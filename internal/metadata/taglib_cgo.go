@@ -1,5 +1,6 @@
 // file: internal/metadata/taglib_cgo.go
-// version: 1.4.0
+// version: 1.5.0
+// last-edited: 2026-06-13
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
 //
 // Native CGO bindings to TagLib C API for high-performance tag writing.
@@ -53,7 +54,42 @@ func writeMetadataWithTaglib(filePath string, metadata map[string]interface{}, _
 		return fmt.Errorf("taglib write resolve: %w", err)
 	}
 
-	cPath := C.CString(effectivePath)
+	_, _, err = fileops.WriteTagsSafe(effectivePath, func(tmpPath string) error {
+		return writeTagMapWithTaglib(effectivePath, tmpPath, tags)
+	}, fileops.WriteTagsSafeOptions{})
+	if err != nil {
+		return fmt.Errorf("taglib write: %w", err)
+	}
+	return nil
+}
+
+// writeSingleTagWithTaglib writes one tag property without touching others.
+// Pass value="" to clear the property.
+//
+// If packageSafeWriteDeps is configured, protected (Deluge-managed) paths are
+// imported into the library before the write proceeds.
+func writeSingleTagWithTaglib(filePath, tagName, value string) error {
+	abs, err := filepath.Abs(filePath)
+	if err != nil {
+		return fmt.Errorf("taglib abs: %w", err)
+	}
+
+	effectivePath, err := resolvePathForWrite(abs)
+	if err != nil {
+		return fmt.Errorf("taglib single-tag resolve: %w", err)
+	}
+
+	_, _, err = fileops.WriteTagsSafe(effectivePath, func(tmpPath string) error {
+		return writeSingleTagToPath(effectivePath, tmpPath, tagName, value)
+	}, fileops.WriteTagsSafeOptions{})
+	if err != nil {
+		return fmt.Errorf("taglib single-tag: %w", err)
+	}
+	return nil
+}
+
+func writeTagMapWithTaglib(effectivePath, tmpPath string, tags map[string][]string) error {
+	cPath := C.CString(tmpPath)
 	defer C.free(unsafe.Pointer(cPath))
 
 	file := C.taglib_file_new(cPath)
@@ -86,27 +122,11 @@ func writeMetadataWithTaglib(filePath string, metadata map[string]interface{}, _
 	if C.taglib_file_save(file) == 0 {
 		return fmt.Errorf("taglib: save failed for %s", effectivePath)
 	}
-
 	return nil
 }
 
-// writeSingleTagWithTaglib writes one tag property without touching others.
-// Pass value="" to clear the property.
-//
-// If packageSafeWriteDeps is configured, protected (Deluge-managed) paths are
-// imported into the library before the write proceeds.
-func writeSingleTagWithTaglib(filePath, tagName, value string) error {
-	abs, err := filepath.Abs(filePath)
-	if err != nil {
-		return fmt.Errorf("taglib abs: %w", err)
-	}
-
-	effectivePath, err := resolvePathForWrite(abs)
-	if err != nil {
-		return fmt.Errorf("taglib single-tag resolve: %w", err)
-	}
-
-	cPath := C.CString(effectivePath)
+func writeSingleTagToPath(effectivePath, tmpPath, tagName, value string) error {
+	cPath := C.CString(tmpPath)
 	defer C.free(unsafe.Pointer(cPath))
 
 	file := C.taglib_file_new(cPath)
