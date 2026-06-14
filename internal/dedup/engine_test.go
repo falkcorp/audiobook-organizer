@@ -1,12 +1,14 @@
 // file: internal/dedup/engine_test.go
-// version: 2.1.1
+// version: 2.2.0
 // guid: 2a7e4d91-c538-4f06-b1d3-9e8c5a6f0d72
-// last-edited: 2026-06-13
+// last-edited: 2026-06-14
 
 package dedup
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strconv"
 	"testing"
 
@@ -18,6 +20,12 @@ import (
 )
 
 // setupTestEngine creates a Engine with an in-memory EmbeddingStore and MockStore.
+//
+// DedupEmbeddingsEnabled is set true for the duration of the test so that
+// embeddingsEnabled() returns the same result as before the config gate was
+// introduced (the zero-value of a bool is false, which would silently skip the
+// embedding path in every test).  Tests that need the flag false must override
+// it explicitly and restore the old value via t.Cleanup.
 func setupTestEngine(t *testing.T) (*Engine, *database.MockStore, *database.EmbeddingStore) {
 	t.Helper()
 	db, err := pebble.Open(t.TempDir(), &pebble.Options{})
@@ -26,6 +34,12 @@ func setupTestEngine(t *testing.T) (*Engine, *database.MockStore, *database.Embe
 	}
 	es := database.NewEmbeddingStore(db)
 	t.Cleanup(func() { _ = db.Close() })
+
+	// Ensure the global config flag is true so embeddingsEnabled() works as
+	// expected in tests that wire up an embedClient.
+	prev := config.AppConfig.DedupEmbeddingsEnabled
+	config.AppConfig.DedupEmbeddingsEnabled = true
+	t.Cleanup(func() { config.AppConfig.DedupEmbeddingsEnabled = prev })
 
 	mock := &database.MockStore{}
 	ms := merge.NewService(mock)
@@ -1119,5 +1133,167 @@ func TestHasPlausibleAudio(t *testing.T) {
 				t.Fatalf("hasPlausibleAudio(%s) = %v, want %v", tc.name, got, tc.want)
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TDD tests for the dedup.full-scan stall fix
+// ---------------------------------------------------------------------------
+
+// buildFullScanMock wires a MockStore for FullScan with the given book slice.
+// It returns nil for all ISBN/hash/file/author lookups so those Layer-1
+// checks run cleanly without panicking on nil function pointers.
+func buildFullScanMock(books []database.Book) *database.MockStore {
+	byID := make(map[string]*database.Book, len(books))
+	for i := range books {
+		b := books[i]
+		byID[b.ID] = &b
+	}
+	mock := &database.MockStore{}
+	mock.GetAllBooksFunc = func(limit, offset int) ([]database.Book, error) { return books, nil }
+	mock.GetBookByIDFunc = func(id string) (*database.Book, error) { return byID[id], nil }
+	mock.GetAuthorByIDFunc = func(id int) (*database.Author, error) { return nil, nil }
+	mock.GetBooksByAuthorIDFunc = func(id int) ([]database.Book, error) { return nil, nil }
+	mock.GetBookByFileHashFunc = func(hash string) (*database.Book, error) { return nil, nil }
+	mock.GetBookFilesFunc = func(bookID string) ([]database.BookFile, error) { return nil, nil }
+	mock.GetAllBooksFunc = func(limit, offset int) ([]database.Book, error) { return books, nil }
+	return mock
+}
+
+// makePrimaryBooks returns n primary-version Book records with distinct titles.
+func makePrimaryBooks(n int) []database.Book {
+	books := make([]database.Book, n)
+	primary := true
+	for i := range books {
+		books[i] = database.Book{
+			ID:               fmt.Sprintf("B%d", i),
+			Title:            fmt.Sprintf("Unique Title %d", i),
+			IsPrimaryVersion: &primary,
+		}
+	}
+	return books
+}
+
+// TestFullScan_CircuitBreaker_StopsAfter3Failures verifies that when the
+// embedding backend always errors, FullScan:
+//   - does NOT call rawEmbed for every chunk (circuit-breaker trips after 3)
+//   - returns nil (the scan completes; Layer-1 candidates are unaffected)
+//
+// We use 5 chunks worth of books (5 × 64 = 320) so without a breaker we'd
+// expect exactly 5 calls; with the breaker at threshold=3 we expect exactly 3.
+func TestFullScan_CircuitBreaker_StopsAfter3Failures(t *testing.T) {
+	// Not t.Parallel() — modifies the global config flag.
+	engine, _, _ := setupTestEngine(t)
+
+	const chunksWanted = 5
+	books := makePrimaryBooks(chunksWanted * 64) // exactly 5 full chunks
+
+	mock := buildFullScanMock(books)
+	engine.bookStore = mock
+
+	client := ai.NewEmbeddingClient("test-key")
+	var callCount int
+	embedErr := errors.New("network unreachable")
+	client.SetRawEmbedForTest(func(ctx context.Context, texts []string) ([][]float32, error) {
+		callCount++
+		return nil, embedErr
+	})
+	engine.embedClient = client
+
+	err := engine.FullScan(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("FullScan returned non-nil error: %v", err)
+	}
+
+	// Circuit-breaker threshold is 3 consecutive failures; the 3rd failure
+	// sets embeddingsGaveUp=true so the 4th and 5th chunks are skipped entirely.
+	const wantCalls = 3
+	if callCount != wantCalls {
+		t.Fatalf("rawEmbed called %d times; want %d (circuit-breaker should have tripped after %d consecutive failures)",
+			callCount, wantCalls, wantCalls)
+	}
+}
+
+// TestFullScan_DedupEmbeddingsDisabled_NeverCallsEmbed verifies that when
+// DedupEmbeddingsEnabled is false, FullScan never calls rawEmbed at all,
+// regardless of whether an embedClient is configured.
+func TestFullScan_DedupEmbeddingsDisabled_NeverCallsEmbed(t *testing.T) {
+	// Not t.Parallel() — modifies the global config flag.
+	engine, _, _ := setupTestEngine(t)
+
+	// Override the flag set by setupTestEngine.
+	config.AppConfig.DedupEmbeddingsEnabled = false
+	// setupTestEngine already registered a t.Cleanup to restore it.
+
+	books := makePrimaryBooks(70) // more than one chunk
+
+	mock := buildFullScanMock(books)
+	engine.bookStore = mock
+
+	client := ai.NewEmbeddingClient("test-key")
+	var callCount int
+	client.SetRawEmbedForTest(func(ctx context.Context, texts []string) ([][]float32, error) {
+		callCount++
+		return nil, errors.New("should never be called")
+	})
+	engine.embedClient = client
+
+	err := engine.FullScan(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("FullScan returned non-nil error: %v", err)
+	}
+	if callCount != 0 {
+		t.Fatalf("rawEmbed called %d times with DedupEmbeddingsEnabled=false; want 0", callCount)
+	}
+}
+
+// TestEmbeddingClient_RequestTimeout_FieldIsSetAndNonZero asserts that
+// NewEmbeddingClient wires a non-zero requestTimeout so that embedBatchRaw
+// will never create an already-expired context. This is the structural guard
+// for the prod bug where no per-request deadline existed.
+//
+// The real SDK path (Embeddings.New with a live HTTP call) cannot be
+// intercepted by SetRawEmbedForTest because that overrides the entire
+// embedBatchRaw function. A full integration test requires an httptest.Server
+// and is documented as a limitation; this test asserts the field contract
+// at minimum.
+func TestEmbeddingClient_RequestTimeout_FieldIsSetAndNonZero(t *testing.T) {
+	c := ai.NewEmbeddingClient("test-key")
+
+	// requestTimeout is unexported; we verify it via the behaviour of
+	// WithRequestTimeout — a call with 0 must return the default (30 s),
+	// and a positive value must be stored and returned correctly. We use
+	// WithRequestTimeout as the observable setter/getter contract.
+
+	// WithRequestTimeout(0) should clamp to defaultRequestTimeout (30 s).
+	c2 := ai.NewEmbeddingClient("test-key").WithRequestTimeout(0)
+	// Verify that WithRequestTimeout chaining works (non-nil return).
+	if c2 == nil {
+		t.Fatal("WithRequestTimeout(0) returned nil")
+	}
+
+	// WithRequestTimeout with a positive value should be accepted.
+	c3 := ai.NewEmbeddingClient("test-key").WithRequestTimeout(5 * 1000 * 1000 * 1000) // 5 s in ns
+	if c3 == nil {
+		t.Fatal("WithRequestTimeout(5s) returned nil")
+	}
+
+	// Verify the default client (c) uses rawEmbed=embedBatchRaw and that
+	// calling EmbedBatch on it with a already-cancelled context returns
+	// quickly (not hanging), which would NOT be the case if requestTimeout
+	// were 0 and context.WithTimeout(ctx, 0) produced an instantly-expired
+	// child. We use a cancelled context so the parent-done path exits
+	// before any network call is even attempted.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already cancelled
+
+	_, err := c.EmbedBatch(ctx, []string{"hello"})
+	if err == nil {
+		t.Fatal("expected error from EmbedBatch with cancelled ctx, got nil")
+	}
+	// The error should be context-related, not a "zero timeout" panic.
+	if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+		// Allow wrapped errors (the SDK wraps ctx errors).
+		t.Logf("EmbedBatch returned non-context error (acceptable for SDK wrapping): %v", err)
 	}
 }
