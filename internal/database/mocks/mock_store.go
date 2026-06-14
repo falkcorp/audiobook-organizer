@@ -3544,6 +3544,76 @@ func (_c *MockBookReader_GetBooksByMetadataSourceHash_Call) RunAndReturn(run fun
 	return _c
 }
 
+// GetBookIDsByISBNASIN provides a mock function for the type MockBookReader
+func (_mock *MockBookReader) GetBookIDsByISBNASIN(isbn10 string, isbn13 string, asin string) ([]string, error) {
+	ret := _mock.Called(isbn10, isbn13, asin)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetBookIDsByISBNASIN")
+	}
+
+	var r0 []string
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string, string, string) ([]string, error)); ok {
+		return returnFunc(isbn10, isbn13, asin)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string, string, string) []string); ok {
+		r0 = returnFunc(isbn10, isbn13, asin)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]string)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string, string, string) error); ok {
+		r1 = returnFunc(isbn10, isbn13, asin)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockBookReader_GetBookIDsByISBNASIN_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetBookIDsByISBNASIN'
+type MockBookReader_GetBookIDsByISBNASIN_Call struct {
+	*mock.Call
+}
+
+// GetBookIDsByISBNASIN is a helper method to define mock.On call
+//   - isbn10 string
+//   - isbn13 string
+//   - asin string
+func (_e *MockBookReader_Expecter) GetBookIDsByISBNASIN(isbn10 interface{}, isbn13 interface{}, asin interface{}) *MockBookReader_GetBookIDsByISBNASIN_Call {
+	return &MockBookReader_GetBookIDsByISBNASIN_Call{Call: _e.mock.On("GetBookIDsByISBNASIN", isbn10, isbn13, asin)}
+}
+
+func (_c *MockBookReader_GetBookIDsByISBNASIN_Call) Run(run func(isbn10 string, isbn13 string, asin string)) *MockBookReader_GetBookIDsByISBNASIN_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
+		run(arg0, arg1, arg2)
+	})
+	return _c
+}
+
+func (_c *MockBookReader_GetBookIDsByISBNASIN_Call) Return(ids []string, err error) *MockBookReader_GetBookIDsByISBNASIN_Call {
+	_c.Call.Return(ids, err)
+	return _c
+}
+
+func (_c *MockBookReader_GetBookIDsByISBNASIN_Call) RunAndReturn(run func(string, string, string) ([]string, error)) *MockBookReader_GetBookIDsByISBNASIN_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetBooksBySeriesID provides a mock function for the type MockBookReader
 func (_mock *MockBookReader) GetBooksBySeriesID(seriesID int) ([]database.Book, error) {
 	ret := _mock.Called(seriesID)
@@ -6765,6 +6835,76 @@ func (_c *MockBookStore_GetBooksByMetadataSourceHash_Call) Return(books []databa
 }
 
 func (_c *MockBookStore_GetBooksByMetadataSourceHash_Call) RunAndReturn(run func(hash string) ([]database.Book, error)) *MockBookStore_GetBooksByMetadataSourceHash_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// GetBookIDsByISBNASIN provides a mock function for the type MockBookStore
+func (_mock *MockBookStore) GetBookIDsByISBNASIN(isbn10 string, isbn13 string, asin string) ([]string, error) {
+	ret := _mock.Called(isbn10, isbn13, asin)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetBookIDsByISBNASIN")
+	}
+
+	var r0 []string
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string, string, string) ([]string, error)); ok {
+		return returnFunc(isbn10, isbn13, asin)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string, string, string) []string); ok {
+		r0 = returnFunc(isbn10, isbn13, asin)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]string)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string, string, string) error); ok {
+		r1 = returnFunc(isbn10, isbn13, asin)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockBookStore_GetBookIDsByISBNASIN_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetBookIDsByISBNASIN'
+type MockBookStore_GetBookIDsByISBNASIN_Call struct {
+	*mock.Call
+}
+
+// GetBookIDsByISBNASIN is a helper method to define mock.On call
+//   - isbn10 string
+//   - isbn13 string
+//   - asin string
+func (_e *MockBookStore_Expecter) GetBookIDsByISBNASIN(isbn10 interface{}, isbn13 interface{}, asin interface{}) *MockBookStore_GetBookIDsByISBNASIN_Call {
+	return &MockBookStore_GetBookIDsByISBNASIN_Call{Call: _e.mock.On("GetBookIDsByISBNASIN", isbn10, isbn13, asin)}
+}
+
+func (_c *MockBookStore_GetBookIDsByISBNASIN_Call) Run(run func(isbn10 string, isbn13 string, asin string)) *MockBookStore_GetBookIDsByISBNASIN_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
+		run(arg0, arg1, arg2)
+	})
+	return _c
+}
+
+func (_c *MockBookStore_GetBookIDsByISBNASIN_Call) Return(ids []string, err error) *MockBookStore_GetBookIDsByISBNASIN_Call {
+	_c.Call.Return(ids, err)
+	return _c
+}
+
+func (_c *MockBookStore_GetBookIDsByISBNASIN_Call) RunAndReturn(run func(string, string, string) ([]string, error)) *MockBookStore_GetBookIDsByISBNASIN_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -36964,6 +37104,76 @@ func (_c *MockStore_GetBooksByMetadataSourceHash_Call) Return(books []database.B
 }
 
 func (_c *MockStore_GetBooksByMetadataSourceHash_Call) RunAndReturn(run func(hash string) ([]database.Book, error)) *MockStore_GetBooksByMetadataSourceHash_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// GetBookIDsByISBNASIN provides a mock function for the type MockStore
+func (_mock *MockStore) GetBookIDsByISBNASIN(isbn10 string, isbn13 string, asin string) ([]string, error) {
+	ret := _mock.Called(isbn10, isbn13, asin)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetBookIDsByISBNASIN")
+	}
+
+	var r0 []string
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string, string, string) ([]string, error)); ok {
+		return returnFunc(isbn10, isbn13, asin)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string, string, string) []string); ok {
+		r0 = returnFunc(isbn10, isbn13, asin)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]string)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string, string, string) error); ok {
+		r1 = returnFunc(isbn10, isbn13, asin)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_GetBookIDsByISBNASIN_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetBookIDsByISBNASIN'
+type MockStore_GetBookIDsByISBNASIN_Call struct {
+	*mock.Call
+}
+
+// GetBookIDsByISBNASIN is a helper method to define mock.On call
+//   - isbn10 string
+//   - isbn13 string
+//   - asin string
+func (_e *MockStore_Expecter) GetBookIDsByISBNASIN(isbn10 interface{}, isbn13 interface{}, asin interface{}) *MockStore_GetBookIDsByISBNASIN_Call {
+	return &MockStore_GetBookIDsByISBNASIN_Call{Call: _e.mock.On("GetBookIDsByISBNASIN", isbn10, isbn13, asin)}
+}
+
+func (_c *MockStore_GetBookIDsByISBNASIN_Call) Run(run func(isbn10 string, isbn13 string, asin string)) *MockStore_GetBookIDsByISBNASIN_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
+		run(arg0, arg1, arg2)
+	})
+	return _c
+}
+
+func (_c *MockStore_GetBookIDsByISBNASIN_Call) Return(ids []string, err error) *MockStore_GetBookIDsByISBNASIN_Call {
+	_c.Call.Return(ids, err)
+	return _c
+}
+
+func (_c *MockStore_GetBookIDsByISBNASIN_Call) RunAndReturn(run func(string, string, string) ([]string, error)) *MockStore_GetBookIDsByISBNASIN_Call {
 	_c.Call.Return(run)
 	return _c
 }

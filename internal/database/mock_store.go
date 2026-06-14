@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.61.0
+// version: 1.62.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-06-13
+// last-edited: 2026-06-14
 
 package database
 
@@ -311,6 +311,7 @@ type MockStore struct {
 	// Version Management
 	GetBooksByVersionGroupFunc       func(groupID string) ([]Book, error)
 	GetBooksByMetadataSourceHashFunc func(hash string) ([]Book, error)
+	GetBookIDsByISBNASINFunc         func(isbn10, isbn13, asin string) ([]string, error)
 
 	// iTunes Library Fingerprints
 	SaveLibraryFingerprintFunc func(path string, size int64, modTime time.Time, crc32 uint32) error
@@ -969,6 +970,13 @@ func (m *MockStore) GetBooksByVersionGroup(groupID string) ([]Book, error) {
 func (m *MockStore) GetBooksByMetadataSourceHash(hash string) ([]Book, error) {
 	if m.GetBooksByMetadataSourceHashFunc != nil {
 		return m.GetBooksByMetadataSourceHashFunc(hash)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetBookIDsByISBNASIN(isbn10, isbn13, asin string) ([]string, error) {
+	if m.GetBookIDsByISBNASINFunc != nil {
+		return m.GetBookIDsByISBNASINFunc(isbn10, isbn13, asin)
 	}
 	return nil, nil
 }

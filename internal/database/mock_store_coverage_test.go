@@ -1,6 +1,7 @@
 // file: internal/database/mock_store_coverage_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9f8e7d6c-5b4a-3c2d-1e0f-a9b8c7d6e5f4
+// last-edited: 2026-06-14
 
 package database
 
@@ -62,6 +63,7 @@ func TestMockStore_CustomFuncPaths(t *testing.T) {
 	mock.CountFilesFunc = func() (int, error) { return 0, nil }
 	mock.ListSoftDeletedBooksFunc = func(int, int, *time.Time) ([]Book, error) { return nil, nil }
 	mock.GetBooksByVersionGroupFunc = func(string) ([]Book, error) { return nil, nil }
+	mock.GetBookIDsByISBNASINFunc = func(string, string, string) ([]string, error) { return nil, nil }
 
 	// Import Paths
 	mock.GetAllImportPathsFunc = func() ([]ImportPath, error) { return nil, nil }
@@ -180,6 +182,7 @@ func TestMockStore_CustomFuncPaths(t *testing.T) {
 	_, _ = mock.CountFiles()
 	_, _ = mock.ListSoftDeletedBooks(10, 0, nil)
 	_, _ = mock.GetBooksByVersionGroup("group-1")
+	_, _ = mock.GetBookIDsByISBNASIN("0123456789", "9780123456786", "B001234567")
 	_, _ = mock.GetAllImportPaths()
 	_, _ = mock.GetImportPathByID(1)
 	_, _ = mock.GetImportPathByPath("/path")
