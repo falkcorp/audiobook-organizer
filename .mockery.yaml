@@ -1,6 +1,7 @@
 # file: .mockery.yaml
-# version: 1.17.0
+# version: 1.18.0
 # guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
+# last-edited: 2026-06-14
 
 # Mockery configuration (v3)
 # NOTE: with-expecter is enabled by default in v3
@@ -15,7 +16,7 @@ filename: mock_store.go
 pkgname: mocks
 
 packages:
-  github.com/jdfalk/audiobook-organizer/internal/database:
+  github.com/falkcorp/audiobook-organizer/internal/database:
     interfaces:
       Store:
       LifecycleStore:
@@ -61,20 +62,20 @@ packages:
       RejectedMetadataStore:
       SystemActivityStore:
       OpsV2Store:
-  github.com/jdfalk/audiobook-organizer/internal/operations:
+  github.com/falkcorp/audiobook-organizer/internal/operations:
     config:
       dir: internal/operations/mocks
     interfaces:
       ProgressReporter:
         config:
           filename: mock_progress_reporter.go
-  github.com/jdfalk/audiobook-organizer/internal/scanner:
+  github.com/falkcorp/audiobook-organizer/internal/scanner:
     config:
       dir: internal/scanner/mocks
       filename: mock_scanner.go
     interfaces:
       Scanner:
-  github.com/jdfalk/audiobook-organizer/internal/metadata:
+  github.com/falkcorp/audiobook-organizer/internal/metadata:
     interfaces:
       MetadataExtractor:
         configs:
@@ -98,7 +99,7 @@ packages:
         config:
           dir: internal/metadata/mocks
           filename: mock_contextual_search.go
-  github.com/jdfalk/audiobook-organizer/internal/ai:
+  github.com/falkcorp/audiobook-organizer/internal/ai:
     interfaces:
       MetadataCandidateScorer:
         config:
@@ -114,7 +115,7 @@ packages:
           pkgname: ai
           filename: mock_metadata_llm_backend_test.go
           structname: mockMetadataLLMBackend
-  github.com/jdfalk/audiobook-organizer/internal/logger:
+  github.com/falkcorp/audiobook-organizer/internal/logger:
     config:
       dir: internal/logger/mocks
     interfaces:
@@ -130,7 +131,7 @@ packages:
       RetentionStore:
         config:
           filename: mock_retention_store.go
-  github.com/jdfalk/audiobook-organizer/internal/server/handlers:
+  github.com/falkcorp/audiobook-organizer/internal/server/handlers:
     config:
       dir: internal/server/handlers/mocks
       filename: "mock_{{.InterfaceName | snakecase}}.go"
@@ -170,7 +171,7 @@ packages:
       AudiobookUpdater:
       DiagnosticsService:
       MergeService:
-  github.com/jdfalk/audiobook-organizer/internal/server/handlers/entities:
+  github.com/falkcorp/audiobook-organizer/internal/server/handlers/entities:
     config:
       dir: internal/server/handlers/entities/mocks
       filename: "mock_{{.InterfaceName | snakecase}}.go"
@@ -180,7 +181,7 @@ packages:
       WorkService:
       AuthorSeriesService:
       OperationsRegistry:
-  github.com/jdfalk/audiobook-organizer/internal/server/handlers/operations:
+  github.com/falkcorp/audiobook-organizer/internal/server/handlers/operations:
     config:
       dir: internal/server/handlers/operations/mocks
       filename: "mock_{{.InterfaceName | snakecase}}.go"
@@ -191,7 +192,7 @@ packages:
       Scheduler:
       ScanCanceler:
       AIScanLister:
-  github.com/jdfalk/audiobook-organizer/internal/server/handlers/system:
+  github.com/falkcorp/audiobook-organizer/internal/server/handlers/system:
     config:
       dir: internal/server/handlers/system/mocks
       filename: "mock_{{.InterfaceName | snakecase}}.go"
@@ -203,7 +204,7 @@ packages:
       PluginHealthChecker:
       EventStreamer:
       OperationLogsProvider:
-  github.com/jdfalk/audiobook-organizer/internal/server/handlers/dedup:
+  github.com/falkcorp/audiobook-organizer/internal/server/handlers/dedup:
     config:
       dir: internal/server/handlers/dedup/mocks
       filename: "mock_{{.InterfaceName | snakecase}}.go"
@@ -214,7 +215,7 @@ packages:
       MergeService:
       DedupEngine:
       OperationsRegistry:
-  github.com/jdfalk/audiobook-organizer/internal/server/handlers/duplicates:
+  github.com/falkcorp/audiobook-organizer/internal/server/handlers/duplicates:
     config:
       dir: internal/server/handlers/duplicates/mocks
       filename: "mock_{{.InterfaceName | snakecase}}.go"
@@ -225,7 +226,7 @@ packages:
       MetadataFetchService:
       AudiobookService:
       OperationsRegistry:
-  github.com/jdfalk/audiobook-organizer/internal/server/handlers/audiobooks:
+  github.com/falkcorp/audiobook-organizer/internal/server/handlers/audiobooks:
     config:
       dir: internal/server/handlers/audiobooks/mocks
       filename: "mock_{{.InterfaceName | snakecase}}.go"
@@ -240,7 +241,7 @@ packages:
       BatchService:
       ChangelogService:
       ExternalIDStore:
-  github.com/jdfalk/audiobook-organizer/internal/server/handlers/metadata:
+  github.com/falkcorp/audiobook-organizer/internal/server/handlers/metadata:
     config:
       dir: internal/server/handlers/metadata/mocks
       filename: "mock_{{.InterfaceName | snakecase}}.go"

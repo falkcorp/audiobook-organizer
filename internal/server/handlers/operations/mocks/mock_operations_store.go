@@ -1013,6 +1013,57 @@ func (_c *MockOperationsStore_DeleteOperationState_Call) RunAndReturn(run func(o
 	return _c
 }
 
+// DeleteOperationWithLogs provides a mock function for the type MockOperationsStore
+func (_mock *MockOperationsStore) DeleteOperationWithLogs(id string) error {
+	ret := _mock.Called(id)
+
+	if len(ret) == 0 {
+		panic("no return value specified for DeleteOperationWithLogs")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string) error); ok {
+		r0 = returnFunc(id)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockOperationsStore_DeleteOperationWithLogs_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DeleteOperationWithLogs'
+type MockOperationsStore_DeleteOperationWithLogs_Call struct {
+	*mock.Call
+}
+
+// DeleteOperationWithLogs is a helper method to define mock.On call
+//   - id string
+func (_e *MockOperationsStore_Expecter) DeleteOperationWithLogs(id interface{}) *MockOperationsStore_DeleteOperationWithLogs_Call {
+	return &MockOperationsStore_DeleteOperationWithLogs_Call{Call: _e.mock.On("DeleteOperationWithLogs", id)}
+}
+
+func (_c *MockOperationsStore_DeleteOperationWithLogs_Call) Run(run func(id string)) *MockOperationsStore_DeleteOperationWithLogs_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockOperationsStore_DeleteOperationWithLogs_Call) Return(err error) *MockOperationsStore_DeleteOperationWithLogs_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockOperationsStore_DeleteOperationWithLogs_Call) RunAndReturn(run func(id string) error) *MockOperationsStore_DeleteOperationWithLogs_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // DeleteOperationsByStatus provides a mock function for the type MockOperationsStore
 func (_mock *MockOperationsStore) DeleteOperationsByStatus(statuses []string) (int, error) {
 	ret := _mock.Called(statuses)
@@ -1069,51 +1120,6 @@ func (_c *MockOperationsStore_DeleteOperationsByStatus_Call) Return(n int, err e
 }
 
 func (_c *MockOperationsStore_DeleteOperationsByStatus_Call) RunAndReturn(run func(statuses []string) (int, error)) *MockOperationsStore_DeleteOperationsByStatus_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// DeleteOperationWithLogs provides a mock function for the type MockOperationsStore
-func (_mock *MockOperationsStore) DeleteOperationWithLogs(id string) error {
-	ret := _mock.Called(id)
-
-	if len(ret) == 0 {
-		panic("no return value specified for DeleteOperationWithLogs")
-	}
-
-	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(string) error); ok {
-		r0 = returnFunc(id)
-	} else {
-		r0 = ret.Error(0)
-	}
-	return r0
-}
-
-// MockOperationsStore_DeleteOperationWithLogs_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DeleteOperationWithLogs'
-type MockOperationsStore_DeleteOperationWithLogs_Call struct {
-	*mock.Call
-}
-
-// DeleteOperationWithLogs is a helper method to define mock.On call
-//   - id string
-func (_e *MockOperationsStore_Expecter) DeleteOperationWithLogs(id interface{}) *MockOperationsStore_DeleteOperationWithLogs_Call {
-	return &MockOperationsStore_DeleteOperationWithLogs_Call{Call: _e.mock.On("DeleteOperationWithLogs", id)}
-}
-
-func (_c *MockOperationsStore_DeleteOperationWithLogs_Call) Run(run func(id string)) *MockOperationsStore_DeleteOperationWithLogs_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(string))
-	})
-	return _c
-}
-
-func (_c *MockOperationsStore_DeleteOperationWithLogs_Call) Return(err error) *MockOperationsStore_DeleteOperationWithLogs_Call {
-	_c.Call.Return(err)
-	return _c
-}
-
-func (_c *MockOperationsStore_DeleteOperationWithLogs_Call) RunAndReturn(run func(string) error) *MockOperationsStore_DeleteOperationWithLogs_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -1284,51 +1290,6 @@ func (_c *MockOperationsStore_FlagMetadataHashDuplicate_Call) Return(err error) 
 }
 
 func (_c *MockOperationsStore_FlagMetadataHashDuplicate_Call) RunAndReturn(run func(primaryID string, duplicateID string) error) *MockOperationsStore_FlagMetadataHashDuplicate_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// RecomputeBookAggregates provides a mock function for the type MockOperationsStore
-func (_mock *MockOperationsStore) RecomputeBookAggregates(bookID string) error {
-	ret := _mock.Called(bookID)
-
-	if len(ret) == 0 {
-		panic("no return value specified for RecomputeBookAggregates")
-	}
-
-	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(string) error); ok {
-		r0 = returnFunc(bookID)
-	} else {
-		r0 = ret.Error(0)
-	}
-	return r0
-}
-
-// MockOperationsStore_RecomputeBookAggregates_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RecomputeBookAggregates'
-type MockOperationsStore_RecomputeBookAggregates_Call struct {
-	*mock.Call
-}
-
-// RecomputeBookAggregates is a helper method to define mock.On call
-//   - bookID string
-func (_e *MockOperationsStore_Expecter) RecomputeBookAggregates(bookID interface{}) *MockOperationsStore_RecomputeBookAggregates_Call {
-	return &MockOperationsStore_RecomputeBookAggregates_Call{Call: _e.mock.On("RecomputeBookAggregates", bookID)}
-}
-
-func (_c *MockOperationsStore_RecomputeBookAggregates_Call) Run(run func(bookID string)) *MockOperationsStore_RecomputeBookAggregates_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(string))
-	})
-	return _c
-}
-
-func (_c *MockOperationsStore_RecomputeBookAggregates_Call) Return(err error) *MockOperationsStore_RecomputeBookAggregates_Call {
-	_c.Call.Return(err)
-	return _c
-}
-
-func (_c *MockOperationsStore_RecomputeBookAggregates_Call) RunAndReturn(run func(bookID string) error) *MockOperationsStore_RecomputeBookAggregates_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -2680,6 +2641,80 @@ func (_c *MockOperationsStore_GetBookChanges_Call) Return(operationChanges []*da
 }
 
 func (_c *MockOperationsStore_GetBookChanges_Call) RunAndReturn(run func(bookID string) ([]*database.OperationChange, error)) *MockOperationsStore_GetBookChanges_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// GetBookIDsByISBNASIN provides a mock function for the type MockOperationsStore
+func (_mock *MockOperationsStore) GetBookIDsByISBNASIN(isbn10 string, isbn13 string, asin string) ([]string, error) {
+	ret := _mock.Called(isbn10, isbn13, asin)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetBookIDsByISBNASIN")
+	}
+
+	var r0 []string
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string, string, string) ([]string, error)); ok {
+		return returnFunc(isbn10, isbn13, asin)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string, string, string) []string); ok {
+		r0 = returnFunc(isbn10, isbn13, asin)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]string)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string, string, string) error); ok {
+		r1 = returnFunc(isbn10, isbn13, asin)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockOperationsStore_GetBookIDsByISBNASIN_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetBookIDsByISBNASIN'
+type MockOperationsStore_GetBookIDsByISBNASIN_Call struct {
+	*mock.Call
+}
+
+// GetBookIDsByISBNASIN is a helper method to define mock.On call
+//   - isbn10 string
+//   - isbn13 string
+//   - asin string
+func (_e *MockOperationsStore_Expecter) GetBookIDsByISBNASIN(isbn10 interface{}, isbn13 interface{}, asin interface{}) *MockOperationsStore_GetBookIDsByISBNASIN_Call {
+	return &MockOperationsStore_GetBookIDsByISBNASIN_Call{Call: _e.mock.On("GetBookIDsByISBNASIN", isbn10, isbn13, asin)}
+}
+
+func (_c *MockOperationsStore_GetBookIDsByISBNASIN_Call) Run(run func(isbn10 string, isbn13 string, asin string)) *MockOperationsStore_GetBookIDsByISBNASIN_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockOperationsStore_GetBookIDsByISBNASIN_Call) Return(strings []string, err error) *MockOperationsStore_GetBookIDsByISBNASIN_Call {
+	_c.Call.Return(strings, err)
+	return _c
+}
+
+func (_c *MockOperationsStore_GetBookIDsByISBNASIN_Call) RunAndReturn(run func(isbn10 string, isbn13 string, asin string) ([]string, error)) *MockOperationsStore_GetBookIDsByISBNASIN_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -5678,6 +5713,57 @@ func (_c *MockOperationsStore_PruneOperationLogs_Call) Return(n int, err error) 
 }
 
 func (_c *MockOperationsStore_PruneOperationLogs_Call) RunAndReturn(run func(olderThan time.Time) (int, error)) *MockOperationsStore_PruneOperationLogs_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// RecomputeBookAggregates provides a mock function for the type MockOperationsStore
+func (_mock *MockOperationsStore) RecomputeBookAggregates(bookID string) error {
+	ret := _mock.Called(bookID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for RecomputeBookAggregates")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string) error); ok {
+		r0 = returnFunc(bookID)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockOperationsStore_RecomputeBookAggregates_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RecomputeBookAggregates'
+type MockOperationsStore_RecomputeBookAggregates_Call struct {
+	*mock.Call
+}
+
+// RecomputeBookAggregates is a helper method to define mock.On call
+//   - bookID string
+func (_e *MockOperationsStore_Expecter) RecomputeBookAggregates(bookID interface{}) *MockOperationsStore_RecomputeBookAggregates_Call {
+	return &MockOperationsStore_RecomputeBookAggregates_Call{Call: _e.mock.On("RecomputeBookAggregates", bookID)}
+}
+
+func (_c *MockOperationsStore_RecomputeBookAggregates_Call) Run(run func(bookID string)) *MockOperationsStore_RecomputeBookAggregates_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockOperationsStore_RecomputeBookAggregates_Call) Return(err error) *MockOperationsStore_RecomputeBookAggregates_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockOperationsStore_RecomputeBookAggregates_Call) RunAndReturn(run func(bookID string) error) *MockOperationsStore_RecomputeBookAggregates_Call {
 	_c.Call.Return(run)
 	return _c
 }
