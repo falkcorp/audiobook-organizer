@@ -1,7 +1,7 @@
 // file: internal/database/iface_book.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 668ec5a2-f8d9-4fdb-b0d5-09937b5d83ea
-// last-edited: 2026-06-10
+// last-edited: 2026-06-14
 
 package database
 
@@ -46,6 +46,14 @@ type BookReader interface {
 	GetBooksByAuthorID(authorID int) ([]Book, error)
 	GetBooksByVersionGroup(groupID string) ([]Book, error)
 	GetBooksByMetadataSourceHash(hash string) ([]Book, error)
+	// GetBookIDsByISBNASIN returns the distinct book IDs whose ISBN10, ISBN13,
+	// or ASIN match any of the supplied non-empty values.  It is a set-union:
+	// an ID is returned if it appears in any of the three index namespaces.
+	// Returns IDs only — callers load the full Book via GetBookByID when needed.
+	// Returns an empty slice (not nil, not error) when no match is found.
+	// Only valid after the book_isbn_index_v1_done flag is set; callers must
+	// gate on that flag themselves.
+	GetBookIDsByISBNASIN(isbn10, isbn13, asin string) ([]string, error)
 	SearchBooks(query string, limit, offset int) ([]Book, error)
 	CountBooks() (int, error)
 	GetDistinctGenres() ([]string, error)

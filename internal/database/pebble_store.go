@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.87.0
+// version: 1.88.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-06-10
+// last-edited: 2026-06-14
 
 package database
 
@@ -2506,6 +2506,18 @@ func (p *PebbleStore) CreateBook(book *Book) (*Book, error) {
 		}
 	}
 
+	// ISBN/ASIN secondary index: set-layout rows so GetBookIDsByISBNASIN can
+	// do a prefix scan instead of a full O(N) book scan.
+	{
+		isbn10 := derefStrISBN(book.ISBN10)
+		isbn13 := derefStrISBN(book.ISBN13)
+		asin := derefStrISBN(book.ASIN)
+		if err := writeISBNIndexRows(batch, book.ID, isbn10, isbn13, asin); err != nil {
+			batch.Close()
+			return nil, err
+		}
+	}
+
 	if err := batch.Commit(pebble.Sync); err != nil {
 		return nil, err
 	}
@@ -2698,6 +2710,21 @@ func (p *PebbleStore) UpdateBook(id string, book *Book) (*Book, error) {
 	// cache. Missing-key is a no-op in pebble.
 	if identityChanged(oldBook, book) {
 		_ = batch.Delete(metadataCacheKey(id), nil)
+	}
+
+	// ISBN/ASIN secondary index: delete stale rows for old values and write
+	// new rows for changed values, all in the same atomic batch.
+	{
+		oldISBN10 := derefStrISBN(oldBook.ISBN10)
+		newISBN10 := derefStrISBN(book.ISBN10)
+		oldISBN13 := derefStrISBN(oldBook.ISBN13)
+		newISBN13 := derefStrISBN(book.ISBN13)
+		oldASIN := derefStrISBN(oldBook.ASIN)
+		newASIN := derefStrISBN(book.ASIN)
+		if err := updateISBNIndex(batch, id, oldISBN10, newISBN10, oldISBN13, newISBN13, oldASIN, newASIN); err != nil {
+			batch.Close()
+			return nil, err
+		}
 	}
 
 	if err := batch.Commit(pebble.Sync); err != nil {
@@ -3032,6 +3059,17 @@ func (p *PebbleStore) DeleteBook(id string) error {
 
 	for iter.First(); iter.Valid(); iter.Next() {
 		if err := batch.Delete(iter.Key(), nil); err != nil {
+			batch.Close()
+			return err
+		}
+	}
+
+	// Delete ISBN/ASIN secondary index rows for this book.
+	{
+		isbn10 := derefStrISBN(book.ISBN10)
+		isbn13 := derefStrISBN(book.ISBN13)
+		asin := derefStrISBN(book.ASIN)
+		if err := deleteISBNIndexRows(batch, id, isbn10, isbn13, asin); err != nil {
 			batch.Close()
 			return err
 		}

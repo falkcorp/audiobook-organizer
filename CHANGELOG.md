@@ -1,11 +1,48 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.22.0 -->
+<!-- version: 3.23.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-14 -->
 
 # Changelog
 
 ## [Unreleased]
+
+### Performance
+
+#### June 14, 2026 — ISBN/ASIN secondary index (T022)
+
+Fixes O(N²) `checkExactISBN` in the dedup engine by adding set-layout secondary
+indexes to PebbleDB and a backfill operation.
+
+- **Secondary indexes** (`internal/database/pebble_store_isbn_index.go`): Three new
+  Pebble key namespaces — `book:isbn10:<value>:<bookID>`, `book:isbn13:<value>:<bookID>`,
+  `book:asin:<value>:<bookID>`. Value is `[]byte{}` (set-layout); multiple books can
+  share the same ISBN/ASIN (that is the dedup signal). Index rows are written and
+  deleted inside the **same atomic batch** as the book row in `CreateBook`, `UpdateBook`
+  (delta-only via `updateISBNIndex`), and `DeleteBook`.
+- **Lookup method**: `GetBookIDsByISBNASIN(isbn10, isbn13, asin string) ([]string, error)`
+  added to `BookReader` interface and `*PebbleStore`; performs prefix-scan per
+  non-empty argument and unions results. Only valid after backfill flag is set.
+- **Build flag**: `system:flag:book_isbn_index_v1_done` in Settings; `IsISBNIndexBuilt()`
+  and `SetISBNIndexBuilt()` on `*PebbleStore`.
+- **Backfill op**: `dedup.build-isbn-index` UOS operation
+  (`internal/plugins/dedup/build_isbn_index.go`). Dry-run by default; pass
+  `{"apply":true}` to execute. Iterates all books in 500-row batches via
+  `WriteISBNIndexForBook` (lightweight one-shot Pebble batch, avoids full
+  `UpdateBook` overhead). Sets the completion flag on success. Idempotent.
+- **Engine rewrite**: `checkExactISBN` dispatches to O(matches) indexed path
+  (`checkExactISBNIndexed`) when flag is set and `ISBNIndexStore` is wired; falls
+  back to original O(N) `GetAllBooks` scan (`checkExactISBNScan`) otherwise.
+  Both paths apply identical guards: skip self, skip `MarkedForDeletion`, skip
+  `!hasPlausibleAudio`.
+- **Production wiring**: `lifecycle.go` `PostInit` type-asserts the main store to
+  `*database.PebbleStore` and calls `engine.SetISBNIndexStore(ps)`.
+- **Tests**: 7 store-level tests (`pebble_store_isbn_index_test.go`): create,
+  shared-ISBN union, update old→new, delete, empty values, backfill helper, build
+  flag. 7 engine-level tests (`engine_isbn_test.go`): indexed path used (no
+  GetAllBooks), fallback when not built, fallback when nil store, skip self, skip
+  soft-deleted, skip implausible audio (match side), skip implausible audio
+  (anchor side).
 
 ### Added
 

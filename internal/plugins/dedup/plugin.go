@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/plugin.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: d1e2f3a4-b5c6-7890-abcd-ef1234567890
 // last-edited: 2026-06-14
 
@@ -61,6 +61,7 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.bookfileSegDropDef(), // T020: drop AcoustID segment fields from stored values
 		p.datasetBackfillDef(), // C4: label + suppress residual pending candidates
 		p.checkBookDef(),       // M4: per-book dedup check via dependency scheduler
+		p.buildISBNIndexDef(),  // T022: ISBN/ASIN secondary index backfill
 	}
 
 	for _, op := range ops {

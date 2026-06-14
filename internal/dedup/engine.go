@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.27.0
+// version: 1.28.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-06-14
 
@@ -93,6 +93,12 @@ type Engine struct {
 	// lshAcoustIDStore is the narrow interface used by T013's
 	// CollectLSHAcoustID; set via SetLSHStore.
 	lshAcoustIDStore LSHAcoustIDStore
+
+	// isbnIndexStore is the narrow interface used by checkExactISBN to
+	// perform O(1) prefix scans instead of O(N) full-book scans.
+	// Set via SetISBNIndexStore. When nil, checkExactISBN falls back to
+	// the GetAllBooks scan (safe — just slow).
+	isbnIndexStore ISBNIndexStore
 }
 
 // NewEngine creates a Engine with sensible defaults.
@@ -163,6 +169,28 @@ func (de *Engine) SetAcoustIDBookFileStore(s ExactAcoustIDStore) {
 // In production the caller passes the same *database.PebbleStore as bookStore.
 func (de *Engine) SetLSHStore(s LSHAcoustIDStore) {
 	de.lshAcoustIDStore = s
+}
+
+// ISBNIndexStore is the narrow interface that checkExactISBN uses to perform
+// O(1) prefix-scan lookups instead of an O(N) full-book scan.
+// *database.PebbleStore satisfies this interface.
+// Callers set it via SetISBNIndexStore; when nil, checkExactISBN falls back
+// to the full GetAllBooks scan (correct, but slow at 50 K books).
+type ISBNIndexStore interface {
+	// IsISBNIndexBuilt reports whether the isbn-index-build backfill op
+	// has completed. The index must be fully built before being queried;
+	// an unbuilt index silently returns empty results.
+	IsISBNIndexBuilt() bool
+	// GetBookIDsByISBNASIN returns the union of book IDs whose ISBN10,
+	// ISBN13, or ASIN matches any of the supplied non-empty values.
+	GetBookIDsByISBNASIN(isbn10, isbn13, asin string) ([]string, error)
+}
+
+// SetISBNIndexStore wires the ISBNIndexStore used by checkExactISBN.
+// In production the caller passes the same *database.PebbleStore that
+// was passed to NewEngine as bookStore.
+func (de *Engine) SetISBNIndexStore(s ISBNIndexStore) {
+	de.isbnIndexStore = s
 }
 
 // embeddingsEnabled reports whether the embedding layer (Layer 2) should be
@@ -721,7 +749,19 @@ func (de *Engine) handleFileHashMatch(book, other *database.Book, authorName str
 	})
 }
 
-// checkExactISBN scans all books for matching ISBN10, ISBN13, or ASIN.
+// checkExactISBN finds all other books with a matching ISBN10, ISBN13, or ASIN
+// and emits dedup candidates for each match.
+//
+// Fast path (when isbn-index-build has run): queries the book:isbn10:,
+// book:isbn13:, and book:asin: secondary indexes via GetBookIDsByISBNASIN,
+// then loads only the matching books via GetBookByID. O(matches) instead of
+// O(N books).
+//
+// Fallback (index not built or isbnIndexStore not wired): scans all books in
+// 500-row batches via GetAllBooks — the original O(N) behavior, always correct.
+//
+// Both paths apply the same guards: skip self (book.ID == other.ID), skip
+// MarkedForDeletion books, and skip books where hasPlausibleAudio is false.
 func (de *Engine) checkExactISBN(book *database.Book) error {
 	bookISBN10 := derefStr(book.ISBN10)
 	bookISBN13 := derefStr(book.ISBN13)
@@ -734,6 +774,61 @@ func (de *Engine) checkExactISBN(book *database.Book) error {
 		return nil // stub / unscanned shell — never anchor an exact-ISBN match
 	}
 
+	// Try the indexed fast path first.
+	if de.isbnIndexStore != nil && de.isbnIndexStore.IsISBNIndexBuilt() {
+		return de.checkExactISBNIndexed(book, bookISBN10, bookISBN13, bookASIN)
+	}
+
+	// Fallback: O(N) GetAllBooks scan (original behavior).
+	return de.checkExactISBNScan(book, bookISBN10, bookISBN13, bookASIN)
+}
+
+// checkExactISBNIndexed implements the O(matches) indexed path.
+// Only called when the isbn-index-build backfill has completed.
+func (de *Engine) checkExactISBNIndexed(book *database.Book, bookISBN10, bookISBN13, bookASIN string) error {
+	ids, err := de.isbnIndexStore.GetBookIDsByISBNASIN(bookISBN10, bookISBN13, bookASIN)
+	if err != nil {
+		return fmt.Errorf("isbn index lookup: %w", err)
+	}
+
+	for _, otherID := range ids {
+		if otherID == book.ID {
+			continue
+		}
+		other, err := de.bookStore.GetBookByID(otherID)
+		if err != nil {
+			slog.Warn("dedup isbn index: GetBookByID error", "id", otherID, "err", err)
+			continue
+		}
+		if other == nil {
+			continue // deleted between index scan and point lookup
+		}
+		// GetBookByID does not filter MarkedForDeletion; apply the same filter
+		// that GetAllBooks applies so indexed and scan paths are equivalent.
+		if other.MarkedForDeletion != nil && *other.MarkedForDeletion {
+			continue
+		}
+		if !hasPlausibleAudio(other) {
+			continue // stub / unscanned shell on the other side
+		}
+		sim := 1.0
+		if err := de.embedStore.UpsertCandidate(database.DedupCandidate{
+			EntityType: "book",
+			EntityAID:  book.ID,
+			EntityBID:  other.ID,
+			Layer:      "exact",
+			Similarity: &sim,
+			Status:     "pending",
+		}); err != nil {
+			slog.Error("dedup upsert ISBN candidate error", "err", err)
+		}
+	}
+	return nil
+}
+
+// checkExactISBNScan implements the O(N) fallback path via GetAllBooks.
+// Used when the isbn-index-build backfill has not yet run.
+func (de *Engine) checkExactISBNScan(book *database.Book, bookISBN10, bookISBN13, bookASIN string) error {
 	const batchSize = 500
 	offset := 0
 	for {
