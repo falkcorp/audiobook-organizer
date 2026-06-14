@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_isbn_index.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-06-14
 
@@ -41,7 +41,10 @@ import (
 
 // isbnIndexBuiltFlagKey is stored in Settings when the isbn-index-build op
 // completes.  The v1 suffix lets us force a re-run by bumping to v2.
-const isbnIndexBuiltFlagKey = "system:flag:book_isbn_index_v1_done"
+// No namespace prefix — matches the convention of sibling ops (e.g.
+// purgeLegacyFPDoneFlag = "dedup_fp_purge_v1_done").  The Settings layer
+// adds its own "setting:" storage prefix internally.
+const isbnIndexBuiltFlagKey = "book_isbn_index_v1_done"
 
 // derefStrISBN is a nil-safe string pointer deref used in ISBN index maintenance.
 // Returns "" for nil pointers.

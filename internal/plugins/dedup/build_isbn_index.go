@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/build_isbn_index.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-06-14
 
@@ -32,10 +32,6 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
-
-// isbnIndexDoneFlag is the versioned Settings key set on successful completion.
-// Increment to v2 if the key format changes and a forced rebuild is needed.
-const isbnIndexDoneFlag = "book_isbn_index_v1_done"
 
 // buildISBNIndexParams are the JSON parameters accepted by the op.
 type buildISBNIndexParams struct {
@@ -74,6 +70,15 @@ func (p *Plugin) runBuildISBNIndex(ctx context.Context, rawParams json.RawMessag
 		return fmt.Errorf("main store not available")
 	}
 
+	// --- Resolve the typed ISBN index interface ---
+	// The store must implement ISBNIndexStore so the op can write index rows
+	// and set/read the completion flag without going through the generic
+	// SetSetting path (which uses a different key from IsISBNIndexBuilt).
+	isbnStore, ok := p.store.(ISBNIndexStore)
+	if !ok {
+		return fmt.Errorf("store does not implement ISBNIndexStore (expected *database.PebbleStore)")
+	}
+
 	// --- Parse params ---
 	var params buildISBNIndexParams
 	if len(rawParams) > 0 {
@@ -85,11 +90,8 @@ func (p *Plugin) runBuildISBNIndex(ctx context.Context, rawParams json.RawMessag
 	reporter.Logger().Info("build-isbn-index start", "apply", params.Apply)
 
 	// --- Check if already complete ---
-	if done, err := p.isFlagSet(isbnIndexDoneFlag); err != nil {
-		reporter.Logger().Warn("build-isbn-index: flag check error (proceeding)", "error", err)
-	} else if done && params.Apply {
-		reporter.Logger().Info("build-isbn-index: already completed; re-running to ensure consistency",
-			"flag", isbnIndexDoneFlag)
+	if isbnStore.IsISBNIndexBuilt() && params.Apply {
+		reporter.Logger().Info("build-isbn-index: already completed; re-running to ensure consistency")
 	}
 
 	// --- Load all books ---
@@ -186,32 +188,15 @@ func (p *Plugin) runBuildISBNIndex(ctx context.Context, rawParams json.RawMessag
 		return nil
 	}
 
-	// --- Apply: write index rows via the store's write path ---
-	// We call the individual PebbleStore methods through the database.Store
-	// interface.  The index write happens via WriteISBNIndexRows which is
-	// package-private in database; we trigger it by calling UpdateBook for
-	// each affected book.  However, UpdateBook is expensive (full JSON
-	// marshal + snapshot).  Instead, we call the public
-	// GetBookIDsByISBNASIN-style helpers on the store… but the write helpers
-	// are package-private.
-	//
-	// The cleanest solution: check if the store exposes the typed write
-	// interface. We type-assert to ISBNIndexPebbleStore (which is *PebbleStore)
-	// to call SetISBNIndexBuilt.  For the row writes we use UpdateBook on a
-	// no-op update — it's slightly expensive but preserves all maintenance
-	// (snapshots, memdb write-through, dirty-flag invalidation) and avoids
-	// any direct Pebble batch access from outside the database package.
-	//
-	// For the actual row writes we call a dedicated typed interface:
-	// ISBNIndexWriter which *PebbleStore satisfies via WriteISBNIndexForBook.
-	writer, ok := p.store.(ISBNIndexWriter)
-	if !ok {
-		return fmt.Errorf("store does not implement ISBNIndexWriter (expected *database.PebbleStore)")
-	}
-
+	// --- Apply: write index rows via the store's typed write path ---
+	// Row writes go through ISBNIndexStore.WriteISBNIndexForBook (a dedicated
+	// single-book batch write, idempotent, no UpdateBook overhead).
+	// The completion flag is set only when ALL books were written successfully
+	// (written == booksWithISBN), covering both per-book write failures and
+	// mid-run cancellation.
 	_ = reporter.UpdateProgress(1, 3, fmt.Sprintf("Writing %d index rows…", indexRows))
 
-	var written int
+	var written, failed int
 	for _, e := range toWrite {
 		if reporter.IsCanceled() {
 			break
@@ -222,38 +207,54 @@ func (p *Plugin) runBuildISBNIndex(ctx context.Context, rawParams json.RawMessag
 		default:
 		}
 
-		if err := writer.WriteISBNIndexForBook(e.bookID, e.isbn10, e.isbn13, e.asin); err != nil {
+		if err := isbnStore.WriteISBNIndexForBook(e.bookID, e.isbn10, e.isbn13, e.asin); err != nil {
 			reporter.Logger().Error("build-isbn-index: write error",
 				"book_id", e.bookID, "error", err)
 			// Continue — partial progress is better than aborting; the op is idempotent.
+			failed++
 		} else {
 			written++
 		}
 	}
 
 	reporter.Logger().Info("build-isbn-index: write complete",
-		"written", written, "intended", booksWithISBN)
+		"written", written, "failed", failed, "intended", booksWithISBN)
 
-	// --- Set completion flag ---
-	if err := p.store.SetSetting(isbnIndexDoneFlag, "true", "bool", false); err != nil {
-		reporter.Logger().Warn("build-isbn-index: could not set done flag",
-			"flag", isbnIndexDoneFlag, "error", err)
+	// --- Set completion flag only on a complete, error-free backfill ---
+	// written == booksWithISBN guards against both write errors (failed > 0)
+	// and mid-run cancellation (written + failed < booksWithISBN).
+	if written == booksWithISBN {
+		if err := isbnStore.SetISBNIndexBuilt(); err != nil {
+			reporter.Logger().Warn("build-isbn-index: could not set done flag", "error", err)
+		} else {
+			reporter.Logger().Info("build-isbn-index: set done flag")
+		}
 	} else {
-		reporter.Logger().Info("build-isbn-index: set done flag", "flag", isbnIndexDoneFlag)
+		reporter.Logger().Warn("build-isbn-index: done flag NOT set — backfill incomplete",
+			"written", written, "failed", failed, "intended", booksWithISBN,
+			"action", "re-run with apply=true to complete")
 	}
 
 	_ = reporter.UpdateProgress(3, 3,
-		fmt.Sprintf("Complete — %d/%d books indexed. %s", written, booksWithISBN, summary))
+		fmt.Sprintf("Complete — %d/%d books indexed (%d failed). %s", written, booksWithISBN, failed, summary))
 	reporter.Logger().Info("build-isbn-index: complete",
-		"written", written, "intended", booksWithISBN)
+		"written", written, "failed", failed, "intended", booksWithISBN)
 	return nil
 }
 
-// ISBNIndexWriter is the narrow write interface the backfill op uses to write
-// index rows for a single book without going through the full UpdateBook path.
-// *database.PebbleStore implements this via WriteISBNIndexForBook.
-type ISBNIndexWriter interface {
+// ISBNIndexStore is the narrow typed interface the build-isbn-index op uses.
+// It covers both the per-book row write and the single-source-of-truth
+// completion flag methods.  *database.PebbleStore implements all three.
+type ISBNIndexStore interface {
+	// WriteISBNIndexForBook writes isbn10/isbn13/asin secondary-index rows for
+	// a single book (idempotent, one-shot Pebble batch).
 	WriteISBNIndexForBook(bookID, isbn10, isbn13, asin string) error
+	// IsISBNIndexBuilt reports whether the backfill has completed.
+	IsISBNIndexBuilt() bool
+	// SetISBNIndexBuilt marks the backfill complete.  Must use the same
+	// Settings key as IsISBNIndexBuilt — both are on *database.PebbleStore,
+	// so this is guaranteed by construction.
+	SetISBNIndexBuilt() error
 }
 
 // derefStrPlugin is a nil-safe string pointer deref for use in the dedup plugin.
