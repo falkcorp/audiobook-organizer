@@ -603,51 +603,6 @@ func (_c *MockMetadataStore_FlagMetadataHashDuplicate_Call) RunAndReturn(run fun
 	return _c
 }
 
-// RecomputeBookAggregates provides a mock function for the type MockMetadataStore
-func (_mock *MockMetadataStore) RecomputeBookAggregates(bookID string) error {
-	ret := _mock.Called(bookID)
-
-	if len(ret) == 0 {
-		panic("no return value specified for RecomputeBookAggregates")
-	}
-
-	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(string) error); ok {
-		r0 = returnFunc(bookID)
-	} else {
-		r0 = ret.Error(0)
-	}
-	return r0
-}
-
-// MockMetadataStore_RecomputeBookAggregates_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RecomputeBookAggregates'
-type MockMetadataStore_RecomputeBookAggregates_Call struct {
-	*mock.Call
-}
-
-// RecomputeBookAggregates is a helper method to define mock.On call
-//   - bookID string
-func (_e *MockMetadataStore_Expecter) RecomputeBookAggregates(bookID interface{}) *MockMetadataStore_RecomputeBookAggregates_Call {
-	return &MockMetadataStore_RecomputeBookAggregates_Call{Call: _e.mock.On("RecomputeBookAggregates", bookID)}
-}
-
-func (_c *MockMetadataStore_RecomputeBookAggregates_Call) Run(run func(bookID string)) *MockMetadataStore_RecomputeBookAggregates_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(string))
-	})
-	return _c
-}
-
-func (_c *MockMetadataStore_RecomputeBookAggregates_Call) Return(err error) *MockMetadataStore_RecomputeBookAggregates_Call {
-	_c.Call.Return(err)
-	return _c
-}
-
-func (_c *MockMetadataStore_RecomputeBookAggregates_Call) RunAndReturn(run func(bookID string) error) *MockMetadataStore_RecomputeBookAggregates_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // GetAllBookSummaries provides a mock function for the type MockMetadataStore
 func (_mock *MockMetadataStore) GetAllBookSummaries(limit int, offset int) ([]database.BookSummary, error) {
 	ret := _mock.Called(limit, offset)
@@ -1282,6 +1237,80 @@ func (_c *MockMetadataStore_GetBookByOriginalHash_Call) Return(book *database.Bo
 }
 
 func (_c *MockMetadataStore_GetBookByOriginalHash_Call) RunAndReturn(run func(hash string) (*database.Book, error)) *MockMetadataStore_GetBookByOriginalHash_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// GetBookIDsByISBNASIN provides a mock function for the type MockMetadataStore
+func (_mock *MockMetadataStore) GetBookIDsByISBNASIN(isbn10 string, isbn13 string, asin string) ([]string, error) {
+	ret := _mock.Called(isbn10, isbn13, asin)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetBookIDsByISBNASIN")
+	}
+
+	var r0 []string
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string, string, string) ([]string, error)); ok {
+		return returnFunc(isbn10, isbn13, asin)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string, string, string) []string); ok {
+		r0 = returnFunc(isbn10, isbn13, asin)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]string)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string, string, string) error); ok {
+		r1 = returnFunc(isbn10, isbn13, asin)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockMetadataStore_GetBookIDsByISBNASIN_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetBookIDsByISBNASIN'
+type MockMetadataStore_GetBookIDsByISBNASIN_Call struct {
+	*mock.Call
+}
+
+// GetBookIDsByISBNASIN is a helper method to define mock.On call
+//   - isbn10 string
+//   - isbn13 string
+//   - asin string
+func (_e *MockMetadataStore_Expecter) GetBookIDsByISBNASIN(isbn10 interface{}, isbn13 interface{}, asin interface{}) *MockMetadataStore_GetBookIDsByISBNASIN_Call {
+	return &MockMetadataStore_GetBookIDsByISBNASIN_Call{Call: _e.mock.On("GetBookIDsByISBNASIN", isbn10, isbn13, asin)}
+}
+
+func (_c *MockMetadataStore_GetBookIDsByISBNASIN_Call) Run(run func(isbn10 string, isbn13 string, asin string)) *MockMetadataStore_GetBookIDsByISBNASIN_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockMetadataStore_GetBookIDsByISBNASIN_Call) Return(strings []string, err error) *MockMetadataStore_GetBookIDsByISBNASIN_Call {
+	_c.Call.Return(strings, err)
+	return _c
+}
+
+func (_c *MockMetadataStore_GetBookIDsByISBNASIN_Call) RunAndReturn(run func(isbn10 string, isbn13 string, asin string) ([]string, error)) *MockMetadataStore_GetBookIDsByISBNASIN_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -2824,6 +2853,57 @@ func (_c *MockMetadataStore_PruneBookSnapshots_Call) Return(n int, err error) *M
 }
 
 func (_c *MockMetadataStore_PruneBookSnapshots_Call) RunAndReturn(run func(id string, keepCount int) (int, error)) *MockMetadataStore_PruneBookSnapshots_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// RecomputeBookAggregates provides a mock function for the type MockMetadataStore
+func (_mock *MockMetadataStore) RecomputeBookAggregates(bookID string) error {
+	ret := _mock.Called(bookID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for RecomputeBookAggregates")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string) error); ok {
+		r0 = returnFunc(bookID)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockMetadataStore_RecomputeBookAggregates_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RecomputeBookAggregates'
+type MockMetadataStore_RecomputeBookAggregates_Call struct {
+	*mock.Call
+}
+
+// RecomputeBookAggregates is a helper method to define mock.On call
+//   - bookID string
+func (_e *MockMetadataStore_Expecter) RecomputeBookAggregates(bookID interface{}) *MockMetadataStore_RecomputeBookAggregates_Call {
+	return &MockMetadataStore_RecomputeBookAggregates_Call{Call: _e.mock.On("RecomputeBookAggregates", bookID)}
+}
+
+func (_c *MockMetadataStore_RecomputeBookAggregates_Call) Run(run func(bookID string)) *MockMetadataStore_RecomputeBookAggregates_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockMetadataStore_RecomputeBookAggregates_Call) Return(err error) *MockMetadataStore_RecomputeBookAggregates_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockMetadataStore_RecomputeBookAggregates_Call) RunAndReturn(run func(bookID string) error) *MockMetadataStore_RecomputeBookAggregates_Call {
 	_c.Call.Return(run)
 	return _c
 }
