@@ -1,5 +1,5 @@
 // file: internal/sweep/sweeper_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: b2c3d4e5-f6a7-8910-abcd-ef2345678902
 
 package sweep
@@ -85,7 +85,10 @@ func (m *MockBookStore) GetBookByFilePath(path string) (*database.Book, error) {
 func (m *MockBookStore) GetBookByITunesPersistentID(persistentID string) (*database.Book, error) {
 	return nil, nil
 }
-func (m *MockBookStore) GetBookByFileHash(hash string) (*database.Book, error)      { return nil, nil }
+func (m *MockBookStore) GetBookByFileHash(hash string) (*database.Book, error) { return nil, nil }
+func (m *MockBookStore) GetBookIDsByISBNASIN(isbn10, isbn13, asin string) ([]string, error) {
+	return nil, nil
+}
 func (m *MockBookStore) GetBookByOriginalHash(hash string) (*database.Book, error)  { return nil, nil }
 func (m *MockBookStore) GetBookByOrganizedHash(hash string) (*database.Book, error) { return nil, nil }
 func (m *MockBookStore) GetDuplicateBooks() ([][]database.Book, error)              { return nil, nil }
@@ -141,8 +144,10 @@ func (m *MockBookStore) MergeChapterBooks(primaryID string, srcIDs []string, com
 }
 func (m *MockBookStore) FlagMetadataHashDuplicate(primaryID, duplicateID string) error { return nil }
 func (m *MockBookStore) RecomputeBookAggregates(_ string) error                        { return nil }
-func (m *MockBookStore) ListBookIDs() ([]string, error)                                        { return nil, nil }
-func (m *MockBookStore) ListBooksByITunesPID(limit, offset int) ([]database.Book, error)       { return nil, nil }
+func (m *MockBookStore) ListBookIDs() ([]string, error)                                { return nil, nil }
+func (m *MockBookStore) ListBooksByITunesPID(limit, offset int) ([]database.Book, error) {
+	return nil, nil
+}
 
 func TestSweepTombstones_EmptyList(t *testing.T) {
 	store := &MockBookStore{

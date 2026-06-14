@@ -1,5 +1,5 @@
 // file: internal/itunes/rebuild_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1c2d3e4f-5a6b-7c8d-9e0f-1a2b3c4d5e6f
 
 package itunes
@@ -53,6 +53,10 @@ func (m *mockRebuildStore) GetBookByITunesPersistentID(persistentID string) (*da
 }
 
 func (m *mockRebuildStore) GetBookByFileHash(hash string) (*database.Book, error) {
+	return nil, nil
+}
+
+func (m *mockRebuildStore) GetBookIDsByISBNASIN(isbn10, isbn13, asin string) ([]string, error) {
 	return nil, nil
 }
 
@@ -158,8 +162,10 @@ func (m *mockRebuildStore) GetBookFiles(bookID string) ([]database.BookFile, err
 func (m *mockRebuildStore) GetAuthorByID(id int) (*database.Author, error) {
 	return nil, nil
 }
-func (m *mockRebuildStore) ListBookIDs() ([]string, error)                                { return nil, nil }
-func (m *mockRebuildStore) ListBooksByITunesPID(limit, offset int) ([]database.Book, error) { return nil, nil }
+func (m *mockRebuildStore) ListBookIDs() ([]string, error) { return nil, nil }
+func (m *mockRebuildStore) ListBooksByITunesPID(limit, offset int) ([]database.Book, error) {
+	return nil, nil
+}
 
 func TestBuildNewTrackFromBook(t *testing.T) {
 	// Create a mock book
