@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.48.0
+// version: 1.49.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-06-14
 
@@ -176,6 +176,15 @@ type Config struct {
 	DedupAuthorHighThreshold float64 `json:"dedup_author_high_threshold"` // default 0.92
 	DedupAuthorLowThreshold  float64 `json:"dedup_author_low_threshold"`  // default 0.80
 	DedupAutoMergeEnabled    bool    `json:"dedup_auto_merge_enabled"`    // default true
+	// DedupEmbeddingsEnabled controls whether the embedding layer (Layer 2) is
+	// active for dedup.full-scan and per-import dedup checks. Default true
+	// (preserves current behaviour). Set to false on air-gapped / no-internet
+	// boxes to skip all OpenAI embedding calls; Layer 1 (hash/ISBN/title/
+	// duration) still runs and produces candidates. A circuit-breaker in
+	// FullScan also disables the path automatically after 3 consecutive API
+	// failures, so toggling this manually is only needed when you want to
+	// suppress the API calls from the very start.
+	DedupEmbeddingsEnabled bool `json:"dedup_embeddings_enabled"` // default true
 	// DedupOnImportViaScheduler, when true, routes the post-import dedup check
 	// through the UOS dependency scheduler (dedup.check-book op, M4) instead
 	// of firing an eager goroutine. Defaults false so production import behavior
@@ -770,6 +779,7 @@ func InitConfig() {
 		c.DedupAuthorHighThreshold = 0.92
 		c.DedupAuthorLowThreshold = 0.80
 		c.DedupAutoMergeEnabled = true
+		c.DedupEmbeddingsEnabled = true           // opt-out: set false on no-internet boxes
 		c.DedupLLMAutoMergeHighConfidence = false // opt-in
 		c.DedupOnImportViaScheduler = false       // opt-in — keep eager path until M4 is confirmed
 
@@ -1094,6 +1104,7 @@ func ResetToDefaults() {
 			DedupAuthorHighThreshold:        0.92,
 			DedupAuthorLowThreshold:         0.80,
 			DedupAutoMergeEnabled:           true,
+			DedupEmbeddingsEnabled:          true, // opt-out: set false on no-internet boxes
 			DedupLLMAutoMergeHighConfidence: false,
 			DedupOnImportViaScheduler:       false, // opt-in
 

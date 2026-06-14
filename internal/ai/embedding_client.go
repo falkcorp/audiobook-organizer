@@ -1,6 +1,7 @@
 // file: internal/ai/embedding_client.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+// last-edited: 2026-06-14
 
 package ai
 
@@ -47,12 +48,24 @@ type EmbeddingClient struct {
 	model  string
 	cache  EmbeddingCache
 
+	// requestTimeout bounds each individual Embeddings.New call
+	// (one per retry attempt). Without this, a single hung request
+	// blocks the whole FullScan for the lifetime of the parent ctx
+	// (up to 120 min). Set via WithRequestTimeout; default 30s.
+	requestTimeout time.Duration
+
 	// rawEmbed is the underlying API-call function. It defaults
 	// to c.embedBatchRaw which hits OpenAI; tests override it
 	// with a fake so the cache-partitioning logic can be
 	// exercised without a real API key.
 	rawEmbed func(ctx context.Context, texts []string) ([][]float32, error)
 }
+
+// defaultRequestTimeout is the per-attempt timeout applied to each
+// Embeddings.New call in embedBatchRaw. 30 s is enough for any batch ≤ 64
+// inputs on a healthy network; on an unreachable endpoint it triggers after
+// 30 s instead of blocking for the full operation timeout (up to 120 min).
+const defaultRequestTimeout = 30 * time.Second
 
 // NewEmbeddingClient creates a new embedding client using the given API key.
 // Default model is text-embedding-3-large. The returned client has no cache
@@ -65,10 +78,23 @@ func NewEmbeddingClient(apiKey string) *EmbeddingClient {
 
 	client := openai.NewClient(clientOptions...)
 	c := &EmbeddingClient{
-		client: &client,
-		model:  "text-embedding-3-large",
+		client:         &client,
+		model:          "text-embedding-3-large",
+		requestTimeout: defaultRequestTimeout,
 	}
 	c.rawEmbed = c.embedBatchRaw
+	return c
+}
+
+// WithRequestTimeout overrides the per-attempt timeout for each
+// Embeddings.New call. A value ≤ 0 is silently replaced with the
+// defaultRequestTimeout (30 s) so the client never blocks forever.
+// Safe to call at any time; subsequent EmbedBatch calls use the new value.
+func (c *EmbeddingClient) WithRequestTimeout(d time.Duration) *EmbeddingClient {
+	if d <= 0 {
+		d = defaultRequestTimeout
+	}
+	c.requestTimeout = d
 	return c
 }
 
@@ -182,9 +208,22 @@ func (c *EmbeddingClient) EmbedBatch(ctx context.Context, texts []string) ([][]f
 // embedBatchRaw is the actual OpenAI API call with retries —
 // EmbedBatch handles the cache partitioning around it. Split out
 // so the caching logic can call it with just the miss set.
+//
+// Each attempt is wrapped in a child context bounded by c.requestTimeout
+// so a hung TCP connection fails in ≤ requestTimeout (default 30 s) rather
+// than blocking until the parent ctx deadline (up to 120 min op timeout).
+// The parent ctx is still respected — if it is cancelled between attempts the
+// retry loop exits immediately.
 func (c *EmbeddingClient) embedBatchRaw(ctx context.Context, texts []string) ([][]float32, error) {
 	var lastErr error
 	delays := []time.Duration{1 * time.Second, 4 * time.Second}
+
+	// Resolve the per-attempt timeout, guarding against a zero value that
+	// would produce an already-expired context.
+	reqTimeout := c.requestTimeout
+	if reqTimeout <= 0 {
+		reqTimeout = defaultRequestTimeout
+	}
 
 	for attempt := 0; attempt <= 2; attempt++ {
 		if attempt > 0 {
@@ -196,13 +235,18 @@ func (c *EmbeddingClient) embedBatchRaw(ctx context.Context, texts []string) ([]
 			}
 		}
 
-		resp, err := c.client.Embeddings.New(ctx, openai.EmbeddingNewParams{
+		// Wrap each attempt in its own bounded child context so a hung
+		// network call times out in reqTimeout rather than waiting for the
+		// (potentially very long) parent op context.
+		attemptCtx, attemptCancel := context.WithTimeout(ctx, reqTimeout)
+		resp, err := c.client.Embeddings.New(attemptCtx, openai.EmbeddingNewParams{
 			Input: openai.EmbeddingNewParamsInputUnion{
 				OfArrayOfStrings: texts,
 			},
 			Model: openai.EmbeddingModel(c.model),
 			User:  openai.String("ao-embeddings"),
 		})
+		attemptCancel() // always release the child context, never defer in a loop
 		if err != nil {
 			lastErr = fmt.Errorf("embedding attempt %d: %w", attempt+1, err)
 			continue

@@ -1,7 +1,7 @@
 // file: internal/dedup/engine.go
-// version: 1.26.2
+// version: 1.27.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
-// last-edited: 2026-06-13
+// last-edited: 2026-06-14
 
 package dedup
 
@@ -165,6 +165,19 @@ func (de *Engine) SetLSHStore(s LSHAcoustIDStore) {
 	de.lshAcoustIDStore = s
 }
 
+// embeddingsEnabled reports whether the embedding layer (Layer 2) should be
+// active for this engine. Both conditions must hold:
+//   - an embedding client is wired (de.embedClient != nil)
+//   - the global config flag DedupEmbeddingsEnabled is true (default true;
+//     set false on no-internet boxes via config or the settings API)
+//
+// Reading config.AppConfig directly (not a construction-time snapshot) mirrors
+// the pattern used by DedupReviewModel and DedupLLMAutoMergeHighConfidence so
+// a runtime settings toggle takes effect on the next FullScan without a restart.
+func (de *Engine) embeddingsEnabled() bool {
+	return de.embedClient != nil && config.AppConfig.DedupEmbeddingsEnabled
+}
+
 // SetScoreConfig overrides the unified scoring calibration.  Call this before
 // any CheckBook/FullScan if you need non-default thresholds (tests, A/B).
 // Pass a nil pointer to revert to DefaultScoreConfig.
@@ -308,7 +321,7 @@ func (de *Engine) CheckBook(ctx context.Context, bookID string) (bool, error) {
 	}
 
 	// --- Layer 2: Embedding similarity ---
-	if de.embedClient != nil {
+	if de.embeddingsEnabled() {
 		if _, err := de.EmbedBook(ctx, bookID); err != nil {
 			slog.Error("dedup embed book error for", "bookID", bookID, "err", err)
 		} else {
@@ -1784,18 +1797,33 @@ func (de *Engine) FullScan(ctx context.Context, progress func(done, total int)) 
 	// magnitude vs. the previous one-call-per-book loop.
 	const embedChunkSize = 64
 
+	// Circuit-breaker state: if the embedding backend fails consecutively
+	// (network unreachable, quota exhausted, etc.) we give up on Layer 2 for
+	// the rest of this scan rather than hanging/retrying ~780 times.
+	// embeddingsGaveUp is set after embedFailThreshold consecutive failures.
+	const embedFailThreshold = 3
+	var (
+		embedConsecutiveFails int
+		embeddingsGaveUp      bool
+	)
+
 	total := len(books)
 	span.SetAttributes(attribute.Int("total_books", total))
 	chunkIDs := make([]string, 0, embedChunkSize)
 	chunkStart := 0
 
+	// flushChunk sends the accumulated book IDs to EmbedBooks and then runs
+	// findSimilarBooks for each successfully embedded book. It now returns the
+	// EmbedBooks error (if any) so the circuit-breaker above can count
+	// consecutive failures; chunkIDs is always reset so we advance past the
+	// failed chunk regardless.
 	flushChunk := func(endIdx int) error {
 		if len(chunkIDs) == 0 {
 			return nil
 		}
 		statuses, err := de.EmbedBooks(ctx, chunkIDs)
 		if err != nil {
-			slog.Error("dedup full scan embed batch error (start size)", "chunkStart", chunkStart, "chunkIDs_count", len(chunkIDs), "err", err)
+			slog.Error("dedup full scan embed batch error", "chunkStart", chunkStart, "chunkIDs_count", len(chunkIDs), "err", err)
 		}
 		for _, id := range chunkIDs {
 			st, ok := statuses[id]
@@ -1810,7 +1838,7 @@ func (de *Engine) FullScan(ctx context.Context, progress func(done, total int)) 
 		}
 		chunkIDs = chunkIDs[:0]
 		chunkStart = endIdx
-		return nil
+		return err // return the EmbedBooks error for circuit-breaker accounting
 	}
 
 	for i, book := range books {
@@ -1830,7 +1858,7 @@ func (de *Engine) FullScan(ctx context.Context, progress func(done, total int)) 
 
 		// Layer 1 exact checks (file hash, ISBN/ASIN, near-identical title,
 		// duration match). Cheap and synchronous, no API calls — runs
-		// inline regardless of embed batching.
+		// inline regardless of embed batching or the circuit-breaker state.
 		if _, err := de.checkExactFileHash(&book, authorName); err != nil {
 			slog.Error("dedup full scan hash check error for", "book", book.ID, "err", err)
 		}
@@ -1848,10 +1876,28 @@ func (de *Engine) FullScan(ctx context.Context, progress func(done, total int)) 
 		// OpenAI calls coalesced. findSimilarBooks runs after each batch
 		// flush so similarity work overlaps with the embedding work for
 		// the next chunk in flight.
-		if de.embedClient != nil {
+		//
+		// Guarded by embeddingsEnabled() (client present + config flag) and
+		// the circuit-breaker flag. When the flag is false from the start,
+		// no API calls are made at all. When the breaker trips mid-scan,
+		// remaining chunks are skipped; Layer 1 candidates already written
+		// are unaffected and the scan completes normally.
+		if de.embeddingsEnabled() && !embeddingsGaveUp {
 			chunkIDs = append(chunkIDs, book.ID)
 			if len(chunkIDs) >= embedChunkSize {
-				_ = flushChunk(i + 1)
+				if err := flushChunk(i + 1); err != nil {
+					embedConsecutiveFails++
+					if embedConsecutiveFails >= embedFailThreshold {
+						embeddingsGaveUp = true
+						slog.Warn("dedup full-scan: embeddings unavailable after consecutive failures — completing scan with Layer-1 + signature only",
+							"consecutive_failures", embedConsecutiveFails,
+							"books_processed_so_far", i+1,
+							"total_books", total,
+						)
+					}
+				} else {
+					embedConsecutiveFails = 0
+				}
 			}
 		}
 
@@ -1860,8 +1906,12 @@ func (de *Engine) FullScan(ctx context.Context, progress func(done, total int)) 
 		}
 	}
 
-	// Final partial chunk.
-	_ = flushChunk(total)
+	// Final partial chunk — only if embeddings are still active.
+	if de.embeddingsEnabled() && !embeddingsGaveUp {
+		if err := flushChunk(total); err != nil {
+			slog.Error("dedup full scan final embed chunk error", "err", err)
+		}
+	}
 
 	// --- Unified composite scoring (T014) ---
 	// Second pass over all books: for each book, compose a unified score from
