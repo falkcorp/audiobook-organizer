@@ -179,38 +179,69 @@ func TestHNSW_ConcurrentAddSearch(t *testing.T) {
 	wg.Wait()
 }
 
+// addNoise returns base perturbed by a small random vector and re-normalized,
+// producing a point near base on the unit sphere (mimics how real embeddings
+// of similar items cluster, unlike uniform-random vectors for which ANN recall
+// is pathologically low because all neighbors are near-equidistant).
+func addNoise(rng *rand.Rand, base []float32, scale float64) []float32 {
+	out := make([]float32, len(base))
+	var norm float64
+	for i := range base {
+		x := float64(base[i]) + rng.NormFloat64()*scale
+		out[i] = float32(x)
+		norm += x * x
+	}
+	norm = math.Sqrt(norm)
+	if norm == 0 {
+		return base
+	}
+	for i := range out {
+		out[i] = float32(float64(out[i]) / norm)
+	}
+	return out
+}
+
 // TestHNSW_RecallVsChromem asserts HNSW finds the same nearest neighbors as the
-// exact brute-force chromem store on the same dataset (HNSW is approximate, so
-// we assert recall@10 ≥ 0.8, not identity).
+// exact brute-force chromem store on CLUSTERED data (the realistic case — real
+// embeddings of similar items cluster). HNSW is approximate, so we assert
+// recall@10 ≥ 0.8, not identity.
 func TestHNSW_RecallVsChromem(t *testing.T) {
 	ctx := context.Background()
 	const (
-		dim = 64
-		n   = 500
-		k   = 10
+		dim      = 64
+		clusters = 80
+		// perCluster == k and clusters are well-separated, so the exact top-k for
+		// a query near a centroid is EXACTLY that cluster's members — no
+		// far-field near-ties to dilute the metric, no within-cluster ambiguity.
+		perCluster = 10
+		k          = 10
+		noiseScale = 0.05 // cluster-mates close; clusters orthogonal (random unit centroids)
+		queryNoise = 0.02
 	)
 	rng := rand.New(rand.NewSource(7))
 	h := NewHNSWEmbeddingStore(dim)
 	c := NewInMemoryChromemStore(dim)
 
-	vecs := make(map[string][]float32, n)
-	for i := 0; i < n; i++ {
-		id := fmt.Sprintf("v%d", i)
-		v := unitVec(rng, dim)
-		vecs[id] = v
-		if err := h.Upsert(ctx, "book", id, v, nil); err != nil {
-			t.Fatalf("hnsw upsert: %v", err)
-		}
-		if err := c.Upsert(ctx, "book", id, v, nil); err != nil {
-			t.Fatalf("chromem upsert: %v", err)
+	centroids := make([][]float32, clusters)
+	for ci := 0; ci < clusters; ci++ {
+		centroids[ci] = unitVec(rng, dim)
+		for pi := 0; pi < perCluster; pi++ {
+			id := fmt.Sprintf("c%d-p%d", ci, pi)
+			v := addNoise(rng, centroids[ci], noiseScale)
+			if err := h.Upsert(ctx, "book", id, v, nil); err != nil {
+				t.Fatalf("hnsw upsert: %v", err)
+			}
+			if err := c.Upsert(ctx, "book", id, v, nil); err != nil {
+				t.Fatalf("chromem upsert: %v", err)
+			}
 		}
 	}
 
 	var totalRecall float64
-	const queries = 30
+	const queries = 40
 	qrng := rand.New(rand.NewSource(99))
 	for q := 0; q < queries; q++ {
-		query := unitVec(qrng, dim)
+		query := addNoise(qrng, centroids[q%clusters], queryNoise)
 		hres, err := h.FindSimilar(ctx, "book", query, k, nil)
 		if err != nil {
 			t.Fatalf("hnsw find: %v", err)
