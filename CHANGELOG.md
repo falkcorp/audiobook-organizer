@@ -1,11 +1,48 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.23.0 -->
+<!-- version: 3.24.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-14 -->
 
 # Changelog
 
 ## [Unreleased]
+
+### Features
+
+#### June 14, 2026 — Local embeddings (Ollama) + config-driven embedding backend
+
+Lets dedup Layer-2 / entity embeddings run through a local OpenAI-compatible
+backend (e.g. Ollama `bge-m3`, 1024-dim) instead of OpenAI text-embedding-3-large
+(3072-dim), config-driven.
+
+- **Config**: `embedding_dimensions` (default 3072), `embedding_base_url` (default
+  "", scoped to the embedding client only — the LLM/metadata clients are
+  unaffected). `embedding_model` already existed.
+- **Client**: `ai.NewEmbeddingClientWithOptions(apiKey, model, baseURL)`;
+  `NewEmbeddingClient` delegates with prior env-based behavior for back-compat.
+- **chromem store** dimension is now config-driven (guarded `<=0 → 3072`).
+- **Bug fix**: `EmbedBooks`/`EmbedAuthor` recorded a hardcoded
+  `Model: "text-embedding-3-large"` on every stored vector regardless of the
+  actual model; now records `de.embedClient.Model()`. Added `Engine.EmbeddingModel()`.
+- **Op `dedup.reembed-embeddings`** (`internal/plugins/dedup/reembed_embeddings.go`):
+  dry-run default, resumable. Re-embeds books whose stored model ≠ the configured
+  model; deletes the stale vector first so a same-text cache hit can't reuse a
+  wrong-dimension vector.
+
+#### June 14, 2026 — HNSW vector index backend (coder/hnsw)
+
+Config-selectable sub-linear ANN index for dedup Layer 2, an alternative to
+chromem-go's brute-force O(n·d) cosine scan. At ~68K × 1024-dim a full-scan is
+hours on chromem; HNSW is ~O(log n). Pure Go, zero CGo.
+
+- **`database.VectorANNStore`** interface; both `*ChromemEmbeddingStore` and the
+  new **`*HNSWEmbeddingStore`** (`github.com/coder/hnsw`) satisfy it.
+- HNSW store: one graph per entity type, metadata sidecar + `sync.RWMutex`,
+  cosine, over-fetch + metadata post-filter (the graph has no native filtering),
+  dimension-mismatch rejection. Tests incl. concurrent `-race` and recall@10 ≥
+  0.8 vs exact chromem; chromem-vs-hnsw benchmark.
+- **`config.vector_index_backend`** (`"chromem"` default | `"hnsw"`). Default keeps
+  chromem, so deploy is a no-op until flipped.
 
 ### Performance
 
