@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.50.0
+// version: 1.51.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-06-14
 
@@ -183,6 +183,11 @@ type Config struct {
 	// OpenAI SDK applies to every default client. Empty = OpenAI (or, for
 	// backward compat, the OPENAI_BASE_URL env if set). Default "".
 	EmbeddingBaseURL string `json:"embedding_base_url"` // default ""
+	// VectorIndexBackend selects the in-memory ANN backend for dedup Layer 2:
+	// "chromem" (default, brute-force O(n) cosine scan) or "hnsw" (coder/hnsw
+	// graph, sub-linear search — preferred once the corpus is large). Both are
+	// derived indexes hydrated from the PebbleDB embedding store on boot.
+	VectorIndexBackend       string  `json:"vector_index_backend"`        // default "chromem"
 	DedupBookHighThreshold   float64 `json:"dedup_book_high_threshold"`   // default 0.95
 	DedupBookLowThreshold    float64 `json:"dedup_book_low_threshold"`    // default 0.85
 	DedupAuthorHighThreshold float64 `json:"dedup_author_high_threshold"` // default 0.92
@@ -788,6 +793,7 @@ func InitConfig() {
 		c.EmbeddingModel = "text-embedding-3-large"
 		c.EmbeddingDimensions = 3072
 		c.EmbeddingBaseURL = ""
+		c.VectorIndexBackend = "chromem"
 		c.DedupBookHighThreshold = 0.95
 		c.DedupBookLowThreshold = 0.85
 		c.DedupAuthorHighThreshold = 0.92
@@ -1115,6 +1121,7 @@ func ResetToDefaults() {
 			EmbeddingModel:                  "text-embedding-3-large",
 			EmbeddingDimensions:             3072,
 			EmbeddingBaseURL:                "",
+			VectorIndexBackend:              "chromem",
 			DedupBookHighThreshold:          0.95,
 			DedupBookLowThreshold:           0.85,
 			DedupAuthorHighThreshold:        0.92,
