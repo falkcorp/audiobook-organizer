@@ -1,5 +1,6 @@
 // file: internal/config/config_unit_test.go
-// version: 1.3.1
+// version: 1.4.0
+// last-edited: 2026-06-15
 
 package config
 
@@ -12,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/tools"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -475,6 +477,14 @@ func TestInitConfigDefaults(t *testing.T) {
 		assert.True(t, AppConfig.AutoRenameOnApply)
 		assert.True(t, AppConfig.AutoWriteTagsOnApply)
 		assert.True(t, AppConfig.VerifyAfterWrite)
+	})
+
+	t.Run("tools defaults", func(t *testing.T) {
+		assert.Equal(t, "/var/lib/audiobook-organizer/tools", AppConfig.Tools.ManagedDir)
+		assert.Equal(t, tools.ToolModeSystem, AppConfig.Tools.Ollama.Mode)
+		assert.Equal(t, tools.ToolModeSystem, AppConfig.Tools.Fpcalc.Mode)
+		assert.False(t, AppConfig.Tools.AllowPeriodicOllama)
+		assert.Equal(t, 10, AppConfig.Tools.OllamaDebounceMin)
 	})
 }
 
