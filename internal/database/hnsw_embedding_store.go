@@ -47,17 +47,23 @@ import (
 )
 
 const (
-	// hnswM is the max neighbors per node. 16 is the library's recommended
-	// default for OpenAI-scale embeddings and works well for bge-m3 (1024-dim).
-	hnswM = 16
-	// hnswEfSearch is the candidate-list size during search; higher = better
-	// recall, more CPU. 20 is the library default.
-	hnswEfSearch = 20
+	// hnswM is the max neighbors per node. The library default (16) gives only
+	// ~72% recall@10 on our data; 32 lifts it materially. Higher M = denser
+	// graph = better recall at more memory (~M edges/node/layer). 32 is a good
+	// balance for a dedup index where missing a duplicate matters.
+	hnswM = 32
+	// hnswEfSearch is the candidate-list (beam) size during search; higher =
+	// better recall at more CPU. It MUST be ≥ the number of neighbors requested
+	// from Search, otherwise the beam is narrower than the result set and recall
+	// collapses. FindSimilar requests limit*overFetch neighbors (≤80 in the
+	// common limit≤20 case); 200 covers that with ample headroom for recall.
+	hnswEfSearch = 200
 	// hnswOverFetchFactor multiplies the requested limit when searching, so the
 	// metadata post-filter still has enough survivors to fill `limit`. The graph
 	// has no native filtering, so non-matching neighbors must be fetched then
-	// dropped.
-	hnswOverFetchFactor = 8
+	// dropped. Kept modest (most books are primary versions, so few are filtered)
+	// to keep the search k under EfSearch.
+	hnswOverFetchFactor = 4
 )
 
 // HNSWEmbeddingStore is a coder/hnsw-backed VectorANNStore.
