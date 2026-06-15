@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_embedding_store.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-06-14
 
@@ -40,6 +40,7 @@ package database
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
 	"sync"
 
@@ -111,6 +112,11 @@ func (s *HNSWEmbeddingStore) Upsert(_ context.Context, entityType, entityID stri
 	if s.dims > 0 && len(vec) != s.dims {
 		return fmt.Errorf("hnsw upsert %s: vector dim %d != store dim %d", entityID, len(vec), s.dims)
 	}
+	// Reject zero-magnitude vectors: cosine of a zero vector is NaN, which would
+	// poison FindSimilar's similarity sort (NaN comparisons are undefined).
+	if !hasNonZeroMagnitude(vec) {
+		return fmt.Errorf("hnsw upsert %s: zero-magnitude vector", entityID)
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -121,11 +127,7 @@ func (s *HNSWEmbeddingStore) Upsert(_ context.Context, entityType, entityID stri
 		meta = map[string]string{}
 	}
 	// Store a defensive copy so the caller can't mutate our sidecar.
-	cp := make(map[string]string, len(meta))
-	for k, v := range meta {
-		cp[k] = v
-	}
-	s.meta[entityType][entityID] = cp
+	s.meta[entityType][entityID] = copyMeta(meta)
 	return nil
 }
 
@@ -141,11 +143,7 @@ func (s *HNSWEmbeddingStore) Get(_ context.Context, entityType, entityID string)
 	if !ok {
 		return nil, nil
 	}
-	cp := make(map[string]string, len(m))
-	for k, v := range m {
-		cp[k] = v
-	}
-	return cp, nil
+	return copyMeta(m), nil
 }
 
 // Delete removes an entity's vector + metadata. Absent keys are a no-op.
@@ -173,6 +171,16 @@ func (s *HNSWEmbeddingStore) FindSimilar(
 	if maxResults <= 0 {
 		maxResults = 20
 	}
+	// Guard the query dimension and return an error (don't panic): coder/hnsw's
+	// Search panics on a dimension mismatch, and dedup queries run from
+	// background goroutines where an unrecovered panic crashes the process. This
+	// also matches the chromem backend, which returns an error for the same input.
+	if len(query) == 0 {
+		return nil, fmt.Errorf("hnsw findsimilar: empty query vector")
+	}
+	if s.dims > 0 && len(query) != s.dims {
+		return nil, fmt.Errorf("hnsw findsimilar: query dim %d != store dim %d", len(query), s.dims)
+	}
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -182,8 +190,13 @@ func (s *HNSWEmbeddingStore) FindSimilar(
 		return nil, nil
 	}
 
-	// Over-fetch so the metadata filter has enough survivors. Cap at graph size.
+	// Over-fetch so the metadata filter has enough survivors. Cap at graph size,
+	// and at EfSearch: the search beam can't return more good neighbors than its
+	// width, so requesting k > EfSearch would silently degrade recall.
 	k := maxResults * hnswOverFetchFactor
+	if k > hnswEfSearch {
+		k = hnswEfSearch
+	}
 	if k > g.Len() {
 		k = g.Len()
 	}
@@ -198,10 +211,16 @@ func (s *HNSWEmbeddingStore) FindSimilar(
 		}
 		// v0.6.1 Search returns no score — recompute cosine similarity.
 		sim := 1 - hnsw.CosineDistance(query, n.Value)
+		if math.IsNaN(float64(sim)) {
+			// Defensive: a zero-magnitude stored vector would yield NaN, which
+			// makes the similarity sort undefined. Upsert already rejects those,
+			// so this is belt-and-suspenders.
+			continue
+		}
 		out = append(out, ChromemSimilarityResult{
 			EntityID:   n.Key,
 			Similarity: sim,
-			Metadata:   m,
+			Metadata:   copyMeta(m),
 		})
 	}
 
@@ -227,6 +246,30 @@ func (s *HNSWEmbeddingStore) CountByType(_ context.Context, entityType string) (
 
 // Close is a no-op for the in-memory store.
 func (s *HNSWEmbeddingStore) Close() error { return nil }
+
+// hasNonZeroMagnitude reports whether vec has any non-zero component (a proxy
+// for non-zero L2 magnitude — sufficient to keep cosine from producing NaN).
+func hasNonZeroMagnitude(vec []float32) bool {
+	for _, x := range vec {
+		if x != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// copyMeta returns a shallow copy of m (nil for a nil input), so callers never
+// receive a reference to the store's internal metadata sidecar.
+func copyMeta(m map[string]string) map[string]string {
+	if m == nil {
+		return nil
+	}
+	cp := make(map[string]string, len(m))
+	for k, v := range m {
+		cp[k] = v
+	}
+	return cp
+}
 
 // metadataMatches reports whether m satisfies every key/value in filter.
 // A nil/empty filter matches everything; a filter key absent from m fails.
