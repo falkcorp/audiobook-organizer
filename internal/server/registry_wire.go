@@ -1,5 +1,5 @@
 // file: internal/server/registry_wire.go
-// version: 1.10.0
+// version: 1.11.0
 
 package server
 
@@ -68,9 +68,14 @@ func init() {
 		},
 	})
 
-	// chromemstore — chromem-go ANN vector store for dedup Layer 2.
-	// Optional; failure logs a warning + returns nil so dedup falls back
-	// to the Pebble linear scan.
+	// chromemstore — in-memory ANN vector store for dedup Layer 2. The backend
+	// is config-selectable (config.VectorIndexBackend): "chromem" (default,
+	// brute-force cosine scan) or "hnsw" (coder/hnsw graph, sub-linear search).
+	// Both satisfy database.VectorANNStore. Optional; on disabled/error the Build
+	// returns an UNTYPED nil so TryGet[database.VectorANNStore] yields ok=false
+	// (returning a typed-nil pointer would assert non-nil to the interface and
+	// trip the engine's chromemStore != nil guards — the classic Go nil-iface
+	// trap). Dedup then falls back to the Pebble linear scan.
 	serviceregistry.Register(serviceregistry.ServiceDef{
 		Name:   "chromemstore",
 		Needs:  []string{"config"},
@@ -78,7 +83,7 @@ func init() {
 		Build: func(c *serviceregistry.Container) (any, error) {
 			cfg := serviceregistry.Get[*config.Config](c, "config")
 			if cfg.DatabasePath == "" {
-				return (*database.ChromemEmbeddingStore)(nil), nil
+				return nil, nil
 			}
 			dir := filepath.Dir(cfg.DatabasePath)
 			// Dimension is config-driven so a local model (e.g. bge-m3 = 1024)
@@ -91,9 +96,12 @@ func init() {
 			if dims <= 0 {
 				dims = 3072
 			}
+			if cfg.VectorIndexBackend == "hnsw" {
+				return database.NewHNSWEmbeddingStore(dims), nil
+			}
 			store, err := database.NewChromemEmbeddingStore(dir, dims)
 			if err != nil {
-				return (*database.ChromemEmbeddingStore)(nil), nil
+				return nil, nil
 			}
 			return store, nil
 		},

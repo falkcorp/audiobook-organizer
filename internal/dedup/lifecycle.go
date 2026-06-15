@@ -106,10 +106,12 @@ func (de *Engine) PostInit(ctx context.Context, c *serviceregistry.Container) er
 		slog.Info("[dedup] PostInit eventbus not available, skipping dedup-on-import subscription")
 	}
 
-	// Step 2 — chromem store + hydrate
-	if chromemStore, ok := serviceregistry.TryGet[*database.ChromemEmbeddingStore](c, "chromemstore"); ok && chromemStore != nil {
+	// Step 2 — vector ANN store (chromem or hnsw, per config) + hydrate.
+	// Retrieved as the VectorANNStore interface so either backend works; the
+	// service Build returns an untyped nil when disabled, so ok=false here.
+	if chromemStore, ok := serviceregistry.TryGet[database.VectorANNStore](c, "chromemstore"); ok && chromemStore != nil {
 		de.SetChromemStore(chromemStore)
-		slog.Info("[INFO] chromem-go ANN store active for dedup Layer 2")
+		slog.Info("[INFO] vector ANN store active for dedup Layer 2")
 		if dedupChromemLazy() {
 			// Skip the eager hydrate. Chromem stays empty; FindSimilar in
 			// engine.go falls back to the SQLite linear-scan path via

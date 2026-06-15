@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.29.0
+// version: 1.30.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-06-14
 
@@ -36,7 +36,7 @@ var dedupTracer = otel.Tracer("audiobook-organizer/dedup")
 //   - Layer 3: LLM review (expensive, batch only) — for ambiguous candidates
 type Engine struct {
 	embedStore   *database.EmbeddingStore
-	chromemStore *database.ChromemEmbeddingStore
+	chromemStore database.VectorANNStore
 	bookStore    database.Store
 	embedClient  *ai.EmbeddingClient
 	llmParser    *ai.OpenAIParser
@@ -154,7 +154,7 @@ func (de *Engine) LookupCandidate(id int64) (database.DedupCandidate, bool) {
 // SetChromemStore configures the ANN vector store for Layer 2.
 // When set, FindSimilar queries go through chromem instead of
 // the SQLite linear scan.
-func (de *Engine) SetChromemStore(cs *database.ChromemEmbeddingStore) {
+func (de *Engine) SetChromemStore(cs database.VectorANNStore) {
 	de.chromemStore = cs
 }
 
