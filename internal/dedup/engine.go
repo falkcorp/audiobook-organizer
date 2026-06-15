@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.28.0
+// version: 1.29.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-06-14
 
@@ -1566,6 +1566,18 @@ func (de *Engine) EmbedBook(ctx context.Context, bookID string) (EmbedStatus, er
 	return results[bookID], nil
 }
 
+// EmbeddingModel returns the model name the wired embedding client is pinned
+// to (e.g. "text-embedding-3-large" or "bge-m3"), or "" if no client is
+// configured. This is the authoritative target model for the re-embed op:
+// vectors Upserted by EmbedBooks are tagged with exactly this value, so the
+// op can skip books already stored at this model (resumable re-embed).
+func (de *Engine) EmbeddingModel() string {
+	if de.embedClient == nil {
+		return ""
+	}
+	return de.embedClient.Model()
+}
+
 // prepBookEmbed runs the per-book skip-checks and builds the embedding text +
 // hash. Returns terminal=true when a final EmbedStatus has been determined
 // (skip cases or pre-existing cache hit by hash) so the caller can record the
@@ -1695,7 +1707,7 @@ func (de *Engine) EmbedBooks(ctx context.Context, bookIDs []string) (map[string]
 			EntityID:   p.id,
 			TextHash:   p.hash,
 			Vector:     vecs[i],
-			Model:      "text-embedding-3-large",
+			Model:      de.embedClient.Model(),
 		}); upErr != nil {
 			slog.Info("dedup upsert embedding for", "p", p.id, "upErr", upErr)
 			continue
@@ -1772,7 +1784,7 @@ func (de *Engine) EmbedAuthor(ctx context.Context, authorID int) error {
 		EntityID:   entityID,
 		TextHash:   hash,
 		Vector:     vec,
-		Model:      "text-embedding-3-large",
+		Model:      de.embedClient.Model(),
 	}); err != nil {
 		return err
 	}

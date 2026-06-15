@@ -1,5 +1,5 @@
 // file: internal/server/registry_wire.go
-// version: 1.9.0
+// version: 1.10.0
 
 package server
 
@@ -81,7 +81,17 @@ func init() {
 				return (*database.ChromemEmbeddingStore)(nil), nil
 			}
 			dir := filepath.Dir(cfg.DatabasePath)
-			store, err := database.NewChromemEmbeddingStore(dir, 3072)
+			// Dimension is config-driven so a local model (e.g. bge-m3 = 1024)
+			// can replace OpenAI text-embedding-3-large (3072). Guard against a
+			// zero value: an upgraded install loads an older config_blob that
+			// predates EmbeddingDimensions (whole-struct replace zeroes it), so
+			// fall back to the historical 3072 default rather than build a
+			// 0-dim store.
+			dims := cfg.EmbeddingDimensions
+			if dims <= 0 {
+				dims = 3072
+			}
+			store, err := database.NewChromemEmbeddingStore(dir, dims)
 			if err != nil {
 				return (*database.ChromemEmbeddingStore)(nil), nil
 			}

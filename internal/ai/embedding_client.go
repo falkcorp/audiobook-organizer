@@ -1,5 +1,5 @@
 // file: internal/ai/embedding_client.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 // last-edited: 2026-06-14
 
@@ -67,19 +67,44 @@ type EmbeddingClient struct {
 // 30 s instead of blocking for the full operation timeout (up to 120 min).
 const defaultRequestTimeout = 30 * time.Second
 
-// NewEmbeddingClient creates a new embedding client using the given API key.
-// Default model is text-embedding-3-large. The returned client has no cache
-// wired up — call WithCache after construction to enable content-hash caching.
+// defaultEmbeddingModel is the model used when none is configured.
+const defaultEmbeddingModel = "text-embedding-3-large"
+
+// NewEmbeddingClient creates a new embedding client using the given API key,
+// with the default model (text-embedding-3-large) and the base URL taken from
+// the OPENAI_BASE_URL env (if set). Preserved for backward compatibility; new
+// callers that need an explicit model or a per-client base URL (e.g. a local
+// Ollama endpoint) should use NewEmbeddingClientWithOptions. The returned
+// client has no cache wired up — call WithCache to enable content-hash caching.
 func NewEmbeddingClient(apiKey string) *EmbeddingClient {
+	return NewEmbeddingClientWithOptions(apiKey, defaultEmbeddingModel, os.Getenv("OPENAI_BASE_URL"))
+}
+
+// NewEmbeddingClientWithOptions creates an embedding client pinned to an
+// explicit model and (optionally) a per-client base URL.
+//
+// baseURL scopes an OpenAI-compatible endpoint override to THIS client only —
+// e.g. "http://127.0.0.1:11434/v1" for a local Ollama. This is deliberately a
+// parameter rather than the process-wide OPENAI_BASE_URL env, because the
+// OpenAI SDK applies that env to every default client (the LLM parser, metadata
+// reranker, etc.), which would silently redirect chat completions to a backend
+// that has no chat model. An empty baseURL uses the OpenAI default.
+//
+// An empty model falls back to the default (text-embedding-3-large) so a
+// zero-valued config field never produces an empty model name.
+func NewEmbeddingClientWithOptions(apiKey, model, baseURL string) *EmbeddingClient {
+	if model == "" {
+		model = defaultEmbeddingModel
+	}
 	clientOptions := []option.RequestOption{option.WithAPIKey(apiKey)}
-	if baseURL := os.Getenv("OPENAI_BASE_URL"); baseURL != "" {
+	if baseURL != "" {
 		clientOptions = append(clientOptions, option.WithBaseURL(baseURL))
 	}
 
 	client := openai.NewClient(clientOptions...)
 	c := &EmbeddingClient{
 		client:         &client,
-		model:          "text-embedding-3-large",
+		model:          model,
 		requestTimeout: defaultRequestTimeout,
 	}
 	c.rawEmbed = c.embedBatchRaw

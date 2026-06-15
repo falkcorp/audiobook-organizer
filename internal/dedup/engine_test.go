@@ -1,5 +1,5 @@
 // file: internal/dedup/engine_test.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: 2a7e4d91-c538-4f06-b1d3-9e8c5a6f0d72
 // last-edited: 2026-06-14
 
@@ -494,6 +494,50 @@ func TestEngine_FullScan_BatchesEmbeddings(t *testing.T) {
 		if calls[i] != n {
 			t.Fatalf("call %d size=%d, want %d (sizes=%v)", i, calls[i], n, calls)
 		}
+	}
+}
+
+// TestEmbedBooks_RecordsClientModel verifies that EmbedBooks tags the stored
+// entity embedding with the embedding client's ACTUAL model — not a hardcoded
+// "text-embedding-3-large". This is load-bearing for the local-embedding
+// cutover: the re-embed op skips books whose stored Model already equals the
+// target, so a mislabeled model would either re-embed forever or skip wrongly.
+func TestEmbedBooks_RecordsClientModel(t *testing.T) {
+	engine, mock, es := setupTestEngine(t)
+
+	primary := true
+	book := &database.Book{ID: "BOOK_M", Title: "A Real Audiobook", IsPrimaryVersion: &primary}
+	mock.GetBookByIDFunc = func(id string) (*database.Book, error) {
+		if id == "BOOK_M" {
+			return book, nil
+		}
+		return nil, nil
+	}
+
+	// Client pinned to a non-default model (as the Ollama/bge-m3 path would be).
+	client := ai.NewEmbeddingClientWithOptions("test-key", "bge-m3", "")
+	client.SetRawEmbedForTest(func(ctx context.Context, texts []string) ([][]float32, error) {
+		out := make([][]float32, len(texts))
+		for i := range out {
+			out[i] = []float32{0.1, 0.2, 0.3, 0.4}
+		}
+		return out, nil
+	})
+	engine.embedClient = client
+
+	if _, err := engine.EmbedBooks(context.Background(), []string{"BOOK_M"}); err != nil {
+		t.Fatalf("EmbedBooks: %v", err)
+	}
+
+	stored, err := es.Get("book", "BOOK_M")
+	if err != nil {
+		t.Fatalf("Get embedding: %v", err)
+	}
+	if stored == nil {
+		t.Fatal("expected a stored embedding for BOOK_M")
+	}
+	if stored.Model != "bge-m3" {
+		t.Errorf("stored embedding Model = %q, want %q (must reflect the client's model, not a hardcode)", stored.Model, "bge-m3")
 	}
 }
 
