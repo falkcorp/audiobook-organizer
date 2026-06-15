@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/reembed_embeddings.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9d8c7b6a-5e4f-3a2b-1c0d-9e8f7a6b5c4d
 // last-edited: 2026-06-14
 
@@ -50,8 +50,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -171,11 +173,29 @@ func (p *Plugin) runReembedEmbeddings(ctx context.Context, rawParams json.RawMes
 			b := &batch[i]
 			totalBooks++
 			existing, getErr := p.embeddingStore.Get("book", b.ID)
-			if getErr == nil && existing != nil && existing.Model == targetModel {
-				current++
-				continue
+			if getErr != nil {
+				reporter.Logger().Warn("reembed-embeddings: get embedding during scan",
+					"book_id", b.ID, "err", getErr)
+				existing = nil
 			}
-			toReembed = append(toReembed, b.ID)
+			switch {
+			case existing != nil && existing.Model == targetModel:
+				// Already at the target model — nothing to do.
+				current++
+			case existing != nil:
+				// Stale-model vector present: must be deleted (and re-embedded if
+				// the book is embeddable). Always include so the wrong-dimension
+				// vector can't survive into chromem on the next hydrate.
+				toReembed = append(toReembed, b.ID)
+			case embeddableForReembed(b):
+				// No embedding yet and the book is embeddable — a model switch
+				// must populate it.
+				toReembed = append(toReembed, b.ID)
+			default:
+				// No embedding and not embeddable (non-primary or near-empty
+				// title): nothing to do. Excluding these lets the candidate count
+				// converge to 0 across re-runs instead of re-selecting them forever.
+			}
 		}
 		if len(batch) < scanBatch {
 			break
@@ -205,9 +225,15 @@ func (p *Plugin) runReembedEmbeddings(ctx context.Context, rawParams json.RawMes
 	var embedded, skipped int
 	for start := 0; start < needCount; start += batchSize {
 		if reporter.IsCanceled() {
+			// Emit a canceled (not "complete") message so an operator watching
+			// the progress text isn't misled; the worker independently records
+			// the terminal status as canceled from the run context.
+			_ = reporter.UpdateProgress(1, 2, fmt.Sprintf(
+				"Canceled — %d of %d re-embedded (%d skipped). Re-run to continue.",
+				embedded, needCount, skipped))
 			reporter.Logger().Warn("reembed-embeddings: canceled mid-run; re-run to continue",
-				"embedded_so_far", embedded)
-			break
+				"embedded", embedded, "skipped", skipped, "candidates", needCount)
+			return nil
 		}
 		select {
 		case <-ctx.Done():
@@ -260,4 +286,18 @@ func (p *Plugin) runReembedEmbeddings(ctx context.Context, rawParams json.RawMes
 		"embedded", embedded, "skipped", skipped, "candidates", needCount,
 		"target_model", targetModel)
 	return nil
+}
+
+// embeddableForReembed reports whether a book with NO stored embedding is one
+// the engine would actually embed — i.e. worth selecting into the re-embed set.
+// Mirrors the engine's prepBookEmbed skip rules (non-primary versions and
+// near-empty titles produce no embedding) so the op's candidate count converges
+// instead of re-selecting un-embeddable books on every run. Books that already
+// carry a stale-model vector are handled separately (they must be deleted
+// regardless of embeddability) and do not go through this check.
+func embeddableForReembed(b *database.Book) bool {
+	if b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion {
+		return false
+	}
+	return len([]rune(strings.TrimSpace(b.Title))) > 2
 }
