@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/falkcorp/audiobook-organizer/internal/tools"
 	"github.com/spf13/viper"
 )
 
@@ -393,6 +394,9 @@ type Config struct {
 
 	SupportedExtensions []string `json:"supported_extensions"`
 	ExcludePatterns     []string `json:"exclude_patterns"`
+
+	// Tools configures the managed external-tool lifecycle (Ollama, fpcalc).
+	Tools tools.ToolsConfig `json:"tools"`
 }
 
 // mu guards AppConfig against concurrent writes.
@@ -839,6 +843,17 @@ func InitConfig() {
 			MetadataLLMRerankTopK:           viper.GetInt("metadata_llm_rerank_top_k"),
 			WriteBackupBeforeTagWrite:       viper.GetBool("write_backup_before_tag_write"),
 		}
+
+
+		// Managed external-tool lifecycle
+		c.Tools = tools.ToolsConfig{
+			ManagedDir:          "/var/lib/audiobook-organizer/tools",
+			Ollama:              tools.ToolConfig{Mode: tools.ToolModeSystem},
+			Fpcalc:              tools.ToolConfig{Mode: tools.ToolModeSystem},
+			AllowPeriodicOllama: false,
+			OllamaDebounceMin:   10,
+		}
+
 
 		// Default Open Library dump dir to {RootDir}/openlibrary-dumps if not set
 		if c.OpenLibraryDumpDir == "" && c.RootDir != "" {
@@ -1306,6 +1321,15 @@ func ResetToDefaults() {
 					RequiresAuth: false,
 					Credentials:  make(map[string]string),
 				},
+			},
+
+			// Managed external-tool lifecycle
+			Tools: tools.ToolsConfig{
+				ManagedDir:          "/var/lib/audiobook-organizer/tools",
+				Ollama:              tools.ToolConfig{Mode: tools.ToolModeSystem},
+				Fpcalc:              tools.ToolConfig{Mode: tools.ToolModeSystem},
+				AllowPeriodicOllama: false,
+				OllamaDebounceMin:   10,
 			},
 		}
 	}) // end Mutate
