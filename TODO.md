@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 8.80.0 -->
+<!-- version: 8.81.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-06-13 -->
+<!-- last-edited: 2026-06-15 -->
 
 # Project TODO
 
@@ -25,6 +25,30 @@ future agent) can scan the entire workspace in one page.
 **Production:** PebbleDB primary; Linux, HTTPS at prod server
 **Latest activity:** All 27 Fable 5 tasks + T028 bonus shipped (June 9–10). Plugin framework added (agents, skills, pre-commit PII hook). CI fixes (PRs #1405, #1407, #1408). LSHBandCount 64→128.
 **In flight:** Burndown bot dispatching test coverage tasks (#79–#109), FE-10 (Vitest coverage thresholds)
+
+---
+
+## 🚀 Embeddings + Vector Index — Activation & Follow-ups
+
+> Captured 2026-06-15. Both features shipped & deployed default-off:
+> local embeddings (PR #1452, Ollama/bge-m3) + HNSW vector-index backend (PR #1453).
+> See `~/.claude/.../memory/project_embeddings_and_vector_index.md` and CHANGELOG (June 14, 2026).
+
+**Done**
+- [x] **VEC-1** HNSW backend flipped live on prod — `vector_index_backend=hnsw`, restarted 2026-06-15 (hydrates existing 3072-dim OpenAI vectors). Reversible: set back to `chromem` + restart.
+
+**Activation — user-gated (dry-run, then checkpoint)**
+- [ ] **EMB-1** Switch embeddings to local bge-m3: PUT config `{embedding_model:"bge-m3", embedding_dimensions:1024, embedding_base_url:"http://127.0.0.1:11434/v1"}` → restart.
+- [ ] **EMB-2** Run `dedup.reembed-embeddings` **dry-run** → checkpoint with user → apply (re-embeds ~68K books; deletes stale 3072-dim vectors first) → restart to re-hydrate.
+- [ ] **EMB-3** After re-embed populates 1024-dim vectors, enable Layer-2 (`dedup_embeddings_enabled:true`). HNSW store dim will follow `embedding_dimensions`.
+
+**Infra / hardening**
+- [ ] **OLLAMA-1** Make rootless Ollama durable across reboot on prod (`systemctl --user` + `loginctl enable-linger jdfalk`, or a root systemd unit). It currently dies on reboot.
+- [ ] **VEC-2** HNSW on-disk persistence via `Graph.Export`/`Import` (skip boot re-hydration; documented follow-up in `hnsw_embedding_store.go`).
+- [ ] **EMB-4** Delete dead legacy `embeddings.db` (SQLite, ~1.8GB, replaced by Pebble `emb:v:`) — owned by `audiobook` user, needs `sudo rm`.
+
+**UI**
+- [ ] **EMB-UI-1** Add a "Download latest Ollama" link above the embeddings settings on the Settings page (deep-link to https://ollama.com/download), so an operator configuring a local backend can grab the binary without leaving the page.
 
 ---
 
