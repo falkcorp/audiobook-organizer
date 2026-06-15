@@ -132,6 +132,56 @@ func TestHNSW_FindSimilar_MetadataFilter(t *testing.T) {
 	}
 }
 
+func TestHNSW_UpsertRejectsZeroMagnitude(t *testing.T) {
+	ctx := context.Background()
+	s := NewHNSWEmbeddingStore(4)
+	if err := s.Upsert(ctx, "book", "Z", []float32{0, 0, 0, 0}, nil); err == nil {
+		t.Error("zero-magnitude vector should be rejected (would yield NaN cosine)")
+	}
+}
+
+// TestHNSW_FindSimilar_DimMismatchErrors verifies a wrong-dimension query
+// returns an error rather than panicking (coder/hnsw's Search panics on
+// mismatch; dedup queries run from background goroutines).
+func TestHNSW_FindSimilar_DimMismatchErrors(t *testing.T) {
+	ctx := context.Background()
+	s := NewHNSWEmbeddingStore(4)
+	_ = s.Upsert(ctx, "book", "A", []float32{1, 0, 0, 0}, nil)
+
+	if _, err := s.FindSimilar(ctx, "book", []float32{1, 0, 0}, 5, nil); err == nil {
+		t.Error("dimension-mismatched query should error, not panic")
+	}
+	if _, err := s.FindSimilar(ctx, "book", nil, 5, nil); err == nil {
+		t.Error("empty query should error")
+	}
+}
+
+// TestHNSW_MetadataIsolation verifies callers receive copies of metadata, so
+// mutating a returned map cannot corrupt the store's sidecar.
+func TestHNSW_MetadataIsolation(t *testing.T) {
+	ctx := context.Background()
+	s := NewHNSWEmbeddingStore(3)
+	_ = s.Upsert(ctx, "book", "A", []float32{1, 0, 0}, map[string]string{"is_primary_version": "true"})
+
+	// Via Get.
+	m, _ := s.Get(ctx, "book", "A")
+	m["is_primary_version"] = "MUTATED"
+	again, _ := s.Get(ctx, "book", "A")
+	if again["is_primary_version"] != "true" {
+		t.Errorf("Get returned a live map; store corrupted to %q", again["is_primary_version"])
+	}
+
+	// Via FindSimilar.
+	res, _ := s.FindSimilar(ctx, "book", []float32{1, 0, 0}, 5, nil)
+	if len(res) > 0 && res[0].Metadata != nil {
+		res[0].Metadata["is_primary_version"] = "MUTATED2"
+		after, _ := s.Get(ctx, "book", "A")
+		if after["is_primary_version"] != "true" {
+			t.Errorf("FindSimilar returned a live map; store corrupted to %q", after["is_primary_version"])
+		}
+	}
+}
+
 func TestHNSW_FindSimilar_EmptyGraph(t *testing.T) {
 	ctx := context.Background()
 	s := NewHNSWEmbeddingStore(3)
