@@ -1,5 +1,5 @@
 // file: internal/ai/register.go
-// version: 1.0.0
+// version: 1.1.0
 
 // Service registry registrations for the AI cluster (W4).
 //
@@ -15,6 +15,8 @@
 package ai
 
 import (
+	"os"
+
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
@@ -33,7 +35,17 @@ func init() {
 				return (*EmbeddingClient)(nil), nil
 			}
 			embStore, _ := serviceregistry.TryGet[*database.EmbeddingStore](c, "embeddingstore")
-			client := NewEmbeddingClient(cfg.OpenAIAPIKey)
+			// Base URL is scoped to the embedding client ONLY (see
+			// NewEmbeddingClientWithOptions): cfg.EmbeddingBaseURL points
+			// embeddings at a local OpenAI-compatible backend (e.g. Ollama)
+			// without touching the LLM / metadata clients. Fall back to the
+			// OPENAI_BASE_URL env when the config field is empty for backward
+			// compatibility with env-based setups.
+			baseURL := cfg.EmbeddingBaseURL
+			if baseURL == "" {
+				baseURL = os.Getenv("OPENAI_BASE_URL")
+			}
+			client := NewEmbeddingClientWithOptions(cfg.OpenAIAPIKey, cfg.EmbeddingModel, baseURL)
 			if embStore != nil {
 				client = client.WithCache(embStore)
 			}

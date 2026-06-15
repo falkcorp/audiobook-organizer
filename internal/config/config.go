@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.49.0
+// version: 1.50.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-06-14
 
@@ -169,8 +169,20 @@ type Config struct {
 	ActivityLogCompactionDays      int `json:"activity_log_compaction_days"`       // default 14
 
 	// Embedding-based dedup
-	EmbeddingEnabled         bool    `json:"embedding_enabled"`           // default true
-	EmbeddingModel           string  `json:"embedding_model"`             // default "text-embedding-3-large"
+	EmbeddingEnabled bool   `json:"embedding_enabled"` // default true
+	EmbeddingModel   string `json:"embedding_model"`   // default "text-embedding-3-large"
+	// EmbeddingDimensions is the vector dimension of the configured embedding
+	// model. Must match the model's output: text-embedding-3-large = 3072,
+	// bge-m3 = 1024. Sizes the in-memory chromem ANN store. Default 3072.
+	EmbeddingDimensions int `json:"embedding_dimensions"` // default 3072
+	// EmbeddingBaseURL, when non-empty, points the embedding client at an
+	// OpenAI-compatible endpoint (e.g. a local Ollama at
+	// "http://127.0.0.1:11434/v1") for the EMBEDDING client ONLY. The LLM /
+	// metadata clients are unaffected — this is deliberately a per-client
+	// config field rather than the process-wide OPENAI_BASE_URL env, which the
+	// OpenAI SDK applies to every default client. Empty = OpenAI (or, for
+	// backward compat, the OPENAI_BASE_URL env if set). Default "".
+	EmbeddingBaseURL string `json:"embedding_base_url"` // default ""
 	DedupBookHighThreshold   float64 `json:"dedup_book_high_threshold"`   // default 0.95
 	DedupBookLowThreshold    float64 `json:"dedup_book_low_threshold"`    // default 0.85
 	DedupAuthorHighThreshold float64 `json:"dedup_author_high_threshold"` // default 0.92
@@ -774,6 +786,8 @@ func InitConfig() {
 		// Embedding-based dedup (defaults used unless DB settings override)
 		c.EmbeddingEnabled = true
 		c.EmbeddingModel = "text-embedding-3-large"
+		c.EmbeddingDimensions = 3072
+		c.EmbeddingBaseURL = ""
 		c.DedupBookHighThreshold = 0.95
 		c.DedupBookLowThreshold = 0.85
 		c.DedupAuthorHighThreshold = 0.92
@@ -1099,6 +1113,8 @@ func ResetToDefaults() {
 			// Embedding-based dedup
 			EmbeddingEnabled:                true,
 			EmbeddingModel:                  "text-embedding-3-large",
+			EmbeddingDimensions:             3072,
+			EmbeddingBaseURL:                "",
 			DedupBookHighThreshold:          0.95,
 			DedupBookLowThreshold:           0.85,
 			DedupAuthorHighThreshold:        0.92,

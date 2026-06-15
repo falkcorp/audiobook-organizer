@@ -1,5 +1,5 @@
 // file: internal/ai/embedding_client_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
 
 package ai
@@ -7,12 +7,38 @@ package ai
 import (
 	"context"
 	"errors"
+	"os"
 	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// TestNewEmbeddingClientWithOptions_Model verifies the explicit-options
+// constructor pins the requested model and falls back to the default when the
+// model is empty (a zero-valued config field must never yield an empty model).
+func TestNewEmbeddingClientWithOptions_Model(t *testing.T) {
+	c := NewEmbeddingClientWithOptions("k", "bge-m3", "http://127.0.0.1:11434/v1")
+	assert.Equal(t, "bge-m3", c.Model())
+
+	cDefault := NewEmbeddingClientWithOptions("k", "", "")
+	assert.Equal(t, defaultEmbeddingModel, cDefault.Model(), "empty model must fall back to the default")
+}
+
+// TestNewEmbeddingClient_BackwardCompat verifies the legacy constructor keeps
+// the default model and still honors the OPENAI_BASE_URL env (existing setups
+// must not regress). We can't observe the SDK's base URL directly, but we can
+// confirm construction succeeds with the env set and the model is unchanged.
+func TestNewEmbeddingClient_BackwardCompat(t *testing.T) {
+	t.Setenv("OPENAI_BASE_URL", "http://example.invalid/v1")
+	c := NewEmbeddingClient("k")
+	assert.Equal(t, defaultEmbeddingModel, c.Model())
+	// Sanity: the env path is exercised (no panic), and clearing it also works.
+	_ = os.Unsetenv("OPENAI_BASE_URL")
+	c2 := NewEmbeddingClient("k")
+	assert.Equal(t, defaultEmbeddingModel, c2.Model())
+}
 
 func TestBuildEmbeddingText_Book(t *testing.T) {
 	result := BuildEmbeddingText("book", "The Way of Kings", "Brandon Sanderson", "Michael Kramer")
