@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 8.81.0 -->
+<!-- version: 8.82.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-06-15 -->
 
@@ -48,7 +48,40 @@ future agent) can scan the entire workspace in one page.
 - [ ] **EMB-4** Delete dead legacy `embeddings.db` (SQLite, ~1.8GB, replaced by Pebble `emb:v:`) — owned by `audiobook` user, needs `sudo rm`.
 
 **UI**
-- [ ] **EMB-UI-1** Add a "Download latest Ollama" link above the embeddings settings on the Settings page (deep-link to https://ollama.com/download), so an operator configuring a local backend can grab the binary without leaving the page.
+- [ ] **EMB-UI-1** Add a "Download latest Ollama" link above the embeddings settings on the Settings page (deep-link to https://ollama.com/download), so an operator configuring a local backend can grab the binary without leaving the page. *(May be superseded by TOOL-1 managed auto-download.)*
+
+---
+
+## 🧰 Managed External-Tool Lifecycle (Ollama + fpcalc) — Captured 2026-06-15
+
+> Full design + risks: [`docs/research/2026-06-15-tool-lifecycle-and-workflow-system.md`](docs/research/2026-06-15-tool-lifecycle-and-workflow-system.md)
+> **Verified:** embeddings ARE cached (`emb:c:<model>:<textHash>` in Pebble) → Ollama only needs to run to generate NEW embeddings; steady state = mostly cache hits → can be down almost always. fpcalc already shells out (`exec.LookPath` + ffmpeg fallback + `ErrNotAvailable` graceful disable) — generalize that pattern. Static binaries exist for both (Ollama `.tar.zst`; Chromaprint fpcalc fully-static Linux on GitHub releases).
+
+- [ ] **TOOL-1** Managed-tool abstraction with per-tool mode = `managed` (auto-download static binary to `/var/lib/audiobook-organizer/tools/<tool>/<version>/`, checksum-verified, version-pinned) | `system` (`LookPath`) | `custom` (user path) | `disabled`. Resolution order: managed → system → custom → **auto-disable the dependent pipeline stage** if none found and unconfigured.
+- [ ] **TOOL-2** Toggle: **auto-download + setup Ollama** to the assured `/var/lib/...` path and run from there.
+- [ ] **TOOL-3** Apply the same managed pattern to **fpcalc** (and ffmpeg) — static binary auto-download, else detect on PATH, else custom path, else fingerprinting auto-disables.
+- [ ] **TOOL-4** **Ollama daemon lifecycle manager**: start on demand for the on-startup embed scan → **stop when the embed queue drains**. Own the child process (health check, crash restart, graceful stop on app shutdown, port-conflict handling, resource caps). *(Also solves OLLAMA-1 durability.)*
+- [ ] **TOOL-5** **Duty-cycle / batching**: queue post-startup embed requests and flush either at the scheduled maintenance window, or — if user enables **"allow periodic Ollama"** — on a ~10-min debounce (spin up, drain batch, spin down). Goal: never hold ~5GB RAM + CPU between batches; user has complete control to stop it.
+- [ ] **TOOL-6** Auto-gate the pipeline by tool/provider availability: if the user hasn't enabled Ollama → no local embeddings; hasn't enabled OpenAI → no remote embeddings; no fpcalc/ffmpeg → no fingerprinting. (Becomes trivial once WF-2 capability-gating lands.)
+
+## 🧙 Startup Wizard — Tool Install & Config Flow — Captured 2026-06-15
+
+- [ ] **WIZ-1** Two-tier install dialog: **"Install all recommended tools?"** vs **"Let me choose what to install"** (recommended = Ollama + bge-m3 + fpcalc/ffmpeg via managed path).
+- [ ] **WIZ-2** Two-tier config dialog: **"Accept recommended configuration?"** vs **"Let me configure the tools"** (custom branch exposes per-tool mode, models, dimensions, base URLs, duty-cycle policy, thresholds — many more steps).
+- [ ] **WIZ-3** Make managed-tool install the **default recommended path** so a fresh install lands a working AI + fingerprint pipeline with zero manual steps.
+
+## 🔌 Operations → Pluggable Workflow System — Captured 2026-06-15 [EXPLORATORY — needs brainstorming → spec]
+
+> **Devil's-advocate analysis, pros/cons, Go-library survey, recommended incremental path:** [`docs/research/2026-06-15-tool-lifecycle-and-workflow-system.md`](docs/research/2026-06-15-tool-lifecycle-and-workflow-system.md)
+> **Stance:** vision is right and achievable as an *evolution of UOS* (we already have ~80%: op registry + plugins + PR #1440 dependency-scheduling). Resist adopting a heavyweight external engine (Temporal/Conductor break single-binary deploy; go-workflows is code-only) or extracting to a standalone package before the model is proven. **No code yet — core-infra blast radius.**
+
+- [ ] **WF-0** Run a dedicated brainstorming → spec session before any code (per CLAUDE.md plan-first).
+- [ ] **WF-1** Land PR #1440 dependency-scheduling (prerequisite). See [[project_uos_dependency_scheduling]].
+- [ ] **WF-2** Action-level **capability/requirement declarations** (`requires: [ollama, openai, fpcalc]`) → powers conditional skip/gating (and TOOL-6's auto-gate).
+- [ ] **WF-3** Introduce a persisted **`Workflow`** object = enable/disable/schedule-able composition (DAG/ordered) of registered ops. Seed built-in workflows from today's scheduled ops. Collapse `scheduled_*` + `dedup_embeddings_enabled` flags into workflow state. Built-in workflows auto-enabled; user-added start **disabled** until explicitly enabled.
+- [ ] **WF-4** Registration-time dependency checks: refuse to register an action that invokes another plugin's actions without declaring the dependency (best-effort runtime check — true static isolation isn't feasible with Go compile-time plugin registration).
+- [ ] **WF-5** **UI workflow builder** — LAST, once the backend model is proven (smart-home / CI-CD-style composition). Biggest single cost; treat as its own product surface.
+- [ ] **WF-6** (Re-evaluate only) adopt `go-workflows` *iff* durable mid-run crash recovery becomes a hard requirement; (re-evaluate only) extract to a standalone Go package *iff* the model stabilizes and a second consumer wants it.
 
 ---
 
