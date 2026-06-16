@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 8.85.0 -->
+<!-- version: 8.86.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-06-16 -->
 
@@ -40,7 +40,7 @@ future agent) can scan the entire workspace in one page.
 - [ ] **CFG-1 Wave 3** `MetadataConfig` — 6 metadata scoring/model fields (`metadata_embedding_*`, `metadata_llm_*`).
 - [ ] **CFG-1 Wave 4** `ITunesConfig` — 10 iTunes sync fields.
 - [ ] **CFG-1 Wave 5** `MaintenanceConfig` — 12 maintenance window + scheduled task fields.
-- [ ] **CFG-1 Wave 6** `ScheduledConfig` — 12 scheduled-task enable/interval/on-startup fields.
+- [x] **CFG-1 Wave 6** `ScheduledTasksConfig` — 23 scheduled-task fields (8 task groups) nested into `Config.Scheduled`. PR #1482.
 - [ ] **CFG-1 Wave 7** `AutoUpdateConfig` — 5 auto-update fields.
 - [ ] **CFG-1 Wave 8** Remaining flat fields cleanup + final `safeConfig` audit.
 
