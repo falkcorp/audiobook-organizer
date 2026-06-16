@@ -1,7 +1,7 @@
 // file: internal/ai/embedding_client.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-06-14
+// last-edited: 2026-06-15
 
 package ai
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -17,6 +18,12 @@ import (
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 )
+
+// ErrOllamaNotAvailable is returned by EmbedBatch when a local embedding
+// endpoint is configured but the Ollama daemon has been marked unavailable
+// via SetOllamaAvailable(false). The caller should surface this to the user
+// as an actionable error rather than a silent failure.
+var ErrOllamaNotAvailable = errors.New("embedding: Ollama not available — install and enable via Settings → Tools")
 
 // EmbeddingCache is the minimal surface EmbeddingClient needs from
 // a content-hash cache layer. It's an interface (not a concrete
@@ -59,6 +66,20 @@ type EmbeddingClient struct {
 	// with a fake so the cache-partitioning logic can be
 	// exercised without a real API key.
 	rawEmbed func(ctx context.Context, texts []string) ([][]float32, error)
+
+	// baseURL is the per-client endpoint override supplied at construction
+	// time (e.g. "http://127.0.0.1:11434/v1" for a local Ollama). Empty
+	// means use the OpenAI default. Stored so EmbedBatch can distinguish
+	// the local path (where Ollama availability matters) from the cloud
+	// path (where it does not).
+	baseURL string
+
+	// localOllamaOK is true when the Ollama daemon is available. It
+	// defaults to true so callers that never call SetOllamaAvailable
+	// continue to work unchanged. When false and baseURL is non-empty,
+	// EmbedBatch returns ErrOllamaNotAvailable without making any HTTP
+	// calls.
+	localOllamaOK bool
 }
 
 // defaultRequestTimeout is the per-attempt timeout applied to each
@@ -106,9 +127,19 @@ func NewEmbeddingClientWithOptions(apiKey, model, baseURL string) *EmbeddingClie
 		client:         &client,
 		model:          model,
 		requestTimeout: defaultRequestTimeout,
+		baseURL:        baseURL,
+		localOllamaOK:  true,
 	}
 	c.rawEmbed = c.embedBatchRaw
 	return c
+}
+
+// SetOllamaAvailable is called by server init with toolRegistry.Available("ollama").
+// When false and a local base URL is configured, EmbedBatch returns
+// ErrOllamaNotAvailable without making any HTTP calls. The default is true so
+// existing callers that never call this method are unaffected.
+func (c *EmbeddingClient) SetOllamaAvailable(ok bool) {
+	c.localOllamaOK = ok
 }
 
 // WithRequestTimeout overrides the per-attempt timeout for each
@@ -159,6 +190,9 @@ func (c *EmbeddingClient) Model() string {
 // API errors. Cache I/O errors are logged but never fail the
 // call — the cache is an optimization, not a correctness layer.
 func (c *EmbeddingClient) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	if c.baseURL != "" && !c.localOllamaOK {
+		return nil, ErrOllamaNotAvailable
+	}
 	if len(texts) == 0 {
 		return nil, nil
 	}

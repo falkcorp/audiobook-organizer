@@ -1,6 +1,7 @@
 // file: internal/ai/embedding_client_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
+// last-edited: 2026-06-15
 
 package ai
 
@@ -239,4 +240,57 @@ func TestEmbedBatch_EmptyInput_NoAPICallNoError(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, results)
 	assert.Equal(t, 0, *apiCalls)
+}
+
+// TestEmbeddingClient_LocalGating verifies that when SetOllamaAvailable(false)
+// is called and a local base URL is configured, EmbedBatch returns
+// ErrOllamaNotAvailable without making any network call.
+func TestEmbeddingClient_LocalGating(t *testing.T) {
+	c := NewEmbeddingClientWithOptions("k", "bge-m3", "http://127.0.0.1:11434/v1")
+	c.SetOllamaAvailable(false)
+	_, err := c.EmbedBatch(context.Background(), []string{"hello"})
+	assert.ErrorIs(t, err, ErrOllamaNotAvailable)
+}
+
+// TestEmbeddingClient_LocalGating_DefaultIsAvailable verifies that a freshly
+// constructed client with a local base URL does NOT gate by default — callers
+// that never call SetOllamaAvailable must continue to work unchanged.
+func TestEmbeddingClient_LocalGating_DefaultIsAvailable(t *testing.T) {
+	calls := 0
+	c := NewEmbeddingClientWithOptions("k", "bge-m3", "http://127.0.0.1:11434/v1")
+	c.SetRawEmbedForTest(func(_ context.Context, texts []string) ([][]float32, error) {
+		calls++
+		out := make([][]float32, len(texts))
+		for i := range texts {
+			out[i] = []float32{float32(i)}
+		}
+		return out, nil
+	})
+
+	results, err := c.EmbedBatch(context.Background(), []string{"hello"})
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, 1, calls, "default (available=true) must reach the API")
+}
+
+// TestEmbeddingClient_OpenAIPath_NeverGated verifies that an OpenAI client
+// (no local base URL) is never gated even when SetOllamaAvailable(false)
+// is called — the gate is scoped to local endpoints only.
+func TestEmbeddingClient_OpenAIPath_NeverGated(t *testing.T) {
+	calls := 0
+	c := NewEmbeddingClientWithOptions("k", "text-embedding-3-large", "") // no baseURL
+	c.SetOllamaAvailable(false)
+	c.SetRawEmbedForTest(func(_ context.Context, texts []string) ([][]float32, error) {
+		calls++
+		out := make([][]float32, len(texts))
+		for i := range texts {
+			out[i] = []float32{float32(i)}
+		}
+		return out, nil
+	})
+
+	results, err := c.EmbedBatch(context.Background(), []string{"hello"})
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, 1, calls, "OpenAI path (empty baseURL) must never be gated")
 }
