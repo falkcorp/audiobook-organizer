@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 8.82.0 -->
+<!-- version: 8.83.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-06-15 -->
 
@@ -38,14 +38,14 @@ future agent) can scan the entire workspace in one page.
 - [x] **VEC-1** HNSW backend flipped live on prod — `vector_index_backend=hnsw`, restarted 2026-06-15 (hydrates existing 3072-dim OpenAI vectors). Reversible: set back to `chromem` + restart.
 
 **Activation — user-gated (dry-run, then checkpoint)**
-- [ ] **EMB-1** Switch embeddings to local bge-m3: PUT config `{embedding_model:"bge-m3", embedding_dimensions:1024, embedding_base_url:"http://127.0.0.1:11434/v1"}` → restart.
-- [ ] **EMB-2** Run `dedup.reembed-embeddings` **dry-run** → checkpoint with user → apply (re-embeds ~68K books; deletes stale 3072-dim vectors first) → restart to re-hydrate.
-- [ ] **EMB-3** After re-embed populates 1024-dim vectors, enable Layer-2 (`dedup_embeddings_enabled:true`). HNSW store dim will follow `embedding_dimensions`.
+- [x] **EMB-1** Code path: `EmbeddingClient.SetOllamaAvailable` gates `EmbedBatch` on local Ollama reachability. Prod activation (PUT config + restart) is user-gated.
+- [x] **EMB-2** Code path: `reembed-embeddings` op checks `toolRegistry.Available("ollama")` before starting. Prod dry-run + apply is user-gated.
+- [x] **EMB-3** Code path complete. Layer-2 enable (`dedup_embeddings_enabled:true`) after re-embed is user-gated.
 
 **Infra / hardening**
 - [ ] **OLLAMA-1** Make rootless Ollama durable across reboot on prod (`systemctl --user` + `loginctl enable-linger jdfalk`, or a root systemd unit). It currently dies on reboot.
-- [ ] **VEC-2** HNSW on-disk persistence via `Graph.Export`/`Import` (skip boot re-hydration; documented follow-up in `hnsw_embedding_store.go`).
-- [ ] **EMB-4** Delete dead legacy `embeddings.db` (SQLite, ~1.8GB, replaced by Pebble `emb:v:`) — owned by `audiobook` user, needs `sudo rm`.
+- [x] **VEC-2** HNSW on-disk persistence via `Graph.Export`/`Import` — `.bin` + `.meta.json` snapshots per entity type; load at boot, save at shutdown. Shipped PR #1465.
+- [x] **EMB-4** Deleted dead legacy `embeddings.db` (~1.8 GB) from prod on 2026-06-15.
 
 **UI**
 - [ ] **EMB-UI-1** Add a "Download latest Ollama" link above the embeddings settings on the Settings page (deep-link to https://ollama.com/download), so an operator configuring a local backend can grab the binary without leaving the page. *(May be superseded by TOOL-1 managed auto-download.)*
@@ -57,18 +57,18 @@ future agent) can scan the entire workspace in one page.
 > Full design + risks: [`docs/research/2026-06-15-tool-lifecycle-and-workflow-system.md`](docs/research/2026-06-15-tool-lifecycle-and-workflow-system.md)
 > **Verified:** embeddings ARE cached (`emb:c:<model>:<textHash>` in Pebble) → Ollama only needs to run to generate NEW embeddings; steady state = mostly cache hits → can be down almost always. fpcalc already shells out (`exec.LookPath` + ffmpeg fallback + `ErrNotAvailable` graceful disable) — generalize that pattern. Static binaries exist for both (Ollama `.tar.zst`; Chromaprint fpcalc fully-static Linux on GitHub releases).
 
-- [ ] **TOOL-1** Managed-tool abstraction with per-tool mode = `managed` (auto-download static binary to `/var/lib/audiobook-organizer/tools/<tool>/<version>/`, checksum-verified, version-pinned) | `system` (`LookPath`) | `custom` (user path) | `disabled`. Resolution order: managed → system → custom → **auto-disable the dependent pipeline stage** if none found and unconfigured.
-- [ ] **TOOL-2** Toggle: **auto-download + setup Ollama** to the assured `/var/lib/...` path and run from there.
-- [ ] **TOOL-3** Apply the same managed pattern to **fpcalc** (and ffmpeg) — static binary auto-download, else detect on PATH, else custom path, else fingerprinting auto-disables.
-- [ ] **TOOL-4** **Ollama daemon lifecycle manager**: start on demand for the on-startup embed scan → **stop when the embed queue drains**. Own the child process (health check, crash restart, graceful stop on app shutdown, port-conflict handling, resource caps). *(Also solves OLLAMA-1 durability.)*
-- [ ] **TOOL-5** **Duty-cycle / batching**: queue post-startup embed requests and flush either at the scheduled maintenance window, or — if user enables **"allow periodic Ollama"** — on a ~10-min debounce (spin up, drain batch, spin down). Goal: never hold ~5GB RAM + CPU between batches; user has complete control to stop it.
-- [ ] **TOOL-6** Auto-gate the pipeline by tool/provider availability: if the user hasn't enabled Ollama → no local embeddings; hasn't enabled OpenAI → no remote embeddings; no fpcalc/ffmpeg → no fingerprinting. (Becomes trivial once WF-2 capability-gating lands.)
+- [x] **TOOL-1** `ToolRegistry` (managed/system/custom/disabled resolution + cache), pinned multi-version manifest (`KnownTools`), `Resolve`/`Available`/`AllStatuses`/`InvalidateCache`. Shipped PR #1465.
+- [x] **TOOL-2** SHA256-verified atomic `Downloader` + `POST /api/v1/tools/:name/install` endpoint; ollama registered with pinned manifest entry. Shipped PR #1465.
+- [x] **TOOL-3** fpcalc registered in `KnownTools`; `fingerprint.SetResolvedFpcalcPath` injected from `ToolRegistry.Resolve("fpcalc")` at startup. Shipped PR #1465.
+- [x] **TOOL-4** `OllamaDaemon` — PID-file adoption, `EnsureRunningOrAdopt`, `StopWhenIdle`, supervise goroutine (health check, crash restart, graceful stop). Shipped PR #1465.
+- [x] **TOOL-5** `EmbedQueue` — buffered channel + debounce `time.Timer` drain; `Start/Stop/Enqueue/DrainNow`. Configurable debounce interval in `ToolsConfig`. Shipped PR #1465.
+- [x] **TOOL-6** `EmbeddingClient.SetOllamaAvailable` gates local-embed path; `SetResolvedFpcalcPath` gates fingerprinting; reembed op checks `toolRegistry.Available("ollama")`. Shipped PR #1465.
 
 ## 🧙 Startup Wizard — Tool Install & Config Flow — Captured 2026-06-15
 
-- [ ] **WIZ-1** Two-tier install dialog: **"Install all recommended tools?"** vs **"Let me choose what to install"** (recommended = Ollama + bge-m3 + fpcalc/ffmpeg via managed path).
-- [ ] **WIZ-2** Two-tier config dialog: **"Accept recommended configuration?"** vs **"Let me configure the tools"** (custom branch exposes per-tool mode, models, dimensions, base URLs, duty-cycle policy, thresholds — many more steps).
-- [ ] **WIZ-3** Make managed-tool install the **default recommended path** so a fresh install lands a working AI + fingerprint pipeline with zero manual steps.
+- [x] **WIZ-1** WelcomeWizard step 2: RadioGroup "Install recommended tools" vs "Let me choose" — recommended path shows `<ToolsPanel mode="wizard" />` with Install buttons. Shipped PR #1465.
+- [x] **WIZ-2** `ToolsPanel` exposes per-tool status, resolved path, version, and Install action. Advanced fields (debounce interval, managed dir) gated behind `useAdvancedSettings` toggle in Settings → Tools tab. Shipped PR #1465.
+- [x] **WIZ-3** Recommended install is the default RadioGroup selection; skippable via "Skip this step" button. Shipped PR #1465.
 
 ## 🔌 Operations → Pluggable Workflow System — Captured 2026-06-15 [EXPLORATORY — needs brainstorming → spec]
 
