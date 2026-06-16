@@ -328,7 +328,7 @@ func (mfs *Service) SearchMetadataForBookWithOptions(
 			// MetadataEmbeddingMinScore threshold.
 			minScore := 0.0
 			if baseTier == "embedding" {
-				minScore = config.AppConfig.MetadataEmbeddingMinScore
+				minScore = config.AppConfig.MetadataScoring.EmbeddingMinScore
 			}
 			if score <= minScore {
 								slog.Debug("metadata-search adjusted score%.3f (tier) below threshold for by from", "value", score, "value", baseTier, "value", r.Title, "value", r.Author, "name", src.Name())
@@ -527,7 +527,7 @@ func (mfs *Service) SearchMetadataForBookWithOptions(
 	}
 
 	// Optional LLM rerank pass on the top ambiguous candidates.
-	if opts.UseRerank && mfs.llmScorer != nil && config.AppConfig.MetadataLLMScoringEnabled {
+	if opts.UseRerank && mfs.llmScorer != nil && config.AppConfig.MetadataScoring.LLMEnabled {
 		candidates = mfs.RerankTopK(context.Background(), book, candidates)
 	}
 

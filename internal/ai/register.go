@@ -77,7 +77,7 @@ func init() {
 		Groups: []string{"ai"},
 		Build: func(c *serviceregistry.Container) (any, error) {
 			cfg := serviceregistry.Get[*config.Config](c, "config")
-			if !cfg.MetadataEmbeddingScoringEnabled {
+			if !cfg.MetadataScoring.EmbeddingEnabled {
 				return (*EmbeddingScorer)(nil), nil
 			}
 			client, _ := serviceregistry.TryGet[*EmbeddingClient](c, "embedclient")

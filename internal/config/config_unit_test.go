@@ -1,5 +1,5 @@
 // file: internal/config/config_unit_test.go
-// version: 1.6.0
+// version: 1.7.0
 // last-edited: 2026-06-16
 
 package config
@@ -402,16 +402,16 @@ func TestInitConfigDefaults(t *testing.T) {
 	})
 
 	t.Run("metadata scoring defaults", func(t *testing.T) {
-		assert.True(t, AppConfig.MetadataEmbeddingScoringEnabled)
-		assert.InDelta(t, 0.50, AppConfig.MetadataEmbeddingMinScore, 0.001)
-		assert.InDelta(t, 0.70, AppConfig.MetadataEmbeddingBestMatchMin, 0.001)
-		assert.False(t, AppConfig.MetadataLLMScoringEnabled)
-		assert.InDelta(t, 0.01, AppConfig.MetadataLLMRerankEpsilon, 0.001)
-		assert.Equal(t, 5, AppConfig.MetadataLLMRerankTopK)
+		assert.False(t, AppConfig.MetadataScoring.EmbeddingEnabled)
+		assert.InDelta(t, 0.82, AppConfig.MetadataScoring.EmbeddingMinScore, 0.001)
+		assert.InDelta(t, 0.88, AppConfig.MetadataScoring.EmbeddingBestMatch, 0.001)
+		assert.False(t, AppConfig.MetadataScoring.LLMEnabled)
+		assert.InDelta(t, 0.05, AppConfig.MetadataScoring.LLMRerankEpsilon, 0.001)
+		assert.Equal(t, 5, AppConfig.MetadataScoring.LLMRerankTopK)
 	})
 
 	t.Run("tag write backup default", func(t *testing.T) {
-		assert.False(t, AppConfig.WriteBackupBeforeTagWrite)
+		assert.True(t, AppConfig.MetadataScoring.WriteBackupBefore)
 	})
 
 	t.Run("API and auth defaults", func(t *testing.T) {

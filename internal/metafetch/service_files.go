@@ -53,7 +53,7 @@ func AudioFilesInDir(dir string) []string {
 //
 // Failures are logged but non-fatal — the write-back proceeds regardless.
 func backupFileBeforeWrite(filePath string) {
-	if !config.AppConfig.WriteBackupBeforeTagWrite {
+	if !config.AppConfig.MetadataScoring.WriteBackupBefore {
 		return
 	}
 	if filePath == "" {
