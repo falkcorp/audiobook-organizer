@@ -1,5 +1,5 @@
 // file: internal/config/persistence_test.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-06-16
 
@@ -1125,5 +1125,70 @@ func TestRemapMaintenanceKeys_FlatKeys(t *testing.T) {
 func TestRemapMaintenanceKeys_NoFlatKeys(t *testing.T) {
 	payload := map[string]any{"root_dir": "/data"}
 	result := remapMaintenanceKeys(payload)
+	assert.Equal(t, map[string]any{"root_dir": "/data"}, result)
+}
+
+func TestMigrateScheduledFields_FlatBlob(t *testing.T) {
+	flatBlob := `{
+		"scheduled_dedup_refresh_enabled": false,
+		"scheduled_dedup_refresh_interval": 360,
+		"scheduled_dedup_refresh_on_startup": false,
+		"scheduled_ai_dedup_batch_enabled": true,
+		"scheduled_ai_dedup_batch_interval": 1440,
+		"scheduled_resolve_production_authors_enabled": false,
+		"scheduled_resolve_production_authors_interval": 0,
+		"root_dir": "/data"
+	}`
+	migrated, changed := migrateScheduledBlob(flatBlob)
+	require.True(t, changed)
+	var result map[string]any
+	require.NoError(t, json.Unmarshal([]byte(migrated), &result))
+	s, ok := result["scheduled"].(map[string]any)
+	require.True(t, ok)
+	dr, ok := s["dedup_refresh"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, false, dr["enabled"])
+	assert.Equal(t, float64(360), dr["interval"])
+	ai, ok := s["ai_dedup_batch"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, true, ai["enabled"])
+	rpa, ok := s["resolve_production_authors"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, false, rpa["enabled"])
+	assert.Equal(t, "/data", result["root_dir"])
+	assert.NotContains(t, result, "scheduled_dedup_refresh_enabled")
+	assert.NotContains(t, result, "scheduled_ai_dedup_batch_enabled")
+}
+
+func TestMigrateScheduledFields_AlreadyNested(t *testing.T) {
+	_, changed := migrateScheduledBlob(`{"scheduled": {"dedup_refresh": {"enabled": false}}}`)
+	assert.False(t, changed)
+}
+
+func TestMigrateScheduledFields_EmptyBlob(t *testing.T) {
+	_, changed := migrateScheduledBlob(`{}`)
+	assert.False(t, changed)
+}
+
+func TestRemapScheduledKeys_FlatKeys(t *testing.T) {
+	payload := map[string]any{
+		"scheduled_dedup_refresh_enabled":  false,
+		"scheduled_ai_dedup_batch_enabled": true,
+		"root_dir":                         "/data",
+	}
+	result := remapScheduledKeys(payload)
+	s, ok := result["scheduled"].(map[string]any)
+	require.True(t, ok)
+	dr := s["dedup_refresh"].(map[string]any)
+	assert.Equal(t, false, dr["enabled"])
+	ai := s["ai_dedup_batch"].(map[string]any)
+	assert.Equal(t, true, ai["enabled"])
+	assert.Equal(t, "/data", result["root_dir"])
+	assert.NotContains(t, result, "scheduled_dedup_refresh_enabled")
+}
+
+func TestRemapScheduledKeys_NoFlatKeys(t *testing.T) {
+	payload := map[string]any{"root_dir": "/data"}
+	result := remapScheduledKeys(payload)
 	assert.Equal(t, map[string]any{"root_dir": "/data"}, result)
 }

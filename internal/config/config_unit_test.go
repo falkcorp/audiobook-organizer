@@ -1,5 +1,5 @@
 // file: internal/config/config_unit_test.go
-// version: 1.8.0
+// version: 1.9.0
 // last-edited: 2026-06-16
 
 package config
@@ -664,17 +664,17 @@ func TestApplySettingBoolKeys(t *testing.T) {
 		{"maintenance_window_library_organize", func() bool { return AppConfig.Maintenance.LibraryOrganize }},
 		{"maintenance_window_metadata_refresh", func() bool { return AppConfig.Maintenance.MetadataRefresh }},
 		{"basic_auth_enabled", func() bool { return AppConfig.BasicAuthEnabled }},
-		{"scheduled_dedup_refresh_enabled", func() bool { return AppConfig.ScheduledDedupRefreshEnabled }},
-		{"scheduled_dedup_refresh_on_startup", func() bool { return AppConfig.ScheduledDedupRefreshOnStartup }},
-		{"scheduled_author_split_enabled", func() bool { return AppConfig.ScheduledAuthorSplitEnabled }},
-		{"scheduled_author_split_on_startup", func() bool { return AppConfig.ScheduledAuthorSplitOnStartup }},
-		{"scheduled_db_optimize_enabled", func() bool { return AppConfig.ScheduledDbOptimizeEnabled }},
-		{"scheduled_db_optimize_on_startup", func() bool { return AppConfig.ScheduledDbOptimizeOnStartup }},
-		{"scheduled_metadata_refresh_enabled", func() bool { return AppConfig.ScheduledMetadataRefreshEnabled }},
-		{"scheduled_metadata_refresh_on_startup", func() bool { return AppConfig.ScheduledMetadataRefreshOnStartup }},
-		{"scheduled_resolve_production_authors_enabled", func() bool { return AppConfig.ScheduledResolveProductionAuthorsEnabled }},
-		{"scheduled_series_prune_enabled", func() bool { return AppConfig.ScheduledSeriesPruneEnabled }},
-		{"scheduled_series_prune_on_startup", func() bool { return AppConfig.ScheduledSeriesPruneOnStartup }},
+		{"scheduled_dedup_refresh_enabled", func() bool { return AppConfig.Scheduled.DedupRefresh.Enabled }},
+		{"scheduled_dedup_refresh_on_startup", func() bool { return AppConfig.Scheduled.DedupRefresh.OnStartup }},
+		{"scheduled_author_split_enabled", func() bool { return AppConfig.Scheduled.AuthorSplit.Enabled }},
+		{"scheduled_author_split_on_startup", func() bool { return AppConfig.Scheduled.AuthorSplit.OnStartup }},
+		{"scheduled_db_optimize_enabled", func() bool { return AppConfig.Scheduled.DbOptimize.Enabled }},
+		{"scheduled_db_optimize_on_startup", func() bool { return AppConfig.Scheduled.DbOptimize.OnStartup }},
+		{"scheduled_metadata_refresh_enabled", func() bool { return AppConfig.Scheduled.MetadataRefresh.Enabled }},
+		{"scheduled_metadata_refresh_on_startup", func() bool { return AppConfig.Scheduled.MetadataRefresh.OnStartup }},
+		{"scheduled_resolve_production_authors_enabled", func() bool { return AppConfig.Scheduled.ResolveProductionAuthors.Enabled }},
+		{"scheduled_series_prune_enabled", func() bool { return AppConfig.Scheduled.SeriesPrune.Enabled }},
+		{"scheduled_series_prune_on_startup", func() bool { return AppConfig.Scheduled.SeriesPrune.OnStartup }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.key+"_true", func(t *testing.T) {
@@ -725,12 +725,12 @@ func TestApplySettingIntKeys(t *testing.T) {
 		{"itunes_sync_interval", "60", func() int { return AppConfig.ITunes.SyncInterval }},
 		{"maintenance_window_start", "3", func() int { return AppConfig.Maintenance.WindowStart }},
 		{"maintenance_window_end", "6", func() int { return AppConfig.Maintenance.WindowEnd }},
-		{"scheduled_dedup_refresh_interval", "24", func() int { return AppConfig.ScheduledDedupRefreshInterval }},
-		{"scheduled_author_split_interval", "12", func() int { return AppConfig.ScheduledAuthorSplitInterval }},
-		{"scheduled_db_optimize_interval", "48", func() int { return AppConfig.ScheduledDbOptimizeInterval }},
-		{"scheduled_metadata_refresh_interval", "72", func() int { return AppConfig.ScheduledMetadataRefreshInterval }},
-		{"scheduled_resolve_production_authors_interval", "96", func() int { return AppConfig.ScheduledResolveProductionAuthorsInterval }},
-		{"scheduled_series_prune_interval", "168", func() int { return AppConfig.ScheduledSeriesPruneInterval }},
+		{"scheduled_dedup_refresh_interval", "24", func() int { return AppConfig.Scheduled.DedupRefresh.Interval }},
+		{"scheduled_author_split_interval", "12", func() int { return AppConfig.Scheduled.AuthorSplit.Interval }},
+		{"scheduled_db_optimize_interval", "48", func() int { return AppConfig.Scheduled.DbOptimize.Interval }},
+		{"scheduled_metadata_refresh_interval", "72", func() int { return AppConfig.Scheduled.MetadataRefresh.Interval }},
+		{"scheduled_resolve_production_authors_interval", "96", func() int { return AppConfig.Scheduled.ResolveProductionAuthors.Interval }},
+		{"scheduled_series_prune_interval", "168", func() int { return AppConfig.Scheduled.SeriesPrune.Interval }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.key, func(t *testing.T) {
