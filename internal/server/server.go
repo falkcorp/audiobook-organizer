@@ -1,17 +1,19 @@
 // file: internal/server/server.go
-// version: 2.28.0
+// version: 2.29.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-06-14
+// last-edited: 2026-06-15
 
 package server
 
 import (
 	"context"
+	"fmt"
 
 	"log"
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +29,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/deluge"
 	"github.com/falkcorp/audiobook-organizer/internal/diagnostics"
+	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/importer"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -40,6 +43,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/scheduler"
 	operationshandlers "github.com/falkcorp/audiobook-organizer/internal/server/handlers/operations"
 	systemhandlers "github.com/falkcorp/audiobook-organizer/internal/server/handlers/system"
+	"github.com/falkcorp/audiobook-organizer/internal/tools"
 	"github.com/gin-contrib/gzip"
 	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
@@ -51,7 +55,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	_ "github.com/falkcorp/audiobook-organizer/internal/plugins/acoustid"
-	_ "github.com/falkcorp/audiobook-organizer/internal/plugins/dedup"
+	dedupplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/dedup"
 	_ "github.com/falkcorp/audiobook-organizer/internal/plugins/deluge"
 	_ "github.com/falkcorp/audiobook-organizer/internal/plugins/itunes"
 	maintenanceplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance"
@@ -271,6 +275,15 @@ type Server struct {
 	// filled in after all services are wired so closures see correct values
 	// at run time.
 	extraOpsRegistrar *scheduler.ExtraOpsRegistrar
+
+	// toolRegistry manages external binary lifecycle (Ollama, fpcalc).
+	toolRegistry *tools.ToolRegistry
+	// ollamaDaemon starts/stops the Ollama binary on demand.
+	ollamaDaemon *tools.OllamaDaemon
+	// embedQueue debounces re-embedding requests.
+	embedQueue *tools.EmbedQueue
+	// hnswPersistDir is the directory where HNSW snapshots are saved/loaded.
+	hnswPersistDir string
 }
 
 // ServerConfig holds server configuration
@@ -517,6 +530,64 @@ func NewServer(store database.Store) *Server {
 		slog.Info("Organize collision hook wired via OrganizeService")
 	}
 
+	// --- Managed tool lifecycle ---
+	// Wire ToolRegistry, OllamaDaemon, EmbedQueue, and HNSW persist dir.
+	// This block runs after wireServerFromContainer so server.embedClient
+	// is already populated.
+	{
+		toolsCfg := &config.AppConfig.Tools
+		server.toolRegistry = tools.NewToolRegistry(toolsCfg)
+
+		// Register known tools with their latest releases.
+		if rel, ok := tools.LatestRelease("ollama"); ok {
+			server.toolRegistry.Register(tools.ToolDef{Name: "ollama", Release: rel})
+		}
+		if rel, ok := tools.LatestRelease("fpcalc"); ok {
+			server.toolRegistry.Register(tools.ToolDef{Name: "fpcalc", Release: rel})
+		}
+
+		// Wire fingerprint package so fpcalc resolves via the registry.
+		if fpcalcPath, err := server.toolRegistry.Resolve("fpcalc"); err == nil {
+			fingerprint.SetResolvedFpcalcPath(fpcalcPath)
+		} else {
+			slog.Info("fpcalc: not available via registry, fingerprinting disabled", "reason", err)
+		}
+
+		// Wire Ollama daemon (only when mode is not disabled).
+		if toolsCfg.Ollama.Mode != tools.ToolModeDisabled {
+			if ollamaBin, err := server.toolRegistry.Resolve("ollama"); err == nil {
+				server.ollamaDaemon = tools.NewOllamaDaemon(tools.OllamaDaemonConfig{
+					BinPath: ollamaBin,
+					PIDFile: toolsCfg.ManagedDir + "/ollama.pid",
+					Port:    11434,
+				})
+			}
+		}
+
+		// Wire embed queue with debounce drain.
+		server.embedQueue = tools.NewEmbedQueue(tools.EmbedQueueConfig{
+			Capacity:      10_000,
+			Debounce:      time.Duration(toolsCfg.OllamaDebounceMin) * time.Minute,
+			AllowPeriodic: toolsCfg.AllowPeriodicOllama,
+			DrainFn:       server.drainEmbedQueue,
+		})
+
+		// Set HNSW persist directory alongside the main database.
+		if config.AppConfig.DatabasePath != "" {
+			server.hnswPersistDir = filepath.Join(filepath.Dir(config.AppConfig.DatabasePath), "hnsw")
+		}
+
+		// Gate embedding client on Ollama availability.
+		if server.embedClient != nil {
+			server.embedClient.SetOllamaAvailable(server.toolRegistry.Available("ollama"))
+		}
+
+		// Wire dedup plugin tool registry so Ollama-gated ops check availability.
+		if dedupPlug, ok := serviceregistry.TryGet[*dedupplugin.Plugin](regContainer, "dedupplugin"); ok && dedupPlug != nil {
+			dedupPlug.SetToolRegistry(server.toolRegistry)
+		}
+	}
+
 	// Start embedding backfill if dedup engine is ready. Tracked via
 	// bgWG so Shutdown() can wait for it to finish before the database
 	// closes — without this, a backfill still iterating Pebble when the
@@ -738,6 +809,18 @@ func NewServer(store database.Store) *Server {
 	server.initPlugins(bgCtx)
 
 	return server
+}
+
+// drainEmbedQueue is the EmbedQueue DrainFn: ensures Ollama is running,
+// signals the embedding backfill, then stops Ollama when idle.
+func (s *Server) drainEmbedQueue(ctx context.Context) error {
+	if s.ollamaDaemon != nil {
+		if err := s.ollamaDaemon.EnsureRunningOrAdopt(ctx); err != nil {
+			return fmt.Errorf("drain embed queue: start ollama: %w", err)
+		}
+		defer s.ollamaDaemon.StopWhenIdle(ctx) //nolint:errcheck
+	}
+	return nil
 }
 
 // SearchIndex returns the server's Bleve index, or nil if none is
