@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.39.0
+// version: 2.40.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-06-12
+// last-edited: 2026-06-15
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -5442,4 +5442,35 @@ export async function rescoreDedupCandidates(apply = false): Promise<DedupRescor
   }
   const responseData = await response.json();
   return responseData.data;
+}
+
+// --- Tool lifecycle ---
+
+export interface ToolStatus {
+  name: string;
+  mode: 'managed' | 'system' | 'custom' | 'disabled';
+  available: boolean;
+  resolved_path?: string;
+  version?: string;
+}
+
+export async function getTools(): Promise<ToolStatus[]> {
+  const response = await fetch(`${API_BASE}/tools`, {
+    credentials: 'include',
+  });
+  if (!response.ok) {
+    throw await buildApiError(response, 'Failed to fetch tools');
+  }
+  return response.json();
+}
+
+export async function installTool(name: string): Promise<{ path: string; version: string }> {
+  const response = await fetch(`${API_BASE}/tools/${name}/install`, {
+    method: 'POST',
+    credentials: 'include',
+  });
+  if (!response.ok) {
+    throw await buildApiError(response, `Failed to install ${name}`);
+  }
+  return response.json();
 }
