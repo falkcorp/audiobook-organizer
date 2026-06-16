@@ -1,7 +1,7 @@
 // file: internal/config/persistence.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
-// last-edited: 2026-06-15
+// last-edited: 2026-06-16
 
 package config
 
@@ -147,6 +147,54 @@ func SaveConfigToFile() error {
 	return nil
 }
 
+// migrateEmbeddingBlob rewrites a flat-format config blob to the nested EmbeddingConfig
+// format. Returns the (possibly modified) blob and whether a migration occurred.
+// Safe to call repeatedly: returns (blob, false) if already nested.
+func migrateEmbeddingBlob(blob string) (string, bool) {
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(blob), &raw); err != nil {
+		return blob, false
+	}
+	if _, isFlat := raw["embedding_enabled"]; !isFlat {
+		return blob, false
+	}
+
+	type flatShape struct {
+		EmbeddingEnabled    bool   `json:"embedding_enabled"`
+		EmbeddingModel      string `json:"embedding_model"`
+		EmbeddingDimensions int    `json:"embedding_dimensions"`
+		EmbeddingBaseURL    string `json:"embedding_base_url"`
+		VectorIndexBackend  string `json:"vector_index_backend"`
+	}
+	var old flatShape
+	json.Unmarshal([]byte(blob), &old) //nolint:errcheck — already parsed above
+
+	raw["embedding"] = map[string]any{
+		"enabled":        old.EmbeddingEnabled,
+		"model":          old.EmbeddingModel,
+		"dimensions":     old.EmbeddingDimensions,
+		"base_url":       old.EmbeddingBaseURL,
+		"vector_backend": old.VectorIndexBackend,
+	}
+	delete(raw, "embedding_enabled")
+	delete(raw, "embedding_model")
+	delete(raw, "embedding_dimensions")
+	delete(raw, "embedding_base_url")
+	delete(raw, "vector_index_backend")
+
+	migrated, err := json.Marshal(raw)
+	if err != nil {
+		return blob, false
+	}
+	return string(migrated), true
+}
+
+// saveRawBlob writes a pre-marshaled JSON string directly as the config blob.
+// Used only by startup migration to persist migrated blobs without re-marshaling.
+func saveRawBlob(store database.SettingsStore, rawJSON string) error {
+	return store.SetSetting("config_blob", rawJSON, "json", false)
+}
+
 // LoadConfigFromDatabase loads settings from database and applies them to AppConfig.
 //
 // Load order (blob-first):
@@ -184,8 +232,18 @@ func LoadConfigFromDatabase(store database.SettingsStore) error {
 		// WHY Snapshot: reads AppConfig.DatabaseType under the read lock.
 		savedDBType := Snapshot().DatabaseType
 
+		// Migrate flat embedding keys → nested EmbeddingConfig format (idempotent).
+		blobStr := blob.Value
+		if migrated, changed := migrateEmbeddingBlob(blobStr); changed {
+			slog.Info("config: migrated embedding fields to nested format")
+			blobStr = migrated
+			if saveErr := saveRawBlob(store, migrated); saveErr != nil {
+				slog.Warn("config: failed to persist migrated blob", "err", saveErr)
+			}
+		}
+
 		var loaded Config
-		if err := json.Unmarshal([]byte(blob.Value), &loaded); err == nil {
+		if err := json.Unmarshal([]byte(blobStr), &loaded); err == nil {
 			// WHY Mutate: whole-struct assignment races with HTTP readers.
 			Mutate(func(c *Config) {
 				*c = loaded
@@ -818,9 +876,9 @@ func SyncConfigFromEnv() {
 		if viper.IsSet("enable_ai_parsing") {
 			c.EnableAIParsing = viper.GetBool("enable_ai_parsing")
 		}
-		if viper.IsSet("embedding_base_url") {
-			if val := viper.GetString("embedding_base_url"); val != "" {
-				c.EmbeddingBaseURL = val
+		if viper.IsSet("embedding.base_url") {
+			if val := viper.GetString("embedding.base_url"); val != "" {
+				c.Embedding.BaseURL = val
 			}
 		}
 		if viper.IsSet("acoustid_api_key") {

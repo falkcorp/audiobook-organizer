@@ -1,6 +1,6 @@
 // file: internal/config/config_unit_test.go
-// version: 1.4.0
-// last-edited: 2026-06-15
+// version: 1.5.0
+// last-edited: 2026-06-16
 
 package config
 
@@ -391,8 +391,8 @@ func TestInitConfigDefaults(t *testing.T) {
 	})
 
 	t.Run("embedding dedup defaults", func(t *testing.T) {
-		assert.True(t, AppConfig.EmbeddingEnabled)
-		assert.Equal(t, "text-embedding-3-large", AppConfig.EmbeddingModel)
+		assert.True(t, AppConfig.Embedding.Enabled)
+		assert.Equal(t, "text-embedding-3-large", AppConfig.Embedding.Model)
 		assert.InDelta(t, 0.95, AppConfig.DedupBookHighThreshold, 0.001)
 		assert.InDelta(t, 0.85, AppConfig.DedupBookLowThreshold, 0.001)
 		assert.InDelta(t, 0.92, AppConfig.DedupAuthorHighThreshold, 0.001)

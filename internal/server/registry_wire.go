@@ -1,5 +1,6 @@
 // file: internal/server/registry_wire.go
-// version: 1.11.0
+// version: 1.12.0
+// last-edited: 2026-06-16
 
 package server
 
@@ -92,11 +93,11 @@ func init() {
 			// predates EmbeddingDimensions (whole-struct replace zeroes it), so
 			// fall back to the historical 3072 default rather than build a
 			// 0-dim store.
-			dims := cfg.EmbeddingDimensions
+			dims := cfg.Embedding.Dimensions
 			if dims <= 0 {
 				dims = 3072
 			}
-			if cfg.VectorIndexBackend == "hnsw" {
+			if cfg.Embedding.VectorBackend == "hnsw" {
 				return database.NewHNSWEmbeddingStore(dims), nil
 			}
 			store, err := database.NewChromemEmbeddingStore(dir, dims)
@@ -131,7 +132,7 @@ func init() {
 		Groups: []string{"ai"},
 		Build: func(c *serviceregistry.Container) (any, error) {
 			cfg := serviceregistry.Get[*config.Config](c, "config")
-			if cfg.OpenAIAPIKey == "" || !cfg.EmbeddingEnabled {
+			if cfg.OpenAIAPIKey == "" || !cfg.Embedding.Enabled {
 				return (*dedup.Engine)(nil), nil
 			}
 			embStore, _ := serviceregistry.TryGet[*database.EmbeddingStore](c, "embeddingstore")

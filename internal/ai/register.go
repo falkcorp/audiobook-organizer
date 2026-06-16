@@ -1,5 +1,6 @@
 // file: internal/ai/register.go
-// version: 1.1.0
+// version: 1.2.0
+// last-edited: 2026-06-16
 
 // Service registry registrations for the AI cluster (W4).
 //
@@ -31,21 +32,21 @@ func init() {
 		Groups: []string{"ai"},
 		Build: func(c *serviceregistry.Container) (any, error) {
 			cfg := serviceregistry.Get[*config.Config](c, "config")
-			if cfg.OpenAIAPIKey == "" || !cfg.EmbeddingEnabled {
+			if cfg.OpenAIAPIKey == "" || !cfg.Embedding.Enabled {
 				return (*EmbeddingClient)(nil), nil
 			}
 			embStore, _ := serviceregistry.TryGet[*database.EmbeddingStore](c, "embeddingstore")
 			// Base URL is scoped to the embedding client ONLY (see
-			// NewEmbeddingClientWithOptions): cfg.EmbeddingBaseURL points
+			// NewEmbeddingClientWithOptions): cfg.Embedding.BaseURL points
 			// embeddings at a local OpenAI-compatible backend (e.g. Ollama)
 			// without touching the LLM / metadata clients. Fall back to the
 			// OPENAI_BASE_URL env when the config field is empty for backward
 			// compatibility with env-based setups.
-			baseURL := cfg.EmbeddingBaseURL
+			baseURL := cfg.Embedding.BaseURL
 			if baseURL == "" {
 				baseURL = os.Getenv("OPENAI_BASE_URL")
 			}
-			client := NewEmbeddingClientWithOptions(cfg.OpenAIAPIKey, cfg.EmbeddingModel, baseURL)
+			client := NewEmbeddingClientWithOptions(cfg.OpenAIAPIKey, cfg.Embedding.Model, baseURL)
 			if embStore != nil {
 				client = client.WithCache(embStore)
 			}

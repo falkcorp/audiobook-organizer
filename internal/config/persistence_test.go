@@ -1,6 +1,7 @@
 // file: internal/config/persistence_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
+// last-edited: 2026-06-16
 
 package config
 
@@ -12,7 +13,9 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/spf13/viper"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 func resetConfigTestState() {
@@ -805,4 +808,87 @@ func TestLifecycleRetentionSettings(t *testing.T) {
 			t.Errorf("expected PurgeSoftDeletedDeleteFiles to be true, got %v", AppConfig.PurgeSoftDeletedDeleteFiles)
 		}
 	})
+}
+
+func TestMigrateEmbeddingFields_FlatBlob(t *testing.T) {
+	flatBlob := `{
+		"embedding_enabled": true,
+		"embedding_model": "text-embedding-3-large",
+		"embedding_dimensions": 3072,
+		"embedding_base_url": "http://localhost:11434/v1",
+		"vector_index_backend": "hnsw",
+		"root_dir": "/data"
+	}`
+
+	migrated, changed := migrateEmbeddingBlob(flatBlob)
+	require.True(t, changed, "flat blob should be migrated")
+
+	var result map[string]any
+	require.NoError(t, json.Unmarshal([]byte(migrated), &result))
+
+	emb, ok := result["embedding"].(map[string]any)
+	require.True(t, ok, "embedding key should exist as object")
+	assert.Equal(t, true, emb["enabled"])
+	assert.Equal(t, "text-embedding-3-large", emb["model"])
+	assert.Equal(t, float64(3072), emb["dimensions"])
+	assert.Equal(t, "http://localhost:11434/v1", emb["base_url"])
+	assert.Equal(t, "hnsw", emb["vector_backend"])
+
+	// flat keys must be gone
+	assert.NotContains(t, result, "embedding_enabled")
+	assert.NotContains(t, result, "embedding_model")
+	assert.NotContains(t, result, "embedding_dimensions")
+	assert.NotContains(t, result, "embedding_base_url")
+	assert.NotContains(t, result, "vector_index_backend")
+
+	// unrelated keys must be preserved
+	assert.Equal(t, "/data", result["root_dir"])
+}
+
+func TestMigrateEmbeddingFields_AlreadyNested(t *testing.T) {
+	nestedBlob := `{"embedding": {"enabled": true, "model": "bge-m3"}, "root_dir": "/data"}`
+	_, changed := migrateEmbeddingBlob(nestedBlob)
+	assert.False(t, changed, "already-nested blob should be a no-op")
+}
+
+func TestMigrateEmbeddingFields_EmptyBlob(t *testing.T) {
+	_, changed := migrateEmbeddingBlob(`{}`)
+	assert.False(t, changed, "empty blob should be a no-op")
+}
+
+func TestRemapEmbeddingKeys_FlatKeys(t *testing.T) {
+	payload := map[string]any{
+		"embedding_enabled":    true,
+		"embedding_model":      "bge-m3",
+		"embedding_dimensions": float64(1024),
+		"root_dir":             "/data",
+	}
+	result := remapEmbeddingKeys(payload)
+
+	emb, ok := result["embedding"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, true, emb["enabled"])
+	assert.Equal(t, "bge-m3", emb["model"])
+	assert.Equal(t, float64(1024), emb["dimensions"])
+	assert.Equal(t, "/data", result["root_dir"]) // untouched
+	assert.NotContains(t, result, "embedding_enabled")
+	assert.NotContains(t, result, "embedding_model")
+}
+
+func TestRemapEmbeddingKeys_MixedKeys(t *testing.T) {
+	// Client sends both flat legacy key AND new nested key — merge, don't overwrite
+	payload := map[string]any{
+		"embedding_enabled": false,
+		"embedding":         map[string]any{"model": "bge-m3"},
+	}
+	result := remapEmbeddingKeys(payload)
+	emb := result["embedding"].(map[string]any)
+	assert.Equal(t, false, emb["enabled"])
+	assert.Equal(t, "bge-m3", emb["model"])
+}
+
+func TestRemapEmbeddingKeys_NoFlatKeys(t *testing.T) {
+	payload := map[string]any{"root_dir": "/data"}
+	result := remapEmbeddingKeys(payload)
+	assert.Equal(t, map[string]any{"root_dir": "/data"}, result)
 }
