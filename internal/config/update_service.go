@@ -1,7 +1,7 @@
 // file: internal/config/update_service.go
-// version: 3.1.0
+// version: 3.2.0
 // guid: f6g7h8i9-j0k1-l2m3-n4o5-p6q7r8s9t0u1
-// last-edited: 2026-06-10
+// last-edited: 2026-06-16
 
 package config
 
@@ -67,6 +67,38 @@ var secretFieldKeys = []string{
 // immutableFieldKeys cannot be changed at runtime and are rejected if present.
 var immutableFieldKeys = []string{"database_type", "enable_sqlite"}
 
+// remapEmbeddingKeys translates legacy flat embedding keys in a config update
+// payload to the nested EmbeddingConfig format. Merges into any existing
+// "embedding" sub-object to avoid zeroing sibling fields.
+// Remove this shim once the frontend sends nested keys.
+func remapEmbeddingKeys(payload map[string]any) map[string]any {
+	flatToNested := map[string]string{
+		"embedding_enabled":    "enabled",
+		"embedding_model":      "model",
+		"embedding_dimensions": "dimensions",
+		"embedding_base_url":   "base_url",
+		"vector_index_backend": "vector_backend",
+	}
+	nested := make(map[string]any)
+	for flat, short := range flatToNested {
+		if v, ok := payload[flat]; ok {
+			nested[short] = v
+			delete(payload, flat)
+		}
+	}
+	if len(nested) == 0 {
+		return payload
+	}
+	if existing, ok := payload["embedding"].(map[string]any); ok {
+		for k, v := range nested {
+			existing[k] = v
+		}
+	} else {
+		payload["embedding"] = nested
+	}
+	return payload
+}
+
 // UpdateConfig applies a config update payload to AppConfig and persists it.
 //
 // Architecture: non-secret fields are applied via JSON round-trip onto AppConfig.
@@ -118,6 +150,9 @@ func (us *UpdateService) UpdateConfig(payload map[string]any) (int, map[string]a
 	for _, k := range secretFieldKeys {
 		delete(filtered, k)
 	}
+
+	// Translate any legacy flat embedding keys to the nested EmbeddingConfig format.
+	filtered = remapEmbeddingKeys(filtered)
 
 	// Apply all remaining fields via JSON round-trip.
 	// Any field in Config with a matching json tag is set automatically.

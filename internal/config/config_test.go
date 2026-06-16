@@ -1,7 +1,7 @@
 // file: internal/config/config_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-06-10
+// last-edited: 2026-06-16
 
 package config
 
@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/spf13/viper"
+	"github.com/stretchr/testify/assert"
 )
 
 // TestInitConfig tests configuration initialization with defaults
@@ -495,4 +496,33 @@ func TestAppConfigRace_MutateSnapshot(t *testing.T) {
 	}
 
 	wg.Wait()
+}
+
+func TestInitConfig_EmbeddingDefaults(t *testing.T) {
+	viper.Reset()
+	InitConfig()
+	snap := Snapshot()
+
+	assert.True(t, snap.Embedding.Enabled)
+	assert.Equal(t, "text-embedding-3-large", snap.Embedding.Model)
+	assert.Equal(t, 3072, snap.Embedding.Dimensions)
+	assert.Equal(t, "", snap.Embedding.BaseURL)
+	assert.Equal(t, "chromem", snap.Embedding.VectorBackend)
+}
+
+func TestInitConfig_EmbeddingFromEnv(t *testing.T) {
+	t.Setenv("EMBEDDING_ENABLED", "false")
+	t.Setenv("EMBEDDING_BASE_URL", "http://localhost:11434/v1")
+	t.Setenv("EMBEDDING_MODEL", "bge-m3")
+	t.Setenv("EMBEDDING_DIMENSIONS", "1024")
+	t.Setenv("VECTOR_INDEX_BACKEND", "hnsw")
+	viper.Reset()
+	InitConfig()
+	snap := Snapshot()
+
+	assert.False(t, snap.Embedding.Enabled)
+	assert.Equal(t, "http://localhost:11434/v1", snap.Embedding.BaseURL)
+	assert.Equal(t, "bge-m3", snap.Embedding.Model)
+	assert.Equal(t, 1024, snap.Embedding.Dimensions)
+	assert.Equal(t, "hnsw", snap.Embedding.VectorBackend)
 }

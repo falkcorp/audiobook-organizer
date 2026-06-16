@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.52.0
+// version: 1.53.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-06-15
+// last-edited: 2026-06-16
 
 package config
 
@@ -84,6 +84,15 @@ type SABnzbdConfig struct {
 type PluginConfig struct {
 	Enabled  bool              `json:"enabled"`
 	Settings map[string]string `json:"settings"` // plugin-specific key-value pairs
+}
+
+// EmbeddingConfig holds all settings for the local/remote embedding pipeline.
+type EmbeddingConfig struct {
+	Enabled       bool   `json:"enabled"        mapstructure:"enabled"`
+	Model         string `json:"model"          mapstructure:"model"`
+	Dimensions    int    `json:"dimensions"     mapstructure:"dimensions"`
+	BaseURL       string `json:"base_url"       mapstructure:"base_url"`
+	VectorBackend string `json:"vector_backend" mapstructure:"vector_backend"`
 }
 
 // Config holds application configuration
@@ -169,26 +178,9 @@ type Config struct {
 	ActivityLogRetentionDebugDays  int `json:"activity_log_retention_debug_days"`  // default 30
 	ActivityLogCompactionDays      int `json:"activity_log_compaction_days"`       // default 14
 
-	// Embedding-based dedup
-	EmbeddingEnabled bool   `json:"embedding_enabled"` // default true
-	EmbeddingModel   string `json:"embedding_model"`   // default "text-embedding-3-large"
-	// EmbeddingDimensions is the vector dimension of the configured embedding
-	// model. Must match the model's output: text-embedding-3-large = 3072,
-	// bge-m3 = 1024. Sizes the in-memory chromem ANN store. Default 3072.
-	EmbeddingDimensions int `json:"embedding_dimensions"` // default 3072
-	// EmbeddingBaseURL, when non-empty, points the embedding client at an
-	// OpenAI-compatible endpoint (e.g. a local Ollama at
-	// "http://127.0.0.1:11434/v1") for the EMBEDDING client ONLY. The LLM /
-	// metadata clients are unaffected — this is deliberately a per-client
-	// config field rather than the process-wide OPENAI_BASE_URL env, which the
-	// OpenAI SDK applies to every default client. Empty = OpenAI (or, for
-	// backward compat, the OPENAI_BASE_URL env if set). Default "".
-	EmbeddingBaseURL string `json:"embedding_base_url"` // default ""
-	// VectorIndexBackend selects the in-memory ANN backend for dedup Layer 2:
-	// "chromem" (default, brute-force O(n) cosine scan) or "hnsw" (coder/hnsw
-	// graph, sub-linear search — preferred once the corpus is large). Both are
-	// derived indexes hydrated from the PebbleDB embedding store on boot.
-	VectorIndexBackend       string  `json:"vector_index_backend"`        // default "chromem"
+	// Embedding holds configuration for the embedding pipeline (model, provider, vector backend).
+	Embedding EmbeddingConfig `json:"embedding" mapstructure:"embedding"`
+
 	DedupBookHighThreshold   float64 `json:"dedup_book_high_threshold"`   // default 0.95
 	DedupBookLowThreshold    float64 `json:"dedup_book_low_threshold"`    // default 0.85
 	DedupAuthorHighThreshold float64 `json:"dedup_author_high_threshold"` // default 0.92
@@ -608,12 +600,20 @@ func InitConfig() {
 	viper.SetDefault("auto_write_tags_on_apply", true)
 	viper.SetDefault("verify_after_write", true)
 
-	// Embedding + vector index defaults
-	viper.SetDefault("embedding_enabled", true)
-	viper.SetDefault("embedding_model", "text-embedding-3-large")
-	viper.SetDefault("embedding_dimensions", 3072)
-	viper.SetDefault("embedding_base_url", "")
-	viper.SetDefault("vector_index_backend", "chromem")
+	// Embedding + vector index defaults (nested under "embedding.*").
+	// BindEnv maps each dot-notation key to its uppercase env var name so that
+	// EMBEDDING_ENABLED, EMBEDDING_MODEL, etc. override the defaults even when
+	// AutomaticEnv() is not active (e.g. in unit tests that call InitConfig directly).
+	viper.SetDefault("embedding.enabled", true)
+	viper.SetDefault("embedding.model", "text-embedding-3-large")
+	viper.SetDefault("embedding.dimensions", 3072)
+	viper.SetDefault("embedding.base_url", "")
+	viper.SetDefault("embedding.vector_backend", "chromem")
+	viper.BindEnv("embedding.enabled", "EMBEDDING_ENABLED")           //nolint:errcheck
+	viper.BindEnv("embedding.model", "EMBEDDING_MODEL")               //nolint:errcheck
+	viper.BindEnv("embedding.dimensions", "EMBEDDING_DIMENSIONS")     //nolint:errcheck
+	viper.BindEnv("embedding.base_url", "EMBEDDING_BASE_URL")         //nolint:errcheck
+	viper.BindEnv("embedding.vector_backend", "VECTOR_INDEX_BACKEND") //nolint:errcheck
 
 	// Dedup threshold + behaviour defaults
 	viper.SetDefault("dedup_book_high_threshold", 0.95)
@@ -817,12 +817,14 @@ func InitConfig() {
 			SupportedExtensions: supportedExtensions,
 			ExcludePatterns:     excludePatterns,
 
-			// Embedding + vector index
-			EmbeddingEnabled:   viper.GetBool("embedding_enabled"),
-			EmbeddingModel:     viper.GetString("embedding_model"),
-			EmbeddingDimensions: viper.GetInt("embedding_dimensions"),
-			EmbeddingBaseURL:   viper.GetString("embedding_base_url"),
-			VectorIndexBackend: viper.GetString("vector_index_backend"),
+			// Embedding pipeline (nested sub-struct)
+			Embedding: EmbeddingConfig{
+				Enabled:       viper.GetBool("embedding.enabled"),
+				Model:         viper.GetString("embedding.model"),
+				Dimensions:    viper.GetInt("embedding.dimensions"),
+				BaseURL:       viper.GetString("embedding.base_url"),
+				VectorBackend: viper.GetString("embedding.vector_backend"),
+			},
 
 			// Dedup thresholds + behaviour
 			DedupBookHighThreshold:          viper.GetFloat64("dedup_book_high_threshold"),
@@ -1159,12 +1161,14 @@ func ResetToDefaults() {
 			ActivityLogRetentionDebugDays:  30,
 			ActivityLogCompactionDays:      14,
 
-			// Embedding-based dedup
-			EmbeddingEnabled:                true,
-			EmbeddingModel:                  "text-embedding-3-large",
-			EmbeddingDimensions:             3072,
-			EmbeddingBaseURL:                "",
-			VectorIndexBackend:              "chromem",
+			// Embedding pipeline
+			Embedding: EmbeddingConfig{
+				Enabled:       true,
+				Model:         "text-embedding-3-large",
+				Dimensions:    3072,
+				BaseURL:       "",
+				VectorBackend: "chromem",
+			},
 			DedupBookHighThreshold:          0.95,
 			DedupBookLowThreshold:           0.85,
 			DedupAuthorHighThreshold:        0.92,
