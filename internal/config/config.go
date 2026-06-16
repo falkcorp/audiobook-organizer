@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.53.0
+// version: 1.54.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-06-16
 
@@ -95,6 +95,50 @@ type EmbeddingConfig struct {
 	VectorBackend string `json:"vector_backend" mapstructure:"vector_backend"`
 }
 
+// DedupSignalConfig holds the band-threshold values for the unified scoring
+// system (SPEC 1 §3). Persisting these in the config blob means they survive
+// across restarts without needing to fall back to Viper every time.
+type DedupSignalConfig struct {
+	// BandCertainMin is the minimum score to classify a pair as CERTAIN (default 97).
+	BandCertainMin float64 `json:"band_certain_min" mapstructure:"band_certain_min"`
+	// BandHighMin is the minimum score to classify a pair as HIGH (default 90).
+	BandHighMin float64 `json:"band_high_min" mapstructure:"band_high_min"`
+	// BandMediumMin is the minimum score to classify a pair as MEDIUM (default 75).
+	BandMediumMin float64 `json:"band_medium_min" mapstructure:"band_medium_min"`
+	// BandReviewMin is the minimum score to classify a pair as REVIEW (default 60).
+	// Pairs scoring below this floor are not persisted.
+	BandReviewMin float64 `json:"band_review_min" mapstructure:"band_review_min"`
+}
+
+// DedupConfig holds all deduplication settings that were previously flat fields
+// in Config. Nesting these here keeps the config blob organised and lets the
+// API shim (remapDedupKeys) translate legacy PUT payloads transparently.
+type DedupConfig struct {
+	// BookHighThreshold is the cosine-similarity floor for "high confidence" book pairs (default 0.95).
+	BookHighThreshold float64 `json:"book_high_threshold" mapstructure:"book_high_threshold"`
+	// BookLowThreshold is the cosine-similarity floor for "low confidence" book pairs (default 0.85).
+	BookLowThreshold float64 `json:"book_low_threshold" mapstructure:"book_low_threshold"`
+	// AuthorHighThreshold is the cosine-similarity floor for "high confidence" author pairs (default 0.92).
+	AuthorHighThreshold float64 `json:"author_high_threshold" mapstructure:"author_high_threshold"`
+	// AuthorLowThreshold is the cosine-similarity floor for "low confidence" author pairs (default 0.80).
+	AuthorLowThreshold float64 `json:"author_low_threshold" mapstructure:"author_low_threshold"`
+	// AutoMergeEnabled controls whether high-confidence pairs are merged automatically (default true).
+	AutoMergeEnabled bool `json:"auto_merge_enabled" mapstructure:"auto_merge_enabled"`
+	// EmbeddingsEnabled controls whether the embedding layer (Layer 2) is active (default true).
+	// Set false on air-gapped / no-internet boxes to skip all embedding API calls.
+	EmbeddingsEnabled bool `json:"embeddings_enabled" mapstructure:"embeddings_enabled"`
+	// LLMAutoMergeHighConfidence, when true, auto-applies merges when the LLM
+	// review returns a "duplicate" verdict with confidence "high" (default false — opt-in).
+	LLMAutoMergeHighConfidence bool `json:"llm_auto_merge_high_confidence" mapstructure:"llm_auto_merge_high_confidence"`
+	// OnImportViaScheduler routes the post-import dedup check through the UOS
+	// dependency scheduler instead of an eager goroutine (default false — opt-in).
+	OnImportViaScheduler bool `json:"on_import_via_scheduler" mapstructure:"on_import_via_scheduler"`
+	// ReviewModel is the OpenAI model used for LLM-layer dedup review (default "gpt-5-mini").
+	ReviewModel string `json:"review_model" mapstructure:"review_model"`
+	// Signals holds the unified scoring band thresholds.
+	Signals DedupSignalConfig `json:"signals" mapstructure:"signals"`
+}
+
 // Config holds application configuration
 type Config struct {
 	// Core paths
@@ -149,9 +193,9 @@ type Config struct {
 	// when empty, for compatibility with the original env-only setup.
 	AcoustIDAPIKey string `json:"acoustid_api_key"`
 
-	// Per-feature OpenAI model selection. Default to gpt-5-mini for all four
+	// Per-feature OpenAI model selection. Default to gpt-5-mini for all three
 	// to preserve historical behavior. See spec docs/superpowers/specs/2026-04-27-per-feature-llm-model-knob-design.md.
-	DedupReviewModel    string `json:"dedup_review_model"    mapstructure:"dedup_review_model"`
+	// Note: DedupReviewModel has moved to Dedup.ReviewModel.
 	MetadataReviewModel string `json:"metadata_review_model" mapstructure:"metadata_review_model"`
 	FilenameParseModel  string `json:"filename_parse_model"  mapstructure:"filename_parse_model"`
 	CoverArtModel       string `json:"cover_art_model"       mapstructure:"cover_art_model"`
@@ -181,36 +225,8 @@ type Config struct {
 	// Embedding holds configuration for the embedding pipeline (model, provider, vector backend).
 	Embedding EmbeddingConfig `json:"embedding" mapstructure:"embedding"`
 
-	DedupBookHighThreshold   float64 `json:"dedup_book_high_threshold"`   // default 0.95
-	DedupBookLowThreshold    float64 `json:"dedup_book_low_threshold"`    // default 0.85
-	DedupAuthorHighThreshold float64 `json:"dedup_author_high_threshold"` // default 0.92
-	DedupAuthorLowThreshold  float64 `json:"dedup_author_low_threshold"`  // default 0.80
-	DedupAutoMergeEnabled    bool    `json:"dedup_auto_merge_enabled"`    // default true
-	// DedupEmbeddingsEnabled controls whether the embedding layer (Layer 2) is
-	// active for dedup.full-scan and per-import dedup checks. Default true
-	// (preserves current behaviour). Set to false on air-gapped / no-internet
-	// boxes to skip all OpenAI embedding calls; Layer 1 (hash/ISBN/title/
-	// duration) still runs and produces candidates. A circuit-breaker in
-	// FullScan also disables the path automatically after 3 consecutive API
-	// failures, so toggling this manually is only needed when you want to
-	// suppress the API calls from the very start.
-	DedupEmbeddingsEnabled bool `json:"dedup_embeddings_enabled"` // default true
-	// DedupOnImportViaScheduler, when true, routes the post-import dedup check
-	// through the UOS dependency scheduler (dedup.check-book op, M4) instead
-	// of firing an eager goroutine. Defaults false so production import behavior
-	// is unchanged until explicitly opted in. Set to true to enable the
-	// scheduled path once book_sig_v1 population is confirmed in the library.
-	DedupOnImportViaScheduler bool `json:"dedup_on_import_via_scheduler"` // default false — opt-in
-	// DedupLLMAutoMergeHighConfidence, when true, automatically
-	// applies a merge when the LLM review (Layer 3) returns a
-	// "duplicate" verdict with confidence "high". Opt-in because
-	// a false-positive high-confidence verdict silently merges
-	// the wrong pair of books. When enabled, every auto-merge
-	// tags the surviving book with
-	// `dedup:merge-survivor:llm-auto` as a system tag so users
-	// can filter the dedup tab for "things the LLM decided
-	// for me" and review them post-hoc.
-	DedupLLMAutoMergeHighConfidence bool `json:"dedup_llm_auto_merge_high_confidence"` // default false — opt-in
+	// Dedup holds all deduplication settings (thresholds, auto-merge, LLM model, signal bands).
+	Dedup DedupConfig `json:"dedup" mapstructure:"dedup"`
 
 	// Metadata candidate scoring (PR1)
 	MetadataEmbeddingScoringEnabled bool    `json:"metadata_embedding_scoring_enabled"` // default true
@@ -477,8 +493,9 @@ func InitConfig() {
 	viper.SetDefault("openai_api_key", "")
 	viper.SetDefault("acoustid_api_key", "")
 
-	// Per-feature model defaults — gpt-5-mini preserves historical behavior
-	viper.SetDefault("dedup_review_model", "gpt-5-mini")
+	// Per-feature model defaults — gpt-5-mini preserves historical behavior.
+	// dedup_review_model has moved to dedup.review_model (nested DedupConfig).
+	viper.SetDefault("dedup.review_model", "gpt-5-mini")
 	viper.SetDefault("metadata_review_model", "gpt-5-mini")
 	viper.SetDefault("filename_parse_model", "gpt-5-mini")
 	viper.SetDefault("cover_art_model", "gpt-5-mini")
@@ -615,15 +632,15 @@ func InitConfig() {
 	viper.BindEnv("embedding.base_url", "EMBEDDING_BASE_URL")         //nolint:errcheck
 	viper.BindEnv("embedding.vector_backend", "VECTOR_INDEX_BACKEND") //nolint:errcheck
 
-	// Dedup threshold + behaviour defaults
-	viper.SetDefault("dedup_book_high_threshold", 0.95)
-	viper.SetDefault("dedup_book_low_threshold", 0.85)
-	viper.SetDefault("dedup_author_high_threshold", 0.92)
-	viper.SetDefault("dedup_author_low_threshold", 0.80)
-	viper.SetDefault("dedup_auto_merge_enabled", true)
-	viper.SetDefault("dedup_embeddings_enabled", true)           // opt-out: set false on no-internet boxes
-	viper.SetDefault("dedup_llm_auto_merge_high_confidence", false) // opt-in
-	viper.SetDefault("dedup_on_import_via_scheduler", false)        // opt-in — keep eager path until M4 confirmed
+	// Dedup threshold + behaviour defaults (nested under "dedup.*").
+	viper.SetDefault("dedup.book_high_threshold", 0.95)
+	viper.SetDefault("dedup.book_low_threshold", 0.85)
+	viper.SetDefault("dedup.author_high_threshold", 0.92)
+	viper.SetDefault("dedup.author_low_threshold", 0.80)
+	viper.SetDefault("dedup.auto_merge_enabled", true)
+	viper.SetDefault("dedup.embeddings_enabled", true)                 // opt-out: set false on no-internet boxes
+	viper.SetDefault("dedup.llm_auto_merge_high_confidence", false)   // opt-in
+	viper.SetDefault("dedup.on_import_via_scheduler", false)          // opt-in — keep eager path until M4 confirmed
 
 	// Metadata candidate scoring defaults
 	viper.SetDefault("metadata_embedding_scoring_enabled", true)
@@ -705,7 +722,6 @@ func InitConfig() {
 			EnableAIParsing:     viper.GetBool("enable_ai_parsing"),
 			OpenAIAPIKey:        viper.GetString("openai_api_key"),
 			AcoustIDAPIKey:      viper.GetString("acoustid_api_key"),
-			DedupReviewModel:    viper.GetString("dedup_review_model"),
 			MetadataReviewModel: viper.GetString("metadata_review_model"),
 			FilenameParseModel:  viper.GetString("filename_parse_model"),
 			CoverArtModel:       viper.GetString("cover_art_model"),
@@ -826,15 +842,24 @@ func InitConfig() {
 				VectorBackend: viper.GetString("embedding.vector_backend"),
 			},
 
-			// Dedup thresholds + behaviour
-			DedupBookHighThreshold:          viper.GetFloat64("dedup_book_high_threshold"),
-			DedupBookLowThreshold:           viper.GetFloat64("dedup_book_low_threshold"),
-			DedupAuthorHighThreshold:        viper.GetFloat64("dedup_author_high_threshold"),
-			DedupAuthorLowThreshold:         viper.GetFloat64("dedup_author_low_threshold"),
-			DedupAutoMergeEnabled:           viper.GetBool("dedup_auto_merge_enabled"),
-			DedupEmbeddingsEnabled:          viper.GetBool("dedup_embeddings_enabled"),
-			DedupLLMAutoMergeHighConfidence: viper.GetBool("dedup_llm_auto_merge_high_confidence"),
-			DedupOnImportViaScheduler:       viper.GetBool("dedup_on_import_via_scheduler"),
+			// Dedup thresholds + behaviour (nested sub-struct)
+			Dedup: DedupConfig{
+				BookHighThreshold:          viper.GetFloat64("dedup.book_high_threshold"),
+				BookLowThreshold:           viper.GetFloat64("dedup.book_low_threshold"),
+				AuthorHighThreshold:        viper.GetFloat64("dedup.author_high_threshold"),
+				AuthorLowThreshold:         viper.GetFloat64("dedup.author_low_threshold"),
+				AutoMergeEnabled:           viper.GetBool("dedup.auto_merge_enabled"),
+				EmbeddingsEnabled:          viper.GetBool("dedup.embeddings_enabled"),
+				LLMAutoMergeHighConfidence: viper.GetBool("dedup.llm_auto_merge_high_confidence"),
+				OnImportViaScheduler:       viper.GetBool("dedup.on_import_via_scheduler"),
+				ReviewModel:                viper.GetString("dedup.review_model"),
+				Signals: DedupSignalConfig{
+					BandCertainMin: viper.GetFloat64("dedup.signals.band_certain_min"),
+					BandHighMin:    viper.GetFloat64("dedup.signals.band_high_min"),
+					BandMediumMin:  viper.GetFloat64("dedup.signals.band_medium_min"),
+					BandReviewMin:  viper.GetFloat64("dedup.signals.band_review_min"),
+				},
+			},
 
 			// Metadata candidate scoring
 			MetadataEmbeddingScoringEnabled: viper.GetBool("metadata_embedding_scoring_enabled"),
@@ -1129,7 +1154,6 @@ func ResetToDefaults() {
 			EnableAIParsing:     true,
 			OpenAIAPIKey:        "",
 			AcoustIDAPIKey:      "",
-			DedupReviewModel:    "gpt-5-mini",
 			MetadataReviewModel: "gpt-5-mini",
 			FilenameParseModel:  "gpt-5-mini",
 			CoverArtModel:       "gpt-5-mini",
@@ -1169,14 +1193,25 @@ func ResetToDefaults() {
 				BaseURL:       "",
 				VectorBackend: "chromem",
 			},
-			DedupBookHighThreshold:          0.95,
-			DedupBookLowThreshold:           0.85,
-			DedupAuthorHighThreshold:        0.92,
-			DedupAuthorLowThreshold:         0.80,
-			DedupAutoMergeEnabled:           true,
-			DedupEmbeddingsEnabled:          true, // opt-out: set false on no-internet boxes
-			DedupLLMAutoMergeHighConfidence: false,
-			DedupOnImportViaScheduler:       false, // opt-in
+
+			// Dedup thresholds + behaviour (nested sub-struct)
+			Dedup: DedupConfig{
+				BookHighThreshold:          0.95,
+				BookLowThreshold:           0.85,
+				AuthorHighThreshold:        0.92,
+				AuthorLowThreshold:         0.80,
+				AutoMergeEnabled:           true,
+				EmbeddingsEnabled:          true,  // opt-out: set false on no-internet boxes
+				LLMAutoMergeHighConfidence: false,
+				OnImportViaScheduler:       false, // opt-in
+				ReviewModel:                "gpt-5-mini",
+				Signals: DedupSignalConfig{
+					BandCertainMin: 97.0,
+					BandHighMin:    90.0,
+					BandMediumMin:  75.0,
+					BandReviewMin:  60.0,
+				},
+			},
 
 			// Metadata candidate scoring (PR1)
 			MetadataEmbeddingScoringEnabled: true,

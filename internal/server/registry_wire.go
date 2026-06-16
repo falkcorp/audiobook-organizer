@@ -1,5 +1,5 @@
 // file: internal/server/registry_wire.go
-// version: 1.12.0
+// version: 1.13.0
 // last-edited: 2026-06-16
 
 package server
@@ -16,6 +16,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/importer"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
@@ -144,11 +145,15 @@ func init() {
 			store := serviceregistry.Get[database.Store](c, "store")
 			mergeSvc := serviceregistry.Get[*merge.Service](c, "merge")
 			engine := dedup.NewEngine(embStore, store, embClient, llmParser, mergeSvc)
-			engine.BookHighThreshold = cfg.DedupBookHighThreshold
-			engine.BookLowThreshold = cfg.DedupBookLowThreshold
-			engine.AuthorHighThreshold = cfg.DedupAuthorHighThreshold
-			engine.AuthorLowThreshold = cfg.DedupAuthorLowThreshold
-			engine.AutoMergeEnabled = cfg.DedupAutoMergeEnabled
+			engine.BookHighThreshold = cfg.Dedup.BookHighThreshold
+			engine.BookLowThreshold = cfg.Dedup.BookLowThreshold
+			engine.AuthorHighThreshold = cfg.Dedup.AuthorHighThreshold
+			engine.AuthorLowThreshold = cfg.Dedup.AuthorLowThreshold
+			engine.AutoMergeEnabled = cfg.Dedup.AutoMergeEnabled
+			// Inject DB-persisted band thresholds into the unified scoring package
+			// to break the unified→config circular import.
+			sigs := cfg.Dedup.Signals
+			unified.SetBandThresholds(sigs.BandCertainMin, sigs.BandHighMin, sigs.BandMediumMin, sigs.BandReviewMin)
 			return engine, nil
 		},
 	})

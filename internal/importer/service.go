@@ -1,7 +1,7 @@
 // file: internal/importer/service.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d0e1f2a3-b4c5-6d7e-8f9a-0b1c2d3e4f5b
-// last-edited: 2026-06-14
+// last-edited: 2026-06-16
 
 package importer
 
@@ -33,7 +33,7 @@ type ImportService struct {
 	provisioner *itunesservice.TrackProvisioner
 	dedupEngine *dedup.Engine
 	// opRegistry is the UOS operation registry. When set and
-	// config.AppConfig.DedupOnImportViaScheduler is true, post-import dedup
+	// config.AppConfig.Dedup.OnImportViaScheduler is true, post-import dedup
 	// checks are routed through the scheduler (dedup.check-book op) instead
 	// of the eager goroutine. Nil when the registry is not yet available.
 	opRegistry sdk.Registry
@@ -224,7 +224,7 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 	//
 	//   flag OFF (default):
 	//     Eager goroutine — existing behavior, unchanged for instant rollback.
-	if config.AppConfig.DedupOnImportViaScheduler && is.opRegistry != nil {
+	if config.AppConfig.Dedup.OnImportViaScheduler && is.opRegistry != nil {
 		if _, err := is.opRegistry.EnqueueOp(context.Background(), "dedup.check-book",
 			map[string]any{"book_id": created.ID}); err != nil {
 			slog.Warn("dedup-on-import: EnqueueOp dedup.check-book", "id", created.ID, "err", err)

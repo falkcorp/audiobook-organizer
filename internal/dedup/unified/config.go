@@ -1,12 +1,14 @@
 // file: internal/dedup/unified/config.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d8a383db-5083-4257-be54-686ac2e72d32
+// last-edited: 2026-06-16
 
 package unified
 
 import (
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/spf13/viper"
 )
@@ -147,13 +149,37 @@ func DefaultScoreConfig() ScoreConfig {
 	}
 }
 
-// LoadScoreConfig reads overrides from Viper (config.yaml dedup.signals.*)
-// on top of DefaultScoreConfig. Returns an error if the resulting config
-// fails Validate.
+// bandOverride holds DB-persisted band thresholds injected by the caller
+// (engine or server init) to avoid a circular import between unified→config.
+// Protected by bandMu; zero values mean "use Viper / defaults".
+var (
+	bandMu       sync.RWMutex
+	bandOverride struct {
+		certainMin, highMin, mediumMin, reviewMin float64
+	}
+)
+
+// SetBandThresholds injects DB-persisted band thresholds into LoadScoreConfig.
+// Called by the dedup engine after AppConfig is loaded from the database.
+// Values of 0 are ignored (treated as "not set").
+func SetBandThresholds(certainMin, highMin, mediumMin, reviewMin float64) {
+	bandMu.Lock()
+	defer bandMu.Unlock()
+	bandOverride.certainMin = certainMin
+	bandOverride.highMin = highMin
+	bandOverride.mediumMin = mediumMin
+	bandOverride.reviewMin = reviewMin
+}
+
+// LoadScoreConfig reads overrides from injected band thresholds (DB-persisted,
+// set via SetBandThresholds) and Viper (config.yaml dedup.signals.*) on top of
+// DefaultScoreConfig.
+// Precedence (highest → lowest): SetBandThresholds > Viper > defaults.
+// Returns an error if the resulting config fails Validate.
 func LoadScoreConfig() (ScoreConfig, error) {
 	cfg := DefaultScoreConfig()
 
-	// Merge band thresholds if overridden.
+	// Merge band thresholds if overridden via Viper (config.yaml / env vars).
 	if viper.IsSet("dedup.signals.band_certain_min") {
 		cfg.BandCertainMin = viper.GetFloat64("dedup.signals.band_certain_min")
 	}
@@ -165,6 +191,24 @@ func LoadScoreConfig() (ScoreConfig, error) {
 	}
 	if viper.IsSet("dedup.signals.band_review_min") {
 		cfg.BandReviewMin = viper.GetFloat64("dedup.signals.band_review_min")
+	}
+
+	// Override with DB-persisted values injected via SetBandThresholds.
+	// Non-zero check: zero values indicate "not set".
+	bandMu.RLock()
+	ov := bandOverride
+	bandMu.RUnlock()
+	if ov.certainMin > 0 {
+		cfg.BandCertainMin = ov.certainMin
+	}
+	if ov.highMin > 0 {
+		cfg.BandHighMin = ov.highMin
+	}
+	if ov.mediumMin > 0 {
+		cfg.BandMediumMin = ov.mediumMin
+	}
+	if ov.reviewMin > 0 {
+		cfg.BandReviewMin = ov.reviewMin
 	}
 
 	// Merge per-kind overrides.

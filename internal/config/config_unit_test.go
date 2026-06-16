@@ -1,5 +1,5 @@
 // file: internal/config/config_unit_test.go
-// version: 1.5.0
+// version: 1.6.0
 // last-edited: 2026-06-16
 
 package config
@@ -393,12 +393,12 @@ func TestInitConfigDefaults(t *testing.T) {
 	t.Run("embedding dedup defaults", func(t *testing.T) {
 		assert.True(t, AppConfig.Embedding.Enabled)
 		assert.Equal(t, "text-embedding-3-large", AppConfig.Embedding.Model)
-		assert.InDelta(t, 0.95, AppConfig.DedupBookHighThreshold, 0.001)
-		assert.InDelta(t, 0.85, AppConfig.DedupBookLowThreshold, 0.001)
-		assert.InDelta(t, 0.92, AppConfig.DedupAuthorHighThreshold, 0.001)
-		assert.InDelta(t, 0.80, AppConfig.DedupAuthorLowThreshold, 0.001)
-		assert.True(t, AppConfig.DedupAutoMergeEnabled)
-		assert.False(t, AppConfig.DedupLLMAutoMergeHighConfidence)
+		assert.InDelta(t, 0.95, AppConfig.Dedup.BookHighThreshold, 0.001)
+		assert.InDelta(t, 0.85, AppConfig.Dedup.BookLowThreshold, 0.001)
+		assert.InDelta(t, 0.92, AppConfig.Dedup.AuthorHighThreshold, 0.001)
+		assert.InDelta(t, 0.80, AppConfig.Dedup.AuthorLowThreshold, 0.001)
+		assert.True(t, AppConfig.Dedup.AutoMergeEnabled)
+		assert.False(t, AppConfig.Dedup.LLMAutoMergeHighConfidence)
 	})
 
 	t.Run("metadata scoring defaults", func(t *testing.T) {
