@@ -1,11 +1,24 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.25.0 -->
+<!-- version: 3.26.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
-<!-- last-edited: 2026-06-15 -->
+<!-- last-edited: 2026-06-16 -->
 
 # Changelog
 
 ## [Unreleased]
+
+### Refactors
+
+#### June 16, 2026 — Config struct-nesting Wave 2: DedupConfig (PR #1476)
+
+Moves 9 flat dedup fields from `Config` into a new `DedupConfig` sub-struct at `Config.Dedup`, and absorbs the 4 unified-scoring band thresholds (`BandCertainMin/High/Medium/Review`) from the viper-only `ScoreConfig` into `Config.Dedup.Signals` so they persist across restarts.
+
+- **`DedupConfig` + `DedupSignalConfig`** types defined in `internal/config/config.go`; `Config.Dedup` field replaces 9 flat `Dedup*` fields.
+- **`migrateDedupBlob`**: idempotent startup blob migration (flat `dedup_*` keys → nested `dedup.*`), chained after `migrateEmbeddingBlob` in `LoadConfigFromDatabase`.
+- **`remapDedupKeys`**: API compat shim for legacy flat PUT `/config` payloads, chained after `remapEmbeddingKeys` in `UpdateConfig`.
+- **`unified.SetBandThresholds`**: package-level injection mechanism so `LoadScoreConfig()` can use DB-persisted thresholds without creating a `unified→config` circular import. Called from `registry_wire.go` after `NewEngine`.
+- **`applySetting`**: 9 new cases for legacy flat `dedup_*` keys writing to `c.Dedup.*`.
+- All callsites updated (`engine.go`, `engine_test.go`, `importer/service.go`, `registry_wire.go`, `config_unit_test.go`). 5 TDD tests cover migration and shim. Full suite green.
 
 ### Features
 

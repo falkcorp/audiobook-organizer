@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 8.84.0 -->
+<!-- version: 8.85.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-06-16 -->
 
@@ -23,8 +23,26 @@ future agent) can scan the entire workspace in one page.
 
 **Library:** ~50K books (~10,891 organized + ~39K iTunes-imported) / 8,837 authors / 21,668 series
 **Production:** PebbleDB primary; Linux, HTTPS at prod server
-**Latest activity:** All 27 Fable 5 tasks + T028 bonus shipped (June 9–10). Plugin framework added (agents, skills, pre-commit PII hook). CI fixes (PRs #1405, #1407, #1408). LSHBandCount 64→128.
-**In flight:** Burndown bot dispatching test coverage tasks (#79–#109), FE-10 (Vitest coverage thresholds)
+**Latest activity:** All 27 Fable 5 tasks + T028 bonus shipped (June 9–10). Plugin framework added (agents, skills, pre-commit PII hook). CI fixes (PRs #1405, #1407, #1408). LSHBandCount 64→128. Config struct-nesting CFG-0 (viper wiring fix PR #1464) + CFG-1 Wave 1 (EmbeddingConfig PR #1468) + Wave 2 (DedupConfig PR #1476) shipped.
+**In flight:** Burndown bot dispatching test coverage tasks (#79–#109), FE-10 (Vitest coverage thresholds). CFG-1 Waves 3–8 pending.
+
+---
+
+## 🏗️ Config Struct-Nesting Refactor (CFG-0 → CFG-1, 8 Waves)
+
+> **CFG-0** (viper wiring fix) shipped PR #1464. **CFG-1** (struct nesting) Waves 1–2 shipped.
+> Design doc: `docs/superpowers/specs/2026-06-16-config-struct-nesting.md` (to be written).
+> Pattern: define sub-struct → add field to Config → remove flat fields → migrate blob → add applySetting cases → add remapKeys shim → update callsites.
+
+- [x] **CFG-0** Viper wiring: 21 embedding/dedup/metadata fields were bypassing the blob on first save. Fixed PR #1464.
+- [x] **CFG-1 Wave 1** `EmbeddingConfig` — 5 flat embedding fields nested into `Config.Embedding`. PR #1468.
+- [x] **CFG-1 Wave 2** `DedupConfig` — 9 flat dedup fields + 4 signal band thresholds nested into `Config.Dedup`. `SetBandThresholds` injection avoids `unified→config` circular import. PR #1476.
+- [ ] **CFG-1 Wave 3** `MetadataConfig` — 6 metadata scoring/model fields (`metadata_embedding_*`, `metadata_llm_*`).
+- [ ] **CFG-1 Wave 4** `ITunesConfig` — 10 iTunes sync fields.
+- [ ] **CFG-1 Wave 5** `MaintenanceConfig` — 12 maintenance window + scheduled task fields.
+- [ ] **CFG-1 Wave 6** `ScheduledConfig` — 12 scheduled-task enable/interval/on-startup fields.
+- [ ] **CFG-1 Wave 7** `AutoUpdateConfig` — 5 auto-update fields.
+- [ ] **CFG-1 Wave 8** Remaining flat fields cleanup + final `safeConfig` audit.
 
 ---
 
