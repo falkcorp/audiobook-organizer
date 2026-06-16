@@ -1,7 +1,7 @@
 // file: internal/database/hnsw_embedding_store.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-06-14
+// last-edited: 2026-06-15
 
 // HNSW-graph vector store (coder/hnsw) — a sub-linear ANN index alternative to
 // the brute-force chromem store. Selected via config.VectorIndexBackend="hnsw".
@@ -38,10 +38,17 @@
 package database
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"math"
+	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/coder/hnsw"
@@ -283,6 +290,99 @@ func metadataMatches(m, filter map[string]string) bool {
 		}
 	}
 	return true
+}
+
+// ErrNoHNSWSnapshot is returned by Import when no snapshot files exist in dir.
+var ErrNoHNSWSnapshot = errors.New("hnsw: no snapshot found in directory")
+
+// Export writes the HNSW graph and metadata sidecar for each entityType to dir.
+// Files: hnsw-<entityType>.bin (graph) + hnsw-<entityType>.meta.json (metadata).
+// Called on clean shutdown (SIGTERM/SIGINT) so the next boot can skip hydration.
+func (s *HNSWEmbeddingStore) Export(dir string) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("hnsw export: mkdir: %w", err)
+	}
+
+	for entityType, g := range s.graphs {
+		binPath := filepath.Join(dir, "hnsw-"+entityType+".bin")
+		f, err := os.Create(binPath)
+		if err != nil {
+			return fmt.Errorf("hnsw export: create %s: %w", binPath, err)
+		}
+		if err := g.Export(f); err != nil {
+			f.Close()
+			return fmt.Errorf("hnsw export: write graph %s: %w", entityType, err)
+		}
+		f.Close()
+
+		metaPath := filepath.Join(dir, "hnsw-"+entityType+".meta.json")
+		m := s.meta[entityType]
+		if m == nil {
+			m = map[string]map[string]string{}
+		}
+		b, err := json.Marshal(m)
+		if err != nil {
+			return fmt.Errorf("hnsw export: marshal meta %s: %w", entityType, err)
+		}
+		if err := os.WriteFile(metaPath, b, 0o644); err != nil {
+			return fmt.Errorf("hnsw export: write meta %s: %w", entityType, err)
+		}
+	}
+	slog.Info("hnsw: snapshot exported", "dir", dir, "entity_types", len(s.graphs))
+	return nil
+}
+
+// Import loads HNSW graphs and metadata sidecars from dir.
+// Returns ErrNoHNSWSnapshot if no snapshot files exist.
+func (s *HNSWEmbeddingStore) Import(dir string) error {
+	entries, err := filepath.Glob(filepath.Join(dir, "hnsw-*.bin"))
+	if err != nil || len(entries) == 0 {
+		return ErrNoHNSWSnapshot
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, binPath := range entries {
+		base := filepath.Base(binPath)
+		entityType := strings.TrimPrefix(strings.TrimSuffix(base, ".bin"), "hnsw-")
+
+		f, err := os.Open(binPath)
+		if err != nil {
+			return fmt.Errorf("hnsw import: open %s: %w", binPath, err)
+		}
+		g := hnsw.NewGraph[string]()
+		// Distance/M/EfSearch are restored from the binary by g.Import itself;
+		// no need to pre-set them. bufio.NewReader is required because
+		// coder/hnsw's varint decoder calls io.ByteReader.ReadByte, which
+		// os.File does not implement.
+		if err := g.Import(bufio.NewReader(f)); err != nil {
+			f.Close()
+			return fmt.Errorf("hnsw import: read graph %s: %w", entityType, err)
+		}
+		f.Close()
+		s.graphs[entityType] = g
+
+		metaPath := filepath.Join(dir, "hnsw-"+entityType+".meta.json")
+		b, err := os.ReadFile(metaPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				s.meta[entityType] = map[string]map[string]string{}
+				continue
+			}
+			return fmt.Errorf("hnsw import: read meta %s: %w", entityType, err)
+		}
+		var m map[string]map[string]string
+		if err := json.Unmarshal(b, &m); err != nil {
+			return fmt.Errorf("hnsw import: unmarshal meta %s: %w", entityType, err)
+		}
+		s.meta[entityType] = m
+	}
+	slog.Info("hnsw: snapshot imported", "dir", dir, "entity_types", len(entries))
+	return nil
 }
 
 // Compile-time assertion.
