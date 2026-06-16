@@ -1,5 +1,5 @@
 // file: internal/tools/ollama_daemon.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: f2a3b4c5-d6e7-8901-fabc-901234567890
 // last-edited: 2026-06-15
 
@@ -75,7 +75,7 @@ func (d *OllamaDaemon) EnsureRunningOrAdopt(ctx context.Context) error {
 		slog.Warn("ollama: could not write PID file", "err", err)
 	}
 
-	go d.supervise()
+	go d.supervise(cmd)
 
 	if err := d.waitReady(ctx, time.Duration(d.cfg.ReadyTimeout)*time.Millisecond); err != nil {
 		// Synchronous cleanup: kill the child and remove the PID file before
@@ -140,11 +140,8 @@ func (d *OllamaDaemon) StopWhenIdle(ctx context.Context) error {
 	return nil
 }
 
-func (d *OllamaDaemon) supervise() {
-	if d.cmd == nil {
-		return
-	}
-	d.cmd.Wait()
+func (d *OllamaDaemon) supervise(cmd *exec.Cmd) {
+	cmd.Wait()
 	d.mu.Lock()
 	intentional := d.intentional
 	d.mu.Unlock()
