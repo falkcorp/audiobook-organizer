@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.26.0 -->
+<!-- version: 3.27.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-16 -->
 
@@ -8,6 +8,17 @@
 ## [Unreleased]
 
 ### Refactors
+
+#### June 16, 2026 — Config struct-nesting Wave 6: ScheduledTasksConfig (PR #1482)
+
+Moves 23 flat `Scheduled*` fields (8 task groups) from `Config` into a new `ScheduledTasksConfig` sub-struct at `Config.Scheduled`. Each task group uses a shared `ScheduledTaskConfig` with `Enabled`/`Interval`/`OnStartup` fields (`ResolveProductionAuthors` has no `OnStartup` — zero value is correct).
+
+- **`ScheduledTaskConfig` + `ScheduledTasksConfig`** types defined in `internal/config/config.go`; `Config.Scheduled` replaces 23 flat `Scheduled*` fields.
+- **`migrateScheduledBlob`**: idempotent startup blob migration (flat `scheduled_*` → nested `scheduled.*.*`), chained after `migrateMaintenanceBlob` in `LoadConfigFromDatabase`.
+- **`remapScheduledKeys`**: API compat shim for legacy flat PUT `/config` payloads, chained after `remapMaintenanceKeys` in `UpdateConfig`.
+- **`applySetting`**: all 23 cases updated to write `c.Scheduled.*.*`; added missing `ai_dedup_batch` + `reconcile` cases that were absent from pre-Wave-6 code.
+- **`BindEnv`**: all 23 `SCHEDULED_*` env vars wired to nested viper dot-notation keys.
+- 7 new tests: `TestMigrateScheduledFields_*` (3), `TestRemapScheduledKeys_*` (2), `TestInitConfig_Scheduled*` (2).
 
 #### June 16, 2026 — Config struct-nesting Wave 2: DedupConfig (PR #1476)
 
