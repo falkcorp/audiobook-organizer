@@ -1,6 +1,7 @@
 // file: web/src/components/wizard/WelcomeWizard.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8b9c0d1e-2f3a-4b5c-6d7e-8f9a0b1c2d3e
+// last-edited: 2026-06-15
 
 import { useState, useEffect } from 'react';
 import {
@@ -32,6 +33,7 @@ import {
   CheckCircle as CheckCircleIcon,
 } from '@mui/icons-material';
 import { ServerFileBrowser } from '../common/ServerFileBrowser';
+import { ToolsPanel } from '../tools/ToolsPanel';
 import * as api from '../../services/api';
 import { STORAGE_KEYS } from '../../lib/storageKeys';
 
@@ -79,6 +81,7 @@ export function WelcomeWizard({ open, onComplete }: WelcomeWizardProps) {
   const [mappingTests, setMappingTests] = useState<Record<number, api.ITunesTestMappingResponse | null>>({});
   const [testingMapping, setTestingMapping] = useState<number | null>(null);
   const [appVersion, setAppVersion] = useState('');
+  const [toolInstallChoice, setToolInstallChoice] = useState<'recommended' | 'custom'>('recommended');
 
   useEffect(() => {
     api.getAppVersion().then(setAppVersion);
@@ -86,6 +89,7 @@ export function WelcomeWizard({ open, onComplete }: WelcomeWizardProps) {
 
   const steps = [
     'Library Path',
+    'Tools',
     'AI Setup (Optional)',
     'iTunes Library',
     'Import Folders',
@@ -308,10 +312,12 @@ export function WelcomeWizard({ open, onComplete }: WelcomeWizardProps) {
       case 0:
         return (libraryPath || '').trim() !== '';
       case 1:
-        return true; // Optional step
+        return true; // Tools step is optional
       case 2:
-        return true; // iTunes is optional
+        return true; // AI Setup is optional
       case 3:
+        return true; // iTunes is optional
+      case 4:
         return true; // Import folders are optional
       default:
         return false;
@@ -381,8 +387,59 @@ export function WelcomeWizard({ open, onComplete }: WelcomeWizardProps) {
             </Box>
           )}
 
-          {/* Step 2: OpenAI API Key */}
+          {/* Step 2: Tools */}
           {activeStep === 1 && (
+            <Box>
+              <Typography variant="h6" gutterBottom>
+                Set up AI &amp; fingerprinting tools
+              </Typography>
+              <Typography variant="body2" color="text.secondary" mb={2}>
+                These tools power local AI deduplication and audio fingerprint matching.
+                Recommended installs everything automatically.
+              </Typography>
+
+              <FormControl component="fieldset" sx={{ mb: 2 }}>
+                <RadioGroup
+                  value={toolInstallChoice}
+                  onChange={e => setToolInstallChoice(e.target.value as 'recommended' | 'custom')}
+                >
+                  <FormControlLabel
+                    value="recommended"
+                    control={<Radio />}
+                    label={
+                      <Stack>
+                        <Typography>Install recommended tools</Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          Ollama (local AI, ~5GB) + fpcalc (fingerprinting, ~2MB)
+                        </Typography>
+                      </Stack>
+                    }
+                  />
+                  <FormControlLabel
+                    value="custom"
+                    control={<Radio />}
+                    label="Let me choose"
+                  />
+                </RadioGroup>
+              </FormControl>
+
+              {toolInstallChoice === 'custom' && (
+                <ToolsPanel mode="wizard" />
+              )}
+
+              <Button
+                variant="text"
+                size="small"
+                onClick={() => setActiveStep(prev => prev + 1)}
+                sx={{ mt: 1 }}
+              >
+                Skip — I'll set this up later
+              </Button>
+            </Box>
+          )}
+
+          {/* Step 3: OpenAI API Key */}
+          {activeStep === 2 && (
             <Box>
               <Typography variant="h6" gutterBottom>
                 AI-Powered Metadata (Optional)
@@ -433,8 +490,8 @@ export function WelcomeWizard({ open, onComplete }: WelcomeWizardProps) {
             </Box>
           )}
 
-          {/* Step 3: iTunes Library */}
-          {activeStep === 2 && (
+          {/* Step 4: iTunes Library */}
+          {activeStep === 3 && (
             <Box>
               <Typography variant="h6" gutterBottom>
                 Import from iTunes Library
@@ -661,8 +718,8 @@ export function WelcomeWizard({ open, onComplete }: WelcomeWizardProps) {
             </Box>
           )}
 
-          {/* Step 4: Import Folders */}
-          {activeStep === 3 && (
+          {/* Step 5: Import Folders */}
+          {activeStep === 4 && (
             <Box>
               <Typography variant="h6" gutterBottom>
                 Add Import Folders
