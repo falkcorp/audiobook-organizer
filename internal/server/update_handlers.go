@@ -1,6 +1,7 @@
 // file: internal/server/update_handlers.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
+// last-edited: 2026-06-16
 
 package server
 
@@ -23,7 +24,7 @@ func (s *Server) getUpdateStatus(c *gin.Context) {
 		}{
 			CurrentVersion:  appVersion,
 			LatestVersion:   "",
-			Channel:         config.AppConfig.AutoUpdateChannel,
+			Channel:         config.AppConfig.AutoUpdate.Channel,
 			UpdateAvailable: false,
 			LastChecked:     nil,
 		})
@@ -34,7 +35,7 @@ func (s *Server) getUpdateStatus(c *gin.Context) {
 
 // checkForUpdate triggers an immediate update check and returns the result.
 func (s *Server) checkForUpdate(c *gin.Context) {
-	channel := config.AppConfig.AutoUpdateChannel
+	channel := config.AppConfig.AutoUpdate.Channel
 	info, err := s.updater.CheckForUpdate(channel)
 	if err != nil {
 		httputil.InternalError(c, "failed to check for updates", err)

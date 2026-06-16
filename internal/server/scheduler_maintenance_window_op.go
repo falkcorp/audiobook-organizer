@@ -1,7 +1,7 @@
 // file: internal/server/scheduler_maintenance_window_op.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2a4b6c8d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
-// last-edited: 2026-05-11
+// last-edited: 2026-06-16
 
 package server
 
@@ -59,7 +59,7 @@ func (s *Server) RegisterMaintenanceWindowOp(reg *opsregistry.Registry) error {
 			progress := registryProgressAdapter{r: reporter}
 
 			// Step 1: Auto-update (if enabled and not already completed post-restart)
-			if config.AppConfig.AutoUpdateEnabled {
+			if config.AppConfig.AutoUpdate.Enabled {
 				updateDone, _ := store.GetSetting("maintenance_window_update_completed")
 				today := time.Now().Format("2006-01-02")
 				if updateDone == nil || updateDone.Value != today {
@@ -68,7 +68,7 @@ func (s *Server) RegisterMaintenanceWindowOp(reg *opsregistry.Registry) error {
 					_ = reporter.UpdateProgress(0, 1, "Running auto-update... (0/1 0%)")
 					_ = store.SetSetting("maintenance_window_update_completed", today, "string", false)
 					if s.updater != nil {
-						channel := config.AppConfig.AutoUpdateChannel
+						channel := config.AppConfig.AutoUpdate.Channel
 						info, checkErr := s.updater.CheckForUpdate(channel)
 						if checkErr != nil {
 							_ = progress.Log("warning", fmt.Sprintf("Auto-update check failed: %v", checkErr), nil)

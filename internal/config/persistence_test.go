@@ -1,5 +1,5 @@
 // file: internal/config/persistence_test.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-06-16
 
@@ -1190,5 +1190,60 @@ func TestRemapScheduledKeys_FlatKeys(t *testing.T) {
 func TestRemapScheduledKeys_NoFlatKeys(t *testing.T) {
 	payload := map[string]any{"root_dir": "/data"}
 	result := remapScheduledKeys(payload)
+	assert.Equal(t, map[string]any{"root_dir": "/data"}, result)
+}
+
+func TestMigrateAutoUpdateFields_FlatBlob(t *testing.T) {
+	flatBlob := `{
+		"auto_update_enabled": false,
+		"auto_update_channel": "stable",
+		"auto_update_check_minutes": 60,
+		"auto_update_window_start": 2,
+		"auto_update_window_end": 5,
+		"root_dir": "/data"
+	}`
+	migrated, changed := migrateAutoUpdateBlob(flatBlob)
+	require.True(t, changed)
+	var result map[string]any
+	require.NoError(t, json.Unmarshal([]byte(migrated), &result))
+	au, ok := result["auto_update"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, false, au["enabled"])
+	assert.Equal(t, "stable", au["channel"])
+	assert.Equal(t, float64(60), au["check_minutes"])
+	assert.Equal(t, float64(2), au["window_start"])
+	assert.Equal(t, "/data", result["root_dir"])
+	assert.NotContains(t, result, "auto_update_enabled")
+	assert.NotContains(t, result, "auto_update_channel")
+}
+
+func TestMigrateAutoUpdateFields_AlreadyNested(t *testing.T) {
+	_, changed := migrateAutoUpdateBlob(`{"auto_update": {"enabled": false}}`)
+	assert.False(t, changed)
+}
+
+func TestMigrateAutoUpdateFields_EmptyBlob(t *testing.T) {
+	_, changed := migrateAutoUpdateBlob(`{}`)
+	assert.False(t, changed)
+}
+
+func TestRemapAutoUpdateKeys_FlatKeys(t *testing.T) {
+	payload := map[string]any{
+		"auto_update_enabled": false,
+		"auto_update_channel": "beta",
+		"root_dir":            "/data",
+	}
+	result := remapAutoUpdateKeys(payload)
+	au, ok := result["auto_update"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, false, au["enabled"])
+	assert.Equal(t, "beta", au["channel"])
+	assert.Equal(t, "/data", result["root_dir"])
+	assert.NotContains(t, result, "auto_update_enabled")
+}
+
+func TestRemapAutoUpdateKeys_NoFlatKeys(t *testing.T) {
+	payload := map[string]any{"root_dir": "/data"}
+	result := remapAutoUpdateKeys(payload)
 	assert.Equal(t, map[string]any{"root_dir": "/data"}, result)
 }

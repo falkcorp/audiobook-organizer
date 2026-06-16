@@ -1,5 +1,5 @@
 // file: internal/config/config_unit_test.go
-// version: 1.9.0
+// version: 1.10.0
 // last-edited: 2026-06-16
 
 package config
@@ -454,9 +454,9 @@ func TestInitConfigDefaults(t *testing.T) {
 	})
 
 	t.Run("auto-update defaults", func(t *testing.T) {
-		assert.False(t, AppConfig.AutoUpdateEnabled)
-		assert.Equal(t, "stable", AppConfig.AutoUpdateChannel)
-		assert.Equal(t, 60, AppConfig.AutoUpdateCheckMinutes)
+		assert.False(t, AppConfig.AutoUpdate.Enabled)
+		assert.Equal(t, "stable", AppConfig.AutoUpdate.Channel)
+		assert.Equal(t, 60, AppConfig.AutoUpdate.CheckMinutes)
 	})
 
 	t.Run("default metadata sources", func(t *testing.T) {
@@ -609,7 +609,7 @@ func TestApplySettingStringKeys(t *testing.T) {
 		{"memory_limit_type", "percent", func() string { return AppConfig.MemoryLimitType }},
 		{"log_level", "debug", func() string { return AppConfig.LogLevel }},
 		{"log_format", "json", func() string { return AppConfig.LogFormat }},
-		{"auto_update_channel", "beta", func() string { return AppConfig.AutoUpdateChannel }},
+		{"auto_update_channel", "beta", func() string { return AppConfig.AutoUpdate.Channel }},
 		{"itunes_library_write_path", "/itl/path", func() string { return AppConfig.ITunes.LibraryWritePath }},
 		{"itunes_library_itl_path", "/itl/path2", func() string { return AppConfig.ITunes.LibraryWritePath }},
 		{"itunes_library_read_path", "/xml/path", func() string { return AppConfig.ITunes.LibraryReadPath }},
@@ -646,7 +646,7 @@ func TestApplySettingBoolKeys(t *testing.T) {
 		{"embed_cover_art", func() bool { return AppConfig.EmbedCoverArt }},
 		{"auto_scan_enabled", func() bool { return AppConfig.AutoScanEnabled }},
 		{"enable_json_logging", func() bool { return AppConfig.EnableJsonLogging }},
-		{"auto_update_enabled", func() bool { return AppConfig.AutoUpdateEnabled }},
+		{"auto_update_enabled", func() bool { return AppConfig.AutoUpdate.Enabled }},
 		{"purge_soft_deleted_delete_files", func() bool { return AppConfig.PurgeSoftDeletedDeleteFiles }},
 		{"itunes_sync_enabled", func() bool { return AppConfig.ITunes.SyncEnabled }},
 		{"itl_write_back_enabled", func() bool { return AppConfig.ITunes.WriteBackEnabled }},
@@ -718,9 +718,9 @@ func TestApplySettingIntKeys(t *testing.T) {
 		{"cache_size", "2000", func() int { return AppConfig.CacheSize }},
 		{"memory_limit_percent", "50", func() int { return AppConfig.MemoryLimitPercent }},
 		{"memory_limit_mb", "1024", func() int { return AppConfig.MemoryLimitMB }},
-		{"auto_update_check_minutes", "120", func() int { return AppConfig.AutoUpdateCheckMinutes }},
-		{"auto_update_window_start", "2", func() int { return AppConfig.AutoUpdateWindowStart }},
-		{"auto_update_window_end", "5", func() int { return AppConfig.AutoUpdateWindowEnd }},
+		{"auto_update_check_minutes", "120", func() int { return AppConfig.AutoUpdate.CheckMinutes }},
+		{"auto_update_window_start", "2", func() int { return AppConfig.AutoUpdate.WindowStart }},
+		{"auto_update_window_end", "5", func() int { return AppConfig.AutoUpdate.WindowEnd }},
 		{"purge_soft_deleted_after_days", "30", func() int { return AppConfig.PurgeSoftDeletedAfterDays }},
 		{"itunes_sync_interval", "60", func() int { return AppConfig.ITunes.SyncInterval }},
 		{"maintenance_window_start", "3", func() int { return AppConfig.Maintenance.WindowStart }},
@@ -1111,9 +1111,8 @@ func TestMigrateMaintenanceWindow(t *testing.T) {
 	t.Run("migrates from auto-update window", func(t *testing.T) {
 		store := newMockSettingsStore()
 		AppConfig = Config{
-			AutoUpdateWindowStart: 2,
-			AutoUpdateWindowEnd:   5,
-			Maintenance:           MaintenanceConfig{WindowStart: 0, WindowEnd: 0},
+			AutoUpdate:  AutoUpdateConfig{WindowStart: 2, WindowEnd: 5},
+			Maintenance: MaintenanceConfig{WindowStart: 0, WindowEnd: 0},
 		}
 		MigrateMaintenanceWindow(store)
 		assert.Equal(t, 2, AppConfig.Maintenance.WindowStart)

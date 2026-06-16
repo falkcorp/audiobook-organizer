@@ -1,5 +1,5 @@
 // file: internal/config/persistence.go
-// version: 1.26.0
+// version: 1.27.0
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
 // last-edited: 2026-06-16
 
@@ -503,6 +503,43 @@ func remapScheduledKeys(payload map[string]any) map[string]any {
 	return payload
 }
 
+// migrateAutoUpdateBlob rewrites flat auto_update_* fields to the nested AutoUpdateConfig format.
+func migrateAutoUpdateBlob(blob string) (string, bool) {
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(blob), &raw); err != nil {
+		return blob, false
+	}
+	if _, isFlat := raw["auto_update_enabled"]; !isFlat {
+		return blob, false
+	}
+	type flatShape struct {
+		Enabled      bool   `json:"auto_update_enabled"`
+		Channel      string `json:"auto_update_channel"`
+		CheckMinutes int    `json:"auto_update_check_minutes"`
+		WindowStart  int    `json:"auto_update_window_start"`
+		WindowEnd    int    `json:"auto_update_window_end"`
+	}
+	var old flatShape
+	json.Unmarshal([]byte(blob), &old) //nolint:errcheck
+	raw["auto_update"] = map[string]any{
+		"enabled":       old.Enabled,
+		"channel":       old.Channel,
+		"check_minutes": old.CheckMinutes,
+		"window_start":  old.WindowStart,
+		"window_end":    old.WindowEnd,
+	}
+	delete(raw, "auto_update_enabled")
+	delete(raw, "auto_update_channel")
+	delete(raw, "auto_update_check_minutes")
+	delete(raw, "auto_update_window_start")
+	delete(raw, "auto_update_window_end")
+	migrated, err := json.Marshal(raw)
+	if err != nil {
+		return blob, false
+	}
+	return string(migrated), true
+}
+
 // saveRawBlob writes a pre-marshaled JSON string directly as the config blob.
 // Used only by startup migration to persist migrated blobs without re-marshaling.
 func saveRawBlob(store database.SettingsStore, rawJSON string) error {
@@ -599,6 +636,15 @@ func LoadConfigFromDatabase(store database.SettingsStore) error {
 			blobStr = migrated
 			if saveErr := saveRawBlob(store, migrated); saveErr != nil {
 				slog.Warn("config: failed to persist migrated scheduled blob", "err", saveErr)
+			}
+		}
+
+		// Migrate flat auto_update_* keys → nested AutoUpdateConfig format (idempotent).
+		if migrated, changed := migrateAutoUpdateBlob(blobStr); changed {
+			slog.Info("config: migrated auto-update fields to nested format")
+			blobStr = migrated
+			if saveErr := saveRawBlob(store, migrated); saveErr != nil {
+				slog.Warn("config: failed to persist migrated auto-update blob", "err", saveErr)
 			}
 		}
 
@@ -720,11 +766,11 @@ func MigrateMaintenanceWindow(store database.SettingsStore) {
 	var logStart, logEnd int
 	Mutate(func(c *Config) {
 		// Migrate auto-update window start/end if maintenance window not yet configured
-		if c.Maintenance.WindowStart == 0 && c.AutoUpdateWindowStart > 0 {
-			c.Maintenance.WindowStart = c.AutoUpdateWindowStart
+		if c.Maintenance.WindowStart == 0 && c.AutoUpdate.WindowStart > 0 {
+			c.Maintenance.WindowStart = c.AutoUpdate.WindowStart
 		}
-		if c.Maintenance.WindowEnd == 0 && c.AutoUpdateWindowEnd > 0 {
-			c.Maintenance.WindowEnd = c.AutoUpdateWindowEnd
+		if c.Maintenance.WindowEnd == 0 && c.AutoUpdate.WindowEnd > 0 {
+			c.Maintenance.WindowEnd = c.AutoUpdate.WindowEnd
 		}
 		// Ensure sensible defaults
 		if c.Maintenance.WindowStart == 0 && c.Maintenance.WindowEnd == 0 {
@@ -931,21 +977,21 @@ func applySetting(key, value, typ string) error {
 		// Auto-update
 		case "auto_update_enabled":
 			if b, err := strconv.ParseBool(value); err == nil {
-				c.AutoUpdateEnabled = b
+				c.AutoUpdate.Enabled = b
 			}
 		case "auto_update_channel":
-			c.AutoUpdateChannel = value
+			c.AutoUpdate.Channel = value
 		case "auto_update_check_minutes":
 			if i, err := strconv.Atoi(value); err == nil {
-				c.AutoUpdateCheckMinutes = i
+				c.AutoUpdate.CheckMinutes = i
 			}
 		case "auto_update_window_start":
 			if i, err := strconv.Atoi(value); err == nil {
-				c.AutoUpdateWindowStart = i
+				c.AutoUpdate.WindowStart = i
 			}
 		case "auto_update_window_end":
 			if i, err := strconv.Atoi(value); err == nil {
-				c.AutoUpdateWindowEnd = i
+				c.AutoUpdate.WindowEnd = i
 			}
 
 		// Lifecycle / retention

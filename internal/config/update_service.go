@@ -1,5 +1,5 @@
 // file: internal/config/update_service.go
-// version: 3.7.0
+// version: 3.8.0
 // guid: f6g7h8i9-j0k1-l2m3-n4o5-p6q7r8s9t0u1
 // last-edited: 2026-06-16
 
@@ -247,6 +247,35 @@ func remapMaintenanceKeys(payload map[string]any) map[string]any {
 	return payload
 }
 
+// remapAutoUpdateKeys translates legacy flat auto_update_* keys to nested AutoUpdateConfig format.
+func remapAutoUpdateKeys(payload map[string]any) map[string]any {
+	flatToNested := map[string]string{
+		"auto_update_enabled":       "enabled",
+		"auto_update_channel":       "channel",
+		"auto_update_check_minutes": "check_minutes",
+		"auto_update_window_start":  "window_start",
+		"auto_update_window_end":    "window_end",
+	}
+	nested := make(map[string]any)
+	for flat, short := range flatToNested {
+		if v, ok := payload[flat]; ok {
+			nested[short] = v
+			delete(payload, flat)
+		}
+	}
+	if len(nested) == 0 {
+		return payload
+	}
+	if existing, ok := payload["auto_update"].(map[string]any); ok {
+		for k, v := range nested {
+			existing[k] = v
+		}
+	} else {
+		payload["auto_update"] = nested
+	}
+	return payload
+}
+
 // UpdateConfig applies a config update payload to AppConfig and persists it.
 //
 // Architecture: non-secret fields are applied via JSON round-trip onto AppConfig.
@@ -311,6 +340,8 @@ func (us *UpdateService) UpdateConfig(payload map[string]any) (int, map[string]a
 	filtered = remapMaintenanceKeys(filtered)
 	// Translate any legacy flat scheduled_* keys to the nested ScheduledTasksConfig format.
 	filtered = remapScheduledKeys(filtered)
+	// Translate any legacy flat auto_update_* keys to the nested AutoUpdateConfig format.
+	filtered = remapAutoUpdateKeys(filtered)
 
 	// Apply all remaining fields via JSON round-trip.
 	// Any field in Config with a matching json tag is set automatically.

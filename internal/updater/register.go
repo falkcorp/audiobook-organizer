@@ -1,6 +1,7 @@
 // file: internal/updater/register.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 8c9d0a1b-2c3d-4e5f-6a7b-8c9d0a1b2c3d
+// last-edited: 2026-06-16
 //
 // Service registry registrations for the auto-updater + its scheduler.
 //
@@ -80,11 +81,11 @@ func init() {
 			upd := serviceregistry.Get[*Updater](c, "updater")
 			scheduler := NewScheduler(upd, func() SchedulerConfig {
 				return SchedulerConfig{
-					Enabled:     config.AppConfig.AutoUpdateEnabled,
-					Channel:     config.AppConfig.AutoUpdateChannel,
-					CheckMins:   config.AppConfig.AutoUpdateCheckMinutes,
-					WindowStart: config.AppConfig.AutoUpdateWindowStart,
-					WindowEnd:   config.AppConfig.AutoUpdateWindowEnd,
+					Enabled:     config.AppConfig.AutoUpdate.Enabled,
+					Channel:     config.AppConfig.AutoUpdate.Channel,
+					CheckMins:   config.AppConfig.AutoUpdate.CheckMinutes,
+					WindowStart: config.AppConfig.AutoUpdate.WindowStart,
+					WindowEnd:   config.AppConfig.AutoUpdate.WindowEnd,
 				}
 			})
 			return &SchedulerStarterAdapter{scheduler: scheduler}, nil

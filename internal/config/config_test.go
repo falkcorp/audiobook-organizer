@@ -1,5 +1,5 @@
 // file: internal/config/config_test.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-06-16
 
@@ -612,4 +612,25 @@ func TestInitConfig_ScheduledFromEnv(t *testing.T) {
 	snap := Snapshot()
 	assert.True(t, snap.Scheduled.DedupRefresh.Enabled)
 	assert.Equal(t, 720, snap.Scheduled.AIDedupBatch.Interval)
+}
+
+func TestInitConfig_AutoUpdateDefaults(t *testing.T) {
+	viper.Reset()
+	InitConfig()
+	snap := Snapshot()
+	assert.False(t, snap.AutoUpdate.Enabled)
+	assert.Equal(t, "stable", snap.AutoUpdate.Channel)
+	assert.Equal(t, 60, snap.AutoUpdate.CheckMinutes)
+	assert.Equal(t, 2, snap.AutoUpdate.WindowStart)
+	assert.Equal(t, 5, snap.AutoUpdate.WindowEnd)
+}
+
+func TestInitConfig_AutoUpdateFromEnv(t *testing.T) {
+	t.Setenv("AUTO_UPDATE_ENABLED", "true")
+	t.Setenv("AUTO_UPDATE_CHANNEL", "beta")
+	viper.Reset()
+	InitConfig()
+	snap := Snapshot()
+	assert.True(t, snap.AutoUpdate.Enabled)
+	assert.Equal(t, "beta", snap.AutoUpdate.Channel)
 }
