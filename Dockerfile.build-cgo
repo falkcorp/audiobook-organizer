@@ -9,7 +9,7 @@
 #   docker buildx build --platform linux/amd64 --build-arg APP_VERSION=v1.0.0 \
 #     -f Dockerfile.build-cgo --output type=local,dest=dist/ .
 
-FROM --platform=$BUILDPLATFORM node:25-alpine AS frontend-builder
+FROM --platform=$BUILDPLATFORM node:26-alpine AS frontend-builder
 WORKDIR /build/web
 COPY web/package*.json ./
 RUN npm ci --prefer-offline --no-audit
