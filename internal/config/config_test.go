@@ -1,5 +1,5 @@
 // file: internal/config/config_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-06-16
 
@@ -590,4 +590,26 @@ func TestInitConfig_MaintenanceFromEnv(t *testing.T) {
 	snap := Snapshot()
 	assert.True(t, snap.Maintenance.Enabled)
 	assert.Equal(t, 100, snap.Maintenance.AcoustIDNightlyLimit)
+}
+
+func TestInitConfig_ScheduledDefaults(t *testing.T) {
+	viper.Reset()
+	InitConfig()
+	snap := Snapshot()
+	assert.False(t, snap.Scheduled.DedupRefresh.Enabled)
+	assert.Equal(t, 360, snap.Scheduled.DedupRefresh.Interval)
+	assert.Equal(t, 1440, snap.Scheduled.DbOptimize.Interval)
+	assert.False(t, snap.Scheduled.AIDedupBatch.Enabled)
+	assert.Equal(t, 1440, snap.Scheduled.AIDedupBatch.Interval)
+	assert.False(t, snap.Scheduled.ResolveProductionAuthors.Enabled)
+}
+
+func TestInitConfig_ScheduledFromEnv(t *testing.T) {
+	t.Setenv("SCHEDULED_DEDUP_REFRESH_ENABLED", "true")
+	t.Setenv("SCHEDULED_AI_DEDUP_BATCH_INTERVAL", "720")
+	viper.Reset()
+	InitConfig()
+	snap := Snapshot()
+	assert.True(t, snap.Scheduled.DedupRefresh.Enabled)
+	assert.Equal(t, 720, snap.Scheduled.AIDedupBatch.Interval)
 }

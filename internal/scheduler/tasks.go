@@ -1,5 +1,5 @@
 // file: internal/scheduler/tasks.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9b4c7e21-a5f3-4d08-b2e6-3c8d1f7a0e54
 // last-edited: 2026-06-16
 
@@ -179,15 +179,15 @@ func (ts *TaskScheduler) registerAllTasks() {
 			}
 			return op, nil
 		},
-		IsEnabled: func() bool { return config.AppConfig.ScheduledDedupRefreshEnabled },
+		IsEnabled: func() bool { return config.AppConfig.Scheduled.DedupRefresh.Enabled },
 		GetInterval: func() time.Duration {
-			mins := config.AppConfig.ScheduledDedupRefreshInterval
+			mins := config.AppConfig.Scheduled.DedupRefresh.Interval
 			if mins <= 0 {
 				return 0
 			}
 			return time.Duration(mins) * time.Minute
 		},
-		RunOnStart:             func() bool { return config.AppConfig.ScheduledDedupRefreshOnStartup },
+		RunOnStart:             func() bool { return config.AppConfig.Scheduled.DedupRefresh.OnStartup },
 		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.DedupRefresh },
 	})
 
@@ -236,15 +236,15 @@ func (ts *TaskScheduler) registerAllTasks() {
 			}
 			return op, nil
 		},
-		IsEnabled: func() bool { return config.AppConfig.ScheduledSeriesPruneEnabled },
+		IsEnabled: func() bool { return config.AppConfig.Scheduled.SeriesPrune.Enabled },
 		GetInterval: func() time.Duration {
-			mins := config.AppConfig.ScheduledSeriesPruneInterval
+			mins := config.AppConfig.Scheduled.SeriesPrune.Interval
 			if mins <= 0 {
 				return 0
 			}
 			return time.Duration(mins) * time.Minute
 		},
-		RunOnStart:             func() bool { return config.AppConfig.ScheduledSeriesPruneOnStartup },
+		RunOnStart:             func() bool { return config.AppConfig.Scheduled.SeriesPrune.OnStartup },
 		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.SeriesPrune },
 	})
 
@@ -427,15 +427,15 @@ func (ts *TaskScheduler) registerAllTasks() {
 			}
 			return op, nil
 		},
-		IsEnabled: func() bool { return config.AppConfig.ScheduledAuthorSplitEnabled },
+		IsEnabled: func() bool { return config.AppConfig.Scheduled.AuthorSplit.Enabled },
 		GetInterval: func() time.Duration {
-			mins := config.AppConfig.ScheduledAuthorSplitInterval
+			mins := config.AppConfig.Scheduled.AuthorSplit.Interval
 			if mins <= 0 {
 				return 0
 			}
 			return time.Duration(mins) * time.Minute
 		},
-		RunOnStart:             func() bool { return config.AppConfig.ScheduledAuthorSplitOnStartup },
+		RunOnStart:             func() bool { return config.AppConfig.Scheduled.AuthorSplit.OnStartup },
 		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.AuthorSplit },
 	})
 
@@ -458,15 +458,15 @@ func (ts *TaskScheduler) registerAllTasks() {
 			}
 			return op, nil
 		},
-		IsEnabled: func() bool { return config.AppConfig.ScheduledDbOptimizeEnabled },
+		IsEnabled: func() bool { return config.AppConfig.Scheduled.DbOptimize.Enabled },
 		GetInterval: func() time.Duration {
-			mins := config.AppConfig.ScheduledDbOptimizeInterval
+			mins := config.AppConfig.Scheduled.DbOptimize.Interval
 			if mins <= 0 {
 				return 0
 			}
 			return time.Duration(mins) * time.Minute
 		},
-		RunOnStart:             func() bool { return config.AppConfig.ScheduledDbOptimizeOnStartup },
+		RunOnStart:             func() bool { return config.AppConfig.Scheduled.DbOptimize.OnStartup },
 		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.DbOptimize },
 	})
 
@@ -603,9 +603,9 @@ func (ts *TaskScheduler) registerAllTasks() {
 			}
 			return op, nil
 		},
-		IsEnabled: func() bool { return config.AppConfig.ScheduledResolveProductionAuthorsEnabled },
+		IsEnabled: func() bool { return config.AppConfig.Scheduled.ResolveProductionAuthors.Enabled },
 		GetInterval: func() time.Duration {
-			mins := config.AppConfig.ScheduledResolveProductionAuthorsInterval
+			mins := config.AppConfig.Scheduled.ResolveProductionAuthors.Interval
 			if mins <= 0 {
 				return 0
 			}
@@ -634,15 +634,15 @@ func (ts *TaskScheduler) registerAllTasks() {
 			}
 			return op, nil
 		},
-		IsEnabled: func() bool { return config.AppConfig.ScheduledMetadataRefreshEnabled },
+		IsEnabled: func() bool { return config.AppConfig.Scheduled.MetadataRefresh.Enabled },
 		GetInterval: func() time.Duration {
-			mins := config.AppConfig.ScheduledMetadataRefreshInterval
+			mins := config.AppConfig.Scheduled.MetadataRefresh.Interval
 			if mins <= 0 {
 				return 0
 			}
 			return time.Duration(mins) * time.Minute
 		},
-		RunOnStart:             func() bool { return config.AppConfig.ScheduledMetadataRefreshOnStartup },
+		RunOnStart:             func() bool { return config.AppConfig.Scheduled.MetadataRefresh.OnStartup },
 		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.MetadataRefresh },
 	})
 
@@ -666,15 +666,15 @@ func (ts *TaskScheduler) registerAllTasks() {
 			}
 			return op, nil
 		},
-		IsEnabled: func() bool { return config.AppConfig.ScheduledReconcileEnabled },
+		IsEnabled: func() bool { return config.AppConfig.Scheduled.Reconcile.Enabled },
 		GetInterval: func() time.Duration {
-			mins := config.AppConfig.ScheduledReconcileInterval
+			mins := config.AppConfig.Scheduled.Reconcile.Interval
 			if mins <= 0 {
 				return 0
 			}
 			return time.Duration(mins) * time.Minute
 		},
-		RunOnStart:             func() bool { return config.AppConfig.ScheduledReconcileOnStartup },
+		RunOnStart:             func() bool { return config.AppConfig.Scheduled.Reconcile.OnStartup },
 		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.Reconcile },
 	})
 
@@ -699,16 +699,16 @@ func (ts *TaskScheduler) registerAllTasks() {
 			return op, nil
 		},
 		IsEnabled: func() bool {
-			return config.AppConfig.ScheduledAIDedupBatchEnabled && config.AppConfig.EnableAIParsing
+			return config.AppConfig.Scheduled.AIDedupBatch.Enabled && config.AppConfig.EnableAIParsing
 		},
 		GetInterval: func() time.Duration {
-			mins := config.AppConfig.ScheduledAIDedupBatchInterval
+			mins := config.AppConfig.Scheduled.AIDedupBatch.Interval
 			if mins <= 0 {
 				return 24 * time.Hour
 			}
 			return time.Duration(mins) * time.Minute
 		},
-		RunOnStart:             func() bool { return config.AppConfig.ScheduledAIDedupBatchOnStartup },
+		RunOnStart:             func() bool { return config.AppConfig.Scheduled.AIDedupBatch.OnStartup },
 		RunInMaintenanceWindow: func() bool { return false },
 	})
 

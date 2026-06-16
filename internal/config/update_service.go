@@ -1,5 +1,5 @@
 // file: internal/config/update_service.go
-// version: 3.6.0
+// version: 3.7.0
 // guid: f6g7h8i9-j0k1-l2m3-n4o5-p6q7r8s9t0u1
 // last-edited: 2026-06-16
 
@@ -309,6 +309,8 @@ func (us *UpdateService) UpdateConfig(payload map[string]any) (int, map[string]a
 	filtered = remapITunesKeys(filtered)
 	// Translate any legacy flat maintenance_window_* keys to the nested MaintenanceConfig format.
 	filtered = remapMaintenanceKeys(filtered)
+	// Translate any legacy flat scheduled_* keys to the nested ScheduledTasksConfig format.
+	filtered = remapScheduledKeys(filtered)
 
 	// Apply all remaining fields via JSON round-trip.
 	// Any field in Config with a matching json tag is set automatically.

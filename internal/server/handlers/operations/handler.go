@@ -1,5 +1,5 @@
 // file: internal/server/handlers/operations/handler.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1b7fbd86-cdda-4921-b2d0-786f5cadb438
 // last-edited: 2026-06-16
 
@@ -677,52 +677,52 @@ func (h *Handler) UpdateTaskConfig(c *gin.Context) {
 	switch name {
 	case "dedup_refresh":
 		if req.Enabled != nil {
-			config.AppConfig.ScheduledDedupRefreshEnabled = *req.Enabled
+			config.AppConfig.Scheduled.DedupRefresh.Enabled = *req.Enabled
 		}
 		if req.IntervalMinutes != nil {
-			config.AppConfig.ScheduledDedupRefreshInterval = *req.IntervalMinutes
+			config.AppConfig.Scheduled.DedupRefresh.Interval = *req.IntervalMinutes
 		}
 		if req.RunOnStartup != nil {
-			config.AppConfig.ScheduledDedupRefreshOnStartup = *req.RunOnStartup
+			config.AppConfig.Scheduled.DedupRefresh.OnStartup = *req.RunOnStartup
 		}
 		if req.RunInMaintenanceWindow != nil {
 			config.AppConfig.Maintenance.DedupRefresh = *req.RunInMaintenanceWindow
 		}
 	case "author_split_scan":
 		if req.Enabled != nil {
-			config.AppConfig.ScheduledAuthorSplitEnabled = *req.Enabled
+			config.AppConfig.Scheduled.AuthorSplit.Enabled = *req.Enabled
 		}
 		if req.IntervalMinutes != nil {
-			config.AppConfig.ScheduledAuthorSplitInterval = *req.IntervalMinutes
+			config.AppConfig.Scheduled.AuthorSplit.Interval = *req.IntervalMinutes
 		}
 		if req.RunOnStartup != nil {
-			config.AppConfig.ScheduledAuthorSplitOnStartup = *req.RunOnStartup
+			config.AppConfig.Scheduled.AuthorSplit.OnStartup = *req.RunOnStartup
 		}
 		if req.RunInMaintenanceWindow != nil {
 			config.AppConfig.Maintenance.AuthorSplit = *req.RunInMaintenanceWindow
 		}
 	case "db_optimize":
 		if req.Enabled != nil {
-			config.AppConfig.ScheduledDbOptimizeEnabled = *req.Enabled
+			config.AppConfig.Scheduled.DbOptimize.Enabled = *req.Enabled
 		}
 		if req.IntervalMinutes != nil {
-			config.AppConfig.ScheduledDbOptimizeInterval = *req.IntervalMinutes
+			config.AppConfig.Scheduled.DbOptimize.Interval = *req.IntervalMinutes
 		}
 		if req.RunOnStartup != nil {
-			config.AppConfig.ScheduledDbOptimizeOnStartup = *req.RunOnStartup
+			config.AppConfig.Scheduled.DbOptimize.OnStartup = *req.RunOnStartup
 		}
 		if req.RunInMaintenanceWindow != nil {
 			config.AppConfig.Maintenance.DbOptimize = *req.RunInMaintenanceWindow
 		}
 	case "metadata_refresh":
 		if req.Enabled != nil {
-			config.AppConfig.ScheduledMetadataRefreshEnabled = *req.Enabled
+			config.AppConfig.Scheduled.MetadataRefresh.Enabled = *req.Enabled
 		}
 		if req.IntervalMinutes != nil {
-			config.AppConfig.ScheduledMetadataRefreshInterval = *req.IntervalMinutes
+			config.AppConfig.Scheduled.MetadataRefresh.Interval = *req.IntervalMinutes
 		}
 		if req.RunOnStartup != nil {
-			config.AppConfig.ScheduledMetadataRefreshOnStartup = *req.RunOnStartup
+			config.AppConfig.Scheduled.MetadataRefresh.OnStartup = *req.RunOnStartup
 		}
 		if req.RunInMaintenanceWindow != nil {
 			config.AppConfig.Maintenance.MetadataRefresh = *req.RunInMaintenanceWindow
@@ -736,13 +736,13 @@ func (h *Handler) UpdateTaskConfig(c *gin.Context) {
 		}
 	case "series_prune":
 		if req.Enabled != nil {
-			config.AppConfig.ScheduledSeriesPruneEnabled = *req.Enabled
+			config.AppConfig.Scheduled.SeriesPrune.Enabled = *req.Enabled
 		}
 		if req.IntervalMinutes != nil {
-			config.AppConfig.ScheduledSeriesPruneInterval = *req.IntervalMinutes
+			config.AppConfig.Scheduled.SeriesPrune.Interval = *req.IntervalMinutes
 		}
 		if req.RunOnStartup != nil {
-			config.AppConfig.ScheduledSeriesPruneOnStartup = *req.RunOnStartup
+			config.AppConfig.Scheduled.SeriesPrune.OnStartup = *req.RunOnStartup
 		}
 		if req.RunInMaintenanceWindow != nil {
 			config.AppConfig.Maintenance.SeriesPrune = *req.RunInMaintenanceWindow
@@ -760,7 +760,7 @@ func (h *Handler) UpdateTaskConfig(c *gin.Context) {
 		}
 	case "reconcile_scan":
 		if req.Enabled != nil {
-			config.AppConfig.ScheduledReconcileEnabled = *req.Enabled
+			config.AppConfig.Scheduled.Reconcile.Enabled = *req.Enabled
 		}
 		if req.RunInMaintenanceWindow != nil {
 			config.AppConfig.Maintenance.Reconcile = *req.RunInMaintenanceWindow

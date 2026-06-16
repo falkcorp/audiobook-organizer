@@ -1,5 +1,5 @@
 // file: internal/config/persistence.go
-// version: 1.25.0
+// version: 1.26.0
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
 // last-edited: 2026-06-16
 
@@ -424,6 +424,85 @@ func migrateMaintenanceBlob(blob string) (string, bool) {
 	return string(migrated), true
 }
 
+// migrateScheduledBlob rewrites flat scheduled_* fields to the nested
+// ScheduledTasksConfig format. Safe to call repeatedly (idempotent).
+// Sentinel key: "scheduled_dedup_refresh_enabled".
+func migrateScheduledBlob(blob string) (string, bool) {
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(blob), &raw); err != nil {
+		return blob, false
+	}
+	if _, isFlat := raw["scheduled_dedup_refresh_enabled"]; !isFlat {
+		return blob, false
+	}
+	raw = remapScheduledKeys(raw)
+	migrated, err := json.Marshal(raw)
+	if err != nil {
+		return blob, false
+	}
+	return string(migrated), true
+}
+
+// remapScheduledKeys translates flat scheduled_* keys in a config map to the
+// nested ScheduledTasksConfig format. Merges into any existing "scheduled"
+// sub-object to avoid zeroing sibling fields.
+func remapScheduledKeys(payload map[string]any) map[string]any {
+	type mapping struct{ group, field string }
+	flatMap := map[string]mapping{
+		"scheduled_dedup_refresh_enabled":               {group: "dedup_refresh", field: "enabled"},
+		"scheduled_dedup_refresh_interval":              {group: "dedup_refresh", field: "interval"},
+		"scheduled_dedup_refresh_on_startup":            {group: "dedup_refresh", field: "on_startup"},
+		"scheduled_author_split_enabled":                {group: "author_split", field: "enabled"},
+		"scheduled_author_split_interval":               {group: "author_split", field: "interval"},
+		"scheduled_author_split_on_startup":             {group: "author_split", field: "on_startup"},
+		"scheduled_db_optimize_enabled":                 {group: "db_optimize", field: "enabled"},
+		"scheduled_db_optimize_interval":                {group: "db_optimize", field: "interval"},
+		"scheduled_db_optimize_on_startup":              {group: "db_optimize", field: "on_startup"},
+		"scheduled_metadata_refresh_enabled":            {group: "metadata_refresh", field: "enabled"},
+		"scheduled_metadata_refresh_interval":           {group: "metadata_refresh", field: "interval"},
+		"scheduled_metadata_refresh_on_startup":         {group: "metadata_refresh", field: "on_startup"},
+		"scheduled_resolve_production_authors_enabled":  {group: "resolve_production_authors", field: "enabled"},
+		"scheduled_resolve_production_authors_interval": {group: "resolve_production_authors", field: "interval"},
+		"scheduled_series_prune_enabled":                {group: "series_prune", field: "enabled"},
+		"scheduled_series_prune_interval":               {group: "series_prune", field: "interval"},
+		"scheduled_series_prune_on_startup":             {group: "series_prune", field: "on_startup"},
+		"scheduled_ai_dedup_batch_enabled":              {group: "ai_dedup_batch", field: "enabled"},
+		"scheduled_ai_dedup_batch_interval":             {group: "ai_dedup_batch", field: "interval"},
+		"scheduled_ai_dedup_batch_on_startup":           {group: "ai_dedup_batch", field: "on_startup"},
+		"scheduled_reconcile_enabled":                   {group: "reconcile", field: "enabled"},
+		"scheduled_reconcile_interval":                  {group: "reconcile", field: "interval"},
+		"scheduled_reconcile_on_startup":                {group: "reconcile", field: "on_startup"},
+	}
+	groups := make(map[string]map[string]any)
+	for flat, m := range flatMap {
+		if v, ok := payload[flat]; ok {
+			if groups[m.group] == nil {
+				groups[m.group] = make(map[string]any)
+			}
+			groups[m.group][m.field] = v
+			delete(payload, flat)
+		}
+	}
+	if len(groups) == 0 {
+		return payload
+	}
+	existing, _ := payload["scheduled"].(map[string]any)
+	if existing == nil {
+		existing = make(map[string]any)
+	}
+	for group, fields := range groups {
+		if existingGroup, ok := existing[group].(map[string]any); ok {
+			for k, v := range fields {
+				existingGroup[k] = v
+			}
+		} else {
+			existing[group] = fields
+		}
+	}
+	payload["scheduled"] = existing
+	return payload
+}
+
 // saveRawBlob writes a pre-marshaled JSON string directly as the config blob.
 // Used only by startup migration to persist migrated blobs without re-marshaling.
 func saveRawBlob(store database.SettingsStore, rawJSON string) error {
@@ -511,6 +590,15 @@ func LoadConfigFromDatabase(store database.SettingsStore) error {
 			blobStr = migrated
 			if saveErr := saveRawBlob(store, migrated); saveErr != nil {
 				slog.Warn("config: failed to persist migrated maintenance blob", "err", saveErr)
+			}
+		}
+
+		// Migrate flat scheduled_* keys → nested ScheduledTasksConfig format (idempotent).
+		if migrated, changed := migrateScheduledBlob(blobStr); changed {
+			slog.Info("config: migrated scheduled task fields to nested format")
+			blobStr = migrated
+			if saveErr := saveRawBlob(store, migrated); saveErr != nil {
+				slog.Warn("config: failed to persist migrated scheduled blob", "err", saveErr)
 			}
 		}
 
@@ -979,73 +1067,99 @@ func applySetting(key, value, typ string) error {
 		// Scheduled maintenance tasks
 		case "scheduled_dedup_refresh_enabled":
 			if b, err := strconv.ParseBool(value); err == nil {
-				c.ScheduledDedupRefreshEnabled = b
+				c.Scheduled.DedupRefresh.Enabled = b
 			}
 		case "scheduled_dedup_refresh_interval":
 			if i, err := strconv.Atoi(value); err == nil {
-				c.ScheduledDedupRefreshInterval = i
+				c.Scheduled.DedupRefresh.Interval = i
 			}
 		case "scheduled_dedup_refresh_on_startup":
 			if b, err := strconv.ParseBool(value); err == nil {
-				c.ScheduledDedupRefreshOnStartup = b
+				c.Scheduled.DedupRefresh.OnStartup = b
 			}
 		case "scheduled_author_split_enabled":
 			if b, err := strconv.ParseBool(value); err == nil {
-				c.ScheduledAuthorSplitEnabled = b
+				c.Scheduled.AuthorSplit.Enabled = b
 			}
 		case "scheduled_author_split_interval":
 			if i, err := strconv.Atoi(value); err == nil {
-				c.ScheduledAuthorSplitInterval = i
+				c.Scheduled.AuthorSplit.Interval = i
 			}
 		case "scheduled_author_split_on_startup":
 			if b, err := strconv.ParseBool(value); err == nil {
-				c.ScheduledAuthorSplitOnStartup = b
+				c.Scheduled.AuthorSplit.OnStartup = b
 			}
 		case "scheduled_db_optimize_enabled":
 			if b, err := strconv.ParseBool(value); err == nil {
-				c.ScheduledDbOptimizeEnabled = b
+				c.Scheduled.DbOptimize.Enabled = b
 			}
 		case "scheduled_db_optimize_interval":
 			if i, err := strconv.Atoi(value); err == nil {
-				c.ScheduledDbOptimizeInterval = i
+				c.Scheduled.DbOptimize.Interval = i
 			}
 		case "scheduled_db_optimize_on_startup":
 			if b, err := strconv.ParseBool(value); err == nil {
-				c.ScheduledDbOptimizeOnStartup = b
+				c.Scheduled.DbOptimize.OnStartup = b
 			}
 		case "scheduled_metadata_refresh_enabled":
 			if b, err := strconv.ParseBool(value); err == nil {
-				c.ScheduledMetadataRefreshEnabled = b
+				c.Scheduled.MetadataRefresh.Enabled = b
 			}
 		case "scheduled_metadata_refresh_interval":
 			if i, err := strconv.Atoi(value); err == nil {
-				c.ScheduledMetadataRefreshInterval = i
+				c.Scheduled.MetadataRefresh.Interval = i
 			}
 		case "scheduled_metadata_refresh_on_startup":
 			if b, err := strconv.ParseBool(value); err == nil {
-				c.ScheduledMetadataRefreshOnStartup = b
+				c.Scheduled.MetadataRefresh.OnStartup = b
 			}
 
 		case "scheduled_resolve_production_authors_enabled":
 			if b, err := strconv.ParseBool(value); err == nil {
-				c.ScheduledResolveProductionAuthorsEnabled = b
+				c.Scheduled.ResolveProductionAuthors.Enabled = b
 			}
 		case "scheduled_resolve_production_authors_interval":
 			if i, err := strconv.Atoi(value); err == nil {
-				c.ScheduledResolveProductionAuthorsInterval = i
+				c.Scheduled.ResolveProductionAuthors.Interval = i
 			}
 
 		case "scheduled_series_prune_enabled":
 			if b, err := strconv.ParseBool(value); err == nil {
-				c.ScheduledSeriesPruneEnabled = b
+				c.Scheduled.SeriesPrune.Enabled = b
 			}
 		case "scheduled_series_prune_interval":
 			if i, err := strconv.Atoi(value); err == nil {
-				c.ScheduledSeriesPruneInterval = i
+				c.Scheduled.SeriesPrune.Interval = i
 			}
 		case "scheduled_series_prune_on_startup":
 			if b, err := strconv.ParseBool(value); err == nil {
-				c.ScheduledSeriesPruneOnStartup = b
+				c.Scheduled.SeriesPrune.OnStartup = b
+			}
+
+		case "scheduled_ai_dedup_batch_enabled":
+			if b, err := strconv.ParseBool(value); err == nil {
+				c.Scheduled.AIDedupBatch.Enabled = b
+			}
+		case "scheduled_ai_dedup_batch_interval":
+			if i, err := strconv.Atoi(value); err == nil {
+				c.Scheduled.AIDedupBatch.Interval = i
+			}
+		case "scheduled_ai_dedup_batch_on_startup":
+			if b, err := strconv.ParseBool(value); err == nil {
+				c.Scheduled.AIDedupBatch.OnStartup = b
+			}
+
+		case "scheduled_reconcile_enabled":
+			if b, err := strconv.ParseBool(value); err == nil {
+				c.Scheduled.Reconcile.Enabled = b
+			}
+		case "scheduled_reconcile_interval":
+			if i, err := strconv.Atoi(value); err == nil {
+				c.Scheduled.Reconcile.Interval = i
+			}
+		case "scheduled_reconcile_on_startup":
+			if b, err := strconv.ParseBool(value); err == nil {
+				c.Scheduled.Reconcile.OnStartup = b
 			}
 
 		// Basic auth

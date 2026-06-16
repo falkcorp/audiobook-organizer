@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.57.0
+// version: 1.58.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-06-16
 
@@ -185,6 +185,25 @@ type MetadataScoringConfig struct {
 	WriteBackupBefore  bool    `json:"write_backup_before"  mapstructure:"write_backup_before"`
 }
 
+// ScheduledTaskConfig holds per-task scheduler settings.
+type ScheduledTaskConfig struct {
+	Enabled   bool `json:"enabled"    mapstructure:"enabled"`
+	Interval  int  `json:"interval"   mapstructure:"interval"`
+	OnStartup bool `json:"on_startup" mapstructure:"on_startup"`
+}
+
+// ScheduledTasksConfig holds settings for all background scheduled tasks.
+type ScheduledTasksConfig struct {
+	DedupRefresh             ScheduledTaskConfig `json:"dedup_refresh"               mapstructure:"dedup_refresh"`
+	AuthorSplit              ScheduledTaskConfig `json:"author_split"                mapstructure:"author_split"`
+	DbOptimize               ScheduledTaskConfig `json:"db_optimize"                 mapstructure:"db_optimize"`
+	MetadataRefresh          ScheduledTaskConfig `json:"metadata_refresh"            mapstructure:"metadata_refresh"`
+	ResolveProductionAuthors ScheduledTaskConfig `json:"resolve_production_authors"  mapstructure:"resolve_production_authors"`
+	SeriesPrune              ScheduledTaskConfig `json:"series_prune"                mapstructure:"series_prune"`
+	AIDedupBatch             ScheduledTaskConfig `json:"ai_dedup_batch"              mapstructure:"ai_dedup_batch"`
+	Reconcile                ScheduledTaskConfig `json:"reconcile"                   mapstructure:"reconcile"`
+}
+
 // Config holds application configuration
 type Config struct {
 	// Core paths
@@ -354,38 +373,9 @@ type Config struct {
 	AutoWriteTagsOnApply bool   `json:"auto_write_tags_on_apply"`
 	VerifyAfterWrite     bool   `json:"verify_after_write"`
 
-	// Scheduled maintenance tasks
-	ScheduledDedupRefreshEnabled   bool `json:"scheduled_dedup_refresh_enabled"`
-	ScheduledDedupRefreshInterval  int  `json:"scheduled_dedup_refresh_interval"` // minutes, default 360
-	ScheduledDedupRefreshOnStartup bool `json:"scheduled_dedup_refresh_on_startup"`
-
-	ScheduledAuthorSplitEnabled   bool `json:"scheduled_author_split_enabled"`
-	ScheduledAuthorSplitInterval  int  `json:"scheduled_author_split_interval"` // minutes, default 0 (manual)
-	ScheduledAuthorSplitOnStartup bool `json:"scheduled_author_split_on_startup"`
-
-	ScheduledDbOptimizeEnabled   bool `json:"scheduled_db_optimize_enabled"`
-	ScheduledDbOptimizeInterval  int  `json:"scheduled_db_optimize_interval"` // minutes, default 1440
-	ScheduledDbOptimizeOnStartup bool `json:"scheduled_db_optimize_on_startup"`
-
-	ScheduledMetadataRefreshEnabled   bool `json:"scheduled_metadata_refresh_enabled"`
-	ScheduledMetadataRefreshInterval  int  `json:"scheduled_metadata_refresh_interval"` // minutes
-	ScheduledMetadataRefreshOnStartup bool `json:"scheduled_metadata_refresh_on_startup"`
-
-	ScheduledResolveProductionAuthorsEnabled  bool `json:"scheduled_resolve_production_authors_enabled"`
-	ScheduledResolveProductionAuthorsInterval int  `json:"scheduled_resolve_production_authors_interval"` // minutes, 0 = manual only
-
-	ScheduledSeriesPruneEnabled   bool `json:"scheduled_series_prune_enabled"`
-	ScheduledSeriesPruneInterval  int  `json:"scheduled_series_prune_interval"` // minutes, default 0 (manual)
-	ScheduledSeriesPruneOnStartup bool `json:"scheduled_series_prune_on_startup"`
-
-	// AI Batch API
-	ScheduledAIDedupBatchEnabled   bool `json:"scheduled_ai_dedup_batch_enabled"`
-	ScheduledAIDedupBatchInterval  int  `json:"scheduled_ai_dedup_batch_interval"` // minutes, default 1440 (24h)
-	ScheduledAIDedupBatchOnStartup bool `json:"scheduled_ai_dedup_batch_on_startup"`
-
-	ScheduledReconcileEnabled   bool `json:"scheduled_reconcile_enabled"`
-	ScheduledReconcileInterval  int  `json:"scheduled_reconcile_interval"` // minutes, default 0 (manual)
-	ScheduledReconcileOnStartup bool `json:"scheduled_reconcile_on_startup"`
+	// Scheduled holds settings for all background scheduled tasks.
+	// Previously 23 flat Scheduled* fields (Wave 6 nests them here).
+	Scheduled ScheduledTasksConfig `json:"scheduled" mapstructure:"scheduled"`
 
 	// Plugin system
 	Plugins map[string]PluginConfig `json:"plugins"`
@@ -527,23 +517,54 @@ func InitConfig() {
 	viper.SetDefault("log_format", "text")
 	viper.SetDefault("enable_json_logging", false)
 
-	// Scheduled maintenance task defaults
-	viper.SetDefault("scheduled_dedup_refresh_enabled", false)
-	viper.SetDefault("scheduled_dedup_refresh_interval", 360)
-	viper.SetDefault("scheduled_dedup_refresh_on_startup", false)
-	viper.SetDefault("scheduled_author_split_enabled", false)
-	viper.SetDefault("scheduled_author_split_interval", 0)
-	viper.SetDefault("scheduled_author_split_on_startup", false)
-	viper.SetDefault("scheduled_db_optimize_enabled", false)
-	viper.SetDefault("scheduled_db_optimize_interval", 1440)
-	viper.SetDefault("scheduled_db_optimize_on_startup", false)
-	viper.SetDefault("scheduled_metadata_refresh_enabled", false)
-	viper.SetDefault("scheduled_metadata_refresh_interval", 0)
-	viper.SetDefault("scheduled_metadata_refresh_on_startup", false)
-
-	viper.SetDefault("scheduled_ai_dedup_batch_enabled", false)
-	viper.SetDefault("scheduled_ai_dedup_batch_interval", 1440)
-	viper.SetDefault("scheduled_ai_dedup_batch_on_startup", false)
+	// Scheduled task defaults (nested under "scheduled.*.*")
+	viper.SetDefault("scheduled.dedup_refresh.enabled", false)
+	viper.SetDefault("scheduled.dedup_refresh.interval", 360)
+	viper.SetDefault("scheduled.dedup_refresh.on_startup", false)
+	viper.SetDefault("scheduled.author_split.enabled", false)
+	viper.SetDefault("scheduled.author_split.interval", 0)
+	viper.SetDefault("scheduled.author_split.on_startup", false)
+	viper.SetDefault("scheduled.db_optimize.enabled", false)
+	viper.SetDefault("scheduled.db_optimize.interval", 1440)
+	viper.SetDefault("scheduled.db_optimize.on_startup", false)
+	viper.SetDefault("scheduled.metadata_refresh.enabled", false)
+	viper.SetDefault("scheduled.metadata_refresh.interval", 0)
+	viper.SetDefault("scheduled.metadata_refresh.on_startup", false)
+	viper.SetDefault("scheduled.resolve_production_authors.enabled", false)
+	viper.SetDefault("scheduled.resolve_production_authors.interval", 0)
+	viper.SetDefault("scheduled.series_prune.enabled", false)
+	viper.SetDefault("scheduled.series_prune.interval", 0)
+	viper.SetDefault("scheduled.series_prune.on_startup", false)
+	viper.SetDefault("scheduled.ai_dedup_batch.enabled", false)
+	viper.SetDefault("scheduled.ai_dedup_batch.interval", 1440)
+	viper.SetDefault("scheduled.ai_dedup_batch.on_startup", false)
+	viper.SetDefault("scheduled.reconcile.enabled", false)
+	viper.SetDefault("scheduled.reconcile.interval", 0)
+	viper.SetDefault("scheduled.reconcile.on_startup", false)
+	// BindEnv maps env vars so SCHEDULED_* overrides work even without AutomaticEnv.
+	viper.BindEnv("scheduled.dedup_refresh.enabled", "SCHEDULED_DEDUP_REFRESH_ENABLED")                               //nolint:errcheck
+	viper.BindEnv("scheduled.dedup_refresh.interval", "SCHEDULED_DEDUP_REFRESH_INTERVAL")                             //nolint:errcheck
+	viper.BindEnv("scheduled.dedup_refresh.on_startup", "SCHEDULED_DEDUP_REFRESH_ON_STARTUP")                         //nolint:errcheck
+	viper.BindEnv("scheduled.author_split.enabled", "SCHEDULED_AUTHOR_SPLIT_ENABLED")                                 //nolint:errcheck
+	viper.BindEnv("scheduled.author_split.interval", "SCHEDULED_AUTHOR_SPLIT_INTERVAL")                               //nolint:errcheck
+	viper.BindEnv("scheduled.author_split.on_startup", "SCHEDULED_AUTHOR_SPLIT_ON_STARTUP")                           //nolint:errcheck
+	viper.BindEnv("scheduled.db_optimize.enabled", "SCHEDULED_DB_OPTIMIZE_ENABLED")                                   //nolint:errcheck
+	viper.BindEnv("scheduled.db_optimize.interval", "SCHEDULED_DB_OPTIMIZE_INTERVAL")                                 //nolint:errcheck
+	viper.BindEnv("scheduled.db_optimize.on_startup", "SCHEDULED_DB_OPTIMIZE_ON_STARTUP")                             //nolint:errcheck
+	viper.BindEnv("scheduled.metadata_refresh.enabled", "SCHEDULED_METADATA_REFRESH_ENABLED")                         //nolint:errcheck
+	viper.BindEnv("scheduled.metadata_refresh.interval", "SCHEDULED_METADATA_REFRESH_INTERVAL")                       //nolint:errcheck
+	viper.BindEnv("scheduled.metadata_refresh.on_startup", "SCHEDULED_METADATA_REFRESH_ON_STARTUP")                   //nolint:errcheck
+	viper.BindEnv("scheduled.resolve_production_authors.enabled", "SCHEDULED_RESOLVE_PRODUCTION_AUTHORS_ENABLED")     //nolint:errcheck
+	viper.BindEnv("scheduled.resolve_production_authors.interval", "SCHEDULED_RESOLVE_PRODUCTION_AUTHORS_INTERVAL")   //nolint:errcheck
+	viper.BindEnv("scheduled.series_prune.enabled", "SCHEDULED_SERIES_PRUNE_ENABLED")                                 //nolint:errcheck
+	viper.BindEnv("scheduled.series_prune.interval", "SCHEDULED_SERIES_PRUNE_INTERVAL")                               //nolint:errcheck
+	viper.BindEnv("scheduled.series_prune.on_startup", "SCHEDULED_SERIES_PRUNE_ON_STARTUP")                           //nolint:errcheck
+	viper.BindEnv("scheduled.ai_dedup_batch.enabled", "SCHEDULED_AI_DEDUP_BATCH_ENABLED")                             //nolint:errcheck
+	viper.BindEnv("scheduled.ai_dedup_batch.interval", "SCHEDULED_AI_DEDUP_BATCH_INTERVAL")                           //nolint:errcheck
+	viper.BindEnv("scheduled.ai_dedup_batch.on_startup", "SCHEDULED_AI_DEDUP_BATCH_ON_STARTUP")                       //nolint:errcheck
+	viper.BindEnv("scheduled.reconcile.enabled", "SCHEDULED_RECONCILE_ENABLED")                                       //nolint:errcheck
+	viper.BindEnv("scheduled.reconcile.interval", "SCHEDULED_RECONCILE_INTERVAL")                                     //nolint:errcheck
+	viper.BindEnv("scheduled.reconcile.on_startup", "SCHEDULED_RECONCILE_ON_STARTUP")                                 //nolint:errcheck
 
 	// iTunes sync defaults (nested under "itunes.*").
 	// BindEnv maps env vars so ITUNES_SYNC_ENABLED etc. override even without AutomaticEnv.
@@ -887,6 +908,49 @@ func InitConfig() {
 				LLMRerankEpsilon:   viper.GetFloat64("metadata_scoring.llm_rerank_epsilon"),
 				LLMRerankTopK:      viper.GetInt("metadata_scoring.llm_rerank_top_k"),
 				WriteBackupBefore:  viper.GetBool("metadata_scoring.write_backup_before"),
+			},
+
+			// Scheduled background tasks (nested sub-struct)
+			Scheduled: ScheduledTasksConfig{
+				DedupRefresh: ScheduledTaskConfig{
+					Enabled:   viper.GetBool("scheduled.dedup_refresh.enabled"),
+					Interval:  viper.GetInt("scheduled.dedup_refresh.interval"),
+					OnStartup: viper.GetBool("scheduled.dedup_refresh.on_startup"),
+				},
+				AuthorSplit: ScheduledTaskConfig{
+					Enabled:   viper.GetBool("scheduled.author_split.enabled"),
+					Interval:  viper.GetInt("scheduled.author_split.interval"),
+					OnStartup: viper.GetBool("scheduled.author_split.on_startup"),
+				},
+				DbOptimize: ScheduledTaskConfig{
+					Enabled:   viper.GetBool("scheduled.db_optimize.enabled"),
+					Interval:  viper.GetInt("scheduled.db_optimize.interval"),
+					OnStartup: viper.GetBool("scheduled.db_optimize.on_startup"),
+				},
+				MetadataRefresh: ScheduledTaskConfig{
+					Enabled:   viper.GetBool("scheduled.metadata_refresh.enabled"),
+					Interval:  viper.GetInt("scheduled.metadata_refresh.interval"),
+					OnStartup: viper.GetBool("scheduled.metadata_refresh.on_startup"),
+				},
+				ResolveProductionAuthors: ScheduledTaskConfig{
+					Enabled:  viper.GetBool("scheduled.resolve_production_authors.enabled"),
+					Interval: viper.GetInt("scheduled.resolve_production_authors.interval"),
+				},
+				SeriesPrune: ScheduledTaskConfig{
+					Enabled:   viper.GetBool("scheduled.series_prune.enabled"),
+					Interval:  viper.GetInt("scheduled.series_prune.interval"),
+					OnStartup: viper.GetBool("scheduled.series_prune.on_startup"),
+				},
+				AIDedupBatch: ScheduledTaskConfig{
+					Enabled:   viper.GetBool("scheduled.ai_dedup_batch.enabled"),
+					Interval:  viper.GetInt("scheduled.ai_dedup_batch.interval"),
+					OnStartup: viper.GetBool("scheduled.ai_dedup_batch.on_startup"),
+				},
+				Reconcile: ScheduledTaskConfig{
+					Enabled:   viper.GetBool("scheduled.reconcile.enabled"),
+					Interval:  viper.GetInt("scheduled.reconcile.interval"),
+					OnStartup: viper.GetBool("scheduled.reconcile.on_startup"),
+				},
 			},
 		}
 
