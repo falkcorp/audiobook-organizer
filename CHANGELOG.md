@@ -1,11 +1,17 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.28.0 -->
+<!-- version: 3.29.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-16 -->
 
 # Changelog
 
 ## [Unreleased]
+
+### Fixes
+
+#### June 16, 2026 — GetConfig secret-masking bug: all secrets now redacted (PR #1484)
+
+`GET /config` was manually masking only `OpenAIAPIKey` while `AcoustIDAPIKey`, `GoogleBooksAPIKey`, `HardcoverAPIToken`, and `BasicAuthPassword` were returned in plaintext. The handler now calls `h.configUpdate.MaskSecrets(config.Snapshot())` — the same path already used by `PUT /config`. Two new tests added: `TestGetConfig_OK` (verifies mock is called) and `TestGetConfig_MasksAllSecrets` (verifies all five fields are masked).
 
 ### Refactors
 
@@ -21,7 +27,7 @@ Moves 5 flat `AutoUpdate*` fields from `Config` into a new `AutoUpdateConfig` su
 - **Callsite updates**: `internal/server/scheduler_maintenance_window_op.go`, `internal/server/update_handlers.go`, `internal/updater/register.go` updated to use `config.AppConfig.AutoUpdate.*` paths.
 - **Tests**: 7 new tests across `persistence_test.go` and `config_test.go` covering blob migration, API remap, defaults, and env var override.
 
-Together with Waves 1–6, `AppConfig` now has 7 logical sub-structs: `EmbeddingConfig`, `DedupConfig`, `MetadataScoringConfig`, `ITunesConfig`, `MaintenanceConfig`, `ScheduledTasksConfig`, `AutoUpdateConfig`. Old flat keys still accepted via startup blob migration and API compat shims — no breaking changes for existing installs or the frontend.
+Together with Waves 1–6, `AppConfig` now has 7 logical sub-structs: `EmbeddingConfig`, `DedupConfig`, `MetadataScoringConfig`, `ITunesConfig`, `MaintenanceConfig`, `ScheduledTasksConfig`, `AutoUpdateConfig`. Old flat keys still accepted via startup blob migration and API compat shims — no breaking changes for existing installs or the frontend. API shape documented in `docs/reference/config-api-shape.md`.
 
 #### June 16, 2026 — Config struct-nesting Wave 6: ScheduledTasksConfig (PR #1482)
 
@@ -34,6 +40,40 @@ Moves 23 flat `Scheduled*` fields (8 task groups) from `Config` into a new `Sche
 - **`BindEnv`**: all 23 `SCHEDULED_*` env vars wired to nested viper dot-notation keys.
 - 7 new tests: `TestMigrateScheduledFields_*` (3), `TestRemapScheduledKeys_*` (2), `TestInitConfig_Scheduled*` (2).
 
+#### June 16, 2026 — Config struct-nesting Wave 5: MaintenanceConfig (PR #1481)
+
+Moves 18 flat `Maintenance*` fields from `Config` into a new `MaintenanceConfig` sub-struct at `Config.Maintenance`.
+
+- **`MaintenanceConfig`** type defined in `internal/config/config.go`; `Config.Maintenance` replaces 18 flat `Maintenance*` fields.
+- **`migrateMaintenanceBlob`**: idempotent startup blob migration (flat `maintenance_*` → nested `maintenance.*`), chained after `migrateITunesBlob` in `LoadConfigFromDatabase`.
+- **`remapMaintenanceKeys`**: API compat shim for legacy flat PUT `/config` payloads, chained after `remapITunesKeys` in `UpdateConfig`.
+- **`applySetting`**: all 18 cases updated to write `c.Maintenance.*`; added missing `library_size_refresh`, `acoustid_online_lookup`, `acoustid_nightly_limit` cases absent from pre-Wave-5 code.
+- **`BindEnv`**: all 18 `MAINTENANCE_*` env vars wired to nested viper dot-notation keys.
+- 5 new tests: `TestMigrateMaintenanceFields_*` (3), `TestRemapMaintenanceKeys_*` (2).
+
+#### June 16, 2026 — Config struct-nesting Wave 4: ITunesConfig (PR #1480)
+
+Moves 10 flat `ITunes*` fields from `Config` into a new `ITunesConfig` sub-struct at `Config.ITunes`. The local `itunesservice.Config` struct is kept unchanged; `registry_wire.go` constructs it from `AppConfig.ITunes.*` fields.
+
+- **`ITunesConfig`** type defined in `internal/config/config.go`; `Config.ITunes` replaces 10 flat `ITunes*` fields.
+- **`migrateITunesBlob`**: idempotent startup blob migration (flat `itunes_*` → nested `itunes.*`), chained after `migrateMetadataScoringBlob` in `LoadConfigFromDatabase`.
+- **`remapITunesKeys`**: API compat shim for legacy flat PUT `/config` payloads, chained after `remapMetadataScoringKeys` in `UpdateConfig`.
+- **`applySetting`**: all 10 cases updated to write `c.ITunes.*`.
+- **`BindEnv`**: all 10 `ITUNES_*` env vars wired to nested viper dot-notation keys.
+- `registry_wire.go` updated to build `itunesservice.Config` from `AppConfig.ITunes.*`.
+- 5 new tests: `TestMigrateITunesFields_*` (3), `TestRemapITunesKeys_*` (2).
+
+#### June 16, 2026 — Config struct-nesting Wave 3: MetadataScoringConfig (PR #1479)
+
+Moves 7 flat `MetadataEmbedding*` / `MetadataLLM*` fields from `Config` into a new `MetadataScoringConfig` sub-struct at `Config.MetadataScoring`.
+
+- **`MetadataScoringConfig`** type defined in `internal/config/config.go`; `Config.MetadataScoring` replaces 7 flat metadata scoring fields.
+- **`migrateMetadataScoringBlob`**: idempotent startup blob migration (flat `metadata_embedding_*` / `metadata_llm_*` → nested `metadata_scoring.*`), chained after `migrateDedupBlob` in `LoadConfigFromDatabase`.
+- **`remapMetadataScoringKeys`**: API compat shim for legacy flat PUT `/config` payloads, chained after `remapDedupKeys` in `UpdateConfig`.
+- **`applySetting`**: all 7 cases updated to write `c.MetadataScoring.*`.
+- **`BindEnv`**: all 7 `METADATA_*` env vars wired to nested viper dot-notation keys.
+- 5 new tests: `TestMigrateMetadataScoringFields_*` (3), `TestRemapMetadataScoringKeys_*` (2).
+
 #### June 16, 2026 — Config struct-nesting Wave 2: DedupConfig (PR #1476)
 
 Moves 9 flat dedup fields from `Config` into a new `DedupConfig` sub-struct at `Config.Dedup`, and absorbs the 4 unified-scoring band thresholds (`BandCertainMin/High/Medium/Review`) from the viper-only `ScoreConfig` into `Config.Dedup.Signals` so they persist across restarts.
@@ -44,6 +84,17 @@ Moves 9 flat dedup fields from `Config` into a new `DedupConfig` sub-struct at `
 - **`unified.SetBandThresholds`**: package-level injection mechanism so `LoadScoreConfig()` can use DB-persisted thresholds without creating a `unified→config` circular import. Called from `registry_wire.go` after `NewEngine`.
 - **`applySetting`**: 9 new cases for legacy flat `dedup_*` keys writing to `c.Dedup.*`.
 - All callsites updated (`engine.go`, `engine_test.go`, `importer/service.go`, `registry_wire.go`, `config_unit_test.go`). 5 TDD tests cover migration and shim. Full suite green.
+
+#### June 16, 2026 — Config struct-nesting Wave 1: EmbeddingConfig (PR #1468)
+
+First wave of CFG-1: moves 5 flat `Embedding*` fields from `Config` into a new `EmbeddingConfig` sub-struct at `Config.Embedding`.
+
+- **`EmbeddingConfig`** type defined in `internal/config/config.go`; `Config.Embedding` replaces 5 flat `Embedding*` fields (`EmbeddingEnabled`, `EmbeddingModel`, `EmbeddingDimensions`, `EmbeddingBaseURL`, `VectorIndexBackend`).
+- **`migrateEmbeddingBlob`**: idempotent startup blob migration (flat `embedding_*` sentinel key detected → rewrite to nested `embedding.*`), the first migration in the chain in `LoadConfigFromDatabase`.
+- **`remapEmbeddingKeys`**: API compat shim for legacy flat PUT `/config` payloads; the first shim in the chain in `UpdateConfig`.
+- **`applySetting`**: all 5 cases updated to write `c.Embedding.*`.
+- **`BindEnv`**: all 5 `EMBEDDING_*` / `VECTOR_INDEX_BACKEND` env vars wired to nested viper dot-notation keys.
+- 5 new tests: `TestMigrateEmbeddingFields_*` (3), `TestRemapEmbeddingKeys_*` (2).
 
 ### Features
 
