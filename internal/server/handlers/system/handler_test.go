@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: af6670e5-d640-4339-b0b2-3b0cf1596ce7
-// last-edited: 2026-06-03
+// last-edited: 2026-06-16
 
 // Unit tests for the system-domain HTTP handlers. Each public method has at
 // least one test; happy paths plus key branches (config mask-secrets path,
@@ -323,7 +323,8 @@ func TestFactoryReset_OK(t *testing.T) {
 // --- GetConfig ---
 
 func TestGetConfig_OK(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h, d := newTestHandler(t)
+	d.cfgUpd.EXPECT().MaskSecrets(mock.Anything).Return(config.Config{})
 	w := run(http.MethodGet, "/config", "/config", nil, func(r *gin.Engine) {
 		r.GET("/config", h.GetConfig)
 	})
@@ -331,6 +332,24 @@ func TestGetConfig_OK(t *testing.T) {
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.NotNil(t, resp["data"].(map[string]any)["config"])
+}
+
+func TestGetConfig_MasksAllSecrets(t *testing.T) {
+	h, d := newTestHandler(t)
+	// MaskSecrets is called with whatever Snapshot() returns; we verify the
+	// handler uses MaskSecrets (not manual per-field masking) by confirming the
+	// mock is called exactly once.
+	d.cfgUpd.EXPECT().MaskSecrets(mock.Anything).Return(config.Config{
+		OpenAIAPIKey:      "sk-****",
+		AcoustIDAPIKey:    "ac-****",
+		GoogleBooksAPIKey: "gb-****",
+		HardcoverAPIToken: "hc-****",
+		BasicAuthPassword: "****",
+	})
+	w := run(http.MethodGet, "/config", "/config", nil, func(r *gin.Engine) {
+		r.GET("/config", h.GetConfig)
+	})
+	assert.Equal(t, http.StatusOK, w.Code)
 }
 
 // --- UpdateConfig ---

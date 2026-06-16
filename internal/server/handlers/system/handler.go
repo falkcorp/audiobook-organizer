@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8475f406-df31-4286-95b0-30787397603e
-// last-edited: 2026-06-03
+// last-edited: 2026-06-16
 
 // Package system hosts the system-level HTTP handlers extracted from the server
 // package: health, status, announcements, storage, logs, activity-log,
@@ -458,12 +458,7 @@ func (h *Handler) FactoryReset(c *gin.Context) {
 
 // GetConfig implements GET /config.
 func (h *Handler) GetConfig(c *gin.Context) {
-	// Create a copy of config with masked secrets
-	maskedConfig := config.AppConfig
-	if maskedConfig.OpenAIAPIKey != "" {
-		maskedConfig.OpenAIAPIKey = database.MaskSecret(maskedConfig.OpenAIAPIKey)
-	}
-	httputil.RespondWithOK(c, gin.H{"config": maskedConfig})
+	httputil.RespondWithOK(c, gin.H{"config": h.configUpdate.MaskSecrets(config.Snapshot())})
 }
 
 // UpdateConfig implements PUT /config.
