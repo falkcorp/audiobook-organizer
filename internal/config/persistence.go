@@ -1,7 +1,7 @@
 // file: internal/config/persistence.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
-// last-edited: 2026-06-10
+// last-edited: 2026-06-15
 
 package config
 
@@ -818,6 +818,15 @@ func SyncConfigFromEnv() {
 		if viper.IsSet("enable_ai_parsing") {
 			c.EnableAIParsing = viper.GetBool("enable_ai_parsing")
 		}
-		// Add more env overrides as needed
+		if viper.IsSet("embedding_base_url") {
+			if val := viper.GetString("embedding_base_url"); val != "" {
+				c.EmbeddingBaseURL = val
+			}
+		}
+		if viper.IsSet("acoustid_api_key") {
+			if val := viper.GetString("acoustid_api_key"); val != "" {
+				c.AcoustIDAPIKey = val
+			}
+		}
 	})
 }
