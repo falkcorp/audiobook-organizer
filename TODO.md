@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 8.83.0 -->
+<!-- version: 8.84.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-06-15 -->
+<!-- last-edited: 2026-06-16 -->
 
 # Project TODO
 
@@ -43,7 +43,7 @@ future agent) can scan the entire workspace in one page.
 - [x] **EMB-3** Code path complete. Layer-2 enable (`dedup_embeddings_enabled:true`) after re-embed is user-gated.
 
 **Infra / hardening**
-- [ ] **OLLAMA-1** Make rootless Ollama durable across reboot on prod (`systemctl --user` + `loginctl enable-linger jdfalk`, or a root systemd unit). It currently dies on reboot.
+- [x] **OLLAMA-1** Superseded by TOOL-4 (`OllamaDaemon`): `EnsureRunningOrAdopt` is called at `server.Start()`, so audiobook-organizer's own systemd unit provides the reboot durability — no separate Ollama unit needed.
 - [x] **VEC-2** HNSW on-disk persistence via `Graph.Export`/`Import` — `.bin` + `.meta.json` snapshots per entity type; load at boot, save at shutdown. Shipped PR #1465.
 - [x] **EMB-4** Deleted dead legacy `embeddings.db` (~1.8 GB) from prod on 2026-06-15.
 
