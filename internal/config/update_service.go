@@ -1,5 +1,5 @@
 // file: internal/config/update_service.go
-// version: 3.2.0
+// version: 3.3.0
 // guid: f6g7h8i9-j0k1-l2m3-n4o5-p6q7r8s9t0u1
 // last-edited: 2026-06-16
 
@@ -99,6 +99,42 @@ func remapEmbeddingKeys(payload map[string]any) map[string]any {
 	return payload
 }
 
+// remapDedupKeys translates legacy flat dedup keys in a config update payload
+// to the nested DedupConfig format. Merges into any existing "dedup" sub-object
+// to avoid zeroing sibling fields.
+// Remove this shim once the frontend sends nested keys.
+func remapDedupKeys(payload map[string]any) map[string]any {
+	flatToNested := map[string]string{
+		"dedup_book_high_threshold":             "book_high_threshold",
+		"dedup_book_low_threshold":              "book_low_threshold",
+		"dedup_author_high_threshold":           "author_high_threshold",
+		"dedup_author_low_threshold":            "author_low_threshold",
+		"dedup_auto_merge_enabled":              "auto_merge_enabled",
+		"dedup_embeddings_enabled":              "embeddings_enabled",
+		"dedup_llm_auto_merge_high_confidence": "llm_auto_merge_high_confidence",
+		"dedup_on_import_via_scheduler":         "on_import_via_scheduler",
+		"dedup_review_model":                    "review_model",
+	}
+	nested := make(map[string]any)
+	for flat, short := range flatToNested {
+		if v, ok := payload[flat]; ok {
+			nested[short] = v
+			delete(payload, flat)
+		}
+	}
+	if len(nested) == 0 {
+		return payload
+	}
+	if existing, ok := payload["dedup"].(map[string]any); ok {
+		for k, v := range nested {
+			existing[k] = v
+		}
+	} else {
+		payload["dedup"] = nested
+	}
+	return payload
+}
+
 // UpdateConfig applies a config update payload to AppConfig and persists it.
 //
 // Architecture: non-secret fields are applied via JSON round-trip onto AppConfig.
@@ -153,6 +189,8 @@ func (us *UpdateService) UpdateConfig(payload map[string]any) (int, map[string]a
 
 	// Translate any legacy flat embedding keys to the nested EmbeddingConfig format.
 	filtered = remapEmbeddingKeys(filtered)
+	// Translate any legacy flat dedup keys to the nested DedupConfig format.
+	filtered = remapDedupKeys(filtered)
 
 	// Apply all remaining fields via JSON round-trip.
 	// Any field in Config with a matching json tag is set automatically.

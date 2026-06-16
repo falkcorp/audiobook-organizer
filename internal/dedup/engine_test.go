@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_test.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: 2a7e4d91-c538-4f06-b1d3-9e8c5a6f0d72
-// last-edited: 2026-06-14
+// last-edited: 2026-06-16
 
 package dedup
 
@@ -37,9 +37,9 @@ func setupTestEngine(t *testing.T) (*Engine, *database.MockStore, *database.Embe
 
 	// Ensure the global config flag is true so embeddingsEnabled() works as
 	// expected in tests that wire up an embedClient.
-	prev := config.AppConfig.DedupEmbeddingsEnabled
-	config.AppConfig.DedupEmbeddingsEnabled = true
-	t.Cleanup(func() { config.AppConfig.DedupEmbeddingsEnabled = prev })
+	prev := config.AppConfig.Dedup.EmbeddingsEnabled
+	config.AppConfig.Dedup.EmbeddingsEnabled = true
+	t.Cleanup(func() { config.AppConfig.Dedup.EmbeddingsEnabled = prev })
 
 	mock := &database.MockStore{}
 	ms := merge.NewService(mock)
@@ -834,9 +834,9 @@ func TestApplyVerdicts_AutoMergeOnHighConfidence(t *testing.T) {
 	engine, mock, es := setupTestEngine(t)
 
 	// Enable the opt-in flag for this test.
-	prev := config.AppConfig.DedupLLMAutoMergeHighConfidence
-	config.AppConfig.DedupLLMAutoMergeHighConfidence = true
-	defer func() { config.AppConfig.DedupLLMAutoMergeHighConfidence = prev }()
+	prev := config.AppConfig.Dedup.LLMAutoMergeHighConfidence
+	config.AppConfig.Dedup.LLMAutoMergeHighConfidence = true
+	defer func() { config.AppConfig.Dedup.LLMAutoMergeHighConfidence = prev }()
 
 	// Seed two books the merge service can load.
 	authorID := 1
@@ -901,9 +901,9 @@ func TestApplyVerdicts_NoAutoMergeWhenDisabled(t *testing.T) {
 	engine, _, es := setupTestEngine(t)
 
 	// Flag is false by default; be explicit.
-	prev := config.AppConfig.DedupLLMAutoMergeHighConfidence
-	config.AppConfig.DedupLLMAutoMergeHighConfidence = false
-	defer func() { config.AppConfig.DedupLLMAutoMergeHighConfidence = prev }()
+	prev := config.AppConfig.Dedup.LLMAutoMergeHighConfidence
+	config.AppConfig.Dedup.LLMAutoMergeHighConfidence = false
+	defer func() { config.AppConfig.Dedup.LLMAutoMergeHighConfidence = prev }()
 
 	sim := 0.88
 	_ = es.UpsertCandidate(database.DedupCandidate{
@@ -929,9 +929,9 @@ func TestApplyVerdicts_NoAutoMergeWhenDisabled(t *testing.T) {
 func TestApplyVerdicts_NoAutoMergeMediumConfidence(t *testing.T) {
 	engine, _, es := setupTestEngine(t)
 
-	prev := config.AppConfig.DedupLLMAutoMergeHighConfidence
-	config.AppConfig.DedupLLMAutoMergeHighConfidence = true
-	defer func() { config.AppConfig.DedupLLMAutoMergeHighConfidence = prev }()
+	prev := config.AppConfig.Dedup.LLMAutoMergeHighConfidence
+	config.AppConfig.Dedup.LLMAutoMergeHighConfidence = true
+	defer func() { config.AppConfig.Dedup.LLMAutoMergeHighConfidence = prev }()
 
 	sim := 0.88
 	_ = es.UpsertCandidate(database.DedupCandidate{
@@ -1266,7 +1266,7 @@ func TestFullScan_DedupEmbeddingsDisabled_NeverCallsEmbed(t *testing.T) {
 	engine, _, _ := setupTestEngine(t)
 
 	// Override the flag set by setupTestEngine.
-	config.AppConfig.DedupEmbeddingsEnabled = false
+	config.AppConfig.Dedup.EmbeddingsEnabled = false
 	// setupTestEngine already registered a t.Cleanup to restore it.
 
 	books := makePrimaryBooks(70) // more than one chunk

@@ -1,5 +1,5 @@
 // file: internal/config/persistence_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-06-16
 
@@ -890,5 +890,63 @@ func TestRemapEmbeddingKeys_MixedKeys(t *testing.T) {
 func TestRemapEmbeddingKeys_NoFlatKeys(t *testing.T) {
 	payload := map[string]any{"root_dir": "/data"}
 	result := remapEmbeddingKeys(payload)
+	assert.Equal(t, map[string]any{"root_dir": "/data"}, result)
+}
+
+func TestMigrateDedupFields_FlatBlob(t *testing.T) {
+	flatBlob := `{
+		"dedup_book_high_threshold": 0.95,
+		"dedup_book_low_threshold": 0.85,
+		"dedup_author_high_threshold": 0.92,
+		"dedup_author_low_threshold": 0.80,
+		"dedup_auto_merge_enabled": true,
+		"dedup_embeddings_enabled": false,
+		"dedup_llm_auto_merge_high_confidence": false,
+		"dedup_on_import_via_scheduler": true,
+		"dedup_review_model": "gpt-5-mini",
+		"root_dir": "/data"
+	}`
+	migrated, changed := migrateDedupBlob(flatBlob)
+	require.True(t, changed)
+	var result map[string]any
+	require.NoError(t, json.Unmarshal([]byte(migrated), &result))
+	d, ok := result["dedup"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, float64(0.95), d["book_high_threshold"])
+	assert.Equal(t, "gpt-5-mini", d["review_model"])
+	assert.Equal(t, true, d["auto_merge_enabled"])
+	assert.Equal(t, "/data", result["root_dir"])
+	assert.NotContains(t, result, "dedup_book_high_threshold")
+	assert.NotContains(t, result, "dedup_review_model")
+}
+
+func TestMigrateDedupFields_AlreadyNested(t *testing.T) {
+	_, changed := migrateDedupBlob(`{"dedup": {"book_high_threshold": 0.95}}`)
+	assert.False(t, changed)
+}
+
+func TestMigrateDedupFields_EmptyBlob(t *testing.T) {
+	_, changed := migrateDedupBlob(`{}`)
+	assert.False(t, changed)
+}
+
+func TestRemapDedupKeys_FlatKeys(t *testing.T) {
+	payload := map[string]any{
+		"dedup_book_high_threshold": float64(0.95),
+		"dedup_review_model":        "gpt-5-mini",
+		"root_dir":                  "/data",
+	}
+	result := remapDedupKeys(payload)
+	d, ok := result["dedup"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, float64(0.95), d["book_high_threshold"])
+	assert.Equal(t, "gpt-5-mini", d["review_model"])
+	assert.Equal(t, "/data", result["root_dir"])
+	assert.NotContains(t, result, "dedup_book_high_threshold")
+}
+
+func TestRemapDedupKeys_NoFlatKeys(t *testing.T) {
+	payload := map[string]any{"root_dir": "/data"}
+	result := remapDedupKeys(payload)
 	assert.Equal(t, map[string]any{"root_dir": "/data"}, result)
 }

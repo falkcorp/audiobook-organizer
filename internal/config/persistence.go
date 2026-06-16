@@ -1,5 +1,5 @@
 // file: internal/config/persistence.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
 // last-edited: 2026-06-16
 
@@ -189,6 +189,71 @@ func migrateEmbeddingBlob(blob string) (string, bool) {
 	return string(migrated), true
 }
 
+// migrateDedupBlob rewrites a flat-format config blob to the nested DedupConfig
+// format. Returns the (possibly modified) blob and whether a migration occurred.
+// Safe to call repeatedly: returns (blob, false) if already nested or no flat
+// dedup keys are present.
+func migrateDedupBlob(blob string) (string, bool) {
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(blob), &raw); err != nil {
+		return blob, false
+	}
+
+	// Check whether any flat dedup keys exist.
+	flatDedupKeys := []string{
+		"dedup_book_high_threshold",
+		"dedup_book_low_threshold",
+		"dedup_author_high_threshold",
+		"dedup_author_low_threshold",
+		"dedup_auto_merge_enabled",
+		"dedup_embeddings_enabled",
+		"dedup_llm_auto_merge_high_confidence",
+		"dedup_on_import_via_scheduler",
+		"dedup_review_model",
+	}
+	hasFlat := false
+	for _, k := range flatDedupKeys {
+		if _, ok := raw[k]; ok {
+			hasFlat = true
+			break
+		}
+	}
+	if !hasFlat {
+		return blob, false
+	}
+
+	// Build the nested "dedup" object, starting from any already-present sub-object.
+	nested, _ := raw["dedup"].(map[string]any)
+	if nested == nil {
+		nested = make(map[string]any)
+	}
+
+	flatToNested := map[string]string{
+		"dedup_book_high_threshold":           "book_high_threshold",
+		"dedup_book_low_threshold":            "book_low_threshold",
+		"dedup_author_high_threshold":         "author_high_threshold",
+		"dedup_author_low_threshold":          "author_low_threshold",
+		"dedup_auto_merge_enabled":            "auto_merge_enabled",
+		"dedup_embeddings_enabled":            "embeddings_enabled",
+		"dedup_llm_auto_merge_high_confidence": "llm_auto_merge_high_confidence",
+		"dedup_on_import_via_scheduler":       "on_import_via_scheduler",
+		"dedup_review_model":                  "review_model",
+	}
+	for flat, short := range flatToNested {
+		if v, ok := raw[flat]; ok {
+			nested[short] = v
+			delete(raw, flat)
+		}
+	}
+	raw["dedup"] = nested
+
+	migrated, err := json.Marshal(raw)
+	if err != nil {
+		return blob, false
+	}
+	return string(migrated), true
+}
+
 // saveRawBlob writes a pre-marshaled JSON string directly as the config blob.
 // Used only by startup migration to persist migrated blobs without re-marshaling.
 func saveRawBlob(store database.SettingsStore, rawJSON string) error {
@@ -239,6 +304,15 @@ func LoadConfigFromDatabase(store database.SettingsStore) error {
 			blobStr = migrated
 			if saveErr := saveRawBlob(store, migrated); saveErr != nil {
 				slog.Warn("config: failed to persist migrated blob", "err", saveErr)
+			}
+		}
+
+		// Migrate flat dedup_* keys → nested DedupConfig format (idempotent).
+		if migrated, changed := migrateDedupBlob(blobStr); changed {
+			slog.Info("config: migrated dedup fields to nested format")
+			blobStr = migrated
+			if saveErr := saveRawBlob(store, migrated); saveErr != nil {
+				slog.Warn("config: failed to persist migrated dedup blob", "err", saveErr)
 			}
 		}
 
@@ -772,6 +846,43 @@ func applySetting(key, value, typ string) error {
 			c.BasicAuthUsername = value
 		case "basic_auth_password":
 			c.BasicAuthPassword = value
+
+		// Dedup thresholds + behaviour (legacy flat keys — new installs use the blob).
+		// These cases handle pre-Wave-2 installs that stored settings as individual rows.
+		case "dedup_book_high_threshold":
+			if f, err := strconv.ParseFloat(value, 64); err == nil {
+				c.Dedup.BookHighThreshold = f
+			}
+		case "dedup_book_low_threshold":
+			if f, err := strconv.ParseFloat(value, 64); err == nil {
+				c.Dedup.BookLowThreshold = f
+			}
+		case "dedup_author_high_threshold":
+			if f, err := strconv.ParseFloat(value, 64); err == nil {
+				c.Dedup.AuthorHighThreshold = f
+			}
+		case "dedup_author_low_threshold":
+			if f, err := strconv.ParseFloat(value, 64); err == nil {
+				c.Dedup.AuthorLowThreshold = f
+			}
+		case "dedup_auto_merge_enabled":
+			if b, err := strconv.ParseBool(value); err == nil {
+				c.Dedup.AutoMergeEnabled = b
+			}
+		case "dedup_embeddings_enabled":
+			if b, err := strconv.ParseBool(value); err == nil {
+				c.Dedup.EmbeddingsEnabled = b
+			}
+		case "dedup_llm_auto_merge_high_confidence":
+			if b, err := strconv.ParseBool(value); err == nil {
+				c.Dedup.LLMAutoMergeHighConfidence = b
+			}
+		case "dedup_on_import_via_scheduler":
+			if b, err := strconv.ParseBool(value); err == nil {
+				c.Dedup.OnImportViaScheduler = b
+			}
+		case "dedup_review_model":
+			c.Dedup.ReviewModel = value
 
 		default:
 			applyErr = fmt.Errorf("unknown setting key: %s", key)

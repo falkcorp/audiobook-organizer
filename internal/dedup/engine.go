@@ -1,7 +1,7 @@
 // file: internal/dedup/engine.go
-// version: 1.30.0
+// version: 1.31.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
-// last-edited: 2026-06-14
+// last-edited: 2026-06-16
 
 package dedup
 
@@ -203,7 +203,7 @@ func (de *Engine) SetISBNIndexStore(s ISBNIndexStore) {
 // the pattern used by DedupReviewModel and DedupLLMAutoMergeHighConfidence so
 // a runtime settings toggle takes effect on the next FullScan without a restart.
 func (de *Engine) embeddingsEnabled() bool {
-	return de.embedClient != nil && config.AppConfig.DedupEmbeddingsEnabled
+	return de.embedClient != nil && config.AppConfig.Dedup.EmbeddingsEnabled
 }
 
 // SetScoreConfig overrides the unified scoring calibration.  Call this before
@@ -2408,7 +2408,7 @@ func (de *Engine) RunLLMReview(ctx context.Context) error {
 		Store:  de.aiJobsStore,
 		Client: &ai.AIJobsBatchClient{Parser: de.llmParser},
 	}
-	model := config.AppConfig.DedupReviewModel // per-feature model knob (AI-MODEL-1)
+	model := config.AppConfig.Dedup.ReviewModel // per-feature model knob (AI-MODEL-1)
 	if model == "" {
 		model = "gpt-5-mini"
 	}
@@ -2555,7 +2555,7 @@ func (de *Engine) ApplyVerdicts(verdicts []ai.DedupPairVerdict, byIndex map[int]
 		// — author merges are structural and user-visible enough
 		// that we require manual confirmation regardless of
 		// confidence.
-		if !config.AppConfig.DedupLLMAutoMergeHighConfidence {
+		if !config.AppConfig.Dedup.LLMAutoMergeHighConfidence {
 			continue
 		}
 		if candidate.EntityType != "book" {
