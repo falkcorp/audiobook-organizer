@@ -1,5 +1,5 @@
 // file: internal/config/persistence.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
 // last-edited: 2026-06-16
 
@@ -254,6 +254,51 @@ func migrateDedupBlob(blob string) (string, bool) {
 	return string(migrated), true
 }
 
+// migrateMetadataScoringBlob rewrites flat metadata_embedding_* and write_backup_before_tag_write
+// fields to the nested MetadataScoringConfig format. Safe to call repeatedly.
+// Returns (blob, false) if already nested or no flat keys present.
+func migrateMetadataScoringBlob(blob string) (string, bool) {
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(blob), &raw); err != nil {
+		return blob, false
+	}
+	if _, isFlat := raw["metadata_embedding_scoring_enabled"]; !isFlat {
+		return blob, false
+	}
+	type flatShape struct {
+		MetadataEmbeddingScoringEnabled bool    `json:"metadata_embedding_scoring_enabled"`
+		MetadataEmbeddingMinScore       float64 `json:"metadata_embedding_min_score"`
+		MetadataEmbeddingBestMatchMin   float64 `json:"metadata_embedding_best_match_min"`
+		MetadataLLMScoringEnabled       bool    `json:"metadata_llm_scoring_enabled"`
+		MetadataLLMRerankEpsilon        float64 `json:"metadata_llm_rerank_epsilon"`
+		MetadataLLMRerankTopK           int     `json:"metadata_llm_rerank_top_k"`
+		WriteBackupBeforeTagWrite       bool    `json:"write_backup_before_tag_write"`
+	}
+	var old flatShape
+	json.Unmarshal([]byte(blob), &old) //nolint:errcheck
+	raw["metadata_scoring"] = map[string]any{
+		"embedding_enabled":    old.MetadataEmbeddingScoringEnabled,
+		"embedding_min_score":  old.MetadataEmbeddingMinScore,
+		"embedding_best_match": old.MetadataEmbeddingBestMatchMin,
+		"llm_enabled":          old.MetadataLLMScoringEnabled,
+		"llm_rerank_epsilon":   old.MetadataLLMRerankEpsilon,
+		"llm_rerank_top_k":     old.MetadataLLMRerankTopK,
+		"write_backup_before":  old.WriteBackupBeforeTagWrite,
+	}
+	delete(raw, "metadata_embedding_scoring_enabled")
+	delete(raw, "metadata_embedding_min_score")
+	delete(raw, "metadata_embedding_best_match_min")
+	delete(raw, "metadata_llm_scoring_enabled")
+	delete(raw, "metadata_llm_rerank_epsilon")
+	delete(raw, "metadata_llm_rerank_top_k")
+	delete(raw, "write_backup_before_tag_write")
+	migrated, err := json.Marshal(raw)
+	if err != nil {
+		return blob, false
+	}
+	return string(migrated), true
+}
+
 // saveRawBlob writes a pre-marshaled JSON string directly as the config blob.
 // Used only by startup migration to persist migrated blobs without re-marshaling.
 func saveRawBlob(store database.SettingsStore, rawJSON string) error {
@@ -313,6 +358,16 @@ func LoadConfigFromDatabase(store database.SettingsStore) error {
 			blobStr = migrated
 			if saveErr := saveRawBlob(store, migrated); saveErr != nil {
 				slog.Warn("config: failed to persist migrated dedup blob", "err", saveErr)
+			}
+		}
+
+		// Migrate flat metadata_embedding_* / write_backup_before_tag_write keys →
+		// nested MetadataScoringConfig format (idempotent).
+		if migrated, changed := migrateMetadataScoringBlob(blobStr); changed {
+			slog.Info("config: migrated metadata_scoring fields to nested format")
+			blobStr = migrated
+			if saveErr := saveRawBlob(store, migrated); saveErr != nil {
+				slog.Warn("config: failed to persist migrated metadata_scoring blob", "err", saveErr)
 			}
 		}
 
@@ -883,6 +938,37 @@ func applySetting(key, value, typ string) error {
 			}
 		case "dedup_review_model":
 			c.Dedup.ReviewModel = value
+
+		// Metadata scoring (legacy flat keys — new installs use the blob).
+		// These cases handle pre-Wave-3 installs that stored settings as individual rows.
+		case "metadata_embedding_scoring_enabled":
+			if b, err := strconv.ParseBool(value); err == nil {
+				c.MetadataScoring.EmbeddingEnabled = b
+			}
+		case "metadata_embedding_min_score":
+			if f, err := strconv.ParseFloat(value, 64); err == nil {
+				c.MetadataScoring.EmbeddingMinScore = f
+			}
+		case "metadata_embedding_best_match_min":
+			if f, err := strconv.ParseFloat(value, 64); err == nil {
+				c.MetadataScoring.EmbeddingBestMatch = f
+			}
+		case "metadata_llm_scoring_enabled":
+			if b, err := strconv.ParseBool(value); err == nil {
+				c.MetadataScoring.LLMEnabled = b
+			}
+		case "metadata_llm_rerank_epsilon":
+			if f, err := strconv.ParseFloat(value, 64); err == nil {
+				c.MetadataScoring.LLMRerankEpsilon = f
+			}
+		case "metadata_llm_rerank_top_k":
+			if n, err := strconv.Atoi(value); err == nil {
+				c.MetadataScoring.LLMRerankTopK = n
+			}
+		case "write_backup_before_tag_write":
+			if b, err := strconv.ParseBool(value); err == nil {
+				c.MetadataScoring.WriteBackupBefore = b
+			}
 
 		default:
 			applyErr = fmt.Errorf("unknown setting key: %s", key)

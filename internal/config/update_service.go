@@ -1,5 +1,5 @@
 // file: internal/config/update_service.go
-// version: 3.3.0
+// version: 3.4.0
 // guid: f6g7h8i9-j0k1-l2m3-n4o5-p6q7r8s9t0u1
 // last-edited: 2026-06-16
 
@@ -135,6 +135,38 @@ func remapDedupKeys(payload map[string]any) map[string]any {
 	return payload
 }
 
+// remapMetadataScoringKeys translates legacy flat metadata scoring keys to nested format.
+// Remove this shim once the frontend sends nested keys.
+func remapMetadataScoringKeys(payload map[string]any) map[string]any {
+	flatToNested := map[string]string{
+		"metadata_embedding_scoring_enabled": "embedding_enabled",
+		"metadata_embedding_min_score":       "embedding_min_score",
+		"metadata_embedding_best_match_min":  "embedding_best_match",
+		"metadata_llm_scoring_enabled":       "llm_enabled",
+		"metadata_llm_rerank_epsilon":        "llm_rerank_epsilon",
+		"metadata_llm_rerank_top_k":          "llm_rerank_top_k",
+		"write_backup_before_tag_write":      "write_backup_before",
+	}
+	nested := make(map[string]any)
+	for flat, short := range flatToNested {
+		if v, ok := payload[flat]; ok {
+			nested[short] = v
+			delete(payload, flat)
+		}
+	}
+	if len(nested) == 0 {
+		return payload
+	}
+	if existing, ok := payload["metadata_scoring"].(map[string]any); ok {
+		for k, v := range nested {
+			existing[k] = v
+		}
+	} else {
+		payload["metadata_scoring"] = nested
+	}
+	return payload
+}
+
 // UpdateConfig applies a config update payload to AppConfig and persists it.
 //
 // Architecture: non-secret fields are applied via JSON round-trip onto AppConfig.
@@ -191,6 +223,8 @@ func (us *UpdateService) UpdateConfig(payload map[string]any) (int, map[string]a
 	filtered = remapEmbeddingKeys(filtered)
 	// Translate any legacy flat dedup keys to the nested DedupConfig format.
 	filtered = remapDedupKeys(filtered)
+	// Translate any legacy flat metadata scoring keys to the nested MetadataScoringConfig format.
+	filtered = remapMetadataScoringKeys(filtered)
 
 	// Apply all remaining fields via JSON round-trip.
 	// Any field in Config with a matching json tag is set automatically.

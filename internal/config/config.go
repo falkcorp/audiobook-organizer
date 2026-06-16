@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.54.0
+// version: 1.55.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-06-16
 
@@ -139,6 +139,17 @@ type DedupConfig struct {
 	Signals DedupSignalConfig `json:"signals" mapstructure:"signals"`
 }
 
+// MetadataScoringConfig holds settings for the AI-assisted metadata scoring pipeline.
+type MetadataScoringConfig struct {
+	EmbeddingEnabled   bool    `json:"embedding_enabled"    mapstructure:"embedding_enabled"`
+	EmbeddingMinScore  float64 `json:"embedding_min_score"  mapstructure:"embedding_min_score"`
+	EmbeddingBestMatch float64 `json:"embedding_best_match" mapstructure:"embedding_best_match"`
+	LLMEnabled         bool    `json:"llm_enabled"          mapstructure:"llm_enabled"`
+	LLMRerankEpsilon   float64 `json:"llm_rerank_epsilon"   mapstructure:"llm_rerank_epsilon"`
+	LLMRerankTopK      int     `json:"llm_rerank_top_k"     mapstructure:"llm_rerank_top_k"`
+	WriteBackupBefore  bool    `json:"write_backup_before"  mapstructure:"write_backup_before"`
+}
+
 // Config holds application configuration
 type Config struct {
 	// Core paths
@@ -228,33 +239,10 @@ type Config struct {
 	// Dedup holds all deduplication settings (thresholds, auto-merge, LLM model, signal bands).
 	Dedup DedupConfig `json:"dedup" mapstructure:"dedup"`
 
-	// Metadata candidate scoring (PR1)
-	MetadataEmbeddingScoringEnabled bool    `json:"metadata_embedding_scoring_enabled"` // default true
-	MetadataEmbeddingMinScore       float64 `json:"metadata_embedding_min_score"`       // default 0.50
-	MetadataEmbeddingBestMatchMin   float64 `json:"metadata_embedding_best_match_min"`  // default 0.70
-
-	// Metadata LLM rerank tier (PR2)
-	MetadataLLMScoringEnabled bool    `json:"metadata_llm_scoring_enabled"` // default false — opt-in, costs money
-	MetadataLLMRerankEpsilon  float64 `json:"metadata_llm_rerank_epsilon"`  // default 0.01
-	MetadataLLMRerankTopK     int     `json:"metadata_llm_rerank_top_k"`    // default 5
-
-	// Tag-write backup policy.
-	//
-	// When enabled, metadata_fetch_service creates a .bak-<timestamp>
-	// hardlink next to every audio file it's about to write tags to.
-	// Historically this was always on and accumulated tens of thousands
-	// of stale backup files across the library, filling terabytes of
-	// disk. It's also of questionable value — TagLib writes tags
-	// in-place, which means a hardlink snapshot DOES NOT preserve
-	// pre-write content if the writer modifies the inode's data. The
-	// hardlinks only survive as real backups when the writer happens
-	// to use a rename-dance, which is not guaranteed across formats.
-	//
-	// Default is false: don't create the backups at all. Users who
-	// want belt-and-suspenders recovery can turn it on, but they
-	// should pair it with the cleanup-backups maintenance endpoint
-	// to keep the library from growing unbounded.
-	WriteBackupBeforeTagWrite bool `json:"write_backup_before_tag_write"` // default false
+	// MetadataScoring holds all AI-assisted metadata candidate scoring settings
+	// (embedding scoring, LLM rerank tier, and tag-write backup policy).
+	// Previously these were 7 flat fields; Wave 3 nests them here.
+	MetadataScoring MetadataScoringConfig `json:"metadata_scoring" mapstructure:"metadata_scoring"`
 
 	// API limits
 	APIRateLimitPerMinute  int  `json:"api_rate_limit_per_minute"`
@@ -642,14 +630,22 @@ func InitConfig() {
 	viper.SetDefault("dedup.llm_auto_merge_high_confidence", false)   // opt-in
 	viper.SetDefault("dedup.on_import_via_scheduler", false)          // opt-in — keep eager path until M4 confirmed
 
-	// Metadata candidate scoring defaults
-	viper.SetDefault("metadata_embedding_scoring_enabled", true)
-	viper.SetDefault("metadata_embedding_min_score", 0.50)
-	viper.SetDefault("metadata_embedding_best_match_min", 0.70)
-	viper.SetDefault("metadata_llm_scoring_enabled", false)
-	viper.SetDefault("metadata_llm_rerank_epsilon", 0.01)
-	viper.SetDefault("metadata_llm_rerank_top_k", 5)
-	viper.SetDefault("write_backup_before_tag_write", false)
+	// Metadata candidate scoring defaults (nested under "metadata_scoring.*").
+	// BindEnv maps env vars so METADATA_SCORING_* overrides even without AutomaticEnv.
+	viper.SetDefault("metadata_scoring.embedding_enabled", false)
+	viper.SetDefault("metadata_scoring.embedding_min_score", 0.82)
+	viper.SetDefault("metadata_scoring.embedding_best_match", 0.88)
+	viper.SetDefault("metadata_scoring.llm_enabled", false)
+	viper.SetDefault("metadata_scoring.llm_rerank_epsilon", 0.05)
+	viper.SetDefault("metadata_scoring.llm_rerank_top_k", 5)
+	viper.SetDefault("metadata_scoring.write_backup_before", true)
+	viper.BindEnv("metadata_scoring.embedding_enabled", "METADATA_SCORING_EMBEDDING_ENABLED")     //nolint:errcheck
+	viper.BindEnv("metadata_scoring.embedding_min_score", "METADATA_SCORING_EMBEDDING_MIN_SCORE") //nolint:errcheck
+	viper.BindEnv("metadata_scoring.embedding_best_match", "METADATA_SCORING_EMBEDDING_BEST_MATCH") //nolint:errcheck
+	viper.BindEnv("metadata_scoring.llm_enabled", "METADATA_SCORING_LLM_ENABLED")                //nolint:errcheck
+	viper.BindEnv("metadata_scoring.llm_rerank_epsilon", "METADATA_SCORING_LLM_RERANK_EPSILON")  //nolint:errcheck
+	viper.BindEnv("metadata_scoring.llm_rerank_top_k", "METADATA_SCORING_LLM_RERANK_TOP_K")      //nolint:errcheck
+	viper.BindEnv("metadata_scoring.write_backup_before", "METADATA_SCORING_WRITE_BACKUP_BEFORE") //nolint:errcheck
 
 	// Unified dedup scoring defaults (SPEC 1 §3–4, T011).
 	// These are consumed by internal/dedup/unified.LoadScoreConfig via Viper.
@@ -861,14 +857,16 @@ func InitConfig() {
 				},
 			},
 
-			// Metadata candidate scoring
-			MetadataEmbeddingScoringEnabled: viper.GetBool("metadata_embedding_scoring_enabled"),
-			MetadataEmbeddingMinScore:       viper.GetFloat64("metadata_embedding_min_score"),
-			MetadataEmbeddingBestMatchMin:   viper.GetFloat64("metadata_embedding_best_match_min"),
-			MetadataLLMScoringEnabled:       viper.GetBool("metadata_llm_scoring_enabled"),
-			MetadataLLMRerankEpsilon:        viper.GetFloat64("metadata_llm_rerank_epsilon"),
-			MetadataLLMRerankTopK:           viper.GetInt("metadata_llm_rerank_top_k"),
-			WriteBackupBeforeTagWrite:       viper.GetBool("write_backup_before_tag_write"),
+			// Metadata candidate scoring + tag-write backup policy (nested sub-struct)
+			MetadataScoring: MetadataScoringConfig{
+				EmbeddingEnabled:   viper.GetBool("metadata_scoring.embedding_enabled"),
+				EmbeddingMinScore:  viper.GetFloat64("metadata_scoring.embedding_min_score"),
+				EmbeddingBestMatch: viper.GetFloat64("metadata_scoring.embedding_best_match"),
+				LLMEnabled:         viper.GetBool("metadata_scoring.llm_enabled"),
+				LLMRerankEpsilon:   viper.GetFloat64("metadata_scoring.llm_rerank_epsilon"),
+				LLMRerankTopK:      viper.GetInt("metadata_scoring.llm_rerank_top_k"),
+				WriteBackupBefore:  viper.GetBool("metadata_scoring.write_backup_before"),
+			},
 		}
 
 
@@ -1213,20 +1211,16 @@ func ResetToDefaults() {
 				},
 			},
 
-			// Metadata candidate scoring (PR1)
-			MetadataEmbeddingScoringEnabled: true,
-			MetadataEmbeddingMinScore:       0.50,
-			MetadataEmbeddingBestMatchMin:   0.70,
-
-			// Metadata LLM rerank tier (PR2)
-			MetadataLLMScoringEnabled: false,
-			MetadataLLMRerankEpsilon:  0.01,
-			MetadataLLMRerankTopK:     5,
-
-			// Tag-write backup default OFF — old default was always-on and
-			// accumulated tens of thousands of stale backup files across
-			// the library (multi-TB apparent size). Opt-in if you want it.
-			WriteBackupBeforeTagWrite: false,
+			// Metadata candidate scoring + tag-write backup policy (nested sub-struct)
+			MetadataScoring: MetadataScoringConfig{
+				EmbeddingEnabled:   false,
+				EmbeddingMinScore:  0.82,
+				EmbeddingBestMatch: 0.88,
+				LLMEnabled:         false,
+				LLMRerankEpsilon:   0.05,
+				LLMRerankTopK:      5,
+				WriteBackupBefore:  true,
+			},
 
 			// Logging
 			LogLevel:          "info",

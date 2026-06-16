@@ -269,7 +269,7 @@ func pickBestMatchFromScored(
 
 	minScore := f1MinScore
 	if baseTier != "f1" {
-		minScore = config.AppConfig.MetadataEmbeddingBestMatchMin
+		minScore = config.AppConfig.MetadataScoring.EmbeddingBestMatch
 	}
 
 	bestIdx := -1
@@ -370,7 +370,7 @@ func (mfs *Service) ScoreBaseCandidates(
 	results []metadata.BookMetadata,
 	searchWords map[string]bool,
 ) ([]float64, string) {
-	if config.AppConfig.MetadataEmbeddingScoringEnabled && mfs.metadataScorer != nil && len(results) > 0 {
+	if config.AppConfig.MetadataScoring.EmbeddingEnabled && mfs.metadataScorer != nil && len(results) > 0 {
 		query := ai.Query{
 			BookID:   book.ID,
 			Title:    book.Title,
@@ -470,8 +470,8 @@ func (mfs *Service) RerankTopK(
 		return candidates[i].Score > candidates[j].Score
 	})
 
-	epsilon := config.AppConfig.MetadataLLMRerankEpsilon
-	topK := config.AppConfig.MetadataLLMRerankTopK
+	epsilon := config.AppConfig.MetadataScoring.LLMRerankEpsilon
+	topK := config.AppConfig.MetadataScoring.LLMRerankTopK
 	if topK <= 0 {
 		topK = 5
 	}

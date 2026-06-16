@@ -1,5 +1,5 @@
 // file: internal/config/persistence_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-06-16
 
@@ -948,5 +948,64 @@ func TestRemapDedupKeys_FlatKeys(t *testing.T) {
 func TestRemapDedupKeys_NoFlatKeys(t *testing.T) {
 	payload := map[string]any{"root_dir": "/data"}
 	result := remapDedupKeys(payload)
+	assert.Equal(t, map[string]any{"root_dir": "/data"}, result)
+}
+
+func TestMigrateMetadataScoringFields_FlatBlob(t *testing.T) {
+	flatBlob := `{
+		"metadata_embedding_scoring_enabled": true,
+		"metadata_embedding_min_score": 0.82,
+		"metadata_embedding_best_match_min": 0.88,
+		"metadata_llm_scoring_enabled": false,
+		"metadata_llm_rerank_epsilon": 0.05,
+		"metadata_llm_rerank_top_k": 5,
+		"write_backup_before_tag_write": true,
+		"root_dir": "/data"
+	}`
+	migrated, changed := migrateMetadataScoringBlob(flatBlob)
+	require.True(t, changed)
+	var result map[string]any
+	require.NoError(t, json.Unmarshal([]byte(migrated), &result))
+	ms, ok := result["metadata_scoring"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, true, ms["embedding_enabled"])
+	assert.Equal(t, float64(0.82), ms["embedding_min_score"])
+	assert.Equal(t, float64(0.88), ms["embedding_best_match"])
+	assert.Equal(t, false, ms["llm_enabled"])
+	assert.Equal(t, float64(5), ms["llm_rerank_top_k"])
+	assert.Equal(t, true, ms["write_backup_before"])
+	assert.Equal(t, "/data", result["root_dir"])
+	assert.NotContains(t, result, "metadata_embedding_scoring_enabled")
+	assert.NotContains(t, result, "write_backup_before_tag_write")
+}
+
+func TestMigrateMetadataScoringFields_AlreadyNested(t *testing.T) {
+	_, changed := migrateMetadataScoringBlob(`{"metadata_scoring": {"embedding_enabled": true}}`)
+	assert.False(t, changed)
+}
+
+func TestMigrateMetadataScoringFields_EmptyBlob(t *testing.T) {
+	_, changed := migrateMetadataScoringBlob(`{}`)
+	assert.False(t, changed)
+}
+
+func TestRemapMetadataScoringKeys_FlatKeys(t *testing.T) {
+	payload := map[string]any{
+		"metadata_embedding_scoring_enabled": true,
+		"write_backup_before_tag_write":      false,
+		"root_dir":                           "/data",
+	}
+	result := remapMetadataScoringKeys(payload)
+	ms, ok := result["metadata_scoring"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, true, ms["embedding_enabled"])
+	assert.Equal(t, false, ms["write_backup_before"])
+	assert.Equal(t, "/data", result["root_dir"])
+	assert.NotContains(t, result, "metadata_embedding_scoring_enabled")
+}
+
+func TestRemapMetadataScoringKeys_NoFlatKeys(t *testing.T) {
+	payload := map[string]any{"root_dir": "/data"}
+	result := remapMetadataScoringKeys(payload)
 	assert.Equal(t, map[string]any{"root_dir": "/data"}, result)
 }

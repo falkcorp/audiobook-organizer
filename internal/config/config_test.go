@@ -1,5 +1,5 @@
 // file: internal/config/config_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-06-16
 
@@ -525,4 +525,27 @@ func TestInitConfig_EmbeddingFromEnv(t *testing.T) {
 	assert.Equal(t, "bge-m3", snap.Embedding.Model)
 	assert.Equal(t, 1024, snap.Embedding.Dimensions)
 	assert.Equal(t, "hnsw", snap.Embedding.VectorBackend)
+}
+
+func TestInitConfig_MetadataScoringDefaults(t *testing.T) {
+	viper.Reset()
+	InitConfig()
+	snap := Snapshot()
+	assert.False(t, snap.MetadataScoring.EmbeddingEnabled)
+	assert.Equal(t, 0.82, snap.MetadataScoring.EmbeddingMinScore)
+	assert.Equal(t, 0.88, snap.MetadataScoring.EmbeddingBestMatch)
+	assert.False(t, snap.MetadataScoring.LLMEnabled)
+	assert.Equal(t, 0.05, snap.MetadataScoring.LLMRerankEpsilon)
+	assert.Equal(t, 5, snap.MetadataScoring.LLMRerankTopK)
+	assert.True(t, snap.MetadataScoring.WriteBackupBefore)
+}
+
+func TestInitConfig_MetadataScoringFromEnv(t *testing.T) {
+	t.Setenv("METADATA_SCORING_EMBEDDING_ENABLED", "true")
+	t.Setenv("METADATA_SCORING_LLM_RERANK_TOP_K", "10")
+	viper.Reset()
+	InitConfig()
+	snap := Snapshot()
+	assert.True(t, snap.MetadataScoring.EmbeddingEnabled)
+	assert.Equal(t, 10, snap.MetadataScoring.LLMRerankTopK)
 }
