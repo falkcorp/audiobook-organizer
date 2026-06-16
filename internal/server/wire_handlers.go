@@ -1,12 +1,11 @@
 // file: internal/server/wire_handlers.go
-// version: 2.8.0
+// version: 2.9.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
-// last-edited: 2026-06-10
+// last-edited: 2026-06-15
 
 package server
 
 import (
-	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -21,8 +20,10 @@ import (
 	metadatahandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/metadata"
 	operations "github.com/falkcorp/audiobook-organizer/internal/server/handlers/operations"
 	system "github.com/falkcorp/audiobook-organizer/internal/server/handlers/system"
+	toolshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/tools"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
+	"github.com/gin-gonic/gin"
 )
 
 // wireHandlers instantiates handler structs and registers their routes.
@@ -949,6 +950,12 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	protected.PATCH("/audiobooks/:id/rating", s.perm(auth.PermLibraryEditMetadata), metadataH.HandleUpdateBookRating)
 	protected.POST("/audiobooks/batch-write-back", s.perm(auth.PermLibraryEditMetadata), metadataH.BatchWriteBackAudiobooks)
 	protected.POST("/audiobooks/bulk-write-back", s.perm(auth.PermLibraryEditMetadata), metadataH.HandleBulkWriteBack)
+
+	// Tools lifecycle
+	toolsH := toolshandler.New(s.toolRegistry, &config.AppConfig.Tools, nil)
+	protected.GET("/tools", s.perm(auth.PermSettingsManage), toolsH.List)
+	protected.GET("/tools/:name/status", s.perm(auth.PermSettingsManage), toolsH.Status)
+	protected.POST("/tools/:name/install", s.perm(auth.PermSettingsManage), toolsH.Install)
 
 	// Plugins
 	plugins := protected.Group("/plugins")
