@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.29.0
+// version: 2.30.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-06-15
+// last-edited: 2026-06-16
 
 package server
 
@@ -386,7 +386,7 @@ func NewServer(store database.Store) *Server {
 		seriesCache:  cache.NewWithLimit[*audiobookspkg.SeriesWithCountsResponse]("series", 24*time.Hour, 1),
 		// olService, updater, updateScheduler are container-built;
 		// wireServerFromContainer populates the fields.
-		diagnosticsService: diagnostics.NewService(resolvedStore, nil, config.AppConfig.ITunesLibraryReadPath),
+		diagnosticsService: diagnostics.NewService(resolvedStore, nil, config.AppConfig.ITunes.LibraryReadPath),
 		changelogService:   activity.NewChangelogService(resolvedStore),
 	}
 

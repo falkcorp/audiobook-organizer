@@ -1,7 +1,7 @@
 // file: internal/itunes/service/transfer_handler_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-05-03
+// last-edited: 2026-06-16
 
 package itunesservice
 
@@ -39,13 +39,13 @@ func newTransferRouter(ts *TransferService) *gin.Engine {
 	return r
 }
 
-// setITLPath sets config.AppConfig.ITunesLibraryWritePath for the duration
+// setITLPath sets config.AppConfig.ITunes.LibraryWritePath for the duration
 // of a test and restores it on cleanup.
 func setITLPath(t *testing.T, path string) {
 	t.Helper()
-	orig := config.AppConfig.ITunesLibraryWritePath
-	config.AppConfig.ITunesLibraryWritePath = path
-	t.Cleanup(func() { config.AppConfig.ITunesLibraryWritePath = orig })
+	orig := config.AppConfig.ITunes.LibraryWritePath
+	config.AppConfig.ITunes.LibraryWritePath = path
+	t.Cleanup(func() { config.AppConfig.ITunes.LibraryWritePath = orig })
 }
 
 // ---------------------------------------------------------------------------

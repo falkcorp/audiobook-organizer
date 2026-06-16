@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/handler.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1b7fbd86-cdda-4921-b2d0-786f5cadb438
-// last-edited: 2026-06-03
+// last-edited: 2026-06-16
 
 // Package operations hosts the background-operation HTTP handlers extracted
 // from the server package: the long-running scan / organize / optimize /
@@ -729,10 +729,10 @@ func (h *Handler) UpdateTaskConfig(c *gin.Context) {
 		}
 	case "itunes_sync":
 		if req.Enabled != nil {
-			config.AppConfig.ITunesSyncEnabled = *req.Enabled
+			config.AppConfig.ITunes.SyncEnabled = *req.Enabled
 		}
 		if req.IntervalMinutes != nil {
-			config.AppConfig.ITunesSyncInterval = *req.IntervalMinutes
+			config.AppConfig.ITunes.SyncInterval = *req.IntervalMinutes
 		}
 	case "series_prune":
 		if req.Enabled != nil {

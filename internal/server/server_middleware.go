@@ -1,7 +1,7 @@
 // file: internal/server/server_middleware.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 6a093405-441a-4c14-a9c5-46326ea767c1
-// last-edited: 2026-05-19
+// last-edited: 2026-06-16
 
 package server
 
@@ -99,15 +99,15 @@ func (s *Server) isProtectedPath(filePath string) bool {
 	}
 
 	// Check iTunes library paths
-	if config.AppConfig.ITunesLibraryReadPath != "" {
-		itunesDir := filepath.Dir(config.AppConfig.ITunesLibraryReadPath)
+	if config.AppConfig.ITunes.LibraryReadPath != "" {
+		itunesDir := filepath.Dir(config.AppConfig.ITunes.LibraryReadPath)
 		itunesAbs, _ := filepath.Abs(itunesDir)
 		if strings.HasPrefix(absPath, itunesAbs+"/") || absPath == itunesAbs {
 			return true
 		}
 	}
-	if config.AppConfig.ITunesLibraryWritePath != "" {
-		itunesDir := filepath.Dir(config.AppConfig.ITunesLibraryWritePath)
+	if config.AppConfig.ITunes.LibraryWritePath != "" {
+		itunesDir := filepath.Dir(config.AppConfig.ITunes.LibraryWritePath)
 		itunesAbs, _ := filepath.Abs(itunesDir)
 		if strings.HasPrefix(absPath, itunesAbs+"/") || absPath == itunesAbs {
 			return true

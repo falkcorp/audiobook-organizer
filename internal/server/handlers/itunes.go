@@ -1,7 +1,7 @@
 // file: internal/server/handlers/itunes.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: d4e5f6a7-b8c9-0123-defa-123456789012
-// last-edited: 2026-06-10
+// last-edited: 2026-06-16
 
 package handlers
 
@@ -418,14 +418,14 @@ func (h *ITunesHandler) WriteBack(c *gin.Context) {
 		return
 	}
 
-	if !config.AppConfig.ITLWriteBackEnabled || config.AppConfig.ITunesLibraryWritePath == "" {
+	if !config.AppConfig.ITunes.WriteBackEnabled || config.AppConfig.ITunes.LibraryWritePath == "" {
 		httputil.RespondWithBadRequest(c, "ITL write-back is not enabled in config")
 		return
 	}
 
 	pathMappings := req.PathMappings
 	if len(pathMappings) == 0 {
-		for _, m := range config.AppConfig.ITunesPathMappings {
+		for _, m := range config.AppConfig.ITunes.PathMappings {
 			pathMappings = append(pathMappings, itunes.PathMapping{From: m.From, To: m.To})
 		}
 	}
@@ -463,7 +463,7 @@ func (h *ITunesHandler) WriteBack(c *gin.Context) {
 		return
 	}
 
-	itlPath := config.AppConfig.ITunesLibraryWritePath
+	itlPath := config.AppConfig.ITunes.LibraryWritePath
 	itlResult, itlErr := itunes.UpdateITLLocations(itlPath, itlPath+".tmp", itlUpdates)
 	if itlErr != nil {
 		stdlog.Warn("ITL write-back failed", "err", itlErr)
@@ -495,12 +495,12 @@ func (h *ITunesHandler) WriteBackAll(c *gin.Context) {
 		return
 	}
 
-	if !config.AppConfig.ITLWriteBackEnabled {
+	if !config.AppConfig.ITunes.WriteBackEnabled {
 		httputil.RespondWithBadRequest(c, "ITL write-back is not enabled in config")
 		return
 	}
 
-	itlPath := config.AppConfig.ITunesLibraryWritePath
+	itlPath := config.AppConfig.ITunes.LibraryWritePath
 	if itlPath == "" {
 		httputil.RespondWithBadRequest(c, "no ITL library path configured")
 		return
@@ -581,7 +581,7 @@ func (h *ITunesHandler) WriteBackPreview(c *gin.Context) {
 		}
 		libraryPath = cleanLibPath
 	} else {
-		libraryPath = config.AppConfig.ITunesLibraryReadPath
+		libraryPath = config.AppConfig.ITunes.LibraryReadPath
 	}
 	if libraryPath == "" {
 		httputil.RespondWithBadRequest(c, "no iTunes library path configured (set ITunesLibraryReadPath in settings)")
@@ -635,7 +635,7 @@ func (h *ITunesHandler) WriteBackPreview(c *gin.Context) {
 	}
 
 	var previewMappings []itunes.PathMapping
-	for _, m := range config.AppConfig.ITunesPathMappings {
+	for _, m := range config.AppConfig.ITunes.PathMappings {
 		previewMappings = append(previewMappings, itunes.PathMapping{From: m.From, To: m.To})
 	}
 	// Forward-mapper for translating an iTunes location into its local
@@ -911,7 +911,7 @@ func (h *ITunesHandler) Sync(c *gin.Context) {
 		}
 		libraryPath = cleanLibPath
 	} else {
-		libraryPath = config.AppConfig.ITunesLibraryReadPath
+		libraryPath = config.AppConfig.ITunes.LibraryReadPath
 		if libraryPath == "" {
 			libraryPath = h.importer.DiscoverLibraryPath()
 		}
@@ -946,7 +946,7 @@ func (h *ITunesHandler) Sync(c *gin.Context) {
 
 	pathMappings := req.PathMappings
 	if len(pathMappings) == 0 {
-		for _, m := range config.AppConfig.ITunesPathMappings {
+		for _, m := range config.AppConfig.ITunes.PathMappings {
 			pathMappings = append(pathMappings, itunes.PathMapping{From: m.From, To: m.To})
 		}
 	}
@@ -974,7 +974,7 @@ func (h *ITunesHandler) LibraryStats(c *gin.Context) {
 	if !h.itunesEnabledOrError(c) {
 		return
 	}
-	itlPath := config.AppConfig.ITunesLibraryWritePath
+	itlPath := config.AppConfig.ITunes.LibraryWritePath
 	if itlPath == "" {
 		httputil.RespondWithBadRequest(c, "no ITL library path configured")
 		return

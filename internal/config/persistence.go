@@ -1,5 +1,5 @@
 // file: internal/config/persistence.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
 // last-edited: 2026-06-16
 
@@ -299,6 +299,61 @@ func migrateMetadataScoringBlob(blob string) (string, bool) {
 	return string(migrated), true
 }
 
+// migrateITunesBlob rewrites flat itunes_* / itl_* config fields to the nested
+// ITunesConfig format. Returns the (possibly modified) blob and whether a migration
+// occurred. Safe to call repeatedly: returns (blob, false) if already nested or no
+// flat iTunes keys are present.
+func migrateITunesBlob(blob string) (string, bool) {
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(blob), &raw); err != nil {
+		return blob, false
+	}
+	if _, isFlat := raw["itunes_sync_enabled"]; !isFlat {
+		return blob, false
+	}
+
+	type flatShape struct {
+		ITunesSyncEnabled      bool   `json:"itunes_sync_enabled"`
+		ITunesSyncInterval     int    `json:"itunes_sync_interval"`
+		ITLWriteBackEnabled    bool   `json:"itl_write_back_enabled"`
+		ITunesLibraryWritePath string `json:"itunes_library_write_path"`
+		ITunesLibraryReadPath  string `json:"itunes_library_read_path"`
+		ITunesAutoWriteBack    bool   `json:"itunes_auto_write_back"`
+		ITunesPathTrimEnabled  bool   `json:"itunes_path_trim_enabled"`
+		ITunesWindowsRootPath  string `json:"itunes_windows_root_path"`
+		ITunesMediaRoot        string `json:"itunes_media_root"`
+	}
+	var old flatShape
+	json.Unmarshal([]byte(blob), &old) //nolint:errcheck — already parsed above
+
+	raw["itunes"] = map[string]any{
+		"sync_enabled":       old.ITunesSyncEnabled,
+		"sync_interval":      old.ITunesSyncInterval,
+		"write_back_enabled": old.ITLWriteBackEnabled,
+		"library_write_path": old.ITunesLibraryWritePath,
+		"library_read_path":  old.ITunesLibraryReadPath,
+		"auto_write_back":    old.ITunesAutoWriteBack,
+		"path_trim_enabled":  old.ITunesPathTrimEnabled,
+		"windows_root_path":  old.ITunesWindowsRootPath,
+		"media_root":         old.ITunesMediaRoot,
+	}
+	delete(raw, "itunes_sync_enabled")
+	delete(raw, "itunes_sync_interval")
+	delete(raw, "itl_write_back_enabled")
+	delete(raw, "itunes_library_write_path")
+	delete(raw, "itunes_library_read_path")
+	delete(raw, "itunes_auto_write_back")
+	delete(raw, "itunes_path_trim_enabled")
+	delete(raw, "itunes_windows_root_path")
+	delete(raw, "itunes_media_root")
+
+	migrated, err := json.Marshal(raw)
+	if err != nil {
+		return blob, false
+	}
+	return string(migrated), true
+}
+
 // saveRawBlob writes a pre-marshaled JSON string directly as the config blob.
 // Used only by startup migration to persist migrated blobs without re-marshaling.
 func saveRawBlob(store database.SettingsStore, rawJSON string) error {
@@ -368,6 +423,15 @@ func LoadConfigFromDatabase(store database.SettingsStore) error {
 			blobStr = migrated
 			if saveErr := saveRawBlob(store, migrated); saveErr != nil {
 				slog.Warn("config: failed to persist migrated metadata_scoring blob", "err", saveErr)
+			}
+		}
+
+		// Migrate flat itunes_* / itl_* keys → nested ITunesConfig format (idempotent).
+		if migrated, changed := migrateITunesBlob(blobStr); changed {
+			slog.Info("config: migrated iTunes fields to nested format")
+			blobStr = migrated
+			if saveErr := saveRawBlob(store, migrated); saveErr != nil {
+				slog.Warn("config: failed to persist migrated iTunes blob", "err", saveErr)
 			}
 		}
 
@@ -727,39 +791,40 @@ func applySetting(key, value, typ string) error {
 				c.PurgeSoftDeletedDeleteFiles = b
 			}
 
-		// iTunes sync
+		// iTunes sync (legacy flat keys — new installs use the blob).
+		// These cases handle pre-Wave-4 installs that stored settings as individual rows.
 		case "itunes_sync_enabled":
 			if b, err := strconv.ParseBool(value); err == nil {
-				c.ITunesSyncEnabled = b
+				c.ITunes.SyncEnabled = b
 			}
 		case "itunes_sync_interval":
 			if i, err := strconv.Atoi(value); err == nil {
-				c.ITunesSyncInterval = i
+				c.ITunes.SyncInterval = i
 			}
 		case "itl_write_back_enabled":
 			if b, err := strconv.ParseBool(value); err == nil {
-				c.ITLWriteBackEnabled = b
+				c.ITunes.WriteBackEnabled = b
 			}
 		case "itunes_library_write_path", "itunes_library_itl_path":
-			c.ITunesLibraryWritePath = value
+			c.ITunes.LibraryWritePath = value
 		case "itunes_library_read_path", "itunes_library_xml_path":
-			c.ITunesLibraryReadPath = value
+			c.ITunes.LibraryReadPath = value
 		case "itunes_auto_write_back":
 			if b, err := strconv.ParseBool(value); err == nil {
-				c.ITunesAutoWriteBack = b
+				c.ITunes.AutoWriteBack = b
 			}
 		case "itunes_path_trim_enabled":
 			if b, err := strconv.ParseBool(value); err == nil {
-				c.ITunesPathTrimEnabled = b
+				c.ITunes.PathTrimEnabled = b
 			}
 		case "itunes_windows_root_path":
-			c.ITunesWindowsRootPath = value
+			c.ITunes.WindowsRootPath = value
 		case "itunes_media_root":
-			c.ITunesMediaRoot = value
+			c.ITunes.MediaRoot = value
 		case "itunes_path_mappings":
 			var mappings []ITunesPathMap
 			if err := json.Unmarshal([]byte(value), &mappings); err == nil {
-				c.ITunesPathMappings = mappings
+				c.ITunes.PathMappings = mappings
 			}
 
 		// Maintenance window

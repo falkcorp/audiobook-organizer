@@ -180,7 +180,7 @@ func TestCoverage_ITunesConfig(t *testing.T) {
 	InitConfig()
 
 	// Test ITunes-related defaults exist
-	if AppConfig.ITunesSyncInterval != 0 && AppConfig.ITunesSyncInterval < 0 {
+	if AppConfig.ITunes.SyncInterval != 0 && AppConfig.ITunes.SyncInterval < 0 {
 		t.Error("ITunesSyncInterval has unexpected negative value")
 	}
 }

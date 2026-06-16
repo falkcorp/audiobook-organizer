@@ -1,5 +1,5 @@
 // file: internal/config/persistence_test.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-06-16
 
@@ -1007,5 +1007,65 @@ func TestRemapMetadataScoringKeys_FlatKeys(t *testing.T) {
 func TestRemapMetadataScoringKeys_NoFlatKeys(t *testing.T) {
 	payload := map[string]any{"root_dir": "/data"}
 	result := remapMetadataScoringKeys(payload)
+	assert.Equal(t, map[string]any{"root_dir": "/data"}, result)
+}
+
+func TestMigrateITunesFields_FlatBlob(t *testing.T) {
+	flatBlob := `{
+		"itunes_sync_enabled": true,
+		"itunes_sync_interval": 30,
+		"itl_write_back_enabled": false,
+		"itunes_library_write_path": "/mnt/itunes.itl",
+		"itunes_library_read_path": "/mnt/iTunes Library.xml",
+		"itunes_auto_write_back": false,
+		"itunes_path_trim_enabled": true,
+		"itunes_windows_root_path": "C:\\Users\\",
+		"itunes_media_root": "/mnt/media",
+		"root_dir": "/data"
+	}`
+	migrated, changed := migrateITunesBlob(flatBlob)
+	require.True(t, changed)
+	var result map[string]any
+	require.NoError(t, json.Unmarshal([]byte(migrated), &result))
+	it, ok := result["itunes"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, true, it["sync_enabled"])
+	assert.Equal(t, float64(30), it["sync_interval"])
+	assert.Equal(t, false, it["write_back_enabled"])
+	assert.Equal(t, "/mnt/itunes.itl", it["library_write_path"])
+	assert.Equal(t, true, it["path_trim_enabled"])
+	assert.Equal(t, "/data", result["root_dir"])
+	assert.NotContains(t, result, "itunes_sync_enabled")
+	assert.NotContains(t, result, "itl_write_back_enabled")
+}
+
+func TestMigrateITunesFields_AlreadyNested(t *testing.T) {
+	_, changed := migrateITunesBlob(`{"itunes": {"sync_enabled": true}}`)
+	assert.False(t, changed)
+}
+
+func TestMigrateITunesFields_EmptyBlob(t *testing.T) {
+	_, changed := migrateITunesBlob(`{}`)
+	assert.False(t, changed)
+}
+
+func TestRemapITunesKeys_FlatKeys(t *testing.T) {
+	payload := map[string]any{
+		"itunes_sync_enabled":    true,
+		"itl_write_back_enabled": false,
+		"root_dir":               "/data",
+	}
+	result := remapITunesKeys(payload)
+	it, ok := result["itunes"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, true, it["sync_enabled"])
+	assert.Equal(t, false, it["write_back_enabled"])
+	assert.Equal(t, "/data", result["root_dir"])
+	assert.NotContains(t, result, "itunes_sync_enabled")
+}
+
+func TestRemapITunesKeys_NoFlatKeys(t *testing.T) {
+	payload := map[string]any{"root_dir": "/data"}
+	result := remapITunesKeys(payload)
 	assert.Equal(t, map[string]any{"root_dir": "/data"}, result)
 }

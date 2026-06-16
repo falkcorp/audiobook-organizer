@@ -1,7 +1,7 @@
 // file: internal/itunes/service/transfer.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-05-01
+// last-edited: 2026-06-16
 //
 // ITL file transfer handlers: download, upload+validate, backup
 // list, and restore. Part of backlog 6.4.
@@ -29,7 +29,7 @@ const maxITLUploadSize = 500 << 20
 
 // TransferService owns the ITL file transfer HTTP handlers: download,
 // upload+validate, backup list, and restore. No store / batcher deps —
-// pure filesystem operations keyed off config.AppConfig.ITunesLibraryWritePath.
+// pure filesystem operations keyed off config.AppConfig.ITunes.LibraryWritePath.
 type TransferService struct{}
 
 func newTransferService() *TransferService { return &TransferService{} }
@@ -38,7 +38,7 @@ func newTransferService() *TransferService { return &TransferService{} }
 //
 // GET /api/v1/itunes/library/download
 func (t *TransferService) HandleDownload(c *gin.Context) {
-	itlPath := config.AppConfig.ITunesLibraryWritePath
+	itlPath := config.AppConfig.ITunes.LibraryWritePath
 	if itlPath == "" {
 		httputil.RespondWithNotFound(c, "ITunesLibraryWritePath is not configured", "")
 		return
@@ -75,7 +75,7 @@ type ITLUploadResponse struct {
 //
 // POST /api/v1/itunes/library/upload?install=true|false
 func (t *TransferService) HandleUpload(c *gin.Context) {
-	itlPath := config.AppConfig.ITunesLibraryWritePath
+	itlPath := config.AppConfig.ITunes.LibraryWritePath
 	if itlPath == "" {
 		httputil.RespondWithBadRequest(c, "ITunesLibraryWritePath is not configured")
 		return
@@ -154,7 +154,7 @@ type ITLBackupEntry struct {
 //
 // GET /api/v1/itunes/library/backups
 func (t *TransferService) HandleBackupList(c *gin.Context) {
-	itlPath := config.AppConfig.ITunesLibraryWritePath
+	itlPath := config.AppConfig.ITunes.LibraryWritePath
 	if itlPath == "" {
 		httputil.RespondWithBadRequest(c, "ITunesLibraryWritePath is not configured")
 		return
@@ -208,7 +208,7 @@ type ITLRestoreRequest struct {
 //
 // POST /api/v1/itunes/library/restore
 func (t *TransferService) HandleRestore(c *gin.Context) {
-	itlPath := config.AppConfig.ITunesLibraryWritePath
+	itlPath := config.AppConfig.ITunes.LibraryWritePath
 	if itlPath == "" {
 		httputil.RespondWithBadRequest(c, "ITunesLibraryWritePath is not configured")
 		return

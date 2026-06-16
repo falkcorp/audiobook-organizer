@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.55.0
+// version: 1.56.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-06-16
 
@@ -137,6 +137,20 @@ type DedupConfig struct {
 	ReviewModel string `json:"review_model" mapstructure:"review_model"`
 	// Signals holds the unified scoring band thresholds.
 	Signals DedupSignalConfig `json:"signals" mapstructure:"signals"`
+}
+
+// ITunesConfig holds all settings for the iTunes sync and write-back subsystem.
+type ITunesConfig struct {
+	SyncEnabled      bool            `json:"sync_enabled"       mapstructure:"sync_enabled"`
+	SyncInterval     int             `json:"sync_interval"      mapstructure:"sync_interval"`
+	WriteBackEnabled bool            `json:"write_back_enabled" mapstructure:"write_back_enabled"`
+	LibraryWritePath string          `json:"library_write_path" mapstructure:"library_write_path"`
+	LibraryReadPath  string          `json:"library_read_path"  mapstructure:"library_read_path"`
+	AutoWriteBack    bool            `json:"auto_write_back"    mapstructure:"auto_write_back"`
+	PathTrimEnabled  bool            `json:"path_trim_enabled"  mapstructure:"path_trim_enabled"`
+	WindowsRootPath  string          `json:"windows_root_path"  mapstructure:"windows_root_path"`
+	MediaRoot        string          `json:"media_root"         mapstructure:"media_root"`
+	PathMappings     []ITunesPathMap `json:"path_mappings"      mapstructure:"path_mappings"`
 }
 
 // MetadataScoringConfig holds settings for the AI-assisted metadata scoring pipeline.
@@ -280,17 +294,9 @@ type Config struct {
 	LogFormat         string `json:"log_format"` // 'text' or 'json'
 	EnableJsonLogging bool   `json:"enable_json_logging"`
 
-	// iTunes sync
-	ITunesSyncEnabled      bool            `json:"itunes_sync_enabled"`
-	ITunesSyncInterval     int             `json:"itunes_sync_interval"` // minutes
-	ITLWriteBackEnabled    bool            `json:"itl_write_back_enabled"`
-	ITunesLibraryWritePath string          `json:"itunes_library_write_path"` // ITL path used for write-back (always ITL)
-	ITunesLibraryReadPath  string          `json:"itunes_library_read_path"`  // path used for sync (XML or ITL)
-	ITunesPathMappings     []ITunesPathMap `json:"itunes_path_mappings"`      // Stored path mappings for write-back
-	ITunesAutoWriteBack    bool            `json:"itunes_auto_write_back"`    // Auto write-back on every edit (batched)
-	ITunesPathTrimEnabled  bool            `json:"itunes_path_trim_enabled"`  // Trim filenames to fit Windows MAX_PATH for iTunes compatibility
-	ITunesWindowsRootPath  string          `json:"itunes_windows_root_path"`  // Windows equivalent of RootDir, e.g. "W:\audiobook-organizer" (no trailing slash)
-	ITunesMediaRoot        string          `json:"itunes_media_root"`         // Local path to iTunes Media/Audiobooks, e.g. "/mnt/bigdata/books/itunes/iTunes Media/Audiobooks"
+	// ITunes holds all iTunes sync and write-back settings.
+	// Previously these were 10 flat fields; Wave 4 nests them here.
+	ITunes ITunesConfig `json:"itunes" mapstructure:"itunes"`
 
 	// Deluge integration
 	DelugeWebURL           string `json:"deluge_web_url"`           // e.g. "http://172.16.2.30:8112"
@@ -543,16 +549,21 @@ func InitConfig() {
 	viper.SetDefault("scheduled_ai_dedup_batch_interval", 1440)
 	viper.SetDefault("scheduled_ai_dedup_batch_on_startup", false)
 
-	// iTunes sync defaults
-	viper.SetDefault("itunes_sync_enabled", true)
-	viper.SetDefault("itunes_sync_interval", 30)
-	viper.SetDefault("itl_write_back_enabled", false)
-	viper.SetDefault("itunes_library_write_path", "")
-	viper.SetDefault("itunes_library_read_path", "")
-	viper.SetDefault("itunes_auto_write_back", false)
-	viper.SetDefault("itunes_path_trim_enabled", false)
-	viper.SetDefault("itunes_windows_root_path", "")
-	viper.SetDefault("itunes_media_root", "")
+	// iTunes sync defaults (nested under "itunes.*").
+	// BindEnv maps env vars so ITUNES_SYNC_ENABLED etc. override even without AutomaticEnv.
+	viper.SetDefault("itunes.sync_enabled", true)
+	viper.SetDefault("itunes.sync_interval", 30)
+	viper.SetDefault("itunes.write_back_enabled", false)
+	viper.SetDefault("itunes.library_write_path", "")
+	viper.SetDefault("itunes.library_read_path", "")
+	viper.SetDefault("itunes.auto_write_back", false)
+	viper.SetDefault("itunes.path_trim_enabled", false)
+	viper.SetDefault("itunes.windows_root_path", "")
+	viper.SetDefault("itunes.media_root", "")
+	viper.BindEnv("itunes.sync_enabled", "ITUNES_SYNC_ENABLED")           //nolint:errcheck
+	viper.BindEnv("itunes.sync_interval", "ITUNES_SYNC_INTERVAL")         //nolint:errcheck
+	viper.BindEnv("itunes.write_back_enabled", "ITUNES_WRITE_BACK_ENABLED") //nolint:errcheck
+	viper.BindEnv("itunes.auto_write_back", "ITUNES_AUTO_WRITE_BACK")     //nolint:errcheck
 
 	// Auto-update defaults
 	viper.SetDefault("auto_update_enabled", false)
@@ -779,16 +790,19 @@ func InitConfig() {
 			MaintenanceWindowAcoustIDOnlineLookup: viper.GetBool("maintenance_window_acoustid_online_lookup"),
 			AcoustIDOnlineLookupNightlyLimit:      viper.GetInt("acoustid_online_lookup_nightly_limit"),
 
-			// iTunes sync
-			ITunesSyncEnabled:      viper.GetBool("itunes_sync_enabled"),
-			ITunesSyncInterval:     viper.GetInt("itunes_sync_interval"),
-			ITLWriteBackEnabled:    viper.GetBool("itl_write_back_enabled"),
-			ITunesLibraryWritePath: viper.GetString("itunes_library_write_path"),
-			ITunesLibraryReadPath:  viper.GetString("itunes_library_read_path"),
-			ITunesAutoWriteBack:    viper.GetBool("itunes_auto_write_back"),
-			ITunesPathTrimEnabled:  viper.GetBool("itunes_path_trim_enabled"),
-			ITunesWindowsRootPath:  viper.GetString("itunes_windows_root_path"),
-			ITunesMediaRoot:        viper.GetString("itunes_media_root"),
+			// iTunes sync (nested sub-struct)
+			ITunes: ITunesConfig{
+				SyncEnabled:      viper.GetBool("itunes.sync_enabled"),
+				SyncInterval:     viper.GetInt("itunes.sync_interval"),
+				WriteBackEnabled: viper.GetBool("itunes.write_back_enabled"),
+				LibraryWritePath: viper.GetString("itunes.library_write_path"),
+				LibraryReadPath:  viper.GetString("itunes.library_read_path"),
+				AutoWriteBack:    viper.GetBool("itunes.auto_write_back"),
+				PathTrimEnabled:  viper.GetBool("itunes.path_trim_enabled"),
+				WindowsRootPath:  viper.GetString("itunes.windows_root_path"),
+				MediaRoot:        viper.GetString("itunes.media_root"),
+				// PathMappings loaded from DB blob, not viper
+			},
 
 			// Download client integration
 			DownloadClient: DownloadClientConfig{
@@ -946,17 +960,35 @@ func InitConfig() {
 			}
 		}
 
-		// Backward compatibility: map old config key names to new ones
-		if c.ITunesLibraryWritePath == "" {
-			c.ITunesLibraryWritePath = viper.GetString("itunes_library_itl_path")
+		// Backward compatibility: map old flat viper key names to the nested struct.
+		// These keys were set directly (e.g. via viper.Set in tests or old config files)
+		// using the pre-Wave-4 flat names, which are no longer read in the struct literal.
+		if c.ITunes.LibraryWritePath == "" {
+			if v := viper.GetString("itunes_library_write_path"); v != "" {
+				c.ITunes.LibraryWritePath = v
+			}
 		}
-		if c.ITunesLibraryReadPath == "" {
-			c.ITunesLibraryReadPath = viper.GetString("itunes_library_xml_path")
+		if c.ITunes.LibraryWritePath == "" {
+			c.ITunes.LibraryWritePath = viper.GetString("itunes_library_itl_path")
+		}
+		if c.ITunes.LibraryReadPath == "" {
+			if v := viper.GetString("itunes_library_read_path"); v != "" {
+				c.ITunes.LibraryReadPath = v
+			}
+		}
+		if c.ITunes.LibraryReadPath == "" {
+			c.ITunes.LibraryReadPath = viper.GetString("itunes_library_xml_path")
+		}
+		// Also pick up the flat write_back and sync keys if set via old viper keys
+		if !c.ITunes.WriteBackEnabled {
+			if viper.IsSet("itl_write_back_enabled") {
+				c.ITunes.WriteBackEnabled = viper.GetBool("itl_write_back_enabled")
+			}
 		}
 
 		// Auto-enable ITL write-back when a write path is configured
-		if c.ITunesLibraryWritePath != "" && !c.ITLWriteBackEnabled {
-			c.ITLWriteBackEnabled = true
+		if c.ITunes.LibraryWritePath != "" && !c.ITunes.WriteBackEnabled {
+			c.ITunes.WriteBackEnabled = true
 		}
 
 		// Normalize database type
@@ -1255,11 +1287,11 @@ func ResetToDefaults() {
 			MaintenanceWindowAcoustIDOnlineLookup: false,
 			AcoustIDOnlineLookupNightlyLimit:      5000,
 
-			// iTunes sync
-			ITunesSyncEnabled:      true,
-			ITunesSyncInterval:     30,
-			ITLWriteBackEnabled:    false,
-			ITunesLibraryWritePath: "",
+			// iTunes sync (nested sub-struct)
+			ITunes: ITunesConfig{
+				SyncEnabled:  true,
+				SyncInterval: 30,
+			},
 
 			// Download client integration
 			DownloadClient: DownloadClientConfig{

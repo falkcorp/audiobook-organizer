@@ -1,5 +1,5 @@
 // file: internal/itunes/service/config.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6d05155e-42e3-4319-a2a7-2e80d10be2aa
 
 package itunesservice
@@ -19,8 +19,8 @@ type Config struct {
 	WriteBackMaxBatch   int
 	BackupKeep          int
 	ImportConcurrency   int
-	AutoWriteBack       bool // mirror of config.AppConfig.ITunesAutoWriteBack
-	ITLWriteBackEnabled bool // mirror of config.AppConfig.ITLWriteBackEnabled
+	AutoWriteBack       bool // mirror of config.AppConfig.ITunes.AutoWriteBack
+	ITLWriteBackEnabled bool // mirror of config.AppConfig.ITunes.WriteBackEnabled
 }
 
 // PathMapping is a single ITunesPath → OrganizedPath transform applied

@@ -1,5 +1,5 @@
 // file: internal/itunes/service/path_repair_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6b7e3d51-c0a3-4ab2-8d6c-7e9c1d4a8f01
 
 package itunesservice
@@ -25,11 +25,11 @@ import (
 // ComputeITunesPath, restoring the previous mappings on cleanup.
 func withITunesPathMapping(t *testing.T, dir string) {
 	t.Helper()
-	prev := config.AppConfig.ITunesPathMappings
-	config.AppConfig.ITunesPathMappings = []config.ITunesPathMap{
+	prev := config.AppConfig.ITunes.PathMappings
+	config.AppConfig.ITunes.PathMappings = []config.ITunesPathMap{
 		{From: "Z:/", To: dir + "/"},
 	}
-	t.Cleanup(func() { config.AppConfig.ITunesPathMappings = prev })
+	t.Cleanup(func() { config.AppConfig.ITunes.PathMappings = prev })
 }
 
 // noopProgressRepair mirrors the reconciler test helper.

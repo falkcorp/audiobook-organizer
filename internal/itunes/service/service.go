@@ -1,5 +1,5 @@
 // file: internal/itunes/service/service.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 81ccaec6-42b0-4828-83c8-7a96680112d9
 
 package itunesservice

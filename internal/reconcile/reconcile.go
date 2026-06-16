@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-05-15
+// last-edited: 2026-06-16
 
 package reconcile
 
@@ -438,8 +438,8 @@ func FindUntrackedFiles(store Store, knownPaths map[string]bool) ([]string, erro
 	}
 
 	// Priority 3: iTunes library paths (lowest priority — never modify these)
-	if config.AppConfig.ITunesLibraryReadPath != "" {
-		itunesMedia := filepath.Dir(config.AppConfig.ITunesLibraryReadPath)
+	if config.AppConfig.ITunes.LibraryReadPath != "" {
+		itunesMedia := filepath.Dir(config.AppConfig.ITunes.LibraryReadPath)
 		// Walk up to find the iTunes Media/Audiobooks folder
 		if sp, err := safepath.Join(itunesMedia, "iTunes Media", "Audiobooks"); err == nil {
 			audiobooks := sp.String()

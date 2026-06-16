@@ -1,5 +1,5 @@
 // file: internal/config/update_service.go
-// version: 3.4.0
+// version: 3.5.0
 // guid: f6g7h8i9-j0k1-l2m3-n4o5-p6q7r8s9t0u1
 // last-edited: 2026-06-16
 
@@ -167,6 +167,42 @@ func remapMetadataScoringKeys(payload map[string]any) map[string]any {
 	return payload
 }
 
+// remapITunesKeys translates legacy flat iTunes keys in a config update payload
+// to the nested ITunesConfig format. Merges into any existing "itunes" sub-object
+// to avoid zeroing sibling fields.
+// Remove this shim once the frontend sends nested keys.
+func remapITunesKeys(payload map[string]any) map[string]any {
+	flatToNested := map[string]string{
+		"itunes_sync_enabled":       "sync_enabled",
+		"itunes_sync_interval":      "sync_interval",
+		"itl_write_back_enabled":    "write_back_enabled",
+		"itunes_library_write_path": "library_write_path",
+		"itunes_library_read_path":  "library_read_path",
+		"itunes_auto_write_back":    "auto_write_back",
+		"itunes_path_trim_enabled":  "path_trim_enabled",
+		"itunes_windows_root_path":  "windows_root_path",
+		"itunes_media_root":         "media_root",
+	}
+	nested := make(map[string]any)
+	for flat, short := range flatToNested {
+		if v, ok := payload[flat]; ok {
+			nested[short] = v
+			delete(payload, flat)
+		}
+	}
+	if len(nested) == 0 {
+		return payload
+	}
+	if existing, ok := payload["itunes"].(map[string]any); ok {
+		for k, v := range nested {
+			existing[k] = v
+		}
+	} else {
+		payload["itunes"] = nested
+	}
+	return payload
+}
+
 // UpdateConfig applies a config update payload to AppConfig and persists it.
 //
 // Architecture: non-secret fields are applied via JSON round-trip onto AppConfig.
@@ -225,6 +261,8 @@ func (us *UpdateService) UpdateConfig(payload map[string]any) (int, map[string]a
 	filtered = remapDedupKeys(filtered)
 	// Translate any legacy flat metadata scoring keys to the nested MetadataScoringConfig format.
 	filtered = remapMetadataScoringKeys(filtered)
+	// Translate any legacy flat iTunes keys to the nested ITunesConfig format.
+	filtered = remapITunesKeys(filtered)
 
 	// Apply all remaining fields via JSON round-trip.
 	// Any field in Config with a matching json tag is set automatically.

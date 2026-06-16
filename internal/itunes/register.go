@@ -1,5 +1,5 @@
 // file: internal/itunes/register.go
-// version: 1.0.0
+// version: 1.1.0
 
 package itunes
 
@@ -15,11 +15,11 @@ func init() {
 		Groups: []string{"scheduler"},
 		Build: func(c *serviceregistry.Container) (any, error) {
 			cfg := serviceregistry.Get[*config.Config](c, "config")
-			if cfg.ITunesLibraryReadPath == "" {
+			if cfg.ITunes.LibraryReadPath == "" {
 				return nil, nil
 			}
 			// Create and start the fsnotify watcher for the iTunes Library.xml file.
-			watcher, err := NewLibraryWatcher(cfg.ITunesLibraryReadPath)
+			watcher, err := NewLibraryWatcher(cfg.ITunes.LibraryReadPath)
 			if err != nil {
 				return nil, err
 			}

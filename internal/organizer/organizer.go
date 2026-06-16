@@ -1,5 +1,5 @@
 // file: internal/organizer/organizer.go
-// version: 1.17.1
+// version: 1.18.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 
 package organizer
@@ -245,9 +245,9 @@ func (o *Organizer) generateTargetPath(book *database.Book) (string, error) {
 
 	// When iTunes path trimming is enabled, shorten the filename stem so the
 	// Windows-equivalent path stays under MAX_PATH (260 chars). This uses
-	// config.ITunesWindowsRootPath as the Windows equivalent of RootDir.
-	if config.AppConfig.ITunesPathTrimEnabled && config.AppConfig.ITunesWindowsRootPath != "" {
-		windowsRoot := strings.TrimRight(config.AppConfig.ITunesWindowsRootPath, `\/`)
+	// config.ITunes.WindowsRootPath as the Windows equivalent of RootDir.
+	if config.AppConfig.ITunes.PathTrimEnabled && config.AppConfig.ITunes.WindowsRootPath != "" {
+		windowsRoot := strings.TrimRight(config.AppConfig.ITunes.WindowsRootPath, `\/`)
 		relDir := strings.ReplaceAll(folderPath, "/", `\`)
 		// Windows path = windowsRoot + \ + relDir + \ + filename
 		prefixLen := len(windowsRoot) + 1 + len(relDir) + 1

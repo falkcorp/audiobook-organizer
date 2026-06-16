@@ -1,7 +1,7 @@
 // file: internal/server/handlers/diagnostics.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 14e70c44-73ca-456a-bc67-8dc6ba6e5736
-// last-edited: 2026-06-10
+// last-edited: 2026-06-16
 
 // DiagnosticsHandler hosts the diagnostics HTTP endpoints extracted from the
 // server package: ZIP export start/download, AI batch submit + results, applying
@@ -294,7 +294,7 @@ func (h *DiagnosticsHandler) SubmitAI(c *gin.Context) {
 
 	ds := h.diagService
 	if ds == nil {
-		ds = diagnostics.NewService(store, nil, config.AppConfig.ITunesLibraryReadPath)
+		ds = diagnostics.NewService(store, nil, config.AppConfig.ITunes.LibraryReadPath)
 	}
 
 	category := req.Category

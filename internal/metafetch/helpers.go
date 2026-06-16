@@ -1,5 +1,5 @@
 // file: internal/metafetch/helpers.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
 
 package metafetch
@@ -119,15 +119,15 @@ func (mfs *Service) isProtectedPath(filePath string) bool {
 	}
 
 	// Check iTunes library paths
-	if config.AppConfig.ITunesLibraryReadPath != "" {
-		itunesDir := filepath.Dir(config.AppConfig.ITunesLibraryReadPath)
+	if config.AppConfig.ITunes.LibraryReadPath != "" {
+		itunesDir := filepath.Dir(config.AppConfig.ITunes.LibraryReadPath)
 		itunesAbs, _ := filepath.Abs(itunesDir)
 		if strings.HasPrefix(absPath, itunesAbs+"/") || absPath == itunesAbs {
 			return true
 		}
 	}
-	if config.AppConfig.ITunesLibraryWritePath != "" {
-		itunesDir := filepath.Dir(config.AppConfig.ITunesLibraryWritePath)
+	if config.AppConfig.ITunes.LibraryWritePath != "" {
+		itunesDir := filepath.Dir(config.AppConfig.ITunes.LibraryWritePath)
 		itunesAbs, _ := filepath.Abs(itunesDir)
 		if strings.HasPrefix(absPath, itunesAbs+"/") || absPath == itunesAbs {
 			return true
