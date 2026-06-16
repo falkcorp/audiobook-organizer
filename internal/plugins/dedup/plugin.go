@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/plugin.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: d1e2f3a4-b5c6-7890-abcd-ef1234567890
-// last-edited: 2026-06-14
+// last-edited: 2026-06-15
 
 // Package dedup is the UOS plugin for deduplication operations.
 // It wraps the internal dedup.Engine and registers OperationDefs through
@@ -20,7 +20,15 @@ type Plugin struct {
 	engine         *dedupengine.Engine
 	store          database.Store
 	embeddingStore *database.EmbeddingStore
-	registry       sdk.Registry // set in Register; used by ops that enqueue follow-on work
+	registry       sdk.Registry                    // set in Register; used by ops that enqueue follow-on work
+	toolRegistry   interface{ Available(string) bool } // optional; guards ops that require external binaries
+}
+
+// SetToolRegistry wires the tool registry for Ollama availability checks.
+// Call before Register so that guarded ops (e.g. reembed-embeddings) can
+// fail fast when the required binary is absent.
+func (p *Plugin) SetToolRegistry(r interface{ Available(string) bool }) {
+	p.toolRegistry = r
 }
 
 // New constructs a dedup Plugin. engine and embeddingStore may be nil if embedding is disabled;
