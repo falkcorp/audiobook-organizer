@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/relink_report.go
-// version: 2.2.1
+// version: 2.3.0
 // guid: a1000022-0000-0000-0000-000000000022
-// last-edited: 2026-05-05
+// last-edited: 2026-06-16
 
 package jobs
 
@@ -39,7 +39,7 @@ func (j *relinkReportJob) Description() string {
 func (j *relinkReportJob) CanResume() bool { return false }
 
 func (j *relinkReportJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, _ bool) error {
-	iTunesRoot := config.AppConfig.ITunesMediaRoot
+	iTunesRoot := config.AppConfig.ITunes.MediaRoot
 	organizerRoot := config.AppConfig.RootDir
 
 	if iTunesRoot == "" {

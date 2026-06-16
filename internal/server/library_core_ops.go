@@ -1,5 +1,5 @@
 // file: internal/server/library_core_ops.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 
 // library_core_ops registers the scan, organize, and transcode OperationDefs
@@ -290,7 +290,7 @@ func (s *Server) RegisterLibraryTranscodeOp(reg *opsregistry.Registry) error {
 			op.AddEntity("books", newBook.ID)
 			progress.Log("info", fmt.Sprintf("Created M4B version %s (group %s), original %s demoted to non-primary", newBook.ID, groupID, p.BookID), nil)
 
-			if !config.AppConfig.ITLWriteBackEnabled &&
+			if !config.AppConfig.ITunes.WriteBackEnabled &&
 				originalBook.ITunesPersistentID != nil &&
 				*originalBook.ITunesPersistentID != "" {
 				if err := s.Store().CreateDeferredITunesUpdate(

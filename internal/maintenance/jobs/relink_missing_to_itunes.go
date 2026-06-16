@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/relink_missing_to_itunes.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: e0f6a4d5-7b8c-9d0e-1f2a-3b4c5d6e7f80
-// last-edited: 2026-05-05
+// last-edited: 2026-06-16
 
 package jobs
 
@@ -44,7 +44,7 @@ func (j *relinkMissingToITunesJob) DefaultParams() any {
 func (j *relinkMissingToITunesJob) CanResume() bool { return false }
 
 func (j *relinkMissingToITunesJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, dryRun bool) error {
-	iTunesRoot := config.AppConfig.ITunesMediaRoot
+	iTunesRoot := config.AppConfig.ITunes.MediaRoot
 	organizerRoot := config.AppConfig.RootDir
 
 	if iTunesRoot == "" {

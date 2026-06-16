@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_mock_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
-// last-edited: 2026-05-01
+// last-edited: 2026-06-16
 
 package metafetch
 
@@ -1114,7 +1114,7 @@ func TestBuildSearchContext(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestComputeITunesPath(t *testing.T) {
-	// ComputeITunesPath reads from config.AppConfig.ITunesPathMappings.
+	// ComputeITunesPath reads from config.AppConfig.ITunes.PathMappings.
 	// With no mappings configured, it should return empty.
 	t.Run("no_mappings", func(t *testing.T) {
 		result := ComputeITunesPath("/some/path")

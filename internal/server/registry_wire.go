@@ -1,5 +1,5 @@
 // file: internal/server/registry_wire.go
-// version: 1.13.0
+// version: 1.14.0
 // last-edited: 2026-06-16
 
 package server
@@ -245,10 +245,10 @@ func init() {
 				Store: store,
 				Config: itunesservice.Config{
 					Enabled:             true,
-					LibraryReadPath:     cfg.ITunesLibraryReadPath,
-					LibraryWritePath:    cfg.ITunesLibraryWritePath,
-					AutoWriteBack:       cfg.ITunesAutoWriteBack,
-					ITLWriteBackEnabled: cfg.ITLWriteBackEnabled,
+					LibraryReadPath:     cfg.ITunes.LibraryReadPath,
+					LibraryWritePath:    cfg.ITunes.LibraryWritePath,
+					AutoWriteBack:       cfg.ITunes.AutoWriteBack,
+					ITLWriteBackEnabled: cfg.ITunes.WriteBackEnabled,
 				},
 				AudiobookRoot: cfg.RootDir,
 				ReportDir:     filepath.Join(cfg.RootDir, "reports"),

@@ -448,9 +448,9 @@ func TestInitConfigDefaults(t *testing.T) {
 	})
 
 	t.Run("iTunes defaults", func(t *testing.T) {
-		assert.True(t, AppConfig.ITunesSyncEnabled)
-		assert.Equal(t, 30, AppConfig.ITunesSyncInterval)
-		assert.False(t, AppConfig.ITunesAutoWriteBack)
+		assert.True(t, AppConfig.ITunes.SyncEnabled)
+		assert.Equal(t, 30, AppConfig.ITunes.SyncInterval)
+		assert.False(t, AppConfig.ITunes.AutoWriteBack)
 	})
 
 	t.Run("auto-update defaults", func(t *testing.T) {
@@ -509,14 +509,14 @@ func TestInitConfigITunesBackwardCompat(t *testing.T) {
 		viper.Reset()
 		viper.Set("itunes_library_itl_path", "/old/path.itl")
 		InitConfig()
-		assert.Equal(t, "/old/path.itl", AppConfig.ITunesLibraryWritePath)
+		assert.Equal(t, "/old/path.itl", AppConfig.ITunes.LibraryWritePath)
 	})
 
 	t.Run("old itunes_library_xml_path maps to read path", func(t *testing.T) {
 		viper.Reset()
 		viper.Set("itunes_library_xml_path", "/old/library.xml")
 		InitConfig()
-		assert.Equal(t, "/old/library.xml", AppConfig.ITunesLibraryReadPath)
+		assert.Equal(t, "/old/library.xml", AppConfig.ITunes.LibraryReadPath)
 	})
 
 	t.Run("new path takes precedence over old", func(t *testing.T) {
@@ -524,7 +524,7 @@ func TestInitConfigITunesBackwardCompat(t *testing.T) {
 		viper.Set("itunes_library_write_path", "/new/path.itl")
 		viper.Set("itunes_library_itl_path", "/old/path.itl")
 		InitConfig()
-		assert.Equal(t, "/new/path.itl", AppConfig.ITunesLibraryWritePath)
+		assert.Equal(t, "/new/path.itl", AppConfig.ITunes.LibraryWritePath)
 	})
 }
 
@@ -533,7 +533,7 @@ func TestInitConfigITLWriteBackAutoEnable(t *testing.T) {
 	viper.Set("itunes_library_write_path", "/some/path.itl")
 	viper.Set("itl_write_back_enabled", false)
 	InitConfig()
-	assert.True(t, AppConfig.ITLWriteBackEnabled, "should auto-enable when write path is set")
+	assert.True(t, AppConfig.ITunes.WriteBackEnabled, "should auto-enable when write path is set")
 }
 
 func TestInitConfigOpenLibraryDumpDir(t *testing.T) {
@@ -610,10 +610,10 @@ func TestApplySettingStringKeys(t *testing.T) {
 		{"log_level", "debug", func() string { return AppConfig.LogLevel }},
 		{"log_format", "json", func() string { return AppConfig.LogFormat }},
 		{"auto_update_channel", "beta", func() string { return AppConfig.AutoUpdateChannel }},
-		{"itunes_library_write_path", "/itl/path", func() string { return AppConfig.ITunesLibraryWritePath }},
-		{"itunes_library_itl_path", "/itl/path2", func() string { return AppConfig.ITunesLibraryWritePath }},
-		{"itunes_library_read_path", "/xml/path", func() string { return AppConfig.ITunesLibraryReadPath }},
-		{"itunes_library_xml_path", "/xml/path2", func() string { return AppConfig.ITunesLibraryReadPath }},
+		{"itunes_library_write_path", "/itl/path", func() string { return AppConfig.ITunes.LibraryWritePath }},
+		{"itunes_library_itl_path", "/itl/path2", func() string { return AppConfig.ITunes.LibraryWritePath }},
+		{"itunes_library_read_path", "/xml/path", func() string { return AppConfig.ITunes.LibraryReadPath }},
+		{"itunes_library_xml_path", "/xml/path2", func() string { return AppConfig.ITunes.LibraryReadPath }},
 		{"basic_auth_username", "admin", func() string { return AppConfig.BasicAuthUsername }},
 		{"basic_auth_password", "secret", func() string { return AppConfig.BasicAuthPassword }},
 	}
@@ -648,9 +648,9 @@ func TestApplySettingBoolKeys(t *testing.T) {
 		{"enable_json_logging", func() bool { return AppConfig.EnableJsonLogging }},
 		{"auto_update_enabled", func() bool { return AppConfig.AutoUpdateEnabled }},
 		{"purge_soft_deleted_delete_files", func() bool { return AppConfig.PurgeSoftDeletedDeleteFiles }},
-		{"itunes_sync_enabled", func() bool { return AppConfig.ITunesSyncEnabled }},
-		{"itl_write_back_enabled", func() bool { return AppConfig.ITLWriteBackEnabled }},
-		{"itunes_auto_write_back", func() bool { return AppConfig.ITunesAutoWriteBack }},
+		{"itunes_sync_enabled", func() bool { return AppConfig.ITunes.SyncEnabled }},
+		{"itl_write_back_enabled", func() bool { return AppConfig.ITunes.WriteBackEnabled }},
+		{"itunes_auto_write_back", func() bool { return AppConfig.ITunes.AutoWriteBack }},
 		{"maintenance_window_enabled", func() bool { return AppConfig.MaintenanceWindowEnabled }},
 		{"maintenance_window_dedup_refresh", func() bool { return AppConfig.MaintenanceWindowDedupRefresh }},
 		{"maintenance_window_series_prune", func() bool { return AppConfig.MaintenanceWindowSeriesPrune }},
@@ -722,7 +722,7 @@ func TestApplySettingIntKeys(t *testing.T) {
 		{"auto_update_window_start", "2", func() int { return AppConfig.AutoUpdateWindowStart }},
 		{"auto_update_window_end", "5", func() int { return AppConfig.AutoUpdateWindowEnd }},
 		{"purge_soft_deleted_after_days", "30", func() int { return AppConfig.PurgeSoftDeletedAfterDays }},
-		{"itunes_sync_interval", "60", func() int { return AppConfig.ITunesSyncInterval }},
+		{"itunes_sync_interval", "60", func() int { return AppConfig.ITunes.SyncInterval }},
 		{"maintenance_window_start", "3", func() int { return AppConfig.MaintenanceWindowStart }},
 		{"maintenance_window_end", "6", func() int { return AppConfig.MaintenanceWindowEnd }},
 		{"scheduled_dedup_refresh_interval", "24", func() int { return AppConfig.ScheduledDedupRefreshInterval }},
@@ -811,8 +811,8 @@ func TestApplySettingJSONKeys(t *testing.T) {
 		data, _ := json.Marshal(mappings)
 		err := applySetting("itunes_path_mappings", string(data), "json")
 		require.NoError(t, err)
-		require.Len(t, AppConfig.ITunesPathMappings, 1)
-		assert.Equal(t, "/itunes", AppConfig.ITunesPathMappings[0].From)
+		require.Len(t, AppConfig.ITunes.PathMappings, 1)
+		assert.Equal(t, "/itunes", AppConfig.ITunes.PathMappings[0].From)
 	})
 }
 

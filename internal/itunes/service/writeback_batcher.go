@@ -1,5 +1,5 @@
 // file: internal/itunes/service/writeback_batcher.go
-// version: 5.2.0
+// version: 5.3.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e90
 //
 // Combined write-back batcher: handles location updates, track additions,

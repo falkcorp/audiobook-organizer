@@ -1,5 +1,5 @@
 // file: internal/server/compute_itunes_path_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d3e4f5a6-b7c8-d9e0-f1a2-itunes-path01
 
 package server
@@ -17,10 +17,10 @@ import (
 // ---------------------------------------------------------------------------
 
 func TestComputeITunesPath_AudiobookOrganizerPath(t *testing.T) {
-	old := config.AppConfig.ITunesPathMappings
-	defer func() { config.AppConfig.ITunesPathMappings = old }()
+	old := config.AppConfig.ITunes.PathMappings
+	defer func() { config.AppConfig.ITunes.PathMappings = old }()
 
-	config.AppConfig.ITunesPathMappings = []config.ITunesPathMap{
+	config.AppConfig.ITunes.PathMappings = []config.ITunesPathMap{
 		{From: "W:/audiobook-organizer", To: "/mnt/bigdata/books/audiobook-organizer"},
 	}
 
@@ -31,10 +31,10 @@ func TestComputeITunesPath_AudiobookOrganizerPath(t *testing.T) {
 }
 
 func TestComputeITunesPath_ITunesMediaPath(t *testing.T) {
-	old := config.AppConfig.ITunesPathMappings
-	defer func() { config.AppConfig.ITunesPathMappings = old }()
+	old := config.AppConfig.ITunes.PathMappings
+	defer func() { config.AppConfig.ITunes.PathMappings = old }()
 
-	config.AppConfig.ITunesPathMappings = []config.ITunesPathMap{
+	config.AppConfig.ITunes.PathMappings = []config.ITunesPathMap{
 		{From: "W:/itunes/iTunes Media", To: "/mnt/bigdata/books/itunes/iTunes Media"},
 	}
 
@@ -45,10 +45,10 @@ func TestComputeITunesPath_ITunesMediaPath(t *testing.T) {
 }
 
 func TestComputeITunesPath_NoMatchingMapping(t *testing.T) {
-	old := config.AppConfig.ITunesPathMappings
-	defer func() { config.AppConfig.ITunesPathMappings = old }()
+	old := config.AppConfig.ITunes.PathMappings
+	defer func() { config.AppConfig.ITunes.PathMappings = old }()
 
-	config.AppConfig.ITunesPathMappings = []config.ITunesPathMap{
+	config.AppConfig.ITunes.PathMappings = []config.ITunesPathMap{
 		{From: "W:/audiobook-organizer", To: "/mnt/bigdata/books/audiobook-organizer"},
 	}
 
@@ -62,10 +62,10 @@ func TestComputeITunesPath_EmptyPath(t *testing.T) {
 }
 
 func TestComputeITunesPath_NoMappingsConfigured(t *testing.T) {
-	old := config.AppConfig.ITunesPathMappings
-	defer func() { config.AppConfig.ITunesPathMappings = old }()
+	old := config.AppConfig.ITunes.PathMappings
+	defer func() { config.AppConfig.ITunes.PathMappings = old }()
 
-	config.AppConfig.ITunesPathMappings = nil
+	config.AppConfig.ITunes.PathMappings = nil
 
 	result := metafetch.ComputeITunesPath("/mnt/bigdata/books/audiobook-organizer/Author/file.m4b")
 	assert.Equal(t, "", result, "no mappings should return empty string")
@@ -76,10 +76,10 @@ func TestComputeITunesPath_NoMappingsConfigured(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestComputeITunesPath_SpacesEncoded(t *testing.T) {
-	old := config.AppConfig.ITunesPathMappings
-	defer func() { config.AppConfig.ITunesPathMappings = old }()
+	old := config.AppConfig.ITunes.PathMappings
+	defer func() { config.AppConfig.ITunes.PathMappings = old }()
 
-	config.AppConfig.ITunesPathMappings = []config.ITunesPathMap{
+	config.AppConfig.ITunes.PathMappings = []config.ITunesPathMap{
 		{From: "W:/audiobook-organizer", To: "/mnt/bigdata/books/audiobook-organizer"},
 	}
 
@@ -93,10 +93,10 @@ func TestComputeITunesPath_SpacesEncoded(t *testing.T) {
 }
 
 func TestComputeITunesPath_SpecialCharsInTitle(t *testing.T) {
-	old := config.AppConfig.ITunesPathMappings
-	defer func() { config.AppConfig.ITunesPathMappings = old }()
+	old := config.AppConfig.ITunes.PathMappings
+	defer func() { config.AppConfig.ITunes.PathMappings = old }()
 
-	config.AppConfig.ITunesPathMappings = []config.ITunesPathMap{
+	config.AppConfig.ITunes.PathMappings = []config.ITunesPathMap{
 		{From: "W:/audiobook-organizer", To: "/mnt/bigdata/books/audiobook-organizer"},
 	}
 
@@ -137,10 +137,10 @@ func TestComputeITunesPath_SpecialCharsInTitle(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestComputeITunesPath_OrganizedVsITunes_Distinction(t *testing.T) {
-	old := config.AppConfig.ITunesPathMappings
-	defer func() { config.AppConfig.ITunesPathMappings = old }()
+	old := config.AppConfig.ITunes.PathMappings
+	defer func() { config.AppConfig.ITunes.PathMappings = old }()
 
-	config.AppConfig.ITunesPathMappings = []config.ITunesPathMap{
+	config.AppConfig.ITunes.PathMappings = []config.ITunesPathMap{
 		{From: "W:/audiobook-organizer", To: "/mnt/bigdata/books/audiobook-organizer"},
 		{From: "W:/itunes/iTunes Media", To: "/mnt/bigdata/books/itunes/iTunes Media"},
 	}
@@ -164,12 +164,12 @@ func TestComputeITunesPath_OrganizedVsITunes_Distinction(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestComputeITunesPath_FirstMappingWins(t *testing.T) {
-	old := config.AppConfig.ITunesPathMappings
-	defer func() { config.AppConfig.ITunesPathMappings = old }()
+	old := config.AppConfig.ITunes.PathMappings
+	defer func() { config.AppConfig.ITunes.PathMappings = old }()
 
 	// Both mappings could match a path starting with /mnt/bigdata/books/
 	// but the more specific one should be listed first
-	config.AppConfig.ITunesPathMappings = []config.ITunesPathMap{
+	config.AppConfig.ITunes.PathMappings = []config.ITunesPathMap{
 		{From: "W:/audiobook-organizer", To: "/mnt/bigdata/books/audiobook-organizer"},
 		{From: "W:/books", To: "/mnt/bigdata/books"},
 	}
@@ -184,11 +184,11 @@ func TestComputeITunesPath_FirstMappingWins(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestComputeITunesPath_TrailingSlashConsistency(t *testing.T) {
-	old := config.AppConfig.ITunesPathMappings
-	defer func() { config.AppConfig.ITunesPathMappings = old }()
+	old := config.AppConfig.ITunes.PathMappings
+	defer func() { config.AppConfig.ITunes.PathMappings = old }()
 
 	// No trailing slash in mapping
-	config.AppConfig.ITunesPathMappings = []config.ITunesPathMap{
+	config.AppConfig.ITunes.PathMappings = []config.ITunesPathMap{
 		{From: "W:/audiobook-organizer", To: "/mnt/bigdata/books/audiobook-organizer"},
 	}
 

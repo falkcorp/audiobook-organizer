@@ -1,7 +1,7 @@
 // file: internal/audiobooks/helpers.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234560010
-// last-edited: 2026-05-05
+// last-edited: 2026-06-16
 //
 // Private utilities needed by the audiobooks service package. These mirror
 // equivalent helpers from internal/server/ but are standalone so that the
@@ -256,15 +256,15 @@ func isProtectedPath(store importPathLister, filePath string) bool {
 		}
 	}
 
-	if config.AppConfig.ITunesLibraryReadPath != "" {
-		itunesDir := filepath.Dir(config.AppConfig.ITunesLibraryReadPath)
+	if config.AppConfig.ITunes.LibraryReadPath != "" {
+		itunesDir := filepath.Dir(config.AppConfig.ITunes.LibraryReadPath)
 		itunesAbs, _ := filepath.Abs(itunesDir)
 		if strings.HasPrefix(absPath, itunesAbs+"/") || absPath == itunesAbs {
 			return true
 		}
 	}
-	if config.AppConfig.ITunesLibraryWritePath != "" {
-		itunesDir := filepath.Dir(config.AppConfig.ITunesLibraryWritePath)
+	if config.AppConfig.ITunes.LibraryWritePath != "" {
+		itunesDir := filepath.Dir(config.AppConfig.ITunes.LibraryWritePath)
 		itunesAbs, _ := filepath.Abs(itunesDir)
 		if strings.HasPrefix(absPath, itunesAbs+"/") || absPath == itunesAbs {
 			return true

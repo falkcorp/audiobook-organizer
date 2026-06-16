@@ -1,5 +1,5 @@
 // file: internal/itunes/backfill.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b8c9d0e1-f2a3-b4c5-d6e7-f8a9b0c1d2e3
 
 package itunes
@@ -120,7 +120,7 @@ func BackfillITunesTrackPIDs(ctx context.Context, store ExternalIDBackfillStore)
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	xmlPath := config.AppConfig.ITunesLibraryReadPath
+	xmlPath := config.AppConfig.ITunes.LibraryReadPath
 	if xmlPath == "" {
 		slog.Info("BackfillITunesTrackPIDs no iTunes XML path configured, skipping")
 		return 0, nil

@@ -1,5 +1,5 @@
 // file: internal/config/config_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-06-16
 
@@ -548,4 +548,24 @@ func TestInitConfig_MetadataScoringFromEnv(t *testing.T) {
 	snap := Snapshot()
 	assert.True(t, snap.MetadataScoring.EmbeddingEnabled)
 	assert.Equal(t, 10, snap.MetadataScoring.LLMRerankTopK)
+}
+
+func TestInitConfig_ITunesDefaults(t *testing.T) {
+	viper.Reset()
+	InitConfig()
+	snap := Snapshot()
+	assert.True(t, snap.ITunes.SyncEnabled)
+	assert.Equal(t, 30, snap.ITunes.SyncInterval)
+	assert.False(t, snap.ITunes.WriteBackEnabled)
+	assert.False(t, snap.ITunes.AutoWriteBack)
+}
+
+func TestInitConfig_ITunesFromEnv(t *testing.T) {
+	t.Setenv("ITUNES_SYNC_INTERVAL", "60")
+	t.Setenv("ITUNES_AUTO_WRITE_BACK", "true")
+	viper.Reset()
+	InitConfig()
+	snap := Snapshot()
+	assert.Equal(t, 60, snap.ITunes.SyncInterval)
+	assert.True(t, snap.ITunes.AutoWriteBack)
 }

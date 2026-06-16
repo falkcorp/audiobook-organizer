@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_files.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 969b284a-5657-442b-beba-275e325e000b
-// last-edited: 2026-05-01
+// last-edited: 2026-06-16
 
 package metafetch
 
@@ -100,7 +100,7 @@ func (mfs *Service) ApplyMetadataFileIO(id string) {
 // using the configured path mappings (m.To = Linux prefix, m.From = Windows prefix).
 // Returns an empty string if no mapping matches.
 func ComputeITunesPath(localPath string) string {
-	for _, m := range config.AppConfig.ITunesPathMappings {
+	for _, m := range config.AppConfig.ITunes.PathMappings {
 		if m.To != "" && m.From != "" && strings.HasPrefix(localPath, m.To) {
 			remainder := localPath[len(m.To):]
 			windowsPath := m.From + remainder

@@ -1,5 +1,5 @@
 // file: internal/server/diagnostics_ops.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7d8e9f0a-1b2c-3d4e-5f6a-7b8c9d0e1f2a
 
 // diagnostics_ops registers the diagnostics export OperationDef (v2 UOS).
@@ -48,7 +48,7 @@ func (s *Server) RegisterDiagnosticsExportOp(reg *opsregistry.Registry) error {
 			store := s.Store()
 			ds := s.diagnosticsService
 			if ds == nil {
-				ds = diagnostics.NewService(store, nil, config.AppConfig.ITunesLibraryReadPath)
+				ds = diagnostics.NewService(store, nil, config.AppConfig.ITunes.LibraryReadPath)
 			}
 			prog := sdk.NewProgress(reporter, 0)
 			prog.Start("Generating export data")

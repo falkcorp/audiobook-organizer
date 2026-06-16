@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/repair_missing_files.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: f1a7b5e6-8c9d-0e1f-2a3b-4c5d6e7f8a90
-// last-edited: 2026-05-01
+// last-edited: 2026-06-16
 
 package jobs
 
@@ -116,7 +116,7 @@ func (j *repairMissingFilesJob) Run(ctx context.Context, store database.Store, r
 
 	// Parse iTunes XML for PID lookups.
 	pidToLocation := make(map[string]string)
-	if xmlPath := config.AppConfig.ITunesLibraryReadPath; xmlPath != "" {
+	if xmlPath := config.AppConfig.ITunes.LibraryReadPath; xmlPath != "" {
 		if lib, parseErr := itunes.ParseLibrary(xmlPath); parseErr != nil {
 			slog.Warn("repair-missing-files iTunes XML parse error", "opID", opID, "parseErr", parseErr)
 		} else {
@@ -129,8 +129,8 @@ func (j *repairMissingFilesJob) Run(ctx context.Context, store database.Store, r
 		}
 	}
 
-	itunesOpts := itunes.ImportOptions{PathMappings: make([]itunes.PathMapping, len(config.AppConfig.ITunesPathMappings))}
-	for i, m := range config.AppConfig.ITunesPathMappings {
+	itunesOpts := itunes.ImportOptions{PathMappings: make([]itunes.PathMapping, len(config.AppConfig.ITunes.PathMappings))}
+	for i, m := range config.AppConfig.ITunes.PathMappings {
 		itunesOpts.PathMappings[i] = itunes.PathMapping{From: m.From, To: m.To}
 	}
 
@@ -216,7 +216,7 @@ func (j *repairMissingFilesJob) Run(ctx context.Context, store database.Store, r
 
 // rmfr_searchRoots builds the ordered list of roots to search from config.
 func rmfr_searchRoots() []string {
-	roots := []string{config.AppConfig.ITunesMediaRoot, config.AppConfig.RootDir}
+	roots := []string{config.AppConfig.ITunes.MediaRoot, config.AppConfig.RootDir}
 	var out []string
 	for _, r := range roots {
 		if r != "" {
