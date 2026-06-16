@@ -686,7 +686,7 @@ func (h *Handler) UpdateTaskConfig(c *gin.Context) {
 			config.AppConfig.ScheduledDedupRefreshOnStartup = *req.RunOnStartup
 		}
 		if req.RunInMaintenanceWindow != nil {
-			config.AppConfig.MaintenanceWindowDedupRefresh = *req.RunInMaintenanceWindow
+			config.AppConfig.Maintenance.DedupRefresh = *req.RunInMaintenanceWindow
 		}
 	case "author_split_scan":
 		if req.Enabled != nil {
@@ -699,7 +699,7 @@ func (h *Handler) UpdateTaskConfig(c *gin.Context) {
 			config.AppConfig.ScheduledAuthorSplitOnStartup = *req.RunOnStartup
 		}
 		if req.RunInMaintenanceWindow != nil {
-			config.AppConfig.MaintenanceWindowAuthorSplit = *req.RunInMaintenanceWindow
+			config.AppConfig.Maintenance.AuthorSplit = *req.RunInMaintenanceWindow
 		}
 	case "db_optimize":
 		if req.Enabled != nil {
@@ -712,7 +712,7 @@ func (h *Handler) UpdateTaskConfig(c *gin.Context) {
 			config.AppConfig.ScheduledDbOptimizeOnStartup = *req.RunOnStartup
 		}
 		if req.RunInMaintenanceWindow != nil {
-			config.AppConfig.MaintenanceWindowDbOptimize = *req.RunInMaintenanceWindow
+			config.AppConfig.Maintenance.DbOptimize = *req.RunInMaintenanceWindow
 		}
 	case "metadata_refresh":
 		if req.Enabled != nil {
@@ -725,7 +725,7 @@ func (h *Handler) UpdateTaskConfig(c *gin.Context) {
 			config.AppConfig.ScheduledMetadataRefreshOnStartup = *req.RunOnStartup
 		}
 		if req.RunInMaintenanceWindow != nil {
-			config.AppConfig.MaintenanceWindowMetadataRefresh = *req.RunInMaintenanceWindow
+			config.AppConfig.Maintenance.MetadataRefresh = *req.RunInMaintenanceWindow
 		}
 	case "itunes_sync":
 		if req.Enabled != nil {
@@ -745,37 +745,37 @@ func (h *Handler) UpdateTaskConfig(c *gin.Context) {
 			config.AppConfig.ScheduledSeriesPruneOnStartup = *req.RunOnStartup
 		}
 		if req.RunInMaintenanceWindow != nil {
-			config.AppConfig.MaintenanceWindowSeriesPrune = *req.RunInMaintenanceWindow
+			config.AppConfig.Maintenance.SeriesPrune = *req.RunInMaintenanceWindow
 		}
 	case "purge_deleted":
 		if req.IntervalMinutes != nil {
 			// purge interval is fixed at 6h, but we can update retention days
 		}
 		if req.RunInMaintenanceWindow != nil {
-			config.AppConfig.MaintenanceWindowPurgeDeleted = *req.RunInMaintenanceWindow
+			config.AppConfig.Maintenance.PurgeDeleted = *req.RunInMaintenanceWindow
 		}
 	case "tombstone_cleanup":
 		if req.RunInMaintenanceWindow != nil {
-			config.AppConfig.MaintenanceWindowTombstoneCleanup = *req.RunInMaintenanceWindow
+			config.AppConfig.Maintenance.TombstoneCleanup = *req.RunInMaintenanceWindow
 		}
 	case "reconcile_scan":
 		if req.Enabled != nil {
 			config.AppConfig.ScheduledReconcileEnabled = *req.Enabled
 		}
 		if req.RunInMaintenanceWindow != nil {
-			config.AppConfig.MaintenanceWindowReconcile = *req.RunInMaintenanceWindow
+			config.AppConfig.Maintenance.Reconcile = *req.RunInMaintenanceWindow
 		}
 	case "purge_old_logs":
 		if req.RunInMaintenanceWindow != nil {
-			config.AppConfig.MaintenanceWindowPurgeOldLogs = *req.RunInMaintenanceWindow
+			config.AppConfig.Maintenance.PurgeOldLogs = *req.RunInMaintenanceWindow
 		}
 	case "library_scan":
 		if req.RunInMaintenanceWindow != nil {
-			config.AppConfig.MaintenanceWindowLibraryScan = *req.RunInMaintenanceWindow
+			config.AppConfig.Maintenance.LibraryScan = *req.RunInMaintenanceWindow
 		}
 	case "library_organize":
 		if req.RunInMaintenanceWindow != nil {
-			config.AppConfig.MaintenanceWindowLibraryOrganize = *req.RunInMaintenanceWindow
+			config.AppConfig.Maintenance.LibraryOrganize = *req.RunInMaintenanceWindow
 		}
 	default:
 		httputil.RespondWithBadRequest(c, fmt.Sprintf("task %q config is not configurable", name))
@@ -820,11 +820,11 @@ func (h *Handler) GetMaintenanceWindowStatus(c *gin.Context) {
 	}
 	cfg := config.AppConfig
 	httputil.RespondWithOK(c, gin.H{
-		"enabled":           cfg.MaintenanceWindowEnabled,
-		"window_start":      cfg.MaintenanceWindowStart,
-		"window_end":        cfg.MaintenanceWindowEnd,
+		"enabled":           cfg.Maintenance.Enabled,
+		"window_start":      cfg.Maintenance.WindowStart,
+		"window_end":        cfg.Maintenance.WindowEnd,
 		"last_run_date":     sched.GetLastMaintenanceRunDate(),
-		"next_run_estimate": calculateNextWindowRun(cfg.MaintenanceWindowStart),
+		"next_run_estimate": calculateNextWindowRun(cfg.Maintenance.WindowStart),
 		"currently_running": sched.IsMaintenanceRunning(),
 	})
 }
@@ -852,9 +852,9 @@ func (h *Handler) UpdateMaintenanceWindowConfig(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "window_start and window_end must be 0-23")
 		return
 	}
-	config.AppConfig.MaintenanceWindowEnabled = req.Enabled
-	config.AppConfig.MaintenanceWindowStart = req.WindowStart
-	config.AppConfig.MaintenanceWindowEnd = req.WindowEnd
+	config.AppConfig.Maintenance.Enabled = req.Enabled
+	config.AppConfig.Maintenance.WindowStart = req.WindowStart
+	config.AppConfig.Maintenance.WindowEnd = req.WindowEnd
 	if h.store != nil {
 		if err := config.SaveConfigToDatabase(h.store); err != nil {
 			httputil.InternalError(c, "failed to save maintenance window config", err)

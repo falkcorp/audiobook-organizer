@@ -1,5 +1,5 @@
 // file: internal/config/persistence.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
 // last-edited: 2026-06-16
 
@@ -354,6 +354,76 @@ func migrateITunesBlob(blob string) (string, bool) {
 	return string(migrated), true
 }
 
+// migrateMaintenanceBlob rewrites flat maintenance_window_* fields to the nested
+// MaintenanceConfig format. Safe to call repeatedly.
+func migrateMaintenanceBlob(blob string) (string, bool) {
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(blob), &raw); err != nil {
+		return blob, false
+	}
+	if _, isFlat := raw["maintenance_window_enabled"]; !isFlat {
+		return blob, false
+	}
+	type flatShape struct {
+		Enabled              bool `json:"maintenance_window_enabled"`
+		WindowStart          int  `json:"maintenance_window_start"`
+		WindowEnd            int  `json:"maintenance_window_end"`
+		DedupRefresh         bool `json:"maintenance_window_dedup_refresh"`
+		SeriesPrune          bool `json:"maintenance_window_series_prune"`
+		AuthorSplit          bool `json:"maintenance_window_author_split"`
+		TombstoneCleanup     bool `json:"maintenance_window_tombstone_cleanup"`
+		Reconcile            bool `json:"maintenance_window_reconcile"`
+		PurgeDeleted         bool `json:"maintenance_window_purge_deleted"`
+		PurgeOldLogs         bool `json:"maintenance_window_purge_old_logs"`
+		DbOptimize           bool `json:"maintenance_window_db_optimize"`
+		LibraryScan          bool `json:"maintenance_window_library_scan"`
+		LibraryOrganize      bool `json:"maintenance_window_library_organize"`
+		MetadataRefresh      bool `json:"maintenance_window_metadata_refresh"`
+		LibrarySizeRefresh   bool `json:"maintenance_window_library_size_refresh"`
+		AcoustIDOnlineLookup bool `json:"maintenance_window_acoustid_online_lookup"`
+		AcoustIDNightlyLimit int  `json:"acoustid_online_lookup_nightly_limit"`
+	}
+	var old flatShape
+	json.Unmarshal([]byte(blob), &old) //nolint:errcheck — already parsed above
+	raw["maintenance"] = map[string]any{
+		"enabled":                old.Enabled,
+		"window_start":           old.WindowStart,
+		"window_end":             old.WindowEnd,
+		"dedup_refresh":          old.DedupRefresh,
+		"series_prune":           old.SeriesPrune,
+		"author_split":           old.AuthorSplit,
+		"tombstone_cleanup":      old.TombstoneCleanup,
+		"reconcile":              old.Reconcile,
+		"purge_deleted":          old.PurgeDeleted,
+		"purge_old_logs":         old.PurgeOldLogs,
+		"db_optimize":            old.DbOptimize,
+		"library_scan":           old.LibraryScan,
+		"library_organize":       old.LibraryOrganize,
+		"metadata_refresh":       old.MetadataRefresh,
+		"library_size_refresh":   old.LibrarySizeRefresh,
+		"acoustid_online_lookup": old.AcoustIDOnlineLookup,
+		"acoustid_nightly_limit": old.AcoustIDNightlyLimit,
+	}
+	// delete all flat keys
+	for _, k := range []string{
+		"maintenance_window_enabled", "maintenance_window_start", "maintenance_window_end",
+		"maintenance_window_dedup_refresh", "maintenance_window_series_prune",
+		"maintenance_window_author_split", "maintenance_window_tombstone_cleanup",
+		"maintenance_window_reconcile", "maintenance_window_purge_deleted",
+		"maintenance_window_purge_old_logs", "maintenance_window_db_optimize",
+		"maintenance_window_library_scan", "maintenance_window_library_organize",
+		"maintenance_window_metadata_refresh", "maintenance_window_library_size_refresh",
+		"maintenance_window_acoustid_online_lookup", "acoustid_online_lookup_nightly_limit",
+	} {
+		delete(raw, k)
+	}
+	migrated, err := json.Marshal(raw)
+	if err != nil {
+		return blob, false
+	}
+	return string(migrated), true
+}
+
 // saveRawBlob writes a pre-marshaled JSON string directly as the config blob.
 // Used only by startup migration to persist migrated blobs without re-marshaling.
 func saveRawBlob(store database.SettingsStore, rawJSON string) error {
@@ -432,6 +502,15 @@ func LoadConfigFromDatabase(store database.SettingsStore) error {
 			blobStr = migrated
 			if saveErr := saveRawBlob(store, migrated); saveErr != nil {
 				slog.Warn("config: failed to persist migrated iTunes blob", "err", saveErr)
+			}
+		}
+
+		// Migrate flat maintenance_window_* keys → nested MaintenanceConfig format (idempotent).
+		if migrated, changed := migrateMaintenanceBlob(blobStr); changed {
+			slog.Info("config: migrated maintenance fields to nested format")
+			blobStr = migrated
+			if saveErr := saveRawBlob(store, migrated); saveErr != nil {
+				slog.Warn("config: failed to persist migrated maintenance blob", "err", saveErr)
 			}
 		}
 
@@ -553,18 +632,18 @@ func MigrateMaintenanceWindow(store database.SettingsStore) {
 	var logStart, logEnd int
 	Mutate(func(c *Config) {
 		// Migrate auto-update window start/end if maintenance window not yet configured
-		if c.MaintenanceWindowStart == 0 && c.AutoUpdateWindowStart > 0 {
-			c.MaintenanceWindowStart = c.AutoUpdateWindowStart
+		if c.Maintenance.WindowStart == 0 && c.AutoUpdateWindowStart > 0 {
+			c.Maintenance.WindowStart = c.AutoUpdateWindowStart
 		}
-		if c.MaintenanceWindowEnd == 0 && c.AutoUpdateWindowEnd > 0 {
-			c.MaintenanceWindowEnd = c.AutoUpdateWindowEnd
+		if c.Maintenance.WindowEnd == 0 && c.AutoUpdateWindowEnd > 0 {
+			c.Maintenance.WindowEnd = c.AutoUpdateWindowEnd
 		}
 		// Ensure sensible defaults
-		if c.MaintenanceWindowStart == 0 && c.MaintenanceWindowEnd == 0 {
-			c.MaintenanceWindowStart = 1
-			c.MaintenanceWindowEnd = 4
+		if c.Maintenance.WindowStart == 0 && c.Maintenance.WindowEnd == 0 {
+			c.Maintenance.WindowStart = 1
+			c.Maintenance.WindowEnd = 4
 		}
-		logStart, logEnd = c.MaintenanceWindowStart, c.MaintenanceWindowEnd
+		logStart, logEnd = c.Maintenance.WindowStart, c.Maintenance.WindowEnd
 	})
 
 	_ = store.SetSetting("maintenance_window_migrated", "true", "bool", false)
@@ -830,59 +909,71 @@ func applySetting(key, value, typ string) error {
 		// Maintenance window
 		case "maintenance_window_enabled":
 			if b, err := strconv.ParseBool(value); err == nil {
-				c.MaintenanceWindowEnabled = b
+				c.Maintenance.Enabled = b
 			}
 		case "maintenance_window_start":
 			if i, err := strconv.Atoi(value); err == nil {
-				c.MaintenanceWindowStart = i
+				c.Maintenance.WindowStart = i
 			}
 		case "maintenance_window_end":
 			if i, err := strconv.Atoi(value); err == nil {
-				c.MaintenanceWindowEnd = i
+				c.Maintenance.WindowEnd = i
 			}
 		case "maintenance_window_dedup_refresh":
 			if b, err := strconv.ParseBool(value); err == nil {
-				c.MaintenanceWindowDedupRefresh = b
+				c.Maintenance.DedupRefresh = b
 			}
 		case "maintenance_window_series_prune":
 			if b, err := strconv.ParseBool(value); err == nil {
-				c.MaintenanceWindowSeriesPrune = b
+				c.Maintenance.SeriesPrune = b
 			}
 		case "maintenance_window_author_split":
 			if b, err := strconv.ParseBool(value); err == nil {
-				c.MaintenanceWindowAuthorSplit = b
+				c.Maintenance.AuthorSplit = b
 			}
 		case "maintenance_window_tombstone_cleanup":
 			if b, err := strconv.ParseBool(value); err == nil {
-				c.MaintenanceWindowTombstoneCleanup = b
+				c.Maintenance.TombstoneCleanup = b
 			}
 		case "maintenance_window_reconcile":
 			if b, err := strconv.ParseBool(value); err == nil {
-				c.MaintenanceWindowReconcile = b
+				c.Maintenance.Reconcile = b
 			}
 		case "maintenance_window_purge_deleted":
 			if b, err := strconv.ParseBool(value); err == nil {
-				c.MaintenanceWindowPurgeDeleted = b
+				c.Maintenance.PurgeDeleted = b
 			}
 		case "maintenance_window_purge_old_logs":
 			if b, err := strconv.ParseBool(value); err == nil {
-				c.MaintenanceWindowPurgeOldLogs = b
+				c.Maintenance.PurgeOldLogs = b
 			}
 		case "maintenance_window_db_optimize":
 			if b, err := strconv.ParseBool(value); err == nil {
-				c.MaintenanceWindowDbOptimize = b
+				c.Maintenance.DbOptimize = b
 			}
 		case "maintenance_window_library_scan":
 			if b, err := strconv.ParseBool(value); err == nil {
-				c.MaintenanceWindowLibraryScan = b
+				c.Maintenance.LibraryScan = b
 			}
 		case "maintenance_window_library_organize":
 			if b, err := strconv.ParseBool(value); err == nil {
-				c.MaintenanceWindowLibraryOrganize = b
+				c.Maintenance.LibraryOrganize = b
 			}
 		case "maintenance_window_metadata_refresh":
 			if b, err := strconv.ParseBool(value); err == nil {
-				c.MaintenanceWindowMetadataRefresh = b
+				c.Maintenance.MetadataRefresh = b
+			}
+		case "maintenance_window_library_size_refresh":
+			if b, err := strconv.ParseBool(value); err == nil {
+				c.Maintenance.LibrarySizeRefresh = b
+			}
+		case "maintenance_window_acoustid_online_lookup":
+			if b, err := strconv.ParseBool(value); err == nil {
+				c.Maintenance.AcoustIDOnlineLookup = b
+			}
+		case "acoustid_online_lookup_nightly_limit":
+			if i, err := strconv.Atoi(value); err == nil {
+				c.Maintenance.AcoustIDNightlyLimit = i
 			}
 
 		// Scheduled maintenance tasks

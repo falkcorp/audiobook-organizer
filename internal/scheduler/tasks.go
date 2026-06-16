@@ -1,7 +1,7 @@
 // file: internal/scheduler/tasks.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 9b4c7e21-a5f3-4d08-b2e6-3c8d1f7a0e54
-// last-edited: 2026-05-11
+// last-edited: 2026-06-16
 
 // Package scheduler — task registrations.
 // All 22 registered tasks are defined here. Each task's TriggerFn and
@@ -75,7 +75,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 		IsEnabled:              func() bool { return config.AppConfig.ScanOnStartup },
 		GetInterval:            func() time.Duration { return 0 },
 		RunOnStart:             func() bool { return config.AppConfig.ScanOnStartup },
-		RunInMaintenanceWindow: func() bool { return config.AppConfig.MaintenanceWindowLibraryScan },
+		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.LibraryScan },
 	})
 
 	ts.registerTask(TaskDefinition{
@@ -100,7 +100,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 		IsEnabled:              func() bool { return true },
 		GetInterval:            func() time.Duration { return 0 },
 		RunOnStart:             func() bool { return false },
-		RunInMaintenanceWindow: func() bool { return config.AppConfig.MaintenanceWindowLibraryOrganize },
+		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.LibraryOrganize },
 	})
 
 	ts.registerTask(TaskDefinition{
@@ -125,7 +125,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 		IsEnabled:              func() bool { return true },
 		GetInterval:            func() time.Duration { return 0 },
 		RunOnStart:             func() bool { return false },
-		RunInMaintenanceWindow: func() bool { return config.AppConfig.MaintenanceWindowLibrarySizeRefresh },
+		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.LibrarySizeRefresh },
 	})
 
 	ts.registerTask(TaskDefinition{
@@ -188,7 +188,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 			return time.Duration(mins) * time.Minute
 		},
 		RunOnStart:             func() bool { return config.AppConfig.ScheduledDedupRefreshOnStartup },
-		RunInMaintenanceWindow: func() bool { return config.AppConfig.MaintenanceWindowDedupRefresh },
+		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.DedupRefresh },
 	})
 
 	ts.registerTask(TaskDefinition{
@@ -245,7 +245,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 			return time.Duration(mins) * time.Minute
 		},
 		RunOnStart:             func() bool { return config.AppConfig.ScheduledSeriesPruneOnStartup },
-		RunInMaintenanceWindow: func() bool { return config.AppConfig.MaintenanceWindowSeriesPrune },
+		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.SeriesPrune },
 	})
 
 	ts.registerTask(TaskDefinition{
@@ -302,7 +302,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 		// picks it up periodically; the 6h interval keeps it from going
 		// completely silent.
 		RunOnStart:             func() bool { return false },
-		RunInMaintenanceWindow: func() bool { return config.AppConfig.MaintenanceWindowMetadataRefresh },
+		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.MetadataRefresh },
 	})
 
 	// iTunes position sync is now registered via UOS plugin (UOS-10)
@@ -405,7 +405,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 		IsEnabled:              func() bool { return ts.deps.HasMetadataFetchSvc() },
 		GetInterval:            func() time.Duration { return 0 },
 		RunOnStart:             func() bool { return false },
-		RunInMaintenanceWindow: func() bool { return config.AppConfig.MaintenanceWindowMetadataRefresh },
+		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.MetadataRefresh },
 	})
 
 	ts.registerTask(TaskDefinition{
@@ -436,7 +436,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 			return time.Duration(mins) * time.Minute
 		},
 		RunOnStart:             func() bool { return config.AppConfig.ScheduledAuthorSplitOnStartup },
-		RunInMaintenanceWindow: func() bool { return config.AppConfig.MaintenanceWindowAuthorSplit },
+		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.AuthorSplit },
 	})
 
 	ts.registerTask(TaskDefinition{
@@ -467,7 +467,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 			return time.Duration(mins) * time.Minute
 		},
 		RunOnStart:             func() bool { return config.AppConfig.ScheduledDbOptimizeOnStartup },
-		RunInMaintenanceWindow: func() bool { return config.AppConfig.MaintenanceWindowDbOptimize },
+		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.DbOptimize },
 	})
 
 	// Nightly AcoustID online lookup. Off unless the user explicitly
@@ -489,7 +489,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 				return nil, fmt.Errorf("failed to create operation: %w", err)
 			}
 			params := map[string]any{
-				"limit": config.AppConfig.AcoustIDOnlineLookupNightlyLimit,
+				"limit": config.AppConfig.Maintenance.AcoustIDNightlyLimit,
 				"force": false,
 			}
 			if _, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "acoustid.lookup-online", params); enqErr != nil {
@@ -497,10 +497,10 @@ func (ts *TaskScheduler) registerAllTasks() {
 			}
 			return op, nil
 		},
-		IsEnabled:              func() bool { return config.AppConfig.MaintenanceWindowAcoustIDOnlineLookup },
+		IsEnabled:              func() bool { return config.AppConfig.Maintenance.AcoustIDOnlineLookup },
 		GetInterval:            func() time.Duration { return 0 }, // run only inside the maintenance window
 		RunOnStart:             func() bool { return false },
-		RunInMaintenanceWindow: func() bool { return config.AppConfig.MaintenanceWindowAcoustIDOnlineLookup },
+		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.AcoustIDOnlineLookup },
 	})
 
 	ts.registerTask(TaskDefinition{
@@ -522,10 +522,10 @@ func (ts *TaskScheduler) registerAllTasks() {
 			}
 			return op, nil
 		},
-		IsEnabled:              func() bool { return config.AppConfig.MaintenanceWindowDbOptimize },
+		IsEnabled:              func() bool { return config.AppConfig.Maintenance.DbOptimize },
 		GetInterval:            func() time.Duration { return 0 },
 		RunOnStart:             func() bool { return false },
-		RunInMaintenanceWindow: func() bool { return config.AppConfig.MaintenanceWindowDbOptimize },
+		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.DbOptimize },
 	})
 
 	ts.registerTask(TaskDefinition{
@@ -556,7 +556,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 			return 0
 		},
 		RunOnStart:             func() bool { return config.AppConfig.PurgeSoftDeletedAfterDays > 0 },
-		RunInMaintenanceWindow: func() bool { return config.AppConfig.MaintenanceWindowPurgeDeleted },
+		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.PurgeDeleted },
 	})
 
 	ts.registerTask(TaskDefinition{
@@ -581,7 +581,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 		IsEnabled:              func() bool { return true },
 		GetInterval:            func() time.Duration { return 24 * time.Hour },
 		RunOnStart:             func() bool { return false },
-		RunInMaintenanceWindow: func() bool { return config.AppConfig.MaintenanceWindowTombstoneCleanup },
+		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.TombstoneCleanup },
 	})
 
 	ts.registerTask(TaskDefinition{
@@ -643,7 +643,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 			return time.Duration(mins) * time.Minute
 		},
 		RunOnStart:             func() bool { return config.AppConfig.ScheduledMetadataRefreshOnStartup },
-		RunInMaintenanceWindow: func() bool { return config.AppConfig.MaintenanceWindowMetadataRefresh },
+		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.MetadataRefresh },
 	})
 
 	// Reconcile — find broken file paths and match to untracked files on disk
@@ -675,7 +675,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 			return time.Duration(mins) * time.Minute
 		},
 		RunOnStart:             func() bool { return config.AppConfig.ScheduledReconcileOnStartup },
-		RunInMaintenanceWindow: func() bool { return config.AppConfig.MaintenanceWindowReconcile },
+		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.Reconcile },
 	})
 
 	// AI Dedup Batch — uses OpenAI Batch API at 50% cost
@@ -765,7 +765,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 		IsEnabled:              func() bool { return config.AppConfig.LogRetentionDays > 0 },
 		GetInterval:            func() time.Duration { return 7 * 24 * time.Hour },
 		RunOnStart:             func() bool { return false },
-		RunInMaintenanceWindow: func() bool { return config.AppConfig.MaintenanceWindowPurgeOldLogs },
+		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.PurgeOldLogs },
 	})
 
 	// Activity Log Cleanup — summarize old change entries and prune old debug entries
