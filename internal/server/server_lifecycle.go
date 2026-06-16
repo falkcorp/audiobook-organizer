@@ -1,13 +1,14 @@
 // file: internal/server/server_lifecycle.go
-// version: 1.33.0
+// version: 1.34.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-06-09
+// last-edited: 2026-06-15
 
 package server
 
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -218,6 +219,12 @@ func (s *Server) Start(cfg ServerConfig) error {
 		}
 	}
 
+	// Start embed queue debounce timer (activated after container start so
+	// Ollama daemon wiring is complete before any drain fires).
+	if s.embedQueue != nil {
+		s.embedQueue.Start(s.bgCtx)
+	}
+
 	// Pull the now-open Bleve index out of the searchindex service
 	// (opened above by Container.Start) and install the indexedStore
 	// decorator BEFORE any background goroutines or HTTP handlers
@@ -247,6 +254,28 @@ func (s *Server) Start(cfg ServerConfig) error {
 		// Route the /audiobooks?search= path through Bleve.
 		if s.audiobookService != nil {
 			s.audiobookService.SetSearchIndex(s.searchIndex)
+		}
+	}
+
+	// Load HNSW snapshot from disk (skips PebbleDB hydration walk when available).
+	// NOTE: the chromem hydration goroutine is already running (launched in
+	// dedup.Engine.PostInit inside NewServer). If Import succeeds it pre-populates
+	// the graph; the concurrent hydration Upserts are serialized by the store's
+	// mutex and result in duplicate-but-correct inserts. A future task should gate
+	// hydration on snapshot availability to avoid the double-work.
+	if s.hnswPersistDir != "" {
+		if raw, ok := serviceregistry.TryGet[database.VectorANNStore](s.container, "chromemstore"); ok && raw != nil {
+			if hnswStore, ok := raw.(*database.HNSWEmbeddingStore); ok {
+				if err := hnswStore.Import(s.hnswPersistDir); err != nil {
+					if !errors.Is(err, database.ErrNoHNSWSnapshot) {
+						slog.Warn("hnsw: import failed, falling back to hydration", "err", err)
+					} else {
+						slog.Info("hnsw: no snapshot found, will hydrate from PebbleDB")
+					}
+				} else {
+					slog.Info("hnsw: loaded from on-disk snapshot", "dir", s.hnswPersistDir)
+				}
+			}
 		}
 	}
 
@@ -813,6 +842,30 @@ func (s *Server) Start(cfg ServerConfig) error {
 	}
 	if len(fileWatchers) > 0 {
 		slog.Info("File watchers stopped ()", "fileWatchers_count", len(fileWatchers))
+	}
+
+	// Persist HNSW snapshot for fast next-boot startup (before embedding store
+	// closes so the graph data is still intact and consistent).
+	if s.hnswPersistDir != "" {
+		if raw, ok := serviceregistry.TryGet[database.VectorANNStore](s.container, "chromemstore"); ok && raw != nil {
+			if hnswStore, ok := raw.(*database.HNSWEmbeddingStore); ok {
+				if err := hnswStore.Export(s.hnswPersistDir); err != nil {
+					slog.Error("hnsw: export failed", "err", err)
+				} else {
+					slog.Info("hnsw: snapshot saved", "dir", s.hnswPersistDir)
+				}
+			}
+		}
+	}
+
+	// Stop embed queue and Ollama daemon.
+	if s.embedQueue != nil {
+		s.embedQueue.Stop()
+	}
+	if s.ollamaDaemon != nil {
+		if err := s.ollamaDaemon.StopWhenIdle(context.Background()); err != nil {
+			slog.Warn("ollama: stop failed", "err", err)
+		}
 	}
 
 	// Close embedding store
