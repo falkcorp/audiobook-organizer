@@ -1,6 +1,7 @@
 // file: internal/fingerprint/fpcalc.go
-// version: 3.2.1
+// version: 3.3.0
 // guid: b1c2d3e4-f5a6-7b8c-9d0e-1f2a3b4c5d6e
+// last-edited: 2026-06-15
 
 // Package fingerprint generates AcoustID-compatible acoustic fingerprints for
 // audio files. It supports two backends:
@@ -32,12 +33,35 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 )
 
 // ErrNotAvailable is returned when neither fpcalc nor ffmpeg is on PATH.
 var ErrNotAvailable = errors.New("fingerprint: neither fpcalc nor ffmpeg found — install chromaprint-tools or ffmpeg with chromaprint support")
+
+// resolvedFpcalcPath is set by server init via SetResolvedFpcalcPath when a
+// ToolRegistry provides the binary location. Empty = fall back to PATH lookup.
+var resolvedFpcalcPath string
+
+// SetResolvedFpcalcPath is called once during server startup with the path
+// returned by ToolRegistry.Resolve("fpcalc"). An empty string resets to PATH lookup.
+func SetResolvedFpcalcPath(path string) {
+	resolvedFpcalcPath = path
+}
+
+// lookupFpcalc returns the path to fpcalc, preferring the ToolRegistry-injected
+// path when set, then falling back to exec.LookPath. Returns ("", error) when
+// fpcalc is not found by either means.
+func lookupFpcalc() (string, error) {
+	if resolvedFpcalcPath != "" {
+		if _, err := os.Stat(resolvedFpcalcPath); err == nil {
+			return resolvedFpcalcPath, nil
+		}
+	}
+	return exec.LookPath("fpcalc")
+}
 
 // SegmentSeconds is the audio duration (in seconds) analysed per segment.
 const SegmentSeconds = 300 // 5 minutes
@@ -98,9 +122,10 @@ type Result struct {
 	Fingerprint string `json:"fingerprint"`
 }
 
-// Available reports whether any supported fingerprint backend is on PATH.
+// Available reports whether any supported fingerprint backend is on PATH (or
+// has been injected via SetResolvedFpcalcPath).
 func Available() bool {
-	if _, err := exec.LookPath("fpcalc"); err == nil {
+	if _, err := lookupFpcalc(); err == nil {
 		return true
 	}
 	_, err := exec.LookPath("ffmpeg")
@@ -188,10 +213,10 @@ func FileSegments(path string, durationHint int) (*Segments, error) {
 }
 
 // fingerprintAt generates a fingerprint string for SegmentSeconds of audio
-// starting at the given offset (in seconds). It prefers fpcalc, falling back
-// to ffmpeg -f chromaprint.
+// starting at the given offset (in seconds). It prefers fpcalc (resolved via
+// ToolRegistry injection or PATH), falling back to ffmpeg -f chromaprint.
 func fingerprintAt(path string, offset float64) (string, error) {
-	if fpcalc, err := exec.LookPath("fpcalc"); err == nil {
+	if fpcalc, err := lookupFpcalc(); err == nil {
 		return fpcalcAt(fpcalc, path, offset)
 	}
 	return ffmpegChromaprintAt(path, offset)

@@ -1,6 +1,7 @@
 // file: internal/fingerprint/wholefile.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c4d5e6f7-a8b9-4c0d-1e2f-3a4b5c6d7e8f
+// last-edited: 2026-06-15
 
 package fingerprint
 
@@ -53,7 +54,7 @@ func (w *WholeFile) FrameCount() int {
 // MinUsefulFingerprintFrames frames (e.g. <10s of audio, or a corrupt file
 // that decoded only its header).
 func FileWholeFingerprint(path string) (*WholeFile, error) {
-	fpcalc, err := exec.LookPath("fpcalc")
+	fpcalc, err := lookupFpcalc()
 	if err != nil {
 		return nil, ErrNotAvailable
 	}
