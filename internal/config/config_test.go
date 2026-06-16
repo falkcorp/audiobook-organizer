@@ -1,5 +1,5 @@
 // file: internal/config/config_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-06-16
 
@@ -568,4 +568,26 @@ func TestInitConfig_ITunesFromEnv(t *testing.T) {
 	snap := Snapshot()
 	assert.Equal(t, 60, snap.ITunes.SyncInterval)
 	assert.True(t, snap.ITunes.AutoWriteBack)
+}
+
+func TestInitConfig_MaintenanceDefaults(t *testing.T) {
+	viper.Reset()
+	InitConfig()
+	snap := Snapshot()
+	assert.True(t, snap.Maintenance.Enabled)
+	assert.Equal(t, 1, snap.Maintenance.WindowStart)
+	assert.Equal(t, 4, snap.Maintenance.WindowEnd)
+	assert.True(t, snap.Maintenance.DedupRefresh)
+	assert.False(t, snap.Maintenance.AcoustIDOnlineLookup)
+	assert.Equal(t, 5000, snap.Maintenance.AcoustIDNightlyLimit)
+}
+
+func TestInitConfig_MaintenanceFromEnv(t *testing.T) {
+	t.Setenv("MAINTENANCE_ENABLED", "true")
+	t.Setenv("MAINTENANCE_ACOUSTID_NIGHTLY_LIMIT", "100")
+	viper.Reset()
+	InitConfig()
+	snap := Snapshot()
+	assert.True(t, snap.Maintenance.Enabled)
+	assert.Equal(t, 100, snap.Maintenance.AcoustIDNightlyLimit)
 }

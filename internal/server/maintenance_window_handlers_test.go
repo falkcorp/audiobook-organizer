@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_window_handlers_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: d5e6f7a8-b9c0-1234-efab-456789012345
-// last-edited: 2026-05-11
+// last-edited: 2026-06-16
 
 package server
 
@@ -79,9 +79,9 @@ func TestGetMaintenanceWindowStatus(t *testing.T) {
 	orig := config.AppConfig
 	defer func() { config.AppConfig = orig }()
 
-	config.AppConfig.MaintenanceWindowEnabled = true
-	config.AppConfig.MaintenanceWindowStart = 2
-	config.AppConfig.MaintenanceWindowEnd = 5
+	config.AppConfig.Maintenance.Enabled = true
+	config.AppConfig.Maintenance.WindowStart = 2
+	config.AppConfig.Maintenance.WindowEnd = 5
 
 	srv := setupMaintenanceTestServer(t)
 
@@ -131,9 +131,9 @@ func TestUpdateMaintenanceWindowConfig_Valid(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code, "expected 200 OK: %s", w.Body.String())
 
 	// Verify config was updated.
-	assert.True(t, config.AppConfig.MaintenanceWindowEnabled)
-	assert.Equal(t, 3, config.AppConfig.MaintenanceWindowStart)
-	assert.Equal(t, 5, config.AppConfig.MaintenanceWindowEnd)
+	assert.True(t, config.AppConfig.Maintenance.Enabled)
+	assert.Equal(t, 3, config.AppConfig.Maintenance.WindowStart)
+	assert.Equal(t, 5, config.AppConfig.Maintenance.WindowEnd)
 
 	// GET status and confirm round-trip.
 	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/maintenance-window/status", nil)

@@ -1,5 +1,6 @@
 // file: internal/config/config_coverage_test.go
-// version: 1.0.0
+// version: 1.1.0
+// last-edited: 2026-06-16
 
 package config
 
@@ -257,11 +258,13 @@ func TestCoverage_MaintenanceWindowDefaults(t *testing.T) {
 	// MaintenanceWindow defaults should be sensible
 	// These are only set during migration, so test the struct
 	cfg := Config{
-		MaintenanceWindowEnabled: true,
-		MaintenanceWindowStart:   1,
-		MaintenanceWindowEnd:     4,
+		Maintenance: MaintenanceConfig{
+			Enabled:     true,
+			WindowStart: 1,
+			WindowEnd:   4,
+		},
 	}
-	if cfg.MaintenanceWindowStart != 1 || cfg.MaintenanceWindowEnd != 4 {
+	if cfg.Maintenance.WindowStart != 1 || cfg.Maintenance.WindowEnd != 4 {
 		t.Error("maintenance window fields not set correctly")
 	}
 }

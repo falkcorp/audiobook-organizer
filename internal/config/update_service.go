@@ -1,5 +1,5 @@
 // file: internal/config/update_service.go
-// version: 3.5.0
+// version: 3.6.0
 // guid: f6g7h8i9-j0k1-l2m3-n4o5-p6q7r8s9t0u1
 // last-edited: 2026-06-16
 
@@ -203,6 +203,50 @@ func remapITunesKeys(payload map[string]any) map[string]any {
 	return payload
 }
 
+// remapMaintenanceKeys translates legacy flat maintenance_window_* keys in a config
+// update payload to the nested MaintenanceConfig format. Merges into any existing
+// "maintenance" sub-object to avoid zeroing sibling fields.
+// Remove this shim once the frontend sends nested keys.
+func remapMaintenanceKeys(payload map[string]any) map[string]any {
+	flatToNested := map[string]string{
+		"maintenance_window_enabled":                "enabled",
+		"maintenance_window_start":                  "window_start",
+		"maintenance_window_end":                    "window_end",
+		"maintenance_window_dedup_refresh":          "dedup_refresh",
+		"maintenance_window_series_prune":           "series_prune",
+		"maintenance_window_author_split":           "author_split",
+		"maintenance_window_tombstone_cleanup":      "tombstone_cleanup",
+		"maintenance_window_reconcile":              "reconcile",
+		"maintenance_window_purge_deleted":          "purge_deleted",
+		"maintenance_window_purge_old_logs":         "purge_old_logs",
+		"maintenance_window_db_optimize":            "db_optimize",
+		"maintenance_window_library_scan":           "library_scan",
+		"maintenance_window_library_organize":       "library_organize",
+		"maintenance_window_metadata_refresh":       "metadata_refresh",
+		"maintenance_window_library_size_refresh":   "library_size_refresh",
+		"maintenance_window_acoustid_online_lookup": "acoustid_online_lookup",
+		"acoustid_online_lookup_nightly_limit":      "acoustid_nightly_limit",
+	}
+	nested := make(map[string]any)
+	for flat, short := range flatToNested {
+		if v, ok := payload[flat]; ok {
+			nested[short] = v
+			delete(payload, flat)
+		}
+	}
+	if len(nested) == 0 {
+		return payload
+	}
+	if existing, ok := payload["maintenance"].(map[string]any); ok {
+		for k, v := range nested {
+			existing[k] = v
+		}
+	} else {
+		payload["maintenance"] = nested
+	}
+	return payload
+}
+
 // UpdateConfig applies a config update payload to AppConfig and persists it.
 //
 // Architecture: non-secret fields are applied via JSON round-trip onto AppConfig.
@@ -263,6 +307,8 @@ func (us *UpdateService) UpdateConfig(payload map[string]any) (int, map[string]a
 	filtered = remapMetadataScoringKeys(filtered)
 	// Translate any legacy flat iTunes keys to the nested ITunesConfig format.
 	filtered = remapITunesKeys(filtered)
+	// Translate any legacy flat maintenance_window_* keys to the nested MaintenanceConfig format.
+	filtered = remapMaintenanceKeys(filtered)
 
 	// Apply all remaining fields via JSON round-trip.
 	// Any field in Config with a matching json tag is set automatically.

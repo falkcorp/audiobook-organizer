@@ -1,5 +1,5 @@
 // file: internal/config/config_unit_test.go
-// version: 1.7.0
+// version: 1.8.0
 // last-edited: 2026-06-16
 
 package config
@@ -437,14 +437,14 @@ func TestInitConfigDefaults(t *testing.T) {
 	})
 
 	t.Run("maintenance window defaults", func(t *testing.T) {
-		assert.True(t, AppConfig.MaintenanceWindowEnabled)
-		assert.Equal(t, 1, AppConfig.MaintenanceWindowStart)
-		assert.Equal(t, 4, AppConfig.MaintenanceWindowEnd)
-		assert.True(t, AppConfig.MaintenanceWindowDedupRefresh)
-		assert.True(t, AppConfig.MaintenanceWindowDbOptimize)
-		assert.False(t, AppConfig.MaintenanceWindowLibraryScan)
-		assert.False(t, AppConfig.MaintenanceWindowLibraryOrganize)
-		assert.False(t, AppConfig.MaintenanceWindowMetadataRefresh)
+		assert.True(t, AppConfig.Maintenance.Enabled)
+		assert.Equal(t, 1, AppConfig.Maintenance.WindowStart)
+		assert.Equal(t, 4, AppConfig.Maintenance.WindowEnd)
+		assert.True(t, AppConfig.Maintenance.DedupRefresh)
+		assert.True(t, AppConfig.Maintenance.DbOptimize)
+		assert.False(t, AppConfig.Maintenance.LibraryScan)
+		assert.False(t, AppConfig.Maintenance.LibraryOrganize)
+		assert.False(t, AppConfig.Maintenance.MetadataRefresh)
 	})
 
 	t.Run("iTunes defaults", func(t *testing.T) {
@@ -651,18 +651,18 @@ func TestApplySettingBoolKeys(t *testing.T) {
 		{"itunes_sync_enabled", func() bool { return AppConfig.ITunes.SyncEnabled }},
 		{"itl_write_back_enabled", func() bool { return AppConfig.ITunes.WriteBackEnabled }},
 		{"itunes_auto_write_back", func() bool { return AppConfig.ITunes.AutoWriteBack }},
-		{"maintenance_window_enabled", func() bool { return AppConfig.MaintenanceWindowEnabled }},
-		{"maintenance_window_dedup_refresh", func() bool { return AppConfig.MaintenanceWindowDedupRefresh }},
-		{"maintenance_window_series_prune", func() bool { return AppConfig.MaintenanceWindowSeriesPrune }},
-		{"maintenance_window_author_split", func() bool { return AppConfig.MaintenanceWindowAuthorSplit }},
-		{"maintenance_window_tombstone_cleanup", func() bool { return AppConfig.MaintenanceWindowTombstoneCleanup }},
-		{"maintenance_window_reconcile", func() bool { return AppConfig.MaintenanceWindowReconcile }},
-		{"maintenance_window_purge_deleted", func() bool { return AppConfig.MaintenanceWindowPurgeDeleted }},
-		{"maintenance_window_purge_old_logs", func() bool { return AppConfig.MaintenanceWindowPurgeOldLogs }},
-		{"maintenance_window_db_optimize", func() bool { return AppConfig.MaintenanceWindowDbOptimize }},
-		{"maintenance_window_library_scan", func() bool { return AppConfig.MaintenanceWindowLibraryScan }},
-		{"maintenance_window_library_organize", func() bool { return AppConfig.MaintenanceWindowLibraryOrganize }},
-		{"maintenance_window_metadata_refresh", func() bool { return AppConfig.MaintenanceWindowMetadataRefresh }},
+		{"maintenance_window_enabled", func() bool { return AppConfig.Maintenance.Enabled }},
+		{"maintenance_window_dedup_refresh", func() bool { return AppConfig.Maintenance.DedupRefresh }},
+		{"maintenance_window_series_prune", func() bool { return AppConfig.Maintenance.SeriesPrune }},
+		{"maintenance_window_author_split", func() bool { return AppConfig.Maintenance.AuthorSplit }},
+		{"maintenance_window_tombstone_cleanup", func() bool { return AppConfig.Maintenance.TombstoneCleanup }},
+		{"maintenance_window_reconcile", func() bool { return AppConfig.Maintenance.Reconcile }},
+		{"maintenance_window_purge_deleted", func() bool { return AppConfig.Maintenance.PurgeDeleted }},
+		{"maintenance_window_purge_old_logs", func() bool { return AppConfig.Maintenance.PurgeOldLogs }},
+		{"maintenance_window_db_optimize", func() bool { return AppConfig.Maintenance.DbOptimize }},
+		{"maintenance_window_library_scan", func() bool { return AppConfig.Maintenance.LibraryScan }},
+		{"maintenance_window_library_organize", func() bool { return AppConfig.Maintenance.LibraryOrganize }},
+		{"maintenance_window_metadata_refresh", func() bool { return AppConfig.Maintenance.MetadataRefresh }},
 		{"basic_auth_enabled", func() bool { return AppConfig.BasicAuthEnabled }},
 		{"scheduled_dedup_refresh_enabled", func() bool { return AppConfig.ScheduledDedupRefreshEnabled }},
 		{"scheduled_dedup_refresh_on_startup", func() bool { return AppConfig.ScheduledDedupRefreshOnStartup }},
@@ -723,8 +723,8 @@ func TestApplySettingIntKeys(t *testing.T) {
 		{"auto_update_window_end", "5", func() int { return AppConfig.AutoUpdateWindowEnd }},
 		{"purge_soft_deleted_after_days", "30", func() int { return AppConfig.PurgeSoftDeletedAfterDays }},
 		{"itunes_sync_interval", "60", func() int { return AppConfig.ITunes.SyncInterval }},
-		{"maintenance_window_start", "3", func() int { return AppConfig.MaintenanceWindowStart }},
-		{"maintenance_window_end", "6", func() int { return AppConfig.MaintenanceWindowEnd }},
+		{"maintenance_window_start", "3", func() int { return AppConfig.Maintenance.WindowStart }},
+		{"maintenance_window_end", "6", func() int { return AppConfig.Maintenance.WindowEnd }},
 		{"scheduled_dedup_refresh_interval", "24", func() int { return AppConfig.ScheduledDedupRefreshInterval }},
 		{"scheduled_author_split_interval", "12", func() int { return AppConfig.ScheduledAuthorSplitInterval }},
 		{"scheduled_db_optimize_interval", "48", func() int { return AppConfig.ScheduledDbOptimizeInterval }},
@@ -1102,23 +1102,22 @@ func TestMigrateMaintenanceWindow(t *testing.T) {
 		store.settings["maintenance_window_migrated"] = &database.Setting{
 			Key: "maintenance_window_migrated", Value: "true", Type: "bool",
 		}
-		AppConfig = Config{MaintenanceWindowStart: 0, MaintenanceWindowEnd: 0}
+		AppConfig = Config{Maintenance: MaintenanceConfig{WindowStart: 0, WindowEnd: 0}}
 		MigrateMaintenanceWindow(store)
 		// Should not change defaults since migration was already done
-		assert.Equal(t, 0, AppConfig.MaintenanceWindowStart)
+		assert.Equal(t, 0, AppConfig.Maintenance.WindowStart)
 	})
 
 	t.Run("migrates from auto-update window", func(t *testing.T) {
 		store := newMockSettingsStore()
 		AppConfig = Config{
-			AutoUpdateWindowStart:  2,
-			AutoUpdateWindowEnd:    5,
-			MaintenanceWindowStart: 0,
-			MaintenanceWindowEnd:   0,
+			AutoUpdateWindowStart: 2,
+			AutoUpdateWindowEnd:   5,
+			Maintenance:           MaintenanceConfig{WindowStart: 0, WindowEnd: 0},
 		}
 		MigrateMaintenanceWindow(store)
-		assert.Equal(t, 2, AppConfig.MaintenanceWindowStart)
-		assert.Equal(t, 5, AppConfig.MaintenanceWindowEnd)
+		assert.Equal(t, 2, AppConfig.Maintenance.WindowStart)
+		assert.Equal(t, 5, AppConfig.Maintenance.WindowEnd)
 		assert.Equal(t, "true", store.settings["maintenance_window_migrated"].Value)
 	})
 
@@ -1126,8 +1125,8 @@ func TestMigrateMaintenanceWindow(t *testing.T) {
 		store := newMockSettingsStore()
 		AppConfig = Config{}
 		MigrateMaintenanceWindow(store)
-		assert.Equal(t, 1, AppConfig.MaintenanceWindowStart)
-		assert.Equal(t, 4, AppConfig.MaintenanceWindowEnd)
+		assert.Equal(t, 1, AppConfig.Maintenance.WindowStart)
+		assert.Equal(t, 4, AppConfig.Maintenance.WindowEnd)
 	})
 }
 

@@ -1,7 +1,7 @@
 // file: internal/scheduler/maintenance.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7d2e8f4a-c3b1-4a09-8e5f-2d6c0b9a3e71
-// last-edited: 2026-05-11
+// last-edited: 2026-06-16
 
 package scheduler
 
@@ -25,11 +25,11 @@ const IgnoreWindowKey MaintenanceCtxKey = "ignore_window"
 // IsInMaintenanceWindowAt checks if a given hour falls within the configured window.
 // Supports midnight-spanning windows (e.g., start=23, end=2).
 func IsInMaintenanceWindowAt(hour int) bool {
-	if !config.AppConfig.MaintenanceWindowEnabled {
+	if !config.AppConfig.Maintenance.Enabled {
 		return false
 	}
-	start := config.AppConfig.MaintenanceWindowStart
-	end := config.AppConfig.MaintenanceWindowEnd
+	start := config.AppConfig.Maintenance.WindowStart
+	end := config.AppConfig.Maintenance.WindowEnd
 
 	if start < end {
 		return hour >= start && hour < end

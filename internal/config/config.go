@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.56.0
+// version: 1.57.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-06-16
 
@@ -151,6 +151,27 @@ type ITunesConfig struct {
 	WindowsRootPath  string          `json:"windows_root_path"  mapstructure:"windows_root_path"`
 	MediaRoot        string          `json:"media_root"         mapstructure:"media_root"`
 	PathMappings     []ITunesPathMap `json:"path_mappings"      mapstructure:"path_mappings"`
+}
+
+// MaintenanceConfig holds settings for the nightly maintenance window.
+type MaintenanceConfig struct {
+	Enabled              bool `json:"enabled"                mapstructure:"enabled"`
+	WindowStart          int  `json:"window_start"           mapstructure:"window_start"`
+	WindowEnd            int  `json:"window_end"             mapstructure:"window_end"`
+	DedupRefresh         bool `json:"dedup_refresh"          mapstructure:"dedup_refresh"`
+	SeriesPrune          bool `json:"series_prune"           mapstructure:"series_prune"`
+	AuthorSplit          bool `json:"author_split"           mapstructure:"author_split"`
+	TombstoneCleanup     bool `json:"tombstone_cleanup"      mapstructure:"tombstone_cleanup"`
+	Reconcile            bool `json:"reconcile"              mapstructure:"reconcile"`
+	PurgeDeleted         bool `json:"purge_deleted"          mapstructure:"purge_deleted"`
+	PurgeOldLogs         bool `json:"purge_old_logs"         mapstructure:"purge_old_logs"`
+	DbOptimize           bool `json:"db_optimize"            mapstructure:"db_optimize"`
+	LibraryScan          bool `json:"library_scan"           mapstructure:"library_scan"`
+	LibraryOrganize      bool `json:"library_organize"       mapstructure:"library_organize"`
+	MetadataRefresh      bool `json:"metadata_refresh"       mapstructure:"metadata_refresh"`
+	LibrarySizeRefresh   bool `json:"library_size_refresh"   mapstructure:"library_size_refresh"`
+	AcoustIDOnlineLookup bool `json:"acoustid_online_lookup" mapstructure:"acoustid_online_lookup"`
+	AcoustIDNightlyLimit int  `json:"acoustid_nightly_limit" mapstructure:"acoustid_nightly_limit"`
 }
 
 // MetadataScoringConfig holds settings for the AI-assisted metadata scoring pipeline.
@@ -317,9 +338,7 @@ type Config struct {
 	AutoUpdateWindowEnd    int    `json:"auto_update_window_end"`    // hour 0-23, e.g. 4
 
 	// Maintenance window (unified — replaces separate auto-update window)
-	MaintenanceWindowEnabled bool `json:"maintenance_window_enabled"`
-	MaintenanceWindowStart   int  `json:"maintenance_window_start"` // hour 0-23, default 1
-	MaintenanceWindowEnd     int  `json:"maintenance_window_end"`   // hour 0-23, default 4
+	Maintenance MaintenanceConfig `json:"maintenance" mapstructure:"maintenance"`
 
 	// Download client integration
 	DownloadClient DownloadClientConfig `json:"download_client"`
@@ -367,29 +386,6 @@ type Config struct {
 	ScheduledReconcileEnabled   bool `json:"scheduled_reconcile_enabled"`
 	ScheduledReconcileInterval  int  `json:"scheduled_reconcile_interval"` // minutes, default 0 (manual)
 	ScheduledReconcileOnStartup bool `json:"scheduled_reconcile_on_startup"`
-
-	// Per-task maintenance window toggles
-	MaintenanceWindowDedupRefresh       bool `json:"maintenance_window_dedup_refresh"`
-	MaintenanceWindowSeriesPrune        bool `json:"maintenance_window_series_prune"`
-	MaintenanceWindowAuthorSplit        bool `json:"maintenance_window_author_split"`
-	MaintenanceWindowTombstoneCleanup   bool `json:"maintenance_window_tombstone_cleanup"`
-	MaintenanceWindowReconcile          bool `json:"maintenance_window_reconcile"`
-	MaintenanceWindowPurgeDeleted       bool `json:"maintenance_window_purge_deleted"`
-	MaintenanceWindowPurgeOldLogs       bool `json:"maintenance_window_purge_old_logs"`
-	MaintenanceWindowDbOptimize         bool `json:"maintenance_window_db_optimize"`
-	MaintenanceWindowLibraryScan        bool `json:"maintenance_window_library_scan"`
-	MaintenanceWindowLibraryOrganize    bool `json:"maintenance_window_library_organize"`
-	MaintenanceWindowMetadataRefresh    bool `json:"maintenance_window_metadata_refresh"`
-	MaintenanceWindowLibrarySizeRefresh bool `json:"maintenance_window_library_size_refresh"`
-	// MaintenanceWindowAcoustIDOnlineLookup gates the nightly
-	// acoustid.lookup-online task. Off by default — the task hits a
-	// third-party API and uses quota, so requires explicit opt-in.
-	MaintenanceWindowAcoustIDOnlineLookup bool `json:"maintenance_window_acoustid_online_lookup"`
-	// AcoustIDOnlineLookupNightlyLimit caps the number of files processed
-	// per nightly run, so the maintenance window doesn't get monopolized
-	// by a slow third-party API. 0 = no cap (the op processes everything
-	// eligible). Default 5000 ≈ ~33 min at 400ms throttle.
-	AcoustIDOnlineLookupNightlyLimit int `json:"acoustid_online_lookup_nightly_limit"`
 
 	// Plugin system
 	Plugins map[string]PluginConfig `json:"plugins"`
@@ -573,25 +569,34 @@ func InitConfig() {
 	viper.SetDefault("auto_update_window_end", 4)
 
 	// Maintenance window defaults
-	viper.SetDefault("maintenance_window_enabled", true)
-	viper.SetDefault("maintenance_window_start", 1)
-	viper.SetDefault("maintenance_window_end", 4)
-	// Per-task defaults — maintenance tasks default true
-	viper.SetDefault("maintenance_window_dedup_refresh", true)
-	viper.SetDefault("maintenance_window_series_prune", true)
-	viper.SetDefault("maintenance_window_author_split", true)
-	viper.SetDefault("maintenance_window_tombstone_cleanup", true)
-	viper.SetDefault("maintenance_window_reconcile", true)
-	viper.SetDefault("maintenance_window_purge_deleted", true)
-	viper.SetDefault("maintenance_window_purge_old_logs", true)
-	viper.SetDefault("maintenance_window_db_optimize", true)
+	viper.SetDefault("maintenance.enabled", true)
+	viper.SetDefault("maintenance.window_start", 1)
+	viper.SetDefault("maintenance.window_end", 4)
+	// Per-task defaults — most maintenance tasks default true
+	viper.SetDefault("maintenance.dedup_refresh", true)
+	viper.SetDefault("maintenance.series_prune", true)
+	viper.SetDefault("maintenance.author_split", true)
+	viper.SetDefault("maintenance.tombstone_cleanup", true)
+	viper.SetDefault("maintenance.reconcile", true)
+	viper.SetDefault("maintenance.purge_deleted", true)
+	viper.SetDefault("maintenance.purge_old_logs", true)
+	viper.SetDefault("maintenance.db_optimize", true)
 	// Non-maintenance tasks default false
-	viper.SetDefault("maintenance_window_library_scan", false)
-	viper.SetDefault("maintenance_window_library_organize", false)
-	viper.SetDefault("maintenance_window_metadata_refresh", false)
+	viper.SetDefault("maintenance.library_scan", false)
+	viper.SetDefault("maintenance.library_organize", false)
+	viper.SetDefault("maintenance.metadata_refresh", false)
 	// FS-walk-based on-disk size refresh — true by default (cheap, runs nightly,
 	// keeps the FS-side cache fresh for any caller that queries physical sizes).
-	viper.SetDefault("maintenance_window_library_size_refresh", true)
+	viper.SetDefault("maintenance.library_size_refresh", true)
+	// AcoustID online lookup is OFF by default — uses third-party quota
+	viper.SetDefault("maintenance.acoustid_online_lookup", false)
+	viper.SetDefault("maintenance.acoustid_nightly_limit", 5000)
+	// BindEnv maps env vars so MAINTENANCE_ENABLED etc. override even without AutomaticEnv.
+	viper.BindEnv("maintenance.enabled", "MAINTENANCE_ENABLED")                                //nolint:errcheck
+	viper.BindEnv("maintenance.window_start", "MAINTENANCE_WINDOW_START")                      //nolint:errcheck
+	viper.BindEnv("maintenance.window_end", "MAINTENANCE_WINDOW_END")                          //nolint:errcheck
+	viper.BindEnv("maintenance.acoustid_online_lookup", "MAINTENANCE_ACOUSTID_ONLINE_LOOKUP")  //nolint:errcheck
+	viper.BindEnv("maintenance.acoustid_nightly_limit", "MAINTENANCE_ACOUSTID_NIGHTLY_LIMIT")  //nolint:errcheck
 
 	// Download client defaults
 	viper.SetDefault("download_client.torrent.type", "")
@@ -771,24 +776,26 @@ func InitConfig() {
 			AutoUpdateWindowStart:  viper.GetInt("auto_update_window_start"),
 			AutoUpdateWindowEnd:    viper.GetInt("auto_update_window_end"),
 
-			// Maintenance window
-			MaintenanceWindowEnabled:              viper.GetBool("maintenance_window_enabled"),
-			MaintenanceWindowStart:                viper.GetInt("maintenance_window_start"),
-			MaintenanceWindowEnd:                  viper.GetInt("maintenance_window_end"),
-			MaintenanceWindowDedupRefresh:         viper.GetBool("maintenance_window_dedup_refresh"),
-			MaintenanceWindowSeriesPrune:          viper.GetBool("maintenance_window_series_prune"),
-			MaintenanceWindowAuthorSplit:          viper.GetBool("maintenance_window_author_split"),
-			MaintenanceWindowTombstoneCleanup:     viper.GetBool("maintenance_window_tombstone_cleanup"),
-			MaintenanceWindowReconcile:            viper.GetBool("maintenance_window_reconcile"),
-			MaintenanceWindowPurgeDeleted:         viper.GetBool("maintenance_window_purge_deleted"),
-			MaintenanceWindowPurgeOldLogs:         viper.GetBool("maintenance_window_purge_old_logs"),
-			MaintenanceWindowDbOptimize:           viper.GetBool("maintenance_window_db_optimize"),
-			MaintenanceWindowLibraryScan:          viper.GetBool("maintenance_window_library_scan"),
-			MaintenanceWindowLibraryOrganize:      viper.GetBool("maintenance_window_library_organize"),
-			MaintenanceWindowMetadataRefresh:      viper.GetBool("maintenance_window_metadata_refresh"),
-			MaintenanceWindowLibrarySizeRefresh:   viper.GetBool("maintenance_window_library_size_refresh"),
-			MaintenanceWindowAcoustIDOnlineLookup: viper.GetBool("maintenance_window_acoustid_online_lookup"),
-			AcoustIDOnlineLookupNightlyLimit:      viper.GetInt("acoustid_online_lookup_nightly_limit"),
+			// Maintenance window (nested sub-struct)
+			Maintenance: MaintenanceConfig{
+				Enabled:              viper.GetBool("maintenance.enabled"),
+				WindowStart:          viper.GetInt("maintenance.window_start"),
+				WindowEnd:            viper.GetInt("maintenance.window_end"),
+				DedupRefresh:         viper.GetBool("maintenance.dedup_refresh"),
+				SeriesPrune:          viper.GetBool("maintenance.series_prune"),
+				AuthorSplit:          viper.GetBool("maintenance.author_split"),
+				TombstoneCleanup:     viper.GetBool("maintenance.tombstone_cleanup"),
+				Reconcile:            viper.GetBool("maintenance.reconcile"),
+				PurgeDeleted:         viper.GetBool("maintenance.purge_deleted"),
+				PurgeOldLogs:         viper.GetBool("maintenance.purge_old_logs"),
+				DbOptimize:           viper.GetBool("maintenance.db_optimize"),
+				LibraryScan:          viper.GetBool("maintenance.library_scan"),
+				LibraryOrganize:      viper.GetBool("maintenance.library_organize"),
+				MetadataRefresh:      viper.GetBool("maintenance.metadata_refresh"),
+				LibrarySizeRefresh:   viper.GetBool("maintenance.library_size_refresh"),
+				AcoustIDOnlineLookup: viper.GetBool("maintenance.acoustid_online_lookup"),
+				AcoustIDNightlyLimit: viper.GetInt("maintenance.acoustid_nightly_limit"),
+			},
 
 			// iTunes sync (nested sub-struct)
 			ITunes: ITunesConfig{
@@ -1267,25 +1274,28 @@ func ResetToDefaults() {
 			AutoUpdateWindowEnd:    4,
 
 			// Maintenance window
-			MaintenanceWindowEnabled:          true,
-			MaintenanceWindowStart:            1,
-			MaintenanceWindowEnd:              4,
-			MaintenanceWindowDedupRefresh:     true,
-			MaintenanceWindowSeriesPrune:      true,
-			MaintenanceWindowAuthorSplit:      true,
-			MaintenanceWindowTombstoneCleanup: true,
-			MaintenanceWindowReconcile:        true,
-			MaintenanceWindowPurgeDeleted:     true,
-			MaintenanceWindowPurgeOldLogs:     true,
-			MaintenanceWindowDbOptimize:       true,
-			MaintenanceWindowLibraryScan:      false,
-			MaintenanceWindowLibraryOrganize:  false,
-			MaintenanceWindowMetadataRefresh:  false,
-			// AcoustID online lookup is OFF by default — uses third-party
-			// quota and only helps users who set ACOUSTID_API_KEY. Opt-in
-			// via setting + env key.
-			MaintenanceWindowAcoustIDOnlineLookup: false,
-			AcoustIDOnlineLookupNightlyLimit:      5000,
+			Maintenance: MaintenanceConfig{
+				Enabled:          true,
+				WindowStart:      1,
+				WindowEnd:        4,
+				DedupRefresh:     true,
+				SeriesPrune:      true,
+				AuthorSplit:      true,
+				TombstoneCleanup: true,
+				Reconcile:        true,
+				PurgeDeleted:     true,
+				PurgeOldLogs:     true,
+				DbOptimize:       true,
+				LibraryScan:      false,
+				LibraryOrganize:  false,
+				MetadataRefresh:  false,
+				LibrarySizeRefresh: true,
+				// AcoustID online lookup is OFF by default — uses third-party
+				// quota and only helps users who set ACOUSTID_API_KEY. Opt-in
+				// via setting + env key.
+				AcoustIDOnlineLookup: false,
+				AcoustIDNightlyLimit: 5000,
+			},
 
 			// iTunes sync (nested sub-struct)
 			ITunes: ITunesConfig{

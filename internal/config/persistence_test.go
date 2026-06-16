@@ -1,5 +1,5 @@
 // file: internal/config/persistence_test.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-06-16
 
@@ -1067,5 +1067,63 @@ func TestRemapITunesKeys_FlatKeys(t *testing.T) {
 func TestRemapITunesKeys_NoFlatKeys(t *testing.T) {
 	payload := map[string]any{"root_dir": "/data"}
 	result := remapITunesKeys(payload)
+	assert.Equal(t, map[string]any{"root_dir": "/data"}, result)
+}
+
+func TestMigrateMaintenanceFields_FlatBlob(t *testing.T) {
+	flatBlob := `{
+		"maintenance_window_enabled": false,
+		"maintenance_window_start": 2,
+		"maintenance_window_end": 5,
+		"maintenance_window_dedup_refresh": true,
+		"maintenance_window_series_prune": true,
+		"maintenance_window_db_optimize": true,
+		"acoustid_online_lookup_nightly_limit": 500,
+		"root_dir": "/data"
+	}`
+	migrated, changed := migrateMaintenanceBlob(flatBlob)
+	require.True(t, changed)
+	var result map[string]any
+	require.NoError(t, json.Unmarshal([]byte(migrated), &result))
+	m, ok := result["maintenance"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, false, m["enabled"])
+	assert.Equal(t, float64(2), m["window_start"])
+	assert.Equal(t, float64(5), m["window_end"])
+	assert.Equal(t, true, m["dedup_refresh"])
+	assert.Equal(t, float64(500), m["acoustid_nightly_limit"])
+	assert.Equal(t, "/data", result["root_dir"])
+	assert.NotContains(t, result, "maintenance_window_enabled")
+	assert.NotContains(t, result, "acoustid_online_lookup_nightly_limit")
+}
+
+func TestMigrateMaintenanceFields_AlreadyNested(t *testing.T) {
+	_, changed := migrateMaintenanceBlob(`{"maintenance": {"enabled": false}}`)
+	assert.False(t, changed)
+}
+
+func TestMigrateMaintenanceFields_EmptyBlob(t *testing.T) {
+	_, changed := migrateMaintenanceBlob(`{}`)
+	assert.False(t, changed)
+}
+
+func TestRemapMaintenanceKeys_FlatKeys(t *testing.T) {
+	payload := map[string]any{
+		"maintenance_window_enabled":           false,
+		"acoustid_online_lookup_nightly_limit": float64(500),
+		"root_dir":                             "/data",
+	}
+	result := remapMaintenanceKeys(payload)
+	m, ok := result["maintenance"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, false, m["enabled"])
+	assert.Equal(t, float64(500), m["acoustid_nightly_limit"])
+	assert.Equal(t, "/data", result["root_dir"])
+	assert.NotContains(t, result, "maintenance_window_enabled")
+}
+
+func TestRemapMaintenanceKeys_NoFlatKeys(t *testing.T) {
+	payload := map[string]any{"root_dir": "/data"}
+	result := remapMaintenanceKeys(payload)
 	assert.Equal(t, map[string]any{"root_dir": "/data"}, result)
 }
