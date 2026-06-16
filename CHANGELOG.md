@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.27.0 -->
+<!-- version: 3.28.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-16 -->
 
@@ -8,6 +8,20 @@
 ## [Unreleased]
 
 ### Refactors
+
+#### June 16, 2026 — Config struct-nesting Wave 7: AutoUpdateConfig (PR #1483)
+
+Moves 5 flat `AutoUpdate*` fields from `Config` into a new `AutoUpdateConfig` sub-struct at `Config.AutoUpdate`. Final wave of the 7-wave CFG-1 config nesting refactor.
+
+- **`AutoUpdateConfig`** type defined in `internal/config/config.go`; `Config.AutoUpdate` replaces 5 flat `AutoUpdate*` fields.
+- **`migrateAutoUpdateBlob`**: idempotent startup blob migration (flat `auto_update_*` → nested `auto_update.*`), chained after `migrateScheduledBlob` in `LoadConfigFromDatabase`.
+- **`remapAutoUpdateKeys`**: API compat shim for legacy flat PUT `/config` payloads, chained after `remapScheduledKeys` in `UpdateConfig`.
+- **`applySetting`**: all 5 cases updated to write `c.AutoUpdate.*`.
+- **`BindEnv`**: all 5 `AUTO_UPDATE_*` env vars wired to nested viper dot-notation keys.
+- **Callsite updates**: `internal/server/scheduler_maintenance_window_op.go`, `internal/server/update_handlers.go`, `internal/updater/register.go` updated to use `config.AppConfig.AutoUpdate.*` paths.
+- **Tests**: 7 new tests across `persistence_test.go` and `config_test.go` covering blob migration, API remap, defaults, and env var override.
+
+Together with Waves 1–6, `AppConfig` now has 7 logical sub-structs: `EmbeddingConfig`, `DedupConfig`, `MetadataScoringConfig`, `ITunesConfig`, `MaintenanceConfig`, `ScheduledTasksConfig`, `AutoUpdateConfig`. Old flat keys still accepted via startup blob migration and API compat shims — no breaking changes for existing installs or the frontend.
 
 #### June 16, 2026 — Config struct-nesting Wave 6: ScheduledTasksConfig (PR #1482)
 

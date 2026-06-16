@@ -1,5 +1,5 @@
 // file: internal/config/config_coverage_test.go
-// version: 1.1.0
+// version: 1.2.0
 // last-edited: 2026-06-16
 
 package config
@@ -191,9 +191,9 @@ func TestCoverage_AutoUpdateDefaults(t *testing.T) {
 	InitConfig()
 
 	// Verify auto-update defaults
-	if AppConfig.AutoUpdateChannel != "" && AppConfig.AutoUpdateChannel != "stable" {
+	if AppConfig.AutoUpdate.Channel != "" && AppConfig.AutoUpdate.Channel != "stable" {
 		// AutoUpdateChannel may or may not be set by default
-		t.Logf("AutoUpdateChannel = %q", AppConfig.AutoUpdateChannel)
+		t.Logf("AutoUpdateChannel = %q", AppConfig.AutoUpdate.Channel)
 	}
 }
 

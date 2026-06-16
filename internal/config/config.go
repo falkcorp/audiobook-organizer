@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.58.0
+// version: 1.59.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-06-16
 
@@ -192,6 +192,15 @@ type ScheduledTaskConfig struct {
 	OnStartup bool `json:"on_startup" mapstructure:"on_startup"`
 }
 
+// AutoUpdateConfig holds settings for the automatic update checker.
+type AutoUpdateConfig struct {
+	Enabled      bool   `json:"enabled"       mapstructure:"enabled"`
+	Channel      string `json:"channel"       mapstructure:"channel"`
+	CheckMinutes int    `json:"check_minutes" mapstructure:"check_minutes"`
+	WindowStart  int    `json:"window_start"  mapstructure:"window_start"`
+	WindowEnd    int    `json:"window_end"    mapstructure:"window_end"`
+}
+
 // ScheduledTasksConfig holds settings for all background scheduled tasks.
 type ScheduledTasksConfig struct {
 	DedupRefresh             ScheduledTaskConfig `json:"dedup_refresh"               mapstructure:"dedup_refresh"`
@@ -350,11 +359,7 @@ type Config struct {
 	ProtectedPaths []string `json:"protected_paths"` // default: empty
 
 	// Auto-update
-	AutoUpdateEnabled      bool   `json:"auto_update_enabled"`
-	AutoUpdateChannel      string `json:"auto_update_channel"`       // "stable" or "develop"
-	AutoUpdateCheckMinutes int    `json:"auto_update_check_minutes"` // e.g. 60
-	AutoUpdateWindowStart  int    `json:"auto_update_window_start"`  // hour 0-23, e.g. 1
-	AutoUpdateWindowEnd    int    `json:"auto_update_window_end"`    // hour 0-23, e.g. 4
+	AutoUpdate AutoUpdateConfig `json:"auto_update" mapstructure:"auto_update"`
 
 	// Maintenance window (unified — replaces separate auto-update window)
 	Maintenance MaintenanceConfig `json:"maintenance" mapstructure:"maintenance"`
@@ -583,11 +588,16 @@ func InitConfig() {
 	viper.BindEnv("itunes.auto_write_back", "ITUNES_AUTO_WRITE_BACK")     //nolint:errcheck
 
 	// Auto-update defaults
-	viper.SetDefault("auto_update_enabled", false)
-	viper.SetDefault("auto_update_channel", "stable")
-	viper.SetDefault("auto_update_check_minutes", 60)
-	viper.SetDefault("auto_update_window_start", 1)
-	viper.SetDefault("auto_update_window_end", 4)
+	viper.SetDefault("auto_update.enabled", false)
+	viper.SetDefault("auto_update.channel", "stable")
+	viper.SetDefault("auto_update.check_minutes", 60)
+	viper.SetDefault("auto_update.window_start", 2)
+	viper.SetDefault("auto_update.window_end", 5)
+	viper.BindEnv("auto_update.enabled", "AUTO_UPDATE_ENABLED")           //nolint:errcheck
+	viper.BindEnv("auto_update.channel", "AUTO_UPDATE_CHANNEL")           //nolint:errcheck
+	viper.BindEnv("auto_update.check_minutes", "AUTO_UPDATE_CHECK_MINUTES") //nolint:errcheck
+	viper.BindEnv("auto_update.window_start", "AUTO_UPDATE_WINDOW_START") //nolint:errcheck
+	viper.BindEnv("auto_update.window_end", "AUTO_UPDATE_WINDOW_END")     //nolint:errcheck
 
 	// Maintenance window defaults
 	viper.SetDefault("maintenance.enabled", true)
@@ -791,11 +801,13 @@ func InitConfig() {
 			EnableJsonLogging: viper.GetBool("enable_json_logging"),
 
 			// Auto-update
-			AutoUpdateEnabled:      viper.GetBool("auto_update_enabled"),
-			AutoUpdateChannel:      viper.GetString("auto_update_channel"),
-			AutoUpdateCheckMinutes: viper.GetInt("auto_update_check_minutes"),
-			AutoUpdateWindowStart:  viper.GetInt("auto_update_window_start"),
-			AutoUpdateWindowEnd:    viper.GetInt("auto_update_window_end"),
+			AutoUpdate: AutoUpdateConfig{
+				Enabled:      viper.GetBool("auto_update.enabled"),
+				Channel:      viper.GetString("auto_update.channel"),
+				CheckMinutes: viper.GetInt("auto_update.check_minutes"),
+				WindowStart:  viper.GetInt("auto_update.window_start"),
+				WindowEnd:    viper.GetInt("auto_update.window_end"),
+			},
 
 			// Maintenance window (nested sub-struct)
 			Maintenance: MaintenanceConfig{
@@ -1331,11 +1343,13 @@ func ResetToDefaults() {
 			EnableJsonLogging: false,
 
 			// Auto-update
-			AutoUpdateEnabled:      false,
-			AutoUpdateChannel:      "stable",
-			AutoUpdateCheckMinutes: 60,
-			AutoUpdateWindowStart:  1,
-			AutoUpdateWindowEnd:    4,
+			AutoUpdate: AutoUpdateConfig{
+				Enabled:      false,
+				Channel:      "stable",
+				CheckMinutes: 60,
+				WindowStart:  2,
+				WindowEnd:    5,
+			},
 
 			// Maintenance window
 			Maintenance: MaintenanceConfig{
