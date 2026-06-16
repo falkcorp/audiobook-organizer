@@ -19,7 +19,7 @@ on:
 
 jobs:
   triage-poll:
-    uses: jdfalk/ghcommon/.github/workflows/reusable-triage-poll.yml@acbc1ec5a64c5fb497a5077c3a56e56d5e7b4873
+    uses: jdfalk/ghcommon/.github/workflows/reusable-triage-poll.yml@bfb912c850effd1ae9aded26d14856a538d3e5fc
     with:
       mode: ${{ inputs.mode || 'draft-only' }}
       triage_model: o3
