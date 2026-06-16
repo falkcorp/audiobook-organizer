@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/reembed_embeddings.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9d8c7b6a-5e4f-3a2b-1c0d-9e8f7a6b5c4d
-// last-edited: 2026-06-14
+// last-edited: 2026-06-15
 
 // Package dedup — op dedup.reembed-embeddings.
 //
@@ -53,8 +53,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
+	"github.com/falkcorp/audiobook-organizer/internal/tools"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -106,6 +108,13 @@ func (p *Plugin) reembedEmbeddingsDef() sdk.OperationDef {
 
 // runReembedEmbeddings implements the reembed-embeddings op.
 func (p *Plugin) runReembedEmbeddings(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
+	// Guard: local re-embed requires Ollama to be running.
+	if config.AppConfig.EmbeddingBaseURL != "" {
+		if p.toolRegistry != nil && !p.toolRegistry.Available("ollama") {
+			return fmt.Errorf("reembed-embeddings: local embedding base URL configured but Ollama is not available — install or enable via Settings → Tools: %w", tools.ErrToolNotAvailable)
+		}
+	}
+
 	if p.engine == nil {
 		return fmt.Errorf("dedup engine not available (embeddings disabled?)")
 	}
