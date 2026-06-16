@@ -1,13 +1,25 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.24.0 -->
+<!-- version: 3.25.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
-<!-- last-edited: 2026-06-14 -->
+<!-- last-edited: 2026-06-15 -->
 
 # Changelog
 
 ## [Unreleased]
 
 ### Features
+
+#### June 15, 2026 — Managed external-tool lifecycle (PR #1465)
+
+Automated download, verification, and supervision of external binaries (Ollama, fpcalc) plus HNSW on-disk snapshot persistence and a new Settings → Tools UI.
+
+- **`internal/tools` package**: `ToolRegistry` (managed/system/custom/disabled resolution), pinned multi-version manifest (`KnownTools[tool][version]` + `LatestRelease()`), SHA256-verified atomic `Downloader`, `OllamaDaemon` (PID-file adoption + start-on-demand + stop-when-idle), `EmbedQueue` (buffered channel + debounce drain). Config nested as `Config.Tools ToolsConfig` with prod defaults at `/var/lib/audiobook-organizer/tools`.
+- **HNSW persistence (VEC-2)**: `HNSWEmbeddingStore.Export/Import` writes `.bin` + `.meta.json` snapshots per entity type; server loads snapshot at boot, saves on shutdown — eliminates full PebbleDB hydration walk on restart.
+- **Embedding guards (EMB-1..3)**: `EmbeddingClient.SetOllamaAvailable` gates `EmbedBatch` when Ollama isn't reachable; `reembed-embeddings` op checks `toolRegistry.Available("ollama")` before starting.
+- **fpcalc wiring (TOOL-6)**: `fingerprint.SetResolvedFpcalcPath` injected from `ToolRegistry.Resolve("fpcalc")` at startup.
+- **API**: `GET /api/v1/tools`, `GET /api/v1/tools/:name/status`, `POST /api/v1/tools/:name/install` (requires `settings.manage`).
+- **UI**: `ToolsPanel` component (wizard + settings modes), `useAdvancedSettings` hook (localStorage-persisted toggle), new step 2 in WelcomeWizard (recommended/custom RadioGroup), Settings → Tools tab (tab index 8).
+- **EMB-4**: Legacy `embeddings.db` deleted from prod (freed ~1.8 GB).
 
 #### June 14, 2026 — Local embeddings (Ollama) + config-driven embedding backend
 
