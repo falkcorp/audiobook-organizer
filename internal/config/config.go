@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.51.0
+// version: 1.52.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-06-14
+// last-edited: 2026-06-15
 
 package config
 
@@ -604,6 +604,32 @@ func InitConfig() {
 	viper.SetDefault("auto_write_tags_on_apply", true)
 	viper.SetDefault("verify_after_write", true)
 
+	// Embedding + vector index defaults
+	viper.SetDefault("embedding_enabled", true)
+	viper.SetDefault("embedding_model", "text-embedding-3-large")
+	viper.SetDefault("embedding_dimensions", 3072)
+	viper.SetDefault("embedding_base_url", "")
+	viper.SetDefault("vector_index_backend", "chromem")
+
+	// Dedup threshold + behaviour defaults
+	viper.SetDefault("dedup_book_high_threshold", 0.95)
+	viper.SetDefault("dedup_book_low_threshold", 0.85)
+	viper.SetDefault("dedup_author_high_threshold", 0.92)
+	viper.SetDefault("dedup_author_low_threshold", 0.80)
+	viper.SetDefault("dedup_auto_merge_enabled", true)
+	viper.SetDefault("dedup_embeddings_enabled", true)           // opt-out: set false on no-internet boxes
+	viper.SetDefault("dedup_llm_auto_merge_high_confidence", false) // opt-in
+	viper.SetDefault("dedup_on_import_via_scheduler", false)        // opt-in — keep eager path until M4 confirmed
+
+	// Metadata candidate scoring defaults
+	viper.SetDefault("metadata_embedding_scoring_enabled", true)
+	viper.SetDefault("metadata_embedding_min_score", 0.50)
+	viper.SetDefault("metadata_embedding_best_match_min", 0.70)
+	viper.SetDefault("metadata_llm_scoring_enabled", false)
+	viper.SetDefault("metadata_llm_rerank_epsilon", 0.01)
+	viper.SetDefault("metadata_llm_rerank_top_k", 5)
+	viper.SetDefault("write_backup_before_tag_write", false)
+
 	// Unified dedup scoring defaults (SPEC 1 §3–4, T011).
 	// These are consumed by internal/dedup/unified.LoadScoreConfig via Viper.
 	// Overridable per-kind in config.yaml under dedup.signals.<kind>.*
@@ -786,31 +812,33 @@ func InitConfig() {
 
 			SupportedExtensions: supportedExtensions,
 			ExcludePatterns:     excludePatterns,
+
+			// Embedding + vector index
+			EmbeddingEnabled:   viper.GetBool("embedding_enabled"),
+			EmbeddingModel:     viper.GetString("embedding_model"),
+			EmbeddingDimensions: viper.GetInt("embedding_dimensions"),
+			EmbeddingBaseURL:   viper.GetString("embedding_base_url"),
+			VectorIndexBackend: viper.GetString("vector_index_backend"),
+
+			// Dedup thresholds + behaviour
+			DedupBookHighThreshold:          viper.GetFloat64("dedup_book_high_threshold"),
+			DedupBookLowThreshold:           viper.GetFloat64("dedup_book_low_threshold"),
+			DedupAuthorHighThreshold:        viper.GetFloat64("dedup_author_high_threshold"),
+			DedupAuthorLowThreshold:         viper.GetFloat64("dedup_author_low_threshold"),
+			DedupAutoMergeEnabled:           viper.GetBool("dedup_auto_merge_enabled"),
+			DedupEmbeddingsEnabled:          viper.GetBool("dedup_embeddings_enabled"),
+			DedupLLMAutoMergeHighConfidence: viper.GetBool("dedup_llm_auto_merge_high_confidence"),
+			DedupOnImportViaScheduler:       viper.GetBool("dedup_on_import_via_scheduler"),
+
+			// Metadata candidate scoring
+			MetadataEmbeddingScoringEnabled: viper.GetBool("metadata_embedding_scoring_enabled"),
+			MetadataEmbeddingMinScore:       viper.GetFloat64("metadata_embedding_min_score"),
+			MetadataEmbeddingBestMatchMin:   viper.GetFloat64("metadata_embedding_best_match_min"),
+			MetadataLLMScoringEnabled:       viper.GetBool("metadata_llm_scoring_enabled"),
+			MetadataLLMRerankEpsilon:        viper.GetFloat64("metadata_llm_rerank_epsilon"),
+			MetadataLLMRerankTopK:           viper.GetInt("metadata_llm_rerank_top_k"),
+			WriteBackupBeforeTagWrite:       viper.GetBool("write_backup_before_tag_write"),
 		}
-
-		// Embedding-based dedup (defaults used unless DB settings override)
-		c.EmbeddingEnabled = true
-		c.EmbeddingModel = "text-embedding-3-large"
-		c.EmbeddingDimensions = 3072
-		c.EmbeddingBaseURL = ""
-		c.VectorIndexBackend = "chromem"
-		c.DedupBookHighThreshold = 0.95
-		c.DedupBookLowThreshold = 0.85
-		c.DedupAuthorHighThreshold = 0.92
-		c.DedupAuthorLowThreshold = 0.80
-		c.DedupAutoMergeEnabled = true
-		c.DedupEmbeddingsEnabled = true           // opt-out: set false on no-internet boxes
-		c.DedupLLMAutoMergeHighConfidence = false // opt-in
-		c.DedupOnImportViaScheduler = false       // opt-in — keep eager path until M4 is confirmed
-
-		// Metadata candidate scoring (defaults used unless DB settings override)
-		c.MetadataEmbeddingScoringEnabled = true
-		c.MetadataEmbeddingMinScore = 0.50
-		c.MetadataEmbeddingBestMatchMin = 0.70
-		c.MetadataLLMScoringEnabled = false
-		c.MetadataLLMRerankEpsilon = 0.01
-		c.MetadataLLMRerankTopK = 5
-		c.WriteBackupBeforeTagWrite = false
 
 		// Default Open Library dump dir to {RootDir}/openlibrary-dumps if not set
 		if c.OpenLibraryDumpDir == "" && c.RootDir != "" {
