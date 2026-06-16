@@ -1,7 +1,7 @@
 // file: web/src/pages/Settings.tsx
-// version: 1.45.5
+// version: 1.46.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-05-20
+// last-edited: 2026-06-15
 
 import { useState, useEffect, useMemo, useRef, ChangeEvent } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
@@ -45,6 +45,7 @@ import { TempLoginTab } from '../components/settings/TempLoginTab';
 import PluginsTab from '../components/settings/PluginsTab';
 import { PathsSettingsTab } from '../components/settings/PathsSettingsTab';
 import { MetadataSettingsTab } from '../components/settings/MetadataSettingsTab';
+import { ToolsSettingsTab } from '../components/settings/ToolsSettingsTab';
 import { ITunesImport } from '../components/settings/ITunesImport';
 import { ITunesTransfer } from '../components/settings/ITunesTransfer';
 import { SystemInfoTab } from '../components/system/SystemInfoTab';
@@ -513,7 +514,7 @@ function APIKeysTab() {
   );
 }
 
-const TAB_KEYS = ['library', 'itunes', 'metadata', 'paths', 'performance', 'security', 'api-keys', 'plugins', 'system'] as const;
+const TAB_KEYS = ['library', 'itunes', 'metadata', 'paths', 'performance', 'security', 'api-keys', 'plugins', 'tools', 'system'] as const;
 
 function tabFromHash(hash: string): number {
   const key = hash.replace('#', '');
@@ -2188,6 +2189,7 @@ export function Settings() {
             <Tab label="Security" />
             <Tab label="API Keys" />
             <Tab label="Plugins" />
+            <Tab label="Tools" />
             <Tab label="System Info" />
             <Tab label="Temp Login" />
           </Tabs>
@@ -2548,6 +2550,10 @@ export function Settings() {
         </TabPanel>
 
         <TabPanel value={tabValue} index={8}>
+          <ToolsSettingsTab />
+        </TabPanel>
+
+        <TabPanel value={tabValue} index={9}>
           <SystemInfoTab />
 
           <UpdatesSection settings={settings} setSettings={setSettings} />
@@ -2658,7 +2664,7 @@ export function Settings() {
           </Dialog>
         </TabPanel>
 
-        <TabPanel value={tabValue} index={9}>
+        <TabPanel value={tabValue} index={10}>
           <TempLoginTab />
         </TabPanel>
 

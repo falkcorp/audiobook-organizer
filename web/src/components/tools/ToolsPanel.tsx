@@ -1,11 +1,11 @@
 // file: web/src/components/tools/ToolsPanel.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: f8a9b0c1-d2e3-4567-fabc-567890123456
 // last-edited: 2026-06-15
 
 import { useState, useEffect } from 'react';
 import {
-  Box, Card, CardContent, Typography, Chip, Button,
+  Card, CardContent, Typography, Chip, Button,
   CircularProgress, Tooltip, Stack,
 } from '@mui/material';
 import { getTools, installTool, ToolStatus } from '../../services/api';
@@ -19,7 +19,7 @@ const TOOL_TOOLTIPS: Record<string, string> = {
   fpcalc: 'Enables audio fingerprint matching to identify duplicate recordings. ~2MB download.',
 };
 
-export function ToolsPanel({ mode }: ToolsPanelProps) {
+export function ToolsPanel({ mode: _mode }: ToolsPanelProps) {
   const [tools, setTools] = useState<ToolStatus[]>([]);
   const [installing, setInstalling] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
