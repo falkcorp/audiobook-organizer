@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 8.88.0 -->
+<!-- version: 8.89.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-06-16 -->
+<!-- last-edited: 2026-06-17 -->
 
 # Project TODO
 
@@ -23,7 +23,7 @@ future agent) can scan the entire workspace in one page.
 
 **Library:** ~50K books (~10,891 organized + ~39K iTunes-imported) / 8,837 authors / 21,668 series
 **Production:** PebbleDB primary; Linux, HTTPS at prod server
-**Latest activity:** CFG-1 Waves 1–8 complete (PRs #1468–#1484). All 77 flat config fields now nested into 7 sub-structs (`EmbeddingConfig`, `DedupConfig`, `MetadataScoringConfig`, `ITunesConfig`, `MaintenanceConfig`, `ScheduledTasksConfig`, `AutoUpdateConfig`). `GetConfig` secret-masking bug fixed (all 5 secrets now masked via `MaskSecrets`). WebUI config API documented at `docs/reference/config-api-shape.md`.
+**Latest activity:** Repo hygiene + red-CI fix (2026-06-17): pruned 51 stale worktrees (55→4) and ~97 merged branches (106→4); fixed the long-red `Frontend Unit Tests` CI job (stale `UnifiedDedupTab` assertions); bumped the full `-race` test timeout (root-caused an `internal/server` timeout). Prior: CFG-1 Waves 1–8 complete (PRs #1468–#1484) — all 77 flat config fields nested into 7 sub-structs; `GetConfig` secret-masking bug fixed; WebUI config API documented at `docs/reference/config-api-shape.md`.
 **In flight:** Burndown bot dispatching test coverage tasks (#79–#109), FE-10 (Vitest coverage thresholds). EMB-UI-1 (Ollama download link) still open.
 
 ---
@@ -323,10 +323,11 @@ because the subprocess child-mode handler is never wired into
   access), then call `registry.RunChildMode(r)` which never returns.
   Acceptance: `audiobook-organizer --operation-runner <opID>` with
   `UOS_SOCKET=/tmp/sock` connects to a parent socket and runs.
-- [ ] **A2** Add unit test in `internal/operations/registry/subprocess_test.go`
-  that re-execs the test binary as child and verifies handshake +
-  result roundtrip via the unix socket. (`testscript` or
-  `os/exec.Cmd` with `os.Args[0]`.)
+- [x] **A2** ✅ Done (verified 2026-06-17) — `internal/operations/registry/subprocess_test.go`
+  already contains `TestSubprocess_HandshakeRoundtrip` + `TestSubprocessRoundtrip` (added
+  2026-06-13) which re-exec the test binary as the child and verify handshake + result
+  roundtrip over the unix socket. `go test ./internal/operations/registry/ -run TestSubprocess`
+  passes. The stale auto-burndown PR #1339 is redundant (left for the user to close).
 - [ ] **A3** [hold] After A1+A2 pass in CI, revert `Isolate: false` on the
   7 ops (PR #1155). Restore the original comments. Verify
   acoustid.scan logs both parent "dispatched" AND child stdout
@@ -668,15 +669,26 @@ must sequence, but A and B are parallelizable. Spawn:
 
 ## 🐛 Open Bugs — May 17, 2026
 
-- [ ] **CI-FRONTEND-UNITTESTS-STALE** (2026-06-13) — `Minimal CI / Frontend Unit Tests`
-  is failing on `web/src/components/dedup/__tests__/UnifiedDedupTab.test.tsx`: 2 tests
-  (`renders candidates in the table`, `shows bulk action bar when a candidate is selected`)
-  assert a raw ULID `01ABCDEFGHIJKLMNOPQRSTUV01` appears in the table, but the reworked
-  `UnifiedDedupTab` now renders acoustic-style rich cards (title/author/path + metadata
-  chips), not bare ULIDs. The tests are stale vs the cards/filter rework — update them to
-  match the new rendering (query by the card title/path, not the ULID). Also clean up the
-  `getSystemStorage` mock-export warning in the same suite if it surfaces. Failing on every
-  PR (it's a pre-existing red on main, not caused by any one PR).
+- [x] **CI-FRONTEND-UNITTESTS-STALE** (2026-06-13) ✅ **FIXED 2026-06-17** — `UnifiedDedupTab.test.tsx`
+  updated: `mockCandidate` now carries inline `book_a`/`book_b` (the `include_books` shape)
+  and the 2 stale tests assert on the rendered card **title** (`Dune (FLAC rip)`) instead of
+  the raw ULID; the bulk-bar test selects the row checkbox via `within(row)` (robust against
+  the toolbar filter + header select-all checkboxes) instead of a brittle `getAllByRole` index.
+  Full frontend suite green (35 files / 246 tests). No `getSystemStorage` warning surfaced.
+- [x] **CI-BACKEND-RACE-TIMEOUT** (2026-06-17) ✅ **FIXED** — `make test` (full `go test ./... -v -race`,
+  reused by `test-nightly`) failed with `panic: test timed out after 10m0s` in `internal/server`.
+  Root cause: that package runs ~421s **without** `-race` (heavy per-test setup: Pebble + migrations
+  + op-registry workers) and exceeds the 600s/package default under `-race`. Fix: `-timeout 25m` on
+  the full target. CI's `-short -race` job fits the default and was already green, so this never
+  blocked PRs — only local `make test` + nightly.
+- [ ] **NUTSDB-CLOSE-GOROUTINE-LEAK** (2026-06-17, low priority) — `NutsActivityStore.Close()` →
+  `nutsdb.DB.Close()` leaks **1 background goroutine per Open** (the TTL time-wheel; isolation
+  micro-test: 20 open+close cycles → 20 survivors). **Benign in prod** — the activity store is a
+  process-lifetime singleton (one open at startup, `internal/activity/register.go`). Only the test
+  suite (which opens many short-lived stores) accumulates them. Do NOT fork/upgrade nutsdb to chase
+  this — `nuts_activity_store.go` is coupled to v1.1.0-specific error sentinels (`ErrNotFoundBucket`
+  vs `ErrBucketNotFound`) and an upgrade risks breaking empty-scan handling. If it ever matters,
+  add an option to skip the TTL manager, or share one store across the server test package.
 
 - [x] **BUG-ITUNES-WRITEBACK-CORRUPTS-LIBRARY** — Fixed in PR #1319 (2026-06-05). See PD-2.
 

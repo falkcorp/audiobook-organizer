@@ -1,13 +1,31 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.29.0 -->
+<!-- version: 3.30.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
-<!-- last-edited: 2026-06-16 -->
+<!-- last-edited: 2026-06-17 -->
 
 # Changelog
 
 ## [Unreleased]
 
 ### Fixes
+
+#### June 17, 2026 — Fix long-red Frontend Unit Tests CI job + backend -race test timeout
+
+Two CI/test reliability fixes:
+
+- **Frontend Unit Tests (the red CI job):** `web/src/components/dedup/__tests__/UnifiedDedupTab.test.tsx`
+  had two stale assertions (`renders candidates in the table`, `shows bulk action bar when a candidate
+  is selected`) that expected a raw entity ULID to appear in the table. The `UnifiedDedupTab` rework
+  renders rich book cards (title / author / file path) from inline `book_a`/`book_b` objects, so the
+  ULID is no longer shown (a missing book renders `(missing book — …)`). The test now seeds realistic
+  `book_a`/`book_b` and asserts on the rendered card title, and selects a candidate by its row checkbox
+  via `within(row)` rather than a brittle `getAllByRole('checkbox')` index (which broke once a toolbar
+  filter checkbox was added). Full frontend suite green: 35 files / 246 tests.
+- **Backend full `-race` suite:** `make test` (and `test-nightly`, which reuses it) panicked with
+  `test timed out after 10m0s` in `internal/server`. That package legitimately runs ~421s without
+  `-race` (heavy per-test setup), exceeding the 600s/package default under the race detector. Raised
+  the full target's timeout to `-timeout 25m`. CI's `-short -race` job already fit the default and was
+  green, so this only affected local `make test` and the nightly run.
 
 #### June 16, 2026 — GetConfig secret-masking bug: all secrets now redacted (PR #1484)
 

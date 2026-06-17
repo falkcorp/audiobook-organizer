@@ -155,9 +155,14 @@ web-lint-memory:
 # --- Testing targets ---
 
 ## test: Run Go backend tests (full — includes slow property tests)
+## NOTE: -timeout 25m (vs the 10m default). internal/server alone runs ~421s
+## WITHOUT -race; under -race it exceeds the 600s/package default and the run
+## fails with "panic: test timed out after 10m0s". The package is large (heavy
+## per-test setup: Pebble + migrations + op-registry workers). CI uses the
+## -short variant which fits the default; this full target needs the headroom.
 test: vet
 	@echo "🧪 Running backend tests (full suite)..."
-	@go test ./... -v -race
+	@go test ./... -v -race -timeout 25m
 	@echo "✅ Backend tests passed"
 
 ## test-short: Run Go backend tests in short mode — skips slow property
