@@ -1,7 +1,7 @@
 // file: internal/server/import_collision_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 9c0d1e2f-3a4b-5c6d-7e8f-9a0b1c2d3e4f
-// last-edited: 2026-05-03
+// last-edited: 2026-06-17
 
 package server
 
@@ -90,6 +90,12 @@ func TestHandleImportCollisionPreview_FileHashCollision(t *testing.T) {
 	tmpFile := filepath.Join(t.TempDir(), "existing.m4b")
 	content := []byte("this is some audio content for hash matching")
 	_ = os.WriteFile(tmpFile, content, 0o644)
+
+	// Register the temp dir as an import path so the collision check's
+	// file-hash + metadata steps pass the path allow-list gate.
+	if _, err := store.CreateImportPath(filepath.Dir(tmpFile), "test-allow"); err != nil {
+		t.Fatalf("allow import path: %v", err)
+	}
 
 	hash := merge.QuickHash(tmpFile)
 	if hash == "" {

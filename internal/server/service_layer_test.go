@@ -1,7 +1,7 @@
 // file: internal/server/service_layer_test.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 8b9c0d1e-2f3a-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-05-15
+// last-edited: 2026-06-17
 
 package server
 
@@ -1520,11 +1520,15 @@ func TestFilesystemService_CreateExclusion_EmptyPath(t *testing.T) {
 
 // TestFilesystemService_CreateExclusion_NotDirectory tests file path error
 func TestFilesystemService_CreateExclusion_NotDirectory(t *testing.T) {
-	svc := fileops.NewFilesystemService(nil)
-
 	// Create a real file so stat succeeds but it's not a directory
 	tmpFile := filepath.Join(t.TempDir(), "not_a_dir.txt")
 	os.WriteFile(tmpFile, []byte("test"), 0644)
+
+	// Store must allow the path so the allow-list gate passes and the
+	// not-a-directory check is what rejects it.
+	mockStore := new(mocks.MockImportPathStore)
+	mockStore.On("GetAllImportPaths").Return([]database.ImportPath{{Path: filepath.Dir(tmpFile)}}, nil)
+	svc := fileops.NewFilesystemService(mockStore)
 
 	err := svc.CreateExclusion(context.Background(), tmpFile)
 	if err == nil {

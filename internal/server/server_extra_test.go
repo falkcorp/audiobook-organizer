@@ -1,7 +1,7 @@
 // file: internal/server/server_extra_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 61a2d3c4-80ab-4f6f-8c39-15a2ac5b7f0c
-// last-edited: 2026-05-08
+// last-edited: 2026-06-17
 
 package server
 
@@ -204,6 +204,11 @@ func TestExclusionEndpoints(t *testing.T) {
 	defer cleanup()
 
 	dir := t.TempDir()
+	// Allow the temp dir through the exclusion path gate by registering it as
+	// an import path on the store (parallel-safe; avoids global config mutation).
+	if _, err := database.GetGlobalStore().CreateImportPath(dir, "test-allow"); err != nil {
+		t.Fatalf("allow import path: %v", err)
+	}
 	payload := bytes.NewBufferString(`{"path":"` + dir + `","reason":"test"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/filesystem/exclude", payload)
 	req.Header.Set("Content-Type", "application/json")
