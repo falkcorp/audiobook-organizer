@@ -1,6 +1,7 @@
 // file: internal/logger/standard.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3f2504e0-4f89-11d3-9a0c-0305e82c3301
+// last-edited: 2026-06-17
 
 package logger
 
@@ -46,6 +47,7 @@ func (l *StandardLogger) log(level Level, msg string, args ...any) {
 		if len(args) > 0 {
 			formatted = fmt.Sprintf(msg, args...)
 		}
+		formatted = sanitizeLogLine(formatted)
 		_ = l.activityWriter.AddSystemActivityLog(l.subsystem, level.String(), formatted)
 	}
 }

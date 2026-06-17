@@ -1,6 +1,7 @@
 // file: internal/logger/operation.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7b3f9c1a-4e2d-4a8b-9c5e-1d2f3a4b5c6d
+// last-edited: 2026-06-17
 
 package logger
 
@@ -68,7 +69,7 @@ func (l *OperationLogger) SetCanceled() {
 }
 
 func (l *OperationLogger) log(level Level, msg string, args ...any) {
-	formatted := fmt.Sprintf(msg, args...)
+	formatted := sanitizeLogLine(fmt.Sprintf(msg, args...))
 
 	if level >= l.minStdout {
 		logToStdout(l.subsystem, level, msg, args...)
@@ -158,6 +159,7 @@ func (l *OperationLogger) With(subsystem string) Logger {
 // Log implements the ProgressReporter.Log interface for backward compatibility.
 func (l *OperationLogger) Log(level, message string, details *string) error {
 	lvl := ParseLevel(level)
+	message = sanitizeLogLine(message)
 	if lvl >= l.minStdout {
 		logToStdout(l.subsystem, lvl, "%s", message)
 	}

@@ -1,7 +1,7 @@
 // file: internal/logger/logger.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: f47ac10b-58cc-4372-a567-0e02b2c3d479
-// last-edited: 2026-05-15
+// last-edited: 2026-06-17
 
 package logger
 
@@ -98,7 +98,7 @@ var _ Logger = (*OperationLogger)(nil)
 
 // logToStdout formats and prints a log line to stdout using slog.
 func logToStdout(subsystem string, level Level, msg string, args ...any) {
-	formatted := fmt.Sprintf(msg, args...)
+	formatted := sanitizeLogLine(fmt.Sprintf(msg, args...))
 	l := slog.Default()
 	msgWithSubsystem := formatted
 	if subsystem != "" {
