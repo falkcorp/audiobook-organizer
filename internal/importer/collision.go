@@ -1,7 +1,7 @@
 // file: internal/importer/collision.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5c7d8e9f-0a1b-2c3d-4e5f-6a7b8c9d0e1f
-// last-edited: 2026-05-11
+// last-edited: 2026-06-17
 //
 // Import-time collision preview. Before importing a file, check whether
 // it collides with an existing book (by title match, file hash, or fingerprint)
@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
@@ -54,24 +55,37 @@ func CheckImportCollisions(store database.Store, req *CollisionPreviewRequest) *
 		}
 	}
 
+	// Steps 2 and 3 read the file directly, so validate the path against the
+	// allow-list first (go/path-injection). A disallowed path simply skips the
+	// file-based checks — the actual import via ImportFile will reject it.
+	safePath, pathErr := fileops.ValidateUserPath(store, req.FilePath)
+
 	// 2. File hash check against existing books.
-	if _, err := os.Stat(req.FilePath); err == nil {
-		hash := merge.QuickHash(req.FilePath)
-		if hash != "" {
-			existing, _ := store.GetBookByFileHash(hash)
-			if existing != nil {
-				candidates = append(candidates, merge.CollisionCandidate{
-					BookID:    existing.ID,
-					Title:     existing.Title,
-					MatchType: "file_hash",
-					FilePath:  existing.FilePath,
-				})
+	if pathErr == nil {
+		if _, err := os.Stat(safePath); err == nil {
+			hash := merge.QuickHash(safePath)
+			if hash != "" {
+				existing, _ := store.GetBookByFileHash(hash)
+				if existing != nil {
+					candidates = append(candidates, merge.CollisionCandidate{
+						BookID:    existing.ID,
+						Title:     existing.Title,
+						MatchType: "file_hash",
+						FilePath:  existing.FilePath,
+					})
+				}
 			}
 		}
 	}
 
 	// 3. Title match via metadata extraction.
-	meta, err := metadata.ExtractMetadata(req.FilePath, nil)
+	var meta metadata.Metadata
+	var err error
+	if pathErr == nil {
+		meta, err = metadata.ExtractMetadata(safePath, nil)
+	} else {
+		err = pathErr
+	}
 	if err == nil && meta.Title != "" {
 		titleLower := strings.ToLower(strings.TrimSpace(meta.Title))
 		books, _ := store.GetAllBooks(0, 0)

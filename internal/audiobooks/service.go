@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service.go
-// version: 1.30.0
+// version: 1.31.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-05-29
+// last-edited: 2026-06-17
 
 package audiobooks
 
@@ -23,6 +23,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
+	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
@@ -2038,12 +2039,25 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 		currentBook.Format = req.Updates.Format
 	}
 	if req.Updates.FilePath != "" && req.Updates.FilePath != currentBook.FilePath {
-		// Validate new file exists before accepting path change
-		if _, err := os.Stat(req.Updates.FilePath); err != nil {
-			return nil, fmt.Errorf("file does not exist at new path: %s", req.Updates.FilePath)
+		// Validate the new path is inside an allowed directory before accepting
+		// the change (go/path-injection), then confirm it exists.
+		absNewPath, err := filepath.Abs(req.Updates.FilePath)
+		if err != nil {
+			return nil, fmt.Errorf("invalid new path: %w", err)
 		}
-		slog.Info("audiobook_service FilePath changed for →", "id", id, "currentBook", currentBook.FilePath, "value2", req.Updates.FilePath)
-		currentBook.FilePath = req.Updates.FilePath
+		importPaths, err := svc.store.GetAllImportPaths()
+		if err != nil {
+			return nil, fmt.Errorf("failed to check allowed paths: %w", err)
+		}
+		if !fileops.IsAllowedPath(absNewPath, importPaths) {
+			return nil, fmt.Errorf("new path is not in an allowed directory")
+		}
+		// Validate new file exists before accepting path change
+		if _, err := os.Stat(absNewPath); err != nil {
+			return nil, fmt.Errorf("file does not exist at new path: %s", absNewPath)
+		}
+		slog.Info("audiobook_service FilePath changed for →", "id", id, "currentBook", currentBook.FilePath, "value2", absNewPath)
+		currentBook.FilePath = absNewPath
 	}
 	if req.Updates.Narrator != nil {
 		currentBook.Narrator = req.Updates.Narrator

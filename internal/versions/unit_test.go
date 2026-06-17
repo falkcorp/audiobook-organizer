@@ -1,5 +1,6 @@
 // file: internal/versions/unit_test.go
-// version: 1.0.0
+// version: 1.1.0
+// last-edited: 2026-06-17
 
 package versions
 
@@ -40,6 +41,9 @@ func TestCreateIngestVersion_EmptyFilePath(t *testing.T) {
 func TestCreateIngestVersion_StoreErrorOnCreate(t *testing.T) {
 	mockStore := mocks.NewMockStore(t)
 
+	// Allow-all import path so the path gate passes; this test exercises
+	// version-creation error handling, not path validation.
+	mockStore.EXPECT().GetAllImportPaths().Return([]database.ImportPath{{Path: "/"}}, nil)
 	// No torrent hash so fingerprint check is skipped.
 	// First version — no active version exists.
 	mockStore.EXPECT().GetActiveVersionForBook("book-1").Return(nil, errors.New("not found"))
@@ -55,9 +59,27 @@ func TestCreateIngestVersion_StoreErrorOnCreate(t *testing.T) {
 	assert.Contains(t, err.Error(), "create version")
 }
 
+// TestCreateIngestVersion_RejectsDisallowedPath verifies the allow-list gate:
+// a path outside the configured import paths is rejected before any version
+// row is created or file is read (go/path-injection).
+func TestCreateIngestVersion_RejectsDisallowedPath(t *testing.T) {
+	mockStore := mocks.NewMockStore(t)
+	mockStore.EXPECT().GetAllImportPaths().Return([]database.ImportPath{}, nil)
+
+	_, err := CreateIngestVersion(mockStore, IngestVersionParams{
+		BookID:   "book-1",
+		FilePath: "/etc/passwd",
+		Format:   "m4b",
+		Source:   "imported",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "allowed")
+}
+
 func TestCreateIngestVersion_FingerprintBlocksPurgedTorrent_Mock(t *testing.T) {
 	mockStore := mocks.NewMockStore(t)
 
+	mockStore.EXPECT().GetAllImportPaths().Return([]database.ImportPath{{Path: "/"}}, nil)
 	// Torrent hash matches a purged version.
 	mockStore.EXPECT().GetBookVersionByTorrentHash("bad-hash").Return(&database.BookVersion{
 		ID:     "v-old",
@@ -79,6 +101,7 @@ func TestCreateIngestVersion_FingerprintBlocksPurgedTorrent_Mock(t *testing.T) {
 func TestCreateIngestVersion_FirstVersionIsActive_Mock(t *testing.T) {
 	mockStore := mocks.NewMockStore(t)
 
+	mockStore.EXPECT().GetAllImportPaths().Return([]database.ImportPath{{Path: "/"}}, nil)
 	// No active version exists.
 	mockStore.EXPECT().GetActiveVersionForBook("book-1").Return(nil, errors.New("not found"))
 
@@ -105,6 +128,7 @@ func TestCreateIngestVersion_FirstVersionIsActive_Mock(t *testing.T) {
 func TestCreateIngestVersion_SecondVersionIsAlt_Mock(t *testing.T) {
 	mockStore := mocks.NewMockStore(t)
 
+	mockStore.EXPECT().GetAllImportPaths().Return([]database.ImportPath{{Path: "/"}}, nil)
 	// Active version already exists.
 	mockStore.EXPECT().GetActiveVersionForBook("book-1").Return(&database.BookVersion{
 		ID: "v-existing", BookID: "book-1", Status: database.BookVersionStatusActive,

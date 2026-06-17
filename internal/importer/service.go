@@ -16,6 +16,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
+	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
@@ -73,10 +74,11 @@ type ImportFileResponse struct {
 }
 
 func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse, error) {
-	// Validate file exists and is supported
-	absPath, err := filepath.Abs(req.FilePath)
+	// Validate the path is inside an allowed directory before any filesystem
+	// access (go/path-injection); returns the cleaned absolute path.
+	absPath, err := fileops.ValidateUserPath(is.db, req.FilePath)
 	if err != nil {
-		return nil, fmt.Errorf("file not found or inaccessible: %w", err)
+		return nil, err
 	}
 	fileInfo, err := os.Stat(absPath)
 	if err != nil {
