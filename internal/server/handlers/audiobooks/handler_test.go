@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5cd764d5-8036-425c-842e-c49d0d44acec
-// last-edited: 2026-06-03
+// last-edited: 2026-06-17
 
 // Tests for the audiobooks-domain handlers (main library list / CRUD). The
 // store / audiobook-service / updater / write-back / metadata-state /
@@ -20,6 +20,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -363,6 +364,24 @@ func TestRelocateBookFiles_BadRequest(t *testing.T) {
 	h.RelocateBookFiles(c)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d", w.Code)
+	}
+}
+
+// TestRelocateBookFiles_RejectsDisallowedPath verifies the relocate target is
+// gated by the allow-list: a clean absolute path outside the allowed roots
+// (RootDir empty + default prefixes in tests) is rejected (go/path-injection).
+func TestRelocateBookFiles_RejectsDisallowedPath(t *testing.T) {
+	h, d := newHandler(t)
+	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1"}, nil)
+	d.store.EXPECT().GetBookFiles("b1").Return([]database.BookFile{{ID: "s1", BookID: "b1"}}, nil)
+	c, w := newCtx("POST", "/audiobooks/b1/relocate",
+		map[string]any{"segment_id": "s1", "new_path": "/etc/cron.d/evil"}, p("id", "b1"))
+	h.RelocateBookFiles(c)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "not in an allowed directory") {
+		t.Fatalf("expected allow-list rejection, got: %s", w.Body.String())
 	}
 }
 

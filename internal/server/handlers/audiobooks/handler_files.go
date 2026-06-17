@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_files.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 82f8d1f7-46d5-4ead-b5c1-ba796fd785f9
-// last-edited: 2026-06-03
+// last-edited: 2026-06-17
 
 // File / segment endpoints for the audiobooks domain: segment listing,
 // book-file listing + patch, track-info extraction, relocate, and segment
@@ -20,11 +20,30 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
 )
+
+// relocateTargetAllowed reports whether absPath is inside an allowed directory
+// (registered import paths + RootDir + default prefixes). A relocate target
+// must land inside the library's allowed roots (go/path-injection). Import
+// paths are read from the live store via an inline type assertion (the narrow
+// AudiobooksStore interface does not expose them); when unavailable (e.g. in
+// tests with a mock store) the RootDir/default-prefix allow-list still applies.
+func relocateTargetAllowed(store AudiobooksStore, absPath string) bool {
+	var importPaths []database.ImportPath
+	if ips, ok := store.(interface {
+		GetAllImportPaths() ([]database.ImportPath, error)
+	}); ok {
+		if got, err := ips.GetAllImportPaths(); err == nil {
+			importPaths = got
+		}
+	}
+	return fileops.IsAllowedPath(absPath, importPaths)
+}
 
 // ListAudiobookSegments handles GET /audiobooks/:id/segments. Returns file
 // segments for a multi-file audiobook in the legacy BookSegment JSON shape.
@@ -338,6 +357,10 @@ func (h *Handler) RelocateBookFiles(c *gin.Context) {
 			httputil.RespondWithBadRequest(c, "invalid new_path: "+err.Error())
 			return
 		}
+		if !relocateTargetAllowed(store, cleanNewPath) {
+			httputil.RespondWithBadRequest(c, "new_path is not in an allowed directory")
+			return
+		}
 		for i, f := range files {
 			if f.ID == req.SegmentID {
 				if _, statErr := os.Stat(cleanNewPath); os.IsNotExist(statErr) {
@@ -358,6 +381,10 @@ func (h *Handler) RelocateBookFiles(c *gin.Context) {
 		cleanFolderPath, err := pathvalidation.CleanAbsolutePath(req.FolderPath)
 		if err != nil {
 			httputil.RespondWithBadRequest(c, "invalid folder_path: "+err.Error())
+			return
+		}
+		if !relocateTargetAllowed(store, cleanFolderPath) {
+			httputil.RespondWithBadRequest(c, "folder_path is not in an allowed directory")
 			return
 		}
 		dirEntries, err := os.ReadDir(cleanFolderPath)

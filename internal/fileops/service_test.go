@@ -1,5 +1,5 @@
 // file: internal/fileops/service_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c9d0e1f2-a3b4-5c6d-7e8f-9a0b1c2d3e4f
 // last-edited: 2026-06-17
 
@@ -101,5 +101,26 @@ func TestFilesystemService_RemoveExclusion_NotFound(t *testing.T) {
 	err = fs.RemoveExclusion(context.Background(), tmpDir)
 	if err == nil {
 		t.Error("expected error for nonexistent exclusion")
+	}
+}
+
+// TestIsAllowedPath_EtcPackageDir verifies the packaged-install dir
+// /etc/audiobook-organizer is allowed (and its subtree) while the rest of /etc
+// is denied.
+func TestIsAllowedPath_EtcPackageDir(t *testing.T) {
+	cases := []struct {
+		path string
+		want bool
+	}{
+		{"/etc/audiobook-organizer", true},
+		{"/etc/audiobook-organizer/config.yaml", true},
+		{"/etc/passwd", false},
+		{"/etc", false},
+		{"/etc/audiobook-organizer-evil/x", false}, // sibling, not subtree
+	}
+	for _, c := range cases {
+		if got := IsAllowedPath(c.path, nil); got != c.want {
+			t.Errorf("IsAllowedPath(%q) = %v, want %v", c.path, got, c.want)
+		}
 	}
 }
