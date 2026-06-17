@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/UnifiedDedupTab.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: c8b9d0e1-f2a3-4567-bcde-cb8901234567
-// last-edited: 2026-06-12
+// last-edited: 2026-06-17
 
 // UnifiedDedupTab is the T017 single surface that replaces the separate Books /
 // Advanced-Scan / Acoustic tabs. It shows a paginated candidate table filtered
@@ -214,6 +214,18 @@ export function UnifiedDedupTab({ hidden }: UnifiedDedupTabProps) {
   // --- abort controller refs ---
   const fetchAbortRef = useRef<AbortController | null>(null);
   const statsAbortRef = useRef<AbortController | null>(null);
+
+  // Post-scan refresh timers (fire ~2s later to pick up new candidates). Tracked
+  // so they're cancelled on unmount — otherwise the deferred loadCandidates/
+  // loadStats would call setState on an unmounted component.
+  const refreshTimeoutsRef = useRef<number[]>([]);
+  useEffect(
+    () => () => {
+      refreshTimeoutsRef.current.forEach((id) => window.clearTimeout(id));
+      refreshTimeoutsRef.current = [];
+    },
+    [],
+  );
 
   // --- sync band filter to URL ---
   const handleBandChange = useCallback(
@@ -508,10 +520,11 @@ export function UnifiedDedupTab({ hidden }: UnifiedDedupTabProps) {
       const op = await api.triggerDedupScan();
       setToast(trackOp(op, 'Dedup scan'));
       // Refresh after short delay for new candidates to appear.
-      setTimeout(() => {
+      const refreshTimeout = window.setTimeout(() => {
         loadCandidates();
         loadStats();
       }, 2000);
+      refreshTimeoutsRef.current.push(refreshTimeout);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Scan failed');
     } finally {
@@ -566,10 +579,11 @@ export function UnifiedDedupTab({ hidden }: UnifiedDedupTabProps) {
     try {
       const op = await opt.run();
       setToast(trackOp(op, `Force rescan (${opt.kind})`));
-      setTimeout(() => {
+      const refreshTimeout = window.setTimeout(() => {
         loadCandidates();
         loadStats();
       }, 2000);
+      refreshTimeoutsRef.current.push(refreshTimeout);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Rescan failed');
     } finally {
