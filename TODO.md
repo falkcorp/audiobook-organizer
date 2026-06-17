@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 8.89.0 -->
+<!-- version: 8.90.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-06-17 -->
 
@@ -1768,7 +1768,7 @@ Activity page mobile layout, adaptive refresh, version vs snapshot UI polish, co
 
 ## ⚠️ Automated Findings
 
-- [ ] **MEMLEAK-2026-06-14** [memory-leak] 4 potential memory leak(s) detected by scheduled scan — https://github.com/falkcorp/audiobook-organizer/actions/runs/27492872026.
+- [x] **MEMLEAK-2026-06-14** [memory-leak] 4 potential memory leak(s) detected by scheduled scan — https://github.com/falkcorp/audiobook-organizer/actions/runs/27492872026. **Fixed by commit `4f68ef9f`** — all 4 timers tracked in `refreshTimeoutsRef`/`scrollTimeoutsRef` with unmount cleanup; `scripts/check-memory-leaks.py` reports clean. Issue #1449 closed 2026-06-17.
   - `src/components/dedup/UnifiedDedupTab.tsx:511` — Untracked setTimeout (may fire after unmount)
   - `src/components/dedup/UnifiedDedupTab.tsx:569` — Untracked setTimeout (may fire after unmount)
   - `src/pages/ActivityLog.tsx:250` — Untracked setTimeout (may fire after unmount)
