@@ -1,5 +1,5 @@
 // file: internal/fileops/service.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
 // last-edited: 2026-06-17
 
@@ -23,12 +23,15 @@ import (
 var ErrPathNotAllowed = errors.New("path not in allowed directories")
 
 // defaultBrowseAllowPrefixes covers common Linux desktop/server and Docker layouts.
+// "/etc/audiobook-organizer" is the packaged-install dir; the prefix match allows
+// it (and its subtree) while still denying the rest of /etc (e.g. /etc/passwd).
 var defaultBrowseAllowPrefixes = []string{
 	"/home",
 	"/media",
 	"/mnt",
 	"/audiobooks",
 	"/data",
+	"/etc/audiobook-organizer",
 }
 
 type FilesystemService struct {
