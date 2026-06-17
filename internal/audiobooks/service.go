@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service.go
-// version: 1.31.0
+// version: 1.31.1
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-06-17
 
@@ -2052,8 +2052,10 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 		if !fileops.IsAllowedPath(absNewPath, importPaths) {
 			return nil, fmt.Errorf("new path is not in an allowed directory")
 		}
-		// Validate new file exists before accepting path change
-		if _, err := os.Stat(absNewPath); err != nil {
+		// Validate new file exists before accepting path change.
+		// absNewPath is gated by fileops.IsAllowedPath above; CodeQL does not
+		// model that custom allow-list barrier, so suppress the false positive.
+		if _, err := os.Stat(absNewPath); err != nil { // lgtm[go/path-injection]
 			return nil, fmt.Errorf("file does not exist at new path: %s", absNewPath)
 		}
 		slog.Info("audiobook_service FilePath changed for →", "id", id, "currentBook", currentBook.FilePath, "value2", absNewPath)

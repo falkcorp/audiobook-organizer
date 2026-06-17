@@ -1,5 +1,5 @@
 // file: internal/importer/collision.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5c7d8e9f-0a1b-2c3d-4e5f-6a7b8c9d0e1f
 // last-edited: 2026-06-17
 //
@@ -61,8 +61,10 @@ func CheckImportCollisions(store database.Store, req *CollisionPreviewRequest) *
 	safePath, pathErr := fileops.ValidateUserPath(store, req.FilePath)
 
 	// 2. File hash check against existing books.
+	// safePath is validated against the allow-list by ValidateUserPath above;
+	// CodeQL does not model that barrier, so suppress the false positive.
 	if pathErr == nil {
-		if _, err := os.Stat(safePath); err == nil {
+		if _, err := os.Stat(safePath); err == nil { // lgtm[go/path-injection]
 			hash := merge.QuickHash(safePath)
 			if hash != "" {
 				existing, _ := store.GetBookByFileHash(hash)
