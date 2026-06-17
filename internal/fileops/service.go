@@ -1,7 +1,7 @@
 // file: internal/fileops/service.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-05-15
+// last-edited: 2026-06-17
 
 package fileops
 
@@ -64,6 +64,36 @@ func isAllowedPath(absPath string, importPaths []database.ImportPath) bool {
 		}
 	}
 	return false
+}
+
+// IsAllowedPath reports whether absPath lies within the configured allow-list
+// (default prefixes + RootDir + registered import paths). Exported so callers in
+// other packages that perform filesystem operations on request-supplied paths
+// can reuse the same gate BrowseDirectory uses.
+func IsAllowedPath(absPath string, importPaths []database.ImportPath) bool {
+	return isAllowedPath(absPath, importPaths)
+}
+
+// ValidateUserPath resolves path to an absolute form and verifies it is within
+// the allow-list, returning ErrPathNotAllowed otherwise. It is the one-call
+// guard for handlers/services that accept a filesystem path from a request and
+// then read, write, hash, or scan it (go/path-injection).
+func ValidateUserPath(db database.ImportPathStore, path string) (string, error) {
+	if path == "" {
+		return "", fmt.Errorf("path is required")
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("invalid path: %w", err)
+	}
+	importPaths, err := db.GetAllImportPaths()
+	if err != nil {
+		return "", fmt.Errorf("failed to check allowed paths: %w", err)
+	}
+	if !isAllowedPath(absPath, importPaths) {
+		return "", ErrPathNotAllowed
+	}
+	return absPath, nil
 }
 
 type FileInfo struct {
@@ -172,6 +202,16 @@ func (fs *FilesystemService) CreateExclusion(_ context.Context, path string) err
 		return fmt.Errorf("invalid path: %w", err)
 	}
 
+	// Security: only allow exclusion files inside allowed directories (same gate
+	// as BrowseDirectory) before touching the filesystem (go/path-injection).
+	importPaths, err := fs.db.GetAllImportPaths()
+	if err != nil {
+		return fmt.Errorf("failed to check allowed paths: %w", err)
+	}
+	if !isAllowedPath(absPath, importPaths) {
+		return ErrPathNotAllowed
+	}
+
 	stat, err := os.Stat(absPath)
 	if err != nil {
 		return fmt.Errorf("path not found or inaccessible: %w", err)
@@ -196,6 +236,15 @@ func (fs *FilesystemService) RemoveExclusion(_ context.Context, path string) err
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return fmt.Errorf("invalid path: %w", err)
+	}
+
+	// Security: same allow-list gate as CreateExclusion (go/path-injection).
+	importPaths, err := fs.db.GetAllImportPaths()
+	if err != nil {
+		return fmt.Errorf("failed to check allowed paths: %w", err)
+	}
+	if !isAllowedPath(absPath, importPaths) {
+		return ErrPathNotAllowed
 	}
 
 	sp, err := safepath.Join(absPath, ".jabexclude")
