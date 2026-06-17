@@ -1,11 +1,34 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.31.0 -->
+<!-- version: 3.32.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-17 -->
 
 # Changelog
 
 ## [Unreleased]
+
+### Security
+
+#### June 17, 2026 — SEC-AUDIT-12: remediate log + path injection (CodeQL)
+
+Closed out the `go/log-injection` (14) and `go/path-injection` (73) CodeQL alert
+classes with runtime guards plus categorized dismissals.
+
+- **Log injection:** new `logger.sanitizeLogLine` escapes CR/LF and C0/DEL control
+  chars in every formatted log line at all three logger sinks, so user-controlled
+  values (file paths, embedded tags, error strings) can't forge log entries or inject
+  terminal escapes (PR #1490). Corrects the prior "`%s` makes it safe" assumption —
+  `%s` interpolates newlines verbatim, which is the injection vector.
+- **Path injection:** added an import-path allow-list gate (`fileops.ValidateUserPath`
+  / `IsAllowedPath`) on the request-supplied filesystem sinks: import-path create +
+  scan (#1491); exclusion writes + import/ingest/merge/update (#1492); relocate (#1494).
+  `/etc/audiobook-organizer` added to the default prefixes for packaged installs (allows
+  that dir + subtree, denies the rest of `/etc`).
+- **iTunes** library-path endpoints treated as accepted-risk (authenticated-admin-only,
+  single configured library file; prod path already under an allowed root).
+- All 87 path+log CodeQL alerts dismissed with per-category rationale; both rule
+  classes now report **0 open**. Guards are defense-in-depth (CodeQL can't model the
+  custom allow-list barrier, hence the dismissals).
 
 ### Fixes
 
