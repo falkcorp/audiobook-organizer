@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 8.91.0 -->
+<!-- version: 8.92.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-06-17 -->
 
@@ -1810,6 +1810,11 @@ Activity page mobile layout, adaptive refresh, version vs snapshot UI polish, co
 
 
 ## ⚠️ Automated Findings
+
+- [ ] **FLAKY-DB-TESTS-2026-06-17** Two `internal/database` tests fail intermittently under the full `Minimal CI / Go Tests (short, race)` run but **pass in isolation** — order-dependent state pollution surfacing only in the full-package `-race` run. Repeatedly blocked PR #1494 (and others) until re-run; NOT caused by those PRs.
+  - `TestGetAcoustIDStats_Mixed` (`internal/database/pebble_acoustid_stats_test.go:59-62`) — expects import-path `/lib/audiobooks`, counts 2/1; gets different data in the full run. Root cause likely a **shared/global store or memdb cache not isolated per test** (`setupPebbleTestDB` + `database.SetGlobalStore`), or another test's books leaking in. Fix: ensure each test gets a fully isolated store + invalidated caches; audit for `SetGlobalStore` leakage across the package.
+  - `TestHNSW_RecallVsChromem` (`internal/database`, HNSW vector index) — **probabilistic recall** comparison HNSW vs chromem; flakes under CI load. Fix: deterministic seed for the vector set, or assert a tolerance band / move off the `-short` path so it doesn't gate CI.
+  - **Action:** diagnose + fix both (regression-proof the isolation), or quarantine via `t.Skip` under `-short`/`-race` with a tracking note. Per [[feedback_fix_flaky_tests]] — root-cause, don't rerun-and-ignore.
 
 - [x] **MEMLEAK-2026-06-14** [memory-leak] 4 potential memory leak(s) detected by scheduled scan — https://github.com/falkcorp/audiobook-organizer/actions/runs/27492872026. **Fixed by commit `4f68ef9f`** — all 4 timers tracked in `refreshTimeoutsRef`/`scrollTimeoutsRef` with unmount cleanup; `scripts/check-memory-leaks.py` reports clean. Issue #1449 closed 2026-06-17.
   - `src/components/dedup/UnifiedDedupTab.tsx:511` — Untracked setTimeout (may fire after unmount)
