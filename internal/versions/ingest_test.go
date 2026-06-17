@@ -1,6 +1,7 @@
 // file: internal/versions/ingest_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4f2a3b0c-5d6e-4a70-b8c5-3d7e0f1b9a99
+// last-edited: 2026-06-17
 
 package versions
 
@@ -22,6 +23,16 @@ func writeTestFile(t *testing.T, path, content string) {
 	}
 }
 
+// allowDir registers dir as an import path so paths beneath it pass the
+// CreateIngestVersion allow-list gate (go/path-injection). Temp dirs live
+// outside the default allow-list prefixes, so tests must opt them in.
+func allowDir(t *testing.T, store *database.PebbleStore, dir string) {
+	t.Helper()
+	if _, err := store.CreateImportPath(dir, "test-allow"); err != nil {
+		t.Fatalf("allow import path: %v", err)
+	}
+}
+
 func TestCreateIngestVersion_NewBook(t *testing.T) {
 	store, err := database.NewPebbleStore(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
@@ -30,6 +41,7 @@ func TestCreateIngestVersion_NewBook(t *testing.T) {
 	t.Cleanup(func() { store.Close() })
 
 	dir := t.TempDir()
+	allowDir(t, store, dir)
 	filePath := filepath.Join(dir, "Book.m4b")
 	writeTestFile(t, filePath, "audio-data-for-hash")
 
@@ -59,6 +71,7 @@ func TestCreateIngestVersion_SecondVersionIsAlt(t *testing.T) {
 	t.Cleanup(func() { store.Close() })
 
 	dir := t.TempDir()
+	allowDir(t, store, dir)
 	book, _ := store.CreateBook(&database.Book{
 		Title: "Book", FilePath: filepath.Join(dir, "Book.m4b"), Format: "m4b",
 	})
@@ -90,6 +103,12 @@ func TestCreateIngestVersion_FingerprintBlocksPurged(t *testing.T) {
 	}
 	t.Cleanup(func() { store.Close() })
 
+	// Use an allowed path so the rejection under test is the fingerprint gate,
+	// not the path allow-list gate.
+	dir := t.TempDir()
+	allowDir(t, store, dir)
+	filePath := filepath.Join(dir, "new.m4b")
+
 	// Create a purged version with a known torrent hash.
 	_, _ = store.CreateBookVersion(&database.BookVersion{
 		BookID: "old-book", Status: database.BookVersionStatusInactivePurged,
@@ -97,11 +116,11 @@ func TestCreateIngestVersion_FingerprintBlocksPurged(t *testing.T) {
 	})
 
 	book, _ := store.CreateBook(&database.Book{
-		Title: "New Import", FilePath: "/tmp/new", Format: "m4b",
+		Title: "New Import", FilePath: filePath, Format: "m4b",
 	})
 
 	_, err = CreateIngestVersion(store, IngestVersionParams{
-		BookID: book.ID, FilePath: "/tmp/new", Format: "m4b",
+		BookID: book.ID, FilePath: filePath, Format: "m4b",
 		Source: "deluge", TorrentHash: "blocked-hash",
 	})
 	if err == nil {
@@ -131,6 +150,7 @@ func TestCreateIngestVersion_FileHashUpdated(t *testing.T) {
 	t.Cleanup(func() { store.Close() })
 
 	dir := t.TempDir()
+	allowDir(t, store, dir)
 	filePath := filepath.Join(dir, "Book.m4b")
 	writeTestFile(t, filePath, "audio-content-to-hash")
 

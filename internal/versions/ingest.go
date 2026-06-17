@@ -1,6 +1,7 @@
 // file: internal/versions/ingest.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 3e1f2a9b-4c5d-4a70-b8c5-3d7e0f1b9a99
+// last-edited: 2026-06-17
 //
 // Version creation on ingest (spec 3.1 task 5).
 //
@@ -24,6 +25,7 @@ import (
 	"os"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 )
 
 // IngestVersionParams describes the provenance of a newly-ingested file.
@@ -45,6 +47,14 @@ func CreateIngestVersion(store database.Store, params IngestVersionParams) (*dat
 	if params.BookID == "" || params.FilePath == "" {
 		return nil, fmt.Errorf("book_id and file_path required")
 	}
+
+	// Validate the path is inside an allowed directory before hashing the file
+	// (go/path-injection); use the cleaned absolute path downstream.
+	validPath, err := fileops.ValidateUserPath(store, params.FilePath)
+	if err != nil {
+		return nil, err
+	}
+	params.FilePath = validPath
 
 	// Check fingerprint first — refuse if this file was previously purged.
 	if params.TorrentHash != "" {
