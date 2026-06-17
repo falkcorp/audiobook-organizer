@@ -132,6 +132,34 @@ func TestAddImportPath_Returns201(t *testing.T) {
 	require.Equal(t, http.StatusCreated, w.Code)
 }
 
+// TestAddImportPath_RejectsTraversal verifies that a request path containing
+// traversal sequences is rejected with 400 before any store write or directory
+// scan. Guards against go/path-injection at the AddImportPath entry point: the
+// mock store sets no CreateImportPath expectation, so the test fails if the
+// unvalidated path reaches the store.
+func TestAddImportPath_RejectsTraversal(t *testing.T) {
+	origCfg := config.AppConfig
+	t.Cleanup(func() { config.AppConfig = origCfg })
+	config.AppConfig.AutoOrganize = false
+	config.AppConfig.RootDir = ""
+
+	store := dbmocks.NewMockStore(t)
+	store.EXPECT().SetRootDir(mock.Anything).Return()
+	// No CreateImportPath / CreateOperation expectation: mockery fails the test
+	// if the handler calls the store despite the traversal path.
+
+	server, cleanup := setupTestServerWithStore(t, store)
+	defer cleanup()
+
+	body := bytes.NewBufferString(`{"path":"/mnt/books/../../etc","name":"Evil"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/import-paths", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	server.router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+}
+
 func TestBlockedHashes_CRUD(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
