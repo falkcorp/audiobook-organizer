@@ -1,7 +1,7 @@
 // file: internal/server/server_more_test.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 18a6b0a3-7e78-4e0f-8b8e-0e4c1dbde6de
-// last-edited: 2026-05-08
+// last-edited: 2026-06-17
 
 //go:build !windows
 
@@ -213,6 +213,11 @@ func TestImportFileEndpoint(t *testing.T) {
 	tempDir := t.TempDir()
 	filePath := copyFixtureToDir(t, "test_sample.m4b", tempDir)
 	config.AppConfig.SupportedExtensions = []string{".m4b"}
+	// Allow the temp dir through the import path allow-list gate by registering
+	// it on the store (parallel-safe; avoids global config mutation).
+	if _, err := database.GetGlobalStore().CreateImportPath(tempDir, "test-allow"); err != nil {
+		t.Fatalf("allow import path: %v", err)
+	}
 
 	payload := map[string]any{
 		"file_path": filePath,
