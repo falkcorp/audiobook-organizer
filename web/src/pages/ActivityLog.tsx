@@ -1,6 +1,7 @@
 // file: web/src/pages/ActivityLog.tsx
-// version: 2.16.0
+// version: 2.17.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
+// last-edited: 2026-06-17
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -211,6 +212,18 @@ export default function ActivityLog() {
   const feedIntervalRef = useRef<number | null>(null);
   const sourcesDropdownRef = useRef<HTMLDivElement | null>(null);
 
+  // Tracks pending scroll timers so they can be cancelled on unmount — a timer
+  // that fires after unmount would touch a detached ref (harmless here thanks to
+  // optional chaining, but still flagged by the memory-leak scanner).
+  const scrollTimeoutsRef = useRef<number[]>([]);
+  useEffect(
+    () => () => {
+      scrollTimeoutsRef.current.forEach((id) => window.clearTimeout(id));
+      scrollTimeoutsRef.current = [];
+    },
+    [],
+  );
+
   // Persist excluded sources
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.ACTIVITY_SOURCE_PREFS, JSON.stringify([...excludedSources]));
@@ -247,7 +260,11 @@ export default function ActivityLog() {
     const logs = await api.getOperationLogs(opId);
     setOpLogs(logs.map((l: { message?: string }) => l.message || String(l)));
     setOpLogsLoaded(true);
-    window.setTimeout(() => opLogsRef.current?.scrollTo({ top: opLogsRef.current.scrollHeight }), 50);
+    const scrollTimeout = window.setTimeout(
+      () => opLogsRef.current?.scrollTo({ top: opLogsRef.current.scrollHeight }),
+      50,
+    );
+    scrollTimeoutsRef.current.push(scrollTimeout);
   }, []);
 
   // Load logs once when an operation is expanded. Live lines append via SSE
@@ -282,7 +299,11 @@ export default function ActivityLog() {
     if (!latestLogEvent || latestLogEvent.op_id !== expandedOpId) return;
     setOpLogsLoaded(true);
     setOpLogs((prev) => [...prev, latestLogEvent.message]);
-    window.setTimeout(() => opLogsRef.current?.scrollTo({ top: opLogsRef.current.scrollHeight }), 50);
+    const scrollTimeout = window.setTimeout(
+      () => opLogsRef.current?.scrollTo({ top: opLogsRef.current.scrollHeight }),
+      50,
+    );
+    scrollTimeoutsRef.current.push(scrollTimeout);
   }, [latestLogEvent, expandedOpId]);
 
   // Load sources

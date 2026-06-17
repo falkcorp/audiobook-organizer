@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.30.0 -->
+<!-- version: 3.31.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-17 -->
 
@@ -8,6 +8,21 @@
 ## [Unreleased]
 
 ### Fixes
+
+#### June 17, 2026 — Fix `Scan for memory leaks` CI job: track + cancel deferred timers
+
+The repo memory-leak scanner (`scripts/check-memory-leaks.py`) flagged 4 untracked
+`setTimeout` calls in React components, which fail the `Scan for memory leaks` CI job:
+
+- **`UnifiedDedupTab.tsx`** (2 sites) — `handleScan` / `handleForceRescan` scheduled a 2s
+  refresh that calls `loadCandidates()` + `loadStats()` (both `setState`). If the tab
+  unmounted within that window, the timer fired on an unmounted component. Timers are now
+  tracked in a `refreshTimeoutsRef` and cleared in an unmount cleanup effect.
+- **`ActivityLog.tsx`** (2 sites) — 50ms scroll-to-bottom timers (null-safe but flagged).
+  Tracked in a `scrollTimeoutsRef` and cleared on unmount.
+
+Scanner now reports "No memory leak patterns detected". Frontend suite stays green
+(35 files / 246 tests); `tsc` and `eslint` clean.
 
 #### June 17, 2026 — Fix long-red Frontend Unit Tests CI job + backend -race test timeout
 
