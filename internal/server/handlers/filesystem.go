@@ -1,7 +1,7 @@
 // file: internal/server/handlers/filesystem.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c4d5e6f7-a8b9-0123-cdef-012345678901
-// last-edited: 2026-06-02
+// last-edited: 2026-06-17
 
 // Package handlers — FilesystemHandler covers home-directory, filesystem
 // browse, exclusion CRUD, import-path CRUD, and the on-demand single-file
@@ -27,6 +27,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
+	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
 	ulid "github.com/oklog/ulid/v2"
 )
 
@@ -223,7 +224,17 @@ func (h *FilesystemHandler) AddImportPath(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, err.Error())
 		return
 	}
-	createdPath, err := h.pathCreator.CreateImportPath(req.Path, req.Name)
+	// Reject traversal sequences and require an absolute path before the value
+	// reaches the store and the directory scanner (go/path-injection). Import
+	// roots are intentionally arbitrary absolute directories, so we normalize
+	// rather than confine to a fixed root; CleanAbsolutePath's return value is
+	// the sanitized path used downstream.
+	cleanPath, err := pathvalidation.CleanAbsolutePath(req.Path)
+	if err != nil {
+		httputil.RespondWithBadRequest(c, err.Error())
+		return
+	}
+	createdPath, err := h.pathCreator.CreateImportPath(cleanPath, req.Name)
 	if err != nil {
 		httputil.RespondWithBadRequest(c, err.Error())
 		return
