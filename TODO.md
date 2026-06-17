@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 8.92.0 -->
+<!-- version: 8.93.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-06-17 -->
 
@@ -1038,7 +1038,8 @@ incrementally:
 
 ### Phase 12: Log Injection (255 alerts, NEW category post-audit)
 
-- [ ] **SEC-AUDIT-12** [hold] Investigate and remediate log-injection alerts
+- [x] **SEC-AUDIT-12** Investigate and remediate log+path injection alerts — **DONE 2026-06-17**. Current counts were 14 log-injection + 73 path-injection (the "255" was stale). Remediation: runtime sanitizer `logger.sanitizeLogLine` at all log sinks (PR #1490); import-path scan guard (#1491); membership-gate sweep on exclusion/import/ingest/update (#1492); relocate gate + `/etc/audiobook-organizer` package prefix (#1494); iTunes treated as accepted-risk (admin-only, single config file). All 87 path+log CodeQL alerts dismissed with per-category rationale (guarded-at-runtime / sanitized / accepted-risk / triaged false-positive). **`go/path-injection` and `go/log-injection` open counts are now 0.** Note: the original "%s is safe" assessment below was wrong for log-injection (CR/LF in user input forges log lines regardless of `%s`); the sanitizer addresses it.
+  - _(original notes retained for history)_ [hold] Investigate and remediate log-injection alerts
   - **Priority:** P1 (review required; likely low-risk false positives)
   - **Alerts:** 255 open (go/log-injection, error severity)
   - **Affected areas:** dedup, server handlers, system services (all files logging bookID, userInput, or paths)
