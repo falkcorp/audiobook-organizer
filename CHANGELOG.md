@@ -1,11 +1,35 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.33.0 -->
+<!-- version: 3.34.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
-<!-- last-edited: 2026-06-17 -->
+<!-- last-edited: 2026-06-18 -->
 
 # Changelog
 
 ## [Unreleased]
+
+### Bug Fixes
+
+#### June 18, 2026 — HNSW-CRASH-2026-06-18: fix crash loop on restart (PR #1500)
+
+Production was crash-looping (restart counter #51) with a nil-pointer dereference
+in `coder/hnsw v0.6.1` during startup. Root cause: initialization ordering — the
+server called `PostInit` (launching `HydrateChromem`) **before** loading the HNSW
+snapshot. `HydrateChromem` then re-inserted all 38,987 existing keys into the
+already-populated graph, triggering a library bug where `Delete+Add` of an existing
+key leaves the graph in an inconsistent state (node present at layer L, absent from
+layer L-1), causing a SIGSEGV on the next insertion (addr=0x10 = `layerNode.Value`
+field offset).
+
+Fix: `NewServer` now loads the HNSW snapshot between `Build()` and `PostInit()`.
+`dedup.Engine.PostInit` checks `CountByType("book") > 0` and skips `HydrateChromem`
+entirely when the snapshot is already loaded. Confirmed stable in production with
+38,987 books indexed from snapshot on first restart.
+
+- `internal/server/server.go`: load HNSW snapshot between `Build()` and `PostInit()`
+- `internal/dedup/lifecycle.go`: gate HydrateChromem on `CountByType("book") == 0`
+- `internal/server/server_lifecycle.go`: remove now-redundant `Import` call from `Run()`
+- `internal/database/hnsw_embedding_store.go`: revert incorrect pre-delete workaround; document the library bug
+- Regression test: `TestHNSW_SnapshotSkipsHydration`
 
 ### Security
 

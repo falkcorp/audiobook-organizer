@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 8.94.0 -->
+<!-- version: 8.95.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-06-17 -->
+<!-- last-edited: 2026-06-18 -->
 
 # Project TODO
 
@@ -19,12 +19,12 @@ future agent) can scan the entire workspace in one page.
 
 ---
 
-## 🎯 Current Status — June 16, 2026
+## 🎯 Current Status — June 18, 2026
 
 **Library:** ~50K books (~10,891 organized + ~39K iTunes-imported) / 8,837 authors / 21,668 series
-**Production:** PebbleDB primary; Linux, HTTPS at prod server
-**Latest activity:** Repo hygiene + red-CI fix (2026-06-17): pruned 51 stale worktrees (55→4) and ~97 merged branches (106→4); fixed the long-red `Frontend Unit Tests` CI job (stale `UnifiedDedupTab` assertions); bumped the full `-race` test timeout (root-caused an `internal/server` timeout). Prior: CFG-1 Waves 1–8 complete (PRs #1468–#1484) — all 77 flat config fields nested into 7 sub-structs; `GetConfig` secret-masking bug fixed; WebUI config API documented at `docs/reference/config-api-shape.md`.
-**In flight:** Burndown bot dispatching test coverage tasks (#79–#109), FE-10 (Vitest coverage thresholds). EMB-UI-1 (Ollama download link) still open.
+**Production:** PebbleDB primary; Linux, HTTPS at prod server; stable (crash loop resolved 2026-06-18)
+**Latest activity:** HNSW-CRASH-2026-06-18 (2026-06-18, PR #1500): fixed production crash loop (restart #51) — HNSW snapshot now loaded before PostInit, HydrateChromem gated on CountByType>0; 38,987 books indexed from snapshot on first restart. Prior: SEC-AUDIT-12 closed (log+path injection guards, 87 CodeQL alerts resolved, PRs #1490–#1494); flaky DB tests fixed PR #1497.
+**In flight:** CFG-2 (Settings UI reorg — frontend "second half") not started. Burndown bot dispatching test coverage tasks. EMB-UI-1 (Ollama download link) still open.
 
 ---
 
