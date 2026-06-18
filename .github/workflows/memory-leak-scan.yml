@@ -1,7 +1,7 @@
 # file: .github/workflows/memory-leak-scan.yml
-# version: 2.1.0
+# version: 2.2.0
 # guid: 9f3a1b2c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
-# last-edited: 2026-06-10
+# last-edited: 2026-06-18
 name: Memory Leak Detection
 
 on:
@@ -74,21 +74,14 @@ jobs:
       github.event_name == 'schedule'
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
+      pull-requests: write
     steps:
-      - name: Create GitHub App token
-        id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ secrets.BURNDOWN_BOT_APP_ID }}
-          private-key: ${{ secrets.BURNDOWN_BOT_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-
       - name: Checkout repo
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           submodules: recursive
-          token: ${{ steps.app-token.outputs.token }}
+          token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 1
 
       - name: Set up Python
@@ -98,7 +91,7 @@ jobs:
 
       - name: Insert findings into TODO.md and open PR
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
           LEAK_COUNT: ${{ needs.scan.outputs.leak_count }}
@@ -106,8 +99,8 @@ jobs:
           DATE=$(date -u +%Y-%m-%d)
           BRANCH="auto/memory-leak-findings-${DATE}"
 
-          git config user.name  "burndown-bot[bot]"
-          git config user.email "burndown-bot[bot]@users.noreply.github.com"
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
 
           # Run the scanner to insert findings into TODO.md under
@@ -172,6 +165,6 @@ jobs:
           gh pr merge "$PR_NUMBER" \
             --repo "$REPO" \
             --rebase \
-            --admin
+            --auto
 
           echo "Findings merged to main via PR #${PR_NUMBER} (commit carries [skip ci])"
