@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.32.0 -->
+<!-- version: 3.33.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-17 -->
 
@@ -31,6 +31,30 @@ classes with runtime guards plus categorized dismissals.
   custom allow-list barrier, hence the dismissals).
 
 ### Fixes
+
+#### June 17, 2026 — FLAKY-DB-TESTS-2026-06-17: root-cause two intermittent `internal/database` tests
+
+Two tests passed in isolation but flaked under the full `Minimal CI (short, race)`
+run. Both are now fixed at the source with deterministic regression coverage:
+
+- **`TestGetAcoustIDStats_Mixed`** — `GetAcoustIDStats` scanned book *files*
+  pebble-direct (to avoid memdb's stripped fields) but grouped them by library via
+  `GetAllBooks`, which reads the **asynchronously-warmed memdb**. memdb write-through
+  is a no-op until the warmup goroutine publishes, so under load the warmup could
+  publish an empty/stale memdb — leaving `GetAllBooks` blind to books that exist in
+  Pebble. Every file then collapsed into the `(unknown)` library bucket and the
+  `LibraryRoot` assertion failed. Fix: read books pebble-direct via the new
+  `getAllBooksPebbleScan()`, mirroring the file scan, so library grouping no longer
+  depends on warmup timing. New `TestGetAcoustIDStats_StaleMemDBDoesNotBreakLibraryGrouping`
+  forces the exact race (injects an empty memdb post-write) and is deterministic.
+- **`TestHNSW_RecallVsChromem`** — `hnsw.NewGraph()` seeds its level-generation RNG
+  from `time.Now().UnixNano()`, so graph topology — and recall — varied run to run
+  (~0.75–0.92), intermittently dipping below the 0.80 gate. Fix: added an unexported
+  `HNSWEmbeddingStore.newGraphRng` seam (nil in production → unchanged behavior); the
+  test pins a fixed seed, collapsing the spread to a tight band (floor 0.868 over 50
+  runs) that clears the 0.80 gate with margin. (Not bit-deterministic — coder/hnsw
+  v0.6.1 iterates Go maps during neighbor pruning — but the dominant variance source
+  is removed.)
 
 #### June 17, 2026 — Fix `Scan for memory leaks` CI job: track + cancel deferred timers
 

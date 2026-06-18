@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 8.93.0 -->
+<!-- version: 8.94.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-06-17 -->
 
@@ -1812,10 +1812,10 @@ Activity page mobile layout, adaptive refresh, version vs snapshot UI polish, co
 
 ## ⚠️ Automated Findings
 
-- [ ] **FLAKY-DB-TESTS-2026-06-17** Two `internal/database` tests fail intermittently under the full `Minimal CI / Go Tests (short, race)` run but **pass in isolation** — order-dependent state pollution surfacing only in the full-package `-race` run. Repeatedly blocked PR #1494 (and others) until re-run; NOT caused by those PRs.
-  - `TestGetAcoustIDStats_Mixed` (`internal/database/pebble_acoustid_stats_test.go:59-62`) — expects import-path `/lib/audiobooks`, counts 2/1; gets different data in the full run. Root cause likely a **shared/global store or memdb cache not isolated per test** (`setupPebbleTestDB` + `database.SetGlobalStore`), or another test's books leaking in. Fix: ensure each test gets a fully isolated store + invalidated caches; audit for `SetGlobalStore` leakage across the package.
-  - `TestHNSW_RecallVsChromem` (`internal/database`, HNSW vector index) — **probabilistic recall** comparison HNSW vs chromem; flakes under CI load. Fix: deterministic seed for the vector set, or assert a tolerance band / move off the `-short` path so it doesn't gate CI.
-  - **Action:** diagnose + fix both (regression-proof the isolation), or quarantine via `t.Skip` under `-short`/`-race` with a tracking note. Per [[feedback_fix_flaky_tests]] — root-cause, don't rerun-and-ignore.
+- [x] **FLAKY-DB-TESTS-2026-06-17** Two `internal/database` tests flaked under the full `Minimal CI / Go Tests (short, race)` run but passed in isolation. **Both root-caused + fixed (not quarantined)** — the "order-dependent state pollution" hypothesis was wrong for both; actual causes below. Verified: targeted `-race -count=20` green; both flakes reproduced before the fix (deterministic repro for #1; 2/20 failures for #2) and gone after.
+  - `TestGetAcoustIDStats_Mixed` — **NOT** store/cache isolation. `GetAcoustIDStats` read book *files* pebble-direct but grouped them by library via `GetAllBooks`, which reads the **async-warmed memdb**. memdb write-through is a no-op until the warmup goroutine publishes (`memSync` returns early while `mem()==nil`), so under load the warmup published an empty/stale memdb → `GetAllBooks` returned no books → files collapsed into the `(unknown)` bucket → `LibraryRoot` assertion failed. Fix: added `getAllBooksPebbleScan()` and switched `GetAcoustIDStats` to read books pebble-direct (mirrors its existing file scan), so grouping no longer depends on warmup timing. Regression: `TestGetAcoustIDStats_StaleMemDBDoesNotBreakLibraryGrouping` injects an empty memdb post-write — fails pre-fix, deterministic post-fix.
+  - `TestHNSW_RecallVsChromem` — **NOT** dataset seeding (data already fixed-seed). `hnsw.NewGraph()` seeds its level RNG from `time.Now().UnixNano()` → graph topology + recall varied ~0.75–0.92, dipping below the 0.80 gate. Fix: unexported `HNSWEmbeddingStore.newGraphRng` seam (nil in prod), test pins seed 1 → tight band (floor 0.868 / 50 runs) clearing 0.80 with margin. Not bit-deterministic (coder/hnsw v0.6.1 iterates Go maps in neighbor pruning) but dominant variance source removed; 0.80 gate kept so a real recall regression is still caught.
+  - **Latent follow-up (not blocking):** the async-warmup write-through drop (`memSync` no-op while `mem()==nil`) is a general hazard for any "create then immediately read via memdb" test. Only `GetAcoustIDStats` was hardened. If other tests surface the same flake, add a `WaitForWarmup()` helper to `setupPebbleTestDB`.
 
 - [x] **MEMLEAK-2026-06-14** [memory-leak] 4 potential memory leak(s) detected by scheduled scan — https://github.com/falkcorp/audiobook-organizer/actions/runs/27492872026. **Fixed by commit `4f68ef9f`** — all 4 timers tracked in `refreshTimeoutsRef`/`scrollTimeoutsRef` with unmount cleanup; `scripts/check-memory-leaks.py` reports clean. Issue #1449 closed 2026-06-17.
   - `src/components/dedup/UnifiedDedupTab.tsx:511` — Untracked setTimeout (may fire after unmount)

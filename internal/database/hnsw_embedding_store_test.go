@@ -1,7 +1,7 @@
 // file: internal/database/hnsw_embedding_store_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-06-14
+// last-edited: 2026-06-17
 
 package database
 
@@ -270,6 +270,17 @@ func TestHNSW_RecallVsChromem(t *testing.T) {
 	)
 	rng := rand.New(rand.NewSource(7))
 	h := NewHNSWEmbeddingStore(dim)
+	// Pin the HNSW level-generation RNG. Without this the library seeds from
+	// time.Now().UnixNano() (coder/hnsw graph.go defaultRand), which was the
+	// dominant source of run-to-run recall variance: unseeded the recall spanned
+	// ~0.75–0.92 and intermittently dipped below the 0.80 gate under CI load
+	// (FLAKY-DB-TESTS-2026-06-17). Seeding does NOT make recall bit-deterministic —
+	// coder/hnsw v0.6.1 iterates Go maps during neighbor pruning (graph.go), and
+	// map order is randomized per run — but it collapses the spread to a tight
+	// band (~0.87–0.96 over 50 runs, floor 0.868) that clears the 0.80 assertion
+	// below with ample margin. Keep the gate at the product-meaningful 0.80 so a
+	// real recall regression from an M/EfSearch change is still caught.
+	h.newGraphRng = func() *rand.Rand { return rand.New(rand.NewSource(1)) }
 	c := NewInMemoryChromemStore(dim)
 
 	centroids := make([][]float32, clusters)
