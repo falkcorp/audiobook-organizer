@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.88.0
+// version: 1.89.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-06-14
+// last-edited: 2026-06-17
 
 package database
 
@@ -9413,6 +9413,38 @@ func (s *PebbleStore) getAllBookFilesPebbleScan() ([]BookFile, error) {
 	return files, nil
 }
 
+// getAllBooksPebbleScan returns every non-deleted Book by scanning Pebble directly,
+// bypassing memdb. Mirrors the Pebble branch of GetAllBooks (skips ":path:" index
+// keys and MarkedForDeletion rows). Used by callers — like GetAcoustIDStats — that
+// must not depend on the async memdb warmup having published.
+func (s *PebbleStore) getAllBooksPebbleScan() ([]Book, error) {
+	iter, err := s.db.NewIter(&pebble.IterOptions{
+		LowerBound: []byte("book:0"),
+		UpperBound: []byte("book:;"),
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	var books []Book
+	for iter.First(); iter.Valid(); iter.Next() {
+		// Skip path index keys (book:path:...).
+		if strings.Contains(string(iter.Key()), ":path:") {
+			continue
+		}
+		var book Book
+		if err := json.Unmarshal(iter.Value(), &book); err != nil {
+			return nil, err
+		}
+		if book.MarkedForDeletion != nil && *book.MarkedForDeletion {
+			continue
+		}
+		books = append(books, book)
+	}
+	return books, nil
+}
+
 // GetBookFilesNeedingDelugeImport returns book_files that have a non-empty
 // deluge_hash but have not yet been imported (imported_from_deluge_at IS NULL).
 //
@@ -10551,7 +10583,15 @@ func (p *PebbleStore) GetAcoustIDStats() (*AcoustIDStats, error) {
 	}
 
 	// Build bookID → source_import_path for library grouping.
-	allBooks, _ := p.GetAllBooks(0, 0)
+	//
+	// Read books pebble-direct (not via GetAllBooks) for the same reason the file
+	// scan above is pebble-direct: this method must not depend on the async memdb
+	// warmup. While memdb is unpublished (or transiently empty during the warmup
+	// window), GetAllBooks would return no books and every file would collapse into
+	// the "(unknown)" library bucket. Reading pebble directly keeps the grouping
+	// consistent with the authoritative store regardless of memdb state.
+	// (FLAKY-DB-TESTS-2026-06-17 root cause.)
+	allBooks, _ := p.getAllBooksPebbleScan()
 	bookLib := make(map[string]string, len(allBooks))
 	for _, b := range allBooks {
 		if b.SourceImportPath != nil && *b.SourceImportPath != "" {

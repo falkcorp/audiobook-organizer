@@ -1,7 +1,7 @@
 // file: internal/database/hnsw_embedding_store.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-06-15
+// last-edited: 2026-06-17
 
 // HNSW-graph vector store (coder/hnsw) — a sub-linear ANN index alternative to
 // the brute-force chromem store. Selected via config.VectorIndexBackend="hnsw".
@@ -45,6 +45,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"sort"
@@ -80,6 +81,14 @@ type HNSWEmbeddingStore struct {
 	graphs map[string]*hnsw.Graph[string]          // entityType → graph
 	meta   map[string]map[string]map[string]string // entityType → id → metadata
 	dims   int
+
+	// newGraphRng, when non-nil, supplies the *rand.Rand used for HNSW level
+	// generation on each lazily-created graph. Production leaves it nil, so the
+	// library's default time-seeded RNG (rand.NewSource(time.Now().UnixNano()))
+	// is used. Tests set it to a fixed seed to make graph topology — and thus
+	// recall — deterministic. Mutated graphs are only built under s.mu, so a
+	// shared *rand.Rand returned here is never used concurrently.
+	newGraphRng func() *rand.Rand
 }
 
 // NewHNSWEmbeddingStore creates an empty HNSW store sized for `dims`-dimensional
@@ -102,6 +111,9 @@ func (s *HNSWEmbeddingStore) graphFor(entityType string) *hnsw.Graph[string] {
 		g.Distance = hnsw.CosineDistance
 		g.M = hnswM
 		g.EfSearch = hnswEfSearch
+		if s.newGraphRng != nil {
+			g.Rng = s.newGraphRng()
+		}
 		s.graphs[entityType] = g
 		s.meta[entityType] = make(map[string]map[string]string)
 	}
