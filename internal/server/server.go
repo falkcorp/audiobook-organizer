@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.30.0
+// version: 2.31.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-06-16
+// last-edited: 2026-06-18
 
 package server
 
@@ -10,6 +10,7 @@ import (
 	"fmt"
 
 	"log"
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
@@ -418,6 +419,28 @@ func NewServer(store database.Store) *Server {
 		slog.Error("serviceregistry build", "err", err)
 		os.Exit(1)
 	}
+
+	// Load the HNSW snapshot BEFORE PostInit so dedup.Engine.PostInit can detect
+	// the populated store and skip HydrateChromem. Loading after PostInit caused a
+	// crash loop: HydrateChromem re-inserted all ~38K existing keys into the
+	// already-populated graph, triggering a nil-deref in coder/hnsw v0.6.1 when
+	// Delete+Add violates the per-layer node invariant (HNSW-CRASH-2026-06-18).
+	if config.AppConfig.DatabasePath != "" {
+		hnswDir := filepath.Join(filepath.Dir(config.AppConfig.DatabasePath), "hnsw")
+		server.hnswPersistDir = hnswDir
+		if raw, ok := serviceregistry.TryGet[database.VectorANNStore](regContainer, "chromemstore"); ok && raw != nil {
+			if hnswStore, ok := raw.(*database.HNSWEmbeddingStore); ok {
+				if err := hnswStore.Import(hnswDir); err != nil {
+					if !errors.Is(err, database.ErrNoHNSWSnapshot) {
+						slog.Warn("hnsw: import failed, will hydrate from PebbleDB", "err", err)
+					}
+				} else {
+					slog.Info("hnsw: loaded from on-disk snapshot", "dir", hnswDir)
+				}
+			}
+		}
+	}
+
 	if err := regContainer.PostInit(regCtx); err != nil {
 		slog.Error("serviceregistry postinit", "err", err)
 		os.Exit(1)
