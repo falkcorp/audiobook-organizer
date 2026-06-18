@@ -1,11 +1,31 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.34.0 -->
+<!-- version: 3.35.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-18 -->
 
 # Changelog
 
 ## [Unreleased]
+
+### Features
+
+#### June 18, 2026 — Dedup feedback loop, Slice A: capture human merge/dismiss as gold labels
+
+First slice of the self-improving dedup feedback loop. When a user **merges** or
+**dismisses** a dedup candidate, the decision is now captured as a gold ground-truth
+`LabeledExample` (`label_source="human"`) in the existing `dedup:label:` keyspace —
+`true_dup` on merge, `not_dup` on dismiss. These are the human labels the planned
+dedup classifier will train and validate on.
+
+- Reuses `dataset.BuildExample` for the feature snapshot, so live captures are
+  identical to the `dedup.dataset-backfill` op's.
+- **Best-effort:** any capture failure is logged and swallowed — it can never block or
+  fail the user's merge/dismiss action.
+- **Merge timing:** the feature snapshot is taken *before* the merge runs, because a
+  merge absorbs/deletes one side (after which the book can't be loaded).
+- Hooked into single merge, single dismiss, bulk merge, and cluster dismiss. Cluster-
+  merge and series-merge capture are a tracked follow-up (need pre-merge snapshot
+  reordering); C5 live-capture-on-upsert and the gold miner are subsequent slices.
 
 ### Bug Fixes
 

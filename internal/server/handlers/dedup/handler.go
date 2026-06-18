@@ -991,6 +991,8 @@ func (h *Handler) BulkMergeDedupCandidates(c *gin.Context) {
 	merged := 0
 
 	for _, cand := range candidates {
+		// Snapshot features before the merge absorbs one side (best-effort).
+		labelExample := h.snapshotCandidateExample(&cand)
 		_, mergeErr := h.mergeService.MergeBooks([]string{cand.EntityAID, cand.EntityBID}, "")
 		if mergeErr != nil {
 			failures = append(failures, failure{CandidateID: cand.ID, Reason: mergeErr.Error()})
@@ -1004,6 +1006,8 @@ func (h *Handler) BulkMergeDedupCandidates(c *gin.Context) {
 			slog.Info("dedup bulk merge candidate merged but status update failed", "cand", cand.ID, "err", err)
 		}
 		merged++
+		// Capture the user's bulk merge as a gold true_dup label (best-effort).
+		h.recordHumanLabel(labelExample, labelTrueDup, labelReasonUserMerge)
 	}
 
 	slog.Info("dedup bulk merge complete merged, failed out of matched", "merged", merged, "failures_count", len(failures), "total", total)
@@ -1162,6 +1166,8 @@ func (h *Handler) DismissDedupCluster(c *gin.Context) {
 			continue
 		}
 		dismissed++
+		// Capture each dismissed pair as a gold not_dup label (best-effort).
+		h.recordHumanLabel(h.snapshotCandidateExample(&cand), labelNotDup, labelReasonUserDismiss)
 	}
 	slog.Info("dedup cluster dismiss dismissed candidate row(s) across books", "dismissed", dismissed, "count", len(body.BookIDs))
 	h.markDuplicatesFlaggedDirty("dismiss_cluster")
@@ -1337,6 +1343,10 @@ func (h *Handler) MergeDedupCandidate(c *gin.Context) {
 		return
 	}
 
+	// Snapshot the feature example BEFORE the merge: MergeBooks absorbs/deletes one
+	// side, after which the snapshot can no longer load that book. Best-effort.
+	labelExample := h.snapshotCandidateExample(candidate)
+
 	var result interface{}
 	if candidate.EntityType == "book" && h.mergeService != nil {
 		mergeResult, mergeErr := h.mergeService.MergeBooks([]string{candidate.EntityAID, candidate.EntityBID}, keepID)
@@ -1405,6 +1415,9 @@ func (h *Handler) MergeDedupCandidate(c *gin.Context) {
 		"candidate_id": id,
 	}))
 
+	// Capture the user's merge as a gold true_dup label (best-effort).
+	h.recordHumanLabel(labelExample, labelTrueDup, labelReasonUserMerge)
+
 	httputil.RespondWithOK(c, gin.H{"status": "merged", "result": result, "keep_id": keepID})
 }
 
@@ -1428,6 +1441,9 @@ func (h *Handler) DismissDedupCandidate(c *gin.Context) {
 		return
 	}
 	h.markDuplicatesFlaggedDirty("dismiss_candidate")
+
+	// Capture the user's dismiss as a gold not_dup label (best-effort).
+	h.captureHumanLabelByID(id, labelNotDup, labelReasonUserDismiss)
 
 	httputil.RespondWithOK(c, gin.H{"status": "dismissed"})
 }
