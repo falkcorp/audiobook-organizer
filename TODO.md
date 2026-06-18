@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 8.96.0 -->
+<!-- version: 8.97.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-06-18 -->
 
@@ -268,6 +268,13 @@ Plan: [`docs/plans/2026-06-13-dedup-exact-gate-and-dataset.md`](docs/plans/2026-
   merge snapshots features pre-merge. Hooked: single merge, single dismiss, bulk merge,
   cluster dismiss. **Follow-up (deferred):** cluster-merge + series-merge capture (need
   pre-merge snapshot reordering); `RemoveFromDedupCluster` → not_dup capture.
+- [x] **C-gold / gold miner** In-house high-confidence positive miner: op `dedup.mine-gold-labels`
+  (`internal/plugins/dedup/mine_gold_labels.go`) labels pending candidates `true_dup`
+  (`label_source="auto_high_conf"`) when the two books share a file hash, AcoustID recording id,
+  or ASIN/ISBN (audio-gated). Pure matcher `dataset.MineHighConfidenceDup`
+  (`internal/dedup/dataset/highconf.go`), 7 unit tests + 2 op e2e tests. Dry-run default;
+  reuses candidate ids (no synthetic rows). Complements `dedup.dataset-backfill` (rule negatives)
+  + human capture. **Not yet run on prod** — dry-run first via `{"def_id":"dedup.mine-gold-labels","params":{}}`.
 - [ ] **C5** Live-capture: wire `BuildExample` + `Classify` into the candidate-upsert path
   so each new candidate automatically gets a feature snapshot + deterministic label on
   creation (no separate backfill needed going forward).

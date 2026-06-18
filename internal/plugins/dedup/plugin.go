@@ -68,6 +68,7 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.embReencodeDef(),       // T021: float16+zstd re-encode op
 		p.bookfileSegDropDef(),   // T020: drop AcoustID segment fields from stored values
 		p.datasetBackfillDef(),   // C4: label + suppress residual pending candidates
+		p.mineGoldLabelsDef(),    // gold miner: auto-label high-confidence true_dup positives
 		p.checkBookDef(),         // M4: per-book dedup check via dependency scheduler
 		p.buildISBNIndexDef(),    // T022: ISBN/ASIN secondary index backfill
 		p.reembedEmbeddingsDef(), // Part B: re-embed corpus when the embedding model changes

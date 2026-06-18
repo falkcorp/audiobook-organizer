@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.35.0 -->
+<!-- version: 3.36.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-18 -->
 
@@ -8,6 +8,24 @@
 ## [Unreleased]
 
 ### Features
+
+#### June 18, 2026 — Dedup feedback loop: in-house gold miner (`dedup.mine-gold-labels`)
+
+New UOS op that seeds the dedup tuning dataset with **high-confidence positive labels**
+mined from in-house ground truth — the positive counterpart to `dedup.dataset-backfill`'s
+rule-based negatives and the live human merge/dismiss capture.
+
+For each pending candidate it labels `true_dup` (`label_source="auto_high_conf"`) when the
+two books share a **file hash** (identical bytes — definitive), an **AcoustID recording id**,
+or an **ASIN/ISBN** (gated on plausible audio on both sides so two metadata stubs sharing an
+id are never mislabeled). Signals fire in descending confidence order; reuses each
+candidate's own id (no synthetic rows).
+
+- Pure, unit-tested matcher `dataset.MineHighConfidenceDup` (`internal/dedup/dataset/highconf.go`).
+- **Dry-run by default**; `apply=true` is idempotent. Trigger via the generic op route
+  (`{"def_id":"dedup.mine-gold-labels","params":{"apply":true}}`).
+- These are high-precision but NOT human gold — the classifier treats them as weak/strong
+  supervision and validates only on `label_source="human"` labels.
 
 #### June 18, 2026 — Dedup feedback loop, Slice A: capture human merge/dismiss as gold labels
 
