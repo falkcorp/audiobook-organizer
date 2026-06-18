@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 8.97.0 -->
+<!-- version: 8.98.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-06-18 -->
 
@@ -1824,6 +1824,22 @@ Activity page mobile layout, adaptive refresh, version vs snapshot UI polish, co
 
 
 ## ⚠️ Automated Findings
+
+- [ ] **DEDUP-CANDIDATE-EXPLOSION-2026-06-18** The `exact` dedup layer has **387,597 pending**
+  candidates (of 388,998 total; acoustid 1,028 / embedding 164 / llm 209 are sane) against only
+  **49,573 final books** (`GET /api/v1/audiobooks` count) — yet memdb holds **401,968 raw `books`
+  rows**. The exact emitters (`checkExactTitle` / `checkExactMetadataSourceHash` /
+  `checkDurationMatch`) are pairing far beyond the final-book set. The engine *intends* primary-only
+  (`internal/plugins/dedup/full_scan.go` "for every primary book"; `internal/dedup/engine.go`
+  "skip non-primary versions"; `is_primary_version` filter), so either non-final/version-group/
+  **chapter-as-a-book** rows leak past the filter (evidence: a candidate book titled *"Opening
+  Credits"*), or this is a stale legacy backlog predating the primary-filter + `hasPlausibleAudio`
+  fixes. **Investigate:** (1) how the ~352K extra book rows arise (chapter-split on import/organize?
+  duplicate book rows per copy? soft-deleted/iTunes variants?); (2) whether candidate generation
+  actually applies the primary filter on all exact emitters; (3) purge + rebuild candidates against
+  final books. **Do NOT run `dedup.mine-gold-labels --apply` or bulk merge/dismiss until fixed** —
+  it would seed the tuning dataset with within-group + chapter-artifact pairs. See
+  [`docs/dedup-feedback-loop.md`](dedup-feedback-loop.md) §Open issue.
 
 - [x] **FLAKY-DB-TESTS-2026-06-17** Two `internal/database` tests flaked under the full `Minimal CI / Go Tests (short, race)` run but passed in isolation. **Both root-caused + fixed (not quarantined)** — the "order-dependent state pollution" hypothesis was wrong for both; actual causes below. Verified: targeted `-race -count=20` green; both flakes reproduced before the fix (deterministic repro for #1; 2/20 failures for #2) and gone after.
   - `TestGetAcoustIDStats_Mixed` — **NOT** store/cache isolation. `GetAcoustIDStats` read book *files* pebble-direct but grouped them by library via `GetAllBooks`, which reads the **async-warmed memdb**. memdb write-through is a no-op until the warmup goroutine publishes (`memSync` returns early while `mem()==nil`), so under load the warmup published an empty/stale memdb → `GetAllBooks` returned no books → files collapsed into the `(unknown)` bucket → `LibraryRoot` assertion failed. Fix: added `getAllBooksPebbleScan()` and switched `GetAcoustIDStats` to read books pebble-direct (mirrors its existing file scan), so grouping no longer depends on warmup timing. Regression: `TestGetAcoustIDStats_StaleMemDBDoesNotBreakLibraryGrouping` injects an empty memdb post-write — fails pre-fix, deterministic post-fix.
