@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 8.95.0 -->
+<!-- version: 8.96.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-06-18 -->
 
@@ -262,6 +262,12 @@ Plan: [`docs/plans/2026-06-13-dedup-exact-gate-and-dataset.md`](docs/plans/2026-
   `unrelated`, `same_dir`, `a_ancestor_of_b`, `b_ancestor_of_a`. The `sibling_parts`
   value (same parent, different child dirs matching a series pattern) is planned but not
   yet implemented.
+- [x] **C-human / Slice A** Human label capture: merging or dismissing a dedup candidate now
+  writes a gold `LabeledExample` (`label_source="human"`, `true_dup`/`not_dup`) via
+  `internal/server/handlers/dedup/label_capture.go`. Best-effort (never blocks the action);
+  merge snapshots features pre-merge. Hooked: single merge, single dismiss, bulk merge,
+  cluster dismiss. **Follow-up (deferred):** cluster-merge + series-merge capture (need
+  pre-merge snapshot reordering); `RemoveFromDedupCluster` → not_dup capture.
 - [ ] **C5** Live-capture: wire `BuildExample` + `Classify` into the candidate-upsert path
   so each new candidate automatically gets a feature snapshot + deterministic label on
   creation (no separate backfill needed going forward).

@@ -363,6 +363,7 @@ func TestMergeDedupCandidateSeries_NoMergeSvc(t *testing.T) {
 
 func TestBulkMergeDedupCandidates(t *testing.T) {
 	h, d := newHandler(t)
+	allowLabelCaptureReads(d)
 	insertCandidate(t, d.es, "book-a", "book-b")
 	d.merge.EXPECT().MergeBooks(mock.Anything, mock.Anything).Return(&merge.Result{PrimaryID: "book-a"}, nil).Once()
 	w := doReq(t, h.BulkMergeDedupCandidates, http.MethodPost, "/api/v1/dedup/candidates/bulk-merge", map[string]any{}, nil)
@@ -408,6 +409,7 @@ func TestMergeDedupCluster_TooFew(t *testing.T) {
 
 func TestDismissDedupCluster(t *testing.T) {
 	h, d := newHandler(t)
+	allowLabelCaptureReads(d)
 	insertCandidate(t, d.es, "id1", "id2")
 	w := doReq(t, h.DismissDedupCluster, http.MethodPost, "/api/v1/dedup/candidates/dismiss-cluster",
 		map[string][]string{"book_ids": {"id1", "id2"}}, nil)
@@ -463,6 +465,7 @@ func TestMergeDedupCandidate_KeepIDInvalid(t *testing.T) {
 
 func TestMergeDedupCandidate_MergeSuccess(t *testing.T) {
 	h, d := newHandler(t)
+	allowLabelCaptureReads(d)
 	id, aID, bID := insertCandidate(t, d.es, "book-aaa", "book-bbb")
 	d.merge.EXPECT().MergeBooks([]string{aID, bID}, "").Return(&merge.Result{PrimaryID: aID}, nil).Once()
 	d.engine.EXPECT().CleanupCandidatesAfterMerge(mock.Anything).Return(0).Once()
@@ -484,6 +487,7 @@ func TestMergeDedupCandidate_KeepIDEcho(t *testing.T) {
 	for _, side := range []string{"A", "B"} {
 		t.Run(side, func(t *testing.T) {
 			h, d := newHandler(t)
+			allowLabelCaptureReads(d)
 			id, aID, bID := insertCandidate(t, d.es, "book-aaa", "book-bbb")
 			keep := aID
 			if side == "B" {
@@ -515,6 +519,7 @@ func TestMergeDedupCandidate_KeepIDEcho(t *testing.T) {
 
 func TestMergeDedupCandidate_AlreadyMergedConflict(t *testing.T) {
 	h, d := newHandler(t)
+	allowLabelCaptureReads(d)
 	id, aID, bID := insertCandidate(t, d.es, "book-aaa", "book-bbb")
 	d.merge.EXPECT().MergeBooks([]string{aID, bID}, "").
 		Return(nil, errNotFound{}).Once()
@@ -532,6 +537,7 @@ func (errNotFound) Error() string { return "book book-aaa not found" }
 
 func TestDismissDedupCandidate(t *testing.T) {
 	h, d := newHandler(t)
+	allowLabelCaptureReads(d)
 	id, _, _ := insertCandidate(t, d.es, "book-aaa", "book-bbb")
 	w := doReq(t, h.DismissDedupCandidate, http.MethodPost,
 		"/api/v1/dedup/candidates/"+strconv.FormatInt(id, 10)+"/dismiss", nil,
