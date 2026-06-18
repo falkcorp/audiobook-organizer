@@ -1,11 +1,37 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.36.0 -->
+<!-- version: 3.37.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-18 -->
 
 # Changelog
 
 ## [Unreleased]
+
+### Fixes
+
+#### June 18, 2026 — Dedup exact emitters skip non-primary version-group members (candidate-explosion fix)
+
+The exact-family candidate emitters (`checkExactFileHash`, `checkExactISBN`,
+`checkExactMetadataSourceHash`, `checkExactTitle`, `checkDurationMatch`) gated candidate
+books on `MarkedForDeletion` + `hasPlausibleAudio` but **not** `IsPrimaryVersion` — so
+every non-primary copy of a book got paired with its version-group siblings and with
+other books' copies. On prod this ballooned the `exact` layer to **387,597 pending
+candidates** against only **49,573 final books** (acoustid/embedding/llm combined were
+~1.4K). The embedding layer already gated on primary; the exact layer did not.
+
+- All six exact-layer writes now route through one gated helper,
+  `Engine.upsertExactCandidate`, which skips any pair where either side is a non-primary
+  version-group member. Centralizing the gate means a future emitter cannot reintroduce
+  the balloon without passing through it.
+- Regression guard `internal/dedup/engine_primary_gate_test.go`: non-primary members
+  never leak into a candidate; one final book + N copies yields **0** candidates (was
+  O(N²)); two primaries still pair normally.
+- Books with `IsPrimaryVersion == nil` are treated as primary (unchanged behavior).
+
+Follow-up (tracked as **DEDUP-CANDIDATE-EXPLOSION-2026-06-18**): the existing 387K stale
+exact candidates still need a one-time purge/rebuild against final books, and the
+upstream cause (why ~352K extra/chapter `books` rows exist) needs investigation. Do not
+run `dedup.mine-gold-labels --apply` until the candidate set is rebuilt.
 
 ### Features
 

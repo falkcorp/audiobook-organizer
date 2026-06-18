@@ -1,7 +1,7 @@
 // file: internal/dedup/engine.go
-// version: 1.31.0
+// version: 1.32.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
-// last-edited: 2026-06-16
+// last-edited: 2026-06-18
 
 package dedup
 
@@ -738,15 +738,7 @@ func (de *Engine) handleFileHashMatch(book, other *database.Book, authorName str
 	}
 
 	// Create candidate even if we don't auto-merge
-	sim := 1.0
-	return false, de.embedStore.UpsertCandidate(database.DedupCandidate{
-		EntityType: "book",
-		EntityAID:  book.ID,
-		EntityBID:  other.ID,
-		Layer:      "exact",
-		Similarity: &sim,
-		Status:     "pending",
-	})
+	return false, de.upsertExactCandidate(book, other, "exact", 1.0)
 }
 
 // checkExactISBN finds all other books with a matching ISBN10, ISBN13, or ASIN
@@ -811,15 +803,7 @@ func (de *Engine) checkExactISBNIndexed(book *database.Book, bookISBN10, bookISB
 		if !hasPlausibleAudio(other) {
 			continue // stub / unscanned shell on the other side
 		}
-		sim := 1.0
-		if err := de.embedStore.UpsertCandidate(database.DedupCandidate{
-			EntityType: "book",
-			EntityAID:  book.ID,
-			EntityBID:  other.ID,
-			Layer:      "exact",
-			Similarity: &sim,
-			Status:     "pending",
-		}); err != nil {
+		if err := de.upsertExactCandidate(book, other, "exact", 1.0); err != nil {
 			slog.Error("dedup upsert ISBN candidate error", "err", err)
 		}
 	}
@@ -859,15 +843,7 @@ func (de *Engine) checkExactISBNScan(book *database.Book, bookISBN10, bookISBN13
 				matched = true
 			}
 			if matched {
-				sim := 1.0
-				if err := de.embedStore.UpsertCandidate(database.DedupCandidate{
-					EntityType: "book",
-					EntityAID:  book.ID,
-					EntityBID:  other.ID,
-					Layer:      "exact",
-					Similarity: &sim,
-					Status:     "pending",
-				}); err != nil {
+				if err := de.upsertExactCandidate(book, other, "exact", 1.0); err != nil {
 					slog.Error("dedup upsert ISBN candidate error", "err", err)
 				}
 			}
@@ -903,15 +879,7 @@ func (de *Engine) checkExactMetadataSourceHash(book *database.Book) error {
 		if other.ID == book.ID {
 			continue
 		}
-		sim := 0.99
-		if err := de.embedStore.UpsertCandidate(database.DedupCandidate{
-			EntityType: "book",
-			EntityAID:  book.ID,
-			EntityBID:  other.ID,
-			Layer:      "metadata_hash",
-			Similarity: &sim,
-			Status:     "pending",
-		}); err != nil {
+		if err := de.upsertExactCandidate(book, other, "metadata_hash", 0.99); err != nil {
 			slog.Error("dedup upsert metadata-hash candidate error (book ↔ )", "book", book.ID, "other", other.ID, "err", err)
 		}
 	}
@@ -996,15 +964,7 @@ func (de *Engine) checkExactTitle(book *database.Book, authorName string) error 
 		if titlesDifferOnlyInDigits(normTitle, otherNormTitle) {
 			continue
 		}
-		sim := 1.0
-		if err := de.embedStore.UpsertCandidate(database.DedupCandidate{
-			EntityType: "book",
-			EntityAID:  book.ID,
-			EntityBID:  other.ID,
-			Layer:      "exact",
-			Similarity: &sim,
-			Status:     "pending",
-		}); err != nil {
+		if err := de.upsertExactCandidate(book, other, "exact", 1.0); err != nil {
 			slog.Error("dedup upsert title candidate error", "err", err)
 		}
 	}
@@ -1124,15 +1084,7 @@ func (de *Engine) checkDurationMatch(book *database.Book) error {
 		// threshold (6 vs 3 in checkExactTitle) is OK here
 		// because duration is the strong signal.
 		if pct <= durationMatchTolerance && titleDist <= durationLevenshteinMax {
-			sim := 1.0
-			if err := de.embedStore.UpsertCandidate(database.DedupCandidate{
-				EntityType: "book",
-				EntityAID:  book.ID,
-				EntityBID:  other.ID,
-				Layer:      "exact",
-				Similarity: &sim,
-				Status:     "pending",
-			}); err != nil {
+			if err := de.upsertExactCandidate(book, other, "exact", 1.0); err != nil {
 				slog.Error("dedup duration candidate upsert error", "err", err)
 				continue
 			}
@@ -1189,6 +1141,36 @@ const minPlausibleAudioBytes = 256 * 1024 // 256 KiB
 // exact-title / ISBN emitters from flagging "100% duplicate" when one side is a
 // 32-byte stub or an unscanned shell. A large unscanned copy (real size, zero
 // duration) still qualifies — it is a genuine duplicate, not garbage.
+// isNonPrimaryVersion reports whether b is a non-primary member of a version
+// group. Such a book is, by construction, a known duplicate of its group's
+// primary — so it must never participate in dedup candidates. Pairing non-primary
+// members (with each other or with primaries) re-discovers duplicates the version
+// grouping already resolved and balloons the candidate set into the hundreds of
+// thousands. See DEDUP-CANDIDATE-EXPLOSION-2026-06-18.
+func isNonPrimaryVersion(b *database.Book) bool {
+	return b != nil && b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion
+}
+
+// upsertExactCandidate writes one exact-family dedup candidate (layer
+// "exact"/"metadata_hash"), skipping any pair where either side is a non-primary
+// version-group member. ALL exact emitters route through here so the primary gate
+// lives in exactly one place — a future emitter cannot reintroduce the balloon
+// without going through this guard. Returns the store error so callers that
+// propagate it keep their contract.
+func (de *Engine) upsertExactCandidate(a, b *database.Book, layer string, sim float64) error {
+	if isNonPrimaryVersion(a) || isNonPrimaryVersion(b) {
+		return nil
+	}
+	return de.embedStore.UpsertCandidate(database.DedupCandidate{
+		EntityType: "book",
+		EntityAID:  a.ID,
+		EntityBID:  b.ID,
+		Layer:      layer,
+		Similarity: &sim,
+		Status:     "pending",
+	})
+}
+
 func hasPlausibleAudio(book *database.Book) bool {
 	if book == nil {
 		return false
