@@ -1,7 +1,7 @@
 // file: internal/database/hnsw_embedding_store.go
-// version: 1.3.0
+// version: 1.5.0
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-06-17
+// last-edited: 2026-06-18
 
 // HNSW-graph vector store (coder/hnsw) — a sub-linear ANN index alternative to
 // the brute-force chromem store. Selected via config.VectorIndexBackend="hnsw".
@@ -140,7 +140,14 @@ func (s *HNSWEmbeddingStore) Upsert(_ context.Context, entityType, entityID stri
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	g := s.graphFor(entityType)
-	// Add replaces an existing node with the same key.
+	// coder/hnsw v0.6.1 Graph.Add replaces an existing key. The typical
+	// call path (HydrateChromem on a fresh store, or adding a brand-new book)
+	// only inserts new keys, so the built-in replace path is never exercised.
+	// Re-inserting existing keys has a library bug (HNSW-CRASH-2026-06-18)
+	// that is avoided structurally: NewServer loads the HNSW snapshot BEFORE
+	// PostInit so dedup.Engine.PostInit detects the populated store and skips
+	// HydrateChromem entirely. See internal/server/server.go and
+	// internal/dedup/lifecycle.go for the fix.
 	g.Add(hnsw.MakeNode(entityID, vec))
 	if meta == nil {
 		meta = map[string]string{}

@@ -1,7 +1,7 @@
 // file: internal/database/hnsw_embedding_store_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-06-17
+// last-edited: 2026-06-18
 
 package database
 
@@ -330,4 +330,78 @@ func TestHNSW_RecallVsChromem(t *testing.T) {
 		t.Errorf("recall@%d vs exact = %.3f, want ≥ 0.80", k, recall)
 	}
 	t.Logf("HNSW recall@%d vs exact chromem = %.3f", k, recall)
+}
+
+// TestHNSW_SnapshotSkipsHydration is a regression test for HNSW-CRASH-2026-06-18.
+//
+// Production crash: on every restart with a saved snapshot, the service entered
+// a crash loop (restart #51). Sequence: NewServer called PostInit (which
+// launched HydrateChromem), then loaded the HNSW snapshot. HydrateChromem
+// re-inserted all ~38K existing keys into the already-populated graph, hitting a
+// bug in coder/hnsw v0.6.1: Delete+Add of an existing key can leave the graph
+// in a state where a node exists at layer L but not L-1. A subsequent Add finds
+// that node via the elevator and crashes at layer.nodes[elevator]=nil (addr=0x10
+// = Value field offset in layerNode, SIGSEGV).
+//
+// Fix: NewServer now loads the HNSW snapshot BEFORE PostInit (between Build and
+// PostInit). dedup.Engine.PostInit checks CountByType("book") > 0 and skips
+// HydrateChromem entirely. This test verifies the observable contract: after
+// Import, CountByType reports the loaded nodes so the lifecycle can detect and
+// skip hydration, and FindSimilar works correctly on the imported graph.
+func TestHNSW_SnapshotSkipsHydration(t *testing.T) {
+	const dim = 8
+	ctx := context.Background()
+	rng := rand.New(rand.NewSource(42))
+
+	// Build an initial store with enough nodes to produce a multi-layer graph.
+	s1 := NewHNSWEmbeddingStore(dim)
+	s1.newGraphRng = func() *rand.Rand { return rand.New(rand.NewSource(7)) }
+	ids := make([]string, 50)
+	vecs := make([][]float32, 50)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("book-%02d", i)
+		vecs[i] = unitVec(rng, dim)
+		if err := s1.Upsert(ctx, "book", ids[i], vecs[i], map[string]string{"k": "v"}); err != nil {
+			t.Fatalf("initial upsert %s: %v", ids[i], err)
+		}
+	}
+
+	// Export then Import — simulates the on-disk snapshot path.
+	dir := t.TempDir()
+	if err := s1.Export(dir); err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	s2 := NewHNSWEmbeddingStore(dim)
+	s2.newGraphRng = func() *rand.Rand { return rand.New(rand.NewSource(7)) }
+	if err := s2.Import(dir); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	// CountByType must be >0 after a successful Import so the lifecycle can
+	// detect the populated store and skip HydrateChromem.
+	n, err := s2.CountByType(ctx, "book")
+	if err != nil {
+		t.Fatalf("CountByType: %v", err)
+	}
+	if n != 50 {
+		t.Errorf("CountByType after import = %d, want 50", n)
+	}
+
+	// FindSimilar must work on the imported graph (snapshot is usable).
+	results, err := s2.FindSimilar(ctx, "book", vecs[0], 5, nil)
+	if err != nil {
+		t.Fatalf("FindSimilar after import: %v", err)
+	}
+	if len(results) == 0 {
+		t.Error("FindSimilar returned 0 results after import")
+	}
+
+	// New keys (not in snapshot) must still be insertable without crashing.
+	newVec := unitVec(rng, dim)
+	if err := s2.Upsert(ctx, "book", "new-book-99", newVec, nil); err != nil {
+		t.Fatalf("upsert new key after import: %v", err)
+	}
+	if got, _ := s2.CountByType(ctx, "book"); got != 51 {
+		t.Errorf("CountByType after new insert = %d, want 51", got)
+	}
 }

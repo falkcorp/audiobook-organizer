@@ -1,7 +1,7 @@
 // file: internal/dedup/lifecycle.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3e4f5a6b-7c8d-9e0f-a1b2-c3d4e5f60718
-// last-edited: 2026-06-14
+// last-edited: 2026-06-18
 
 // Lifecycle methods on *dedup.Engine that the serviceregistry container
 // picks up via interface satisfaction. PostInit subscribes to lifecycle
@@ -112,12 +112,23 @@ func (de *Engine) PostInit(ctx context.Context, c *serviceregistry.Container) er
 	if chromemStore, ok := serviceregistry.TryGet[database.VectorANNStore](c, "chromemstore"); ok && chromemStore != nil {
 		de.SetChromemStore(chromemStore)
 		slog.Info("[INFO] vector ANN store active for dedup Layer 2")
+		// Check if the store is already populated (HNSW snapshot loaded before
+		// PostInit in NewServer — HNSW-CRASH-2026-06-18). Re-inserting existing
+		// keys into coder/hnsw v0.6.1 corrupts per-layer invariants and panics.
+		alreadyPopulated := false
+		if n, err := chromemStore.CountByType(ctx, "book"); err == nil && n > 0 {
+			alreadyPopulated = true
+			slog.Info("[dedup] vector ANN store already populated from snapshot, skipping hydration", "books", n)
+		}
+
 		if dedupChromemLazy() {
 			// Skip the eager hydrate. Chromem stays empty; FindSimilar in
 			// engine.go falls back to the SQLite linear-scan path via
 			// EmbeddingStore.FindSimilar (slower per-query but no upfront
 			// ~6GB heap from mirroring 42K book vectors into memory).
 			slog.Info("chromem hydrate skipped (DEDUP_CHROMEM_LAZY=true) — dedup FindSimilar will use SQLite linear-scan fallback")
+		} else if alreadyPopulated {
+			// Snapshot was loaded — nothing to hydrate.
 		} else {
 			// Hydrate asynchronously on the engine's bg-context.
 			// Add(1) under bgMu BEFORE launching so Stop can't race the

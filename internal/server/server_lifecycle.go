@@ -1,14 +1,13 @@
 // file: internal/server/server_lifecycle.go
-// version: 1.34.0
+// version: 1.35.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-06-15
+// last-edited: 2026-06-18
 
 package server
 
 import (
 	"context"
 	"crypto/tls"
-	"errors"
 	"fmt"
 	"log/slog"
 
@@ -257,27 +256,9 @@ func (s *Server) Start(cfg ServerConfig) error {
 		}
 	}
 
-	// Load HNSW snapshot from disk (skips PebbleDB hydration walk when available).
-	// NOTE: the chromem hydration goroutine is already running (launched in
-	// dedup.Engine.PostInit inside NewServer). If Import succeeds it pre-populates
-	// the graph; the concurrent hydration Upserts are serialized by the store's
-	// mutex and result in duplicate-but-correct inserts. A future task should gate
-	// hydration on snapshot availability to avoid the double-work.
-	if s.hnswPersistDir != "" {
-		if raw, ok := serviceregistry.TryGet[database.VectorANNStore](s.container, "chromemstore"); ok && raw != nil {
-			if hnswStore, ok := raw.(*database.HNSWEmbeddingStore); ok {
-				if err := hnswStore.Import(s.hnswPersistDir); err != nil {
-					if !errors.Is(err, database.ErrNoHNSWSnapshot) {
-						slog.Warn("hnsw: import failed, falling back to hydration", "err", err)
-					} else {
-						slog.Info("hnsw: no snapshot found, will hydrate from PebbleDB")
-					}
-				} else {
-					slog.Info("hnsw: loaded from on-disk snapshot", "dir", s.hnswPersistDir)
-				}
-			}
-		}
-	}
+	// HNSW snapshot is now loaded earlier, in NewServer (between Build and PostInit),
+	// so that dedup.Engine.PostInit can detect the populated store and skip the
+	// redundant HydrateChromem walk. Nothing to do here. (HNSW-CRASH-2026-06-18)
 
 	// Pre-warm facets cache (genres/languages) - lightweight, <1 second
 	go s.warmFacetsCache()
