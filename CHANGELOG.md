@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.47.0 -->
+<!-- version: 3.48.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-19 -->
 
@@ -52,6 +52,10 @@ then summed those inflated values and clobbered the correct seconds-valued
   low-bitrate audiobook. Per book it corrects each file then re-runs
   `RecomputeBookAggregates`. Dry-run is the default; no prod data is touched until an
   operator runs it with `dryRun=false`.
+- Throttled the op's per-file logging and progress events (sample + periodic
+  heartbeat instead of one-per-file): at library scale the prod dry-run found
+  **175,061** ms-valued file durations, and a log/progress event per row would have
+  flooded the activity store and dominated wall-clock for work that is otherwise cheap.
 
 ### Documentation
 
