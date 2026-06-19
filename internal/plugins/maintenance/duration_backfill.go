@@ -1,0 +1,243 @@
+// file: internal/plugins/maintenance/duration_backfill.go
+// version: 1.0.0
+// guid: 7e4b2a90-3c61-4d58-8f29-6a1c0e5b9d83
+// last-edited: 2026-06-19
+
+package maintenance
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+)
+
+// CONS-16: the iTunes importer historically stored per-file BookFile.Duration in
+// milliseconds (iTunes TotalTime units) instead of seconds. RecomputeBookAggregates
+// then summed those inflated values and overwrote the correct seconds-valued
+// Book.Duration, mislabeling real books as dedup candidates. This maintenance op
+// heals existing rows. The importer bug itself is fixed at the 3 write sites
+// (see internal/itunes/service/importer.go trackDurationSeconds).
+
+// Bitrate band (bits/sec) used to decide whether a stored duration is plausible
+// when interpreted as seconds. The ms/seconds confusion shifts the implied
+// bitrate by ~1000×, while real audiobook bitrate variation spans only ~20×
+// (4 kbps spoken-word … ~1.4 Mbps lossless), so a single 4 kbps floor cleanly
+// separates the two without ever flagging a genuine low-bitrate file.
+const (
+	minPlausibleBitsPerSec = 4_000     // 4 kbps — below any real audio codec
+	maxPlausibleBitsPerSec = 3_000_000 // 3 Mbps — above lossless; upper sanity bound
+)
+
+// durationLooksLikeMillis reports whether durationSec (stored as the seconds
+// field) is actually a milliseconds value, judged by the bitrate it would imply
+// for a file of fileSize bytes.
+//
+//   - If the implied bitrate is within a plausible audio range, the value is a
+//     legitimate seconds duration → not milliseconds.
+//   - If the implied bitrate is impossibly low (< 4 kbps), the duration is too
+//     large for the file: it is milliseconds. We confirm by checking that
+//     dividing by 1000 lands back inside the plausible band — this rejects the
+//     rare false positive of a genuinely sub-4 kbps clip (whose /1000 would imply
+//     an absurd multi-Mbps bitrate).
+func durationLooksLikeMillis(fileSize int64, durationSec int) bool {
+	if fileSize <= 0 || durationSec <= 0 {
+		return false // cannot judge / nothing to fix
+	}
+
+	impliedBitsPerSec := fileSize * 8 / int64(durationSec)
+	if impliedBitsPerSec >= minPlausibleBitsPerSec {
+		return false // plausible as seconds
+	}
+
+	correctedSec := durationSec / 1000
+	if correctedSec <= 0 {
+		return false // would round to zero — refuse to corrupt
+	}
+	correctedBitsPerSec := fileSize * 8 / int64(correctedSec)
+	return correctedBitsPerSec >= minPlausibleBitsPerSec &&
+		correctedBitsPerSec <= maxPlausibleBitsPerSec
+}
+
+type durationBackfillParams struct {
+	DryRun bool `json:"dryRun"`
+}
+
+// durationFix records a single BookFile whose Duration must be divided by 1000.
+type durationFix struct {
+	file        database.BookFile
+	newDuration int
+}
+
+func (p *Plugin) durationBackfillDef() sdk.OperationDef {
+	return sdk.OperationDef{
+		ID:              "maintenance.duration-backfill",
+		Plugin:          "maintenance",
+		DisplayName:     "Fix millisecond-valued book file durations",
+		Description:     "Scans all BookFiles for durations mistakenly stored in milliseconds (CONS-16: legacy iTunes import bug) and divides them back to seconds, then recomputes affected book aggregates. Detection uses the file's implied bitrate so genuine durations are never touched. Default dry-run previews changes; set dryRun=false to apply.",
+		ResumePolicy:    sdk.ResumeDrop,
+		DefaultPriority: sdk.PriorityLow,
+		ConcurrencyKey:  "maintenance.duration-backfill",
+		Cancellable:     true,
+		Isolate:         false,
+		Timeout:         60 * time.Minute,
+		Schedule:        nil,
+		Capabilities:    []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
+		Run:             p.runDurationBackfill,
+	}
+}
+
+func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
+	params := durationBackfillParams{DryRun: true} // safe default
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &params); err != nil {
+			return fmt.Errorf("invalid params: %w", err)
+		}
+	}
+
+	store := p.deps.Store()
+	if store == nil {
+		return fmt.Errorf("database not initialized")
+	}
+
+	if params.DryRun {
+		_ = reporter.Log(slog.LevelInfo, "DRY RUN — no changes will be written")
+	}
+
+	totalBooks, countErr := store.CountBooks()
+	if countErr != nil || totalBooks <= 0 {
+		totalBooks = 0
+	}
+	_ = reporter.UpdateProgress(0, totalBooks, "Phase 1/2: scanning book file durations…")
+
+	const pageSize = 500
+	offset := 0
+	var scanned int
+	// Fixes grouped per book, preserving book discovery order so Phase 2 can
+	// recompute each affected book's aggregates exactly once.
+	bookOrder := make([]string, 0)
+	fixesByBook := make(map[string][]durationFix)
+
+	for {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		books, err := store.GetAllBooks(pageSize, offset)
+		if err != nil {
+			return fmt.Errorf("GetAllBooks offset=%d: %w", offset, err)
+		}
+		if len(books) == 0 {
+			break
+		}
+
+		for _, book := range books {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			scanned++
+
+			files, ferr := store.GetBookFiles(book.ID)
+			if ferr != nil {
+				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
+					"book %s: GetBookFiles failed: %v", book.ID, ferr))
+				continue
+			}
+			for _, f := range files {
+				if durationLooksLikeMillis(f.FileSize, f.Duration) {
+					if _, seen := fixesByBook[book.ID]; !seen {
+						bookOrder = append(bookOrder, book.ID)
+					}
+					fixesByBook[book.ID] = append(fixesByBook[book.ID], durationFix{
+						file:        f,
+						newDuration: f.Duration / 1000,
+					})
+				}
+			}
+		}
+
+		offset += len(books)
+		total := totalBooks
+		if total == 0 {
+			total = scanned
+		}
+		_ = reporter.UpdateProgress(scanned, total, fmt.Sprintf(
+			"Phase 1/2: scanned %d/%d — %d books with ms durations", scanned, total, len(bookOrder)))
+
+		if len(books) < pageSize {
+			break
+		}
+	}
+
+	totalFiles := 0
+	for _, fixes := range fixesByBook {
+		totalFiles += len(fixes)
+	}
+
+	if totalFiles == 0 {
+		suffix := ""
+		if params.DryRun {
+			suffix = " (dry run)"
+		}
+		result := fmt.Sprintf("Scanned %d books: 0 files need duration correction%s", scanned, suffix)
+		_ = reporter.Log(slog.LevelInfo, result)
+		_ = reporter.UpdateProgress(1, 1, result)
+		return nil
+	}
+
+	_ = reporter.UpdateProgress(0, totalFiles, fmt.Sprintf(
+		"Phase 2/2: correcting %d file durations across %d books…", totalFiles, len(bookOrder)))
+
+	var fixedFiles, errCount int
+	for _, bookID := range bookOrder {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		for _, fix := range fixesByBook[bookID] {
+			_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
+				"book %s file %s: %d ms → %d s", bookID, fix.file.ID, fix.file.Duration, fix.newDuration))
+
+			if !params.DryRun {
+				updated := fix.file
+				updated.Duration = fix.newDuration
+				if err := store.UpdateBookFile(updated.ID, &updated); err != nil {
+					_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
+						"book %s file %s: UpdateBookFile failed: %v", bookID, fix.file.ID, err))
+					errCount++
+					continue
+				}
+			}
+			fixedFiles++
+			_ = reporter.UpdateProgress(fixedFiles, totalFiles, fmt.Sprintf(
+				"Phase 2/2: corrected %d/%d file durations", fixedFiles, totalFiles))
+		}
+
+		// Heal the book-level aggregate once all of its files are corrected.
+		if !params.DryRun {
+			if err := store.RecomputeBookAggregates(bookID); err != nil {
+				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
+					"book %s: RecomputeBookAggregates failed: %v", bookID, err))
+				errCount++
+			}
+		}
+	}
+
+	suffix := ""
+	if params.DryRun {
+		suffix = " (dry run — no writes)"
+	}
+	result := fmt.Sprintf("Scanned %d books: %d file durations corrected across %d books, %d errors%s",
+		scanned, fixedFiles, len(bookOrder), errCount, suffix)
+	_ = reporter.Log(slog.LevelInfo, result)
+	_ = reporter.UpdateProgress(totalFiles, totalFiles, result)
+
+	if errCount > 0 {
+		return fmt.Errorf("%d errors during duration backfill (see op log for details)", errCount)
+	}
+	return nil
+}

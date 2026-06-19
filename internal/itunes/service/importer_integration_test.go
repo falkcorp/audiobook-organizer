@@ -1,6 +1,7 @@
 // file: internal/itunes/service/importer_integration_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8f2e4a1b-7c3d-4f9b-a0e5-3d6c2f8b5a7e
+// last-edited: 2026-06-19
 
 package itunesservice
 
@@ -318,7 +319,7 @@ func TestITunesImport_MultiTrackBookSegments(t *testing.T) {
 			FilePath:    trackPath,
 			Format:      "m4b",
 			FileSize:    int64(track.Size),
-			Duration:    int(track.TotalTime),
+			Duration:    trackDurationSeconds(track), // CONS-16: seconds, not raw ms
 			TrackNumber: track.TrackNumber,
 			TrackCount:  len(mobyGroup.tracks),
 		}
@@ -329,9 +330,17 @@ func TestITunesImport_MultiTrackBookSegments(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, files, 3)
 
+	// Index expected per-track seconds by track number so we can assert each
+	// stored BookFile.Duration is in seconds (CONS-16 regression guard).
+	wantSecByTrack := make(map[int]int, len(mobyGroup.tracks))
+	for _, track := range mobyGroup.tracks {
+		wantSecByTrack[track.TrackNumber] = int(track.TotalTime / 1000)
+	}
 	for _, bf := range files {
 		assert.Equal(t, len(mobyGroup.tracks), bf.TrackCount)
 		assert.NotZero(t, bf.Duration)
+		assert.Equal(t, wantSecByTrack[bf.TrackNumber], bf.Duration,
+			"BookFile.Duration must be seconds, not milliseconds")
 	}
 }
 
