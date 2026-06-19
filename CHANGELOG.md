@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.39.0 -->
+<!-- version: 3.40.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-18 -->
 
@@ -8,6 +8,17 @@
 ## [Unreleased]
 
 ### Fixes
+
+#### June 19, 2026 — Fix memdb-warmup-race flaky DB tests (GetAll* "expected N, got N-1")
+
+`setupPebbleTestDB` now calls the new `PebbleStore.WaitForWarmup()` before returning, so
+the async memdb warmup has published (or fallen back to Pebble) before any test writes.
+Previously a write that landed mid-warmup had its memdb write-through dropped (memSync
+no-ops while `mem()==nil`), then warmup published a memdb missing those rows — surfacing
+as order-dependent `TestPebbleGetAllAuthors`-class flakes ("Expected 3 authors, got 2")
+under the full `-race` suite, repeatedly blocking unrelated PRs. Verified: the flaky test
+is green over `-race -count=40`; full `internal/database -short -race` green.
+
 
 #### June 19, 2026 — dedup.quarantine-chapter-artifacts: drain chapter-file-as-book candidates
 

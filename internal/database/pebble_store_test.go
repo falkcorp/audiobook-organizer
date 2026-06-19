@@ -28,6 +28,12 @@ func setupPebbleTestDB(t *testing.T) (Store, func()) {
 	if err != nil {
 		t.Fatalf("Failed to create test Pebble database: %v", err)
 	}
+	// Wait for the async memdb warmup to settle BEFORE any test writes, so
+	// write-throughs land in the published memdb and GetAll* reads are
+	// deterministic. Without this the warmup race drops some write-throughs and
+	// surfaces as order-dependent "expected N, got N-1" flakes under -race
+	// (e.g. TestPebbleGetAllAuthors).
+	store.WaitForWarmup()
 
 	// Cleanup function removes the database directory
 	cleanup := func() {
