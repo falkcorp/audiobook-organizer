@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/CandidateCompareDrawer.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: a6f7b8c9-d0e1-2345-fabc-af6789012345
-// last-edited: 2026-06-10
+// last-edited: 2026-06-19
 
 // CandidateCompareDrawer is a right-side Drawer that shows a full side-by-side
 // comparison of the two books in a dedup candidate, plus the score breakdown.
@@ -29,11 +29,12 @@ import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import { useNavigate } from 'react-router-dom';
 import * as api from '../../services/api';
-import type { DedupCandidateBreakdownResponse } from '../../services/api';
+import type { AcoustIDCompareResponse, DedupCandidateBreakdownResponse } from '../../services/api';
 import { ScoreBadgeRow } from './ScoreBadgeRow';
 import { ScoreBreakdownPanel } from './ScoreBreakdownPanel';
 import { FileInfoCompare } from './FileInfoCompare';
 import { AudioSamplePair } from './AudioSamplePair';
+import { FingerprintPair } from './FingerprintCanvas';
 
 interface CandidateCompareDrawerProps {
   /** Candidate ID to load breakdown for, or null to close. */
@@ -57,7 +58,10 @@ export function CandidateCompareDrawer({
   const [error, setError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState(0);
+  const [fpData, setFpData] = useState<AcoustIDCompareResponse | null>(null);
+  const [fpLoading, setFpLoading] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const fpAbortRef = useRef<AbortController | null>(null);
 
   // Fetch breakdown whenever candidateId changes.
   useEffect(() => {
@@ -76,6 +80,7 @@ export function CandidateCompareDrawer({
     setError(null);
     setData(null);
     setActiveTab(0);
+    setFpData(null);
 
     api
       .getDedupCandidateBreakdown(candidateId, ctrl.signal)
@@ -104,8 +109,26 @@ export function CandidateCompareDrawer({
   useEffect(() => {
     return () => {
       abortRef.current?.abort();
+      fpAbortRef.current?.abort();
     };
   }, []);
+
+  // Lazy-load fingerprint comparison when the Fingerprint tab (index 2) is first opened.
+  useEffect(() => {
+    const bA = data?.book_a;
+    const bB = data?.book_b;
+    if (activeTab !== 2 || !bA || !bB || fpData || fpLoading) return;
+    fpAbortRef.current?.abort();
+    const ctrl = new AbortController();
+    fpAbortRef.current = ctrl;
+    setFpLoading(true);
+    api
+      .compareAcoustID(bA.id, bB.id)
+      .then((resp) => { if (!ctrl.signal.aborted) setFpData(resp); })
+      .catch(() => { /* non-critical: fingerprint view stays empty */ })
+      .finally(() => { if (!ctrl.signal.aborted) setFpLoading(false); });
+    return () => ctrl.abort();
+  }, [activeTab, data, fpData, fpLoading]);
 
   const handleMerge = async (keepId?: string) => {
     if (!candidateId) return;
@@ -295,6 +318,7 @@ export function CandidateCompareDrawer({
             >
               <Tab label="Files" data-testid="drawer-tab-files" />
               <Tab label="Score Breakdown" data-testid="drawer-tab-breakdown" />
+              <Tab label="Fingerprint" data-testid="drawer-tab-fingerprint" />
             </Tabs>
 
             {activeTab === 0 && bookA && bookB && (
@@ -313,6 +337,25 @@ export function CandidateCompareDrawer({
               <Typography color="text.secondary" variant="body2" fontStyle="italic">
                 No score breakdown available (pre-T015 candidate — run rescore to backfill).
               </Typography>
+            )}
+
+            {activeTab === 2 && (
+              <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, pt: 1 }}>
+                {fpLoading && <CircularProgress size={32} />}
+                {!fpLoading && fpData && fpData.segment_scores.length > 0 && (
+                  <FingerprintPair
+                    hashA={fpData.segment_scores[0]?.hash_a ?? ''}
+                    hashB={fpData.segment_scores[0]?.hash_b ?? ''}
+                    width={220}
+                    rows={64}
+                  />
+                )}
+                {!fpLoading && !fpData && (
+                  <Typography color="text.secondary" variant="body2" fontStyle="italic">
+                    No fingerprint data — run acoustid.scan to generate fingerprints first.
+                  </Typography>
+                )}
+              </Box>
             )}
           </>
         )}
