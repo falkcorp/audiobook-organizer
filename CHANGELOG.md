@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.37.0 -->
+<!-- version: 3.38.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-18 -->
 
@@ -8,6 +8,20 @@
 ## [Unreleased]
 
 ### Fixes
+
+#### June 19, 2026 — dedup.quarantine-chapter-artifacts: drain chapter-file-as-book candidates
+
+New maintenance op that drains the dedup candidate explosion at its source. Root cause
+(confirmed): the scanner's mixed-directory album grouping (`groupFilesIntoBooks`) emits a
+STANDALONE book for every single-file album group, so segment files (idents, "Opening
+Credits", intros) with distinct tags became standalone books whose generic titles collide
+library-wide. The exact-title emitter cross-paired them into ~356K bogus candidates (the
+primary-version-gate fix only removed ~31K non-primary ones).
+
+The op soft-deletes (recoverable; `MarkedForDeletion`) a book only when ALL hold: its
+normalized title is shared by ≥ N other books (default 5), it is a single-file book, and
+that file's duration is positive and below a threshold (default 1200s). Dry-run by default.
+
 
 #### June 18, 2026 — Dedup exact emitters skip non-primary version-group members (candidate-explosion fix)
 
