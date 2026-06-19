@@ -1,12 +1,12 @@
 // file: web/src/components/dedup/ScoreBadgeRow.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: c2b3d4e5-f6a7-8901-bcde-cb2345678901
-// last-edited: 2026-06-10
+// last-edited: 2026-06-19
 
 // ScoreBadgeRow renders a compact row of band + score chips for a candidate.
 // Used inside the candidate table and the comparison drawer header.
 
-import { Box, Chip, Stack, Tooltip, Typography } from '@mui/material';
+import { Chip, Stack, Tooltip } from '@mui/material';
 import type { DedupBand } from '../../services/api';
 import { BAND_CONFIG } from './BandFilterBar';
 
@@ -17,8 +17,9 @@ interface ScoreBadgeRowProps {
   similarity?: number;
 }
 
-const LAYER_COLORS: Record<string, 'error' | 'primary' | 'secondary' | 'default'> = {
-  exact: 'error',
+// Non-exact layers are shown since they're distinctive. "exact" is omitted —
+// when everything in view is exact it adds no information and wastes space.
+const NOTABLE_LAYER_COLORS: Record<string, 'primary' | 'secondary' | 'default'> = {
   embedding: 'primary',
   llm: 'secondary',
 };
@@ -26,52 +27,44 @@ const LAYER_COLORS: Record<string, 'error' | 'primary' | 'secondary' | 'default'
 export function ScoreBadgeRow({ band, score, layer, similarity }: ScoreBadgeRowProps) {
   const bandCfg = band ? BAND_CONFIG[band as DedupBand] : null;
 
+  // Prefer the composite score; fall back to raw similarity percentage.
+  const scoreLabel =
+    score != null
+      ? `${score.toFixed(0)}%`
+      : similarity != null
+        ? `${(similarity * 100).toFixed(0)}%`
+        : null;
+
+  const scoreTooltip =
+    score != null
+      ? `Composite score: ${score.toFixed(1)} / 100`
+      : similarity != null
+        ? `Raw similarity: ${(similarity * 100).toFixed(1)}%`
+        : '';
+
   return (
     <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap" useFlexGap>
       {bandCfg && (
         <Tooltip title={bandCfg.description}>
-          <Chip
-            label={bandCfg.label}
-            size="small"
-            color={bandCfg.color}
-            variant="filled"
-          />
+          <Chip label={bandCfg.label} size="small" color={bandCfg.color} variant="filled" />
         </Tooltip>
       )}
       {band && !bandCfg && (
         <Chip label={String(band)} size="small" variant="outlined" />
       )}
-      {score != null && (
-        <Tooltip title={`Composite score: ${score.toFixed(1)} / 100`}>
-          <Box
-            component="span"
-            sx={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              bgcolor: 'action.hover',
-              borderRadius: 1,
-              px: 0.75,
-              py: 0.25,
-            }}
-          >
-            <Typography variant="caption" fontWeight={600}>
-              {score.toFixed(0)}
-            </Typography>
-          </Box>
+      {scoreLabel && (
+        <Tooltip title={scoreTooltip}>
+          <Chip label={scoreLabel} size="small" variant="outlined" color="default" />
         </Tooltip>
       )}
-      {layer && (
+      {/* Only show layer when it's something non-obvious (not "exact") */}
+      {layer && layer !== 'exact' && layer in NOTABLE_LAYER_COLORS && (
         <Chip
           label={layer}
           size="small"
-          color={LAYER_COLORS[layer] ?? 'default'}
+          color={NOTABLE_LAYER_COLORS[layer]}
           variant="outlined"
         />
-      )}
-      {similarity != null && score == null && (
-        <Typography variant="caption" color="text.secondary">
-          {(similarity * 100).toFixed(1)}%
-        </Typography>
       )}
     </Stack>
   );
