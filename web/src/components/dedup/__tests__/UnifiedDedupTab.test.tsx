@@ -1,5 +1,5 @@
 // file: web/src/components/dedup/__tests__/UnifiedDedupTab.test.tsx
-// version: 1.2.0
+// version: 1.2.1
 // guid: d4e5f6a7-b8c9-0123-defa-444567890123
 // last-edited: 2026-06-19
 
@@ -71,6 +71,9 @@ function renderInRouter() {
 describe('UnifiedDedupTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // UnifiedDedupTab persists multi-select / page-size to localStorage and
+    // reads them on init; clear between tests so the suite is order-independent.
+    localStorage.clear();
     // Default: fetch returns an empty candidate list.
     vi.mocked(api.getDedupCandidates).mockResolvedValue({
       candidates: [],
@@ -189,12 +192,15 @@ describe('UnifiedDedupTab', () => {
       expect(screen.getByText(bookATitle)).toBeInTheDocument();
     });
 
-    // Checkboxes are hidden by default.
-    expect(screen.queryByRole('checkbox')).toBeNull();
+    // Row-selection checkboxes are hidden by default. (The toolbar's
+    // "Both need manual matching" filter checkbox is always present, so we
+    // assert the count grows once multi-select adds per-row checkboxes rather
+    // than asserting zero checkboxes.)
+    const baseline = screen.queryAllByRole('checkbox').length;
 
-    // Enable multi-select — checkboxes should appear.
+    // Enable multi-select — per-row checkboxes should appear.
     fireEvent.click(screen.getByTestId('multi-select-toggle'));
-    expect(screen.getAllByRole('checkbox').length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('checkbox').length).toBeGreaterThan(baseline);
   });
 
   it('shows rescore dialog when rescore button clicked', async () => {
