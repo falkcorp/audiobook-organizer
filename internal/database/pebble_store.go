@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.89.0
+// version: 1.90.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-06-17
 
@@ -150,6 +150,24 @@ func (p *PebbleStore) mem() *MemStore { return p.memPtr.Load() }
 // memdb readiness so warm-up queries hit the fast O(log n) memdb path
 // instead of the slow Pebble JSON-unmarshal path.
 func (p *PebbleStore) IsMemReady() bool { return p.memPtr.Load() != nil }
+
+// WaitForWarmup blocks until the async memdb warmup goroutine has finished —
+// memdb is published (success) or the store has fallen back to Pebble reads
+// (failure). Either way, AFTER this returns the memdb-published state is stable,
+// so subsequent write-throughs (UpsertAuthorToMemDB etc.) land in the published
+// memdb and GetAll* reads are deterministic.
+//
+// Tests MUST call this right after NewPebbleStore. Without it there is a race: a
+// write that lands while warmup is still snapshotting Pebble has its memdb
+// write-through dropped (memSync no-ops while mem()==nil), then warmup publishes a
+// memdb missing those rows — surfacing as the order-dependent "expected 3, got 2"
+// GetAll* flakes under the full -race suite. Production never needs this (warmup
+// is a one-time startup affair; reads fall back to Pebble until it publishes).
+func (p *PebbleStore) WaitForWarmup() {
+	if p.warmupDone != nil {
+		<-p.warmupDone
+	}
+}
 
 const statsLibraryKey = "stats:library"
 const statsLibraryTTL = 10 * time.Minute
