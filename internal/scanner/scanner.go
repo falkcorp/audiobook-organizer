@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.42.0
+// version: 1.43.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-06-10
+// last-edited: 2026-06-19
 
 package scanner
 
@@ -667,7 +667,16 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 				return // Done with this directory-based book
 			}
 
-			if metadata.IsGenericPartFilename(filePath) {
+			// CONS-17 (Path B): a sequential multi-file group (SegmentFiles>1,
+			// detected at the grouping stage) carries FilePath=segs[0], a single
+			// chapter file. Without this, it would fall to the per-file ProcessFile
+			// path below and take its title from one chapter's tags — chapter
+			// titles ("Chapter 1", "Part 1") then leak into and collide across
+			// Book.Title. Route it through AssembleBookMetadata (folder preference)
+			// exactly like generically-named part files; the segments are still
+			// created from SegmentFiles at the saveBook step. This mirrors the
+			// album-grouped multi-file path, which already routes via the folder.
+			if metadata.IsGenericPartFilename(filePath) || len(books[idx].SegmentFiles) > 1 {
 				dirPath := filepath.Dir(filePath)
 				firstFile := metadata.FindFirstAudioFile(dirPath, config.AppConfig.SupportedExtensions)
 				if firstFile == "" {

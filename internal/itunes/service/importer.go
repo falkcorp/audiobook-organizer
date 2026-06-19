@@ -1,5 +1,5 @@
 // file: internal/itunes/service/importer.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
 // last-edited: 2026-06-19
 
@@ -1128,6 +1128,21 @@ func (imp *Importer) buildBookFromAlbumGroup(group albumGroup, libraryPath strin
 	bookFilePath := filePath
 	if len(group.tracks) > 1 && title != "" {
 		bookFilePath = imp.commonParentDir(group.tracks, opts)
+	}
+	if title == "" && len(group.tracks) > 1 {
+		// CONS-17 (Path A): album tag empty on a multi-file group. Derive the
+		// title from the common parent FOLDER (the book/album directory), which
+		// is far more reliable than a per-chapter track Name — chapter tracks are
+		// often "Opening Credits", "Big Finish Ident", etc. which have no chapter
+		// marker to strip and would otherwise leak into (and collide across)
+		// Book.Title. Only fall through to the track-Name heuristic below if the
+		// folder name is unusable.
+		if dir := imp.commonParentDir(group.tracks, opts); dir != "" {
+			if base := strings.TrimSpace(filepath.Base(dir)); base != "" && base != "." && base != string(filepath.Separator) {
+				title = base
+				bookFilePath = dir
+			}
+		}
 	}
 	if title == "" {
 		// Album tag was empty/missing — falling back to the per-chapter track

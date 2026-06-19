@@ -1,5 +1,5 @@
 // file: internal/metadata/assemble_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2c3d4e5f-6a7b-8c9d-0e1f-2a3b4c5d6e7f
 
 package metadata
@@ -40,6 +40,41 @@ func TestResolveTitleSkipsGenericTag(t *testing.T) {
 	title, source := resolveTitle(tag, fm, "/some/path")
 	if title != "Real Book Title" || source != "folder.Title" {
 		t.Errorf("got title=%q source=%q, want 'Real Book Title' / 'folder.Title'", title, source)
+	}
+}
+
+// TestAssembleBookMetadata_GenericChapterUsesFolder is the CONS-17 (Path B)
+// regression guard at the resolution seam. Multi-file groups detected by the
+// scanner's sequential-naming detector have generic-likely per-chapter tag
+// titles ("Chapter 1", "Part 1", bare numbers). Routing such a group through
+// AssembleBookMetadata must yield the FOLDER title, not the first chapter's tag —
+// otherwise the chapter name leaks into (and collides across) Book.Title.
+func TestAssembleBookMetadata_GenericChapterUsesFolder(t *testing.T) {
+	base := t.TempDir()
+	bookDir := filepath.Join(base, "Douglas Adams", "The Hitchhikers Guide")
+	if err := os.MkdirAll(bookDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	firstChapter := filepath.Join(bookDir, "chapter01.mp3")
+	if err := os.WriteFile(firstChapter, []byte("not a real mp3"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// First chapter carries a generic per-chapter title, as sequential multi-file
+	// audiobooks typically do.
+	SetMetadataExtractor(newAssembleExtractorStub(t, Metadata{
+		Title:  "Chapter 1",
+		Artist: "Douglas Adams",
+	}, nil))
+	defer func() { SetMetadataExtractor(nil) }()
+
+	bm, err := AssembleBookMetadata(bookDir, firstChapter, 5, 0)
+	if err != nil {
+		t.Fatalf("AssembleBookMetadata error: %v", err)
+	}
+	if bm.Title != "The Hitchhikers Guide" || bm.TitleSource != "folder.Title" {
+		t.Errorf("Title = %q (source %q), want 'The Hitchhikers Guide' / 'folder.Title'",
+			bm.Title, bm.TitleSource)
 	}
 }
 
