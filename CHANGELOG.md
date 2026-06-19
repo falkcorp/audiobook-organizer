@@ -1,11 +1,30 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.42.0 -->
+<!-- version: 3.43.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-19 -->
 
 # Changelog
 
 ## [Unreleased]
+
+### Fixes
+
+#### June 19, 2026 — iTunes import: collapse chapter-part tracks into one book (D2)
+
+Root cause of the "individual book part vs full book" dedup candidate explosion
+(e.g. "At All Costs – 11/23", "13/23", "23/23" each imported as a separate book and
+paired at 100% against the full book).
+
+- `groupTracksByAlbum` (`internal/itunes/service/importer.go`): when a track has **no
+  album tag**, the grouping key fell back to the per-chapter track *name*. Because
+  `StripChapterPrefix` only strips *leading* markers, trailing part markers
+  ("Title – 11/23") survived → one book per chapter part.
+- Added `titleutil.StripChapterSuffix` (trailing `N/M`, `(N of M)`, `– N/M` markers;
+  preserves lone trailing numbers like "Catch 22"/"1984"). The empty-album fallback now
+  strips both leading and trailing markers, so all parts of one title collapse to a
+  single book. `Book.Title` is likewise cleaned.
+- Prevents **future** part-books; existing stale candidates are cleared separately by the
+  already-shipped `dedup.quarantine-chapter-artifacts` op.
 
 ### Features
 
