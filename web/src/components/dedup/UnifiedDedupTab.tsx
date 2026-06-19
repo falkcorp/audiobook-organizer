@@ -1,5 +1,5 @@
 // file: web/src/components/dedup/UnifiedDedupTab.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: c8b9d0e1-f2a3-4567-bcde-cb8901234567
 // last-edited: 2026-06-19
 
@@ -21,7 +21,7 @@
 //   - Timers cleared on unmount.
 //   - No module-level mutable state.
 
-import { type MouseEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type MouseEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams, Link as RouterLink } from 'react-router-dom';
 import {
   Alert,
@@ -104,13 +104,21 @@ function qualityChip(score: number) {
   return <Chip label="Poor metadata" size="small" color="error" variant="outlined" />;
 }
 
-// renderBookCard shows a candidate book's title (linking to its detail page) and
-// file path. The title falls back to a muted ULID tail when the book row is
-// missing (merged/deleted/orphaned candidate) and is shown in orange when the
-// stored title is itself garbage — the case the user kept hitting in the raw-ULID
-// table. Path lives under the title so identical/missing titles can still be
-// disambiguated.
-function renderBookCard(book: Book | null | undefined, id: string) {
+interface BookCardOpts {
+  /** Score/band/status chips rendered above the title — only supplied for Book A. */
+  badgesNode?: ReactNode;
+  /** Quality chip shown inline after the title. */
+  qualityChipNode?: ReactNode;
+  /** "★ Recommended keep" chip shown inline after quality. */
+  recommendedNode?: ReactNode;
+}
+
+// renderBookCard renders a candidate book with:
+//   • cover on the LEFT spanning full row height
+//   • score/status badges above the title (Book A only, via badgesNode)
+//   • title (bigger) + quality chip inline on the same line
+//   • author + monospace path below
+function renderBookCard(book: Book | null | undefined, id: string, opts: BookCardOpts = {}) {
   const missing = !book;
   const path = book?.file_path ?? '';
   const title = book?.title ?? '';
@@ -118,67 +126,92 @@ function renderBookCard(book: Book | null | undefined, id: string) {
   const isGarbageTitle =
     !title || title.toUpperCase() === 'TITLE' || /^[0-9A-Z]{26}$/.test(title.trim());
   return (
-    <Stack direction="row" spacing={1} sx={{ minWidth: 0, alignItems: 'flex-start' }}>
-      {coverUrl && (
-        <Box
-          component="img"
-          src={coverUrl}
-          alt=""
-          loading="lazy"
-          sx={{ width: 44, height: 44, objectFit: 'cover', borderRadius: 0.5, flexShrink: 0, mt: 0.25 }}
-        />
-      )}
-      {!coverUrl && (
-        <Box sx={{ width: 44, height: 44, borderRadius: 0.5, flexShrink: 0, bgcolor: 'action.selected', mt: 0.25 }} />
-      )}
-      <Stack spacing={0.25} sx={{ minWidth: 0, flex: 1 }}>
-      {missing ? (
-        <Typography variant="body2" sx={{ color: 'error.main', fontStyle: 'italic' }}>
-          (missing book — {id.slice(-8)})
-        </Typography>
-      ) : (
-        <Link
-          component={RouterLink}
-          to={`/library/${id}`}
-          underline="hover"
-          sx={{
-            color: isGarbageTitle ? 'warning.main' : 'primary.main',
-            fontWeight: 500,
-            fontSize: '0.95rem',
-            textTransform: 'none',
-            textAlign: 'left',
-            display: 'block',
-            whiteSpace: 'normal',
-            wordBreak: 'break-word',
-            fontStyle: isGarbageTitle ? 'italic' : 'normal',
-          }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          {isGarbageTitle ? title || '(no title)' : title}
-        </Link>
-      )}
-      {book?.author_name && (
-        <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-          {book.author_name}
-        </Typography>
-      )}
-      {path && (
-        <Tooltip title={path} placement="bottom-start">
-          <Typography
-            variant="caption"
-            sx={{
-              color: 'text.secondary',
-              fontFamily: 'monospace',
-              fontSize: '0.72rem',
-              lineHeight: 1.2,
-              wordBreak: 'break-all',
-              opacity: 0.75,
-            }}
-          >
-            {path}
+    <Stack direction="row" alignItems="stretch" spacing={1.5} sx={{ minWidth: 0 }}>
+      {/* Cover — left-anchored, full row height */}
+      <Box
+        sx={{
+          width: 56,
+          flexShrink: 0,
+          borderRadius: 0.5,
+          overflow: 'hidden',
+          alignSelf: 'stretch',
+          minHeight: 68,
+          bgcolor: 'action.selected',
+        }}
+      >
+        {coverUrl && (
+          <Box
+            component="img"
+            src={coverUrl}
+            alt=""
+            loading="lazy"
+            sx={{ width: 56, height: '100%', objectFit: 'cover', display: 'block' }}
+          />
+        )}
+      </Box>
+
+      {/* Text content */}
+      <Stack spacing={0.4} sx={{ minWidth: 0, flex: 1 }}>
+        {/* Badges row — only rendered when supplied (Book A) */}
+        {opts.badgesNode && (
+          <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap alignItems="center">
+            {opts.badgesNode}
+          </Stack>
+        )}
+
+        {/* Title + inline quality + recommended chips */}
+        <Stack direction="row" alignItems="center" flexWrap="wrap" spacing={0.5} useFlexGap>
+          {missing ? (
+            <Typography variant="body1" sx={{ color: 'error.main', fontStyle: 'italic' }}>
+              (missing book — {id.slice(-8)})
+            </Typography>
+          ) : (
+            <Link
+              component={RouterLink}
+              to={`/library/${id}`}
+              underline="hover"
+              sx={{
+                color: isGarbageTitle ? 'warning.main' : 'primary.main',
+                fontWeight: 600,
+                fontSize: '1rem',
+                textTransform: 'none',
+                textAlign: 'left',
+                whiteSpace: 'normal',
+                wordBreak: 'break-word',
+                fontStyle: isGarbageTitle ? 'italic' : 'normal',
+              }}
+              onClick={(e: MouseEvent) => e.stopPropagation()}
+            >
+              {isGarbageTitle ? title || '(no title)' : title}
+            </Link>
+          )}
+          {opts.qualityChipNode}
+          {opts.recommendedNode}
+        </Stack>
+
+        {book?.author_name && (
+          <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+            {book.author_name}
           </Typography>
-        </Tooltip>
-      )}
+        )}
+
+        {path && (
+          <Tooltip title={path} placement="bottom-start">
+            <Typography
+              variant="caption"
+              sx={{
+                color: 'text.secondary',
+                fontFamily: 'monospace',
+                fontSize: '0.72rem',
+                lineHeight: 1.2,
+                wordBreak: 'break-all',
+                opacity: 0.75,
+              }}
+            >
+              {path}
+            </Typography>
+          </Tooltip>
+        )}
       </Stack>
     </Stack>
   );
@@ -857,49 +890,45 @@ export function UnifiedDedupTab({ hidden }: UnifiedDedupTabProps) {
                           />
                         </TableCell>
                       )}
-                      {/* Book A — badges (score/band/status) inline at top, then card */}
-                      <TableCell sx={{ verticalAlign: 'top', minWidth: 300 }}>
-                        <Stack spacing={0.5}>
-                          <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap alignItems="center">
-                            <ScoreBadgeRow
-                              band={c.band}
-                              score={c.score}
-                              layer={c.layer}
-                              similarity={c.similarity}
-                            />
-                            <Chip
-                              label={c.status}
-                              size="small"
-                              color={
-                                c.status === 'merged'
-                                  ? 'success'
-                                  : c.status === 'dismissed'
-                                    ? 'default'
-                                    : 'warning'
-                              }
-                              variant="outlined"
-                            />
-                          </Stack>
-                          {renderBookCard(bookA, c.entity_a_id)}
-                          <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
-                            {qualityChip(qA)}
-                            {recommendA && (
-                              <Chip label="★ Recommended keep" size="small" color="primary" />
-                            )}
-                          </Stack>
-                        </Stack>
+                      {/* Book A: cover left + score badges above title + quality chip inline */}
+                      <TableCell sx={{ verticalAlign: 'middle', minWidth: 300 }}>
+                        {renderBookCard(bookA, c.entity_a_id, {
+                          badgesNode: (
+                            <>
+                              <ScoreBadgeRow
+                                band={c.band}
+                                score={c.score}
+                                layer={c.layer}
+                                similarity={c.similarity}
+                              />
+                              <Chip
+                                label={c.status}
+                                size="small"
+                                color={
+                                  c.status === 'merged'
+                                    ? 'success'
+                                    : c.status === 'dismissed'
+                                      ? 'default'
+                                      : 'warning'
+                                }
+                                variant="outlined"
+                              />
+                            </>
+                          ),
+                          qualityChipNode: qualityChip(qA),
+                          recommendedNode: recommendA ? (
+                            <Chip label="★ Recommended keep" size="small" color="primary" />
+                          ) : undefined,
+                        })}
                       </TableCell>
-                      {/* Book B */}
-                      <TableCell sx={{ verticalAlign: 'top', minWidth: 280 }}>
-                        <Stack spacing={0.5}>
-                          {renderBookCard(bookB, c.entity_b_id)}
-                          <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
-                            {qualityChip(qB)}
-                            {recommendB && (
-                              <Chip label="★ Recommended keep" size="small" color="primary" />
-                            )}
-                          </Stack>
-                        </Stack>
+                      {/* Book B: cover left + quality chip inline */}
+                      <TableCell sx={{ verticalAlign: 'middle', minWidth: 280 }}>
+                        {renderBookCard(bookB, c.entity_b_id, {
+                          qualityChipNode: qualityChip(qB),
+                          recommendedNode: recommendB ? (
+                            <Chip label="★ Recommended keep" size="small" color="primary" />
+                          ) : undefined,
+                        })}
                       </TableCell>
                       <TableCell sx={{ verticalAlign: 'top' }}>
                         <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
