@@ -9204,6 +9204,10 @@ func (s *PebbleStore) HasLSHIndex(bookFileID string) bool {
 // It writes the primary key book_file:<bookID>:<fileID> and secondary indexes
 // for iTunes PID and file path (when non-empty) atomically in a single batch.
 func (s *PebbleStore) CreateBookFile(file *BookFile) error {
+	// CONS-18: repair millisecond-valued durations at the write chokepoint so no
+	// ingest path can re-create the ms/seconds corruption (CONS-16).
+	normalizeBookFileDuration(file)
+
 	if file.ID == "" {
 		id, err := newULID()
 		if err != nil {
@@ -9746,6 +9750,8 @@ func (s *PebbleStore) DeleteBookFilesForBook(bookID string) error {
 //  2. Otherwise look up by FilePath.
 //  3. If still not found, create a new record.
 func (s *PebbleStore) UpsertBookFile(file *BookFile) error {
+	normalizeBookFileDuration(file) // CONS-18: repair ms durations at the chokepoint
+
 	var existing *BookFile
 	var err error
 
@@ -9789,6 +9795,7 @@ func (s *PebbleStore) BatchUpsertBookFiles(files []*BookFile) error {
 		if file == nil {
 			continue
 		}
+		normalizeBookFileDuration(file) // CONS-18: repair ms durations at the chokepoint
 
 		var existing *BookFile
 		var lookupErr error

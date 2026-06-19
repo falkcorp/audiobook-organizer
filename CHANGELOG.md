@@ -1,11 +1,28 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.49.0 -->
+<!-- version: 3.50.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-19 -->
 
 # Changelog
 
 ## [Unreleased]
+
+### Added
+
+#### June 19, 2026 — Duration-sanity gate at the BookFile write chokepoint (CONS-18)
+
+Defense-in-depth so no ingest path can re-introduce the millisecond/seconds
+duration corruption that CONS-16 patched at one call site.
+
+- New shared predicate `database.DurationLooksLikeMillis(fileSize, durationSec)`
+  (promoted out of the maintenance backfill op so the op and the store share one
+  implementation) and an internal `normalizeBookFileDuration` repair helper.
+- Wired the repair into the three BookFile write chokepoints — `CreateBookFile`,
+  `UpsertBookFile`, `BatchUpsertBookFiles` — so a millisecond-valued duration from
+  *any* caller (iTunes, scanner, future importers, manual import) is corrected to
+  seconds on write, with a `slog.Warn`. The repair only ever touches a value the
+  implied-bitrate predicate flags (idempotent; plausible values and rows without a
+  FileSize pass through untouched).
 
 ### Fixed
 
