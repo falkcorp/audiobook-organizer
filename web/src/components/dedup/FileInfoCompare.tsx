@@ -1,13 +1,14 @@
 // file: web/src/components/dedup/FileInfoCompare.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: e4d5f6a7-b8c9-0123-defa-ed4567890123
-// last-edited: 2026-06-10
+// last-edited: 2026-06-19
 
 // FileInfoCompare renders a side-by-side comparison of two books' file lists.
 // Used inside CandidateCompareDrawer.
 
 import { Box, Chip, Divider, Stack, Tooltip, Typography } from '@mui/material';
 import type { DedupBookDetail } from '../../services/api';
+import { formatPath, usePathVars, type PathVar } from '../../utils/formatPath';
 
 function formatBytes(bytes: number | undefined): string {
   if (bytes == null) return '';
@@ -24,18 +25,13 @@ function formatDuration(seconds: number | undefined): string {
   return `${m}m`;
 }
 
-function truncatePath(path: string): string {
-  const marker = 'audiobook-organizer/';
-  const idx = path.indexOf(marker);
-  return idx >= 0 ? path.slice(idx + marker.length) : path;
-}
-
 interface BookFilesColumnProps {
   book: DedupBookDetail;
   label: string;
+  pathVars: PathVar[];
 }
 
-function BookFilesColumn({ book, label }: BookFilesColumnProps) {
+function BookFilesColumn({ book, label, pathVars }: BookFilesColumnProps) {
   return (
     <Box sx={{ flex: 1, minWidth: 0 }}>
       <Typography
@@ -84,7 +80,7 @@ function BookFilesColumn({ book, label }: BookFilesColumnProps) {
                   sx={{ fontFamily: 'monospace', fontSize: '0.65rem', display: 'block' }}
                   noWrap
                 >
-                  {truncatePath(f.file_path)}
+                  {formatPath(f.file_path, pathVars)}
                 </Typography>
                 <Stack direction="row" spacing={0.5} sx={{ mt: 0.25 }}>
                   {f.format && (
@@ -127,6 +123,7 @@ interface FileInfoCompareProps {
 }
 
 export function FileInfoCompare({ bookA, bookB }: FileInfoCompareProps) {
+  const pathVars = usePathVars();
   return (
     <Stack
       direction="row"
@@ -135,8 +132,8 @@ export function FileInfoCompare({ bookA, bookB }: FileInfoCompareProps) {
       sx={{ alignItems: 'flex-start' }}
       data-testid="file-info-compare"
     >
-      <BookFilesColumn book={bookA} label="Book A" />
-      <BookFilesColumn book={bookB} label="Book B" />
+      <BookFilesColumn book={bookA} label="Book A" pathVars={pathVars} />
+      <BookFilesColumn book={bookB} label="Book B" pathVars={pathVars} />
     </Stack>
   );
 }

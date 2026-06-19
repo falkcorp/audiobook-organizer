@@ -1,7 +1,7 @@
 // file: internal/server/server_middleware.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6a093405-441a-4c14-a9c5-46326ea767c1
-// last-edited: 2026-06-16
+// last-edited: 2026-06-19
 
 package server
 
@@ -13,9 +13,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/gin-gonic/gin"
 )
 
 func corsMiddleware() gin.HandlerFunc {
@@ -58,23 +58,6 @@ func corsMiddleware() gin.HandlerFunc {
 
 		c.Next()
 	}
-}
-
-func filesCommonDir(files []database.BookFile) string {
-	if len(files) == 0 {
-		return ""
-	}
-	common := filepath.Dir(files[0].FilePath)
-	for _, f := range files[1:] {
-		fDir := filepath.Dir(f.FilePath)
-		for common != fDir && !strings.HasPrefix(fDir, common+string(filepath.Separator)) {
-			common = filepath.Dir(common)
-			if common == "/" || common == "." {
-				return common
-			}
-		}
-	}
-	return common
 }
 
 // isProtectedPath is now a method on *Server so it uses the server's
