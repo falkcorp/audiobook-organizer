@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.40.0
+// version: 2.41.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-06-15
+// last-edited: 2026-06-19
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -603,6 +603,114 @@ export interface MetadataSource {
   };
 }
 
+export interface EmbeddingConfig {
+  enabled: boolean;
+  model: string;
+  dimensions: number;
+  base_url: string;
+  vector_backend: string;
+}
+
+export interface DedupSignalConfig {
+  band_certain_min: number;
+  band_high_min: number;
+  band_medium_min: number;
+  band_review_min: number;
+  duration_boost: number;
+  folder_path_boost: number;
+}
+
+export interface DedupConfig {
+  book_high_threshold: number;
+  book_low_threshold: number;
+  author_high_threshold: number;
+  author_low_threshold: number;
+  auto_merge_enabled: boolean;
+  embeddings_enabled: boolean;
+  llm_auto_merge_high_confidence: boolean;
+  on_import_via_scheduler: boolean;
+  review_model: string;
+  signals: DedupSignalConfig;
+}
+
+export interface MetadataScoringConfig {
+  embedding_enabled: boolean;
+  embedding_min_score: number;
+  embedding_best_match: number;
+  llm_enabled: boolean;
+  llm_rerank_epsilon: number;
+  llm_rerank_top_k: number;
+  write_backup_before: boolean;
+}
+
+export interface ITunesPathMap {
+  from: string;
+  to: string;
+}
+
+export interface ITunesConfig {
+  sync_enabled: boolean;
+  sync_interval: number;
+  write_back_enabled: boolean;
+  library_write_path: string;
+  library_read_path: string;
+  auto_write_back: boolean;
+  path_trim_enabled: boolean;
+  windows_root_path: string;
+  media_root: string;
+  path_mappings: ITunesPathMap[];
+}
+
+export interface MaintenanceConfig {
+  enabled: boolean;
+  window_start: number;
+  window_end: number;
+  dedup_refresh: boolean;
+  series_prune: boolean;
+  author_split: boolean;
+  tombstone_cleanup: boolean;
+  reconcile: boolean;
+  purge_deleted: boolean;
+  purge_old_logs: boolean;
+  db_optimize: boolean;
+  library_scan: boolean;
+  library_organize: boolean;
+  metadata_refresh: boolean;
+  library_size_refresh: boolean;
+  acoustid_online_lookup: boolean;
+  acoustid_nightly_limit: number;
+}
+
+export interface ScheduledTaskConfig {
+  enabled: boolean;
+  interval: number;
+  on_startup: boolean;
+}
+
+export interface ScheduledTasksConfig {
+  dedup_refresh: ScheduledTaskConfig;
+  author_split: ScheduledTaskConfig;
+  db_optimize: ScheduledTaskConfig;
+  metadata_refresh: ScheduledTaskConfig;
+  resolve_production_authors: { enabled: boolean; interval: number };
+  series_prune: ScheduledTaskConfig;
+  ai_dedup_batch: ScheduledTaskConfig;
+  reconcile: ScheduledTaskConfig;
+}
+
+export interface AutoUpdateConfig {
+  enabled: boolean;
+  channel: string;
+  check_minutes: number;
+  window_start: number;
+  window_end: number;
+}
+
+export interface ToolsConfig {
+  managed_dir: string;
+  embed_queue_debounce_ms: number;
+}
+
 export interface Config {
   // Core paths
   root_dir: string;
@@ -687,6 +795,16 @@ export interface Config {
   itl_write_back_enabled?: boolean;
   itunes_auto_write_back?: boolean;
   itunes_sync_enabled?: boolean;
+
+  // Sub-structs (CFG-1 nested fields)
+  embedding?: EmbeddingConfig;
+  dedup?: DedupConfig;
+  metadata_scoring?: MetadataScoringConfig;
+  itunes?: ITunesConfig;
+  maintenance?: MaintenanceConfig;
+  scheduled?: ScheduledTasksConfig;
+  auto_update?: AutoUpdateConfig;
+  tools?: ToolsConfig;
 
   // Deluge integration
   protected_paths?: string[];
