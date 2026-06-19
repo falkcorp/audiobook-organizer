@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.3.0 -->
+<!-- version: 9.4.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-06-19 -->
 
@@ -34,19 +34,32 @@ future agent) can scan the entire workspace in one page.
 > `dedup-ux`) were merged into one to stop conflicts. Full handoff:
 > `~/repos/temp/session-status-CONSOLIDATED-HANDOFF.md`. Ordered burn-down list:
 
-- [ ] **CONS-1** Merge **PR #1515** (`feat/path-abbrev`, Track A — path abbreviation `$(libroot)`/`$(books)`). Re-rebase onto `origin/main` (42d87ce7); resolve `UnifiedDedupTab.test.tsx` conflict by taking main's #1517 version (drop local `fc77a300` test change). Push, CI, ship.
-- [ ] **CONS-2** Merge **Track B** (`feat/gold-labels-controls`) — 3-way `LabelToggle` (Dup/Unsure/Not), clickable rows, abbreviated paths in `DedupLabels.tsx`. After CONS-1: rebase, drop duplicate path-abbrev commits, keep only `af2d3313`, ship.
-- [ ] **CONS-3** Verify + merge stale fix branches if not already in main: `fix/1337-cleanup`, `fix/memory-leak-token`, `fix/triage-poll-org-ref`, `fix/hnsw-elevator-nil-deref` (check `git log origin/main | grep hnsw` first).
+- [x] **CONS-1** ✅ **PR #1515** merged (`feat/path-abbrev`, Track A — path abbreviation `$(libroot)`/`$(books)`).
+- [x] **CONS-2** ✅ **Track B** merged — 3-way `LabelToggle` (Dup/Unsure/Not), clickable rows, abbreviated paths in `DedupLabels.tsx`.
+- [x] **CONS-3** ✅ Stale fix branches verified merged.
 - [ ] **CONS-4** **BookDedup.tsx row redesign** (dedup-ux task, 0 code written) — apply `renderBookCard` pattern (cover tall-left `alignSelf:'stretch'` w56 h100%, quality chip inline after title, larger title, remove bottom chip whitespace) to `renderBookSide` (~line 1057) in the 2907-line `web/src/pages/BookDedup.tsx`.
 - [x] **CONS-5** = **DEDUP-FOLDER-1** — ✅ `FolderFilesChip` (lazy popover w/ file list, count, format/size/duration) wired into `UnifiedDedupTab` cards.
 - [ ] **CONS-6** **Track C** — metadata-compare tab in `CandidateCompareDrawer.tsx` (alongside Fingerprint tab): series/narrator/parts/duration/size/which-signal-fired, from `GET /api/v1/dedup/candidates/:id/breakdown`.
 - [ ] **CONS-7** = **DEDUP-KB-1** (see Dedup UX section) — keyboard shortcuts.
 - [x] **CONS-8** **Track D2** — ✅ code complete. Real root cause was iTunes import, NOT the scanner: `groupTracksByAlbum` empty-album fallback keyed per-chapter track name. Added `titleutil.StripChapterSuffix` to collapse trailing part markers (`Title – 11/23`) so chapter parts group into one book; `Book.Title` cleaned too. (`scanner.go groupFilesIntoBooks` was a red herring — only the FS walk uses it and its multi-file detection is already correct.)
-- [ ] **CONS-9** **Track D1** — `dedup.quarantine-chapter-artifacts` op misses unscanned (Duration=0) idents ("Opening Credits"/"Big Finish Ident"); dry-run finds only ~53. Fix selection predicate. **DRY-RUN ONLY; show list before apply.**
-- [ ] **CONS-10** **Track D3** — drain ~356K stale exact chapter-part candidates (run fixed quarantine op after D1/D2).
-- [ ] **CONS-11** **Track D4** — manual-import UI button (op `library.import` already merged/deployed; no frontend yet).
+- [x] **CONS-9** ✅ **Track D1** — `dedup.quarantine-chapter-artifacts` now catches unscanned (Duration=0) idents via `MinTitleCollisionsUnscanned` gate (merged #1511). Prod dry-run finds only ~53 short idents — confirms most of the 380K candidates are NOT chapter artifacts but real books with corrupt metadata (see CONS-16/17). **DRY-RUN ONLY; show list before apply.**
+- [ ] **CONS-10** **Track D3** — drain stale exact candidates. **BLOCKED by CONS-16 + CONS-17.** ⚠️ Prod investigation (candidate 211) proved the 380K exact candidates are a MIX: some real dups + many real multi-file books mislabeled by the duration-ms + title-leak bugs. Quarantining these = **DATA LOSS**. Must fix + backfill CONS-16/17 first; many candidates self-resolve once titles/durations are correct, then re-scope the drain.
+- [ ] **CONS-11** **Track D4** — manual-import UI button (op `library.import` already merged/deployed; no frontend yet). Add a button/dialog on the Library page that POSTs `{def_id:"library.import", params:{path}}` to `/api/v1/operations/v2` and polls. ~Lowest-effort remaining UI task.
 - [ ] **CONS-12** = **DEDUP-INTRO-1** (see Dedup UX section) — Audible intro/outro false-positive dedup candidates.
 - [ ] **CONS-13** = **CFG-2 Phase D** — retire flat-key compat shim in `internal/server/update_service.go` (low priority; after 1+ wk prod stability).
+
+### Metadata-repair track (root causes of the dedup candidate explosion) — investigated 2026-06-19
+
+> Read-only investigation complete. Root-cause map below. **No code written yet.** A design spec is the
+> next step (CONS-18 needs brainstorming/approval before implementation; CONS-16/17 are clear bug fixes).
+> The user's framing: "after we eliminate the nonsense in our own repo, we should probably have some sort
+> of normalization filter that runs on import that handles that and writes the correct time back to the
+> primary file."
+
+- [ ] **CONS-15** **(D3-emitter)** part-vs-whole guard in the exact dedup emitter — defense-in-depth so a part can't pair 100% against a whole even if metadata is wrong. **Deprioritized** (fixing CONS-16/17 removes most of the cause).
+- [ ] **CONS-16** **Duration-unit bug** — the iTunes **service** importer stores per-file `Duration` in **milliseconds** without `/1000`. Defect sites: `internal/itunes/service/importer.go` lines **302, 646, 694** (`Duration: int(track.TotalTime)` — `track.TotalTime` is ms; `BookFile.Duration` is seconds by convention, proven by `track_provisioner.go:138`). The book-level calc at `importer.go:1135-1145` correctly divides; `internal/itunes/import.go:374` (standalone import) is also correct — only the service importer is broken. **Amplification:** `RecomputeBookAggregates` (`pebble_store_book_aggregates.go:60,138`) sums per-file ms into `Book.Duration`, producing the 28M-"second" books. **Fix:** (a) `/1000` at the 3 write sites + regression test; (b) safe backfill for existing inflated rows (detect ms via filesize/bitrate plausibility, see CONS-18) then re-run `RecomputeBookAggregates`. **Affects any iTunes-imported multi-track book, not just mp3.**
+- [ ] **CONS-17** **Multi-file title leak** — book titled after first track when album tag empty. **Two independent paths:** (1) **iTunes** `importer.go:1117-1133` (`buildBookFromAlbumGroup`): when `firstTrack.Album==""`, title falls to chapter-stripped `firstTrack.Name` ("Opening Credits"/"Big Finish Ident" have no chapter marker → survive). Needs an album/folder-derived fallback *before* track Name. (2) **Filesystem scanner**: `groupFilesIntoBooks` (`scanner.go:1519-1523`) returns multi-file groups with `FilePath=segs[0]` (a file, not a dir), so `info.IsDir()` is false (`scanner.go:612`) and the group **skips** `AssembleBookMetadata`'s folder-preference (`assemble.go:88-96`), falling to `ProcessFile`+first-segment tag title (`scanner.go:705-730`). Needs multi-file groups routed through `AssembleBookMetadata` (or `FilePath` set to the directory).
+- [ ] **CONS-18** **Import-time duration-normalization filter** (user feature request). **Best per-file chokepoint:** `CreateBookFile` / `UpsertBookFile` / `BatchUpsertBookFiles` (`pebble_store.go:9203,9744,9776` — all ingest paths funnel here, per `pebble_store_lsh.go:23`). **Plausibility signal:** `expectedSec ≈ FileSize / (BitrateKbps*1000/8)` (the same formula `mediainfo.go:88-92` already uses); a stored `Duration` ~1000× that is ms → divide. **Book-level safety clamp:** `RecomputeBookAggregates`. ⚠️ **Open design question for the spec:** the user asked to "write the correct time back to the primary file," but the investigation found duration is **never** written to file tags today (no TLEN/Length in any write-tag-map; `taglib_tagmap.go`, `enhanced.go`, `metafetch/service_writeback.go`). For mp3, players read the VBR/container header (not a tag), so writeback is net-new work with low payoff. **Recommend: DB-side normalization only; confirm with user whether file-tag writeback is worth building.** Needs brainstorming → spec → plan before code.
 
 ---
 

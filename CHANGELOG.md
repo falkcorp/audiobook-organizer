@@ -1,11 +1,34 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.44.0 -->
+<!-- version: 3.45.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-19 -->
 
 # Changelog
 
 ## [Unreleased]
+
+### Documentation
+
+#### June 19, 2026 — Root-cause map for the dedup candidate explosion (CONS-16/17/18)
+
+Recorded the result of a read-only investigation into why ~380K exact dedup
+candidates exist on prod (most are NOT chapter artifacts but real multi-file books
+mislabeled by two importer bugs). No code change yet — the drain (CONS-10) is now
+blocked behind these fixes because quarantining the affected books would be data loss.
+
+- **CONS-16 (duration-unit bug):** the iTunes *service* importer stores per-file
+  `BookFile.Duration` in milliseconds without `/1000` (`importer.go:302,646,694`);
+  `RecomputeBookAggregates` then sums the ms into `Book.Duration`, producing
+  "28M-second" books. Book-level calc and the standalone iTunes import path are correct.
+- **CONS-17 (multi-file title leak):** books titled after their first track when the
+  album tag is empty — two independent paths (iTunes `buildBookFromAlbumGroup`; the
+  filesystem scanner bypassing `AssembleBookMetadata` for multi-file groups).
+- **CONS-18 (import normalization filter):** designed hook point at the BookFile write
+  chokepoints with a filesize/bitrate plausibility check. Finding: duration is never
+  written back to file tags today, so file-tag writeback would be net-new work — DB-side
+  normalization recommended pending user confirmation.
+
+Full detail and file/line references in `TODO.md` → "Metadata-repair track".
 
 ### Features
 
