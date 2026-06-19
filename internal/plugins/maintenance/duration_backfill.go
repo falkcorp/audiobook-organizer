@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7e4b2a90-3c61-4d58-8f29-6a1c0e5b9d83
 // last-edited: 2026-06-19
 
@@ -193,14 +193,26 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 		"Phase 2/2: correcting %d file durations across %d books…", totalFiles, len(bookOrder)))
 
 	var fixedFiles, errCount int
+	// Throttle per-file logging and progress: at library scale (175K+ rows) a log
+	// line and progress event per file would flood the activity store and dominate
+	// wall-clock (the work itself is cheap). Emit a small sample plus periodic
+	// heartbeats instead.
+	const (
+		sampleLogCount = 20   // first N corrections logged verbatim as examples
+		logEvery       = 5000 // then one example every logEvery files
+		progressEvery  = 500  // progress heartbeat cadence
+	)
+
 	for _, bookID := range bookOrder {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 
 		for _, fix := range fixesByBook[bookID] {
-			_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
-				"book %s file %s: %d ms → %d s", bookID, fix.file.ID, fix.file.Duration, fix.newDuration))
+			if fixedFiles < sampleLogCount || fixedFiles%logEvery == 0 {
+				_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
+					"book %s file %s: %d ms → %d s", bookID, fix.file.ID, fix.file.Duration, fix.newDuration))
+			}
 
 			if !params.DryRun {
 				updated := fix.file
@@ -213,11 +225,15 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 				}
 			}
 			fixedFiles++
-			_ = reporter.UpdateProgress(fixedFiles, totalFiles, fmt.Sprintf(
-				"Phase 2/2: corrected %d/%d file durations", fixedFiles, totalFiles))
+			if fixedFiles%progressEvery == 0 {
+				_ = reporter.UpdateProgress(fixedFiles, totalFiles, fmt.Sprintf(
+					"Phase 2/2: corrected %d/%d file durations", fixedFiles, totalFiles))
+			}
 		}
 
 		// Heal the book-level aggregate once all of its files are corrected.
+		// (UpdateBookFile recomputes per file too, but an explicit final recompute
+		// is a cheap safety net against a mid-book failure leaving a partial sum.)
 		if !params.DryRun {
 			if err := store.RecomputeBookAggregates(bookID); err != nil {
 				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
