@@ -167,6 +167,9 @@ export default function ActivityLog() {
   const [pinned, setPinned] = useState(() => localStorage.getItem(STORAGE_KEYS.ACTIVITY_OPS_PINNED) !== 'false');
   const [cancelling, setCancelling] = useState<Set<string>>(new Set());
   const [expandedOpId, setExpandedOpId] = useState<string | null>(searchParams.get('op'));
+  // pausedByExpand: true when auto-refresh was auto-paused because a row is
+  // expanded. Cleared when the row collapses or the user clicks "Follow log".
+  const pausedByExpandRef = useRef(false);
   const [opLogs, setOpLogs] = useState<string[]>([]);
   // opLogsLoaded distinguishes "haven't fetched yet" from "fetched, empty".
   // Without this, an op with zero logs shows "Loading logs..." forever.
@@ -223,6 +226,23 @@ export default function ActivityLog() {
     },
     [],
   );
+
+  // Auto-pause refresh when a row is expanded so log lines don't jump away.
+  // Restores the previous state when the row collapses, unless the user
+  // manually clicked "Follow log" (which clears pausedByExpandRef).
+  useEffect(() => {
+    if (expandedOpId !== null) {
+      if (autoRefresh) {
+        setAutoRefresh(false);
+        pausedByExpandRef.current = true;
+      }
+    } else if (pausedByExpandRef.current) {
+      setAutoRefresh(true);
+      pausedByExpandRef.current = false;
+    }
+  // intentionally omit autoRefresh — only trigger on expand/collapse transitions
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expandedOpId]);
 
   // Persist excluded sources
   useEffect(() => {
@@ -706,11 +726,27 @@ export default function ActivityLog() {
         <Typography variant="h4" sx={{ flexGrow: 1 }}>
           Activity
         </Typography>
+        {!isMobile && pausedByExpandRef.current && (
+          <Chip
+            label="Paused — row expanded"
+            size="small"
+            color="warning"
+            variant="outlined"
+            onDelete={() => {
+              pausedByExpandRef.current = false;
+              setAutoRefresh(true);
+            }}
+            deleteIcon={<span style={{ fontSize: '0.7rem', padding: '0 4px' }}>Follow log</span>}
+          />
+        )}
         {!isMobile && (
           <Button
             size="small"
             variant={autoRefresh ? 'contained' : 'outlined'}
-            onClick={() => setAutoRefresh(!autoRefresh)}
+            onClick={() => {
+              pausedByExpandRef.current = false;
+              setAutoRefresh(!autoRefresh);
+            }}
           >
             {autoRefresh ? 'Auto-refresh ON' : 'Auto-refresh OFF'}
           </Button>

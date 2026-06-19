@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 8.98.0 -->
+<!-- version: 8.99.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-06-18 -->
+<!-- last-edited: 2026-06-19 -->
 
 # Project TODO
 
@@ -19,12 +19,25 @@ future agent) can scan the entire workspace in one page.
 
 ---
 
-## 🎯 Current Status — June 18, 2026
+## 🎯 Current Status — June 19, 2026
 
 **Library:** ~50K books (~10,891 organized + ~39K iTunes-imported) / 8,837 authors / 21,668 series
-**Production:** PebbleDB primary; Linux, HTTPS at prod server; stable (crash loop resolved 2026-06-18)
-**Latest activity:** HNSW-CRASH-2026-06-18 (2026-06-18, PR #1500): fixed production crash loop (restart #51) — HNSW snapshot now loaded before PostInit, HydrateChromem gated on CountByType>0; 38,987 books indexed from snapshot on first restart. Prior: SEC-AUDIT-12 closed (log+path injection guards, 87 CodeQL alerts resolved, PRs #1490–#1494); flaky DB tests fixed PR #1497.
+**Production:** PebbleDB primary; Linux, HTTPS at prod server; stable
+**Latest activity:** Dedup UX overhaul (PR #1507): book covers, inline badges, zebra rows, click-to-select + shift-click, localStorage page-size, multi-select toggle, activity log auto-pause on expand. Fingerprint visual (PR #1506): chromaprint bit-matrix in candidate drawer.
 **In flight:** CFG-2 (Settings UI reorg — frontend "second half") not started. Burndown bot dispatching test coverage tasks. EMB-UI-1 (Ollama download link) still open.
+
+---
+
+## 🖥️ Dedup UX — Open Items
+
+### Keyboard shortcuts (future)
+- [ ] **DEDUP-KB-1** Add keyboard shortcuts to dedup page for power users: `j`/`k` to navigate rows, `m` to merge, `d` to dismiss, `s` to select/deselect, `enter` to open compare drawer, `esc` to close drawer, `shift+a` select all on page. Goal: make it possible to clear a page of dedups without touching the mouse. Design: global `keydown` listener active when no input/dialog is focused; shortcuts displayed in a `?` help overlay.
+
+### Audible intro/outro false positives (backend investigation needed)
+- [ ] **DEDUP-INTRO-1** Investigate why Audible intro/outro clips ("Audible Opening Message", "Introduction") generate exact-match dedup candidates across unrelated books. Root cause: the exact layer fingerprints individual audio files and short intro clips have identical chromaprints across all books from the same publisher. Fix candidates: (a) filter candidates where both titles are known Audible boilerplate strings (title blocklist); (b) skip fingerprint comparison on files shorter than a configurable threshold (e.g. <60s); (c) check at the book level first — if books have different ISBNs/ASINs, don't flag file-level matches. Track prod volume: ~372K total candidates, many likely this class.
+
+### Folder chip + file hover list
+- [ ] **DEDUP-FOLDER-1** Add a "folder" chip to dedup candidate cards when the matched path is a directory (multi-file book). On hover/click, show a popover listing all files in that folder with their format, bitrate, size, duration. Helps distinguish "this is a 197-file m4b series" from "this is a single file" at a glance without opening the compare drawer.
 
 ---
 
