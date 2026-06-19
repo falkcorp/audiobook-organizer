@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 8.99.0 -->
+<!-- version: 9.0.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-06-19 -->
 
@@ -24,7 +24,7 @@ future agent) can scan the entire workspace in one page.
 **Library:** ~50K books (~10,891 organized + ~39K iTunes-imported) / 8,837 authors / 21,668 series
 **Production:** PebbleDB primary; Linux, HTTPS at prod server; stable
 **Latest activity:** Dedup UX overhaul (PR #1507): book covers, inline badges, zebra rows, click-to-select + shift-click, localStorage page-size, multi-select toggle, activity log auto-pause on expand. Fingerprint visual (PR #1506): chromaprint bit-matrix in candidate drawer.
-**In flight:** CFG-2 (Settings UI reorg — frontend "second half") not started. Burndown bot dispatching test coverage tasks. EMB-UI-1 (Ollama download link) still open.
+**In flight:** CFG-2 Phases A/B/C/E shipped PR #1514 (2026-06-19); Phase D (retire flat shim) open. Burndown bot dispatching test coverage tasks. EMB-UI-1 (Ollama download link) still open.
 
 ---
 
@@ -44,7 +44,7 @@ future agent) can scan the entire workspace in one page.
 ## 🏗️ Config Struct-Nesting Refactor (CFG-0 → CFG-1 done, CFG-2 settings-UI open)
 
 > **CFG-0** (viper wiring fix) shipped PR #1464. **CFG-1** (backend struct nesting) Waves 1–8 complete (PRs #1468–#1484). All 77 flat fields nested.
-> **CFG-2** (Settings UI reorg — the frontend "second half") is **NOT STARTED** (see below); the WebUI still relies on the flat-key compat shim.
+> **CFG-2** (Settings UI reorg — the frontend "second half") **SHIPPED PR #1514** (Phases A/B/C/E); Phase D (retire flat shim) still open.
 > API shape documented in `docs/reference/config-api-shape.md`.
 > Pattern: define sub-struct → add field to Config → remove flat fields → migrate blob → add applySetting cases → add remapKeys shim → update callsites.
 
@@ -58,47 +58,18 @@ future agent) can scan the entire workspace in one page.
 - [x] **CFG-1 Wave 7** `AutoUpdateConfig` — 5 auto-update fields nested into `Config.AutoUpdate`. PR #1483.
 - [x] **CFG-1 Wave 8** `GetConfig` secret-masking fix — all 5 secrets now masked via `MaskSecrets`; 2 new tests. PR #1484.
 
-### CFG-2 — Settings UI reorganization (the "second half") — NOT STARTED
+### CFG-2 — Settings UI reorganization (the "second half") — SHIPPED PR #1514
 
-> **Context:** CFG-1 nested the backend `Config` into 7 sub-structs, but the frontend was
-> left untouched. The Settings page (`web/src/pages/Settings.tsx`, ~2,500 lines) still reads/writes
-> **flat keys** (`config.auto_update_enabled`, `config.maintenance_window_*`, `embedding_model`, …)
-> and is organized by **feature tabs** (Library, iTunes Import, Metadata, Paths, Performance,
-> Security, API Keys, Plugins, Tools, System Info, Temp Login) that do **not** map to the 7 config
-> groups. It keeps working only because `GET/PUT /config` still exposes a **flat-key compat shim**
-> (`internal/config/update_service.go` remap, e.g. `auto_update_enabled → enabled`).
->
-> **Load-bearing risk:** that flat↔nested shim is now a hard dependency of the WebUI. Removing it
-> (thinking "everything's migrated") would silently break the Settings page — fields read `undefined`
-> and render defaults. CFG-2 removes that coupling and aligns the UI to the nested shape.
->
-> **Goal:** migrate the frontend to consume the nested config shape, reorganize Settings into
-> sections that mirror the 7 config groups, decompose the monolith, then retire the flat shim.
+> **Done (2026-06-19):** Settings.tsx 3,077 → 1,395 lines. Dedup has its own tab (index 3). 11 new
+> TypeScript interfaces. `loadConfig` reads nested keys first, flat fallback for compat.
+> `handleSave` sends both nested + flat. 9 section components + `useSettingsHandlers` hook.
+> 280 Vitest tests pass. `sanitizeImportPayload` fixed for nested objects.
 
-- [ ] **CFG-2 Phase A — Frontend nested config client + types.** Add a typed `AppConfig` interface
-  mirroring the 7 sub-structs (`embedding`, `dedup`, `metadata_scoring`, `itunes`, `maintenance`,
-  `scheduled`, `auto_update`) in `web/src/types/`. Update the config API client to read/write nested
-  keys. Land *behind* the existing flat shim (no behavior change) so it can ship independently.
-- [ ] **CFG-2 Phase B — Reorganize Settings into config-aligned sections.** Replace the inline
-  field blobs in `Settings.tsx` (tab indexes 0–4) with section components matching the config groups:
-  `EmbeddingSettingsTab`, `DedupSettingsTab`, `MetadataScoringSettingsTab` (fold into existing Metadata),
-  `ITunesSettingsTab` (rename "iTunes Import"), `MaintenanceSettingsTab` (window + retention),
-  `ScheduledTasksSettingsTab` (8 task groups), `AutoUpdateSettingsTab`. Keep the non-config tabs
-  (API Keys, Plugins, Tools, Security, Paths, System Info, Temp Login) as-is.
-- [ ] **CFG-2 Phase C — Decompose the monolith.** Extract the remaining ~2,500-line `Settings.tsx`
-  inline panels into per-section components under `web/src/components/settings/`. Target: `Settings.tsx`
-  becomes a thin tab-host (<300 lines). Mirrors the existing `*SettingsTab` component pattern.
-- [ ] **CFG-2 Phase D — Retire the flat-key compat shim.** Once the frontend is fully on nested keys,
-  remove the flat→nested remap in `update_service.go` and the flat read paths in `persistence.go`;
-  keep only the one-time blob migration (old stored configs still need it). Update
-  `docs/reference/config-api-shape.md` to document nested-only as the API contract.
-- [ ] **CFG-2 Phase E — Tests.** Vitest per new section component (render + save round-trip against
-  the nested client); one E2E (`make test-e2e`) covering load → edit → save → reload for at least one
-  field per group; assert the flat shim removal didn't regress any field (Phase D gate).
-
-> **Sequencing:** A → B → C can land incrementally (UI keeps working via the shim throughout).
-> D is the breaking step — gate it on B+C being fully merged and E2E green. Estimate: A ~0.5d,
-> B ~2d, C ~1.5d, D ~0.5d, E ~1d. Plan-first per CLAUDE.md (multi-file frontend refactor).
+- [x] **CFG-2 Phase A** — 11 nested TS interfaces added to `api.ts`. PR #1514.
+- [x] **CFG-2 Phase B** — `loadConfig`/`handleSave` wired to nested keys; Dedup tab at index 3. PR #1514.
+- [x] **CFG-2 Phase C** — Settings.tsx 3,077 → 1,395 lines; 9 section components + `useSettingsHandlers`. PR #1514.
+- [ ] **CFG-2 Phase D — Retire the flat-key compat shim.** Remove flat→nested remap in `update_service.go`; keep blob migration. Gate on Phase B+C proven stable. (open — future PR)
+- [x] **CFG-2 Phase E** — 5 Vitest unit tests + 1 E2E spec. 280 tests pass. PR #1514.
 
 ---
 

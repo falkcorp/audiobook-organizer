@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.41.0 -->
+<!-- version: 3.42.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-19 -->
 
@@ -8,6 +8,18 @@
 ## [Unreleased]
 
 ### Features
+
+#### June 19, 2026 — CFG-2: Settings UI reorganization (nested config, Dedup tab, section components)
+
+Frontend "second half" of the config struct-nesting refactor (CFG-1 nested the Go backend; CFG-2 aligns the WebUI).
+
+- **TypeScript types:** 11 new interfaces in `services/api.ts` matching the 7 CFG-1 sub-structs (`EmbeddingConfig`, `DedupConfig`, `MetadataScoringConfig`, `ITunesConfig`, `MaintenanceConfig`, `ScheduledTasksConfig`, `AutoUpdateConfig`, `ToolsConfig`, etc.)
+- **Config wiring:** `loadConfig()` reads nested keys first with flat fallback; `handleSave()` sends both nested + flat (compat shim kept — Phase D deferred)
+- **Monolith decomposed:** `Settings.tsx` 3,077 → 1,395 lines; 9 section components + `useSettingsHandlers` hook extracted
+- **New Dedup tab** at index 3 (between Metadata and Paths) exposes all `config.dedup` fields
+- **Tools Advanced collapsible** exposes `config.tools.managed_dir` and `embed_queue_debounce_ms`
+- **Import/export fix:** `sanitizeImportPayload` now passes nested sub-struct objects through correctly (was silently dropping them)
+- **Tests:** 5 Vitest unit tests + 1 Playwright E2E spec; 280 total (was 246)
 
 #### June 19, 2026 — Dedup UX overhaul (PR #1507)
 
