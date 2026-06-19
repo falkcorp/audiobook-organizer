@@ -1,5 +1,5 @@
 // file: internal/server/handlers/dedup/label_review.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5e2a9c41-7b30-4d68-8f12-3a6e0c9d5b27
 // last-edited: 2026-06-19
 
@@ -65,18 +65,19 @@ func (h *Handler) GetDedupLabelStats(c *gin.Context) {
 		httputil.RespondWithServiceUnavailable(c, "embedding store not available")
 		return
 	}
+	// Count the explicit labels. NOTE: an empty Label means "no filter" (matches
+	// all), so "unlabeled" is DERIVED from total minus the explicit counts — a
+	// Label:"" query would wrongly return everything.
 	byLabel := map[string]int{}
-	for _, l := range []string{"true_dup", "not_dup", "unsure", ""} {
+	labeledSum := 0
+	for _, l := range []string{"true_dup", "not_dup", "unsure"} {
 		n, err := es.CountLabeledExamples(database.LabeledExampleFilter{Label: l})
 		if err != nil {
 			httputil.InternalError(c, "failed to count labels", err)
 			return
 		}
-		key := l
-		if key == "" {
-			key = "unlabeled"
-		}
-		byLabel[key] = n
+		byLabel[l] = n
+		labeledSum += n
 	}
 	bySource := map[string]int{}
 	for _, src := range []string{"human", "auto_high_conf", "rule", "itunes_attr", "llm_judge"} {
@@ -88,6 +89,7 @@ func (h *Handler) GetDedupLabelStats(c *gin.Context) {
 		bySource[src] = n
 	}
 	total, _ := es.CountLabeledExamples(database.LabeledExampleFilter{})
+	byLabel["unlabeled"] = total - labeledSum
 	httputil.RespondWithOK(c, gin.H{"total": total, "by_label": byLabel, "by_source": bySource})
 }
 

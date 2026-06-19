@@ -63,6 +63,35 @@ func TestListDedupLabels_FilterAndTotal(t *testing.T) {
 	}
 }
 
+func TestGetDedupLabelStats_UnlabeledDerived(t *testing.T) {
+	h, d := newHandler(t)
+	seedLabel(t, d, 1, "true_dup", "auto_high_conf")
+	seedLabel(t, d, 2, "not_dup", "rule")
+	seedLabel(t, d, 3, "", "rule") // features captured, no label yet
+
+	w := doReq(t, h.GetDedupLabelStats, http.MethodGet, "/api/v1/dedup/labels/stats", nil, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			Total   int            `json:"total"`
+			ByLabel map[string]int `json:"by_label"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Data.Total != 3 {
+		t.Fatalf("total=%d want 3", resp.Data.Total)
+	}
+	// The bug: by_label["unlabeled"] used a Label:"" query that matched ALL (3).
+	// It must be DERIVED: total - true_dup - not_dup - unsure = 3 - 1 - 1 - 0 = 1.
+	if resp.Data.ByLabel["unlabeled"] != 1 {
+		t.Errorf("unlabeled=%d want 1; by_label=%v", resp.Data.ByLabel["unlabeled"], resp.Data.ByLabel)
+	}
+}
+
 func TestOverrideDedupLabel_SetsHuman(t *testing.T) {
 	h, d := newHandler(t)
 	seedLabel(t, d, 7, "true_dup", "auto_high_conf")
