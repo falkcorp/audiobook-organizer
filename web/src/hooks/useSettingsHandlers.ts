@@ -1,15 +1,18 @@
 // file: web/src/hooks/useSettingsHandlers.ts
-// version: 1.0.0
+// version: 1.2.0
 // guid: b8c9d0e1-f2a3-4567-bcde-678901234567
 // last-edited: 2026-06-19
 
 import { ChangeEvent } from 'react';
 import { NavigateFunction } from 'react-router-dom';
 import * as api from '../services/api';
+import type { SettingsState } from '../pages/Settings';
 
 // ---------------------------------------------------------------------------
-// Local types (re-declared here so the hook is self-contained)
+// Local types
 // ---------------------------------------------------------------------------
+
+export type { SettingsState };
 
 export interface ScanStatus {
   status: 'scanning' | 'complete' | 'error' | 'cancelled';
@@ -22,61 +25,6 @@ export interface ScanStatus {
 export interface ScanErrorTarget {
   path: string;
   errors: string[];
-}
-
-export interface SettingsState {
-  libraryPath: string;
-  organizationStrategy: string;
-  scanOnStartup: boolean;
-  autoOrganize: boolean;
-  folderNamingPattern: string;
-  fileNamingPattern: string;
-  createBackups: boolean;
-  supportedExtensions: string[];
-  excludePatterns: string[];
-  enableDiskQuota: boolean;
-  diskQuotaPercent: number;
-  enableUserQuotas: boolean;
-  defaultUserQuotaGB: number;
-  autoFetchMetadata: boolean;
-  enableAIParsing: boolean;
-  metadataLLMScoringEnabled: boolean;
-  openaiApiKey: string;
-  metadataSources: Array<{
-    id: string;
-    name: string;
-    enabled: boolean;
-    priority: number;
-    requiresAuth: boolean;
-    credentials: Record<string, string>;
-  }>;
-  language: string;
-  concurrentScans: number;
-  memoryLimitType: string;
-  cacheSize: number;
-  cacheInvalidateOnBookUpdate: boolean;
-  metadataFetchCacheTTLDays: number;
-  memoryLimitPercent: number;
-  memoryLimitMB: number;
-  purgeSoftDeletedAfterDays: number;
-  purgeSoftDeletedDeleteFiles: boolean;
-  logLevel: string;
-  logFormat: string;
-  enableJsonLogging: boolean;
-  autoUpdateEnabled: boolean;
-  autoUpdateChannel: string;
-  autoUpdateCheckMinutes: number;
-  autoUpdateWindowStart: number;
-  autoUpdateWindowEnd: number;
-  maintenanceWindowEnabled: boolean;
-  maintenanceWindowStart: number;
-  maintenanceWindowEnd: number;
-  pathFormat: string;
-  segmentTitleFormat: string;
-  autoRenameOnApply: boolean;
-  autoWriteTagsOnApply: boolean;
-  verifyAfterWrite: boolean;
-  protectedPaths: string;
 }
 
 interface Blocker {
@@ -1024,6 +972,8 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
       'auto_update_window_start', 'auto_update_window_end', 'maintenance_window_enabled',
       'maintenance_window_start', 'maintenance_window_end', 'path_format', 'segment_title_format',
       'auto_rename_on_apply', 'auto_write_tags_on_apply', 'verify_after_write', 'protected_paths',
+      // nested sub-struct keys (CFG-1)
+      'embedding', 'dedup', 'metadata_scoring', 'itunes', 'maintenance', 'scheduled', 'auto_update', 'tools',
     ]);
 
     const cleaned: Partial<api.Config> = {};
@@ -1138,6 +1088,21 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
           } else if (typeof val === 'string' && val.trim() !== '' && !isNaN(Number(val))) {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             (cleaned as any)[key] = Number(val);
+          }
+          break;
+
+        // nested sub-struct objects — pass through as-is (backend validates shape)
+        case 'embedding':
+        case 'dedup':
+        case 'metadata_scoring':
+        case 'itunes':
+        case 'maintenance':
+        case 'scheduled':
+        case 'auto_update':
+        case 'tools':
+          if (val !== null && typeof val === 'object' && !Array.isArray(val)) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (cleaned as any)[key] = val;
           }
           break;
 
