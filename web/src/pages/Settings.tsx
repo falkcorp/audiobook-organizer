@@ -1,5 +1,5 @@
 // file: web/src/pages/Settings.tsx
-// version: 1.51.0
+// version: 1.52.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
 // last-edited: 2026-06-19
 
@@ -43,6 +43,7 @@ import { EmbeddingSettingsSection } from '../components/settings/EmbeddingSettin
 import { DedupSettingsSection } from '../components/settings/DedupSettingsSection';
 import { MetadataScoringSection } from '../components/settings/MetadataScoringSection';
 import { MaintenanceSettingsSection } from '../components/settings/MaintenanceSettingsSection';
+import { AutoUpdateSection } from '../components/settings/AutoUpdateSection';
 import { ScheduledTasksSection } from '../components/settings/ScheduledTasksSection';
 import { APIKeysTab } from '../components/settings/APIKeysTab';
 import { PerformanceSettingsTab } from '../components/settings/PerformanceSettingsTab';
@@ -875,6 +876,8 @@ export function Settings() {
 
         <TabPanel value={tabValue} index={10}>
           <SystemInfoTab />
+
+          <AutoUpdateSection settings={settings} setSettings={setSettings} />
 
           <MaintenanceSettingsSection config={maintenanceConfig} onChange={handleMaintenanceChange} />
 
