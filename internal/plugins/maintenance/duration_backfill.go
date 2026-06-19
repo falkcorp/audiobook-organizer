@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7e4b2a90-3c61-4d58-8f29-6a1c0e5b9d83
 // last-edited: 2026-06-19
 
@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -190,65 +191,107 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 	}
 
 	_ = reporter.UpdateProgress(0, totalFiles, fmt.Sprintf(
-		"Phase 2/2: correcting %d file durations across %d books…", totalFiles, len(bookOrder)))
+		"Phase 2: correcting %d file durations across %d books…", totalFiles, len(bookOrder)))
 
 	var fixedFiles, errCount int
-	// Throttle per-file logging and progress: at library scale (175K+ rows) a log
-	// line and progress event per file would flood the activity store and dominate
-	// wall-clock (the work itself is cheap). Emit a small sample plus periodic
-	// heartbeats instead.
+
+	// Logging is best-effort and time-batched: progress (a cheap counter) updates
+	// continuously, but file-level detail is flushed at most once per logInterval
+	// so a 175K-row run can't flood the activity store. Examples are kept in a
+	// small ring and emitted with each heartbeat.
 	const (
-		sampleLogCount = 20   // first N corrections logged verbatim as examples
-		logEvery       = 5000 // then one example every logEvery files
-		progressEvery  = 500  // progress heartbeat cadence
+		writeBatchSize = 1000             // BookFiles per BatchUpsert commit
+		logInterval    = 15 * time.Second // heartbeat cadence for detail logs
+		exampleCount   = 5                // sample corrections per heartbeat
 	)
+	lastLog := time.Now()
+	heartbeat := func(force bool, phase string, cur, total int, examples []string) {
+		if !force && time.Since(lastLog) < logInterval {
+			return
+		}
+		msg := fmt.Sprintf("%s: %d/%d", phase, cur, total)
+		if len(examples) > 0 {
+			msg += " — e.g. " + strings.Join(examples, "; ")
+		}
+		_ = reporter.Log(slog.LevelInfo, msg)
+		_ = reporter.UpdateProgress(cur, total, fmt.Sprintf("%s: %d/%d", phase, cur, total))
+		lastLog = time.Now()
+	}
+
+	if params.DryRun {
+		// Preview only: count and show a handful of examples, no writes.
+		examples := make([]string, 0, exampleCount)
+		for _, bookID := range bookOrder {
+			for _, fix := range fixesByBook[bookID] {
+				if len(examples) < exampleCount {
+					examples = append(examples, fmt.Sprintf("%s %dms→%ds", fix.file.ID, fix.file.Duration, fix.newDuration))
+				}
+				fixedFiles++
+			}
+		}
+		result := fmt.Sprintf("DRY RUN — would correct %d file durations across %d books. Examples: %s",
+			fixedFiles, len(bookOrder), strings.Join(examples, "; "))
+		_ = reporter.Log(slog.LevelInfo, result)
+		_ = reporter.UpdateProgress(totalFiles, totalFiles, result)
+		return nil
+	}
+
+	// Phase 2a: write corrected durations in batches. BatchUpsertBookFiles does
+	// NOT recompute book aggregates per file — that's the whole point: a per-file
+	// recompute (175K of them, each re-summing the book) is what made the naive
+	// version take hours. We recompute once per book in Phase 2b instead.
+	pending := make([]*database.BookFile, 0, writeBatchSize)
+	flush := func() error {
+		if len(pending) == 0 {
+			return nil
+		}
+		if err := store.BatchUpsertBookFiles(pending); err != nil {
+			return err
+		}
+		pending = pending[:0]
+		return nil
+	}
 
 	for _, bookID := range bookOrder {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-
 		for _, fix := range fixesByBook[bookID] {
-			if fixedFiles < sampleLogCount || fixedFiles%logEvery == 0 {
-				_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
-					"book %s file %s: %d ms → %d s", bookID, fix.file.ID, fix.file.Duration, fix.newDuration))
-			}
-
-			if !params.DryRun {
-				updated := fix.file
-				updated.Duration = fix.newDuration
-				if err := store.UpdateBookFile(updated.ID, &updated); err != nil {
-					_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
-						"book %s file %s: UpdateBookFile failed: %v", bookID, fix.file.ID, err))
-					errCount++
-					continue
+			corrected := fix.file // copy; take address of the loop-local
+			corrected.Duration = fix.newDuration
+			pending = append(pending, &corrected)
+			fixedFiles++
+			if len(pending) >= writeBatchSize {
+				if err := flush(); err != nil {
+					return fmt.Errorf("batch write at file %d: %w", fixedFiles, err)
 				}
 			}
-			fixedFiles++
-			if fixedFiles%progressEvery == 0 {
-				_ = reporter.UpdateProgress(fixedFiles, totalFiles, fmt.Sprintf(
-					"Phase 2/2: corrected %d/%d file durations", fixedFiles, totalFiles))
-			}
-		}
-
-		// Heal the book-level aggregate once all of its files are corrected.
-		// (UpdateBookFile recomputes per file too, but an explicit final recompute
-		// is a cheap safety net against a mid-book failure leaving a partial sum.)
-		if !params.DryRun {
-			if err := store.RecomputeBookAggregates(bookID); err != nil {
-				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
-					"book %s: RecomputeBookAggregates failed: %v", bookID, err))
-				errCount++
-			}
+			heartbeat(false, "Phase 2a writing durations", fixedFiles, totalFiles, nil)
 		}
 	}
-
-	suffix := ""
-	if params.DryRun {
-		suffix = " (dry run — no writes)"
+	if err := flush(); err != nil {
+		return fmt.Errorf("final batch write: %w", err)
 	}
-	result := fmt.Sprintf("Scanned %d books: %d file durations corrected across %d books, %d errors%s",
-		scanned, fixedFiles, len(bookOrder), errCount, suffix)
+	heartbeat(true, "Phase 2a writing durations", fixedFiles, totalFiles, nil)
+
+	// Phase 2b: heal the denormalized Book.Duration / Book.FileSize aggregates,
+	// exactly once per affected book.
+	healed := 0
+	for _, bookID := range bookOrder {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if err := store.RecomputeBookAggregates(bookID); err != nil {
+			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
+				"book %s: RecomputeBookAggregates failed: %v", bookID, err))
+			errCount++
+		}
+		healed++
+		heartbeat(false, "Phase 2b healing book aggregates", healed, len(bookOrder), nil)
+	}
+
+	result := fmt.Sprintf("Scanned %d books: %d file durations corrected across %d books, %d errors",
+		scanned, fixedFiles, len(bookOrder), errCount)
 	_ = reporter.Log(slog.LevelInfo, result)
 	_ = reporter.UpdateProgress(totalFiles, totalFiles, result)
 
