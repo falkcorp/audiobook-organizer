@@ -16,6 +16,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -91,6 +92,81 @@ func (s *Server) RegisterLibraryScanOp(reg *opsregistry.Registry) error {
 			}
 			op.SetStatus("success")
 			logging.Info(ctx, "library scan complete")
+			return nil
+		},
+	})
+}
+
+// libraryImportParams are the JSON parameters for the manual-import op.
+type libraryImportParams struct {
+	// Path is the folder OR single file to import. It MUST resolve under a
+	// configured import path (validated via fileops.ValidateUserPath, the
+	// SEC-AUDIT path-injection guard).
+	Path string `json:"path"`
+	// Confirm bypasses the import circuit breaker (the > N-new-books hard stop).
+	// Wired by the import-guard feature; accepted here so the param contract is
+	// stable.
+	Confirm bool `json:"confirm,omitempty"`
+}
+
+// RegisterLibraryImportOp registers the "library.import" v2 OperationDef — a
+// manual, targeted import of one folder or file. Unlike library.scan it:
+//   - takes its own ConcurrencyKey, so it never queues behind a full library scan;
+//   - scans ONLY the given path (no full-library removal pass);
+//   - validates the user-supplied path against configured import paths.
+//
+// It reuses the scanner's PerformScan (WalkDir handles both a directory and a
+// single file), so a manual import goes through the exact same assembly + dedup +
+// create pipeline as a scan — including (once wired) the import circuit breaker.
+func (s *Server) RegisterLibraryImportOp(reg *opsregistry.Registry) error {
+	return reg.RegisterOp(opsregistry.OperationDef{
+		ID:              "library.import",
+		Plugin:          "library",
+		DisplayName:     "Manual Import",
+		Description:     "Import audiobooks from a specific folder or file (no full-library scan). The path must resolve under a configured import path.",
+		DefaultPriority: opsregistry.PriorityHigh, // user-triggered, should not wait behind background scans
+		Cancellable:     true,
+		Isolate:         false,
+		Timeout:         4 * time.Hour,
+		ResumePolicy:    opsregistry.ResumeDrop,
+		ConcurrencyKey:  "library.import",
+		Permissions:     []auth.Permission{auth.PermScanTrigger},
+		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapFilesWrite},
+		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
+			var p libraryImportParams
+			if len(rawParams) > 0 {
+				if err := json.Unmarshal(rawParams, &p); err != nil {
+					return fmt.Errorf("parse import params: %w", err)
+				}
+			}
+			if p.Path == "" {
+				return fmt.Errorf("path is required")
+			}
+
+			// Security: the path is user-supplied. Validate + canonicalize it
+			// against the configured import paths before touching the filesystem.
+			cleanPath, err := fileops.ValidateUserPath(s.Store(), p.Path)
+			if err != nil {
+				return fmt.Errorf("import path rejected: %w", err)
+			}
+
+			op := &logging.OpContext{
+				ID:     ulid.Make().String(),
+				Type:   "library.import",
+				Status: "pending",
+			}
+			ctx = logging.WithOp(ctx, op)
+			logging.Info(ctx, "manual import starting", "path", cleanPath)
+
+			scanReq := &scanner.ScanRequest{FolderPath: &cleanPath}
+			progress := registryProgressAdapter{r: reporter}
+			if err := s.scanService.PerformScan(ctx, scanReq, operations.LoggerFromReporter(progress)); err != nil {
+				op.SetStatus("failed")
+				logging.Error(ctx, "manual import failed", "path", cleanPath, "err", err)
+				return err
+			}
+			op.SetStatus("success")
+			logging.Info(ctx, "manual import complete", "path", cleanPath)
 			return nil
 		},
 	})
@@ -315,6 +391,7 @@ func (s *Server) RegisterLibraryTranscodeOp(reg *opsregistry.Registry) error {
 
 func init() {
 	addOpRegistrar(func(s *Server, reg *opsregistry.Registry) error { return s.RegisterLibraryScanOp(reg) })
+	addOpRegistrar(func(s *Server, reg *opsregistry.Registry) error { return s.RegisterLibraryImportOp(reg) })
 	addOpRegistrar(func(s *Server, reg *opsregistry.Registry) error { return s.RegisterLibraryOrganizeOp(reg) })
 	addOpRegistrar(func(s *Server, reg *opsregistry.Registry) error { return s.RegisterLibraryTranscodeOp(reg) })
 }

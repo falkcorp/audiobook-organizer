@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.38.0 -->
+<!-- version: 3.39.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-18 -->
 
@@ -48,6 +48,18 @@ upstream cause (why ~352K extra/chapter `books` rows exist) needs investigation.
 run `dedup.mine-gold-labels --apply` until the candidate set is rebuilt.
 
 ### Features
+
+#### June 19, 2026 — Manual import (library.import): import a folder or file directly
+
+New `library.import` op + generic-route support: import a specific folder OR single file
+without a full-library scan. Unlike `library.scan` it takes its own ConcurrencyKey (never
+queues behind a background full scan), scans only the given path (no full-library removal
+pass), and validates the user-supplied path against configured import paths
+(`fileops.ValidateUserPath` — the SEC-AUDIT path-injection guard). Reuses the scanner's
+`PerformScan` (WalkDir handles a directory or a single file), so it goes through the same
+assembly + dedup + create pipeline. Trigger via `POST /operations/v2`
+`{"def_id":"library.import","params":{"path":"…"}}`.
+
 
 #### June 18, 2026 — Dedup feedback loop: in-house gold miner (`dedup.mine-gold-labels`)
 
