@@ -1,7 +1,7 @@
 // file: web/src/lib/storageKeys.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5c8a3d7b-2e1f-4a9c-b3d5-1e8f2a9c7d4b
-// last-edited: 2026-04-30
+// last-edited: 2026-06-19
 
 /** Centralised localStorage key constants. */
 export const STORAGE_KEYS = {
@@ -17,6 +17,8 @@ export const STORAGE_KEYS = {
   LIBRARY_RECENT_SEARCHES: 'library_recent_searches',
   METADATA_REVIEW_LANGUAGE_FILTER: 'metadata-review-language-filter',
   METADATA_REVIEW_PAGE_SIZE: 'metadata-review-page-size',
+  DEDUP_PAGE_SIZE: 'dedup-page-size',
+  DEDUP_MULTI_SELECT: 'dedup-multi-select',
 } as const;
 
 export type StorageKey = typeof STORAGE_KEYS[keyof typeof STORAGE_KEYS];

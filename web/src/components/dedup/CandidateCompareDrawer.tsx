@@ -1,5 +1,5 @@
 // file: web/src/components/dedup/CandidateCompareDrawer.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: a6f7b8c9-d0e1-2345-fabc-af6789012345
 // last-edited: 2026-06-19
 
@@ -84,12 +84,12 @@ export function CandidateCompareDrawer({
 
     api
       .getDedupCandidateBreakdown(candidateId, ctrl.signal)
-      .then((resp) => {
+      .then((resp: DedupCandidateBreakdownResponse) => {
         if (!ctrl.signal.aborted) {
           setData(resp);
         }
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         if (!ctrl.signal.aborted) {
           setError(err instanceof Error ? err.message : 'Failed to load breakdown');
         }
@@ -289,7 +289,7 @@ export function CandidateCompareDrawer({
                     <AudioSamplePair
                       bookA={bookA}
                       bookB={bookB}
-                      onKeep={(winnerId) => handleMerge(winnerId)}
+                      onKeep={(winnerId: string | undefined) => handleMerge(winnerId)}
                     />
                   )}
                 </>
@@ -313,7 +313,7 @@ export function CandidateCompareDrawer({
             {/* Tabs: Files | Score Breakdown */}
             <Tabs
               value={activeTab}
-              onChange={(_, v) => setActiveTab(v)}
+              onChange={(_: unknown, v: number) => setActiveTab(v)}
               sx={{ mb: 2, borderBottom: 1, borderColor: 'divider' }}
             >
               <Tab label="Files" data-testid="drawer-tab-files" />

@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/UnifiedDedupTab.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: c8b9d0e1-f2a3-4567-bcde-cb8901234567
-// last-edited: 2026-06-17
+// last-edited: 2026-06-19
 
 // UnifiedDedupTab is the T017 single surface that replaces the separate Books /
 // Advanced-Scan / Acoustic tabs. It shows a paginated candidate table filtered
@@ -21,7 +21,7 @@
 //   - Timers cleared on unmount.
 //   - No module-level mutable state.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type MouseEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams, Link as RouterLink } from 'react-router-dom';
 import {
   Alert,
@@ -56,6 +56,7 @@ import ClearIcon from '@mui/icons-material/Clear';
 import * as api from '../../services/api';
 import type { Book, DedupCandidate, DedupBand, DedupStats } from '../../services/api';
 import { useOperationsStore } from '../../stores/useOperationsStore';
+import { STORAGE_KEYS } from '../../lib/storageKeys';
 import { BandFilterBar, type BandCounts } from './BandFilterBar';
 import { ScoreBadgeRow } from './ScoreBadgeRow';
 import { CandidateCompareDrawer } from './CandidateCompareDrawer';
@@ -113,10 +114,24 @@ function renderBookCard(book: Book | null | undefined, id: string) {
   const missing = !book;
   const path = book?.file_path ?? '';
   const title = book?.title ?? '';
+  const coverUrl = book?.cover_url ?? '';
   const isGarbageTitle =
     !title || title.toUpperCase() === 'TITLE' || /^[0-9A-Z]{26}$/.test(title.trim());
   return (
-    <Stack spacing={0.25} sx={{ minWidth: 0 }}>
+    <Stack direction="row" spacing={1} sx={{ minWidth: 0, alignItems: 'flex-start' }}>
+      {coverUrl && (
+        <Box
+          component="img"
+          src={coverUrl}
+          alt=""
+          loading="lazy"
+          sx={{ width: 44, height: 44, objectFit: 'cover', borderRadius: 0.5, flexShrink: 0, mt: 0.25 }}
+        />
+      )}
+      {!coverUrl && (
+        <Box sx={{ width: 44, height: 44, borderRadius: 0.5, flexShrink: 0, bgcolor: 'action.selected', mt: 0.25 }} />
+      )}
+      <Stack spacing={0.25} sx={{ minWidth: 0, flex: 1 }}>
       {missing ? (
         <Typography variant="body2" sx={{ color: 'error.main', fontStyle: 'italic' }}>
           (missing book — {id.slice(-8)})
@@ -164,6 +179,7 @@ function renderBookCard(book: Book | null | undefined, id: string) {
           </Typography>
         </Tooltip>
       )}
+      </Stack>
     </Stack>
   );
 }
@@ -189,7 +205,13 @@ export function UnifiedDedupTab({ hidden }: UnifiedDedupTabProps) {
   // (both low-quality, need manual matching) — server-side filter.
   const [bothUnmatched, setBothUnmatched] = useState(false);
   const [page, setPage] = useState(0);
-  const [rowsPerPage, setRowsPerPage] = useState(25);
+  const [rowsPerPage, setRowsPerPage] = useState<number>(() =>
+    parseInt(localStorage.getItem(STORAGE_KEYS.DEDUP_PAGE_SIZE) ?? '25', 10),
+  );
+  const [showMultiSelect, setShowMultiSelect] = useState<boolean>(
+    () => localStorage.getItem(STORAGE_KEYS.DEDUP_MULTI_SELECT) === 'true',
+  );
+  const lastClickedIdxRef = useRef<number | null>(null);
 
   // --- data state ---
   const [candidates, setCandidates] = useState<DedupCandidate[]>([]);
@@ -376,7 +398,28 @@ export function UnifiedDedupTab({ hidden }: UnifiedDedupTabProps) {
     setSelected(new Set(filteredCandidates.map((c) => c.id)));
   };
 
-  const clearSelection = () => setSelected(new Set());
+  const clearSelection = () => {
+    setSelected(new Set());
+    lastClickedIdxRef.current = null;
+  };
+
+  // Click-to-select a row. Supports shift-click range selection.
+  const handleRowClick = (e: MouseEvent, id: number, idx: number) => {
+    // Don't steal clicks from buttons/links inside the row.
+    if ((e.target as HTMLElement).closest('a, button')) return;
+    if (e.shiftKey && lastClickedIdxRef.current !== null) {
+      const lo = Math.min(lastClickedIdxRef.current, idx);
+      const hi = Math.max(lastClickedIdxRef.current, idx);
+      setSelected((prev) => {
+        const next = new Set(prev);
+        filteredCandidates.slice(lo, hi + 1).forEach((c) => next.add(c.id));
+        return next;
+      });
+    } else {
+      toggleSelect(id);
+    }
+    lastClickedIdxRef.current = idx;
+  };
 
   // --- bulk actions ---
   const handleMergeSelected = async () => {
@@ -647,6 +690,22 @@ export function UnifiedDedupTab({ hidden }: UnifiedDedupTabProps) {
             </Button>
           </span>
         </Tooltip>
+        <Box sx={{ flex: 1 }} />
+        <Tooltip title="Show checkboxes for bulk operations. Click any row to select; shift-click to range-select.">
+          <Button
+            size="small"
+            variant={showMultiSelect ? 'contained' : 'outlined'}
+            onClick={() => {
+              const next = !showMultiSelect;
+              setShowMultiSelect(next);
+              localStorage.setItem(STORAGE_KEYS.DEDUP_MULTI_SELECT, String(next));
+              if (!next) clearSelection();
+            }}
+            data-testid="multi-select-toggle"
+          >
+            {showMultiSelect ? 'Multi-select ON' : 'Multi-select'}
+          </Button>
+        </Tooltip>
       </Stack>
 
       {/* Band filter */}
@@ -744,58 +803,83 @@ export function UnifiedDedupTab({ hidden }: UnifiedDedupTabProps) {
             <Table size="small">
               <TableHead>
                 <TableRow>
-                  <TableCell padding="checkbox">
-                    <Checkbox
-                      size="small"
-                      indeterminate={selected.size > 0 && selected.size < filteredCandidates.length}
-                      checked={
-                        filteredCandidates.length > 0 && selected.size === filteredCandidates.length
-                      }
-                      onChange={(e) => (e.target.checked ? selectAll() : clearSelection())}
-                    />
-                  </TableCell>
-                  <TableCell>Score / Band</TableCell>
+                  {showMultiSelect && (
+                    <TableCell padding="checkbox">
+                      <Checkbox
+                        size="small"
+                        indeterminate={selected.size > 0 && selected.size < filteredCandidates.length}
+                        checked={
+                          filteredCandidates.length > 0 && selected.size === filteredCandidates.length
+                        }
+                        onChange={(e) => (e.target.checked ? selectAll() : clearSelection())}
+                      />
+                    </TableCell>
+                  )}
                   <TableCell>Book A</TableCell>
                   <TableCell>Book B</TableCell>
-                  <TableCell align="center">Status</TableCell>
                   <TableCell align="center">Actions</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
-                {filteredCandidates.map((c) => {
+                {filteredCandidates.map((c, idx) => {
                   const busy = bulkBusy;
                   const bookA = c.book_a;
                   const bookB = c.book_b;
                   const qA = metadataQuality(bookA);
                   const qB = metadataQuality(bookB);
-                  // Recommend keeping the side with richer metadata. Ties (both
-                  // equal, or both missing) recommend neither.
                   const recommendA = qA > qB;
                   const recommendB = qB > qA;
+                  const isSelected = selected.has(c.id);
                   return (
                     <TableRow
                       key={c.id}
                       hover
-                      selected={selected.has(c.id)}
-                      sx={{ opacity: busy ? 0.7 : 1 }}
+                      selected={isSelected}
+                      onClick={(e) => handleRowClick(e, c.id, idx)}
+                      sx={{
+                        opacity: busy ? 0.7 : 1,
+                        cursor: 'pointer',
+                        // Zebra stripe: odd rows get a subtle tint for easier reading
+                        bgcolor: isSelected
+                          ? undefined
+                          : idx % 2 === 1
+                            ? 'action.hover'
+                            : 'transparent',
+                      }}
                     >
-                      <TableCell padding="checkbox">
-                        <Checkbox
-                          size="small"
-                          checked={selected.has(c.id)}
-                          onChange={() => toggleSelect(c.id)}
-                        />
-                      </TableCell>
-                      <TableCell sx={{ verticalAlign: 'top' }}>
-                        <ScoreBadgeRow
-                          band={c.band}
-                          score={c.score}
-                          layer={c.layer}
-                          similarity={c.similarity}
-                        />
-                      </TableCell>
-                      <TableCell sx={{ verticalAlign: 'top', minWidth: 280 }}>
+                      {showMultiSelect && (
+                        <TableCell padding="checkbox">
+                          <Checkbox
+                            size="small"
+                            checked={isSelected}
+                            onChange={() => toggleSelect(c.id)}
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                        </TableCell>
+                      )}
+                      {/* Book A — badges (score/band/status) inline at top, then card */}
+                      <TableCell sx={{ verticalAlign: 'top', minWidth: 300 }}>
                         <Stack spacing={0.5}>
+                          <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap alignItems="center">
+                            <ScoreBadgeRow
+                              band={c.band}
+                              score={c.score}
+                              layer={c.layer}
+                              similarity={c.similarity}
+                            />
+                            <Chip
+                              label={c.status}
+                              size="small"
+                              color={
+                                c.status === 'merged'
+                                  ? 'success'
+                                  : c.status === 'dismissed'
+                                    ? 'default'
+                                    : 'warning'
+                              }
+                              variant="outlined"
+                            />
+                          </Stack>
                           {renderBookCard(bookA, c.entity_a_id)}
                           <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
                             {qualityChip(qA)}
@@ -805,6 +889,7 @@ export function UnifiedDedupTab({ hidden }: UnifiedDedupTabProps) {
                           </Stack>
                         </Stack>
                       </TableCell>
+                      {/* Book B */}
                       <TableCell sx={{ verticalAlign: 'top', minWidth: 280 }}>
                         <Stack spacing={0.5}>
                           {renderBookCard(bookB, c.entity_b_id)}
@@ -815,20 +900,6 @@ export function UnifiedDedupTab({ hidden }: UnifiedDedupTabProps) {
                             )}
                           </Stack>
                         </Stack>
-                      </TableCell>
-                      <TableCell align="center" sx={{ verticalAlign: 'top' }}>
-                        <Chip
-                          label={c.status}
-                          size="small"
-                          color={
-                            c.status === 'merged'
-                              ? 'success'
-                              : c.status === 'dismissed'
-                                ? 'default'
-                                : 'warning'
-                          }
-                          variant="outlined"
-                        />
                       </TableCell>
                       <TableCell sx={{ verticalAlign: 'top' }}>
                         <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
@@ -899,7 +970,9 @@ export function UnifiedDedupTab({ hidden }: UnifiedDedupTabProps) {
             }}
             rowsPerPage={rowsPerPage}
             onRowsPerPageChange={(e) => {
-              setRowsPerPage(parseInt(e.target.value, 10));
+              const val = parseInt(e.target.value, 10);
+              setRowsPerPage(val);
+              localStorage.setItem(STORAGE_KEYS.DEDUP_PAGE_SIZE, String(val));
               setPage(0);
               setSelected(new Set());
             }}

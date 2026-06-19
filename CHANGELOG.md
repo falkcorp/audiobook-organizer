@@ -1,11 +1,29 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.40.0 -->
+<!-- version: 3.41.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
-<!-- last-edited: 2026-06-18 -->
+<!-- last-edited: 2026-06-19 -->
 
 # Changelog
 
 ## [Unreleased]
+
+### Features
+
+#### June 19, 2026 — Dedup UX overhaul (PR #1507)
+
+**Dedup candidate table:**
+- Book cover thumbnails (44×44) now show on every candidate row alongside title/path. Falls back to a placeholder box when no cover is stored.
+- Score/band/status chips moved inline to the top of the Book A cell — no more separate "Score/Band" and "Status" columns. Frees horizontal space for cover + path.
+- Alternating row background (zebra stripe) makes it much easier to track which row you're reading when scrolling through hundreds of candidates.
+- Click any row to select it; shift-click to range-select (same as a file manager). No checkbox required.
+- "Multi-select" toggle button in the toolbar shows/hides checkboxes for explicit bulk operations. Hidden by default to reclaim the column. State persists via `localStorage`.
+- Page size persists across navigation via `localStorage` (`dedup-page-size` key). Setting 250/page and clicking back no longer resets to 25.
+
+**Activity log:**
+- Expanding an op row now automatically pauses auto-refresh so log lines stop jumping away. A "Paused — row expanded" chip appears in the header with a "Follow log" action to resume without collapsing the row. Collapsing the row restores the previous refresh state.
+
+**Fingerprint visualizer (PR #1506):**
+- New "Fingerprint" tab in the candidate compare drawer renders both books' chromaprints as 32×64 bit-matrix heatmaps (frequency bits × time buckets). Amber cells overlay Book A showing differences vs Book B. Visual similarity percentage shown. Fetched lazily via `compareAcoustID` on first tab open.
 
 ### Fixes
 
