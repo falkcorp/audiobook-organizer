@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.46.0 -->
+<!-- version: 3.47.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-19 -->
 
@@ -8,6 +8,29 @@
 ## [Unreleased]
 
 ### Fixed
+
+#### June 19, 2026 — Multi-file books titled after their first chapter (CONS-17)
+
+Multi-file audiobooks could take their `Book.Title` from the first chapter's tags
+instead of the book, producing titles like "Opening Credits" or "Chapter 1" that
+collide across unrelated books and inflate the exact-dedup candidate set. Two
+independent paths fixed:
+
+- **iTunes import** (`buildBookFromAlbumGroup`): when the album tag is empty on a
+  multi-file group, the title now derives from the common parent **folder** (the
+  book/album directory) before falling back to the per-chapter track name. Scoped
+  to multi-file groups; single-file books still use the stripped track name.
+- **Filesystem scanner**: a sequentially-detected multi-file group (carrying
+  `SegmentFiles>1` with `FilePath=segs[0]`) is now routed through
+  `AssembleBookMetadata` — the same folder-preferring path as generically-named
+  part files — instead of taking its title from one chapter via `ProcessFile`. The
+  segment BookFiles are still created from the detected `SegmentFiles` list.
+
+Known residual (filed as a follow-up): a multi-file group whose first chapter has a
+*non-generic* tag title (e.g. "Big Finish Ident") still prefers that tag over the
+folder, because `resolveTitle` trusts non-generic tag titles. A robust fix needs a
+"do all chapters agree on their title tag?" discriminator and is out of scope here;
+album-preference was rejected (album frequently equals the *series* name).
 
 #### June 19, 2026 — iTunes per-file durations stored in milliseconds (CONS-16)
 
