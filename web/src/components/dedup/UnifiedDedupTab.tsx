@@ -1,5 +1,5 @@
 // file: web/src/components/dedup/UnifiedDedupTab.tsx
-// version: 1.5.0
+// version: 1.6.0
 // guid: c8b9d0e1-f2a3-4567-bcde-cb8901234567
 // last-edited: 2026-06-19
 
@@ -61,6 +61,7 @@ import { BandFilterBar, type BandCounts } from './BandFilterBar';
 import { ScoreBadgeRow } from './ScoreBadgeRow';
 import { CandidateCompareDrawer } from './CandidateCompareDrawer';
 import { BulkActionBar } from './BulkActionBar';
+import { FolderFilesChip } from './FolderFilesChip';
 
 // ---------- helpers ----------
 
@@ -211,6 +212,12 @@ function renderBookCard(book: Book | null | undefined, id: string, opts: BookCar
               {path}
             </Typography>
           </Tooltip>
+        )}
+
+        {!missing && (
+          <Box>
+            <FolderFilesChip bookId={id} />
+          </Box>
         )}
       </Stack>
     </Stack>

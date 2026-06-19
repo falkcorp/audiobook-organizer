@@ -1,11 +1,22 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.43.0 -->
+<!-- version: 3.44.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-19 -->
 
 # Changelog
 
 ## [Unreleased]
+
+### Features
+
+#### June 19, 2026 — Dedup: folder/file-count chip on candidate cards (DEDUP-FOLDER-1)
+
+- Each dedup candidate card now shows a "Files" chip. Clicking it opens a popover that
+  lazily fetches the book's file list (`getBookFiles`) and lists each file's name,
+  format, size and duration with a count header — so a 197-file series is
+  distinguishable from a single file at a glance, without opening the compare drawer.
+- New `FolderFilesChip` component (own popover + lazy-load state); wired into
+  `UnifiedDedupTab` `renderBookCard`. Frontend-only; read-only API; best-effort.
 
 ### Fixes
 
