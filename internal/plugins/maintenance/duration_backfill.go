@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7e4b2a90-3c61-4d58-8f29-6a1c0e5b9d83
 // last-edited: 2026-06-19
 
@@ -22,46 +22,13 @@ import (
 // then summed those inflated values and overwrote the correct seconds-valued
 // Book.Duration, mislabeling real books as dedup candidates. This maintenance op
 // heals existing rows. The importer bug itself is fixed at the 3 write sites
-// (see internal/itunes/service/importer.go trackDurationSeconds).
-
-// Bitrate band (bits/sec) used to decide whether a stored duration is plausible
-// when interpreted as seconds. The ms/seconds confusion shifts the implied
-// bitrate by ~1000×, while real audiobook bitrate variation spans only ~20×
-// (4 kbps spoken-word … ~1.4 Mbps lossless), so a single 4 kbps floor cleanly
-// separates the two without ever flagging a genuine low-bitrate file.
-const (
-	minPlausibleBitsPerSec = 4_000     // 4 kbps — below any real audio codec
-	maxPlausibleBitsPerSec = 3_000_000 // 3 Mbps — above lossless; upper sanity bound
-)
-
-// durationLooksLikeMillis reports whether durationSec (stored as the seconds
-// field) is actually a milliseconds value, judged by the bitrate it would imply
-// for a file of fileSize bytes.
+// (see internal/itunes/service/importer.go trackDurationSeconds), and new writes
+// are guarded at the store chokepoint (CONS-18, database.DurationLooksLikeMillis).
 //
-//   - If the implied bitrate is within a plausible audio range, the value is a
-//     legitimate seconds duration → not milliseconds.
-//   - If the implied bitrate is impossibly low (< 4 kbps), the duration is too
-//     large for the file: it is milliseconds. We confirm by checking that
-//     dividing by 1000 lands back inside the plausible band — this rejects the
-//     rare false positive of a genuinely sub-4 kbps clip (whose /1000 would imply
-//     an absurd multi-Mbps bitrate).
+// The ms-detection predicate now lives in the database package so the store gate
+// and this backfill share one implementation.
 func durationLooksLikeMillis(fileSize int64, durationSec int) bool {
-	if fileSize <= 0 || durationSec <= 0 {
-		return false // cannot judge / nothing to fix
-	}
-
-	impliedBitsPerSec := fileSize * 8 / int64(durationSec)
-	if impliedBitsPerSec >= minPlausibleBitsPerSec {
-		return false // plausible as seconds
-	}
-
-	correctedSec := durationSec / 1000
-	if correctedSec <= 0 {
-		return false // would round to zero — refuse to corrupt
-	}
-	correctedBitsPerSec := fileSize * 8 / int64(correctedSec)
-	return correctedBitsPerSec >= minPlausibleBitsPerSec &&
-		correctedBitsPerSec <= maxPlausibleBitsPerSec
+	return database.DurationLooksLikeMillis(fileSize, durationSec)
 }
 
 type durationBackfillParams struct {
