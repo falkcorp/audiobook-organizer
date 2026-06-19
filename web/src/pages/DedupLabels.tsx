@@ -1,5 +1,5 @@
 // file: web/src/pages/DedupLabels.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7e3a1c92-4b60-4d85-9f21-6a5e0c9d3f58
 // last-edited: 2026-06-19
 
@@ -12,8 +12,12 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   Box, Typography, Paper, Table, TableBody, TableCell, TableContainer, TableHead,
   TableRow, Chip, Select, MenuItem, FormControl, InputLabel, Button, Stack,
-  CircularProgress, Alert, Tooltip,
+  CircularProgress, Alert, Tooltip, Link as MuiLink,
 } from '@mui/material';
+import { useNavigate } from 'react-router-dom';
+import { LabelToggle } from '../components/dedup/LabelToggle';
+import { PathVarsLegend } from '../components/common/PathVarsLegend';
+import { formatPath, usePathVars, type PathVar } from '../utils/formatPath';
 
 const API_BASE = '/api/v1';
 
@@ -51,7 +55,52 @@ const sourceColor = (s: string): 'primary' | 'secondary' | 'info' | 'default' =>
 
 const PAGE = 50;
 
+// BookCell renders one side of a labeled pair: a clickable title that opens the
+// book, plus its abbreviated path (full path on hover).
+function BookCell({
+  bookId,
+  title,
+  path,
+  pathVars,
+  onOpen,
+}: {
+  bookId: string;
+  title?: string;
+  path?: string;
+  pathVars: PathVar[];
+  onOpen: (id: string) => void;
+}) {
+  return (
+    <Box sx={{ minWidth: 0, maxWidth: 360 }}>
+      <MuiLink
+        component="button"
+        type="button"
+        underline="hover"
+        onClick={() => onOpen(bookId)}
+        sx={{ fontWeight: 600, textAlign: 'left', display: 'block', cursor: 'pointer' }}
+        title={`Open "${title || bookId}"`}
+      >
+        {title || bookId}
+      </MuiLink>
+      {path && (
+        <Tooltip title={path} placement="bottom-start" componentsProps={{ tooltip: { sx: { maxWidth: 600 } } }}>
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{ fontFamily: 'monospace', fontSize: '0.65rem', display: 'block' }}
+            noWrap
+          >
+            {formatPath(path, pathVars)}
+          </Typography>
+        </Tooltip>
+      )}
+    </Box>
+  );
+}
+
 export default function DedupLabels() {
+  const navigate = useNavigate();
+  const pathVars = usePathVars();
   const [rows, setRows] = useState<LabeledExample[]>([]);
   const [total, setTotal] = useState(0);
   const [stats, setStats] = useState<LabelStats | null>(null);
@@ -91,6 +140,10 @@ export default function DedupLabels() {
 
   useEffect(() => { void loadStats(); }, [loadStats]);
   useEffect(() => { void load(); }, [load]);
+
+  // Opens the book detail page. Track C will upgrade this to the
+  // CandidateCompareDrawer for in-context side-by-side review.
+  const openBook = (bookId: string) => navigate(`/library/${bookId}`);
 
   const override = async (candidateId: number, label: string) => {
     try {
@@ -158,28 +211,29 @@ export default function DedupLabels() {
               <TableCell>Book A</TableCell>
               <TableCell>Book B</TableCell>
               <TableCell>Layer</TableCell>
-              <TableCell>Label</TableCell>
               <TableCell>Source</TableCell>
               <TableCell>Reason</TableCell>
-              <TableCell align="right">Override</TableCell>
+              <TableCell align="center">Label</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {loading ? (
-              <TableRow><TableCell colSpan={7} align="center"><CircularProgress size={24} sx={{ my: 2 }} /></TableCell></TableRow>
+              <TableRow><TableCell colSpan={6} align="center"><CircularProgress size={24} sx={{ my: 2 }} /></TableCell></TableRow>
             ) : rows.length === 0 ? (
-              <TableRow><TableCell colSpan={7} align="center"><Typography variant="body2" color="text.secondary" sx={{ py: 2 }}>No labeled examples for this filter.</Typography></TableCell></TableRow>
+              <TableRow><TableCell colSpan={6} align="center"><Typography variant="body2" color="text.secondary" sx={{ py: 2 }}>No labeled examples for this filter.</Typography></TableCell></TableRow>
             ) : rows.map((r) => (
               <TableRow key={r.candidate_id} hover>
-                <TableCell><Tooltip title={r.a?.primary_path || r.entity_a_id}><span>{r.a?.title || r.entity_a_id}</span></Tooltip></TableCell>
-                <TableCell><Tooltip title={r.b?.primary_path || r.entity_b_id}><span>{r.b?.title || r.entity_b_id}</span></Tooltip></TableCell>
+                <TableCell>
+                  <BookCell bookId={r.entity_a_id} title={r.a?.title} path={r.a?.primary_path} pathVars={pathVars} onOpen={openBook} />
+                </TableCell>
+                <TableCell>
+                  <BookCell bookId={r.entity_b_id} title={r.b?.title} path={r.b?.primary_path} pathVars={pathVars} onOpen={openBook} />
+                </TableCell>
                 <TableCell>{r.layer}</TableCell>
-                <TableCell><Chip size="small" color={labelColor(r.label)} label={r.label || 'unlabeled'} /></TableCell>
                 <TableCell><Chip size="small" variant="outlined" color={sourceColor(r.label_source)} label={r.label_source} /></TableCell>
-                <TableCell><Typography variant="caption">{r.label_reason}</Typography></TableCell>
-                <TableCell align="right">
-                  <Button size="small" color="success" onClick={() => void override(r.candidate_id, 'true_dup')}>dup</Button>
-                  <Button size="small" color="error" onClick={() => void override(r.candidate_id, 'not_dup')}>not</Button>
+                <TableCell><Typography variant="caption" color="text.secondary">{r.label_reason}</Typography></TableCell>
+                <TableCell align="center">
+                  <LabelToggle value={r.label} onChange={(label) => void override(r.candidate_id, label)} />
                 </TableCell>
               </TableRow>
             ))}
@@ -194,6 +248,8 @@ export default function DedupLabels() {
         </Typography>
         <Button disabled={offset + PAGE >= total} onClick={() => setOffset(offset + PAGE)}>Next</Button>
       </Stack>
+
+      <PathVarsLegend />
     </Box>
   );
 }
