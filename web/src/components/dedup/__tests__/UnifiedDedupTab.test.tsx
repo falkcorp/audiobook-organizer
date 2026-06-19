@@ -1,9 +1,9 @@
 // file: web/src/components/dedup/__tests__/UnifiedDedupTab.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: d4e5f6a7-b8c9-0123-defa-444567890123
-// last-edited: 2026-06-17
+// last-edited: 2026-06-19
 
-import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import { UnifiedDedupTab } from '../UnifiedDedupTab';
@@ -136,7 +136,7 @@ describe('UnifiedDedupTab', () => {
     });
   });
 
-  it('shows bulk action bar when a candidate is selected', async () => {
+  it('shows bulk action bar when a candidate is selected via row click', async () => {
     (globalThis.fetch as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
       if (url.includes('/dedup/stats')) {
         return Promise.resolve({
@@ -153,21 +153,48 @@ describe('UnifiedDedupTab', () => {
 
     renderInRouter();
 
-    // Wait for the candidate's card to render.
     await waitFor(() => {
       expect(screen.getByText(bookATitle)).toBeInTheDocument();
     });
 
-    // Select the candidate by clicking ITS row checkbox. Scope the query to the
-    // row so it stays correct regardless of the toolbar filter checkbox and the
-    // table select-all checkbox (which a bare getAllByRole index would conflate).
+    // Checkboxes are hidden by default (behind the Multi-select toggle).
+    // Click the row itself — the new click-to-select behavior — to select it.
     const row = screen.getByText(bookATitle).closest('tr');
     expect(row).not.toBeNull();
-    fireEvent.click(within(row as HTMLElement).getByRole('checkbox'));
+    fireEvent.click(row as HTMLElement);
 
     await waitFor(() => {
       expect(screen.getByTestId('bulk-action-bar')).toBeInTheDocument();
     });
+  });
+
+  it('shows checkboxes when multi-select toggle is enabled', async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
+      if (url.includes('/dedup/stats')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ data: { stats: [] } }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve({ data: { candidates: [mockCandidate], total: 1 } }),
+      });
+    });
+
+    renderInRouter();
+
+    await waitFor(() => {
+      expect(screen.getByText(bookATitle)).toBeInTheDocument();
+    });
+
+    // Checkboxes are hidden by default.
+    expect(screen.queryByRole('checkbox')).toBeNull();
+
+    // Enable multi-select — checkboxes should appear.
+    fireEvent.click(screen.getByTestId('multi-select-toggle'));
+    expect(screen.getAllByRole('checkbox').length).toBeGreaterThan(0);
   });
 
   it('shows rescore dialog when rescore button clicked', async () => {
