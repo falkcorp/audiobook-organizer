@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.48.0 -->
+<!-- version: 3.49.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-19 -->
 
@@ -56,6 +56,12 @@ then summed those inflated values and clobbered the correct seconds-valued
   heartbeat instead of one-per-file): at library scale the prod dry-run found
   **175,061** ms-valued file durations, and a log/progress event per row would have
   flooded the activity store and dominated wall-clock for work that is otherwise cheap.
+- Rewrote the apply path to batch. The naive version called `UpdateBookFile` per
+  row, and each call fires a *synchronous* `RecomputeBookAggregates` — 175K book
+  re-sums, projecting to ~2.7 h. Phase 2a now writes corrected durations via
+  `BatchUpsertBookFiles` (no per-file recompute) in 1000-row commits; Phase 2b
+  recomputes each affected book's aggregate exactly once (~40K). File-detail logs
+  are time-batched (≤ one heartbeat per 15 s); progress stays continuous.
 
 ### Documentation
 
