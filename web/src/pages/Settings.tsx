@@ -1,7 +1,7 @@
 // file: web/src/pages/Settings.tsx
-// version: 1.46.0
+// version: 1.47.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-06-15
+// last-edited: 2026-06-19
 
 import { useState, useEffect, useMemo, useRef, ChangeEvent } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
@@ -1240,17 +1240,17 @@ export function Settings() {
         logFormat: config.log_format || 'text',
         enableJsonLogging: config.enable_json_logging ?? false,
 
-        // Auto-update
-        autoUpdateEnabled: config.auto_update_enabled ?? false,
-        autoUpdateChannel: config.auto_update_channel || 'stable',
-        autoUpdateCheckMinutes: config.auto_update_check_minutes || 60,
-        autoUpdateWindowStart: config.auto_update_window_start ?? 1,
-        autoUpdateWindowEnd: config.auto_update_window_end ?? 4,
+        // Auto-update (nested key preferred, flat fallback for compat)
+        autoUpdateEnabled: config.auto_update?.enabled ?? config.auto_update_enabled ?? false,
+        autoUpdateChannel: config.auto_update?.channel ?? config.auto_update_channel ?? 'stable',
+        autoUpdateCheckMinutes: config.auto_update?.check_minutes ?? config.auto_update_check_minutes ?? 60,
+        autoUpdateWindowStart: config.auto_update?.window_start ?? config.auto_update_window_start ?? 1,
+        autoUpdateWindowEnd: config.auto_update?.window_end ?? config.auto_update_window_end ?? 4,
 
-        // Maintenance window
-        maintenanceWindowEnabled: config.maintenance_window_enabled ?? false,
-        maintenanceWindowStart: config.maintenance_window_start ?? 2,
-        maintenanceWindowEnd: config.maintenance_window_end ?? 4,
+        // Maintenance window (nested key preferred, flat fallback for compat)
+        maintenanceWindowEnabled: config.maintenance?.enabled ?? config.maintenance_window_enabled ?? false,
+        maintenanceWindowStart: config.maintenance?.window_start ?? config.maintenance_window_start ?? 2,
+        maintenanceWindowEnd: config.maintenance?.window_end ?? config.maintenance_window_end ?? 4,
 
         // Smart apply pipeline
         pathFormat: config.path_format || '{author}/{series_prefix}{title}/{track_title}.{ext}',
@@ -1760,17 +1760,29 @@ export function Settings() {
         log_format: settings.logFormat,
         enable_json_logging: settings.enableJsonLogging,
 
-        // Auto-update
+        // Auto-update — flat keys for compat + nested preferred
         auto_update_enabled: settings.autoUpdateEnabled,
         auto_update_channel: settings.autoUpdateChannel,
         auto_update_check_minutes: settings.autoUpdateCheckMinutes,
         auto_update_window_start: settings.autoUpdateWindowStart,
         auto_update_window_end: settings.autoUpdateWindowEnd,
+        auto_update: {
+          enabled: settings.autoUpdateEnabled,
+          channel: settings.autoUpdateChannel,
+          check_minutes: settings.autoUpdateCheckMinutes,
+          window_start: settings.autoUpdateWindowStart,
+          window_end: settings.autoUpdateWindowEnd,
+        },
 
-        // Maintenance window
+        // Maintenance window — flat keys for compat + nested preferred
         maintenance_window_enabled: settings.maintenanceWindowEnabled,
         maintenance_window_start: settings.maintenanceWindowStart,
         maintenance_window_end: settings.maintenanceWindowEnd,
+        maintenance: {
+          enabled: settings.maintenanceWindowEnabled,
+          window_start: settings.maintenanceWindowStart,
+          window_end: settings.maintenanceWindowEnd,
+        } as api.MaintenanceConfig,
 
         // Smart apply pipeline
         path_format: settings.pathFormat,
