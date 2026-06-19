@@ -1,5 +1,5 @@
 // file: web/src/components/settings/AutoUpdateSection.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: f8e2d4c6-b3a1-4f7e-9c2d-5a8b6e3f1d90
 // last-edited: 2026-06-19
 
@@ -22,6 +22,7 @@ import {
   DialogActions,
 } from '@mui/material';
 import * as api from '../../services/api';
+import type { SettingsState } from '../../pages/Settings';
 
 interface AutoUpdateSectionProps {
   settings: {
@@ -31,7 +32,7 @@ interface AutoUpdateSectionProps {
     autoUpdateWindowStart: number;
     autoUpdateWindowEnd: number;
   };
-  setSettings: React.Dispatch<React.SetStateAction<any>>;
+  setSettings: React.Dispatch<React.SetStateAction<SettingsState>>;
 }
 
 export function AutoUpdateSection({ settings, setSettings }: AutoUpdateSectionProps) {
@@ -101,7 +102,7 @@ export function AutoUpdateSection({ settings, setSettings }: AutoUpdateSectionPr
               <Switch
                 checked={settings.autoUpdateEnabled}
                 onChange={(e) =>
-                  setSettings((prev: any) => ({
+                  setSettings((prev) => ({
                     ...prev,
                     autoUpdateEnabled: e.target.checked,
                   }))
@@ -119,7 +120,7 @@ export function AutoUpdateSection({ settings, setSettings }: AutoUpdateSectionPr
             label="Update channel"
             value={settings.autoUpdateChannel}
             onChange={(e) =>
-              setSettings((prev: any) => ({
+              setSettings((prev) => ({
                 ...prev,
                 autoUpdateChannel: e.target.value,
               }))
@@ -138,7 +139,7 @@ export function AutoUpdateSection({ settings, setSettings }: AutoUpdateSectionPr
             label="Check interval (minutes)"
             value={settings.autoUpdateCheckMinutes}
             onChange={(e) =>
-              setSettings((prev: any) => ({
+              setSettings((prev) => ({
                 ...prev,
                 autoUpdateCheckMinutes: parseInt(e.target.value) || 60,
               }))
@@ -155,7 +156,7 @@ export function AutoUpdateSection({ settings, setSettings }: AutoUpdateSectionPr
             label="Update window start"
             value={settings.autoUpdateWindowStart}
             onChange={(e) =>
-              setSettings((prev: any) => ({
+              setSettings((prev) => ({
                 ...prev,
                 autoUpdateWindowStart: parseInt(e.target.value),
               }))
@@ -177,7 +178,7 @@ export function AutoUpdateSection({ settings, setSettings }: AutoUpdateSectionPr
             label="Update window end"
             value={settings.autoUpdateWindowEnd}
             onChange={(e) =>
-              setSettings((prev: any) => ({
+              setSettings((prev) => ({
                 ...prev,
                 autoUpdateWindowEnd: parseInt(e.target.value),
               }))
