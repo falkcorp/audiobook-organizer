@@ -59,6 +59,16 @@ pass), and validates the user-supplied path against configured import paths
 `PerformScan` (WalkDir handles a directory or a single file), so it goes through the same
 assembly + dedup + create pipeline. Trigger via `POST /operations/v2`
 `{"def_id":"library.import","params":{"path":"…"}}`.
+#### June 19, 2026 — C6: Gold Labels review UI (dedup feedback loop)
+
+The gold dataset is now reviewable in the UI. New **Gold Labels** page (`/dedup/labels`,
+sidebar entry) lists labeled dedup examples (the `dedup:label:` keyspace) filterable by
+label and `label_source`, with dataset-composition chips and one-click **human override**
+(sets `label_source=human`, which is gold and takes precedence).
+
+Backend: `GET /api/v1/dedup/labels` (filter + paginate), `GET /api/v1/dedup/labels/stats`
+(counts by label + source), `POST /api/v1/dedup/labels/:id/override`
+(`internal/server/handlers/dedup/label_review.go`). Tested in `label_review_test.go`.
 
 
 #### June 18, 2026 — Dedup feedback loop: in-house gold miner (`dedup.mine-gold-labels`)

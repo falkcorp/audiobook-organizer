@@ -46,6 +46,7 @@ const FileBrowser = lazy(() =>
 const BookDedup = lazy(() =>
   import('./pages/BookDedup').then((m) => ({ default: m.BookDedup }))
 );
+const DedupLabels = lazy(() => import('./pages/DedupLabels'));
 const Series = lazy(() =>
   import('./pages/Series').then((m) => ({ default: m.Series }))
 );
@@ -236,6 +237,7 @@ function App() {
               <Route path="/authors/dedup" element={<Navigate to="/dedup" replace />} />
               <Route path="/books/dedup" element={<Navigate to="/dedup" replace />} />
               <Route path="/dedup" element={<ErrorBoundary><BookDedup /></ErrorBoundary>} />
+              <Route path="/dedup/labels" element={<ErrorBoundary><DedupLabels /></ErrorBoundary>} />
               <Route path="/series" element={<ErrorBoundary><Series /></ErrorBoundary>} />
               <Route path="/authors" element={<ErrorBoundary><Authors /></ErrorBoundary>} />
               <Route path="/diagnostics" element={<ErrorBoundary><Diagnostics /></ErrorBoundary>} />

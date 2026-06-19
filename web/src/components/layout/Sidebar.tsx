@@ -60,6 +60,7 @@ const menuItems = [
   { text: 'Playlists', icon: <MenuBookIcon />, path: '/playlists' },
   { text: 'Activity', icon: <TimelineIcon />, path: '/activity' },
   { text: 'Dedup', icon: <MergeTypeIcon />, path: '/dedup' },
+  { text: 'Gold Labels', icon: <LibraryBooksIcon />, path: '/dedup/labels' },
   { text: 'Diagnostics', icon: <BugReportIcon />, path: '/diagnostics' },
   { text: 'System', icon: <MonitorIcon />, path: '/system' },
   { text: 'Users', icon: <PeopleIcon />, path: '/users' },
