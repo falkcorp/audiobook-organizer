@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.0.0 -->
+<!-- version: 9.1.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-06-19 -->
 
@@ -25,6 +25,28 @@ future agent) can scan the entire workspace in one page.
 **Production:** PebbleDB primary; Linux, HTTPS at prod server; stable
 **Latest activity:** Dedup UX overhaul (PR #1507): book covers, inline badges, zebra rows, click-to-select + shift-click, localStorage page-size, multi-select toggle, activity log auto-pause on expand. Fingerprint visual (PR #1506): chromaprint bit-matrix in candidate drawer.
 **In flight:** CFG-2 Phases A/B/C/E shipped PR #1514 (2026-06-19); Phase D (retire flat shim) open. Burndown bot dispatching test coverage tasks. EMB-UI-1 (Ollama download link) still open.
+
+---
+
+## 🔀 Consolidated Session Work Queue (2026-06-19)
+
+> Three parallel Claude sessions (`refactor-score-badge-chip`, `fix-scanner-part-book-dedup`,
+> `dedup-ux`) were merged into one to stop conflicts. Full handoff:
+> `~/repos/temp/session-status-CONSOLIDATED-HANDOFF.md`. Ordered burn-down list:
+
+- [ ] **CONS-1** Merge **PR #1515** (`feat/path-abbrev`, Track A — path abbreviation `$(libroot)`/`$(books)`). Re-rebase onto `origin/main` (42d87ce7); resolve `UnifiedDedupTab.test.tsx` conflict by taking main's #1517 version (drop local `fc77a300` test change). Push, CI, ship.
+- [ ] **CONS-2** Merge **Track B** (`feat/gold-labels-controls`) — 3-way `LabelToggle` (Dup/Unsure/Not), clickable rows, abbreviated paths in `DedupLabels.tsx`. After CONS-1: rebase, drop duplicate path-abbrev commits, keep only `af2d3313`, ship.
+- [ ] **CONS-3** Verify + merge stale fix branches if not already in main: `fix/1337-cleanup`, `fix/memory-leak-token`, `fix/triage-poll-org-ref`, `fix/hnsw-elevator-nil-deref` (check `git log origin/main | grep hnsw` first).
+- [ ] **CONS-4** **BookDedup.tsx row redesign** (dedup-ux task, 0 code written) — apply `renderBookCard` pattern (cover tall-left `alignSelf:'stretch'` w56 h100%, quality chip inline after title, larger title, remove bottom chip whitespace) to `renderBookSide` (~line 1057) in the 2907-line `web/src/pages/BookDedup.tsx`.
+- [ ] **CONS-5** = **DEDUP-FOLDER-1** (see Dedup UX section) — folder/file-count chip + lazy `getBookFiles` popover in `UnifiedDedupTab.tsx`.
+- [ ] **CONS-6** **Track C** — metadata-compare tab in `CandidateCompareDrawer.tsx` (alongside Fingerprint tab): series/narrator/parts/duration/size/which-signal-fired, from `GET /api/v1/dedup/candidates/:id/breakdown`.
+- [ ] **CONS-7** = **DEDUP-KB-1** (see Dedup UX section) — keyboard shortcuts.
+- [ ] **CONS-8** **Track D2** — scanner `groupFilesIntoBooks` (`internal/scanner/scanner.go`): group chapter-part files (`N/M` / disc-number patterns) into one book instead of importing each as a separate book (root cause of part-vs-full-book candidates).
+- [ ] **CONS-9** **Track D1** — `dedup.quarantine-chapter-artifacts` op misses unscanned (Duration=0) idents ("Opening Credits"/"Big Finish Ident"); dry-run finds only ~53. Fix selection predicate. **DRY-RUN ONLY; show list before apply.**
+- [ ] **CONS-10** **Track D3** — drain ~356K stale exact chapter-part candidates (run fixed quarantine op after D1/D2).
+- [ ] **CONS-11** **Track D4** — manual-import UI button (op `library.import` already merged/deployed; no frontend yet).
+- [ ] **CONS-12** = **DEDUP-INTRO-1** (see Dedup UX section) — Audible intro/outro false-positive dedup candidates.
+- [ ] **CONS-13** = **CFG-2 Phase D** — retire flat-key compat shim in `internal/server/update_service.go` (low priority; after 1+ wk prod stability).
 
 ---
 
