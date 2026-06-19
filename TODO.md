@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.2.0 -->
+<!-- version: 9.3.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-06-19 -->
 
@@ -38,7 +38,7 @@ future agent) can scan the entire workspace in one page.
 - [ ] **CONS-2** Merge **Track B** (`feat/gold-labels-controls`) — 3-way `LabelToggle` (Dup/Unsure/Not), clickable rows, abbreviated paths in `DedupLabels.tsx`. After CONS-1: rebase, drop duplicate path-abbrev commits, keep only `af2d3313`, ship.
 - [ ] **CONS-3** Verify + merge stale fix branches if not already in main: `fix/1337-cleanup`, `fix/memory-leak-token`, `fix/triage-poll-org-ref`, `fix/hnsw-elevator-nil-deref` (check `git log origin/main | grep hnsw` first).
 - [ ] **CONS-4** **BookDedup.tsx row redesign** (dedup-ux task, 0 code written) — apply `renderBookCard` pattern (cover tall-left `alignSelf:'stretch'` w56 h100%, quality chip inline after title, larger title, remove bottom chip whitespace) to `renderBookSide` (~line 1057) in the 2907-line `web/src/pages/BookDedup.tsx`.
-- [ ] **CONS-5** = **DEDUP-FOLDER-1** (see Dedup UX section) — folder/file-count chip + lazy `getBookFiles` popover in `UnifiedDedupTab.tsx`.
+- [x] **CONS-5** = **DEDUP-FOLDER-1** — ✅ `FolderFilesChip` (lazy popover w/ file list, count, format/size/duration) wired into `UnifiedDedupTab` cards.
 - [ ] **CONS-6** **Track C** — metadata-compare tab in `CandidateCompareDrawer.tsx` (alongside Fingerprint tab): series/narrator/parts/duration/size/which-signal-fired, from `GET /api/v1/dedup/candidates/:id/breakdown`.
 - [ ] **CONS-7** = **DEDUP-KB-1** (see Dedup UX section) — keyboard shortcuts.
 - [x] **CONS-8** **Track D2** — ✅ code complete. Real root cause was iTunes import, NOT the scanner: `groupTracksByAlbum` empty-album fallback keyed per-chapter track name. Added `titleutil.StripChapterSuffix` to collapse trailing part markers (`Title – 11/23`) so chapter parts group into one book; `Book.Title` cleaned too. (`scanner.go groupFilesIntoBooks` was a red herring — only the FS walk uses it and its multi-file detection is already correct.)
