@@ -18,6 +18,13 @@ no-ops while `mem()==nil`), then warmup published a memdb missing those rows —
 as order-dependent `TestPebbleGetAllAuthors`-class flakes ("Expected 3 authors, got 2")
 under the full `-race` suite, repeatedly blocking unrelated PRs. Verified: the flaky test
 is green over `-race -count=40`; full `internal/database -short -race` green.
+#### June 19, 2026 — quarantine-chapter-artifacts: also catch UNSCANNED idents
+
+The first version required positive duration, but the dominant offenders ("Opening
+Credits", "Big Finish Ident") are UNSCANNED mp3 segments (duration=0) — so a prod dry-run
+found only 53 books. Now unscanned single-file books are caught when their title collides
+with >= MinTitleCollisionsUnscanned (default 10, a higher bar than the scanned-short
+threshold of 5). Long single files are still never touched. Dry-run by default.
 
 
 #### June 19, 2026 — dedup.quarantine-chapter-artifacts: drain chapter-file-as-book candidates

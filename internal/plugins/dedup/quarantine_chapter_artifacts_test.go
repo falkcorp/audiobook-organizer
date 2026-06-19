@@ -85,3 +85,35 @@ func TestQuarantineChapterArtifacts(t *testing.T) {
 		t.Error("unique-title book must NOT be quarantined")
 	}
 }
+
+// TestQuarantineChapterArtifacts_UnscannedIdents: unscanned (duration=0) segments
+// like "Big Finish Ident" are the dominant offenders. They are caught only when the
+// title collides with >= MinTitleCollisionsUnscanned (10) books; fewer unscanned
+// copies of a genuine book are left alone.
+func TestQuarantineChapterArtifacts_UnscannedIdents(t *testing.T) {
+	pebble := newPebbleForISBNIndexTest(t)
+	p := &Plugin{store: pebble}
+
+	var identIDs []string
+	for i := 0; i < 10; i++ { // 10 unscanned "Big Finish Ident" → over the unscanned bar
+		identIDs = append(identIDs, mkBook(t, pebble, "Big Finish Ident", i, 0))
+	}
+	var nicheIDs []string
+	for i := 0; i < 5; i++ { // 5 unscanned "Niche Title" → under the unscanned bar (10)
+		nicheIDs = append(nicheIDs, mkBook(t, pebble, "Niche Title", i, 0))
+	}
+
+	if err := p.runQuarantineChapterArtifacts(context.Background(), json.RawMessage(`{"apply":true}`), &fakeReporter{}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	for _, id := range identIDs {
+		if !isMarkedDeleted(t, pebble, id) {
+			t.Errorf("expected unscanned ident %s (10 collisions) to be quarantined", id)
+		}
+	}
+	for _, id := range nicheIDs {
+		if isMarkedDeleted(t, pebble, id) {
+			t.Errorf("5 unscanned copies (< 10) must NOT be quarantined: %s", id)
+		}
+	}
+}

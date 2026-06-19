@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/quarantine_chapter_artifacts.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1d7a4f92-3c60-4e85-9b21-6a5e8c0d3f47
 // last-edited: 2026-06-19
 
@@ -15,8 +15,10 @@
 //   - its normalized title is shared by >= MinTitleCollisions OTHER books
 //     (a real book title is not held by 5+ books; "Opening Credits" is held by many);
 //   - it is a SINGLE-file book (not a multi-file audiobook);
-//   - that single file's duration is positive and below MaxDurationSec
-//     (a genuine short story is not also title-colliding with 5+ books).
+//   - and either its single file is short (0 < duration < MaxDurationSec), OR it is
+//     UNSCANNED (duration unknown — most idents/credits are) AND the title collides
+//     with >= MinTitleCollisionsUnscanned books (a higher bar, since duration can't
+//     confirm it's a segment). Long single files are never touched.
 //
 // Action is SOFT-delete (MarkedForDeletion) — recoverable, not a hard delete.
 // Dry-run by default: reports what it WOULD quarantine and writes nothing.
@@ -35,8 +37,13 @@ import (
 
 type quarantineChapterParams struct {
 	Apply              bool `json:"apply"`
-	MinTitleCollisions int  `json:"min_title_collisions,omitempty"` // default 5
+	MinTitleCollisions int  `json:"min_title_collisions,omitempty"` // default 5 (scanned short books)
 	MaxDurationSec     int  `json:"max_duration_sec,omitempty"`     // default 1200 (20 min)
+	// MinTitleCollisionsUnscanned is the (higher) collision bar for UNSCANNED
+	// single-file books (duration unknown). Most chapter idents/credits are
+	// unscanned mp3 segments, so they MUST be reachable — but a higher bar avoids
+	// quarantining a few unscanned copies of a genuine book. Default 10.
+	MinTitleCollisionsUnscanned int `json:"min_title_collisions_unscanned,omitempty"`
 }
 
 func (p *Plugin) quarantineChapterArtifactsDef() sdk.OperationDef {
@@ -60,7 +67,7 @@ func (p *Plugin) runQuarantineChapterArtifacts(ctx context.Context, rawParams js
 	if p.store == nil {
 		return fmt.Errorf("main store not available")
 	}
-	params := quarantineChapterParams{MinTitleCollisions: 5, MaxDurationSec: 1200}
+	params := quarantineChapterParams{MinTitleCollisions: 5, MaxDurationSec: 1200, MinTitleCollisionsUnscanned: 10}
 	if len(rawParams) > 0 {
 		if err := json.Unmarshal(rawParams, &params); err != nil {
 			return fmt.Errorf("parse params: %w", err)
@@ -71,6 +78,12 @@ func (p *Plugin) runQuarantineChapterArtifacts(ctx context.Context, rawParams js
 	}
 	if params.MaxDurationSec <= 0 {
 		params.MaxDurationSec = 1200
+	}
+	if params.MinTitleCollisionsUnscanned < params.MinTitleCollisions {
+		params.MinTitleCollisionsUnscanned = params.MinTitleCollisions
+		if params.MinTitleCollisionsUnscanned < 10 {
+			params.MinTitleCollisionsUnscanned = 10
+		}
 	}
 	reporter.Logger().Info("quarantine-chapter-artifacts start",
 		"apply", params.Apply, "min_collisions", params.MinTitleCollisions, "max_duration_sec", params.MaxDurationSec)
@@ -131,8 +144,18 @@ func (p *Plugin) runQuarantineChapterArtifacts(ctx context.Context, rawParams js
 		if dur <= 0 {
 			dur = float64(files[0].Duration)
 		}
-		if dur <= 0 || dur >= float64(params.MaxDurationSec) {
-			continue // unscanned or long — leave it alone (conservative)
+		switch {
+		case dur >= float64(params.MaxDurationSec):
+			continue // long — a real audiobook, never an artifact
+		case dur > 0:
+			// Scanned + short: the ≥ MinTitleCollisions gate above is enough.
+		default:
+			// Unscanned (duration unknown — most idents/credits are unscanned mp3
+			// segments). Require the higher collision bar so we don't quarantine a
+			// few unscanned copies of a genuine book.
+			if titleCount[norm] < params.MinTitleCollisionsUnscanned {
+				continue
+			}
 		}
 		artifacts = append(artifacts, artifact{ID: b.ID, Title: b.Title})
 		sampleByTitle[b.Title]++
