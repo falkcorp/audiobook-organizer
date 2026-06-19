@@ -1,11 +1,34 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.45.0 -->
+<!-- version: 3.46.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-19 -->
 
 # Changelog
 
 ## [Unreleased]
+
+### Fixed
+
+#### June 19, 2026 — iTunes per-file durations stored in milliseconds (CONS-16)
+
+The iTunes *service* importer wrote per-file `BookFile.Duration` in milliseconds
+(`int(track.TotalTime)`) instead of seconds at three sites. `RecomputeBookAggregates`
+then summed those inflated values and clobbered the correct seconds-valued
+`Book.Duration`, mislabeling real multi-file books as exact dedup candidates.
+
+- Extracted `trackDurationSeconds()` in `internal/itunes/service/importer.go` and
+  routed all three write sites (importer lines ~311/655/703) through it, matching the
+  already-correct `import.go:374` and `track_provisioner.go:138` conventions. Added a
+  `trackDurationSeconds` unit test plus a seconds assertion in the integration test
+  (the scaffolding previously mirrored the bug).
+- New dry-run-gated maintenance op `maintenance.duration-backfill` heals existing
+  inflated rows. Detection uses an **implied-bitrate** test (a duration is millis if,
+  read as seconds, it implies a bitrate below 4 kbps, with an upper sanity bound) —
+  this needs only `FileSize` (the buggy iTunes rows have `BitrateKbps=0`, so the
+  originally-planned filesize/bitrate formula was unusable) and never flags a genuine
+  low-bitrate audiobook. Per book it corrects each file then re-runs
+  `RecomputeBookAggregates`. Dry-run is the default; no prod data is touched until an
+  operator runs it with `dryRun=false`.
 
 ### Documentation
 

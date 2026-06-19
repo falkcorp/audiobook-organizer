@@ -1,6 +1,7 @@
 // file: internal/itunes/service/importer.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
+// last-edited: 2026-06-19
 
 package itunesservice
 
@@ -65,6 +66,15 @@ func CheckITLConflict(itlPath string) error {
 type albumGroup struct {
 	key    string
 	tracks []*itunes.Track
+}
+
+// trackDurationSeconds converts an iTunes track's TotalTime (milliseconds) to the
+// seconds unit used by BookFile.Duration everywhere else in the codebase (see
+// track_provisioner.go: `bookFile.Duration * 1000 // seconds to ms`). CONS-16:
+// storing the raw ms value here let RecomputeBookAggregates sum inflated per-file
+// durations and clobber the correct seconds-valued Book.Duration.
+func trackDurationSeconds(t *itunes.Track) int {
+	return int(t.TotalTime / 1000)
 }
 
 // Importer runs the iTunes import pipeline and incremental sync.
@@ -299,7 +309,7 @@ func (imp *Importer) Execute(ctx context.Context, opID string, req ImportRequest
 					ITunesPersistentID: track.PersistentID,
 					Format:             trackFormat,
 					FileSize:           track.Size,
-					Duration:           int(track.TotalTime),
+					Duration:           trackDurationSeconds(track),
 					TrackNumber:        track.TrackNumber,
 					TrackCount:         totalTracks,
 				}
@@ -643,7 +653,7 @@ func (imp *Importer) Sync(ctx context.Context, libraryPath string, pathMappings 
 					DiscCount:          track.DiscCount,
 					Title:              track.Name,
 					Format:             strings.TrimPrefix(filepath.Ext(decodedPath), "."),
-					Duration:           int(track.TotalTime),
+					Duration:           trackDurationSeconds(track),
 					FileSize:           track.Size,
 				})
 			}
@@ -691,7 +701,7 @@ func (imp *Importer) Sync(ctx context.Context, libraryPath string, pathMappings 
 						DiscCount:          track.DiscCount,
 						Title:              track.Name,
 						Format:             strings.TrimPrefix(filepath.Ext(decodedPath), "."),
-						Duration:           int(track.TotalTime),
+						Duration:           trackDurationSeconds(track),
 						FileSize:           track.Size,
 					})
 				}
