@@ -1,5 +1,5 @@
 // file: internal/titleutil/strip.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7e2a1b3c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
 
 // Package titleutil provides shared helpers for normalising book titles.
@@ -50,6 +50,46 @@ func StripChapterPrefix(title string) string {
 	for _, re := range chapterPrefixPatterns {
 		if loc := re.FindStringIndex(s); loc != nil && loc[0] == 0 {
 			s = strings.TrimSpace(s[loc[1]:])
+			break
+		}
+	}
+	return s
+}
+
+// chapterSuffixPatterns matches a TRAILING part marker on an iTunes per-chapter
+// track Name, e.g. the reported "At All Costs – 11/23". Order matters — most
+// specific first. Each pattern is anchored at the end of the string.
+//
+// Every pattern requires an explicit N/M shape (two numbers, or "(N of M)"),
+// so a title ending in a lone number ("Catch 22", "1984") is left untouched.
+//
+//	"At All Costs – 11/23"   → "At All Costs"
+//	"At All Costs (11 of 23)"→ "At All Costs"
+//	"At All Costs 11/23"     → "At All Costs"
+var chapterSuffixPatterns = []*regexp.Regexp{
+	// Trailing "(11/23)" / "(11 of 23)" / "(1-2)" / "(1_2)"
+	regexp.MustCompile(`\s*\(\s*\d{1,4}\s*(?:of|[\s_\-/])\s*\d{1,4}\s*\)$`),
+	// Trailing delimiter then fraction: " – 11/23" / " - 13/23" / " : 1/23"
+	regexp.MustCompile(`\s*[-–—:]\s*\d{1,4}\s*/\s*\d{1,4}$`),
+	// Trailing "11 of 23"
+	regexp.MustCompile(`(?i)\s+\d{1,4}\s+of\s+\d{1,4}$`),
+	// Trailing bare fraction "11/23"
+	regexp.MustCompile(`\s+\d{1,4}\s*/\s*\d{1,4}$`),
+}
+
+// StripChapterSuffix removes a trailing part/chapter marker ("– 11/23",
+// "(11 of 23)", "11/23") from a book title. It exists so that iTunes
+// per-chapter track names with a TRAILING marker collapse to a single album
+// key (StripChapterPrefix only handles leading markers). Idempotent; only
+// strips an explicit N-of-M shape, so lone trailing numbers are preserved.
+func StripChapterSuffix(title string) string {
+	s := strings.TrimSpace(title)
+	if s == "" {
+		return s
+	}
+	for _, re := range chapterSuffixPatterns {
+		if loc := re.FindStringIndex(s); loc != nil && loc[1] == len(s) {
+			s = strings.TrimSpace(s[:loc[0]])
 			break
 		}
 	}

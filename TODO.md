@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.1.0 -->
+<!-- version: 9.2.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-06-19 -->
 
@@ -41,7 +41,7 @@ future agent) can scan the entire workspace in one page.
 - [ ] **CONS-5** = **DEDUP-FOLDER-1** (see Dedup UX section) — folder/file-count chip + lazy `getBookFiles` popover in `UnifiedDedupTab.tsx`.
 - [ ] **CONS-6** **Track C** — metadata-compare tab in `CandidateCompareDrawer.tsx` (alongside Fingerprint tab): series/narrator/parts/duration/size/which-signal-fired, from `GET /api/v1/dedup/candidates/:id/breakdown`.
 - [ ] **CONS-7** = **DEDUP-KB-1** (see Dedup UX section) — keyboard shortcuts.
-- [ ] **CONS-8** **Track D2** — scanner `groupFilesIntoBooks` (`internal/scanner/scanner.go`): group chapter-part files (`N/M` / disc-number patterns) into one book instead of importing each as a separate book (root cause of part-vs-full-book candidates).
+- [x] **CONS-8** **Track D2** — ✅ code complete. Real root cause was iTunes import, NOT the scanner: `groupTracksByAlbum` empty-album fallback keyed per-chapter track name. Added `titleutil.StripChapterSuffix` to collapse trailing part markers (`Title – 11/23`) so chapter parts group into one book; `Book.Title` cleaned too. (`scanner.go groupFilesIntoBooks` was a red herring — only the FS walk uses it and its multi-file detection is already correct.)
 - [ ] **CONS-9** **Track D1** — `dedup.quarantine-chapter-artifacts` op misses unscanned (Duration=0) idents ("Opening Credits"/"Big Finish Ident"); dry-run finds only ~53. Fix selection predicate. **DRY-RUN ONLY; show list before apply.**
 - [ ] **CONS-10** **Track D3** — drain ~356K stale exact chapter-part candidates (run fixed quarantine op after D1/D2).
 - [ ] **CONS-11** **Track D4** — manual-import UI button (op `library.import` already merged/deployed; no frontend yet).

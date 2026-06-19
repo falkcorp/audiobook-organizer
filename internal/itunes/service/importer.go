@@ -865,8 +865,12 @@ func (imp *Importer) groupTracksByAlbum(library *itunes.Library) []albumGroup {
 		artist := strings.TrimSpace(track.Artist)
 		album := strings.TrimSpace(track.Album)
 		if album == "" {
+			// No album tag: derive a stable grouping key from the track name.
+			// Strip both a leading marker ("(76/85) Title", "Chapter 03 - Title")
+			// AND a trailing one ("Title – 11/23") so every chapter part of the
+			// same book collapses into one group instead of one book per part.
 			trackName := strings.TrimSpace(track.Name)
-			stripped := stripChapterPrefix(trackName)
+			stripped := stripChapterSuffix(stripChapterPrefix(trackName))
 			if stripped != "" {
 				album = stripped
 			} else {
@@ -1118,10 +1122,11 @@ func (imp *Importer) buildBookFromAlbumGroup(group albumGroup, libraryPath strin
 	if title == "" {
 		// Album tag was empty/missing — falling back to the per-chapter track
 		// Name. iTunes audiobook tracks frequently have Names shaped like
-		// "(76/85) Tarkin: Star Wars (Unabridged)" — strip the chapter prefix
-		// so Book.Title doesn't carry a chapter number.
+		// "(76/85) Tarkin: Star Wars (Unabridged)" or "At All Costs – 11/23" —
+		// strip both leading and trailing chapter markers so Book.Title doesn't
+		// carry a chapter number.
 		// See docs/perf-audit-2026-05-29-g5-title-mismatch.md (MAYDEPLOY-G5a).
-		title = stripChapterPrefix(strings.TrimSpace(firstTrack.Name))
+		title = stripChapterSuffix(stripChapterPrefix(strings.TrimSpace(firstTrack.Name)))
 	}
 	if title == "" {
 		title = strings.TrimSuffix(filepath.Base(filePath), filepath.Ext(filePath))

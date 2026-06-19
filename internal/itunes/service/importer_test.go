@@ -235,6 +235,33 @@ func TestGroupTracksByAlbum(t *testing.T) {
 	}
 }
 
+// TestGroupTracksByAlbum_EmptyAlbumChapterParts verifies that iTunes tracks with
+// NO album tag whose names carry a trailing part marker ("At All Costs – 11/23")
+// collapse into a single book group, rather than one book per chapter part.
+// This is the root cause of the part-vs-full-book dedup candidate explosion.
+func TestGroupTracksByAlbum_EmptyAlbumChapterParts(t *testing.T) {
+	library := &itunes.Library{
+		Tracks: map[string]*itunes.Track{
+			"1": {TrackID: 1, Name: "At All Costs – 11/23", Artist: "David Weber", Album: "", Kind: "Audiobook", TrackNumber: 11, DiscNumber: 1},
+			"2": {TrackID: 2, Name: "At All Costs – 13/23", Artist: "David Weber", Album: "", Kind: "Audiobook", TrackNumber: 13, DiscNumber: 1},
+			"3": {TrackID: 3, Name: "At All Costs – 23/23", Artist: "David Weber", Album: "", Kind: "Audiobook", TrackNumber: 23, DiscNumber: 1},
+		},
+	}
+
+	imp := newTestImporter()
+	groups := imp.groupTracksByAlbum(library)
+
+	if len(groups) != 1 {
+		t.Fatalf("expected 1 group (all chapter parts collapsed), got %d: %+v", len(groups), groups)
+	}
+	if groups[0].key != "David Weber|At All Costs" {
+		t.Errorf("group key = %q, want %q", groups[0].key, "David Weber|At All Costs")
+	}
+	if len(groups[0].tracks) != 3 {
+		t.Errorf("expected 3 tracks in the collapsed group, got %d", len(groups[0].tracks))
+	}
+}
+
 // TestGroupTracksByAlbum_MultiTrackBooks tests grouping with multi-track test data.
 func TestGroupTracksByAlbum_MultiTrackBooks(t *testing.T) {
 	library := &itunes.Library{
