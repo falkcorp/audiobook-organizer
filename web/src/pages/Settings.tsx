@@ -1,5 +1,5 @@
 // file: web/src/pages/Settings.tsx
-// version: 1.52.0
+// version: 1.53.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
 // last-edited: 2026-06-19
 
@@ -107,7 +107,7 @@ interface UiMetadataSource {
   credentials: { [key: string]: string };
 }
 
-interface SettingsState {
+export interface SettingsState {
   libraryPath: string;
   organizationStrategy: string;
   scanOnStartup: boolean;
