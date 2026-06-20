@@ -1,5 +1,5 @@
 // file: internal/metadata/metadata.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 9d0e1f2a-3b4c-5d6e-7f8a-9b0c1d2e3f4a
 
 package metadata
@@ -46,6 +46,16 @@ type Metadata struct {
 	SeriesIndex  int
 	Comments     string
 	Year         int
+	// Track / disc position within a multi-file album. Captured so the scanner can
+	// order chapters and group by album instead of by folder (the shattering bug).
+	TrackNumber int
+	TrackTotal  int
+	DiscNumber  int
+	DiscTotal   int
+	// Grouping is the iTunes "Grouping" field (ID3 TIT1/GRP1, MP4 ©grp). It is the
+	// authoritative box-set/anthology divider: a single Album that contains multiple
+	// books carries a distinct Grouping per book. Kept distinct from Series.
+	Grouping string
 	// Extended fields (best-effort; may be empty)
 	Narrator  string
 	Language  string
@@ -302,6 +312,28 @@ func BuildMetadataFromTag(m tag.Metadata, filePath string, metaLog logger.Logger
 		setFieldSource(fieldSources, "year", yearSource)
 	}
 
+	// Track / disc position — the dhowden tag interface exposes these directly;
+	// fall back to raw frames for parsers that don't. Both "N" and "N/Total"
+	// forms are handled by parseSlashPair.
+	metadata.TrackNumber, metadata.TrackTotal = m.Track()
+	if metadata.TrackNumber == 0 {
+		if n, total := parseSlashPair(getRawString(raw, "TRCK", "trkn", "track", "tracknumber", "TRACKNUMBER")); n != 0 {
+			metadata.TrackNumber, metadata.TrackTotal = n, total
+		}
+	}
+	metadata.DiscNumber, metadata.DiscTotal = m.Disc()
+	if metadata.DiscNumber == 0 {
+		if n, total := parseSlashPair(getRawString(raw, "TPOS", "disk", "disc", "discnumber", "DISCNUMBER")); n != 0 {
+			metadata.DiscNumber, metadata.DiscTotal = n, total
+		}
+	}
+	if metadata.TrackNumber != 0 {
+		setFieldSource(fieldSources, "track", "tag.Track")
+	}
+
+	// Grouping (box-set/anthology divider): ID3 TIT1/GRP1, MP4 ©grp.
+	metadata.Grouping = cleanTagValue(getRawString(raw, "TIT1", "GRP1", "©grp", "\xa9grp", "grouping", "GROUPING"))
+
 	seriesValue, seriesSource := pickFirstNonEmpty(
 		fieldCandidate{value: getRawString(raw, "TXXX:SERIES", "SERIES", "SERIES_NAME", "SERIESNAME", "MVNM", "GRP1", "TGID", "©grp", "\xa9grp"), source: "raw.series"},
 	)
@@ -484,6 +516,27 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// parseSlashPair parses an iTunes/ID3 track-or-disc value of the form "N" or
+// "N/Total" (e.g. "15", "15/47") into (number, total). Returns (0, 0) when the
+// leading component is not a positive integer.
+func parseSlashPair(s string) (number, total int) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, 0
+	}
+	parts := strings.SplitN(s, "/", 2)
+	n, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+	if err != nil || n <= 0 {
+		return 0, 0
+	}
+	if len(parts) == 2 {
+		if t, err := strconv.Atoi(strings.TrimSpace(parts[1])); err == nil && t > 0 {
+			total = t
+		}
+	}
+	return n, total
 }
 
 func getRawString(raw map[string]interface{}, keys ...string) string {

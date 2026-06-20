@@ -79,6 +79,9 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		// --- iTunes re-group heal (CONS-FRAG) ---
 		p.itunesRegroupDef(),
 
+		// --- filesystem shattered-book heal (tag-anchored) ---
+		p.fsRegroupXMLDef(),
+
 		// --- one-shot startup backfills ---
 		p.externalIDBackfillDef(),
 		p.movementAtomCleanupDef(),
