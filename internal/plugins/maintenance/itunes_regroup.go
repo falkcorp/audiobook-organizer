@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_regroup.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-06-20
 
@@ -85,7 +85,7 @@ func (p *Plugin) runITunesRegroup(ctx context.Context, raw json.RawMessage, repo
 	groups := itunesservice.GroupLibraryForHeal(lib)
 
 	_ = reporter.UpdateProgress(1, 4, fmt.Sprintf("Phase 2/4: snapshotting DB for %d target groups…", len(groups)))
-	snap, err := p.buildRegroupSnapshot(ctx, store, groups, reporter)
+	snap, err := p.buildRegroupSnapshot(ctx, store, reporter)
 	if err != nil {
 		return err
 	}
@@ -114,84 +114,87 @@ func (p *Plugin) runITunesRegroup(ctx context.Context, raw json.RawMessage, repo
 	return nil
 }
 
-// buildRegroupSnapshot reads the immutable DB state the planner reasons over:
-// the current location of every group PID, and metadata for each book holding
-// them (including version-group entanglement). No mutation.
-func (p *Plugin) buildRegroupSnapshot(ctx context.Context, store database.Store, groups []itunesservice.HealGroup, reporter sdk.Reporter) (itunesservice.Snapshot, error) {
+// buildRegroupSnapshot reads the immutable DB state the planner reasons over via
+// TWO bulk in-memory scans — all books once, all book files once — instead of
+// tens of thousands of per-PID / per-book point queries (which made the dry-run
+// take >10min on a 65K/308K library). The file scan yields PID→location directly
+// from BookFile.ITunesPersistentID, so no per-PID lookups are needed. No mutation.
+func (p *Plugin) buildRegroupSnapshot(ctx context.Context, store database.Store, reporter sdk.Reporter) (itunesservice.Snapshot, error) {
 	snap := itunesservice.Snapshot{
 		PIDLoc: make(map[string]itunesservice.PIDLoc),
 		Books:  make(map[string]itunesservice.BookMeta),
 	}
-	vgNonPrimary := make(map[string]bool) // version-group id -> has a non-primary member
-	seenPID := make(map[string]bool)
 
-	var processed int
-	for _, g := range groups {
+	// Pass 1: all books → per-book fields + version-group non-primary membership.
+	type partialMeta struct {
+		isPrimary bool
+		enrich    int
+		createdAt int64
+		vgID      string
+	}
+	meta := make(map[string]partialMeta)
+	vgNonPrimary := make(map[string]bool) // version-group id -> has a non-primary member
+	const page = 1000
+	off := 0
+	for {
 		if ctx.Err() != nil {
 			return snap, ctx.Err()
 		}
-		for _, pid := range g.PIDs {
-			if seenPID[pid] {
-				continue
+		books, err := store.GetAllBooks(page, off)
+		if err != nil {
+			return snap, fmt.Errorf("GetAllBooks offset=%d: %w", off, err)
+		}
+		if len(books) == 0 {
+			break
+		}
+		for i := range books {
+			b := &books[i]
+			vg := ""
+			if b.VersionGroupID != nil {
+				vg = *b.VersionGroupID
 			}
-			seenPID[pid] = true
+			isPrimary := b.IsPrimaryVersion != nil && *b.IsPrimaryVersion
+			meta[b.ID] = partialMeta{isPrimary: isPrimary, enrich: enrichScore(b), createdAt: b.CreatedAt.Unix(), vgID: vg}
+			if vg != "" && !isPrimary {
+				vgNonPrimary[vg] = true
+			}
+		}
+		off += len(books)
+		_ = reporter.UpdateProgress(1, 4, fmt.Sprintf("Phase 2/4: scanned %d books…", off))
+		if len(books) < page {
+			break
+		}
+	}
 
-			f, ferr := store.GetBookFileByPID(pid)
-			if ferr != nil || f == nil || f.BookID == "" {
-				continue // unresolved: PID in XML but not in DB
-			}
+	// Pass 2: all book files → PID→location + per-book file counts.
+	files, err := store.GetAllBookFiles()
+	if err != nil {
+		return snap, fmt.Errorf("GetAllBookFiles: %w", err)
+	}
+	fileCount := make(map[string]int, len(meta))
+	for i := range files {
+		f := &files[i]
+		fileCount[f.BookID]++
+		if pid := strings.TrimSpace(f.ITunesPersistentID); pid != "" && f.BookID != "" {
 			snap.PIDLoc[pid] = itunesservice.PIDLoc{FileID: f.ID, BookID: f.BookID}
-
-			if _, ok := snap.Books[f.BookID]; !ok {
-				if meta, ok := bookMeta(store, f.BookID, vgNonPrimary); ok {
-					snap.Books[f.BookID] = meta
-				}
-			}
-		}
-		processed++
-		if processed%2000 == 0 {
-			_ = reporter.UpdateProgress(1, 4, fmt.Sprintf("Phase 2/4: snapshotted %d/%d groups…", processed, len(groups)))
 		}
 	}
+
+	// Assemble book meta (only books that actually exist; planner only reads the
+	// ones referenced by resolved PIDs).
+	for id, pm := range meta {
+		snap.Books[id] = itunesservice.BookMeta{
+			ID:                   id,
+			IsPrimary:            pm.isPrimary,
+			FileCount:            fileCount[id],
+			EnrichScore:          pm.enrich,
+			CreatedAtUnix:        pm.createdAt,
+			VersionGroupID:       pm.vgID,
+			HasNonPrimaryMembers: pm.vgID != "" && vgNonPrimary[pm.vgID],
+		}
+	}
+	_ = reporter.UpdateProgress(2, 4, fmt.Sprintf("Phase 2/4: snapshot ready (%d books, %d PID locations)", len(snap.Books), len(snap.PIDLoc)))
 	return snap, nil
-}
-
-// bookMeta loads one book's planner metadata, resolving version-group
-// entanglement (cached per group id).
-func bookMeta(store database.Store, bookID string, vgNonPrimary map[string]bool) (itunesservice.BookMeta, bool) {
-	b, err := store.GetBookByID(bookID)
-	if err != nil || b == nil {
-		return itunesservice.BookMeta{}, false
-	}
-	files, _ := store.GetBookFiles(bookID)
-	vgID := ""
-	if b.VersionGroupID != nil {
-		vgID = *b.VersionGroupID
-	}
-	hasNonPrimary := false
-	if vgID != "" {
-		if v, ok := vgNonPrimary[vgID]; ok {
-			hasNonPrimary = v
-		} else {
-			members, _ := store.GetBooksByVersionGroup(vgID)
-			for i := range members {
-				if members[i].IsPrimaryVersion == nil || !*members[i].IsPrimaryVersion {
-					hasNonPrimary = true
-					break
-				}
-			}
-			vgNonPrimary[vgID] = hasNonPrimary
-		}
-	}
-	return itunesservice.BookMeta{
-		ID:                   b.ID,
-		IsPrimary:            b.IsPrimaryVersion != nil && *b.IsPrimaryVersion,
-		FileCount:            len(files),
-		EnrichScore:          enrichScore(b),
-		CreatedAtUnix:        b.CreatedAt.Unix(),
-		VersionGroupID:       vgID,
-		HasNonPrimaryMembers: hasNonPrimary,
-	}, true
 }
 
 // enrichScore counts populated enrichment fields so the planner prefers the
