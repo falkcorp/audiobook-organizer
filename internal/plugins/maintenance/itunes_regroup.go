@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_regroup.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-06-20
 
@@ -98,6 +98,9 @@ func (p *Plugin) runITunesRegroup(ctx context.Context, raw json.RawMessage, repo
 		plan.TotalGroups, plan.AlreadyCorrect, plan.Consolidated, plan.EntangledSkipped,
 		plan.FreshBooks, len(plan.DeleteBooks), plan.PIDsResolved, plan.PIDsUnresolved)
 	_ = reporter.Log(slog.LevelInfo, "PLAN: "+summary)
+	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
+		"COMPLETENESS: complete-groups=%d partial-groups=%d (missing some tracks) single-file-chapter-books=%d (lone 1-file books that are really one chapter of a multi-track book)",
+		plan.CompleteGroups, plan.PartialGroups, plan.SingleFileChapterBooks))
 
 	if params.DryRun {
 		examples := regroupExamples(plan, 8)
