@@ -1,5 +1,5 @@
 // file: internal/itunes/service/importer_integration_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8f2e4a1b-7c3d-4f9b-a0e5-3d6c2f8b5a7e
 // last-edited: 2026-06-19
 
@@ -48,24 +48,28 @@ func TestITunesImport_ParseAndGroupTestLibrary(t *testing.T) {
 		byKey[g.key] = g
 	}
 
-	moby, ok := byKey["Herman Melville|Moby Dick"]
+	// CONS-FRAG: book grouping keys on the album ALONE (artist-agnostic) when an
+	// album tag is present, and on "name:<artist>|<stripped-name>" when it is
+	// empty. The group COUNT and track membership are the real invariants here.
+	moby, ok := byKey["album:moby dick"]
 	require.True(t, ok, "Moby Dick group should exist")
 	assert.Len(t, moby.tracks, 3)
 	assert.Equal(t, 1, moby.tracks[0].TrackNumber)
 	assert.Equal(t, 2, moby.tracks[1].TrackNumber)
 	assert.Equal(t, 3, moby.tracks[2].TrackNumber)
 
-	pride, ok := byKey["Jane Austen|Pride and Prejudice"]
+	pride, ok := byKey["album:pride and prejudice"]
 	require.True(t, ok, "Pride and Prejudice group should exist")
 	assert.Len(t, pride.tracks, 2)
 
-	_, ok = byKey["J.R.R. Tolkien|Middle-earth, Book 1"]
+	_, ok = byKey["album:middle-earth, book 1"]
 	assert.True(t, ok, "Hobbit group should exist")
 
-	_, ok = byKey["Frank Herbert|Dune Chronicles"]
+	_, ok = byKey["album:dune chronicles"]
 	assert.True(t, ok, "Dune group should exist")
 
-	_, ok = byKey["Sun Tzu|The Art of War"]
+	// The Art of War has an empty album tag → name-keyed.
+	_, ok = byKey["name:Sun Tzu|the art of war"]
 	assert.True(t, ok, "Art of War group should exist")
 }
 
@@ -279,7 +283,7 @@ func TestITunesImport_MultiTrackBookSegments(t *testing.T) {
 
 	var mobyGroup *albumGroup
 	for i, g := range groups {
-		if g.key == "Herman Melville|Moby Dick" {
+		if g.key == "album:moby dick" {
 			mobyGroup = &groups[i]
 			break
 		}

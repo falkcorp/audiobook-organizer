@@ -1,5 +1,5 @@
 // file: internal/itunes/service/importer.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
 // last-edited: 2026-06-19
 
@@ -872,22 +872,7 @@ func (imp *Importer) groupTracksByAlbum(library *itunes.Library) []albumGroup {
 		if !itunes.IsAudiobook(track) {
 			continue
 		}
-		artist := strings.TrimSpace(track.Artist)
-		album := strings.TrimSpace(track.Album)
-		if album == "" {
-			// No album tag: derive a stable grouping key from the track name.
-			// Strip both a leading marker ("(76/85) Title", "Chapter 03 - Title")
-			// AND a trailing one ("Title – 11/23") so every chapter part of the
-			// same book collapses into one group instead of one book per part.
-			trackName := strings.TrimSpace(track.Name)
-			stripped := stripChapterSuffix(stripChapterPrefix(trackName))
-			if stripped != "" {
-				album = stripped
-			} else {
-				album = trackName
-			}
-		}
-		key := artist + "|" + album
+		key := albumGroupKey(track)
 		if _, exists := groupMap[key]; !exists {
 			groupMap[key] = &albumGroup{key: key}
 			groupOrder = append(groupOrder, key)
@@ -897,16 +882,131 @@ func (imp *Importer) groupTracksByAlbum(library *itunes.Library) []albumGroup {
 
 	result := make([]albumGroup, 0, len(groupOrder))
 	for _, key := range groupOrder {
-		g := groupMap[key]
-		sort.Slice(g.tracks, func(i, j int) bool {
-			if g.tracks[i].DiscNumber != g.tracks[j].DiscNumber {
-				return g.tracks[i].DiscNumber < g.tracks[j].DiscNumber
-			}
-			return g.tracks[i].TrackNumber < g.tracks[j].TrackNumber
-		})
-		result = append(result, *g)
+		// The over-merge guard may split a group that mis-shares one album tag
+		// across several books back into per-book sub-groups.
+		for _, sub := range splitOverMergedGroup(*groupMap[key]) {
+			sortTracksByDiscTrack(sub.tracks)
+			result = append(result, sub)
+		}
 	}
 	return result
+}
+
+// normalizeGroupKey lowercases and collapses whitespace so trivial tag
+// formatting differences ("Wild Cards I" vs "Wild Cards  I") share one key.
+func normalizeGroupKey(s string) string {
+	return strings.ToLower(strings.Join(strings.Fields(s), " "))
+}
+
+// albumGroupKey derives the book-grouping key for one iTunes track.
+//
+// CONS-FRAG: the previous key was artist+"|"+album, which fragmented two ways:
+//   - a multi-author anthology ("Wild Cards I" with a different Artist per
+//     story) split into one book per artist even though the album was constant;
+//   - an empty-album chapter file whose " - Part NN" suffix would not strip
+//     split into one book per chapter.
+//
+// When an album tag is present we key on the album ALONE (artist-agnostic) so
+// the anthology collapses. When it is absent we derive the key from the
+// fully chapter-stripped track name and KEEP the artist — the derived name is a
+// weaker signal and the artist guards against unrelated books colliding.
+func albumGroupKey(track *itunes.Track) string {
+	if album := strings.TrimSpace(track.Album); album != "" {
+		return "album:" + normalizeGroupKey(album)
+	}
+	name := strings.TrimSpace(track.Name)
+	stripped := stripChapterSuffix(stripChapterPrefix(name))
+	if stripped == "" {
+		stripped = name
+	}
+	return "name:" + strings.TrimSpace(track.Artist) + "|" + normalizeGroupKey(stripped)
+}
+
+// trackNumbersCleanDistinct reports whether EVERY track carries a positive,
+// distinct track number — strong evidence the group is ONE book (or an anthology
+// numbered globally 1..N). A group with a missing/zero number, or a repeated
+// number, fails this test: it may span several books each numbered 1..N, or
+// simply be untagged, so a cross-artist album merge cannot be trusted.
+func trackNumbersCleanDistinct(tracks []*itunes.Track) bool {
+	seen := make(map[int]bool, len(tracks))
+	for _, t := range tracks {
+		if t.TrackNumber <= 0 || seen[t.TrackNumber] {
+			return false
+		}
+		seen[t.TrackNumber] = true
+	}
+	return len(seen) == len(tracks)
+}
+
+// splitOverMergedGroup is the over-merge guard for the artist-agnostic album
+// key. A cross-artist merge under one album tag is only trusted when the track
+// numbers form a clean distinct sequence (a real multi-author anthology like
+// "Wild Cards I", numbered globally). Otherwise — repeated or missing/zero track
+// numbers, the signature of several distinct books sharing a generic album
+// ("Audiobook", an author name) — the group is split back apart by artist,
+// restoring the pre-CONS-FRAG granularity. If every track shares one artist
+// there is no safe split signal, so the group is left intact (never worse than
+// the old artist+album key). Empty-album ("name:") groups are never split.
+func splitOverMergedGroup(g albumGroup) []albumGroup {
+	if !strings.HasPrefix(g.key, "album:") || len(g.tracks) < 2 || trackNumbersCleanDistinct(g.tracks) {
+		return []albumGroup{g}
+	}
+	byArtist := make(map[string]*albumGroup)
+	var order []string
+	for _, t := range g.tracks {
+		ak := strings.TrimSpace(t.Artist)
+		sub, ok := byArtist[ak]
+		if !ok {
+			sub = &albumGroup{key: g.key + "|artist:" + ak}
+			byArtist[ak] = sub
+			order = append(order, ak)
+		}
+		sub.tracks = append(sub.tracks, t)
+	}
+	if len(order) < 2 {
+		return []albumGroup{g}
+	}
+	slog.Info("itunes import: split over-merged album group",
+		"album_key", g.key, "tracks", len(g.tracks), "into_books", len(order))
+	out := make([]albumGroup, 0, len(order))
+	for _, ak := range order {
+		out = append(out, *byArtist[ak])
+	}
+	return out
+}
+
+// agreedStrippedTitle returns the chapter-stripped track name when EVERY track
+// in the group strips to the same non-empty title (e.g. "Aces Abroad - Part 1"
+// … "Aces Abroad - Part 14" all → "Aces Abroad"). It returns "" when the
+// stripped names disagree (generic chapter names like "Opening Credits" /
+// "Big Finish Ident"), letting the caller fall back to the folder name.
+//
+// CONS-17b: without this, an empty-album multi-file book whose chapter files sit
+// flat in the AUTHOR folder would be titled after that folder (every GRRM book
+// → "George R. R. Martin"), creating fresh dedup collisions.
+func agreedStrippedTitle(tracks []*itunes.Track) string {
+	agreed := ""
+	for _, t := range tracks {
+		s := stripChapterSuffix(stripChapterPrefix(strings.TrimSpace(t.Name)))
+		if s == "" {
+			return ""
+		}
+		if agreed == "" {
+			agreed = s
+		} else if !strings.EqualFold(agreed, s) {
+			return ""
+		}
+	}
+	return agreed
+}
+
+func sortTracksByDiscTrack(tracks []*itunes.Track) {
+	sort.Slice(tracks, func(i, j int) bool {
+		if tracks[i].DiscNumber != tracks[j].DiscNumber {
+			return tracks[i].DiscNumber < tracks[j].DiscNumber
+		}
+		return tracks[i].TrackNumber < tracks[j].TrackNumber
+	})
 }
 
 func (imp *Importer) enrichImportedBooks(status *itunesImportStatus, log logger.Logger) {
@@ -1130,13 +1230,22 @@ func (imp *Importer) buildBookFromAlbumGroup(group albumGroup, libraryPath strin
 		bookFilePath = imp.commonParentDir(group.tracks, opts)
 	}
 	if title == "" && len(group.tracks) > 1 {
-		// CONS-17 (Path A): album tag empty on a multi-file group. Derive the
-		// title from the common parent FOLDER (the book/album directory), which
-		// is far more reliable than a per-chapter track Name — chapter tracks are
-		// often "Opening Credits", "Big Finish Ident", etc. which have no chapter
-		// marker to strip and would otherwise leak into (and collide across)
-		// Book.Title. Only fall through to the track-Name heuristic below if the
-		// folder name is unusable.
+		// CONS-17b: when every chapter track strips to the SAME title (e.g.
+		// "Aces Abroad - Part NN" → "Aces Abroad"), that agreed title IS the
+		// book title. Prefer it over the folder name — these chapter files often
+		// sit flat in the AUTHOR folder, so the folder base would mistitle every
+		// book after its author and spawn fresh dedup collisions.
+		if agreed := agreedStrippedTitle(group.tracks); agreed != "" {
+			title = agreed
+			bookFilePath = imp.commonParentDir(group.tracks, opts)
+		}
+	}
+	if title == "" && len(group.tracks) > 1 {
+		// CONS-17 (Path A): album tag empty and the chapter names disagree
+		// (generic "Opening Credits" / "Big Finish Ident"). Derive the title from
+		// the common parent FOLDER (the book/album directory), more reliable than
+		// a per-chapter track Name. Only fall through to the track-Name heuristic
+		// below if the folder name is unusable.
 		if dir := imp.commonParentDir(group.tracks, opts); dir != "" {
 			if base := strings.TrimSpace(filepath.Base(dir)); base != "" && base != "." && base != string(filepath.Separator) {
 				title = base
