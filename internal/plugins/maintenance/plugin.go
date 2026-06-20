@@ -82,6 +82,9 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		// --- filesystem shattered-book heal (tag-anchored) ---
 		p.fsRegroupXMLDef(),
 
+		// --- lossless tag backfill for existing rows ---
+		p.tagBackfillDef(),
+
 		// --- one-shot startup backfills ---
 		p.externalIDBackfillDef(),
 		p.movementAtomCleanupDef(),
