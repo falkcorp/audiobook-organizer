@@ -41,6 +41,7 @@ type FSBook struct {
 	DurationSec int
 	FileCount   int  // BookFiles count; shattered chapters are single-file (0 or 1)
 	IsPrimary   bool // non-primary version members are ignored
+	EnrichScore int  // populated enrichment fields; the richest member becomes the survivor
 }
 
 // FSRegroupTarget is one real book recovered from a grandparent book-folder.
@@ -50,6 +51,7 @@ type FSRegroupTarget struct {
 	AuthorID       int      // consensus author
 	ASIN           string   // consensus ASIN ("" if none/mixed)
 	Members        []FSBook // ordered by chapter number
+	SurvivorID     string   // the member kept as the unified book (richest enrichment)
 	Cohesive       bool     // every member agrees on identity
 	DistinctTitles []string // populated when !Cohesive (review signal)
 }
@@ -146,11 +148,23 @@ func GroupShatteredBooks(books []FSBook) []FSRegroupTarget {
 		sort.Strings(distinct)
 		cohesive := len(titleVotes) == 1 && len(authorVotes) == 1
 
+		// Survivor = the member with the richest enrichment (ties → earliest chapter,
+		// since members are already chapter-ordered and the scan is stable).
+		survivor := ""
+		bestEnrich := -1
+		for _, m := range members {
+			if m.EnrichScore > bestEnrich {
+				bestEnrich = m.EnrichScore
+				survivor = m.ID
+			}
+		}
+
 		t := FSRegroupTarget{
 			BookFolder: folder,
 			Title:      title,
 			AuthorID:   author,
 			Members:    members,
+			SurvivorID: survivor,
 			Cohesive:   cohesive,
 		}
 		if asinDominant {

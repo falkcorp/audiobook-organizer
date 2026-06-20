@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fs_regroup_xml.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7d2a9c14-3e86-4b50-9f71-2c8e0a6d4b95
 // last-edited: 2026-06-20
 
@@ -12,10 +12,11 @@
 // tags (already in the DB: Book.Title = album, author, ASIN); the scanner just grouped
 // by FOLDER instead of by album. See .claude/notes/shattered-books-inventory.md.
 //
-// v1 is DRY-RUN ONLY: it builds the regroup plan via the pure, tested
-// itunesservice.GroupShatteredBooks and reports it. The apply path (create one unified
-// book per shattered folder, move chapter files in, delete emptied shells, backfill PIDs)
-// lands in a follow-up once the dry-run is reviewed + advisor-gated.
+// It builds the regroup plan via the pure, tested itunesservice.GroupShatteredBooks.
+// Default dry-run reports the plan; dryRun=false applies it: each cohesive shattered
+// folder collapses to ONE survivor book (richest enrichment) with a BookFile per chapter,
+// and the emptied shells are deleted. Mixed-identity folders are skipped for review.
+// ZFS-snapshot-backed; run a dry-run + advisor review before applying on prod.
 
 package maintenance
 
@@ -24,18 +25,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/oklog/ulid/v2"
+
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
 type fsRegroupParams struct {
-	// DryRun defaults true. Apply is intentionally NOT wired in v1 — this op only
-	// reports. A non-dry-run call returns an explicit not-implemented error so no
-	// caller can mutate the library before the plan is reviewed.
+	// DryRun defaults true (safe). Set false to apply the plan and mutate the library.
 	DryRun bool `json:"dryRun"`
 }
 
@@ -44,16 +48,17 @@ func (p *Plugin) fsRegroupXMLDef() sdk.OperationDef {
 		ID:          "maintenance.fs-regroup-xml",
 		Plugin:      "maintenance",
 		DisplayName: "Heal shattered filesystem books (tag-anchored regroup)",
-		Description: "Reports the plan to regroup filesystem-scanner-shattered books (one-book-per-chapter-subdir) " +
-			"back into real books, grouping single-file books by shared grandparent book-folder + tag identity " +
-			"(ASIN, else title+author). DRY-RUN ONLY in v1 — reports counts + samples, writes nothing.",
+		Description: "Regroups filesystem-scanner-shattered books (one-book-per-chapter-subdir) back into " +
+			"real books: groups single-file books by shared grandparent book-folder + tag identity (ASIN, else " +
+			"title+author), attaches each chapter file to one survivor book, and deletes the emptied shells. " +
+			"Mixed-identity folders are skipped for review. Default dry-run reports the plan; set dryRun=false to apply.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.fs-regroup-xml",
 		Cancellable:     true,
 		Isolate:         false,
-		Timeout:         60 * time.Minute,
-		Capabilities:    []sdk.Capability{sdk.CapLibraryRead},
+		Timeout:         120 * time.Minute,
+		Capabilities:    []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
 		Run:             p.runFSRegroupXML,
 	}
 }
@@ -64,9 +69,6 @@ func (p *Plugin) runFSRegroupXML(ctx context.Context, raw json.RawMessage, repor
 		if err := json.Unmarshal(raw, &params); err != nil {
 			return fmt.Errorf("invalid params: %w", err)
 		}
-	}
-	if !params.DryRun {
-		return fmt.Errorf("maintenance.fs-regroup-xml v1 is dry-run only; apply path not yet implemented")
 	}
 	store := p.deps.Store()
 	if store == nil {
@@ -107,6 +109,7 @@ func (p *Plugin) runFSRegroupXML(ctx context.Context, raw json.RawMessage, repor
 			if b.Duration != nil {
 				fsb.DurationSec = *b.Duration
 			}
+			fsb.EnrichScore = enrichScore(b)
 			bookMeta[b.ID] = &fsb
 		}
 		off += len(books)
@@ -165,13 +168,129 @@ func (p *Plugin) runFSRegroupXML(ctx context.Context, raw json.RawMessage, repor
 	summary := fmt.Sprintf(
 		"shattered-books=%d chapter-records=%d cohesive=%d flagged-mixed=%d with-asin=%d | sizes %v",
 		len(targets), chapterRecords, cohesive, flagged, withASIN, hist)
-	_ = reporter.Log(slog.LevelInfo, "DRY RUN PLAN: "+summary)
-	_ = reporter.Log(slog.LevelInfo, "DRY RUN examples: "+strings.Join(fsRegroupExamples(targets, 12), " | "))
-	if flagged > 0 {
-		_ = reporter.Log(slog.LevelWarn, "FLAGGED (mixed-identity folders, review before apply): "+
-			strings.Join(fsRegroupFlagged(targets, 10), " | "))
+	if params.DryRun {
+		_ = reporter.Log(slog.LevelInfo, "DRY RUN PLAN: "+summary)
+		_ = reporter.Log(slog.LevelInfo, "DRY RUN examples: "+strings.Join(fsRegroupExamples(targets, 12), " | "))
+		if flagged > 0 {
+			_ = reporter.Log(slog.LevelWarn, "FLAGGED (mixed-identity folders, review before apply): "+
+				strings.Join(fsRegroupFlagged(targets, 10), " | "))
+		}
+		_ = reporter.UpdateProgress(3, 3, "DRY RUN — "+summary)
+		return nil
 	}
-	_ = reporter.UpdateProgress(3, 3, "DRY RUN — "+summary)
+
+	// APPLY: collapse each cohesive shattered folder into ONE book. Mixed-identity
+	// folders are skipped (require review). Snapshot-backed (ZFS hourly); advisor-gated.
+	_ = reporter.Log(slog.LevelInfo, "APPLY — "+summary)
+	return p.applyFSRegroup(ctx, store, targets, reporter)
+}
+
+// applyFSRegroup executes the regroup: for each cohesive target, attach a BookFile
+// for every member's chapter file to the survivor book, set its canonical title +
+// folder path, reassign any external-ids off the deleted shells, then delete the
+// emptied non-survivor chapter books. Lean by design — stat-only per file, no hashing
+// (the tag-backfill op fills RawTags/hashes after). Recompute aggregates per survivor.
+func (p *Plugin) applyFSRegroup(ctx context.Context, store database.Store, targets []itunesservice.FSRegroupTarget, reporter sdk.Reporter) error {
+	var (
+		healedBooks, filesAttached, deleted, deleteSkipped, skippedMixed, errCount int
+		lastLog                                                                    = time.Now()
+	)
+	for ti := range targets {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		t := targets[ti]
+		if !t.Cohesive || t.SurvivorID == "" {
+			skippedMixed++
+			continue
+		}
+
+		survivor, err := store.GetBookByID(t.SurvivorID)
+		if err != nil || survivor == nil {
+			errCount++
+			continue
+		}
+
+		// Attach one BookFile per member chapter file (ordered) to the survivor.
+		for order, m := range t.Members {
+			var size int64
+			if fi, serr := os.Stat(m.FilePath); serr == nil {
+				size = fi.Size()
+			}
+			bf := &database.BookFile{
+				ID:          ulid.Make().String(),
+				BookID:      survivor.ID,
+				FilePath:    m.FilePath,
+				Format:      strings.TrimPrefix(strings.ToLower(filepath.Ext(m.FilePath)), "."),
+				FileSize:    size,
+				Duration:    m.DurationSec,
+				TrackNumber: order + 1,
+			}
+			if err := store.UpsertBookFile(bf); err != nil {
+				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("attach file %s -> %s failed: %v", m.FilePath, survivor.ID, err))
+				errCount++
+				continue
+			}
+			filesAttached++
+		}
+
+		// Canonical title + folder path on the survivor.
+		survivor.Title = t.Title
+		survivor.FilePath = t.BookFolder
+		if t.ASIN != "" && (survivor.ASIN == nil || *survivor.ASIN == "") {
+			asin := t.ASIN
+			survivor.ASIN = &asin
+		}
+		if _, err := store.UpdateBook(survivor.ID, survivor); err != nil {
+			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("update survivor %s failed: %v", survivor.ID, err))
+			errCount++
+		}
+
+		// Delete the emptied non-survivor chapter shells (reassign ext-ids first).
+		for _, m := range t.Members {
+			if m.ID == survivor.ID {
+				continue
+			}
+			if exts, _ := store.GetExternalIDsForBook(m.ID); len(exts) > 0 {
+				if rerr := store.ReassignExternalIDs(m.ID, survivor.ID); rerr != nil {
+					_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("reassign ext-ids %s->%s failed; skipping delete: %v", m.ID, survivor.ID, rerr))
+					deleteSkipped++
+					continue
+				}
+			}
+			// Guard: a shattered chapter book has no BookFiles of its own; re-assert.
+			if files, _ := store.GetBookFiles(m.ID); len(files) != 0 {
+				deleteSkipped++
+				continue
+			}
+			if err := store.DeleteBook(m.ID); err != nil {
+				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("delete shell %s failed: %v", m.ID, err))
+				errCount++
+				continue
+			}
+			deleted++
+		}
+
+		if err := store.RecomputeBookAggregates(survivor.ID); err != nil {
+			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("recompute %s failed: %v", survivor.ID, err))
+			errCount++
+		}
+		healedBooks++
+
+		if time.Since(lastLog) >= 15*time.Second {
+			_ = reporter.UpdateProgress(ti+1, len(targets), fmt.Sprintf(
+				"healed %d books, %d files attached, %d shells deleted…", healedBooks, filesAttached, deleted))
+			lastLog = time.Now()
+		}
+	}
+
+	result := fmt.Sprintf("APPLIED — healed=%d books, files-attached=%d, shells-deleted=%d, delete-skipped=%d, mixed-skipped=%d, errors=%d",
+		healedBooks, filesAttached, deleted, deleteSkipped, skippedMixed, errCount)
+	_ = reporter.Log(slog.LevelInfo, result)
+	_ = reporter.UpdateProgress(len(targets), len(targets), result)
+	if errCount > 0 {
+		return fmt.Errorf("%d errors during fs-regroup apply (see op log)", errCount)
+	}
 	return nil
 }
 

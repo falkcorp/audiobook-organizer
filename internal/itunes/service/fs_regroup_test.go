@@ -108,6 +108,21 @@ func TestGroupShatteredBooks_ASINMinorityIgnored(t *testing.T) {
 	}
 }
 
+func TestGroupShatteredBooks_SurvivorIsRichest(t *testing.T) {
+	b1 := chapter("s1", "T", 1, "", "Auth", "T", 1)
+	b2 := chapter("s2", "T", 1, "", "Auth", "T", 2)
+	b3 := chapter("s3", "T", 1, "", "Auth", "T", 3)
+	b2.EnrichScore = 5 // richest → survivor
+	b3.EnrichScore = 2
+	got := GroupShatteredBooks([]FSBook{b1, b2, b3})
+	if len(got) != 1 {
+		t.Fatalf("want 1 target, got %d", len(got))
+	}
+	if got[0].SurvivorID != "s2" {
+		t.Errorf("survivor should be richest s2, got %q", got[0].SurvivorID)
+	}
+}
+
 func TestGroupShatteredBooks_NonPrimaryIgnored(t *testing.T) {
 	b1 := chapter("p1", "VG", 1, "", "Auth", "VG", 1)
 	b2 := chapter("p2", "VG", 1, "", "Auth", "VG", 2)
