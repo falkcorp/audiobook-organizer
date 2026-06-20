@@ -1,11 +1,48 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.50.0 -->
+<!-- version: 3.51.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-19 -->
 
 # Changelog
 
 ## [Unreleased]
+
+### Fixed
+
+#### June 19, 2026 — iTunes book fragmentation: group chapter files into one book (CONS-FRAG)
+
+Root-caused (against prod) and fixed the iTunes importer fragmenting one
+audiobook into many single-file "books" — the source of the partial-file-vs-full-book
+dedup false positives ("6/47" matching a full book).
+
+- `groupTracksByAlbum` keyed books by `artist + "|" + album`, which split two ways:
+  (1) a **multi-author anthology** ("Wild Cards I" with a different `Artist` per
+  story) fragmented into one book per author even though the album was constant;
+  (2) an **empty-album chapter file** whose " - Part NN" suffix would not strip
+  ("Aces Abroad - Part 19") fragmented into one book per chapter.
+- Now keys on the **album alone** (artist-agnostic) when an album tag is present,
+  and on `name:<artist>|<chapter-stripped-name>` when it is empty. An over-merge
+  guard (`splitOverMergedGroup`) splits an album group back apart by artist when
+  its track numbers repeat (the signature of several books mis-sharing one album).
+- `titleutil.StripChapterSuffix` now strips bare trailing chapter keywords without
+  an N/M fraction (`- Part 19`, `: Chapter 3`, `- CD 2`, `Aces Abroad-Part19`),
+  while deliberately preserving series volumes (`…Book 8`, `Volume 2`) and lone
+  numbers (`1984`, `Catch 22`, `Apartment 16`).
+- CONS-17b: when every chapter strips to the same title, that agreed title is used
+  for `Book.Title` instead of the (often flat author-) folder name, preventing
+  every book from being titled after its author.
+- Over-merge guard hardened: a cross-artist album merge is only kept when track
+  numbers form a clean distinct sequence; repeated OR missing/zero numbers
+  (distinct books sharing a generic album like "Audiobook" / an author name)
+  split back by artist.
+- Forward-only (new ingest). Existing already-fragmented+organized books need a
+  separate, dry-run-gated re-group op — not auto-applied.
+- Known follow-up (CONS-FRAG-2): a newly-merged multi-file book whose chapter
+  files are scattered across folders gets `Book.FilePath` = their common parent
+  (possibly a library/author directory). The single-file organize path safely
+  REFUSES a directory `FilePath` (early return, no file move), so the book stays
+  `imported` rather than organizing — non-destructive, but multi-file iTunes
+  books should be routed to `OrganizeBookDirectory`.
 
 ### Added
 

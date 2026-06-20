@@ -219,13 +219,13 @@ func TestGroupTracksByAlbum(t *testing.T) {
 
 	var bookOneGroup *albumGroup
 	for i := range groups {
-		if groups[i].key == "Author A|Book One" {
+		if groups[i].key == "album:book one" {
 			bookOneGroup = &groups[i]
 			break
 		}
 	}
 	if bookOneGroup == nil {
-		t.Fatal("expected to find 'Author A|Book One' group")
+		t.Fatal("expected to find 'album:book one' group")
 	}
 	if len(bookOneGroup.tracks) != 2 {
 		t.Errorf("expected 2 tracks in Book One group, got %d", len(bookOneGroup.tracks))
@@ -254,8 +254,8 @@ func TestGroupTracksByAlbum_EmptyAlbumChapterParts(t *testing.T) {
 	if len(groups) != 1 {
 		t.Fatalf("expected 1 group (all chapter parts collapsed), got %d: %+v", len(groups), groups)
 	}
-	if groups[0].key != "David Weber|At All Costs" {
-		t.Errorf("group key = %q, want %q", groups[0].key, "David Weber|At All Costs")
+	if groups[0].key != "name:David Weber|at all costs" {
+		t.Errorf("group key = %q, want %q", groups[0].key, "name:David Weber|at all costs")
 	}
 	if len(groups[0].tracks) != 3 {
 		t.Errorf("expected 3 tracks in the collapsed group, got %d", len(groups[0].tracks))
@@ -284,15 +284,15 @@ func TestGroupTracksByAlbum_MultiTrackBooks(t *testing.T) {
 	var mobyGroup, prideGroup *albumGroup
 	for i := range groups {
 		switch groups[i].key {
-		case "Herman Melville|Moby Dick":
+		case "album:moby dick":
 			mobyGroup = &groups[i]
-		case "Jane Austen|Pride and Prejudice":
+		case "album:pride and prejudice":
 			prideGroup = &groups[i]
 		}
 	}
 
 	if mobyGroup == nil {
-		t.Fatal("expected to find 'Herman Melville|Moby Dick' group")
+		t.Fatal("expected to find 'album:moby dick' group")
 	}
 	if len(mobyGroup.tracks) != 3 {
 		t.Errorf("expected 3 tracks in Moby Dick group, got %d", len(mobyGroup.tracks))

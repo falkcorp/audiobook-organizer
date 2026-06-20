@@ -1,6 +1,7 @@
 // file: internal/titleutil/strip.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7e2a1b3c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
+// last-edited: 2026-06-19
 
 // Package titleutil provides shared helpers for normalising book titles.
 package titleutil
@@ -75,6 +76,13 @@ var chapterSuffixPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\s+\d{1,4}\s+of\s+\d{1,4}$`),
 	// Trailing bare fraction "11/23"
 	regexp.MustCompile(`\s+\d{1,4}\s*/\s*\d{1,4}$`),
+	// Trailing bare chapter-keyword marker WITHOUT an N/M fraction — the iTunes
+	// chapter-file convention: "Aces Abroad - Part 19", "The Storm: Chapter 3",
+	// "Foo - CD 2", "Aces Abroad-Part19" (no space). A leading word boundary on
+	// the keyword guards against mid-word matches ("Apartment 16" is left
+	// untouched). "book"/"vol"/"volume" are deliberately EXCLUDED — they denote
+	// a SERIES VOLUME, not a chapter (e.g. "…Full Metal Superhero, Book 8").
+	regexp.MustCompile(`(?i)\s*[-–—:]?\s*\b(?:part|chapter|track|cd|disc|disk|pt|section|episode)\s*\.?\s*\d{1,4}\s*$`),
 }
 
 // StripChapterSuffix removes a trailing part/chapter marker ("– 11/23",

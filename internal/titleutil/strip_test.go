@@ -80,6 +80,23 @@ func TestStripChapterSuffix(t *testing.T) {
 		{"At All Costs 11 of 23", "At All Costs"},
 		{"At All Costs 11/23", "At All Costs"},
 
+		// Bare keyword+number part markers WITHOUT an N/M fraction — the iTunes
+		// chapter-file convention that previously fragmented one book into one
+		// book per chapter (e.g. "Aces Abroad - Part 19").
+		{"Aces Abroad - Part 19", "Aces Abroad"},
+		{"Aces Abroad - Part 01", "Aces Abroad"},
+		{"Aces Abroad – Part 7", "Aces Abroad"},
+		{"Aces Abroad-Part19", "Aces Abroad"},
+		{"The Storm - Chapter 3", "The Storm"},
+		{"The Storm : Chapter 12", "The Storm"},
+		{"Foo - CD 2", "Foo"},
+		{"Foo - Disc 1", "Foo"},
+		{"Foo - Disk 4", "Foo"},
+		{"Foo - Pt 4", "Foo"},
+		{"Foo - Track 8", "Foo"},
+		{"Foo - Section 5", "Foo"},
+		{"Foo - Episode 2", "Foo"},
+
 		// Clean titles — must be untouched.
 		{"The Hobbit", "The Hobbit"},
 		{"Tarkin: Star Wars (Unabridged)", "Tarkin: Star Wars (Unabridged)"},
@@ -87,6 +104,15 @@ func TestStripChapterSuffix(t *testing.T) {
 		// A trailing year or lone number is NOT a part marker — keep it.
 		{"1984", "1984"},
 		{"Catch 22", "Catch 22"},
+		// "Book N" is a SERIES VOLUME, not a chapter — must survive (78 legit
+		// titles on prod, e.g. "...Full Metal Superhero, Book 8").
+		{"Arsenal Reloaded Full Metal Superhero, Book 8", "Arsenal Reloaded Full Metal Superhero, Book 8"},
+		{"Renegade Star Publisher's Pack 6, Book 11-12", "Renegade Star Publisher's Pack 6, Book 11-12"},
+		{"Traction: Eternal Dominion, Book 2", "Traction: Eternal Dominion, Book 2"},
+		// "Volume N" is also series-level — keep it.
+		{"Saga Volume 2", "Saga Volume 2"},
+		// A keyword mid-word must not be stripped.
+		{"Apartment 16", "Apartment 16"},
 
 		// Edge cases.
 		{"", ""},
