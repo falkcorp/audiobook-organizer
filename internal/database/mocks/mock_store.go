@@ -45544,6 +45544,69 @@ func (_c *MockStore_ReassignExternalIDs_Call) RunAndReturn(run func(oldBookID st
 	return _c
 }
 
+// ReassignExternalID provides a mock function for the type MockStore
+func (_mock *MockStore) ReassignExternalID(source string, externalID string, newBookID string) error {
+	ret := _mock.Called(source, externalID, newBookID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ReassignExternalID")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string, string, string) error); ok {
+		r0 = returnFunc(source, externalID, newBookID)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockStore_ReassignExternalID_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ReassignExternalID'
+type MockStore_ReassignExternalID_Call struct {
+	*mock.Call
+}
+
+// ReassignExternalID is a helper method to define mock.On call
+//   - source string
+//   - externalID string
+//   - newBookID string
+func (_e *MockStore_Expecter) ReassignExternalID(source interface{}, externalID interface{}, newBookID interface{}) *MockStore_ReassignExternalID_Call {
+	return &MockStore_ReassignExternalID_Call{Call: _e.mock.On("ReassignExternalID", source, externalID, newBookID)}
+}
+
+func (_c *MockStore_ReassignExternalID_Call) Run(run func(source string, externalID string, newBookID string)) *MockStore_ReassignExternalID_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_ReassignExternalID_Call) Return(err error) *MockStore_ReassignExternalID_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockStore_ReassignExternalID_Call) RunAndReturn(run func(source string, externalID string, newBookID string) error) *MockStore_ReassignExternalID_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // RecordMetadataChange provides a mock function for the type MockStore
 func (_mock *MockStore) RecordMetadataChange(record *database.MetadataChangeRecord) error {
 	ret := _mock.Called(record)

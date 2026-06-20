@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
-// last-edited: 2026-06-19
+// last-edited: 2026-06-20
 
 package maintenance
 
@@ -75,6 +75,9 @@ func (p *Plugin) Register(r sdk.Registry) error {
 
 		// --- duration repair ---
 		p.durationBackfillDef(),
+
+		// --- iTunes re-group heal (CONS-FRAG) ---
+		p.itunesRegroupDef(),
 
 		// --- one-shot startup backfills ---
 		p.externalIDBackfillDef(),

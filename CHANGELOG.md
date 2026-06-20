@@ -1,11 +1,32 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.51.0 -->
+<!-- version: 3.52.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
-<!-- last-edited: 2026-06-19 -->
+<!-- last-edited: 2026-06-20 -->
 
 # Changelog
 
 ## [Unreleased]
+
+### Added
+
+#### June 20, 2026 — iTunes in-place re-group heal op (CONS-FRAG-HEAL)
+
+New dry-run-gated maintenance op `maintenance.itunes-regroup` heals the ~65K
+existing iTunes books accreted under the old buggy grouping — IN PLACE, preserving
+enrichment / version groups / manual edits — instead of delete+reimport (which the
+canary proved tombstones PIDs and blocks recreation; see
+`.claude/notes/itunes-heal-canary-findings.md`).
+
+- Re-derives the correct books from the iTunes XML via the FIXED grouping
+  (`itunesservice.GroupLibraryForHeal`), then gathers each book's tracks onto a
+  single survivor via per-PID `ReassignExternalID` + `MoveBookFilesToBook`.
+- Plan is **frozen, deterministic, exclusive-claim** (one existing book targets at
+  most one group) so dry-run == apply and over-merged books actually SPLIT rather
+  than silently retitle. Handles both fragmentation and over-merge uniformly.
+- Empty-book deletion is guarded: re-asserts zero files AND zero ext-id mappings
+  before deleting (zero files ≠ zero mappings). Version-entangled groups skipped (v1).
+- New store primitive `ReassignExternalID(source, externalID, newBookID)` (singular,
+  per-mapping) — the whole-book `ReassignExternalIDs` is too coarse for splits.
 
 ### Fixed
 

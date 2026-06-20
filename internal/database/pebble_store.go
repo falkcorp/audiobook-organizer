@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.90.0
+// version: 1.91.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-06-17
+// last-edited: 2026-06-20
 
 package database
 
@@ -7160,6 +7160,53 @@ func (p *PebbleStore) ReassignExternalIDs(oldBookID, newBookID string) error {
 		if err := batch.Set(newReverseKey, []byte(m.ExternalID), nil); err != nil {
 			return fmt.Errorf("pebble Set ext_id new reverse: %w", err)
 		}
+	}
+
+	return batch.Commit(pebble.Sync)
+}
+
+// ReassignExternalID moves a SINGLE external-ID mapping to another book. The
+// in-place re-group heal needs per-mapping granularity: an over-merged book holds
+// PIDs belonging to several target books, so the whole-book ReassignExternalIDs
+// would wrongly drag unrelated PIDs along. No-ops if the mapping already points at
+// newBookID; errors if the mapping does not exist.
+func (p *PebbleStore) ReassignExternalID(source, externalID, newBookID string) error {
+	primaryKey := []byte(fmt.Sprintf("ext_id:%s:%s", source, externalID))
+	data, closer, err := p.db.Get(primaryKey)
+	if err != nil {
+		return fmt.Errorf("ReassignExternalID: ext_id %s:%s not found: %w", source, externalID, err)
+	}
+	var m ExternalIDMapping
+	unmErr := json.Unmarshal(data, &m)
+	closer.Close()
+	if unmErr != nil {
+		return fmt.Errorf("ReassignExternalID unmarshal: %w", unmErr)
+	}
+	if m.BookID == newBookID {
+		return nil
+	}
+
+	batch := p.db.NewBatch()
+	defer batch.Close()
+
+	oldReverseKey := []byte(fmt.Sprintf("ext_id:book:%s:%s:%s", m.BookID, m.Source, m.ExternalID))
+	if err := batch.Delete(oldReverseKey, nil); err != nil {
+		return fmt.Errorf("ReassignExternalID delete old reverse: %w", err)
+	}
+
+	m.BookID = newBookID
+	m.UpdatedAt = time.Now()
+	updated, err := json.Marshal(m)
+	if err != nil {
+		return err
+	}
+	if err := batch.Set(primaryKey, updated, nil); err != nil {
+		return fmt.Errorf("ReassignExternalID set primary: %w", err)
+	}
+
+	newReverseKey := []byte(fmt.Sprintf("ext_id:book:%s:%s:%s", newBookID, m.Source, m.ExternalID))
+	if err := batch.Set(newReverseKey, []byte(m.ExternalID), nil); err != nil {
+		return fmt.Errorf("ReassignExternalID set new reverse: %w", err)
 	}
 
 	return batch.Commit(pebble.Sync)
