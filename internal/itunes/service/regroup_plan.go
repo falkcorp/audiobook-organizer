@@ -1,11 +1,14 @@
 // file: internal/itunes/service/regroup_plan.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-06-20
 
 package itunesservice
 
-import "sort"
+import (
+	"fmt"
+	"sort"
+)
 
 // PIDLoc is the current DB location of one iTunes track PID.
 type PIDLoc struct {
@@ -17,8 +20,10 @@ type PIDLoc struct {
 // target book for a group. Built once from a DB read-snapshot; never mutated.
 type BookMeta struct {
 	ID                   string
+	Title                string
 	IsPrimary            bool
 	FileCount            int   // total BookFiles currently on this book
+	DurationSec          int   // book aggregate duration (seconds)
 	EnrichScore          int   // richer = preferred survivor (ISBN, description, …)
 	CreatedAtUnix        int64 // older = preferred survivor (tiebreak)
 	VersionGroupID       string
@@ -77,6 +82,15 @@ type RegroupPlan struct {
 	CompleteGroups         int
 	PartialGroups          int
 	SingleFileChapterBooks int
+
+	// Single-file-chapter books bucketed by duration, to separate TRUE lone
+	// chapters (short) from COMPLETE single-file books that merely share an album
+	// tag with un-imported siblings (long). SFCExamples holds a few short-bucket
+	// "title (dur)" samples for eyeballing.
+	SFCShort    int // < 15min — likely a true chapter or intro/credit clip
+	SFCMid      int // 15-90min — novella / long chapter / short book (ambiguous)
+	SFCLong     int // >= 90min — a COMPLETE book (false alarm: series entry)
+	SFCExamples []string
 }
 
 // PlanRegroup computes the frozen heal plan: assign each group exactly one target
@@ -118,11 +132,29 @@ func PlanRegroup(groups []HealGroup, snap Snapshot) RegroupPlan {
 				plan.PartialGroups++
 			}
 		}
-		// Lone single-file books that are really one chapter of a multi-track book.
+		// Lone single-file books that are really one chapter of a multi-track book,
+		// bucketed by duration so true chapters (short) separate from complete
+		// single-file books sharing an album tag (long).
 		if len(g.PIDs) > 1 {
 			for _, loc := range resolved {
-				if b, ok := snap.Books[loc.BookID]; ok && b.FileCount == 1 {
-					singleFileChapters[loc.BookID] = struct{}{}
+				b, ok := snap.Books[loc.BookID]
+				if !ok || b.FileCount != 1 {
+					continue
+				}
+				if _, seen := singleFileChapters[loc.BookID]; seen {
+					continue
+				}
+				singleFileChapters[loc.BookID] = struct{}{}
+				switch {
+				case b.DurationSec < 900:
+					plan.SFCShort++
+					if len(plan.SFCExamples) < 12 {
+						plan.SFCExamples = append(plan.SFCExamples, fmt.Sprintf("%q (%ds)", b.Title, b.DurationSec))
+					}
+				case b.DurationSec < 5400:
+					plan.SFCMid++
+				default:
+					plan.SFCLong++
 				}
 			}
 		}

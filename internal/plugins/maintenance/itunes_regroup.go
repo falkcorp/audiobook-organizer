@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_regroup.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-06-20
 
@@ -99,8 +99,11 @@ func (p *Plugin) runITunesRegroup(ctx context.Context, raw json.RawMessage, repo
 		plan.FreshBooks, len(plan.DeleteBooks), plan.PIDsResolved, plan.PIDsUnresolved)
 	_ = reporter.Log(slog.LevelInfo, "PLAN: "+summary)
 	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
-		"COMPLETENESS: complete-groups=%d partial-groups=%d (missing some tracks) single-file-chapter-books=%d (lone 1-file books that are really one chapter of a multi-track book)",
+		"COMPLETENESS: complete-groups=%d partial-groups=%d (missing some tracks) single-file-in-multitrack-album=%d",
 		plan.CompleteGroups, plan.PartialGroups, plan.SingleFileChapterBooks))
+	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
+		"SINGLE-FILE BY DURATION: <15min(true chapter/clip)=%d  15-90min(ambiguous)=%d  >=90min(COMPLETE book, false alarm)=%d | short examples: %s",
+		plan.SFCShort, plan.SFCMid, plan.SFCLong, strings.Join(plan.SFCExamples, "; ")))
 
 	if params.DryRun {
 		examples := regroupExamples(plan, 8)
@@ -130,8 +133,10 @@ func (p *Plugin) buildRegroupSnapshot(ctx context.Context, store database.Store,
 
 	// Pass 1: all books → per-book fields + version-group non-primary membership.
 	type partialMeta struct {
+		title     string
 		isPrimary bool
 		enrich    int
+		duration  int
 		createdAt int64
 		vgID      string
 	}
@@ -157,7 +162,11 @@ func (p *Plugin) buildRegroupSnapshot(ctx context.Context, store database.Store,
 				vg = *b.VersionGroupID
 			}
 			isPrimary := b.IsPrimaryVersion != nil && *b.IsPrimaryVersion
-			meta[b.ID] = partialMeta{isPrimary: isPrimary, enrich: enrichScore(b), createdAt: b.CreatedAt.Unix(), vgID: vg}
+			dur := 0
+			if b.Duration != nil {
+				dur = *b.Duration
+			}
+			meta[b.ID] = partialMeta{title: b.Title, isPrimary: isPrimary, enrich: enrichScore(b), duration: dur, createdAt: b.CreatedAt.Unix(), vgID: vg}
 			if vg != "" && !isPrimary {
 				vgNonPrimary[vg] = true
 			}
@@ -188,8 +197,10 @@ func (p *Plugin) buildRegroupSnapshot(ctx context.Context, store database.Store,
 	for id, pm := range meta {
 		snap.Books[id] = itunesservice.BookMeta{
 			ID:                   id,
+			Title:                pm.title,
 			IsPrimary:            pm.isPrimary,
 			FileCount:            fileCount[id],
+			DurationSec:          pm.duration,
 			EnrichScore:          pm.enrich,
 			CreatedAtUnix:        pm.createdAt,
 			VersionGroupID:       pm.vgID,
