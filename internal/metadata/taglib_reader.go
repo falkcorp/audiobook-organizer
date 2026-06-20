@@ -1,5 +1,5 @@
 // file: internal/metadata/taglib_reader.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9e8d7c6b-5a4f-3e2d-1c0b-9a8b7c6d5e4f
 
 package metadata
@@ -96,6 +96,12 @@ func BuildMetadataFromTaglibMap(tags map[string][]string, filePath string, metaL
 			metadata.Year = y
 		}
 	}
+
+	// Track / disc position (for chapter ordering + album grouping).
+	metadata.TrackNumber, metadata.TrackTotal = parseSlashPair(get("TRACKNUMBER", "TRACK", "TRCK"))
+	metadata.DiscNumber, metadata.DiscTotal = parseSlashPair(get("DISCNUMBER", "DISC", "TPOS"))
+	// Grouping (box-set/anthology divider).
+	metadata.Grouping = get("GROUPING", "GRP1", "TIT1", "CONTENTGROUP")
 
 	// Series and series index. Custom audiobook tags come first, then
 	// the movement tags iTunes uses, then fall back to splitting the

@@ -406,6 +406,11 @@ func TestCustomTagConsistency_ProvenanceFieldsCoverMetadata(t *testing.T) {
 		"HardcoverID":          true, // external ID, tracked separately
 		"OpenLibraryID":        true, // external ID, tracked separately
 		"GoogleBooksID":        true, // external ID, tracked separately
+		"TrackNumber":          true, // positional, not a scored/provenance value
+		"TrackTotal":           true, // positional
+		"DiscNumber":           true, // positional
+		"DiscTotal":            true, // positional
+		"Grouping":             true, // box-set divider, not a scored value
 	}
 
 	metaFieldsInProvenance := map[string]bool{}
