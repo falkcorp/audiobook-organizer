@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/quarantine_chapter_artifacts_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9c2e7a14-5b80-4d36-8f21-3a6e0c9d5b18
 // last-edited: 2026-06-19
 
@@ -22,8 +22,15 @@ func mkBook(t *testing.T, pebble *database.PebbleStore, title string, idx, durat
 	if err != nil {
 		t.Fatalf("CreateBook: %v", err)
 	}
+	// FileSize must be realistic for the duration. The CONS-18 duration-sanity
+	// gate (normalizeBookFileDuration, applied on BookFile write) treats a
+	// duration whose implied bitrate is < 4 kbps as milliseconds and rewrites
+	// it to seconds. A flat 1 MiB made the 10h "long" fixture imply ~0.2 kbps,
+	// so it was clobbered 36000→36s and then wrongly quarantined as short.
+	// Derive ~128 kbps (16000 bytes/sec) plus a 1 MiB floor for zero-duration.
+	fileSize := int64(durationSec)*16000 + 1<<20
 	if err := pebble.CreateBookFile(&database.BookFile{
-		BookID: created.ID, FilePath: path, Duration: durationSec, FileSize: 1 << 20,
+		BookID: created.ID, FilePath: path, Duration: durationSec, FileSize: fileSize,
 	}); err != nil {
 		t.Fatalf("CreateBookFile: %v", err)
 	}
