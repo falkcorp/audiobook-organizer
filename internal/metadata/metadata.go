@@ -73,6 +73,12 @@ type Metadata struct {
 	PrintYear           string
 	// UsedFilenameFallback indicates filename parsing filled metadata gaps.
 	UsedFilenameFallback bool
+	// AllTags is the LOSSLESS capture of every tag the file carries (all ID3
+	// frames + MP4 atoms + custom keys), normalized to strings. Binary blobs
+	// (cover art APIC/covr/PIC) are excluded — covers are stored separately.
+	// Named fields above are the fast/typed path; AllTags is the backstop so no
+	// tag is ever lost and future features can mine any key without a schema change.
+	AllTags map[string]string
 }
 
 type fieldCandidate struct {
@@ -334,6 +340,9 @@ func BuildMetadataFromTag(m tag.Metadata, filePath string, metaLog logger.Logger
 	// Grouping (box-set/anthology divider): ID3 TIT1/GRP1, MP4 ©grp.
 	metadata.Grouping = cleanTagValue(getRawString(raw, "TIT1", "GRP1", "©grp", "\xa9grp", "grouping", "GROUPING"))
 
+	// Lossless capture of every tag the file carries (sans binary/artwork).
+	metadata.AllTags = collectAllTags(raw)
+
 	seriesValue, seriesSource := pickFirstNonEmpty(
 		fieldCandidate{value: getRawString(raw, "TXXX:SERIES", "SERIES", "SERIES_NAME", "SERIESNAME", "MVNM", "GRP1", "TGID", "©grp", "\xa9grp"), source: "raw.series"},
 	)
@@ -516,6 +525,38 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// binaryTagKeyRe matches tag keys that hold embedded artwork / binary blobs,
+// which must NOT be copied into the lossless AllTags map (they're megabytes and
+// covers are stored separately).
+var binaryTagKeyRe = regexp.MustCompile(`(?i)^(APIC|PIC|covr|©cov|METADATA_BLOCK_PICTURE|COVERART)`)
+
+// collectAllTags flattens a dhowden raw tag map into a lossless string→string map,
+// normalizing each value and skipping binary/picture frames and empty values.
+func collectAllTags(raw map[string]interface{}) map[string]string {
+	if len(raw) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(raw))
+	for k, v := range raw {
+		if binaryTagKeyRe.MatchString(k) {
+			continue
+		}
+		if _, isPic := v.(*tag.Picture); isPic {
+			continue
+		}
+		if _, isBytes := v.([]byte); isBytes {
+			continue
+		}
+		if s := strings.TrimSpace(normalizeRawTagValue(v)); s != "" {
+			out[k] = s
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // parseSlashPair parses an iTunes/ID3 track-or-disc value of the form "N" or

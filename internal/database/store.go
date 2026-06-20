@@ -1,7 +1,7 @@
 // file: internal/database/store.go
-// version: 2.78.0
+// version: 2.79.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-06-10
+// last-edited: 2026-06-20
 
 package database
 
@@ -255,7 +255,7 @@ type Book struct {
 	LastScanSize  *int64 `json:"last_scan_size,omitempty"`
 	NeedsRescan   *bool  `json:"needs_rescan,omitempty"`
 	// Fingerprinting fields (computed, not stored in DB)
-	FingerprintStatus      string     `json:"fingerprint_status,omitempty"`      // "none", "partial", "complete"
+	FingerprintStatus      string     `json:"fingerprint_status,omitempty"` // "none", "partial", "complete"
 	FingerprintedFileCount int        `json:"fingerprinted_file_count,omitempty"`
 	TotalFileCount         int        `json:"total_file_count,omitempty"`
 	CoveragePercent        int        `json:"coverage_percent,omitempty"`
@@ -659,16 +659,22 @@ type BookFile struct {
 	DiscNumber         int    `json:"disc_number,omitempty"`
 	DiscCount          int    `json:"disc_count,omitempty"`
 	Title              string `json:"title,omitempty"`
-	Format             string `json:"format,omitempty"`
-	Codec              string `json:"codec,omitempty"`
-	Duration           int    `json:"duration,omitempty"`
-	FileSize           int64  `json:"file_size,omitempty"`
-	BitrateKbps        int    `json:"bitrate_kbps,omitempty"`
-	SampleRateHz       int    `json:"sample_rate_hz,omitempty"`
-	Channels           int    `json:"channels,omitempty"`
-	BitDepth           int    `json:"bit_depth,omitempty"`
-	FileHash           string `json:"file_hash,omitempty"`
-	OriginalFileHash   string `json:"original_file_hash,omitempty"`
+	// RawTags is the LOSSLESS capture of every tag this file carried at import
+	// (all ID3 frames + MP4 atoms + custom keys), normalized to strings, minus
+	// binary artwork. Populated on scan/import so full provenance is always
+	// recoverable — no future bug can lose tag data we never recorded. Additive
+	// JSON field; nil on rows imported before lossless capture (backfill later).
+	RawTags          map[string]string `json:"raw_tags,omitempty"`
+	Format           string            `json:"format,omitempty"`
+	Codec            string            `json:"codec,omitempty"`
+	Duration         int               `json:"duration,omitempty"`
+	FileSize         int64             `json:"file_size,omitempty"`
+	BitrateKbps      int               `json:"bitrate_kbps,omitempty"`
+	SampleRateHz     int               `json:"sample_rate_hz,omitempty"`
+	Channels         int               `json:"channels,omitempty"`
+	BitDepth         int               `json:"bit_depth,omitempty"`
+	FileHash         string            `json:"file_hash,omitempty"`
+	OriginalFileHash string            `json:"original_file_hash,omitempty"`
 	// PostMetadataHash is the SHA-256 of the file immediately after a metadata
 	// tag write. It differs from OriginalFileHash because tag writes add/change
 	// bytes in the header. Store it so pre-write identity is always recoverable.
@@ -713,11 +719,11 @@ type BookFile struct {
 	// Used to avoid re-querying — the API has rate limits and the answer
 	// is stable for a stable fingerprint.
 	AcoustIDOnlineLookedUpAt *time.Time `json:"acoustid_online_looked_up_at,omitempty"`
-	OrganizeMethod            string     `json:"organize_method,omitempty"`             // "reflink", "hardlink", "copy", "symlink"
-	Missing                   bool       `json:"missing"`
-	SkipScan                  bool       `json:"skip_scan"` // user-set: exclude file from scans/fingerprinting
-	CreatedAt                 time.Time  `json:"created_at"`
-	UpdatedAt                 time.Time  `json:"updated_at"`
+	OrganizeMethod           string     `json:"organize_method,omitempty"` // "reflink", "hardlink", "copy", "symlink"
+	Missing                  bool       `json:"missing"`
+	SkipScan                 bool       `json:"skip_scan"` // user-set: exclude file from scans/fingerprinting
+	CreatedAt                time.Time  `json:"created_at"`
+	UpdatedAt                time.Time  `json:"updated_at"`
 	// Deluge integration fields (spec: deluge-protected-paths-design).
 	// DelugeHash is the torrent info-hash (40-char hex string).
 	// DelugeOriginalPath is the file path before copy-into-library.
@@ -932,8 +938,8 @@ type LibraryStats struct {
 	// file error (from the book_file_errors_by_book: index). Populated alongside
 	// TotalBooks/TotalFiles in computeLibraryStats so all three counts share a
 	// single cache entry and invalidation path.
-	BrokenFiles        int            `json:"broken_files"`
-	ComputedAt         time.Time      `json:"computed_at"`
+	BrokenFiles int       `json:"broken_files"`
+	ComputedAt  time.Time `json:"computed_at"`
 }
 
 // DashboardStats is an alias kept for callers that haven't migrated to LibraryStats yet.
@@ -1017,8 +1023,8 @@ type BookMetadataHashStatsByLib struct {
 
 // AcoustIDStats describes AcoustID fingerprint coverage across all book files.
 type AcoustIDStats struct {
-	TotalFiles      int                    `json:"total_files"`
-	WithFingerprint int                    `json:"with_fingerprint"` // ≥1 segment populated
+	TotalFiles      int                      `json:"total_files"`
+	WithFingerprint int                      `json:"with_fingerprint"` // ≥1 segment populated
 	ByLibrary       []AcoustIDStatsByLibrary `json:"by_library"`
 }
 
