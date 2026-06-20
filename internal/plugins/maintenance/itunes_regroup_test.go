@@ -56,7 +56,7 @@ func TestITunesRegroupApply_MergeAndDelete(t *testing.T) {
 	rep := &fakeReporter{}
 	groups := []itunesservice.HealGroup{{Title: "Merged Book", PIDs: []string{"p1", "p2"}}}
 
-	snap, err := p.buildRegroupSnapshot(context.Background(), s, groups, rep)
+	snap, err := p.buildRegroupSnapshot(context.Background(), s, rep)
 	if err != nil {
 		t.Fatalf("buildRegroupSnapshot: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestITunesRegroupApply_DeleteGuardSkipsResidualExtID(t *testing.T) {
 	p := &Plugin{}
 	rep := &fakeReporter{}
 	groups := []itunesservice.HealGroup{{Title: "Merged Book", PIDs: []string{"p1", "p2"}}}
-	snap, _ := p.buildRegroupSnapshot(context.Background(), s, groups, rep)
+	snap, _ := p.buildRegroupSnapshot(context.Background(), s, rep)
 	plan := itunesservice.PlanRegroup(groups, snap)
 
 	survivor := plan.Groups[0].Target
