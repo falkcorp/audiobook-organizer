@@ -103,6 +103,23 @@ func BuildMetadataFromTaglibMap(tags map[string][]string, filePath string, metaL
 	// Grouping (box-set/anthology divider).
 	metadata.Grouping = get("GROUPING", "GRP1", "TIT1", "CONTENTGROUP")
 
+	// Lossless capture of every tag (sans binary/artwork keys).
+	allTags := make(map[string]string, len(norm))
+	for k, vs := range norm {
+		if binaryTagKeyRe.MatchString(k) {
+			continue
+		}
+		for _, v := range vs {
+			if cleaned := cleanTagValue(v); cleaned != "" {
+				allTags[k] = cleaned
+				break
+			}
+		}
+	}
+	if len(allTags) > 0 {
+		metadata.AllTags = allTags
+	}
+
 	// Series and series index. Custom audiobook tags come first, then
 	// the movement tags iTunes uses, then fall back to splitting the
 	// album name on " - ".

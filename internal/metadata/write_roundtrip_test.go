@@ -411,6 +411,7 @@ func TestCustomTagConsistency_ProvenanceFieldsCoverMetadata(t *testing.T) {
 		"DiscNumber":           true, // positional
 		"DiscTotal":            true, // positional
 		"Grouping":             true, // box-set divider, not a scored value
+		"AllTags":              true, // lossless raw-tag backstop, not a scored value
 	}
 
 	metaFieldsInProvenance := map[string]bool{}

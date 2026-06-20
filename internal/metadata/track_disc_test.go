@@ -52,3 +52,27 @@ func TestBuildMetadataFromTaglibMap_TrackDisc(t *testing.T) {
 		t.Errorf("ASIN = %q, want B0BTDSTWG9", md.ASIN)
 	}
 }
+
+func TestBuildMetadataFromTaglibMap_AllTagsLossless(t *testing.T) {
+	tags := map[string][]string{
+		"ALBUM":                  {"Cage of Souls"},
+		"ARTIST":                 {"Adrian Tchaikovsky"},
+		"WEIRD_CUSTOM_TAG":       {"keepme"}, // not a named field — must survive in AllTags
+		"AUDIOBOOK_ORGANIZER_ID": {"01ABC"},
+		"APIC":                   {"<binary art bytes>"}, // binary frame — must be excluded
+		"COVERART":               {"<more art>"},
+	}
+	md := BuildMetadataFromTaglibMap(tags, "/x/f.mp3", nil)
+	if md.AllTags["WEIRD_CUSTOM_TAG"] != "keepme" {
+		t.Errorf("custom tag not captured losslessly: %v", md.AllTags)
+	}
+	if md.AllTags["ALBUM"] != "Cage of Souls" {
+		t.Errorf("standard tag not in AllTags: %v", md.AllTags)
+	}
+	if _, ok := md.AllTags["APIC"]; ok {
+		t.Errorf("binary APIC frame must be excluded from AllTags")
+	}
+	if _, ok := md.AllTags["COVERART"]; ok {
+		t.Errorf("binary COVERART frame must be excluded from AllTags")
+	}
+}
