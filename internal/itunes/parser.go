@@ -1,5 +1,5 @@
 // file: internal/itunes/parser.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9c3d7e51-2f84-4b60-ae91-d8c72b4f36e0
 
 // Package itunes provides functionality for importing audiobooks from iTunes Library.xml files
@@ -36,6 +36,7 @@ type Track struct {
 	Artist       string    `xml:"-"`
 	AlbumArtist  string    `xml:"-"`
 	Album        string    `xml:"-"`
+	Grouping     string    `xml:"-"`
 	Genre        string    `xml:"-"`
 	Kind         string    `xml:"-"`
 	Year         int       `xml:"-"`

@@ -1,5 +1,5 @@
 // file: internal/itunes/plist_parser.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: d1f3e5c7-a9b1-c3d5-e7f9-1a3b5c7d9e1f
 
 package itunes
@@ -35,6 +35,7 @@ type plistTrack struct {
 	Artist       string    `plist:"Artist"`
 	AlbumArtist  string    `plist:"Album Artist"`
 	Album        string    `plist:"Album"`
+	Grouping     string    `plist:"Grouping"`
 	Genre        string    `plist:"Genre"`
 	Kind         string    `plist:"Kind"`
 	Year         int       `plist:"Year"`
@@ -167,6 +168,7 @@ func writePlist(library *Library, path string) error {
 			Artist:       track.Artist,
 			AlbumArtist:  track.AlbumArtist,
 			Album:        track.Album,
+			Grouping:     track.Grouping,
 			Genre:        track.Genre,
 			Kind:         track.Kind,
 			Year:         track.Year,
@@ -429,6 +431,7 @@ func buildTrackFromDict(data map[string]string) *Track {
 	track.Artist = data["Artist"]
 	track.AlbumArtist = data["Album Artist"]
 	track.Album = data["Album"]
+	track.Grouping = data["Grouping"]
 	track.Genre = data["Genre"]
 	track.Kind = data["Kind"]
 
