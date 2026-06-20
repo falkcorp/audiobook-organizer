@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.62.0
+// version: 1.63.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-06-14
+// last-edited: 2026-06-20
 
 package database
 
@@ -330,6 +330,7 @@ type MockStore struct {
 	IsExternalIDTombstonedFunc       func(source, externalID string) (bool, error)
 	TombstoneExternalIDFunc          func(source, externalID string) error
 	ReassignExternalIDsFunc          func(oldBookID, newBookID string) error
+	ReassignExternalIDFunc           func(source, externalID, newBookID string) error
 	BulkCreateExternalIDMappingsFunc func(mappings []ExternalIDMapping) error
 
 	// BookFile methods
@@ -2038,6 +2039,13 @@ func (m *MockStore) TombstoneExternalID(source, externalID string) error {
 func (m *MockStore) ReassignExternalIDs(oldBookID, newBookID string) error {
 	if m.ReassignExternalIDsFunc != nil {
 		return m.ReassignExternalIDsFunc(oldBookID, newBookID)
+	}
+	return nil
+}
+
+func (m *MockStore) ReassignExternalID(source, externalID, newBookID string) error {
+	if m.ReassignExternalIDFunc != nil {
+		return m.ReassignExternalIDFunc(source, externalID, newBookID)
 	}
 	return nil
 }
