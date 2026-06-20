@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.52.0 -->
+<!-- version: 3.53.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-20 -->
 
@@ -16,6 +16,15 @@ existing iTunes books accreted under the old buggy grouping — IN PLACE, preser
 enrichment / version groups / manual edits — instead of delete+reimport (which the
 canary proved tombstones PIDs and blocks recreation; see
 `.claude/notes/itunes-heal-canary-findings.md`).
+
+**Outcome (prod dry-run): the library is already correctly grouped** —
+`consolidate=0`, zero fragmentation/over-merge remain; no mass heal needed. The op
+now also reports completeness (complete vs partial groups) and buckets single-file
+books by duration. Ran `maintenance.duration-backfill` apply (17,684 file durations
+across 1,210 books corrected ms→s); the duration buckets then showed the 554
+single-file-in-album books are 366 complete books + 181 short books + only 7 truly
+short (anthology pieces) — i.e. **no orphaned-chapter problem**. Remaining backlog of
+~383,902 pre-fix dedup candidates is a separate re-detection/purge workstream.
 
 - Re-derives the correct books from the iTunes XML via the FIXED grouping
   (`itunesservice.GroupLibraryForHeal`), then gathers each book's tracks onto a
