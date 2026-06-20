@@ -200,6 +200,37 @@ func TestPlanRegroup_UnresolvedPIDs(t *testing.T) {
 	}
 }
 
+func TestPlanRegroup_CompletenessMetrics(t *testing.T) {
+	// "Complete": both PIDs present on a 2-file book. "Partial": only 1 of 3 PIDs
+	// present, on a single-file book — a lone chapter of a multi-track book.
+	groups := []HealGroup{
+		{Title: "Complete", PIDs: []string{"a1", "a2"}},
+		{Title: "Partial", PIDs: []string{"b1", "b2", "b3"}},
+	}
+	snap := mkSnap(
+		map[string]PIDLoc{
+			"a1": {FileID: "fa1", BookID: "BA"}, "a2": {FileID: "fa2", BookID: "BA"},
+			"b1": {FileID: "fb1", BookID: "BB"}, // b2, b3 unresolved (not imported)
+		},
+		map[string]BookMeta{
+			"BA": {ID: "BA", FileCount: 2},
+			"BB": {ID: "BB", FileCount: 1},
+		},
+	)
+	p := PlanRegroup(groups, snap)
+	if p.CompleteGroups != 1 || p.PartialGroups != 1 {
+		t.Fatalf("complete=%d partial=%d, want 1/1", p.CompleteGroups, p.PartialGroups)
+	}
+	if p.SingleFileChapterBooks != 1 {
+		t.Fatalf("single-file-chapter books=%d, want 1 (BB)", p.SingleFileChapterBooks)
+	}
+	// Both are "already-correct" by the move metric (resolved PIDs each on one book)
+	// — proving already-correct ≠ complete.
+	if p.AlreadyCorrect != 2 {
+		t.Fatalf("already-correct=%d, want 2 (partial still counts as no-move)", p.AlreadyCorrect)
+	}
+}
+
 func TestPlanRegroup_Deterministic(t *testing.T) {
 	groups := []HealGroup{
 		{Title: "Alpha", PIDs: []string{"p1", "p2", "p3"}},

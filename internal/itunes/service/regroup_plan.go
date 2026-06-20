@@ -1,5 +1,5 @@
 // file: internal/itunes/service/regroup_plan.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-06-20
 
@@ -61,12 +61,22 @@ type RegroupPlan struct {
 
 	// Metrics (for the dry-run model-validation report).
 	TotalGroups      int
-	AlreadyCorrect   int // target already holds exactly the group's resolved PIDs
+	AlreadyCorrect   int // group's resolved PIDs already all on one book (may be PARTIAL)
 	Consolidated     int // groups requiring ≥1 move
 	EntangledSkipped int
 	FreshBooks       int
 	PIDsResolved     int
 	PIDsUnresolved   int
+
+	// Completeness metrics — distinguish "correctly grouped" from "only partially
+	// present". A group is PARTIAL when some of its XML PIDs resolve in the DB and
+	// some do not: the book(s) holding it are missing tracks. CompleteGroups have
+	// every XML PID present. SingleFileChapterBooks is the count of distinct books
+	// that (a) hold ≥1 PID of a multi-track group and (b) have exactly one file —
+	// i.e. lone single-file "books" that are really one chapter of a larger book.
+	CompleteGroups         int
+	PartialGroups          int
+	SingleFileChapterBooks int
 }
 
 // PlanRegroup computes the frozen heal plan: assign each group exactly one target
@@ -80,7 +90,8 @@ type RegroupPlan struct {
 // silently retitling it.
 func PlanRegroup(groups []HealGroup, snap Snapshot) RegroupPlan {
 	plan := RegroupPlan{TotalGroups: len(groups)}
-	claimed := make(map[string]bool, len(groups)) // existing books already taken as a target
+	claimed := make(map[string]bool, len(groups))   // existing books already taken as a target
+	singleFileChapters := make(map[string]struct{}) // distinct single-file books in multi-track groups
 
 	for _, g := range groups {
 		act := GroupAction{Title: g.Title}
@@ -98,6 +109,23 @@ func PlanRegroup(groups []HealGroup, snap Snapshot) RegroupPlan {
 		}
 		plan.PIDsResolved += len(resolved)
 		plan.PIDsUnresolved += len(act.Unresolved)
+
+		// Completeness: did every XML track for this group make it into the DB?
+		if len(resolved) > 0 {
+			if len(resolved) == len(g.PIDs) {
+				plan.CompleteGroups++
+			} else {
+				plan.PartialGroups++
+			}
+		}
+		// Lone single-file books that are really one chapter of a multi-track book.
+		if len(g.PIDs) > 1 {
+			for _, loc := range resolved {
+				if b, ok := snap.Books[loc.BookID]; ok && b.FileCount == 1 {
+					singleFileChapters[loc.BookID] = struct{}{}
+				}
+			}
+		}
 
 		if len(resolved) == 0 {
 			// Nothing in the DB to heal for this group (book never imported).
@@ -150,6 +178,7 @@ func PlanRegroup(groups []HealGroup, snap Snapshot) RegroupPlan {
 		plan.Groups = append(plan.Groups, act)
 	}
 
+	plan.SingleFileChapterBooks = len(singleFileChapters)
 	plan.DeleteBooks = projectEmptyBooks(plan.Groups, snap)
 	return plan
 }
