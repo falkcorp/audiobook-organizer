@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.43.0
+// version: 1.44.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-06-19
 
@@ -1285,6 +1285,25 @@ func createBookFilesForBook(bookFilePath string, segmentFiles []string, scanLog 
 			Format:           strings.TrimPrefix(ext, "."),
 			FileSize:         sizeBytes,
 			TrackNumber:      trackNum,
+		}
+
+		// Read the file's tags so we capture EVERY tag losslessly (RawTags) and
+		// use the real track/disc position from the tag instead of the file's
+		// positional index (the index-based TrackNumber above is only a fallback,
+		// and grouping-by-folder over positional tracks is what shattered books).
+		if meta, merr := metadata.ExtractMetadata(filePath, nil); merr == nil {
+			bf.RawTags = meta.AllTags
+			if meta.TrackNumber > 0 {
+				bf.TrackNumber = meta.TrackNumber
+			}
+			bf.TrackCount = meta.TrackTotal
+			bf.DiscNumber = meta.DiscNumber
+			bf.DiscCount = meta.DiscTotal
+			if meta.Title != "" {
+				bf.Title = meta.Title
+			}
+		} else {
+			scanLog.Debug("tag read failed for %s (keeping positional track): %v", filePath, merr)
 		}
 
 		if h, herr := ComputeFileHash(filePath); herr == nil {
