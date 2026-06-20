@@ -166,6 +166,22 @@ func TestPlanRegroup_VersionEntangledSkipped(t *testing.T) {
 	}
 }
 
+func TestPlanRegroup_EntangledButAlreadyCorrect_NotSkipped(t *testing.T) {
+	// All of the group's PIDs are already on ONE book that happens to be version-
+	// entangled. Zero moves → entanglement is irrelevant → AlreadyCorrect, NOT
+	// skipped. (Regression guard for the check-ordering bug that falsely skipped
+	// ~95% of groups merely for touching a version-grouped book.)
+	groups := []HealGroup{{Title: "Solo", PIDs: []string{"p1", "p2"}}}
+	snap := mkSnap(
+		map[string]PIDLoc{"p1": {FileID: "f1", BookID: "B1"}, "p2": {FileID: "f2", BookID: "B1"}},
+		map[string]BookMeta{"B1": {ID: "B1", FileCount: 2, VersionGroupID: "vg1", HasNonPrimaryMembers: true}},
+	)
+	p := PlanRegroup(groups, snap)
+	if p.AlreadyCorrect != 1 || p.EntangledSkipped != 0 {
+		t.Fatalf("AlreadyCorrect=%d EntangledSkipped=%d, want 1/0", p.AlreadyCorrect, p.EntangledSkipped)
+	}
+}
+
 func TestPlanRegroup_UnresolvedPIDs(t *testing.T) {
 	// p3 is in the XML group but absent from the DB → counted unresolved; the
 	// resolved p1,p2 still consolidate.

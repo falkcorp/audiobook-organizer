@@ -1,5 +1,5 @@
 // file: internal/itunes/service/regroup_plan.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-06-20
 
@@ -105,9 +105,32 @@ func PlanRegroup(groups []HealGroup, snap Snapshot) RegroupPlan {
 			continue
 		}
 
-		// Version-entanglement guard: if any book holding this group's files is
-		// part of a version group with non-primary members, skip (conservative
-		// v1 — auto-merging could orphan or mis-merge curated versions).
+		// Pick the target: the best UNCLAIMED book among the holders, then compute
+		// the moves needed to gather this group's files onto it.
+		target, fresh := pickTarget(resolved, snap, claimed)
+		var moves []FileMove
+		for i, loc := range resolved {
+			if loc.BookID != target {
+				moves = append(moves, FileMove{PID: resolvedPIDs[i], FileID: loc.FileID, From: loc.BookID})
+			}
+		}
+
+		// Already correct: all of this group's files are on one existing book.
+		// Nothing moves, so version entanglement is IRRELEVANT (nothing to orphan
+		// or mis-merge) — claim the book and count it correct, never skip it.
+		// (Checking entanglement BEFORE this point is the bug that made ~95% of
+		// groups falsely skip merely for touching a version-grouped book.)
+		if len(moves) == 0 && !fresh {
+			act.Target = target
+			claimed[target] = true
+			plan.AlreadyCorrect++
+			plan.Groups = append(plan.Groups, act)
+			continue
+		}
+
+		// Moves ARE needed. Only now does entanglement matter: auto-merging could
+		// orphan or mis-merge curated versions (or genuine alternate editions), so
+		// skip (conservative v1). This count is "entangled AND would-move".
 		if entangledAmong(resolved, snap) {
 			act.Entangled = true
 			plan.EntangledSkipped++
@@ -115,29 +138,15 @@ func PlanRegroup(groups []HealGroup, snap Snapshot) RegroupPlan {
 			continue
 		}
 
-		// Pick the target: the best UNCLAIMED book among the holders. If every
-		// holder is already claimed by an earlier group, allocate a fresh book.
-		target, fresh := pickTarget(resolved, snap, claimed)
 		act.Target = target
 		act.FreshBook = fresh
+		act.Moves = moves
 		if fresh {
 			plan.FreshBooks++
 		} else {
 			claimed[target] = true
 		}
-
-		// Emit a move for every resolved PID whose file is not already on target.
-		for i, loc := range resolved {
-			if loc.BookID != target {
-				act.Moves = append(act.Moves, FileMove{PID: resolvedPIDs[i], FileID: loc.FileID, From: loc.BookID})
-			}
-		}
-
-		if len(act.Moves) == 0 && !fresh {
-			plan.AlreadyCorrect++
-		} else {
-			plan.Consolidated++
-		}
+		plan.Consolidated++
 		plan.Groups = append(plan.Groups, act)
 	}
 
