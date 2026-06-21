@@ -1,5 +1,5 @@
 // file: internal/itunes/service/fs_regroup.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3b8e1f04-7a2c-4d96-9e51-0c6f2a8d4b73
 // last-edited: 2026-06-20
 
@@ -56,10 +56,25 @@ type FSRegroupTarget struct {
 	DistinctTitles []string // populated when !Cohesive (review signal)
 }
 
-// chapterDirRe matches a chapter subdir basename like "Cage of Souls - 15".
+// chapterDirRe matches a chapter subdir basename like "Cage of Souls - 15":
+// "<prefix> - <number>". The prefix is the real book title.
 var chapterDirRe = regexp.MustCompile(`^(.*) - (\d+)$`)
 
-// normTitle lowercases and strips non-alphanumerics for title cohesion comparison.
+// GroupStats reports why books were / were not grouped, so the record count can be
+// reconciled against the on-disk inventory (no silent filtering).
+type GroupStats struct {
+	TotalBooks        int // all books seen
+	NonPrimary        int // skipped: non-primary version member
+	MultiFile         int // skipped: already a real multi-file book
+	NotChapterPattern int // skipped: file not inside a "<prefix> - N" chapter dir
+	ChapterCandidates int // single-file primary books inside a chapter dir
+	SingletonGroups   int // (parent,prefix) groups with a single member (lone chapter)
+	PrefixNotInParent int // groups skipped: prefix not a substring of the book folder name
+	GroupedRecords    int // member records in accepted shattered books
+	ShatteredBooks    int // accepted shattered books (== len(targets))
+}
+
+// normTitle lowercases and strips non-alphanumerics for substring/identity comparison.
 func normTitle(s string) string {
 	var b strings.Builder
 	for _, r := range strings.ToLower(s) {
@@ -70,86 +85,86 @@ func normTitle(s string) string {
 	return b.String()
 }
 
-// bookFolderOf returns the grandparent directory (the book folder) when the file sits
-// inside a numbered chapter subdir (`<book>/<book> - N/<file>`); otherwise it returns
-// the immediate parent. The grandparent is the shattered-book boundary.
-func bookFolderOf(fp string) string {
-	parent := filepath.Dir(fp)
-	if chapterDirRe.MatchString(filepath.Base(parent)) {
-		return filepath.Dir(parent)
+// chapterParts returns the parent dir, the book-title prefix, and the chapter number
+// for a file inside a "<prefix> - N" chapter dir. ok=false when it isn't one.
+func chapterParts(fp string) (parent, prefix string, num int, ok bool) {
+	chapterDir := filepath.Dir(fp)
+	m := chapterDirRe.FindStringSubmatch(filepath.Base(chapterDir))
+	if m == nil {
+		return "", "", 0, false
 	}
-	return parent
+	n, err := strconv.Atoi(m[2])
+	if err != nil {
+		return "", "", 0, false
+	}
+	return filepath.Dir(chapterDir), m[1], n, true
 }
 
-// chapterNumOf extracts the chapter ordinal from the chapter-dir basename for ordering;
-// returns a large fallback so unparseable members sort last but stably.
-func chapterNumOf(fp string) int {
-	if m := chapterDirRe.FindStringSubmatch(filepath.Base(filepath.Dir(fp))); m != nil {
-		if n, err := strconv.Atoi(m[2]); err == nil {
-			return n
-		}
-	}
-	return 1 << 30
-}
-
-// GroupShatteredBooks groups single-file books by grandparent book-folder into recovered
-// books. Only folders holding >=2 single-file primary books are returned (a lone single-file
-// book under a folder is not "shattered"). Cohesion is reported, never silently merged across
-// distinct identities.
-func GroupShatteredBooks(books []FSBook) []FSRegroupTarget {
-	byFolder := make(map[string][]FSBook)
+// GroupShatteredBooks groups shattered chapter books by (parent dir, chapter prefix).
+//
+// The true shattered-book signature is `<BookFolder>/<prefix> - N/<file>` where the book
+// folder is NAMED AFTER the book — i.e. the chapter prefix is a substring of the parent
+// folder name (`Cage of Souls - Cage of Souls/` holds `Cage of Souls - N/`). Requiring
+// prefix ⊆ parent is high-precision: it catches Cage of Souls / Elantris but EXCLUDES
+// flat dumps (`abooks/Throne of Jade 01/…`, parent "abooks" ⊉ "Throne of Jade") and series
+// volumes stored as `Author/Series - N/singlefile` (parent = author ⊉ series) which must
+// NOT be merged. The chapter prefix is used as the canonical title (Book.Title is often
+// empty on these). Returns stats so the record count reconciles against the inventory.
+func GroupShatteredBooks(books []FSBook) ([]FSRegroupTarget, GroupStats) {
+	var st GroupStats
+	st.TotalBooks = len(books)
+	type key struct{ parent, prefix string }
+	byKey := make(map[key][]FSBook)
 	for _, b := range books {
-		if b.FilePath == "" || !b.IsPrimary {
+		if !b.IsPrimary {
+			st.NonPrimary++
 			continue
 		}
 		if b.FileCount > 1 {
-			continue // already a real multi-file book
-		}
-		folder := bookFolderOf(b.FilePath)
-		// require the file to actually be in a numbered chapter subdir — that is the
-		// shattering fingerprint; a plain single-file book under its own folder is skipped.
-		if !chapterDirRe.MatchString(filepath.Base(filepath.Dir(b.FilePath))) {
+			st.MultiFile++
 			continue
 		}
-		byFolder[folder] = append(byFolder[folder], b)
+		if b.FilePath == "" {
+			st.NotChapterPattern++
+			continue
+		}
+		parent, prefix, _, ok := chapterParts(b.FilePath)
+		if !ok {
+			st.NotChapterPattern++
+			continue
+		}
+		st.ChapterCandidates++
+		byKey[key{parent, prefix}] = append(byKey[key{parent, prefix}], b)
 	}
 
-	targets := make([]FSRegroupTarget, 0, len(byFolder))
-	for folder, members := range byFolder {
+	targets := make([]FSRegroupTarget, 0, len(byKey))
+	for k, members := range byKey {
 		if len(members) < 2 {
+			st.SingletonGroups++
+			continue
+		}
+		// Precision guard: the book folder must be named after the book.
+		if !strings.Contains(normTitle(filepath.Base(k.parent)), normTitle(k.prefix)) {
+			st.PrefixNotInParent++
 			continue
 		}
 		sort.SliceStable(members, func(i, j int) bool {
-			return chapterNumOf(members[i].FilePath) < chapterNumOf(members[j].FilePath)
+			_, _, ni, _ := chapterParts(members[i].FilePath)
+			_, _, nj, _ := chapterParts(members[j].FilePath)
+			return ni < nj
 		})
 
-		// Consensus identity + cohesion.
-		titleVotes := make(map[string]int)
-		asinVotes := make(map[string]int)
 		authorVotes := make(map[int]int)
-		titleDisplay := make(map[string]string)
+		asinVotes := make(map[string]int)
 		for _, m := range members {
-			nt := normTitle(m.Title)
-			titleVotes[nt]++
-			titleDisplay[nt] = m.Title
 			authorVotes[m.AuthorID]++
 			if m.ASIN != "" {
 				asinVotes[m.ASIN]++
 			}
 		}
-		title, _ := topString(titleVotes, titleDisplay)
 		author := topInt(authorVotes)
 		asin, asinDominant := topASIN(asinVotes, len(members))
 
-		distinct := make([]string, 0, len(titleVotes))
-		for nt := range titleVotes {
-			distinct = append(distinct, titleDisplay[nt])
-		}
-		sort.Strings(distinct)
-		cohesive := len(titleVotes) == 1 && len(authorVotes) == 1
-
-		// Survivor = the member with the richest enrichment (ties → earliest chapter,
-		// since members are already chapter-ordered and the scan is stable).
 		survivor := ""
 		bestEnrich := -1
 		for _, m := range members {
@@ -159,34 +174,35 @@ func GroupShatteredBooks(books []FSBook) []FSRegroupTarget {
 			}
 		}
 
+		// Cohesive unless members disagree on a real (non-zero) author.
+		distinctAuthors := 0
+		for a := range authorVotes {
+			if a != 0 {
+				distinctAuthors++
+			}
+		}
 		t := FSRegroupTarget{
-			BookFolder: folder,
-			Title:      title,
+			BookFolder: k.parent,
+			Title:      k.prefix, // the chapter prefix IS the book title
 			AuthorID:   author,
 			Members:    members,
 			SurvivorID: survivor,
-			Cohesive:   cohesive,
+			Cohesive:   distinctAuthors <= 1,
 		}
 		if asinDominant {
 			t.ASIN = asin
 		}
-		if !cohesive {
-			t.DistinctTitles = distinct
-		}
+		st.ShatteredBooks++
+		st.GroupedRecords += len(members)
 		targets = append(targets, t)
 	}
-	sort.SliceStable(targets, func(i, j int) bool { return targets[i].BookFolder < targets[j].BookFolder })
-	return targets
-}
-
-func topString(votes map[string]int, display map[string]string) (string, int) {
-	bestKey, best := "", -1
-	for k, v := range votes {
-		if v > best || (v == best && k < bestKey) {
-			bestKey, best = k, v
+	sort.SliceStable(targets, func(i, j int) bool {
+		if targets[i].BookFolder != targets[j].BookFolder {
+			return targets[i].BookFolder < targets[j].BookFolder
 		}
-	}
-	return display[bestKey], best
+		return targets[i].Title < targets[j].Title
+	})
+	return targets, st
 }
 
 func topInt(votes map[int]int) int {

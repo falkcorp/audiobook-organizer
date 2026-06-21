@@ -41,6 +41,9 @@ import (
 type fsRegroupParams struct {
 	// DryRun defaults true (safe). Set false to apply the plan and mutate the library.
 	DryRun bool `json:"dryRun"`
+	// Limit caps how many shattered books the apply path heals in one run (0 = no cap).
+	// Use limit=1 for the first canary apply before batching.
+	Limit int `json:"limit"`
 }
 
 func (p *Plugin) fsRegroupXMLDef() sdk.OperationDef {
@@ -138,7 +141,7 @@ func (p *Plugin) runFSRegroupXML(ctx context.Context, raw json.RawMessage, repor
 
 	// Phase 3: group + report.
 	_ = reporter.UpdateProgress(2, 3, "Phase 3/3: grouping shattered books…")
-	targets := itunesservice.GroupShatteredBooks(all)
+	targets, st := itunesservice.GroupShatteredBooks(all)
 
 	var cohesive, flagged, withASIN, chapterRecords int
 	hist := map[string]int{}
@@ -166,23 +169,30 @@ func (p *Plugin) runFSRegroupXML(ctx context.Context, raw json.RawMessage, repor
 	}
 
 	summary := fmt.Sprintf(
-		"shattered-books=%d chapter-records=%d cohesive=%d flagged-mixed=%d with-asin=%d | sizes %v",
+		"shattered-books=%d chapter-records=%d cohesive=%d author-mixed=%d with-asin=%d | sizes %v",
 		len(targets), chapterRecords, cohesive, flagged, withASIN, hist)
+	// Reconciliation: account for EVERY book so the record count ties out vs the inventory.
+	recon := fmt.Sprintf(
+		"RECONCILE: total=%d non-primary=%d multi-file=%d not-chapter-pattern=%d chapter-candidates=%d "+
+			"→ singleton-groups=%d prefix-not-in-parent=%d grouped-records=%d",
+		st.TotalBooks, st.NonPrimary, st.MultiFile, st.NotChapterPattern, st.ChapterCandidates,
+		st.SingletonGroups, st.PrefixNotInParent, st.GroupedRecords)
+	_ = reporter.Log(slog.LevelInfo, recon)
+
 	if params.DryRun {
 		_ = reporter.Log(slog.LevelInfo, "DRY RUN PLAN: "+summary)
 		_ = reporter.Log(slog.LevelInfo, "DRY RUN examples: "+strings.Join(fsRegroupExamples(targets, 12), " | "))
-		if flagged > 0 {
-			_ = reporter.Log(slog.LevelWarn, "FLAGGED (mixed-identity folders, review before apply): "+
-				strings.Join(fsRegroupFlagged(targets, 10), " | "))
-		}
 		_ = reporter.UpdateProgress(3, 3, "DRY RUN — "+summary)
 		return nil
 	}
 
-	// APPLY: collapse each cohesive shattered folder into ONE book. Mixed-identity
-	// folders are skipped (require review). Snapshot-backed (ZFS hourly); advisor-gated.
-	_ = reporter.Log(slog.LevelInfo, "APPLY — "+summary)
-	return p.applyFSRegroup(ctx, store, targets, reporter)
+	// APPLY: collapse each cohesive shattered book into ONE record. Snapshot-backed.
+	if params.Limit > 0 {
+		_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("APPLY (limit=%d) — %s", params.Limit, summary))
+	} else {
+		_ = reporter.Log(slog.LevelInfo, "APPLY — "+summary)
+	}
+	return p.applyFSRegroup(ctx, store, targets, params.Limit, reporter)
 }
 
 // applyFSRegroup executes the regroup: for each cohesive target, attach a BookFile
@@ -190,7 +200,7 @@ func (p *Plugin) runFSRegroupXML(ctx context.Context, raw json.RawMessage, repor
 // folder path, reassign any external-ids off the deleted shells, then delete the
 // emptied non-survivor chapter books. Lean by design — stat-only per file, no hashing
 // (the tag-backfill op fills RawTags/hashes after). Recompute aggregates per survivor.
-func (p *Plugin) applyFSRegroup(ctx context.Context, store database.Store, targets []itunesservice.FSRegroupTarget, reporter sdk.Reporter) error {
+func (p *Plugin) applyFSRegroup(ctx context.Context, store database.Store, targets []itunesservice.FSRegroupTarget, limit int, reporter sdk.Reporter) error {
 	var (
 		healedBooks, filesAttached, deleted, deleteSkipped, skippedMixed, errCount int
 		lastLog                                                                    = time.Now()
@@ -198,6 +208,9 @@ func (p *Plugin) applyFSRegroup(ctx context.Context, store database.Store, targe
 	for ti := range targets {
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		if limit > 0 && healedBooks >= limit {
+			break // canary cap: heal only `limit` books this run
 		}
 		t := targets[ti]
 		if !t.Cohesive || t.SurvivorID == "" {
@@ -305,17 +318,6 @@ func fsRegroupExamples(targets []itunesservice.FSRegroupTarget, n int) []string 
 			break
 		}
 		out = append(out, fmt.Sprintf("%q (%d ch%s)", t.Title, len(t.Members), asinTag(t.ASIN)))
-	}
-	return out
-}
-
-func fsRegroupFlagged(targets []itunesservice.FSRegroupTarget, n int) []string {
-	out := make([]string, 0, n)
-	for _, t := range targets {
-		if t.Cohesive || len(out) >= n {
-			continue
-		}
-		out = append(out, fmt.Sprintf("%s → %v", t.BookFolder, t.DistinctTitles))
 	}
 	return out
 }
