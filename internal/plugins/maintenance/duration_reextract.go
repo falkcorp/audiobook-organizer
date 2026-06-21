@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_reextract.go
-// version: 2.0.0
+// version: 3.0.0
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
 // last-edited: 2026-06-21
 
@@ -30,9 +30,21 @@
 // untrustworthy, so the whole book is skipped (counted) rather than half-written.
 // Book.Duration is what dedup's checkDurationMatch consumes.
 //
+// Source priority (v3): fingerprinting already measured and stored the real
+// decode duration in BookFile.AcoustIDFingerprintDurationSec for ~275K files. v3
+// reads that stored value FIRST and treats it as authoritative — no stat, no
+// ffprobe — so the fingerprinted majority of the backlog is a fast pure-DB pass.
+// ffprobe is the fallback only for never-fingerprinted segments (and virtual
+// single-file books, which have no BookFile row to carry the value). The summary
+// reports from-fingerprint vs from-ffprobe so a dry-run reveals the fast/slow
+// split. The FingerprintFailedAt tombstone does NOT gate the ffprobe fallback:
+// ffprobe can still read a container header even when full-decode fingerprinting
+// failed, and the worst case is simply skipping the book.
+//
 // Idempotent: a re-run finds already-corrected rows within tolerance and skips
-// them. Slow by design — it shells out to ffprobe once per segment — so it
-// heartbeats progress every ~15s and is cancellable.
+// them. The ffprobe tail is slow by design — it shells out once per
+// non-fingerprinted segment — so the op heartbeats progress every ~15s and is
+// cancellable.
 
 package maintenance
 
@@ -62,8 +74,8 @@ type durationReextractParams struct {
 // real duration differs from the stored value by more than BOTH a relative and an
 // absolute floor, so we never churn rows over sub-second rounding noise.
 const (
-	durationRelTolerance = 0.02 // 2%
-	durationAbsToleranceS = 5   // seconds
+	durationRelTolerance  = 0.02 // 2%
+	durationAbsToleranceS = 5    // seconds
 )
 
 // durationDiffMeaningful reports whether newDur differs from oldDur by enough to
@@ -84,11 +96,12 @@ func (p *Plugin) durationReextractDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.duration-reextract",
 		Plugin:      "maintenance",
-		DisplayName: "Re-extract real book durations via ffprobe",
-		Description: "Re-reads the true audio-stream duration (ffprobe) for existing single-file books and " +
-			"corrects Book.Duration where the old fileSize÷bitrate estimate was wrong (PR #1555; m4b/m4a were ~2× too short). " +
-			"Never overwrites a real duration with an estimate, and skips files missing on disk. " +
-			"Default dry-run previews counts; set dryRun=false to apply. Slow: shells out to ffprobe per book.",
+		DisplayName: "Re-extract real book durations (fingerprint-first)",
+		Description: "Reads the real per-file duration already stored from fingerprinting (AcoustIDFingerprintDurationSec) first — a fast DB pass — " +
+			"and falls back to ffprobe only for never-fingerprinted files. Handles both multi-file and virtual single-file books. " +
+			"Corrects Book.Duration where the old fileSize÷bitrate estimate was wrong (PR #1555; m4b/m4a were ~2× too short). " +
+			"Never overwrites a real duration with an estimate, and skips books with any unreadable segment. " +
+			"Default dry-run previews counts (incl. fingerprint vs ffprobe split); set dryRun=false to apply.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.duration-reextract",
@@ -138,6 +151,8 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 		estimated     int // ffprobe failed → estimate returned; never trusted/written
 		readErr       int // mediainfo.Extract returned an error
 		noPath        int // book has no single-file FilePath (multi-file; out of v1 scope)
+		fpBooks       int // eligible books fully sourced from stored fingerprint durations (fast path)
+		ffprobeBooks  int // eligible books that needed ≥1 ffprobe call (slow tail)
 		written       int // actual UpdateBook calls (apply mode)
 		examples      = make([]string, 0, exampleCap)
 		lastLog       = time.Now()
@@ -153,8 +168,8 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 			total = examined
 		}
 		_ = reporter.UpdateProgress(examined, total, fmt.Sprintf(
-			"examined=%d eligible=%d would-change=%d (~2x=%d) missing=%d est-skip=%d read-err=%d",
-			examined, eligible, wouldChange, roughlyDouble, missing, estimated, readErr))
+			"examined=%d eligible=%d (fp=%d ffprobe=%d) would-change=%d (~2x=%d) missing=%d est-skip=%d read-err=%d",
+			examined, eligible, fpBooks, ffprobeBooks, wouldChange, roughlyDouble, missing, estimated, readErr))
 		lastLog = time.Now()
 	}
 
@@ -188,9 +203,10 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 			segs, _ := store.GetBookFiles(book.ID)
 
 			var (
-				newDur     int
-				changedBFs []database.BookFile
-				skip       bool
+				newDur      int
+				changedBFs  []database.BookFile
+				skip        bool
+				usedFfprobe bool // this book needed ≥1 ffprobe call (slow tail)
 			)
 
 			if len(segs) > 0 {
@@ -199,31 +215,44 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 					if f.FilePath == "" {
 						continue // pathless segment contributes nothing; tolerate
 					}
-					if _, statErr := os.Stat(f.FilePath); statErr != nil {
-						missing++
-						skip = true
-						break
+					// v3 fast path: fingerprinting already measured and stored the real
+					// decode duration. Trust it as authoritative — no stat, no ffprobe.
+					// Only segments never fingerprinted fall through to the slow ffprobe
+					// path below.
+					var segDur int
+					if f.AcoustIDFingerprintDurationSec > 0 {
+						segDur = int(math.Round(f.AcoustIDFingerprintDurationSec))
+					} else {
+						usedFfprobe = true
+						if _, statErr := os.Stat(f.FilePath); statErr != nil {
+							missing++
+							skip = true
+							break
+						}
+						info, mErr := mediainfo.Extract(f.FilePath)
+						if mErr != nil || info == nil || info.Duration <= 0 {
+							readErr++
+							skip = true
+							break
+						}
+						if info.DurationEstimated {
+							estimated++
+							skip = true
+							break
+						}
+						segDur = info.Duration
 					}
-					info, mErr := mediainfo.Extract(f.FilePath)
-					if mErr != nil || info == nil || info.Duration <= 0 {
-						readErr++
-						skip = true
-						break
-					}
-					if info.DurationEstimated {
-						estimated++
-						skip = true
-						break
-					}
-					newDur += info.Duration
-					if durationDiffMeaningful(f.Duration, info.Duration) {
+					newDur += segDur
+					if durationDiffMeaningful(f.Duration, segDur) {
 						nf := f
-						nf.Duration = info.Duration
+						nf.Duration = segDur
 						changedBFs = append(changedBFs, nf)
 					}
 				}
 			} else {
-				// Virtual single-file book: probe Book.FilePath directly.
+				// Virtual single-file book: no BookFile rows means no stored fingerprint
+				// duration, so always probe Book.FilePath directly.
+				usedFfprobe = true
 				if book.FilePath == "" {
 					noPath++
 					continue
@@ -247,6 +276,11 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 				continue
 			}
 			eligible++
+			if usedFfprobe {
+				ffprobeBooks++
+			} else {
+				fpBooks++
+			}
 
 			oldDur := 0
 			if book.Duration != nil {
@@ -325,8 +359,8 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 		verb = fmt.Sprintf("corrected %d;", written)
 	}
 	summary := fmt.Sprintf(
-		"examined=%d eligible=%d %s would-change=%d (~2x=%d) missing-on-disk=%d estimated-skipped=%d read-errors=%d no-filepath=%d | e.g. %s",
-		examined, eligible, verb, wouldChange, roughlyDouble, missing, estimated, readErr, noPath,
+		"examined=%d eligible=%d (from-fingerprint=%d from-ffprobe=%d) %s would-change=%d (~2x=%d) missing-on-disk=%d estimated-skipped=%d read-errors=%d no-filepath=%d | e.g. %s",
+		examined, eligible, fpBooks, ffprobeBooks, verb, wouldChange, roughlyDouble, missing, estimated, readErr, noPath,
 		strings.Join(examples, ", "))
 	_ = reporter.Log(slog.LevelInfo, summary)
 	total := totalBooks

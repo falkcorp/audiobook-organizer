@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_reextract_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4a7d1e92-8c63-4f50-a1b8-3e6c9d2f5a04
 // last-edited: 2026-06-21
 
@@ -87,8 +87,8 @@ func TestDurationDiffMeaningful(t *testing.T) {
 		old, new int
 		want     bool
 	}{
-		{0, 100, true},     // no stored value, any real value is an improvement
-		{0, 0, false},      // nothing usable
+		{0, 100, true},      // no stored value, any real value is an improvement
+		{0, 0, false},       // nothing usable
 		{3600, 3600, false}, // identical
 		{3600, 3603, false}, // 3s — under both floors
 		{3600, 3700, true},  // 100s and ~2.8%
@@ -165,7 +165,7 @@ func TestDurationReextract_MultiFileMissingSegmentsSkipped(t *testing.T) {
 	writes := 0
 	books := []database.Book{{ID: "bm", Title: "Multi", FilePath: "/lib/Multi", Duration: intPtr(100)}}
 	store := &database.MockStore{
-		CountBooksFunc:  func() (int, error) { return len(books), nil },
+		CountBooksFunc: func() (int, error) { return len(books), nil },
 		GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) {
 			if offset >= len(books) {
 				return nil, nil
@@ -187,5 +187,118 @@ func TestDurationReextract_MultiFileMissingSegmentsSkipped(t *testing.T) {
 	}
 	if writes != 0 {
 		t.Errorf("multi-file book with missing segments must be skipped, got %d writes", writes)
+	}
+}
+
+// TestDurationReextract_FingerprintDurationFirst is the v3 contract: when every
+// segment carries a stored fingerprint duration (AcoustIDFingerprintDurationSec),
+// the op corrects Book.Duration from those values WITHOUT touching the
+// filesystem. The segment paths below do not exist on disk — under the v2 logic
+// (os.Stat first) the whole book would be skipped, so a successful UpdateBookFile
+// proves the fingerprint-first fast path ran with zero ffprobe/stat calls. Only
+// the drifted segment is written; the already-correct one is left alone.
+func TestDurationReextract_FingerprintDurationFirst(t *testing.T) {
+	var written []database.BookFile
+	books := []database.Book{{ID: "bf", Title: "Fingerprinted", FilePath: "/lib/Fingerprinted", Duration: intPtr(120)}}
+	store := &database.MockStore{
+		CountBooksFunc: func() (int, error) { return len(books), nil },
+		GetAllBooksFunc: func(_, offset int) ([]database.Book, error) {
+			if offset >= len(books) {
+				return nil, nil
+			}
+			return books, nil
+		},
+		GetBookFilesFunc: func(string) ([]database.BookFile, error) {
+			return []database.BookFile{
+				// Stored Duration wildly wrong (the estimate bug); fingerprint says 1800s.
+				{ID: "s1", BookID: "bf", FilePath: "/nonexistent/01.mp3", Duration: 50, AcoustIDFingerprintDurationSec: 1800.0},
+				// Stored Duration already within tolerance of the fingerprint value.
+				{ID: "s2", BookID: "bf", FilePath: "/nonexistent/02.mp3", Duration: 1801, AcoustIDFingerprintDurationSec: 1800.0},
+			}, nil
+		},
+		UpdateBookFileFunc: func(_ string, f *database.BookFile) error {
+			written = append(written, *f)
+			return nil
+		},
+	}
+	p := New(fakeDeps{store: store})
+	if err := p.runDurationReextract(context.Background(), mustReextractParams(t, false, 0), &fakeReporter{}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(written) != 1 {
+		t.Fatalf("expected exactly 1 segment write (the drifted one), got %d", len(written))
+	}
+	if written[0].ID != "s1" {
+		t.Errorf("expected segment s1 to be corrected, got %q", written[0].ID)
+	}
+	if written[0].Duration != 1800 {
+		t.Errorf("corrected segment Duration = %d, want 1800 (rounded fingerprint)", written[0].Duration)
+	}
+}
+
+// TestDurationReextract_MixedFingerprintAndFfprobe verifies the fallback: a book
+// with one fingerprinted segment and one never-fingerprinted segment. The
+// fingerprinted segment is sourced from the stored value; the other must fall to
+// ffprobe. Here the ffprobe segment's file does not exist, so ffprobe fails and
+// the whole book is skipped (trust invariant) — proving the missing fingerprint
+// genuinely routed to the slow path rather than being silently treated as zero.
+func TestDurationReextract_MixedFingerprintAndFfprobe(t *testing.T) {
+	writes := 0
+	books := []database.Book{{ID: "bm", Title: "Mixed", FilePath: "/lib/Mixed", Duration: intPtr(120)}}
+	store := &database.MockStore{
+		CountBooksFunc: func() (int, error) { return len(books), nil },
+		GetAllBooksFunc: func(_, offset int) ([]database.Book, error) {
+			if offset >= len(books) {
+				return nil, nil
+			}
+			return books, nil
+		},
+		GetBookFilesFunc: func(string) ([]database.BookFile, error) {
+			return []database.BookFile{
+				{ID: "s1", BookID: "bm", FilePath: "/nonexistent/01.mp3", Duration: 50, AcoustIDFingerprintDurationSec: 1800.0},
+				{ID: "s2", BookID: "bm", FilePath: "/nonexistent/02.mp3", Duration: 50}, // no fingerprint → ffprobe → missing file
+			}, nil
+		},
+		UpdateBookFileFunc: func(_ string, _ *database.BookFile) error { writes++; return nil },
+		UpdateBookFunc:     func(_ string, b *database.Book) (*database.Book, error) { writes++; return b, nil },
+	}
+	p := New(fakeDeps{store: store})
+	if err := p.runDurationReextract(context.Background(), mustReextractParams(t, false, 0), &fakeReporter{}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if writes != 0 {
+		t.Errorf("book with an unreadable non-fingerprinted segment must be skipped, got %d writes", writes)
+	}
+}
+
+// TestDurationReextract_FingerprintIdempotent verifies a re-run over already-correct
+// books writes nothing: every segment's stored Duration already matches its
+// fingerprint duration within tolerance, so there is nothing to correct.
+func TestDurationReextract_FingerprintIdempotent(t *testing.T) {
+	writes := 0
+	books := []database.Book{{ID: "bi", Title: "Correct", FilePath: "/lib/Correct", Duration: intPtr(3600)}}
+	store := &database.MockStore{
+		CountBooksFunc: func() (int, error) { return len(books), nil },
+		GetAllBooksFunc: func(_, offset int) ([]database.Book, error) {
+			if offset >= len(books) {
+				return nil, nil
+			}
+			return books, nil
+		},
+		GetBookFilesFunc: func(string) ([]database.BookFile, error) {
+			return []database.BookFile{
+				{ID: "s1", BookID: "bi", FilePath: "/nonexistent/01.mp3", Duration: 1800, AcoustIDFingerprintDurationSec: 1800.0},
+				{ID: "s2", BookID: "bi", FilePath: "/nonexistent/02.mp3", Duration: 1800, AcoustIDFingerprintDurationSec: 1800.0},
+			}, nil
+		},
+		UpdateBookFileFunc: func(_ string, _ *database.BookFile) error { writes++; return nil },
+		UpdateBookFunc:     func(_ string, b *database.Book) (*database.Book, error) { writes++; return b, nil },
+	}
+	p := New(fakeDeps{store: store})
+	if err := p.runDurationReextract(context.Background(), mustReextractParams(t, false, 0), &fakeReporter{}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if writes != 0 {
+		t.Errorf("already-correct book must be skipped on re-run, got %d writes", writes)
 	}
 }
