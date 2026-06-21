@@ -1,7 +1,7 @@
 // file: internal/server/metadata_ops.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
-// last-edited: 2026-06-03
+// last-edited: 2026-06-21
 //
 // Async-operation machinery for the metadata domain, relocated verbatim from
 // metadata_handlers.go (ADR-003 Phase 4) when the 19 metadata HTTP handlers
@@ -168,6 +168,27 @@ func (s *Server) runBulkMetadataFetchAll(
 
 		bookID := w.book.ID
 		currentAuthor := w.authorName
+
+		// Skip obvious chapter fragments of shattered audiobooks (e.g. a book
+		// titled "06 Chapter 6"). Searching the catalog for these confidently
+		// matches a random entry, so we record a skipped status and never hit
+		// the API or cache a bogus result.
+		if metadata.IsLikelyChapterFragment(w.book.Title) {
+			_ = store.CreateOperationResult(&database.OperationResult{
+				OperationID: opID,
+				BookID:      bookID,
+				ResultJSON:  `{"status":"skipped_fragment","source":""}`,
+				Status:      "skipped_fragment",
+			})
+			notFound++
+			n := atomic.AddInt64(&completed, 1)
+			if i%50 == 0 || int(n) == totalBooks {
+				_ = progress.UpdateProgress(int(n), totalBooks,
+					fmt.Sprintf("fetched %d/%d — cached:%d not_found:%d", n, totalBooks, found, notFound))
+			}
+			continue
+		}
+
 		searchTitle := stripChapterFromTitle(w.book.Title)
 
 		var metaResults []metadata.BookMetadata
@@ -499,6 +520,26 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 			return ctx.Err()
 		}
 		bookID := w.book.ID
+
+		// Skip obvious chapter fragments of shattered audiobooks (see
+		// runBulkMetadataFetchAll for the rationale): never search or cache a
+		// bogus catalog match for a title like "06 Chapter 6".
+		if metadata.IsLikelyChapterFragment(w.book.Title) {
+			_ = store.CreateOperationResult(&database.OperationResult{
+				OperationID: opID,
+				BookID:      bookID,
+				ResultJSON:  `{"status":"skipped_fragment","source":""}`,
+				Status:      "skipped_fragment",
+			})
+			notFound++
+			n := atomic.AddInt64(&completed, 1)
+			if i%50 == 0 || int(n) == totalBooks {
+				_ = progress.UpdateProgress(int(n), totalBooks,
+					fmt.Sprintf("fetched %d/%d — cached:%d not_found:%d", n, totalBooks, found, notFound))
+			}
+			continue
+		}
+
 		searchTitle := stripChapterFromTitle(w.book.Title)
 
 		var metaResults []metadata.BookMetadata
