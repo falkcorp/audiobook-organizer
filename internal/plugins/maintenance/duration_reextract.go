@@ -11,11 +11,12 @@
 // Every Book row imported before that fix still carries the wrong duration, which
 // poisons dedup duration-matching (checkDurationMatch) and metadata scoring.
 //
-// This op re-reads the real duration via mediainfo.Extract and corrects durations
-// when the new real value differs meaningfully from the stored one. It NEVER
-// overwrites a stored value with an ffprobe-fallback ESTIMATE
-// (DurationEstimated==true) and skips files missing on disk. Dry-run by default:
-// previews counts; set dryRun=false to apply.
+// This op re-derives the real duration and corrects durations when the new value
+// differs meaningfully from the stored one (see "Source priority (v3)" below for
+// where the real value comes from). It NEVER overwrites a stored value with an
+// ffprobe-fallback ESTIMATE (DurationEstimated==true) and skips books with any
+// unreadable segment. Dry-run by default: previews counts; set dryRun=false to
+// apply.
 //
 // Scope (v2): handles BOTH book layouts.
 //   - Multi-file books (audio across BookFiles; Book.FilePath may be a directory):
@@ -135,7 +136,7 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 	if countErr != nil || totalBooks <= 0 {
 		totalBooks = 0
 	}
-	_ = reporter.UpdateProgress(0, totalBooks, "Re-extracting real durations via ffprobe…")
+	_ = reporter.UpdateProgress(0, totalBooks, "Correcting real durations (fingerprint-first, ffprobe fallback)…")
 
 	const (
 		pageSize    = 500
@@ -144,7 +145,7 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 	)
 	var (
 		examined      int // books inspected
-		eligible      int // single-file books with a real, present file we could probe
+		eligible      int // books for which every segment yielded a real duration (fingerprint or ffprobe)
 		wouldChange   int // books whose real duration differs meaningfully
 		roughlyDouble int // subset where new ≈ 2× old (the m4b/m4a estimate bug signature)
 		missing       int // file path set but not on disk
