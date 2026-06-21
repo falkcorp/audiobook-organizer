@@ -1,14 +1,19 @@
 // file: internal/mediainfo/mediainfo.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: f1e2d3c4-b5a6-7c8d-9e0f-1a2b3c4d5e6f
 
 package mediainfo
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/dhowden/tag"
 )
@@ -23,6 +28,39 @@ type MediaInfo struct {
 	Quality    string
 	Format     string
 	Duration   int
+	// DurationEstimated is true when Duration was derived from fileSize ÷ bitrate
+	// rather than read from the actual audio stream. Estimated durations are
+	// unreliable (esp. for m4b/AAC where the assumed bitrate is a default) and
+	// must NOT be trusted by dedup duration-matching or metadata scoring.
+	DurationEstimated bool
+}
+
+// ffprobeDurationTimeout bounds the per-file ffprobe call. ffprobe only reads the
+// container header, so this is generous even for large audiobooks.
+const ffprobeDurationTimeout = 20 * time.Second
+
+// realDurationSec reads the TRUE container duration via ffprobe (the stream's own
+// duration, not a filesize estimate). Returns ok=false when ffprobe is missing or
+// the file has no parseable duration, so the caller can fall back to a flagged
+// estimate. ffprobe is resolved from PATH, mirroring internal/diagnosis/probe.go.
+func realDurationSec(filePath string) (int, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), ffprobeDurationTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "ffprobe",
+		"-v", "quiet",
+		"-show_entries", "format=duration",
+		"-of", "default=noprint_wrappers=1:nokey=1",
+		filePath)
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	if err := cmd.Run(); err != nil {
+		return 0, false // ffprobe missing or failed — caller estimates
+	}
+	secs, err := strconv.ParseFloat(strings.TrimSpace(stdout.String()), 64)
+	if err != nil || secs <= 0 {
+		return 0, false
+	}
+	return int(secs + 0.5), true
 }
 
 // Extract reads media information from an audio file.
@@ -83,13 +121,19 @@ func BuildFromTag(m tag.Metadata, filePath string, fileSize int64) *MediaInfo {
 		return result
 	}
 
-	// Estimate duration from file size and bitrate when the tag library
-	// doesn't provide it directly (which is most cases).
-	if info.Duration == 0 && info.Bitrate > 0 && fileSize > 0 {
-		// bitrate is in kbps; convert to bytes/sec then divide file size
-		bytesPerSec := (info.Bitrate * 1000) / 8
-		if bytesPerSec > 0 {
-			info.Duration = int(fileSize) / bytesPerSec
+	// The tag library does not expose real duration, so read it from the audio
+	// stream via ffprobe (accurate). Only if that fails do we fall back to a
+	// fileSize ÷ bitrate ESTIMATE — which for m4b/AAC uses a default bitrate and
+	// is routinely ~2× off — and we FLAG it so dedup/matching can distrust it.
+	if info.Duration == 0 {
+		if d, ok := realDurationSec(filePath); ok {
+			info.Duration = d
+		} else if info.Bitrate > 0 && fileSize > 0 {
+			bytesPerSec := (info.Bitrate * 1000) / 8
+			if bytesPerSec > 0 {
+				info.Duration = int(fileSize) / bytesPerSec
+				info.DurationEstimated = true
+			}
 		}
 	}
 
@@ -253,9 +297,16 @@ func inferFromFormat(filePath string, info *MediaInfo) (*MediaInfo, error) {
 		return nil, fmt.Errorf("unsupported format: %s", ext)
 	}
 
-	// Estimate duration from file size and bitrate
-	if info.Duration == 0 && info.Bitrate > 0 {
-		info.Duration = estimateDurationFromFile(filePath, info.Bitrate)
+	// Real duration first (ffprobe); estimate only as a flagged fallback.
+	if info.Duration == 0 {
+		if d, ok := realDurationSec(filePath); ok {
+			info.Duration = d
+		} else if info.Bitrate > 0 {
+			info.Duration = estimateDurationFromFile(filePath, info.Bitrate)
+			if info.Duration > 0 {
+				info.DurationEstimated = true
+			}
+		}
 	}
 
 	return info, nil

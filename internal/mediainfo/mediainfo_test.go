@@ -1,7 +1,7 @@
 // file: internal/mediainfo/mediainfo_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a2b3c4d5-e6f7-8a9b-0c1d-2e3f4a5b6c7d
-// last-edited: 2026-01-21
+// last-edited: 2026-06-21
 
 package mediainfo
 
@@ -1230,5 +1230,33 @@ func TestExtractOGGInfo_WithMetadata(t *testing.T) {
 				t.Errorf("Expected 2 channels, got %d", info.Channels)
 			}
 		})
+	}
+}
+
+// realDurationSec must report ok=false (not crash) when ffprobe can't read the
+// file, so callers fall back to a flagged estimate.
+func TestRealDurationSec_MissingFile(t *testing.T) {
+	if _, ok := realDurationSec(filepath.Join(t.TempDir(), "nope.m4b")); ok {
+		t.Error("expected ok=false for a non-existent file")
+	}
+}
+
+// When the real duration can't be read (junk bytes ffprobe can't parse), the
+// fileSize÷bitrate fallback is used AND flagged DurationEstimated=true so dedup
+// and metadata scoring know not to trust it.
+func TestInferFromFormat_FlagsEstimatedDuration(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "junk.mp3")
+	if err := os.WriteFile(p, bytes.Repeat([]byte{0}, 200_000), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	info, err := inferFromFormat(p, &MediaInfo{})
+	if err != nil {
+		t.Fatalf("inferFromFormat: %v", err)
+	}
+	if info.Duration <= 0 {
+		t.Fatalf("expected an estimated duration > 0, got %d", info.Duration)
+	}
+	if !info.DurationEstimated {
+		t.Error("fallback estimate must set DurationEstimated=true")
 	}
 }
