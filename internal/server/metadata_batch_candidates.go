@@ -1,7 +1,7 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 3.1.0
+// version: 3.2.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
-// last-edited: 2026-05-11
+// last-edited: 2026-06-21
 //
 // HTTP handlers for the metadata candidate batch fetch / apply pipeline.
 // Pure service types and logic live in internal/metabatch.
@@ -23,6 +23,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
+	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 )
@@ -195,6 +196,19 @@ func (s *Server) fetchCandidateForBook(
 	}
 
 	bookInfo := metabatch.BuildCandidateBookInfo(store, book)
+
+	// Skip obvious chapter fragments of shattered audiobooks (e.g. a book
+	// titled "06 Chapter 6"). Searching a catalog for these matches a random
+	// entry at ~100%+ confidence and writes garbage onto every chapter, so we
+	// short-circuit BEFORE any external search and surface a clear skipped
+	// status instead of a bogus "matched" candidate.
+	if metadata.IsLikelyChapterFragment(book.Title) {
+		return CandidateResult{
+			Book:   bookInfo,
+			Status: "skipped",
+			Error:  "skipped: chapter fragment",
+		}
+	}
 
 	// Wait for rate limiter before making external requests.
 	if err := limiter.Wait(ctx); err != nil {
