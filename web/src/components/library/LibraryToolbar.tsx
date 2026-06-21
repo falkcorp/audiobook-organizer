@@ -1,7 +1,7 @@
 // file: web/src/components/library/LibraryToolbar.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-05-15
+// last-edited: 2026-06-21
 
 import {
   Typography,
@@ -54,6 +54,7 @@ interface LibraryToolbarProps {
   onSaveToFiles: () => void;
   onOrganizeSelected: () => void;
   onMergeAsVersions: () => void;
+  onCombineIntoOneBook: () => void;
   onTagClick: () => void;
   onRateClick: () => void;
   onDeleteSelected: () => void;
@@ -96,6 +97,7 @@ export const LibraryToolbar = ({
   onSaveToFiles,
   onOrganizeSelected,
   onMergeAsVersions,
+  onCombineIntoOneBook,
   onTagClick,
   onRateClick,
   onDeleteSelected,
@@ -133,6 +135,7 @@ export const LibraryToolbar = ({
           onSaveToFilesClick={onSaveToFiles}
           onOrganizeSelectedClick={onOrganizeSelected}
           onMergeAsVersionsClick={onMergeAsVersions}
+          onCombineIntoOneBookClick={onCombineIntoOneBook}
           onTagClick={onTagClick}
           onRateClick={onRateClick}
           onDeleteSelectedClick={onDeleteSelected}

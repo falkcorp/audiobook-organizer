@@ -1,7 +1,7 @@
 // file: web/src/components/library/LibraryDialogs.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: d4e5f6a7-b8c9-0123-def0-234567890123
-// last-edited: 2026-05-11
+// last-edited: 2026-06-21
 
 import React from 'react';
 import {
@@ -95,6 +95,10 @@ interface LibraryDialogsProps {
   setMergePrimaryId: (id: string) => void;
   mergeInProgress: boolean;
   handleMergeAsVersions: () => void;
+  combineDialogOpen: boolean;
+  setCombineDialogOpen: (open: boolean) => void;
+  combineInProgress: boolean;
+  handleCombineIntoOneBook: () => void;
 
   // Batch delete dialog
   batchDeleteDialogOpen: boolean;
@@ -243,6 +247,10 @@ export const LibraryDialogs = ({
   setMergePrimaryId,
   mergeInProgress,
   handleMergeAsVersions,
+  combineDialogOpen,
+  setCombineDialogOpen,
+  combineInProgress,
+  handleCombineIntoOneBook,
   batchDeleteDialogOpen,
   setBatchDeleteDialogOpen,
   batchDeleteInProgress,
@@ -408,6 +416,50 @@ export const LibraryDialogs = ({
           disabled={mergeInProgress || !mergePrimaryId}
         >
           {mergeInProgress ? 'Merging...' : 'Merge'}
+        </Button>
+      </DialogActions>
+    </Dialog>
+
+    <Dialog open={combineDialogOpen} onClose={() => setCombineDialogOpen(false)} maxWidth="sm" fullWidth>
+      <DialogTitle>Combine into One Book</DialogTitle>
+      <DialogContent>
+        <Typography variant="body2" gutterBottom>
+          Combine {selectedAudiobooks.length} books into a single multi-file book. Pick which book to keep as the survivor — its metadata is kept and all other files move onto it:
+        </Typography>
+        <Box sx={{ mt: 1 }}>
+          {selectedAudiobooks.map((book) => (
+            <FormControlLabel
+              key={book.id}
+              control={
+                <Checkbox
+                  checked={mergePrimaryId === book.id}
+                  onChange={() => setMergePrimaryId(book.id)}
+                />
+              }
+              label={
+                <Typography variant="body2">
+                  <strong>{book.title}</strong>
+                  {book.author ? ` by ${book.author}` : ''}
+                  {book.file_path ? ` (${book.file_path.split('/').pop()})` : ''}
+                </Typography>
+              }
+            />
+          ))}
+        </Box>
+        <Alert severity="warning" sx={{ mt: 1 }}>
+          The other {Math.max(selectedAudiobooks.length - 1, 0)} entries will be deleted and their files attached to the survivor. Unlike "Merge as Versions", this produces ONE book, not a version group. Files stay in place on disk.
+        </Alert>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={() => setCombineDialogOpen(false)} disabled={combineInProgress}>
+          Cancel
+        </Button>
+        <Button
+          variant="contained"
+          onClick={handleCombineIntoOneBook}
+          disabled={combineInProgress || !mergePrimaryId}
+        >
+          {combineInProgress ? 'Combining...' : 'Combine'}
         </Button>
       </DialogActions>
     </Dialog>

@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.41.0
+// version: 2.42.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-06-19
+// last-edited: 2026-06-21
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -1433,6 +1433,32 @@ export async function mergeBooks(keepId: string, mergeIds: string[]): Promise<Op
     throw await buildApiError(response, 'Failed to merge books');
   }
   return response.json();
+}
+
+export interface CombineBooksResult {
+  primary_id: string;
+  files_moved: number;
+  books_deleted: number;
+  message?: string;
+}
+
+// combineBooks combines several single-file books into ONE multi-file book on the
+// survivor (keepId), hard-deleting the absorbed shells. Distinct from mergeBooks,
+// which links them as alternate versions in a version group. Synchronous.
+export async function combineBooks(
+  keepId: string,
+  mergeIds: string[],
+): Promise<CombineBooksResult> {
+  const response = await fetch(`${API_BASE}/audiobooks/combine`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ keep_id: keepId, merge_ids: mergeIds }),
+  });
+  if (!response.ok) {
+    throw await buildApiError(response, 'Failed to combine books');
+  }
+  const body = await response.json();
+  return body.data ?? body;
 }
 
 // Book dedup scan — advanced duplicate detection with confidence levels

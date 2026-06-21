@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 
 package merge
@@ -7,6 +7,7 @@ package merge
 import (
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -214,6 +215,151 @@ func (ms *Service) MergeBooks(bookIDs []string, primaryID string) (*Result, erro
 		VersionGroupID: versionGroupID,
 		MergedCount:    len(books),
 	}, nil
+}
+
+// CombineResult is the outcome of a CombineBooks call.
+type CombineResult struct {
+	PrimaryID    string `json:"primary_id"`
+	FilesMoved   int    `json:"files_moved"`
+	BooksDeleted int    `json:"books_deleted"`
+}
+
+// CombineBooks combines several books into ONE multi-file book — distinct from
+// MergeBooks, which links them as alternate VERSIONS in a version group. Every
+// selected book's audio files become real BookFiles on the survivor, and the
+// absorbed shells are hard-deleted. This is the manual analogue of the
+// shattered-book heal (applyFSRegroup): use it to reassemble tracks that were
+// imported as one book per file (e.g. an untagged folder of chapters).
+//
+// DB-only: files stay where they are on disk (most shattered sets are already in
+// one folder). Run organize afterward to physically co-locate if desired.
+//
+// The survivor keeps its own metadata (the caller picks primaryID); rename after.
+func (ms *Service) CombineBooks(bookIDs []string, primaryID string) (*CombineResult, error) {
+	if len(bookIDs) < 2 {
+		return nil, fmt.Errorf("need at least 2 books to combine")
+	}
+	if primaryID == "" {
+		return nil, fmt.Errorf("primary_id is required for combine")
+	}
+	survivor, err := ms.db.GetBookByID(primaryID)
+	if err != nil || survivor == nil {
+		return nil, fmt.Errorf("primary book %s not found", primaryID)
+	}
+	// Validate all IDs up front so a bad ID aborts before any mutation.
+	seen := map[string]bool{}
+	for _, id := range bookIDs {
+		if seen[id] {
+			return nil, fmt.Errorf("duplicate book id %s", id)
+		}
+		seen[id] = true
+		b, err := ms.db.GetBookByID(id)
+		if err != nil || b == nil {
+			return nil, fmt.Errorf("book %s not found", id)
+		}
+	}
+	if !seen[primaryID] {
+		return nil, fmt.Errorf("primary_id %s not in book_ids", primaryID)
+	}
+
+	res := &CombineResult{PrimaryID: primaryID}
+	eidStore := AsExternalIDReassigner(ms.db)
+
+	// Materialize the survivor's own single-file (virtual-segment) audio as a
+	// BookFile so the combined book owns ALL its files explicitly.
+	res.FilesMoved += ms.ensureOwnFile(survivor)
+
+	for _, id := range bookIDs {
+		if id == primaryID {
+			continue
+		}
+		book, _ := ms.db.GetBookByID(id)
+		if book == nil {
+			continue
+		}
+
+		// Attach this book's files to the survivor.
+		files, _ := ms.db.GetBookFiles(id)
+		if len(files) > 0 {
+			ids := make([]string, len(files))
+			for i := range files {
+				ids[i] = files[i].ID
+			}
+			if err := ms.db.MoveBookFilesToBook(ids, id, survivor.ID); err != nil {
+				return nil, fmt.Errorf("move files %s->%s: %w", id, survivor.ID, err)
+			}
+			res.FilesMoved += len(files)
+		} else if book.FilePath != "" {
+			res.FilesMoved += ms.attachVirtualFile(book, survivor.ID)
+		}
+
+		// Reassign external IDs to the survivor.
+		if eidStore != nil {
+			if err := eidStore.ReassignExternalIDs(id, survivor.ID); err != nil {
+				slog.Warn("combine ReassignExternalIDs", "from", id, "to", survivor.ID, "err", err)
+			}
+		}
+
+		// Guard (mirrors applyFSRegroup): never delete a book that still owns
+		// files — that would orphan audio. After the move it must be empty.
+		if remaining, _ := ms.db.GetBookFiles(id); len(remaining) != 0 {
+			return nil, fmt.Errorf("book %s still owns %d files after move; aborting delete", id, len(remaining))
+		}
+		if err := ms.db.DeleteBook(id); err != nil {
+			return nil, fmt.Errorf("delete absorbed book %s: %w", id, err)
+		}
+		res.BooksDeleted++
+	}
+
+	if err := ms.db.RecomputeBookAggregates(survivor.ID); err != nil {
+		slog.Warn("combine RecomputeBookAggregates", "id", survivor.ID, "err", err)
+	}
+	slog.Info("combined books into one", "survivor", survivor.ID,
+		"files_moved", res.FilesMoved, "books_deleted", res.BooksDeleted)
+	return res, nil
+}
+
+// ensureOwnFile materializes a single-file book's FilePath as a BookFile when it
+// has no BookFile rows yet (the virtual-segment model). Returns files created (0/1).
+func (ms *Service) ensureOwnFile(b *database.Book) int {
+	if b.FilePath == "" {
+		return 0
+	}
+	if files, _ := ms.db.GetBookFiles(b.ID); len(files) > 0 {
+		return 0 // already materialized
+	}
+	return ms.attachVirtualFile(b, b.ID)
+}
+
+// attachVirtualFile creates (or reattaches) a BookFile at book.FilePath owned by
+// targetBookID. Reattach-safe per #1549: an existing row at that path is MOVED
+// (its BookID can't be changed in place — the primary key embeds it), never
+// duplicated. Returns files attached (0/1).
+func (ms *Service) attachVirtualFile(b *database.Book, targetBookID string) int {
+	existing, _ := ms.db.GetBookFileByPath(b.FilePath)
+	if existing != nil {
+		if existing.BookID != targetBookID {
+			if err := ms.db.MoveBookFilesToBook([]string{existing.ID}, existing.BookID, targetBookID); err != nil {
+				slog.Warn("combine reattach existing file", "path", b.FilePath, "err", err)
+				return 0
+			}
+		}
+		return 1
+	}
+	bf := &database.BookFile{
+		ID:       ulid.Make().String(),
+		BookID:   targetBookID,
+		FilePath: b.FilePath,
+		Format:   strings.TrimPrefix(strings.ToLower(filepath.Ext(b.FilePath)), "."),
+	}
+	if b.Duration != nil {
+		bf.Duration = *b.Duration
+	}
+	if err := ms.db.CreateBookFile(bf); err != nil {
+		slog.Warn("combine create file", "path", b.FilePath, "err", err)
+		return 0
+	}
+	return 1
 }
 
 // SoftDeleteBook marks a book as deleted using the MarkedForDeletion flag.

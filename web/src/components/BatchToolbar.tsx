@@ -1,7 +1,7 @@
 // file: web/src/components/BatchToolbar.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b5c6d7e8f9a0b
-// last-edited: 2026-04-30
+// last-edited: 2026-06-21
 
 import { Button, Chip, Box, Stack } from '@mui/material';
 
@@ -14,6 +14,7 @@ export interface BatchToolbarProps {
   onSaveToFilesClick: () => void;
   onOrganizeSelectedClick: () => void;
   onMergeAsVersionsClick: () => void;
+  onCombineIntoOneBookClick: () => void;
   onTagClick: () => void;
   onRateClick: () => void;
   onDeleteSelectedClick: () => void;
@@ -34,6 +35,7 @@ export const BatchToolbar = ({
   onSaveToFilesClick,
   onOrganizeSelectedClick,
   onMergeAsVersionsClick,
+  onCombineIntoOneBookClick,
   onTagClick,
   onRateClick,
   onDeleteSelectedClick,
@@ -91,6 +93,16 @@ export const BatchToolbar = ({
         disabled={selectedAudiobooksLength < 2}
       >
         Merge as Versions
+      </Button>
+      <Button
+        size="small"
+        variant="outlined"
+        color="primary"
+        onClick={onCombineIntoOneBookClick}
+        disabled={selectedAudiobooksLength < 2}
+        title="Combine the selected single-file books into ONE multi-file book (moves all files onto one survivor, deletes the rest). Distinct from Merge as Versions."
+      >
+        Combine into One Book
       </Button>
       <Button size="small" variant="outlined" onClick={onTagClick} disabled={!selectedCount}>
         Tag

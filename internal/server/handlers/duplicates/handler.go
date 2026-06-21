@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/handler.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9f41f363-34fc-4ad2-b2f1-46d5ac0ba2f3
-// last-edited: 2026-06-03
+// last-edited: 2026-06-21
 
 // Package duplicates hosts the SQL-backed duplicate-detection HTTP handlers
 // extracted from the server package's duplicates_handlers.go: book / author /
@@ -319,6 +319,55 @@ func (h *Handler) MergeBooks(c *gin.Context) {
 	}
 
 	httputil.RespondWithSuccess(c, 202, op)
+}
+
+// CombineBooks combines several single-file books into ONE multi-file book on the
+// survivor (keep_id) and hard-deletes the absorbed shells. Distinct from
+// MergeBooks, which links them as alternate VERSIONS in a version group.
+// Synchronous — combine is a fast DB-only operation. POST /audiobooks/combine.
+func (h *Handler) CombineBooks(c *gin.Context) {
+	var req struct {
+		KeepID   string   `json:"keep_id" binding:"required"`
+		MergeIDs []string `json:"merge_ids" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		httputil.RespondWithBadRequest(c, err.Error())
+		return
+	}
+
+	if len(req.MergeIDs) == 0 {
+		httputil.RespondWithBadRequest(c, "merge_ids must not be empty")
+		return
+	}
+
+	ms := h.getMergeService()
+	if ms == nil {
+		httputil.RespondWithInternalError(c, "merge service not initialized")
+		return
+	}
+
+	// Pass ALL ids (the absorbed books plus the survivor) and the survivor id.
+	result, err := ms.CombineBooks(append(req.MergeIDs, req.KeepID), req.KeepID)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			httputil.RespondWithNotFound(c, "book", req.KeepID)
+		} else {
+			httputil.InternalError(c, "failed to combine books", err)
+		}
+		return
+	}
+
+	if h.dedupCache != nil {
+		h.dedupCache.Invalidate("book-dedup-scan")
+		h.dedupCache.Invalidate("book-duplicates")
+	}
+
+	httputil.RespondWithOK(c, gin.H{
+		"message":       fmt.Sprintf("Combined %d files onto book; deleted %d shells", result.FilesMoved, result.BooksDeleted),
+		"primary_id":    result.PrimaryID,
+		"files_moved":   result.FilesMoved,
+		"books_deleted": result.BooksDeleted,
+	})
 }
 
 // ListDuplicateAuthors handles GET /authors/duplicates.

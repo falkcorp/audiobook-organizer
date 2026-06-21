@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/interfaces.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a04e0263-a6b1-42b9-9791-1b8b649004b5
-// last-edited: 2026-06-03
+// last-edited: 2026-06-21
 
 // Narrow dependency interfaces for the duplicates-domain HTTP handlers
 // (SQL-backed book/author/series duplicate detection, async merge / dismiss /
@@ -53,6 +53,10 @@ type DuplicatesStore interface {
 // controller without this package importing internal/server.
 type MergeService interface {
 	MergeBooks(bookIDs []string, primaryID string) (*merge.Result, error)
+	// CombineBooks combines several single-file books into ONE multi-file book
+	// on the survivor (primaryID) and hard-deletes the absorbed shells. Distinct
+	// from MergeBooks, which links them as alternate versions in a version group.
+	CombineBooks(bookIDs []string, primaryID string) (*merge.CombineResult, error)
 }
 
 // MetadataFetchService is the narrow *metafetch.Service subset used by
