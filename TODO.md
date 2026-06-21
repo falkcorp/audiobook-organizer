@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.11.0 -->
+<!-- version: 9.12.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-06-21 -->
 
@@ -48,6 +48,58 @@ fix). 1 residual shattered book healed (shattered-books now 0).
 - [ ] **PH-4** 5 prefix-not-in-parent flat-dump folders — decide v2 looser guard or leave.
 - [ ] **PH-5** `UpsertBookFile` (singular) — same memdb-roundtrip full-replace pattern as #1552;
       add the preserve-on-empty guard for safety.
+
+---
+
+## 🚧 Active Projects — in flight (2026-06-21, this session)
+
+> Live working set so nothing is lost between sessions. Status flags:
+> 🟢 done · 🟡 in progress / branch exists · 🔵 designed, not started · 🔴 blocked.
+
+### AP-1 🟡 Generic "Combine into one book" merge
+**Branch `feat/combine-into-one-book`** (worktree `.worktrees/combine-merge`, NOT committed yet).
+The only book "merge" today is a VERSION-group merge (`merge.Service.MergeBooks`, both
+`/audiobooks/merge` and `/audiobooks/duplicates/merge`). There is NO action that combines N
+single-file books into one multi-file book. User wants one (e.g. to reassemble the
+"Assimil Japanese With Ease" tracks, each imported as its own `- <track>` book).
+- 🟢 Backend: `merge.Service.CombineBooks(bookIDs, primaryID)` written + compiles — moves all
+  files onto a user-picked survivor (MoveBookFilesToBook / reattach-safe create), reassigns
+  ext-ids, guards + hard-deletes shells, recomputes aggregates. DB-only (files stay on disk).
+- 🔵 TODO: extend `duplicates.MergeService` iface + `CombineBooks` handler + `POST /audiobooks/combine`
+  route + `api.combineBooks` + Library "Combine into one book" button (distinct from "Merge as
+  versions") + service unit tests.
+- 🔵 Follow-up (AP-1b): when survivor's files are under RootDir, physically move them into one
+  folder (user wants co-location only inside the library; leave abooks/ etc. in place).
+- Plan: `.worktrees/combine-merge/PLAN.md`.
+
+### AP-2 🔵 Persistent metadata-review undo
+The "review metadata matches" success banner is transient; add a persistent Undo control at the
+bottom of the review view so the last apply can be undone after the banner disappears. Reuse
+`POST /audiobooks/:id/metadata/undo-apply` / revert-to-snapshot. Investigate the review-matches
+component in `web/src/` first. NOT started.
+
+### AP-3 🔴 Duration extraction is fake (HALF/wrong durations) — feeds dedup + matching
+`internal/mediainfo/mediainfo.go` NEVER reads real duration: `dhowden/tag` doesn't expose it, so
+`Duration = fileSize ÷ bitrate` (line 88-93) with m4b bitrate DEFAULTING to 128 kbps (line 137).
+Real audiobooks ≈ 64 kbps → every m4b/m4a duration is ~2× too short (verified: Moons of Barsk
+403 MB shows 7h19m≈128k, real 14h46m≈61k). Poisons dedup duration-match + metadata scoring.
+- 🔵 FIX: read REAL duration. Best option — taglib `taglib_audioproperties_length` (already linked
+  via `internal/metadata/taglib_cgo.go`, accurate, no subprocess); fall back to ffprobe
+  (`internal/diagnosis/probe.go` already parses `format.duration`) when taglib can't.
+- 🔵 Then a re-extraction backfill op for existing rows (all current m4b/m4a durations are wrong).
+- 🔵 ARCH (AP-3b): consolidate the 3 duration paths — `internal/mediainfo` (estimate),
+  `internal/diagnosis/probe` (real ffprobe), external (Audible) — into ONE accurate extractor,
+  ideally surfaced through `internal/metadata` where it belongs.
+
+### AP-4 🟡 tag-backfill apply (lossless RawTags)
+RUNNING server-side `op_id=01KVN04C1WYZ4DFGYJGDDCFPC3` (was ~46% at last check, 0 read-err).
+Verify completion; re-run if canceled (idempotent). Safe post-#1552 fingerprint-preserve fix.
+
+### AP-5 🔵 Same-folder untagged track shattering (import root cause #2)
+Distinct from the subdir-shatter fixed in #1551: tracks like `Assimil .../Audio/06 - X.mp3`,
+`07 - Y.mp3` (all in ONE folder, NO tags) each import as their own book because
+`DetectMultiFileGroup` needs a ≥75% album-tag quorum and there are no tags. Needs a no-tag
+sequential-filename grouping path at scan time. (AP-1 lets the user fix existing ones manually.)
 
 ---
 
