@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 9.10.0 -->
+<!-- version: 9.11.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-06-20 -->
+<!-- last-edited: 2026-06-21 -->
 
 # Project TODO
 
@@ -19,12 +19,35 @@ future agent) can scan the entire workspace in one page.
 
 ---
 
-## 🎯 Current Status — June 19, 2026
+## 🎯 Current Status — June 21, 2026
 
-**Library:** ~50K books (~10,891 organized + ~39K iTunes-imported) / 8,837 authors / 21,668 series
+**Library:** 29,307 books (post shattered-book heal) / 8,837 authors / 21,668 series
 **Production:** PebbleDB primary; Linux, HTTPS at prod server; stable
-**Latest activity:** Dedup UX overhaul (PR #1507): book covers, inline badges, zebra rows, click-to-select + shift-click, localStorage page-size, multi-select toggle, activity log auto-pause on expand. Fingerprint visual (PR #1506): chromaprint bit-matrix in candidate drawer.
-**In flight:** CFG-2 Phases A/B/C/E shipped PR #1514 (2026-06-19); Phase D (retire flat shim) open. Burndown bot dispatching test coverage tasks. EMB-UI-1 (Ollama download link) still open.
+**Latest activity:** Pipeline hardening after the shattered-book heal — PRs #1549–#1552
+merged + deployed (fs-regroup data-loss fix, dedup chapter-sibling emission gate,
+scanner shatter-prevention coalescer [flag OFF], BatchUpsertBookFiles fingerprint-wipe
+fix). 1 residual shattered book healed (shattered-books now 0).
+**In flight:** `maintenance.tag-backfill` apply RUNNING server-side
+(`op_id=01KVN04C1WYZ4DFGYJGDDCFPC3`) — verify completion (idempotent; re-run if canceled).
+
+---
+
+## 🛠️ Pipeline Hardening — remaining (2026-06-21)
+
+> Full audit + prioritized fixes: [`docs/dedup-import-pipeline-audit.md`](docs/dedup-import-pipeline-audit.md).
+> Session handoff: `.remember/remember.md`.
+
+- [ ] **PH-1** Verify `tag-backfill` apply completed (`op_id=01KVN04C1WYZ4DFGYJGDDCFPC3`);
+      re-run if canceled (idempotent — skips populated rows). Lossless-library goal done on completion.
+- [ ] **PH-2 (P2)** Differentiated residual-triage op — the 10,859 exact-pending are 4
+      populations (genuine dups KEEP / fragment-vs-full / title-leak-false / byte-empty stubs).
+      Purge only the junk; never blanket-purge. Own dry-run + advisor gate. Audit §3.
+- [ ] **PH-3 (P1/P2)** Dedup perf: O(N·P) per-book candidate filter (engine.go:407),
+      hoist book-only collectors out of per-candidate loop (444-554), purge-stale cap 100K→1M
+      chunked (2195). Audit §2.2–2.5.
+- [ ] **PH-4** 5 prefix-not-in-parent flat-dump folders — decide v2 looser guard or leave.
+- [ ] **PH-5** `UpsertBookFile` (singular) — same memdb-roundtrip full-replace pattern as #1552;
+      add the preserve-on-empty guard for safety.
 
 ---
 

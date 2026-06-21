@@ -1,13 +1,47 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.53.0 -->
+<!-- version: 3.54.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
-<!-- last-edited: 2026-06-20 -->
+<!-- last-edited: 2026-06-21 -->
 
 # Changelog
 
 ## [Unreleased]
 
 ### Added
+
+#### June 21, 2026 — scanner shatter prevention (flag OFF)
+
+- **#1551 `feat(scanner)`** — `coalesceShatteredSiblings` post-pass in
+  `ScanDirectoryParallel` prevents re-shattering at scan time: single-file books in
+  sibling `<prefix> - N` chapter subdirs are coalesced into one multi-file book when
+  `prefix ⊆ parent-folder-name` (the production-validated precision guard; excludes
+  flat dumps + series volumes). Path-based, no extra tag I/O. Gated by
+  `config.CoalesceShatteredSiblings`, **default OFF**. Audit:
+  `docs/dedup-import-pipeline-audit.md`.
+
+### Fixed
+
+#### June 21, 2026 — shattered-book / dedup recurrence + a latent fingerprint-wipe
+
+- **#1549 `fix(fs-regroup)`** — `maintenance.fs-regroup-xml` apply attached chapter
+  files via `UpsertBookFile`, which path-matches and PRESERVES the existing row's
+  BookID, so a `FileCount==1` shell never moved its file to the survivor: the shell
+  was `delete-skipped` AND the survivor silently lost that chapter's audio. Fixed with
+  explicit `MoveBookFilesToBook` + track-order update. Added the apply-path tests that
+  never existed. Healed the 1 residual prod book (`delete-skipped=0`; shattered-books
+  now 0; library 29,308 → 29,307).
+- **#1550 `fix(dedup)`** — exact emitters (`checkExactTitle`, `checkDurationMatch`) had
+  no same-folder gate and cross-paired the chapters of one multi-file book (the 380K
+  candidate-explosion vector). Added `sameMultiFileBook` (same parent dir OR
+  `<prefix> - N` chapter siblings — the layout `purge-stale`'s same-parent guard
+  missed), gated both emitters at emit time, extended `PairEligibility`, and made the
+  unified scoring pass DELETE suppressed pairs instead of skipping re-scoring.
+- **#1552 `fix(db)`** — **latent mass-data-loss.** `BatchUpsertBookFiles` full-replaces
+  the stored row, but `GetAllBookFiles` returns the memdb view (which strips
+  `AcoustIDFingerprint`, ~230 KB/file). `maintenance.tag-backfill` apply does that
+  round-trip → would have wiped the ~275K-fingerprint library. Fixed to preserve
+  `AcoustIDFingerprint` + fingerprint diagnostics from the stored row when the incoming
+  value is empty. Op had never been applied on prod, so no damage occurred.
 
 #### June 20, 2026 — iTunes in-place re-group heal op (CONS-FRAG-HEAL)
 
