@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.12.0 -->
+<!-- version: 9.13.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-06-21 -->
 
@@ -78,18 +78,17 @@ bottom of the review view so the last apply can be undone after the banner disap
 `POST /audiobooks/:id/metadata/undo-apply` / revert-to-snapshot. Investigate the review-matches
 component in `web/src/` first. NOT started.
 
-### AP-3 🔴 Duration extraction is fake (HALF/wrong durations) — feeds dedup + matching
-`internal/mediainfo/mediainfo.go` NEVER reads real duration: `dhowden/tag` doesn't expose it, so
-`Duration = fileSize ÷ bitrate` (line 88-93) with m4b bitrate DEFAULTING to 128 kbps (line 137).
-Real audiobooks ≈ 64 kbps → every m4b/m4a duration is ~2× too short (verified: Moons of Barsk
-403 MB shows 7h19m≈128k, real 14h46m≈61k). Poisons dedup duration-match + metadata scoring.
-- 🔵 FIX: read REAL duration. Best option — taglib `taglib_audioproperties_length` (already linked
-  via `internal/metadata/taglib_cgo.go`, accurate, no subprocess); fall back to ffprobe
-  (`internal/diagnosis/probe.go` already parses `format.duration`) when taglib can't.
-- 🔵 Then a re-extraction backfill op for existing rows (all current m4b/m4a durations are wrong).
-- 🔵 ARCH (AP-3b): consolidate the 3 duration paths — `internal/mediainfo` (estimate),
-  `internal/diagnosis/probe` (real ffprobe), external (Audible) — into ONE accurate extractor,
-  ideally surfaced through `internal/metadata` where it belongs.
+### AP-3 ✅ Duration extraction fixed — real durations now stored + backfill op shipped
+Fixed in PR #1555 (`internal/mediainfo`: calls ffprobe first, estimate only as flagged fallback).
+Both import paths now correct: filesystem scan uses `BuildFromTag`→`realDurationSec`; iTunes import
+uses `track.TotalTime/1000`. Backfill ops:
+- `maintenance.duration-backfill` — corrects iTunes ms→s inflated rows (CONS-16)
+- `maintenance.duration-reextract` v3 (Jun 21) — fingerprint-first; reads stored
+  `AcoustIDFingerprintDurationSec` (fast DB pass for ~275K fingerprinted files), ffprobe fallback
+  for residue. Design: `docs/specs/2026-06-21-duration-reextract-v3-design.md`.
+  Run dry-run first to verify counts, then `dryRun:false` to apply.
+- 🔵 ARCH (AP-3b): consolidate the 3 duration paths — `internal/mediainfo`, `internal/diagnosis/probe`,
+  external (Audible) — into ONE accurate extractor. Lower priority now that the extractor is fixed.
 
 ### AP-4 🟡 tag-backfill apply (lossless RawTags)
 RUNNING server-side `op_id=01KVN04C1WYZ4DFGYJGDDCFPC3` (was ~46% at last check, 0 read-err).

@@ -1,11 +1,26 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.54.0 -->
+<!-- version: 3.55.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-21 -->
 
 # Changelog
 
 ## [Unreleased]
+
+### Changed
+
+#### June 21, 2026 — duration-reextract v3: fingerprint-first backfill
+
+- **`refactor(maintenance)`** — `maintenance.duration-reextract` upgraded to v3:
+  reads `BookFile.AcoustIDFingerprintDurationSec` (stored by fpcalc during whole-file
+  fingerprinting) as the authoritative per-segment duration — no stat, no subprocess.
+  ffprobe (`mediainfo.Extract`) is now the fallback only for the never-fingerprinted
+  tail (~275K files on fast path). The summary now reports `from-fingerprint=N
+  from-ffprobe=N` so a dry-run reveals the fast/slow split immediately. Trust
+  invariant and write path (UpdateBookFile + RecomputeBookAggregates) unchanged from
+  v2. Key insight: bad durations are a bounded historical stock (pre-PR #1555), not a
+  recurring flow — no tracking fields added. Design spec:
+  `docs/specs/2026-06-21-duration-reextract-v3-design.md`.
 
 ### Added
 
