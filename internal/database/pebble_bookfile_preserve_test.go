@@ -1,5 +1,5 @@
 // file: internal/database/pebble_bookfile_preserve_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7e1a9c43-2b86-4d05-9f71-3c6e8a0d2b54
 // last-edited: 2026-06-21
 
@@ -95,5 +95,46 @@ func TestBatchUpsertBookFiles_OverwritesFingerprintWhenProvided(t *testing.T) {
 	files, _ := s.GetBookFiles(book.ID)
 	if len(files) != 1 || string(files[0].AcoustIDFingerprint) != string([]byte{9, 9, 9, 9}) {
 		t.Errorf("fresh fingerprint not written: %v", files[0].AcoustIDFingerprint)
+	}
+}
+
+// BatchUpsertBookFiles must refresh the memdb view so batch-written rows are
+// immediately visible to memdb-backed reads (GetAllBookFiles / the UI). Without
+// the post-commit UpsertBookFileToMemDB, the row would be absent from memdb until
+// the next warmup — the tag-backfill non-convergence bug.
+func TestBatchUpsertBookFiles_RefreshesMemDB(t *testing.T) {
+	s, err := NewPebbleStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewPebbleStore: %v", err)
+	}
+	defer s.Close()
+	if !s.UseMemDB {
+		t.Skip("memdb disabled")
+	}
+	book, err := s.CreateBook(&Book{Title: "MemDB Book"})
+	if err != nil {
+		t.Fatalf("CreateBook: %v", err)
+	}
+	path := "/lib/MemDB Book/01.mp3"
+	if err := s.BatchUpsertBookFiles([]*BookFile{{
+		BookID: book.ID, FilePath: path, RawTags: map[string]string{"ALBUM": "X"},
+	}}); err != nil {
+		t.Fatalf("BatchUpsertBookFiles: %v", err)
+	}
+	all, err := s.GetAllBookFiles() // memdb-backed view
+	if err != nil {
+		t.Fatalf("GetAllBookFiles: %v", err)
+	}
+	found := false
+	for i := range all {
+		if all[i].FilePath == path {
+			found = true
+			if len(all[i].RawTags) == 0 {
+				t.Error("RawTags missing from memdb view after batch write")
+			}
+		}
+	}
+	if !found {
+		t.Error("batch-written file not visible via GetAllBookFiles — memdb not refreshed")
 	}
 }
