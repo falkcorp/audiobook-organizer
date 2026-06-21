@@ -469,6 +469,19 @@ func ScanDirectoryParallel(rootDir string, workers int, scanLog logger.Logger) (
 	}
 
 	wg.Wait()
+
+	// Prevention post-pass: groupFilesIntoBooks runs per-leaf-dir, so a book laid
+	// out as one chapter per "<prefix> - N" subdir shatters into one book per
+	// chapter. Coalesce those siblings into one multi-file book before persisting.
+	// Path-based + prefix⊆parent guard; gated OFF by default (see CoalesceShatteredSiblings).
+	if config.AppConfig.CoalesceShatteredSiblings {
+		before := len(books)
+		books = coalesceShatteredSiblings(books)
+		if len(books) != before {
+			slog.Info("scanner shattered-sibling coalesce", "books_before", before, "books_after", len(books))
+		}
+	}
+
 	return books, nil
 }
 

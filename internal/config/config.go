@@ -282,6 +282,14 @@ type Config struct {
 	// averages below this duration, they are consolidated into one book record.
 	// Default 10. Set to 0 to disable consolidation.
 	ChapterConsolidationThresholdMin int `json:"chapter_consolidation_threshold_min"`
+	// CoalesceShatteredSiblings enables a scan-time post-pass that merges
+	// single-file books shattered across "<prefix> - N" sibling chapter subdirs
+	// (the layout that produced the 380K dedup-candidate explosion) into ONE
+	// multi-file book — the scan-time analogue of maintenance.fs-regroup-xml.
+	// DEFAULT OFF: the existing library is already healed; enable on a canary
+	// before turning on by default. Path-based + the prefix⊆parent precision
+	// guard (excludes flat dumps and series volumes); no extra tag I/O.
+	CoalesceShatteredSiblings bool `json:"coalesce_shattered_siblings"`
 	// Background operation timeout in minutes (0 disables timeout)
 	OperationTimeoutMinutes int `json:"operation_timeout_minutes"`
 	// MinBookSizeBytes: single-file books below this size are flagged as suspicious and
@@ -772,6 +780,7 @@ func InitConfig() {
 			// Performance
 			ConcurrentScans:                  viper.GetInt("concurrent_scans"),
 			ChapterConsolidationThresholdMin: viper.GetInt("chapter_consolidation_threshold_min"),
+			CoalesceShatteredSiblings:        viper.GetBool("coalesce_shattered_siblings"),
 			OperationTimeoutMinutes:          viper.GetInt("operation_timeout_minutes"),
 			MinBookSizeBytes:                 viper.GetInt64("min_book_size_bytes"),
 			APIRateLimitPerMinute:            viper.GetInt("api_rate_limit_per_minute"),
