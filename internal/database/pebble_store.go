@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.91.0
+// version: 1.92.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-06-20
+// last-edited: 2026-06-21
 
 package database
 
@@ -9868,6 +9868,28 @@ func (s *PebbleStore) BatchUpsertBookFiles(files []*BookFile) error {
 			file.BookID = existing.BookID
 			file.CreatedAt = existing.CreatedAt
 			file.UpdatedAt = now
+
+			// Preserve memdb-stripped heavy fields. A caller that sourced `file`
+			// from the memdb view (GetAllBookFiles → stripBookFileForMemdb) carries
+			// a nil AcoustIDFingerprint + nil fingerprint diagnostics. Writing that
+			// back verbatim would WIPE the raw chromaprint (~230 KB/file, expensive
+			// to recompute) on every row — a mass data-loss on any whole-library
+			// round-trip (e.g. maintenance.tag-backfill). Restore from the stored
+			// row whenever the incoming value is empty. The fingerprint WRITE path
+			// (internal/plugins/acoustid/backfill.go) always supplies a fresh
+			// non-empty value via UpdateBookFile, so this never blocks a real update.
+			if len(file.AcoustIDFingerprint) == 0 {
+				file.AcoustIDFingerprint = existing.AcoustIDFingerprint
+			}
+			if file.FingerprintFailureReason == nil {
+				file.FingerprintFailureReason = existing.FingerprintFailureReason
+			}
+			if file.FingerprintFailureDetail == nil {
+				file.FingerprintFailureDetail = existing.FingerprintFailureDetail
+			}
+			if file.FingerprintDiagnosticJSON == nil {
+				file.FingerprintDiagnosticJSON = existing.FingerprintDiagnosticJSON
+			}
 
 			if err := s.deleteBookFileSecondaryIndexes(batch, existing); err != nil {
 				batch.Close()
