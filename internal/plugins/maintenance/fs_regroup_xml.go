@@ -213,7 +213,10 @@ func (p *Plugin) applyFSRegroup(ctx context.Context, store database.Store, targe
 			break // canary cap: heal only `limit` books this run
 		}
 		t := targets[ti]
-		if !t.Cohesive || t.SurvivorID == "" {
+		// The (parent,prefix,prefix⊆parent) folder guard already proves these are
+		// chapters of ONE book, so heal regardless of the author-cohesion flag (which
+		// false-positives on author-table duplication: same author name, different IDs).
+		if t.SurvivorID == "" {
 			skippedMixed++
 			continue
 		}
