@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_reextract.go
-// version: 3.1.0
+// version: 3.2.0
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
 // last-edited: 2026-06-21
 
@@ -206,14 +206,30 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 	}
 
 	for {
-		// Fire a progress update BEFORE GetAllBooks so the stuck-op detector
-		// (5-minute no-progress threshold) does not cancel us during a slow
-		// PebbleDB compaction or memdb-lock contention between pages.
-		heartbeat(true)
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		// Keepalive goroutine: fires heartbeats every 60s while GetAllBooks
+		// blocks (e.g. during PebbleDB L0 compaction). Without it, the
+		// 5-minute stuck-op detector cancels us before the first page returns.
+		kaStop := make(chan struct{})
+		go func() {
+			tick := time.NewTicker(60 * time.Second)
+			defer tick.Stop()
+			for {
+				select {
+				case <-tick.C:
+					heartbeat(true)
+				case <-kaStop:
+					return
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+		heartbeat(true)
 		books, err := store.GetAllBooks(pageSize, offset)
+		close(kaStop)
 		if err != nil {
 			return fmt.Errorf("GetAllBooks offset=%d: %w", offset, err)
 		}
