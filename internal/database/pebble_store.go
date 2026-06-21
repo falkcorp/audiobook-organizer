@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.92.0
+// version: 1.93.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-06-21
 
@@ -9931,6 +9931,17 @@ func (s *PebbleStore) BatchUpsertBookFiles(files []*BookFile) error {
 
 	if err := batch.Commit(pebble.Sync); err != nil {
 		return err
+	}
+	// Refresh memdb for every upserted file. UpdateBookFile does this per row;
+	// BatchUpsertBookFiles historically did not, so after a batch write the memdb
+	// view (what GetAllBookFiles / the UI read) stayed stale until the next warmup.
+	// That made whole-library batch backfills (e.g. maintenance.tag-backfill) look
+	// like they did nothing on re-read and forced redundant re-runs. Keep memdb in
+	// sync here so batch writes are immediately visible.
+	for _, file := range files {
+		if file != nil {
+			s.UpsertBookFileToMemDB(file)
+		}
 	}
 	s.InvalidateLibraryStats()
 	s.MarkQuickQueryDirty("no_fingerprints", "batch_upsert_book_files")
