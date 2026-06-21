@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_reextract.go
-// version: 3.0.0
+// version: 3.1.0
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
 // last-edited: 2026-06-21
 
@@ -55,7 +55,6 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
-	"os"
 	"strings"
 	"time"
 
@@ -91,6 +90,38 @@ func durationDiffMeaningful(oldDur, newDur int) bool {
 	}
 	rel := float64(delta) / float64(oldDur)
 	return rel > durationRelTolerance
+}
+
+// extractTimeout is the per-file wall-clock cap for mediainfo.Extract. The call
+// chain (os.Open → tag.ReadFrom → ffprobe) contains several blocking syscalls
+// that do not respect Go context cancellation and can hang indefinitely on a
+// slow or unresponsive filesystem. The goroutine is intentionally leaked on
+// timeout — it will unblock whenever the kernel recovers the I/O.
+const extractTimeout = 30 * time.Second
+
+// extractWithTimeout runs mediainfo.Extract in a goroutine and returns an error
+// if it does not complete within extractTimeout. It also respects ctx so the op
+// can be cancelled between files.
+func extractWithTimeout(ctx context.Context, filePath string) (*mediainfo.MediaInfo, error) {
+	type result struct {
+		info *mediainfo.MediaInfo
+		err  error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		info, err := mediainfo.Extract(filePath)
+		ch <- result{info, err}
+	}()
+	timer := time.NewTimer(extractTimeout)
+	defer timer.Stop()
+	select {
+	case r := <-ch:
+		return r.info, r.err
+	case <-timer.C:
+		return nil, fmt.Errorf("extract timed out after %v", extractTimeout)
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 func (p *Plugin) durationReextractDef() sdk.OperationDef {
@@ -225,12 +256,7 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 						segDur = int(math.Round(f.AcoustIDFingerprintDurationSec))
 					} else {
 						usedFfprobe = true
-						if _, statErr := os.Stat(f.FilePath); statErr != nil {
-							missing++
-							skip = true
-							break
-						}
-						info, mErr := mediainfo.Extract(f.FilePath)
+						info, mErr := extractWithTimeout(ctx, f.FilePath)
 						if mErr != nil || info == nil || info.Duration <= 0 {
 							readErr++
 							skip = true
@@ -258,11 +284,7 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 					noPath++
 					continue
 				}
-				if _, statErr := os.Stat(book.FilePath); statErr != nil {
-					missing++
-					continue
-				}
-				info, mErr := mediainfo.Extract(book.FilePath)
+				info, mErr := extractWithTimeout(ctx, book.FilePath)
 				if mErr != nil || info == nil || info.Duration <= 0 {
 					readErr++
 					continue
