@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_reextract_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4a7d1e92-8c63-4f50-a1b8-3e6c9d2f5a04
 // last-edited: 2026-06-21
 
@@ -154,5 +154,38 @@ func TestDurationReextract_EmptyLibrary(t *testing.T) {
 	}
 	if len(*updates) != 0 {
 		t.Errorf("empty library must write nothing, got %d writes", len(*updates))
+	}
+}
+
+// TestDurationReextract_MultiFileMissingSegmentsSkipped exercises the v2
+// multi-file branch: a book whose audio lives in BookFile segments. When a
+// segment's file is missing on disk the book total can't be trusted, so the
+// whole book is skipped — no Book or BookFile writes, even in apply mode.
+func TestDurationReextract_MultiFileMissingSegmentsSkipped(t *testing.T) {
+	writes := 0
+	books := []database.Book{{ID: "bm", Title: "Multi", FilePath: "/lib/Multi", Duration: intPtr(100)}}
+	store := &database.MockStore{
+		CountBooksFunc:  func() (int, error) { return len(books), nil },
+		GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) {
+			if offset >= len(books) {
+				return nil, nil
+			}
+			return books, nil
+		},
+		GetBookFilesFunc: func(string) ([]database.BookFile, error) {
+			return []database.BookFile{
+				{ID: "s1", BookID: "bm", FilePath: "/nonexistent/01.mp3", Duration: 50},
+				{ID: "s2", BookID: "bm", FilePath: "/nonexistent/02.mp3", Duration: 50},
+			}, nil
+		},
+		UpdateBookFunc:     func(_ string, b *database.Book) (*database.Book, error) { writes++; return b, nil },
+		UpdateBookFileFunc: func(_ string, _ *database.BookFile) error { writes++; return nil },
+	}
+	p := New(fakeDeps{store: store})
+	if err := p.runDurationReextract(context.Background(), mustReextractParams(t, false, 0), &fakeReporter{}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if writes != 0 {
+		t.Errorf("multi-file book with missing segments must be skipped, got %d writes", writes)
 	}
 }
