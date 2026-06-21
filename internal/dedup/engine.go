@@ -414,7 +414,14 @@ func (de *Engine) runUnifiedScoringForBook(ctx context.Context, book *database.B
 
 	// Build the set of other-book IDs this book is paired with in the current
 	// embedding + LSH candidate set.  This is the candidate pool for MetaFuzzy.
-	var embeddingCandIDs []string
+	// Keep each pair's candidate-record ID so the eligibility backstop below can
+	// DELETE a suppressed pair (e.g. a chapter cross-pair) rather than merely
+	// skip re-scoring it — otherwise the row persists forever.
+	type candRef struct {
+		otherID string
+		candID  int64
+	}
+	var embeddingCandIDs []candRef
 	for _, c := range candidates {
 		if c.EntityAID != book.ID && c.EntityBID != book.ID {
 			continue
@@ -423,7 +430,7 @@ func (de *Engine) runUnifiedScoringForBook(ctx context.Context, book *database.B
 		if c.EntityBID == book.ID {
 			otherID = c.EntityAID
 		}
-		embeddingCandIDs = append(embeddingCandIDs, otherID)
+		embeddingCandIDs = append(embeddingCandIDs, candRef{otherID: otherID, candID: c.ID})
 	}
 
 	if len(embeddingCandIDs) == 0 {
@@ -441,18 +448,26 @@ func (de *Engine) runUnifiedScoringForBook(ctx context.Context, book *database.B
 	// Get the book's files once for acoustid collectors.
 	bookFiles, _ := de.bookStore.GetBookFiles(book.ID)
 
-	for _, candID := range embeddingCandIDs {
+	for _, ref := range embeddingCandIDs {
+		candID := ref.otherID
 		otherBook, err := de.bookStore.GetBookByID(candID)
 		if err != nil || otherBook == nil {
 			continue
 		}
 
-		// 1. Eligibility pre-filter.
+		// 1. Eligibility pre-filter. A suppressed pair (chapter cross-pair, same
+		// version group, distinct series volume) is not just skipped — it is
+		// DELETED, so it can't survive re-scoring forever. This is the backstop
+		// for any emitter (incl. LSH/AcoustID) that lacks the emit-time guard.
 		ok, suppressors := PairEligibility(book, otherBook)
 		if !ok {
-			slog.Debug("dedup unified: suppressed pair",
+			slog.Debug("dedup unified: suppressed pair → delete",
 				"book", book.ID, "other", candID,
-				"suppressors", suppressors)
+				"cand", ref.candID, "suppressors", suppressors)
+			if err := de.embedStore.DeleteCandidate(ref.candID); err != nil {
+				slog.Debug("dedup unified: delete suppressed candidate failed",
+					"cand", ref.candID, "err", err)
+			}
 			continue
 		}
 
@@ -928,6 +943,13 @@ func (de *Engine) checkExactTitle(book *database.Book, authorName string) error 
 		if !hasPlausibleAudio(other) {
 			continue // stub / unscanned shell on the other side
 		}
+		// Prevention: never cross-pair the chapters of ONE physical multi-file
+		// book (same folder, or shattered across "<prefix> - N" sibling subdirs).
+		// This was the 380K-explosion vector. Cheap filepath compare before the
+		// O(title-length) Levenshtein, so it also trims per-author O(M²) cost.
+		if sameMultiFileBook(book, other) {
+			continue
+		}
 		otherForms := de.allNormalizedTitleForms(other)
 		// Closest-form distance: a match exists if ANY form of book is
 		// within Levenshtein 2 of ANY form of other. Alt titles let the
@@ -1040,6 +1062,11 @@ func (de *Engine) checkDurationMatch(book *database.Book) error {
 			continue
 		}
 		if !hasUsableTitle(other.Title) {
+			continue
+		}
+		// Prevention: chapters of ONE multi-file book share near-identical
+		// durations and the album-derived title — never emit them as a pair.
+		if sameMultiFileBook(book, other) {
 			continue
 		}
 

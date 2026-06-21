@@ -37,8 +37,6 @@
 package dedup
 
 import (
-	"path/filepath"
-
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
@@ -100,11 +98,12 @@ func PairEligibility(a, b *database.Book) (ok bool, suppressors []string) {
 	}
 
 	// Guard 3 — same_dir_multi_file
-	// Extracted verbatim from findSimilarBooks (engine.go:920-922).
-	// Multi-file audiobooks split into chapters and stored in the same folder
-	// produce identical embeddings — suppress before any collector runs.
-	if a.FilePath != "" && b.FilePath != "" &&
-		filepath.Dir(a.FilePath) == filepath.Dir(b.FilePath) {
+	// Originally from findSimilarBooks (engine.go:920-922): chapters split into
+	// multiple files in ONE folder produce identical embeddings. Extended to also
+	// catch the "shattered" layout where each chapter is its own "<prefix> - N"
+	// subdir (different parent dirs, same grandparent + prefix) — the layout that
+	// the old same-parent-only guard missed (purge-stale cleared only ~8%).
+	if sameMultiFileBook(a, b) {
 		suppressors = append(suppressors, "same_dir_multi_file")
 	}
 
