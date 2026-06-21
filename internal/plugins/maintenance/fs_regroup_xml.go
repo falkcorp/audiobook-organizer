@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fs_regroup_xml.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7d2a9c14-3e86-4b50-9f71-2c8e0a6d4b95
-// last-edited: 2026-06-20
+// last-edited: 2026-06-21
 
 // Package maintenance — op maintenance.fs-regroup-xml.
 //
@@ -233,16 +233,54 @@ func (p *Plugin) applyFSRegroup(ctx context.Context, store database.Store, targe
 			if fi, serr := os.Stat(m.FilePath); serr == nil {
 				size = fi.Size()
 			}
+			format := strings.TrimPrefix(strings.ToLower(filepath.Ext(m.FilePath)), ".")
+			// Explicit REATTACH (not UpsertBookFile): a member shell may already own a
+			// materialized BookFile row at this path (FileCount==1). UpsertBookFile matches
+			// by path and PRESERVES the existing row's BookID (pebble_store.go:9824-9825),
+			// which would leave the file orphaned on the shell — the shell then fails the
+			// delete-guard (delete-skipped) AND the survivor silently loses that chapter's
+			// audio. So if a row exists, MOVE it to the survivor (preserving its
+			// RawTags/hashes — the BookFile primary key embeds the bookID, so an in-place
+			// UpdateBookFile cannot change owners; MoveBookFilesToBook re-keys it), then set
+			// the chapter track order (which also syncs memdb). Otherwise create a fresh row.
+			existing, _ := store.GetBookFileByPath(m.FilePath)
+			if existing != nil {
+				if existing.BookID != survivor.ID {
+					if err := store.MoveBookFilesToBook([]string{existing.ID}, existing.BookID, survivor.ID); err != nil {
+						_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("reattach file %s -> %s failed: %v", m.FilePath, survivor.ID, err))
+						errCount++
+						continue
+					}
+				}
+				existing.BookID = survivor.ID
+				existing.TrackNumber = order + 1
+				if existing.Duration == 0 {
+					existing.Duration = m.DurationSec
+				}
+				if existing.FileSize == 0 {
+					existing.FileSize = size
+				}
+				if existing.Format == "" {
+					existing.Format = format
+				}
+				if err := store.UpdateBookFile(existing.ID, existing); err != nil {
+					_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("set track order %s -> %s failed: %v", m.FilePath, survivor.ID, err))
+					errCount++
+					continue
+				}
+				filesAttached++
+				continue
+			}
 			bf := &database.BookFile{
 				ID:          ulid.Make().String(),
 				BookID:      survivor.ID,
 				FilePath:    m.FilePath,
-				Format:      strings.TrimPrefix(strings.ToLower(filepath.Ext(m.FilePath)), "."),
+				Format:      format,
 				FileSize:    size,
 				Duration:    m.DurationSec,
 				TrackNumber: order + 1,
 			}
-			if err := store.UpsertBookFile(bf); err != nil {
+			if err := store.CreateBookFile(bf); err != nil {
 				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("attach file %s -> %s failed: %v", m.FilePath, survivor.ID, err))
 				errCount++
 				continue
