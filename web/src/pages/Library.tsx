@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.tsx
-// version: 1.68.0
+// version: 1.69.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-05-20
+// last-edited: 2026-06-21
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -228,6 +228,8 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
   const [batchDeleteInProgress, setBatchDeleteInProgress] = useState(false);
   const [batchRestoreInProgress, setBatchRestoreInProgress] = useState(false);
   const [mergeDialogOpen, setMergeDialogOpen] = useState(false);
+  const [combineDialogOpen, setCombineDialogOpen] = useState(false);
+  const [combineInProgress, setCombineInProgress] = useState(false);
   const [batchPlaylistOpen, setBatchPlaylistOpen] = useState(false);
   const [mergePrimaryId, setMergePrimaryId] = useState<string>('');
   // pendingFetchOpId tracks the in-flight metadata fetch so we can
@@ -1004,6 +1006,32 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     }
   };
 
+  // handleCombineIntoOneBook combines the selected single-file books into ONE
+  // multi-file book on the chosen survivor (mergePrimaryId), hard-deleting the
+  // absorbed shells. Distinct from handleMergeAsVersions (version-group merge).
+  const handleCombineIntoOneBook = async () => {
+    if (selectedAudiobooks.length < 2) return;
+    setCombineInProgress(true);
+    try {
+      const keepId = mergePrimaryId || selectedAudiobooks[0].id;
+      const mergeIds = selectedAudiobooks.filter((b) => b.id !== keepId).map((b) => b.id);
+      const result = await api.combineBooks(keepId, mergeIds);
+      toast(
+        `Combined ${result.files_moved} files into one book; removed ${result.books_deleted} entries.`,
+        'success',
+      );
+      setSelectedAudiobooks([]);
+      setCrossPageFilter(null);
+      setCombineDialogOpen(false);
+      await loadAudiobooks();
+    } catch (error) {
+      console.error('Failed to combine books:', error);
+      toast('Failed to combine books.', 'error');
+    } finally {
+      setCombineInProgress(false);
+    }
+  };
+
   const handlePurgeOne = async (book: Audiobook) => {
     setPurgingBookId(book.id);
     try {
@@ -1758,6 +1786,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
         onSaveToFiles={() => { setBulkWriteBackResult(null); setBulkWriteBackRename(false); setBulkWriteBackDialogOpen(true); }}
         onOrganizeSelected={() => setBulkOrganizeDialogOpen(true)}
         onMergeAsVersions={() => { setMergePrimaryId(selectedAudiobooks[0]?.id || ''); setMergeDialogOpen(true); }}
+        onCombineIntoOneBook={() => { setMergePrimaryId(selectedAudiobooks[0]?.id || ''); setCombineDialogOpen(true); }}
         onTagClick={() => setBulkTagDialogOpen(true)}
         onRateClick={() => setBulkRatingDialogOpen(true)}
         onDeleteSelected={() => setBatchDeleteDialogOpen(true)}
@@ -1889,6 +1918,10 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
           setMergePrimaryId={setMergePrimaryId}
           mergeInProgress={mergeInProgress}
           handleMergeAsVersions={handleMergeAsVersions}
+          combineDialogOpen={combineDialogOpen}
+          setCombineDialogOpen={setCombineDialogOpen}
+          combineInProgress={combineInProgress}
+          handleCombineIntoOneBook={handleCombineIntoOneBook}
           batchDeleteDialogOpen={batchDeleteDialogOpen}
           setBatchDeleteDialogOpen={setBatchDeleteDialogOpen}
           batchDeleteInProgress={batchDeleteInProgress}

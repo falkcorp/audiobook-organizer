@@ -36,6 +36,74 @@ func (_m *MockMergeService) EXPECT() *MockMergeService_Expecter {
 	return &MockMergeService_Expecter{mock: &_m.Mock}
 }
 
+// CombineBooks provides a mock function for the type MockMergeService
+func (_mock *MockMergeService) CombineBooks(bookIDs []string, primaryID string) (*merge.CombineResult, error) {
+	ret := _mock.Called(bookIDs, primaryID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for CombineBooks")
+	}
+
+	var r0 *merge.CombineResult
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func([]string, string) (*merge.CombineResult, error)); ok {
+		return returnFunc(bookIDs, primaryID)
+	}
+	if returnFunc, ok := ret.Get(0).(func([]string, string) *merge.CombineResult); ok {
+		r0 = returnFunc(bookIDs, primaryID)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*merge.CombineResult)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func([]string, string) error); ok {
+		r1 = returnFunc(bookIDs, primaryID)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockMergeService_CombineBooks_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CombineBooks'
+type MockMergeService_CombineBooks_Call struct {
+	*mock.Call
+}
+
+// CombineBooks is a helper method to define mock.On call
+//   - bookIDs []string
+//   - primaryID string
+func (_e *MockMergeService_Expecter) CombineBooks(bookIDs any, primaryID any) *MockMergeService_CombineBooks_Call {
+	return &MockMergeService_CombineBooks_Call{Call: _e.mock.On("CombineBooks", bookIDs, primaryID)}
+}
+
+func (_c *MockMergeService_CombineBooks_Call) Run(run func(bookIDs []string, primaryID string)) *MockMergeService_CombineBooks_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 []string
+		if args[0] != nil {
+			arg0 = args[0].([]string)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockMergeService_CombineBooks_Call) Return(combineResult *merge.CombineResult, err error) *MockMergeService_CombineBooks_Call {
+	_c.Call.Return(combineResult, err)
+	return _c
+}
+
+func (_c *MockMergeService_CombineBooks_Call) RunAndReturn(run func(bookIDs []string, primaryID string) (*merge.CombineResult, error)) *MockMergeService_CombineBooks_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // MergeBooks provides a mock function for the type MockMergeService
 func (_mock *MockMergeService) MergeBooks(bookIDs []string, primaryID string) (*merge.Result, error) {
 	ret := _mock.Called(bookIDs, primaryID)
@@ -72,7 +140,7 @@ type MockMergeService_MergeBooks_Call struct {
 // MergeBooks is a helper method to define mock.On call
 //   - bookIDs []string
 //   - primaryID string
-func (_e *MockMergeService_Expecter) MergeBooks(bookIDs interface{}, primaryID interface{}) *MockMergeService_MergeBooks_Call {
+func (_e *MockMergeService_Expecter) MergeBooks(bookIDs any, primaryID any) *MockMergeService_MergeBooks_Call {
 	return &MockMergeService_MergeBooks_Call{Call: _e.mock.On("MergeBooks", bookIDs, primaryID)}
 }
 
