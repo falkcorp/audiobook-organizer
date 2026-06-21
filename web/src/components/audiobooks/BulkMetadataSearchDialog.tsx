@@ -1,6 +1,7 @@
 // file: web/src/components/audiobooks/BulkMetadataSearchDialog.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
+// last-edited: 2026-06-21
 
 import { useCallback, useEffect, useState } from 'react';
 import {
@@ -19,6 +20,8 @@ import {
   IconButton,
   InputAdornment,
   LinearProgress,
+  List,
+  ListItem,
   Stack,
   Switch,
   TextField,
@@ -26,6 +29,7 @@ import {
   Typography,
 } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search.js';
+import FolderOpenIcon from '@mui/icons-material/FolderOpen.js';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore.js';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess.js';
 import HeadphonesIcon from '@mui/icons-material/Headphones.js';
@@ -35,7 +39,7 @@ import SkipNextIcon from '@mui/icons-material/SkipNext.js';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle.js';
 import UndoIcon from '@mui/icons-material/Undo.js';
 import type { Audiobook } from '../../types';
-import type { MetadataCandidate } from '../../services/api';
+import type { BookFile, MetadataCandidate } from '../../services/api';
 import * as api from '../../services/api';
 
 interface BulkMetadataSearchDialogProps {
@@ -76,6 +80,12 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / 1024).toFixed(0)} KB`;
 }
 
+function basename(p: string): string {
+  if (!p) return '';
+  const parts = p.split('/');
+  return parts[parts.length - 1] || p;
+}
+
 export function BulkMetadataSearchDialog({ open, books, onClose, onComplete, toast }: BulkMetadataSearchDialogProps) {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [query, setQuery] = useState('');
@@ -95,6 +105,14 @@ export function BulkMetadataSearchDialog({ open, books, onClose, onComplete, toa
   const [skipApplied, setSkipApplied] = useState(false);
   const [sourceFilter, setSourceFilter] = useState<string | null>(null);
   const [sortResults, setSortResults] = useState<'score' | 'source'>('score');
+  // Files list for the current book — always shown so the user can confirm
+  // the file set even for single-file books. Eager-loaded on book change.
+  const [files, setFiles] = useState<BookFile[]>([]);
+  const [filesLoading, setFilesLoading] = useState(false);
+  const [filesExpanded, setFilesExpanded] = useState(false);
+  // Stack of book ids applied in this session so the persistent Undo button
+  // can revert the last apply even after navigating away / banner dismissal.
+  const [appliedStack, setAppliedStack] = useState<{ id: string; title: string }[]>([]);
 
   const handleToggleSkipApplied = (checked: boolean) => {
     setSkipApplied(checked);
@@ -144,6 +162,41 @@ export function BulkMetadataSearchDialog({ open, books, onClose, onComplete, toa
     }
   }, [open, currentIndex, currentBook, doSearch]);
 
+  // Eager-load the current book's files so the "N File(s)" control shows the
+  // real count without a click. One request per navigation — cheap because the
+  // dialog shows a single book at a time.
+  useEffect(() => {
+    if (!open || !currentBook?.id) return;
+    const controller = new AbortController();
+    setFiles([]);
+    setFilesExpanded(false);
+    setFilesLoading(true);
+    api
+      .getBookFiles(currentBook.id, { signal: controller.signal })
+      .then((res) => setFiles(res.files || []))
+      .catch(() => setFiles([]))
+      .finally(() => setFilesLoading(false));
+    return () => controller.abort();
+  }, [open, currentBook?.id]);
+
+  // Synthetic fallback so the Files control is never blank: if the API returns
+  // nothing, show "1 File" using the book's own path/size.
+  const displayFiles: BookFile[] = files.length > 0
+    ? files
+    : currentBook?.file_path
+      ? [{
+          id: `fallback-${currentBook.id}`,
+          book_id: currentBook.id,
+          file_path: currentBook.file_path,
+          file_size: currentBook.file_size_bytes ?? undefined,
+          format: currentBook.format ?? undefined,
+          missing: false,
+          created_at: '',
+          updated_at: '',
+        }]
+      : [];
+  const fileCount = Math.max(displayFiles.length, 1);
+
   const handleSearch = () => doSearch(query, authorQuery, narratorQuery, seriesQuery);
 
   const handleApplyAll = async (candidate: MetadataCandidate) => {
@@ -159,10 +212,12 @@ export function BulkMetadataSearchDialog({ open, books, onClose, onComplete, toa
             await api.undoLastApply(bookId);
             toast(`Undid metadata apply for "${bookTitle}"`, 'info');
             setBookStatuses((prev) => new Map(prev).set(bookId, 'pending'));
+            setAppliedStack((prev) => prev.filter((b) => b.id !== bookId));
           } catch { /* ignore */ }
         },
       });
       setBookStatuses((prev) => new Map(prev).set(bookId, 'applied'));
+      setAppliedStack((prev) => [...prev, { id: bookId, title: bookTitle }]);
       advanceToNext();
     } catch (err) {
       toast(err instanceof Error ? err.message : 'Failed to apply metadata', 'error');
@@ -188,15 +243,36 @@ export function BulkMetadataSearchDialog({ open, books, onClose, onComplete, toa
             await api.undoLastApply(bookId);
             toast(`Undid metadata apply for "${bookTitle}"`, 'info');
             setBookStatuses((prev) => new Map(prev).set(bookId, 'pending'));
+            setAppliedStack((prev) => prev.filter((b) => b.id !== bookId));
           } catch { /* ignore */ }
         },
       });
       setBookStatuses((prev) => new Map(prev).set(bookId, 'applied'));
+      setAppliedStack((prev) => [...prev, { id: bookId, title: bookTitle }]);
       advanceToNext();
     } catch (err) {
       toast(err instanceof Error ? err.message : 'Failed to apply metadata', 'error');
     } finally {
       setApplying(false);
+    }
+  };
+
+  // Undo the most-recently applied book in this session. Works after the
+  // success banner is gone and after navigating to other books, because it
+  // keys off the applied stack rather than the current book.
+  const handleUndoLastApplied = async () => {
+    const last = appliedStack[appliedStack.length - 1];
+    if (!last) return;
+    setUndoing(true);
+    try {
+      await api.undoLastApply(last.id);
+      toast(`Undid metadata apply for "${last.title}"`, 'success');
+      setBookStatuses((prev) => new Map(prev).set(last.id, 'pending'));
+      setAppliedStack((prev) => prev.slice(0, -1));
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Failed to undo', 'error');
+    } finally {
+      setUndoing(false);
     }
   };
 
@@ -206,6 +282,7 @@ export function BulkMetadataSearchDialog({ open, books, onClose, onComplete, toa
       const resp = await api.undoLastApply(currentBook.id);
       toast(`Undid ${resp.undone_fields.length} field(s) for "${currentBook.title}"`, 'success');
       setBookStatuses((prev) => new Map(prev).set(currentBook.id, 'pending'));
+      setAppliedStack((prev) => prev.filter((b) => b.id !== currentBook.id));
     } catch (err) {
       toast(err instanceof Error ? err.message : 'Failed to undo', 'error');
     } finally {
@@ -241,6 +318,7 @@ export function BulkMetadataSearchDialog({ open, books, onClose, onComplete, toa
     }
     setCurrentIndex(0);
     setBookStatuses(new Map());
+    setAppliedStack([]);
     onClose();
   };
 
@@ -368,6 +446,49 @@ export function BulkMetadataSearchDialog({ open, books, onClose, onComplete, toa
                   iTunes: {currentBook.itunes_path}
                 </Typography>
               )}
+
+              {/* Always-visible Files control — shows even for single-file books
+                  so the user can confirm the file set. Mirrors the Library page's
+                  expandable "N Files" list. Stop click propagation so expanding
+                  the list doesn't trigger the card's cover-preview handler. */}
+              <Box sx={{ mt: 0.75 }} onClick={(e) => e.stopPropagation()}>
+                <Chip
+                  icon={filesLoading ? <CircularProgress size={14} /> : <FolderOpenIcon />}
+                  label={filesLoading ? 'Loading files…' : `${fileCount} File${fileCount === 1 ? '' : 's'}`}
+                  size="small"
+                  variant="outlined"
+                  clickable
+                  onClick={() => setFilesExpanded((v) => !v)}
+                  deleteIcon={filesExpanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+                  onDelete={() => setFilesExpanded((v) => !v)}
+                />
+                <Collapse in={filesExpanded}>
+                  <List dense disablePadding sx={{ mt: 0.5, maxHeight: 200, overflow: 'auto' }}>
+                    {displayFiles.map((f) => {
+                      const meta = [
+                        f.format,
+                        f.file_size != null && f.file_size > 0 ? formatFileSize(f.file_size) : null,
+                        f.duration != null && f.duration > 0 ? formatDuration(f.duration) : null,
+                      ].filter(Boolean).join(' · ');
+                      return (
+                        <ListItem key={f.id} disableGutters sx={{ display: 'block', py: 0.25 }}>
+                          <Tooltip title={f.file_path} placement="bottom-start">
+                            <Typography
+                              variant="caption"
+                              sx={{ fontFamily: 'monospace', display: 'block', color: f.missing ? 'error.main' : 'text.primary', wordBreak: 'break-all' }}
+                            >
+                              {basename(f.file_path)}
+                            </Typography>
+                          </Tooltip>
+                          {meta && (
+                            <Typography variant="caption" color="text.secondary">{meta}</Typography>
+                          )}
+                        </ListItem>
+                      );
+                    })}
+                  </List>
+                </Collapse>
+              </Box>
             </Box>
             {status === 'applied' && <Chip label="Applied" color="success" size="small" />}
             {status === 'skipped' && <Chip label="Skipped" size="small" variant="outlined" />}
@@ -606,6 +727,22 @@ export function BulkMetadataSearchDialog({ open, books, onClose, onComplete, toa
             >
               Undo
             </Button>
+          )}
+          {/* Persistent undo for the last applied book — remains usable after
+              the success banner is gone and after navigating to other books. */}
+          {appliedStack.length > 0 && (
+            <Tooltip title={`Undo last applied: "${appliedStack[appliedStack.length - 1].title}"`}>
+              <Button
+                color="warning"
+                startIcon={<UndoIcon />}
+                onClick={handleUndoLastApplied}
+                disabled={undoing}
+                size="small"
+                variant="contained"
+              >
+                {undoing ? 'Undoing…' : `Undo Last (${appliedStack.length})`}
+              </Button>
+            </Tooltip>
           )}
         </Stack>
         <Stack direction="row" spacing={1}>
