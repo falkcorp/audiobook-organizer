@@ -206,6 +206,10 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 	}
 
 	for {
+		// Fire a progress update BEFORE GetAllBooks so the stuck-op detector
+		// (5-minute no-progress threshold) does not cancel us during a slow
+		// PebbleDB compaction or memdb-lock contention between pages.
+		heartbeat(true)
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
