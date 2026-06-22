@@ -219,7 +219,7 @@ make web-dev         # Vite dev server (frontend hot-reload)
 make test            # Go backend tests
 make test-all        # Backend + frontend tests
 make test-e2e        # Playwright E2E tests
-make ci              # All tests + 80% coverage check
+make ci              # All tests + 30% coverage check
 make docker           # Build Docker image
 make help            # All targets
 ```
@@ -231,7 +231,7 @@ Always use `-tags=mocks` for accurate coverage:
 ```bash
 make test              # recommended
 make coverage          # generate coverage report
-make coverage-check    # verify 80% threshold
+make coverage-check    # verify 30% threshold
 go test ./... -tags=mocks -cover -v   # direct invocation
 ```
 
