@@ -1,7 +1,7 @@
 // file: internal/server/handlers/cache.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: c9d0e1f2-a3b4-5678-cdef-678901234567
-// last-edited: 2026-06-02
+// last-edited: 2026-06-22
 
 package handlers
 
@@ -78,7 +78,7 @@ func NewCacheHandler(metricsStore CacheMetricsStore, metadataStore CacheMetadata
 }
 
 // HandleCacheStats returns aggregated cache metrics from Prometheus default registry.
-// GET /api/v1/cache/stats (public, no auth)
+// GET /api/v1/cache/stats (requires PermLibraryView — SEC-7)
 func (h *CacheHandler) HandleCacheStats(c *gin.Context) {
 	metrics, err := prometheus.DefaultGatherer.Gather()
 	if err != nil {
