@@ -1,11 +1,38 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.55.0 -->
+<!-- version: 3.57.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
-<!-- last-edited: 2026-06-21 -->
+<!-- last-edited: 2026-06-22 -->
 
 # Changelog
 
 ## [Unreleased]
+
+### Fixed
+
+#### June 22, 2026 — in-memory atomic progress clock (#1566, #1567)
+
+- **`fix(ops)`** — `maintenance.duration-reextract` (and all long-running ops) no
+  longer get false-positive watchdog cancellations. Three root causes were fixed:
+  - **Scenario A** — `UpdateOpProgressV2` stalls during PebbleDB L0 compaction →
+    `LastProgressAt` never updates in DB → watchdog fires. Fix: `runHandle` gains
+    `lastProgressAt atomic.Int64`; reporter stamps it on every `UpdateProgress` call
+    *before* any lock or DB write; watchdog reads the atomic first (lock-free).
+  - **Scenario B** — `GetAllBooks` blocks for 5+ minutes during memdb rebuild on
+    raidz2 spinning disks. Fix: new `sdk.PageBooks` helper wraps pagination with a
+    keepalive goroutine scoped to each `GetAllBooks` call (exits immediately after
+    the call returns).
+  - **Scenario C** (#1567) — `heartbeat(false)` was at the END of the per-book
+    closure, so books that returned early via any skip condition (already-correct,
+    no-path, read-error, estimated) never stamped the atomic. With ~95% of books
+    already corrected on a subsequent run, the atomic was stamped only once at op
+    start — 300s later the watchdog fired. Fix: move `heartbeat(false)` to
+    immediately after `examined++`, so every book stamps the atomic regardless of
+    which return path it takes.
+- **`feat(sdk)`** — `sdk.PageBooks` — pagination helper with built-in watchdog
+  keepalive; plugin authors no longer need to wire liveness boilerplate manually.
+- `OperationDef` gains `Synchronous bool` (legacy sync DB writes) and
+  `ProgressFlushInterval time.Duration` (per-op configurable lazy flush cadence,
+  clamped to (0, 5m]; default 30s).
 
 ### Changed
 
