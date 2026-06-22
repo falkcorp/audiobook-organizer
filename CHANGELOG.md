@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.61.0 -->
+<!-- version: 3.62.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-22 -->
 
@@ -7,6 +7,11 @@
 
 ## [Unreleased]
 
+### Tests
+
+#### June 22, 2026 — fix hardcoded corpus path in mediainfo test (PR #1586)
+
+- **`fix(test)`** — `TestExtract_RealMP3File` used a hardcoded absolute path (`/Users/jdfalk/repos/.../`) that broke on any other machine. Replaced with `findRepoRootForMediainfo()` — an inline `go.mod` walk — so the test is portable. LFS already configured in `.gitattributes` (48 tracked audio files). Skip message now says "run git lfs pull to enable" instead of bare "not found".
 ### Refactor
 
 #### June 22, 2026 — frontend page decomposition: BookDedup + Library (PR #1585)

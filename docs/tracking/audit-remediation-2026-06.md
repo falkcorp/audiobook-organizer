@@ -1,5 +1,5 @@
 <!-- file: docs/tracking/audit-remediation-2026-06.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f -->
 <!-- last-edited: 2026-06-22 -->
 
@@ -203,4 +203,4 @@ This ordering respects dependencies and keeps each PR reviewable:
 | J | **Scanner batch pipeline** ✅ | PERF-2 batch upserts shipped PR #1583: `createBookFilesForBook` now collects all BookFiles then calls `BatchUpsertBookFiles` once (N→1 DB writes per book). Hash carry-forward (dedup check re-hashes same files at line 1885) deferred — needs `saveBookToDatabase` API change; documented as PERF-2b in TODO. | — |
 | K | **Security guardrails** ✅ | SEC-5 + SEC-6: `IsDangerousRoot` in pathvalidation, restore dangerous-root guard + verify warning, factory-reset dangerous-root guard. PR #1584. | — |
 | L | **Frontend page decomposition** ✅ | STR-4: BookDedup.tsx 2907→145 lines (3 tabs extracted: DedupAIReviewTab, DedupEmbeddingTab, DedupAcousticTab). FE-5: Library.tsx 2018→1811 lines (useLibraryQuery + useLibrarySelection hooks extracted). PR #1585. TypeScript: 0 errors. | F |
-| M | **Dataset strategy** | TOOL-1 optional large corpus | — |
+| M | **Dataset strategy** ✅ | TOOL-1: LFS already configured (`.gitattributes`). Fixed hardcoded absolute path in `mediainfo_test.go:889` (`falkcorp/...` → `findRepoRootForMediainfo()` walk). Skip message updated. PR #1586. | — |

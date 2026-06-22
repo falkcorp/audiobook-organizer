@@ -1,7 +1,7 @@
 // file: internal/mediainfo/mediainfo_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a2b3c4d5-e6f7-8a9b-0c1d-2e3f4a5b6c7d
-// last-edited: 2026-06-21
+// last-edited: 2026-06-22
 
 package mediainfo
 
@@ -884,12 +884,32 @@ func TestGetQualityTier_AboveBoundaries(t *testing.T) {
 	}
 }
 
+// findRepoRootForMediainfo walks up from cwd until it finds go.mod.
+func findRepoRootForMediainfo(t *testing.T) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	for {
+		if _, statErr := os.Stat(filepath.Join(dir, "go.mod")); statErr == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatal("could not find repo root (go.mod)")
+		}
+		dir = parent
+	}
+}
+
 func TestExtract_RealMP3File(t *testing.T) {
-	// Use actual test file from testdata
-	testFile := "/Users/jdfalk/repos/github.com/falkcorp/audiobook-organizer/testdata/audio/librivox/odyssey_butler_librivox/odyssey_01_homer_butler_64kb.mp3"
+	repoRoot := findRepoRootForMediainfo(t)
+	testFile := filepath.Join(repoRoot, "testdata", "audio", "librivox",
+		"odyssey_butler_librivox", "odyssey_01_homer_butler_64kb.mp3")
 
 	if _, err := os.Stat(testFile); os.IsNotExist(err) {
-		t.Skip("Test file not found")
+		t.Skip("Librivox corpus not present (LFS-on-demand; run git lfs pull to enable)")
 	}
 
 	info, err := Extract(testFile)
