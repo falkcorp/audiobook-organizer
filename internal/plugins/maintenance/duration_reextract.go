@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_reextract.go
-// version: 3.3.0
+// version: 3.4.0
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
 // last-edited: 2026-06-22
 
@@ -213,6 +213,7 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 			return errLimitReached
 		}
 		examined++
+		heartbeat(false) // stamp atomic for every book, including skipped ones
 
 		// Compute the book's REAL duration. Multi-file books store audio across
 		// BookFiles (Book.FilePath may even be a directory); virtual single-file
