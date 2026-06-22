@@ -1,7 +1,7 @@
 // file: internal/security/pathvalidation/pathvalidation.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3a8f5c2b-7d4e-4a19-9f6b-1c0e2d3a5b7c
-// last-edited: 2026-05-18
+// last-edited: 2026-06-22
 
 // Package pathvalidation provides centralized path validation utilities to
 // prevent path traversal and injection vulnerabilities. It is the foundation
@@ -264,4 +264,32 @@ func isWithinRoot(path, root string) bool {
 		return true
 	}
 	return strings.HasPrefix(path, root+string(filepath.Separator))
+}
+
+// ErrDangerousRoot is returned when a path is a known-dangerous system directory.
+var ErrDangerousRoot = errors.New("path is a protected system directory")
+
+// dangerousRoots lists absolute paths that must never be used as a library root
+// or factory-reset target. The list is conservative — it protects system
+// directories on Linux and macOS that, if recursively deleted or overwritten,
+// would render the host unrecoverable.
+var dangerousRoots = []string{
+	"/",
+	"/bin", "/sbin", "/usr", "/lib", "/lib64", "/lib32",
+	"/etc", "/var", "/run", "/sys", "/proc", "/dev",
+	"/boot", "/root", "/home",
+	"/opt", "/srv",
+}
+
+// IsDangerousRoot reports whether path equals one of the known-dangerous system
+// directories. It does NOT check sub-paths — /home/user/audiobooks is safe even
+// though /home itself is dangerous.
+func IsDangerousRoot(path string) bool {
+	cleaned := filepath.Clean(path)
+	for _, d := range dangerousRoots {
+		if cleaned == d {
+			return true
+		}
+	}
+	return false
 }

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 8475f406-df31-4286-95b0-30787397603e
-// last-edited: 2026-06-16
+// last-edited: 2026-06-22
 
 // Package system hosts the system-level HTTP handlers extracted from the server
 // package: health, status, announcements, storage, logs, activity-log,
@@ -428,6 +428,11 @@ func (h *Handler) FactoryReset(c *gin.Context) {
 	// Clear library folder contents (organized audiobooks)
 	if config.AppConfig.RootDir != "" {
 		libraryDir := config.AppConfig.RootDir
+		if pathvalidation.IsDangerousRoot(libraryDir) {
+			slog.Error("Factory reset refused: RootDir is a protected system directory", "rootDir", libraryDir)
+			httputil.RespondWithBadRequest(c, "factory reset refused: library RootDir is a protected system directory")
+			return
+		}
 		entries, err := os.ReadDir(libraryDir)
 		if err == nil {
 			for _, entry := range entries {
@@ -596,9 +601,17 @@ func (h *Handler) RestoreBackup(c *gin.Context) {
 			httputil.RespondWithBadRequest(c, "invalid target_path: "+err.Error())
 			return
 		}
+		if pathvalidation.IsDangerousRoot(cleanTarget) {
+			httputil.RespondWithBadRequest(c, "restore target is a protected system directory")
+			return
+		}
 		targetPath = cleanTarget
 	} else {
 		targetPath = filepath.Dir(config.AppConfig.DatabasePath)
+	}
+
+	if req.Verify {
+		slog.Warn("backup restore: checksum verification requested but not yet implemented; proceeding without verification")
 	}
 
 	if err := backup.RestoreBackup(backupPath, targetPath, req.Verify); err != nil {

@@ -1,5 +1,5 @@
 <!-- file: docs/tracking/audit-remediation-2026-06.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f -->
 <!-- last-edited: 2026-06-22 -->
 
@@ -38,8 +38,8 @@ These Structure Audit findings were addressed in the May–June refactor wave be
 | SEC-2 | Bootstrap/read-only credentials generated to plaintext files at startup | Sweep | ⬜ | `server_lifecycle.go:408`, `bootstrap.go:107,152,338`. Make recovery opt-in or local-only. |
 | SEC-3 | Temp-login URLs trust inbound `Host` header | Sweep | ⬜ | `auth_temp_login.go:114`. Use configured canonical URL or Host allowlist. |
 | SEC-4 | No security-header middleware (CSP, frame-ancestors, nosniff, HSTS) | Sweep | ⬜ | Gap around `server_middleware.go:21`. |
-| SEC-5 | Restore `verify=true` is a no-op; restore target is arbitrary absolute path | Sweep | ⬜ | `handlers/system/handler.go:591`, `backup/backup.go:149`. Constrain targets; implement manifest check. |
-| SEC-6 | Factory reset deletes everything under `RootDir` without path validation | Sweep | ⬜ | `handlers/system/handler.go:428`. Reject dangerous roots; require resolved-path confirmation. |
+| SEC-5 | Restore `verify=true` is a no-op; restore target is arbitrary absolute path | Sweep | ✅ | `pathvalidation.IsDangerousRoot` blocks system-dir targets; `verify=true` now logs a visible warning. Full checksum manifest deferred. Shipped PR #1584. |
+| SEC-6 | Factory reset deletes everything under `RootDir` without path validation | Sweep | ✅ | `pathvalidation.IsDangerousRoot` check added before library folder deletion; returns 400 + logs error if RootDir is a protected path. Shipped PR #1584. |
 | SEC-7 | `/metrics` and cache-stats endpoints unauthenticated | Sweep | ⬜ | P2. Gate behind auth or internal bind. |
 | SEC-8 | Docker build downloads unsigned tarballs, uses mutable base tags | Sweep | ⬜ | P2. Pin base digest, verify SHA256. |
 | SEC-9 | OpenAI key exposed to frontend runtime for validation | Sweep | ⬜ | P2. Move validation server-side. |
@@ -201,6 +201,6 @@ This ordering respects dependencies and keeps each PR reviewable:
 | H | **Work-item contract design** | Design doc + open question resolution | G |
 | I | **Work-item contract implementation** ✅ | `RunItems[T]` standalone generic fn + `ErrMode`/`RunItemsOptions` + 9 unit tests (PR #1579). Note: the 6 listed fan-out sites all have custom checkpointing/multi-counter/resume-from-index logic that cannot be replaced without regression — documented as future follow-up in TODO `ARCH-4b`. | H |
 | J | **Scanner batch pipeline** ✅ | PERF-2 batch upserts shipped PR #1583: `createBookFilesForBook` now collects all BookFiles then calls `BatchUpsertBookFiles` once (N→1 DB writes per book). Hash carry-forward (dedup check re-hashes same files at line 1885) deferred — needs `saveBookToDatabase` API change; documented as PERF-2b in TODO. | — |
-| K | **Security guardrails** | SEC-5 restore validation, SEC-6 factory-reset path check | — |
+| K | **Security guardrails** ✅ | SEC-5 + SEC-6: `IsDangerousRoot` in pathvalidation, restore dangerous-root guard + verify warning, factory-reset dangerous-root guard. PR #1584. | — |
 | L | **Frontend page decomposition** | FE-5 Library.tsx hooks, STR-4 BookDedup split | F |
 | M | **Dataset strategy** | TOOL-1 optional large corpus | — |
