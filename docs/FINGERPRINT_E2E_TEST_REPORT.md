@@ -1,3 +1,8 @@
+<!-- file: docs/FINGERPRINT_E2E_TEST_REPORT.md -->
+<!-- version: 1.0.1 -->
+<!-- guid: f1e2d3c4-b5a6-7890-abcd-ef0123456789 -->
+<!-- last-edited: 2026-06-22 -->
+
 # Task 9: Integration Test and E2E Verification Report
 **Date:** 2026-05-19  
 **Tester:** Claude  
@@ -138,7 +143,7 @@ The fresh database requires admin authentication setup. The standard workflow:
 curl -X POST -d '{"token":"<emergency-token>"}' https://localhost:8484/api/v1/auth/bootstrap
 ```
 
-**API Key obtained:** `abk_qNtlWsBMgAW9EyCPwjHbuwEjPBQNIP_OAjKVkBCRo8o` ✅
+**API Key obtained:** `abk_<REDACTED — key rotated, see SEC-1>` ✅
 
 ## Part 5: Feature Completeness Assessment
 

@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 1.35.0
+// version: 1.36.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-06-18
+// last-edited: 2026-06-22
 
 package server
 
@@ -209,6 +209,8 @@ func (s *Server) resumeLegacyOp(opID, opType string) {
 }
 
 func (s *Server) Start(cfg ServerConfig) error {
+	s.externalURL = strings.TrimRight(cfg.ExternalURL, "/")
+
 	// SERVER-LIFECYCLE-FLIP: drive Starter services via the container.
 	// Container.Start runs services in resolved dep order; failures
 	// abort startup and roll back already-started services.

@@ -1,7 +1,7 @@
 // file: internal/server/server_middleware.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 6a093405-441a-4c14-a9c5-46326ea767c1
-// last-edited: 2026-06-19
+// last-edited: 2026-06-22
 
 package server
 
@@ -54,6 +54,26 @@ func corsMiddleware() gin.HandlerFunc {
 			}
 			c.AbortWithStatus(http.StatusNoContent)
 			return
+		}
+
+		c.Next()
+	}
+}
+
+// securityHeadersMiddleware sets browser security headers on every response.
+// TLS-only headers (HSTS) are added only when the connection is HTTPS.
+// CSP is intentionally omitted here — the React SPA requires inline styles and
+// scripts that vary across builds; add it as a separate hardening step once the
+// nonce/hash strategy is settled.
+func securityHeadersMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Header("X-Content-Type-Options", "nosniff")
+		c.Header("X-Frame-Options", "SAMEORIGIN")
+		c.Header("Referrer-Policy", "strict-origin-when-cross-origin")
+		c.Header("X-XSS-Protection", "0") // tell browsers to use built-in XSS filters, not legacy mode
+
+		if c.Request.TLS != nil || strings.EqualFold(strings.TrimSpace(c.GetHeader("X-Forwarded-Proto")), "https") {
+			c.Header("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		}
 
 		c.Next()

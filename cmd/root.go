@@ -1,6 +1,7 @@
 // file: cmd/root.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
+// last-edited: 2026-06-22
 
 package cmd
 
@@ -319,6 +320,9 @@ var serveCmd = &cobra.Command{
 		cfg.TLSKeyFile = cmd.Flag("tls-key").Value.String()
 		cfg.HTTP3Port = cmd.Flag("http3-port").Value.String()
 
+		// Public-facing origin for absolute link generation (e.g. temp-login URLs).
+		cfg.ExternalURL = cmd.Flag("external-url").Value.String()
+
 		return startServer(srv, cfg)
 	},
 }
@@ -372,6 +376,7 @@ func init() {
 	serveCmd.Flags().String("tls-cert", "certs/localhost.crt", "TLS certificate file for HTTPS/HTTP2/HTTP3")
 	serveCmd.Flags().String("tls-key", "certs/localhost.key", "TLS key file for HTTPS/HTTP2/HTTP3")
 	serveCmd.Flags().String("http3-port", "8484", "HTTP/3 (QUIC) port on UDP (same as --port for best compatibility)")
+	serveCmd.Flags().String("external-url", "", "public-facing origin used in generated links, e.g. https://books.example.com (prevents Host-header injection)")
 	serveCmd.Flags().Int("workers", 2, "number of background operation workers")
 
 	metadataInspectCmd.Flags().StringVar(&metadataInspectFile, "file", "", "audio file to inspect (can also pass as positional argument)")

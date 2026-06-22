@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.31.0
+// version: 2.32.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-06-18
+// last-edited: 2026-06-22
 
 package server
 
@@ -277,6 +277,11 @@ type Server struct {
 	// at run time.
 	extraOpsRegistrar *scheduler.ExtraOpsRegistrar
 
+	// externalURL is the public-facing origin set from ServerConfig.ExternalURL.
+	// Used by handlers that build absolute links (e.g. temp-login tokens).
+	// Empty means "return relative paths only".
+	externalURL string
+
 	// toolRegistry manages external binary lifecycle (Ollama, fpcalc).
 	toolRegistry *tools.ToolRegistry
 	// ollamaDaemon starts/stops the Ollama binary on demand.
@@ -297,6 +302,11 @@ type ServerConfig struct {
 	TLSCertFile  string // Optional TLS certificate file for HTTPS/HTTP2/HTTP3
 	TLSKeyFile   string // Optional TLS key file for HTTPS/HTTP2/HTTP3
 	HTTP3Port    string // Optional HTTP/3 port (UDP). If set with TLS, enables HTTP/3
+
+	// ExternalURL is the public-facing origin (e.g. "https://books.example.com").
+	// When set, it is used to build absolute links (temp-login URLs, etc.) instead
+	// of trusting the inbound Host header. Leave empty to return relative paths.
+	ExternalURL string
 }
 
 // Store returns the database.Store dependency the server was constructed with.
@@ -348,6 +358,7 @@ func NewServer(store database.Store) *Server {
 		SkipPaths: []string{"/api/v1/operations/events"},
 	}))
 	router.Use(gin.Recovery())
+	router.Use(securityHeadersMiddleware())
 	router.Use(corsMiddleware())
 	router.Use(servermiddleware.BasicAuth())
 	router.Use(gzip.Gzip(gzip.DefaultCompression, gzip.WithExcludedPaths([]string{"/api/events"})))

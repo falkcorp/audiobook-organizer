@@ -1,6 +1,7 @@
 // file: internal/server/auth_temp_login.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5b6c7d8e-9f0a-1b2c-3d4e-5f6a7b8c9d0e
+// last-edited: 2026-06-22
 
 // Temp-login token: admin mints a short-lived single-use URL for a user.
 // User clicks the URL → server consumes the token → 24h session cookie
@@ -104,17 +105,15 @@ func (s *Server) createTempLoginToken(c *gin.Context) {
 	tempLoginTokens[token] = tempLoginEntry{UserID: user.ID, ExpiresAt: expires}
 	tempLoginMu.Unlock()
 
-	// Build absolute URL from the inbound request. Falls back to a
-	// relative path if the Host header is unset (shouldn't happen in
-	// production but defensive).
-	scheme := "https"
-	if c.Request.TLS == nil && !handlers.IsHTTPSRequest(c) {
-		scheme = "http"
-	}
-	host := strings.TrimSpace(c.Request.Host)
-	loginURL := fmt.Sprintf("/auth/temp-login?token=%s", token)
-	if host != "" {
-		loginURL = fmt.Sprintf("%s://%s/auth/temp-login?token=%s", scheme, host, token)
+	// Build the login URL. If ExternalURL is configured, use it as the
+	// canonical origin — never trust the inbound Host header, which can be
+	// spoofed to redirect the token to an attacker-controlled origin.
+	// When ExternalURL is empty, return only the relative path so the admin
+	// can prepend the known server address out-of-band.
+	relativePath := fmt.Sprintf("/auth/temp-login?token=%s", token)
+	loginURL := relativePath
+	if s.externalURL != "" {
+		loginURL = s.externalURL + relativePath
 	}
 
 	httputil.RespondWithCreated(c, gin.H{
