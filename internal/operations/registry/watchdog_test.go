@@ -1,7 +1,7 @@
 // file: internal/operations/registry/watchdog_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4d5e6f7a-8b9c-0123-def0-1234567890ab
-// last-edited: 2026-05-06
+// last-edited: 2026-06-22
 
 package registry_test
 
@@ -108,6 +108,69 @@ func TestWatchdog_UncheckpointedOpGetsStrike(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Error("expected at least 1 uncheckpointed strike within 500ms, got 0")
+}
+
+// TestWatchdog_InMemoryClockPreventsFalseStuck verifies that the watchdog does
+// NOT fire when the in-memory atomic clock is fresh, even if the DB
+// last_progress_at row is stale — the scenario that occurs when
+// UpdateOpProgressV2 is blocked behind PebbleDB L0 compaction (Scenario A).
+//
+// The op calls UpdateProgress in a loop (keeping the atomic fresh) while the
+// test continuously backdates the DB row (simulating stuck DB writes).
+func TestWatchdog_InMemoryClockPreventsFalseStuck(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	store := newFakeStore()
+	r := registry.NewWithOptions(store, slog.Default(), 2, registry.Options{
+		WatchdogInterval: 30 * time.Millisecond,
+	})
+
+	ready := make(chan struct{})
+	def := makeValidDef("test.wdog-atomic-fresh")
+	def.ResumePolicy = registry.ResumeDrop
+	def.ProgressTimeout = 100 * time.Millisecond
+	def.Run = func(runCtx context.Context, _ json.RawMessage, rep registry.Reporter) error {
+		// Signal that we're inside Run and about to start the loop.
+		close(ready)
+		// Keep calling UpdateProgress every 20ms so the atomic stays fresh.
+		// This simulates an op that is actively making progress but whose DB
+		// writes are queued/blocked.
+		ticker := time.NewTicker(20 * time.Millisecond)
+		defer ticker.Stop()
+		i := 0
+		for {
+			select {
+			case <-runCtx.Done():
+				return runCtx.Err()
+			case <-ticker.C:
+				i++
+				_ = rep.UpdateProgress(i, 1000, "processing")
+			}
+		}
+	}
+	_ = r.RegisterOp(def)
+	r.Start(ctx)
+
+	opID, _ := r.EnqueueOp(ctx, "test.wdog-atomic-fresh", nil)
+	select {
+	case <-ready:
+	case <-time.After(3 * time.Second):
+		t.Fatal("op never entered Run")
+	}
+
+	// For 300ms, continuously backdate the DB row to simulate stuck DB writes.
+	// The op's UpdateProgress loop keeps the atomic fresh (every 20ms).
+	deadline := time.Now().Add(300 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		stale := time.Now().UTC().Add(-500 * time.Millisecond)
+		store.setLastProgressAt(opID, &stale)
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if strikes := store.strikesOfKind(opID, "stuck"); len(strikes) > 0 {
+		t.Errorf("watchdog fired despite fresh in-memory progress clock (got %d stuck strikes)", len(strikes))
+	}
 }
 
 // TestWatchdog_InfiniteRestartForceDrop verifies that an op with resume_count≥3

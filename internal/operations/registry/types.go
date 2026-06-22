@@ -1,7 +1,7 @@
 // file: internal/operations/registry/types.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-06-13
+// last-edited: 2026-06-22
 
 // Package registry provides the UOS-02 in-memory OperationDef registry,
 // dispatcher, and in-process worker pool. See the spec at
@@ -48,6 +48,15 @@ type OperationDef struct {
 	// op is considered stuck and its context is canceled.
 	// Zero means "use default 5m".
 	ProgressTimeout time.Duration
+	// ProgressFlushInterval controls how often the lazy background goroutine
+	// persists the in-memory progress clock to the DB for crash-recovery
+	// observability. Zero or negative → default 30s. Greater than 5m → capped
+	// at 5m. Synchronous overrides this (no background flush needed).
+	ProgressFlushInterval time.Duration
+	// Synchronous, if true, writes last_progress_at to the database on every
+	// UpdateProgress call (legacy behaviour). Zero-value = false = in-memory
+	// atomic clock with lazy periodic DB flush.
+	Synchronous bool
 
 	// Concurrency. Required.
 	// ConcurrencyKey: ops with same non-empty key serialize; empty = no serialization.
