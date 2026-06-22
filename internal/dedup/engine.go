@@ -1,7 +1,7 @@
 // file: internal/dedup/engine.go
-// version: 1.32.0
+// version: 1.33.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
-// last-edited: 2026-06-18
+// last-edited: 2026-06-22
 
 package dedup
 
@@ -401,31 +401,22 @@ func (de *Engine) runUnifiedScoringForBook(ctx context.Context, book *database.B
 		return nil
 	}
 
-	// Load the embedding candidates that findSimilarBooks just wrote for this
-	// book.  We iterate only these (embedding top-K) rather than all pending
-	// candidates to avoid O(N²) cost and to satisfy the MetaFuzzy constraint.
-	candidates, _, err := de.embedStore.ListCandidates(database.CandidateFilter{
-		EntityType: "book",
-		Status:     "pending",
-	})
+	// Load pending candidates for this specific book via the entity secondary
+	// index — O(k) where k is candidates for this book, not O(N) over all rows.
+	bookCandidates, err := de.embedStore.ListCandidatesForEntity("book", book.ID, "pending")
 	if err != nil {
 		return fmt.Errorf("runUnifiedScoringForBook: list candidates: %w", err)
 	}
 
-	// Build the set of other-book IDs this book is paired with in the current
-	// embedding + LSH candidate set.  This is the candidate pool for MetaFuzzy.
+	// Build the set of other-book IDs this book is paired with.
 	// Keep each pair's candidate-record ID so the eligibility backstop below can
-	// DELETE a suppressed pair (e.g. a chapter cross-pair) rather than merely
-	// skip re-scoring it — otherwise the row persists forever.
+	// DELETE a suppressed pair rather than merely skip re-scoring it.
 	type candRef struct {
 		otherID string
 		candID  int64
 	}
 	var embeddingCandIDs []candRef
-	for _, c := range candidates {
-		if c.EntityAID != book.ID && c.EntityBID != book.ID {
-			continue
-		}
+	for _, c := range bookCandidates {
 		otherID := c.EntityBID
 		if c.EntityBID == book.ID {
 			otherID = c.EntityAID
@@ -503,7 +494,7 @@ func (de *Engine) runUnifiedScoringForBook(ctx context.Context, book *database.B
 		}
 
 		// Embedding signal from existing candidate row (avoid re-scanning).
-		for _, c := range candidates {
+		for _, c := range bookCandidates {
 			if (c.EntityAID == book.ID && c.EntityBID == candID) ||
 				(c.EntityBID == book.ID && c.EntityAID == candID) {
 				if c.Similarity != nil && c.Layer == "embedding" {
