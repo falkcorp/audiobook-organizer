@@ -1,7 +1,7 @@
 // file: web/src/components/settings/APIKeysTab.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: f6a7b8c9-d0e1-2345-fabc-456789012345
-// last-edited: 2026-06-19
+// last-edited: 2026-06-22
 
 import { useState, useEffect, useRef } from 'react';
 import {
@@ -191,10 +191,11 @@ export function APIKeysTab() {
       if (timeoutRef.current) {
         clearTimeout(timeoutRef.current);
       }
-      // Schedule reset with cleanup protection
+      // Schedule reset with cleanup protection; clear token from state after confirmation (FE-7).
       timeoutRef.current = setTimeout(() => {
         if (!isUnmountedRef.current) {
           setCopied(false);
+          setCreatedToken(null);
         }
         timeoutRef.current = null;
       }, 2000);

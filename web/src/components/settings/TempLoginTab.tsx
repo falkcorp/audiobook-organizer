@@ -1,12 +1,13 @@
 // file: web/src/components/settings/TempLoginTab.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6c7d8e9f-0a1b-2c3d-4e5f-6a7b8c9d0e1f
+// last-edited: 2026-06-22
 
 // Settings tab: pick a user, mint a 15-min single-use login URL,
 // copy it to the clipboard. Useful for signing yourself in on a new
 // phone / browser without typing a password.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -31,6 +32,16 @@ export function TempLoginTab() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<api.TempLoginTokenResponse | null>(null);
   const [error, setError] = useState('');
+  const clearRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Auto-clear token from state 30s after display (FE-7).
+  useEffect(() => {
+    if (!result) return;
+    clearRef.current = setTimeout(() => setResult(null), 30_000);
+    return () => {
+      if (clearRef.current) clearTimeout(clearRef.current);
+    };
+  }, [result]);
 
   useEffect(() => {
     let cancelled = false;
@@ -75,6 +86,8 @@ export function TempLoginTab() {
     try {
       await navigator.clipboard.writeText(result.login_url);
       toast('Login URL copied to clipboard', 'success');
+      if (clearRef.current) clearTimeout(clearRef.current);
+      setResult(null);
     } catch {
       toast('Could not copy — select the URL and copy manually', 'warning');
     }
