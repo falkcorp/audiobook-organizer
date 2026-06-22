@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.93.0
+// version: 1.94.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-06-21
+// last-edited: 2026-06-22
 
 package database
 
@@ -9823,6 +9823,25 @@ func (s *PebbleStore) UpsertBookFile(file *BookFile) error {
 	// Preserve the existing ID and bookID; update in place.
 	file.ID = existing.ID
 	file.BookID = existing.BookID
+
+	// Preserve heavy fingerprint fields stripped by stripBookFileForMemdb (PERF-7).
+	// Callers that read from the memdb projection (GetAllBookFiles etc.) get nil
+	// AcoustIDFingerprint and nil diagnostic strings. Without this guard, a memdb
+	// round-trip via UpsertBookFile would silently erase the stored fingerprint.
+	// The same guard exists in BatchUpsertBookFiles — keep both in sync.
+	if len(file.AcoustIDFingerprint) == 0 {
+		file.AcoustIDFingerprint = existing.AcoustIDFingerprint
+	}
+	if file.FingerprintFailureReason == nil {
+		file.FingerprintFailureReason = existing.FingerprintFailureReason
+	}
+	if file.FingerprintFailureDetail == nil {
+		file.FingerprintFailureDetail = existing.FingerprintFailureDetail
+	}
+	if file.FingerprintDiagnosticJSON == nil {
+		file.FingerprintDiagnosticJSON = existing.FingerprintDiagnosticJSON
+	}
+
 	return s.UpdateBookFile(existing.ID, file)
 }
 
