@@ -1,7 +1,7 @@
 // file: internal/database/pebble_bookfile_preserve_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7e1a9c43-2b86-4d05-9f71-3c6e8a0d2b54
-// last-edited: 2026-06-21
+// last-edited: 2026-06-22
 
 package database
 
@@ -97,6 +97,131 @@ func TestBatchUpsertBookFiles_OverwritesFingerprintWhenProvided(t *testing.T) {
 		t.Errorf("fresh fingerprint not written: %v", files[0].AcoustIDFingerprint)
 	}
 }
+
+// UpsertBookFile must NOT wipe the raw AcoustID fingerprint when the incoming
+// row carries an empty fingerprint (PERF-7). This is the same footgun as the
+// BatchUpsertBookFiles variant: a caller reads a BookFile from memdb (stripped),
+// sets some non-fingerprint fields, then calls UpsertBookFile — without the
+// preserve guard, the nil AcoustIDFingerprint overwrites the real value in Pebble.
+func TestUpsertBookFile_PreservesFingerprintOnEmptyIncoming(t *testing.T) {
+	s, err := NewPebbleStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewPebbleStore: %v", err)
+	}
+	defer s.Close()
+
+	book, err := s.CreateBook(&Book{Title: "Upsert FP Book"})
+	if err != nil {
+		t.Fatalf("CreateBook: %v", err)
+	}
+	path := "/lib/Upsert FP Book/01.m4b"
+	detail := "checksum mismatch"
+	if err := s.CreateBookFile(&BookFile{
+		BookID:                    book.ID,
+		FilePath:                  path,
+		FileHash:                  "cafebabe",
+		Duration:                  7200,
+		AcoustIDFingerprint:       []byte{10, 20, 30, 40},
+		FingerprintFailureReason:  nil,
+		FingerprintFailureDetail:  &detail,
+		FingerprintDiagnosticJSON: strPtr(`{"codec":"mp3"}`),
+	}); err != nil {
+		t.Fatalf("CreateBookFile: %v", err)
+	}
+
+	// Simulate a memdb-sourced caller: fingerprint fields are nil/empty, but
+	// non-fingerprint metadata fields have new values to write.
+	if err := s.UpsertBookFile(&BookFile{
+		BookID:   book.ID,
+		FilePath: path,
+		FileHash: "cafebabe",
+		Duration: 7200,
+		RawTags:  map[string]string{"ALBUM": "Upsert FP Book", "TRACKNUMBER": "1"},
+	}); err != nil {
+		t.Fatalf("UpsertBookFile: %v", err)
+	}
+
+	files, err := s.GetBookFiles(book.ID)
+	if err != nil || len(files) != 1 {
+		t.Fatalf("GetBookFiles: err=%v len=%d", err, len(files))
+	}
+	got := files[0]
+	if string(got.AcoustIDFingerprint) != string([]byte{10, 20, 30, 40}) {
+		t.Errorf("AcoustIDFingerprint WIPED by UpsertBookFile: got %v", got.AcoustIDFingerprint)
+	}
+	if got.FingerprintFailureDetail == nil || *got.FingerprintFailureDetail != detail {
+		t.Errorf("FingerprintFailureDetail not preserved: %v", got.FingerprintFailureDetail)
+	}
+	if got.FingerprintDiagnosticJSON == nil {
+		t.Error("FingerprintDiagnosticJSON not preserved")
+	}
+	if len(got.RawTags) != 2 {
+		t.Errorf("RawTags not written: %v", got.RawTags)
+	}
+}
+
+// A genuine fingerprint write via UpsertBookFile must still overwrite — the
+// preserve guard fires only when the incoming value is empty.
+func TestUpsertBookFile_OverwritesFingerprintWhenProvided(t *testing.T) {
+	s, err := NewPebbleStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewPebbleStore: %v", err)
+	}
+	defer s.Close()
+
+	book, _ := s.CreateBook(&Book{Title: "Upsert FP Book 2"})
+	path := "/lib/Upsert FP Book 2/01.m4b"
+	if err := s.CreateBookFile(&BookFile{BookID: book.ID, FilePath: path, AcoustIDFingerprint: []byte{1, 1, 1}}); err != nil {
+		t.Fatalf("CreateBookFile: %v", err)
+	}
+	if err := s.UpsertBookFile(&BookFile{
+		BookID: book.ID, FilePath: path, AcoustIDFingerprint: []byte{9, 9, 9, 9},
+	}); err != nil {
+		t.Fatalf("UpsertBookFile: %v", err)
+	}
+	files, _ := s.GetBookFiles(book.ID)
+	if len(files) != 1 || string(files[0].AcoustIDFingerprint) != string([]byte{9, 9, 9, 9}) {
+		t.Errorf("fresh fingerprint not written: %v", files[0].AcoustIDFingerprint)
+	}
+}
+
+// UpsertBookFile's iTunes PID lookup path must also preserve fingerprint data.
+func TestUpsertBookFile_PreservesFingerprintViaPIDLookup(t *testing.T) {
+	s, err := NewPebbleStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewPebbleStore: %v", err)
+	}
+	defer s.Close()
+
+	book, _ := s.CreateBook(&Book{Title: "iTunes FP Book"})
+	pid := "PID123ABC"
+	if err := s.CreateBookFile(&BookFile{
+		BookID:              book.ID,
+		FilePath:            "/lib/iTunes FP Book/01.m4b",
+		ITunesPersistentID:  pid,
+		AcoustIDFingerprint: []byte{5, 6, 7, 8},
+	}); err != nil {
+		t.Fatalf("CreateBookFile: %v", err)
+	}
+
+	// Incoming via PID with no fingerprint.
+	if err := s.UpsertBookFile(&BookFile{
+		BookID:             book.ID,
+		FilePath:           "/lib/iTunes FP Book/01.m4b",
+		ITunesPersistentID: pid,
+		Duration:           1800,
+	}); err != nil {
+		t.Fatalf("UpsertBookFile via PID: %v", err)
+	}
+
+	files, _ := s.GetBookFiles(book.ID)
+	if len(files) != 1 || string(files[0].AcoustIDFingerprint) != string([]byte{5, 6, 7, 8}) {
+		t.Errorf("AcoustIDFingerprint WIPED via PID path: got %v", files[0].AcoustIDFingerprint)
+	}
+}
+
+// strPtr is a local test helper — returns a pointer to the given string.
+func strPtr(s string) *string { return &s }
 
 // BatchUpsertBookFiles must refresh the memdb view so batch-written rows are
 // immediately visible to memdb-backed reads (GetAllBookFiles / the UI). Without
