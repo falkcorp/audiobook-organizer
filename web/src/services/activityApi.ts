@@ -1,6 +1,9 @@
 // file: web/src/services/activityApi.ts
-// version: 2.3.0
+// version: 2.4.0
+// last-edited: 2026-06-22
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+
+import { apiFetch } from '../utils/apiFetch';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api/v1';
 
@@ -71,7 +74,7 @@ export async function fetchActivity(filter?: ActivityFilter): Promise<ActivityRe
     if (filter.exclude_tags) params.set('exclude_tags', filter.exclude_tags);
   }
   const query = params.toString();
-  const response = await fetch(`${API_BASE}/activity${query ? `?${query}` : ''}`);
+  const response = await apiFetch(`${API_BASE}/activity${query ? `?${query}` : ''}`);
   if (!response.ok) {
     throw new Error(`Failed to fetch activity: ${response.status}`);
   }
@@ -86,7 +89,7 @@ export async function fetchActivitySources(filter: Partial<ActivityFilter> = {})
   if (filter.since) params.set('since', filter.since);
   if (filter.until) params.set('until', filter.until);
   const url = `${API_BASE}/activity/sources?${params.toString()}`;
-  const res = await fetch(url);
+  const res = await apiFetch(url);
   if (!res.ok) throw new Error(`Sources API error: ${res.status}`);
   const body = await res.json();
   return body.data;
@@ -125,7 +128,7 @@ export async function fetchOperationActivity(
   if (limit !== undefined) params.set('limit', String(limit));
   const query = params.toString();
   const url = `${API_BASE}/operations/${encodeURIComponent(opID)}/activity${query ? `?${query}` : ''}`;
-  const response = await fetch(url);
+  const response = await apiFetch(url);
   if (!response.ok) {
     throw new Error(`Failed to fetch operation activity: ${response.status}`);
   }
@@ -139,7 +142,7 @@ export async function fetchOperationActivity(
 }
 
 export async function compactActivityLog(olderThanDays: number): Promise<CompactResult> {
-  const response = await fetch(`${API_BASE}/activity/compact`, {
+  const response = await apiFetch(`${API_BASE}/activity/compact`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ older_than_days: olderThanDays }),
