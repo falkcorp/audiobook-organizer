@@ -1,7 +1,7 @@
 // file: internal/security/pathvalidation/pathvalidation_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7b3d9f1e-2a6c-4f8d-8e0b-5c4a3b2d1e0f
-// last-edited: 2026-05-09
+// last-edited: 2026-06-22
 
 package pathvalidation_test
 
@@ -398,5 +398,41 @@ func TestErrors_WrappedCorrectly(t *testing.T) {
 	_, err = pathvalidation.ValidateRelativePath(root, "")
 	if !errors.Is(err, pathvalidation.ErrEmptyPath) {
 		t.Errorf("errors.Is(err, ErrEmptyPath) = false, got: %v", err)
+	}
+}
+
+func TestIsDangerousRoot(t *testing.T) {
+	dangerous := []string{
+		"/",
+		"/etc",
+		"/home",
+		"/usr",
+		"/var",
+		"/root",
+		"/bin",
+		"/sbin",
+		"/boot",
+		"/proc",
+		"/sys",
+		"/dev",
+	}
+	for _, p := range dangerous {
+		if !pathvalidation.IsDangerousRoot(p) {
+			t.Errorf("IsDangerousRoot(%q) = false, want true", p)
+		}
+	}
+
+	safe := []string{
+		"/home/user/audiobooks",
+		"/mnt/bigdata/books",
+		"/srv/audiobook-library",
+		"/data/books",
+		"/tmp/test-library",
+		"/Users/jdfalk/audiobooks",
+	}
+	for _, p := range safe {
+		if pathvalidation.IsDangerousRoot(p) {
+			t.Errorf("IsDangerousRoot(%q) = true, want false", p)
+		}
 	}
 }

@@ -1,11 +1,19 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.59.0 -->
+<!-- version: 3.60.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-22 -->
 
 # Changelog
 
 ## [Unreleased]
+
+### Security
+
+#### June 22, 2026 — security guardrails: dangerous-root protection (PR #1584)
+
+- **`fix(security)`** — `pathvalidation.IsDangerousRoot` added: exact-match denylist of 19 protected system directories (`/`, `/etc`, `/home`, `/usr`, `/var`, `/root`, etc.).
+- **`fix(sec-5)`** — Restore handler now rejects any `target_path` that resolves to a system directory via `IsDangerousRoot`. When `verify=true`, a clear `slog.Warn` is emitted (was silently ignored).
+- **`fix(sec-6)`** — Factory reset now validates `RootDir` against `IsDangerousRoot` before `os.RemoveAll` loop; returns HTTP 400 and logs an error if the directory is a protected system path.
 
 ### Performance
 
