@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/handler.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9f41f363-34fc-4ad2-b2f1-46d5ac0ba2f3
-// last-edited: 2026-06-21
+// last-edited: 2026-06-22
 
 // Package duplicates hosts the SQL-backed duplicate-detection HTTP handlers
 // extracted from the server package's duplicates_handlers.go: book / author /
@@ -175,29 +175,35 @@ func (h *Handler) ListBookDuplicateScanResults(c *gin.Context) {
 	httputil.RespondWithOK(c, gin.H{"groups": []any{}, "group_count": 0, "duplicate_count": 0, "needs_refresh": true})
 }
 
+// launchLegacyOp creates a legacy DB operation record, enqueues defID with the
+// params returned by buildParams(legacyOpID), and responds 202 with the op.
+// Returns false if the registry is nil or any step fails (response already written).
+func (h *Handler) launchLegacyOp(c *gin.Context, defID, legacyType, detail string, buildParams func(legacyOpID string) any) bool {
+	if h.opRegistry == nil {
+		httputil.RespondWithInternalError(c, "operation registry not initialized")
+		return false
+	}
+	store := h.resolveStore()
+	legacyID := ulid.Make().String()
+	d := detail
+	op, err := store.CreateOperation(legacyID, legacyType, &d)
+	if err != nil {
+		httputil.InternalError(c, "failed to create operation", err)
+		return false
+	}
+	if _, err := h.opRegistry.EnqueueOp(c.Request.Context(), defID, buildParams(op.ID)); err != nil {
+		httputil.InternalError(c, "failed to enqueue operation", err)
+		return false
+	}
+	httputil.RespondWithSuccess(c, 202, op)
+	return true
+}
+
 // ScanBookDuplicates triggers an async scan for book duplicates using metadata
 // matching. POST /audiobooks/duplicates/scan.
 func (h *Handler) ScanBookDuplicates(c *gin.Context) {
-	if h.opRegistry == nil {
-		httputil.RespondWithInternalError(c, "operation registry not initialized")
-		return
-	}
-
-	store := h.resolveStore()
-	legacyID := ulid.Make().String()
-	detail := "book-dedup-scan"
-	op, err := store.CreateOperation(legacyID, "book-dedup-scan", &detail)
-	if err != nil {
-		httputil.InternalError(c, "failed to create operation", err)
-		return
-	}
-
-	if _, err := h.opRegistry.EnqueueOp(c.Request.Context(), "dedup.book-scan", bookDedupScanOpParams{LegacyOpID: op.ID}); err != nil {
-		httputil.InternalError(c, "failed to enqueue operation", err)
-		return
-	}
-
-	httputil.RespondWithSuccess(c, 202, op)
+	h.launchLegacyOp(c, "dedup.book-scan", "book-dedup-scan", "book-dedup-scan",
+		func(id string) any { return bookDedupScanOpParams{LegacyOpID: id} })
 }
 
 // MergeBookDuplicatesAsVersions merges a group of duplicate books into a version
@@ -294,31 +300,11 @@ func (h *Handler) MergeBooks(c *gin.Context) {
 		return
 	}
 
-	if h.opRegistry == nil {
-		httputil.RespondWithInternalError(c, "operation registry not initialized")
-		return
-	}
-
-	opID := ulid.Make().String()
 	detail := fmt.Sprintf("merge-books:keep=%s,merge=%d", req.KeepID, len(req.MergeIDs))
-	op, err := store.CreateOperation(opID, "book-merge", &detail)
-	if err != nil {
-		httputil.InternalError(c, "failed to create operation", err)
-		return
-	}
-
-	params := bookMergeOpParams{
-		LegacyOpID: op.ID,
-		KeepID:     req.KeepID,
-		MergeIDs:   req.MergeIDs,
-		Detail:     detail,
-	}
-	if _, err := h.opRegistry.EnqueueOp(c.Request.Context(), "dedup.book-merge", params); err != nil {
-		httputil.InternalError(c, "failed to enqueue operation", err)
-		return
-	}
-
-	httputil.RespondWithSuccess(c, 202, op)
+	h.launchLegacyOp(c, "dedup.book-merge", "book-merge", detail,
+		func(id string) any {
+			return bookMergeOpParams{LegacyOpID: id, KeepID: req.KeepID, MergeIDs: req.MergeIDs, Detail: detail}
+		})
 }
 
 // CombineBooks combines several single-file books into ONE multi-file book on the
@@ -386,26 +372,8 @@ func (h *Handler) ListDuplicateAuthors(c *gin.Context) {
 // RefreshDuplicateAuthors enqueues an async author-dedup scan.
 // POST /authors/duplicates/refresh.
 func (h *Handler) RefreshDuplicateAuthors(c *gin.Context) {
-	if h.opRegistry == nil {
-		httputil.RespondWithInternalError(c, "operation registry not initialized")
-		return
-	}
-
-	store := h.resolveStore()
-	legacyID := ulid.Make().String()
-	detail := "author-dedup-scan"
-	op, err := store.CreateOperation(legacyID, "author-dedup-scan", &detail)
-	if err != nil {
-		httputil.InternalError(c, "failed to create operation", err)
-		return
-	}
-
-	if _, err := h.opRegistry.EnqueueOp(c.Request.Context(), "dedup.author-scan", authorDedupScanOpParams{LegacyOpID: op.ID}); err != nil {
-		httputil.InternalError(c, "failed to enqueue operation", err)
-		return
-	}
-
-	httputil.RespondWithSuccess(c, 202, op)
+	h.launchLegacyOp(c, "dedup.author-scan", "author-dedup-scan", "author-dedup-scan",
+		func(id string) any { return authorDedupScanOpParams{LegacyOpID: id} })
 }
 
 // ListSeriesDuplicates handles GET /series/duplicates.
@@ -424,26 +392,8 @@ func (h *Handler) ListSeriesDuplicates(c *gin.Context) {
 // RefreshSeriesDuplicates enqueues an async series-dedup scan.
 // POST /series/duplicates/refresh.
 func (h *Handler) RefreshSeriesDuplicates(c *gin.Context) {
-	if h.opRegistry == nil {
-		httputil.RespondWithInternalError(c, "operation registry not initialized")
-		return
-	}
-
-	store := h.resolveStore()
-	legacyID := ulid.Make().String()
-	detail := "series-dedup-scan"
-	op, err := store.CreateOperation(legacyID, "series-dedup-scan", &detail)
-	if err != nil {
-		httputil.InternalError(c, "failed to create operation", err)
-		return
-	}
-
-	if _, err := h.opRegistry.EnqueueOp(c.Request.Context(), "dedup.series-scan", seriesDedupScanOpParams{LegacyOpID: op.ID}); err != nil {
-		httputil.InternalError(c, "failed to enqueue operation", err)
-		return
-	}
-
-	httputil.RespondWithSuccess(c, 202, op)
+	h.launchLegacyOp(c, "dedup.series-scan", "series-dedup-scan", "series-dedup-scan",
+		func(id string) any { return seriesDedupScanOpParams{LegacyOpID: id} })
 }
 
 // ValidateDedupEntry searches metadata sources (OpenLibrary, Audible, etc.) to
@@ -522,31 +472,8 @@ func (h *Handler) ValidateDedupEntry(c *gin.Context) {
 // DeduplicateSeriesHandler enqueues an async series-dedup operation.
 // POST /series/deduplicate.
 func (h *Handler) DeduplicateSeriesHandler(c *gin.Context) {
-	store := h.resolveStore()
-	if store == nil {
-		httputil.RespondWithInternalError(c, "database not initialized")
-		return
-	}
-	if h.opRegistry == nil {
-		httputil.RespondWithInternalError(c, "operation registry not initialized")
-		return
-	}
-
-	opID := ulid.Make().String()
-	detail := "series-deduplicate"
-	op, err := store.CreateOperation(opID, "series-dedup", &detail)
-	if err != nil {
-		httputil.InternalError(c, "failed to create operation", err)
-		return
-	}
-
-	params := seriesDedupOpParams{LegacyOpID: op.ID, Detail: detail}
-	if _, err := h.opRegistry.EnqueueOp(c.Request.Context(), "dedup.series-dedup", params); err != nil {
-		httputil.InternalError(c, "failed to enqueue operation", err)
-		return
-	}
-
-	httputil.RespondWithSuccess(c, 202, op)
+	h.launchLegacyOp(c, "dedup.series-dedup", "series-dedup", "series-deduplicate",
+		func(id string) any { return seriesDedupOpParams{LegacyOpID: id, Detail: "series-deduplicate"} })
 }
 
 // SeriesPrunePreview returns a dry-run preview of the series auto-prune.
@@ -569,31 +496,8 @@ func (h *Handler) SeriesPrunePreview(c *gin.Context) {
 
 // SeriesPrune enqueues an async series-prune operation. POST /series/prune.
 func (h *Handler) SeriesPrune(c *gin.Context) {
-	store := h.resolveStore()
-	if store == nil {
-		httputil.RespondWithInternalError(c, "database not initialized")
-		return
-	}
-	if h.opRegistry == nil {
-		httputil.RespondWithInternalError(c, "operation registry not initialized")
-		return
-	}
-
-	opID := ulid.Make().String()
-	detail := "series-prune"
-	op, err := store.CreateOperation(opID, "series-prune", &detail)
-	if err != nil {
-		httputil.InternalError(c, "failed to create operation", err)
-		return
-	}
-
-	params := seriesPruneOpParams{LegacyOpID: op.ID, Detail: detail}
-	if _, err := h.opRegistry.EnqueueOp(c.Request.Context(), "dedup.series-prune", params); err != nil {
-		httputil.InternalError(c, "failed to enqueue operation", err)
-		return
-	}
-
-	httputil.RespondWithSuccess(c, 202, op)
+	h.launchLegacyOp(c, "dedup.series-prune", "series-prune", "series-prune",
+		func(id string) any { return seriesPruneOpParams{LegacyOpID: id, Detail: "series-prune"} })
 }
 
 // MergeSeriesGroup enqueues an async series-merge operation, reassigning all
@@ -621,32 +525,11 @@ func (h *Handler) MergeSeriesGroup(c *gin.Context) {
 		return
 	}
 
-	if h.opRegistry == nil {
-		httputil.RespondWithInternalError(c, "operation registry not initialized")
-		return
-	}
-
-	opID := ulid.Make().String()
 	detail := fmt.Sprintf("merge-series:keep=%d,merge=%v", req.KeepID, req.MergeIDs)
-	op, err := store.CreateOperation(opID, "series-merge", &detail)
-	if err != nil {
-		httputil.InternalError(c, "failed to create operation", err)
-		return
-	}
-
-	params := seriesMergeOpParams{
-		LegacyOpID: op.ID,
-		KeepID:     req.KeepID,
-		MergeIDs:   req.MergeIDs,
-		CustomName: req.CustomName,
-		Detail:     detail,
-	}
-	if _, err := h.opRegistry.EnqueueOp(c.Request.Context(), "dedup.series-merge", params); err != nil {
-		httputil.InternalError(c, "failed to enqueue operation", err)
-		return
-	}
-
-	httputil.RespondWithSuccess(c, 202, op)
+	h.launchLegacyOp(c, "dedup.series-merge", "series-merge", detail,
+		func(id string) any {
+			return seriesMergeOpParams{LegacyOpID: id, KeepID: req.KeepID, MergeIDs: req.MergeIDs, CustomName: req.CustomName, Detail: detail}
+		})
 }
 
 // SeriesNormalizePreview returns a dry-run preview of what the series
