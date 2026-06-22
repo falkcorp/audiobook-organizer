@@ -1,11 +1,26 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.57.0 -->
+<!-- version: 3.58.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-22 -->
 
 # Changelog
 
 ## [Unreleased]
+
+### Added
+
+#### June 22, 2026 — work-item execution contract (PR #1579)
+
+- **`feat(ops)`** — `internal/operations/registry/run_items.go`: new `RunItems[T any]` standalone generic function providing standardized fan-out over any item slice:
+  - `ctx.Done()` polling between items (both sequential and parallel modes)
+  - `reporter.SetCurrentItem(label)` heartbeat per item (watchdog-safe)
+  - `reporter.UpdateProgress(i+1, total, label)` after each item
+  - Per-item timeout via `RunItemsOptions.PerItemTimeout` (generalizes the ad-hoc `os.Stat` timeout from #1562)
+  - Worker-pool concurrency via `RunItemsOptions.Concurrency`
+  - Fail-fast or best-effort error semantics via `ErrMode` (`ErrModeFail` / `ErrModeCollect`)
+  - Custom label function via `RunItemsOptions.Label`
+- 9 unit tests covering sequential, parallel, fail-fast, collect, per-item timeout, context cancellation, empty slice, and custom label
+- Design spec: `docs/specs/2026-06-22-work-item-contract.md`
 
 ### Fixed
 
