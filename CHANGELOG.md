@@ -1,11 +1,26 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.60.0 -->
+<!-- version: 3.61.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-22 -->
 
 # Changelog
 
 ## [Unreleased]
+
+### Refactor
+
+#### June 22, 2026 — frontend page decomposition: BookDedup + Library (PR #1585)
+
+**STR-4 — `BookDedup.tsx` 2,907 → 145 lines (95% reduction):**
+- `DedupAIReviewTab.tsx` (new, 386 lines) — AI author pipeline tab with `useAsyncAction` scan lifecycle
+- `DedupEmbeddingTab.tsx` (new, 1,441 lines) — embedding dedup tab, module-level `bookCache`/`bookFilesCache`, `buildClusters` union-find, `fetchBookCached`/`fetchBookFilesCached` re-exports
+- `DedupAcousticTab.tsx` (new, 996 lines) — acoustic dedup tab, re-exports `AcousticBookMetadata` + `AcousticBookCard`
+
+**FE-5 — `Library.tsx` 2,018 → 1,811 lines:**
+- `useLibraryQuery.ts` (new, 229 lines) — book-fetch state + effects + auto-refresh interval + op-complete reload
+- `useLibrarySelection.ts` (new, 164 lines) — selection state + cross-page filter + 6 selection handlers
+
+TypeScript: 0 errors after extraction.
 
 ### Security
 

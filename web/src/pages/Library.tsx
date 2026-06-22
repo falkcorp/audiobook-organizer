@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.tsx
-// version: 1.69.0
+// version: 1.70.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-06-21
+// last-edited: 2026-06-22
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -11,6 +11,8 @@ import CachedIcon from '@mui/icons-material/Cached';
 import { ViewMode } from '../components/audiobooks/SearchBar';
 import { useColumnConfig } from '../hooks/useColumnConfig';
 import { useLibraryFilters } from '../hooks/useLibraryFilters';
+import { useLibraryQuery } from '../hooks/useLibraryQuery';
+import { useLibrarySelection } from '../hooks/useLibrarySelection';
 import { useToast } from '../components/toast/ToastProvider';
 import type { Audiobook } from '../types';
 import { SortField, SortOrder } from '../types';
@@ -23,7 +25,6 @@ import {
 } from '../services/eventSourceManager';
 import { pollOperation } from '../utils/operationPolling';
 import { useOperationsStore } from '../stores/useOperationsStore';
-import { useLibraryCache, buildCacheKey } from '../stores/useLibraryCache';
 import { withOptimisticOperation } from '../utils/withOptimisticOperation';
 import { STORAGE_KEYS } from '../lib/storageKeys';
 import { LibraryToolbar } from '../components/library/LibraryToolbar';
@@ -129,9 +130,6 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
       10
     )
   );
-  const [audiobooks, setAudiobooks] = useState<Audiobook[]>([]);
-  const [totalCount, setTotalCount] = useState(0); // Total matching books (server-reported, all pages)
-  const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState(initialSearch);
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [viewMode, setViewMode] = useState<ViewMode>(initialViewMode);
@@ -139,14 +137,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
   const [sortOrder, setSortOrder] = useState<SortOrder>(initialSortOrder);
   const [page, setPage] = useState(initialPage);
   const [itemsPerPage, setItemsPerPage] = useState(initialItemsPerPage);
-  const [totalPages, setTotalPages] = useState(1);
   const [editingAudiobook, setEditingAudiobook] = useState<Audiobook | null>(null);
-  const [selectedAudiobooks, setSelectedAudiobooks] = useState<Audiobook[]>([]);
-  // crossPageFilter is set when the user clicks "select all across all pages".
-  // When non-null it carries the current filter state so the server can
-  // resolve the full matching book ID list at operation execution time —
-  // no 61K-ID array in browser memory. Set to null to clear cross-page mode.
-  const [crossPageFilter, setCrossPageFilter] = useState<api.SelectionSpec['filter'] | null>(null);
   const [batchEditOpen, setBatchEditOpen] = useState(false);
   const [versionManagementOpen, setVersionManagementOpen] = useState(false);
   const [versionManagingAudiobook, setVersionManagingAudiobook] = useState<Audiobook | null>(null);
@@ -208,9 +199,6 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
   const logContainerRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const bulkFetchCancelRef = useRef(false);
   const bulkOrganizeCancelRef = useRef(false);
-  const [softDeletedCount, setSoftDeletedCount] = useState(0);
-  const [softDeletedBooks, setSoftDeletedBooks] = useState<Audiobook[]>([]);
-  const [softDeletedLoading, setSoftDeletedLoading] = useState(false);
   const [softDeletedExpanded, setSoftDeletedExpanded] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [bookPendingDelete, setBookPendingDelete] = useState<Audiobook | null>(null);
@@ -500,96 +488,6 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     localStorage.setItem(STORAGE_KEYS.LIBRARY_PAGE, page.toString());
   }, [filters, itemsPerPage, page, searchQuery, selectedTags, setSearchParams, sortBy, sortOrder, viewMode]);
 
-  const loadSoftDeleted = useCallback(async () => {
-    setSoftDeletedLoading(true);
-    try {
-      const { items, count } = await api.getSoftDeletedBooks(10000, 0);
-      setSoftDeletedBooks(items);
-      setSoftDeletedCount(count);
-    } catch (e) {
-      console.error('Failed to load soft-deleted books', e);
-      setSoftDeletedBooks([]);
-      setSoftDeletedCount(0);
-    } finally {
-      setSoftDeletedLoading(false);
-    }
-  }, []);
-
-  const selectedIds = new Set(selectedAudiobooks.map((book) => book.id));
-  // effectiveSelectedIds is used by bulk operations that still need explicit IDs.
-  // When crossPageFilter is set, we don't have IDs locally — use totalCount for display.
-  const effectiveSelectedIds: string[] = selectedAudiobooks.map((b) => b.id);
-  const effectiveSelectedCount = crossPageFilter !== null ? totalCount : selectedAudiobooks.length;
-  const hasSelection = effectiveSelectedCount > 0;
-  const allOnPageSelected =
-    audiobooks.length > 0 && audiobooks.every((book) => selectedIds.has(book.id));
-  const someOnPageSelected = audiobooks.some((book) => selectedIds.has(book.id));
-  const selectedHasDeleted = selectedAudiobooks.some((book) => book.marked_for_deletion);
-  const selectedHasActive = selectedAudiobooks.some((book) => !book.marked_for_deletion);
-  const selectedHasImport = selectedAudiobooks.some((book) => book.library_state === 'imported');
-
-  const lastSelectedIndexRef = useRef<number>(-1);
-
-  const handleToggleSelect = (audiobook: Audiobook, event?: React.MouseEvent) => {
-    // Any individual toggle exits cross-page-select-all mode.
-    setCrossPageFilter(null);
-    const clickedIndex = audiobooks.findIndex((b) => b.id === audiobook.id);
-
-    // Shift-click: select range from last selected to clicked
-    if (event?.shiftKey && lastSelectedIndexRef.current >= 0 && clickedIndex >= 0) {
-      const start = Math.min(lastSelectedIndexRef.current, clickedIndex);
-      const end = Math.max(lastSelectedIndexRef.current, clickedIndex);
-      const rangeBooks = audiobooks.slice(start, end + 1);
-      setSelectedAudiobooks((prev) => {
-        const byId = new Map(prev.map((b) => [b.id, b]));
-        for (const b of rangeBooks) {
-          byId.set(b.id, b);
-        }
-        return Array.from(byId.values());
-      });
-      lastSelectedIndexRef.current = clickedIndex;
-      return;
-    }
-
-    // Normal click: toggle single
-    setSelectedAudiobooks((prev) => {
-      if (prev.some((selected) => selected.id === audiobook.id)) {
-        return prev.filter((selected) => selected.id !== audiobook.id);
-      }
-      return [...prev, audiobook];
-    });
-    lastSelectedIndexRef.current = clickedIndex;
-  };
-
-  const handleSelectAllOnPage = () => {
-    setCrossPageFilter(null);
-    setSelectedAudiobooks((prev) => {
-      const byId = new Map(prev.map((book) => [book.id, book]));
-      audiobooks.forEach((book) => {
-        if (!byId.has(book.id)) {
-          byId.set(book.id, book);
-        }
-      });
-      return Array.from(byId.values());
-    });
-  };
-
-  const handleToggleSelectAllOnPage = () => {
-    setCrossPageFilter(null);
-    if (allOnPageSelected) {
-      setSelectedAudiobooks((prev) =>
-        prev.filter((book) => !audiobooks.some((pageBook) => pageBook.id === book.id))
-      );
-      return;
-    }
-    handleSelectAllOnPage();
-  };
-
-  const handleClearSelection = () => {
-    setCrossPageFilter(null);
-    setSelectedAudiobooks([]);
-  };
-
   const buildFieldFilters = useCallback(() => {
     const fieldFilters: Array<{ field: string; value: string; negated: boolean }> = [];
     if (filters.author) fieldFilters.push({ field: 'author', value: filters.author, negated: false });
@@ -604,168 +502,63 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     return fieldFilters;
   }, [filters, parsedSearch]);
 
-  // Build a cross-page selection filter for "select all across all pages".
-  // Instead of fetching 61K IDs, we store the current filter state and pass
-  // it to bulk operations so the server resolves the set at execution time.
-  const handleSelectAllItems = useCallback(() => {
-    const fieldFilters = buildFieldFilters();
-    const searchText = parsedSearch ? parsedSearch.freeText : debouncedSearch;
-    let tagsForFilter: string[] | undefined;
-    if (selectedTags && selectedTags.length > 0) {
-      tagsForFilter = selectedTags;
-    } else {
-      const parsedTag = parsedSearch?.fieldFilters.find((f) => f.field === 'tag' && !f.negated)?.value;
-      if (parsedTag) tagsForFilter = [parsedTag];
-    }
-    const libraryState = filters.libraryState === 'deleted' ? undefined : filters.libraryState;
+  const {
+    audiobooks,
+    setAudiobooks,
+    totalCount,
+    loading,
+    totalPages,
+    softDeletedBooks,
+    softDeletedCount,
+    softDeletedLoading,
+    loadAudiobooks,
+    loadSoftDeleted,
+  } = useLibraryQuery({
+    page,
+    itemsPerPage,
+    debouncedSearch,
+    parsedSearch,
+    filters,
+    selectedTags,
+    sortBy,
+    sortOrder,
+    activeScanOp,
+    activeOrganizeOp,
+    setImportPaths,
+    navigate,
+    toast,
+    buildFieldFilters,
+    convertBook: convertApiBook,
+  });
 
-    const filterSpec: api.SelectionSpec['filter'] = {};
-    if (searchText) filterSpec.search = searchText;
-    if (tagsForFilter && tagsForFilter.length > 0) {
-      filterSpec.tags = tagsForFilter;
-      // back-compat single-tag field
-      filterSpec.tag = tagsForFilter[0];
-    }
-    if (libraryState) filterSpec.library_state = libraryState;
-    if (fieldFilters.length > 0) filterSpec.field_filters = fieldFilters;
-
-    setCrossPageFilter(filterSpec);
-  }, [buildFieldFilters, debouncedSearch, filters, parsedSearch, selectedTags]);
-
-  // True when all items on the current page are selected but not all items globally,
-  // and the user hasn't already selected all pages.
-  const showSelectAllBanner =
-    allOnPageSelected && crossPageFilter === null && selectedAudiobooks.length < totalCount && totalCount > audiobooks.length;
-
-  const loadAudiobooks = useCallback(async () => {
-    setLoading(true);
-    try {
-      const offset = (page - 1) * itemsPerPage;
-      const fieldFilters = buildFieldFilters();
-      const searchText = parsedSearch ? parsedSearch.freeText : debouncedSearch;
-      let tagsParam: string[] | undefined;
-      if (selectedTags && selectedTags.length > 0) {
-        tagsParam = selectedTags;
-      } else {
-        const parsedTag = parsedSearch?.fieldFilters.find((f) => f.field === 'tag' && !f.negated)?.value;
-        if (parsedTag) tagsParam = [parsedTag];
-      }
-
-      // 'deleted' is a client-side concept (marked_for_deletion flag); send no library_state to server
-      const libraryState = filters.libraryState === 'deleted' ? undefined : filters.libraryState;
-
-      // Check cache before fetching
-      const filterStr = JSON.stringify({ fieldFilters, tagsParam, libraryState, showFailed: filters.showFailed, hasFileErrors: filters.hasFileErrors, fingerprintStatus: filters.fingerprintStatus, coveragePercentMin: filters.coveragePercentMin, coveragePercentMax: filters.coveragePercentMax });
-      const cacheKey = buildCacheKey(page, itemsPerPage, searchText, filterStr, sortBy, sortOrder);
-      const cached = useLibraryCache.getState().getCached(cacheKey);
-      if (cached) {
-        setAudiobooks(cached.audiobooks);
-        setTotalCount(cached.totalCount);
-        setTotalPages(cached.totalPages);
-        setImportPaths(cached.importPaths);
-        setLoading(false);
-        return;
-      }
-
-      const [page_, folders] = await Promise.all([
-        searchText
-          ? api.searchBooksPage(searchText, itemsPerPage, offset, filters.showFailed)
-          : api.getBooks(itemsPerPage, offset, {
-              sortBy,
-              sortOrder,
-              tags: tagsParam,
-              libraryState,
-              filters: fieldFilters.length > 0 ? JSON.stringify(fieldFilters) : undefined,
-              showFailed: filters.showFailed,
-              hasFileErrors: filters.hasFileErrors,
-              fingerprintStatus: filters.fingerprintStatus,
-              coveragePercentMin: filters.coveragePercentMin,
-              coveragePercentMax: filters.coveragePercentMax,
-            }),
-        api.getImportPaths(),
-      ]);
-
-      const items = page_.items;
-      const serverCount = page_.count;
-
-      let convertedBooks: Audiobook[] = items.map(convertApiBook);
-
-      // Client-side filter for deleted state (marked_for_deletion flag, no server equivalent)
-      if (filters.libraryState === 'deleted') {
-        convertedBooks = convertedBooks.filter((book) => book.marked_for_deletion);
-      }
-
-      const total = serverCount ?? convertedBooks.length;
-      const totalPages = Math.max(1, Math.ceil(total / itemsPerPage));
-      const importPathsData = folders.map((folder) => ({
-        id: folder.id,
-        path: folder.path,
-        status: 'idle' as const,
-        book_count: folder.book_count,
-      }));
-
-      // Cache the results
-      useLibraryCache.getState().setCached(cacheKey, {
-        audiobooks: convertedBooks,
-        totalCount: total,
-        totalPages,
-        importPaths: importPathsData,
-      });
-
-      setAudiobooks(convertedBooks);
-      setTotalCount(total);
-      setTotalPages(totalPages);
-      setImportPaths(importPathsData);
-    } catch (error) {
-      if (error instanceof api.ApiError && error.status === 401) {
-        navigate('/login');
-        return;
-      }
-      if (error instanceof api.ApiError && error.status >= 500) {
-        toast('Server error occurred.', 'error');
-      }
-      const message = error instanceof Error ? error.message : 'Failed to load audiobooks.';
-      if (message.toLowerCase().includes('timeout')) {
-        toast('Request timed out.', 'error');
-      }
-      console.error('Failed to load audiobooks:', error);
-      setAudiobooks([]);
-      setTotalPages(1);
-    } finally {
-      setLoading(false);
-    }
-  }, [buildFieldFilters, debouncedSearch, filters, itemsPerPage, page, parsedSearch, selectedTags, sortBy, sortOrder, navigate, toast]);
-
-  // Reload books when scan/organize completes
-  useEffect(() => {
-    if (activeScanOp?.status === 'completed' || activeScanOp?.status === 'failed') {
-      loadAudiobooks();
-    }
-  }, [activeScanOp?.status, loadAudiobooks]);
-
-  useEffect(() => {
-    if (activeOrganizeOp?.status === 'completed' || activeOrganizeOp?.status === 'failed') {
-      loadAudiobooks();
-    }
-  }, [activeOrganizeOp?.status, loadAudiobooks]);
-
-  // Auto-refresh books every 10s while a scan is active
-  const isUnmountedRef = useRef(false);
-  useEffect(() => {
-    isUnmountedRef.current = false;
-    if (!activeScanOp || activeScanOp.status === 'completed' || activeScanOp.status === 'failed') {
-      return;
-    }
-    const interval = window.setInterval(() => {
-      if (!isUnmountedRef.current) {
-        loadAudiobooks();
-      }
-    }, 10000);
-    return () => {
-      isUnmountedRef.current = true;
-      window.clearInterval(interval);
-    };
-  }, [activeScanOp, loadAudiobooks]);
+  const {
+    selectedAudiobooks,
+    setSelectedAudiobooks,
+    crossPageFilter,
+    setCrossPageFilter,
+    selectedIds,
+    effectiveSelectedIds,
+    effectiveSelectedCount,
+    hasSelection,
+    allOnPageSelected,
+    someOnPageSelected,
+    selectedHasDeleted,
+    selectedHasActive,
+    selectedHasImport,
+    showSelectAllBanner,
+    handleToggleSelect,
+    handleToggleSelectAllOnPage,
+    handleClearSelection,
+    handleSelectAllItems,
+  } = useLibrarySelection({
+    audiobooks,
+    totalCount,
+    debouncedSearch,
+    parsedSearch,
+    filters,
+    selectedTags,
+    buildFieldFilters,
+  });
 
   const handleManualImport = () => {
     setImportFilePath('');
