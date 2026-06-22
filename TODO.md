@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 9.13.0 -->
+<!-- version: 9.14.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-06-21 -->
+<!-- last-edited: 2026-06-22 -->
 
 # Project TODO
 
@@ -19,16 +19,20 @@ future agent) can scan the entire workspace in one page.
 
 ---
 
-## 🎯 Current Status — June 21, 2026
+## 🎯 Current Status — June 22, 2026
 
-**Library:** 29,307 books (post shattered-book heal) / 8,837 authors / 21,668 series
+**Library:** ~31,400 books / 8,837 authors / 21,668 series
 **Production:** PebbleDB primary; Linux, HTTPS at prod server; stable
-**Latest activity:** Pipeline hardening after the shattered-book heal — PRs #1549–#1552
-merged + deployed (fs-regroup data-loss fix, dedup chapter-sibling emission gate,
-scanner shatter-prevention coalescer [flag OFF], BatchUpsertBookFiles fingerprint-wipe
-fix). 1 residual shattered book healed (shattered-books now 0).
-**In flight:** `maintenance.tag-backfill` apply RUNNING server-side
-(`op_id=01KVN04C1WYZ4DFGYJGDDCFPC3`) — verify completion (idempotent; re-run if canceled).
+**Latest activity:** Watchdog false-cancellation fixes PRs #1566–#1567 deployed. Duration
+backfill verified: apply run wrote 6,540 corrections; dry-run confirms `would-change=0`
+across first ~30K books; ~721 tail books still need correction (new imports + apply-run
+cancel tail) — re-enqueue pending. Tag-backfill 98% complete (308K/314K), re-enqueued
+(`op_id=01KVQVAZK0TH0FRFPNMMBYJKJQ`).
+**In flight:**
+- `maintenance.duration-reextract` tail: ~721 books still need correction; enqueue apply
+  after current dry-run confirms final count.
+- `maintenance.tag-backfill` re-running (`op_id=01KVQVAZK0TH0FRFPNMMBYJKJQ`), was 98%
+  complete. Idempotent — re-run until confirmed completed.
 
 ---
 
@@ -78,21 +82,24 @@ bottom of the review view so the last apply can be undone after the banner disap
 `POST /audiobooks/:id/metadata/undo-apply` / revert-to-snapshot. Investigate the review-matches
 component in `web/src/` first. NOT started.
 
-### AP-3 ✅ Duration extraction fixed — real durations now stored + backfill op shipped
+### AP-3 ✅ Duration extraction fixed — real durations backfill ~complete
 Fixed in PR #1555 (`internal/mediainfo`: calls ffprobe first, estimate only as flagged fallback).
 Both import paths now correct: filesystem scan uses `BuildFromTag`→`realDurationSec`; iTunes import
 uses `track.TotalTime/1000`. Backfill ops:
-- `maintenance.duration-backfill` — corrects iTunes ms→s inflated rows (CONS-16)
-- `maintenance.duration-reextract` v3 (Jun 21) — fingerprint-first; reads stored
-  `AcoustIDFingerprintDurationSec` (fast DB pass for ~275K fingerprinted files), ffprobe fallback
-  for residue. Design: `docs/specs/2026-06-21-duration-reextract-v3-design.md`.
-  Run dry-run first to verify counts, then `dryRun:false` to apply.
+- `maintenance.duration-backfill` — corrects iTunes ms→s inflated rows (CONS-16). Completed (17,684
+  files / 1,210 books corrected).
+- `maintenance.duration-reextract` v3 (Jun 21) — fingerprint-first; 6,540 corrections written
+  (apply run, PRs #1562–#1565). **Watchdog false-cancel fixed** (PRs #1566–#1567: atomic clock +
+  sdk.PageBooks keepalive + heartbeat-at-top). Dry-run (Jun 22) confirmed `would-change=0` across
+  ~30K books; **~721 tail books still pending** (new imports + apply-cancel tail). Re-enqueue apply
+  once dry-run confirms final count.
 - 🔵 ARCH (AP-3b): consolidate the 3 duration paths — `internal/mediainfo`, `internal/diagnosis/probe`,
   external (Audible) — into ONE accurate extractor. Lower priority now that the extractor is fixed.
 
 ### AP-4 🟡 tag-backfill apply (lossless RawTags)
-RUNNING server-side `op_id=01KVN04C1WYZ4DFGYJGDDCFPC3` (was ~46% at last check, 0 read-err).
-Verify completion; re-run if canceled (idempotent). Safe post-#1552 fingerprint-preserve fix.
+Re-running `op_id=01KVQVAZK0TH0FRFPNMMBYJKJQ`. Previous run reached 308,389/314,893 (98%)
+before watchdog cancel. Idempotent — skips already-populated rows. Verify completion; re-run
+if canceled again.
 
 ### AP-5 🔵 Same-folder untagged track shattering (import root cause #2)
 Distinct from the subdir-shatter fixed in #1551: tracks like `Assimil .../Audio/06 - X.mp3`,
