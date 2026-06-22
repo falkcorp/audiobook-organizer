@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.16.0 -->
+<!-- version: 9.17.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-06-22 -->
 
@@ -1309,6 +1309,8 @@ Bot-tasks at [`docs/superpowers/bot-tasks/2026-05-01-struct-*.md`](docs/superpow
 - [x] **ARCH-3** — Unified op-launch helpers: `launchOp` (operations handler) and `launchLegacyOp` (duplicates handler) shipped PR #1577. Eliminates enqueue boilerplate across 11 callers.
 - [x] **ARCH-4** — Work-item contract: `RunItems[T]` standalone generic function + `ErrMode`/`RunItemsOptions` + 9 unit tests shipped PR #1579. Eliminates ctx.Done/UpdateProgress/SetCurrentItem boilerplate in new fan-out ops.
 - [ ] **ARCH-4b** — Migrate existing fan-out loops to `RunItems`: the 6 originally planned sites (`acoustid/backfill.go`, `acoustid/fingerprint_rescan.go`, `deluge/centralization.go`, `deluge/path_update.go`, `acoustid/lsh_backfill.go`, `acoustid/reset_all.go`) all have custom checkpointing, multi-counter, or resume-from-index logic that must be preserved. Each needs its own migration PR. Priority: medium (new code should use `RunItems` from day one).
+- [x] **PERF-2** — Batch upserts in `createBookFilesForBook`: N per-segment `UpsertBookFile` calls replaced with one `BatchUpsertBookFiles` call (shipped PR #1583). N→1 DB writes per book on first scan.
+- [ ] **PERF-2b** — Hash carry-forward: dedup check at `scanner.go:1885` re-hashes every segment file that `createBookFilesForBook` (line 1322) also hashes. Fix requires `saveBookToDatabase` to return a `map[string]string` (filePath→hash) and passing it to `createBookFilesForBook`. Blocked by `saveBook` function-variable API change.
 
 ---
 

@@ -1,11 +1,17 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.58.0 -->
+<!-- version: 3.59.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-22 -->
 
 # Changelog
 
 ## [Unreleased]
+
+### Performance
+
+#### June 22, 2026 — scanner batch pipeline: N→1 DB writes per book on first scan (PR #1583)
+
+- **`perf(scanner)`** — `createBookFilesForBook` now collects all `BookFile` records for a book and calls `BatchUpsertBookFiles` once (single PebbleDB batch write) instead of calling `UpsertBookFile` per segment file. For a 40-chapter book this reduces DB round-trips from 40 to 1 during initial scan.
 
 ### Added
 

@@ -1,7 +1,7 @@
 // file: internal/scanner/unit_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a2b3c4d5-e6f7-8901-abcd-ef2345678901
-// last-edited: 2026-06-01
+// last-edited: 2026-06-22
 
 package scanner
 
@@ -1586,7 +1586,7 @@ func TestCreateBookFilesForBookWithStore(t *testing.T) {
 		FilePath: bookPath,
 	}, nil)
 	store.EXPECT().GetBookFiles("book-1").Return(nil, nil) // no existing files
-	store.EXPECT().UpsertBookFile(mock.Anything).Return(nil)
+	store.EXPECT().BatchUpsertBookFiles(mock.Anything).Return(nil)
 	store.EXPECT().UpdateBook("book-1", mock.Anything).Return(nil, nil) // normalize FilePath
 
 	oldExts := config.AppConfig.SupportedExtensions
@@ -1646,7 +1646,7 @@ func TestCreateBookFilesWithSegmentFiles(t *testing.T) {
 		FilePath: tmp,
 	}, nil)
 	store.EXPECT().GetBookFiles("book-2").Return(nil, nil)
-	store.EXPECT().UpsertBookFile(mock.Anything).Return(nil).Times(2)
+	store.EXPECT().BatchUpsertBookFiles(mock.Anything).Return(nil)
 
 	createBookFilesForBook(tmp, []string{seg1, seg2}, defaultLog)
 }

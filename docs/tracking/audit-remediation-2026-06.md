@@ -1,5 +1,5 @@
 <!-- file: docs/tracking/audit-remediation-2026-06.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f -->
 <!-- last-edited: 2026-06-22 -->
 
@@ -200,7 +200,7 @@ This ordering respects dependencies and keeps each PR reviewable:
 | G | **Operation launch helper** | ARCH-3 unified enqueue helper | ARCH-2 partially |
 | H | **Work-item contract design** | Design doc + open question resolution | G |
 | I | **Work-item contract implementation** ✅ | `RunItems[T]` standalone generic fn + `ErrMode`/`RunItemsOptions` + 9 unit tests (PR #1579). Note: the 6 listed fan-out sites all have custom checkpointing/multi-counter/resume-from-index logic that cannot be replaced without regression — documented as future follow-up in TODO `ARCH-4b`. | H |
-| J | **Scanner batch pipeline** | PERF-2 hash/tag carry-forward, batch upserts | — |
+| J | **Scanner batch pipeline** ✅ | PERF-2 batch upserts shipped PR #1583: `createBookFilesForBook` now collects all BookFiles then calls `BatchUpsertBookFiles` once (N→1 DB writes per book). Hash carry-forward (dedup check re-hashes same files at line 1885) deferred — needs `saveBookToDatabase` API change; documented as PERF-2b in TODO. | — |
 | K | **Security guardrails** | SEC-5 restore validation, SEC-6 factory-reset path check | — |
 | L | **Frontend page decomposition** | FE-5 Library.tsx hooks, STR-4 BookDedup split | F |
 | M | **Dataset strategy** | TOOL-1 optional large corpus | — |

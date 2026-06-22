@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.44.0
+// version: 1.45.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-06-19
+// last-edited: 2026-06-22
 
 package scanner
 
@@ -1282,6 +1282,7 @@ func createBookFilesForBook(bookFilePath string, segmentFiles []string, scanLog 
 		}
 	}
 
+	bfs := make([]*database.BookFile, 0, len(segmentFiles))
 	for i, filePath := range segmentFiles {
 		trackNum := i + 1
 		ext := strings.ToLower(filepath.Ext(filePath))
@@ -1324,8 +1325,12 @@ func createBookFilesForBook(bookFilePath string, segmentFiles []string, scanLog 
 			bf.OriginalFileHash = h
 		}
 
-		if serr := getStore().UpsertBookFile(bf); serr != nil {
-			scanLog.Warn("failed to upsert book file for %s: %v", filePath, serr)
+		bfs = append(bfs, bf)
+	}
+
+	if len(bfs) > 0 {
+		if serr := getStore().BatchUpsertBookFiles(bfs); serr != nil {
+			scanLog.Warn("failed to batch upsert book files for book %s: %v", dbBook.ID, serr)
 		}
 	}
 
