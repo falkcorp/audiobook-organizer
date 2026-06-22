@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/handler.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 1b7fbd86-cdda-4921-b2d0-786f5cadb438
-// last-edited: 2026-06-16
+// last-edited: 2026-06-22
 
 // Package operations hosts the background-operation HTTP handlers extracted
 // from the server package: the long-running scan / organize / optimize /
@@ -106,62 +106,45 @@ func (h *Handler) resolveScheduler() Scheduler {
 
 // --- Operation starters ---
 
-// StartScan implements POST /operations/scan.
-func (h *Handler) StartScan(c *gin.Context) {
+// launchOp checks the registry, enqueues opName with body, and responds 202.
+// Returns false if the registry is nil or enqueueing fails (response already written).
+// body may be nil or empty — defaults to "{}".
+func (h *Handler) launchOp(c *gin.Context, opName string, body []byte) bool {
 	if h.registry == nil {
 		httputil.RespondWithInternalError(c, "operations registry not initialized")
-		return
+		return false
 	}
-	body, _ := c.GetRawData()
 	if len(body) == 0 {
 		body = []byte("{}")
 	}
-	opID, err := h.registry.EnqueueOp(c.Request.Context(), "library.scan", body)
+	opID, err := h.registry.EnqueueOp(c.Request.Context(), opName, body)
 	if err != nil {
 		httputil.InternalError(c, "enqueue failed", err)
-		return
+		return false
 	}
 	c.JSON(202, gin.H{"op_id": opID, "id": opID})
+	return true
+}
+
+// StartScan implements POST /operations/scan.
+func (h *Handler) StartScan(c *gin.Context) {
+	body, _ := c.GetRawData()
+	h.launchOp(c, "library.scan", body)
 }
 
 // StartOrganize implements POST /operations/organize.
 func (h *Handler) StartOrganize(c *gin.Context) {
-	if h.registry == nil {
-		httputil.RespondWithInternalError(c, "operations registry not initialized")
-		return
-	}
 	body, _ := c.GetRawData()
-	if len(body) == 0 {
-		body = []byte("{}")
-	}
-	opID, err := h.registry.EnqueueOp(c.Request.Context(), "library.organize", body)
-	if err != nil {
-		httputil.InternalError(c, "enqueue failed", err)
-		return
-	}
-	c.JSON(202, gin.H{"op_id": opID, "id": opID})
+	h.launchOp(c, "library.organize", body)
 }
 
 // StartOptimize implements POST /operations/optimize.
 func (h *Handler) StartOptimize(c *gin.Context) {
-	if h.registry == nil {
-		httputil.RespondWithInternalError(c, "operations registry not initialized")
-		return
-	}
-	opID, err := h.registry.EnqueueOp(c.Request.Context(), "library.optimize", nil)
-	if err != nil {
-		httputil.InternalError(c, "enqueue failed", err)
-		return
-	}
-	c.JSON(202, gin.H{"op_id": opID, "id": opID})
+	h.launchOp(c, "library.optimize", nil)
 }
 
 // StartTranscode implements POST /operations/transcode.
 func (h *Handler) StartTranscode(c *gin.Context) {
-	if h.registry == nil {
-		httputil.RespondWithInternalError(c, "operations registry not initialized")
-		return
-	}
 	body, _ := c.GetRawData()
 	var check struct {
 		BookID string `json:"book_id"`
@@ -170,12 +153,7 @@ func (h *Handler) StartTranscode(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "book_id is required")
 		return
 	}
-	opID, err := h.registry.EnqueueOp(c.Request.Context(), "library.transcode", body)
-	if err != nil {
-		httputil.InternalError(c, "enqueue failed", err)
-		return
-	}
-	c.JSON(202, gin.H{"op_id": opID, "id": opID})
+	h.launchOp(c, "library.transcode", body)
 }
 
 // --- Operation status / cancel ---
