@@ -1,7 +1,7 @@
 <!-- file: TESTING.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d -->
-<!-- last-edited: 2026-01-31 -->
+<!-- last-edited: 2026-06-22 -->
 
 # Testing Documentation
 
@@ -18,12 +18,12 @@ This project has comprehensive testing coverage across multiple layers:
 ### Current Coverage
 - **Frontend E2E**: 17 test files, 140+ tests
 - **Frontend Unit**: Component and service tests
-- **Backend Go**: 86.2% coverage with mocks
+- **Backend Go**: CI gate requires 30% (run `make coverage-check` to verify current level)
 - **Video Recording**: Enabled for all test failures
 
 ### Target Coverage
 - **E2E**: All critical user workflows with video evidence
-- **Unit**: 80%+ component coverage
+- **Unit**: Incrementally increasing — see Makefile `coverage-check` for live threshold
 - **Integration**: All API endpoints
 - **Visual**: Key UI states and interactions
 
