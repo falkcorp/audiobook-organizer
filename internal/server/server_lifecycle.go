@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 1.36.0
+// version: 1.37.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-06-22
 
@@ -415,8 +415,10 @@ func (s *Server) Start(cfg ServerConfig) error {
 		if err := InitBootstrapToken(s.Store(), dataDir); err != nil {
 			slog.Info("Failed to init bootstrap token", "err", err)
 		}
-		if err := InitStartupReadOnlyKey(s.Store(), dataDir); err != nil {
-			slog.Info("Failed to init startup read-only key", "err", err)
+		if config.AppConfig.WriteStartupReadOnlyKey {
+			if err := InitStartupReadOnlyKey(s.Store(), dataDir); err != nil {
+				slog.Info("Failed to init startup read-only key", "err", err)
+			}
 		}
 	}
 

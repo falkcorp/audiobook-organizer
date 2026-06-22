@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.20.0 -->
+<!-- version: 9.21.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-06-22 -->
 
@@ -1311,6 +1311,9 @@ Bot-tasks at [`docs/superpowers/bot-tasks/2026-05-01-struct-*.md`](docs/superpow
 - [ ] **ARCH-4b** — Migrate existing fan-out loops to `RunItems`: the 6 originally planned sites (`acoustid/backfill.go`, `acoustid/fingerprint_rescan.go`, `deluge/centralization.go`, `deluge/path_update.go`, `acoustid/lsh_backfill.go`, `acoustid/reset_all.go`) all have custom checkpointing, multi-counter, or resume-from-index logic that must be preserved. Each needs its own migration PR. Priority: medium (new code should use `RunItems` from day one).
 - [x] **PERF-2** — Batch upserts in `createBookFilesForBook`: N per-segment `UpsertBookFile` calls replaced with one `BatchUpsertBookFiles` call (shipped PR #1583). N→1 DB writes per book on first scan.
 - [ ] **PERF-2b** — Hash carry-forward: dedup check at `scanner.go:1885` re-hashes every segment file that `createBookFilesForBook` (line 1322) also hashes. Fix requires `saveBookToDatabase` to return a `map[string]string` (filePath→hash) and passing it to `createBookFilesForBook`. Blocked by `saveBook` function-variable API change.
+- [x] **PERF-7** — `UpsertBookFile` memdb round-trip fingerprint data-loss: same preserve-on-empty guard as `BatchUpsertBookFiles` now applied. 3 regression tests in `pebble_bookfile_preserve_test.go`. Shipped PR (audit-remediation-p1).
+- [x] **SEC-7** — `/cache/stats` + `/cache/stats/history` moved to `protected` group (PermLibraryView). `/metrics` stays accepted-risk per MED-1. Shipped PR (audit-remediation-p1).
+- [x] **SEC-2** — `WriteStartupReadOnlyKey bool` config flag (default true). Operators can set `write_startup_readonly_key: false` to suppress `.readonly-key` file creation. Bootstrap token unaffected. Shipped PR (audit-remediation-p1).
 - [x] **SEC-5** — Restore target is arbitrary absolute path + `verify=true` is a no-op: `IsDangerousRoot` check added on `target_path`; `verify=true` logs a visible warning. Shipped PR #1584.
 - [x] **SEC-6** — Factory reset uses `RootDir` without validation: `IsDangerousRoot` check added before `os.RemoveAll` loop; returns 400 + logs error if RootDir is a protected system path. Shipped PR #1584.
 - [x] **FE-5 (audit)** — `Library.tsx` 2018→1811 lines: extracted `useLibraryQuery` (229 lines, book-fetch state + effects + auto-refresh) and `useLibrarySelection` (164 lines, selection state + handlers). Shipped PR #1585.

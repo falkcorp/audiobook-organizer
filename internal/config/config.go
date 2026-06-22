@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.59.0
+// version: 1.60.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-06-16
+// last-edited: 2026-06-22
 
 package config
 
@@ -398,6 +398,14 @@ type Config struct {
 
 	// Tools configures the managed external-tool lifecycle (Ollama, fpcalc).
 	Tools tools.ToolsConfig `json:"tools"`
+
+	// WriteStartupReadOnlyKey controls whether a 24-hour read-only API key is
+	// written to <data-dir>/.readonly-key on every server startup (SEC-2).
+	// Default true preserves existing behaviour; set false in hardened deployments
+	// where file-system credential files are unwanted. The bootstrap recovery
+	// token (.bootstrap-token) is always generated — it is emergency access
+	// infrastructure and is not affected by this flag.
+	WriteStartupReadOnlyKey bool `json:"write_startup_readonly_key" mapstructure:"write_startup_readonly_key"`
 }
 
 // mu guards AppConfig against concurrent writes.
@@ -659,6 +667,7 @@ func InitConfig() {
 	viper.SetDefault("auto_rename_on_apply", true)
 	viper.SetDefault("auto_write_tags_on_apply", true)
 	viper.SetDefault("verify_after_write", true)
+	viper.SetDefault("write_startup_readonly_key", true) // SEC-2: opt-out to disable file write
 
 	// Embedding + vector index defaults (nested under "embedding.*").
 	// BindEnv maps each dot-notation key to its uppercase env var name so that
@@ -886,8 +895,9 @@ func InitConfig() {
 			PathFormat:           viper.GetString("path_format"),
 			SegmentTitleFormat:   viper.GetString("segment_title_format"),
 			AutoRenameOnApply:    viper.GetBool("auto_rename_on_apply"),
-			AutoWriteTagsOnApply: viper.GetBool("auto_write_tags_on_apply"),
-			VerifyAfterWrite:     viper.GetBool("verify_after_write"),
+			AutoWriteTagsOnApply:    viper.GetBool("auto_write_tags_on_apply"),
+			VerifyAfterWrite:        viper.GetBool("verify_after_write"),
+			WriteStartupReadOnlyKey: viper.GetBool("write_startup_readonly_key"),
 
 			SupportedExtensions: supportedExtensions,
 			ExcludePatterns:     excludePatterns,
@@ -1422,9 +1432,10 @@ func ResetToDefaults() {
 			// Path formatting & apply pipeline
 			PathFormat:           "{author}/{series_prefix}{title}/{track_title}.{ext}",
 			SegmentTitleFormat:   "{title} - {track}/{total_tracks}",
-			AutoRenameOnApply:    true,
-			AutoWriteTagsOnApply: true,
-			VerifyAfterWrite:     true,
+			AutoRenameOnApply:       true,
+			AutoWriteTagsOnApply:    true,
+			VerifyAfterWrite:        true,
+			WriteStartupReadOnlyKey: true,
 
 			SupportedExtensions: []string{
 				".m4b", ".mp3", ".m4a", ".aac", ".ogg", ".flac", ".wma",

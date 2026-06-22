@@ -1,5 +1,5 @@
 <!-- file: docs/tracking/audit-remediation-2026-06.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f -->
 <!-- last-edited: 2026-06-22 -->
 
@@ -35,12 +35,12 @@ These Structure Audit findings were addressed in the May–June refactor wave be
 | ID | Finding | Source | Status | Notes |
 |---|---|---|---|---|
 | SEC-1 | `abk_...` API key committed in `docs/FINGERPRINT_E2E_TEST_REPORT.md:141` | Sweep | ⬜ | **Immediate.** Rotate key, replace with placeholder, add secret scanning to docs/. |
-| SEC-2 | Bootstrap/read-only credentials generated to plaintext files at startup | Sweep | ⬜ | `server_lifecycle.go:408`, `bootstrap.go:107,152,338`. Make recovery opt-in or local-only. |
+| SEC-2 | Bootstrap/read-only credentials generated to plaintext files at startup | Sweep | ✅ | `Config.WriteStartupReadOnlyKey` bool (default true). Gated in `server_lifecycle.go`. Bootstrap token unchanged (emergency access). |
 | SEC-3 | Temp-login URLs trust inbound `Host` header | Sweep | ⬜ | `auth_temp_login.go:114`. Use configured canonical URL or Host allowlist. |
 | SEC-4 | No security-header middleware (CSP, frame-ancestors, nosniff, HSTS) | Sweep | ⬜ | Gap around `server_middleware.go:21`. |
 | SEC-5 | Restore `verify=true` is a no-op; restore target is arbitrary absolute path | Sweep | ✅ | `pathvalidation.IsDangerousRoot` blocks system-dir targets; `verify=true` now logs a visible warning. Full checksum manifest deferred. Shipped PR #1584. |
 | SEC-6 | Factory reset deletes everything under `RootDir` without path validation | Sweep | ✅ | `pathvalidation.IsDangerousRoot` check added before library folder deletion; returns 400 + logs error if RootDir is a protected path. Shipped PR #1584. |
-| SEC-7 | `/metrics` and cache-stats endpoints unauthenticated | Sweep | ⬜ | P2. Gate behind auth or internal bind. |
+| SEC-7 | `/metrics` and cache-stats endpoints unauthenticated | Sweep | ✅ | `/cache/stats` + `/cache/stats/history` moved to `protected` group (PermLibraryView). `/metrics` kept as accepted-risk per MED-1 — standard Prometheus scrape endpoint, network-layer gating. |
 | SEC-8 | Docker build downloads unsigned tarballs, uses mutable base tags | Sweep | ⬜ | P2. Pin base digest, verify SHA256. |
 | SEC-9 | OpenAI key exposed to frontend runtime for validation | Sweep | ⬜ | P2. Move validation server-side. |
 
@@ -56,7 +56,7 @@ These Structure Audit findings were addressed in the May–June refactor wave be
 | PERF-4 | iTunes search calls `SearchBooks(search, 0, 0)` — returns zero rows | Sweep | ⬜ | `handlers/itunes.go:693`. Add bounded iTunes-filtered search. |
 | PERF-5 | iTunes backfill: offset pagination, N+1 file reads, per-row writes | Sweep | ⬜ | `itunes/backfill.go:21,46,73`. Cursor iteration, batch file lookup, bulk writes. |
 | PERF-6 | Search index rebuild uses offset-based `GetAllBooks` | Sweep | ⬜ | `server_search.go:63`. Add streaming/cursor book iteration. |
-| PERF-7 | Memdb projection is a monolith; strips `AcoustIDFingerprint` on round-trip | Sweep | ⬜ | **P1, not P2.** `memdb_strip.go`. `UpsertBookFile` still has the latent data-loss bug. Split projections by query family. |
+| PERF-7 | Memdb projection is a monolith; strips `AcoustIDFingerprint` on round-trip | Sweep | ✅ | `UpsertBookFile` now has the same fingerprint-preserve guard as `BatchUpsertBookFiles`. 3 regression tests added in `pebble_bookfile_preserve_test.go`. |
 | PERF-8 | Backup walks live Pebble files directly | Sweep | ⬜ | P2. Use Pebble `Checkpoint` before archiving. |
 
 ---
