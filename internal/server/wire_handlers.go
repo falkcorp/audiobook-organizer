@@ -1,7 +1,7 @@
 // file: internal/server/wire_handlers.go
-// version: 2.10.0
+// version: 2.11.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
-// last-edited: 2026-06-21
+// last-edited: 2026-06-22
 
 package server
 
@@ -596,11 +596,11 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		s.publishEvent,
 	)
 
-	// ── Public cache routes (no auth) ────────────────────────────────────────
-	api.GET("/cache/stats", cacheH.HandleCacheStats)
-	api.GET("/cache/stats/history", cacheH.HandleCacheStatsHistory)
-
 	// ── Protected routes ─────────────────────────────────────────────────────
+
+	// Cache stats (operational metrics — auth-gated per SEC-7)
+	protected.GET("/cache/stats", s.perm(auth.PermLibraryView), cacheH.HandleCacheStats)
+	protected.GET("/cache/stats/history", s.perm(auth.PermLibraryView), cacheH.HandleCacheStatsHistory)
 
 	// Activity log
 	protected.GET("/activity", s.perm(auth.PermLibraryView), activityH.ListActivity)
