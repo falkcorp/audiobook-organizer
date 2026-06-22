@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.14.0 -->
+<!-- version: 9.15.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-06-22 -->
 
@@ -41,8 +41,7 @@ cancel tail) — re-enqueue pending. Tag-backfill 98% complete (308K/314K), re-e
 > Full audit + prioritized fixes: [`docs/dedup-import-pipeline-audit.md`](docs/dedup-import-pipeline-audit.md).
 > Session handoff: `.remember/remember.md`.
 
-- [ ] **PH-1** Verify `tag-backfill` apply completed (`op_id=01KVN04C1WYZ4DFGYJGDDCFPC3`);
-      re-run if canceled (idempotent — skips populated rows). Lossless-library goal done on completion.
+- [x] **PH-1** ✅ Tag-backfill completed 314,893/314,893 (op `01KVQVAZK0TH0FRFPNMMBYJKJQ`, 2026-06-22). Lossless-library goal done.
 - [ ] **PH-2 (P2)** Differentiated residual-triage op — the 10,859 exact-pending are 4
       populations (genuine dups KEEP / fragment-vs-full / title-leak-false / byte-empty stubs).
       Purge only the junk; never blanket-purge. Own dry-run + advisor gate. Audit §3.
@@ -96,10 +95,9 @@ uses `track.TotalTime/1000`. Backfill ops:
 - 🔵 ARCH (AP-3b): consolidate the 3 duration paths — `internal/mediainfo`, `internal/diagnosis/probe`,
   external (Audible) — into ONE accurate extractor. Lower priority now that the extractor is fixed.
 
-### AP-4 🟡 tag-backfill apply (lossless RawTags)
-Re-running `op_id=01KVQVAZK0TH0FRFPNMMBYJKJQ`. Previous run reached 308,389/314,893 (98%)
-before watchdog cancel. Idempotent — skips already-populated rows. Verify completion; re-run
-if canceled again.
+### AP-4 ✅ tag-backfill apply (lossless RawTags) — COMPLETE
+Completed 314,893/314,893 at 2026-06-22T14:38 (op `01KVQVAZK0TH0FRFPNMMBYJKJQ`). All RawTags
+backfilled. Lossless-library goal achieved.
 
 ### AP-5 🔵 Same-folder untagged track shattering (import root cause #2)
 Distinct from the subdir-shatter fixed in #1551: tracks like `Assimil .../Audio/06 - X.mp3`,
