@@ -1,6 +1,7 @@
 // file: internal/ai/metadata_llm_review.go
-// version: 3.3.0
+// version: 3.4.0
 // guid: e4f92b17-3c8a-4d65-a1f3-9b2e07d84c61
+// last-edited: 2026-06-22
 
 package ai
 
@@ -139,17 +140,8 @@ Include one score per input candidate, using the same index as the input.`
 
 	jsonObjectFormat := shared.NewResponseFormatJSONObjectParam()
 
-	var lastErr error
-	for attempt := 0; attempt <= p.maxRetries; attempt++ {
-		if attempt > 0 {
-			backoff := time.Duration(attempt*attempt) * 2 * time.Second
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(backoff):
-			}
-		}
-
+	var scores []MetadataLLMScore
+	if err := DoWithRetry(ctx, p.maxRetries+1, 2*time.Second, func() error {
 		completion, err := p.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
 			Messages: []openai.ChatCompletionMessageParamUnion{
 				openai.SystemMessage(systemPrompt),
@@ -164,27 +156,22 @@ Include one score per input candidate, using the same index as the input.`
 			},
 			User: openai.String("ao-metadata-review"),
 		})
-
 		if err != nil {
-			lastErr = fmt.Errorf("OpenAI API call failed (attempt %d): %w", attempt+1, err)
-			continue
+			return fmt.Errorf("OpenAI API call failed: %w", err)
 		}
-
 		if len(completion.Choices) == 0 {
-			lastErr = fmt.Errorf("no response from OpenAI (attempt %d)", attempt+1)
-			continue
+			return fmt.Errorf("no response from OpenAI")
 		}
-
-		content := completion.Choices[0].Message.Content
 		var result struct {
 			Scores []MetadataLLMScore `json:"scores"`
 		}
-		if err := json.Unmarshal([]byte(content), &result); err != nil {
-			lastErr = fmt.Errorf("parse response (attempt %d): %w", attempt+1, err)
-			continue
+		if err := json.Unmarshal([]byte(completion.Choices[0].Message.Content), &result); err != nil {
+			return fmt.Errorf("parse response: %w", err)
 		}
-		return result.Scores, nil
+		scores = result.Scores
+		return nil
+	}); err != nil {
+		return nil, err
 	}
-
-	return nil, lastErr
+	return scores, nil
 }
