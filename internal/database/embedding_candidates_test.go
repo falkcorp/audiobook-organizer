@@ -1,6 +1,7 @@
 // file: internal/database/embedding_candidates_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: f3e2d1c0-b9a8-4765-8e7d-6f5c4b3a2190
+// last-edited: 2026-06-22
 
 package database
 
@@ -536,4 +537,71 @@ func TestCanonicalizeCandidates_Cleanup(t *testing.T) {
 			"all rows should have entity_a_id <= entity_b_id after canonicalize, got (%s, %s)",
 			c.EntityAID, c.EntityBID)
 	}
+}
+
+func TestListCandidatesForEntity(t *testing.T) {
+	store := newTestEmbeddingStore(t)
+
+	// book "b1" is paired with b2 and b3; b2 and b3 also have a pair with each other.
+	require.NoError(t, store.UpsertCandidate(DedupCandidate{EntityType: "book", EntityAID: "b1", EntityBID: "b2", Layer: "embedding", Similarity: floatPtr(0.95), Status: "pending"}))
+	require.NoError(t, store.UpsertCandidate(DedupCandidate{EntityType: "book", EntityAID: "b1", EntityBID: "b3", Layer: "embedding", Similarity: floatPtr(0.80), Status: "dismissed"}))
+	require.NoError(t, store.UpsertCandidate(DedupCandidate{EntityType: "book", EntityAID: "b2", EntityBID: "b3", Layer: "embedding", Similarity: floatPtr(0.70), Status: "pending"}))
+
+	// b1 appears in 2 pairs; filtered by status it's 1.
+	all, err := store.ListCandidatesForEntity("book", "b1", "")
+	require.NoError(t, err)
+	assert.Len(t, all, 2, "b1 is in 2 pairs")
+
+	pending, err := store.ListCandidatesForEntity("book", "b1", "pending")
+	require.NoError(t, err)
+	assert.Len(t, pending, 1)
+	assert.Equal(t, "pending", pending[0].Status)
+
+	// b2 appears in 2 pairs (b1-b2 and b2-b3).
+	b2All, err := store.ListCandidatesForEntity("book", "b2", "")
+	require.NoError(t, err)
+	assert.Len(t, b2All, 2)
+
+	// Entity with no pairs returns empty slice, not error.
+	none, err := store.ListCandidatesForEntity("book", "bX", "")
+	require.NoError(t, err)
+	assert.Empty(t, none)
+}
+
+func TestBackfillEntityIndex(t *testing.T) {
+	store := newTestEmbeddingStore(t)
+
+	// Write two candidates via the normal path (entity index is written automatically).
+	require.NoError(t, store.UpsertCandidate(DedupCandidate{EntityType: "book", EntityAID: "b1", EntityBID: "b2", Layer: "embedding", Status: "pending"}))
+	require.NoError(t, store.UpsertCandidate(DedupCandidate{EntityType: "book", EntityAID: "b3", EntityBID: "b4", Layer: "embedding", Status: "pending"}))
+
+	// BackfillEntityIndex is idempotent — running twice should not error or duplicate.
+	n1, err := store.BackfillEntityIndex()
+	require.NoError(t, err)
+	assert.Equal(t, 2, n1)
+
+	n2, err := store.BackfillEntityIndex()
+	require.NoError(t, err)
+	assert.Equal(t, 2, n2)
+
+	// Entity index lookups should still return correct results after backfill.
+	got, err := store.ListCandidatesForEntity("book", "b1", "")
+	require.NoError(t, err)
+	assert.Len(t, got, 1)
+}
+
+func TestDeleteCandidate_CleansEntityIndex(t *testing.T) {
+	store := newTestEmbeddingStore(t)
+
+	require.NoError(t, store.UpsertCandidate(DedupCandidate{EntityType: "book", EntityAID: "b1", EntityBID: "b2", Layer: "embedding", Status: "pending"}))
+
+	before, err := store.ListCandidatesForEntity("book", "b1", "")
+	require.NoError(t, err)
+	require.Len(t, before, 1)
+
+	require.NoError(t, store.DeleteCandidate(before[0].ID))
+
+	after, err := store.ListCandidatesForEntity("book", "b1", "")
+	require.NoError(t, err)
+	assert.Empty(t, after, "entity index entries should be removed on delete")
 }

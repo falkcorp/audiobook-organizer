@@ -1,6 +1,6 @@
 // file: internal/database/embedding_store.go
-// version: 2.3.1
-// last-edited: 2026-06-13
+// version: 2.4.0
+// last-edited: 2026-06-22
 // guid: 7c4a9b2e-d831-4f5c-a07e-3b8d6e1f9c42
 
 package database
@@ -76,14 +76,16 @@ func init() {
 //	emb:c:<model>:<textHash>        → raw float32 blob  (content-hash cache)
 //	dedup:r:<id16hex>               → candRec JSON      (dedup candidate)
 //	dedup:p:<type>:<aID>:<bID>      → id16hex           (pair uniqueness index)
+//	dedup:e:<type>:<entityID>:<id16hex> → empty         (entity secondary index — both sides)
 //	dedup:seq                       → [8]byte LE int64  (auto-increment counter)
 //	dedup:label:<id16hex>           → LabeledExample JSON   (dataset labels)
 const (
-	embVecPfx    = "emb:v:"
-	embCachePfx  = "emb:c:"
-	dedupRecPfx  = "dedup:r:"
-	dedupPairPfx = "dedup:p:"
-	dedupSeqKey  = "dedup:seq"
+	embVecPfx      = "emb:v:"
+	embCachePfx    = "emb:c:"
+	dedupRecPfx    = "dedup:r:"
+	dedupPairPfx   = "dedup:p:"
+	dedupEntityPfx = "dedup:e:"
+	dedupSeqKey    = "dedup:seq"
 )
 
 // embRec is the stored value for a vector embedding.
@@ -431,6 +433,13 @@ func dedupPairKey(entityType, aID, bID string) []byte {
 	return []byte(dedupPairPfx + entityType + ":" + aID + ":" + bID)
 }
 
+// dedupEntityKey builds a secondary-index key for one side of a candidate pair.
+// Both entity_a and entity_b get their own entry so prefix-scanning
+// "dedup:e:<type>:<entityID>:" yields all candidates for that entity in O(k).
+func dedupEntityKey(entityType, entityID string, id int64) []byte {
+	return []byte(fmt.Sprintf("%s%s:%s:%016x", dedupEntityPfx, entityType, entityID, id))
+}
+
 // nextID reads and increments the sequential counter. Must be called with s.mu held.
 // The new counter value is written into the supplied batch so counter + record land atomically.
 func (s *EmbeddingStore) nextID(b *pebble.Batch) (int64, error) {
@@ -509,6 +518,13 @@ func (s *EmbeddingStore) UpsertCandidate(c DedupCandidate) error {
 		if err := b.Set(pairKey, []byte(fmt.Sprintf("%016x", id)), nil); err != nil {
 			return err
 		}
+		// Entity secondary index — both sides, so prefix-scan by entity is O(k).
+		if err := b.Set(dedupEntityKey(c.EntityType, c.EntityAID, id), nil, nil); err != nil {
+			return err
+		}
+		if err := b.Set(dedupEntityKey(c.EntityType, c.EntityBID, id), nil, nil); err != nil {
+			return err
+		}
 		return b.Commit(pebble.Sync)
 	}
 
@@ -571,6 +587,13 @@ func (s *EmbeddingStore) UpsertCandidate(c DedupCandidate) error {
 		return fmt.Errorf("marshal updated candidate: %w", err)
 	}
 	if err := b.Set(dedupRecKey(id), data, nil); err != nil {
+		return err
+	}
+	// Idempotent: ensure entity index entries exist (backfills pre-index records).
+	if err := b.Set(dedupEntityKey(existing.EntityType, existing.EntityAID, id), nil, nil); err != nil {
+		return err
+	}
+	if err := b.Set(dedupEntityKey(existing.EntityType, existing.EntityBID, id), nil, nil); err != nil {
 		return err
 	}
 	return b.Commit(pebble.Sync)
@@ -676,6 +699,97 @@ func (s *EmbeddingStore) ListCandidates(f CandidateFilter) ([]DedupCandidate, in
 	return all[start:end], total, nil
 }
 
+// ListCandidatesForEntity returns all dedup candidates that involve the given
+// entity on either side, using the "dedup:e:" secondary index for O(k) lookup
+// instead of a full-table scan. status="" returns all statuses.
+func (s *EmbeddingStore) ListCandidatesForEntity(entityType, entityID, status string) ([]DedupCandidate, error) {
+	if err := s.checkClosed(); err != nil {
+		return nil, err
+	}
+	prefix := []byte(dedupEntityPfx + entityType + ":" + entityID + ":")
+	upper := prefixUpperBound(prefix)
+
+	iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: upper})
+	if err != nil {
+		return nil, fmt.Errorf("entity index scan: %w", err)
+	}
+	defer iter.Close()
+
+	pfxLen := len(dedupEntityPfx) + len(entityType) + 1 + len(entityID) + 1
+	var results []DedupCandidate
+	for iter.First(); iter.Valid(); iter.Next() {
+		idHex := string(iter.Key()[pfxLen:])
+		id, err := strconv.ParseInt(idHex, 16, 64)
+		if err != nil {
+			continue
+		}
+		val, closer, err := s.db.Get(dedupRecKey(id))
+		if err == pebble.ErrNotFound {
+			continue // stale index entry — tolerated, cleaned up on next UpsertCandidate
+		}
+		if err != nil {
+			return nil, fmt.Errorf("entity candidate fetch %d: %w", id, err)
+		}
+		var rec candRec
+		unmarshalErr := json.Unmarshal(val, &rec)
+		closer.Close()
+		if unmarshalErr != nil {
+			continue
+		}
+		if status != "" && rec.Status != status {
+			continue
+		}
+		results = append(results, candRecToCandidate(id, rec))
+	}
+	if err := iter.Error(); err != nil {
+		return nil, fmt.Errorf("entity candidate scan: %w", err)
+	}
+	return results, nil
+}
+
+// BackfillEntityIndex writes "dedup:e:" index entries for any candidate that
+// was stored before the entity index was introduced. Safe to call repeatedly —
+// writes are idempotent. Returns the number of candidates processed.
+func (s *EmbeddingStore) BackfillEntityIndex() (int, error) {
+	if err := s.checkClosed(); err != nil {
+		return 0, err
+	}
+	prefix := []byte(dedupRecPfx)
+	upper := prefixUpperBound(prefix)
+
+	iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: upper})
+	if err != nil {
+		return 0, fmt.Errorf("backfill entity index scan: %w", err)
+	}
+	defer iter.Close()
+
+	count := 0
+	for iter.First(); iter.Valid(); iter.Next() {
+		idHex := string(iter.Key())[len(dedupRecPfx):]
+		id, err := strconv.ParseInt(idHex, 16, 64)
+		if err != nil {
+			continue
+		}
+		var rec candRec
+		if err := json.Unmarshal(iter.Value(), &rec); err != nil {
+			continue
+		}
+		b := s.db.NewBatch()
+		_ = b.Set(dedupEntityKey(rec.EntityType, rec.EntityAID, id), nil, nil)
+		_ = b.Set(dedupEntityKey(rec.EntityType, rec.EntityBID, id), nil, nil)
+		if err := b.Commit(pebble.Sync); err != nil {
+			b.Close()
+			return count, fmt.Errorf("backfill entity index write %d: %w", id, err)
+		}
+		b.Close()
+		count++
+	}
+	if err := iter.Error(); err != nil {
+		return count, fmt.Errorf("backfill entity index: %w", err)
+	}
+	return count, nil
+}
+
 // UpdateCandidateStatus updates the status of a single candidate by ID.
 func (s *EmbeddingStore) UpdateCandidateStatus(id int64, status string) error {
 	return s.updateCandidate(id, func(rec *candRec) {
@@ -751,6 +865,8 @@ func (s *EmbeddingStore) DeleteCandidate(id int64) error {
 	defer b.Close()
 	_ = b.Delete(dedupRecKey(id), nil)
 	_ = b.Delete(dedupPairKey(rec.EntityType, rec.EntityAID, rec.EntityBID), nil)
+	_ = b.Delete(dedupEntityKey(rec.EntityType, rec.EntityAID, id), nil)
+	_ = b.Delete(dedupEntityKey(rec.EntityType, rec.EntityBID, id), nil)
 	return b.Commit(pebble.Sync)
 }
 
