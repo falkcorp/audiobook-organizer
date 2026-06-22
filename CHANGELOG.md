@@ -1,11 +1,19 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.62.0 -->
+<!-- version: 3.63.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-22 -->
 
 # Changelog
 
 ## [Unreleased]
+
+### Security
+
+#### June 22, 2026 — P1 audit remediation: PERF-7, SEC-7, SEC-2
+
+- **`fix(database)`** PERF-7 — `UpsertBookFile` now preserves `AcoustIDFingerprint`, `FingerprintFailureReason`, `FingerprintFailureDetail`, and `FingerprintDiagnosticJSON` when the incoming row carries nil values (e.g. memdb-sourced callers). Identical guard to `BatchUpsertBookFiles` (#1552). 3 regression tests added (path lookup, PID lookup, legitimate overwrite).
+- **`fix(server)`** SEC-7 — `GET /api/v1/cache/stats` and `GET /api/v1/cache/stats/history` moved from unauthenticated `api` router group to `protected` group (requires `PermLibraryView`). `/metrics` (standard Prometheus scrape) left as accepted-risk per MED-1 code comment.
+- **`fix(config)`** SEC-2 — New `write_startup_readonly_key` config flag (default `true`, JSON/mapstructure). When set to `false`, the server skips writing the 24-hour read-only key to `<data-dir>/.readonly-key` on startup — useful in hardened deployments. Bootstrap token (emergency access, 10-min TTL) is unaffected.
 
 ### Tests
 
