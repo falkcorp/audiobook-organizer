@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.15.0 -->
+<!-- version: 9.16.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-06-22 -->
 
@@ -1303,6 +1303,12 @@ Bot-tasks at [`docs/superpowers/bot-tasks/2026-05-01-struct-*.md`](docs/superpow
   ✅ NormalizePath, NormalizeTitle, NormalizeAuthor, NormalizeString, CollapseSpaces; 45 call-chain replacements across 5 files
 - [x] **STRUCT-13** — Finish splitting `BookDetail.tsx` (2773 lines) into sub-components *(completed)*
   ✅ See STRUCT-9 above — BookDetail.tsx reduced to 1073 lines
+
+#### ARCH — Architecture (June 2026 audit)
+
+- [x] **ARCH-3** — Unified op-launch helpers: `launchOp` (operations handler) and `launchLegacyOp` (duplicates handler) shipped PR #1577. Eliminates enqueue boilerplate across 11 callers.
+- [x] **ARCH-4** — Work-item contract: `RunItems[T]` standalone generic function + `ErrMode`/`RunItemsOptions` + 9 unit tests shipped PR #1579. Eliminates ctx.Done/UpdateProgress/SetCurrentItem boilerplate in new fan-out ops.
+- [ ] **ARCH-4b** — Migrate existing fan-out loops to `RunItems`: the 6 originally planned sites (`acoustid/backfill.go`, `acoustid/fingerprint_rescan.go`, `deluge/centralization.go`, `deluge/path_update.go`, `acoustid/lsh_backfill.go`, `acoustid/reset_all.go`) all have custom checkpointing, multi-counter, or resume-from-index logic that must be preserved. Each needs its own migration PR. Priority: medium (new code should use `RunItems` from day one).
 
 ---
 
