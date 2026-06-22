@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_reextract.go
-// version: 3.4.0
+// version: 3.5.0
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
 // last-edited: 2026-06-22
 
@@ -42,6 +42,13 @@
 // ffprobe can still read a container header even when full-decode fingerprinting
 // failed, and the worst case is simply skipping the book.
 //
+// Parallelism (v4): the Workers param controls how many books are processed
+// concurrently (default 4, max 16). The fp-fast path is pure-DB and near-instant;
+// the ffprobe path shells out per file and is the real bottleneck. Parallelising
+// over books means up to Workers ffprobe subprocesses run at once, cutting wall
+// clock for the ffprobe tail proportionally. All DB writes happen on a single
+// collector goroutine — no locking required on counters or PebbleDB writes.
+//
 // Idempotent: a re-run finds already-corrected rows within tolerance and skips
 // them. The ffprobe tail is slow by design — it shells out once per
 // non-fingerprinted segment — so the op heartbeats progress every ~15s and is
@@ -56,6 +63,7 @@ import (
 	"log/slog"
 	"math"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -68,6 +76,10 @@ type durationReextractParams struct {
 	// Limit caps the number of books examined in one run (0 = no cap). Useful for
 	// a bounded first pass over a large library.
 	Limit int `json:"limit"`
+	// Workers sets the number of concurrent book-processing goroutines (default 4,
+	// clamped 1–16). More workers = more concurrent ffprobe subprocesses, which
+	// cuts wall-clock time for the non-fingerprinted tail proportionally.
+	Workers int `json:"workers"`
 }
 
 // durationChangeThresholds: a book is corrected only when the freshly extracted
@@ -133,7 +145,8 @@ func (p *Plugin) durationReextractDef() sdk.OperationDef {
 			"and falls back to ffprobe only for never-fingerprinted files. Handles both multi-file and virtual single-file books. " +
 			"Corrects Book.Duration where the old fileSize÷bitrate estimate was wrong (PR #1555; m4b/m4a were ~2× too short). " +
 			"Never overwrites a real duration with an estimate, and skips books with any unreadable segment. " +
-			"Default dry-run previews counts (incl. fingerprint vs ffprobe split); set dryRun=false to apply.",
+			"Default dry-run previews counts (incl. fingerprint vs ffprobe split); set dryRun=false to apply. " +
+			"Workers param (default 4) controls ffprobe concurrency — higher = faster ffprobe tail.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.duration-reextract",
@@ -146,12 +159,129 @@ func (p *Plugin) durationReextractDef() sdk.OperationDef {
 	}
 }
 
+// bookProcessResult holds the outcome of processing one book. Returned by
+// processBookForReextract and consumed by the collector goroutine, which owns
+// all counter mutations and DB writes.
+type bookProcessResult struct {
+	book        database.Book
+	segs        []database.BookFile // may be nil for virtual single-file books
+	newDur      int
+	changedBFs  []database.BookFile
+	eligible    bool
+	usedFfprobe bool
+	wouldChange bool
+	roughDouble bool
+	readErr     bool
+	estimated   bool
+	noPath      bool
+	example     string
+}
+
+// processBookForReextract evaluates one book: computes the real duration from
+// stored fingerprint values (fast) or ffprobe (slow), and returns what should
+// be written. It never writes to the store.
+func processBookForReextract(ctx context.Context, store database.Store, book database.Book) bookProcessResult {
+	res := bookProcessResult{book: book}
+
+	segs, _ := store.GetBookFiles(book.ID)
+	res.segs = segs
+
+	var (
+		newDur      int
+		changedBFs  []database.BookFile
+		skip        bool
+		usedFfprobe bool
+	)
+
+	if len(segs) > 0 {
+		for si := range segs {
+			f := segs[si]
+			if f.FilePath == "" {
+				continue
+			}
+			var segDur int
+			if f.AcoustIDFingerprintDurationSec > 0 {
+				segDur = int(math.Round(f.AcoustIDFingerprintDurationSec))
+			} else {
+				usedFfprobe = true
+				info, mErr := extractWithTimeout(ctx, f.FilePath)
+				if mErr != nil || info == nil || info.Duration <= 0 {
+					res.readErr = true
+					skip = true
+					break
+				}
+				if info.DurationEstimated {
+					res.estimated = true
+					skip = true
+					break
+				}
+				segDur = info.Duration
+			}
+			newDur += segDur
+			if durationDiffMeaningful(f.Duration, segDur) {
+				nf := f
+				nf.Duration = segDur
+				changedBFs = append(changedBFs, nf)
+			}
+		}
+	} else {
+		usedFfprobe = true
+		if book.FilePath == "" {
+			res.noPath = true
+			return res
+		}
+		info, mErr := extractWithTimeout(ctx, book.FilePath)
+		if mErr != nil || info == nil || info.Duration <= 0 {
+			res.readErr = true
+			return res
+		}
+		if info.DurationEstimated {
+			res.estimated = true
+			return res
+		}
+		newDur = info.Duration
+	}
+
+	if skip || newDur <= 0 {
+		return res
+	}
+
+	res.eligible = true
+	res.usedFfprobe = usedFfprobe
+	res.newDur = newDur
+	res.changedBFs = changedBFs
+
+	oldDur := 0
+	if book.Duration != nil {
+		oldDur = *book.Duration
+	}
+	if !durationDiffMeaningful(oldDur, newDur) && len(changedBFs) == 0 {
+		return res // already correct
+	}
+	res.wouldChange = true
+	if oldDur > 0 {
+		ratio := float64(newDur) / float64(oldDur)
+		if ratio >= 1.8 && ratio <= 2.2 {
+			res.roughDouble = true
+		}
+	}
+	res.example = fmt.Sprintf("%s %ds→%ds (%d seg)", book.ID, oldDur, newDur, len(segs))
+	return res
+}
+
 func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
-	params := durationReextractParams{DryRun: true} // safe default
+	params := durationReextractParams{DryRun: true, Workers: 4} // safe defaults
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &params); err != nil {
 			return fmt.Errorf("invalid params: %w", err)
 		}
+	}
+	// Clamp worker count.
+	if params.Workers < 1 {
+		params.Workers = 4
+	}
+	if params.Workers > 16 {
+		params.Workers = 16
 	}
 
 	store := p.deps.Store()
@@ -174,18 +304,20 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 		logInterval = 15 * time.Second
 		exampleCap  = 5
 	)
+
+	// All counters and the examples slice are owned exclusively by the collector
+	// goroutine (the main goroutine after the workers start). No locking needed.
 	var (
-		examined      int // books inspected
-		eligible      int // books for which every segment yielded a real duration (fingerprint or ffprobe)
-		wouldChange   int // books whose real duration differs meaningfully
-		roughlyDouble int // subset where new ≈ 2× old (the m4b/m4a estimate bug signature)
-		missing       int // file path set but not on disk
-		estimated     int // ffprobe failed → estimate returned; never trusted/written
-		readErr       int // mediainfo.Extract returned an error
-		noPath        int // book has no single-file FilePath (multi-file; out of v1 scope)
-		fpBooks       int // eligible books fully sourced from stored fingerprint durations (fast path)
-		ffprobeBooks  int // eligible books that needed ≥1 ffprobe call (slow tail)
-		written       int // actual UpdateBook calls (apply mode)
+		examined      int
+		eligible      int
+		wouldChange   int
+		roughlyDouble int
+		estimated     int
+		readErr       int
+		noPath        int
+		fpBooks       int
+		ffprobeBooks  int
+		written        int
 		examples      = make([]string, 0, exampleCap)
 		lastLog       = time.Now()
 	)
@@ -199,164 +331,139 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 			total = examined
 		}
 		_ = reporter.UpdateProgress(examined, total, fmt.Sprintf(
-			"examined=%d eligible=%d (fp=%d ffprobe=%d) would-change=%d (~2x=%d) missing=%d est-skip=%d read-err=%d",
-			examined, eligible, fpBooks, ffprobeBooks, wouldChange, roughlyDouble, missing, estimated, readErr))
+			"examined=%d eligible=%d (fp=%d ffprobe=%d) would-change=%d (~2x=%d) est-skip=%d read-err=%d",
+			examined, eligible, fpBooks, ffprobeBooks, wouldChange, roughlyDouble, estimated, readErr))
 		lastLog = time.Now()
 	}
 
-	// errLimitReached signals PageBooks to stop iteration when params.Limit is hit.
-	// It is not propagated to the caller.
 	errLimitReached := fmt.Errorf("limit reached")
 
-	iterErr := sdk.PageBooks(ctx, store, reporter, pageSize, func(book database.Book) error {
-		if params.Limit > 0 && examined >= params.Limit {
-			return errLimitReached
-		}
-		examined++
-		heartbeat(false) // stamp atomic for every book, including skipped ones
+	// jobCh feeds books from the PageBooks producer to workers.
+	// resultCh carries per-book results back to the collector (this goroutine).
+	jobCh := make(chan database.Book, params.Workers*2)
+	resultCh := make(chan bookProcessResult, params.Workers*2)
 
-		// Compute the book's REAL duration. Multi-file books store audio across
-		// BookFiles (Book.FilePath may even be a directory); virtual single-file
-		// books carry it on Book.FilePath. We require EVERY present segment to
-		// yield a real (non-estimated) ffprobe duration, else the book total
-		// can't be trusted and we skip it.
-		segs, _ := store.GetBookFiles(book.ID)
+	// Start worker pool.
+	var wg sync.WaitGroup
+	for i := 0; i < params.Workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for book := range jobCh {
+				resultCh <- processBookForReextract(ctx, store, book)
+			}
+		}()
+	}
+	// Close resultCh once all workers finish.
+	go func() {
+		wg.Wait()
+		close(resultCh)
+	}()
 
-		var (
-			newDur      int
-			changedBFs  []database.BookFile
-			skip        bool
-			usedFfprobe bool // this book needed ≥1 ffprobe call (slow tail)
-		)
-
-		if len(segs) > 0 {
-			for si := range segs {
-				f := segs[si]
-				if f.FilePath == "" {
-					continue // pathless segment contributes nothing; tolerate
-				}
-				// v3 fast path: fingerprinting already measured and stored the real
-				// decode duration. Trust it as authoritative — no stat, no ffprobe.
-				// Only segments never fingerprinted fall through to the slow ffprobe
-				// path below.
-				var segDur int
-				if f.AcoustIDFingerprintDurationSec > 0 {
-					segDur = int(math.Round(f.AcoustIDFingerprintDurationSec))
-				} else {
-					usedFfprobe = true
-					info, mErr := extractWithTimeout(ctx, f.FilePath)
-					if mErr != nil || info == nil || info.Duration <= 0 {
-						readErr++
-						skip = true
-						break
-					}
-					if info.DurationEstimated {
-						estimated++
-						skip = true
-						break
-					}
-					segDur = info.Duration
-				}
-				newDur += segDur
-				if durationDiffMeaningful(f.Duration, segDur) {
-					nf := f
-					nf.Duration = segDur
-					changedBFs = append(changedBFs, nf)
-				}
+	// Producer: iterate all books and feed them into jobCh.
+	// Runs in its own goroutine so the collector can drain resultCh concurrently.
+	producerErr := make(chan error, 1)
+	go func() {
+		dispatched := 0
+		err := sdk.PageBooks(ctx, store, reporter, pageSize, func(book database.Book) error {
+			if params.Limit > 0 && dispatched >= params.Limit {
+				return errLimitReached
 			}
-		} else {
-			// Virtual single-file book: no BookFile rows means no stored fingerprint
-			// duration, so always probe Book.FilePath directly.
-			usedFfprobe = true
-			if book.FilePath == "" {
-				noPath++
-				return nil
+			dispatched++
+			select {
+			case jobCh <- book:
+			case <-ctx.Done():
+				return ctx.Err()
 			}
-			info, mErr := extractWithTimeout(ctx, book.FilePath)
-			if mErr != nil || info == nil || info.Duration <= 0 {
-				readErr++
-				return nil
-			}
-			if info.DurationEstimated {
-				estimated++
-				return nil
-			}
-			newDur = info.Duration
-		}
-		if skip || newDur <= 0 {
 			return nil
+		})
+		close(jobCh)
+		producerErr <- err
+	}()
+
+	// Collector: drain results, update counters, apply writes.
+	for res := range resultCh {
+		examined++
+		heartbeat(false)
+
+		if res.noPath {
+			noPath++
+			continue
 		}
+		if res.readErr {
+			readErr++
+			continue
+		}
+		if res.estimated {
+			estimated++
+			continue
+		}
+		if !res.eligible {
+			continue
+		}
+
 		eligible++
-		if usedFfprobe {
+		if res.usedFfprobe {
 			ffprobeBooks++
 		} else {
 			fpBooks++
 		}
+		if !res.wouldChange {
+			continue
+		}
 
-		oldDur := 0
-		if book.Duration != nil {
-			oldDur = *book.Duration
-		}
-		if !durationDiffMeaningful(oldDur, newDur) && len(changedBFs) == 0 {
-			return nil // book total + every segment already correct — idempotent skip
-		}
 		wouldChange++
-		if oldDur > 0 {
-			ratio := float64(newDur) / float64(oldDur)
-			if ratio >= 1.8 && ratio <= 2.2 {
-				roughlyDouble++
-			}
+		if res.roughDouble {
+			roughlyDouble++
 		}
 		if len(examples) < exampleCap {
-			examples = append(examples, fmt.Sprintf("%s %ds→%ds (%d seg)", book.ID, oldDur, newDur, len(segs)))
+			examples = append(examples, res.example)
 		}
 
-		if !params.DryRun {
-			// Correct each changed segment first. UpdateBookFile is full-replace,
-			// but segs came from pebble-direct GetBookFiles so every field incl.
-			// the fingerprint is intact; it also refreshes memdb.
-			for ci := range changedBFs {
-				cf := changedBFs[ci]
-				if uErr := store.UpdateBookFile(cf.ID, &cf); uErr != nil {
-					_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
-						"book %s seg %s: UpdateBookFile failed: %v", book.ID, cf.ID, uErr))
-					readErr++
-				}
-			}
-			if len(segs) > 0 {
-				// Canonical aggregator: sums the (now-corrected) segment durations
-				// into Book.Duration.
-				if rErr := store.RecomputeBookAggregates(book.ID); rErr != nil {
-					_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
-						"book %s: RecomputeBookAggregates failed: %v", book.ID, rErr))
-					readErr++
-					return nil
-				}
-			} else {
-				full, gErr := store.GetBookByID(book.ID)
-				if gErr != nil || full == nil {
-					_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
-						"book %s: GetBookByID failed: %v", book.ID, gErr))
-					readErr++
-					return nil
-				}
-				nd := newDur
-				full.Duration = &nd
-				if _, uErr := store.UpdateBook(book.ID, full); uErr != nil {
-					_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
-						"book %s: UpdateBook failed: %v", book.ID, uErr))
-					readErr++
-					return nil
-				}
-			}
-			written++
+		if params.DryRun {
+			continue
 		}
 
+		// Apply: write changed segments then recompute aggregates.
+		for ci := range res.changedBFs {
+			cf := res.changedBFs[ci]
+			if uErr := store.UpdateBookFile(cf.ID, &cf); uErr != nil {
+				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
+					"book %s seg %s: UpdateBookFile failed: %v", res.book.ID, cf.ID, uErr))
+				readErr++
+			}
+		}
+		if len(res.segs) > 0 {
+			if rErr := store.RecomputeBookAggregates(res.book.ID); rErr != nil {
+				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
+					"book %s: RecomputeBookAggregates failed: %v", res.book.ID, rErr))
+				readErr++
+				continue
+			}
+		} else {
+			full, gErr := store.GetBookByID(res.book.ID)
+			if gErr != nil || full == nil {
+				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
+					"book %s: GetBookByID failed: %v", res.book.ID, gErr))
+				readErr++
+				continue
+			}
+			nd := res.newDur
+			full.Duration = &nd
+			if _, uErr := store.UpdateBook(res.book.ID, full); uErr != nil {
+				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
+					"book %s: UpdateBook failed: %v", res.book.ID, uErr))
+				readErr++
+				continue
+			}
+		}
+		written++
 		heartbeat(false)
-		return nil
-	})
-	if iterErr != nil && iterErr != errLimitReached {
-		return fmt.Errorf("book scan: %w", iterErr)
+	}
+
+	// Wait for producer and surface any non-limit error.
+	if err := <-producerErr; err != nil && err != errLimitReached {
+		return fmt.Errorf("book scan: %w", err)
 	}
 
 	verb := "would correct"
@@ -364,8 +471,8 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 		verb = fmt.Sprintf("corrected %d;", written)
 	}
 	summary := fmt.Sprintf(
-		"examined=%d eligible=%d (from-fingerprint=%d from-ffprobe=%d) %s would-change=%d (~2x=%d) missing-on-disk=%d estimated-skipped=%d read-errors=%d no-filepath=%d | e.g. %s",
-		examined, eligible, fpBooks, ffprobeBooks, verb, wouldChange, roughlyDouble, missing, estimated, readErr, noPath,
+		"examined=%d eligible=%d (from-fingerprint=%d from-ffprobe=%d) %s would-change=%d (~2x=%d) estimated-skipped=%d read-errors=%d no-filepath=%d | e.g. %s",
+		examined, eligible, fpBooks, ffprobeBooks, verb, wouldChange, roughlyDouble, estimated, readErr, noPath,
 		strings.Join(examples, ", "))
 	_ = reporter.Log(slog.LevelInfo, summary)
 	total := totalBooks

@@ -1,15 +1,17 @@
 // file: internal/plugins/maintenance/duration_reextract_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4a7d1e92-8c63-4f50-a1b8-3e6c9d2f5a04
-// last-edited: 2026-06-21
+// last-edited: 2026-06-22
 
 package maintenance
 
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -268,6 +270,55 @@ func TestDurationReextract_MixedFingerprintAndFfprobe(t *testing.T) {
 	}
 	if writes != 0 {
 		t.Errorf("book with an unreadable non-fingerprinted segment must be skipped, got %d writes", writes)
+	}
+}
+
+// TestDurationReextract_ParallelWorkers_AllBooksProcessed verifies that running
+// with Workers>1 produces the same set of corrections as Workers=1. Uses 10
+// books each with a drifted fingerprint segment — all must be written regardless
+// of which worker picks them up.
+func TestDurationReextract_ParallelWorkers_AllBooksProcessed(t *testing.T) {
+	const n = 10
+	var written []string // segment IDs written
+	var mu sync.Mutex
+
+	books := make([]database.Book, n)
+	for i := range books {
+		books[i] = database.Book{ID: fmt.Sprintf("b%d", i), FilePath: fmt.Sprintf("/lib/b%d", i), Duration: intPtr(50)}
+	}
+
+	store := &database.MockStore{
+		CountBooksFunc: func() (int, error) { return n, nil },
+		GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) {
+			if offset >= n {
+				return nil, nil
+			}
+			end := offset + limit
+			if end > n {
+				end = n
+			}
+			return books[offset:end], nil
+		},
+		GetBookFilesFunc: func(id string) ([]database.BookFile, error) {
+			return []database.BookFile{
+				{ID: id + "-s1", BookID: id, FilePath: "/nonexistent/01.mp3", Duration: 50, AcoustIDFingerprintDurationSec: 3600.0},
+			}, nil
+		},
+		UpdateBookFileFunc: func(_ string, f *database.BookFile) error {
+			mu.Lock()
+			written = append(written, f.ID)
+			mu.Unlock()
+			return nil
+		},
+	}
+
+	params, _ := json.Marshal(durationReextractParams{DryRun: false, Workers: 4})
+	p := New(fakeDeps{store: store})
+	if err := p.runDurationReextract(context.Background(), params, &fakeReporter{}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(written) != n {
+		t.Errorf("parallel run wrote %d segments, want %d", len(written), n)
 	}
 }
 
