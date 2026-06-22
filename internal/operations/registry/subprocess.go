@@ -1,7 +1,7 @@
 // file: internal/operations/registry/subprocess.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2b3c4d5e-6f7a-8901-bcde-f01234567890
-// last-edited: 2026-06-01
+// last-edited: 2026-06-22
 
 // Package registry — subprocess runner for Isolate=true operations.
 //
@@ -124,7 +124,9 @@ func RunChildMode(r *Registry) {
 
 	// Create reporter.
 	ctx := context.Background()
-	reporter := newDBReporter(ctx, opID, def.ID, def.DisplayName, def.Plugin, "", "", r.store, nil, r.activityRecorder, r.logger, nil)
+	// Subprocess runs in a separate process; no runHandle to stamp, so
+	// touchProgressFn is nil and synchronous mode preserves DB writes.
+	reporter := newDBReporter(ctx, opID, def.ID, def.DisplayName, def.Plugin, "", "", r.store, nil, r.activityRecorder, r.logger, nil, nil, 0, true)
 
 	// Run.
 	runErr := def.Run(ctx, hs.Params, reporter)

@@ -1,7 +1,7 @@
 // file: internal/operations/registry/reporter_db.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 1a2b3c4d-5e6f-7890-abcd-ef0123456789
-// last-edited: 2026-06-01
+// last-edited: 2026-06-22
 
 package registry
 
@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -61,10 +62,19 @@ type dbReporter struct {
 
 	progressMu          sync.Mutex
 	progressCurrent     int
+	progressTotal       int
 	lastProgressMessage string
+	progressGen         atomic.Uint64 // incremented on every UpdateProgress; flush goroutine tracks last-flushed gen
 
 	// setCurrentItemFn, if non-nil, updates the runHandle's in-memory label.
 	setCurrentItemFn func(string)
+	// touchProgressFn, if non-nil, stamps the owning runHandle's lastProgressAt
+	// atomic nanosecond clock. Called at the very top of UpdateProgress before
+	// any lock or DB write, so the watchdog always sees a fresh timestamp even
+	// when UpdateOpProgressV2 is blocked behind PebbleDB compaction.
+	touchProgressFn      func()
+	synchronous          bool          // legacy: write DB on every UpdateProgress
+	progressFlushInterval time.Duration // how often lazy flush fires (0 = no lazy flush)
 
 	runCtx context.Context
 }
@@ -110,6 +120,8 @@ func (h *fanoutHandler) WithGroup(name string) slog.Handler {
 
 // NewDBReporterForTest is an exported wrapper around newDBReporter for use in
 // external _test packages. Do not use in production code.
+// NewDBReporterForTest creates a synchronous (legacy-mode) DB reporter for
+// tests that assert on immediate DB state after UpdateProgress.
 func NewDBReporterForTest(
 	runCtx context.Context,
 	opID, defID, plugin, traceID, spanID string,
@@ -117,7 +129,20 @@ func NewDBReporterForTest(
 	bus Bus,
 	logger *slog.Logger,
 ) Reporter {
-	return newDBReporter(runCtx, opID, defID, "", plugin, traceID, spanID, store, bus, nil, logger, nil)
+	return newDBReporter(runCtx, opID, defID, "", plugin, traceID, spanID, store, bus, nil, logger, nil, nil, 0, true)
+}
+
+// NewDBReporterForTestWithTouch creates a reporter with a custom touchFn for
+// tests that verify the in-memory atomic clock path.
+func NewDBReporterForTestWithTouch(
+	runCtx context.Context,
+	opID, defID, plugin, traceID, spanID string,
+	store database.OpsV2Store,
+	bus Bus,
+	logger *slog.Logger,
+	touchFn func(),
+) Reporter {
+	return newDBReporter(runCtx, opID, defID, "", plugin, traceID, spanID, store, bus, nil, logger, nil, touchFn, 0, false)
 }
 
 // newDBReporter creates a DB-backed Reporter.
@@ -125,6 +150,9 @@ func NewDBReporterForTest(
 // op_name attribute on every log line; empty falls back to defID.
 // setCurrentItemFn, if non-nil, is called by SetCurrentItem to update
 // the registry's in-memory runHandle without a DB write.
+// touchProgressFn, if non-nil, stamps the owning runHandle's atomic clock.
+// flushInterval controls lazy DB flush cadence (0 = disable lazy flush).
+// synchronous = true writes the DB on every UpdateProgress (legacy).
 func newDBReporter(
 	runCtx context.Context,
 	opID, defID, displayName, plugin, traceID, spanID string,
@@ -133,23 +161,29 @@ func newDBReporter(
 	activityRecorder ActivityRecorder,
 	logger *slog.Logger,
 	setCurrentItemFn func(string),
+	touchProgressFn func(),
+	flushInterval time.Duration,
+	synchronous bool,
 ) Reporter {
 	if displayName == "" {
 		displayName = defID
 	}
 	r := &dbReporter{
-		opID:             opID,
-		defID:            defID,
-		displayName:      displayName,
-		plugin:           plugin,
-		traceID:          traceID,
-		spanID:           spanID,
-		store:            store,
-		bus:              bus,
-		activityRecorder: activityRecorder,
-		flushCh:          make(chan struct{}, 1),
-		runCtx:           runCtx,
-		setCurrentItemFn: setCurrentItemFn,
+		opID:                  opID,
+		defID:                 defID,
+		displayName:           displayName,
+		plugin:                plugin,
+		traceID:               traceID,
+		spanID:                spanID,
+		store:                 store,
+		bus:                   bus,
+		activityRecorder:      activityRecorder,
+		flushCh:               make(chan struct{}, 1),
+		runCtx:                runCtx,
+		setCurrentItemFn:      setCurrentItemFn,
+		touchProgressFn:       touchProgressFn,
+		synchronous:           synchronous,
+		progressFlushInterval: flushInterval,
 	}
 
 	// Every log line emitted via reporter.Logger() inherits these attrs.
@@ -179,22 +213,55 @@ func newDBReporter(
 	return r
 }
 
-// flushLoop is the background goroutine that periodically flushes the log buffer.
+// flushLoop is the background goroutine that periodically flushes the log
+// buffer and, when lazy progress flushing is active, persists the in-memory
+// progress state to the DB for crash-recovery observability.
 func (r *dbReporter) flushLoop(ctx context.Context) {
-	ticker := time.NewTicker(250 * time.Millisecond)
-	defer ticker.Stop()
+	logTicker := time.NewTicker(250 * time.Millisecond)
+	defer logTicker.Stop()
+
+	// Wire lazy progress flush when not in synchronous mode.
+	var progressTickC <-chan time.Time
+	var progressTicker *time.Ticker
+	if !r.synchronous && r.progressFlushInterval > 0 {
+		progressTicker = time.NewTicker(r.progressFlushInterval)
+		progressTickC = progressTicker.C
+		defer progressTicker.Stop()
+	}
+
+	var lastFlushedGen uint64
 	for {
 		select {
 		case <-ctx.Done():
-			// Final flush on shutdown.
 			r.flushLogs()
+			r.flushProgressLazy(&lastFlushedGen) // terminal flush — final state persisted
 			return
-		case <-ticker.C:
+		case <-logTicker.C:
 			r.flushLogs()
 		case <-r.flushCh:
 			r.flushLogs()
+		case <-progressTickC:
+			r.flushProgressLazy(&lastFlushedGen)
 		}
 	}
+}
+
+// flushProgressLazy writes the current in-memory progress to the DB only when
+// it has changed since the last flush (tracked by generation counter).
+func (r *dbReporter) flushProgressLazy(lastFlushedGen *uint64) {
+	cur := r.progressGen.Load()
+	if cur == *lastFlushedGen {
+		return
+	}
+	r.progressMu.Lock()
+	current := r.progressCurrent
+	total := r.progressTotal
+	msg := r.lastProgressMessage
+	r.progressMu.Unlock()
+	if err := r.store.UpdateOpProgressV2(r.opID, current, total, msg); err != nil {
+		slog.Default().Warn("dbReporter: lazy progress flush failed", "op_id", r.opID, "error", err)
+	}
+	*lastFlushedGen = cur
 }
 
 // flushLogs drains logBuf to the DB.
@@ -236,14 +303,25 @@ func (r *dbReporter) flushLogs() {
 
 // UpdateProgress implements Reporter.
 func (r *dbReporter) UpdateProgress(current, total int, message string) error {
+	// Stamp the in-memory atomic clock first — before any lock or DB write.
+	// The watchdog reads this (lock-free) so it never fires due to a blocked
+	// UpdateOpProgressV2 call during PebbleDB L0 compaction.
+	if r.touchProgressFn != nil {
+		r.touchProgressFn()
+	}
+
 	r.progressMu.Lock()
 	last := r.lastProgressMessage
 	r.progressCurrent = current
+	r.progressTotal = total
 	r.lastProgressMessage = message
 	r.progressMu.Unlock()
+	r.progressGen.Add(1)
 
-	if err := r.store.UpdateOpProgressV2(r.opID, current, total, message); err != nil {
-		return err
+	if r.synchronous {
+		if err := r.store.UpdateOpProgressV2(r.opID, current, total, message); err != nil {
+			return err
+		}
 	}
 	if r.bus != nil {
 		_ = r.bus.Publish(r.runCtx, "op.updated", map[string]any{

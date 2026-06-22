@@ -1,7 +1,7 @@
 // file: internal/operations/registry/worker.go
-// version: 2.6.0
+// version: 2.8.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-06-14
+// last-edited: 2026-06-22
 
 package registry
 
@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -50,6 +51,10 @@ type runHandle struct {
 	abandoned      bool
 	currentItem    string
 	currentItemMu  sync.Mutex
+	// lastProgressAt is stamped by the reporter on every UpdateProgress call.
+	// Stored as Unix nanoseconds; zero means progress has never been reported.
+	// The watchdog reads this first (lock-free) before falling back to the DB row.
+	lastProgressAt atomic.Int64
 }
 
 // cancelIfActive cancels the run's context if it has been wired up.
@@ -173,12 +178,20 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 
 	r.logger.Info("registry: starting run", "op_id", qr.opID, "def_id", qr.defID)
 
-	// Build reporter (DB-backed). Pass a setter so SetCurrentItem updates
-	// the runHandle's in-memory currentItem without a DB write.
+	// Build reporter (DB-backed). Pass setItemFn so SetCurrentItem updates
+	// the runHandle's in-memory currentItem without a DB write. Pass touchFn
+	// so UpdateProgress stamps lastProgressAt atomically — the watchdog reads
+	// this instead of the DB row, preventing false-positive cancellations when
+	// UpdateOpProgressV2 is blocked behind PebbleDB compaction.
 	setItemFn := func(label string) { h.setCurrentItem(label) }
+	touchFn := func() { h.lastProgressAt.Store(time.Now().UnixNano()) }
+	flushInterval := def.ProgressFlushInterval
+	if flushInterval <= 0 || flushInterval > 5*time.Minute {
+		flushInterval = 30 * time.Second
+	}
 	reporter := newDBReporter(runCtx, qr.opID, qr.defID, def.DisplayName, qr.plugin,
 		"", "", // traceID / spanID loaded from DB row in future; empty for now
-		r.store, r.bus, r.activityRecorder, r.logger, setItemFn)
+		r.store, r.bus, r.activityRecorder, r.logger, setItemFn, touchFn, flushInterval, def.Synchronous)
 
 	// Canonical "operation started" log line, with all the tags downstream
 	// readers (op_log feed, activity-log enricher, digest aggregator) need

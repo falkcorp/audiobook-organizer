@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_reextract.go
-// version: 3.2.0
+// version: 3.3.0
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
-// last-edited: 2026-06-21
+// last-edited: 2026-06-22
 
 // Package maintenance — op maintenance.duration-reextract.
 //
@@ -188,7 +188,6 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 		written       int // actual UpdateBook calls (apply mode)
 		examples      = make([]string, 0, exampleCap)
 		lastLog       = time.Now()
-		offset        int
 	)
 
 	heartbeat := func(force bool) {
@@ -205,196 +204,158 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 		lastLog = time.Now()
 	}
 
-	for {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		// Keepalive goroutine: fires heartbeats every 60s while GetAllBooks
-		// blocks (e.g. during PebbleDB L0 compaction). Without it, the
-		// 5-minute stuck-op detector cancels us before the first page returns.
-		kaStop := make(chan struct{})
-		go func() {
-			tick := time.NewTicker(60 * time.Second)
-			defer tick.Stop()
-			for {
-				select {
-				case <-tick.C:
-					heartbeat(true)
-				case <-kaStop:
-					return
-				case <-ctx.Done():
-					return
-				}
-			}
-		}()
-		heartbeat(true)
-		books, err := store.GetAllBooks(pageSize, offset)
-		close(kaStop)
-		if err != nil {
-			return fmt.Errorf("GetAllBooks offset=%d: %w", offset, err)
-		}
-		if len(books) == 0 {
-			break
-		}
+	// errLimitReached signals PageBooks to stop iteration when params.Limit is hit.
+	// It is not propagated to the caller.
+	errLimitReached := fmt.Errorf("limit reached")
 
-		for i := range books {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			if params.Limit > 0 && examined >= params.Limit {
-				break
-			}
-			book := books[i]
-			examined++
-
-			// Compute the book's REAL duration. Multi-file books store audio across
-			// BookFiles (Book.FilePath may even be a directory); virtual single-file
-			// books carry it on Book.FilePath. We require EVERY present segment to
-			// yield a real (non-estimated) ffprobe duration, else the book total
-			// can't be trusted and we skip it.
-			segs, _ := store.GetBookFiles(book.ID)
-
-			var (
-				newDur      int
-				changedBFs  []database.BookFile
-				skip        bool
-				usedFfprobe bool // this book needed ≥1 ffprobe call (slow tail)
-			)
-
-			if len(segs) > 0 {
-				for si := range segs {
-					f := segs[si]
-					if f.FilePath == "" {
-						continue // pathless segment contributes nothing; tolerate
-					}
-					// v3 fast path: fingerprinting already measured and stored the real
-					// decode duration. Trust it as authoritative — no stat, no ffprobe.
-					// Only segments never fingerprinted fall through to the slow ffprobe
-					// path below.
-					var segDur int
-					if f.AcoustIDFingerprintDurationSec > 0 {
-						segDur = int(math.Round(f.AcoustIDFingerprintDurationSec))
-					} else {
-						usedFfprobe = true
-						info, mErr := extractWithTimeout(ctx, f.FilePath)
-						if mErr != nil || info == nil || info.Duration <= 0 {
-							readErr++
-							skip = true
-							break
-						}
-						if info.DurationEstimated {
-							estimated++
-							skip = true
-							break
-						}
-						segDur = info.Duration
-					}
-					newDur += segDur
-					if durationDiffMeaningful(f.Duration, segDur) {
-						nf := f
-						nf.Duration = segDur
-						changedBFs = append(changedBFs, nf)
-					}
-				}
-			} else {
-				// Virtual single-file book: no BookFile rows means no stored fingerprint
-				// duration, so always probe Book.FilePath directly.
-				usedFfprobe = true
-				if book.FilePath == "" {
-					noPath++
-					continue
-				}
-				info, mErr := extractWithTimeout(ctx, book.FilePath)
-				if mErr != nil || info == nil || info.Duration <= 0 {
-					readErr++
-					continue
-				}
-				if info.DurationEstimated {
-					estimated++
-					continue
-				}
-				newDur = info.Duration
-			}
-			if skip || newDur <= 0 {
-				continue
-			}
-			eligible++
-			if usedFfprobe {
-				ffprobeBooks++
-			} else {
-				fpBooks++
-			}
-
-			oldDur := 0
-			if book.Duration != nil {
-				oldDur = *book.Duration
-			}
-			if !durationDiffMeaningful(oldDur, newDur) && len(changedBFs) == 0 {
-				continue // book total + every segment already correct — idempotent skip
-			}
-			wouldChange++
-			if oldDur > 0 {
-				ratio := float64(newDur) / float64(oldDur)
-				if ratio >= 1.8 && ratio <= 2.2 {
-					roughlyDouble++
-				}
-			}
-			if len(examples) < exampleCap {
-				examples = append(examples, fmt.Sprintf("%s %ds→%ds (%d seg)", book.ID, oldDur, newDur, len(segs)))
-			}
-
-			if !params.DryRun {
-				// Correct each changed segment first. UpdateBookFile is full-replace,
-				// but segs came from pebble-direct GetBookFiles so every field incl.
-				// the fingerprint is intact; it also refreshes memdb.
-				for ci := range changedBFs {
-					cf := changedBFs[ci]
-					if uErr := store.UpdateBookFile(cf.ID, &cf); uErr != nil {
-						_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
-							"book %s seg %s: UpdateBookFile failed: %v", book.ID, cf.ID, uErr))
-						readErr++
-					}
-				}
-				if len(segs) > 0 {
-					// Canonical aggregator: sums the (now-corrected) segment durations
-					// into Book.Duration.
-					if rErr := store.RecomputeBookAggregates(book.ID); rErr != nil {
-						_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
-							"book %s: RecomputeBookAggregates failed: %v", book.ID, rErr))
-						readErr++
-						continue
-					}
-				} else {
-					full, gErr := store.GetBookByID(book.ID)
-					if gErr != nil || full == nil {
-						_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
-							"book %s: GetBookByID failed: %v", book.ID, gErr))
-						readErr++
-						continue
-					}
-					nd := newDur
-					full.Duration = &nd
-					if _, uErr := store.UpdateBook(book.ID, full); uErr != nil {
-						_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
-							"book %s: UpdateBook failed: %v", book.ID, uErr))
-						readErr++
-						continue
-					}
-				}
-				written++
-			}
-
-			heartbeat(false)
-		}
-
-		offset += len(books)
+	iterErr := sdk.PageBooks(ctx, store, reporter, pageSize, func(book database.Book) error {
 		if params.Limit > 0 && examined >= params.Limit {
-			break
+			return errLimitReached
 		}
-		if len(books) < pageSize {
-			break
+		examined++
+
+		// Compute the book's REAL duration. Multi-file books store audio across
+		// BookFiles (Book.FilePath may even be a directory); virtual single-file
+		// books carry it on Book.FilePath. We require EVERY present segment to
+		// yield a real (non-estimated) ffprobe duration, else the book total
+		// can't be trusted and we skip it.
+		segs, _ := store.GetBookFiles(book.ID)
+
+		var (
+			newDur      int
+			changedBFs  []database.BookFile
+			skip        bool
+			usedFfprobe bool // this book needed ≥1 ffprobe call (slow tail)
+		)
+
+		if len(segs) > 0 {
+			for si := range segs {
+				f := segs[si]
+				if f.FilePath == "" {
+					continue // pathless segment contributes nothing; tolerate
+				}
+				// v3 fast path: fingerprinting already measured and stored the real
+				// decode duration. Trust it as authoritative — no stat, no ffprobe.
+				// Only segments never fingerprinted fall through to the slow ffprobe
+				// path below.
+				var segDur int
+				if f.AcoustIDFingerprintDurationSec > 0 {
+					segDur = int(math.Round(f.AcoustIDFingerprintDurationSec))
+				} else {
+					usedFfprobe = true
+					info, mErr := extractWithTimeout(ctx, f.FilePath)
+					if mErr != nil || info == nil || info.Duration <= 0 {
+						readErr++
+						skip = true
+						break
+					}
+					if info.DurationEstimated {
+						estimated++
+						skip = true
+						break
+					}
+					segDur = info.Duration
+				}
+				newDur += segDur
+				if durationDiffMeaningful(f.Duration, segDur) {
+					nf := f
+					nf.Duration = segDur
+					changedBFs = append(changedBFs, nf)
+				}
+			}
+		} else {
+			// Virtual single-file book: no BookFile rows means no stored fingerprint
+			// duration, so always probe Book.FilePath directly.
+			usedFfprobe = true
+			if book.FilePath == "" {
+				noPath++
+				return nil
+			}
+			info, mErr := extractWithTimeout(ctx, book.FilePath)
+			if mErr != nil || info == nil || info.Duration <= 0 {
+				readErr++
+				return nil
+			}
+			if info.DurationEstimated {
+				estimated++
+				return nil
+			}
+			newDur = info.Duration
 		}
+		if skip || newDur <= 0 {
+			return nil
+		}
+		eligible++
+		if usedFfprobe {
+			ffprobeBooks++
+		} else {
+			fpBooks++
+		}
+
+		oldDur := 0
+		if book.Duration != nil {
+			oldDur = *book.Duration
+		}
+		if !durationDiffMeaningful(oldDur, newDur) && len(changedBFs) == 0 {
+			return nil // book total + every segment already correct — idempotent skip
+		}
+		wouldChange++
+		if oldDur > 0 {
+			ratio := float64(newDur) / float64(oldDur)
+			if ratio >= 1.8 && ratio <= 2.2 {
+				roughlyDouble++
+			}
+		}
+		if len(examples) < exampleCap {
+			examples = append(examples, fmt.Sprintf("%s %ds→%ds (%d seg)", book.ID, oldDur, newDur, len(segs)))
+		}
+
+		if !params.DryRun {
+			// Correct each changed segment first. UpdateBookFile is full-replace,
+			// but segs came from pebble-direct GetBookFiles so every field incl.
+			// the fingerprint is intact; it also refreshes memdb.
+			for ci := range changedBFs {
+				cf := changedBFs[ci]
+				if uErr := store.UpdateBookFile(cf.ID, &cf); uErr != nil {
+					_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
+						"book %s seg %s: UpdateBookFile failed: %v", book.ID, cf.ID, uErr))
+					readErr++
+				}
+			}
+			if len(segs) > 0 {
+				// Canonical aggregator: sums the (now-corrected) segment durations
+				// into Book.Duration.
+				if rErr := store.RecomputeBookAggregates(book.ID); rErr != nil {
+					_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
+						"book %s: RecomputeBookAggregates failed: %v", book.ID, rErr))
+					readErr++
+					return nil
+				}
+			} else {
+				full, gErr := store.GetBookByID(book.ID)
+				if gErr != nil || full == nil {
+					_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
+						"book %s: GetBookByID failed: %v", book.ID, gErr))
+					readErr++
+					return nil
+				}
+				nd := newDur
+				full.Duration = &nd
+				if _, uErr := store.UpdateBook(book.ID, full); uErr != nil {
+					_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
+						"book %s: UpdateBook failed: %v", book.ID, uErr))
+					readErr++
+					return nil
+				}
+			}
+			written++
+		}
+
 		heartbeat(false)
+		return nil
+	})
+	if iterErr != nil && iterErr != errLimitReached {
+		return fmt.Errorf("book scan: %w", iterErr)
 	}
 
 	verb := "would correct"

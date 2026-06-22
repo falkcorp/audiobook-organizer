@@ -1,7 +1,7 @@
 // file: internal/operations/registry/watchdog.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2b3c4d5e-6f7a-8901-bcde-f01234567890
-// last-edited: 2026-05-06
+// last-edited: 2026-06-22
 
 package registry
 
@@ -82,11 +82,21 @@ func (r *Registry) watchdogCycle() {
 		if progressTimeout == 0 {
 			progressTimeout = defaultProgressTimeout
 		}
-		if row.LastProgressAt != nil && now.Sub(*row.LastProgressAt) > progressTimeout {
+		// Prefer the in-memory atomic clock over the DB row: if the reporter has
+		// stamped lastProgressAt (non-zero), use it — this avoids false-positive
+		// cancellations when UpdateOpProgressV2 is queued behind PebbleDB L0
+		// compaction. Fall back to the DB row only when the atomic is unset (zero).
+		var lastProgress time.Time
+		if ts := h.lastProgressAt.Load(); ts != 0 {
+			lastProgress = time.Unix(0, ts).UTC()
+		} else if row.LastProgressAt != nil {
+			lastProgress = *row.LastProgressAt
+		}
+		if !lastProgress.IsZero() && now.Sub(lastProgress) > progressTimeout {
 			r.writeStrike(h.id, def.ID, def.Plugin, "stuck",
-				fmt.Sprintf("no progress for %s (timeout=%s)", now.Sub(*row.LastProgressAt).Round(time.Second), progressTimeout))
+				fmt.Sprintf("no progress for %s (timeout=%s)", now.Sub(lastProgress).Round(time.Second), progressTimeout))
 			r.logger.Warn("registry: canceling stuck op", "op_id", h.id, "def_id", def.ID,
-				"idle_since", row.LastProgressAt)
+				"idle_since", lastProgress)
 			h.cancelIfActive()
 			continue // don't also check uncheckpointed for the same op
 		}

@@ -1,7 +1,7 @@
 // file: internal/operations/registry/reporter_db_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-05-06
+// last-edited: 2026-06-22
 
 package registry_test
 
@@ -10,6 +10,7 @@ import (
 	"encoding/gob"
 	"encoding/json"
 	"log/slog"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -372,5 +373,37 @@ func TestReporterDB_AttrsAreIncludedInLog(t *testing.T) {
 	}
 	if !found {
 		t.Error("'with attrs' log entry not found")
+	}
+}
+
+// TestReporter_TouchProgressFnCalledOnUpdate verifies that the touchProgressFn
+// closure is called on every UpdateProgress call — proving the in-memory
+// atomic clock is stamped before any DB write can block.
+func TestReporter_TouchProgressFnCalledOnUpdate(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var touchCount int64
+	touchFn := func() { atomic.AddInt64(&touchCount, 1) }
+
+	store := newFakeStore()
+	opID := "01TESTOPID000000000000002"
+	now := time.Now().UTC()
+	_ = store.InsertOperationV2(database.OperationV2Row{
+		ID: opID, DefID: "test.def", Plugin: "test-plugin",
+		TraceID: "trace-touch", SpanID: "span-touch", Status: "running",
+		Priority: 1, Params: "{}", QueuedAt: now,
+	})
+
+	rep := registry.NewDBReporterForTestWithTouch(ctx, opID, "test.def", "test-plugin",
+		"trace-touch", "span-touch", store, nil, slog.Default(), touchFn)
+
+	_ = rep.UpdateProgress(10, 100, "first")
+	_ = rep.UpdateProgress(20, 100, "second")
+	_ = rep.UpdateProgress(30, 100, "third")
+
+	got := atomic.LoadInt64(&touchCount)
+	if got != 3 {
+		t.Errorf("expected touchFn called 3 times, got %d", got)
 	}
 }
