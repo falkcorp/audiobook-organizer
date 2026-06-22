@@ -1,7 +1,7 @@
 // file: web/src/pages/ActivityLog.tsx
-// version: 2.17.0
+// version: 2.18.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-06-17
+// last-edited: 2026-06-22
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -381,7 +381,7 @@ export default function ActivityLog() {
       setRefreshing(false);
       setLastUpdated(new Date());
     }
-  }, [typeFilter, levelFilter, operationId, sinceFilter, untilFilter, search, excludedSources, tiers, hideNoOp, tagFilter]);
+  }, [typeFilter, levelFilter, operationId, sinceFilter, untilFilter, search, excludedSources, tiers, hideNoOp, tagFilter, pageSize]);
 
   // Initial load + polling for active ops (3s when Activity page is mounted or
   // bell is open). The interval was unconditional before — toggling

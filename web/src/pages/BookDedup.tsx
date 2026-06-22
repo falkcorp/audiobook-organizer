@@ -1,7 +1,7 @@
 // file: web/src/pages/BookDedup.tsx
-// version: 3.29.0
+// version: 3.30.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-book0dedup02
-// last-edited: 2026-06-11
+// last-edited: 2026-06-22
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useSearchParams, useNavigate, Link as RouterLink } from 'react-router-dom';
@@ -2270,7 +2270,7 @@ function AcousticDedupTab() {
     } finally {
       setLoading(false);
     }
-  }, [page]);
+  }, [page, rowsPerPage]);
 
   useEffect(() => { loadCandidates(); }, [loadCandidates]);
 

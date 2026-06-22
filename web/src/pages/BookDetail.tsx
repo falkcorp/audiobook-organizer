@@ -1,7 +1,7 @@
 // file: web/src/pages/BookDetail.tsx
-// version: 1.50.1
+// version: 1.51.0
 // guid: 4d2f7c6a-1b3e-4c5d-8f7a-9b0c1d2e3f4a
-// last-edited: 2026-05-02
+// last-edited: 2026-06-22
 
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -217,6 +217,13 @@ export const BookDetail = () => {
       toast('Failed to link version', 'error');
     }
   };
+
+  // Reset file/segment state when navigating between books (FE-4).
+  useEffect(() => {
+    setSegmentsLoaded(false);
+    setBookFiles([]);
+    setSegments([]);
+  }, [id]);
 
   // Load book files from the canonical book_files endpoint.
   // Falls back to legacy segments endpoint if book_files is unavailable.
