@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.24.0 -->
+<!-- version: 9.25.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-06-23 -->
 
@@ -1309,7 +1309,8 @@ Bot-tasks at [`docs/superpowers/bot-tasks/2026-05-01-struct-*.md`](docs/superpow
 - [x] **ARCH-3** — Unified op-launch helpers: `launchOp` (operations handler) and `launchLegacyOp` (duplicates handler) shipped PR #1577. Eliminates enqueue boilerplate across 11 callers.
 - [x] **ARCH-4** — Work-item contract: `RunItems[T]` standalone generic function + `ErrMode`/`RunItemsOptions` + 9 unit tests shipped PR #1579. Eliminates ctx.Done/UpdateProgress/SetCurrentItem boilerplate in new fan-out ops.
 - [x] **ARCH-4b (wave 1)** — `deluge/path_update.go` migrated to `registry.RunItems[database.BookVersion]` with `ErrModeCollect`. `updated` counter via `atomic.Int64`. PR #1591.
-- [ ] **ARCH-4b (wave 2)** — Remaining 5 sites: `lsh_backfill.go` (deferred: 308K items × per-item UpdateProgress = 600× more reporter writes than current every-500 throttle; needs throttle wrapper), `deluge/centralization.go` (deferred: checkpoint state must be threaded into RunItems fn closure), `acoustid/backfill.go` (deferred: nested books→files loop + resume-by-book-ID), `acoustid/fingerprint_rescan.go` (deferred: semaphore-based goroutine pool, already parallel), `acoustid/reset_all.go` (deferred: callback-driven PebbleStore API + dual heterogeneous loops).
+- [x] **ARCH-4b (wave 2)** — `deluge/centralization.go` migrated: pre-sliced to checkpoint.ProcessedFiles, atomic counters (success/skip/err), checkpoint written inside RunItems fn closure, IsCanceled() replaced by ctx-based RunItems polling. PR #1592.
+- [ ] **ARCH-4b (wave 3)** — Remaining 3 sites: `lsh_backfill.go` (308K-item progress cadence — needs reporter throttle wrapper before RunItems is appropriate), `acoustid/backfill.go` (nested books→files loop + resume-by-book-ID — requires flat-map preprocessing), `acoustid/reset_all.go` (callback-driven PebbleStore.ClearAllAcoustIDFingerprints API + dual heterogeneous loops). `acoustid/fingerprint_rescan.go` excluded — already uses semaphore goroutine pool that outperforms sequential RunItems.
 - [x] **PERF-2** — Batch upserts in `createBookFilesForBook`: N per-segment `UpsertBookFile` calls replaced with one `BatchUpsertBookFiles` call (shipped PR #1583). N→1 DB writes per book on first scan.
 - [ ] **PERF-2b** — Hash carry-forward: dedup check at `scanner.go:1885` re-hashes every segment file that `createBookFilesForBook` (line 1322) also hashes. Fix requires `saveBookToDatabase` to return a `map[string]string` (filePath→hash) and passing it to `createBookFilesForBook`. Blocked by `saveBook` function-variable API change.
 - [x] **PERF-4** — iTunes search `SearchBooks(search, 0, 0)` returned zero results: `limit=0` was checked as `len(filtered) < 0` (always false). Fixed in `pebble_store.go:3169` — `limit==0` now means "no limit". Regression test `TestSearchBooksUnlimited` added.
