@@ -1,7 +1,7 @@
 // file: internal/server/server_search.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 12815699-f9ea-4788-9af3-2e854d710315
-// last-edited: 2026-05-20
+// last-edited: 2026-06-23
 
 package server
 
@@ -69,6 +69,8 @@ func (s *Server) buildSearchIndexIfEmpty() {
 			return
 		default:
 		}
+		// TODO(PERF-6): replace with cursor-based GetAllBooksFrom(afterID, limit) once
+		// the Store interface gains that method — offset scans are O(offset) per page.
 		books, err := store.GetAllBooks(pageSize, offset)
 		if err != nil {
 			slog.Warn("search backfill GetAllBooks", "err", err)

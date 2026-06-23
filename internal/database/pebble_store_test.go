@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4d5e6f7a-8b9c-0d1e-2f3a-4b5c6d7e8f9a
 
 package database
@@ -551,6 +551,32 @@ func TestPebbleSearchBooks(t *testing.T) {
 	// Assert
 	if len(results) < 3 {
 		t.Errorf("Expected at least 3 results for 'The', got %d", len(results))
+	}
+}
+
+// TestSearchBooksUnlimited verifies that limit=0 returns all matching results
+// (regression for PERF-4: count < 0 was always false, producing zero results).
+func TestSearchBooksUnlimited(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+
+	for i := 0; i < 5; i++ {
+		_, err := store.CreateBook(&Book{
+			Title:    "Unlimited Test Book " + string(rune('A'+i)),
+			FilePath: "/test/unlimited/book" + string(rune('A'+i)) + ".mp3",
+		})
+		if err != nil {
+			t.Fatalf("create book %d: %v", i, err)
+		}
+	}
+
+	// limit=0 should return all 5 matches, not zero
+	results, err := store.SearchBooks("Unlimited Test", 0, 0)
+	if err != nil {
+		t.Fatalf("SearchBooks: %v", err)
+	}
+	if len(results) < 5 {
+		t.Errorf("limit=0 should return all matches; got %d, want ≥5", len(results))
 	}
 }
 
