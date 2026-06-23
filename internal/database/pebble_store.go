@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.95.0
+// version: 1.96.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-06-23
 
@@ -489,7 +489,7 @@ func (p *PebbleStore) GetAuthorsByIDs(ids []int) (map[int]*Author, error) {
 
 func (p *PebbleStore) GetAuthorByName(name string) (*Author, error) {
 	// Use lowercase for case-insensitive lookup
-	indexKey := []byte(fmt.Sprintf("author:name:%s", strings.ToLower(name)))
+	indexKey := []byte(fmt.Sprintf("author:name:%s", util.NormalizeAuthor(name)))
 	value, closer, err := p.db.Get(indexKey)
 	if err == pebble.ErrNotFound {
 		return nil, nil
@@ -531,7 +531,7 @@ func (p *PebbleStore) CreateAuthor(name string) (*Author, error) {
 	batch := p.db.NewBatch()
 	key := []byte(fmt.Sprintf("author:%d", id))
 	// Use lowercase for case-insensitive lookup
-	indexKey := []byte(fmt.Sprintf("author:name:%s", strings.ToLower(name)))
+	indexKey := []byte(fmt.Sprintf("author:name:%s", util.NormalizeAuthor(name)))
 
 	if err := batch.Set(key, data, nil); err != nil {
 		batch.Close()
@@ -565,7 +565,7 @@ func (p *PebbleStore) DeleteAuthor(id int) error {
 		batch.Close()
 		return fmt.Errorf("pebble Delete author:%d: %w", id, err)
 	}
-	if err := batch.Delete([]byte(fmt.Sprintf("author:name:%s", strings.ToLower(author.Name))), nil); err != nil {
+	if err := batch.Delete([]byte(fmt.Sprintf("author:name:%s", util.NormalizeAuthor(author.Name))), nil); err != nil {
 		batch.Close()
 		return fmt.Errorf("pebble Delete author:name: %w", err)
 	}
@@ -617,7 +617,7 @@ func (p *PebbleStore) UpdateAuthorName(id int, name string) error {
 
 	batch := p.db.NewBatch()
 	// Remove old name index
-	if err := batch.Delete([]byte(fmt.Sprintf("author:name:%s", strings.ToLower(author.Name))), nil); err != nil {
+	if err := batch.Delete([]byte(fmt.Sprintf("author:name:%s", util.NormalizeAuthor(author.Name))), nil); err != nil {
 		batch.Close()
 		return fmt.Errorf("pebble Delete author:name: %w", err)
 	}
@@ -634,7 +634,7 @@ func (p *PebbleStore) UpdateAuthorName(id int, name string) error {
 		return err
 	}
 	// Add new name index
-	if err := batch.Set([]byte(fmt.Sprintf("author:name:%s", strings.ToLower(name))), []byte(strconv.Itoa(id)), nil); err != nil {
+	if err := batch.Set([]byte(fmt.Sprintf("author:name:%s", util.NormalizeAuthor(name))), []byte(strconv.Itoa(id)), nil); err != nil {
 		batch.Close()
 		return err
 	}
@@ -718,7 +718,7 @@ func (p *PebbleStore) CreateAuthorAlias(authorID int, aliasName string, aliasTyp
 	}
 
 	// Check for duplicate
-	nameKey := fmt.Sprintf("author_alias:name:%s", strings.ToLower(aliasName))
+	nameKey := fmt.Sprintf("author_alias:name:%s", util.NormalizeAuthor(aliasName))
 	if _, closer, err := p.db.Get([]byte(nameKey)); err == nil {
 		closer.Close()
 		return nil, fmt.Errorf("alias %q already exists", aliasName)
@@ -782,7 +782,7 @@ func (p *PebbleStore) DeleteAuthorAlias(id int) error {
 		batch.Close()
 		return fmt.Errorf("pebble Delete author_alias:author index: %w", err)
 	}
-	if err := batch.Delete([]byte(fmt.Sprintf("author_alias:name:%s", strings.ToLower(alias.AliasName))), nil); err != nil {
+	if err := batch.Delete([]byte(fmt.Sprintf("author_alias:name:%s", util.NormalizeAuthor(alias.AliasName))), nil); err != nil {
 		batch.Close()
 		return fmt.Errorf("pebble Delete author_alias:name index: %w", err)
 	}
@@ -794,7 +794,7 @@ func (p *PebbleStore) DeleteAuthorAlias(id int) error {
 }
 
 func (p *PebbleStore) FindAuthorByAlias(aliasName string) (*Author, error) {
-	nameKey := []byte(fmt.Sprintf("author_alias:name:%s", strings.ToLower(aliasName)))
+	nameKey := []byte(fmt.Sprintf("author_alias:name:%s", util.NormalizeAuthor(aliasName)))
 	value, closer, err := p.db.Get(nameKey)
 	if err == pebble.ErrNotFound {
 		return nil, nil
@@ -850,7 +850,7 @@ func (p *PebbleStore) deleteAuthorAliases(batch *pebble.Batch, authorID int) err
 			if err := batch.Delete([]byte(fmt.Sprintf("author_alias:%d", aliasID)), nil); err != nil {
 				return fmt.Errorf("pebble Delete author_alias:%d: %w", aliasID, err)
 			}
-			if err := batch.Delete([]byte(fmt.Sprintf("author_alias:name:%s", strings.ToLower(alias.AliasName))), nil); err != nil {
+			if err := batch.Delete([]byte(fmt.Sprintf("author_alias:name:%s", util.NormalizeAuthor(alias.AliasName))), nil); err != nil {
 				return fmt.Errorf("pebble Delete author_alias:name index: %w", err)
 			}
 		}
@@ -942,7 +942,7 @@ func (p *PebbleStore) GetSeriesByName(name string, authorID *int) (*Series, erro
 	}
 
 	// Use lowercase for case-insensitive lookup
-	indexKey := []byte(fmt.Sprintf("series:name:%s:%s", strings.ToLower(name), authorIDStr))
+	indexKey := []byte(fmt.Sprintf("series:name:%s:%s", util.NormalizeAuthor(name), authorIDStr))
 	value, closer, err := p.db.Get(indexKey)
 	if err == pebble.ErrNotFound {
 		return nil, nil
@@ -989,7 +989,7 @@ func (p *PebbleStore) CreateSeries(name string, authorID *int) (*Series, error) 
 	batch := p.db.NewBatch()
 	key := []byte(fmt.Sprintf("series:%d", id))
 	// Use lowercase for case-insensitive lookup
-	indexKey := []byte(fmt.Sprintf("series:name:%s:%s", strings.ToLower(name), authorIDStr))
+	indexKey := []byte(fmt.Sprintf("series:name:%s:%s", util.NormalizeAuthor(name), authorIDStr))
 
 	if err := batch.Set(key, data, nil); err != nil {
 		batch.Close()
@@ -1020,7 +1020,7 @@ func (p *PebbleStore) DeleteSeries(id int) error {
 			if series.AuthorID != nil {
 				authorIDStr = strconv.Itoa(*series.AuthorID)
 			}
-			indexKey := []byte(fmt.Sprintf("series:name:%s:%s", strings.ToLower(series.Name), authorIDStr))
+			indexKey := []byte(fmt.Sprintf("series:name:%s:%s", util.NormalizeAuthor(series.Name), authorIDStr))
 			if err := p.db.Delete(indexKey, pebble.Sync); err != nil {
 				slog.Warn("pebble Delete series name index", "key", string(indexKey), "error", err)
 			}
@@ -1053,7 +1053,7 @@ func (p *PebbleStore) UpdateSeriesName(id int, name string) error {
 	if series.AuthorID != nil {
 		oldAuthorIDStr = strconv.Itoa(*series.AuthorID)
 	}
-	oldIndexKey := []byte(fmt.Sprintf("series:name:%s:%s", strings.ToLower(series.Name), oldAuthorIDStr))
+	oldIndexKey := []byte(fmt.Sprintf("series:name:%s:%s", util.NormalizeAuthor(series.Name), oldAuthorIDStr))
 	if err := p.db.Delete(oldIndexKey, pebble.Sync); err != nil {
 		slog.Warn("pebble Delete old series name index", "key", string(oldIndexKey), "error", err)
 	}
@@ -1069,7 +1069,7 @@ func (p *PebbleStore) UpdateSeriesName(id int, name string) error {
 	}
 
 	// Create new name index
-	newIndexKey := []byte(fmt.Sprintf("series:name:%s:%s", strings.ToLower(name), oldAuthorIDStr))
+	newIndexKey := []byte(fmt.Sprintf("series:name:%s:%s", util.NormalizeAuthor(name), oldAuthorIDStr))
 	idBytes := []byte(fmt.Sprintf("%d", id))
 	if err := p.db.Set(newIndexKey, idBytes, pebble.Sync); err != nil {
 		return err
@@ -1870,7 +1870,7 @@ func (p *PebbleStore) GetBooksByTitleInDir(normalizedTitle, dirPath string) ([]B
 		if err := json.Unmarshal(iter.Value(), &book); err != nil {
 			continue
 		}
-		if strings.ToLower(book.Title) != strings.ToLower(normalizedTitle) {
+		if util.NormalizeTitle(book.Title) != util.NormalizeTitle(normalizedTitle) {
 			continue
 		}
 		if filepath.Dir(book.FilePath) != dirPath {
@@ -2325,7 +2325,7 @@ func (p *PebbleStore) CreateNarrator(name string) (*Narrator, error) {
 	}
 
 	// Save name index
-	nameKey := []byte(fmt.Sprintf("narrator_name:%s", strings.ToLower(name)))
+	nameKey := []byte(fmt.Sprintf("narrator_name:%s", util.NormalizeAuthor(name)))
 	idData, _ := json.Marshal(nextID)
 	if err := p.db.Set(nameKey, idData, pebble.Sync); err != nil {
 		return nil, fmt.Errorf("pebble Set narrator name index: %w", err)
@@ -2360,7 +2360,7 @@ func (p *PebbleStore) GetNarratorByID(id int) (*Narrator, error) {
 }
 
 func (p *PebbleStore) GetNarratorByName(name string) (*Narrator, error) {
-	nameKey := []byte(fmt.Sprintf("narrator_name:%s", strings.ToLower(name)))
+	nameKey := []byte(fmt.Sprintf("narrator_name:%s", util.NormalizeAuthor(name)))
 	val, closer, err := p.db.Get(nameKey)
 	if err != nil {
 		if err == pebble.ErrNotFound {
@@ -3122,7 +3122,7 @@ func (p *PebbleStore) SearchBooks(query string, limit, offset int) ([]Book, erro
 			}
 			var a Author
 			if err := json.Unmarshal(authIter.Value(), &a); err == nil {
-				authorNames[a.ID] = strings.ToLower(a.Name)
+				authorNames[a.ID] = util.NormalizeAuthor(a.Name)
 			}
 		}
 	}
@@ -4933,7 +4933,7 @@ func (p *PebbleStore) GetRoleByID(id string) (*Role, error) {
 }
 
 func (p *PebbleStore) GetRoleByName(name string) (*Role, error) {
-	lower := strings.ToLower(name)
+	lower := util.NormalizeAuthor(name)
 	v, closer, err := p.db.Get([]byte("idx:role:name:" + lower))
 	if err == pebble.ErrNotFound {
 		return nil, nil
@@ -5042,7 +5042,7 @@ func (p *PebbleStore) DeleteRole(id string) error {
 		b.Close()
 		return err
 	}
-	if err := b.Delete([]byte("idx:role:name:"+strings.ToLower(r.Name)), nil); err != nil {
+	if err := b.Delete([]byte("idx:role:name:"+util.NormalizeAuthor(r.Name)), nil); err != nil {
 		b.Close()
 		return err
 	}
@@ -5071,7 +5071,7 @@ func (p *PebbleStore) CreateUserPlaylist(pl *UserPlaylist) (*UserPlaylist, error
 		}
 		pl.ID = id
 	}
-	lower := strings.ToLower(pl.Name)
+	lower := util.NormalizeString(pl.Name)
 	if v, closer, err := p.db.Get([]byte("idx:upl:name:" + lower)); err == nil {
 		existing := string(v)
 		closer.Close()
@@ -5135,7 +5135,7 @@ func (p *PebbleStore) GetUserPlaylist(id string) (*UserPlaylist, error) {
 }
 
 func (p *PebbleStore) GetUserPlaylistByName(name string) (*UserPlaylist, error) {
-	v, closer, err := p.db.Get([]byte("idx:upl:name:" + strings.ToLower(name)))
+	v, closer, err := p.db.Get([]byte("idx:upl:name:" + util.NormalizeAuthor(name)))
 	if err == pebble.ErrNotFound {
 		return nil, nil
 	}
@@ -5236,11 +5236,11 @@ func (p *PebbleStore) UpdateUserPlaylist(pl *UserPlaylist) error {
 		return err
 	}
 	if !strings.EqualFold(prev.Name, pl.Name) {
-		if err := b.Delete([]byte("idx:upl:name:"+strings.ToLower(prev.Name)), nil); err != nil {
+		if err := b.Delete([]byte("idx:upl:name:"+util.NormalizeString(prev.Name)), nil); err != nil {
 			b.Close()
 			return err
 		}
-		if err := b.Set([]byte("idx:upl:name:"+strings.ToLower(pl.Name)), []byte(pl.ID), nil); err != nil {
+		if err := b.Set([]byte("idx:upl:name:"+util.NormalizeString(pl.Name)), []byte(pl.ID), nil); err != nil {
 			b.Close()
 			return err
 		}
@@ -5286,7 +5286,7 @@ func (p *PebbleStore) DeleteUserPlaylist(id string) error {
 		b.Close()
 		return err
 	}
-	if err := b.Delete([]byte("idx:upl:name:"+strings.ToLower(pl.Name)), nil); err != nil {
+	if err := b.Delete([]byte("idx:upl:name:"+util.NormalizeString(pl.Name)), nil); err != nil {
 		b.Close()
 		return err
 	}

@@ -1,7 +1,7 @@
 // file: internal/database/metadata_fetch_cache.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9e8d7c6b-5a4f-3e2d-1c0b-9a8b7c6d5e4f
-// last-edited: 2026-05-05
+// last-edited: 2026-06-23
 
 package database
 
@@ -9,10 +9,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
+	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
 // MetadataFetchCache caches external metadata API responses
@@ -58,7 +58,7 @@ type CachedMetadataEntry struct {
 // across restarts. Source names are lowercased to avoid
 // "Hardcover" vs "hardcover" drift.
 func metadataFetchCacheKey(bookID, source string) string {
-	return "metadata_fetch_cache:" + bookID + ":" + strings.ToLower(strings.TrimSpace(source))
+	return "metadata_fetch_cache:" + bookID + ":" + util.NormalizeString(source)
 }
 
 // GetCachedMetadataFetchWithMaxAge looks up a cache entry and enforces
@@ -132,7 +132,7 @@ func PutCachedMetadataFetch(store Store, bookID, source string, results json.Raw
 	}
 	entry := CachedMetadataEntry{
 		BookID:    bookID,
-		Source:    strings.ToLower(strings.TrimSpace(source)),
+		Source:    util.NormalizeString(source),
 		Results:   results,
 		BestScore: bestScore,
 		CachedAt:  time.Now().UTC(),
