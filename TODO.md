@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.30.0 -->
+<!-- version: 9.31.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-06-23 -->
 
@@ -1253,6 +1253,7 @@ Bot-tasks: `docs/superpowers/bot-tasks/2026-04-30-*.md`.
 - [x] **FE-6 (audit)** `refactor/fe6-settings-handlers-split` — Done: `useSettingsHandlers.ts` (1259→936 lines) split into `useImportFolderHandlers`, `useBackupHandlers`, `useMetadataSourceHandlers`.
 - [x] **FE-7** `fix/frontend-remove-console-logs` — Done: no `console.log` calls in production source; only `console.error`/`console.warn` in catch blocks (appropriate).
 - [x] **FE-8** `fix/frontend-error-boundaries` — Done: `ErrorBoundary` wraps every page route in `App.tsx`.
+- [x] **FE-8 (audit)** `fix/fe8-real-server-smoke-test` — Done: real-server auth smoke test added to `auth-flow.spec.ts`; exercises first-run bootstrap + real session cookie against live webServer.
 - [x] **FE-9** `fix/frontend-localstorage-keys` — Done: `STORAGE_KEYS` constants exported from `lib/storageKeys.ts`.
 - [ ] **FE-10** [hold] `chore/frontend-coverage-thresholds` — Add Vitest coverage thresholds
   → [`2026-04-30-fe-10-coverage.md`](docs/superpowers/bot-tasks/2026-04-30-fe-10-coverage.md)
