@@ -1,7 +1,7 @@
 // file: internal/config/persistence_test.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-06-16
+// last-edited: 2026-06-23
 
 package config
 
@@ -863,7 +863,7 @@ func TestRemapEmbeddingKeys_FlatKeys(t *testing.T) {
 		"embedding_dimensions": float64(1024),
 		"root_dir":             "/data",
 	}
-	result := remapEmbeddingKeys(payload)
+	result := applyLegacyRemaps(payload)
 
 	emb, ok := result["embedding"].(map[string]any)
 	require.True(t, ok)
@@ -881,7 +881,7 @@ func TestRemapEmbeddingKeys_MixedKeys(t *testing.T) {
 		"embedding_enabled": false,
 		"embedding":         map[string]any{"model": "bge-m3"},
 	}
-	result := remapEmbeddingKeys(payload)
+	result := applyLegacyRemaps(payload)
 	emb := result["embedding"].(map[string]any)
 	assert.Equal(t, false, emb["enabled"])
 	assert.Equal(t, "bge-m3", emb["model"])
@@ -889,7 +889,7 @@ func TestRemapEmbeddingKeys_MixedKeys(t *testing.T) {
 
 func TestRemapEmbeddingKeys_NoFlatKeys(t *testing.T) {
 	payload := map[string]any{"root_dir": "/data"}
-	result := remapEmbeddingKeys(payload)
+	result := applyLegacyRemaps(payload)
 	assert.Equal(t, map[string]any{"root_dir": "/data"}, result)
 }
 
@@ -936,7 +936,7 @@ func TestRemapDedupKeys_FlatKeys(t *testing.T) {
 		"dedup_review_model":        "gpt-5-mini",
 		"root_dir":                  "/data",
 	}
-	result := remapDedupKeys(payload)
+	result := applyLegacyRemaps(payload)
 	d, ok := result["dedup"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, float64(0.95), d["book_high_threshold"])
@@ -947,7 +947,7 @@ func TestRemapDedupKeys_FlatKeys(t *testing.T) {
 
 func TestRemapDedupKeys_NoFlatKeys(t *testing.T) {
 	payload := map[string]any{"root_dir": "/data"}
-	result := remapDedupKeys(payload)
+	result := applyLegacyRemaps(payload)
 	assert.Equal(t, map[string]any{"root_dir": "/data"}, result)
 }
 
@@ -995,7 +995,7 @@ func TestRemapMetadataScoringKeys_FlatKeys(t *testing.T) {
 		"write_backup_before_tag_write":      false,
 		"root_dir":                           "/data",
 	}
-	result := remapMetadataScoringKeys(payload)
+	result := applyLegacyRemaps(payload)
 	ms, ok := result["metadata_scoring"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, true, ms["embedding_enabled"])
@@ -1006,7 +1006,7 @@ func TestRemapMetadataScoringKeys_FlatKeys(t *testing.T) {
 
 func TestRemapMetadataScoringKeys_NoFlatKeys(t *testing.T) {
 	payload := map[string]any{"root_dir": "/data"}
-	result := remapMetadataScoringKeys(payload)
+	result := applyLegacyRemaps(payload)
 	assert.Equal(t, map[string]any{"root_dir": "/data"}, result)
 }
 
@@ -1055,7 +1055,7 @@ func TestRemapITunesKeys_FlatKeys(t *testing.T) {
 		"itl_write_back_enabled": false,
 		"root_dir":               "/data",
 	}
-	result := remapITunesKeys(payload)
+	result := applyLegacyRemaps(payload)
 	it, ok := result["itunes"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, true, it["sync_enabled"])
@@ -1066,7 +1066,7 @@ func TestRemapITunesKeys_FlatKeys(t *testing.T) {
 
 func TestRemapITunesKeys_NoFlatKeys(t *testing.T) {
 	payload := map[string]any{"root_dir": "/data"}
-	result := remapITunesKeys(payload)
+	result := applyLegacyRemaps(payload)
 	assert.Equal(t, map[string]any{"root_dir": "/data"}, result)
 }
 
@@ -1113,7 +1113,7 @@ func TestRemapMaintenanceKeys_FlatKeys(t *testing.T) {
 		"acoustid_online_lookup_nightly_limit": float64(500),
 		"root_dir":                             "/data",
 	}
-	result := remapMaintenanceKeys(payload)
+	result := applyLegacyRemaps(payload)
 	m, ok := result["maintenance"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, false, m["enabled"])
@@ -1124,7 +1124,7 @@ func TestRemapMaintenanceKeys_FlatKeys(t *testing.T) {
 
 func TestRemapMaintenanceKeys_NoFlatKeys(t *testing.T) {
 	payload := map[string]any{"root_dir": "/data"}
-	result := remapMaintenanceKeys(payload)
+	result := applyLegacyRemaps(payload)
 	assert.Equal(t, map[string]any{"root_dir": "/data"}, result)
 }
 
@@ -1233,7 +1233,7 @@ func TestRemapAutoUpdateKeys_FlatKeys(t *testing.T) {
 		"auto_update_channel": "beta",
 		"root_dir":            "/data",
 	}
-	result := remapAutoUpdateKeys(payload)
+	result := applyLegacyRemaps(payload)
 	au, ok := result["auto_update"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, false, au["enabled"])
@@ -1244,6 +1244,6 @@ func TestRemapAutoUpdateKeys_FlatKeys(t *testing.T) {
 
 func TestRemapAutoUpdateKeys_NoFlatKeys(t *testing.T) {
 	payload := map[string]any{"root_dir": "/data"}
-	result := remapAutoUpdateKeys(payload)
+	result := applyLegacyRemaps(payload)
 	assert.Equal(t, map[string]any{"root_dir": "/data"}, result)
 }

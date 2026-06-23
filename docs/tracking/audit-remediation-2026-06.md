@@ -1,5 +1,5 @@
 <!-- file: docs/tracking/audit-remediation-2026-06.md -->
-<!-- version: 1.11.0 -->
+<!-- version: 1.12.0 -->
 <!-- guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f -->
 <!-- last-edited: 2026-06-23 -->
 <!-- Note: per-finding table synced to PR delivery table on 2026-06-23 -->
@@ -69,7 +69,7 @@ These Structure Audit findings were addressed in the May–June refactor wave be
 | ARCH-1 | Handler extraction preserved Server coupling (lazy providers, injected closures, server-private helpers) | Sweep | ⬜ | `handlers/audiobooks/handler.go:77`, `handlers/metadata/handler.go:72`, etc. Introduce domain application services; handlers become HTTP adapters. |
 | ARCH-2 | `wire_handlers.go` is an overloaded composition root + route registry | Sweep | ⬜ | `wire_handlers.go:31`, typed-nil guards at `:145,170,226`. Split per-domain route modules. |
 | ARCH-3 | Operation enqueue boilerplate duplicated across handlers | Sweep | ✅ | `launchOp` / `launchLegacyOp` helpers extracted; 11 enqueue boilerplate sites eliminated (PR G #1577). |
-| ARCH-4 | Config legacy remap machinery repeats by group | Sweep | ⬜ | `config/update_service.go:70,102,138,170,206`. Centralize remap tables. P2 — CFG struct-nesting refactor (PRs #1464–#1485) restructured fields but did not centralize remap tables. |
+| ARCH-4 | Config legacy remap machinery repeats by group | Sweep | ✅ | `applyLegacyRemaps` + `configRemapGroups` table in `update_service.go`. 6 per-group functions eliminated; all remap logic in one place. 13 tests updated. |
 | ARCH-5 | `AudiobookService` is a god service | Sweep | ⬜ | P2. Split query/mutation/tags/delete/compatibility. |
 | ARCH-6 | Optional store capabilities discovered ad hoc | Sweep | ⬜ | P2. Add `storecap` helpers. |
 | ARCH-7 | Compatibility surfaces scattered across 6+ files | Sweep | ⬜ | P2. Create compatibility registry with owner/removal condition. |

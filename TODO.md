@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.25.0 -->
+<!-- version: 9.26.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-06-23 -->
 
@@ -1308,6 +1308,7 @@ Bot-tasks at [`docs/superpowers/bot-tasks/2026-05-01-struct-*.md`](docs/superpow
 
 - [x] **ARCH-3** — Unified op-launch helpers: `launchOp` (operations handler) and `launchLegacyOp` (duplicates handler) shipped PR #1577. Eliminates enqueue boilerplate across 11 callers.
 - [x] **ARCH-4** — Work-item contract: `RunItems[T]` standalone generic function + `ErrMode`/`RunItemsOptions` + 9 unit tests shipped PR #1579. Eliminates ctx.Done/UpdateProgress/SetCurrentItem boilerplate in new fan-out ops.
+- [x] **ARCH-4 (remap centralization)** — Config remap machinery: 6 per-group `remap*Keys` functions in `update_service.go` replaced with `configRemapGroups` table + generic `applyLegacyRemaps`. Single source of truth — adding new legacy-key groups requires one entry, not a new function. PR #1594.
 - [x] **ARCH-4b (wave 1)** — `deluge/path_update.go` migrated to `registry.RunItems[database.BookVersion]` with `ErrModeCollect`. `updated` counter via `atomic.Int64`. PR #1591.
 - [x] **ARCH-4b (wave 2)** — `deluge/centralization.go` migrated: pre-sliced to checkpoint.ProcessedFiles, atomic counters (success/skip/err), checkpoint written inside RunItems fn closure, IsCanceled() replaced by ctx-based RunItems polling. PR #1592.
 - [ ] **ARCH-4b (wave 3)** — Remaining 3 sites: `lsh_backfill.go` (308K-item progress cadence — needs reporter throttle wrapper before RunItems is appropriate), `acoustid/backfill.go` (nested books→files loop + resume-by-book-ID — requires flat-map preprocessing), `acoustid/reset_all.go` (callback-driven PebbleStore.ClearAllAcoustIDFingerprints API + dual heterogeneous loops). `acoustid/fingerprint_rescan.go` excluded — already uses semaphore goroutine pool that outperforms sequential RunItems.

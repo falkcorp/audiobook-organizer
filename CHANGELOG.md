@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.67.0 -->
+<!-- version: 3.68.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-23 -->
 
@@ -8,6 +8,10 @@
 ## [Unreleased]
 
 ### Refactor
+
+#### June 23, 2026 — ARCH-4: config remap table centralization
+
+- **`refactor(config)`** ARCH-4 — 6 per-group `remap*Keys` functions in `update_service.go` replaced with `configRemapGroups` table + generic `applyLegacyRemaps`. Single source of truth: adding a new legacy-key migration needs one `legacyRemapGroup` entry, not a new function. 13 tests updated to use the unified helper.
 
 #### June 23, 2026 — ARCH-4b wave 2: deluge/centralization.go → RunItems (ARCH-4b)
 
