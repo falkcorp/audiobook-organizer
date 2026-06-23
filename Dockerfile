@@ -1,13 +1,16 @@
 # file: Dockerfile
-# version: 2.5.0
+# version: 2.6.0
 # guid: audiobook-organizer-dockerfile-production
+# last-edited: 2026-06-23
 
 # Multi-stage production Dockerfile for audiobook-organizer
 # Builds React frontend, embeds it into a statically-linked Go binary with
 # CGO enabled (for SQLite FTS5 support), produces a minimal container.
 
 # Stage 1: Build frontend
-FROM --platform=$BUILDPLATFORM node:26-alpine AS frontend-builder
+# SHA pinned 2026-06-23 (node:26-alpine manifest-list). Refresh with:
+#   docker buildx imagetools inspect node:26-alpine --format '{{.Manifest.Digest}}'
+FROM --platform=$BUILDPLATFORM node:26-alpine@sha256:a2dc166a387cc6ca1e62d0c8e265e49ca985d6e60abc9fe6e6c3d6ce8e63f606 AS frontend-builder
 
 WORKDIR /build/web
 
@@ -19,7 +22,8 @@ RUN npm run build
 
 # Stage 2: Build Go application with embedded frontend
 # Uses native platform (no cross-compile) so CGO works without cross-toolchain.
-FROM golang:1.26-alpine AS go-builder
+# SHA pinned 2026-06-23 (golang:1.26-alpine manifest-list).
+FROM golang:1.26-alpine@sha256:3ad57304ad93bbec8548a0437ad9e06a455660655d9af011d58b993f6f615648 AS go-builder
 
 WORKDIR /build
 
@@ -73,7 +77,8 @@ RUN CGO_ENABLED=1 go build \
     .
 
 # Stage 3: Minimal runtime image (scratch-compatible since binary is static)
-FROM alpine:3.24
+# SHA pinned 2026-06-23 (alpine:3.24 manifest-list).
+FROM alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
 
 RUN apk add --no-cache ca-certificates tzdata ffmpeg \
     && addgroup -g 1000 audiobook \
