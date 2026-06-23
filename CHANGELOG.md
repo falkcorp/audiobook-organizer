@@ -1,11 +1,17 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.68.0 -->
+<!-- version: 3.69.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-23 -->
 
 # Changelog
 
 ## [Unreleased]
+
+### Performance
+
+#### June 23, 2026 — iTunes backfill bulk writes (PERF-5)
+
+- **`perf(itunes)`** PERF-5 — `BackfillExternalIDs` now accumulates mappings per page and flushes with a single `BulkCreateExternalIDMappings` call, reducing DB writes from O(N) to O(pages). N+1 `GetBookFiles` read deferred (TODO at `itunes/backfill.go:77`).
 
 ### Refactor
 
