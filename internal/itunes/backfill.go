@@ -1,6 +1,7 @@
 // file: internal/itunes/backfill.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b8c9d0e1-f2a3-b4c5-d6e7-f8a9b0c1d2e3
+// last-edited: 2026-06-23
 
 package itunes
 
@@ -54,6 +55,10 @@ func BackfillExternalIDs(ctx context.Context, store ExternalIDBackfillStore) err
 		if err != nil || len(books) == 0 {
 			break
 		}
+
+		// Accumulate per-page so we can flush with a single bulk write rather
+		// than one CreateExternalIDMapping call per book/file (PERF-5).
+		var batch []database.ExternalIDMapping
 		for _, book := range books {
 			if err := ctx.Err(); err != nil {
 				slog.Info("external ID backfill canceled mid-batch after mappings", "backfilled", backfilled, "err", err)
@@ -61,31 +66,35 @@ func BackfillExternalIDs(ctx context.Context, store ExternalIDBackfillStore) err
 			}
 			// Book-level PID
 			if book.ITunesPersistentID != nil && *book.ITunesPersistentID != "" {
-				_ = store.CreateExternalIDMapping(&database.ExternalIDMapping{
+				batch = append(batch, database.ExternalIDMapping{
 					Source:     "itunes",
 					ExternalID: *book.ITunesPersistentID,
 					BookID:     book.ID,
 				})
-				backfilled++
 			}
 
 			// BookFile-level PIDs (catches split books, multi-file books, etc.)
+			// TODO(PERF-5): replace with a batch GetBookFilesByBookIDs call to
+			// eliminate the N+1 file read. Requires a new Store interface method.
 			files, fErr := store.GetBookFiles(book.ID)
 			if fErr != nil {
 				continue
 			}
 			for _, f := range files {
 				if f.ITunesPersistentID != "" {
-					_ = store.CreateExternalIDMapping(&database.ExternalIDMapping{
+					batch = append(batch, database.ExternalIDMapping{
 						Source:     "itunes",
 						ExternalID: f.ITunesPersistentID,
 						BookID:     book.ID,
 						FilePath:   f.FilePath,
 						Provenance: "backfill_v4",
 					})
-					backfilled++
 				}
 			}
+		}
+		if len(batch) > 0 {
+			_ = store.BulkCreateExternalIDMappings(batch)
+			backfilled += len(batch)
 		}
 		offset += 10000
 	}

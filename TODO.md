@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.26.0 -->
+<!-- version: 9.27.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-06-23 -->
 
@@ -1314,6 +1314,7 @@ Bot-tasks at [`docs/superpowers/bot-tasks/2026-05-01-struct-*.md`](docs/superpow
 - [ ] **ARCH-4b (wave 3)** — Remaining 3 sites: `lsh_backfill.go` (308K-item progress cadence — needs reporter throttle wrapper before RunItems is appropriate), `acoustid/backfill.go` (nested books→files loop + resume-by-book-ID — requires flat-map preprocessing), `acoustid/reset_all.go` (callback-driven PebbleStore.ClearAllAcoustIDFingerprints API + dual heterogeneous loops). `acoustid/fingerprint_rescan.go` excluded — already uses semaphore goroutine pool that outperforms sequential RunItems.
 - [x] **PERF-2** — Batch upserts in `createBookFilesForBook`: N per-segment `UpsertBookFile` calls replaced with one `BatchUpsertBookFiles` call (shipped PR #1583). N→1 DB writes per book on first scan.
 - [ ] **PERF-2b** — Hash carry-forward: dedup check at `scanner.go:1885` re-hashes every segment file that `createBookFilesForBook` (line 1322) also hashes. Fix requires `saveBookToDatabase` to return a `map[string]string` (filePath→hash) and passing it to `createBookFilesForBook`. Blocked by `saveBook` function-variable API change.
+- [x] **PERF-5 (partial)** — iTunes backfill bulk writes: per-row `CreateExternalIDMapping` calls replaced with per-page batch accumulation + `BulkCreateExternalIDMappings` (N→1 per 10K-book page). N+1 `GetBookFiles` per book still present — deferred until `GetBookFilesByBookIDs([]string)` batch method added to Store interface (TODO comment at `itunes/backfill.go:77`).
 - [x] **PERF-4** — iTunes search `SearchBooks(search, 0, 0)` returned zero results: `limit=0` was checked as `len(filtered) < 0` (always false). Fixed in `pebble_store.go:3169` — `limit==0` now means "no limit". Regression test `TestSearchBooksUnlimited` added.
 - [x] **PERF-7** — `UpsertBookFile` memdb round-trip fingerprint data-loss: same preserve-on-empty guard as `BatchUpsertBookFiles` now applied. 3 regression tests in `pebble_bookfile_preserve_test.go`. Shipped PR (audit-remediation-p1).
 - [x] **SEC-7** — `/cache/stats` + `/cache/stats/history` moved to `protected` group (PermLibraryView). `/metrics` stays accepted-risk per MED-1. Shipped PR (audit-remediation-p1).
