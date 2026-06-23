@@ -230,7 +230,7 @@ func TestCoverage_CountFunctions(t *testing.T) {
 
 	_ = createTestBook(t, store, "Count Book", "/tmp/count.m4b", &author.ID, &series.ID)
 
-	// CountBooks already covered, test CountFiles, CountAuthors, CountSeries
+	// CountPrimaryBooks already covered, test CountFiles, CountAuthors, CountSeries
 	fileCount, err := store.CountFiles()
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, fileCount, 1) // 1 book with no files counts as 1 file

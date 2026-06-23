@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
 // last-edited: 2026-06-23
 
@@ -462,7 +462,7 @@ func (svc *AudiobookService) CountAudiobooks(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("database not initialized")
 	}
 
-	count, err := svc.store.CountBooks()
+	count, err := svc.store.CountPrimaryBooks()
 	if err != nil {
 		return 0, err
 	}

@@ -231,8 +231,8 @@ func TestMockStore_AllMethods(t *testing.T) {
 	if books, err := mock.SearchBooks("query", 10, 0); err != nil || books != nil {
 		t.Errorf("SearchBooks() = %v, %v; want nil, nil", books, err)
 	}
-	if count, err := mock.CountBooks(); err != nil || count != 0 {
-		t.Errorf("CountBooks() = %v, %v; want 0, nil", count, err)
+	if count, err := mock.CountPrimaryBooks(); err != nil || count != 0 {
+		t.Errorf("CountPrimaryBooks() = %v, %v; want 0, nil", count, err)
 	}
 	now := time.Now()
 	if books, err := mock.ListSoftDeletedBooks(10, 0, &now); err != nil || books != nil {
@@ -479,20 +479,20 @@ func TestMockStore_WithCustomFuncs(t *testing.T) {
 
 	// Test custom count function
 	customCountCalled := false
-	mock.CountBooksFunc = func() (int, error) {
+	mock.CountPrimaryBooksFunc = func() (int, error) {
 		customCountCalled = true
 		return 42, nil
 	}
 
-	count, err := mock.CountBooks()
+	count, err := mock.CountPrimaryBooks()
 	if err != nil {
-		t.Errorf("CountBooks() returned error: %v", err)
+		t.Errorf("CountPrimaryBooks() returned error: %v", err)
 	}
 	if !customCountCalled {
-		t.Error("Custom CountBooksFunc was not called")
+		t.Error("Custom CountPrimaryBooksFunc was not called")
 	}
 	if count != 42 {
-		t.Errorf("CountBooks() = %d; want 42", count)
+		t.Errorf("CountPrimaryBooks() = %d; want 42", count)
 	}
 
 	// Test custom bool function

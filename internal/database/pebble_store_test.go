@@ -580,13 +580,13 @@ func TestSearchBooksUnlimited(t *testing.T) {
 	}
 }
 
-// TestPebbleCountBooks tests book counting
-func TestPebbleCountBooks(t *testing.T) {
+// TestPebbleCountPrimaryBooks tests book counting
+func TestPebbleCountPrimaryBooks(t *testing.T) {
 	// Arrange
 	store, cleanup := setupPebbleTestDB(t)
 	defer cleanup()
 
-	initialCount, err := store.CountBooks()
+	initialCount, err := store.CountPrimaryBooks()
 	if err != nil {
 		t.Fatalf("Failed to count books: %v", err)
 	}
@@ -604,7 +604,7 @@ func TestPebbleCountBooks(t *testing.T) {
 	}
 
 	// Act
-	newCount, err := store.CountBooks()
+	newCount, err := store.CountPrimaryBooks()
 	if err != nil {
 		t.Fatalf("Failed to count books after creation: %v", err)
 	}

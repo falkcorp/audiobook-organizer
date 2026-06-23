@@ -1,5 +1,5 @@
 // file: internal/database/iface_book.go
-// version: 2.2.0
+// version: 2.4.0
 // guid: 668ec5a2-f8d9-4fdb-b0d5-09937b5d83ea
 // last-edited: 2026-06-23
 
@@ -60,7 +60,11 @@ type BookReader interface {
 	// gate on that flag themselves.
 	GetBookIDsByISBNASIN(isbn10, isbn13, asin string) ([]string, error)
 	SearchBooks(query string, limit, offset int) ([]Book, error)
-	CountBooks() (int, error)
+	CountPrimaryBooks() (int, error)
+	// CountAllBooks returns the total number of non-deleted books regardless of
+	// IsPrimaryVersion. Use this when iterating with GetAllBooks/PageBooks so
+	// progress denominators match what the iterator actually visits.
+	CountAllBooks() (int, error)
 	GetDistinctGenres() ([]string, error)
 	GetDistinctLanguages() ([]string, error)
 	ListSoftDeletedBooks(limit, offset int, olderThan *time.Time) ([]Book, error)

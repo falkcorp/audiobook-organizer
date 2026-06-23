@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.96.0
+// version: 1.97.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-06-23
 
@@ -3256,7 +3256,7 @@ func (p *PebbleStore) SearchBooks(query string, limit, offset int) ([]Book, erro
 	return filtered, nil
 }
 
-func (p *PebbleStore) CountBooks() (int, error) {
+func (p *PebbleStore) CountPrimaryBooks() (int, error) {
 	count := 0
 	iter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: []byte("book:0"),
@@ -3288,6 +3288,45 @@ func (p *PebbleStore) CountBooks() (int, error) {
 		count++
 	}
 
+	return count, nil
+}
+
+// CountAllBooks returns the count of all non-deleted books regardless of
+// IsPrimaryVersion. Matches what GetAllBooks/PageBooks iterates — use this
+// for progress denominators in ops that process every book.
+func (p *PebbleStore) CountAllBooks() (int, error) {
+	if p.UseMemDB && p.mem() != nil {
+		all, err := p.mem().GetAllBooks(0, 0, nil)
+		if err != nil {
+			return 0, err
+		}
+		return len(all), nil
+	}
+	count := 0
+	iter, err := p.db.NewIter(&pebble.IterOptions{
+		LowerBound: []byte("book:0"),
+		UpperBound: []byte("book:;"),
+	})
+	if err != nil {
+		return 0, err
+	}
+	defer iter.Close()
+
+	for iter.First(); iter.Valid(); iter.Next() {
+		key := string(iter.Key())
+		if strings.Contains(key, ":path:") || strings.Contains(key, ":series:") ||
+			strings.Contains(key, ":author:") {
+			continue
+		}
+		var book Book
+		if err := json.Unmarshal(iter.Value(), &book); err != nil {
+			return 0, err
+		}
+		if book.MarkedForDeletion != nil && *book.MarkedForDeletion {
+			continue
+		}
+		count++
+	}
 	return count, nil
 }
 

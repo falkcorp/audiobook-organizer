@@ -338,8 +338,8 @@ func exerciseStoreCommon(t *testing.T, store Store) {
 	if books, err := store.ListSoftDeletedBooks(10, 0, nil); err != nil || len(books) == 0 {
 		t.Fatalf("ListSoftDeletedBooks failed: %v", err)
 	}
-	if count, err := store.CountBooks(); err != nil || count < 1 {
-		t.Fatalf("CountBooks failed: %v", err)
+	if count, err := store.CountPrimaryBooks(); err != nil || count < 1 {
+		t.Fatalf("CountPrimaryBooks failed: %v", err)
 	}
 	if _, err := store.GetBooksBySeriesID(series.ID); err != nil {
 		t.Fatalf("GetBooksBySeriesID failed: %v", err)

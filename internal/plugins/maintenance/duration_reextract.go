@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_reextract.go
-// version: 3.5.0
+// version: 3.6.0
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
 // last-edited: 2026-06-22
 
@@ -293,7 +293,7 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 		_ = reporter.Log(slog.LevelInfo, "DRY RUN — no changes will be written")
 	}
 
-	totalBooks, countErr := store.CountBooks()
+	totalBooks, countErr := store.CountAllBooks()
 	if countErr != nil || totalBooks <= 0 {
 		totalBooks = 0
 	}

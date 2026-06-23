@@ -70,7 +70,7 @@ func (m *MockBookStore) GetAllBooks(limit, offset int) ([]database.Book, error) 
 }
 
 // Stub out other required BookStore methods
-func (m *MockBookStore) CountBooks() (int, error)                               { return 0, nil }
+func (m *MockBookStore) CountPrimaryBooks() (int, error)                               { return 0, nil }
 func (m *MockBookStore) CreateBook(book *database.Book) (*database.Book, error) { return nil, nil }
 func (m *MockBookStore) UpdateBook(id string, book *database.Book) (*database.Book, error) {
 	return nil, nil

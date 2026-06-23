@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/interfaces.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7a91ad40-5c96-4423-ad24-715acb791cf8
-// last-edited: 2026-06-03
+// last-edited: 2026-06-23
 
 // Narrow dependency interfaces for the system domain handlers (health, status,
 // announcements, storage, logs, activity-log, reset/factory-reset, config
@@ -40,7 +40,7 @@ type SystemStore interface {
 	database.SettingsStore // factoryReset -> config.SaveConfigToDatabase
 
 	// health metrics
-	CountBooks() (int, error)   // BookStore
+	CountPrimaryBooks() (int, error)   // BookStore
 	CountAuthors() (int, error) // StatsStore
 	CountSeries() (int, error)  // StatsStore
 

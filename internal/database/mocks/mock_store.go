@@ -2608,12 +2608,12 @@ func (_m *MockBookReader) EXPECT() *MockBookReader_Expecter {
 	return &MockBookReader_Expecter{mock: &_m.Mock}
 }
 
-// CountBooks provides a mock function for the type MockBookReader
-func (_mock *MockBookReader) CountBooks() (int, error) {
+// CountPrimaryBooks provides a mock function for the type MockBookReader
+func (_mock *MockBookReader) CountPrimaryBooks() (int, error) {
 	ret := _mock.Called()
 
 	if len(ret) == 0 {
-		panic("no return value specified for CountBooks")
+		panic("no return value specified for CountPrimaryBooks")
 	}
 
 	var r0 int
@@ -2634,29 +2634,73 @@ func (_mock *MockBookReader) CountBooks() (int, error) {
 	return r0, r1
 }
 
-// MockBookReader_CountBooks_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CountBooks'
-type MockBookReader_CountBooks_Call struct {
+// MockBookReader_CountPrimaryBooks_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CountPrimaryBooks'
+type MockBookReader_CountPrimaryBooks_Call struct {
 	*mock.Call
 }
 
-// CountBooks is a helper method to define mock.On call
-func (_e *MockBookReader_Expecter) CountBooks() *MockBookReader_CountBooks_Call {
-	return &MockBookReader_CountBooks_Call{Call: _e.mock.On("CountBooks")}
+// CountPrimaryBooks is a helper method to define mock.On call
+func (_e *MockBookReader_Expecter) CountPrimaryBooks() *MockBookReader_CountPrimaryBooks_Call {
+	return &MockBookReader_CountPrimaryBooks_Call{Call: _e.mock.On("CountPrimaryBooks")}
 }
 
-func (_c *MockBookReader_CountBooks_Call) Run(run func()) *MockBookReader_CountBooks_Call {
+func (_c *MockBookReader_CountPrimaryBooks_Call) Run(run func()) *MockBookReader_CountPrimaryBooks_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run()
 	})
 	return _c
 }
 
-func (_c *MockBookReader_CountBooks_Call) Return(n int, err error) *MockBookReader_CountBooks_Call {
+func (_c *MockBookReader_CountPrimaryBooks_Call) Return(n int, err error) *MockBookReader_CountPrimaryBooks_Call {
 	_c.Call.Return(n, err)
 	return _c
 }
 
-func (_c *MockBookReader_CountBooks_Call) RunAndReturn(run func() (int, error)) *MockBookReader_CountBooks_Call {
+func (_c *MockBookReader_CountPrimaryBooks_Call) RunAndReturn(run func() (int, error)) *MockBookReader_CountPrimaryBooks_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+func (_mock *MockBookReader) CountAllBooks() (int, error) {
+	ret := _mock.Called()
+	if len(ret) == 0 {
+		panic("no return value specified for CountAllBooks")
+	}
+	var r0 int
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func() (int, error)); ok {
+		return returnFunc()
+	}
+	if returnFunc, ok := ret.Get(0).(func() int); ok {
+		r0 = returnFunc()
+	} else {
+		r0 = ret.Get(0).(int)
+	}
+	if returnFunc, ok := ret.Get(1).(func() error); ok {
+		r1 = returnFunc()
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+type MockBookReader_CountAllBooks_Call struct{ *mock.Call }
+
+func (_e *MockBookReader_Expecter) CountAllBooks() *MockBookReader_CountAllBooks_Call {
+	return &MockBookReader_CountAllBooks_Call{Call: _e.mock.On("CountAllBooks")}
+}
+
+func (_c *MockBookReader_CountAllBooks_Call) Run(run func()) *MockBookReader_CountAllBooks_Call {
+	_c.Call.Run(func(args mock.Arguments) { run() })
+	return _c
+}
+
+func (_c *MockBookReader_CountAllBooks_Call) Return(n int, err error) *MockBookReader_CountAllBooks_Call {
+	_c.Call.Return(n, err)
+	return _c
+}
+
+func (_c *MockBookReader_CountAllBooks_Call) RunAndReturn(run func() (int, error)) *MockBookReader_CountAllBooks_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -5651,12 +5695,12 @@ func (_m *MockBookStore) EXPECT() *MockBookStore_Expecter {
 	return &MockBookStore_Expecter{mock: &_m.Mock}
 }
 
-// CountBooks provides a mock function for the type MockBookStore
-func (_mock *MockBookStore) CountBooks() (int, error) {
+// CountPrimaryBooks provides a mock function for the type MockBookStore
+func (_mock *MockBookStore) CountPrimaryBooks() (int, error) {
 	ret := _mock.Called()
 
 	if len(ret) == 0 {
-		panic("no return value specified for CountBooks")
+		panic("no return value specified for CountPrimaryBooks")
 	}
 
 	var r0 int
@@ -5677,14 +5721,14 @@ func (_mock *MockBookStore) CountBooks() (int, error) {
 	return r0, r1
 }
 
-// MockBookStore_CountBooks_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CountBooks'
+// MockBookStore_CountBooks_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CountPrimaryBooks'
 type MockBookStore_CountBooks_Call struct {
 	*mock.Call
 }
 
-// CountBooks is a helper method to define mock.On call
-func (_e *MockBookStore_Expecter) CountBooks() *MockBookStore_CountBooks_Call {
-	return &MockBookStore_CountBooks_Call{Call: _e.mock.On("CountBooks")}
+// CountPrimaryBooks is a helper method to define mock.On call
+func (_e *MockBookStore_Expecter) CountPrimaryBooks() *MockBookStore_CountBooks_Call {
+	return &MockBookStore_CountBooks_Call{Call: _e.mock.On("CountPrimaryBooks")}
 }
 
 func (_c *MockBookStore_CountBooks_Call) Run(run func()) *MockBookStore_CountBooks_Call {
@@ -29333,12 +29377,12 @@ func (_c *MockStore_CountAuthors_Call) RunAndReturn(run func() (int, error)) *Mo
 	return _c
 }
 
-// CountBooks provides a mock function for the type MockStore
-func (_mock *MockStore) CountBooks() (int, error) {
+// CountPrimaryBooks provides a mock function for the type MockStore
+func (_mock *MockStore) CountPrimaryBooks() (int, error) {
 	ret := _mock.Called()
 
 	if len(ret) == 0 {
-		panic("no return value specified for CountBooks")
+		panic("no return value specified for CountPrimaryBooks")
 	}
 
 	var r0 int
@@ -29359,14 +29403,58 @@ func (_mock *MockStore) CountBooks() (int, error) {
 	return r0, r1
 }
 
-// MockStore_CountBooks_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CountBooks'
+func (_mock *MockStore) CountAllBooks() (int, error) {
+	ret := _mock.Called()
+	if len(ret) == 0 {
+		panic("no return value specified for CountAllBooks")
+	}
+	var r0 int
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func() (int, error)); ok {
+		return returnFunc()
+	}
+	if returnFunc, ok := ret.Get(0).(func() int); ok {
+		r0 = returnFunc()
+	} else {
+		r0 = ret.Get(0).(int)
+	}
+	if returnFunc, ok := ret.Get(1).(func() error); ok {
+		r1 = returnFunc()
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+type MockStore_CountAllBooks_Call struct{ *mock.Call }
+
+func (_e *MockStore_Expecter) CountAllBooks() *MockStore_CountAllBooks_Call {
+	return &MockStore_CountAllBooks_Call{Call: _e.mock.On("CountAllBooks")}
+}
+
+func (_c *MockStore_CountAllBooks_Call) Run(run func()) *MockStore_CountAllBooks_Call {
+	_c.Call.Run(func(args mock.Arguments) { run() })
+	return _c
+}
+
+func (_c *MockStore_CountAllBooks_Call) Return(n int, err error) *MockStore_CountAllBooks_Call {
+	_c.Call.Return(n, err)
+	return _c
+}
+
+func (_c *MockStore_CountAllBooks_Call) RunAndReturn(run func() (int, error)) *MockStore_CountAllBooks_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// MockStore_CountBooks_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CountPrimaryBooks'
 type MockStore_CountBooks_Call struct {
 	*mock.Call
 }
 
-// CountBooks is a helper method to define mock.On call
-func (_e *MockStore_Expecter) CountBooks() *MockStore_CountBooks_Call {
-	return &MockStore_CountBooks_Call{Call: _e.mock.On("CountBooks")}
+// CountPrimaryBooks is a helper method to define mock.On call
+func (_e *MockStore_Expecter) CountPrimaryBooks() *MockStore_CountBooks_Call {
+	return &MockStore_CountBooks_Call{Call: _e.mock.On("CountPrimaryBooks")}
 }
 
 func (_c *MockStore_CountBooks_Call) Run(run func()) *MockStore_CountBooks_Call {

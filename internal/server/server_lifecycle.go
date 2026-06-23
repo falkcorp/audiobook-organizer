@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 1.37.0
+// version: 1.38.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-06-22
+// last-edited: 2026-06-23
 
 package server
 
@@ -564,7 +564,7 @@ func (s *Server) Start(cfg ServerConfig) error {
 					bookCount := 0
 					folderCount := 0
 					if s.Store() != nil {
-						if bc, err := s.Store().CountBooks(); err == nil {
+						if bc, err := s.Store().CountPrimaryBooks(); err == nil {
 							bookCount = bc
 						}
 						if folders, err := s.Store().GetAllImportPaths(); err == nil {

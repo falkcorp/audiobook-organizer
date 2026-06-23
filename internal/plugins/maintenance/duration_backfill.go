@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7e4b2a90-3c61-4d58-8f29-6a1c0e5b9d83
-// last-edited: 2026-06-19
+// last-edited: 2026-06-23
 
 package maintenance
 
@@ -76,7 +76,7 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 		_ = reporter.Log(slog.LevelInfo, "DRY RUN — no changes will be written")
 	}
 
-	totalBooks, countErr := store.CountBooks()
+	totalBooks, countErr := store.CountPrimaryBooks()
 	if countErr != nil || totalBooks <= 0 {
 		totalBooks = 0
 	}

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_backfill.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-06-01
+// last-edited: 2026-06-23
 
 package maintenance
 
@@ -64,7 +64,7 @@ func (p *Plugin) runTitleBackfill(ctx context.Context, raw json.RawMessage, repo
 
 	// Phase 1: get real total upfront — O(1) counter lookup in PebbleDB.
 	// Falls back to 0 (indeterminate bar) if the count isn't available.
-	totalBooks, countErr := store.CountBooks()
+	totalBooks, countErr := store.CountPrimaryBooks()
 	if countErr != nil || totalBooks <= 0 {
 		totalBooks = 0
 	}
