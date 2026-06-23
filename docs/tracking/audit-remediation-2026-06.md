@@ -1,7 +1,8 @@
 <!-- file: docs/tracking/audit-remediation-2026-06.md -->
-<!-- version: 1.10.0 -->
+<!-- version: 1.11.0 -->
 <!-- guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f -->
 <!-- last-edited: 2026-06-23 -->
+<!-- Note: per-finding table synced to PR delivery table on 2026-06-23 -->
 
 # Audit Remediation Tracking — June 2026
 
@@ -50,8 +51,8 @@ These Structure Audit findings were addressed in the May–June refactor wave be
 
 | ID | Finding | Source | Status | Notes |
 |---|---|---|---|---|
-| PERF-1 | Dedup full scan repeatedly sorts all candidate rows, caps at global top 50 — books with many candidates get incorrect results | Sweep | ⬜ | `dedup/engine.go:2032,404`, `embedding_store.go:608,663`. Add `ListCandidatesForEntity(entityType, bookID, status)` with index. |
-| PERF-2 | Multi-file import hashes/tags same files repeatedly, one `UpsertBookFile` per segment | Sweep | ⬜ | `scanner.go:1885,1307,1322,1327`. Carry hash/tag results forward; batch upserts; recompute aggregates once per book. |
+| PERF-1 | Dedup full scan repeatedly sorts all candidate rows, caps at global top 50 — books with many candidates get incorrect results | Sweep | ✅ | `ListCandidatesForEntity(entityType, bookID, status)` secondary index added (PR D #1577). |
+| PERF-2 | Multi-file import hashes/tags same files repeatedly, one `UpsertBookFile` per segment | Sweep | ✅ Partial | Batch upserts shipped (PR J #1583): N→1 `BatchUpsertBookFiles` per book. Hash carry-forward (PERF-2b) blocked — needs `saveBookToDatabase` API change. |
 | PERF-3 | Library list has full-materialization escape hatches | Sweep | ⬜ | `audiobooks/service.go:856,1092,1286`. Push filters into `BookSummaryFilter`; add projections for common sorts. |
 | PERF-4 | iTunes search calls `SearchBooks(search, 0, 0)` — returns zero rows | Sweep | ✅ | Root cause: `pebble_store.go:3169` `len(filtered) < limit` is always false when `limit=0`. Fixed: treat `limit==0` as "no limit". Regression test `TestSearchBooksUnlimited` added. |
 | PERF-5 | iTunes backfill: offset pagination, N+1 file reads, per-row writes | Sweep | ⬜ | `itunes/backfill.go:21,46,73`. Cursor iteration, batch file lookup, bulk writes. |
@@ -67,14 +68,14 @@ These Structure Audit findings were addressed in the May–June refactor wave be
 |---|---|---|---|---|
 | ARCH-1 | Handler extraction preserved Server coupling (lazy providers, injected closures, server-private helpers) | Sweep | ⬜ | `handlers/audiobooks/handler.go:77`, `handlers/metadata/handler.go:72`, etc. Introduce domain application services; handlers become HTTP adapters. |
 | ARCH-2 | `wire_handlers.go` is an overloaded composition root + route registry | Sweep | ⬜ | `wire_handlers.go:31`, typed-nil guards at `:145,170,226`. Split per-domain route modules. |
-| ARCH-3 | Operation enqueue boilerplate duplicated across handlers | Sweep | ⬜ | `handlers/operations/handler.go:110`, `handlers/duplicates/handler.go:180,388,426,570`. Build one operation launch service. |
-| ARCH-4 | Config legacy remap machinery repeats by group | Sweep | ⬜ | `config/update_service.go:70,102,138,170,206`. Centralize remap tables. |
+| ARCH-3 | Operation enqueue boilerplate duplicated across handlers | Sweep | ✅ | `launchOp` / `launchLegacyOp` helpers extracted; 11 enqueue boilerplate sites eliminated (PR G #1577). |
+| ARCH-4 | Config legacy remap machinery repeats by group | Sweep | ⬜ | `config/update_service.go:70,102,138,170,206`. Centralize remap tables. P2 — CFG struct-nesting refactor (PRs #1464–#1485) restructured fields but did not centralize remap tables. |
 | ARCH-5 | `AudiobookService` is a god service | Sweep | ⬜ | P2. Split query/mutation/tags/delete/compatibility. |
 | ARCH-6 | Optional store capabilities discovered ad hoc | Sweep | ⬜ | P2. Add `storecap` helpers. |
 | ARCH-7 | Compatibility surfaces scattered across 6+ files | Sweep | ⬜ | P2. Create compatibility registry with owner/removal condition. |
 | ARCH-8 | Service registry uses globals and panicking string lookups | Sweep | ⬜ | P2. Typed service keys or generated accessors. |
-| STR-1 | Pagination helper missing — 376+ limit/offset/page callsites parsed independently | Structure | ⬜ | `internal/server/pagination.go` (proposed). Estimated 300+ callsites still open (not verified post-refactor). |
-| STR-2 | AI retry duplicated in `openai_parser.go`, `metadata_llm_review.go`, `embedding_client.go` | Structure | ⬜ | `internal/ai/retry.go` (proposed). 3 files, small fix. |
+| STR-1 | Pagination helper missing — 376+ limit/offset/page callsites parsed independently | Structure | ✅ | `internal/server/pagination.go` created; pagination helper standardized (PR E #1578). |
+| STR-2 | AI retry duplicated in `openai_parser.go`, `metadata_llm_review.go`, `embedding_client.go` | Structure | ✅ | `internal/ai/retry.go` → `DoWithRetry` function; 4 sites migrated (PR E #1578). |
 | STR-3 | Path/string normalization scattered — 611 `ToLower/TrimSpace/Clean` callsites, subtle inconsistencies in author/series matching | Structure | ⬜ | P2. `internal/util/normalize.go` (proposed). Important for author name matching correctness. |
 
 ---
@@ -83,15 +84,15 @@ These Structure Audit findings were addressed in the May–June refactor wave be
 
 | ID | Finding | Source | Status | Notes |
 |---|---|---|---|---|
-| FE-1 | No centralized `apiFetch` wrapper — credentials, CSRF, error parsing, abort duplicated across `api.ts`, `activityApi.ts`, `readingApi.ts` | Sweep | ⬜ | `api.ts:891`, `activityApi.ts:141`, `readingApi.ts:62`. |
-| FE-2 | `ActivityLog` page-size changes can fetch stale data | Sweep | ⬜ | `ActivityLog.tsx:358,384,411`. Add `pageSize` to callback deps. |
+| FE-1 | No centralized `apiFetch` wrapper — credentials, CSRF, error parsing, abort duplicated across `api.ts`, `activityApi.ts`, `readingApi.ts` | Sweep | ✅ | `apiFetch` wrapper created; 267 callsites migrated (PR F #1580). |
+| FE-2 | `ActivityLog` page-size changes can fetch stale data | Sweep | ✅ | `pageSize` added to callback dep arrays (PR C #1576). |
 | FE-3 | Legacy `BookDedup` rows-per-page changes can fetch stale data | Sweep | ✅ | Resolved by PR L (#1585): `BookDedup.tsx` reduced to 145 lines (pure tab router); the stale rows-per-page code was in the extracted tab components which were rewritten. |
-| FE-4 | `BookDetail` file/segment state stale across route-param changes | Sweep | ⬜ | `BookDetail.tsx:80,223`. Reset on `id` change. |
-| FE-5 | `Library.tsx` still a 3,333-line maintenance hotspot | Both | ⬜ | Extract `useLibraryQuery`, `useLibrarySelection`, `useImportPaths`, `useLibraryOperations`. |
-| FE-6 | `useSettingsHandlers` passes too much mutable state through one hook | Sweep | ⬜ | `useSettingsHandlers.ts:40`. Split by domain. |
-| FE-7 | Sensitive one-time tokens remain rendered in React state after display | Sweep | ⬜ | `TempLoginTab.tsx:32,139`, `APIKeysTab.tsx:109`. Auto-clear after copy/timeout. |
+| FE-4 | `BookDetail` file/segment state stale across route-param changes | Sweep | ✅ | Reset on `id` change added (PR C #1576). |
+| FE-5 | `Library.tsx` still a 3,333-line maintenance hotspot | Both | ✅ Partial | `useLibraryQuery` + `useLibrarySelection` extracted, 3,333→1,811 lines (PR L #1585). `useImportPaths` + `useLibraryOperations` deferred — P2. |
+| FE-6 | `useSettingsHandlers` passes too much mutable state through one hook | Sweep | ⬜ | `useSettingsHandlers.ts:40`. Split by domain. P2. |
+| FE-7 | Sensitive one-time tokens remain rendered in React state after display | Sweep | ✅ | Token auto-clear after copy/timeout added (PR C #1576). |
 | FE-8 | E2E auth tests mock auth instead of exercising real cookie/CSRF | Sweep | ⬜ | Add one real-server smoke test. |
-| STR-4 | `BookDedup.tsx` still ~3,656 lines | Structure | ⬜ | Split into feature sections. |
+| STR-4 | `BookDedup.tsx` still ~3,656 lines | Structure | ✅ | Split into 3 tab components (DedupAIReviewTab, DedupEmbeddingTab, DedupAcousticTab); 2,907→145 lines (PR L #1585). |
 | STR-5 | `useAsyncAction` reduces but doesn't eliminate setLoading duplication (51 remaining) | Structure | ✅ Partial | Hook exists; 51 remaining callsites could adopt it incrementally. |
 
 ---
@@ -100,12 +101,12 @@ These Structure Audit findings were addressed in the May–June refactor wave be
 
 | ID | Finding | Source | Status | Notes |
 |---|---|---|---|---|
-| TOOL-1 | ~1.7 GB tracked test fixture footprint (Librivox corpus) | Sweep | ⬜ | Move large corpus to optional/LFS-on-demand; keep tiny fixtures in repo. |
-| TOOL-2 | CI mockery gate can pass when mockery fails (`|| true`) | Sweep | ⬜ | `.github/workflows/ci.yml:79`. Remove `|| true`, pin mockery, call `make mocks-check`. |
-| TOOL-3 | Demo recording workflow mixed into default E2E target | Sweep | ⬜ | `playwright.config.ts:37`. Split demo to opt-in `test:e2e:demo`. |
-| TOOL-4 | Testing docs and actual CI gates disagree (80% vs 30% coverage claims) | Sweep | ⬜ | Consolidate `README.md`, `TESTING.md`, `CLAUDE.md` to derive claims from Makefile/CI. |
+| TOOL-1 | ~1.7 GB tracked test fixture footprint (Librivox corpus) | Sweep | ✅ Partial | Hardcoded absolute path in `mediainfo_test.go` fixed (portable `findRepoRoot`); test skip message updated (PR M #1586). Full LFS migration deferred — P2. |
+| TOOL-2 | CI mockery gate can pass when mockery fails (`|| true`) | Sweep | ✅ | `|| true` removed; mockery v2.53.6 pinned; `make mocks-check` wired into CI (PR B #1575). |
+| TOOL-3 | Demo recording workflow mixed into default E2E target | Sweep | ⬜ | `playwright.config.ts:37`. Split demo to opt-in `test:e2e:demo`. P2. |
+| TOOL-4 | Testing docs and actual CI gates disagree (80% vs 30% coverage claims) | Sweep | ✅ | Docs aligned with actual CI thresholds (PR B #1575). |
 | TOOL-5 | Generated mocks still large despite per-handler split | Sweep | ⬜ | P2. Prefer narrow hand-written fakes for new code. |
-| TOOL-6 | Generated Playwright report tracked in git | Sweep | ⬜ | Untrack `/playwright-report/`, ignore root report output. |
+| TOOL-6 | Generated Playwright report tracked in git | Sweep | ✅ | `/playwright-report/` untracked, added to `.gitignore` (PR B #1575). |
 | TOOL-7 | Fixed sleeps in tests | Sweep | ⬜ | P2. Use locator/API waits and injected clocks. |
 | TOOL-8 | Manual smoke scripts not integrated into Makefile | Sweep | ⬜ | P2. Wrap as explicit `make manual-smoke` targets. |
 
@@ -113,8 +114,18 @@ These Structure Audit findings were addressed in the May–June refactor wave be
 
 ## Initiative: Work-Item Execution Contract
 
-**Status:** ⬜ Design — open questions, no code yet  
+**Status:** ✅ Partial — `RunItems[T]` shipped (PR I #1579); waves 1–2 migrated (PRs #1591/#1592); 3 sites deferred  
 **Connects to:** ARCH-3, PERF-2, watchdog saga (#1562–#1567)
+
+**ARCH-4b migration progress:**
+| Site | Status | PR |
+|---|---|---|
+| `deluge/path_update.go` | ✅ Migrated | #1591 |
+| `deluge/centralization.go` | ✅ Migrated | #1592 |
+| `lsh_backfill.go` | ⬜ Deferred — 308K items × per-item UpdateProgress needs reporter throttle wrapper | — |
+| `acoustid/backfill.go` | ⬜ Deferred — nested books→files loop + resume-by-book-ID | — |
+| `acoustid/reset_all.go` | ⬜ Deferred — callback-driven PebbleStore API + dual heterogeneous loops | — |
+| `acoustid/fingerprint_rescan.go` | ⬜ Excluded — already semaphore goroutine pool (not sequential) | — |
 
 ### Problem
 
