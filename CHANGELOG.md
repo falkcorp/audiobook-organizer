@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.79.0 -->
+<!-- version: 3.80.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-23 -->
 
@@ -8,6 +8,13 @@
 ## [Unreleased]
 
 ### Architecture
+
+#### June 23, 2026 — ARCH-1/2/5 + TOOL-5: handler coupling, route split, service split, test-double guidance
+
+- **`refactor(handlers)`** ARCH-1 (PR #1613) — Removed `getStore func()` lazy provider closures from `audiobooks`, `metadata`, `dedup`, and `duplicates` handler packages (54 call sites → direct `h.store` field). Handlers now receive a wire-time store snapshot; the lazy pattern is kept only where genuinely required (`system.getStore` for one post-wire test swap; `*.getWriteBack` for nil-safety undo tests). Injected funcs wrapping server-private types are documented and retained.
+- **`refactor(server)`** ARCH-2 (PR #1610) — Split `wire_handlers.go` (978 lines) into 9 per-domain route-registration methods: `wire_auth_routes.go`, `wire_library_routes.go`, `wire_audiobooks_routes.go`, `wire_metadata_routes.go`, `wire_entities_routes.go`, `wire_operations_routes.go`, `wire_system_routes.go`, `wire_dedup_routes.go`, `wire_media_routes.go`. Handler instantiation stays in `wire_handlers.go` (now 414 lines).
+- **`refactor(audiobooks)`** ARCH-5 (PR #1611) — Split `AudiobookService` god service (`service.go`, 2691 lines) into 6 focused files: `service_types.go` (types), `service_filtering.go` (sort/filter helpers + pushdown), `service_query.go` (GetAudiobooks, Count, Enrich), `service_single.go` (GetAudiobook, soft-delete lifecycle), `service_mutation.go` (UpdateAudiobook, DeleteAudiobook), `service_tags.go` (user tag CRUD). Core `service.go` now 171 lines.
+- **`docs(testing)`** TOOL-5 (PR #1609) — Added style guidance to `docs/CODING_STANDARDS.md` Go Testing section: prefer narrow hand-written fakes for new, small interfaces; use mockery for large, frequently-changing interfaces.
 
 #### June 23, 2026 — ARCH-7: backward-compatibility surface registry
 

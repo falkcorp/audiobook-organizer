@@ -1,5 +1,5 @@
 <!-- file: docs/tracking/audit-remediation-2026-06.md -->
-<!-- version: 1.23.0 -->
+<!-- version: 1.24.0 -->
 <!-- guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f -->
 <!-- last-edited: 2026-06-23 -->
 <!-- Note: per-finding table synced to PR delivery table on 2026-06-23 -->
@@ -66,11 +66,11 @@ These Structure Audit findings were addressed in the May–June refactor wave be
 
 | ID | Finding | Source | Status | Notes |
 |---|---|---|---|---|
-| ARCH-1 | Handler extraction preserved Server coupling (lazy providers, injected closures, server-private helpers) | Sweep | ⬜ | `handlers/audiobooks/handler.go:77`, `handlers/metadata/handler.go:72`, etc. Introduce domain application services; handlers become HTTP adapters. |
-| ARCH-2 | `wire_handlers.go` is an overloaded composition root + route registry | Sweep | ⬜ | `wire_handlers.go:31`, typed-nil guards at `:145,170,226`. Split per-domain route modules. |
+| ARCH-1 | Handler extraction preserved Server coupling (lazy providers, injected closures, server-private helpers) | Sweep | ✅ | PR #1613. Removed `getStore func()` lazy providers from audiobooks, metadata, dedup, duplicates handlers (54 call sites → direct field access). `system.getStore` and `*.getWriteBack` kept lazy where genuinely needed (1 post-wire test, nil-safety undo tests). Injected funcs kept (server-private types). |
+| ARCH-2 | `wire_handlers.go` is an overloaded composition root + route registry | Sweep | ✅ | PR #1610. Split 304 route registrations into 9 per-domain `wire_*_routes.go` files. `wire_handlers.go` reduced from 978 → 414 lines. |
 | ARCH-3 | Operation enqueue boilerplate duplicated across handlers | Sweep | ✅ | `launchOp` / `launchLegacyOp` helpers extracted; 11 enqueue boilerplate sites eliminated (PR G #1577). |
 | ARCH-4 | Config legacy remap machinery repeats by group | Sweep | ✅ | `applyLegacyRemaps` + `configRemapGroups` table in `update_service.go`. 6 per-group functions eliminated; all remap logic in one place. 13 tests updated. |
-| ARCH-5 | `AudiobookService` is a god service | Sweep | ⬜ | P2. Split query/mutation/tags/delete/compatibility. |
+| ARCH-5 | `AudiobookService` is a god service | Sweep | ✅ | PR #1611. Split `service.go` (2691 lines) into 6 files: `service_types.go`, `service_filtering.go`, `service_query.go`, `service_single.go`, `service_mutation.go`, `service_tags.go`. Core `service.go` now 171 lines. |
 | ARCH-6 | Optional store capabilities discovered ad hoc | Sweep | ✅ | `database.GetOpsV2` + `GetAIJobs` in `storecap.go`; 5 sites updated; `UnwrapAIJobsStore` delegates. PR #1606. |
 | ARCH-7 | Compatibility surfaces scattered across 6+ files | Sweep | ✅ | `docs/compat-surfaces.md` documents 8 shim files with removal conditions. PR #1608. |
 | ARCH-8 | Service registry uses globals and panicking string lookups | Sweep | ✅ | 24 typed constants in `serviceregistry/keys.go`; 68 Get/Name/Needs string literals replaced across 25 files. PR #1607. |
@@ -105,7 +105,7 @@ These Structure Audit findings were addressed in the May–June refactor wave be
 | TOOL-2 | CI mockery gate can pass when mockery fails (`|| true`) | Sweep | ✅ | `|| true` removed; mockery v2.53.6 pinned; `make mocks-check` wired into CI (PR B #1575). |
 | TOOL-3 | Demo recording workflow mixed into default E2E target | Sweep | ✅ | `chromium` and `webkit` projects now exclude `demo-*.spec.ts` and `interactive-*.spec.ts` via `testIgnore`. `chromium-record` is opt-in. `npm run test:e2e:demo` / `make test-e2e-demo` added. |
 | TOOL-4 | Testing docs and actual CI gates disagree (80% vs 30% coverage claims) | Sweep | ✅ | Docs aligned with actual CI thresholds (PR B #1575). |
-| TOOL-5 | Generated mocks still large despite per-handler split | Sweep | ⬜ | P2. Prefer narrow hand-written fakes for new code. |
+| TOOL-5 | Generated mocks still large despite per-handler split | Sweep | ✅ | PR #1609. Added style guidance to `docs/CODING_STANDARDS.md`: prefer narrow hand-written fakes for new, small interfaces; use mockery for large/frequently-changing interfaces. |
 | TOOL-6 | Generated Playwright report tracked in git | Sweep | ✅ | `/playwright-report/` untracked, added to `.gitignore` (PR B #1575). |
 | TOOL-7 | Fixed sleeps in tests | Sweep | ✅ Partial | `waitForTimeout(1000)` replaced with `waitForRequest(url)` in `dedup-operations.spec.ts:128` and `dedup.spec.ts:174`. `dynamic-ui-interactions.spec.ts` sleeps are in mock route handlers (intentional simulated latency, not polling) — correctly left as-is. Remaining Go backend sleeps (`time.Sleep`) are timing-sensitive (TTL expiry, timestamp ordering) and cannot be replaced with state checks. |
 | TOOL-8 | Manual smoke scripts not integrated into Makefile | Sweep | ✅ | `make manual-smoke`, `make smoke-create-books`, `make smoke-run-demo` targets added to Makefile. |
