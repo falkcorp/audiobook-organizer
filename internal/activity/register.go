@@ -1,5 +1,6 @@
 // file: internal/activity/register.go
-// version: 1.2.0
+// version: 1.2.1
+// last-edited: 2026-06-23
 // guid: c4d5e6f7-a8b9-0009-2345-000000000009
 
 // Package activity — service registry wiring for the activity log.
@@ -29,10 +30,10 @@ func init() {
 	// wiring below can detect and fall back gracefully.
 	serviceregistry.Register(serviceregistry.ServiceDef{
 		Name:   "pebble-activitystore",
-		Needs:  []string{"store"},
-		Groups: []string{"activity"},
+		Needs:  []string{serviceregistry.KeyStore},
+		Groups: []string{serviceregistry.KeyActivity},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			store := serviceregistry.Get[database.Store](c, "store")
+			store := serviceregistry.Get[database.Store](c, serviceregistry.KeyStore)
 			ps, ok := store.(*database.PebbleStore)
 			if !ok {
 				// Non-Pebble backend (test double, SQLite) — return nil pointer;
@@ -47,14 +48,14 @@ func init() {
 
 	// activitystore: activity log backend, wired to dual-write when Pebble is available.
 	// Lives in {dirname(DatabasePath)}/activity.nutsdb (NutsDB sidecar).
-	// Returns nil when DatabasePath is unset — host code must Override "activitystore"
+	// Returns nil when DatabasePath is unset — host code must Override serviceregistry.KeyActivityStore
 	// with a pre-built instance in that case (test paths).
 	serviceregistry.Register(serviceregistry.ServiceDef{
-		Name:   "activitystore",
-		Needs:  []string{"config", "pebble-activitystore"},
-		Groups: []string{"activity"},
+		Name:   serviceregistry.KeyActivityStore,
+		Needs:  []string{serviceregistry.KeyConfig, "pebble-activitystore"},
+		Groups: []string{serviceregistry.KeyActivity},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			cfg := serviceregistry.Get[*config.Config](c, "config")
+			cfg := serviceregistry.Get[*config.Config](c, serviceregistry.KeyConfig)
 			if cfg.DatabasePath == "" {
 				return nil, fmt.Errorf("activitystore: DatabasePath not configured")
 			}
@@ -83,13 +84,13 @@ func init() {
 	})
 
 	serviceregistry.Register(serviceregistry.ServiceDef{
-		Name:   "activity",
-		Needs:  []string{"activitystore"},
-		Groups: []string{"activity"},
+		Name:   serviceregistry.KeyActivity,
+		Needs:  []string{serviceregistry.KeyActivityStore},
+		Groups: []string{serviceregistry.KeyActivity},
 		Build: func(c *serviceregistry.Container) (any, error) {
 			// Use the ActivityStorer interface — the activitystore may be any of
 			// *NutsActivityStore, *DualWriteActivityStore (all implement ActivityStorer).
-			store := serviceregistry.Get[database.ActivityStorer](c, "activitystore")
+			store := serviceregistry.Get[database.ActivityStorer](c, serviceregistry.KeyActivityStore)
 			return NewService(store), nil
 		},
 	})
@@ -99,10 +100,10 @@ func init() {
 	// for lifecycle management. Depends on activity service for its store.
 	serviceregistry.Register(serviceregistry.ServiceDef{
 		Name:   "activitywriter",
-		Needs:  []string{"activity"},
-		Groups: []string{"activity"},
+		Needs:  []string{serviceregistry.KeyActivity},
+		Groups: []string{serviceregistry.KeyActivity},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			activitySvc := serviceregistry.Get[*Service](c, "activity")
+			activitySvc := serviceregistry.Get[*Service](c, serviceregistry.KeyActivity)
 			return NewWriter(activitySvc.Store(), 10000), nil
 		},
 	})

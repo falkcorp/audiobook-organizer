@@ -1,5 +1,6 @@
 // file: internal/plugins/acoustid/register.go
-// version: 1.1.1
+// version: 1.1.2
+// last-edited: 2026-06-23
 
 // Service registry registration for the acoustid UOS plugin (W5/W7).
 //
@@ -22,15 +23,15 @@ import (
 func init() {
 	serviceregistry.Register(serviceregistry.ServiceDef{
 		Name:   "acoustidplugin",
-		Needs:  []string{"store", "dedup", "embeddingstore"},
+		Needs:  []string{serviceregistry.KeyStore, serviceregistry.KeyDedup, serviceregistry.KeyEmbeddingStore},
 		Groups: []string{"plugins"},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			engine, _ := serviceregistry.TryGet[*dedupengine.Engine](c, "dedup")
-			embStore, _ := serviceregistry.TryGet[*database.EmbeddingStore](c, "embeddingstore")
+			engine, _ := serviceregistry.TryGet[*dedupengine.Engine](c, serviceregistry.KeyDedup)
+			embStore, _ := serviceregistry.TryGet[*database.EmbeddingStore](c, serviceregistry.KeyEmbeddingStore)
 			if engine == nil || embStore == nil {
 				return (*Plugin)(nil), nil
 			}
-			store := serviceregistry.Get[database.Store](c, "store")
+			store := serviceregistry.Get[database.Store](c, serviceregistry.KeyStore)
 			return New(engine, store, embStore), nil
 		},
 	})

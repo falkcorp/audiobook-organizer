@@ -1,5 +1,5 @@
 // file: internal/server/registry_wire.go
-// version: 1.15.0
+// version: 1.16.0
 // last-edited: 2026-06-23
 
 package server
@@ -45,11 +45,11 @@ import (
 //     here avoids forcing a new dependency on that pkg.
 func init() {
 	serviceregistry.Register(serviceregistry.ServiceDef{
-		Name:   "system",
-		Needs:  []string{"store"},
+		Name:   serviceregistry.KeySystem,
+		Needs:  []string{serviceregistry.KeyStore},
 		Groups: []string{"core"},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			store := serviceregistry.Get[database.Store](c, "store")
+			store := serviceregistry.Get[database.Store](c, serviceregistry.KeyStore)
 			return sysinfo.NewSystemService(store, appVersion, calculateLibrarySizes), nil
 		},
 	})
@@ -57,11 +57,11 @@ func init() {
 	// embeddingstore — Pebble-backed key namespace for dedup embeddings.
 	// Returns nil if the underlying store isn't *PebbleStore (e.g. tests).
 	serviceregistry.Register(serviceregistry.ServiceDef{
-		Name:   "embeddingstore",
-		Needs:  []string{"store"},
+		Name:   serviceregistry.KeyEmbeddingStore,
+		Needs:  []string{serviceregistry.KeyStore},
 		Groups: []string{"ai"},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			store := serviceregistry.Get[database.Store](c, "store")
+			store := serviceregistry.Get[database.Store](c, serviceregistry.KeyStore)
 			ps, ok := store.(*database.PebbleStore)
 			if !ok {
 				return (*database.EmbeddingStore)(nil), nil
@@ -80,10 +80,10 @@ func init() {
 	// trap). Dedup then falls back to the Pebble linear scan.
 	serviceregistry.Register(serviceregistry.ServiceDef{
 		Name:   "chromemstore",
-		Needs:  []string{"config"},
+		Needs:  []string{serviceregistry.KeyConfig},
 		Groups: []string{"ai"},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			cfg := serviceregistry.Get[*config.Config](c, "config")
+			cfg := serviceregistry.Get[*config.Config](c, serviceregistry.KeyConfig)
 			if cfg.DatabasePath == "" {
 				return nil, nil
 			}
@@ -112,10 +112,10 @@ func init() {
 	// aijobsstore — interface assertion on the main store.
 	serviceregistry.Register(serviceregistry.ServiceDef{
 		Name:   "aijobsstore",
-		Needs:  []string{"store"},
+		Needs:  []string{serviceregistry.KeyStore},
 		Groups: []string{"ai"},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			store := serviceregistry.Get[database.Store](c, "store")
+			store := serviceregistry.Get[database.Store](c, serviceregistry.KeyStore)
 			return database.GetAIJobs(store), nil
 		},
 	})
@@ -125,22 +125,22 @@ func init() {
 	// client, etc.) — matches the existing inline conditional construction
 	// in NewServer.
 	serviceregistry.Register(serviceregistry.ServiceDef{
-		Name:   "dedup",
-		Needs:  []string{"store", "config", "embeddingstore", "embedclient", "llmparser", "merge"},
+		Name:   serviceregistry.KeyDedup,
+		Needs:  []string{serviceregistry.KeyStore, serviceregistry.KeyConfig, serviceregistry.KeyEmbeddingStore, "embedclient", "llmparser", serviceregistry.KeyMerge},
 		Groups: []string{"ai"},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			cfg := serviceregistry.Get[*config.Config](c, "config")
+			cfg := serviceregistry.Get[*config.Config](c, serviceregistry.KeyConfig)
 			if cfg.OpenAIAPIKey == "" || !cfg.Embedding.Enabled {
 				return (*dedup.Engine)(nil), nil
 			}
-			embStore, _ := serviceregistry.TryGet[*database.EmbeddingStore](c, "embeddingstore")
+			embStore, _ := serviceregistry.TryGet[*database.EmbeddingStore](c, serviceregistry.KeyEmbeddingStore)
 			embClient, _ := serviceregistry.TryGet[*ai.EmbeddingClient](c, "embedclient")
 			llmParser, _ := serviceregistry.TryGet[*ai.OpenAIParser](c, "llmparser")
 			if embStore == nil || embClient == nil || llmParser == nil {
 				return (*dedup.Engine)(nil), nil
 			}
-			store := serviceregistry.Get[database.Store](c, "store")
-			mergeSvc := serviceregistry.Get[*merge.Service](c, "merge")
+			store := serviceregistry.Get[database.Store](c, serviceregistry.KeyStore)
+			mergeSvc := serviceregistry.Get[*merge.Service](c, serviceregistry.KeyMerge)
 			engine := dedup.NewEngine(embStore, store, embClient, llmParser, mergeSvc)
 			engine.BookHighThreshold = cfg.Dedup.BookHighThreshold
 			engine.BookLowThreshold = cfg.Dedup.BookLowThreshold
@@ -161,10 +161,10 @@ func init() {
 	// nil-checks before use.
 	serviceregistry.Register(serviceregistry.ServiceDef{
 		Name:   "metricsstore",
-		Needs:  []string{"config"},
+		Needs:  []string{serviceregistry.KeyConfig},
 		Groups: []string{"core"},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			cfg := serviceregistry.Get[*config.Config](c, "config")
+			cfg := serviceregistry.Get[*config.Config](c, serviceregistry.KeyConfig)
 			if cfg.DatabasePath == "" {
 				return (*database.NutsMetricsStore)(nil), nil
 			}
@@ -183,10 +183,10 @@ func init() {
 	// store isn't a PebbleStore (test paths).
 	serviceregistry.Register(serviceregistry.ServiceDef{
 		Name:   "aiscanstore",
-		Needs:  []string{"store"},
+		Needs:  []string{serviceregistry.KeyStore},
 		Groups: []string{"ai"},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			store := serviceregistry.Get[database.Store](c, "store")
+			store := serviceregistry.Get[database.Store](c, serviceregistry.KeyStore)
 			ps, ok := store.(*database.PebbleStore)
 			if !ok {
 				return (*database.AIScanStore)(nil), nil
@@ -205,7 +205,7 @@ func init() {
 	// is nil (no OpenAI key) or aiscanstore is nil, returns nil.
 	serviceregistry.Register(serviceregistry.ServiceDef{
 		Name:   "pipelinemanager",
-		Needs:  []string{"store", "aiscanstore", "llmparser"},
+		Needs:  []string{serviceregistry.KeyStore, "aiscanstore", "llmparser"},
 		Groups: []string{"ai"},
 		Build: func(c *serviceregistry.Container) (any, error) {
 			scanStore, _ := serviceregistry.TryGet[*database.AIScanStore](c, "aiscanstore")
@@ -213,7 +213,7 @@ func init() {
 			if scanStore == nil || parser == nil {
 				return (*aiscan.PipelineManager)(nil), nil
 			}
-			store := serviceregistry.Get[database.Store](c, "store")
+			store := serviceregistry.Get[database.Store](c, serviceregistry.KeyStore)
 			return aiscan.NewPipelineManager(scanStore, store, parser), nil
 		},
 	})
@@ -230,14 +230,14 @@ func init() {
 	// — the per-feature toggles (AutoWriteBack, ITLWriteBackEnabled) come
 	// from AppConfig.
 	serviceregistry.Register(serviceregistry.ServiceDef{
-		Name:   "itunes",
-		Needs:  []string{"store", "config", "eventbus", "metafetch"},
+		Name:   serviceregistry.KeyITunes,
+		Needs:  []string{serviceregistry.KeyStore, serviceregistry.KeyConfig, serviceregistry.KeyEventBus, serviceregistry.KeyMetaFetch},
 		Groups: []string{"core"},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			store := serviceregistry.Get[database.Store](c, "store")
-			cfg := serviceregistry.Get[*config.Config](c, "config")
-			bus := serviceregistry.Get[*plugin.EventBus](c, "eventbus")
-			mf := serviceregistry.Get[*metafetch.Service](c, "metafetch")
+			store := serviceregistry.Get[database.Store](c, serviceregistry.KeyStore)
+			cfg := serviceregistry.Get[*config.Config](c, serviceregistry.KeyConfig)
+			bus := serviceregistry.Get[*plugin.EventBus](c, serviceregistry.KeyEventBus)
+			mf := serviceregistry.Get[*metafetch.Service](c, serviceregistry.KeyMetaFetch)
 			svc, err := itunesservice.New(itunesservice.Deps{
 				Store: store,
 				Config: itunesservice.Config{
@@ -271,39 +271,39 @@ func init() {
 // Container.Build() and Container.PostInit() succeed. Adding a future
 // service is one new line here + one new register.go in the domain pkg.
 //
-// W2 services use TryGet because "activity" / "activitystore" are only
+// W2 services use TryGet because serviceregistry.KeyActivity / serviceregistry.KeyActivityStore are only
 // Included when config.DatabasePath is set (the NutsDB sidecar can't open
 // without a path). All other W1+W2 services are unconditional and Get
 // could safely be used — TryGet is used consistently here to keep the
 // wire-up uniform and tolerant of further phased Include() decisions.
 func wireServerFromContainer(s *Server, c *serviceregistry.Container) {
 	// W1 services (unconditional)
-	s.audiobookService = serviceregistry.Get[*audiobookspkg.AudiobookService](c, "audiobook")
-	s.batchService = serviceregistry.Get[*batch.BatchService](c, "batch")
-	s.workService = serviceregistry.Get[*work.WorkService](c, "work")
-	s.filesystemService = serviceregistry.Get[*fileops.FilesystemService](c, "filesystem")
-	s.importPathService = serviceregistry.Get[*importer.ImportPathService](c, "importpath")
-	s.scanService = serviceregistry.Get[*scanner.ScanService](c, "scan")
-	s.dashboardService = serviceregistry.Get[*sysinfo.DashboardService](c, "dashboard")
-	s.systemService = serviceregistry.Get[*sysinfo.SystemService](c, "system")
-	s.configUpdateService = serviceregistry.Get[*config.UpdateService](c, "configupdate")
-	s.metadataStateService = serviceregistry.Get[*metafetch.MetadataStateService](c, "metadatastate")
+	s.audiobookService = serviceregistry.Get[*audiobookspkg.AudiobookService](c, serviceregistry.KeyAudiobook)
+	s.batchService = serviceregistry.Get[*batch.BatchService](c, serviceregistry.KeyBatch)
+	s.workService = serviceregistry.Get[*work.WorkService](c, serviceregistry.KeyWork)
+	s.filesystemService = serviceregistry.Get[*fileops.FilesystemService](c, serviceregistry.KeyFilesystem)
+	s.importPathService = serviceregistry.Get[*importer.ImportPathService](c, serviceregistry.KeyImportPath)
+	s.scanService = serviceregistry.Get[*scanner.ScanService](c, serviceregistry.KeyScan)
+	s.dashboardService = serviceregistry.Get[*sysinfo.DashboardService](c, serviceregistry.KeyDashboard)
+	s.systemService = serviceregistry.Get[*sysinfo.SystemService](c, serviceregistry.KeySystem)
+	s.configUpdateService = serviceregistry.Get[*config.UpdateService](c, serviceregistry.KeyConfigUpdate)
+	s.metadataStateService = serviceregistry.Get[*metafetch.MetadataStateService](c, serviceregistry.KeyMetadataState)
 
 	// W2 services
-	s.metadataFetchService = serviceregistry.Get[*metafetch.Service](c, "metafetch")
+	s.metadataFetchService = serviceregistry.Get[*metafetch.Service](c, serviceregistry.KeyMetaFetch)
 	if ol, ok := serviceregistry.TryGet[*metafetch.OpenLibraryService](c, "olservice"); ok && ol != nil {
 		s.olService = ol
 	}
-	s.mergeService = serviceregistry.Get[*merge.Service](c, "merge")
-	s.organizeService = serviceregistry.Get[*OrganizeService](c, "organize")
-	s.quarantineSvc = serviceregistry.Get[*quarantine.QuarantineService](c, "quarantine")
-	s.eventBus = serviceregistry.Get[*plugin.EventBus](c, "eventbus")
+	s.mergeService = serviceregistry.Get[*merge.Service](c, serviceregistry.KeyMerge)
+	s.organizeService = serviceregistry.Get[*OrganizeService](c, serviceregistry.KeyOrganize)
+	s.quarantineSvc = serviceregistry.Get[*quarantine.QuarantineService](c, serviceregistry.KeyQuarantine)
+	s.eventBus = serviceregistry.Get[*plugin.EventBus](c, serviceregistry.KeyEventBus)
 	// activity is conditional on config.DatabasePath — pull via TryGet so
 	// tests that don't configure a DB path still build.
-	if svc, ok := serviceregistry.TryGet[*activity.Service](c, "activity"); ok {
+	if svc, ok := serviceregistry.TryGet[*activity.Service](c, serviceregistry.KeyActivity); ok {
 		s.activityService = svc
 	}
-	// activitywriter is in the "activity" group (same conditional). NewServer
+	// activitywriter is in the serviceregistry.KeyActivity group (same conditional). NewServer
 	// drives Start inline today; SERVER-LIFECYCLE-FLIP will hand that off to
 	// Container.Start (Writer.Start/Stop already match the Starter/Stopper
 	// signatures so no adapter is needed).
@@ -324,18 +324,18 @@ func wireServerFromContainer(s *Server, c *serviceregistry.Container) {
 			s.opRegistry.SetActivityRecorder(s.activityService)
 		}
 	}
-	if hub, ok := serviceregistry.TryGet[*opsregistry.EventHub](c, "ophub"); ok {
+	if hub, ok := serviceregistry.TryGet[*opsregistry.EventHub](c, serviceregistry.KeyOpHub); ok {
 		s.opHub = hub
 	}
 
 	// W4 services — embedding/AI cluster.
-	if embStore, ok := serviceregistry.TryGet[*database.EmbeddingStore](c, "embeddingstore"); ok {
+	if embStore, ok := serviceregistry.TryGet[*database.EmbeddingStore](c, serviceregistry.KeyEmbeddingStore); ok {
 		s.embeddingStore = embStore
 	}
 	if ec, ok := serviceregistry.TryGet[*ai.EmbeddingClient](c, "embedclient"); ok {
 		s.embedClient = ec
 	}
-	if engine, ok := serviceregistry.TryGet[*dedup.Engine](c, "dedup"); ok {
+	if engine, ok := serviceregistry.TryGet[*dedup.Engine](c, serviceregistry.KeyDedup); ok {
 		s.dedupEngine = engine
 	}
 	if scanStore, ok := serviceregistry.TryGet[*database.AIScanStore](c, "aiscanstore"); ok && scanStore != nil {
@@ -353,7 +353,7 @@ func wireServerFromContainer(s *Server, c *serviceregistry.Container) {
 	// itunesservice.Service — container-built since PLUGIN-DECOUPLE-CLOSURES
 	// (May 13, 2026). Replaces the prior inline itunesservice.New(...) call
 	// in NewServer. Always present (Build returns NewDisabled() on error).
-	s.itunesSvc = serviceregistry.Get[*itunesservice.Service](c, "itunes")
+	s.itunesSvc = serviceregistry.Get[*itunesservice.Service](c, serviceregistry.KeyITunes)
 
 	// updater + updateScheduler — container-built since the updater
 	// LIFECYCLE-FLIP prep (May 13, 2026). Real version flows in via the
@@ -361,7 +361,7 @@ func wireServerFromContainer(s *Server, c *serviceregistry.Container) {
 	// SchedulerStarterAdapter wraps Scheduler.Start/Stop for the eventual
 	// Container.Start hand-off; until then NewServer calls .Start()
 	// inline against the embedded scheduler.
-	if upd, ok := serviceregistry.TryGet[*updater.Updater](c, "updater"); ok {
+	if upd, ok := serviceregistry.TryGet[*updater.Updater](c, serviceregistry.KeyUpdater); ok {
 		s.updater = upd
 	}
 	if adapter, ok := serviceregistry.TryGet[*updater.SchedulerStarterAdapter](c, "updatescheduler"); ok && adapter != nil {

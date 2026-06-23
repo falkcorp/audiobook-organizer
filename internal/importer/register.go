@@ -1,5 +1,6 @@
 // file: internal/importer/register.go
-// version: 1.0.0
+// version: 1.0.1
+// last-edited: 2026-06-23
 
 package importer
 
@@ -10,11 +11,11 @@ import (
 
 func init() {
 	serviceregistry.Register(serviceregistry.ServiceDef{
-		Name:   "importpath",
-		Needs:  []string{"store"},
+		Name:   serviceregistry.KeyImportPath,
+		Needs:  []string{serviceregistry.KeyStore},
 		Groups: []string{"core"},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			store := serviceregistry.Get[database.Store](c, "store")
+			store := serviceregistry.Get[database.Store](c, serviceregistry.KeyStore)
 			return NewImportPathService(store), nil
 		},
 	})

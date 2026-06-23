@@ -1,5 +1,6 @@
 // file: internal/itunes/service/register.go
-// version: 3.0.0
+// version: 3.0.1
+// last-edited: 2026-06-23
 // guid: f1e2d3c4-b5a6-7890-1a2b-3c4d5e6f7a8b
 //
 // Registers the "writebackbatcher" service with the global serviceregistry.
@@ -22,10 +23,10 @@ import (
 func init() {
 	serviceregistry.Register(serviceregistry.ServiceDef{
 		Name:   "writebackbatcher",
-		Needs:  []string{"itunes"},
+		Needs:  []string{serviceregistry.KeyITunes},
 		Groups: []string{"scheduler"},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			svc := serviceregistry.Get[*Service](c, "itunes")
+			svc := serviceregistry.Get[*Service](c, serviceregistry.KeyITunes)
 			if svc == nil {
 				return (*WriteBackBatcher)(nil), nil
 			}

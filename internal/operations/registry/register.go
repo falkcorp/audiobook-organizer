@@ -1,7 +1,7 @@
 // file: internal/operations/registry/register.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-06-14
+// last-edited: 2026-06-23
 
 package registry
 
@@ -49,7 +49,7 @@ func (p *prodSchedulerStore) BookFiles(_ string) ([]string, error) {
 
 func init() {
 	serviceregistry.Register(serviceregistry.ServiceDef{
-		Name:   "ophub",
+		Name:   serviceregistry.KeyOpHub,
 		Needs:  []string{},
 		Groups: []string{"scheduler"},
 		Build: func(c *serviceregistry.Container) (any, error) {
@@ -59,13 +59,13 @@ func init() {
 
 	serviceregistry.Register(serviceregistry.ServiceDef{
 		Name:   "opregistry",
-		Needs:  []string{"store", "ophub"},
+		Needs:  []string{serviceregistry.KeyStore, serviceregistry.KeyOpHub},
 		Groups: []string{"scheduler"},
 		Build: func(c *serviceregistry.Container) (any, error) {
 			// Resolve the wide database.Store so we get GetBookByID and all
 			// OpsV2Store methods from the same concrete *PebbleStore instance.
-			store := serviceregistry.Get[database.Store](c, "store")
-			hub := serviceregistry.Get[*EventHub](c, "ophub")
+			store := serviceregistry.Get[database.Store](c, serviceregistry.KeyStore)
+			hub := serviceregistry.Get[*EventHub](c, serviceregistry.KeyOpHub)
 			reg := New(store, slog.Default(), 8, hub)
 
 			// Wire the book store for dep evaluation (ReqFieldSet).

@@ -1,5 +1,6 @@
 // file: internal/quarantine/register.go
-// version: 1.0.0
+// version: 1.0.1
+// last-edited: 2026-06-23
 
 package quarantine
 
@@ -12,13 +13,13 @@ import (
 
 func init() {
 	serviceregistry.Register(serviceregistry.ServiceDef{
-		Name:   "quarantine",
-		Needs:  []string{"store", "config", "eventbus"},
+		Name:   serviceregistry.KeyQuarantine,
+		Needs:  []string{serviceregistry.KeyStore, serviceregistry.KeyConfig, serviceregistry.KeyEventBus},
 		Groups: []string{"core"},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			store := serviceregistry.Get[database.Store](c, "store")
-			cfg := serviceregistry.Get[*config.Config](c, "config")
-			bus := serviceregistry.Get[*plugin.EventBus](c, "eventbus")
+			store := serviceregistry.Get[database.Store](c, serviceregistry.KeyStore)
+			cfg := serviceregistry.Get[*config.Config](c, serviceregistry.KeyConfig)
+			bus := serviceregistry.Get[*plugin.EventBus](c, serviceregistry.KeyEventBus)
 			return NewQuarantineService(store, cfg, bus), nil
 		},
 	})
