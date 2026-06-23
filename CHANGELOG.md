@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.73.0 -->
+<!-- version: 3.74.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-23 -->
 
@@ -8,6 +8,11 @@
 ## [Unreleased]
 
 ### Frontend
+
+#### June 23, 2026 — STR-3: adopt util.Normalize* for DB index keys
+
+- **`fix(database)`** STR-3 — Replaced `strings.ToLower(name)` (no TrimSpace) with `util.NormalizeAuthor`/`NormalizeTitle`/`NormalizeString` for all author, series, alias, role, playlist, and title index key construction in `pebble_store.go`. The missing TrimSpace caused names with leading/trailing whitespace (common from XML import or API input) to produce different keys on write vs. read, causing silent lookup misses.
+- **`fix(database)`** STR-3 — Adopted `util.NormalizeTitle` in `memdb_indexers.go` titleSortIndex and `util.NormalizeString` in `metadata_fetch_cache.go` cache key/source field; removed now-redundant `strings` import from indexers.
 
 #### June 23, 2026 — FE-8: real-server auth smoke test
 

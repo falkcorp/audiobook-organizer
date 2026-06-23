@@ -1,5 +1,5 @@
 <!-- file: docs/tracking/audit-remediation-2026-06.md -->
-<!-- version: 1.17.0 -->
+<!-- version: 1.18.0 -->
 <!-- guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f -->
 <!-- last-edited: 2026-06-23 -->
 <!-- Note: per-finding table synced to PR delivery table on 2026-06-23 -->
@@ -76,7 +76,7 @@ These Structure Audit findings were addressed in the May–June refactor wave be
 | ARCH-8 | Service registry uses globals and panicking string lookups | Sweep | ⬜ | P2. Typed service keys or generated accessors. |
 | STR-1 | Pagination helper missing — 376+ limit/offset/page callsites parsed independently | Structure | ✅ | `internal/server/pagination.go` created; pagination helper standardized (PR E #1578). |
 | STR-2 | AI retry duplicated in `openai_parser.go`, `metadata_llm_review.go`, `embedding_client.go` | Structure | ✅ | `internal/ai/retry.go` → `DoWithRetry` function; 4 sites migrated (PR E #1578). |
-| STR-3 | Path/string normalization scattered — 611 `ToLower/TrimSpace/Clean` callsites, subtle inconsistencies in author/series matching | Structure | ⬜ | P2. `internal/util/normalize.go` (proposed). Important for author name matching correctness. |
+| STR-3 | Path/string normalization scattered — 611 `ToLower/TrimSpace/Clean` callsites, subtle inconsistencies in author/series matching | Structure | ✅ Partial | `internal/util/normalize.go` already existed with 41 existing callers. Fixed the **correctness bug**: `pebble_store.go` author/series/alias/role/playlist index keys were using only `ToLower` (no TrimSpace) → names with whitespace produced wrong keys. Adopted `util.NormalizeTitle` in `memdb_indexers.go` and `util.NormalizeString` in `metadata_fetch_cache.go`. 49 remaining inline `ToLower+TrimSpace` patterns are style (already correct logic); incremental adoption ongoing. |
 
 ---
 
