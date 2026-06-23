@@ -1,6 +1,7 @@
 // file: web/tests/e2e/dedup.spec.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: d1e2f3a4-b5c6-7d8e-9f0a-1b2c3d4e5f6a
+// last-edited: 2026-06-23
 
 import { test, expect, type Page } from '@playwright/test';
 import {
@@ -170,8 +171,8 @@ test.describe('Author Dedup', () => {
 
     await page.getByRole('button', { name: /find real author/i }).first().click();
 
-    // Wait for the API call to complete
-    await page.waitForTimeout(1000);
+    // Wait for the API request rather than sleeping — avoids flakiness under load.
+    await page.waitForRequest(req => req.url().includes('/resolve-production'));
     expect(resolveCallCount).toBeGreaterThan(0);
   });
 

@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.28.0 -->
+<!-- version: 9.29.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-06-23 -->
 
@@ -1326,6 +1326,7 @@ Bot-tasks at [`docs/superpowers/bot-tasks/2026-05-01-struct-*.md`](docs/superpow
 - [x] **STR-4** — `BookDedup.tsx` 2907→145 lines: extracted `DedupAIReviewTab` (386 lines), `DedupEmbeddingTab` (1441 lines, embedding dedup with module-level cache + buildClusters), `DedupAcousticTab` (996 lines, acoustic dedup + `AcousticBookCard`/`AcousticBookMetadata` re-exports). Shipped PR #1585. TypeScript: 0 errors.
 - [x] **TOOL-1** — Large corpus LFS: already configured in `.gitattributes` (48 LFS objects, 1.7 GB). Fixed `mediainfo_test.go:889` hardcoded absolute path → `findRepoRootForMediainfo()` inline walk. Skip message updated to guide `git lfs pull`. Shipped PR #1586.
 - [x] **TOOL-3** — Demo recording isolated from default E2E: `chromium`/`webkit` projects now have `testIgnore: ['**/demo-*.spec.ts', '**/interactive-*.spec.ts']`; `chromium-record` is opt-in. `npm run test:e2e:demo` + `make test-e2e-demo` added.
+- [x] **TOOL-7** — Fixed sleeps in E2E tests: `waitForTimeout(1000)` replaced with `waitForRequest(url)` in `dedup-operations.spec.ts` and `dedup.spec.ts`. `dynamic-ui-interactions.spec.ts` mock-handler delays retained (intentional latency simulation). Go backend `time.Sleep` calls are timing-sensitive and correct.
 - [x] **TOOL-8** — Manual smoke scripts wrapped as Makefile targets: `make manual-smoke`, `make smoke-create-books`, `make smoke-run-demo`.
 
 ---
