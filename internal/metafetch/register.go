@@ -1,5 +1,6 @@
 // file: internal/metafetch/register.go
-// version: 1.2.0
+// version: 1.2.1
+// last-edited: 2026-06-23
 
 package metafetch
 
@@ -10,21 +11,21 @@ import (
 
 func init() {
 	serviceregistry.Register(serviceregistry.ServiceDef{
-		Name:   "metadatastate",
-		Needs:  []string{"store"},
+		Name:   serviceregistry.KeyMetadataState,
+		Needs:  []string{serviceregistry.KeyStore},
 		Groups: []string{"core"},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			store := serviceregistry.Get[database.Store](c, "store")
+			store := serviceregistry.Get[database.Store](c, serviceregistry.KeyStore)
 			return NewMetadataStateService(store), nil
 		},
 	})
 
 	serviceregistry.Register(serviceregistry.ServiceDef{
-		Name:   "metafetch",
-		Needs:  []string{"store"},
+		Name:   serviceregistry.KeyMetaFetch,
+		Needs:  []string{serviceregistry.KeyStore},
 		Groups: []string{"core"},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			store := serviceregistry.Get[database.Store](c, "store")
+			store := serviceregistry.Get[database.Store](c, serviceregistry.KeyStore)
 			return NewService(store), nil
 		},
 	})

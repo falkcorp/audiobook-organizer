@@ -1,6 +1,6 @@
 // file: internal/ai/register.go
-// version: 1.2.0
-// last-edited: 2026-06-16
+// version: 1.2.1
+// last-edited: 2026-06-23
 
 // Service registry registrations for the AI cluster (W4).
 //
@@ -28,14 +28,14 @@ func init() {
 	// Conditional on: OpenAIAPIKey set AND EmbeddingEnabled true.
 	serviceregistry.Register(serviceregistry.ServiceDef{
 		Name:   "embedclient",
-		Needs:  []string{"config", "embeddingstore"},
+		Needs:  []string{serviceregistry.KeyConfig, serviceregistry.KeyEmbeddingStore},
 		Groups: []string{"ai"},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			cfg := serviceregistry.Get[*config.Config](c, "config")
+			cfg := serviceregistry.Get[*config.Config](c, serviceregistry.KeyConfig)
 			if cfg.OpenAIAPIKey == "" || !cfg.Embedding.Enabled {
 				return (*EmbeddingClient)(nil), nil
 			}
-			embStore, _ := serviceregistry.TryGet[*database.EmbeddingStore](c, "embeddingstore")
+			embStore, _ := serviceregistry.TryGet[*database.EmbeddingStore](c, serviceregistry.KeyEmbeddingStore)
 			// Base URL is scoped to the embedding client ONLY (see
 			// NewEmbeddingClientWithOptions): cfg.Embedding.BaseURL points
 			// embeddings at a local OpenAI-compatible backend (e.g. Ollama)
@@ -58,10 +58,10 @@ func init() {
 	// LLM reranker. Conditional on OpenAIAPIKey set.
 	serviceregistry.Register(serviceregistry.ServiceDef{
 		Name:   "llmparser",
-		Needs:  []string{"config"},
+		Needs:  []string{serviceregistry.KeyConfig},
 		Groups: []string{"ai"},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			cfg := serviceregistry.Get[*config.Config](c, "config")
+			cfg := serviceregistry.Get[*config.Config](c, serviceregistry.KeyConfig)
 			if cfg.OpenAIAPIKey == "" {
 				return (*OpenAIParser)(nil), nil
 			}
@@ -73,15 +73,15 @@ func init() {
 	// Conditional on embedclient + embeddingstore both being available.
 	serviceregistry.Register(serviceregistry.ServiceDef{
 		Name:   "metadatascorer",
-		Needs:  []string{"config", "embedclient", "embeddingstore"},
+		Needs:  []string{serviceregistry.KeyConfig, "embedclient", serviceregistry.KeyEmbeddingStore},
 		Groups: []string{"ai"},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			cfg := serviceregistry.Get[*config.Config](c, "config")
+			cfg := serviceregistry.Get[*config.Config](c, serviceregistry.KeyConfig)
 			if !cfg.MetadataScoring.EmbeddingEnabled {
 				return (*EmbeddingScorer)(nil), nil
 			}
 			client, _ := serviceregistry.TryGet[*EmbeddingClient](c, "embedclient")
-			store, _ := serviceregistry.TryGet[*database.EmbeddingStore](c, "embeddingstore")
+			store, _ := serviceregistry.TryGet[*database.EmbeddingStore](c, serviceregistry.KeyEmbeddingStore)
 			if client == nil || store == nil {
 				return (*EmbeddingScorer)(nil), nil
 			}

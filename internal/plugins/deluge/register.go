@@ -1,5 +1,6 @@
 // file: internal/plugins/deluge/register.go
-// version: 1.1.1
+// version: 1.1.2
+// last-edited: 2026-06-23
 
 // Service registry registration for the deluge UOS plugin (W5/W7).
 //
@@ -23,10 +24,10 @@ import (
 func init() {
 	serviceregistry.Register(serviceregistry.ServiceDef{
 		Name:   "delugeplugin",
-		Needs:  []string{"store", "config"},
+		Needs:  []string{serviceregistry.KeyStore, serviceregistry.KeyConfig},
 		Groups: []string{"plugins"},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			cfg := serviceregistry.Get[*config.Config](c, "config")
+			cfg := serviceregistry.Get[*config.Config](c, serviceregistry.KeyConfig)
 			// Mirror the original inline guard: skip when library root
 			// isn't configured (test paths). Without this, MockStore-based
 			// tests blow up because PostInit's Plugin.Register triggers
@@ -39,7 +40,7 @@ func init() {
 				return (*Plugin)(nil), nil
 			}
 			cache := delugeclient.NewProtectedPathCache(client, cfg.ProtectedPaths)
-			store := serviceregistry.Get[database.Store](c, "store")
+			store := serviceregistry.Get[database.Store](c, serviceregistry.KeyStore)
 			return New(client, cache, store), nil
 		},
 	})

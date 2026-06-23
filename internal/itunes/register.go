@@ -1,5 +1,6 @@
 // file: internal/itunes/register.go
-// version: 1.1.0
+// version: 1.1.1
+// last-edited: 2026-06-23
 
 package itunes
 
@@ -11,10 +12,10 @@ import (
 func init() {
 	serviceregistry.Register(serviceregistry.ServiceDef{
 		Name:   "librarywatcher",
-		Needs:  []string{"config"},
+		Needs:  []string{serviceregistry.KeyConfig},
 		Groups: []string{"scheduler"},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			cfg := serviceregistry.Get[*config.Config](c, "config")
+			cfg := serviceregistry.Get[*config.Config](c, serviceregistry.KeyConfig)
 			if cfg.ITunes.LibraryReadPath == "" {
 				return nil, nil
 			}

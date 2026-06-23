@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.77.0 -->
+<!-- version: 3.78.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-23 -->
 
@@ -8,6 +8,10 @@
 ## [Unreleased]
 
 ### Architecture
+
+#### June 23, 2026 — ARCH-8: typed service registry keys
+
+- **`refactor(serviceregistry)`** ARCH-8 — Added `internal/serviceregistry/keys.go` with 24 typed string constants (`KeyStore`, `KeyConfig`, `KeyActivity`, etc.) for all known service names. Replaced 68 bare string literals in `Get[T](c, "key")`, `Name: "key"`, and `Needs: []string{"key"}` across 25 `register.go` files. Panicking string-key typos are now caught at compile time via IDE autocomplete / unused-constant lint.
 
 #### June 23, 2026 — ARCH-6: centralized storecap helpers
 

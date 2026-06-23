@@ -1,7 +1,7 @@
 // file: internal/updater/register.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: 8c9d0a1b-2c3d-4e5f-6a7b-8c9d0a1b2c3d
-// last-edited: 2026-06-16
+// last-edited: 2026-06-23
 //
 // Service registry registrations for the auto-updater + its scheduler.
 //
@@ -58,7 +58,7 @@ func (a *SchedulerStarterAdapter) Stop(_ context.Context) error {
 
 func init() {
 	serviceregistry.Register(serviceregistry.ServiceDef{
-		Name:   "updater",
+		Name:   serviceregistry.KeyUpdater,
 		Needs:  []string{},
 		Groups: []string{"scheduler"},
 		Build: func(c *serviceregistry.Container) (any, error) {
@@ -75,10 +75,10 @@ func init() {
 
 	serviceregistry.Register(serviceregistry.ServiceDef{
 		Name:   "updatescheduler",
-		Needs:  []string{"updater"},
+		Needs:  []string{serviceregistry.KeyUpdater},
 		Groups: []string{"scheduler"},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			upd := serviceregistry.Get[*Updater](c, "updater")
+			upd := serviceregistry.Get[*Updater](c, serviceregistry.KeyUpdater)
 			scheduler := NewScheduler(upd, func() SchedulerConfig {
 				return SchedulerConfig{
 					Enabled:     config.AppConfig.AutoUpdate.Enabled,

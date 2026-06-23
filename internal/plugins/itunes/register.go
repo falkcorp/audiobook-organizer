@@ -1,10 +1,11 @@
 // file: internal/plugins/itunes/register.go
-// version: 2.0.0
+// version: 2.0.1
+// last-edited: 2026-06-23
 
 // Service registry registration for the iTunes UOS plugin (W5).
 //
 // As of PROMOTE-STUB-REGISTRATIONS (May 13, 2026) this is no longer a stub.
-// "itunes" is container-built (internal/server/registry_wire.go) and the
+// serviceregistry.KeyITunes is container-built (internal/server/registry_wire.go) and the
 // plugin's only deps — *itunesservice.Service + database.Store — are
 // pullable here. PostInit registers OperationDefs with the opregistry
 // after Build completes, mirroring the same nil-guard ordering used in
@@ -42,18 +43,18 @@ func (p *Plugin) PostInit(_ context.Context, c *serviceregistry.Container) error
 func init() {
 	serviceregistry.Register(serviceregistry.ServiceDef{
 		Name:   "itunesplugin",
-		Needs:  []string{"itunes", "store", "config"},
+		Needs:  []string{serviceregistry.KeyITunes, serviceregistry.KeyStore, serviceregistry.KeyConfig},
 		Groups: []string{"plugins"},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			cfg := serviceregistry.Get[*config.Config](c, "config")
+			cfg := serviceregistry.Get[*config.Config](c, serviceregistry.KeyConfig)
 			// Test-path guard: empty RootDir means tests without a real
 			// AppConfig — the mock store has no UpsertOpDefinitionV2
 			// expectations, so don't register ops.
 			if cfg.RootDir == "" {
 				return (*Plugin)(nil), nil
 			}
-			svc := serviceregistry.Get[*itunesservice.Service](c, "itunes")
-			store := serviceregistry.Get[database.Store](c, "store")
+			svc := serviceregistry.Get[*itunesservice.Service](c, serviceregistry.KeyITunes)
+			store := serviceregistry.Get[database.Store](c, serviceregistry.KeyStore)
 			return New(svc, store), nil
 		},
 	})

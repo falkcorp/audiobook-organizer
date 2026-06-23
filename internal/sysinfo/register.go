@@ -1,5 +1,6 @@
 // file: internal/sysinfo/register.go
-// version: 1.0.0
+// version: 1.0.1
+// last-edited: 2026-06-23
 
 package sysinfo
 
@@ -10,11 +11,11 @@ import (
 
 func init() {
 	serviceregistry.Register(serviceregistry.ServiceDef{
-		Name:   "dashboard",
-		Needs:  []string{"store"},
+		Name:   serviceregistry.KeyDashboard,
+		Needs:  []string{serviceregistry.KeyStore},
 		Groups: []string{"core"},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			store := serviceregistry.Get[database.Store](c, "store")
+			store := serviceregistry.Get[database.Store](c, serviceregistry.KeyStore)
 			return NewDashboardService(store), nil
 		},
 	})
