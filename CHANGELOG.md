@@ -1,11 +1,18 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.63.0 -->
+<!-- version: 3.64.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
-<!-- last-edited: 2026-06-22 -->
+<!-- last-edited: 2026-06-23 -->
 
 # Changelog
 
 ## [Unreleased]
+
+### Fixed
+
+#### June 23, 2026 — audit tracking cleanup + PERF-4 bug fix
+
+- **`fix(database)`** PERF-4 — `SearchBooks` with `limit=0` returned zero rows. Root cause: `len(filtered) < 0` is always false. Fixed by treating `limit==0` as "no limit" (standard Go convention). iTunes search panel now returns results when a search term is entered. Regression test `TestSearchBooksUnlimited` added.
+- **`docs`** SEC-3, SEC-4, SEC-9, FE-3 — tracking doc updated to ✅; all were already fixed in prior PRs (SEC-3/4 in PR A #1574; SEC-9 via `MaskSecrets()`; FE-3 via PR L #1585 which eliminated the stale code path).
 
 ### Security
 

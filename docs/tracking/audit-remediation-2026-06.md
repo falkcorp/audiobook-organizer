@@ -1,7 +1,7 @@
 <!-- file: docs/tracking/audit-remediation-2026-06.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f -->
-<!-- last-edited: 2026-06-22 -->
+<!-- last-edited: 2026-06-23 -->
 
 # Audit Remediation Tracking — June 2026
 
@@ -36,13 +36,13 @@ These Structure Audit findings were addressed in the May–June refactor wave be
 |---|---|---|---|---|
 | SEC-1 | `abk_...` API key committed in `docs/FINGERPRINT_E2E_TEST_REPORT.md:141` | Sweep | ⬜ | **Immediate.** Rotate key, replace with placeholder, add secret scanning to docs/. |
 | SEC-2 | Bootstrap/read-only credentials generated to plaintext files at startup | Sweep | ✅ | `Config.WriteStartupReadOnlyKey` bool (default true). Gated in `server_lifecycle.go`. Bootstrap token unchanged (emergency access). |
-| SEC-3 | Temp-login URLs trust inbound `Host` header | Sweep | ⬜ | `auth_temp_login.go:114`. Use configured canonical URL or Host allowlist. |
-| SEC-4 | No security-header middleware (CSP, frame-ancestors, nosniff, HSTS) | Sweep | ⬜ | Gap around `server_middleware.go:21`. |
+| SEC-3 | Temp-login URLs trust inbound `Host` header | Sweep | ✅ | Fixed in PR A (#1574): `auth_temp_login.go:108-116` uses `s.externalURL`; comment explicitly says "never trust the inbound Host header". |
+| SEC-4 | No security-header middleware (CSP, frame-ancestors, nosniff, HSTS) | Sweep | ✅ | Fixed in PR A (#1574): `securityHeadersMiddleware()` registered at `server.go:361`; sets nosniff, X-Frame-Options, HSTS (HTTPS only), Referrer-Policy. CSP intentionally omitted — React SPA requires inline styles. |
 | SEC-5 | Restore `verify=true` is a no-op; restore target is arbitrary absolute path | Sweep | ✅ | `pathvalidation.IsDangerousRoot` blocks system-dir targets; `verify=true` now logs a visible warning. Full checksum manifest deferred. Shipped PR #1584. |
 | SEC-6 | Factory reset deletes everything under `RootDir` without path validation | Sweep | ✅ | `pathvalidation.IsDangerousRoot` check added before library folder deletion; returns 400 + logs error if RootDir is a protected path. Shipped PR #1584. |
 | SEC-7 | `/metrics` and cache-stats endpoints unauthenticated | Sweep | ✅ | `/cache/stats` + `/cache/stats/history` moved to `protected` group (PermLibraryView). `/metrics` kept as accepted-risk per MED-1 — standard Prometheus scrape endpoint, network-layer gating. |
-| SEC-8 | Docker build downloads unsigned tarballs, uses mutable base tags | Sweep | ⬜ | P2. Pin base digest, verify SHA256. |
-| SEC-9 | OpenAI key exposed to frontend runtime for validation | Sweep | ⬜ | P2. Move validation server-side. |
+| SEC-8 | Docker build downloads unsigned tarballs, uses mutable base tags | Sweep | ⬜ | P2. Pin `node:26-alpine`, `golang:1.26-alpine`, `alpine:3.24` to `@sha256:...` digests in `Dockerfile` + `Dockerfile.build-cgo`. Deferred — network-only change, no prod risk (internal network only). |
+| SEC-9 | OpenAI key exposed to frontend runtime for validation | Sweep | ✅ | `GetConfig` calls `MaskSecrets()` before responding; `update_service.go:37-55` masks all secret fields (OpenAI, AcoustID, Google Books, Hardcover, BasicAuth). Frontend only receives `***` masked value. |
 
 ---
 
@@ -53,9 +53,9 @@ These Structure Audit findings were addressed in the May–June refactor wave be
 | PERF-1 | Dedup full scan repeatedly sorts all candidate rows, caps at global top 50 — books with many candidates get incorrect results | Sweep | ⬜ | `dedup/engine.go:2032,404`, `embedding_store.go:608,663`. Add `ListCandidatesForEntity(entityType, bookID, status)` with index. |
 | PERF-2 | Multi-file import hashes/tags same files repeatedly, one `UpsertBookFile` per segment | Sweep | ⬜ | `scanner.go:1885,1307,1322,1327`. Carry hash/tag results forward; batch upserts; recompute aggregates once per book. |
 | PERF-3 | Library list has full-materialization escape hatches | Sweep | ⬜ | `audiobooks/service.go:856,1092,1286`. Push filters into `BookSummaryFilter`; add projections for common sorts. |
-| PERF-4 | iTunes search calls `SearchBooks(search, 0, 0)` — returns zero rows | Sweep | ⬜ | `handlers/itunes.go:693`. Add bounded iTunes-filtered search. |
+| PERF-4 | iTunes search calls `SearchBooks(search, 0, 0)` — returns zero rows | Sweep | ✅ | Root cause: `pebble_store.go:3169` `len(filtered) < limit` is always false when `limit=0`. Fixed: treat `limit==0` as "no limit". Regression test `TestSearchBooksUnlimited` added. |
 | PERF-5 | iTunes backfill: offset pagination, N+1 file reads, per-row writes | Sweep | ⬜ | `itunes/backfill.go:21,46,73`. Cursor iteration, batch file lookup, bulk writes. |
-| PERF-6 | Search index rebuild uses offset-based `GetAllBooks` | Sweep | ⬜ | `server_search.go:63`. Add streaming/cursor book iteration. |
+| PERF-6 | Search index rebuild uses offset-based `GetAllBooks` | Sweep | ⬜ | `server_search.go:63`. Deferred — requires `GetAllBooksFrom(afterID, limit)` cursor method on Store interface + mock regen. TODO comment added at call site. |
 | PERF-7 | Memdb projection is a monolith; strips `AcoustIDFingerprint` on round-trip | Sweep | ✅ | `UpsertBookFile` now has the same fingerprint-preserve guard as `BatchUpsertBookFiles`. 3 regression tests added in `pebble_bookfile_preserve_test.go`. |
 | PERF-8 | Backup walks live Pebble files directly | Sweep | ⬜ | P2. Use Pebble `Checkpoint` before archiving. |
 
@@ -85,7 +85,7 @@ These Structure Audit findings were addressed in the May–June refactor wave be
 |---|---|---|---|---|
 | FE-1 | No centralized `apiFetch` wrapper — credentials, CSRF, error parsing, abort duplicated across `api.ts`, `activityApi.ts`, `readingApi.ts` | Sweep | ⬜ | `api.ts:891`, `activityApi.ts:141`, `readingApi.ts:62`. |
 | FE-2 | `ActivityLog` page-size changes can fetch stale data | Sweep | ⬜ | `ActivityLog.tsx:358,384,411`. Add `pageSize` to callback deps. |
-| FE-3 | Legacy `BookDedup` rows-per-page changes can fetch stale data | Sweep | ⬜ | `BookDedup.tsx:2249,2273`. Add dep or retire legacy tab. |
+| FE-3 | Legacy `BookDedup` rows-per-page changes can fetch stale data | Sweep | ✅ | Resolved by PR L (#1585): `BookDedup.tsx` reduced to 145 lines (pure tab router); the stale rows-per-page code was in the extracted tab components which were rewritten. |
 | FE-4 | `BookDetail` file/segment state stale across route-param changes | Sweep | ⬜ | `BookDetail.tsx:80,223`. Reset on `id` change. |
 | FE-5 | `Library.tsx` still a 3,333-line maintenance hotspot | Both | ⬜ | Extract `useLibraryQuery`, `useLibrarySelection`, `useImportPaths`, `useLibraryOperations`. |
 | FE-6 | `useSettingsHandlers` passes too much mutable state through one hook | Sweep | ⬜ | `useSettingsHandlers.ts:40`. Split by domain. |

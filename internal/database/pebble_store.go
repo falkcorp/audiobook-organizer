@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.94.0
+// version: 1.95.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-06-22
+// last-edited: 2026-06-23
 
 package database
 
@@ -3165,12 +3165,13 @@ func (p *PebbleStore) SearchBooks(query string, limit, offset int) ([]Book, erro
 		narratorMatch := book.Narrator != nil && strings.Contains(strings.ToLower(*book.Narrator), lowerQuery)
 
 		if titleMatch || authorMatch || narratorMatch {
-			// Apply pagination: only collect results in the requested range
-			if count >= offset && len(filtered) < limit {
+			// Apply pagination: only collect results in the requested range.
+			// limit == 0 means "no limit" (return all matches).
+			if count >= offset && (limit == 0 || len(filtered) < limit) {
 				filtered = append(filtered, book)
 			}
 			count++
-			if len(filtered) >= limit {
+			if limit > 0 && len(filtered) >= limit {
 				break
 			}
 		}
