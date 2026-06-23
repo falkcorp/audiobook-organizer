@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/handler.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: d1b9e024-d28c-4d62-8f90-96d7064559c4
-// last-edited: 2026-06-13
+// last-edited: 2026-06-23
 
 // Package deduphandler hosts the dedup-domain HTTP handlers extracted from the
 // server package: dedup candidate / cluster / series listing, merge / dismiss /
@@ -15,13 +15,11 @@
 // wrap *Server methods which stay in package server (they are shared with other
 // domains). As a result package deduphandler never imports package server.
 //
-// The store and the embedding store are reached through LAZY PROVIDER CLOSURES
-// (getStore / getEmbeddingStore) so a value swapped after wireHandlers (a
-// router-integration test swaps server.store post-wire) is still observed at
-// request time, mirroring the system handler's getStore seam. opRegistry /
-// mergeService / dedupEngine are interface snapshots taken at wire time (they
-// are assigned once in registry_wire, before setupRoutes, and never swapped),
-// each guarded against typed-nil boxing by the controller.
+// The store and the embedding store are WIRE-TIME SNAPSHOTS (assigned once in
+// New, never swapped after that). opRegistry / mergeService / dedupEngine are
+// also interface snapshots taken at wire time (assigned once in registry_wire,
+// before setupRoutes, and never swapped), each guarded against typed-nil boxing
+// by the controller.
 //
 // NAME NOTE: this package is `deduphandler` (dir internal/server/handlers/dedup/)
 // to avoid clashing with the dedup ENGINE package internal/dedup, imported here
@@ -49,19 +47,14 @@ import (
 
 // Handler hosts the dedup-domain HTTP endpoints.
 type Handler struct {
-	// getStore resolves the database store lazily, at request time. The original
-	// handlers read s.Store() at call time (late binding), and a router
-	// integration test swaps server.store AFTER wiring to inject a mock — so
-	// snapshotting the store at wire time would capture the pre-swap store and
-	// miss the mock's expectations. The provider performs the typed-nil guard.
-	getStore func() DedupStore
+	// store is the wire-time snapshot of the database store. All handlers read
+	// from this field directly (no lazy provider needed).
+	store DedupStore
 
-	// getEmbeddingStore resolves the concrete *database.EmbeddingStore lazily, at
-	// request time. The original handlers read s.embeddingStore at call time and
-	// nil-checked it; the provider performs the nil-check (a nil concrete pointer
-	// stays nil, no interface boxing involved). Concrete pointer (not interface)
-	// because EmbeddingStore is a clean db type under heavy multi-method use.
-	getEmbeddingStore func() *database.EmbeddingStore
+	// embeddingStore is the wire-time snapshot of the concrete
+	// *database.EmbeddingStore. Concrete pointer (not interface) because
+	// EmbeddingStore is a clean db type under heavy multi-method use.
+	embeddingStore *database.EmbeddingStore
 
 	// opRegistry backs the scan-trigger endpoints. Interface snapshot guarded by
 	// the controller against typed-nil boxing so the in-method `== nil` guards
@@ -89,8 +82,8 @@ type Handler struct {
 
 // New constructs a dedup Handler from its dependencies.
 func New(
-	getStore func() DedupStore,
-	getEmbeddingStore func() *database.EmbeddingStore,
+	store DedupStore,
+	embeddingStore *database.EmbeddingStore,
 	opRegistry OperationsRegistry,
 	mergeService MergeService,
 	dedupEngine DedupEngine,
@@ -98,32 +91,14 @@ func New(
 	markDuplicatesFlaggedDirty func(reason string),
 ) *Handler {
 	return &Handler{
-		getStore:                   getStore,
-		getEmbeddingStore:          getEmbeddingStore,
+		store:                      store,
+		embeddingStore:             embeddingStore,
 		opRegistry:                 opRegistry,
 		mergeService:               mergeService,
 		dedupEngine:                dedupEngine,
 		publishEvent:               publishEvent,
 		markDuplicatesFlaggedDirty: markDuplicatesFlaggedDirty,
 	}
-}
-
-// resolveStore returns the live store via the lazy provider, or nil if no
-// provider was supplied or the provider yields nil.
-func (h *Handler) resolveStore() DedupStore {
-	if h.getStore == nil {
-		return nil
-	}
-	return h.getStore()
-}
-
-// resolveEmbeddingStore returns the live *database.EmbeddingStore via the lazy
-// provider, or nil if no provider was supplied or it yields nil.
-func (h *Handler) resolveEmbeddingStore() *database.EmbeddingStore {
-	if h.getEmbeddingStore == nil {
-		return nil
-	}
-	return h.getEmbeddingStore()
 }
 
 // ListDedupCandidates handles GET /api/v1/dedup/candidates.
@@ -149,7 +124,7 @@ func (h *Handler) resolveEmbeddingStore() *database.EmbeddingStore {
 // field (the composite 0–100 value). "band" is already part of
 // DedupCandidate. "score_breakdown" is omitted unless include_breakdown=true.
 func (h *Handler) ListDedupCandidates(c *gin.Context) {
-	es := h.resolveEmbeddingStore()
+	es := h.embeddingStore
 	if es == nil {
 		httputil.RespondWithServiceUnavailable(c, "embedding store not available")
 		return
@@ -216,7 +191,7 @@ func (h *Handler) ListDedupCandidates(c *gin.Context) {
 	// slips through (race, missed delete, crash between cleanup runs),
 	// the UI never shows a candidate that would 404 when clicked.
 	// Non-book entities (e.g. author) skip the existence check.
-	store := h.resolveStore()
+	store := h.store
 	// bookCache memoises GetBookByID across both referenced IDs of every
 	// candidate. A miss is recorded as a nil entry so we never re-query a
 	// known-dead ID. The cached *database.Book doubles as the include_books
@@ -359,7 +334,7 @@ func (h *Handler) ListDedupCandidates(c *gin.Context) {
 // Returns 404 when the candidate ID is not found.
 // Returns 503 when the embedding store is unavailable.
 func (h *Handler) GetDedupCandidateBreakdown(c *gin.Context) {
-	es := h.resolveEmbeddingStore()
+	es := h.embeddingStore
 	if es == nil {
 		httputil.RespondWithServiceUnavailable(c, "embedding store not available")
 		return
@@ -383,7 +358,7 @@ func (h *Handler) GetDedupCandidateBreakdown(c *gin.Context) {
 	}
 
 	// Fetch both books and their files for the side-by-side comparison view.
-	store := h.resolveStore()
+	store := h.store
 	type bookDetail struct {
 		*database.Book
 		Files []database.BookFile `json:"files"`
@@ -468,7 +443,7 @@ func (h *Handler) RescoreDedupCandidates(c *gin.Context) {
 // entity_b_id, entity_b_title, entity_b_author,
 // llm_verdict, llm_reason, created_at, updated_at.
 func (h *Handler) ExportDedupCandidates(c *gin.Context) {
-	es := h.resolveEmbeddingStore()
+	es := h.embeddingStore
 	if es == nil {
 		httputil.RespondWithServiceUnavailable(c, "embedding store not available")
 		return
@@ -509,7 +484,7 @@ func (h *Handler) ExportDedupCandidates(c *gin.Context) {
 	// memoized so a book that appears in multiple candidates is only
 	// fetched once. Books-only for now — authors export would need the
 	// author table which we can add later if needed.
-	store := h.resolveStore()
+	store := h.store
 	type enriched struct {
 		title  string
 		author string
@@ -660,7 +635,7 @@ type dedupSeriesSummary struct {
 // from every summary — they're cross-series and don't fit the
 // "series-aware bulk merge" workflow.
 func (h *Handler) ListDedupCandidateSeries(c *gin.Context) {
-	es := h.resolveEmbeddingStore()
+	es := h.embeddingStore
 	if es == nil {
 		httputil.RespondWithServiceUnavailable(c, "embedding store not available")
 		return
@@ -677,7 +652,7 @@ func (h *Handler) ListDedupCandidateSeries(c *gin.Context) {
 	}
 
 	// Memoize book → series_id lookups across candidates.
-	store := h.resolveStore()
+	store := h.store
 	bookSeries := make(map[string]int, len(cands)*2)
 	lookup := func(id string) int {
 		if v, ok := bookSeries[id]; ok {
@@ -777,7 +752,7 @@ func (h *Handler) ListDedupCandidateSeries(c *gin.Context) {
 // a scope, not a selector. If the user wants those pairs merged, they
 // can use the regular Merge Filtered action.
 func (h *Handler) MergeDedupCandidateSeries(c *gin.Context) {
-	es := h.resolveEmbeddingStore()
+	es := h.embeddingStore
 	if es == nil {
 		httputil.RespondWithServiceUnavailable(c, "embedding store not available")
 		return
@@ -806,7 +781,7 @@ func (h *Handler) MergeDedupCandidateSeries(c *gin.Context) {
 	}
 
 	// Filter to same-series candidates only.
-	store := h.resolveStore()
+	store := h.store
 	bookSeries := make(map[string]int, len(cands)*2)
 	lookup := func(id string) int {
 		if v, ok := bookSeries[id]; ok {
@@ -905,7 +880,7 @@ func (h *Handler) MergeDedupCandidateSeries(c *gin.Context) {
 
 // GetDedupStats handles GET /api/v1/dedup/stats.
 func (h *Handler) GetDedupStats(c *gin.Context) {
-	es := h.resolveEmbeddingStore()
+	es := h.embeddingStore
 	if es == nil {
 		httputil.RespondWithServiceUnavailable(c, "embedding store not available")
 		return
@@ -935,7 +910,7 @@ func (h *Handler) GetDedupStats(c *gin.Context) {
 // Safety: caller should confirm with the user before invoking, because
 // this is destructive and irreversible.
 func (h *Handler) BulkMergeDedupCandidates(c *gin.Context) {
-	es := h.resolveEmbeddingStore()
+	es := h.embeddingStore
 	if es == nil {
 		httputil.RespondWithServiceUnavailable(c, "embedding store not available")
 		return
@@ -1032,7 +1007,7 @@ func (h *Handler) BulkMergeDedupCandidates(c *gin.Context) {
 // merged together as one logical group rather than one pairwise merge at a
 // time (which would fight the version-group state mid-way).
 func (h *Handler) MergeDedupCluster(c *gin.Context) {
-	es := h.resolveEmbeddingStore()
+	es := h.embeddingStore
 	if es == nil {
 		httputil.RespondWithServiceUnavailable(c, "embedding store not available")
 		return
@@ -1123,7 +1098,7 @@ func (h *Handler) MergeDedupCluster(c *gin.Context) {
 // as status=dismissed. No books are modified — this just removes the pair
 // from the pending queue.
 func (h *Handler) DismissDedupCluster(c *gin.Context) {
-	es := h.resolveEmbeddingStore()
+	es := h.embeddingStore
 	if es == nil {
 		httputil.RespondWithServiceUnavailable(c, "embedding store not available")
 		return
@@ -1199,7 +1174,7 @@ func (h *Handler) DismissDedupCluster(c *gin.Context) {
 // Accepts both singular and plural forms for backwards compatibility.
 // If both are provided, they're merged into a single set.
 func (h *Handler) RemoveFromDedupCluster(c *gin.Context) {
-	es := h.resolveEmbeddingStore()
+	es := h.embeddingStore
 	if es == nil {
 		httputil.RespondWithServiceUnavailable(c, "embedding store not available")
 		return
@@ -1303,7 +1278,7 @@ func (h *Handler) RemoveFromDedupCluster(c *gin.Context) {
 
 // MergeDedupCandidate handles POST /api/v1/dedup/candidates/:id/merge.
 func (h *Handler) MergeDedupCandidate(c *gin.Context) {
-	es := h.resolveEmbeddingStore()
+	es := h.embeddingStore
 	if es == nil {
 		httputil.RespondWithServiceUnavailable(c, "embedding store not available")
 		return
@@ -1423,7 +1398,7 @@ func (h *Handler) MergeDedupCandidate(c *gin.Context) {
 
 // DismissDedupCandidate handles POST /api/v1/dedup/candidates/:id/dismiss.
 func (h *Handler) DismissDedupCandidate(c *gin.Context) {
-	es := h.resolveEmbeddingStore()
+	es := h.embeddingStore
 	if es == nil {
 		httputil.RespondWithServiceUnavailable(c, "embedding store not available")
 		return
@@ -1673,7 +1648,7 @@ type AcoustIDCompareResponse struct {
 // HandleCompareAcoustID handles POST /api/v1/audiobooks/:id/compare-acoustid?other=<bookID2>.
 // Computes per-segment fingerprint comparison between two books' primary files.
 func (h *Handler) HandleCompareAcoustID(c *gin.Context) {
-	store := h.resolveStore()
+	store := h.store
 	idA := c.Param("id")
 	idB := c.Query("other")
 	if idB == "" {

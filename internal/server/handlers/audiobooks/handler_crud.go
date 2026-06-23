@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_crud.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7f0f10bf-7554-4af5-b2d2-ce0a6af6b46e
-// last-edited: 2026-06-03
+// last-edited: 2026-06-23
 
 // Write-side CRUD + batch endpoints for the audiobooks domain: update
 // (full-column replacement with change-history recording + file write-back),
@@ -32,7 +32,7 @@ import (
 // the file, enqueues iTunes write-back, and invalidates caches.
 func (h *Handler) UpdateAudiobook(c *gin.Context) {
 	id := c.Param("id")
-	store := h.resolveStore()
+	store := h.store
 
 	var payload map[string]any
 	if err := c.ShouldBindJSON(&payload); err != nil {

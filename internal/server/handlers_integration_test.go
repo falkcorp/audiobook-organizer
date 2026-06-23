@@ -1,7 +1,7 @@
 // file: internal/server/handlers_integration_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-06-10
+// last-edited: 2026-06-23
 
 package server
 
@@ -153,7 +153,7 @@ func newAudiobooksHandler(s *Server) *audiobookshandler.Handler {
 		abChangelog = s.changelogService
 	}
 	return audiobookshandler.New(
-		func() audiobookshandler.AudiobooksStore { return s.Store() },
+		s.Store(),
 		abSvc,
 		abUpdater,
 		func() audiobookshandler.WriteBackEnqueuer {

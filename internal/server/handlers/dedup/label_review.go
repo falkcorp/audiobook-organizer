@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/label_review.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 5e2a9c41-7b30-4d68-8f12-3a6e0c9d5b27
-// last-edited: 2026-06-19
+// last-edited: 2026-06-23
 
 package deduphandler
 
@@ -19,7 +19,7 @@ import (
 // UI, filterable by label / label_source / band / folder_relation / signature_relation,
 // paginated. The total is the unfiltered-by-page count for the same filters.
 func (h *Handler) ListDedupLabels(c *gin.Context) {
-	es := h.resolveEmbeddingStore()
+	es := h.embeddingStore
 	if es == nil {
 		httputil.RespondWithServiceUnavailable(c, "embedding store not available")
 		return
@@ -60,7 +60,7 @@ func (h *Handler) ListDedupLabels(c *gin.Context) {
 // GetDedupLabelStats handles GET /api/v1/dedup/labels/stats — counts by label and by
 // label_source, so the review UI can show the dataset composition at a glance.
 func (h *Handler) GetDedupLabelStats(c *gin.Context) {
-	es := h.resolveEmbeddingStore()
+	es := h.embeddingStore
 	if es == nil {
 		httputil.RespondWithServiceUnavailable(c, "embedding store not available")
 		return
@@ -98,7 +98,7 @@ func (h *Handler) GetDedupLabelStats(c *gin.Context) {
 // label_source="human" (this is gold) and re-stamps DecidedAt, so reviewer
 // corrections take precedence over rule/auto-mined labels.
 func (h *Handler) OverrideDedupLabel(c *gin.Context) {
-	es := h.resolveEmbeddingStore()
+	es := h.embeddingStore
 	if es == nil {
 		httputil.RespondWithServiceUnavailable(c, "embedding store not available")
 		return

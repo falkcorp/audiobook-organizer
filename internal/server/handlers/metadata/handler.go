@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
-// last-edited: 2026-06-03
+// last-edited: 2026-06-23
 
 // Package metadatahandler hosts the metadata-domain HTTP handlers extracted
 // from the server package's metadata_handlers.go: batch-update / validate /
@@ -36,13 +36,12 @@
 //
 // As a result package metadatahandler never imports package server.
 //
-// The store and the write-back batcher are reached through LAZY PROVIDER
-// CLOSURES (getStore / getWriteBack) so values swapped after wireHandlers (a
-// router-integration test swaps server.store / server.writeBackBatcher
-// post-wire) are still observed at request time, mirroring the audiobooks /
-// duplicates seams. The interface-typed service deps (metadataFetchService,
-// opRegistry, fileIOPool) are wire-time snapshots, each guarded against
-// typed-nil boxing by the controller in wire_handlers.go.
+// The store is a WIRE-TIME SNAPSHOT (assigned once in New, never swapped after
+// that). The write-back batcher remains a lazy provider closure because
+// integration tests swap server.writeBackBatcher post-wire. The interface-typed
+// service deps (metadataFetchService, opRegistry, fileIOPool) are wire-time
+// snapshots, each guarded against typed-nil boxing by the controller in
+// wire_handlers.go.
 
 package metadatahandler
 
@@ -71,14 +70,12 @@ import (
 
 // Handler hosts the metadata-domain HTTP endpoints.
 type Handler struct {
-	// getStore resolves the database store lazily, at request time. The original
-	// handlers read s.Store() at call time (late binding), and a router
-	// integration test swaps server.store AFTER wiring to inject a mock — so
-	// snapshotting the store at wire time would capture the pre-swap store. The
-	// provider returns a value typed MetadataStore (which embeds
-	// database.BookStore) so the handler can pass it straight to
-	// metadata.BatchUpdateMetadata / metadata.ImportMetadata.
-	getStore func() MetadataStore
+	// store is the wire-time snapshot of the database store. All handlers read
+	// from this field directly (no lazy provider needed — no post-wire swap for
+	// this package's store). Typed MetadataStore (which embeds database.BookStore)
+	// so the handler can pass it straight to metadata.BatchUpdateMetadata /
+	// metadata.ImportMetadata.
+	store MetadataStore
 
 	metadataFetchService MetadataFetchService
 
@@ -135,7 +132,7 @@ type Handler struct {
 
 // New constructs a metadata Handler from its dependencies.
 func New(
-	getStore func() MetadataStore,
+	store MetadataStore,
 	metadataFetchService MetadataFetchService,
 	getWriteBack func() WriteBackEnqueuer,
 	opRegistry OperationsRegistry,
@@ -148,7 +145,7 @@ func New(
 	publishEvent func(ctx context.Context, event plugin.Event),
 ) *Handler {
 	return &Handler{
-		getStore:                   getStore,
+		store:                      store,
 		metadataFetchService:       metadataFetchService,
 		getWriteBack:               getWriteBack,
 		opRegistry:                 opRegistry,
@@ -160,15 +157,6 @@ func New(
 		updateFetchedMetadataState: updateFetchedMetadataState,
 		publishEvent:               publishEvent,
 	}
-}
-
-// resolveStore returns the live store via the lazy provider, or nil if no
-// provider was supplied or the provider yields nil.
-func (h *Handler) resolveStore() MetadataStore {
-	if h.getStore == nil {
-		return nil
-	}
-	return h.getStore()
 }
 
 // resolveWriteBack returns the live write-back batcher via the lazy provider, or
@@ -227,7 +215,7 @@ type batchSaveOpParams struct {
 
 // batchUpdateMetadata handles batch metadata updates with validation
 func (h *Handler) batchUpdateMetadataImpl(c *gin.Context) {
-	store := h.resolveStore()
+	store := h.store
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
@@ -292,7 +280,7 @@ func (h *Handler) validateMetadataImpl(c *gin.Context) {
 
 // exportMetadata exports all audiobook metadata
 func (h *Handler) exportMetadataImpl(c *gin.Context) {
-	store := h.resolveStore()
+	store := h.store
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
@@ -317,7 +305,7 @@ func (h *Handler) exportMetadataImpl(c *gin.Context) {
 
 // importMetadata imports audiobook metadata
 func (h *Handler) importMetadataImpl(c *gin.Context) {
-	store := h.resolveStore()
+	store := h.store
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
@@ -389,7 +377,7 @@ func (h *Handler) searchMetadataImpl(c *gin.Context) {
 func (h *Handler) fetchAudiobookMetadataImpl(c *gin.Context) {
 	id := c.Param("id")
 
-	store := h.resolveStore()
+	store := h.store
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
@@ -432,7 +420,7 @@ func (h *Handler) fetchAudiobookMetadataImpl(c *gin.Context) {
 // alternative-search, not a re-read of the same query.
 func (h *Handler) searchAudiobookMetadataImpl(c *gin.Context) {
 	id := c.Param("id")
-	if h.resolveStore() == nil {
+	if h.store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
 	}
@@ -525,7 +513,7 @@ func decodeCachedCandidates(entry *metafetch.MetadataCandidateCache) []metafetch
 // applyAudiobookMetadata handles POST /api/v1/audiobooks/:id/apply-metadata.
 func (h *Handler) applyAudiobookMetadataImpl(c *gin.Context) {
 	id := c.Param("id")
-	store := h.resolveStore()
+	store := h.store
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
@@ -597,7 +585,7 @@ func (h *Handler) applyAudiobookMetadataImpl(c *gin.Context) {
 // markAudiobookNoMatch handles POST /api/v1/audiobooks/:id/mark-no-match.
 func (h *Handler) markAudiobookNoMatchImpl(c *gin.Context) {
 	id := c.Param("id")
-	store := h.resolveStore()
+	store := h.store
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
@@ -622,7 +610,7 @@ func (h *Handler) markAudiobookNoMatchImpl(c *gin.Context) {
 // handleGetMetadataRejections handles GET /api/v1/audiobooks/:id/metadata-rejections.
 func (h *Handler) handleGetMetadataRejectionsImpl(c *gin.Context) {
 	id := c.Param("id")
-	store := h.resolveStore()
+	store := h.store
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
@@ -642,7 +630,7 @@ func (h *Handler) handleGetMetadataRejectionsImpl(c *gin.Context) {
 // It restores a book to a previous CoW version snapshot via the store layer.
 func (h *Handler) revertAudiobookMetadataImpl(c *gin.Context) {
 	id := c.Param("id")
-	store := h.resolveStore()
+	store := h.store
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
@@ -676,7 +664,7 @@ func (h *Handler) revertAudiobookMetadataImpl(c *gin.Context) {
 // Returns copy-on-write version snapshots from the store layer.
 func (h *Handler) listBookCOWVersionsImpl(c *gin.Context) {
 	id := c.Param("id")
-	store := h.resolveStore()
+	store := h.store
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
@@ -695,7 +683,7 @@ func (h *Handler) listBookCOWVersionsImpl(c *gin.Context) {
 // Prunes old copy-on-write version snapshots, keeping the most recent N.
 func (h *Handler) pruneBookCOWVersionsImpl(c *gin.Context) {
 	id := c.Param("id")
-	store := h.resolveStore()
+	store := h.store
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
@@ -731,7 +719,7 @@ func (h *Handler) writeBackAudiobookMetadataImpl(c *gin.Context) {
 	}
 	_ = c.ShouldBindJSON(&body)
 
-	store := h.resolveStore()
+	store := h.store
 	book, err := store.GetBookByID(id)
 	if err != nil || book == nil {
 		httputil.RespondWithNotFound(c, "audiobook", "")
@@ -779,7 +767,7 @@ func (h *Handler) writeBackAudiobookMetadataImpl(c *gin.Context) {
 // bulkFetchMetadata fetches external metadata for multiple audiobooks and applies
 // fields only when they are missing and not manually overridden or locked.
 func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
-	store := h.resolveStore()
+	store := h.store
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
@@ -1091,7 +1079,7 @@ func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
 // It creates an async operation that writes metadata tags and renames files
 // for all books matching the provided filters (or all organized/imported books).
 func (h *Handler) handleBulkWriteBackImpl(c *gin.Context) {
-	store := h.resolveStore()
+	store := h.store
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
@@ -1217,7 +1205,7 @@ func (h *Handler) batchWriteBackAudiobooksImpl(c *gin.Context) {
 		return
 	}
 
-	store := h.resolveStore()
+	store := h.store
 	doOrganize := req.Organize || req.Rename
 
 	// Create a supervisor operation for tracking
@@ -1409,7 +1397,7 @@ func (h *Handler) handleUpdateBookRatingImpl(c *gin.Context) {
 		}
 	}
 
-	store := h.resolveStore()
+	store := h.store
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return

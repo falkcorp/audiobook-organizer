@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/handler_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 62637af9-347f-4f38-b42b-d90ff3ab3654
-// last-edited: 2026-06-03
+// last-edited: 2026-06-23
 
 // Tests for the duplicates-domain handlers. The store / merge-service /
 // audiobook-service / metadata-fetch-service / operations-registry deps are
@@ -98,7 +98,7 @@ func newHandler(t *testing.T, opts ...func(*cfg)) (*duplicates.Handler, testDeps
 	}
 
 	h := duplicates.New(
-		func() duplicates.DuplicatesStore { return store },
+		store,
 		dc,
 		regArg,
 		audArg,

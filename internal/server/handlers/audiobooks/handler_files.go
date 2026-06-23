@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_files.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 82f8d1f7-46d5-4ead-b5c1-ba796fd785f9
-// last-edited: 2026-06-17
+// last-edited: 2026-06-23
 
 // File / segment endpoints for the audiobooks domain: segment listing,
 // book-file listing + patch, track-info extraction, relocate, and segment
@@ -49,7 +49,7 @@ func relocateTargetAllowed(store AudiobooksStore, absPath string) bool {
 // segments for a multi-file audiobook in the legacy BookSegment JSON shape.
 func (h *Handler) ListAudiobookSegments(c *gin.Context) {
 	id := c.Param("id")
-	store := h.resolveStore()
+	store := h.store
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
@@ -100,7 +100,7 @@ func (h *Handler) ListAudiobookSegments(c *gin.Context) {
 // check. GET /audiobooks/:id/files.
 func (h *Handler) ListBookFiles(c *gin.Context) {
 	bookID := c.Param("id")
-	store := h.resolveStore()
+	store := h.store
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
@@ -167,7 +167,7 @@ func (h *Handler) PatchBookFile(c *gin.Context) {
 	bookID := c.Param("id")
 	fileID := c.Param("file_id")
 
-	store := h.resolveStore()
+	store := h.store
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
@@ -211,7 +211,7 @@ func (h *Handler) PatchBookFile(c *gin.Context) {
 // segments. POST /audiobooks/:id/extract-track-info.
 func (h *Handler) ExtractTrackInfo(c *gin.Context) {
 	id := c.Param("id")
-	store := h.resolveStore()
+	store := h.store
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
@@ -324,7 +324,7 @@ func (h *Handler) ExtractTrackInfo(c *gin.Context) {
 // POST /audiobooks/:id/relocate.
 func (h *Handler) RelocateBookFiles(c *gin.Context) {
 	id := c.Param("id")
-	store := h.resolveStore()
+	store := h.store
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
@@ -433,7 +433,7 @@ func (h *Handler) RelocateBookFiles(c *gin.Context) {
 func (h *Handler) GetSegmentTags(c *gin.Context) {
 	id := c.Param("id")
 	segmentId := c.Param("segmentId")
-	store := h.resolveStore()
+	store := h.store
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
