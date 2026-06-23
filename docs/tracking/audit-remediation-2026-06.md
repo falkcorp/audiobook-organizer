@@ -1,5 +1,5 @@
 <!-- file: docs/tracking/audit-remediation-2026-06.md -->
-<!-- version: 1.15.0 -->
+<!-- version: 1.16.0 -->
 <!-- guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f -->
 <!-- last-edited: 2026-06-23 -->
 <!-- Note: per-finding table synced to PR delivery table on 2026-06-23 -->
@@ -89,7 +89,7 @@ These Structure Audit findings were addressed in the May–June refactor wave be
 | FE-3 | Legacy `BookDedup` rows-per-page changes can fetch stale data | Sweep | ✅ | Resolved by PR L (#1585): `BookDedup.tsx` reduced to 145 lines (pure tab router); the stale rows-per-page code was in the extracted tab components which were rewritten. |
 | FE-4 | `BookDetail` file/segment state stale across route-param changes | Sweep | ✅ | Reset on `id` change added (PR C #1576). |
 | FE-5 | `Library.tsx` still a 3,333-line maintenance hotspot | Both | ✅ Partial | `useLibraryQuery` + `useLibrarySelection` extracted, 3,333→1,811 lines (PR L #1585). `useImportPaths` + `useLibraryOperations` deferred — P2. |
-| FE-6 | `useSettingsHandlers` passes too much mutable state through one hook | Sweep | ⬜ | `useSettingsHandlers.ts:40`. Split by domain. P2. |
+| FE-6 | `useSettingsHandlers` passes too much mutable state through one hook | Sweep | ✅ | Extracted `useImportFolderHandlers` (212L), `useBackupHandlers` (167L), `useMetadataSourceHandlers` (121L). Main hook: 1259→936 lines (−26%). Return interface unchanged; Settings.tsx untouched. |
 | FE-7 | Sensitive one-time tokens remain rendered in React state after display | Sweep | ✅ | Token auto-clear after copy/timeout added (PR C #1576). |
 | FE-8 | E2E auth tests mock auth instead of exercising real cookie/CSRF | Sweep | ⬜ | Add one real-server smoke test. |
 | STR-4 | `BookDedup.tsx` still ~3,656 lines | Structure | ✅ | Split into 3 tab components (DedupAIReviewTab, DedupEmbeddingTab, DedupAcousticTab); 2,907→145 lines (PR L #1585). |

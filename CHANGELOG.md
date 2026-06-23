@@ -1,11 +1,17 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.71.0 -->
+<!-- version: 3.72.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-23 -->
 
 # Changelog
 
 ## [Unreleased]
+
+### Frontend
+
+#### June 23, 2026 — FE-6: split useSettingsHandlers by domain
+
+- **`refactor(frontend)`** FE-6 — `useSettingsHandlers.ts` (1259 lines) split into three domain-scoped sub-hooks: `useImportFolderHandlers`, `useBackupHandlers`, `useMetadataSourceHandlers`. Main hook reduced to 936 lines (−26%). Return interface and Settings.tsx consumer unchanged.
 
 ### Tooling
 
