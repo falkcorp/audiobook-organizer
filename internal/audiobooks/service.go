@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service.go
-// version: 1.31.1
+// version: 1.32.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-06-17
+// last-edited: 2026-06-23
 
 package audiobooks
 
@@ -853,12 +853,13 @@ func (svc *AudiobookService) buildBookSummaryFilter(f ListFilters, sortAsc bool)
 }
 
 func (svc *AudiobookService) buildBookSummaryFilterWithLookupCount(f ListFilters, sortAsc bool) (database.BookSummaryFilter, bool, *int64) {
-	if f.SortBy != "" && f.SortBy != "title" {
-		return database.BookSummaryFilter{}, false, nil
-	}
-	if f.FingerprintStatus != "" || f.CoveragePercentMin != nil || f.CoveragePercentMax != nil {
-		return database.BookSummaryFilter{}, false, nil
-	}
+	// Non-title sorts: the memdb walker still applies all other filter predicates
+	// (IsPrimary, LibraryState, RestrictToIDs, Predicate) and returns the
+	// filtered subset; the caller applySorting sorts that smaller slice in
+	// memory. Previously this fell back to an unfiltered full-corpus fetch.
+	// Fingerprint/coverage: FingerprintStatus and CoveragePercent are
+	// denormalized on the Book record, so they can be pushed as in-loop
+	// predicates without extra I/O.
 
 	// Tag intersection → ID set. Empty set ⇒ no matches (walker short-circuits).
 	var restrictIDs map[string]struct{}
@@ -912,10 +913,14 @@ func (svc *AudiobookService) buildBookSummaryFilterWithLookupCount(f ListFilters
 	var predicate func(*database.Book) bool
 	var pebbleLookupsPtr *int64
 	hasPerUser := len(f.PerUserFilters) > 0 && f.UserID != ""
-	if len(remainingFF) > 0 || hasPerUser {
+	hasFPFilters := f.FingerprintStatus != "" || f.CoveragePercentMin != nil || f.CoveragePercentMax != nil
+	if len(remainingFF) > 0 || hasPerUser || hasFPFilters {
 		store := svc.store
 		userID := f.UserID
 		perUser := f.PerUserFilters
+		fpStatus := f.FingerprintStatus
+		fpCovMin := f.CoveragePercentMin
+		fpCovMax := f.CoveragePercentMax
 		cheapFF, strippedFF := splitFieldFilters(remainingFF)
 		if len(strippedFF) > 0 {
 			slog.Debug("predicate uses stripped-field Pebble fallback",
@@ -949,6 +954,17 @@ func (svc *AudiobookService) buildBookSummaryFilterWithLookupCount(f ListFilters
 				if !matchesAllPerUserFilters(state, perUser) {
 					return false
 				}
+			}
+			// FingerprintStatus and CoveragePercent are denormalized on the
+			// Book record so they're available without a BookFile lookup.
+			if fpStatus != "" && b.FingerprintStatus != fpStatus {
+				return false
+			}
+			if fpCovMin != nil && b.CoveragePercent < *fpCovMin {
+				return false
+			}
+			if fpCovMax != nil && b.CoveragePercent > *fpCovMax {
+				return false
 			}
 			return true
 		}
@@ -1064,11 +1080,19 @@ func (svc *AudiobookService) GetAudiobooks(ctx context.Context, limit int, offse
 			// materialization, no 1GB working set per query.
 			//
 			// Falls back to the legacy fetch-all-then-filter path when the
-			// filter set contains something we can't push down (non-title
-			// sort, fingerprint filters). Pre-fix this was 100% of heavy
-			// queries; post-fix it's the rare ones.
+			// filter set contains something we can't push down. Previously
+			// non-title sorts and fingerprint filters always fell back; now they
+			// go through pushdown with predicates, reducing fetched rows from
+			// ~68K (unfiltered) to only the filtered subset (e.g. ~38K primary).
 			if bsf, pushdownOK, pebbleLookups := svc.buildBookSummaryFilterWithLookupCount(f, sortAsc); pushdownOK {
-				summaries, didPushdown, sErr := svc.summariesPushdownFiltered(limit, offset, bsf)
+				// Non-title sorts need the post-filter pass for pagination
+				// (sort happens after paginate — pre-existing design). Fetch all
+				// filtered books so the service can slice after sorting.
+				pdLimit, pdOffset := limit, offset
+				if heavySorting {
+					pdLimit, pdOffset = 0, 0
+				}
+				summaries, didPushdown, sErr := svc.summariesPushdownFiltered(pdLimit, pdOffset, bsf)
 				if sErr == nil && summaries != nil {
 					books = bookSummariesToBooks(summaries)
 				}
@@ -1076,16 +1100,12 @@ func (svc *AudiobookService) GetAudiobooks(ctx context.Context, limit int, offse
 					slog.Debug("GetAudiobooks: stripped-field predicate Pebble fallback",
 						"lookups", *pebbleLookups, "books_returned", len(books))
 				}
-				// When the store actually pushed down (production memdb
-				// path), the walker has already applied filters AND
-				// pagination — re-running the in-memory post-filter
-				// would re-apply pagination against an already-paginated
-				// slice (offset bug) and waste cycles. Skip it.
-				//
-				// When the store fell back (mock / no filteredSummaryStore
-				// impl), summaries are unfiltered — let the post-filter
-				// pass below do its thing as the safety net.
-				if didPushdown {
+				// When the store pushed down AND the walker already handled
+				// pagination (no heavy sort), the post-filter pass would
+				// double-apply pagination. Skip it. For heavy sorts, keep
+				// hasPostFilters = true so the pagination block runs after
+				// applySorting recombines the filtered set.
+				if didPushdown && !heavySorting {
 					hasPostFilters = false
 				}
 			} else {
@@ -1280,9 +1300,9 @@ func (svc *AudiobookService) CountAudiobooksFiltered(ctx context.Context, filter
 		return svc.countSummariesPushdownFiltered(bsf)
 	}
 
-	// Fallback: legacy fetch-all-then-filter path. Hit only when the
-	// caller passed a fingerprint filter, which depends on BookFile data
-	// not stored on Book. Slow but correct.
+	// Unreachable in practice — buildBookSummaryFilter now returns pushdownOK=true
+	// for fingerprint filters (FingerprintStatus/CoveragePercent are denormalized
+	// on Book). Kept as a defensive fallback.
 	books, err := svc.store.GetAllBooks(0, 0)
 	if err != nil {
 		return 0, err

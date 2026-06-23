@@ -1,5 +1,5 @@
 <!-- file: docs/tracking/audit-remediation-2026-06.md -->
-<!-- version: 1.18.0 -->
+<!-- version: 1.19.0 -->
 <!-- guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f -->
 <!-- last-edited: 2026-06-23 -->
 <!-- Note: per-finding table synced to PR delivery table on 2026-06-23 -->
@@ -53,7 +53,7 @@ These Structure Audit findings were addressed in the May–June refactor wave be
 |---|---|---|---|---|
 | PERF-1 | Dedup full scan repeatedly sorts all candidate rows, caps at global top 50 — books with many candidates get incorrect results | Sweep | ✅ | `ListCandidatesForEntity(entityType, bookID, status)` secondary index added (PR D #1577). |
 | PERF-2 | Multi-file import hashes/tags same files repeatedly, one `UpsertBookFile` per segment | Sweep | ✅ Partial | Batch upserts shipped (PR J #1583): N→1 `BatchUpsertBookFiles` per book. Hash carry-forward (PERF-2b) blocked — needs `saveBookToDatabase` API change. |
-| PERF-3 | Library list has full-materialization escape hatches | Sweep | ⬜ | `audiobooks/service.go:856,1092,1286`. Push filters into `BookSummaryFilter`; add projections for common sorts. |
+| PERF-3 | Library list has full-materialization escape hatches | Sweep | ✅ | Removed two early-return escape hatches from `buildBookSummaryFilterWithLookupCount`: (1) non-title sorts now build the filter without SortBy and fetch all filtered books (not 68K unfiltered); (2) fingerprint/coverage pushed into `Predicate` closure (fields are denormalized on Book, no BookFile join needed). Non-title sort calls use `pdLimit=0` so post-filter paginates. `CountAudiobooksFiltered` fallback is now dead code. PR #1604. |
 | PERF-4 | iTunes search calls `SearchBooks(search, 0, 0)` — returns zero rows | Sweep | ✅ | Root cause: `pebble_store.go:3169` `len(filtered) < limit` is always false when `limit=0`. Fixed: treat `limit==0` as "no limit". Regression test `TestSearchBooksUnlimited` added. |
 | PERF-5 | iTunes backfill: offset pagination, N+1 file reads, per-row writes | Sweep | ✅ Partial | Per-row writes fixed: mappings now accumulated per page and flushed with one `BulkCreateExternalIDMappings` call (N→1 per page). N+1 file reads deferred — needs `GetBookFilesByBookIDs([]string)` batch method on Store + mock regen; TODO comment added. Offset pagination kept — 5 pages for 50K books is acceptable. |
 | PERF-6 | Search index rebuild uses offset-based `GetAllBooks` | Sweep | ✅ | Added `GetAllBooksFrom(afterID, limit)` cursor to `BookReader` interface (`iface_book.go`), implemented in `PebbleStore` (O(1) seek via LowerBound), updated 6 generated mocks + 1 hand-written mock, rewrote `server_search.go` backfill loop to use cursor. Shipped PR #1601. |
