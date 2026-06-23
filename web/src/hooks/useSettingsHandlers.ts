@@ -1,12 +1,15 @@
 // file: web/src/hooks/useSettingsHandlers.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: b8c9d0e1-f2a3-4567-bcde-678901234567
-// last-edited: 2026-06-19
+// last-edited: 2026-06-23
 
 import { ChangeEvent } from 'react';
 import { NavigateFunction } from 'react-router-dom';
 import * as api from '../services/api';
 import type { SettingsState } from '../pages/Settings';
+import { useImportFolderHandlers } from './useImportFolderHandlers';
+import { useBackupHandlers } from './useBackupHandlers';
+import { useMetadataSourceHandlers } from './useMetadataSourceHandlers';
 
 // ---------------------------------------------------------------------------
 // Local types
@@ -341,356 +344,45 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
   // Import folder management
   // -------------------------------------------------------------------------
 
-  const loadImportFolders = async () => {
-    try {
-      const folders = await api.getImportPaths();
-      setImportFolders(folders);
-    } catch (error) {
-      console.error('Failed to load import folders:', error);
-    }
-  };
+  // ── Import folder management (extracted to useImportFolderHandlers) ──────
+  const importFolderHandlers = useImportFolderHandlers({
+    setImportFolders,
+    setScanStatuses,
+    setCancelScanTarget,
+    setScanErrorTarget,
+    setNewFolderPath,
+    setShowFolderBrowser,
+    setAddFolderDialogOpen,
+    scanIntervalsRef,
+    cancelScanTarget,
+    scanStatuses,
+    newFolderPath,
+  });
 
-  const handleAddImportFolder = async () => {
-    if (!newFolderPath.trim()) return;
-    try {
-      const folder = await api.addImportPath(
-        newFolderPath,
-        newFolderPath.split('/').pop() || 'Import Folder'
-      );
-      setImportFolders((prev) => [...prev, folder]);
-      setNewFolderPath('');
-      setShowFolderBrowser(false);
-      setAddFolderDialogOpen(false);
-    } catch (error) {
-      console.error('Failed to add import folder:', error);
-    }
-  };
+  // ── Backup management (extracted to useBackupHandlers) ───────────────────
+  const backupHandlers = useBackupHandlers({
+    setBackups,
+    setBackupNotice,
+    setBackupsLoading,
+    setRestoreTarget,
+    setRestoreDialogOpen,
+    setRestoreInProgress,
+    setDeleteBackupTarget,
+    setDeleteBackupInProgress,
+    setCreateBackupInProgress,
+    setNewFolderPath,
+    restoreTarget,
+    restoreVerify,
+    deleteBackupTarget,
+  });
 
-  const handleRemoveImportFolder = async (id: number) => {
-    try {
-      await api.removeImportPath(id);
-      setImportFolders((prev) => prev.filter((f) => f.id !== id));
-    } catch (error) {
-      console.error('Failed to remove import folder:', error);
-    }
-  };
-
-  const handleScanImportFolder = async (folder: api.ImportPath) => {
-    setScanStatuses((prev) => ({
-      ...prev,
-      [folder.id]: {
-        status: 'scanning',
-        scanned: 0,
-        total: prev[folder.id]?.total || 0,
-      },
-    }));
-
-    let total = 50;
-    let errors: string[] = [];
-    let operationId: string | undefined;
-
-    try {
-      const response = await api.startScan(folder.path);
-      if (typeof response.total === 'number') {
-        total = response.total;
-      }
-      if (Array.isArray(response.errors)) {
-        errors = response.errors;
-      }
-      operationId = response.id;
-    } catch (error) {
-      console.error('Failed to scan import folder:', error);
-      const message =
-        error instanceof Error ? error.message : 'Scan failed.';
-      setScanStatuses((prev) => ({
-        ...prev,
-        [folder.id]: {
-          status: 'error',
-          scanned: 0,
-          total: 0,
-          errors: [message],
-        },
-      }));
-      return;
-    }
-
-    setScanStatuses((prev) => ({
-      ...prev,
-      [folder.id]: {
-        status: 'scanning',
-        scanned: 0,
-        total,
-        operationId,
-        errors,
-      },
-    }));
-
-    let scanned = 0;
-    const increment = Math.max(1, Math.ceil(total / 10));
-    // Clear any existing interval for this folder
-    if (scanIntervalsRef.current[folder.id]) {
-      window.clearInterval(scanIntervalsRef.current[folder.id]);
-    }
-    const interval = window.setInterval(() => {
-      scanned += increment;
-      setScanStatuses((prev) => ({
-        ...prev,
-        [folder.id]: {
-          status: scanned >= total ? 'complete' : 'scanning',
-          scanned: Math.min(scanned, total),
-          total,
-          operationId,
-          errors,
-        },
-      }));
-      if (scanned >= total) {
-        window.clearInterval(interval);
-        delete scanIntervalsRef.current[folder.id];
-      }
-    }, 300);
-
-    scanIntervalsRef.current[folder.id] = interval;
-  };
-
-  const handleRequestCancelScan = (folder: api.ImportPath) => {
-    setCancelScanTarget(folder);
-  };
-
-  const handleConfirmCancelScan = async () => {
-    if (!cancelScanTarget) return;
-    const target = cancelScanTarget;
-    setCancelScanTarget(null);
-    const status = scanStatuses[target.id];
-    if (!status) return;
-    const interval = scanIntervalsRef.current[target.id];
-    if (interval) {
-      window.clearInterval(interval);
-      delete scanIntervalsRef.current[target.id];
-    }
-    if (status.operationId) {
-      try {
-        await api.cancelOperation(status.operationId);
-      } catch (error) {
-        console.error('Failed to cancel scan operation:', error);
-      }
-    }
-    setScanStatuses((prev) => ({
-      ...prev,
-      [target.id]: {
-        ...status,
-        status: 'cancelled',
-      },
-    }));
-  };
-
-  const handleViewScanErrors = (
-    folder: api.ImportPath,
-    status: ScanStatus
-  ) => {
-    if (!status.errors?.length) return;
-    setScanErrorTarget({
-      path: folder.path,
-      errors: status.errors,
-    });
-  };
-
-  // -------------------------------------------------------------------------
-  // Backup management
-  // -------------------------------------------------------------------------
-
-  const loadBackups = async () => {
-    setBackupsLoading(true);
-    try {
-      const data = await api.listBackups();
-      const sorted = [...(data.backups || [])].sort(
-        (a, b) =>
-          new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-      );
-      setBackups(sorted);
-    } catch (error) {
-      console.error('Failed to load backups:', error);
-      setBackupNotice({
-        severity: 'error',
-        message: 'Failed to load backups.',
-      });
-    } finally {
-      setBackupsLoading(false);
-    }
-  };
-
-  const handleCreateBackup = async () => {
-    setCreateBackupInProgress(true);
-    setBackupNotice(null);
-    try {
-      await api.createBackup();
-      setBackupNotice({
-        severity: 'success',
-        message: 'Backup created successfully.',
-      });
-      await loadBackups();
-    } catch (error) {
-      console.error('Failed to create backup:', error);
-      setBackupNotice({
-        severity: 'error',
-        message: 'Failed to create backup.',
-      });
-    } finally {
-      setCreateBackupInProgress(false);
-    }
-  };
-
-  const handleRequestRestore = (backup: api.BackupInfo) => {
-    setRestoreTarget(backup);
-    setRestoreDialogOpen(true);
-  };
-
-  const handleConfirmRestore = async () => {
-    if (!restoreTarget) return;
-    setRestoreInProgress(true);
-    setBackupNotice(null);
-    try {
-      await api.restoreBackup(restoreTarget.filename, restoreVerify);
-      setBackupNotice({
-        severity: 'success',
-        message: 'Backup restored successfully.',
-      });
-      setRestoreDialogOpen(false);
-      window.location.reload();
-    } catch (error) {
-      console.error('Failed to restore backup:', error);
-      setBackupNotice({
-        severity: 'error',
-        message: 'Backup file is corrupt.',
-      });
-    } finally {
-      setRestoreInProgress(false);
-    }
-  };
-
-  const handleRequestDeleteBackup = (backup: api.BackupInfo) => {
-    setDeleteBackupTarget(backup);
-  };
-
-  const handleConfirmDeleteBackup = async () => {
-    if (!deleteBackupTarget) return;
-    setDeleteBackupInProgress(true);
-    setBackupNotice(null);
-    try {
-      await api.deleteBackup(deleteBackupTarget.filename);
-      setBackupNotice({
-        severity: 'success',
-        message: 'Backup deleted successfully.',
-      });
-      setDeleteBackupTarget(null);
-      await loadBackups();
-    } catch (error) {
-      console.error('Failed to delete backup:', error);
-      setBackupNotice({
-        severity: 'error',
-        message: 'Failed to delete backup.',
-      });
-    } finally {
-      setDeleteBackupInProgress(false);
-    }
-  };
-
-  // -------------------------------------------------------------------------
-  // Folder browser for import path dialog
-  // -------------------------------------------------------------------------
-
-  const handleFolderBrowserSelect = (path: string, isDir: boolean) => {
-    if (isDir) {
-      setNewFolderPath(path);
-    }
-  };
-
-  // -------------------------------------------------------------------------
-  // Metadata source management
-  // -------------------------------------------------------------------------
-
-  const handleSourceToggle = (sourceId: string) => {
-    setSettings((prev) => ({
-      ...prev,
-      metadataSources: prev.metadataSources.map((source) =>
-        source.id === sourceId
-          ? { ...source, enabled: !source.enabled }
-          : source
-      ),
-    }));
-    setSaved(false);
-  };
-
-  const handleTestMetadataSource = async (sourceId: string) => {
-    const source = settings.metadataSources.find((s) => s.id === sourceId);
-    const apiKey = source?.credentials?.apiKey || '';
-    if (!apiKey) {
-      setSourceTestStatus((prev) => ({
-        ...prev,
-        [sourceId]: { testing: false, result: { success: false, error: 'No API key entered' } },
-      }));
-      return;
-    }
-    setSourceTestStatus((prev) => ({
-      ...prev,
-      [sourceId]: { testing: true },
-    }));
-    try {
-      const result = await api.testMetadataSource(sourceId, apiKey);
-      setSourceTestStatus((prev) => ({
-        ...prev,
-        [sourceId]: { testing: false, result },
-      }));
-    } catch (err) {
-      setSourceTestStatus((prev) => ({
-        ...prev,
-        [sourceId]: { testing: false, result: { success: false, error: String(err) } },
-      }));
-    }
-  };
-
-  const handleCredentialChange = (
-    sourceId: string,
-    field: string,
-    value: string
-  ) => {
-    setSettings((prev) => ({
-      ...prev,
-      metadataSources: prev.metadataSources.map((source) =>
-        source.id === sourceId
-          ? {
-              ...source,
-              credentials: { ...source.credentials, [field]: value },
-            }
-          : source
-      ),
-    }));
-    setSaved(false);
-  };
-
-  const handleSourceReorder = (sourceId: string, direction: 'up' | 'down') => {
-    setSettings((prev) => {
-      const sources = [...prev.metadataSources];
-      const index = sources.findIndex((s) => s.id === sourceId);
-      if (index === -1) return prev;
-
-      const targetIndex = direction === 'up' ? index - 1 : index + 1;
-      if (targetIndex < 0 || targetIndex >= sources.length) return prev;
-
-      // Swap priorities
-      const temp = sources[index].priority;
-      sources[index] = {
-        ...sources[index],
-        priority: sources[targetIndex].priority,
-      };
-      sources[targetIndex] = { ...sources[targetIndex], priority: temp };
-
-      // Sort by priority
-      sources.sort((a, b) => a.priority - b.priority);
-
-      return { ...prev, metadataSources: sources };
-    });
-    setSaved(false);
-  };
+  // ── Metadata source management (extracted to useMetadataSourceHandlers) ──
+  const metadataSourceHandlers = useMetadataSourceHandlers({
+    settings,
+    setSettings,
+    setSaved,
+    setSourceTestStatus,
+  });
 
   // -------------------------------------------------------------------------
   // Save / reset
@@ -1223,24 +915,9 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
     handleBrowserSelect,
     handleBrowserConfirm,
     handleBrowserCancel,
-    loadImportFolders,
-    handleAddImportFolder,
-    handleRemoveImportFolder,
-    handleScanImportFolder,
-    handleRequestCancelScan,
-    handleConfirmCancelScan,
-    handleViewScanErrors,
-    loadBackups,
-    handleCreateBackup,
-    handleRequestRestore,
-    handleConfirmRestore,
-    handleRequestDeleteBackup,
-    handleConfirmDeleteBackup,
-    handleFolderBrowserSelect,
-    handleSourceToggle,
-    handleTestMetadataSource,
-    handleCredentialChange,
-    handleSourceReorder,
+    ...importFolderHandlers,
+    ...backupHandlers,
+    ...metadataSourceHandlers,
     handleSave,
     handleReset,
     handleAddExtension,
