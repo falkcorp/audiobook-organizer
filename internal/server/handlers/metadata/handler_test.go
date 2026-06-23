@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1d31ef73-7c7a-4c3b-a840-01b0865023d7
-// last-edited: 2026-06-03
+// last-edited: 2026-06-23
 
 // Tests for the metadata-domain handlers. The store / metadata-fetch-service /
 // write-back-enqueuer / operations-registry / file-io-pool deps are generated
@@ -96,7 +96,7 @@ func newHandler(t *testing.T, opts ...func(*cfg)) (*metadatahandler.Handler, tes
 	}
 
 	h := metadatahandler.New(
-		func() metadatahandler.MetadataStore { return store },
+		store,
 		mfsArg,
 		func() metadatahandler.WriteBackEnqueuer {
 			if cf.hasWB {

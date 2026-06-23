@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/label_capture.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c1d9e42-3a8b-4f60-9c21-5e0a7b2d6f48
-// last-edited: 2026-06-18
+// last-edited: 2026-06-23
 
 package deduphandler
 
@@ -51,7 +51,7 @@ func (h *Handler) snapshotCandidateExample(cand *database.DedupCandidate) *datab
 	if cand == nil {
 		return nil
 	}
-	store := h.resolveStore()
+	store := h.store
 	if store == nil {
 		slog.Warn("dedup label capture: no store; skipping snapshot", "candidate_id", cand.ID)
 		return nil
@@ -72,7 +72,7 @@ func (h *Handler) recordHumanLabel(ex *database.LabeledExample, label, reason st
 	if ex == nil {
 		return
 	}
-	es := h.resolveEmbeddingStore()
+	es := h.embeddingStore
 	if es == nil {
 		slog.Warn("dedup label capture: no embedding store; dropping label", "candidate_id", ex.CandidateID)
 		return
@@ -94,7 +94,7 @@ func (h *Handler) recordHumanLabel(ex *database.LabeledExample, label, reason st
 // in one best-effort call. Use this ONLY for dismiss-style actions where both books
 // still exist; for merges, snapshot before the merge and recordHumanLabel after.
 func (h *Handler) captureHumanLabelByID(candidateID int64, label, reason string) {
-	es := h.resolveEmbeddingStore()
+	es := h.embeddingStore
 	if es == nil {
 		return
 	}

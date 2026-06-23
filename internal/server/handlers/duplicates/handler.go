@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/handler.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9f41f363-34fc-4ad2-b2f1-46d5ac0ba2f3
-// last-edited: 2026-06-22
+// last-edited: 2026-06-23
 
 // Package duplicates hosts the SQL-backed duplicate-detection HTTP handlers
 // extracted from the server package's duplicates_handlers.go: book / author /
@@ -21,13 +21,10 @@
 // passes thin closures over them. As a result package duplicates never imports
 // package server.
 //
-// The store is reached through a LAZY PROVIDER CLOSURE (getStore) so a value
-// swapped after wireHandlers (a router-integration test swaps server.store
-// post-wire) is still observed at request time, mirroring the dedup / system
-// handler getStore seam. opRegistry / mergeService / audiobookService /
-// metadataFetchService are interface snapshots taken at wire time (assigned once
-// before setupRoutes, never swapped), each guarded against typed-nil boxing by
-// the controller.
+// The store is a WIRE-TIME SNAPSHOT (assigned once in New, never swapped after
+// that). opRegistry / mergeService / audiobookService / metadataFetchService are
+// also interface snapshots taken at wire time (assigned once before setupRoutes,
+// never swapped), each guarded against typed-nil boxing by the controller.
 
 package duplicates
 
@@ -43,13 +40,9 @@ import (
 
 // Handler hosts the duplicates-domain HTTP endpoints.
 type Handler struct {
-	// getStore resolves the database store lazily, at request time. The original
-	// handlers read s.Store() at call time (late binding), and a router
-	// integration test swaps server.store AFTER wiring to inject a mock — so
-	// snapshotting the store at wire time would capture the pre-swap store. The
-	// provider performs the typed-nil guard (s.Store() returns the database.Store
-	// interface, so a nil store stays a nil interface).
-	getStore func() DuplicatesStore
+	// store is the wire-time snapshot of the database store. All handlers read
+	// from this field directly (no lazy provider needed).
+	store DuplicatesStore
 
 	// dedupCache is the concrete *cache.Cache[gin.H] the original handlers read /
 	// wrote directly (book-duplicates / author-duplicates / series-duplicates /
@@ -100,7 +93,7 @@ type Handler struct {
 
 // New constructs a duplicates Handler from its dependencies.
 func New(
-	getStore func() DuplicatesStore,
+	store DuplicatesStore,
 	dedupCache *cache.Cache[gin.H],
 	opRegistry OperationsRegistry,
 	audiobookService AudiobookService,
@@ -111,7 +104,7 @@ func New(
 	seriesNormalizePreview func() any,
 ) *Handler {
 	return &Handler{
-		getStore:                  getStore,
+		store:                     store,
 		dedupCache:                dedupCache,
 		opRegistry:                opRegistry,
 		audiobookService:          audiobookService,
@@ -121,15 +114,6 @@ func New(
 		computeSeriesPrunePreview: computeSeriesPrunePreview,
 		seriesNormalizePreview:    seriesNormalizePreview,
 	}
-}
-
-// resolveStore returns the live store via the lazy provider, or nil if no
-// provider was supplied or the provider yields nil.
-func (h *Handler) resolveStore() DuplicatesStore {
-	if h.getStore == nil {
-		return nil
-	}
-	return h.getStore()
 }
 
 // ListDuplicateAudiobooks handles GET /audiobooks/duplicates.
@@ -183,7 +167,7 @@ func (h *Handler) launchLegacyOp(c *gin.Context, defID, legacyType, detail strin
 		httputil.RespondWithInternalError(c, "operation registry not initialized")
 		return false
 	}
-	store := h.resolveStore()
+	store := h.store
 	legacyID := ulid.Make().String()
 	d := detail
 	op, err := store.CreateOperation(legacyID, legacyType, &d)
@@ -260,7 +244,7 @@ func (h *Handler) DismissBookDuplicateGroup(c *gin.Context) {
 		return
 	}
 
-	store := h.resolveStore()
+	store := h.store
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
@@ -293,7 +277,7 @@ func (h *Handler) MergeBooks(c *gin.Context) {
 		return
 	}
 
-	store := h.resolveStore()
+	store := h.store
 	keepBook, err := store.GetBookByID(req.KeepID)
 	if err != nil || keepBook == nil {
 		httputil.RespondWithNotFound(c, "book", req.KeepID)
@@ -479,7 +463,7 @@ func (h *Handler) DeduplicateSeriesHandler(c *gin.Context) {
 // SeriesPrunePreview returns a dry-run preview of the series auto-prune.
 // GET /series/prune/preview.
 func (h *Handler) SeriesPrunePreview(c *gin.Context) {
-	store := h.resolveStore()
+	store := h.store
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
@@ -518,7 +502,7 @@ func (h *Handler) MergeSeriesGroup(c *gin.Context) {
 		return
 	}
 
-	store := h.resolveStore()
+	store := h.store
 	keepSeries, err := store.GetSeriesByID(req.KeepID)
 	if err != nil || keepSeries == nil {
 		httputil.RespondWithNotFound(c, "series", "")
@@ -536,7 +520,7 @@ func (h *Handler) MergeSeriesGroup(c *gin.Context) {
 // name-normalization pass would do, with no database writes.
 // GET /series/normalize/preview.
 func (h *Handler) SeriesNormalizePreview(c *gin.Context) {
-	store := h.resolveStore()
+	store := h.store
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
@@ -548,7 +532,7 @@ func (h *Handler) SeriesNormalizePreview(c *gin.Context) {
 // SeriesNormalize enqueues an async operation that renames/merges contaminated
 // series and re-organizes affected books in place. POST /series/normalize.
 func (h *Handler) SeriesNormalize(c *gin.Context) {
-	store := h.resolveStore()
+	store := h.store
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return

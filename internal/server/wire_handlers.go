@@ -287,8 +287,8 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		dedupEng = s.dedupEngine
 	}
 	dedupH := deduphandler.New(
-		func() deduphandler.DedupStore { return s.Store() },
-		func() *database.EmbeddingStore { return s.embeddingStore },
+		s.Store(),
+		s.embeddingStore,
 		dedupOpReg,
 		dedupMergeSvc,
 		dedupEng,
@@ -329,7 +329,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		dupMetadataSvc = s.metadataFetchService
 	}
 	duplicatesH := duplicates.New(
-		func() duplicates.DuplicatesStore { return s.Store() },
+		s.Store(),
 		s.dedupCache,
 		dupOpReg,
 		dupAudiobookSvc,
@@ -477,7 +477,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		abChangelog = s.changelogService
 	}
 	audiobooksH := audiobookshandler.New(
-		func() audiobookshandler.AudiobooksStore { return s.Store() },
+		s.Store(),
 		abSvc,
 		abUpdater,
 		// Lazy provider: server.writeBackBatcher is swapped post-wire by
@@ -538,13 +538,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		mdFileIOPool = s.fileIOPool
 	}
 	metadataH := metadatahandler.New(
-		func() metadatahandler.MetadataStore {
-			st := s.Store()
-			if st == nil {
-				return nil
-			}
-			return st
-		},
+		s.Store(),
 		mdMetaFetch,
 		// Lazy provider: server.writeBackBatcher is swapped post-wire by
 		// integration tests and the original handlers read it at request time, so

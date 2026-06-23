@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_tags.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: ff2e3609-5ce3-4414-a18b-976d21b929fb
-// last-edited: 2026-06-03
+// last-edited: 2026-06-23
 
 // Tag read/write, alternative-title CRUD, and batch tag-update endpoints for
 // the audiobooks domain. Split out of handler.go for readability; one Handler,
@@ -77,7 +77,7 @@ func (h *Handler) GetBookTagsDetailed(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "book id is required")
 		return
 	}
-	tags, err := h.resolveStore().GetBookTagsDetailed(id)
+	tags, err := h.store.GetBookTagsDetailed(id)
 	if err != nil {
 		httputil.RespondWithInternalError(c, err.Error())
 		return
@@ -95,7 +95,7 @@ func (h *Handler) GetBookAlternativeTitles(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "id is required")
 		return
 	}
-	alts, err := h.resolveStore().GetBookAlternativeTitles(id)
+	alts, err := h.store.GetBookAlternativeTitles(id)
 	if err != nil {
 		httputil.InternalError(c, "failed to get alternative titles", err)
 		return
@@ -123,7 +123,7 @@ func (h *Handler) AddBookAlternativeTitle(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "title is required")
 		return
 	}
-	store := h.resolveStore()
+	store := h.store
 	// Confirm the book exists before inserting — avoids orphan alt
 	// title rows for deleted books.
 	if book, err := store.GetBookByID(id); err != nil || book == nil {
@@ -152,7 +152,7 @@ func (h *Handler) RemoveBookAlternativeTitle(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "title is required")
 		return
 	}
-	store := h.resolveStore()
+	store := h.store
 	if err := store.RemoveBookAlternativeTitle(id, body.Title); err != nil {
 		httputil.InternalError(c, "failed to remove alternative title", err)
 		return

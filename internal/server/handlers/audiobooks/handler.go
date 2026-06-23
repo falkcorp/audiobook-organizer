@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
-// last-edited: 2026-06-03
+// last-edited: 2026-06-23
 
 // Package audiobookshandler hosts the main library list / CRUD HTTP handlers
 // extracted from the server package's audiobooks_handlers.go: book listing
@@ -39,12 +39,11 @@
 //
 // As a result package audiobookshandler never imports package server.
 //
-// The store is reached through a LAZY PROVIDER CLOSURE (getStore) so a value
-// swapped after wireHandlers (a router-integration test swaps server.store
-// post-wire) is still observed at request time, mirroring the dedup /
-// duplicates / system handler getStore seam. The interface-typed service deps
-// are wire-time snapshots (assigned once before setupRoutes, never swapped),
-// each guarded against typed-nil boxing by the controller in wire_handlers.go.
+// The store is a WIRE-TIME SNAPSHOT (assigned once in New, never swapped after
+// that). The interface-typed service deps are also wire-time snapshots, each
+// guarded against typed-nil boxing by the controller in wire_handlers.go.
+// The write-back batcher is the sole exception: it remains a lazy provider
+// closure because integration tests swap server.writeBackBatcher post-wire.
 
 package audiobookshandler
 
@@ -76,15 +75,13 @@ const facetsCacheKey = "all"
 
 // Handler hosts the audiobooks-domain HTTP endpoints.
 type Handler struct {
-	// getStore resolves the database store lazily, at request time. The original
-	// handlers read s.Store() at call time (late binding), and a router
-	// integration test swaps server.store AFTER wiring to inject a mock — so
-	// snapshotting the store at wire time would capture the pre-swap store. The
-	// provider returns the concrete store value (un-stripped) so the handlers'
-	// inline type assertions (Unwrap / ListBooksWithFileErrors /
+	// store is the wire-time snapshot of the database store. All handlers read
+	// from this field directly (no lazy provider needed — no post-wire swap for
+	// this package's store). The concrete store value (un-stripped) is preserved
+	// so the handlers' inline type assertions (Unwrap / ListBooksWithFileErrors /
 	// GetAllBookIDsForQuickQuery / GetBookFilesForIDs / InvalidateLibraryStats)
 	// still resolve against the dynamic type.
-	getStore func() AudiobooksStore
+	store AudiobooksStore
 
 	audiobookService AudiobookService
 	audiobookUpdater AudiobookUpdater
@@ -143,7 +140,7 @@ type Handler struct {
 
 // New constructs an audiobooks Handler from its dependencies.
 func New(
-	getStore func() AudiobooksStore,
+	store AudiobooksStore,
 	audiobookService AudiobookService,
 	audiobookUpdater AudiobookUpdater,
 	getWriteBack func() WriteBackEnqueuer,
@@ -163,7 +160,7 @@ func New(
 	publishEvent func(ctx context.Context, event plugin.Event),
 ) *Handler {
 	return &Handler{
-		getStore:             getStore,
+		store:                store,
 		audiobookService:     audiobookService,
 		audiobookUpdater:     audiobookUpdater,
 		getWriteBack:         getWriteBack,
@@ -182,15 +179,6 @@ func New(
 		getExternalIDStore:   getExternalIDStore,
 		publishEvent:         publishEvent,
 	}
-}
-
-// resolveStore returns the live store via the lazy provider, or nil if no
-// provider was supplied or the provider yields nil.
-func (h *Handler) resolveStore() AudiobooksStore {
-	if h.getStore == nil {
-		return nil
-	}
-	return h.getStore()
 }
 
 // resolveWriteBack returns the live write-back batcher via the lazy provider, or
@@ -218,7 +206,7 @@ func ptrStr(p *string) string {
 // no_isbn / duplicates_flagged) fast-path, then the filtered list pipeline with
 // the list cache (skipped when per-user filters are active).
 func (h *Handler) ListAudiobooks(c *gin.Context) {
-	store := h.resolveStore()
+	store := h.store
 
 	// Parse pagination parameters
 	params := httputil.ParsePaginationParams(c)
@@ -527,7 +515,7 @@ func (h *Handler) PurgeSoftDeletedAudiobooks(c *gin.Context) {
 // in the DB to match physical reality. POST /audiobooks/:id/rescan.
 func (h *Handler) RescanAudiobook(c *gin.Context) {
 	id := c.Param("id")
-	store := h.resolveStore()
+	store := h.store
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
@@ -649,7 +637,7 @@ func (h *Handler) CountAudiobooks(c *gin.Context) {
 // distinct genres and languages for filter dropdowns. Results are cached for 5
 // minutes and pre-warmed at startup (warmFacetsCache stays in package server).
 func (h *Handler) AudiobookFacets(c *gin.Context) {
-	store := h.resolveStore()
+	store := h.store
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return

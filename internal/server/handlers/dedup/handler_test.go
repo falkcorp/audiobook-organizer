@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/handler_test.go
-// version: 1.3.2
+// version: 1.4.0
 // guid: 6d8011eb-bed6-430b-959e-2a2b0738ffbc
-// last-edited: 2026-06-12
+// last-edited: 2026-06-23
 
 // Tests for the dedup-domain handlers. The embedding store is exercised through
 // a REAL pebble-backed *database.EmbeddingStore (it is a concrete db type the
@@ -74,11 +74,9 @@ func newHandler(t *testing.T, opts ...func(*handlerCfg)) (*deduphandler.Handler,
 	publishedN := 0
 	dirtyReasons := []string{}
 
-	var getEmbed func() *database.EmbeddingStore
+	var embedArg *database.EmbeddingStore
 	if cfg.hasEmbed {
-		getEmbed = func() *database.EmbeddingStore { return es }
-	} else {
-		getEmbed = func() *database.EmbeddingStore { return nil }
+		embedArg = es
 	}
 
 	var regArg deduphandler.OperationsRegistry
@@ -95,8 +93,8 @@ func newHandler(t *testing.T, opts ...func(*handlerCfg)) (*deduphandler.Handler,
 	}
 
 	h := deduphandler.New(
-		func() deduphandler.DedupStore { return store },
-		getEmbed,
+		store,
+		embedArg,
 		regArg,
 		mergeArg,
 		engineArg,

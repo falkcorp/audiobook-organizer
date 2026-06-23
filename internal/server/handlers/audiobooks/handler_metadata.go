@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_metadata.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 591661c3-5e87-4559-9a08-3203eec4fb68
-// last-edited: 2026-06-03
+// last-edited: 2026-06-23
 
 // Metadata-history / undo / field-state / path-history / external-id /
 // changelog / changes endpoints for the audiobooks domain. Split out of
@@ -26,7 +26,7 @@ import (
 // GetBookMetadataHistory handles GET /audiobooks/:id/metadata-history.
 func (h *Handler) GetBookMetadataHistory(c *gin.Context) {
 	id := c.Param("id")
-	store := h.resolveStore()
+	store := h.store
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
@@ -65,7 +65,7 @@ func (h *Handler) GetAudiobookFieldStates(c *gin.Context) {
 func (h *Handler) GetFieldMetadataHistory(c *gin.Context) {
 	id := c.Param("id")
 	field := c.Param("field")
-	store := h.resolveStore()
+	store := h.store
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
@@ -91,7 +91,7 @@ func (h *Handler) GetFieldMetadataHistory(c *gin.Context) {
 func (h *Handler) UndoMetadataChange(c *gin.Context) {
 	id := c.Param("id")
 	field := c.Param("field")
-	store := h.resolveStore()
+	store := h.store
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
@@ -158,7 +158,7 @@ func (h *Handler) UndoMetadataChange(c *gin.Context) {
 // for a book. POST /audiobooks/:id/undo-last-apply.
 func (h *Handler) UndoLastApply(c *gin.Context) {
 	id := c.Param("id")
-	store := h.resolveStore()
+	store := h.store
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
@@ -266,7 +266,7 @@ func (h *Handler) UndoLastApply(c *gin.Context) {
 // GetBookPathHistory handles GET /audiobooks/:id/path-history.
 func (h *Handler) GetBookPathHistory(c *gin.Context) {
 	id := c.Param("id")
-	history, err := h.resolveStore().GetBookPathHistory(id)
+	history, err := h.store.GetBookPathHistory(id)
 	if err != nil {
 		httputil.RespondWithOK(c, gin.H{"history": []any{}})
 		return
@@ -321,7 +321,7 @@ func (h *Handler) GetBookChangelog(c *gin.Context) {
 // GET /audiobooks/:id/changes.
 func (h *Handler) GetBookChanges(c *gin.Context) {
 	id := c.Param("id")
-	changes, err := h.resolveStore().GetBookChanges(id)
+	changes, err := h.store.GetBookChanges(id)
 	if err != nil {
 		httputil.InternalError(c, "failed to get book changes", err)
 		return
