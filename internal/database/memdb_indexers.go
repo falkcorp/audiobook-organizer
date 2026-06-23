@@ -1,6 +1,7 @@
 // file: internal/database/memdb_indexers.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000001
+// last-edited: 2026-06-23
 
 package database
 
@@ -8,9 +9,10 @@ import (
 	"encoding/binary"
 	"fmt"
 	"reflect"
-	"strings"
 
 	"github.com/hashicorp/go-memdb"
+
+	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
 // Custom go-memdb indexers for our types. memdb ships with StringFieldIndex,
@@ -322,9 +324,9 @@ func (titleSortIndex) FromObject(obj interface{}) (bool, []byte, error) {
 	if !ok {
 		return false, nil, fmt.Errorf("titleSortIndex: expected *Book, got %T", obj)
 	}
-	key := strings.ToLower(strings.TrimSpace(b.Title))
+	key := util.NormalizeTitle(b.Title)
 	if key == "" && b.OriginalFilename != nil {
-		key = strings.ToLower(strings.TrimSpace(*b.OriginalFilename))
+		key = util.NormalizeTitle(*b.OriginalFilename)
 	}
 	if key == "" {
 		key = "~" // sort to end
@@ -341,7 +343,7 @@ func (titleSortIndex) FromArgs(args ...interface{}) ([]byte, error) {
 	if !ok {
 		return nil, fmt.Errorf("titleSortIndex: arg must be string, got %T", args[0])
 	}
-	return append([]byte(strings.ToLower(strings.TrimSpace(s))), 0), nil
+	return append([]byte(util.NormalizeTitle(s)), 0), nil
 }
 
 func (titleSortIndex) PrefixFromArgs(args ...interface{}) ([]byte, error) {
