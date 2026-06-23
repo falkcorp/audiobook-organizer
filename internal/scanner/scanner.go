@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.45.0
+// version: 1.46.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-06-22
+// last-edited: 2026-06-23
 
 package scanner
 
@@ -331,8 +331,9 @@ type Book struct {
 	HardcoverID      string
 	SegmentFiles     []string // For multi-file books grouped by album in mixed directories
 	GoogleBooksID    string
-	FileHash         string // Pre-computed hash from ProcessFile (avoids double-read)
-	LibraryState     string // If set, overrides the default "imported" state in saveBookToDatabase
+	FileHash         string            // Pre-computed hash from ProcessFile (avoids double-read)
+	SegmentHashes    map[string]string // filePath→hash written back by saveBookToDatabase dedup loop
+	LibraryState     string            // If set, overrides the default "imported" state in saveBookToDatabase
 	SourceImportPath string // Top-level import path this file was discovered in; set by scan_service
 }
 
@@ -845,9 +846,11 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 			if err := saveBook(ctx, &books[idx]); err != nil {
 				errChan <- fmt.Errorf("failed to save book %s: %w", books[idx].FilePath, err)
 			} else {
-				// Create segments for multi-file books grouped by album
+				// Create segments for multi-file books grouped by album.
+				// Pass SegmentHashes (populated by saveBookToDatabase dedup loop)
+				// to avoid re-hashing each segment file (PERF-2b).
 				if len(books[idx].SegmentFiles) > 1 {
-					createBookFilesForBook(books[idx].FilePath, books[idx].SegmentFiles, scanLog)
+					createBookFilesForBook(books[idx].FilePath, books[idx].SegmentFiles, scanLog, books[idx].SegmentHashes)
 				}
 				// Update scan cache so next incremental scan skips this file.
 				// Use a deferred recover guard in case GlobalStore is a non-nil interface
@@ -1239,7 +1242,9 @@ func isInitialToken(word string) bool {
 // If segmentFiles is provided, only those specific files become BookFile records.
 // After creating book files, if book.FilePath points to a file (not a directory),
 // it normalizes it to the parent directory.
-func createBookFilesForBook(bookFilePath string, segmentFiles []string, scanLog logger.Logger) {
+// The optional knownHashes parameter (filePath→hash) lets callers pass hashes
+// already computed during the dedup check (PERF-2b) to avoid a second os.Open.
+func createBookFilesForBook(bookFilePath string, segmentFiles []string, scanLog logger.Logger, knownHashes ...map[string]string) {
 	if getStore() == nil {
 		return
 	}
@@ -1320,7 +1325,14 @@ func createBookFilesForBook(bookFilePath string, segmentFiles []string, scanLog 
 			scanLog.Debug("tag read failed for %s (keeping positional track): %v", filePath, merr)
 		}
 
-		if h, herr := ComputeFileHash(filePath); herr == nil {
+		var preHash string
+		if len(knownHashes) > 0 && knownHashes[0] != nil {
+			preHash = knownHashes[0][filePath]
+		}
+		if preHash != "" {
+			bf.FileHash = preHash
+			bf.OriginalFileHash = preHash
+		} else if h, herr := ComputeFileHash(filePath); herr == nil {
 			bf.FileHash = h
 			bf.OriginalFileHash = h
 		}
@@ -1896,6 +1908,11 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 				if herr != nil || h == "" {
 					continue
 				}
+				// Write back so createBookFilesForBook can reuse without re-hashing.
+				if book.SegmentHashes == nil {
+					book.SegmentHashes = make(map[string]string)
+				}
+				book.SegmentHashes[segFile] = h
 				candidate, lerr := getStore().GetBookBySegmentFileHash(h)
 				if lerr != nil || candidate == nil {
 					continue

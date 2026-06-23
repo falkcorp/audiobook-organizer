@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.75.0 -->
+<!-- version: 3.76.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-23 -->
 
@@ -8,6 +8,10 @@
 ## [Unreleased]
 
 ### Performance
+
+#### June 23, 2026 — PERF-2b: hash carry-forward for multi-file scanner dedup
+
+- **`perf(scanner)`** PERF-2b — Added `Book.SegmentHashes map[string]string` to the scanner `Book` struct. The multi-file dedup loop inside `saveBookToDatabase` now writes computed hashes back to `book.SegmentHashes[segFile]` as it goes. `createBookFilesForBook` accepts an optional `knownHashes ...map[string]string` variadic parameter (backward-compatible — existing call sites unchanged); for multi-file books the caller passes `books[idx].SegmentHashes` eliminating a second `os.Open`/SHA-256 per segment. No change to `saveBook` function-variable signature.
 
 #### June 23, 2026 — PERF-3: eliminate full-materialization escape hatches in library list
 
