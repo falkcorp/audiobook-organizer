@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.33.0 -->
+<!-- version: 9.34.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-06-23 -->
 
@@ -1316,7 +1316,7 @@ Bot-tasks at [`docs/superpowers/bot-tasks/2026-05-01-struct-*.md`](docs/superpow
 - [ ] **ARCH-4b (wave 3)** — Remaining 3 sites: `lsh_backfill.go` (308K-item progress cadence — needs reporter throttle wrapper before RunItems is appropriate), `acoustid/backfill.go` (nested books→files loop + resume-by-book-ID — requires flat-map preprocessing), `acoustid/reset_all.go` (callback-driven PebbleStore.ClearAllAcoustIDFingerprints API + dual heterogeneous loops). `acoustid/fingerprint_rescan.go` excluded — already uses semaphore goroutine pool that outperforms sequential RunItems.
 - [x] **PERF-2** — Batch upserts in `createBookFilesForBook`: N per-segment `UpsertBookFile` calls replaced with one `BatchUpsertBookFiles` call (shipped PR #1583). N→1 DB writes per book on first scan.
 - [x] **PERF-6** — Search index backfill cursor: added `GetAllBooksFrom(afterID, limit)` to `BookReader` interface + PebbleStore (O(1) LowerBound seek). Rewrote `server_search.go` backfill loop to use cursor pagination instead of O(offset) `GetAllBooks`. Updated 1 hand-written + 6 mockery-generated mocks. PR #1601.
-- [ ] **PERF-2b** — Hash carry-forward: dedup check at `scanner.go:1885` re-hashes every segment file that `createBookFilesForBook` (line 1322) also hashes. Fix requires `saveBookToDatabase` to return a `map[string]string` (filePath→hash) and passing it to `createBookFilesForBook`. Blocked by `saveBook` function-variable API change.
+- [x] **PERF-2b** — Hash carry-forward: added `Book.SegmentHashes map[string]string`; `saveBookToDatabase` dedup loop writes computed hashes back; `createBookFilesForBook` accepts `knownHashes ...map[string]string` variadic (no signature change to `saveBook` function variable); call site at line 850 passes `books[idx].SegmentHashes`. PR #1605.
 - [x] **PERF-5 (partial)** — iTunes backfill bulk writes: per-row `CreateExternalIDMapping` calls replaced with per-page batch accumulation + `BulkCreateExternalIDMappings` (N→1 per 10K-book page). N+1 `GetBookFiles` per book still present — deferred until `GetBookFilesByBookIDs([]string)` batch method added to Store interface (TODO comment at `itunes/backfill.go:77`).
 - [x] **PERF-4** — iTunes search `SearchBooks(search, 0, 0)` returned zero results: `limit=0` was checked as `len(filtered) < 0` (always false). Fixed in `pebble_store.go:3169` — `limit==0` now means "no limit". Regression test `TestSearchBooksUnlimited` added.
 - [x] **PERF-3** — Library list full-materialization escape hatches: removed non-title sort and fingerprint/coverage early-returns from `buildBookSummaryFilterWithLookupCount`. Both now push predicates into `BookSummaryFilter`; non-title sorts fetch all filtered books (not 68K unfiltered), letting the service sort+paginate in-memory on the smaller set. PR #1604.
