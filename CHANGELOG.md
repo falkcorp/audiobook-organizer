@@ -1,11 +1,18 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.69.0 -->
+<!-- version: 3.70.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-23 -->
 
 # Changelog
 
 ## [Unreleased]
+
+### Tooling
+
+#### June 23, 2026 — TOOL-3 demo isolation + TOOL-8 smoke targets
+
+- **`chore(e2e)`** TOOL-3 — Demo recording tests excluded from default E2E run; `chromium`/`webkit` projects use `testIgnore` for `demo-*`/`interactive-*`; `chromium-record` is opt-in via `npm run test:e2e:demo` / `make test-e2e-demo`.
+- **`chore(make)`** TOOL-8 — `make manual-smoke`, `smoke-create-books`, `smoke-run-demo` targets added; smoke scripts now runnable without remembering script paths.
 
 ### Performance
 

@@ -1,7 +1,7 @@
 # file: Makefile
-# version: 2.12.0
+# version: 2.13.0
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
-# last-edited: 2026-06-01
+# last-edited: 2026-06-23
 
 BINARY := audiobook-organizer
 ROOT_DIR := $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
@@ -19,12 +19,13 @@ BACKUP_DIR  ?= $(CURDIR)/backups
 
 .PHONY: all build build-api run run-api install clean help \
         web-install web-build web-dev web-test web-lint web-lint-memory \
-        test test-short test-all test-all-short test-nightly test-frontend test-e2e \
+        test test-short test-all test-all-short test-nightly test-frontend test-e2e test-e2e-demo \
         coverage coverage-check coverage-check-short ci \
         vet mocks mocks-check check-mock-fresh staticcheck oplint sdkguard \
         docker docker-run docker-stop \
         release-dry-run release-snapshot version \
-        build-mtls-bridge build-mtls-bridge-windows
+        build-mtls-bridge build-mtls-bridge-windows \
+        manual-smoke smoke-create-books smoke-run-demo
 
 # Default: full build (frontend + backend with embed)
 all: build
@@ -248,11 +249,30 @@ test-nightly: test web-test coverage-check
 ## test-frontend: Run frontend tests independently (alias for web-test)
 test-frontend: web-test
 
-## test-e2e: Run Playwright E2E tests
+## test-e2e: Run Playwright E2E tests (chromium + webkit only; excludes demo recording)
 test-e2e:
 	@echo "🧪 Running E2E tests..."
 	@cd $(WEB_DIR) && npm run test:e2e
 	@echo "✅ E2E tests passed"
+
+## test-e2e-demo: Run demo recording tests (opt-in; requires live media content)
+test-e2e-demo:
+	@echo "🎬 Running demo recording tests (chromium-record project)..."
+	@cd $(WEB_DIR) && npm run test:e2e:demo
+	@echo "✅ Demo recording tests complete"
+
+## manual-smoke: Run all manual smoke scripts against a running server
+manual-smoke: smoke-create-books smoke-run-demo
+
+## smoke-create-books: Create test audiobook fixtures on the running server
+smoke-create-books:
+	@echo "📚 Creating test audiobook fixtures..."
+	@bash scripts/create-test-audiobooks.sh
+
+## smoke-run-demo: Run the demo recording script (requires running server with media)
+smoke-run-demo:
+	@echo "🎬 Running demo recording script..."
+	@bash scripts/run_demo_recording.sh
 
 ## coverage: Generate coverage report
 coverage:
