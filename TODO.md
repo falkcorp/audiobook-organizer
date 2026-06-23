@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.34.0 -->
+<!-- version: 9.35.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-06-23 -->
 
@@ -1317,6 +1317,7 @@ Bot-tasks at [`docs/superpowers/bot-tasks/2026-05-01-struct-*.md`](docs/superpow
 - [x] **PERF-2** — Batch upserts in `createBookFilesForBook`: N per-segment `UpsertBookFile` calls replaced with one `BatchUpsertBookFiles` call (shipped PR #1583). N→1 DB writes per book on first scan.
 - [x] **PERF-6** — Search index backfill cursor: added `GetAllBooksFrom(afterID, limit)` to `BookReader` interface + PebbleStore (O(1) LowerBound seek). Rewrote `server_search.go` backfill loop to use cursor pagination instead of O(offset) `GetAllBooks`. Updated 1 hand-written + 6 mockery-generated mocks. PR #1601.
 - [x] **PERF-2b** — Hash carry-forward: added `Book.SegmentHashes map[string]string`; `saveBookToDatabase` dedup loop writes computed hashes back; `createBookFilesForBook` accepts `knownHashes ...map[string]string` variadic (no signature change to `saveBook` function variable); call site at line 850 passes `books[idx].SegmentHashes`. PR #1605.
+- [x] **ARCH-6** — Optional store capabilities discovered ad hoc: `database.GetOpsV2(store)` + `database.GetAIJobs(store)` added to `internal/database/storecap.go`. Both walk the `Unwrap()` decorator chain (mirrors `errors.As`). 5 ad-hoc type-assertion sites replaced; `UnwrapAIJobsStore` in `handlers/ai.go` delegates to `GetAIJobs` for backward compat. PR #1606.
 - [x] **PERF-5 (partial)** — iTunes backfill bulk writes: per-row `CreateExternalIDMapping` calls replaced with per-page batch accumulation + `BulkCreateExternalIDMappings` (N→1 per 10K-book page). N+1 `GetBookFiles` per book still present — deferred until `GetBookFilesByBookIDs([]string)` batch method added to Store interface (TODO comment at `itunes/backfill.go:77`).
 - [x] **PERF-4** — iTunes search `SearchBooks(search, 0, 0)` returned zero results: `limit=0` was checked as `len(filtered) < 0` (always false). Fixed in `pebble_store.go:3169` — `limit==0` now means "no limit". Regression test `TestSearchBooksUnlimited` added.
 - [x] **PERF-3** — Library list full-materialization escape hatches: removed non-title sort and fingerprint/coverage early-returns from `buildBookSummaryFilterWithLookupCount`. Both now push predicates into `BookSummaryFilter`; non-title sorts fetch all filtered books (not 68K unfiltered), letting the service sort+paginate in-memory on the smaller set. PR #1604.

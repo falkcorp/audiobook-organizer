@@ -1,7 +1,7 @@
 // file: internal/server/operations_v2_handlers.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-05-08
+// last-edited: 2026-06-23
 
 // UOS-06: SSE event hub, /operations/timeline, single-op introspection,
 // cancel, trigger-op, and /op-defs endpoints.
@@ -263,14 +263,7 @@ func (s *Server) handleOperationsSSE(c *gin.Context) {
 // opsV2Store returns the OpsV2Store from the server's composite Store, or nil
 // if the store does not implement it.
 func (s *Server) opsV2Store() database.OpsV2Store {
-	if s.Store() == nil {
-		return nil
-	}
-	st, ok := s.Store().(database.OpsV2Store)
-	if !ok {
-		return nil
-	}
-	return st
+	return database.GetOpsV2(s.Store())
 }
 
 // displayNameFor looks up the human-readable display name for a def ID.

@@ -1,6 +1,6 @@
 // file: internal/server/registry_wire.go
-// version: 1.14.0
-// last-edited: 2026-06-16
+// version: 1.15.0
+// last-edited: 2026-06-23
 
 package server
 
@@ -116,10 +116,7 @@ func init() {
 		Groups: []string{"ai"},
 		Build: func(c *serviceregistry.Container) (any, error) {
 			store := serviceregistry.Get[database.Store](c, "store")
-			if s, ok := store.(database.AIJobsStore); ok {
-				return s, nil
-			}
-			return database.AIJobsStore(nil), nil
+			return database.GetAIJobs(store), nil
 		},
 	})
 

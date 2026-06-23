@@ -1,7 +1,7 @@
 // file: internal/server/wire_handlers.go
-// version: 2.11.0
+// version: 2.12.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
-// last-edited: 2026-06-22
+// last-edited: 2026-06-23
 
 package server
 
@@ -159,12 +159,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	}
 
 	// Resolve the opsV2 store from the composite store (nil if unsupported).
-	var opsV2 database.OpsV2Store
-	if st := s.Store(); st != nil {
-		if v2, ok := st.(database.OpsV2Store); ok {
-			opsV2 = v2
-		}
-	}
+	opsV2 := database.GetOpsV2(s.Store())
 	opsV2H := handlers.NewOperationsV2Handler(opsV2, opReg, opEventHub)
 
 	// Operations domain handler (scan/organize/optimize/transcode triggers,
