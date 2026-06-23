@@ -1,7 +1,7 @@
 // file: internal/config/update_service.go
-// version: 3.8.0
+// version: 3.9.0
 // guid: f6g7h8i9-j0k1-l2m3-n4o5-p6q7r8s9t0u1
-// last-edited: 2026-06-16
+// last-edited: 2026-06-23
 
 package config
 
@@ -67,44 +67,25 @@ var secretFieldKeys = []string{
 // immutableFieldKeys cannot be changed at runtime and are rejected if present.
 var immutableFieldKeys = []string{"database_type", "enable_sqlite"}
 
-// remapEmbeddingKeys translates legacy flat embedding keys in a config update
-// payload to the nested EmbeddingConfig format. Merges into any existing
-// "embedding" sub-object to avoid zeroing sibling fields.
-// Remove this shim once the frontend sends nested keys.
-func remapEmbeddingKeys(payload map[string]any) map[string]any {
-	flatToNested := map[string]string{
+// legacyRemapGroup defines a single flat→nested config migration shim.
+// Remove entries (and their keys) once the frontend sends nested keys directly.
+type legacyRemapGroup struct {
+	groupKey     string
+	flatToNested map[string]string
+}
+
+// configRemapGroups is the single source of truth for all flat→nested config
+// key translations in UpdateConfig. Adding a new group here is sufficient —
+// no per-group function required.
+var configRemapGroups = []legacyRemapGroup{
+	{groupKey: "embedding", flatToNested: map[string]string{
 		"embedding_enabled":    "enabled",
 		"embedding_model":      "model",
 		"embedding_dimensions": "dimensions",
 		"embedding_base_url":   "base_url",
 		"vector_index_backend": "vector_backend",
-	}
-	nested := make(map[string]any)
-	for flat, short := range flatToNested {
-		if v, ok := payload[flat]; ok {
-			nested[short] = v
-			delete(payload, flat)
-		}
-	}
-	if len(nested) == 0 {
-		return payload
-	}
-	if existing, ok := payload["embedding"].(map[string]any); ok {
-		for k, v := range nested {
-			existing[k] = v
-		}
-	} else {
-		payload["embedding"] = nested
-	}
-	return payload
-}
-
-// remapDedupKeys translates legacy flat dedup keys in a config update payload
-// to the nested DedupConfig format. Merges into any existing "dedup" sub-object
-// to avoid zeroing sibling fields.
-// Remove this shim once the frontend sends nested keys.
-func remapDedupKeys(payload map[string]any) map[string]any {
-	flatToNested := map[string]string{
+	}},
+	{groupKey: "dedup", flatToNested: map[string]string{
 		"dedup_book_high_threshold":             "book_high_threshold",
 		"dedup_book_low_threshold":              "book_low_threshold",
 		"dedup_author_high_threshold":           "author_high_threshold",
@@ -114,31 +95,8 @@ func remapDedupKeys(payload map[string]any) map[string]any {
 		"dedup_llm_auto_merge_high_confidence": "llm_auto_merge_high_confidence",
 		"dedup_on_import_via_scheduler":         "on_import_via_scheduler",
 		"dedup_review_model":                    "review_model",
-	}
-	nested := make(map[string]any)
-	for flat, short := range flatToNested {
-		if v, ok := payload[flat]; ok {
-			nested[short] = v
-			delete(payload, flat)
-		}
-	}
-	if len(nested) == 0 {
-		return payload
-	}
-	if existing, ok := payload["dedup"].(map[string]any); ok {
-		for k, v := range nested {
-			existing[k] = v
-		}
-	} else {
-		payload["dedup"] = nested
-	}
-	return payload
-}
-
-// remapMetadataScoringKeys translates legacy flat metadata scoring keys to nested format.
-// Remove this shim once the frontend sends nested keys.
-func remapMetadataScoringKeys(payload map[string]any) map[string]any {
-	flatToNested := map[string]string{
+	}},
+	{groupKey: "metadata_scoring", flatToNested: map[string]string{
 		"metadata_embedding_scoring_enabled": "embedding_enabled",
 		"metadata_embedding_min_score":       "embedding_min_score",
 		"metadata_embedding_best_match_min":  "embedding_best_match",
@@ -146,33 +104,8 @@ func remapMetadataScoringKeys(payload map[string]any) map[string]any {
 		"metadata_llm_rerank_epsilon":        "llm_rerank_epsilon",
 		"metadata_llm_rerank_top_k":          "llm_rerank_top_k",
 		"write_backup_before_tag_write":      "write_backup_before",
-	}
-	nested := make(map[string]any)
-	for flat, short := range flatToNested {
-		if v, ok := payload[flat]; ok {
-			nested[short] = v
-			delete(payload, flat)
-		}
-	}
-	if len(nested) == 0 {
-		return payload
-	}
-	if existing, ok := payload["metadata_scoring"].(map[string]any); ok {
-		for k, v := range nested {
-			existing[k] = v
-		}
-	} else {
-		payload["metadata_scoring"] = nested
-	}
-	return payload
-}
-
-// remapITunesKeys translates legacy flat iTunes keys in a config update payload
-// to the nested ITunesConfig format. Merges into any existing "itunes" sub-object
-// to avoid zeroing sibling fields.
-// Remove this shim once the frontend sends nested keys.
-func remapITunesKeys(payload map[string]any) map[string]any {
-	flatToNested := map[string]string{
+	}},
+	{groupKey: "itunes", flatToNested: map[string]string{
 		"itunes_sync_enabled":       "sync_enabled",
 		"itunes_sync_interval":      "sync_interval",
 		"itl_write_back_enabled":    "write_back_enabled",
@@ -182,33 +115,8 @@ func remapITunesKeys(payload map[string]any) map[string]any {
 		"itunes_path_trim_enabled":  "path_trim_enabled",
 		"itunes_windows_root_path":  "windows_root_path",
 		"itunes_media_root":         "media_root",
-	}
-	nested := make(map[string]any)
-	for flat, short := range flatToNested {
-		if v, ok := payload[flat]; ok {
-			nested[short] = v
-			delete(payload, flat)
-		}
-	}
-	if len(nested) == 0 {
-		return payload
-	}
-	if existing, ok := payload["itunes"].(map[string]any); ok {
-		for k, v := range nested {
-			existing[k] = v
-		}
-	} else {
-		payload["itunes"] = nested
-	}
-	return payload
-}
-
-// remapMaintenanceKeys translates legacy flat maintenance_window_* keys in a config
-// update payload to the nested MaintenanceConfig format. Merges into any existing
-// "maintenance" sub-object to avoid zeroing sibling fields.
-// Remove this shim once the frontend sends nested keys.
-func remapMaintenanceKeys(payload map[string]any) map[string]any {
-	flatToNested := map[string]string{
+	}},
+	{groupKey: "maintenance", flatToNested: map[string]string{
 		"maintenance_window_enabled":                "enabled",
 		"maintenance_window_start":                  "window_start",
 		"maintenance_window_end":                    "window_end",
@@ -226,52 +134,38 @@ func remapMaintenanceKeys(payload map[string]any) map[string]any {
 		"maintenance_window_library_size_refresh":   "library_size_refresh",
 		"maintenance_window_acoustid_online_lookup": "acoustid_online_lookup",
 		"acoustid_online_lookup_nightly_limit":      "acoustid_nightly_limit",
-	}
-	nested := make(map[string]any)
-	for flat, short := range flatToNested {
-		if v, ok := payload[flat]; ok {
-			nested[short] = v
-			delete(payload, flat)
-		}
-	}
-	if len(nested) == 0 {
-		return payload
-	}
-	if existing, ok := payload["maintenance"].(map[string]any); ok {
-		for k, v := range nested {
-			existing[k] = v
-		}
-	} else {
-		payload["maintenance"] = nested
-	}
-	return payload
-}
-
-// remapAutoUpdateKeys translates legacy flat auto_update_* keys to nested AutoUpdateConfig format.
-func remapAutoUpdateKeys(payload map[string]any) map[string]any {
-	flatToNested := map[string]string{
+	}},
+	{groupKey: "auto_update", flatToNested: map[string]string{
 		"auto_update_enabled":       "enabled",
 		"auto_update_channel":       "channel",
 		"auto_update_check_minutes": "check_minutes",
 		"auto_update_window_start":  "window_start",
 		"auto_update_window_end":    "window_end",
-	}
-	nested := make(map[string]any)
-	for flat, short := range flatToNested {
-		if v, ok := payload[flat]; ok {
-			nested[short] = v
-			delete(payload, flat)
+	}},
+}
+
+// applyLegacyRemaps applies all configRemapGroups to payload, translating any
+// legacy flat keys to their nested equivalents. Existing sub-objects are merged
+// rather than replaced, so partial payloads don't zero sibling fields.
+func applyLegacyRemaps(payload map[string]any) map[string]any {
+	for _, g := range configRemapGroups {
+		nested := make(map[string]any)
+		for flat, short := range g.flatToNested {
+			if v, ok := payload[flat]; ok {
+				nested[short] = v
+				delete(payload, flat)
+			}
 		}
-	}
-	if len(nested) == 0 {
-		return payload
-	}
-	if existing, ok := payload["auto_update"].(map[string]any); ok {
-		for k, v := range nested {
-			existing[k] = v
+		if len(nested) == 0 {
+			continue
 		}
-	} else {
-		payload["auto_update"] = nested
+		if existing, ok := payload[g.groupKey].(map[string]any); ok {
+			for k, v := range nested {
+				existing[k] = v
+			}
+		} else {
+			payload[g.groupKey] = nested
+		}
 	}
 	return payload
 }
@@ -328,20 +222,11 @@ func (us *UpdateService) UpdateConfig(payload map[string]any) (int, map[string]a
 		delete(filtered, k)
 	}
 
-	// Translate any legacy flat embedding keys to the nested EmbeddingConfig format.
-	filtered = remapEmbeddingKeys(filtered)
-	// Translate any legacy flat dedup keys to the nested DedupConfig format.
-	filtered = remapDedupKeys(filtered)
-	// Translate any legacy flat metadata scoring keys to the nested MetadataScoringConfig format.
-	filtered = remapMetadataScoringKeys(filtered)
-	// Translate any legacy flat iTunes keys to the nested ITunesConfig format.
-	filtered = remapITunesKeys(filtered)
-	// Translate any legacy flat maintenance_window_* keys to the nested MaintenanceConfig format.
-	filtered = remapMaintenanceKeys(filtered)
-	// Translate any legacy flat scheduled_* keys to the nested ScheduledTasksConfig format.
+	// Translate all legacy flat keys to their nested group equivalents.
+	// configRemapGroups is the single source of truth; remapScheduledKeys handles
+	// the deeper two-level nesting that the generic helper doesn't cover.
+	filtered = applyLegacyRemaps(filtered)
 	filtered = remapScheduledKeys(filtered)
-	// Translate any legacy flat auto_update_* keys to the nested AutoUpdateConfig format.
-	filtered = remapAutoUpdateKeys(filtered)
 
 	// Apply all remaining fields via JSON round-trip.
 	// Any field in Config with a matching json tag is set automatically.
