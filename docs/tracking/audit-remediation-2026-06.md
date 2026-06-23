@@ -1,5 +1,5 @@
 <!-- file: docs/tracking/audit-remediation-2026-06.md -->
-<!-- version: 1.9.0 -->
+<!-- version: 1.10.0 -->
 <!-- guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f -->
 <!-- last-edited: 2026-06-23 -->
 
@@ -200,7 +200,7 @@ This ordering respects dependencies and keeps each PR reviewable:
 | G | **Operation launch helper** | ARCH-3 unified enqueue helper | ARCH-2 partially |
 | H | **Work-item contract design** | Design doc + open question resolution | G |
 | I | **Work-item contract implementation** ✅ | `RunItems[T]` standalone generic fn + `ErrMode`/`RunItemsOptions` + 9 unit tests (PR #1579). Note: the 6 listed fan-out sites all have custom checkpointing/multi-counter/resume-from-index logic that cannot be replaced without regression — documented as future follow-up in TODO `ARCH-4b`. | H |
-| I-b | **ARCH-4b — RunItems migration (wave 1)** ✅ | `deluge/path_update.go` migrated to `registry.RunItems` (PR #1591). Remaining 5 sites deferred: `lsh_backfill.go` (308K-item progress cadence — per-item UpdateProgress would be 600× more DB writes than the current every-500 throttle), `centralization.go` (checkpoint wiring), `acoustid/backfill.go` (nested books→files loop + resume-from-ID), `acoustid/fingerprint_rescan.go` (goroutine-based semaphore parallelism), `acoustid/reset_all.go` (callback-driven + dual loop). | H |
+| I-b | **ARCH-4b — RunItems migration (waves 1–2)** ✅ | Wave 1: `deluge/path_update.go` (PR #1591). Wave 2: `deluge/centralization.go` migrated — pre-sliced to checkpoint.ProcessedFiles, atomic counters (success/skip/err), checkpoint written inside fn closure (PR #1592). Remaining 3 sites deferred: `lsh_backfill.go` (308K-item progress cadence), `acoustid/backfill.go` (nested loop + resume-by-ID), `acoustid/reset_all.go` (callback-driven API). `acoustid/fingerprint_rescan.go` excluded — already uses semaphore goroutine pool. | H |
 | J | **Scanner batch pipeline** ✅ | PERF-2 batch upserts shipped PR #1583: `createBookFilesForBook` now collects all BookFiles then calls `BatchUpsertBookFiles` once (N→1 DB writes per book). Hash carry-forward (dedup check re-hashes same files at line 1885) deferred — needs `saveBookToDatabase` API change; documented as PERF-2b in TODO. | — |
 | K | **Security guardrails** ✅ | SEC-5 + SEC-6: `IsDangerousRoot` in pathvalidation, restore dangerous-root guard + verify warning, factory-reset dangerous-root guard. PR #1584. | — |
 | L | **Frontend page decomposition** ✅ | STR-4: BookDedup.tsx 2907→145 lines (3 tabs extracted: DedupAIReviewTab, DedupEmbeddingTab, DedupAcousticTab). FE-5: Library.tsx 2018→1811 lines (useLibraryQuery + useLibrarySelection hooks extracted). PR #1585. TypeScript: 0 errors. | F |

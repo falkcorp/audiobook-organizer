@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.66.0 -->
+<!-- version: 3.67.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-23 -->
 
@@ -8,6 +8,10 @@
 ## [Unreleased]
 
 ### Refactor
+
+#### June 23, 2026 — ARCH-4b wave 2: deluge/centralization.go → RunItems (ARCH-4b)
+
+- **`refactor(plugins)`** ARCH-4b wave 2 — `deluge/centralization.go` migrated to `registry.RunItems`. Key pattern: pre-slice `toImport[checkpoint.ProcessedFiles:]` for resume; atomic counters for success/skip/err; `reporter.Checkpoint(checkpoint)` called inside fn closure after each successful copy; `reporter.IsCanceled()` replaced by RunItems' ctx.Done() polling.
 
 #### June 23, 2026 — ARCH-4b wave 1: deluge/path_update.go → RunItems (ARCH-4b)
 
