@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.78.0 -->
+<!-- version: 3.79.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-23 -->
 
@@ -8,6 +8,10 @@
 ## [Unreleased]
 
 ### Architecture
+
+#### June 23, 2026 — ARCH-7: backward-compatibility surface registry
+
+- **`docs(compat)`** ARCH-7 — Added `docs/compat-surfaces.md` cataloguing all 8+ backward-compatibility shim files with their re-export targets and explicit removal conditions. Covers `internal/server/{file_move,pipeline_checkpoint,file_pipeline,deluge_importer_adapter}.go`, `internal/audiobooks/{rename,organize_preview}.go`, and deprecated config/logger surfaces. Future shims must add a row here in the same PR.
 
 #### June 23, 2026 — ARCH-8: typed service registry keys
 
