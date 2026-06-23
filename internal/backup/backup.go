@@ -1,7 +1,7 @@
 // file: internal/backup/backup.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8f9e0a1b-2c3d-4e5f-6a7b-8c9d0e1f2a3b
-// last-edited: 2026-05-18
+// last-edited: 2026-06-23
 
 package backup
 
@@ -21,6 +21,16 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/security/safepath"
 )
+
+// Checkpointable is satisfied by PebbleStore. The backup handler type-asserts
+// to this interface at runtime; callers without PebbleStore fall back to the
+// live-file copy path. Not part of the main database.Store interface to avoid
+// propagating to every mock.
+type Checkpointable interface {
+	// Checkpoint writes a consistent snapshot of the database to destDir.
+	// destDir must not exist.
+	Checkpoint(destDir string) error
+}
 
 // BackupInfo contains information about a backup
 type BackupInfo struct {
@@ -123,6 +133,35 @@ func CreateBackup(databasePath, databaseType string, config BackupConfig) (*Back
 	}
 
 	return info, nil
+}
+
+// CreateBackupWithCheckpoint creates a consistent PebbleDB backup via
+// Checkpoint(destDir) instead of a live filepath.Walk. The Checkpoint API
+// flushes all in-flight writes and hard-links SST files into destDir, so the
+// archive is always internally consistent. Falls back to CreateBackup (live
+// walk) if the store does not implement Checkpointable (e.g. in tests).
+func CreateBackupWithCheckpoint(store Checkpointable, databaseType string, config BackupConfig) (*BackupInfo, error) {
+	if err := os.MkdirAll(config.BackupDir, 0775); err != nil {
+		return nil, fmt.Errorf("create backup dir: %w", err)
+	}
+
+	// Create a temp directory for the checkpoint.
+	tmpDir, err := os.MkdirTemp(config.BackupDir, "pebble-checkpoint-*")
+	if err != nil {
+		return nil, fmt.Errorf("create temp checkpoint dir: %w", err)
+	}
+	// Pebble requires the destination not to exist — remove the empty dir
+	// it was created with (MkdirTemp creates it), then let Checkpoint re-create it.
+	if err := os.Remove(tmpDir); err != nil {
+		return nil, fmt.Errorf("remove pre-created checkpoint tmp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	if err := store.Checkpoint(tmpDir); err != nil {
+		return nil, fmt.Errorf("pebble checkpoint: %w", err)
+	}
+
+	return CreateBackup(tmpDir, databaseType, config)
 }
 
 // isPathWithinTarget reports whether entryPath, when joined with targetPath,
