@@ -1,5 +1,5 @@
 <!-- file: docs/tracking/audit-remediation-2026-06.md -->
-<!-- version: 1.22.0 -->
+<!-- version: 1.23.0 -->
 <!-- guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f -->
 <!-- last-edited: 2026-06-23 -->
 <!-- Note: per-finding table synced to PR delivery table on 2026-06-23 -->
@@ -72,7 +72,7 @@ These Structure Audit findings were addressed in the May–June refactor wave be
 | ARCH-4 | Config legacy remap machinery repeats by group | Sweep | ✅ | `applyLegacyRemaps` + `configRemapGroups` table in `update_service.go`. 6 per-group functions eliminated; all remap logic in one place. 13 tests updated. |
 | ARCH-5 | `AudiobookService` is a god service | Sweep | ⬜ | P2. Split query/mutation/tags/delete/compatibility. |
 | ARCH-6 | Optional store capabilities discovered ad hoc | Sweep | ✅ | `database.GetOpsV2` + `GetAIJobs` in `storecap.go`; 5 sites updated; `UnwrapAIJobsStore` delegates. PR #1606. |
-| ARCH-7 | Compatibility surfaces scattered across 6+ files | Sweep | ⬜ | P2. Create compatibility registry with owner/removal condition. |
+| ARCH-7 | Compatibility surfaces scattered across 6+ files | Sweep | ✅ | `docs/compat-surfaces.md` documents 8 shim files with removal conditions. PR #1608. |
 | ARCH-8 | Service registry uses globals and panicking string lookups | Sweep | ✅ | 24 typed constants in `serviceregistry/keys.go`; 68 Get/Name/Needs string literals replaced across 25 files. PR #1607. |
 | STR-1 | Pagination helper missing — 376+ limit/offset/page callsites parsed independently | Structure | ✅ | `internal/server/pagination.go` created; pagination helper standardized (PR E #1578). |
 | STR-2 | AI retry duplicated in `openai_parser.go`, `metadata_llm_review.go`, `embedding_client.go` | Structure | ✅ | `internal/ai/retry.go` → `DoWithRetry` function; 4 sites migrated (PR E #1578). |
