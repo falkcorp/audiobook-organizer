@@ -1,5 +1,5 @@
 // file: internal/server/server_search.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 12815699-f9ea-4788-9af3-2e854d710315
 // last-edited: 2026-06-23
 
@@ -61,7 +61,7 @@ func (s *Server) buildSearchIndexIfEmpty() {
 	start := time.Now()
 	indexed := 0
 	const pageSize = 500
-	offset := 0
+	afterID := ""
 	for {
 		select {
 		case <-s.bgCtx.Done():
@@ -69,11 +69,9 @@ func (s *Server) buildSearchIndexIfEmpty() {
 			return
 		default:
 		}
-		// TODO(PERF-6): replace with cursor-based GetAllBooksFrom(afterID, limit) once
-		// the Store interface gains that method — offset scans are O(offset) per page.
-		books, err := store.GetAllBooks(pageSize, offset)
+		books, err := store.GetAllBooksFrom(afterID, pageSize)
 		if err != nil {
-			slog.Warn("search backfill GetAllBooks", "err", err)
+			slog.Warn("search backfill GetAllBooksFrom", "err", err)
 			return
 		}
 		if len(books) == 0 {
@@ -93,7 +91,7 @@ func (s *Server) buildSearchIndexIfEmpty() {
 			}
 			indexed++
 		}
-		offset += len(books)
+		afterID = books[len(books)-1].ID
 		if len(books) < pageSize {
 			break
 		}

@@ -1,7 +1,7 @@
 // file: internal/database/iface_book.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 668ec5a2-f8d9-4fdb-b0d5-09937b5d83ea
-// last-edited: 2026-06-14
+// last-edited: 2026-06-23
 
 package database
 
@@ -27,6 +27,11 @@ type UpdateBookRatingRequest struct {
 type BookReader interface {
 	GetBookByID(id string) (*Book, error)
 	GetAllBooks(limit, offset int) ([]Book, error)
+	// GetAllBooksFrom returns up to limit non-deleted books whose PebbleDB key
+	// sorts after "book:<afterID>". Pass afterID="" to start from the beginning.
+	// This is an O(1) seek vs GetAllBooks's O(offset) skip — use for search
+	// index backfill and other full-table cursor scans.
+	GetAllBooksFrom(afterID string, limit int) ([]Book, error)
 	// ListBookIDs returns just the IDs of all non-deleted books, without
 	// materializing Book structs. Saves ~50x memory vs GetAllBooks(0,0) when
 	// the caller only needs the ID set (e.g., diff'ing against another set).

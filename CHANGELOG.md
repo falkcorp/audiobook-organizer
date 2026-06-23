@@ -7,6 +7,12 @@
 
 ## [Unreleased]
 
+### Performance
+
+#### June 23, 2026 — PERF-6: cursor-based search index backfill
+
+- **`perf(database)`** PERF-6 — Added `GetAllBooksFrom(afterID string, limit int)` cursor method to `BookReader` interface and `PebbleStore`. Uses PebbleDB `LowerBound` for O(1) seek vs. `GetAllBooks`'s O(offset) linear scan. Rewrote `server_search.go` backfill loop from offset pagination to cursor pagination. Updated 1 hand-written mock + 6 mockery-generated mocks.
+
 ### Frontend
 
 #### June 23, 2026 — STR-3: adopt util.Normalize* for DB index keys

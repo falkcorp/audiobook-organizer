@@ -481,6 +481,50 @@ func (_c *MockSystemStore_GetAllBooks_Call) RunAndReturn(run func(limit int, off
 	return _c
 }
 
+// GetAllBooksFrom provides a mock function for the type MockSystemStore
+func (_mock *MockSystemStore) GetAllBooksFrom(afterID string, limit int) ([]database.Book, error) {
+	ret := _mock.Called(afterID, limit)
+	if len(ret) == 0 {
+		panic("no return value specified for GetAllBooksFrom")
+	}
+	var r0 []database.Book
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string, int) ([]database.Book, error)); ok {
+		return returnFunc(afterID, limit)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string, int) []database.Book); ok {
+		r0 = returnFunc(afterID, limit)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]database.Book)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string, int) error); ok {
+		r1 = returnFunc(afterID, limit)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+type MockSystemStore_GetAllBooksFrom_Call struct{ *mock.Call }
+
+func (_e *MockSystemStore_Expecter) GetAllBooksFrom(afterID interface{}, limit interface{}) *MockSystemStore_GetAllBooksFrom_Call {
+	return &MockSystemStore_GetAllBooksFrom_Call{Call: _e.mock.On("GetAllBooksFrom", afterID, limit)}
+}
+func (_c *MockSystemStore_GetAllBooksFrom_Call) Run(run func(string, int)) *MockSystemStore_GetAllBooksFrom_Call {
+	_c.Call.Run(func(args mock.Arguments) { run(args[0].(string), args[1].(int)) })
+	return _c
+}
+func (_c *MockSystemStore_GetAllBooksFrom_Call) Return(books []database.Book, err error) *MockSystemStore_GetAllBooksFrom_Call {
+	_c.Call.Return(books, err)
+	return _c
+}
+func (_c *MockSystemStore_GetAllBooksFrom_Call) RunAndReturn(run func(string, int) ([]database.Book, error)) *MockSystemStore_GetAllBooksFrom_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetAllSettings provides a mock function for the type MockSystemStore
 func (_mock *MockSystemStore) GetAllSettings() ([]database.Setting, error) {
 	ret := _mock.Called()

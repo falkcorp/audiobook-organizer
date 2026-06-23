@@ -1425,6 +1425,74 @@ func (p *PebbleStore) GetAllBooks(limit, offset int) ([]Book, error) {
 	return books, nil
 }
 
+// GetAllBooksFrom returns up to limit non-deleted books in PebbleDB key order
+// after "book:<afterID>". Pass afterID="" to start from the beginning. This
+// is O(1) seek vs GetAllBooks's O(offset) linear scan — use for cursor-based
+// full-table iteration (e.g. search index backfill).
+func (p *PebbleStore) GetAllBooksFrom(afterID string, limit int) ([]Book, error) {
+	if p.UseMemDB && p.mem() != nil {
+		// MemDB path: load a page from the beginning and filter to after afterID.
+		// Only used in tests — not optimised for large N.
+		all, err := p.mem().GetAllBooks(limit*2+1, 0, nil)
+		if err != nil {
+			return nil, err
+		}
+		if afterID == "" {
+			if limit > 0 && len(all) > limit {
+				all = all[:limit]
+			}
+			return all, nil
+		}
+		for i, b := range all {
+			if b.ID == afterID {
+				rest := all[i+1:]
+				if limit > 0 && len(rest) > limit {
+					rest = rest[:limit]
+				}
+				return rest, nil
+			}
+		}
+		return all, nil
+	}
+
+	lower := []byte("book:0")
+	if afterID != "" {
+		// "\x01" is below any UUID character (0-9, a-f, '-') so this positions
+		// the iterator at the first key strictly after "book:<afterID>".
+		lower = append(append([]byte("book:"), afterID...), '\x01')
+	}
+	iter, err := p.db.NewIter(&pebble.IterOptions{
+		LowerBound: lower,
+		UpperBound: []byte("book:~"),
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	var books []Book
+	count := 0
+	for iter.First(); iter.Valid(); iter.Next() {
+		key := string(iter.Key())
+		if strings.Contains(key, ":path:") {
+			continue
+		}
+		var book Book
+		if err := json.Unmarshal(iter.Value(), &book); err != nil {
+			return nil, err
+		}
+		if book.MarkedForDeletion != nil && *book.MarkedForDeletion {
+			continue
+		}
+		books = append(books, book)
+		count++
+		if limit > 0 && count >= limit {
+			break
+		}
+	}
+	return books, nil
+}
+
 // ListBookIDs returns the IDs of all books, without materializing Book
 // structs. When memdb is available, delegates to the memdb fast path
 // (which also filters MarkedForDeletion). Otherwise walks Pebble keys in

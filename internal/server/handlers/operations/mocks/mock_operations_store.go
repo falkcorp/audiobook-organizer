@@ -1650,6 +1650,71 @@ func (_c *MockOperationsStore_GetAllBooks_Call) RunAndReturn(run func(limit int,
 	return _c
 }
 
+// GetAllBooksFrom provides a mock function for the type MockOperationsStore
+func (_mock *MockOperationsStore) GetAllBooksFrom(afterID string, limit int) ([]database.Book, error) {
+	ret := _mock.Called(afterID, limit)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetAllBooksFrom")
+	}
+
+	var r0 []database.Book
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string, int) ([]database.Book, error)); ok {
+		return returnFunc(afterID, limit)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string, int) []database.Book); ok {
+		r0 = returnFunc(afterID, limit)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]database.Book)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string, int) error); ok {
+		r1 = returnFunc(afterID, limit)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockOperationsStore_GetAllBooksFrom_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetAllBooksFrom'
+type MockOperationsStore_GetAllBooksFrom_Call struct {
+	*mock.Call
+}
+
+// GetAllBooksFrom is a helper method to define mock.On call
+//   - afterID string
+//   - limit int
+func (_e *MockOperationsStore_Expecter) GetAllBooksFrom(afterID interface{}, limit interface{}) *MockOperationsStore_GetAllBooksFrom_Call {
+	return &MockOperationsStore_GetAllBooksFrom_Call{Call: _e.mock.On("GetAllBooksFrom", afterID, limit)}
+}
+
+func (_c *MockOperationsStore_GetAllBooksFrom_Call) Run(run func(afterID string, limit int)) *MockOperationsStore_GetAllBooksFrom_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 int
+		if args[1] != nil {
+			arg1 = args[1].(int)
+		}
+		run(arg0, arg1)
+	})
+	return _c
+}
+
+func (_c *MockOperationsStore_GetAllBooksFrom_Call) Return(books []database.Book, err error) *MockOperationsStore_GetAllBooksFrom_Call {
+	_c.Call.Return(books, err)
+	return _c
+}
+
+func (_c *MockOperationsStore_GetAllBooksFrom_Call) RunAndReturn(run func(string, int) ([]database.Book, error)) *MockOperationsStore_GetAllBooksFrom_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetAllSettings provides a mock function for the type MockOperationsStore
 func (_mock *MockOperationsStore) GetAllSettings() ([]database.Setting, error) {
 	ret := _mock.Called()
