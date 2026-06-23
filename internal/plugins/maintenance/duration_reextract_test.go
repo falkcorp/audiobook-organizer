@@ -35,7 +35,7 @@ func newReextractPlugin(books []database.Book) (*Plugin, *[]database.Book) {
 		byID[b.ID] = b
 	}
 	store := &database.MockStore{
-		CountBooksFunc: func() (int, error) { return len(books), nil },
+		CountAllBooksFunc: func() (int, error) { return len(books), nil },
 		GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) {
 			if offset >= len(books) {
 				return nil, nil
@@ -167,7 +167,7 @@ func TestDurationReextract_MultiFileMissingSegmentsSkipped(t *testing.T) {
 	writes := 0
 	books := []database.Book{{ID: "bm", Title: "Multi", FilePath: "/lib/Multi", Duration: intPtr(100)}}
 	store := &database.MockStore{
-		CountBooksFunc: func() (int, error) { return len(books), nil },
+		CountAllBooksFunc: func() (int, error) { return len(books), nil },
 		GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) {
 			if offset >= len(books) {
 				return nil, nil
@@ -203,7 +203,7 @@ func TestDurationReextract_FingerprintDurationFirst(t *testing.T) {
 	var written []database.BookFile
 	books := []database.Book{{ID: "bf", Title: "Fingerprinted", FilePath: "/lib/Fingerprinted", Duration: intPtr(120)}}
 	store := &database.MockStore{
-		CountBooksFunc: func() (int, error) { return len(books), nil },
+		CountAllBooksFunc: func() (int, error) { return len(books), nil },
 		GetAllBooksFunc: func(_, offset int) ([]database.Book, error) {
 			if offset >= len(books) {
 				return nil, nil
@@ -248,7 +248,7 @@ func TestDurationReextract_MixedFingerprintAndFfprobe(t *testing.T) {
 	writes := 0
 	books := []database.Book{{ID: "bm", Title: "Mixed", FilePath: "/lib/Mixed", Duration: intPtr(120)}}
 	store := &database.MockStore{
-		CountBooksFunc: func() (int, error) { return len(books), nil },
+		CountAllBooksFunc: func() (int, error) { return len(books), nil },
 		GetAllBooksFunc: func(_, offset int) ([]database.Book, error) {
 			if offset >= len(books) {
 				return nil, nil
@@ -288,7 +288,7 @@ func TestDurationReextract_ParallelWorkers_AllBooksProcessed(t *testing.T) {
 	}
 
 	store := &database.MockStore{
-		CountBooksFunc: func() (int, error) { return n, nil },
+		CountAllBooksFunc: func() (int, error) { return n, nil },
 		GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) {
 			if offset >= n {
 				return nil, nil
@@ -329,7 +329,7 @@ func TestDurationReextract_FingerprintIdempotent(t *testing.T) {
 	writes := 0
 	books := []database.Book{{ID: "bi", Title: "Correct", FilePath: "/lib/Correct", Duration: intPtr(3600)}}
 	store := &database.MockStore{
-		CountBooksFunc: func() (int, error) { return len(books), nil },
+		CountAllBooksFunc: func() (int, error) { return len(books), nil },
 		GetAllBooksFunc: func(_, offset int) ([]database.Book, error) {
 			if offset >= len(books) {
 				return nil, nil

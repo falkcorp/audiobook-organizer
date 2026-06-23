@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8475f406-df31-4286-95b0-30787397603e
 // last-edited: 2026-06-23
 
@@ -150,7 +150,7 @@ func (h *Handler) HealthCheck(c *gin.Context) {
 	var dbErr error
 	var brokenFileCount int
 	if store != nil {
-		if bc, err := store.CountBooks(); err == nil {
+		if bc, err := store.CountPrimaryBooks(); err == nil {
 			bookCount = bc
 		} else {
 			dbErr = err

@@ -40,7 +40,7 @@ func (m *mockRebuildStore) GetBookByID(id string) (*database.Book, error) {
 	return nil, nil
 }
 
-func (m *mockRebuildStore) CountBooks() (int, error) {
+func (m *mockRebuildStore) CountPrimaryBooks() (int, error) {
 	return len(m.books), nil
 }
 

@@ -104,7 +104,7 @@ func run(method, routePath, reqPath string, body []byte, register func(r *gin.En
 
 func TestHealthCheck_OK(t *testing.T) {
 	h, d := newTestHandler(t)
-	d.store.EXPECT().CountBooks().Return(10, nil)
+	d.store.EXPECT().CountPrimaryBooks().Return(10, nil)
 	d.store.EXPECT().CountAuthors().Return(5, nil)
 	d.store.EXPECT().CountSeries().Return(2, nil)
 
@@ -122,7 +122,7 @@ func TestHealthCheck_OK(t *testing.T) {
 
 func TestHealthCheck_PartialError(t *testing.T) {
 	h, d := newTestHandler(t)
-	d.store.EXPECT().CountBooks().Return(0, errors.New("db down"))
+	d.store.EXPECT().CountPrimaryBooks().Return(0, errors.New("db down"))
 	d.store.EXPECT().CountAuthors().Return(0, errors.New("db down"))
 	d.store.EXPECT().CountSeries().Return(0, errors.New("db down"))
 

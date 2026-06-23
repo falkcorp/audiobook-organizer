@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_fixups.go
-// version: 2.5.0
+// version: 2.6.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-06-10
+// last-edited: 2026-06-23
 
 package server
 
@@ -286,7 +286,7 @@ func wipeSegments(store maintenanceStore, dryRun bool) (int64, error) {
 // wipeBooks deletes all book rows using the appropriate store backend.
 func wipeBooks(store maintenanceStore, dryRun bool) (int64, error) {
 	if dryRun {
-		n, err := store.CountBooks()
+		n, err := store.CountPrimaryBooks()
 		return int64(n), err
 	}
 	if s, ok := store.(*database.PebbleStore); ok {

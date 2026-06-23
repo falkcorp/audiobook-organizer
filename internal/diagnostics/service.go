@@ -1,5 +1,5 @@
 // file: internal/diagnostics/service.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: d1a9n0st-1cs0-s3rv-1c3z-1pexp0rt001
 
 package diagnostics
@@ -276,7 +276,7 @@ func WriteRaw(zw *zip.Writer, filename string, data []byte) error {
 }
 
 func (ds *Service) writeSystemInfo(zw *zip.Writer, category, description string) error {
-	bookCount, _ := ds.db.CountBooks()
+	bookCount, _ := ds.db.CountPrimaryBooks()
 	authorCount, _ := ds.db.CountAuthors()
 	seriesCount, _ := ds.db.CountSeries()
 

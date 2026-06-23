@@ -53,7 +53,7 @@ func setupHandlerTest(t *testing.T) (*Server, *mocks.MockStore, *gin.Engine) {
 func TestHandler_HealthCheck_Success(t *testing.T) {
 	srv, mockStore, router := setupHandlerTest(t)
 
-	mockStore.EXPECT().CountBooks().Return(42, nil)
+	mockStore.EXPECT().CountPrimaryBooks().Return(42, nil)
 	mockStore.EXPECT().CountAuthors().Return(1, nil)
 	mockStore.EXPECT().CountSeries().Return(1, nil)
 
@@ -78,7 +78,7 @@ func TestHandler_HealthCheck_Success(t *testing.T) {
 func TestHandler_HealthCheck_DBError(t *testing.T) {
 	srv, mockStore, router := setupHandlerTest(t)
 
-	mockStore.EXPECT().CountBooks().Return(0, errors.New("db down"))
+	mockStore.EXPECT().CountPrimaryBooks().Return(0, errors.New("db down"))
 	mockStore.EXPECT().CountAuthors().Return(0, errors.New("db down"))
 	mockStore.EXPECT().CountSeries().Return(0, errors.New("db down"))
 

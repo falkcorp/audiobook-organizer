@@ -119,7 +119,7 @@ func (m *MockBookStore) GetBooksByMetadataSourceHash(hash string) ([]database.Bo
 func (m *MockBookStore) SearchBooks(query string, limit, offset int) ([]database.Book, error) {
 	return nil, nil
 }
-func (m *MockBookStore) CountBooks() (int, error)                { return len(m.books), nil }
+func (m *MockBookStore) CountPrimaryBooks() (int, error)                { return len(m.books), nil }
 func (m *MockBookStore) GetDistinctGenres() ([]string, error)    { return nil, nil }
 func (m *MockBookStore) GetDistinctLanguages() ([]string, error) { return nil, nil }
 func (m *MockBookStore) ListSoftDeletedBooks(limit, offset int, olderThan *time.Time) ([]database.Book, error) {

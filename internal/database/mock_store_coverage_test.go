@@ -59,7 +59,7 @@ func TestMockStore_CustomFuncPaths(t *testing.T) {
 	mock.UpdateBookFunc = func(string, *Book) (*Book, error) { return nil, nil }
 	mock.DeleteBookFunc = func(string) error { return nil }
 	mock.SearchBooksFunc = func(string, int, int) ([]Book, error) { return nil, nil }
-	mock.CountBooksFunc = func() (int, error) { return 0, nil }
+	mock.CountPrimaryBooksFunc = func() (int, error) { return 0, nil }
 	mock.CountFilesFunc = func() (int, error) { return 0, nil }
 	mock.ListSoftDeletedBooksFunc = func(int, int, *time.Time) ([]Book, error) { return nil, nil }
 	mock.GetBooksByVersionGroupFunc = func(string) ([]Book, error) { return nil, nil }
@@ -178,7 +178,7 @@ func TestMockStore_CustomFuncPaths(t *testing.T) {
 	_, _ = mock.UpdateBook("book-1", &Book{})
 	_ = mock.DeleteBook("book-1")
 	_, _ = mock.SearchBooks("query", 10, 0)
-	_, _ = mock.CountBooks()
+	_, _ = mock.CountPrimaryBooks()
 	_, _ = mock.CountFiles()
 	_, _ = mock.ListSoftDeletedBooks(10, 0, nil)
 	_, _ = mock.GetBooksByVersionGroup("group-1")

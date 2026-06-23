@@ -232,7 +232,7 @@ func TestAudiobookService_CountAudiobooks_Success(t *testing.T) {
 	mockStore := mocks.NewMockStore(t)
 	svc := NewAudiobookService(mockStore)
 
-	mockStore.EXPECT().CountBooks().Return(42, nil)
+	mockStore.EXPECT().CountPrimaryBooks().Return(42, nil)
 
 	count, err := svc.CountAudiobooks(context.Background())
 	assert.NoError(t, err)
@@ -243,7 +243,7 @@ func TestAudiobookService_CountAudiobooks_StoreError(t *testing.T) {
 	mockStore := mocks.NewMockStore(t)
 	svc := NewAudiobookService(mockStore)
 
-	mockStore.EXPECT().CountBooks().Return(0, fmt.Errorf("count failed"))
+	mockStore.EXPECT().CountPrimaryBooks().Return(0, fmt.Errorf("count failed"))
 
 	count, err := svc.CountAudiobooks(context.Background())
 	assert.Error(t, err)
