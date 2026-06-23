@@ -1,5 +1,6 @@
 // file: internal/batch/service_test.go
-// version: 1.0.2
+// version: 1.0.3
+// last-edited: 2026-06-23
 // guid: b2c3d4e5-f6a7-b8c9-0d1e-2f3a4b5c6d7e
 
 package batch
@@ -83,6 +84,9 @@ func (m *MockBookStore) DeleteBook(id string) error {
 
 // Stub implementations for other BookStore methods not used by BatchService
 func (m *MockBookStore) GetAllBooks(limit, offset int) ([]database.Book, error) { return nil, nil }
+func (m *MockBookStore) GetAllBooksFrom(afterID string, limit int) ([]database.Book, error) {
+	return nil, nil
+}
 func (m *MockBookStore) GetAllBookSummaries(limit, offset int) ([]database.BookSummary, error) {
 	return nil, nil
 }
