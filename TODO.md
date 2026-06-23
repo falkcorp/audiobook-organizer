@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.29.0 -->
+<!-- version: 9.30.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-06-23 -->
 
@@ -1250,6 +1250,7 @@ Bot-tasks: `docs/superpowers/bot-tasks/2026-04-30-*.md`.
   → [`2026-04-30-fe-4-settings-general.md`](docs/superpowers/bot-tasks/2026-04-30-fe-4-settings-general.md)
 - [x] **FE-5** `refactor/settings-paths-tab` — Done: `PathsSettingsTab.tsx` extracted.
 - [x] **FE-6** `refactor/settings-metadata-tab` — Done: `MetadataSettingsTab.tsx` extracted.
+- [x] **FE-6 (audit)** `refactor/fe6-settings-handlers-split` — Done: `useSettingsHandlers.ts` (1259→936 lines) split into `useImportFolderHandlers`, `useBackupHandlers`, `useMetadataSourceHandlers`.
 - [x] **FE-7** `fix/frontend-remove-console-logs` — Done: no `console.log` calls in production source; only `console.error`/`console.warn` in catch blocks (appropriate).
 - [x] **FE-8** `fix/frontend-error-boundaries` — Done: `ErrorBoundary` wraps every page route in `App.tsx`.
 - [x] **FE-9** `fix/frontend-localstorage-keys` — Done: `STORAGE_KEYS` constants exported from `lib/storageKeys.ts`.
