@@ -1,7 +1,7 @@
 // file: internal/plugins/deluge/path_update.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-05-07
+// last-edited: 2026-06-23
 
 package deluge
 
@@ -10,10 +10,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -83,7 +85,6 @@ func (p *Plugin) runPathUpdate(ctx context.Context, params json.RawMessage, repo
 
 	sdk.NewProgress(reporter, 0).Start(fmt.Sprintf("Loading book %s...", bookID))
 
-	// Fetch the book.
 	book, err := p.store.GetBookByID(bookID)
 	if err != nil {
 		return fmt.Errorf("load book: %w", err)
@@ -92,67 +93,55 @@ func (p *Plugin) runPathUpdate(ctx context.Context, params json.RawMessage, repo
 		return fmt.Errorf("book not found")
 	}
 
-	// Fetch all versions for this book.
 	versions, err := p.store.GetBookVersionsByBookID(bookID)
 	if err != nil {
 		return fmt.Errorf("load versions: %w", err)
 	}
 
-	prog := sdk.NewProgress(reporter, len(versions))
-	prog.Start(fmt.Sprintf("Updating %d version(s) in Deluge...", len(versions)))
+	sdk.NewProgress(reporter, len(versions)).Start(
+		fmt.Sprintf("Updating %d version(s) in Deluge...", len(versions)),
+	)
 
-	// Update each version's torrent path.
-	updated := 0
-	for i, v := range versions {
-		prog.StepN(i+1, fmt.Sprintf("Processing version %d/%d", i+1, len(versions)))
-		if v.TorrentHash == "" {
-			continue // Not a Deluge torrent
+	// Pre-compute active count so the RunItems closure can reference it without
+	// iterating versions again on each call.
+	activeCount := 0
+	for _, v := range versions {
+		if v.Status == database.BookVersionStatusActive {
+			activeCount++
 		}
-		if v.Status != database.BookVersionStatusActive {
-			continue // Skip inactive versions
+	}
+	primaryDir := filepath.Dir(book.FilePath)
+
+	var updated atomic.Int64
+
+	if err := registry.RunItems(ctx, reporter, versions, func(ctx context.Context, v database.BookVersion) error {
+		if v.TorrentHash == "" || v.Status != database.BookVersionStatusActive {
+			return nil // skip non-Deluge or inactive versions
 		}
 
-		// Determine the file path for this version.
-		// Active versions can be in two places:
-		// 1. Primary (main): book.FilePath
-		// 2. Alternative: .versions/{versionID}/{filename}
 		var dir string
-		primaryDir := filepath.Dir(book.FilePath)
-
-		// Check if this version's file is at the primary location.
-		// This is a heuristic: if only one active version exists, it's primary.
-		activeCount := 0
-		for _, ver := range versions {
-			if ver.Status == database.BookVersionStatusActive {
-				activeCount++
-			}
-		}
-
 		if activeCount == 1 {
-			// Only one active version — it's primary
 			dir = primaryDir
 		} else {
-			// Multiple active versions — check if this one is at the primary path.
-			// For now, assume any non-primary version is in .versions/.
-			// The actual determination requires additional state tracking.
-			// As a best effort, we'll try to update both locations.
 			dir = filepath.Join(primaryDir, ".versions", v.ID)
 		}
 
-		// Tell Deluge to update the torrent storage path.
 		if cfg.DelugeMoveEnabled && p.client != nil {
-			err := p.client.MoveStorage([]string{v.TorrentHash}, dir)
-			if err != nil {
-				reporter.Logger().Error("move_storage failed", "hash", v.TorrentHash, "path", dir, "error", err)
-				// Non-fatal: log but continue.
-			} else {
-				reporter.Logger().Info("move_storage succeeded", "hash", v.TorrentHash, "path", dir)
-				updated++
+			if err := p.client.MoveStorage([]string{v.TorrentHash}, dir); err != nil {
+				reporter.Logger().Error("move_storage failed",
+					"hash", v.TorrentHash, "path", dir, "error", err)
+				return nil // non-fatal: log but continue
 			}
+			reporter.Logger().Info("move_storage succeeded",
+				"hash", v.TorrentHash, "path", dir)
+			updated.Add(1)
 		}
+		return nil
+	}, registry.RunItemsOptions{ErrMode: registry.ErrModeCollect}); err != nil {
+		return err
 	}
 
-	prog.Finalize("Writing results...")
-	prog.Done(fmt.Sprintf("Updated %d torrent(s)", updated))
+	reporter.Logger().Info("deluge path-update complete",
+		"book_id", bookID, "updated", updated.Load())
 	return nil
 }
