@@ -1,7 +1,7 @@
 // file: internal/server/handlers/ai.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6ccf0c64-9654-46c5-aed0-584943acb1c5
-// last-edited: 2026-06-03
+// last-edited: 2026-06-23
 
 // AIHandler hosts the AI HTTP endpoints extracted from the server package:
 // filename parsing, OpenAI / metadata-source connection tests, per-book AI
@@ -701,8 +701,8 @@ func (h *AIHandler) ListAIJobs(c *gin.Context) {
 		offset = 0
 	}
 
-	store, ok := UnwrapAIJobsStore(h.store)
-	if !ok {
+	store := database.GetAIJobs(h.store)
+	if store == nil {
 		httputil.RespondWithInternalError(c, "store does not implement AIJobsStore")
 		return
 	}
@@ -716,23 +716,11 @@ func (h *AIHandler) ListAIJobs(c *gin.Context) {
 	}{Jobs: jobs})
 }
 
-// UnwrapAIJobsStore peels Store decorator layers (anything with Unwrap()) until
-// it finds one that satisfies database.AIJobsStore, mirroring the errors.As()
-// pattern. Exported (relocated from server.unwrapAIJobsStore) so it remains
-// callable from package handlers.
+// UnwrapAIJobsStore peels Store decorator layers until it finds one satisfying
+// database.AIJobsStore. Delegates to database.GetAIJobs; kept for API compat.
 func UnwrapAIJobsStore(s database.Store) (database.AIJobsStore, bool) {
-	type unwrapper interface{ Unwrap() database.Store }
-	for s != nil {
-		if aij, ok := s.(database.AIJobsStore); ok {
-			return aij, true
-		}
-		u, ok := s.(unwrapper)
-		if !ok {
-			break
-		}
-		s = u.Unwrap()
-	}
-	return nil, false
+	aij := database.GetAIJobs(s)
+	return aij, aij != nil
 }
 
 // AIReviewGroupsMode is the Groups mode of the AI author review: local

@@ -1,11 +1,17 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.76.0 -->
+<!-- version: 3.77.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-23 -->
 
 # Changelog
 
 ## [Unreleased]
+
+### Architecture
+
+#### June 23, 2026 — ARCH-6: centralized storecap helpers
+
+- **`refactor(database)`** ARCH-6 — Added `database.GetOpsV2(store Store) OpsV2Store` and `database.GetAIJobs(store Store) AIJobsStore` in `internal/database/storecap.go`. Both helpers handle the nil-guard and walk any `Unwrap()` decorator chain (same pattern as `errors.As`). Updated 5 call sites in `wire_handlers.go`, `registry_wire.go`, `operations_v2_handlers.go`, `batch_poller.go`, and `handlers/ai.go` to use the canonical helpers. `UnwrapAIJobsStore` now delegates to `database.GetAIJobs` for backward compat.
 
 ### Performance
 

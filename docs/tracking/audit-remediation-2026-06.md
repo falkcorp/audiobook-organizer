@@ -1,5 +1,5 @@
 <!-- file: docs/tracking/audit-remediation-2026-06.md -->
-<!-- version: 1.20.0 -->
+<!-- version: 1.21.0 -->
 <!-- guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f -->
 <!-- last-edited: 2026-06-23 -->
 <!-- Note: per-finding table synced to PR delivery table on 2026-06-23 -->
@@ -71,7 +71,7 @@ These Structure Audit findings were addressed in the May–June refactor wave be
 | ARCH-3 | Operation enqueue boilerplate duplicated across handlers | Sweep | ✅ | `launchOp` / `launchLegacyOp` helpers extracted; 11 enqueue boilerplate sites eliminated (PR G #1577). |
 | ARCH-4 | Config legacy remap machinery repeats by group | Sweep | ✅ | `applyLegacyRemaps` + `configRemapGroups` table in `update_service.go`. 6 per-group functions eliminated; all remap logic in one place. 13 tests updated. |
 | ARCH-5 | `AudiobookService` is a god service | Sweep | ⬜ | P2. Split query/mutation/tags/delete/compatibility. |
-| ARCH-6 | Optional store capabilities discovered ad hoc | Sweep | ⬜ | P2. Add `storecap` helpers. |
+| ARCH-6 | Optional store capabilities discovered ad hoc | Sweep | ✅ | `database.GetOpsV2` + `GetAIJobs` in `storecap.go`; 5 sites updated; `UnwrapAIJobsStore` delegates. PR #1606. |
 | ARCH-7 | Compatibility surfaces scattered across 6+ files | Sweep | ⬜ | P2. Create compatibility registry with owner/removal condition. |
 | ARCH-8 | Service registry uses globals and panicking string lookups | Sweep | ⬜ | P2. Typed service keys or generated accessors. |
 | STR-1 | Pagination helper missing — 376+ limit/offset/page callsites parsed independently | Structure | ✅ | `internal/server/pagination.go` created; pagination helper standardized (PR E #1578). |

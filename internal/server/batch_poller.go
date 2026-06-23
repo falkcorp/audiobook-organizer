@@ -1,6 +1,7 @@
 // file: internal/server/batch_poller.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: f8a1b2c3-d4e5-6789-abcd-0123456789ab
+// last-edited: 2026-06-23
 
 package server
 
@@ -200,8 +201,8 @@ func (s *Server) registerBatchPollerHandlers() {
 				Err:      r.Error,
 			})
 		}
-		store, ok := s.Store().(database.AIJobsStore)
-		if !ok {
+		store := database.GetAIJobs(s.Store())
+		if store == nil {
 			return fmt.Errorf("aijobs: store does not implement AIJobsStore")
 		}
 		return aijobs.Dispatch(ctx, store, batchID, results)
