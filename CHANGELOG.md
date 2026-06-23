@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.74.0 -->
+<!-- version: 3.75.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-23 -->
 
@@ -8,6 +8,10 @@
 ## [Unreleased]
 
 ### Performance
+
+#### June 23, 2026 — PERF-3: eliminate full-materialization escape hatches in library list
+
+- **`perf(audiobooks)`** PERF-3 — Removed two early-return escape hatches from `buildBookSummaryFilterWithLookupCount`: (1) non-title sorts (author, duration, etc.) now build the `BookSummaryFilter` with predicates and fetch only the filtered subset instead of all 68K books; (2) fingerprint/coverage filters are pushed into the `Predicate` closure (`FingerprintStatus` and `CoveragePercent` are denormalized on `Book`, no BookFile join required). For non-title sorts, `pdLimit=0` lets the post-filter block handle pagination after in-memory sort. `CountAudiobooksFiltered` fallback is now dead code.
 
 #### June 23, 2026 — PERF-8: consistent Pebble backup via Checkpoint
 
