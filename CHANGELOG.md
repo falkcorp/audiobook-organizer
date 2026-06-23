@@ -1,11 +1,17 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.65.0 -->
+<!-- version: 3.66.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-23 -->
 
 # Changelog
 
 ## [Unreleased]
+
+### Refactor
+
+#### June 23, 2026 — ARCH-4b wave 1: deluge/path_update.go → RunItems (ARCH-4b)
+
+- **`refactor(plugins)`** ARCH-4b — `deluge/path_update.go` loop migrated to `registry.RunItems[database.BookVersion]` with `ErrModeCollect`. `updated` counter tracked via `atomic.Int64`. Active-version count pre-computed outside the fan-out. Remaining 5 sites deferred with detailed rationale in TODO.md.
 
 ### Fixed
 
