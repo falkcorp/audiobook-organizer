@@ -58,7 +58,7 @@ These Structure Audit findings were addressed in the May–June refactor wave be
 | PERF-5 | iTunes backfill: offset pagination, N+1 file reads, per-row writes | Sweep | ✅ Partial | Per-row writes fixed: mappings now accumulated per page and flushed with one `BulkCreateExternalIDMappings` call (N→1 per page). N+1 file reads deferred — needs `GetBookFilesByBookIDs([]string)` batch method on Store + mock regen; TODO comment added. Offset pagination kept — 5 pages for 50K books is acceptable. |
 | PERF-6 | Search index rebuild uses offset-based `GetAllBooks` | Sweep | ✅ | Added `GetAllBooksFrom(afterID, limit)` cursor to `BookReader` interface (`iface_book.go`), implemented in `PebbleStore` (O(1) seek via LowerBound), updated 6 generated mocks + 1 hand-written mock, rewrote `server_search.go` backfill loop to use cursor. Shipped PR #1601. |
 | PERF-7 | Memdb projection is a monolith; strips `AcoustIDFingerprint` on round-trip | Sweep | ✅ | `UpsertBookFile` now has the same fingerprint-preserve guard as `BatchUpsertBookFiles`. 3 regression tests added in `pebble_bookfile_preserve_test.go`. |
-| PERF-8 | Backup walks live Pebble files directly | Sweep | ⬜ | P2. Use Pebble `Checkpoint` before archiving. |
+| PERF-8 | Backup walks live Pebble files directly | Sweep | ✅ | Added `PebbleStore.Checkpoint(destDir)` + `backup.Checkpointable` interface + `backup.CreateBackupWithCheckpoint`. `system/handler.go CreateBackup` type-asserts the store to `Checkpointable` at runtime — PebbleStore uses the consistent checkpoint path; mocks fall back to the live-walk path. No Store interface change (no mock propagation). PR #1603. |
 
 ---
 

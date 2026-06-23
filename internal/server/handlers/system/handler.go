@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8475f406-df31-4286-95b0-30787397603e
-// last-edited: 2026-06-22
+// last-edited: 2026-06-23
 
 // Package system hosts the system-level HTTP handlers extracted from the server
 // package: health, status, announcements, storage, logs, activity-log,
@@ -540,7 +540,17 @@ func (h *Handler) CreateBackup(c *gin.Context) {
 		backupConfig.BackupDir = filepath.Join(filepath.Dir(dbPath), backupConfig.BackupDir)
 	}
 
-	info, err := backup.CreateBackup(dbPath, dbType, backupConfig)
+	var info *backup.BackupInfo
+	var err error
+	if store := h.resolveStore(); store != nil {
+		if cp, ok := store.(backup.Checkpointable); ok {
+			info, err = backup.CreateBackupWithCheckpoint(cp, dbType, backupConfig)
+		} else {
+			info, err = backup.CreateBackup(dbPath, dbType, backupConfig)
+		}
+	} else {
+		info, err = backup.CreateBackup(dbPath, dbType, backupConfig)
+	}
 	if err != nil {
 		httputil.InternalError(c, "failed to create backup", err)
 		return

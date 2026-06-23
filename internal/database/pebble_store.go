@@ -319,6 +319,14 @@ func (p *PebbleStore) Close() error {
 	return p.db.Close()
 }
 
+// Checkpoint writes a consistent point-in-time snapshot of the PebbleDB to
+// destDir using Pebble's built-in checkpoint mechanism. The snapshot is safe
+// to archive without the risk of torn writes that a live filepath.Walk incurs.
+// destDir must not exist; Pebble creates it.
+func (p *PebbleStore) Checkpoint(destDir string) error {
+	return p.db.Checkpoint(destDir)
+}
+
 // DB returns the underlying *pebble.DB. Used by AIScanStore to share the DB.
 func (p *PebbleStore) DB() *pebble.DB {
 	return p.db

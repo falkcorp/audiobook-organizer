@@ -9,6 +9,10 @@
 
 ### Performance
 
+#### June 23, 2026 — PERF-8: consistent Pebble backup via Checkpoint
+
+- **`perf(backup)`** PERF-8 — Added `PebbleStore.Checkpoint(destDir string) error` using Pebble's built-in checkpoint API. Added `backup.Checkpointable` interface + `backup.CreateBackupWithCheckpoint`. The `POST /backup/create` handler now type-asserts the store to `Checkpointable` at runtime; PebbleStore takes the consistent checkpoint path, mocks fall back to the live-file walk path. No Store interface change required.
+
 #### June 23, 2026 — PERF-6: cursor-based search index backfill
 
 - **`perf(database)`** PERF-6 — Added `GetAllBooksFrom(afterID string, limit int)` cursor method to `BookReader` interface and `PebbleStore`. Uses PebbleDB `LowerBound` for O(1) seek vs. `GetAllBooks`'s O(offset) linear scan. Rewrote `server_search.go` backfill loop from offset pagination to cursor pagination. Updated 1 hand-written mock + 6 mockery-generated mocks.
