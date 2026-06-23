@@ -1,6 +1,7 @@
 // file: tests/e2e/playwright.config.ts
-// version: 1.6.0
+// version: 1.7.0
 // guid: 7c8d9e0f-1a2b-3c4d-5e6f-7a8b9c0d1e2f
+// last-edited: 2026-06-23
 
 import { defineConfig, devices } from '@playwright/test';
 import { fileURLToPath } from 'url';
@@ -29,11 +30,29 @@ export default defineConfig({
     headless: true,
   },
   projects: [
+    // --- CI / default projects --------------------------------------------------
+    // demo-*.spec.ts and interactive-*.spec.ts are excluded here so that `make
+    // test-e2e` (and `npm run test:e2e`) only runs functional tests. Demo
+    // recording requires a live server with media content and must be invoked
+    // explicitly via `make test-e2e-demo` / `npm run test:e2e:demo`.
     {
       name: 'chromium',
-      testIgnore: ['**/demo-full-workflow.spec.ts'],
+      testIgnore: ['**/demo-*.spec.ts', '**/interactive-*.spec.ts'],
       use: { ...devices['Desktop Chrome'] },
     },
+    {
+      name: 'webkit',
+      testIgnore: ['**/demo-*.spec.ts', '**/interactive-*.spec.ts'],
+      use: { ...devices['Desktop Safari'] },
+      // We accept WebKit failures for now; main gate stays on Chromium.
+      expect: {
+        toMatchSnapshot: { maxDiffPixelRatio: 0.05 },
+      },
+    },
+    // --- Opt-in demo recording project ------------------------------------------
+    // Run with: npx playwright test --project chromium-record
+    //       or: npm run test:e2e:demo
+    //       or: make test-e2e-demo
     {
       name: 'chromium-record',
       testMatch: ['**/interactive-*.spec.ts', '**/demo-*.spec.ts'],
@@ -42,15 +61,6 @@ export default defineConfig({
         ...devices['Desktop Chrome'],
         screenshot: 'on',
         video: 'on',
-      },
-    },
-    {
-      name: 'webkit',
-      testIgnore: ['**/demo-full-workflow.spec.ts'],
-      use: { ...devices['Desktop Safari'] },
-      // We accept WebKit failures for now; main gate stays on Chromium.
-      expect: {
-        toMatchSnapshot: { maxDiffPixelRatio: 0.05 },
       },
     },
   ],

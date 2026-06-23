@@ -1,5 +1,5 @@
 <!-- file: docs/tracking/audit-remediation-2026-06.md -->
-<!-- version: 1.13.0 -->
+<!-- version: 1.14.0 -->
 <!-- guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f -->
 <!-- last-edited: 2026-06-23 -->
 <!-- Note: per-finding table synced to PR delivery table on 2026-06-23 -->
@@ -103,12 +103,12 @@ These Structure Audit findings were addressed in the May–June refactor wave be
 |---|---|---|---|---|
 | TOOL-1 | ~1.7 GB tracked test fixture footprint (Librivox corpus) | Sweep | ✅ Partial | Hardcoded absolute path in `mediainfo_test.go` fixed (portable `findRepoRoot`); test skip message updated (PR M #1586). Full LFS migration deferred — P2. |
 | TOOL-2 | CI mockery gate can pass when mockery fails (`|| true`) | Sweep | ✅ | `|| true` removed; mockery v2.53.6 pinned; `make mocks-check` wired into CI (PR B #1575). |
-| TOOL-3 | Demo recording workflow mixed into default E2E target | Sweep | ⬜ | `playwright.config.ts:37`. Split demo to opt-in `test:e2e:demo`. P2. |
+| TOOL-3 | Demo recording workflow mixed into default E2E target | Sweep | ✅ | `chromium` and `webkit` projects now exclude `demo-*.spec.ts` and `interactive-*.spec.ts` via `testIgnore`. `chromium-record` is opt-in. `npm run test:e2e:demo` / `make test-e2e-demo` added. |
 | TOOL-4 | Testing docs and actual CI gates disagree (80% vs 30% coverage claims) | Sweep | ✅ | Docs aligned with actual CI thresholds (PR B #1575). |
 | TOOL-5 | Generated mocks still large despite per-handler split | Sweep | ⬜ | P2. Prefer narrow hand-written fakes for new code. |
 | TOOL-6 | Generated Playwright report tracked in git | Sweep | ✅ | `/playwright-report/` untracked, added to `.gitignore` (PR B #1575). |
 | TOOL-7 | Fixed sleeps in tests | Sweep | ⬜ | P2. Use locator/API waits and injected clocks. |
-| TOOL-8 | Manual smoke scripts not integrated into Makefile | Sweep | ⬜ | P2. Wrap as explicit `make manual-smoke` targets. |
+| TOOL-8 | Manual smoke scripts not integrated into Makefile | Sweep | ✅ | `make manual-smoke`, `make smoke-create-books`, `make smoke-run-demo` targets added to Makefile. |
 
 ---
 
