@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.72.0 -->
+<!-- version: 3.73.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-23 -->
 
@@ -8,6 +8,10 @@
 ## [Unreleased]
 
 ### Frontend
+
+#### June 23, 2026 — FE-8: real-server auth smoke test
+
+- **`test(e2e)`** FE-8 — Added `Authentication — Real Server Smoke` describe block to `auth-flow.spec.ts`. Hits live `/api/v1/auth/status`, runs first-run admin bootstrap against the real embedded server, and verifies the session cookie survives a page reload. Skips gracefully when DB already has users (local dev reuse).
 
 #### June 23, 2026 — FE-6: split useSettingsHandlers by domain
 
