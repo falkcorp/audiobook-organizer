@@ -1,5 +1,5 @@
 <!-- file: docs/tracking/audit-remediation-2026-06.md -->
-<!-- version: 1.7.0 -->
+<!-- version: 1.8.0 -->
 <!-- guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f -->
 <!-- last-edited: 2026-06-23 -->
 
@@ -41,7 +41,7 @@ These Structure Audit findings were addressed in the May–June refactor wave be
 | SEC-5 | Restore `verify=true` is a no-op; restore target is arbitrary absolute path | Sweep | ✅ | `pathvalidation.IsDangerousRoot` blocks system-dir targets; `verify=true` now logs a visible warning. Full checksum manifest deferred. Shipped PR #1584. |
 | SEC-6 | Factory reset deletes everything under `RootDir` without path validation | Sweep | ✅ | `pathvalidation.IsDangerousRoot` check added before library folder deletion; returns 400 + logs error if RootDir is a protected path. Shipped PR #1584. |
 | SEC-7 | `/metrics` and cache-stats endpoints unauthenticated | Sweep | ✅ | `/cache/stats` + `/cache/stats/history` moved to `protected` group (PermLibraryView). `/metrics` kept as accepted-risk per MED-1 — standard Prometheus scrape endpoint, network-layer gating. |
-| SEC-8 | Docker build downloads unsigned tarballs, uses mutable base tags | Sweep | ⬜ | P2. Pin `node:26-alpine`, `golang:1.26-alpine`, `alpine:3.24` to `@sha256:...` digests in `Dockerfile` + `Dockerfile.build-cgo`. Deferred — network-only change, no prod risk (internal network only). |
+| SEC-8 | Docker build downloads unsigned tarballs, uses mutable base tags | Sweep | ✅ | Pinned all base images to manifest-list SHA digests in `Dockerfile` and `Dockerfile.build-cgo` (2026-06-23). Refresh with `docker buildx imagetools inspect <image> --format '{{.Manifest.Digest}}'`. |
 | SEC-9 | OpenAI key exposed to frontend runtime for validation | Sweep | ✅ | `GetConfig` calls `MaskSecrets()` before responding; `update_service.go:37-55` masks all secret fields (OpenAI, AcoustID, Google Books, Hardcover, BasicAuth). Frontend only receives `***` masked value. |
 
 ---

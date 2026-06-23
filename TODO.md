@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.22.0 -->
+<!-- version: 9.23.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-06-23 -->
 
@@ -1315,6 +1315,7 @@ Bot-tasks at [`docs/superpowers/bot-tasks/2026-05-01-struct-*.md`](docs/superpow
 - [x] **PERF-7** — `UpsertBookFile` memdb round-trip fingerprint data-loss: same preserve-on-empty guard as `BatchUpsertBookFiles` now applied. 3 regression tests in `pebble_bookfile_preserve_test.go`. Shipped PR (audit-remediation-p1).
 - [x] **SEC-7** — `/cache/stats` + `/cache/stats/history` moved to `protected` group (PermLibraryView). `/metrics` stays accepted-risk per MED-1. Shipped PR (audit-remediation-p1).
 - [x] **SEC-2** — `WriteStartupReadOnlyKey bool` config flag (default true). Operators can set `write_startup_readonly_key: false` to suppress `.readonly-key` file creation. Bootstrap token unaffected. Shipped PR (audit-remediation-p1).
+- [x] **SEC-8** — Docker mutable base tags: `node:26-alpine`, `golang:1.26-alpine`, `alpine:3.24` pinned to manifest-list SHA digests in `Dockerfile` + `Dockerfile.build-cgo`. Refresh with `docker buildx imagetools inspect <image> --format '{{.Manifest.Digest}}'`.
 - [x] **SEC-5** — Restore target is arbitrary absolute path + `verify=true` is a no-op: `IsDangerousRoot` check added on `target_path`; `verify=true` logs a visible warning. Shipped PR #1584.
 - [x] **SEC-6** — Factory reset uses `RootDir` without validation: `IsDangerousRoot` check added before `os.RemoveAll` loop; returns 400 + logs error if RootDir is a protected system path. Shipped PR #1584.
 - [x] **FE-5 (audit)** — `Library.tsx` 2018→1811 lines: extracted `useLibraryQuery` (229 lines, book-fetch state + effects + auto-refresh) and `useLibrarySelection` (164 lines, selection state + handlers). Shipped PR #1585.

@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.64.0 -->
+<!-- version: 3.65.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-23 -->
 
@@ -15,6 +15,10 @@
 - **`docs`** SEC-3, SEC-4, SEC-9, FE-3 — tracking doc updated to ✅; all were already fixed in prior PRs (SEC-3/4 in PR A #1574; SEC-9 via `MaskSecrets()`; FE-3 via PR L #1585 which eliminated the stale code path).
 
 ### Security
+
+#### June 23, 2026 — pin Docker base image SHA digests (SEC-8)
+
+- **`fix(docker)`** SEC-8 — All base images in `Dockerfile` and `Dockerfile.build-cgo` pinned to content-addressed manifest-list digests: `node:26-alpine@sha256:a2dc166a...`, `golang:1.26-alpine@sha256:3ad57304...`, `alpine:3.24@sha256:28bd5fe8...`. Builds are now reproducible and immune to tag mutation attacks. Refresh comment included in each Dockerfile.
 
 #### June 22, 2026 — P1 audit remediation: PERF-7, SEC-7, SEC-2
 
