@@ -1,5 +1,5 @@
 // file: internal/server/wire_handlers.go
-// version: 2.12.0
+// version: 2.13.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
 // last-edited: 2026-06-23
 
@@ -7,7 +7,6 @@ package server
 
 import (
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
-	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
@@ -21,43 +20,18 @@ import (
 	operations "github.com/falkcorp/audiobook-organizer/internal/server/handlers/operations"
 	system "github.com/falkcorp/audiobook-organizer/internal/server/handlers/system"
 	toolshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/tools"
-	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/gin-gonic/gin"
 )
 
 // wireHandlers instantiates handler structs and registers their routes.
 // Called from Start() after the protected group is created.
+// Route registration is delegated to per-domain wire*Routes methods.
 func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFunc, protected *gin.RouterGroup) {
 	authH := handlers.NewAuthHandler(s.Store(), config.AppConfig.EnableAuth)
 	apiKeyH := handlers.NewAPIKeyHandler(s.Store())
 
-	authGroup := api.Group("/auth")
-	{
-		authGroup.GET("/status", authH.GetStatus)
-		authGroup.POST("/setup", authH.SetupInitialAdmin)
-		authGroup.POST("/login", authH.Login)
-		authGroup.POST("/accept-invite", s.handleAcceptInvite)
-		authGroup.POST("/bootstrap", s.handleBootstrap)
-	}
-
-	authProtected := authGroup.Group("")
-	authProtected.Use(authMiddleware)
-	{
-		authProtected.GET("/me", authH.Me)
-		authProtected.PATCH("/me", authH.UpdateMe)
-		authProtected.POST("/logout", authH.Logout)
-		authProtected.GET("/sessions", authH.ListMySessions)
-		authProtected.DELETE("/sessions/:id", authH.RevokeMySession)
-		authProtected.PUT("/me/password", authH.ChangePassword)
-		authProtected.POST("/temp-tokens", s.perm(permTempLoginMint()), s.createTempLoginToken)
-
-		authProtected.POST("/api-keys", apiKeyH.Create)
-		authProtected.GET("/api-keys", apiKeyH.List)
-		authProtected.GET("/api-keys/:id", apiKeyH.Get)
-		authProtected.PATCH("/api-keys/:id", apiKeyH.UpdateStatus)
-		authProtected.DELETE("/api-keys/:id", apiKeyH.Revoke)
-	}
+	s.wireAuthRoutes(api, authMiddleware, authH, apiKeyH)
 
 	// ── Build split-book candidate store ─────────────────────────────────────
 	var splitBookCands handlers.SplitBookCandidateStore
@@ -591,388 +565,16 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		s.publishEvent,
 	)
 
-	// ── Protected routes ─────────────────────────────────────────────────────
-
-	// Cache stats (operational metrics — auth-gated per SEC-7)
-	protected.GET("/cache/stats", s.perm(auth.PermLibraryView), cacheH.HandleCacheStats)
-	protected.GET("/cache/stats/history", s.perm(auth.PermLibraryView), cacheH.HandleCacheStatsHistory)
-
-	// Activity log
-	protected.GET("/activity", s.perm(auth.PermLibraryView), activityH.ListActivity)
-	protected.GET("/activity/sources", s.perm(auth.PermLibraryView), activityH.ListActivitySources)
-	protected.POST("/activity/compact", s.perm(auth.PermSettingsManage), activityH.CompactActivity)
-	protected.GET("/operations/:id/activity", s.perm(auth.PermLibraryView), activityH.ListOperationActivity)
-
-	// Split-book dedup
-	protected.POST("/dedup/split-book-scan", s.perm(auth.PermScanTrigger), splitBookH.TriggerSplitBookScan)
-	protected.GET("/dedup/split-book-candidates", s.perm(auth.PermLibraryView), splitBookH.ListSplitBookCandidates)
-	protected.POST("/dedup/split-book-candidates/:id/merge", s.perm(auth.PermLibraryEditMetadata), splitBookH.MergeSplitBookCandidate)
-
-	// Filesystem + import paths
-	protected.GET("/filesystem/home", s.perm(auth.PermSettingsManage), filesystemH.GetHomeDirectory)
-	protected.GET("/filesystem/browse", s.perm(auth.PermSettingsManage), filesystemH.BrowseFilesystem)
-	protected.POST("/filesystem/exclude", s.perm(auth.PermSettingsManage), filesystemH.CreateExclusion)
-	protected.DELETE("/filesystem/exclude", s.perm(auth.PermSettingsManage), filesystemH.RemoveExclusion)
-	protected.GET("/import-paths", s.perm(auth.PermSettingsManage), filesystemH.ListImportPaths)
-	protected.POST("/import-paths", s.perm(auth.PermSettingsManage), filesystemH.AddImportPath)
-	protected.DELETE("/import-paths/:id", s.perm(auth.PermSettingsManage), filesystemH.RemoveImportPath)
-	protected.POST("/import/file", s.perm(auth.PermScanTrigger), filesystemH.ImportFile)
-
-	// Organize + rename
-	protected.POST("/audiobooks/:id/rename/preview", s.perm(auth.PermLibraryOrganize), organizeH.PreviewRename)
-	protected.POST("/audiobooks/:id/rename/apply", s.perm(auth.PermLibraryOrganize), organizeH.ApplyRename)
-	protected.GET("/audiobooks/:id/preview-organize", s.perm(auth.PermLibraryOrganize), organizeH.PreviewOrganize)
-	protected.POST("/audiobooks/:id/organize", s.perm(auth.PermLibraryOrganize), organizeH.OrganizeBook)
-
-	// Metadata cache
-	protected.GET("/audiobooks/metadata/cached", s.perm(auth.PermLibraryView), metaCacheH.ListCachedCandidates)
-	protected.GET("/audiobooks/metadata/cache/review", s.perm(auth.PermLibraryView), metaCacheH.GetCacheReviewResults)
-	protected.POST("/audiobooks/metadata/batch-apply-cached", s.perm(auth.PermLibraryEditMetadata), metaCacheH.BatchApplyFromCache)
-	protected.POST("/audiobooks/:id/clear-no-match", s.perm(auth.PermLibraryEditMetadata), metaCacheH.ClearMetadataNoMatch)
-
-	// Reading progress
-	protected.POST("/books/:id/position", readingH.SetPosition)
-	protected.GET("/books/:id/position", readingH.GetPosition)
-	protected.GET("/books/:id/state", readingH.GetBookState)
-	protected.PATCH("/books/:id/status", readingH.SetBookStatus)
-	protected.DELETE("/books/:id/status", readingH.ClearBookStatus)
-	protected.GET("/me/:status", readingH.ListByStatus)
-
-	// Playlists
-	protected.GET("/playlists", s.perm(auth.PermLibraryView), playlistH.ListPlaylists)
-	protected.POST("/playlists", playlistH.CreatePlaylist)
-	protected.GET("/playlists/:id", playlistH.GetPlaylist)
-	protected.PUT("/playlists/:id", playlistH.UpdatePlaylist)
-	protected.DELETE("/playlists/:id", playlistH.DeletePlaylist)
-	protected.POST("/playlists/:id/books", playlistH.AddBooksToPlaylist)
-	protected.DELETE("/playlists/:id/books/:bookID", playlistH.RemoveBookFromPlaylist)
-	protected.POST("/playlists/:id/reorder", playlistH.ReorderPlaylist)
-	protected.POST("/playlists/:id/materialize", playlistH.MaterializePlaylist)
-
-	// User management
-	users := protected.Group("/users")
-	{
-		users.GET("", s.perm("users.manage"), userH.ListUsers)
-		users.POST("/invite", s.perm("users.manage"), userH.CreateInvite)
-		users.GET("/invites", s.perm("users.manage"), userH.ListInvites)
-		users.DELETE("/invites/:token", s.perm("users.manage"), userH.DeleteInvite)
-		users.POST("/:id/deactivate", s.perm("users.manage"), userH.DeactivateUser)
-		users.POST("/:id/reactivate", s.perm("users.manage"), userH.ReactivateUser)
-		users.POST("/:id/reset-password", s.perm("users.manage"), userH.ResetPassword)
-	}
-
-	// Version groups
-	protected.GET("/audiobooks/:id/versions", s.perm(auth.PermLibraryView), versionsH.ListAudiobookVersions)
-	protected.POST("/audiobooks/:id/versions", s.perm(auth.PermLibraryEditMetadata), versionsH.LinkAudiobookVersion)
-	protected.PUT("/audiobooks/:id/set-primary", s.perm(auth.PermLibraryEditMetadata), versionsH.SetAudiobookPrimary)
-	protected.POST("/audiobooks/:id/split-version", s.perm(auth.PermLibraryEditMetadata), versionsH.SplitVersion)
-	protected.POST("/audiobooks/:id/split-to-books", s.perm(auth.PermLibraryEditMetadata), versionsH.SplitSegmentsToBooks)
-	protected.POST("/audiobooks/:id/move-segments", s.perm(auth.PermLibraryEditMetadata), versionsH.MoveSegments)
-	protected.GET("/version-groups/:id", s.perm(auth.PermLibraryView), versionsH.GetVersionGroup)
-
-	// iTunes (12 migrated routes; survivors stay in server_lifecycle.go).
-	// Two protected.Group("/itunes") blocks (here + survivors) is fine in Gin
-	// since there is no duplicate method+path.
-	itunesG := protected.Group("/itunes")
-	{
-		itunesG.POST("/validate", s.perm(auth.PermLibraryEditMetadata), itunesH.Validate)
-		itunesG.POST("/test-mapping", s.perm(auth.PermLibraryEditMetadata), itunesH.TestMapping)
-		itunesG.POST("/import", s.perm(auth.PermLibraryEditMetadata), itunesH.Import)
-		itunesG.POST("/write-back", s.perm(auth.PermLibraryEditMetadata), itunesH.WriteBack)
-		itunesG.POST("/write-back-all", s.perm(auth.PermLibraryEditMetadata), itunesH.WriteBackAll)
-		itunesG.GET("/library-stats", s.perm(auth.PermLibraryView), itunesH.LibraryStats)
-		itunesG.POST("/write-back/preview", s.perm(auth.PermLibraryEditMetadata), itunesH.WriteBackPreview)
-		itunesG.GET("/books", s.perm(auth.PermLibraryView), itunesH.ListBooks)
-		itunesG.GET("/import-status/:id", s.perm(auth.PermLibraryView), itunesH.ImportStatus)
-		itunesG.POST("/import-status/bulk", s.perm(auth.PermLibraryEditMetadata), itunesH.ImportStatusBulk)
-		itunesG.GET("/library-status", s.perm(auth.PermLibraryView), itunesH.LibraryStatus)
-		itunesG.POST("/sync", s.perm(auth.PermLibraryEditMetadata), itunesH.Sync)
-	}
-
-	// AI domain (migrated from server_lifecycle.go).
-	protected.POST("/authors/duplicates/ai-review", s.perm(auth.PermLibraryEditMetadata), aiH.ReviewDuplicateAuthors)
-	protected.POST("/authors/duplicates/ai-review/apply", s.perm(auth.PermLibraryEditMetadata), aiH.ApplyAuthorReview)
-	protected.POST("/ai/parse-filename", s.perm(auth.PermLibraryEditMetadata), aiH.ParseFilename)
-	protected.POST("/ai/test-connection", s.perm(auth.PermLibraryEditMetadata), aiH.TestConnection)
-	aiScans := protected.Group("/ai/scans")
-	{
-		aiScans.POST("", s.perm(auth.PermLibraryEditMetadata), aiH.StartScan)
-		aiScans.GET("", s.perm(auth.PermLibraryView), aiH.ListScans)
-		aiScans.GET("/compare", aiH.CompareScans) // Must be before /:id to avoid conflict
-		aiScans.GET("/:id", s.perm(auth.PermLibraryView), aiH.GetScan)
-		aiScans.GET("/:id/results", s.perm(auth.PermLibraryView), aiH.GetScanResults)
-		aiScans.POST("/:id/apply", s.perm(auth.PermLibraryEditMetadata), aiH.ApplyScanResults)
-		aiScans.POST("/:id/cancel", s.perm(auth.PermLibraryEditMetadata), aiH.CancelScan)
-		aiScans.DELETE("/:id", s.perm(auth.PermLibraryDelete), aiH.DeleteScan)
-	}
-	protected.POST("/metadata-sources/test", s.perm(auth.PermSettingsManage), aiH.TestMetadataSource)
-	protected.POST("/audiobooks/:id/parse-with-ai", s.perm(auth.PermLibraryEditMetadata), aiH.ParseAudiobook)
-	protected.GET("/ai-jobs", s.perm(auth.PermSettingsManage), aiH.ListAIJobs)
-
-	// Entities domain (migrated from server_lifecycle.go): authors, narrators,
-	// series, and works. Paths + permission guards copied verbatim. Sibling
-	// /authors/duplicates*, /series/duplicates*, /authors/duplicates/ai-review*
-	// (now aiH.*) and the entity-tag routes stay on *Server / their own handlers.
-	protected.GET("/authors", s.perm(auth.PermLibraryView), entitiesH.ListAuthors)
-	protected.GET("/authors/count", s.perm(auth.PermLibraryView), entitiesH.CountAuthors)
-	protected.POST("/authors/merge", s.perm(auth.PermLibraryEditMetadata), entitiesH.MergeAuthors)
-	protected.POST("/authors/:id/reclassify-as-narrator", s.perm(auth.PermLibraryEditMetadata), entitiesH.ReclassifyAuthorAsNarrator)
-	protected.PUT("/authors/:id/name", s.perm(auth.PermLibraryEditMetadata), entitiesH.RenameAuthor)
-	protected.POST("/authors/:id/split", s.perm(auth.PermLibraryEditMetadata), entitiesH.SplitCompositeAuthor)
-	protected.POST("/authors/:id/resolve-production", s.perm(auth.PermLibraryEditMetadata), entitiesH.ResolveProductionAuthor)
-	protected.GET("/authors/:id/aliases", s.perm(auth.PermLibraryView), entitiesH.GetAuthorAliases)
-	protected.POST("/authors/:id/aliases", s.perm(auth.PermLibraryEditMetadata), entitiesH.CreateAuthorAlias)
-	protected.DELETE("/authors/:id/aliases/:aliasId", s.perm(auth.PermLibraryDelete), entitiesH.DeleteAuthorAlias)
-	protected.GET("/authors/:id/books", s.perm(auth.PermLibraryView), entitiesH.GetAuthorBooks)
-	protected.DELETE("/authors/:id", s.perm(auth.PermLibraryDelete), entitiesH.DeleteAuthor)
-	protected.POST("/authors/bulk-delete", s.perm(auth.PermLibraryDelete), entitiesH.BulkDeleteAuthors)
-
-	protected.GET("/narrators", s.perm(auth.PermLibraryView), entitiesH.ListNarrators)
-	protected.GET("/narrators/count", s.perm(auth.PermLibraryView), entitiesH.CountNarrators)
-	protected.GET("/audiobooks/:id/narrators", s.perm(auth.PermLibraryView), entitiesH.ListAudiobookNarrators)
-	protected.PUT("/audiobooks/:id/narrators", s.perm(auth.PermLibraryEditMetadata), entitiesH.SetAudiobookNarrators)
-
-	protected.GET("/series", s.perm(auth.PermLibraryView), entitiesH.ListSeries)
-	protected.GET("/series/count", s.perm(auth.PermLibraryView), entitiesH.CountSeries)
-	protected.PATCH("/series/:id", s.perm(auth.PermLibraryEditMetadata), entitiesH.UpdateSeriesName)
-	protected.GET("/series/:id/books", s.perm(auth.PermLibraryView), entitiesH.GetSeriesBooks)
-	protected.PUT("/series/:id/name", s.perm(auth.PermLibraryEditMetadata), entitiesH.RenameSeries)
-	protected.POST("/series/:id/split", s.perm(auth.PermLibraryEditMetadata), entitiesH.SplitSeries)
-	protected.DELETE("/series/:id", s.perm(auth.PermLibraryDelete), entitiesH.DeleteEmptySeries)
-	protected.POST("/series/bulk-delete", s.perm(auth.PermLibraryDelete), entitiesH.BulkDeleteSeries)
-
-	protected.GET("/works", s.perm(auth.PermLibraryView), entitiesH.ListWorks)
-	protected.POST("/works", s.perm(auth.PermLibraryEditMetadata), entitiesH.CreateWork)
-	protected.GET("/works/:id", s.perm(auth.PermLibraryView), entitiesH.GetWork)
-	protected.PUT("/works/:id", s.perm(auth.PermLibraryEditMetadata), entitiesH.UpdateWork)
-	protected.DELETE("/works/:id", s.perm(auth.PermLibraryDelete), entitiesH.DeleteWork)
-	protected.GET("/works/:id/books", s.perm(auth.PermLibraryView), entitiesH.ListWorkBooks)
-	protected.GET("/work", s.perm(auth.PermLibraryView), entitiesH.ListWork)
-	protected.GET("/work/stats", s.perm(auth.PermLibraryView), entitiesH.GetWorkStats)
-
-	// Diagnostics (migrated from server_lifecycle.go).
-	protected.GET("/diagnostics/db-health", s.perm(auth.PermSettingsManage), diagH.GetDBHealth)
-	protected.POST("/diagnostics/export", s.perm(auth.PermSettingsManage), diagH.StartExport)
-	protected.GET("/diagnostics/export/:operationId/download", s.perm(auth.PermSettingsManage), diagH.DownloadExport)
-	protected.POST("/diagnostics/submit-ai", s.perm(auth.PermSettingsManage), diagH.SubmitAI)
-	protected.GET("/diagnostics/ai-results/:operationId", s.perm(auth.PermSettingsManage), diagH.GetAIResults)
-	protected.POST("/diagnostics/apply-suggestions", s.perm(auth.PermSettingsManage), diagH.ApplySuggestions)
-
-	// Operations v2 (UOS-06)
-	protected.GET("/operations/timeline", s.perm(auth.PermLibraryView), opsV2H.GetOperationTimeline)
-	protected.GET("/operations/events", s.perm(auth.PermLibraryView), opsV2H.OperationsSSE)
-	protected.GET("/operations/v2/:id", s.perm(auth.PermLibraryView), opsV2H.GetOperationV2)
-	protected.DELETE("/operations/v2/:id", s.perm(auth.PermSettingsManage), opsV2H.CancelOperationV2)
-	protected.POST("/operations/v2", s.perm(auth.PermScanTrigger), opsV2H.TriggerOperationV2)
-	protected.GET("/op-defs", s.perm(auth.PermLibraryView), opsV2H.ListOpDefs)
-	protected.GET("/op-defs/:id", s.perm(auth.PermLibraryView), opsV2H.GetOpDef)
-
-	// Operations domain (migrated from server_lifecycle.go). Paths + permission
-	// guards copied verbatim. These share the /operations path prefix with the
-	// operations_v2 routes above (timeline/events/v2/op-defs) and the survivors
-	// that stay in server_lifecycle.go (active/recent/reconcile/itunes-path-*/
-	// cleanup-version-groups/results/file-ops) — all distinct method+path pairs,
-	// all using the identical `:id` param name, so Gin registers them cleanly.
-	protected.GET("/operations", s.perm(auth.PermLibraryView), operationsH.ListOperations)
-	protected.GET("/operations/stale", s.perm(auth.PermLibraryView), operationsH.ListStaleOperations)
-	protected.POST("/operations/scan", s.perm(auth.PermScanTrigger), operationsH.StartScan)
-	protected.POST("/operations/organize", s.perm(auth.PermScanTrigger), operationsH.StartOrganize)
-	protected.POST("/operations/transcode", s.perm(auth.PermScanTrigger), operationsH.StartTranscode)
-	protected.POST("/operations/optimize", s.perm(auth.PermScanTrigger), operationsH.StartOptimize)
-	protected.GET("/operations/:id/status", s.perm(auth.PermLibraryView), operationsH.GetOperationStatus)
-	protected.GET("/operations/:id/logs", s.perm(auth.PermLibraryView), operationsH.GetOperationLogs)
-	protected.GET("/operations/:id/result", s.perm(auth.PermLibraryView), operationsH.GetOperationResult)
-	protected.DELETE("/operations/:id", s.perm(auth.PermSettingsManage), operationsH.CancelOperation)
-	protected.POST("/operations/clear-stale", s.perm(auth.PermSettingsManage), operationsH.ClearStaleOperations)
-	protected.DELETE("/operations/history", s.perm(auth.PermSettingsManage), operationsH.DeleteOperationHistory)
-	protected.POST("/operations/optimize-database", s.perm(auth.PermSettingsManage), operationsH.OptimizeDatabase)
-	protected.POST("/operations/sweep-tombstones", s.perm(auth.PermSettingsManage), operationsH.SweepTombstones)
-	protected.POST("/operations/set-internal-flag", s.perm(auth.PermSettingsManage), operationsH.SetInternalFlag)
-	protected.GET("/operations/audit-files", s.perm(auth.PermSettingsManage), operationsH.AuditFileConsistency)
-	protected.GET("/operations/:id/changes", s.perm(auth.PermLibraryView), operationsH.GetOperationChanges)
-	protected.GET("/operations/:id/undo/preflight", s.perm(auth.PermLibraryView), operationsH.UndoPreflightHandler)
-	protected.POST("/operations/:id/revert", s.perm(auth.PermLibraryOrganize), operationsH.RevertOperation)
-	protected.GET("/tasks", s.perm(auth.PermSettingsManage), operationsH.ListTasks)
-	protected.POST("/tasks/:name/run", s.perm(auth.PermSettingsManage), operationsH.RunTask)
-	protected.PUT("/tasks/:name", s.perm(auth.PermSettingsManage), operationsH.UpdateTaskConfig)
-	protected.POST("/maintenance-window/run", s.perm(auth.PermSettingsManage), operationsH.RunMaintenanceWindowNow)
-	protected.GET("/maintenance-window/status", s.perm(auth.PermSettingsManage), operationsH.GetMaintenanceWindowStatus)
-	protected.PUT("/maintenance-window/config", s.perm(auth.PermSettingsManage), operationsH.UpdateMaintenanceWindowConfig)
-
-	// System domain (migrated from server_lifecycle.go). Paths + permission
-	// guards copied verbatim. The public /health (x3) and /api/events routes stay
-	// in setupRoutes — they are registered on s.router BEFORE the /api/* redirect
-	// middleware, so re-registering them here would change their middleware
-	// ordering; they delegate to systemH via closures instead.
-	protected.GET("/policy/tags", s.perm(auth.PermLibraryView), systemH.HandlePolicyTags)
-	protected.GET("/system/status", s.perm(auth.PermSettingsManage), systemH.GetSystemStatus)
-	protected.GET("/system/announcements", s.perm(auth.PermSettingsManage), systemH.GetSystemAnnouncements)
-	protected.GET("/system/storage", s.perm(auth.PermSettingsManage), systemH.GetSystemStorage)
-	protected.GET("/system/logs", s.perm(auth.PermSettingsManage), systemH.GetSystemLogs)
-	protected.GET("/system/activity-log", s.perm(auth.PermSettingsManage), systemH.GetSystemActivityLog)
-	protected.POST("/system/reset", s.perm(auth.PermSettingsManage), systemH.ResetSystem)
-	protected.POST("/system/factory-reset", s.perm(auth.PermSettingsManage), systemH.FactoryReset)
-	protected.GET("/config", s.perm(auth.PermSettingsManage), systemH.GetConfig)
-	protected.PUT("/config", s.perm(auth.PermSettingsManage), systemH.UpdateConfig)
-	protected.GET("/dashboard", s.perm(auth.PermLibraryView), systemH.GetDashboard)
-	protected.POST("/backup/create", s.perm(auth.PermSettingsManage), systemH.CreateBackup)
-	protected.GET("/backup/list", s.perm(auth.PermSettingsManage), systemH.ListBackups)
-	protected.POST("/backup/restore", s.perm(auth.PermSettingsManage), systemH.RestoreBackup)
-	protected.DELETE("/backup/:filename", s.perm(auth.PermSettingsManage), systemH.DeleteBackup)
-	protected.GET("/library/quick-queries", s.perm(auth.PermLibraryView), systemH.GetQuickQueries)
-	protected.GET("/blocked-hashes", s.perm(auth.PermLibraryView), systemH.ListBlockedHashes)
-	protected.POST("/blocked-hashes", s.perm(auth.PermLibraryEditMetadata), systemH.AddBlockedHash)
-	protected.DELETE("/blocked-hashes/:hash", s.perm(auth.PermLibraryDelete), systemH.RemoveBlockedHash)
-	protected.GET("/preferences/:key", s.perm(auth.PermLibraryView), systemH.GetUserPreference)
-	protected.PUT("/preferences/:key", s.perm(auth.PermLibraryEditMetadata), systemH.SetUserPreference)
-	protected.DELETE("/preferences/:key", s.perm(auth.PermLibraryDelete), systemH.DeleteUserPreference)
-
-	// Embedding-based dedup domain routes (migrated from server_lifecycle.go).
-	// The split-book /dedup/* routes (registered above) and the
-	// /dedup/fingerprint-rescan + /dedup/validate survivors stay where they are.
-	protected.GET("/dedup/candidates", s.perm(auth.PermLibraryView), dedupH.ListDedupCandidates)
-	protected.GET("/dedup/candidates/export", s.perm(auth.PermLibraryView), dedupH.ExportDedupCandidates)
-	protected.GET("/dedup/stats", s.perm(auth.PermLibraryView), dedupH.GetDedupStats)
-	// T016: breakdown and rescore endpoints (frozen API contract for T017).
-	protected.GET("/dedup/candidates/:id/breakdown", s.perm(auth.PermLibraryView), dedupH.GetDedupCandidateBreakdown)
-	protected.POST("/dedup/rescore", s.perm(auth.PermScanTrigger), dedupH.RescoreDedupCandidates)
-	protected.POST("/dedup/candidates/:id/merge", s.perm(auth.PermLibraryEditMetadata), dedupH.MergeDedupCandidate)
-	protected.POST("/dedup/candidates/:id/dismiss", s.perm(auth.PermLibraryEditMetadata), dedupH.DismissDedupCandidate)
-	protected.POST("/dedup/candidates/bulk-merge", s.perm(auth.PermLibraryEditMetadata), dedupH.BulkMergeDedupCandidates)
-	protected.POST("/dedup/candidates/merge-cluster", s.perm(auth.PermLibraryEditMetadata), dedupH.MergeDedupCluster)
-	protected.POST("/dedup/candidates/dismiss-cluster", s.perm(auth.PermLibraryEditMetadata), dedupH.DismissDedupCluster)
-	protected.POST("/dedup/candidates/remove-from-cluster", s.perm(auth.PermLibraryEditMetadata), dedupH.RemoveFromDedupCluster)
-	protected.GET("/dedup/candidates/series-summary", s.perm(auth.PermLibraryView), dedupH.ListDedupCandidateSeries)
-	// C6 — gold-dataset review (the dedup feedback-loop labels).
-	protected.GET("/dedup/labels", s.perm(auth.PermLibraryView), dedupH.ListDedupLabels)
-	protected.GET("/dedup/labels/stats", s.perm(auth.PermLibraryView), dedupH.GetDedupLabelStats)
-	protected.POST("/dedup/labels/:id/override", s.perm(auth.PermLibraryEditMetadata), dedupH.OverrideDedupLabel)
-	protected.POST("/dedup/candidates/merge-series", s.perm(auth.PermLibraryEditMetadata), dedupH.MergeDedupCandidateSeries)
-	protected.POST("/dedup/scan", s.perm(auth.PermScanTrigger), dedupH.TriggerDedupScan)
-	protected.POST("/dedup/scan-llm", s.perm(auth.PermScanTrigger), dedupH.TriggerDedupLLM)
-	protected.POST("/dedup/scan-acoustid", s.perm(auth.PermScanTrigger), dedupH.TriggerDedupAcoustID)
-	protected.POST("/audiobooks/:id/compare-acoustid", s.perm(auth.PermLibraryView), dedupH.HandleCompareAcoustID)
-	protected.POST("/dedup/scan-book-signature", s.perm(auth.PermScanTrigger), dedupH.TriggerBookSignatureScan)
-	protected.POST("/dedup/refresh", s.perm(auth.PermScanTrigger), dedupH.TriggerDedupRefresh)
-	protected.POST("/dedup/purge-stale", s.perm(auth.PermScanTrigger), dedupH.PurgeStaleCandidates)
-	protected.POST("/dedup/purge-legacy-fp", s.perm(auth.PermScanTrigger), dedupH.PurgeLegacyFPCandidates)
-	protected.POST("/dedup/reset-acoustid", s.perm(auth.PermScanTrigger), dedupH.ResetAcoustIDFingerprints)
-	protected.POST("/dedup/embed", s.perm(auth.PermScanTrigger), dedupH.TriggerEmbedScan)
-	protected.POST("/dedup/embed-async", s.perm(auth.PermScanTrigger), dedupH.TriggerEmbedAsync)
-	protected.POST("/dedup/lsh-index", s.perm(auth.PermScanTrigger), dedupH.TriggerLSHIndexBuild)
-	protected.POST("/dedup/emb-reencode", s.perm(auth.PermScanTrigger), dedupH.EmbReeencode) // T021: float16+zstd re-encode op
-
-	// Duplicates domain (SQL-backed dup detection, series prune/normalize,
-	// dedup-entry validation; migrated from server_lifecycle.go). Paths + permission
-	// guards copied verbatim. The /authors/duplicates(/refresh), /series/duplicates(/refresh)
-	// sibling routes were intentionally left here by the entities phase and are now
-	// owned by this handler; /dedup/validate is the dedup-entry validator (distinct
-	// from the embedding-based /dedup/* routes above and the split-book /dedup/* routes).
-	protected.GET("/audiobooks/duplicates", s.perm(auth.PermLibraryView), duplicatesH.ListDuplicateAudiobooks)
-	protected.GET("/audiobooks/duplicates/scan-results", s.perm(auth.PermLibraryView), duplicatesH.ListBookDuplicateScanResults)
-	protected.POST("/audiobooks/duplicates/scan", s.perm(auth.PermLibraryEditMetadata), duplicatesH.ScanBookDuplicates)
-	protected.POST("/audiobooks/duplicates/merge", s.perm(auth.PermLibraryEditMetadata), duplicatesH.MergeBookDuplicatesAsVersions)
-	protected.POST("/audiobooks/duplicates/dismiss", s.perm(auth.PermLibraryEditMetadata), duplicatesH.DismissBookDuplicateGroup)
-	protected.GET("/authors/duplicates", s.perm(auth.PermLibraryView), duplicatesH.ListDuplicateAuthors)
-	protected.POST("/authors/duplicates/refresh", s.perm(auth.PermLibraryEditMetadata), duplicatesH.RefreshDuplicateAuthors)
-	protected.POST("/audiobooks/merge", s.perm(auth.PermLibraryEditMetadata), duplicatesH.MergeBooks)
-	protected.POST("/audiobooks/combine", s.perm(auth.PermLibraryEditMetadata), duplicatesH.CombineBooks)
-	protected.GET("/series/duplicates", s.perm(auth.PermLibraryView), duplicatesH.ListSeriesDuplicates)
-	protected.POST("/series/duplicates/refresh", s.perm(auth.PermLibraryEditMetadata), duplicatesH.RefreshSeriesDuplicates)
-	protected.POST("/series/deduplicate", s.perm(auth.PermLibraryEditMetadata), duplicatesH.DeduplicateSeriesHandler)
-	protected.POST("/series/merge", s.perm(auth.PermLibraryEditMetadata), duplicatesH.MergeSeriesGroup)
-	protected.GET("/series/prune/preview", s.perm(auth.PermLibraryView), duplicatesH.SeriesPrunePreview)
-	protected.POST("/series/prune", s.perm(auth.PermLibraryEditMetadata), duplicatesH.SeriesPrune)
-	protected.GET("/series/normalize/preview", s.perm(auth.PermLibraryView), duplicatesH.SeriesNormalizePreview)
-	protected.POST("/series/normalize", s.perm(auth.PermLibraryEditMetadata), duplicatesH.SeriesNormalize)
-	protected.POST("/dedup/validate", s.perm(auth.PermLibraryEditMetadata), duplicatesH.ValidateDedupEntry)
-
-	// Audiobooks domain (main library list / CRUD; migrated from
-	// server_lifecycle.go). Paths + permission guards copied verbatim. Sibling
-	// /audiobooks/:id/* routes owned by OTHER domains (quarantine, rating,
-	// sample, organize/rename, versions, metadata, itunes, parse-with-ai, the
-	// batch-write-back/bulk-write-back endpoints) stay in server_lifecycle.go.
-	protected.GET("/audiobooks", s.perm(auth.PermLibraryView), audiobooksH.ListAudiobooks)
-	protected.GET("/audiobooks/count", s.perm(auth.PermLibraryView), audiobooksH.CountAudiobooks)
-	protected.GET("/audiobooks/facets", s.perm(auth.PermLibraryView), audiobooksH.AudiobookFacets)
-	protected.GET("/audiobooks/soft-deleted", s.perm(auth.PermLibraryView), audiobooksH.ListSoftDeletedAudiobooks)
-	protected.DELETE("/audiobooks/purge-soft-deleted", s.perm(auth.PermLibraryDelete), audiobooksH.PurgeSoftDeletedAudiobooks)
-	protected.POST("/audiobooks/:id/restore", s.perm(auth.PermLibraryOrganize), audiobooksH.RestoreAudiobook)
-	protected.POST("/audiobooks/:id/rescan", s.perm(auth.PermLibraryEditMetadata), audiobooksH.RescanAudiobook)
-	protected.GET("/audiobooks/:id", s.perm(auth.PermLibraryView), audiobooksH.GetAudiobook)
-	protected.GET("/audiobooks/:id/tags", s.perm(auth.PermLibraryView), audiobooksH.GetAudiobookTags)
-	protected.PUT("/audiobooks/:id", s.perm(auth.PermLibraryEditMetadata), audiobooksH.UpdateAudiobook)
-	protected.DELETE("/audiobooks/:id", s.perm(auth.PermLibraryDelete), audiobooksH.DeleteAudiobook)
-	protected.GET("/audiobooks/:id/cover", s.perm(auth.PermLibraryView), audiobooksH.ServeAudiobookCover)
-	protected.GET("/audiobooks/:id/segments", s.perm(auth.PermLibraryView), audiobooksH.ListAudiobookSegments)
-	protected.GET("/audiobooks/:id/segments/:segmentId/tags", s.perm(auth.PermLibraryView), audiobooksH.GetSegmentTags)
-	protected.GET("/audiobooks/:id/files", s.perm(auth.PermLibraryView), audiobooksH.ListBookFiles)
-	protected.PATCH("/audiobooks/:id/files/:file_id", s.perm(auth.PermLibraryEditMetadata), audiobooksH.PatchBookFile)
-	protected.GET("/audiobooks/:id/changelog", s.perm(auth.PermLibraryView), audiobooksH.GetBookChangelog)
-	protected.GET("/audiobooks/:id/path-history", s.perm(auth.PermLibraryView), audiobooksH.GetBookPathHistory)
-	protected.GET("/audiobooks/:id/external-ids", s.perm(auth.PermLibraryView), audiobooksH.GetAudiobookExternalIDs)
-	protected.POST("/audiobooks/:id/extract-track-info", s.perm(auth.PermLibraryEditMetadata), audiobooksH.ExtractTrackInfo)
-	protected.POST("/audiobooks/:id/relocate", s.perm(auth.PermLibraryOrganize), audiobooksH.RelocateBookFiles)
-	protected.POST("/audiobooks/batch", s.perm(auth.PermLibraryEditMetadata), audiobooksH.BatchUpdateAudiobooks)
-	protected.POST("/audiobooks/batch-operations", s.perm(auth.PermLibraryEditMetadata), audiobooksH.BatchOperations)
-	protected.GET("/tags", s.perm(auth.PermLibraryView), audiobooksH.ListAllUserTags)
-	protected.GET("/audiobooks/:id/user-tags", s.perm(auth.PermLibraryView), audiobooksH.GetBookUserTags)
-	protected.GET("/audiobooks/:id/tags-detailed", s.perm(auth.PermLibraryView), audiobooksH.GetBookTagsDetailed)
-	protected.POST("/audiobooks/batch-tags", s.perm(auth.PermLibraryEditMetadata), audiobooksH.BatchUpdateTags)
-	protected.GET("/audiobooks/:id/alternative-titles", s.perm(auth.PermLibraryView), audiobooksH.GetBookAlternativeTitles)
-	protected.POST("/audiobooks/:id/alternative-titles", s.perm(auth.PermLibraryEditMetadata), audiobooksH.AddBookAlternativeTitle)
-	protected.DELETE("/audiobooks/:id/alternative-titles", s.perm(auth.PermLibraryDelete), audiobooksH.RemoveBookAlternativeTitle)
-	protected.GET("/audiobooks/:id/metadata-history", s.perm(auth.PermLibraryView), audiobooksH.GetBookMetadataHistory)
-	protected.GET("/audiobooks/:id/metadata-history/:field", s.perm(auth.PermLibraryView), audiobooksH.GetFieldMetadataHistory)
-	protected.POST("/audiobooks/:id/metadata-history/:field/undo", s.perm(auth.PermLibraryEditMetadata), audiobooksH.UndoMetadataChange)
-	protected.POST("/audiobooks/:id/undo-last-apply", s.perm(auth.PermLibraryEditMetadata), audiobooksH.UndoLastApply)
-	protected.GET("/audiobooks/:id/field-states", s.perm(auth.PermLibraryView), audiobooksH.GetAudiobookFieldStates)
-	protected.GET("/audiobooks/:id/changes", s.perm(auth.PermLibraryView), audiobooksH.GetBookChanges)
-
-	// Metadata domain (handlers/metadata) — 19 routes relocated from
-	// server_lifecycle.go. EXACT paths + perm guards preserved.
-	protected.POST("/metadata/batch-update", s.perm(auth.PermLibraryEditMetadata), metadataH.BatchUpdateMetadata)
-	protected.POST("/metadata/validate", s.perm(auth.PermLibraryEditMetadata), metadataH.ValidateMetadata)
-	protected.GET("/metadata/export", s.perm(auth.PermLibraryView), metadataH.ExportMetadata)
-	protected.POST("/metadata/import", s.perm(auth.PermLibraryEditMetadata), metadataH.ImportMetadata)
-	protected.GET("/metadata/search", s.perm(auth.PermLibraryView), metadataH.SearchMetadata)
-	protected.GET("/metadata/fields", s.perm(auth.PermLibraryView), metadataH.GetMetadataFields)
-	protected.POST("/metadata/bulk-fetch", s.perm(auth.PermLibraryEditMetadata), metadataH.BulkFetchMetadata)
-	protected.POST("/audiobooks/:id/fetch-metadata", s.perm(auth.PermLibraryEditMetadata), metadataH.FetchAudiobookMetadata)
-	protected.POST("/audiobooks/:id/search-metadata", s.perm(auth.PermLibraryEditMetadata), metadataH.SearchAudiobookMetadata)
-	protected.POST("/audiobooks/:id/apply-metadata", s.perm(auth.PermLibraryEditMetadata), metadataH.ApplyAudiobookMetadata)
-	protected.POST("/audiobooks/:id/mark-no-match", s.perm(auth.PermLibraryEditMetadata), metadataH.MarkAudiobookNoMatch)
-	protected.POST("/audiobooks/:id/revert-metadata", s.perm(auth.PermLibraryEditMetadata), metadataH.RevertAudiobookMetadata)
-	protected.GET("/audiobooks/:id/metadata-rejections", s.perm(auth.PermLibraryView), metadataH.HandleGetMetadataRejections)
-	protected.GET("/audiobooks/:id/cow-versions", s.perm(auth.PermLibraryView), metadataH.ListBookCOWVersions)
-	protected.POST("/audiobooks/:id/cow-versions/prune", s.perm(auth.PermLibraryEditMetadata), metadataH.PruneBookCOWVersions)
-	protected.POST("/audiobooks/:id/write-back", s.perm(auth.PermLibraryEditMetadata), metadataH.WriteBackAudiobookMetadata)
-	protected.PATCH("/audiobooks/:id/rating", s.perm(auth.PermLibraryEditMetadata), metadataH.HandleUpdateBookRating)
-	protected.POST("/audiobooks/batch-write-back", s.perm(auth.PermLibraryEditMetadata), metadataH.BatchWriteBackAudiobooks)
-	protected.POST("/audiobooks/bulk-write-back", s.perm(auth.PermLibraryEditMetadata), metadataH.HandleBulkWriteBack)
-
-	// Tools lifecycle
+	// Tools lifecycle handler (instantiated here so wireMediaRoutes receives it).
 	toolsH := toolshandler.New(s.toolRegistry, &config.AppConfig.Tools, nil)
-	protected.GET("/tools", s.perm(auth.PermSettingsManage), toolsH.List)
-	protected.GET("/tools/:name/status", s.perm(auth.PermSettingsManage), toolsH.Status)
-	protected.POST("/tools/:name/install", s.perm(auth.PermSettingsManage), toolsH.Install)
 
-	// Plugins
-	plugins := protected.Group("/plugins")
-	{
-		plugins.GET("", s.perm(auth.PermSettingsManage), pluginsH.ListPlugins)
-		plugins.GET("/:id", s.perm(auth.PermSettingsManage), pluginsH.GetPlugin)
-		plugins.POST("/:id/enable", s.perm(auth.PermSettingsManage), pluginsH.EnablePlugin)
-		plugins.POST("/:id/disable", s.perm(auth.PermSettingsManage), pluginsH.DisablePlugin)
-		plugins.GET("/:id/health", s.perm(auth.PermSettingsManage), pluginsH.PluginHealth)
-		plugins.PUT("/:id/settings", s.perm(auth.PermSettingsManage), pluginsH.UpdatePluginSettings)
-	}
-
-	// Admin-only Phase 2 routes
-	adminOnly := protected.Group("")
-	adminOnly.Use(servermiddleware.RequireAdmin())
-	{
-		adminOnly.GET("/cache/stats/keys", cacheH.HandleCacheKeysIntrospection)
-		adminOnly.POST("/admin/recompact-digests", activityH.RecompactDigests)
-	}
+	// ── Register protected routes via per-domain methods ─────────────────────
+	s.wireLibraryRoutes(protected, cacheH, activityH, splitBookH, filesystemH, organizeH, metaCacheH, readingH, playlistH, userH, versionsH)
+	s.wireMediaRoutes(protected, itunesH, aiH, diagH, toolsH, pluginsH)
+	s.wireEntitiesRoutes(protected, entitiesH)
+	s.wireOperationsRoutes(protected, opsV2H, operationsH)
+	s.wireSystemRoutes(protected, systemH)
+	s.wireDedupRoutes(protected, dedupH, duplicatesH)
+	s.wireAudiobooksRoutes(protected, audiobooksH)
+	s.wireMetadataRoutes(protected, metadataH)
 }
