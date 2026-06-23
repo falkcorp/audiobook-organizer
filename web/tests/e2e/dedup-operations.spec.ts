@@ -1,6 +1,7 @@
 // file: web/tests/e2e/dedup-operations.spec.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: e2f3a4b5-c6d7-8e9f-0a1b-2c3d4e5f6a7b
+// last-edited: 2026-06-23
 
 import { test, expect, type Page } from '@playwright/test';
 import {
@@ -125,7 +126,8 @@ test.describe('Production Company Resolution', () => {
     await page.waitForLoadState('networkidle');
 
     await page.getByRole('button', { name: /find real author/i }).first().click();
-    await page.waitForTimeout(1000);
+    // Wait for the API request rather than sleeping — avoids flakiness under load.
+    await page.waitForRequest(req => req.url().includes('/resolve-production'));
     expect(resolveCallCount).toBeGreaterThan(0);
   });
 });

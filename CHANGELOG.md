@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.70.0 -->
+<!-- version: 3.71.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-23 -->
 
@@ -8,6 +8,10 @@
 ## [Unreleased]
 
 ### Tooling
+
+#### June 23, 2026 — TOOL-7: replace fixed sleeps in E2E tests
+
+- **`test(e2e)`** TOOL-7 — `waitForTimeout(1000)` replaced with `waitForRequest(url)` in `dedup-operations.spec.ts` and `dedup.spec.ts`. Tests now respond to actual network activity instead of arbitrary delays.
 
 #### June 23, 2026 — TOOL-3 demo isolation + TOOL-8 smoke targets
 
