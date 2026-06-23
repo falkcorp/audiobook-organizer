@@ -1,7 +1,7 @@
 <!-- file: CODING_STANDARDS.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: c1d2e3f4-a5b6-7c8d-9e0f-1a2b3c4d5e6f -->
-<!-- last-edited: 2026-01-19 -->
+<!-- last-edited: 2026-06-23 -->
 
 # Coding Standards for Refactoring Task
 
@@ -595,6 +595,33 @@ func BenchmarkCalculateTotal(b *testing.B) {
     }
 }
 ```
+
+**Test Doubles — Prefer Narrow Hand-Written Fakes for New Code:**
+
+When writing tests for new interfaces, prefer a narrow hand-written fake over a
+generated mock (mockery). Generated mocks are appropriate for large or frequently-
+changing interfaces where the maintenance cost of hand-writing outweighs the
+drawback of generated boilerplate; for new, purpose-built interfaces, a small fake
+that implements only the methods under test is more readable and less brittle.
+
+```go
+// Preferred for new interfaces: narrow fake, implements only what the test needs.
+type fakeBookStore struct {
+    books map[string]*database.Book
+}
+
+func (f *fakeBookStore) GetBookByID(id string) (*database.Book, error) {
+    b, ok := f.books[id]
+    if !ok {
+        return nil, fmt.Errorf("not found: %s", id)
+    }
+    return b, nil
+}
+```
+
+Use generated mocks (mockery) for existing large store or service interfaces
+where the interface surface exceeds ~5 methods and is expected to grow. Document
+the choice with a comment when the decision is non-obvious.
 
 This covers the essential Go style guidelines including formatting, naming
 conventions, package organization, error handling, function design, struct
