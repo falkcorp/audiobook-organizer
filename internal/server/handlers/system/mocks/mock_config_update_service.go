@@ -60,7 +60,7 @@ type MockConfigUpdateService_MaskSecrets_Call struct {
 
 // MaskSecrets is a helper method to define mock.On call
 //   - cfg config.Config
-func (_e *MockConfigUpdateService_Expecter) MaskSecrets(cfg interface{}) *MockConfigUpdateService_MaskSecrets_Call {
+func (_e *MockConfigUpdateService_Expecter) MaskSecrets(cfg any) *MockConfigUpdateService_MaskSecrets_Call {
 	return &MockConfigUpdateService_MaskSecrets_Call{Call: _e.mock.On("MaskSecrets", cfg)}
 }
 
@@ -122,7 +122,7 @@ type MockConfigUpdateService_UpdateConfig_Call struct {
 
 // UpdateConfig is a helper method to define mock.On call
 //   - payload map[string]any
-func (_e *MockConfigUpdateService_Expecter) UpdateConfig(payload interface{}) *MockConfigUpdateService_UpdateConfig_Call {
+func (_e *MockConfigUpdateService_Expecter) UpdateConfig(payload any) *MockConfigUpdateService_UpdateConfig_Call {
 	return &MockConfigUpdateService_UpdateConfig_Call{Call: _e.mock.On("UpdateConfig", payload)}
 }
 

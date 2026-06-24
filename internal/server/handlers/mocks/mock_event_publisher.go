@@ -52,7 +52,7 @@ type MockEventPublisher_Publish_Call struct {
 // Publish is a helper method to define mock.On call
 //   - ctx context.Context
 //   - event plugin.Event
-func (_e *MockEventPublisher_Expecter) Publish(ctx interface{}, event interface{}) *MockEventPublisher_Publish_Call {
+func (_e *MockEventPublisher_Expecter) Publish(ctx any, event any) *MockEventPublisher_Publish_Call {
 	return &MockEventPublisher_Publish_Call{Call: _e.mock.On("Publish", ctx, event)}
 }
 

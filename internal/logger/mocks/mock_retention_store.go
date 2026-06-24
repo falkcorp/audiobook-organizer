@@ -70,7 +70,7 @@ type MockRetentionStore_PruneOperationChanges_Call struct {
 
 // PruneOperationChanges is a helper method to define mock.On call
 //   - olderThan time.Time
-func (_e *MockRetentionStore_Expecter) PruneOperationChanges(olderThan interface{}) *MockRetentionStore_PruneOperationChanges_Call {
+func (_e *MockRetentionStore_Expecter) PruneOperationChanges(olderThan any) *MockRetentionStore_PruneOperationChanges_Call {
 	return &MockRetentionStore_PruneOperationChanges_Call{Call: _e.mock.On("PruneOperationChanges", olderThan)}
 }
 
@@ -130,7 +130,7 @@ type MockRetentionStore_PruneOperationLogs_Call struct {
 
 // PruneOperationLogs is a helper method to define mock.On call
 //   - olderThan time.Time
-func (_e *MockRetentionStore_Expecter) PruneOperationLogs(olderThan interface{}) *MockRetentionStore_PruneOperationLogs_Call {
+func (_e *MockRetentionStore_Expecter) PruneOperationLogs(olderThan any) *MockRetentionStore_PruneOperationLogs_Call {
 	return &MockRetentionStore_PruneOperationLogs_Call{Call: _e.mock.On("PruneOperationLogs", olderThan)}
 }
 
@@ -190,7 +190,7 @@ type MockRetentionStore_PruneSystemActivityLogs_Call struct {
 
 // PruneSystemActivityLogs is a helper method to define mock.On call
 //   - olderThan time.Time
-func (_e *MockRetentionStore_Expecter) PruneSystemActivityLogs(olderThan interface{}) *MockRetentionStore_PruneSystemActivityLogs_Call {
+func (_e *MockRetentionStore_Expecter) PruneSystemActivityLogs(olderThan any) *MockRetentionStore_PruneSystemActivityLogs_Call {
 	return &MockRetentionStore_PruneSystemActivityLogs_Call{Call: _e.mock.On("PruneSystemActivityLogs", olderThan)}
 }
 

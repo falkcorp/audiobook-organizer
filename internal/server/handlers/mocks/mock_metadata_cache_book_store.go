@@ -71,7 +71,7 @@ type MockMetadataCacheBookStore_GetBookByID_Call struct {
 
 // GetBookByID is a helper method to define mock.On call
 //   - id string
-func (_e *MockMetadataCacheBookStore_Expecter) GetBookByID(id interface{}) *MockMetadataCacheBookStore_GetBookByID_Call {
+func (_e *MockMetadataCacheBookStore_Expecter) GetBookByID(id any) *MockMetadataCacheBookStore_GetBookByID_Call {
 	return &MockMetadataCacheBookStore_GetBookByID_Call{Call: _e.mock.On("GetBookByID", id)}
 }
 
@@ -133,7 +133,7 @@ type MockMetadataCacheBookStore_GetBookFiles_Call struct {
 
 // GetBookFiles is a helper method to define mock.On call
 //   - bookID string
-func (_e *MockMetadataCacheBookStore_Expecter) GetBookFiles(bookID interface{}) *MockMetadataCacheBookStore_GetBookFiles_Call {
+func (_e *MockMetadataCacheBookStore_Expecter) GetBookFiles(bookID any) *MockMetadataCacheBookStore_GetBookFiles_Call {
 	return &MockMetadataCacheBookStore_GetBookFiles_Call{Call: _e.mock.On("GetBookFiles", bookID)}
 }
 
@@ -196,7 +196,7 @@ type MockMetadataCacheBookStore_UpdateBook_Call struct {
 // UpdateBook is a helper method to define mock.On call
 //   - id string
 //   - book *database.Book
-func (_e *MockMetadataCacheBookStore_Expecter) UpdateBook(id interface{}, book interface{}) *MockMetadataCacheBookStore_UpdateBook_Call {
+func (_e *MockMetadataCacheBookStore_Expecter) UpdateBook(id any, book any) *MockMetadataCacheBookStore_UpdateBook_Call {
 	return &MockMetadataCacheBookStore_UpdateBook_Call{Call: _e.mock.On("UpdateBook", id, book)}
 }
 

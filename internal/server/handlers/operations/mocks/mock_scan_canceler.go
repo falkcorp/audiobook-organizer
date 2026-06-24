@@ -59,7 +59,7 @@ type MockScanCanceler_CancelScan_Call struct {
 
 // CancelScan is a helper method to define mock.On call
 //   - scanID int
-func (_e *MockScanCanceler_Expecter) CancelScan(scanID interface{}) *MockScanCanceler_CancelScan_Call {
+func (_e *MockScanCanceler_Expecter) CancelScan(scanID any) *MockScanCanceler_CancelScan_Call {
 	return &MockScanCanceler_CancelScan_Call{Call: _e.mock.On("CancelScan", scanID)}
 }
 

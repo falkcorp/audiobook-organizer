@@ -74,7 +74,7 @@ type MockFilesystemBrowser_BrowseDirectory_Call struct {
 // BrowseDirectory is a helper method to define mock.On call
 //   - ctx context.Context
 //   - path string
-func (_e *MockFilesystemBrowser_Expecter) BrowseDirectory(ctx interface{}, path interface{}) *MockFilesystemBrowser_BrowseDirectory_Call {
+func (_e *MockFilesystemBrowser_Expecter) BrowseDirectory(ctx any, path any) *MockFilesystemBrowser_BrowseDirectory_Call {
 	return &MockFilesystemBrowser_BrowseDirectory_Call{Call: _e.mock.On("BrowseDirectory", ctx, path)}
 }
 
@@ -131,7 +131,7 @@ type MockFilesystemBrowser_CreateExclusion_Call struct {
 // CreateExclusion is a helper method to define mock.On call
 //   - ctx context.Context
 //   - path string
-func (_e *MockFilesystemBrowser_Expecter) CreateExclusion(ctx interface{}, path interface{}) *MockFilesystemBrowser_CreateExclusion_Call {
+func (_e *MockFilesystemBrowser_Expecter) CreateExclusion(ctx any, path any) *MockFilesystemBrowser_CreateExclusion_Call {
 	return &MockFilesystemBrowser_CreateExclusion_Call{Call: _e.mock.On("CreateExclusion", ctx, path)}
 }
 
@@ -188,7 +188,7 @@ type MockFilesystemBrowser_RemoveExclusion_Call struct {
 // RemoveExclusion is a helper method to define mock.On call
 //   - ctx context.Context
 //   - path string
-func (_e *MockFilesystemBrowser_Expecter) RemoveExclusion(ctx interface{}, path interface{}) *MockFilesystemBrowser_RemoveExclusion_Call {
+func (_e *MockFilesystemBrowser_Expecter) RemoveExclusion(ctx any, path any) *MockFilesystemBrowser_RemoveExclusion_Call {
 	return &MockFilesystemBrowser_RemoveExclusion_Call{Call: _e.mock.On("RemoveExclusion", ctx, path)}
 }
 

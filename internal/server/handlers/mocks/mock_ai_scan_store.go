@@ -60,7 +60,7 @@ type MockAIScanStore_DeleteScan_Call struct {
 
 // DeleteScan is a helper method to define mock.On call
 //   - id int
-func (_e *MockAIScanStore_Expecter) DeleteScan(id interface{}) *MockAIScanStore_DeleteScan_Call {
+func (_e *MockAIScanStore_Expecter) DeleteScan(id any) *MockAIScanStore_DeleteScan_Call {
 	return &MockAIScanStore_DeleteScan_Call{Call: _e.mock.On("DeleteScan", id)}
 }
 
@@ -122,7 +122,7 @@ type MockAIScanStore_GetPhases_Call struct {
 
 // GetPhases is a helper method to define mock.On call
 //   - scanID int
-func (_e *MockAIScanStore_Expecter) GetPhases(scanID interface{}) *MockAIScanStore_GetPhases_Call {
+func (_e *MockAIScanStore_Expecter) GetPhases(scanID any) *MockAIScanStore_GetPhases_Call {
 	return &MockAIScanStore_GetPhases_Call{Call: _e.mock.On("GetPhases", scanID)}
 }
 
@@ -184,7 +184,7 @@ type MockAIScanStore_GetScan_Call struct {
 
 // GetScan is a helper method to define mock.On call
 //   - id int
-func (_e *MockAIScanStore_Expecter) GetScan(id interface{}) *MockAIScanStore_GetScan_Call {
+func (_e *MockAIScanStore_Expecter) GetScan(id any) *MockAIScanStore_GetScan_Call {
 	return &MockAIScanStore_GetScan_Call{Call: _e.mock.On("GetScan", id)}
 }
 
@@ -246,7 +246,7 @@ type MockAIScanStore_GetScanResults_Call struct {
 
 // GetScanResults is a helper method to define mock.On call
 //   - scanID int
-func (_e *MockAIScanStore_Expecter) GetScanResults(scanID interface{}) *MockAIScanStore_GetScanResults_Call {
+func (_e *MockAIScanStore_Expecter) GetScanResults(scanID any) *MockAIScanStore_GetScanResults_Call {
 	return &MockAIScanStore_GetScanResults_Call{Call: _e.mock.On("GetScanResults", scanID)}
 }
 
@@ -353,7 +353,7 @@ type MockAIScanStore_MarkResultApplied_Call struct {
 // MarkResultApplied is a helper method to define mock.On call
 //   - scanID int
 //   - resultID int
-func (_e *MockAIScanStore_Expecter) MarkResultApplied(scanID interface{}, resultID interface{}) *MockAIScanStore_MarkResultApplied_Call {
+func (_e *MockAIScanStore_Expecter) MarkResultApplied(scanID any, resultID any) *MockAIScanStore_MarkResultApplied_Call {
 	return &MockAIScanStore_MarkResultApplied_Call{Call: _e.mock.On("MarkResultApplied", scanID, resultID)}
 }
 

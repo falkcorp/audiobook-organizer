@@ -61,7 +61,7 @@ type MockActivityLogWriter_AddSystemActivityLog_Call struct {
 //   - source string
 //   - level string
 //   - message string
-func (_e *MockActivityLogWriter_Expecter) AddSystemActivityLog(source interface{}, level interface{}, message interface{}) *MockActivityLogWriter_AddSystemActivityLog_Call {
+func (_e *MockActivityLogWriter_Expecter) AddSystemActivityLog(source any, level any, message any) *MockActivityLogWriter_AddSystemActivityLog_Call {
 	return &MockActivityLogWriter_AddSystemActivityLog_Call{Call: _e.mock.On("AddSystemActivityLog", source, level, message)}
 }
 

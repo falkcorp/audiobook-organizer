@@ -63,7 +63,7 @@ type MockReadingStore_BatchUpsertBookFiles_Call struct {
 
 // BatchUpsertBookFiles is a helper method to define mock.On call
 //   - files []*database.BookFile
-func (_e *MockReadingStore_Expecter) BatchUpsertBookFiles(files interface{}) *MockReadingStore_BatchUpsertBookFiles_Call {
+func (_e *MockReadingStore_Expecter) BatchUpsertBookFiles(files any) *MockReadingStore_BatchUpsertBookFiles_Call {
 	return &MockReadingStore_BatchUpsertBookFiles_Call{Call: _e.mock.On("BatchUpsertBookFiles", files)}
 }
 
@@ -123,7 +123,7 @@ type MockReadingStore_ClearITunesPID_Call struct {
 
 // ClearITunesPID is a helper method to define mock.On call
 //   - itunesPID string
-func (_e *MockReadingStore_Expecter) ClearITunesPID(itunesPID interface{}) *MockReadingStore_ClearITunesPID_Call {
+func (_e *MockReadingStore_Expecter) ClearITunesPID(itunesPID any) *MockReadingStore_ClearITunesPID_Call {
 	return &MockReadingStore_ClearITunesPID_Call{Call: _e.mock.On("ClearITunesPID", itunesPID)}
 }
 
@@ -175,7 +175,7 @@ type MockReadingStore_ClearUserPositions_Call struct {
 // ClearUserPositions is a helper method to define mock.On call
 //   - userID string
 //   - bookID string
-func (_e *MockReadingStore_Expecter) ClearUserPositions(userID interface{}, bookID interface{}) *MockReadingStore_ClearUserPositions_Call {
+func (_e *MockReadingStore_Expecter) ClearUserPositions(userID any, bookID any) *MockReadingStore_ClearUserPositions_Call {
 	return &MockReadingStore_ClearUserPositions_Call{Call: _e.mock.On("ClearUserPositions", userID, bookID)}
 }
 
@@ -231,7 +231,7 @@ type MockReadingStore_CreateBookFile_Call struct {
 
 // CreateBookFile is a helper method to define mock.On call
 //   - file *database.BookFile
-func (_e *MockReadingStore_Expecter) CreateBookFile(file interface{}) *MockReadingStore_CreateBookFile_Call {
+func (_e *MockReadingStore_Expecter) CreateBookFile(file any) *MockReadingStore_CreateBookFile_Call {
 	return &MockReadingStore_CreateBookFile_Call{Call: _e.mock.On("CreateBookFile", file)}
 }
 
@@ -282,7 +282,7 @@ type MockReadingStore_DeleteBookFile_Call struct {
 
 // DeleteBookFile is a helper method to define mock.On call
 //   - id string
-func (_e *MockReadingStore_Expecter) DeleteBookFile(id interface{}) *MockReadingStore_DeleteBookFile_Call {
+func (_e *MockReadingStore_Expecter) DeleteBookFile(id any) *MockReadingStore_DeleteBookFile_Call {
 	return &MockReadingStore_DeleteBookFile_Call{Call: _e.mock.On("DeleteBookFile", id)}
 }
 
@@ -333,7 +333,7 @@ type MockReadingStore_DeleteBookFilesForBook_Call struct {
 
 // DeleteBookFilesForBook is a helper method to define mock.On call
 //   - bookID string
-func (_e *MockReadingStore_Expecter) DeleteBookFilesForBook(bookID interface{}) *MockReadingStore_DeleteBookFilesForBook_Call {
+func (_e *MockReadingStore_Expecter) DeleteBookFilesForBook(bookID any) *MockReadingStore_DeleteBookFilesForBook_Call {
 	return &MockReadingStore_DeleteBookFilesForBook_Call{Call: _e.mock.On("DeleteBookFilesForBook", bookID)}
 }
 
@@ -505,7 +505,7 @@ type MockReadingStore_GetBookBySegmentFileHash_Call struct {
 
 // GetBookBySegmentFileHash is a helper method to define mock.On call
 //   - hash string
-func (_e *MockReadingStore_Expecter) GetBookBySegmentFileHash(hash interface{}) *MockReadingStore_GetBookBySegmentFileHash_Call {
+func (_e *MockReadingStore_Expecter) GetBookBySegmentFileHash(hash any) *MockReadingStore_GetBookBySegmentFileHash_Call {
 	return &MockReadingStore_GetBookBySegmentFileHash_Call{Call: _e.mock.On("GetBookBySegmentFileHash", hash)}
 }
 
@@ -567,7 +567,7 @@ type MockReadingStore_GetBookFileByAcoustID_Call struct {
 
 // GetBookFileByAcoustID is a helper method to define mock.On call
 //   - fingerprint string
-func (_e *MockReadingStore_Expecter) GetBookFileByAcoustID(fingerprint interface{}) *MockReadingStore_GetBookFileByAcoustID_Call {
+func (_e *MockReadingStore_Expecter) GetBookFileByAcoustID(fingerprint any) *MockReadingStore_GetBookFileByAcoustID_Call {
 	return &MockReadingStore_GetBookFileByAcoustID_Call{Call: _e.mock.On("GetBookFileByAcoustID", fingerprint)}
 }
 
@@ -630,7 +630,7 @@ type MockReadingStore_GetBookFileByAcoustIDFuzzy_Call struct {
 // GetBookFileByAcoustIDFuzzy is a helper method to define mock.On call
 //   - fingerprint string
 //   - minSimilarity float64
-func (_e *MockReadingStore_Expecter) GetBookFileByAcoustIDFuzzy(fingerprint interface{}, minSimilarity interface{}) *MockReadingStore_GetBookFileByAcoustIDFuzzy_Call {
+func (_e *MockReadingStore_Expecter) GetBookFileByAcoustIDFuzzy(fingerprint any, minSimilarity any) *MockReadingStore_GetBookFileByAcoustIDFuzzy_Call {
 	return &MockReadingStore_GetBookFileByAcoustIDFuzzy_Call{Call: _e.mock.On("GetBookFileByAcoustIDFuzzy", fingerprint, minSimilarity)}
 }
 
@@ -698,7 +698,7 @@ type MockReadingStore_GetBookFileByID_Call struct {
 // GetBookFileByID is a helper method to define mock.On call
 //   - bookID string
 //   - fileID string
-func (_e *MockReadingStore_Expecter) GetBookFileByID(bookID interface{}, fileID interface{}) *MockReadingStore_GetBookFileByID_Call {
+func (_e *MockReadingStore_Expecter) GetBookFileByID(bookID any, fileID any) *MockReadingStore_GetBookFileByID_Call {
 	return &MockReadingStore_GetBookFileByID_Call{Call: _e.mock.On("GetBookFileByID", bookID, fileID)}
 }
 
@@ -765,7 +765,7 @@ type MockReadingStore_GetBookFileByPID_Call struct {
 
 // GetBookFileByPID is a helper method to define mock.On call
 //   - itunesPID string
-func (_e *MockReadingStore_Expecter) GetBookFileByPID(itunesPID interface{}) *MockReadingStore_GetBookFileByPID_Call {
+func (_e *MockReadingStore_Expecter) GetBookFileByPID(itunesPID any) *MockReadingStore_GetBookFileByPID_Call {
 	return &MockReadingStore_GetBookFileByPID_Call{Call: _e.mock.On("GetBookFileByPID", itunesPID)}
 }
 
@@ -827,7 +827,7 @@ type MockReadingStore_GetBookFileByPath_Call struct {
 
 // GetBookFileByPath is a helper method to define mock.On call
 //   - filePath string
-func (_e *MockReadingStore_Expecter) GetBookFileByPath(filePath interface{}) *MockReadingStore_GetBookFileByPath_Call {
+func (_e *MockReadingStore_Expecter) GetBookFileByPath(filePath any) *MockReadingStore_GetBookFileByPath_Call {
 	return &MockReadingStore_GetBookFileByPath_Call{Call: _e.mock.On("GetBookFileByPath", filePath)}
 }
 
@@ -944,7 +944,7 @@ type MockReadingStore_GetBookFiles_Call struct {
 
 // GetBookFiles is a helper method to define mock.On call
 //   - bookID string
-func (_e *MockReadingStore_Expecter) GetBookFiles(bookID interface{}) *MockReadingStore_GetBookFiles_Call {
+func (_e *MockReadingStore_Expecter) GetBookFiles(bookID any) *MockReadingStore_GetBookFiles_Call {
 	return &MockReadingStore_GetBookFiles_Call{Call: _e.mock.On("GetBookFiles", bookID)}
 }
 
@@ -1116,7 +1116,7 @@ type MockReadingStore_GetDuplicateFilesByHash_Call struct {
 
 // GetDuplicateFilesByHash is a helper method to define mock.On call
 //   - limit int
-func (_e *MockReadingStore_Expecter) GetDuplicateFilesByHash(limit interface{}) *MockReadingStore_GetDuplicateFilesByHash_Call {
+func (_e *MockReadingStore_Expecter) GetDuplicateFilesByHash(limit any) *MockReadingStore_GetDuplicateFilesByHash_Call {
 	return &MockReadingStore_GetDuplicateFilesByHash_Call{Call: _e.mock.On("GetDuplicateFilesByHash", limit)}
 }
 
@@ -1186,7 +1186,7 @@ type MockReadingStore_GetFilesWithFingerprintFailures_Call struct {
 //   - reason string
 //   - limit int
 //   - offset int
-func (_e *MockReadingStore_Expecter) GetFilesWithFingerprintFailures(reason interface{}, limit interface{}, offset interface{}) *MockReadingStore_GetFilesWithFingerprintFailures_Call {
+func (_e *MockReadingStore_Expecter) GetFilesWithFingerprintFailures(reason any, limit any, offset any) *MockReadingStore_GetFilesWithFingerprintFailures_Call {
 	return &MockReadingStore_GetFilesWithFingerprintFailures_Call{Call: _e.mock.On("GetFilesWithFingerprintFailures", reason, limit, offset)}
 }
 
@@ -1259,7 +1259,7 @@ type MockReadingStore_GetUserBookState_Call struct {
 // GetUserBookState is a helper method to define mock.On call
 //   - userID string
 //   - bookID string
-func (_e *MockReadingStore_Expecter) GetUserBookState(userID interface{}, bookID interface{}) *MockReadingStore_GetUserBookState_Call {
+func (_e *MockReadingStore_Expecter) GetUserBookState(userID any, bookID any) *MockReadingStore_GetUserBookState_Call {
 	return &MockReadingStore_GetUserBookState_Call{Call: _e.mock.On("GetUserBookState", userID, bookID)}
 }
 
@@ -1327,7 +1327,7 @@ type MockReadingStore_GetUserPosition_Call struct {
 // GetUserPosition is a helper method to define mock.On call
 //   - userID string
 //   - bookID string
-func (_e *MockReadingStore_Expecter) GetUserPosition(userID interface{}, bookID interface{}) *MockReadingStore_GetUserPosition_Call {
+func (_e *MockReadingStore_Expecter) GetUserPosition(userID any, bookID any) *MockReadingStore_GetUserPosition_Call {
 	return &MockReadingStore_GetUserPosition_Call{Call: _e.mock.On("GetUserPosition", userID, bookID)}
 }
 
@@ -1397,7 +1397,7 @@ type MockReadingStore_ListUserBookStatesByStatus_Call struct {
 //   - status string
 //   - limit int
 //   - offset int
-func (_e *MockReadingStore_Expecter) ListUserBookStatesByStatus(userID interface{}, status interface{}, limit interface{}, offset interface{}) *MockReadingStore_ListUserBookStatesByStatus_Call {
+func (_e *MockReadingStore_Expecter) ListUserBookStatesByStatus(userID any, status any, limit any, offset any) *MockReadingStore_ListUserBookStatesByStatus_Call {
 	return &MockReadingStore_ListUserBookStatesByStatus_Call{Call: _e.mock.On("ListUserBookStatesByStatus", userID, status, limit, offset)}
 }
 
@@ -1475,7 +1475,7 @@ type MockReadingStore_ListUserPositionsForBook_Call struct {
 // ListUserPositionsForBook is a helper method to define mock.On call
 //   - userID string
 //   - bookID string
-func (_e *MockReadingStore_Expecter) ListUserPositionsForBook(userID interface{}, bookID interface{}) *MockReadingStore_ListUserPositionsForBook_Call {
+func (_e *MockReadingStore_Expecter) ListUserPositionsForBook(userID any, bookID any) *MockReadingStore_ListUserPositionsForBook_Call {
 	return &MockReadingStore_ListUserPositionsForBook_Call{Call: _e.mock.On("ListUserPositionsForBook", userID, bookID)}
 }
 
@@ -1543,7 +1543,7 @@ type MockReadingStore_ListUserPositionsSince_Call struct {
 // ListUserPositionsSince is a helper method to define mock.On call
 //   - userID string
 //   - t time.Time
-func (_e *MockReadingStore_Expecter) ListUserPositionsSince(userID interface{}, t interface{}) *MockReadingStore_ListUserPositionsSince_Call {
+func (_e *MockReadingStore_Expecter) ListUserPositionsSince(userID any, t any) *MockReadingStore_ListUserPositionsSince_Call {
 	return &MockReadingStore_ListUserPositionsSince_Call{Call: _e.mock.On("ListUserPositionsSince", userID, t)}
 }
 
@@ -1602,7 +1602,7 @@ type MockReadingStore_MarkFileImportedFromDeluge_Call struct {
 //   - originalPath string
 //   - libraryPath string
 //   - torrentHash string
-func (_e *MockReadingStore_Expecter) MarkFileImportedFromDeluge(ctx interface{}, originalPath interface{}, libraryPath interface{}, torrentHash interface{}) *MockReadingStore_MarkFileImportedFromDeluge_Call {
+func (_e *MockReadingStore_Expecter) MarkFileImportedFromDeluge(ctx any, originalPath any, libraryPath any, torrentHash any) *MockReadingStore_MarkFileImportedFromDeluge_Call {
 	return &MockReadingStore_MarkFileImportedFromDeluge_Call{Call: _e.mock.On("MarkFileImportedFromDeluge", ctx, originalPath, libraryPath, torrentHash)}
 }
 
@@ -1670,7 +1670,7 @@ type MockReadingStore_MoveBookFilesToBook_Call struct {
 //   - fileIDs []string
 //   - sourceBookID string
 //   - targetBookID string
-func (_e *MockReadingStore_Expecter) MoveBookFilesToBook(fileIDs interface{}, sourceBookID interface{}, targetBookID interface{}) *MockReadingStore_MoveBookFilesToBook_Call {
+func (_e *MockReadingStore_Expecter) MoveBookFilesToBook(fileIDs any, sourceBookID any, targetBookID any) *MockReadingStore_MoveBookFilesToBook_Call {
 	return &MockReadingStore_MoveBookFilesToBook_Call{Call: _e.mock.On("MoveBookFilesToBook", fileIDs, sourceBookID, targetBookID)}
 }
 
@@ -1732,7 +1732,7 @@ type MockReadingStore_SetBookFileHash_Call struct {
 // SetBookFileHash is a helper method to define mock.On call
 //   - id string
 //   - hash string
-func (_e *MockReadingStore_Expecter) SetBookFileHash(id interface{}, hash interface{}) *MockReadingStore_SetBookFileHash_Call {
+func (_e *MockReadingStore_Expecter) SetBookFileHash(id any, hash any) *MockReadingStore_SetBookFileHash_Call {
 	return &MockReadingStore_SetBookFileHash_Call{Call: _e.mock.On("SetBookFileHash", id, hash)}
 }
 
@@ -1788,7 +1788,7 @@ type MockReadingStore_SetUserBookState_Call struct {
 
 // SetUserBookState is a helper method to define mock.On call
 //   - state *database.UserBookState
-func (_e *MockReadingStore_Expecter) SetUserBookState(state interface{}) *MockReadingStore_SetUserBookState_Call {
+func (_e *MockReadingStore_Expecter) SetUserBookState(state any) *MockReadingStore_SetUserBookState_Call {
 	return &MockReadingStore_SetUserBookState_Call{Call: _e.mock.On("SetUserBookState", state)}
 }
 
@@ -1842,7 +1842,7 @@ type MockReadingStore_SetUserPosition_Call struct {
 //   - bookID string
 //   - segmentID string
 //   - positionSeconds float64
-func (_e *MockReadingStore_Expecter) SetUserPosition(userID interface{}, bookID interface{}, segmentID interface{}, positionSeconds interface{}) *MockReadingStore_SetUserPosition_Call {
+func (_e *MockReadingStore_Expecter) SetUserPosition(userID any, bookID any, segmentID any, positionSeconds any) *MockReadingStore_SetUserPosition_Call {
 	return &MockReadingStore_SetUserPosition_Call{Call: _e.mock.On("SetUserPosition", userID, bookID, segmentID, positionSeconds)}
 }
 
@@ -1909,7 +1909,7 @@ type MockReadingStore_UpdateBookFile_Call struct {
 // UpdateBookFile is a helper method to define mock.On call
 //   - id string
 //   - file *database.BookFile
-func (_e *MockReadingStore_Expecter) UpdateBookFile(id interface{}, file interface{}) *MockReadingStore_UpdateBookFile_Call {
+func (_e *MockReadingStore_Expecter) UpdateBookFile(id any, file any) *MockReadingStore_UpdateBookFile_Call {
 	return &MockReadingStore_UpdateBookFile_Call{Call: _e.mock.On("UpdateBookFile", id, file)}
 }
 
@@ -1967,7 +1967,7 @@ type MockReadingStore_UpdateBookFileHashes_Call struct {
 //   - id string
 //   - originalHash string
 //   - postMetadataHash string
-func (_e *MockReadingStore_Expecter) UpdateBookFileHashes(id interface{}, originalHash interface{}, postMetadataHash interface{}) *MockReadingStore_UpdateBookFileHashes_Call {
+func (_e *MockReadingStore_Expecter) UpdateBookFileHashes(id any, originalHash any, postMetadataHash any) *MockReadingStore_UpdateBookFileHashes_Call {
 	return &MockReadingStore_UpdateBookFileHashes_Call{Call: _e.mock.On("UpdateBookFileHashes", id, originalHash, postMetadataHash)}
 }
 
@@ -2028,7 +2028,7 @@ type MockReadingStore_UpsertBookFile_Call struct {
 
 // UpsertBookFile is a helper method to define mock.On call
 //   - file *database.BookFile
-func (_e *MockReadingStore_Expecter) UpsertBookFile(file interface{}) *MockReadingStore_UpsertBookFile_Call {
+func (_e *MockReadingStore_Expecter) UpsertBookFile(file any) *MockReadingStore_UpsertBookFile_Call {
 	return &MockReadingStore_UpsertBookFile_Call{Call: _e.mock.On("UpsertBookFile", file)}
 }
 

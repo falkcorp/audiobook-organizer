@@ -118,7 +118,7 @@ type MockMetadataSource_SearchByTitle_Call struct {
 // SearchByTitle is a helper method to define mock.On call
 //   - ctx context.Context
 //   - title string
-func (_e *MockMetadataSource_Expecter) SearchByTitle(ctx interface{}, title interface{}) *MockMetadataSource_SearchByTitle_Call {
+func (_e *MockMetadataSource_Expecter) SearchByTitle(ctx any, title any) *MockMetadataSource_SearchByTitle_Call {
 	return &MockMetadataSource_SearchByTitle_Call{Call: _e.mock.On("SearchByTitle", ctx, title)}
 }
 
@@ -187,7 +187,7 @@ type MockMetadataSource_SearchByTitleAndAuthor_Call struct {
 //   - ctx context.Context
 //   - title string
 //   - author string
-func (_e *MockMetadataSource_Expecter) SearchByTitleAndAuthor(ctx interface{}, title interface{}, author interface{}) *MockMetadataSource_SearchByTitleAndAuthor_Call {
+func (_e *MockMetadataSource_Expecter) SearchByTitleAndAuthor(ctx any, title any, author any) *MockMetadataSource_SearchByTitleAndAuthor_Call {
 	return &MockMetadataSource_SearchByTitleAndAuthor_Call{Call: _e.mock.On("SearchByTitleAndAuthor", ctx, title, author)}
 }
 

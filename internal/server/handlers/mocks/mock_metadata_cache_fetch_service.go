@@ -75,7 +75,7 @@ type MockMetadataCacheFetchService_ApplyMetadataCandidate_Call struct {
 //   - id string
 //   - candidate metafetch.MetadataCandidate
 //   - fields []string
-func (_e *MockMetadataCacheFetchService_Expecter) ApplyMetadataCandidate(id interface{}, candidate interface{}, fields interface{}) *MockMetadataCacheFetchService_ApplyMetadataCandidate_Call {
+func (_e *MockMetadataCacheFetchService_Expecter) ApplyMetadataCandidate(id any, candidate any, fields any) *MockMetadataCacheFetchService_ApplyMetadataCandidate_Call {
 	return &MockMetadataCacheFetchService_ApplyMetadataCandidate_Call{Call: _e.mock.On("ApplyMetadataCandidate", id, candidate, fields)}
 }
 
@@ -153,7 +153,7 @@ type MockMetadataCacheFetchService_GetCachedCandidates_Call struct {
 
 // GetCachedCandidates is a helper method to define mock.On call
 //   - bookID string
-func (_e *MockMetadataCacheFetchService_Expecter) GetCachedCandidates(bookID interface{}) *MockMetadataCacheFetchService_GetCachedCandidates_Call {
+func (_e *MockMetadataCacheFetchService_Expecter) GetCachedCandidates(bookID any) *MockMetadataCacheFetchService_GetCachedCandidates_Call {
 	return &MockMetadataCacheFetchService_GetCachedCandidates_Call{Call: _e.mock.On("GetCachedCandidates", bookID)}
 }
 
@@ -204,7 +204,7 @@ type MockMetadataCacheFetchService_InvalidateCachedCandidates_Call struct {
 
 // InvalidateCachedCandidates is a helper method to define mock.On call
 //   - bookID string
-func (_e *MockMetadataCacheFetchService_Expecter) InvalidateCachedCandidates(bookID interface{}) *MockMetadataCacheFetchService_InvalidateCachedCandidates_Call {
+func (_e *MockMetadataCacheFetchService_Expecter) InvalidateCachedCandidates(bookID any) *MockMetadataCacheFetchService_InvalidateCachedCandidates_Call {
 	return &MockMetadataCacheFetchService_InvalidateCachedCandidates_Call{Call: _e.mock.On("InvalidateCachedCandidates", bookID)}
 }
 
@@ -266,7 +266,7 @@ type MockMetadataCacheFetchService_ListCachedSummaries_Call struct {
 
 // ListCachedSummaries is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockMetadataCacheFetchService_Expecter) ListCachedSummaries(ctx interface{}) *MockMetadataCacheFetchService_ListCachedSummaries_Call {
+func (_e *MockMetadataCacheFetchService_Expecter) ListCachedSummaries(ctx any) *MockMetadataCacheFetchService_ListCachedSummaries_Call {
 	return &MockMetadataCacheFetchService_ListCachedSummaries_Call{Call: _e.mock.On("ListCachedSummaries", ctx)}
 }
 

@@ -71,7 +71,7 @@ type MockVersionsStore_CreateBook_Call struct {
 
 // CreateBook is a helper method to define mock.On call
 //   - book *database.Book
-func (_e *MockVersionsStore_Expecter) CreateBook(book interface{}) *MockVersionsStore_CreateBook_Call {
+func (_e *MockVersionsStore_Expecter) CreateBook(book any) *MockVersionsStore_CreateBook_Call {
 	return &MockVersionsStore_CreateBook_Call{Call: _e.mock.On("CreateBook", book)}
 }
 
@@ -122,7 +122,7 @@ type MockVersionsStore_CreateExternalIDMapping_Call struct {
 
 // CreateExternalIDMapping is a helper method to define mock.On call
 //   - mapping *database.ExternalIDMapping
-func (_e *MockVersionsStore_Expecter) CreateExternalIDMapping(mapping interface{}) *MockVersionsStore_CreateExternalIDMapping_Call {
+func (_e *MockVersionsStore_Expecter) CreateExternalIDMapping(mapping any) *MockVersionsStore_CreateExternalIDMapping_Call {
 	return &MockVersionsStore_CreateExternalIDMapping_Call{Call: _e.mock.On("CreateExternalIDMapping", mapping)}
 }
 
@@ -173,7 +173,7 @@ type MockVersionsStore_DeleteRaw_Call struct {
 
 // DeleteRaw is a helper method to define mock.On call
 //   - key string
-func (_e *MockVersionsStore_Expecter) DeleteRaw(key interface{}) *MockVersionsStore_DeleteRaw_Call {
+func (_e *MockVersionsStore_Expecter) DeleteRaw(key any) *MockVersionsStore_DeleteRaw_Call {
 	return &MockVersionsStore_DeleteRaw_Call{Call: _e.mock.On("DeleteRaw", key)}
 }
 
@@ -235,7 +235,7 @@ type MockVersionsStore_GetBookAuthors_Call struct {
 
 // GetBookAuthors is a helper method to define mock.On call
 //   - bookID string
-func (_e *MockVersionsStore_Expecter) GetBookAuthors(bookID interface{}) *MockVersionsStore_GetBookAuthors_Call {
+func (_e *MockVersionsStore_Expecter) GetBookAuthors(bookID any) *MockVersionsStore_GetBookAuthors_Call {
 	return &MockVersionsStore_GetBookAuthors_Call{Call: _e.mock.On("GetBookAuthors", bookID)}
 }
 
@@ -297,7 +297,7 @@ type MockVersionsStore_GetBookByID_Call struct {
 
 // GetBookByID is a helper method to define mock.On call
 //   - id string
-func (_e *MockVersionsStore_Expecter) GetBookByID(id interface{}) *MockVersionsStore_GetBookByID_Call {
+func (_e *MockVersionsStore_Expecter) GetBookByID(id any) *MockVersionsStore_GetBookByID_Call {
 	return &MockVersionsStore_GetBookByID_Call{Call: _e.mock.On("GetBookByID", id)}
 }
 
@@ -359,7 +359,7 @@ type MockVersionsStore_GetBookFiles_Call struct {
 
 // GetBookFiles is a helper method to define mock.On call
 //   - bookID string
-func (_e *MockVersionsStore_Expecter) GetBookFiles(bookID interface{}) *MockVersionsStore_GetBookFiles_Call {
+func (_e *MockVersionsStore_Expecter) GetBookFiles(bookID any) *MockVersionsStore_GetBookFiles_Call {
 	return &MockVersionsStore_GetBookFiles_Call{Call: _e.mock.On("GetBookFiles", bookID)}
 }
 
@@ -421,7 +421,7 @@ type MockVersionsStore_GetBooksByVersionGroup_Call struct {
 
 // GetBooksByVersionGroup is a helper method to define mock.On call
 //   - groupID string
-func (_e *MockVersionsStore_Expecter) GetBooksByVersionGroup(groupID interface{}) *MockVersionsStore_GetBooksByVersionGroup_Call {
+func (_e *MockVersionsStore_Expecter) GetBooksByVersionGroup(groupID any) *MockVersionsStore_GetBooksByVersionGroup_Call {
 	return &MockVersionsStore_GetBooksByVersionGroup_Call{Call: _e.mock.On("GetBooksByVersionGroup", groupID)}
 }
 
@@ -483,7 +483,7 @@ type MockVersionsStore_GetExternalIDsForBook_Call struct {
 
 // GetExternalIDsForBook is a helper method to define mock.On call
 //   - bookID string
-func (_e *MockVersionsStore_Expecter) GetExternalIDsForBook(bookID interface{}) *MockVersionsStore_GetExternalIDsForBook_Call {
+func (_e *MockVersionsStore_Expecter) GetExternalIDsForBook(bookID any) *MockVersionsStore_GetExternalIDsForBook_Call {
 	return &MockVersionsStore_GetExternalIDsForBook_Call{Call: _e.mock.On("GetExternalIDsForBook", bookID)}
 }
 
@@ -536,7 +536,7 @@ type MockVersionsStore_MoveBookFilesToBook_Call struct {
 //   - fileIDs []string
 //   - sourceBookID string
 //   - targetBookID string
-func (_e *MockVersionsStore_Expecter) MoveBookFilesToBook(fileIDs interface{}, sourceBookID interface{}, targetBookID interface{}) *MockVersionsStore_MoveBookFilesToBook_Call {
+func (_e *MockVersionsStore_Expecter) MoveBookFilesToBook(fileIDs any, sourceBookID any, targetBookID any) *MockVersionsStore_MoveBookFilesToBook_Call {
 	return &MockVersionsStore_MoveBookFilesToBook_Call{Call: _e.mock.On("MoveBookFilesToBook", fileIDs, sourceBookID, targetBookID)}
 }
 
@@ -598,7 +598,7 @@ type MockVersionsStore_SetBookAuthors_Call struct {
 // SetBookAuthors is a helper method to define mock.On call
 //   - bookID string
 //   - authors []database.BookAuthor
-func (_e *MockVersionsStore_Expecter) SetBookAuthors(bookID interface{}, authors interface{}) *MockVersionsStore_SetBookAuthors_Call {
+func (_e *MockVersionsStore_Expecter) SetBookAuthors(bookID any, authors any) *MockVersionsStore_SetBookAuthors_Call {
 	return &MockVersionsStore_SetBookAuthors_Call{Call: _e.mock.On("SetBookAuthors", bookID, authors)}
 }
 
@@ -666,7 +666,7 @@ type MockVersionsStore_UpdateBook_Call struct {
 // UpdateBook is a helper method to define mock.On call
 //   - id string
 //   - book *database.Book
-func (_e *MockVersionsStore_Expecter) UpdateBook(id interface{}, book interface{}) *MockVersionsStore_UpdateBook_Call {
+func (_e *MockVersionsStore_Expecter) UpdateBook(id any, book any) *MockVersionsStore_UpdateBook_Call {
 	return &MockVersionsStore_UpdateBook_Call{Call: _e.mock.On("UpdateBook", id, book)}
 }
 

@@ -164,7 +164,7 @@ type MockITunesImporter_GetStatus_Call struct {
 
 // GetStatus is a helper method to define mock.On call
 //   - opID string
-func (_e *MockITunesImporter_Expecter) GetStatus(opID interface{}) *MockITunesImporter_GetStatus_Call {
+func (_e *MockITunesImporter_Expecter) GetStatus(opID any) *MockITunesImporter_GetStatus_Call {
 	return &MockITunesImporter_GetStatus_Call{Call: _e.mock.On("GetStatus", opID)}
 }
 
@@ -217,7 +217,7 @@ type MockITunesImporter_GetStatusBulk_Call struct {
 
 // GetStatusBulk is a helper method to define mock.On call
 //   - ids []string
-func (_e *MockITunesImporter_Expecter) GetStatusBulk(ids interface{}) *MockITunesImporter_GetStatusBulk_Call {
+func (_e *MockITunesImporter_Expecter) GetStatusBulk(ids any) *MockITunesImporter_GetStatusBulk_Call {
 	return &MockITunesImporter_GetStatusBulk_Call{Call: _e.mock.On("GetStatusBulk", ids)}
 }
 

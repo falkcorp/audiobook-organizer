@@ -73,7 +73,7 @@ type MockITunesStore_CreateOperation_Call struct {
 //   - id string
 //   - opType string
 //   - folderPath *string
-func (_e *MockITunesStore_Expecter) CreateOperation(id interface{}, opType interface{}, folderPath interface{}) *MockITunesStore_CreateOperation_Call {
+func (_e *MockITunesStore_Expecter) CreateOperation(id any, opType any, folderPath any) *MockITunesStore_CreateOperation_Call {
 	return &MockITunesStore_CreateOperation_Call{Call: _e.mock.On("CreateOperation", id, opType, folderPath)}
 }
 
@@ -145,7 +145,7 @@ type MockITunesStore_GetAuthorByID_Call struct {
 
 // GetAuthorByID is a helper method to define mock.On call
 //   - id int
-func (_e *MockITunesStore_Expecter) GetAuthorByID(id interface{}) *MockITunesStore_GetAuthorByID_Call {
+func (_e *MockITunesStore_Expecter) GetAuthorByID(id any) *MockITunesStore_GetAuthorByID_Call {
 	return &MockITunesStore_GetAuthorByID_Call{Call: _e.mock.On("GetAuthorByID", id)}
 }
 
@@ -207,7 +207,7 @@ type MockITunesStore_GetBookByID_Call struct {
 
 // GetBookByID is a helper method to define mock.On call
 //   - id string
-func (_e *MockITunesStore_Expecter) GetBookByID(id interface{}) *MockITunesStore_GetBookByID_Call {
+func (_e *MockITunesStore_Expecter) GetBookByID(id any) *MockITunesStore_GetBookByID_Call {
 	return &MockITunesStore_GetBookByID_Call{Call: _e.mock.On("GetBookByID", id)}
 }
 
@@ -269,7 +269,7 @@ type MockITunesStore_GetLibraryFingerprint_Call struct {
 
 // GetLibraryFingerprint is a helper method to define mock.On call
 //   - path string
-func (_e *MockITunesStore_Expecter) GetLibraryFingerprint(path interface{}) *MockITunesStore_GetLibraryFingerprint_Call {
+func (_e *MockITunesStore_Expecter) GetLibraryFingerprint(path any) *MockITunesStore_GetLibraryFingerprint_Call {
 	return &MockITunesStore_GetLibraryFingerprint_Call{Call: _e.mock.On("GetLibraryFingerprint", path)}
 }
 
@@ -331,7 +331,7 @@ type MockITunesStore_GetOperationByID_Call struct {
 
 // GetOperationByID is a helper method to define mock.On call
 //   - id string
-func (_e *MockITunesStore_Expecter) GetOperationByID(id interface{}) *MockITunesStore_GetOperationByID_Call {
+func (_e *MockITunesStore_Expecter) GetOperationByID(id any) *MockITunesStore_GetOperationByID_Call {
 	return &MockITunesStore_GetOperationByID_Call{Call: _e.mock.On("GetOperationByID", id)}
 }
 
@@ -394,7 +394,7 @@ type MockITunesStore_ListBooksByITunesPID_Call struct {
 // ListBooksByITunesPID is a helper method to define mock.On call
 //   - limit int
 //   - offset int
-func (_e *MockITunesStore_Expecter) ListBooksByITunesPID(limit interface{}, offset interface{}) *MockITunesStore_ListBooksByITunesPID_Call {
+func (_e *MockITunesStore_Expecter) ListBooksByITunesPID(limit any, offset any) *MockITunesStore_ListBooksByITunesPID_Call {
 	return &MockITunesStore_ListBooksByITunesPID_Call{Call: _e.mock.On("ListBooksByITunesPID", limit, offset)}
 }
 
@@ -459,7 +459,7 @@ type MockITunesStore_MarkITunesSynced_Call struct {
 
 // MarkITunesSynced is a helper method to define mock.On call
 //   - bookIDs []string
-func (_e *MockITunesStore_Expecter) MarkITunesSynced(bookIDs interface{}) *MockITunesStore_MarkITunesSynced_Call {
+func (_e *MockITunesStore_Expecter) MarkITunesSynced(bookIDs any) *MockITunesStore_MarkITunesSynced_Call {
 	return &MockITunesStore_MarkITunesSynced_Call{Call: _e.mock.On("MarkITunesSynced", bookIDs)}
 }
 
@@ -523,7 +523,7 @@ type MockITunesStore_SearchBooks_Call struct {
 //   - query string
 //   - limit int
 //   - offset int
-func (_e *MockITunesStore_Expecter) SearchBooks(query interface{}, limit interface{}, offset interface{}) *MockITunesStore_SearchBooks_Call {
+func (_e *MockITunesStore_Expecter) SearchBooks(query any, limit any, offset any) *MockITunesStore_SearchBooks_Call {
 	return &MockITunesStore_SearchBooks_Call{Call: _e.mock.On("SearchBooks", query, limit, offset)}
 }
 
