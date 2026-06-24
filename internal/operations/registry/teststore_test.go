@@ -1,7 +1,7 @@
 // file: internal/operations/registry/teststore_test.go
-// version: 2.7.0
+// version: 2.8.0
 // guid: c9d0e1f2-a3b4-5c6d-7e8f-9a0b1c2d3e4f
-// last-edited: 2026-06-14
+// last-edited: 2026-06-24
 
 package registry_test
 
@@ -373,6 +373,18 @@ func (f *fakeStore) UpsertOpStateV2(row database.OpStateV2Row) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.states[row.OperationID] = row
+	return nil
+}
+
+func (f *fakeStore) UpdateOperationV2Params(id string, params []byte) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	op, ok := f.ops[id]
+	if !ok {
+		return nil // best-effort
+	}
+	op.Params = string(params)
+	f.ops[id] = op
 	return nil
 }
 

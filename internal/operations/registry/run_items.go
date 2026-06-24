@@ -1,7 +1,7 @@
 // file: internal/operations/registry/run_items.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a2b3c4d5-e6f7-8901-abcd-ef2345678901
-// last-edited: 2026-06-22
+// last-edited: 2026-06-24
 
 package registry
 
@@ -44,6 +44,16 @@ type RunItemsOptions struct {
 	// Label returns the SetCurrentItem / UpdateProgress label for item i of
 	// total. Defaults to "item <i+1>/<total>".
 	Label func(i, total int) string
+
+	// CheckpointFn, if non-nil, is called after each item completes
+	// successfully in SEQUENTIAL mode (Concurrency <= 1). The caller uses a
+	// closure to capture the current item's ID or any other state needed to
+	// build the checkpoint. Errors are logged but do not fail the item.
+	//
+	// Not called in concurrent mode — parallel writes to reporter.Checkpoint
+	// would race on the shared state blob. Use OpFreshness.Stamp instead for
+	// concurrent per-item checkpointing.
+	CheckpointFn func(ctx context.Context) error
 }
 
 // RunItems fans out fn over items, managing:
@@ -90,13 +100,14 @@ func RunItems[T any](ctx context.Context, r Reporter, items []T, fn func(ctx con
 	}
 
 	if opt.Concurrency == 1 {
-		return runItemsSeq(ctx, items, runOne, opt.ErrMode)
+		return runItemsSeq(ctx, items, runOne, opt)
 	}
 	return runItemsPar(ctx, items, runOne, opt)
 }
 
-// runItemsSeq runs items sequentially.
-func runItemsSeq[T any](ctx context.Context, items []T, runOne func(context.Context, int, T) error, mode ErrMode) error {
+// runItemsSeq runs items sequentially, calling opt.CheckpointFn after each
+// successful item when set.
+func runItemsSeq[T any](ctx context.Context, items []T, runOne func(context.Context, int, T) error, opt RunItemsOptions) error {
 	var errs []error
 	for i, item := range items {
 		select {
@@ -105,11 +116,14 @@ func runItemsSeq[T any](ctx context.Context, items []T, runOne func(context.Cont
 		default:
 		}
 		if err := runOne(ctx, i, item); err != nil {
-			if mode == ErrModeCollect {
+			if opt.ErrMode == ErrModeCollect {
 				errs = append(errs, err)
 				continue
 			}
 			return err
+		}
+		if opt.CheckpointFn != nil {
+			_ = opt.CheckpointFn(ctx) // errors are non-fatal; op continues
 		}
 	}
 	return errors.Join(errs...)

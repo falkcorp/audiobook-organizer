@@ -1,12 +1,13 @@
 // file: internal/operations/registry/resume.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3c4d5e6f-7a8b-9012-cdef-012345678901
-// last-edited: 2026-05-06
+// last-edited: 2026-06-24
 
 package registry
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -81,18 +82,36 @@ func (r *Registry) resumeAfterStartup(ctx context.Context) {
 	}
 }
 
-// resumeRestart increments resume_count, clears state if needed, resets the
-// DB row to status=queued, and signals the dispatcher. The dispatcher picks it
-// up via ListQueuedOperationsV2 on its next cycle — same path as a fresh enqueue.
-// State blob restoration is UOS-03's responsibility; initialState on queuedRun
-// is not yet consumed by executeRun, so direct-dispatch would add no value and
-// would race with the dispatcher re-queuing the same row.
+// resumeRestart increments resume_count, merges any saved checkpoint state
+// into the re-queued row's params, resets status to queued, and signals the
+// dispatcher. The dispatcher picks it up via ListQueuedOperationsV2 on its
+// next cycle — same path as a fresh enqueue.
+//
+// Checkpoint state (schema_version=2, JSON) is merged into params so that
+// the op's Run function receives it via json.Unmarshal(params, &state) on
+// the resumed run. Schema_version=1 (gob) blobs are ignored — the op
+// restarts from scratch once, which is safe for all idempotent ops.
 func (r *Registry) resumeRestart(ctx context.Context, row database.OperationV2Row, def OperationDef) {
 	_ = ctx // context used only for cancel guard; dispatcher started after us
 
 	if err := r.store.IncrementResumeCountV2(row.ID); err != nil {
 		r.logger.Warn("registry: resumeAfterStartup: failed to increment resume_count",
 			"op_id", row.ID, "error", err)
+	}
+
+	// Restore checkpoint state into params so Run can read it on resume.
+	if stateRow, err := r.store.GetOpStateV2(row.ID); err == nil &&
+		stateRow != nil && stateRow.SchemaVersion == 2 {
+		if merged, mergeErr := mergeJSONParams([]byte(row.Params), stateRow.StateBlob); mergeErr == nil {
+			if updateErr := r.store.UpdateOperationV2Params(row.ID, merged); updateErr != nil {
+				r.logger.Warn("registry: resumeAfterStartup: failed to merge checkpoint into params",
+					"op_id", row.ID, "error", updateErr)
+			} else {
+				row.Params = string(merged)
+				r.logger.Info("registry: resumeAfterStartup: merged checkpoint state into params",
+					"op_id", row.ID, "state_bytes", len(stateRow.StateBlob))
+			}
+		}
 	}
 
 	// Reset status to queued so the dispatcher picks it up normally.
@@ -108,6 +127,30 @@ func (r *Registry) resumeRestart(ctx context.Context, row database.OperationV2Ro
 	r.publishOpCreated(row, true)
 
 	r.pingDispatch()
+}
+
+// mergeJSONParams overlays checkpoint keys onto base params. Keys present in
+// overlay take precedence; keys present only in base are preserved. Both base
+// and overlay must be valid JSON objects (or empty/nil). Returns the merged
+// JSON. Pure function — no store calls.
+func mergeJSONParams(base, overlay []byte) ([]byte, error) {
+	merged := make(map[string]any)
+	if len(base) > 0 {
+		if err := json.Unmarshal(base, &merged); err != nil {
+			return nil, err
+		}
+	}
+	if len(overlay) == 0 {
+		return json.Marshal(merged)
+	}
+	var over map[string]any
+	if err := json.Unmarshal(overlay, &over); err != nil {
+		return nil, err
+	}
+	for k, v := range over {
+		merged[k] = v
+	}
+	return json.Marshal(merged)
 }
 
 // resumeRequeue clears state and re-inserts as a brand-new queued op.

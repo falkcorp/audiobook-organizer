@@ -1,7 +1,7 @@
 // file: internal/operations/registry/reporter_db.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 1a2b3c4d-5e6f-7890-abcd-ef0123456789
-// last-edited: 2026-06-22
+// last-edited: 2026-06-24
 
 package registry
 
@@ -10,9 +10,7 @@ package registry
 // before using Checkpoint with custom state types.
 
 import (
-	"bytes"
 	"context"
-	"encoding/gob"
 	"encoding/json"
 	"log/slog"
 	"sync"
@@ -397,12 +395,16 @@ func (r *dbReporter) Logger() *slog.Logger {
 }
 
 // Checkpoint implements Reporter.
-// It gob-encodes state and UPSERTs into op_state_v2, then updates
-// high_water_progress on operations_v2.
+// It JSON-encodes state (schema_version=2) and UPSERTs into op_state_v2,
+// then updates high_water_progress on operations_v2.
+//
+// Schema version 2 (JSON) is machine-readable by resumeRestart so the blob
+// can be merged back into the re-queued params on server restart — closing
+// the resume loop that schema version 1 (gob) left open. Existing v1 rows
+// in op_state_v2 are ignored by resumeRestart (treated as no checkpoint).
 func (r *dbReporter) Checkpoint(state any) error {
-	var buf bytes.Buffer
-	enc := gob.NewEncoder(&buf)
-	if err := enc.Encode(state); err != nil {
+	data, err := json.Marshal(state)
+	if err != nil {
 		return err
 	}
 
@@ -412,8 +414,8 @@ func (r *dbReporter) Checkpoint(state any) error {
 
 	stateRow := database.OpStateV2Row{
 		OperationID:   r.opID,
-		StateBlob:     buf.Bytes(),
-		SchemaVersion: 1,
+		StateBlob:     data,
+		SchemaVersion: 2,
 		WrittenAt:     time.Now().UTC(),
 	}
 	if err := r.store.UpsertOpStateV2(stateRow); err != nil {

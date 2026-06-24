@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.65.0
+// version: 1.66.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-06-23
+// last-edited: 2026-06-24
 
 package database
 
@@ -2611,6 +2611,7 @@ func (m *MockStore) IncrementResumeCountV2(_ string) error                  { re
 func (m *MockStore) InsertOpStrikeV2(_ OpStrikeV2Row) error                 { return nil }
 func (m *MockStore) GetOpStateV2(_ string) (*OpStateV2Row, error)           { return nil, nil }
 func (m *MockStore) DeleteOpStateV2(_ string) error                         { return nil }
+func (m *MockStore) UpdateOperationV2Params(_ string, _ []byte) error       { return nil }
 func (m *MockStore) UpdateOpProgressV2(_ string, _, _ int, _ string) error  { return nil }
 func (m *MockStore) UpdateOpPhaseV2(_ string, _ *string) error              { return nil }
 func (m *MockStore) UpdateOpCheckpointV2(_ string, _ int) error             { return nil }
