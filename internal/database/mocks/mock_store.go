@@ -49374,6 +49374,60 @@ func (_c *MockStore_UpdateOperationStatus_Call) RunAndReturn(run func(id string,
 	return _c
 }
 
+// UpdateOperationV2Params provides a mock function for the type MockStore
+func (_mock *MockStore) UpdateOperationV2Params(id string, params []byte) error {
+	ret := _mock.Called(id, params)
+
+	if len(ret) == 0 {
+		panic("no return value specified for UpdateOperationV2Params")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string, []byte) error); ok {
+		r0 = returnFunc(id, params)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockStore_UpdateOperationV2Params_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'UpdateOperationV2Params'
+type MockStore_UpdateOperationV2Params_Call struct {
+	*mock.Call
+}
+
+// UpdateOperationV2Params is a helper method to define mock.On call
+//   - id string
+//   - params []byte
+func (_e *MockStore_Expecter) UpdateOperationV2Params(id interface{}, params interface{}) *MockStore_UpdateOperationV2Params_Call {
+	return &MockStore_UpdateOperationV2Params_Call{Call: _e.mock.On("UpdateOperationV2Params", id, params)}
+}
+
+func (_c *MockStore_UpdateOperationV2Params_Call) Run(run func(id string, params []byte)) *MockStore_UpdateOperationV2Params_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 []byte
+		if args[1] != nil {
+			arg1 = args[1].([]byte)
+		}
+		run(arg0, arg1)
+	})
+	return _c
+}
+
+func (_c *MockStore_UpdateOperationV2Params_Call) Return(err error) *MockStore_UpdateOperationV2Params_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockStore_UpdateOperationV2Params_Call) RunAndReturn(run func(string, []byte) error) *MockStore_UpdateOperationV2Params_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // UpdateOperationV2Status provides a mock function for the type MockStore
 func (_mock *MockStore) UpdateOperationV2Status(id string, status string, startedAt *time.Time, completedAt *time.Time, errMsg *string) error {
 	ret := _mock.Called(id, status, startedAt, completedAt, errMsg)
