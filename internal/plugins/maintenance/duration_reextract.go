@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_reextract.go
-// version: 3.6.0
+// version: 3.7.0
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
-// last-edited: 2026-06-22
+// last-edited: 2026-06-24
 
 // Package maintenance — op maintenance.duration-reextract.
 //
@@ -80,6 +80,12 @@ type durationReextractParams struct {
 	// clamped 1–16). More workers = more concurrent ffprobe subprocesses, which
 	// cuts wall-clock time for the non-fingerprinted tail proportionally.
 	Workers int `json:"workers"`
+	// SkipAgeDays skips books whose DurationVerifiedAt is more recent than this
+	// many days (default 90). Set to 0 to disable age-based skipping. Has no
+	// effect when Force is true.
+	SkipAgeDays int `json:"skipAgeDays"`
+	// Force ignores DurationVerifiedAt entirely and re-examines every book.
+	Force bool `json:"force"`
 }
 
 // durationChangeThresholds: a book is corrected only when the freshly extracted
@@ -163,25 +169,31 @@ func (p *Plugin) durationReextractDef() sdk.OperationDef {
 // processBookForReextract and consumed by the collector goroutine, which owns
 // all counter mutations and DB writes.
 type bookProcessResult struct {
-	book        database.Book
-	segs        []database.BookFile // may be nil for virtual single-file books
-	newDur      int
-	changedBFs  []database.BookFile
-	eligible    bool
-	usedFfprobe bool
-	wouldChange bool
-	roughDouble bool
-	readErr     bool
-	estimated   bool
-	noPath      bool
-	example     string
+	book             database.Book
+	segs             []database.BookFile // may be nil for virtual single-file books
+	newDur           int
+	changedBFs       []database.BookFile
+	eligible         bool
+	usedFfprobe      bool
+	wouldChange      bool
+	roughDouble      bool
+	readErr          bool
+	estimated        bool
+	noPath           bool
+	recentlyVerified bool // skipped because DurationVerifiedAt is within skipBefore threshold
+	example          string
 }
 
 // processBookForReextract evaluates one book: computes the real duration from
 // stored fingerprint values (fast) or ffprobe (slow), and returns what should
-// be written. It never writes to the store.
-func processBookForReextract(ctx context.Context, store database.Store, book database.Book) bookProcessResult {
+// be written. It never writes to the store. skipBefore is the age threshold:
+// books verified after skipBefore are returned with recentlyVerified=true.
+func processBookForReextract(ctx context.Context, store database.Store, book database.Book, skipBefore time.Time) bookProcessResult {
 	res := bookProcessResult{book: book}
+	if !skipBefore.IsZero() && book.DurationVerifiedAt != nil && book.DurationVerifiedAt.After(skipBefore) {
+		res.recentlyVerified = true
+		return res
+	}
 
 	segs, _ := store.GetBookFiles(book.ID)
 	res.segs = segs
@@ -270,7 +282,7 @@ func processBookForReextract(ctx context.Context, store database.Store, book dat
 }
 
 func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
-	params := durationReextractParams{DryRun: true, Workers: 4} // safe defaults
+	params := durationReextractParams{DryRun: true, Workers: 4, SkipAgeDays: 90} // safe defaults
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &params); err != nil {
 			return fmt.Errorf("invalid params: %w", err)
@@ -282,6 +294,11 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 	}
 	if params.Workers > 16 {
 		params.Workers = 16
+	}
+	// Compute skip threshold once; zero SkipAgeDays or Force disables age skipping.
+	var skipBefore time.Time
+	if !params.Force && params.SkipAgeDays > 0 {
+		skipBefore = time.Now().AddDate(0, 0, -params.SkipAgeDays)
 	}
 
 	store := p.deps.Store()
@@ -350,7 +367,7 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 		go func() {
 			defer wg.Done()
 			for book := range jobCh {
-				resultCh <- processBookForReextract(ctx, store, book)
+				resultCh <- processBookForReextract(ctx, store, book, skipBefore)
 			}
 		}()
 	}
@@ -386,6 +403,10 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 		examined++
 		heartbeat(false)
 
+		if res.recentlyVerified {
+			estimated++ // counted as "skipped" — already verified recently
+			continue
+		}
 		if res.noPath {
 			noPath++
 			continue
@@ -409,6 +430,10 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 			fpBooks++
 		}
 		if !res.wouldChange {
+			// Duration is already correct — stamp verified and move on.
+			if !params.DryRun {
+				stampVerifiedAt(store, reporter, res.book.ID)
+			}
 			continue
 		}
 
@@ -458,6 +483,7 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 			}
 		}
 		written++
+		stampVerifiedAt(store, reporter, res.book.ID)
 		heartbeat(false)
 	}
 
@@ -481,4 +507,18 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 	}
 	_ = reporter.UpdateProgress(total, total, summary)
 	return nil
+}
+
+// stampVerifiedAt writes DurationVerifiedAt=now to the book record. Called
+// after confirming or correcting a book's duration so future runs can skip it.
+func stampVerifiedAt(store database.Store, reporter sdk.Reporter, bookID string) {
+	full, err := store.GetBookByID(bookID)
+	if err != nil || full == nil {
+		return
+	}
+	now := time.Now()
+	full.DurationVerifiedAt = &now
+	if _, err := store.UpdateBook(bookID, full); err != nil {
+		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("book %s: failed to stamp DurationVerifiedAt: %v", bookID, err))
+	}
 }

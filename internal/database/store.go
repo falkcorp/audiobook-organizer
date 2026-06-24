@@ -1,7 +1,7 @@
 // file: internal/database/store.go
-// version: 2.79.0
+// version: 2.80.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-06-20
+// last-edited: 2026-06-24
 
 package database
 
@@ -214,6 +214,10 @@ type Book struct {
 	// scan-duration-mismatch endpoint can compare it against the local file
 	// Duration without making live API calls.
 	AudibleRuntimeMin *int `json:"audible_runtime_min,omitempty"`
+	// DurationVerifiedAt is stamped by the duration-reextract op after it
+	// confirms or corrects a book's duration. Used to skip recently-verified
+	// books on subsequent runs (see SkipAgeDays param).
+	DurationVerifiedAt *time.Time `json:"duration_verified_at,omitempty"`
 	// MetadataSourceHash is sha256("{source}:{canonical_id}") set during
 	// metadata apply. Enables O(1) dedup detection: books sharing an ASIN
 	// or ISBN-13 will have the same hash and are almost certainly the same
