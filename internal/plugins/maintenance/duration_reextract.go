@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_reextract.go
-// version: 3.7.0
+// version: 3.8.0
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
 // last-edited: 2026-06-24
 
@@ -175,6 +175,7 @@ type bookProcessResult struct {
 	changedBFs       []database.BookFile
 	eligible         bool
 	usedFfprobe      bool
+	usedStoredDur    bool // used stored segment Duration instead of ffprobe (non-iTunes fast path)
 	wouldChange      bool
 	roughDouble      bool
 	readErr          bool
@@ -214,6 +215,13 @@ func processBookForReextract(ctx context.Context, store database.Store, book dat
 			var segDur int
 			if f.AcoustIDFingerprintDurationSec > 0 {
 				segDur = int(math.Round(f.AcoustIDFingerprintDurationSec))
+			} else if f.ITunesPersistentID == "" && book.ITunesPersistentID == nil && f.Duration > 0 {
+				// Stored-duration fast path: non-iTunes segment with a known Duration.
+				// The iTunes-ms bug (durations stored as milliseconds instead of seconds)
+				// only affects iTunes-imported segments; organized-library files have
+				// durations measured by the scanner and can be trusted without ffprobe.
+				segDur = f.Duration
+				res.usedStoredDur = true
 			} else {
 				usedFfprobe = true
 				info, mErr := extractWithTimeout(ctx, f.FilePath)
@@ -332,8 +340,9 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 		estimated     int
 		readErr       int
 		noPath        int
-		fpBooks       int
-		ffprobeBooks  int
+		fpBooks        int
+		ffprobeBooks   int
+		storedDurBooks int
 		written        int
 		examples      = make([]string, 0, exampleCap)
 		lastLog       = time.Now()
@@ -348,8 +357,8 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 			total = examined
 		}
 		_ = reporter.UpdateProgress(examined, total, fmt.Sprintf(
-			"examined=%d eligible=%d (fp=%d ffprobe=%d) would-change=%d (~2x=%d) est-skip=%d read-err=%d",
-			examined, eligible, fpBooks, ffprobeBooks, wouldChange, roughlyDouble, estimated, readErr))
+			"examined=%d eligible=%d (fp=%d stored=%d ffprobe=%d) would-change=%d (~2x=%d) est-skip=%d read-err=%d",
+			examined, eligible, fpBooks, storedDurBooks, ffprobeBooks, wouldChange, roughlyDouble, estimated, readErr))
 		lastLog = time.Now()
 	}
 
@@ -426,6 +435,8 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 		eligible++
 		if res.usedFfprobe {
 			ffprobeBooks++
+		} else if res.usedStoredDur {
+			storedDurBooks++
 		} else {
 			fpBooks++
 		}
@@ -497,8 +508,8 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 		verb = fmt.Sprintf("corrected %d;", written)
 	}
 	summary := fmt.Sprintf(
-		"examined=%d eligible=%d (from-fingerprint=%d from-ffprobe=%d) %s would-change=%d (~2x=%d) estimated-skipped=%d read-errors=%d no-filepath=%d | e.g. %s",
-		examined, eligible, fpBooks, ffprobeBooks, verb, wouldChange, roughlyDouble, estimated, readErr, noPath,
+		"examined=%d eligible=%d (from-fingerprint=%d from-stored=%d from-ffprobe=%d) %s would-change=%d (~2x=%d) estimated-skipped=%d read-errors=%d no-filepath=%d | e.g. %s",
+		examined, eligible, fpBooks, storedDurBooks, ffprobeBooks, verb, wouldChange, roughlyDouble, estimated, readErr, noPath,
 		strings.Join(examples, ", "))
 	_ = reporter.Log(slog.LevelInfo, summary)
 	total := totalBooks

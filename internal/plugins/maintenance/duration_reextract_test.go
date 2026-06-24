@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_reextract_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4a7d1e92-8c63-4f50-a1b8-3e6c9d2f5a04
-// last-edited: 2026-06-22
+// last-edited: 2026-06-24
 
 package maintenance
 
@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
@@ -238,15 +239,15 @@ func TestDurationReextract_FingerprintDurationFirst(t *testing.T) {
 	}
 }
 
-// TestDurationReextract_MixedFingerprintAndFfprobe verifies the fallback: a book
-// with one fingerprinted segment and one never-fingerprinted segment. The
-// fingerprinted segment is sourced from the stored value; the other must fall to
-// ffprobe. Here the ffprobe segment's file does not exist, so ffprobe fails and
-// the whole book is skipped (trust invariant) — proving the missing fingerprint
-// genuinely routed to the slow path rather than being silently treated as zero.
+// TestDurationReextract_MixedFingerprintAndFfprobe verifies the ffprobe fallback
+// for iTunes-linked segments: one fingerprinted segment + one iTunes segment
+// without a fingerprint. The iTunes segment falls through to ffprobe; its file
+// is missing, so the whole book is skipped (trust invariant).
 func TestDurationReextract_MixedFingerprintAndFfprobe(t *testing.T) {
 	writes := 0
-	books := []database.Book{{ID: "bm", Title: "Mixed", FilePath: "/lib/Mixed", Duration: intPtr(120)}}
+	itunesPID := "itunes-pid-mixed"
+	bookPID := itunesPID
+	books := []database.Book{{ID: "bm", Title: "Mixed", FilePath: "/lib/Mixed", Duration: intPtr(120), ITunesPersistentID: &bookPID}}
 	store := &database.MockStore{
 		CountAllBooksFunc: func() (int, error) { return len(books), nil },
 		GetAllBooksFunc: func(_, offset int) ([]database.Book, error) {
@@ -258,7 +259,8 @@ func TestDurationReextract_MixedFingerprintAndFfprobe(t *testing.T) {
 		GetBookFilesFunc: func(string) ([]database.BookFile, error) {
 			return []database.BookFile{
 				{ID: "s1", BookID: "bm", FilePath: "/nonexistent/01.mp3", Duration: 50, AcoustIDFingerprintDurationSec: 1800.0},
-				{ID: "s2", BookID: "bm", FilePath: "/nonexistent/02.mp3", Duration: 50}, // no fingerprint → ffprobe → missing file
+				// iTunes segment, no fingerprint → must fall back to ffprobe → missing file → skip
+				{ID: "s2", BookID: "bm", FilePath: "/nonexistent/02.mp3", Duration: 50, ITunesPersistentID: itunesPID},
 			}, nil
 		},
 		UpdateBookFileFunc: func(_ string, _ *database.BookFile) error { writes++; return nil },
@@ -269,7 +271,7 @@ func TestDurationReextract_MixedFingerprintAndFfprobe(t *testing.T) {
 		t.Fatalf("run: %v", err)
 	}
 	if writes != 0 {
-		t.Errorf("book with an unreadable non-fingerprinted segment must be skipped, got %d writes", writes)
+		t.Errorf("book with an unreadable iTunes segment must be skipped, got %d writes", writes)
 	}
 }
 
@@ -319,6 +321,90 @@ func TestDurationReextract_ParallelWorkers_AllBooksProcessed(t *testing.T) {
 	}
 	if len(written) != n {
 		t.Errorf("parallel run wrote %d segments, want %d", len(written), n)
+	}
+}
+
+// TestProcessBookForReextract_StoredDuration_NonITunes verifies opt-2: when a
+// segment has no fingerprint AND is not iTunes-linked (f.ITunesPersistentID==""
+// and book.ITunesPersistentID==nil), the stored segment Duration is used without
+// shelling out to ffprobe. The file path does not exist on disk, so any ffprobe
+// attempt would produce a readErr and classify the book as ineligible. A result
+// of eligible=true proves the stored-duration path ran instead.
+func TestProcessBookForReextract_StoredDuration_NonITunes(t *testing.T) {
+	store := &database.MockStore{
+		GetBookFilesFunc: func(string) ([]database.BookFile, error) {
+			return []database.BookFile{
+				// no fingerprint, no iTunes PID, stored Duration=1800, file absent
+				{ID: "s1", FilePath: "/nonexistent/01.mp3", Duration: 1800},
+			}, nil
+		},
+	}
+	book := database.Book{ID: "b1", Duration: intPtr(100)}
+	res := processBookForReextract(context.Background(), store, book, time.Time{})
+
+	if !res.eligible {
+		t.Fatalf("expected eligible=true (stored duration used), got eligible=false readErr=%v", res.readErr)
+	}
+	if res.usedFfprobe {
+		t.Error("non-iTunes segment with stored Duration must not use ffprobe")
+	}
+	if res.newDur != 1800 {
+		t.Errorf("newDur = %d, want 1800 (stored segment Duration)", res.newDur)
+	}
+	if !res.wouldChange {
+		t.Error("book.Duration=100 vs computed=1800 must set wouldChange=true")
+	}
+}
+
+// TestProcessBookForReextract_StoredDuration_ITunes still routes to ffprobe:
+// a segment that is iTunes-linked (ITunesPersistentID!="") may have the ms-bug
+// duration and must be verified via ffprobe rather than trusting the stored value.
+// Missing file → ffprobe fails → readErr, not eligible.
+func TestProcessBookForReextract_StoredDuration_ITunes(t *testing.T) {
+	pid := "itunes-pid-001"
+	store := &database.MockStore{
+		GetBookFilesFunc: func(string) ([]database.BookFile, error) {
+			return []database.BookFile{
+				{ID: "s1", FilePath: "/nonexistent/01.mp3", Duration: 1800, ITunesPersistentID: pid},
+			}, nil
+		},
+	}
+	bookPID := pid
+	book := database.Book{ID: "b1", Duration: intPtr(100), ITunesPersistentID: &bookPID}
+	res := processBookForReextract(context.Background(), store, book, time.Time{})
+
+	if res.eligible {
+		t.Error("iTunes segment must go through ffprobe; file missing → not eligible")
+	}
+	if !res.readErr {
+		t.Error("expected readErr=true (iTunes segment, missing file, ffprobe failed)")
+	}
+}
+
+// TestProcessBookForReextract_StoredDuration_BookITunesLinked verifies that a
+// segment without its own ITunesPersistentID still falls back to ffprobe when
+// the BOOK is iTunes-linked (book.ITunesPersistentID!=nil). Some organized-library
+// books are matched to an iTunes entry but the segment files themselves don't carry
+// the PID; the book-level field is the definitive iTunes guard.
+func TestProcessBookForReextract_StoredDuration_BookITunesLinked(t *testing.T) {
+	pid := "book-itunes-pid"
+	store := &database.MockStore{
+		GetBookFilesFunc: func(string) ([]database.BookFile, error) {
+			return []database.BookFile{
+				// segment has no iTunes PID, but the BOOK is iTunes-linked
+				{ID: "s1", FilePath: "/nonexistent/01.mp3", Duration: 1800},
+			}, nil
+		},
+	}
+	bookPID := pid
+	book := database.Book{ID: "b1", Duration: intPtr(100), ITunesPersistentID: &bookPID}
+	res := processBookForReextract(context.Background(), store, book, time.Time{})
+
+	if res.eligible {
+		t.Error("book-level iTunes link must prevent stored-duration shortcut; file missing → not eligible")
+	}
+	if !res.readErr {
+		t.Error("expected readErr=true (book iTunes-linked, missing file, ffprobe failed)")
 	}
 }
 
