@@ -1,7 +1,7 @@
 // file: internal/dedup/engine.go
-// version: 1.33.0
+// version: 1.34.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
-// last-edited: 2026-06-22
+// last-edited: 2026-06-24
 
 package dedup
 
@@ -439,6 +439,42 @@ func (de *Engine) runUnifiedScoringForBook(ctx context.Context, book *database.B
 	// Get the book's files once for acoustid collectors.
 	bookFiles, _ := de.bookStore.GetBookFiles(book.ID)
 
+	// PH-3a: hoist book-only collectors outside the per-candidate loop.
+	// Each collector queries the DB once for `book` and returns signals for ALL
+	// of its pending candidates; we filter per candidate inside the loop below.
+	// Running these N times (once per candidate) multiplied DB reads by N.
+	allExactHashSigs, _ := CollectExactFileHash(de.bookStore, book)
+	allISBNSigs, _ := CollectISBNASIN(de.bookStore, book)
+	allMetaSrcSigs, _ := CollectMetaSrcHash(de.bookStore, book)
+	allDurationSigs, _ := CollectDuration(de.bookStore, de.bookStore, book, durCfg)
+
+	// AcoustID: collect across all bookFiles once (same hoist rationale).
+	var allExactAcoustSigs, allLSHAcoustSigs []unified.Signal
+	if de.acoustidBookFileStore != nil {
+		for _, bf := range bookFiles {
+			sigs, _ := CollectExactAcoustID(de.acoustidBookFileStore, &bf, book.ID)
+			allExactAcoustSigs = append(allExactAcoustSigs, sigs...)
+		}
+	}
+	if de.lshAcoustIDStore != nil {
+		for _, bf := range bookFiles {
+			sigs, _ := CollectLSHAcoustID(de.lshAcoustIDStore, &bf, book.ID, lshCfg)
+			allLSHAcoustSigs = append(allLSHAcoustSigs, sigs...)
+		}
+	}
+
+	// PH-3b: build O(1) embedding map so the per-candidate inner scan
+	// (previously O(k)) becomes a single map lookup.
+	// Index both directions so lookup works regardless of which side is EntityA.
+	type pairKey = [2]string
+	embeddingMap := make(map[pairKey]float64, len(bookCandidates))
+	for _, c := range bookCandidates {
+		if c.Layer == "embedding" && c.Similarity != nil {
+			embeddingMap[pairKey{c.EntityAID, c.EntityBID}] = *c.Similarity
+			embeddingMap[pairKey{c.EntityBID, c.EntityAID}] = *c.Similarity
+		}
+	}
+
 	for _, ref := range embeddingCandIDs {
 		candID := ref.otherID
 		otherBook, err := de.bookStore.GetBookByID(candID)
@@ -465,97 +501,72 @@ func (de *Engine) runUnifiedScoringForBook(ctx context.Context, book *database.B
 		// 2. Collect signals from all available collectors.
 		var signals []unified.Signal
 
-		// Exact-file hash signals.
-		if sigs, err := CollectExactFileHash(de.bookStore, book); err == nil {
-			for _, s := range sigs {
-				// Only keep signals that match this specific candidate.
-				if isSigForPair(s, book.ID, candID) {
-					signals = append(signals, s)
-				}
+		// Exact-file hash signals (pre-computed above).
+		for _, s := range allExactHashSigs {
+			if isSigForPair(s, book.ID, candID) {
+				signals = append(signals, s)
 			}
 		}
 
-		// ISBN/ASIN — only emit if candidate matches.
-		if sigs, err := CollectISBNASIN(de.bookStore, book); err == nil {
-			for _, s := range sigs {
-				if isSigForPair(s, book.ID, candID) {
-					signals = append(signals, s)
-				}
+		// ISBN/ASIN (pre-computed above).
+		for _, s := range allISBNSigs {
+			if isSigForPair(s, book.ID, candID) {
+				signals = append(signals, s)
 			}
 		}
 
-		// Metadata source hash.
-		if sigs, err := CollectMetaSrcHash(de.bookStore, book); err == nil {
-			for _, s := range sigs {
-				if isSigForPair(s, book.ID, candID) {
-					signals = append(signals, s)
-				}
+		// Metadata source hash (pre-computed above).
+		for _, s := range allMetaSrcSigs {
+			if isSigForPair(s, book.ID, candID) {
+				signals = append(signals, s)
 			}
 		}
 
-		// Embedding signal from existing candidate row (avoid re-scanning).
-		for _, c := range bookCandidates {
-			if (c.EntityAID == book.ID && c.EntityBID == candID) ||
-				(c.EntityBID == book.ID && c.EntityAID == candID) {
-				if c.Similarity != nil && c.Layer == "embedding" {
-					cos := float32(*c.Similarity)
-					if float64(cos) >= embCfg.HighThreshold {
-						signals = append(signals, unified.Signal{
-							Kind:       unified.SigEmbedHigh,
-							Raw:        float64(cos),
-							Confidence: embedHighConfidence(cos),
-							Evidence: fmt.Sprintf(
-								"embedding cosine %.4f (high tier): book %s ↔ %s",
-								cos, book.ID, candID),
-						})
-					} else if float64(cos) >= embCfg.LowThreshold {
-						signals = append(signals, unified.Signal{
-							Kind:       unified.SigEmbedMedium,
-							Raw:        float64(cos),
-							Confidence: embedMediumConfidence(cos),
-							Evidence: fmt.Sprintf(
-								"embedding cosine %.4f (medium tier): book %s ↔ %s",
-								cos, book.ID, candID),
-						})
-					}
-				}
-				break
+		// Embedding signal — O(1) map lookup (PH-3b).
+		if cos, ok := embeddingMap[pairKey{book.ID, candID}]; ok {
+			cos32 := float32(cos)
+			if cos >= embCfg.HighThreshold {
+				signals = append(signals, unified.Signal{
+					Kind:       unified.SigEmbedHigh,
+					Raw:        cos,
+					Confidence: embedHighConfidence(cos32),
+					Evidence: fmt.Sprintf(
+						"embedding cosine %.4f (high tier): book %s ↔ %s",
+						cos32, book.ID, candID),
+				})
+			} else if cos >= embCfg.LowThreshold {
+				signals = append(signals, unified.Signal{
+					Kind:       unified.SigEmbedMedium,
+					Raw:        cos,
+					Confidence: embedMediumConfidence(cos32),
+					Evidence: fmt.Sprintf(
+						"embedding cosine %.4f (medium tier): book %s ↔ %s",
+						cos32, book.ID, candID),
+				})
 			}
 		}
 
-		// Duration signal.
-		if sigs, err := CollectDuration(de.bookStore, de.bookStore, book, durCfg); err == nil {
-			for _, s := range sigs {
-				if isDurationSigFor(s.Evidence, book.ID, candID) {
-					signals = append(signals, s)
-				}
+		// Duration signal (pre-computed above).
+		for _, s := range allDurationSigs {
+			if isDurationSigFor(s.Evidence, book.ID, candID) {
+				signals = append(signals, s)
 			}
 		}
 
-		// Metadata-fuzzy (uses embedding top-K candidates only per spec).
+		// Metadata-fuzzy (per-candidate by design — takes candIDs param).
 		if sigs, err := CollectMetaFuzzy(de.bookStore, book, authorName, []string{candID}, fuzCfg); err == nil {
 			signals = append(signals, sigs...)
 		}
 
-		// AcoustID collectors (T013) — run per BookFile of the query book.
-		if de.acoustidBookFileStore != nil {
-			for _, bf := range bookFiles {
-				exactSigs, _ := CollectExactAcoustID(de.acoustidBookFileStore, &bf, book.ID)
-				for _, s := range exactSigs {
-					if isSigForBookID(s.Evidence, candID) {
-						signals = append(signals, s)
-					}
-				}
+		// AcoustID signals (pre-computed above).
+		for _, s := range allExactAcoustSigs {
+			if isSigForBookID(s.Evidence, candID) {
+				signals = append(signals, s)
 			}
 		}
-		if de.lshAcoustIDStore != nil {
-			for _, bf := range bookFiles {
-				lshSigs, _ := CollectLSHAcoustID(de.lshAcoustIDStore, &bf, book.ID, lshCfg)
-				for _, s := range lshSigs {
-					if isSigForBookID(s.Evidence, candID) {
-						signals = append(signals, s)
-					}
-				}
+		for _, s := range allLSHAcoustSigs {
+			if isSigForBookID(s.Evidence, candID) {
+				signals = append(signals, s)
 			}
 		}
 
@@ -2210,10 +2221,12 @@ func (de *Engine) PurgeStaleCandidates(ctx context.Context) (int, error) {
 	// would delete every previously-merged candidate (because merged
 	// books share a version_group_id, which is one of the stale-rule
 	// conditions below), making the Merged tab useless.
+	// PH-3c: raised from 100K to 1M so a large library's tail of stale candidates
+	// is not silently left un-purged across runs.
 	candidates, _, err := de.embedStore.ListCandidates(database.CandidateFilter{
 		EntityType: "book",
 		Status:     "pending",
-		Limit:      100000,
+		Limit:      1000000,
 	})
 	if err != nil {
 		err := fmt.Errorf("list candidates: %w", err)
