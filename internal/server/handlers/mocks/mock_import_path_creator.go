@@ -72,7 +72,7 @@ type MockImportPathCreator_CreateImportPath_Call struct {
 // CreateImportPath is a helper method to define mock.On call
 //   - path string
 //   - name string
-func (_e *MockImportPathCreator_Expecter) CreateImportPath(path interface{}, name interface{}) *MockImportPathCreator_CreateImportPath_Call {
+func (_e *MockImportPathCreator_Expecter) CreateImportPath(path any, name any) *MockImportPathCreator_CreateImportPath_Call {
 	return &MockImportPathCreator_CreateImportPath_Call{Call: _e.mock.On("CreateImportPath", path, name)}
 }
 

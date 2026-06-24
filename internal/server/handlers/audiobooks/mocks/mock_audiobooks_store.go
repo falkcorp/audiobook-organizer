@@ -65,7 +65,7 @@ type MockAudiobooksStore_AddBookAlternativeTitle_Call struct {
 //   - title string
 //   - source string
 //   - language string
-func (_e *MockAudiobooksStore_Expecter) AddBookAlternativeTitle(bookID interface{}, title interface{}, source interface{}, language interface{}) *MockAudiobooksStore_AddBookAlternativeTitle_Call {
+func (_e *MockAudiobooksStore_Expecter) AddBookAlternativeTitle(bookID any, title any, source any, language any) *MockAudiobooksStore_AddBookAlternativeTitle_Call {
 	return &MockAudiobooksStore_AddBookAlternativeTitle_Call{Call: _e.mock.On("AddBookAlternativeTitle", bookID, title, source, language)}
 }
 
@@ -142,7 +142,7 @@ type MockAudiobooksStore_GetAuthorByID_Call struct {
 
 // GetAuthorByID is a helper method to define mock.On call
 //   - id int
-func (_e *MockAudiobooksStore_Expecter) GetAuthorByID(id interface{}) *MockAudiobooksStore_GetAuthorByID_Call {
+func (_e *MockAudiobooksStore_Expecter) GetAuthorByID(id any) *MockAudiobooksStore_GetAuthorByID_Call {
 	return &MockAudiobooksStore_GetAuthorByID_Call{Call: _e.mock.On("GetAuthorByID", id)}
 }
 
@@ -204,7 +204,7 @@ type MockAudiobooksStore_GetBookAlternativeTitles_Call struct {
 
 // GetBookAlternativeTitles is a helper method to define mock.On call
 //   - bookID string
-func (_e *MockAudiobooksStore_Expecter) GetBookAlternativeTitles(bookID interface{}) *MockAudiobooksStore_GetBookAlternativeTitles_Call {
+func (_e *MockAudiobooksStore_Expecter) GetBookAlternativeTitles(bookID any) *MockAudiobooksStore_GetBookAlternativeTitles_Call {
 	return &MockAudiobooksStore_GetBookAlternativeTitles_Call{Call: _e.mock.On("GetBookAlternativeTitles", bookID)}
 }
 
@@ -266,7 +266,7 @@ type MockAudiobooksStore_GetBookAuthors_Call struct {
 
 // GetBookAuthors is a helper method to define mock.On call
 //   - bookID string
-func (_e *MockAudiobooksStore_Expecter) GetBookAuthors(bookID interface{}) *MockAudiobooksStore_GetBookAuthors_Call {
+func (_e *MockAudiobooksStore_Expecter) GetBookAuthors(bookID any) *MockAudiobooksStore_GetBookAuthors_Call {
 	return &MockAudiobooksStore_GetBookAuthors_Call{Call: _e.mock.On("GetBookAuthors", bookID)}
 }
 
@@ -328,7 +328,7 @@ type MockAudiobooksStore_GetBookByID_Call struct {
 
 // GetBookByID is a helper method to define mock.On call
 //   - id string
-func (_e *MockAudiobooksStore_Expecter) GetBookByID(id interface{}) *MockAudiobooksStore_GetBookByID_Call {
+func (_e *MockAudiobooksStore_Expecter) GetBookByID(id any) *MockAudiobooksStore_GetBookByID_Call {
 	return &MockAudiobooksStore_GetBookByID_Call{Call: _e.mock.On("GetBookByID", id)}
 }
 
@@ -391,7 +391,7 @@ type MockAudiobooksStore_GetBookChangeHistory_Call struct {
 // GetBookChangeHistory is a helper method to define mock.On call
 //   - bookID string
 //   - limit int
-func (_e *MockAudiobooksStore_Expecter) GetBookChangeHistory(bookID interface{}, limit interface{}) *MockAudiobooksStore_GetBookChangeHistory_Call {
+func (_e *MockAudiobooksStore_Expecter) GetBookChangeHistory(bookID any, limit any) *MockAudiobooksStore_GetBookChangeHistory_Call {
 	return &MockAudiobooksStore_GetBookChangeHistory_Call{Call: _e.mock.On("GetBookChangeHistory", bookID, limit)}
 }
 
@@ -458,7 +458,7 @@ type MockAudiobooksStore_GetBookChanges_Call struct {
 
 // GetBookChanges is a helper method to define mock.On call
 //   - bookID string
-func (_e *MockAudiobooksStore_Expecter) GetBookChanges(bookID interface{}) *MockAudiobooksStore_GetBookChanges_Call {
+func (_e *MockAudiobooksStore_Expecter) GetBookChanges(bookID any) *MockAudiobooksStore_GetBookChanges_Call {
 	return &MockAudiobooksStore_GetBookChanges_Call{Call: _e.mock.On("GetBookChanges", bookID)}
 }
 
@@ -521,7 +521,7 @@ type MockAudiobooksStore_GetBookFileByID_Call struct {
 // GetBookFileByID is a helper method to define mock.On call
 //   - bookID string
 //   - fileID string
-func (_e *MockAudiobooksStore_Expecter) GetBookFileByID(bookID interface{}, fileID interface{}) *MockAudiobooksStore_GetBookFileByID_Call {
+func (_e *MockAudiobooksStore_Expecter) GetBookFileByID(bookID any, fileID any) *MockAudiobooksStore_GetBookFileByID_Call {
 	return &MockAudiobooksStore_GetBookFileByID_Call{Call: _e.mock.On("GetBookFileByID", bookID, fileID)}
 }
 
@@ -588,7 +588,7 @@ type MockAudiobooksStore_GetBookFiles_Call struct {
 
 // GetBookFiles is a helper method to define mock.On call
 //   - bookID string
-func (_e *MockAudiobooksStore_Expecter) GetBookFiles(bookID interface{}) *MockAudiobooksStore_GetBookFiles_Call {
+func (_e *MockAudiobooksStore_Expecter) GetBookFiles(bookID any) *MockAudiobooksStore_GetBookFiles_Call {
 	return &MockAudiobooksStore_GetBookFiles_Call{Call: _e.mock.On("GetBookFiles", bookID)}
 }
 
@@ -650,7 +650,7 @@ type MockAudiobooksStore_GetBookNarrators_Call struct {
 
 // GetBookNarrators is a helper method to define mock.On call
 //   - bookID string
-func (_e *MockAudiobooksStore_Expecter) GetBookNarrators(bookID interface{}) *MockAudiobooksStore_GetBookNarrators_Call {
+func (_e *MockAudiobooksStore_Expecter) GetBookNarrators(bookID any) *MockAudiobooksStore_GetBookNarrators_Call {
 	return &MockAudiobooksStore_GetBookNarrators_Call{Call: _e.mock.On("GetBookNarrators", bookID)}
 }
 
@@ -712,7 +712,7 @@ type MockAudiobooksStore_GetBookPathHistory_Call struct {
 
 // GetBookPathHistory is a helper method to define mock.On call
 //   - bookID string
-func (_e *MockAudiobooksStore_Expecter) GetBookPathHistory(bookID interface{}) *MockAudiobooksStore_GetBookPathHistory_Call {
+func (_e *MockAudiobooksStore_Expecter) GetBookPathHistory(bookID any) *MockAudiobooksStore_GetBookPathHistory_Call {
 	return &MockAudiobooksStore_GetBookPathHistory_Call{Call: _e.mock.On("GetBookPathHistory", bookID)}
 }
 
@@ -774,7 +774,7 @@ type MockAudiobooksStore_GetBookTagsDetailed_Call struct {
 
 // GetBookTagsDetailed is a helper method to define mock.On call
 //   - bookID string
-func (_e *MockAudiobooksStore_Expecter) GetBookTagsDetailed(bookID interface{}) *MockAudiobooksStore_GetBookTagsDetailed_Call {
+func (_e *MockAudiobooksStore_Expecter) GetBookTagsDetailed(bookID any) *MockAudiobooksStore_GetBookTagsDetailed_Call {
 	return &MockAudiobooksStore_GetBookTagsDetailed_Call{Call: _e.mock.On("GetBookTagsDetailed", bookID)}
 }
 
@@ -948,7 +948,7 @@ type MockAudiobooksStore_GetMetadataChangeHistory_Call struct {
 //   - bookID string
 //   - field string
 //   - limit int
-func (_e *MockAudiobooksStore_Expecter) GetMetadataChangeHistory(bookID interface{}, field interface{}, limit interface{}) *MockAudiobooksStore_GetMetadataChangeHistory_Call {
+func (_e *MockAudiobooksStore_Expecter) GetMetadataChangeHistory(bookID any, field any, limit any) *MockAudiobooksStore_GetMetadataChangeHistory_Call {
 	return &MockAudiobooksStore_GetMetadataChangeHistory_Call{Call: _e.mock.On("GetMetadataChangeHistory", bookID, field, limit)}
 }
 
@@ -1020,7 +1020,7 @@ type MockAudiobooksStore_GetNarratorByID_Call struct {
 
 // GetNarratorByID is a helper method to define mock.On call
 //   - id int
-func (_e *MockAudiobooksStore_Expecter) GetNarratorByID(id interface{}) *MockAudiobooksStore_GetNarratorByID_Call {
+func (_e *MockAudiobooksStore_Expecter) GetNarratorByID(id any) *MockAudiobooksStore_GetNarratorByID_Call {
 	return &MockAudiobooksStore_GetNarratorByID_Call{Call: _e.mock.On("GetNarratorByID", id)}
 }
 
@@ -1071,7 +1071,7 @@ type MockAudiobooksStore_RecordMetadataChange_Call struct {
 
 // RecordMetadataChange is a helper method to define mock.On call
 //   - record *database.MetadataChangeRecord
-func (_e *MockAudiobooksStore_Expecter) RecordMetadataChange(record interface{}) *MockAudiobooksStore_RecordMetadataChange_Call {
+func (_e *MockAudiobooksStore_Expecter) RecordMetadataChange(record any) *MockAudiobooksStore_RecordMetadataChange_Call {
 	return &MockAudiobooksStore_RecordMetadataChange_Call{Call: _e.mock.On("RecordMetadataChange", record)}
 }
 
@@ -1123,7 +1123,7 @@ type MockAudiobooksStore_RemoveBookAlternativeTitle_Call struct {
 // RemoveBookAlternativeTitle is a helper method to define mock.On call
 //   - bookID string
 //   - title string
-func (_e *MockAudiobooksStore_Expecter) RemoveBookAlternativeTitle(bookID interface{}, title interface{}) *MockAudiobooksStore_RemoveBookAlternativeTitle_Call {
+func (_e *MockAudiobooksStore_Expecter) RemoveBookAlternativeTitle(bookID any, title any) *MockAudiobooksStore_RemoveBookAlternativeTitle_Call {
 	return &MockAudiobooksStore_RemoveBookAlternativeTitle_Call{Call: _e.mock.On("RemoveBookAlternativeTitle", bookID, title)}
 }
 
@@ -1180,7 +1180,7 @@ type MockAudiobooksStore_SetLastWrittenAt_Call struct {
 // SetLastWrittenAt is a helper method to define mock.On call
 //   - bookID string
 //   - t time.Time
-func (_e *MockAudiobooksStore_Expecter) SetLastWrittenAt(bookID interface{}, t interface{}) *MockAudiobooksStore_SetLastWrittenAt_Call {
+func (_e *MockAudiobooksStore_Expecter) SetLastWrittenAt(bookID any, t any) *MockAudiobooksStore_SetLastWrittenAt_Call {
 	return &MockAudiobooksStore_SetLastWrittenAt_Call{Call: _e.mock.On("SetLastWrittenAt", bookID, t)}
 }
 
@@ -1248,7 +1248,7 @@ type MockAudiobooksStore_UpdateBook_Call struct {
 // UpdateBook is a helper method to define mock.On call
 //   - id string
 //   - book *database.Book
-func (_e *MockAudiobooksStore_Expecter) UpdateBook(id interface{}, book interface{}) *MockAudiobooksStore_UpdateBook_Call {
+func (_e *MockAudiobooksStore_Expecter) UpdateBook(id any, book any) *MockAudiobooksStore_UpdateBook_Call {
 	return &MockAudiobooksStore_UpdateBook_Call{Call: _e.mock.On("UpdateBook", id, book)}
 }
 
@@ -1305,7 +1305,7 @@ type MockAudiobooksStore_UpdateBookFile_Call struct {
 // UpdateBookFile is a helper method to define mock.On call
 //   - id string
 //   - file *database.BookFile
-func (_e *MockAudiobooksStore_Expecter) UpdateBookFile(id interface{}, file interface{}) *MockAudiobooksStore_UpdateBookFile_Call {
+func (_e *MockAudiobooksStore_Expecter) UpdateBookFile(id any, file any) *MockAudiobooksStore_UpdateBookFile_Call {
 	return &MockAudiobooksStore_UpdateBookFile_Call{Call: _e.mock.On("UpdateBookFile", id, file)}
 }
 
@@ -1361,7 +1361,7 @@ type MockAudiobooksStore_UpsertBookFile_Call struct {
 
 // UpsertBookFile is a helper method to define mock.On call
 //   - file *database.BookFile
-func (_e *MockAudiobooksStore_Expecter) UpsertBookFile(file interface{}) *MockAudiobooksStore_UpsertBookFile_Call {
+func (_e *MockAudiobooksStore_Expecter) UpsertBookFile(file any) *MockAudiobooksStore_UpsertBookFile_Call {
 	return &MockAudiobooksStore_UpsertBookFile_Call{Call: _e.mock.On("UpsertBookFile", file)}
 }
 

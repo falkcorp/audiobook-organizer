@@ -75,7 +75,7 @@ type MockAudiobookUpdater_UpdateAudiobook_Call struct {
 //   - ctx context.Context
 //   - id string
 //   - payload map[string]any
-func (_e *MockAudiobookUpdater_Expecter) UpdateAudiobook(ctx interface{}, id interface{}, payload interface{}) *MockAudiobookUpdater_UpdateAudiobook_Call {
+func (_e *MockAudiobookUpdater_Expecter) UpdateAudiobook(ctx any, id any, payload any) *MockAudiobookUpdater_UpdateAudiobook_Call {
 	return &MockAudiobookUpdater_UpdateAudiobook_Call{Call: _e.mock.On("UpdateAudiobook", ctx, id, payload)}
 }
 

@@ -105,7 +105,7 @@ type MockProgressReporter_Log_Call struct {
 //   - level string
 //   - message string
 //   - details *string
-func (_e *MockProgressReporter_Expecter) Log(level interface{}, message interface{}, details interface{}) *MockProgressReporter_Log_Call {
+func (_e *MockProgressReporter_Expecter) Log(level any, message any, details any) *MockProgressReporter_Log_Call {
 	return &MockProgressReporter_Log_Call{Call: _e.mock.On("Log", level, message, details)}
 }
 
@@ -168,7 +168,7 @@ type MockProgressReporter_UpdateProgress_Call struct {
 //   - current int
 //   - total int
 //   - message string
-func (_e *MockProgressReporter_Expecter) UpdateProgress(current interface{}, total interface{}, message interface{}) *MockProgressReporter_UpdateProgress_Call {
+func (_e *MockProgressReporter_Expecter) UpdateProgress(current any, total any, message any) *MockProgressReporter_UpdateProgress_Call {
 	return &MockProgressReporter_UpdateProgress_Call{Call: _e.mock.On("UpdateProgress", current, total, message)}
 }
 

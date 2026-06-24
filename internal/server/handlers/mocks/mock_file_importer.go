@@ -71,7 +71,7 @@ type MockFileImporter_ImportFile_Call struct {
 
 // ImportFile is a helper method to define mock.On call
 //   - req *importer.ImportFileRequest
-func (_e *MockFileImporter_Expecter) ImportFile(req interface{}) *MockFileImporter_ImportFile_Call {
+func (_e *MockFileImporter_Expecter) ImportFile(req any) *MockFileImporter_ImportFile_Call {
 	return &MockFileImporter_ImportFile_Call{Call: _e.mock.On("ImportFile", req)}
 }
 

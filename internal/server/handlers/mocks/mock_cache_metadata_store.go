@@ -68,7 +68,7 @@ type MockCacheMetadataStore_CountPrefix_Call struct {
 
 // CountPrefix is a helper method to define mock.On call
 //   - prefix string
-func (_e *MockCacheMetadataStore_Expecter) CountPrefix(prefix interface{}) *MockCacheMetadataStore_CountPrefix_Call {
+func (_e *MockCacheMetadataStore_Expecter) CountPrefix(prefix any) *MockCacheMetadataStore_CountPrefix_Call {
 	return &MockCacheMetadataStore_CountPrefix_Call{Call: _e.mock.On("CountPrefix", prefix)}
 }
 

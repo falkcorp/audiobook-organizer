@@ -72,7 +72,7 @@ type MockRenameServicer_ApplyRename_Call struct {
 // ApplyRename is a helper method to define mock.On call
 //   - bookID string
 //   - operationID string
-func (_e *MockRenameServicer_Expecter) ApplyRename(bookID interface{}, operationID interface{}) *MockRenameServicer_ApplyRename_Call {
+func (_e *MockRenameServicer_Expecter) ApplyRename(bookID any, operationID any) *MockRenameServicer_ApplyRename_Call {
 	return &MockRenameServicer_ApplyRename_Call{Call: _e.mock.On("ApplyRename", bookID, operationID)}
 }
 
@@ -139,7 +139,7 @@ type MockRenameServicer_PreviewRename_Call struct {
 
 // PreviewRename is a helper method to define mock.On call
 //   - bookID string
-func (_e *MockRenameServicer_Expecter) PreviewRename(bookID interface{}) *MockRenameServicer_PreviewRename_Call {
+func (_e *MockRenameServicer_Expecter) PreviewRename(bookID any) *MockRenameServicer_PreviewRename_Call {
 	return &MockRenameServicer_PreviewRename_Call{Call: _e.mock.On("PreviewRename", bookID)}
 }
 
