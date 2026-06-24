@@ -1,11 +1,27 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.80.0 -->
+<!-- version: 3.81.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
-<!-- last-edited: 2026-06-23 -->
+<!-- last-edited: 2026-06-24 -->
 
 # Changelog
 
 ## [Unreleased]
+
+### Performance
+
+#### June 24, 2026 — PH-3: dedup engine optimizations (PR #1617)
+
+- **`perf(dedup)`** PH-3a — Hoisted book-only signal collectors (`CollectExactFileHash`, `CollectISBNASIN`, `CollectMetaSrcHash`, `CollectDuration`, both AcoustID collectors) outside the per-candidate loop in `runUnifiedScoringForBook`. These depend only on `book`, not the specific candidate — running them N times per book multiplied DB reads by N. Now computed once; each iteration filters from the pre-built slice.
+- **`perf(dedup)`** PH-3b — Replaced O(k) inner scan for embedding signal with O(1) map lookup. Pre-built `map[[2]string]float64` indexes both pair directions before the outer loop; was O(k²) total for a book with k candidates.
+- **`perf(dedup)`** PH-3c — Purge-stale candidate cap raised from 100K → 1M. Libraries with >100K pending candidates were silently leaving the tail un-purged on every maintenance run.
+
+### Bug Fixes
+
+#### June 24, 2026 — CI green: mock gaps + apiFetch assertion drift (PR #1616)
+
+- **`fix(test)`** Added `CountAllBooks` method + Expecter scaffold to `MockMetadataStore` and `MockPlaylistStore` in the handler mocks. `database.BookStore` gained `CountAllBooks` in a prior PR; the mocks were not regenerated, breaking `go vet` and `Go Tests (short, race)` in CI.
+- **`fix(test)`** Added `getSystemStorage` to the `vi.mock('./services/api')` factory in `App.test.tsx`. `QuotaTab` calls `api.getSystemStorage()` at render time; the missing export threw on test startup.
+- **`fix(test)`** Updated 4 fetch call assertions in `api.test.ts` from exact-match to `expect.objectContaining`/`expect.any(Object)` after the `apiFetch` wrapper (PR #1580) added `credentials: 'include'` + a `Headers` instance to every call.
 
 ### Architecture
 
