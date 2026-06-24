@@ -89,6 +89,59 @@ func (_c *MockMetadataStore_AddMetadataRejection_Call) RunAndReturn(run func(r d
 	return _c
 }
 
+// CountAllBooks provides a mock function for the type MockMetadataStore
+func (_mock *MockMetadataStore) CountAllBooks() (int, error) {
+	ret := _mock.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for CountAllBooks")
+	}
+
+	var r0 int
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func() (int, error)); ok {
+		return returnFunc()
+	}
+	if returnFunc, ok := ret.Get(0).(func() int); ok {
+		r0 = returnFunc()
+	} else {
+		r0 = ret.Get(0).(int)
+	}
+	if returnFunc, ok := ret.Get(1).(func() error); ok {
+		r1 = returnFunc()
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockMetadataStore_CountAllBooks_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CountAllBooks'
+type MockMetadataStore_CountAllBooks_Call struct {
+	*mock.Call
+}
+
+// CountAllBooks is a helper method to define mock.On call
+func (_e *MockMetadataStore_Expecter) CountAllBooks() *MockMetadataStore_CountAllBooks_Call {
+	return &MockMetadataStore_CountAllBooks_Call{Call: _e.mock.On("CountAllBooks")}
+}
+
+func (_c *MockMetadataStore_CountAllBooks_Call) Run(run func()) *MockMetadataStore_CountAllBooks_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockMetadataStore_CountAllBooks_Call) Return(n int, err error) *MockMetadataStore_CountAllBooks_Call {
+	_c.Call.Return(n, err)
+	return _c
+}
+
+func (_c *MockMetadataStore_CountAllBooks_Call) RunAndReturn(run func() (int, error)) *MockMetadataStore_CountAllBooks_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // CountPrimaryBooks provides a mock function for the type MockMetadataStore
 func (_mock *MockMetadataStore) CountPrimaryBooks() (int, error) {
 	ret := _mock.Called()
