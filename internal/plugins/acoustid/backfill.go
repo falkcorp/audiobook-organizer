@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/backfill.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: f6a7b8c9-d0e1-2345-def0-123456789abc
-// last-edited: 2026-06-11
+// last-edited: 2026-06-24
 
 package acoustid
 
@@ -18,17 +18,15 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
-// BackfillParams encodes the checkpoint state for resumable backfill.
+// BackfillParams is the checkpoint state written by reporter.Checkpoint and
+// restored into params on ResumeRestart. RunItems drives the loop; progress
+// counters are handled by reporter.UpdateProgress.
 type BackfillParams struct {
 	LastProcessedBookID string `json:"last_processed_book_id,omitempty"`
-	Stats               struct {
-		Fingerprinted int `json:"fingerprinted"`
-		Skipped       int `json:"skipped"`
-		Failed        int `json:"failed"`
-	} `json:"stats"`
 }
 
 func (p *Plugin) backfillDef() sdk.OperationDef {
@@ -111,17 +109,16 @@ func (p *Plugin) runBackfill(ctx context.Context, params json.RawMessage, report
 		return nil
 	}
 
-	for i := startIdx; i < total; i++ {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
+	slice := books[startIdx:]
 
-		b := books[i]
-		files, err := p.store.GetBookFiles(b.ID)
-		if err != nil {
-			continue
+	// lastID is captured by both the item fn and CheckpointFn to thread the
+	// current book ID through without a shared struct that would need a mutex.
+	var lastID string
+
+	err = registry.RunItems(ctx, reporter, slice, func(ctx context.Context, b database.Book) error {
+		files, ferr := p.store.GetBookFiles(b.ID)
+		if ferr != nil {
+			return nil // non-fatal: skip this book
 		}
 
 		bookModified := false
@@ -139,25 +136,26 @@ func (p *Plugin) runBackfill(ctx context.Context, params json.RawMessage, report
 			}
 		}
 
-		// After fingerprinting all files for this book, synthesize the book signature
 		if bookModified || b.BookSigV1 == nil {
 			if err := synthesizeBookSignatureForBook(p.store, b.ID); err != nil {
 				reporter.Logger().Warn("synthesize book signature", "book_id", b.ID, "error", err)
 			}
 		}
 
-		if i%25 == 0 || i == total-1 {
-			prog.StepN(i+1,
-				fmt.Sprintf("Books %d/%d (fp=%d skip=%d fail=%d)", i+1, total, fingerprinted, skipped, failed))
-
-			// Checkpoint progress every 25 books for resumability
-			state.LastProcessedBookID = b.ID
-			state.Stats.Fingerprinted = fingerprinted
-			state.Stats.Skipped = skipped
-			state.Stats.Failed = failed
-			stateJSON, _ := json.Marshal(state)
-			_ = reporter.Checkpoint(stateJSON)
-		}
+		lastID = b.ID
+		return nil
+	}, registry.RunItemsOptions{
+		Label: func(i, t int) string {
+			return fmt.Sprintf("Books %d/%d (fp=%d skip=%d fail=%d)",
+				startIdx+i+1, total, fingerprinted, skipped, failed)
+		},
+		CheckpointFn: func(ctx context.Context) error {
+			cp := BackfillParams{LastProcessedBookID: lastID}
+			return reporter.Checkpoint(cp)
+		},
+	})
+	if err != nil {
+		return err
 	}
 
 	prog.Done(fmt.Sprintf("Acoustid backfill complete: fingerprinted=%d skipped=%d failed=%d",

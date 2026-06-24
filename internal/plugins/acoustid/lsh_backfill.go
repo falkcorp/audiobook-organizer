@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/lsh_backfill.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2c4d6e80-3b5a-4f9c-9b1d-7e8f0a2b4c6d
-// last-edited: 2026-05-30
+// last-edited: 2026-06-24
 
 package acoustid
 
@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -91,47 +93,30 @@ func (p *Plugin) runLSHBackfill(ctx context.Context, _ json.RawMessage, reporter
 
 	var indexed, skippedNoFP, skippedAlreadyIndexed, failed int
 
-	for i := range files {
-		select {
-		case <-ctx.Done():
-			log.Info("acoustid lsh-backfill: cancelled",
-				"processed", i,
-				"indexed", indexed,
-				"skipped_no_fp", skippedNoFP,
-				"skipped_already_indexed", skippedAlreadyIndexed,
-				"failed", failed,
-				"elapsed", time.Since(startedAt).Round(time.Second))
-			return ctx.Err()
-		default:
-		}
-
-		f := files[i]
-
+	if err := registry.RunItems(ctx, reporter, files, func(ctx context.Context, f database.BookFile) error {
 		if len(f.AcoustIDFingerprint) == 0 {
 			skippedNoFP++
 		} else if hasChecker && checker.HasLSHIndex(f.ID) {
 			skippedAlreadyIndexed++
 		} else {
-			// Re-save the row so PebbleStore.writeBookFileSecondaryIndexes
-			// (added by the sibling pebble agent) writes the fpidx +
-			// fpidx_meta entries. We pass the row through unmodified —
-			// this is just a hook trigger.
+			// Re-save the row so PebbleStore.writeBookFileSecondaryIndexes writes
+			// the fpidx + fpidx_meta entries. Passed unmodified — just a hook trigger.
 			updated := f
 			if err := p.store.UpdateBookFile(f.ID, &updated); err != nil {
-				log.Warn("acoustid lsh-backfill: update failed",
-					"id", f.ID, "err", err)
+				log.Warn("acoustid lsh-backfill: update failed", "id", f.ID, "err", err)
 				failed++
 			} else {
 				indexed++
 			}
 		}
-
-		processed := i + 1
-		if processed%lshBackfillProgressEvery == 0 || processed == total {
-			prog.StepN(processed,
-				fmt.Sprintf("LSH backfill %d/%d (indexed=%d skip-no-fp=%d skip-existing=%d fail=%d)",
-					processed, total, indexed, skippedNoFP, skippedAlreadyIndexed, failed))
-		}
+		return nil
+	}, registry.RunItemsOptions{
+		Label: func(i, t int) string {
+			return fmt.Sprintf("LSH backfill %d/%d (indexed=%d skip-no-fp=%d skip-existing=%d fail=%d)",
+				i+1, t, indexed, skippedNoFP, skippedAlreadyIndexed, failed)
+		},
+	}); err != nil {
+		return err
 	}
 
 	log.Info("acoustid lsh-backfill: complete",

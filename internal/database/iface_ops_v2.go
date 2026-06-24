@@ -168,6 +168,10 @@ type OpsV2Store interface {
 	// UpsertOpStateV2 inserts or replaces a checkpoint row in op_state_v2.
 	UpsertOpStateV2(row OpStateV2Row) error
 
+	// UpdateOperationV2Params replaces the params blob on an operation row.
+	// Used by resumeRestart to inject checkpoint state before re-dispatch.
+	UpdateOperationV2Params(id string, params []byte) error
+
 	// ListOperationsV2Since returns all operations whose queued_at timestamp is
 	// at or after the given time, ordered by started_at DESC NULLS LAST,
 	// queued_at DESC. At most limit rows are returned (0 = use a safe default).

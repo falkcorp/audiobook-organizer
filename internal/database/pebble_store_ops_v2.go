@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2.go
-// version: 3.3.0
+// version: 3.4.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-06-13
+// last-edited: 2026-06-24
 
 // pebble_store_ops_v2 implements OpsV2Store for PebbleDB (the primary production
 // database). Key schema (all prefixed with "opv2:"):
@@ -378,6 +378,22 @@ func (p *PebbleStore) GetOpStateV2(opID string) (*OpStateV2Row, error) {
 // DeleteOpStateV2 removes the state blob for an op.
 func (p *PebbleStore) DeleteOpStateV2(opID string) error {
 	return p.db.Delete(opv2StateKey(opID), pebble.Sync)
+}
+
+// UpdateOperationV2Params replaces the params blob on an operation row.
+// Used by resumeRestart to inject checkpoint state before re-dispatch.
+func (p *PebbleStore) UpdateOperationV2Params(id string, params []byte) error {
+	p.opsMu.Lock()
+	defer p.opsMu.Unlock()
+	var row OperationV2Row
+	if err := p.pebbleGetJSON(opv2OpKey(id), &row); err != nil {
+		return err
+	}
+	if row.ID == "" {
+		return fmt.Errorf("opv2: operation not found: %s", id)
+	}
+	row.Params = string(params)
+	return p.pebbleSetJSON(opv2OpKey(id), &row)
 }
 
 // AppendOpLogsV2 bulk-inserts log rows.
