@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-05-19
+// last-edited: 2026-06-24
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -75,6 +75,12 @@ type ServerDeps interface {
 	CompactActivityLog(ctx context.Context,
 		compactionDays, changeDays, debugDays int,
 	) (compacted int, summarized int, pruned int, err error)
+
+	// DedupTriageExactPending scans all pending book dedup candidates,
+	// classifies each into one of four populations (genuine / stub / fragment /
+	// title_leak), and returns a TriageReport. No candidates are deleted.
+	// Returns an error if the embedding store is not initialised.
+	DedupTriageExactPending(ctx context.Context) (*TriageReport, error)
 
 	// ----- feature flags -----
 

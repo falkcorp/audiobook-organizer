@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-05-19
+// last-edited: 2026-06-24
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -246,6 +246,103 @@ func (s *Server) EnqueueOp(ctx context.Context, defID string, params any) (strin
 		return "", fmt.Errorf("operations registry not initialized")
 	}
 	return s.opRegistry.EnqueueOp(ctx, defID, params)
+}
+
+// DedupTriageExactPending implements maintenance.ServerDeps. It pages all
+// pending book dedup candidates, classifies each via ClassifyCandidate, and
+// returns a TriageReport with per-population counts and up to 5 examples each.
+// No candidates are deleted regardless of their class.
+func (s *Server) DedupTriageExactPending(ctx context.Context) (*maintenanceplugin.TriageReport, error) {
+	if s.embeddingStore == nil {
+		return nil, fmt.Errorf("embedding store not initialized")
+	}
+
+	candidates, _, err := s.embeddingStore.ListCandidates(database.CandidateFilter{
+		EntityType: "book",
+		Status:     "pending",
+		Limit:      1_000_000,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list candidates: %w", err)
+	}
+
+	// Memoize book lookups — a book may appear in many candidate pairs.
+	bookCache := make(map[string]*database.Book, len(candidates))
+	getBook := func(id string) *database.Book {
+		if b, ok := bookCache[id]; ok {
+			return b
+		}
+		b, _ := s.Store().GetBookByID(id)
+		bookCache[id] = b
+		return b
+	}
+
+	type popState struct {
+		count    int
+		examples []maintenanceplugin.TriageExample
+	}
+	pops := map[maintenanceplugin.TriageClass]*popState{
+		maintenanceplugin.TriageClassGenuine:   {},
+		maintenanceplugin.TriageClassStub:      {},
+		maintenanceplugin.TriageClassFragment:  {},
+		maintenanceplugin.TriageClassTitleLeak: {},
+		maintenanceplugin.TriageClassUnknown:   {},
+	}
+
+	for i := range candidates {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+		c := candidates[i]
+		a := getBook(c.EntityAID)
+		b := getBook(c.EntityBID)
+
+		cls, reason := maintenanceplugin.ClassifyCandidate(c, a, b)
+		ps := pops[cls]
+		ps.count++
+		if len(ps.examples) < 5 {
+			titleA, titleB := "", ""
+			if a != nil {
+				titleA = a.Title
+			}
+			if b != nil {
+				titleB = b.Title
+			}
+			ps.examples = append(ps.examples, maintenanceplugin.TriageExample{
+				CandidateID: c.ID,
+				BookAID:     c.EntityAID,
+				BookBID:     c.EntityBID,
+				BookATitle:  titleA,
+				BookBTitle:  titleB,
+				Layer:       c.Layer,
+				Reason:      reason,
+			})
+		}
+	}
+
+	report := &maintenanceplugin.TriageReport{
+		ScannedAt:    time.Now(),
+		TotalScanned: len(candidates),
+		Populations:  make(map[maintenanceplugin.TriageClass]maintenanceplugin.TriagePopulation, len(pops)),
+	}
+	for cls, ps := range pops {
+		report.Populations[cls] = maintenanceplugin.TriagePopulation{
+			Class:    cls,
+			Count:    ps.count,
+			Examples: ps.examples,
+		}
+		switch {
+		case maintenanceplugin.IsPurgeable(cls):
+			report.PurgeableCount += ps.count
+		case cls == maintenanceplugin.TriageClassGenuine:
+			report.KeepCount += ps.count
+		default:
+			report.ReviewCount += ps.count
+		}
+	}
+	return report, nil
 }
 
 // WaitForOp implements maintenance.ServerDeps. It polls the database at 5-second
