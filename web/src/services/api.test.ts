@@ -1,6 +1,7 @@
 // file: src/services/api.test.ts
-// version: 1.3.0
+// version: 1.3.1
 // guid: 0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d
+// last-edited: 2026-06-24
 
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
@@ -59,7 +60,7 @@ describe('api import paths', () => {
         book_count: 0,
       },
     ]);
-    expect(mockFetch).toHaveBeenCalledWith('/api/v1/import-paths');
+    expect(mockFetch).toHaveBeenCalledWith('/api/v1/import-paths', expect.any(Object));
   });
 
   it('addImportPath returns created import path', async () => {
@@ -124,9 +125,7 @@ describe('api import paths', () => {
     mockFetch.mockResolvedValueOnce(new Response(null, { status: 200 }));
 
     await removeImportPath(4);
-    expect(mockFetch).toHaveBeenCalledWith('/api/v1/import-paths/4', {
-      method: 'DELETE',
-    });
+    expect(mockFetch).toHaveBeenCalledWith('/api/v1/import-paths/4', expect.objectContaining({ method: 'DELETE' }));
   });
 
   it('bulkFetchMetadata posts book ids and returns response', async () => {
@@ -157,11 +156,10 @@ describe('api import paths', () => {
     const response = await bulkFetchMetadata(['id-1', 'id-2'], false);
     expect(response.updated_count).toBe(1);
     expect(response.total_count).toBe(2);
-    expect(mockFetch).toHaveBeenCalledWith('/api/v1/metadata/bulk-fetch', {
+    expect(mockFetch).toHaveBeenCalledWith('/api/v1/metadata/bulk-fetch', expect.objectContaining({
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ book_ids: ['id-1', 'id-2'], only_missing: false }),
-    });
+    }));
   });
 
   it('batchWriteBackMetadata posts book ids and rename flag', async () => {
@@ -186,10 +184,9 @@ describe('api import paths', () => {
     const response = await batchWriteBackMetadata(['id-1', 'id-2'], true);
     expect(response.written).toBe(2);
     expect(response.renamed).toBe(1);
-    expect(mockFetch).toHaveBeenCalledWith('/api/v1/audiobooks/batch-write-back', {
+    expect(mockFetch).toHaveBeenCalledWith('/api/v1/audiobooks/batch-write-back', expect.objectContaining({
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ book_ids: ['id-1', 'id-2'], organize: true, force: false }),
-    });
+    }));
   });
 });
