@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/dedup_triage_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8f9a0b1c-2d3e-4f50-a6b7-c8d9e0f12345
 // last-edited: 2026-06-24
 
@@ -100,6 +100,23 @@ func TestClassifyCandidate_Fragment_DurationRatio(t *testing.T) {
 	cls, reason := ClassifyCandidate(c, a, b)
 	if cls != TriageClassFragment {
 		t.Errorf("got %s (%s), want fragment", cls, reason)
+	}
+}
+
+func TestClassifyCandidate_Fragment_Cons17Suspect_NotFragment(t *testing.T) {
+	// CONS-17: one book has an astronomically large duration (stored as ms instead
+	// of seconds) with no DurationVerifiedAt. The ratio looks tiny (<5%) but the
+	// duration data is unreliable — must fall through to unknown, not fragment.
+	a := makeBook("a", 50*1024*1024, 31431, "")   // correct: ~8.7h
+	b := makeBook("b", 50*1024*1024, 31430435, "") // CONS-17: 31430435s = 364 days
+	c := database.DedupCandidate{Layer: "exact"}
+
+	cls, reason := ClassifyCandidate(c, a, b)
+	if cls == TriageClassFragment {
+		t.Errorf("CONS-17 suspect book must not be classified as fragment, got fragment (%s)", reason)
+	}
+	if cls != TriageClassUnknown {
+		t.Errorf("CONS-17 suspect book should fall to unknown, got %s (%s)", cls, reason)
 	}
 }
 

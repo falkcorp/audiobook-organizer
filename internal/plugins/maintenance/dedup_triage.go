@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/dedup_triage.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3a4b5c6d-7e8f-9012-abcd-ef1234567890
 // last-edited: 2026-06-24
 
@@ -34,7 +34,9 @@ const (
 	// TriageClassFragment — duration ratio between the two books is < 5%, suggesting
 	// one is a single iTunes chapter (fragment) matched against the full book.
 	// These are CONS-FRAG artifacts that survived PurgeStaleCandidates because they
-	// live in different directories.
+	// live in different directories. Only classified as fragment when neither book
+	// shows a CONS-17 suspect duration (> maxPlausibleAudioSeconds with no
+	// DurationVerifiedAt stamp) — otherwise falls through to unknown.
 	TriageClassFragment TriageClass = "fragment"
 
 	// TriageClassTitleLeak — both books are iTunes imports, the candidate layer is
@@ -92,6 +94,11 @@ func IsPurgeable(cls TriageClass) bool { return purgeableClasses[cls] }
 // minPlausibleAudioBytes is copied from internal/dedup/engine.go to avoid an
 // import cycle. Files smaller than this with sub-5-second duration are stubs.
 const minPlausibleAudioBytes = 256 * 1024
+
+// maxPlausibleAudioSeconds is the upper bound for a sane audiobook duration.
+// Any unverified book exceeding this almost certainly has its duration stored
+// as milliseconds (CONS-17 iTunes-importer bug). 360 000 s = 100 hours.
+const maxPlausibleAudioSeconds = 360_000
 
 // ClassifyCandidate classifies a dedup candidate into one of the four triage
 // populations. It returns the class and a short human-readable reason string.
@@ -176,7 +183,23 @@ func hardSignalName(c database.DedupCandidate) string {
 	return ""
 }
 
+// isCons17Suspect returns true when a book's stored duration looks like it was
+// saved in milliseconds rather than seconds (CONS-17 iTunes-importer bug) and
+// the duration-reextract op has not yet corrected it.
+func isCons17Suspect(b *database.Book) bool {
+	return b.Duration != nil &&
+		*b.Duration > maxPlausibleAudioSeconds &&
+		b.DurationVerifiedAt == nil
+}
+
 func checkFragment(_ database.DedupCandidate, a, b *database.Book) (TriageClass, string, bool) {
+	// Guard: if either book looks like a CONS-17 ms-stored-as-seconds victim, the
+	// raw duration numbers are unreliable — skip fragment classification entirely
+	// and let the caller fall through to unknown.
+	if isCons17Suspect(a) || isCons17Suspect(b) {
+		return "", "", false
+	}
+
 	durA, durB := 0, 0
 	if a.Duration != nil {
 		durA = *a.Duration
