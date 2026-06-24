@@ -72,7 +72,7 @@ type MockScanner_ComputeFileHash_Call struct {
 
 // ComputeFileHash is a helper method to define mock.On call
 //   - filePath string
-func (_e *MockScanner_Expecter) ComputeFileHash(filePath any) *MockScanner_ComputeFileHash_Call {
+func (_e *MockScanner_Expecter) ComputeFileHash(filePath interface{}) *MockScanner_ComputeFileHash_Call {
 	return &MockScanner_ComputeFileHash_Call{Call: _e.mock.On("ComputeFileHash", filePath)}
 }
 
@@ -124,7 +124,7 @@ type MockScanner_ProcessBooks_Call struct {
 // ProcessBooks is a helper method to define mock.On call
 //   - books []scanner.Book
 //   - scanLog logger.Logger
-func (_e *MockScanner_Expecter) ProcessBooks(books any, scanLog any) *MockScanner_ProcessBooks_Call {
+func (_e *MockScanner_Expecter) ProcessBooks(books interface{}, scanLog interface{}) *MockScanner_ProcessBooks_Call {
 	return &MockScanner_ProcessBooks_Call{Call: _e.mock.On("ProcessBooks", books, scanLog)}
 }
 
@@ -184,7 +184,7 @@ type MockScanner_ProcessBooksParallel_Call struct {
 //   - workers int
 //   - progressFn func(processed int, total int, bookPath string)
 //   - scanLog logger.Logger
-func (_e *MockScanner_Expecter) ProcessBooksParallel(ctx any, books any, workers any, progressFn any, scanLog any) *MockScanner_ProcessBooksParallel_Call {
+func (_e *MockScanner_Expecter) ProcessBooksParallel(ctx interface{}, books interface{}, workers interface{}, progressFn interface{}, scanLog interface{}) *MockScanner_ProcessBooksParallel_Call {
 	return &MockScanner_ProcessBooksParallel_Call{Call: _e.mock.On("ProcessBooksParallel", ctx, books, workers, progressFn, scanLog)}
 }
 
@@ -267,7 +267,7 @@ type MockScanner_ScanDirectory_Call struct {
 // ScanDirectory is a helper method to define mock.On call
 //   - rootDir string
 //   - scanLog logger.Logger
-func (_e *MockScanner_Expecter) ScanDirectory(rootDir any, scanLog any) *MockScanner_ScanDirectory_Call {
+func (_e *MockScanner_Expecter) ScanDirectory(rootDir interface{}, scanLog interface{}) *MockScanner_ScanDirectory_Call {
 	return &MockScanner_ScanDirectory_Call{Call: _e.mock.On("ScanDirectory", rootDir, scanLog)}
 }
 
@@ -336,7 +336,7 @@ type MockScanner_ScanDirectoryParallel_Call struct {
 //   - rootDir string
 //   - workers int
 //   - scanLog logger.Logger
-func (_e *MockScanner_Expecter) ScanDirectoryParallel(rootDir any, workers any, scanLog any) *MockScanner_ScanDirectoryParallel_Call {
+func (_e *MockScanner_Expecter) ScanDirectoryParallel(rootDir interface{}, workers interface{}, scanLog interface{}) *MockScanner_ScanDirectoryParallel_Call {
 	return &MockScanner_ScanDirectoryParallel_Call{Call: _e.mock.On("ScanDirectoryParallel", rootDir, workers, scanLog)}
 }
 

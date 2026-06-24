@@ -73,7 +73,7 @@ type MockDuplicatesStore_CreateOperation_Call struct {
 //   - id string
 //   - opType string
 //   - folderPath *string
-func (_e *MockDuplicatesStore_Expecter) CreateOperation(id any, opType any, folderPath any) *MockDuplicatesStore_CreateOperation_Call {
+func (_e *MockDuplicatesStore_Expecter) CreateOperation(id interface{}, opType interface{}, folderPath interface{}) *MockDuplicatesStore_CreateOperation_Call {
 	return &MockDuplicatesStore_CreateOperation_Call{Call: _e.mock.On("CreateOperation", id, opType, folderPath)}
 }
 
@@ -145,7 +145,7 @@ type MockDuplicatesStore_GetBookByID_Call struct {
 
 // GetBookByID is a helper method to define mock.On call
 //   - id string
-func (_e *MockDuplicatesStore_Expecter) GetBookByID(id any) *MockDuplicatesStore_GetBookByID_Call {
+func (_e *MockDuplicatesStore_Expecter) GetBookByID(id interface{}) *MockDuplicatesStore_GetBookByID_Call {
 	return &MockDuplicatesStore_GetBookByID_Call{Call: _e.mock.On("GetBookByID", id)}
 }
 
@@ -207,7 +207,7 @@ type MockDuplicatesStore_GetSeriesByID_Call struct {
 
 // GetSeriesByID is a helper method to define mock.On call
 //   - id int
-func (_e *MockDuplicatesStore_Expecter) GetSeriesByID(id any) *MockDuplicatesStore_GetSeriesByID_Call {
+func (_e *MockDuplicatesStore_Expecter) GetSeriesByID(id interface{}) *MockDuplicatesStore_GetSeriesByID_Call {
 	return &MockDuplicatesStore_GetSeriesByID_Call{Call: _e.mock.On("GetSeriesByID", id)}
 }
 

@@ -49,7 +49,7 @@ type MockOperationLogsProvider_GetOperationLogs_Call struct {
 
 // GetOperationLogs is a helper method to define mock.On call
 //   - c *gin.Context
-func (_e *MockOperationLogsProvider_Expecter) GetOperationLogs(c any) *MockOperationLogsProvider_GetOperationLogs_Call {
+func (_e *MockOperationLogsProvider_Expecter) GetOperationLogs(c interface{}) *MockOperationLogsProvider_GetOperationLogs_Call {
 	return &MockOperationLogsProvider_GetOperationLogs_Call{Call: _e.mock.On("GetOperationLogs", c)}
 }
 

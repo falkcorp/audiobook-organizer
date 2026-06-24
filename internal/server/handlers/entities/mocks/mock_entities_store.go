@@ -177,7 +177,7 @@ type MockEntitiesStore_CreateAuthor_Call struct {
 
 // CreateAuthor is a helper method to define mock.On call
 //   - name string
-func (_e *MockEntitiesStore_Expecter) CreateAuthor(name any) *MockEntitiesStore_CreateAuthor_Call {
+func (_e *MockEntitiesStore_Expecter) CreateAuthor(name interface{}) *MockEntitiesStore_CreateAuthor_Call {
 	return &MockEntitiesStore_CreateAuthor_Call{Call: _e.mock.On("CreateAuthor", name)}
 }
 
@@ -241,7 +241,7 @@ type MockEntitiesStore_CreateAuthorAlias_Call struct {
 //   - authorID int
 //   - aliasName string
 //   - aliasType string
-func (_e *MockEntitiesStore_Expecter) CreateAuthorAlias(authorID any, aliasName any, aliasType any) *MockEntitiesStore_CreateAuthorAlias_Call {
+func (_e *MockEntitiesStore_Expecter) CreateAuthorAlias(authorID interface{}, aliasName interface{}, aliasType interface{}) *MockEntitiesStore_CreateAuthorAlias_Call {
 	return &MockEntitiesStore_CreateAuthorAlias_Call{Call: _e.mock.On("CreateAuthorAlias", authorID, aliasName, aliasType)}
 }
 
@@ -313,7 +313,7 @@ type MockEntitiesStore_CreateNarrator_Call struct {
 
 // CreateNarrator is a helper method to define mock.On call
 //   - name string
-func (_e *MockEntitiesStore_Expecter) CreateNarrator(name any) *MockEntitiesStore_CreateNarrator_Call {
+func (_e *MockEntitiesStore_Expecter) CreateNarrator(name interface{}) *MockEntitiesStore_CreateNarrator_Call {
 	return &MockEntitiesStore_CreateNarrator_Call{Call: _e.mock.On("CreateNarrator", name)}
 }
 
@@ -377,7 +377,7 @@ type MockEntitiesStore_CreateOperation_Call struct {
 //   - id string
 //   - opType string
 //   - folderPath *string
-func (_e *MockEntitiesStore_Expecter) CreateOperation(id any, opType any, folderPath any) *MockEntitiesStore_CreateOperation_Call {
+func (_e *MockEntitiesStore_Expecter) CreateOperation(id interface{}, opType interface{}, folderPath interface{}) *MockEntitiesStore_CreateOperation_Call {
 	return &MockEntitiesStore_CreateOperation_Call{Call: _e.mock.On("CreateOperation", id, opType, folderPath)}
 }
 
@@ -450,7 +450,7 @@ type MockEntitiesStore_CreateSeries_Call struct {
 // CreateSeries is a helper method to define mock.On call
 //   - name string
 //   - authorID *int
-func (_e *MockEntitiesStore_Expecter) CreateSeries(name any, authorID any) *MockEntitiesStore_CreateSeries_Call {
+func (_e *MockEntitiesStore_Expecter) CreateSeries(name interface{}, authorID interface{}) *MockEntitiesStore_CreateSeries_Call {
 	return &MockEntitiesStore_CreateSeries_Call{Call: _e.mock.On("CreateSeries", name, authorID)}
 }
 
@@ -506,7 +506,7 @@ type MockEntitiesStore_DeleteAuthor_Call struct {
 
 // DeleteAuthor is a helper method to define mock.On call
 //   - id int
-func (_e *MockEntitiesStore_Expecter) DeleteAuthor(id any) *MockEntitiesStore_DeleteAuthor_Call {
+func (_e *MockEntitiesStore_Expecter) DeleteAuthor(id interface{}) *MockEntitiesStore_DeleteAuthor_Call {
 	return &MockEntitiesStore_DeleteAuthor_Call{Call: _e.mock.On("DeleteAuthor", id)}
 }
 
@@ -557,7 +557,7 @@ type MockEntitiesStore_DeleteAuthorAlias_Call struct {
 
 // DeleteAuthorAlias is a helper method to define mock.On call
 //   - id int
-func (_e *MockEntitiesStore_Expecter) DeleteAuthorAlias(id any) *MockEntitiesStore_DeleteAuthorAlias_Call {
+func (_e *MockEntitiesStore_Expecter) DeleteAuthorAlias(id interface{}) *MockEntitiesStore_DeleteAuthorAlias_Call {
 	return &MockEntitiesStore_DeleteAuthorAlias_Call{Call: _e.mock.On("DeleteAuthorAlias", id)}
 }
 
@@ -608,7 +608,7 @@ type MockEntitiesStore_DeleteSeries_Call struct {
 
 // DeleteSeries is a helper method to define mock.On call
 //   - id int
-func (_e *MockEntitiesStore_Expecter) DeleteSeries(id any) *MockEntitiesStore_DeleteSeries_Call {
+func (_e *MockEntitiesStore_Expecter) DeleteSeries(id interface{}) *MockEntitiesStore_DeleteSeries_Call {
 	return &MockEntitiesStore_DeleteSeries_Call{Call: _e.mock.On("DeleteSeries", id)}
 }
 
@@ -780,7 +780,7 @@ type MockEntitiesStore_GetAuthorAliases_Call struct {
 
 // GetAuthorAliases is a helper method to define mock.On call
 //   - authorID int
-func (_e *MockEntitiesStore_Expecter) GetAuthorAliases(authorID any) *MockEntitiesStore_GetAuthorAliases_Call {
+func (_e *MockEntitiesStore_Expecter) GetAuthorAliases(authorID interface{}) *MockEntitiesStore_GetAuthorAliases_Call {
 	return &MockEntitiesStore_GetAuthorAliases_Call{Call: _e.mock.On("GetAuthorAliases", authorID)}
 }
 
@@ -842,7 +842,7 @@ type MockEntitiesStore_GetAuthorByID_Call struct {
 
 // GetAuthorByID is a helper method to define mock.On call
 //   - id int
-func (_e *MockEntitiesStore_Expecter) GetAuthorByID(id any) *MockEntitiesStore_GetAuthorByID_Call {
+func (_e *MockEntitiesStore_Expecter) GetAuthorByID(id interface{}) *MockEntitiesStore_GetAuthorByID_Call {
 	return &MockEntitiesStore_GetAuthorByID_Call{Call: _e.mock.On("GetAuthorByID", id)}
 }
 
@@ -904,7 +904,7 @@ type MockEntitiesStore_GetAuthorByName_Call struct {
 
 // GetAuthorByName is a helper method to define mock.On call
 //   - name string
-func (_e *MockEntitiesStore_Expecter) GetAuthorByName(name any) *MockEntitiesStore_GetAuthorByName_Call {
+func (_e *MockEntitiesStore_Expecter) GetAuthorByName(name interface{}) *MockEntitiesStore_GetAuthorByName_Call {
 	return &MockEntitiesStore_GetAuthorByName_Call{Call: _e.mock.On("GetAuthorByName", name)}
 }
 
@@ -966,7 +966,7 @@ type MockEntitiesStore_GetBookAuthors_Call struct {
 
 // GetBookAuthors is a helper method to define mock.On call
 //   - bookID string
-func (_e *MockEntitiesStore_Expecter) GetBookAuthors(bookID any) *MockEntitiesStore_GetBookAuthors_Call {
+func (_e *MockEntitiesStore_Expecter) GetBookAuthors(bookID interface{}) *MockEntitiesStore_GetBookAuthors_Call {
 	return &MockEntitiesStore_GetBookAuthors_Call{Call: _e.mock.On("GetBookAuthors", bookID)}
 }
 
@@ -1028,7 +1028,7 @@ type MockEntitiesStore_GetBookByID_Call struct {
 
 // GetBookByID is a helper method to define mock.On call
 //   - id string
-func (_e *MockEntitiesStore_Expecter) GetBookByID(id any) *MockEntitiesStore_GetBookByID_Call {
+func (_e *MockEntitiesStore_Expecter) GetBookByID(id interface{}) *MockEntitiesStore_GetBookByID_Call {
 	return &MockEntitiesStore_GetBookByID_Call{Call: _e.mock.On("GetBookByID", id)}
 }
 
@@ -1090,7 +1090,7 @@ type MockEntitiesStore_GetBookNarrators_Call struct {
 
 // GetBookNarrators is a helper method to define mock.On call
 //   - bookID string
-func (_e *MockEntitiesStore_Expecter) GetBookNarrators(bookID any) *MockEntitiesStore_GetBookNarrators_Call {
+func (_e *MockEntitiesStore_Expecter) GetBookNarrators(bookID interface{}) *MockEntitiesStore_GetBookNarrators_Call {
 	return &MockEntitiesStore_GetBookNarrators_Call{Call: _e.mock.On("GetBookNarrators", bookID)}
 }
 
@@ -1152,7 +1152,7 @@ type MockEntitiesStore_GetBooksByAuthorID_Call struct {
 
 // GetBooksByAuthorID is a helper method to define mock.On call
 //   - authorID int
-func (_e *MockEntitiesStore_Expecter) GetBooksByAuthorID(authorID any) *MockEntitiesStore_GetBooksByAuthorID_Call {
+func (_e *MockEntitiesStore_Expecter) GetBooksByAuthorID(authorID interface{}) *MockEntitiesStore_GetBooksByAuthorID_Call {
 	return &MockEntitiesStore_GetBooksByAuthorID_Call{Call: _e.mock.On("GetBooksByAuthorID", authorID)}
 }
 
@@ -1214,7 +1214,7 @@ type MockEntitiesStore_GetBooksByAuthorIDWithRole_Call struct {
 
 // GetBooksByAuthorIDWithRole is a helper method to define mock.On call
 //   - authorID int
-func (_e *MockEntitiesStore_Expecter) GetBooksByAuthorIDWithRole(authorID any) *MockEntitiesStore_GetBooksByAuthorIDWithRole_Call {
+func (_e *MockEntitiesStore_Expecter) GetBooksByAuthorIDWithRole(authorID interface{}) *MockEntitiesStore_GetBooksByAuthorIDWithRole_Call {
 	return &MockEntitiesStore_GetBooksByAuthorIDWithRole_Call{Call: _e.mock.On("GetBooksByAuthorIDWithRole", authorID)}
 }
 
@@ -1276,7 +1276,7 @@ type MockEntitiesStore_GetBooksBySeriesID_Call struct {
 
 // GetBooksBySeriesID is a helper method to define mock.On call
 //   - seriesID int
-func (_e *MockEntitiesStore_Expecter) GetBooksBySeriesID(seriesID any) *MockEntitiesStore_GetBooksBySeriesID_Call {
+func (_e *MockEntitiesStore_Expecter) GetBooksBySeriesID(seriesID interface{}) *MockEntitiesStore_GetBooksBySeriesID_Call {
 	return &MockEntitiesStore_GetBooksBySeriesID_Call{Call: _e.mock.On("GetBooksBySeriesID", seriesID)}
 }
 
@@ -1338,7 +1338,7 @@ type MockEntitiesStore_GetBooksByWorkID_Call struct {
 
 // GetBooksByWorkID is a helper method to define mock.On call
 //   - workID string
-func (_e *MockEntitiesStore_Expecter) GetBooksByWorkID(workID any) *MockEntitiesStore_GetBooksByWorkID_Call {
+func (_e *MockEntitiesStore_Expecter) GetBooksByWorkID(workID interface{}) *MockEntitiesStore_GetBooksByWorkID_Call {
 	return &MockEntitiesStore_GetBooksByWorkID_Call{Call: _e.mock.On("GetBooksByWorkID", workID)}
 }
 
@@ -1400,7 +1400,7 @@ type MockEntitiesStore_GetNarratorByName_Call struct {
 
 // GetNarratorByName is a helper method to define mock.On call
 //   - name string
-func (_e *MockEntitiesStore_Expecter) GetNarratorByName(name any) *MockEntitiesStore_GetNarratorByName_Call {
+func (_e *MockEntitiesStore_Expecter) GetNarratorByName(name interface{}) *MockEntitiesStore_GetNarratorByName_Call {
 	return &MockEntitiesStore_GetNarratorByName_Call{Call: _e.mock.On("GetNarratorByName", name)}
 }
 
@@ -1462,7 +1462,7 @@ type MockEntitiesStore_GetSeriesByID_Call struct {
 
 // GetSeriesByID is a helper method to define mock.On call
 //   - id int
-func (_e *MockEntitiesStore_Expecter) GetSeriesByID(id any) *MockEntitiesStore_GetSeriesByID_Call {
+func (_e *MockEntitiesStore_Expecter) GetSeriesByID(id interface{}) *MockEntitiesStore_GetSeriesByID_Call {
 	return &MockEntitiesStore_GetSeriesByID_Call{Call: _e.mock.On("GetSeriesByID", id)}
 }
 
@@ -1569,7 +1569,7 @@ type MockEntitiesStore_SetBookAuthors_Call struct {
 // SetBookAuthors is a helper method to define mock.On call
 //   - bookID string
 //   - authors []database.BookAuthor
-func (_e *MockEntitiesStore_Expecter) SetBookAuthors(bookID any, authors any) *MockEntitiesStore_SetBookAuthors_Call {
+func (_e *MockEntitiesStore_Expecter) SetBookAuthors(bookID interface{}, authors interface{}) *MockEntitiesStore_SetBookAuthors_Call {
 	return &MockEntitiesStore_SetBookAuthors_Call{Call: _e.mock.On("SetBookAuthors", bookID, authors)}
 }
 
@@ -1626,7 +1626,7 @@ type MockEntitiesStore_SetBookNarrators_Call struct {
 // SetBookNarrators is a helper method to define mock.On call
 //   - bookID string
 //   - narrators []database.BookNarrator
-func (_e *MockEntitiesStore_Expecter) SetBookNarrators(bookID any, narrators any) *MockEntitiesStore_SetBookNarrators_Call {
+func (_e *MockEntitiesStore_Expecter) SetBookNarrators(bookID interface{}, narrators interface{}) *MockEntitiesStore_SetBookNarrators_Call {
 	return &MockEntitiesStore_SetBookNarrators_Call{Call: _e.mock.On("SetBookNarrators", bookID, narrators)}
 }
 
@@ -1683,7 +1683,7 @@ type MockEntitiesStore_UpdateAuthorName_Call struct {
 // UpdateAuthorName is a helper method to define mock.On call
 //   - id int
 //   - name string
-func (_e *MockEntitiesStore_Expecter) UpdateAuthorName(id any, name any) *MockEntitiesStore_UpdateAuthorName_Call {
+func (_e *MockEntitiesStore_Expecter) UpdateAuthorName(id interface{}, name interface{}) *MockEntitiesStore_UpdateAuthorName_Call {
 	return &MockEntitiesStore_UpdateAuthorName_Call{Call: _e.mock.On("UpdateAuthorName", id, name)}
 }
 
@@ -1751,7 +1751,7 @@ type MockEntitiesStore_UpdateBook_Call struct {
 // UpdateBook is a helper method to define mock.On call
 //   - id string
 //   - book *database.Book
-func (_e *MockEntitiesStore_Expecter) UpdateBook(id any, book any) *MockEntitiesStore_UpdateBook_Call {
+func (_e *MockEntitiesStore_Expecter) UpdateBook(id interface{}, book interface{}) *MockEntitiesStore_UpdateBook_Call {
 	return &MockEntitiesStore_UpdateBook_Call{Call: _e.mock.On("UpdateBook", id, book)}
 }
 
@@ -1808,7 +1808,7 @@ type MockEntitiesStore_UpdateSeriesName_Call struct {
 // UpdateSeriesName is a helper method to define mock.On call
 //   - id int
 //   - name string
-func (_e *MockEntitiesStore_Expecter) UpdateSeriesName(id any, name any) *MockEntitiesStore_UpdateSeriesName_Call {
+func (_e *MockEntitiesStore_Expecter) UpdateSeriesName(id interface{}, name interface{}) *MockEntitiesStore_UpdateSeriesName_Call {
 	return &MockEntitiesStore_UpdateSeriesName_Call{Call: _e.mock.On("UpdateSeriesName", id, name)}
 }
 

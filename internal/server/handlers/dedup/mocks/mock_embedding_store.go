@@ -71,7 +71,7 @@ type MockEmbeddingStore_GetCandidateByID_Call struct {
 
 // GetCandidateByID is a helper method to define mock.On call
 //   - id int64
-func (_e *MockEmbeddingStore_Expecter) GetCandidateByID(id any) *MockEmbeddingStore_GetCandidateByID_Call {
+func (_e *MockEmbeddingStore_Expecter) GetCandidateByID(id interface{}) *MockEmbeddingStore_GetCandidateByID_Call {
 	return &MockEmbeddingStore_GetCandidateByID_Call{Call: _e.mock.On("GetCandidateByID", id)}
 }
 
@@ -194,7 +194,7 @@ type MockEmbeddingStore_ListCandidates_Call struct {
 
 // ListCandidates is a helper method to define mock.On call
 //   - f database.CandidateFilter
-func (_e *MockEmbeddingStore_Expecter) ListCandidates(f any) *MockEmbeddingStore_ListCandidates_Call {
+func (_e *MockEmbeddingStore_Expecter) ListCandidates(f interface{}) *MockEmbeddingStore_ListCandidates_Call {
 	return &MockEmbeddingStore_ListCandidates_Call{Call: _e.mock.On("ListCandidates", f)}
 }
 
@@ -246,7 +246,7 @@ type MockEmbeddingStore_UpdateCandidateStatus_Call struct {
 // UpdateCandidateStatus is a helper method to define mock.On call
 //   - id int64
 //   - status string
-func (_e *MockEmbeddingStore_Expecter) UpdateCandidateStatus(id any, status any) *MockEmbeddingStore_UpdateCandidateStatus_Call {
+func (_e *MockEmbeddingStore_Expecter) UpdateCandidateStatus(id interface{}, status interface{}) *MockEmbeddingStore_UpdateCandidateStatus_Call {
 	return &MockEmbeddingStore_UpdateCandidateStatus_Call{Call: _e.mock.On("UpdateCandidateStatus", id, status)}
 }
 

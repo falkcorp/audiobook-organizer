@@ -71,7 +71,7 @@ type MockOrganizePreviewServicer_PreviewOrganize_Call struct {
 
 // PreviewOrganize is a helper method to define mock.On call
 //   - bookID string
-func (_e *MockOrganizePreviewServicer_Expecter) PreviewOrganize(bookID any) *MockOrganizePreviewServicer_PreviewOrganize_Call {
+func (_e *MockOrganizePreviewServicer_Expecter) PreviewOrganize(bookID interface{}) *MockOrganizePreviewServicer_PreviewOrganize_Call {
 	return &MockOrganizePreviewServicer_PreviewOrganize_Call{Call: _e.mock.On("PreviewOrganize", bookID)}
 }
 

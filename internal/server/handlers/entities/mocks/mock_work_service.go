@@ -72,7 +72,7 @@ type MockWorkService_CreateWork_Call struct {
 
 // CreateWork is a helper method to define mock.On call
 //   - w *database.Work
-func (_e *MockWorkService_Expecter) CreateWork(w any) *MockWorkService_CreateWork_Call {
+func (_e *MockWorkService_Expecter) CreateWork(w interface{}) *MockWorkService_CreateWork_Call {
 	return &MockWorkService_CreateWork_Call{Call: _e.mock.On("CreateWork", w)}
 }
 
@@ -123,7 +123,7 @@ type MockWorkService_DeleteWork_Call struct {
 
 // DeleteWork is a helper method to define mock.On call
 //   - id string
-func (_e *MockWorkService_Expecter) DeleteWork(id any) *MockWorkService_DeleteWork_Call {
+func (_e *MockWorkService_Expecter) DeleteWork(id interface{}) *MockWorkService_DeleteWork_Call {
 	return &MockWorkService_DeleteWork_Call{Call: _e.mock.On("DeleteWork", id)}
 }
 
@@ -185,7 +185,7 @@ type MockWorkService_GetWork_Call struct {
 
 // GetWork is a helper method to define mock.On call
 //   - id string
-func (_e *MockWorkService_Expecter) GetWork(id any) *MockWorkService_GetWork_Call {
+func (_e *MockWorkService_Expecter) GetWork(id interface{}) *MockWorkService_GetWork_Call {
 	return &MockWorkService_GetWork_Call{Call: _e.mock.On("GetWork", id)}
 }
 
@@ -303,7 +303,7 @@ type MockWorkService_UpdateWork_Call struct {
 // UpdateWork is a helper method to define mock.On call
 //   - id string
 //   - w *database.Work
-func (_e *MockWorkService_Expecter) UpdateWork(id any, w any) *MockWorkService_UpdateWork_Call {
+func (_e *MockWorkService_Expecter) UpdateWork(id interface{}, w interface{}) *MockWorkService_UpdateWork_Call {
 	return &MockWorkService_UpdateWork_Call{Call: _e.mock.On("UpdateWork", id, w)}
 }
 

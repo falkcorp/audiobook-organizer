@@ -73,7 +73,7 @@ type MockActivityService_CompactByDay_Call struct {
 // CompactByDay is a helper method to define mock.On call
 //   - ctx context.Context
 //   - cutoff time.Time
-func (_e *MockActivityService_Expecter) CompactByDay(ctx any, cutoff any) *MockActivityService_CompactByDay_Call {
+func (_e *MockActivityService_Expecter) CompactByDay(ctx interface{}, cutoff interface{}) *MockActivityService_CompactByDay_Call {
 	return &MockActivityService_CompactByDay_Call{Call: _e.mock.On("CompactByDay", ctx, cutoff)}
 }
 
@@ -140,7 +140,7 @@ type MockActivityService_GetDistinctSources_Call struct {
 
 // GetDistinctSources is a helper method to define mock.On call
 //   - filter database.ActivityFilter
-func (_e *MockActivityService_Expecter) GetDistinctSources(filter any) *MockActivityService_GetDistinctSources_Call {
+func (_e *MockActivityService_Expecter) GetDistinctSources(filter interface{}) *MockActivityService_GetDistinctSources_Call {
 	return &MockActivityService_GetDistinctSources_Call{Call: _e.mock.On("GetDistinctSources", filter)}
 }
 
@@ -208,7 +208,7 @@ type MockActivityService_Query_Call struct {
 
 // Query is a helper method to define mock.On call
 //   - filter database.ActivityFilter
-func (_e *MockActivityService_Expecter) Query(filter any) *MockActivityService_Query_Call {
+func (_e *MockActivityService_Expecter) Query(filter interface{}) *MockActivityService_Query_Call {
 	return &MockActivityService_Query_Call{Call: _e.mock.On("Query", filter)}
 }
 
@@ -268,7 +268,7 @@ type MockActivityService_RecompactDigests_Call struct {
 
 // RecompactDigests is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockActivityService_Expecter) RecompactDigests(ctx any) *MockActivityService_RecompactDigests_Call {
+func (_e *MockActivityService_Expecter) RecompactDigests(ctx interface{}) *MockActivityService_RecompactDigests_Call {
 	return &MockActivityService_RecompactDigests_Call{Call: _e.mock.On("RecompactDigests", ctx)}
 }
 

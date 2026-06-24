@@ -48,7 +48,7 @@ type MockWriteBackEnqueuer_Enqueue_Call struct {
 
 // Enqueue is a helper method to define mock.On call
 //   - bookID string
-func (_e *MockWriteBackEnqueuer_Expecter) Enqueue(bookID any) *MockWriteBackEnqueuer_Enqueue_Call {
+func (_e *MockWriteBackEnqueuer_Expecter) Enqueue(bookID interface{}) *MockWriteBackEnqueuer_Enqueue_Call {
 	return &MockWriteBackEnqueuer_Enqueue_Call{Call: _e.mock.On("Enqueue", bookID)}
 }
 

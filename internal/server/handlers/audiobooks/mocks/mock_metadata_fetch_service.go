@@ -59,7 +59,7 @@ type MockMetadataFetchService_InvalidateCachedCandidates_Call struct {
 
 // InvalidateCachedCandidates is a helper method to define mock.On call
 //   - bookID string
-func (_e *MockMetadataFetchService_Expecter) InvalidateCachedCandidates(bookID any) *MockMetadataFetchService_InvalidateCachedCandidates_Call {
+func (_e *MockMetadataFetchService_Expecter) InvalidateCachedCandidates(bookID interface{}) *MockMetadataFetchService_InvalidateCachedCandidates_Call {
 	return &MockMetadataFetchService_InvalidateCachedCandidates_Call{Call: _e.mock.On("InvalidateCachedCandidates", bookID)}
 }
 

@@ -63,7 +63,7 @@ type MockPlaylistStore_ClearUserPositions_Call struct {
 // ClearUserPositions is a helper method to define mock.On call
 //   - userID string
 //   - bookID string
-func (_e *MockPlaylistStore_Expecter) ClearUserPositions(userID any, bookID any) *MockPlaylistStore_ClearUserPositions_Call {
+func (_e *MockPlaylistStore_Expecter) ClearUserPositions(userID interface{}, bookID interface{}) *MockPlaylistStore_ClearUserPositions_Call {
 	return &MockPlaylistStore_ClearUserPositions_Call{Call: _e.mock.On("ClearUserPositions", userID, bookID)}
 }
 
@@ -95,59 +95,6 @@ func (_c *MockPlaylistStore_ClearUserPositions_Call) RunAndReturn(run func(userI
 	return _c
 }
 
-// CountAllBooks provides a mock function for the type MockPlaylistStore
-func (_mock *MockPlaylistStore) CountAllBooks() (int, error) {
-	ret := _mock.Called()
-
-	if len(ret) == 0 {
-		panic("no return value specified for CountAllBooks")
-	}
-
-	var r0 int
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func() (int, error)); ok {
-		return returnFunc()
-	}
-	if returnFunc, ok := ret.Get(0).(func() int); ok {
-		r0 = returnFunc()
-	} else {
-		r0 = ret.Get(0).(int)
-	}
-	if returnFunc, ok := ret.Get(1).(func() error); ok {
-		r1 = returnFunc()
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockPlaylistStore_CountAllBooks_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CountAllBooks'
-type MockPlaylistStore_CountAllBooks_Call struct {
-	*mock.Call
-}
-
-// CountAllBooks is a helper method to define mock.On call
-func (_e *MockPlaylistStore_Expecter) CountAllBooks() *MockPlaylistStore_CountAllBooks_Call {
-	return &MockPlaylistStore_CountAllBooks_Call{Call: _e.mock.On("CountAllBooks")}
-}
-
-func (_c *MockPlaylistStore_CountAllBooks_Call) Run(run func()) *MockPlaylistStore_CountAllBooks_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run()
-	})
-	return _c
-}
-
-func (_c *MockPlaylistStore_CountAllBooks_Call) Return(n int, err error) *MockPlaylistStore_CountAllBooks_Call {
-	_c.Call.Return(n, err)
-	return _c
-}
-
-func (_c *MockPlaylistStore_CountAllBooks_Call) RunAndReturn(run func() (int, error)) *MockPlaylistStore_CountAllBooks_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // CountPrimaryBooks provides a mock function for the type MockPlaylistStore
 func (_mock *MockPlaylistStore) CountPrimaryBooks() (int, error) {
 	ret := _mock.Called()
@@ -174,29 +121,29 @@ func (_mock *MockPlaylistStore) CountPrimaryBooks() (int, error) {
 	return r0, r1
 }
 
-// MockPlaylistStore_CountPrimaryBooks_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CountPrimaryBooks'
-type MockPlaylistStore_CountPrimaryBooks_Call struct {
+// MockPlaylistStore_CountBooks_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CountPrimaryBooks'
+type MockPlaylistStore_CountBooks_Call struct {
 	*mock.Call
 }
 
 // CountPrimaryBooks is a helper method to define mock.On call
-func (_e *MockPlaylistStore_Expecter) CountPrimaryBooks() *MockPlaylistStore_CountPrimaryBooks_Call {
-	return &MockPlaylistStore_CountPrimaryBooks_Call{Call: _e.mock.On("CountPrimaryBooks")}
+func (_e *MockPlaylistStore_Expecter) CountPrimaryBooks() *MockPlaylistStore_CountBooks_Call {
+	return &MockPlaylistStore_CountBooks_Call{Call: _e.mock.On("CountPrimaryBooks")}
 }
 
-func (_c *MockPlaylistStore_CountPrimaryBooks_Call) Run(run func()) *MockPlaylistStore_CountPrimaryBooks_Call {
+func (_c *MockPlaylistStore_CountBooks_Call) Run(run func()) *MockPlaylistStore_CountBooks_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run()
 	})
 	return _c
 }
 
-func (_c *MockPlaylistStore_CountPrimaryBooks_Call) Return(n int, err error) *MockPlaylistStore_CountPrimaryBooks_Call {
+func (_c *MockPlaylistStore_CountBooks_Call) Return(n int, err error) *MockPlaylistStore_CountBooks_Call {
 	_c.Call.Return(n, err)
 	return _c
 }
 
-func (_c *MockPlaylistStore_CountPrimaryBooks_Call) RunAndReturn(run func() (int, error)) *MockPlaylistStore_CountPrimaryBooks_Call {
+func (_c *MockPlaylistStore_CountBooks_Call) RunAndReturn(run func() (int, error)) *MockPlaylistStore_CountBooks_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -289,7 +236,7 @@ type MockPlaylistStore_CreateUserPlaylist_Call struct {
 
 // CreateUserPlaylist is a helper method to define mock.On call
 //   - pl *database.UserPlaylist
-func (_e *MockPlaylistStore_Expecter) CreateUserPlaylist(pl any) *MockPlaylistStore_CreateUserPlaylist_Call {
+func (_e *MockPlaylistStore_Expecter) CreateUserPlaylist(pl interface{}) *MockPlaylistStore_CreateUserPlaylist_Call {
 	return &MockPlaylistStore_CreateUserPlaylist_Call{Call: _e.mock.On("CreateUserPlaylist", pl)}
 }
 
@@ -340,7 +287,7 @@ type MockPlaylistStore_DeleteUserPlaylist_Call struct {
 
 // DeleteUserPlaylist is a helper method to define mock.On call
 //   - id string
-func (_e *MockPlaylistStore_Expecter) DeleteUserPlaylist(id any) *MockPlaylistStore_DeleteUserPlaylist_Call {
+func (_e *MockPlaylistStore_Expecter) DeleteUserPlaylist(id interface{}) *MockPlaylistStore_DeleteUserPlaylist_Call {
 	return &MockPlaylistStore_DeleteUserPlaylist_Call{Call: _e.mock.On("DeleteUserPlaylist", id)}
 }
 
@@ -403,7 +350,7 @@ type MockPlaylistStore_GetAllBookSummaries_Call struct {
 // GetAllBookSummaries is a helper method to define mock.On call
 //   - limit int
 //   - offset int
-func (_e *MockPlaylistStore_Expecter) GetAllBookSummaries(limit any, offset any) *MockPlaylistStore_GetAllBookSummaries_Call {
+func (_e *MockPlaylistStore_Expecter) GetAllBookSummaries(limit interface{}, offset interface{}) *MockPlaylistStore_GetAllBookSummaries_Call {
 	return &MockPlaylistStore_GetAllBookSummaries_Call{Call: _e.mock.On("GetAllBookSummaries", limit, offset)}
 }
 
@@ -471,7 +418,7 @@ type MockPlaylistStore_GetAllBooks_Call struct {
 // GetAllBooks is a helper method to define mock.On call
 //   - limit int
 //   - offset int
-func (_e *MockPlaylistStore_Expecter) GetAllBooks(limit any, offset any) *MockPlaylistStore_GetAllBooks_Call {
+func (_e *MockPlaylistStore_Expecter) GetAllBooks(limit interface{}, offset interface{}) *MockPlaylistStore_GetAllBooks_Call {
 	return &MockPlaylistStore_GetAllBooks_Call{Call: _e.mock.On("GetAllBooks", limit, offset)}
 }
 
@@ -506,11 +453,9 @@ func (_c *MockPlaylistStore_GetAllBooks_Call) RunAndReturn(run func(limit int, o
 // GetAllBooksFrom provides a mock function for the type MockPlaylistStore
 func (_mock *MockPlaylistStore) GetAllBooksFrom(afterID string, limit int) ([]database.Book, error) {
 	ret := _mock.Called(afterID, limit)
-
 	if len(ret) == 0 {
 		panic("no return value specified for GetAllBooksFrom")
 	}
-
 	var r0 []database.Book
 	var r1 error
 	if returnFunc, ok := ret.Get(0).(func(string, int) ([]database.Book, error)); ok {
@@ -531,42 +476,20 @@ func (_mock *MockPlaylistStore) GetAllBooksFrom(afterID string, limit int) ([]da
 	return r0, r1
 }
 
-// MockPlaylistStore_GetAllBooksFrom_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetAllBooksFrom'
-type MockPlaylistStore_GetAllBooksFrom_Call struct {
-	*mock.Call
-}
+type MockPlaylistStore_GetAllBooksFrom_Call struct{ *mock.Call }
 
-// GetAllBooksFrom is a helper method to define mock.On call
-//   - afterID string
-//   - limit int
-func (_e *MockPlaylistStore_Expecter) GetAllBooksFrom(afterID any, limit any) *MockPlaylistStore_GetAllBooksFrom_Call {
+func (_e *MockPlaylistStore_Expecter) GetAllBooksFrom(afterID interface{}, limit interface{}) *MockPlaylistStore_GetAllBooksFrom_Call {
 	return &MockPlaylistStore_GetAllBooksFrom_Call{Call: _e.mock.On("GetAllBooksFrom", afterID, limit)}
 }
-
-func (_c *MockPlaylistStore_GetAllBooksFrom_Call) Run(run func(afterID string, limit int)) *MockPlaylistStore_GetAllBooksFrom_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 string
-		if args[0] != nil {
-			arg0 = args[0].(string)
-		}
-		var arg1 int
-		if args[1] != nil {
-			arg1 = args[1].(int)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
+func (_c *MockPlaylistStore_GetAllBooksFrom_Call) Run(run func(string, int)) *MockPlaylistStore_GetAllBooksFrom_Call {
+	_c.Call.Run(func(args mock.Arguments) { run(args[0].(string), args[1].(int)) })
 	return _c
 }
-
 func (_c *MockPlaylistStore_GetAllBooksFrom_Call) Return(books []database.Book, err error) *MockPlaylistStore_GetAllBooksFrom_Call {
 	_c.Call.Return(books, err)
 	return _c
 }
-
-func (_c *MockPlaylistStore_GetAllBooksFrom_Call) RunAndReturn(run func(afterID string, limit int) ([]database.Book, error)) *MockPlaylistStore_GetAllBooksFrom_Call {
+func (_c *MockPlaylistStore_GetAllBooksFrom_Call) RunAndReturn(run func(string, int) ([]database.Book, error)) *MockPlaylistStore_GetAllBooksFrom_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -607,7 +530,7 @@ type MockPlaylistStore_GetBookAtVersion_Call struct {
 // GetBookAtVersion is a helper method to define mock.On call
 //   - id string
 //   - ts time.Time
-func (_e *MockPlaylistStore_Expecter) GetBookAtVersion(id any, ts any) *MockPlaylistStore_GetBookAtVersion_Call {
+func (_e *MockPlaylistStore_Expecter) GetBookAtVersion(id interface{}, ts interface{}) *MockPlaylistStore_GetBookAtVersion_Call {
 	return &MockPlaylistStore_GetBookAtVersion_Call{Call: _e.mock.On("GetBookAtVersion", id, ts)}
 }
 
@@ -674,7 +597,7 @@ type MockPlaylistStore_GetBookByFileHash_Call struct {
 
 // GetBookByFileHash is a helper method to define mock.On call
 //   - hash string
-func (_e *MockPlaylistStore_Expecter) GetBookByFileHash(hash any) *MockPlaylistStore_GetBookByFileHash_Call {
+func (_e *MockPlaylistStore_Expecter) GetBookByFileHash(hash interface{}) *MockPlaylistStore_GetBookByFileHash_Call {
 	return &MockPlaylistStore_GetBookByFileHash_Call{Call: _e.mock.On("GetBookByFileHash", hash)}
 }
 
@@ -736,7 +659,7 @@ type MockPlaylistStore_GetBookByFilePath_Call struct {
 
 // GetBookByFilePath is a helper method to define mock.On call
 //   - path string
-func (_e *MockPlaylistStore_Expecter) GetBookByFilePath(path any) *MockPlaylistStore_GetBookByFilePath_Call {
+func (_e *MockPlaylistStore_Expecter) GetBookByFilePath(path interface{}) *MockPlaylistStore_GetBookByFilePath_Call {
 	return &MockPlaylistStore_GetBookByFilePath_Call{Call: _e.mock.On("GetBookByFilePath", path)}
 }
 
@@ -798,7 +721,7 @@ type MockPlaylistStore_GetBookByID_Call struct {
 
 // GetBookByID is a helper method to define mock.On call
 //   - id string
-func (_e *MockPlaylistStore_Expecter) GetBookByID(id any) *MockPlaylistStore_GetBookByID_Call {
+func (_e *MockPlaylistStore_Expecter) GetBookByID(id interface{}) *MockPlaylistStore_GetBookByID_Call {
 	return &MockPlaylistStore_GetBookByID_Call{Call: _e.mock.On("GetBookByID", id)}
 }
 
@@ -860,7 +783,7 @@ type MockPlaylistStore_GetBookByITunesPersistentID_Call struct {
 
 // GetBookByITunesPersistentID is a helper method to define mock.On call
 //   - persistentID string
-func (_e *MockPlaylistStore_Expecter) GetBookByITunesPersistentID(persistentID any) *MockPlaylistStore_GetBookByITunesPersistentID_Call {
+func (_e *MockPlaylistStore_Expecter) GetBookByITunesPersistentID(persistentID interface{}) *MockPlaylistStore_GetBookByITunesPersistentID_Call {
 	return &MockPlaylistStore_GetBookByITunesPersistentID_Call{Call: _e.mock.On("GetBookByITunesPersistentID", persistentID)}
 }
 
@@ -922,7 +845,7 @@ type MockPlaylistStore_GetBookByOrganizedHash_Call struct {
 
 // GetBookByOrganizedHash is a helper method to define mock.On call
 //   - hash string
-func (_e *MockPlaylistStore_Expecter) GetBookByOrganizedHash(hash any) *MockPlaylistStore_GetBookByOrganizedHash_Call {
+func (_e *MockPlaylistStore_Expecter) GetBookByOrganizedHash(hash interface{}) *MockPlaylistStore_GetBookByOrganizedHash_Call {
 	return &MockPlaylistStore_GetBookByOrganizedHash_Call{Call: _e.mock.On("GetBookByOrganizedHash", hash)}
 }
 
@@ -984,7 +907,7 @@ type MockPlaylistStore_GetBookByOriginalHash_Call struct {
 
 // GetBookByOriginalHash is a helper method to define mock.On call
 //   - hash string
-func (_e *MockPlaylistStore_Expecter) GetBookByOriginalHash(hash any) *MockPlaylistStore_GetBookByOriginalHash_Call {
+func (_e *MockPlaylistStore_Expecter) GetBookByOriginalHash(hash interface{}) *MockPlaylistStore_GetBookByOriginalHash_Call {
 	return &MockPlaylistStore_GetBookByOriginalHash_Call{Call: _e.mock.On("GetBookByOriginalHash", hash)}
 }
 
@@ -1048,7 +971,7 @@ type MockPlaylistStore_GetBookIDsByISBNASIN_Call struct {
 //   - isbn10 string
 //   - isbn13 string
 //   - asin string
-func (_e *MockPlaylistStore_Expecter) GetBookIDsByISBNASIN(isbn10 any, isbn13 any, asin any) *MockPlaylistStore_GetBookIDsByISBNASIN_Call {
+func (_e *MockPlaylistStore_Expecter) GetBookIDsByISBNASIN(isbn10 interface{}, isbn13 interface{}, asin interface{}) *MockPlaylistStore_GetBookIDsByISBNASIN_Call {
 	return &MockPlaylistStore_GetBookIDsByISBNASIN_Call{Call: _e.mock.On("GetBookIDsByISBNASIN", isbn10, isbn13, asin)}
 }
 
@@ -1121,7 +1044,7 @@ type MockPlaylistStore_GetBookSnapshots_Call struct {
 // GetBookSnapshots is a helper method to define mock.On call
 //   - id string
 //   - limit int
-func (_e *MockPlaylistStore_Expecter) GetBookSnapshots(id any, limit any) *MockPlaylistStore_GetBookSnapshots_Call {
+func (_e *MockPlaylistStore_Expecter) GetBookSnapshots(id interface{}, limit interface{}) *MockPlaylistStore_GetBookSnapshots_Call {
 	return &MockPlaylistStore_GetBookSnapshots_Call{Call: _e.mock.On("GetBookSnapshots", id, limit)}
 }
 
@@ -1188,7 +1111,7 @@ type MockPlaylistStore_GetBookTombstone_Call struct {
 
 // GetBookTombstone is a helper method to define mock.On call
 //   - id string
-func (_e *MockPlaylistStore_Expecter) GetBookTombstone(id any) *MockPlaylistStore_GetBookTombstone_Call {
+func (_e *MockPlaylistStore_Expecter) GetBookTombstone(id interface{}) *MockPlaylistStore_GetBookTombstone_Call {
 	return &MockPlaylistStore_GetBookTombstone_Call{Call: _e.mock.On("GetBookTombstone", id)}
 }
 
@@ -1250,7 +1173,7 @@ type MockPlaylistStore_GetBooksByAuthorID_Call struct {
 
 // GetBooksByAuthorID is a helper method to define mock.On call
 //   - authorID int
-func (_e *MockPlaylistStore_Expecter) GetBooksByAuthorID(authorID any) *MockPlaylistStore_GetBooksByAuthorID_Call {
+func (_e *MockPlaylistStore_Expecter) GetBooksByAuthorID(authorID interface{}) *MockPlaylistStore_GetBooksByAuthorID_Call {
 	return &MockPlaylistStore_GetBooksByAuthorID_Call{Call: _e.mock.On("GetBooksByAuthorID", authorID)}
 }
 
@@ -1312,7 +1235,7 @@ type MockPlaylistStore_GetBooksByMetadataSourceHash_Call struct {
 
 // GetBooksByMetadataSourceHash is a helper method to define mock.On call
 //   - hash string
-func (_e *MockPlaylistStore_Expecter) GetBooksByMetadataSourceHash(hash any) *MockPlaylistStore_GetBooksByMetadataSourceHash_Call {
+func (_e *MockPlaylistStore_Expecter) GetBooksByMetadataSourceHash(hash interface{}) *MockPlaylistStore_GetBooksByMetadataSourceHash_Call {
 	return &MockPlaylistStore_GetBooksByMetadataSourceHash_Call{Call: _e.mock.On("GetBooksByMetadataSourceHash", hash)}
 }
 
@@ -1374,7 +1297,7 @@ type MockPlaylistStore_GetBooksBySeriesID_Call struct {
 
 // GetBooksBySeriesID is a helper method to define mock.On call
 //   - seriesID int
-func (_e *MockPlaylistStore_Expecter) GetBooksBySeriesID(seriesID any) *MockPlaylistStore_GetBooksBySeriesID_Call {
+func (_e *MockPlaylistStore_Expecter) GetBooksBySeriesID(seriesID interface{}) *MockPlaylistStore_GetBooksBySeriesID_Call {
 	return &MockPlaylistStore_GetBooksBySeriesID_Call{Call: _e.mock.On("GetBooksBySeriesID", seriesID)}
 }
 
@@ -1437,7 +1360,7 @@ type MockPlaylistStore_GetBooksByTitleInDir_Call struct {
 // GetBooksByTitleInDir is a helper method to define mock.On call
 //   - normalizedTitle string
 //   - dirPath string
-func (_e *MockPlaylistStore_Expecter) GetBooksByTitleInDir(normalizedTitle any, dirPath any) *MockPlaylistStore_GetBooksByTitleInDir_Call {
+func (_e *MockPlaylistStore_Expecter) GetBooksByTitleInDir(normalizedTitle interface{}, dirPath interface{}) *MockPlaylistStore_GetBooksByTitleInDir_Call {
 	return &MockPlaylistStore_GetBooksByTitleInDir_Call{Call: _e.mock.On("GetBooksByTitleInDir", normalizedTitle, dirPath)}
 }
 
@@ -1504,7 +1427,7 @@ type MockPlaylistStore_GetBooksByVersionGroup_Call struct {
 
 // GetBooksByVersionGroup is a helper method to define mock.On call
 //   - groupID string
-func (_e *MockPlaylistStore_Expecter) GetBooksByVersionGroup(groupID any) *MockPlaylistStore_GetBooksByVersionGroup_Call {
+func (_e *MockPlaylistStore_Expecter) GetBooksByVersionGroup(groupID interface{}) *MockPlaylistStore_GetBooksByVersionGroup_Call {
 	return &MockPlaylistStore_GetBooksByVersionGroup_Call{Call: _e.mock.On("GetBooksByVersionGroup", groupID)}
 }
 
@@ -1731,7 +1654,7 @@ type MockPlaylistStore_GetDuplicateBooksByMetadata_Call struct {
 
 // GetDuplicateBooksByMetadata is a helper method to define mock.On call
 //   - threshold float64
-func (_e *MockPlaylistStore_Expecter) GetDuplicateBooksByMetadata(threshold any) *MockPlaylistStore_GetDuplicateBooksByMetadata_Call {
+func (_e *MockPlaylistStore_Expecter) GetDuplicateBooksByMetadata(threshold interface{}) *MockPlaylistStore_GetDuplicateBooksByMetadata_Call {
 	return &MockPlaylistStore_GetDuplicateBooksByMetadata_Call{Call: _e.mock.On("GetDuplicateBooksByMetadata", threshold)}
 }
 
@@ -1959,7 +1882,7 @@ type MockPlaylistStore_GetQuarantinedBooks_Call struct {
 // GetQuarantinedBooks is a helper method to define mock.On call
 //   - limit int
 //   - offset int
-func (_e *MockPlaylistStore_Expecter) GetQuarantinedBooks(limit any, offset any) *MockPlaylistStore_GetQuarantinedBooks_Call {
+func (_e *MockPlaylistStore_Expecter) GetQuarantinedBooks(limit interface{}, offset interface{}) *MockPlaylistStore_GetQuarantinedBooks_Call {
 	return &MockPlaylistStore_GetQuarantinedBooks_Call{Call: _e.mock.On("GetQuarantinedBooks", limit, offset)}
 }
 
@@ -2027,7 +1950,7 @@ type MockPlaylistStore_GetUserBookState_Call struct {
 // GetUserBookState is a helper method to define mock.On call
 //   - userID string
 //   - bookID string
-func (_e *MockPlaylistStore_Expecter) GetUserBookState(userID any, bookID any) *MockPlaylistStore_GetUserBookState_Call {
+func (_e *MockPlaylistStore_Expecter) GetUserBookState(userID interface{}, bookID interface{}) *MockPlaylistStore_GetUserBookState_Call {
 	return &MockPlaylistStore_GetUserBookState_Call{Call: _e.mock.On("GetUserBookState", userID, bookID)}
 }
 
@@ -2094,7 +2017,7 @@ type MockPlaylistStore_GetUserPlaylist_Call struct {
 
 // GetUserPlaylist is a helper method to define mock.On call
 //   - id string
-func (_e *MockPlaylistStore_Expecter) GetUserPlaylist(id any) *MockPlaylistStore_GetUserPlaylist_Call {
+func (_e *MockPlaylistStore_Expecter) GetUserPlaylist(id interface{}) *MockPlaylistStore_GetUserPlaylist_Call {
 	return &MockPlaylistStore_GetUserPlaylist_Call{Call: _e.mock.On("GetUserPlaylist", id)}
 }
 
@@ -2156,7 +2079,7 @@ type MockPlaylistStore_GetUserPlaylistByITunesPID_Call struct {
 
 // GetUserPlaylistByITunesPID is a helper method to define mock.On call
 //   - pid string
-func (_e *MockPlaylistStore_Expecter) GetUserPlaylistByITunesPID(pid any) *MockPlaylistStore_GetUserPlaylistByITunesPID_Call {
+func (_e *MockPlaylistStore_Expecter) GetUserPlaylistByITunesPID(pid interface{}) *MockPlaylistStore_GetUserPlaylistByITunesPID_Call {
 	return &MockPlaylistStore_GetUserPlaylistByITunesPID_Call{Call: _e.mock.On("GetUserPlaylistByITunesPID", pid)}
 }
 
@@ -2218,7 +2141,7 @@ type MockPlaylistStore_GetUserPlaylistByName_Call struct {
 
 // GetUserPlaylistByName is a helper method to define mock.On call
 //   - name string
-func (_e *MockPlaylistStore_Expecter) GetUserPlaylistByName(name any) *MockPlaylistStore_GetUserPlaylistByName_Call {
+func (_e *MockPlaylistStore_Expecter) GetUserPlaylistByName(name interface{}) *MockPlaylistStore_GetUserPlaylistByName_Call {
 	return &MockPlaylistStore_GetUserPlaylistByName_Call{Call: _e.mock.On("GetUserPlaylistByName", name)}
 }
 
@@ -2281,7 +2204,7 @@ type MockPlaylistStore_GetUserPosition_Call struct {
 // GetUserPosition is a helper method to define mock.On call
 //   - userID string
 //   - bookID string
-func (_e *MockPlaylistStore_Expecter) GetUserPosition(userID any, bookID any) *MockPlaylistStore_GetUserPosition_Call {
+func (_e *MockPlaylistStore_Expecter) GetUserPosition(userID interface{}, bookID interface{}) *MockPlaylistStore_GetUserPosition_Call {
 	return &MockPlaylistStore_GetUserPosition_Call{Call: _e.mock.On("GetUserPosition", userID, bookID)}
 }
 
@@ -2403,7 +2326,7 @@ type MockPlaylistStore_ListBookTombstones_Call struct {
 
 // ListBookTombstones is a helper method to define mock.On call
 //   - limit int
-func (_e *MockPlaylistStore_Expecter) ListBookTombstones(limit any) *MockPlaylistStore_ListBookTombstones_Call {
+func (_e *MockPlaylistStore_Expecter) ListBookTombstones(limit interface{}) *MockPlaylistStore_ListBookTombstones_Call {
 	return &MockPlaylistStore_ListBookTombstones_Call{Call: _e.mock.On("ListBookTombstones", limit)}
 }
 
@@ -2466,7 +2389,7 @@ type MockPlaylistStore_ListBooksByITunesPID_Call struct {
 // ListBooksByITunesPID is a helper method to define mock.On call
 //   - limit int
 //   - offset int
-func (_e *MockPlaylistStore_Expecter) ListBooksByITunesPID(limit any, offset any) *MockPlaylistStore_ListBooksByITunesPID_Call {
+func (_e *MockPlaylistStore_Expecter) ListBooksByITunesPID(limit interface{}, offset interface{}) *MockPlaylistStore_ListBooksByITunesPID_Call {
 	return &MockPlaylistStore_ListBooksByITunesPID_Call{Call: _e.mock.On("ListBooksByITunesPID", limit, offset)}
 }
 
@@ -2590,7 +2513,7 @@ type MockPlaylistStore_ListSoftDeletedBooks_Call struct {
 //   - limit int
 //   - offset int
 //   - olderThan *time.Time
-func (_e *MockPlaylistStore_Expecter) ListSoftDeletedBooks(limit any, offset any, olderThan any) *MockPlaylistStore_ListSoftDeletedBooks_Call {
+func (_e *MockPlaylistStore_Expecter) ListSoftDeletedBooks(limit interface{}, offset interface{}, olderThan interface{}) *MockPlaylistStore_ListSoftDeletedBooks_Call {
 	return &MockPlaylistStore_ListSoftDeletedBooks_Call{Call: _e.mock.On("ListSoftDeletedBooks", limit, offset, olderThan)}
 }
 
@@ -2665,7 +2588,7 @@ type MockPlaylistStore_ListUserBookStatesByStatus_Call struct {
 //   - status string
 //   - limit int
 //   - offset int
-func (_e *MockPlaylistStore_Expecter) ListUserBookStatesByStatus(userID any, status any, limit any, offset any) *MockPlaylistStore_ListUserBookStatesByStatus_Call {
+func (_e *MockPlaylistStore_Expecter) ListUserBookStatesByStatus(userID interface{}, status interface{}, limit interface{}, offset interface{}) *MockPlaylistStore_ListUserBookStatesByStatus_Call {
 	return &MockPlaylistStore_ListUserBookStatesByStatus_Call{Call: _e.mock.On("ListUserBookStatesByStatus", userID, status, limit, offset)}
 }
 
@@ -2750,7 +2673,7 @@ type MockPlaylistStore_ListUserPlaylists_Call struct {
 //   - playlistType string
 //   - limit int
 //   - offset int
-func (_e *MockPlaylistStore_Expecter) ListUserPlaylists(playlistType any, limit any, offset any) *MockPlaylistStore_ListUserPlaylists_Call {
+func (_e *MockPlaylistStore_Expecter) ListUserPlaylists(playlistType interface{}, limit interface{}, offset interface{}) *MockPlaylistStore_ListUserPlaylists_Call {
 	return &MockPlaylistStore_ListUserPlaylists_Call{Call: _e.mock.On("ListUserPlaylists", playlistType, limit, offset)}
 }
 
@@ -2831,7 +2754,7 @@ type MockPlaylistStore_ListUserPlaylistsForUser_Call struct {
 //   - playlistType string
 //   - limit int
 //   - offset int
-func (_e *MockPlaylistStore_Expecter) ListUserPlaylistsForUser(userID any, playlistType any, limit any, offset any) *MockPlaylistStore_ListUserPlaylistsForUser_Call {
+func (_e *MockPlaylistStore_Expecter) ListUserPlaylistsForUser(userID interface{}, playlistType interface{}, limit interface{}, offset interface{}) *MockPlaylistStore_ListUserPlaylistsForUser_Call {
 	return &MockPlaylistStore_ListUserPlaylistsForUser_Call{Call: _e.mock.On("ListUserPlaylistsForUser", userID, playlistType, limit, offset)}
 }
 
@@ -2909,7 +2832,7 @@ type MockPlaylistStore_ListUserPositionsForBook_Call struct {
 // ListUserPositionsForBook is a helper method to define mock.On call
 //   - userID string
 //   - bookID string
-func (_e *MockPlaylistStore_Expecter) ListUserPositionsForBook(userID any, bookID any) *MockPlaylistStore_ListUserPositionsForBook_Call {
+func (_e *MockPlaylistStore_Expecter) ListUserPositionsForBook(userID interface{}, bookID interface{}) *MockPlaylistStore_ListUserPositionsForBook_Call {
 	return &MockPlaylistStore_ListUserPositionsForBook_Call{Call: _e.mock.On("ListUserPositionsForBook", userID, bookID)}
 }
 
@@ -2977,7 +2900,7 @@ type MockPlaylistStore_ListUserPositionsSince_Call struct {
 // ListUserPositionsSince is a helper method to define mock.On call
 //   - userID string
 //   - t time.Time
-func (_e *MockPlaylistStore_Expecter) ListUserPositionsSince(userID any, t any) *MockPlaylistStore_ListUserPositionsSince_Call {
+func (_e *MockPlaylistStore_Expecter) ListUserPositionsSince(userID interface{}, t interface{}) *MockPlaylistStore_ListUserPositionsSince_Call {
 	return &MockPlaylistStore_ListUserPositionsSince_Call{Call: _e.mock.On("ListUserPositionsSince", userID, t)}
 }
 
@@ -3046,7 +2969,7 @@ type MockPlaylistStore_SearchBooks_Call struct {
 //   - query string
 //   - limit int
 //   - offset int
-func (_e *MockPlaylistStore_Expecter) SearchBooks(query any, limit any, offset any) *MockPlaylistStore_SearchBooks_Call {
+func (_e *MockPlaylistStore_Expecter) SearchBooks(query interface{}, limit interface{}, offset interface{}) *MockPlaylistStore_SearchBooks_Call {
 	return &MockPlaylistStore_SearchBooks_Call{Call: _e.mock.On("SearchBooks", query, limit, offset)}
 }
 
@@ -3107,7 +3030,7 @@ type MockPlaylistStore_SetUserBookState_Call struct {
 
 // SetUserBookState is a helper method to define mock.On call
 //   - state *database.UserBookState
-func (_e *MockPlaylistStore_Expecter) SetUserBookState(state any) *MockPlaylistStore_SetUserBookState_Call {
+func (_e *MockPlaylistStore_Expecter) SetUserBookState(state interface{}) *MockPlaylistStore_SetUserBookState_Call {
 	return &MockPlaylistStore_SetUserBookState_Call{Call: _e.mock.On("SetUserBookState", state)}
 }
 
@@ -3161,7 +3084,7 @@ type MockPlaylistStore_SetUserPosition_Call struct {
 //   - bookID string
 //   - segmentID string
 //   - positionSeconds float64
-func (_e *MockPlaylistStore_Expecter) SetUserPosition(userID any, bookID any, segmentID any, positionSeconds any) *MockPlaylistStore_SetUserPosition_Call {
+func (_e *MockPlaylistStore_Expecter) SetUserPosition(userID interface{}, bookID interface{}, segmentID interface{}, positionSeconds interface{}) *MockPlaylistStore_SetUserPosition_Call {
 	return &MockPlaylistStore_SetUserPosition_Call{Call: _e.mock.On("SetUserPosition", userID, bookID, segmentID, positionSeconds)}
 }
 
@@ -3227,7 +3150,7 @@ type MockPlaylistStore_UpdateUserPlaylist_Call struct {
 
 // UpdateUserPlaylist is a helper method to define mock.On call
 //   - pl *database.UserPlaylist
-func (_e *MockPlaylistStore_Expecter) UpdateUserPlaylist(pl any) *MockPlaylistStore_UpdateUserPlaylist_Call {
+func (_e *MockPlaylistStore_Expecter) UpdateUserPlaylist(pl interface{}) *MockPlaylistStore_UpdateUserPlaylist_Call {
 	return &MockPlaylistStore_UpdateUserPlaylist_Call{Call: _e.mock.On("UpdateUserPlaylist", pl)}
 }
 

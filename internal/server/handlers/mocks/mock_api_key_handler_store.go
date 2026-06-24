@@ -73,7 +73,7 @@ type MockAPIKeyHandlerStore_CreateAPIKey_Call struct {
 
 // CreateAPIKey is a helper method to define mock.On call
 //   - key *database.APIKey
-func (_e *MockAPIKeyHandlerStore_Expecter) CreateAPIKey(key any) *MockAPIKeyHandlerStore_CreateAPIKey_Call {
+func (_e *MockAPIKeyHandlerStore_Expecter) CreateAPIKey(key interface{}) *MockAPIKeyHandlerStore_CreateAPIKey_Call {
 	return &MockAPIKeyHandlerStore_CreateAPIKey_Call{Call: _e.mock.On("CreateAPIKey", key)}
 }
 
@@ -135,7 +135,7 @@ type MockAPIKeyHandlerStore_GetAPIKey_Call struct {
 
 // GetAPIKey is a helper method to define mock.On call
 //   - id string
-func (_e *MockAPIKeyHandlerStore_Expecter) GetAPIKey(id any) *MockAPIKeyHandlerStore_GetAPIKey_Call {
+func (_e *MockAPIKeyHandlerStore_Expecter) GetAPIKey(id interface{}) *MockAPIKeyHandlerStore_GetAPIKey_Call {
 	return &MockAPIKeyHandlerStore_GetAPIKey_Call{Call: _e.mock.On("GetAPIKey", id)}
 }
 
@@ -197,7 +197,7 @@ type MockAPIKeyHandlerStore_GetUserByID_Call struct {
 
 // GetUserByID is a helper method to define mock.On call
 //   - id string
-func (_e *MockAPIKeyHandlerStore_Expecter) GetUserByID(id any) *MockAPIKeyHandlerStore_GetUserByID_Call {
+func (_e *MockAPIKeyHandlerStore_Expecter) GetUserByID(id interface{}) *MockAPIKeyHandlerStore_GetUserByID_Call {
 	return &MockAPIKeyHandlerStore_GetUserByID_Call{Call: _e.mock.On("GetUserByID", id)}
 }
 
@@ -259,7 +259,7 @@ type MockAPIKeyHandlerStore_ListAPIKeysForUser_Call struct {
 
 // ListAPIKeysForUser is a helper method to define mock.On call
 //   - userID string
-func (_e *MockAPIKeyHandlerStore_Expecter) ListAPIKeysForUser(userID any) *MockAPIKeyHandlerStore_ListAPIKeysForUser_Call {
+func (_e *MockAPIKeyHandlerStore_Expecter) ListAPIKeysForUser(userID interface{}) *MockAPIKeyHandlerStore_ListAPIKeysForUser_Call {
 	return &MockAPIKeyHandlerStore_ListAPIKeysForUser_Call{Call: _e.mock.On("ListAPIKeysForUser", userID)}
 }
 
@@ -365,7 +365,7 @@ type MockAPIKeyHandlerStore_RevokeAPIKey_Call struct {
 
 // RevokeAPIKey is a helper method to define mock.On call
 //   - id string
-func (_e *MockAPIKeyHandlerStore_Expecter) RevokeAPIKey(id any) *MockAPIKeyHandlerStore_RevokeAPIKey_Call {
+func (_e *MockAPIKeyHandlerStore_Expecter) RevokeAPIKey(id interface{}) *MockAPIKeyHandlerStore_RevokeAPIKey_Call {
 	return &MockAPIKeyHandlerStore_RevokeAPIKey_Call{Call: _e.mock.On("RevokeAPIKey", id)}
 }
 
@@ -418,7 +418,7 @@ type MockAPIKeyHandlerStore_SetAPIKeyStatus_Call struct {
 //   - id string
 //   - status string
 //   - at time.Time
-func (_e *MockAPIKeyHandlerStore_Expecter) SetAPIKeyStatus(id any, status any, at any) *MockAPIKeyHandlerStore_SetAPIKeyStatus_Call {
+func (_e *MockAPIKeyHandlerStore_Expecter) SetAPIKeyStatus(id interface{}, status interface{}, at interface{}) *MockAPIKeyHandlerStore_SetAPIKeyStatus_Call {
 	return &MockAPIKeyHandlerStore_SetAPIKeyStatus_Call{Call: _e.mock.On("SetAPIKeyStatus", id, status, at)}
 }
 

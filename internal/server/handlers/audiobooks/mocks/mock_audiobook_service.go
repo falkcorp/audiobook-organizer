@@ -74,7 +74,7 @@ type MockAudiobookService_BatchUpdateUserTags_Call struct {
 //   - bookIDs []string
 //   - addTags []string
 //   - removeTags []string
-func (_e *MockAudiobookService_Expecter) BatchUpdateUserTags(bookIDs any, addTags any, removeTags any) *MockAudiobookService_BatchUpdateUserTags_Call {
+func (_e *MockAudiobookService_Expecter) BatchUpdateUserTags(bookIDs interface{}, addTags interface{}, removeTags interface{}) *MockAudiobookService_BatchUpdateUserTags_Call {
 	return &MockAudiobookService_BatchUpdateUserTags_Call{Call: _e.mock.On("BatchUpdateUserTags", bookIDs, addTags, removeTags)}
 }
 
@@ -144,7 +144,7 @@ type MockAudiobookService_CountAudiobooks_Call struct {
 
 // CountAudiobooks is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockAudiobookService_Expecter) CountAudiobooks(ctx any) *MockAudiobookService_CountAudiobooks_Call {
+func (_e *MockAudiobookService_Expecter) CountAudiobooks(ctx interface{}) *MockAudiobookService_CountAudiobooks_Call {
 	return &MockAudiobookService_CountAudiobooks_Call{Call: _e.mock.On("CountAudiobooks", ctx)}
 }
 
@@ -208,7 +208,7 @@ type MockAudiobookService_DeleteAudiobook_Call struct {
 //   - ctx context.Context
 //   - id string
 //   - opts *audiobooks.DeleteAudiobookOptions
-func (_e *MockAudiobookService_Expecter) DeleteAudiobook(ctx any, id any, opts any) *MockAudiobookService_DeleteAudiobook_Call {
+func (_e *MockAudiobookService_Expecter) DeleteAudiobook(ctx interface{}, id interface{}, opts interface{}) *MockAudiobookService_DeleteAudiobook_Call {
 	return &MockAudiobookService_DeleteAudiobook_Call{Call: _e.mock.On("DeleteAudiobook", ctx, id, opts)}
 }
 
@@ -271,7 +271,7 @@ type MockAudiobookService_EnrichAudiobooksWithNames_Call struct {
 
 // EnrichAudiobooksWithNames is a helper method to define mock.On call
 //   - books []database.Book
-func (_e *MockAudiobookService_Expecter) EnrichAudiobooksWithNames(books any) *MockAudiobookService_EnrichAudiobooksWithNames_Call {
+func (_e *MockAudiobookService_Expecter) EnrichAudiobooksWithNames(books interface{}) *MockAudiobookService_EnrichAudiobooksWithNames_Call {
 	return &MockAudiobookService_EnrichAudiobooksWithNames_Call{Call: _e.mock.On("EnrichAudiobooksWithNames", books)}
 }
 
@@ -334,7 +334,7 @@ type MockAudiobookService_GetAudiobook_Call struct {
 // GetAudiobook is a helper method to define mock.On call
 //   - ctx context.Context
 //   - id string
-func (_e *MockAudiobookService_Expecter) GetAudiobook(ctx any, id any) *MockAudiobookService_GetAudiobook_Call {
+func (_e *MockAudiobookService_Expecter) GetAudiobook(ctx interface{}, id interface{}) *MockAudiobookService_GetAudiobook_Call {
 	return &MockAudiobookService_GetAudiobook_Call{Call: _e.mock.On("GetAudiobook", ctx, id)}
 }
 
@@ -404,7 +404,7 @@ type MockAudiobookService_GetAudiobookTags_Call struct {
 //   - id string
 //   - compareID string
 //   - snapshotTS string
-func (_e *MockAudiobookService_Expecter) GetAudiobookTags(ctx any, id any, compareID any, snapshotTS any) *MockAudiobookService_GetAudiobookTags_Call {
+func (_e *MockAudiobookService_Expecter) GetAudiobookTags(ctx interface{}, id interface{}, compareID interface{}, snapshotTS interface{}) *MockAudiobookService_GetAudiobookTags_Call {
 	return &MockAudiobookService_GetAudiobookTags_Call{Call: _e.mock.On("GetAudiobookTags", ctx, id, compareID, snapshotTS)}
 }
 
@@ -481,7 +481,7 @@ type MockAudiobookService_GetBookUserTags_Call struct {
 
 // GetBookUserTags is a helper method to define mock.On call
 //   - bookID string
-func (_e *MockAudiobookService_Expecter) GetBookUserTags(bookID any) *MockAudiobookService_GetBookUserTags_Call {
+func (_e *MockAudiobookService_Expecter) GetBookUserTags(bookID interface{}) *MockAudiobookService_GetBookUserTags_Call {
 	return &MockAudiobookService_GetBookUserTags_Call{Call: _e.mock.On("GetBookUserTags", bookID)}
 }
 
@@ -546,7 +546,7 @@ type MockAudiobookService_GetSoftDeletedBooks_Call struct {
 //   - limit int
 //   - offset int
 //   - olderThanDays *int
-func (_e *MockAudiobookService_Expecter) GetSoftDeletedBooks(ctx any, limit any, offset any, olderThanDays any) *MockAudiobookService_GetSoftDeletedBooks_Call {
+func (_e *MockAudiobookService_Expecter) GetSoftDeletedBooks(ctx interface{}, limit interface{}, offset interface{}, olderThanDays interface{}) *MockAudiobookService_GetSoftDeletedBooks_Call {
 	return &MockAudiobookService_GetSoftDeletedBooks_Call{Call: _e.mock.On("GetSoftDeletedBooks", ctx, limit, offset, olderThanDays)}
 }
 
@@ -713,7 +713,7 @@ type MockAudiobookService_PurgeSoftDeletedBooks_Call struct {
 //   - ctx context.Context
 //   - deleteFiles bool
 //   - olderThanDays *int
-func (_e *MockAudiobookService_Expecter) PurgeSoftDeletedBooks(ctx any, deleteFiles any, olderThanDays any) *MockAudiobookService_PurgeSoftDeletedBooks_Call {
+func (_e *MockAudiobookService_Expecter) PurgeSoftDeletedBooks(ctx interface{}, deleteFiles interface{}, olderThanDays interface{}) *MockAudiobookService_PurgeSoftDeletedBooks_Call {
 	return &MockAudiobookService_PurgeSoftDeletedBooks_Call{Call: _e.mock.On("PurgeSoftDeletedBooks", ctx, deleteFiles, olderThanDays)}
 }
 
@@ -786,7 +786,7 @@ type MockAudiobookService_RestoreAudiobook_Call struct {
 // RestoreAudiobook is a helper method to define mock.On call
 //   - ctx context.Context
 //   - id string
-func (_e *MockAudiobookService_Expecter) RestoreAudiobook(ctx any, id any) *MockAudiobookService_RestoreAudiobook_Call {
+func (_e *MockAudiobookService_Expecter) RestoreAudiobook(ctx interface{}, id interface{}) *MockAudiobookService_RestoreAudiobook_Call {
 	return &MockAudiobookService_RestoreAudiobook_Call{Call: _e.mock.On("RestoreAudiobook", ctx, id)}
 }
 

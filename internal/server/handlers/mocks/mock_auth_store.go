@@ -129,7 +129,7 @@ type MockAuthStore_CreateSession_Call struct {
 //   - ip string
 //   - userAgent string
 //   - ttl time.Duration
-func (_e *MockAuthStore_Expecter) CreateSession(userID any, ip any, userAgent any, ttl any) *MockAuthStore_CreateSession_Call {
+func (_e *MockAuthStore_Expecter) CreateSession(userID interface{}, ip interface{}, userAgent interface{}, ttl interface{}) *MockAuthStore_CreateSession_Call {
 	return &MockAuthStore_CreateSession_Call{Call: _e.mock.On("CreateSession", userID, ip, userAgent, ttl)}
 }
 
@@ -211,7 +211,7 @@ type MockAuthStore_CreateUser_Call struct {
 //   - passwordHash string
 //   - roles []string
 //   - status string
-func (_e *MockAuthStore_Expecter) CreateUser(username any, email any, passwordHashAlgo any, passwordHash any, roles any, status any) *MockAuthStore_CreateUser_Call {
+func (_e *MockAuthStore_Expecter) CreateUser(username interface{}, email interface{}, passwordHashAlgo interface{}, passwordHash interface{}, roles interface{}, status interface{}) *MockAuthStore_CreateUser_Call {
 	return &MockAuthStore_CreateUser_Call{Call: _e.mock.On("CreateUser", username, email, passwordHashAlgo, passwordHash, roles, status)}
 }
 
@@ -298,7 +298,7 @@ type MockAuthStore_GetRoleByID_Call struct {
 
 // GetRoleByID is a helper method to define mock.On call
 //   - id string
-func (_e *MockAuthStore_Expecter) GetRoleByID(id any) *MockAuthStore_GetRoleByID_Call {
+func (_e *MockAuthStore_Expecter) GetRoleByID(id interface{}) *MockAuthStore_GetRoleByID_Call {
 	return &MockAuthStore_GetRoleByID_Call{Call: _e.mock.On("GetRoleByID", id)}
 }
 
@@ -360,7 +360,7 @@ type MockAuthStore_GetRoleByName_Call struct {
 
 // GetRoleByName is a helper method to define mock.On call
 //   - name string
-func (_e *MockAuthStore_Expecter) GetRoleByName(name any) *MockAuthStore_GetRoleByName_Call {
+func (_e *MockAuthStore_Expecter) GetRoleByName(name interface{}) *MockAuthStore_GetRoleByName_Call {
 	return &MockAuthStore_GetRoleByName_Call{Call: _e.mock.On("GetRoleByName", name)}
 }
 
@@ -422,7 +422,7 @@ type MockAuthStore_GetSession_Call struct {
 
 // GetSession is a helper method to define mock.On call
 //   - id string
-func (_e *MockAuthStore_Expecter) GetSession(id any) *MockAuthStore_GetSession_Call {
+func (_e *MockAuthStore_Expecter) GetSession(id interface{}) *MockAuthStore_GetSession_Call {
 	return &MockAuthStore_GetSession_Call{Call: _e.mock.On("GetSession", id)}
 }
 
@@ -484,7 +484,7 @@ type MockAuthStore_GetUserByID_Call struct {
 
 // GetUserByID is a helper method to define mock.On call
 //   - id string
-func (_e *MockAuthStore_Expecter) GetUserByID(id any) *MockAuthStore_GetUserByID_Call {
+func (_e *MockAuthStore_Expecter) GetUserByID(id interface{}) *MockAuthStore_GetUserByID_Call {
 	return &MockAuthStore_GetUserByID_Call{Call: _e.mock.On("GetUserByID", id)}
 }
 
@@ -546,7 +546,7 @@ type MockAuthStore_GetUserByUsername_Call struct {
 
 // GetUserByUsername is a helper method to define mock.On call
 //   - username string
-func (_e *MockAuthStore_Expecter) GetUserByUsername(username any) *MockAuthStore_GetUserByUsername_Call {
+func (_e *MockAuthStore_Expecter) GetUserByUsername(username interface{}) *MockAuthStore_GetUserByUsername_Call {
 	return &MockAuthStore_GetUserByUsername_Call{Call: _e.mock.On("GetUserByUsername", username)}
 }
 
@@ -608,7 +608,7 @@ type MockAuthStore_ListUserSessions_Call struct {
 
 // ListUserSessions is a helper method to define mock.On call
 //   - userID string
-func (_e *MockAuthStore_Expecter) ListUserSessions(userID any) *MockAuthStore_ListUserSessions_Call {
+func (_e *MockAuthStore_Expecter) ListUserSessions(userID interface{}) *MockAuthStore_ListUserSessions_Call {
 	return &MockAuthStore_ListUserSessions_Call{Call: _e.mock.On("ListUserSessions", userID)}
 }
 
@@ -659,7 +659,7 @@ type MockAuthStore_RevokeSession_Call struct {
 
 // RevokeSession is a helper method to define mock.On call
 //   - id string
-func (_e *MockAuthStore_Expecter) RevokeSession(id any) *MockAuthStore_RevokeSession_Call {
+func (_e *MockAuthStore_Expecter) RevokeSession(id interface{}) *MockAuthStore_RevokeSession_Call {
 	return &MockAuthStore_RevokeSession_Call{Call: _e.mock.On("RevokeSession", id)}
 }
 
@@ -710,7 +710,7 @@ type MockAuthStore_UpdateUser_Call struct {
 
 // UpdateUser is a helper method to define mock.On call
 //   - user *database.User
-func (_e *MockAuthStore_Expecter) UpdateUser(user any) *MockAuthStore_UpdateUser_Call {
+func (_e *MockAuthStore_Expecter) UpdateUser(user interface{}) *MockAuthStore_UpdateUser_Call {
 	return &MockAuthStore_UpdateUser_Call{Call: _e.mock.On("UpdateUser", user)}
 }
 

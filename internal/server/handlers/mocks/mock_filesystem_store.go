@@ -69,7 +69,7 @@ type MockFilesystemStore_CountBooksByPathPrefix_Call struct {
 
 // CountBooksByPathPrefix is a helper method to define mock.On call
 //   - prefix string
-func (_e *MockFilesystemStore_Expecter) CountBooksByPathPrefix(prefix any) *MockFilesystemStore_CountBooksByPathPrefix_Call {
+func (_e *MockFilesystemStore_Expecter) CountBooksByPathPrefix(prefix interface{}) *MockFilesystemStore_CountBooksByPathPrefix_Call {
 	return &MockFilesystemStore_CountBooksByPathPrefix_Call{Call: _e.mock.On("CountBooksByPathPrefix", prefix)}
 }
 
@@ -133,7 +133,7 @@ type MockFilesystemStore_CreateOperation_Call struct {
 //   - id string
 //   - opType string
 //   - folderPath *string
-func (_e *MockFilesystemStore_Expecter) CreateOperation(id any, opType any, folderPath any) *MockFilesystemStore_CreateOperation_Call {
+func (_e *MockFilesystemStore_Expecter) CreateOperation(id interface{}, opType interface{}, folderPath interface{}) *MockFilesystemStore_CreateOperation_Call {
 	return &MockFilesystemStore_CreateOperation_Call{Call: _e.mock.On("CreateOperation", id, opType, folderPath)}
 }
 
@@ -194,7 +194,7 @@ type MockFilesystemStore_DeleteImportPath_Call struct {
 
 // DeleteImportPath is a helper method to define mock.On call
 //   - id int
-func (_e *MockFilesystemStore_Expecter) DeleteImportPath(id any) *MockFilesystemStore_DeleteImportPath_Call {
+func (_e *MockFilesystemStore_Expecter) DeleteImportPath(id interface{}) *MockFilesystemStore_DeleteImportPath_Call {
 	return &MockFilesystemStore_DeleteImportPath_Call{Call: _e.mock.On("DeleteImportPath", id)}
 }
 
@@ -311,7 +311,7 @@ type MockFilesystemStore_GetBookByFilePath_Call struct {
 
 // GetBookByFilePath is a helper method to define mock.On call
 //   - path string
-func (_e *MockFilesystemStore_Expecter) GetBookByFilePath(path any) *MockFilesystemStore_GetBookByFilePath_Call {
+func (_e *MockFilesystemStore_Expecter) GetBookByFilePath(path interface{}) *MockFilesystemStore_GetBookByFilePath_Call {
 	return &MockFilesystemStore_GetBookByFilePath_Call{Call: _e.mock.On("GetBookByFilePath", path)}
 }
 
@@ -429,7 +429,7 @@ type MockFilesystemStore_UpdateBook_Call struct {
 // UpdateBook is a helper method to define mock.On call
 //   - id string
 //   - book *database.Book
-func (_e *MockFilesystemStore_Expecter) UpdateBook(id any, book any) *MockFilesystemStore_UpdateBook_Call {
+func (_e *MockFilesystemStore_Expecter) UpdateBook(id interface{}, book interface{}) *MockFilesystemStore_UpdateBook_Call {
 	return &MockFilesystemStore_UpdateBook_Call{Call: _e.mock.On("UpdateBook", id, book)}
 }
 
@@ -486,7 +486,7 @@ type MockFilesystemStore_UpdateImportPath_Call struct {
 // UpdateImportPath is a helper method to define mock.On call
 //   - id int
 //   - path *database.ImportPath
-func (_e *MockFilesystemStore_Expecter) UpdateImportPath(id any, path any) *MockFilesystemStore_UpdateImportPath_Call {
+func (_e *MockFilesystemStore_Expecter) UpdateImportPath(id interface{}, path interface{}) *MockFilesystemStore_UpdateImportPath_Call {
 	return &MockFilesystemStore_UpdateImportPath_Call{Call: _e.mock.On("UpdateImportPath", id, path)}
 }
 

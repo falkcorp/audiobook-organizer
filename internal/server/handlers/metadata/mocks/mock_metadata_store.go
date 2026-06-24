@@ -62,7 +62,7 @@ type MockMetadataStore_AddMetadataRejection_Call struct {
 
 // AddMetadataRejection is a helper method to define mock.On call
 //   - r database.MetadataRejection
-func (_e *MockMetadataStore_Expecter) AddMetadataRejection(r any) *MockMetadataStore_AddMetadataRejection_Call {
+func (_e *MockMetadataStore_Expecter) AddMetadataRejection(r interface{}) *MockMetadataStore_AddMetadataRejection_Call {
 	return &MockMetadataStore_AddMetadataRejection_Call{Call: _e.mock.On("AddMetadataRejection", r)}
 }
 
@@ -85,59 +85,6 @@ func (_c *MockMetadataStore_AddMetadataRejection_Call) Return(err error) *MockMe
 }
 
 func (_c *MockMetadataStore_AddMetadataRejection_Call) RunAndReturn(run func(r database.MetadataRejection) error) *MockMetadataStore_AddMetadataRejection_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// CountAllBooks provides a mock function for the type MockMetadataStore
-func (_mock *MockMetadataStore) CountAllBooks() (int, error) {
-	ret := _mock.Called()
-
-	if len(ret) == 0 {
-		panic("no return value specified for CountAllBooks")
-	}
-
-	var r0 int
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func() (int, error)); ok {
-		return returnFunc()
-	}
-	if returnFunc, ok := ret.Get(0).(func() int); ok {
-		r0 = returnFunc()
-	} else {
-		r0 = ret.Get(0).(int)
-	}
-	if returnFunc, ok := ret.Get(1).(func() error); ok {
-		r1 = returnFunc()
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockMetadataStore_CountAllBooks_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CountAllBooks'
-type MockMetadataStore_CountAllBooks_Call struct {
-	*mock.Call
-}
-
-// CountAllBooks is a helper method to define mock.On call
-func (_e *MockMetadataStore_Expecter) CountAllBooks() *MockMetadataStore_CountAllBooks_Call {
-	return &MockMetadataStore_CountAllBooks_Call{Call: _e.mock.On("CountAllBooks")}
-}
-
-func (_c *MockMetadataStore_CountAllBooks_Call) Run(run func()) *MockMetadataStore_CountAllBooks_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run()
-	})
-	return _c
-}
-
-func (_c *MockMetadataStore_CountAllBooks_Call) Return(n int, err error) *MockMetadataStore_CountAllBooks_Call {
-	_c.Call.Return(n, err)
-	return _c
-}
-
-func (_c *MockMetadataStore_CountAllBooks_Call) RunAndReturn(run func() (int, error)) *MockMetadataStore_CountAllBooks_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -168,29 +115,29 @@ func (_mock *MockMetadataStore) CountPrimaryBooks() (int, error) {
 	return r0, r1
 }
 
-// MockMetadataStore_CountPrimaryBooks_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CountPrimaryBooks'
-type MockMetadataStore_CountPrimaryBooks_Call struct {
+// MockMetadataStore_CountBooks_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CountPrimaryBooks'
+type MockMetadataStore_CountBooks_Call struct {
 	*mock.Call
 }
 
 // CountPrimaryBooks is a helper method to define mock.On call
-func (_e *MockMetadataStore_Expecter) CountPrimaryBooks() *MockMetadataStore_CountPrimaryBooks_Call {
-	return &MockMetadataStore_CountPrimaryBooks_Call{Call: _e.mock.On("CountPrimaryBooks")}
+func (_e *MockMetadataStore_Expecter) CountPrimaryBooks() *MockMetadataStore_CountBooks_Call {
+	return &MockMetadataStore_CountBooks_Call{Call: _e.mock.On("CountPrimaryBooks")}
 }
 
-func (_c *MockMetadataStore_CountPrimaryBooks_Call) Run(run func()) *MockMetadataStore_CountPrimaryBooks_Call {
+func (_c *MockMetadataStore_CountBooks_Call) Run(run func()) *MockMetadataStore_CountBooks_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run()
 	})
 	return _c
 }
 
-func (_c *MockMetadataStore_CountPrimaryBooks_Call) Return(n int, err error) *MockMetadataStore_CountPrimaryBooks_Call {
+func (_c *MockMetadataStore_CountBooks_Call) Return(n int, err error) *MockMetadataStore_CountBooks_Call {
 	_c.Call.Return(n, err)
 	return _c
 }
 
-func (_c *MockMetadataStore_CountPrimaryBooks_Call) RunAndReturn(run func() (int, error)) *MockMetadataStore_CountPrimaryBooks_Call {
+func (_c *MockMetadataStore_CountBooks_Call) RunAndReturn(run func() (int, error)) *MockMetadataStore_CountBooks_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -283,7 +230,7 @@ type MockMetadataStore_CreateAuthor_Call struct {
 
 // CreateAuthor is a helper method to define mock.On call
 //   - name string
-func (_e *MockMetadataStore_Expecter) CreateAuthor(name any) *MockMetadataStore_CreateAuthor_Call {
+func (_e *MockMetadataStore_Expecter) CreateAuthor(name interface{}) *MockMetadataStore_CreateAuthor_Call {
 	return &MockMetadataStore_CreateAuthor_Call{Call: _e.mock.On("CreateAuthor", name)}
 }
 
@@ -345,7 +292,7 @@ type MockMetadataStore_CreateBook_Call struct {
 
 // CreateBook is a helper method to define mock.On call
 //   - book *database.Book
-func (_e *MockMetadataStore_Expecter) CreateBook(book any) *MockMetadataStore_CreateBook_Call {
+func (_e *MockMetadataStore_Expecter) CreateBook(book interface{}) *MockMetadataStore_CreateBook_Call {
 	return &MockMetadataStore_CreateBook_Call{Call: _e.mock.On("CreateBook", book)}
 }
 
@@ -396,7 +343,7 @@ type MockMetadataStore_CreateBookTombstone_Call struct {
 
 // CreateBookTombstone is a helper method to define mock.On call
 //   - book *database.Book
-func (_e *MockMetadataStore_Expecter) CreateBookTombstone(book any) *MockMetadataStore_CreateBookTombstone_Call {
+func (_e *MockMetadataStore_Expecter) CreateBookTombstone(book interface{}) *MockMetadataStore_CreateBookTombstone_Call {
 	return &MockMetadataStore_CreateBookTombstone_Call{Call: _e.mock.On("CreateBookTombstone", book)}
 }
 
@@ -460,7 +407,7 @@ type MockMetadataStore_CreateOperation_Call struct {
 //   - id string
 //   - opType string
 //   - folderPath *string
-func (_e *MockMetadataStore_Expecter) CreateOperation(id any, opType any, folderPath any) *MockMetadataStore_CreateOperation_Call {
+func (_e *MockMetadataStore_Expecter) CreateOperation(id interface{}, opType interface{}, folderPath interface{}) *MockMetadataStore_CreateOperation_Call {
 	return &MockMetadataStore_CreateOperation_Call{Call: _e.mock.On("CreateOperation", id, opType, folderPath)}
 }
 
@@ -521,7 +468,7 @@ type MockMetadataStore_DeleteBook_Call struct {
 
 // DeleteBook is a helper method to define mock.On call
 //   - id string
-func (_e *MockMetadataStore_Expecter) DeleteBook(id any) *MockMetadataStore_DeleteBook_Call {
+func (_e *MockMetadataStore_Expecter) DeleteBook(id interface{}) *MockMetadataStore_DeleteBook_Call {
 	return &MockMetadataStore_DeleteBook_Call{Call: _e.mock.On("DeleteBook", id)}
 }
 
@@ -572,7 +519,7 @@ type MockMetadataStore_DeleteBookTombstone_Call struct {
 
 // DeleteBookTombstone is a helper method to define mock.On call
 //   - id string
-func (_e *MockMetadataStore_Expecter) DeleteBookTombstone(id any) *MockMetadataStore_DeleteBookTombstone_Call {
+func (_e *MockMetadataStore_Expecter) DeleteBookTombstone(id interface{}) *MockMetadataStore_DeleteBookTombstone_Call {
 	return &MockMetadataStore_DeleteBookTombstone_Call{Call: _e.mock.On("DeleteBookTombstone", id)}
 }
 
@@ -624,7 +571,7 @@ type MockMetadataStore_FlagMetadataHashDuplicate_Call struct {
 // FlagMetadataHashDuplicate is a helper method to define mock.On call
 //   - primaryID string
 //   - duplicateID string
-func (_e *MockMetadataStore_Expecter) FlagMetadataHashDuplicate(primaryID any, duplicateID any) *MockMetadataStore_FlagMetadataHashDuplicate_Call {
+func (_e *MockMetadataStore_Expecter) FlagMetadataHashDuplicate(primaryID interface{}, duplicateID interface{}) *MockMetadataStore_FlagMetadataHashDuplicate_Call {
 	return &MockMetadataStore_FlagMetadataHashDuplicate_Call{Call: _e.mock.On("FlagMetadataHashDuplicate", primaryID, duplicateID)}
 }
 
@@ -692,7 +639,7 @@ type MockMetadataStore_GetAllBookSummaries_Call struct {
 // GetAllBookSummaries is a helper method to define mock.On call
 //   - limit int
 //   - offset int
-func (_e *MockMetadataStore_Expecter) GetAllBookSummaries(limit any, offset any) *MockMetadataStore_GetAllBookSummaries_Call {
+func (_e *MockMetadataStore_Expecter) GetAllBookSummaries(limit interface{}, offset interface{}) *MockMetadataStore_GetAllBookSummaries_Call {
 	return &MockMetadataStore_GetAllBookSummaries_Call{Call: _e.mock.On("GetAllBookSummaries", limit, offset)}
 }
 
@@ -760,7 +707,7 @@ type MockMetadataStore_GetAllBooks_Call struct {
 // GetAllBooks is a helper method to define mock.On call
 //   - limit int
 //   - offset int
-func (_e *MockMetadataStore_Expecter) GetAllBooks(limit any, offset any) *MockMetadataStore_GetAllBooks_Call {
+func (_e *MockMetadataStore_Expecter) GetAllBooks(limit interface{}, offset interface{}) *MockMetadataStore_GetAllBooks_Call {
 	return &MockMetadataStore_GetAllBooks_Call{Call: _e.mock.On("GetAllBooks", limit, offset)}
 }
 
@@ -795,11 +742,9 @@ func (_c *MockMetadataStore_GetAllBooks_Call) RunAndReturn(run func(limit int, o
 // GetAllBooksFrom provides a mock function for the type MockMetadataStore
 func (_mock *MockMetadataStore) GetAllBooksFrom(afterID string, limit int) ([]database.Book, error) {
 	ret := _mock.Called(afterID, limit)
-
 	if len(ret) == 0 {
 		panic("no return value specified for GetAllBooksFrom")
 	}
-
 	var r0 []database.Book
 	var r1 error
 	if returnFunc, ok := ret.Get(0).(func(string, int) ([]database.Book, error)); ok {
@@ -820,42 +765,20 @@ func (_mock *MockMetadataStore) GetAllBooksFrom(afterID string, limit int) ([]da
 	return r0, r1
 }
 
-// MockMetadataStore_GetAllBooksFrom_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetAllBooksFrom'
-type MockMetadataStore_GetAllBooksFrom_Call struct {
-	*mock.Call
-}
+type MockMetadataStore_GetAllBooksFrom_Call struct{ *mock.Call }
 
-// GetAllBooksFrom is a helper method to define mock.On call
-//   - afterID string
-//   - limit int
-func (_e *MockMetadataStore_Expecter) GetAllBooksFrom(afterID any, limit any) *MockMetadataStore_GetAllBooksFrom_Call {
+func (_e *MockMetadataStore_Expecter) GetAllBooksFrom(afterID interface{}, limit interface{}) *MockMetadataStore_GetAllBooksFrom_Call {
 	return &MockMetadataStore_GetAllBooksFrom_Call{Call: _e.mock.On("GetAllBooksFrom", afterID, limit)}
 }
-
-func (_c *MockMetadataStore_GetAllBooksFrom_Call) Run(run func(afterID string, limit int)) *MockMetadataStore_GetAllBooksFrom_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 string
-		if args[0] != nil {
-			arg0 = args[0].(string)
-		}
-		var arg1 int
-		if args[1] != nil {
-			arg1 = args[1].(int)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
+func (_c *MockMetadataStore_GetAllBooksFrom_Call) Run(run func(string, int)) *MockMetadataStore_GetAllBooksFrom_Call {
+	_c.Call.Run(func(args mock.Arguments) { run(args[0].(string), args[1].(int)) })
 	return _c
 }
-
 func (_c *MockMetadataStore_GetAllBooksFrom_Call) Return(books []database.Book, err error) *MockMetadataStore_GetAllBooksFrom_Call {
 	_c.Call.Return(books, err)
 	return _c
 }
-
-func (_c *MockMetadataStore_GetAllBooksFrom_Call) RunAndReturn(run func(afterID string, limit int) ([]database.Book, error)) *MockMetadataStore_GetAllBooksFrom_Call {
+func (_c *MockMetadataStore_GetAllBooksFrom_Call) RunAndReturn(run func(string, int) ([]database.Book, error)) *MockMetadataStore_GetAllBooksFrom_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -895,7 +818,7 @@ type MockMetadataStore_GetAuthorByName_Call struct {
 
 // GetAuthorByName is a helper method to define mock.On call
 //   - name string
-func (_e *MockMetadataStore_Expecter) GetAuthorByName(name any) *MockMetadataStore_GetAuthorByName_Call {
+func (_e *MockMetadataStore_Expecter) GetAuthorByName(name interface{}) *MockMetadataStore_GetAuthorByName_Call {
 	return &MockMetadataStore_GetAuthorByName_Call{Call: _e.mock.On("GetAuthorByName", name)}
 }
 
@@ -958,7 +881,7 @@ type MockMetadataStore_GetBookAtVersion_Call struct {
 // GetBookAtVersion is a helper method to define mock.On call
 //   - id string
 //   - ts time.Time
-func (_e *MockMetadataStore_Expecter) GetBookAtVersion(id any, ts any) *MockMetadataStore_GetBookAtVersion_Call {
+func (_e *MockMetadataStore_Expecter) GetBookAtVersion(id interface{}, ts interface{}) *MockMetadataStore_GetBookAtVersion_Call {
 	return &MockMetadataStore_GetBookAtVersion_Call{Call: _e.mock.On("GetBookAtVersion", id, ts)}
 }
 
@@ -1025,7 +948,7 @@ type MockMetadataStore_GetBookByFileHash_Call struct {
 
 // GetBookByFileHash is a helper method to define mock.On call
 //   - hash string
-func (_e *MockMetadataStore_Expecter) GetBookByFileHash(hash any) *MockMetadataStore_GetBookByFileHash_Call {
+func (_e *MockMetadataStore_Expecter) GetBookByFileHash(hash interface{}) *MockMetadataStore_GetBookByFileHash_Call {
 	return &MockMetadataStore_GetBookByFileHash_Call{Call: _e.mock.On("GetBookByFileHash", hash)}
 }
 
@@ -1087,7 +1010,7 @@ type MockMetadataStore_GetBookByFilePath_Call struct {
 
 // GetBookByFilePath is a helper method to define mock.On call
 //   - path string
-func (_e *MockMetadataStore_Expecter) GetBookByFilePath(path any) *MockMetadataStore_GetBookByFilePath_Call {
+func (_e *MockMetadataStore_Expecter) GetBookByFilePath(path interface{}) *MockMetadataStore_GetBookByFilePath_Call {
 	return &MockMetadataStore_GetBookByFilePath_Call{Call: _e.mock.On("GetBookByFilePath", path)}
 }
 
@@ -1149,7 +1072,7 @@ type MockMetadataStore_GetBookByID_Call struct {
 
 // GetBookByID is a helper method to define mock.On call
 //   - id string
-func (_e *MockMetadataStore_Expecter) GetBookByID(id any) *MockMetadataStore_GetBookByID_Call {
+func (_e *MockMetadataStore_Expecter) GetBookByID(id interface{}) *MockMetadataStore_GetBookByID_Call {
 	return &MockMetadataStore_GetBookByID_Call{Call: _e.mock.On("GetBookByID", id)}
 }
 
@@ -1211,7 +1134,7 @@ type MockMetadataStore_GetBookByITunesPersistentID_Call struct {
 
 // GetBookByITunesPersistentID is a helper method to define mock.On call
 //   - persistentID string
-func (_e *MockMetadataStore_Expecter) GetBookByITunesPersistentID(persistentID any) *MockMetadataStore_GetBookByITunesPersistentID_Call {
+func (_e *MockMetadataStore_Expecter) GetBookByITunesPersistentID(persistentID interface{}) *MockMetadataStore_GetBookByITunesPersistentID_Call {
 	return &MockMetadataStore_GetBookByITunesPersistentID_Call{Call: _e.mock.On("GetBookByITunesPersistentID", persistentID)}
 }
 
@@ -1273,7 +1196,7 @@ type MockMetadataStore_GetBookByOrganizedHash_Call struct {
 
 // GetBookByOrganizedHash is a helper method to define mock.On call
 //   - hash string
-func (_e *MockMetadataStore_Expecter) GetBookByOrganizedHash(hash any) *MockMetadataStore_GetBookByOrganizedHash_Call {
+func (_e *MockMetadataStore_Expecter) GetBookByOrganizedHash(hash interface{}) *MockMetadataStore_GetBookByOrganizedHash_Call {
 	return &MockMetadataStore_GetBookByOrganizedHash_Call{Call: _e.mock.On("GetBookByOrganizedHash", hash)}
 }
 
@@ -1335,7 +1258,7 @@ type MockMetadataStore_GetBookByOriginalHash_Call struct {
 
 // GetBookByOriginalHash is a helper method to define mock.On call
 //   - hash string
-func (_e *MockMetadataStore_Expecter) GetBookByOriginalHash(hash any) *MockMetadataStore_GetBookByOriginalHash_Call {
+func (_e *MockMetadataStore_Expecter) GetBookByOriginalHash(hash interface{}) *MockMetadataStore_GetBookByOriginalHash_Call {
 	return &MockMetadataStore_GetBookByOriginalHash_Call{Call: _e.mock.On("GetBookByOriginalHash", hash)}
 }
 
@@ -1399,7 +1322,7 @@ type MockMetadataStore_GetBookIDsByISBNASIN_Call struct {
 //   - isbn10 string
 //   - isbn13 string
 //   - asin string
-func (_e *MockMetadataStore_Expecter) GetBookIDsByISBNASIN(isbn10 any, isbn13 any, asin any) *MockMetadataStore_GetBookIDsByISBNASIN_Call {
+func (_e *MockMetadataStore_Expecter) GetBookIDsByISBNASIN(isbn10 interface{}, isbn13 interface{}, asin interface{}) *MockMetadataStore_GetBookIDsByISBNASIN_Call {
 	return &MockMetadataStore_GetBookIDsByISBNASIN_Call{Call: _e.mock.On("GetBookIDsByISBNASIN", isbn10, isbn13, asin)}
 }
 
@@ -1472,7 +1395,7 @@ type MockMetadataStore_GetBookSnapshots_Call struct {
 // GetBookSnapshots is a helper method to define mock.On call
 //   - id string
 //   - limit int
-func (_e *MockMetadataStore_Expecter) GetBookSnapshots(id any, limit any) *MockMetadataStore_GetBookSnapshots_Call {
+func (_e *MockMetadataStore_Expecter) GetBookSnapshots(id interface{}, limit interface{}) *MockMetadataStore_GetBookSnapshots_Call {
 	return &MockMetadataStore_GetBookSnapshots_Call{Call: _e.mock.On("GetBookSnapshots", id, limit)}
 }
 
@@ -1539,7 +1462,7 @@ type MockMetadataStore_GetBookTombstone_Call struct {
 
 // GetBookTombstone is a helper method to define mock.On call
 //   - id string
-func (_e *MockMetadataStore_Expecter) GetBookTombstone(id any) *MockMetadataStore_GetBookTombstone_Call {
+func (_e *MockMetadataStore_Expecter) GetBookTombstone(id interface{}) *MockMetadataStore_GetBookTombstone_Call {
 	return &MockMetadataStore_GetBookTombstone_Call{Call: _e.mock.On("GetBookTombstone", id)}
 }
 
@@ -1601,7 +1524,7 @@ type MockMetadataStore_GetBooksByAuthorID_Call struct {
 
 // GetBooksByAuthorID is a helper method to define mock.On call
 //   - authorID int
-func (_e *MockMetadataStore_Expecter) GetBooksByAuthorID(authorID any) *MockMetadataStore_GetBooksByAuthorID_Call {
+func (_e *MockMetadataStore_Expecter) GetBooksByAuthorID(authorID interface{}) *MockMetadataStore_GetBooksByAuthorID_Call {
 	return &MockMetadataStore_GetBooksByAuthorID_Call{Call: _e.mock.On("GetBooksByAuthorID", authorID)}
 }
 
@@ -1663,7 +1586,7 @@ type MockMetadataStore_GetBooksByMetadataSourceHash_Call struct {
 
 // GetBooksByMetadataSourceHash is a helper method to define mock.On call
 //   - hash string
-func (_e *MockMetadataStore_Expecter) GetBooksByMetadataSourceHash(hash any) *MockMetadataStore_GetBooksByMetadataSourceHash_Call {
+func (_e *MockMetadataStore_Expecter) GetBooksByMetadataSourceHash(hash interface{}) *MockMetadataStore_GetBooksByMetadataSourceHash_Call {
 	return &MockMetadataStore_GetBooksByMetadataSourceHash_Call{Call: _e.mock.On("GetBooksByMetadataSourceHash", hash)}
 }
 
@@ -1725,7 +1648,7 @@ type MockMetadataStore_GetBooksBySeriesID_Call struct {
 
 // GetBooksBySeriesID is a helper method to define mock.On call
 //   - seriesID int
-func (_e *MockMetadataStore_Expecter) GetBooksBySeriesID(seriesID any) *MockMetadataStore_GetBooksBySeriesID_Call {
+func (_e *MockMetadataStore_Expecter) GetBooksBySeriesID(seriesID interface{}) *MockMetadataStore_GetBooksBySeriesID_Call {
 	return &MockMetadataStore_GetBooksBySeriesID_Call{Call: _e.mock.On("GetBooksBySeriesID", seriesID)}
 }
 
@@ -1788,7 +1711,7 @@ type MockMetadataStore_GetBooksByTitleInDir_Call struct {
 // GetBooksByTitleInDir is a helper method to define mock.On call
 //   - normalizedTitle string
 //   - dirPath string
-func (_e *MockMetadataStore_Expecter) GetBooksByTitleInDir(normalizedTitle any, dirPath any) *MockMetadataStore_GetBooksByTitleInDir_Call {
+func (_e *MockMetadataStore_Expecter) GetBooksByTitleInDir(normalizedTitle interface{}, dirPath interface{}) *MockMetadataStore_GetBooksByTitleInDir_Call {
 	return &MockMetadataStore_GetBooksByTitleInDir_Call{Call: _e.mock.On("GetBooksByTitleInDir", normalizedTitle, dirPath)}
 }
 
@@ -1855,7 +1778,7 @@ type MockMetadataStore_GetBooksByVersionGroup_Call struct {
 
 // GetBooksByVersionGroup is a helper method to define mock.On call
 //   - groupID string
-func (_e *MockMetadataStore_Expecter) GetBooksByVersionGroup(groupID any) *MockMetadataStore_GetBooksByVersionGroup_Call {
+func (_e *MockMetadataStore_Expecter) GetBooksByVersionGroup(groupID interface{}) *MockMetadataStore_GetBooksByVersionGroup_Call {
 	return &MockMetadataStore_GetBooksByVersionGroup_Call{Call: _e.mock.On("GetBooksByVersionGroup", groupID)}
 }
 
@@ -2082,7 +2005,7 @@ type MockMetadataStore_GetDuplicateBooksByMetadata_Call struct {
 
 // GetDuplicateBooksByMetadata is a helper method to define mock.On call
 //   - threshold float64
-func (_e *MockMetadataStore_Expecter) GetDuplicateBooksByMetadata(threshold any) *MockMetadataStore_GetDuplicateBooksByMetadata_Call {
+func (_e *MockMetadataStore_Expecter) GetDuplicateBooksByMetadata(threshold interface{}) *MockMetadataStore_GetDuplicateBooksByMetadata_Call {
 	return &MockMetadataStore_GetDuplicateBooksByMetadata_Call{Call: _e.mock.On("GetDuplicateBooksByMetadata", threshold)}
 }
 
@@ -2309,7 +2232,7 @@ type MockMetadataStore_GetMetadataRejections_Call struct {
 
 // GetMetadataRejections is a helper method to define mock.On call
 //   - bookID string
-func (_e *MockMetadataStore_Expecter) GetMetadataRejections(bookID any) *MockMetadataStore_GetMetadataRejections_Call {
+func (_e *MockMetadataStore_Expecter) GetMetadataRejections(bookID interface{}) *MockMetadataStore_GetMetadataRejections_Call {
 	return &MockMetadataStore_GetMetadataRejections_Call{Call: _e.mock.On("GetMetadataRejections", bookID)}
 }
 
@@ -2372,7 +2295,7 @@ type MockMetadataStore_GetQuarantinedBooks_Call struct {
 // GetQuarantinedBooks is a helper method to define mock.On call
 //   - limit int
 //   - offset int
-func (_e *MockMetadataStore_Expecter) GetQuarantinedBooks(limit any, offset any) *MockMetadataStore_GetQuarantinedBooks_Call {
+func (_e *MockMetadataStore_Expecter) GetQuarantinedBooks(limit interface{}, offset interface{}) *MockMetadataStore_GetQuarantinedBooks_Call {
 	return &MockMetadataStore_GetQuarantinedBooks_Call{Call: _e.mock.On("GetQuarantinedBooks", limit, offset)}
 }
 
@@ -2437,7 +2360,7 @@ type MockMetadataStore_GetScanFailCount_Call struct {
 
 // GetScanFailCount is a helper method to define mock.On call
 //   - pathHash string
-func (_e *MockMetadataStore_Expecter) GetScanFailCount(pathHash any) *MockMetadataStore_GetScanFailCount_Call {
+func (_e *MockMetadataStore_Expecter) GetScanFailCount(pathHash interface{}) *MockMetadataStore_GetScanFailCount_Call {
 	return &MockMetadataStore_GetScanFailCount_Call{Call: _e.mock.On("GetScanFailCount", pathHash)}
 }
 
@@ -2497,7 +2420,7 @@ type MockMetadataStore_IncrScanFailCount_Call struct {
 
 // IncrScanFailCount is a helper method to define mock.On call
 //   - pathHash string
-func (_e *MockMetadataStore_Expecter) IncrScanFailCount(pathHash any) *MockMetadataStore_IncrScanFailCount_Call {
+func (_e *MockMetadataStore_Expecter) IncrScanFailCount(pathHash interface{}) *MockMetadataStore_IncrScanFailCount_Call {
 	return &MockMetadataStore_IncrScanFailCount_Call{Call: _e.mock.On("IncrScanFailCount", pathHash)}
 }
 
@@ -2614,7 +2537,7 @@ type MockMetadataStore_ListBookTombstones_Call struct {
 
 // ListBookTombstones is a helper method to define mock.On call
 //   - limit int
-func (_e *MockMetadataStore_Expecter) ListBookTombstones(limit any) *MockMetadataStore_ListBookTombstones_Call {
+func (_e *MockMetadataStore_Expecter) ListBookTombstones(limit interface{}) *MockMetadataStore_ListBookTombstones_Call {
 	return &MockMetadataStore_ListBookTombstones_Call{Call: _e.mock.On("ListBookTombstones", limit)}
 }
 
@@ -2677,7 +2600,7 @@ type MockMetadataStore_ListBooksByITunesPID_Call struct {
 // ListBooksByITunesPID is a helper method to define mock.On call
 //   - limit int
 //   - offset int
-func (_e *MockMetadataStore_Expecter) ListBooksByITunesPID(limit any, offset any) *MockMetadataStore_ListBooksByITunesPID_Call {
+func (_e *MockMetadataStore_Expecter) ListBooksByITunesPID(limit interface{}, offset interface{}) *MockMetadataStore_ListBooksByITunesPID_Call {
 	return &MockMetadataStore_ListBooksByITunesPID_Call{Call: _e.mock.On("ListBooksByITunesPID", limit, offset)}
 }
 
@@ -2746,7 +2669,7 @@ type MockMetadataStore_ListSoftDeletedBooks_Call struct {
 //   - limit int
 //   - offset int
 //   - olderThan *time.Time
-func (_e *MockMetadataStore_Expecter) ListSoftDeletedBooks(limit any, offset any, olderThan any) *MockMetadataStore_ListSoftDeletedBooks_Call {
+func (_e *MockMetadataStore_Expecter) ListSoftDeletedBooks(limit interface{}, offset interface{}, olderThan interface{}) *MockMetadataStore_ListSoftDeletedBooks_Call {
 	return &MockMetadataStore_ListSoftDeletedBooks_Call{Call: _e.mock.On("ListSoftDeletedBooks", limit, offset, olderThan)}
 }
 
@@ -2816,7 +2739,7 @@ type MockMetadataStore_MarkITunesSynced_Call struct {
 
 // MarkITunesSynced is a helper method to define mock.On call
 //   - bookIDs []string
-func (_e *MockMetadataStore_Expecter) MarkITunesSynced(bookIDs any) *MockMetadataStore_MarkITunesSynced_Call {
+func (_e *MockMetadataStore_Expecter) MarkITunesSynced(bookIDs interface{}) *MockMetadataStore_MarkITunesSynced_Call {
 	return &MockMetadataStore_MarkITunesSynced_Call{Call: _e.mock.On("MarkITunesSynced", bookIDs)}
 }
 
@@ -2870,7 +2793,7 @@ type MockMetadataStore_MergeChapterBooks_Call struct {
 //   - srcIDs []string
 //   - commonTitle string
 //   - totalDuration float64
-func (_e *MockMetadataStore_Expecter) MergeChapterBooks(primaryID any, srcIDs any, commonTitle any, totalDuration any) *MockMetadataStore_MergeChapterBooks_Call {
+func (_e *MockMetadataStore_Expecter) MergeChapterBooks(primaryID interface{}, srcIDs interface{}, commonTitle interface{}, totalDuration interface{}) *MockMetadataStore_MergeChapterBooks_Call {
 	return &MockMetadataStore_MergeChapterBooks_Call{Call: _e.mock.On("MergeChapterBooks", primaryID, srcIDs, commonTitle, totalDuration)}
 }
 
@@ -2946,7 +2869,7 @@ type MockMetadataStore_PruneBookSnapshots_Call struct {
 // PruneBookSnapshots is a helper method to define mock.On call
 //   - id string
 //   - keepCount int
-func (_e *MockMetadataStore_Expecter) PruneBookSnapshots(id any, keepCount any) *MockMetadataStore_PruneBookSnapshots_Call {
+func (_e *MockMetadataStore_Expecter) PruneBookSnapshots(id interface{}, keepCount interface{}) *MockMetadataStore_PruneBookSnapshots_Call {
 	return &MockMetadataStore_PruneBookSnapshots_Call{Call: _e.mock.On("PruneBookSnapshots", id, keepCount)}
 }
 
@@ -3002,7 +2925,7 @@ type MockMetadataStore_RecomputeBookAggregates_Call struct {
 
 // RecomputeBookAggregates is a helper method to define mock.On call
 //   - bookID string
-func (_e *MockMetadataStore_Expecter) RecomputeBookAggregates(bookID any) *MockMetadataStore_RecomputeBookAggregates_Call {
+func (_e *MockMetadataStore_Expecter) RecomputeBookAggregates(bookID interface{}) *MockMetadataStore_RecomputeBookAggregates_Call {
 	return &MockMetadataStore_RecomputeBookAggregates_Call{Call: _e.mock.On("RecomputeBookAggregates", bookID)}
 }
 
@@ -3053,7 +2976,7 @@ type MockMetadataStore_ResetScanFailCount_Call struct {
 
 // ResetScanFailCount is a helper method to define mock.On call
 //   - pathHash string
-func (_e *MockMetadataStore_Expecter) ResetScanFailCount(pathHash any) *MockMetadataStore_ResetScanFailCount_Call {
+func (_e *MockMetadataStore_Expecter) ResetScanFailCount(pathHash interface{}) *MockMetadataStore_ResetScanFailCount_Call {
 	return &MockMetadataStore_ResetScanFailCount_Call{Call: _e.mock.On("ResetScanFailCount", pathHash)}
 }
 
@@ -3116,7 +3039,7 @@ type MockMetadataStore_RevertBookToVersion_Call struct {
 // RevertBookToVersion is a helper method to define mock.On call
 //   - id string
 //   - ts time.Time
-func (_e *MockMetadataStore_Expecter) RevertBookToVersion(id any, ts any) *MockMetadataStore_RevertBookToVersion_Call {
+func (_e *MockMetadataStore_Expecter) RevertBookToVersion(id interface{}, ts interface{}) *MockMetadataStore_RevertBookToVersion_Call {
 	return &MockMetadataStore_RevertBookToVersion_Call{Call: _e.mock.On("RevertBookToVersion", id, ts)}
 }
 
@@ -3185,7 +3108,7 @@ type MockMetadataStore_SearchBooks_Call struct {
 //   - query string
 //   - limit int
 //   - offset int
-func (_e *MockMetadataStore_Expecter) SearchBooks(query any, limit any, offset any) *MockMetadataStore_SearchBooks_Call {
+func (_e *MockMetadataStore_Expecter) SearchBooks(query interface{}, limit interface{}, offset interface{}) *MockMetadataStore_SearchBooks_Call {
 	return &MockMetadataStore_SearchBooks_Call{Call: _e.mock.On("SearchBooks", query, limit, offset)}
 }
 
@@ -3247,7 +3170,7 @@ type MockMetadataStore_SetLastWrittenAt_Call struct {
 // SetLastWrittenAt is a helper method to define mock.On call
 //   - id string
 //   - t time.Time
-func (_e *MockMetadataStore_Expecter) SetLastWrittenAt(id any, t any) *MockMetadataStore_SetLastWrittenAt_Call {
+func (_e *MockMetadataStore_Expecter) SetLastWrittenAt(id interface{}, t interface{}) *MockMetadataStore_SetLastWrittenAt_Call {
 	return &MockMetadataStore_SetLastWrittenAt_Call{Call: _e.mock.On("SetLastWrittenAt", id, t)}
 }
 
@@ -3315,7 +3238,7 @@ type MockMetadataStore_UpdateBook_Call struct {
 // UpdateBook is a helper method to define mock.On call
 //   - id string
 //   - book *database.Book
-func (_e *MockMetadataStore_Expecter) UpdateBook(id any, book any) *MockMetadataStore_UpdateBook_Call {
+func (_e *MockMetadataStore_Expecter) UpdateBook(id interface{}, book interface{}) *MockMetadataStore_UpdateBook_Call {
 	return &MockMetadataStore_UpdateBook_Call{Call: _e.mock.On("UpdateBook", id, book)}
 }
 
@@ -3372,7 +3295,7 @@ type MockMetadataStore_UpdateBookRating_Call struct {
 // UpdateBookRating is a helper method to define mock.On call
 //   - id string
 //   - req database.UpdateBookRatingRequest
-func (_e *MockMetadataStore_Expecter) UpdateBookRating(id any, req any) *MockMetadataStore_UpdateBookRating_Call {
+func (_e *MockMetadataStore_Expecter) UpdateBookRating(id interface{}, req interface{}) *MockMetadataStore_UpdateBookRating_Call {
 	return &MockMetadataStore_UpdateBookRating_Call{Call: _e.mock.On("UpdateBookRating", id, req)}
 }
 

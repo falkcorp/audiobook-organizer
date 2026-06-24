@@ -71,7 +71,7 @@ type MockDedupStore_GetAuthorByID_Call struct {
 
 // GetAuthorByID is a helper method to define mock.On call
 //   - id int
-func (_e *MockDedupStore_Expecter) GetAuthorByID(id any) *MockDedupStore_GetAuthorByID_Call {
+func (_e *MockDedupStore_Expecter) GetAuthorByID(id interface{}) *MockDedupStore_GetAuthorByID_Call {
 	return &MockDedupStore_GetAuthorByID_Call{Call: _e.mock.On("GetAuthorByID", id)}
 }
 
@@ -133,7 +133,7 @@ type MockDedupStore_GetBookByID_Call struct {
 
 // GetBookByID is a helper method to define mock.On call
 //   - id string
-func (_e *MockDedupStore_Expecter) GetBookByID(id any) *MockDedupStore_GetBookByID_Call {
+func (_e *MockDedupStore_Expecter) GetBookByID(id interface{}) *MockDedupStore_GetBookByID_Call {
 	return &MockDedupStore_GetBookByID_Call{Call: _e.mock.On("GetBookByID", id)}
 }
 
@@ -195,7 +195,7 @@ type MockDedupStore_GetBookFiles_Call struct {
 
 // GetBookFiles is a helper method to define mock.On call
 //   - bookID string
-func (_e *MockDedupStore_Expecter) GetBookFiles(bookID any) *MockDedupStore_GetBookFiles_Call {
+func (_e *MockDedupStore_Expecter) GetBookFiles(bookID interface{}) *MockDedupStore_GetBookFiles_Call {
 	return &MockDedupStore_GetBookFiles_Call{Call: _e.mock.On("GetBookFiles", bookID)}
 }
 
@@ -257,7 +257,7 @@ type MockDedupStore_GetSeriesByID_Call struct {
 
 // GetSeriesByID is a helper method to define mock.On call
 //   - id int
-func (_e *MockDedupStore_Expecter) GetSeriesByID(id any) *MockDedupStore_GetSeriesByID_Call {
+func (_e *MockDedupStore_Expecter) GetSeriesByID(id interface{}) *MockDedupStore_GetSeriesByID_Call {
 	return &MockDedupStore_GetSeriesByID_Call{Call: _e.mock.On("GetSeriesByID", id)}
 }
 
