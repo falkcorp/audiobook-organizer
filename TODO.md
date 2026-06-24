@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 9.38.0 -->
+<!-- version: 9.39.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-06-23 -->
+<!-- last-edited: 2026-06-24 -->
 
 # Project TODO
 
@@ -49,8 +49,7 @@ cancel tail) — re-enqueue pending. Tag-backfill 98% complete (308K/314K), re-e
       hoist book-only collectors out of per-candidate loop (444-554), purge-stale cap 100K→1M
       chunked (2195). Audit §2.2–2.5.
 - [ ] **PH-4** 5 prefix-not-in-parent flat-dump folders — decide v2 looser guard or leave.
-- [ ] **PH-5** `UpsertBookFile` (singular) — same memdb-roundtrip full-replace pattern as #1552;
-      add the preserve-on-empty guard for safety.
+- [x] **PH-5** ✅ `UpsertBookFile` preserve-on-empty guard already added in PR #1587 (PERF-7). AcoustIDFingerprint, FingerprintFailureReason/Detail/DiagnosticJSON all preserved on nil/empty incoming fields.
 
 ---
 
