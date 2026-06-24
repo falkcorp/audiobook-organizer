@@ -108,6 +108,30 @@ func (_c *MockOperationsStore_AddOperationLog_Call) RunAndReturn(run func(operat
 	return _c
 }
 
+// CountAllBooks provides a mock function for the type MockOperationsStore
+func (_mock *MockOperationsStore) CountAllBooks() (int, error) {
+	ret := _mock.Called()
+	if len(ret) == 0 {
+		panic("no return value specified for CountAllBooks")
+	}
+	var r0 int
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func() (int, error)); ok {
+		return returnFunc()
+	}
+	if returnFunc, ok := ret.Get(0).(func() int); ok {
+		r0 = returnFunc()
+	} else {
+		r0 = ret.Get(0).(int)
+	}
+	if returnFunc, ok := ret.Get(1).(func() error); ok {
+		r1 = returnFunc()
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
 // CountPrimaryBooks provides a mock function for the type MockOperationsStore
 func (_mock *MockOperationsStore) CountPrimaryBooks() (int, error) {
 	ret := _mock.Called()
