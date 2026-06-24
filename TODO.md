@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.39.0 -->
+<!-- version: 9.40.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-06-24 -->
 
@@ -45,9 +45,7 @@ cancel tail) — re-enqueue pending. Tag-backfill 98% complete (308K/314K), re-e
 - [ ] **PH-2 (P2)** Differentiated residual-triage op — the 10,859 exact-pending are 4
       populations (genuine dups KEEP / fragment-vs-full / title-leak-false / byte-empty stubs).
       Purge only the junk; never blanket-purge. Own dry-run + advisor gate. Audit §3.
-- [ ] **PH-3 (P1/P2)** Dedup perf: O(N·P) per-book candidate filter (engine.go:407),
-      hoist book-only collectors out of per-candidate loop (444-554), purge-stale cap 100K→1M
-      chunked (2195). Audit §2.2–2.5.
+- [x] **PH-3 (P1/P2)** ✅ Dedup perf shipped in PR #1617: O(N²)→O(1) embedding map, hoisted book-only collectors, purge cap 100K→1M.
 - [ ] **PH-4** 5 prefix-not-in-parent flat-dump folders — decide v2 looser guard or leave.
 - [x] **PH-5** ✅ `UpsertBookFile` preserve-on-empty guard already added in PR #1587 (PERF-7). AcoustIDFingerprint, FingerprintFailureReason/Detail/DiagnosticJSON all preserved on nil/empty incoming fields.
 
@@ -58,27 +56,17 @@ cancel tail) — re-enqueue pending. Tag-backfill 98% complete (308K/314K), re-e
 > Live working set so nothing is lost between sessions. Status flags:
 > 🟢 done · 🟡 in progress / branch exists · 🔵 designed, not started · 🔴 blocked.
 
-### AP-1 🟡 Generic "Combine into one book" merge
-**Branch `feat/combine-into-one-book`** (worktree `.worktrees/combine-merge`, NOT committed yet).
-The only book "merge" today is a VERSION-group merge (`merge.Service.MergeBooks`, both
-`/audiobooks/merge` and `/audiobooks/duplicates/merge`). There is NO action that combines N
-single-file books into one multi-file book. User wants one (e.g. to reassemble the
-"Assimil Japanese With Ease" tracks, each imported as its own `- <track>` book).
-- 🟢 Backend: `merge.Service.CombineBooks(bookIDs, primaryID)` written + compiles — moves all
-  files onto a user-picked survivor (MoveBookFilesToBook / reattach-safe create), reassigns
-  ext-ids, guards + hard-deletes shells, recomputes aggregates. DB-only (files stay on disk).
-- 🔵 TODO: extend `duplicates.MergeService` iface + `CombineBooks` handler + `POST /audiobooks/combine`
-  route + `api.combineBooks` + Library "Combine into one book" button (distinct from "Merge as
-  versions") + service unit tests.
+### AP-1 ✅ Generic "Combine into one book" merge
+All components confirmed in main: `merge.Service.CombineBooks`, `POST /audiobooks/combine` route,
+`duplicates.MergeService.CombineBooks` iface, `api.combineBooks` frontend function, Library toolbar
+button + dialog (LibraryToolbar.tsx → BatchToolbar.tsx → LibraryDialogs.tsx).
 - 🔵 Follow-up (AP-1b): when survivor's files are under RootDir, physically move them into one
   folder (user wants co-location only inside the library; leave abooks/ etc. in place).
-- Plan: `.worktrees/combine-merge/PLAN.md`.
 
-### AP-2 🔵 Persistent metadata-review undo
-The "review metadata matches" success banner is transient; add a persistent Undo control at the
-bottom of the review view so the last apply can be undone after the banner disappears. Reuse
-`POST /audiobooks/:id/metadata/undo-apply` / revert-to-snapshot. Investigate the review-matches
-component in `web/src/` first. NOT started.
+### AP-2 ✅ Persistent metadata-review undo
+Confirmed in main: `POST /audiobooks/:id/undo-last-apply` backend (`wire_audiobooks_routes.go:58`,
+`handler_metadata.go:159`), `api.undoLastApply`, and persistent Undo button in
+`BulkMetadataSearchDialog.tsx:731` ("remains usable after the banner disappears").
 
 ### AP-3 ✅ Duration extraction fixed — real durations backfill ~complete
 Fixed in PR #1555 (`internal/mediainfo`: calls ffprobe first, estimate only as flagged fallback).
@@ -98,11 +86,10 @@ uses `track.TotalTime/1000`. Backfill ops:
 Completed 314,893/314,893 at 2026-06-22T14:38 (op `01KVQVAZK0TH0FRFPNMMBYJKJQ`). All RawTags
 backfilled. Lossless-library goal achieved.
 
-### AP-5 🔵 Same-folder untagged track shattering (import root cause #2)
-Distinct from the subdir-shatter fixed in #1551: tracks like `Assimil .../Audio/06 - X.mp3`,
-`07 - Y.mp3` (all in ONE folder, NO tags) each import as their own book because
-`DetectMultiFileGroup` needs a ≥75% album-tag quorum and there are no tags. Needs a no-tag
-sequential-filename grouping path at scan time. (AP-1 lets the user fix existing ones manually.)
+### AP-5 ✅ Same-folder untagged track shattering (import root cause #2)
+Fixed in PR #1618: `DetectMultiFileGroup` now groups files when ALL tags are absent
+(universally empty album + album_artist). Sequential filenames alone are sufficient evidence
+for untagged tracks. Scanner uses folder name as book title for no-tag groups.
 
 ---
 

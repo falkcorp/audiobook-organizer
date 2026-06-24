@@ -1,11 +1,17 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.81.0 -->
+<!-- version: 3.82.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-24 -->
 
 # Changelog
 
 ## [Unreleased]
+
+### Features
+
+#### June 24, 2026 — AP-5: no-tag sequential grouping (PR #1618)
+
+- **`feat(scanner)`** AP-5 — `DetectMultiFileGroup` now groups files when ALL album and album_artist tags are absent. Previously, untagged sequential tracks (e.g. `06 - Lesson Six.mp3`, `07 - Lesson Seven.mp3` in one folder) each imported as a separate shattered Book because the 75% tag-quorum check failed on empty tags. Fixed with a single-condition check: `albumCount == 0 && artistCount == 0` → tag silence is uniform, not a conflict; sequential filenames are sufficient evidence. Conflicting tags (mixed non-empty values) are still rejected. Scanner uses the folder name as the book title for no-tag groups.
 
 ### Performance
 
