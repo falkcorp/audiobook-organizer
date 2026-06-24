@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/dedup_triage.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3a4b5c6d-7e8f-9012-abcd-ef1234567890
 // last-edited: 2026-06-24
 
@@ -82,9 +82,11 @@ type TriageReport struct {
 }
 
 // purgeableClasses are the populations safe to delete without human review.
+// TriageClassFragment is intentionally excluded: duration-data quality issues
+// (CONS-17 books with unverified ms-stored durations) mean fragment candidates
+// require manual review before any purge is authorised.
 var purgeableClasses = map[TriageClass]bool{
 	TriageClassStub:      true,
-	TriageClassFragment:  true,
 	TriageClassTitleLeak: true,
 }
 
