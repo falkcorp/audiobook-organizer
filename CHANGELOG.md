@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.82.0 -->
+<!-- version: 3.83.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-24 -->
 
@@ -8,6 +8,10 @@
 ## [Unreleased]
 
 ### Features
+
+#### June 24, 2026 — PH-2: dedup exact-pending triage op (PR #1619)
+
+- **`feat(dedup)`** PH-2 — Adds `maintenance.dedup-exact-triage`, a **read-only** dry-run op that classifies all pending book dedup candidates into five populations: `genuine` (file-hash / ISBN / metadata-hash / exact-acoustid → KEEP), `stub` (FileSize < 256 KiB + Duration < 5s → purgeable), `fragment` (duration ratio < 5%, CONS-FRAG artifact → purgeable), `title_leak` (both iTunes, exact-layer, no hard signal, CONS-17 artifact → purgeable), `unknown` (pre-T015 / unclassifiable → manual review). No candidates are deleted by this op. The purge wave (PH-2b) is a separate PR gated on the user reviewing the reported breakdown. 10 unit tests cover all classification branches.
 
 #### June 24, 2026 — AP-5: no-tag sequential grouping (PR #1618)
 

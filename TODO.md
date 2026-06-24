@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.40.0 -->
+<!-- version: 9.41.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-06-24 -->
 
@@ -42,11 +42,12 @@ cancel tail) — re-enqueue pending. Tag-backfill 98% complete (308K/314K), re-e
 > Session handoff: `.remember/remember.md`.
 
 - [x] **PH-1** ✅ Tag-backfill completed 314,893/314,893 (op `01KVQVAZK0TH0FRFPNMMBYJKJQ`, 2026-06-22). Lossless-library goal done.
-- [ ] **PH-2 (P2)** Differentiated residual-triage op — the 10,859 exact-pending are 4
-      populations (genuine dups KEEP / fragment-vs-full / title-leak-false / byte-empty stubs).
-      Purge only the junk; never blanket-purge. Own dry-run + advisor gate. Audit §3.
+- [ ] **PH-2 (P2)** Differentiated residual-triage op (PR #1619 merged, deployed).
+      `maintenance.dedup-exact-triage` shipped: classifies all pending candidates into
+      genuine/stub/fragment/title_leak/unknown. **Next: enqueue on prod and review the
+      population breakdown. Purge wave (PH-2b) is a separate PR — never blanket-purge.**
 - [x] **PH-3 (P1/P2)** ✅ Dedup perf shipped in PR #1617: O(N²)→O(1) embedding map, hoisted book-only collectors, purge cap 100K→1M.
-- [ ] **PH-4** 5 prefix-not-in-parent flat-dump folders — decide v2 looser guard or leave.
+- [x] **PH-4** ✅ Decision: LEAVE the `strings.Contains(normTitle(parent), normTitle(prefix))` guard as-is. Weakening the string test risks silent mis-merges across tens of thousands of iTunes books for only 5 edge cases. These 5 folders can be fixed manually via AP-1 "Combine into one book". No code change needed.
 - [x] **PH-5** ✅ `UpsertBookFile` preserve-on-empty guard already added in PR #1587 (PERF-7). AcoustIDFingerprint, FingerprintFailureReason/Detail/DiagnosticJSON all preserved on nil/empty incoming fields.
 
 ---
