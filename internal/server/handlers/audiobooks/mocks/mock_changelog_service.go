@@ -71,7 +71,7 @@ type MockChangelogService_GetBookChangelog_Call struct {
 
 // GetBookChangelog is a helper method to define mock.On call
 //   - bookID string
-func (_e *MockChangelogService_Expecter) GetBookChangelog(bookID any) *MockChangelogService_GetBookChangelog_Call {
+func (_e *MockChangelogService_Expecter) GetBookChangelog(bookID interface{}) *MockChangelogService_GetBookChangelog_Call {
 	return &MockChangelogService_GetBookChangelog_Call{Call: _e.mock.On("GetBookChangelog", bookID)}
 }
 

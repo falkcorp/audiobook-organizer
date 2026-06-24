@@ -62,7 +62,7 @@ type MockAIPipeline_CancelScan_Call struct {
 
 // CancelScan is a helper method to define mock.On call
 //   - scanID int
-func (_e *MockAIPipeline_Expecter) CancelScan(scanID any) *MockAIPipeline_CancelScan_Call {
+func (_e *MockAIPipeline_Expecter) CancelScan(scanID interface{}) *MockAIPipeline_CancelScan_Call {
 	return &MockAIPipeline_CancelScan_Call{Call: _e.mock.On("CancelScan", scanID)}
 }
 
@@ -125,7 +125,7 @@ type MockAIPipeline_StartScan_Call struct {
 // StartScan is a helper method to define mock.On call
 //   - ctx context.Context
 //   - mode string
-func (_e *MockAIPipeline_Expecter) StartScan(ctx any, mode any) *MockAIPipeline_StartScan_Call {
+func (_e *MockAIPipeline_Expecter) StartScan(ctx interface{}, mode interface{}) *MockAIPipeline_StartScan_Call {
 	return &MockAIPipeline_StartScan_Call{Call: _e.mock.On("StartScan", ctx, mode)}
 }
 

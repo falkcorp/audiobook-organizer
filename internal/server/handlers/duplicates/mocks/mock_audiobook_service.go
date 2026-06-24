@@ -73,7 +73,7 @@ type MockAudiobookService_GetDuplicateBooks_Call struct {
 
 // GetDuplicateBooks is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockAudiobookService_Expecter) GetDuplicateBooks(ctx any) *MockAudiobookService_GetDuplicateBooks_Call {
+func (_e *MockAudiobookService_Expecter) GetDuplicateBooks(ctx interface{}) *MockAudiobookService_GetDuplicateBooks_Call {
 	return &MockAudiobookService_GetDuplicateBooks_Call{Call: _e.mock.On("GetDuplicateBooks", ctx)}
 }
 

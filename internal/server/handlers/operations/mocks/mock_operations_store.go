@@ -66,7 +66,7 @@ type MockOperationsStore_AddOperationLog_Call struct {
 //   - level string
 //   - message string
 //   - details *string
-func (_e *MockOperationsStore_Expecter) AddOperationLog(operationID any, level any, message any, details any) *MockOperationsStore_AddOperationLog_Call {
+func (_e *MockOperationsStore_Expecter) AddOperationLog(operationID interface{}, level interface{}, message interface{}, details interface{}) *MockOperationsStore_AddOperationLog_Call {
 	return &MockOperationsStore_AddOperationLog_Call{Call: _e.mock.On("AddOperationLog", operationID, level, message, details)}
 }
 
@@ -111,11 +111,9 @@ func (_c *MockOperationsStore_AddOperationLog_Call) RunAndReturn(run func(operat
 // CountAllBooks provides a mock function for the type MockOperationsStore
 func (_mock *MockOperationsStore) CountAllBooks() (int, error) {
 	ret := _mock.Called()
-
 	if len(ret) == 0 {
 		panic("no return value specified for CountAllBooks")
 	}
-
 	var r0 int
 	var r1 error
 	if returnFunc, ok := ret.Get(0).(func() (int, error)); ok {
@@ -132,33 +130,6 @@ func (_mock *MockOperationsStore) CountAllBooks() (int, error) {
 		r1 = ret.Error(1)
 	}
 	return r0, r1
-}
-
-// MockOperationsStore_CountAllBooks_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CountAllBooks'
-type MockOperationsStore_CountAllBooks_Call struct {
-	*mock.Call
-}
-
-// CountAllBooks is a helper method to define mock.On call
-func (_e *MockOperationsStore_Expecter) CountAllBooks() *MockOperationsStore_CountAllBooks_Call {
-	return &MockOperationsStore_CountAllBooks_Call{Call: _e.mock.On("CountAllBooks")}
-}
-
-func (_c *MockOperationsStore_CountAllBooks_Call) Run(run func()) *MockOperationsStore_CountAllBooks_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run()
-	})
-	return _c
-}
-
-func (_c *MockOperationsStore_CountAllBooks_Call) Return(n int, err error) *MockOperationsStore_CountAllBooks_Call {
-	_c.Call.Return(n, err)
-	return _c
-}
-
-func (_c *MockOperationsStore_CountAllBooks_Call) RunAndReturn(run func() (int, error)) *MockOperationsStore_CountAllBooks_Call {
-	_c.Call.Return(run)
-	return _c
 }
 
 // CountPrimaryBooks provides a mock function for the type MockOperationsStore
@@ -187,29 +158,29 @@ func (_mock *MockOperationsStore) CountPrimaryBooks() (int, error) {
 	return r0, r1
 }
 
-// MockOperationsStore_CountPrimaryBooks_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CountPrimaryBooks'
-type MockOperationsStore_CountPrimaryBooks_Call struct {
+// MockOperationsStore_CountBooks_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CountPrimaryBooks'
+type MockOperationsStore_CountBooks_Call struct {
 	*mock.Call
 }
 
 // CountPrimaryBooks is a helper method to define mock.On call
-func (_e *MockOperationsStore_Expecter) CountPrimaryBooks() *MockOperationsStore_CountPrimaryBooks_Call {
-	return &MockOperationsStore_CountPrimaryBooks_Call{Call: _e.mock.On("CountPrimaryBooks")}
+func (_e *MockOperationsStore_Expecter) CountPrimaryBooks() *MockOperationsStore_CountBooks_Call {
+	return &MockOperationsStore_CountBooks_Call{Call: _e.mock.On("CountPrimaryBooks")}
 }
 
-func (_c *MockOperationsStore_CountPrimaryBooks_Call) Run(run func()) *MockOperationsStore_CountPrimaryBooks_Call {
+func (_c *MockOperationsStore_CountBooks_Call) Run(run func()) *MockOperationsStore_CountBooks_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run()
 	})
 	return _c
 }
 
-func (_c *MockOperationsStore_CountPrimaryBooks_Call) Return(n int, err error) *MockOperationsStore_CountPrimaryBooks_Call {
+func (_c *MockOperationsStore_CountBooks_Call) Return(n int, err error) *MockOperationsStore_CountBooks_Call {
 	_c.Call.Return(n, err)
 	return _c
 }
 
-func (_c *MockOperationsStore_CountPrimaryBooks_Call) RunAndReturn(run func() (int, error)) *MockOperationsStore_CountPrimaryBooks_Call {
+func (_c *MockOperationsStore_CountBooks_Call) RunAndReturn(run func() (int, error)) *MockOperationsStore_CountBooks_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -302,7 +273,7 @@ type MockOperationsStore_CreateAuthor_Call struct {
 
 // CreateAuthor is a helper method to define mock.On call
 //   - name string
-func (_e *MockOperationsStore_Expecter) CreateAuthor(name any) *MockOperationsStore_CreateAuthor_Call {
+func (_e *MockOperationsStore_Expecter) CreateAuthor(name interface{}) *MockOperationsStore_CreateAuthor_Call {
 	return &MockOperationsStore_CreateAuthor_Call{Call: _e.mock.On("CreateAuthor", name)}
 }
 
@@ -366,7 +337,7 @@ type MockOperationsStore_CreateAuthorAlias_Call struct {
 //   - authorID int
 //   - aliasName string
 //   - aliasType string
-func (_e *MockOperationsStore_Expecter) CreateAuthorAlias(authorID any, aliasName any, aliasType any) *MockOperationsStore_CreateAuthorAlias_Call {
+func (_e *MockOperationsStore_Expecter) CreateAuthorAlias(authorID interface{}, aliasName interface{}, aliasType interface{}) *MockOperationsStore_CreateAuthorAlias_Call {
 	return &MockOperationsStore_CreateAuthorAlias_Call{Call: _e.mock.On("CreateAuthorAlias", authorID, aliasName, aliasType)}
 }
 
@@ -428,7 +399,7 @@ type MockOperationsStore_CreateAuthorTombstone_Call struct {
 // CreateAuthorTombstone is a helper method to define mock.On call
 //   - oldID int
 //   - canonicalID int
-func (_e *MockOperationsStore_Expecter) CreateAuthorTombstone(oldID any, canonicalID any) *MockOperationsStore_CreateAuthorTombstone_Call {
+func (_e *MockOperationsStore_Expecter) CreateAuthorTombstone(oldID interface{}, canonicalID interface{}) *MockOperationsStore_CreateAuthorTombstone_Call {
 	return &MockOperationsStore_CreateAuthorTombstone_Call{Call: _e.mock.On("CreateAuthorTombstone", oldID, canonicalID)}
 }
 
@@ -495,7 +466,7 @@ type MockOperationsStore_CreateBook_Call struct {
 
 // CreateBook is a helper method to define mock.On call
 //   - book *database.Book
-func (_e *MockOperationsStore_Expecter) CreateBook(book any) *MockOperationsStore_CreateBook_Call {
+func (_e *MockOperationsStore_Expecter) CreateBook(book interface{}) *MockOperationsStore_CreateBook_Call {
 	return &MockOperationsStore_CreateBook_Call{Call: _e.mock.On("CreateBook", book)}
 }
 
@@ -546,7 +517,7 @@ type MockOperationsStore_CreateBookTombstone_Call struct {
 
 // CreateBookTombstone is a helper method to define mock.On call
 //   - book *database.Book
-func (_e *MockOperationsStore_Expecter) CreateBookTombstone(book any) *MockOperationsStore_CreateBookTombstone_Call {
+func (_e *MockOperationsStore_Expecter) CreateBookTombstone(book interface{}) *MockOperationsStore_CreateBookTombstone_Call {
 	return &MockOperationsStore_CreateBookTombstone_Call{Call: _e.mock.On("CreateBookTombstone", book)}
 }
 
@@ -608,7 +579,7 @@ type MockOperationsStore_CreateNarrator_Call struct {
 
 // CreateNarrator is a helper method to define mock.On call
 //   - name string
-func (_e *MockOperationsStore_Expecter) CreateNarrator(name any) *MockOperationsStore_CreateNarrator_Call {
+func (_e *MockOperationsStore_Expecter) CreateNarrator(name interface{}) *MockOperationsStore_CreateNarrator_Call {
 	return &MockOperationsStore_CreateNarrator_Call{Call: _e.mock.On("CreateNarrator", name)}
 }
 
@@ -672,7 +643,7 @@ type MockOperationsStore_CreateOperation_Call struct {
 //   - id string
 //   - opType string
 //   - folderPath *string
-func (_e *MockOperationsStore_Expecter) CreateOperation(id any, opType any, folderPath any) *MockOperationsStore_CreateOperation_Call {
+func (_e *MockOperationsStore_Expecter) CreateOperation(id interface{}, opType interface{}, folderPath interface{}) *MockOperationsStore_CreateOperation_Call {
 	return &MockOperationsStore_CreateOperation_Call{Call: _e.mock.On("CreateOperation", id, opType, folderPath)}
 }
 
@@ -733,7 +704,7 @@ type MockOperationsStore_CreateOperationChange_Call struct {
 
 // CreateOperationChange is a helper method to define mock.On call
 //   - change *database.OperationChange
-func (_e *MockOperationsStore_Expecter) CreateOperationChange(change any) *MockOperationsStore_CreateOperationChange_Call {
+func (_e *MockOperationsStore_Expecter) CreateOperationChange(change interface{}) *MockOperationsStore_CreateOperationChange_Call {
 	return &MockOperationsStore_CreateOperationChange_Call{Call: _e.mock.On("CreateOperationChange", change)}
 }
 
@@ -784,7 +755,7 @@ type MockOperationsStore_CreateOperationResult_Call struct {
 
 // CreateOperationResult is a helper method to define mock.On call
 //   - result *database.OperationResult
-func (_e *MockOperationsStore_Expecter) CreateOperationResult(result any) *MockOperationsStore_CreateOperationResult_Call {
+func (_e *MockOperationsStore_Expecter) CreateOperationResult(result interface{}) *MockOperationsStore_CreateOperationResult_Call {
 	return &MockOperationsStore_CreateOperationResult_Call{Call: _e.mock.On("CreateOperationResult", result)}
 }
 
@@ -835,7 +806,7 @@ type MockOperationsStore_DeleteAuthor_Call struct {
 
 // DeleteAuthor is a helper method to define mock.On call
 //   - id int
-func (_e *MockOperationsStore_Expecter) DeleteAuthor(id any) *MockOperationsStore_DeleteAuthor_Call {
+func (_e *MockOperationsStore_Expecter) DeleteAuthor(id interface{}) *MockOperationsStore_DeleteAuthor_Call {
 	return &MockOperationsStore_DeleteAuthor_Call{Call: _e.mock.On("DeleteAuthor", id)}
 }
 
@@ -886,7 +857,7 @@ type MockOperationsStore_DeleteAuthorAlias_Call struct {
 
 // DeleteAuthorAlias is a helper method to define mock.On call
 //   - id int
-func (_e *MockOperationsStore_Expecter) DeleteAuthorAlias(id any) *MockOperationsStore_DeleteAuthorAlias_Call {
+func (_e *MockOperationsStore_Expecter) DeleteAuthorAlias(id interface{}) *MockOperationsStore_DeleteAuthorAlias_Call {
 	return &MockOperationsStore_DeleteAuthorAlias_Call{Call: _e.mock.On("DeleteAuthorAlias", id)}
 }
 
@@ -937,7 +908,7 @@ type MockOperationsStore_DeleteBook_Call struct {
 
 // DeleteBook is a helper method to define mock.On call
 //   - id string
-func (_e *MockOperationsStore_Expecter) DeleteBook(id any) *MockOperationsStore_DeleteBook_Call {
+func (_e *MockOperationsStore_Expecter) DeleteBook(id interface{}) *MockOperationsStore_DeleteBook_Call {
 	return &MockOperationsStore_DeleteBook_Call{Call: _e.mock.On("DeleteBook", id)}
 }
 
@@ -988,7 +959,7 @@ type MockOperationsStore_DeleteBookTombstone_Call struct {
 
 // DeleteBookTombstone is a helper method to define mock.On call
 //   - id string
-func (_e *MockOperationsStore_Expecter) DeleteBookTombstone(id any) *MockOperationsStore_DeleteBookTombstone_Call {
+func (_e *MockOperationsStore_Expecter) DeleteBookTombstone(id interface{}) *MockOperationsStore_DeleteBookTombstone_Call {
 	return &MockOperationsStore_DeleteBookTombstone_Call{Call: _e.mock.On("DeleteBookTombstone", id)}
 }
 
@@ -1039,7 +1010,7 @@ type MockOperationsStore_DeleteOperationState_Call struct {
 
 // DeleteOperationState is a helper method to define mock.On call
 //   - opID string
-func (_e *MockOperationsStore_Expecter) DeleteOperationState(opID any) *MockOperationsStore_DeleteOperationState_Call {
+func (_e *MockOperationsStore_Expecter) DeleteOperationState(opID interface{}) *MockOperationsStore_DeleteOperationState_Call {
 	return &MockOperationsStore_DeleteOperationState_Call{Call: _e.mock.On("DeleteOperationState", opID)}
 }
 
@@ -1090,7 +1061,7 @@ type MockOperationsStore_DeleteOperationWithLogs_Call struct {
 
 // DeleteOperationWithLogs is a helper method to define mock.On call
 //   - id string
-func (_e *MockOperationsStore_Expecter) DeleteOperationWithLogs(id any) *MockOperationsStore_DeleteOperationWithLogs_Call {
+func (_e *MockOperationsStore_Expecter) DeleteOperationWithLogs(id interface{}) *MockOperationsStore_DeleteOperationWithLogs_Call {
 	return &MockOperationsStore_DeleteOperationWithLogs_Call{Call: _e.mock.On("DeleteOperationWithLogs", id)}
 }
 
@@ -1150,7 +1121,7 @@ type MockOperationsStore_DeleteOperationsByStatus_Call struct {
 
 // DeleteOperationsByStatus is a helper method to define mock.On call
 //   - statuses []string
-func (_e *MockOperationsStore_Expecter) DeleteOperationsByStatus(statuses any) *MockOperationsStore_DeleteOperationsByStatus_Call {
+func (_e *MockOperationsStore_Expecter) DeleteOperationsByStatus(statuses interface{}) *MockOperationsStore_DeleteOperationsByStatus_Call {
 	return &MockOperationsStore_DeleteOperationsByStatus_Call{Call: _e.mock.On("DeleteOperationsByStatus", statuses)}
 }
 
@@ -1201,7 +1172,7 @@ type MockOperationsStore_DeleteSetting_Call struct {
 
 // DeleteSetting is a helper method to define mock.On call
 //   - key string
-func (_e *MockOperationsStore_Expecter) DeleteSetting(key any) *MockOperationsStore_DeleteSetting_Call {
+func (_e *MockOperationsStore_Expecter) DeleteSetting(key interface{}) *MockOperationsStore_DeleteSetting_Call {
 	return &MockOperationsStore_DeleteSetting_Call{Call: _e.mock.On("DeleteSetting", key)}
 }
 
@@ -1263,7 +1234,7 @@ type MockOperationsStore_FindAuthorByAlias_Call struct {
 
 // FindAuthorByAlias is a helper method to define mock.On call
 //   - aliasName string
-func (_e *MockOperationsStore_Expecter) FindAuthorByAlias(aliasName any) *MockOperationsStore_FindAuthorByAlias_Call {
+func (_e *MockOperationsStore_Expecter) FindAuthorByAlias(aliasName interface{}) *MockOperationsStore_FindAuthorByAlias_Call {
 	return &MockOperationsStore_FindAuthorByAlias_Call{Call: _e.mock.On("FindAuthorByAlias", aliasName)}
 }
 
@@ -1315,7 +1286,7 @@ type MockOperationsStore_FlagMetadataHashDuplicate_Call struct {
 // FlagMetadataHashDuplicate is a helper method to define mock.On call
 //   - primaryID string
 //   - duplicateID string
-func (_e *MockOperationsStore_Expecter) FlagMetadataHashDuplicate(primaryID any, duplicateID any) *MockOperationsStore_FlagMetadataHashDuplicate_Call {
+func (_e *MockOperationsStore_Expecter) FlagMetadataHashDuplicate(primaryID interface{}, duplicateID interface{}) *MockOperationsStore_FlagMetadataHashDuplicate_Call {
 	return &MockOperationsStore_FlagMetadataHashDuplicate_Call{Call: _e.mock.On("FlagMetadataHashDuplicate", primaryID, duplicateID)}
 }
 
@@ -1603,7 +1574,7 @@ type MockOperationsStore_GetAllBookSummaries_Call struct {
 // GetAllBookSummaries is a helper method to define mock.On call
 //   - limit int
 //   - offset int
-func (_e *MockOperationsStore_Expecter) GetAllBookSummaries(limit any, offset any) *MockOperationsStore_GetAllBookSummaries_Call {
+func (_e *MockOperationsStore_Expecter) GetAllBookSummaries(limit interface{}, offset interface{}) *MockOperationsStore_GetAllBookSummaries_Call {
 	return &MockOperationsStore_GetAllBookSummaries_Call{Call: _e.mock.On("GetAllBookSummaries", limit, offset)}
 }
 
@@ -1671,7 +1642,7 @@ type MockOperationsStore_GetAllBooks_Call struct {
 // GetAllBooks is a helper method to define mock.On call
 //   - limit int
 //   - offset int
-func (_e *MockOperationsStore_Expecter) GetAllBooks(limit any, offset any) *MockOperationsStore_GetAllBooks_Call {
+func (_e *MockOperationsStore_Expecter) GetAllBooks(limit interface{}, offset interface{}) *MockOperationsStore_GetAllBooks_Call {
 	return &MockOperationsStore_GetAllBooks_Call{Call: _e.mock.On("GetAllBooks", limit, offset)}
 }
 
@@ -1739,7 +1710,7 @@ type MockOperationsStore_GetAllBooksFrom_Call struct {
 // GetAllBooksFrom is a helper method to define mock.On call
 //   - afterID string
 //   - limit int
-func (_e *MockOperationsStore_Expecter) GetAllBooksFrom(afterID any, limit any) *MockOperationsStore_GetAllBooksFrom_Call {
+func (_e *MockOperationsStore_Expecter) GetAllBooksFrom(afterID interface{}, limit interface{}) *MockOperationsStore_GetAllBooksFrom_Call {
 	return &MockOperationsStore_GetAllBooksFrom_Call{Call: _e.mock.On("GetAllBooksFrom", afterID, limit)}
 }
 
@@ -1753,10 +1724,7 @@ func (_c *MockOperationsStore_GetAllBooksFrom_Call) Run(run func(afterID string,
 		if args[1] != nil {
 			arg1 = args[1].(int)
 		}
-		run(
-			arg0,
-			arg1,
-		)
+		run(arg0, arg1)
 	})
 	return _c
 }
@@ -1766,7 +1734,7 @@ func (_c *MockOperationsStore_GetAllBooksFrom_Call) Return(books []database.Book
 	return _c
 }
 
-func (_c *MockOperationsStore_GetAllBooksFrom_Call) RunAndReturn(run func(afterID string, limit int) ([]database.Book, error)) *MockOperationsStore_GetAllBooksFrom_Call {
+func (_c *MockOperationsStore_GetAllBooksFrom_Call) RunAndReturn(run func(string, int) ([]database.Book, error)) *MockOperationsStore_GetAllBooksFrom_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -1861,7 +1829,7 @@ type MockOperationsStore_GetAuthorAliases_Call struct {
 
 // GetAuthorAliases is a helper method to define mock.On call
 //   - authorID int
-func (_e *MockOperationsStore_Expecter) GetAuthorAliases(authorID any) *MockOperationsStore_GetAuthorAliases_Call {
+func (_e *MockOperationsStore_Expecter) GetAuthorAliases(authorID interface{}) *MockOperationsStore_GetAuthorAliases_Call {
 	return &MockOperationsStore_GetAuthorAliases_Call{Call: _e.mock.On("GetAuthorAliases", authorID)}
 }
 
@@ -1923,7 +1891,7 @@ type MockOperationsStore_GetAuthorByID_Call struct {
 
 // GetAuthorByID is a helper method to define mock.On call
 //   - id int
-func (_e *MockOperationsStore_Expecter) GetAuthorByID(id any) *MockOperationsStore_GetAuthorByID_Call {
+func (_e *MockOperationsStore_Expecter) GetAuthorByID(id interface{}) *MockOperationsStore_GetAuthorByID_Call {
 	return &MockOperationsStore_GetAuthorByID_Call{Call: _e.mock.On("GetAuthorByID", id)}
 }
 
@@ -1985,7 +1953,7 @@ type MockOperationsStore_GetAuthorByName_Call struct {
 
 // GetAuthorByName is a helper method to define mock.On call
 //   - name string
-func (_e *MockOperationsStore_Expecter) GetAuthorByName(name any) *MockOperationsStore_GetAuthorByName_Call {
+func (_e *MockOperationsStore_Expecter) GetAuthorByName(name interface{}) *MockOperationsStore_GetAuthorByName_Call {
 	return &MockOperationsStore_GetAuthorByName_Call{Call: _e.mock.On("GetAuthorByName", name)}
 }
 
@@ -2045,7 +2013,7 @@ type MockOperationsStore_GetAuthorTombstone_Call struct {
 
 // GetAuthorTombstone is a helper method to define mock.On call
 //   - oldID int
-func (_e *MockOperationsStore_Expecter) GetAuthorTombstone(oldID any) *MockOperationsStore_GetAuthorTombstone_Call {
+func (_e *MockOperationsStore_Expecter) GetAuthorTombstone(oldID interface{}) *MockOperationsStore_GetAuthorTombstone_Call {
 	return &MockOperationsStore_GetAuthorTombstone_Call{Call: _e.mock.On("GetAuthorTombstone", oldID)}
 }
 
@@ -2108,7 +2076,7 @@ type MockOperationsStore_GetAuthorsByBookIDs_Call struct {
 // GetAuthorsByBookIDs is a helper method to define mock.On call
 //   - ctx context.Context
 //   - bookIDs []string
-func (_e *MockOperationsStore_Expecter) GetAuthorsByBookIDs(ctx any, bookIDs any) *MockOperationsStore_GetAuthorsByBookIDs_Call {
+func (_e *MockOperationsStore_Expecter) GetAuthorsByBookIDs(ctx interface{}, bookIDs interface{}) *MockOperationsStore_GetAuthorsByBookIDs_Call {
 	return &MockOperationsStore_GetAuthorsByBookIDs_Call{Call: _e.mock.On("GetAuthorsByBookIDs", ctx, bookIDs)}
 }
 
@@ -2175,7 +2143,7 @@ type MockOperationsStore_GetAuthorsByIDs_Call struct {
 
 // GetAuthorsByIDs is a helper method to define mock.On call
 //   - ids []int
-func (_e *MockOperationsStore_Expecter) GetAuthorsByIDs(ids any) *MockOperationsStore_GetAuthorsByIDs_Call {
+func (_e *MockOperationsStore_Expecter) GetAuthorsByIDs(ids interface{}) *MockOperationsStore_GetAuthorsByIDs_Call {
 	return &MockOperationsStore_GetAuthorsByIDs_Call{Call: _e.mock.On("GetAuthorsByIDs", ids)}
 }
 
@@ -2238,7 +2206,7 @@ type MockOperationsStore_GetBookAtVersion_Call struct {
 // GetBookAtVersion is a helper method to define mock.On call
 //   - id string
 //   - ts time.Time
-func (_e *MockOperationsStore_Expecter) GetBookAtVersion(id any, ts any) *MockOperationsStore_GetBookAtVersion_Call {
+func (_e *MockOperationsStore_Expecter) GetBookAtVersion(id interface{}, ts interface{}) *MockOperationsStore_GetBookAtVersion_Call {
 	return &MockOperationsStore_GetBookAtVersion_Call{Call: _e.mock.On("GetBookAtVersion", id, ts)}
 }
 
@@ -2305,7 +2273,7 @@ type MockOperationsStore_GetBookAuthors_Call struct {
 
 // GetBookAuthors is a helper method to define mock.On call
 //   - bookID string
-func (_e *MockOperationsStore_Expecter) GetBookAuthors(bookID any) *MockOperationsStore_GetBookAuthors_Call {
+func (_e *MockOperationsStore_Expecter) GetBookAuthors(bookID interface{}) *MockOperationsStore_GetBookAuthors_Call {
 	return &MockOperationsStore_GetBookAuthors_Call{Call: _e.mock.On("GetBookAuthors", bookID)}
 }
 
@@ -2367,7 +2335,7 @@ type MockOperationsStore_GetBookByFileHash_Call struct {
 
 // GetBookByFileHash is a helper method to define mock.On call
 //   - hash string
-func (_e *MockOperationsStore_Expecter) GetBookByFileHash(hash any) *MockOperationsStore_GetBookByFileHash_Call {
+func (_e *MockOperationsStore_Expecter) GetBookByFileHash(hash interface{}) *MockOperationsStore_GetBookByFileHash_Call {
 	return &MockOperationsStore_GetBookByFileHash_Call{Call: _e.mock.On("GetBookByFileHash", hash)}
 }
 
@@ -2429,7 +2397,7 @@ type MockOperationsStore_GetBookByFilePath_Call struct {
 
 // GetBookByFilePath is a helper method to define mock.On call
 //   - path string
-func (_e *MockOperationsStore_Expecter) GetBookByFilePath(path any) *MockOperationsStore_GetBookByFilePath_Call {
+func (_e *MockOperationsStore_Expecter) GetBookByFilePath(path interface{}) *MockOperationsStore_GetBookByFilePath_Call {
 	return &MockOperationsStore_GetBookByFilePath_Call{Call: _e.mock.On("GetBookByFilePath", path)}
 }
 
@@ -2491,7 +2459,7 @@ type MockOperationsStore_GetBookByID_Call struct {
 
 // GetBookByID is a helper method to define mock.On call
 //   - id string
-func (_e *MockOperationsStore_Expecter) GetBookByID(id any) *MockOperationsStore_GetBookByID_Call {
+func (_e *MockOperationsStore_Expecter) GetBookByID(id interface{}) *MockOperationsStore_GetBookByID_Call {
 	return &MockOperationsStore_GetBookByID_Call{Call: _e.mock.On("GetBookByID", id)}
 }
 
@@ -2553,7 +2521,7 @@ type MockOperationsStore_GetBookByITunesPersistentID_Call struct {
 
 // GetBookByITunesPersistentID is a helper method to define mock.On call
 //   - persistentID string
-func (_e *MockOperationsStore_Expecter) GetBookByITunesPersistentID(persistentID any) *MockOperationsStore_GetBookByITunesPersistentID_Call {
+func (_e *MockOperationsStore_Expecter) GetBookByITunesPersistentID(persistentID interface{}) *MockOperationsStore_GetBookByITunesPersistentID_Call {
 	return &MockOperationsStore_GetBookByITunesPersistentID_Call{Call: _e.mock.On("GetBookByITunesPersistentID", persistentID)}
 }
 
@@ -2615,7 +2583,7 @@ type MockOperationsStore_GetBookByOrganizedHash_Call struct {
 
 // GetBookByOrganizedHash is a helper method to define mock.On call
 //   - hash string
-func (_e *MockOperationsStore_Expecter) GetBookByOrganizedHash(hash any) *MockOperationsStore_GetBookByOrganizedHash_Call {
+func (_e *MockOperationsStore_Expecter) GetBookByOrganizedHash(hash interface{}) *MockOperationsStore_GetBookByOrganizedHash_Call {
 	return &MockOperationsStore_GetBookByOrganizedHash_Call{Call: _e.mock.On("GetBookByOrganizedHash", hash)}
 }
 
@@ -2677,7 +2645,7 @@ type MockOperationsStore_GetBookByOriginalHash_Call struct {
 
 // GetBookByOriginalHash is a helper method to define mock.On call
 //   - hash string
-func (_e *MockOperationsStore_Expecter) GetBookByOriginalHash(hash any) *MockOperationsStore_GetBookByOriginalHash_Call {
+func (_e *MockOperationsStore_Expecter) GetBookByOriginalHash(hash interface{}) *MockOperationsStore_GetBookByOriginalHash_Call {
 	return &MockOperationsStore_GetBookByOriginalHash_Call{Call: _e.mock.On("GetBookByOriginalHash", hash)}
 }
 
@@ -2739,7 +2707,7 @@ type MockOperationsStore_GetBookChanges_Call struct {
 
 // GetBookChanges is a helper method to define mock.On call
 //   - bookID string
-func (_e *MockOperationsStore_Expecter) GetBookChanges(bookID any) *MockOperationsStore_GetBookChanges_Call {
+func (_e *MockOperationsStore_Expecter) GetBookChanges(bookID interface{}) *MockOperationsStore_GetBookChanges_Call {
 	return &MockOperationsStore_GetBookChanges_Call{Call: _e.mock.On("GetBookChanges", bookID)}
 }
 
@@ -2803,7 +2771,7 @@ type MockOperationsStore_GetBookIDsByISBNASIN_Call struct {
 //   - isbn10 string
 //   - isbn13 string
 //   - asin string
-func (_e *MockOperationsStore_Expecter) GetBookIDsByISBNASIN(isbn10 any, isbn13 any, asin any) *MockOperationsStore_GetBookIDsByISBNASIN_Call {
+func (_e *MockOperationsStore_Expecter) GetBookIDsByISBNASIN(isbn10 interface{}, isbn13 interface{}, asin interface{}) *MockOperationsStore_GetBookIDsByISBNASIN_Call {
 	return &MockOperationsStore_GetBookIDsByISBNASIN_Call{Call: _e.mock.On("GetBookIDsByISBNASIN", isbn10, isbn13, asin)}
 }
 
@@ -2875,7 +2843,7 @@ type MockOperationsStore_GetBookNarrators_Call struct {
 
 // GetBookNarrators is a helper method to define mock.On call
 //   - bookID string
-func (_e *MockOperationsStore_Expecter) GetBookNarrators(bookID any) *MockOperationsStore_GetBookNarrators_Call {
+func (_e *MockOperationsStore_Expecter) GetBookNarrators(bookID interface{}) *MockOperationsStore_GetBookNarrators_Call {
 	return &MockOperationsStore_GetBookNarrators_Call{Call: _e.mock.On("GetBookNarrators", bookID)}
 }
 
@@ -2938,7 +2906,7 @@ type MockOperationsStore_GetBookSnapshots_Call struct {
 // GetBookSnapshots is a helper method to define mock.On call
 //   - id string
 //   - limit int
-func (_e *MockOperationsStore_Expecter) GetBookSnapshots(id any, limit any) *MockOperationsStore_GetBookSnapshots_Call {
+func (_e *MockOperationsStore_Expecter) GetBookSnapshots(id interface{}, limit interface{}) *MockOperationsStore_GetBookSnapshots_Call {
 	return &MockOperationsStore_GetBookSnapshots_Call{Call: _e.mock.On("GetBookSnapshots", id, limit)}
 }
 
@@ -3005,7 +2973,7 @@ type MockOperationsStore_GetBookTombstone_Call struct {
 
 // GetBookTombstone is a helper method to define mock.On call
 //   - id string
-func (_e *MockOperationsStore_Expecter) GetBookTombstone(id any) *MockOperationsStore_GetBookTombstone_Call {
+func (_e *MockOperationsStore_Expecter) GetBookTombstone(id interface{}) *MockOperationsStore_GetBookTombstone_Call {
 	return &MockOperationsStore_GetBookTombstone_Call{Call: _e.mock.On("GetBookTombstone", id)}
 }
 
@@ -3067,7 +3035,7 @@ type MockOperationsStore_GetBooksByAuthorID_Call struct {
 
 // GetBooksByAuthorID is a helper method to define mock.On call
 //   - authorID int
-func (_e *MockOperationsStore_Expecter) GetBooksByAuthorID(authorID any) *MockOperationsStore_GetBooksByAuthorID_Call {
+func (_e *MockOperationsStore_Expecter) GetBooksByAuthorID(authorID interface{}) *MockOperationsStore_GetBooksByAuthorID_Call {
 	return &MockOperationsStore_GetBooksByAuthorID_Call{Call: _e.mock.On("GetBooksByAuthorID", authorID)}
 }
 
@@ -3129,7 +3097,7 @@ type MockOperationsStore_GetBooksByAuthorIDWithRole_Call struct {
 
 // GetBooksByAuthorIDWithRole is a helper method to define mock.On call
 //   - authorID int
-func (_e *MockOperationsStore_Expecter) GetBooksByAuthorIDWithRole(authorID any) *MockOperationsStore_GetBooksByAuthorIDWithRole_Call {
+func (_e *MockOperationsStore_Expecter) GetBooksByAuthorIDWithRole(authorID interface{}) *MockOperationsStore_GetBooksByAuthorIDWithRole_Call {
 	return &MockOperationsStore_GetBooksByAuthorIDWithRole_Call{Call: _e.mock.On("GetBooksByAuthorIDWithRole", authorID)}
 }
 
@@ -3191,7 +3159,7 @@ type MockOperationsStore_GetBooksByMetadataSourceHash_Call struct {
 
 // GetBooksByMetadataSourceHash is a helper method to define mock.On call
 //   - hash string
-func (_e *MockOperationsStore_Expecter) GetBooksByMetadataSourceHash(hash any) *MockOperationsStore_GetBooksByMetadataSourceHash_Call {
+func (_e *MockOperationsStore_Expecter) GetBooksByMetadataSourceHash(hash interface{}) *MockOperationsStore_GetBooksByMetadataSourceHash_Call {
 	return &MockOperationsStore_GetBooksByMetadataSourceHash_Call{Call: _e.mock.On("GetBooksByMetadataSourceHash", hash)}
 }
 
@@ -3253,7 +3221,7 @@ type MockOperationsStore_GetBooksBySeriesID_Call struct {
 
 // GetBooksBySeriesID is a helper method to define mock.On call
 //   - seriesID int
-func (_e *MockOperationsStore_Expecter) GetBooksBySeriesID(seriesID any) *MockOperationsStore_GetBooksBySeriesID_Call {
+func (_e *MockOperationsStore_Expecter) GetBooksBySeriesID(seriesID interface{}) *MockOperationsStore_GetBooksBySeriesID_Call {
 	return &MockOperationsStore_GetBooksBySeriesID_Call{Call: _e.mock.On("GetBooksBySeriesID", seriesID)}
 }
 
@@ -3316,7 +3284,7 @@ type MockOperationsStore_GetBooksByTitleInDir_Call struct {
 // GetBooksByTitleInDir is a helper method to define mock.On call
 //   - normalizedTitle string
 //   - dirPath string
-func (_e *MockOperationsStore_Expecter) GetBooksByTitleInDir(normalizedTitle any, dirPath any) *MockOperationsStore_GetBooksByTitleInDir_Call {
+func (_e *MockOperationsStore_Expecter) GetBooksByTitleInDir(normalizedTitle interface{}, dirPath interface{}) *MockOperationsStore_GetBooksByTitleInDir_Call {
 	return &MockOperationsStore_GetBooksByTitleInDir_Call{Call: _e.mock.On("GetBooksByTitleInDir", normalizedTitle, dirPath)}
 }
 
@@ -3383,7 +3351,7 @@ type MockOperationsStore_GetBooksByVersionGroup_Call struct {
 
 // GetBooksByVersionGroup is a helper method to define mock.On call
 //   - groupID string
-func (_e *MockOperationsStore_Expecter) GetBooksByVersionGroup(groupID any) *MockOperationsStore_GetBooksByVersionGroup_Call {
+func (_e *MockOperationsStore_Expecter) GetBooksByVersionGroup(groupID interface{}) *MockOperationsStore_GetBooksByVersionGroup_Call {
 	return &MockOperationsStore_GetBooksByVersionGroup_Call{Call: _e.mock.On("GetBooksByVersionGroup", groupID)}
 }
 
@@ -3610,7 +3578,7 @@ type MockOperationsStore_GetDuplicateBooksByMetadata_Call struct {
 
 // GetDuplicateBooksByMetadata is a helper method to define mock.On call
 //   - threshold float64
-func (_e *MockOperationsStore_Expecter) GetDuplicateBooksByMetadata(threshold any) *MockOperationsStore_GetDuplicateBooksByMetadata_Call {
+func (_e *MockOperationsStore_Expecter) GetDuplicateBooksByMetadata(threshold interface{}) *MockOperationsStore_GetDuplicateBooksByMetadata_Call {
 	return &MockOperationsStore_GetDuplicateBooksByMetadata_Call{Call: _e.mock.On("GetDuplicateBooksByMetadata", threshold)}
 }
 
@@ -3892,7 +3860,7 @@ type MockOperationsStore_GetNarratorByID_Call struct {
 
 // GetNarratorByID is a helper method to define mock.On call
 //   - id int
-func (_e *MockOperationsStore_Expecter) GetNarratorByID(id any) *MockOperationsStore_GetNarratorByID_Call {
+func (_e *MockOperationsStore_Expecter) GetNarratorByID(id interface{}) *MockOperationsStore_GetNarratorByID_Call {
 	return &MockOperationsStore_GetNarratorByID_Call{Call: _e.mock.On("GetNarratorByID", id)}
 }
 
@@ -3954,7 +3922,7 @@ type MockOperationsStore_GetNarratorByName_Call struct {
 
 // GetNarratorByName is a helper method to define mock.On call
 //   - name string
-func (_e *MockOperationsStore_Expecter) GetNarratorByName(name any) *MockOperationsStore_GetNarratorByName_Call {
+func (_e *MockOperationsStore_Expecter) GetNarratorByName(name interface{}) *MockOperationsStore_GetNarratorByName_Call {
 	return &MockOperationsStore_GetNarratorByName_Call{Call: _e.mock.On("GetNarratorByName", name)}
 }
 
@@ -4017,7 +3985,7 @@ type MockOperationsStore_GetNarratorsByBookIDs_Call struct {
 // GetNarratorsByBookIDs is a helper method to define mock.On call
 //   - ctx context.Context
 //   - bookIDs []string
-func (_e *MockOperationsStore_Expecter) GetNarratorsByBookIDs(ctx any, bookIDs any) *MockOperationsStore_GetNarratorsByBookIDs_Call {
+func (_e *MockOperationsStore_Expecter) GetNarratorsByBookIDs(ctx interface{}, bookIDs interface{}) *MockOperationsStore_GetNarratorsByBookIDs_Call {
 	return &MockOperationsStore_GetNarratorsByBookIDs_Call{Call: _e.mock.On("GetNarratorsByBookIDs", ctx, bookIDs)}
 }
 
@@ -4085,7 +4053,7 @@ type MockOperationsStore_GetOpLogsV2_Call struct {
 // GetOpLogsV2 is a helper method to define mock.On call
 //   - opID string
 //   - limit int
-func (_e *MockOperationsStore_Expecter) GetOpLogsV2(opID any, limit any) *MockOperationsStore_GetOpLogsV2_Call {
+func (_e *MockOperationsStore_Expecter) GetOpLogsV2(opID interface{}, limit interface{}) *MockOperationsStore_GetOpLogsV2_Call {
 	return &MockOperationsStore_GetOpLogsV2_Call{Call: _e.mock.On("GetOpLogsV2", opID, limit)}
 }
 
@@ -4152,7 +4120,7 @@ type MockOperationsStore_GetOperationByID_Call struct {
 
 // GetOperationByID is a helper method to define mock.On call
 //   - id string
-func (_e *MockOperationsStore_Expecter) GetOperationByID(id any) *MockOperationsStore_GetOperationByID_Call {
+func (_e *MockOperationsStore_Expecter) GetOperationByID(id interface{}) *MockOperationsStore_GetOperationByID_Call {
 	return &MockOperationsStore_GetOperationByID_Call{Call: _e.mock.On("GetOperationByID", id)}
 }
 
@@ -4214,7 +4182,7 @@ type MockOperationsStore_GetOperationChanges_Call struct {
 
 // GetOperationChanges is a helper method to define mock.On call
 //   - operationID string
-func (_e *MockOperationsStore_Expecter) GetOperationChanges(operationID any) *MockOperationsStore_GetOperationChanges_Call {
+func (_e *MockOperationsStore_Expecter) GetOperationChanges(operationID interface{}) *MockOperationsStore_GetOperationChanges_Call {
 	return &MockOperationsStore_GetOperationChanges_Call{Call: _e.mock.On("GetOperationChanges", operationID)}
 }
 
@@ -4276,7 +4244,7 @@ type MockOperationsStore_GetOperationLogs_Call struct {
 
 // GetOperationLogs is a helper method to define mock.On call
 //   - operationID string
-func (_e *MockOperationsStore_Expecter) GetOperationLogs(operationID any) *MockOperationsStore_GetOperationLogs_Call {
+func (_e *MockOperationsStore_Expecter) GetOperationLogs(operationID interface{}) *MockOperationsStore_GetOperationLogs_Call {
 	return &MockOperationsStore_GetOperationLogs_Call{Call: _e.mock.On("GetOperationLogs", operationID)}
 }
 
@@ -4338,7 +4306,7 @@ type MockOperationsStore_GetOperationParams_Call struct {
 
 // GetOperationParams is a helper method to define mock.On call
 //   - opID string
-func (_e *MockOperationsStore_Expecter) GetOperationParams(opID any) *MockOperationsStore_GetOperationParams_Call {
+func (_e *MockOperationsStore_Expecter) GetOperationParams(opID interface{}) *MockOperationsStore_GetOperationParams_Call {
 	return &MockOperationsStore_GetOperationParams_Call{Call: _e.mock.On("GetOperationParams", opID)}
 }
 
@@ -4400,7 +4368,7 @@ type MockOperationsStore_GetOperationResults_Call struct {
 
 // GetOperationResults is a helper method to define mock.On call
 //   - operationID string
-func (_e *MockOperationsStore_Expecter) GetOperationResults(operationID any) *MockOperationsStore_GetOperationResults_Call {
+func (_e *MockOperationsStore_Expecter) GetOperationResults(operationID interface{}) *MockOperationsStore_GetOperationResults_Call {
 	return &MockOperationsStore_GetOperationResults_Call{Call: _e.mock.On("GetOperationResults", operationID)}
 }
 
@@ -4470,7 +4438,7 @@ type MockOperationsStore_GetOperationResultsPage_Call struct {
 //   - operationID string
 //   - limit int
 //   - offset int
-func (_e *MockOperationsStore_Expecter) GetOperationResultsPage(operationID any, limit any, offset any) *MockOperationsStore_GetOperationResultsPage_Call {
+func (_e *MockOperationsStore_Expecter) GetOperationResultsPage(operationID interface{}, limit interface{}, offset interface{}) *MockOperationsStore_GetOperationResultsPage_Call {
 	return &MockOperationsStore_GetOperationResultsPage_Call{Call: _e.mock.On("GetOperationResultsPage", operationID, limit, offset)}
 }
 
@@ -4542,7 +4510,7 @@ type MockOperationsStore_GetOperationState_Call struct {
 
 // GetOperationState is a helper method to define mock.On call
 //   - opID string
-func (_e *MockOperationsStore_Expecter) GetOperationState(opID any) *MockOperationsStore_GetOperationState_Call {
+func (_e *MockOperationsStore_Expecter) GetOperationState(opID interface{}) *MockOperationsStore_GetOperationState_Call {
 	return &MockOperationsStore_GetOperationState_Call{Call: _e.mock.On("GetOperationState", opID)}
 }
 
@@ -4604,7 +4572,7 @@ type MockOperationsStore_GetOperationSummaryLog_Call struct {
 
 // GetOperationSummaryLog is a helper method to define mock.On call
 //   - id string
-func (_e *MockOperationsStore_Expecter) GetOperationSummaryLog(id any) *MockOperationsStore_GetOperationSummaryLog_Call {
+func (_e *MockOperationsStore_Expecter) GetOperationSummaryLog(id interface{}) *MockOperationsStore_GetOperationSummaryLog_Call {
 	return &MockOperationsStore_GetOperationSummaryLog_Call{Call: _e.mock.On("GetOperationSummaryLog", id)}
 }
 
@@ -4666,7 +4634,7 @@ type MockOperationsStore_GetOperationV2_Call struct {
 
 // GetOperationV2 is a helper method to define mock.On call
 //   - id string
-func (_e *MockOperationsStore_Expecter) GetOperationV2(id any) *MockOperationsStore_GetOperationV2_Call {
+func (_e *MockOperationsStore_Expecter) GetOperationV2(id interface{}) *MockOperationsStore_GetOperationV2_Call {
 	return &MockOperationsStore_GetOperationV2_Call{Call: _e.mock.On("GetOperationV2", id)}
 }
 
@@ -4729,7 +4697,7 @@ type MockOperationsStore_GetQuarantinedBooks_Call struct {
 // GetQuarantinedBooks is a helper method to define mock.On call
 //   - limit int
 //   - offset int
-func (_e *MockOperationsStore_Expecter) GetQuarantinedBooks(limit any, offset any) *MockOperationsStore_GetQuarantinedBooks_Call {
+func (_e *MockOperationsStore_Expecter) GetQuarantinedBooks(limit interface{}, offset interface{}) *MockOperationsStore_GetQuarantinedBooks_Call {
 	return &MockOperationsStore_GetQuarantinedBooks_Call{Call: _e.mock.On("GetQuarantinedBooks", limit, offset)}
 }
 
@@ -4796,7 +4764,7 @@ type MockOperationsStore_GetRecentCompletedOperations_Call struct {
 
 // GetRecentCompletedOperations is a helper method to define mock.On call
 //   - limit int
-func (_e *MockOperationsStore_Expecter) GetRecentCompletedOperations(limit any) *MockOperationsStore_GetRecentCompletedOperations_Call {
+func (_e *MockOperationsStore_Expecter) GetRecentCompletedOperations(limit interface{}) *MockOperationsStore_GetRecentCompletedOperations_Call {
 	return &MockOperationsStore_GetRecentCompletedOperations_Call{Call: _e.mock.On("GetRecentCompletedOperations", limit)}
 }
 
@@ -4858,7 +4826,7 @@ type MockOperationsStore_GetRecentOperations_Call struct {
 
 // GetRecentOperations is a helper method to define mock.On call
 //   - limit int
-func (_e *MockOperationsStore_Expecter) GetRecentOperations(limit any) *MockOperationsStore_GetRecentOperations_Call {
+func (_e *MockOperationsStore_Expecter) GetRecentOperations(limit interface{}) *MockOperationsStore_GetRecentOperations_Call {
 	return &MockOperationsStore_GetRecentOperations_Call{Call: _e.mock.On("GetRecentOperations", limit)}
 }
 
@@ -4918,7 +4886,7 @@ type MockOperationsStore_GetScanFailCount_Call struct {
 
 // GetScanFailCount is a helper method to define mock.On call
 //   - pathHash string
-func (_e *MockOperationsStore_Expecter) GetScanFailCount(pathHash any) *MockOperationsStore_GetScanFailCount_Call {
+func (_e *MockOperationsStore_Expecter) GetScanFailCount(pathHash interface{}) *MockOperationsStore_GetScanFailCount_Call {
 	return &MockOperationsStore_GetScanFailCount_Call{Call: _e.mock.On("GetScanFailCount", pathHash)}
 }
 
@@ -4980,7 +4948,7 @@ type MockOperationsStore_GetSetting_Call struct {
 
 // GetSetting is a helper method to define mock.On call
 //   - key string
-func (_e *MockOperationsStore_Expecter) GetSetting(key any) *MockOperationsStore_GetSetting_Call {
+func (_e *MockOperationsStore_Expecter) GetSetting(key interface{}) *MockOperationsStore_GetSetting_Call {
 	return &MockOperationsStore_GetSetting_Call{Call: _e.mock.On("GetSetting", key)}
 }
 
@@ -5040,7 +5008,7 @@ type MockOperationsStore_IncrScanFailCount_Call struct {
 
 // IncrScanFailCount is a helper method to define mock.On call
 //   - pathHash string
-func (_e *MockOperationsStore_Expecter) IncrScanFailCount(pathHash any) *MockOperationsStore_IncrScanFailCount_Call {
+func (_e *MockOperationsStore_Expecter) IncrScanFailCount(pathHash interface{}) *MockOperationsStore_IncrScanFailCount_Call {
 	return &MockOperationsStore_IncrScanFailCount_Call{Call: _e.mock.On("IncrScanFailCount", pathHash)}
 }
 
@@ -5157,7 +5125,7 @@ type MockOperationsStore_ListBookTombstones_Call struct {
 
 // ListBookTombstones is a helper method to define mock.On call
 //   - limit int
-func (_e *MockOperationsStore_Expecter) ListBookTombstones(limit any) *MockOperationsStore_ListBookTombstones_Call {
+func (_e *MockOperationsStore_Expecter) ListBookTombstones(limit interface{}) *MockOperationsStore_ListBookTombstones_Call {
 	return &MockOperationsStore_ListBookTombstones_Call{Call: _e.mock.On("ListBookTombstones", limit)}
 }
 
@@ -5220,7 +5188,7 @@ type MockOperationsStore_ListBooksByITunesPID_Call struct {
 // ListBooksByITunesPID is a helper method to define mock.On call
 //   - limit int
 //   - offset int
-func (_e *MockOperationsStore_Expecter) ListBooksByITunesPID(limit any, offset any) *MockOperationsStore_ListBooksByITunesPID_Call {
+func (_e *MockOperationsStore_Expecter) ListBooksByITunesPID(limit interface{}, offset interface{}) *MockOperationsStore_ListBooksByITunesPID_Call {
 	return &MockOperationsStore_ListBooksByITunesPID_Call{Call: _e.mock.On("ListBooksByITunesPID", limit, offset)}
 }
 
@@ -5343,7 +5311,7 @@ type MockOperationsStore_ListOperationSummaryLogs_Call struct {
 // ListOperationSummaryLogs is a helper method to define mock.On call
 //   - limit int
 //   - offset int
-func (_e *MockOperationsStore_Expecter) ListOperationSummaryLogs(limit any, offset any) *MockOperationsStore_ListOperationSummaryLogs_Call {
+func (_e *MockOperationsStore_Expecter) ListOperationSummaryLogs(limit interface{}, offset interface{}) *MockOperationsStore_ListOperationSummaryLogs_Call {
 	return &MockOperationsStore_ListOperationSummaryLogs_Call{Call: _e.mock.On("ListOperationSummaryLogs", limit, offset)}
 }
 
@@ -5417,7 +5385,7 @@ type MockOperationsStore_ListOperations_Call struct {
 // ListOperations is a helper method to define mock.On call
 //   - limit int
 //   - offset int
-func (_e *MockOperationsStore_Expecter) ListOperations(limit any, offset any) *MockOperationsStore_ListOperations_Call {
+func (_e *MockOperationsStore_Expecter) ListOperations(limit interface{}, offset interface{}) *MockOperationsStore_ListOperations_Call {
 	return &MockOperationsStore_ListOperations_Call{Call: _e.mock.On("ListOperations", limit, offset)}
 }
 
@@ -5486,7 +5454,7 @@ type MockOperationsStore_ListSoftDeletedBooks_Call struct {
 //   - limit int
 //   - offset int
 //   - olderThan *time.Time
-func (_e *MockOperationsStore_Expecter) ListSoftDeletedBooks(limit any, offset any, olderThan any) *MockOperationsStore_ListSoftDeletedBooks_Call {
+func (_e *MockOperationsStore_Expecter) ListSoftDeletedBooks(limit interface{}, offset interface{}, olderThan interface{}) *MockOperationsStore_ListSoftDeletedBooks_Call {
 	return &MockOperationsStore_ListSoftDeletedBooks_Call{Call: _e.mock.On("ListSoftDeletedBooks", limit, offset, olderThan)}
 }
 
@@ -5556,7 +5524,7 @@ type MockOperationsStore_MarkITunesSynced_Call struct {
 
 // MarkITunesSynced is a helper method to define mock.On call
 //   - bookIDs []string
-func (_e *MockOperationsStore_Expecter) MarkITunesSynced(bookIDs any) *MockOperationsStore_MarkITunesSynced_Call {
+func (_e *MockOperationsStore_Expecter) MarkITunesSynced(bookIDs interface{}) *MockOperationsStore_MarkITunesSynced_Call {
 	return &MockOperationsStore_MarkITunesSynced_Call{Call: _e.mock.On("MarkITunesSynced", bookIDs)}
 }
 
@@ -5610,7 +5578,7 @@ type MockOperationsStore_MergeChapterBooks_Call struct {
 //   - srcIDs []string
 //   - commonTitle string
 //   - totalDuration float64
-func (_e *MockOperationsStore_Expecter) MergeChapterBooks(primaryID any, srcIDs any, commonTitle any, totalDuration any) *MockOperationsStore_MergeChapterBooks_Call {
+func (_e *MockOperationsStore_Expecter) MergeChapterBooks(primaryID interface{}, srcIDs interface{}, commonTitle interface{}, totalDuration interface{}) *MockOperationsStore_MergeChapterBooks_Call {
 	return &MockOperationsStore_MergeChapterBooks_Call{Call: _e.mock.On("MergeChapterBooks", primaryID, srcIDs, commonTitle, totalDuration)}
 }
 
@@ -5686,7 +5654,7 @@ type MockOperationsStore_PruneBookSnapshots_Call struct {
 // PruneBookSnapshots is a helper method to define mock.On call
 //   - id string
 //   - keepCount int
-func (_e *MockOperationsStore_Expecter) PruneBookSnapshots(id any, keepCount any) *MockOperationsStore_PruneBookSnapshots_Call {
+func (_e *MockOperationsStore_Expecter) PruneBookSnapshots(id interface{}, keepCount interface{}) *MockOperationsStore_PruneBookSnapshots_Call {
 	return &MockOperationsStore_PruneBookSnapshots_Call{Call: _e.mock.On("PruneBookSnapshots", id, keepCount)}
 }
 
@@ -5751,7 +5719,7 @@ type MockOperationsStore_PruneOperationChanges_Call struct {
 
 // PruneOperationChanges is a helper method to define mock.On call
 //   - olderThan time.Time
-func (_e *MockOperationsStore_Expecter) PruneOperationChanges(olderThan any) *MockOperationsStore_PruneOperationChanges_Call {
+func (_e *MockOperationsStore_Expecter) PruneOperationChanges(olderThan interface{}) *MockOperationsStore_PruneOperationChanges_Call {
 	return &MockOperationsStore_PruneOperationChanges_Call{Call: _e.mock.On("PruneOperationChanges", olderThan)}
 }
 
@@ -5811,7 +5779,7 @@ type MockOperationsStore_PruneOperationLogs_Call struct {
 
 // PruneOperationLogs is a helper method to define mock.On call
 //   - olderThan time.Time
-func (_e *MockOperationsStore_Expecter) PruneOperationLogs(olderThan any) *MockOperationsStore_PruneOperationLogs_Call {
+func (_e *MockOperationsStore_Expecter) PruneOperationLogs(olderThan interface{}) *MockOperationsStore_PruneOperationLogs_Call {
 	return &MockOperationsStore_PruneOperationLogs_Call{Call: _e.mock.On("PruneOperationLogs", olderThan)}
 }
 
@@ -5862,7 +5830,7 @@ type MockOperationsStore_RecomputeBookAggregates_Call struct {
 
 // RecomputeBookAggregates is a helper method to define mock.On call
 //   - bookID string
-func (_e *MockOperationsStore_Expecter) RecomputeBookAggregates(bookID any) *MockOperationsStore_RecomputeBookAggregates_Call {
+func (_e *MockOperationsStore_Expecter) RecomputeBookAggregates(bookID interface{}) *MockOperationsStore_RecomputeBookAggregates_Call {
 	return &MockOperationsStore_RecomputeBookAggregates_Call{Call: _e.mock.On("RecomputeBookAggregates", bookID)}
 }
 
@@ -5913,7 +5881,7 @@ type MockOperationsStore_ResetScanFailCount_Call struct {
 
 // ResetScanFailCount is a helper method to define mock.On call
 //   - pathHash string
-func (_e *MockOperationsStore_Expecter) ResetScanFailCount(pathHash any) *MockOperationsStore_ResetScanFailCount_Call {
+func (_e *MockOperationsStore_Expecter) ResetScanFailCount(pathHash interface{}) *MockOperationsStore_ResetScanFailCount_Call {
 	return &MockOperationsStore_ResetScanFailCount_Call{Call: _e.mock.On("ResetScanFailCount", pathHash)}
 }
 
@@ -6029,7 +5997,7 @@ type MockOperationsStore_RevertBookToVersion_Call struct {
 // RevertBookToVersion is a helper method to define mock.On call
 //   - id string
 //   - ts time.Time
-func (_e *MockOperationsStore_Expecter) RevertBookToVersion(id any, ts any) *MockOperationsStore_RevertBookToVersion_Call {
+func (_e *MockOperationsStore_Expecter) RevertBookToVersion(id interface{}, ts interface{}) *MockOperationsStore_RevertBookToVersion_Call {
 	return &MockOperationsStore_RevertBookToVersion_Call{Call: _e.mock.On("RevertBookToVersion", id, ts)}
 }
 
@@ -6085,7 +6053,7 @@ type MockOperationsStore_RevertOperationChanges_Call struct {
 
 // RevertOperationChanges is a helper method to define mock.On call
 //   - operationID string
-func (_e *MockOperationsStore_Expecter) RevertOperationChanges(operationID any) *MockOperationsStore_RevertOperationChanges_Call {
+func (_e *MockOperationsStore_Expecter) RevertOperationChanges(operationID interface{}) *MockOperationsStore_RevertOperationChanges_Call {
 	return &MockOperationsStore_RevertOperationChanges_Call{Call: _e.mock.On("RevertOperationChanges", operationID)}
 }
 
@@ -6137,7 +6105,7 @@ type MockOperationsStore_SaveOperationParams_Call struct {
 // SaveOperationParams is a helper method to define mock.On call
 //   - opID string
 //   - params []byte
-func (_e *MockOperationsStore_Expecter) SaveOperationParams(opID any, params any) *MockOperationsStore_SaveOperationParams_Call {
+func (_e *MockOperationsStore_Expecter) SaveOperationParams(opID interface{}, params interface{}) *MockOperationsStore_SaveOperationParams_Call {
 	return &MockOperationsStore_SaveOperationParams_Call{Call: _e.mock.On("SaveOperationParams", opID, params)}
 }
 
@@ -6194,7 +6162,7 @@ type MockOperationsStore_SaveOperationState_Call struct {
 // SaveOperationState is a helper method to define mock.On call
 //   - opID string
 //   - state []byte
-func (_e *MockOperationsStore_Expecter) SaveOperationState(opID any, state any) *MockOperationsStore_SaveOperationState_Call {
+func (_e *MockOperationsStore_Expecter) SaveOperationState(opID interface{}, state interface{}) *MockOperationsStore_SaveOperationState_Call {
 	return &MockOperationsStore_SaveOperationState_Call{Call: _e.mock.On("SaveOperationState", opID, state)}
 }
 
@@ -6250,7 +6218,7 @@ type MockOperationsStore_SaveOperationSummaryLog_Call struct {
 
 // SaveOperationSummaryLog is a helper method to define mock.On call
 //   - op *database.OperationSummaryLog
-func (_e *MockOperationsStore_Expecter) SaveOperationSummaryLog(op any) *MockOperationsStore_SaveOperationSummaryLog_Call {
+func (_e *MockOperationsStore_Expecter) SaveOperationSummaryLog(op interface{}) *MockOperationsStore_SaveOperationSummaryLog_Call {
 	return &MockOperationsStore_SaveOperationSummaryLog_Call{Call: _e.mock.On("SaveOperationSummaryLog", op)}
 }
 
@@ -6314,7 +6282,7 @@ type MockOperationsStore_SearchBooks_Call struct {
 //   - query string
 //   - limit int
 //   - offset int
-func (_e *MockOperationsStore_Expecter) SearchBooks(query any, limit any, offset any) *MockOperationsStore_SearchBooks_Call {
+func (_e *MockOperationsStore_Expecter) SearchBooks(query interface{}, limit interface{}, offset interface{}) *MockOperationsStore_SearchBooks_Call {
 	return &MockOperationsStore_SearchBooks_Call{Call: _e.mock.On("SearchBooks", query, limit, offset)}
 }
 
@@ -6376,7 +6344,7 @@ type MockOperationsStore_SetBookAuthors_Call struct {
 // SetBookAuthors is a helper method to define mock.On call
 //   - bookID string
 //   - authors []database.BookAuthor
-func (_e *MockOperationsStore_Expecter) SetBookAuthors(bookID any, authors any) *MockOperationsStore_SetBookAuthors_Call {
+func (_e *MockOperationsStore_Expecter) SetBookAuthors(bookID interface{}, authors interface{}) *MockOperationsStore_SetBookAuthors_Call {
 	return &MockOperationsStore_SetBookAuthors_Call{Call: _e.mock.On("SetBookAuthors", bookID, authors)}
 }
 
@@ -6433,7 +6401,7 @@ type MockOperationsStore_SetBookNarrators_Call struct {
 // SetBookNarrators is a helper method to define mock.On call
 //   - bookID string
 //   - narrators []database.BookNarrator
-func (_e *MockOperationsStore_Expecter) SetBookNarrators(bookID any, narrators any) *MockOperationsStore_SetBookNarrators_Call {
+func (_e *MockOperationsStore_Expecter) SetBookNarrators(bookID interface{}, narrators interface{}) *MockOperationsStore_SetBookNarrators_Call {
 	return &MockOperationsStore_SetBookNarrators_Call{Call: _e.mock.On("SetBookNarrators", bookID, narrators)}
 }
 
@@ -6490,7 +6458,7 @@ type MockOperationsStore_SetLastWrittenAt_Call struct {
 // SetLastWrittenAt is a helper method to define mock.On call
 //   - id string
 //   - t time.Time
-func (_e *MockOperationsStore_Expecter) SetLastWrittenAt(id any, t any) *MockOperationsStore_SetLastWrittenAt_Call {
+func (_e *MockOperationsStore_Expecter) SetLastWrittenAt(id interface{}, t interface{}) *MockOperationsStore_SetLastWrittenAt_Call {
 	return &MockOperationsStore_SetLastWrittenAt_Call{Call: _e.mock.On("SetLastWrittenAt", id, t)}
 }
 
@@ -6549,7 +6517,7 @@ type MockOperationsStore_SetSetting_Call struct {
 //   - value string
 //   - typ string
 //   - isSecret bool
-func (_e *MockOperationsStore_Expecter) SetSetting(key any, value any, typ any, isSecret any) *MockOperationsStore_SetSetting_Call {
+func (_e *MockOperationsStore_Expecter) SetSetting(key interface{}, value interface{}, typ interface{}, isSecret interface{}) *MockOperationsStore_SetSetting_Call {
 	return &MockOperationsStore_SetSetting_Call{Call: _e.mock.On("SetSetting", key, value, typ, isSecret)}
 }
 
@@ -6616,7 +6584,7 @@ type MockOperationsStore_UpdateAuthorName_Call struct {
 // UpdateAuthorName is a helper method to define mock.On call
 //   - id int
 //   - name string
-func (_e *MockOperationsStore_Expecter) UpdateAuthorName(id any, name any) *MockOperationsStore_UpdateAuthorName_Call {
+func (_e *MockOperationsStore_Expecter) UpdateAuthorName(id interface{}, name interface{}) *MockOperationsStore_UpdateAuthorName_Call {
 	return &MockOperationsStore_UpdateAuthorName_Call{Call: _e.mock.On("UpdateAuthorName", id, name)}
 }
 
@@ -6684,7 +6652,7 @@ type MockOperationsStore_UpdateBook_Call struct {
 // UpdateBook is a helper method to define mock.On call
 //   - id string
 //   - book *database.Book
-func (_e *MockOperationsStore_Expecter) UpdateBook(id any, book any) *MockOperationsStore_UpdateBook_Call {
+func (_e *MockOperationsStore_Expecter) UpdateBook(id interface{}, book interface{}) *MockOperationsStore_UpdateBook_Call {
 	return &MockOperationsStore_UpdateBook_Call{Call: _e.mock.On("UpdateBook", id, book)}
 }
 
@@ -6741,7 +6709,7 @@ type MockOperationsStore_UpdateBookRating_Call struct {
 // UpdateBookRating is a helper method to define mock.On call
 //   - id string
 //   - req database.UpdateBookRatingRequest
-func (_e *MockOperationsStore_Expecter) UpdateBookRating(id any, req any) *MockOperationsStore_UpdateBookRating_Call {
+func (_e *MockOperationsStore_Expecter) UpdateBookRating(id interface{}, req interface{}) *MockOperationsStore_UpdateBookRating_Call {
 	return &MockOperationsStore_UpdateBookRating_Call{Call: _e.mock.On("UpdateBookRating", id, req)}
 }
 
@@ -6798,7 +6766,7 @@ type MockOperationsStore_UpdateOperationError_Call struct {
 // UpdateOperationError is a helper method to define mock.On call
 //   - id string
 //   - errorMessage string
-func (_e *MockOperationsStore_Expecter) UpdateOperationError(id any, errorMessage any) *MockOperationsStore_UpdateOperationError_Call {
+func (_e *MockOperationsStore_Expecter) UpdateOperationError(id interface{}, errorMessage interface{}) *MockOperationsStore_UpdateOperationError_Call {
 	return &MockOperationsStore_UpdateOperationError_Call{Call: _e.mock.On("UpdateOperationError", id, errorMessage)}
 }
 
@@ -6855,7 +6823,7 @@ type MockOperationsStore_UpdateOperationResultData_Call struct {
 // UpdateOperationResultData is a helper method to define mock.On call
 //   - id string
 //   - resultData string
-func (_e *MockOperationsStore_Expecter) UpdateOperationResultData(id any, resultData any) *MockOperationsStore_UpdateOperationResultData_Call {
+func (_e *MockOperationsStore_Expecter) UpdateOperationResultData(id interface{}, resultData interface{}) *MockOperationsStore_UpdateOperationResultData_Call {
 	return &MockOperationsStore_UpdateOperationResultData_Call{Call: _e.mock.On("UpdateOperationResultData", id, resultData)}
 }
 
@@ -6915,7 +6883,7 @@ type MockOperationsStore_UpdateOperationStatus_Call struct {
 //   - progress int
 //   - total int
 //   - message string
-func (_e *MockOperationsStore_Expecter) UpdateOperationStatus(id any, status any, progress any, total any, message any) *MockOperationsStore_UpdateOperationStatus_Call {
+func (_e *MockOperationsStore_Expecter) UpdateOperationStatus(id interface{}, status interface{}, progress interface{}, total interface{}, message interface{}) *MockOperationsStore_UpdateOperationStatus_Call {
 	return &MockOperationsStore_UpdateOperationStatus_Call{Call: _e.mock.On("UpdateOperationStatus", id, status, progress, total, message)}
 }
 

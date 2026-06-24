@@ -77,7 +77,7 @@ type MockMetadataFetchService_ApplyMetadataCandidate_Call struct {
 //   - id string
 //   - candidate metafetch.MetadataCandidate
 //   - fields []string
-func (_e *MockMetadataFetchService_Expecter) ApplyMetadataCandidate(id any, candidate any, fields any) *MockMetadataFetchService_ApplyMetadataCandidate_Call {
+func (_e *MockMetadataFetchService_Expecter) ApplyMetadataCandidate(id interface{}, candidate interface{}, fields interface{}) *MockMetadataFetchService_ApplyMetadataCandidate_Call {
 	return &MockMetadataFetchService_ApplyMetadataCandidate_Call{Call: _e.mock.On("ApplyMetadataCandidate", id, candidate, fields)}
 }
 
@@ -127,7 +127,7 @@ type MockMetadataFetchService_ApplyMetadataFileIO_Call struct {
 
 // ApplyMetadataFileIO is a helper method to define mock.On call
 //   - id string
-func (_e *MockMetadataFetchService_Expecter) ApplyMetadataFileIO(id any) *MockMetadataFetchService_ApplyMetadataFileIO_Call {
+func (_e *MockMetadataFetchService_Expecter) ApplyMetadataFileIO(id interface{}) *MockMetadataFetchService_ApplyMetadataFileIO_Call {
 	return &MockMetadataFetchService_ApplyMetadataFileIO_Call{Call: _e.mock.On("ApplyMetadataFileIO", id)}
 }
 
@@ -169,7 +169,7 @@ type MockMetadataFetchService_ApplyMetadataSystemTags_Call struct {
 //   - bookID string
 //   - sourceName string
 //   - language string
-func (_e *MockMetadataFetchService_Expecter) ApplyMetadataSystemTags(bookID any, sourceName any, language any) *MockMetadataFetchService_ApplyMetadataSystemTags_Call {
+func (_e *MockMetadataFetchService_Expecter) ApplyMetadataSystemTags(bookID interface{}, sourceName interface{}, language interface{}) *MockMetadataFetchService_ApplyMetadataSystemTags_Call {
 	return &MockMetadataFetchService_ApplyMetadataSystemTags_Call{Call: _e.mock.On("ApplyMetadataSystemTags", bookID, sourceName, language)}
 }
 
@@ -247,7 +247,7 @@ type MockMetadataFetchService_FetchAndCache_Call struct {
 //   - narrator string
 //   - series string
 //   - opts metafetch.SearchOptions
-func (_e *MockMetadataFetchService_Expecter) FetchAndCache(ctx any, bookID any, query any, author any, narrator any, series any, opts any) *MockMetadataFetchService_FetchAndCache_Call {
+func (_e *MockMetadataFetchService_Expecter) FetchAndCache(ctx interface{}, bookID interface{}, query interface{}, author interface{}, narrator interface{}, series interface{}, opts interface{}) *MockMetadataFetchService_FetchAndCache_Call {
 	return &MockMetadataFetchService_FetchAndCache_Call{Call: _e.mock.On("FetchAndCache", ctx, bookID, query, author, narrator, series, opts)}
 }
 
@@ -339,7 +339,7 @@ type MockMetadataFetchService_FetchMetadataForBook_Call struct {
 
 // FetchMetadataForBook is a helper method to define mock.On call
 //   - id string
-func (_e *MockMetadataFetchService_Expecter) FetchMetadataForBook(id any) *MockMetadataFetchService_FetchMetadataForBook_Call {
+func (_e *MockMetadataFetchService_Expecter) FetchMetadataForBook(id interface{}) *MockMetadataFetchService_FetchMetadataForBook_Call {
 	return &MockMetadataFetchService_FetchMetadataForBook_Call{Call: _e.mock.On("FetchMetadataForBook", id)}
 }
 
@@ -407,7 +407,7 @@ type MockMetadataFetchService_GetCachedCandidates_Call struct {
 
 // GetCachedCandidates is a helper method to define mock.On call
 //   - bookID string
-func (_e *MockMetadataFetchService_Expecter) GetCachedCandidates(bookID any) *MockMetadataFetchService_GetCachedCandidates_Call {
+func (_e *MockMetadataFetchService_Expecter) GetCachedCandidates(bookID interface{}) *MockMetadataFetchService_GetCachedCandidates_Call {
 	return &MockMetadataFetchService_GetCachedCandidates_Call{Call: _e.mock.On("GetCachedCandidates", bookID)}
 }
 
@@ -458,7 +458,7 @@ type MockMetadataFetchService_InvalidateCachedCandidates_Call struct {
 
 // InvalidateCachedCandidates is a helper method to define mock.On call
 //   - bookID string
-func (_e *MockMetadataFetchService_Expecter) InvalidateCachedCandidates(bookID any) *MockMetadataFetchService_InvalidateCachedCandidates_Call {
+func (_e *MockMetadataFetchService_Expecter) InvalidateCachedCandidates(bookID interface{}) *MockMetadataFetchService_InvalidateCachedCandidates_Call {
 	return &MockMetadataFetchService_InvalidateCachedCandidates_Call{Call: _e.mock.On("InvalidateCachedCandidates", bookID)}
 }
 
@@ -509,7 +509,7 @@ type MockMetadataFetchService_MarkNoMatch_Call struct {
 
 // MarkNoMatch is a helper method to define mock.On call
 //   - id string
-func (_e *MockMetadataFetchService_Expecter) MarkNoMatch(id any) *MockMetadataFetchService_MarkNoMatch_Call {
+func (_e *MockMetadataFetchService_Expecter) MarkNoMatch(id interface{}) *MockMetadataFetchService_MarkNoMatch_Call {
 	return &MockMetadataFetchService_MarkNoMatch_Call{Call: _e.mock.On("MarkNoMatch", id)}
 }
 
@@ -551,7 +551,7 @@ type MockMetadataFetchService_RecordChangeHistory_Call struct {
 //   - book *database.Book
 //   - meta metadata.BookMetadata
 //   - sourceName string
-func (_e *MockMetadataFetchService_Expecter) RecordChangeHistory(book any, meta any, sourceName any) *MockMetadataFetchService_RecordChangeHistory_Call {
+func (_e *MockMetadataFetchService_Expecter) RecordChangeHistory(book interface{}, meta interface{}, sourceName interface{}) *MockMetadataFetchService_RecordChangeHistory_Call {
 	return &MockMetadataFetchService_RecordChangeHistory_Call{Call: _e.mock.On("RecordChangeHistory", book, meta, sourceName)}
 }
 
@@ -613,7 +613,7 @@ type MockMetadataFetchService_RunApplyPipelineRenameOnly_Call struct {
 // RunApplyPipelineRenameOnly is a helper method to define mock.On call
 //   - id string
 //   - book *database.Book
-func (_e *MockMetadataFetchService_Expecter) RunApplyPipelineRenameOnly(id any, book any) *MockMetadataFetchService_RunApplyPipelineRenameOnly_Call {
+func (_e *MockMetadataFetchService_Expecter) RunApplyPipelineRenameOnly(id interface{}, book interface{}) *MockMetadataFetchService_RunApplyPipelineRenameOnly_Call {
 	return &MockMetadataFetchService_RunApplyPipelineRenameOnly_Call{Call: _e.mock.On("RunApplyPipelineRenameOnly", id, book)}
 }
 
@@ -685,7 +685,7 @@ type MockMetadataFetchService_SearchMetadataForBookWithOptions_Call struct {
 //   - narrator string
 //   - series string
 //   - opts metafetch.SearchOptions
-func (_e *MockMetadataFetchService_Expecter) SearchMetadataForBookWithOptions(id any, query any, author any, narrator any, series any, opts any) *MockMetadataFetchService_SearchMetadataForBookWithOptions_Call {
+func (_e *MockMetadataFetchService_Expecter) SearchMetadataForBookWithOptions(id interface{}, query interface{}, author interface{}, narrator interface{}, series interface{}, opts interface{}) *MockMetadataFetchService_SearchMetadataForBookWithOptions_Call {
 	return &MockMetadataFetchService_SearchMetadataForBookWithOptions_Call{Call: _e.mock.On("SearchMetadataForBookWithOptions", id, query, author, narrator, series, opts)}
 }
 
@@ -777,9 +777,9 @@ type MockMetadataFetchService_WriteBackMetadataForBook_Call struct {
 // WriteBackMetadataForBook is a helper method to define mock.On call
 //   - id string
 //   - segmentFilter ...[]string
-func (_e *MockMetadataFetchService_Expecter) WriteBackMetadataForBook(id any, segmentFilter ...any) *MockMetadataFetchService_WriteBackMetadataForBook_Call {
+func (_e *MockMetadataFetchService_Expecter) WriteBackMetadataForBook(id interface{}, segmentFilter ...interface{}) *MockMetadataFetchService_WriteBackMetadataForBook_Call {
 	return &MockMetadataFetchService_WriteBackMetadataForBook_Call{Call: _e.mock.On("WriteBackMetadataForBook",
-		append([]any{id}, segmentFilter...)...)}
+		append([]interface{}{id}, segmentFilter...)...)}
 }
 
 func (_c *MockMetadataFetchService_WriteBackMetadataForBook_Call) Run(run func(id string, segmentFilter ...[]string)) *MockMetadataFetchService_WriteBackMetadataForBook_Call {

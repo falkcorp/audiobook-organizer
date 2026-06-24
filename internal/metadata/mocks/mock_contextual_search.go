@@ -71,7 +71,7 @@ type MockContextualSearch_SearchByContext_Call struct {
 
 // SearchByContext is a helper method to define mock.On call
 //   - ctx *metadata.SearchContext
-func (_e *MockContextualSearch_Expecter) SearchByContext(ctx any) *MockContextualSearch_SearchByContext_Call {
+func (_e *MockContextualSearch_Expecter) SearchByContext(ctx interface{}) *MockContextualSearch_SearchByContext_Call {
 	return &MockContextualSearch_SearchByContext_Call{Call: _e.mock.On("SearchByContext", ctx)}
 }
 

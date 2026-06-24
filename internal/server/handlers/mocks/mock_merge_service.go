@@ -72,7 +72,7 @@ type MockMergeService_MergeBooks_Call struct {
 // MergeBooks is a helper method to define mock.On call
 //   - bookIDs []string
 //   - primaryID string
-func (_e *MockMergeService_Expecter) MergeBooks(bookIDs any, primaryID any) *MockMergeService_MergeBooks_Call {
+func (_e *MockMergeService_Expecter) MergeBooks(bookIDs interface{}, primaryID interface{}) *MockMergeService_MergeBooks_Call {
 	return &MockMergeService_MergeBooks_Call{Call: _e.mock.On("MergeBooks", bookIDs, primaryID)}
 }
 

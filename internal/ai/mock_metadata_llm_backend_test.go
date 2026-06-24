@@ -74,7 +74,7 @@ type mockMetadataLLMBackend_ScoreMetadataCandidates_Call struct {
 //   - ctx context.Context
 //   - query MetadataLLMQuery
 //   - candidates []MetadataLLMCandidate
-func (_e *mockMetadataLLMBackend_Expecter) ScoreMetadataCandidates(ctx any, query any, candidates any) *mockMetadataLLMBackend_ScoreMetadataCandidates_Call {
+func (_e *mockMetadataLLMBackend_Expecter) ScoreMetadataCandidates(ctx interface{}, query interface{}, candidates interface{}) *mockMetadataLLMBackend_ScoreMetadataCandidates_Call {
 	return &mockMetadataLLMBackend_ScoreMetadataCandidates_Call{Call: _e.mock.On("ScoreMetadataCandidates", ctx, query, candidates)}
 }
 

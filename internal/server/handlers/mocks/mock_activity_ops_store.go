@@ -72,7 +72,7 @@ type MockActivityOpsStore_GetOpLogsV2_Call struct {
 // GetOpLogsV2 is a helper method to define mock.On call
 //   - opID string
 //   - limit int
-func (_e *MockActivityOpsStore_Expecter) GetOpLogsV2(opID any, limit any) *MockActivityOpsStore_GetOpLogsV2_Call {
+func (_e *MockActivityOpsStore_Expecter) GetOpLogsV2(opID interface{}, limit interface{}) *MockActivityOpsStore_GetOpLogsV2_Call {
 	return &MockActivityOpsStore_GetOpLogsV2_Call{Call: _e.mock.On("GetOpLogsV2", opID, limit)}
 }
 

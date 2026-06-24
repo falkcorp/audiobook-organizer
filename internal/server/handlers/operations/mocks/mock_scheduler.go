@@ -197,7 +197,7 @@ type MockScheduler_RunMaintenanceWindow_Call struct {
 
 // RunMaintenanceWindow is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockScheduler_Expecter) RunMaintenanceWindow(ctx any) *MockScheduler_RunMaintenanceWindow_Call {
+func (_e *MockScheduler_Expecter) RunMaintenanceWindow(ctx interface{}) *MockScheduler_RunMaintenanceWindow_Call {
 	return &MockScheduler_RunMaintenanceWindow_Call{Call: _e.mock.On("RunMaintenanceWindow", ctx)}
 }
 
@@ -259,7 +259,7 @@ type MockScheduler_RunTaskManual_Call struct {
 
 // RunTaskManual is a helper method to define mock.On call
 //   - name string
-func (_e *MockScheduler_Expecter) RunTaskManual(name any) *MockScheduler_RunTaskManual_Call {
+func (_e *MockScheduler_Expecter) RunTaskManual(name interface{}) *MockScheduler_RunTaskManual_Call {
 	return &MockScheduler_RunTaskManual_Call{Call: _e.mock.On("RunTaskManual", name)}
 }
 

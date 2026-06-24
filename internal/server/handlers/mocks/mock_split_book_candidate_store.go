@@ -60,7 +60,7 @@ type MockSplitBookCandidateStore_Delete_Call struct {
 
 // Delete is a helper method to define mock.On call
 //   - id string
-func (_e *MockSplitBookCandidateStore_Expecter) Delete(id any) *MockSplitBookCandidateStore_Delete_Call {
+func (_e *MockSplitBookCandidateStore_Expecter) Delete(id interface{}) *MockSplitBookCandidateStore_Delete_Call {
 	return &MockSplitBookCandidateStore_Delete_Call{Call: _e.mock.On("Delete", id)}
 }
 
@@ -122,7 +122,7 @@ type MockSplitBookCandidateStore_Get_Call struct {
 
 // Get is a helper method to define mock.On call
 //   - id string
-func (_e *MockSplitBookCandidateStore_Expecter) Get(id any) *MockSplitBookCandidateStore_Get_Call {
+func (_e *MockSplitBookCandidateStore_Expecter) Get(id interface{}) *MockSplitBookCandidateStore_Get_Call {
 	return &MockSplitBookCandidateStore_Get_Call{Call: _e.mock.On("Get", id)}
 }
 

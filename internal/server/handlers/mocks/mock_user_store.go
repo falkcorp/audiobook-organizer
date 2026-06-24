@@ -75,7 +75,7 @@ type MockUserStore_ConsumeInvite_Call struct {
 //   - token string
 //   - algo string
 //   - hash string
-func (_e *MockUserStore_Expecter) ConsumeInvite(token any, algo any, hash any) *MockUserStore_ConsumeInvite_Call {
+func (_e *MockUserStore_Expecter) ConsumeInvite(token interface{}, algo interface{}, hash interface{}) *MockUserStore_ConsumeInvite_Call {
 	return &MockUserStore_ConsumeInvite_Call{Call: _e.mock.On("ConsumeInvite", token, algo, hash)}
 }
 
@@ -147,7 +147,7 @@ type MockUserStore_CreateInvite_Call struct {
 
 // CreateInvite is a helper method to define mock.On call
 //   - invite *database.Invite
-func (_e *MockUserStore_Expecter) CreateInvite(invite any) *MockUserStore_CreateInvite_Call {
+func (_e *MockUserStore_Expecter) CreateInvite(invite interface{}) *MockUserStore_CreateInvite_Call {
 	return &MockUserStore_CreateInvite_Call{Call: _e.mock.On("CreateInvite", invite)}
 }
 
@@ -212,7 +212,7 @@ type MockUserStore_CreateSession_Call struct {
 //   - ip string
 //   - ua string
 //   - ttl time.Duration
-func (_e *MockUserStore_Expecter) CreateSession(userID any, ip any, ua any, ttl any) *MockUserStore_CreateSession_Call {
+func (_e *MockUserStore_Expecter) CreateSession(userID interface{}, ip interface{}, ua interface{}, ttl interface{}) *MockUserStore_CreateSession_Call {
 	return &MockUserStore_CreateSession_Call{Call: _e.mock.On("CreateSession", userID, ip, ua, ttl)}
 }
 
@@ -278,7 +278,7 @@ type MockUserStore_DeleteInvite_Call struct {
 
 // DeleteInvite is a helper method to define mock.On call
 //   - token string
-func (_e *MockUserStore_Expecter) DeleteInvite(token any) *MockUserStore_DeleteInvite_Call {
+func (_e *MockUserStore_Expecter) DeleteInvite(token interface{}) *MockUserStore_DeleteInvite_Call {
 	return &MockUserStore_DeleteInvite_Call{Call: _e.mock.On("DeleteInvite", token)}
 }
 
@@ -340,7 +340,7 @@ type MockUserStore_GetUserByID_Call struct {
 
 // GetUserByID is a helper method to define mock.On call
 //   - id string
-func (_e *MockUserStore_Expecter) GetUserByID(id any) *MockUserStore_GetUserByID_Call {
+func (_e *MockUserStore_Expecter) GetUserByID(id interface{}) *MockUserStore_GetUserByID_Call {
 	return &MockUserStore_GetUserByID_Call{Call: _e.mock.On("GetUserByID", id)}
 }
 
@@ -501,7 +501,7 @@ type MockUserStore_UpdateUser_Call struct {
 
 // UpdateUser is a helper method to define mock.On call
 //   - user *database.User
-func (_e *MockUserStore_Expecter) UpdateUser(user any) *MockUserStore_UpdateUser_Call {
+func (_e *MockUserStore_Expecter) UpdateUser(user interface{}) *MockUserStore_UpdateUser_Call {
 	return &MockUserStore_UpdateUser_Call{Call: _e.mock.On("UpdateUser", user)}
 }
 

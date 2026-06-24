@@ -80,9 +80,9 @@ type MockSplitBookOpEnqueuer_EnqueueOp_Call struct {
 //   - defID string
 //   - params any
 //   - opts ...registry.EnqueueOption
-func (_e *MockSplitBookOpEnqueuer_Expecter) EnqueueOp(ctx any, defID any, params any, opts ...any) *MockSplitBookOpEnqueuer_EnqueueOp_Call {
+func (_e *MockSplitBookOpEnqueuer_Expecter) EnqueueOp(ctx interface{}, defID interface{}, params interface{}, opts ...interface{}) *MockSplitBookOpEnqueuer_EnqueueOp_Call {
 	return &MockSplitBookOpEnqueuer_EnqueueOp_Call{Call: _e.mock.On("EnqueueOp",
-		append([]any{ctx, defID, params}, opts...)...)}
+		append([]interface{}{ctx, defID, params}, opts...)...)}
 }
 
 func (_c *MockSplitBookOpEnqueuer_EnqueueOp_Call) Run(run func(ctx context.Context, defID string, params any, opts ...registry.EnqueueOption)) *MockSplitBookOpEnqueuer_EnqueueOp_Call {

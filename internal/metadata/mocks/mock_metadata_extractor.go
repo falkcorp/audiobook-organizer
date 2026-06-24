@@ -69,7 +69,7 @@ type MockMetadataExtractor_ExtractMetadata_Call struct {
 
 // ExtractMetadata is a helper method to define mock.On call
 //   - filePath string
-func (_e *MockMetadataExtractor_Expecter) ExtractMetadata(filePath any) *MockMetadataExtractor_ExtractMetadata_Call {
+func (_e *MockMetadataExtractor_Expecter) ExtractMetadata(filePath interface{}) *MockMetadataExtractor_ExtractMetadata_Call {
 	return &MockMetadataExtractor_ExtractMetadata_Call{Call: _e.mock.On("ExtractMetadata", filePath)}
 }
 

@@ -62,7 +62,7 @@ type MockDedupEngine_CleanupCandidatesAfterMerge_Call struct {
 
 // CleanupCandidatesAfterMerge is a helper method to define mock.On call
 //   - mergedAwayBookIDs []string
-func (_e *MockDedupEngine_Expecter) CleanupCandidatesAfterMerge(mergedAwayBookIDs any) *MockDedupEngine_CleanupCandidatesAfterMerge_Call {
+func (_e *MockDedupEngine_Expecter) CleanupCandidatesAfterMerge(mergedAwayBookIDs interface{}) *MockDedupEngine_CleanupCandidatesAfterMerge_Call {
 	return &MockDedupEngine_CleanupCandidatesAfterMerge_Call{Call: _e.mock.On("CleanupCandidatesAfterMerge", mergedAwayBookIDs)}
 }
 
@@ -123,7 +123,7 @@ type MockDedupEngine_Rescore_Call struct {
 // Rescore is a helper method to define mock.On call
 //   - ctx context.Context
 //   - apply bool
-func (_e *MockDedupEngine_Expecter) Rescore(ctx any, apply any) *MockDedupEngine_Rescore_Call {
+func (_e *MockDedupEngine_Expecter) Rescore(ctx interface{}, apply interface{}) *MockDedupEngine_Rescore_Call {
 	return &MockDedupEngine_Rescore_Call{Call: _e.mock.On("Rescore", ctx, apply)}
 }
 

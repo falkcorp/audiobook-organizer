@@ -71,7 +71,7 @@ type MockExternalIDStore_GetExternalIDsForBook_Call struct {
 
 // GetExternalIDsForBook is a helper method to define mock.On call
 //   - bookID string
-func (_e *MockExternalIDStore_Expecter) GetExternalIDsForBook(bookID any) *MockExternalIDStore_GetExternalIDsForBook_Call {
+func (_e *MockExternalIDStore_Expecter) GetExternalIDsForBook(bookID interface{}) *MockExternalIDStore_GetExternalIDsForBook_Call {
 	return &MockExternalIDStore_GetExternalIDsForBook_Call{Call: _e.mock.On("GetExternalIDsForBook", bookID)}
 }
 

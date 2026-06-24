@@ -80,7 +80,7 @@ type MockSystemService_CollectSystemLogs_Call struct {
 //   - search string
 //   - limit int
 //   - offset int
-func (_e *MockSystemService_Expecter) CollectSystemLogs(level any, search any, limit any, offset any) *MockSystemService_CollectSystemLogs_Call {
+func (_e *MockSystemService_Expecter) CollectSystemLogs(level interface{}, search interface{}, limit interface{}, offset interface{}) *MockSystemService_CollectSystemLogs_Call {
 	return &MockSystemService_CollectSystemLogs_Call{Call: _e.mock.On("CollectSystemLogs", level, search, limit, offset)}
 }
 

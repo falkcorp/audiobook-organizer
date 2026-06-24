@@ -49,7 +49,7 @@ type MockFileIOPool_Submit_Call struct {
 // Submit is a helper method to define mock.On call
 //   - bookID string
 //   - fn func()
-func (_e *MockFileIOPool_Expecter) Submit(bookID any, fn any) *MockFileIOPool_Submit_Call {
+func (_e *MockFileIOPool_Expecter) Submit(bookID interface{}, fn interface{}) *MockFileIOPool_Submit_Call {
 	return &MockFileIOPool_Submit_Call{Call: _e.mock.On("Submit", bookID, fn)}
 }
 

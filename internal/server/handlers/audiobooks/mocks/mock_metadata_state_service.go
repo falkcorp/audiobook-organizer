@@ -60,7 +60,7 @@ type MockMetadataStateService_ClearOverride_Call struct {
 // ClearOverride is a helper method to define mock.On call
 //   - bookID string
 //   - field string
-func (_e *MockMetadataStateService_Expecter) ClearOverride(bookID any, field any) *MockMetadataStateService_ClearOverride_Call {
+func (_e *MockMetadataStateService_Expecter) ClearOverride(bookID interface{}, field interface{}) *MockMetadataStateService_ClearOverride_Call {
 	return &MockMetadataStateService_ClearOverride_Call{Call: _e.mock.On("ClearOverride", bookID, field)}
 }
 
@@ -119,7 +119,7 @@ type MockMetadataStateService_SetOverride_Call struct {
 //   - field string
 //   - value any
 //   - locked bool
-func (_e *MockMetadataStateService_Expecter) SetOverride(bookID any, field any, value any, locked any) *MockMetadataStateService_SetOverride_Call {
+func (_e *MockMetadataStateService_Expecter) SetOverride(bookID interface{}, field interface{}, value interface{}, locked interface{}) *MockMetadataStateService_SetOverride_Call {
 	return &MockMetadataStateService_SetOverride_Call{Call: _e.mock.On("SetOverride", bookID, field, value, locked)}
 }
 
