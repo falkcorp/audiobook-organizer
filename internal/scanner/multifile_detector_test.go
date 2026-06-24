@@ -1,7 +1,7 @@
 // file: internal/scanner/multifile_detector_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9b4f5d2c-3e6a-4b7c-8d9e-0f1a2b3c4d5e
-// last-edited: 2026-05-29
+// last-edited: 2026-06-24
 
 package scanner
 
@@ -232,5 +232,42 @@ func TestDetectMultiFileGroup_RejectsSparseNumbers(t *testing.T) {
 	ok, _ := DetectMultiFileGroup(files, DefaultMultiFileConfig())
 	if ok {
 		t.Fatalf("expected NEGATIVE detection for sparse numbering (1, 2, 500)")
+	}
+}
+
+func TestDetectMultiFileGroup_NoTagsGroupedBySequentialName(t *testing.T) {
+	// AP-5: files with no album / album_artist tags at all but clear sequential
+	// naming — e.g. "Assimil Japanese With Ease Audio/06 - X.mp3". The tag
+	// quorum cannot be satisfied (no tags), but tag silence is uniform, not a
+	// sign of tag conflict.  Sequential names are sufficient evidence.
+	files := []MultiFileInfo{
+		mk("06 - Lesson Six.mp3", "", ""),
+		mk("07 - Lesson Seven.mp3", "", ""),
+		mk("08 - Lesson Eight.mp3", "", ""),
+		mk("09 - Lesson Nine.mp3", "", ""),
+		mk("10 - Lesson Ten.mp3", "", ""),
+	}
+	ok, sorted := DetectMultiFileGroup(files, DefaultMultiFileConfig())
+	if !ok {
+		t.Fatal("expected positive detection for untagged sequential files (AP-5)")
+	}
+	if len(sorted) != len(files) {
+		t.Fatalf("expected %d sorted files, got %d", len(files), len(sorted))
+	}
+}
+
+func TestDetectMultiFileGroup_MixedTagsStillGroupedByArtistQuorum(t *testing.T) {
+	// Conflicting album tags but consistent album_artist: artist quorum passes.
+	// This verifies that the AP-5 allTagsAbsent path doesn't break the existing
+	// quorum path when some tags are present.
+	files := []MultiFileInfo{
+		mk("01.mp3", "Album A", "Same Author"),
+		mk("02.mp3", "Album B", "Same Author"),
+		mk("03.mp3", "Album C", "Same Author"),
+		mk("04.mp3", "Album D", "Same Author"),
+	}
+	ok, _ := DetectMultiFileGroup(files, DefaultMultiFileConfig())
+	if !ok {
+		t.Fatal("expected positive detection when album_artist quorum passes despite varying album tags")
 	}
 }

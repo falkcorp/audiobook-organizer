@@ -1,7 +1,7 @@
 // file: internal/scanner/multifile_detector.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7a3e4c8b-1d2f-4a5b-9c6d-8e0f1a2b3c4d
-// last-edited: 2026-05-29
+// last-edited: 2026-06-24
 
 // Package scanner — multi-file audiobook detection.
 //
@@ -177,7 +177,8 @@ func majorityValue(values []string) (string, int) {
 //   - detected numbers are dense in [min..max]:
 //     #detected / (max-min+1) >= cfg.DensityRatio
 //   - ≥ cfg.TagQuorum fraction of files share the same non-empty
-//     normalized album OR album_artist
+//     normalized album OR album_artist; OR all files have empty album AND
+//     album_artist (AP-5: untagged tracks are grouped by sequential name alone)
 //
 // The detector does NO file IO; the caller pre-extracts tag metadata.
 func DetectMultiFileGroup(files []MultiFileInfo, cfg MultiFileDetectionConfig) (bool, []MultiFileInfo) {
@@ -277,7 +278,11 @@ func DetectMultiFileGroup(files []MultiFileInfo, cfg MultiFileDetectionConfig) (
 	if required < 1 {
 		required = 1
 	}
-	tagAgrees := albumCount >= required || artistCount >= required
+	// AP-5: when ALL files lack album and album_artist tags the silence is
+	// uniform, not a sign of tag conflict. Sequential filenames alone are
+	// sufficient evidence — the scanner will use the folder name as the title.
+	allTagsAbsent := albumCount == 0 && artistCount == 0
+	tagAgrees := albumCount >= required || artistCount >= required || allTagsAbsent
 	if !tagAgrees {
 		return false, files
 	}
