@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/dedup_triage_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8f9a0b1c-2d3e-4f50-a6b7-c8d9e0f12345
 // last-edited: 2026-06-24
 
@@ -167,8 +167,8 @@ func TestClassifyCandidate_MissingBook(t *testing.T) {
 }
 
 func TestIsPurgeable(t *testing.T) {
-	purge := []TriageClass{TriageClassStub, TriageClassFragment, TriageClassTitleLeak}
-	keep := []TriageClass{TriageClassGenuine, TriageClassUnknown}
+	purge := []TriageClass{TriageClassStub, TriageClassTitleLeak}
+	keep := []TriageClass{TriageClassGenuine, TriageClassFragment, TriageClassUnknown}
 
 	for _, cls := range purge {
 		if !IsPurgeable(cls) {
