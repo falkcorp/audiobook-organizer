@@ -1,6 +1,7 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
+// last-edited: 2026-06-24
 
 package maintenance
 
@@ -67,8 +68,11 @@ func (d fakeDeps) SweepArchivedBooks() int                         { return 0 }
 func (d fakeDeps) ActivityFlushOp(_ string)                        {}
 func (d fakeDeps) EnqueueWriteBack(_ string)                       {}
 func (d fakeDeps) PollBatch(_ context.Context) (int, error)        { return 0, nil }
-func (d fakeDeps) DedupLLMReview(_ context.Context) error          { return nil }
-func (d fakeDeps) InvalidateDedupCache()                           {}
+func (d fakeDeps) DedupLLMReview(_ context.Context) error { return nil }
+func (d fakeDeps) DedupTriageExactPending(_ context.Context) (*TriageReport, error) {
+	return &TriageReport{}, nil
+}
+func (d fakeDeps) InvalidateDedupCache() {}
 func (d fakeDeps) MetadataUpgradeRun(_ context.Context, _ int) (int, int, int, int, error) {
 	return 0, 0, 0, 0, nil
 }
