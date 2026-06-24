@@ -1,6 +1,7 @@
 // file: internal/scanner/integration_format_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
+// last-edited: 2026-06-24
 
 package scanner
 
@@ -74,8 +75,17 @@ func TestIntegrationRealWorldMixedFormats(t *testing.T) {
 		t.Fatalf("Integration scan failed: %v", err)
 	}
 
-	if len(books) != totalFiles {
-		t.Errorf("Expected %d total files, got %d", totalFiles, len(books))
+	// AP-5: "Author B/Book 2 - MP3" contains Chapter 01-03.mp3 with no tags
+	// but sequential names — they are now grouped into ONE multi-file book
+	// instead of 3 shattered single-file books. Expected book count = 11:
+	//   Author A: 1 (m4b)
+	//   Author B: 1 (multi-file, Chapter 01-03.mp3 → SegmentFiles)
+	//   Author C: 2 (Part 1 + Part 2 m4a — no sequential pattern match)
+	//   Author D: 4 (Track01-04.flac — "TrackNN" not a pattern-quorum match)
+	//   Author E: 3 (Intro.mp3 + Main.m4b + Bonus.m4a — mixed formats, no group)
+	expectedBooks := totalFiles - 2 // 13 - 2: Chapter 02 + Chapter 03 absorbed
+	if len(books) != expectedBooks {
+		t.Errorf("Expected %d total books, got %d", expectedBooks, len(books))
 	}
 
 	// Verify format distribution
@@ -92,7 +102,7 @@ func TestIntegrationRealWorldMixedFormats(t *testing.T) {
 
 	expectedCounts := map[string]int{
 		".m4b":  2, // Book 1 + Book 5 Main
-		".mp3":  4, // Book 2 (3) + Book 5 Intro
+		".mp3":  2, // Book 2 as multi-file (1) + Book 5 Intro (1)
 		".m4a":  3, // Book 3 (2) + Book 5 Bonus
 		".flac": 4, // Book 4
 	}
