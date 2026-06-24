@@ -1,9 +1,9 @@
 // file: web/src/hooks/useSettingsHandlers.ts
-// version: 1.3.0
+// version: 1.4.0
 // guid: b8c9d0e1-f2a3-4567-bcde-678901234567
-// last-edited: 2026-06-23
+// last-edited: 2026-06-24
 
-import { ChangeEvent } from 'react';
+import { ChangeEvent, Dispatch, MutableRefObject, SetStateAction } from 'react';
 import { NavigateFunction } from 'react-router-dom';
 import * as api from '../services/api';
 import type { SettingsState } from '../pages/Settings';
@@ -42,56 +42,56 @@ interface Blocker {
 
 export interface UseSettingsHandlersParams {
   settings: SettingsState;
-  setSettings: React.Dispatch<React.SetStateAction<SettingsState>>;
-  setSaved: React.Dispatch<React.SetStateAction<boolean>>;
-  setSavedApiKeyMask: React.Dispatch<React.SetStateAction<string>>;
-  setConfigLoaded: React.Dispatch<React.SetStateAction<boolean>>;
-  setDedupConfig: React.Dispatch<React.SetStateAction<api.DedupConfig>>;
-  setEmbeddingConfig: React.Dispatch<React.SetStateAction<api.EmbeddingConfig>>;
-  setMetadataScoringConfig: React.Dispatch<React.SetStateAction<api.MetadataScoringConfig>>;
-  setMaintenanceConfig: React.Dispatch<React.SetStateAction<api.MaintenanceConfig>>;
-  setScheduledConfig: React.Dispatch<React.SetStateAction<api.ScheduledTasksConfig | null>>;
-  setToolsConfig: React.Dispatch<React.SetStateAction<api.ToolsConfig>>;
-  setLibraryPathError: React.Dispatch<React.SetStateAction<string | null>>;
-  setOpenaiKeyError: React.Dispatch<React.SetStateAction<string | null>>;
-  setExtensionsError: React.Dispatch<React.SetStateAction<string | null>>;
-  setExcludePatternError: React.Dispatch<React.SetStateAction<string | null>>;
-  setImportFolders: React.Dispatch<React.SetStateAction<api.ImportPath[]>>;
-  setScanStatuses: React.Dispatch<React.SetStateAction<Record<number, ScanStatus>>>;
-  setCancelScanTarget: React.Dispatch<React.SetStateAction<api.ImportPath | null>>;
-  setScanErrorTarget: React.Dispatch<React.SetStateAction<ScanErrorTarget | null>>;
-  setBackups: React.Dispatch<React.SetStateAction<api.BackupInfo[]>>;
-  setBackupNotice: React.Dispatch<React.SetStateAction<{ severity: 'success' | 'error' | 'info'; message: string } | null>>;
-  setBackupsLoading: React.Dispatch<React.SetStateAction<boolean>>;
-  setRestoreTarget: React.Dispatch<React.SetStateAction<api.BackupInfo | null>>;
-  setRestoreDialogOpen: React.Dispatch<React.SetStateAction<boolean>>;
-  setRestoreInProgress: React.Dispatch<React.SetStateAction<boolean>>;
-  setDeleteBackupTarget: React.Dispatch<React.SetStateAction<api.BackupInfo | null>>;
-  setDeleteBackupInProgress: React.Dispatch<React.SetStateAction<boolean>>;
-  setCreateBackupInProgress: React.Dispatch<React.SetStateAction<boolean>>;
-  setOpenaiTestState: React.Dispatch<React.SetStateAction<{ status: 'idle' | 'loading' | 'success' | 'error'; message?: string; model?: string }>>;
-  setSavedSnapshot: React.Dispatch<React.SetStateAction<string>>;
-  setSourceTestStatus: React.Dispatch<React.SetStateAction<Record<string, { testing: boolean; result?: { success: boolean; message?: string; error?: string } }>>>;
-  setExpandedSource: React.Dispatch<React.SetStateAction<string | null>>;
-  setBrowserOpen: React.Dispatch<React.SetStateAction<boolean>>;
-  setSelectedPath: React.Dispatch<React.SetStateAction<string | null>>;
-  setAddFolderDialogOpen: React.Dispatch<React.SetStateAction<boolean>>;
-  setNewFolderPath: React.Dispatch<React.SetStateAction<string>>;
-  setShowFolderBrowser: React.Dispatch<React.SetStateAction<boolean>>;
-  setImportDialogOpen: React.Dispatch<React.SetStateAction<boolean>>;
-  setImportPayload: React.Dispatch<React.SetStateAction<Partial<api.Config> | null>>;
-  setImportFileName: React.Dispatch<React.SetStateAction<string>>;
-  setImportNotice: React.Dispatch<React.SetStateAction<string | null>>;
-  setExportInProgress: React.Dispatch<React.SetStateAction<boolean>>;
-  setImportInProgress: React.Dispatch<React.SetStateAction<boolean>>;
-  setExtensionsInput: React.Dispatch<React.SetStateAction<string>>;
-  setExcludePatternInput: React.Dispatch<React.SetStateAction<string>>;
+  setSettings: Dispatch<SetStateAction<SettingsState>>;
+  setSaved: Dispatch<SetStateAction<boolean>>;
+  setSavedApiKeyMask: Dispatch<SetStateAction<string>>;
+  setConfigLoaded: Dispatch<SetStateAction<boolean>>;
+  setDedupConfig: Dispatch<SetStateAction<api.DedupConfig>>;
+  setEmbeddingConfig: Dispatch<SetStateAction<api.EmbeddingConfig>>;
+  setMetadataScoringConfig: Dispatch<SetStateAction<api.MetadataScoringConfig>>;
+  setMaintenanceConfig: Dispatch<SetStateAction<api.MaintenanceConfig>>;
+  setScheduledConfig: Dispatch<SetStateAction<api.ScheduledTasksConfig | null>>;
+  setToolsConfig: Dispatch<SetStateAction<api.ToolsConfig>>;
+  setLibraryPathError: Dispatch<SetStateAction<string | null>>;
+  setOpenaiKeyError: Dispatch<SetStateAction<string | null>>;
+  setExtensionsError: Dispatch<SetStateAction<string | null>>;
+  setExcludePatternError: Dispatch<SetStateAction<string | null>>;
+  setImportFolders: Dispatch<SetStateAction<api.ImportPath[]>>;
+  setScanStatuses: Dispatch<SetStateAction<Record<number, ScanStatus>>>;
+  setCancelScanTarget: Dispatch<SetStateAction<api.ImportPath | null>>;
+  setScanErrorTarget: Dispatch<SetStateAction<ScanErrorTarget | null>>;
+  setBackups: Dispatch<SetStateAction<api.BackupInfo[]>>;
+  setBackupNotice: Dispatch<SetStateAction<{ severity: 'success' | 'error' | 'info'; message: string } | null>>;
+  setBackupsLoading: Dispatch<SetStateAction<boolean>>;
+  setRestoreTarget: Dispatch<SetStateAction<api.BackupInfo | null>>;
+  setRestoreDialogOpen: Dispatch<SetStateAction<boolean>>;
+  setRestoreInProgress: Dispatch<SetStateAction<boolean>>;
+  setDeleteBackupTarget: Dispatch<SetStateAction<api.BackupInfo | null>>;
+  setDeleteBackupInProgress: Dispatch<SetStateAction<boolean>>;
+  setCreateBackupInProgress: Dispatch<SetStateAction<boolean>>;
+  setOpenaiTestState: Dispatch<SetStateAction<{ status: 'idle' | 'loading' | 'success' | 'error'; message?: string; model?: string }>>;
+  setSavedSnapshot: Dispatch<SetStateAction<string>>;
+  setSourceTestStatus: Dispatch<SetStateAction<Record<string, { testing: boolean; result?: { success: boolean; message?: string; error?: string } }>>>;
+  setExpandedSource: Dispatch<SetStateAction<string | null>>;
+  setBrowserOpen: Dispatch<SetStateAction<boolean>>;
+  setSelectedPath: Dispatch<SetStateAction<string | null>>;
+  setAddFolderDialogOpen: Dispatch<SetStateAction<boolean>>;
+  setNewFolderPath: Dispatch<SetStateAction<string>>;
+  setShowFolderBrowser: Dispatch<SetStateAction<boolean>>;
+  setImportDialogOpen: Dispatch<SetStateAction<boolean>>;
+  setImportPayload: Dispatch<SetStateAction<Partial<api.Config> | null>>;
+  setImportFileName: Dispatch<SetStateAction<string>>;
+  setImportNotice: Dispatch<SetStateAction<string | null>>;
+  setExportInProgress: Dispatch<SetStateAction<boolean>>;
+  setImportInProgress: Dispatch<SetStateAction<boolean>>;
+  setExtensionsInput: Dispatch<SetStateAction<string>>;
+  setExcludePatternInput: Dispatch<SetStateAction<string>>;
   savedApiKeyMask: string;
   configLoaded: boolean;
   navigate: NavigateFunction;
-  scanIntervalsRef: React.MutableRefObject<Record<number, number>>;
-  isUnmountedRef: React.MutableRefObject<boolean>;
-  timeoutRef: React.MutableRefObject<ReturnType<typeof setTimeout> | null>;
+  scanIntervalsRef: MutableRefObject<Record<number, number>>;
+  isUnmountedRef: MutableRefObject<boolean>;
+  timeoutRef: MutableRefObject<ReturnType<typeof setTimeout> | null>;
   restoreTarget: api.BackupInfo | null;
   restoreVerify: boolean;
   deleteBackupTarget: api.BackupInfo | null;
@@ -111,7 +111,7 @@ export interface UseSettingsHandlersParams {
   maintenanceConfig: api.MaintenanceConfig;
   scheduledConfig: api.ScheduledTasksConfig | null;
   toolsConfig: api.ToolsConfig;
-  importInputRef: React.MutableRefObject<HTMLInputElement | null>;
+  importInputRef: MutableRefObject<HTMLInputElement | null>;
   loadConfig: () => Promise<void>;
   initialSettings: SettingsState;
 }
