@@ -225,7 +225,9 @@ library.bleve/
 # Startup read-only API key (auth credential, do not commit)
 .readonly-key
 
-# API token file (auth credential shared across worktrees, do not commit)
+# API token files (auth credentials, do not commit)
+.api-token
+*.api-token
 .claude/.api-token
 
 # Worktree-specific credentials (per-branch user/pass, do not commit)
