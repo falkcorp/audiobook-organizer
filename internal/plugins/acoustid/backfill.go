@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/backfill.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: f6a7b8c9-d0e1-2345-def0-123456789abc
-// last-edited: 2026-06-24
+// last-edited: 2026-06-25
 
 package acoustid
 
@@ -145,9 +145,11 @@ func (p *Plugin) runBackfill(ctx context.Context, params json.RawMessage, report
 		lastID = b.ID
 		return nil
 	}, registry.RunItemsOptions{
+		ProgressOffset: startIdx,
+		ProgressTotal:  total,
 		Label: func(i, t int) string {
 			return fmt.Sprintf("Books %d/%d (fp=%d skip=%d fail=%d)",
-				startIdx+i+1, total, fingerprinted, skipped, failed)
+				i+1, t, fingerprinted, skipped, failed)
 		},
 		CheckpointFn: func(ctx context.Context) error {
 			cp := BackfillParams{LastProcessedBookID: lastID}
