@@ -1,7 +1,7 @@
 // file: internal/operations/registry/run_items.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a2b3c4d5-e6f7-8901-abcd-ef2345678901
-// last-edited: 2026-06-24
+// last-edited: 2026-06-25
 
 package registry
 
@@ -54,6 +54,17 @@ type RunItemsOptions struct {
 	// would race on the shared state blob. Use OpFreshness.Stamp instead for
 	// concurrent per-item checkpointing.
 	CheckpointFn func(ctx context.Context) error
+
+	// ProgressOffset shifts UpdateProgress current values by this amount.
+	// Use when iterating a sub-slice of a larger set so the progress bar
+	// shows position within the full set rather than within the slice.
+	// Example: startIdx=1000, total=5000 → item 0 reports 1001/5000.
+	ProgressOffset int
+
+	// ProgressTotal overrides the denominator passed to UpdateProgress.
+	// Defaults to len(items) when zero. Set to the full collection size
+	// when iterating a sub-slice (pairs with ProgressOffset).
+	ProgressTotal int
 }
 
 // RunItems fans out fn over items, managing:
@@ -80,9 +91,14 @@ func RunItems[T any](ctx context.Context, r Reporter, items []T, fn func(ctx con
 		return nil
 	}
 
+	progTotal := total
+	if opt.ProgressTotal > 0 {
+		progTotal = opt.ProgressTotal
+	}
+
 	lbl := opt.Label
 	if lbl == nil {
-		lbl = func(i, total int) string { return fmt.Sprintf("item %d/%d", i+1, total) }
+		lbl = func(i, total int) string { return fmt.Sprintf("item %d/%d", opt.ProgressOffset+i+1, total) }
 	}
 
 	runOne := func(ctx context.Context, i int, item T) error {
@@ -92,10 +108,10 @@ func RunItems[T any](ctx context.Context, r Reporter, items []T, fn func(ctx con
 			itemCtx, cancel = context.WithTimeout(ctx, opt.PerItemTimeout)
 			defer cancel()
 		}
-		l := lbl(i, total)
+		l := lbl(i, progTotal)
 		r.SetCurrentItem(l)
 		err := fn(itemCtx, item)
-		_ = r.UpdateProgress(i+1, total, l)
+		_ = r.UpdateProgress(opt.ProgressOffset+i+1, progTotal, l)
 		return err
 	}
 
