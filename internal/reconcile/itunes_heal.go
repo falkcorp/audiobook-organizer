@@ -1,5 +1,5 @@
 // file: internal/reconcile/itunes_heal.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7f3a1b2c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
 // last-edited: 2026-06-26
 
@@ -18,6 +18,8 @@ import (
 	"sync/atomic"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -42,6 +44,7 @@ type ITunesHealResult struct {
 	AlreadyGood int `json:"already_good"` // expected path already existed
 	Ambiguous   int `json:"ambiguous"`    // multiple candidates, could not pick one
 	NotFound    int `json:"not_found"`    // no candidate on disk at all
+	Merged      int `json:"merged"`       // duplicate books collapsed during heal
 	Errors      int `json:"errors"`       // reflink/copy failures
 }
 
@@ -99,18 +102,13 @@ func ParseITunesXML(xmlPath string) ([]iTunesTrack, error) {
 //
 // Returns the original location unchanged if no translation applies.
 func TranslateITunesPath(location string, mappings []config.ITunesPathMap) string {
-	// Strip scheme and URL-decode.
 	s := strings.TrimPrefix(location, "file://localhost")
 	s = strings.ReplaceAll(s, "\\", "/")
 	if decoded, err := url.PathUnescape(s); err == nil {
 		s = decoded
 	}
-	// s is now /W:/path/... or W:/path/... depending on URL encoding
-
-	// Normalise to no-leading-slash form for prefix matching.
 	stripped := strings.TrimPrefix(s, "/")
 
-	// 1. Try configured PathMappings (From = Windows path, To = Linux path).
 	for _, m := range mappings {
 		from := strings.ReplaceAll(m.From, "\\", "/")
 		if from == "" || m.To == "" {
@@ -122,12 +120,11 @@ func TranslateITunesPath(location string, mappings []config.ITunesPathMap) strin
 		}
 	}
 
-	// 2. Hardcoded W:\ → /mnt/bigdata/books/ (production constant).
 	if strings.HasPrefix(stripped, "W:/") {
 		return "/mnt/bigdata/books/" + stripped[3:]
 	}
 
-	return location // unchanged — caller treats as untranslatable
+	return location
 }
 
 // BuildFileIndex walks dirs in parallel and returns filename → []absolutepath.
@@ -177,8 +174,6 @@ func DisambiguateMatch(expectedPath, artist, album string, trackNum int, candida
 		return candidates[0], "high"
 	}
 
-	// Extract the author directory from the expected iTunes path.
-	// Expected form: .../Audiobooks/<AUTHOR>/filename
 	parts := strings.Split(expectedPath, "/")
 	var expectedAuthor string
 	for i, p := range parts {
@@ -224,7 +219,6 @@ func DisambiguateMatch(expectedPath, artist, album string, trackNum int, candida
 		scored[i] = entry{h, score}
 	}
 
-	// Find max and second-max.
 	best, second := scored[0], entry{score: -1}
 	for _, e := range scored[1:] {
 		if e.score > best.score {
@@ -242,41 +236,64 @@ func DisambiguateMatch(expectedPath, artist, album string, trackNum int, candida
 		}
 		return best.path, conf
 	}
-	return "", "" // tied — cannot pick safely
+	return "", ""
 }
 
-// fingerprintCandidates runs fpcalc on each candidate and returns the first path
-// if all candidates share the same audio content (Hamming similarity ≥ 0.9).
-// Returns "" if candidates are acoustically distinct (can't pick safely).
+// resolveAmbiguousByDB looks up stored AcoustID fingerprints for each candidate
+// from the DB (no fpcalc — data is already there from the backfill).
 //
-// This resolves the common case where the same file was copied into multiple
-// book folders during the organize bug — same bytes, different directory.
-func fingerprintCandidates(ctx context.Context, candidates []string) string {
+// If all candidates are acoustically identical (Hamming similarity ≥ 0.9), they
+// are duplicate books created by the organize bug. MergeBooks collapses them into
+// one and returns the surviving file path. If any pair is acoustically distinct,
+// returns ("", 0) — still ambiguous.
+func resolveAmbiguousByDB(ctx context.Context, store database.Store, candidates []string) (survivingPath string, merged int) {
 	if len(candidates) == 0 {
-		return ""
+		return "", 0
 	}
-	fps := make([]string, 0, len(candidates))
+
+	type bf struct {
+		bookID string
+		fileID string
+		fp     []byte
+		path   string
+	}
+	rows := make([]bf, 0, len(candidates))
 	for _, path := range candidates {
-		select {
-		case <-ctx.Done():
-			return ""
-		default:
+		f, err := store.GetBookFileByPath(path)
+		if err != nil || f == nil || len(f.AcoustIDFingerprint) == 0 {
+			return "", 0 // missing DB entry or not yet fingerprinted
 		}
-		r, err := fingerprint.File(path)
-		if err != nil || r == nil || r.Fingerprint == "" {
-			return "" // can't fingerprint one → can't compare
-		}
-		fps = append(fps, r.Fingerprint)
+		rows = append(rows, bf{bookID: f.BookID, fileID: f.ID, fp: f.AcoustIDFingerprint, path: path})
 	}
-	// All pairs must be similar.
-	ref := fps[0]
-	for _, fp := range fps[1:] {
-		sim, err := fingerprint.HammingSimilarity(ref, fp)
+
+	// All pairs must be acoustically identical (WholeFileSimilarity works on raw
+	// uint32 byte streams — no fpcalc invoked, data is already in the DB).
+	ref := rows[0].fp
+	for _, r := range rows[1:] {
+		sim, err := fingerprint.WholeFileSimilarity(ref, r.fp)
 		if err != nil || sim < 0.9 {
-			return "" // distinct audio — cannot pick safely
+			return "", 0 // genuinely distinct audio — cannot safely pick
 		}
 	}
-	return candidates[0] // all same content; first is fine
+
+	// Same content across multiple books — merge all into the first.
+	keepID := rows[0].bookID
+	var dupIDs []string
+	seen := map[string]bool{keepID: true}
+	for _, r := range rows[1:] {
+		if !seen[r.bookID] {
+			dupIDs = append(dupIDs, r.bookID)
+			seen[r.bookID] = true
+		}
+	}
+
+	if len(dupIDs) > 0 {
+		if _, err := dedup.MergeBooks(ctx, store, "", keepID, dupIDs, nil); err != nil {
+			return "", 0 // merge failed; caller will count as ambiguous
+		}
+	}
+
+	return rows[0].path, len(dupIDs)
 }
 
 // healTrack creates a reflink (ZFS COW) from src to dst, falling back to a
@@ -296,12 +313,13 @@ func healTrack(dst, src string) error {
 
 // RunITunesHeal is the entry point called by the maintenance plugin op.
 //
-// It parses the iTunes XML, builds a filename index of the organized library
-// and import directories, then fans out healing across missing tracks using
-// RunItems with 16 workers. Total runtime is dominated by the index walk
-// (~10–30s for 138K files) and is otherwise I/O-free per track (map lookup
-// + ZFS reflink).
-func RunITunesHeal(ctx context.Context, reporter sdk.Reporter, params json.RawMessage) error {
+// Parses iTunes XML as ground truth, builds a parallel filename index, then fans
+// out 16 workers. For each missing track:
+//  1. Metadata scoring (author dir + title words + track number) picks a winner.
+//  2. On tie: DB fingerprint comparison resolves it — if candidates are acoustically
+//     identical (same file in multiple folders from the organize bug), they are merged
+//     and the survivor is used. No fpcalc is invoked; fingerprints come from the backfill.
+func RunITunesHeal(ctx context.Context, store database.Store, reporter sdk.Reporter, params json.RawMessage) error {
 	cfg := config.AppConfig.ITunes
 	if cfg.LibraryReadPath == "" {
 		return fmt.Errorf("itunes.library_read_path not configured")
@@ -319,25 +337,22 @@ func RunITunesHeal(ctx context.Context, reporter sdk.Reporter, params json.RawMe
 	log := reporter.Logger()
 	log.Info("itunes-heal: parsing iTunes XML", "path", cfg.LibraryReadPath)
 
-	// Step 1: Parse iTunes XML.
 	allTracks, err := ParseITunesXML(cfg.LibraryReadPath)
 	if err != nil {
 		return fmt.Errorf("parse iTunes XML: %w", err)
 	}
 	log.Info("itunes-heal: parsed tracks", "count", len(allTracks))
 
-	// Step 2: Translate paths and separate missing from already-present.
 	extSet := map[string]bool{
 		".m4b": true, ".mp3": true, ".m4a": true,
 		".flac": true, ".aac": true, ".ogg": true, ".wma": true,
 	}
 	var missing []iTunesTrack
-	alreadyGood := 0
-	untranslatable := 0
+	alreadyGood, untranslatable := 0, 0
 	for _, t := range allTracks {
 		expected := TranslateITunesPath(t.Location, cfg.PathMappings)
 		if expected == t.Location {
-			untranslatable++ // translation failed — skip silently
+			untranslatable++
 			continue
 		}
 		if _, err := os.Stat(expected); err == nil {
@@ -364,7 +379,6 @@ func RunITunesHeal(ctx context.Context, reporter sdk.Reporter, params json.RawMe
 		return nil
 	}
 
-	// Step 3: Build filename index of organized library + newbooks.
 	indexDirs := []string{rootDir}
 	newbooks := filepath.Join(filepath.Dir(rootDir), "newbooks")
 	if _, err := os.Stat(newbooks); err == nil {
@@ -374,7 +388,6 @@ func RunITunesHeal(ctx context.Context, reporter sdk.Reporter, params json.RawMe
 	fileIndex := BuildFileIndex(indexDirs, extSet)
 	log.Info("itunes-heal: file index built", "unique_filenames", len(fileIndex))
 
-	// Step 4: Skip to checkpoint if resuming.
 	startIdx := 0
 	if cp.LastProcessedPID != "" {
 		for i, t := range missing {
@@ -386,11 +399,11 @@ func RunITunesHeal(ctx context.Context, reporter sdk.Reporter, params json.RawMe
 	}
 	slice := missing[startIdx:]
 
-	// Step 5: Fan out healing — 16 workers, ErrModeCollect (non-fatal per item).
 	var (
 		healed    atomic.Int64
 		ambiguous atomic.Int64
 		notFound  atomic.Int64
+		merged    atomic.Int64
 		healErrs  atomic.Int64
 	)
 
@@ -398,7 +411,6 @@ func RunITunesHeal(ctx context.Context, reporter sdk.Reporter, params json.RawMe
 		func(ctx context.Context, t iTunesTrack) error {
 			expected := TranslateITunesPath(t.Location, cfg.PathMappings)
 
-			// Re-check in case a parallel worker already healed this path.
 			if _, err := os.Stat(expected); err == nil {
 				healed.Add(1)
 				return nil
@@ -407,10 +419,13 @@ func RunITunesHeal(ctx context.Context, reporter sdk.Reporter, params json.RawMe
 			candidates := fileIndex[filepath.Base(expected)]
 			src, _ := DisambiguateMatch(expected, t.Artist, t.Album, t.TrackNumber, candidates)
 
-			// Metadata scoring tied: run fpcalc on all candidates.
-			// If they share the same audio content, any one will do.
-			if src == "" && len(candidates) > 0 {
-				src = fingerprintCandidates(ctx, candidates)
+			// Metadata scoring tied: compare stored DB fingerprints.
+			// Identical fingerprints → same file in multiple folders (organize bug duplicate)
+			// → merge the books, pick the survivor. No fpcalc invoked.
+			if src == "" && len(candidates) > 0 && store != nil {
+				var n int
+				src, n = resolveAmbiguousByDB(ctx, store, candidates)
+				merged.Add(int64(n))
 			}
 
 			switch {
@@ -428,7 +443,7 @@ func RunITunesHeal(ctx context.Context, reporter sdk.Reporter, params json.RawMe
 					healed.Add(1)
 				}
 			}
-			return nil // all outcomes non-fatal; keep processing
+			return nil
 		},
 		registry.RunItemsOptions{
 			Concurrency:    16,
@@ -436,8 +451,8 @@ func RunITunesHeal(ctx context.Context, reporter sdk.Reporter, params json.RawMe
 			ProgressOffset: startIdx,
 			ProgressTotal:  len(missing),
 			Label: func(i, total int) string {
-				return fmt.Sprintf("Track %d/%d  healed=%d ambig=%d missing=%d err=%d",
-					i+1, total, healed.Load(), ambiguous.Load(), notFound.Load(), healErrs.Load())
+				return fmt.Sprintf("Track %d/%d  healed=%d merged=%d ambig=%d missing=%d err=%d",
+					i+1, total, healed.Load(), merged.Load(), ambiguous.Load(), notFound.Load(), healErrs.Load())
 			},
 		},
 	)
@@ -452,13 +467,14 @@ func RunITunesHeal(ctx context.Context, reporter sdk.Reporter, params json.RawMe
 		Healed:      int(healed.Load()),
 		Ambiguous:   int(ambiguous.Load()),
 		NotFound:    int(notFound.Load()),
+		Merged:      int(merged.Load()),
 		Errors:      int(healErrs.Load()),
 	}
 	resultJSON, _ := json.Marshal(result)
 	log.Info("itunes-heal: complete", "result", string(resultJSON))
 	_ = reporter.UpdateProgress(len(missing), len(missing), fmt.Sprintf(
-		"Done: healed=%d  ambig=%d  not_found=%d  err=%d",
-		result.Healed, result.Ambiguous, result.NotFound, result.Errors,
+		"Done: healed=%d  merged=%d  ambig=%d  not_found=%d  err=%d",
+		result.Healed, result.Merged, result.Ambiguous, result.NotFound, result.Errors,
 	))
 	return nil
 }

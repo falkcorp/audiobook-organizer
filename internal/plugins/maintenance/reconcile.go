@@ -92,5 +92,5 @@ func (p *Plugin) itunesHealDef() sdk.OperationDef {
 }
 
 func (p *Plugin) runITunesHeal(ctx context.Context, params json.RawMessage, reporter sdk.Reporter) error {
-	return reconcile.RunITunesHeal(ctx, reporter, params)
+	return reconcile.RunITunesHeal(ctx, p.deps.Store(), reporter, params)
 }
