@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v2.go
-// version: 3.4.0
+// version: 3.5.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-06-24
 
@@ -221,9 +221,13 @@ func (p *PebbleStore) UpdateOperationV2Status(id, status string, startedAt, comp
 		return err
 	}
 
-	// Remove from queue index if it was queued.
-	if oldStatus == "queued" {
+	// Maintain queue index.
+	if oldStatus == "queued" && status != "queued" {
 		_ = p.db.Delete(opv2QueueKey(row.Priority, row.QueuedAt, id), pebble.Sync)
+	} else if status == "queued" && oldStatus != "queued" {
+		// resumeRestart transitions running→queued; must re-add the index entry
+		// or ListQueuedOperationsV2 never sees the op and it stalls forever.
+		_ = p.db.Set(opv2QueueKey(row.Priority, row.QueuedAt, id), []byte(id), pebble.Sync)
 	}
 	// Maintain active set.
 	if status == "running" {
