@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.43.0 -->
+<!-- version: 9.44.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-06-26 -->
 
@@ -23,14 +23,13 @@ future agent) can scan the entire workspace in one page.
 
 **Library:** ~31,400 books / 8,837 authors / 21,668 series
 **Production:** PebbleDB primary; Linux, HTTPS at prod server; stable
-**Latest activity:** Batch Whisper transcription infrastructure merged (feat/transcribe-batch).
-GPU confirmed working on prod (GTX 1050 Ti, CC 6.1, torch 2.0.1+cu118). Projected runtime
-~2-3h for 10,891 books on GPU. Ready to deploy and trigger bulk run.
-Previously: `maintenance.itunes-heal` shipped (PR #1625) and executed on prod:
-2,274 iTunes tracks reflinked back to expected paths.
+**Latest activity:** Batch Whisper bulk transcription RUNNING on prod (op `01KW2PHQ1M0NPNDPAMVZ7ZW8M9`).
+GPU confirmed active (device=cuda, GTX 1050 Ti). ~13 min/page × ~55 pages (200 books/page, 10,891 total).
+Dep pins confirmed (numpy<2, setuptools<67, --index-strategy unsafe-best-match — PR #1637).
+Crash-recovery checkpoint added — cursor persisted after each page (PR #1638).
+First page: 199 books transcribed. Run auto-resumed after deploy restart.
 **In flight:**
-- `feat/transcribe-batch` — PR open, awaiting merge and deploy
-- Once deployed: trigger `maintenance.transcribe-book-intros` for bulk run
+- `maintenance.transcribe-book-intros` — bulk run in progress; ~55 pages; ~12h total; auto-resumes on restart
 - After bulk run completes: re-trigger `maintenance.itunes-heal` to resolve 292 ambiguous tracks using Layer 6 (Whisper transcription-based disambiguation)
 
 **iTunes path heal remaining work:**

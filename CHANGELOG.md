@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.85.0 -->
+<!-- version: 3.86.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-26 -->
 
@@ -8,6 +8,11 @@
 ## [Unreleased]
 
 ### Features
+
+#### June 26, 2026 — Batch Whisper dep pins + crash-recovery checkpoint (PRs #1637, #1638)
+
+- **`fix(transcribe)`** (PR #1637) — Three dependency pins for `uv run` that were confirmed working end-to-end on GPU before commit: `numpy<2` (torch 2.0.x compiled against NumPy 1.x ABI; NumPy 2.x breaks model weight deserialization), `setuptools<67` (torch 2.0.x imports `pkg_resources.packaging` removed in setuptools 67.2), `--index-strategy unsafe-best-match` (PyTorch cu118 wheel index also serves setuptools≥70, blocking the pin under the default first-match strategy). Proof: `device=cuda`, `"This is Audible."` transcription from a real `.m4b` file.
+- **`fix(transcribe)`** (PR #1638) — Checkpoint cursor after each completed page via `reporter.Checkpoint(introTranscribeParams{LastBookID: cursor})`. On server restart, `resumeRestart` merges the JSON blob into `rawParams` so the resumed op starts from the last completed page rather than scanning from book 0. Safety model: per-book DB writes are permanent on page completion; the in-flight page (200-book Python batch) is the only all-or-nothing unit.
 
 #### June 26, 2026 — Batch Whisper transcription + transcribe-book-intros op (feat/transcribe-batch)
 
