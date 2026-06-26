@@ -1,5 +1,5 @@
 // file: internal/transcribe/batch.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
 // last-edited: 2026-06-26
 
@@ -66,13 +66,20 @@ func TranscribeBatch(ctx context.Context, jobs map[string]string) (map[string]Ba
 
 	// --python 3.11 is required: torch==2.0.1 has no wheels for python 3.12+.
 	// cu118 build supports CC 6.1 (GTX 1050 Ti); newer torch dropped sm_61.
-	// setuptools provides pkg_resources, which torch 2.0.x uses for version
-	// comparison. uv isolated envs don't include it by default.
+	// torch 2.0.x uses pkg_resources.packaging for version comparison.
+	// setuptools>=67.2 removed the bundled packaging vendoring, breaking that
+	// import. Pin setuptools<67 to keep the bundled copy.
+	// --index-strategy unsafe-best-match: the PyTorch cu118 wheel index also
+	// serves setuptools>=70, so uv would refuse setuptools<67 without this flag
+	// (default strategy is "first-match": once a package is found on any index,
+	// only that index is searched for that package's versions).
 	cmd := exec.CommandContext(ctx, uvBin, "run",
 		"--python", "3.11",
+		"--index-strategy", "unsafe-best-match",
 		"--with", "openai-whisper",
 		"--with", "torch==2.0.1+cu118",
-		"--with", "setuptools",
+		"--with", "setuptools<67",
+		"--with", "numpy<2", // torch 2.0.x was compiled against NumPy 1.x
 		"python", scriptFile.Name(), "base.en", jobsFile.Name(),
 	)
 	// PyTorch wheel index for cu118 — supports CC 6.1 (Pascal) that newer
