@@ -1,5 +1,5 @@
 // file: internal/transcribe/batch.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
 // last-edited: 2026-06-26
 
@@ -75,41 +75,38 @@ func TranscribeBatch(ctx context.Context, jobs map[string]string) (map[string]Ba
 	scriptFile.Close()
 
 	uvBin := resolveUVBin()
+	cuda := detectCUDA()
 
-	// --python 3.11 is required: torch==2.0.1 has no wheels for python 3.12+.
-	// cu118 build supports CC 6.1 (GTX 1050 Ti); newer torch dropped sm_61.
-	// torch 2.0.x uses pkg_resources.packaging for version comparison.
-	// setuptools>=67.2 removed the bundled packaging vendoring, breaking that
-	// import. Pin setuptools<67 to keep the bundled copy.
-	// --index-strategy unsafe-best-match: the PyTorch cu118 wheel index also
-	// serves setuptools>=70, so uv would refuse setuptools<67 without this flag
-	// (default strategy is "first-match": once a package is found on any index,
-	// only that index is searched for that package's versions).
-	cmd := exec.CommandContext(ctx, uvBin, "run",
-		"--python", "3.11",
+	// Build uv args dynamically from CUDA probe results.
+	// --index-strategy unsafe-best-match: required when the PyTorch wheel index
+	// also serves a higher version of a pinned dep (e.g. setuptools>=70 on the
+	// cu118 index would block setuptools<67 under default first-match strategy).
+	uvArgs := []string{
+		"run",
+		"--python", cuda.PythonVersion,
 		"--index-strategy", "unsafe-best-match",
 		"--with", "openai-whisper",
-		"--with", "torch==2.0.1+cu118",
-		"--with", "setuptools<67",
-		"--with", "numpy<2", // torch 2.0.x was compiled against NumPy 1.x
-		"python", scriptFile.Name(), "base.en", jobsFile.Name(),
-	)
-	// PyTorch wheel index for cu118 — supports CC 6.1 (Pascal) that newer
-	// torch builds dropped. The driver version check is forward-compatible
-	// with CUDA 12.x drivers.
-	//
-	// UV_PYTHON_INSTALL_DIR: uv needs to write Python 3.11 on first run.
-	// Point both the cache and python dir at the service user's home so they
-	// persist across restarts without touching /tmp.
+		"--with", cuda.TorchPkg,
+	}
+	for _, dep := range cuda.ExtraDeps {
+		uvArgs = append(uvArgs, "--with", dep)
+	}
+	uvArgs = append(uvArgs, "python", scriptFile.Name(), "base.en", jobsFile.Name())
+
+	cmd := exec.CommandContext(ctx, uvBin, uvArgs...)
+
 	home := os.Getenv("HOME")
 	if home == "" {
 		home = "/tmp"
 	}
-	cmd.Env = append(os.Environ(),
-		"UV_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cu118",
+	env := append(os.Environ(),
 		"UV_CACHE_DIR="+home+"/.uv-cache",
 		"UV_PYTHON_INSTALL_DIR="+home+"/.uv-python",
 	)
+	if cuda.ExtraIndexURL != "" {
+		env = append(env, "UV_EXTRA_INDEX_URL="+cuda.ExtraIndexURL)
+	}
+	cmd.Env = env
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
