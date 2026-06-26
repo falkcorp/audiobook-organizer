@@ -1,5 +1,5 @@
 // file: internal/reconcile/itunes_heal.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7f3a1b2c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
 // last-edited: 2026-06-26
 
@@ -415,6 +415,24 @@ func resolveAmbiguousByAcoustID(ctx context.Context, store database.Store, ac *a
 	return ""
 }
 
+// resolveNotFoundByPID looks up the track's iTunes Persistent ID in the DB to
+// find the book's current file path. This is the most reliable not-found
+// resolver: if the file was organized to a different name/location, the PID
+// stored on the BookFile points directly to it — no filesystem scan needed.
+func resolveNotFoundByPID(store database.Store, pid string) string {
+	if pid == "" || store == nil {
+		return ""
+	}
+	bf, err := store.GetBookFileByPID(pid)
+	if err != nil || bf == nil || bf.FilePath == "" {
+		return ""
+	}
+	if _, err := os.Stat(bf.FilePath); err != nil {
+		return ""
+	}
+	return bf.FilePath
+}
+
 // fuzzyFindByAlbum searches the whole file index for a file whose PATH
 // contains enough words from the iTunes album/artist to strongly suggest the
 // same book. Used for not-found tracks (zero filename matches in the index).
@@ -575,9 +593,11 @@ func RunITunesHeal(ctx context.Context, store database.Store, reporter sdk.Repor
 	// Skip the iTunes source tree (itunes/) and non-audio directories.
 	booksRoot := filepath.Dir(rootDir)
 	indexDirs := []string{rootDir}
+	// itunes/ is intentionally NOT skipped here — original iTunes media files
+	// may still live there and are valid heal sources. Only the library scanner
+	// must avoid it (to prevent importing iTunes source files as library books).
 	skipDirs := map[string]bool{
 		rootDir:                                       true,
-		filepath.Join(booksRoot, "itunes"):            true,
 		filepath.Join(booksRoot, "bkup"):              true,
 		filepath.Join(booksRoot, "logs"):              true,
 		filepath.Join(booksRoot, "playlists"):         true,
@@ -648,7 +668,14 @@ func RunITunesHeal(ctx context.Context, store database.Store, reporter sdk.Repor
 				src = resolveAmbiguousByAcoustID(ctx, store, ac, t, candidates)
 			}
 
-			// Layer 5: fuzzy album/artist path scan for tracks with no filename match.
+			// Layer 5: PID lookup — authoritative for both ambiguous and not-found.
+			// The BookFile.ITunesPersistentID index points directly to the current
+			// on-disk path, bypassing filename/metadata guessing entirely.
+			if src == "" && t.PersistentID != "" && store != nil {
+				src = resolveNotFoundByPID(store, t.PersistentID)
+			}
+
+			// Layer 6: fuzzy album/artist path scan for zero-candidate not-found tracks.
 			if src == "" && len(candidates) == 0 {
 				src = fuzzyFindByAlbum(t, fileIndex)
 			}
