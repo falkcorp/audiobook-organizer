@@ -70,6 +70,7 @@ func (p *Plugin) Register(r sdk.Registry) error {
 
 		// --- reconcile ---
 		p.reconcileScanDef(),
+		p.itunesHealDef(),
 
 		// --- title cleanup ---
 		p.titleBackfillDef(),
