@@ -1,5 +1,5 @@
 // file: internal/transcribe/remote.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f7a8b9c0-d1e2-3f4a-5b6c-7d8e9f0a1b2c
 // last-edited: 2026-06-26
 
@@ -19,16 +19,20 @@ import (
 	"time"
 )
 
-// remoteWorkers is the number of concurrent HTTP requests to the remote
-// whisper server. Two lets us pipeline network transfer with GPU compute
-// (one file uploading while the previous is being transcribed).
+// remoteWorkers pipelines network upload with GPU compute on the remote:
+// one file uploading while the previous is being transcribed.
 const remoteWorkers = 2
 
-// transcribeRemote sends WAV jobs to a remote faster-whisper HTTP server.
-// If the server is unreachable or any request fails, returns an error so
-// the caller can fall back to local transcription.
+// transcribeRemote sends WAV jobs directly to the remote faster-whisper server.
+// No upfront health check — just tries to connect. On any failure, cancels all
+// in-flight requests immediately and returns an error so the caller falls back
+// to local transcription.
 func transcribeRemote(ctx context.Context, remoteURL string, jobs map[string]string) (map[string]BatchResult, error) {
 	client := &http.Client{Timeout: 120 * time.Second}
+
+	// Child context so we can cancel all workers the moment any request fails.
+	batchCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
 	type jobItem struct {
 		id      string
@@ -53,8 +57,12 @@ func transcribeRemote(ctx context.Context, remoteURL string, jobs map[string]str
 		go func() {
 			defer wg.Done()
 			for j := range jobCh {
-				r, err := transcribeOneRemote(ctx, client, remoteURL, j.wavPath)
+				r, err := transcribeOneRemote(batchCtx, client, remoteURL, j.wavPath)
 				resultCh <- resultItem{id: j.id, result: r, err: err}
+				if err != nil {
+					cancel() // abort remaining workers immediately
+					return
+				}
 			}
 		}()
 	}
