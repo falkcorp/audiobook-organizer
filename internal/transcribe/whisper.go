@@ -1,14 +1,17 @@
 // file: internal/transcribe/whisper.go
-// version: 1.0.0
+// version: 1.2.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 // last-edited: 2026-06-26
 
 // Package transcribe extracts and transcribes the opening seconds of an audio
 // file. It tries backends in preference order:
 //
-//  1. whisper-cpp (local binary — fastest, fully offline)
-//  2. whisper / main (alternate whisper.cpp binary names)
-//  3. OpenAI Whisper API (whisper-1 model — requires openai_api_key in config)
+//  1. uv run --with openai-whisper whisper  (requires uv on PATH)
+//     No venv or install step — uv downloads and caches openai-whisper +
+//     torch on first use, then reuses the cache. Models auto-downloaded to
+//     ~/.cache/whisper/ on first whisper run.
+//     Install uv: curl -LsSf https://astral.sh/uv/install.sh | sh
+//  2. OpenAI Whisper API (whisper-1 — requires openai_api_key in config)
 //
 // Audio is extracted with ffmpeg to a 30-second 16 kHz mono WAV before being
 // sent to the transcription backend.
@@ -29,111 +32,74 @@ import (
 	"github.com/openai/openai-go/v3/packages/param"
 )
 
-
 const (
 	// IntroSeconds is how many seconds to extract from the start of the file.
-	// 30s covers the full "Title by Author. Read by Narrator" announcement in
-	// virtually every commercial audiobook, even with a brief music intro.
 	IntroSeconds = 30
 )
 
 // TranscribeFirst30s extracts the first IntroSeconds of the given audio file
 // and returns the transcribed text. The text is not parsed — call
 // ParseAudiobookIntro to extract structured title/author/narrator fields.
-//
-// The function creates a temporary WAV file in os.TempDir(), removes it on
-// return, and honours ctx cancellation throughout.
 func TranscribeFirst30s(ctx context.Context, audioPath string) (string, error) {
-	// Extract first 30 seconds to a temp WAV (16 kHz mono — Whisper's native format).
 	tmpWAV := filepath.Join(os.TempDir(), fmt.Sprintf("ao-intro-%d.wav", time.Now().UnixNano()))
 	defer os.Remove(tmpWAV)
 
-	ffmpegArgs := []string{
+	ffCmd := exec.CommandContext(ctx, "ffmpeg",
 		"-y", "-i", audioPath,
 		"-t", fmt.Sprintf("%d", IntroSeconds),
-		"-vn",
-		"-ar", "16000",
-		"-ac", "1",
-		"-f", "wav",
+		"-vn", "-ar", "16000", "-ac", "1", "-f", "wav",
 		tmpWAV,
-	}
-	ffCmd := exec.CommandContext(ctx, "ffmpeg", ffmpegArgs...)
+	)
 	if out, err := ffCmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("ffmpeg extract: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
 
-	// Try local whisper.cpp binary first — zero network, fastest.
-	for _, bin := range []string{"whisper-cpp", "whisper", "main"} {
-		if path, err := exec.LookPath(bin); err == nil {
-			text, err := runWhisperCPP(ctx, path, tmpWAV)
-			if err == nil {
-				return text, nil
-			}
+	// Try official OpenAI Whisper via uv run — no install step, uv caches
+	// openai-whisper + torch on first use and reuses the cache thereafter.
+	if _, err := exec.LookPath("uv"); err == nil {
+		if text, err := runPythonWhisper(ctx, tmpWAV); err == nil {
+			return text, nil
 		}
 	}
 
 	// Fall back to OpenAI Whisper API.
 	apiKey := config.AppConfig.OpenAIAPIKey
 	if apiKey == "" {
-		return "", fmt.Errorf("transcribe: no local whisper binary found and openai_api_key is not configured")
+		return "", fmt.Errorf("transcribe: uv not found on PATH and openai_api_key is not configured")
 	}
 	return runOpenAIWhisper(ctx, apiKey, tmpWAV)
 }
 
-// runWhisperCPP calls the whisper.cpp CLI. Output format: each line is either
-// a timestamp "[HH:MM:SS.mmm --> HH:MM:SS.mmm]" or a text segment. We strip
-// timestamps and join the text.
-func runWhisperCPP(ctx context.Context, binPath, wavPath string) (string, error) {
-	// -m: model file path — whisper.cpp requires a .bin model file. We look
-	// for common installation locations. If none found we skip this backend.
-	modelPath := findWhisperModel()
-	if modelPath == "" {
-		return "", fmt.Errorf("whisper-cpp: no model file found")
-	}
-
-	out, err := exec.CommandContext(ctx, binPath,
-		"-m", modelPath,
-		"-f", wavPath,
-		"-otxt",
-		"--no-timestamps",
+// runPythonWhisper calls openai-whisper via `uv run --with openai-whisper whisper`.
+// uv downloads and caches the package + torch on first use; subsequent calls
+// are instant. Models auto-download to ~/.cache/whisper/ on first whisper run.
+// The CLI writes a .txt file to outDir; we read and remove it.
+func runPythonWhisper(ctx context.Context, wavPath string) (string, error) {
+	outDir := filepath.Dir(wavPath)
+	out, err := exec.CommandContext(ctx, "uv", "run",
+		"--with", "openai-whisper",
+		"whisper",
+		wavPath,
+		"--model", "base.en",
+		"--output_format", "txt",
+		"--output_dir", outDir,
 		"--language", "en",
+		"--task", "transcribe",
 	).CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("whisper-cpp: %w (%s)", err, strings.TrimSpace(string(out)))
+		return "", fmt.Errorf("python whisper: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
-	// whisper.cpp with -otxt writes result to wavPath+".txt"
-	txtPath := wavPath + ".txt"
+
+	// Output file is {stem}.txt in outDir.
+	stem := strings.TrimSuffix(filepath.Base(wavPath), filepath.Ext(wavPath))
+	txtPath := filepath.Join(outDir, stem+".txt")
 	defer os.Remove(txtPath)
+
 	data, err := os.ReadFile(txtPath)
 	if err != nil {
-		// Some versions print to stdout instead.
-		return strings.TrimSpace(string(out)), nil
+		return "", fmt.Errorf("python whisper: read output: %w", err)
 	}
 	return strings.TrimSpace(string(data)), nil
-}
-
-// findWhisperModel looks for a whisper model in common install locations,
-// including the snap's restricted data directory (~/snap/whisper-cpp/common/).
-func findWhisperModel() string {
-	home := os.ExpandEnv("$HOME")
-	candidates := []string{
-		// snap install (strict confinement — model must live under snap data dir)
-		home + "/snap/whisper-cpp/common/models/ggml-base.en.bin",
-		home + "/snap/whisper-cpp/current/models/ggml-base.en.bin",
-		// apt / manual install paths
-		"/usr/share/whisper.cpp/models/ggml-base.en.bin",
-		"/usr/local/share/whisper.cpp/models/ggml-base.en.bin",
-		"/opt/whisper/models/ggml-base.en.bin",
-		"/var/lib/whisper/ggml-base.en.bin",
-		home + "/.local/share/whisper/ggml-base.en.bin",
-		home + "/whisper.cpp/models/ggml-base.en.bin",
-	}
-	for _, p := range candidates {
-		if _, err := os.Stat(p); err == nil {
-			return p
-		}
-	}
-	return ""
 }
 
 // runOpenAIWhisper submits the WAV to OpenAI's Whisper API (whisper-1 model).
