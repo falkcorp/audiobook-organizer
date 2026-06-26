@@ -1,17 +1,19 @@
 // file: internal/transcribe/batch.go
-// version: 1.1.0
+// version: 1.3.0
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
 // last-edited: 2026-06-26
 
 package transcribe
 
 import (
+	"bytes"
 	"context"
 	_ "embed"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 )
 
 //go:embed batch_whisper.py
@@ -71,19 +73,28 @@ func TranscribeBatch(ctx context.Context, jobs map[string]string) (map[string]Ba
 	// PyTorch wheel index for cu118 — supports CC 6.1 (Pascal) that newer
 	// torch builds dropped. The driver version check is forward-compatible
 	// with CUDA 12.x drivers.
+	// UV_CACHE_DIR: the audiobook service runs with HOME=/var/lib/audiobook-organizer
+	// where ~/.cache/uv is not writable. /tmp is always writable.
 	cmd.Env = append(os.Environ(),
 		"UV_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cu118",
+		"UV_CACHE_DIR=/tmp/ao-uv-cache",
 	)
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("transcribe batch: uv run: %w", err)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		errMsg := strings.TrimSpace(stderr.String())
+		if len(errMsg) > 500 {
+			errMsg = errMsg[len(errMsg)-500:] // keep tail (most relevant)
+		}
+		return nil, fmt.Errorf("transcribe batch: uv run: %w: %s", err, errMsg)
 	}
 
 	var raw map[string]struct {
 		Text  string  `json:"text"`
 		Error *string `json:"error"`
 	}
-	if err := json.Unmarshal(out, &raw); err != nil {
+	if err := json.Unmarshal(stdout.Bytes(), &raw); err != nil {
 		return nil, fmt.Errorf("transcribe batch: parse output: %w", err)
 	}
 
