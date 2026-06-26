@@ -1,5 +1,5 @@
 // file: internal/reconcile/itunes_heal.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 7f3a1b2c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
 // last-edited: 2026-06-26
 
@@ -23,6 +23,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"howett.net/plist"
 )
@@ -433,6 +434,96 @@ func resolveNotFoundByPID(store database.Store, pid string) string {
 	return bf.FilePath
 }
 
+// resolveAmbiguousByTranscription transcribes the first 30 seconds of each
+// candidate's first audio file and parses the "TITLE by AUTHOR. Read by
+// NARRATOR." announcement that every commercial audiobook opens with. The
+// candidate whose parsed title/author best matches the iTunes track Album/Artist
+// wins — this is definitive when all other layers have tied.
+//
+// Only called when there are ≤5 candidates (cost: ~5–15 s per candidate with a
+// local Whisper model; more candidates indicate a structural problem better
+// handled by the triage op).
+func resolveAmbiguousByTranscription(ctx context.Context, store database.Store, track iTunesTrack, candidates []string) string {
+	if len(candidates) == 0 || len(candidates) > 5 {
+		return ""
+	}
+
+	type entry struct {
+		path  string
+		score int
+	}
+	scored := make([]entry, 0, len(candidates))
+
+	for _, candidatePath := range candidates {
+		select {
+		case <-ctx.Done():
+			return ""
+		default:
+		}
+
+		// Find the first audio file of this candidate's book.
+		firstFile := candidatePath
+		if bf, err := store.GetBookFileByPath(candidatePath); err == nil && bf != nil {
+			files, err := store.GetBookFiles(bf.BookID)
+			if err == nil && len(files) > 0 {
+				if f := pickFirstFile(files); f != "" {
+					firstFile = f
+				}
+			}
+		}
+
+		text, err := transcribe.TranscribeFirst30s(ctx, firstFile)
+		if err != nil || text == "" {
+			continue
+		}
+
+		fields := transcribe.ParseAudiobookIntro(text)
+		score := fields.MatchesTrack(track.Album, track.Artist)
+		if score > 0 {
+			scored = append(scored, entry{candidatePath, score})
+		}
+	}
+
+	if len(scored) == 0 {
+		return ""
+	}
+	best, second := scored[0], entry{score: -1}
+	for _, e := range scored[1:] {
+		if e.score > best.score {
+			second = best
+			best = e
+		} else if e.score > second.score {
+			second = e
+		}
+	}
+	if best.score > second.score {
+		return best.path
+	}
+	return ""
+}
+
+// pickFirstFile returns the FilePath of the first audio file in the slice
+// (lowest TrackNumber, then alphabetical). Returns "" if none are audio files.
+func pickFirstFile(files []database.BookFile) string {
+	extSet := map[string]bool{
+		".m4b": true, ".mp3": true, ".m4a": true,
+		".flac": true, ".aac": true, ".ogg": true, ".wma": true,
+	}
+	best := ""
+	bestTrack := -1
+	for _, f := range files {
+		if !extSet[strings.ToLower(filepath.Ext(f.FilePath))] || f.FilePath == "" {
+			continue
+		}
+		tn := f.TrackNumber
+		if best == "" || tn < bestTrack || (tn == bestTrack && f.FilePath < best) {
+			best = f.FilePath
+			bestTrack = tn
+		}
+	}
+	return best
+}
+
 // fuzzyFindByAlbum searches the whole file index for a file whose PATH
 // contains enough words from the iTunes album/artist to strongly suggest the
 // same book. Used for not-found tracks (zero filename matches in the index).
@@ -675,7 +766,15 @@ func RunITunesHeal(ctx context.Context, store database.Store, reporter sdk.Repor
 				src = resolveNotFoundByPID(store, t.PersistentID)
 			}
 
-			// Layer 6: fuzzy album/artist path scan for zero-candidate not-found tracks.
+			// Layer 6: transcription — Whisper on the first 30s of each candidate's
+			// first file; parses "TITLE by AUTHOR. Read by NARRATOR." and picks the
+			// candidate whose title/author best matches the iTunes track. Definitive
+			// but expensive; only runs for ≤5 still-ambiguous candidates.
+			if src == "" && len(candidates) > 0 && store != nil {
+				src = resolveAmbiguousByTranscription(ctx, store, t, candidates)
+			}
+
+			// Layer 7: fuzzy album/artist path scan for zero-candidate not-found tracks.
 			if src == "" && len(candidates) == 0 {
 				src = fuzzyFindByAlbum(t, fileIndex)
 			}

@@ -258,6 +258,13 @@ type Book struct {
 	LastScanMtime *int64 `json:"last_scan_mtime,omitempty"`
 	LastScanSize  *int64 `json:"last_scan_size,omitempty"`
 	NeedsRescan   *bool  `json:"needs_rescan,omitempty"`
+	// IntroTranscription is the raw Whisper transcript of the first ~30 seconds
+	// of the book's first audio file. Populated by maintenance.transcribe-book-intros.
+	// Format: "TITLE by AUTHOR. Read by NARRATOR." — used for disambiguation,
+	// narrator search, and dedup cross-checks.
+	IntroTranscription *string `json:"intro_transcription,omitempty"`
+	// IntroTranscribedAt is when IntroTranscription was last populated.
+	IntroTranscribedAt *time.Time `json:"intro_transcribed_at,omitempty"`
 	// Fingerprinting fields (computed, not stored in DB)
 	FingerprintStatus      string     `json:"fingerprint_status,omitempty"` // "none", "partial", "complete"
 	FingerprintedFileCount int        `json:"fingerprinted_file_count,omitempty"`
