@@ -112,15 +112,21 @@ func runWhisperCPP(ctx context.Context, binPath, wavPath string) (string, error)
 	return strings.TrimSpace(string(data)), nil
 }
 
-// findWhisperModel looks for a whisper model in common install locations.
+// findWhisperModel looks for a whisper model in common install locations,
+// including the snap's restricted data directory (~/snap/whisper-cpp/common/).
 func findWhisperModel() string {
+	home := os.ExpandEnv("$HOME")
 	candidates := []string{
+		// snap install (strict confinement — model must live under snap data dir)
+		home + "/snap/whisper-cpp/common/models/ggml-base.en.bin",
+		home + "/snap/whisper-cpp/current/models/ggml-base.en.bin",
+		// apt / manual install paths
 		"/usr/share/whisper.cpp/models/ggml-base.en.bin",
 		"/usr/local/share/whisper.cpp/models/ggml-base.en.bin",
 		"/opt/whisper/models/ggml-base.en.bin",
 		"/var/lib/whisper/ggml-base.en.bin",
-		os.ExpandEnv("$HOME/.local/share/whisper/ggml-base.en.bin"),
-		os.ExpandEnv("$HOME/whisper.cpp/models/ggml-base.en.bin"),
+		home + "/.local/share/whisper/ggml-base.en.bin",
+		home + "/whisper.cpp/models/ggml-base.en.bin",
 	}
 	for _, p := range candidates {
 		if _, err := os.Stat(p); err == nil {
