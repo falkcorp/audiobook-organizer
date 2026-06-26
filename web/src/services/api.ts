@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.43.0
+// version: 2.44.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-06-22
 
@@ -148,6 +148,12 @@ export interface Book {
   // MATCH-1: metadata-source deduplication
   metadata_source_hash?: string | null;
   metadata_source_hash_duplicate_count?: number | null;
+  // Whisper intro transcription (maintenance.transcribe-book-intros op)
+  intro_transcription?: string | null;
+  transcribed_title?: string | null;
+  transcribed_author?: string | null;
+  transcribed_narrator?: string | null;
+  intro_transcribed_at?: string | null;
   // Book-level fingerprint signature (whole-file chromaprint synthesis)
   book_sig_v1?: string | null;
   book_sig_segments?: number | null;

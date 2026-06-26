@@ -1,5 +1,5 @@
 // file: web/src/components/bookdetail/BookDetailInfoTab.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: e5f6a7b8-c9d0-1234-efab-345678901234
 // last-edited: 2026-05-02
 
@@ -21,6 +21,7 @@ import LabelIcon from '@mui/icons-material/Label.js';
 import type { Book, SegmentTags } from '../../services/api';
 import * as api from '../../services/api';
 import { formatDuration, formatBytes } from './bookDetailUtils';
+import { WhisperIntroPanel } from './WhisperIntroPanel';
 
 export interface BookDetailInfoTabProps {
   book: Book;
@@ -326,6 +327,8 @@ export const BookDetailInfoTab = ({
           )}
         </Paper>
       )}
+
+      <WhisperIntroPanel book={book} />
     </>
   );
 };
