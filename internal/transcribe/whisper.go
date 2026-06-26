@@ -85,6 +85,7 @@ func runPythonWhisper(ctx context.Context, wavPath string) (string, error) {
 		"--output_dir", outDir,
 		"--language", "en",
 		"--task", "transcribe",
+		"--device", "cpu", // GPU compatibility varies; CPU is universal and plenty fast for 30s clips
 	).CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("python whisper: %w (%s)", err, strings.TrimSpace(string(out)))
