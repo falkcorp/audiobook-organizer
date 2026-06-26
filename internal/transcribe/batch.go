@@ -1,5 +1,5 @@
 // file: internal/transcribe/batch.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
 // last-edited: 2026-06-26
 
@@ -11,6 +11,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
@@ -25,17 +26,28 @@ type BatchResult struct {
 	Error string // non-empty means transcription failed for this item
 }
 
-// TranscribeBatch transcribes multiple WAV files in a single Python process,
-// loading the Whisper model only once. jobs maps an opaque key to a WAV path.
+// TranscribeBatch transcribes multiple WAV files. jobs maps an opaque key to a WAV path.
 //
-// Uses torch==2.0.1+cu118 so older NVIDIA cards (CC 6.1, e.g. GTX 1050 Ti)
-// get GPU acceleration; the Python script falls back to CPU automatically when
-// CUDA is absent or incompatible.
+// If WHISPER_REMOTE_URL is set (e.g. "http://192.168.1.x:8000"), jobs are sent
+// to the remote faster-whisper server running scripts/whisper_server.py. On any
+// failure the warning is logged and the function falls back to the local
+// uv/openai-whisper path.
 //
-// Requires uv on PATH.
+// Local path uses torch==2.0.1+cu118 for CC 6.1 GPU support (GTX 1050 Ti).
 func TranscribeBatch(ctx context.Context, jobs map[string]string) (map[string]BatchResult, error) {
 	if len(jobs) == 0 {
 		return nil, nil
+	}
+
+	if remoteURL := os.Getenv("WHISPER_REMOTE_URL"); remoteURL != "" {
+		results, err := transcribeRemote(ctx, remoteURL, jobs)
+		if err != nil {
+			slog.Warn("transcribe: remote whisper failed, falling back to local",
+				"url", remoteURL, "err", err)
+			// fall through to local uv path
+		} else {
+			return results, nil
+		}
 	}
 
 	// Write jobs JSON to temp file.
