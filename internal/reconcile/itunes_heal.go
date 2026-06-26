@@ -1,7 +1,7 @@
 // file: internal/reconcile/itunes_heal.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7f3a1b2c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
-// last-edited: 2026-06-25
+// last-edited: 2026-06-26
 
 package reconcile
 
@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"howett.net/plist"
@@ -244,6 +245,40 @@ func DisambiguateMatch(expectedPath, artist, album string, trackNum int, candida
 	return "", "" // tied — cannot pick safely
 }
 
+// fingerprintCandidates runs fpcalc on each candidate and returns the first path
+// if all candidates share the same audio content (Hamming similarity ≥ 0.9).
+// Returns "" if candidates are acoustically distinct (can't pick safely).
+//
+// This resolves the common case where the same file was copied into multiple
+// book folders during the organize bug — same bytes, different directory.
+func fingerprintCandidates(ctx context.Context, candidates []string) string {
+	if len(candidates) == 0 {
+		return ""
+	}
+	fps := make([]string, 0, len(candidates))
+	for _, path := range candidates {
+		select {
+		case <-ctx.Done():
+			return ""
+		default:
+		}
+		r, err := fingerprint.File(path)
+		if err != nil || r == nil || r.Fingerprint == "" {
+			return "" // can't fingerprint one → can't compare
+		}
+		fps = append(fps, r.Fingerprint)
+	}
+	// All pairs must be similar.
+	ref := fps[0]
+	for _, fp := range fps[1:] {
+		sim, err := fingerprint.HammingSimilarity(ref, fp)
+		if err != nil || sim < 0.9 {
+			return "" // distinct audio — cannot pick safely
+		}
+	}
+	return candidates[0] // all same content; first is fine
+}
+
 // healTrack creates a reflink (ZFS COW) from src to dst, falling back to a
 // regular copy when reflink fails (cross-subvol or non-ZFS).
 func healTrack(dst, src string) error {
@@ -371,6 +406,12 @@ func RunITunesHeal(ctx context.Context, reporter sdk.Reporter, params json.RawMe
 
 			candidates := fileIndex[filepath.Base(expected)]
 			src, _ := DisambiguateMatch(expected, t.Artist, t.Album, t.TrackNumber, candidates)
+
+			// Metadata scoring tied: run fpcalc on all candidates.
+			// If they share the same audio content, any one will do.
+			if src == "" && len(candidates) > 0 {
+				src = fingerprintCandidates(ctx, candidates)
+			}
 
 			switch {
 			case src == "" && len(candidates) > 0:
