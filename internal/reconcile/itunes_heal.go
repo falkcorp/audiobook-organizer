@@ -1,5 +1,5 @@
 // file: internal/reconcile/itunes_heal.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7f3a1b2c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
 // last-edited: 2026-06-26
 
@@ -17,6 +17,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/falkcorp/audiobook-organizer/internal/acoustid"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
@@ -164,7 +165,6 @@ func BuildFileIndex(dirs []string, extSet map[string]bool) map[string][]string {
 //   - Album/book title word in candidate path: 1 pt each
 //   - Track number embedded in candidate filename: 5 pts
 //
-// Returns (path, confidence) where confidence is "high" (≥10), "medium" (>0), "".
 // Returns ("", "") when no unique winner can be determined.
 func DisambiguateMatch(expectedPath, artist, album string, trackNum int, candidates []string) (string, string) {
 	if len(candidates) == 0 {
@@ -183,16 +183,6 @@ func DisambiguateMatch(expectedPath, artist, album string, trackNum int, candida
 		}
 	}
 
-	albumWords := func(s string) []string {
-		var words []string
-		for _, w := range strings.Fields(strings.ToLower(s)) {
-			if len(w) > 3 {
-				words = append(words, w)
-			}
-		}
-		return words
-	}
-
 	type entry struct {
 		path  string
 		score int
@@ -204,7 +194,7 @@ func DisambiguateMatch(expectedPath, artist, album string, trackNum int, candida
 		if expectedAuthor != "" && strings.Contains(hl, expectedAuthor) {
 			score += 10
 		}
-		for _, w := range albumWords(album) {
+		for _, w := range titleWords(album) {
 			if strings.Contains(hl, w) {
 				score++
 			}
@@ -228,7 +218,6 @@ func DisambiguateMatch(expectedPath, artist, album string, trackNum int, candida
 			second = e
 		}
 	}
-
 	if best.score > second.score {
 		conf := "medium"
 		if best.score >= 10 {
@@ -242,41 +231,35 @@ func DisambiguateMatch(expectedPath, artist, album string, trackNum int, candida
 // resolveAmbiguousByDB looks up stored AcoustID fingerprints for each candidate
 // from the DB (no fpcalc — data is already there from the backfill).
 //
-// If all candidates are acoustically identical (Hamming similarity ≥ 0.9), they
-// are duplicate books created by the organize bug. MergeBooks collapses them into
-// one and returns the surviving file path. If any pair is acoustically distinct,
-// returns ("", 0) — still ambiguous.
-func resolveAmbiguousByDB(ctx context.Context, store database.Store, candidates []string) (survivingPath string, merged int) {
+// If all candidates are acoustically identical (similarity ≥ 0.9), they are
+// duplicate books from the organize bug. MergeBooks collapses them and returns
+// the surviving path. Acoustically distinct candidates return ("", 0).
+func resolveAmbiguousByDB(ctx context.Context, store database.Store, candidates []string) (string, int) {
 	if len(candidates) == 0 {
 		return "", 0
 	}
-
-	type bf struct {
+	type row struct {
 		bookID string
-		fileID string
 		fp     []byte
 		path   string
 	}
-	rows := make([]bf, 0, len(candidates))
+	rows := make([]row, 0, len(candidates))
 	for _, path := range candidates {
 		f, err := store.GetBookFileByPath(path)
 		if err != nil || f == nil || len(f.AcoustIDFingerprint) == 0 {
-			return "", 0 // missing DB entry or not yet fingerprinted
+			return "", 0
 		}
-		rows = append(rows, bf{bookID: f.BookID, fileID: f.ID, fp: f.AcoustIDFingerprint, path: path})
+		rows = append(rows, row{f.BookID, f.AcoustIDFingerprint, path})
 	}
 
-	// All pairs must be acoustically identical (WholeFileSimilarity works on raw
-	// uint32 byte streams — no fpcalc invoked, data is already in the DB).
 	ref := rows[0].fp
 	for _, r := range rows[1:] {
 		sim, err := fingerprint.WholeFileSimilarity(ref, r.fp)
 		if err != nil || sim < 0.9 {
-			return "", 0 // genuinely distinct audio — cannot safely pick
+			return "", 0
 		}
 	}
 
-	// Same content across multiple books — merge all into the first.
 	keepID := rows[0].bookID
 	var dupIDs []string
 	seen := map[string]bool{keepID: true}
@@ -286,14 +269,202 @@ func resolveAmbiguousByDB(ctx context.Context, store database.Store, candidates 
 			seen[r.bookID] = true
 		}
 	}
-
 	if len(dupIDs) > 0 {
 		if _, err := dedup.MergeBooks(ctx, store, "", keepID, dupIDs, nil); err != nil {
-			return "", 0 // merge failed; caller will count as ambiguous
+			return "", 0
 		}
 	}
-
 	return rows[0].path, len(dupIDs)
+}
+
+// resolveAmbiguousByBookMeta looks up each candidate's Book in the DB and
+// scores its title and file path (which encodes the author directory) against
+// the iTunes track's Album and Artist via word overlap. Pure DB — no API calls.
+func resolveAmbiguousByBookMeta(store database.Store, track iTunesTrack, candidates []string) string {
+	albumWords := titleWords(track.Album)
+	artistWords := titleWords(track.Artist)
+	if len(albumWords) == 0 {
+		return ""
+	}
+
+	type entry struct {
+		path  string
+		score int
+	}
+	scored := make([]entry, 0, len(candidates))
+	for _, path := range candidates {
+		bf, err := store.GetBookFileByPath(path)
+		if err != nil || bf == nil {
+			continue
+		}
+		book, err := store.GetBookByID(bf.BookID)
+		if err != nil || book == nil {
+			continue
+		}
+
+		score := 0
+		titleL := strings.ToLower(book.Title)
+		for _, w := range albumWords {
+			if strings.Contains(titleL, w) {
+				score += 2
+			}
+		}
+		// book.FilePath encodes the author directory; extract it for artist matching.
+		pathL := strings.ToLower(book.FilePath)
+		for _, w := range artistWords {
+			if strings.Contains(pathL, w) {
+				score++
+			}
+		}
+		scored = append(scored, entry{path, score})
+	}
+
+	if len(scored) == 0 {
+		return ""
+	}
+	best, second := scored[0], entry{score: -1}
+	for _, e := range scored[1:] {
+		if e.score > best.score {
+			second = best
+			best = e
+		} else if e.score > second.score {
+			second = e
+		}
+	}
+	if best.score > second.score && best.score >= 4 {
+		return best.path
+	}
+	return ""
+}
+
+// resolveAmbiguousByAcoustID fingerprints each candidate (using the stored DB
+// fingerprint when available, falling back to fpcalc), submits to AcoustID,
+// and picks the candidate whose returned title/artist best matches the iTunes
+// track. Only invoked when layers 1–3 fail and an API key is configured.
+func resolveAmbiguousByAcoustID(ctx context.Context, store database.Store, ac *acoustid.Client, track iTunesTrack, candidates []string) string {
+	albumWords := titleWords(track.Album)
+	artistWords := titleWords(track.Artist)
+
+	type entry struct {
+		path  string
+		score int
+	}
+	scored := make([]entry, 0, len(candidates))
+
+	for _, path := range candidates {
+		select {
+		case <-ctx.Done():
+			return ""
+		default:
+		}
+
+		var rawFP []byte
+		var durationSec int
+
+		if bf, err := store.GetBookFileByPath(path); err == nil && bf != nil && len(bf.AcoustIDFingerprint) > 0 {
+			rawFP = bf.AcoustIDFingerprint
+			durationSec = int(bf.AcoustIDFingerprintDurationSec)
+		} else {
+			wf, err := fingerprint.FileWholeFingerprint(path)
+			if err != nil || wf == nil {
+				continue
+			}
+			rawFP = wf.Raw
+			durationSec = int(wf.DurationSec)
+		}
+
+		encoded := fingerprint.EncodeWholeFingerprint(rawFP)
+		result, err := ac.Lookup(ctx, encoded, durationSec)
+		if err != nil || result.Title == "" {
+			continue
+		}
+
+		score := 0
+		titleL := strings.ToLower(result.Title)
+		for _, w := range albumWords {
+			if strings.Contains(titleL, w) {
+				score += 2
+			}
+		}
+		for _, artist := range result.Artists {
+			artistL := strings.ToLower(artist)
+			for _, w := range artistWords {
+				if strings.Contains(artistL, w) {
+					score++
+				}
+			}
+		}
+		scored = append(scored, entry{path, score})
+	}
+
+	if len(scored) == 0 {
+		return ""
+	}
+	best, second := scored[0], entry{score: -1}
+	for _, e := range scored[1:] {
+		if e.score > best.score {
+			second = best
+			best = e
+		} else if e.score > second.score {
+			second = e
+		}
+	}
+	if best.score > second.score && best.score >= 4 {
+		return best.path
+	}
+	return ""
+}
+
+// fuzzyFindByAlbum searches the whole file index for a file whose PATH
+// contains enough words from the iTunes album/artist to strongly suggest the
+// same book. Used for not-found tracks (zero filename matches in the index).
+func fuzzyFindByAlbum(track iTunesTrack, fileIndex map[string][]string) string {
+	albumWords := titleWords(track.Album)
+	if len(albumWords) < 2 {
+		return ""
+	}
+
+	type entry struct {
+		path  string
+		score int
+	}
+	var best entry
+
+	for _, paths := range fileIndex {
+		for _, path := range paths {
+			pl := strings.ToLower(path)
+			score := 0
+			for _, w := range albumWords {
+				if strings.Contains(pl, w) {
+					score += 2
+				}
+			}
+			for _, w := range titleWords(track.Artist) {
+				if strings.Contains(pl, w) {
+					score++
+				}
+			}
+			if track.TrackNumber > 0 {
+				base := strings.ToLower(filepath.Base(path))
+				if strings.Contains(base, fmt.Sprintf("%03d", track.TrackNumber)) ||
+					strings.Contains(base, fmt.Sprintf("%02d", track.TrackNumber)) {
+					score += 5
+				}
+			}
+			if score > best.score {
+				best = entry{path, score}
+			}
+		}
+	}
+	// Require at least (all album words × 2) − 2 to avoid short-title false positives.
+	minScore := len(albumWords)*2 - 2
+	if minScore < 8 {
+		minScore = 8
+	}
+	if best.score >= minScore {
+		return best.path
+	}
+	return ""
 }
 
 // healTrack creates a reflink (ZFS COW) from src to dst, falling back to a
@@ -311,14 +482,29 @@ func healTrack(dst, src string) error {
 	return nil
 }
 
+// titleWords returns lowercase words >3 chars from s, for overlap scoring.
+func titleWords(s string) []string {
+	var out []string
+	for _, w := range strings.Fields(strings.ToLower(s)) {
+		if len(w) > 3 {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
 // RunITunesHeal is the entry point called by the maintenance plugin op.
 //
-// Parses iTunes XML as ground truth, builds a parallel filename index, then fans
-// out 16 workers. For each missing track:
-//  1. Metadata scoring (author dir + title words + track number) picks a winner.
-//  2. On tie: DB fingerprint comparison resolves it — if candidates are acoustically
-//     identical (same file in multiple folders from the organize bug), they are merged
-//     and the survivor is used. No fpcalc is invoked; fingerprints come from the backfill.
+// Disambiguation pipeline (each layer only runs if the previous one tied):
+//  1. DisambiguateMatch — author dir + album title words + track number in filename
+//  2. resolveAmbiguousByDB — stored chromaprint byte comparison (no fpcalc);
+//     identical audio → MergeBooks + heal
+//  3. resolveAmbiguousByBookMeta — DB book title / file-path word overlap vs iTunes
+//     Album/Artist; clear winner → heal (no API calls)
+//  4. resolveAmbiguousByAcoustID — stored fingerprint (fallback fpcalc) →
+//     AcoustID title+artists lookup → metadata match; rate-limited, API key required
+//  5. fuzzyFindByAlbum — full index path-content scan for tracks with zero filename
+//     matches; finds files in correctly-named book folders with different filenames
 func RunITunesHeal(ctx context.Context, store database.Store, reporter sdk.Reporter, params json.RawMessage) error {
 	cfg := config.AppConfig.ITunes
 	if cfg.LibraryReadPath == "" {
@@ -332,6 +518,12 @@ func RunITunesHeal(ctx context.Context, store database.Store, reporter sdk.Repor
 	var cp ITunesHealParams
 	if len(params) > 0 {
 		_ = json.Unmarshal(params, &cp)
+	}
+
+	// AcoustID client for layer 4 — nil when no key configured (layers 1–3 still work).
+	var ac *acoustid.Client
+	if key := config.AppConfig.AcoustIDAPIKey; key != "" {
+		ac = acoustid.NewClient(key)
 	}
 
 	log := reporter.Logger()
@@ -379,12 +571,30 @@ func RunITunesHeal(ctx context.Context, store database.Store, reporter sdk.Repor
 		return nil
 	}
 
+	// Build file index: rootDir + every sibling audio directory under booksRoot.
+	// Skip the iTunes source tree (itunes/) and non-audio directories.
+	booksRoot := filepath.Dir(rootDir)
 	indexDirs := []string{rootDir}
-	newbooks := filepath.Join(filepath.Dir(rootDir), "newbooks")
-	if _, err := os.Stat(newbooks); err == nil {
-		indexDirs = append(indexDirs, newbooks)
+	skipDirs := map[string]bool{
+		rootDir:                                       true,
+		filepath.Join(booksRoot, "itunes"):            true,
+		filepath.Join(booksRoot, "bkup"):              true,
+		filepath.Join(booksRoot, "logs"):              true,
+		filepath.Join(booksRoot, "playlists"):         true,
+		filepath.Join(booksRoot, "snapshot-list-v1"): true,
 	}
-	log.Info("itunes-heal: building file index", "dirs", indexDirs)
+	if entries, err := os.ReadDir(booksRoot); err == nil {
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			full := filepath.Join(booksRoot, e.Name())
+			if !skipDirs[full] {
+				indexDirs = append(indexDirs, full)
+			}
+		}
+	}
+	log.Info("itunes-heal: building file index", "dirs", len(indexDirs))
 	fileIndex := BuildFileIndex(indexDirs, extSet)
 	log.Info("itunes-heal: file index built", "unique_filenames", len(fileIndex))
 
@@ -417,15 +627,30 @@ func RunITunesHeal(ctx context.Context, store database.Store, reporter sdk.Repor
 			}
 
 			candidates := fileIndex[filepath.Base(expected)]
+
+			// Layer 1: metadata scoring (author dir + title words + track number).
 			src, _ := DisambiguateMatch(expected, t.Artist, t.Album, t.TrackNumber, candidates)
 
-			// Metadata scoring tied: compare stored DB fingerprints.
-			// Identical fingerprints → same file in multiple folders (organize bug duplicate)
-			// → merge the books, pick the survivor. No fpcalc invoked.
+			// Layer 2: stored fingerprint comparison — no fpcalc.
 			if src == "" && len(candidates) > 0 && store != nil {
 				var n int
 				src, n = resolveAmbiguousByDB(ctx, store, candidates)
 				merged.Add(int64(n))
+			}
+
+			// Layer 3: DB book title / path word-overlap — no API calls.
+			if src == "" && len(candidates) > 0 && store != nil {
+				src = resolveAmbiguousByBookMeta(store, t, candidates)
+			}
+
+			// Layer 4: AcoustID title lookup — only when API key is configured.
+			if src == "" && len(candidates) > 0 && ac != nil {
+				src = resolveAmbiguousByAcoustID(ctx, store, ac, t, candidates)
+			}
+
+			// Layer 5: fuzzy album/artist path scan for tracks with no filename match.
+			if src == "" && len(candidates) == 0 {
+				src = fuzzyFindByAlbum(t, fileIndex)
 			}
 
 			switch {
