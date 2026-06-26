@@ -1,5 +1,5 @@
 // file: internal/transcribe/batch.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
 // last-edited: 2026-06-26
 
@@ -123,8 +123,11 @@ func TranscribeBatch(ctx context.Context, jobs map[string]string) (map[string]Ba
 // typically drop. We prefer a non-snap install (e.g. installed via the
 // official uv installer to ~/.local/bin/uv) over the snap at /snap/bin/uv.
 func resolveUVBin() string {
+	// /home/jdfalk/.local has 700 perms — world-inaccessible to the audiobook
+	// service user. /home/jdfalk/uv is a copy with 755, world-executable.
+	// /usr/local/bin/uv would be ideal (requires root to install there).
 	candidates := []string{
-		"/home/jdfalk/.local/bin/uv",
+		"/home/jdfalk/uv",
 		"/usr/local/bin/uv",
 		"/opt/uv/bin/uv",
 	}
