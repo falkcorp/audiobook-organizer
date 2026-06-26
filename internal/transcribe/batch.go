@@ -1,5 +1,5 @@
 // file: internal/transcribe/batch.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
 // last-edited: 2026-06-26
 
@@ -62,9 +62,11 @@ func TranscribeBatch(ctx context.Context, jobs map[string]string) (map[string]Ba
 	}
 	scriptFile.Close()
 
+	uvBin := resolveUVBin()
+
 	// --python 3.11 is required: torch==2.0.1 has no wheels for python 3.12+.
 	// cu118 build supports CC 6.1 (GTX 1050 Ti); newer torch dropped sm_61.
-	cmd := exec.CommandContext(ctx, "uv", "run",
+	cmd := exec.CommandContext(ctx, uvBin, "run",
 		"--python", "3.11",
 		"--with", "openai-whisper",
 		"--with", "torch==2.0.1+cu118",
@@ -73,11 +75,18 @@ func TranscribeBatch(ctx context.Context, jobs map[string]string) (map[string]Ba
 	// PyTorch wheel index for cu118 — supports CC 6.1 (Pascal) that newer
 	// torch builds dropped. The driver version check is forward-compatible
 	// with CUDA 12.x drivers.
-	// UV_CACHE_DIR: the audiobook service runs with HOME=/var/lib/audiobook-organizer
-	// where ~/.cache/uv is not writable. /tmp is always writable.
+	//
+	// UV_PYTHON_INSTALL_DIR: uv needs to write Python 3.11 on first run.
+	// Point both the cache and python dir at the service user's home so they
+	// persist across restarts without touching /tmp.
+	home := os.Getenv("HOME")
+	if home == "" {
+		home = "/tmp"
+	}
 	cmd.Env = append(os.Environ(),
 		"UV_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cu118",
-		"UV_CACHE_DIR=/tmp/ao-uv-cache",
+		"UV_CACHE_DIR="+home+"/.uv-cache",
+		"UV_PYTHON_INSTALL_DIR="+home+"/.uv-python",
 	)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -107,4 +116,27 @@ func TranscribeBatch(ctx context.Context, jobs map[string]string) (map[string]Ba
 		results[k] = r
 	}
 	return results, nil
+}
+
+// resolveUVBin returns the path to a uv binary that is NOT routed through
+// snap-confine. Snap packages require cap_dac_override which systemd services
+// typically drop. We prefer a non-snap install (e.g. installed via the
+// official uv installer to ~/.local/bin/uv) over the snap at /snap/bin/uv.
+func resolveUVBin() string {
+	candidates := []string{
+		"/home/jdfalk/.local/bin/uv",
+		"/usr/local/bin/uv",
+		"/opt/uv/bin/uv",
+	}
+	for _, p := range candidates {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	// Fall back to PATH lookup; may be the snap version, but is better than
+	// nothing (works fine for non-systemd invocations like dev/test).
+	if p, err := exec.LookPath("uv"); err == nil {
+		return p
+	}
+	return "uv"
 }
