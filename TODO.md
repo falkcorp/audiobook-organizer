@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.42.0 -->
+<!-- version: 9.43.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-06-26 -->
 
@@ -23,12 +23,15 @@ future agent) can scan the entire workspace in one page.
 
 **Library:** ~31,400 books / 8,837 authors / 21,668 series
 **Production:** PebbleDB primary; Linux, HTTPS at prod server; stable
-**Latest activity:** `maintenance.itunes-heal` shipped (PR #1625) and executed on prod:
-2,274 iTunes tracks reflinked back to expected paths; acoustid backfill re-triggered to
-fingerprint newly accessible files.
+**Latest activity:** Batch Whisper transcription infrastructure merged (feat/transcribe-batch).
+GPU confirmed working on prod (GTX 1050 Ti, CC 6.1, torch 2.0.1+cu118). Projected runtime
+~2-3h for 10,891 books on GPU. Ready to deploy and trigger bulk run.
+Previously: `maintenance.itunes-heal` shipped (PR #1625) and executed on prod:
+2,274 iTunes tracks reflinked back to expected paths.
 **In flight:**
-- `acoustid.backfill` running (`op_id=01KW120TXNQ4FF7G3TB79BTKKD`) — fingerprinting
-  newly accessible iTunes files; monitor to completion.
+- `feat/transcribe-batch` — PR open, awaiting merge and deploy
+- Once deployed: trigger `maintenance.transcribe-book-intros` for bulk run
+- After bulk run completes: re-trigger `maintenance.itunes-heal` to resolve 292 ambiguous tracks using Layer 6 (Whisper transcription-based disambiguation)
 
 **iTunes path heal remaining work:**
 - 3,720 ambiguous — disambiguation tied; improve scoring or use DB series info for the
