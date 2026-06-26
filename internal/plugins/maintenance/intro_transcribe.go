@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-06-26
 
@@ -40,7 +40,7 @@ func (p *Plugin) introTranscribeDef() sdk.OperationDef {
 		ID:              "maintenance.transcribe-book-intros",
 		Plugin:          "maintenance",
 		DisplayName:     "Transcribe book intros",
-		Description:     "Extracts the first 30 seconds of each book's first audio file and transcribes it with Whisper. Stores the result in TranscribedTitle/Author/Narrator (separate from curated metadata) for disambiguation and dedup cross-checks. Uses batch mode: one Python process per page of 200 books loads the model once, cutting total runtime from ~62h to ~2-3h on GPU.",
+		Description:     "Extracts the first 90 seconds of each book's first audio file and transcribes it with Whisper. Stores the result in TranscribedTitle/Author/Narrator (separate from curated metadata) for disambiguation and dedup cross-checks. Uses batch mode: one Python process per page of 200 books loads the model once. 90s captures past Audible jingles/music intros that caused 30s clips to return only 'This is Audible.'",
 		ResumePolicy:    sdk.ResumeRestart,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.transcribe-book-intros",
@@ -126,7 +126,7 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 
 // processTranscribePage handles one page of books:
 // 1. Find the first audio file for each book.
-// 2. Extract 30-second WAVs in parallel with ffmpeg.
+// 2. Extract 90-second WAVs in parallel with ffmpeg.
 // 3. Call TranscribeBatch once (single Python/Whisper process).
 // 4. Parse results and update all books.
 // 5. Clean up temp WAVs.
@@ -177,7 +177,7 @@ func (p *Plugin) processTranscribePage(
 			wavPath := filepath.Join(tmpDir, bookID+".wav")
 			ffCmd := exec.CommandContext(ctx, "ffmpeg",
 				"-y", "-i", src,
-				"-t", "30",
+				"-t", "90",
 				"-vn", "-ar", "16000", "-ac", "1", "-f", "wav",
 				wavPath,
 			)
