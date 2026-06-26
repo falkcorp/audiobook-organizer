@@ -1,7 +1,7 @@
 // file: internal/acoustid/client.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5d6e7f80-9a1b-2c3d-4e5f-607182931a2b
-// last-edited: 2026-05-31
+// last-edited: 2026-06-26
 
 // Package acoustid is a thin client for the acoustid.org /v2/lookup API.
 // We only need the smallest slice of the response — top-scoring
@@ -70,6 +70,12 @@ type LookupResult struct {
 	RecordingID string
 	// Score is the top match's similarity score (0..1).
 	Score float64
+	// Title is the recording title from the top result (populated when
+	// Lookup is called with meta=recordings+titles, e.g. via LookupWithMeta).
+	Title string
+	// Artists contains artist names from the top result (populated when
+	// Lookup is called with meta=recordings+artists).
+	Artists []string
 	// Status is the API's top-level status field (e.g. "ok", "error").
 	Status string
 	// Raw is the unmodified JSON response, for diagnostic logging. Empty
@@ -114,7 +120,7 @@ func (c *Client) Lookup(ctx context.Context, fingerprint string, durationSec int
 	form.Set("client", c.APIKey)
 	form.Set("duration", strconv.Itoa(durationSec))
 	form.Set("fingerprint", fingerprint)
-	form.Set("meta", "recordings")
+	form.Set("meta", "recordings recordings+titles recordings+artists")
 
 	// Retry loop: on 429 or 5xx, honor Retry-After (or fall back to
 	// retryDelays). Budget = 1 initial + len(retryDelays) attempts.
@@ -181,7 +187,11 @@ func (c *Client) Lookup(ctx context.Context, fingerprint string, durationSec int
 			ID         string  `json:"id"`
 			Score      float64 `json:"score"`
 			Recordings []struct {
-				ID string `json:"id"`
+				ID      string `json:"id"`
+				Title   string `json:"title"`
+				Artists []struct {
+					Name string `json:"name"`
+				} `json:"artists,omitempty"`
 			} `json:"recordings,omitempty"`
 		} `json:"results"`
 	}
@@ -199,15 +209,16 @@ func (c *Client) Lookup(ctx context.Context, fingerprint string, durationSec int
 			continue
 		}
 		out.Score = r.Score
-		// Pick the first recording from the top result. Files with multiple
-		// recording matches (e.g. an audiobook chapter pulled from a
-		// re-issue) all point at the same MusicBrainz work via this id;
-		// the caller can fetch siblings later via the MB API if needed.
 		if len(r.Recordings) > 0 {
-			out.RecordingID = r.Recordings[0].ID
+			rec := r.Recordings[0]
+			out.RecordingID = rec.ID
+			out.Title = rec.Title
+			for _, a := range rec.Artists {
+				if a.Name != "" {
+					out.Artists = append(out.Artists, a.Name)
+				}
+			}
 		} else {
-			// AcoustID's `id` field is the AcoustID UUID, not a MB id, but
-			// keep it as a fallback so the caller has *something* to log.
 			out.RecordingID = r.ID
 		}
 	}
