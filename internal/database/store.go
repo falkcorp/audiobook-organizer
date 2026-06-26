@@ -260,9 +260,15 @@ type Book struct {
 	NeedsRescan   *bool  `json:"needs_rescan,omitempty"`
 	// IntroTranscription is the raw Whisper transcript of the first ~30 seconds
 	// of the book's first audio file. Populated by maintenance.transcribe-book-intros.
-	// Format: "TITLE by AUTHOR. Read by NARRATOR." — used for disambiguation,
-	// narrator search, and dedup cross-checks.
+	// Never used as the canonical title/author — see TranscribedTitle/Author/Narrator.
 	IntroTranscription *string `json:"intro_transcription,omitempty"`
+	// TranscribedTitle / TranscribedAuthor / TranscribedNarrator are the fields
+	// parsed from IntroTranscription ("TITLE by AUTHOR. Read by NARRATOR.").
+	// Stored separately from Title/Author/Narrator so transcription errors cannot
+	// overwrite curated metadata. UI can show these as a "suggested correction".
+	TranscribedTitle    *string `json:"transcribed_title,omitempty"`
+	TranscribedAuthor   *string `json:"transcribed_author,omitempty"`
+	TranscribedNarrator *string `json:"transcribed_narrator,omitempty"`
 	// IntroTranscribedAt is when IntroTranscription was last populated.
 	IntroTranscribedAt *time.Time `json:"intro_transcribed_at,omitempty"`
 	// Fingerprinting fields (computed, not stored in DB)
