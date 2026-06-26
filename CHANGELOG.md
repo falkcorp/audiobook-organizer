@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.84.0 -->
+<!-- version: 3.85.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-26 -->
 
@@ -8,6 +8,12 @@
 ## [Unreleased]
 
 ### Features
+
+#### June 26, 2026 — Batch Whisper transcription + transcribe-book-intros op (feat/transcribe-batch)
+
+- **`feat(transcribe)`** — `TranscribeBatch` in `internal/transcribe/batch.go` sends a page of WAV files to a single Python/Whisper process via `//go:embed batch_whisper.py`. The model loads once per page instead of once per book, cutting projected bulk-transcription time from ~62h to ~2-3h on GPU (GTX 1050 Ti, CC 6.1). Pins `torch==2.0.1+cu118` (last PyTorch build supporting sm_61) via `UV_EXTRA_INDEX_URL`; `--python 3.11` ensures wheel resolution. GPU uses `fp16=True` for throughput; CPU falls back to `fp16=False`.
+- **`feat(maintenance)`** — Rewrote `maintenance.transcribe-book-intros` op with batch mode: cursor-paginates 200 books/page → parallel ffmpeg WAV extractions (4 workers) → one `TranscribeBatch` call → parse `IntroFields` (title/author/narrator) → update all books → advance checkpoint cursor. Transcribed fields (`TranscribedTitle`, `TranscribedAuthor`, `TranscribedNarrator`, `IntroTranscription`, `IntroTranscribedAt`) are stored separately from curated `Title`/`Author`/`Narrator` so transcription errors cannot overwrite manually curated data.
+- **Decision log:** `base.en` model chosen over `small.en` for the bulk run to hit the 2-3h GPU target. A targeted re-run with `small.en` can follow for books where title/author parsing returns empty (proper-noun accuracy gap is real but acceptable for the first pass).
 
 #### June 26, 2026 — iTunes path heal UOS op (PR #1625)
 
