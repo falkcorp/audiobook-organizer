@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 1.0.0
+// version: 2.0.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-06-26
 
@@ -9,15 +9,22 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+)
+
+const (
+	introTranscribePageSize = 200
+	introTranscribeFFWorkers = 4 // parallel ffmpeg extractions per page
 )
 
 // introTranscribeParams is the checkpoint state for a transcription run.
@@ -33,13 +40,13 @@ func (p *Plugin) introTranscribeDef() sdk.OperationDef {
 		ID:              "maintenance.transcribe-book-intros",
 		Plugin:          "maintenance",
 		DisplayName:     "Transcribe book intros",
-		Description:     "Extracts the first 30 seconds of each book's first audio file and transcribes it with Whisper. Stores the result in Book.IntroTranscription for disambiguation, narrator search, and dedup cross-checks.",
+		Description:     "Extracts the first 30 seconds of each book's first audio file and transcribes it with Whisper. Stores the result in TranscribedTitle/Author/Narrator (separate from curated metadata) for disambiguation and dedup cross-checks. Uses batch mode: one Python process per page of 200 books loads the model once, cutting total runtime from ~62h to ~2-3h on GPU.",
 		ResumePolicy:    sdk.ResumeRestart,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.transcribe-book-intros",
 		Cancellable:     true,
 		Isolate:         false,
-		Timeout:         8 * time.Hour,
+		Timeout:         10 * time.Hour,
 		Capabilities:    []sdk.Capability{sdk.CapLibraryRead, sdk.CapFilesRead},
 		Run:             p.runIntroTranscribe,
 	}
@@ -58,82 +65,194 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 	onlyMissing := params.OnlyMissing == nil || *params.OnlyMissing
 
 	log := reporter.Logger()
-	log.Info("transcribe-book-intros: loading books")
+	log.Info("transcribe-book-intros: starting batch run",
+		"only_missing", onlyMissing, "page_size", introTranscribePageSize)
 
-	// Load all books (paginated to avoid OOM on 50K library).
-	// We only need ID, FilePath, IntroTranscription — GetAllBooks returns full structs
-	// but we filter in-memory to avoid N+1.
-	// GetAllBooksFrom is O(1) seek-based — safe on 50K+ libraries.
-	const pageSize = 500
+	// Count total so we can report meaningful progress.
+	// We re-count mid-run only when needed; approximate is fine.
+	total := 0
+	processed := 0
 	cursor := params.LastBookID
-	var toProcess []database.Book
+
 	for {
-		page, err := store.GetAllBooksFrom(cursor, pageSize)
-		if err != nil {
-			return fmt.Errorf("load books: %w", err)
+		if err := ctx.Err(); err != nil {
+			return err
 		}
+
+		// Load one page of books from the cursor position.
+		page, err := store.GetAllBooksFrom(cursor, introTranscribePageSize)
+		if err != nil {
+			return fmt.Errorf("load books page: %w", err)
+		}
+		if len(page) == 0 {
+			break
+		}
+
+		// Filter to only books that need transcription.
+		var toProcess []database.Book
 		for _, b := range page {
 			if onlyMissing && b.IntroTranscription != nil && *b.IntroTranscription != "" {
 				continue
 			}
 			toProcess = append(toProcess, b)
 		}
-		if len(page) < pageSize {
-			break
+		total += len(page)
+
+		if len(toProcess) > 0 {
+			done, err := p.processTranscribePage(ctx, store, log, reporter, toProcess, processed, total)
+			processed += done
+			if err != nil {
+				// Non-fatal: log and continue to next page.
+				log.Warn("transcribe-book-intros: page error", "err", err)
+			}
+		}
+
+		if len(page) < introTranscribePageSize {
+			break // last page
 		}
 		cursor = page[len(page)-1].ID
 	}
 
-	log.Info("transcribe-book-intros: books to process", "count", len(toProcess))
-	if len(toProcess) == 0 {
-		_ = reporter.UpdateProgress(1, 1, "All books already have intro transcriptions")
-		return nil
+	log.Info("transcribe-book-intros: complete", "processed", processed)
+	_ = reporter.UpdateProgress(1, 1, fmt.Sprintf("Done — transcribed %d books", processed))
+	return nil
+}
+
+// processTranscribePage handles one page of books:
+// 1. Find the first audio file for each book.
+// 2. Extract 30-second WAVs in parallel with ffmpeg.
+// 3. Call TranscribeBatch once (single Python/Whisper process).
+// 4. Parse results and update all books.
+// 5. Clean up temp WAVs.
+func (p *Plugin) processTranscribePage(
+	ctx context.Context,
+	store database.Store,
+	log interface{ Info(string, ...any); Warn(string, ...any) },
+	reporter sdk.Reporter,
+	books []database.Book,
+	progressOffset, progressTotal int,
+) (processed int, err error) {
+	tmpDir, err := os.MkdirTemp("", "ao-transcribe-*")
+	if err != nil {
+		return 0, fmt.Errorf("create temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Step 1: find first audio file for each book (fast DB reads, serial).
+	type bookJob struct {
+		book     database.Book
+		audioSrc string // empty if no usable file
+	}
+	jobs := make([]bookJob, 0, len(books))
+	for _, b := range books {
+		src, _ := firstAudioFile(store, b.ID)
+		jobs = append(jobs, bookJob{book: b, audioSrc: src})
 	}
 
-	return registry.RunItems(ctx, reporter, toProcess,
-		func(ctx context.Context, book database.Book) error {
-			firstFile, err := firstAudioFile(store, book.ID)
-			if err != nil || firstFile == "" {
-				return nil // skip books with no accessible files
-			}
+	// Step 2: extract WAVs in parallel with bounded ffmpeg workers.
+	type wavResult struct {
+		bookID  string
+		wavPath string // empty on failure
+	}
+	wavResults := make([]wavResult, len(jobs))
+	sem := make(chan struct{}, introTranscribeFFWorkers)
+	var wg sync.WaitGroup
+	for i, j := range jobs {
+		if j.audioSrc == "" {
+			wavResults[i] = wavResult{bookID: j.book.ID}
+			continue
+		}
+		wg.Add(1)
+		go func(idx int, bookID, src string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
 
-			text, err := transcribe.TranscribeFirst30s(ctx, firstFile)
-			if err != nil {
-				log.Warn("transcribe-book-intros: transcription failed",
-					"book_id", book.ID, "file", firstFile, "err", err)
-				return nil
+			wavPath := filepath.Join(tmpDir, bookID+".wav")
+			ffCmd := exec.CommandContext(ctx, "ffmpeg",
+				"-y", "-i", src,
+				"-t", "30",
+				"-vn", "-ar", "16000", "-ac", "1", "-f", "wav",
+				wavPath,
+			)
+			if out, err := ffCmd.CombinedOutput(); err != nil {
+				log.Warn("transcribe: ffmpeg failed",
+					"book_id", bookID, "file", src,
+					"err", err, "output", strings.TrimSpace(string(out)))
+				wavResults[idx] = wavResult{bookID: bookID}
+				return
 			}
+			wavResults[idx] = wavResult{bookID: bookID, wavPath: wavPath}
+		}(i, j.book.ID, j.audioSrc)
+	}
+	wg.Wait()
 
-			// Store raw transcript + parsed fields.
-			// Parsed fields never overwrite Title/Author/Narrator — they live
-			// in TranscribedTitle/Author/Narrator so transcription errors are
-			// isolated from curated metadata.
-			fields := transcribe.ParseAudiobookIntro(text)
-			now := time.Now()
-			book.IntroTranscription = &text
-			book.IntroTranscribedAt = &now
-			if fields.Title != "" {
-				book.TranscribedTitle = &fields.Title
-			}
-			if fields.Author != "" {
-				book.TranscribedAuthor = &fields.Author
-			}
-			if fields.Narrator != "" {
-				book.TranscribedNarrator = &fields.Narrator
-			}
-			if _, err := store.UpdateBook(book.ID, &book); err != nil {
-				log.Warn("transcribe-book-intros: update failed", "book_id", book.ID, "err", err)
-			}
-			return nil
-		},
-		registry.RunItemsOptions{
-			Concurrency: 4, // ffmpeg + Whisper is CPU-heavy; limit parallelism
-			ErrMode:     registry.ErrModeCollect,
-			Label: func(i, total int) string {
-				return fmt.Sprintf("Book %d/%d", i+1, total)
-			},
-		},
+	// Build the jobs map for TranscribeBatch (only books with valid WAVs).
+	batchJobs := make(map[string]string)
+	for _, r := range wavResults {
+		if r.wavPath != "" {
+			batchJobs[r.bookID] = r.wavPath
+		}
+	}
+	if len(batchJobs) == 0 {
+		return 0, nil
+	}
+
+	// Step 3: one Python/Whisper process for the whole page.
+	log.Info("transcribe-book-intros: calling whisper batch", "jobs", len(batchJobs))
+	batchResults, err := transcribe.TranscribeBatch(ctx, batchJobs)
+	if err != nil {
+		return 0, fmt.Errorf("whisper batch: %w", err)
+	}
+
+	// Step 4: parse results and update books.
+	// Build a lookup so we can find the Book struct by ID.
+	bookByID := make(map[string]database.Book, len(books))
+	for _, b := range books {
+		bookByID[b.ID] = b
+	}
+
+	now := time.Now()
+	for bookID, result := range batchResults {
+		if result.Error != "" {
+			log.Warn("transcribe: whisper error", "book_id", bookID, "err", result.Error)
+			continue
+		}
+		text := result.Text
+		if text == "" {
+			continue
+		}
+
+		book, ok := bookByID[bookID]
+		if !ok {
+			continue
+		}
+
+		fields := transcribe.ParseAudiobookIntro(text)
+		book.IntroTranscription = &text
+		book.IntroTranscribedAt = &now
+		if fields.Title != "" {
+			book.TranscribedTitle = &fields.Title
+		}
+		if fields.Author != "" {
+			book.TranscribedAuthor = &fields.Author
+		}
+		if fields.Narrator != "" {
+			book.TranscribedNarrator = &fields.Narrator
+		}
+		if _, err := store.UpdateBook(book.ID, &book); err != nil {
+			log.Warn("transcribe: update failed", "book_id", bookID, "err", err)
+			continue
+		}
+		processed++
+	}
+
+	_ = reporter.UpdateProgress(
+		progressOffset+processed,
+		progressTotal,
+		fmt.Sprintf("Transcribed %d/%d books", progressOffset+processed, progressTotal),
 	)
+	return processed, nil
 }
 
 // firstAudioFile returns the path of the first audio file for the given book
@@ -159,16 +278,12 @@ func firstAudioFile(store database.Store, bookID string) (string, error) {
 	}
 
 	sort.Slice(audio, func(i, j int) bool {
-		ti := trackNum(audio[i])
-		tj := trackNum(audio[j])
+		ti := audio[i].TrackNumber
+		tj := audio[j].TrackNumber
 		if ti != tj {
 			return ti < tj
 		}
 		return audio[i].FilePath < audio[j].FilePath
 	})
 	return audio[0].FilePath, nil
-}
-
-func trackNum(f database.BookFile) int {
-	return f.TrackNumber
 }
