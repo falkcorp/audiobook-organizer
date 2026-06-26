@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.44.0 -->
+<!-- version: 9.45.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-06-26 -->
 
@@ -989,6 +989,14 @@ incrementally:
   bridge fires from `itunes_ops` and `folder_autoscan_op`.
 
 ---
+
+## 🧹 Repo Size — Git History Bloat (1.69 GB)
+
+- [ ] **REPO-SIZE-1** Repo is 1.69 GB — likely test fixtures committed directly to history.
+  - Audit: `git rev-list --objects --all | git cat-file --batch-check='%(objecttype) %(objectname) %(objectsize) %(rest)' | sort -k3 -n -r | head -40` to find the largest blobs.
+  - Plan: move test media files to an external host (GitHub Releases asset, S3, or a simple HTTP server on 172.16.2.30); have tests download on-demand via a `testdata/fetch.go` helper that caches locally and skips if `TEST_SKIP_LARGE_FIXTURES=1`.
+  - Use `git filter-repo` (NOT `git filter-branch`) to rewrite history and remove the blobs. Coordinate with any forks/clones before force-push.
+  - After rewrite: add the large-file extensions to `.gitignore` and optionally enable GitHub's push protection to prevent recurrence.
 
 ## 🧹 Tech Debt Sweep — Deprecated Code & Warnings
 
