@@ -1,13 +1,17 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.83.0 -->
+<!-- version: 3.84.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
-<!-- last-edited: 2026-06-24 -->
+<!-- last-edited: 2026-06-26 -->
 
 # Changelog
 
 ## [Unreleased]
 
 ### Features
+
+#### June 26, 2026 — iTunes path heal UOS op (PR #1625)
+
+- **`feat(reconcile)`** — New `maintenance.itunes-heal` op that heals the ~19,922 iTunes track `FilePath` records left stale after the June organize bug moved files into the library. Parses `iTunes Library.xml` as ground truth, translates `W:\` → `/mnt/bigdata/books/` paths, builds a parallel filename index of the organized library (138K files, ~10–30s), then fans out 16 workers via `RunItems[T]` — O(1) map lookup + ZFS `cp --reflink=always` per track. Disambiguation uses three signals: author directory match (10 pts), album title word matches, and track-number in filename (5 pts); tied candidates are counted as ambiguous, never guessed. First prod run: **2,274 healed**, 3,720 ambiguous, 5,349 not found on disk, 0 errors. Op ID: `maintenance.itunes-heal`. `ResumePolicy: ResumeRestart` (reflink idempotent).
 
 #### June 24, 2026 — PH-2: dedup exact-pending triage op (PR #1619)
 

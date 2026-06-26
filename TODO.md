@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 9.41.0 -->
+<!-- version: 9.42.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-06-24 -->
+<!-- last-edited: 2026-06-26 -->
 
 # Project TODO
 
@@ -19,20 +19,25 @@ future agent) can scan the entire workspace in one page.
 
 ---
 
-## 🎯 Current Status — June 22, 2026
+## 🎯 Current Status — June 26, 2026
 
 **Library:** ~31,400 books / 8,837 authors / 21,668 series
 **Production:** PebbleDB primary; Linux, HTTPS at prod server; stable
-**Latest activity:** Watchdog false-cancellation fixes PRs #1566–#1567 deployed. Duration
-backfill verified: apply run wrote 6,540 corrections; dry-run confirms `would-change=0`
-across first ~30K books; ~721 tail books still need correction (new imports + apply-run
-cancel tail) — re-enqueue pending. Tag-backfill 98% complete (308K/314K), re-enqueued
-(`op_id=01KVQVAZK0TH0FRFPNMMBYJKJQ`).
+**Latest activity:** `maintenance.itunes-heal` shipped (PR #1625) and executed on prod:
+2,274 iTunes tracks reflinked back to expected paths; acoustid backfill re-triggered to
+fingerprint newly accessible files.
 **In flight:**
-- `maintenance.duration-reextract` tail: ~721 books still need correction; enqueue apply
-  after current dry-run confirms final count.
-- `maintenance.tag-backfill` re-running (`op_id=01KVQVAZK0TH0FRFPNMMBYJKJQ`), was 98%
-  complete. Idempotent — re-run until confirmed completed.
+- `acoustid.backfill` running (`op_id=01KW120TXNQ4FF7G3TB79BTKKD`) — fingerprinting
+  newly accessible iTunes files; monitor to completion.
+
+**iTunes path heal remaining work:**
+- 3,720 ambiguous — disambiguation tied; improve scoring or use DB series info for the
+  208 unique book IDs in the ambiguous set.
+- 5,349 not found on disk — files not present in organized library or newbooks; may need
+  newbooks track-number-aware matching (e.g. `...League of Losers, Book 1 - 032.mp3`
+  vs iTunes expected `32 A Cat and His Human_ League of Lo.mp3`).
+- 4,734 doubled-path records — separate issue: base path embedded twice in `FilePath`;
+  files exist at the second path occurrence. Not yet addressed.
 
 ---
 
