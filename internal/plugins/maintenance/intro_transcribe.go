@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-06-26
 
@@ -24,7 +24,7 @@ import (
 
 const (
 	introTranscribePageSize = 200
-	introTranscribeFFWorkers = 4 // parallel ffmpeg extractions per page
+	introTranscribeFFWorkers = 16 // parallel ffmpeg extractions per page (I/O bound on read-optimized ZFS)
 )
 
 // introTranscribeParams is the checkpoint state for a transcription run.
