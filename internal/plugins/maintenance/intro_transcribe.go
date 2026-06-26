@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-06-26
 
@@ -138,27 +138,38 @@ func (p *Plugin) processTranscribePage(
 	books []database.Book,
 	progressOffset, progressTotal int,
 ) (processed int, err error) {
+	cacheDir := whisperClipCacheDir()
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		log.Warn("transcribe: cannot create clip cache dir, running without cache", "dir", cacheDir, "err", err)
+		cacheDir = ""
+	}
+
+	// tmpDir holds WAVs for books whose source file has no stored hash (no caching).
 	tmpDir, err := os.MkdirTemp("", "ao-transcribe-*")
 	if err != nil {
 		return 0, fmt.Errorf("create temp dir: %w", err)
 	}
 	defer os.RemoveAll(tmpDir)
 
-	// Step 1: find first audio file for each book (fast DB reads, serial).
+	// Step 1: find first audio file + file hash for each book (fast DB reads, serial).
 	type bookJob struct {
 		book     database.Book
-		audioSrc string // empty if no usable file
+		audioSrc string
+		fileHash string // empty → no cache key available
 	}
 	jobs := make([]bookJob, 0, len(books))
 	for _, b := range books {
-		src, _ := firstAudioFile(store, b.ID)
-		jobs = append(jobs, bookJob{book: b, audioSrc: src})
+		src, hash, _ := firstAudioFile(store, b.ID)
+		jobs = append(jobs, bookJob{book: b, audioSrc: src, fileHash: hash})
 	}
 
 	// Step 2: extract WAVs in parallel with bounded ffmpeg workers.
+	// Cache hit: serve from cacheDir/{hash}.wav, skip ffmpeg entirely.
+	// Cache miss: write ffmpeg output directly to cacheDir/{hash}.wav (or tmpDir if no hash).
 	type wavResult struct {
-		bookID  string
-		wavPath string // empty on failure
+		bookID   string
+		wavPath  string // empty on failure
+		fromCache bool
 	}
 	wavResults := make([]wavResult, len(jobs))
 	sem := make(chan struct{}, introTranscribeFFWorkers)
@@ -169,12 +180,29 @@ func (p *Plugin) processTranscribePage(
 			continue
 		}
 		wg.Add(1)
-		go func(idx int, bookID, src string) {
+		go func(idx int, bookID, src, fileHash string) {
 			defer wg.Done()
+
+			// Cache hit — no semaphore needed, just a stat.
+			if cacheDir != "" && fileHash != "" {
+				cp := cachedClipPath(cacheDir, fileHash)
+				if _, statErr := os.Stat(cp); statErr == nil {
+					wavResults[idx] = wavResult{bookID: bookID, wavPath: cp, fromCache: true}
+					return
+				}
+			}
+
+			// Cache miss — run ffmpeg.
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			wavPath := filepath.Join(tmpDir, bookID+".wav")
+			var wavPath string
+			if cacheDir != "" && fileHash != "" {
+				wavPath = cachedClipPath(cacheDir, fileHash)
+			} else {
+				wavPath = filepath.Join(tmpDir, bookID+".wav")
+			}
+
 			ffCmd := exec.CommandContext(ctx, "ffmpeg",
 				"-y", "-i", src,
 				"-t", "90",
@@ -189,9 +217,19 @@ func (p *Plugin) processTranscribePage(
 				return
 			}
 			wavResults[idx] = wavResult{bookID: bookID, wavPath: wavPath}
-		}(i, j.book.ID, j.audioSrc)
+		}(i, j.book.ID, j.audioSrc, j.fileHash)
 	}
 	wg.Wait()
+
+	cacheHits := 0
+	for _, r := range wavResults {
+		if r.fromCache {
+			cacheHits++
+		}
+	}
+	if cacheHits > 0 {
+		log.Info("transcribe: clip cache hits", "hits", cacheHits, "total", len(wavResults))
+	}
 
 	// Build the jobs map for TranscribeBatch (only books with valid WAVs).
 	batchJobs := make(map[string]string)
@@ -261,12 +299,12 @@ func (p *Plugin) processTranscribePage(
 	return processed, nil
 }
 
-// firstAudioFile returns the path of the first audio file for the given book
-// (lowest TrackNumber, falling back to alphabetical by FilePath).
-func firstAudioFile(store database.Store, bookID string) (string, error) {
+// firstAudioFile returns the path and stored file hash of the first audio file
+// for the given book (lowest TrackNumber, falling back to alphabetical by FilePath).
+func firstAudioFile(store database.Store, bookID string) (path, fileHash string, err error) {
 	files, err := store.GetBookFiles(bookID)
 	if err != nil || len(files) == 0 {
-		return "", err
+		return "", "", err
 	}
 
 	extSet := map[string]bool{
@@ -280,7 +318,7 @@ func firstAudioFile(store database.Store, bookID string) (string, error) {
 		}
 	}
 	if len(audio) == 0 {
-		return "", nil
+		return "", "", nil
 	}
 
 	sort.Slice(audio, func(i, j int) bool {
@@ -291,5 +329,24 @@ func firstAudioFile(store database.Store, bookID string) (string, error) {
 		}
 		return audio[i].FilePath < audio[j].FilePath
 	})
-	return audio[0].FilePath, nil
+	f := audio[0]
+	return f.FilePath, f.FileHash, nil
+}
+
+// whisperClipCacheDir returns the directory used to cache extracted 90s WAV clips.
+// Set WHISPER_CLIP_CACHE_DIR to override; defaults to /var/lib/audiobook-organizer/whisper-clips.
+func whisperClipCacheDir() string {
+	if d := os.Getenv("WHISPER_CLIP_CACHE_DIR"); d != "" {
+		return d
+	}
+	return "/var/lib/audiobook-organizer/whisper-clips"
+}
+
+// cachedClipPath returns the cache file path for a given source file hash.
+// Returns "" if hash is empty (cache disabled for that file).
+func cachedClipPath(cacheDir, fileHash string) string {
+	if fileHash == "" {
+		return ""
+	}
+	return filepath.Join(cacheDir, fileHash+".wav")
 }
