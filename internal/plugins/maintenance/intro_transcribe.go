@@ -104,10 +104,23 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 				return nil
 			}
 
-			// Store the raw transcript; callers can parse on demand.
+			// Store raw transcript + parsed fields.
+			// Parsed fields never overwrite Title/Author/Narrator — they live
+			// in TranscribedTitle/Author/Narrator so transcription errors are
+			// isolated from curated metadata.
+			fields := transcribe.ParseAudiobookIntro(text)
 			now := time.Now()
 			book.IntroTranscription = &text
 			book.IntroTranscribedAt = &now
+			if fields.Title != "" {
+				book.TranscribedTitle = &fields.Title
+			}
+			if fields.Author != "" {
+				book.TranscribedAuthor = &fields.Author
+			}
+			if fields.Narrator != "" {
+				book.TranscribedNarrator = &fields.Narrator
+			}
 			if _, err := store.UpdateBook(book.ID, &book); err != nil {
 				log.Warn("transcribe-book-intros: update failed", "book_id", book.ID, "err", err)
 			}
