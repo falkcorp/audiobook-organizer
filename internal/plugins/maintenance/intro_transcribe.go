@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-06-26
 
@@ -111,6 +111,12 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 			break // last page
 		}
 		cursor = page[len(page)-1].ID
+		// Persist cursor after each completed page so a server restart resumes
+		// from here rather than scanning from book 0.
+		_ = reporter.Checkpoint(introTranscribeParams{
+			LastBookID:  cursor,
+			OnlyMissing: &onlyMissing,
+		})
 	}
 
 	log.Info("transcribe-book-intros: complete", "processed", processed)
