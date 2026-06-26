@@ -43,6 +43,13 @@ Key constraints:
 - Purge skips books with iTunes PIDs
 - Use LSP (gopls hover/goToDefinition/findReferences) instead of grep for Go symbols
 
+Path mapping (CRITICAL — never forget this):
+- W:\ on the Windows iTunes machine maps to /mnt/bigdata/books/ on the server (172.16.2.30)
+- iTunes XML at /mnt/bigdata/books/itunes/iTunes Library.xml contains file://localhost/W:/itunes/... URLs
+- BookFile stores TWO paths: FilePath (translated Linux path) and ITunesPath (original Windows path)
+- ALL files are on the NAS (172.16.2.30) — there are ZERO Windows-local-only files. NEVER dismiss iTunes file_not_found as "Windows-only expected"
+- When FilePath doesn't resolve for an iTunes file, the file was MOVED on the server (organize bug) — find it on disk by filename/hash
+
 Recent decisions: [list 1-3 key points from the newest spec files]
 === END CONTEXT ===
 ```
