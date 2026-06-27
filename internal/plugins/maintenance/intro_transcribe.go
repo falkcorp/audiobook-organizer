@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.0.0
+// version: 3.1.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-06-26
 
@@ -48,6 +48,14 @@ func (p *Plugin) introTranscribeDef() sdk.OperationDef {
 		Cancellable:     true,
 		Isolate:         false,
 		Timeout:         10 * time.Hour,
+		// A page of 200 books sent to the (remote GPU or local) Whisper backend
+		// can take several minutes to return. The default 5-minute no-progress
+		// watchdog would cancel the op mid-batch — which it did, repeatedly,
+		// cutting off in-flight requests to the remote GPU. Per-book progress
+		// (see TranscribeBatch onProgress) normally ticks every ~1-2s on the
+		// remote path; this generous timeout is the backstop for the local
+		// single-subprocess fallback, which is silent until it completes.
+		ProgressTimeout: 30 * time.Minute,
 		Capabilities:    []sdk.Capability{sdk.CapLibraryRead, sdk.CapFilesRead},
 		Run:             p.runIntroTranscribe,
 	}
@@ -125,7 +133,16 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 		if len(books) == 0 {
 			return nil
 		}
-		done := p.processTranscribePage(ctx, store, log, books)
+		// Per-book heartbeat: each completed book bumps the operation's progress
+		// clock so the watchdog sees liveness during a multi-minute batch (the
+		// old code only reported once per page and got cancelled mid-batch).
+		// base is the cumulative count before this page; d is books done within it.
+		base := processed
+		onBook := func(d, _ int) {
+			_ = reporter.UpdateProgress(base+d, total,
+				fmt.Sprintf("Transcribing — %d/%d books", base+d, total))
+		}
+		done := p.processTranscribePage(ctx, store, log, books, onBook)
 		processed += done
 		log.Info("transcribe-book-intros: page complete",
 			"page_books", done, "cumulative_processed", processed, "total_books", total)
@@ -179,6 +196,7 @@ func (p *Plugin) processTranscribePage(
 	store database.Store,
 	log interface{ Info(string, ...any); Warn(string, ...any) },
 	books []database.Book,
+	onBook transcribe.ProgressFunc,
 ) (processed int) {
 	cacheDir := whisperClipCacheDir()
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
@@ -287,7 +305,7 @@ func (p *Plugin) processTranscribePage(
 
 	// Step 3: one Python/Whisper process for the whole page.
 	log.Info("transcribe-book-intros: calling whisper batch", "jobs", len(batchJobs))
-	batchResults, err := transcribe.TranscribeBatch(ctx, batchJobs)
+	batchResults, err := transcribe.TranscribeBatch(ctx, batchJobs, onBook)
 	if err != nil {
 		log.Warn("transcribe: whisper batch failed", "jobs", len(batchJobs), "err", err)
 		return 0
