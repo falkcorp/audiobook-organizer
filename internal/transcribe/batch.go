@@ -1,7 +1,7 @@
 // file: internal/transcribe/batch.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
-// last-edited: 2026-06-26
+// last-edited: 2026-06-27
 
 package transcribe
 
@@ -11,7 +11,6 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
@@ -50,12 +49,16 @@ func TranscribeBatch(ctx context.Context, jobs map[string]string, onProgress Pro
 	if remoteURL := os.Getenv("WHISPER_REMOTE_URL"); remoteURL != "" {
 		results, err := transcribeRemote(ctx, remoteURL, jobs, onProgress)
 		if err != nil {
-			slog.Warn("transcribe: remote whisper failed, falling back to local",
-				"url", remoteURL, "err", err)
-			// fall through to local uv path
-		} else {
-			return results, nil
+			// Do NOT fall back to the local uv path when WHISPER_REMOTE_URL is
+			// configured. The local subprocess loads the full Whisper model into
+			// RAM; at batch sizes of 100–200 books this reliably OOMs the server
+			// (signal: killed after 40+ minutes) and produces zero results anyway.
+			// Returning the error lets the caller (processTranscribePage) log a
+			// warning, skip the page, and advance to the next one — far better
+			// than stalling for an hour and triggering the watchdog.
+			return nil, fmt.Errorf("transcribe remote: %w", err)
 		}
+		return results, nil
 	}
 
 	// Write jobs JSON to temp file.
