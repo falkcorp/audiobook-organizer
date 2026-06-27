@@ -1,7 +1,7 @@
 // file: internal/transcribe/remote.go
-// version: 1.3.0
+// version: 2.0.0
 // guid: f7a8b9c0-d1e2-3f4a-5b6c-7d8e9f0a1b2c
-// last-edited: 2026-06-26
+// last-edited: 2026-06-27
 
 package transcribe
 
@@ -19,21 +19,167 @@ import (
 	"time"
 )
 
-// remoteWorkers pipelines network upload with GPU compute on the remote.
-// 4 workers keeps the RTX 2060 Super consistently fed: network upload of one
-// WAV overlaps with GPU inference on the previous, hiding transfer latency.
-// GPU log showed 32–68% utilisation at remoteWorkers=2; bumping to 4 fills
-// the gaps without overloading the 8GT/s PCIe 3.0 x16 link.
+// wavJob pairs a book ID with its local WAV path for a transcription request.
+type wavJob struct {
+	id   string
+	path string
+}
+
+// whisperBatchSize is the number of WAV files sent per /transcribe-batch request.
+// Each file is ~2.9 MB (90s × 16kHz × 16-bit mono), so 32 files ≈ 93 MB per request —
+// well within memory limits on both ends. Smaller batches give more frequent
+// onProgress ticks; larger ones reduce HTTP overhead further.
+const whisperBatchSize = 32
+
+// remoteWorkers is only used on the legacy single-file path (/transcribe).
+// The batch path (/transcribe-batch) sends all files in one request so no
+// concurrency is needed at the Go layer.
 const remoteWorkers = 4
 
-// transcribeRemote sends WAV jobs directly to the remote faster-whisper server.
-// No upfront health check — just tries to connect. On any failure, cancels all
-// in-flight requests immediately and returns an error so the caller falls back
-// to local transcription.
+// transcribeRemote sends WAV jobs to the remote faster-whisper server.
+// It probes for /transcribe-batch support first (faster-whisper >=1.0.0 server)
+// and falls back to the original per-file worker pool on 404 or probe failure.
 func transcribeRemote(ctx context.Context, remoteURL string, jobs map[string]string, onProgress ProgressFunc) (map[string]BatchResult, error) {
+	if supportsRemoteBatch(ctx, remoteURL) {
+		return transcribeRemoteBatched(ctx, remoteURL, jobs, onProgress)
+	}
+	return transcribeRemotePerFile(ctx, remoteURL, jobs, onProgress)
+}
+
+// supportsRemoteBatch checks whether the server exposes /transcribe-batch by
+// hitting /health and looking for "batch_pipeline" in the response. A plain
+// connection error is treated as unsupported (server may be older version).
+func supportsRemoteBatch(ctx context.Context, remoteURL string) bool {
+	hctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(hctx, http.MethodGet, remoteURL+"/health", nil)
+	if err != nil {
+		return false
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	var h struct {
+		BatchPipeline *bool `json:"batch_pipeline"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&h); err != nil {
+		return false
+	}
+	// Present in v2 server; absent or false means old server.
+	return h.BatchPipeline != nil
+}
+
+// transcribeRemoteBatched sends jobs in sub-batches of whisperBatchSize to
+// /transcribe-batch. Processing is sequential inside each sub-batch (the GPU
+// handles one file at a time), but reduced HTTP round-trips and
+// BatchedInferencePipeline on the server give 2-3x throughput vs per-file mode.
+func transcribeRemoteBatched(ctx context.Context, remoteURL string, jobs map[string]string, onProgress ProgressFunc) (map[string]BatchResult, error) {
+	// Stable order so progress reporting is deterministic.
+	ordered := make([]wavJob, 0, len(jobs))
+	for id, path := range jobs {
+		ordered = append(ordered, wavJob{id, path})
+	}
+
+	client := &http.Client{
+		// Each sub-batch of 32 files takes up to ~whisperBatchSize × 3s ≈ 96s.
+		// Give generous headroom for slow GPU or network hiccups.
+		Timeout: 300 * time.Second,
+	}
+	results := make(map[string]BatchResult, len(jobs))
+	total := len(jobs)
+	done := 0
+
+	for start := 0; start < len(ordered); start += whisperBatchSize {
+		end := start + whisperBatchSize
+		if end > len(ordered) {
+			end = len(ordered)
+		}
+		chunk := ordered[start:end]
+
+		batchResults, err := sendBatch(ctx, client, remoteURL, chunk)
+		if err != nil {
+			return nil, fmt.Errorf("transcribe-batch chunk %d-%d: %w", start, end, err)
+		}
+		for id, r := range batchResults {
+			results[id] = r
+			done++
+			if onProgress != nil {
+				onProgress(done, total)
+			}
+		}
+	}
+	return results, nil
+}
+
+// sendBatch sends one multipart request containing len(chunk) WAV files.
+// The filename of each part is the book ID so the server echoes it back as
+// the result key.
+func sendBatch(ctx context.Context, client *http.Client, remoteURL string, chunk []wavJob) (map[string]BatchResult, error) {
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+
+	for _, e := range chunk {
+		fw, err := mw.CreateFormFile("files", e.id)
+		if err != nil {
+			return nil, fmt.Errorf("create form file %s: %w", e.id, err)
+		}
+		f, err := os.Open(e.path)
+		if err != nil {
+			// Missing WAV — skip this file rather than aborting the whole batch.
+			continue
+		}
+		if _, err := io.Copy(fw, f); err != nil {
+			f.Close()
+			return nil, fmt.Errorf("copy wav %s: %w", e.id, err)
+		}
+		f.Close()
+	}
+	mw.Close()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, remoteURL+"/transcribe-batch", &body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("server returned HTTP %d", resp.StatusCode)
+	}
+
+	var out struct {
+		Results map[string]struct {
+			Text  string  `json:"text"`
+			Error *string `json:"error"`
+		} `json:"results"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("decode batch response: %w", err)
+	}
+
+	ret := make(map[string]BatchResult, len(out.Results))
+	for id, v := range out.Results {
+		r := BatchResult{Text: v.Text}
+		if v.Error != nil {
+			r.Error = *v.Error
+		}
+		ret[id] = r
+	}
+	return ret, nil
+}
+
+// transcribeRemotePerFile is the original per-file worker-pool path, kept as
+// fallback for servers that don't expose /transcribe-batch.
+func transcribeRemotePerFile(ctx context.Context, remoteURL string, jobs map[string]string, onProgress ProgressFunc) (map[string]BatchResult, error) {
 	client := &http.Client{Timeout: 120 * time.Second}
 
-	// Child context so we can cancel all workers the moment any request fails.
 	batchCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -63,7 +209,7 @@ func transcribeRemote(ctx context.Context, remoteURL string, jobs map[string]str
 				r, err := transcribeOneRemote(batchCtx, client, remoteURL, j.wavPath)
 				resultCh <- resultItem{id: j.id, result: r, err: err}
 				if err != nil {
-					cancel() // abort remaining workers immediately
+					cancel()
 					return
 				}
 			}
@@ -81,9 +227,6 @@ func transcribeRemote(ctx context.Context, remoteURL string, jobs map[string]str
 			return nil, fmt.Errorf("remote transcribe %s: %w", item.id, item.err)
 		}
 		results[item.id] = item.result
-		// Single-goroutine drain loop, so onProgress is called sequentially —
-		// no extra synchronization needed. This per-book tick is what keeps the
-		// operation watchdog alive during a long batch.
 		if onProgress != nil {
 			onProgress(len(results), total)
 		}
