@@ -1,5 +1,5 @@
 // file: internal/transcribe/remote.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: f7a8b9c0-d1e2-3f4a-5b6c-7d8e9f0a1b2c
 // last-edited: 2026-06-26
 
@@ -19,9 +19,12 @@ import (
 	"time"
 )
 
-// remoteWorkers pipelines network upload with GPU compute on the remote:
-// one file uploading while the previous is being transcribed.
-const remoteWorkers = 2
+// remoteWorkers pipelines network upload with GPU compute on the remote.
+// 4 workers keeps the RTX 2060 Super consistently fed: network upload of one
+// WAV overlaps with GPU inference on the previous, hiding transfer latency.
+// GPU log showed 32–68% utilisation at remoteWorkers=2; bumping to 4 fills
+// the gaps without overloading the 8GT/s PCIe 3.0 x16 link.
+const remoteWorkers = 4
 
 // transcribeRemote sends WAV jobs directly to the remote faster-whisper server.
 // No upfront health check — just tries to connect. On any failure, cancels all
