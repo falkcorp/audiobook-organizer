@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.1.0
+// version: 3.2.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-06-26
 
@@ -7,6 +7,8 @@ package maintenance
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -387,7 +389,16 @@ func firstAudioFile(store database.Store, bookID string) (path, fileHash string,
 		return audio[i].FilePath < audio[j].FilePath
 	})
 	f := audio[0]
-	return f.FilePath, f.FileHash, nil
+	// Use the stored content hash as the cache key. If it's empty (scanner
+	// hasn't computed it yet for this book), derive a stable key from the file
+	// path instead — SHA-256 of the path string is deterministic as long as
+	// the file isn't moved, which is true for organised books.
+	cacheKey := f.FileHash
+	if cacheKey == "" {
+		h := sha256.Sum256([]byte(f.FilePath))
+		cacheKey = "path:" + hex.EncodeToString(h[:])
+	}
+	return f.FilePath, cacheKey, nil
 }
 
 // whisperClipCacheDir returns the directory used to cache extracted 90s WAV clips.
