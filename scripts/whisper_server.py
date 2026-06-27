@@ -1,23 +1,36 @@
 # file: scripts/whisper_server.py
-# version: 2.0.0
+# version: 2.1.0
 # guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 # last-edited: 2026-06-27
 #
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#   "faster-whisper>=1.0.0",
+#   "fastapi>=0.111",
+#   "uvicorn[standard]>=0.29",
+# ]
+# ///
+#
 # Remote Whisper transcription server for use with audiobook-organizer.
-# Run on a machine with a fast GPU to offload the bulk transcription op.
+# Run on a machine with a fast GPU to offload bulk transcription.
 #
-# Install:
-#   pip install "faster-whisper>=1.0.0" fastapi "uvicorn[standard]"
+# Run (uv handles all deps automatically — no pip install needed):
+#   uv run scripts/whisper_server.py [model]
+#   uv run scripts/whisper_server.py small.en
 #
-# Run (defaults to base.en):
-#   python scripts/whisper_server.py [model]
-#   python scripts/whisper_server.py small.en
+# On Windows (GPU machine), uv is available at:
+#   https://docs.astral.sh/uv/getting-started/installation/
 #
 # Configure the Go service to use it:
 #   Add to deploy/local.conf:  Environment=WHISPER_REMOTE_URL=http://<ip>:8000
 #   Then: make deploy
 #
 # Windows firewall: allow inbound TCP 8000 from your LAN subnet.
+#
+# NOTE: faster-whisper uses ctranslate2 for CUDA inference — no separate
+# torch install needed. ctranslate2 bundles its own CUDA runtime.
+# If you see CUDA errors, ensure CUDA 11.x or 12.x drivers are installed.
 #
 # v2: adds /transcribe-batch endpoint.  BatchedInferencePipeline (faster-whisper
 # >=1.0.0) processes 16 audio chunks per file simultaneously on the GPU —
