@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
 // last-edited: 2026-06-26
 
@@ -72,6 +72,7 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.reconcileScanDef(),
 		p.itunesHealDef(),
 		p.introTranscribeDef(),
+		p.extractWAVClipsDef(),
 
 		// --- title cleanup ---
 		p.titleBackfillDef(),
