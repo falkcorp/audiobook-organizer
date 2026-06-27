@@ -1,5 +1,5 @@
 // file: internal/transcribe/remote.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: f7a8b9c0-d1e2-3f4a-5b6c-7d8e9f0a1b2c
 // last-edited: 2026-06-26
 
@@ -27,7 +27,7 @@ const remoteWorkers = 2
 // No upfront health check — just tries to connect. On any failure, cancels all
 // in-flight requests immediately and returns an error so the caller falls back
 // to local transcription.
-func transcribeRemote(ctx context.Context, remoteURL string, jobs map[string]string) (map[string]BatchResult, error) {
+func transcribeRemote(ctx context.Context, remoteURL string, jobs map[string]string, onProgress ProgressFunc) (map[string]BatchResult, error) {
 	client := &http.Client{Timeout: 120 * time.Second}
 
 	// Child context so we can cancel all workers the moment any request fails.
@@ -72,11 +72,18 @@ func transcribeRemote(ctx context.Context, remoteURL string, jobs map[string]str
 	}()
 
 	results := make(map[string]BatchResult, len(jobs))
+	total := len(jobs)
 	for item := range resultCh {
 		if item.err != nil {
 			return nil, fmt.Errorf("remote transcribe %s: %w", item.id, item.err)
 		}
 		results[item.id] = item.result
+		// Single-goroutine drain loop, so onProgress is called sequentially —
+		// no extra synchronization needed. This per-book tick is what keeps the
+		// operation watchdog alive during a long batch.
+		if onProgress != nil {
+			onProgress(len(results), total)
+		}
 	}
 	return results, nil
 }

@@ -1,5 +1,5 @@
 // file: internal/transcribe/batch.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
 // last-edited: 2026-06-26
 
@@ -26,21 +26,29 @@ type BatchResult struct {
 	Error string // non-empty means transcription failed for this item
 }
 
+// ProgressFunc is an optional callback invoked after each book finishes
+// transcribing on the remote path. done is the number completed so far, total
+// the batch size. Callers use it to emit per-book progress — critical so the
+// operation watchdog sees liveness during a multi-minute batch instead of
+// cancelling it for "no progress". May be nil.
+type ProgressFunc func(done, total int)
+
 // TranscribeBatch transcribes multiple WAV files. jobs maps an opaque key to a WAV path.
 //
 // If WHISPER_REMOTE_URL is set (e.g. "http://192.168.1.x:8000"), jobs are sent
 // to the remote faster-whisper server running scripts/whisper_server.py. On any
 // failure the warning is logged and the function falls back to the local
-// uv/openai-whisper path.
+// uv/openai-whisper path. onProgress (if non-nil) fires per book on the remote
+// path; the local single-subprocess path reports only on completion.
 //
 // Local path uses torch==2.0.1+cu118 for CC 6.1 GPU support (GTX 1050 Ti).
-func TranscribeBatch(ctx context.Context, jobs map[string]string) (map[string]BatchResult, error) {
+func TranscribeBatch(ctx context.Context, jobs map[string]string, onProgress ProgressFunc) (map[string]BatchResult, error) {
 	if len(jobs) == 0 {
 		return nil, nil
 	}
 
 	if remoteURL := os.Getenv("WHISPER_REMOTE_URL"); remoteURL != "" {
-		results, err := transcribeRemote(ctx, remoteURL, jobs)
+		results, err := transcribeRemote(ctx, remoteURL, jobs, onProgress)
 		if err != nil {
 			slog.Warn("transcribe: remote whisper failed, falling back to local",
 				"url", remoteURL, "err", err)
@@ -133,6 +141,12 @@ func TranscribeBatch(ctx context.Context, jobs map[string]string) (map[string]Ba
 			r.Error = *v.Error
 		}
 		results[k] = r
+	}
+	// The local subprocess returns all results at once, so we can only report
+	// completion (not per-book). The op def's generous ProgressTimeout covers
+	// the silent gap during a local-fallback batch.
+	if onProgress != nil {
+		onProgress(len(results), len(jobs))
 	}
 	return results, nil
 }
