@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 2.4.0
+// version: 3.0.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-06-26
 
@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -65,79 +66,120 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 	onlyMissing := params.OnlyMissing == nil || *params.OnlyMissing
 
 	log := reporter.Logger()
-	log.Info("transcribe-book-intros: starting batch run",
-		"only_missing", onlyMissing, "page_size", introTranscribePageSize)
 
-	// Count total so we can report meaningful progress.
-	// We re-count mid-run only when needed; approximate is fine.
-	total := 0
-	processed := 0
-	cursor := params.LastBookID
+	// Load the FULL, ordered list of book IDs up front. This is the proven
+	// uncapped primitive (memdb ID-index walk). The previous implementation
+	// paginated via GetAllBooksFrom, whose memdb path silently stopped after
+	// 2*pageSize books — so only the first ~400 books of the library were ever
+	// transcribed. See fix/transcribe-full-library.
+	allIDs, err := store.ListBookIDs()
+	if err != nil {
+		return fmt.Errorf("list book ids: %w", err)
+	}
+	total := len(allIDs)
 
-	for {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-
-		// Load one page of books from the cursor position.
-		page, err := store.GetAllBooksFrom(cursor, introTranscribePageSize)
-		if err != nil {
-			return fmt.Errorf("load books page: %w", err)
-		}
-		if len(page) == 0 {
-			break
-		}
-
-		// Filter to only books that need transcription.
-		var toProcess []database.Book
-		for _, b := range page {
-			if onlyMissing && b.IntroTranscription != nil && *b.IntroTranscription != "" {
-				continue
-			}
-			toProcess = append(toProcess, b)
-		}
-		total += len(page)
-
-		if len(toProcess) > 0 {
-			done, err := p.processTranscribePage(ctx, store, log, reporter, toProcess, processed, total)
-			processed += done
-			if err != nil {
-				// Non-fatal: log and continue to next page.
-				log.Warn("transcribe-book-intros: page error", "err", err)
+	// Resume support: skip past the last book ID checkpointed by a prior run.
+	startIdx := 0
+	if params.LastBookID != "" {
+		for i, id := range allIDs {
+			if id == params.LastBookID {
+				startIdx = i + 1
+				break
 			}
 		}
-
-		if len(page) < introTranscribePageSize {
-			break // last page
-		}
-		cursor = page[len(page)-1].ID
-		// Persist cursor after each completed page so a server restart resumes
-		// from here rather than scanning from book 0.
-		_ = reporter.Checkpoint(introTranscribeParams{
-			LastBookID:  cursor,
-			OnlyMissing: &onlyMissing,
-		})
 	}
 
-	log.Info("transcribe-book-intros: complete", "processed", processed)
+	log.Info("transcribe-book-intros: starting batch run",
+		"only_missing", onlyMissing, "total_books", total,
+		"start_index", startIdx, "page_size", introTranscribePageSize)
+
+	if startIdx >= total {
+		_ = reporter.UpdateProgress(1, 1, "Done — nothing to transcribe")
+		return nil
+	}
+
+	// Chunk the remaining IDs into pages. Each page → one Whisper batch process
+	// (the whole point of batch mode: load the model once per 200 books).
+	pages := chunkIDs(allIDs[startIdx:], introTranscribePageSize)
+
+	var processed int // cumulative books transcribed across all pages
+	var lastID string // last book ID seen — captured for the checkpoint closure
+
+	// RunItems drives the page loop, handling ctx cancellation, per-page
+	// progress, and checkpointing. The item is a PAGE of IDs (not a single
+	// book) so we keep one Whisper process per 200 books. Sequential by design:
+	// ffmpeg parallelism (16 workers) already lives inside processTranscribePage.
+	err = registry.RunItems(ctx, reporter, pages, func(ctx context.Context, ids []string) error {
+		books := make([]database.Book, 0, len(ids))
+		for _, id := range ids {
+			b, gerr := store.GetBookByID(id)
+			if gerr != nil || b == nil {
+				continue
+			}
+			lastID = id
+			if onlyMissing && b.IntroTranscription != nil && *b.IntroTranscription != "" {
+				continue // already transcribed — skip (cache still warm if re-run)
+			}
+			books = append(books, *b)
+		}
+		if len(books) == 0 {
+			return nil
+		}
+		done := p.processTranscribePage(ctx, store, log, books)
+		processed += done
+		log.Info("transcribe-book-intros: page complete",
+			"page_books", done, "cumulative_processed", processed, "total_books", total)
+		return nil
+	}, registry.RunItemsOptions{
+		Concurrency:   1,
+		ProgressTotal: len(pages),
+		Label: func(i, t int) string {
+			return fmt.Sprintf("Page %d/%d — %d books transcribed", i+1, t, processed)
+		},
+		CheckpointFn: func(ctx context.Context) error {
+			om := onlyMissing
+			return reporter.Checkpoint(introTranscribeParams{LastBookID: lastID, OnlyMissing: &om})
+		},
+	})
+	if err != nil {
+		return err
+	}
+
+	log.Info("transcribe-book-intros: complete", "processed", processed, "total_books", total)
 	_ = reporter.UpdateProgress(1, 1, fmt.Sprintf("Done — transcribed %d books", processed))
 	return nil
 }
 
+// chunkIDs splits ids into consecutive slices of at most size elements.
+func chunkIDs(ids []string, size int) [][]string {
+	if size < 1 {
+		size = 1
+	}
+	chunks := make([][]string, 0, (len(ids)+size-1)/size)
+	for start := 0; start < len(ids); start += size {
+		end := start + size
+		if end > len(ids) {
+			end = len(ids)
+		}
+		chunks = append(chunks, ids[start:end])
+	}
+	return chunks
+}
+
 // processTranscribePage handles one page of books:
 // 1. Find the first audio file for each book.
-// 2. Extract 90-second WAVs in parallel with ffmpeg.
+// 2. Extract 90-second WAVs in parallel with ffmpeg (cached on disk).
 // 3. Call TranscribeBatch once (single Python/Whisper process).
 // 4. Parse results and update all books.
-// 5. Clean up temp WAVs.
+// 5. Clean up temp WAVs (cached clips persist).
+// Returns the number of books successfully transcribed in this page. Errors are
+// logged and treated as non-fatal so one bad page never aborts the whole run.
 func (p *Plugin) processTranscribePage(
 	ctx context.Context,
 	store database.Store,
 	log interface{ Info(string, ...any); Warn(string, ...any) },
-	reporter sdk.Reporter,
 	books []database.Book,
-	progressOffset, progressTotal int,
-) (processed int, err error) {
+) (processed int) {
 	cacheDir := whisperClipCacheDir()
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		log.Warn("transcribe: cannot create clip cache dir, running without cache", "dir", cacheDir, "err", err)
@@ -147,7 +189,8 @@ func (p *Plugin) processTranscribePage(
 	// tmpDir holds WAVs for books whose source file has no stored hash (no caching).
 	tmpDir, err := os.MkdirTemp("", "ao-transcribe-*")
 	if err != nil {
-		return 0, fmt.Errorf("create temp dir: %w", err)
+		log.Warn("transcribe: create temp dir failed", "err", err)
+		return 0
 	}
 	defer os.RemoveAll(tmpDir)
 
@@ -239,14 +282,15 @@ func (p *Plugin) processTranscribePage(
 		}
 	}
 	if len(batchJobs) == 0 {
-		return 0, nil
+		return 0
 	}
 
 	// Step 3: one Python/Whisper process for the whole page.
 	log.Info("transcribe-book-intros: calling whisper batch", "jobs", len(batchJobs))
 	batchResults, err := transcribe.TranscribeBatch(ctx, batchJobs)
 	if err != nil {
-		return 0, fmt.Errorf("whisper batch: %w", err)
+		log.Warn("transcribe: whisper batch failed", "jobs", len(batchJobs), "err", err)
+		return 0
 	}
 
 	// Step 4: parse results and update books.
@@ -291,12 +335,7 @@ func (p *Plugin) processTranscribePage(
 		processed++
 	}
 
-	_ = reporter.UpdateProgress(
-		progressOffset+processed,
-		progressTotal,
-		fmt.Sprintf("Transcribed %d/%d books", progressOffset+processed, progressTotal),
-	)
-	return processed, nil
+	return processed
 }
 
 // firstAudioFile returns the path and stored file hash of the first audio file
