@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/extract_wav_clips.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e1f2a3b4-c5d6-7890-abcd-ef1234567890
 // last-edited: 2026-06-27
 
@@ -85,7 +85,7 @@ func (p *Plugin) runExtractWAVClips(ctx context.Context, rawParams json.RawMessa
 			if gerr != nil || b == nil {
 				continue
 			}
-			src, cacheKey, _ := firstAudioFile(store, bookID)
+			src, cacheKey, _ := firstAudioFile(store, *b)
 			if src == "" || cacheKey == "" {
 				continue
 			}

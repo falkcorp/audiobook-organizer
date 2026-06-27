@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.3.0
+// version: 3.4.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-06-26
+// last-edited: 2026-06-27
 
 package maintenance
 
@@ -223,7 +223,7 @@ func (p *Plugin) processTranscribePage(
 	}
 	jobs := make([]bookJob, 0, len(books))
 	for _, b := range books {
-		src, hash, _ := firstAudioFile(store, b.ID)
+		src, hash, _ := firstAudioFile(store, b)
 		jobs = append(jobs, bookJob{book: b, audioSrc: src, fileHash: hash})
 	}
 
@@ -359,25 +359,38 @@ func (p *Plugin) processTranscribePage(
 	return processed
 }
 
-// firstAudioFile returns the path and stored file hash of the first audio file
-// for the given book (lowest TrackNumber, falling back to alphabetical by FilePath).
-func firstAudioFile(store database.Store, bookID string) (path, fileHash string, err error) {
-	files, err := store.GetBookFiles(bookID)
-	if err != nil || len(files) == 0 {
+// audioExtSet is the set of extensions treated as playable audio by firstAudioFile.
+var audioExtSet = map[string]bool{
+	".m4b": true, ".mp3": true, ".m4a": true, ".mp4": true,
+	".flac": true, ".aac": true, ".ogg": true, ".wma": true,
+}
+
+// firstAudioFile returns the path and a stable cache key for the first audio
+// file of book. It checks BookFile records first (multi-track books); when none
+// exist it falls back to book.FilePath directly (single-file iTunes imports that
+// were ingested without individual BookFile rows — the ~17K gap in the cache).
+func firstAudioFile(store database.Store, book database.Book) (path, cacheKey string, err error) {
+	files, err := store.GetBookFiles(book.ID)
+	if err != nil {
 		return "", "", err
 	}
 
-	extSet := map[string]bool{
-		".m4b": true, ".mp3": true, ".m4a": true,
-		".flac": true, ".aac": true, ".ogg": true, ".wma": true,
-	}
 	var audio []database.BookFile
 	for _, f := range files {
-		if extSet[strings.ToLower(filepath.Ext(f.FilePath))] && f.FilePath != "" {
+		if audioExtSet[strings.ToLower(filepath.Ext(f.FilePath))] && f.FilePath != "" {
 			audio = append(audio, f)
 		}
 	}
+
 	if len(audio) == 0 {
+		// No BookFile rows — fall back to Book.FilePath for single-file imports
+		// (iTunes ingestion sets book.FilePath to the track path but skips
+		// creating BookFile records when there is only one track per album).
+		fp := book.FilePath
+		if fp != "" && audioExtSet[strings.ToLower(filepath.Ext(fp))] {
+			h := sha256.Sum256([]byte(fp))
+			return fp, "path:" + hex.EncodeToString(h[:]), nil
+		}
 		return "", "", nil
 	}
 
@@ -390,16 +403,12 @@ func firstAudioFile(store database.Store, bookID string) (path, fileHash string,
 		return audio[i].FilePath < audio[j].FilePath
 	})
 	f := audio[0]
-	// Use the stored content hash as the cache key. If it's empty (scanner
-	// hasn't computed it yet for this book), derive a stable key from the file
-	// path instead — SHA-256 of the path string is deterministic as long as
-	// the file isn't moved, which is true for organised books.
-	cacheKey := f.FileHash
-	if cacheKey == "" {
+	key := f.FileHash
+	if key == "" {
 		h := sha256.Sum256([]byte(f.FilePath))
-		cacheKey = "path:" + hex.EncodeToString(h[:])
+		key = "path:" + hex.EncodeToString(h[:])
 	}
-	return f.FilePath, cacheKey, nil
+	return f.FilePath, key, nil
 }
 
 // wavCacheDir returns the directory used to cache extracted 90s WAV clips.
