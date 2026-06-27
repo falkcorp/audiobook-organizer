@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.97.0
+// version: 1.98.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-06-23
+// last-edited: 2026-06-26
 
 package database
 
@@ -1439,28 +1439,50 @@ func (p *PebbleStore) GetAllBooks(limit, offset int) ([]Book, error) {
 // full-table iteration (e.g. search index backfill).
 func (p *PebbleStore) GetAllBooksFrom(afterID string, limit int) ([]Book, error) {
 	if p.UseMemDB && p.mem() != nil {
-		// MemDB path: load a page from the beginning and filter to after afterID.
-		// Only used in tests — not optimised for large N.
-		all, err := p.mem().GetAllBooks(limit*2+1, 0, nil)
+		// MemDB path. NOTE: this IS the production path — UseMemDB defaults to
+		// true. The previous implementation loaded only limit*2+1 books from the
+		// start and searched for afterID within that window, so cursor pagination
+		// silently stopped at the 2*limit boundary (e.g. page 3 of a 200-page
+		// scan returned nothing). Every full-table backfill that relied on this
+		// (intro transcription, search-index backfill) only ever processed the
+		// first ~2 pages of the library. See fix/transcribe-full-library.
+		//
+		// ListBookIDs walks the same memdb ID index as GetAllBooks and applies
+		// the same MarkedForDeletion filter, so the ID ordering is authoritative.
+		// Seek past afterID, then load the next `limit` books straight from
+		// Pebble (GetBookByID bypasses memdb but returns identical data).
+		ids, err := p.mem().ListBookIDs()
 		if err != nil {
 			return nil, err
 		}
-		if afterID == "" {
-			if limit > 0 && len(all) > limit {
-				all = all[:limit]
-			}
-			return all, nil
-		}
-		for i, b := range all {
-			if b.ID == afterID {
-				rest := all[i+1:]
-				if limit > 0 && len(rest) > limit {
-					rest = rest[:limit]
+		start := 0
+		if afterID != "" {
+			// Default to len(ids): an unknown/stale cursor ends iteration
+			// rather than restarting from the top (which would loop forever).
+			start = len(ids)
+			for i, id := range ids {
+				if id == afterID {
+					start = i + 1
+					break
 				}
-				return rest, nil
 			}
 		}
-		return all, nil
+		if start >= len(ids) {
+			return nil, nil
+		}
+		end := len(ids)
+		if limit > 0 && start+limit < end {
+			end = start + limit
+		}
+		books := make([]Book, 0, end-start)
+		for _, id := range ids[start:end] {
+			b, err := p.GetBookByID(id)
+			if err != nil || b == nil {
+				continue
+			}
+			books = append(books, *b)
+		}
+		return books, nil
 	}
 
 	lower := []byte("book:0")
