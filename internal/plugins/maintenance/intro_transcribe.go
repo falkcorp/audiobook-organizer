@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.2.0
+// version: 3.3.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-06-26
 
@@ -144,7 +144,7 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 			_ = reporter.UpdateProgress(base+d, total,
 				fmt.Sprintf("Transcribing — %d/%d books", base+d, total))
 		}
-		done := p.processTranscribePage(ctx, store, log, books, onBook)
+		done := p.processTranscribePage(ctx, store, log, books, p.deps.RootDir(), onBook)
 		processed += done
 		log.Info("transcribe-book-intros: page complete",
 			"page_books", done, "cumulative_processed", processed, "total_books", total)
@@ -198,9 +198,10 @@ func (p *Plugin) processTranscribePage(
 	store database.Store,
 	log interface{ Info(string, ...any); Warn(string, ...any) },
 	books []database.Book,
+	rootDir string,
 	onBook transcribe.ProgressFunc,
 ) (processed int) {
-	cacheDir := whisperClipCacheDir()
+	cacheDir := wavCacheDir(rootDir)
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		log.Warn("transcribe: cannot create clip cache dir, running without cache", "dir", cacheDir, "err", err)
 		cacheDir = ""
@@ -401,13 +402,14 @@ func firstAudioFile(store database.Store, bookID string) (path, fileHash string,
 	return f.FilePath, cacheKey, nil
 }
 
-// whisperClipCacheDir returns the directory used to cache extracted 90s WAV clips.
-// Set WHISPER_CLIP_CACHE_DIR to override; defaults to /var/lib/audiobook-organizer/whisper-clips.
-func whisperClipCacheDir() string {
+// wavCacheDir returns the directory used to cache extracted 90s WAV clips.
+// Env WHISPER_CLIP_CACHE_DIR overrides. Default: {rootDir}/.wav-cache.
+// rootDir must not be empty; callers should pass p.deps.RootDir().
+func wavCacheDir(rootDir string) string {
 	if d := os.Getenv("WHISPER_CLIP_CACHE_DIR"); d != "" {
 		return d
 	}
-	return "/var/lib/audiobook-organizer/whisper-clips"
+	return filepath.Join(rootDir, ".wav-cache")
 }
 
 // cachedClipPath returns the cache file path for a given source file hash.
