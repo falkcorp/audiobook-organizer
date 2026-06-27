@@ -1,5 +1,5 @@
 # file: scripts/whisper_server.py
-# version: 2.1.0
+# version: 2.2.0
 # guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 # last-edited: 2026-06-27
 #
@@ -9,6 +9,7 @@
 #   "faster-whisper>=1.0.0",
 #   "fastapi>=0.111",
 #   "uvicorn[standard]>=0.29",
+#   "python-multipart>=0.0.9",
 # ]
 # ///
 #
