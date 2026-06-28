@@ -1,7 +1,7 @@
 <!-- file: CLAUDE.md -->
-<!-- version: 4.8.0 -->
+<!-- version: 4.9.0 -->
 <!-- guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f -->
-<!-- last-edited: 2026-06-12 -->
+<!-- last-edited: 2026-06-28 -->
 
 # CLAUDE.md
 
@@ -27,6 +27,13 @@ Key files:
 - If you catch yourself editing main, **STOP immediately**, move changes to a worktree, and reset main
 
 **Before any edit:** run `git worktree list` to confirm current location. If in the primary checkout (main), use EnterPlanMode (which enforces worktree creation) or manually create a worktree first.
+
+**After merging:** always remove the worktree immediately after the PR merges:
+```bash
+git worktree remove .worktrees/<branch>   # or the full path
+git worktree prune                         # cleans up any stale refs
+```
+Never leave merged worktrees sitting around — `git worktree list` should stay short.
 
 **Why:** This repo has production at stake. Direct commits to main conflict with concurrent work. This is non-negotiable — no exceptions.
 
