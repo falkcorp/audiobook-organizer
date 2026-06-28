@@ -447,14 +447,15 @@ func bookSummariesToBooks(summaries []database.BookSummary) []database.Book {
 // boolean is what lets the caller safely SKIP the post-filter re-pagination:
 // re-slicing an already-paginated page by the original offset is what made
 // "page 2" (any offset>0) return zero rows.
-func (svc *AudiobookService) summariesPushdown(limit, offset int, isPrimary *bool, sortBy string, sortAscending bool) (summaries []database.BookSummary, didPushdown bool, err error) {
+func (svc *AudiobookService) summariesPushdown(limit, offset int, isPrimary *bool, sortBy string, sortAscending, excludeQuarantined bool) (summaries []database.BookSummary, didPushdown bool, err error) {
 	type filteredSummaryStore interface {
 		GetAllBookSummariesFiltered(limit, offset int, f database.BookSummaryFilter) ([]database.BookSummary, error)
 	}
 	filter := database.BookSummaryFilter{
-		IsPrimaryVersion: isPrimary,
-		SortBy:           sortBy,
-		SortAscending:    sortAscending,
+		IsPrimaryVersion:   isPrimary,
+		SortBy:             sortBy,
+		SortAscending:      sortAscending,
+		ExcludeQuarantined: excludeQuarantined,
 	}
 	if fs, ok := svc.store.(filteredSummaryStore); ok {
 		s, e := fs.GetAllBookSummariesFiltered(limit, offset, filter)
@@ -704,11 +705,12 @@ func (svc *AudiobookService) buildBookSummaryFilterWithLookupCount(f ListFilters
 	}
 
 	bsf := database.BookSummaryFilter{
-		IsPrimaryVersion: f.IsPrimaryVersion,
-		LibraryState:     libraryState,
-		ReviewStatus:     reviewStatus,
-		RestrictToIDs:    restrictIDs,
-		Predicate:        predicate,
+		IsPrimaryVersion:   f.IsPrimaryVersion,
+		ExcludeQuarantined: f.ExcludeQuarantined,
+		LibraryState:       libraryState,
+		ReviewStatus:       reviewStatus,
+		RestrictToIDs:      restrictIDs,
+		Predicate:          predicate,
 	}
 	if f.SortBy == "title" {
 		bsf.SortBy = "title"

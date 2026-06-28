@@ -1,7 +1,7 @@
 // file: internal/server/audiobooks_helpers.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 439aa827-edea-481d-8918-ddacd2c140b7
-// last-edited: 2026-06-03
+// last-edited: 2026-06-28
 
 // Server-package helpers relocated out of audiobooks_handlers.go when the
 // audiobooks HTTP handlers were extracted into the handlers/audiobooks
@@ -41,11 +41,22 @@ import (
 // buildListResponse closure) and the startup cache warmer so both produce
 // identical results.
 func (s *Server) buildAudiobookListResponse(ctx context.Context, limit, offset int, search string, authorID, seriesID *int, filters ListFilters, showQuarantined bool) (gin.H, error) {
+	// Push quarantine exclusion DOWN into the indexed scan (and the count) so a
+	// page of N returns N non-quarantined books and totalCount agrees. Dropping
+	// quarantined rows AFTER pagination (as this used to) made a 500-page return
+	// fewer than 500 and made count != items.
+	if !showQuarantined {
+		filters.ExcludeQuarantined = true
+	}
+
 	books, err := s.audiobookService.GetAudiobooks(ctx, limit, offset, search, authorID, seriesID, filters)
 	if err != nil {
 		return nil, err
 	}
 
+	// Safety net for the degraded (memdb-down) read path, where the Pebble
+	// fallback does not honor ExcludeQuarantined. In the normal memdb path the
+	// scan already excluded these, so this drops nothing.
 	if !showQuarantined {
 		filtered := books[:0]
 		for _, b := range books {
@@ -78,7 +89,7 @@ func (s *Server) buildAudiobookListResponse(ctx context.Context, limit, offset i
 	}
 
 	totalCount := len(enriched)
-	hasFilters := filters.IsPrimaryVersion != nil || filters.LibraryState != "" || filters.Tag != "" || len(filters.Tags) > 0
+	hasFilters := filters.IsPrimaryVersion != nil || filters.ExcludeQuarantined || filters.LibraryState != "" || filters.Tag != "" || len(filters.Tags) > 0
 	if search == "" && authorID == nil && seriesID == nil {
 		if hasFilters {
 			if tc, err := s.audiobookService.CountAudiobooksFiltered(ctx, filters); err == nil {

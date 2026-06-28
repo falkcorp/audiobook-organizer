@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.98.0
+// version: 1.99.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-06-26
+// last-edited: 2026-06-28
 
 package database
 
@@ -1619,6 +1619,9 @@ func (p *PebbleStore) GetAllBookSummariesFiltered(limit, offset int, f BookSumma
 			if eff != *f.IsPrimaryVersion {
 				continue
 			}
+		}
+		if f.ExcludeQuarantined && s.QuarantinedAt != nil {
+			continue
 		}
 		filtered = append(filtered, s)
 	}

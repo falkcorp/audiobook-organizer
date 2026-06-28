@@ -1,6 +1,7 @@
 // file: internal/database/memdb_summaries.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000008
+// last-edited: 2026-06-28
 
 package database
 
@@ -29,6 +30,13 @@ type BookSummaryFilter struct {
 	// SortAscending controls iteration direction when SortBy is set.
 	// True (or zero value with SortBy=="title") = A→Z; false = Z→A.
 	SortAscending bool
+
+	// ExcludeQuarantined, when true, drops rows whose QuarantinedAt is set.
+	// Applied in-loop BEFORE offset/limit so pagination counts the post-
+	// quarantine set — a page of N returns N non-quarantined books, and the
+	// matching count (CountBookSummaries) agrees. The HTTP layer sets this from
+	// the inverse of ?show_quarantined.
+	ExcludeQuarantined bool
 
 	// LibraryState, if non-empty, restricts to books with this LibraryState
 	// (case-sensitive equality, e.g. "organized" / "imported" / "suspicious").
@@ -166,6 +174,9 @@ func (m *MemStore) GetBookSummaries(limit, offset int, f BookSummaryFilter) ([]B
 		// In-loop filter pushdowns. Each predicate is O(1) per row; the
 		// loop body short-circuits on the first miss, so adding filters
 		// can only reduce work, never add it.
+		if f.ExcludeQuarantined && b.QuarantinedAt != nil {
+			continue
+		}
 		if f.LibraryState != "" {
 			ls := ""
 			if b.LibraryState != nil {
@@ -296,6 +307,9 @@ func (m *MemStore) CountBookSummaries(f BookSummaryFilter) (int, error) {
 			if isDel != requireDeleted {
 				continue
 			}
+		}
+		if f.ExcludeQuarantined && b.QuarantinedAt != nil {
+			continue
 		}
 		if f.LibraryState != "" {
 			ls := ""

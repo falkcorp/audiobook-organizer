@@ -92,12 +92,12 @@ func (svc *AudiobookService) GetAudiobooks(ctx context.Context, limit int, offse
 			if f.IsPrimaryVersion != nil {
 				primaryKey = strconv.FormatBool(*f.IsPrimaryVersion)
 			}
-			cacheKey := fmt.Sprintf("all:%d:%d:p=%s:sb=%s:asc=%v",
-				limit, offset, primaryKey, f.SortBy, sortAsc)
+			cacheKey := fmt.Sprintf("all:%d:%d:p=%s:sb=%s:asc=%v:noq=%v",
+				limit, offset, primaryKey, f.SortBy, sortAsc, f.ExcludeQuarantined)
 			if cached, ok := svc.listCache.Get(cacheKey); ok {
 				return cached, nil
 			}
-			summaries, didPushdown, sErr := svc.summariesPushdown(storeLimit, storeOffset, f.IsPrimaryVersion, f.SortBy, sortAsc)
+			summaries, didPushdown, sErr := svc.summariesPushdown(storeLimit, storeOffset, f.IsPrimaryVersion, f.SortBy, sortAsc, f.ExcludeQuarantined)
 			if sErr == nil && summaries != nil {
 				books = bookSummariesToBooks(summaries)
 				svc.listCache.Set(cacheKey, books)
