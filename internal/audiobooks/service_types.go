@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_types.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a3f9b2c1-d4e5-6f70-8a9b-0c1d2e3f4a5b
-// last-edited: 2026-06-23
+// last-edited: 2026-06-28
 
 package audiobooks
 
@@ -77,9 +77,14 @@ type FieldFilter struct {
 // ListFilters holds optional filters for listing audiobooks.
 type ListFilters struct {
 	IsPrimaryVersion *bool
-	LibraryState     string
-	Tag              string
-	Tags             []string
+	// ExcludeQuarantined drops quarantined books during the indexed scan so
+	// pagination counts the post-quarantine set (a 500-page returns 500
+	// non-quarantined books, and the total count matches). Set by the HTTP
+	// layer from the inverse of ?show_quarantined.
+	ExcludeQuarantined bool
+	LibraryState       string
+	Tag                string
+	Tags               []string
 	SortBy           string        // column sort key
 	SortOrder        string        // "asc" or "desc"
 	FieldFilters     []FieldFilter // advanced field-specific filters (book-global)

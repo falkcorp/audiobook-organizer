@@ -1,5 +1,5 @@
 // file: internal/audiobooks/list_pagination_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c1e9b42-3a6d-4f01-9d8e-2b5c6a7e1f04
 // last-edited: 2026-06-28
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/stretchr/testify/require"
@@ -122,4 +123,70 @@ func TestGetAudiobooks_LargePageSize(t *testing.T) {
 	require.Len(t, second, 500, "page size 500 at offset 500 must return the next 500 books")
 	require.Equal(t, want[500], second[0].Title)
 	require.Equal(t, want[999], second[499].Title)
+}
+
+// TestGetAudiobooks_ExcludeQuarantined verifies quarantine exclusion is pushed
+// into the scan: a page of N returns N NON-quarantined books (not N-minus-the-
+// quarantined-in-window), and the count matches the items. Every 3rd book is
+// quarantined here, so without pushdown a 30-page would return ~20.
+func TestGetAudiobooks_ExcludeQuarantined(t *testing.T) {
+	const total = 90
+	ps, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ps.Close() })
+	ps.WaitForWarmup()
+
+	primary := true
+	quarantined := 0
+	for i := 0; i < total; i++ {
+		b := &database.Book{
+			Title:            fmt.Sprintf("Book %04d", i),
+			IsPrimaryVersion: &primary,
+		}
+		if i%3 == 0 {
+			now := time.Now()
+			reason := "test"
+			b.QuarantinedAt = &now
+			b.QuarantineReason = &reason
+			quarantined++
+		}
+		_, err := ps.CreateBook(b)
+		require.NoError(t, err)
+	}
+	svc := NewAudiobookService(ps)
+	ctx := context.Background()
+	wantVisible := total - quarantined // 60
+
+	filt := ListFilters{
+		IsPrimaryVersion:   &primary,
+		SortBy:             "title",
+		SortOrder:          "asc",
+		ExcludeQuarantined: true,
+	}
+
+	// Page of 30 must be 30 non-quarantined books — not short-changed by the
+	// quarantined rows that fall in the [0,30) title window.
+	page, err := svc.GetAudiobooks(ctx, 30, 0, "", nil, nil, filt)
+	require.NoError(t, err)
+	require.Len(t, page, 30, "page must be filled with non-quarantined books")
+	for _, b := range page {
+		require.Nil(t, b.QuarantinedAt, "no quarantined book may appear")
+	}
+
+	// Count must agree with the visible total (count != items was the bug).
+	count, err := svc.CountAudiobooksFiltered(ctx, filt)
+	require.NoError(t, err)
+	require.Equal(t, wantVisible, count, "count must exclude quarantined to match items")
+
+	// Paging through must surface exactly wantVisible books, all unique.
+	seen := map[string]struct{}{}
+	for off := 0; off < wantVisible; off += 30 {
+		pg, err := svc.GetAudiobooks(ctx, 30, off, "", nil, nil, filt)
+		require.NoError(t, err)
+		for _, b := range pg {
+			require.Nil(t, b.QuarantinedAt)
+			seen[b.ID] = struct{}{}
+		}
+	}
+	require.Len(t, seen, wantVisible, "paging must surface every non-quarantined book exactly once")
 }
