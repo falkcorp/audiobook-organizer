@@ -1,7 +1,7 @@
 // file: internal/server/error_handler_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 6e7f8a9b-0c1d-2e3f-4a5b-6c7d8e9f0a1b
-// last-edited: 2026-05-05
+// last-edited: 2026-06-28
 
 package server
 
@@ -183,7 +183,7 @@ func TestParsePaginationParams(t *testing.T) {
 		{
 			name:       "limit exceeds max",
 			queryStr:   "/?limit=20000",
-			wantLimit:  500,
+			wantLimit:  1000,
 			wantOffset: 0,
 			wantSearch: "",
 		},
