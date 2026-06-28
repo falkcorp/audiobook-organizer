@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/UnifiedDedupTab.tsx
-// version: 1.6.0
+// version: 1.7.0
 // guid: c8b9d0e1-f2a3-4567-bcde-cb8901234567
-// last-edited: 2026-06-19
+// last-edited: 2026-06-28
 
 // UnifiedDedupTab is the T017 single surface that replaces the separate Books /
 // Advanced-Scan / Acoustic tabs. It shows a paginated candidate table filtered
@@ -35,6 +35,7 @@ import {
   DialogContent,
   DialogContentText,
   DialogTitle,
+  Divider,
   FormControlLabel,
   IconButton,
   Link,
@@ -53,6 +54,7 @@ import {
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import ClearIcon from '@mui/icons-material/Clear';
+import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import * as api from '../../services/api';
 import type { Book, DedupCandidate, DedupBand, DedupStats } from '../../services/api';
 import { useOperationsStore } from '../../stores/useOperationsStore';
@@ -103,6 +105,27 @@ function qualityChip(score: number) {
   if (score >= 3)
     return <Chip label="Partial metadata" size="small" color="warning" variant="outlined" />;
   return <Chip label="Poor metadata" size="small" color="error" variant="outlined" />;
+}
+
+const DEDUP_SHORTCUTS = [
+  { keys: 'j / k', action: 'Move to next / previous row' },
+  { keys: 'm', action: 'Merge the focused candidate' },
+  { keys: 'd', action: 'Dismiss the focused candidate' },
+  { keys: 's', action: 'Select / deselect the focused row' },
+  { keys: 'Enter', action: 'Open the compare drawer for the focused row' },
+  { keys: 'Esc', action: 'Close the compare drawer' },
+  { keys: 'Shift+A', action: 'Select all on the current page' },
+  { keys: '?', action: 'Toggle this shortcut help' },
+];
+
+function isKeyboardShortcutSuppressed() {
+  const active = document.activeElement;
+  if (!active) return false;
+  const tag = active.tagName.toLowerCase();
+  if (tag === 'input' || tag === 'textarea' || tag === 'select' || tag === 'dialog') return true;
+  const activeElement = active as HTMLElement;
+  if (activeElement.isContentEditable) return true;
+  return Boolean(activeElement.closest('[role="dialog"]'));
 }
 
 interface BookCardOpts {
@@ -264,6 +287,9 @@ export function UnifiedDedupTab({ hidden }: UnifiedDedupTabProps) {
 
   // --- selection state ---
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [focusedRowIndex, setFocusedRowIndex] = useState(0);
+  const rowRefs = useRef<Array<HTMLTableRowElement | null>>([]);
+  const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
 
   // --- drawer state ---
   const [drawerCandidateId, setDrawerCandidateId] = useState<number | null>(null);
@@ -424,6 +450,20 @@ export function UnifiedDedupTab({ hidden }: UnifiedDedupTabProps) {
 
   const bandCounts = useMemo(() => deriveBandCounts(stats), [stats]);
 
+  useEffect(() => {
+    setFocusedRowIndex((idx) => {
+      if (filteredCandidates.length === 0) return 0;
+      return Math.min(idx, filteredCandidates.length - 1);
+    });
+  }, [filteredCandidates.length]);
+
+  useEffect(() => {
+    rowRefs.current[focusedRowIndex]?.scrollIntoView?.({
+      block: 'nearest',
+      inline: 'nearest',
+    });
+  }, [focusedRowIndex, filteredCandidates.length]);
+
   // --- selection helpers ---
   const toggleSelect = (id: number) => {
     setSelected((prev) => {
@@ -541,6 +581,97 @@ export function UnifiedDedupTab({ hidden }: UnifiedDedupTabProps) {
       setBulkBusy(false);
     }
   };
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === '?' && shortcutHelpOpen) {
+        event.preventDefault();
+        setShortcutHelpOpen(false);
+        return;
+      }
+
+      if (hidden || isKeyboardShortcutSuppressed()) return;
+
+      if (event.key === '?') {
+        event.preventDefault();
+        setShortcutHelpOpen((open) => !open);
+        return;
+      }
+
+      if (event.key === 'Escape') {
+        if (drawerCandidateId !== null) {
+          event.preventDefault();
+          setDrawerCandidateId(null);
+        }
+        return;
+      }
+
+      if (filteredCandidates.length === 0) return;
+      const focusedCandidate = filteredCandidates[focusedRowIndex];
+      if (!focusedCandidate) return;
+
+      if (event.key === 'j') {
+        event.preventDefault();
+        setFocusedRowIndex((idx) => Math.min(idx + 1, filteredCandidates.length - 1));
+        return;
+      }
+
+      if (event.key === 'k') {
+        event.preventDefault();
+        setFocusedRowIndex((idx) => Math.max(idx - 1, 0));
+        return;
+      }
+
+      if (event.key === 's') {
+        event.preventDefault();
+        toggleSelect(focusedCandidate.id);
+        lastClickedIdxRef.current = focusedRowIndex;
+        return;
+      }
+
+      if (event.key === 'A' && event.shiftKey) {
+        event.preventDefault();
+        selectAll();
+        return;
+      }
+
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        setDrawerCandidateId(focusedCandidate.id);
+        return;
+      }
+
+      if (event.key === 'd' && focusedCandidate.status === 'pending') {
+        event.preventDefault();
+        void handleDismissOne(focusedCandidate.id);
+        return;
+      }
+
+      if (event.key === 'm' && focusedCandidate.status === 'pending') {
+        event.preventDefault();
+        const qA = metadataQuality(focusedCandidate.book_a);
+        const qB = metadataQuality(focusedCandidate.book_b);
+        const keepId = qB > qA ? focusedCandidate.entity_b_id : focusedCandidate.entity_a_id;
+        const label = keepId === focusedCandidate.entity_b_id ? 'B' : 'A';
+        void handleKeep(focusedCandidate.id, keepId, label);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [
+    drawerCandidateId,
+    filteredCandidates,
+    focusedRowIndex,
+    handleDismissOne,
+    handleKeep,
+    hidden,
+    selectAll,
+    shortcutHelpOpen,
+    toggleSelect,
+  ]);
 
   const handleMergeAllFiltered = async () => {
     setBulkBusy(true);
@@ -870,12 +1001,18 @@ export function UnifiedDedupTab({ hidden }: UnifiedDedupTabProps) {
                   const recommendA = qA > qB;
                   const recommendB = qB > qA;
                   const isSelected = selected.has(c.id);
+                  const isFocused = idx === focusedRowIndex;
                   return (
                     <TableRow
                       key={c.id}
+                      ref={(node) => {
+                        rowRefs.current[idx] = node;
+                      }}
                       hover
                       selected={isSelected}
                       onClick={(e) => handleRowClick(e, c.id, idx)}
+                      data-testid={`dedup-candidate-row-${c.id}`}
+                      aria-current={isFocused ? 'true' : undefined}
                       sx={{
                         opacity: busy ? 0.7 : 1,
                         cursor: 'pointer',
@@ -885,6 +1022,9 @@ export function UnifiedDedupTab({ hidden }: UnifiedDedupTabProps) {
                           : idx % 2 === 1
                             ? 'action.hover'
                             : 'transparent',
+                        outline: isFocused ? 2 : 0,
+                        outlineColor: 'primary.main',
+                        outlineOffset: -2,
                       }}
                     >
                       {showMultiSelect && (
@@ -1042,6 +1182,44 @@ export function UnifiedDedupTab({ hidden }: UnifiedDedupTabProps) {
           loadStats();
         }}
       />
+
+      {/* Dedup keyboard shortcut help */}
+      <Dialog
+        open={shortcutHelpOpen}
+        onClose={() => setShortcutHelpOpen(false)}
+        maxWidth="xs"
+        fullWidth
+      >
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <HelpOutlineIcon fontSize="small" />
+          <Box sx={{ flex: 1 }}>Dedup Keyboard Shortcuts</Box>
+          <IconButton
+            size="small"
+            onClick={() => setShortcutHelpOpen(false)}
+            aria-label="close shortcuts help"
+          >
+            <ClearIcon fontSize="small" />
+          </IconButton>
+        </DialogTitle>
+        <DialogContent dividers>
+          <Stack spacing={1}>
+            {DEDUP_SHORTCUTS.map((shortcut, idx) => (
+              <Box key={shortcut.keys}>
+                {idx > 0 && <Divider sx={{ mb: 1 }} />}
+                <Stack direction="row" spacing={2} alignItems="center" justifyContent="space-between">
+                  <Typography variant="body2">{shortcut.action}</Typography>
+                  <Chip
+                    label={shortcut.keys}
+                    size="small"
+                    variant="outlined"
+                    sx={{ fontFamily: 'monospace', flexShrink: 0 }}
+                  />
+                </Stack>
+              </Box>
+            ))}
+          </Stack>
+        </DialogContent>
+      </Dialog>
 
       {/* Force Full Rescan modal — pick which detection layer to re-run */}
       <Dialog open={rescanOpen} onClose={() => setRescanOpen(false)} maxWidth="sm" fullWidth>
