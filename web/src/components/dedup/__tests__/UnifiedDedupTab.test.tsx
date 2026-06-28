@@ -1,14 +1,14 @@
 // file: web/src/components/dedup/__tests__/UnifiedDedupTab.test.tsx
-// version: 1.2.1
+// version: 1.3.0
 // guid: d4e5f6a7-b8c9-0123-defa-444567890123
-// last-edited: 2026-06-19
+// last-edited: 2026-06-28
 
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import { UnifiedDedupTab } from '../UnifiedDedupTab';
 import * as api from '../../../services/api';
-import type { Book } from '../../../services/api';
+import type { Book, DedupBookDetail, DedupCandidate } from '../../../services/api';
 
 // Mock the full api module.
 vi.mock('../../../services/api', () => ({
@@ -17,6 +17,9 @@ vi.mock('../../../services/api', () => ({
   mergeDedupCandidate: vi.fn(),
   dismissDedupCandidate: vi.fn(),
   bulkMergeDedupCandidates: vi.fn(),
+  getDedupCandidateBreakdown: vi.fn(),
+  compareAcoustID: vi.fn(),
+  getConfig: vi.fn(),
   rescoreDedupCandidates: vi.fn(),
   triggerDedupScan: vi.fn(),
 }));
@@ -34,7 +37,7 @@ vi.mock('../../../stores/useOperationsStore', () => ({
 const bookATitle = 'Dune (FLAC rip)';
 const bookBTitle = 'Dune (MP3 rip)';
 
-const mockCandidate = {
+const mockCandidate: DedupCandidate = {
   id: 1,
   entity_type: 'book' as const,
   entity_a_id: '01ABCDEFGHIJKLMNOPQRSTUV01',
@@ -60,12 +63,65 @@ const mockCandidate = {
   } as Book,
 };
 
+const secondMockCandidate: DedupCandidate = {
+  ...mockCandidate,
+  id: 2,
+  entity_a_id: '01ABCDEFGHIJKLMNOPQRSTUV03',
+  entity_b_id: '01ABCDEFGHIJKLMNOPQRSTUV04',
+  score: 96.2,
+  book_a: {
+    id: '01ABCDEFGHIJKLMNOPQRSTUV03',
+    title: 'Neuromancer (Archive)',
+    author_name: 'William Gibson',
+    file_path: '/audiobooks/neuromancer-archive.m4b',
+  } as Book,
+  book_b: {
+    id: '01ABCDEFGHIJKLMNOPQRSTUV04',
+    title: 'Neuromancer (Tagged)',
+    author_name: 'William Gibson',
+    file_path: '/audiobooks/neuromancer-tagged.m4b',
+    asin: 'B000000001',
+  } as Book,
+};
+
 function renderInRouter() {
   return render(
     <MemoryRouter>
       <UnifiedDedupTab />
     </MemoryRouter>
   );
+}
+
+function mockCandidatesResponse(candidates: DedupCandidate[]) {
+  (globalThis.fetch as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
+    if (url.includes('/dedup/stats')) {
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ data: { stats: [] } }),
+      });
+    }
+    if (url.includes('/dedup/candidates')) {
+      return Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            data: { candidates, total: candidates.length },
+          }),
+      });
+    }
+    return Promise.resolve({ ok: false, json: () => Promise.resolve({}) });
+  });
+}
+
+function toDedupBookDetail(book: Book): DedupBookDetail {
+  return {
+    id: book.id,
+    title: book.title ?? '',
+    author_name: book.author_name,
+    file_path: book.file_path,
+    cover_url: book.cover_url,
+    files: [],
+  };
 }
 
 describe('UnifiedDedupTab', () => {
@@ -80,6 +136,22 @@ describe('UnifiedDedupTab', () => {
       total: 0,
     });
     vi.mocked(api.getDedupStats).mockResolvedValue({ stats: [] });
+    vi.mocked(api.getConfig).mockResolvedValue({
+      root_dir: '/audiobooks',
+    } as Awaited<ReturnType<typeof api.getConfig>>);
+    vi.mocked(api.mergeDedupCandidate).mockResolvedValue();
+    vi.mocked(api.dismissDedupCandidate).mockResolvedValue();
+    vi.mocked(api.getDedupCandidateBreakdown).mockResolvedValue({
+      candidate: mockCandidate,
+      book_a: toDedupBookDetail(mockCandidate.book_a as Book),
+      book_b: toDedupBookDetail(mockCandidate.book_b as Book),
+    });
+    vi.mocked(api.compareAcoustID).mockResolvedValue({
+      book_a: mockCandidate.book_a as Book,
+      book_b: mockCandidate.book_b as Book,
+      overall_score: 0,
+      segment_scores: [],
+    });
 
     // Mock the global fetch used inside the component for AbortController-aware calls.
     globalThis.fetch = vi.fn().mockImplementation((url: string) => {
@@ -207,5 +279,82 @@ describe('UnifiedDedupTab', () => {
     renderInRouter();
     fireEvent.click(screen.getByTestId('rescore-btn'));
     expect(screen.getByText(/Rescore dedup candidates/i)).toBeInTheDocument();
+  });
+
+  it('uses keyboard navigation to merge and dismiss the focused candidate', async () => {
+    mockCandidatesResponse([mockCandidate, secondMockCandidate]);
+
+    renderInRouter();
+
+    await waitFor(() => {
+      expect(screen.getByText(bookATitle)).toBeInTheDocument();
+      expect(screen.getByText('Neuromancer (Archive)')).toBeInTheDocument();
+    });
+
+    fireEvent.keyDown(window, { key: 'j' });
+    fireEvent.keyDown(window, { key: 'm' });
+
+    await waitFor(() => {
+      expect(api.mergeDedupCandidate).toHaveBeenCalledWith(2, secondMockCandidate.entity_b_id);
+    });
+
+    fireEvent.keyDown(window, { key: 'k' });
+    fireEvent.keyDown(window, { key: 'd' });
+
+    await waitFor(() => {
+      expect(api.dismissDedupCandidate).toHaveBeenCalledWith(1);
+    });
+  });
+
+  it('supports select, select all, compare drawer, escape, and help shortcuts', async () => {
+    mockCandidatesResponse([mockCandidate, secondMockCandidate]);
+
+    renderInRouter();
+
+    await waitFor(() => {
+      expect(screen.getByText(bookATitle)).toBeInTheDocument();
+    });
+
+    fireEvent.keyDown(window, { key: 's' });
+    await waitFor(() => {
+      expect(screen.getByTestId('bulk-action-bar')).toBeInTheDocument();
+    });
+
+    fireEvent.keyDown(window, { key: 'A', shiftKey: true });
+    expect(screen.getByText(/2 selected/i)).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: 'Enter' });
+    await waitFor(() => {
+      expect(screen.getByTestId('candidate-compare-drawer')).toBeInTheDocument();
+    });
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => {
+      expect(screen.queryByText(/Candidate #1/i)).not.toBeInTheDocument();
+    });
+
+    fireEvent.keyDown(window, { key: '?' });
+    expect(screen.getByText('Dedup Keyboard Shortcuts')).toBeInTheDocument();
+    expect(screen.getByText('Merge the focused candidate')).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: '?' });
+    await waitFor(() => {
+      expect(screen.queryByText('Dedup Keyboard Shortcuts')).not.toBeInTheDocument();
+    });
+  });
+
+  it('does not run row shortcuts while typing in the search field', async () => {
+    mockCandidatesResponse([mockCandidate]);
+
+    renderInRouter();
+
+    const search = await screen.findByPlaceholderText(/Search by book ID/i);
+    search.focus();
+    expect(search).toHaveFocus();
+    fireEvent.keyDown(window, { key: 'd' });
+    fireEvent.keyDown(window, { key: '?' });
+
+    expect(api.dismissDedupCandidate).not.toHaveBeenCalled();
+    expect(screen.queryByText('Dedup Keyboard Shortcuts')).not.toBeInTheDocument();
   });
 });
