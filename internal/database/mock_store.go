@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.66.0
+// version: 1.67.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-06-24
+// last-edited: 2026-06-28
 
 package database
 
@@ -51,14 +51,15 @@ type MockStore struct {
 	RevertBookToVersionFunc         func(id string, ts time.Time) (*Book, error)
 	PruneBookVersionsFunc           func(id string, keepCount int) (int, error)
 	GetDuplicateBooksFunc           func() ([][]Book, error)
+	GetDuplicateBooksByMetadataFunc func(threshold float64) ([][]Book, error)
 	CreateBookFunc                  func(book *Book) (*Book, error)
 	UpdateBookFunc                  func(id string, book *Book) (*Book, error)
 	UpdateBookRatingError           error
 	DeleteBookFunc                  func(id string) error
 	SearchBooksFunc                 func(query string, limit, offset int) ([]Book, error)
-	CountPrimaryBooksFunc func() (int, error)
-	CountAllBooksFunc     func() (int, error)
-	GetDistinctGenresFunc func() ([]string, error)
+	CountPrimaryBooksFunc           func() (int, error)
+	CountAllBooksFunc               func() (int, error)
+	GetDistinctGenresFunc           func() ([]string, error)
 	GetDistinctLanguagesFunc        func() ([]string, error)
 	CountFilesFunc                  func() (int, error)
 	CountAuthorsFunc                func() (int, error)
@@ -753,6 +754,9 @@ func (m *MockStore) GetFolderDuplicates() ([][]Book, error) {
 }
 
 func (m *MockStore) GetDuplicateBooksByMetadata(threshold float64) ([][]Book, error) {
+	if m.GetDuplicateBooksByMetadataFunc != nil {
+		return m.GetDuplicateBooksByMetadataFunc(threshold)
+	}
 	return nil, nil
 }
 
