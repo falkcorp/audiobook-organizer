@@ -1,23 +1,30 @@
 // file: web/src/pages/DedupLabels.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7e3a1c92-4b60-4d85-9f21-6a5e0c9d3f58
-// last-edited: 2026-06-19
+// last-edited: 2026-06-28
 
 // DedupLabels — the C6 gold-dataset review page for the dedup feedback loop.
 // Lists labeled dedup examples (the dedup:label: keyspace), filterable by label
-// and label_source, with one-click human override. This is where the user reviews
-// the gold dataset that the classifier will train and validate on.
+// / label_source / band, with one-click human override. This is where the user
+// reviews the gold dataset that the classifier will train and validate on.
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Box, Typography, Paper, Table, TableBody, TableCell, TableContainer, TableHead,
   TableRow, Chip, Select, MenuItem, FormControl, InputLabel, Button, Stack,
-  CircularProgress, Alert, Tooltip, Link as MuiLink,
+  CircularProgress, Alert, Tooltip, Link as MuiLink, TextField,
 } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
 import { LabelToggle } from '../components/dedup/LabelToggle';
 import { PathVarsLegend } from '../components/common/PathVarsLegend';
+import {
+  ColumnPicker,
+  ResizableHeaderCell,
+  type ColumnDef,
+  useConfigurableTable,
+} from '../components/common/ConfigurableTable';
 import { formatPath, usePathVars, type PathVar } from '../utils/formatPath';
+import { apiFetch } from '../utils/apiFetch';
 
 const API_BASE = '/api/v1';
 
@@ -106,13 +113,108 @@ export default function DedupLabels() {
   const [stats, setStats] = useState<LabelStats | null>(null);
   const [labelFilter, setLabelFilter] = useState('');
   const [sourceFilter, setSourceFilter] = useState('');
+  const [bandFilter, setBandFilter] = useState('');
   const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const openBook = useCallback((bookId: string) => navigate(`/library/${bookId}`), [navigate]);
+
+  const columns = useMemo<ColumnDef<LabeledExample>[]>(() => [
+    {
+      key: 'book_a',
+      label: 'Book A',
+      defaultWidth: 360,
+      sortable: false,
+      render: (r) => (
+        <BookCell
+          bookId={r.entity_a_id}
+          title={r.a?.title}
+          path={r.a?.primary_path}
+          pathVars={pathVars}
+          onOpen={openBook}
+        />
+      ),
+    },
+    {
+      key: 'book_b',
+      label: 'Book B',
+      defaultWidth: 360,
+      sortable: false,
+      render: (r) => (
+        <BookCell
+          bookId={r.entity_b_id}
+          title={r.b?.title}
+          path={r.b?.primary_path}
+          pathVars={pathVars}
+          onOpen={openBook}
+        />
+      ),
+    },
+    {
+      key: 'layer',
+      label: 'Layer',
+      defaultWidth: 120,
+      sortValue: (r) => r.layer,
+      render: (r) => r.layer,
+    },
+    {
+      key: 'band',
+      label: 'Band',
+      defaultWidth: 120,
+      sortValue: (r) => r.band || '',
+      render: (r) => r.band || '—',
+    },
+    {
+      key: 'source',
+      label: 'Source',
+      defaultWidth: 150,
+      sortValue: (r) => r.label_source,
+      render: (r) => (
+        <Chip size="small" variant="outlined" color={sourceColor(r.label_source)} label={r.label_source} />
+      ),
+    },
+    {
+      key: 'reason',
+      label: 'Reason',
+      defaultWidth: 220,
+      sortValue: (r) => r.label_reason || '',
+      render: (r) => (
+        <Typography variant="caption" color="text.secondary">{r.label_reason}</Typography>
+      ),
+    },
+    {
+      key: 'label',
+      label: 'Label',
+      align: 'center',
+      defaultWidth: 220,
+      sortValue: (r) => r.label,
+      render: (r) => (
+        <LabelToggle value={r.label} onChange={(label) => void override(r.candidate_id, label)} />
+      ),
+    },
+  ], [openBook, pathVars]);
+
+  const {
+    visibleColumns,
+    allColumns,
+    sortField,
+    sortDir,
+    columnWidths,
+    handleSort,
+    toggleColumn,
+    isColumnVisible,
+    startResize,
+    sortRows,
+    resetColumns,
+  } = useConfigurableTable<LabeledExample>({
+    storageKey: 'dedup-labels',
+    columns,
+    defaultSortField: 'label',
+  });
 
   const loadStats = useCallback(async () => {
     try {
-      const r = await fetch(`${API_BASE}/dedup/labels/stats`);
+      const r = await apiFetch(`${API_BASE}/dedup/labels/stats`);
       if (r.ok) setStats((await r.json()).data);
     } catch {
       /* stats are best-effort */
@@ -126,7 +228,8 @@ export default function DedupLabels() {
       const params = new URLSearchParams({ limit: String(PAGE), offset: String(offset) });
       if (labelFilter) params.set('label', labelFilter);
       if (sourceFilter) params.set('label_source', sourceFilter);
-      const r = await fetch(`${API_BASE}/dedup/labels?${params}`);
+      if (bandFilter) params.set('band', bandFilter);
+      const r = await apiFetch(`${API_BASE}/dedup/labels?${params}`);
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const d = (await r.json()).data;
       setRows(d.labels || []);
@@ -136,29 +239,29 @@ export default function DedupLabels() {
     } finally {
       setLoading(false);
     }
-  }, [labelFilter, sourceFilter, offset]);
+  }, [labelFilter, sourceFilter, bandFilter, offset]);
 
   useEffect(() => { void loadStats(); }, [loadStats]);
   useEffect(() => { void load(); }, [load]);
 
-  // Opens the book detail page. Track C will upgrade this to the
-  // CandidateCompareDrawer for in-context side-by-side review.
-  const openBook = (bookId: string) => navigate(`/library/${bookId}`);
-
-  const override = async (candidateId: number, label: string) => {
+  async function override(candidateId: number, label: string) {
     try {
-      const r = await fetch(`${API_BASE}/dedup/labels/${candidateId}/override`, {
+      const r = await apiFetch(`${API_BASE}/dedup/labels/${candidateId}/override`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ label, reason: 'ui_override' }),
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      await load();
+      const d = (await r.json()).data;
+      setRows((current) => current.map((row) => (
+        row.candidate_id === candidateId
+          ? { ...row, label: d.label || label, label_source: d.label_source || 'human', label_reason: 'ui_override' }
+          : row
+      )));
       await loadStats();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Override failed');
     }
-  };
+  }
 
   return (
     <Box sx={{ p: 3 }}>
@@ -182,8 +285,14 @@ export default function DedupLabels() {
 
       <Stack direction="row" spacing={2} sx={{ mb: 2 }}>
         <FormControl size="small" sx={{ minWidth: 160 }}>
-          <InputLabel>Label</InputLabel>
-          <Select label="Label" value={labelFilter} onChange={(e) => { setOffset(0); setLabelFilter(e.target.value); }}>
+          <InputLabel id="dedup-label-filter-label">Label</InputLabel>
+          <Select
+            id="dedup-label-filter"
+            labelId="dedup-label-filter-label"
+            label="Label"
+            value={labelFilter}
+            onChange={(e) => { setOffset(0); setLabelFilter(e.target.value); }}
+          >
             <MenuItem value="">All</MenuItem>
             <MenuItem value="true_dup">true_dup</MenuItem>
             <MenuItem value="not_dup">not_dup</MenuItem>
@@ -191,8 +300,14 @@ export default function DedupLabels() {
           </Select>
         </FormControl>
         <FormControl size="small" sx={{ minWidth: 180 }}>
-          <InputLabel>Source</InputLabel>
-          <Select label="Source" value={sourceFilter} onChange={(e) => { setOffset(0); setSourceFilter(e.target.value); }}>
+          <InputLabel id="dedup-source-filter-label">Source</InputLabel>
+          <Select
+            id="dedup-source-filter"
+            labelId="dedup-source-filter-label"
+            label="Source"
+            value={sourceFilter}
+            onChange={(e) => { setOffset(0); setSourceFilter(e.target.value); }}
+          >
             <MenuItem value="">All</MenuItem>
             <MenuItem value="human">human (gold)</MenuItem>
             <MenuItem value="auto_high_conf">auto_high_conf</MenuItem>
@@ -200,6 +315,21 @@ export default function DedupLabels() {
             <MenuItem value="llm_judge">llm_judge</MenuItem>
           </Select>
         </FormControl>
+        <TextField
+          size="small"
+          label="Band"
+          value={bandFilter}
+          onChange={(e) => { setOffset(0); setBandFilter(e.target.value); }}
+          sx={{ minWidth: 180 }}
+        />
+        <Box sx={{ display: 'flex', alignItems: 'center', ml: 'auto' }}>
+          <ColumnPicker
+            columns={allColumns.map(({ key, label }) => ({ key, label }))}
+            isVisible={isColumnVisible}
+            onToggle={toggleColumn}
+            onReset={resetColumns}
+          />
+        </Box>
       </Stack>
 
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
@@ -208,33 +338,38 @@ export default function DedupLabels() {
         <Table size="small" stickyHeader>
           <TableHead>
             <TableRow>
-              <TableCell>Book A</TableCell>
-              <TableCell>Book B</TableCell>
-              <TableCell>Layer</TableCell>
-              <TableCell>Source</TableCell>
-              <TableCell>Reason</TableCell>
-              <TableCell align="center">Label</TableCell>
+              {visibleColumns.map((column) => (
+                <ResizableHeaderCell
+                  key={column.key}
+                  columnKey={column.key}
+                  label={column.label}
+                  width={columnWidths[column.key] ?? column.defaultWidth ?? 150}
+                  align={column.align}
+                  sortable={column.sortable !== false}
+                  sortActive={sortField === column.key}
+                  sortDirection={sortDir}
+                  onSort={() => handleSort(column.key)}
+                  onStartResize={startResize}
+                />
+              ))}
             </TableRow>
           </TableHead>
           <TableBody>
             {loading ? (
-              <TableRow><TableCell colSpan={6} align="center"><CircularProgress size={24} sx={{ my: 2 }} /></TableCell></TableRow>
+              <TableRow><TableCell colSpan={visibleColumns.length} align="center"><CircularProgress size={24} sx={{ my: 2 }} /></TableCell></TableRow>
             ) : rows.length === 0 ? (
-              <TableRow><TableCell colSpan={6} align="center"><Typography variant="body2" color="text.secondary" sx={{ py: 2 }}>No labeled examples for this filter.</Typography></TableCell></TableRow>
-            ) : rows.map((r) => (
+              <TableRow><TableCell colSpan={visibleColumns.length} align="center"><Typography variant="body2" color="text.secondary" sx={{ py: 2 }}>No labeled examples for this filter.</Typography></TableCell></TableRow>
+            ) : sortRows(rows).map((r) => (
               <TableRow key={r.candidate_id} hover>
-                <TableCell>
-                  <BookCell bookId={r.entity_a_id} title={r.a?.title} path={r.a?.primary_path} pathVars={pathVars} onOpen={openBook} />
-                </TableCell>
-                <TableCell>
-                  <BookCell bookId={r.entity_b_id} title={r.b?.title} path={r.b?.primary_path} pathVars={pathVars} onOpen={openBook} />
-                </TableCell>
-                <TableCell>{r.layer}</TableCell>
-                <TableCell><Chip size="small" variant="outlined" color={sourceColor(r.label_source)} label={r.label_source} /></TableCell>
-                <TableCell><Typography variant="caption" color="text.secondary">{r.label_reason}</Typography></TableCell>
-                <TableCell align="center">
-                  <LabelToggle value={r.label} onChange={(label) => void override(r.candidate_id, label)} />
-                </TableCell>
+                {visibleColumns.map((column) => (
+                  <TableCell
+                    key={column.key}
+                    align={column.align}
+                    sx={{ width: columnWidths[column.key] ?? column.defaultWidth ?? 150 }}
+                  >
+                    {column.render(r)}
+                  </TableCell>
+                ))}
               </TableRow>
             ))}
           </TableBody>
