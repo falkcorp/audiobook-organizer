@@ -1,6 +1,7 @@
 // file: internal/dedup/book_dedup.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
+// last-edited: 2026-06-28
 
 // Package dedup: book_dedup.go contains the extracted execution logic for the
 // "dedup.book-scan" and "dedup.book-merge" async operations.  The *Server
@@ -9,13 +10,20 @@
 package dedup
 
 import (
-	"log/slog"
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/util"
 	ulid "github.com/oklog/ulid/v2"
+)
+
+const (
+	metadataDuplicateThreshold = 0.85
+	metadataBorderlineFloor    = 0.80
+	metadataBorderlineCeiling  = 0.88
 )
 
 // BookDupGroup is a group of books that are likely duplicates of each other.
@@ -77,11 +85,12 @@ func ScanBookDuplicates(
 
 	// Step 3: Metadata-based fuzzy matching
 	report(3, "Finding metadata-based duplicates...")
-	metadataGroups, err := store.GetDuplicateBooksByMetadata(0.85)
+	metadataGroups, err := store.GetDuplicateBooksByMetadata(metadataBorderlineFloor)
 	if err != nil {
 		slog.Warn("metadata dedup failed", "error", err)
 		metadataGroups = nil
 	}
+	metadataGroups, metadataConfidence, metadataReason := applyTranscriptionMetadataTiebreaker(store, metadataGroups)
 
 	report(4, "Merging results...")
 
@@ -126,6 +135,14 @@ func ScanBookDuplicates(
 	addGroups(hashGroups, "high", "Identical file hash")
 	addGroups(folderGroups, "medium", "Same title in same folder")
 	addGroups(metadataGroups, "low", "Similar title and author")
+	for key, confidence := range metadataConfidence {
+		for i := range allGroups {
+			if allGroups[i].GroupKey == key {
+				allGroups[i].Confidence = confidence
+				allGroups[i].Reason = metadataReason[key]
+			}
+		}
+	}
 
 	totalDuplicates := 0
 	for _, g := range allGroups {
@@ -138,6 +155,139 @@ func ScanBookDuplicates(
 		Groups:          allGroups,
 		TotalDuplicates: totalDuplicates,
 	}, nil
+}
+
+func applyTranscriptionMetadataTiebreaker(
+	store database.Store,
+	groups [][]database.Book,
+) ([][]database.Book, map[string]string, map[string]string) {
+	confidence := map[string]string{}
+	reason := map[string]string{}
+	filtered := make([][]database.Book, 0, len(groups))
+
+	for _, group := range groups {
+		if len(group) != 2 {
+			filtered = append(filtered, group)
+			continue
+		}
+
+		sim := metadataPairSimilarity(store, &group[0], &group[1])
+		if sim < metadataBorderlineFloor {
+			continue
+		}
+
+		agreement := 0
+		if sim >= metadataBorderlineFloor && sim <= metadataBorderlineCeiling {
+			agreement = transcriptionAgreement(&group[0], &group[1])
+		}
+
+		if sim < metadataDuplicateThreshold && agreement <= 0 {
+			continue
+		}
+		if sim >= metadataDuplicateThreshold && agreement < 0 {
+			continue
+		}
+
+		filtered = append(filtered, group)
+		if agreement > 0 {
+			key := groupKeyForBooks(group)
+			confidence[key] = "medium"
+			reason[key] = "Similar metadata with matching transcribed title"
+		}
+	}
+
+	return filtered, confidence, reason
+}
+
+// transcriptionAgreement returns +1 when both books have matching transcribed
+// titles, -1 when present transcribed titles clearly differ, and 0 when
+// transcription is absent or unusable.
+func transcriptionAgreement(a, b *database.Book) int {
+	aTitle, okA := normalizedTranscribedTitle(a)
+	bTitle, okB := normalizedTranscribedTitle(b)
+	if !okA || !okB {
+		return 0
+	}
+	if aTitle != bTitle {
+		return -1
+	}
+
+	aAuthor, aAuthorOK := stringPtrValue(a.TranscribedAuthor)
+	bAuthor, bAuthorOK := stringPtrValue(b.TranscribedAuthor)
+	if aAuthorOK && bAuthorOK && !containsCI(aAuthor, bAuthor) {
+		return -1
+	}
+
+	return 1
+}
+
+func metadataPairSimilarity(store database.Store, a, b *database.Book) float64 {
+	aAuthor := bookAuthorName(store, a)
+	bAuthor := bookAuthorName(store, b)
+	return metaTitleAuthorSimilarity(
+		[]string{normalizeTitle(a.Title)},
+		aAuthor,
+		[]string{normalizeTitle(b.Title)},
+		bAuthor,
+	)
+}
+
+func bookAuthorName(store database.Store, book *database.Book) string {
+	if book == nil || book.AuthorID == nil {
+		return ""
+	}
+	author, err := store.GetAuthorByID(*book.AuthorID)
+	if err != nil || author == nil {
+		return ""
+	}
+	return author.Name
+}
+
+func normalizedTranscribedTitle(book *database.Book) (string, bool) {
+	if book == nil {
+		return "", false
+	}
+	title, ok := stringPtrValue(book.TranscribedTitle)
+	if !ok {
+		return "", false
+	}
+	title = util.NormalizeTitle(title)
+	if len([]rune(title)) < 3 {
+		return "", false
+	}
+	switch title {
+	case "unknown", "untitled", "title", "n/a", "na":
+		return "", false
+	default:
+		return title, true
+	}
+}
+
+func stringPtrValue(value *string) (string, bool) {
+	if value == nil {
+		return "", false
+	}
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return "", false
+	}
+	return trimmed, true
+}
+
+func containsCI(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	al, bl := strings.ToLower(a), strings.ToLower(b)
+	return strings.Contains(al, bl) || strings.Contains(bl, al)
+}
+
+func groupKeyForBooks(group []database.Book) string {
+	ids := make([]string, len(group))
+	for i, b := range group {
+		ids[i] = b.ID
+	}
+	return strings.Join(ids, "+")
 }
 
 // BookMergeResult summarises the outcome of MergeBooks.
