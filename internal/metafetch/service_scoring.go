@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_scoring.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d2226468-bed1-4989-93f3-b0bc3a344424
-// last-edited: 2026-05-01
+// last-edited: 2026-06-28
 
 package metafetch
 
@@ -11,6 +11,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"log/slog"
 	"regexp"
 	"sort"
@@ -257,6 +258,51 @@ func computeDurationScore(bookDurationSec, candidateDurationSec int) float64 {
 // bonuses or author/narrator multipliers. This keeps the package-level
 // bestTitleMatchWithContext bit-for-bit equivalent to its pre-refactor
 // implementation, which the existing test suite locks in.
+// transcriptionHints carries the audio-derived (Whisper) title/author/narrator
+// for a book. These come from the book's own intro narration, so a candidate
+// that matches them is strong evidence of a correct match. Empty fields are
+// ignored. Passed optionally (variadic) so existing callers stay unchanged.
+type transcriptionHints struct {
+	title, author, narrator string
+}
+
+func (th transcriptionHints) empty() bool {
+	return th.title == "" && th.author == "" && th.narrator == ""
+}
+
+// containsCI reports whether a contains b (or vice-versa), case-insensitively.
+// Mirrors the substring-both-ways comparison the curated author/narrator boosts
+// already use, so transcription matching behaves consistently.
+func containsCI(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	al, bl := strings.ToLower(a), strings.ToLower(b)
+	return strings.Contains(al, bl) || strings.Contains(bl, al)
+}
+
+// transcriptionBoost multiplies score when a candidate matches the audio-derived
+// fields. Multipliers stack on top of the curated-field boosts; scores are
+// intentionally NOT clamped — bonuses add on top (see scoring memo). An exact
+// (normalized) transcribed-title match is the strongest signal because the title
+// is read aloud verbatim in the intro.
+func transcriptionBoost(score float64, r metadata.BookMetadata, th transcriptionHints) float64 {
+	if th.title != "" && r.Title != "" {
+		if util.NormalizeTitle(r.Title) == util.NormalizeTitle(th.title) {
+			score *= 2.0
+		} else if containsCI(r.Title, th.title) {
+			score *= 1.4
+		}
+	}
+	if th.author != "" && containsCI(r.Author, th.author) {
+		score *= 1.6
+	}
+	if th.narrator != "" && containsCI(r.Narrator, th.narrator) {
+		score *= 1.4
+	}
+	return score
+}
+
 func pickBestMatchFromScored(
 	results []metadata.BookMetadata,
 	baseScores []float64,
@@ -264,8 +310,14 @@ func pickBestMatchFromScored(
 	searchWords map[string]bool,
 	bookAuthor, bookNarrator string,
 	bookDurationSec int,
+	hints ...transcriptionHints,
 ) []metadata.BookMetadata {
 	const f1MinScore = 0.35
+
+	var th transcriptionHints
+	if len(hints) > 0 {
+		th = hints[0]
+	}
 
 	minScore := f1MinScore
 	if baseTier != "f1" {
@@ -321,6 +373,13 @@ func pickBestMatchFromScored(
 			score *= 1.15
 		} else {
 			score *= 0.85
+		}
+
+		// Transcription-match boost: when the candidate matches the book's own
+		// audio-derived title/author/narrator, that is strong evidence of a
+		// correct match. No-op when no transcription hints were supplied.
+		if !th.empty() {
+			score = transcriptionBoost(score, r, th)
 		}
 
 		// Duration-based scoring: compare candidate runtime against the book's
@@ -441,7 +500,28 @@ func (mfs *Service) bestTitleMatchForBook(
 	if book.Duration != nil {
 		bookDurationSec = *book.Duration
 	}
-	return pickBestMatchFromScored(results, baseScores, baseTier, searchWords, bookAuthor, bookNarrator, bookDurationSec)
+	return pickBestMatchFromScored(results, baseScores, baseTier, searchWords, bookAuthor, bookNarrator, bookDurationSec, hintsFromBook(book))
+}
+
+// hintsFromBook extracts the audio-derived transcription fields from a book for
+// transcription-match scoring. Garbage values are dropped so a noisy transcript
+// can't skew the boost.
+func hintsFromBook(book *database.Book) transcriptionHints {
+	clean := func(p *string) string {
+		if p == nil {
+			return ""
+		}
+		s := strings.TrimSpace(*p)
+		if s == "" || IsGarbageValue(s) {
+			return ""
+		}
+		return s
+	}
+	return transcriptionHints{
+		title:    clean(book.TranscribedTitle),
+		author:   clean(book.TranscribedAuthor),
+		narrator: clean(book.TranscribedNarrator),
+	}
 }
 
 // rerankTopK asks the LLM scorer to re-judge the ambiguous top candidates

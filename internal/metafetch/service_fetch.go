@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_fetch.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b24c7a25-2efa-4b85-adb0-2d591218eff2
-// last-edited: 2026-05-05
+// last-edited: 2026-06-28
 
 package metafetch
 
@@ -80,6 +80,24 @@ func (mfs *Service) FetchMetadataForBook(id string) (*FetchMetadataResponse, err
 		currentNarrator = *book.Narrator
 	}
 
+	// Transcription fallback: when the curated title/author/narrator is missing
+	// or garbage, fall back to what Whisper heard in the book's own intro
+	// ("TITLE by AUTHOR. Read by NARRATOR."). These are stored separately so a
+	// noisy transcript never overwrites curated metadata, but for discovery they
+	// are the best available query terms for an otherwise-unsearchable book.
+	th := hintsFromBook(book)
+	if IsGarbageValue(searchTitle) || strings.TrimSpace(searchTitle) == "" {
+		if th.title != "" {
+			searchTitle = th.title
+		}
+	}
+	if currentAuthor == "" && th.author != "" {
+		currentAuthor = th.author
+	}
+	if currentNarrator == "" && th.narrator != "" {
+		currentNarrator = th.narrator
+	}
+
 	var lastErr error
 	for _, src := range sources {
 		var results []metadata.BookMetadata
@@ -154,6 +172,23 @@ func (mfs *Service) FetchMetadataForBook(id string) (*FetchMetadataResponse, err
 				}
 			}
 
+			// Last resort: the audio-derived (transcribed) title, when it differs
+			// from everything tried above. For books with bad/empty curated titles
+			// the intro narration ("TITLE by AUTHOR") is often the only term that
+			// finds the right edition. Pair it with the transcribed author when we
+			// have one for a tighter match.
+			if len(results) == 0 && th.title != "" && th.title != searchTitle && th.title != book.Title {
+				if th.author != "" {
+					results, searchErr = src.SearchByTitleAndAuthor(context.Background(), th.title, th.author)
+				}
+				if len(results) == 0 {
+					results, searchErr = src.SearchByTitle(context.Background(), th.title)
+				}
+				if searchErr != nil {
+					lastErr = searchErr
+				}
+			}
+
 			// Write non-empty results to cache so future fetch/search calls
 			// for this book+source can skip the external API entirely.
 			if len(results) > 0 {
@@ -170,7 +205,13 @@ func (mfs *Service) FetchMetadataForBook(id string) (*FetchMetadataResponse, err
 		}
 		if len(results) > 0 {
 			// Score all results and pick the best; reject if below quality threshold.
-			scored := mfs.bestTitleMatchForBook(book, results, currentAuthor, currentNarrator, searchTitle, book.Title)
+			// Pass the transcribed title too (when present) so its significant
+			// words contribute to F1 base scoring alongside the curated title.
+			scoreTitles := []string{searchTitle, book.Title}
+			if th.title != "" {
+				scoreTitles = append(scoreTitles, th.title)
+			}
+			scored := mfs.bestTitleMatchForBook(book, results, currentAuthor, currentNarrator, scoreTitles...)
 			if len(scored) == 0 {
 								slog.Debug("all results rejected by quality scorer for", "name", src.Name(), "count", len(results), "value", searchTitle)
 				continue // try next source
