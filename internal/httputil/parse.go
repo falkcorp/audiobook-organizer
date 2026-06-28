@@ -1,7 +1,7 @@
 // file: internal/httputil/parse.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-05-01
+// last-edited: 2026-06-28
 
 package httputil
 
@@ -65,7 +65,12 @@ func ParseQueryString(c *gin.Context, key string) string {
 }
 
 // ParsePaginationParams parses limit, offset, and search from query params.
-// Defaults: limit=50, max=500, offset=0.
+// Defaults: limit=50, max=1000, offset=0.
+//
+// The cap exists so a malformed/hostile ?limit= can't force a huge projection,
+// but it must be high enough to honor the library "items per page" selector
+// (max option 1000). Below 1000 the page would silently return fewer rows than
+// the user asked for.
 func ParsePaginationParams(c *gin.Context) PaginationParams {
 	limit := ParseQueryInt(c, "limit", 50)
 	offset := ParseQueryInt(c, "offset", 0)
@@ -73,8 +78,8 @@ func ParsePaginationParams(c *gin.Context) PaginationParams {
 	if limit < 1 {
 		limit = 50
 	}
-	if limit > 500 {
-		limit = 500
+	if limit > 1000 {
+		limit = 1000
 	}
 	if offset < 0 {
 		offset = 0

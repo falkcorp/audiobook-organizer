@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_filtering.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b4e8c3d2-e5f6-7a80-9b0c-1d2e3f4a5b6c
-// last-edited: 2026-06-23
+// last-edited: 2026-06-28
 
 package audiobooks
 
@@ -439,7 +439,15 @@ func bookSummariesToBooks(summaries []database.BookSummary) []database.Book {
 // by the store. Mock-friendly: when the store lacks
 // GetAllBookSummariesFiltered, falls back to GetAllBookSummaries(limit,
 // offset) — preserves the pre-pushdown test contract.
-func (svc *AudiobookService) summariesPushdown(limit, offset int, isPrimary *bool, sortBy string, sortAscending bool) ([]database.BookSummary, error) {
+//
+// Returns didPushdown=true when the store applied the IsPrimary/title filter
+// itself and already paginated the result (production memdb path). false means
+// the store fell back to the unfiltered GetAllBookSummaries path — the caller
+// must keep the in-memory post-filter pass so IsPrimary is still applied. This
+// boolean is what lets the caller safely SKIP the post-filter re-pagination:
+// re-slicing an already-paginated page by the original offset is what made
+// "page 2" (any offset>0) return zero rows.
+func (svc *AudiobookService) summariesPushdown(limit, offset int, isPrimary *bool, sortBy string, sortAscending bool) (summaries []database.BookSummary, didPushdown bool, err error) {
 	type filteredSummaryStore interface {
 		GetAllBookSummariesFiltered(limit, offset int, f database.BookSummaryFilter) ([]database.BookSummary, error)
 	}
@@ -449,14 +457,17 @@ func (svc *AudiobookService) summariesPushdown(limit, offset int, isPrimary *boo
 		SortAscending:    sortAscending,
 	}
 	if fs, ok := svc.store.(filteredSummaryStore); ok {
-		return fs.GetAllBookSummariesFiltered(limit, offset, filter)
+		s, e := fs.GetAllBookSummariesFiltered(limit, offset, filter)
+		return s, true, e
 	}
 	if uw, ok := svc.store.(interface{ Unwrap() database.Store }); ok {
 		if fs, ok2 := uw.Unwrap().(filteredSummaryStore); ok2 {
-			return fs.GetAllBookSummariesFiltered(limit, offset, filter)
+			s, e := fs.GetAllBookSummariesFiltered(limit, offset, filter)
+			return s, true, e
 		}
 	}
-	return svc.store.GetAllBookSummaries(limit, offset)
+	s, e := svc.store.GetAllBookSummaries(limit, offset)
+	return s, false, e
 }
 
 // summariesPushdownFiltered runs the full pushdown — every filter the

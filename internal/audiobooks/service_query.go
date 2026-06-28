@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
-// last-edited: 2026-06-23
+// last-edited: 2026-06-28
 
 package audiobooks
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -83,15 +84,32 @@ func (svc *AudiobookService) GetAudiobooks(ctx context.Context, limit int, offse
 		// full-scan.
 		sortAsc := !strings.EqualFold(f.SortOrder, "desc")
 		if !hasHeavyPostFilters {
-			cacheKey := fmt.Sprintf("all:%d:%d:p=%v:sb=%s:asc=%v",
-				limit, offset, f.IsPrimaryVersion, f.SortBy, sortAsc)
+			// primaryKey renders the *bool as a stable token. Formatting the
+			// pointer itself with %v prints its memory address, which is unique
+			// per request — so the cache key never matched and the list cache
+			// never hit for is_primary_version queries (every library page).
+			primaryKey := "nil"
+			if f.IsPrimaryVersion != nil {
+				primaryKey = strconv.FormatBool(*f.IsPrimaryVersion)
+			}
+			cacheKey := fmt.Sprintf("all:%d:%d:p=%s:sb=%s:asc=%v",
+				limit, offset, primaryKey, f.SortBy, sortAsc)
 			if cached, ok := svc.listCache.Get(cacheKey); ok {
 				return cached, nil
 			}
-			summaries, sErr := svc.summariesPushdown(storeLimit, storeOffset, f.IsPrimaryVersion, f.SortBy, sortAsc)
+			summaries, didPushdown, sErr := svc.summariesPushdown(storeLimit, storeOffset, f.IsPrimaryVersion, f.SortBy, sortAsc)
 			if sErr == nil && summaries != nil {
 				books = bookSummariesToBooks(summaries)
 				svc.listCache.Set(cacheKey, books)
+			}
+			// When the store applied the filter AND paginated, the page is
+			// final. Running the post-filter block would re-slice this
+			// already-paginated page by the original offset — which is out of
+			// bounds for a ≤limit slice, so every offset>0 ("page 2") returned
+			// zero rows. Skip it. If the store fell back to the unfiltered path
+			// (didPushdown=false), keep the post-filter so IsPrimary is applied.
+			if didPushdown {
+				hasPostFilters = false
 			}
 		} else {
 			// Heavy-filter pushdown: build a BookSummaryFilter that
