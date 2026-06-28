@@ -36,6 +36,12 @@ type introTranscribeParams struct {
 	// OnlyMissing skips books that already have an IntroTranscription.
 	// Defaults to true so re-runs are incremental.
 	OnlyMissing *bool `json:"only_missing,omitempty"`
+	// ReparseOnly re-runs ParseAudiobookIntro over the ALREADY-STORED
+	// IntroTranscription text and rewrites TranscribedTitle/Author/Narrator —
+	// no ffmpeg, no Whisper. Use after a parser fix to correct existing books
+	// (e.g. the "[Publisher] presents ..." / read-by extraction fix) without the
+	// cost of re-transcribing. Cheap: one GetBookByID + UpdateBook per book.
+	ReparseOnly *bool `json:"reparse_only,omitempty"`
 }
 
 func (p *Plugin) introTranscribeDef() sdk.OperationDef {
@@ -43,7 +49,7 @@ func (p *Plugin) introTranscribeDef() sdk.OperationDef {
 		ID:              "maintenance.transcribe-book-intros",
 		Plugin:          "maintenance",
 		DisplayName:     "Transcribe book intros",
-		Description:     "Extracts the first 90 seconds of each book's first audio file and transcribes it with Whisper. Stores the result in TranscribedTitle/Author/Narrator (separate from curated metadata) for disambiguation and dedup cross-checks. Uses batch mode: one Python process per page of 200 books loads the model once. 90s captures past Audible jingles/music intros that caused 30s clips to return only 'This is Audible.'",
+		Description:     "Extracts the first 90 seconds of each book's first audio file and transcribes it with Whisper. Stores the result in TranscribedTitle/Author/Narrator (separate from curated metadata) for disambiguation and dedup cross-checks. Uses batch mode: one Python process per page of 200 books loads the model once. 90s captures past Audible jingles/music intros that caused 30s clips to return only 'This is Audible.' Param reparse_only=true re-runs the parser over already-stored transcripts and rewrites the parsed fields with no ffmpeg/Whisper — use it to apply a parser fix to existing books cheaply.",
 		ResumePolicy:    sdk.ResumeRestart,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.transcribe-book-intros",
@@ -74,8 +80,20 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 		_ = json.Unmarshal(rawParams, &params)
 	}
 	onlyMissing := params.OnlyMissing == nil || *params.OnlyMissing
+	reparseOnly := params.ReparseOnly != nil && *params.ReparseOnly
 
 	log := reporter.Logger()
+
+	// Reparse-only mode short-circuits the whole Whisper pipeline: it re-runs the
+	// parser over stored transcripts and rewrites the parsed fields. Used to apply
+	// a parser fix to existing books cheaply.
+	if reparseOnly {
+		ids, err := store.ListBookIDs()
+		if err != nil {
+			return fmt.Errorf("list book ids: %w", err)
+		}
+		return p.reparseStoredIntros(ctx, store, reporter, ids)
+	}
 
 	// Load the FULL, ordered list of book IDs up front. This is the proven
 	// uncapped primitive (memdb ID-index walk). The previous implementation
@@ -167,6 +185,72 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 	log.Info("transcribe-book-intros: complete", "processed", processed, "total_books", total)
 	_ = reporter.UpdateProgress(1, 1, fmt.Sprintf("Done — transcribed %d books", processed))
 	return nil
+}
+
+// reparseStoredIntros re-runs ParseAudiobookIntro over every book's stored
+// IntroTranscription and rewrites TranscribedTitle/Author/Narrator to the new
+// parse. No ffmpeg, no Whisper — used to apply a parser fix to existing data.
+// UpdateBook does full-column replacement, and GetBookByID returns the full
+// row, so only the three parsed fields change. IntroTranscribedAt is left
+// untouched (reparse is not a new transcription).
+func (p *Plugin) reparseStoredIntros(ctx context.Context, store interface {
+	ListBookIDs() ([]string, error)
+	GetBookByID(string) (*database.Book, error)
+	UpdateBook(string, *database.Book) (*database.Book, error)
+}, reporter sdk.Reporter, ids []string) error {
+	log := reporter.Logger()
+	total := len(ids)
+	var scanned, changed int
+	for i, id := range ids {
+		if i%500 == 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+			_ = reporter.UpdateProgress(i, total,
+				fmt.Sprintf("Reparsing intros — %d/%d (%d updated)", i, total, changed))
+		}
+		b, err := store.GetBookByID(id)
+		if err != nil || b == nil || b.IntroTranscription == nil || *b.IntroTranscription == "" {
+			continue
+		}
+		scanned++
+		f := transcribe.ParseAudiobookIntro(*b.IntroTranscription)
+		nt, na, nn := strPtrOrNil(f.Title), strPtrOrNil(f.Author), strPtrOrNil(f.Narrator)
+		if eqStrPtr(b.TranscribedTitle, nt) && eqStrPtr(b.TranscribedAuthor, na) && eqStrPtr(b.TranscribedNarrator, nn) {
+			continue // unchanged — skip the write
+		}
+		b.TranscribedTitle, b.TranscribedAuthor, b.TranscribedNarrator = nt, na, nn
+		if _, err := store.UpdateBook(b.ID, b); err != nil {
+			log.Warn("reparse-intros: update failed", "book_id", b.ID, "err", err)
+			continue
+		}
+		changed++
+	}
+	log.Info("reparse-intros: complete", "scanned", scanned, "changed", changed, "total_books", total)
+	_ = reporter.UpdateProgress(total, total,
+		fmt.Sprintf("Reparse complete — %d updated of %d transcribed (%d books)", changed, scanned, total))
+	return nil
+}
+
+// strPtrOrNil returns nil for empty/whitespace strings, else a pointer to the
+// trimmed value. Keeps cleared parse results out of the DB as NULL.
+func strPtrOrNil(s string) *string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+// eqStrPtr reports whether two *string values are equal (both nil, or both set
+// to the same string).
+func eqStrPtr(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 // chunkIDs splits ids into consecutive slices of at most size elements.
