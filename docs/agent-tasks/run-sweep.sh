@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # file: docs/agent-tasks/run-sweep.sh
-# version: 1.0.0
+# version: 1.3.0
 # guid: 9e0f1a2b-4c3d-4e60-af71-2b3c4d5e6f70
 # last-edited: 2026-06-28
 #
@@ -28,7 +28,8 @@ WORKSTREAM="${1:-}"
 if [[ -z "$WORKSTREAM" || ! -d "$HERE/$WORKSTREAM" ]]; then
   echo "usage: $0 <workstream> [TASK-id ...]" >&2
   echo "workstreams:" >&2
-  find "$HERE" -mindepth 1 -maxdepth 1 -type d -printf '  %f\n' >&2
+  find "$HERE" -mindepth 1 -maxdepth 1 -type d ! -name '.*' -exec basename {} \; |
+    sed 's/^/  /' >&2
   exit 1
 fi
 shift || true
@@ -60,6 +61,9 @@ for task in "${TASK_FILES[@]}"; do
 
   if git -C "$REPO" worktree list --porcelain | grep -q "worktree $wt$"; then
     echo "• worktree exists: $wt (skipping create)"
+  elif git -C "$REPO" show-ref --verify --quiet "refs/heads/$branch"; then
+    git -C "$REPO" worktree add "$wt" "$branch" >/dev/null
+    echo "• created worktree $wt on existing $branch"
   else
     git -C "$REPO" worktree add "$wt" -b "$branch" origin/main >/dev/null
     echo "• created worktree $wt on $branch"

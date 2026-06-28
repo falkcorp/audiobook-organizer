@@ -1,3 +1,8 @@
+# file: .gitignore
+# version: 1.0.0
+# guid: f7d7af3c-a1f1-4d89-87ef-4a8dc9faea8a
+# last-edited: 2026-06-28
+
 # Local overrides
 Makefile.local
 deploy/local.conf
@@ -269,6 +274,7 @@ test-results.txt
 # Git worktrees
 .worktrees/
 worktrees/
+docs/agent-tasks/.prompts/
 web/tests/e2e/playwright-report/index.html
 web/tests/e2e/playwright-report/
 web/tests/e2e/playwright-report/**/*
