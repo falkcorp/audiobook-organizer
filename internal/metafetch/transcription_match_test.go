@@ -1,5 +1,5 @@
 // file: internal/metafetch/transcription_match_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9d3f1a6c-2b85-4e07-bc41-7a8e0f2d5c39
 // last-edited: 2026-06-28
 
@@ -65,6 +65,36 @@ func TestPickBestMatch_TranscriptionBoost(t *testing.T) {
 		assert.Equal(t, "Mistborn", withoutArg[0].Title)
 		assert.Equal(t, withoutArg[0].Title, withEmpty[0].Title)
 	})
+}
+
+func TestSearchMetadataForBook_TranscriptionTitleHintBoostsManualResults(t *testing.T) {
+	transcribedTitle := "Wrong Correct Shared"
+	mock := &database.MockStore{
+		GetBookByIDFunc: func(id string) (*database.Book, error) {
+			return &database.Book{
+				ID:               id,
+				Title:            "Wrong Shared",
+				TranscribedTitle: &transcribedTitle,
+			}, nil
+		},
+	}
+	svc := NewService(mock)
+	svc.SetOverrideSources([]metadata.MetadataSource{
+		&mockMetadataSource{
+			name: "test-source",
+			results: []metadata.BookMetadata{
+				{Title: "Wrong Shared", Author: "A"},
+				{Title: "Wrong Correct Shared", Author: "A"},
+			},
+		},
+	})
+
+	resp, err := svc.SearchMetadataForBook("b1", "Wrong Shared")
+
+	require.NoError(t, err)
+	require.Len(t, resp.Results, 2)
+	assert.Equal(t, "Wrong Correct Shared", resp.Results[0].Title)
+	assert.Greater(t, resp.Results[0].Score, resp.Results[1].Score)
 }
 
 func TestContainsCI(t *testing.T) {
