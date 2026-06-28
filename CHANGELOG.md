@@ -1,13 +1,22 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.86.0 -->
+<!-- version: 3.87.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
-<!-- last-edited: 2026-06-26 -->
+<!-- last-edited: 2026-06-28 -->
 
 # Changelog
 
 ## [Unreleased]
 
 ### Features
+
+#### June 28, 2026 — Library pagination, transcription parser + matching, agent-task package (PRs #1660, #1661)
+
+- **`fix(library)`** (PR #1660) — Repaired the "page 2 of all books returns 0 items" bug. Root cause was **double pagination**: the light-pushdown path let memdb paginate, then the post-filter block re-sliced the already-paginated page by the original offset (out of bounds for a ≤limit slice), so any offset>0 collapsed to nil. Fixed via a `didPushdown` flag (clears `hasPostFilters` only when the store actually filtered+paginated). Also fixed the service list-cache key that formatted a `*bool` with `%v` (printed the pointer address → cache never hit for primary queries). Verified on prod: page 2 = 20 (was 0), page 1 = 20 (was 10), 500 = 500.
+- **`fix(library)`** (PR #1660) — Pushed quarantine exclusion into the indexed scan (`BookSummaryFilter.ExcludeQuarantined`) so a page of N returns N non-quarantined books and the count matches items (previously quarantined rows were dropped AFTER pagination → short pages, count≠items). Raised the shared pagination cap 500→1000 + a 1000 option in the library items-per-page selector.
+- **`feat(metafetch)`** (PR #1660) — Wired the audio-derived `TranscribedTitle/Author/Narrator` into metadata **discovery**: fallback query construction when curated metadata is garbage/empty, a last-resort transcribed-title search, and a scoring boost (exact normalized title ×2.0, substring ×1.4, author ×1.6, narrator ×1.4) via a backward-compatible `transcriptionHints` param on `pickBestMatchFromScored`.
+- **`fix(transcribe)`** (PR #1661) — Rewrote `ParseAudiobookIntro` as a staged extractor (strip `[Publisher] presents` prefix → split title on first `by` → split author/narrator on `read by` → truncate each name at the first prose boundary). Fixes the Salem's Lot case: Title `Simon and Schuster audio presents Salem's Lot`→`Salem's Lot`, Author (entire acknowledgements wall)→`Stephen King`, Narrator ``→`Ron McClarty`. 11-case table test.
+- **`feat(transcribe)`** (PR #1661) — Added `reparse_only=true` to `maintenance.transcribe-book-intros`: re-runs the parser over already-stored transcripts and rewrites the parsed fields with no ffmpeg/Whisper. First prod run corrected ~80% of transcribed books.
+- **`docs(agent-tasks)`** — Added `docs/agent-tasks/`: a self-contained, in-repo manual task package (weak-model-proof, worktree-disciplined, portable generic-subagent roster) with a portable multi-agent orchestration pattern (`ORCHESTRATION.md` + `run-sweep.sh`) and four workstreams — transcription-matching (5 tasks), dedup-intro-falsepositive (4), dedup-ui (5), system-docs (DOCS-1, 7 tasks).
 
 #### June 26, 2026 — Batch Whisper dep pins + crash-recovery checkpoint (PRs #1637, #1638)
 

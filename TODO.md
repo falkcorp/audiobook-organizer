@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 9.45.0 -->
+<!-- version: 9.46.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-06-26 -->
+<!-- last-edited: 2026-06-28 -->
 
 # Project TODO
 
@@ -10,12 +10,37 @@ Details live in the linked files; this file exists so anyone (you, me, a
 future agent) can scan the entire workspace in one page.
 
 **Sources indexed here:**
+- [`docs/agent-tasks/`](docs/agent-tasks/) — **manual AI-agent task package** (run by hand, not the burndown bot): self-contained briefs + orchestration scripts
 - [`docs/backlog-2026-04-10.md`](docs/backlog-2026-04-10.md) — 1725-line working list, ranked by category
 - [`docs/superpowers/plans/`](docs/superpowers/plans/) — implementation plans per feature
 - [`docs/superpowers/specs/`](docs/superpowers/specs/) — design specs per feature
 - [`docs/implementation-guide.md`](docs/implementation-guide.md) — integration guide for open items
 - [`docs/codebase-evaluation.md`](docs/codebase-evaluation.md) — 2026-04-30 codebase audit (12 issue groups, 38 bot-tasks)
 - Claude project memory at `~/.claude/projects/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/memory/` — items still to graduate here
+
+---
+
+## 🤖 Agent Task Package — [`docs/agent-tasks/`](docs/agent-tasks/) (added June 28, 2026)
+
+Hand-run, weak-model-proof task briefs (worktree-disciplined, portable subagent
+roster, multi-agent orchestration scripts). Use these instead of the unreliable
+TODO→GitHub-issues bot.
+
+- 🔵 **transcription-matching/** (TOP PRIORITY) — 5 tasks: search-path hints, apply auto-confirm, upgrade-confidence gate, batch auto-match, dedup tiebreaker. Extends the shipped transcription→discovery wiring into the rest of matching.
+- 🔵 **dedup-intro-falsepositive/** (DEDUP-INTRO-1) — 4 tasks: investigate, skip sub-60s clip fingerprints, boilerplate-title blocklist, ISBN/ASIN gate. Kills ~372K intro/outro false positives.
+- 🔵 **dedup-ui/** (CONS-4/6/11, C6, DEDUP-KB-1) — 5 frontend tasks: row redesign, metadata-compare tab, manual-import button, label-review panel, keyboard shortcuts.
+- 🔵 **system-docs/** (DOCS-1) — 7 tasks producing ≥9 docs / ≥7 Mermaid diagrams under `docs/system/`.
+
+### ✅ Shipped June 28, 2026 (PRs #1660, #1661)
+
+- 🟢 **Library pagination** — page-2-returns-0 (double-pagination) FIXED; "500 means 500" honored; quarantine pushed into the indexed scan; cap 500→1000. Verified on prod.
+- 🟢 **Transcription discovery wiring** — `hintsFromBook`/`transcriptionBoost` in fetch + scoring.
+- 🟢 **Whisper intro parser** — staged extractor (publisher prefix, read-by narrator, noise truncation); `reparse_only` op corrected existing data on prod.
+
+### 🐛 Known flaky CI (pre-existing, capture-and-fix later)
+
+- 🔴 **Mock Freshness** check fails on every branch — `mockery` version drift (`interface{}`→`any`). Needs the pinned mockery version regenerated/committed.
+- 🔴 `TestBackupEndpointsErrors`, `TestScanService_MultiChapterAudiobook` — flaky/environment-sensitive (fail on `main` too). Diagnose root cause; don't rerun-and-ignore.
 
 ---
 
