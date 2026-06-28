@@ -1,7 +1,7 @@
 // file: web/src/components/library/LibraryBookGrid.tsx
-// version: 1.5.1
+// version: 1.5.2
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-05-23
+// last-edited: 2026-06-28
 
 import {
   Typography,
@@ -388,6 +388,7 @@ export const LibraryBookGrid = ({
               <MenuItem value={100}>100</MenuItem>
               <MenuItem value={250}>250</MenuItem>
               <MenuItem value={500}>500</MenuItem>
+              <MenuItem value={1000}>1000</MenuItem>
             </TextField>
             {totalPages > 1 && (
               <Pagination
