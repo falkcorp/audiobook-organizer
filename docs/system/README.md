@@ -1,14 +1,16 @@
 <!-- file: docs/system/README.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 42030117-6ba8-4f26-a2c6-9b5f9014ef88 -->
 <!-- last-edited: 2026-06-28 -->
 
 # System Documentation
 
-Audiobook Organizer is a single-process Go and React application for scanning,
+> **Status:** This index is a skeleton for the DOCS-1 workstream. The files listed below are in progress and will be added incrementally. Links will resolve once each document is written.
+
+Audiobook Organizer is a single-binary server (Go backend, React frontend) for scanning,
 normalizing, enriching, deduplicating, organizing, and serving audiobook
 libraries. The backend exposes Gin API routes, coordinates long-running
-operation pipelines, stores domain state in PebbleDB by default, and embeds the
+operation pipelines, stores domain state in PebbleDB (activity-log data is stored in NutsDB), and embeds the
 compiled React UI so the same binary can manage library data, filesystem
 changes, metadata fetches, AI-assisted parsing, and operational workflows.
 
