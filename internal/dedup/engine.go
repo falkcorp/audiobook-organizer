@@ -542,6 +542,15 @@ func (de *Engine) runUnifiedScoringForBook(ctx context.Context, book *database.B
 		if err != nil || otherBook == nil {
 			continue
 		}
+		if identifiersConflict(book, otherBook) {
+			slog.Debug("dedup unified: identifier-conflicting pair → delete",
+				"book", book.ID, "other", candID, "cand", ref.candID)
+			if err := de.embedStore.DeleteCandidate(ref.candID); err != nil {
+				slog.Debug("dedup unified: delete identifier-conflicting candidate failed",
+					"cand", ref.candID, "err", err)
+			}
+			continue
+		}
 
 		// 1. Eligibility pre-filter. A suppressed pair (chapter cross-pair, same
 		// version group, distinct series volume) is not just skipped — it is
@@ -1251,6 +1260,11 @@ func (de *Engine) upsertExactCandidate(a, b *database.Book, layer string, sim fl
 	if isNonPrimaryVersion(a) || isNonPrimaryVersion(b) {
 		return nil
 	}
+	if identifiersConflict(a, b) {
+		slog.Debug("dedup exact candidate dropped by identifier gate",
+			"book_a", a.ID, "book_b", b.ID, "layer", layer)
+		return nil
+	}
 	return de.embedStore.UpsertCandidate(database.DedupCandidate{
 		EntityType: "book",
 		EntityAID:  a.ID,
@@ -1259,6 +1273,34 @@ func (de *Engine) upsertExactCandidate(a, b *database.Book, layer string, sim fl
 		Similarity: &sim,
 		Status:     "pending",
 	})
+}
+
+// identifiersConflict reports whether a and b have a definitive, both-present
+// identifier mismatch. Missing identifiers are conservative and never conflict.
+func identifiersConflict(a, b *database.Book) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	return normalizedIDConflict(a.ISBN13, b.ISBN13, normalizeISBN) ||
+		normalizedIDConflict(a.ISBN10, b.ISBN10, normalizeISBN) ||
+		normalizedIDConflict(a.ASIN, b.ASIN, normalizeASIN)
+}
+
+func normalizedIDConflict(a, b *string, normalize func(string) string) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	normalizedA := normalize(*a)
+	normalizedB := normalize(*b)
+	return normalizedA != "" && normalizedB != "" && normalizedA != normalizedB
+}
+
+func normalizeISBN(v string) string {
+	return strings.ReplaceAll(strings.TrimSpace(v), "-", "")
+}
+
+func normalizeASIN(v string) string {
+	return strings.ToUpper(strings.TrimSpace(v))
 }
 
 func hasPlausibleAudio(book *database.Book) bool {
@@ -2879,6 +2921,10 @@ func (de *Engine) AcoustIDScan(ctx context.Context, progress func(done, total in
 	if err != nil {
 		return fmt.Errorf("acoustid scan: get all books: %w", err)
 	}
+	booksByID := make(map[string]*database.Book, len(books))
+	for i := range books {
+		booksByID[books[i].ID] = &books[i]
+	}
 
 	boilerplateBookCache := make(map[string]bool, len(books))
 	for _, b := range books {
@@ -2931,12 +2977,28 @@ func (de *Engine) AcoustIDScan(ctx context.Context, progress func(done, total in
 		return dir
 	}
 
+	identifierGateDrops := 0
+	bookForIdentifierGate := func(bookID string) *database.Book {
+		if b := booksByID[bookID]; b != nil {
+			return b
+		}
+		b, err := de.bookStore.GetBookByID(bookID)
+		if err != nil || b == nil {
+			return nil
+		}
+		booksByID[bookID] = b
+		return b
+	}
 	emit := func(bookAID, bookBID string, sim float64) {
 		if isBoilerplateBook(bookAID) || isBoilerplateBook(bookBID) {
 			return
 		}
 		key := pairKey(bookAID, bookBID)
 		if _, already := emitted[key]; already {
+			return
+		}
+		if identifiersConflict(bookForIdentifierGate(bookAID), bookForIdentifierGate(bookBID)) {
+			identifierGateDrops++
 			return
 		}
 		// Suppress when both books' files live in the same directory: those
@@ -3074,7 +3136,10 @@ func (de *Engine) AcoustIDScan(ctx context.Context, progress func(done, total in
 		}
 	}
 
-	slog.Info("[dedup] acoustid scan complete books scanned, candidate pair(s) emitted", "total", total, "emitted_count", len(emitted))
+	slog.Info("[dedup] acoustid scan complete books scanned, candidate pair(s) emitted",
+		"total", total,
+		"emitted_count", len(emitted),
+		"identifier_gate_dropped_count", identifierGateDrops)
 	return nil
 }
 
