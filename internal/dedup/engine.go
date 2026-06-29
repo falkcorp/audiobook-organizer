@@ -91,6 +91,11 @@ func isBoilerplateTitle(title string) bool {
 	return false
 }
 
+// minFingerprintMatchSeconds: files shorter than this are publisher
+// intro/outro clips, not book content — their fingerprints must not seed or
+// strengthen a duplicate pair. See dedup-intro-falsepositive FINDINGS.md.
+const minFingerprintMatchSeconds = 60
+
 // Engine orchestrates a 3-layer dedup system:
 //   - Layer 1: Exact matching (free, instant) — same file hash, ISBN/ASIN, or near-identical titles
 //   - Layer 2: Embedding similarity (cheap, ~250ms) — cosine similarity of OpenAI embeddings
@@ -3076,6 +3081,11 @@ func (de *Engine) AcoustIDScan(ctx context.Context, progress func(done, total in
 
 	slog.Info("[dedup] acoustid scan complete books scanned, candidate pair(s) emitted", "total", total, "emitted_count", len(emitted))
 	return nil
+}
+
+func knownShortFingerprintFile(f database.BookFile) bool {
+	return f.AcoustIDFingerprintDurationSec > 0 &&
+		f.AcoustIDFingerprintDurationSec < minFingerprintMatchSeconds
 }
 
 // bestSeg returns the first non-empty segment string from a BookFile,

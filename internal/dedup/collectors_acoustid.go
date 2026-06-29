@@ -1,7 +1,7 @@
 // file: internal/dedup/collectors_acoustid.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a7b3c841-d9e2-4f15-88a0-5bc12e347f6d
-// last-edited: 2026-06-10
+// last-edited: 2026-06-28
 
 // Package dedup — acoustic-ID collector family (fable5 T013).
 //
@@ -95,6 +95,12 @@ func CollectExactAcoustID(
 	if queryFile == nil {
 		return nil, nil
 	}
+	if knownShortFingerprintFile(*queryFile) {
+		slog.Debug("dedup/collectors_acoustid: exact lookup skipped short clip fingerprint",
+			"file_id", queryFile.ID,
+			"duration_sec", queryFile.AcoustIDFingerprintDurationSec)
+		return nil, nil
+	}
 	segs := [7]string{
 		queryFile.AcoustIDSeg0,
 		queryFile.AcoustIDSeg1,
@@ -128,6 +134,13 @@ func CollectExactAcoustID(
 			continue
 		}
 		if hit == nil || hit.BookID == queryBookID || seen[hit.BookID] {
+			continue
+		}
+		if knownShortFingerprintFile(*hit) {
+			slog.Debug("dedup/collectors_acoustid: exact lookup hit skipped short clip fingerprint",
+				"file_id", queryFile.ID,
+				"hit_file_id", hit.ID,
+				"hit_duration_sec", hit.AcoustIDFingerprintDurationSec)
 			continue
 		}
 		seen[hit.BookID] = true
@@ -231,6 +244,12 @@ func CollectLSHAcoustID(
 		// Nothing to probe — caller should log at the appropriate level.
 		return nil, nil
 	}
+	if knownShortFingerprintFile(*queryFile) {
+		slog.Debug("dedup/collectors_acoustid: lsh probe skipped short clip fingerprint",
+			"file_id", queryFile.ID,
+			"duration_sec", queryFile.AcoustIDFingerprintDurationSec)
+		return nil, nil
+	}
 
 	// Gate: skip with INFO when the index has never been built.  This is the
 	// permanent replacement for the ACOUSTID_FUZZY_ENABLED env variable — when
@@ -293,6 +312,13 @@ func CollectLSHAcoustID(
 		if len(candFile.AcoustIDFingerprint) == 0 {
 			// Candidate was indexed but fingerprint was subsequently cleared —
 			// skip; stale index entry, harmless.
+			continue
+		}
+		if knownShortFingerprintFile(*candFile) {
+			slog.Debug("dedup/collectors_acoustid: lsh candidate skipped short clip fingerprint",
+				"file_id", queryFile.ID,
+				"cand_file_id", candFile.ID,
+				"cand_duration_sec", candFile.AcoustIDFingerprintDurationSec)
 			continue
 		}
 
