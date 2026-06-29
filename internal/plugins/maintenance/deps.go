@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-06-24
+// last-edited: 2026-06-29
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -65,6 +65,28 @@ type ServerDeps interface {
 	InvalidateDedupCache()
 	// MetadataUpgradeRun runs the metadata upgrade scan up to limit books.
 	MetadataUpgradeRun(ctx context.Context, limit int) (checked, upgraded, skipped, errs int, err error)
+	// SearchTranscriptionCandidate finds the top-scoring metadata candidate for
+	// bookID using transTitle as the query. The returned score may exceed 1.0
+	// (uncapped scale with transcription boosts applied). Returns found=false
+	// when no candidates exist or the service is unavailable. The caller is
+	// responsible for applying score/title/author gates on the returned values.
+	SearchTranscriptionCandidate(
+		ctx context.Context,
+		bookID string,
+		transTitle string,
+		transAuthor string,
+	) (title string, author string, score float64, found bool, err error)
+	// ApplyTranscriptionCandidate applies the top metadata candidate whose
+	// title matches candTitle to the given book, re-fetching via the cached
+	// search path. Relies on TASK-02 audio-confirm logic to set
+	// MetadataReviewStatus="audio_confirmed" when the candidate title matches
+	// the book's transcribed title.
+	ApplyTranscriptionCandidate(
+		ctx context.Context,
+		bookID string,
+		candTitle string,
+		candAuthor string,
+	) error
 	// OptimizeAIScanStore optimizes the AI scan store (no-op if nil).
 	OptimizeAIScanStore() error
 	// OptimizeOLStore optimizes the OpenLibrary cache store (no-op if nil).

@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-06-24
+// last-edited: 2026-06-29
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -343,6 +343,53 @@ func (s *Server) DedupTriageExactPending(ctx context.Context) (*maintenanceplugi
 		}
 	}
 	return report, nil
+}
+
+// SearchTranscriptionCandidate implements maintenance.ServerDeps.
+// It searches for the top-scoring metadata candidate using transTitle as the
+// query, optionally narrowed by transAuthor. Returns (title, author, score,
+// true, nil) when at least one candidate is found; (‟", "", 0, false, nil)
+// when the service is unavailable or no results exist; and a non-nil error
+// only on a hard failure from the metadata service.
+func (s *Server) SearchTranscriptionCandidate(_ context.Context, bookID, transTitle, transAuthor string) (string, string, float64, bool, error) {
+	if s.metadataFetchService == nil {
+		return "", "", 0, false, nil
+	}
+	var hints []string
+	if transAuthor != "" {
+		hints = append(hints, transAuthor)
+	}
+	resp, err := s.metadataFetchService.SearchMetadataForBook(bookID, transTitle, hints...)
+	if err != nil || resp == nil || len(resp.Results) == 0 {
+		return "", "", 0, false, err
+	}
+	best := resp.Results[0]
+	return best.Title, best.Author, best.Score, true, nil
+}
+
+// ApplyTranscriptionCandidate implements maintenance.ServerDeps.
+// It re-fetches candidates for the book (cache-backed, so a second call for
+// the same title is effectively instant) and applies the top result via
+// ApplyMetadataCandidate. TASK-02 audio-confirm logic sets
+// MetadataReviewStatus="audio_confirmed" when the candidate title matches the
+// book's transcribed title.
+func (s *Server) ApplyTranscriptionCandidate(_ context.Context, bookID, candTitle, candAuthor string) error {
+	if s.metadataFetchService == nil {
+		return fmt.Errorf("metadata fetch service not initialized")
+	}
+	var hints []string
+	if candAuthor != "" {
+		hints = append(hints, candAuthor)
+	}
+	resp, err := s.metadataFetchService.SearchMetadataForBook(bookID, candTitle, hints...)
+	if err != nil {
+		return fmt.Errorf("re-search before apply for book %s: %w", bookID, err)
+	}
+	if resp == nil || len(resp.Results) == 0 {
+		return fmt.Errorf("no candidates found when applying for book %s", bookID)
+	}
+	_, err = s.metadataFetchService.ApplyMetadataCandidate(bookID, resp.Results[0], nil)
+	return err
 }
 
 // WaitForOp implements maintenance.ServerDeps. It polls the database at 5-second
