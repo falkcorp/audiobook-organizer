@@ -476,6 +476,15 @@ export async function getOperationTimeline(sinceMinutes = 15): Promise<Operation
   }
 }
 
+export async function getOperationV2(id: string): Promise<OperationV2> {
+  const response = await apiFetch(`${API_BASE}/operations/v2/${encodeURIComponent(id)}`);
+  if (!response.ok) {
+    throw await buildApiError(response, 'Failed to fetch operation');
+  }
+  const body = await response.json();
+  return body?.data?.operation ?? body?.operation;
+}
+
 // SSE event types emitted by the operations EventHub (UOS-06).
 export type OperationSSEEventName =
   | 'op.created'
@@ -1770,6 +1779,22 @@ export async function startBulkMetadataFetch(
     if (!response.ok) throw await buildApiError(response, 'Failed to start bulk metadata fetch');
     const body = await response.json();
     return body?.data ?? { operation_id: '' };
+  });
+}
+
+export async function startLibraryImport(path: string): Promise<{ operation_id: string }> {
+  return wrapTrigger('library.import', async () => {
+    const response = await apiFetch(`${API_BASE}/operations/v2`, {
+      method: 'POST',
+      body: JSON.stringify({
+        def_id: 'library.import',
+        params: { path },
+      }),
+    });
+    if (!response.ok) throw await buildApiError(response, 'Failed to start manual import');
+    const body = await response.json();
+    const operationID = body?.op_id ?? body?.data?.op_id ?? body?.data?.operation_id ?? '';
+    return { operation_id: operationID };
   });
 }
 
