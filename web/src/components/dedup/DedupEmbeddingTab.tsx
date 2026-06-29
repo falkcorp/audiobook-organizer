@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/DedupEmbeddingTab.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567891
-// last-edited: 2026-06-22
+// last-edited: 2026-06-28
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -695,69 +695,106 @@ export function EmbeddingDedupTab() {
       );
     return (
       <Box sx={{ minWidth: 0, position: 'relative' }}>
-        <Box
-          sx={{ cursor: 'pointer', minWidth: 0, '&:hover .dedup-side-title': { textDecoration: 'underline' } }}
+        <Stack
+          direction="row"
+          alignItems="stretch"
+          spacing={1.5}
+          sx={{
+            cursor: 'pointer',
+            minWidth: 0,
+            '&:hover .dedup-side-title': { textDecoration: 'underline' },
+          }}
           onClick={() => navigate(`/library/${book.id}`)}
         >
-          <Typography
-            className="dedup-side-title"
-            variant="body2"
-            fontWeight="medium"
-            noWrap
-            title={book.title}
-            sx={{ pr: isMultiWay ? 3 : 0 }} // leave room for the button
+          <Box
+            sx={{
+              width: 56,
+              flexShrink: 0,
+              borderRadius: 0.5,
+              overflow: 'hidden',
+              alignSelf: 'stretch',
+              minHeight: 68,
+              bgcolor: 'action.selected',
+            }}
           >
-            {cleanDisplayTitle(book.title)}
-          </Typography>
-          {book.author_name && (
-            <Typography variant="caption" color="text.secondary" noWrap title={book.author_name}>
-              {book.author_name}
-            </Typography>
-          )}
-          {book.book_sig_coverage_pct != null && book.book_sig_coverage_pct < 100 && (
-            <Tooltip
-              title={`Book signature was synthesized from partial audio (${book.book_sig_coverage_pct}% real, rest is silence-padded). Similarity matches against this book may be less reliable than full-coverage matches.`}
-            >
-              <Chip
-                label={`partial fp ${book.book_sig_coverage_pct}%`}
-                size="small"
-                color="warning"
-                variant="outlined"
-                onClick={(e) => e.stopPropagation()}
-                sx={{
-                  height: 16,
-                  fontSize: '0.6rem',
-                  mt: 0.25,
-                  mr: 0.5,
-                  '& .MuiChip-label': { px: 0.5 },
-                }}
+            {book.cover_url && (
+              <Box
+                component="img"
+                src={book.cover_url}
+                alt=""
+                loading="lazy"
+                sx={{ width: 56, height: '100%', objectFit: 'cover', display: 'block' }}
               />
-            </Tooltip>
-          )}
-          {shortPath && (
-            <Tooltip
-              title={tooltipContent}
-              enterDelay={300}
-              placement="bottom-start"
-              componentsProps={{ tooltip: { sx: { maxWidth: 'none' } } }}
+            )}
+          </Box>
+          <Stack spacing={0.35} sx={{ minWidth: 0, flex: 1 }}>
+            <Stack
+              direction="row"
+              alignItems="center"
+              spacing={0.5}
+              useFlexGap
+              sx={{ minWidth: 0, pr: isMultiWay ? 3 : 0 }} // leave room for the button
             >
               <Typography
-                variant="caption"
-                color="text.disabled"
+                className="dedup-side-title"
+                variant="body2"
+                fontWeight="medium"
                 noWrap
-                sx={{ display: 'block', fontFamily: 'monospace', fontSize: '0.7rem' }}
-                onClick={(e) => e.stopPropagation()}
+                title={book.title}
+                sx={{ minWidth: 0 }}
               >
-                {shortPath}
-                {extraCount > 0 && (
-                  <Box component="span" sx={{ ml: 0.5, color: 'primary.main', fontWeight: 600 }}>
-                    +{extraCount} more
-                  </Box>
-                )}
+                {cleanDisplayTitle(book.title)}
               </Typography>
-            </Tooltip>
-          )}
-        </Box>
+              {book.book_sig_coverage_pct != null && book.book_sig_coverage_pct < 100 && (
+                <Tooltip
+                  title={`Book signature was synthesized from partial audio (${book.book_sig_coverage_pct}% real, rest is silence-padded). Similarity matches against this book may be less reliable than full-coverage matches.`}
+                >
+                  <Chip
+                    label={`partial fp ${book.book_sig_coverage_pct}%`}
+                    size="small"
+                    color="warning"
+                    variant="outlined"
+                    onClick={(e) => e.stopPropagation()}
+                    sx={{
+                      height: 16,
+                      fontSize: '0.6rem',
+                      flexShrink: 0,
+                      '& .MuiChip-label': { px: 0.5 },
+                    }}
+                  />
+                </Tooltip>
+              )}
+            </Stack>
+            {book.author_name && (
+              <Typography variant="caption" color="text.secondary" noWrap title={book.author_name}>
+                {book.author_name}
+              </Typography>
+            )}
+            {shortPath && (
+              <Tooltip
+                title={tooltipContent}
+                enterDelay={300}
+                placement="bottom-start"
+                componentsProps={{ tooltip: { sx: { maxWidth: 'none' } } }}
+              >
+                <Typography
+                  variant="caption"
+                  color="text.disabled"
+                  noWrap
+                  sx={{ display: 'block', fontFamily: 'monospace', fontSize: '0.7rem' }}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {shortPath}
+                  {extraCount > 0 && (
+                    <Box component="span" sx={{ ml: 0.5, color: 'primary.main', fontWeight: 600 }}>
+                      +{extraCount} more
+                    </Box>
+                  )}
+                </Typography>
+              </Tooltip>
+            )}
+          </Stack>
+        </Stack>
         {cluster.hasPending && (
           <Tooltip title="Merge cluster — keep THIS book as primary (overrides auto-pick)">
             <span>
