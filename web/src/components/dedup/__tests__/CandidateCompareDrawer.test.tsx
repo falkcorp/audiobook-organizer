@@ -1,5 +1,5 @@
 // file: web/src/components/dedup/__tests__/CandidateCompareDrawer.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: c4d5e6f7-a8b9-0123-cdef-cd4567890123
 // last-edited: 2026-06-28
 
@@ -130,5 +130,21 @@ describe('CandidateCompareDrawer', () => {
     const seriesRow = screen.getByTestId('metadata-row-series');
     expect(seriesRow).toHaveAttribute('data-different', 'true');
     expect(within(seriesRow).getByText('Series')).toBeInTheDocument();
+  });
+
+  it('renders "Book metadata unavailable." when book_a is null and Metadata tab is active', async () => {
+    const breakdownNullA = {
+      ...breakdown,
+      book_a: null as unknown as typeof breakdown.book_a,
+    };
+    vi.mocked(api.getDedupCandidateBreakdown).mockResolvedValue(breakdownNullA);
+
+    renderDrawer();
+
+    expect(await screen.findByTestId('drawer-tab-metadata')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('drawer-tab-metadata'));
+
+    expect(await screen.findByText('Book metadata unavailable.')).toBeInTheDocument();
+    expect(screen.queryByTestId('metadata-compare-panel')).not.toBeInTheDocument();
   });
 });

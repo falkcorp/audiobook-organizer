@@ -1,5 +1,5 @@
 // file: web/src/components/dedup/CandidateCompareDrawer.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: a6f7b8c9-d0e1-2345-fabc-af6789012345
 // last-edited: 2026-06-28
 
@@ -85,7 +85,7 @@ function formatPartCount(count: number): string {
 }
 
 function normalizeCompareValue(value: string): string {
-  return value.trim().toLocaleLowerCase();
+  return value.trim().toLowerCase();
 }
 
 function totalFileSize(book: DedupBookDetail): number | undefined {
@@ -186,7 +186,7 @@ function MetadataComparePanel({ bookA, bookB, signals }: MetadataComparePanelPro
         </Typography>
         {signals.length > 0 ? (
           signals.map((signal) => (
-            <Tooltip key={signal.kind} title={signal.evidence || signal.kind}>
+            <Tooltip key={signal.kind} title={signal.evidence}>
               <Chip
                 label={signalLabel(signal)}
                 size="small"
