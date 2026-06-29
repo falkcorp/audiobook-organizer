@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/UnifiedDedupTab.tsx
-// version: 1.7.0
+// version: 1.8.0
 // guid: c8b9d0e1-f2a3-4567-bcde-cb8901234567
-// last-edited: 2026-06-28
+// last-edited: 2026-06-29
 
 // UnifiedDedupTab is the T017 single surface that replaces the separate Books /
 // Advanced-Scan / Acoustic tabs. It shows a paginated candidate table filtered
@@ -107,6 +107,22 @@ function qualityChip(score: number) {
   return <Chip label="Poor metadata" size="small" color="error" variant="outlined" />;
 }
 
+/**
+ * Single source of truth for the "recommended keep" decision.
+ * Returns which entity to keep and its label ('A' or 'B'), or null when scores
+ * are tied (no recommendation). Both the render and the `m` keyboard shortcut
+ * call this function so they can never drift.
+ */
+function recommendedKeepSide(
+  candidate: DedupCandidate
+): { keepId: string; label: 'A' | 'B' } | null {
+  const qA = metadataQuality(candidate.book_a);
+  const qB = metadataQuality(candidate.book_b);
+  if (qA > qB) return { keepId: candidate.entity_a_id, label: 'A' };
+  if (qB > qA) return { keepId: candidate.entity_b_id, label: 'B' };
+  return null; // tie — no recommendation
+}
+
 const DEDUP_SHORTCUTS = [
   { keys: 'j / k', action: 'Move to next / previous row' },
   { keys: 'm', action: 'Merge the focused candidate' },
@@ -118,13 +134,16 @@ const DEDUP_SHORTCUTS = [
   { keys: '?', action: 'Toggle this shortcut help' },
 ];
 
-function isKeyboardShortcutSuppressed() {
+function isKeyboardShortcutSuppressed(): boolean {
   const active = document.activeElement;
   if (!active) return false;
   const tag = active.tagName.toLowerCase();
-  if (tag === 'input' || tag === 'textarea' || tag === 'select' || tag === 'dialog') return true;
+  // Block shortcuts when a form element has focus.
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
   const activeElement = active as HTMLElement;
   if (activeElement.isContentEditable) return true;
+  // Block shortcuts when focus is anywhere inside a modal dialog (MUI renders
+  // div[role="dialog"], not a native <dialog> element).
   return Boolean(activeElement.closest('[role="dialog"]'));
 }
 
@@ -649,10 +668,11 @@ export function UnifiedDedupTab({ hidden }: UnifiedDedupTabProps) {
 
       if (event.key === 'm' && focusedCandidate.status === 'pending') {
         event.preventDefault();
-        const qA = metadataQuality(focusedCandidate.book_a);
-        const qB = metadataQuality(focusedCandidate.book_b);
-        const keepId = qB > qA ? focusedCandidate.entity_b_id : focusedCandidate.entity_a_id;
-        const label = keepId === focusedCandidate.entity_b_id ? 'B' : 'A';
+        // Use the shared helper so this decision can never drift from the ★ chip shown in render.
+        const rec = recommendedKeepSide(focusedCandidate);
+        // On a quality tie (rec === null) default to keeping A, matching the Keep A button order.
+        const keepId = rec?.keepId ?? focusedCandidate.entity_a_id;
+        const label = rec?.label ?? 'A';
         void handleKeep(focusedCandidate.id, keepId, label);
       }
     };
@@ -998,8 +1018,10 @@ export function UnifiedDedupTab({ hidden }: UnifiedDedupTabProps) {
                   const bookB = c.book_b;
                   const qA = metadataQuality(bookA);
                   const qB = metadataQuality(bookB);
-                  const recommendA = qA > qB;
-                  const recommendB = qB > qA;
+                  // Use the shared helper so the ★ chip and `m` shortcut always agree.
+                  const rec = recommendedKeepSide(c);
+                  const recommendA = rec?.label === 'A';
+                  const recommendB = rec?.label === 'B';
                   const isSelected = selected.has(c.id);
                   const isFocused = idx === focusedRowIndex;
                   return (
