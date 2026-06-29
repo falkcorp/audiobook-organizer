@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.45.0
+// version: 2.46.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-06-28
 
@@ -482,7 +482,9 @@ export async function getOperationV2(id: string): Promise<OperationV2> {
     throw await buildApiError(response, 'Failed to fetch operation');
   }
   const body = await response.json();
-  return body?.data?.operation ?? body?.operation;
+  const op = body?.data?.operation ?? body?.operation;
+  if (!op) throw new Error(`Unexpected response shape from GET /api/v1/operations/v2/${id}`);
+  return op as OperationV2;
 }
 
 // SSE event types emitted by the operations EventHub (UOS-06).
