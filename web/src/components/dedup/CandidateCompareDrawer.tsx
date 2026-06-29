@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/CandidateCompareDrawer.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: a6f7b8c9-d0e1-2345-fabc-af6789012345
-// last-edited: 2026-06-19
+// last-edited: 2026-06-28
 
 // CandidateCompareDrawer is a right-side Drawer that shows a full side-by-side
 // comparison of the two books in a dedup candidate, plus the score breakdown.
@@ -13,6 +13,7 @@ import {
   Alert,
   Box,
   Button,
+  Chip,
   CircularProgress,
   Divider,
   Drawer,
@@ -29,7 +30,12 @@ import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import { useNavigate } from 'react-router-dom';
 import * as api from '../../services/api';
-import type { AcoustIDCompareResponse, DedupCandidateBreakdownResponse } from '../../services/api';
+import type {
+  AcoustIDCompareResponse,
+  DedupBookDetail,
+  DedupCandidateBreakdownResponse,
+  DedupSignal,
+} from '../../services/api';
 import { ScoreBadgeRow } from './ScoreBadgeRow';
 import { ScoreBreakdownPanel } from './ScoreBreakdownPanel';
 import { FileInfoCompare } from './FileInfoCompare';
@@ -44,6 +50,182 @@ interface CandidateCompareDrawerProps {
   onMerged?: (candidateId: number, keepId?: string) => void;
   /** Called after a dismiss action. */
   onDismissed?: (candidateId: number) => void;
+}
+
+const SIGNAL_LABELS: Record<string, string> = {
+  exact_file: 'Exact file hash',
+  exact_acoustid: 'Exact AcoustID',
+  isbn_asin: 'ISBN/ASIN',
+  lsh_acoustid: 'LSH AcoustID',
+  embedding_high: 'Embedding (high)',
+  metadata_hash: 'Metadata hash',
+  metadata_fuzzy: 'Metadata fuzzy',
+  embedding_med: 'Embedding (medium)',
+  duration: 'Duration match',
+  folder_path: 'Folder path',
+};
+
+function formatBytes(bytes: number | undefined): string {
+  if (bytes == null) return 'Unknown';
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)}KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+}
+
+function formatDuration(seconds: number | undefined): string {
+  if (seconds == null) return 'Unknown';
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+function formatPartCount(count: number): string {
+  return `${count} ${count === 1 ? 'part' : 'parts'}`;
+}
+
+function normalizeCompareValue(value: string): string {
+  return value.trim().toLocaleLowerCase();
+}
+
+function totalFileSize(book: DedupBookDetail): number | undefined {
+  const fileTotal = book.files?.reduce((sum, file) => sum + (file.file_size ?? 0), 0) ?? 0;
+  return fileTotal > 0 ? fileTotal : book.file_size;
+}
+
+function totalDuration(book: DedupBookDetail): number | undefined {
+  return book.duration ?? book.files?.reduce((sum, file) => sum + (file.duration ?? 0), 0);
+}
+
+function signalLabel(signal: DedupSignal): string {
+  return SIGNAL_LABELS[signal.kind] ?? signal.kind.replace(/_/g, ' ');
+}
+
+interface MetadataCompareRowProps {
+  id: string;
+  label: string;
+  left: string;
+  right: string;
+}
+
+function MetadataCompareRow({ id, label, left, right }: MetadataCompareRowProps) {
+  const different = normalizeCompareValue(left) !== normalizeCompareValue(right);
+  return (
+    <Box
+      data-testid={`metadata-row-${id}`}
+      data-different={different ? 'true' : 'false'}
+      sx={{
+        display: 'grid',
+        gridTemplateColumns: { xs: '1fr', sm: '140px minmax(0, 1fr) minmax(0, 1fr)' },
+        gap: { xs: 0.75, sm: 1 },
+        alignItems: 'stretch',
+        p: 1,
+        borderRadius: 1,
+        bgcolor: different ? 'warning.light' : 'transparent',
+        color: different ? 'warning.contrastText' : 'inherit',
+      }}
+    >
+      <Typography variant="caption" fontWeight={700} color={different ? 'inherit' : 'text.secondary'}>
+        {label}
+      </Typography>
+      <Typography variant="body2" sx={{ minWidth: 0, overflowWrap: 'anywhere' }}>
+        {left}
+      </Typography>
+      <Typography variant="body2" sx={{ minWidth: 0, overflowWrap: 'anywhere' }}>
+        {right}
+      </Typography>
+    </Box>
+  );
+}
+
+interface MetadataComparePanelProps {
+  bookA: DedupBookDetail;
+  bookB: DedupBookDetail;
+  signals: DedupSignal[];
+}
+
+function MetadataComparePanel({ bookA, bookB, signals }: MetadataComparePanelProps) {
+  const rows: MetadataCompareRowProps[] = [
+    {
+      id: 'series',
+      label: 'Series',
+      left: bookA.series_name ?? (bookA.series_id != null ? `Series #${bookA.series_id}` : 'None'),
+      right: bookB.series_name ?? (bookB.series_id != null ? `Series #${bookB.series_id}` : 'None'),
+    },
+    {
+      id: 'narrator',
+      label: 'Narrator',
+      left: bookA.narrator ?? 'Unknown',
+      right: bookB.narrator ?? 'Unknown',
+    },
+    {
+      id: 'parts',
+      label: 'Parts',
+      left: formatPartCount(bookA.files?.length ?? 0),
+      right: formatPartCount(bookB.files?.length ?? 0),
+    },
+    {
+      id: 'duration',
+      label: 'Duration',
+      left: formatDuration(totalDuration(bookA)),
+      right: formatDuration(totalDuration(bookB)),
+    },
+    {
+      id: 'file-size',
+      label: 'File size',
+      left: formatBytes(totalFileSize(bookA)),
+      right: formatBytes(totalFileSize(bookB)),
+    },
+  ];
+
+  return (
+    <Stack spacing={1.5} data-testid="metadata-compare-panel">
+      <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap>
+        <Typography variant="caption" fontWeight={700} color="text.secondary">
+          Signals fired
+        </Typography>
+        {signals.length > 0 ? (
+          signals.map((signal) => (
+            <Tooltip key={signal.kind} title={signal.evidence || signal.kind}>
+              <Chip
+                label={signalLabel(signal)}
+                size="small"
+                color={signal.primary ? 'primary' : 'default'}
+                variant={signal.primary ? 'filled' : 'outlined'}
+              />
+            </Tooltip>
+          ))
+        ) : (
+          <Typography variant="caption" color="text.disabled" fontStyle="italic">
+            No signal data available.
+          </Typography>
+        )}
+      </Stack>
+
+      <Box
+        sx={{
+          display: 'grid',
+          gridTemplateColumns: { xs: '1fr', sm: '140px minmax(0, 1fr) minmax(0, 1fr)' },
+          gap: { xs: 0.5, sm: 1 },
+          px: 1,
+        }}
+      >
+        <Box />
+        <Typography variant="caption" color="text.secondary" fontWeight={700}>
+          Book A
+        </Typography>
+        <Typography variant="caption" color="text.secondary" fontWeight={700}>
+          Book B
+        </Typography>
+      </Box>
+
+      <Stack spacing={0.5}>
+        {rows.map((row) => (
+          <MetadataCompareRow key={row.id} {...row} />
+        ))}
+      </Stack>
+    </Stack>
+  );
 }
 
 export function CandidateCompareDrawer({
@@ -113,11 +295,11 @@ export function CandidateCompareDrawer({
     };
   }, []);
 
-  // Lazy-load fingerprint comparison when the Fingerprint tab (index 2) is first opened.
+  // Lazy-load fingerprint comparison when the Fingerprint tab (index 3) is first opened.
   useEffect(() => {
     const bA = data?.book_a;
     const bB = data?.book_b;
-    if (activeTab !== 2 || !bA || !bB || fpData || fpLoading) return;
+    if (activeTab !== 3 || !bA || !bB || fpData || fpLoading) return;
     fpAbortRef.current?.abort();
     const ctrl = new AbortController();
     fpAbortRef.current = ctrl;
@@ -310,7 +492,7 @@ export function CandidateCompareDrawer({
 
             <Divider sx={{ mb: 2 }} />
 
-            {/* Tabs: Files | Score Breakdown */}
+            {/* Tabs: Files | Score Breakdown | Metadata | Fingerprint */}
             <Tabs
               value={activeTab}
               onChange={(_: unknown, v: number) => setActiveTab(v)}
@@ -318,6 +500,7 @@ export function CandidateCompareDrawer({
             >
               <Tab label="Files" data-testid="drawer-tab-files" />
               <Tab label="Score Breakdown" data-testid="drawer-tab-breakdown" />
+              <Tab label="Metadata" data-testid="drawer-tab-metadata" />
               <Tab label="Fingerprint" data-testid="drawer-tab-fingerprint" />
             </Tabs>
 
@@ -339,7 +522,20 @@ export function CandidateCompareDrawer({
               </Typography>
             )}
 
-            {activeTab === 2 && (
+            {activeTab === 2 && bookA && bookB && (
+              <MetadataComparePanel
+                bookA={bookA}
+                bookB={bookB}
+                signals={candidate?.score_breakdown?.signals ?? []}
+              />
+            )}
+            {activeTab === 2 && (!bookA || !bookB) && (
+              <Typography color="text.secondary" variant="body2">
+                Book metadata unavailable.
+              </Typography>
+            )}
+
+            {activeTab === 3 && (
               <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, pt: 1 }}>
                 {fpLoading && <CircularProgress size={32} />}
                 {!fpLoading && fpData && fpData.segment_scores.length > 0 && (

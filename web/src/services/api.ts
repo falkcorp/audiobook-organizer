@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.44.0
+// version: 2.45.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-06-22
+// last-edited: 2026-06-28
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -5536,8 +5536,10 @@ export interface DedupBookDetail {
   author_name?: string;
   series_id?: number | null;
   series_name?: string;
+  narrator?: string;
   format?: string;
   duration?: number;
+  file_size?: number;
   file_path?: string;
   cover_url?: string;
   files: Array<{
