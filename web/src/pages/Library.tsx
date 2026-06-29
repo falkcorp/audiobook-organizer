@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.tsx
-// version: 1.70.0
+// version: 1.71.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-06-22
+// last-edited: 2026-06-28
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -232,6 +232,11 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
   const [importFilePaths, setImportFilePaths] = useState<string[]>([]);
   const [importFileOrganize, setImportFileOrganize] = useState(true);
   const [importFileInProgress, setImportFileInProgress] = useState(false);
+  const [manualImportDialogOpen, setManualImportDialogOpen] = useState(false);
+  const [manualImportPath, setManualImportPath] = useState('');
+  const [manualImportError, setManualImportError] = useState<string | null>(null);
+  const [manualImportInProgress, setManualImportInProgress] = useState(false);
+  const [manualImportOp, setManualImportOp] = useState<api.OperationV2 | null>(null);
 
   // Per-action loading states for dynamic UI
   const [scanningAll, setScanningAll] = useState(false);
@@ -261,6 +266,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
   const [bulkOrganizeError, setBulkOrganizeError] = useState<OrganizeErrorState | null>(null);
   const bulkOrganizeSnapshotRef = useRef<Map<string, Audiobook>>(new Map());
   const pollingCleanupRef = useRef<(() => void) | null>(null);
+  const manualImportPollCleanupRef = useRef<(() => void) | null>(null);
 
   // Cleanup polling on unmount
   useEffect(() => {
@@ -268,6 +274,10 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
       if (pollingCleanupRef.current) {
         pollingCleanupRef.current();
         pollingCleanupRef.current = null;
+      }
+      if (manualImportPollCleanupRef.current) {
+        manualImportPollCleanupRef.current();
+        manualImportPollCleanupRef.current = null;
       }
     };
   }, []);
@@ -567,6 +577,13 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     setImportFileDialogOpen(true);
   };
 
+  const handleOpenManualPathImport = () => {
+    setManualImportPath('');
+    setManualImportError(null);
+    setManualImportOp(null);
+    setManualImportDialogOpen(true);
+  };
+
   const handleAddImportFilePath = () => {
     const trimmed = importFilePath.trim();
     if (!trimmed) return;
@@ -628,6 +645,87 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
       toast(message, 'error');
     } finally {
       setImportFileInProgress(false);
+    }
+  };
+
+  const startManualImportPolling = (operationId: string) => {
+    if (manualImportPollCleanupRef.current) {
+      manualImportPollCleanupRef.current();
+    }
+
+    let cleanedUp = false;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    const terminalStatuses = [
+      'completed',
+      'failed',
+      'canceled',
+      'interrupted_dropped',
+      'interrupted_restart',
+    ];
+
+    const poll = async () => {
+      try {
+        const op = await api.getOperationV2(operationId);
+        if (cleanedUp) return;
+        setManualImportOp(op);
+        if (terminalStatuses.includes(op.status)) {
+          setManualImportInProgress(false);
+          manualImportPollCleanupRef.current = null;
+          if (op.status === 'completed') {
+            toast('Manual import completed.', 'success');
+            setManualImportDialogOpen(false);
+            setManualImportPath('');
+            setManualImportError(null);
+            await loadAudiobooks();
+          } else {
+            const message = op.error_message || 'Manual import failed.';
+            setManualImportError(message);
+            toast(message, 'error');
+          }
+          return;
+        }
+        timeoutId = setTimeout(poll, 2000);
+      } catch (error) {
+        if (cleanedUp) return;
+        const message = error instanceof Error ? error.message : 'Failed to poll manual import.';
+        setManualImportInProgress(false);
+        setManualImportError(message);
+        toast(message, 'error');
+        manualImportPollCleanupRef.current = null;
+      }
+    };
+
+    timeoutId = setTimeout(poll, 2000);
+    manualImportPollCleanupRef.current = () => {
+      cleanedUp = true;
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    };
+  };
+
+  const handleManualPathImport = async () => {
+    const path = manualImportPath.trim();
+    if (!path) {
+      setManualImportError('Enter an absolute path to import.');
+      return;
+    }
+
+    setManualImportInProgress(true);
+    setManualImportError(null);
+    setManualImportOp(null);
+    try {
+      const { operation_id: operationId } = await api.startLibraryImport(path);
+      if (!operationId) {
+        throw new Error('Manual import did not return an operation ID.');
+      }
+      toast('Manual import started.', 'info');
+      startManualImportPolling(operationId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to start manual import.';
+      setManualImportInProgress(false);
+      setManualImportError(message);
+      toast(message, 'error');
     }
   };
 
@@ -1585,6 +1683,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
         onDeleteSelected={() => setBatchDeleteDialogOpen(true)}
         onRestoreSelected={handleBatchRestore}
         onManualImport={handleManualImport}
+        onManualPathImport={handleOpenManualPathImport}
         onFilterOpen={() => setFilterOpen(true)}
         onOrganizeLibrary={handleOrganizeLibrary}
         onFullRescan={handleFullRescan}
@@ -1757,6 +1856,14 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
           setImportFileOrganize={setImportFileOrganize}
           importFileInProgress={importFileInProgress}
           handleImportFile={handleImportFile}
+          manualImportDialogOpen={manualImportDialogOpen}
+          setManualImportDialogOpen={setManualImportDialogOpen}
+          manualImportPath={manualImportPath}
+          setManualImportPath={setManualImportPath}
+          manualImportError={manualImportError}
+          manualImportInProgress={manualImportInProgress}
+          manualImportOp={manualImportOp}
+          handleManualPathImport={handleManualPathImport}
           bulkFetchDialogOpen={bulkFetchDialogOpen}
           handleCancelBulkFetch={handleCancelBulkFetch}
           bulkFetchProgress={bulkFetchProgress}

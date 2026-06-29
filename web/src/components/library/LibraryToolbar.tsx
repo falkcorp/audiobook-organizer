@@ -1,7 +1,7 @@
 // file: web/src/components/library/LibraryToolbar.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-06-21
+// last-edited: 2026-06-28
 
 import {
   Typography,
@@ -17,6 +17,7 @@ import {
 import {
   FilterList as FilterListIcon,
   Upload as UploadIcon,
+  DriveFolderUpload as ManualImportIcon,
   Delete as DeleteSweepIcon,
   Refresh as RefreshIcon,
 } from '@mui/icons-material';
@@ -60,6 +61,7 @@ interface LibraryToolbarProps {
   onDeleteSelected: () => void;
   onRestoreSelected: () => void;
   onManualImport: () => void;
+  onManualPathImport: () => void;
   onFilterOpen: () => void;
   onOrganizeLibrary: () => void;
   onFullRescan: () => void;
@@ -103,6 +105,7 @@ export const LibraryToolbar = ({
   onDeleteSelected,
   onRestoreSelected,
   onManualImport,
+  onManualPathImport,
   onFilterOpen,
   onOrganizeLibrary,
   onFullRescan,
@@ -151,6 +154,7 @@ export const LibraryToolbar = ({
         <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
           <Typography variant="h6" sx={{ mr: 1 }}>Library</Typography>
           <Button startIcon={<UploadIcon />} onClick={onManualImport} variant="contained" size="small">Import Files</Button>
+          <Button startIcon={<ManualImportIcon />} onClick={onManualPathImport} variant="outlined" size="small">Manual import</Button>
           <Button startIcon={<FilterListIcon />} onClick={onFilterOpen} variant="outlined" size="small">
             Filters{getActiveFilterCount() > 0 && <Chip label={getActiveFilterCount()} size="small" color="primary" sx={{ ml: 0.5, height: 18 }} />}
           </Button>

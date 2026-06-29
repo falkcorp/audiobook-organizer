@@ -1,11 +1,11 @@
 // file: web/src/pages/Library.importFile.test.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6f4a7b0d-9c9f-4f0b-8d85-1dd9e1ffb913
-// last-edited: 2026-05-08
+// last-edited: 2026-06-28
 
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { Library } from './Library';
 import * as api from '../services/api';
 
@@ -65,7 +65,35 @@ vi.mock('../services/api', () => {
       message: 'import started',
       book: { id: 'id-1', title: 'Test Book', file_path: '/tmp/book.m4b' },
     }),
+    startLibraryImport: vi.fn().mockResolvedValue({ operation_id: 'op-manual-import' }),
+    getOperationV2: vi.fn().mockResolvedValue({
+      id: 'op-manual-import',
+      def_id: 'library.import',
+      plugin: 'library',
+      display_name: 'Manual Import',
+      status: 'completed',
+      priority: 10,
+      notify_level: 0,
+      progress_current: 1,
+      progress_total: 1,
+      progress_message: 'Imported /tmp/book.m4b',
+      current_phase: null,
+      current_item: null,
+      actor_user_id: null,
+      parent_id: null,
+      queued_at: '2026-01-01T00:00:00Z',
+      started_at: '2026-01-01T00:00:00Z',
+      completed_at: '2026-01-01T00:00:01Z',
+      error_message: null,
+      resume_count: 0,
+      trace_id: null,
+      span_id: null,
+    }),
   };
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('Library import dialog', () => {
@@ -90,6 +118,41 @@ describe('Library import dialog', () => {
     const importFileMock = vi.mocked(api.importFile);
     await waitFor(() => {
       expect(importFileMock).toHaveBeenCalledWith('/tmp/book.m4b', true);
+    });
+  });
+
+  it('starts a manual library import operation and polls it to completion', async () => {
+    vi.useFakeTimers();
+    render(
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <Library />
+      </MemoryRouter>
+    );
+
+    const openButton = await screen.findByRole('button', {
+      name: /manual import/i,
+    });
+    fireEvent.click(openButton);
+
+    const pathField = await screen.findByLabelText(/absolute path/i);
+    fireEvent.change(pathField, { target: { value: '/tmp/book.m4b' } });
+
+    const submitButton = await screen.findByRole('button', { name: 'Start import' });
+    fireEvent.click(submitButton);
+
+    const startImportMock = vi.mocked(api.startLibraryImport);
+    await waitFor(() => {
+      expect(startImportMock).toHaveBeenCalledWith('/tmp/book.m4b');
+    });
+    expect(submitButton).toBeDisabled();
+
+    await vi.advanceTimersByTimeAsync(2000);
+
+    await waitFor(() => {
+      expect(api.getOperationV2).toHaveBeenCalledWith('op-manual-import');
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: /manual import/i })).not.toBeInTheDocument();
     });
   });
 });

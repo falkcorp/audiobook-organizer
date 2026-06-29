@@ -1,7 +1,7 @@
 // file: web/src/components/library/LibraryDialogs.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: d4e5f6a7-b8c9-0123-def0-234567890123
-// last-edited: 2026-06-21
+// last-edited: 2026-06-28
 
 import React from 'react';
 import {
@@ -156,6 +156,16 @@ interface LibraryDialogsProps {
   importFileInProgress: boolean;
   handleImportFile: () => void;
 
+  // Manual import operation dialog
+  manualImportDialogOpen: boolean;
+  setManualImportDialogOpen: (open: boolean) => void;
+  manualImportPath: string;
+  setManualImportPath: (path: string) => void;
+  manualImportError: string | null;
+  manualImportInProgress: boolean;
+  manualImportOp: api.OperationV2 | null;
+  handleManualPathImport: () => void;
+
   // Bulk fetch dialog
   bulkFetchDialogOpen: boolean;
   handleCancelBulkFetch: () => void;
@@ -293,6 +303,14 @@ export const LibraryDialogs = ({
   setImportFileOrganize,
   importFileInProgress,
   handleImportFile,
+  manualImportDialogOpen,
+  setManualImportDialogOpen,
+  manualImportPath,
+  setManualImportPath,
+  manualImportError,
+  manualImportInProgress,
+  manualImportOp,
+  handleManualPathImport,
   bulkFetchDialogOpen,
   handleCancelBulkFetch,
   bulkFetchProgress,
@@ -778,6 +796,82 @@ export const LibraryDialogs = ({
           }
         >
           {importFileInProgress ? 'Importing\u2026' : 'Import'}
+        </Button>
+      </DialogActions>
+    </Dialog>
+
+    <Dialog
+      open={manualImportDialogOpen}
+      onClose={() => {
+        if (!manualImportInProgress) {
+          setManualImportDialogOpen(false);
+        }
+      }}
+      maxWidth="sm"
+      fullWidth
+    >
+      <DialogTitle>Manual import</DialogTitle>
+      <DialogContent>
+        <TextField
+          fullWidth
+          autoFocus
+          margin="dense"
+          label="Absolute path"
+          value={manualImportPath}
+          onChange={(e) => setManualImportPath(e.target.value)}
+          placeholder="/path/to/audiobook-or-folder"
+          error={Boolean(manualImportError)}
+          helperText={manualImportError || 'Import one server path using the library.import operation.'}
+          disabled={manualImportInProgress}
+        />
+        {manualImportInProgress && (
+          <Box sx={{ mt: 2 }}>
+            <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+              <CircularProgress size={18} />
+              <Typography variant="body2" color="text.secondary">
+                {manualImportOp?.progress_message ||
+                  manualImportOp?.current_phase ||
+                  'Waiting for progress...'}
+              </Typography>
+            </Stack>
+            <LinearProgress
+              variant={(manualImportOp?.progress_total ?? 0) > 0 ? 'determinate' : 'indeterminate'}
+              value={
+                (manualImportOp?.progress_total ?? 0) > 0
+                  ? Math.round(
+                      ((manualImportOp?.progress_current ?? 0) /
+                        (manualImportOp?.progress_total ?? 1)) *
+                        100
+                    )
+                  : 0
+              }
+            />
+            {(manualImportOp?.progress_total ?? 0) > 0 && (
+              <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
+                {Math.round(
+                  ((manualImportOp?.progress_current ?? 0) /
+                    (manualImportOp?.progress_total ?? 1)) *
+                    100
+                )}
+                % ({manualImportOp?.progress_current ?? 0}/{manualImportOp?.progress_total ?? 0})
+              </Typography>
+            )}
+          </Box>
+        )}
+      </DialogContent>
+      <DialogActions>
+        <Button
+          onClick={() => setManualImportDialogOpen(false)}
+          disabled={manualImportInProgress}
+        >
+          Cancel
+        </Button>
+        <Button
+          variant="contained"
+          onClick={handleManualPathImport}
+          disabled={manualImportInProgress || !manualImportPath.trim()}
+        >
+          {manualImportInProgress ? 'Importing...' : 'Start import'}
         </Button>
       </DialogActions>
     </Dialog>
