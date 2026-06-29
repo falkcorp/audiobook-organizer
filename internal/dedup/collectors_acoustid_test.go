@@ -1,7 +1,7 @@
 // file: internal/dedup/collectors_acoustid_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b8c4d952-e0f3-5a26-99b1-6cd23f458g7e
-// last-edited: 2026-06-10
+// last-edited: 2026-06-28
 
 package dedup
 
@@ -132,6 +132,52 @@ func TestCollectExactAcoustID_HitEmitsSignal(t *testing.T) {
 	}
 	if sigs[0].Confidence != 0.99 {
 		t.Errorf("expected confidence 0.99, got %v", sigs[0].Confidence)
+	}
+}
+
+func TestCollectExactAcoustID_ShortQuerySkipped(t *testing.T) {
+	queryFile := &database.BookFile{
+		ID:                             "qfile1",
+		BookID:                         "bookA",
+		AcoustIDSeg0:                   validFP80,
+		AcoustIDFingerprintDurationSec: 20,
+	}
+	candidateFile := &database.BookFile{
+		ID:                             "cfile1",
+		BookID:                         "bookB",
+		AcoustIDFingerprintDurationSec: 7200,
+	}
+	store := &stubExactStore{m: map[string]*database.BookFile{validFP80: candidateFile}}
+
+	sigs, err := CollectExactAcoustID(store, queryFile, "bookA")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(sigs) != 0 {
+		t.Fatalf("expected 0 signals for short query fingerprint, got %d", len(sigs))
+	}
+}
+
+func TestCollectExactAcoustID_ShortHitSkipped(t *testing.T) {
+	queryFile := &database.BookFile{
+		ID:                             "qfile1",
+		BookID:                         "bookA",
+		AcoustIDSeg0:                   validFP80,
+		AcoustIDFingerprintDurationSec: 7200,
+	}
+	candidateFile := &database.BookFile{
+		ID:                             "cfile1",
+		BookID:                         "bookB",
+		AcoustIDFingerprintDurationSec: 20,
+	}
+	store := &stubExactStore{m: map[string]*database.BookFile{validFP80: candidateFile}}
+
+	sigs, err := CollectExactAcoustID(store, queryFile, "bookA")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(sigs) != 0 {
+		t.Fatalf("expected 0 signals for short hit fingerprint, got %d", len(sigs))
 	}
 }
 

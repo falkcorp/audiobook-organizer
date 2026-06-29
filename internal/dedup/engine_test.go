@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_test.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: 2a7e4d91-c538-4f06-b1d3-9e8c5a6f0d72
-// last-edited: 2026-06-16
+// last-edited: 2026-06-28
 
 package dedup
 
@@ -49,6 +49,88 @@ func setupTestEngine(t *testing.T) (*Engine, *database.MockStore, *database.Embe
 }
 
 // strPtr is defined in helpers_test.go
+
+func runAcoustIDScanSharedSegment(
+	t *testing.T,
+	durationA float64,
+	durationB float64,
+) []database.DedupCandidate {
+	t.Helper()
+
+	engine, mock, es := setupTestEngine(t)
+	bookA := database.Book{ID: "BOOK_A", Title: "Book A"}
+	bookB := database.Book{ID: "BOOK_B", Title: "Book B"}
+	fileA := database.BookFile{
+		ID:                             "FILE_A",
+		BookID:                         "BOOK_A",
+		FilePath:                       "/library/a/book.m4b",
+		AcoustIDSeg0:                   validFP80,
+		AcoustIDFingerprintDurationSec: durationA,
+	}
+	fileB := database.BookFile{
+		ID:                             "FILE_B",
+		BookID:                         "BOOK_B",
+		FilePath:                       "/library/b/book.m4b",
+		AcoustIDSeg0:                   validFP80,
+		AcoustIDFingerprintDurationSec: durationB,
+	}
+
+	mock.GetAllBooksFunc = func(limit, offset int) ([]database.Book, error) {
+		return []database.Book{bookA, bookB}, nil
+	}
+	mock.GetBookFilesFunc = func(bookID string) ([]database.BookFile, error) {
+		switch bookID {
+		case "BOOK_A":
+			return []database.BookFile{fileA}, nil
+		case "BOOK_B":
+			return []database.BookFile{fileB}, nil
+		default:
+			return nil, nil
+		}
+	}
+	mock.GetBookFileByAcoustIDFunc = func(fp string) (*database.BookFile, error) {
+		if fp != validFP80 {
+			return nil, nil
+		}
+		return &fileB, nil
+	}
+
+	if err := engine.AcoustIDScan(context.Background(), nil); err != nil {
+		t.Fatalf("AcoustIDScan: %v", err)
+	}
+	candidates, _, err := es.ListCandidates(database.CandidateFilter{
+		EntityType: "book",
+		Status:     "pending",
+	})
+	if err != nil {
+		t.Fatalf("ListCandidates: %v", err)
+	}
+	return candidates
+}
+
+func TestAcoustIDScan_SkipsShortClipFingerprintMatch(t *testing.T) {
+	candidates := runAcoustIDScanSharedSegment(t, 20, 20)
+	if len(candidates) != 0 {
+		t.Fatalf("expected no candidate for shared short clip fingerprint, got %d: %+v", len(candidates), candidates)
+	}
+}
+
+func TestAcoustIDScan_LongFingerprintMatchStillPairs(t *testing.T) {
+	candidates := runAcoustIDScanSharedSegment(t, 7200, 7200)
+	if len(candidates) != 1 {
+		t.Fatalf("expected one candidate for shared long fingerprint, got %d: %+v", len(candidates), candidates)
+	}
+	if candidates[0].Layer != "acoustid" {
+		t.Fatalf("candidate layer = %q, want acoustid", candidates[0].Layer)
+	}
+}
+
+func TestAcoustIDScan_UnknownFingerprintDurationKeepsMatch(t *testing.T) {
+	candidates := runAcoustIDScanSharedSegment(t, 0, 0)
+	if len(candidates) != 1 {
+		t.Fatalf("expected one candidate for unknown fingerprint duration, got %d: %+v", len(candidates), candidates)
+	}
+}
 
 func TestEngine_ExactMatch_FileHash(t *testing.T) {
 	engine, mock, es := setupTestEngine(t)
