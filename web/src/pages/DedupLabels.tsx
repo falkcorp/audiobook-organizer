@@ -1,5 +1,5 @@
 // file: web/src/pages/DedupLabels.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7e3a1c92-4b60-4d85-9f21-6a5e0c9d3f58
 // last-edited: 2026-06-28
 
@@ -8,7 +8,7 @@
 // / label_source / band, with one-click human override. This is where the user
 // reviews the gold dataset that the classifier will train and validate on.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box, Typography, Paper, Table, TableBody, TableCell, TableContainer, TableHead,
   TableRow, Chip, Select, MenuItem, FormControl, InputLabel, Button, Stack,
@@ -114,10 +114,40 @@ export default function DedupLabels() {
   const [labelFilter, setLabelFilter] = useState('');
   const [sourceFilter, setSourceFilter] = useState('');
   const [bandFilter, setBandFilter] = useState('');
+  const [localBandFilter, setLocalBandFilter] = useState('');
+  const bandDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const openBook = useCallback((bookId: string) => navigate(`/library/${bookId}`), [navigate]);
+
+  const loadStats = useCallback(async () => {
+    try {
+      const r = await apiFetch(`${API_BASE}/dedup/labels/stats`);
+      if (r.ok) setStats((await r.json()).data);
+    } catch {
+      /* stats are best-effort */
+    }
+  }, []);
+
+  const override = useCallback(async (candidateId: number, label: string) => {
+    try {
+      const r = await apiFetch(`${API_BASE}/dedup/labels/${candidateId}/override`, {
+        method: 'POST',
+        body: JSON.stringify({ label, reason: 'ui_override' }),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = (await r.json()).data;
+      setRows((current) => current.map((row) => (
+        row.candidate_id === candidateId
+          ? { ...row, label: d.label || label, label_source: d.label_source || 'human', label_reason: 'ui_override' }
+          : row
+      )));
+      await loadStats();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Override failed');
+    }
+  }, [loadStats]);
 
   const columns = useMemo<ColumnDef<LabeledExample>[]>(() => [
     {
@@ -192,7 +222,7 @@ export default function DedupLabels() {
         <LabelToggle value={r.label} onChange={(label) => void override(r.candidate_id, label)} />
       ),
     },
-  ], [openBook, pathVars]);
+  ], [openBook, pathVars, override]);
 
   const {
     visibleColumns,
@@ -211,15 +241,6 @@ export default function DedupLabels() {
     columns,
     defaultSortField: 'label',
   });
-
-  const loadStats = useCallback(async () => {
-    try {
-      const r = await apiFetch(`${API_BASE}/dedup/labels/stats`);
-      if (r.ok) setStats((await r.json()).data);
-    } catch {
-      /* stats are best-effort */
-    }
-  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -243,25 +264,7 @@ export default function DedupLabels() {
 
   useEffect(() => { void loadStats(); }, [loadStats]);
   useEffect(() => { void load(); }, [load]);
-
-  async function override(candidateId: number, label: string) {
-    try {
-      const r = await apiFetch(`${API_BASE}/dedup/labels/${candidateId}/override`, {
-        method: 'POST',
-        body: JSON.stringify({ label, reason: 'ui_override' }),
-      });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const d = (await r.json()).data;
-      setRows((current) => current.map((row) => (
-        row.candidate_id === candidateId
-          ? { ...row, label: d.label || label, label_source: d.label_source || 'human', label_reason: 'ui_override' }
-          : row
-      )));
-      await loadStats();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Override failed');
-    }
-  }
+  useEffect(() => () => { if (bandDebounceRef.current) clearTimeout(bandDebounceRef.current); }, []);
 
   return (
     <Box sx={{ p: 3 }}>
@@ -318,8 +321,15 @@ export default function DedupLabels() {
         <TextField
           size="small"
           label="Band"
-          value={bandFilter}
-          onChange={(e) => { setOffset(0); setBandFilter(e.target.value); }}
+          value={localBandFilter}
+          onChange={(e) => {
+            setLocalBandFilter(e.target.value);
+            if (bandDebounceRef.current) clearTimeout(bandDebounceRef.current);
+            bandDebounceRef.current = setTimeout(() => {
+              setOffset(0);
+              setBandFilter(e.target.value);
+            }, 300);
+          }}
           sx={{ minWidth: 180 }}
         />
         <Box sx={{ display: 'flex', alignItems: 'center', ml: 'auto' }}>
