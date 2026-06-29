@@ -1,11 +1,11 @@
 <!-- file: docs/system/README.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 42030117-6ba8-4f26-a2c6-9b5f9014ef88 -->
-<!-- last-edited: 2026-06-28 -->
+<!-- last-edited: 2026-06-29 -->
 
 # System Documentation
 
-> **Status:** This index is a skeleton for the DOCS-1 workstream. The files listed below are in progress and will be added incrementally. Links will resolve once each document is written.
+> **Status:** DOCS-1 workstream complete. All 6 area documents are written and cross-linked below.
 
 Audiobook Organizer is a single-binary server (Go backend, React frontend) for scanning,
 normalizing, enriching, deduplicating, organizing, and serving audiobook
