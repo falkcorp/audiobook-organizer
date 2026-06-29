@@ -1,7 +1,7 @@
 // file: internal/dedup/engine.go
-// version: 1.34.0
+// version: 1.34.1
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
-// last-edited: 2026-06-24
+// last-edited: 2026-06-28
 
 package dedup
 
@@ -23,12 +23,73 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
+	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 )
 
 var dedupTracer = otel.Tracer("audiobook-organizer/dedup")
+
+// boilerplateTitlePatterns are exact publisher intro/outro "titles" that are
+// not real books and must not seed dedup matches. Seeded from
+// docs/agent-tasks/dedup-intro-falsepositive/FINDINGS.md and safe to extend.
+var boilerplateTitlePatterns = []string{
+	"this is audible",
+	"audible hopes you have enjoyed this program",
+	"audible hopes you have enjoyed this book",
+	"audible studios presents",
+	"audible presents",
+	"this is an audible original",
+	"end credits",
+	"credits",
+	"opening credits",
+	"closing credits",
+	"intro",
+	"introduction",
+	"outro",
+	"epilogue music",
+	"publisher introduction",
+	"publisher's note",
+	"produced by audible studios",
+	"recorded books presents",
+	"graphic audio presents",
+	"brilliance audio presents",
+}
+
+// boilerplateTitlePrefixPatterns are anchored boilerplate phrases that may carry
+// trailing publisher copy. Keep this list narrower than the exact-title list so
+// real books like "Introduction to Algorithms" still match normally.
+var boilerplateTitlePrefixPatterns = []string{
+	"this is audible",
+	"audible hopes you have enjoyed this program",
+	"audible hopes you have enjoyed this book",
+	"audible studios presents",
+	"audible presents",
+	"this is an audible original",
+	"produced by audible studios",
+	"recorded books presents",
+	"graphic audio presents",
+	"brilliance audio presents",
+}
+
+func isBoilerplateTitle(title string) bool {
+	normalized := util.NormalizeTitle(util.CollapseSpaces(title))
+	if normalized == "" {
+		return false
+	}
+	for _, pattern := range boilerplateTitlePatterns {
+		if normalized == pattern {
+			return true
+		}
+	}
+	for _, pattern := range boilerplateTitlePrefixPatterns {
+		if strings.HasPrefix(normalized, pattern+" ") {
+			return true
+		}
+	}
+	return false
+}
 
 // Engine orchestrates a 3-layer dedup system:
 //   - Layer 1: Exact matching (free, instant) — same file hash, ISBN/ASIN, or near-identical titles
@@ -2819,6 +2880,20 @@ func (de *Engine) AcoustIDScan(ctx context.Context, progress func(done, total in
 		return fmt.Errorf("acoustid scan: get all books: %w", err)
 	}
 
+	boilerplateBookCache := make(map[string]bool, len(books))
+	for _, b := range books {
+		boilerplateBookCache[b.ID] = isBoilerplateTitle(b.Title)
+	}
+	isBoilerplateBook := func(bookID string) bool {
+		if blocked, ok := boilerplateBookCache[bookID]; ok {
+			return blocked
+		}
+		book, err := de.bookStore.GetBookByID(bookID)
+		blocked := err == nil && book != nil && isBoilerplateTitle(book.Title)
+		boilerplateBookCache[bookID] = blocked
+		return blocked
+	}
+
 	// emitted tracks canonical pair keys we've already inserted this run so we
 	// don't call UpsertCandidate multiple times for the same pair (can happen
 	// when two books share several segments).
@@ -2854,6 +2929,9 @@ func (de *Engine) AcoustIDScan(ctx context.Context, progress func(done, total in
 	}
 
 	emit := func(bookAID, bookBID string, sim float64) {
+		if isBoilerplateBook(bookAID) || isBoilerplateBook(bookBID) {
+			return
+		}
 		key := pairKey(bookAID, bookBID)
 		if _, already := emitted[key]; already {
 			return
@@ -2927,6 +3005,9 @@ func (de *Engine) AcoustIDScan(ctx context.Context, progress func(done, total in
 		})
 
 		for _, f := range files {
+			if isBoilerplateTitle(f.Title) {
+				continue
+			}
 			// Tier-0: whole-file LSH candidate set + Hamming refine.
 			// Sub-linear via the fpidx: secondary index, so it runs
 			// unconditionally (index caps candidates, so work is bounded).
@@ -2937,7 +3018,8 @@ func (de *Engine) AcoustIDScan(ctx context.Context, progress func(done, total in
 						continue
 					}
 					cand, _ := lshStore.GetBookFileByID("", candID)
-					if cand == nil || cand.BookID == book.ID || len(cand.AcoustIDFingerprint) == 0 {
+					if cand == nil || cand.BookID == book.ID || len(cand.AcoustIDFingerprint) == 0 ||
+						isBoilerplateTitle(cand.Title) {
 						continue
 					}
 					sim, simErr := fingerprint.WholeFileSimilarity(f.AcoustIDFingerprint, cand.AcoustIDFingerprint)
@@ -2974,6 +3056,9 @@ func (de *Engine) AcoustIDScan(ctx context.Context, progress func(done, total in
 				// Tier 1: exact match (O(1) via Pebble book_file_acoustid: index).
 				exactHit, _ := de.bookStore.GetBookFileByAcoustID(seg)
 				if exactHit != nil && exactHit.BookID != book.ID {
+					if isBoilerplateTitle(exactHit.Title) {
+						continue
+					}
 					emit(book.ID, exactHit.BookID, 1.0)
 					continue
 				}
