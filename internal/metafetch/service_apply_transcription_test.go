@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply_transcription_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 7d4c8f5a-23e6-4d91-a38f-97b5a6c2e1d0
 // last-edited: 2026-06-28
 
@@ -43,6 +43,17 @@ func TestApplyMetadataCandidateRecordsAudioConfirmedMarker(t *testing.T) {
 			},
 			wantMarker: false,
 		},
+		{
+			name:             "short_author_token_with_matching_title_is_confirmed",
+			transcribedTitle: "The Way of Kings",
+			transcribedAuth:  "BS",
+			candidate: MetadataCandidate{
+				Title:  "The Way of Kings",
+				Author: "Brandon Sanderson",
+				Source: "audible",
+			},
+			wantMarker: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -74,12 +85,15 @@ func TestApplyMetadataCandidateRecordsAudioConfirmedMarker(t *testing.T) {
 			require.NotNil(t, resp)
 			require.NotNil(t, updated)
 			require.NotNil(t, updated.MetadataReviewStatus)
-			assert.Equal(t, "matched", *updated.MetadataReviewStatus)
 			if tt.wantMarker {
+				assert.Equal(t, "audio_confirmed", *updated.MetadataReviewStatus)
 				require.NotNil(t, updated.VersionNotes)
 				assert.Contains(t, *updated.VersionNotes, "audio_confirmed")
-			} else if updated.VersionNotes != nil {
-				assert.NotContains(t, *updated.VersionNotes, "audio_confirmed")
+			} else {
+				assert.Equal(t, "matched", *updated.MetadataReviewStatus)
+				if updated.VersionNotes != nil {
+					assert.NotContains(t, *updated.VersionNotes, "audio_confirmed")
+				}
 			}
 		})
 	}

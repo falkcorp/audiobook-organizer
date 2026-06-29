@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
 // last-edited: 2026-06-28
 
@@ -529,11 +529,17 @@ func (mfs *Service) ApplyMetadataCandidate(id string, candidate MetadataCandidat
 	th := hintsFromBook(book)
 	audioConfirmed := !th.empty() &&
 		th.title != "" &&
-		util.NormalizeTitle(candidate.Title) == util.NormalizeTitle(th.title) &&
-		(th.author == "" || containsCI(candidate.Author, th.author))
+		util.NormalizeTitle(th.title) == util.NormalizeTitle(candidate.Title)
 	if audioConfirmed {
-		appendMetadataVersionNote(book, "audio_confirmed")
-		slog.Info("metadata apply: audio-confirmed match", "book_id", id, "title", candidate.Title)
+		// Also require author match if we have one, but only if the token is
+		// substantial (>3 chars) to avoid short fragments like "Ki" from
+		// over-constraining the match.
+		if th.author == "" || len(th.author) <= 3 || containsCI(candidate.Author, th.author) {
+			ac := "audio_confirmed"
+			book.MetadataReviewStatus = &ac
+			slog.Info("metadata apply: audio-confirmed match", "id", id, "title", candidate.Title)
+			appendMetadataVersionNote(book, "audio_confirmed")
+		}
 	}
 
 	// Compute metadata_source_hash = sha256("{source}:{canonical_id}") so the
