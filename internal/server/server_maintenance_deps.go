@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-06-29
 
@@ -11,6 +11,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	maintenanceplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/sweep"
@@ -346,49 +348,49 @@ func (s *Server) DedupTriageExactPending(ctx context.Context) (*maintenanceplugi
 }
 
 // SearchTranscriptionCandidate implements maintenance.ServerDeps.
-// It searches for the top-scoring metadata candidate using transTitle as the
-// query, optionally narrowed by transAuthor. Returns (title, author, score,
-// true, nil) when at least one candidate is found; (‟", "", 0, false, nil)
-// when the service is unavailable or no results exist; and a non-nil error
-// only on a hard failure from the metadata service.
-func (s *Server) SearchTranscriptionCandidate(_ context.Context, bookID, transTitle, transAuthor string) (string, string, float64, bool, error) {
+// Uses the local metadata cache — no external API calls. Returns (title,
+// author, score, true, nil) when a cached candidate exists; (‟", "", 0,
+// false, nil) on cache-miss or unavailable service.
+func (s *Server) SearchTranscriptionCandidate(_ context.Context, bookID, _, _ string) (string, string, float64, bool, error) {
 	if s.metadataFetchService == nil {
 		return "", "", 0, false, nil
 	}
-	var hints []string
-	if transAuthor != "" {
-		hints = append(hints, transAuthor)
-	}
-	resp, err := s.metadataFetchService.SearchMetadataForBook(bookID, transTitle, hints...)
-	if err != nil || resp == nil || len(resp.Results) == 0 {
+	entry, _, err := s.metadataFetchService.GetCachedCandidates(bookID)
+	if err != nil {
 		return "", "", 0, false, err
 	}
-	best := resp.Results[0]
+	if entry == nil || len(entry.Candidates) == 0 {
+		return "", "", 0, false, nil
+	}
+	// Cache is stored score-descending; first entry is the best.
+	var best metafetch.MetadataCandidate
+	if err := json.Unmarshal(entry.Candidates[0], &best); err != nil {
+		return "", "", 0, false, nil
+	}
 	return best.Title, best.Author, best.Score, true, nil
 }
 
 // ApplyTranscriptionCandidate implements maintenance.ServerDeps.
-// It re-fetches candidates for the book (cache-backed, so a second call for
-// the same title is effectively instant) and applies the top result via
-// ApplyMetadataCandidate. TASK-02 audio-confirm logic sets
+// Uses the local metadata cache to avoid a redundant external search, then
+// applies the top cached candidate. TASK-02 audio-confirm logic sets
 // MetadataReviewStatus="audio_confirmed" when the candidate title matches the
 // book's transcribed title.
-func (s *Server) ApplyTranscriptionCandidate(_ context.Context, bookID, candTitle, candAuthor string) error {
+func (s *Server) ApplyTranscriptionCandidate(_ context.Context, bookID, _, _ string) error {
 	if s.metadataFetchService == nil {
 		return fmt.Errorf("metadata fetch service not initialized")
 	}
-	var hints []string
-	if candAuthor != "" {
-		hints = append(hints, candAuthor)
-	}
-	resp, err := s.metadataFetchService.SearchMetadataForBook(bookID, candTitle, hints...)
+	entry, _, err := s.metadataFetchService.GetCachedCandidates(bookID)
 	if err != nil {
-		return fmt.Errorf("re-search before apply for book %s: %w", bookID, err)
+		return fmt.Errorf("get cached candidates for book %s: %w", bookID, err)
 	}
-	if resp == nil || len(resp.Results) == 0 {
-		return fmt.Errorf("no candidates found when applying for book %s", bookID)
+	if entry == nil || len(entry.Candidates) == 0 {
+		return fmt.Errorf("no cached candidates for book %s", bookID)
 	}
-	_, err = s.metadataFetchService.ApplyMetadataCandidate(bookID, resp.Results[0], nil)
+	var cand metafetch.MetadataCandidate
+	if err := json.Unmarshal(entry.Candidates[0], &cand); err != nil {
+		return fmt.Errorf("decode cached candidate for book %s: %w", bookID, err)
+	}
+	_, err = s.metadataFetchService.ApplyMetadataCandidate(bookID, cand, nil)
 	return err
 }
 
