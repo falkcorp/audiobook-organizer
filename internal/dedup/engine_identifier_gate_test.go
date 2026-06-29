@@ -1,5 +1,5 @@
 // file: internal/dedup/engine_identifier_gate_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6e6934a1-44e9-45a5-b789-c71b541d7f74
 // last-edited: 2026-06-28
 
@@ -48,6 +48,12 @@ func TestIdentifiersConflict(t *testing.T) {
 			a:    &database.Book{ASIN: strPtr("b00case001")},
 			b:    &database.Book{ASIN: strPtr("B00CASE002")},
 			want: true,
+		},
+		{
+			name: "nil book a is conservative",
+			a:    nil,
+			b:    &database.Book{ISBN13: strPtr("9780000000011")},
+			want: false,
 		},
 	}
 
