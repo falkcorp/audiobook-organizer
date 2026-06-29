@@ -1,24 +1,26 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
-// last-edited: 2026-05-01
+// last-edited: 2026-06-28
 
 package metafetch
 
 import (
 	"crypto/sha256"
 	"fmt"
-	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/metadata"
-	"github.com/falkcorp/audiobook-organizer/internal/organizer"
-	"github.com/falkcorp/audiobook-organizer/internal/policy"
-	"github.com/oklog/ulid/v2"
 	"log/slog"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/organizer"
+	"github.com/falkcorp/audiobook-organizer/internal/policy"
+	"github.com/falkcorp/audiobook-organizer/internal/util"
+	"github.com/oklog/ulid/v2"
 )
 
 func (mfs *Service) ApplyMetadataToBook(book *database.Book, meta metadata.BookMetadata) {
@@ -34,7 +36,7 @@ func (mfs *Service) ApplyMetadataToBook(book *database.Book, meta metadata.BookM
 	// Final safety: never leave title empty if it was set before
 	if book.Title == "" && originalTitle != "" {
 		book.Title = originalTitle
-				slog.Warn("applyMetadataToBook prevented title from being cleared for book", "id", book.ID)
+		slog.Warn("applyMetadataToBook prevented title from being cleared for book", "id", book.ID)
 	}
 	if meta.Publisher != "" && IsBetterStringPtr(book.Publisher, meta.Publisher) {
 		book.Publisher = stringPtr(meta.Publisher)
@@ -61,11 +63,11 @@ func (mfs *Service) ApplyMetadataToBook(book *database.Book, meta metadata.BookM
 		if book.AuthorID != nil && book.Narrator != nil {
 			if existingAuthor, aErr := mfs.db.GetAuthorByID(*book.AuthorID); aErr == nil && existingAuthor != nil {
 				if strings.EqualFold(extractedAuthor, *book.Narrator) && !strings.EqualFold(extractedAuthor, existingAuthor.Name) {
-										slog.Info("applyMetadataToBook extracted artist matches narrator but not author for book — skipping author update", "value", extractedAuthor, "value", *book.Narrator, "name", existingAuthor.Name, "id", book.ID)
+					slog.Info("applyMetadataToBook extracted artist matches narrator but not author for book — skipping author update", "value", extractedAuthor, "value", *book.Narrator, "name", existingAuthor.Name, "id", book.ID)
 					extractedAuthor = ""
 				} else if !strings.EqualFold(extractedAuthor, existingAuthor.Name) && !strings.EqualFold(extractedAuthor, *book.Narrator) {
 					// Extracted artist doesn't match either stored author or narrator — log mismatch for review
-										slog.Warn("applyMetadataToBook extracted artist matches neither author nor narrator for book", "value", extractedAuthor, "name", existingAuthor.Name, "value", *book.Narrator, "id", book.ID)
+					slog.Warn("applyMetadataToBook extracted artist matches neither author nor narrator for book", "value", extractedAuthor, "name", existingAuthor.Name, "value", *book.Narrator, "id", book.ID)
 				}
 			}
 		}
@@ -184,7 +186,7 @@ func (mfs *Service) RecordChangeHistory(book *database.Book, meta metadata.BookM
 			ChangedAt:     now,
 		}
 		if err := mfs.db.RecordMetadataChange(record); err != nil {
-						slog.Warn("failed to record metadata change for .", "id", book.ID, "field", c.field, "error", err)
+			slog.Warn("failed to record metadata change for .", "id", book.ID, "field", c.field, "error", err)
 		}
 		// Dual-write to unified activity log
 		if mfs.activityService != nil {
@@ -229,9 +231,9 @@ func (mfs *Service) syncMetadataToLibraryCopy(original, libCopy *database.Book) 
 	libCopy.MetadataReviewStatus = original.MetadataReviewStatus
 
 	if _, err := mfs.db.UpdateBook(libCopy.ID, libCopy); err != nil {
-				slog.Warn("failed to sync metadata to library copy", "id", libCopy.ID, "error", err)
+		slog.Warn("failed to sync metadata to library copy", "id", libCopy.ID, "error", err)
 	} else {
-				slog.Info("synced metadata from to library copy", "id", original.ID, "id", libCopy.ID)
+		slog.Info("synced metadata from to library copy", "id", original.ID, "id", libCopy.ID)
 	}
 
 	// Also sync author associations
@@ -279,7 +281,7 @@ func (mfs *Service) ensureLibraryCopy(book *database.Book) *database.Book {
 		if err == nil {
 			for i := range siblings {
 				if siblings[i].ID != book.ID && strings.HasPrefix(siblings[i].FilePath, config.AppConfig.RootDir) {
-										slog.Info("using existing library copy for protected book", "id", siblings[i].ID, "id", book.ID)
+					slog.Info("using existing library copy for protected book", "id", siblings[i].ID, "id", book.ID)
 					return &siblings[i]
 				}
 			}
@@ -309,7 +311,7 @@ func (mfs *Service) ensureLibraryCopy(book *database.Book) *database.Book {
 		}
 		targetDir, pm, err := org.OrganizeBookDirectory(book, filePaths)
 		if err != nil {
-						slog.Warn("failed to create library copy for multi-file book", "id", book.ID, "error", err)
+			slog.Warn("failed to create library copy for multi-file book", "id", book.ID, "error", err)
 			return nil
 		}
 		pathMap = pm
@@ -319,7 +321,7 @@ func (mfs *Service) ensureLibraryCopy(book *database.Book) *database.Book {
 		// Single-file: organize just the book file
 		p, _, err := org.OrganizeBook(book)
 		if err != nil {
-						slog.Warn("failed to create library copy for", "id", book.ID, "error", err)
+			slog.Warn("failed to create library copy for", "id", book.ID, "error", err)
 			return nil
 		}
 		newBookPath = p
@@ -345,7 +347,7 @@ func (mfs *Service) ensureLibraryCopy(book *database.Book) *database.Book {
 
 	created, err := mfs.db.CreateBook(&newBook)
 	if err != nil {
-				slog.Warn("failed to create library book record for", "id", book.ID, "error", err)
+		slog.Warn("failed to create library book record for", "id", book.ID, "error", err)
 		return nil
 	}
 
@@ -379,7 +381,7 @@ func (mfs *Service) ensureLibraryCopy(book *database.Book) *database.Book {
 				newBF.ITunesPath = ComputeITunesPath(newPath)
 			}
 			if err := mfs.db.CreateBookFile(&newBF); err != nil {
-								slog.Warn("failed to copy book_file for library book", "id", bf.ID, "id", created.ID, "error", err)
+				slog.Warn("failed to copy book_file for library book", "id", bf.ID, "id", created.ID, "error", err)
 			}
 		}
 	}
@@ -389,7 +391,7 @@ func (mfs *Service) ensureLibraryCopy(book *database.Book) *database.Book {
 	book.IsPrimaryVersion = &isNotPrimary
 	_, _ = mfs.db.UpdateBook(book.ID, book)
 
-		slog.Info("created library copy -> for protected book ( file(s))", "path", newBookPath, "id", created.ID, "id", book.ID, "file", len(activeFiles))
+	slog.Info("created library copy -> for protected book ( file(s))", "path", newBookPath, "id", created.ID, "id", book.ID, "file", len(activeFiles))
 	return created
 }
 func (mfs *Service) persistFetchedMetadata(bookID string, meta metadata.BookMetadata) {
@@ -424,7 +426,7 @@ func (mfs *Service) persistFetchedMetadata(bookID string, meta metadata.BookMeta
 	}
 	if len(fetchedValues) > 0 {
 		if err := mfs.updateFetchedMetadataState(bookID, fetchedValues); err != nil {
-						slog.Error("FetchMetadataForBook failed to persist fetched metadata state", "error", err)
+			slog.Error("FetchMetadataForBook failed to persist fetched metadata state", "error", err)
 		}
 	}
 }
@@ -452,7 +454,7 @@ func (mfs *Service) ApplyMetadataCandidate(id string, candidate MetadataCandidat
 		if book.Duration != nil {
 			bookDurSec = *book.Duration
 		}
-				slog.Warn("duration-mismatch apply book title candidate deltas (books audibles) wrong match or abridged version", "id", id, "value", book.Title, "id", candidate.Title, "id", candidate.DurationDeltaSec, "value", bookDurSec, "id", candidate.DurationSec)
+		slog.Warn("duration-mismatch apply book title candidate deltas (books audibles) wrong match or abridged version", "id", id, "value", book.Title, "id", candidate.Title, "id", candidate.DurationDeltaSec, "value", bookDurSec, "id", candidate.DurationSec)
 	}
 
 	meta := metadata.BookMetadata{
@@ -524,6 +526,15 @@ func (mfs *Service) ApplyMetadataCandidate(id string, candidate MetadataCandidat
 	book.MetadataReviewStatus = &matched
 	src := candidate.Source
 	book.MetadataSource = &src
+	th := hintsFromBook(book)
+	audioConfirmed := !th.empty() &&
+		th.title != "" &&
+		util.NormalizeTitle(candidate.Title) == util.NormalizeTitle(th.title) &&
+		(th.author == "" || containsCI(candidate.Author, th.author))
+	if audioConfirmed {
+		appendMetadataVersionNote(book, "audio_confirmed")
+		slog.Info("metadata apply: audio-confirmed match", "book_id", id, "title", candidate.Title)
+	}
 
 	// Compute metadata_source_hash = sha256("{source}:{canonical_id}") so the
 	// dedup engine can later detect books sharing the exact same external record.
@@ -549,7 +560,7 @@ func (mfs *Service) ApplyMetadataCandidate(id string, candidate MetadataCandidat
 
 	// Generate segment titles (fast, DB-only)
 	if err := mfs.generateSegmentTitles(id, updatedBook.Title); err != nil {
-				slog.Warn("generate segment titles failed for", "id", id, "error", err)
+		slog.Warn("generate segment titles failed for", "id", id, "error", err)
 	}
 
 	// Download cover art (fast network fetch + file write — keep inline so
@@ -557,9 +568,9 @@ func (mfs *Service) ApplyMetadataCandidate(id string, candidate MetadataCandidat
 	if meta.CoverURL != "" && config.AppConfig.RootDir != "" {
 		coverPath, coverErr := metadata.DownloadCoverArt(meta.CoverURL, config.AppConfig.RootDir, id)
 		if coverErr != nil {
-						slog.Warn("cover art download failed for", "id", id, "error", coverErr)
+			slog.Warn("cover art download failed for", "id", id, "error", coverErr)
 		} else {
-						slog.Info("cover art saved to", "path", coverPath)
+			slog.Info("cover art saved to", "path", coverPath)
 			localCoverURL := "/api/v1/covers/local/" + filepath.Base(coverPath)
 			if updatedBook != nil {
 				updatedBook.CoverURL = &localCoverURL
@@ -585,7 +596,7 @@ func (mfs *Service) ApplyMetadataCandidate(id string, candidate MetadataCandidat
 	// a tag write errors.
 	for _, tag := range candidate.CategoryTags {
 		if err := mfs.db.AddBookTagWithSource(id, tag, "audible_category"); err != nil {
-						slog.Warn("failed to apply category tag to book", "value", tag, "id", id, "error", err)
+			slog.Warn("failed to apply category tag to book", "value", tag, "id", id, "error", err)
 		}
 	}
 
@@ -601,6 +612,18 @@ func (mfs *Service) ApplyMetadataCandidate(id string, candidate MetadataCandidat
 	}, nil
 }
 
+func appendMetadataVersionNote(book *database.Book, marker string) {
+	if book.VersionNotes != nil && strings.Contains(*book.VersionNotes, marker) {
+		return
+	}
+	if book.VersionNotes == nil || strings.TrimSpace(*book.VersionNotes) == "" {
+		book.VersionNotes = &marker
+		return
+	}
+	notes := strings.TrimSpace(*book.VersionNotes) + "\n" + marker
+	book.VersionNotes = &notes
+}
+
 // checkMetadataSourceHashDuplicates auto-flags any existing non-merged book
 // that shares the same metadata_source_hash as bookID (MATCH-4). The book
 // with the most book_files is kept as primary; all others get
@@ -608,7 +631,7 @@ func (mfs *Service) ApplyMetadataCandidate(id string, candidate MetadataCandidat
 func (mfs *Service) checkMetadataSourceHashDuplicates(bookID, hash string) {
 	matches, err := mfs.db.GetBooksByMetadataSourceHash(hash)
 	if err != nil {
-				slog.Warn("MATCH-4 metadata-source-hash dedup query failed for book", "id", bookID, "error", err)
+		slog.Warn("MATCH-4 metadata-source-hash dedup query failed for book", "id", bookID, "error", err)
 		return
 	}
 
@@ -653,9 +676,9 @@ func (mfs *Service) checkMetadataSourceHashDuplicates(bookID, hash string) {
 			continue
 		}
 		if err := mfs.db.FlagMetadataHashDuplicate(primaryID, id); err != nil {
-						slog.Warn("MATCH-4 failed to flag book as duplicate of", "id", id, "id", primaryID, "error", err)
+			slog.Warn("MATCH-4 failed to flag book as duplicate of", "id", id, "id", primaryID, "error", err)
 		} else {
-						slog.Info("MATCH-4 auto-flagged book as merged into primary (hash )", "id", id, "id", primaryID, "hash", hash)
+			slog.Info("MATCH-4 auto-flagged book as merged into primary (hash )", "id", id, "id", primaryID, "hash", hash)
 		}
 	}
 }
@@ -671,7 +694,7 @@ func (mfs *Service) ApplyMetadataSystemTags(bookID, sourceName, language string)
 		if err := database.EnsureSingletonBookTag(
 			mfs.db, bookID, "metadata:source:", sourceTag, "system",
 		); err != nil {
-						slog.Warn("failed to tag book with", "id", bookID, "value", sourceTag, "error", err)
+			slog.Warn("failed to tag book with", "id", bookID, "value", sourceTag, "error", err)
 		}
 	}
 	langTag := MetadataLanguageTag(language)
@@ -679,7 +702,7 @@ func (mfs *Service) ApplyMetadataSystemTags(bookID, sourceName, language string)
 		if err := database.EnsureSingletonBookTag(
 			mfs.db, bookID, "metadata:language:", langTag, "system",
 		); err != nil {
-						slog.Warn("failed to tag book with", "id", bookID, "value", langTag, "error", err)
+			slog.Warn("failed to tag book with", "id", bookID, "value", langTag, "error", err)
 		}
 	}
 }
