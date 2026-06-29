@@ -1,5 +1,5 @@
 // file: internal/dedup/engine_acoustid_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c8f25a0d-8e69-47f7-a36f-60c191b73810
 // last-edited: 2026-06-28
 
@@ -121,6 +121,35 @@ func TestAcoustIDScan_NormalTitleContainingBoilerplateWordStillEmitsCandidate(t 
 	}
 	if total != 1 {
 		t.Fatalf("expected one acoustid candidate for real title, got %d (%+v)", total, candidates)
+	}
+}
+
+
+func TestAcoustIDScan_BoilerplatePrefixTitleDoesNotEmitCandidate(t *testing.T) {
+	engine, mock, es := setupTestEngine(t)
+	books := []database.Book{
+		{ID: "BOOK_A", Title: "Audible Presents The Complete Sherlock Holmes"},
+		{ID: "BOOK_B", Title: "A Real Audiobook"},
+	}
+	filesByBook := map[string][]database.BookFile{
+		"BOOK_A": {{ID: "FILE_A", BookID: "BOOK_A", FilePath: "/lib/a/intro.mp3", AcoustIDSeg0: validFP80}},
+		"BOOK_B": {{ID: "FILE_B", BookID: "BOOK_B", FilePath: "/lib/b/book.mp3", AcoustIDSeg0: validFP80}},
+	}
+	wireAcoustIDScanMock(mock, books, filesByBook)
+
+	if err := engine.AcoustIDScan(context.Background(), nil); err != nil {
+		t.Fatalf("AcoustIDScan: %v", err)
+	}
+
+	_, total, err := es.ListCandidates(database.CandidateFilter{
+		EntityType: "book",
+		Layer:      "acoustid",
+	})
+	if err != nil {
+		t.Fatalf("ListCandidates: %v", err)
+	}
+	if total != 0 {
+		t.Fatalf("expected no acoustid candidates for boilerplate prefix title, got %d", total)
 	}
 }
 

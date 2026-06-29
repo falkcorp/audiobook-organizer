@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.34.1
+// version: 1.35.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-06-28
 
@@ -2889,6 +2889,9 @@ func (de *Engine) AcoustIDScan(ctx context.Context, progress func(done, total in
 			return blocked
 		}
 		book, err := de.bookStore.GetBookByID(bookID)
+		if err != nil {
+			slog.Warn("dedup: isBoilerplateBook fallback GetBookByID failed", "book_id", bookID, "err", err)
+		}
 		blocked := err == nil && book != nil && isBoilerplateTitle(book.Title)
 		boilerplateBookCache[bookID] = blocked
 		return blocked
