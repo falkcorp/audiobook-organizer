@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.35.0
+// version: 1.36.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-06-28
 
@@ -1296,7 +1296,8 @@ func normalizedIDConflict(a, b *string, normalize func(string) string) bool {
 }
 
 func normalizeISBN(v string) string {
-	return strings.ReplaceAll(strings.TrimSpace(v), "-", "")
+	s := strings.ReplaceAll(strings.TrimSpace(v), "-", "")
+	return strings.ReplaceAll(s, " ", "")
 }
 
 func normalizeASIN(v string) string {
@@ -2998,6 +2999,7 @@ func (de *Engine) AcoustIDScan(ctx context.Context, progress func(done, total in
 			return
 		}
 		if identifiersConflict(bookForIdentifierGate(bookAID), bookForIdentifierGate(bookBID)) {
+			emitted[key] = struct{}{}
 			identifierGateDrops++
 			return
 		}
