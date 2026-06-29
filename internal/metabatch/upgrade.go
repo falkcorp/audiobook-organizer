@@ -1,7 +1,7 @@
 // file: internal/metabatch/upgrade.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-05-11
+// last-edited: 2026-06-29
 //
 // Background job that upgrades metadata from lower-quality sources
 // (primarily Google Books) to richer ones (Hardcover, Audible/Audnexus)
@@ -28,6 +28,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
+	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
 // MetadataUpgradeService finds books with low-quality metadata
@@ -65,6 +66,10 @@ type UpgradeResult struct {
 // candidate must achieve to trigger an automatic metadata apply.
 // Set conservatively high to avoid upgrading to a worse match.
 const MinUpgradeConfidence = 0.90
+
+// MinUpgradeConfidenceWithTranscription relaxes the gate when the candidate
+// independently matches the book's audio-derived title/author.
+const MinUpgradeConfidenceWithTranscription = 0.85
 
 // RunUpgrade scans for books tagged with low-quality metadata
 // sources and attempts to find a better match from other sources.
@@ -115,6 +120,28 @@ func (s *MetadataUpgradeService) RunUpgrade(ctx context.Context, limit int) (*Up
 	return result, nil
 }
 
+// transcriptionConfirmsCandidate returns true when the candidate's title/author
+// independently matches the book's audio-derived (transcribed) title/author.
+// The title must match exactly after normalization. The author, if present and
+// longer than 3 characters, must appear as a substring of the candidate's
+// author (case-insensitive). A title-only match is sufficient when no usable
+// transcribed author is available.
+func transcriptionConfirmsCandidate(book *database.Book, c *metafetch.MetadataCandidate) bool {
+	if book.TranscribedTitle == nil || *book.TranscribedTitle == "" {
+		return false
+	}
+	transcribedTitle := util.NormalizeTitle(*book.TranscribedTitle)
+	if util.NormalizeTitle(c.Title) != transcribedTitle {
+		return false
+	}
+	// Title matches. Now check author if one is available.
+	if book.TranscribedAuthor == nil || len(*book.TranscribedAuthor) <= 3 {
+		return true // no usable author — title alone confirms
+	}
+	transcribedAuthor := util.NormalizeAuthor(*book.TranscribedAuthor)
+	return strings.Contains(util.NormalizeAuthor(c.Author), transcribedAuthor)
+}
+
 // tryUpgradeBook re-searches metadata for a single book and
 // applies the best non-current-source result if it's confident
 // enough. Returns true if an upgrade was applied.
@@ -149,7 +176,16 @@ func (s *MetadataUpgradeService) tryUpgradeBook(ctx context.Context, bookID, cur
 		if candidateSlug == currentSourceSlug {
 			continue
 		}
-		if c.Score < MinUpgradeConfidence {
+
+		// A candidate that independently matches the book's audio-derived
+		// title/author is corroborated and gets a relaxed score gate.
+		transcriptionConfirms := transcriptionConfirmsCandidate(book, c)
+		gate := MinUpgradeConfidence
+		if transcriptionConfirms {
+			gate = MinUpgradeConfidenceWithTranscription
+		}
+		slog.Debug("upgrade gate", "id", bookID, "score", c.Score, "gate", gate, "transcription_confirms", transcriptionConfirms)
+		if c.Score < gate {
 			continue
 		}
 		if bestCandidate == nil || c.Score > bestCandidate.Score {
