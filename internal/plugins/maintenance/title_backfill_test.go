@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
-// last-edited: 2026-06-24
+// last-edited: 2026-06-29
 
 package maintenance
 
@@ -98,6 +98,10 @@ func (d fakeDeps) EnqueueOp(_ context.Context, _ string, _ any) (string, error) 
 	return "", nil
 }
 func (d fakeDeps) WaitForOp(_ context.Context, _ string) error { return nil }
+func (d fakeDeps) SearchTranscriptionCandidate(_ context.Context, _, _, _ string) (string, string, float64, bool, error) {
+	return "", "", 0, false, nil
+}
+func (d fakeDeps) ApplyTranscriptionCandidate(_ context.Context, _, _, _ string) error { return nil }
 
 var _ ServerDeps = fakeDeps{}
 
