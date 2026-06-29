@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/DedupEmbeddingTab.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567891
-// last-edited: 2026-06-28
+// last-edited: 2026-06-29
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -706,27 +706,24 @@ export function EmbeddingDedupTab() {
           }}
           onClick={() => navigate(`/library/${book.id}`)}
         >
-          <Box
-            sx={{
-              width: 56,
-              flexShrink: 0,
-              borderRadius: 0.5,
-              overflow: 'hidden',
-              alignSelf: 'stretch',
-              minHeight: 68,
-              bgcolor: 'action.selected',
-            }}
-          >
-            {book.cover_url && (
-              <Box
-                component="img"
-                src={book.cover_url}
-                alt=""
-                loading="lazy"
-                sx={{ width: 56, height: '100%', objectFit: 'cover', display: 'block' }}
-              />
-            )}
-          </Box>
+          {book.cover_url && (
+            <Box
+              component="img"
+              src={book.cover_url}
+              alt=""
+              loading="lazy"
+              sx={{
+                width: 56,
+                flexShrink: 0,
+                borderRadius: 0.5,
+                overflow: 'hidden',
+                alignSelf: 'stretch',
+                minHeight: 68,
+                objectFit: 'cover',
+                display: 'block',
+              }}
+            />
+          )}
           <Stack spacing={0.35} sx={{ minWidth: 0, flex: 1 }}>
             <Stack
               direction="row"
