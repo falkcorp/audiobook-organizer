@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.11.0
+// version: 3.12.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-07-01
 
@@ -33,14 +33,23 @@ const (
 	//                              and 6 concurrent Whisper batches to keep the GPU saturated.
 	//                              Tuned for the 48-core prod server (172.16.2.30); audio decode
 	//                              is I/O-light so one ffmpeg per core is the practical ceiling.
+
+	// silenceSentinel is stored as IntroTranscription when all retry attempts
+	// (longer clip + second audio file) return 0 chars from Whisper. It lets
+	// only_missing=true skip these books on future runs without re-trying them
+	// every time. Use retry_silence=true to force a fresh attempt.
+	silenceSentinel = "[SILENCE]"
 )
 
 // introTranscribeParams is the checkpoint state for a transcription run.
 type introTranscribeParams struct {
 	LastBookID string `json:"last_book_id,omitempty"`
-	// OnlyMissing skips books that already have an IntroTranscription.
-	// Defaults to true so re-runs are incremental.
+	// OnlyMissing skips books that already have an IntroTranscription (including
+	// the [SILENCE] sentinel). Defaults to true so re-runs are incremental.
 	OnlyMissing *bool `json:"only_missing,omitempty"`
+	// RetrySilence includes books marked [SILENCE] for another attempt. Useful
+	// after adding more audio files or tuning the VAD threshold.
+	RetrySilence *bool `json:"retry_silence,omitempty"`
 	// ReparseOnly re-runs ParseAudiobookIntro over the ALREADY-STORED
 	// IntroTranscription text and rewrites TranscribedTitle/Author/Narrator —
 	// no ffmpeg, no Whisper. Use after a parser fix to correct existing books
@@ -91,9 +100,10 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 	if len(rawParams) > 0 {
 		_ = json.Unmarshal(rawParams, &params)
 	}
-	onlyMissing := params.OnlyMissing == nil || *params.OnlyMissing
-	reparseOnly := params.ReparseOnly != nil && *params.ReparseOnly
-	extractOnly := params.ExtractOnly != nil && *params.ExtractOnly
+	onlyMissing  := params.OnlyMissing == nil || *params.OnlyMissing
+	retrySilence := params.RetrySilence != nil && *params.RetrySilence
+	reparseOnly  := params.ReparseOnly != nil && *params.ReparseOnly
+	extractOnly  := params.ExtractOnly != nil && *params.ExtractOnly
 
 	log := reporter.Logger()
 
@@ -191,8 +201,11 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 			// extract-only ignores onlyMissing: the whole point is to (re)build the
 			// WAV cache for EVERY book, regardless of transcription status.
 			if !extractOnly && onlyMissing && b.IntroTranscription != nil && *b.IntroTranscription != "" {
-				skipped++
-				continue // already transcribed — skip (cache still warm if re-run)
+				// [SILENCE] books are skipped normally; retry_silence=true includes them.
+				if *b.IntroTranscription != silenceSentinel || !retrySilence {
+					skipped++
+					continue
+				}
 			}
 			books = append(books, *b)
 		}
@@ -531,7 +544,117 @@ func (p *Plugin) processTranscribePage(
 		return 0
 	}
 
+	// Step 3b: retry silence — books that Whisper returned 0 chars for get two
+	// more attempts before we give up and store the [SILENCE] sentinel.
+	// Retry 1: same file, 300-second clip (catches books with a long music intro).
+	// Retry 2: first 90 seconds of the second audio file (catches disc-opener
+	//          music tracks where dialogue starts on track 2).
+	// After both retries, surviving 0-char books are marked [SILENCE] so
+	// only_missing=true skips them; retry_silence=true clears the sentinel.
+	type silentBook struct {
+		book database.Book
+		src  string
+	}
+	var silentQueue []silentBook
+	for bookID, result := range batchResults {
+		if result.Error == "" && result.Text == "" {
+			if b, ok := bookByID[bookID]; ok {
+				src, _, _, _ := firstAudioFile(store, b)
+				if src != "" {
+					silentQueue = append(silentQueue, silentBook{book: b, src: src})
+				}
+			}
+		}
+	}
+
+	// silencedBookIDs tracks books written with the sentinel so Step 4 skips them.
+	silencedBookIDs := map[string]bool{}
+
+	if len(silentQueue) > 0 {
+		log.Info("transcribe: retrying with 300s clip", "count", len(silentQueue))
+		retry1Jobs := make(map[string]string, len(silentQueue))
+		for _, s := range silentQueue {
+			wav := filepath.Join(tmpDir, "r1_"+s.book.ID+".wav")
+			cmd := exec.CommandContext(ctx, "ffmpeg",
+				"-y", "-i", s.src, "-t", "300",
+				"-vn", "-ar", "16000", "-ac", "1", "-f", "wav", wav)
+			if out, ferr := cmd.CombinedOutput(); ferr != nil {
+				log.Warn("transcribe: retry1 ffmpeg failed", "book_id", s.book.ID, "err", ferr, "out", strings.TrimSpace(string(out)))
+			} else {
+				retry1Jobs[s.book.ID] = wav
+			}
+		}
+		if len(retry1Jobs) > 0 {
+			if r1, rerr := transcribe.TranscribeBatch(ctx, retry1Jobs, onBook); rerr == nil {
+				for id, res := range r1 {
+					if res.Text != "" {
+						batchResults[id] = res
+					}
+				}
+			}
+		}
+
+		// Collect books still silent after retry1.
+		var stillSilent []silentBook
+		for _, s := range silentQueue {
+			if res := batchResults[s.book.ID]; res.Text == "" && res.Error == "" {
+				stillSilent = append(stillSilent, s)
+			}
+		}
+
+		if len(stillSilent) > 0 {
+			log.Info("transcribe: retrying with second audio file", "count", len(stillSilent))
+			retry2Jobs := make(map[string]string, len(stillSilent))
+			for _, s := range stillSilent {
+				src2, _, _, _ := nthAudioFile(store, s.book, 1)
+				if src2 == "" {
+					continue
+				}
+				wav := filepath.Join(tmpDir, "r2_"+s.book.ID+".wav")
+				cmd := exec.CommandContext(ctx, "ffmpeg",
+					"-y", "-i", src2, "-t", "90",
+					"-vn", "-ar", "16000", "-ac", "1", "-f", "wav", wav)
+				if out, ferr := cmd.CombinedOutput(); ferr != nil {
+					log.Warn("transcribe: retry2 ffmpeg failed", "book_id", s.book.ID, "err", ferr, "out", strings.TrimSpace(string(out)))
+				} else {
+					retry2Jobs[s.book.ID] = wav
+				}
+			}
+			if len(retry2Jobs) > 0 {
+				if r2, rerr := transcribe.TranscribeBatch(ctx, retry2Jobs, onBook); rerr == nil {
+					for id, res := range r2 {
+						if res.Text != "" {
+							batchResults[id] = res
+						}
+					}
+				}
+			}
+
+			// Mark books that exhausted all retries with the silence sentinel.
+			sentinel := silenceSentinel
+			markedSilent := 0
+			for _, s := range stillSilent {
+				if batchResults[s.book.ID].Text != "" {
+					continue
+				}
+				b := s.book
+				b.IntroTranscription = &sentinel
+				if _, uerr := store.UpdateBook(b.ID, &b); uerr != nil {
+					log.Warn("transcribe: silence sentinel write failed", "book_id", b.ID, "err", uerr)
+				} else {
+					markedSilent++
+					silencedBookIDs[b.ID] = true
+				}
+			}
+			if markedSilent > 0 {
+				log.Info("transcribe: marked as silence", "count", markedSilent)
+			}
+		}
+	}
+
 	// Step 4: write per-book outcome for every book that had a WAV submitted.
+	// Books that received the silence sentinel in Step 3b are skipped here so
+	// the sentinel is not overwritten with statusEmpty.
 	for bookID := range batchJobs {
 		book := bookByID[bookID]
 		result, ok := batchResults[bookID]
@@ -544,6 +667,9 @@ func (p *Plugin) processTranscribePage(
 			log.Warn("transcribe: whisper error", "book_id", bookID, "err", detail)
 			p.applyOutcome(store, log, &book, statusWhisperError, detail, "", transcribe.IntroFields{}, now, accum)
 		case result.Text == "":
+			if silencedBookIDs[bookID] {
+				continue // handled by Step 3b; sentinel already written
+			}
 			p.applyOutcome(store, log, &book, statusEmpty, "whisper returned empty text", "", transcribe.IntroFields{}, now, accum)
 		default:
 			fields := transcribe.ParseAudiobookIntro(result.Text)
@@ -660,12 +786,18 @@ var audioExtSet = map[string]bool{
 	".flac": true, ".aac": true, ".ogg": true, ".wma": true,
 }
 
-// firstAudioFile returns the path, a stable cache key, and the BookFile ID for
-// the first audio file of book. The BookFile ID is empty when falling back to
-// the book-level FilePath (single-file iTunes imports with no BookFile rows).
-// Cache key priority: FileHash (content SHA-256) > fp:AcoustIDFingerprint >
-// path:SHA-256(FilePath) — path-keyed entries break when organize renames files.
+// firstAudioFile returns the path, cache key, and BookFile ID for the first
+// (lowest track number) audio file of book. Delegates to nthAudioFile(0).
 func firstAudioFile(store database.Store, book database.Book) (path, cacheKey, bookFileID string, err error) {
+	return nthAudioFile(store, book, 0)
+}
+
+// nthAudioFile returns the path, cache key, and BookFile ID for the nth audio
+// file of book (sorted by track number, then path). n=0 is the first file.
+// The book-level FilePath fallback (for single-track iTunes imports with no
+// BookFile rows) is only used when n==0 and no BookFile records exist.
+// Cache key priority: FileHash > fp:sha256(AcoustIDFingerprint) > path:sha256(FilePath).
+func nthAudioFile(store database.Store, book database.Book, n int) (path, cacheKey, bookFileID string, err error) {
 	files, err := store.GetBookFiles(book.ID)
 	if err != nil {
 		return "", "", "", err
@@ -679,9 +811,10 @@ func firstAudioFile(store database.Store, book database.Book) (path, cacheKey, b
 	}
 
 	if len(audio) == 0 {
-		// No BookFile rows — fall back to Book.FilePath for single-file imports
-		// (iTunes ingestion sets book.FilePath to the track path but skips
-		// creating BookFile records when there is only one track per album).
+		if n != 0 {
+			return "", "", "", nil
+		}
+		// No BookFile rows — fall back to Book.FilePath for single-file imports.
 		fp := book.FilePath
 		if fp != "" && audioExtSet[strings.ToLower(filepath.Ext(fp))] {
 			h := sha256.Sum256([]byte(fp))
@@ -698,7 +831,12 @@ func firstAudioFile(store database.Store, book database.Book) (path, cacheKey, b
 		}
 		return audio[i].FilePath < audio[j].FilePath
 	})
-	f := audio[0]
+
+	if n >= len(audio) {
+		return "", "", "", nil
+	}
+
+	f := audio[n]
 	key := f.FileHash
 	if key == "" && len(f.AcoustIDFingerprint) > 0 {
 		// Hash the fingerprint — raw fingerprints are 400–2000 bytes;
