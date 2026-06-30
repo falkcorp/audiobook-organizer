@@ -1,5 +1,5 @@
 // file: internal/server/scan_edge_cases_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c3d4e5f6-a7b8-9012-3456-789012abcdef
 
 package server
@@ -196,8 +196,8 @@ func TestScanService_MultiChapterAudiobook(t *testing.T) {
 
 	books, err := env.Store.GetAllBooks(100, 0)
 	require.NoError(t, err)
-	// Scanner treats each file as a separate book
-	assert.Equal(t, 5, len(books), "each chapter file should be a separate book entry")
+	// Scanner groups all files in the same directory into one multi-chapter book.
+	assert.Equal(t, 1, len(books), "all chapter files under one directory should be one book")
 }
 
 func TestScanService_RealLibrivoxFiles(t *testing.T) {
