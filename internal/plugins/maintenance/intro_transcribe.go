@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.6.0
+// version: 3.7.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-06-30
 
@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -26,8 +27,9 @@ import (
 )
 
 const (
-	introTranscribePageSize = 200
-	introTranscribeFFWorkers = 16 // parallel ffmpeg extractions per page (I/O bound on read-optimized ZFS)
+	introTranscribePageSize  = 200
+	introTranscribeFFWorkers = 8  // parallel ffmpeg per page; 4 pages run concurrently → 32 total
+	introTranscribePageConc  = 4  // pages processed in parallel (ffmpeg overlaps with Whisper GPU)
 )
 
 // introTranscribeParams is the checkpoint state for a transcription run.
@@ -130,13 +132,19 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 	// (the whole point of batch mode: load the model once per 200 books).
 	pages := chunkIDs(allIDs[startIdx:], introTranscribePageSize)
 
-	var processed int // cumulative books transcribed across all pages
-	var lastID string // last book ID seen — captured for the checkpoint closure
+	// processed and lastID are written by concurrent page goroutines — must be
+	// thread-safe. processed uses atomic arithmetic; lastID uses a mutex because
+	// string assignment is not atomic (pointer + length, two words).
+	var processed atomic.Int64
+	var lastIDMu sync.Mutex
+	var lastID string
 
-	// RunItems drives the page loop, handling ctx cancellation, per-page
-	// progress, and checkpointing. The item is a PAGE of IDs (not a single
-	// book) so we keep one Whisper process per 200 books. Sequential by design:
-	// ffmpeg parallelism (16 workers) already lives inside processTranscribePage.
+	// RunItems drives the page loop with introTranscribePageConc pages in flight
+	// at once. Each page runs its own ffmpeg workers (introTranscribeFFWorkers),
+	// so total concurrent ffmpeg extractions = pageConc × ffWorkers (32 at default
+	// settings). Pages send independent batches to the Whisper server; the server's
+	// BatchedInferencePipeline queues them and the GPU processes overlapping small
+	// batches far more efficiently than one large serial one.
 	err = registry.RunItems(ctx, reporter, pages, func(ctx context.Context, ids []string) error {
 		books := make([]database.Book, 0, len(ids))
 		for _, id := range ids {
@@ -144,7 +152,9 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 			if gerr != nil || b == nil {
 				continue
 			}
+			lastIDMu.Lock()
 			lastID = id
+			lastIDMu.Unlock()
 			if onlyMissing && b.IntroTranscription != nil && *b.IntroTranscription != "" {
 				continue // already transcribed — skip (cache still warm if re-run)
 			}
@@ -154,36 +164,42 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 			return nil
 		}
 		// Per-book heartbeat: each completed book bumps the operation's progress
-		// clock so the watchdog sees liveness during a multi-minute batch (the
-		// old code only reported once per page and got cancelled mid-batch).
-		// base is the cumulative count before this page; d is books done within it.
-		base := processed
+		// clock so the watchdog sees liveness during a multi-minute batch.
+		// base is a snapshot of the cumulative count before this page starts; it
+		// is read once (atomic load) so the closure captures the right baseline
+		// even when other pages increment processed concurrently.
+		base := int(processed.Load())
 		onBook := func(d, _ int) {
-			_ = reporter.UpdateProgress(base+d, total,
-				fmt.Sprintf("Transcribing — %d/%d books", base+d, total))
+			cur := base + d
+			_ = reporter.UpdateProgress(cur, total,
+				fmt.Sprintf("Transcribing — %d/%d books", cur, total))
 		}
 		done := p.processTranscribePage(ctx, store, log, books, p.deps.RootDir(), onBook)
-		processed += done
+		cum := int(processed.Add(int64(done)))
 		log.Info("transcribe-book-intros: page complete",
-			"page_books", done, "cumulative_processed", processed, "total_books", total)
+			"page_books", done, "cumulative_processed", cum, "total_books", total)
 		return nil
 	}, registry.RunItemsOptions{
-		Concurrency:   1,
+		Concurrency:   introTranscribePageConc,
 		ProgressTotal: len(pages),
 		Label: func(i, t int) string {
-			return fmt.Sprintf("Page %d/%d — %d books transcribed", i+1, t, processed)
+			return fmt.Sprintf("Page %d/%d — %d books transcribed", i+1, t, int(processed.Load()))
 		},
 		CheckpointFn: func(ctx context.Context) error {
+			lastIDMu.Lock()
+			lid := lastID
+			lastIDMu.Unlock()
 			om := onlyMissing
-			return reporter.Checkpoint(introTranscribeParams{LastBookID: lastID, OnlyMissing: &om})
+			return reporter.Checkpoint(introTranscribeParams{LastBookID: lid, OnlyMissing: &om})
 		},
 	})
 	if err != nil {
 		return err
 	}
 
-	log.Info("transcribe-book-intros: complete", "processed", processed, "total_books", total)
-	_ = reporter.UpdateProgress(1, 1, fmt.Sprintf("Done — transcribed %d books", processed))
+	total64 := int(processed.Load())
+	log.Info("transcribe-book-intros: complete", "processed", total64, "total_books", total)
+	_ = reporter.UpdateProgress(1, 1, fmt.Sprintf("Done — transcribed %d books", total64))
 	return nil
 }
 
