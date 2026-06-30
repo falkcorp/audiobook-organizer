@@ -1,5 +1,5 @@
 # file: scripts/whisper_server.py
-# version: 2.4.0
+# version: 2.5.0
 # guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 # last-edited: 2026-06-30
 #
@@ -55,13 +55,17 @@ except ImportError as e:
     print('Install with: pip install "faster-whisper>=1.0.0" fastapi "uvicorn[standard]"')
     sys.exit(1)
 
+import os
+
 model_name = sys.argv[1] if len(sys.argv) > 1 else "base.en"
-log.info(f"Loading {model_name} (first run downloads ~150MB)...")
+# WHISPER_COMPUTE_TYPE: float16 for Turing+ (RTX series), int8 for Pascal (GTX 10-series).
+compute_type = os.environ.get("WHISPER_COMPUTE_TYPE", "float16")
+log.info(f"Loading {model_name} compute={compute_type} (first run downloads model)...")
 
 model = faster_whisper.WhisperModel(
     model_name,
     device="cuda",
-    compute_type="int8",  # int8 works on Pascal+ (GTX 10-series and up); float16 needs Turing+
+    compute_type=compute_type,
 )
 
 # BatchedInferencePipeline was introduced in faster-whisper 1.0.0.
@@ -75,7 +79,15 @@ except (ImportError, Exception) as e:
     batched_model = None
     log.warning(f"BatchedInferencePipeline unavailable ({e}), falling back to standard model")
 
-log.info(f"Ready — model={model_name} device=cuda compute=int8")
+log.info(f"Ready — model={model_name} device=cuda compute={compute_type}")
+
+# VAD parameters tuned for audiobook intros: lower threshold so music/quiet speech
+# isn't stripped; shorter silence gap so publisher jingles don't eat the whole clip.
+VAD_PARAMS = {
+    "threshold": 0.3,            # default 0.5 — lower = more permissive (catches quiet speech)
+    "min_silence_duration_ms": 500,   # default 2000 — split on shorter silences
+    "min_speech_duration_ms": 200,    # default 250 — keep shorter speech fragments
+}
 
 app = FastAPI()
 
@@ -89,7 +101,8 @@ def _do_transcribe(data: bytes, filename: str) -> dict:
                 language="en",
                 task="transcribe",
                 batch_size=16,
-                vad_filter=False,
+                vad_filter=True,
+                vad_parameters=VAD_PARAMS,
             )
         else:
             segments, info = model.transcribe(
@@ -97,7 +110,8 @@ def _do_transcribe(data: bytes, filename: str) -> dict:
                 language="en",
                 task="transcribe",
                 beam_size=5,
-                vad_filter=False,
+                vad_filter=True,
+                vad_parameters=VAD_PARAMS,
             )
         text = " ".join(s.text for s in segments).strip()
         log.info(f"transcribed {filename}: {len(text)} chars, {info.duration:.1f}s audio")
