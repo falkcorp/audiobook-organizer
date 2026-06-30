@@ -56,7 +56,7 @@ type MergeService interface {
 	// CombineBooks combines several single-file books into ONE multi-file book
 	// on the survivor (primaryID) and hard-deletes the absorbed shells. Distinct
 	// from MergeBooks, which links them as alternate versions in a version group.
-	CombineBooks(bookIDs []string, primaryID string) (*merge.CombineResult, error)
+	CombineBooks(bookIDs []string, primaryID string, override *merge.CombineOverride) (*merge.CombineResult, error)
 }
 
 // MetadataFetchService is the narrow *metafetch.Service subset used by

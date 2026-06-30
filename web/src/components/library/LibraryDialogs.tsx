@@ -1,7 +1,7 @@
 // file: web/src/components/library/LibraryDialogs.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: d4e5f6a7-b8c9-0123-def0-234567890123
-// last-edited: 2026-06-28
+// last-edited: 2026-06-30
 
 import React from 'react';
 import {
@@ -98,6 +98,12 @@ interface LibraryDialogsProps {
   combineDialogOpen: boolean;
   setCombineDialogOpen: (open: boolean) => void;
   combineInProgress: boolean;
+  combineOverrideTitle: string;
+  setCombineOverrideTitle: (v: string) => void;
+  combineOverrideAuthor: string;
+  setCombineOverrideAuthor: (v: string) => void;
+  combineOverrideNarrator: string;
+  setCombineOverrideNarrator: (v: string) => void;
   handleCombineIntoOneBook: () => void;
 
   // Batch delete dialog
@@ -260,6 +266,12 @@ export const LibraryDialogs = ({
   combineDialogOpen,
   setCombineDialogOpen,
   combineInProgress,
+  combineOverrideTitle,
+  setCombineOverrideTitle,
+  combineOverrideAuthor,
+  setCombineOverrideAuthor,
+  combineOverrideNarrator,
+  setCombineOverrideNarrator,
   handleCombineIntoOneBook,
   batchDeleteDialogOpen,
   setBatchDeleteDialogOpen,
@@ -465,8 +477,37 @@ export const LibraryDialogs = ({
           ))}
         </Box>
         <Alert severity="warning" sx={{ mt: 1 }}>
-          The other {Math.max(selectedAudiobooks.length - 1, 0)} entries will be deleted and their files attached to the survivor. Unlike "Merge as Versions", this produces ONE book, not a version group. Files stay in place on disk.
+          The other {Math.max(selectedAudiobooks.length - 1, 0)} entries will be deleted and their files attached to the survivor. Unlike &quot;Merge as Versions&quot;, this produces ONE book, not a version group. Files stay in place on disk.
         </Alert>
+        <Typography variant="body2" sx={{ mt: 2, mb: 0.5, color: 'text.secondary' }}>
+          Override metadata (optional — leave blank to keep the survivor&apos;s existing values):
+        </Typography>
+        <Stack spacing={1.5}>
+          <TextField
+            label="Title"
+            size="small"
+            fullWidth
+            value={combineOverrideTitle}
+            onChange={(e) => setCombineOverrideTitle(e.target.value)}
+            placeholder="e.g. Salem's Lot"
+          />
+          <TextField
+            label="Author"
+            size="small"
+            fullWidth
+            value={combineOverrideAuthor}
+            onChange={(e) => setCombineOverrideAuthor(e.target.value)}
+            placeholder="e.g. Stephen King"
+          />
+          <TextField
+            label="Narrator"
+            size="small"
+            fullWidth
+            value={combineOverrideNarrator}
+            onChange={(e) => setCombineOverrideNarrator(e.target.value)}
+            placeholder="e.g. Ron McClarty"
+          />
+        </Stack>
       </DialogContent>
       <DialogActions>
         <Button onClick={() => setCombineDialogOpen(false)} disabled={combineInProgress}>

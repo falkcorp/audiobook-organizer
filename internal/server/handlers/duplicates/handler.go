@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/handler.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9f41f363-34fc-4ad2-b2f1-46d5ac0ba2f3
-// last-edited: 2026-06-23
+// last-edited: 2026-06-30
 
 // Package duplicates hosts the SQL-backed duplicate-detection HTTP handlers
 // extracted from the server package's duplicates_handlers.go: book / author /
@@ -35,6 +35,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	ulid "github.com/oklog/ulid/v2"
 )
 
@@ -299,6 +300,10 @@ func (h *Handler) CombineBooks(c *gin.Context) {
 	var req struct {
 		KeepID   string   `json:"keep_id" binding:"required"`
 		MergeIDs []string `json:"merge_ids" binding:"required"`
+		// Override is optional. Non-empty fields overwrite the survivor's metadata
+		// after all files are reassigned. Useful when none of the source books has
+		// the correct title/author (e.g. every file was titled after its chapter).
+		Override *merge.CombineOverride `json:"override,omitempty"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		httputil.RespondWithBadRequest(c, err.Error())
@@ -317,7 +322,7 @@ func (h *Handler) CombineBooks(c *gin.Context) {
 	}
 
 	// Pass ALL ids (the absorbed books plus the survivor) and the survivor id.
-	result, err := ms.CombineBooks(append(req.MergeIDs, req.KeepID), req.KeepID)
+	result, err := ms.CombineBooks(append(req.MergeIDs, req.KeepID), req.KeepID, req.Override)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			httputil.RespondWithNotFound(c, "book", req.KeepID)

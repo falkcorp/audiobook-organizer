@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.tsx
-// version: 1.71.0
+// version: 1.72.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-06-28
+// last-edited: 2026-06-30
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -218,6 +218,9 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
   const [mergeDialogOpen, setMergeDialogOpen] = useState(false);
   const [combineDialogOpen, setCombineDialogOpen] = useState(false);
   const [combineInProgress, setCombineInProgress] = useState(false);
+  const [combineOverrideTitle, setCombineOverrideTitle] = useState('');
+  const [combineOverrideAuthor, setCombineOverrideAuthor] = useState('');
+  const [combineOverrideNarrator, setCombineOverrideNarrator] = useState('');
   const [batchPlaylistOpen, setBatchPlaylistOpen] = useState(false);
   const [mergePrimaryId, setMergePrimaryId] = useState<string>('');
   // pendingFetchOpId tracks the in-flight metadata fetch so we can
@@ -906,13 +909,19 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     try {
       const keepId = mergePrimaryId || selectedAudiobooks[0].id;
       const mergeIds = selectedAudiobooks.filter((b) => b.id !== keepId).map((b) => b.id);
-      const result = await api.combineBooks(keepId, mergeIds);
+      const override = (combineOverrideTitle || combineOverrideAuthor || combineOverrideNarrator)
+        ? { title: combineOverrideTitle || undefined, author: combineOverrideAuthor || undefined, narrator: combineOverrideNarrator || undefined }
+        : undefined;
+      const result = await api.combineBooks(keepId, mergeIds, override);
       toast(
         `Combined ${result.files_moved} files into one book; removed ${result.books_deleted} entries.`,
         'success',
       );
       setSelectedAudiobooks([]);
       setCrossPageFilter(null);
+      setCombineOverrideTitle('');
+      setCombineOverrideAuthor('');
+      setCombineOverrideNarrator('');
       setCombineDialogOpen(false);
       await loadAudiobooks();
     } catch (error) {
@@ -1813,6 +1822,12 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
           combineDialogOpen={combineDialogOpen}
           setCombineDialogOpen={setCombineDialogOpen}
           combineInProgress={combineInProgress}
+          combineOverrideTitle={combineOverrideTitle}
+          setCombineOverrideTitle={setCombineOverrideTitle}
+          combineOverrideAuthor={combineOverrideAuthor}
+          setCombineOverrideAuthor={setCombineOverrideAuthor}
+          combineOverrideNarrator={combineOverrideNarrator}
+          setCombineOverrideNarrator={setCombineOverrideNarrator}
           handleCombineIntoOneBook={handleCombineIntoOneBook}
           batchDeleteDialogOpen={batchDeleteDialogOpen}
           setBatchDeleteDialogOpen={setBatchDeleteDialogOpen}

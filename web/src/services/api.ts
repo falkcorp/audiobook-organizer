@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.46.0
+// version: 2.47.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-06-28
+// last-edited: 2026-06-30
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -1460,17 +1460,26 @@ export interface CombineBooksResult {
   message?: string;
 }
 
+export interface CombineOverride {
+  title?: string;
+  author?: string;
+  narrator?: string;
+}
+
 // combineBooks combines several single-file books into ONE multi-file book on the
 // survivor (keepId), hard-deleting the absorbed shells. Distinct from mergeBooks,
 // which links them as alternate versions in a version group. Synchronous.
+// override is optional: non-empty fields overwrite the survivor's metadata after
+// the combine (useful when all source books have per-chapter titles).
 export async function combineBooks(
   keepId: string,
   mergeIds: string[],
+  override?: CombineOverride,
 ): Promise<CombineBooksResult> {
   const response = await apiFetch(`${API_BASE}/audiobooks/combine`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ keep_id: keepId, merge_ids: mergeIds }),
+    body: JSON.stringify({ keep_id: keepId, merge_ids: mergeIds, override: override ?? null }),
   });
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to combine books');

@@ -67,7 +67,7 @@ func TestService_CombineBooks(t *testing.T) {
 	}))
 
 	ms := NewService(store)
-	res, err := ms.CombineBooks([]string{book1.ID, book3.ID, survivor.ID}, survivor.ID)
+	res, err := ms.CombineBooks([]string{book1.ID, book3.ID, survivor.ID}, survivor.ID, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, survivor.ID, res.PrimaryID)
@@ -108,13 +108,13 @@ func TestService_CombineBooks(t *testing.T) {
 
 func TestService_CombineBooks_TooFew(t *testing.T) {
 	ms := NewService(nil)
-	_, err := ms.CombineBooks([]string{"one"}, "one")
+	_, err := ms.CombineBooks([]string{"one"}, "one", nil)
 	require.Error(t, err)
 }
 
 func TestService_CombineBooks_RequiresPrimary(t *testing.T) {
 	ms := NewService(nil)
-	_, err := ms.CombineBooks([]string{"a", "b"}, "")
+	_, err := ms.CombineBooks([]string{"a", "b"}, "", nil)
 	require.Error(t, err)
 }
 
@@ -132,6 +132,6 @@ func TestService_CombineBooks_PrimaryNotInSet(t *testing.T) {
 	c := &database.Book{ID: ulid.Make().String(), Title: "C", Format: "mp3", FilePath: "/tmp/c.mp3"}
 	_, err = store.CreateBook(c)
 	require.NoError(t, err)
-	_, err = ms.CombineBooks([]string{a.ID, b.ID}, c.ID)
+	_, err = ms.CombineBooks([]string{a.ID, b.ID}, c.ID, nil)
 	require.Error(t, err)
 }
