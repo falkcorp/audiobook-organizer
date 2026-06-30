@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.88.0 -->
+<!-- version: 3.89.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-06-30 -->
 
@@ -8,6 +8,16 @@
 ## [Unreleased]
 
 ### Features
+
+#### June 30, 2026 — Transcription observability: per-book outcome + stats aggregate + monitor (PRs #1693, #1694, #1695)
+
+- **`feat(transcribe)`** (PR #1693) — The transcription op now records a **per-book outcome** for every attempted book: `Book.TranscribeStatus` ∈ {`ok`, `source_file_missing`, `no_audio`, `ffmpeg_error`, `whisper_error`, `empty`} plus `TranscribeError` detail and `TranscribeAttemptedAt`. `source_file_missing` is detected via `os.Stat` **before** ffmpeg so stale FilePaths (the dominant cause after an organize move) are cleanly separated from real codec errors; ffmpeg stderr tail is captured for the rest. Writes are change-guarded (`eqStrPtr`) so re-runs over the un-transcribable tail don't churn the DB.
+- **`feat(transcribe)`** (PR #1693) — Added the `stats:transcribe` PebbleDB aggregate (`TranscribeStats`), updated after each page by a thread-safe accumulator, served at **`GET /api/v1/maintenance/transcribe-stats`** — a single key read instead of scanning 48K books or scraping ephemeral op logs. Counts ok/source_missing/no_audio/ffmpeg/whisper/empty/skipped/cache_hits + a `done` flag.
+- **`feat(ops)`** (PR #1693) — `scripts/transcribe_monitor.py`: polls the aggregate, writes parseable JSONL metrics, and alerts on `IDLE` / `STALL` / `NOPROGRESS` (the did-nothing-completion pattern) / `WHISPER_DOWN`; optional `--relaunch` with cooldown. Built to run persistently on the server (systemd timer / nohup), not as an agent background task.
+- **`feat(ops)`** (PR #1693) — `scripts/whisper-supervisor.ps1`: supervises `whisper_server.py` on the Windows GPU box — auto-restart on crash, sentinel-file clean-stop for applying changes (the claude-loop pattern), and a crash-loop circuit breaker.
+- **`fix(transcribe)`** (PR #1694) — Unwrap the memdb/query-layer store wrapper when resolving the stats sink; without it `statsSink` was nil and `stats:transcribe` was never written (endpoint returned null even while the op ran).
+- **`fix(ops)`** (PR #1695) — `read_token` now parses the `api_key=` line from the multi-line `.api-token` instead of the whole file (which produced an `Invalid header value`).
+- **First prod read confirmed the real state:** **47,135 / 48,763 books (96.7%) already transcribed.** The remaining ~1,628 are un-transcribable as-is: 1,053 `no_audio` (no audio file) + 479 `source_file_missing` (moved files / stale FilePath) + a few ffmpeg/whisper/empty. The actionable follow-up is **path reconciliation** for the `source_file_missing` set, now quantified by the aggregate.
 
 #### June 30, 2026 — Silence retry loop + [SILENCE] sentinel (PR #1688)
 
