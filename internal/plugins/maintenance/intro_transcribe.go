@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.5.0
+// version: 3.6.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-06-30
 
@@ -490,7 +490,10 @@ func firstAudioFile(store database.Store, book database.Book) (path, cacheKey, b
 	f := audio[0]
 	key := f.FileHash
 	if key == "" && len(f.AcoustIDFingerprint) > 0 {
-		key = "fp:" + hex.EncodeToString(f.AcoustIDFingerprint)
+		// Hash the fingerprint — raw fingerprints are 400–2000 bytes;
+		// hex-encoding them directly exceeds the 255-byte Linux filename limit.
+		fpHash := sha256.Sum256(f.AcoustIDFingerprint)
+		key = "fp:" + hex.EncodeToString(fpHash[:])
 	}
 	if key == "" {
 		h := sha256.Sum256([]byte(f.FilePath))
