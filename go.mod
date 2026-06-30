@@ -11,7 +11,7 @@ require (
 	github.com/gin-contrib/gzip v1.2.6
 	github.com/gin-gonic/gin v1.12.0
 	github.com/hashicorp/go-memdb v1.3.5
-	github.com/klauspost/compress v1.18.6
+	github.com/klauspost/compress v1.18.7
 	github.com/lithammer/fuzzysearch v1.1.8
 	github.com/nutsdb/nutsdb v1.1.0
 	github.com/oklog/ulid/v2 v2.1.1
