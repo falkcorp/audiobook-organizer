@@ -1,7 +1,7 @@
 // file: internal/backup/backup.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 8f9e0a1b-2c3d-4e5f-6a7b-8c9d0e1f2a3b
-// last-edited: 2026-06-23
+// last-edited: 2026-06-30
 
 package backup
 
@@ -140,7 +140,12 @@ func CreateBackup(databasePath, databaseType string, config BackupConfig) (*Back
 // flushes all in-flight writes and hard-links SST files into destDir, so the
 // archive is always internally consistent. Falls back to CreateBackup (live
 // walk) if the store does not implement Checkpointable (e.g. in tests).
-func CreateBackupWithCheckpoint(store Checkpointable, databaseType string, config BackupConfig) (*BackupInfo, error) {
+//
+// dbSourcePath is the original database path. Its basename is used as the root
+// entry in the tar archive so that restoring the archive recreates a directory
+// named after the source DB (e.g. "audiobooks.pebble/") rather than the random
+// checkpoint temp-dir name ("pebble-checkpoint-XYZ/").
+func CreateBackupWithCheckpoint(store Checkpointable, dbSourcePath, databaseType string, config BackupConfig) (*BackupInfo, error) {
 	if err := os.MkdirAll(config.BackupDir, 0775); err != nil {
 		return nil, fmt.Errorf("create backup dir: %w", err)
 	}
@@ -155,10 +160,24 @@ func CreateBackupWithCheckpoint(store Checkpointable, databaseType string, confi
 	if err := os.Remove(tmpDir); err != nil {
 		return nil, fmt.Errorf("remove pre-created checkpoint tmp dir: %w", err)
 	}
-	defer os.RemoveAll(tmpDir)
+
+	// Use a closure so the defer always removes whichever path is current.
+	cleanupDir := tmpDir
+	defer func() { os.RemoveAll(cleanupDir) }()
 
 	if err := store.Checkpoint(tmpDir); err != nil {
 		return nil, fmt.Errorf("pebble checkpoint: %w", err)
+	}
+
+	// Rename checkpoint dir to source DB basename so tar archive entries use
+	// the expected name. Restoring to a target then creates "target/test.pebble/"
+	// rather than "target/pebble-checkpoint-XYZ/".
+	if base := filepath.Base(dbSourcePath); base != "" && base != "." {
+		named := filepath.Join(filepath.Dir(tmpDir), base)
+		if renErr := os.Rename(tmpDir, named); renErr == nil {
+			cleanupDir = named
+			tmpDir = named
+		}
 	}
 
 	return CreateBackup(tmpDir, databaseType, config)

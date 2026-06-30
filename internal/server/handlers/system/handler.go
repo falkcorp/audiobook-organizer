@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8475f406-df31-4286-95b0-30787397603e
-// last-edited: 2026-06-23
+// last-edited: 2026-06-30
 
 // Package system hosts the system-level HTTP handlers extracted from the server
 // package: health, status, announcements, storage, logs, activity-log,
@@ -542,9 +542,13 @@ func (h *Handler) CreateBackup(c *gin.Context) {
 
 	var info *backup.BackupInfo
 	var err error
-	if store := h.resolveStore(); store != nil {
+	// Only use the Checkpointable (Pebble-native) path when the configured DB
+	// type is pebble. For sqlite (or any other type), fall through to the
+	// file-copy path so the source-path existence check runs and returns an
+	// appropriate error when the DB file is missing.
+	if store := h.resolveStore(); store != nil && dbType == "pebble" {
 		if cp, ok := store.(backup.Checkpointable); ok {
-			info, err = backup.CreateBackupWithCheckpoint(cp, dbType, backupConfig)
+			info, err = backup.CreateBackupWithCheckpoint(cp, dbPath, dbType, backupConfig)
 		} else {
 			info, err = backup.CreateBackup(dbPath, dbType, backupConfig)
 		}

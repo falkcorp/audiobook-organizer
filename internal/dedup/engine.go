@@ -1,7 +1,7 @@
 // file: internal/dedup/engine.go
-// version: 1.36.0
+// version: 1.37.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
-// last-edited: 2026-06-28
+// last-edited: 2026-06-30
 
 package dedup
 
@@ -3078,6 +3078,12 @@ func (de *Engine) AcoustIDScan(ctx context.Context, progress func(done, total in
 
 		for _, f := range files {
 			if isBoilerplateTitle(f.Title) {
+				continue
+			}
+			// Skip files whose fingerprint duration is below the minimum — these
+			// are typically short publisher jingles or intro clips that appear on
+			// many unrelated books and produce false-positive pairs.
+			if knownShortFingerprintFile(f) {
 				continue
 			}
 			// Tier-0: whole-file LSH candidate set + Hamming refine.
