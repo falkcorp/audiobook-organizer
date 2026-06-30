@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/transcribe_monitor.py
-# version: 1.0.0
+# version: 1.0.1
 # guid: 2f7c4a91-8b03-4d6e-9a52-1c6e8f0b3d47
 # last-edited: 2026-06-30
 """Transcription progress monitor + alerter.
@@ -65,16 +65,26 @@ def now_iso():
 
 
 def read_token(token_file):
-    """Read 'api_key=abk_...' (or a bare token) from token_file."""
+    """Extract the API key from token_file.
+
+    The .api-token file is multi-line (api_key=abk_..., key_id=..., username=...),
+    so we scan for the api_key line rather than reading the whole file. Falls back
+    to a bare single-line token if no api_key= line is present.
+    """
     try:
         with open(token_file) as f:
-            raw = f.read().strip()
+            lines = [ln.strip() for ln in f if ln.strip()]
     except OSError as e:
         print(f"FATAL: cannot read token file {token_file}: {e}", file=sys.stderr)
         sys.exit(2)
-    if raw.startswith("api_key="):
-        return raw.split("=", 1)[1].strip()
-    return raw
+    for ln in lines:
+        if ln.startswith("api_key="):
+            return ln.split("=", 1)[1].strip()
+    # No api_key= line: treat a single bare line as the token.
+    if len(lines) == 1 and "=" not in lines[0]:
+        return lines[0]
+    print(f"FATAL: no api_key= line found in {token_file}", file=sys.stderr)
+    sys.exit(2)
 
 
 def http_get(url, token, insecure, timeout=15):
