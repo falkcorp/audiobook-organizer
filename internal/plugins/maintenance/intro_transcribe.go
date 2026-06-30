@@ -307,7 +307,7 @@ func (p *Plugin) processTranscribePage(
 	}
 	jobs := make([]bookJob, 0, len(books))
 	for _, b := range books {
-		src, hash, _ := firstAudioFile(store, b)
+		src, hash, _, _ := firstAudioFile(store, b)
 		jobs = append(jobs, bookJob{book: b, audioSrc: src, fileHash: hash})
 	}
 
@@ -449,14 +449,15 @@ var audioExtSet = map[string]bool{
 	".flac": true, ".aac": true, ".ogg": true, ".wma": true,
 }
 
-// firstAudioFile returns the path and a stable cache key for the first audio
-// file of book. It checks BookFile records first (multi-track books); when none
-// exist it falls back to book.FilePath directly (single-file iTunes imports that
-// were ingested without individual BookFile rows — the ~17K gap in the cache).
-func firstAudioFile(store database.Store, book database.Book) (path, cacheKey string, err error) {
+// firstAudioFile returns the path, a stable cache key, and the BookFile ID for
+// the first audio file of book. The BookFile ID is empty when falling back to
+// the book-level FilePath (single-file iTunes imports with no BookFile rows).
+// Cache key priority: FileHash (content SHA-256) > fp:AcoustIDFingerprint >
+// path:SHA-256(FilePath) — path-keyed entries break when organize renames files.
+func firstAudioFile(store database.Store, book database.Book) (path, cacheKey, bookFileID string, err error) {
 	files, err := store.GetBookFiles(book.ID)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 
 	var audio []database.BookFile
@@ -473,9 +474,9 @@ func firstAudioFile(store database.Store, book database.Book) (path, cacheKey st
 		fp := book.FilePath
 		if fp != "" && audioExtSet[strings.ToLower(filepath.Ext(fp))] {
 			h := sha256.Sum256([]byte(fp))
-			return fp, "path:" + hex.EncodeToString(h[:]), nil
+			return fp, "path:" + hex.EncodeToString(h[:]), "", nil
 		}
-		return "", "", nil
+		return "", "", "", nil
 	}
 
 	sort.Slice(audio, func(i, j int) bool {
@@ -487,9 +488,6 @@ func firstAudioFile(store database.Store, book database.Book) (path, cacheKey st
 		return audio[i].FilePath < audio[j].FilePath
 	})
 	f := audio[0]
-	// Prefer content-stable keys so the cache survives file moves (organize renames).
-	// Priority: FileHash (SHA-256 of content) > AcoustIDFingerprint (acoustic hash) >
-	// path hash (last resort; breaks when files are renamed/moved).
 	key := f.FileHash
 	if key == "" && len(f.AcoustIDFingerprint) > 0 {
 		key = "fp:" + hex.EncodeToString(f.AcoustIDFingerprint)
@@ -498,7 +496,7 @@ func firstAudioFile(store database.Store, book database.Book) (path, cacheKey st
 		h := sha256.Sum256([]byte(f.FilePath))
 		key = "path:" + hex.EncodeToString(h[:])
 	}
-	return f.FilePath, key, nil
+	return f.FilePath, key, f.ID, nil
 }
 
 // wavCacheDir returns the directory used to cache extracted 90s WAV clips.
