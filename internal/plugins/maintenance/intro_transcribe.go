@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.4.0
+// version: 3.5.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-06-27
+// last-edited: 2026-06-30
 
 package maintenance
 
@@ -487,7 +487,13 @@ func firstAudioFile(store database.Store, book database.Book) (path, cacheKey st
 		return audio[i].FilePath < audio[j].FilePath
 	})
 	f := audio[0]
+	// Prefer content-stable keys so the cache survives file moves (organize renames).
+	// Priority: FileHash (SHA-256 of content) > AcoustIDFingerprint (acoustic hash) >
+	// path hash (last resort; breaks when files are renamed/moved).
 	key := f.FileHash
+	if key == "" && len(f.AcoustIDFingerprint) > 0 {
+		key = "fp:" + hex.EncodeToString(f.AcoustIDFingerprint)
+	}
 	if key == "" {
 		h := sha256.Sum256([]byte(f.FilePath))
 		key = "path:" + hex.EncodeToString(h[:])
