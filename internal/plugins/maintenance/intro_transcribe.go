@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.8.1
+// version: 3.9.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-06-30
 
@@ -28,8 +28,11 @@ import (
 
 const (
 	introTranscribePageSize  = 200
-	introTranscribeFFWorkers = 8  // parallel ffmpeg per page; 4 pages run concurrently → 32 total
-	introTranscribePageConc  = 4  // pages processed in parallel (ffmpeg overlaps with Whisper GPU)
+	introTranscribeFFWorkers = 8 // parallel ffmpeg per page; 6 pages run concurrently → 48 total
+	introTranscribePageConc  = 6 // pages in parallel: 48 concurrent ffmpeg (= server core count)
+	//                              and 6 concurrent Whisper batches to keep the GPU saturated.
+	//                              Tuned for the 48-core prod server (172.16.2.30); audio decode
+	//                              is I/O-light so one ffmpeg per core is the practical ceiling.
 )
 
 // introTranscribeParams is the checkpoint state for a transcription run.
