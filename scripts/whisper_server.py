@@ -1,5 +1,5 @@
 # file: scripts/whisper_server.py
-# version: 2.3.0
+# version: 2.4.0
 # guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 # last-edited: 2026-06-30
 #
@@ -89,7 +89,7 @@ def _do_transcribe(data: bytes, filename: str) -> dict:
                 language="en",
                 task="transcribe",
                 batch_size=16,
-                vad_filter=True,
+                vad_filter=False,
             )
         else:
             segments, info = model.transcribe(
@@ -97,7 +97,7 @@ def _do_transcribe(data: bytes, filename: str) -> dict:
                 language="en",
                 task="transcribe",
                 beam_size=5,
-                vad_filter=True,
+                vad_filter=False,
             )
         text = " ".join(s.text for s in segments).strip()
         log.info(f"transcribed {filename}: {len(text)} chars, {info.duration:.1f}s audio")
