@@ -1,7 +1,7 @@
 # file: scripts/whisper_server.py
-# version: 2.2.0
+# version: 2.3.0
 # guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-# last-edited: 2026-06-27
+# last-edited: 2026-06-30
 #
 # /// script
 # requires-python = ">=3.11"
@@ -61,7 +61,7 @@ log.info(f"Loading {model_name} (first run downloads ~150MB)...")
 model = faster_whisper.WhisperModel(
     model_name,
     device="cuda",
-    compute_type="float16",  # tensor cores on Turing+ (RTX series)
+    compute_type="int8",  # int8 works on Pascal+ (GTX 10-series and up); float16 needs Turing+
 )
 
 # BatchedInferencePipeline was introduced in faster-whisper 1.0.0.
@@ -75,7 +75,7 @@ except (ImportError, Exception) as e:
     batched_model = None
     log.warning(f"BatchedInferencePipeline unavailable ({e}), falling back to standard model")
 
-log.info(f"Ready — model={model_name} device=cuda compute=float16")
+log.info(f"Ready — model={model_name} device=cuda compute=int8")
 
 app = FastAPI()
 
@@ -137,4 +137,6 @@ async def health():
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+    import os
+    port = int(os.environ.get("WHISPER_PORT", "19847"))
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
