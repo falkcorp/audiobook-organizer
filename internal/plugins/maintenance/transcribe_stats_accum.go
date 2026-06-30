@@ -21,6 +21,7 @@ const (
 	statusFFmpegError   = "ffmpeg_error"
 	statusWhisperError  = "whisper_error"
 	statusEmpty         = "empty"
+	statusExtracted     = "extracted" // extract-only mode: WAV cached, not transcribed
 )
 
 // transcribeStatsAccum is a thread-safe accumulator for the live transcription
@@ -65,6 +66,8 @@ func (a *transcribeStatsAccum) recordOutcome(status string, now time.Time) {
 		a.stats.WhisperError++
 	case statusEmpty:
 		a.stats.Empty++
+	case statusExtracted:
+		a.stats.Extracted++
 	}
 	a.stats.UpdatedAt = now
 }

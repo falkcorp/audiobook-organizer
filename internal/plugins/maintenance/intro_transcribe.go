@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.9.0
+// version: 3.10.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-06-30
 
@@ -47,6 +47,13 @@ type introTranscribeParams struct {
 	// (e.g. the "[Publisher] presents ..." / read-by extraction fix) without the
 	// cost of re-transcribing. Cheap: one GetBookByID + UpdateBook per book.
 	ReparseOnly *bool `json:"reparse_only,omitempty"`
+	// ExtractOnly rebuilds the WAV clip cache WITHOUT calling Whisper. ffmpeg runs
+	// at full concurrency (48 on the prod server) and is no longer gated by the
+	// single GPU, so the whole library's clips re-extract in ~30-60 min instead of
+	// the ~2 days a full GPU re-transcribe takes. Use after moving/clearing the
+	// cache: extract-only first (fast, CPU-bound), then a normal run transcribes
+	// off the warm cache (cache hits → no ffmpeg, only the GPU step remains).
+	ExtractOnly *bool `json:"extract_only,omitempty"`
 }
 
 func (p *Plugin) introTranscribeDef() sdk.OperationDef {
@@ -86,6 +93,7 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 	}
 	onlyMissing := params.OnlyMissing == nil || *params.OnlyMissing
 	reparseOnly := params.ReparseOnly != nil && *params.ReparseOnly
+	extractOnly := params.ExtractOnly != nil && *params.ExtractOnly
 
 	log := reporter.Logger()
 
@@ -180,7 +188,9 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 			lastIDMu.Lock()
 			lastID = id
 			lastIDMu.Unlock()
-			if onlyMissing && b.IntroTranscription != nil && *b.IntroTranscription != "" {
+			// extract-only ignores onlyMissing: the whole point is to (re)build the
+			// WAV cache for EVERY book, regardless of transcription status.
+			if !extractOnly && onlyMissing && b.IntroTranscription != nil && *b.IntroTranscription != "" {
 				skipped++
 				continue // already transcribed — skip (cache still warm if re-run)
 			}
@@ -197,12 +207,16 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 		// is read once (atomic load) so the closure captures the right baseline
 		// even when other pages increment processed concurrently.
 		base := int(processed.Load())
+		verb := "Transcribing"
+		if extractOnly {
+			verb = "Extracting"
+		}
 		onBook := func(d, _ int) {
 			cur := base + d
 			_ = reporter.UpdateProgress(cur, total,
-				fmt.Sprintf("Transcribing — %d/%d books", cur, total))
+				fmt.Sprintf("%s — %d/%d books", verb, cur, total))
 		}
-		done := p.processTranscribePage(ctx, store, log, books, p.deps.RootDir(), onBook, accum)
+		done := p.processTranscribePage(ctx, store, log, books, p.deps.RootDir(), onBook, accum, extractOnly)
 		cum := int(processed.Add(int64(done)))
 		accum.flush(false) // persist cumulative counts so the monitor sees live progress
 		log.Info("transcribe-book-intros: page complete",
@@ -351,6 +365,7 @@ func (p *Plugin) processTranscribePage(
 	rootDir string,
 	onBook transcribe.ProgressFunc,
 	accum *transcribeStatsAccum,
+	extractOnly bool,
 ) (processed int) {
 	cacheDir := wavCacheDir(rootDir)
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
@@ -471,6 +486,24 @@ func (p *Plugin) processTranscribePage(
 			b := bookByID[r.bookID]
 			p.applyOutcome(store, log, &b, r.status, r.detail, "", transcribe.IntroFields{}, now, accum)
 		}
+	}
+
+	// extract-only: the WAV cache is rebuilt; stop here, never call the GPU.
+	// Count every book that now has a clip (fresh ffmpeg or cache hit) as
+	// "extracted" and bump progress once for the page. This is what decouples
+	// the cache rebuild from the single-GPU transcription bottleneck.
+	if extractOnly {
+		extracted := 0
+		for _, r := range wavResults {
+			if r.wavPath != "" {
+				accum.recordOutcome(statusExtracted, now)
+				extracted++
+			}
+		}
+		if onBook != nil && extracted > 0 {
+			onBook(extracted, extracted)
+		}
+		return extracted
 	}
 
 	// Build the jobs map for TranscribeBatch (only books with valid WAVs).
