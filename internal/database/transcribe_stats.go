@@ -1,5 +1,5 @@
 // file: internal/database/transcribe_stats.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7f2a9c14-3b6d-4e81-9a05-2c8e1d4f6b73
 // last-edited: 2026-06-30
 
@@ -42,6 +42,9 @@ type TranscribeStats struct {
 	Empty           int `json:"empty"`
 	SkippedExisting int `json:"skipped_existing"`
 	CacheHits       int `json:"cache_hits"`
+	// Extracted counts books whose WAV clip was (re)built in extract-only mode —
+	// cache rebuilt without invoking the GPU. Zero in normal transcription runs.
+	Extracted int `json:"extracted"`
 }
 
 // PutTranscribeStats writes the aggregate counters. Sync is intentional so a
