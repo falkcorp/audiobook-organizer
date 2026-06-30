@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.8.0
+// version: 3.8.1
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-06-30
 
@@ -137,9 +137,17 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 	// monitor reads one key instead of scanning books or scraping op logs. The
 	// sink is best-effort — when the store doesn't implement TranscribeStatsStore
 	// (e.g. a test stub) counts are tracked in memory only.
+	// The live store is often a wrapper (memdb/query layer) around *PebbleStore,
+	// so a direct assertion misses the capability — unwrap one level like the
+	// HTTP handlers do. Without this the sink stays nil and stats:transcribe is
+	// never written (the aggregate endpoint returns null even while the op runs).
 	var statsSink database.TranscribeStatsStore
 	if s, ok := store.(database.TranscribeStatsStore); ok {
 		statsSink = s
+	} else if uw, ok := store.(interface{ Unwrap() database.Store }); ok {
+		if s, ok2 := uw.Unwrap().(database.TranscribeStatsStore); ok2 {
+			statsSink = s
+		}
 	}
 	startedAt := time.Now()
 	accum := newTranscribeStatsAccum(statsSink, startedAt.Format(time.RFC3339), total, startedAt)
