@@ -5,9 +5,13 @@
     supervisor (which relaunches whisper under supervision).
 
 .DESCRIPTION
-    Run this ONCE from an Administrator PowerShell. After this, the Whisper
-    server is supervised: it auto-restarts on crash, and you can apply changes
-    cleanly via the stop-sentinel (see "Applying changes" below).
+    Run this ONCE from a normal (non-elevated) PowerShell. After this, the
+    Whisper server is supervised: it auto-restarts on crash, and you can apply
+    changes cleanly via the stop-sentinel (see "Applying changes" below).
+
+    The scheduled task runs at your NORMAL user token (RunLevel Limited) — not
+    elevated — so the user-writable script path is not a privilege-escalation
+    vector. Whisper needs no admin rights (it is launched unelevated manually).
 
     Run from your repo clone so it picks up the committed supervisor script:
       cd C:\Users\jdfal\audiobook-organizer
@@ -54,14 +58,13 @@ $ProgressPreference = "SilentlyContinue"
 
 function Info($m) { Write-Host "[install] $m" }
 
-# Verify admin (Register-ScheduledTask with -RunLevel Highest needs it).
-$isAdmin = ([Security.Principal.WindowsPrincipal] `
-    [Security.Principal.WindowsIdentity]::GetCurrent()
-).IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)
-if (-not $isAdmin) {
-    Write-Error "Run this from an ADMINISTRATOR PowerShell (needed to register the scheduled task)."
-    exit 1
-}
+# No elevation required. The task runs at the user's NORMAL token (see step 5):
+# whisper_server.py needs no admin rights (it's launched manually unelevated),
+# and registering a task for your own account does not require admin. We
+# deliberately do NOT use -RunLevel Highest — that would run a script from a
+# user-writable path (C:\Users\jdfal\...) elevated, which is a privilege-
+# escalation vector (any unprivileged write to the script = elevated code at
+# next logon). Normal-level + user-writable path crosses no privilege boundary.
 
 if (-not (Test-Path $RepoScript)) {
     Write-Error "Supervisor script not found at $RepoScript. Run from your repo clone (cd C:\Users\jdfal\audiobook-organizer) after 'git pull'."
@@ -93,16 +96,19 @@ Start-Sleep -Seconds 2
 # 4. Clear any stale stop-sentinel.
 Remove-Item "C:\Users\jdfal\whisper-stop.flag" -Force -ErrorAction SilentlyContinue
 
-# 5. Register the Scheduled Task (recreate if present).
+# 5. Register the Scheduled Task (recreate if present). Runs at the user's
+# NORMAL token (RunLevel Limited) — intentionally NOT elevated, so the
+# user-writable script path is not a privilege-escalation vector.
 schtasks /Delete /TN $TaskName /F 2>$null | Out-Null
 $action = New-ScheduledTaskAction -Execute "powershell.exe" `
     -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$InstallPath`""
 $trigger = New-ScheduledTaskTrigger -AtLogOn
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+$principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
-    -Settings $settings -RunLevel Highest -User $env:USERNAME -Force | Out-Null
-Info "registered scheduled task '$TaskName' (runs at logon + now)"
+    -Settings $settings -Principal $principal -Force | Out-Null
+Info "registered scheduled task '$TaskName' (runs at logon + now, normal token)"
 
 # 6. Start it now.
 Start-ScheduledTask -TaskName $TaskName
