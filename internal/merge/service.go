@@ -1,6 +1,7 @@
 // file: internal/merge/service.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
+// last-edited: 2026-06-30
 
 package merge
 
@@ -224,6 +225,15 @@ type CombineResult struct {
 	BooksDeleted int    `json:"books_deleted"`
 }
 
+// CombineOverride holds optional metadata fields to apply to the survivor book
+// after all files have been reassigned. Only non-empty strings take effect;
+// omitting a field leaves the survivor's existing value untouched.
+type CombineOverride struct {
+	Title    string `json:"title,omitempty"`
+	Author   string `json:"author,omitempty"`
+	Narrator string `json:"narrator,omitempty"`
+}
+
 // CombineBooks combines several books into ONE multi-file book — distinct from
 // MergeBooks, which links them as alternate VERSIONS in a version group. Every
 // selected book's audio files become real BookFiles on the survivor, and the
@@ -234,8 +244,9 @@ type CombineResult struct {
 // DB-only: files stay where they are on disk (most shattered sets are already in
 // one folder). Run organize afterward to physically co-locate if desired.
 //
-// The survivor keeps its own metadata (the caller picks primaryID); rename after.
-func (ms *Service) CombineBooks(bookIDs []string, primaryID string) (*CombineResult, error) {
+// override is optional: non-empty fields overwrite the survivor's metadata after
+// the combine. Leave it nil or empty to keep the survivor's existing metadata.
+func (ms *Service) CombineBooks(bookIDs []string, primaryID string, override *CombineOverride) (*CombineResult, error) {
 	if len(bookIDs) < 2 {
 		return nil, fmt.Errorf("need at least 2 books to combine")
 	}
@@ -314,6 +325,48 @@ func (ms *Service) CombineBooks(bookIDs []string, primaryID string) (*CombineRes
 	if err := ms.db.RecomputeBookAggregates(survivor.ID); err != nil {
 		slog.Warn("combine RecomputeBookAggregates", "id", survivor.ID, "err", err)
 	}
+
+	// Apply metadata overrides to the survivor. UpdateBook does a full column
+	// replacement, so we re-fetch after the aggregate recompute and patch only
+	// the non-empty override fields.
+	if override != nil && (override.Title != "" || override.Author != "" || override.Narrator != "") {
+		fresh, err := ms.db.GetBookByID(primaryID)
+		if err == nil && fresh != nil {
+			if override.Title != "" {
+				fresh.Title = override.Title
+			}
+			if override.Narrator != "" {
+				fresh.Narrator = &override.Narrator
+			}
+			if _, err := ms.db.UpdateBook(fresh.ID, fresh); err != nil {
+				slog.Warn("combine override UpdateBook", "id", fresh.ID, "err", err)
+			} else {
+				slog.Info("combine applied metadata override", "id", fresh.ID,
+					"title", override.Title, "narrator", override.Narrator)
+			}
+		}
+		// Author resolution: find or create by name, then link to the survivor.
+		if override.Author != "" {
+			author, err := ms.db.GetAuthorByName(override.Author)
+			if err == nil && author == nil {
+				author, err = ms.db.CreateAuthor(override.Author)
+			}
+			if err == nil && author != nil {
+				_ = ms.db.SetBookAuthors(primaryID, []database.BookAuthor{
+					{BookID: primaryID, AuthorID: author.ID, Role: "author", Position: 0},
+				})
+				// Also set AuthorID on the book row for backward compat.
+				if b, err2 := ms.db.GetBookByID(primaryID); err2 == nil && b != nil {
+					b.AuthorID = &author.ID
+					_, _ = ms.db.UpdateBook(b.ID, b)
+				}
+			}
+			if err != nil {
+				slog.Warn("combine override author", "name", override.Author, "err", err)
+			}
+		}
+	}
+
 	slog.Info("combined books into one", "survivor", survivor.ID,
 		"files_moved", res.FilesMoved, "books_deleted", res.BooksDeleted)
 	return res, nil

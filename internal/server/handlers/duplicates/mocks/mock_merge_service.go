@@ -37,8 +37,8 @@ func (_m *MockMergeService) EXPECT() *MockMergeService_Expecter {
 }
 
 // CombineBooks provides a mock function for the type MockMergeService
-func (_mock *MockMergeService) CombineBooks(bookIDs []string, primaryID string) (*merge.CombineResult, error) {
-	ret := _mock.Called(bookIDs, primaryID)
+func (_mock *MockMergeService) CombineBooks(bookIDs []string, primaryID string, override *merge.CombineOverride) (*merge.CombineResult, error) {
+	ret := _mock.Called(bookIDs, primaryID, override)
 
 	if len(ret) == 0 {
 		panic("no return value specified for CombineBooks")
@@ -46,18 +46,18 @@ func (_mock *MockMergeService) CombineBooks(bookIDs []string, primaryID string) 
 
 	var r0 *merge.CombineResult
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func([]string, string) (*merge.CombineResult, error)); ok {
-		return returnFunc(bookIDs, primaryID)
+	if returnFunc, ok := ret.Get(0).(func([]string, string, *merge.CombineOverride) (*merge.CombineResult, error)); ok {
+		return returnFunc(bookIDs, primaryID, override)
 	}
-	if returnFunc, ok := ret.Get(0).(func([]string, string) *merge.CombineResult); ok {
-		r0 = returnFunc(bookIDs, primaryID)
+	if returnFunc, ok := ret.Get(0).(func([]string, string, *merge.CombineOverride) *merge.CombineResult); ok {
+		r0 = returnFunc(bookIDs, primaryID, override)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*merge.CombineResult)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func([]string, string) error); ok {
-		r1 = returnFunc(bookIDs, primaryID)
+	if returnFunc, ok := ret.Get(1).(func([]string, string, *merge.CombineOverride) error); ok {
+		r1 = returnFunc(bookIDs, primaryID, override)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -72,11 +72,12 @@ type MockMergeService_CombineBooks_Call struct {
 // CombineBooks is a helper method to define mock.On call
 //   - bookIDs []string
 //   - primaryID string
-func (_e *MockMergeService_Expecter) CombineBooks(bookIDs any, primaryID any) *MockMergeService_CombineBooks_Call {
-	return &MockMergeService_CombineBooks_Call{Call: _e.mock.On("CombineBooks", bookIDs, primaryID)}
+//   - override *merge.CombineOverride
+func (_e *MockMergeService_Expecter) CombineBooks(bookIDs any, primaryID any, override any) *MockMergeService_CombineBooks_Call {
+	return &MockMergeService_CombineBooks_Call{Call: _e.mock.On("CombineBooks", bookIDs, primaryID, override)}
 }
 
-func (_c *MockMergeService_CombineBooks_Call) Run(run func(bookIDs []string, primaryID string)) *MockMergeService_CombineBooks_Call {
+func (_c *MockMergeService_CombineBooks_Call) Run(run func(bookIDs []string, primaryID string, override *merge.CombineOverride)) *MockMergeService_CombineBooks_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 []string
 		if args[0] != nil {
@@ -86,10 +87,11 @@ func (_c *MockMergeService_CombineBooks_Call) Run(run func(bookIDs []string, pri
 		if args[1] != nil {
 			arg1 = args[1].(string)
 		}
-		run(
-			arg0,
-			arg1,
-		)
+		var arg2 *merge.CombineOverride
+		if args[2] != nil {
+			arg2 = args[2].(*merge.CombineOverride)
+		}
+		run(arg0, arg1, arg2)
 	})
 	return _c
 }
@@ -99,7 +101,7 @@ func (_c *MockMergeService_CombineBooks_Call) Return(combineResult *merge.Combin
 	return _c
 }
 
-func (_c *MockMergeService_CombineBooks_Call) RunAndReturn(run func(bookIDs []string, primaryID string) (*merge.CombineResult, error)) *MockMergeService_CombineBooks_Call {
+func (_c *MockMergeService_CombineBooks_Call) RunAndReturn(run func(bookIDs []string, primaryID string, override *merge.CombineOverride) (*merge.CombineResult, error)) *MockMergeService_CombineBooks_Call {
 	_c.Call.Return(run)
 	return _c
 }
