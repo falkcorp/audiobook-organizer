@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.7.0
+// version: 3.8.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-06-30
 
@@ -132,6 +132,19 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 	// (the whole point of batch mode: load the model once per 200 books).
 	pages := chunkIDs(allIDs[startIdx:], introTranscribePageSize)
 
+	// Live aggregate: the op records per-outcome counts into accum and flushes
+	// them to the stats:transcribe PebbleDB key after each page so an external
+	// monitor reads one key instead of scanning books or scraping op logs. The
+	// sink is best-effort — when the store doesn't implement TranscribeStatsStore
+	// (e.g. a test stub) counts are tracked in memory only.
+	var statsSink database.TranscribeStatsStore
+	if s, ok := store.(database.TranscribeStatsStore); ok {
+		statsSink = s
+	}
+	startedAt := time.Now()
+	accum := newTranscribeStatsAccum(statsSink, startedAt.Format(time.RFC3339), total, startedAt)
+	accum.flush(false) // initial write: monitor sees the run has started
+
 	// processed and lastID are written by concurrent page goroutines — must be
 	// thread-safe. processed uses atomic arithmetic; lastID uses a mutex because
 	// string assignment is not atomic (pointer + length, two words).
@@ -147,6 +160,7 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 	// batches far more efficiently than one large serial one.
 	err = registry.RunItems(ctx, reporter, pages, func(ctx context.Context, ids []string) error {
 		books := make([]database.Book, 0, len(ids))
+		skipped := 0
 		for _, id := range ids {
 			b, gerr := store.GetBookByID(id)
 			if gerr != nil || b == nil {
@@ -156,11 +170,14 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 			lastID = id
 			lastIDMu.Unlock()
 			if onlyMissing && b.IntroTranscription != nil && *b.IntroTranscription != "" {
+				skipped++
 				continue // already transcribed — skip (cache still warm if re-run)
 			}
 			books = append(books, *b)
 		}
+		accum.recordSkipped(skipped)
 		if len(books) == 0 {
+			accum.flush(false)
 			return nil
 		}
 		// Per-book heartbeat: each completed book bumps the operation's progress
@@ -174,8 +191,9 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 			_ = reporter.UpdateProgress(cur, total,
 				fmt.Sprintf("Transcribing — %d/%d books", cur, total))
 		}
-		done := p.processTranscribePage(ctx, store, log, books, p.deps.RootDir(), onBook)
+		done := p.processTranscribePage(ctx, store, log, books, p.deps.RootDir(), onBook, accum)
 		cum := int(processed.Add(int64(done)))
+		accum.flush(false) // persist cumulative counts so the monitor sees live progress
 		log.Info("transcribe-book-intros: page complete",
 			"page_books", done, "cumulative_processed", cum, "total_books", total)
 		return nil
@@ -194,12 +212,23 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 		},
 	})
 	if err != nil {
+		// Mark the run done even on error so the monitor stops treating it as
+		// in-flight; the counts reflect whatever was processed before the error.
+		accum.flush(true)
 		return err
 	}
 
+	accum.flush(true)
+	st := accum.snapshot()
 	total64 := int(processed.Load())
-	log.Info("transcribe-book-intros: complete", "processed", total64, "total_books", total)
-	_ = reporter.UpdateProgress(1, 1, fmt.Sprintf("Done — transcribed %d books", total64))
+	log.Info("transcribe-book-intros: complete",
+		"processed", total64, "total_books", total,
+		"ok", st.OK, "source_missing", st.SourceMissing, "no_audio", st.NoAudio,
+		"ffmpeg_error", st.FFmpegError, "whisper_error", st.WhisperError,
+		"empty", st.Empty, "skipped_existing", st.SkippedExisting, "cache_hits", st.CacheHits)
+	_ = reporter.UpdateProgress(1, 1, fmt.Sprintf(
+		"Done — %d ok, %d source-missing, %d ffmpeg-err, %d whisper-err, %d empty (of %d total)",
+		st.OK, st.SourceMissing, st.FFmpegError, st.WhisperError, st.Empty, total))
 	return nil
 }
 
@@ -289,17 +318,28 @@ func chunkIDs(ids []string, size int) [][]string {
 // 1. Find the first audio file for each book.
 // 2. Extract 90-second WAVs in parallel with ffmpeg (cached on disk).
 // 3. Call TranscribeBatch once (single Python/Whisper process).
-// 4. Parse results and update all books.
+// 4. Parse results and write per-book outcome (status + parsed fields).
 // 5. Clean up temp WAVs (cached clips persist).
-// Returns the number of books successfully transcribed in this page. Errors are
-// logged and treated as non-fatal so one bad page never aborts the whole run.
+//
+// EVERY book in the page gets a TranscribeStatus written (change-guarded), so
+// the per-book field and the stats:transcribe aggregate together explain exactly
+// why transcription did or didn't produce data — the single most useful signal
+// being how many books fail with source_file_missing (stale FilePath after an
+// organize move).
+//
+// Returns the number of books successfully transcribed (status ok) in this page.
+// Errors are logged and treated as non-fatal so one bad page never aborts the run.
 func (p *Plugin) processTranscribePage(
 	ctx context.Context,
 	store database.Store,
-	log interface{ Info(string, ...any); Warn(string, ...any) },
+	log interface {
+		Info(string, ...any)
+		Warn(string, ...any)
+	},
 	books []database.Book,
 	rootDir string,
 	onBook transcribe.ProgressFunc,
+	accum *transcribeStatsAccum,
 ) (processed int) {
 	cacheDir := wavCacheDir(rootDir)
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
@@ -315,6 +355,12 @@ func (p *Plugin) processTranscribePage(
 	}
 	defer os.RemoveAll(tmpDir)
 
+	now := time.Now()
+	bookByID := make(map[string]database.Book, len(books))
+	for _, b := range books {
+		bookByID[b.ID] = b
+	}
+
 	// Step 1: find first audio file + file hash for each book (fast DB reads, serial).
 	type bookJob struct {
 		book     database.Book
@@ -327,20 +373,23 @@ func (p *Plugin) processTranscribePage(
 		jobs = append(jobs, bookJob{book: b, audioSrc: src, fileHash: hash})
 	}
 
-	// Step 2: extract WAVs in parallel with bounded ffmpeg workers.
-	// Cache hit: serve from cacheDir/{hash}.wav, skip ffmpeg entirely.
-	// Cache miss: write ffmpeg output directly to cacheDir/{hash}.wav (or tmpDir if no hash).
+	// Step 2: extract WAVs in parallel with bounded ffmpeg workers. Each
+	// goroutine owns its wavResults[idx] slot, so writes there are race-free.
+	// status carries the terminal extraction outcome ("" = WAV produced, defer
+	// to Whisper); detail carries the ffmpeg stderr tail for diagnosis.
 	type wavResult struct {
-		bookID   string
-		wavPath  string // empty on failure
+		bookID    string
+		wavPath   string // empty on failure
 		fromCache bool
+		status    string // "" | statusNoAudio | statusSourceMissing | statusFFmpegError
+		detail    string
 	}
 	wavResults := make([]wavResult, len(jobs))
 	sem := make(chan struct{}, introTranscribeFFWorkers)
 	var wg sync.WaitGroup
 	for i, j := range jobs {
 		if j.audioSrc == "" {
-			wavResults[i] = wavResult{bookID: j.book.ID}
+			wavResults[i] = wavResult{bookID: j.book.ID, status: statusNoAudio}
 			continue
 		}
 		wg.Add(1)
@@ -354,6 +403,13 @@ func (p *Plugin) processTranscribePage(
 					wavResults[idx] = wavResult{bookID: bookID, wavPath: cp, fromCache: true}
 					return
 				}
+			}
+
+			// Distinguish a stale FilePath (the dominant failure after organize
+			// moves files) from a real ffmpeg/codec error: stat the source first.
+			if _, statErr := os.Stat(src); statErr != nil {
+				wavResults[idx] = wavResult{bookID: bookID, status: statusSourceMissing, detail: "source file not found: " + src}
+				return
 			}
 
 			// Cache miss — run ffmpeg.
@@ -374,10 +430,10 @@ func (p *Plugin) processTranscribePage(
 				wavPath,
 			)
 			if out, err := ffCmd.CombinedOutput(); err != nil {
+				tail := ffmpegErrorTail(string(out))
 				log.Warn("transcribe: ffmpeg failed",
-					"book_id", bookID, "file", src,
-					"err", err, "output", strings.TrimSpace(string(out)))
-				wavResults[idx] = wavResult{bookID: bookID}
+					"book_id", bookID, "file", src, "err", err, "output", tail)
+				wavResults[idx] = wavResult{bookID: bookID, status: statusFFmpegError, detail: tail}
 				return
 			}
 			wavResults[idx] = wavResult{bookID: bookID, wavPath: wavPath}
@@ -393,6 +449,17 @@ func (p *Plugin) processTranscribePage(
 	}
 	if cacheHits > 0 {
 		log.Info("transcribe: clip cache hits", "hits", cacheHits, "total", len(wavResults))
+		accum.recordCacheHits(cacheHits)
+	}
+
+	// Record terminal extraction failures now (no Whisper needed for them).
+	wrByID := make(map[string]wavResult, len(wavResults))
+	for _, r := range wavResults {
+		wrByID[r.bookID] = r
+		if r.status != "" {
+			b := bookByID[r.bookID]
+			p.applyOutcome(store, log, &b, r.status, r.detail, "", transcribe.IntroFields{}, now, accum)
+		}
 	}
 
 	// Build the jobs map for TranscribeBatch (only books with valid WAVs).
@@ -410,34 +477,76 @@ func (p *Plugin) processTranscribePage(
 	log.Info("transcribe-book-intros: calling whisper batch", "jobs", len(batchJobs))
 	batchResults, err := transcribe.TranscribeBatch(ctx, batchJobs, onBook)
 	if err != nil {
+		// Whole-batch failure: every book that had a WAV is a whisper_error.
 		log.Warn("transcribe: whisper batch failed", "jobs", len(batchJobs), "err", err)
+		detail := truncateDetail(err.Error())
+		for bookID := range batchJobs {
+			b := bookByID[bookID]
+			p.applyOutcome(store, log, &b, statusWhisperError, detail, "", transcribe.IntroFields{}, now, accum)
+		}
 		return 0
 	}
 
-	// Step 4: parse results and update books.
-	// Build a lookup so we can find the Book struct by ID.
-	bookByID := make(map[string]database.Book, len(books))
-	for _, b := range books {
-		bookByID[b.ID] = b
+	// Step 4: write per-book outcome for every book that had a WAV submitted.
+	for bookID := range batchJobs {
+		book := bookByID[bookID]
+		result, ok := batchResults[bookID]
+		switch {
+		case !ok || result.Error != "":
+			detail := "no whisper result"
+			if ok {
+				detail = truncateDetail(result.Error)
+			}
+			log.Warn("transcribe: whisper error", "book_id", bookID, "err", detail)
+			p.applyOutcome(store, log, &book, statusWhisperError, detail, "", transcribe.IntroFields{}, now, accum)
+		case result.Text == "":
+			p.applyOutcome(store, log, &book, statusEmpty, "whisper returned empty text", "", transcribe.IntroFields{}, now, accum)
+		default:
+			fields := transcribe.ParseAudiobookIntro(result.Text)
+			if p.applyOutcome(store, log, &book, statusOK, "", result.Text, fields, now, accum) {
+				processed++
+			}
+		}
 	}
 
-	now := time.Now()
-	for bookID, result := range batchResults {
-		if result.Error != "" {
-			log.Warn("transcribe: whisper error", "book_id", bookID, "err", result.Error)
-			continue
-		}
-		text := result.Text
-		if text == "" {
-			continue
-		}
+	return processed
+}
 
-		book, ok := bookByID[bookID]
-		if !ok {
-			continue
-		}
+// applyOutcome writes a book's transcription outcome and records it in the
+// aggregate. On statusOK it also stores the transcript and parsed fields. Writes
+// are change-guarded: a repeat of the SAME failure (same status + detail) skips
+// the UpdateBook so a re-run over ~45K stale-path books doesn't churn the DB.
+// statusOK always writes (a fresh transcript is new data). Returns true only
+// when the book was counted as a successful (ok) transcription.
+func (p *Plugin) applyOutcome(
+	store database.Store,
+	log interface {
+		Info(string, ...any)
+		Warn(string, ...any)
+	},
+	book *database.Book,
+	status, detail, text string,
+	fields transcribe.IntroFields,
+	now time.Time,
+	accum *transcribeStatsAccum,
+) (ok bool) {
+	accum.recordOutcome(status, now)
 
-		fields := transcribe.ParseAudiobookIntro(text)
+	newDetail := strPtrOrNil(detail)
+
+	// Change-guard for failures: identical status+detail already stored → no write.
+	if status != statusOK &&
+		book.TranscribeStatus != nil && *book.TranscribeStatus == status &&
+		eqStrPtr(book.TranscribeError, newDetail) {
+		return false
+	}
+
+	book.TranscribeAttemptedAt = &now
+	st := status
+	book.TranscribeStatus = &st
+	book.TranscribeError = newDetail
+
+	if status == statusOK {
 		book.IntroTranscription = &text
 		book.IntroTranscribedAt = &now
 		if fields.Title != "" {
@@ -449,14 +558,40 @@ func (p *Plugin) processTranscribePage(
 		if fields.Narrator != "" {
 			book.TranscribedNarrator = &fields.Narrator
 		}
-		if _, err := store.UpdateBook(book.ID, &book); err != nil {
-			log.Warn("transcribe: update failed", "book_id", bookID, "err", err)
-			continue
-		}
-		processed++
 	}
 
-	return processed
+	if _, err := store.UpdateBook(book.ID, book); err != nil {
+		log.Warn("transcribe: update failed", "book_id", book.ID, "status", status, "err", err)
+		return false
+	}
+	return status == statusOK
+}
+
+// ffmpegErrorTail returns the most diagnostic tail of ffmpeg stderr. ffmpeg
+// prints a long build banner before the actual error; the real reason is on the
+// last non-empty line(s). Returns at most ~200 chars.
+func ffmpegErrorTail(out string) string {
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	// Walk back to the last non-empty line — that's almost always the error.
+	last := ""
+	for i := len(lines) - 1; i >= 0; i-- {
+		if s := strings.TrimSpace(lines[i]); s != "" {
+			last = s
+			break
+		}
+	}
+	return truncateDetail(last)
+}
+
+// truncateDetail caps a detail string so per-book error fields and the stats
+// blob stay small.
+func truncateDetail(s string) string {
+	s = strings.TrimSpace(s)
+	const max = 200
+	if len(s) > max {
+		return s[:max] + "…"
+	}
+	return s
 }
 
 // audioExtSet is the set of extensions treated as playable audio by firstAudioFile.

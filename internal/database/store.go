@@ -271,6 +271,20 @@ type Book struct {
 	TranscribedNarrator *string `json:"transcribed_narrator,omitempty"`
 	// IntroTranscribedAt is when IntroTranscription was last populated.
 	IntroTranscribedAt *time.Time `json:"intro_transcribed_at,omitempty"`
+	// TranscribeStatus records the outcome of the most recent transcription
+	// ATTEMPT for this book, written per-book by maintenance.transcribe-book-intros.
+	// One of: "ok", "source_file_missing", "no_audio", "ffmpeg_error",
+	// "whisper_error", "empty". This is the queryable drill-down field — count
+	// books by status to see exactly why transcription is/isn't producing data
+	// (e.g. how many books have stale FilePaths after an organize move).
+	TranscribeStatus *string `json:"transcribe_status,omitempty"`
+	// TranscribeError holds a short human-readable detail for a non-ok status —
+	// typically the tail of ffmpeg stderr or the Whisper error string. Empty on ok.
+	TranscribeError *string `json:"transcribe_error,omitempty"`
+	// TranscribeAttemptedAt is when the most recent transcription attempt ran
+	// (success OR failure), distinct from IntroTranscribedAt which only advances
+	// on a successful transcription.
+	TranscribeAttemptedAt *time.Time `json:"transcribe_attempted_at,omitempty"`
 	// Fingerprinting fields (computed, not stored in DB)
 	FingerprintStatus      string     `json:"fingerprint_status,omitempty"` // "none", "partial", "complete"
 	FingerprintedFileCount int        `json:"fingerprinted_file_count,omitempty"`
