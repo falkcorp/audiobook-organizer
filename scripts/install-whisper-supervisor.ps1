@@ -99,7 +99,14 @@ Remove-Item "C:\Users\jdfal\whisper-stop.flag" -Force -ErrorAction SilentlyConti
 # 5. Register the Scheduled Task (recreate if present). Runs at the user's
 # NORMAL token (RunLevel Limited) — intentionally NOT elevated, so the
 # user-writable script path is not a privilege-escalation vector.
-schtasks /Delete /TN $TaskName /F 2>$null | Out-Null
+#
+# Use Unregister-ScheduledTask (not `schtasks /Delete`): with
+# $ErrorActionPreference='Stop', the native schtasks command writes
+# "ERROR: cannot find the file specified" to stderr on first run (no task yet),
+# which PowerShell turns into a TERMINATING error that halts the installer
+# before it registers anything. -ErrorAction SilentlyContinue makes the
+# not-present case a clean no-op.
+Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
 $action = New-ScheduledTaskAction -Execute "powershell.exe" `
     -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$InstallPath`""
 $trigger = New-ScheduledTaskTrigger -AtLogOn
