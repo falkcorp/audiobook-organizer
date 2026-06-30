@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 9.46.0 -->
+<!-- version: 9.47.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-06-28 -->
+<!-- last-edited: 2026-06-30 -->
 
 # Project TODO
 
@@ -30,6 +30,10 @@ TODO→GitHub-issues bot.
 - 🔵 **dedup-intro-falsepositive/** (DEDUP-INTRO-1) — 4 tasks: investigate, skip sub-60s clip fingerprints, boilerplate-title blocklist, ISBN/ASIN gate. Kills ~372K intro/outro false positives.
 - 🔵 **dedup-ui/** (CONS-4/6/11, C6, DEDUP-KB-1) — 5 frontend tasks: row redesign, metadata-compare tab, manual-import button, label-review panel, keyboard shortcuts.
 - 🔵 **system-docs/** (DOCS-1) — 7 tasks producing ≥9 docs / ≥7 Mermaid diagrams under `docs/system/`.
+
+### ✅ Shipped June 30, 2026 (PR #1688)
+
+- 🟢 **Silence retry loop** — 0-char Whisper results retried with 300s same-file clip, then 90s of second audio file; exhausted books marked `[SILENCE]` and skipped on future sweeps (`retry_silence=true` to re-include).
 
 ### ✅ Shipped June 28, 2026 (PRs #1660, #1661)
 

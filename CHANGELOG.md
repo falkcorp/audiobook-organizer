@@ -1,13 +1,17 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.87.0 -->
+<!-- version: 3.88.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
-<!-- last-edited: 2026-06-28 -->
+<!-- last-edited: 2026-06-30 -->
 
 # Changelog
 
 ## [Unreleased]
 
 ### Features
+
+#### June 30, 2026 — Silence retry loop + [SILENCE] sentinel (PR #1688)
+
+- **`feat(transcribe)`** (PR #1688) — When Whisper returns 0 chars for a book, `processTranscribePage` now automatically tries two fallbacks before giving up: (1) re-extracts a **300-second clip** from the same source file (handles books with a long music intro), then (2) re-extracts a **90-second clip from the second audio file** via `nthAudioFile(store, book, 1)` (handles disc-opener music tracks where dialogue starts on track 2). Books exhausting both fallbacks are stored with `IntroTranscription = "[SILENCE]"` — subsequent `only_missing=true` sweeps skip them; `retry_silence=true` re-includes them for another attempt. Also refactors `firstAudioFile` into a thin wrapper around a new `nthAudioFile(store, book, n)` helper.
 
 #### June 28, 2026 — Library pagination, transcription parser + matching, agent-task package (PRs #1660, #1661)
 
