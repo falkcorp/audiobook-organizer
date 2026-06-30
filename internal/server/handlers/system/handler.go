@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8475f406-df31-4286-95b0-30787397603e
 // last-edited: 2026-06-30
 
@@ -903,4 +903,38 @@ func (h *Handler) GetQuickQueries(c *gin.Context) {
 	}
 
 	httputil.RespondWithOK(c, gin.H{"queries": results})
+}
+
+// GetTranscribeStats implements GET /api/v1/maintenance/transcribe-stats. It
+// returns the live aggregate counters written by maintenance.transcribe-book-intros
+// (stats:transcribe). A monitor polls this single endpoint instead of scanning
+// books or scraping op logs. Returns {data: null} when no run has ever written
+// stats (so the monitor reports "never run").
+func (h *Handler) GetTranscribeStats(c *gin.Context) {
+	store := h.resolveStore()
+	if store == nil {
+		httputil.RespondWithInternalError(c, "store unavailable")
+		return
+	}
+
+	var ts database.TranscribeStatsStore
+	if s, ok := store.(database.TranscribeStatsStore); ok {
+		ts = s
+	} else if uw, ok := store.(interface{ Unwrap() database.Store }); ok {
+		if s, ok2 := uw.Unwrap().(database.TranscribeStatsStore); ok2 {
+			ts = s
+		}
+	}
+	if ts == nil {
+		// Store does not support transcribe stats (e.g. SQLite in tests).
+		httputil.RespondWithOK(c, nil)
+		return
+	}
+
+	stats, err := ts.GetTranscribeStats()
+	if err != nil {
+		httputil.RespondWithInternalError(c, "failed to read transcribe stats")
+		return
+	}
+	httputil.RespondWithOK(c, stats)
 }

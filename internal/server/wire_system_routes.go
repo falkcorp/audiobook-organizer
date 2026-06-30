@@ -1,7 +1,7 @@
 // file: internal/server/wire_system_routes.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a7b8c9d0-e1f2-3456-abcd-789012345678
-// last-edited: 2026-06-23
+// last-edited: 2026-06-30
 
 package server
 
@@ -38,6 +38,7 @@ func (s *Server) wireSystemRoutes(
 	protected.POST("/backup/restore", s.perm(auth.PermSettingsManage), systemH.RestoreBackup)
 	protected.DELETE("/backup/:filename", s.perm(auth.PermSettingsManage), systemH.DeleteBackup)
 	protected.GET("/library/quick-queries", s.perm(auth.PermLibraryView), systemH.GetQuickQueries)
+	protected.GET("/maintenance/transcribe-stats", s.perm(auth.PermLibraryView), systemH.GetTranscribeStats)
 	protected.GET("/blocked-hashes", s.perm(auth.PermLibraryView), systemH.ListBlockedHashes)
 	protected.POST("/blocked-hashes", s.perm(auth.PermLibraryEditMetadata), systemH.AddBlockedHash)
 	protected.DELETE("/blocked-hashes/:hash", s.perm(auth.PermLibraryDelete), systemH.RemoveBlockedHash)
