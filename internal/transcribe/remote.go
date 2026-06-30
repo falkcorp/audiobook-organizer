@@ -1,7 +1,7 @@
 // file: internal/transcribe/remote.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: f7a8b9c0-d1e2-3f4a-5b6c-7d8e9f0a1b2c
-// last-edited: 2026-06-27
+// last-edited: 2026-06-30
 
 package transcribe
 
@@ -141,14 +141,20 @@ func sendBatch(ctx context.Context, client *http.Client, remoteURL string, chunk
 	mw := multipart.NewWriter(&body)
 
 	for _, e := range chunk {
-		fw, err := mw.CreateFormFile("files", e.id)
-		if err != nil {
-			return nil, fmt.Errorf("create form file %s: %w", e.id, err)
-		}
+		// Open the file BEFORE CreateFormFile — if we call CreateFormFile first
+		// and then skip on Open failure, the multipart writer has already written
+		// the part header with zero bytes of content. The server receives an empty
+		// part and faster-whisper reports "Invalid data found when processing
+		// input: '<none>'". Opening first ensures we only add parts we can fill.
 		f, err := os.Open(e.path)
 		if err != nil {
 			// Missing WAV — skip this file rather than aborting the whole batch.
 			continue
+		}
+		fw, err := mw.CreateFormFile("files", e.id)
+		if err != nil {
+			f.Close()
+			return nil, fmt.Errorf("create form file %s: %w", e.id, err)
 		}
 		if _, err := io.Copy(fw, f); err != nil {
 			f.Close()
