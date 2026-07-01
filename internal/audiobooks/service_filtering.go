@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_filtering.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b4e8c3d2-e5f6-7a80-9b0c-1d2e3f4a5b6c
-// last-edited: 2026-06-28
+// last-edited: 2026-07-01
 
 package audiobooks
 
@@ -407,6 +407,7 @@ func bookSummaryToBook(summary database.BookSummary) database.Book {
 		Format:               summary.Format,
 		Duration:             summary.Duration,
 		Narrator:             summary.Narrator,
+		TranscribedTitle:     summary.TranscribedTitle,
 		OriginalFilename:     summary.OriginalFilename,
 		FileHash:             summary.FileHash,
 		FileSize:             summary.FileSize,

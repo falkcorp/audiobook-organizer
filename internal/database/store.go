@@ -1,7 +1,7 @@
 // file: internal/database/store.go
-// version: 2.80.0
+// version: 2.81.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-06-24
+// last-edited: 2026-07-01
 
 package database
 
@@ -323,6 +323,12 @@ type BookSummary struct {
 	QuarantineReason     *string    `json:"quarantine_reason,omitempty"`
 	CoverURL             *string    `json:"cover_url,omitempty"`
 	Narrator             *string    `json:"narrator,omitempty"`
+	// TranscribedTitle is the Whisper-parsed intro title, carried in the
+	// summary projection so filter-pushdown callers (e.g.
+	// FilterSpec.OnlyParsedTranscription) can distinguish parsed from
+	// raw-but-unparsed transcriptions without a full-book fetch. Empty for the
+	// vast majority of books; nil unless the intro parsed into a title.
+	TranscribedTitle     *string    `json:"transcribed_title,omitempty"`
 	CreatedAt            *time.Time `json:"created_at,omitempty"`
 	UpdatedAt            *time.Time `json:"updated_at,omitempty"`
 	MetadataUpdatedAt    *time.Time `json:"metadata_updated_at,omitempty"`

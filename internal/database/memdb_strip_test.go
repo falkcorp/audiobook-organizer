@@ -1,7 +1,7 @@
 // file: internal/database/memdb_strip_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: e6f7a8b9-c0d1-4e2f-3a4b-5c6d7e8f9012
-// last-edited: 2026-06-11
+// last-edited: 2026-07-01
 
 package database
 
@@ -116,6 +116,50 @@ func TestStripBookFileForMemdb_NilsLargeFields(t *testing.T) {
 	}
 	if src.AcoustIDSeg0 != "AQADtAcSRY" {
 		t.Errorf("source mutated: AcoustIDSeg0 changed on src")
+	}
+}
+
+// TestStripBookForMemdb_PreservesTranscription is the correctness guard for
+// FilterSpec.OnlyParsedTranscription: the filter resolves against memdb-resident
+// Books (via GetAudiobooks), so it only works if stripBookForMemdb keeps the
+// transcription fields. This asserts Description is stripped (heavy) while
+// TranscribedTitle / TranscribeStatus / IntroTranscription survive. If a future
+// change adds these to the strip list, this test fails loudly before the filter
+// silently starts returning nothing.
+func TestStripBookForMemdb_PreservesTranscription(t *testing.T) {
+	desc := "a very long description that memdb strips to save RAM"
+	title := "Salem's Lot"
+	status := "ok"
+	intro := "Simon and Schuster audio presents Salem's Lot by Stephen King"
+
+	src := &Book{
+		ID:                 "bk-1",
+		Title:              "T",
+		Description:        &desc,
+		TranscribedTitle:   &title,
+		TranscribeStatus:   &status,
+		IntroTranscription: &intro,
+	}
+
+	stripped := stripBookForMemdb(src)
+	if stripped == nil {
+		t.Fatal("stripped is nil")
+	}
+	if stripped.Description != nil {
+		t.Errorf("Description should be stripped from memdb, got %q", *stripped.Description)
+	}
+	if stripped.TranscribedTitle == nil || *stripped.TranscribedTitle != title {
+		t.Errorf("TranscribedTitle must survive memdb strip (OnlyParsedTranscription depends on it), got %v", stripped.TranscribedTitle)
+	}
+	if stripped.TranscribeStatus == nil || *stripped.TranscribeStatus != status {
+		t.Errorf("TranscribeStatus must survive memdb strip, got %v", stripped.TranscribeStatus)
+	}
+	if stripped.IntroTranscription == nil || *stripped.IntroTranscription != intro {
+		t.Errorf("IntroTranscription must survive memdb strip, got %v", stripped.IntroTranscription)
+	}
+	// Source must not be mutated.
+	if src.Description == nil {
+		t.Error("source mutated: Description nil on src")
 	}
 }
 

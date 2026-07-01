@@ -1,7 +1,7 @@
 // file: internal/database/memdb_summaries.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000008
-// last-edited: 2026-06-28
+// last-edited: 2026-07-01
 
 package database
 
@@ -228,6 +228,7 @@ func (m *MemStore) GetBookSummaries(limit, offset int, f BookSummaryFilter) ([]B
 			QuarantineReason:     b.QuarantineReason,
 			CoverURL:             b.CoverURL,
 			Narrator:             b.Narrator,
+			TranscribedTitle:     b.TranscribedTitle,
 			CreatedAt:            b.CreatedAt,
 			UpdatedAt:            b.UpdatedAt,
 			MetadataUpdatedAt:    b.MetadataUpdatedAt,

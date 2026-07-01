@@ -1,7 +1,7 @@
 // file: internal/database/transcribe_stats_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4c1f8a92-7d63-4b05-9e21-8f6a3c0d51e4
-// last-edited: 2026-06-30
+// last-edited: 2026-07-01
 
 package database
 
@@ -37,7 +37,8 @@ func TestTranscribeStats_RoundTrip(t *testing.T) {
 		TotalBooks:    48763,
 		Attempted:     200,
 		OK:            5,
-		SourceMissing: 190,
+		Unparsed:      8,
+		SourceMissing: 182,
 		FFmpegError:   3,
 		WhisperError:  1,
 		Empty:         1,
@@ -54,7 +55,7 @@ func TestTranscribeStats_RoundTrip(t *testing.T) {
 	if got == nil {
 		t.Fatal("expected stats after write, got nil")
 	}
-	if got.OK != 5 || got.SourceMissing != 190 || got.TotalBooks != 48763 {
+	if got.OK != 5 || got.Unparsed != 8 || got.SourceMissing != 182 || got.TotalBooks != 48763 {
 		t.Fatalf("round-trip mismatch: %+v", got)
 	}
 	if !got.StartedAt.Equal(now) {

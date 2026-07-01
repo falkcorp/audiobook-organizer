@@ -1,7 +1,7 @@
 // file: internal/operations/types.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: f1e2d3c4-b5a6-7890-abcd-ef1234567890
-// last-edited: 2026-05-16
+// last-edited: 2026-07-01
 //
 // SelectionSpec and related types for server-side bulk operation targeting.
 // A SelectionSpec describes which books an operation targets without requiring
@@ -33,6 +33,12 @@ type FilterSpec struct {
 	// "matched" candidate in the most-recent metadata_candidate_fetch result.
 	// Applied server-side after the primary filter; requires DB access.
 	OnlyUnmatched bool `json:"only_unmatched,omitempty"`
+	// OnlyParsedTranscription restricts the resolved set to books whose Whisper
+	// intro parsed into a usable title (TranscribedTitle non-empty), excluding
+	// raw-but-unparsed low-quality transcriptions. Because the transcriber only
+	// ever sets TranscribedTitle when a title was parsed, this works for books
+	// transcribed before the statusUnparsed split too — no backfill required.
+	OnlyParsedTranscription bool `json:"only_parsed_transcription,omitempty"`
 }
 
 // FieldFilter mirrors the server-side FieldFilter used for advanced search.

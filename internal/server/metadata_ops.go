@@ -1,7 +1,7 @@
 // file: internal/server/metadata_ops.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
-// last-edited: 2026-06-21
+// last-edited: 2026-07-01
 //
 // Async-operation machinery for the metadata domain, relocated verbatim from
 // metadata_handlers.go (ADR-003 Phase 4) when the 19 metadata HTTP handlers
@@ -314,6 +314,9 @@ type bulkMetadataFetchV2Params = handlers.BulkMetadataFetchV2Params
 // version book IDs.  IsPrimaryVersion=true and quarantine exclusion are always
 // applied.  If f.OnlyUnmatched is set, books that already have a "matched"
 // candidate in the most-recent metadata_candidate_fetch result are removed.
+// If f.OnlyParsedTranscription is set, books whose Whisper intro produced no
+// parsed title (TranscribedTitle empty) are removed — this is safe against the
+// memdb projection because stripBookForMemdb does not clear TranscribedTitle.
 // Per-user FieldFilters are silently dropped (no user context in background ops).
 func (s *Server) resolveFilterToBookIDs(ctx context.Context, f operations.FilterSpec) ([]string, error) {
 	trueVal := true
@@ -349,6 +352,10 @@ func (s *Server) resolveFilterToBookIDs(ctx context.Context, f operations.Filter
 	ids := make([]string, 0, len(books))
 	for _, b := range books {
 		if b.QuarantinedAt != nil {
+			continue
+		}
+		if f.OnlyParsedTranscription &&
+			(b.TranscribedTitle == nil || strings.TrimSpace(*b.TranscribedTitle) == "") {
 			continue
 		}
 		ids = append(ids, b.ID)

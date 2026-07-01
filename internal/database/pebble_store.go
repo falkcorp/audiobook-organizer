@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.99.0
+// version: 1.100.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-06-28
+// last-edited: 2026-07-01
 
 package database
 
@@ -1676,6 +1676,7 @@ func (p *PebbleStore) GetAllBookSummaries_Pebble(limit, offset int) ([]BookSumma
 			QuarantineReason:     b.QuarantineReason,
 			CoverURL:             b.CoverURL,
 			Narrator:             b.Narrator,
+			TranscribedTitle:     b.TranscribedTitle,
 			CreatedAt:            b.CreatedAt,
 			UpdatedAt:            b.UpdatedAt,
 			MetadataUpdatedAt:    b.MetadataUpdatedAt,

@@ -1,13 +1,20 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.89.0 -->
+<!-- version: 3.90.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
-<!-- last-edited: 2026-06-30 -->
+<!-- last-edited: 2026-07-01 -->
 
 # Changelog
 
 ## [Unreleased]
 
 ### Features
+
+#### July 1, 2026 — Transcription quality gate: `unparsed` status + `OnlyParsedTranscription` filter
+
+- **`feat(operations)`** — Added `FilterSpec.OnlyParsedTranscription`. When set, a bulk operation's `SelectionSpec.Filter` resolves to only those primary books whose Whisper intro **parsed into a usable title** (`TranscribedTitle` non-empty), excluding the ~44% of transcriptions that produced raw text but no parseable title. This lets `library.bulk-metadata-fetch` (and any future filter-driven op) skip low-quality results without an upfront ID snapshot. **No backfill required:** the transcriber has always set `TranscribedTitle` only when a title parsed, so the filter is retroactively correct for books transcribed before this change.
+- **`feat(database)`** — Threaded `TranscribedTitle` through the `BookSummary` projection (both memdb and Pebble builders + the reverse `bookSummaryToBook` map) so it survives the summary-pushdown path that `GetAudiobooks` (and therefore `resolveFilterToBookIDs`) uses after PR #1660. Without this, the filter would resolve against summaries that never carried the field and silently return zero books. Guarded by `TestGetAudiobooks_CarriesTranscribedTitleThroughPushdown` (exercises the real service path) plus `TestStripBookForMemdb_PreservesTranscription`. Side benefit: `transcribed_title` now appears in the `/api/v1/audiobooks` list response.
+- **`feat(transcribe)`** — Split the transcription outcome: when Whisper returns non-empty text but `ParseAudiobookIntro` extracts no title, the book is now recorded as **`unparsed`** (new status + `TranscribeStats.Unparsed` counter) instead of `ok`. The raw transcript is still stored (usable via `reparse_only` after a future parser fix); only the parsed-title fields stay empty. `ok` now implies a parsed title, so the live `stats:transcribe` aggregate distinguishes genuinely-good transcriptions from the low-quality remainder.
+- Not yet deployed — merged to hold until the in-flight GPU re-transcribe run can be interrupted at a convenient time. The filter needs no data migration and works on first deploy.
 
 #### June 30, 2026 — Transcription observability: per-book outcome + stats aggregate + monitor (PRs #1693, #1694, #1695)
 

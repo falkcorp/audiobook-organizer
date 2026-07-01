@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.10.0
+// version: 3.11.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-06-30
+// last-edited: 2026-07-01
 
 package maintenance
 
@@ -547,7 +547,15 @@ func (p *Plugin) processTranscribePage(
 			p.applyOutcome(store, log, &book, statusEmpty, "whisper returned empty text", "", transcribe.IntroFields{}, now, accum)
 		default:
 			fields := transcribe.ParseAudiobookIntro(result.Text)
-			if p.applyOutcome(store, log, &book, statusOK, "", result.Text, fields, now, accum) {
+			// statusOK requires a parsed title. When Whisper returns text but
+			// the parser can't extract a title, store the raw transcript but
+			// mark it statusUnparsed so it's excluded by OnlyParsedTranscription
+			// and can be retried later via reparse_only after a parser fix.
+			outcome := statusOK
+			if fields.Title == "" {
+				outcome = statusUnparsed
+			}
+			if p.applyOutcome(store, log, &book, outcome, "", result.Text, fields, now, accum) {
 				processed++
 			}
 		}
@@ -557,11 +565,13 @@ func (p *Plugin) processTranscribePage(
 }
 
 // applyOutcome writes a book's transcription outcome and records it in the
-// aggregate. On statusOK it also stores the transcript and parsed fields. Writes
-// are change-guarded: a repeat of the SAME failure (same status + detail) skips
-// the UpdateBook so a re-run over ~45K stale-path books doesn't churn the DB.
-// statusOK always writes (a fresh transcript is new data). Returns true only
-// when the book was counted as a successful (ok) transcription.
+// aggregate. On statusOK/statusUnparsed it also stores the raw transcript (and,
+// for OK, the parsed fields). Writes are change-guarded: a repeat of the SAME
+// failure (same status + detail) skips the UpdateBook so a re-run over ~45K
+// stale-path books doesn't churn the DB. A transcript outcome (OK or Unparsed)
+// always writes — fresh transcript text is new data. Returns true when the book
+// produced a transcript this run (OK or Unparsed), which the caller counts as
+// processed.
 func (p *Plugin) applyOutcome(
 	store database.Store,
 	log interface {
@@ -578,8 +588,11 @@ func (p *Plugin) applyOutcome(
 
 	newDetail := strPtrOrNil(detail)
 
-	// Change-guard for failures: identical status+detail already stored → no write.
-	if status != statusOK &&
+	// A transcript outcome (OK or Unparsed) always carries fresh text and must
+	// write. Only pure failures are change-guarded: identical status+detail
+	// already stored → no write (avoids churning ~45K stale-path books on re-run).
+	hasTranscript := status == statusOK || status == statusUnparsed
+	if !hasTranscript &&
 		book.TranscribeStatus != nil && *book.TranscribeStatus == status &&
 		eqStrPtr(book.TranscribeError, newDetail) {
 		return false
@@ -590,9 +603,12 @@ func (p *Plugin) applyOutcome(
 	book.TranscribeStatus = &st
 	book.TranscribeError = newDetail
 
-	if status == statusOK {
+	if hasTranscript {
 		book.IntroTranscription = &text
 		book.IntroTranscribedAt = &now
+		// Parsed fields are set only when present. For statusUnparsed Title is
+		// empty by definition, leaving TranscribedTitle nil — which is exactly
+		// what OnlyParsedTranscription filters on.
 		if fields.Title != "" {
 			book.TranscribedTitle = &fields.Title
 		}
@@ -608,7 +624,7 @@ func (p *Plugin) applyOutcome(
 		log.Warn("transcribe: update failed", "book_id", book.ID, "status", status, "err", err)
 		return false
 	}
-	return status == statusOK
+	return hasTranscript
 }
 
 // ffmpegErrorTail returns the most diagnostic tail of ffmpeg stderr. ffmpeg
