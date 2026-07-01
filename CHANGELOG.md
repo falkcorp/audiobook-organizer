@@ -1,11 +1,19 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.91.0 -->
+<!-- version: 3.92.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-01 -->
 
 # Changelog
 
 ## [Unreleased]
+
+### Documentation
+
+#### July 1, 2026 — TODO/docs accuracy sweep (evaluation + done-item reconciliation)
+
+- **`docs(todo)`** — Cross-referenced all 86 open `TODO.md` items against the current codebase, CHANGELOG, and git history. Checked off **28 items that were already fully implemented but never marked done** — including `CACHE-WARMUP-ROOT-CAUSE` (startup preload re-enabled + warmers rewritten to typed counts, `entity_cache_warmers.go`), `4.13` (iTunes extracted to `internal/itunes/service`), `WriteTagsSafe` (+ all call-site migration), the `ACOUSTID-STATS-1/2/3` and `BACKFILL-ASYNC-1/2/3` clusters, `DEDUP-KB-1`/`DEDUP-INTRO-1`/`DEDUP-FOLDER-1`, `1.12`, `1.15`, `WF-1`, and more. Annotated 16 further items as `⏳ operational` (code shipped, only a prod run/verification remains) or `◑ partial`.
+- **`docs(ai-reference)`** — Corrected stale facts in `docs/AI-REFERENCE.md`: the SQLite backend was removed (PebbleDB is the sole store; `InitializeStore` errors on `dbType: sqlite`); removed the non-existent `sqlite_store.go` entry; `server.go` is ~1025 lines (not ~8000) with domain logic in `internal/server/handlers/*`; the iTunes integration lives in `internal/itunes/service` (added to the package map); `Store` is a composite of ~36 role interfaces with PebbleStore the only impl (not "255 methods").
+- **`docs(claude)`** — Fixed the `make ci` coverage-gate claim: it is a **30%** short-suite gate (`coverage-check-short`), not 80%.
 
 ### Features
 

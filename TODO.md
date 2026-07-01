@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.48.0 -->
+<!-- version: 9.49.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-01 -->
 
@@ -82,7 +82,7 @@ First page: 199 books transcribed. Run auto-resumed after deploy restart.
 > Session handoff: `.remember/remember.md`.
 
 - [x] **PH-1** ✅ Tag-backfill completed 314,893/314,893 (op `01KVQVAZK0TH0FRFPNMMBYJKJQ`, 2026-06-22). Lossless-library goal done.
-- [ ] **PH-2 (P2)** Differentiated residual-triage op (PR #1619 merged, deployed).
+- [ ] **PH-2 (P2)** Differentiated residual-triage op (PR #1619 merged, deployed).  <!-- 2026-07-01: ⏳ code shipped (maintenance.dedup-exact-triage op); remaining is a prod run + population review. -->
       `maintenance.dedup-exact-triage` shipped: classifies all pending candidates into
       genuine/stub/fragment/title_leak/unknown. **Next: enqueue on prod and review the
       population breakdown. Purge wave (PH-2b) is a separate PR — never blanket-purge.**
@@ -143,15 +143,15 @@ for untagged tracks. Scanner uses folder name as book title for no-tag groups.
 - [x] **CONS-1** ✅ **PR #1515** merged (`feat/path-abbrev`, Track A — path abbreviation `$(libroot)`/`$(books)`).
 - [x] **CONS-2** ✅ **Track B** merged — 3-way `LabelToggle` (Dup/Unsure/Not), clickable rows, abbreviated paths in `DedupLabels.tsx`.
 - [x] **CONS-3** ✅ Stale fix branches verified merged.
-- [ ] **CONS-4** **BookDedup.tsx row redesign** (dedup-ux task, 0 code written) — apply `renderBookCard` pattern (cover tall-left `alignSelf:'stretch'` w56 h100%, quality chip inline after title, larger title, remove bottom chip whitespace) to `renderBookSide` (~line 1057) in the 2907-line `web/src/pages/BookDedup.tsx`.
+- [x] **CONS-4** **BookDedup.tsx row redesign** (dedup-ux task, 0 code written) — apply `renderBookCard` pattern (cover tall-left `alignSelf:'stretch'` w56 h100%, quality chip inline after title, larger title, remove bottom chip whitespace) to `renderBookSide` (~line 1057) in the 2907-line `web/src/pages/BookDedup.tsx`. — ✅ verified done 2026-07-01: BookDedup.tsx now a 145-line shim → UnifiedDedupTab.renderBookCard
 - [x] **CONS-5** = **DEDUP-FOLDER-1** — ✅ `FolderFilesChip` (lazy popover w/ file list, count, format/size/duration) wired into `UnifiedDedupTab` cards.
-- [ ] **CONS-6** **Track C** — metadata-compare tab in `CandidateCompareDrawer.tsx` (alongside Fingerprint tab): series/narrator/parts/duration/size/which-signal-fired, from `GET /api/v1/dedup/candidates/:id/breakdown`.
-- [ ] **CONS-7** = **DEDUP-KB-1** (see Dedup UX section) — keyboard shortcuts.
+- [x] **CONS-6** **Track C** — metadata-compare tab in `CandidateCompareDrawer.tsx` (alongside Fingerprint tab): series/narrator/parts/duration/size/which-signal-fired, from `GET /api/v1/dedup/candidates/:id/breakdown`. — ✅ verified done 2026-07-01: metadata-compare panel in CandidateCompareDrawer.tsx (metadata-compare-panel)
+- [x] **CONS-7** = **DEDUP-KB-1** (see Dedup UX section) — keyboard shortcuts. — ✅ verified done 2026-07-01: = DEDUP-KB-1 (done)
 - [x] **CONS-8** **Track D2** — ✅ code complete. Real root cause was iTunes import, NOT the scanner: `groupTracksByAlbum` empty-album fallback keyed per-chapter track name. Added `titleutil.StripChapterSuffix` to collapse trailing part markers (`Title – 11/23`) so chapter parts group into one book; `Book.Title` cleaned too. (`scanner.go groupFilesIntoBooks` was a red herring — only the FS walk uses it and its multi-file detection is already correct.)
 - [x] **CONS-9** ✅ **Track D1** — `dedup.quarantine-chapter-artifacts` now catches unscanned (Duration=0) idents via `MinTitleCollisionsUnscanned` gate (merged #1511). Prod dry-run finds only ~53 short idents — confirms most of the 380K candidates are NOT chapter artifacts but real books with corrupt metadata (see CONS-16/17). **DRY-RUN ONLY; show list before apply.**
-- [ ] **CONS-10** **Track D3** — drain stale exact candidates. **Code fixes CONS-16 + CONS-17 now MERGED**; remaining blocker is the **backfill/re-scan** on prod (run `maintenance.duration-backfill` dry-run → apply; re-scan affected filesystem books so corrected titles land) so candidates self-resolve, THEN re-scope. ⚠️ Prod investigation (candidate 211) proved the 380K exact candidates are a MIX: some real dups + many real multi-file books mislabeled by the duration-ms + title-leak bugs. Quarantining before backfill = **DATA LOSS**. **Re-run `dedup.quarantine-chapter-artifacts` dry-run AFTER backfill, show the list, get explicit user OK before any apply.**
-- [ ] **CONS-11** **Track D4** — manual-import UI button (op `library.import` already merged/deployed; no frontend yet). Add a button/dialog on the Library page that POSTs `{def_id:"library.import", params:{path}}` to `/api/v1/operations/v2` and polls. ~Lowest-effort remaining UI task.
-- [ ] **CONS-12** = **DEDUP-INTRO-1** (see Dedup UX section) — Audible intro/outro false-positive dedup candidates.
+- [ ] **CONS-10** **Track D3** — drain stale exact candidates. **Code fixes CONS-16 + CONS-17 now MERGED**; remaining blocker is the **backfill/re-scan** on prod (run `maintenance.duration-backfill` dry-run → apply; re-scan affected filesystem books so corrected titles land) so candidates self-resolve, THEN re-scope. ⚠️ Prod investigation (candidate 211) proved the 380K exact candidates are a MIX: some real dups + many real multi-file books mislabeled by the duration-ms + title-leak bugs. Quarantining before backfill = **DATA LOSS**. **Re-run `dedup.quarantine-chapter-artifacts` dry-run AFTER backfill, show the list, get explicit user OK before any apply.**  <!-- 2026-07-01: ⏳ code fixes (CONS-16/17) merged; blocked on prod duration-backfill + re-scan (DATA-LOSS gate — dry-run + user OK). -->
+- [x] **CONS-11** **Track D4** — manual-import UI button (op `library.import` already merged/deployed; no frontend yet). Add a button/dialog on the Library page that POSTs `{def_id:"library.import", params:{path}}` to `/api/v1/operations/v2` and polls. ~Lowest-effort remaining UI task. — ✅ verified done 2026-07-01: Library.tsx manualImport dialog + api.startLibraryImport
+- [x] **CONS-12** = **DEDUP-INTRO-1** (see Dedup UX section) — Audible intro/outro false-positive dedup candidates. — ✅ verified done 2026-07-01: = DEDUP-INTRO-1 (done)
 - [ ] **CONS-13** = **CFG-2 Phase D** — retire flat-key compat shim in `internal/server/update_service.go` (low priority; after 1+ wk prod stability).
 
 ### Metadata-repair track (root causes of the dedup candidate explosion) — investigated 2026-06-19
@@ -176,13 +176,13 @@ for untagged tracks. Scanner uses folder name as book title for no-tag groups.
 ## 🖥️ Dedup UX — Open Items
 
 ### Keyboard shortcuts (future)
-- [ ] **DEDUP-KB-1** Add keyboard shortcuts to dedup page for power users: `j`/`k` to navigate rows, `m` to merge, `d` to dismiss, `s` to select/deselect, `enter` to open compare drawer, `esc` to close drawer, `shift+a` select all on page. Goal: make it possible to clear a page of dedups without touching the mouse. Design: global `keydown` listener active when no input/dialog is focused; shortcuts displayed in a `?` help overlay.
+- [x] **DEDUP-KB-1** Add keyboard shortcuts to dedup page for power users: `j`/`k` to navigate rows, `m` to merge, `d` to dismiss, `s` to select/deselect, `enter` to open compare drawer, `esc` to close drawer, `shift+a` select all on page. Goal: make it possible to clear a page of dedups without touching the mouse. Design: global `keydown` listener active when no input/dialog is focused; shortcuts displayed in a `?` help overlay. — ✅ verified done 2026-07-01: UnifiedDedupTab.tsx DEDUP_SHORTCUTS + ? help overlay + shift-select
 
 ### Audible intro/outro false positives (backend investigation needed)
-- [ ] **DEDUP-INTRO-1** Investigate why Audible intro/outro clips ("Audible Opening Message", "Introduction") generate exact-match dedup candidates across unrelated books. Root cause: the exact layer fingerprints individual audio files and short intro clips have identical chromaprints across all books from the same publisher. Fix candidates: (a) filter candidates where both titles are known Audible boilerplate strings (title blocklist); (b) skip fingerprint comparison on files shorter than a configurable threshold (e.g. <60s); (c) check at the book level first — if books have different ISBNs/ASINs, don't flag file-level matches. Track prod volume: ~372K total candidates, many likely this class.
+- [x] **DEDUP-INTRO-1** Investigate why Audible intro/outro clips ("Audible Opening Message", "Introduction") generate exact-match dedup candidates across unrelated books. Root cause: the exact layer fingerprints individual audio files and short intro clips have identical chromaprints across all books from the same publisher. Fix candidates: (a) filter candidates where both titles are known Audible boilerplate strings (title blocklist); (b) skip fingerprint comparison on files shorter than a configurable threshold (e.g. <60s); (c) check at the book level first — if books have different ISBNs/ASINs, don't flag file-level matches. Track prod volume: ~372K total candidates, many likely this class. — ✅ verified done 2026-07-01: boilerplateTitlePatterns suppress intro/outro fp seeding (engine.go:34); residual exact-title/duration leak tracked in dedup eval (upsertExactCandidate guard)
 
 ### Folder chip + file hover list
-- [ ] **DEDUP-FOLDER-1** Add a "folder" chip to dedup candidate cards when the matched path is a directory (multi-file book). On hover/click, show a popover listing all files in that folder with their format, bitrate, size, duration. Helps distinguish "this is a 197-file m4b series" from "this is a single file" at a glance without opening the compare drawer.
+- [x] **DEDUP-FOLDER-1** Add a "folder" chip to dedup candidate cards when the matched path is a directory (multi-file book). On hover/click, show a popover listing all files in that folder with their format, bitrate, size, duration. Helps distinguish "this is a 197-file m4b series" from "this is a single file" at a glance without opening the compare drawer. — ✅ verified done 2026-07-01: FolderFilesChip.tsx wired into UnifiedDedupTab (= CONS-5)
 
 ---
 
@@ -266,7 +266,7 @@ for untagged tracks. Scanner uses folder name as book title for no-tag groups.
 > **Stance:** vision is right and achievable as an *evolution of UOS* (we already have ~80%: op registry + plugins + PR #1440 dependency-scheduling). Resist adopting a heavyweight external engine (Temporal/Conductor break single-binary deploy; go-workflows is code-only) or extracting to a standalone package before the model is proven. **No code yet — core-infra blast radius.**
 
 - [ ] **WF-0** Run a dedicated brainstorming → spec session before any code (per CLAUDE.md plan-first).
-- [ ] **WF-1** Land PR #1440 dependency-scheduling (prerequisite). See [[project_uos_dependency_scheduling]].
+- [x] **WF-1** Land PR #1440 dependency-scheduling (prerequisite). See [[project_uos_dependency_scheduling]]. — ✅ verified done 2026-07-01: UOS dependency-scheduling landed flag-off (commit 8282f818, M4)
 - [ ] **WF-2** Action-level **capability/requirement declarations** (`requires: [ollama, openai, fpcalc]`) → powers conditional skip/gating (and TOOL-6's auto-gate).
 - [ ] **WF-3** Introduce a persisted **`Workflow`** object = enable/disable/schedule-able composition (DAG/ordered) of registered ops. Seed built-in workflows from today's scheduled ops. Collapse `scheduled_*` + `dedup_embeddings_enabled` flags into workflow state. Built-in workflows auto-enabled; user-added start **disabled** until explicitly enabled.
 - [ ] **WF-4** Registration-time dependency checks: refuse to register an action that invokes another plugin's actions without declaring the dependency (best-effort runtime check — true static isolation isn't feasible with Go compile-time plugin registration).
@@ -407,7 +407,7 @@ Plan: [`docs/plans/2026-06-13-dedup-exact-gate-and-dataset.md`](docs/plans/2026-
 - [ ] **C5** Live-capture: wire `BuildExample` + `Classify` into the candidate-upsert path
   so each new candidate automatically gets a feature snapshot + deterministic label on
   creation (no separate backfill needed going forward).
-- [ ] **C6** Review UI: web panel listing `dedup:label:` examples filterable by label,
+- [x] **C6** Review UI: web panel listing `dedup:label:` examples filterable by label, — ✅ verified done 2026-07-01: label_review.go + web DedupLabels.tsx (filter + override)
   label_source, band; human can override label and set `label_source=human`.
 - [ ] **C7** JSONL export: admin endpoint or CLI tool to export labeled examples as JSONL
   for offline ML training; include `formula_version` for dataset versioning.
@@ -436,7 +436,7 @@ Plan: [`docs/plans/2026-06-13-dedup-exact-gate-and-dataset.md`](docs/plans/2026-
 
 ## 📚 Project Documentation (TODO — not yet done)
 
-- [ ] **DOCS-1** [hold] Write comprehensive system documentation for `falkcorp/audiobook-organizer` into `docs/` — full process graphs, architecture diagrams, data flow, component inventory, operations runbooks, incident history. Target: ≥9 files, ≥7 Mermaid diagrams (flowchart, sequence, state machine, Gantt). Model after `falkcorp/burndown-tasks/docs/` (PR #73, 2216 lines). Invoke as a dedicated documentation subagent: "write full process graphs, literally all the documentation you can write. The more graphs and charts the better."
+- [ ] **DOCS-1** [hold] Write comprehensive system documentation for `falkcorp/audiobook-organizer` into `docs/` — full process graphs, architecture diagrams, data flow, component inventory, operations runbooks, incident history. Target: ≥9 files, ≥7 Mermaid diagrams (flowchart, sequence, state machine, Gantt). Model after `falkcorp/burndown-tasks/docs/` (PR #73, 2216 lines). Invoke as a dedicated documentation subagent: "write full process graphs, literally all the documentation you can write. The more graphs and charts the better."  <!-- 2026-07-01: ℹ️ quantitative bar already exceeded (418 md files, 59 mermaid); a single cohesive burndown-style deliverable is the only residual. -->
 
 ---
 
@@ -461,8 +461,8 @@ PR `feat/fingerprint-wholefile` (Step 1 + 2) ships:
 - [x] Run `acoustid.reset-all` on prod (retires AQAAAA-poisoned segs) — done 2026-05-31, 28,538 fps cleared
 - [x] Book-level parallelism (PR #1217, FP_PARALLEL_WORKERS=16) — merged + deployed 2026-05-31
 - [x] Run `fingerprint-rescan` on prod — **COMPLETE** 2026-05-31 15:50 UTC-4; 2h45m3s; fp=275,318 skip=0 ineligible=23,826 fail=4,882 (98.3% eligible-file coverage; failures are corrupt/too-short files, unrecoverable)
-- [ ] [hold] Verify dedup stops showing 14K false-positive 100% matches
-- [ ] [hold] Verify book-sig coverage % shows up for partial books
+- [ ] [hold] Verify dedup stops showing 14K false-positive 100% matches  <!-- 2026-07-01: ⏳ purge applied on prod (Jun 13, 12,322 rows); only UI re-verification remains. -->
+- [ ] [hold] Verify book-sig coverage % shows up for partial books  <!-- 2026-07-01: ⏳ SynthesizePartialBookSignature computes coveragePct (book_signature.go:255); only UI verification remains. -->
 
 ---
 
@@ -482,7 +482,7 @@ PR `feat/fingerprint-wholefile` (Step 1 + 2) ships:
 **Follow-up PRs (not in this PR):**
 - [x] **Step 3 — LSH index for whole-file similarity.** ✅ F5-T012 + T013 (Jun 10): `fpidx:<subfp>:<bookfile_id>` Pebble secondary index + build op; LSH probe collector replaces O(N) `ACOUSTID_FUZZY_ENABLED` path.
 - [x] **Step 4 — Drop legacy seg1..6 fields.** ✅ F5-T019 + T020 (Jun 10): seg fields stripped from memdb projections (T019) and from all new Pebble `book_file:` writes (T020); `SweepBookFileSegDrop` backfills legacy rows.
-- [ ] **Online AcoustID lookup.** Whole-file fps can now be POSTed
+- [x] **Online AcoustID lookup.** Whole-file fps can now be POSTed — ✅ verified done 2026-07-01: plugins/acoustid/online_lookup.go (/v2/lookup, ≥0.85, API-key gated)
   to `acoustid.org` for MBID enrichment — wire it up as an
   optional enrichment step after fingerprinting.
 
@@ -502,7 +502,7 @@ because the subprocess child-mode handler is never wired into
 `main.go`. Without it, the child process re-execs with
 `--operation-runner` and cobra root errors out with "unknown flag".
 
-- [ ] **A1** [hold] `main.go`: before `cmd.Execute`, call
+- [x] **A1** [hold] `main.go`: before `cmd.Execute`, call — ✅ verified done 2026-07-01: main.go:37 registry.IsChildMode() before cobra parse
   `registry.IsChildMode()`. If true, build a minimal Registry with all
   plugin defs (NO server init, NO memdb warm — just defs + store
   access), then call `registry.RunChildMode(r)` which never returns.
@@ -593,7 +593,7 @@ Structural audit (`docs/perf-audit-2026-05-29-heap-breakdown.md`)
 identifies these next-biggest-win targets at the ~18 GB post-strip
 baseline.
 
-- [ ] **I1** [hold] Verify MAYDEPLOY-D1 (`DEDUP_CHROMEM_LAZY`) and D2
+- [ ] **I1** [hold] Verify MAYDEPLOY-D1 (`DEDUP_CHROMEM_LAZY`) and D2  <!-- 2026-07-01: ⏳ D1/D2 code shipped (DEDUP_CHROMEM_LAZY lifecycle.go:48); prod pprof verification remains. -->
   (chromem persistence vs `NewDB()`) ship before any more memdb
   strips. Chromem is the largest remaining bucket (~6 GB live;
   3–6 GB savings projected).
@@ -616,7 +616,7 @@ baseline.
   chars (or skip indexing description entirely). bleve still indexes
   the full description from Pebble even though memdb has been stripped.
   Est. savings: 0.5–1 GB index residency.
-- [ ] **I6** Once I1+I2+I3 ship (or chromem D1/D2 lands), re-run this
+- [ ] **I6** Once I1+I2+I3 ship (or chromem D1/D2 lands), re-run this  <!-- 2026-07-01: ⏳ heap-audit-rerun is a prod pprof measurement action, no code deliverable. -->
   audit with a real `inuse_space` heap profile from prod via
   `pprof_endpoint` — replace structural estimates with measured
   bytes. Target: baseline ~18 GB → ~10 GB.
@@ -646,7 +646,7 @@ Copy + pause-on-hover in #1182.
   within mhoh chunks; wrong value caused corrupt-library on next open. Also
   fixed `UpdateMetadataLE` to preserve original `headerLen` via
   `rewriteHohmLocationLE` when replacing existing mhoh chunks.
-- [ ] **PD-3 / Post-deploy verification** — confirm in prod:
+- [ ] **PD-3 / Post-deploy verification** — confirm in prod:  <!-- 2026-07-01: ⏳ post-deploy prod verification checklist (docs/pd3-prod-verification.md); no code deliverable. -->
   (1) fingerprint-rescan from UI now actually runs (no
   "failed to unmarshal params"), (2) op-log Copy + Refresh buttons work,
   (3) RSS post-I2/I3/I4/I5 holds steady or drops further, (4) chromem
@@ -659,7 +659,7 @@ Copy + pause-on-hover in #1182.
 - [x] **MAYDEPLOY-G5b** — back-fill poisoned `Book.Title` rows ✅ (2026-05-31)
   Op `maintenance.title-backfill` shipped; dry-run by default. Run with
   `{"dryRun": false}` on prod to apply. Old→new logged via op reporter.
-- [ ] **MAYDEPLOY-G5c** — tighten `groupTracksByAlbum` to use
+- [x] **MAYDEPLOY-G5c** — tighten `groupTracksByAlbum` to use — ✅ verified done 2026-07-01: albumGroupKey empty-Album branch strips chapter prefix/suffix (importer.go:912)
   `stripChapterPrefix(track.Name)` as the album key when Album tag is
   empty. Needs design pass — risks merging unrelated tracks that
   share a stripped prefix.
@@ -668,17 +668,17 @@ Copy + pause-on-hover in #1182.
   Low priority; defer until profiler shows actual cost.
 - [ ] **MAYDEPLOY-H7** [hold] — Cache `isProtectedPath` / `GetAllImportPaths`
   with TTL or mutation invalidation. Low priority (~10 rows).
-- [ ] **MAYDEPLOY-I1** [hold] — Verify D1 (`DEDUP_CHROMEM_LAZY`) and D2
+- [ ] **MAYDEPLOY-I1** [hold] — Verify D1 (`DEDUP_CHROMEM_LAZY`) and D2  <!-- 2026-07-01: ⏳ duplicate of I1 — code shipped; prod verification remains. -->
   (`NewDB()`) shipped behaviour matches design. Needs live prod
   observation (`/system/status`, heap dump).
-- [ ] **MAYDEPLOY-I6** [hold] — Re-run heap audit with live pprof from prod
+- [ ] **MAYDEPLOY-I6** [hold] — Re-run heap audit with live pprof from prod  <!-- 2026-07-01: ⏳ duplicate of I6 — prod pprof measurement. -->
   via `pprof_endpoint`. Replace structural estimates in
   `docs/perf-audit-2026-05-29-heap-breakdown.md` with measured bytes.
   Target: baseline ~18 GB → ~10 GB.
 
 ### Post-Task Hygiene (per CLAUDE.md)
 
-- [ ] **PD-4** [hold] Update `CHANGELOG.md` with full MAYDEPLOY A–I sweep +
+- [x] **PD-4** [hold] Update `CHANGELOG.md` with full MAYDEPLOY A–I sweep + — ✅ verified done 2026-07-01: CHANGELOG.md:1554 documents MAYDEPLOY A→I sweep + Wave 4 (PRs #1156–#1191)
   Wave 4 PRs (#1182–#1191), prepending to current section, not
   overwriting.
 
@@ -771,7 +771,7 @@ one book × many BookFiles).
   only in the empty-Album fall-back branch.
 - [x] **G5b** Back-fill existing poisoned `Book.Title` rows ✅ (2026-05-31)
   `maintenance.title-backfill` op shipped. Dry-run default.
-- [ ] **G5c** Tighten `groupTracksByAlbum` to use
+- [x] **G5c** Tighten `groupTracksByAlbum` to use — ✅ verified done 2026-07-01: albumGroupKey tightened (importer.go:912, commit 7ff363d7)
   `stripChapterPrefix(track.Name)` as the album key when the
   Album tag is empty. Currently every chapter falls back to a
   unique key (the raw Name) and becomes its own book record.
@@ -947,9 +947,9 @@ must sequence, but A and B are parallelizable. Spawn:
 
 ### Remaining slog / logging work
 
-- [ ] **SLOG-W13** [hold] Wire `logging.Info(ctx, ...)` into long-tail async ops that currently use raw `slog.Info`: `runBulkWriteBack`, ISBN enrichment goroutine, iTunes sync ops, batch poller, scanner deep paths. ~1363 raw `slog.Info/Warn/Error/Debug` calls across 193 files remain. Priority: any code inside an op-context flow (where `logging.WithOp` has been called upstream). Code outside ops (startup, background goroutines) can stay as raw slog.
-- [ ] **SLOG-PROD-VERIFY** Smoke-test metadata-fetch on prod to verify the full chain (opID in logs, `/api/v1/operations/:id/activity` returns rows).
-- [ ] **CACHE-WARMUP-ROOT-CAUSE** Investigate root cause of cache warm-up OOM. Likely issue: `List*WithCounts()` allocates unboundedly during scan, or the `Server` struct cache fields retain full API response objects. Once fixed, re-enable startup preload.
+- [ ] **SLOG-W13** [hold] Wire `logging.Info(ctx, ...)` into long-tail async ops that currently use raw `slog.Info`: `runBulkWriteBack`, ISBN enrichment goroutine, iTunes sync ops, batch poller, scanner deep paths. ~1363 raw `slog.Info/Warn/Error/Debug` calls across 193 files remain. Priority: any code inside an op-context flow (where `logging.WithOp` has been called upstream). Code outside ops (startup, background goroutines) can stay as raw slog.  <!-- 2026-07-01: ◑ PARTIAL: batch_poller + isbn flows wired (commit 7f5c28f1); runBulkWriteBack, iTunes sync, scanner deep paths remain (~1363 raw slog calls). Re-held per db977ae3 (context overflow). -->
+- [ ] **SLOG-PROD-VERIFY** Smoke-test metadata-fetch on prod to verify the full chain (opID in logs, `/api/v1/operations/:id/activity` returns rows).  <!-- 2026-07-01: ⏳ code/endpoint exist (docs/slog-prod-verify.md); remaining is a live-prod smoke-test run. -->
+- [x] **CACHE-WARMUP-ROOT-CAUSE** Investigate root cause of cache warm-up OOM. Likely issue: `List*WithCounts()` allocates unboundedly during scan, or the `Server` struct cache fields retain full API response objects. Once fixed, re-enable startup preload. — ✅ verified done 2026-07-01: startup preload re-enabled (server_lifecycle.go:277); warmers rewritten to typed counts, no gin.H (entity_cache_warmers.go, commit 4515cb2c). Live OOM re-confirmation is operational.
 
 ---
 
@@ -1176,7 +1176,7 @@ incrementally:
 
 ### Phase 11: Verification
 
-- [ ] **SEC-AUDIT-11** Final verification — Dismiss post-audit findings
+- [ ] **SEC-AUDIT-11** Final verification — Dismiss post-audit findings  <!-- 2026-07-01: ⏳ closeout doc exists (sec-audit-11-closeout.md); actual CodeQL alert dismissal is a GitHub-console action. -->
   - **Current Status:** 492 open alerts (mostly post-audit findings, not in scope of Phases 1-10)
   - **Breakdown:**
     - `go/path-injection` 220 (217 original + 3-9 new from May 18 code; new ones from OTEL/legacy-migration likely safe)
@@ -1290,7 +1290,7 @@ Bot-tasks: `docs/superpowers/bot-tasks/2026-04-30-*.md`.
 - [x] **FE-8** `fix/frontend-error-boundaries` — Done: `ErrorBoundary` wraps every page route in `App.tsx`.
 - [x] **FE-8 (audit)** `fix/fe8-real-server-smoke-test` — Done: real-server auth smoke test added to `auth-flow.spec.ts`; exercises first-run bootstrap + real session cookie against live webServer.
 - [x] **FE-9** `fix/frontend-localstorage-keys` — Done: `STORAGE_KEYS` constants exported from `lib/storageKeys.ts`.
-- [ ] **FE-10** [hold] `chore/frontend-coverage-thresholds` — Add Vitest coverage thresholds
+- [x] **FE-10** [hold] `chore/frontend-coverage-thresholds` — Add Vitest coverage thresholds — ✅ verified done 2026-07-01: vitest.config.ts:22 thresholds {lines:30,functions:20,branches:20,statements:25}
   → [`2026-04-30-fe-10-coverage.md`](docs/superpowers/bot-tasks/2026-04-30-fe-10-coverage.md)
 
 ### STRUCT — Structural Refactors — 2026-05-01
@@ -1350,7 +1350,7 @@ Bot-tasks at [`docs/superpowers/bot-tasks/2026-05-01-struct-*.md`](docs/superpow
 - [x] **ARCH-4b (wave 2)** — `deluge/centralization.go` migrated: pre-sliced to checkpoint.ProcessedFiles, atomic counters (success/skip/err), checkpoint written inside RunItems fn closure, IsCanceled() replaced by ctx-based RunItems polling. PR #1592.
 - [x] **ARCH-7** — Compatibility surface registry: `docs/compat-surfaces.md` documents 8 shim files (server→organizer forwarding layers, audiobooks→organizer aliases, deprecated config/logger surfaces) with re-export targets and removal conditions. PR #1608.
 - [x] **ARCH-8** — Typed service keys: added `internal/serviceregistry/keys.go` with 24 constants (`KeyStore`, `KeyConfig`, `KeyActivity`, etc.). Replaced 68 string literals in `Get[T]`, `Name:`, and `Needs:` across 25 `register.go` files. PR #1607.
-- [ ] **ARCH-4b (wave 3)** — Remaining 3 sites: `lsh_backfill.go` (308K-item progress cadence — needs reporter throttle wrapper before RunItems is appropriate), `acoustid/backfill.go` (nested books→files loop + resume-by-book-ID — requires flat-map preprocessing), `acoustid/reset_all.go` (callback-driven PebbleStore.ClearAllAcoustIDFingerprints API + dual heterogeneous loops). `acoustid/fingerprint_rescan.go` excluded — already uses semaphore goroutine pool that outperforms sequential RunItems.
+- [ ] **ARCH-4b (wave 3)** — Remaining 3 sites: `lsh_backfill.go` (308K-item progress cadence — needs reporter throttle wrapper before RunItems is appropriate), `acoustid/backfill.go` (nested books→files loop + resume-by-book-ID — requires flat-map preprocessing), `acoustid/reset_all.go` (callback-driven PebbleStore.ClearAllAcoustIDFingerprints API + dual heterogeneous loops). `acoustid/fingerprint_rescan.go` excluded — already uses semaphore goroutine pool that outperforms sequential RunItems.  <!-- 2026-07-01: ◑ PARTIAL: lsh_backfill.go + acoustid/backfill.go migrated to RunItems; acoustid/reset_all.go remains. -->
 - [x] **PERF-2** — Batch upserts in `createBookFilesForBook`: N per-segment `UpsertBookFile` calls replaced with one `BatchUpsertBookFiles` call (shipped PR #1583). N→1 DB writes per book on first scan.
 - [x] **PERF-6** — Search index backfill cursor: added `GetAllBooksFrom(afterID, limit)` to `BookReader` interface + PebbleStore (O(1) LowerBound seek). Rewrote `server_search.go` backfill loop to use cursor pagination instead of O(offset) `GetAllBooks`. Updated 1 hand-written + 6 mockery-generated mocks. PR #1601.
 - [x] **PERF-2b** — Hash carry-forward: added `Book.SegmentHashes map[string]string`; `saveBookToDatabase` dedup loop writes computed hashes back; `createBookFilesForBook` accepts `knownHashes ...map[string]string` variadic (no signature change to `saveBook` function variable); call site at line 850 passes `books[idx].SegmentHashes`. PR #1605.
@@ -1441,8 +1441,8 @@ Implementation steps (in order):
 - [x] **DELUGE-1** `deluge_hash`, `deluge_original_path`, `imported_from_deluge_at` columns on `book_files` — PR #540
 - [x] **DELUGE-2** `protectedPathCache` with TTL refresh + IsProtected() — PR #556
 - [x] **DELUGE-3** `importToLibrary`: reflink `src → library_path`, update DB, call `core.move_storage` if enabled (best-effort). Implemented in fleet branch `fleet/014-deluge-3-import-to-library` (PR #976). Bot-task: [`docs/superpowers/bot-tasks/2026-04-29-deluge-3-import-to-library.md`](docs/superpowers/bot-tasks/2026-04-29-deluge-3-import-to-library.md)
-- [ ] **`WriteTagsSafe`**: pre-flight guard wrapping all tag-write call sites; falls back to `os.Copy` on non-reflink FS
-- [ ] **Migrate all call sites** [hold] to `WriteTagsSafe` (bulk write-back, single-file write, cover embed)
+- [x] **`WriteTagsSafe`**: pre-flight guard wrapping all tag-write call sites; falls back to `os.Copy` on non-reflink FS — ✅ verified done 2026-07-01: internal/fileops/write_tags_safe.go:35 (pre-flight hash, temp-copy+rename, non-reflink fallback)
+- [x] **Migrate all call sites** [hold] to `WriteTagsSafe` (bulk write-back, single-file write, cover embed) — ✅ verified done 2026-07-01: all tag-write sites route through WriteTagsSafe (writeback/single-file/cover embed)
 - [x] **Discovery → Import UI**: "Import" button on discovered torrent calls the import flow — PR #562
 - [x] **UI**: "Imported from Deluge" badge on book detail; original path shown in Files tab audit row — PR #561
 - [x] **Config**: add `protected_paths []string` field; expose in Settings UI — PR #562
@@ -1568,7 +1568,7 @@ Operations or the notification bell. These need the same treatment as `composer_
 `missing-file-repair`: `s.queue.Enqueue` → `operations.SaveParams` → `SaveCheckpoint` loop →
 `activity.EmitInfo` summary on finish.
 
-- [ ] **BACKFILL-ASYNC-1** `handleBackfillFileHashes` — convert to async queued operation:
+- [x] **BACKFILL-ASYNC-1** `handleBackfillFileHashes` — convert to async queued operation: — ✅ verified done 2026-07-01: internal/maintenance/jobs/backfill_file_hashes.go (async, checkpoint/resume)
   - `operations.BackfillFileHashesParams{DryRun bool}` struct in `state.go`
   - Enqueue as `"backfill-file-hashes"`, return `opID` immediately
   - Worker loop: for each `book_file` missing hash, `SaveCheckpoint` every N files
@@ -1576,13 +1576,13 @@ Operations or the notification bell. These need the same treatment as `composer_
   - `activity.EmitInfo` summary on completion; `activity.LogBatch` for errors
   - Poll via `GET /api/v1/operations/{id}`; UI "Backfill Missing Hashes" button uses opID
 
-- [ ] **BACKFILL-ASYNC-2** `handleBackfillMetadataSourceHash` — same async treatment:
+- [x] **BACKFILL-ASYNC-2** `handleBackfillMetadataSourceHash` — same async treatment: — ✅ verified done 2026-07-01: internal/maintenance/jobs/backfill_metadata_source_hash.go (async)
   - `operations.BackfillMetadataHashParams{DryRun bool, Force bool}` struct
   - Enqueue as `"backfill-metadata-source-hash"`, return `opID`
   - Worker: iterate all books, checkpoint every N; skip-on-resume by `PhaseIndex`
   - `activity.EmitInfo` + `activity.LogBatch` on finish
 
-- [ ] **BACKFILL-ASYNC-3** [hold] `MetadataHashDuplicateCard` UI — add coverage stats panel + backfill button matching the SHA Duplicate Detection card style:
+- [x] **BACKFILL-ASYNC-3** [hold] `MetadataHashDuplicateCard` UI — add coverage stats panel + backfill button matching the SHA Duplicate Detection card style: — ✅ verified done 2026-07-01: MetadataHashDuplicateCard (MaintenanceTab.tsx:672) + book-metadata-hash-stats endpoint
   - `GET /maintenance/metadata-hash-stats` endpoint: total books, with/without `metadata_source_hash`, by-library breakdown
   - `BookMetadataHashStats` struct in `store.go`; `GetBookMetadataHashStats` in interface + SQLite + PebbleDB + mock
   - Auto-load stats on mount; status chip ("N missing hashes" / "✓ All hashed"); "Backfill Missing Hashes" button
@@ -1607,9 +1607,9 @@ Proposed chain: **DownloadHash** (as-downloaded) → **OriginalFileHash** (after
 
 AcoustID segment fingerprints already exist in the schema (`acoustid_seg0`–`seg6`). Needs the same coverage-stats + backfill-trigger treatment as file hashes.
 
-- [ ] **ACOUSTID-STATS-1** `GetAcoustIDStats()` — count books/files with ≥1 fingerprint segment populated, by-library breakdown. Add to interface + SQLite + PebbleDB + mock.
-- [ ] **ACOUSTID-STATS-2** `GET /maintenance/acoustid-stats` handler + route.
-- [ ] **ACOUSTID-STATS-3** UI card on Maintenance tab (same tile style as SHA Duplicate Detection): shows coverage %, "Fingerprint Library" trigger button, status chip.
+- [x] **ACOUSTID-STATS-1** `GetAcoustIDStats()` — count books/files with ≥1 fingerprint segment populated, by-library breakdown. Add to interface + SQLite + PebbleDB + mock. — ✅ verified done 2026-07-01: GetAcoustIDStats() iface_misc.go:186 + Pebble + mock, by-library breakdown
+- [x] **ACOUSTID-STATS-2** `GET /maintenance/acoustid-stats` handler + route. — ✅ verified done 2026-07-01: GET /maintenance/acoustid-stats handleGetAcoustIDStats (maintenance_fixups.go:553)
+- [x] **ACOUSTID-STATS-3** UI card on Maintenance tab (same tile style as SHA Duplicate Detection): shows coverage %, "Fingerprint Library" trigger button, status chip. — ✅ verified done 2026-07-01: AcoustID coverage card MaintenanceTab.tsx:586
 - [x] **ACOUSTID-DEDUP-1** Acoustic Duplicates tab in BookDedup — fingerprint-based candidate pairs with similarity scores (PR #998)
 - [x] **ACOUSTID-COMPARE-1** Manual two-book fingerprint comparison — `GET /api/v1/acoustid/compare?a=&b=` with per-segment Hamming distance; comparison panel in UI (PR #999)
   - Both books/files displayed side-by-side (title, author, cover, duration, format)
@@ -1636,7 +1636,7 @@ since it was last edited on 2026-04-11).
 - [x] **1.9** Series-aware bulk merge (#232)
 - [x] **1.10** Export dedup state as CSV/JSON (#231)
 - [x] **1.11** **Async embed via OpenAI Batch API for nightly re-scans** — `dedup.embed-async` UOS op (nightly cron 03:00) + `POST /api/v1/dedup/embed-async` on-demand trigger; batch poller handles result ingestion (PR #1003)
-- [ ] **1.12** **Tag operation log lines with the originating operation ID** — pipe `op.ID` into a context-bound logger, replace bare `log.Printf` inside operation funcs with op-scoped calls, and write each line into `operation_logs` so the Activity-page log view shows everything (ffmpeg warnings, fingerprint failures, etc.) instead of only the explicit `progress.Log()` calls. Spec: [`docs/superpowers/bot-tasks/2026-05-04-tag-operation-logs.md`](docs/superpowers/bot-tasks/2026-05-04-tag-operation-logs.md)
+- [x] **1.12** **Tag operation log lines with the originating operation ID** — pipe `op.ID` into a context-bound logger, replace bare `log.Printf` inside operation funcs with op-scoped calls, and write each line into `operation_logs` so the Activity-page log view shows everything (ffmpeg warnings, fingerprint failures, etc.) instead of only the explicit `progress.Log()` calls. Spec: [`docs/superpowers/bot-tasks/2026-05-04-tag-operation-logs.md`](docs/superpowers/bot-tasks/2026-05-04-tag-operation-logs.md) — ✅ verified done 2026-07-01: PR #1047 op-context logging: logging.Info(ctx) auto-prepends opID, writes operation_logs
 - [x] **1.13** **Broken-files dashboard card + repair pipeline** — `book_file_errors` table, dashboard card, `has_file_errors` library facet, repair pipeline (PR #986)
 - [x] **1.14** **Unified Operations System (UOS)** — COMPLETE 2026-05-11 (infra 2026-05-08, full migration 2026-05-11, final queue deletion PR #800). All 16 UOS tasks shipped across PRs #740–#759; v1→v2 `queue.Enqueue` migration completed across PRs #783–#798; BridgeQueue + OperationQueue + Queue interface fully deleted in PR #800. `scheduler_triggers.go` deleted; iTunes path ops and organizer scan decoupled from BridgeQueue via new `itunes_path_ops.go` and `ScanEnqueuer` callback. Single `Registry` owns every OperationDef; plugins register through `pkg/plugin/sdk`; subprocess isolation; explicit `ResumePolicy`; single SSE-fed frontend store. Human spec: [`docs/superpowers/specs/2026-05-04-unified-operations-system.md`](docs/superpowers/specs/2026-05-04-unified-operations-system.md).
   - [x] **UOS-01** Schema migrations for v2 tables (merged 2026-05-06)
@@ -1654,7 +1654,7 @@ since it was last edited on 2026-04-11).
   - [x] **UOS-13** Frontend single-source — drop dual-source (PR #754, merged 2026-05-08)
   - [x] **UOS-14** Delete v1 OperationQueue + legacy endpoints (PR #756, merged 2026-05-08)
   - [x] **UOS-15** Promote pkg/plugin/sdk to stable public API + sdkguard CI (PR #755, merged 2026-05-08)
-- [ ] **1.15** [hold] **UOS amendment — `Reporter.SetCurrentItem(label)` for live "currently working on" ticker** — Sonarr/Radarr-style high-frequency current-item display under the progress bar. New SDK Reporter method that's purely ephemeral (in-memory on the registry's run handle, no DB write); SSE event `op.current_item` patches the frontend store; timeline endpoint returns the cached value so refresh / new tab / re-login re-hydrates. Survives refresh; survives a brief gap on server restart (next per-item iteration repopulates). If we ever want it to survive restart, retrofit is a single column add to `operations_v2` flushed at 30s cadence — explicit out of v1. Implementation footprint: amend §1 (Reporter) + §9 (timeline payload) + UOS-03/UOS-06 bot-tasks. Spec: [`docs/superpowers/bot-tasks/2026-05-05-uos-amendment-current-item.md`](docs/superpowers/bot-tasks/2026-05-05-uos-amendment-current-item.md).
+- [x] **1.15** [hold] **UOS amendment — `Reporter.SetCurrentItem(label)` for live "currently working on" ticker** — Sonarr/Radarr-style high-frequency current-item display under the progress bar. New SDK Reporter method that's purely ephemeral (in-memory on the registry's run handle, no DB write); SSE event `op.current_item` patches the frontend store; timeline endpoint returns the cached value so refresh / new tab / re-login re-hydrates. Survives refresh; survives a brief gap on server restart (next per-item iteration repopulates). If we ever want it to survive restart, retrofit is a single column add to `operations_v2` flushed at 30s cadence — explicit out of v1. Implementation footprint: amend §1 (Reporter) + §9 (timeline payload) + UOS-03/UOS-06 bot-tasks. Spec: [`docs/superpowers/bot-tasks/2026-05-05-uos-amendment-current-item.md`](docs/superpowers/bot-tasks/2026-05-05-uos-amendment-current-item.md). — ✅ verified done 2026-07-01: Reporter.SetCurrentItem reporter.go:32 + SSE current_item + useOperationsStore
 - [~] **1.16** **Resizable + dynamically-sortable columns everywhere** — Library/Authors/Series/Works/TrashedVersions done (PR #1002). Remaining: dedup results, activity log, iTunes write-back preview, metadata review. Build a single `<ResizableSortableTable>` component (or extend existing `ConfigurableTable`); roll across remaining pages.
 - [ ] **1.17** **Replace "AO" / "audiobook-organizer" branding with a real product name + logo** — the placeholder "AO" leaks into UI labels (e.g. proposed "AO Path" column on the iTunes write-back dialog), service names, status panels, etc. Pick a product name + minimal logo, apply consistently. Out of scope until name is decided; this entry is the placeholder for the rename sweep.
 
@@ -1692,7 +1692,7 @@ since it was last edited on 2026-04-11).
 - [ ] **4.7** [hold] Per-workload store evaluation: Pebble vs SQLite vs PostgreSQL vs Go-native NoSQL (**L** research)
 - [~] **4.8** Split the `database.Store` interface (ISP refactor) (**L**) — foundation + 3 proof-points shipped (#372, #376, #379, #380, #381, #382); ~38-file sweep + 18-file noop cleanup remain per [`docs/superpowers/plans/2026-04-17-store-iface-sweep.md`](docs/superpowers/plans/2026-04-17-store-iface-sweep.md)
 - [x] **4.9** Eliminate remaining package globals (DI Phase 2) (**M**) — 10 globals replaced with interface injection + Server fields (#386)
-- [ ] **4.10** [hold] Service-layer unit tests with mock stores (**L**) — leverage DI + ISP to unit-test AudiobookService, OrganizeService, MetadataFetchService, MergeService with MockStore; test error paths, edge cases, and business logic in isolation without HTTP or real DB
+- [ ] **4.10** [hold] Service-layer unit tests with mock stores (**L**) — leverage DI + ISP to unit-test AudiobookService, OrganizeService, MetadataFetchService, MergeService with MockStore; test error paths, edge cases, and business logic in isolation without HTTP or real DB  <!-- 2026-07-01: ◑ PARTIAL: unit tests exist for AudiobookService/OrganizeService/MetadataFetchService; MergeService lacks a dedicated mock-store unit-test file. -->
 - [x] **4.11** Split `internal/server` into sub-packages (**XL**) — all 8 PKG tasks completed
   - ✅ **PKG-1** `internal/audiobooks/` — audiobook service extracted (#663)
   - ✅ **PKG-2** `internal/aiscan/` — AI scan pipeline extracted (#656)
@@ -1703,7 +1703,7 @@ since it was last edited on 2026-04-11).
   - ✅ **PKG-4d** `internal/writeback/` — writeback enqueuer/outbox extracted (#661)
   - ✅ **PKG-4e** `internal/fileops/` + `internal/sysinfo/` — filesystem/system services extracted (#664)
 - [x] **4.12** Narrow extracted service dependencies to ISP sub-interfaces (**M**) — PR #995
-- [ ] **4.13** [hold] Extract iTunes integration into `internal/itunes` (**L**) — decouple iTunes import/sync/writeback from Server lifecycle; currently ~3,900 LOC deeply coupled to Server, needs interface extraction and dependency injection redesign
+- [x] **4.13** [hold] Extract iTunes integration into `internal/itunes` (**L**) — decouple iTunes import/sync/writeback from Server lifecycle; currently ~3,900 LOC deeply coupled to Server, needs interface extraction and dependency injection redesign — ✅ verified done 2026-07-01: internal/itunes/service extracted with Deps struct + narrow Store interfaces
   - [x] **4.13b** Unit tests for `internal/itunes/service/track_provisioner.go` — 11 tests: multi-segment, missing metadata, idempotency, UpsertBookFile error, managed/unmanaged paths, PID uniqueness, duration conversion, partial-failure best-effort. (`track_provisioner_test.go`, bot-task 4-13b)
   - [x] **4.13d** Error and edge-case tests for `internal/itunes/service/importer.go` (21 new tests; disabled-mode, corrupt ITL, concurrent sync, tombstoned PID, existing-PID link, SkipDuplicates, partial write, Sync GetAllBooks failure, cover-art missing, linkITunesMetadata, linkAsVersion, organizeOneBook nil/no-factory)
 
@@ -2001,7 +2001,7 @@ Activity page mobile layout, adaptive refresh, version vs snapshot UI polish, co
 
 ## ⚠️ Automated Findings
 
-- [ ] **DEDUP-CANDIDATE-EXPLOSION-2026-06-18** The `exact` dedup layer has **387,597 pending**
+- [ ] **DEDUP-CANDIDATE-EXPLOSION-2026-06-18** The `exact` dedup layer has **387,597 pending**  <!-- 2026-07-01: ⏳ = CONS-10 — prod backfill/investigation of the exact-candidate backlog; not a code deliverable. -->
   candidates (of 388,998 total; acoustid 1,028 / embedding 164 / llm 209 are sane) against only
   **49,573 final books** (`GET /api/v1/audiobooks` count) — yet memdb holds **401,968 raw `books`
   rows**. The exact emitters (`checkExactTitle` / `checkExactMetadataSourceHash` /
