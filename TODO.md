@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.49.0 -->
+<!-- version: 9.50.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-01 -->
 
@@ -20,16 +20,33 @@ future agent) can scan the entire workspace in one page.
 
 ---
 
-## 🤖 Agent Task Package — [`docs/agent-tasks/`](docs/agent-tasks/) (added June 28, 2026)
+## 🤖 Agent Task Package — [`docs/agent-tasks/`](docs/agent-tasks/) (refreshed July 1, 2026)
 
 Hand-run, weak-model-proof task briefs (worktree-disciplined, portable subagent
 roster, multi-agent orchestration scripts). Use these instead of the unreliable
-TODO→GitHub-issues bot.
+TODO→GitHub-issues bot. Planning + cost/efficiency rationale (buckets, per-task
+model tier, same-file collision→wave table) is in
+[`docs/agent-tasks/BREAKDOWN-2026-07-01.md`](docs/agent-tasks/BREAKDOWN-2026-07-01.md).
 
-- 🔵 **transcription-matching/** (TOP PRIORITY) — 5 tasks: search-path hints, apply auto-confirm, upgrade-confidence gate, batch auto-match, dedup tiebreaker. Extends the shipped transcription→discovery wiring into the rest of matching.
-- 🔵 **dedup-intro-falsepositive/** (DEDUP-INTRO-1) — 4 tasks: investigate, skip sub-60s clip fingerprints, boilerplate-title blocklist, ISBN/ASIN gate. Kills ~372K intro/outro false positives.
-- 🔵 **dedup-ui/** (CONS-4/6/11, C6, DEDUP-KB-1) — 5 frontend tasks: row redesign, metadata-compare tab, manual-import button, label-review panel, keyboard shortcuts.
-- 🔵 **system-docs/** (DOCS-1) — 7 tasks producing ≥9 docs / ≥7 Mermaid diagrams under `docs/system/`.
+**Active workstreams (8 · 30 briefs):**
+
+- 🔵 **dedup-hardening/** (P1) — 3 tasks: `upsertExactCandidate` boilerplate/min-duration guard (DEDUP-INTRO-1 residual), CONS-15 part-vs-whole guard, CONS-FRAG-2 multi-file organize.
+- 🔵 **ci-flaky-fixes/** (P1) — 3 tasks: mockery pin/regen (Mock Freshness), `TestBackupEndpointsErrors`, `TestScanService_MultiChapterAudiobook`.
+- 🔵 **library-ui/** (P2) — 4 tasks: EMB-UI-1 Ollama link, USER-QUICK-FILTERS saved presets, TAG-SEARCH filter/cloud, Library stale-cache bugfix.
+- 🔵 **dedup-dataset/** (P2) — 5 tasks: C5-sig, C5-folder, C5 live-capture, C7 JSONL export, C8 auto-bug-filing (deferred on backfill).
+- 🔵 **provenance-hash-chain/** (P2) — 2 tasks: HASH-CHAIN-1 download-hash field, HASH-CHAIN-3 integrity alert.
+- 🔵 **perf-cleanup/** (P3) — 5 tasks: ARCH-4b reset_all RunItems, MAYDEPLOY-H5/H7 fast-paths, NUTSDB tidy (optional), CONS-13 shim retire (gated).
+- 🔵 **logging-slog/** (P3) — 3 tasks: SLOG-W13 residual (writeback+ISBN, iTunes sync, scanner deep paths).
+- ⚪ **ai-responses-migration/** (P3, **DEFERRED/optional**) — 5 tasks: AI-RESP-A/B/D/E/F Chat Completions → `/v1/responses`. Do not start without greenlight.
+
+**Not turned into briefs** (see BREAKDOWN doc): design/brainstorm-first items
+(WF-0..6, 3.8 Plex, 4.1 PG, 3.9/3.10, 1.17 rename, REPO-SIZE-1, CONS-17b) and
+operational/prod-verification items (CONS-10, PH-2, PD-3, I1/I6, SEC-AUDIT-11,
+SLOG-PROD-VERIFY, DEDUP-CANDIDATE-EXPLOSION).
+
+**✅ Archived (shipped) → [`docs/archive/agent-tasks/`](docs/archive/agent-tasks/):**
+`transcription-matching/` (5/5), `dedup-intro-falsepositive/` (4/4),
+`dedup-ui/` (5/5), `system-docs/` (→ `docs/system/`) — all verified complete 2026-07-01.
 
 ### ✅ Shipped June 30, 2026 (PR #1688)
 

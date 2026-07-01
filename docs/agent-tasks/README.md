@@ -1,7 +1,7 @@
 <!-- file: docs/agent-tasks/README.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 2.0.0 -->
 <!-- guid: 7a1e0c44-9d2b-4f08-bc31-2e5a6b7c8d90 -->
-<!-- last-edited: 2026-06-28 -->
+<!-- last-edited: 2026-07-01 -->
 
 # Agent Task Package
 
@@ -16,17 +16,31 @@ tasks in parallel on isolated git worktrees.
 > This is **not** the automated burndown bot (TODO.md → GitHub issues). These are
 > in-repo markdown briefs for hands-on runs.
 
-## Workstreams (run in priority order)
+## Workstreams (2026-07-01 refresh)
 
-| # | Folder | What | Priority |
-|---|--------|------|----------|
-| B | [`transcription-matching/`](transcription-matching/) | Wire the audio-transcription fields into the metadata **matching** system | **P1 — do first** |
-| C | [`dedup-intro-falsepositive/`](dedup-intro-falsepositive/) | Kill the ~372K dedup false positives from identical short intro/outro audio | P2 |
-| D | [`dedup-ui/`](dedup-ui/) | Five small dedup/library frontend tasks | P2 |
-| E | [`system-docs/`](system-docs/) | Comprehensive system documentation (≥9 files, ≥7 Mermaid diagrams) | P3 |
+Planning + cost/efficiency rationale for this set is in
+[`BREAKDOWN-2026-07-01.md`](BREAKDOWN-2026-07-01.md) (three buckets: authored as
+briefs / needs-brainstorm / operational-no-task, plus per-task model tier and the
+same-file collision→wave table).
 
-Each workstream folder has its own `README.md` (overview + dependency graph),
-numbered `TASK-NN-*.md` files, an `orchestration.md`, and a `run.sh`.
+| Folder | What | Priority | Tasks |
+|--------|------|----------|-------|
+| [`dedup-hardening/`](dedup-hardening/) | Close the residual exact-layer false-positive leak + defensive guards (DEDUP-INTRO-1 residual, CONS-15, CONS-FRAG-2) | **P1** | 3 |
+| [`ci-flaky-fixes/`](ci-flaky-fixes/) | Make the mock-freshness + 2 flaky-test gates trustworthy | **P1** | 3 |
+| [`library-ui/`](library-ui/) | Saved filter presets, tag search, Ollama link, Library stale-cache bugfix | P2 | 4 |
+| [`dedup-dataset/`](dedup-dataset/) | Labeled-dataset follow-ups: relation classifiers, live-capture, JSONL export (C5, C5-sig, C5-folder, C7, C8) | P2 | 5 |
+| [`provenance-hash-chain/`](provenance-hash-chain/) | Download-hash field + integrity alert (HASH-CHAIN-1/3) | P2 | 2 |
+| [`perf-cleanup/`](perf-cleanup/) | RunItems migration, caching fast-paths, config-shim retire (ARCH-4b, MAYDEPLOY-H5/H7, NUTSDB, CONS-13) | P3 | 5 |
+| [`logging-slog/`](logging-slog/) | Wire `logging.Info(ctx)` into the remaining raw-slog op paths (SLOG-W13 residual) | P3 | 3 |
+| [`ai-responses-migration/`](ai-responses-migration/) | **DEFERRED/optional** — Chat Completions → `/v1/responses` (AI-RESP-A/B/D/E/F) | P3 (deferred) | 5 |
+
+Each workstream folder has its own `README.md` (overview + wave table),
+numbered `TASK-NN-*.md` briefs, an `orchestration.md`, and a `run.sh`.
+
+> **Archived (shipped) workstreams** live in
+> [`../archive/agent-tasks/`](../archive/agent-tasks/): `transcription-matching/`,
+> `dedup-intro-falsepositive/`, `dedup-ui/`, `system-docs/` — all verified
+> complete on 2026-07-01 (see BREAKDOWN doc).
 
 ## How to run ONE task (the simple path)
 
