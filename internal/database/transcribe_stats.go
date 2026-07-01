@@ -1,7 +1,7 @@
 // file: internal/database/transcribe_stats.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7f2a9c14-3b6d-4e81-9a05-2c8e1d4f6b73
-// last-edited: 2026-06-30
+// last-edited: 2026-07-01
 
 package database
 
@@ -33,8 +33,14 @@ type TranscribeStats struct {
 	// Per-outcome cumulative counts. Attempted = sum of the outcome buckets
 	// below; SkippedExisting is books skipped because they already had a
 	// transcript (only_missing mode) and were never attempted this run.
-	Attempted       int `json:"attempted"`
-	OK              int `json:"ok"`
+	Attempted int `json:"attempted"`
+	OK        int `json:"ok"`
+	// Unparsed counts books where Whisper returned non-empty text but
+	// ParseAudiobookIntro extracted no title. The raw transcript IS stored
+	// (usable via reparse_only), but TranscribedTitle stays empty, so these
+	// are excluded by FilterSpec.OnlyParsedTranscription. OK now implies a
+	// parsed title; Unparsed is the low-quality remainder.
+	Unparsed        int `json:"unparsed"`
 	SourceMissing   int `json:"source_file_missing"`
 	NoAudio         int `json:"no_audio"`
 	FFmpegError     int `json:"ffmpeg_error"`

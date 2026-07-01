@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/transcribe_stats_accum.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9d3b1e57-6a02-4c8f-b14d-7e9a2f5c08b1
-// last-edited: 2026-06-30
+// last-edited: 2026-07-01
 
 package maintenance
 
@@ -15,7 +15,12 @@ import (
 // Per-book transcription outcome categories. These are written to
 // Book.TranscribeStatus and counted into the stats:transcribe aggregate.
 const (
-	statusOK            = "ok"
+	statusOK = "ok"
+	// statusUnparsed: Whisper returned non-empty text but ParseAudiobookIntro
+	// extracted no title. The raw transcript is still stored; only the parsed
+	// fields are absent. Distinct from statusOK so the aggregate and the
+	// OnlyParsedTranscription filter can exclude these low-quality results.
+	statusUnparsed      = "unparsed"
 	statusSourceMissing = "source_file_missing"
 	statusNoAudio       = "no_audio"
 	statusFFmpegError   = "ffmpeg_error"
@@ -56,6 +61,8 @@ func (a *transcribeStatsAccum) recordOutcome(status string, now time.Time) {
 	switch status {
 	case statusOK:
 		a.stats.OK++
+	case statusUnparsed:
+		a.stats.Unparsed++
 	case statusSourceMissing:
 		a.stats.SourceMissing++
 	case statusNoAudio:
