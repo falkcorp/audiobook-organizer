@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.90.0 -->
+<!-- version: 3.91.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-01 -->
 
@@ -71,6 +71,12 @@
 - **`perf(dedup)`** PH-3c — Purge-stale candidate cap raised from 100K → 1M. Libraries with >100K pending candidates were silently leaving the tail un-purged on every maintenance run.
 
 ### Bug Fixes
+
+#### July 1, 2026 — Merged-away dedup candidates persist; Library page-size race drops page-1 results
+
+- **`fix(web)`** — `Library.tsx`'s `handleMergeAsVersions` and `handleCombineIntoOneBook` now call a new `clearLibraryCache()` (from `useLibraryQuery`, wrapping `useLibraryCache.getState().clear()`) before reloading. `useLibraryQuery.loadAudiobooks` reads the 60s-TTL client cache before every fetch and nothing ever invalidated it on mutation, so after a merge/combine the next `loadAudiobooks()` call could serve a stale cached page still listing the just-deleted books — until the TTL happened to lapse, which is exactly why they "eventually disappeared" on their own. At least ~14 other mutation handlers in `Library.tsx` share the same latent bug; tracked in `TODO.md` for a follow-up pass.
+- **`fix(dedup)`** — `MergeBookDuplicatesAsVersions`, `CombineBooks`, and the async `/audiobooks/merge` op (`dedup.book-merge`) now call `DedupEngine.CleanupCandidatesAfterMerge` for every merged-away book ID after a successful merge/combine, mirroring the sweep the Dedup page's own per-candidate Merge button already ran. Previously only that one entry point cleaned up orphaned `dedup:r:`/`dedup:p:` rows; the other three merge/combine paths left them behind, so merged-away books kept appearing as duplicate candidates on the Dedup page in any view that doesn't apply the live "does this book still exist" filter.
+- **`fix(web)`** — `useLibraryQuery.loadAudiobooks` now tracks the most recently issued request and drops any response that resolves after a newer request has been issued. Previously, changing the Library page-size dropdown while not on page 1 could let a stale `offset = (oldPage-1) * newLimit` request race a corrected `offset = 0` request; if the stale one resolved last, "page 1" silently showed the old page's data at the new page size (visibly dropping punctuation-leading titles, which only exist near offset 0).
 
 #### June 24, 2026 — CI green: mock gaps + apiFetch assertion drift (PR #1616)
 

@@ -1,7 +1,7 @@
 // file: internal/server/wire_handlers.go
-// version: 2.13.0
+// version: 2.14.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
-// last-edited: 2026-06-23
+// last-edited: 2026-07-01
 
 package server
 
@@ -328,6 +328,10 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	if s.metadataFetchService != nil {
 		dupMetadataSvc = s.metadataFetchService
 	}
+	var dupDedupEng duplicates.DedupEngine
+	if s.dedupEngine != nil {
+		dupDedupEng = s.dedupEngine
+	}
 	duplicatesH := duplicates.New(
 		s.Store(),
 		s.dedupCache,
@@ -340,6 +344,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 			}
 			return merge.NewService(s.Store())
 		},
+		dupDedupEng,
 		func(groupKey string) {
 			store := s.Store()
 			if store == nil {

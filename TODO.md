@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 9.47.0 -->
+<!-- version: 9.48.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-06-30 -->
+<!-- last-edited: 2026-07-01 -->
 
 # Project TODO
 
@@ -45,6 +45,10 @@ TODO→GitHub-issues bot.
 
 - 🔴 **Mock Freshness** check fails on every branch — `mockery` version drift (`interface{}`→`any`). Needs the pinned mockery version regenerated/committed.
 - 🔴 `TestBackupEndpointsErrors`, `TestScanService_MultiChapterAudiobook` — flaky/environment-sensitive (fail on `main` too). Diagnose root cause; don't rerun-and-ignore.
+
+### 🐛 Known bug: Library page's client-side cache is never invalidated on mutation (2026-07-01)
+
+- 🔴 `web/src/stores/useLibraryCache.ts` (60s TTL) is read by `useLibraryQuery.loadAudiobooks` before every fetch and is served as-is on a cache hit. Nothing ever invalidates a specific entry or the whole store on mutation — only `handleMergeAsVersions` and `handleCombineIntoOneBook` in `Library.tsx` were fixed (PR merging this note) to call the new `clearLibraryCache()` before reloading. At least ~14 other mutation handlers in `Library.tsx` (`handlePurgeOne`, `handleRestoreOne`, `handleConfirmPurge`, `handleBatchRestore`, `handleVersionUpdate`, `handleFetchMetadata`, `handleParseWithAI`, the batch-delete/apply-metadata handlers, etc. — grep `loadAudiobooks()` call sites) call `loadAudiobooks()` right after a mutation without clearing the cache, so they have the same latent bug: a cached page can serve stale rows (deleted/restored/edited books, wrong order) until the 60s TTL lapses. Fix: either call `clearLibraryCache()` in each remaining handler, or thread a `bypassCache` flag through `loadAudiobooks` and default all mutation call sites to bypass.
 
 ---
 
