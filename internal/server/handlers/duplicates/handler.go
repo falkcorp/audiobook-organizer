@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/handler.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9f41f363-34fc-4ad2-b2f1-46d5ac0ba2f3
-// last-edited: 2026-06-30
+// last-edited: 2026-07-01
 
 // Package duplicates hosts the SQL-backed duplicate-detection HTTP handlers
 // extracted from the server package's duplicates_handlers.go: book / author /
@@ -32,10 +32,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
+	"github.com/gin-gonic/gin"
 	ulid "github.com/oklog/ulid/v2"
 )
 
@@ -72,6 +72,14 @@ type Handler struct {
 	// so this package needs neither the merge constructor nor a server import.
 	getMergeService func() MergeService
 
+	// dedupEngine backs the post-merge orphan-candidate sweep for
+	// mergeBookDuplicatesAsVersions and combineBooks (mirrors the sweep the
+	// dedup handler package already runs after its own per-candidate Merge
+	// button). Interface snapshot, typed-nil guarded by the controller; nil is
+	// tolerated (skips the sweep) since CleanupCandidatesAfterMerge itself
+	// also nil-checks its receiver.
+	dedupEngine DedupEngine
+
 	// --- injected funcs wrapping helpers that stay in package server ---
 
 	// dismissDedupGroup wraps the loadDismissedDedupGroups / saveDismissedDedupGroups
@@ -100,6 +108,7 @@ func New(
 	audiobookService AudiobookService,
 	metadataFetchService MetadataFetchService,
 	getMergeService func() MergeService,
+	dedupEngine DedupEngine,
 	dismissDedupGroup func(groupKey string),
 	computeSeriesPrunePreview func() (any, error),
 	seriesNormalizePreview func() any,
@@ -111,6 +120,7 @@ func New(
 		audiobookService:          audiobookService,
 		metadataFetchService:      metadataFetchService,
 		getMergeService:           getMergeService,
+		dedupEngine:               dedupEngine,
 		dismissDedupGroup:         dismissDedupGroup,
 		computeSeriesPrunePreview: computeSeriesPrunePreview,
 		seriesNormalizePreview:    seriesNormalizePreview,
@@ -227,11 +237,27 @@ func (h *Handler) MergeBookDuplicatesAsVersions(c *gin.Context) {
 		h.dedupCache.Invalidate("book-duplicates")
 	}
 
+	if h.dedupEngine != nil {
+		h.dedupEngine.CleanupCandidatesAfterMerge(mergedAwayIDs(req.BookIDs, result.PrimaryID))
+	}
+
 	httputil.RespondWithOK(c, gin.H{
 		"message":          fmt.Sprintf("Merged %d books into version group", result.MergedCount),
 		"version_group_id": result.VersionGroupID,
 		"primary_id":       result.PrimaryID,
 	})
+}
+
+// mergedAwayIDs returns ids minus the survivor, for handing to
+// DedupEngine.CleanupCandidatesAfterMerge after a successful merge/combine.
+func mergedAwayIDs(ids []string, primaryID string) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id != primaryID {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // DismissBookDuplicateGroup marks a book duplicate group as not-duplicates.
@@ -335,6 +361,10 @@ func (h *Handler) CombineBooks(c *gin.Context) {
 	if h.dedupCache != nil {
 		h.dedupCache.Invalidate("book-dedup-scan")
 		h.dedupCache.Invalidate("book-duplicates")
+	}
+
+	if h.dedupEngine != nil {
+		h.dedupEngine.CleanupCandidatesAfterMerge(mergedAwayIDs(req.MergeIDs, result.PrimaryID))
 	}
 
 	httputil.RespondWithOK(c, gin.H{

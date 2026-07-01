@@ -1,6 +1,7 @@
 // file: internal/server/duplicates_ops.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: 8b3e1f92-d4c7-4a6e-b5f0-2a7c9d1e3f45
+// last-edited: 2026-07-01
 
 // duplicates_ops registers v2 OperationDefs for the 8 async dedup operations
 // that previously used s.queue.Enqueue.  HTTP handlers in duplicates_handlers.go
@@ -30,7 +31,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
@@ -38,6 +38,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/gin-gonic/gin"
 )
 
 // ── OperationDef registrations ────────────────────────────────────────────────
@@ -155,6 +156,9 @@ func (s *Server) RegisterBookMergeOp(reg *opsregistry.Registry) error {
 			}
 
 			s.dedupCache.InvalidateAll()
+			if s.dedupEngine != nil {
+				s.dedupEngine.CleanupCandidatesAfterMerge(p.MergeIDs)
+			}
 			op.SetStatus("success")
 			logging.Info(ctx, "book merge complete", "kept_id", p.KeepID, "merged_count", len(p.MergeIDs))
 

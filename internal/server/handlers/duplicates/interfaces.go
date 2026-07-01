@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/interfaces.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a04e0263-a6b1-42b9-9791-1b8b649004b5
-// last-edited: 2026-06-21
+// last-edited: 2026-07-01
 
 // Narrow dependency interfaces for the duplicates-domain HTTP handlers
 // (SQL-backed book/author/series duplicate detection, async merge / dismiss /
@@ -72,6 +72,15 @@ type MetadataFetchService interface {
 // returns the SQL-grouped duplicate result the handler caches + serializes.
 type AudiobookService interface {
 	GetDuplicateBooks(ctx context.Context) (*audiobookspkg.DuplicatesResult, error)
+}
+
+// DedupEngine is the narrow *dedup.Engine subset used to sweep orphaned
+// dedup candidates after a merge/combine hard- or soft-deletes a book.
+// Mirrors the identically-named interface in the dedup handler package
+// (which has its own sweep after the Dedup page's per-candidate Merge
+// button). The concrete *dedup.Engine satisfies it.
+type DedupEngine interface {
+	CleanupCandidatesAfterMerge(mergedAwayBookIDs []string) int
 }
 
 // OperationsRegistry is the narrow operations-registry subset the duplicates

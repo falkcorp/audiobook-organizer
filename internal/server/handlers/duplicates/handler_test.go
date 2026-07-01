@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/handler_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 62637af9-347f-4f38-b42b-d90ff3ab3654
-// last-edited: 2026-06-23
+// last-edited: 2026-07-01
 
 // Tests for the duplicates-domain handlers. The store / merge-service /
 // audiobook-service / metadata-fetch-service / operations-registry deps are
@@ -48,30 +48,32 @@ type recorders struct {
 }
 
 type testDeps struct {
-	store   *duplicatesmocks.MockDuplicatesStore
-	reg     *duplicatesmocks.MockOperationsRegistry
-	merge   *duplicatesmocks.MockMergeService
-	audSvc  *duplicatesmocks.MockAudiobookService
-	metaSvc *duplicatesmocks.MockMetadataFetchService
-	cache   *cache.Cache[gin.H]
-	rec     *recorders
+	store    *duplicatesmocks.MockDuplicatesStore
+	reg      *duplicatesmocks.MockOperationsRegistry
+	merge    *duplicatesmocks.MockMergeService
+	audSvc   *duplicatesmocks.MockAudiobookService
+	metaSvc  *duplicatesmocks.MockMetadataFetchService
+	dedupEng *duplicatesmocks.MockDedupEngine
+	cache    *cache.Cache[gin.H]
+	rec      *recorders
 }
 
 type cfg struct {
-	hasReg, hasMerge, hasAud, hasMeta bool
+	hasReg, hasMerge, hasAud, hasMeta, hasDedupEng bool
 }
 
-func noReg(c *cfg)   { c.hasReg = false }
-func noMerge(c *cfg) { c.hasMerge = false }
-func noAud(c *cfg)   { c.hasAud = false }
-func noMeta(c *cfg)  { c.hasMeta = false }
+func noReg(c *cfg)      { c.hasReg = false }
+func noMerge(c *cfg)    { c.hasMerge = false }
+func noAud(c *cfg)      { c.hasAud = false }
+func noMeta(c *cfg)     { c.hasMeta = false }
+func noDedupEng(c *cfg) { c.hasDedupEng = false }
 
 // newHandler builds a Handler with fresh mocks. The dedupCache is a real
 // in-memory cache.Cache[gin.H]. Any dep can be left out via the no* options to
 // exercise the in-method nil guards.
 func newHandler(t *testing.T, opts ...func(*cfg)) (*duplicates.Handler, testDeps) {
 	t.Helper()
-	cf := &cfg{hasReg: true, hasMerge: true, hasAud: true, hasMeta: true}
+	cf := &cfg{hasReg: true, hasMerge: true, hasAud: true, hasMeta: true, hasDedupEng: true}
 	for _, o := range opts {
 		o(cf)
 	}
@@ -81,6 +83,7 @@ func newHandler(t *testing.T, opts ...func(*cfg)) (*duplicates.Handler, testDeps
 	mergeMock := duplicatesmocks.NewMockMergeService(t)
 	audMock := duplicatesmocks.NewMockAudiobookService(t)
 	metaMock := duplicatesmocks.NewMockMetadataFetchService(t)
+	dedupEngMock := duplicatesmocks.NewMockDedupEngine(t)
 	dc := cache.New[gin.H]("dedup-test", time.Minute)
 	rec := &recorders{}
 
@@ -96,6 +99,10 @@ func newHandler(t *testing.T, opts ...func(*cfg)) (*duplicates.Handler, testDeps
 	if cf.hasMeta {
 		metaArg = metaMock
 	}
+	var dedupEngArg duplicates.DedupEngine
+	if cf.hasDedupEng {
+		dedupEngArg = dedupEngMock
+	}
 
 	h := duplicates.New(
 		store,
@@ -109,6 +116,7 @@ func newHandler(t *testing.T, opts ...func(*cfg)) (*duplicates.Handler, testDeps
 			}
 			return nil
 		},
+		dedupEngArg,
 		func(groupKey string) { rec.dismissedKeys = append(rec.dismissedKeys, groupKey) },
 		func() (any, error) {
 			rec.prunePreviewCalls++
@@ -119,7 +127,7 @@ func newHandler(t *testing.T, opts ...func(*cfg)) (*duplicates.Handler, testDeps
 			return rec.normalizeResult
 		},
 	)
-	return h, testDeps{store, reg, mergeMock, audMock, metaMock, dc, rec}
+	return h, testDeps{store, reg, mergeMock, audMock, metaMock, dedupEngMock, dc, rec}
 }
 
 // doReq drives a single handler with the supplied method/url/body.
@@ -203,6 +211,7 @@ func TestMergeBookDuplicatesAsVersions_OK(t *testing.T) {
 	d.merge.EXPECT().MergeBooks([]string{"a", "b"}, "").Return(&merge.Result{
 		PrimaryID: "a", VersionGroupID: "vg1", MergedCount: 2,
 	}, nil)
+	d.dedupEng.EXPECT().CleanupCandidatesAfterMerge([]string{"b"}).Return(1)
 	w := doReq(t, h.MergeBookDuplicatesAsVersions, http.MethodPost, "/audiobooks/duplicates/merge",
 		map[string]any{"book_ids": []string{"a", "b"}})
 	if w.Code != http.StatusOK {
@@ -224,6 +233,40 @@ func TestMergeBookDuplicatesAsVersions_NotFound(t *testing.T) {
 	d.merge.EXPECT().MergeBooks(mock.Anything, "").Return(nil, errString("book not found"))
 	w := doReq(t, h.MergeBookDuplicatesAsVersions, http.MethodPost, "/audiobooks/duplicates/merge",
 		map[string]any{"book_ids": []string{"a", "b"}})
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("want 404, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// --- CombineBooks ---
+
+func TestCombineBooks_OK(t *testing.T) {
+	h, d := newHandler(t)
+	d.merge.EXPECT().CombineBooks([]string{"b", "c", "a"}, "a", (*merge.CombineOverride)(nil)).Return(&merge.CombineResult{
+		PrimaryID: "a", FilesMoved: 3, BooksDeleted: 2,
+	}, nil)
+	d.dedupEng.EXPECT().CleanupCandidatesAfterMerge([]string{"b", "c"}).Return(2)
+	w := doReq(t, h.CombineBooks, http.MethodPost, "/audiobooks/combine",
+		map[string]any{"keep_id": "a", "merge_ids": []string{"b", "c"}})
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestCombineBooks_TooFew(t *testing.T) {
+	h, _ := newHandler(t)
+	w := doReq(t, h.CombineBooks, http.MethodPost, "/audiobooks/combine",
+		map[string]any{"keep_id": "a", "merge_ids": []string{}})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", w.Code)
+	}
+}
+
+func TestCombineBooks_NotFound(t *testing.T) {
+	h, d := newHandler(t)
+	d.merge.EXPECT().CombineBooks(mock.Anything, "a", mock.Anything).Return(nil, errString("book not found"))
+	w := doReq(t, h.CombineBooks, http.MethodPost, "/audiobooks/combine",
+		map[string]any{"keep_id": "a", "merge_ids": []string{"b"}})
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("want 404, got %d: %s", w.Code, w.Body.String())
 	}

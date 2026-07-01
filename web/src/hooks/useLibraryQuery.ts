@@ -1,7 +1,7 @@
 // file: web/src/hooks/useLibraryQuery.ts
-// version: 1.0.0
+// version: 1.2.0
 // guid: d4e5f6a7-b8c9-0123-def0-123456789003
-// last-edited: 2026-06-22
+// last-edited: 2026-07-01
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -68,6 +68,13 @@ export function useLibraryQuery({
   const [softDeletedCount, setSoftDeletedCount] = useState(0);
   const [softDeletedLoading, setSoftDeletedLoading] = useState(false);
 
+  // Tracks the most recently issued loadAudiobooks call. A response is only
+  // applied if it's still the latest one in flight — otherwise a slower,
+  // superseded request (e.g. a stale page/offset from just before a
+  // page-size or filter change) can resolve after the corrected request and
+  // overwrite good data with stale data.
+  const latestRequestIdRef = useRef(0);
+
   const loadSoftDeleted = useCallback(async () => {
     setSoftDeletedLoading(true);
     try {
@@ -84,6 +91,7 @@ export function useLibraryQuery({
   }, []);
 
   const loadAudiobooks = useCallback(async () => {
+    const requestId = ++latestRequestIdRef.current;
     setLoading(true);
     try {
       const offset = (page - 1) * itemsPerPage;
@@ -131,6 +139,13 @@ export function useLibraryQuery({
         api.getImportPaths(),
       ]);
 
+      // A newer loadAudiobooks call has since been issued (e.g. page size or
+      // filters changed again while this request was in flight) — its
+      // response, not this stale one, should win. Drop this result.
+      if (requestId !== latestRequestIdRef.current) {
+        return;
+      }
+
       const items = page_.items;
       const serverCount = page_.count;
 
@@ -167,6 +182,9 @@ export function useLibraryQuery({
         navigate('/login');
         return;
       }
+      if (requestId !== latestRequestIdRef.current) {
+        return;
+      }
       if (error instanceof api.ApiError && error.status >= 500) {
         toast('Server error occurred.', 'error');
       }
@@ -178,7 +196,9 @@ export function useLibraryQuery({
       setAudiobooks([]);
       setTotalPages(1);
     } finally {
-      setLoading(false);
+      if (requestId === latestRequestIdRef.current) {
+        setLoading(false);
+      }
     }
   }, [buildFieldFilters, debouncedSearch, filters, itemsPerPage, page, parsedSearch, selectedTags, sortBy, sortOrder, navigate, toast, setImportPaths, convertBook]);
 
@@ -213,6 +233,15 @@ export function useLibraryQuery({
     };
   }, [activeScanOp, loadAudiobooks]);
 
+  // clearLibraryCache drops every cached page. Call before loadAudiobooks()
+  // after any mutation that hard/soft-deletes, merges, or combines books —
+  // otherwise the next reload can serve a stale cached page (same
+  // page/itemsPerPage/search/filter/sort key) that still lists books which
+  // no longer exist, until the cache's own TTL expires on its own.
+  const clearLibraryCache = useCallback(() => {
+    useLibraryCache.getState().clear();
+  }, []);
+
   return {
     audiobooks,
     setAudiobooks,
@@ -225,5 +254,6 @@ export function useLibraryQuery({
     softDeletedLoading,
     loadAudiobooks,
     loadSoftDeleted,
+    clearLibraryCache,
   };
 }

@@ -1,7 +1,7 @@
 # file: .mockery.yaml
-# version: 1.18.0
+# version: 1.19.0
 # guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
-# last-edited: 2026-06-14
+# last-edited: 2026-07-01
 
 # Mockery configuration (v3)
 # NOTE: with-expecter is enabled by default in v3
@@ -226,6 +226,7 @@ packages:
       MetadataFetchService:
       AudiobookService:
       OperationsRegistry:
+      DedupEngine:
   github.com/falkcorp/audiobook-organizer/internal/server/handlers/audiobooks:
     config:
       dir: internal/server/handlers/audiobooks/mocks
