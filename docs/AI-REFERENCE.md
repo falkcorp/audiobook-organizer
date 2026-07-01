@@ -3,7 +3,7 @@
 > **Purpose**: Complete project reference for AI agents. Read this before making any changes.
 > Keep this file updated with every architectural change.
 
-**Last updated**: 2026-06-13 | **Server version**: 1.117.0 | **Total API routes**: 189
+**Last updated**: 2026-07-01 | **Server version**: 1.117.0 | **Total API routes**: 189
 
 ## Quick Facts
 
@@ -11,7 +11,7 @@
 |--------|--------|
 | **Language** | Go 1.24 backend, React 18 + TypeScript frontend |
 | **Framework** | Gin (HTTP), Material UI (frontend) |
-| **Database** | PebbleDB (primary KV store), SQLite (opt-in alternative) |
+| **Database** | PebbleDB (sole production KV store; SQLite backend was removed — `InitializeStore` errors on `dbType: sqlite`) |
 | **ID format** | ULID strings for Books/Operations/Users; auto-increment int for Authors/Series/Narrators |
 | **Frontend embed** | `//go:embed web/dist` with build tag `embed_frontend` |
 | **Build** | `make build` (full), `make build-api` (backend only), `make deploy` (cross-compile + scp to Linux) |
@@ -38,8 +38,9 @@ The Go binary embeds the compiled React app. A single process serves both the AP
 ## Go Package Map
 
 ### `internal/server` — HTTP layer (THE largest package)
-- **server.go** (~8000 lines) — All 189 routes, main handlers, middleware
-- **itunes.go** — iTunes import/validate/sync/write-back handlers + `linkITunesMetadata()`, `linkAsVersion()`, `buildBookFromAlbumGroup()`
+- **server.go** (~1025 lines — was ~8000; domain logic moved to `internal/server/handlers/*`) — route registration, `Server` struct, middleware wiring
+- **handlers/** — extracted per-domain handlers (audiobooks, metadata, operations, dedup, system, itunes, …), each taking narrow consumer-side interfaces
+- **itunes_ops.go / itunes_path_ops.go** — thin op-registration wrappers on `*Server` that delegate to `s.itunesSvc`; the iTunes integration itself now lives in `internal/itunes/service/` (see below), NOT in `internal/server`
 - **reconcile.go** — File reconciliation, orphan VG assignment, series prune
 - **auth.go** — Login, session management, RBAC middleware
 - **config_update_service.go** — Hot-reload config via `PUT /api/v1/config`
@@ -47,12 +48,11 @@ The Go binary embeds the compiled React app. A single process serves both the AP
 - **scan_service.go** — Scan orchestration
 
 ### `internal/database` — Data layer
-- **store.go** — `Store` interface (255 methods), ALL entity struct definitions (Book, Author, Series, Work, Narrator, BookSegment, Operation, etc.)
+- **store.go** — `Store` interface (composite of ~36 role interfaces: `BookStore`, `AuthorStore`, `MetadataCacheStore`, …; PebbleStore is the ONLY implementation), ALL entity struct definitions (Book, Author, Series, Work, Narrator, BookSegment, Operation, etc.)
 - **pebble_store.go** — Primary implementation. Key schema: `book:<ulid>`, `book:path:<filepath>`, `book:hash:<hash>`, `author:<id>`, `series:<id>`, etc.
 - **embedding_store.go** — `EmbeddingStore` wrapping a separate PebbleDB for embeddings + dedup candidates + labeled dataset. Key-space: `emb:v:*`, `emb:c:*`, `dedup:r:*`, `dedup:p:*`, `dedup:seq`, `dedup:label:*`.
 - **dedup_label.go** — Labeled dedup training dataset keyspace (`dedup:label:<candidateID,16hex>`). Types: `LabeledExample` (candidate pair + feature snapshot + label fields), `BookFeatures` (per-book evidence: title, author, path, durations, file count, has_cover, files_exist, recording_ids, itunes_pid_present, whole_book_sig_present), `LabeledExampleFilter`. Methods on `*EmbeddingStore`: `UpsertLabeledExample`, `GetLabeledExample`, `ListLabeledExamples`, `CountLabeledExamples`.
 - **ai_scan_store.go** — Separate PebbleDB (`ai_scans.db`) for AI dedup pipeline
-- **sqlite_store.go** — Alternative SQLite implementation
 - **mock_store.go** — Test mock (generated with mockery patterns)
 - **settings.go** — Encrypted settings (AES-256-GCM)
 
@@ -70,11 +70,16 @@ The Go binary embeds the compiled React app. A single process serves both the AP
 - **ffmpeg.go** — Write metadata tags back to audio files
 - **cover.go** — Extract/download cover art
 
-### `internal/itunes` — iTunes library handling
+### `internal/itunes` — iTunes library handling (low-level ITL layer)
 - **parser.go** — Parse iTunes Library.xml (plist format)
 - **import.go** — `ValidateImport()`, `ConvertTrack()`, `ExtractPlaylistTags()`, path mapping
 - **writeback.go** — Write changes back to iTunes .itl binary files
 - Types: `Track`, `Playlist`, `Library`, `ImportOptions`, `PathMapping`
+
+### `internal/itunes/service` — iTunes integration service (extracted from `internal/server`)
+- The import/sync/write-back/grouping orchestration formerly coupled to `*Server` now lives here (~5,500 LOC, ~25 files) behind an explicit `Deps` struct (`service.go`) and its own narrow `Store` interface — no `*Server` captures. `*Server` keeps only thin op-registration wrappers that delegate to `s.itunesSvc`.
+- Key files: `service.go` (`Deps`), `importer.go` (`groupTracksByAlbum`, `albumGroupKey`, `buildBookFromAlbumGroup`), `enqueuer.go`, `fs_regroup.go`, `config.go`
+- **Note:** TODO 4.13 ("extract iTunes into `internal/itunes`") is effectively DONE at the structure level; the low-level ITL binary layer above was intentionally left untouched.
 
 ### `internal/ai` — AI integration
 - **openai_parser.go** — `OpenAIParser` with methods: `ParseFilename()`, `ParseAudiobook()`, `ParseCoverArt()`, `ReviewAuthorDuplicates()`, `DiscoverAuthorDuplicates()`, `CreateBatchAuthorDedup()`, `CheckBatchStatus()`, `DownloadBatchResults()`

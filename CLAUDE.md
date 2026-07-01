@@ -81,7 +81,7 @@ make run-api         # API-only build then serve
 make test            # Go backend tests
 make test-all        # Backend + frontend tests
 make test-e2e        # Playwright E2E tests
-make ci              # All tests + 80% coverage check
+make ci              # Fast CI: mocks/staticcheck/short tests + 30% coverage gate (coverage-check-short)
 make web-dev         # Vite dev server (frontend only)
 make help            # All targets
 ```
