@@ -1,7 +1,7 @@
 # file: scripts/whisper_server.py
-# version: 2.5.0
+# version: 2.6.0
 # guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-# last-edited: 2026-06-30
+# last-edited: 2026-07-01
 #
 # /// script
 # requires-python = ">=3.11"
@@ -74,7 +74,7 @@ model = faster_whisper.WhisperModel(
 try:
     from faster_whisper import BatchedInferencePipeline
     batched_model = BatchedInferencePipeline(model=model)
-    log.info("BatchedInferencePipeline available — batch endpoint uses batch_size=16")
+    log.info(f"BatchedInferencePipeline available — batch_size={int(os.environ.get('WHISPER_BATCH_SIZE', 8))}")
 except (ImportError, Exception) as e:
     batched_model = None
     log.warning(f"BatchedInferencePipeline unavailable ({e}), falling back to standard model")
@@ -100,7 +100,7 @@ def _do_transcribe(data: bytes, filename: str) -> dict:
                 io.BytesIO(data),
                 language="en",
                 task="transcribe",
-                batch_size=16,
+                batch_size=int(os.environ.get("WHISPER_BATCH_SIZE", 8)),
                 vad_filter=True,
                 vad_parameters=VAD_PARAMS,
             )
