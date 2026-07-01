@@ -51,7 +51,7 @@ type MockRealtimeHub_SendOperationLog_Call struct {
 //   - level string
 //   - message string
 //   - details *string
-func (_e *MockRealtimeHub_Expecter) SendOperationLog(operationID interface{}, level interface{}, message interface{}, details interface{}) *MockRealtimeHub_SendOperationLog_Call {
+func (_e *MockRealtimeHub_Expecter) SendOperationLog(operationID any, level any, message any, details any) *MockRealtimeHub_SendOperationLog_Call {
 	return &MockRealtimeHub_SendOperationLog_Call{Call: _e.mock.On("SendOperationLog", operationID, level, message, details)}
 }
 
@@ -109,7 +109,7 @@ type MockRealtimeHub_SendOperationProgress_Call struct {
 //   - current int
 //   - total int
 //   - message string
-func (_e *MockRealtimeHub_Expecter) SendOperationProgress(operationID interface{}, current interface{}, total interface{}, message interface{}) *MockRealtimeHub_SendOperationProgress_Call {
+func (_e *MockRealtimeHub_Expecter) SendOperationProgress(operationID any, current any, total any, message any) *MockRealtimeHub_SendOperationProgress_Call {
 	return &MockRealtimeHub_SendOperationProgress_Call{Call: _e.mock.On("SendOperationProgress", operationID, current, total, message)}
 }
 

@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.importFile.test.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6f4a7b0d-9c9f-4f0b-8d85-1dd9e1ffb913
-// last-edited: 2026-06-28
+// last-edited: 2026-07-01
 
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
@@ -23,6 +23,7 @@ vi.mock('../services/api', () => {
   return {
     ApiError,
     getOperationLogsTail: vi.fn().mockResolvedValue([]),
+    getOperationTimeline: vi.fn().mockResolvedValue([]),
     getBooks: vi.fn().mockResolvedValue({
       items: [
         {
@@ -122,7 +123,9 @@ describe('Library import dialog', () => {
   });
 
   it('starts a manual library import operation and polls it to completion', async () => {
-    vi.useFakeTimers();
+    // shouldAdvanceTime keeps the testing-library polling timers running
+    // while still letting us fast-forward the app's 1500ms reload timers.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     render(
       <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Library />

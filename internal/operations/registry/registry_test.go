@@ -1,7 +1,7 @@
 // file: internal/operations/registry/registry_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: d0e1f2a3-b4c5-6d7e-8f9a-0b1c2d3e4f5a
-// last-edited: 2026-06-13
+// last-edited: 2026-07-01
 
 package registry_test
 
@@ -507,17 +507,19 @@ func TestDepsScheduler_WakeOnCompletion(t *testing.T) {
 		t.Fatalf("OnOpCompleted: %v", err)
 	}
 
-	// After wakeup, the dependent should be promoted to "queued".
+	// After wakeup, the dependent should be promoted to "queued" or "completed"
+	// (4 workers may pick it up and finish before our poll loop observes "queued").
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if store.statusOf(depOpID) == "queued" {
+		s := store.statusOf(depOpID)
+		if s == "queued" || s == "completed" {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if store.statusOf(depOpID) != "queued" {
-		t.Errorf("expected dep to be promoted to queued after prereq completion, got %q",
-			store.statusOf(depOpID))
+	s := store.statusOf(depOpID)
+	if s != "queued" && s != "completed" {
+		t.Errorf("expected dep to be promoted to queued or completed after prereq completion, got %q", s)
 	}
 }
 

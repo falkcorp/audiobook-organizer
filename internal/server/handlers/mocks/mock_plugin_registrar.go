@@ -95,7 +95,7 @@ type MockPluginRegistrar_Disable_Call struct {
 
 // Disable is a helper method to define mock.On call
 //   - id string
-func (_e *MockPluginRegistrar_Expecter) Disable(id interface{}) *MockPluginRegistrar_Disable_Call {
+func (_e *MockPluginRegistrar_Expecter) Disable(id any) *MockPluginRegistrar_Disable_Call {
 	return &MockPluginRegistrar_Disable_Call{Call: _e.mock.On("Disable", id)}
 }
 
@@ -135,7 +135,7 @@ type MockPluginRegistrar_Enable_Call struct {
 
 // Enable is a helper method to define mock.On call
 //   - id string
-func (_e *MockPluginRegistrar_Expecter) Enable(id interface{}) *MockPluginRegistrar_Enable_Call {
+func (_e *MockPluginRegistrar_Expecter) Enable(id any) *MockPluginRegistrar_Enable_Call {
 	return &MockPluginRegistrar_Enable_Call{Call: _e.mock.On("Enable", id)}
 }
 
@@ -197,7 +197,7 @@ type MockPluginRegistrar_Get_Call struct {
 
 // Get is a helper method to define mock.On call
 //   - id string
-func (_e *MockPluginRegistrar_Expecter) Get(id interface{}) *MockPluginRegistrar_Get_Call {
+func (_e *MockPluginRegistrar_Expecter) Get(id any) *MockPluginRegistrar_Get_Call {
 	return &MockPluginRegistrar_Get_Call{Call: _e.mock.On("Get", id)}
 }
 
@@ -248,7 +248,7 @@ type MockPluginRegistrar_IsEnabled_Call struct {
 
 // IsEnabled is a helper method to define mock.On call
 //   - id string
-func (_e *MockPluginRegistrar_Expecter) IsEnabled(id interface{}) *MockPluginRegistrar_IsEnabled_Call {
+func (_e *MockPluginRegistrar_Expecter) IsEnabled(id any) *MockPluginRegistrar_IsEnabled_Call {
 	return &MockPluginRegistrar_IsEnabled_Call{Call: _e.mock.On("IsEnabled", id)}
 }
 

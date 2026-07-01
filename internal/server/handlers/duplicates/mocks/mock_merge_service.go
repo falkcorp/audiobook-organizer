@@ -91,7 +91,11 @@ func (_c *MockMergeService_CombineBooks_Call) Run(run func(bookIDs []string, pri
 		if args[2] != nil {
 			arg2 = args[2].(*merge.CombineOverride)
 		}
-		run(arg0, arg1, arg2)
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
 	})
 	return _c
 }
