@@ -61,7 +61,7 @@ type MockSystemStore_AddBlockedHash_Call struct {
 // AddBlockedHash is a helper method to define mock.On call
 //   - hash string
 //   - reason string
-func (_e *MockSystemStore_Expecter) AddBlockedHash(hash interface{}, reason interface{}) *MockSystemStore_AddBlockedHash_Call {
+func (_e *MockSystemStore_Expecter) AddBlockedHash(hash any, reason any) *MockSystemStore_AddBlockedHash_Call {
 	return &MockSystemStore_AddBlockedHash_Call{Call: _e.mock.On("AddBlockedHash", hash, reason)}
 }
 
@@ -172,29 +172,29 @@ func (_mock *MockSystemStore) CountPrimaryBooks() (int, error) {
 	return r0, r1
 }
 
-// MockSystemStore_CountBooks_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CountPrimaryBooks'
-type MockSystemStore_CountBooks_Call struct {
+// MockSystemStore_CountPrimaryBooks_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CountPrimaryBooks'
+type MockSystemStore_CountPrimaryBooks_Call struct {
 	*mock.Call
 }
 
 // CountPrimaryBooks is a helper method to define mock.On call
-func (_e *MockSystemStore_Expecter) CountPrimaryBooks() *MockSystemStore_CountBooks_Call {
-	return &MockSystemStore_CountBooks_Call{Call: _e.mock.On("CountPrimaryBooks")}
+func (_e *MockSystemStore_Expecter) CountPrimaryBooks() *MockSystemStore_CountPrimaryBooks_Call {
+	return &MockSystemStore_CountPrimaryBooks_Call{Call: _e.mock.On("CountPrimaryBooks")}
 }
 
-func (_c *MockSystemStore_CountBooks_Call) Run(run func()) *MockSystemStore_CountBooks_Call {
+func (_c *MockSystemStore_CountPrimaryBooks_Call) Run(run func()) *MockSystemStore_CountPrimaryBooks_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run()
 	})
 	return _c
 }
 
-func (_c *MockSystemStore_CountBooks_Call) Return(n int, err error) *MockSystemStore_CountBooks_Call {
+func (_c *MockSystemStore_CountPrimaryBooks_Call) Return(n int, err error) *MockSystemStore_CountPrimaryBooks_Call {
 	_c.Call.Return(n, err)
 	return _c
 }
 
-func (_c *MockSystemStore_CountBooks_Call) RunAndReturn(run func() (int, error)) *MockSystemStore_CountBooks_Call {
+func (_c *MockSystemStore_CountPrimaryBooks_Call) RunAndReturn(run func() (int, error)) *MockSystemStore_CountPrimaryBooks_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -276,7 +276,7 @@ type MockSystemStore_DeleteSetting_Call struct {
 
 // DeleteSetting is a helper method to define mock.On call
 //   - key string
-func (_e *MockSystemStore_Expecter) DeleteSetting(key interface{}) *MockSystemStore_DeleteSetting_Call {
+func (_e *MockSystemStore_Expecter) DeleteSetting(key any) *MockSystemStore_DeleteSetting_Call {
 	return &MockSystemStore_DeleteSetting_Call{Call: _e.mock.On("DeleteSetting", key)}
 }
 
@@ -449,7 +449,7 @@ type MockSystemStore_GetAllBooks_Call struct {
 // GetAllBooks is a helper method to define mock.On call
 //   - limit int
 //   - offset int
-func (_e *MockSystemStore_Expecter) GetAllBooks(limit interface{}, offset interface{}) *MockSystemStore_GetAllBooks_Call {
+func (_e *MockSystemStore_Expecter) GetAllBooks(limit any, offset any) *MockSystemStore_GetAllBooks_Call {
 	return &MockSystemStore_GetAllBooks_Call{Call: _e.mock.On("GetAllBooks", limit, offset)}
 }
 
@@ -477,50 +477,6 @@ func (_c *MockSystemStore_GetAllBooks_Call) Return(books []database.Book, err er
 }
 
 func (_c *MockSystemStore_GetAllBooks_Call) RunAndReturn(run func(limit int, offset int) ([]database.Book, error)) *MockSystemStore_GetAllBooks_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// GetAllBooksFrom provides a mock function for the type MockSystemStore
-func (_mock *MockSystemStore) GetAllBooksFrom(afterID string, limit int) ([]database.Book, error) {
-	ret := _mock.Called(afterID, limit)
-	if len(ret) == 0 {
-		panic("no return value specified for GetAllBooksFrom")
-	}
-	var r0 []database.Book
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string, int) ([]database.Book, error)); ok {
-		return returnFunc(afterID, limit)
-	}
-	if returnFunc, ok := ret.Get(0).(func(string, int) []database.Book); ok {
-		r0 = returnFunc(afterID, limit)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.Book)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func(string, int) error); ok {
-		r1 = returnFunc(afterID, limit)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-type MockSystemStore_GetAllBooksFrom_Call struct{ *mock.Call }
-
-func (_e *MockSystemStore_Expecter) GetAllBooksFrom(afterID interface{}, limit interface{}) *MockSystemStore_GetAllBooksFrom_Call {
-	return &MockSystemStore_GetAllBooksFrom_Call{Call: _e.mock.On("GetAllBooksFrom", afterID, limit)}
-}
-func (_c *MockSystemStore_GetAllBooksFrom_Call) Run(run func(string, int)) *MockSystemStore_GetAllBooksFrom_Call {
-	_c.Call.Run(func(args mock.Arguments) { run(args[0].(string), args[1].(int)) })
-	return _c
-}
-func (_c *MockSystemStore_GetAllBooksFrom_Call) Return(books []database.Book, err error) *MockSystemStore_GetAllBooksFrom_Call {
-	_c.Call.Return(books, err)
-	return _c
-}
-func (_c *MockSystemStore_GetAllBooksFrom_Call) RunAndReturn(run func(string, int) ([]database.Book, error)) *MockSystemStore_GetAllBooksFrom_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -615,7 +571,7 @@ type MockSystemStore_GetBooksByAuthorIDWithRole_Call struct {
 
 // GetBooksByAuthorIDWithRole is a helper method to define mock.On call
 //   - authorID int
-func (_e *MockSystemStore_Expecter) GetBooksByAuthorIDWithRole(authorID interface{}) *MockSystemStore_GetBooksByAuthorIDWithRole_Call {
+func (_e *MockSystemStore_Expecter) GetBooksByAuthorIDWithRole(authorID any) *MockSystemStore_GetBooksByAuthorIDWithRole_Call {
 	return &MockSystemStore_GetBooksByAuthorIDWithRole_Call{Call: _e.mock.On("GetBooksByAuthorIDWithRole", authorID)}
 }
 
@@ -732,7 +688,7 @@ type MockSystemStore_GetRecentOperations_Call struct {
 
 // GetRecentOperations is a helper method to define mock.On call
 //   - limit int
-func (_e *MockSystemStore_Expecter) GetRecentOperations(limit interface{}) *MockSystemStore_GetRecentOperations_Call {
+func (_e *MockSystemStore_Expecter) GetRecentOperations(limit any) *MockSystemStore_GetRecentOperations_Call {
 	return &MockSystemStore_GetRecentOperations_Call{Call: _e.mock.On("GetRecentOperations", limit)}
 }
 
@@ -794,7 +750,7 @@ type MockSystemStore_GetSetting_Call struct {
 
 // GetSetting is a helper method to define mock.On call
 //   - key string
-func (_e *MockSystemStore_Expecter) GetSetting(key interface{}) *MockSystemStore_GetSetting_Call {
+func (_e *MockSystemStore_Expecter) GetSetting(key any) *MockSystemStore_GetSetting_Call {
 	return &MockSystemStore_GetSetting_Call{Call: _e.mock.On("GetSetting", key)}
 }
 
@@ -857,7 +813,7 @@ type MockSystemStore_GetSystemActivityLogs_Call struct {
 // GetSystemActivityLogs is a helper method to define mock.On call
 //   - source string
 //   - limit int
-func (_e *MockSystemStore_Expecter) GetSystemActivityLogs(source interface{}, limit interface{}) *MockSystemStore_GetSystemActivityLogs_Call {
+func (_e *MockSystemStore_Expecter) GetSystemActivityLogs(source any, limit any) *MockSystemStore_GetSystemActivityLogs_Call {
 	return &MockSystemStore_GetSystemActivityLogs_Call{Call: _e.mock.On("GetSystemActivityLogs", source, limit)}
 }
 
@@ -924,7 +880,7 @@ type MockSystemStore_GetUserPreference_Call struct {
 
 // GetUserPreference is a helper method to define mock.On call
 //   - key string
-func (_e *MockSystemStore_Expecter) GetUserPreference(key interface{}) *MockSystemStore_GetUserPreference_Call {
+func (_e *MockSystemStore_Expecter) GetUserPreference(key any) *MockSystemStore_GetUserPreference_Call {
 	return &MockSystemStore_GetUserPreference_Call{Call: _e.mock.On("GetUserPreference", key)}
 }
 
@@ -1008,7 +964,7 @@ type MockSystemStore_RemoveBlockedHash_Call struct {
 
 // RemoveBlockedHash is a helper method to define mock.On call
 //   - hash string
-func (_e *MockSystemStore_Expecter) RemoveBlockedHash(hash interface{}) *MockSystemStore_RemoveBlockedHash_Call {
+func (_e *MockSystemStore_Expecter) RemoveBlockedHash(hash any) *MockSystemStore_RemoveBlockedHash_Call {
 	return &MockSystemStore_RemoveBlockedHash_Call{Call: _e.mock.On("RemoveBlockedHash", hash)}
 }
 
@@ -1106,7 +1062,7 @@ type MockSystemStore_SetSetting_Call struct {
 //   - value string
 //   - typ string
 //   - isSecret bool
-func (_e *MockSystemStore_Expecter) SetSetting(key interface{}, value interface{}, typ interface{}, isSecret interface{}) *MockSystemStore_SetSetting_Call {
+func (_e *MockSystemStore_Expecter) SetSetting(key any, value any, typ any, isSecret any) *MockSystemStore_SetSetting_Call {
 	return &MockSystemStore_SetSetting_Call{Call: _e.mock.On("SetSetting", key, value, typ, isSecret)}
 }
 
@@ -1173,7 +1129,7 @@ type MockSystemStore_SetUserPreference_Call struct {
 // SetUserPreference is a helper method to define mock.On call
 //   - key string
 //   - value string
-func (_e *MockSystemStore_Expecter) SetUserPreference(key interface{}, value interface{}) *MockSystemStore_SetUserPreference_Call {
+func (_e *MockSystemStore_Expecter) SetUserPreference(key any, value any) *MockSystemStore_SetUserPreference_Call {
 	return &MockSystemStore_SetUserPreference_Call{Call: _e.mock.On("SetUserPreference", key, value)}
 }
 

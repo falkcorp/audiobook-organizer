@@ -75,7 +75,7 @@ type MockCacheMetricsStore_GetCacheStatsHistory_Call struct {
 //   - cacheName string
 //   - since time.Time
 //   - limit int
-func (_e *MockCacheMetricsStore_Expecter) GetCacheStatsHistory(cacheName interface{}, since interface{}, limit interface{}) *MockCacheMetricsStore_GetCacheStatsHistory_Call {
+func (_e *MockCacheMetricsStore_Expecter) GetCacheStatsHistory(cacheName any, since any, limit any) *MockCacheMetricsStore_GetCacheStatsHistory_Call {
 	return &MockCacheMetricsStore_GetCacheStatsHistory_Call{Call: _e.mock.On("GetCacheStatsHistory", cacheName, since, limit)}
 }
 

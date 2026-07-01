@@ -62,7 +62,7 @@ type MockOperationStore_AddOperationLog_Call struct {
 //   - level string
 //   - message string
 //   - details *string
-func (_e *MockOperationStore_Expecter) AddOperationLog(operationID interface{}, level interface{}, message interface{}, details interface{}) *MockOperationStore_AddOperationLog_Call {
+func (_e *MockOperationStore_Expecter) AddOperationLog(operationID any, level any, message any, details any) *MockOperationStore_AddOperationLog_Call {
 	return &MockOperationStore_AddOperationLog_Call{Call: _e.mock.On("AddOperationLog", operationID, level, message, details)}
 }
 
@@ -128,7 +128,7 @@ type MockOperationStore_CreateOperationChange_Call struct {
 
 // CreateOperationChange is a helper method to define mock.On call
 //   - change interface{}
-func (_e *MockOperationStore_Expecter) CreateOperationChange(change interface{}) *MockOperationStore_CreateOperationChange_Call {
+func (_e *MockOperationStore_Expecter) CreateOperationChange(change any) *MockOperationStore_CreateOperationChange_Call {
 	return &MockOperationStore_CreateOperationChange_Call{Call: _e.mock.On("CreateOperationChange", change)}
 }
 
@@ -182,7 +182,7 @@ type MockOperationStore_UpdateOperationProgress_Call struct {
 //   - current int
 //   - total int
 //   - message string
-func (_e *MockOperationStore_Expecter) UpdateOperationProgress(id interface{}, current interface{}, total interface{}, message interface{}) *MockOperationStore_UpdateOperationProgress_Call {
+func (_e *MockOperationStore_Expecter) UpdateOperationProgress(id any, current any, total any, message any) *MockOperationStore_UpdateOperationProgress_Call {
 	return &MockOperationStore_UpdateOperationProgress_Call{Call: _e.mock.On("UpdateOperationProgress", id, current, total, message)}
 }
 

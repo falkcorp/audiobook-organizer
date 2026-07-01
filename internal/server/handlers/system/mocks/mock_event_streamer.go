@@ -49,7 +49,7 @@ type MockEventStreamer_HandleSSE_Call struct {
 
 // HandleSSE is a helper method to define mock.On call
 //   - c *gin.Context
-func (_e *MockEventStreamer_Expecter) HandleSSE(c interface{}) *MockEventStreamer_HandleSSE_Call {
+func (_e *MockEventStreamer_Expecter) HandleSSE(c any) *MockEventStreamer_HandleSSE_Call {
 	return &MockEventStreamer_HandleSSE_Call{Call: _e.mock.On("HandleSSE", c)}
 }
 

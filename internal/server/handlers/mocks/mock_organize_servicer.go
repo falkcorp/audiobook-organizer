@@ -78,7 +78,7 @@ type MockOrganizeServicer_CreateOrganizedVersion_Call struct {
 //   - isDir bool
 //   - operationID string
 //   - log logger.Logger
-func (_e *MockOrganizeServicer_Expecter) CreateOrganizedVersion(org interface{}, book interface{}, newPath interface{}, isDir interface{}, operationID interface{}, log interface{}) *MockOrganizeServicer_CreateOrganizedVersion_Call {
+func (_e *MockOrganizeServicer_Expecter) CreateOrganizedVersion(org any, book any, newPath any, isDir any, operationID any, log any) *MockOrganizeServicer_CreateOrganizedVersion_Call {
 	return &MockOrganizeServicer_CreateOrganizedVersion_Call{Call: _e.mock.On("CreateOrganizedVersion", org, book, newPath, isDir, operationID, log)}
 }
 
@@ -165,7 +165,7 @@ type MockOrganizeServicer_OrganizeDirectoryBook_Call struct {
 //   - org *organizer.Organizer
 //   - book *database.Book
 //   - log logger.Logger
-func (_e *MockOrganizeServicer_Expecter) OrganizeDirectoryBook(org interface{}, book interface{}, log interface{}) *MockOrganizeServicer_OrganizeDirectoryBook_Call {
+func (_e *MockOrganizeServicer_Expecter) OrganizeDirectoryBook(org any, book any, log any) *MockOrganizeServicer_OrganizeDirectoryBook_Call {
 	return &MockOrganizeServicer_OrganizeDirectoryBook_Call{Call: _e.mock.On("OrganizeDirectoryBook", org, book, log)}
 }
 
@@ -236,7 +236,7 @@ type MockOrganizeServicer_ReOrganizeInPlace_Call struct {
 // ReOrganizeInPlace is a helper method to define mock.On call
 //   - book *database.Book
 //   - log logger.Logger
-func (_e *MockOrganizeServicer_Expecter) ReOrganizeInPlace(book interface{}, log interface{}) *MockOrganizeServicer_ReOrganizeInPlace_Call {
+func (_e *MockOrganizeServicer_Expecter) ReOrganizeInPlace(book any, log any) *MockOrganizeServicer_ReOrganizeInPlace_Call {
 	return &MockOrganizeServicer_ReOrganizeInPlace_Call{Call: _e.mock.On("ReOrganizeInPlace", book, log)}
 }
 

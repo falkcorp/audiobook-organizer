@@ -119,7 +119,7 @@ type MockMetadataCandidateScorer_Score_Call struct {
 //   - ctx context.Context
 //   - q ai.Query
 //   - cands []ai.Candidate
-func (_e *MockMetadataCandidateScorer_Expecter) Score(ctx interface{}, q interface{}, cands interface{}) *MockMetadataCandidateScorer_Score_Call {
+func (_e *MockMetadataCandidateScorer_Expecter) Score(ctx any, q any, cands any) *MockMetadataCandidateScorer_Score_Call {
 	return &MockMetadataCandidateScorer_Score_Call{Call: _e.mock.On("Score", ctx, q, cands)}
 }
 

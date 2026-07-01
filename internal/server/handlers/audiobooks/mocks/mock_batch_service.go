@@ -62,7 +62,7 @@ type MockBatchService_ExecuteOperations_Call struct {
 
 // ExecuteOperations is a helper method to define mock.On call
 //   - req *batch.BatchOperationsRequest
-func (_e *MockBatchService_Expecter) ExecuteOperations(req interface{}) *MockBatchService_ExecuteOperations_Call {
+func (_e *MockBatchService_Expecter) ExecuteOperations(req any) *MockBatchService_ExecuteOperations_Call {
 	return &MockBatchService_ExecuteOperations_Call{Call: _e.mock.On("ExecuteOperations", req)}
 }
 
@@ -115,7 +115,7 @@ type MockBatchService_UpdateAudiobooks_Call struct {
 
 // UpdateAudiobooks is a helper method to define mock.On call
 //   - req *batch.BatchUpdateRequest
-func (_e *MockBatchService_Expecter) UpdateAudiobooks(req interface{}) *MockBatchService_UpdateAudiobooks_Call {
+func (_e *MockBatchService_Expecter) UpdateAudiobooks(req any) *MockBatchService_UpdateAudiobooks_Call {
 	return &MockBatchService_UpdateAudiobooks_Call{Call: _e.mock.On("UpdateAudiobooks", req)}
 }
 
