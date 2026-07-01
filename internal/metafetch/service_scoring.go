@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_scoring.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: d2226468-bed1-4989-93f3-b0bc3a344424
-// last-edited: 2026-06-28
+// last-edited: 2026-07-01
 
 package metafetch
 
@@ -286,21 +286,27 @@ func containsCI(a, b string) bool {
 // intentionally NOT clamped — bonuses add on top (see scoring memo). An exact
 // (normalized) transcribed-title match is the strongest signal because the title
 // is read aloud verbatim in the intro.
-func transcriptionBoost(score float64, r metadata.BookMetadata, th transcriptionHints) float64 {
+// Returns (adjusted score, true) when any boost was applied; (score, false) otherwise.
+func transcriptionBoost(score float64, r metadata.BookMetadata, th transcriptionHints) (float64, bool) {
+	boosted := false
 	if th.title != "" && r.Title != "" {
 		if util.NormalizeTitle(r.Title) == util.NormalizeTitle(th.title) {
 			score *= 2.0
+			boosted = true
 		} else if containsCI(r.Title, th.title) {
 			score *= 1.4
+			boosted = true
 		}
 	}
 	if th.author != "" && containsCI(r.Author, th.author) {
 		score *= 1.6
+		boosted = true
 	}
 	if th.narrator != "" && containsCI(r.Narrator, th.narrator) {
 		score *= 1.4
+		boosted = true
 	}
-	return score
+	return score, boosted
 }
 
 func pickBestMatchFromScored(
@@ -379,7 +385,7 @@ func pickBestMatchFromScored(
 		// audio-derived title/author/narrator, that is strong evidence of a
 		// correct match. No-op when no transcription hints were supplied.
 		if !th.empty() {
-			score = transcriptionBoost(score, r, th)
+			score, _ = transcriptionBoost(score, r, th)
 		}
 
 		// Duration-based scoring: compare candidate runtime against the book's

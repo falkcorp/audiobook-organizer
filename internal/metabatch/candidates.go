@@ -1,7 +1,7 @@
 // file: internal/metabatch/candidates.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-05-11
+// last-edited: 2026-07-01
 //
 // Package metabatch contains pure service types and logic for the
 // metadata candidate batch fetch / apply pipeline. HTTP handlers live
@@ -45,6 +45,11 @@ type CandidateBookInfo struct {
 	// Empty when the book has no language set, in which case the
 	// filter is a no-op for that row.
 	Language string `json:"language,omitempty"`
+	// TranscribedTitle is the Whisper-parsed title from the book's audio intro.
+	// Non-empty means transcription data was available during candidate scoring.
+	// Lets the review UI offer a "has transcription" filter to focus on books
+	// where audio-derived metadata could confirm or reject the match.
+	TranscribedTitle string `json:"transcribed_title,omitempty"`
 }
 
 // CandidateResult holds the metadata candidate search result for a single book.
@@ -133,6 +138,9 @@ func BuildCandidateBookInfo(store BookFilesGetter, book *database.Book) Candidat
 	}
 	if book.Language != nil {
 		info.Language = *book.Language
+	}
+	if book.TranscribedTitle != nil && *book.TranscribedTitle != "" {
+		info.TranscribedTitle = *book.TranscribedTitle
 	}
 	return info
 }

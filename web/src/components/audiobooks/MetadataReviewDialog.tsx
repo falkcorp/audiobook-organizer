@@ -1,6 +1,7 @@
 // file: web/src/components/audiobooks/MetadataReviewDialog.tsx
-// version: 1.12.0
+// version: 1.13.0
 // guid: e7f8a9b0-c1d2-3e4f-5a6b-7c8d9e0f1a2b
+// last-edited: 2026-07-01
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -171,6 +172,8 @@ export function MetadataReviewDialog({
   const [hideSkipped, setHideSkipped] = useState(false);
   const [matchLanguage, setMatchLanguage] = useState<boolean>(loadLanguageFilter);
   const [titleFilter, setTitleFilter] = useState('');
+  const [onlyWithTranscription, setOnlyWithTranscription] = useState(false);
+  const [onlyTranscriptionMatched, setOnlyTranscriptionMatched] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   // Books in this set have been manually split from their duplicate group and
   // render as standalone rows. Reset when the page changes.
@@ -289,12 +292,16 @@ export function MetadataReviewDialog({
       const candLang = normalizeLanguage(r.candidate.language);
       if (!bookLang || !candLang) return true;
       return bookLang === candLang;
-    });
+    })
+    // Transcription filters: optional narrow-down to books where Whisper
+    // intro data exists, and/or where it was the deciding scoring factor.
+    .filter((r) => !onlyWithTranscription || !!r.book.transcribed_title)
+    .filter((r) => !onlyTranscriptionMatched || !!r.candidate?.transcription_boosted);
 
   // Reset to page 1 when filters change so the user sees the first filtered result.
   useEffect(() => {
     setServerPage(1);
-  }, [sourceFilter, confidenceThreshold, hideApplied, hideRejected, hideSkipped, hideNoMatch, matchLanguage, titleFilter]);
+  }, [sourceFilter, confidenceThreshold, hideApplied, hideRejected, hideSkipped, hideNoMatch, matchLanguage, titleFilter, onlyWithTranscription, onlyTranscriptionMatched]);
 
   // Go back to page 1 on manual refresh.
   useEffect(() => {
@@ -1388,6 +1395,30 @@ export function MetadataReviewDialog({
                       />
                     }
                     label={<Typography variant="body2">Match Language</Typography>}
+                  />
+                </Tooltip>
+                <Tooltip title="Show only books that have Whisper-transcribed intro data (title extracted from audio).">
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        size="small"
+                        checked={onlyWithTranscription}
+                        onChange={(e) => setOnlyWithTranscription(e.target.checked)}
+                      />
+                    }
+                    label={<Typography variant="body2">Has Transcription</Typography>}
+                  />
+                </Tooltip>
+                <Tooltip title="Show only books where the candidate score was boosted by matching the Whisper-transcribed title, author, or narrator.">
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        size="small"
+                        checked={onlyTranscriptionMatched}
+                        onChange={(e) => setOnlyTranscriptionMatched(e.target.checked)}
+                      />
+                    }
+                    label={<Typography variant="body2">Transcription Matched</Typography>}
                   />
                 </Tooltip>
               </Stack>
