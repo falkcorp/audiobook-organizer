@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.92.0 -->
+<!-- version: 3.93.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-01 -->
 
@@ -8,6 +8,11 @@
 ## [Unreleased]
 
 ### Documentation
+
+#### July 1, 2026 — Agent-task package refresh (archive shipped, author remaining)
+
+- **`docs(agent-tasks)`** — Archived the 4 completed workstreams (`transcription-matching` 5/5, `dedup-intro-falsepositive` 4/4, `dedup-ui` 5/5, `system-docs` → `docs/system/`) to `docs/archive/agent-tasks/` after verifying each is fully shipped in code. Authored **8 new workstreams / 30 weak-model-proof briefs** for the remaining actionable TODO items: `dedup-hardening` (the confirmed `upsertExactCandidate` boilerplate/min-duration residual + CONS-15 + CONS-FRAG-2), `ci-flaky-fixes`, `library-ui`, `dedup-dataset` (C5 family), `provenance-hash-chain`, `perf-cleanup`, `logging-slog`, and the deferred `ai-responses-migration`. Each brief names a model tier (Haiku for mechanical, Sonnet for logic/risk) and a wave that serializes same-file tasks (engine.go, builder.go, Library.tsx) to avoid rebase conflicts.
+- **`docs(agent-tasks)`** — Added [`BREAKDOWN-2026-07-01.md`](docs/agent-tasks/BREAKDOWN-2026-07-01.md): the planning/fan-out doc sorting every remaining open item into authored-as-brief / needs-brainstorm-first / operational-no-task, with the cost/efficiency strategy and the same-file collision→wave table. Refreshed the package `README.md` (v2.0.0) and the TODO.md "Agent Task Package" section to match.
 
 #### July 1, 2026 — TODO/docs accuracy sweep (evaluation + done-item reconciliation)
 
