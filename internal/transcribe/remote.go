@@ -1,7 +1,7 @@
 // file: internal/transcribe/remote.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: f7a8b9c0-d1e2-3f4a-5b6c-7d8e9f0a1b2c
-// last-edited: 2026-06-30
+// last-edited: 2026-07-01
 
 package transcribe
 
@@ -27,10 +27,12 @@ type wavJob struct {
 }
 
 // whisperBatchSize is the number of WAV files sent per /transcribe-batch request.
-// Each file is ~2.9 MB (90s × 16kHz × 16-bit mono), so 32 files ≈ 93 MB per request —
+// Each file is ~2.9 MB (90s × 16kHz × 16-bit mono), so 16 files ≈ 46 MB per request —
 // well within memory limits on both ends. Smaller batches give more frequent
 // onProgress ticks; larger ones reduce HTTP overhead further.
-const whisperBatchSize = 32
+// 16 is chosen so that even at ~15s/file on large-v2 the batch finishes in ~240s,
+// safely below the 600s HTTP client timeout (was 32 files → 480s > 300s → deadline exceeded).
+const whisperBatchSize = 16
 
 // remoteWorkers is only used on the legacy single-file path (/transcribe).
 // The batch path (/transcribe-batch) sends all files in one request so no
@@ -84,9 +86,9 @@ func transcribeRemoteBatched(ctx context.Context, remoteURL string, jobs map[str
 	}
 
 	client := &http.Client{
-		// Each sub-batch of 32 files takes up to ~whisperBatchSize × 3s ≈ 96s.
-		// Give generous headroom for slow GPU or network hiccups.
-		Timeout: 300 * time.Second,
+		// Each sub-batch of 16 files at ~15s/file on large-v2 ≈ 240s.
+		// 600s gives 2.5× headroom for slow GPU or large clips.
+		Timeout: 600 * time.Second,
 	}
 	results := make(map[string]BatchResult, len(jobs))
 	total := len(jobs)
