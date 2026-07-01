@@ -1,7 +1,7 @@
 // file: internal/metafetch/service.go
-// version: 5.1.0
+// version: 5.2.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
-// last-edited: 2026-05-01
+// last-edited: 2026-07-01
 
 package metafetch
 
@@ -92,6 +92,12 @@ type MetadataCandidate struct {
 	//   < 5%  → +20,  < 10% → +15,  < 20% → +10,
 	//   > 50% → -10,  > 100% → -20.
 	DurationScore float64 `json:"duration_score,omitempty"`
+	// TranscriptionBoosted is true when this candidate's title, author, or
+	// narrator matched the book's Whisper-transcribed intro fields, causing a
+	// score multiplier to be applied. Lets the review UI surface a
+	// "matched on transcription" filter so users can focus on books where
+	// audio-derived metadata was the deciding factor.
+	TranscriptionBoosted bool `json:"transcription_boosted,omitempty"`
 	// AudibleRatingOverall is the Audible overall star rating (1–5 scale).
 	// Zero means the source did not provide a rating.
 	AudibleRatingOverall float64 `json:"audible_rating_overall,omitempty"`

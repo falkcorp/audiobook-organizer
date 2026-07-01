@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_search.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
-// last-edited: 2026-06-28
+// last-edited: 2026-07-01
 
 package metafetch
 
@@ -377,8 +377,9 @@ func (mfs *Service) SearchMetadataForBookWithOptions(
 				score *= 0.85 // Penalize results without narrator info (likely non-audiobook sources)
 			}
 
+			var transcriptionBoosted bool
 			if !th.empty() {
-				score = transcriptionBoost(score, r, th)
+				score, transcriptionBoosted = transcriptionBoost(score, r, th)
 			}
 
 			// Duration-based scoring: compare candidate runtime vs. local file duration.
@@ -412,6 +413,7 @@ func (mfs *Service) SearchMetadataForBookWithOptions(
 				DurationScore:        computeDurationScore(bookDurationSec, r.DurationSec),
 				CategoryTags:         r.CategoryTags,
 				DurationMismatch:     durationDelta > 600,
+				TranscriptionBoosted: transcriptionBoosted,
 				AudibleRatingOverall: r.AudibleRatingOverall,
 				AudibleRatingCount:   r.AudibleRatingCount,
 				GoogleRatingAverage:  r.GoogleRatingAverage,

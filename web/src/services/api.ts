@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.47.0
+// version: 2.48.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-06-30
+// last-edited: 2026-07-01
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -2733,6 +2733,10 @@ export interface MetadataCandidate {
   google_rating_average?: number;
   /** Number of Google Books ratings. */
   google_rating_count?: number;
+  /** True when this candidate's title, author, or narrator matched the book's
+   *  Whisper-transcribed intro, causing a score multiplier to be applied.
+   *  Use as a filter to find books where audio data confirmed the match. */
+  transcription_boosted?: boolean;
 }
 
 export interface SearchMetadataResponse {
@@ -3336,6 +3340,10 @@ export interface CandidateBookInfo {
   // whose language disagrees with the book's. Empty means
   // "unknown" — filter is a no-op for that row.
   language?: string;
+  // Whisper-parsed title from the book's audio intro. Non-empty means
+  // transcription data was available when candidates were scored.
+  // Lets the review dialog filter to "only books with transcription data".
+  transcribed_title?: string;
 }
 
 export interface CandidateResult {
