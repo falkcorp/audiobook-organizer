@@ -1,5 +1,5 @@
 # file: .github/workflows/hard-burndown.yml
-# version: 1.0.0
+# version: 1.1.0
 name: Hard burndown (failed-batch retry)
 
 on:
@@ -16,13 +16,22 @@ on:
           - dry-run
           - draft-only
           - full
+      max_tasks:
+        description: "Cap dispatched tasks (0 = unlimited)"
+        required: false
+        default: "0"
+        type: string
 
 jobs:
   burndown:
-    uses: falkcorp/github-common/.github/workflows/reusable-burndown.yml@cf478e0ede8ec82d9b954b5c2b5f2830725c4499 # v1.10.7
+    uses: falkcorp/github-common/.github/workflows/reusable-burndown.yml@66059b7eba8a00bee7e45a114c00251f0a6c3a07 # v1.11.2 + submodules:recursive + triage-poll pin fix
     with:
       mode: ${{ inputs.mode || 'draft-only' }}
       hub_repo: falkcorp/burndown-tasks
       task_filter: failed-batch
       powerful_only: true
+      # powerful_only runs the priciest model tier; cap scheduled runs to avoid
+      # an uncapped weekly batch burning OpenAI quota the way nightly-burndown
+      # did before max_tasks was added there (see MEMORY: burndown-open-process-issues).
+      max_tasks: ${{ github.event_name == 'schedule' && 8 || fromJSON(inputs.max_tasks || '0') }}
     secrets: inherit
