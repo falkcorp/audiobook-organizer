@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_error_paths_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a7c3f2e1-4d8b-4e6a-9f0c-2b5d7e3a8c1f
-// last-edited: 2026-05-05
+// last-edited: 2026-07-01
 
 // Package itunesservice - error and edge-case tests for importer.go (TODO 4.13d).
 //
@@ -589,6 +589,94 @@ func TestOrganizeOneBook_NoFactory_Error(t *testing.T) {
 	err := imp.organizeOneBook(book, log)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not configured")
+}
+
+// ---------------------------------------------------------------------------
+// organizeOneBook — multi-file (merged) book routes to OrganizeBookDirectory
+// instead of the single-file OrganizeBook path (CONS-FRAG-2).
+// ---------------------------------------------------------------------------
+
+// fakeDirOrganizer is a minimal BookOrganizer whose OrganizeBook always fails
+// (mirroring the real Organizer's directory-path refusal) and whose
+// OrganizeBookDirectory succeeds, recording the segment paths it was called
+// with so the test can assert routing.
+type fakeDirOrganizer struct {
+	calledDirectory bool
+	segmentPaths    []string
+	targetDir       string
+	pathMap         map[string]string
+}
+
+func (f *fakeDirOrganizer) OrganizeBook(book *database.Book) (string, string, error) {
+	return "", "", fmt.Errorf("file_path %s is a directory but single-file organize was requested", book.FilePath)
+}
+
+func (f *fakeDirOrganizer) OrganizeBookDirectory(book *database.Book, segmentPaths []string) (string, map[string]string, error) {
+	f.calledDirectory = true
+	f.segmentPaths = segmentPaths
+	return f.targetDir, f.pathMap, nil
+}
+
+func TestOrganizeOneBook_MultiFile_RoutesToOrganizeBookDirectory(t *testing.T) {
+	book := &database.Book{ID: "book-multi", Title: "Multi File Book", FilePath: "/mnt/books/imported/multi-file-book"}
+	files := []database.BookFile{
+		{ID: "f1", BookID: book.ID, FilePath: "/mnt/books/imported/multi-file-book/track1.mp3"},
+		{ID: "f2", BookID: book.ID, FilePath: "/mnt/books/imported/multi-file-book/track2.mp3"},
+	}
+
+	targetDir := "/mnt/books/organized/Multi File Book"
+	pathMap := map[string]string{
+		files[0].FilePath: targetDir + "/track1.mp3",
+		files[1].FilePath: targetDir + "/track2.mp3",
+	}
+	fake := &fakeDirOrganizer{targetDir: targetDir, pathMap: pathMap}
+
+	m := dbmocks.NewMockStore(t)
+	m.EXPECT().GetBookFiles(book.ID).Return(files, nil)
+	m.EXPECT().UpdateBookFile("f1", mock.MatchedBy(func(bf *database.BookFile) bool {
+		return bf.FilePath == pathMap[files[0].FilePath]
+	})).Return(nil)
+	m.EXPECT().UpdateBookFile("f2", mock.MatchedBy(func(bf *database.BookFile) bool {
+		return bf.FilePath == pathMap[files[1].FilePath]
+	})).Return(nil)
+
+	imp := newMockImporter(m)
+	imp.organizerFactory = func() BookOrganizer { return fake }
+
+	log := logger.New("test")
+	err := imp.organizeOneBook(book, log)
+	require.NoError(t, err)
+
+	assert.True(t, fake.calledDirectory, "expected OrganizeBookDirectory to be called for a multi-file book")
+	assert.ElementsMatch(t, []string{files[0].FilePath, files[1].FilePath}, fake.segmentPaths)
+	assert.Equal(t, targetDir, book.FilePath, "book.FilePath should be updated to the new organized directory")
+}
+
+// TestOrganizeOneBook_SingleFile_StillUsesOrganizeBook verifies that this
+// change is strictly additive: books with 0 or 1 BookFile continue to use
+// the existing single-file OrganizeBook path unchanged.
+func TestOrganizeOneBook_SingleFile_StillUsesOrganizeBook(t *testing.T) {
+	book := &database.Book{ID: "book-single", Title: "Single File Book", FilePath: "/mnt/books/imported/single.m4b"}
+	files := []database.BookFile{
+		{ID: "f1", BookID: book.ID, FilePath: book.FilePath},
+	}
+
+	fake := &fakeDirOrganizer{}
+
+	m := dbmocks.NewMockStore(t)
+	m.EXPECT().GetBookFiles(book.ID).Return(files, nil)
+
+	imp := newMockImporter(m)
+	imp.organizerFactory = func() BookOrganizer { return fake }
+
+	log := logger.New("test")
+	err := imp.organizeOneBook(book, log)
+
+	// The fake's OrganizeBook always errors (mirroring the real directory
+	// refusal); a single-file book must still hit that path, so the error
+	// must propagate and OrganizeBookDirectory must never be called.
+	require.Error(t, err)
+	assert.False(t, fake.calledDirectory, "single-file book must not route through OrganizeBookDirectory")
 }
 
 // ---------------------------------------------------------------------------

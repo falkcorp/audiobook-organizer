@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
-// last-edited: 2026-06-19
+// last-edited: 2026-07-01
 
 package itunesservice
 
@@ -1111,6 +1111,20 @@ func (imp *Importer) organizeOneBook(book *database.Book, log logger.Logger) err
 	}
 
 	org := imp.organizerFactory()
+
+	// Merged multi-file iTunes books have their tracks scattered across
+	// multiple book_files rows; FilePath on the book itself resolves to a
+	// directory, and OrganizeBook safely (but silently) refuses to touch
+	// directories. Route those books through OrganizeBookDirectory instead
+	// so they don't get stuck at library_state=imported forever (CONS-FRAG-2).
+	var files []database.BookFile
+	if imp.store != nil {
+		files, _ = imp.store.GetBookFiles(book.ID)
+	}
+	if len(files) > 1 {
+		return imp.organizeMultiFileBook(org, book, files, log)
+	}
+
 	newPath, _, err := org.OrganizeBook(book)
 	if err != nil {
 		return err
@@ -1119,6 +1133,43 @@ func (imp *Importer) organizeOneBook(book *database.Book, log logger.Logger) err
 		book.FilePath = newPath
 		imp.applyOrganizedFileMetadata(book, newPath)
 		log.Info("Organized '%s' to %s", book.Title, newPath)
+	}
+	return nil
+}
+
+// organizeMultiFileBook routes a merged, multi-file book through
+// OrganizeBookDirectory, then updates the book's FilePath and each
+// BookFile's FilePath to reflect the new organized locations.
+func (imp *Importer) organizeMultiFileBook(org BookOrganizer, book *database.Book, files []database.BookFile, log logger.Logger) error {
+	segmentPaths := make([]string, 0, len(files))
+	for _, f := range files {
+		if f.FilePath == "" {
+			continue
+		}
+		segmentPaths = append(segmentPaths, f.FilePath)
+	}
+
+	targetDir, pathMap, err := org.OrganizeBookDirectory(book, segmentPaths)
+	if err != nil {
+		return err
+	}
+	if targetDir != "" && targetDir != book.FilePath {
+		book.FilePath = targetDir
+		log.Info("Organized '%s' to %s", book.Title, targetDir)
+	}
+
+	if imp.store != nil {
+		for _, f := range files {
+			newPath, ok := pathMap[f.FilePath]
+			if !ok || newPath == "" || newPath == f.FilePath {
+				continue
+			}
+			updated := f
+			updated.FilePath = newPath
+			if uErr := imp.store.UpdateBookFile(f.ID, &updated); uErr != nil {
+				log.Warn("failed to update book file path for '%s' (file=%s): %v", book.Title, f.ID, uErr)
+			}
+		}
 	}
 	return nil
 }
