@@ -883,14 +883,23 @@ must sequence, but A and B are parallelizable. Spawn:
   + op-registry workers) and exceeds the 600s/package default under `-race`. Fix: `-timeout 25m` on
   the full target. CI's `-short -race` job fits the default and was already green, so this never
   blocked PRs — only local `make test` + nightly.
-- [ ] **NUTSDB-CLOSE-GOROUTINE-LEAK** (2026-06-17, low priority) — `NutsActivityStore.Close()` →
-  `nutsdb.DB.Close()` leaks **1 background goroutine per Open** (the TTL time-wheel; isolation
-  micro-test: 20 open+close cycles → 20 survivors). **Benign in prod** — the activity store is a
-  process-lifetime singleton (one open at startup, `internal/activity/register.go`). Only the test
-  suite (which opens many short-lived stores) accumulates them. Do NOT fork/upgrade nutsdb to chase
-  this — `nuts_activity_store.go` is coupled to v1.1.0-specific error sentinels (`ErrNotFoundBucket`
-  vs `ErrBucketNotFound`) and an upgrade risks breaking empty-scan handling. If it ever matters,
-  add an option to skip the TTL manager, or share one store across the server test package.
+- [x] **NUTSDB-CLOSE-GOROUTINE-LEAK** (2026-06-17, low priority) — ✅ **INVESTIGATED/DOCUMENTED
+  2026-07-01** (not fixed — remains an accepted, benign, third-party limitation).
+  `NutsActivityStore.Close()` → `nutsdb.DB.Close()` leaks **1 background goroutine per Open** (the
+  TTL time-wheel; isolation micro-test: 20 open+close cycles → 20 survivors). **Benign in prod** —
+  the activity store is a process-lifetime singleton (one open at startup,
+  `internal/activity/register.go`). Only the test suite (which opens many short-lived stores)
+  accumulates them. Do NOT fork/upgrade nutsdb to chase this — `nuts_activity_store.go` is coupled
+  to v1.1.0-specific error sentinels (`ErrNotFoundBucket` vs `ErrBucketNotFound`) and an upgrade
+  risks breaking empty-scan handling. Re-verified 2026-07-01: `nuts_activity_store.go` has no
+  `go func(...)` of its own — `Close()` is a one-line passthrough to `s.db.Close()`, which already
+  calls `tm.close()` internally; the goroutine lives entirely inside the vendored nutsdb v1.1.0
+  library (`db.go`: `go db.tm.run()`). Confirmed `nutsdb@v1.1.0/options.go` has no option to skip
+  the TTL manager (only `ExpiredDeleteType`: `TimeWheel` vs `TimeHeap`, both goroutine-based), so
+  the "add an option to skip the TTL manager" mitigation is unavailable without forking, which is
+  forbidden. A doc comment was added above `NutsActivityStore.Close()` recording this so the entry
+  isn't mis-read as a fixable bug in our own code. If it ever matters, share one store across the
+  server test package (test-only change, out of scope here).
 
 - [x] **BUG-ITUNES-WRITEBACK-CORRUPTS-LIBRARY** — Fixed in PR #1319 (2026-06-05). See PD-2.
 
