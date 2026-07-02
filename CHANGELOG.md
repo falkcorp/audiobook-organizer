@@ -9,6 +9,10 @@
 
 ### Bug Fixes
 
+#### July 2, 2026 — Embedding backend cutover now actually re-embeds (model-aware skip)
+
+- **`fix(dedup)`** — `prepBookEmbed`'s cached-skip checked only the content hash, not the stored embedding **model**. Switching the embedding backend (e.g. OpenAI `text-embedding-3-large` 3072-dim → local `bge-m3` 1024-dim) therefore skipped every book whose text was unchanged, leaving stale wrong-dimension vectors that score 0 against the new model — so the "re-embed all" op no-oped (observed live: `skipped=all, new=0`). The skip now also requires the stored model to equal the wired client's model (`embeddingModelMatches`); an empty/legacy stored model counts as a mismatch and re-embeds. Enables the local-embedding cutover. Regression test `TestEmbedBooks_ReembedsOnModelChange`.
+
 #### July 2, 2026 — Dedup: AcoustID-conflict diagnostics (emission veto NOT wired — see prod dry-run finding)
 
 - **`feat(dedup)`** — investigated using book-level AcoustID signatures (`book_sig_v1`, synthesized from per-file chromaprints) to veto the "exact" title-match false-positive flood (`checkExactTitle`: same author + titles within Levenshtein 2 → similarity 1.0). Added the `acoustIDSignaturesConflict` helper, `ReevaluateAcoustIDConflicts(dryRun)`, and a diagnostic endpoint `POST /api/v1/dedup/purge-acoustid-conflicts` (dry-run by default). **A prod dry-run showed the veto is not viable as an emission gate, so it was intentionally NOT wired into `upsertExactCandidate`:** of 12,897 pending non-audio candidates, **65% (8,387) had no AcoustID fingerprint** (unjudgeable), and `BookSignatureSimilarityMasked` returns ~0.50 for *uncorrelated* audio (the noise floor — uncorrelated chromaprints differ in ~half their bits), so no defensible similarity threshold separates dups from non-dups on this data (only 5/4,510 comparable pairs fell below 0.50, at the floor). The real lever is **fingerprint coverage**, not a veto. The helper/endpoint are kept as diagnostics for a future, coverage-backed, distribution-validated threshold. Tests in `acoustid_veto_test.go`.
