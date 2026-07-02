@@ -1,6 +1,6 @@
 // file: internal/database/embedding_store.go
-// version: 2.4.0
-// last-edited: 2026-06-22
+// version: 2.5.0
+// last-edited: 2026-07-01
 // guid: 7c4a9b2e-d831-4f5c-a07e-3b8d6e1f9c42
 
 package database
@@ -464,8 +464,19 @@ func (s *EmbeddingStore) nextID(b *pebble.Batch) (int64, error) {
 // downgraded by a less-specific one. LLM fields are always updated when non-empty.
 // Pairs are canonicalised before insert (lexicographically smaller ID is always A).
 func (s *EmbeddingStore) UpsertCandidate(c DedupCandidate) error {
+	_, _, err := s.UpsertCandidateNew(c)
+	return err
+}
+
+// UpsertCandidateNew is UpsertCandidate but also reports the assigned
+// candidate ID and whether this call created a brand-new pair (true) or
+// updated an existing one (false). Callers that must react only when a
+// genuinely new candidate is created — e.g. C5 live dataset capture, which
+// must never re-label an existing pair on a score update — should call this
+// instead of UpsertCandidate.
+func (s *EmbeddingStore) UpsertCandidateNew(c DedupCandidate) (id int64, isNew bool, err error) {
 	if err := s.checkClosed(); err != nil {
-		return err
+		return 0, false, err
 	}
 	if c.EntityAID > c.EntityBID {
 		c.EntityAID, c.EntityBID = c.EntityBID, c.EntityAID
@@ -481,7 +492,7 @@ func (s *EmbeddingStore) UpsertCandidate(c DedupCandidate) error {
 	pairKey := dedupPairKey(c.EntityType, c.EntityAID, c.EntityBID)
 	existingIDBytes, closer, err := s.db.Get(pairKey)
 	if err != nil && err != pebble.ErrNotFound {
-		return fmt.Errorf("upsert candidate pair lookup: %w", err)
+		return 0, false, fmt.Errorf("upsert candidate pair lookup: %w", err)
 	}
 
 	b := s.db.NewBatch()
@@ -491,7 +502,7 @@ func (s *EmbeddingStore) UpsertCandidate(c DedupCandidate) error {
 		// New pair — assign sequential ID.
 		id, err := s.nextID(b)
 		if err != nil {
-			return err
+			return 0, false, err
 		}
 		rec := candRec{
 			EntityType:     c.EntityType,
@@ -510,40 +521,43 @@ func (s *EmbeddingStore) UpsertCandidate(c DedupCandidate) error {
 		}
 		data, err := json.Marshal(rec)
 		if err != nil {
-			return fmt.Errorf("marshal candidate: %w", err)
+			return 0, false, fmt.Errorf("marshal candidate: %w", err)
 		}
 		if err := b.Set(dedupRecKey(id), data, nil); err != nil {
-			return err
+			return 0, false, err
 		}
 		if err := b.Set(pairKey, []byte(fmt.Sprintf("%016x", id)), nil); err != nil {
-			return err
+			return 0, false, err
 		}
 		// Entity secondary index — both sides, so prefix-scan by entity is O(k).
 		if err := b.Set(dedupEntityKey(c.EntityType, c.EntityAID, id), nil, nil); err != nil {
-			return err
+			return 0, false, err
 		}
 		if err := b.Set(dedupEntityKey(c.EntityType, c.EntityBID, id), nil, nil); err != nil {
-			return err
+			return 0, false, err
 		}
-		return b.Commit(pebble.Sync)
+		if err := b.Commit(pebble.Sync); err != nil {
+			return 0, false, err
+		}
+		return id, true, nil
 	}
 
 	// Existing pair — update in-place.
 	idHex := string(existingIDBytes)
 	closer.Close()
-	id, err := strconv.ParseInt(idHex, 16, 64)
+	id, err = strconv.ParseInt(idHex, 16, 64)
 	if err != nil {
-		return fmt.Errorf("parse candidate id %q: %w", idHex, err)
+		return 0, false, fmt.Errorf("parse candidate id %q: %w", idHex, err)
 	}
 
 	val, existingCloser, err := s.db.Get(dedupRecKey(id))
 	if err != nil {
-		return fmt.Errorf("read existing candidate %d: %w", id, err)
+		return 0, false, fmt.Errorf("read existing candidate %d: %w", id, err)
 	}
 	var existing candRec
 	if err := json.Unmarshal(val, &existing); err != nil {
 		existingCloser.Close()
-		return fmt.Errorf("unmarshal existing candidate %d: %w", id, err)
+		return 0, false, fmt.Errorf("unmarshal existing candidate %d: %w", id, err)
 	}
 	existingCloser.Close()
 
@@ -584,19 +598,22 @@ func (s *EmbeddingStore) UpsertCandidate(c DedupCandidate) error {
 
 	data, err := json.Marshal(existing)
 	if err != nil {
-		return fmt.Errorf("marshal updated candidate: %w", err)
+		return 0, false, fmt.Errorf("marshal updated candidate: %w", err)
 	}
 	if err := b.Set(dedupRecKey(id), data, nil); err != nil {
-		return err
+		return 0, false, err
 	}
 	// Idempotent: ensure entity index entries exist (backfills pre-index records).
 	if err := b.Set(dedupEntityKey(existing.EntityType, existing.EntityAID, id), nil, nil); err != nil {
-		return err
+		return 0, false, err
 	}
 	if err := b.Set(dedupEntityKey(existing.EntityType, existing.EntityBID, id), nil, nil); err != nil {
-		return err
+		return 0, false, err
 	}
-	return b.Commit(pebble.Sync)
+	if err := b.Commit(pebble.Sync); err != nil {
+		return 0, false, err
+	}
+	return id, false, nil
 }
 
 // GetCandidateByID retrieves a single candidate by its ID.

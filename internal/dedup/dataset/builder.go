@@ -1,5 +1,5 @@
 // file: internal/dedup/dataset/builder.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 4a91c7e0-6d83-4b25-9f10-2c5a8e7d4b31
 // last-edited: 2026-07-01
 
@@ -51,6 +51,18 @@ const containmentOffsetSteps = 8
 type BuilderStore interface {
 	GetBook(id string) (*database.Book, error)
 	GetBookFiles(id string) ([]database.BookFile, error)
+}
+
+// StoreAdapter bridges a full database.Store onto the narrower BuilderStore
+// interface (database.Store exposes GetBookByID, not GetBook). Exported here
+// so callers that already hold a database.Store (the live dedup engine, the
+// dataset-backfill op) can share a single adapter instead of each defining an
+// identical private one.
+type StoreAdapter struct{ Store database.Store }
+
+func (a StoreAdapter) GetBook(id string) (*database.Book, error) { return a.Store.GetBookByID(id) }
+func (a StoreAdapter) GetBookFiles(id string) ([]database.BookFile, error) {
+	return a.Store.GetBookFiles(id)
 }
 
 // BuildExample loads both books and computes every feature for the candidate pair.

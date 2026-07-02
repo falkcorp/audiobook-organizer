@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_test.go
-// version: 2.5.0
+// version: 2.6.0
 // guid: 2a7e4d91-c538-4f06-b1d3-9e8c5a6f0d72
-// last-edited: 2026-06-28
+// last-edited: 2026-07-01
 
 package dedup
 
@@ -1421,5 +1421,122 @@ func TestEmbeddingClient_RequestTimeout_FieldIsSetAndNonZero(t *testing.T) {
 	if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 		// Allow wrapped errors (the SDK wraps ctx errors).
 		t.Logf("EmbedBatch returned non-context error (acceptable for SDK wrapping): %v", err)
+	}
+}
+
+// TestUpsertCandidateWithLiveLabel_NewPairCreatesLabeledExample verifies the
+// C5 live-capture wiring: the first upsert of a brand-new candidate pair must
+// build+classify a snapshot and persist it with an auto (rule-based)
+// label_source.
+func TestUpsertCandidateWithLiveLabel_NewPairCreatesLabeledExample(t *testing.T) {
+	engine, mock, es := setupTestEngine(t)
+
+	bookA := &database.Book{ID: "LIVE_A", Title: "Live Capture Book"}
+	bookB := &database.Book{ID: "LIVE_B", Title: "Live Capture Book"}
+	mock.GetBookByIDFunc = func(id string) (*database.Book, error) {
+		switch id {
+		case "LIVE_A":
+			return bookA, nil
+		case "LIVE_B":
+			return bookB, nil
+		}
+		return nil, nil
+	}
+	mock.GetBookFilesFunc = func(bookID string) ([]database.BookFile, error) {
+		return nil, nil
+	}
+
+	sim := 0.9
+	if err := engine.upsertCandidateWithLiveLabel(database.DedupCandidate{
+		EntityType: "book",
+		EntityAID:  "LIVE_A",
+		EntityBID:  "LIVE_B",
+		Layer:      "embedding",
+		Similarity: &sim,
+		Status:     "pending",
+	}); err != nil {
+		t.Fatalf("upsertCandidateWithLiveLabel: %v", err)
+	}
+
+	cands, _, err := es.ListCandidates(database.CandidateFilter{EntityType: "book", Status: "pending"})
+	if err != nil {
+		t.Fatalf("ListCandidates: %v", err)
+	}
+	if len(cands) != 1 {
+		t.Fatalf("expected exactly one candidate, got %d", len(cands))
+	}
+	candID := cands[0].ID
+
+	ex, err := es.GetLabeledExample(candID)
+	if err != nil {
+		t.Fatalf("GetLabeledExample: %v", err)
+	}
+	if ex == nil {
+		t.Fatal("expected a labeled example to be created for the new pair, got nil")
+	}
+	if ex.LabelSource != "" && ex.LabelSource != "rule" {
+		t.Fatalf("expected label_source to be empty (unfired) or %q, got %q", "rule", ex.LabelSource)
+	}
+	if ex.EntityAID != "LIVE_A" || ex.EntityBID != "LIVE_B" {
+		t.Fatalf("unexpected entity IDs on labeled example: %+v", ex)
+	}
+}
+
+// TestUpsertCandidateWithLiveLabel_UpdateDoesNotDuplicate verifies that
+// calling the live-capture upsert path again for the *same* pair (an update,
+// not a new pair) never creates a second labeled example nor overwrites the
+// first one's snapshot.
+func TestUpsertCandidateWithLiveLabel_UpdateDoesNotDuplicate(t *testing.T) {
+	engine, mock, es := setupTestEngine(t)
+
+	bookA := &database.Book{ID: "DUP_A", Title: "Update Should Not Duplicate"}
+	bookB := &database.Book{ID: "DUP_B", Title: "Update Should Not Duplicate"}
+	mock.GetBookByIDFunc = func(id string) (*database.Book, error) {
+		switch id {
+		case "DUP_A":
+			return bookA, nil
+		case "DUP_B":
+			return bookB, nil
+		}
+		return nil, nil
+	}
+	mock.GetBookFilesFunc = func(bookID string) ([]database.BookFile, error) {
+		return nil, nil
+	}
+
+	sim := 0.9
+	cand := database.DedupCandidate{
+		EntityType: "book",
+		EntityAID:  "DUP_A",
+		EntityBID:  "DUP_B",
+		Layer:      "embedding",
+		Similarity: &sim,
+		Status:     "pending",
+	}
+	if err := engine.upsertCandidateWithLiveLabel(cand); err != nil {
+		t.Fatalf("first upsertCandidateWithLiveLabel: %v", err)
+	}
+
+	before, err := es.ListLabeledExamples(database.LabeledExampleFilter{})
+	if err != nil {
+		t.Fatalf("ListLabeledExamples (before): %v", err)
+	}
+	if len(before) != 1 {
+		t.Fatalf("expected exactly one labeled example after the first upsert, got %d", len(before))
+	}
+
+	// Second call for the identical pair — this is an update, not a new pair.
+	sim2 := 0.95
+	cand.Similarity = &sim2
+	if err := engine.upsertCandidateWithLiveLabel(cand); err != nil {
+		t.Fatalf("second upsertCandidateWithLiveLabel: %v", err)
+	}
+
+	after, err := es.ListLabeledExamples(database.LabeledExampleFilter{})
+	if err != nil {
+		t.Fatalf("ListLabeledExamples (after): %v", err)
+	}
+	if len(after) != 1 {
+		t.Fatalf("expected the update to NOT create a second labeled example, got %d", len(after))
 	}
 }
