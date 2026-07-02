@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/reset_all.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: f3b1e8c4-2d7a-4d62-aabb-1f1d6e2c4a01
-// last-edited: 2026-05-31
+// last-edited: 2026-07-01
 
 package acoustid
 
@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -92,17 +93,11 @@ func (p *Plugin) runResetAll(ctx context.Context, _ json.RawMessage, reporter sd
 		log.Info("acoustid reset-all: clearing fingerprints (slow path)", "book_files", total)
 		prog = sdk.NewProgress(reporter, total)
 		prog.Start("Clearing fingerprints (slow path)…")
-		for i := range files {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			default:
-			}
-			f := files[i]
+		err = registry.RunItems(ctx, reporter, files, func(_ context.Context, f database.BookFile) error {
 			if f.AcoustIDSeg0 == "" && f.AcoustIDSeg1 == "" && f.AcoustIDSeg2 == "" &&
 				f.AcoustIDSeg3 == "" && f.AcoustIDSeg4 == "" && f.AcoustIDSeg5 == "" &&
 				f.AcoustIDSeg6 == "" {
-				continue
+				return nil
 			}
 			updated := f
 			updated.AcoustIDSeg0 = ""
@@ -114,13 +109,17 @@ func (p *Plugin) runResetAll(ctx context.Context, _ json.RawMessage, reporter sd
 			updated.AcoustIDSeg6 = ""
 			if err := p.store.UpdateBookFile(f.ID, &updated); err != nil {
 				log.Warn("acoustid reset-all: update file failed", "id", f.ID, "err", err)
-				continue
+				return nil
 			}
 			cleared++
-			if i%500 == 0 || i == total-1 {
-				prog.StepN(i+1,
-					fmt.Sprintf("Clearing fingerprints %d/%d (cleared=%d)", i+1, total, cleared))
-			}
+			return nil
+		}, registry.RunItemsOptions{
+			Label: func(i, t int) string {
+				return fmt.Sprintf("Clearing fingerprints %d/%d (cleared=%d)", i+1, t, cleared)
+			},
+		})
+		if err != nil {
+			return err
 		}
 	}
 
@@ -129,6 +128,7 @@ func (p *Plugin) runResetAll(ctx context.Context, _ json.RawMessage, reporter sd
 	prog.Finalize("Dropping acoustid dedup candidates…")
 	deleted := 0
 	if p.embeddingStore != nil {
+		var allCands []database.DedupCandidate
 		offset := 0
 		const pageSize = 500
 		for {
@@ -144,17 +144,25 @@ func (p *Plugin) runResetAll(ctx context.Context, _ json.RawMessage, reporter sd
 			if len(cands) == 0 {
 				break
 			}
-			for _, c := range cands {
-				if derr := p.embeddingStore.DeleteCandidate(c.ID); derr != nil {
-					log.Warn("acoustid reset-all: delete candidate failed", "id", c.ID, "err", derr)
-					continue
+			allCands = append(allCands, cands...)
+			offset += len(cands)
+		}
+
+		if len(allCands) > 0 {
+			if derr := registry.RunItems(ctx, reporter, allCands, func(_ context.Context, c database.DedupCandidate) error {
+				if err := p.embeddingStore.DeleteCandidate(c.ID); err != nil {
+					log.Warn("acoustid reset-all: delete candidate failed", "id", c.ID, "err", err)
+					return nil
 				}
 				deleted++
+				return nil
+			}, registry.RunItemsOptions{
+				Label: func(i, t int) string {
+					return fmt.Sprintf("Dropping acoustid dedup candidates %d/%d (deleted=%d)", i+1, t, deleted)
+				},
+			}); derr != nil {
+				return derr
 			}
-			// We delete in-place, so the next page-0 fetch returns the next
-			// fresh window — keep offset at 0 to avoid skipping rows after
-			// deletion shifts the result set.
-			_ = offset
 		}
 	}
 
