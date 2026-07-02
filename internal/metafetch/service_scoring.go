@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_scoring.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: d2226468-bed1-4989-93f3-b0bc3a344424
-// last-edited: 2026-07-01
+// last-edited: 2026-07-02
 
 package metafetch
 
@@ -288,16 +288,33 @@ func containsCI(a, b string) bool {
 // is read aloud verbatim in the intro.
 // Returns (adjusted score, true) when any boost was applied; (score, false) otherwise.
 func transcriptionBoost(score float64, r metadata.BookMetadata, th transcriptionHints) (float64, bool) {
-	boosted := false
-	if th.title != "" && r.Title != "" {
+	// The transcribed TITLE is the anchor — it is read aloud verbatim in the
+	// intro. The author/narrator boosts only apply when the title ALSO agrees;
+	// otherwise a same-author, wrong-title candidate gets multiplied to the top
+	// ("matches the author but not the actual book"). Audio author/narrator
+	// agreement without a title match is a tiebreaker, not a score driver, so it
+	// must not multiply the score on its own.
+	titleHintPresent := th.title != ""
+	titleMatched := false
+	if titleHintPresent && r.Title != "" {
 		if util.NormalizeTitle(r.Title) == util.NormalizeTitle(th.title) {
 			score *= 2.0
-			boosted = true
+			titleMatched = true
 		} else if containsCI(r.Title, th.title) {
 			score *= 1.4
-			boosted = true
+			titleMatched = true
 		}
 	}
+	// Suppress the author/narrator boosts only when we HAVE a transcribed title
+	// that this candidate fails to match — that is the "matches the author but
+	// not the actual book" case, where a same-author, wrong-title candidate must
+	// not be carried to the top. When no transcribed title is available at all,
+	// author/narrator agreement remains a legitimate tiebreaker on the
+	// title-based F1 base.
+	if titleHintPresent && !titleMatched {
+		return score, false
+	}
+	boosted := titleMatched
 	if th.author != "" && containsCI(r.Author, th.author) {
 		score *= 1.6
 		boosted = true
@@ -307,6 +324,21 @@ func transcriptionBoost(score float64, r metadata.BookMetadata, th transcription
 		boosted = true
 	}
 	return score, boosted
+}
+
+// transcribedTitleAgrees reports whether a candidate title matches the book's
+// audio-derived (transcribed) title — by exact normalized equality or a
+// case-insensitive substring either way. Used as a hard gate before
+// auto-applying metadata to a book that has a transcribed title, so an
+// author-driven, wrong-title candidate can't overwrite good data.
+func transcribedTitleAgrees(candidateTitle, transcribedTitle string) bool {
+	if candidateTitle == "" || transcribedTitle == "" {
+		return false
+	}
+	if util.NormalizeTitle(candidateTitle) == util.NormalizeTitle(transcribedTitle) {
+		return true
+	}
+	return containsCI(candidateTitle, transcribedTitle)
 }
 
 func pickBestMatchFromScored(

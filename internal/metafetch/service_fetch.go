@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_fetch.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: b24c7a25-2efa-4b85-adb0-2d591218eff2
-// last-edited: 2026-07-01
+// last-edited: 2026-07-02
 
 package metafetch
 
@@ -226,6 +226,17 @@ func (mfs *Service) FetchMetadataForBook(id string) (*FetchMetadataResponse, err
 			}
 			meta := scored[0]
 			NormalizeMetaSeries(&meta)
+
+			// When the book has an audio-derived (transcribed) title, require the
+			// chosen candidate's title to agree before auto-applying. Otherwise a
+			// high-scoring same-author / wrong-title candidate would overwrite good
+			// data ("matches the author but not the actual book"). Defer to the next
+			// source (and ultimately manual review) rather than apply a wrong book.
+			if th.title != "" && !transcribedTitleAgrees(meta.Title, th.title) {
+				slog.Debug("auto-fetch: candidate title disagrees with transcribed title; skipping auto-apply",
+					"name", src.Name(), "candidate_title", meta.Title, "transcribed_title", th.title)
+				continue
+			}
 
 			// Safety: never apply empty/untitled metadata
 			if meta.Title == "" || strings.ToLower(meta.Title) == "untitled" {
