@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.51.0 -->
+<!-- version: 9.52.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-01 -->
 
@@ -60,11 +60,12 @@ SLOG-PROD-VERIFY, DEDUP-CANDIDATE-EXPLOSION).
 
 ### 🐛 Known flaky CI (pre-existing, capture-and-fix later)
 
-- 🔴 **Mock Freshness** check fails on every branch — `mockery` version drift (`interface{}`→`any`). Needs the pinned mockery version regenerated/committed.
-- 🔴 `TestBackupEndpointsErrors`, `TestScanService_MultiChapterAudiobook` — flaky/environment-sensitive (fail on `main` too). Diagnose root cause; don't rerun-and-ignore.
+- 🟢 **Mock Freshness** ✅ FIXED (#1718, 2026-07-01) — pinned mockery to v3.7.1 (CI + Makefile + setup script); v2 could not generate the merged-file `.mockery.yaml`. `make mocks-check` green.
+- 🟢 `TestBackupEndpointsErrors` ✅ FIXED (#1711 — dead `os.Chdir` race removed, 20/20) · `TestScanService_MultiChapterAudiobook` ✅ FIXED (#1713 — missing `WaitForWarmup` in `SetupIntegration`, 20/20). NOTE: a *separate* pre-existing `pebble: closed` shutdown race remains under package-wide `-race` — see `PEBBLE-CLOSED-SHUTDOWN-RACE` in Open Bugs.
 
-### 🐛 Known bug: Library page's client-side cache is never invalidated on mutation (2026-07-01)
+### 🐛 Known bug: Library page's client-side cache is never invalidated on mutation (2026-07-01) — ✅ FIXED #1719
 
+- 🟢 ✅ **FIXED (#1719, 2026-07-01):** all ~13 remaining mutation handlers in `Library.tsx` now call `clearLibraryCache()` before `loadAudiobooks()` (+ regression test). Original description retained below for context.
 - 🔴 `web/src/stores/useLibraryCache.ts` (60s TTL) is read by `useLibraryQuery.loadAudiobooks` before every fetch and is served as-is on a cache hit. Nothing ever invalidates a specific entry or the whole store on mutation — only `handleMergeAsVersions` and `handleCombineIntoOneBook` in `Library.tsx` were fixed (PR merging this note) to call the new `clearLibraryCache()` before reloading. At least ~14 other mutation handlers in `Library.tsx` (`handlePurgeOne`, `handleRestoreOne`, `handleConfirmPurge`, `handleBatchRestore`, `handleVersionUpdate`, `handleFetchMetadata`, `handleParseWithAI`, the batch-delete/apply-metadata handlers, etc. — grep `loadAudiobooks()` call sites) call `loadAudiobooks()` right after a mutation without clearing the cache, so they have the same latent bug: a cached page can serve stale rows (deleted/restored/edited books, wrong order) until the 60s TTL lapses. Fix: either call `clearLibraryCache()` in each remaining handler, or thread a `bypassCache` flag through `loadAudiobooks` and default all mutation call sites to bypass.
 
 ---
@@ -179,13 +180,13 @@ for untagged tracks. Scanner uses folder name as book title for no-tag groups.
 > of normalization filter that runs on import that handles that and writes the correct time back to the
 > primary file."
 
-- [ ] **CONS-15** **(D3-emitter)** part-vs-whole guard in the exact dedup emitter — defense-in-depth so a part can't pair 100% against a whole even if metadata is wrong. **Deprioritized** (fixing CONS-16/17 removes most of the cause).
+- [x] **CONS-15** **(D3-emitter)** part-vs-whole guard in the exact dedup emitter — defense-in-depth so a part can't pair 100% against a whole even if metadata is wrong. **Deprioritized** (fixing CONS-16/17 removes most of the cause).  ✅ shipped #1712 (agent-task sweep 2026-07-01)
 - [x] **CONS-16** ✅ **Duration-unit bug** — FIXED. (a) Extracted `trackDurationSeconds()` in `internal/itunes/service/importer.go`; routed all 3 write sites (now lines ~311/655/703) through it with `/1000`; added `trackDurationSeconds` unit test + a seconds assertion in the integration test (which previously mirrored the bug). (b) New dry-run-gated maintenance op `maintenance.duration-backfill` heals existing inflated rows. **Detection changed from the planned filesize/bitrate formula** — the iTunes importer never populates `BitrateKbps` (the `itunes.Track` struct has no BitRate field), so those rows have `BitrateKbps=0`. Replaced with an **implied-bitrate** test (millis if duration-as-seconds implies <4 kbps, with a 3 Mbps upper sanity bound) that needs only `FileSize` and never flags genuine low-bitrate audiobooks (advisor-reviewed: a 16 kbps floor would have corrupted 12 kbps spoken-word books). Per book: corrects each file then re-runs `RecomputeBookAggregates`. Dry-run default — no prod data touched until run with `dryRun=false`. Shipped in PR (branch `fix/cons16-duration-units`).
 - [x] **CONS-17** ✅ **Multi-file title leak** — FIXED, both paths. (1) **iTunes** `buildBookFromAlbumGroup`: empty album on a multi-file group now derives the title from the common parent **folder** before falling to the per-chapter track Name (scoped to multi-file; single-file keeps stripped track Name). (2) **Filesystem scanner**: sequential multi-file groups (`SegmentFiles>1`, `FilePath=segs[0]`) are now routed through `AssembleBookMetadata` via a condition change at `scanner.go:670` (`IsGenericPartFilename(filePath) || len(SegmentFiles)>1`) — NOT by setting `FilePath=dir` (which would drop the detected `SegmentFiles` subset and rescan the whole dir). Segments still created at the saveBook step. Tests: `TestBuildBookFromAlbumGroup_EmptyAlbumUsesFolder`, `TestAssembleBookMetadata_GenericChapterUsesFolder`. Shipped in PR (branch `fix/cons17-title-leak`).
 - [ ] **CONS-17b** **(follow-up, residual)** Multi-file group whose first chapter has a *non-generic* tag title (e.g. "Big Finish Ident") still prefers that tag over the folder, because `resolveTitle` (`assemble.go:88`) trusts non-generic tag titles. Robust fix needs a **"do all chapters agree on their `tag.Title`?"** discriminator (agree → it's the book title; disagree → fall to folder). ⚠️ Album-preference was **rejected**: album frequently equals the *series* name (`assemble.go:139` already notes this), so preferring album would replace correct titles with series names. Needs a small design before code. **Partially done (CONS-FRAG):** the iTunes importer path now implements exactly this all-chapters-agree discriminator (`agreedStrippedTitle`); the residual is the **filesystem scanner** `resolveTitle` path.
 - [x] **CONS-FRAG** ✅ **iTunes book fragmentation** — FIXED. `groupTracksByAlbum` keyed `artist+"|"+album`, fragmenting (1) multi-author anthologies (constant album, per-story Artist → one book per author, e.g. "Wild Cards I") and (2) empty-album chapter files whose " - Part NN" suffix wouldn't strip ("Aces Abroad - Part 19"). Verified against prod via `/external-ids` (both iTunes-PID-linked) + ffprobe. Now keys on **album alone** when present, `name:<artist>|<stripped>` when empty, with a track-number-repeat **over-merge guard** (`splitOverMergedGroup`) protecting series-as-album. `titleutil.StripChapterSuffix` strips bare `- Part NN`/`- Chapter N`/`- CD N` (excludes `Book N`/`Volume N`). CONS-17b agree-title discriminator applied to the iTunes path. Forward-only; tests in `grouping_test.go` + `strip_test.go`. ⚠️ Existing fragmented+organized books need a **separate dry-run-gated re-group op** (un-organize = destructive; surface before applying — see CONS-10).
 - [x] **CONS-FRAG-HEAL** ✅ **built + dry-run → library already correctly grouped (no mass heal needed).** Dry-run-gated `maintenance.itunes-regroup` op (PRs #1542–#1546): in-place re-group via per-PID `ReassignExternalID` + `MoveBookFilesToBook` (NOT delete+reimport — canary proved purge tombstones PIDs; `.claude/notes/itunes-heal-canary-findings.md`); frozen deterministic exclusive-claim plan. **Prod dry-run: consolidate=0, fresh=0 → ZERO fragmentation/over-merge remain.** Completeness: complete-groups≈11,000, partial≈712, single-file-in-album=554. **Duration-backfill applied (17,684 files / 1,210 books ms→s)** then duration-bucketed the 554: <15min=7 (anthology pieces, correct), 15-90min=181 (short books), ≥90min=366 (complete books, false alarm). ⇒ **No orphaned-chapter problem; grouping healthy.** `dryRun:false` would change ~nothing (only 173 entangled groups, skipped). Residual (separate, NOT auto-run as unsafe/unclear): 173 entangled-would-move (task: manual/v2); 10,374 unresolved PIDs = import gap (benign, complete books present); **~383,902 stale dedup candidates** computed pre-fix — next workstream is dedup re-detection/purge to clear the original 6/47 false-match backlog.
-- [ ] **CONS-FRAG-2** **(follow-up)** A newly-merged multi-file iTunes book whose chapter files are scattered across folders gets `Book.FilePath` = their common parent dir. `organizeOneBook` calls only the single-file `OrganizeBook`, which **safely refuses a directory `FilePath`** (early return at `organizer.go:98`, no file move) — so the book stays `imported` instead of organizing. Non-destructive but incomplete: route multi-file books (BookFiles>1) to `OrganizeBookDirectory(book, segmentPaths)` in `organizeOneBook`. BookFiles already carry correct per-track paths.
+- [x] **CONS-FRAG-2** **(follow-up)** A newly-merged multi-file iTunes book whose chapter files are scattered across folders gets `Book.FilePath` = their common parent dir. `organizeOneBook` calls only the single-file `OrganizeBook`, which **safely refuses a directory `FilePath`** (early return at `organizer.go:98`, no file move) — so the book stays `imported` instead of organizing. Non-destructive but incomplete: route multi-file books (BookFiles>1) to `OrganizeBookDirectory(book, segmentPaths)` in `organizeOneBook`. BookFiles already carry correct per-track paths.  ✅ shipped #1709 (agent-task sweep 2026-07-01)
 - [~] **CONS-18** **Import-time duration-normalization filter** — **Part 1 (DB-side gate) DONE.** Shared predicate `database.DurationLooksLikeMillis` (implied-bitrate, promoted from the backfill op) + `normalizeBookFileDuration` repair wired into `CreateBookFile` / `UpsertBookFile` / `BatchUpsertBookFiles` so no ingest path can re-introduce ms durations; idempotent, FileSize-less rows untouched; full DB test suite green. Spec: `docs/superpowers/specs/2026-06-19-import-duration-normalization-design.md`. Shipped in PR (branch `feat/cons18-duration-gate`). **Part 2 (file-tag duration writeback) REMAINING** — user approved emitting a duration tag to the primary file. Scoping found it is non-trivial + low-payoff: per-file duration must be threaded through `BuildFullTagMap` (currently book-level), it only maps to a real frame for MP3 (`LENGTH`/TLEN, ms; MP4/M4B store duration in the container, no tag), `FilterUnchangedTags` needs a LENGTH case, and players read the VBR/container header not TLEN. Config-gate it + `isProtectedPath`-guard. Build after the dedup re-scope settles.
 
 ---
@@ -255,7 +256,7 @@ for untagged tracks. Scanner uses folder name as book title for no-tag groups.
 - [x] **EMB-4** Deleted dead legacy `embeddings.db` (~1.8 GB) from prod on 2026-06-15.
 
 **UI**
-- [ ] **EMB-UI-1** Add a "Download latest Ollama" link above the embeddings settings on the Settings page (deep-link to https://ollama.com/download), so an operator configuring a local backend can grab the binary without leaving the page. *(May be superseded by TOOL-1 managed auto-download.)*
+- [x] **EMB-UI-1** Add a "Download latest Ollama" link above the embeddings settings on the Settings page (deep-link to https://ollama.com/download), so an operator configuring a local backend can grab the binary without leaving the page. *(May be superseded by TOOL-1 managed auto-download.)*  ✅ shipped #1714 (agent-task sweep 2026-07-01)
 
 ---
 
@@ -401,10 +402,10 @@ Plan: [`docs/plans/2026-06-13-dedup-exact-gate-and-dataset.md`](docs/plans/2026-
   + populated. Catches the dominant residual class (0-second stubs) that `partVsWhole`
   (`DurationRatio == 0`) and `missingFile` (file records exist) miss; genuine unscanned-large
   copies are not suppressed. Run `dedup.dataset-backfill --apply` to clear the existing ~3,154.
-- [ ] **C5-sig** Offset/subsequence containment: `signatureRelation` currently returns only
+- [x] **C5-sig** Offset/subsequence containment: `signatureRelation` currently returns only  ✅ shipped #1717 (agent-task sweep 2026-07-01)
   `match`, `disjoint`, or `unknown`. The `a_contains_b` / `b_contains_a` values in the
   spec require comparing signature subsequences — deferred to a future milestone.
-- [ ] **C5-folder** `sibling_parts` folder relation: `folderRelation` currently returns only
+- [x] **C5-folder** `sibling_parts` folder relation: `folderRelation` currently returns only  ✅ shipped #1721 (agent-task sweep 2026-07-01)
   `unrelated`, `same_dir`, `a_ancestor_of_b`, `b_ancestor_of_a`. The `sibling_parts`
   value (same parent, different child dirs matching a series pattern) is planned but not
   yet implemented.
@@ -421,12 +422,12 @@ Plan: [`docs/plans/2026-06-13-dedup-exact-gate-and-dataset.md`](docs/plans/2026-
   (`internal/dedup/dataset/highconf.go`), 7 unit tests + 2 op e2e tests. Dry-run default;
   reuses candidate ids (no synthetic rows). Complements `dedup.dataset-backfill` (rule negatives)
   + human capture. **Not yet run on prod** — dry-run first via `{"def_id":"dedup.mine-gold-labels","params":{}}`.
-- [ ] **C5** Live-capture: wire `BuildExample` + `Classify` into the candidate-upsert path
+- [x] **C5** Live-capture: wire `BuildExample` + `Classify` into the candidate-upsert path  ✅ shipped #1729 (agent-task sweep 2026-07-01)
   so each new candidate automatically gets a feature snapshot + deterministic label on
   creation (no separate backfill needed going forward).
 - [x] **C6** Review UI: web panel listing `dedup:label:` examples filterable by label, — ✅ verified done 2026-07-01: label_review.go + web DedupLabels.tsx (filter + override)
   label_source, band; human can override label and set `label_source=human`.
-- [ ] **C7** JSONL export: admin endpoint or CLI tool to export labeled examples as JSONL
+- [x] **C7** JSONL export: admin endpoint or CLI tool to export labeled examples as JSONL  ✅ shipped #1730 (agent-task sweep 2026-07-01)
   for offline ML training; include `formula_version` for dataset versioning.
 - [ ] **C8** Auto-bug-filing: after backfill, emit a GitHub issue per `not_dup` cluster
   where rule-suppressed count exceeds a threshold (surfacing systematic false-positive
@@ -680,10 +681,10 @@ Copy + pause-on-hover in #1182.
   `stripChapterPrefix(track.Name)` as the album key when Album tag is
   empty. Needs design pass — risks merging unrelated tracks that
   share a stripped prefix.
-- [ ] **MAYDEPLOY-H5** [hold] — metadata-fetch-ids: when `len(bookIDs) < 100`,
+- [x] **MAYDEPLOY-H5** [hold] — metadata-fetch-ids: when `len(bookIDs) < 100`,  ✅ shipped #1720 (agent-task sweep 2026-07-01)
   use per-book `GetAuthorByID` instead of materialising 8.8K authors.
   Low priority; defer until profiler shows actual cost.
-- [ ] **MAYDEPLOY-H7** [hold] — Cache `isProtectedPath` / `GetAllImportPaths`
+- [x] **MAYDEPLOY-H7** [hold] — Cache `isProtectedPath` / `GetAllImportPaths`  ✅ shipped #1725 (agent-task sweep 2026-07-01)
   with TTL or mutation invalidation. Low priority (~10 rows).
 - [ ] **MAYDEPLOY-I1** [hold] — Verify D1 (`DEDUP_CHROMEM_LAZY`) and D2  <!-- 2026-07-01: ⏳ duplicate of I1 — code shipped; prod verification remains. -->
   (`NewDB()`) shipped behaviour matches design. Needs live prod
@@ -839,7 +840,7 @@ landed in this audit PR; the rest need a new store method or memdb index.
   memory. Acceptance: `GET /api/v1/metadata/candidates?include_unfetched=true`
   uses <10MB peak vs ~50MB today.
 
-- [ ] **H5** [hold] `internal/server/metadata_handlers.go:1283` — metadata-fetch-ids
+- [x] **H5** [hold] `internal/server/metadata_handlers.go:1283` — metadata-fetch-ids  ✅ shipped #1720 (agent-task sweep 2026-07-01)
   op always materializes 8.8K authors even for 20-book requests. When
   `len(bookIDs) < 100`, use per-book `GetAuthorByID`. Low priority.
 
@@ -848,7 +849,7 @@ landed in this audit PR; the rest need a new store method or memdb index.
   `map[normalizedTitle+authorID]workID` once at scan start, invalidate
   on new-work creation. Cuts scan time on 50K-work corpus by ~10x.
 
-- [ ] **H7** [hold] `internal/server/server_middleware.go:90` and
+- [x] **H7** [hold] `internal/server/server_middleware.go:90` and  ✅ shipped #1725 (agent-task sweep 2026-07-01)
   `internal/audiobooks/helpers.go:248` — `isProtectedPath` calls
   `GetAllImportPaths()` per-file. Cache with TTL or invalidate on
   import-path mutation. Low priority (~10 rows total).
@@ -980,11 +981,11 @@ must sequence, but A and B are parallelizable. Spawn:
 
 ### Library UI follow-ups
 
-- [ ] **User-saved quick filters.** Let users save the current filter set as a named preset and surface it in the header kebab menu alongside the six built-in counts. Persist per-user (settings table), include in `/library/quick-queries` payload, edit/delete from a "Manage" submenu.
+- [x] **User-saved quick filters.** Let users save the current filter set as a named preset and surface it in the header kebab menu alongside the six built-in counts. Persist per-user (settings table), include in `/library/quick-queries` payload, edit/delete from a "Manage" submenu.  ✅ shipped #1723 (agent-task sweep 2026-07-01)
 
 ### Remaining slog / logging work
 
-- [ ] **SLOG-W13** [hold] Wire `logging.Info(ctx, ...)` into long-tail async ops that currently use raw `slog.Info`: `runBulkWriteBack`, ISBN enrichment goroutine, iTunes sync ops, batch poller, scanner deep paths. ~1363 raw `slog.Info/Warn/Error/Debug` calls across 193 files remain. Priority: any code inside an op-context flow (where `logging.WithOp` has been called upstream). Code outside ops (startup, background goroutines) can stay as raw slog.  <!-- 2026-07-01: ◑ PARTIAL: batch_poller + isbn flows wired (commit 7f5c28f1); runBulkWriteBack, iTunes sync, scanner deep paths remain (~1363 raw slog calls). Re-held per db977ae3 (context overflow). -->
+- [ ] **SLOG-W13** [hold] Wire `logging.Info(ctx, ...)` into long-tail async ops that currently use raw `slog.Info`: `runBulkWriteBack`, ISBN enrichment goroutine, iTunes sync ops, batch poller, scanner deep paths. ~1363 raw `slog.Info/Warn/Error/Debug` calls across 193 files remain. Priority: any code inside an op-context flow (where `logging.WithOp` has been called upstream). Code outside ops (startup, background goroutines) can stay as raw slog.  <!-- 2026-07-01: ◑ PARTIAL: batch_poller + isbn flows wired (commit 7f5c28f1); runBulkWriteBack, iTunes sync, scanner deep paths remain (~1363 raw slog calls). Re-held per db977ae3 (context overflow). -->  <!-- 2026-07-01: further progress — writeback+ISBN #1715, scanner deep paths #1724 done; iTunes sync n/a (ops are stubs); broad ~1363-call residual remains open -->
 - [ ] **SLOG-PROD-VERIFY** Smoke-test metadata-fetch on prod to verify the full chain (opID in logs, `/api/v1/operations/:id/activity` returns rows).  <!-- 2026-07-01: ⏳ code/endpoint exist (docs/slog-prod-verify.md); remaining is a live-prod smoke-test run. -->
 - [x] **CACHE-WARMUP-ROOT-CAUSE** Investigate root cause of cache warm-up OOM. Likely issue: `List*WithCounts()` allocates unboundedly during scan, or the `Server` struct cache fields retain full API response objects. Once fixed, re-enable startup preload. — ✅ verified done 2026-07-01: startup preload re-enabled (server_lifecycle.go:277); warmers rewritten to typed counts, no gin.H (entity_cache_warmers.go, commit 4515cb2c). Live OOM re-confirmation is operational.
 
@@ -1387,7 +1388,7 @@ Bot-tasks at [`docs/superpowers/bot-tasks/2026-05-01-struct-*.md`](docs/superpow
 - [x] **ARCH-4b (wave 2)** — `deluge/centralization.go` migrated: pre-sliced to checkpoint.ProcessedFiles, atomic counters (success/skip/err), checkpoint written inside RunItems fn closure, IsCanceled() replaced by ctx-based RunItems polling. PR #1592.
 - [x] **ARCH-7** — Compatibility surface registry: `docs/compat-surfaces.md` documents 8 shim files (server→organizer forwarding layers, audiobooks→organizer aliases, deprecated config/logger surfaces) with re-export targets and removal conditions. PR #1608.
 - [x] **ARCH-8** — Typed service keys: added `internal/serviceregistry/keys.go` with 24 constants (`KeyStore`, `KeyConfig`, `KeyActivity`, etc.). Replaced 68 string literals in `Get[T]`, `Name:`, and `Needs:` across 25 `register.go` files. PR #1607.
-- [ ] **ARCH-4b (wave 3)** — Remaining 3 sites: `lsh_backfill.go` (308K-item progress cadence — needs reporter throttle wrapper before RunItems is appropriate), `acoustid/backfill.go` (nested books→files loop + resume-by-book-ID — requires flat-map preprocessing), `acoustid/reset_all.go` (callback-driven PebbleStore.ClearAllAcoustIDFingerprints API + dual heterogeneous loops). `acoustid/fingerprint_rescan.go` excluded — already uses semaphore goroutine pool that outperforms sequential RunItems.  <!-- 2026-07-01: ◑ PARTIAL: lsh_backfill.go + acoustid/backfill.go migrated to RunItems; acoustid/reset_all.go remains. -->
+- [x] **ARCH-4b (wave 3)** — Remaining 3 sites: `lsh_backfill.go` (308K-item progress cadence — needs reporter throttle wrapper before RunItems is appropriate), `acoustid/backfill.go` (nested books→files loop + resume-by-book-ID — requires flat-map preprocessing), `acoustid/reset_all.go` (callback-driven PebbleStore.ClearAllAcoustIDFingerprints API + dual heterogeneous loops). `acoustid/fingerprint_rescan.go` excluded — already uses semaphore goroutine pool that outperforms sequential RunItems.  <!-- 2026-07-01: ◑ PARTIAL: lsh_backfill.go + acoustid/backfill.go migrated to RunItems; acoustid/reset_all.go remains. -->  ✅ shipped #1716 (agent-task sweep 2026-07-01)
 - [x] **PERF-2** — Batch upserts in `createBookFilesForBook`: N per-segment `UpsertBookFile` calls replaced with one `BatchUpsertBookFiles` call (shipped PR #1583). N→1 DB writes per book on first scan.
 - [x] **PERF-6** — Search index backfill cursor: added `GetAllBooksFrom(afterID, limit)` to `BookReader` interface + PebbleStore (O(1) LowerBound seek). Rewrote `server_search.go` backfill loop to use cursor pagination instead of O(offset) `GetAllBooks`. Updated 1 hand-written + 6 mockery-generated mocks. PR #1601.
 - [x] **PERF-2b** — Hash carry-forward: added `Book.SegmentHashes map[string]string`; `saveBookToDatabase` dedup loop writes computed hashes back; `createBookFilesForBook` accepts `knownHashes ...map[string]string` variadic (no signature change to `saveBook` function variable); call site at line 850 passes `books[idx].SegmentHashes`. PR #1605.
@@ -1526,7 +1527,7 @@ applied as a user tag on the book so browsing by genre is hierarchical, not flat
 - [x] Parse ladder entries into `BookMetadata.CategoryTags []string` (all layers, e.g. `["Science Fiction", "Space Opera"]`) — PR #548
 - [x] In the apply pipeline, write each tag via `AddBookTagWithSource` (idempotent) with source `"audible_category"` — PR #548
 - [x] UI: show Audible-sourced category tags separately from user tags in the book detail panel — PR #561
-- [ ] Search/filter: "has tag Science Fiction" or browsable tag cloud on library page
+- [x] Search/filter: "has tag Science Fiction" or browsable tag cloud on library page  ✅ shipped #1728 (agent-task sweep 2026-07-01)
 
 ---
 
@@ -1632,9 +1633,9 @@ Operations or the notification bell. These need the same treatment as `composer_
 Track the full lifecycle of a file's hash so we can answer "has this file changed since download?".
 Proposed chain: **DownloadHash** (as-downloaded) → **OriginalFileHash** (after iTunes/external tagger) → **FileHash** (current, after AO).
 
-- [ ] **HASH-CHAIN-1** Add `download_hash` column to `book_files` (SQLite migration + PebbleDB field). Populate it from Deluge import data (already have `deluge_hash`) and allow manual set via API.
+- [x] **HASH-CHAIN-1** Add `download_hash` column to `book_files` (SQLite migration + PebbleDB field). Populate it from Deluge import data (already have `deluge_hash`) and allow manual set via API.  ✅ shipped #1722 (agent-task sweep 2026-07-01)
 - [ ] **HASH-CHAIN-2** [hold] UI: show hash chain in book file detail view so users can see when/where a file changed.
-- [ ] **HASH-CHAIN-3** Integrity alert: flag files where `file_hash != original_file_hash` and no AO tag-write is on record (possible external modification / bit-rot).
+- [x] **HASH-CHAIN-3** Integrity alert: flag files where `file_hash != original_file_hash` and no AO tag-write is on record (possible external modification / bit-rot).  ✅ shipped #1726 (agent-task sweep 2026-07-01)
 
 *Low priority — AcoustID fingerprinting covers the identity-across-re-encode case better. Useful mainly for strict download-integrity auditing.*
 

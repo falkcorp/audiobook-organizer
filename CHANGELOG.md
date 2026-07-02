@@ -1,11 +1,27 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.94.0 -->
+<!-- version: 3.95.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-01 -->
 
 # Changelog
 
 ## [Unreleased]
+
+### Features
+
+#### July 1, 2026 — Agent-task sweep: 22 briefs shipped across 7 workstreams (PRs #1709–#1730)
+
+Coordinator-driven parallel execution of the `docs/agent-tasks/` briefs (worker-per-task worktrees, local build/test gate, admin-merge). Highlights by workstream:
+
+- **Dedup hardening** — boilerplate-title + min-duration guard at the `upsertExactCandidate` chokepoint to stop intro/outro & short-clip false positives across all exact emitters (#1710); part-vs-whole defense-in-depth guard (CONS-15, #1712); route multi-file iTunes books to `OrganizeBookDirectory` (CONS-FRAG-2, #1709).
+- **CI health** — pinned mockery to **v3.7.1** to fix the always-red Mock Freshness gate (#1718); deflaked `TestBackupEndpointsErrors` (dead `os.Chdir` race, #1711) and `TestScanService_MultiChapterAudiobook` (missing `WaitForWarmup` in test setup, #1713).
+- **Library UI** — "Download latest Ollama" link (EMB-UI-1, #1714); **fixed the client-cache staleness bug** across ~13 mutation handlers (#1719); saved filter presets (USER-QUICK-FILTERS, #1723); frequency-sized tag cloud (TAG-SEARCH, #1728).
+- **Dedup dataset** — `signatureRelation` offset/subsequence containment (C5-sig, #1717); `sibling_parts` folder relation (C5-folder, #1721); live-capture labeled examples on candidate upsert (C5, #1729); NDJSON export of labeled examples (C7, #1730).
+- **File provenance** — `BookFile.DownloadHash` + Deluge population + manual-set API (HASH-CHAIN-1, #1722); integrity-check op flagging external file modifications (HASH-CHAIN-3, #1726).
+- **Perf** — `reset_all.go` migrated to `registry.RunItems` (ARCH-4b, #1716); metadata-fetch-ids per-book author fast path <100 (MAYDEPLOY-H5, #1720); TTL-cached `isProtectedPath` (MAYDEPLOY-H7, #1725); NutsActivityStore.Close() investigation documented (#1727).
+- **Logging** — op-context logging for the ISBN-enrichment path (SLOG-W13a, #1715) and scanner deep paths (SLOG-W13c, #1724).
+
+Deferred by explicit gate (not shipped): `ai-responses-migration` (×5), dedup-dataset `C8` (backfill-gated), perf-cleanup `CONS-13` (prod-stability-gated).
 
 ### Documentation
 
