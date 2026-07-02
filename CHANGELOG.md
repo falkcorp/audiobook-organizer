@@ -9,6 +9,10 @@
 
 ### Bug Fixes
 
+#### July 2, 2026 — Dedup: AcoustID veto for the title-match false-positive flood
+
+- **`feat(dedup)`** — the "exact" dedup layer is dominated by fuzzy **title** matches (`checkExactTitle`: same author + normalized titles within Levenshtein 2 → similarity 1.0), which produced a large backlog of false "duplicates" between different audio. Added an **AcoustID veto** at the exact chokepoint (`upsertExactCandidate`): when both books have book-level AcoustID signatures (`book_sig_v1`, synthesized from per-file chromaprints) that clearly disagree (masked similarity < 0.50 with ≥512-word overlap), the candidate is suppressed. Deliberately conservative — never vetoes on missing/partial signatures or borderline similarity, since a false veto would silently hide a real duplicate. New endpoint `POST /api/v1/dedup/purge-acoustid-conflicts` (dry-run by default; `{"apply":true}` deletes) re-evaluates the existing pending backlog against the same rule and reports counts + a sample. Skips the audio-positive `acoustid`/`book_signature` layers. Regression tests in `acoustid_veto_test.go`.
+
 #### July 2, 2026 — Library: selecting a later page no longer bounces back to page 1
 
 - **`fix(web)`** — the filters-sync effect in `useLibraryFilters` rebuilt the `filters` object on **every** `searchParams` change, including page-only navigation (the URL carries `?page=N`). The new object reference re-triggered the page-reset effect in `Library.tsx` (whose deps include `filters`), snapping the user back to page 1. The effect now preserves prev's non-URL fields (`tags`, etc.) and returns the **same reference** when no filter value actually changed (`shallowEqualFilters`), so page navigation no longer churns `filters`. Regression test in `useLibraryFilters.test.ts`.

@@ -127,6 +127,33 @@ func (_e *MockDedupEngine_Expecter) Rescore(ctx any, apply any) *MockDedupEngine
 	return &MockDedupEngine_Rescore_Call{Call: _e.mock.On("Rescore", ctx, apply)}
 }
 
+func (_mock *MockDedupEngine) ReevaluateAcoustIDConflicts(ctx context.Context, dryRun bool) (*dedup.AcoustIDConflictResult, error) {
+	ret := _mock.Called(ctx, dryRun)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ReevaluateAcoustIDConflicts")
+	}
+
+	var r0 *dedup.AcoustIDConflictResult
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, bool) (*dedup.AcoustIDConflictResult, error)); ok {
+		return returnFunc(ctx, dryRun)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, bool) *dedup.AcoustIDConflictResult); ok {
+		r0 = returnFunc(ctx, dryRun)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*dedup.AcoustIDConflictResult)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, bool) error); ok {
+		r1 = returnFunc(ctx, dryRun)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
 func (_c *MockDedupEngine_Rescore_Call) Run(run func(ctx context.Context, apply bool)) *MockDedupEngine_Rescore_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
