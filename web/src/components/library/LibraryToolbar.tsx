@@ -1,8 +1,9 @@
 // file: web/src/components/library/LibraryToolbar.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
 // last-edited: 2026-07-01
 
+import { useState } from 'react';
 import {
   Typography,
   Box,
@@ -13,6 +14,10 @@ import {
   CircularProgress,
   Drawer,
   Divider,
+  Menu,
+  MenuItem,
+  ListItemText,
+  IconButton,
 } from '@mui/material';
 import {
   FilterList as FilterListIcon,
@@ -20,11 +25,15 @@ import {
   DriveFolderUpload as ManualImportIcon,
   Delete as DeleteSweepIcon,
   Refresh as RefreshIcon,
+  Bookmark as BookmarkIcon,
+  Edit as EditIcon,
+  Close as CloseIcon,
 } from '@mui/icons-material';
 import { ColumnChooser } from '../audiobooks/ColumnChooser';
 import { BatchToolbar } from '../BatchToolbar';
 import type { Audiobook } from '../../types';
 import * as api from '../../services/api';
+import type { SavedFilterPreset } from '../../services/api';
 
 interface LibraryToolbarProps {
   hasSelection: boolean;
@@ -47,6 +56,11 @@ interface LibraryToolbarProps {
   toggleColumn: (id: string) => void;
   resetColumnsToDefaults: () => void;
   getActiveFilterCount: () => number;
+  savedPresets: SavedFilterPreset[];
+  onSaveCurrentAsPreset: () => void;
+  onApplyPreset: (preset: SavedFilterPreset) => void;
+  onRenamePreset: (preset: SavedFilterPreset) => void;
+  onDeletePreset: (preset: SavedFilterPreset) => void;
   onBatchEdit: () => void;
   onFetchReview: () => Promise<void>;
   onFetchAllUnmatched: () => Promise<void>;
@@ -91,6 +105,11 @@ export const LibraryToolbar = ({
   toggleColumn,
   resetColumnsToDefaults,
   getActiveFilterCount,
+  savedPresets,
+  onSaveCurrentAsPreset,
+  onApplyPreset,
+  onRenamePreset,
+  onDeletePreset,
   onBatchEdit,
   onFetchReview,
   onFetchAllUnmatched,
@@ -112,7 +131,12 @@ export const LibraryToolbar = ({
   onPurgeOpen,
   onStorageDrawerClose,
   navigate,
-}: LibraryToolbarProps) => (
+}: LibraryToolbarProps) => {
+  const [presetsMenuAnchor, setPresetsMenuAnchor] = useState<null | HTMLElement>(null);
+  const presetsMenuOpen = Boolean(presetsMenuAnchor);
+  const closePresetsMenu = () => setPresetsMenuAnchor(null);
+
+  return (
   <>
     {/* Unified toolbar — sticky, shows library actions or batch actions based on selection */}
     <Box
@@ -158,6 +182,58 @@ export const LibraryToolbar = ({
           <Button startIcon={<FilterListIcon />} onClick={onFilterOpen} variant="outlined" size="small">
             Filters{getActiveFilterCount() > 0 && <Chip label={getActiveFilterCount()} size="small" color="primary" sx={{ ml: 0.5, height: 18 }} />}
           </Button>
+          <Button
+            startIcon={<BookmarkIcon />}
+            onClick={(e) => setPresetsMenuAnchor(e.currentTarget)}
+            variant="outlined"
+            size="small"
+          >
+            Presets{savedPresets.length > 0 && <Chip label={savedPresets.length} size="small" color="primary" sx={{ ml: 0.5, height: 18 }} />}
+          </Button>
+          <Menu anchorEl={presetsMenuAnchor} open={presetsMenuOpen} onClose={closePresetsMenu}>
+            <MenuItem
+              onClick={() => {
+                closePresetsMenu();
+                onSaveCurrentAsPreset();
+              }}
+            >
+              Save current filters as preset...
+            </MenuItem>
+            {savedPresets.length > 0 && <Divider />}
+            {savedPresets.map((preset) => (
+              <MenuItem
+                key={preset.id}
+                onClick={() => {
+                  closePresetsMenu();
+                  onApplyPreset(preset);
+                }}
+              >
+                <ListItemText>{preset.name}</ListItemText>
+                <IconButton
+                  size="small"
+                  aria-label={`Rename ${preset.name}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    closePresetsMenu();
+                    onRenamePreset(preset);
+                  }}
+                >
+                  <EditIcon fontSize="inherit" />
+                </IconButton>
+                <IconButton
+                  size="small"
+                  aria-label={`Delete ${preset.name}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    closePresetsMenu();
+                    onDeletePreset(preset);
+                  }}
+                >
+                  <CloseIcon fontSize="inherit" />
+                </IconButton>
+              </MenuItem>
+            ))}
+          </Menu>
           <ColumnChooser visibleColumnIds={visibleColumnIds} onToggleColumn={toggleColumn} onResetDefaults={resetColumnsToDefaults} />
           <Button variant="outlined" size="small" startIcon={organizeRunning ? <CircularProgress size={16} /> : undefined} disabled={organizeRunning} onClick={onOrganizeLibrary}>{organizeRunning ? 'Organizing…' : 'Organize Library'}</Button>
           <Button variant="outlined" size="small" startIcon={activeScanOp !== null ? <CircularProgress size={16} /> : <RefreshIcon />} disabled={activeScanOp !== null} onClick={onFullRescan}>{activeScanOp !== null ? 'Scanning…' : 'Full Rescan'}</Button>
@@ -237,4 +313,5 @@ export const LibraryToolbar = ({
       </Box>
     </Drawer>
   </>
-);
+  );
+};
