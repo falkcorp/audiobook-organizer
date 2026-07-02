@@ -59,7 +59,7 @@ type MockDedupEngine_CleanupCandidatesAfterMerge_Call struct {
 
 // CleanupCandidatesAfterMerge is a helper method to define mock.On call
 //   - mergedAwayBookIDs []string
-func (_e *MockDedupEngine_Expecter) CleanupCandidatesAfterMerge(mergedAwayBookIDs interface{}) *MockDedupEngine_CleanupCandidatesAfterMerge_Call {
+func (_e *MockDedupEngine_Expecter) CleanupCandidatesAfterMerge(mergedAwayBookIDs any) *MockDedupEngine_CleanupCandidatesAfterMerge_Call {
 	return &MockDedupEngine_CleanupCandidatesAfterMerge_Call{Call: _e.mock.On("CleanupCandidatesAfterMerge", mergedAwayBookIDs)}
 }
 

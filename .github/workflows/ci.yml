@@ -1,7 +1,7 @@
 # file: .github/workflows/ci.yml
-# version: 3.0.3
+# version: 3.0.4
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
-# last-edited: 2026-06-22
+# last-edited: 2026-07-01
 
 # Fast parallel CI for PRs and pushes.
 # Runs go vet/build, short tests, frontend lint/build, and frontend unit tests
@@ -71,12 +71,21 @@ jobs:
       - name: Install system packages
         run: sudo apt-get update && sudo apt-get install -y libtag1-dev
 
+      # Pinned mockery version: v3.7.1 (module github.com/vektra/mockery/v3).
+      # Must match scripts/setup-mockery.sh. The committed mocks (including
+      # the merged internal/database/mocks/mock_store.go) were generated
+      # with mockery v3, which supports package-based config and merging
+      # multiple interfaces into one output file — mockery v2.53.6 does NOT
+      # support merging into a shared filename (each interface's generation
+      # overwrites the previous one), so v2 cannot regenerate this repo's
+      # mocks at all. Do not downgrade this pin to v2.
       - name: Install mockery
-        run: go install github.com/vektra/mockery/v2@v2.53.6
+        run: go install github.com/vektra/mockery/v3@v3.7.1
 
       - name: Check mockery mocks are fresh
         run: |
-          mockery >/dev/null 2>&1
+          set -e
+          mockery
           if ! git diff --quiet -- internal/*/mocks/ internal/ai/mock_*_test.go internal/metadata/mock_*_test.go 2>/dev/null; then
             echo "❌ Committed mocks are stale. Run 'make mocks' and commit."
             git diff --stat -- internal/*/mocks/ internal/ai/mock_*_test.go internal/metadata/mock_*_test.go
