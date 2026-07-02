@@ -9,6 +9,10 @@
 
 ### Bug Fixes
 
+#### July 2, 2026 — Local embeddings: trust an explicitly-configured Ollama base_url
+
+- **`fix(server)`** — the embedding client's Ollama-availability gate was set from `toolRegistry.Available("ollama")`, which is a binary-on-PATH probe (`exec.LookPath`). When Ollama runs as a system service / container the app can't see on `PATH` (its HTTP endpoint still reachable on `:11434`), the probe failed and `EmbedBatch` refused every call with `ErrOllamaNotAvailable` — so a local-embedding cutover produced `new=0, errors=all` even though Ollama was up. Now, when an operator has explicitly set an embedding `base_url` (an assertion the endpoint exists), Ollama is treated as available regardless of the binary probe. Unblocks local (bge-m3) embeddings.
+
 #### July 2, 2026 — Embedding backend cutover now actually re-embeds (model-aware skip)
 
 - **`fix(dedup)`** — `prepBookEmbed`'s cached-skip checked only the content hash, not the stored embedding **model**. Switching the embedding backend (e.g. OpenAI `text-embedding-3-large` 3072-dim → local `bge-m3` 1024-dim) therefore skipped every book whose text was unchanged, leaving stale wrong-dimension vectors that score 0 against the new model — so the "re-embed all" op no-oped (observed live: `skipped=all, new=0`). The skip now also requires the stored model to equal the wired client's model (`embeddingModelMatches`); an empty/legacy stored model counts as a mismatch and re-embeds. Enables the local-embedding cutover. Regression test `TestEmbedBooks_ReembedsOnModelChange`.
