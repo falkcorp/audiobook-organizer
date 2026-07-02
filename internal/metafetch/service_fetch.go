@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_fetch.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: b24c7a25-2efa-4b85-adb0-2d591218eff2
-// last-edited: 2026-06-28
+// last-edited: 2026-07-01
 
 package metafetch
 
@@ -30,7 +30,7 @@ func (mfs *Service) queueISBNEnrichment(id string, book *database.Book) {
 		return
 	}
 	go func(bid string) {
-		found, err := mfs.isbnEnrichment.EnrichBookISBN(bid)
+		found, err := mfs.isbnEnrichment.EnrichBookISBN(context.Background(), bid)
 		if err != nil {
 						slog.Warn("ISBN enrichment failed for", "id", bid, "error", err)
 		} else if found {

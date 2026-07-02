@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_mock_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
-// last-edited: 2026-06-16
+// last-edited: 2026-07-01
 
 package metafetch
 
@@ -1648,7 +1648,7 @@ func TestEnrichBookISBN(t *testing.T) {
 			},
 		}
 		svc := NewISBNService(mock, nil)
-		found, err := svc.EnrichBookISBN("nonexistent")
+		found, err := svc.EnrichBookISBN(context.Background(), "nonexistent")
 		assert.NoError(t, err)
 		assert.False(t, found)
 	})
@@ -1662,7 +1662,7 @@ func TestEnrichBookISBN(t *testing.T) {
 			},
 		}
 		svc := NewISBNService(mock, nil)
-		found, err := svc.EnrichBookISBN("b1")
+		found, err := svc.EnrichBookISBN(context.Background(), "b1")
 		assert.NoError(t, err)
 		assert.False(t, found, "should not enrich when ISBN and ASIN already present")
 	})

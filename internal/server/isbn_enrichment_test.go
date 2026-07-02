@@ -1,6 +1,7 @@
 // file: internal/server/isbn_enrichment_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5b7766bc-1f00-4f32-b8ca-8cb0e815c9a1
+// last-edited: 2026-07-01
 
 package server
 
@@ -35,7 +36,7 @@ func TestEnrichBookISBN_SkipsWhenAlreadyHasISBN(t *testing.T) {
 		},
 	}
 	svc := metafetch.NewISBNService(mock, nil)
-	found, err := svc.EnrichBookISBN("book-1")
+	found, err := svc.EnrichBookISBN(context.Background(), "book-1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -62,7 +63,7 @@ func TestEnrichBookISBN_FindsISBN13(t *testing.T) {
 		},
 	}
 	svc := metafetch.NewISBNService(mock, []metadata.MetadataSource{src})
-	found, err := svc.EnrichBookISBN("book-1")
+	found, err := svc.EnrichBookISBN(context.Background(), "book-1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -92,7 +93,7 @@ func TestEnrichBookISBN_FindsISBN10(t *testing.T) {
 		},
 	}
 	svc := metafetch.NewISBNService(mock, []metadata.MetadataSource{src})
-	found, err := svc.EnrichBookISBN("book-1")
+	found, err := svc.EnrichBookISBN(context.Background(), "book-1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -123,7 +124,7 @@ func TestEnrichBookISBN_FindsASIN(t *testing.T) {
 		},
 	}
 	svc := metafetch.NewISBNService(mock, []metadata.MetadataSource{src})
-	found, err := svc.EnrichBookISBN("book-1")
+	found, err := svc.EnrichBookISBN(context.Background(), "book-1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -146,7 +147,7 @@ func TestEnrichBookISBN_NoResultsReturnsFalse(t *testing.T) {
 		results: nil,
 	}
 	svc := metafetch.NewISBNService(mock, []metadata.MetadataSource{src})
-	found, err := svc.EnrichBookISBN("book-1")
+	found, err := svc.EnrichBookISBN(context.Background(), "book-1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -168,7 +169,7 @@ func TestEnrichBookISBN_StrictTitleMismatchSkips(t *testing.T) {
 		},
 	}
 	svc := metafetch.NewISBNService(mock, []metadata.MetadataSource{src})
-	found, err := svc.EnrichBookISBN("book-1")
+	found, err := svc.EnrichBookISBN(context.Background(), "book-1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
