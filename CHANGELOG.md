@@ -9,6 +9,10 @@
 
 ### Bug Fixes
 
+#### July 2, 2026 - HNSW: discard a stale-dimension snapshot on import (embedding cutover)
+
+- **`fix(database)`** - switching the embedding backend from OpenAI `text-embedding-3-large` (3072-dim) to local `bge-m3` (1024-dim) crashed the re-embed op: `HNSWEmbeddingStore.Import` loaded the old 3072-dim on-disk snapshot without a dimension check, and the coder/hnsw library then **panicked** (`graph.go assertDims`) the moment a 1024-dim vector was added. Import now discards any snapshot whose dimension no longer matches the configured store dimension; the derived index rebuilds empty at the new dimension via hydration + re-embed. Regression tests in `hnsw_dim_reset_test.go`.
+
 #### July 2, 2026 — Local embeddings: trust an explicitly-configured Ollama base_url
 
 - **`fix(server)`** — the embedding client's Ollama-availability gate was set from `toolRegistry.Available("ollama")`, which is a binary-on-PATH probe (`exec.LookPath`). When Ollama runs as a system service / container the app can't see on `PATH` (its HTTP endpoint still reachable on `:11434`), the probe failed and `EmbedBatch` refused every call with `ErrOllamaNotAvailable` — so a local-embedding cutover produced `new=0, errors=all` even though Ollama was up. Now, when an operator has explicitly set an embedding `base_url` (an assertion the endpoint exists), Ollama is treated as available regardless of the binary probe. Unblocks local (bge-m3) embeddings.

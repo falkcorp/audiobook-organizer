@@ -1,7 +1,7 @@
 // file: internal/database/hnsw_embedding_store.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-06-18
+// last-edited: 2026-07-02
 
 // HNSW-graph vector store (coder/hnsw) — a sub-linear ANN index alternative to
 // the brute-force chromem store. Selected via config.VectorIndexBackend="hnsw".
@@ -383,6 +383,18 @@ func (s *HNSWEmbeddingStore) Import(dir string) error {
 			return fmt.Errorf("hnsw import: read graph %s: %w", entityType, err)
 		}
 		f.Close()
+		// Discard a snapshot whose dimension no longer matches the configured
+		// store dimension — e.g. after switching the embedding backend from
+		// OpenAI text-embedding-3-large (3072) to local bge-m3 (1024). Loading
+		// the stale graph would make the coder/hnsw library PANIC the moment a
+		// new-dimension vector is added (graph.go assertDims). The index is a
+		// derived structure; skipping the snapshot lets it rebuild empty at the
+		// new dimension via hydration + re-embed.
+		if s.dims > 0 && g.Len() > 0 && g.Dims() != s.dims {
+			slog.Warn("hnsw import: snapshot dimension mismatch; discarding stale snapshot (index will rebuild at new dimension)",
+				"entity_type", entityType, "snapshot_dims", g.Dims(), "config_dims", s.dims)
+			continue
+		}
 		s.graphs[entityType] = g
 
 		metaPath := filepath.Join(dir, "hnsw-"+entityType+".meta.json")
