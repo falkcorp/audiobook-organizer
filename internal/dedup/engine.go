@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.38.0
+// version: 1.39.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-07-01
 
@@ -95,6 +95,13 @@ func isBoilerplateTitle(title string) bool {
 // intro/outro clips, not book content — their fingerprints must not seed or
 // strengthen a duplicate pair. See dedup-intro-falsepositive FINDINGS.md.
 const minFingerprintMatchSeconds = 60
+
+// partVsWholeDurationRatioMax is the duration-ratio ceiling below which a
+// single-file book is treated as a plausible fragment of a multi-file book
+// it is being compared against (CONS-15). Conservative on purpose: genuine
+// single-file duplicates of comparable length must never be suppressed, only
+// pairs where the single-file side is clearly a small slice of the whole.
+const partVsWholeDurationRatioMax = 0.6
 
 // Engine orchestrates a 3-layer dedup system:
 //   - Layer 1: Exact matching (free, instant) — same file hash, ISBN/ASIN, or near-identical titles
@@ -1280,6 +1287,11 @@ func (de *Engine) upsertExactCandidate(a, b *database.Book, layer string, sim fl
 			"book_a", a.ID, "book_b", b.ID, "layer", layer)
 		return nil
 	}
+	if de.isPartVsWholeMismatch(a, b) {
+		slog.Debug("dedup exact candidate dropped by part-vs-whole gate",
+			"book_a", a.ID, "book_b", b.ID, "layer", layer)
+		return nil
+	}
 	return de.embedStore.UpsertCandidate(database.DedupCandidate{
 		EntityType: "book",
 		EntityAID:  a.ID,
@@ -1328,6 +1340,60 @@ func hasKnownShortDuration(book *database.Book) bool {
 		return false
 	}
 	return *book.Duration < minFingerprintMatchSeconds
+}
+
+// isPartVsWholeMismatch reports whether a and b look like a single-file part
+// being compared against a multi-file whole — e.g. one side has exactly one
+// BookFile whose total duration is a small fraction of the other side's
+// total duration. Such pairs must not be emitted as 100%-confidence exact
+// duplicates even if titles/identifiers otherwise match, since a mis-tagged
+// chapter file is common and an incorrect merge is destructive.
+//
+// Unknown or zero durations/file counts are conservative and never trigger
+// the guard — this only fires when both sides' file counts and durations are
+// known and clearly mismatched, mirroring hasPlausibleAudio's convention.
+func (de *Engine) isPartVsWholeMismatch(a, b *database.Book) bool {
+	if a == nil || b == nil || de.bookStore == nil {
+		return false
+	}
+	filesA, err := de.bookStore.GetBookFiles(a.ID)
+	if err != nil || len(filesA) == 0 {
+		return false
+	}
+	filesB, err := de.bookStore.GetBookFiles(b.ID)
+	if err != nil || len(filesB) == 0 {
+		return false
+	}
+
+	var partFiles, wholeFiles []database.BookFile
+	switch {
+	case len(filesA) == 1 && len(filesB) >= 2:
+		partFiles, wholeFiles = filesA, filesB
+	case len(filesB) == 1 && len(filesA) >= 2:
+		partFiles, wholeFiles = filesB, filesA
+	default:
+		return false
+	}
+
+	partDuration := sumBookFileDurations(partFiles)
+	wholeDuration := sumBookFileDurations(wholeFiles)
+	if partDuration <= 0 || wholeDuration <= 0 {
+		return false
+	}
+	return float64(partDuration) < partVsWholeDurationRatioMax*float64(wholeDuration)
+}
+
+// sumBookFileDurations totals the Duration (seconds) of the given BookFiles.
+// Non-positive durations contribute 0, consistent with the "unknown" convention
+// used elsewhere in the dedup guards.
+func sumBookFileDurations(files []database.BookFile) int {
+	total := 0
+	for _, f := range files {
+		if f.Duration > 0 {
+			total += f.Duration
+		}
+	}
+	return total
 }
 
 func hasPlausibleAudio(book *database.Book) bool {
