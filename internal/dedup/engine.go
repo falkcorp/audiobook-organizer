@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.41.0
+// version: 1.41.1
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-07-02
 
@@ -1348,15 +1348,15 @@ func (de *Engine) upsertExactCandidate(a, b *database.Book, layer string, sim fl
 			"book_a", a.ID, "book_b", b.ID, "layer", layer)
 		return nil
 	}
-	if de.acoustIDSignaturesConflict(a, b) {
-		// Two books whose book-level AcoustID audio signatures clearly disagree
-		// cannot be the same recording, no matter how similar their title/author
-		// metadata is. This is the AcoustID veto: a title-fuzzy "exact" match
-		// between different audio is a false positive.
-		slog.Debug("dedup exact candidate dropped by acoustid-signature gate",
-			"book_a", a.ID, "book_b", b.ID, "layer", layer)
-		return nil
-	}
+	// NOTE: an AcoustID-signature emission veto was intentionally NOT wired here.
+	// A prod dry-run (ReevaluateAcoustIDConflicts) showed it is not viable as a
+	// gate: 65% of candidate books have no AcoustID fingerprint (unjudgeable), and
+	// BookSignatureSimilarityMasked returns ~0.50 for UNCORRELATED audio (the
+	// noise floor: uncorrelated chromaprints differ in ~half their bits). So there
+	// is no defensible similarity threshold that separates dups from non-dups on
+	// this data. The helper + the /dedup/purge-acoustid-conflicts endpoint are
+	// kept as diagnostics; a real veto needs measured dup-vs-nondup separation
+	// (and fingerprint coverage) first.
 	return de.upsertCandidateWithLiveLabel(database.DedupCandidate{
 		EntityType: "book",
 		EntityAID:  a.ID,
