@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.41.1
+// version: 1.42.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-07-02
 
@@ -2091,11 +2091,27 @@ func (de *Engine) prepBookEmbed(ctx context.Context, bookID string) (
 	hash = ai.TextHash(text)
 
 	existing, getErr := de.embedStore.Get("book", bookID)
-	if getErr == nil && existing != nil && existing.TextHash == hash {
+	if getErr == nil && existing != nil && existing.TextHash == hash && de.embeddingModelMatches(existing.Model) {
 		de.mirrorBookToChromem(ctx, book, existing.Vector)
 		return book, text, hash, EmbedStatusCached, true, nil
 	}
 	return book, text, hash, 0, false, nil
+}
+
+// embeddingModelMatches reports whether a stored embedding's model matches the
+// currently-wired embedding client's model. A mismatch — e.g. after switching
+// the embedding backend from OpenAI (text-embedding-3-large, 3072-dim) to a
+// local model (bge-m3, 1024-dim) — must FORCE a re-embed even when the text
+// hash is unchanged. Without this, prepBookEmbed skips every book on a
+// content-hash hit and a model cutover silently no-ops, leaving stale vectors
+// of the wrong dimension (which then score 0 against the new model's vectors).
+// Empty stored model (pre-model-tagging rows) counts as a mismatch so those are
+// re-embedded too.
+func (de *Engine) embeddingModelMatches(storedModel string) bool {
+	if de.embedClient == nil {
+		return true // no client to compare against; don't force churn
+	}
+	return storedModel == de.embedClient.Model()
 }
 
 // EmbedBooks generates embeddings for the given book IDs in a single API call
