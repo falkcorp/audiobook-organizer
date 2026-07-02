@@ -520,18 +520,18 @@ because the subprocess child-mode handler is never wired into
 `main.go`. Without it, the child process re-execs with
 `--operation-runner` and cobra root errors out with "unknown flag".
 
-- [x] **A1** [hold] `main.go`: before `cmd.Execute`, call — ✅ verified done 2026-07-01: main.go:37 registry.IsChildMode() before cobra parse
+- [x] **MDA1** [hold] `main.go`: before `cmd.Execute`, call — ✅ verified done 2026-07-01: main.go:37 registry.IsChildMode() before cobra parse
   `registry.IsChildMode()`. If true, build a minimal Registry with all
   plugin defs (NO server init, NO memdb warm — just defs + store
   access), then call `registry.RunChildMode(r)` which never returns.
   Acceptance: `audiobook-organizer --operation-runner <opID>` with
   `UOS_SOCKET=/tmp/sock` connects to a parent socket and runs.
-- [x] **A2** ✅ Done (verified 2026-06-17) — `internal/operations/registry/subprocess_test.go`
+- [x] **MDA2** ✅ Done (verified 2026-06-17) — `internal/operations/registry/subprocess_test.go`
   already contains `TestSubprocess_HandshakeRoundtrip` + `TestSubprocessRoundtrip` (added
   2026-06-13) which re-exec the test binary as the child and verify handshake + result
   roundtrip over the unix socket. `go test ./internal/operations/registry/ -run TestSubprocess`
   passes. The stale auto-burndown PR #1339 is redundant (left for the user to close).
-- [ ] **A3** [hold] After A1+A2 pass in CI, revert `Isolate: false` on the
+- [ ] **MDA3** [hold] After MDA1+MDA2 pass in CI, revert `Isolate: false` on the
   7 ops (PR #1155). Restore the original comments. Verify
   acoustid.scan logs both parent "dispatched" AND child stdout
   routed through reporter.
@@ -540,22 +540,22 @@ because the subprocess child-mode handler is never wired into
 The merge button hits TWO endpoints per click, and stale candidate
 rows reference merged-away book IDs.
 
-- [x] **B1** Find which frontend component fires both
+- [x] **MDB1** Find which frontend component fires both
   `POST /api/v1/audiobooks/merge` AND
   `POST /api/v1/dedup/candidates/:id/merge` for one Merge click
   (likely `web/src/components/dedup/`). Pick one endpoint, remove
   the other call.
-- [x] **B2** `server/dedup_handlers.go:mergeDedupCandidate`: when
+- [x] **MDB2** `server/dedup_handlers.go:mergeDedupCandidate`: when
   `mergeService.MergeBooks` returns "book not found", respond 409
   Conflict with body `{status: "already_merged"}` instead of 500.
-- [x] **B3** Add `cleanupCandidatesForMergedBook(bookID)` to
+- [x] **MDB3** Add `cleanupCandidatesForMergedBook(bookID)` to
   `internal/dedup/engine.go`: when a book is merged-away, mark
   ALL other candidate rows referencing that book ID as "merged" so
   they disappear from the pending-candidates list. Call from
   `mergeService.MergeBooks` after the book is gone.
-- [x] **B4** `embeddingStore.ListCandidates`: filter out rows whose
+- [x] **MDB4** `embeddingStore.ListCandidates`: filter out rows whose
   `entity_a_id` or `entity_b_id` no longer exists in the book table
-  (defense-in-depth against B3 missing edge cases).
+  (defense-in-depth against MDB3 missing edge cases).
 
 ### MAYDEPLOY-C: List-query perf cleanup
 The big wins shipped (#1153 GetBookFilesForIDs memdb pushdown), but
