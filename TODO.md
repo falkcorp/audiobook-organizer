@@ -872,17 +872,21 @@ must sequence, but A and B are parallelizable. Spawn:
 
 ## 🐛 Open Bugs — May 17, 2026
 
-- [ ] **PEBBLE-CLOSED-SHUTDOWN-RACE** (2026-07-01, found during the agent-task sweep) — Under
-  `go test -race` (package-wide, e.g. `internal/server`), a leaked `DepsScheduler.SweepTick`
-  goroutine can outlive a test's `store.Close()` and panic with `pebble: closed`, crashing the
-  whole test binary. Path: `operations/registry.Registry.Start` (registry.go:~318) launches the
-  sweep goroutine → `DepsScheduler.SweepTick` (deps_scheduler.go:~176) → `PebbleStore.ListWaitingDepsOps`
-  (pebble_store_ops_v2.go:~638) reads the DB after it's closed. **Independently reproduced by two
-  sweep workers** (the `flaky-backup` and `flaky-scan` fixes) as an out-of-scope side-finding.
-  Fix direction: give the sweep goroutine a stop signal (context/channel) tied to `Registry.Stop`/
-  test cleanup so it joins before the store closes, OR make `ListWaitingDepsOps` tolerate a closed DB.
-  Not the cause of the two deflaked tests (#1711/#1713) — a separate lifecycle bug. Re-verify line
-  numbers with grep before fixing.
+- [x] **PEBBLE-CLOSED-SHUTDOWN-RACE** (2026-07-01, found during the agent-task sweep) — ✅ **FIXED
+  2026-07-02** (branch `fix/pebble-shutdown-race`). **Root cause was NOT `SweepTick`** as the
+  original entry guessed — that path was already enrolled in `goroutineWG` and drained by
+  `Shutdown`. Reproduced with a real PebbleStore (`shutdown_race_test.go`, 10/10 panic pre-fix):
+  the actual leak is the fire-and-forget dep-notify goroutines at `registry.go:210,226`
+  (`notifyDepCompletion`/`notifyDepFailed`). They used `context.Background()` and were **not**
+  enrolled in `goroutineWG`, so `Registry.Shutdown()`'s `goroutineWG.Wait()` returned without
+  draining them → `OnOpCompleted → RecordOpCompletion` read/wrote the store after `store.Close()`
+  → `pebble: closed` crash. Fix: enroll both notify goroutines in `goroutineWG`, gated under `r.mu`
+  against a new `notifyStopped` flag that `Shutdown` sets (under `mu`) just before `Wait()` — this
+  closes the Add-after-Wait window created by `releaseRunHandle` removing the op from `r.running`
+  (worker.go:303) *before* the notify call (worker.go:331). Late notifies during teardown are
+  skipped safely (terminal status already persisted; next `Start`'s `SweepTick` re-evaluates).
+  Verified: repro 10/10 pass under `-race`, full `internal/operations/registry` package green under
+  `-race`. Not the cause of the two deflaked tests (#1711/#1713) — a separate lifecycle bug.
 - [x] **CI-FRONTEND-UNITTESTS-STALE** (2026-06-13) ✅ **FIXED 2026-06-17** — `UnifiedDedupTab.test.tsx`
   updated: `mockCandidate` now carries inline `book_a`/`book_b` (the `include_books` shape)
   and the 2 stale tests assert on the rendered card **title** (`Dune (FLAC rip)`) instead of
