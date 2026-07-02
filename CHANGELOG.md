@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.96.0 -->
+<!-- version: 3.97.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-02 -->
 
@@ -8,6 +8,17 @@
 ## [Unreleased]
 
 ### Bug Fixes
+
+#### July 2, 2026 - Burndown pipeline audit: stale CI pins across all 3 burndown workflows
+
+- **`fix(ci)`** - `triage-poll.yml` was SHA-pinned to a `github-common` commit whose embedded image tag no longer existed in the registry — every 30-min cron run failed at `docker pull`, confirmed via 100/100 recent runs red. Re-pinned to the commit with the fix; a manually-triggered run confirmed green afterward.
+- **`fix(ci)`** - `hard-burndown.yml` was 6 commits behind `main` on `github-common`, missing both the `max_tasks` cap and the `rebase-stale` auto-conflict-fix job — a weekly job running the priciest model tier (`powerful_only: true`) with no dispatch cap, exposed to the same OpenAI-quota-exhaustion failure mode `max_tasks` was added to `nightly-burndown.yml` to prevent. Re-pinned to current `main` and added the same `max_tasks=8` cap on scheduled runs.
+- **`fix(ci)`** - `nightly-burndown.yml` was 3 commits behind (not broken today, but same staleness class) — re-pinned to current `main` for consistency.
+
+#### July 2, 2026 - TODO.md: resolved ID collisions between unrelated tasks
+
+- **`fix(todo)`** - `A1`/`A2`/`A3` and `B1`-`B4` bold checkbox IDs were each reused for two genuinely unrelated task groups (`sync_todo_issues.py`'s dedup keys purely on the literal ID string). `A3` had conflicting done-states, causing GitHub issue #1243 to be permanently stuck open with a garbled two-tasks-glued-together body. Renamed the `MAYDEPLOY-A`/`MAYDEPLOY-B` group's IDs to `MDA1-3`/`MDB1-4`; relabeled the corresponding live GitHub issues (#1241/#1242/#1243) first so the still-open #1243 wasn't mistaken for done and auto-closed by the next sync run.
+- **`fix(todo)`** - Same collision class found in `TOOL-1`/`TOOL-3`/`TOOL-5`/`SEC-2` (dormant — both occurrences happened to be checked, so no live conflict yet, but the mechanism is identical). Renamed the "ARCH — Architecture (June 2026 audit)" section's occurrences to `<ID>-AUD`. `ARCH-7`'s duplicate was left untouched — it looks like a genuine content duplicate of the same PR #1608 work rather than an ID collision between different tasks.
 
 #### July 2, 2026 - HNSW: contain coder/hnsw library panics at the store boundary
 
