@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/handler.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: d1b9e024-d28c-4d62-8f90-96d7064559c4
-// last-edited: 2026-06-23
+// last-edited: 2026-07-02
 
 // Package deduphandler hosts the dedup-domain HTTP handlers extracted from the
 // server package: dedup candidate / cluster / series listing, merge / dismiss /
@@ -419,6 +419,34 @@ func (h *Handler) RescoreDedupCandidates(c *gin.Context) {
 	result, err := h.dedupEngine.Rescore(c.Request.Context(), body.Apply)
 	if err != nil {
 		httputil.InternalError(c, "rescore failed", err)
+		return
+	}
+
+	httputil.RespondWithOK(c, result)
+}
+
+// PurgeAcoustIDConflicts handles POST /api/v1/dedup/purge-acoustid-conflicts.
+//
+// Finds PENDING non-audio dedup candidates whose two books have clearly
+// disagreeing book-level AcoustID signatures — the title/metadata false
+// positives the new acoustid veto suppresses at emission time. Dry-run by
+// default (returns counts + a sample, mutates nothing); pass {"apply": true} to
+// delete the conflicting candidates.
+func (h *Handler) PurgeAcoustIDConflicts(c *gin.Context) {
+	if h.dedupEngine == nil {
+		httputil.RespondWithServiceUnavailable(c, "dedup engine not available")
+		return
+	}
+
+	var body struct {
+		Apply bool `json:"apply"`
+	}
+	// Ignore parse errors; missing body → dry-run (apply=false).
+	_ = c.ShouldBindJSON(&body)
+
+	result, err := h.dedupEngine.ReevaluateAcoustIDConflicts(c.Request.Context(), !body.Apply)
+	if err != nil {
+		httputil.InternalError(c, "acoustid-conflict reevaluation failed", err)
 		return
 	}
 

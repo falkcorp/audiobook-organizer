@@ -1,7 +1,7 @@
 // file: internal/dedup/engine.go
-// version: 1.40.0
+// version: 1.41.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
-// last-edited: 2026-07-01
+// last-edited: 2026-07-02
 
 package dedup
 
@@ -1348,6 +1348,15 @@ func (de *Engine) upsertExactCandidate(a, b *database.Book, layer string, sim fl
 			"book_a", a.ID, "book_b", b.ID, "layer", layer)
 		return nil
 	}
+	if de.acoustIDSignaturesConflict(a, b) {
+		// Two books whose book-level AcoustID audio signatures clearly disagree
+		// cannot be the same recording, no matter how similar their title/author
+		// metadata is. This is the AcoustID veto: a title-fuzzy "exact" match
+		// between different audio is a false positive.
+		slog.Debug("dedup exact candidate dropped by acoustid-signature gate",
+			"book_a", a.ID, "book_b", b.ID, "layer", layer)
+		return nil
+	}
 	return de.upsertCandidateWithLiveLabel(database.DedupCandidate{
 		EntityType: "book",
 		EntityAID:  a.ID,
@@ -1437,6 +1446,192 @@ func (de *Engine) isPartVsWholeMismatch(a, b *database.Book) bool {
 		return false
 	}
 	return float64(partDuration) < partVsWholeDurationRatioMax*float64(wholeDuration)
+}
+
+const (
+	// acoustIDVetoMaxSimilarity is the book-level AcoustID signature similarity
+	// BELOW which two books are treated as clearly different audio, so a
+	// title/metadata "exact" candidate between them is a false positive that
+	// gets vetoed. Set well below fingerprint.FuzzyMinSimilarity (0.80, the
+	// positive-match threshold) so only clearly-different audio is vetoed;
+	// borderline pairs (0.50–0.80) are left for manual review, never hidden.
+	acoustIDVetoMaxSimilarity = 0.50
+	// acoustIDVetoMinOverlap is the minimum number of overlapping signature
+	// words required for a reliable masked comparison, mirroring
+	// BookSignatureScan's floor. Below this, the comparison is skipped (no veto).
+	acoustIDVetoMinOverlap = 512
+)
+
+// acoustIDSignaturesConflict reports whether books a and b have book-level
+// AcoustID audio signatures (book_sig_v1, synthesized from per-file chromaprint
+// segments) that CLEARLY disagree — strong evidence they are not the same
+// recording. This is the veto primitive for the exact chokepoint.
+//
+// Deliberately conservative: a false veto silently hides a real duplicate, which
+// is worse than a false positive sitting in the review queue. It therefore
+// returns false (no veto) unless BOTH books have a usable signature, the masked
+// comparison has enough overlap to be reliable, and the similarity is well below
+// the match threshold. Book signatures are book-level (not per-file), so a real
+// duplicate chaptered 1-file-vs-many still compares correctly and is not vetoed.
+//
+// When a passed book lacks its signature (e.g. a stripped summary row), it is
+// re-fetched by ID so the veto still applies. This runs only per emitted
+// candidate (the chokepoint), not per pairwise comparison, so the lookup cost is
+// bounded.
+func (de *Engine) acoustIDSignaturesConflict(a, b *database.Book) bool {
+	if a == nil || b == nil || de.bookStore == nil {
+		return false
+	}
+	sigA, maskA, okA := de.bookSignature(a)
+	sigB, maskB, okB := de.bookSignature(b)
+	if !okA || !okB {
+		return false // conservative: never veto on missing signature data
+	}
+	sim, overlap, err := fingerprint.BookSignatureSimilarityMasked(sigA, sigB, maskA, maskB)
+	if err != nil || overlap < acoustIDVetoMinOverlap {
+		return false
+	}
+	return sim < acoustIDVetoMaxSimilarity
+}
+
+// bookSignature returns a book's book_sig_v1 signature and mask, re-fetching the
+// full record by ID when the passed struct doesn't carry the signature. The
+// bool is false when no usable signature is available.
+func (de *Engine) bookSignature(b *database.Book) (sig, mask string, ok bool) {
+	if b == nil {
+		return "", "", false
+	}
+	if b.BookSigV1 == nil || *b.BookSigV1 == "" {
+		if de.bookStore == nil {
+			return "", "", false
+		}
+		full, err := de.bookStore.GetBookByID(b.ID)
+		if err != nil || full == nil {
+			return "", "", false
+		}
+		b = full
+	}
+	if b.BookSigV1 == nil || *b.BookSigV1 == "" {
+		return "", "", false
+	}
+	if b.BookSigV1Mask != nil {
+		mask = *b.BookSigV1Mask
+	}
+	return *b.BookSigV1, mask, true
+}
+
+// AcoustIDConflictResult summarizes a ReevaluateAcoustIDConflicts run.
+type AcoustIDConflictResult struct {
+	Checked   int                      `json:"checked"`   // pending non-audio candidates examined
+	Skipped   int                      `json:"skipped"`   // no usable signature / insufficient overlap
+	Conflicts int                      `json:"conflicts"` // pairs whose AcoustID audio clearly disagrees
+	Deleted   int                      `json:"deleted"`   // rows removed (0 when dryRun)
+	DryRun    bool                     `json:"dry_run"`
+	Samples   []AcoustIDConflictSample `json:"samples"`
+}
+
+// AcoustIDConflictSample is one conflicting candidate, for the dry-run report.
+type AcoustIDConflictSample struct {
+	CandidateID int64   `json:"candidate_id"`
+	Layer       string  `json:"layer"`
+	BookAID     string  `json:"book_a_id"`
+	BookBID     string  `json:"book_b_id"`
+	TitleA      string  `json:"title_a"`
+	TitleB      string  `json:"title_b"`
+	Similarity  float64 `json:"similarity"`
+}
+
+const acoustIDConflictSampleCap = 50
+
+// ReevaluateAcoustIDConflicts walks PENDING book dedup candidates and finds
+// those whose two books have clearly-disagreeing book-level AcoustID signatures
+// — the false positives from the title/metadata "exact" layers that the new
+// acoustid veto now suppresses at emission time. The "acoustid" and
+// "book_signature" layers are skipped (they ARE the positive audio evidence, so
+// vetoing them by audio would be circular).
+//
+// When dryRun is true nothing is mutated: the result reports how many WOULD be
+// removed, plus a capped sample for inspection.
+func (de *Engine) ReevaluateAcoustIDConflicts(ctx context.Context, dryRun bool) (*AcoustIDConflictResult, error) {
+	if de.embedStore == nil || de.bookStore == nil {
+		return &AcoustIDConflictResult{DryRun: dryRun}, nil
+	}
+	candidates, _, err := de.embedStore.ListCandidates(database.CandidateFilter{
+		EntityType: "book",
+		Status:     "pending",
+		Limit:      1000000,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list candidates: %w", err)
+	}
+
+	res := &AcoustIDConflictResult{DryRun: dryRun}
+	type sigMeta struct {
+		sig, mask, title string
+		ok               bool
+	}
+	cache := make(map[string]sigMeta, len(candidates)*2)
+	lookup := func(id string) sigMeta {
+		if m, ok := cache[id]; ok {
+			return m
+		}
+		m := sigMeta{}
+		b, err := de.bookStore.GetBookByID(id)
+		if err == nil && b != nil {
+			m.title = b.Title
+			if b.BookSigV1 != nil && *b.BookSigV1 != "" {
+				m.sig = *b.BookSigV1
+				if b.BookSigV1Mask != nil {
+					m.mask = *b.BookSigV1Mask
+				}
+				m.ok = true
+			}
+		}
+		cache[id] = m
+		return m
+	}
+
+	for _, c := range candidates {
+		select {
+		case <-ctx.Done():
+			return res, ctx.Err()
+		default:
+		}
+		if c.Layer == "acoustid" || c.Layer == "book_signature" {
+			continue // audio-positive layers: never vetoed by audio
+		}
+		res.Checked++
+		a := lookup(c.EntityAID)
+		b := lookup(c.EntityBID)
+		if !a.ok || !b.ok {
+			res.Skipped++ // conservative: can't judge without both signatures
+			continue
+		}
+		sim, overlap, err := fingerprint.BookSignatureSimilarityMasked(a.sig, b.sig, a.mask, b.mask)
+		if err != nil || overlap < acoustIDVetoMinOverlap {
+			res.Skipped++
+			continue
+		}
+		if sim >= acoustIDVetoMaxSimilarity {
+			continue // audio agrees or is borderline — leave for manual review
+		}
+		res.Conflicts++
+		if len(res.Samples) < acoustIDConflictSampleCap {
+			res.Samples = append(res.Samples, AcoustIDConflictSample{
+				CandidateID: c.ID, Layer: c.Layer,
+				BookAID: c.EntityAID, BookBID: c.EntityBID,
+				TitleA: a.title, TitleB: b.title, Similarity: sim,
+			})
+		}
+		if !dryRun {
+			if err := de.embedStore.DeleteCandidate(c.ID); err != nil {
+				slog.Info("dedup acoustid-conflict delete", "c", c.ID, "err", err)
+				continue
+			}
+			res.Deleted++
+		}
+	}
+	return res, nil
 }
 
 // sumBookFileDurations totals the Duration (seconds) of the given BookFiles.

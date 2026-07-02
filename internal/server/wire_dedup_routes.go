@@ -1,7 +1,7 @@
 // file: internal/server/wire_dedup_routes.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b8c9d0e1-f2a3-4567-bcde-890123456789
-// last-edited: 2026-07-01
+// last-edited: 2026-07-02
 
 package server
 
@@ -29,6 +29,7 @@ func (s *Server) wireDedupRoutes(
 	// T016: breakdown and rescore endpoints (frozen API contract for T017).
 	protected.GET("/dedup/candidates/:id/breakdown", s.perm(auth.PermLibraryView), dedupH.GetDedupCandidateBreakdown)
 	protected.POST("/dedup/rescore", s.perm(auth.PermScanTrigger), dedupH.RescoreDedupCandidates)
+	protected.POST("/dedup/purge-acoustid-conflicts", s.perm(auth.PermScanTrigger), dedupH.PurgeAcoustIDConflicts)
 	protected.POST("/dedup/candidates/:id/merge", s.perm(auth.PermLibraryEditMetadata), dedupH.MergeDedupCandidate)
 	protected.POST("/dedup/candidates/:id/dismiss", s.perm(auth.PermLibraryEditMetadata), dedupH.DismissDedupCandidate)
 	protected.POST("/dedup/candidates/bulk-merge", s.perm(auth.PermLibraryEditMetadata), dedupH.BulkMergeDedupCandidates)
