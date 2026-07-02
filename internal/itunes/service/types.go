@@ -1,5 +1,5 @@
 // file: internal/itunes/service/types.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 43dcecba-4cba-4139-bd4c-5047a9a1f0c0
 
 package itunesservice
@@ -11,6 +11,11 @@ import "github.com/falkcorp/audiobook-organizer/internal/database"
 // package never imports internal/config.
 type BookOrganizer interface {
 	OrganizeBook(book *database.Book) (newPath, sidecar string, err error)
+	// OrganizeBookDirectory organizes a multi-file (merged) book by moving
+	// each of its per-track segment paths into the book's target directory.
+	// Returns the new target directory and a map of old segment path ->
+	// new segment path so callers can update per-file records.
+	OrganizeBookDirectory(book *database.Book, segmentPaths []string) (targetDir string, pathMap map[string]string, err error)
 }
 
 // ValidateRequest is the wire type for POST /itunes/validate.
