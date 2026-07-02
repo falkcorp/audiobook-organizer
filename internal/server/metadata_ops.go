@@ -1,5 +1,5 @@
 // file: internal/server/metadata_ops.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
 // last-edited: 2026-07-01
 //
@@ -464,10 +464,13 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 		done[r.BookID] = true
 	}
 
-	allAuthors, _ := store.GetAllAuthors()
-	authorByID := make(map[int]string, len(allAuthors))
-	for _, a := range allAuthors {
-		authorByID[a.ID] = a.Name
+	var authorByID map[int]string
+	if len(bookIDs) >= 100 {
+		allAuthors, _ := store.GetAllAuthors()
+		authorByID = make(map[int]string, len(allAuthors))
+		for _, a := range allAuthors {
+			authorByID[a.ID] = a.Name
+		}
 	}
 
 	type bookWork struct {
@@ -497,7 +500,11 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 		}
 		author := ""
 		if b.AuthorID != nil {
-			author = authorByID[*b.AuthorID]
+			if authorByID != nil {
+				author = authorByID[*b.AuthorID]
+			} else if a, aerr := store.GetAuthorByID(*b.AuthorID); aerr == nil && a != nil {
+				author = a.Name
+			}
 		}
 		work = append(work, bookWork{book: *b, authorName: author})
 	}
