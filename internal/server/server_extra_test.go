@@ -1,7 +1,7 @@
 // file: internal/server/server_extra_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 61a2d3c4-80ab-4f6f-8c39-15a2ac5b7f0c
-// last-edited: 2026-06-17
+// last-edited: 2026-07-01
 
 package server
 
@@ -487,12 +487,8 @@ func TestBackupEndpointsErrors(t *testing.T) {
 	defer cleanup()
 
 	origConfig := config.AppConfig
-	origDir, err := os.Getwd()
-	require.NoError(t, err)
 	tempDir := t.TempDir()
-	require.NoError(t, os.Chdir(tempDir))
 	defer func() {
-		_ = os.Chdir(origDir)
 		config.AppConfig = origConfig
 	}()
 
