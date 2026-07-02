@@ -1,7 +1,7 @@
 # file: Makefile
-# version: 2.13.0
+# version: 2.14.0
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
-# last-edited: 2026-06-23
+# last-edited: 2026-07-01
 
 BINARY := audiobook-organizer
 ROOT_DIR := $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
@@ -184,6 +184,13 @@ vet:
 
 ## mocks: Regenerate mockery-managed mocks from .mockery.yaml.
 ## Run this after editing an interface listed in .mockery.yaml.
+## Pinned mockery version: v3.7.1 (module github.com/vektra/mockery/v3).
+## Install via scripts/setup-mockery.sh. Mockery v2.x cannot regenerate
+## these mocks: it does not support merging multiple interfaces into one
+## shared output file (e.g. internal/database/mocks/mock_store.go), so
+## running an older/newer mockery binary here will silently corrupt or
+## truncate that file. If `make mocks` produces a huge, repo-wide diff,
+## you are running the wrong mockery version — check `mockery version`.
 mocks:
 	@echo "🎭 Regenerating mockery-managed mocks..."
 	@mockery
@@ -191,10 +198,11 @@ mocks:
 
 ## mocks-check: Verify committed mocks match what mockery would generate
 ## right now. Fails CI if someone edited an interface without re-running
-## mockery. Backlog 5.9.
+## mockery. Pinned mockery version: v3.7.1 (see scripts/setup-mockery.sh).
+## Backlog 5.9.
 mocks-check:
 	@echo "🎭 Checking that committed mocks are up to date..."
-	@mockery >/dev/null 2>&1
+	@mockery --log-level warn
 	@if ! git diff --quiet -- internal/*/mocks/ internal/ai/mock_*_test.go internal/metadata/mock_*_test.go; then \
 		echo "❌ Committed mocks are stale. Run 'make mocks' and commit the result."; \
 		git diff --stat -- internal/*/mocks/ internal/ai/mock_*_test.go internal/metadata/mock_*_test.go; \
