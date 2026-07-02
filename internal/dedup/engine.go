@@ -1,7 +1,7 @@
 // file: internal/dedup/engine.go
-// version: 1.37.0
+// version: 1.38.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
-// last-edited: 2026-06-30
+// last-edited: 2026-07-01
 
 package dedup
 
@@ -1270,6 +1270,16 @@ func (de *Engine) upsertExactCandidate(a, b *database.Book, layer string, sim fl
 			"book_a", a.ID, "book_b", b.ID, "layer", layer)
 		return nil
 	}
+	if isBoilerplateTitle(a.Title) || isBoilerplateTitle(b.Title) {
+		slog.Debug("dedup exact candidate dropped by boilerplate-title gate",
+			"book_a", a.ID, "book_b", b.ID, "layer", layer)
+		return nil
+	}
+	if hasKnownShortDuration(a) || hasKnownShortDuration(b) {
+		slog.Debug("dedup exact candidate dropped by min-duration gate",
+			"book_a", a.ID, "book_b", b.ID, "layer", layer)
+		return nil
+	}
 	return de.embedStore.UpsertCandidate(database.DedupCandidate{
 		EntityType: "book",
 		EntityAID:  a.ID,
@@ -1307,6 +1317,17 @@ func normalizeISBN(v string) string {
 
 func normalizeASIN(v string) string {
 	return strings.ToUpper(strings.TrimSpace(v))
+}
+
+// hasKnownShortDuration reports whether book has a known, positive Duration
+// strictly under minFingerprintMatchSeconds. Unknown or non-positive durations
+// (nil or <= 0) are conservative and never treated as "short" — matches the
+// hasPlausibleAudio convention of not disqualifying on missing data.
+func hasKnownShortDuration(book *database.Book) bool {
+	if book == nil || book.Duration == nil || *book.Duration <= 0 {
+		return false
+	}
+	return *book.Duration < minFingerprintMatchSeconds
 }
 
 func hasPlausibleAudio(book *database.Book) bool {
