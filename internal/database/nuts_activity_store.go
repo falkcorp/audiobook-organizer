@@ -1,6 +1,7 @@
 // file: internal/database/nuts_activity_store.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: c3d4e5f6-a7b8-0003-cdef-000000000003
+// last-edited: 2026-07-01
 
 package database
 
@@ -100,6 +101,17 @@ func NewNutsActivityStore(dirPath string) (*NutsActivityStore, error) {
 }
 
 // Close shuts down the underlying NutsDB.
+// Close shuts down the underlying NutsDB handle. Note: nutsdb v1.1.0 starts a
+// background TTL time-wheel goroutine on Open() (db.go: `go db.tm.run()`)
+// regardless of whether TTL/expiry is ever used — it is not, here (every
+// tx.Put(...) call in this file passes 0 for the TTL argument). db.Close()
+// already calls tm.close() internally to stop the time-wheel; there is no
+// additional goroutine owned by this file that needs signaling. This is
+// benign in prod (the activity store is a process-lifetime singleton, see
+// internal/activity/register.go) — it only accumulates goroutines in
+// short-lived test opens. See TODO.md NUTSDB-CLOSE-GOROUTINE-LEAK. Do NOT
+// fork/upgrade nutsdb to chase this further (nuts_activity_store.go is
+// coupled to v1.1.0-specific error sentinels).
 func (s *NutsActivityStore) Close() error { return s.db.Close() }
 
 // Record inserts an ActivityEntry and returns a synthetic int64 ID.
