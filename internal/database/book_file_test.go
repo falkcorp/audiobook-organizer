@@ -1,6 +1,7 @@
 // file: internal/database/book_file_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b7c8d9e0-f1a2-3b4c-5d6e-7f8a9b0c1d2e
+// last-edited: 2026-07-01
 
 package database
 
@@ -97,6 +98,29 @@ func TestCreateBookFile(t *testing.T) {
 	assert.Equal(t, "sha256:abc123", got.FileHash)
 	assert.Equal(t, "sha256:original456", got.OriginalFileHash)
 	assert.False(t, got.Missing)
+}
+
+// TestCreateBookFile_DownloadHashRoundTrips verifies the DownloadHash
+// provenance field persists through CreateBookFile/GetBookFileByID unchanged.
+func TestCreateBookFile_DownloadHashRoundTrips(t *testing.T) {
+	store, bookID, cleanup := newTestStoreWithBook(t)
+	defer cleanup()
+
+	f := &BookFile{
+		BookID:       bookID,
+		FilePath:     "/mnt/books/narnia/download_hash_test.m4b",
+		DelugeHash:   "torrent-info-hash",
+		DownloadHash: "download-hash-value",
+	}
+	err := store.CreateBookFile(f)
+	require.NoError(t, err)
+	require.NotEmpty(t, f.ID)
+
+	got, err := store.GetBookFileByID(bookID, f.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "torrent-info-hash", got.DelugeHash)
+	assert.Equal(t, "download-hash-value", got.DownloadHash)
 }
 
 // TestGetBookFiles creates 3 files for one book with different disc/track
