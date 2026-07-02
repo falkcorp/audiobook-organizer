@@ -9,6 +9,10 @@
 
 ### Bug Fixes
 
+#### July 2, 2026 — Library: selecting a later page no longer bounces back to page 1
+
+- **`fix(web)`** — the filters-sync effect in `useLibraryFilters` rebuilt the `filters` object on **every** `searchParams` change, including page-only navigation (the URL carries `?page=N`). The new object reference re-triggered the page-reset effect in `Library.tsx` (whose deps include `filters`), snapping the user back to page 1. The effect now preserves prev's non-URL fields (`tags`, etc.) and returns the **same reference** when no filter value actually changed (`shallowEqualFilters`), so page navigation no longer churns `filters`. Regression test in `useLibraryFilters.test.ts`.
+
 #### July 2, 2026 — Transcription/metadata matching: require title agreement, not just author
 
 - **`fix(metafetch,metabatch)`** — fixed "matches the author but not the actual book." The audio-derived (transcribed) author/narrator boosts in `transcriptionBoost` (`service_scoring.go`) multiplied the score **independently of title agreement** (author ×1.6, narrator ×1.4, stacked on curated-author ×1.5), so a same-author, wrong-title candidate could be carried to the top. Now those boosts are suppressed when a transcribed title is present but the candidate fails to match it; author/narrator remain a tiebreaker only when no transcribed title is available (not the bug case). Added hard title-agreement gates to the two auto-apply paths that lacked one: the auto-fetch apply (`service_fetch.go` — skip a candidate whose title disagrees with the transcribed title) and the batch upgrade (`metabatch/upgrade.go` — never auto-upgrade a transcribed book to a non-confirming candidate, instead of only discounting the threshold). Regression tests in `transcription_boost_test.go`. Does not affect books without transcription data.

@@ -1,11 +1,27 @@
 // file: web/src/hooks/useLibraryFilters.ts
-// version: 1.3.0
+// version: 1.4.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-05-26
+// last-edited: 2026-07-02
 
 import { useState, useEffect, useCallback } from 'react';
 import type { FilterOptions } from '../types';
 import * as api from '../services/api';
+
+// shallowEqualFilters compares two FilterOptions by value across the union of
+// their keys. Non-URL fields (e.g. `tags`) are preserved by reference via the
+// `...prev` spread in the sync effect, so a reference compare is correct for
+// them. Used to keep a stable `filters` reference when a searchParams change
+// (like page navigation) didn't actually change any filter value.
+export function shallowEqualFilters(a: FilterOptions, b: FilterOptions): boolean {
+  const keys = new Set<keyof FilterOptions>([
+    ...(Object.keys(a) as (keyof FilterOptions)[]),
+    ...(Object.keys(b) as (keyof FilterOptions)[]),
+  ]);
+  for (const k of keys) {
+    if (a[k] !== b[k]) return false;
+  }
+  return true;
+}
 
 interface UseLibraryFiltersOptions {
   searchParams: URLSearchParams;
@@ -124,22 +140,33 @@ export function useLibraryFilters({
       });
   }, []);
 
-  // Sync filters whenever searchParams change (e.g., when navigating to /library with no params)
+  // Sync filters whenever searchParams change (e.g., when navigating to /library with no params).
+  //
+  // This effect fires on EVERY searchParams change, including page-only navigation
+  // (the URL carries ?page=N). Returning a brand-new object each time gave `filters`
+  // a fresh reference on page changes, which re-triggered the page-reset effect in
+  // Library.tsx (deps include `filters`) → the user got bounced back to page 1.
+  // Fix: preserve prev's non-URL fields (tags, showFailed, …) and return the SAME
+  // reference when nothing actually changed, so page navigation doesn't churn it.
   useEffect(() => {
-    setFilters({
-      author: searchParams.get('author') || undefined,
-      series: searchParams.get('series') || undefined,
-      genre: searchParams.get('genre') || undefined,
-      language: searchParams.get('language') || undefined,
-      libraryState: searchParams.get('state') || undefined,
-      hasFileErrors: (searchParams.get('has_file_errors') === 'true') || undefined,
-      fingerprintStatus: (searchParams.get('fingerprint_status') as "complete" | "partial" | "none" | null) || undefined,
-      coveragePercentMin: searchParams.get('coverage_percent_min') ? parseInt(searchParams.get('coverage_percent_min')!, 10) : undefined,
-      coveragePercentMax: searchParams.get('coverage_percent_max') ? parseInt(searchParams.get('coverage_percent_max')!, 10) : undefined,
-      missingCovers: (searchParams.get('missing_covers') === 'true') || undefined,
-      inImportPath: (searchParams.get('in_import_path') === 'true') || undefined,
-      noIsbn: (searchParams.get('no_isbn') === 'true') || undefined,
-      duplicatesFlagged: (searchParams.get('duplicates_flagged') === 'true') || undefined,
+    setFilters((prev) => {
+      const next: FilterOptions = {
+        ...prev,
+        author: searchParams.get('author') || undefined,
+        series: searchParams.get('series') || undefined,
+        genre: searchParams.get('genre') || undefined,
+        language: searchParams.get('language') || undefined,
+        libraryState: searchParams.get('state') || undefined,
+        hasFileErrors: (searchParams.get('has_file_errors') === 'true') || undefined,
+        fingerprintStatus: (searchParams.get('fingerprint_status') as "complete" | "partial" | "none" | null) || undefined,
+        coveragePercentMin: searchParams.get('coverage_percent_min') ? parseInt(searchParams.get('coverage_percent_min')!, 10) : undefined,
+        coveragePercentMax: searchParams.get('coverage_percent_max') ? parseInt(searchParams.get('coverage_percent_max')!, 10) : undefined,
+        missingCovers: (searchParams.get('missing_covers') === 'true') || undefined,
+        inImportPath: (searchParams.get('in_import_path') === 'true') || undefined,
+        noIsbn: (searchParams.get('no_isbn') === 'true') || undefined,
+        duplicatesFlagged: (searchParams.get('duplicates_flagged') === 'true') || undefined,
+      };
+      return shallowEqualFilters(prev, next) ? prev : next;
     });
   }, [searchParams]);
 
