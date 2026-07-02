@@ -1,5 +1,5 @@
 // file: internal/dedup/dataset/builder.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 4a91c7e0-6d83-4b25-9f10-2c5a8e7d4b31
 // last-edited: 2026-07-01
 
@@ -171,8 +171,7 @@ func durationRatio(a, b float64) float64 {
 }
 
 // folderRelation classifies how two primary file paths sit relative to each other.
-// Returns one of: unrelated, same_dir, a_ancestor_of_b, b_ancestor_of_a.
-// Note: currently produces only these four values; sibling_parts is planned but not yet returned.
+// Returns one of: unrelated, same_dir, a_ancestor_of_b, b_ancestor_of_a, sibling_parts.
 func folderRelation(a, b string) string {
 	if a == "" || b == "" {
 		return "unrelated"
@@ -187,6 +186,14 @@ func folderRelation(a, b string) string {
 	if isAncestor(db, da) {
 		return "b_ancestor_of_a"
 	}
+	// Two directories that share a common grandparent AND look like numbered
+	// parts of the same work (e.g. "Part 1" / "Part 2") are sibling_parts.
+	// A bare shared grandparent is not enough — that would also match
+	// unrelated sibling directories like /lib/AuthorOne vs /lib/AuthorTwo or
+	// /lib/Series vs /lib/Series-Extra, which must stay "unrelated".
+	if filepath.Dir(da) == filepath.Dir(db) && partStem(filepath.Base(da)) == partStem(filepath.Base(db)) {
+		return "sibling_parts"
+	}
 	return "unrelated"
 }
 
@@ -194,6 +201,17 @@ func folderRelation(a, b string) string {
 func isAncestor(anc, desc string) bool {
 	anc = strings.TrimRight(anc, "/")
 	return anc != "" && strings.HasPrefix(desc, anc+"/")
+}
+
+// partStem strips a trailing part number (and its separator) from a directory
+// name, e.g. "Part 1" -> "Part", "Part 2" -> "Part". Names without a trailing
+// digit are returned unchanged, so unrelated names never collide.
+func partStem(name string) string {
+	stripped := strings.TrimRight(name, "0123456789")
+	if stripped == name {
+		return name
+	}
+	return strings.TrimRight(stripped, " -_")
 }
 
 // sharesAny reports whether the two recording-ID slices share any element.

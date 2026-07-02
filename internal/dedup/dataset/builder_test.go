@@ -1,5 +1,5 @@
 // file: internal/dedup/dataset/builder_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b3e7f2a1-9c45-4d80-8e62-5f1a3d6c7b90
 // last-edited: 2026-07-01
 
@@ -348,6 +348,29 @@ func TestBuildExample_FolderRelation_PrefixNotAncestor(t *testing.T) {
 	}
 	if ex.FolderRelation != "unrelated" {
 		t.Fatalf("folder relation = %q, want unrelated (Series is not an ancestor of Series-Extra)", ex.FolderRelation)
+	}
+}
+
+func TestBuildExample_FolderRelation_SiblingParts(t *testing.T) {
+	// Distinct parent directories that are numbered parts of the same book,
+	// sharing a common grandparent directory → sibling_parts.
+	bkA := &database.Book{ID: "a", Title: "Book Part 1"}
+	bkB := &database.Book{ID: "b", Title: "Book Part 2"}
+	fs := &fakeStore{
+		books: map[string]*database.Book{"a": bkA, "b": bkB},
+		files: map[string][]database.BookFile{
+			"a": {{BookID: "a", FilePath: "/lib/Book/Part 1/a.m4b", Duration: 3600}},
+			"b": {{BookID: "b", FilePath: "/lib/Book/Part 2/b.m4b", Duration: 3600}},
+		},
+	}
+	cand := database.DedupCandidate{ID: 6, EntityAID: "a", EntityBID: "b", Layer: "lsh"}
+
+	ex, err := BuildExample(fs, cand)
+	if err != nil {
+		t.Fatalf("BuildExample: %v", err)
+	}
+	if ex.FolderRelation != "sibling_parts" {
+		t.Fatalf("folder relation = %q, want sibling_parts", ex.FolderRelation)
 	}
 }
 
