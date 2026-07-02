@@ -1,7 +1,7 @@
 // file: internal/scanner/integration_format_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-06-24
+// last-edited: 2026-07-01
 
 package scanner
 
@@ -70,7 +70,7 @@ func TestIntegrationRealWorldMixedFormats(t *testing.T) {
 	}
 
 	// Test scanning
-	books, err := ScanDirectoryParallel(tmpDir, 4, nil)
+	books, err := ScanDirectoryParallel(context.Background(), tmpDir, 4, nil)
 	if err != nil {
 		t.Fatalf("Integration scan failed: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestIntegrationProcessingMixedFormats(t *testing.T) {
 	}
 
 	// Scan and process
-	books, err := ScanDirectory(tmpDir, nil)
+	books, err := ScanDirectory(context.Background(), tmpDir, nil)
 	if err != nil {
 		t.Fatalf("Scan failed: %v", err)
 	}
@@ -217,7 +217,7 @@ func TestIntegrationLargeScaleMixedFormats(t *testing.T) {
 	workerCounts := []int{1, 2, 4, 8}
 	for _, workers := range workerCounts {
 		t.Run(fmt.Sprintf("workers_%d", workers), func(t *testing.T) {
-			books, err := ScanDirectoryParallel(tmpDir, workers, nil)
+			books, err := ScanDirectoryParallel(context.Background(), tmpDir, workers, nil)
 			if err != nil {
 				t.Fatalf("Scan with %d workers failed: %v", workers, err)
 			}

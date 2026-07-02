@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner_coverage_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 7d8e9f0a-1b2c-3d4e-5f6a-7b8c9d0e1f2a
-// last-edited: 2026-06-10
+// last-edited: 2026-07-01
 
 // NOTE(fable5 T022): Removed tests that used database.DB, database.Initialize,
 // or database.Close (legacy SQLite path removed). TestSaveBookToDatabaseWithoutStore
@@ -382,7 +382,7 @@ func TestScanDirectoryParallelReadDirError(t *testing.T) {
 
 	// This should not panic even if ReadDir fails on the file
 	config.AppConfig.SupportedExtensions = []string{".m4b"}
-	books, err := ScanDirectoryParallel(tmp, 2, nil)
+	books, err := ScanDirectoryParallel(context.Background(), tmp, 2, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -395,7 +395,7 @@ func TestScanDirectoryParallelReadDirError(t *testing.T) {
 // TestScanDirectoryParallelWalkError tests error handling when Walk fails
 func TestScanDirectoryParallelWalkError(t *testing.T) {
 	config.AppConfig.SupportedExtensions = []string{".m4b"}
-	_, err := ScanDirectoryParallel("/completely/nonexistent/path/12345", 2, nil)
+	_, err := ScanDirectoryParallel(context.Background(), "/completely/nonexistent/path/12345", 2, nil)
 	if err == nil {
 		t.Error("expected error for nonexistent directory")
 	}
@@ -588,7 +588,7 @@ func TestScanDirectoryParallelMultipleWorkers(t *testing.T) {
 	workers := []int{0, 1, 2, 4, 8}
 	for _, w := range workers {
 		t.Run(fmt.Sprintf("workers_%d", w), func(t *testing.T) {
-			books, err := ScanDirectoryParallel(tmp, w, nil)
+			books, err := ScanDirectoryParallel(context.Background(), tmp, w, nil)
 			if err != nil {
 				t.Fatalf("scan error: %v", err)
 			}
@@ -643,7 +643,7 @@ func TestScanDirectoryGlobalScanner(t *testing.T) {
 		books: []Book{{FilePath: "/mock/book.m4b", Title: "Mock Book"}},
 	})
 
-	books, err := ScanDirectory("/any/dir", nil)
+	books, err := ScanDirectory(context.Background(), "/any/dir", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -660,7 +660,7 @@ func (m *fullMockScanner) ScanDirectory(rootDir string, _ logger.Logger) ([]Book
 	return m.books, nil
 }
 
-func (m *fullMockScanner) ScanDirectoryParallel(rootDir string, workers int, _ logger.Logger) ([]Book, error) {
+func (m *fullMockScanner) ScanDirectoryParallel(ctx context.Context, rootDir string, workers int, _ logger.Logger) ([]Book, error) {
 	return m.books, nil
 }
 

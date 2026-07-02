@@ -1,17 +1,18 @@
 // file: internal/scanner/chapter_consolidation.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: f9a0b1c2-d3e4-5f60-a7b8-c9d0e1f2a3b4
-// last-edited: 2026-04-30
+// last-edited: 2026-07-01
 
 package scanner
 
 import (
-	"log/slog"
+	"context"
 	"path/filepath"
 	"regexp"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
 )
 
@@ -41,7 +42,7 @@ func normalizeChapterTitle(stem string) string {
 // Files that show no numeric prefix are passed through unchanged.
 // Groups that contain at least one file exceeding the threshold are not
 // consolidated (mixed durations → likely separate books with similar names).
-func consolidateChapterGroups(files []string) []Book {
+func consolidateChapterGroups(ctx context.Context, files []string) []Book {
 	if len(files) == 0 {
 		return nil
 	}
@@ -132,7 +133,7 @@ func consolidateChapterGroups(files []string) []Book {
 		for i, c := range group {
 			paths[i] = c.path
 		}
-		slog.Info("scanner chapter consolidation merging files", "count", len(group), "key", key, "avg_sec_per_file", avgSec, "total_sec", totalSec)
+		logging.Info(ctx, "scanner chapter consolidation merging files", "count", len(group), "key", key, "avg_sec_per_file", avgSec, "total_sec", totalSec)
 		books = append(books, Book{
 			FilePath:     paths[0],
 			Format:       strings.ToLower(filepath.Ext(paths[0])),

@@ -1,7 +1,7 @@
 // file: internal/scanner/unit_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: a2b3c4d5-e6f7-8901-abcd-ef2345678901
-// last-edited: 2026-06-22
+// last-edited: 2026-07-01
 
 package scanner
 
@@ -366,19 +366,19 @@ func TestParseM3UFile(t *testing.T) {
 
 func TestGroupFilesIntoBooks(t *testing.T) {
 	t.Run("empty list", func(t *testing.T) {
-		books := groupFilesIntoBooks(nil)
+		books := groupFilesIntoBooks(context.Background(), nil)
 		assert.Empty(t, books)
 	})
 
 	t.Run("single file", func(t *testing.T) {
-		books := groupFilesIntoBooks([]string{"/tmp/only.m4b"})
+		books := groupFilesIntoBooks(context.Background(), []string{"/tmp/only.m4b"})
 		require.Len(t, books, 1)
 		assert.Equal(t, "/tmp/only.m4b", books[0].FilePath)
 		assert.Equal(t, ".m4b", books[0].Format)
 	})
 
 	t.Run("single file mp3", func(t *testing.T) {
-		books := groupFilesIntoBooks([]string{"/tmp/song.mp3"})
+		books := groupFilesIntoBooks(context.Background(), []string{"/tmp/song.mp3"})
 		require.Len(t, books, 1)
 		assert.Equal(t, ".mp3", books[0].Format)
 	})
@@ -564,7 +564,7 @@ func TestGroupFilesIntoBooksNoAlbumMultipleFiles(t *testing.T) {
 		files[i] = p
 	}
 
-	books := groupFilesIntoBooks(files)
+	books := groupFilesIntoBooks(context.Background(), files)
 	// With no album tags, each becomes its own book (no album grouping)
 	assert.GreaterOrEqual(t, len(books), 1)
 }
@@ -1416,7 +1416,7 @@ func (m *mockScannerImpl) ScanDirectory(rootDir string, scanLog logger.Logger) (
 	return nil, nil
 }
 
-func (m *mockScannerImpl) ScanDirectoryParallel(rootDir string, workers int, scanLog logger.Logger) ([]Book, error) {
+func (m *mockScannerImpl) ScanDirectoryParallel(ctx context.Context, rootDir string, workers int, scanLog logger.Logger) ([]Book, error) {
 	return nil, nil
 }
 
@@ -1925,7 +1925,7 @@ func TestGroupFilesIntoBooksMultiFileAlbum(t *testing.T) {
 		files[i] = p
 	}
 
-	books := groupFilesIntoBooks(files)
+	books := groupFilesIntoBooks(context.Background(), files)
 	// Without real audio tags, all go to noAlbum path -> each is individual
 	assert.GreaterOrEqual(t, len(books), 1)
 	for _, b := range books {
@@ -1955,7 +1955,7 @@ FILE "ch2.mp3" MP3
 `
 	require.NoError(t, os.WriteFile(filepath.Join(tmp, "book.cue"), []byte(cueContent), 0o644))
 
-	books := groupFilesIntoBooks(files)
+	books := groupFilesIntoBooks(context.Background(), files)
 	// Should create at least 2 books: one grouped + one individual
 	assert.GreaterOrEqual(t, len(books), 1)
 }

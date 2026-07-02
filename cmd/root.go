@@ -1,7 +1,7 @@
 // file: cmd/root.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
-// last-edited: 2026-06-22
+// last-edited: 2026-07-01
 
 package cmd
 
@@ -40,7 +40,7 @@ var metadataInspectFile string
 var (
 	initializeStore        = database.InitializeStore
 	closeStore             = database.CloseStore
-	scanDirectory          = scanner.ScanDirectory // func(string, logger.Logger) ([]Book, error)
+	scanDirectory          = scanner.ScanDirectory // func(context.Context, string, logger.Logger) ([]Book, error)
 	processBooks           = scanner.ProcessBooks  // func([]Book, logger.Logger) error
 	generatePlaylists      = playlist.GeneratePlaylistsForSeries
 	updateSeriesTags       = tagger.UpdateSeriesTags
@@ -92,7 +92,7 @@ var scanCmd = &cobra.Command{
 		fmt.Printf("Scanning directory: %s\n", config.AppConfig.RootDir)
 
 		// Start scanning
-		books, err := scanDirectory(config.AppConfig.RootDir, nil)
+		books, err := scanDirectory(cmd.Context(), config.AppConfig.RootDir, nil)
 		if err != nil {
 			return fmt.Errorf("scan error: %w", err)
 		}
@@ -184,7 +184,7 @@ var organizeCmd = &cobra.Command{
 		// Step 1: Scan files
 		fmt.Printf("Using database: %s (%s)\n", config.AppConfig.DatabasePath, config.AppConfig.DatabaseType)
 		fmt.Printf("Scanning directory: %s\n", config.AppConfig.RootDir)
-		books, err := scanDirectory(config.AppConfig.RootDir, nil)
+		books, err := scanDirectory(cmd.Context(), config.AppConfig.RootDir, nil)
 		if err != nil {
 			return fmt.Errorf("scan error: %w", err)
 		}

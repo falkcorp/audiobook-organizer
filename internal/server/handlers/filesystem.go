@@ -1,7 +1,7 @@
 // file: internal/server/handlers/filesystem.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c4d5e6f7-a8b9-0123-cdef-012345678901
-// last-edited: 2026-06-17
+// last-edited: 2026-07-01
 
 // Package handlers — FilesystemHandler covers home-directory, filesystem
 // browse, exclusion CRUD, import-path CRUD, and the on-demand single-file
@@ -269,7 +269,7 @@ func (h *FilesystemHandler) AddImportPath(c *gin.Context) {
 	// Fallback: synchronous scan when op registry is unavailable.
 	if folder.Enabled && h.opEnqueuer == nil {
 		if _, statErr := os.Stat(folder.Path); statErr == nil {
-			books, scanErr := scanner.ScanDirectory(folder.Path, nil)
+			books, scanErr := scanner.ScanDirectory(c.Request.Context(), folder.Path, nil)
 			if scanErr == nil {
 				if len(books) > 0 {
 					_ = scanner.ProcessBooks(books, nil)

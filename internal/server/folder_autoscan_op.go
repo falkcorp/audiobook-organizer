@@ -1,7 +1,7 @@
 // file: internal/server/folder_autoscan_op.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7b3e9f2a-4c1d-4e85-a6b8-2f0d5c8e1a93
-// last-edited: 2026-05-10
+// last-edited: 2026-07-01
 //
 // folder_autoscan_op registers the "library.folder-auto-scan" UOS v2 OperationDef.
 // This op is enqueued when a new import path is added to the library; it replicates
@@ -71,7 +71,7 @@ func (s *Server) RegisterFolderAutoScanOp(reg *opsregistry.Registry) error {
 			if workers < 1 {
 				workers = 4
 			}
-			books, err := scanner.ScanDirectoryParallel(folderPath, workers, scanLog)
+			books, err := scanner.ScanDirectoryParallel(ctx, folderPath, workers, scanLog)
 			if err != nil {
 				return fmt.Errorf("failed to scan folder: %w", err)
 			}
