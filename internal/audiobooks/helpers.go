@@ -1,7 +1,7 @@
 // file: internal/audiobooks/helpers.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234560010
-// last-edited: 2026-06-16
+// last-edited: 2026-07-01
 //
 // Private utilities needed by the audiobooks service package. These mirror
 // equivalent helpers from internal/server/ but are standalone so that the
@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
@@ -235,6 +236,37 @@ type importPathLister interface {
 	GetAllImportPaths() ([]database.ImportPath, error)
 }
 
+// importPathCacheTTLForHelper controls how long cachedImportPathsForHelper
+// reuses a previously fetched import-path list before re-querying the
+// store. Import paths change extremely infrequently (an admin action via
+// the settings UI), so a short TTL-only cache is sufficient here — no
+// invalidation hook is wired into the import-path mutation endpoints
+// (MAYDEPLOY-H7). Not a const so tests can shrink it.
+var importPathCacheTTLForHelper = 5 * time.Second
+
+var (
+	importPathCacheForHelperMu sync.Mutex
+	importPathCacheForHelper   []database.ImportPath
+	importPathCacheForHelperAt time.Time
+)
+
+// cachedImportPathsForHelper returns store.GetAllImportPaths(), reusing the
+// previous result if it was fetched within importPathCacheTTLForHelper.
+func cachedImportPathsForHelper(store importPathLister) ([]database.ImportPath, error) {
+	importPathCacheForHelperMu.Lock()
+	defer importPathCacheForHelperMu.Unlock()
+	if time.Since(importPathCacheForHelperAt) < importPathCacheTTLForHelper {
+		return importPathCacheForHelper, nil
+	}
+	paths, err := store.GetAllImportPaths()
+	if err != nil {
+		return nil, err
+	}
+	importPathCacheForHelper = paths
+	importPathCacheForHelperAt = time.Now()
+	return paths, nil
+}
+
 // isProtectedPath returns true if filePath is under a configured import
 // path, an iTunes library path, or another protected location. Takes an
 // explicit importPathLister so callers thread their own database
@@ -245,7 +277,7 @@ func isProtectedPath(store importPathLister, filePath string) bool {
 	absPath, _ := filepath.Abs(filePath)
 
 	if store != nil {
-		importPaths, err := store.GetAllImportPaths()
+		importPaths, err := cachedImportPathsForHelper(store)
 		if err == nil {
 			for _, ip := range importPaths {
 				ipAbs, _ := filepath.Abs(ip.Path)
