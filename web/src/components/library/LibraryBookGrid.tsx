@@ -1,7 +1,7 @@
 // file: web/src/components/library/LibraryBookGrid.tsx
-// version: 1.5.2
+// version: 1.6.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-06-28
+// last-edited: 2026-07-01
 
 import {
   Typography,
@@ -30,6 +30,7 @@ import { BookGrid } from '../BookGrid';
 import { FilterSidebar } from '../audiobooks/FilterSidebar';
 import type { LibrarySoftDeletedSectionProps } from './LibrarySoftDeletedSection';
 import { LibrarySoftDeletedSection } from './LibrarySoftDeletedSection';
+import { TagCloud } from './TagCloud';
 import type { ColumnDefinition } from '../../config/columnDefinitions';
 import type { Audiobook, FilterOptions, SortField, SortOrder } from '../../types';
 import type { ViewMode } from '../audiobooks/SearchBar';
@@ -247,6 +248,14 @@ export const LibraryBookGrid = ({
           onViewModeChange={setViewMode}
           onLibraryInfoClick={() => setStorageDrawerOpen(true)}
         />
+
+        {availableTags.length > 0 && (
+          <TagCloud
+            availableTags={availableTags}
+            selectedTags={selectedTags}
+            onTagsChange={handleTagFilterChange}
+          />
+        )}
 
         {/* Select All bar — always visible */}
         <Stack direction="row" spacing={1} alignItems="center" sx={{ px: 0.5, mt: -0.5, mb: -1 }}>
