@@ -1,7 +1,7 @@
 // file: internal/scanner/shattered_coalesce.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9b4e2a17-6c08-4d35-8f91-3a7d05c2e6b4
-// last-edited: 2026-06-21
+// last-edited: 2026-07-01
 
 // Package scanner — scan-time prevention of the "shattered book" defect.
 //
@@ -26,12 +26,14 @@
 package scanner
 
 import (
-	"log/slog"
+	"context"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/falkcorp/audiobook-organizer/internal/logging"
 )
 
 // shatterChapterDirRe matches a chapter subdir basename "<prefix> - <number>".
@@ -71,7 +73,7 @@ func normShatterPrefix(s string) string {
 // shattered book (sibling "<prefix> - N" subdirs under a book-named folder) into
 // ONE multi-file Book with SegmentFiles ordered by chapter number. All other
 // books pass through untouched. Returns the input unchanged when nothing merges.
-func coalesceShatteredSiblings(books []Book) []Book {
+func coalesceShatteredSiblings(ctx context.Context, books []Book) []Book {
 	type key struct{ parent, prefix string }
 	groups := map[key][]int{}
 	for i := range books {
@@ -115,7 +117,7 @@ func coalesceShatteredSiblings(books []Book) []Book {
 			Format:       strings.ToLower(filepath.Ext(segs[0])),
 			SegmentFiles: segs,
 		}
-		slog.Info("scanner coalesced shattered siblings",
+		logging.Info(ctx, "scanner coalesced shattered siblings",
 			"book", k.prefix, "chapters", len(segs), "dir", k.parent)
 	}
 	if len(coalesced) == 0 {

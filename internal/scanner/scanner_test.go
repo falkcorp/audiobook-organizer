@@ -1,6 +1,7 @@
 // file: internal/scanner/scanner_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5c1a2b3c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
+// last-edited: 2026-07-01
 
 package scanner
 
@@ -44,7 +45,7 @@ func TestScanDirectoryParallelFiltersExtensions(t *testing.T) {
 		t.Fatalf("write other: %v", err)
 	}
 
-	books, err := ScanDirectoryParallel(dir, 2, nil)
+	books, err := ScanDirectoryParallel(context.Background(), dir, 2, nil)
 	if err != nil {
 		t.Fatalf("ScanDirectoryParallel error: %v", err)
 	}
@@ -178,7 +179,7 @@ func TestScanDirectory(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	books, err := ScanDirectory(dir, nil)
+	books, err := ScanDirectory(context.Background(), dir, nil)
 	if err != nil {
 		t.Fatalf("ScanDirectory error: %v", err)
 	}
@@ -338,7 +339,7 @@ func TestScanDirectoryParallelNegativeWorkers(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	books, err := ScanDirectoryParallel(dir, -1, nil)
+	books, err := ScanDirectoryParallel(context.Background(), dir, -1, nil)
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}

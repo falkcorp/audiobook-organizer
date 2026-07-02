@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.46.0
+// version: 1.47.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-06-23
+// last-edited: 2026-07-01
 
 package scanner
 
@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"log/slog"
 	"math"
 	"os"
 	"path/filepath"
@@ -27,6 +26,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/matcher"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
@@ -47,7 +47,7 @@ var defaultLog = logger.New("scanner")
 // Tests can swap in a mock implementation via SetScanner.
 type Scanner interface {
 	ScanDirectory(rootDir string, scanLog logger.Logger) ([]Book, error)
-	ScanDirectoryParallel(rootDir string, workers int, scanLog logger.Logger) ([]Book, error)
+	ScanDirectoryParallel(ctx context.Context, rootDir string, workers int, scanLog logger.Logger) ([]Book, error)
 	ProcessBooks(books []Book, scanLog logger.Logger) error
 	ProcessBooksParallel(ctx context.Context, books []Book, workers int, progressFn func(processed int, total int, bookPath string), scanLog logger.Logger) error
 	ComputeFileHash(filePath string) (string, error)
@@ -339,18 +339,18 @@ type Book struct {
 
 // ScanDirectory scans the given directory for audiobook files.
 // If scanLog is nil, a default logger is used.
-func ScanDirectory(rootDir string, scanLog logger.Logger) ([]Book, error) {
+func ScanDirectory(ctx context.Context, rootDir string, scanLog logger.Logger) ([]Book, error) {
 	if activeScanner != nil {
 		return activeScanner.ScanDirectory(rootDir, scanLog)
 	}
-	return ScanDirectoryParallel(rootDir, 1, scanLog)
+	return ScanDirectoryParallel(ctx, rootDir, 1, scanLog)
 }
 
 // ScanDirectoryParallel scans directory with parallel workers for improved performance.
 // If scanLog is nil, a default logger is used.
-func ScanDirectoryParallel(rootDir string, workers int, scanLog logger.Logger) ([]Book, error) {
+func ScanDirectoryParallel(ctx context.Context, rootDir string, workers int, scanLog logger.Logger) ([]Book, error) {
 	if activeScanner != nil {
-		return activeScanner.ScanDirectoryParallel(rootDir, workers, scanLog)
+		return activeScanner.ScanDirectoryParallel(ctx, rootDir, workers, scanLog)
 	}
 	if scanLog == nil {
 		scanLog = logger.New("scanner")
@@ -458,7 +458,7 @@ func ScanDirectoryParallel(rootDir string, workers int, scanLog logger.Logger) (
 			}
 
 			// Group files into logical books using album tags
-			localBooks := groupFilesIntoBooks(audioFiles)
+			localBooks := groupFilesIntoBooks(ctx, audioFiles)
 
 			// Merge results
 			if len(localBooks) > 0 {
@@ -477,9 +477,9 @@ func ScanDirectoryParallel(rootDir string, workers int, scanLog logger.Logger) (
 	// Path-based + prefix⊆parent guard; gated OFF by default (see CoalesceShatteredSiblings).
 	if config.AppConfig.CoalesceShatteredSiblings {
 		before := len(books)
-		books = coalesceShatteredSiblings(books)
+		books = coalesceShatteredSiblings(ctx, books)
 		if len(books) != before {
-			slog.Info("scanner shattered-sibling coalesce", "books_before", before, "books_after", len(books))
+			logging.Info(ctx, "scanner shattered-sibling coalesce", "books_before", before, "books_after", len(books))
 		}
 	}
 
@@ -1541,7 +1541,7 @@ func quickReadMultiFileInfo(filePath string) MultiFileInfo {
 // When all files in a directory share the same non-empty album tag, they become a
 // single directory-based Book (with segments created later). Otherwise, each file
 // is treated as an individual Book (existing hash-based dedup handles linking).
-func groupFilesIntoBooks(files []string) []Book {
+func groupFilesIntoBooks(ctx context.Context, files []string) []Book {
 	if len(files) <= 1 {
 		var books []Book
 		for _, f := range files {
@@ -1568,7 +1568,7 @@ func groupFilesIntoBooks(files []string) []Book {
 			for i, s := range sorted {
 				segs[i] = s.Path
 			}
-			slog.Info("scanner multi-file group detected",
+			logging.Info(ctx, "scanner multi-file group detected",
 				"dir", filepath.Dir(segs[0]),
 				"count", len(segs),
 				"first", filepath.Base(segs[0]),
@@ -1673,7 +1673,7 @@ func groupFilesIntoBooks(files []string) []Book {
 	// Apply chapter consolidation to files with no album tag and no playlist
 	// claim. Groups of ≥ 3 files sharing a numbered base title that are
 	// individually short are merged into one multi-file book.
-	books = append(books, consolidateChapterGroups(noAlbum)...)
+	books = append(books, consolidateChapterGroups(ctx, noAlbum)...)
 	return books
 }
 

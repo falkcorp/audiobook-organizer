@@ -300,8 +300,8 @@ func (_c *MockScanner_ScanDirectory_Call) RunAndReturn(run func(rootDir string, 
 }
 
 // ScanDirectoryParallel provides a mock function for the type MockScanner
-func (_mock *MockScanner) ScanDirectoryParallel(rootDir string, workers int, scanLog logger.Logger) ([]scanner.Book, error) {
-	ret := _mock.Called(rootDir, workers, scanLog)
+func (_mock *MockScanner) ScanDirectoryParallel(ctx context.Context, rootDir string, workers int, scanLog logger.Logger) ([]scanner.Book, error) {
+	ret := _mock.Called(ctx, rootDir, workers, scanLog)
 
 	if len(ret) == 0 {
 		panic("no return value specified for ScanDirectoryParallel")
@@ -309,18 +309,18 @@ func (_mock *MockScanner) ScanDirectoryParallel(rootDir string, workers int, sca
 
 	var r0 []scanner.Book
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string, int, logger.Logger) ([]scanner.Book, error)); ok {
-		return returnFunc(rootDir, workers, scanLog)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, int, logger.Logger) ([]scanner.Book, error)); ok {
+		return returnFunc(ctx, rootDir, workers, scanLog)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string, int, logger.Logger) []scanner.Book); ok {
-		r0 = returnFunc(rootDir, workers, scanLog)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, int, logger.Logger) []scanner.Book); ok {
+		r0 = returnFunc(ctx, rootDir, workers, scanLog)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).([]scanner.Book)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(string, int, logger.Logger) error); ok {
-		r1 = returnFunc(rootDir, workers, scanLog)
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, int, logger.Logger) error); ok {
+		r1 = returnFunc(ctx, rootDir, workers, scanLog)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -333,31 +333,37 @@ type MockScanner_ScanDirectoryParallel_Call struct {
 }
 
 // ScanDirectoryParallel is a helper method to define mock.On call
+//   - ctx context.Context
 //   - rootDir string
 //   - workers int
 //   - scanLog logger.Logger
-func (_e *MockScanner_Expecter) ScanDirectoryParallel(rootDir any, workers any, scanLog any) *MockScanner_ScanDirectoryParallel_Call {
-	return &MockScanner_ScanDirectoryParallel_Call{Call: _e.mock.On("ScanDirectoryParallel", rootDir, workers, scanLog)}
+func (_e *MockScanner_Expecter) ScanDirectoryParallel(ctx any, rootDir any, workers any, scanLog any) *MockScanner_ScanDirectoryParallel_Call {
+	return &MockScanner_ScanDirectoryParallel_Call{Call: _e.mock.On("ScanDirectoryParallel", ctx, rootDir, workers, scanLog)}
 }
 
-func (_c *MockScanner_ScanDirectoryParallel_Call) Run(run func(rootDir string, workers int, scanLog logger.Logger)) *MockScanner_ScanDirectoryParallel_Call {
+func (_c *MockScanner_ScanDirectoryParallel_Call) Run(run func(ctx context.Context, rootDir string, workers int, scanLog logger.Logger)) *MockScanner_ScanDirectoryParallel_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 string
+		var arg0 context.Context
 		if args[0] != nil {
-			arg0 = args[0].(string)
+			arg0 = args[0].(context.Context)
 		}
-		var arg1 int
+		var arg1 string
 		if args[1] != nil {
-			arg1 = args[1].(int)
+			arg1 = args[1].(string)
 		}
-		var arg2 logger.Logger
+		var arg2 int
 		if args[2] != nil {
-			arg2 = args[2].(logger.Logger)
+			arg2 = args[2].(int)
+		}
+		var arg3 logger.Logger
+		if args[3] != nil {
+			arg3 = args[3].(logger.Logger)
 		}
 		run(
 			arg0,
 			arg1,
 			arg2,
+			arg3,
 		)
 	})
 	return _c
@@ -368,7 +374,7 @@ func (_c *MockScanner_ScanDirectoryParallel_Call) Return(books []scanner.Book, e
 	return _c
 }
 
-func (_c *MockScanner_ScanDirectoryParallel_Call) RunAndReturn(run func(rootDir string, workers int, scanLog logger.Logger) ([]scanner.Book, error)) *MockScanner_ScanDirectoryParallel_Call {
+func (_c *MockScanner_ScanDirectoryParallel_Call) RunAndReturn(run func(ctx context.Context, rootDir string, workers int, scanLog logger.Logger) ([]scanner.Book, error)) *MockScanner_ScanDirectoryParallel_Call {
 	_c.Call.Return(run)
 	return _c
 }

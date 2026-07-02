@@ -1,10 +1,12 @@
 // file: internal/scanner/multi_format_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+// last-edited: 2026-07-01
 
 package scanner
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -85,7 +87,7 @@ func TestMultiFormatSupport(t *testing.T) {
 			}
 
 			// Scan directory
-			books, err := ScanDirectory(tmpDir, nil)
+			books, err := ScanDirectory(context.Background(), tmpDir, nil)
 			if err != nil {
 				t.Fatalf("ScanDirectory failed: %v", err)
 			}
@@ -162,7 +164,7 @@ func TestParallelScanWithMixedFormats(t *testing.T) {
 	// Test with different worker counts
 	for workers := 1; workers <= 4; workers++ {
 		t.Run("workers_"+string(rune(workers+'0')), func(t *testing.T) {
-			books, err := ScanDirectoryParallel(tmpDir, workers, nil)
+			books, err := ScanDirectoryParallel(context.Background(), tmpDir, workers, nil)
 			if err != nil {
 				t.Fatalf("Parallel scan failed: %v", err)
 			}
@@ -210,7 +212,7 @@ func TestFormatPreservation(t *testing.T) {
 		}
 	}
 
-	books, err := ScanDirectory(tmpDir, nil)
+	books, err := ScanDirectory(context.Background(), tmpDir, nil)
 	if err != nil {
 		t.Fatalf("Scan failed: %v", err)
 	}

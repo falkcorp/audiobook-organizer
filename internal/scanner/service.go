@@ -1,7 +1,7 @@
 // file: internal/scanner/service.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-05-05
+// last-edited: 2026-07-01
 package scanner
 
 import (
@@ -278,7 +278,7 @@ func (ss *ScanService) scanFolder(ctx context.Context, folderIdx int, folderPath
 	if workers < 1 {
 		workers = 4
 	}
-	books, err := ScanDirectoryParallel(folderPath, workers, log.With("scanner"))
+	books, err := ScanDirectoryParallel(ctx, folderPath, workers, log.With("scanner"))
 	if err != nil {
 		return fmt.Errorf("failed to scan folder: %w", err)
 	}

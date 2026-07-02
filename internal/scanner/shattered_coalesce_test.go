@@ -1,11 +1,12 @@
 // file: internal/scanner/shattered_coalesce_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4c7e9a02-8d31-4b65-9f80-1a3c6d2e7b59
-// last-edited: 2026-06-21
+// last-edited: 2026-07-01
 
 package scanner
 
 import (
+	"context"
 	"reflect"
 	"testing"
 )
@@ -21,7 +22,7 @@ func TestCoalesce_ShatteredMergesToOneBook(t *testing.T) {
 		sf(base + "/Cage of Souls - 2/01.mp3"),
 		sf(base + "/Cage of Souls - 3/01.mp3"),
 	}
-	out := coalesceShatteredSiblings(in)
+	out := coalesceShatteredSiblings(context.Background(), in)
 	if len(out) != 1 {
 		t.Fatalf("got %d books, want 1: %+v", len(out), out)
 	}
@@ -44,7 +45,7 @@ func TestCoalesce_OrdersChaptersNumerically(t *testing.T) {
 		sf(base + "/Elantris - 1/f.mp3"),
 		sf(base + "/Elantris - 10/f.mp3"),
 	}
-	out := coalesceShatteredSiblings(in)
+	out := coalesceShatteredSiblings(context.Background(), in)
 	if len(out) != 1 {
 		t.Fatalf("got %d books, want 1", len(out))
 	}
@@ -66,7 +67,7 @@ func TestCoalesce_FlatDumpNotMerged(t *testing.T) {
 		sf("/mnt/bigdata/books/abooks/Throne of Jade - 1/f.mp3"),
 		sf("/mnt/bigdata/books/abooks/Throne of Jade - 2/f.mp3"),
 	}
-	out := coalesceShatteredSiblings(in)
+	out := coalesceShatteredSiblings(context.Background(), in)
 	if len(out) != 2 {
 		t.Errorf("flat dump merged (got %d, want 2 untouched): %+v", len(out), out)
 	}
@@ -80,7 +81,7 @@ func TestCoalesce_SeriesVolumesNotMerged(t *testing.T) {
 		sf("/lib/Brandon Sanderson/Stormlight - 2/book.m4b"),
 		sf("/lib/Brandon Sanderson/Stormlight - 3/book.m4b"),
 	}
-	out := coalesceShatteredSiblings(in)
+	out := coalesceShatteredSiblings(context.Background(), in)
 	if len(out) != 3 {
 		t.Errorf("series volumes merged (got %d, want 3 untouched): %+v", len(out), out)
 	}
@@ -97,7 +98,7 @@ func TestCoalesce_BoxSetDistinctPrefixesSeparate(t *testing.T) {
 		sf("/lib/Author/Other Book - Other Book/Other Book - 1/f.mp3"),
 		sf("/lib/Author/Other Book - Other Book/Other Book - 2/f.mp3"),
 	}
-	out := coalesceShatteredSiblings(in)
+	out := coalesceShatteredSiblings(context.Background(), in)
 	if len(out) != 2 {
 		t.Fatalf("got %d books, want 2 (one per distinct prefix): %+v", len(out), out)
 	}
@@ -111,7 +112,7 @@ func TestCoalesce_BoxSetDistinctPrefixesSeparate(t *testing.T) {
 // A lone chapter (single member of a group) is not a shattered book.
 func TestCoalesce_LoneChapterNotMerged(t *testing.T) {
 	in := []Book{sf("/lib/A/Solo - Solo/Solo - 1/f.mp3")}
-	out := coalesceShatteredSiblings(in)
+	out := coalesceShatteredSiblings(context.Background(), in)
 	if len(out) != 1 || len(out[0].SegmentFiles) != 0 {
 		t.Errorf("lone chapter altered: %+v", out)
 	}
@@ -122,7 +123,7 @@ func TestCoalesce_PassThroughNonCandidates(t *testing.T) {
 	multi := Book{FilePath: "/lib/A/Book/01.mp3", SegmentFiles: []string{"/lib/A/Book/01.mp3", "/lib/A/Book/02.mp3"}}
 	other := sf("/lib/A/Standalone/whole.m4b")
 	in := []Book{multi, other}
-	out := coalesceShatteredSiblings(in)
+	out := coalesceShatteredSiblings(context.Background(), in)
 	if len(out) != 2 {
 		t.Fatalf("got %d, want 2", len(out))
 	}
