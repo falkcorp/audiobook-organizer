@@ -1,7 +1,7 @@
 // file: internal/operations/registry/registry.go
-// version: 3.1.1
+// version: 3.2.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-06-14
+// last-edited: 2026-07-02
 
 package registry
 
@@ -62,7 +62,15 @@ type Registry struct {
 	// Shutdown() calls this after draining running ops to stop the
 	// dispatcher, watchdog, and idle workers before returning.
 	cancelFn    context.CancelFunc
-	goroutineWG sync.WaitGroup // tracks dispatcher + watchdog + workers
+	goroutineWG sync.WaitGroup // tracks dispatcher + watchdog + workers + dep-notify goroutines
+
+	// notifyStopped is set (under mu) in Shutdown just before goroutineWG.Wait()
+	// so no new dep-notify goroutine can Add to the WaitGroup after the Wait has
+	// begun. releaseRunHandle removes an op from r.running BEFORE the worker
+	// calls notifyDepCompletion, so Shutdown's drain loop can reach Wait() in the
+	// gap before a notify goroutine enrolls — gating the Add under mu against
+	// this flag closes that "Add after Wait" window. Reset in Start() for restart.
+	notifyStopped bool
 
 	// Tunable intervals for testing. Zero means use defaults.
 	watchdogInterval time.Duration
@@ -201,13 +209,19 @@ func (c *combinedDepStoreImpl) GetBookByID(id string) (*database.Book, error) {
 // notifyDepCompletion notifies the scheduler (if wired) that opID completed for
 // the given subject asynchronously so the worker is never blocked.
 func (r *Registry) notifyDepCompletion(sub Subject, opType string) {
-	r.mu.RLock()
+	// Enroll the goroutine in goroutineWG under mu so Shutdown drains it before
+	// the caller closes the store (avoids a "pebble: closed" panic). The mu-gated
+	// notifyStopped check prevents Add-after-Wait once Shutdown has begun waiting.
+	r.mu.Lock()
 	sched := r.depsScheduler
-	r.mu.RUnlock()
-	if sched == nil {
+	if sched == nil || r.notifyStopped {
+		r.mu.Unlock()
 		return
 	}
+	r.goroutineWG.Add(1)
+	r.mu.Unlock()
 	go func() {
+		defer r.goroutineWG.Done()
 		if err := sched.OnOpCompleted(context.Background(), sub, opType); err != nil {
 			r.logger.Warn("deps_scheduler: OnOpCompleted error", "op_type", opType, "error", err)
 		}
@@ -217,13 +231,17 @@ func (r *Registry) notifyDepCompletion(sub Subject, opType string) {
 // notifyDepFailed notifies the scheduler (if wired) that opID failed for the
 // given subject asynchronously so the worker is never blocked.
 func (r *Registry) notifyDepFailed(sub Subject, opType string) {
-	r.mu.RLock()
+	// See notifyDepCompletion for why enrollment is gated under mu.
+	r.mu.Lock()
 	sched := r.depsScheduler
-	r.mu.RUnlock()
-	if sched == nil {
+	if sched == nil || r.notifyStopped {
+		r.mu.Unlock()
 		return
 	}
+	r.goroutineWG.Add(1)
+	r.mu.Unlock()
 	go func() {
+		defer r.goroutineWG.Done()
 		if err := sched.OnOpFailed(context.Background(), sub, opType); err != nil {
 			r.logger.Warn("deps_scheduler: OnOpFailed error", "op_type", opType, "error", err)
 		}
@@ -260,6 +278,11 @@ func (r *Registry) SetPluginMaxConcurrent(plugin string, max int) {
 // to re-queue or drop ops that were in-flight at the last shutdown.
 func (r *Registry) Start(ctx context.Context) {
 	r.logger.Info("registry: starting", "workers", r.workers)
+	// Clear the notify gate in case this Registry is being restarted after a
+	// prior Shutdown (Shutdown sets notifyStopped to reject late enrollments).
+	r.mu.Lock()
+	r.notifyStopped = false
+	r.mu.Unlock()
 	// Resume must complete before the dispatcher starts accepting new work.
 	r.resumeAfterStartup(ctx)
 	// Reload any journaled batch buckets from the previous run and re-arm their
@@ -821,6 +844,13 @@ func (r *Registry) Shutdown(ctx context.Context) error {
 	if r.cancelFn != nil {
 		r.cancelFn()
 	}
+	// Reject any further dep-notify enrollment before we wait, so a worker
+	// finishing its last op during teardown cannot Add to goroutineWG after the
+	// Wait below has started. The op's terminal status is already persisted; the
+	// next Start()'s SweepTick re-evaluates any waiting_deps ops for the subject.
+	r.mu.Lock()
+	r.notifyStopped = true
+	r.mu.Unlock()
 	goroutinesDone := make(chan struct{})
 	go func() {
 		r.goroutineWG.Wait()

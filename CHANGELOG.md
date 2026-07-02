@@ -1,11 +1,17 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.95.0 -->
+<!-- version: 3.96.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
-<!-- last-edited: 2026-07-01 -->
+<!-- last-edited: 2026-07-02 -->
 
 # Changelog
 
 ## [Unreleased]
+
+### Bug Fixes
+
+#### July 2, 2026 — Fix `PEBBLE-CLOSED-SHUTDOWN-RACE` (op-registry shutdown)
+
+- **`fix(registry)`** — `Registry.Shutdown()` no longer returns while dep-notify goroutines are still touching the store. The fire-and-forget goroutines in `notifyDepCompletion`/`notifyDepFailed` used `context.Background()` and were not enrolled in `goroutineWG`, so `Shutdown`'s `goroutineWG.Wait()` didn't drain them — a caller that closed the store immediately after `Shutdown` could race a live `OnOpCompleted → RecordOpCompletion` and panic `pebble: closed`, crashing the test binary under package-wide `-race`. Both goroutines are now enrolled in `goroutineWG`, gated under `r.mu` against a `notifyStopped` flag that `Shutdown` sets just before `Wait()` (closes the Add-after-Wait window, since `releaseRunHandle` removes the op from `r.running` before the notify call). Regression test `TestShutdownDrainsDepNotifyGoroutines_RealStore` uses a real PebbleStore (10/10 panic pre-fix, green post-fix under `-race`). Corrects the original triage, which mis-attributed the leak to `DepsScheduler.SweepTick` (that path was already drained).
 
 ### Features
 
