@@ -1,7 +1,7 @@
 // file: internal/testutil/integration.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-06-10
+// last-edited: 2026-07-01
 
 package testutil
 
@@ -49,6 +49,20 @@ func SetupIntegration(t *testing.T) (*IntegrationEnv, func()) {
 
 	store, err := database.NewPebbleStore(dbPath)
 	require.NoError(t, err)
+	// PebbleStore.WaitForWarmup: NewPebbleStore starts the in-memory query
+	// layer (memdb) warmup asynchronously. Without waiting here, a scan run
+	// immediately after SetupIntegration can create a book via CreateBook
+	// before warmup publishes its Pebble snapshot; CreateBook's memdb
+	// write-through silently no-ops while mem()==nil (see memSync in
+	// memdb_sync.go), and the eventual warmup snapshot can still miss a book
+	// that was written mid-snapshot, permanently hiding it from GetAllBooks()
+	// for the life of the store. On an idle dev machine warmup of a fresh,
+	// near-empty DB finishes before the first write, masking the bug; under
+	// CI/full-suite load the warmup goroutine can be scheduled late enough to
+	// race a real scan. This was the root cause of the intermittent
+	// TestScanService_MultiChapterAudiobook flake (asserted book count of 1,
+	// occasionally observed 0 under load). See PebbleStore.WaitForWarmup doc.
+	store.WaitForWarmup()
 
 	err = database.RunMigrations(store)
 	require.NoError(t, err)
