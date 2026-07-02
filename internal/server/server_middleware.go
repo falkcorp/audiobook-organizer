@@ -1,7 +1,7 @@
 // file: internal/server/server_middleware.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 6a093405-441a-4c14-a9c5-46326ea767c1
-// last-edited: 2026-06-22
+// last-edited: 2026-07-01
 
 package server
 
@@ -12,11 +12,44 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/gin-gonic/gin"
 )
+
+// importPathCacheTTL controls how long cachedImportPaths reuses a previously
+// fetched import-path list before re-querying the store. Import paths change
+// extremely infrequently (an admin action via the settings UI), so a short
+// TTL-only cache is sufficient here — no invalidation hook is wired into the
+// import-path mutation endpoints (MAYDEPLOY-H7). Not a const so tests can
+// shrink it.
+var importPathCacheTTL = 5 * time.Second
+
+var (
+	importPathCacheMu sync.Mutex
+	importPathCache   []database.ImportPath
+	importPathCacheAt time.Time
+)
+
+// cachedImportPaths returns store.GetAllImportPaths(), reusing the previous
+// result if it was fetched within importPathCacheTTL.
+func cachedImportPaths(store database.Store) ([]database.ImportPath, error) {
+	importPathCacheMu.Lock()
+	defer importPathCacheMu.Unlock()
+	if time.Since(importPathCacheAt) < importPathCacheTTL {
+		return importPathCache, nil
+	}
+	paths, err := store.GetAllImportPaths()
+	if err != nil {
+		return nil, err
+	}
+	importPathCache = paths
+	importPathCacheAt = time.Now()
+	return paths, nil
+}
 
 func corsMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -90,7 +123,7 @@ func (s *Server) isProtectedPath(filePath string) bool {
 
 	// Check import paths
 	if store := s.Store(); store != nil {
-		importPaths, err := store.GetAllImportPaths()
+		importPaths, err := cachedImportPaths(store)
 		if err == nil {
 			for _, ip := range importPaths {
 				ipAbs, _ := filepath.Abs(ip.Path)
