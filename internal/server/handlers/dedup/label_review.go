@@ -1,11 +1,14 @@
 // file: internal/server/handlers/dedup/label_review.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5e2a9c41-7b30-4d68-8f12-3a6e0c9d5b27
-// last-edited: 2026-06-23
+// last-edited: 2026-07-01
 
 package deduphandler
 
 import (
+	"encoding/json"
+	"fmt"
+	"net/http"
 	"strconv"
 	"time"
 
@@ -143,6 +146,56 @@ func (h *Handler) OverrideDedupLabel(c *gin.Context) {
 		return
 	}
 	httputil.RespondWithOK(c, gin.H{"status": "updated", "candidate_id": id, "label": ex.Label, "label_source": ex.LabelSource})
+}
+
+// ExportLabeledExamples handles GET /api/v1/dedup/labels/export (C7).
+//
+// Streams every dedup:label: labeled example as JSONL (one JSON object per
+// line), including the formula/feature version, for offline dataset analysis
+// and training. Read-only — it only reads via ListLabeledExamples, never
+// mutates a label.
+//
+// Query params (all optional, mirror LabeledExampleFilter — empty means "no
+// filter"): label, label_source, band, folder_relation, signature_relation.
+// Unlike ListDedupLabels this endpoint is unpaginated: it exports every row
+// matching the filter.
+func (h *Handler) ExportLabeledExamples(c *gin.Context) {
+	es := h.embeddingStore
+	if es == nil {
+		httputil.RespondWithServiceUnavailable(c, "embedding store not available")
+		return
+	}
+
+	filter := database.LabeledExampleFilter{
+		Label:             c.Query("label"),
+		LabelSource:       c.Query("label_source"),
+		Band:              c.Query("band"),
+		FolderRelation:    c.Query("folder_relation"),
+		SignatureRelation: c.Query("signature_relation"),
+	}
+
+	items, err := es.ListLabeledExamples(filter)
+	if err != nil {
+		httputil.InternalError(c, "failed to list labeled examples for export", err)
+		return
+	}
+
+	filename := fmt.Sprintf("dedup-labels-%s.jsonl", time.Now().Format("20060102-150405"))
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+	c.Header("Content-Type", "application/x-ndjson")
+	c.Status(http.StatusOK)
+
+	enc := json.NewEncoder(c.Writer)
+	flusher, canFlush := c.Writer.(http.Flusher)
+	for _, ex := range items {
+		if err := enc.Encode(ex); err != nil {
+			// Client likely disconnected mid-stream; nothing else to do.
+			return
+		}
+		if canFlush {
+			flusher.Flush()
+		}
+	}
 }
 
 // clampAtoi parses s as an int, falling back to def, then clamps to [lo, hi].

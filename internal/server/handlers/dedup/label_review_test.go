@@ -1,11 +1,13 @@
 // file: internal/server/handlers/dedup/label_review_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8a3e1c46-9b20-4d75-8f31-2a6e0c9d5b39
-// last-edited: 2026-06-19
+// last-edited: 2026-07-01
 
 package deduphandler_test
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -119,5 +121,101 @@ func TestOverrideDedupLabel_RejectsBadLabel(t *testing.T) {
 		map[string]string{"label": "garbage"}, gin.Params{{Key: "id", Value: "9"}})
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d want 400", w.Code)
+	}
+}
+
+// TestExportLabeledExamples_JSONL covers the C7 read-only JSONL export: every
+// dedup:label: row is streamed as one JSON object per line, including the
+// formula/feature version, and no mutation occurs.
+func TestExportLabeledExamples_JSONL(t *testing.T) {
+	h, d := newHandler(t)
+	seedLabel(t, d, 1, "true_dup", "human")
+	seedLabel(t, d, 2, "not_dup", "rule")
+	if err := d.es.UpsertLabeledExample(database.LabeledExample{
+		CandidateID: 3, EntityAID: "a", EntityBID: "b",
+		Layer: "exact", Label: "unsure", LabelSource: "llm_judge",
+		LabelReason: "seed", FormulaVersion: "v3",
+	}); err != nil {
+		t.Fatalf("UpsertLabeledExample: %v", err)
+	}
+
+	w := doReq(t, h.ExportLabeledExamples, http.MethodGet, "/api/v1/dedup/labels/export", nil, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d want 200; body=%s", w.Code, w.Body.String())
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "application/x-ndjson" {
+		t.Fatalf("content-type=%q want application/x-ndjson", ct)
+	}
+
+	scanner := bufio.NewScanner(bytes.NewReader(w.Body.Bytes()))
+	var (
+		lines          int
+		sawFormulaVer3 bool
+	)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		lines++
+		var ex database.LabeledExample
+		if err := json.Unmarshal(line, &ex); err != nil {
+			t.Fatalf("line %d not valid LabeledExample JSON: %v; line=%s", lines, err, line)
+		}
+		if ex.CandidateID == 3 && ex.FormulaVersion == "v3" {
+			sawFormulaVer3 = true
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if lines != 3 {
+		t.Fatalf("expected 3 JSONL lines, got %d; body=%s", lines, w.Body.String())
+	}
+	if !sawFormulaVer3 {
+		t.Fatalf("expected candidate 3 with formula_version=v3 in export; body=%s", w.Body.String())
+	}
+
+	// Read-only: no example should have been mutated by the export.
+	ex, err := d.es.GetLabeledExample(1)
+	if err != nil || ex == nil {
+		t.Fatalf("GetLabeledExample(1): %v", err)
+	}
+	if ex.Label != "true_dup" || ex.LabelSource != "human" {
+		t.Fatalf("export mutated example 1: label=%q source=%q", ex.Label, ex.LabelSource)
+	}
+}
+
+// TestExportLabeledExamples_FilterByLabelSource confirms the same filter
+// fields honored by ListDedupLabels are honored on the export path too.
+func TestExportLabeledExamples_FilterByLabelSource(t *testing.T) {
+	h, d := newHandler(t)
+	seedLabel(t, d, 1, "true_dup", "human")
+	seedLabel(t, d, 2, "not_dup", "rule")
+
+	w := doReq(t, h.ExportLabeledExamples, http.MethodGet, "/api/v1/dedup/labels/export?label_source=human", nil, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d want 200; body=%s", w.Code, w.Body.String())
+	}
+	scanner := bufio.NewScanner(bytes.NewReader(w.Body.Bytes()))
+	var lines int
+	for scanner.Scan() {
+		if len(scanner.Bytes()) == 0 {
+			continue
+		}
+		lines++
+	}
+	if lines != 1 {
+		t.Fatalf("expected 1 JSONL line for label_source=human filter, got %d; body=%s", lines, w.Body.String())
+	}
+}
+
+// TestExportLabeledExamples_NoEmbedStore mirrors the 503 nil-store guard used
+// throughout this package's other embedding-store-backed handlers.
+func TestExportLabeledExamples_NoEmbedStore(t *testing.T) {
+	h, _ := newHandler(t, noEmbed)
+	w := doReq(t, h.ExportLabeledExamples, http.MethodGet, "/api/v1/dedup/labels/export", nil, nil)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d want 503; body=%s", w.Code, w.Body.String())
 	}
 }
