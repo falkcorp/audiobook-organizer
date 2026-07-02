@@ -1,12 +1,12 @@
 // file: internal/metafetch/isbn.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 34290bd0-745e-4509-ad2d-e237785bb7ef
+// last-edited: 2026-07-01
 
 package metafetch
 
 import (
 	"context"
-	"log/slog"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
@@ -31,7 +31,7 @@ func NewISBNService(db database.Store, sources []metadata.MetadataSource) *ISBNS
 // EnrichBookISBN searches external sources for ISBN if the book doesn't have one.
 // It also back-fills ASIN from Audible when missing. Returns true if any
 // identifier was found and saved.
-func (s *ISBNService) EnrichBookISBN(bookID string) (bool, error) {
+func (s *ISBNService) EnrichBookISBN(ctx context.Context, bookID string) (bool, error) {
 	book, err := s.db.GetBookByID(bookID)
 	if err != nil || book == nil {
 		return false, err
@@ -66,7 +66,7 @@ func (s *ISBNService) EnrichBookISBN(bookID string) (bool, error) {
 			if _, err := s.db.UpdateBook(bookID, book); err != nil {
 				return false, err
 			}
-						slog.Info("ISBN enrichment found for ()", "value", isbn, "value", title, "name", src.Name())
+						logging.Info(ctx, "ISBN enrichment found", "isbn", isbn, "title", title, "source", src.Name())
 			updated = true
 			break
 		}
@@ -86,7 +86,7 @@ func (s *ISBNService) EnrichBookISBN(bookID string) (bool, error) {
 			if _, err := s.db.UpdateBook(bookID, book); err != nil {
 				return updated, err
 			}
-						slog.Info("ASIN enrichment found for", "value", asin, "value", title)
+						logging.Info(ctx, "ASIN enrichment found", "asin", asin, "title", title)
 			updated = true
 			break
 		}
@@ -130,7 +130,7 @@ func (s *ISBNService) EnrichMissingISBNs(ctx context.Context, limit int, w *acti
 			}
 
 			checked++
-			found, err := s.EnrichBookISBN(books[i].ID)
+			found, err := s.EnrichBookISBN(ctx, books[i].ID)
 			if err != nil {
 								logging.Warn(ctx, "ISBN enrichment failed for during batch scan", "id", books[i].ID, "error", err)
 			} else if found {
