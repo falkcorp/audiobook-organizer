@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5cd764d5-8036-425c-842e-c49d0d44acec
-// last-edited: 2026-06-23
+// last-edited: 2026-07-01
 
 // Tests for the audiobooks-domain handlers (main library list / CRUD). The
 // store / audiobook-service / updater / write-back / metadata-state /
@@ -338,6 +338,20 @@ func TestPatchBookFile_Success(t *testing.T) {
 	d.store.EXPECT().GetBookFileByID("b1", "f1").Return(&database.BookFile{ID: "f1"}, nil)
 	d.store.EXPECT().UpsertBookFile(mock.Anything).Return(nil)
 	c, w := newCtx("PATCH", "/audiobooks/b1/files/f1", map[string]any{"skip_scan": true},
+		gin.Params{{Key: "id", Value: "b1"}, {Key: "file_id", Value: "f1"}})
+	h.PatchBookFile(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", w.Code)
+	}
+}
+
+func TestPatchBookFile_SetsDownloadHash(t *testing.T) {
+	h, d := newHandler(t)
+	d.store.EXPECT().GetBookFileByID("b1", "f1").Return(&database.BookFile{ID: "f1"}, nil)
+	d.store.EXPECT().UpsertBookFile(mock.MatchedBy(func(f *database.BookFile) bool {
+		return f.DownloadHash == "abc123"
+	})).Return(nil)
+	c, w := newCtx("PATCH", "/audiobooks/b1/files/f1", map[string]any{"download_hash": "abc123"},
 		gin.Params{{Key: "id", Value: "b1"}, {Key: "file_id", Value: "f1"}})
 	h.PatchBookFile(c)
 	if w.Code != http.StatusOK {

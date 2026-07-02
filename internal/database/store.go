@@ -1,5 +1,5 @@
 // file: internal/database/store.go
-// version: 2.81.0
+// version: 2.82.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
 // last-edited: 2026-07-01
 
@@ -765,7 +765,13 @@ type BookFile struct {
 	// DelugeHash is the torrent info-hash (40-char hex string).
 	// DelugeOriginalPath is the file path before copy-into-library.
 	// ImportedFromDelugeAt is when the copy completed.
-	DelugeHash           string     `json:"deluge_hash,omitempty"`
+	DelugeHash string `json:"deluge_hash,omitempty"`
+	// DownloadHash is the hash of the originally-downloaded file. It is
+	// distinct from DelugeHash (the torrent info-hash): DownloadHash is
+	// auto-populated from DelugeHash for files imported via Deluge, but may
+	// also be manually set/corrected for files that did not arrive via
+	// Deluge.
+	DownloadHash         string     `json:"download_hash,omitempty"`
 	DelugeOriginalPath   string     `json:"deluge_original_path,omitempty"`
 	ImportedFromDelugeAt *time.Time `json:"imported_from_deluge_at,omitempty"`
 }

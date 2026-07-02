@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_mark_import.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e9f1a2b3-c4d5-6789-0abc-def123456789
-// last-edited: 2026-05-15
+// last-edited: 2026-07-01
 
 package database
 
@@ -34,6 +34,9 @@ func (p *PebbleStore) MarkFileImportedFromDeluge(ctx context.Context, originalPa
 			bf.ImportedFromDelugeAt = &now
 			if torrentHash != "" {
 				bf.DelugeHash = torrentHash
+				if bf.DownloadHash == "" {
+					bf.DownloadHash = torrentHash
+				}
 			}
 			return p.UpdateBookFile(bf.ID, bf)
 		}
@@ -66,6 +69,9 @@ func (p *PebbleStore) MarkFileImportedFromDeluge(ctx context.Context, originalPa
 				f.ImportedFromDelugeAt = &now
 				if torrentHash != "" {
 					f.DelugeHash = torrentHash
+					if f.DownloadHash == "" {
+						f.DownloadHash = torrentHash
+					}
 				}
 				return p.UpdateBookFile(f.ID, f)
 			}

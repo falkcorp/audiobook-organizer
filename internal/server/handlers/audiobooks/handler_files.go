@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_files.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 82f8d1f7-46d5-4ead-b5c1-ba796fd785f9
-// last-edited: 2026-06-23
+// last-edited: 2026-07-01
 
 // File / segment endpoints for the audiobooks domain: segment listing,
 // book-file listing + patch, track-info extraction, relocate, and segment
@@ -139,6 +139,7 @@ func (h *Handler) ListBookFiles(c *gin.Context) {
 			"file_hash":            f.FileHash,
 			"original_file_hash":   f.OriginalFileHash,
 			"post_metadata_hash":   f.PostMetadataHash,
+			"download_hash":        f.DownloadHash,
 			// Acoustic fingerprint segments (0=intro, 1-5=body, 6=outro)
 			"acoustid_seg0":               f.AcoustIDSeg0,
 			"acoustid_seg1":               f.AcoustIDSeg1,
@@ -161,7 +162,7 @@ func (h *Handler) ListBookFiles(c *gin.Context) {
 	httputil.RespondWithOK(c, gin.H{"files": results, "count": len(results)})
 }
 
-// PatchBookFile updates a BookFile (currently only SkipScan).
+// PatchBookFile updates a BookFile (SkipScan, DownloadHash).
 // PATCH /audiobooks/:id/files/:file_id.
 func (h *Handler) PatchBookFile(c *gin.Context) {
 	bookID := c.Param("id")
@@ -174,7 +175,8 @@ func (h *Handler) PatchBookFile(c *gin.Context) {
 	}
 
 	var body struct {
-		SkipScan *bool `json:"skip_scan"`
+		SkipScan     *bool   `json:"skip_scan"`
+		DownloadHash *string `json:"download_hash"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		httputil.RespondWithBadRequest(c, "invalid request body")
@@ -197,6 +199,15 @@ func (h *Handler) PatchBookFile(c *gin.Context) {
 			"book_id", bookID,
 			"file_id", fileID,
 			"skip_scan", *body.SkipScan,
+		)
+	}
+
+	if body.DownloadHash != nil {
+		file.DownloadHash = *body.DownloadHash
+		slog.Info("file download_hash set",
+			"book_id", bookID,
+			"file_id", fileID,
+			"download_hash", *body.DownloadHash,
 		)
 	}
 
