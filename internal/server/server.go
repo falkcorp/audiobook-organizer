@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.32.0
+// version: 2.32.1
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-06-22
+// last-edited: 2026-07-02
 
 package server
 
@@ -611,9 +611,16 @@ func NewServer(store database.Store) *Server {
 			server.hnswPersistDir = filepath.Join(filepath.Dir(config.AppConfig.DatabasePath), "hnsw")
 		}
 
-		// Gate embedding client on Ollama availability.
+		// Gate embedding client on Ollama availability. The tool-registry check
+		// is a binary-on-PATH probe (exec.LookPath), which fails when Ollama runs
+		// as a system service / container the app can't see on PATH — even though
+		// its HTTP endpoint is reachable. So when an operator has EXPLICITLY
+		// configured an embedding base_url (an assertion that the endpoint exists,
+		// e.g. http://127.0.0.1:11434/v1 for local Ollama), trust it rather than
+		// let the missing binary block all embeds.
 		if server.embedClient != nil {
-			server.embedClient.SetOllamaAvailable(server.toolRegistry.Available("ollama"))
+			ollamaOK := server.toolRegistry.Available("ollama") || config.AppConfig.Embedding.BaseURL != ""
+			server.embedClient.SetOllamaAvailable(ollamaOK)
 		}
 
 		// Wire dedup plugin tool registry so Ollama-gated ops check availability.
