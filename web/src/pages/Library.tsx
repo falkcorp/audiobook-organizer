@@ -1,11 +1,19 @@
 // file: web/src/pages/Library.tsx
-// version: 1.74.0
+// version: 1.75.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
 // last-edited: 2026-07-01
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Box, Button } from '@mui/material';
+import {
+  Box,
+  Button,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  TextField,
+} from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import CachedIcon from '@mui/icons-material/Cached';
 import { ViewMode } from '../components/audiobooks/SearchBar';
@@ -18,6 +26,7 @@ import type { Audiobook } from '../types';
 import { SortField, SortOrder } from '../types';
 import { parseSearch, type ParsedSearch } from '../utils/searchParser';
 import * as api from '../services/api';
+import type { SavedFilterPreset } from '../services/api';
 import {
   eventSourceManager,
   type EventSourceEvent,
@@ -161,6 +170,91 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
   const [parsedSearch, setParsedSearch] = useState<ParsedSearch>(() => parseSearch(initialSearch));
   const [bulkTagDialogOpen, setBulkTagDialogOpen] = useState(false);
   const [bulkRatingDialogOpen, setBulkRatingDialogOpen] = useState(false);
+
+  // Saved filter presets (USER-QUICK-FILTERS)
+  const [savedPresets, setSavedPresets] = useState<SavedFilterPreset[]>([]);
+  const [presetDialogOpen, setPresetDialogOpen] = useState(false);
+  const [presetDialogName, setPresetDialogName] = useState('');
+  const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
+
+  useEffect(() => {
+    api
+      .getSavedFilterPresets()
+      .then(setSavedPresets)
+      .catch((err) => {
+        console.error('Failed to load saved filter presets:', err);
+      });
+  }, []);
+
+  const handleOpenSavePresetDialog = useCallback(() => {
+    setEditingPresetId(null);
+    setPresetDialogName('');
+    setPresetDialogOpen(true);
+  }, []);
+
+  const handleOpenRenamePresetDialog = useCallback((preset: SavedFilterPreset) => {
+    setEditingPresetId(preset.id);
+    setPresetDialogName(preset.name);
+    setPresetDialogOpen(true);
+  }, []);
+
+  const handleClosePresetDialog = useCallback(() => {
+    setPresetDialogOpen(false);
+  }, []);
+
+  const handleConfirmPresetDialog = useCallback(async () => {
+    const name = presetDialogName.trim();
+    if (!name) return;
+    let updated: SavedFilterPreset[];
+    if (editingPresetId) {
+      updated = savedPresets.map((p) => (p.id === editingPresetId ? { ...p, name } : p));
+    } else {
+      const newPreset: SavedFilterPreset = {
+        id:
+          typeof crypto !== 'undefined' && 'randomUUID' in crypto
+            ? crypto.randomUUID()
+            : `preset-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        name,
+        filters,
+        selectedTags,
+      };
+      updated = [...savedPresets, newPreset];
+    }
+    try {
+      await api.saveSavedFilterPresets(updated);
+      setSavedPresets(updated);
+      setPresetDialogOpen(false);
+      toast(editingPresetId ? 'Preset renamed' : 'Filter preset saved', 'success');
+    } catch (err) {
+      console.error('Failed to save filter preset:', err);
+      toast('Failed to save filter preset', 'error');
+    }
+  }, [presetDialogName, editingPresetId, savedPresets, filters, selectedTags, toast]);
+
+  const handleApplyPreset = useCallback(
+    (preset: SavedFilterPreset) => {
+      baseHandleFiltersChange(preset.filters);
+      if (preset.selectedTags) {
+        setSelectedTags(preset.selectedTags);
+      }
+    },
+    [baseHandleFiltersChange, setSelectedTags]
+  );
+
+  const handleDeletePreset = useCallback(
+    async (preset: SavedFilterPreset) => {
+      const updated = savedPresets.filter((p) => p.id !== preset.id);
+      try {
+        await api.saveSavedFilterPresets(updated);
+        setSavedPresets(updated);
+        toast('Filter preset deleted', 'success');
+      } catch (err) {
+        console.error('Failed to delete filter preset:', err);
+        toast('Failed to delete filter preset', 'error');
+      }
+    },
+    [savedPresets, toast]
+  );
 
   // Column config
   const {
@@ -1696,6 +1790,11 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
         toggleColumn={toggleColumn}
         resetColumnsToDefaults={resetColumnsToDefaults}
         getActiveFilterCount={getActiveFilterCount}
+        savedPresets={savedPresets}
+        onSaveCurrentAsPreset={handleOpenSavePresetDialog}
+        onApplyPreset={handleApplyPreset}
+        onRenamePreset={handleOpenRenamePresetDialog}
+        onDeletePreset={handleDeletePreset}
         onBatchEdit={() => setBatchEditOpen(true)}
         onFetchReview={handleFetchReview}
         onFetchAllUnmatched={handleFetchAllUnmatched}
@@ -1945,6 +2044,26 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
           batchPlaylistOpen={batchPlaylistOpen}
           setBatchPlaylistOpen={setBatchPlaylistOpen}
         />
+
+        <Dialog open={presetDialogOpen} onClose={handleClosePresetDialog}>
+          <DialogTitle>{editingPresetId ? 'Rename preset' : 'Save current filters as preset'}</DialogTitle>
+          <DialogContent>
+            <TextField
+              autoFocus
+              margin="dense"
+              label="Preset name"
+              fullWidth
+              value={presetDialogName}
+              onChange={(e) => setPresetDialogName(e.target.value)}
+            />
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={handleClosePresetDialog}>Cancel</Button>
+            <Button onClick={handleConfirmPresetDialog} disabled={!presetDialogName.trim()} variant="contained">
+              Save
+            </Button>
+          </DialogActions>
+        </Dialog>
       </Box>
     </Box>
   );

@@ -1,10 +1,12 @@
 // file: web/src/services/api.ts
-// version: 2.48.0
+// version: 2.49.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-07-01
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
+
+import type { FilterOptions } from '../types';
 
 import { withOptimisticOperation } from '../utils/withOptimisticOperation';
 import { apiFetch } from '../utils/apiFetch';
@@ -4643,6 +4645,41 @@ export async function deleteUserColumnConfig(): Promise<void> {
   // Ignore 404 — config may not exist
   if (!response.ok && response.status !== 404) {
     throw await buildApiError(response, 'Failed to delete column config');
+  }
+}
+
+// --- Saved filter presets (USER-QUICK-FILTERS) ---
+
+export interface SavedFilterPreset {
+  id: string;
+  name: string;
+  filters: FilterOptions;
+  selectedTags?: string[];
+}
+
+const FILTER_PRESETS_KEY = 'library_filter_presets';
+
+export async function getSavedFilterPresets(): Promise<SavedFilterPreset[]> {
+  const response = await apiFetch(`${API_BASE}/preferences/${FILTER_PRESETS_KEY}`);
+  if (!response.ok) return [];
+  const data = await response.json();
+  if (!data.value) return [];
+  try {
+    const parsed = JSON.parse(data.value);
+    return Array.isArray(parsed) ? (parsed as SavedFilterPreset[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function saveSavedFilterPresets(presets: SavedFilterPreset[]): Promise<void> {
+  const response = await apiFetch(`${API_BASE}/preferences/${FILTER_PRESETS_KEY}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ value: JSON.stringify(presets) }),
+  });
+  if (!response.ok) {
+    throw await buildApiError(response, 'Failed to save filter presets');
   }
 }
 

@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.bulkFetch.test.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: 5b7b0d6f-5c2b-4d57-9b6c-8dbb7a9e9e2c
-// last-edited: 2026-05-08
+// last-edited: 2026-07-01
 
 import { render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
@@ -77,6 +77,8 @@ vi.mock('../services/api', () => {
     }),
     getOperationTimeline: vi.fn().mockResolvedValue([]),
     getActiveOperations: vi.fn().mockResolvedValue([]),
+    getSavedFilterPresets: vi.fn().mockResolvedValue([]),
+    saveSavedFilterPresets: vi.fn().mockResolvedValue(undefined),
   };
 });
 
