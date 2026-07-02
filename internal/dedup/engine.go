@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.39.0
+// version: 1.40.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-07-01
 
@@ -20,6 +20,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/ai/aijobs"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup/dataset"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
@@ -668,7 +669,7 @@ func (de *Engine) runUnifiedScoringForBook(ctx context.Context, book *database.B
 		// 4. Persist: upsert with unified fields + back-compat Layer/Similarity.
 		sim := composed.Score / 100.0
 		layer := bestLayerFromSignals(signals)
-		if err := de.embedStore.UpsertCandidate(database.DedupCandidate{
+		if err := de.upsertCandidateWithLiveLabel(database.DedupCandidate{
 			EntityType:     "book",
 			EntityAID:      canonicalPair[0],
 			EntityBID:      canonicalPair[1],
@@ -685,6 +686,61 @@ func (de *Engine) runUnifiedScoringForBook(ctx context.Context, book *database.B
 	}
 
 	return nil
+}
+
+// upsertCandidateWithLiveLabel upserts a dedup candidate and, only when the
+// pair is brand new (never on a score/layer update to an existing pair),
+// builds a dataset.BuildExample/dataset.Classify snapshot and records it as a
+// labeled example with an auto (rule-based) label_source. This grows the
+// dedup tuning dataset continuously as candidates are created, instead of
+// only via human review (label_capture.go) or the periodic
+// dedup.dataset-backfill op (spec C5).
+//
+// Live-capture is best-effort: any failure building or persisting the
+// snapshot is logged and swallowed — it must never block the primary
+// candidate upsert, whose error (if any) is still returned.
+func (de *Engine) upsertCandidateWithLiveLabel(c database.DedupCandidate) error {
+	id, isNew, err := de.embedStore.UpsertCandidateNew(c)
+	if err != nil {
+		return err
+	}
+	if !isNew {
+		// Update to an existing pair — never re-label, per the guard in TASK-03/C5.
+		return nil
+	}
+	// Author-pair candidates aren't backed by database.Book rows; BuildExample
+	// loads books via GetBook, so live-capture only applies to "book" entities.
+	if c.EntityType != "book" || de.bookStore == nil {
+		return nil
+	}
+	c.ID = id
+	de.captureLiveLabel(c)
+	return nil
+}
+
+// captureLiveLabel builds and persists a Classify snapshot for a
+// newly-created candidate pair. Best-effort: any failure is logged at debug
+// level and swallowed so it can never affect the caller.
+func (de *Engine) captureLiveLabel(c database.DedupCandidate) {
+	ex, err := dataset.BuildExample(dataset.StoreAdapter{Store: de.bookStore}, c)
+	if err != nil {
+		slog.Debug("dedup live-capture: build example failed",
+			"candidate_id", c.ID, "entity_a", c.EntityAID, "entity_b", c.EntityBID, "err", err)
+		return
+	}
+	// Mirrors dataset_backfill.go: only rule-classified pairs get a Label;
+	// unfired pairs are still persisted (unlabeled) so their features are
+	// captured for future human/ML labeling.
+	if label, reason, fires := dataset.Classify(ex); fires {
+		ex.Label = label
+		ex.LabelSource = "rule"
+		ex.LabelReason = reason
+		ex.DecidedAt = time.Now().UTC().Format(time.RFC3339)
+	}
+	if err := de.embedStore.UpsertLabeledExample(ex); err != nil {
+		slog.Debug("dedup live-capture: upsert labeled example failed",
+			"candidate_id", c.ID, "err", err)
+	}
 }
 
 // canonicalPairIDs returns [aID, bID] in lexicographically sorted order so
@@ -1292,7 +1348,7 @@ func (de *Engine) upsertExactCandidate(a, b *database.Book, layer string, sim fl
 			"book_a", a.ID, "book_b", b.ID, "layer", layer)
 		return nil
 	}
-	return de.embedStore.UpsertCandidate(database.DedupCandidate{
+	return de.upsertCandidateWithLiveLabel(database.DedupCandidate{
 		EntityType: "book",
 		EntityAID:  a.ID,
 		EntityBID:  b.ID,
@@ -1621,7 +1677,7 @@ func (de *Engine) findSimilarBooks(ctx context.Context, bookID string) error {
 			continue
 		}
 		sim := float64(r.Similarity)
-		if err := de.embedStore.UpsertCandidate(database.DedupCandidate{
+		if err := de.upsertCandidateWithLiveLabel(database.DedupCandidate{
 			EntityType: "book",
 			EntityAID:  bookID,
 			EntityBID:  r.EntityID,
@@ -1685,7 +1741,7 @@ func (de *Engine) CheckAuthor(ctx context.Context, authorID int) error {
 			continue
 		}
 		sim := float64(r.Similarity)
-		if err := de.embedStore.UpsertCandidate(database.DedupCandidate{
+		if err := de.upsertCandidateWithLiveLabel(database.DedupCandidate{
 			EntityType: "author",
 			EntityAID:  entityID,
 			EntityBID:  r.EntityID,
@@ -3107,7 +3163,7 @@ func (de *Engine) AcoustIDScan(ctx context.Context, progress func(done, total in
 			}
 		}
 		emitted[key] = struct{}{}
-		if err := de.embedStore.UpsertCandidate(database.DedupCandidate{
+		if err := de.upsertCandidateWithLiveLabel(database.DedupCandidate{
 			EntityType: "book",
 			EntityAID:  bookAID,
 			EntityBID:  bookBID,
@@ -3304,7 +3360,7 @@ func (de *Engine) BookSignatureScan(ctx context.Context, progress func(done, tot
 			return
 		}
 		emitted[key] = struct{}{}
-		if err := de.embedStore.UpsertCandidate(database.DedupCandidate{
+		if err := de.upsertCandidateWithLiveLabel(database.DedupCandidate{
 			EntityType: "book",
 			EntityAID:  bookAID,
 			EntityBID:  bookBID,
