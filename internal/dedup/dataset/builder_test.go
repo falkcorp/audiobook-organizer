@@ -1,7 +1,7 @@
 // file: internal/dedup/dataset/builder_test.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: b3e7f2a1-9c45-4d80-8e62-5f1a3d6c7b90
-// last-edited: 2026-06-13
+// last-edited: 2026-07-01
 
 package dataset
 
@@ -22,6 +22,30 @@ func makeTestSig(seed uint32) string {
 	buf := make([]byte, n*4)
 	for i := 0; i < n; i++ {
 		binary.LittleEndian.PutUint32(buf[i*4:], seed)
+	}
+	return base64.StdEncoding.EncodeToString(buf)
+}
+
+// makeVariedWords builds a deterministic 4096-word array with well-spread
+// bits (a Knuth multiplicative hash of the index) so it looks like a
+// realistic fingerprint rather than a uniform constant — needed for
+// containment tests, where a uniform array would trivially "contain" any
+// other uniform array.
+func makeVariedWords() []uint32 {
+	const n = 4096
+	words := make([]uint32, n)
+	for i := range words {
+		words[i] = uint32(i) * 2654435761
+	}
+	return words
+}
+
+// encodeWords base64-encodes a []uint32 as little-endian bytes, mirroring
+// the BookSigV1 on-disk representation.
+func encodeWords(words []uint32) string {
+	buf := make([]byte, len(words)*4)
+	for i, w := range words {
+		binary.LittleEndian.PutUint32(buf[i*4:], w)
 	}
 	return base64.StdEncoding.EncodeToString(buf)
 }
@@ -166,6 +190,57 @@ func TestBuildExample_SignatureRelation_Disjoint(t *testing.T) {
 	}
 	if ex.SignatureRelation != "disjoint" {
 		t.Fatalf("SignatureRelation = %q, want disjoint (fully dissimilar sigs)", ex.SignatureRelation)
+	}
+}
+
+// TestSignatureRelation_Table covers all five signatureRelation outcomes:
+// match, a_contains_b, b_contains_a, disjoint, unknown.
+func TestSignatureRelation_Table(t *testing.T) {
+	whole := makeVariedWords()
+	wholeSig := encodeWords(whole)
+
+	// Pick a window (length = n/4) whose start offset lands exactly on the
+	// same grid signatureContainment searches, so the resampled window is a
+	// byte-for-byte match and containment is detected deterministically.
+	const n = 4096
+	winLen := n / 4
+	maxStart := n - winLen
+	starts := containmentGridStarts(maxStart)
+	prefixStart := starts[0]
+	suffixStart := starts[len(starts)-1]
+	middleStart := starts[len(starts)/2]
+
+	prefixExcerpt := encodeWords(resampleNearest(whole, prefixStart, winLen, n))
+	middleExcerpt := encodeWords(resampleNearest(whole, middleStart, winLen, n))
+	suffixExcerpt := encodeWords(resampleNearest(whole, suffixStart, winLen, n))
+
+	zeroSig := makeTestSig(0x00000000)
+	onesSig := makeTestSig(0xFFFFFFFF)
+
+	tests := []struct {
+		name string
+		a, b *string
+		want string
+	}{
+		{"identical_sigs_match", &wholeSig, &wholeSig, "match"},
+		{"b_is_prefix_of_a", &wholeSig, &prefixExcerpt, "a_contains_b"},
+		{"b_is_middle_of_a", &wholeSig, &middleExcerpt, "a_contains_b"},
+		{"b_is_suffix_of_a", &wholeSig, &suffixExcerpt, "a_contains_b"},
+		{"a_is_prefix_of_b", &prefixExcerpt, &wholeSig, "b_contains_a"},
+		{"unrelated_sigs_disjoint", &zeroSig, &onesSig, "disjoint"},
+		{"nil_sig_unknown", nil, &wholeSig, "unknown"},
+		{"empty_sig_unknown", func() *string { s := ""; return &s }(), &wholeSig, "unknown"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bkA := &database.Book{ID: "a", Title: "A", BookSigV1: tt.a}
+			bkB := &database.Book{ID: "b", Title: "B", BookSigV1: tt.b}
+			got := signatureRelation(bkA, bkB)
+			if got != tt.want {
+				t.Fatalf("signatureRelation() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

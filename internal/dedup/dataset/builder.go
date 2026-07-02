@@ -1,7 +1,7 @@
 // file: internal/dedup/dataset/builder.go
-// version: 1.1.3
+// version: 1.2.0
 // guid: 4a91c7e0-6d83-4b25-9f10-2c5a8e7d4b31
-// last-edited: 2026-06-13
+// last-edited: 2026-07-01
 
 // Package dataset builds labeled dedup examples and runs deterministic catchers
 // over them. Pure: a store interface in, a database.LabeledExample out, no
@@ -10,7 +10,11 @@
 package dataset
 
 import (
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
+	"errors"
+	"math/bits"
 	"path/filepath"
 	"strings"
 
@@ -21,6 +25,27 @@ import (
 // sigMatchThreshold is the BookSignatureSimilarity score at/above which two
 // whole-book signatures are treated as a content match (spec: 0.95).
 const sigMatchThreshold = 0.95
+
+// sigContainmentThreshold is the similarity required, over a resampled
+// candidate window (see signatureContainment), to declare offset/subsequence
+// containment. Set slightly below sigMatchThreshold to tolerate the extra
+// quantization noise introduced by nearest-neighbor resampling.
+const sigContainmentThreshold = 0.90
+
+// containmentFractions are the candidate window-length fractions of the full
+// fingerprint.BookSignatureFixedLength array tried when searching for offset/
+// subsequence containment (e.g. one book being an excerpt, or the first half,
+// of another). Both BookSigV1 signatures are always down-sampled to the same
+// fixed length, so containment cannot be found by a literal sub-slice
+// comparison; instead a candidate window of the longer book's "timeline" is
+// resampled back up to the fixed length and compared to the shorter book.
+var containmentFractions = []int{2, 3, 4, 6, 8}
+
+// containmentOffsetSteps bounds how many candidate start offsets are tried per
+// window length, keeping the search O(len(containmentFractions) *
+// containmentOffsetSteps) resamples-and-compares (a few dozen) instead of
+// scanning every one of the up to 4096 possible offsets.
+const containmentOffsetSteps = 8
 
 // BuilderStore is the narrow store surface BuildExample needs.
 type BuilderStore interface {
@@ -187,10 +212,14 @@ func sharesAny(a, b []string) bool {
 
 // signatureRelation reports the whole-book-signature relationship between two books.
 // Uses fingerprint.BookSignatureSimilarity with a 0.95 threshold for "match".
-// Returns one of: match, disjoint, unknown.
-// "unknown" is returned when either signature is absent or the comparator errors
-// (e.g. corrupt/short base64). Offset/subsequence containment (a_contains_b /
-// b_contains_a) is deferred to a later spec milestone.
+// Returns one of:
+//   - match: whole-signature similarity >= sigMatchThreshold.
+//   - a_contains_b: b's signature closely matches a resampled contiguous
+//     window of a's signature (b looks like an excerpt/partial re-record of a).
+//   - b_contains_a: the reverse of a_contains_b.
+//   - disjoint: neither a match nor a containment relationship was found.
+//   - unknown: either signature is absent or the comparator errors (e.g.
+//     corrupt/short base64).
 func signatureRelation(a, b *database.Book) string {
 	if a == nil || b == nil {
 		return "unknown"
@@ -205,5 +234,127 @@ func signatureRelation(a, b *database.Book) string {
 	if sim >= sigMatchThreshold {
 		return "match"
 	}
+	aWords, errA := decodeBookSigWords(*a.BookSigV1)
+	bWords, errB := decodeBookSigWords(*b.BookSigV1)
+	if errA == nil && errB == nil {
+		if rel, ok := signatureContainment(aWords, bWords); ok {
+			return rel
+		}
+	}
 	return "disjoint"
+}
+
+// decodeBookSigWords decodes a base64-encoded BookSigV1 string into its
+// little-endian []uint32 words. Mirrors the (unexported) decoding used by
+// fingerprint.BookSignatureSimilarity; duplicated here because that package
+// exposes no public decode helper and containment search needs the raw words,
+// not just a similarity score.
+func decodeBookSigWords(encoded string) ([]uint32, error) {
+	b, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, err
+	}
+	if len(b)%4 != 0 {
+		return nil, errSigNotWordAligned
+	}
+	words := make([]uint32, len(b)/4)
+	for i := range words {
+		words[i] = binary.LittleEndian.Uint32(b[i*4:])
+	}
+	return words, nil
+}
+
+// errSigNotWordAligned is returned by decodeBookSigWords when the decoded
+// byte length is not a multiple of 4.
+var errSigNotWordAligned = errors.New("decoded signature length is not word-aligned")
+
+// signatureContainment searches for evidence that one of a/b's signature is a
+// contiguous, possibly-resampled sub-sequence of the other's. Both signatures
+// are always fingerprint.BookSignatureFixedLength words long regardless of the
+// underlying audio duration, so "b is the first half of a" cannot be found by
+// literal sub-slicing; instead candidate windows of the longer book's
+// down-sampled timeline are resampled back up to the fixed length and
+// compared to the other signature. Returns ("a_contains_b", true),
+// ("b_contains_a", true), or ("", false) if no window search matched.
+func signatureContainment(a, b []uint32) (string, bool) {
+	if len(a) == 0 || len(a) != len(b) {
+		return "", false
+	}
+	if rel, ok := containmentDirection(a, b, "a_contains_b"); ok {
+		return rel, true
+	}
+	if rel, ok := containmentDirection(b, a, "b_contains_a"); ok {
+		return rel, true
+	}
+	return "", false
+}
+
+// containmentDirection checks whether some resampled window of long matches
+// short closely enough (>= sigContainmentThreshold) to report relation.
+func containmentDirection(long, short []uint32, relation string) (string, bool) {
+	n := len(long)
+	for _, frac := range containmentFractions {
+		winLen := n / frac
+		if winLen < 8 {
+			continue // too short a window to be a meaningful excerpt
+		}
+		maxStart := n - winLen
+		if maxStart <= 0 {
+			continue
+		}
+		for _, start := range containmentGridStarts(maxStart) {
+			window := resampleNearest(long, start, winLen, len(short))
+			if hammingSimilarity(window, short) >= sigContainmentThreshold {
+				return relation, true
+			}
+		}
+	}
+	return "", false
+}
+
+// containmentGridStarts returns a bounded grid of candidate start offsets in
+// [0, maxStart], spaced so at most containmentOffsetSteps+1 offsets are
+// tried per window length.
+func containmentGridStarts(maxStart int) []int {
+	if maxStart <= 0 {
+		return []int{0}
+	}
+	step := maxStart / containmentOffsetSteps
+	if step == 0 {
+		step = 1
+	}
+	starts := make([]int, 0, containmentOffsetSteps+1)
+	for start := 0; start <= maxStart; start += step {
+		starts = append(starts, start)
+	}
+	return starts
+}
+
+// resampleNearest nearest-neighbor resamples src[start:start+length] up (or
+// down) to targetLen words, so a sub-window of one signature can be compared
+// directly against another signature's full fixed-length representation.
+func resampleNearest(src []uint32, start, length, targetLen int) []uint32 {
+	out := make([]uint32, targetLen)
+	for i := 0; i < targetLen; i++ {
+		idx := start + i*length/targetLen
+		if idx >= start+length {
+			idx = start + length - 1
+		}
+		out[i] = src[idx]
+	}
+	return out
+}
+
+// hammingSimilarity scores two equal-length uint32 slices the same way
+// fingerprint.BookSignatureSimilarity scores two full signatures: 1.0 minus
+// the fraction of differing bits.
+func hammingSimilarity(a, b []uint32) float64 {
+	if len(a) != len(b) || len(a) == 0 {
+		return 0
+	}
+	var diff int
+	for i := range a {
+		diff += bits.OnesCount32(a[i] ^ b[i])
+	}
+	return 1.0 - float64(diff)/float64(len(a)*32)
 }
