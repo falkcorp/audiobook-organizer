@@ -1,7 +1,7 @@
 // file: web/src/components/settings/EmbeddingSettingsSection.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: a9b8c7d6-e5f4-3210-abcd-ef9876543210
-// last-edited: 2026-06-19
+// last-edited: 2026-07-01
 
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
@@ -70,5 +70,14 @@ describe('EmbeddingSettingsSection', () => {
     const modelField = screen.getByLabelText('Model');
     fireEvent.change(modelField, { target: { value: 'text-embedding-3-large' } });
     expect(onChange).toHaveBeenCalledWith({ model: 'text-embedding-3-large' });
+  });
+
+  it('renders a link to download the latest Ollama', () => {
+    const onChange = vi.fn();
+    render(<EmbeddingSettingsSection config={defaultConfig} onChange={onChange} />);
+    const link = screen.getByRole('link', { name: /download the latest ollama/i });
+    expect(link).toHaveAttribute('href', 'https://ollama.com/download');
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer');
   });
 });

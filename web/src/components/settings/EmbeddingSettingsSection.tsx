@@ -1,7 +1,7 @@
 // file: web/src/components/settings/EmbeddingSettingsSection.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-06-19
+// last-edited: 2026-07-01
 
 import {
   Box,
@@ -11,6 +11,7 @@ import {
   Switch,
   MenuItem,
   Grid,
+  Link,
 } from '@mui/material';
 import * as api from '../../services/api';
 
@@ -25,6 +26,12 @@ export function EmbeddingSettingsSection({ config, onChange }: EmbeddingSettings
       <Typography variant="h6" gutterBottom>
         Embedding Settings
       </Typography>
+
+      <Box mb={2}>
+        <Link href="https://ollama.com/download" target="_blank" rel="noopener noreferrer">
+          Download the latest Ollama
+        </Link>
+      </Box>
 
       <Grid container spacing={2}>
         <Grid item xs={12}>
