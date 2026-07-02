@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.93.0 -->
+<!-- version: 3.94.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-01 -->
 
@@ -8,6 +8,10 @@
 ## [Unreleased]
 
 ### Documentation
+
+#### July 1, 2026 — Log pre-existing `pebble: closed` shutdown race (found during agent-task sweep)
+
+- **`docs(todo)`** — Filed `PEBBLE-CLOSED-SHUTDOWN-RACE` in TODO.md Open Bugs: a leaked `DepsScheduler.SweepTick` goroutine (`operations/registry.Registry.Start` → `DepsScheduler.SweepTick` → `PebbleStore.ListWaitingDepsOps`) can outlive a test's `store.Close()` and panic `pebble: closed` under package-wide `go test -race`. Independently reproduced by two sweep workers (the flaky-backup and flaky-scan deflakes, PRs #1711/#1713) as an out-of-scope side-finding; not the cause of those two flakes. Fix direction: stop-signal the sweep goroutine on `Registry.Stop`/cleanup, or make `ListWaitingDepsOps` tolerate a closed DB.
 
 #### July 1, 2026 — Agent-task package refresh (archive shipped, author remaining)
 
