@@ -9,6 +9,10 @@
 
 ### Bug Fixes
 
+#### July 2, 2026 - HNSW: contain coder/hnsw library panics at the store boundary
+
+- **`fix(database)`** - `HNSWEmbeddingStore.Upsert` now recovers panics from the fragile coder/hnsw v0.6.1 `Graph.Add` (it panics `"node not added"` on some re-insert states, and `assertDims` on a dimension mismatch) and returns them as errors. The vector index is a DERIVED, best-effort structure hydrated from PebbleDB; a single bad mirror must never crash a 44K-book re-embed op (which it did). Callers already log and continue past Upsert errors. Regression test `hnsw_panic_safe_test.go`.
+
 #### July 2, 2026 - HNSW: discard a stale-dimension snapshot on import (embedding cutover)
 
 - **`fix(database)`** - switching the embedding backend from OpenAI `text-embedding-3-large` (3072-dim) to local `bge-m3` (1024-dim) crashed the re-embed op: `HNSWEmbeddingStore.Import` loaded the old 3072-dim on-disk snapshot without a dimension check, and the coder/hnsw library then **panicked** (`graph.go assertDims`) the moment a 1024-dim vector was added. Import now discards any snapshot whose dimension no longer matches the configured store dimension; the derived index rebuilds empty at the new dimension via hydration + re-embed. Regression tests in `hnsw_dim_reset_test.go`.

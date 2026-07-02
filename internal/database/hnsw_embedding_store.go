@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_embedding_store.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-07-02
 
@@ -140,20 +140,33 @@ func (s *HNSWEmbeddingStore) Upsert(_ context.Context, entityType, entityID stri
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	g := s.graphFor(entityType)
-	// coder/hnsw v0.6.1 Graph.Add replaces an existing key. The typical
-	// call path (HydrateChromem on a fresh store, or adding a brand-new book)
-	// only inserts new keys, so the built-in replace path is never exercised.
-	// Re-inserting existing keys has a library bug (HNSW-CRASH-2026-06-18)
-	// that is avoided structurally: NewServer loads the HNSW snapshot BEFORE
-	// PostInit so dedup.Engine.PostInit detects the populated store and skips
-	// HydrateChromem entirely. See internal/server/server.go and
-	// internal/dedup/lifecycle.go for the fix.
-	g.Add(hnsw.MakeNode(entityID, vec))
+	// coder/hnsw v0.6.1 Graph.Add has known crash bugs: it panics "node not
+	// added" (graph.go:405) on some re-insert / concurrent-mutation states, and
+	// assertDims-panics on a dimension mismatch. This derived, best-effort ANN
+	// index must never crash a caller — a single bad mirror cannot be allowed to
+	// abort a 44K-book re-embed. Contain the library here: recover any panic and
+	// surface it as an error, which callers (mirrorBookToChromem) already log and
+	// continue past.
+	if err := s.safeAdd(g, entityID, vec); err != nil {
+		return err
+	}
 	if meta == nil {
 		meta = map[string]string{}
 	}
 	// Store a defensive copy so the caller can't mutate our sidecar.
 	s.meta[entityType][entityID] = copyMeta(meta)
+	return nil
+}
+
+// safeAdd wraps coder/hnsw Graph.Add so a library panic becomes an error rather
+// than crashing the process. Caller must hold s.mu.
+func (s *HNSWEmbeddingStore) safeAdd(g *hnsw.Graph[string], entityID string, vec []float32) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("hnsw add %s: recovered library panic: %v", entityID, r)
+		}
+	}()
+	g.Add(hnsw.MakeNode(entityID, vec))
 	return nil
 }
 
