@@ -1,7 +1,7 @@
 // file: internal/metabatch/upgrade.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-06-29
+// last-edited: 2026-07-02
 //
 // Background job that upgrades metadata from lower-quality sources
 // (primarily Google Books) to richer ones (Hardcover, Audible/Audnexus)
@@ -180,6 +180,18 @@ func (s *MetadataUpgradeService) tryUpgradeBook(ctx context.Context, bookID, cur
 		// A candidate that independently matches the book's audio-derived
 		// title/author is corroborated and gets a relaxed score gate.
 		transcriptionConfirms := transcriptionConfirmsCandidate(book, c)
+
+		// Hard gate: when the book has an audio-derived (transcribed) title but
+		// this candidate does NOT match it (title+author), never auto-upgrade —
+		// a score-only pass would let a same-author, wrong-title record win
+		// ("matches the author but not the actual book"). Defer to manual review.
+		hasTranscribedTitle := book.TranscribedTitle != nil && *book.TranscribedTitle != ""
+		if hasTranscribedTitle && !transcriptionConfirms {
+			slog.Debug("upgrade skip: transcribed title present but candidate not confirmed",
+				"id", bookID, "candidate_title", c.Title, "score", c.Score)
+			continue
+		}
+
 		gate := MinUpgradeConfidence
 		if transcriptionConfirms {
 			gate = MinUpgradeConfidenceWithTranscription
