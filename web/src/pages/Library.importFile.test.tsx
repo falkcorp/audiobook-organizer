@@ -1,5 +1,5 @@
 // file: web/src/pages/Library.importFile.test.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: 6f4a7b0d-9c9f-4f0b-8d85-1dd9e1ffb913
 // last-edited: 2026-07-01
 
@@ -8,6 +8,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { Library } from './Library';
 import * as api from '../services/api';
+import { useLibraryCache } from '../stores/useLibraryCache';
 
 vi.mock('../services/api', () => {
   class ApiError extends Error {
@@ -95,6 +96,7 @@ vi.mock('../services/api', () => {
 
 afterEach(() => {
   vi.useRealTimers();
+  useLibraryCache.getState().clear();
 });
 
 describe('Library import dialog', () => {
@@ -119,6 +121,50 @@ describe('Library import dialog', () => {
     const importFileMock = vi.mocked(api.importFile);
     await waitFor(() => {
       expect(importFileMock).toHaveBeenCalledWith('/tmp/book.m4b', true);
+    });
+  });
+
+  it('clears useLibraryCache before reloading after a file import (library-cache-bug)', async () => {
+    // Regression test for the stale-cache bug: handleImportFile used to call
+    // loadAudiobooks() after a successful import without first clearing
+    // useLibraryCache, so a page cached before the import could be served
+    // as-is (missing the newly imported book) for up to the cache's 60s TTL.
+    const getBooksMock = vi.mocked(api.getBooks);
+
+    render(
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <Library />
+      </MemoryRouter>
+    );
+
+    // Wait for the initial load to complete and populate useLibraryCache.
+    await screen.findByText('Test Book');
+    await waitFor(() => {
+      expect(getBooksMock.mock.calls.length).toBeGreaterThanOrEqual(1);
+    });
+    expect(useLibraryCache.getState().cache.size).toBeGreaterThan(0);
+    const callsBeforeImport = getBooksMock.mock.calls.length;
+
+    const openButton = await screen.findByRole('button', {
+      name: /import files/i,
+    });
+    fireEvent.click(openButton);
+
+    const pathField = await screen.findByLabelText(/import file path/i);
+    fireEvent.change(pathField, { target: { value: '/tmp/book.m4b' } });
+
+    const importButton = await screen.findByRole('button', { name: 'Import' });
+    fireEvent.click(importButton);
+
+    await waitFor(() => {
+      expect(api.importFile).toHaveBeenCalledWith('/tmp/book.m4b', true);
+    });
+
+    // If the cache were still populated, the post-import reload would be
+    // served from the stale cached entry and getBooks would NOT be called
+    // again. Asserting a fresh call proves clearLibraryCache() ran first.
+    await waitFor(() => {
+      expect(getBooksMock.mock.calls.length).toBeGreaterThan(callsBeforeImport);
     });
   });
 

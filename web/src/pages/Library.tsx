@@ -1,5 +1,5 @@
 // file: web/src/pages/Library.tsx
-// version: 1.73.0
+// version: 1.74.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
 // last-edited: 2026-07-01
 
@@ -642,6 +642,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
       setImportFileDialogOpen(false);
       setImportFilePath('');
       setImportFilePaths([]);
+      clearLibraryCache();
       await loadAudiobooks();
     } catch (error) {
       console.error('Failed to import file:', error);
@@ -680,6 +681,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
             setManualImportDialogOpen(false);
             setManualImportPath('');
             setManualImportError(null);
+            clearLibraryCache();
             await loadAudiobooks();
           } else {
             const message = op.error_message || 'Manual import failed.';
@@ -808,6 +810,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
       toast(`${baseMessage}${blockNotice}`, severity);
       setDeleteDialogOpen(false);
       setBookPendingDelete(null);
+      clearLibraryCache();
       await loadAudiobooks();
       await loadSoftDeleted();
     } catch (error) {
@@ -851,6 +854,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
       }
       setCrossPageFilter(null);
       setSelectedAudiobooks([]);
+      clearLibraryCache();
       await loadAudiobooks();
       await loadSoftDeleted();
     } catch (error) {
@@ -871,6 +875,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
       toast(`Restored ${deletedBooks.length} selected audiobooks.`, 'success');
       setSelectedAudiobooks([]);
       setCrossPageFilter(null);
+      clearLibraryCache();
       await loadAudiobooks();
       await loadSoftDeleted();
     } catch (error) {
@@ -940,6 +945,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     try {
       await api.deleteBook(book.id, { softDelete: false, blockHash: false });
       toast(`"${book.title}" was purged from the library.`, 'success');
+      clearLibraryCache();
       await loadAudiobooks();
       await loadSoftDeleted();
     } catch (error) {
@@ -955,6 +961,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     try {
       await api.restoreSoftDeletedBook(book.id);
       toast(`"${book.title}" was restored to the library.`, 'success');
+      clearLibraryCache();
       await loadAudiobooks();
       await loadSoftDeleted();
     } catch (error) {
@@ -975,6 +982,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
       );
       setPurgeDialogOpen(false);
       setPurgeDeleteFiles(false);
+      clearLibraryCache();
       await loadAudiobooks();
       await loadSoftDeleted();
     } catch (error) {
@@ -1003,6 +1011,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
           'success'
         );
       }
+      clearLibraryCache();
       loadAudiobooks();
       setSelectedAudiobooks([]);
       setCrossPageFilter(null);
@@ -1036,6 +1045,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
   };
 
   const handleVersionUpdate = () => {
+    clearLibraryCache();
     loadAudiobooks();
   };
 
@@ -1043,6 +1053,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     try {
       await api.fetchBookMetadata(audiobook.id);
       // Reload audiobooks to show updated data
+      clearLibraryCache();
       loadAudiobooks();
     } catch (error) {
       console.error('Failed to fetch metadata:', error);
@@ -1313,6 +1324,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
       }
 
       if (!bulkOrganizeCancelRef.current && !encounteredError) {
+        clearLibraryCache();
         await loadAudiobooks();
       }
     } catch (error) {
@@ -1355,6 +1367,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
       }
       toast('Rollback complete.', 'success');
       setBulkOrganizeError(null);
+      clearLibraryCache();
       await loadAudiobooks();
     } catch (error) {
       console.error('Failed to rollback organize:', error);
@@ -1366,6 +1379,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     try {
       await api.parseAudiobookWithAI(audiobook.id);
       // Reload audiobooks to show updated data
+      clearLibraryCache();
       loadAudiobooks();
     } catch (error) {
       console.error('Failed to parse with AI:', error);
@@ -1507,6 +1521,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
           setOrganizeRunning(false);
           setActiveOrganizeOp(op);
         }
+        clearLibraryCache();
         loadAudiobooks();
         pollingCleanupRef.current = null; // Clear when operation completes
       },
