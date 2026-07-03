@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.60.0
+// version: 1.61.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-06-22
+// last-edited: 2026-07-03
 
 package config
 
@@ -339,6 +339,13 @@ type Config struct {
 	// fetch cache (Audible/Audnexus/etc. API results) is considered fresh.
 	// 0 means never expire. Default 7.
 	MetadataFetchCacheTTLDays int `json:"metadata_fetch_cache_ttl_days"`
+	// BootstrapKeyTTLDays is how long (in days) a bootstrap-issued, full-scope
+	// API key remains valid before the auth middleware's existing expiry check
+	// rejects it. Unlike MetadataFetchCacheTTLDays, 0 (or any non-positive
+	// value) does NOT mean "never expire" — bootstrap keys are full-scope
+	// admin credentials and must always expire, so a non-positive value falls
+	// back to the default of 30. (SEC-1/PROC-6)
+	BootstrapKeyTTLDays int `json:"bootstrap_key_ttl_days"`
 	MemoryLimitPercent        int `json:"memory_limit_percent"` // % of system memory
 	MemoryLimitMB             int `json:"memory_limit_mb"`      // absolute MB
 
@@ -526,6 +533,7 @@ func InitConfig() {
 	viper.SetDefault("memory_limit_type", "items")
 	viper.SetDefault("cache_size", 1000)
 	viper.SetDefault("metadata_fetch_cache_ttl_days", 180)
+	viper.SetDefault("bootstrap_key_ttl_days", 30)
 	viper.SetDefault("memory_limit_percent", 25)
 	viper.SetDefault("memory_limit_mb", 512)
 
@@ -806,6 +814,7 @@ func InitConfig() {
 			MemoryLimitType:           viper.GetString("memory_limit_type"),
 			CacheSize:                 viper.GetInt("cache_size"),
 			MetadataFetchCacheTTLDays: viper.GetInt("metadata_fetch_cache_ttl_days"),
+			BootstrapKeyTTLDays:       viper.GetInt("bootstrap_key_ttl_days"),
 			MemoryLimitPercent:        viper.GetInt("memory_limit_percent"),
 			MemoryLimitMB:             viper.GetInt("memory_limit_mb"),
 

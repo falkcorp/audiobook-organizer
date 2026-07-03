@@ -6110,6 +6110,27 @@ func (p *PebbleStore) SetAPIKeyStatus(id, status string, at time.Time) error {
 	return p.db.Set([]byte("apikey:"+id), data, pebble.Sync)
 }
 
+// SetAPIKeyExpiry updates only the ExpiresAt field on an existing key,
+// leaving Status (and idx: entries) untouched. Used by the rotation grace
+// window (SEC-1/PROC-6): the old key gets a short future ExpiresAt instead
+// of being revoked outright, so the pre-existing middleware expiry check
+// retires it naturally after the grace period.
+func (p *PebbleStore) SetAPIKeyExpiry(id string, at time.Time) error {
+	k, err := p.GetAPIKey(id)
+	if err != nil {
+		return err
+	}
+	if k == nil {
+		return nil
+	}
+	k.ExpiresAt = &at
+	data, err := json.Marshal(k)
+	if err != nil {
+		return err
+	}
+	return p.db.Set([]byte("apikey:"+id), data, pebble.Sync)
+}
+
 func (p *PebbleStore) TouchAPIKeyLastUsed(id string, at time.Time, ip string) error {
 	k, err := p.GetAPIKey(id)
 	if err != nil {

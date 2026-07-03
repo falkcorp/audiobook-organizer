@@ -1,7 +1,7 @@
 // file: internal/server/wire_auth_routes.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-06-23
+// last-edited: 2026-07-03
 
 package server
 
@@ -43,5 +43,6 @@ func (s *Server) wireAuthRoutes(
 		authProtected.GET("/api-keys/:id", apiKeyH.Get)
 		authProtected.PATCH("/api-keys/:id", apiKeyH.UpdateStatus)
 		authProtected.DELETE("/api-keys/:id", apiKeyH.Revoke)
+		authProtected.POST("/api-keys/:id/rotate", apiKeyH.Rotate)
 	}
 }

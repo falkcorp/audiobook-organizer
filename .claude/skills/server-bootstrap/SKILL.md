@@ -61,9 +61,15 @@ Returns:
   "key_id": "...",
   "user_id": "...",
   "username": "admin",
-  "scopes": ["all"]
+  "scopes": ["all"],
+  "expires_at": "2026-08-02T12:00:00Z"
 }
 ```
+
+`expires_at` is the server-side expiry of the issued key (default 30 days,
+config `bootstrap_key_ttl_days`; SEC-1/PROC-6). This is unrelated to the
+8-hour client-side `.claude/.api-token` cleanup convention above — the
+server TTL is much longer, so there's no conflict between the two.
 
 See [references/bootstrap-api.md](references/bootstrap-api.md) for full API details.
 
