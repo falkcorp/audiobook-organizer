@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_regroup_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-06-20
+// last-edited: 2026-07-03
 
 package maintenance
 
@@ -19,6 +19,9 @@ func regroupStore(t *testing.T) *database.PebbleStore {
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}
+	// Memdb warmup publishes asynchronously; writes made before it publishes
+	// are invisible to memdb-backed reads (see PebbleStore.WaitForWarmup).
+	s.WaitForWarmup()
 	t.Cleanup(func() { s.Close() })
 	return s
 }

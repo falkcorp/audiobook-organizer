@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v2.go
-// version: 3.6.0
+// version: 3.7.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-07-03
 
@@ -197,6 +197,23 @@ func (p *PebbleStore) GetOperationV2(id string) (*OperationV2Row, error) {
 
 // UpdateOperationV2Status updates status and optional timestamps on an operation,
 // maintaining the queue/active indexes as status transitions occur.
+//
+// The row write and the queue/active index maintenance are committed as a
+// single Pebble batch. They used to be separate Set/Delete calls: a
+// concurrent ListActiveOperationsV2 scan (which does not take opsMu) could
+// then observe the op's "opv2:act:" index entry still present *after* the
+// row itself had already been rewritten with a terminal status — i.e. a
+// caller could read back {status: "completed", still in the active index}.
+// EnqueueOp's ConcurrencyKey dedup treats anything ListActiveOperationsV2
+// returns as "still active" and hands the caller that op's ID instead of
+// enqueuing a new one; for ops like itunes.import, whose Run bridges a
+// caller-supplied legacy v1 op ID, that silently drops the new request's
+// legacy row in "queued" forever, and integration tests polling it via
+// require.Eventually time out with "Condition never satisfied" (root cause
+// of the TestITunesImport_SkipDuplicates flake; the row-then-index write
+// order made the window trivially easy to hit under load). Making the row
+// update and the index maintenance atomic means readers never observe the
+// index and the row disagreeing.
 func (p *PebbleStore) UpdateOperationV2Status(id, status string, startedAt, completedAt *time.Time, errMsg *string) error {
 	p.opsMu.Lock()
 	defer p.opsMu.Unlock()
@@ -221,29 +238,48 @@ func (p *PebbleStore) UpdateOperationV2Status(id, status string, startedAt, comp
 		row.ErrorMessage = errMsg
 	}
 
-	if err := p.pebbleSetJSON(opv2OpKey(id), &row); err != nil {
+	data, err := json.Marshal(&row)
+	if err != nil {
+		return err
+	}
+
+	batch := p.db.NewBatch()
+	defer batch.Close()
+	if err := batch.Set(opv2OpKey(id), data, nil); err != nil {
 		return err
 	}
 
 	// Maintain queue index.
 	if oldStatus == "queued" && status != "queued" {
-		_ = p.db.Delete(opv2QueueKey(row.Priority, row.QueuedAt, id), pebble.Sync)
+		if err := batch.Delete(opv2QueueKey(row.Priority, row.QueuedAt, id), nil); err != nil {
+			return err
+		}
 	} else if status == "queued" && oldStatus != "queued" {
 		// resumeRestart transitions running→queued; must re-add the index entry
 		// or ListQueuedOperationsV2 never sees the op and it stalls forever.
-		_ = p.db.Set(opv2QueueKey(row.Priority, row.QueuedAt, id), []byte(id), pebble.Sync)
+		if err := batch.Set(opv2QueueKey(row.Priority, row.QueuedAt, id), []byte(id), nil); err != nil {
+			return err
+		}
 	}
 	// Maintain active set.
 	if status == "running" {
-		_ = p.db.Set(opv2ActKey(id), nil, pebble.Sync)
+		if err := batch.Set(opv2ActKey(id), nil, nil); err != nil {
+			return err
+		}
 	} else if status != "queued" {
-		_ = p.db.Delete(opv2ActKey(id), pebble.Sync)
+		if err := batch.Delete(opv2ActKey(id), nil); err != nil {
+			return err
+		}
 	}
-	return nil
+	return batch.Commit(pebble.Sync)
 }
 
 // SetOperationV2StatusIfQueued atomically transitions status only when current status is 'queued'.
-// Returns true if the row was updated.
+// Returns true if the row was updated. Row write + index maintenance are
+// committed as a single batch for the same reason described on
+// UpdateOperationV2Status: separate writes let a concurrent
+// ListActiveOperationsV2 scan observe a row whose status no longer matches
+// its active-index membership.
 func (p *PebbleStore) SetOperationV2StatusIfQueued(id, newStatus string) (bool, error) {
 	p.opsMu.Lock()
 	defer p.opsMu.Unlock()
@@ -257,12 +293,26 @@ func (p *PebbleStore) SetOperationV2StatusIfQueued(id, newStatus string) (bool, 
 	}
 
 	row.Status = newStatus
-	if err := p.pebbleSetJSON(opv2OpKey(id), &row); err != nil {
+	data, err := json.Marshal(&row)
+	if err != nil {
 		return false, err
 	}
-	_ = p.db.Delete(opv2QueueKey(row.Priority, row.QueuedAt, id), pebble.Sync)
+
+	batch := p.db.NewBatch()
+	defer batch.Close()
+	if err := batch.Set(opv2OpKey(id), data, nil); err != nil {
+		return false, err
+	}
+	if err := batch.Delete(opv2QueueKey(row.Priority, row.QueuedAt, id), nil); err != nil {
+		return false, err
+	}
 	if newStatus != "running" {
-		_ = p.db.Delete(opv2ActKey(id), pebble.Sync)
+		if err := batch.Delete(opv2ActKey(id), nil); err != nil {
+			return false, err
+		}
+	}
+	if err := batch.Commit(pebble.Sync); err != nil {
+		return false, err
 	}
 	return true, nil
 }
