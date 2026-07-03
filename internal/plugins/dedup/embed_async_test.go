@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/embed_async_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c1d2e3f4-a5b6-7890-cdef-012345678901
 // last-edited: 2026-07-03
 
@@ -31,8 +31,6 @@ func TestEmbedAsyncDef_ScheduleIsNil(t *testing.T) {
 }
 
 func TestRunEmbedAsync_SkipsWhenOllamaBaseURLConfigured(t *testing.T) {
-	t.Parallel()
-
 	// Save and restore config
 	origConfig := config.AppConfig
 	t.Cleanup(func() {
@@ -50,8 +48,6 @@ func TestRunEmbedAsync_SkipsWhenOllamaBaseURLConfigured(t *testing.T) {
 }
 
 func TestRunEmbedAsync_SkipsWhenNoOpenAIAPIKey(t *testing.T) {
-	t.Parallel()
-
 	// Save and restore config
 	origConfig := config.AppConfig
 	t.Cleanup(func() {
@@ -69,8 +65,6 @@ func TestRunEmbedAsync_SkipsWhenNoOpenAIAPIKey(t *testing.T) {
 }
 
 func TestRunEmbedAsync_SkipsWhenBothConditionsMet(t *testing.T) {
-	t.Parallel()
-
 	// Save and restore config
 	origConfig := config.AppConfig
 	t.Cleanup(func() {
