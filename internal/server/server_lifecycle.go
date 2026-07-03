@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 1.39.0
+// version: 1.40.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-07-03
 
@@ -272,8 +272,17 @@ func (s *Server) Start(cfg ServerConfig) error {
 	// Pre-warm the audiobook list cache after memdb is published. Fires
 	// the most common library-page queries (title asc/desc, -review:matched,
 	// library_state filter) so the user's first load doesn't pay the full
-	// cold-miss cost (~3 min on 50K-book library).
-	go s.warmAudiobookListCache()
+	// cold-miss cost (~3 min on 50K-book library). Enrolled in bgWG and
+	// gated on bgCtx (it also spawns the ~30-min trickle warmer): the old
+	// fire-and-forget launch outlived test servers and kept querying the
+	// store after Close() — panic "pebble: closed" from a trickle-warmer
+	// tick minutes into an internal/server package run
+	// (PEBBLE-CLOSED-SWEEPTICK-RESIDUAL family, warmer leg).
+	s.bgWG.Add("library-list-warmer")
+	go func() {
+		defer s.bgWG.Done("library-list-warmer")
+		s.warmAudiobookListCache()
+	}()
 	go s.warmAuthorsCache()
 	go s.warmSeriesCache()
 

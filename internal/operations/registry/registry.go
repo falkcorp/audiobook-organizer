@@ -1,5 +1,5 @@
 // file: internal/operations/registry/registry.go
-// version: 3.4.0
+// version: 3.5.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-07-03
 
@@ -289,6 +289,7 @@ func (r *Registry) SetPluginMaxConcurrent(plugin string, max int) {
 // to re-queue or drop ops that were in-flight at the last shutdown.
 func (r *Registry) Start(ctx context.Context) {
 	r.logger.Info("registry: starting", "workers", r.workers)
+	trackLiveRegistry(r)
 	// Clear the notify gate in case this Registry is being restarted after a
 	// prior Shutdown (Shutdown sets notifyStopped to reject late enrollments).
 	r.mu.Lock()
@@ -799,6 +800,9 @@ func (r *Registry) Def(id string) (OperationDef, bool) {
 // as interrupted per their ResumePolicy and returns.
 func (r *Registry) Shutdown(ctx context.Context) error {
 	r.logger.Info("registry: shutting down")
+	// Deregister from the live-registry tracker on return: once Shutdown has
+	// run, ShutdownAllForStore must not re-drain this registry.
+	defer untrackLiveRegistry(r)
 	// Flip the shutdown flag before canceling handles so the abandoned-run
 	// watchdog (in worker.go executeRun) refuses to spawn replacement
 	// workers. Without this, a replacement worker is born just as the

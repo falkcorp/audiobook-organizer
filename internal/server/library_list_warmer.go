@@ -1,6 +1,7 @@
 // file: internal/server/library_list_warmer.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 7e8d9a0b-1c2d-3e4f-5a6b-7c8d9e0f1a2b
+// last-edited: 2026-07-03
 
 // Pre-warms svc.audiobookService.listCache by firing the queries the UI
 // is most likely to hit on first load — library page (first few pages,
@@ -11,7 +12,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -216,11 +216,18 @@ func (s *Server) warmAudiobookListCache() {
 			slog.Warn("library list warm-up: memdb not ready after 5 min, skipping")
 			return
 		}
-		time.Sleep(2 * time.Second)
+		select {
+		case <-s.bgCtx.Done():
+			return // server shutting down — never touch the store again
+		case <-time.After(2 * time.Second):
+		}
 	}
 
 	started := time.Now()
-	ctx := context.Background()
+	// Warm-up queries run under bgCtx so Stop()'s bgCancel aborts them
+	// before the store closes. context.Background() here let the warmer
+	// keep reading the store after Close (panic "pebble: closed").
+	ctx := s.bgCtx
 
 	// Each query mirrors what the UI sends on a fresh library-page load.
 	// Pagination keys are independent cache entries, so we warm a lot of
@@ -561,6 +568,13 @@ func (s *Server) warmAudiobookListCache() {
 		eagerQueries = nil
 	}
 	for i, q := range eagerQueries {
+		// Abort between queries once shutdown begins — the store is about
+		// to close and any further read panics "pebble: closed".
+		if ctx.Err() != nil {
+			slog.Info("library list warm-up eager: aborting, server shutting down",
+				"completed", i, "remaining", len(eagerQueries)-i)
+			return
+		}
 		// Heap-pressure guard BETWEEN eager queries (skip for i==0;
 		// already covered by the pre-flight check above).
 		if i > 0 {
@@ -599,9 +613,18 @@ func (s *Server) warmAudiobookListCache() {
 	)
 
 	// Kick off the trickle warmer in its own goroutine so the startup
-	// path returns immediately. Trickle owns its own lifetime (runs
-	// until backlog drained, then exits).
-	go s.runTrickleWarmer(trickleQueries)
+	// path returns immediately. Trickle owns its own lifetime (runs until
+	// the backlog drains or bgCtx is canceled). Enrolled in bgWG — this
+	// goroutine runs ~30 min at the default 10s interval and, when it was
+	// fire-and-forget, outlived test servers and panicked "pebble: closed"
+	// against their closed stores. The Add happens while the parent
+	// warmer's own bgWG entry is still held, so it can never race a
+	// completed bgWG.Wait in Stop().
+	s.bgWG.Add("library-list-trickle-warmer")
+	go func() {
+		defer s.bgWG.Done("library-list-trickle-warmer")
+		s.runTrickleWarmer(trickleQueries)
+	}()
 }
 
 // runTrickleWarmer pops one query per tick from the backlog, runs it,
@@ -625,7 +648,11 @@ func (s *Server) runTrickleWarmer(backlog []qry) {
 	debug.FreeOSMemory()
 	baselineMB := readHeapAllocMB()
 	ceilingMB := baselineMB + deltaMB
-	ctx := context.Background()
+	// Trickle queries run under bgCtx so Stop()'s bgCancel aborts the
+	// warmer before the store closes. This loop runs ~30 min at the
+	// default 10s interval; with context.Background() it outlived test
+	// servers and panicked "pebble: closed" against their closed stores.
+	ctx := s.bgCtx
 	started := time.Now()
 	// F2: re-sample the baseline every 5 minutes inside the trickle loop
 	// to track real heap drift from concurrent workloads (dedup,
@@ -657,9 +684,21 @@ func (s *Server) runTrickleWarmer(backlog []qry) {
 		backoff    time.Duration
 	)
 	for idx < len(backlog) {
-		<-ticker.C
+		select {
+		case <-ctx.Done():
+			slog.Info("library list trickle warmer: aborting, server shutting down",
+				"completed", idx, "remaining", len(backlog)-idx)
+			return
+		case <-ticker.C:
+		}
 		if backoff > 0 {
-			time.Sleep(backoff)
+			select {
+			case <-ctx.Done():
+				slog.Info("library list trickle warmer: aborting during backoff, server shutting down",
+					"completed", idx, "remaining", len(backlog)-idx)
+				return
+			case <-time.After(backoff):
+			}
 		}
 
 		// F2: periodically re-sample baseline + recompute ceiling.

@@ -1,7 +1,7 @@
 // file: internal/server/server_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: b2c3d4e5-f6a7-8901-bcde-234567890abc
-// last-edited: 2026-06-10
+// last-edited: 2026-07-03
 
 // NOTE(fable5 T022): setupTestServer ported from NewSQLiteStore to NewPebbleStore.
 
@@ -106,6 +106,17 @@ func setupTestServerWithStore(t *testing.T, store database.Store) (*Server, func
 	// Set Gin to test mode
 	gin.SetMode(gin.TestMode)
 
+	// Hermetic config: callers pass MockStores with a fixed expectation set,
+	// but the plugin Build guards (itunes, deluge) go LIVE whenever the
+	// ambient config.AppConfig.RootDir is non-empty and then call
+	// UpsertOpDefinitionV2 on the mock, which has no such expectation —
+	// testify FailNow fires before the test's real assertions run. RootDir
+	// can be non-empty here through cross-test (and, under `go test
+	// -count=N`, cross-iteration) config pollution, so pin it to "" for the
+	// duration instead of trusting ambient state.
+	origCfg := config.AppConfig
+	config.AppConfig.RootDir = ""
+
 	// Set the global store to the provided store
 	database.SetGlobalStore(store)
 
@@ -120,6 +131,7 @@ func setupTestServerWithStore(t *testing.T, store database.Store) (*Server, func
 		if server.writeBackBatcher != nil {
 			_ = server.writeBackBatcher.Stop(context.Background())
 		}
+		config.AppConfig = origCfg
 		// Don't close the store - caller is responsible for cleanup
 	}
 

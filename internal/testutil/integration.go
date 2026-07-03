@@ -1,11 +1,12 @@
 // file: internal/testutil/integration.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-07-01
+// last-edited: 2026-07-03
 
 package testutil
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/realtime"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/stretchr/testify/require"
@@ -108,6 +110,21 @@ func SetupIntegration(t *testing.T) (*IntegrationEnv, func()) {
 		// panics ("pebble: closed"). Clearing early means hook calls are
 		// no-ops instead of panics; activity loss during teardown is acceptable.
 		scanner.SetScanHooks(nil)
+
+		// Ordered teardown: drain any op registries still running against THIS
+		// store BEFORE closing it. Each server test is responsible for its own
+		// deferred opRegistry.Shutdown, but any test that forgets leaks a
+		// running registry whose background goroutines (deps sweep ticker,
+		// dispatcher cycle, dbReporter progress/log flushes) keep touching the
+		// store for the remainder of the package run and panic
+		// "pebble: closed" minutes after this Close
+		// (PEBBLE-CLOSED-SWEEPTICK-RESIDUAL family). Scoped to this store, so
+		// parallel tests with their own stores are unaffected.
+		drainCtx, drainCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if n := opsregistry.ShutdownAllForStore(drainCtx, store); n > 0 {
+			t.Logf("testutil: drained %d leaked op registry(ies) before store close — add a deferred opRegistry.Shutdown to the owning test", n)
+		}
+		drainCancel()
 
 		database.SetGlobalStore(nil)
 		scanner.SetStore(nil)

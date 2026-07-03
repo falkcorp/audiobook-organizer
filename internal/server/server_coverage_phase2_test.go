@@ -1,7 +1,7 @@
 // file: internal/server/server_coverage_phase2_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: d5e6f7a8-b9c0-1d2e-3f4a-5b6c7d8e9f0a
-// last-edited: 2026-06-10
+// last-edited: 2026-07-03
 
 package server
 
@@ -13,14 +13,29 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
 
+// pinEmptyRootDir pins config.AppConfig.RootDir to "" for the duration of a
+// MockStore-based test. The itunes/deluge plugin Build guards go LIVE whenever
+// the ambient RootDir is non-empty and then call UpsertOpDefinitionV2 on the
+// mock (no such expectation → testify FailNow). RootDir can be non-empty here
+// through cross-test — and, under `go test -count=N`, cross-iteration —
+// config pollution, so these tests must not trust ambient state.
+func pinEmptyRootDir(t *testing.T) {
+	t.Helper()
+	origCfg := config.AppConfig
+	config.AppConfig.RootDir = ""
+	t.Cleanup(func() { config.AppConfig = origCfg })
+}
+
 // TestGetAudiobookTagsErrors tests error scenarios for getAudiobookTags (59.3% → target 70%+)
 func TestGetAudiobookTagsErrors(t *testing.T) {
+	pinEmptyRootDir(t)
 	tests := []struct {
 		name       string
 		bookID     string
@@ -71,6 +86,7 @@ func TestGetAudiobookTagsErrors(t *testing.T) {
 
 // TestAddBlockedHashErrors tests error scenarios for addBlockedHash (60.0% → target 70%+)
 func TestAddBlockedHashErrors(t *testing.T) {
+	pinEmptyRootDir(t)
 	tests := []struct {
 		name       string
 		body       string
@@ -131,6 +147,7 @@ func TestAddBlockedHashErrors(t *testing.T) {
 
 // TestAddBlockedHashDatabaseError tests database failure in addBlockedHash
 func TestAddBlockedHashDatabaseError(t *testing.T) {
+	pinEmptyRootDir(t)
 	gin.SetMode(gin.TestMode)
 	mockStore := mocks.NewMockStore(t)
 
@@ -159,6 +176,7 @@ func TestAddBlockedHashDatabaseError(t *testing.T) {
 
 // TestDeleteWorkErrors tests error scenarios for deleteWork (63.6% → target 75%+)
 func TestDeleteWorkErrors(t *testing.T) {
+	pinEmptyRootDir(t)
 	tests := []struct {
 		name       string
 		workID     string

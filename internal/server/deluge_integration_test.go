@@ -1,7 +1,7 @@
 // file: internal/server/deluge_integration_test.go
-// version: 2.0.1
+// version: 2.1.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-05-11
+// last-edited: 2026-07-03
 //
 // Integration tests for Deluge notification helpers and HTTP handlers.
 // Service logic moved to internal/deluge/integration.go; tests updated to
@@ -147,7 +147,16 @@ func TestHandleDelugeStatus_Configured(t *testing.T) {
 
 	origURL := config.AppConfig.DelugeWebURL
 	config.AppConfig.DelugeWebURL = "http://localhost:8112"
-	defer func() { config.AppConfig.DelugeWebURL = origURL }()
+	defer func() {
+		config.AppConfig.DelugeWebURL = origURL
+		// NewServer's deluge-plugin Build calls deluge.GetClient() while the
+		// URL above is set, which CACHES a live client in the package-level
+		// singleton. Restoring the URL string alone leaks that client into
+		// every later test in the process (and across -count=N iterations),
+		// where it flips the deluge plugin live inside MockStore-based server
+		// tests → unexpected UpsertOpDefinitionV2 mock failures.
+		deluge.ResetGlobalClientForTest()
+	}()
 
 	srv := NewServer(store)
 
