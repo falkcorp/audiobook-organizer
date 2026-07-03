@@ -1,7 +1,7 @@
 // file: internal/deluge/integration.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e5f6a7b8-c9d0-1234-ef01-345678901234
-// last-edited: 2026-05-11
+// last-edited: 2026-07-03
 //
 // Deluge integration for library centralization.
 //
@@ -64,6 +64,20 @@ func GetClient() *Client {
 	}
 	globalDelugeClient = c
 	return c
+}
+
+// ResetGlobalClientForTest clears the cached global client. Tests that set
+// DelugeWebURL (or the download_client deluge host) and then exercise a code
+// path that calls GetClient — e.g. NewServer, whose deluge-plugin Build does —
+// MUST defer this: GetClient caches the constructed client in a package-level
+// singleton, so restoring the config string alone leaks a live client into
+// every later test in the process (under `go test -count=N` this crossed the
+// iteration boundary and made MockStore-based server tests fail with
+// unexpected UpsertOpDefinitionV2 calls from the deluge plugin's RegisterOp).
+func ResetGlobalClientForTest() {
+	globalDelugeClientMu.Lock()
+	globalDelugeClient = nil
+	globalDelugeClientMu.Unlock()
 }
 
 // SetGlobalClientForTest replaces the global deluge client for testing.

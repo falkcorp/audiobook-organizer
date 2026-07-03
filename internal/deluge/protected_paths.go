@@ -1,6 +1,7 @@
 // file: internal/deluge/protected_paths.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d5b8e2a1-3c9f-4076-b7d4-0e8a2c5f1b93
+// last-edited: 2026-07-03
 
 // Package deluge provides integration with the Deluge BitTorrent client.
 package deluge
@@ -82,6 +83,30 @@ func (c *ProtectedPathCache) refresh() {
 
 	// Re-check under write lock in case another goroutine refreshed first.
 	if time.Since(c.lastRefresh) <= protectedPathTTL {
+		return
+	}
+
+	// No Deluge client (deluge not configured): serve the static extraPaths
+	// only. NewServer explicitly builds this cache with a nil client in that
+	// case ("the cache still works for the static paths") — without this
+	// guard, c.client.ListTorrents() → Login() dereferences the nil receiver
+	// and every tag write's IsProtected pre-flight panics (500 on the update
+	// endpoints; latent in the test suite because a leaked deluge client
+	// singleton from an earlier test masked it until the leak was fixed).
+	if c.client == nil {
+		fresh := make([]string, 0, len(c.extraPaths))
+		seenStatic := make(map[string]struct{}, len(c.extraPaths))
+		for _, p := range c.extraPaths {
+			if p == "" {
+				continue
+			}
+			if _, dup := seenStatic[p]; !dup {
+				seenStatic[p] = struct{}{}
+				fresh = append(fresh, p)
+			}
+		}
+		c.paths = fresh
+		c.lastRefresh = time.Now()
 		return
 	}
 

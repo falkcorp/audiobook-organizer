@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v2.go
-// version: 3.7.0
+// version: 3.8.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-07-03
 
@@ -69,7 +69,10 @@ func opv2StrikeKey(defID string, ts time.Time, opID string) []byte {
 }
 
 // pebbleGet reads a single key and JSON-decodes into dst. Returns nil, nil if not found.
-func (p *PebbleStore) pebbleGetJSON(key []byte, dst any) error {
+// Guarded by recoverPebbleClosed (see its doc): every opv2 method funneling
+// through this helper returns pebble.ErrClosed as an error instead of panicking.
+func (p *PebbleStore) pebbleGetJSON(key []byte, dst any) (err error) {
+	defer recoverPebbleClosed("pebbleGetJSON", &err)
 	val, closer, err := p.db.Get(key)
 	if errors.Is(err, pebble.ErrNotFound) {
 		return nil
@@ -81,7 +84,9 @@ func (p *PebbleStore) pebbleGetJSON(key []byte, dst any) error {
 	return json.Unmarshal(val, dst)
 }
 
-func (p *PebbleStore) pebbleSetJSON(key []byte, src any) error {
+// pebbleSetJSON JSON-encodes src and writes it at key. Guarded like pebbleGetJSON.
+func (p *PebbleStore) pebbleSetJSON(key []byte, src any) (err error) {
+	defer recoverPebbleClosed("pebbleSetJSON", &err)
 	data, err := json.Marshal(src)
 	if err != nil {
 		return err
@@ -95,7 +100,8 @@ func (p *PebbleStore) UpsertOpDefinitionV2(row OpDefinitionV2Row) error {
 }
 
 // DeleteOrphanOpDefsV2 removes definition rows whose ID is not in keepIDs.
-func (p *PebbleStore) DeleteOrphanOpDefsV2(keepIDs []string) error {
+func (p *PebbleStore) DeleteOrphanOpDefsV2(keepIDs []string) (err error) {
+	defer recoverPebbleClosed("DeleteOrphanOpDefsV2", &err)
 	keep := make(map[string]bool, len(keepIDs))
 	for _, id := range keepIDs {
 		keep[id] = true
@@ -134,7 +140,8 @@ func (p *PebbleStore) DeleteOrphanOpDefsV2(keepIDs []string) error {
 }
 
 // InsertOperationV2 inserts a new queued operation row and adds it to the queue index.
-func (p *PebbleStore) InsertOperationV2(row OperationV2Row) error {
+func (p *PebbleStore) InsertOperationV2(row OperationV2Row) (err error) {
+	defer recoverPebbleClosed("InsertOperationV2", &err)
 	if err := p.pebbleSetJSON(opv2OpKey(row.ID), &row); err != nil {
 		return err
 	}
@@ -214,7 +221,8 @@ func (p *PebbleStore) GetOperationV2(id string) (*OperationV2Row, error) {
 // order made the window trivially easy to hit under load). Making the row
 // update and the index maintenance atomic means readers never observe the
 // index and the row disagreeing.
-func (p *PebbleStore) UpdateOperationV2Status(id, status string, startedAt, completedAt *time.Time, errMsg *string) error {
+func (p *PebbleStore) UpdateOperationV2Status(id, status string, startedAt, completedAt *time.Time, errMsg *string) (err error) {
+	defer recoverPebbleClosed("UpdateOperationV2Status", &err)
 	p.opsMu.Lock()
 	defer p.opsMu.Unlock()
 
@@ -280,7 +288,8 @@ func (p *PebbleStore) UpdateOperationV2Status(id, status string, startedAt, comp
 // UpdateOperationV2Status: separate writes let a concurrent
 // ListActiveOperationsV2 scan observe a row whose status no longer matches
 // its active-index membership.
-func (p *PebbleStore) SetOperationV2StatusIfQueued(id, newStatus string) (bool, error) {
+func (p *PebbleStore) SetOperationV2StatusIfQueued(id, newStatus string) (updated bool, err error) {
+	defer recoverPebbleClosed("SetOperationV2StatusIfQueued", &err)
 	p.opsMu.Lock()
 	defer p.opsMu.Unlock()
 
@@ -318,7 +327,8 @@ func (p *PebbleStore) SetOperationV2StatusIfQueued(id, newStatus string) (bool, 
 }
 
 // ListActiveOperationsV2 returns ops with status 'queued' or 'running'.
-func (p *PebbleStore) ListActiveOperationsV2() ([]OperationV2Row, error) {
+func (p *PebbleStore) ListActiveOperationsV2() (rows []OperationV2Row, err error) {
+	defer recoverPebbleClosed("ListActiveOperationsV2", &err)
 	prefix := []byte("opv2:act:")
 	iter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: prefix,
@@ -434,7 +444,8 @@ func (p *PebbleStore) GetOpStateV2(opID string) (*OpStateV2Row, error) {
 }
 
 // DeleteOpStateV2 removes the state blob for an op.
-func (p *PebbleStore) DeleteOpStateV2(opID string) error {
+func (p *PebbleStore) DeleteOpStateV2(opID string) (err error) {
+	defer recoverPebbleClosed("DeleteOpStateV2", &err)
 	return p.db.Delete(opv2StateKey(opID), pebble.Sync)
 }
 
@@ -455,7 +466,8 @@ func (p *PebbleStore) UpdateOperationV2Params(id string, params []byte) error {
 }
 
 // AppendOpLogsV2 bulk-inserts log rows.
-func (p *PebbleStore) AppendOpLogsV2(rows []OpLogV2Row) error {
+func (p *PebbleStore) AppendOpLogsV2(rows []OpLogV2Row) (err error) {
+	defer recoverPebbleClosed("AppendOpLogsV2", &err)
 	if len(rows) == 0 {
 		return nil
 	}
@@ -487,7 +499,8 @@ func (p *PebbleStore) InsertOpStrikeV2(row OpStrikeV2Row) error {
 
 // ListOperationsV2Since returns operations queued at or after `since`, ordered
 // by started_at DESC NULLS LAST, queued_at DESC, up to `limit` rows.
-func (p *PebbleStore) ListOperationsV2Since(since time.Time, limit int) ([]OperationV2Row, error) {
+func (p *PebbleStore) ListOperationsV2Since(since time.Time, limit int) (rows []OperationV2Row, err error) {
+	defer recoverPebbleClosed("ListOperationsV2Since", &err)
 	if limit <= 0 {
 		limit = 200
 	}
@@ -541,7 +554,8 @@ func (p *PebbleStore) ListOperationsV2Since(since time.Time, limit int) ([]Opera
 
 // GetOpLogsV2 returns up to `limit` log lines for the given operation, ordered by created_at ASC.
 // A limit ≤ 0 returns all rows.
-func (p *PebbleStore) GetOpLogsV2(opID string, limit int) ([]OpLogV2Row, error) {
+func (p *PebbleStore) GetOpLogsV2(opID string, limit int) (rows []OpLogV2Row, err error) {
+	defer recoverPebbleClosed("GetOpLogsV2", &err)
 	prefix := []byte("opv2:log:" + opID + ":")
 	iter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: prefix,
@@ -634,7 +648,8 @@ func (p *PebbleStore) RecordOpCompletion(sub OpSubject, opType, fileID string, d
 // Returns (rev, true, nil) when found, (0, false, nil) when absent.
 // Uses a direct key-existence check (not the zero-value sentinel from pebbleGetJSON)
 // so that rev=0 completions (recorded before any BumpDepRev) are correctly found.
-func (p *PebbleStore) GetOpCompletion(sub OpSubject, opType string) (uint64, bool, error) {
+func (p *PebbleStore) GetOpCompletion(sub OpSubject, opType string) (rev uint64, found bool, err error) {
+	defer recoverPebbleClosed("GetOpCompletion", &err)
 	val, closer, err := p.db.Get(completionKey(sub, opType, ""))
 	if errors.Is(err, pebble.ErrNotFound) {
 		return 0, false, nil
@@ -652,7 +667,8 @@ func (p *PebbleStore) GetOpCompletion(sub OpSubject, opType string) (uint64, boo
 
 // ListFileCompletions returns a map of fileID→depRev for all per-file completion
 // records for opType on sub.
-func (p *PebbleStore) ListFileCompletions(sub OpSubject, opType string) (map[string]uint64, error) {
+func (p *PebbleStore) ListFileCompletions(sub OpSubject, opType string) (res map[string]uint64, err error) {
+	defer recoverPebbleClosed("ListFileCompletions", &err)
 	// Per-file keys have the form: op:completion:<type>:<id>:<opType>:<fileID>
 	// The book-level key (no fileID suffix) must be excluded.
 	bookLevelKey := string(completionKey(sub, opType, ""))
@@ -685,16 +701,20 @@ func (p *PebbleStore) ListFileCompletions(sub OpSubject, opType string) (map[str
 	return result, nil
 }
 
-// recoverPebbleClosed is a deferred guard for the ops-v2 reads that registry
-// background goroutines (DepsScheduler sweep ticker, dispatcher cycle) perform
-// on periodic tickers. If a registry is torn down without Shutdown (or a read
-// races a Close in a way the registry-side drain cannot see), pebble PANICS
-// ErrClosed from NewIter / iteration instead of returning an error, killing
-// the whole process (PEBBLE-CLOSED-SWEEPTICK-RESIDUAL). Recover ONLY that
-// sentinel (errors.Is(pebble.ErrClosed)) and surface it as an error — both
-// callers already log-and-skip on error. Any other panic is re-raised so real
-// bugs are not masked. Precedent: HNSWEmbeddingStore.safeAdd (commit 5b90d2f6)
-// containing library panics at the store boundary.
+// recoverPebbleClosed is a deferred guard applied to EVERY opv2 read/write in
+// this file (via the shared pebbleGetJSON/pebbleSetJSON helpers plus each
+// method that touches p.db or a batch directly). The op registry drives these
+// accesses from background goroutines — the DepsScheduler sweep ticker, the
+// dispatcher's 100ms cycle, dbReporter progress/log flushes, worker status
+// writes. If a registry is torn down without Shutdown (or an access races a
+// Close in a way the registry-side drain cannot see), pebble PANICS ErrClosed
+// from Get/Set/NewIter/Commit instead of returning an error, killing the whole
+// process (PEBBLE-CLOSED-SWEEPTICK-RESIDUAL family; legs observed via
+// ListWaitingDepsOps, ListQueuedOperationsV2, and UpdateOpProgressV2). Recover
+// ONLY that sentinel (errors.Is(pebble.ErrClosed)) and surface it as an
+// error — all registry callers already log-and-skip on error. Any other panic
+// is re-raised so real bugs are not masked. Precedent: HNSWEmbeddingStore
+// safeAdd (commit 5b90d2f6) containing library panics at the store boundary.
 func recoverPebbleClosed(op string, errp *error) {
 	if rec := recover(); rec != nil {
 		recErr, ok := rec.(error)
@@ -745,7 +765,8 @@ func (p *PebbleStore) ListWaitingDepsOps() (rows []OperationV2Row, err error) {
 //
 // Returns an error if the op does not exist or its current status is not
 // "waiting_deps".
-func (p *PebbleStore) PromoteToQueued(id string) error {
+func (p *PebbleStore) PromoteToQueued(id string) (err error) {
+	defer recoverPebbleClosed("PromoteToQueued", &err)
 	p.opsMu.Lock()
 	defer p.opsMu.Unlock()
 
@@ -796,7 +817,8 @@ func batchBucketPrefix(opType string) []byte {
 
 // AddToBatchBucket adds sub to the persistent pending bucket for opType.
 // Idempotent: if an entry already exists the call is a no-op (preserving AddedAt).
-func (p *PebbleStore) AddToBatchBucket(opType string, sub OpSubject) error {
+func (p *PebbleStore) AddToBatchBucket(opType string, sub OpSubject) (err error) {
+	defer recoverPebbleClosed("AddToBatchBucket", &err)
 	key := batchBucketKey(opType, sub)
 	// Check for existing entry to preserve AddedAt.
 	_, closer, err := p.db.Get(key)
@@ -821,7 +843,8 @@ func (p *PebbleStore) AddToBatchBucket(opType string, sub OpSubject) error {
 
 // ListBatchBucket returns all pending subjects for opType.
 // Returns an empty slice (not an error) when no bucket exists.
-func (p *PebbleStore) ListBatchBucket(opType string) ([]BatchBucketEntry, error) {
+func (p *PebbleStore) ListBatchBucket(opType string) (entries []BatchBucketEntry, err error) {
+	defer recoverPebbleClosed("ListBatchBucket", &err)
 	prefix := batchBucketPrefix(opType)
 	iter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: prefix,
@@ -845,7 +868,8 @@ func (p *PebbleStore) ListBatchBucket(opType string) ([]BatchBucketEntry, error)
 
 // ClearBatchBucket removes the given subjects from the bucket for opType.
 // Subjects not present in the bucket are silently skipped.
-func (p *PebbleStore) ClearBatchBucket(opType string, subs []OpSubject) error {
+func (p *PebbleStore) ClearBatchBucket(opType string, subs []OpSubject) (err error) {
+	defer recoverPebbleClosed("ClearBatchBucket", &err)
 	for _, sub := range subs {
 		if err := p.db.Delete(batchBucketKey(opType, sub), pebble.Sync); err != nil {
 			return err
