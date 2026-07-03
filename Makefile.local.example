@@ -1,5 +1,5 @@
 # file: Makefile.local.example
-# version: 1.0.0
+# version: 1.0.1
 # guid: a2b4c6d8-e0f2-4a6b-8c0d-2e4f6a8b0c2d
 # last-edited: 2026-07-03
 #
@@ -17,9 +17,9 @@
 # template's `.prev`-preserving step enables.
 
 # Hostname/alias of your production box (must resolve via ssh, e.g. an
-# ~/.ssh/config Host entry). 172.16.2.30 is the author's prod host — replace
+# ~/.ssh/config Host entry). 192.168.0.10 is the author's prod host — replace
 # with your own.
-DEPLOY_HOST := 172.16.2.30
+DEPLOY_HOST := 192.168.0.10
 
 # Absolute path to the deployed binary on DEPLOY_HOST. Required by the
 # committed `make rollback` target as well as this file's `deploy:` recipe.

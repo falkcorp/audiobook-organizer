@@ -1,5 +1,5 @@
 # file: deploy/local.conf.example
-# version: 1.0.0
+# version: 1.0.1
 # guid: b3c5d7e9-f1a3-4b5c-9d7e-1f3a5b7c9d1e
 # last-edited: 2026-07-03
 #
@@ -15,8 +15,8 @@
 #
 # Real secrets/paths (TLS cert/key paths, actual DB path, real
 # WHISPER_REMOTE_URL host if different from your own GPU box) must be filled
-# in by the operator — nothing below is a real credential. 172.16.2.30 /
-# 172.16.3.22 are the author's own hosts, already public in
+# in by the operator — nothing below is a real credential. 192.168.0.10 /
+# 192.168.0.20 are placeholder addresses — substitute your own hosts in
 # docs/system/runbooks.md and docs/status/2026-07-02-local-cutover-and-matching.md.
 
 [Service]
@@ -36,5 +36,5 @@ TimeoutStopSec=30
 # running bge-m3 (1024-dim embeddings) and qwen2.5:7b-instruct. See
 # scripts/manage-ollama-windows.py for keeping that box's Ollama instance
 # alive.
-Environment=WHISPER_REMOTE_URL=http://172.16.3.22:8000
-Environment=OLLAMA_BASE_URL=http://172.16.3.22:11434/v1
+Environment=WHISPER_REMOTE_URL=http://192.168.0.20:8000
+Environment=OLLAMA_BASE_URL=http://192.168.0.20:11434/v1

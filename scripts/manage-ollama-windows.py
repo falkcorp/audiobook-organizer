@@ -1,5 +1,5 @@
 # file: scripts/manage-ollama-windows.py
-# version: 1.0.0
+# version: 1.0.1
 # guid: c4d6e8f0-a2b4-4c6d-8e0f-2a4b6c8d0e2f
 # last-edited: 2026-07-03
 #
@@ -43,7 +43,7 @@ import urllib.error
 import urllib.request
 
 HOST = "windows-gpu"
-IP = "172.16.3.22"
+IP = "192.168.0.20"
 PORT = 11434
 MODELS = ("bge-m3", "qwen2.5:7b-instruct")
 
@@ -182,7 +182,7 @@ def print_result(result: subprocess.CompletedProcess) -> None:
 
 
 def cmd_status() -> int:
-    """Probe http://172.16.3.22:11434/api/tags directly (no SSH needed) and
+    """Probe http://192.168.0.20:11434/api/tags directly (no SSH needed) and
     report which models are loaded."""
     url = f"http://{IP}:{PORT}/api/tags"
     print(f"==> Checking {url}")
