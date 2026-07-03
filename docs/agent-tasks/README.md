@@ -1,7 +1,7 @@
 <!-- file: docs/agent-tasks/README.md -->
-<!-- version: 2.0.0 -->
+<!-- version: 2.1.0 -->
 <!-- guid: 7a1e0c44-9d2b-4f08-bc31-2e5a6b7c8d90 -->
-<!-- last-edited: 2026-07-01 -->
+<!-- last-edited: 2026-07-03 -->
 
 # Agent Task Package
 
@@ -25,6 +25,7 @@ same-file collision→wave table).
 
 | Folder | What | Priority | Tasks |
 |--------|------|----------|-------|
+| [`consultancy-roadmap/`](consultancy-roadmap/) | **2026-07-02 consultancy evaluation** implementation tasks — Tier-0 live-defect fixes (CONSULT-1..8), backend-mode toggle, dedup drain/recalibration/auto-resolve, shutdown correctness, ops hardening ([roadmap](../consultancy/00-ROADMAP.md)) | **P0–P3** | 31 |
 | [`dedup-hardening/`](dedup-hardening/) | Close the residual exact-layer false-positive leak + defensive guards (DEDUP-INTRO-1 residual, CONS-15, CONS-FRAG-2) | **P1** | 3 |
 | [`ci-flaky-fixes/`](ci-flaky-fixes/) | Make the mock-freshness + 2 flaky-test gates trustworthy | **P1** | 3 |
 | [`library-ui/`](library-ui/) | Saved filter presets, tag search, Ollama link, Library stale-cache bugfix | P2 | 4 |
