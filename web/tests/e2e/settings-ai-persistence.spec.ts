@@ -1,5 +1,5 @@
 // file: web/tests/e2e/settings-ai-persistence.spec.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: f1e2d3c4-b5a6-7890-abcd-123456789abc
 
 import { test, expect, type Page } from '@playwright/test';
@@ -98,6 +98,71 @@ test.describe('AI Key Persistence', () => {
     await page.getByRole('button', { name: 'Test Connection' }).click();
 
     await expect(page.getByText('Connection failed')).toBeVisible();
+  });
+});
+
+test.describe('AI Backends (TASK-11)', () => {
+  test('switching embedding mode to local reveals local fields', async ({ page }) => {
+    await openSettings(page);
+
+    await page.getByRole('tab', { name: 'Dedup' }).click();
+    await expect(page.getByLabel('Local base URL')).not.toBeVisible();
+
+    await page.getByLabel('Embedding mode').click();
+    await page.getByRole('option', { name: 'Local (Ollama)' }).click();
+
+    await expect(page.getByLabel('Local base URL')).toBeVisible();
+    await expect(page.getByLabel('Local embedding model')).toBeVisible();
+    await expect(page.getByLabel('Local LLM model')).toBeVisible();
+  });
+
+  test('saves local mode and endpoint fields, and they persist on reload', async ({ page }) => {
+    await openSettings(page);
+
+    await page.getByRole('tab', { name: 'Dedup' }).click();
+    await page.getByLabel('Embedding mode').click();
+    await page.getByRole('option', { name: 'Local (Ollama)' }).click();
+
+    await page.getByLabel('Local base URL').fill('http://192.168.0.20:11434/v1');
+    await page.getByLabel('Local embedding model').fill('bge-m3');
+
+    await page.getByRole('button', { name: 'Save Settings' }).click();
+    await expect(page.getByText('Settings saved successfully!')).toBeVisible();
+
+    await page.reload();
+    await page.waitForLoadState('networkidle');
+    await page.getByRole('tab', { name: 'Dedup' }).click();
+
+    await expect(page.getByLabel('Local base URL')).toHaveValue('http://192.168.0.20:11434/v1');
+    await expect(page.getByLabel('Local embedding model')).toHaveValue('bge-m3');
+  });
+
+  test('Test Connection with an absent local model shows the pull-model dialog', async ({ page }) => {
+    await openSettings(page, {
+      config: {
+        ai_backend: {
+          embedding_mode: 'local',
+          local_base_url: 'http://192.168.0.20:11434/v1',
+          local_embedding_model: 'bge-m3',
+        },
+      },
+      aiBackendsStatus: {
+        embedding_mode: 'local',
+        local_base_url: 'http://192.168.0.20:11434/v1',
+        local_reachable: true,
+        embedding_model: { name: 'bge-m3', pulled: false },
+      },
+    });
+
+    await page.getByRole('tab', { name: 'Dedup' }).click();
+    await page.getByRole('button', { name: 'Test Connection' }).click();
+
+    await expect(page.getByText('Not pulled')).toBeVisible();
+    await page.getByRole('button', { name: 'Pull now' }).click();
+    await expect(page.getByText('bge-m3 not pulled — Pull now?')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Confirm' }).click();
+    await expect(page.getByRole('dialog')).not.toBeVisible();
   });
 });
 

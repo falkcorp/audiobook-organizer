@@ -1,5 +1,5 @@
 <!-- file: docs/reference/config-api-shape.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 2b7f9c31-a4e8-4f1d-b8a2-6c5d9e3f2a17 -->
 <!-- last-edited: 2026-07-03 -->
 
@@ -218,6 +218,52 @@ committed defaults — real endpoints belong in local, gitignored config.
 | `AI_BACKEND_LOCAL_BASE_URL` | `ai_backend.local_base_url` |
 | `AI_BACKEND_LOCAL_EMBEDDING_MODEL` | `ai_backend.local_embedding_model` |
 | `AI_BACKEND_LOCAL_LLM_MODEL` | `ai_backend.local_llm_model` |
+
+**Status probe and model-pull endpoints (TASK-11).** These are separate from
+`GET`/`PUT /config` — they probe the live local backend and, on demand, pull a
+model into it via the managed Ollama lifecycle (the same `ToolRegistry`/
+`OllamaDaemon` machinery behind `/api/v1/tools/:name/install`).
+
+```
+GET /api/v1/ai/backends/status
+```
+
+Response `data`:
+```typescript
+interface AIBackendsStatus {
+  embedding_mode: string;          // effective mode, see EffectiveEmbeddingMode
+  llm_mode: string;                // effective mode, see EffectiveLLMMode
+  local_base_url: string;
+  local_reachable: boolean;        // GET {local_base_url}/api/tags succeeded
+  embedding_model?: { name: string; pulled: boolean };
+  llm_model?: { name: string; pulled: boolean };
+  fallback_reason?: string;        // set when local_reachable is false
+}
+```
+
+The probe is skipped (all fields default) when neither `embedding_mode` nor
+`llm_mode` resolves to `local`/`openai-fallback-local`, or when
+`local_base_url` is empty.
+
+```
+POST /api/v1/ai/backends/pull-model
+Content-Type: application/json
+
+{ "model": "bge-m3" }
+```
+
+Resolves the managed `ollama` binary via `ToolRegistry`, ensures the managed
+`OllamaDaemon` is running, then runs `ollama pull <model>` synchronously
+(bounded by a server-side timeout) and stops the daemon back down when idle.
+There is no streaming/op-registry progress channel for this endpoint — the
+frontend re-polls `GET /ai/backends/status` after this call returns to
+confirm the model is now pulled. Response `data`: `{ "model": string,
+"pulled": true }`. Returns `503` if the tool registry or a resolvable
+`ollama` binary is unavailable, and `500` if the pull itself fails (with the
+`ollama` CLI's combined output in the error message).
+
+Both endpoints require `settings.manage` permission, matching the tools
+lifecycle endpoints.
 
 ---
 

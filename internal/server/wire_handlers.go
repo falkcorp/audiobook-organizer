@@ -1,7 +1,7 @@
 // file: internal/server/wire_handlers.go
-// version: 2.14.0
+// version: 2.15.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
-// last-edited: 2026-07-01
+// last-edited: 2026-07-03
 
 package server
 
@@ -12,6 +12,7 @@ import (
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
+	aibackendshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/aibackends"
 	audiobookshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/audiobooks"
 	deduphandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/dedup"
 	duplicates "github.com/falkcorp/audiobook-organizer/internal/server/handlers/duplicates"
@@ -567,9 +568,14 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	// Tools lifecycle handler (instantiated here so wireMediaRoutes receives it).
 	toolsH := toolshandler.New(s.toolRegistry, &config.AppConfig.Tools, nil)
 
+	// AI backend-mode status/pull-model handler (TASK-11, FE half of TASK-10's
+	// AIBackendConfig toggle). Reuses the same ToolRegistry/OllamaDaemon
+	// lifecycle as the tools handler above.
+	aiBackendsH := aibackendshandler.New(s.toolRegistry, s.ollamaDaemon)
+
 	// ── Register protected routes via per-domain methods ─────────────────────
 	s.wireLibraryRoutes(protected, cacheH, activityH, splitBookH, filesystemH, organizeH, metaCacheH, readingH, playlistH, userH, versionsH)
-	s.wireMediaRoutes(protected, itunesH, aiH, diagH, toolsH, pluginsH)
+	s.wireMediaRoutes(protected, itunesH, aiH, diagH, toolsH, aiBackendsH, pluginsH)
 	s.wireEntitiesRoutes(protected, entitiesH)
 	s.wireOperationsRoutes(protected, opsV2H, operationsH)
 	s.wireSystemRoutes(protected, systemH)
