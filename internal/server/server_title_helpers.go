@@ -1,5 +1,5 @@
 // file: internal/server/server_title_helpers.go
-// version: 1.0.0
+// version: 1.0.2
 // guid: b4b0048c-d778-43c9-871e-21f9a9b6705d
 // last-edited: 2026-05-01
 
@@ -7,8 +7,6 @@ package server
 
 import (
 	"fmt"
-	"log/slog"
-	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -175,87 +173,3 @@ func stripSubtitle(title string) string {
 	return title
 }
 
-func extractTitleFromSegmentFilename(filename string) string {
-	// Strip extension
-	name := strings.TrimSuffix(filename, filepath.Ext(filename))
-
-	// Try to find title after " - " separator (common pattern)
-	if idx := strings.Index(name, " - "); idx >= 0 {
-		title := strings.TrimSpace(name[idx+3:])
-		if title != "" {
-			return title
-		}
-	}
-
-	// Try after " – " (em dash)
-	if idx := strings.Index(name, " – "); idx >= 0 {
-		title := strings.TrimSpace(name[idx+len(" – "):])
-		if title != "" {
-			return title
-		}
-	}
-
-	// Strip leading track numbers like "01 ", "01. "
-	stripped := regexp.MustCompile(`^\d{1,3}[\s.\-]+`).ReplaceAllString(name, "")
-	if stripped != "" {
-		return strings.TrimSpace(stripped)
-	}
-
-	return name
-}
-
-// reassignExternalIDsForFiles is now a method on *Server so it uses
-// the server's resolved store rather than the package-level
-// GetGlobalStore (SERVER-GLOBAL-STORE-AUDIT phase 3a).
-func (s *Server) reassignExternalIDsForFiles(sourceBookID, targetBookID string, files []database.BookFile) {
-	store := s.Store()
-	if store == nil {
-		return
-	}
-	eidStore := asExternalIDStore(store)
-	if eidStore == nil {
-		return
-	}
-
-	mappings, err := eidStore.GetExternalIDsForBook(sourceBookID)
-	if err != nil || len(mappings) == 0 {
-		return
-	}
-
-	// Build lookup sets from the moved files
-	movedPaths := make(map[string]bool, len(files))
-	movedPIDs := make(map[string]bool, len(files))
-	for _, f := range files {
-		if f.FilePath != "" {
-			movedPaths[f.FilePath] = true
-		}
-		if f.ITunesPersistentID != "" {
-			movedPIDs[f.ITunesPersistentID] = true
-		}
-	}
-
-	// Collect only the mappings that belong to the moved files
-	var toMove []database.ExternalIDMapping
-	for _, m := range mappings {
-		if (m.FilePath != "" && movedPaths[m.FilePath]) ||
-			(m.ExternalID != "" && movedPIDs[m.ExternalID]) {
-			toMove = append(toMove, m)
-		}
-	}
-	if len(toMove) == 0 {
-		return
-	}
-
-	// Reassign each mapping: delete old reverse key, update primary, add new reverse key
-	for _, m := range toMove {
-		oldReverseKey := fmt.Sprintf("ext_id:book:%s:%s:%s", sourceBookID, m.Source, m.ExternalID)
-		_ = store.DeleteRaw(oldReverseKey)
-
-		m.BookID = targetBookID
-		if createErr := eidStore.CreateExternalIDMapping(&m); createErr != nil {
-			slog.Warn("reassignExternalIDsForFiles failed to reassign to", "m", m.Source, "m", m.ExternalID, "targetBookID", targetBookID, "createErr", createErr)
-		}
-	}
-
-	slog.Info("reassigned external ID mapping(s) from book to", "toMove_count", len(toMove), "sourceBookID", sourceBookID, "targetBookID", targetBookID)
-}
