@@ -1,7 +1,7 @@
-&lt;!-- file: docs/agent-tasks/ci-flaky-fixes/README.md --&gt;
-&lt;!-- version: 1.0.0 --&gt;
-&lt;!-- guid: 16675f4f-7abf-409f-9867-764bea57be79 --&gt;
-&lt;!-- last-edited: 2026-07-01 --&gt;
+<!-- file: docs/agent-tasks/ci-flaky-fixes/README.md -->
+<!-- version: 1.0.1 -->
+<!-- guid: 16675f4f-7abf-409f-9867-764bea57be79 -->
+<!-- last-edited: 2026-07-03 -->
 
 # Workstream — CI flaky-test + mock-freshness fixes
 
@@ -11,7 +11,7 @@ capture-and-fix later)").
 
 | Task | TODO id | Title | Priority | Effort | Tier | Wave |
 |------|---------|-------|----------|--------|------|------|
-| TASK-01 | mock-freshness | Resolve mockery v2/v3 pin drift; regenerate + commit scoped mocks | P1 | M | Sonnet | 1 (run alone/first) |
+| **TASK-01** | **mock-freshness** | **✅ DONE (#1718, 2026-07-01)** — Resolve mockery v2/v3 pin drift; regenerate + commit scoped mocks | P1 | M | Sonnet | 1 (run alone/first) |
 | TASK-02 | flaky-backup | Root-cause + fix TestBackupEndpointsErrors | P2 | M | Sonnet | 1 |
 | TASK-03 | flaky-scan | Root-cause + fix TestScanService_MultiChapterAudiobook | P2 | M | Sonnet | 1 |
 
@@ -21,8 +21,8 @@ capture-and-fix later)").
 - Diagnose root cause; do **not** rerun-and-ignore a flaky test. Prove
   determinism with repeated runs (`go test -count=20`).
 - For mockery specifically: the local `mockery` binary on developer machines
-  (Homebrew, currently v3.7.1) drifts from the version CI pins
-  (`go install github.com/vektra/mockery/v2@v2.53.6`, see
+  (Homebrew) drifts from the version CI pins
+  (`go install github.com/vektra/mockery/v3@v3.7.1`, see
   `.github/workflows/ci.yml`). Running the wrong version regenerates **all**
   mocks repo-wide (`interface{}` → `any` and other formatting churn) — this is
   a known footgun (see project memory: "Mockery version drift"). Always invoke
