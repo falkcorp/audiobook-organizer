@@ -1,5 +1,5 @@
 // file: internal/config/persistence.go
-// version: 1.28.0
+// version: 1.29.0
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
 // last-edited: 2026-07-03
 
@@ -1347,6 +1347,10 @@ func applySetting(key, value, typ string) error {
 		case "dedup_llm_auto_merge_high_confidence":
 			if b, err := strconv.ParseBool(value); err == nil {
 				c.Dedup.LLMAutoMergeHighConfidence = b
+			}
+		case "dedup_auto_resolve_enabled":
+			if b, err := strconv.ParseBool(value); err == nil {
+				c.Dedup.AutoResolveEnabled = b
 			}
 		case "dedup_on_import_via_scheduler":
 			if b, err := strconv.ParseBool(value); err == nil {
