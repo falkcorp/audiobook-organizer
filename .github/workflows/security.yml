@@ -1,7 +1,7 @@
 # file: .github/workflows/security.yml
-# version: 2.3.0
+# version: 2.4.0
 # guid: 7f2a3c1d-4e5f-6g7h-8i9j-0k1l2m3n4o5p
-# last-edited: 2026-05-31
+# last-edited: 2026-07-03
 #
 # Security scanning: advanced CodeQL, dependency review, language audits, and
 # Go/NPM dependency submission for supply chain security. Third-party filesystem
@@ -27,7 +27,7 @@ permissions:
 jobs:
   advanced-security:
     name: Advanced CodeQL Security
-    uses: falkcorp/github-common/.github/workflows/reusable-security.yml@main
+    uses: falkcorp/github-common/.github/workflows/reusable-security.yml@1dec34cd8d8e2504d9be8298b522eff11448a401 # main @ 2026-07-03, no tagged release yet
     with:
       languages: '["go", "javascript", "actions"]'
       skip-codeql: false
