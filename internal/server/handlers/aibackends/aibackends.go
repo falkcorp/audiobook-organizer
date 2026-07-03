@@ -1,5 +1,5 @@
 // file: internal/server/handlers/aibackends/aibackends.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c3d9e21-4a5b-4f6c-9d8e-1a2b3c4d5e6f
 // last-edited: 2026-07-03
 
@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"net/http"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 
@@ -125,6 +126,12 @@ type pullModelRequest struct {
 	Model string `json:"model" binding:"required"`
 }
 
+// modelNameRe matches valid Ollama model references (name[:tag], optional
+// registry/namespace path segments). Anything else — in particular values
+// starting with "-", which the ollama CLI would parse as flags (argv
+// injection) — is rejected before reaching exec.
+var modelNameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*(?:/[a-zA-Z0-9][a-zA-Z0-9._-]*)*(?::[a-zA-Z0-9][a-zA-Z0-9._-]*)?$`)
+
 // PullModel shells out to the managed `ollama` binary (resolved through
 // ToolRegistry, the same lifecycle backing /api/v1/tools/:name/install) to
 // pull req.Model. It runs synchronously and returns once the pull completes
@@ -137,6 +144,10 @@ func (h *Handler) PullModel(c *gin.Context) {
 	var req pullModelRequest
 	if err := c.ShouldBindJSON(&req); err != nil || req.Model == "" {
 		httputil.RespondWithBadRequest(c, "model is required")
+		return
+	}
+	if !modelNameRe.MatchString(req.Model) {
+		httputil.RespondWithBadRequest(c, "invalid model name")
 		return
 	}
 

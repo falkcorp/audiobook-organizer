@@ -1,5 +1,5 @@
 // file: internal/server/handlers/aibackends/aibackends_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8d4e0f32-5b6c-4a7d-8e9f-2b3c4d5e6f7a
 // last-edited: 2026-07-03
 
@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -117,4 +118,21 @@ func TestHandlerPullModelNoRegistryReturnsUnavailable(t *testing.T) {
 	r.ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusServiceUnavailable, w.Code)
+}
+
+func TestHandlerPullModelRejectsArgvInjection(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	h := aibackendshandler.New(nil, nil)
+	r := gin.New()
+	r.POST("/ai/backends/pull-model", h.PullModel)
+
+	for _, bad := range []string{"--insecure", "-q", "a b", "a;b", "a$(x)", ":tag", "/leading", "a//b"} {
+		w := httptest.NewRecorder()
+		body := strings.NewReader(`{"model":"` + bad + `"}`)
+		req, _ := http.NewRequest(http.MethodPost, "/ai/backends/pull-model", body)
+		req.Header.Set("Content-Type", "application/json")
+		r.ServeHTTP(w, req)
+		require.Equalf(t, http.StatusBadRequest, w.Code, "model %q must be rejected", bad)
+	}
 }
