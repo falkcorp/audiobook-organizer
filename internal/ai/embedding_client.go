@@ -1,7 +1,7 @@
 // file: internal/ai/embedding_client.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-06-15
+// last-edited: 2026-07-03
 
 package ai
 
@@ -304,9 +304,20 @@ func (c *EmbeddingClient) embedBatchRaw(ctx context.Context, texts []string) ([]
 			},
 			Model: openai.EmbeddingModel(c.model),
 			User:  openai.String("ao-embeddings"),
-		})
+			// WithMaxRetries(0): the SDK's own built-in retry logic would
+			// otherwise silently retry 429/5xx responses before this loop
+			// ever sees the error, defeating both the permanent-error
+			// short-circuit (still burning 3 HTTP calls per attempt on a
+			// permanent 429) and the attempt bookkeeping this loop relies
+			// on. This loop is the sole retry authority for embedBatchRaw.
+		}, option.WithMaxRetries(0))
 		attemptCancel() // always release the child context, never defer in a loop
 		if err != nil {
+			// TODO(#TASK-12-followup): route embedBatchRaw through
+			// DoWithRetry to eliminate this duplicated per-attempt loop.
+			if isPermanentAIError(err) {
+				return nil, &PermanentError{Err: fmt.Errorf("embedding attempt %d: %w", attempt+1, err)}
+			}
 			lastErr = fmt.Errorf("embedding attempt %d: %w", attempt+1, err)
 			continue
 		}
