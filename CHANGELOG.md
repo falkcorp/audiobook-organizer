@@ -1,11 +1,17 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.97.0 -->
+<!-- version: 3.98.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-02 -->
 
 # Changelog
 
 ## [Unreleased]
+
+### Documentation
+
+#### July 2, 2026 - Full consultancy evaluation (6 dimensions, 101 findings)
+
+- **`docs(consultancy)`** - Read-only multi-agent consultancy evaluation across storage/architecture, dedup, matching/backends, code quality, feature portfolio, and process/ops/security. 25 agents (repo specialist subagents + adversarial verifiers), all findings cited `file:line`; the 5 critical/high code findings independently verified real. Reports in [`docs/consultancy/`](docs/consultancy/) — start at [`00-ROADMAP.md`](docs/consultancy/00-ROADMAP.md) (impact × effort tiers, deferred-work verdicts, validated-don't-re-fix list). Headline defects: `EmbeddingScorer` model-blind cache fast-path zeroes search scores during the bge-m3 re-embed (MATCH-1/BUG-1); memdb-stripped `Book` → `UpdateBook` full-replace wipes `Description`/`BookSigV1` (STOR-1/QUAL-2). Also committed the previously-untracked `docs/status/2026-07-02-local-cutover-and-matching.md` handoff doc (PROC-1 verdict: commit now).
 
 ### Bug Fixes
 
