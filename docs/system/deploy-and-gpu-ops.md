@@ -1,5 +1,5 @@
 <!-- file: docs/system/deploy-and-gpu-ops.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: d5e7f9a1-b3c5-4d7e-9f1a-3b5c7d9e1f3a -->
 <!-- last-edited: 2026-07-03 -->
 
@@ -51,7 +51,7 @@ Once your real `Makefile.local`'s `deploy` target includes this same
    installing the new one and restarting the service.
 2. If the new deploy is bad, run the committed rollback target:
    ```bash
-   make rollback DEPLOY_HOST=172.16.2.30 DEPLOY_BIN=/usr/local/bin/audiobook-organizer
+   make rollback DEPLOY_HOST=192.168.0.10 DEPLOY_BIN=/usr/local/bin/audiobook-organizer
    ```
    (`DEPLOY_HOST`/`DEPLOY_BIN` are normally already set in your
    `Makefile.local`, so you can usually just run `make rollback`.)
@@ -72,7 +72,7 @@ deeper history, keep your own timestamped copies (see `make backup` in
 
 ## 3. Windows GPU Ollama keepalive (`scripts/manage-ollama-windows.py`)
 
-The Windows GPU box (`172.16.3.22`, reached via the `windows-gpu` SSH alias —
+The Windows GPU box (`192.168.0.20`, reached via the `windows-gpu` SSH alias —
 see `scripts/setup-ssh-from-mac.sh` for creating that alias) runs Ollama
 serving `bge-m3` (1024-dim embeddings) and `qwen2.5:7b-instruct` (LLM).
 Commands are sent as base64-encoded (UTF-16LE) PowerShell via
