@@ -1,6 +1,7 @@
 // file: internal/metafetch/service_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+// last-edited: 2026-07-03
 
 package metafetch
 
@@ -57,7 +58,15 @@ func TestIsGarbageValue(t *testing.T) {
 		{"<html>something</html>", true},
 		{"<!DOCTYPE html>", true},
 		{"403 Forbidden", true},
-		{"some error occurred", true},
+		{"some error occurred", false},
+		// Legitimate titles/authors containing "error" substring should pass
+		{"The Terror", false},
+		{"The Comedy of Errors", false},
+		{"Terrorbyte", false},
+		{"Erroll Garner", false},
+		// Genuine error-page leaks should still be rejected
+		{"Error: connection refused", true},
+		{"HTTP Error 500", true},
 		// Edge cases
 		{"  Unknown  ", true},
 		{"Test", true},

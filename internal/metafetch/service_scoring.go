@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_scoring.go
-// version: 1.5.0
+// version: 1.5.2
 // guid: d2226468-bed1-4989-93f3-b0bc3a344424
 // last-edited: 2026-07-03
 
@@ -32,8 +32,10 @@ func IsGarbageValue(s string) bool {
 		}
 	}
 	// Reject HTML fragments or error messages that may leak from Wikipedia/API errors
+	// Use anchored checks to avoid matching legitimate titles/authors containing "error" as a substring
 	if strings.Contains(lower, "<html") || strings.Contains(lower, "<!doctype") ||
-		strings.Contains(lower, "403 forbidden") || strings.Contains(lower, "error") {
+		strings.Contains(lower, "403 forbidden") || strings.HasPrefix(lower, "error:") || strings.HasPrefix(lower, "error ") ||
+		strings.Contains(lower, "http error") || strings.Contains(lower, "internal server error") {
 		return true
 	}
 	return false
