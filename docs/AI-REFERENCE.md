@@ -1,9 +1,14 @@
+<!-- file: docs/AI-REFERENCE.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: e5f4g3h2-i1j0-k9l8-m7n6-o5p4q3r2s1t0 -->
+<!-- last-edited: 2026-07-03 -->
+
 # AI Reference Guide — Audiobook Organizer
 
 > **Purpose**: Complete project reference for AI agents. Read this before making any changes.
 > Keep this file updated with every architectural change.
 
-**Last updated**: 2026-07-01 | **Server version**: 1.117.0 | **Total API routes**: 189
+**Last updated**: 2026-07-01 | **Server version**: 1.117.0 | **Total API routes**: see `grep -rn '\.GET(\|\.POST(\|\.PUT(\|\.DELETE(\|\.PATCH(' --include='*.go' internal/server | grep -v _test.go | wc -l` for current count (~395 as of 2026-07-03)
 
 ## Quick Facts
 
@@ -50,7 +55,7 @@ The Go binary embeds the compiled React app. A single process serves both the AP
 ### `internal/database` — Data layer
 - **store.go** — `Store` interface (composite of ~36 role interfaces: `BookStore`, `AuthorStore`, `MetadataCacheStore`, …; PebbleStore is the ONLY implementation), ALL entity struct definitions (Book, Author, Series, Work, Narrator, BookSegment, Operation, etc.)
 - **pebble_store.go** — Primary implementation. Key schema: `book:<ulid>`, `book:path:<filepath>`, `book:hash:<hash>`, `author:<id>`, `series:<id>`, etc.
-- **embedding_store.go** — `EmbeddingStore` wrapping a separate PebbleDB for embeddings + dedup candidates + labeled dataset. Key-space: `emb:v:*`, `emb:c:*`, `dedup:r:*`, `dedup:p:*`, `dedup:seq`, `dedup:label:*`.
+- **embedding_store.go** — `EmbeddingStore` wrapping the main audiobooks.pebble DB for embeddings + dedup candidates + labeled dataset. Key-space: `emb:v:*`, `emb:c:*`, `dedup:r:*`, `dedup:p:*`, `dedup:seq`, `dedup:label:*`.
 - **dedup_label.go** — Labeled dedup training dataset keyspace (`dedup:label:<candidateID,16hex>`). Types: `LabeledExample` (candidate pair + feature snapshot + label fields), `BookFeatures` (per-book evidence: title, author, path, durations, file count, has_cover, files_exist, recording_ids, itunes_pid_present, whole_book_sig_present), `LabeledExampleFilter`. Methods on `*EmbeddingStore`: `UpsertLabeledExample`, `GetLabeledExample`, `ListLabeledExamples`, `CountLabeledExamples`.
 - **ai_scan_store.go** — Separate PebbleDB (`ai_scans.db`) for AI dedup pipeline
 - **mock_store.go** — Test mock (generated with mockery patterns)
@@ -83,6 +88,7 @@ The Go binary embeds the compiled React app. A single process serves both the AP
 
 ### `internal/ai` — AI integration
 - **openai_parser.go** — `OpenAIParser` with methods: `ParseFilename()`, `ParseAudiobook()`, `ParseCoverArt()`, `ReviewAuthorDuplicates()`, `DiscoverAuthorDuplicates()`, `CreateBatchAuthorDedup()`, `CheckBatchStatus()`, `DownloadBatchResults()`
+- **embedding_client.go** — Local embedding/LLM backend via Ollama: `bge-m3` (1024-dim vectors) for embeddings; `qwen2.5:7b-instruct` for LLM tasks. Primary backend for dedup/candidate ranking. See `internal/database/hnsw_embedding_store.go`, `internal/dedup/engine.go`, `internal/server/registry_wire.go` for integration points. OpenAI backend (`openai_parser.go`) remains in use for specific flows already documented above.
 
 ### `internal/operations` — Background job queue
 - **queue.go** — `OperationQueue` with timeout (configurable, default 30min), checkpoint/resume support, cancellation

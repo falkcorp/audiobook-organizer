@@ -1,7 +1,7 @@
 <!-- file: docs/database-architecture.md -->
-<!-- version: 1.0.1 -->
+<!-- version: 1.0.2 -->
 <!-- guid: 1d2e3f4a-5b6c-7d8e-9f0a-1b2c3d4e5f6a -->
-<!-- last-edited: 2026-01-19 -->
+<!-- last-edited: 2026-07-03 -->
 
 # Database Architecture
 
@@ -24,7 +24,7 @@ tracking, and migration strategy, see the dedicated schema document:
 That document formalizes all keys (users, sessions, preferences, authors,
 series, books, segments, playlists, playback events, progress, stats,
 operations, migrations) and should be treated as canonical for any new feature
-touching persistence.
+touching persistence. **Caveat:** The document's entity-ID convention (ULID strings) does not match the current implementation (integer IDs); the `## Dedup / Embedding store` section is verified-accurate.
 
 ## Why PebbleDB?
 
