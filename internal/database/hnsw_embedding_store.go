@@ -1,7 +1,7 @@
 // file: internal/database/hnsw_embedding_store.go
-// version: 1.5.2
+// version: 1.6.0
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-07-02
+// last-edited: 2026-07-03
 
 // HNSW-graph vector store (coder/hnsw) — a sub-linear ANN index alternative to
 // the brute-force chromem store. Selected via config.VectorIndexBackend="hnsw".
@@ -170,6 +170,21 @@ func (s *HNSWEmbeddingStore) safeAdd(g *hnsw.Graph[string], entityID string, vec
 	return nil
 }
 
+// safeDelete wraps coder/hnsw Graph.Delete so a library panic becomes an error
+// rather than crashing the process, mirroring safeAdd. Delete shares the same
+// per-layer-invariant panic class as Add (HNSW-CRASH-2026-06-18) and runs on
+// live paths (book merge/removal) from goroutines where an unrecovered panic
+// kills the process. Caller must hold s.mu.
+func (s *HNSWEmbeddingStore) safeDelete(g *hnsw.Graph[string], entityID string) (deleted bool, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("hnsw delete %s: recovered library panic: %v", entityID, r)
+		}
+	}()
+	deleted = g.Delete(entityID)
+	return deleted, nil
+}
+
 // Get returns a copy of an entity's metadata, or (nil, nil) if absent.
 func (s *HNSWEmbeddingStore) Get(_ context.Context, entityType, entityID string) (map[string]string, error) {
 	s.mu.RLock()
@@ -186,11 +201,18 @@ func (s *HNSWEmbeddingStore) Get(_ context.Context, entityType, entityID string)
 }
 
 // Delete removes an entity's vector + metadata. Absent keys are a no-op.
+// Deletion is best-effort: a recovered library panic from safeDelete is
+// logged, not propagated, matching this file's "single bad mirror cannot
+// abort" philosophy (see safeAdd) — the metadata sidecar entry is still
+// removed regardless.
 func (s *HNSWEmbeddingStore) Delete(_ context.Context, entityType, entityID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if g, ok := s.graphs[entityType]; ok {
-		g.Delete(entityID)
+		if _, err := s.safeDelete(g, entityID); err != nil {
+			slog.Warn("hnsw delete: recovered library panic; continuing best-effort",
+				"entity_type", entityType, "entity_id", entityID, "err", err)
+		}
 	}
 	if byID, ok := s.meta[entityType]; ok {
 		delete(byID, entityID)
@@ -338,29 +360,59 @@ func (s *HNSWEmbeddingStore) Export(dir string) error {
 		return fmt.Errorf("hnsw export: mkdir: %w", err)
 	}
 
+	// Each entity type is written to temp files first, then renamed into place
+	// only after both the .bin and .meta.json writes succeed (ARCH-2). A crash
+	// or write failure mid-export therefore cannot leave a truncated file at
+	// the final path, and a previously-committed good snapshot for that entity
+	// type is never clobbered by a failed export attempt.
 	for entityType, g := range s.graphs {
 		binPath := filepath.Join(dir, "hnsw-"+entityType+".bin")
-		f, err := os.Create(binPath)
+		binTmpPath := binPath + ".tmp"
+		f, err := os.Create(binTmpPath)
 		if err != nil {
-			return fmt.Errorf("hnsw export: create %s: %w", binPath, err)
+			return fmt.Errorf("hnsw export: create %s: %w", binTmpPath, err)
 		}
 		if err := g.Export(f); err != nil {
 			f.Close()
+			os.Remove(binTmpPath)
 			return fmt.Errorf("hnsw export: write graph %s: %w", entityType, err)
 		}
-		f.Close()
+		if err := f.Sync(); err != nil {
+			f.Close()
+			os.Remove(binTmpPath)
+			return fmt.Errorf("hnsw export: sync graph %s: %w", entityType, err)
+		}
+		if err := f.Close(); err != nil {
+			os.Remove(binTmpPath)
+			return fmt.Errorf("hnsw export: close graph %s: %w", entityType, err)
+		}
 
 		metaPath := filepath.Join(dir, "hnsw-"+entityType+".meta.json")
+		metaTmpPath := metaPath + ".tmp"
 		m := s.meta[entityType]
 		if m == nil {
 			m = map[string]map[string]string{}
 		}
 		b, err := json.Marshal(m)
 		if err != nil {
+			os.Remove(binTmpPath)
 			return fmt.Errorf("hnsw export: marshal meta %s: %w", entityType, err)
 		}
-		if err := os.WriteFile(metaPath, b, 0o644); err != nil {
+		if err := os.WriteFile(metaTmpPath, b, 0o644); err != nil {
+			os.Remove(binTmpPath)
 			return fmt.Errorf("hnsw export: write meta %s: %w", entityType, err)
+		}
+
+		// Both temp files are on disk and synced/written successfully — commit
+		// by renaming into place. os.Rename is atomic on POSIX filesystems.
+		if err := os.Rename(binTmpPath, binPath); err != nil {
+			os.Remove(binTmpPath)
+			os.Remove(metaTmpPath)
+			return fmt.Errorf("hnsw export: rename graph %s: %w", entityType, err)
+		}
+		if err := os.Rename(metaTmpPath, metaPath); err != nil {
+			os.Remove(metaTmpPath)
+			return fmt.Errorf("hnsw export: rename meta %s: %w", entityType, err)
 		}
 	}
 	slog.Info("hnsw: snapshot exported", "dir", dir, "entity_types", len(s.graphs))
@@ -369,14 +421,24 @@ func (s *HNSWEmbeddingStore) Export(dir string) error {
 
 // Import loads HNSW graphs and metadata sidecars from dir.
 // Returns ErrNoHNSWSnapshot if no snapshot files exist.
+//
+// Import is all-or-nothing (ARCH-2): entries are decoded into local maps
+// first, and s.graphs/s.meta are only replaced after every entity type has
+// either parsed successfully or been legitimately skipped for a dimension
+// mismatch (the existing discard path, unchanged in effect). Any other hard
+// failure (bin open/parse, or a meta read/unmarshal error that isn't "file
+// not found") aborts the whole call and returns before touching s.graphs/
+// s.meta at all, so the caller's existing hydrate-from-Pebble fallback (which
+// runs when CountByType==0) actually runs instead of operating on a partially
+// installed graph.
 func (s *HNSWEmbeddingStore) Import(dir string) error {
 	entries, err := filepath.Glob(filepath.Join(dir, "hnsw-*.bin"))
 	if err != nil || len(entries) == 0 {
 		return ErrNoHNSWSnapshot
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	newGraphs := map[string]*hnsw.Graph[string]{}
+	newMeta := map[string]map[string]map[string]string{}
 
 	for _, binPath := range entries {
 		base := filepath.Base(binPath)
@@ -408,13 +470,13 @@ func (s *HNSWEmbeddingStore) Import(dir string) error {
 				"entity_type", entityType, "snapshot_dims", g.Dims(), "config_dims", s.dims)
 			continue
 		}
-		s.graphs[entityType] = g
+		newGraphs[entityType] = g
 
 		metaPath := filepath.Join(dir, "hnsw-"+entityType+".meta.json")
 		b, err := os.ReadFile(metaPath)
 		if err != nil {
 			if os.IsNotExist(err) {
-				s.meta[entityType] = map[string]map[string]string{}
+				newMeta[entityType] = map[string]map[string]string{}
 				continue
 			}
 			return fmt.Errorf("hnsw import: read meta %s: %w", entityType, err)
@@ -423,9 +485,75 @@ func (s *HNSWEmbeddingStore) Import(dir string) error {
 		if err := json.Unmarshal(b, &m); err != nil {
 			return fmt.Errorf("hnsw import: unmarshal meta %s: %w", entityType, err)
 		}
-		s.meta[entityType] = m
+		newMeta[entityType] = m
 	}
+
+	s.mu.Lock()
+	s.graphs = newGraphs
+	s.meta = newMeta
+	s.mu.Unlock()
+
 	slog.Info("hnsw: snapshot imported", "dir", dir, "entity_types", len(entries))
+	return nil
+}
+
+// ImportWithStalenessCheck wraps Import with a staleness guard (ARCH-1): after
+// a successful on-disk import, it compares each imported entity type's
+// in-memory graph count against a caller-supplied Pebble-side truth count
+// (e.g. EmbeddingStore.CountByType, the emb: keyspace's source-of-truth
+// count). The HNSW snapshot fast-path otherwise skips Pebble hydration
+// unconditionally — after any unclean shutdown, every vector upserted since
+// the last clean-shutdown Export would be silently and permanently missing
+// from the graph. If the imported graph undercounts the truth for any entity
+// type at all (any undercount is unsafe — there is no positive tolerance),
+// the ENTIRE imported snapshot (all entity types) is discarded, not just the
+// stale one, so the caller's existing hydrate-from-Pebble fallback (which
+// runs when CountByType("book")==0) runs normally; no new hydration
+// mechanism is introduced here.
+//
+// Discarding all-or-nothing (rather than per-entity-type) is deliberate:
+// dedup/lifecycle.go's PostInit gates hydration on the "book" count alone,
+// and internal/dedup/engine.go's HydrateChromem re-populates BOTH "book" and
+// "author" together when it runs. A per-type discard that kept a fresh
+// "author" graph while discarding a stale "book" graph would cause
+// HydrateChromem to Add authors on top of the already-populated author
+// graph — the same Delete+Add per-layer-invariant class of bug
+// (HNSW-CRASH-2026-06-18) that safeAdd/safeDelete guard against, just
+// reached via a different path. Discarding every entity type when any one is
+// stale keeps hydration's "populate from empty" precondition intact.
+//
+// truth may be nil, in which case the staleness check is skipped entirely
+// (e.g. callers/tests without a Pebble store handy) and Import's result is
+// returned unchanged.
+func (s *HNSWEmbeddingStore) ImportWithStalenessCheck(dir string, truth func(entityType string) (int, error)) error {
+	if err := s.Import(dir); err != nil {
+		return err
+	}
+	if truth == nil {
+		return nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	stale := false
+	for entityType, g := range s.graphs {
+		truthCount, err := truth(entityType)
+		if err != nil {
+			// Can't verify against the truth source; don't treat this entity
+			// type as stale on an unrelated error.
+			continue
+		}
+		if g.Len() < truthCount {
+			slog.Warn("hnsw import: snapshot undercounts pebble truth; discarding entire imported snapshot (will rehydrate from pebble)",
+				"entity_type", entityType, "graph_count", g.Len(), "truth_count", truthCount)
+			stale = true
+		}
+	}
+	if stale {
+		s.graphs = map[string]*hnsw.Graph[string]{}
+		s.meta = map[string]map[string]map[string]string{}
+	}
 	return nil
 }
 
