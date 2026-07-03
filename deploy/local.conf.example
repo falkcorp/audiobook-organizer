@@ -1,0 +1,40 @@
+# file: deploy/local.conf.example
+# version: 1.0.0
+# guid: b3c5d7e9-f1a3-4b5c-9d7e-1f3a5b7c9d1e
+# last-edited: 2026-07-03
+#
+# TEMPLATE — this is a systemd drop-in for audiobook-organizer.service.
+# Copy to deploy/local.conf (gitignored) and fill in your own TLS cert
+# paths, DB path, and Windows GPU transcription/embedding endpoint. Deploy it
+# to the server at:
+#   /etc/systemd/system/audiobook-organizer.service.d/local.conf
+# then `sudo systemctl daemon-reload && sudo systemctl restart audiobook-organizer`.
+#
+# See deploy/audiobook-organizer.service for the base unit this overrides,
+# and docs/system/deploy-and-gpu-ops.md for the full deploy/rollback flow.
+#
+# Real secrets/paths (TLS cert/key paths, actual DB path, real
+# WHISPER_REMOTE_URL host if different from your own GPU box) must be filled
+# in by the operator — nothing below is a real credential. 172.16.2.30 /
+# 172.16.3.22 are the author's own hosts, already public in
+# docs/system/runbooks.md and docs/status/2026-07-02-local-cutover-and-matching.md.
+
+[Service]
+# Clear the base unit's ExecStart, then set the full production command line.
+ExecStart=
+ExecStart=/usr/local/bin/audiobook-organizer serve --host 0.0.0.0 --port 8484 \
+      --db /path/to/audiobooks.pebble \
+      --tls-cert /path/to/server.crt --tls-key /path/to/server.key \
+      --http3-port 8484
+
+# How long systemd waits for a graceful shutdown before SIGKILL. Raise this
+# if large in-flight operations (fingerprint rescans, dedup purges) need time
+# to finish cleanly on stop/restart.
+TimeoutStopSec=30
+
+# Point at your own Windows GPU box (or other Ollama-compatible endpoint)
+# running bge-m3 (1024-dim embeddings) and qwen2.5:7b-instruct. See
+# scripts/manage-ollama-windows.py for keeping that box's Ollama instance
+# alive.
+Environment=WHISPER_REMOTE_URL=http://172.16.3.22:8000
+Environment=OLLAMA_BASE_URL=http://172.16.3.22:11434/v1

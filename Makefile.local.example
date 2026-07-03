@@ -1,0 +1,52 @@
+# file: Makefile.local.example
+# version: 1.0.0
+# guid: a2b4c6d8-e0f2-4a6b-8c0d-2e4f6a8b0c2d
+# last-edited: 2026-07-03
+#
+# TEMPLATE — copy to Makefile.local (gitignored) and fill in your own values.
+# Makefile.local is included by the committed Makefile via `-include
+# Makefile.local` and supplies the machine-local deployment variables
+# (DEPLOY_HOST, DEPLOY_BIN) plus the `deploy`/`deploy-debug` targets. None of
+# this is committed — only this sanitized example is.
+#
+# Usage:
+#   cp Makefile.local.example Makefile.local
+#   $EDITOR Makefile.local   # fill in DEPLOY_HOST and any real paths
+#
+# See docs/system/deploy-and-gpu-ops.md for the full rollback flow this
+# template's `.prev`-preserving step enables.
+
+# Hostname/alias of your production box (must resolve via ssh, e.g. an
+# ~/.ssh/config Host entry). 172.16.2.30 is the author's prod host — replace
+# with your own.
+DEPLOY_HOST := 172.16.2.30
+
+# Absolute path to the deployed binary on DEPLOY_HOST. Required by the
+# committed `make rollback` target as well as this file's `deploy:` recipe.
+DEPLOY_BIN := /usr/local/bin/audiobook-organizer
+
+## deploy: Cross-compile, ship the binary, preserve a .prev copy, and restart
+.PHONY: deploy
+deploy: build-api
+	@echo "→ Cross-compiling linux/amd64 binary..."
+	GOOS=linux GOARCH=amd64 go build -tags embed_frontend -o dist/$(BINARY)-linux-amd64 .
+	@echo "→ Copying binary to $(DEPLOY_HOST)..."
+	scp dist/$(BINARY)-linux-amd64 $(DEPLOY_HOST):/home/USER/audiobook-organizer
+	@echo "→ Preserving previous binary as .prev, installing new binary, restarting service..."
+	ssh $(DEPLOY_HOST) 'sudo cp $(DEPLOY_BIN) $(DEPLOY_BIN).prev 2>/dev/null; \
+	  sudo mv /home/USER/audiobook-organizer $(DEPLOY_BIN) && \
+	  sudo systemctl restart audiobook-organizer.service'
+	@echo "✅ Deployed to $(DEPLOY_HOST). Roll back with: make rollback DEPLOY_HOST=$(DEPLOY_HOST) DEPLOY_BIN=$(DEPLOY_BIN)"
+
+## deploy-debug: Same as deploy, but ships a debug (non-stripped) build
+.PHONY: deploy-debug
+deploy-debug: build-api
+	@echo "→ Cross-compiling linux/amd64 debug binary..."
+	GOOS=linux GOARCH=amd64 go build -gcflags="all=-N -l" -tags embed_frontend -o dist/$(BINARY)-linux-amd64-debug .
+	@echo "→ Copying debug binary to $(DEPLOY_HOST)..."
+	scp dist/$(BINARY)-linux-amd64-debug $(DEPLOY_HOST):/home/USER/audiobook-organizer
+	@echo "→ Preserving previous binary as .prev, installing new binary, restarting service..."
+	ssh $(DEPLOY_HOST) 'sudo cp $(DEPLOY_BIN) $(DEPLOY_BIN).prev 2>/dev/null; \
+	  sudo mv /home/USER/audiobook-organizer $(DEPLOY_BIN) && \
+	  sudo systemctl restart audiobook-organizer.service'
+	@echo "✅ Debug build deployed to $(DEPLOY_HOST)."

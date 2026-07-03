@@ -1,7 +1,7 @@
 # file: Makefile
-# version: 2.14.0
+# version: 2.15.0
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
-# last-edited: 2026-07-01
+# last-edited: 2026-07-03
 
 BINARY := audiobook-organizer
 ROOT_DIR := $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
@@ -12,6 +12,7 @@ export GOEXPERIMENT := jsonv2
 
 # Overridable deployment variables (set in Makefile.local or via environment)
 DEPLOY_HOST ?=
+DEPLOY_BIN  ?=
 BACKUP_DIR  ?= $(CURDIR)/backups
 
 # Include local overrides (not committed — see Makefile.local.example)
@@ -25,7 +26,8 @@ BACKUP_DIR  ?= $(CURDIR)/backups
         docker docker-run docker-stop \
         release-dry-run release-snapshot version \
         build-mtls-bridge build-mtls-bridge-windows \
-        manual-smoke smoke-create-books smoke-run-demo
+        manual-smoke smoke-create-books smoke-run-demo \
+        rollback
 
 # Default: full build (frontend + backend with embed)
 all: build
@@ -388,6 +390,18 @@ backup:
 		scp $(DEPLOY_HOST):/tmp/aobackup-$$STAMP.tar.gz $(BACKUP_DIR)/; \
 		ssh $(DEPLOY_HOST) "rm -f /tmp/aobackup-$$STAMP.tar.gz"; \
 		echo "✅ Backup saved to $(BACKUP_DIR)/aobackup-$$STAMP.tar.gz"
+
+## rollback: Swap in the previous deployed binary and restart (requires DEPLOY_HOST, DEPLOY_BIN)
+.PHONY: rollback
+rollback:
+	@[ -n "$(DEPLOY_HOST)" ] || (echo "ERROR: DEPLOY_HOST is not set. Add it to Makefile.local or export it."; exit 1)
+	@[ -n "$(DEPLOY_BIN)" ] || (echo "ERROR: DEPLOY_BIN is not set. Add it to Makefile.local or export it."; exit 1)
+	@echo "→ Rolling back $(DEPLOY_BIN) on $(DEPLOY_HOST)..."
+	@ssh $(DEPLOY_HOST) 'test -f $(DEPLOY_BIN).prev' || (echo "ERROR: no $(DEPLOY_BIN).prev found on $(DEPLOY_HOST) — nothing to roll back to."; exit 1)
+	ssh $(DEPLOY_HOST) 'sudo cp $(DEPLOY_BIN) $(DEPLOY_BIN).rolled-back && \
+	  sudo cp $(DEPLOY_BIN).prev $(DEPLOY_BIN) && \
+	  sudo systemctl restart audiobook-organizer.service'
+	@echo "✅ Rolled back $(DEPLOY_BIN) to previous version and restarted."
 
 # Quick aliases
 .PHONY: t c b v
