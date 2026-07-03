@@ -89,6 +89,74 @@ func (_c *MockDedupEngine_CleanupCandidatesAfterMerge_Call) RunAndReturn(run fun
 	return _c
 }
 
+// ReevaluateAcoustIDConflicts provides a mock function for the type MockDedupEngine
+func (_mock *MockDedupEngine) ReevaluateAcoustIDConflicts(ctx context.Context, dryRun bool) (*dedup.AcoustIDConflictResult, error) {
+	ret := _mock.Called(ctx, dryRun)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ReevaluateAcoustIDConflicts")
+	}
+
+	var r0 *dedup.AcoustIDConflictResult
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, bool) (*dedup.AcoustIDConflictResult, error)); ok {
+		return returnFunc(ctx, dryRun)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, bool) *dedup.AcoustIDConflictResult); ok {
+		r0 = returnFunc(ctx, dryRun)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*dedup.AcoustIDConflictResult)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, bool) error); ok {
+		r1 = returnFunc(ctx, dryRun)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockDedupEngine_ReevaluateAcoustIDConflicts_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ReevaluateAcoustIDConflicts'
+type MockDedupEngine_ReevaluateAcoustIDConflicts_Call struct {
+	*mock.Call
+}
+
+// ReevaluateAcoustIDConflicts is a helper method to define mock.On call
+//   - ctx context.Context
+//   - dryRun bool
+func (_e *MockDedupEngine_Expecter) ReevaluateAcoustIDConflicts(ctx any, dryRun any) *MockDedupEngine_ReevaluateAcoustIDConflicts_Call {
+	return &MockDedupEngine_ReevaluateAcoustIDConflicts_Call{Call: _e.mock.On("ReevaluateAcoustIDConflicts", ctx, dryRun)}
+}
+
+func (_c *MockDedupEngine_ReevaluateAcoustIDConflicts_Call) Run(run func(ctx context.Context, dryRun bool)) *MockDedupEngine_ReevaluateAcoustIDConflicts_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 bool
+		if args[1] != nil {
+			arg1 = args[1].(bool)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockDedupEngine_ReevaluateAcoustIDConflicts_Call) Return(acoustIDConflictResult *dedup.AcoustIDConflictResult, err error) *MockDedupEngine_ReevaluateAcoustIDConflicts_Call {
+	_c.Call.Return(acoustIDConflictResult, err)
+	return _c
+}
+
+func (_c *MockDedupEngine_ReevaluateAcoustIDConflicts_Call) RunAndReturn(run func(ctx context.Context, dryRun bool) (*dedup.AcoustIDConflictResult, error)) *MockDedupEngine_ReevaluateAcoustIDConflicts_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // Rescore provides a mock function for the type MockDedupEngine
 func (_mock *MockDedupEngine) Rescore(ctx context.Context, apply bool) (dedup.RescoreResult, error) {
 	ret := _mock.Called(ctx, apply)
@@ -125,33 +193,6 @@ type MockDedupEngine_Rescore_Call struct {
 //   - apply bool
 func (_e *MockDedupEngine_Expecter) Rescore(ctx any, apply any) *MockDedupEngine_Rescore_Call {
 	return &MockDedupEngine_Rescore_Call{Call: _e.mock.On("Rescore", ctx, apply)}
-}
-
-func (_mock *MockDedupEngine) ReevaluateAcoustIDConflicts(ctx context.Context, dryRun bool) (*dedup.AcoustIDConflictResult, error) {
-	ret := _mock.Called(ctx, dryRun)
-
-	if len(ret) == 0 {
-		panic("no return value specified for ReevaluateAcoustIDConflicts")
-	}
-
-	var r0 *dedup.AcoustIDConflictResult
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, bool) (*dedup.AcoustIDConflictResult, error)); ok {
-		return returnFunc(ctx, dryRun)
-	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, bool) *dedup.AcoustIDConflictResult); ok {
-		r0 = returnFunc(ctx, dryRun)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*dedup.AcoustIDConflictResult)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, bool) error); ok {
-		r1 = returnFunc(ctx, dryRun)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
 }
 
 func (_c *MockDedupEngine_Rescore_Call) Run(run func(ctx context.Context, apply bool)) *MockDedupEngine_Rescore_Call {
