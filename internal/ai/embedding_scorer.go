@@ -1,6 +1,7 @@
 // file: internal/ai/embedding_scorer.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f7a2c841-3b5e-4d9f-82c6-1e0d7f3a9b4c
+// last-edited: 2026-07-03
 
 package ai
 
@@ -18,6 +19,7 @@ import (
 type embeddingAPI interface {
 	EmbedOne(ctx context.Context, text string) ([]float32, error)
 	EmbedBatch(ctx context.Context, texts []string) ([][]float32, error)
+	Model() string
 }
 
 // EmbeddingScorer ranks metadata candidates by cosine similarity between the
@@ -90,10 +92,26 @@ func (s *EmbeddingScorer) Score(ctx context.Context, q Query, cands []Candidate)
 // and falling back to a live API embed otherwise.
 func (s *EmbeddingScorer) queryVector(ctx context.Context, q Query) ([]float32, error) {
 	if q.BookID != "" && s.store != nil {
-		if existing, err := s.store.Get("book", q.BookID); err == nil && existing != nil && len(existing.Vector) > 0 {
+		if existing, err := s.store.Get("book", q.BookID); err == nil && existing != nil &&
+			len(existing.Vector) > 0 && s.modelMatches(existing.Model) {
 			return existing.Vector, nil
 		}
 	}
 	text := BuildEmbeddingText("book", q.Title, q.Author, q.Narrator)
 	return s.api.EmbedOne(ctx, text)
+}
+
+// modelMatches reports whether a stored embedding's model matches the
+// scorer's live API model. A mismatch — e.g. after switching the embedding
+// backend from OpenAI (text-embedding-3-large, 3072-dim) to a local model
+// (bge-m3, 1024-dim) — must force a live re-embed even though a cached
+// vector exists; otherwise CosineSimilarity silently returns 0 against the
+// mismatched vector. Empty stored model (pre-model-tagging rows) counts as
+// a mismatch so those are re-embedded too. Mirrors
+// internal/dedup/engine.go's embeddingModelMatches.
+func (s *EmbeddingScorer) modelMatches(storedModel string) bool {
+	if storedModel == "" {
+		return false
+	}
+	return storedModel == s.api.Model()
 }
