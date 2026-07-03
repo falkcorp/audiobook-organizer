@@ -1,11 +1,36 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.99.0 -->
+<!-- version: 3.100.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-02 -->
 
 # Changelog
 
 ## [Unreleased]
+
+### Features & Fixes
+
+#### July 3, 2026 - Consultancy-roadmap wave 1: 14 tasks shipped via parallel sweep (PRs #1744-#1759)
+
+Parallel-sweep run `2026-07-03-0429-consultancy-w1` — one worktree + one child agent per task (Haiku ×4 / Sonnet ×9 / Opus ×1), coordinator-driven PR/CI/merge. All 14 briefs from [`docs/agent-tasks/consultancy-roadmap/`](docs/agent-tasks/consultancy-roadmap/) wave 1 merged; TODO.md CONSULT-1..8 all closed.
+
+- **`fix(ai)`** #1749 — EmbeddingScorer model/dim guard + F1 fallback on degenerate all-zero scores (MATCH-1/BUG-1, the verified-critical re-embed bug)
+- **`fix(database)`** #1747 — UpdateBook preserve-on-nil guard for memdb-stripped Description/BookSig* (STOR-1)
+- **`fix(dedup)`** #1744 — EmbedAuthor/EmbedBooksAsync re-embed skips are model-aware (DEDUPC-1)
+- **`fix(dedup)`** #1751 — nightly dedup.embed-async cron retired + OpenAI-backend guard (OPS-3)
+- **`fix(ai)`** #1745 — keyless local-backend registration; dummy bearer when explicit base_url set (TOGGLE-1)
+- **`fix(security)`** #1750 — pre-commit hook actually blocks .claude/.credentials/ + security.yml SHA-pinned (SEC-2/SEC-5)
+- **`feat(ops)`** #1748 — sanitized deploy templates, make rollback, scripts/manage-ollama-windows.py, ops doc (OPS-1/2/6); follow-up #1758 replaced real IPs with 192.168.0.x placeholders
+- **`feat(auth)`** #1757 — bootstrap-key TTL + rotation endpoint + expiry-warning sweep; legacy keys stay valid (SEC-1)
+- **`fix(ai)`** #1752 — permanent-vs-transient error classification in retry paths; SDK inner-retry layer disabled on embeddings (MATCH-7)
+- **`feat(database)`** #1755 — fingerprint-coverage KPI in cached library stats + dashboard (NEWF-1)
+- **`fix(server,registry)`** #1756 — SYS-1/BUG-2 shutdown escape hatches closed; safeRun enrolled in goroutineWG; real-Pebble -race regression test proved the bug pre-fix (Opus task)
+- **`fix(server)`** #1759 — ApplyTranscriptionCandidate TOCTOU: gated candidate identity verified at apply time (MATCH-6)
+- **`fix(matcher)`** #1746 — rune-based Levenshtein for non-ASCII titles (MATCH-9)
+- **`docs`** #1754 — AI-REFERENCE drift, pebble-schema duplicate, mockery-pin docs (PROC-3/5, ARCH-4, SYS-6)
+- **`test(cmd)`** #1753 — unblocked Minimal CI: scanDirectory test stubs updated to the ctx-aware scanner signature (red on every Go PR since bf97794d)
+- **`chore(mocks)`** (in #1757) — regenerated stale mocks incl. mock_dedup_engine.go, which sits outside the freshness gate's `internal/*/mocks/` glob (gate-coverage gap noted)
+
+Sweep state: `.claude/state/parallel-sweep-2026-07-03-0429-consultancy-w1.json`. Known follow-ups: Mock Freshness glob misses nested mocks dirs; internal/database + internal/server short+race suites run near the 10m go-test default timeout on CI runners (two flake re-runs needed).
 
 ### Documentation
 

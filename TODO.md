@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.54.0 -->
+<!-- version: 9.55.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-03 -->
 
@@ -27,20 +27,20 @@ adversarially verified). Ranked roadmap: [`docs/consultancy/00-ROADMAP.md`](docs
 
 > **Task briefs exist for all of these (2026-07-03):**
 > [`docs/agent-tasks/consultancy-roadmap/`](docs/agent-tasks/consultancy-roadmap/)
-> — 31 briefs, 6 waves, model-tiered (Haiku/Sonnet, Opus only for the 8 complex
+> — 31 briefs, 6 waves, model-tiered. **Wave 1 (14 tasks) SHIPPED 2026-07-03, PRs #1744–#1759.** Next: wave 2 (T03, T13, T20, T21, T22, T24, T25, T29) (Haiku/Sonnet, Opus only for the 8 complex
 > items). CONSULT-1..8 map to TASK-01..09 there. Run via that folder's
 > `run.sh` + `orchestration.md`.
 
 Tier-0 items (high impact, low effort — do first):
 
-- [ ] **CONSULT-1** EmbeddingScorer store fast-path: model/dimension check + F1 fallback on degenerate zero-score results (MATCH-1/BUG-1 — live during bge-m3 re-embed) — `internal/ai/embedding_scorer.go:92-98`
-- [ ] **CONSULT-2** memdb preserve guard on `UpdateBook` (mirror PERF-7 BookFile guard); recover wiped Description/BookSigV1 from `book_ver:` snapshots BEFORE any pruning (STOR-1/QUAL-2) — `internal/database/pebble_store.go:2664`
-- [ ] **CONSULT-3** Model-aware re-embed skip in `EmbedAuthor` + `EmbedBooksAsync` (DEDUPC-1/TOGGLE-2) — `internal/dedup/engine.go:2243,2306`
-- [ ] **CONSULT-4** Unschedule/gate nightly `dedup.embed-async` (quota-dead OpenAI Batch API) (OPS-3) — `internal/plugins/dedup/embed_async.go:24`
-- [ ] **CONSULT-5** Drop OpenAIAPIKey requirement for keyless local backends (TOGGLE-1) — `internal/ai/register.go:35`
-- [ ] **CONSULT-6** Pre-commit hook doesn't actually block `.claude/.credentials/`; SHA-pin `security.yml` (SEC-2/SEC-5) — `scripts/setup-git-hooks.sh:17-27`
-- [ ] **CONSULT-7** Commit deploy recipe templates + `scripts/manage-ollama-windows.py`; add rollback target (OPS-1/OPS-6)
-- [ ] **CONSULT-8** API-key rotation/expiry for bootstrap-issued keys (SEC-1 — previously untracked anywhere)
+- [x] **CONSULT-1** ✅ #1749 — EmbeddingScorer store fast-path: model/dimension check + F1 fallback on degenerate zero-score results (MATCH-1/BUG-1 — live during bge-m3 re-embed) — `internal/ai/embedding_scorer.go:92-98`
+- [x] **CONSULT-2** ✅ #1747 (guard; recovery audit = TASK-03, wave 2) — memdb preserve guard on `UpdateBook` (mirror PERF-7 BookFile guard); recover wiped Description/BookSigV1 from `book_ver:` snapshots BEFORE any pruning (STOR-1/QUAL-2) — `internal/database/pebble_store.go:2664`
+- [x] **CONSULT-3** ✅ #1744 — Model-aware re-embed skip in `EmbedAuthor` + `EmbedBooksAsync` (DEDUPC-1/TOGGLE-2) — `internal/dedup/engine.go:2243,2306`
+- [x] **CONSULT-4** ✅ #1751 — Unschedule/gate nightly `dedup.embed-async` (quota-dead OpenAI Batch API) (OPS-3) — `internal/plugins/dedup/embed_async.go:24`
+- [x] **CONSULT-5** ✅ #1745 — Drop OpenAIAPIKey requirement for keyless local backends (TOGGLE-1) — `internal/ai/register.go:35`
+- [x] **CONSULT-6** ✅ #1750 — Pre-commit hook doesn't actually block `.claude/.credentials/`; SHA-pin `security.yml` (SEC-2/SEC-5) — `scripts/setup-git-hooks.sh:17-27`
+- [x] **CONSULT-7** ✅ #1748 + #1758 — Commit deploy recipe templates + `scripts/manage-ollama-windows.py`; add rollback target (OPS-1/OPS-6)
+- [x] **CONSULT-8** ✅ #1757 — API-key rotation/expiry for bootstrap-issued keys (SEC-1 — previously untracked anywhere)
 
 Tier-1+ (backend-mode toggle, 384K stale-candidate drain, bge-m3 threshold
 recalibration, fingerprint campaign, dedup auto-resolve op, slog-corruption
