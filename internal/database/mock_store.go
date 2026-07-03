@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.67.0
+// version: 1.68.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-06-28
+// last-edited: 2026-07-03
 
 package database
 
@@ -264,6 +264,7 @@ type MockStore struct {
 	ListAllAPIKeysFunc      func() ([]APIKey, error)
 	RevokeAPIKeyFunc        func(id string) error
 	SetAPIKeyStatusFunc     func(id, status string, at time.Time) error
+	SetAPIKeyExpiryFunc     func(id string, at time.Time) error
 	TouchAPIKeyLastUsedFunc func(id string, at time.Time, ip string) error
 
 	// Invites
@@ -1630,6 +1631,13 @@ func (m *MockStore) RevokeAPIKey(id string) error {
 func (m *MockStore) SetAPIKeyStatus(id, status string, at time.Time) error {
 	if m.SetAPIKeyStatusFunc != nil {
 		return m.SetAPIKeyStatusFunc(id, status, at)
+	}
+	return nil
+}
+
+func (m *MockStore) SetAPIKeyExpiry(id string, at time.Time) error {
+	if m.SetAPIKeyExpiryFunc != nil {
+		return m.SetAPIKeyExpiryFunc(id, at)
 	}
 	return nil
 }

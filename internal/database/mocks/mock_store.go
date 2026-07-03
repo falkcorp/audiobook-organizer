@@ -12163,6 +12163,63 @@ func (_c *MockAPIKeyStore_SetAPIKeyStatus_Call) RunAndReturn(run func(id string,
 	return _c
 }
 
+// SetAPIKeyExpiry provides a mock function for the type MockAPIKeyStore
+func (_mock *MockAPIKeyStore) SetAPIKeyExpiry(id string, at time.Time) error {
+	ret := _mock.Called(id, at)
+
+	if len(ret) == 0 {
+		panic("no return value specified for SetAPIKeyExpiry")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string, time.Time) error); ok {
+		r0 = returnFunc(id, at)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockAPIKeyStore_SetAPIKeyExpiry_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SetAPIKeyExpiry'
+type MockAPIKeyStore_SetAPIKeyExpiry_Call struct {
+	*mock.Call
+}
+
+// SetAPIKeyExpiry is a helper method to define mock.On call
+//   - id string
+//   - at time.Time
+func (_e *MockAPIKeyStore_Expecter) SetAPIKeyExpiry(id any, at any) *MockAPIKeyStore_SetAPIKeyExpiry_Call {
+	return &MockAPIKeyStore_SetAPIKeyExpiry_Call{Call: _e.mock.On("SetAPIKeyExpiry", id, at)}
+}
+
+func (_c *MockAPIKeyStore_SetAPIKeyExpiry_Call) Run(run func(id string, at time.Time)) *MockAPIKeyStore_SetAPIKeyExpiry_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 time.Time
+		if args[1] != nil {
+			arg1 = args[1].(time.Time)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockAPIKeyStore_SetAPIKeyExpiry_Call) Return(err error) *MockAPIKeyStore_SetAPIKeyExpiry_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockAPIKeyStore_SetAPIKeyExpiry_Call) RunAndReturn(run func(id string, at time.Time) error) *MockAPIKeyStore_SetAPIKeyExpiry_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // TouchAPIKeyLastUsed provides a mock function for the type MockAPIKeyStore
 func (_mock *MockAPIKeyStore) TouchAPIKeyLastUsed(id string, at time.Time, ip string) error {
 	ret := _mock.Called(id, at, ip)
@@ -48191,6 +48248,63 @@ func (_c *MockStore_SetAPIKeyStatus_Call) Return(err error) *MockStore_SetAPIKey
 }
 
 func (_c *MockStore_SetAPIKeyStatus_Call) RunAndReturn(run func(id string, status string, at time.Time) error) *MockStore_SetAPIKeyStatus_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// SetAPIKeyExpiry provides a mock function for the type MockStore
+func (_mock *MockStore) SetAPIKeyExpiry(id string, at time.Time) error {
+	ret := _mock.Called(id, at)
+
+	if len(ret) == 0 {
+		panic("no return value specified for SetAPIKeyExpiry")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string, time.Time) error); ok {
+		r0 = returnFunc(id, at)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockStore_SetAPIKeyExpiry_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SetAPIKeyExpiry'
+type MockStore_SetAPIKeyExpiry_Call struct {
+	*mock.Call
+}
+
+// SetAPIKeyExpiry is a helper method to define mock.On call
+//   - id string
+//   - at time.Time
+func (_e *MockStore_Expecter) SetAPIKeyExpiry(id any, at any) *MockStore_SetAPIKeyExpiry_Call {
+	return &MockStore_SetAPIKeyExpiry_Call{Call: _e.mock.On("SetAPIKeyExpiry", id, at)}
+}
+
+func (_c *MockStore_SetAPIKeyExpiry_Call) Run(run func(id string, at time.Time)) *MockStore_SetAPIKeyExpiry_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 time.Time
+		if args[1] != nil {
+			arg1 = args[1].(time.Time)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_SetAPIKeyExpiry_Call) Return(err error) *MockStore_SetAPIKeyExpiry_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockStore_SetAPIKeyExpiry_Call) RunAndReturn(run func(id string, at time.Time) error) *MockStore_SetAPIKeyExpiry_Call {
 	_c.Call.Return(run)
 	return _c
 }

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/apikeys.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
-// last-edited: 2026-06-01
+// last-edited: 2026-07-03
 
 package handlers
 
@@ -11,10 +11,17 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 )
+
+// apiKeyRotationGraceWindow is how long the OLD key keeps working after a
+// rotation before the pre-existing middleware expiry check retires it. This
+// gives in-flight clients/scripts holding the old key a chance to pick up
+// the new one instead of failing instantly (SEC-1/PROC-6).
+const apiKeyRotationGraceWindow = 1 * time.Hour
 
 // ---- Request / response types -----------------------------------------------
 
@@ -70,6 +77,7 @@ type APIKeyHandlerStore interface {
 	ListAPIKeysForUser(userID string) ([]database.APIKey, error)
 	RevokeAPIKey(id string) error
 	SetAPIKeyStatus(id, status string, at time.Time) error
+	SetAPIKeyExpiry(id string, at time.Time) error
 }
 
 // ---- Handler -----------------------------------------------------------------
@@ -337,4 +345,76 @@ func (h *APIKeyHandler) Revoke(c *gin.Context) {
 	}
 	slog.Info("apikey revoked", "id", id, "caller", caller.ID, "name", key.Name)
 	httputil.RespondWithNoContent(c)
+}
+
+// Rotate handles POST /auth/api-keys/:id/rotate. It issues a fresh key that
+// inherits the old key's scopes, and instead of revoking the old key
+// immediately it puts it on a short grace-window expiry via
+// SetAPIKeyExpiry — the pre-existing middleware expiry check
+// (key.ExpiresAt != nil && time.Now().After(*key.ExpiresAt)) retires it
+// naturally once the grace window elapses. This avoids breaking in-flight
+// clients that haven't picked up the new key yet (SEC-1/PROC-6).
+func (h *APIKeyHandler) Rotate(c *gin.Context) {
+	caller, ok := servermiddleware.CurrentUser(c)
+	if !ok || caller == nil {
+		httputil.RespondWithUnauthorized(c, "authentication required")
+		return
+	}
+	id := c.Param("id")
+	oldKey, err := h.store.GetAPIKey(id)
+	if err != nil {
+		httputil.InternalError(c, "failed to get api key", err)
+		return
+	}
+	if oldKey == nil {
+		httputil.RespondWithNotFound(c, "api key", id)
+		return
+	}
+	if oldKey.UserID != caller.ID && !isAdminUser(c) {
+		httputil.RespondWithForbidden(c, "access denied")
+		return
+	}
+
+	rawToken, hash, err := database.GenerateAPIKeyToken()
+	if err != nil {
+		httputil.InternalError(c, "failed to generate token", err)
+		return
+	}
+
+	ttlDays := config.AppConfig.BootstrapKeyTTLDays
+	if ttlDays <= 0 {
+		ttlDays = 30
+	}
+	newExpiresAt := time.Now().Add(time.Duration(ttlDays) * 24 * time.Hour)
+
+	newKey := &database.APIKey{
+		UserID:      oldKey.UserID,
+		Name:        oldKey.Name,
+		Description: oldKey.Description,
+		TokenHash:   hash,
+		Scopes:      oldKey.Scopes,
+		Status:      "active",
+		ExpiresAt:   &newExpiresAt,
+	}
+	created, err := h.store.CreateAPIKey(newKey)
+	if err != nil {
+		httputil.InternalError(c, "failed to create api key", err)
+		return
+	}
+
+	graceExpiresAt := time.Now().Add(apiKeyRotationGraceWindow)
+	if err := h.store.SetAPIKeyExpiry(oldKey.ID, graceExpiresAt); err != nil {
+		httputil.InternalError(c, "failed to grace-window old api key", err)
+		return
+	}
+
+	slog.Info("apikey rotated", "id", created.ID, "user", oldKey.UserID, "old_key_id", oldKey.ID, "grace_window", apiKeyRotationGraceWindow.String())
+	httputil.RespondWithCreated(c, CreateAPIKeyResponse{
+		ID:        created.ID,
+		Name:      created.Name,
+		Token:     rawToken,
+		Scopes:    created.Scopes,
+		ExpiresAt: created.ExpiresAt,
+		CreatedAt: created.CreatedAt,
+	})
 }

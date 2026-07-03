@@ -1,7 +1,7 @@
 // file: internal/server/bootstrap.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 3e7c9a12-4f6b-4d8e-b5a1-2c8f0e3d9b47
-// last-edited: 2026-06-09
+// last-edited: 2026-07-03
 
 package server
 
@@ -337,6 +337,15 @@ func (s *Server) handleBootstrap(c *gin.Context) {
 
 	scopes := auth.All()
 
+	// Bootstrap-issued keys are full-scope admin credentials and must always
+	// expire (SEC-1/PROC-6) — a non-positive configured TTL falls back to the
+	// default of 30 days rather than "never expire".
+	ttlDays := config.AppConfig.BootstrapKeyTTLDays
+	if ttlDays <= 0 {
+		ttlDays = 30
+	}
+	expiresAt := time.Now().Add(time.Duration(ttlDays) * 24 * time.Hour)
+
 	key := &database.APIKey{
 		ID:          ulid.Make().String(),
 		UserID:      adminUser.ID,
@@ -346,6 +355,7 @@ func (s *Server) handleBootstrap(c *gin.Context) {
 		Scopes:      scopes,
 		Status:      "active",
 		CreatedAt:   time.Now(),
+		ExpiresAt:   &expiresAt,
 	}
 
 	created, err := store.CreateAPIKey(key)
@@ -358,22 +368,24 @@ func (s *Server) handleBootstrap(c *gin.Context) {
 	slog.Info("Token consumed new API key created user key_id ip", "adminUser", adminUser.Username, "created", created.ID, "ip", ip)
 
 	type bootstrapResp struct {
-		APIKey            string   `json:"api_key"`
-		KeyID             string   `json:"key_id"`
-		UserID            string   `json:"user_id"`
-		Username          string   `json:"username"`
-		Scopes            []string `json:"scopes"`
-		Message           string   `json:"message"`
-		GeneratedPassword string   `json:"generated_password,omitempty"`
-		PasswordMessage   string   `json:"password_message,omitempty"`
+		APIKey            string     `json:"api_key"`
+		KeyID             string     `json:"key_id"`
+		UserID            string     `json:"user_id"`
+		Username          string     `json:"username"`
+		Scopes            []string   `json:"scopes"`
+		Message           string     `json:"message"`
+		ExpiresAt         *time.Time `json:"expires_at,omitempty"`
+		GeneratedPassword string     `json:"generated_password,omitempty"`
+		PasswordMessage   string     `json:"password_message,omitempty"`
 	}
 	rsp := bootstrapResp{
-		APIKey:   raw,
-		KeyID:    created.ID,
-		UserID:   adminUser.ID,
-		Username: adminUser.Username,
-		Scopes:   scopes,
-		Message:  "Bootstrap token consumed. This key will not be shown again.",
+		APIKey:    raw,
+		KeyID:     created.ID,
+		UserID:    adminUser.ID,
+		Username:  adminUser.Username,
+		Scopes:    scopes,
+		Message:   "Bootstrap token consumed. This key will not be shown again.",
+		ExpiresAt: created.ExpiresAt,
 	}
 	if generatedPassword != "" {
 		rsp.GeneratedPassword = generatedPassword

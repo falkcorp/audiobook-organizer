@@ -1,7 +1,7 @@
 // file: internal/database/iface_misc.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 473781a7-1a31-4914-b7c7-8efc91f9f7e6
-// last-edited: 2026-06-10
+// last-edited: 2026-07-03
 
 package database
 
@@ -78,6 +78,11 @@ type APIKeyStore interface {
 	ListAllAPIKeys() ([]APIKey, error)
 	RevokeAPIKey(id string) error
 	SetAPIKeyStatus(id, status string, at time.Time) error
+	// SetAPIKeyExpiry updates only the ExpiresAt field on an existing key,
+	// leaving Status untouched. Used for the rotation grace window, where the
+	// old key must keep working until `at` rather than being revoked
+	// immediately (SEC-1/PROC-6).
+	SetAPIKeyExpiry(id string, at time.Time) error
 	TouchAPIKeyLastUsed(id string, at time.Time, ip string) error
 }
 

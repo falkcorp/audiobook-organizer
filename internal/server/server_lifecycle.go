@@ -277,6 +277,15 @@ func (s *Server) Start(cfg ServerConfig) error {
 	go s.warmAuthorsCache()
 	go s.warmSeriesCache()
 
+	// Low-frequency background sweep that WARN-logs API keys approaching
+	// expiry or lacking one entirely (legacy keys) — observability only,
+	// never enforcement (SEC-1/PROC-6).
+	s.bgWG.Add("apikey-expiry-sweep")
+	go func() {
+		defer s.bgWG.Done("apikey-expiry-sweep")
+		s.warnExpiringAPIKeys()
+	}()
+
 	s.httpServer = &http.Server{
 		Addr:              fmt.Sprintf("%s:%s", cfg.Host, cfg.Port),
 		Handler:           s.router,

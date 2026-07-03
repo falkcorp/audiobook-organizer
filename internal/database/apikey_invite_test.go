@@ -1,6 +1,7 @@
 // file: internal/database/apikey_invite_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5d1e8a2f-4c3b-4f70-a9d6-2e7f0c1b9a48
+// last-edited: 2026-07-03
 
 package database
 
@@ -65,6 +66,50 @@ func TestAPIKey_Lifecycle(t *testing.T) {
 	}
 	if got.UseCount != 1 {
 		t.Errorf("UseCount = %d, want 1", got.UseCount)
+	}
+}
+
+// SetAPIKeyExpiry round-trips through PebbleStore (SEC-1/PROC-6 rotation
+// grace window): it updates only ExpiresAt, leaving Status untouched so the
+// key keeps working until the new expiry via the existing middleware check.
+func TestAPIKey_SetAPIKeyExpiry_RoundTrips(t *testing.T) {
+	store, err := NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	key, err := store.CreateAPIKey(&APIKey{UserID: "u1", Name: "rotated-key", Status: "active"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if key.ExpiresAt != nil {
+		t.Fatalf("expected nil ExpiresAt on creation, got %v", key.ExpiresAt)
+	}
+
+	grace := time.Now().Add(1 * time.Hour)
+	if err := store.SetAPIKeyExpiry(key.ID, grace); err != nil {
+		t.Fatalf("SetAPIKeyExpiry: %v", err)
+	}
+
+	got, err := store.GetAPIKey(key.ID)
+	if err != nil || got == nil {
+		t.Fatalf("get: %v / %v", got, err)
+	}
+	if got.ExpiresAt == nil {
+		t.Fatal("ExpiresAt should be non-nil after SetAPIKeyExpiry")
+	}
+	if got.ExpiresAt.Unix() != grace.Unix() {
+		t.Errorf("ExpiresAt = %v, want %v", got.ExpiresAt, grace)
+	}
+	// Status must be untouched — SetAPIKeyExpiry is not a revoke.
+	if got.Status != "active" {
+		t.Errorf("Status = %q, want %q (SetAPIKeyExpiry must not revoke)", got.Status, "active")
+	}
+
+	// Unknown ID is a silent no-op (mirrors SetAPIKeyStatus's nil-key contract).
+	if err := store.SetAPIKeyExpiry("does-not-exist", grace); err != nil {
+		t.Errorf("SetAPIKeyExpiry on unknown id: %v, want nil error", err)
 	}
 }
 
