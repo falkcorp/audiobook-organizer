@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/t018_scan_rationalization_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: f4a7b2c1-d3e5-4f89-a0b2-c1d3e5f7a9b0
-// last-edited: 2026-06-10
+// last-edited: 2026-07-03
 
 // T018 acceptance tests for scan op rationalization.
 //
@@ -22,6 +22,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -137,6 +138,14 @@ func TestT018_BothOpIDsRegistered(t *testing.T) {
 //     different line — but given the error text is the same, we rely on the
 //     param-parsing path.
 func TestT018_EmbedAsyncDelegatesWithAsyncTrue(t *testing.T) {
+	// Set up config for OpenAI backend so the skip-guard doesn't trigger
+	origConfig := config.AppConfig
+	t.Cleanup(func() {
+		config.AppConfig = origConfig
+	})
+	config.AppConfig.OpenAIAPIKey = "sk-test-key"
+	config.AppConfig.Embedding.BaseURL = ""
+
 	// Nil-engine plugin so both paths immediately return at the nil guard.
 	p := &Plugin{engine: nil}
 	reporter := &fakeReporter{}
