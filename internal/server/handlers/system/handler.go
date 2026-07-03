@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 8475f406-df31-4286-95b0-30787397603e
-// last-edited: 2026-06-30
+// last-edited: 2026-07-03
 
 // Package system hosts the system-level HTTP handlers extracted from the server
 // package: health, status, announcements, storage, logs, activity-log,
@@ -709,6 +709,11 @@ func (h *Handler) GetDashboard(c *gin.Context) {
 		"organizedBooks":     stats.OrganizedBooks,
 		"unorganizedBooks":   stats.UnorganizedBooks,
 		"broken_file_count":  brokenFileCount,
+
+		"fingerprintedBooks":          stats.FingerprintedBooks,
+		"partiallyFingerprintedBooks": stats.PartiallyFingerprintedBooks,
+		"unfingerprintedBooks":        stats.UnfingerprintedBooks,
+		"fingerprintCoveragePercent":  stats.FingerprintCoveragePercent,
 	})
 }
 

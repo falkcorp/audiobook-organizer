@@ -1,6 +1,7 @@
 // file: internal/database/memdb_reads.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000006
+// last-edited: 2026-07-03
 
 package database
 
@@ -713,6 +714,11 @@ func (m *MemStore) ComputeLibraryStats(rootDir string, importPaths []ImportPath)
 	// Matches the Pebble semantics: count all files for primary books; books
 	// with no file rows still count as 1 (legacy single-file-no-row case).
 	bookActiveFiles := make(map[string]int, len(primaryBookIDs))
+	// bookFingerprintedFiles tallies, per primary book, how many of its active
+	// book_files have a fingerprint per BookFile.GetAcoustIDSeg0() (which
+	// already falls back to the memdb-safe AcoustIDFingerprintDurationSec
+	// proxy when AcoustIDSeg0 has been stripped — see bookfile_fingerprint.go).
+	bookFingerprintedFiles := make(map[string]int, len(primaryBookIDs))
 	fIter, err := txn.Get(memTableBookFiles, memIdxID)
 	if err != nil {
 		return nil, fmt.Errorf("memdb book_files scan: %w", err)
@@ -723,12 +729,27 @@ func (m *MemStore) ComputeLibraryStats(rootDir string, importPaths []ImportPath)
 			continue
 		}
 		bookActiveFiles[bf.BookID]++
+		if bf.GetAcoustIDSeg0() != "" {
+			bookFingerprintedFiles[bf.BookID]++
+		}
 	}
 	for id := range primaryBookIDs {
 		if n := bookActiveFiles[id]; n > 0 {
 			stats.TotalFiles += n
 		} else {
 			stats.TotalFiles++
+		}
+		// Classify fingerprint coverage: none/partial/complete, mirroring the
+		// semantics of fingerprint.ComputeFingerprintFields without importing
+		// it (that function takes a []FileWithFingerprint slice, which would
+		// mean building a throwaway slice per book for no benefit).
+		switch fp := bookFingerprintedFiles[id]; {
+		case fp == 0:
+			stats.UnfingerprintedBooks++
+		case fp == bookActiveFiles[id]:
+			stats.FingerprintedBooks++
+		default:
+			stats.PartiallyFingerprintedBooks++
 		}
 	}
 
@@ -744,6 +765,10 @@ func (m *MemStore) ComputeLibraryStats(rootDir string, importPaths []ImportPath)
 		for obj := sIter.Next(); obj != nil; obj = sIter.Next() {
 			stats.TotalSeries++
 		}
+	}
+
+	if stats.TotalBooks > 0 {
+		stats.FingerprintCoveragePercent = stats.FingerprintedBooks * 100 / stats.TotalBooks
 	}
 
 	return stats, nil

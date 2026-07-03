@@ -1,6 +1,7 @@
 // file: internal/database/memdb_reads_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000007
+// last-edited: 2026-07-03
 
 package database
 
@@ -446,10 +447,15 @@ func TestMemStore_ComputeLibraryStats(t *testing.T) {
 			MarkedForDeletion: ptrBool_mem(true), FileSize: ptrInt64_mem(999)},
 	}
 	files := []BookFile{
-		{ID: "f1", BookID: "b1"},
-		{ID: "f2", BookID: "b1"}, // b1 has 2 files
-		{ID: "f3", BookID: "b2"},
-		// b3 has no file rows → counted as 1
+		// b1: 2 files, one fingerprinted (AcoustIDSeg0, the primary/non-fallback
+		// path) and one not → partially fingerprinted.
+		{ID: "f1", BookID: "b1", AcoustIDSeg0: "seg0-data"},
+		{ID: "f2", BookID: "b1"},
+		// b2: 1 file, fingerprinted via the memdb-safe duration fallback proxy
+		// (AcoustIDSeg0 stripped, AcoustIDFingerprintDurationSec retained) →
+		// fully fingerprinted.
+		{ID: "f3", BookID: "b2", AcoustIDFingerprintDurationSec: 42.0},
+		// b3 has no file rows → counted as 1, and as unfingerprinted.
 	}
 	authors := []Author{{ID: 1, Name: "A"}, {ID: 2, Name: "B"}}
 	series := []Series{{ID: 1, Name: "S1"}}
@@ -505,6 +511,21 @@ func TestMemStore_ComputeLibraryStats(t *testing.T) {
 	}
 	if stats.ComputedAt.IsZero() {
 		t.Error("ComputedAt not set")
+	}
+	// Fingerprint coverage: b1 partial (1/2 files), b2 complete (1/1 via the
+	// duration fallback), b3 unfingerprinted (0 files). b4 is non-primary and
+	// excluded from classification.
+	if stats.FingerprintedBooks != 1 {
+		t.Errorf("FingerprintedBooks = %d, want 1 (b2)", stats.FingerprintedBooks)
+	}
+	if stats.PartiallyFingerprintedBooks != 1 {
+		t.Errorf("PartiallyFingerprintedBooks = %d, want 1 (b1)", stats.PartiallyFingerprintedBooks)
+	}
+	if stats.UnfingerprintedBooks != 1 {
+		t.Errorf("UnfingerprintedBooks = %d, want 1 (b3)", stats.UnfingerprintedBooks)
+	}
+	if stats.FingerprintCoveragePercent != 25 {
+		t.Errorf("FingerprintCoveragePercent = %d, want 25 (1/4 books)", stats.FingerprintCoveragePercent)
 	}
 }
 

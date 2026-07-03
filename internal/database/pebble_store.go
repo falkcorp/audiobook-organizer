@@ -3792,14 +3792,18 @@ func (p *PebbleStore) computeLibraryStats() (*LibraryStats, error) {
 	}
 	bookIter.Close()
 
-	// Pass 2: book_file: range — active file count per primary book
-	// Optimized: key-only scan to count files without deserializing
+	// Pass 2: book_file: range — active file count + fingerprint coverage per primary book.
+	// This path only runs as a rare fallback when memdb is unavailable (the fast-path
+	// branch at the top of this function returns early otherwise), so the added
+	// per-file JSON.Unmarshal cost (needed to call GetAcoustIDSeg0()) is acceptable —
+	// unlike before, we can no longer do a pure key-only scan here.
 	fileIter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: []byte("book_file:"),
 		UpperBound: []byte("book_file;"),
 	})
 	if err == nil {
 		bookActiveFiles := make(map[string]int, len(primaryBookIDs))
+		bookFingerprintedFiles := make(map[string]int, len(primaryBookIDs))
 		for fileIter.First(); fileIter.Valid(); fileIter.Next() {
 			parts := strings.SplitN(string(fileIter.Key()), ":", 4)
 			if len(parts) != 3 {
@@ -3809,9 +3813,14 @@ func (p *PebbleStore) computeLibraryStats() (*LibraryStats, error) {
 			if _, ok := primaryBookIDs[bookID]; !ok {
 				continue
 			}
-			// Count all files for primary books (fast path: no deserialization)
-			// Missing files are rare; counting them all is still much faster than deserializing each one
 			bookActiveFiles[bookID]++
+			var bf BookFile
+			if err := json.Unmarshal(fileIter.Value(), &bf); err != nil {
+				continue
+			}
+			if bf.GetAcoustIDSeg0() != "" {
+				bookFingerprintedFiles[bookID]++
+			}
 		}
 		fileIter.Close()
 		for id := range primaryBookIDs {
@@ -3819,6 +3828,18 @@ func (p *PebbleStore) computeLibraryStats() (*LibraryStats, error) {
 				stats.TotalFiles += n
 			} else {
 				stats.TotalFiles++ // no file records → count as 1
+			}
+			// Classify fingerprint coverage: none/partial/complete, mirroring the
+			// semantics of fingerprint.ComputeFingerprintFields without importing
+			// it (that function takes a []FileWithFingerprint slice, which would
+			// mean building a throwaway slice per book for no benefit).
+			switch fp := bookFingerprintedFiles[id]; {
+			case fp == 0:
+				stats.UnfingerprintedBooks++
+			case fp == bookActiveFiles[id]:
+				stats.FingerprintedBooks++
+			default:
+				stats.PartiallyFingerprintedBooks++
 			}
 		}
 	}
@@ -3835,6 +3856,10 @@ func (p *PebbleStore) computeLibraryStats() (*LibraryStats, error) {
 	// Reuses the secondary index written by RecordFileError so no JSON deserialization needed.
 	if booksWithErrors, err := p.ListBooksWithFileErrors(); err == nil {
 		stats.BrokenFiles = len(booksWithErrors)
+	}
+
+	if stats.TotalBooks > 0 {
+		stats.FingerprintCoveragePercent = stats.FingerprintedBooks * 100 / stats.TotalBooks
 	}
 
 	return stats, nil

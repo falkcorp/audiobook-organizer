@@ -1,7 +1,7 @@
 // file: internal/database/store.go
-// version: 2.82.0
+// version: 2.83.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-07-01
+// last-edited: 2026-07-03
 
 package database
 
@@ -982,7 +982,19 @@ type LibraryStats struct {
 	// TotalBooks/TotalFiles in computeLibraryStats so all three counts share a
 	// single cache entry and invalidation path.
 	BrokenFiles int       `json:"broken_files"`
-	ComputedAt  time.Time `json:"computed_at"`
+	// FingerprintedBooks/PartiallyFingerprintedBooks/UnfingerprintedBooks
+	// classify every non-deleted book by whether its active book_files have
+	// any/all/none of them fingerprinted (BookFile.GetAcoustIDSeg0() != "",
+	// which already falls back to the memdb-safe AcoustIDFingerprintDurationSec
+	// proxy — see bookfile_fingerprint.go). Computed alongside the existing
+	// book_file pass so no extra scan is added.
+	FingerprintedBooks          int `json:"fingerprinted_books"`
+	PartiallyFingerprintedBooks int `json:"partially_fingerprinted_books"`
+	UnfingerprintedBooks        int `json:"unfingerprinted_books"`
+	// FingerprintCoveragePercent = FingerprintedBooks * 100 / (TotalBooks
+	// excluding non-primary duplicates counted elsewhere); 0 when TotalBooks==0.
+	FingerprintCoveragePercent int       `json:"fingerprint_coverage_percent"`
+	ComputedAt                 time.Time `json:"computed_at"`
 }
 
 // DashboardStats is an alias kept for callers that haven't migrated to LibraryStats yet.
