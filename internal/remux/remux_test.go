@@ -1,10 +1,12 @@
 // file: internal/remux/remux_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
+// last-edited: 2026-07-03
 
 package remux
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -53,7 +55,7 @@ func TestRemuxerNew(t *testing.T) {
 
 func TestRemuxMalformedFilesWithoutStore(t *testing.T) {
 	remuxer := &Remuxer{store: nil}
-	remuxer.RemuxMalformedFiles() // Should not panic
+	remuxer.RemuxMalformedFiles(context.Background()) // Should not panic
 }
 
 func TestRemuxMalformedFilesAlreadyCompleted(t *testing.T) {
@@ -67,7 +69,7 @@ func TestRemuxMalformedFilesAlreadyCompleted(t *testing.T) {
 		},
 	}
 	remuxer := New(store)
-	remuxer.RemuxMalformedFiles() // Should skip due to already completed
+	remuxer.RemuxMalformedFiles(context.Background()) // Should skip due to already completed
 }
 
 func TestRemuxFileErrorsOnNonexistentFile(t *testing.T) {

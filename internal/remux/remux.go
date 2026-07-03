@@ -1,10 +1,12 @@
 // file: internal/remux/remux.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
+// last-edited: 2026-07-03
 
 package remux
 
 import (
+	"context"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -40,8 +42,10 @@ func New(store Store) *Remuxer {
 // file that taglib cannot parse (malformed atom structure). Re-muxing with
 // ffmpeg -c copy rewrites the atom layout without re-encoding audio, making
 // the file readable by taglib, AtomicParsley, and Apple Devices. The output
-// is verified before replacing the original. Runs once at startup.
-func (r *Remuxer) RemuxMalformedFiles() {
+// is verified before replacing the original. Runs once at startup. The walk
+// checks ctx per file and stops early via fs.SkipAll when canceled (SYS-1);
+// a canceled run does not write the done flag, so the next startup resumes.
+func (r *Remuxer) RemuxMalformedFiles(ctx context.Context) {
 	if r.store == nil {
 		return
 	}
@@ -66,6 +70,13 @@ func (r *Remuxer) RemuxMalformedFiles() {
 	remuxed, clean, failed := 0, 0, 0
 
 	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+		// Stop the walk cleanly on shutdown (SYS-1). fs.SkipAll ends WalkDir
+		// without an error; WalkDir's return is discarded above by design.
+		select {
+		case <-ctx.Done():
+			return fs.SkipAll
+		default:
+		}
 		if walkErr != nil || d.IsDir() {
 			return nil
 		}

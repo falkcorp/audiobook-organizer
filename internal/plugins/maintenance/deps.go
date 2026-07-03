@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-06-29
+// last-edited: 2026-07-03
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -41,9 +41,12 @@ type ServerDeps interface {
 	// ----- one-shot startup ops -----
 
 	BackfillExternalIDs()
-	StripMovementAtoms()
-	RemuxMalformedM4BFiles()
-	TranscodeMalformedM4BFiles()
+	// StripMovementAtoms, RemuxMalformedM4BFiles, and TranscodeMalformedM4BFiles
+	// take ctx so their per-file library walks stop early on cancellation
+	// (SYS-1); pass the op's run context.
+	StripMovementAtoms(ctx context.Context)
+	RemuxMalformedM4BFiles(ctx context.Context)
+	TranscodeMalformedM4BFiles(ctx context.Context)
 
 	// ----- store helpers called by ops -----
 

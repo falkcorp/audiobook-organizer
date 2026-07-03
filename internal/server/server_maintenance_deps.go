@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-06-29
+// last-edited: 2026-07-03
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -60,16 +60,16 @@ func (s *Server) BackfillExternalIDs() {
 	s.backfillExternalIDs()
 }
 
-func (s *Server) StripMovementAtoms() {
-	s.stripMovementAtoms()
+func (s *Server) StripMovementAtoms(ctx context.Context) {
+	s.stripMovementAtoms(ctx)
 }
 
-func (s *Server) RemuxMalformedM4BFiles() {
-	s.remuxMalformedM4BFiles()
+func (s *Server) RemuxMalformedM4BFiles(ctx context.Context) {
+	s.remuxMalformedM4BFiles(ctx)
 }
 
-func (s *Server) TranscodeMalformedM4BFiles() {
-	s.transcodeMalformedM4BFiles()
+func (s *Server) TranscodeMalformedM4BFiles(ctx context.Context) {
+	s.transcodeMalformedM4BFiles(ctx)
 }
 
 // ---- store helpers ----

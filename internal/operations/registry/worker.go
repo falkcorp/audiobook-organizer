@@ -1,7 +1,7 @@
 // file: internal/operations/registry/worker.go
-// version: 2.8.0
+// version: 2.9.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-06-22
+// last-edited: 2026-07-03
 
 package registry
 
@@ -232,8 +232,20 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 	}
 
 	// In-process path: run in a separate goroutine so we can detect abandonment.
+	// The goroutine is enrolled in goroutineWG for its full lifetime so
+	// Registry.Shutdown's final goroutineWG.Wait() genuinely covers plugin code
+	// (BUG-2): if the shutdown ctx expires during the drain poll and the op is
+	// marked interrupted, Shutdown must still wait for this goroutine before
+	// returning — otherwise the caller closes the store while Run is mid-write.
+	// No notifyStopped-style gate is needed here (unlike notifyDepCompletion/
+	// notifyDepFailed): this Add happens synchronously inside executeRun, which
+	// is called from the already-enrolled startWorker goroutine, whose own
+	// Done() has not run yet — so the counter is provably non-zero across this
+	// Add and can never be observed at zero by a concurrent Wait().
 	done := make(chan error, 1)
+	r.goroutineWG.Add(1)
 	go func() {
+		defer r.goroutineWG.Done()
 		done <- r.safeRun(runCtx, def, qr.params, reporter)
 	}()
 

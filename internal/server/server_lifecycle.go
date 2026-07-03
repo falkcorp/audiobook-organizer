@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 1.38.0
+// version: 1.39.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-06-23
+// last-edited: 2026-07-03
 
 package server
 
@@ -465,24 +465,23 @@ func (s *Server) Start(cfg ServerConfig) error {
 
 	// Strip shwm/©mvi/©mvn atoms from audiobook files (one-time). These
 	// classical-music atoms crash Apple Devices for Windows at sync.
-	// NOTE: stripMovementAtoms does not check bgCtx; it runs to completion
-	// once the "done" flag is missing. On the first run after upgrade this
-	// can take O(seconds–minutes) on large libraries and is a known
-	// contributor to the 30s grace-period timeout on shutdown.
+	// Checks bgCtx per file (SYS-1) so shutdown stops the walk early instead
+	// of blowing the 30s grace period on a first-run walk over a large
+	// library; a canceled run resumes on the next startup.
 	s.bgWG.Add("strip-movement-atoms")
 	go func() {
 		defer s.bgWG.Done("strip-movement-atoms")
-		s.stripMovementAtoms()
+		s.stripMovementAtoms(s.bgCtx)
 	}()
 
 	// Re-mux M4B/M4A files with malformed atom structures so taglib,
 	// AtomicParsley, and Apple Devices can read them (one-time).
-	// NOTE: remuxMalformedM4BFiles does not check bgCtx; same first-run
-	// latency caveat as stripMovementAtoms above.
+	// Checks bgCtx per file (SYS-1); same early-stop behavior as
+	// stripMovementAtoms above.
 	s.bgWG.Add("remux-malformed-m4b")
 	go func() {
 		defer s.bgWG.Done("remux-malformed-m4b")
-		s.remuxMalformedM4BFiles()
+		s.remuxMalformedM4BFiles(s.bgCtx)
 	}()
 
 	// Build the search index on first startup (or if it got wiped).
@@ -499,12 +498,12 @@ func (s *Server) Start(cfg ServerConfig) error {
 	// One-time startup jobs: transcode malformed M4B files, then quarantine any
 	// that remained permanently unreadable. Run sequentially in a bgWG goroutine
 	// so shutdown waits for them and they don't race against the HTTP server.
-	// NOTE: transcodeMalformedM4BFiles does not check bgCtx; same first-run
-	// latency caveat as stripMovementAtoms above.
+	// transcodeMalformedM4BFiles checks bgCtx per file (SYS-1); same
+	// early-stop behavior as stripMovementAtoms above.
 	s.bgWG.Add("transcode+quarantine")
 	go func() {
 		defer s.bgWG.Done("transcode+quarantine")
-		s.transcodeMalformedM4BFiles()
+		s.transcodeMalformedM4BFiles(s.bgCtx)
 		s.quarantineKnownBadFiles()
 	}()
 
