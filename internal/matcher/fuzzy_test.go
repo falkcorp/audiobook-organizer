@@ -1,6 +1,7 @@
 // file: internal/matcher/fuzzy_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f23456789012
+// last-edited: 2026-07-03
 
 package matcher
 
@@ -18,6 +19,10 @@ func TestLevenshteinDistance(t *testing.T) {
 		{"saturday", "sunday", 3},
 		{"abc", "abc", 0},
 		{"ABC", "abc", 0}, // case insensitive
+		// Non-ASCII cases: rune-based distance
+		{"Émile Zola", "Emile Zola", 1}, // one accented character substitution
+		{"東京", "東京都", 1},                // one CJK character insertion
+		{"Café", "Cafe", 1},                // one accented character substitution
 	}
 	for _, tt := range tests {
 		got := LevenshteinDistance(tt.a, tt.b)
@@ -48,6 +53,8 @@ func TestScoreMatch(t *testing.T) {
 		// Empty
 		{"", "Harry Potter", 0, 0},
 		{"Harry", "", 0, 0},
+		// Non-ASCII substring match (rune-based ratios)
+		{"Zola", "Émile Zola", 60, 90},
 	}
 	for _, tt := range tests {
 		score := ScoreMatch(tt.query, tt.target)
