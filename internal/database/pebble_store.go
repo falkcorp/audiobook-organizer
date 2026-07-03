@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.100.0
+// version: 1.101.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-07-01
+// last-edited: 2026-07-03
 
 package database
 
@@ -2679,6 +2679,35 @@ func (p *PebbleStore) UpdateBook(id string, book *Book) (*Book, error) {
 	}
 	now := time.Now()
 	book.UpdatedAt = &now
+
+	// Preserve fields stripped by stripBookForMemdb (STOR-1). Callers that
+	// sourced `book` from the memdb projection (GetAllBooks on the production
+	// UseMemDB path) carry nil Description/VersionNotes/BookSig* even though
+	// the stored row has real values. Restoring from oldBook — already fetched
+	// above via the Pebble-direct GetBookByID — costs zero extra reads.
+	// Mirrors the UpsertBookFile/BatchUpsertBookFiles fingerprint-preserve
+	// guard (PERF-7) — keep both in sync.
+	if book.Description == nil {
+		book.Description = oldBook.Description
+	}
+	if book.VersionNotes == nil {
+		book.VersionNotes = oldBook.VersionNotes
+	}
+	if book.BookSigV1 == nil {
+		book.BookSigV1 = oldBook.BookSigV1
+	}
+	if book.BookSigV1Mask == nil {
+		book.BookSigV1Mask = oldBook.BookSigV1Mask
+	}
+	if book.BookSigSegments == nil {
+		book.BookSigSegments = oldBook.BookSigSegments
+	}
+	if book.BookSigBuiltAt == nil {
+		book.BookSigBuiltAt = oldBook.BookSigBuiltAt
+	}
+	if book.BookSigCoveragePct == nil {
+		book.BookSigCoveragePct = oldBook.BookSigCoveragePct
+	}
 
 	data, err := json.Marshal(book)
 	if err != nil {
