@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.9.1
+// version: 1.9.2
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
-// last-edited: 2026-07-01
+// last-edited: 2026-07-03
 
 package maintenance
 
@@ -81,6 +81,9 @@ func (p *Plugin) Register(r sdk.Registry) error {
 
 		// --- duration repair ---
 		p.durationBackfillDef(),
+
+		// --- booksig/description recovery audit (STOR-1/STOR-2, read-only dry-run) ---
+		p.bookSigRecoveryAuditDef(),
 
 		// --- duration re-extract (real ffprobe duration; PR #1555) ---
 		p.durationReextractDef(),
