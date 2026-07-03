@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_scoring.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: d2226468-bed1-4989-93f3-b0bc3a344424
-// last-edited: 2026-07-02
+// last-edited: 2026-07-03
 
 package metafetch
 
@@ -449,6 +449,23 @@ func ScoreOneResult(r metadata.BookMetadata, searchWords map[string]bool) float6
 	return ApplyNonBaseAdjustments(base, r, len(searchWords))
 }
 
+// allZero reports whether every score in the slice is exactly 0. A scorer
+// (e.g. EmbeddingScorer) can return err == nil with a fully-populated but
+// degenerate all-zero result — e.g. when every candidate's cached vector was
+// stale (wrong embedding model/dimension) and CosineSimilarity silently
+// returned 0 for each pair. Treating that as a successful "embedding" tier
+// result would suppress the F1 fallback and drop every candidate below the
+// downstream EmbeddingMinScore threshold, so ScoreBaseCandidates checks for
+// it explicitly.
+func allZero(scores []float64) bool {
+	for _, s := range scores {
+		if s != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // scoreBaseCandidates picks the highest-available base scorer tier and
 // returns one base score per input result, aligned to input order, along
 // with a short tier name for logs and UI badges ("embedding", "f1", ...).
@@ -489,13 +506,17 @@ func (mfs *Service) ScoreBaseCandidates(
 		}
 
 		scores, err := mfs.metadataScorer.Score(ctx, query, cands)
-		if err == nil && len(scores) == len(results) {
+		degenerate := len(scores) > 0 && allZero(scores)
+		if err == nil && len(scores) == len(results) && !degenerate {
 			return scores, mfs.metadataScorer.Name()
 		}
-		if err != nil {
-						slog.Warn("metadata-scorer failed, falling back to F1", "name", mfs.metadataScorer.Name(), "error", err)
-		} else {
-						slog.Warn("metadata-scorer returned scores for results, falling back to F1", "name", mfs.metadataScorer.Name(), "count", len(scores), "count", len(results))
+		switch {
+		case degenerate:
+			slog.Warn("metadata-scorer returned all-zero scores, falling back to F1", "name", mfs.metadataScorer.Name(), "count", len(scores))
+		case err != nil:
+			slog.Warn("metadata-scorer failed, falling back to F1", "name", mfs.metadataScorer.Name(), "error", err)
+		default:
+			slog.Warn("metadata-scorer returned scores for results, falling back to F1", "name", mfs.metadataScorer.Name(), "count", len(scores), "count", len(results))
 		}
 	}
 
