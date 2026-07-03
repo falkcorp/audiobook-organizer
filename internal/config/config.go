@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.63.0
+// version: 1.64.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-07-03
 
@@ -130,6 +130,13 @@ type DedupConfig struct {
 	// LLMAutoMergeHighConfidence, when true, auto-applies merges when the LLM
 	// review returns a "duplicate" verdict with confidence "high" (default false — opt-in).
 	LLMAutoMergeHighConfidence bool `json:"llm_auto_merge_high_confidence" mapstructure:"llm_auto_merge_high_confidence"`
+	// AutoResolveEnabled is the global kill switch for the dedup.auto-resolve
+	// Tier-1 (Band CERTAIN) auto-merge op. When false (the default), an
+	// apply=true auto-resolve run is refused with an error and performs zero
+	// merges; the dry-run report is always producible regardless of this flag.
+	// Flipping this to true is an owner-greenlight action taken out-of-band
+	// after reviewing a dry-run report — it is never defaulted true.
+	AutoResolveEnabled bool `json:"auto_resolve_enabled" mapstructure:"auto_resolve_enabled"`
 	// OnImportViaScheduler routes the post-import dedup check through the UOS
 	// dependency scheduler instead of an eager goroutine (default false — opt-in).
 	OnImportViaScheduler bool `json:"on_import_via_scheduler" mapstructure:"on_import_via_scheduler"`
@@ -1065,6 +1072,7 @@ func InitConfig() {
 				AutoMergeEnabled:           viper.GetBool("dedup.auto_merge_enabled"),
 				EmbeddingsEnabled:          viper.GetBool("dedup.embeddings_enabled"),
 				LLMAutoMergeHighConfidence: viper.GetBool("dedup.llm_auto_merge_high_confidence"),
+				AutoResolveEnabled:         viper.GetBool("dedup.auto_resolve_enabled"),
 				OnImportViaScheduler:       viper.GetBool("dedup.on_import_via_scheduler"),
 				ReviewModel:                viper.GetString("dedup.review_model"),
 				Signals: DedupSignalConfig{
@@ -1489,6 +1497,7 @@ func ResetToDefaults() {
 				AutoMergeEnabled:           true,
 				EmbeddingsEnabled:          true, // opt-out: set false on no-internet boxes
 				LLMAutoMergeHighConfidence: false,
+				AutoResolveEnabled:         false, // owner-greenlight kill switch; never defaulted true
 				OnImportViaScheduler:       false, // opt-in
 				ReviewModel:                "gpt-5-mini",
 				Signals: DedupSignalConfig{
