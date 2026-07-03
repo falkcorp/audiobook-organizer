@@ -1,7 +1,7 @@
 // file: internal/versions/ingest_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4f2a3b0c-5d6e-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-06-17
+// last-edited: 2026-07-03
 
 package versions
 
@@ -26,8 +26,18 @@ func writeTestFile(t *testing.T, path, content string) {
 // allowDir registers dir as an import path so paths beneath it pass the
 // CreateIngestVersion allow-list gate (go/path-injection). Temp dirs live
 // outside the default allow-list prefixes, so tests must opt them in.
+//
+// It first waits for PebbleStore's async memdb warmup to publish. Without
+// this, CreateImportPath's memdb write-through can land while mem() is still
+// nil (warmup in progress) and get silently dropped; when warmup later
+// publishes its Pebble snapshot — taken before this import path was written —
+// GetAllImportPaths (which reads from mem() once published) never sees it,
+// and ValidateUserPath's allow-list check fails intermittently with
+// ErrPathNotAllowed. See PebbleStore.WaitForWarmup's doc comment for the full
+// race description; this is the same class of flake it exists to prevent.
 func allowDir(t *testing.T, store *database.PebbleStore, dir string) {
 	t.Helper()
+	store.WaitForWarmup()
 	if _, err := store.CreateImportPath(dir, "test-allow"); err != nil {
 		t.Fatalf("allow import path: %v", err)
 	}
