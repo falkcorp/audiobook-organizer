@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_reextract.go
-// version: 3.8.0
+// version: 3.9.0
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
-// last-edited: 2026-06-24
+// last-edited: 2026-07-03
 
 // Package maintenance — op maintenance.duration-reextract.
 //
@@ -86,6 +86,12 @@ type durationReextractParams struct {
 	SkipAgeDays int `json:"skipAgeDays"`
 	// Force ignores DurationVerifiedAt entirely and re-examines every book.
 	Force bool `json:"force"`
+	// OnlyMissingDuration, if true, skips books whose Duration is already known
+	// and positive (Book.Duration != nil && *Book.Duration > 0). Use this to
+	// scope a run to the Duration=0/nil residual (DEDUP-4) instead of
+	// re-checking the whole library. Default false (preserves existing
+	// whole-library behavior for all current callers/schedules).
+	OnlyMissingDuration bool `json:"onlyMissingDuration"`
 }
 
 // durationChangeThresholds: a book is corrected only when the freshly extracted
@@ -152,7 +158,8 @@ func (p *Plugin) durationReextractDef() sdk.OperationDef {
 			"Corrects Book.Duration where the old fileSize÷bitrate estimate was wrong (PR #1555; m4b/m4a were ~2× too short). " +
 			"Never overwrites a real duration with an estimate, and skips books with any unreadable segment. " +
 			"Default dry-run previews counts (incl. fingerprint vs ffprobe split); set dryRun=false to apply. " +
-			"Workers param (default 4) controls ffprobe concurrency — higher = faster ffprobe tail.",
+			"Workers param (default 4) controls ffprobe concurrency — higher = faster ffprobe tail. " +
+			"Set onlyMissingDuration=true to scope the run to books with no known duration.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.duration-reextract",
@@ -394,6 +401,9 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 		err := sdk.PageBooks(ctx, store, reporter, pageSize, func(book database.Book) error {
 			if params.Limit > 0 && dispatched >= params.Limit {
 				return errLimitReached
+			}
+			if params.OnlyMissingDuration && book.Duration != nil && *book.Duration > 0 {
+				return nil // skip: duration already known, out of scope for this run
 			}
 			dispatched++
 			select {
