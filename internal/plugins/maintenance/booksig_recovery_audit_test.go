@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/booksig_recovery_audit_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8a1d3f27-6c04-4e59-b2a7-9f5e1c8d0b46
 // last-edited: 2026-07-03
 
@@ -166,17 +166,167 @@ func TestBookSigRecoveryAudit_MemdbNotFalseFlagged(t *testing.T) {
 	}
 }
 
-// TestBookSigRecoveryAudit_ApplyModeRefused ensures apply mode (dryRun=false) is
-// refused rather than silently attempting any write — this task is read-only.
-func TestBookSigRecoveryAudit_ApplyModeRefused(t *testing.T) {
-	current := map[string]*database.Book{"b1": {ID: "b1", Description: nil}}
-	p, written := newAuditPlugin(current, map[string][]database.BookSnapshot{}, []string{"b1"})
+// TestBookSigRecoveryAudit_ApplyRestoresHappyPath proves apply mode
+// (dryRun=false) writes back a recoverable Description sourced from the
+// newest snapshot that carries it.
+func TestBookSigRecoveryAudit_ApplyRestoresHappyPath(t *testing.T) {
+	snapTS := time.Date(2026, 5, 15, 9, 0, 0, 0, time.UTC)
+	current := map[string]*database.Book{
+		"b1": {ID: "b1", Title: "Book One", Description: nil},
+	}
+	snaps := map[string][]database.BookSnapshot{
+		"b1": {snapshotOf(t, "b1", snapTS, database.Book{ID: "b1", Title: "Book One", Description: strptr("old description")})},
+	}
+	p, written := newAuditPlugin(current, snaps, []string{"b1"})
+	rep := &fakeReporter{}
 
-	err := p.runBookSigRecoveryAudit(context.Background(), auditParams(t, false), &fakeReporter{})
-	if err == nil {
-		t.Fatal("expected apply mode (dryRun=false) to be refused")
+	if err := p.runBookSigRecoveryAudit(context.Background(), auditParams(t, false), rep); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(*written) != 1 {
+		t.Fatalf("expected exactly 1 UpdateBook call, got %d", len(*written))
+	}
+	got := (*written)[0]
+	if got.Description == nil || *got.Description != "old description" {
+		t.Errorf("expected restored Description %q, got %v", "old description", got.Description)
+	}
+
+	report := rep.logs[len(rep.logs)-1]
+	if !strings.Contains(report, "APPLY MODE") {
+		t.Errorf("expected APPLY MODE report, got: %s", report)
+	}
+	if !strings.Contains(report, "Restored 1, skipped-nonempty 0, restore errors 0") {
+		t.Errorf("expected restore summary counts in report, got: %s", report)
+	}
+}
+
+// TestBookSigRecoveryAudit_ApplySkipsNonEmptyCurrent proves apply mode never
+// overwrites a field that is no longer empty by write time: it re-reads the
+// current row immediately before writing (simulating a concurrent writer
+// having filled the field in between the scan pass and the restore write),
+// and must skip + count that book rather than clobber the newly-set value.
+func TestBookSigRecoveryAudit_ApplySkipsNonEmptyCurrent(t *testing.T) {
+	snapTS := time.Date(2026, 5, 15, 9, 0, 0, 0, time.UTC)
+	scanRow := &database.Book{ID: "b1", Title: "Book One", Description: nil}
+	raceRow := &database.Book{ID: "b1", Title: "Book One", Description: strptr("filled concurrently")}
+
+	getCalls := 0
+	written := make([]database.Book, 0)
+	store := &database.MockStore{
+		ListBookIDsFunc: func() ([]string, error) { return []string{"b1"}, nil },
+		GetBookByIDFunc: func(id string) (*database.Book, error) {
+			getCalls++
+			if getCalls == 1 {
+				return scanRow, nil // scan-time read: Description still nil
+			}
+			return raceRow, nil // restore re-read: Description now populated
+		},
+		GetBookVersionsFunc: func(id string, _ int) ([]database.BookSnapshot, error) {
+			return []database.BookSnapshot{
+				snapshotOf(t, "b1", snapTS, database.Book{ID: "b1", Title: "Book One", Description: strptr("old description")}),
+			}, nil
+		},
+		UpdateBookFunc: func(_ string, b *database.Book) (*database.Book, error) {
+			written = append(written, *b)
+			return b, nil
+		},
+	}
+	p := New(fakeDeps{store: store})
+	rep := &fakeReporter{}
+
+	if err := p.runBookSigRecoveryAudit(context.Background(), auditParams(t, false), rep); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(written) != 0 {
+		t.Fatalf("expected zero writes (race-detected non-empty skip), got %d", len(written))
+	}
+	report := rep.logs[len(rep.logs)-1]
+	if !strings.Contains(report, "Restored 0, skipped-nonempty 1, restore errors 0") {
+		t.Errorf("expected skipped-nonempty count of 1 in report, got: %s", report)
+	}
+}
+
+// TestBookSigRecoveryAudit_ApplySkipsWhenSnapshotMissing proves apply mode
+// does not attempt any write for a book that is missing a field but has no
+// recoverable snapshot — it must be counted as not-recoverable, not as a
+// skipped-nonempty restore attempt.
+func TestBookSigRecoveryAudit_ApplySkipsWhenSnapshotMissing(t *testing.T) {
+	current := map[string]*database.Book{
+		"b4": {ID: "b4", Title: "Book Four", Description: nil},
+	}
+	p, written := newAuditPlugin(current, map[string][]database.BookSnapshot{}, []string{"b4"})
+	rep := &fakeReporter{}
+
+	if err := p.runBookSigRecoveryAudit(context.Background(), auditParams(t, false), rep); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(*written) != 0 {
-		t.Errorf("apply mode must not write, got %d writes", len(*written))
+		t.Errorf("expected zero writes for a non-recoverable book, got %d", len(*written))
+	}
+	report := rep.logs[len(rep.logs)-1]
+	if !strings.Contains(report, "Description missing: 1 (recoverable 0, not-recoverable 1)") {
+		t.Errorf("expected not-recoverable count of 1 in report, got: %s", report)
+	}
+	if !strings.Contains(report, "Restored 0, skipped-nonempty 0, restore errors 0") {
+		t.Errorf("expected zero restore/skip/error counts, got: %s", report)
+	}
+}
+
+// TestBookSigRecoveryAudit_ApplyPreservesOtherFields is the memdb-round-trip
+// footgun regression test: it proves the restore path re-reads the CURRENT
+// row and mutates only the recovered field, rather than writing back a
+// struct sourced from the (potentially stale/partial) snapshot or an
+// earlier-captured scan struct. The snapshot here carries deliberately
+// different values for Title/FilePath/Narrator than the current row, so a
+// full-replace-from-snapshot bug would show up as those stale values landing
+// in the written book.
+func TestBookSigRecoveryAudit_ApplyPreservesOtherFields(t *testing.T) {
+	snapTS := time.Date(2026, 5, 15, 9, 0, 0, 0, time.UTC)
+	current := map[string]*database.Book{
+		"b1": {
+			ID:          "b1",
+			Title:       "Current Title",
+			FilePath:    "/library/current/path.m4b",
+			Narrator:    strptr("Current Narrator"),
+			Edition:     strptr("Current Edition"),
+			Description: nil,
+		},
+	}
+	snaps := map[string][]database.BookSnapshot{
+		"b1": {snapshotOf(t, "b1", snapTS, database.Book{
+			ID:          "b1",
+			Title:       "STALE Title — must not land in write",
+			FilePath:    "/stale/path.m4b",
+			Narrator:    strptr("Stale Narrator"),
+			Edition:     strptr("Stale Edition"),
+			Description: strptr("old description"),
+		})},
+	}
+	p, written := newAuditPlugin(current, snaps, []string{"b1"})
+
+	if err := p.runBookSigRecoveryAudit(context.Background(), auditParams(t, false), &fakeReporter{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(*written) != 1 {
+		t.Fatalf("expected exactly 1 UpdateBook call, got %d", len(*written))
+	}
+	got := (*written)[0]
+
+	if got.Description == nil || *got.Description != "old description" {
+		t.Errorf("expected restored Description %q, got %v", "old description", got.Description)
+	}
+	if got.Title != "Current Title" {
+		t.Errorf("footgun: Title was overwritten from snapshot, got %q", got.Title)
+	}
+	if got.FilePath != "/library/current/path.m4b" {
+		t.Errorf("footgun: FilePath was overwritten from snapshot, got %q", got.FilePath)
+	}
+	if got.Narrator == nil || *got.Narrator != "Current Narrator" {
+		t.Errorf("footgun: Narrator was overwritten from snapshot, got %v", got.Narrator)
+	}
+	if got.Edition == nil || *got.Edition != "Current Edition" {
+		t.Errorf("footgun: Edition was overwritten from snapshot, got %v", got.Edition)
 	}
 }
