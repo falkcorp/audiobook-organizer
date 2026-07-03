@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_search.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
-// last-edited: 2026-07-01
+// last-edited: 2026-07-03
 
 package metafetch
 
@@ -485,16 +485,9 @@ func (mfs *Service) SearchMetadataForBookWithOptions(
 	}
 
 	// Filter out results without cover images — they're typically low-quality
-	// entries that clutter the results. Keep them only if ALL results lack covers.
-	var withCover []MetadataCandidate
-	for _, c := range candidates {
-		if c.CoverURL != "" {
-			withCover = append(withCover, c)
-		}
-	}
-	if len(withCover) > 0 {
-		candidates = withCover
-	}
+	// entries that clutter the results. Exempt strong-evidence candidates:
+	// direct ASIN-lookup, transcription-boosted, and the top-scored candidate.
+	candidates = filterCoverlessCandidates(candidates)
 
 	// Series-number tiebreaker: if the original title contains a number that
 	// was stripped for search (e.g. "We Hunt Monsters 8" → "We Hunt Monsters"),
@@ -546,4 +539,55 @@ func (mfs *Service) SearchMetadataForBookWithOptions(
 		SourcesTried:  sourcesTried,
 		SourcesFailed: sourcesFailed,
 	}, nil
+}
+
+// filterCoverlessCandidates drops candidates with no CoverURL, except:
+//   - the direct ASIN-lookup candidate (Source == "Audnexus (Audible)"),
+//   - any TranscriptionBoosted candidate,
+//   - the single highest-scored candidate in the input slice.
+// If every candidate lacks a cover, the input is returned unchanged.
+func filterCoverlessCandidates(candidates []MetadataCandidate) []MetadataCandidate {
+	if len(candidates) == 0 {
+		return candidates
+	}
+
+	// Check if any candidate has a cover. If none do, return unchanged.
+	hasCover := false
+	for _, c := range candidates {
+		if c.CoverURL != "" {
+			hasCover = true
+			break
+		}
+	}
+	if !hasCover {
+		return candidates
+	}
+
+	// Find the highest-scored candidate
+	bestIdx := 0
+	for i := range candidates {
+		if candidates[i].Score > candidates[bestIdx].Score {
+			bestIdx = i
+		}
+	}
+
+	// Apply exemption logic
+	var withCover []MetadataCandidate
+	for i, c := range candidates {
+		switch {
+		case c.CoverURL != "":
+			withCover = append(withCover, c)
+		case c.Source == "Audnexus (Audible)":
+			withCover = append(withCover, c)
+		case c.TranscriptionBoosted:
+			withCover = append(withCover, c)
+		case i == bestIdx:
+			withCover = append(withCover, c)
+		}
+	}
+
+	if len(withCover) > 0 {
+		return withCover
+	}
+	return candidates
 }
