@@ -1,5 +1,5 @@
 // file: internal/server/metadata_scoring_refactor_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3a7c2b1d-e84f-4d59-9f16-0e5a8b2c4d7e
 
 package server
@@ -222,7 +222,7 @@ func TestMetadataScorer_WiredEndToEnd(t *testing.T) {
 
 // TestRerankTopK_FiresOnAmbiguousTop checks that rerankTopK sends exactly the
 // candidates within MetadataLLMRerankEpsilon of the best score to the LLM,
-// and replaces their Score fields with the LLM's output.
+// and rescales the LLM's output into the original score window (MATCH-2).
 func TestRerankTopK_FiresOnAmbiguousTop(t *testing.T) {
 	// LLM says candidate 1 is actually the winner (0.95) even though
 	// candidate 0 had a higher base score (0.90).
@@ -253,14 +253,17 @@ func TestRerankTopK_FiresOnAmbiguousTop(t *testing.T) {
 	assert.Equal(t, 1, llm.callCount, "LLM should be called exactly once")
 	require.Len(t, got, 4)
 
-	// After rerank + resort, candidate B (0.95) should be first, A (0.60)
-	// should be pushed down, C (0.70) and D (0.50) should be unchanged.
+	// After rerank + resort, LLM scores are rescaled into the original
+	// ambiguous window [0.88, 0.90] (MATCH-2): B = 0.88+0.95*0.02 = 0.899,
+	// A = 0.88+0.60*0.02 = 0.892. Reranked candidates stay within their
+	// original window, so the un-reranked tail (C 0.70, D 0.50) can no
+	// longer leapfrog a demoted window member.
 	assert.Equal(t, "B", got[0].Title)
-	assert.InDelta(t, 0.95, got[0].Score, 0.0001)
-	assert.Equal(t, "C", got[1].Title, "C's 0.70 should now outrank A's demoted 0.60")
-	assert.InDelta(t, 0.70, got[1].Score, 0.0001)
-	assert.Equal(t, "A", got[2].Title)
-	assert.InDelta(t, 0.60, got[2].Score, 0.0001)
+	assert.InDelta(t, 0.899, got[0].Score, 0.0001)
+	assert.Equal(t, "A", got[1].Title, "A stays within the original window, above the un-reranked tail")
+	assert.InDelta(t, 0.892, got[1].Score, 0.0001)
+	assert.Equal(t, "C", got[2].Title)
+	assert.InDelta(t, 0.70, got[2].Score, 0.0001)
 	assert.Equal(t, "D", got[3].Title)
 	assert.InDelta(t, 0.50, got[3].Score, 0.0001)
 }
