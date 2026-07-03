@@ -1,7 +1,7 @@
 <!-- file: docs/reference/config-api-shape.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 2b7f9c31-a4e8-4f1d-b8a2-6c5d9e3f2a17 -->
-<!-- last-edited: 2026-06-16 -->
+<!-- last-edited: 2026-07-03 -->
 
 # Config API Shape Reference
 
@@ -107,6 +107,7 @@ interface Config {
   embedding:       EmbeddingConfig;
   dedup:           DedupConfig;
   metadata_scoring: MetadataScoringConfig;
+  ai_backend:      AIBackendConfig;
   itunes:          ITunesConfig;
   maintenance:     MaintenanceConfig;
   scheduled:       ScheduledTasksConfig;
@@ -163,6 +164,60 @@ interface EmbeddingConfig {
 | `EMBEDDING_DIMENSIONS` | `embedding.dimensions` |
 | `EMBEDDING_BASE_URL` | `embedding.base_url` |
 | `VECTOR_INDEX_BACKEND` | `embedding.vector_backend` |
+
+---
+
+### AIBackendConfig — `config.ai_backend`
+
+Backend-mode toggle for the AI cluster. Selects, independently for embeddings and
+LLM/chat, whether the corresponding client runs against OpenAI, a local
+OpenAI-compatible backend (e.g. Ollama), or is disabled.
+
+```typescript
+interface AIBackendConfig {
+  embedding_mode: string;         // "" | "disabled" | "openai" | "local" | "openai-fallback-local"
+  llm_mode: string;               // same enum as embedding_mode
+  local_base_url: string;         // local OpenAI-compatible endpoint (default placeholder: "http://192.168.0.20:11434/v1")
+  local_embedding_model: string;  // model name for local embeddings (default: "bge-m3")
+  local_llm_model: string;        // model name for local LLM (default: "qwen2.5:7b-instruct")
+}
+```
+
+**Mode enum values:**
+| Value | Meaning |
+|---|---|
+| `""` (empty) | Mode is derived at load time from the legacy fields (see below). |
+| `disabled` | No client is constructed for that pipeline. |
+| `openai` | Real OpenAI cloud API (`openai_api_key` required). |
+| `local` | Local endpoint at `local_base_url`; the API key is ignored by the backend. |
+| `openai-fallback-local` | Primary OpenAI with a local fallback. At construction time it behaves like `openai`; the fallback *trigger* is wired in the retry/error-classification layer. |
+
+**Empty-mode derivation (legacy-field write-through).**
+The legacy flat fields `embedding.base_url`, `openai_api_key`, `enable_ai_parsing`,
+and `metadata_scoring.llm_enabled` remain readable on `GET` and are still accepted
+on `PUT` for one release. When a mode is empty, the effective mode is derived
+from them:
+
+- **embedding_mode**: `embedding.enabled == false` → `disabled`; else
+  `embedding.base_url != ""` → `local`; else `openai_api_key != ""` → `openai`;
+  else `disabled`.
+- **llm_mode**: `openai_api_key != "" && (enable_ai_parsing || metadata_scoring.llm_enabled)`
+  → `openai`; else `disabled`.
+
+On first load after upgrade, a one-time blob migration (`migrateAIBackendBlob`)
+writes the derived `ai_backend` object into the stored config. Setting a legacy
+field on `PUT` therefore updates the derived mode via the same rule on the next
+load (write-through). Note that `local_base_url` uses a placeholder host in
+committed defaults — real endpoints belong in local, gitignored config.
+
+**Environment variables:**
+| Env var | Config field |
+|---|---|
+| `AI_BACKEND_EMBEDDING_MODE` | `ai_backend.embedding_mode` |
+| `AI_BACKEND_LLM_MODE` | `ai_backend.llm_mode` |
+| `AI_BACKEND_LOCAL_BASE_URL` | `ai_backend.local_base_url` |
+| `AI_BACKEND_LOCAL_EMBEDDING_MODEL` | `ai_backend.local_embedding_model` |
+| `AI_BACKEND_LOCAL_LLM_MODEL` | `ai_backend.local_llm_model` |
 
 ---
 

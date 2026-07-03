@@ -1,5 +1,5 @@
 // file: internal/ai/register.go
-// version: 1.3.0
+// version: 1.4.0
 // last-edited: 2026-07-03
 
 // Service registry registrations for the AI cluster (W4).
@@ -24,54 +24,54 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
 )
 
-// resolveAIEndpointKey decides whether an OpenAI-compatible client should be
-// constructed and what API key to hand it. When a real apiKey is configured
-// it's always used. When apiKey is empty but an explicit baseURL is
-// configured (a local OpenAI-compatible backend, e.g. Ollama, which ignores
-// the Authorization header), a dummy bearer is substituted so construction
-// proceeds. When neither is set, construction is skipped — the real-OpenAI
-// path (no baseURL) still requires a real key.
-func resolveAIEndpointKey(apiKey, baseURL string) (resolvedKey string, ok bool) {
-	if apiKey != "" {
-		return apiKey, true
-	}
-	if baseURL != "" {
-		return "ollama", true
-	}
-	return "", false
-}
-
 func init() {
-	// embedclient — OpenAI embedding client with optional cache.
-	// Conditional on: OpenAIAPIKey set AND EmbeddingEnabled true.
+	// embedclient — embedding client, mode-gated by EffectiveEmbeddingMode.
+	//   - disabled: no client.
+	//   - local:    local OpenAI-compatible backend (Ollama) at LocalBaseURL,
+	//               constructed with a dummy key the backend ignores.
+	//   - openai / openai-fallback-local: real OpenAI (key required).
 	serviceregistry.Register(serviceregistry.ServiceDef{
 		Name:   "embedclient",
 		Needs:  []string{serviceregistry.KeyConfig, serviceregistry.KeyEmbeddingStore},
 		Groups: []string{"ai"},
 		Build: func(c *serviceregistry.Container) (any, error) {
 			cfg := serviceregistry.Get[*config.Config](c, serviceregistry.KeyConfig)
-			if !cfg.Embedding.Enabled {
+			mode := cfg.EffectiveEmbeddingMode()
+			if mode == config.AIBackendModeDisabled {
 				return (*EmbeddingClient)(nil), nil
 			}
-			// Base URL is scoped to the embedding client ONLY (see
-			// NewEmbeddingClientWithOptions): cfg.Embedding.BaseURL points
-			// embeddings at a local OpenAI-compatible backend (e.g. Ollama)
-			// without touching the LLM / metadata clients. Fall back to the
-			// OPENAI_BASE_URL env when the config field is empty for backward
-			// compatibility with env-based setups.
-			baseURL := cfg.Embedding.BaseURL
-			if baseURL == "" {
-				baseURL = os.Getenv("OPENAI_BASE_URL")
+
+			var client *EmbeddingClient
+			switch mode {
+			case config.AIBackendModeLocal:
+				// Read-time fallback keeps the getter pure: prefer the new
+				// AIBackend fields, fall back to the legacy Embedding fields
+				// for the migration-not-yet-applied case.
+				baseURL := cfg.AIBackend.LocalBaseURL
+				if baseURL == "" {
+					baseURL = cfg.Embedding.BaseURL
+				}
+				model := cfg.AIBackend.LocalEmbeddingModel
+				if model == "" {
+					model = cfg.Embedding.Model
+				}
+				slog.Info("embedclient: local backend", "baseURL", baseURL, "model", model)
+				// Dummy key "ollama" — a local OpenAI-compatible backend ignores
+				// the Authorization header.
+				client = NewEmbeddingClientWithOptions("ollama", model, baseURL)
+			default: // openai, openai-fallback-local
+				if cfg.OpenAIAPIKey == "" {
+					slog.Warn("embedclient: openai embedding mode but no OpenAIAPIKey — skipping", "mode", mode)
+					return (*EmbeddingClient)(nil), nil
+				}
+				baseURL := cfg.Embedding.BaseURL
+				if baseURL == "" {
+					baseURL = os.Getenv("OPENAI_BASE_URL")
+				}
+				client = NewEmbeddingClientWithOptions(cfg.OpenAIAPIKey, cfg.Embedding.Model, baseURL)
 			}
-			resolvedKey, ok := resolveAIEndpointKey(cfg.OpenAIAPIKey, baseURL)
-			if !ok {
-				return (*EmbeddingClient)(nil), nil
-			}
-			if cfg.OpenAIAPIKey == "" {
-				slog.Warn("embedclient: constructing with keyless/local backend (no OpenAIAPIKey, using explicit base URL)", "baseURL", baseURL)
-			}
+
 			embStore, _ := serviceregistry.TryGet[*database.EmbeddingStore](c, serviceregistry.KeyEmbeddingStore)
-			client := NewEmbeddingClientWithOptions(resolvedKey, cfg.Embedding.Model, baseURL)
 			if embStore != nil {
 				client = client.WithCache(embStore)
 			}
@@ -79,23 +79,38 @@ func init() {
 		},
 	})
 
-	// llmparser — OpenAIParser used by dedup Layer 3 review + metadata
-	// LLM reranker. Conditional on OpenAIAPIKey set.
+	// llmparser — OpenAIParser used by dedup Layer 3 review + metadata LLM
+	// reranker, mode-gated by EffectiveLLMMode.
+	//   - disabled: no parser.
+	//   - local:    local OpenAI-compatible backend at LocalBaseURL with a dummy
+	//               key and the local LLM model name.
+	//   - openai / openai-fallback-local: real OpenAI (key required).
 	serviceregistry.Register(serviceregistry.ServiceDef{
 		Name:   "llmparser",
 		Needs:  []string{serviceregistry.KeyConfig},
 		Groups: []string{"ai"},
 		Build: func(c *serviceregistry.Container) (any, error) {
 			cfg := serviceregistry.Get[*config.Config](c, serviceregistry.KeyConfig)
-			baseURL := os.Getenv("OPENAI_BASE_URL")
-			resolvedKey, ok := resolveAIEndpointKey(cfg.OpenAIAPIKey, baseURL)
-			if !ok {
+			mode := cfg.EffectiveLLMMode()
+			if mode == config.AIBackendModeDisabled {
 				return (*OpenAIParser)(nil), nil
 			}
-			if cfg.OpenAIAPIKey == "" {
-				slog.Warn("llmparser: constructing with keyless/local backend (no OpenAIAPIKey, using OPENAI_BASE_URL env)", "baseURL", baseURL)
+
+			switch mode {
+			case config.AIBackendModeLocal:
+				baseURL := cfg.AIBackend.LocalBaseURL
+				if baseURL == "" {
+					baseURL = cfg.Embedding.BaseURL
+				}
+				slog.Info("llmparser: local backend", "baseURL", baseURL, "model", cfg.AIBackend.LocalLLMModel)
+				return NewOpenAIParserWithBaseURL(cfg, "ollama", baseURL, cfg.AIBackend.LocalLLMModel, cfg.EnableAIParsing), nil
+			default: // openai, openai-fallback-local
+				if cfg.OpenAIAPIKey == "" {
+					slog.Warn("llmparser: openai LLM mode but no OpenAIAPIKey — skipping", "mode", mode)
+					return (*OpenAIParser)(nil), nil
+				}
+				return NewOpenAIParser(cfg, cfg.OpenAIAPIKey, cfg.EnableAIParsing), nil
 			}
-			return NewOpenAIParser(cfg, resolvedKey, cfg.EnableAIParsing), nil
 		},
 	})
 
@@ -120,12 +135,18 @@ func init() {
 	})
 
 	// metadatallmscorer — LLM-based metadata candidate rerank scorer.
-	// Conditional on llmparser being available.
+	// Conditional on llmparser being available AND the effective LLM mode not
+	// being disabled (TOGGLE-6: previously it built whenever a parser existed,
+	// even in a disabled-LLM configuration).
 	serviceregistry.Register(serviceregistry.ServiceDef{
 		Name:   "metadatallmscorer",
-		Needs:  []string{"llmparser"},
+		Needs:  []string{serviceregistry.KeyConfig, "llmparser"},
 		Groups: []string{"ai"},
 		Build: func(c *serviceregistry.Container) (any, error) {
+			cfg := serviceregistry.Get[*config.Config](c, serviceregistry.KeyConfig)
+			if cfg.EffectiveLLMMode() == config.AIBackendModeDisabled {
+				return (*LLMScorer)(nil), nil
+			}
 			parser, _ := serviceregistry.TryGet[*OpenAIParser](c, "llmparser")
 			if parser == nil {
 				return (*LLMScorer)(nil), nil

@@ -1,7 +1,7 @@
 // file: internal/config/persistence.go
-// version: 1.27.0
+// version: 1.28.0
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
-// last-edited: 2026-06-16
+// last-edited: 2026-07-03
 
 package config
 
@@ -229,15 +229,15 @@ func migrateDedupBlob(blob string) (string, bool) {
 	}
 
 	flatToNested := map[string]string{
-		"dedup_book_high_threshold":           "book_high_threshold",
-		"dedup_book_low_threshold":            "book_low_threshold",
-		"dedup_author_high_threshold":         "author_high_threshold",
-		"dedup_author_low_threshold":          "author_low_threshold",
-		"dedup_auto_merge_enabled":            "auto_merge_enabled",
-		"dedup_embeddings_enabled":            "embeddings_enabled",
+		"dedup_book_high_threshold":            "book_high_threshold",
+		"dedup_book_low_threshold":             "book_low_threshold",
+		"dedup_author_high_threshold":          "author_high_threshold",
+		"dedup_author_low_threshold":           "author_low_threshold",
+		"dedup_auto_merge_enabled":             "auto_merge_enabled",
+		"dedup_embeddings_enabled":             "embeddings_enabled",
 		"dedup_llm_auto_merge_high_confidence": "llm_auto_merge_high_confidence",
-		"dedup_on_import_via_scheduler":       "on_import_via_scheduler",
-		"dedup_review_model":                  "review_model",
+		"dedup_on_import_via_scheduler":        "on_import_via_scheduler",
+		"dedup_review_model":                   "review_model",
 	}
 	for flat, short := range flatToNested {
 		if v, ok := raw[flat]; ok {
@@ -292,6 +292,95 @@ func migrateMetadataScoringBlob(blob string) (string, bool) {
 	delete(raw, "metadata_llm_rerank_epsilon")
 	delete(raw, "metadata_llm_rerank_top_k")
 	delete(raw, "write_backup_before_tag_write")
+	migrated, err := json.Marshal(raw)
+	if err != nil {
+		return blob, false
+	}
+	return string(migrated), true
+}
+
+// migrateAIBackendBlob derives the nested ai_backend object (backend-mode
+// toggle) from the legacy flat/nested AI signal fields (openai_api_key,
+// embedding.enabled/base_url/model, enable_ai_parsing, metadata_scoring.llm_enabled).
+// It mirrors Config.EffectiveEmbeddingMode / Config.EffectiveLLMMode so the
+// persisted modes match what those helpers would resolve at runtime. Safe to
+// call repeatedly: returns (blob, false) once ai_backend is present, or when no
+// legacy AI signal fields exist to derive from.
+//
+// Chained AFTER migrateMetadataScoringBlob so the embedding / metadata_scoring
+// sub-objects are already in their nested shape when we read them here.
+func migrateAIBackendBlob(blob string) (string, bool) {
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(blob), &raw); err != nil {
+		return blob, false
+	}
+	// Idempotent: already migrated.
+	if _, ok := raw["ai_backend"]; ok {
+		return blob, false
+	}
+	// Need at least one legacy signal to derive a mode from; otherwise leave the
+	// blob untouched and let runtime effective-mode resolution handle it.
+	_, hasKey := raw["openai_api_key"]
+	_, hasEmbedding := raw["embedding"]
+	_, hasParsing := raw["enable_ai_parsing"]
+	_, hasMetaScoring := raw["metadata_scoring"]
+	if !hasKey && !hasEmbedding && !hasParsing && !hasMetaScoring {
+		return blob, false
+	}
+
+	apiKey, _ := raw["openai_api_key"].(string)
+	enableAIParsing, _ := raw["enable_ai_parsing"].(bool)
+
+	// Embedding.Enabled defaults true; an absent nested object counts as enabled.
+	embEnabled := true
+	embBaseURL := ""
+	embModel := ""
+	if emb, ok := raw["embedding"].(map[string]any); ok {
+		if v, ok := emb["enabled"].(bool); ok {
+			embEnabled = v
+		}
+		embBaseURL, _ = emb["base_url"].(string)
+		embModel, _ = emb["model"].(string)
+	}
+
+	llmEnabled := false
+	if ms, ok := raw["metadata_scoring"].(map[string]any); ok {
+		llmEnabled, _ = ms["llm_enabled"].(bool)
+	}
+
+	// Derive embedding mode (mirrors Config.EffectiveEmbeddingMode).
+	embeddingMode := AIBackendModeDisabled
+	switch {
+	case !embEnabled:
+		embeddingMode = AIBackendModeDisabled
+	case embBaseURL != "":
+		embeddingMode = AIBackendModeLocal
+	case apiKey != "":
+		embeddingMode = AIBackendModeOpenAI
+	}
+
+	// Derive LLM mode (mirrors Config.EffectiveLLMMode).
+	llmMode := AIBackendModeDisabled
+	if apiKey != "" && (enableAIParsing || llmEnabled) {
+		llmMode = AIBackendModeOpenAI
+	}
+
+	aiBackend := map[string]any{
+		"embedding_mode": embeddingMode,
+		"llm_mode":       llmMode,
+	}
+	// When a local embedding backend was configured via the legacy
+	// embedding.base_url field, carry those coordinates onto the new fields so a
+	// future explicit toggle (or the local register branch) has them. Safe to
+	// mutate: we're building a fresh map, not the shared AppConfig.
+	if embBaseURL != "" {
+		aiBackend["local_base_url"] = embBaseURL
+		if embModel != "" {
+			aiBackend["local_embedding_model"] = embModel
+		}
+	}
+	raw["ai_backend"] = aiBackend
+
 	migrated, err := json.Marshal(raw)
 	if err != nil {
 		return blob, false
@@ -609,6 +698,17 @@ func LoadConfigFromDatabase(store database.SettingsStore) error {
 			blobStr = migrated
 			if saveErr := saveRawBlob(store, migrated); saveErr != nil {
 				slog.Warn("config: failed to persist migrated metadata_scoring blob", "err", saveErr)
+			}
+		}
+
+		// Derive the nested ai_backend object (backend-mode toggle) from the
+		// legacy AI signal fields (idempotent). Runs after the metadata_scoring
+		// migration so metadata_scoring.llm_enabled is in nested shape.
+		if migrated, changed := migrateAIBackendBlob(blobStr); changed {
+			slog.Info("config: derived ai_backend modes from legacy fields")
+			blobStr = migrated
+			if saveErr := saveRawBlob(store, migrated); saveErr != nil {
+				slog.Warn("config: failed to persist migrated ai_backend blob", "err", saveErr)
 			}
 		}
 

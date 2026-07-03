@@ -1,5 +1,5 @@
 // file: internal/ai/embedding_client.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 // last-edited: 2026-07-03
 
@@ -12,7 +12,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
+	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/openai/openai-go/v3"
@@ -24,6 +27,14 @@ import (
 // via SetOllamaAvailable(false). The caller should surface this to the user
 // as an actionable error rather than a silent failure.
 var ErrOllamaNotAvailable = errors.New("embedding: Ollama not available — install and enable via Settings → Tools")
+
+// ErrBatchUnsupported is returned by batch-only embedding paths (e.g. the OpenAI
+// Batch API used by EmbedBooksAsync) when the effective embedding backend is not
+// OpenAI. The OpenAI Batch API is a cloud-only feature; local backends (Ollama)
+// and disabled modes have no equivalent, so callers must fall back to the
+// synchronous per-book path instead of submitting a batch (TOGGLE-2). Lives in
+// internal/ai because the backend-mode concept belongs to the AI client layer.
+var ErrBatchUnsupported = errors.New("embedding: batch API unsupported for the configured backend (openai-only); use the synchronous path")
 
 // EmbeddingCache is the minimal surface EmbeddingClient needs from
 // a content-hash cache layer. It's an interface (not a concrete
@@ -74,12 +85,15 @@ type EmbeddingClient struct {
 	// path (where it does not).
 	baseURL string
 
-	// localOllamaOK is true when the Ollama daemon is available. It
-	// defaults to true so callers that never call SetOllamaAvailable
-	// continue to work unchanged. When false and baseURL is non-empty,
-	// EmbedBatch returns ErrOllamaNotAvailable without making any HTTP
-	// calls.
-	localOllamaOK bool
+	// localOllamaOK is true when the Ollama daemon is available. It is an
+	// atomic.Bool because it is written by the server's availability probe
+	// (SetOllamaAvailable) and by EmbedBatch's inline re-probe while being read
+	// concurrently by every EmbedBatch caller — a plain bool here was a
+	// data race (TOGGLE-5). It is set to true at construction so callers that
+	// never call SetOllamaAvailable continue to work unchanged. When false and
+	// baseURL is non-empty, EmbedBatch re-probes once and, if still
+	// unavailable, returns ErrOllamaNotAvailable without embedding.
+	localOllamaOK atomic.Bool
 }
 
 // defaultRequestTimeout is the per-attempt timeout applied to each
@@ -128,10 +142,48 @@ func NewEmbeddingClientWithOptions(apiKey, model, baseURL string) *EmbeddingClie
 		model:          model,
 		requestTimeout: defaultRequestTimeout,
 		baseURL:        baseURL,
-		localOllamaOK:  true,
 	}
+	// Default availability to true (atomic.Bool zero-value is false) so callers
+	// that never invoke SetOllamaAvailable are unaffected.
+	c.localOllamaOK.Store(true)
 	c.rawEmbed = c.embedBatchRaw
 	return c
+}
+
+// defaultProbeTimeout bounds a single Ollama availability probe. 2s is enough
+// for a healthy local endpoint to answer GET /api/tags and short enough not to
+// stall an embed call when the daemon is down.
+const defaultProbeTimeout = 2 * time.Second
+
+// ProbeOllamaAvailable reports whether a local Ollama-compatible endpoint is
+// reachable by issuing GET {baseURL}/api/tags with a bounded timeout. baseURL
+// may be the OpenAI-compatible ".../v1" form stored in config; the "/v1" suffix
+// is stripped because Ollama's native tags endpoint is served at /api/tags, not
+// under /v1. Returns true on any 2xx response received within timeout. A
+// non-positive timeout falls back to defaultProbeTimeout (2s). An empty baseURL
+// returns false.
+func ProbeOllamaAvailable(ctx context.Context, baseURL string, timeout time.Duration) bool {
+	if baseURL == "" {
+		return false
+	}
+	if timeout <= 0 {
+		timeout = defaultProbeTimeout
+	}
+	root := strings.TrimSuffix(strings.TrimRight(baseURL, "/"), "/v1")
+	url := strings.TrimRight(root, "/") + "/api/tags"
+
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return false
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close() //nolint:errcheck
+	return resp.StatusCode >= 200 && resp.StatusCode < 300
 }
 
 // SetOllamaAvailable is called by server init with toolRegistry.Available("ollama").
@@ -139,7 +191,7 @@ func NewEmbeddingClientWithOptions(apiKey, model, baseURL string) *EmbeddingClie
 // ErrOllamaNotAvailable without making any HTTP calls. The default is true so
 // existing callers that never call this method are unaffected.
 func (c *EmbeddingClient) SetOllamaAvailable(ok bool) {
-	c.localOllamaOK = ok
+	c.localOllamaOK.Store(ok)
 }
 
 // WithRequestTimeout overrides the per-attempt timeout for each
@@ -190,8 +242,15 @@ func (c *EmbeddingClient) Model() string {
 // API errors. Cache I/O errors are logged but never fail the
 // call — the cache is an optimization, not a correctness layer.
 func (c *EmbeddingClient) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
-	if c.baseURL != "" && !c.localOllamaOK {
-		return nil, ErrOllamaNotAvailable
+	if c.baseURL != "" && !c.localOllamaOK.Load() {
+		// Cheap TTL-style recheck: the daemon may have come up since the
+		// last probe (e.g. the on-demand OllamaDaemon started it). Re-probe
+		// once inline before failing the batch.
+		if ProbeOllamaAvailable(ctx, c.baseURL, defaultProbeTimeout) {
+			c.localOllamaOK.Store(true)
+		} else {
+			return nil, ErrOllamaNotAvailable
+		}
 	}
 	if len(texts) == 0 {
 		return nil, nil

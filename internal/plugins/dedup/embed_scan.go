@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/embed_scan.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: e2f3a4b5-c6d7-8901-bcde-f12345678901
-// last-edited: 2026-06-10
+// last-edited: 2026-07-03
 
 // T018: embed_scan.go is the canonical implementation for both
 // dedup.embed-scan (sync) and dedup.embed-async (async/batch API).
@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -68,6 +69,18 @@ func (p *Plugin) runEmbedScan(ctx context.Context, raw json.RawMessage, reporter
 func (p *Plugin) runEmbedScanMode(ctx context.Context, async bool, reporter sdk.Reporter) error {
 	if p.engine == nil {
 		return errors.New("dedup engine not available (embedding may be disabled or API key not configured)")
+	}
+
+	// The OpenAI Batch API path is openai-only (TOGGLE-2). Under a local or
+	// disabled embedding backend, EmbedBooksAsync returns ai.ErrBatchUnsupported;
+	// downgrade to the synchronous per-book path here so the op still makes
+	// progress instead of erroring out.
+	if async {
+		if mode := config.AppConfig.EffectiveEmbeddingMode(); mode != config.AIBackendModeOpenAI {
+			reporter.Logger().Warn("dedup embed-scan: async batch requested but effective embedding backend is not openai — downgrading to synchronous embedding",
+				"mode", mode)
+			async = false
+		}
 	}
 
 	if async {

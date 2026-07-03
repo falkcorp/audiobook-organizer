@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.33.0
+// version: 2.34.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-07-03
 
@@ -9,8 +9,8 @@ import (
 	"context"
 	"fmt"
 
-	"log"
 	"errors"
+	"log"
 	"log/slog"
 	"net/http"
 	"os"
@@ -622,15 +622,24 @@ func NewServer(store database.Store) *Server {
 			server.hnswPersistDir = filepath.Join(filepath.Dir(config.AppConfig.DatabasePath), "hnsw")
 		}
 
-		// Gate embedding client on Ollama availability. The tool-registry check
-		// is a binary-on-PATH probe (exec.LookPath), which fails when Ollama runs
-		// as a system service / container the app can't see on PATH — even though
-		// its HTTP endpoint is reachable. So when an operator has EXPLICITLY
-		// configured an embedding base_url (an assertion that the endpoint exists,
-		// e.g. http://127.0.0.1:11434/v1 for local Ollama), trust it rather than
-		// let the missing binary block all embeds.
+		// Gate embedding client on Ollama availability. The old check was a
+		// binary-on-PATH probe (exec.LookPath) OR-ed with "a base_url is
+		// configured" (trust-without-verify). Both are unreliable: LookPath
+		// fails when Ollama runs as a service/container off PATH, and trusting a
+		// configured URL marks a down endpoint as available. Replace with an
+		// actual HTTP probe against the local endpoint's /api/tags. Fall back to
+		// the legacy Embedding.BaseURL when AIBackend.LocalBaseURL is empty (the
+		// migration-not-yet-applied case), and keep the LookPath signal as a
+		// secondary yes-vote for managed on-PATH installs.
 		if server.embedClient != nil {
-			ollamaOK := server.toolRegistry.Available("ollama") || config.AppConfig.Embedding.BaseURL != ""
+			localBaseURL := config.AppConfig.AIBackend.LocalBaseURL
+			if localBaseURL == "" {
+				localBaseURL = config.AppConfig.Embedding.BaseURL
+			}
+			ollamaOK := server.toolRegistry.Available("ollama")
+			if !ollamaOK && localBaseURL != "" {
+				ollamaOK = ai.ProbeOllamaAvailable(context.Background(), localBaseURL, 2*time.Second)
+			}
 			server.embedClient.SetOllamaAvailable(ollamaOK)
 			metrics.SetBackendAvailable("ollama", ollamaOK)
 		}
