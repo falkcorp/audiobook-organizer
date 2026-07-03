@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.101.0 -->
+<!-- version: 3.102.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-03 -->
 
@@ -8,6 +8,31 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 3, 2026 - Consultancy-roadmap wave 3 + flake eradication (PRs #1772-#1781, #1688)
+
+Wave 3 (4 tasks, run `2026-07-03-1419-consultancy-w3`) plus a flake-eradication campaign triggered by 4 consecutive gate kills, plus prod-data ops.
+
+**Wave-3 tasks:**
+- **`feat(ai)`** #1775 — TASK-10 (Opus): unified AI backend-mode toggle (`disabled/openai/local/openai-fallback-local`), legacy-config migration, per-config LLM base URL (local LLM mode now possible), Ollama probe, Batch-API hard gate
+- **`feat(dedup)`** #1774 — TASK-15 (Opus): per-model embedding thresholds (`EmbeddingThresholdsByModel` + resolver, defaults byte-for-byte unchanged) + read-only `dedup.calibrate-embedding-thresholds` op (gold-dataset sweep, DEDUP-3-safe). Owner-gated: run calibration after re-embed, set thresholds, then full-scan
+- **`fix(metafetch)`** #1773 — TASK-26: LLM rerank scores rescaled into the original candidate window (un-reranked tail can no longer leapfrog); legacy raw-overwrite test expectations reconciled
+- **`feat(maintenance)`** #1772 — TASK-14: `onlyMissingDuration` scoping for duration-reextract (producer-side skip, doesn't consume Limit)
+
+**Prod-data ops (owner-approved):**
+- `dedup.drain-stale` dry-run then APPLY: 12,531 pending exact candidates inspected → **3,076 reclassified stale-drain** (boilerplate_title 2,962, part_vs_whole 65, short_duration 32, identifier_conflict 17), 9,455 kept
+- BookSig recovery audit dry-run: 44,929 books, **0 BookSigV1 wipes**, 397 descriptions snapshot-recoverable (29,083 missing never had one — separate metadata-coverage item). **`feat(maintenance)`** #1776 implemented apply mode (footgun-safe: fresh Pebble re-read before write, only missing fields set, skip-and-count on races); restore run post-deploy
+
+**Flake eradication (5 root causes, all fixed at source):**
+- **`fix(versions)`** #1777 — CreateIngestVersion flakes: memdb async-warmup race (import-path write no-ops pre-publish) → `WaitForWarmup` in test helper
+- **`fix(registry)`** #1778 — SweepTick shutdown race: Shutdown's 2s escape abandoned in-flight sweeps → unconditional sweeper join + `ErrClosed` guard on ticker reads
+- **`fix(database)`** #1779 — **real prod race**: opv2 status row + active-index written non-atomically → EnqueueOp ConcurrencyKey dedup could return a completed op's ID (double-triggered imports hung forever). Atomic batch. + regroup test `WaitForWarmup`
+- **`ci`** #1780 — github-common repin: Minimal CI `go test` gets `-timeout 30m` (10m default killed internal/server on runners; the upstream fix existed since v1.12.1+ but the pin was never bumped)
+- **`fix(registry,server)`** #1781 — ordered registry teardown (live-tracker + testutil drain before store.Close), `recoverPebbleClosed` across all ~18 opv2 store methods, trickle-warmer enrolled in bgWG/bgCtx, **latent prod bug**: `ProtectedPathCache.refresh()` nil-deref with Deluge unconfigured (every tag-write pre-flight would 500) — masked by a test leaking a live client into the package singleton
+
+**Rescued:** **`feat(transcribe)`** #1688 (June 30) — silence retry loop + `[SILENCE]` sentinel; was code-complete but unmerged while main's docs already claimed it. Rebased, merged; prod validation batch pending.
+
+Follow-ups (TODO): sibling warmers (facets/sizes/authors/series) not yet in bgWG; 29K never-had-description books need a metadata-fetch campaign (Audible/metadata-cache); staticcheck ~18 + sdkguard still failing make ci on main.
 
 #### July 3, 2026 - Consultancy-roadmap wave 2: 8 tasks shipped via parallel sweep (PRs #1761-#1770)
 

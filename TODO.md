@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.56.0 -->
+<!-- version: 9.57.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-03 -->
 
@@ -29,14 +29,17 @@ adversarially verified). Ranked roadmap: [`docs/consultancy/00-ROADMAP.md`](docs
 > [`docs/agent-tasks/consultancy-roadmap/`](docs/agent-tasks/consultancy-roadmap/)
 > — 31 briefs, 6 waves, model-tiered. **Wave 1 (14 tasks) SHIPPED 2026-07-03, PRs #1744–#1759.**
 > **Wave 2 (8 tasks) SHIPPED 2026-07-03, PRs #1761–#1770** (T03 #1763, T13 #1768, T20 #1769,
-> T21 #1764, T22 #1770, T24 #1762, T25 #1761, T29 #1766; aux #1765/#1767). Next: wave 3
-> (T10 backend-toggle core [Opus], T14, T15 [Opus], T26). CONSULT-1..8 map to TASK-01..09
-> there. Run via that folder's `run.sh` + `orchestration.md`.
+> T21 #1764, T22 #1770, T24 #1762, T25 #1761, T29 #1766; aux #1765/#1767).
+> **Wave 3 (4 tasks) SHIPPED 2026-07-03** (T10 #1775, T14 #1772, T15 #1774, T26 #1773;
+> plus cr-03b recovery-apply #1776, silence-retry rescue #1688, flake fixes #1777–#1781).
+> Next: wave 4. CONSULT-1..8 map to TASK-01..09 there. Run via `run.sh` + `orchestration.md`.
 >
-> **Owner-greenlight queue from wave 2 (dry-run ops merged, NOT yet run on prod):**
-> - `dedup.drain-stale` (#1768) — dry-run against the ~384K stale candidates, review report, then apply
-> - BookSig/Description recovery audit (#1763) — dry-run over `book_ver:` snapshots, review, then apply
-> - NutsDB retirement PR 2 (file/dep removal) — after prod soak of #1770's Pebble-only cutover
+> **Owner-greenlight queue status (2026-07-03):**
+> - ✅ `dedup.drain-stale` (#1768) — dry-run AND apply DONE on prod: 12,531 inspected, 3,076 reclassified, 9,455 kept
+> - ✅ Recovery audit dry-run DONE: 0 BookSigV1 wipes; 397 descriptions recoverable; apply mode shipped #1776, restore run post-deploy
+> - ⏳ `dedup.calibrate-embedding-thresholds` (#1774) — run after re-embed completes, review, set `embedding_thresholds_by_model`, then full-scan (owner-gated)
+> - ⏳ NutsDB retirement PR 2 (file/dep removal) — after prod soak of #1770's Pebble-only cutover
+> - 📋 29,083 books never had a Description — needs a metadata-fetch campaign (Audible / transcription metadata cache), separate from recovery
 
 Tier-0 items (high impact, low effort — do first):
 
@@ -905,17 +908,34 @@ must sequence, but A and B are parallelizable. Spawn:
 
 ## 🐛 Open Bugs — May 17, 2026
 
-- [ ] **PEBBLE-CLOSED-SWEEPTICK-RESIDUAL** (2026-07-03, found by cr-22's gate during the wave-2
-  sweep) — a residual, separate leg of the shutdown race the entry below marked fixed: the ticker
-  path `registry.go:341` → `DepsScheduler.SweepTick` → `ListWaitingDepsOps` can still touch the
-  store after `Close()` and panic `pebble: closed`. The 2026-07-02 fix drained the dep-*notify*
-  goroutines and asserted SweepTick "was already enrolled" — the tick loop itself isn't gated by
-  `notifyStopped`, so a tick in flight at Close time races. Fix shape: gate the SweepTick body
-  behind the same `notifyStopped`/`r.mu` check (or stop the ticker before `goroutineWG.Wait()`)
-  + `-race` repro test mirroring `shutdown_race_test.go`.
-- [ ] **INGEST-VERSION-FLAKE** (2026-07-03, wave-2 gates) — `TestCreateIngestVersion_SecondVersionIsAlt`
-  SIGSEGV'd once on a GitHub runner; passes 16/16 locally under `-race`. Suspect ordering/teardown
-  sensitivity, not logic. Diagnose root cause per fix-flaky-tests policy; don't rerun-and-ignore.
+- [x] **PEBBLE-CLOSED-SWEEPTICK-RESIDUAL** (2026-07-03) — ✅ **FIXED 2026-07-03 in three PRs**
+  as the true scope emerged (4 gate kills, 3 distinct legs, all the same leaked-lifecycle family):
+  #1778 unconditional sweeper join in Shutdown (2s escape abandoned in-flight sweeps) + ErrClosed
+  guard on the two ticker reads; #1781 ROOT fix — registry live-tracker + `testutil/integration.go`
+  drains leaked registries before `store.Close()` (server tests closed the store with NO registry
+  Shutdown), `recoverPebbleClosed` extended to all ~18 opv2 store methods (dispatcher +
+  `UpdateOpProgressV2`/reporter-flush legs), trickle-warmer enrolled in bgWG/bgCtx. Collateral
+  finds fixed in #1781: latent prod nil-deref in `ProtectedPathCache.refresh()` with Deluge
+  unconfigured (tag-write pre-flights would 500), deluge singleton test leak, RootDir test
+  pollution. Proof: `internal/server -short -race -count=2` green (952s).
+- [ ] **WARMERS-NOT-IN-BGWG** (2026-07-03, follow-up from #1781) — sibling fire-and-forget cache
+  warmers (`warmFacetsCache`/`warmLibrarySizes`/`warmAuthorsCache`/`warmSeriesCache`) are
+  short-lived and haven't struck, but share the trickle-warmer's lifecycle gap. Enroll in
+  bgWG/bgCtx like `runTrickleWarmer` (server_lifecycle.go / library_list_warmer.go pattern).
+- [x] **INGEST-VERSION-FLAKE** (2026-07-03) — ✅ **FIXED #1777.** Root cause was NOT ordering:
+  PebbleStore async memdb-warmup race — `CreateImportPath`'s memdb write no-ops before warmup
+  publishes, so `GetAllImportPaths` (memdb-backed) missed the test's temp dir →
+  `ErrPathNotAllowed`. Fix: `WaitForWarmup()` in the test helper (per its own doc contract).
+  Proof: `-count=5 -race -shuffle=on` green. Same family also fixed in #1779's regroup helper.
+- [x] **ITUNES-IMPORT-DEDUP-RACE** (2026-07-03) — ✅ **FIXED #1779.** Real prod race, found via
+  `TestITunesImport_SkipDuplicates` flake: opv2 status row + `opv2:act:` index written as two
+  separate Pebble writes → `EnqueueOp` ConcurrencyKey dedup could observe a completed op still
+  indexed active and return its dead op ID (second import's legacy op stuck `queued` forever).
+  Fix: atomic batch. Repro red 3/3 pre-fix, green 3/3 post (-count=30 -race).
+- [x] **CI-10M-TIMEOUT** (2026-07-03) — ✅ **FIXED #1780.** Minimal CI's reusable workflow ran
+  `go test -short -race ./...` with Go's 10m default; internal/server exceeds it on runners.
+  github-common had the `-timeout 30m` fix since v1.12.1+ (written FOR this repo) but the pin
+  was never bumped. All 5 workflow pins updated to `1dec34cd`.
 - [ ] **SDKGUARD-VIOLATION** (2026-07-03) — `pkg/plugin/sdk` imports `internal/logger`, so
   `make ci` fails on main at the `sdkguard` step (masked all session by `| tail` swallowing exit
   codes). Either break the import or add an allowlist entry in `tools/cmd/sdkguard/main.go` with
