@@ -13,6 +13,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
@@ -23,6 +25,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	maintenanceplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/sweep"
+	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
 // Verify *Server implements maintenance.ServerDeps at compile time.
@@ -375,7 +378,19 @@ func (s *Server) SearchTranscriptionCandidate(_ context.Context, bookID, _, _ st
 // applies the top cached candidate. TASK-02 audio-confirm logic sets
 // MetadataReviewStatus="audio_confirmed" when the candidate title matches the
 // book's transcribed title.
-func (s *Server) ApplyTranscriptionCandidate(_ context.Context, bookID, _, _ string) error {
+//
+// TOCTOU guard (MATCH-6/BUG-3/QUAL-3): the caller (runAutoMatchTranscribed)
+// gates on the candTitle/candAuthor returned by an earlier
+// SearchTranscriptionCandidate read and passes that exact identity here as
+// gatedTitle/gatedAuthor. Because the metadata cache is shared and keyed only
+// by book ID, it can be refreshed between the gate and this call (a
+// concurrent metadata search, another maintenance op, a UI-driven re-fetch).
+// Re-reading Candidates[0] without re-checking identity would risk applying
+// an ungated candidate while logging the stale, gated title as "applied". To
+// close that window, verify the re-read cache slot 0 still matches the gated
+// identity before applying, and error out on mismatch — the caller already
+// treats a non-nil error as "skip + log".
+func (s *Server) ApplyTranscriptionCandidate(_ context.Context, bookID, gatedTitle, gatedAuthor string) error {
 	if s.metadataFetchService == nil {
 		return fmt.Errorf("metadata fetch service not initialized")
 	}
@@ -390,6 +405,22 @@ func (s *Server) ApplyTranscriptionCandidate(_ context.Context, bookID, _, _ str
 	if err := json.Unmarshal(entry.Candidates[0], &cand); err != nil {
 		return fmt.Errorf("decode cached candidate for book %s: %w", bookID, err)
 	}
+
+	titleMismatch := util.NormalizeTitle(cand.Title) != util.NormalizeTitle(gatedTitle)
+	authorMismatch := false
+	if len(gatedAuthor) > 3 {
+		gl := strings.ToLower(gatedAuthor)
+		cl := strings.ToLower(cand.Author)
+		authorMismatch = !strings.Contains(cl, gl) && !strings.Contains(gl, cl)
+	}
+	if titleMismatch || authorMismatch {
+		slog.Warn("apply-transcription-candidate: cache changed since gating",
+			"book_id", bookID, "gated_title", gatedTitle, "cache_title", cand.Title,
+			"gated_author", gatedAuthor, "cache_author", cand.Author)
+		return fmt.Errorf("cached candidate for book %s changed since gating (want %q/%q, got %q/%q)",
+			bookID, gatedTitle, gatedAuthor, cand.Title, cand.Author)
+	}
+
 	_, err = s.metadataFetchService.ApplyMetadataCandidate(bookID, cand, nil)
 	return err
 }
