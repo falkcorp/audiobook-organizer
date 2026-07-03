@@ -1,10 +1,12 @@
 // file: internal/remux/transcode_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
+// last-edited: 2026-07-03
 
 package remux
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"os"
@@ -28,7 +30,7 @@ func TestTranscoderNew(t *testing.T) {
 
 func TestTranscodeMalformedFilesWithoutStore(t *testing.T) {
 	transcoder := &Transcoder{store: nil}
-	transcoder.TranscodeMalformedFiles() // Should not panic
+	transcoder.TranscodeMalformedFiles(context.Background()) // Should not panic
 }
 
 func TestTranscodeMalformedFilesAlreadyCompleted(t *testing.T) {
@@ -42,7 +44,7 @@ func TestTranscodeMalformedFilesAlreadyCompleted(t *testing.T) {
 		},
 	}
 	transcoder := NewTranscoder(store)
-	transcoder.TranscodeMalformedFiles() // Should skip due to already completed
+	transcoder.TranscodeMalformedFiles(context.Background()) // Should skip due to already completed
 }
 
 func TestTranscodeSkipKey(t *testing.T) {

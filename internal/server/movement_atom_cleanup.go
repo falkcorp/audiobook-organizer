@@ -1,6 +1,7 @@
 // file: internal/server/movement_atom_cleanup.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c2d3e4f5-a6b7-8c9d-0e1f-2a3b4c5d6e7f
+// last-edited: 2026-07-03
 
 package server
 
@@ -25,8 +26,11 @@ var movementAtoms = []string{"SHOWWORKMOVEMENT", "MOVEMENTNUMBER", "MOVEMENTNAME
 
 // stripMovementAtoms walks the library root once, removes the three movement
 // atoms from every M4B/M4A file that has them, then marks itself done via a
-// settings flag so it never runs again.
-func (s *Server) stripMovementAtoms() {
+// settings flag so it never runs again. The walk checks ctx per file and
+// stops early via fs.SkipAll when canceled (SYS-1), so shutdown's 30s grace
+// period is not blown by a first-run walk over a large library. A canceled
+// run does not write the done flag, so the next startup resumes the cleanup.
+func (s *Server) stripMovementAtoms(ctx context.Context) {
 	store := s.Store()
 	if store == nil {
 		return
@@ -50,6 +54,13 @@ func (s *Server) stripMovementAtoms() {
 	stripped, clean, failed := 0, 0, 0
 
 	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+		// Stop the walk cleanly on shutdown (SYS-1). fs.SkipAll ends WalkDir
+		// without an error; WalkDir's return is discarded above by design.
+		select {
+		case <-ctx.Done():
+			return fs.SkipAll
+		default:
+		}
 		if walkErr != nil || d.IsDir() {
 			return nil
 		}

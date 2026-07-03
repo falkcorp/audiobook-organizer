@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
-// last-edited: 2026-06-29
+// last-edited: 2026-07-03
 
 package maintenance
 
@@ -25,14 +25,14 @@ func (r *fakeReporter) Log(_ slog.Level, msg string, _ ...slog.Attr) error {
 	r.logs = append(r.logs, msg)
 	return nil
 }
-func (r *fakeReporter) Logger() *slog.Logger { return slog.Default() }
+func (r *fakeReporter) Logger() *slog.Logger   { return slog.Default() }
 func (r *fakeReporter) Checkpoint(_ any) error { return nil }
 func (r *fakeReporter) IsCanceled() bool       { return false }
 func (r *fakeReporter) RunPhase(_ context.Context, _ string, fn func(context.Context, registry.Reporter) error) error {
 	return fn(context.Background(), r)
 }
 func (r *fakeReporter) Trigger(_ context.Context, _ string, _ any) error { return nil }
-func (r *fakeReporter) SetCurrentItem(_ string)                           {}
+func (r *fakeReporter) SetCurrentItem(_ string)                          {}
 
 var _ sdk.Reporter = (*fakeReporter)(nil)
 
@@ -51,24 +51,24 @@ func (d fakeDeps) RunMetadataRefreshScan(_ context.Context, _ operations.Progres
 func (d fakeDeps) RunBulkWriteBack(_ context.Context, _ string, _ []string, _ bool, _ int, _ operations.ProgressReporter) error {
 	return nil
 }
-func (d fakeDeps) RunAutoPurgeSoftDeleted(_ string)           {}
+func (d fakeDeps) RunAutoPurgeSoftDeleted(_ string) {}
 func (d fakeDeps) ExecuteSeriesPrune(_ context.Context, _ database.Store, _ operations.ProgressReporter, _ string) error {
 	return nil
 }
 func (d fakeDeps) ExecuteSeriesNormalizeCore(_ context.Context, _ database.Store, _ func(string)) ([]string, error) {
 	return nil, nil
 }
-func (d fakeDeps) BackfillExternalIDs()    {}
-func (d fakeDeps) StripMovementAtoms()     {}
-func (d fakeDeps) RemuxMalformedM4BFiles() {}
-func (d fakeDeps) TranscodeMalformedM4BFiles() {}
+func (d fakeDeps) BackfillExternalIDs()                            {}
+func (d fakeDeps) StripMovementAtoms(_ context.Context)            {}
+func (d fakeDeps) RemuxMalformedM4BFiles(_ context.Context)        {}
+func (d fakeDeps) TranscodeMalformedM4BFiles(_ context.Context)    {}
 func (d fakeDeps) CleanupOrphanedTempFiles(_ string, _ string) int { return 0 }
 func (d fakeDeps) CleanupTrashedVersions() int                     { return 0 }
 func (d fakeDeps) SweepArchivedBooks() int                         { return 0 }
 func (d fakeDeps) ActivityFlushOp(_ string)                        {}
 func (d fakeDeps) EnqueueWriteBack(_ string)                       {}
 func (d fakeDeps) PollBatch(_ context.Context) (int, error)        { return 0, nil }
-func (d fakeDeps) DedupLLMReview(_ context.Context) error { return nil }
+func (d fakeDeps) DedupLLMReview(_ context.Context) error          { return nil }
 func (d fakeDeps) DedupTriageExactPending(_ context.Context) (*TriageReport, error) {
 	return &TriageReport{}, nil
 }
@@ -82,15 +82,15 @@ func (d fakeDeps) PruneOldLogs(_ int) error   { return nil }
 func (d fakeDeps) CompactActivityLog(_ context.Context, _, _, _ int) (int, int, int, error) {
 	return 0, 0, 0, nil
 }
-func (d fakeDeps) HasDedupEngine() bool          { return false }
-func (d fakeDeps) HasMetadataFetchService() bool { return false }
-func (d fakeDeps) HasISBNEnrichment() bool       { return false }
-func (d fakeDeps) HasAIParsing() bool            { return false }
-func (d fakeDeps) HasBatchPoller() bool          { return false }
-func (d fakeDeps) RootDir() string               { return "/lib" }
-func (d fakeDeps) LogRetentionDays() int         { return 30 }
-func (d fakeDeps) PurgeSoftDeletedAfterDays() int { return 30 }
-func (d fakeDeps) ActivityLogCompactionDays() int { return 7 }
+func (d fakeDeps) HasDedupEngine() bool                { return false }
+func (d fakeDeps) HasMetadataFetchService() bool       { return false }
+func (d fakeDeps) HasISBNEnrichment() bool             { return false }
+func (d fakeDeps) HasAIParsing() bool                  { return false }
+func (d fakeDeps) HasBatchPoller() bool                { return false }
+func (d fakeDeps) RootDir() string                     { return "/lib" }
+func (d fakeDeps) LogRetentionDays() int               { return 30 }
+func (d fakeDeps) PurgeSoftDeletedAfterDays() int      { return 30 }
+func (d fakeDeps) ActivityLogCompactionDays() int      { return 7 }
 func (d fakeDeps) ActivityLogRetentionChangeDays() int { return 30 }
 func (d fakeDeps) ActivityLogRetentionDebugDays() int  { return 7 }
 func (d fakeDeps) BackupRetentionDays() int            { return 30 }

@@ -1,10 +1,12 @@
 // file: internal/remux/transcode.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
+// last-edited: 2026-07-03
 
 package remux
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"io/fs"
@@ -40,8 +42,10 @@ func TranscodeSkipKey(path string) string {
 // TranscodeMalformedFiles walks the library and re-encodes any M4B/M4A
 // file that taglib cannot parse even after the remux pass. Full AAC transcode
 // at 64 kbps rebuilds the file from scratch, which fixes corruption that a
-// stream copy cannot repair. Runs once at startup.
-func (t *Transcoder) TranscodeMalformedFiles() {
+// stream copy cannot repair. Runs once at startup. The walk checks ctx per
+// file and stops early via fs.SkipAll when canceled (SYS-1); a canceled run
+// does not write the done flag, so the next startup resumes.
+func (t *Transcoder) TranscodeMalformedFiles(ctx context.Context) {
 	if t.store == nil {
 		return
 	}
@@ -80,6 +84,13 @@ func (t *Transcoder) TranscodeMalformedFiles() {
 	transcoded, clean, failed, skipped := 0, 0, 0, 0
 
 	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+		// Stop the walk cleanly on shutdown (SYS-1). fs.SkipAll ends WalkDir
+		// without an error; WalkDir's return is discarded above by design.
+		select {
+		case <-ctx.Done():
+			return fs.SkipAll
+		default:
+		}
 		if walkErr != nil || d.IsDir() {
 			return nil
 		}

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/backfill.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f2a3b4c5-d6e7-8901-5678-123456789012
-// last-edited: 2026-05-07
+// last-edited: 2026-07-03
 
 package maintenance
 
@@ -62,9 +62,9 @@ func (p *Plugin) movementAtomCleanupDef() sdk.OperationDef {
 	}
 }
 
-func (p *Plugin) runMovementAtomCleanup(_ context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
+func (p *Plugin) runMovementAtomCleanup(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
 	_ = reporter.Log(slog.LevelInfo, "Starting movement atom cleanup")
-	p.deps.StripMovementAtoms()
+	p.deps.StripMovementAtoms(ctx)
 	_ = reporter.Log(slog.LevelInfo, "Movement atom cleanup complete")
 	return nil
 }
@@ -87,9 +87,9 @@ func (p *Plugin) malformedM4BRemuxDef() sdk.OperationDef {
 	}
 }
 
-func (p *Plugin) runMalformedM4BRemux(_ context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
+func (p *Plugin) runMalformedM4BRemux(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
 	_ = reporter.Log(slog.LevelInfo, "Starting malformed M4B remux")
-	p.deps.RemuxMalformedM4BFiles()
+	p.deps.RemuxMalformedM4BFiles(ctx)
 	_ = reporter.Log(slog.LevelInfo, "Malformed M4B remux complete")
 	return nil
 }
@@ -114,9 +114,9 @@ func (p *Plugin) malformedM4BTranscodeDef() sdk.OperationDef {
 	}
 }
 
-func (p *Plugin) runMalformedM4BTranscode(_ context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
+func (p *Plugin) runMalformedM4BTranscode(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
 	_ = reporter.Log(slog.LevelInfo, "Starting malformed M4B transcode")
-	p.deps.TranscodeMalformedM4BFiles()
+	p.deps.TranscodeMalformedM4BFiles(ctx)
 	_ = reporter.Log(slog.LevelInfo, "Malformed M4B transcode complete")
 	return nil
 }
