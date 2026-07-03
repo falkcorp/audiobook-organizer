@@ -2308,6 +2308,14 @@ func (de *Engine) EmbedBooksAsync(ctx context.Context) (batchID string, count in
 	if de.embedClient == nil {
 		return "", 0, fmt.Errorf("no embedding client configured")
 	}
+	// Hard-gate the OpenAI Batch API to openai-only embedding modes (TOGGLE-2).
+	// Local (Ollama) and disabled backends have no batch endpoint; a local
+	// backend would otherwise submit to OpenAI's Batch API with a dummy key.
+	// openai-fallback-local is intentionally also blocked — the Batch API has no
+	// fallback path. Callers should downgrade to the synchronous per-book path.
+	if mode := config.AppConfig.EffectiveEmbeddingMode(); mode != config.AIBackendModeOpenAI {
+		return "", 0, fmt.Errorf("%w (mode=%s)", ai.ErrBatchUnsupported, mode)
+	}
 
 	books, err := de.getAllBooks()
 	if err != nil {

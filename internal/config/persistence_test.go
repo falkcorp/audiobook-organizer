@@ -1,7 +1,7 @@
 // file: internal/config/persistence_test.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-06-23
+// last-edited: 2026-07-03
 
 package config
 
@@ -1246,4 +1246,78 @@ func TestRemapAutoUpdateKeys_NoFlatKeys(t *testing.T) {
 	payload := map[string]any{"root_dir": "/data"}
 	result := applyLegacyRemaps(payload)
 	assert.Equal(t, map[string]any{"root_dir": "/data"}, result)
+}
+
+// TestMigrateAIBackend_LocalFromBaseURL: a nested embedding.base_url signals a
+// local embedding backend; embedding_mode derives to "local" and the local
+// coordinates are carried over.
+func TestMigrateAIBackend_LocalFromBaseURL(t *testing.T) {
+	blob := `{
+		"openai_api_key": "sk-x",
+		"enable_ai_parsing": true,
+		"embedding": {"enabled": true, "base_url": "http://192.168.0.20:11434/v1", "model": "bge-m3"}
+	}`
+	migrated, changed := migrateAIBackendBlob(blob)
+	require.True(t, changed)
+	var result map[string]any
+	require.NoError(t, json.Unmarshal([]byte(migrated), &result))
+	ab, ok := result["ai_backend"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, AIBackendModeLocal, ab["embedding_mode"])
+	assert.Equal(t, AIBackendModeOpenAI, ab["llm_mode"]) // key + enable_ai_parsing
+	assert.Equal(t, "http://192.168.0.20:11434/v1", ab["local_base_url"])
+	assert.Equal(t, "bge-m3", ab["local_embedding_model"])
+}
+
+// TestMigrateAIBackend_OpenAIFromKey: a key with no embedding base_url derives
+// embedding_mode "openai"; llm_mode "openai" via enable_ai_parsing.
+func TestMigrateAIBackend_OpenAIFromKey(t *testing.T) {
+	blob := `{
+		"openai_api_key": "sk-x",
+		"enable_ai_parsing": true,
+		"embedding": {"enabled": true}
+	}`
+	migrated, changed := migrateAIBackendBlob(blob)
+	require.True(t, changed)
+	var result map[string]any
+	require.NoError(t, json.Unmarshal([]byte(migrated), &result))
+	ab := result["ai_backend"].(map[string]any)
+	assert.Equal(t, AIBackendModeOpenAI, ab["embedding_mode"])
+	assert.Equal(t, AIBackendModeOpenAI, ab["llm_mode"])
+	assert.NotContains(t, ab, "local_base_url") // no local backend configured
+}
+
+// TestMigrateAIBackend_DisabledWhenNoSignals: an embedding block present but
+// disabled and no key derives both modes to "disabled".
+func TestMigrateAIBackend_DisabledWhenNoSignals(t *testing.T) {
+	blob := `{
+		"embedding": {"enabled": false},
+		"metadata_scoring": {"llm_enabled": false}
+	}`
+	migrated, changed := migrateAIBackendBlob(blob)
+	require.True(t, changed)
+	var result map[string]any
+	require.NoError(t, json.Unmarshal([]byte(migrated), &result))
+	ab := result["ai_backend"].(map[string]any)
+	assert.Equal(t, AIBackendModeDisabled, ab["embedding_mode"])
+	assert.Equal(t, AIBackendModeDisabled, ab["llm_mode"])
+}
+
+// TestMigrateAIBackend_Idempotent: once ai_backend exists, re-running is a
+// no-op; and a blob with no AI signal fields is left untouched.
+func TestMigrateAIBackend_Idempotent(t *testing.T) {
+	// Already migrated.
+	_, changed := migrateAIBackendBlob(`{"ai_backend": {"embedding_mode": "openai"}}`)
+	assert.False(t, changed)
+
+	// A first migration followed by a second returns changed=false.
+	blob := `{"openai_api_key": "sk-x", "embedding": {"enabled": true}}`
+	migrated, changed := migrateAIBackendBlob(blob)
+	require.True(t, changed)
+	_, changed2 := migrateAIBackendBlob(migrated)
+	assert.False(t, changed2)
+
+	// No AI signal fields at all -> untouched.
+	_, changed3 := migrateAIBackendBlob(`{"root_dir": "/data"}`)
+	assert.False(t, changed3)
 }

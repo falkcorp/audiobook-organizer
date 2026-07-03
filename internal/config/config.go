@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.62.0
+// version: 1.63.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-07-03
 
@@ -219,6 +219,88 @@ type MetadataScoringConfig struct {
 	WriteBackupBefore  bool    `json:"write_backup_before"  mapstructure:"write_backup_before"`
 }
 
+// AIBackend mode constants. They control, independently for embeddings and
+// LLM/chat, which backend the corresponding client is constructed against.
+//
+//   - AIBackendModeDisabled: no client is constructed.
+//   - AIBackendModeOpenAI: the real OpenAI cloud API (requires OpenAIAPIKey).
+//   - AIBackendModeLocal: a local OpenAI-compatible endpoint (e.g. Ollama) at
+//     AIBackendConfig.LocalBaseURL; the API key is ignored by the backend.
+//   - AIBackendModeOpenAIFallbackLocal: primary OpenAI with a local fallback.
+//     The fallback *trigger* is not implemented by this config; it is wired by
+//     the error-classification layer (retry.go). At construction time this mode
+//     behaves like OpenAI (real key required).
+const (
+	AIBackendModeDisabled            = "disabled"
+	AIBackendModeOpenAI              = "openai"
+	AIBackendModeLocal               = "local"
+	AIBackendModeOpenAIFallbackLocal = "openai-fallback-local"
+)
+
+// AIBackendConfig holds the backend-mode toggle for the AI cluster. It nests
+// independent embedding / LLM mode enums plus the local endpoint coordinates so
+// operators can point each pipeline at OpenAI, a local Ollama-style backend, or
+// disable it — without the previous coupling of everything to a single
+// OpenAIAPIKey / OPENAI_BASE_URL pair.
+//
+// EmbeddingMode / LLMMode may be empty at rest; the effective mode is then
+// derived from the legacy flat fields (Embedding.BaseURL, OpenAIAPIKey,
+// EnableAIParsing, MetadataScoring.LLMEnabled) via Config.EffectiveEmbeddingMode
+// / Config.EffectiveLLMMode. Migration (migrateAIBackendBlob) fills these in on
+// load; the effective-mode helpers make even an un-migrated blob safe.
+type AIBackendConfig struct {
+	EmbeddingMode       string `json:"embedding_mode"        mapstructure:"embedding_mode"`
+	LLMMode             string `json:"llm_mode"              mapstructure:"llm_mode"`
+	LocalBaseURL        string `json:"local_base_url"        mapstructure:"local_base_url"`
+	LocalEmbeddingModel string `json:"local_embedding_model" mapstructure:"local_embedding_model"`
+	LocalLLMModel       string `json:"local_llm_model"       mapstructure:"local_llm_model"`
+}
+
+// EffectiveEmbeddingMode resolves the embedding backend mode. When
+// AIBackend.EmbeddingMode is set explicitly it wins. Otherwise the mode is
+// derived from the legacy flat fields, mirroring the pre-toggle behavior of the
+// embedclient registration:
+//
+//   - Embedding.Enabled == false -> disabled (master off-switch preserved).
+//   - Embedding.BaseURL != ""     -> local  (a local endpoint is configured).
+//   - OpenAIAPIKey != ""          -> openai.
+//   - otherwise                   -> disabled.
+//
+// This method is pure: it reads config and returns a string, mutating nothing,
+// so it is safe to call from concurrent readers (e.g. the dedup engine reading
+// the global AppConfig).
+func (c *Config) EffectiveEmbeddingMode() string {
+	if c.AIBackend.EmbeddingMode != "" {
+		return c.AIBackend.EmbeddingMode
+	}
+	if !c.Embedding.Enabled {
+		return AIBackendModeDisabled
+	}
+	if c.Embedding.BaseURL != "" {
+		return AIBackendModeLocal
+	}
+	if c.OpenAIAPIKey != "" {
+		return AIBackendModeOpenAI
+	}
+	return AIBackendModeDisabled
+}
+
+// EffectiveLLMMode resolves the LLM/chat backend mode. When AIBackend.LLMMode is
+// set explicitly it wins. Otherwise: openai when a key is configured and any LLM
+// consumer is enabled (EnableAIParsing or MetadataScoring.LLMEnabled), else
+// disabled. There is no legacy flat field for a local LLM endpoint, so local LLM
+// use must be selected explicitly via AIBackend.LLMMode. Pure (see
+// EffectiveEmbeddingMode).
+func (c *Config) EffectiveLLMMode() string {
+	if c.AIBackend.LLMMode != "" {
+		return c.AIBackend.LLMMode
+	}
+	if c.OpenAIAPIKey != "" && (c.EnableAIParsing || c.MetadataScoring.LLMEnabled) {
+		return AIBackendModeOpenAI
+	}
+	return AIBackendModeDisabled
+}
+
 // ScheduledTaskConfig holds per-task scheduler settings.
 type ScheduledTaskConfig struct {
 	Enabled   bool `json:"enabled"    mapstructure:"enabled"`
@@ -348,6 +430,11 @@ type Config struct {
 	// (embedding scoring, LLM rerank tier, and tag-write backup policy).
 	// Previously these were 7 flat fields; Wave 3 nests them here.
 	MetadataScoring MetadataScoringConfig `json:"metadata_scoring" mapstructure:"metadata_scoring"`
+
+	// AIBackend holds the backend-mode toggle for the embedding + LLM clients
+	// (independent EmbeddingMode / LLMMode enums, local endpoint coordinates).
+	// See AIBackendConfig and EffectiveEmbeddingMode / EffectiveLLMMode.
+	AIBackend AIBackendConfig `json:"ai_backend" mapstructure:"ai_backend"`
 
 	// API limits
 	APIRateLimitPerMinute  int  `json:"api_rate_limit_per_minute"`
@@ -745,6 +832,21 @@ func InitConfig() {
 	viper.SetDefault("metadata_scoring.llm_rerank_epsilon", 0.05)
 	viper.SetDefault("metadata_scoring.llm_rerank_top_k", 5)
 	viper.SetDefault("metadata_scoring.write_backup_before", true)
+
+	// AI backend-mode toggle. Modes default empty (resolved from legacy fields
+	// by EffectiveEmbeddingMode / EffectiveLLMMode). LocalBaseURL uses a
+	// placeholder host; real endpoints live in gitignored local config.
+	viper.SetDefault("ai_backend.embedding_mode", "")
+	viper.SetDefault("ai_backend.llm_mode", "")
+	viper.SetDefault("ai_backend.local_base_url", "http://192.168.0.20:11434/v1")
+	viper.SetDefault("ai_backend.local_embedding_model", "bge-m3")
+	viper.SetDefault("ai_backend.local_llm_model", "qwen2.5:7b-instruct")
+	viper.BindEnv("ai_backend.embedding_mode", "AI_BACKEND_EMBEDDING_MODE")               //nolint:errcheck
+	viper.BindEnv("ai_backend.llm_mode", "AI_BACKEND_LLM_MODE")                           //nolint:errcheck
+	viper.BindEnv("ai_backend.local_base_url", "AI_BACKEND_LOCAL_BASE_URL")               //nolint:errcheck
+	viper.BindEnv("ai_backend.local_embedding_model", "AI_BACKEND_LOCAL_EMBEDDING_MODEL") //nolint:errcheck
+	viper.BindEnv("ai_backend.local_llm_model", "AI_BACKEND_LOCAL_LLM_MODEL")             //nolint:errcheck
+
 	viper.BindEnv("metadata_scoring.embedding_enabled", "METADATA_SCORING_EMBEDDING_ENABLED")       //nolint:errcheck
 	viper.BindEnv("metadata_scoring.embedding_min_score", "METADATA_SCORING_EMBEDDING_MIN_SCORE")   //nolint:errcheck
 	viper.BindEnv("metadata_scoring.embedding_best_match", "METADATA_SCORING_EMBEDDING_BEST_MATCH") //nolint:errcheck
@@ -982,6 +1084,17 @@ func InitConfig() {
 				LLMRerankEpsilon:   viper.GetFloat64("metadata_scoring.llm_rerank_epsilon"),
 				LLMRerankTopK:      viper.GetInt("metadata_scoring.llm_rerank_top_k"),
 				WriteBackupBefore:  viper.GetBool("metadata_scoring.write_backup_before"),
+			},
+
+			// AI backend-mode toggle (nested sub-struct). Modes default empty
+			// (resolved by EffectiveEmbeddingMode / EffectiveLLMMode); local
+			// endpoint coordinates carry Ollama-style defaults.
+			AIBackend: AIBackendConfig{
+				EmbeddingMode:       viper.GetString("ai_backend.embedding_mode"),
+				LLMMode:             viper.GetString("ai_backend.llm_mode"),
+				LocalBaseURL:        viper.GetString("ai_backend.local_base_url"),
+				LocalEmbeddingModel: viper.GetString("ai_backend.local_embedding_model"),
+				LocalLLMModel:       viper.GetString("ai_backend.local_llm_model"),
 			},
 
 			// Scheduled background tasks (nested sub-struct)
@@ -1395,6 +1508,18 @@ func ResetToDefaults() {
 				LLMRerankEpsilon:   0.05,
 				LLMRerankTopK:      5,
 				WriteBackupBefore:  true,
+			},
+
+			// AI backend-mode toggle. Modes empty at rest (derived from legacy
+			// fields by EffectiveEmbeddingMode / EffectiveLLMMode); local
+			// endpoint coordinates carry Ollama defaults. LocalBaseURL uses a
+			// placeholder host — real endpoints live in gitignored local config.
+			AIBackend: AIBackendConfig{
+				EmbeddingMode:       "",
+				LLMMode:             "",
+				LocalBaseURL:        "http://192.168.0.20:11434/v1",
+				LocalEmbeddingModel: "bge-m3",
+				LocalLLMModel:       "qwen2.5:7b-instruct",
 			},
 
 			// Logging

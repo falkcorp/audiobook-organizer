@@ -1,7 +1,7 @@
 // file: internal/ai/openai_parser.go
-// version: 13.6.0
+// version: 13.7.0
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
-// last-edited: 2026-06-22
+// last-edited: 2026-07-03
 
 package ai
 
@@ -42,6 +42,13 @@ type OpenAIParser struct {
 	maxRetries    int
 	enabled       bool
 	responseCache *cache.Cache[*ParsedMetadata] // Application-level response cache
+
+	// defaultModelOverride replaces the package-level defaultModel constant as
+	// the fallback when a per-feature model field is empty. Set by
+	// NewOpenAIParserWithBaseURL so a local backend (e.g. Ollama) uses its own
+	// model name (e.g. "qwen2.5:7b-instruct") instead of the OpenAI-only
+	// "gpt-5-mini" default. Empty means fall back to defaultModel.
+	defaultModelOverride string
 }
 
 // Default cache TTL for AI responses (24 hours — metadata doesn't change often)
@@ -50,12 +57,22 @@ const aiResponseCacheTTL = 24 * time.Hour
 // defaultModel is the fallback when cfg is nil or the per-feature field is empty.
 const defaultModel = "gpt-5-mini"
 
+// fallbackModel returns the model to use when a per-feature field is empty:
+// the per-client override (set for local backends) if present, else the
+// package-level OpenAI default.
+func (p *OpenAIParser) fallbackModel() string {
+	if p.defaultModelOverride != "" {
+		return p.defaultModelOverride
+	}
+	return defaultModel
+}
+
 // filenameParseModel returns the configured model for filename/audiobook parsing.
 func (p *OpenAIParser) filenameParseModel() string {
 	if p.cfg != nil && p.cfg.FilenameParseModel != "" {
 		return p.cfg.FilenameParseModel
 	}
-	return defaultModel
+	return p.fallbackModel()
 }
 
 // coverArtModel returns the configured model for cover-art parsing.
@@ -63,7 +80,7 @@ func (p *OpenAIParser) coverArtModel() string {
 	if p.cfg != nil && p.cfg.CoverArtModel != "" {
 		return p.cfg.CoverArtModel
 	}
-	return defaultModel
+	return p.fallbackModel()
 }
 
 // metadataReviewModel returns the configured model for metadata review operations.
@@ -71,29 +88,52 @@ func (p *OpenAIParser) metadataReviewModel() string {
 	if p.cfg != nil && p.cfg.MetadataReviewModel != "" {
 		return p.cfg.MetadataReviewModel
 	}
-	return defaultModel
+	return p.fallbackModel()
 }
 
-// NewOpenAIParser creates a new OpenAI parser.
+// NewOpenAIParser creates a new OpenAI parser using the process-wide
+// OPENAI_BASE_URL env (if set) and the OpenAI default model. Preserved for
+// backward compatibility with existing callers; new callers that need a
+// per-client base URL / model (e.g. a local Ollama backend) should use
+// NewOpenAIParserWithBaseURL, which never consults OPENAI_BASE_URL.
+//
 // cfg may be nil; when provided, per-feature model fields override the default.
 func NewOpenAIParser(cfg *config.Config, apiKey string, enabled bool) *OpenAIParser {
+	return NewOpenAIParserWithBaseURL(cfg, apiKey, os.Getenv("OPENAI_BASE_URL"), defaultModel, enabled)
+}
+
+// NewOpenAIParserWithBaseURL creates an OpenAI parser pinned to an explicit
+// base URL and fallback model, without consulting the process-wide
+// OPENAI_BASE_URL env.
+//
+// baseURL scopes an OpenAI-compatible endpoint override to THIS parser only
+// (e.g. "http://127.0.0.1:11434/v1" for a local Ollama). This is deliberately a
+// parameter rather than the OPENAI_BASE_URL env, because that env applies to
+// every default OpenAI client in the process — including the embedding client,
+// which must NOT be silently redirected. An empty baseURL uses the OpenAI
+// default endpoint.
+//
+// model is the fallback model used when a per-feature model field on cfg is
+// empty; an empty model keeps the OpenAI-only defaultModel. cfg may be nil.
+func NewOpenAIParserWithBaseURL(cfg *config.Config, apiKey, baseURL, model string, enabled bool) *OpenAIParser {
 	if !enabled || apiKey == "" {
-		return &OpenAIParser{enabled: false, cfg: cfg}
+		return &OpenAIParser{enabled: false, cfg: cfg, defaultModelOverride: model}
 	}
 
 	clientOptions := []option.RequestOption{option.WithAPIKey(apiKey)}
-	if baseURL := os.Getenv("OPENAI_BASE_URL"); baseURL != "" {
+	if baseURL != "" {
 		clientOptions = append(clientOptions, option.WithBaseURL(baseURL))
 	}
 
 	client := openai.NewClient(clientOptions...)
 
 	return &OpenAIParser{
-		client:        &client,
-		cfg:           cfg,
-		maxRetries:    2,
-		enabled:       true,
-		responseCache: cache.New[*ParsedMetadata]("ai_response", aiResponseCacheTTL),
+		client:               &client,
+		cfg:                  cfg,
+		maxRetries:           2,
+		enabled:              true,
+		responseCache:        cache.New[*ParsedMetadata]("ai_response", aiResponseCacheTTL),
+		defaultModelOverride: model,
 	}
 }
 
@@ -169,8 +209,8 @@ Set confidence based on clarity of the filename structure.`
 			openai.SystemMessage(systemPrompt),
 			openai.UserMessage(userPrompt),
 		},
-		Model:               shared.ChatModel(p.filenameParseModel()), // filename parsing uses FilenameParseModel
-		MaxCompletionTokens: param.NewOpt[int64](500),
+		Model:                shared.ChatModel(p.filenameParseModel()), // filename parsing uses FilenameParseModel
+		MaxCompletionTokens:  param.NewOpt[int64](500),
 		PromptCacheKey:       param.NewOpt("audiobook-filename-parser-v1"),
 		PromptCacheRetention: openai.ChatCompletionNewParamsPromptCacheRetention24h,
 		ResponseFormat: openai.ChatCompletionNewParamsResponseFormatUnion{
@@ -274,8 +314,8 @@ Set confidence based on how much context was available and how unambiguous it is
 			openai.SystemMessage(systemPrompt),
 			openai.UserMessage(userPrompt),
 		},
-		Model:               shared.ChatModel(p.filenameParseModel()), // audiobook context parsing uses FilenameParseModel
-		MaxCompletionTokens: param.NewOpt[int64](500),
+		Model:                shared.ChatModel(p.filenameParseModel()), // audiobook context parsing uses FilenameParseModel
+		MaxCompletionTokens:  param.NewOpt[int64](500),
 		PromptCacheKey:       param.NewOpt("audiobook-context-parser-v1"),
 		PromptCacheRetention: openai.ChatCompletionNewParamsPromptCacheRetention24h,
 		ResponseFormat: openai.ChatCompletionNewParamsResponseFormatUnion{
@@ -358,8 +398,8 @@ Set confidence based on clarity of the filename structure.`
 				openai.SystemMessage(systemPrompt),
 				openai.UserMessage(userPrompt),
 			},
-			Model:               shared.ChatModel(p.filenameParseModel()), // batch filename parsing uses FilenameParseModel
-			MaxCompletionTokens: param.NewOpt[int64](2000),
+			Model:                shared.ChatModel(p.filenameParseModel()), // batch filename parsing uses FilenameParseModel
+			MaxCompletionTokens:  param.NewOpt[int64](2000),
 			PromptCacheKey:       param.NewOpt("audiobook-batch-parser-v1"),
 			PromptCacheRetention: openai.ChatCompletionNewParamsPromptCacheRetention24h,
 			ResponseFormat: openai.ChatCompletionNewParamsResponseFormatUnion{
@@ -423,7 +463,7 @@ Set confidence based on how clearly the text is readable on the cover.`
 				openai.TextContentPart("Read the metadata from this audiobook cover image."),
 			}),
 		},
-		Model:               shared.ChatModel(p.coverArtModel()), // cover art parsing uses CoverArtModel
+		Model:                shared.ChatModel(p.coverArtModel()), // cover art parsing uses CoverArtModel
 		PromptCacheKey:       param.NewOpt("audiobook-cover-parser-v1"),
 		PromptCacheRetention: openai.ChatCompletionNewParamsPromptCacheRetention24h,
 		MaxCompletionTokens:  param.NewOpt[int64](500),
@@ -564,8 +604,8 @@ The roles object fields are all optional — only include roles that are detecte
 				openai.SystemMessage(systemPrompt),
 				openai.UserMessage(userPrompt),
 			},
-			Model:               shared.ChatModel(p.metadataReviewModel()), // author dedup review uses MetadataReviewModel
-			MaxCompletionTokens: param.NewOpt[int64](32000),
+			Model:                shared.ChatModel(p.metadataReviewModel()), // author dedup review uses MetadataReviewModel
+			MaxCompletionTokens:  param.NewOpt[int64](32000),
 			PromptCacheKey:       param.NewOpt("audiobook-author-dedup-v4"),
 			PromptCacheRetention: openai.ChatCompletionNewParamsPromptCacheRetention24h,
 			ResponseFormat: openai.ChatCompletionNewParamsResponseFormatUnion{
@@ -686,8 +726,8 @@ The roles object fields are all optional — only include roles that are detecte
 				openai.SystemMessage(systemPrompt),
 				openai.UserMessage(userPrompt),
 			},
-			Model:               shared.ChatModel(p.metadataReviewModel()), // author discovery review uses MetadataReviewModel
-			MaxCompletionTokens: param.NewOpt[int64](16000),
+			Model:                shared.ChatModel(p.metadataReviewModel()), // author discovery review uses MetadataReviewModel
+			MaxCompletionTokens:  param.NewOpt[int64](16000),
 			PromptCacheKey:       param.NewOpt("audiobook-author-discover-v4"),
 			PromptCacheRetention: openai.ChatCompletionNewParamsPromptCacheRetention24h,
 			ResponseFormat: openai.ChatCompletionNewParamsResponseFormatUnion{
