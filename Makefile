@@ -1,5 +1,5 @@
 # file: Makefile
-# version: 2.15.0
+# version: 2.15.1
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
 # last-edited: 2026-07-03
 
@@ -170,12 +170,16 @@ test: vet
 
 ## test-short: Run Go backend tests in short mode — skips slow property
 ## tests (undo/playlist/dedup/etc.) that create per-iteration PebbleStores.
+## Produces coverage.out as a side effect (consumed by coverage-check-short).
 ## Use for fast dev iteration and for sweep-style refactors where the
 ## primary gate is `go build ./...`. CI still runs the full suite.
 test-short: vet
 	@echo "🧪 Running backend tests (-short — slow prop tests skipped)..."
 	@go test ./... -short -race
 	@echo "✅ Short backend tests passed"
+	@echo "📊 Generating coverage profile (separate run)..."
+	@go test ./... -short -coverprofile=coverage.out -covermode=atomic >/dev/null 2>&1
+	@echo "✅ Coverage profile generated"
 
 ## vet: Run go vet across every package. Catches hand-written mock
 ## drift (the stubStore / PR #234 incident) before tests even compile.
@@ -307,17 +311,40 @@ coverage-check:
 	fi; \
 	echo "✅ Coverage $$coverage% meets 30% threshold"
 
-## coverage-check-short: Verify coverage using -short suite (prop tests skipped)
+## coverage-check-short: Verify coverage using pre-existing coverage.out (produced by test-short).
+## Fails if coverage.out is missing or if coverage drops below the committed floor file (.ci/coverage-floor.txt).
+## The floor file can only be raised by a human; this ensures we don't silently erode coverage over time.
 coverage-check-short:
 	@echo "🎯 Checking coverage threshold (-short)..."
-	@go test ./... -short -coverprofile=coverage.out -covermode=atomic >/dev/null 2>&1
+	@if [ ! -f coverage.out ]; then \
+		echo "❌ coverage.out not found. Run 'make test-short' first."; \
+		exit 1; \
+	fi
+	@echo "Per-package coverage:"
+	@go tool cover -func=coverage.out | grep -v total
 	@coverage=$$(go tool cover -func=coverage.out | grep total | awk '{print $$3}' | sed 's/%//'); \
-	echo "Coverage: $$coverage%"; \
-	if [ $$(echo "$$coverage < 30" | bc -l) -eq 1 ]; then \
-		echo "❌ Coverage $$coverage% is below 30% threshold"; \
+	echo ""; \
+	echo "Total coverage: $$coverage%"; \
+	floor_file=".ci/coverage-floor.txt"; \
+	if [ ! -f "$$floor_file" ]; then \
+		echo "❌ $$floor_file not found. Coverage floor file must be committed to the repo."; \
 		exit 1; \
 	fi; \
-	echo "✅ Coverage $$coverage% meets 30% threshold"
+	floor=$$(cat $$floor_file); \
+	if [ $$(echo "$$coverage < $$floor" | bc -l) -eq 1 ]; then \
+		echo "❌ Coverage $$coverage% is below committed floor $$floor%"; \
+		exit 1; \
+	fi; \
+	last_file=".ci/coverage-last.txt"; \
+	if [ -f "$$last_file" ]; then \
+		last=$$(cat $$last_file); \
+		if [ $$(echo "$$coverage < $$last" | bc -l) -eq 1 ]; then \
+			echo "⚠️  WARN: Coverage dropped from $$last% to $$coverage%"; \
+		fi; \
+	fi; \
+	mkdir -p .ci; \
+	echo "$$coverage" > "$$last_file"; \
+	echo "✅ Coverage $$coverage% meets floor $$floor%"
 
 ## ci: Fast CI check (short tests — prop tests skipped; use test-nightly for full suite)
 ci: mocks-check check-mock-fresh staticcheck sdkguard test-all-short coverage-check-short
