@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2.go
-// version: 3.5.0
+// version: 3.6.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-06-24
+// last-edited: 2026-07-03
 
 // pebble_store_ops_v2 implements OpsV2Store for PebbleDB (the primary production
 // database). Key schema (all prefixed with "opv2:"):
@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -149,7 +150,10 @@ func (p *PebbleStore) InsertOperationV2(row OperationV2Row) error {
 }
 
 // ListQueuedOperationsV2 returns queued ops ordered by priority DESC, queued_at ASC.
-func (p *PebbleStore) ListQueuedOperationsV2() ([]OperationV2Row, error) {
+func (p *PebbleStore) ListQueuedOperationsV2() (rows []OperationV2Row, err error) {
+	// Guarded like ListWaitingDepsOps: this is the read the dispatcher's 100ms
+	// ticker performs; on a leaked registry it hits the closed store first.
+	defer recoverPebbleClosed("ListQueuedOperationsV2", &err)
 	prefix := []byte("opv2:q:")
 	iter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: prefix,
@@ -631,9 +635,32 @@ func (p *PebbleStore) ListFileCompletions(sub OpSubject, opType string) (map[str
 	return result, nil
 }
 
+// recoverPebbleClosed is a deferred guard for the ops-v2 reads that registry
+// background goroutines (DepsScheduler sweep ticker, dispatcher cycle) perform
+// on periodic tickers. If a registry is torn down without Shutdown (or a read
+// races a Close in a way the registry-side drain cannot see), pebble PANICS
+// ErrClosed from NewIter / iteration instead of returning an error, killing
+// the whole process (PEBBLE-CLOSED-SWEEPTICK-RESIDUAL). Recover ONLY that
+// sentinel (errors.Is(pebble.ErrClosed)) and surface it as an error — both
+// callers already log-and-skip on error. Any other panic is re-raised so real
+// bugs are not masked. Precedent: HNSWEmbeddingStore.safeAdd (commit 5b90d2f6)
+// containing library panics at the store boundary.
+func recoverPebbleClosed(op string, errp *error) {
+	if rec := recover(); rec != nil {
+		recErr, ok := rec.(error)
+		if !ok || !errors.Is(recErr, pebble.ErrClosed) {
+			panic(rec)
+		}
+		slog.Warn("pebble: read on closed store; returning error instead of panicking (likely a registry torn down without Shutdown)",
+			"op", op, "error", recErr)
+		*errp = fmt.Errorf("%s: %w", op, recErr)
+	}
+}
+
 // ListWaitingDepsOps returns all OperationV2Row entries whose Status is
 // "waiting_deps".  No status index exists, so this scans all opv2:op: rows.
-func (p *PebbleStore) ListWaitingDepsOps() ([]OperationV2Row, error) {
+func (p *PebbleStore) ListWaitingDepsOps() (rows []OperationV2Row, err error) {
+	defer recoverPebbleClosed("ListWaitingDepsOps", &err)
 	prefix := []byte("opv2:op:")
 	iter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: prefix,

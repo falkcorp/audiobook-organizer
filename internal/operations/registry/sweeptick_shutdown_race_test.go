@@ -1,5 +1,5 @@
 // file: internal/operations/registry/sweeptick_shutdown_race_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3c9f1a72-8d54-4be1-9f20-6a7c1d4e5b83
 // last-edited: 2026-07-03
 
@@ -19,8 +19,15 @@
 // blocks (once armed) for longer than Shutdown's 2s escape before touching the
 // real store. Pre-fix the store is closed underneath the sleeping sweep → the
 // subsequent NewIter panics. Post-fix Shutdown joins the sweep goroutine
-// explicitly (bounded by the caller ctx, not the 2s escape), so the sweep
-// finishes against the still-open store.
+// UNCONDITIONALLY (never the 2s escape), so the sweep finishes against the
+// still-open store.
+//
+// TestLeakedRegistrySweepDoesNotPanicOnClosedStore covers the second leg seen
+// in internal/server gate runs: a registry whose Shutdown is never called at
+// all (internal/testutil/integration.go's cleanup closes the store with no
+// registry drain). Its leaked sweep ticker fires after Close; the store-side
+// closed-guard in PebbleStore.ListWaitingDepsOps must convert pebble's
+// ErrClosed panic into an error the sweep logs-and-skips.
 package registry_test
 
 import (
@@ -118,5 +125,47 @@ func TestShutdownDrainsSweepTicker_RealStore(t *testing.T) {
 		// Pre-fix, an abandoned sweep's iterator panics here with
 		// "pebble: closed" and crashes the test binary.
 		cleanup()
+	}
+}
+
+// TestLeakedRegistrySweepDoesNotPanicOnClosedStore reproduces the
+// leaked-registry leg: the store is closed while the registry is still
+// running (no Shutdown), exactly what happens when a test's teardown closes
+// the PebbleStore without draining the op registry. The sweep ticker keeps
+// firing against the closed store; without the closed-guard in
+// PebbleStore.ListWaitingDepsOps every tick panics "pebble: closed" and
+// crashes the whole test binary. With the guard each tick logs a warning and
+// skips.
+func TestLeakedRegistrySweepDoesNotPanicOnClosedStore(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	store, cleanup := openTestPebbleStore(t)
+	schedStore := &pebbleSchedulerStore{PebbleStore: store}
+
+	reg := registry.NewWithOptions(store, logger, 2, registry.Options{
+		SweepInterval: 5 * time.Millisecond,
+	})
+	sched := registry.NewDepsScheduler(reg, schedStore)
+	reg.SetDepsScheduler(sched)
+
+	def := makeValidDef("leak.op")
+	def.ID = "leak.op"
+	if err := reg.RegisterOp(def); err != nil {
+		t.Fatalf("RegisterOp: %v", err)
+	}
+
+	reg.Start(context.Background())
+
+	// Close the store WITHOUT calling reg.Shutdown — the leaked ticker keeps
+	// sweeping. Give it time for many ticks against the closed store: pre-guard
+	// this panics the binary; post-guard the sweeps error-and-skip.
+	cleanup()
+	time.Sleep(250 * time.Millisecond)
+
+	// Drain the registry so the ticker goroutine does not outlive the test.
+	shutCtx, shutCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutCancel()
+	if err := reg.Shutdown(shutCtx); err != nil {
+		t.Fatalf("Shutdown: %v", err)
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/operations/registry/registry.go
-// version: 3.3.0
+// version: 3.4.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-07-03
 
@@ -82,12 +82,12 @@ type Registry struct {
 	sweepInterval time.Duration
 
 	// sweepStopped is closed by the DepsScheduler sweep-ticker goroutine when
-	// it exits. Shutdown joins on it (after canceling the internal context) so
-	// an in-flight SweepTick — which reads the store via ListWaitingDepsOps —
-	// is guaranteed to finish before Shutdown returns and the caller closes the
-	// store. Without this, the generic goroutineWG.Wait() below abandons the
-	// tick goroutine after its 2s escape, letting the caller close the store
-	// while a sweep is mid-iteration (panic "pebble: closed",
+	// it exits. Shutdown joins on it UNCONDITIONALLY (after canceling the
+	// internal context) so an in-flight SweepTick — which reads the store via
+	// ListWaitingDepsOps — is guaranteed to finish before Shutdown returns and
+	// the caller closes the store. Without this, the generic goroutineWG.Wait()
+	// abandons the tick goroutine after its 2s escape, letting the caller close
+	// the store while a sweep is mid-iteration (panic "pebble: closed",
 	// PEBBLE-CLOSED-SWEEPTICK-RESIDUAL). nil when no scheduler was wired at
 	// Start (no ticker goroutine spawned). Set fresh in each Start().
 	sweepStopped chan struct{}
@@ -876,15 +876,22 @@ func (r *Registry) Shutdown(ctx context.Context) error {
 	// which would let the caller close the store while a sweep is mid-iteration
 	// (panic "pebble: closed", PEBBLE-CLOSED-SWEEPTICK-RESIDUAL). The gate in the
 	// tick loop guarantees no NEW sweep starts once the context is canceled, so
-	// this join blocks only on at most one in-flight, bounded store scan. It is
-	// bounded by the caller-provided ctx (never the arbitrary 2s) so a genuinely
-	// stuck sweep still cannot hang Shutdown forever.
+	// this join blocks only on at most one in-flight sweep — a single, finite
+	// ListWaitingDepsOps scan plus per-op promotions. The join is UNCONDITIONAL:
+	// under heavy parallel-suite load a sweep can outlive both the caller ctx
+	// and the 2s escape below, and returning early lets the caller close the
+	// store under the still-running sweep. The 2s escape exists for stuck op
+	// goroutines, not the sweeper. A warn is logged if the join is unexpectedly
+	// slow so a genuinely wedged store read stays visible.
 	if r.sweepStopped != nil {
+		slowJoin := time.NewTimer(5 * time.Second)
 		select {
 		case <-r.sweepStopped:
-		case <-ctx.Done():
-			r.logger.Warn("registry: sweep ticker did not stop before shutdown deadline")
+		case <-slowJoin.C:
+			r.logger.Warn("registry: still waiting on in-flight deps sweep before shutdown")
+			<-r.sweepStopped
 		}
+		slowJoin.Stop()
 	}
 	// Reject any further dep-notify enrollment before we wait, so a worker
 	// finishing its last op during teardown cannot Add to goroutineWG after the
