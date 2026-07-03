@@ -441,7 +441,18 @@ func NewServer(store database.Store) *Server {
 		server.hnswPersistDir = hnswDir
 		if raw, ok := serviceregistry.TryGet[database.VectorANNStore](regContainer, "chromemstore"); ok && raw != nil {
 			if hnswStore, ok := raw.(*database.HNSWEmbeddingStore); ok {
-				if err := hnswStore.Import(hnswDir); err != nil {
+				// ARCH-1: guard the snapshot fast-path with a cheap staleness
+				// check against the Pebble source of truth. Without this, an
+				// unclean shutdown silently and permanently strands dedup
+				// Layer 2 on a graph missing every vector upserted since the
+				// last clean-shutdown Export (HNSW-CRASH-2026-06-18 note above
+				// still governs the Import-before-PostInit ordering; this
+				// check does not change that).
+				var truthCount func(string) (int, error)
+				if embStore, ok := serviceregistry.TryGet[*database.EmbeddingStore](regContainer, serviceregistry.KeyEmbeddingStore); ok && embStore != nil {
+					truthCount = embStore.CountByType
+				}
+				if err := hnswStore.ImportWithStalenessCheck(hnswDir, truthCount); err != nil {
 					if !errors.Is(err, database.ErrNoHNSWSnapshot) {
 						slog.Warn("hnsw: import failed, will hydrate from PebbleDB", "err", err)
 					}

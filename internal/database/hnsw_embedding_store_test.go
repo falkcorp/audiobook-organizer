@@ -1,7 +1,7 @@
 // file: internal/database/hnsw_embedding_store_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-06-18
+// last-edited: 2026-07-03
 
 package database
 
@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 )
@@ -403,5 +405,267 @@ func TestHNSW_SnapshotSkipsHydration(t *testing.T) {
 	}
 	if got, _ := s2.CountByType(ctx, "book"); got != 51 {
 		t.Errorf("CountByType after new insert = %d, want 51", got)
+	}
+}
+
+// TestHNSW_ExportAtomic_BadWriteLeavesGoodSnapshotIntact locks ARCH-2's Export
+// half: a failed write for one entity type must not clobber a previously
+// committed good snapshot at the final path (temp+rename semantics).
+func TestHNSW_ExportAtomic_BadWriteLeavesGoodSnapshotIntact(t *testing.T) {
+	const dim = 4
+	ctx := context.Background()
+	s := NewHNSWEmbeddingStore(dim)
+
+	if err := s.Upsert(ctx, "book", "B1", []float32{1, 0, 0, 0}, nil); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	dir := t.TempDir()
+	if err := s.Export(dir); err != nil {
+		t.Fatalf("first export: %v", err)
+	}
+	binPath := filepath.Join(dir, "hnsw-book.bin")
+	before, err := os.ReadFile(binPath)
+	if err != nil {
+		t.Fatalf("read committed snapshot: %v", err)
+	}
+
+	// Simulate an interrupted second export: pre-create the .bin temp path as
+	// a directory, so os.Create on it fails (EISDIR) partway through the next
+	// Export, without touching the already-committed good file.
+	s2 := NewHNSWEmbeddingStore(dim)
+	if err := s2.Upsert(ctx, "book", "B2", []float32{0, 1, 0, 0}, nil); err != nil {
+		t.Fatalf("upsert into second store: %v", err)
+	}
+	tmpBinPath := binPath + ".tmp"
+	if err := os.Mkdir(tmpBinPath, 0o755); err != nil {
+		t.Fatalf("pre-create tmp path as dir: %v", err)
+	}
+	defer os.Remove(tmpBinPath)
+
+	if err := s2.Export(dir); err == nil {
+		t.Fatal("expected Export to fail when the .bin temp path cannot be created")
+	}
+
+	after, err := os.ReadFile(binPath)
+	if err != nil {
+		t.Fatalf("read snapshot after failed export: %v", err)
+	}
+	if string(before) != string(after) {
+		t.Error("failed export clobbered the previously-committed good snapshot")
+	}
+}
+
+// TestHNSW_ImportAtomic_CorruptMetaAbortsWithoutPartialInstall locks ARCH-2's
+// Import half: a hard failure decoding one entity type's meta sidecar must
+// abort the whole call and leave s.graphs/s.meta at their pre-call state, not
+// partially installed — so the caller's hydrate-from-Pebble fallback actually
+// runs instead of operating on a corrupted graph.
+func TestHNSW_ImportAtomic_CorruptMetaAbortsWithoutPartialInstall(t *testing.T) {
+	const dim = 4
+	ctx := context.Background()
+	s1 := NewHNSWEmbeddingStore(dim)
+	if err := s1.Upsert(ctx, "book", "B1", []float32{1, 0, 0, 0}, nil); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	dir := t.TempDir()
+	if err := s1.Export(dir); err != nil {
+		t.Fatalf("export: %v", err)
+	}
+
+	// Corrupt the meta sidecar so json.Unmarshal fails (a hard error, not the
+	// os.IsNotExist "no sidecar" path).
+	metaPath := filepath.Join(dir, "hnsw-book.meta.json")
+	if err := os.WriteFile(metaPath, []byte("{not valid json"), 0o644); err != nil {
+		t.Fatalf("corrupt meta: %v", err)
+	}
+
+	s2 := NewHNSWEmbeddingStore(dim)
+	// Pre-populate s2 with unrelated state to prove Import doesn't touch it
+	// on failure either.
+	if err := s2.Upsert(ctx, "author", "A1", []float32{0, 0, 1, 0}, nil); err != nil {
+		t.Fatalf("pre-populate author: %v", err)
+	}
+
+	if err := s2.Import(dir); err == nil {
+		t.Fatal("expected Import to fail on corrupt meta.json")
+	}
+
+	if _, ok := s2.graphs["book"]; ok {
+		t.Error("Import installed a partial 'book' graph despite returning an error")
+	}
+	n, err := s2.CountByType(ctx, "author")
+	if err != nil {
+		t.Fatalf("CountByType author: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("pre-existing 'author' state was mutated by a failed Import: CountByType = %d, want 1", n)
+	}
+}
+
+// TestHNSW_ImportWithStalenessCheck_DiscardsUndercountedSnapshot locks ARCH-1:
+// when the imported HNSW graph's count for an entity type is lower than the
+// Pebble-side truth count, the imported state for that entity type must be
+// discarded so the caller's existing hydrate-from-Pebble fallback (which
+// checks CountByType==0) runs instead of silently operating on a graph
+// missing vectors upserted since the last clean-shutdown export.
+func TestHNSW_ImportWithStalenessCheck_DiscardsUndercountedSnapshot(t *testing.T) {
+	const dim = 4
+	ctx := context.Background()
+	s1 := NewHNSWEmbeddingStore(dim)
+	if err := s1.Upsert(ctx, "book", "B1", []float32{1, 0, 0, 0}, nil); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	dir := t.TempDir()
+	if err := s1.Export(dir); err != nil {
+		t.Fatalf("export: %v", err)
+	}
+
+	s2 := NewHNSWEmbeddingStore(dim)
+	// Truth (simulated Pebble EmbeddingStore.CountByType) reports 5 vectors
+	// for "book" — more than the 1 vector in the snapshot, simulating an
+	// unclean shutdown that stranded 4 upserts after the last clean export.
+	truth := func(entityType string) (int, error) {
+		if entityType == "book" {
+			return 5, nil
+		}
+		return 0, nil
+	}
+	if err := s2.ImportWithStalenessCheck(dir, truth); err != nil {
+		t.Fatalf("ImportWithStalenessCheck: %v", err)
+	}
+
+	n, err := s2.CountByType(ctx, "book")
+	if err != nil {
+		t.Fatalf("CountByType: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("stale snapshot was not discarded: CountByType(book) = %d, want 0", n)
+	}
+}
+
+// TestHNSW_ImportWithStalenessCheck_DiscardsAllTypesWhenAnyIsStale locks the
+// all-or-nothing discard semantics: dedup/lifecycle.go's PostInit gates
+// hydration on the "book" count alone, and HydrateChromem re-populates BOTH
+// "book" and "author" together when it runs. If only the stale "book" graph
+// were discarded while a fresh "author" graph were kept, HydrateChromem would
+// re-Add authors on top of the already-populated author graph — the same
+// Delete+Add per-layer-invariant class of bug (HNSW-CRASH-2026-06-18) that
+// safeAdd/safeDelete guard against. So a stale "book" count must discard the
+// entire snapshot, including an otherwise-fresh "author" graph.
+func TestHNSW_ImportWithStalenessCheck_DiscardsAllTypesWhenAnyIsStale(t *testing.T) {
+	const dim = 4
+	ctx := context.Background()
+	s1 := NewHNSWEmbeddingStore(dim)
+	if err := s1.Upsert(ctx, "book", "B1", []float32{1, 0, 0, 0}, nil); err != nil {
+		t.Fatalf("upsert book: %v", err)
+	}
+	if err := s1.Upsert(ctx, "author", "A1", []float32{0, 1, 0, 0}, nil); err != nil {
+		t.Fatalf("upsert author: %v", err)
+	}
+
+	dir := t.TempDir()
+	if err := s1.Export(dir); err != nil {
+		t.Fatalf("export: %v", err)
+	}
+
+	s2 := NewHNSWEmbeddingStore(dim)
+	// "book" is stale (truth=5 > graph's 1); "author" is fresh (truth=1 ==
+	// graph's 1). The stale "book" must still cause "author" to be discarded.
+	truth := func(entityType string) (int, error) {
+		if entityType == "book" {
+			return 5, nil
+		}
+		return 1, nil
+	}
+	if err := s2.ImportWithStalenessCheck(dir, truth); err != nil {
+		t.Fatalf("ImportWithStalenessCheck: %v", err)
+	}
+
+	bookCount, err := s2.CountByType(ctx, "book")
+	if err != nil {
+		t.Fatalf("CountByType book: %v", err)
+	}
+	if bookCount != 0 {
+		t.Errorf("stale book snapshot not discarded: CountByType(book) = %d, want 0", bookCount)
+	}
+	authorCount, err := s2.CountByType(ctx, "author")
+	if err != nil {
+		t.Fatalf("CountByType author: %v", err)
+	}
+	if authorCount != 0 {
+		t.Errorf("fresh author graph was not discarded alongside stale book (all-or-nothing violated): CountByType(author) = %d, want 0", authorCount)
+	}
+}
+
+// TestHNSW_ImportWithStalenessCheck_KeepsFreshSnapshot is the counterpart to
+// the discard test: a graph count that meets or exceeds the truth count must
+// be kept (no unnecessary rehydration on every boot).
+func TestHNSW_ImportWithStalenessCheck_KeepsFreshSnapshot(t *testing.T) {
+	const dim = 4
+	ctx := context.Background()
+	s1 := NewHNSWEmbeddingStore(dim)
+	if err := s1.Upsert(ctx, "book", "B1", []float32{1, 0, 0, 0}, nil); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	dir := t.TempDir()
+	if err := s1.Export(dir); err != nil {
+		t.Fatalf("export: %v", err)
+	}
+
+	s2 := NewHNSWEmbeddingStore(dim)
+	truth := func(entityType string) (int, error) { return 1, nil }
+	if err := s2.ImportWithStalenessCheck(dir, truth); err != nil {
+		t.Fatalf("ImportWithStalenessCheck: %v", err)
+	}
+
+	n, err := s2.CountByType(ctx, "book")
+	if err != nil {
+		t.Fatalf("CountByType: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("fresh snapshot was discarded unnecessarily: CountByType(book) = %d, want 1", n)
+	}
+}
+
+// TestHNSW_SafeDelete_AbsentAndDoubleDeleteDoNotPanic locks ARCH-5: Delete
+// must never let a coder/hnsw Graph.Delete panic escape, mirroring the
+// existing safeAdd regression test. Deleting a key that was never added, and
+// deleting the same key twice, must both complete without crashing.
+func TestHNSW_SafeDelete_AbsentAndDoubleDeleteDoNotPanic(t *testing.T) {
+	ctx := context.Background()
+	s := NewHNSWEmbeddingStore(3)
+
+	// Delete of a key never added, on a graph that doesn't exist yet at all.
+	if err := s.Delete(ctx, "book", "never-added"); err != nil {
+		t.Fatalf("delete of absent key on absent graph: %v", err)
+	}
+
+	if err := s.Upsert(ctx, "book", "B1", []float32{1, 0, 0}, nil); err != nil {
+		t.Fatalf("upsert B1: %v", err)
+	}
+
+	// Delete of a key never added, on a graph that does exist.
+	if err := s.Delete(ctx, "book", "still-never-added"); err != nil {
+		t.Fatalf("delete of absent key on populated graph: %v", err)
+	}
+
+	// Double-delete of the same real key.
+	if err := s.Delete(ctx, "book", "B1"); err != nil {
+		t.Fatalf("first delete of B1: %v", err)
+	}
+	if err := s.Delete(ctx, "book", "B1"); err != nil {
+		t.Fatalf("second delete (double-delete) of B1: %v", err)
+	}
+
+	// The store must remain usable afterward: reaching this point at all
+	// proves no panic escaped Delete. A recovered-panic error from the
+	// underlying library on a subsequent Add is tolerated (same contract as
+	// safeAdd/TestHNSWUpsert_ReinsertDoesNotCrash) — a process crash is not.
+	if err := s.Upsert(ctx, "book", "B2", []float32{0, 1, 0}, nil); err != nil {
+		t.Logf("post-delete insert returned (recovered) error, tolerated: %v", err)
 	}
 }
