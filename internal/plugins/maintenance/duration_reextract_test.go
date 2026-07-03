@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_reextract_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4a7d1e92-8c63-4f50-a1b8-3e6c9d2f5a04
-// last-edited: 2026-06-24
+// last-edited: 2026-07-03
 
 package maintenance
 
@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -437,5 +438,98 @@ func TestDurationReextract_FingerprintIdempotent(t *testing.T) {
 	}
 	if writes != 0 {
 		t.Errorf("already-correct book must be skipped on re-run, got %d writes", writes)
+	}
+}
+
+// onlyMissingDurationTestBooks returns one book with a known positive
+// Duration and one with Duration==nil, both virtual (no BookFile rows,
+// empty FilePath so processBookForReextract short-circuits on noPath
+// without touching the filesystem). Used by the OnlyMissingDuration tests
+// below, which only care about whether a book was DISPATCHED (i.e. counted
+// in "examined"), not how it was ultimately triaged.
+func onlyMissingDurationTestBooks() []database.Book {
+	return []database.Book{
+		{ID: "known", Title: "Known duration", Duration: intPtr(3600)},
+		{ID: "unknown", Title: "Unknown duration", Duration: nil},
+	}
+}
+
+func newOnlyMissingDurationStore(books []database.Book) *database.MockStore {
+	return &database.MockStore{
+		CountAllBooksFunc: func() (int, error) { return len(books), nil },
+		GetAllBooksFunc: func(_, offset int) ([]database.Book, error) {
+			if offset >= len(books) {
+				return nil, nil
+			}
+			return books, nil
+		},
+		GetBookFilesFunc: func(string) ([]database.BookFile, error) { return nil, nil },
+	}
+}
+
+// examinedCountFromSummary extracts the "examined=N" value from the final
+// summary log line emitted at the end of runDurationReextract.
+func examinedCountFromSummary(t *testing.T, logs []string) int {
+	t.Helper()
+	for _, l := range logs {
+		idx := strings.Index(l, "examined=")
+		if idx < 0 {
+			continue
+		}
+		var examined int
+		if _, err := fmt.Sscanf(l[idx:], "examined=%d", &examined); err == nil {
+			return examined
+		}
+	}
+	t.Fatalf("no summary log line containing examined=N found in %v", logs)
+	return -1
+}
+
+// TestDurationReextract_OnlyMissingDuration_SkipsKnownDuration is the scoped-skip
+// half of the acceptance criteria: with OnlyMissingDuration=true, a book whose
+// Duration is already known and positive must never be dispatched to a worker
+// — it should not appear in the "examined" count at all (skipped in the
+// producer, before dispatched++), leaving only the zero/nil-duration book.
+func TestDurationReextract_OnlyMissingDuration_SkipsKnownDuration(t *testing.T) {
+	books := onlyMissingDurationTestBooks()
+	store := newOnlyMissingDurationStore(books)
+	p := New(fakeDeps{store: store})
+	reporter := &fakeReporter{}
+
+	params, err := json.Marshal(durationReextractParams{DryRun: true, OnlyMissingDuration: true})
+	if err != nil {
+		t.Fatalf("marshal params: %v", err)
+	}
+	if err := p.runDurationReextract(context.Background(), params, reporter); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	got := examinedCountFromSummary(t, reporter.logs)
+	if got != 1 {
+		t.Errorf("examined = %d, want 1 (only the unknown-duration book should be dispatched)", got)
+	}
+}
+
+// TestDurationReextract_OnlyMissingDuration_DefaultExaminesAll is the
+// additive-not-breaking half: with OnlyMissingDuration left at its zero value
+// (false), behavior must be unchanged from before this task — every book is
+// still dispatched regardless of its current Duration.
+func TestDurationReextract_OnlyMissingDuration_DefaultExaminesAll(t *testing.T) {
+	books := onlyMissingDurationTestBooks()
+	store := newOnlyMissingDurationStore(books)
+	p := New(fakeDeps{store: store})
+	reporter := &fakeReporter{}
+
+	params, err := json.Marshal(durationReextractParams{DryRun: true})
+	if err != nil {
+		t.Fatalf("marshal params: %v", err)
+	}
+	if err := p.runDurationReextract(context.Background(), params, reporter); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	got := examinedCountFromSummary(t, reporter.logs)
+	if got != 2 {
+		t.Errorf("examined = %d, want 2 (OnlyMissingDuration=false must examine both books)", got)
 	}
 }
