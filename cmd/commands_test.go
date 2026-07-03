@@ -1,10 +1,11 @@
 // file: cmd/commands_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 6f5b7d78-11d8-4c1a-a150-96d2c4a1a885
 
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -51,7 +52,7 @@ func stubCommandDeps(t *testing.T) {
 		database.SetGlobalStore(nil)
 		return nil
 	}
-	scanDirectory = func(rootDir string, _ logger.Logger) ([]scanner.Book, error) {
+	scanDirectory = func(_ context.Context, rootDir string, _ logger.Logger) ([]scanner.Book, error) {
 		return []scanner.Book{}, nil
 	}
 	processBooks = func(books []scanner.Book, _ logger.Logger) error {
@@ -150,14 +151,14 @@ func TestScanCommandErrorPaths(t *testing.T) {
 	config.AppConfig.RootDir = tempDir
 	config.AppConfig.EnableSQLite = true
 
-	scanDirectory = func(rootDir string, _ logger.Logger) ([]scanner.Book, error) {
+	scanDirectory = func(_ context.Context, rootDir string, _ logger.Logger) ([]scanner.Book, error) {
 		return nil, fmt.Errorf("scan failed")
 	}
 	if err := scanCmd.RunE(scanCmd, nil); err == nil {
 		t.Fatal("expected scan command error")
 	}
 
-	scanDirectory = func(rootDir string, _ logger.Logger) ([]scanner.Book, error) {
+	scanDirectory = func(_ context.Context, rootDir string, _ logger.Logger) ([]scanner.Book, error) {
 		return []scanner.Book{{FilePath: filepath.Join(tempDir, "book.m4b")}}, nil
 	}
 	processBooks = func(books []scanner.Book, _ logger.Logger) error {
@@ -251,7 +252,7 @@ func TestOrganizeCommandError(t *testing.T) {
 	config.AppConfig.DatabasePath = filepath.Join(tempDir, "db.sqlite")
 	config.AppConfig.EnableSQLite = true
 
-	scanDirectory = func(rootDir string, _ logger.Logger) ([]scanner.Book, error) {
+	scanDirectory = func(_ context.Context, rootDir string, _ logger.Logger) ([]scanner.Book, error) {
 		return nil, fmt.Errorf("scan failed in organize")
 	}
 	if err := organizeCmd.RunE(organizeCmd, nil); err == nil {
