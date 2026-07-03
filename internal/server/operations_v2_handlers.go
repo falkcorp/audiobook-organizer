@@ -1,5 +1,5 @@
 // file: internal/server/operations_v2_handlers.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-06-23
 
@@ -11,13 +11,11 @@ package server
 import (
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
-	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 
 // operationV2Response is the JSON shape returned by the timeline and single-op
@@ -158,63 +156,6 @@ func (s *Server) handleCancelOperationV2(c *gin.Context) {
 	httputil.RespondWithNoContent(c)
 }
 
-// handleTriggerOperationV2 implements POST /api/v1/operations/v2.
-// Body: { "def_id": "...", "params": {...} }
-func (s *Server) handleTriggerOperationV2(c *gin.Context) {
-	if s.opRegistry == nil {
-		httputil.RespondWithInternalError(c, "operations registry not initialized")
-		return
-	}
-
-	var body struct {
-		DefID  string `json:"def_id"`
-		Params any    `json:"params"`
-	}
-	if err := c.ShouldBindJSON(&body); err != nil || body.DefID == "" {
-		httputil.RespondWithBadRequest(c, "body must include def_id")
-		return
-	}
-
-	opID, err := s.opRegistry.EnqueueOp(c.Request.Context(), body.DefID, body.Params)
-	if err != nil {
-		httputil.InternalError(c, "enqueue failed", err)
-		return
-	}
-
-	c.JSON(http.StatusAccepted, gin.H{"op_id": opID})
-}
-
-// handleListOpDefs implements GET /api/v1/op-defs.
-// Returns the set of registered OperationDefs.
-func (s *Server) handleListOpDefs(c *gin.Context) {
-	if s.opRegistry == nil {
-		httputil.RespondWithOK(c, gin.H{"defs": []opDefResponse{}})
-		return
-	}
-	defs := s.opRegistry.ActiveDefs()
-	resp := make([]opDefResponse, 0, len(defs))
-	for _, d := range defs {
-		resp = append(resp, defToResponse(d))
-	}
-	httputil.RespondWithOK(c, gin.H{"defs": resp})
-}
-
-// handleGetOpDef implements GET /api/v1/op-defs/:id.
-func (s *Server) handleGetOpDef(c *gin.Context) {
-	id := c.Param("id")
-	if s.opRegistry == nil {
-		httputil.RespondWithNotFound(c, "op-def", id)
-		return
-	}
-	for _, d := range s.opRegistry.ActiveDefs() {
-		if d.ID == id {
-			httputil.RespondWithOK(c, gin.H{"def": defToResponse(d)})
-			return
-		}
-	}
-	httputil.RespondWithNotFound(c, "op-def", id)
-}
-
 // handleOperationsSSE implements GET /api/v1/operations/events.
 // Streams SSE events from the opHub to the client until the client disconnects.
 func (s *Server) handleOperationsSSE(c *gin.Context) {
@@ -345,40 +286,6 @@ func logRowToResponse(l database.OpLogV2Row) opLogV2Response {
 		Message:     l.Message,
 		Attrs:       attrsAny,
 		CreatedAt:   l.CreatedAt,
-	}
-}
-
-// defToResponse converts a registry.OperationDef to the HTTP response shape.
-func defToResponse(d opsregistry.OperationDef) opDefResponse {
-	triggers := make([]string, 0, len(d.Triggers))
-	for _, t := range d.Triggers {
-		triggers = append(triggers, t.EventName)
-	}
-	depends := make([]string, len(d.DependsOn))
-	copy(depends, d.DependsOn)
-
-	rp := "unspecified"
-	switch d.ResumePolicy {
-	case opsregistry.ResumeRestart:
-		rp = "restart"
-	case opsregistry.ResumeRequeue:
-		rp = "requeue"
-	case opsregistry.ResumeDrop:
-		rp = "drop"
-	case opsregistry.ResumeAsk:
-		rp = "ask"
-	}
-
-	return opDefResponse{
-		ID:           d.ID,
-		Plugin:       d.Plugin,
-		DisplayName:  d.DisplayName,
-		Description:  d.Description,
-		Cancellable:  d.Cancellable,
-		Isolate:      d.Isolate,
-		ResumePolicy: rp,
-		Triggers:     triggers,
-		DependsOn:    depends,
 	}
 }
 

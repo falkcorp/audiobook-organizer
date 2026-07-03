@@ -1,5 +1,5 @@
 // file: internal/server/server_helpers.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 8a40b808-2bf2-4a35-893c-ad5e3351dbae
 // last-edited: 2026-05-25
 
@@ -49,13 +49,6 @@ func intPtrHelper(i int) *int {
 
 func boolPtr(b bool) *bool {
 	return &b
-}
-
-func ptrStr(p *string) string {
-	if p == nil {
-		return ""
-	}
-	return *p
 }
 
 func stringVal(p *string) any {
