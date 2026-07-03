@@ -1,7 +1,7 @@
 // file: web/src/hooks/useSettingsHandlers.ts
-// version: 1.4.0
+// version: 1.5.0
 // guid: b8c9d0e1-f2a3-4567-bcde-678901234567
-// last-edited: 2026-06-24
+// last-edited: 2026-07-03
 
 import { ChangeEvent, Dispatch, MutableRefObject, SetStateAction } from 'react';
 import { NavigateFunction } from 'react-router-dom';
@@ -48,6 +48,7 @@ export interface UseSettingsHandlersParams {
   setConfigLoaded: Dispatch<SetStateAction<boolean>>;
   setDedupConfig: Dispatch<SetStateAction<api.DedupConfig>>;
   setEmbeddingConfig: Dispatch<SetStateAction<api.EmbeddingConfig>>;
+  setAIBackendConfig: Dispatch<SetStateAction<api.AIBackendConfig>>;
   setMetadataScoringConfig: Dispatch<SetStateAction<api.MetadataScoringConfig>>;
   setMaintenanceConfig: Dispatch<SetStateAction<api.MaintenanceConfig>>;
   setScheduledConfig: Dispatch<SetStateAction<api.ScheduledTasksConfig | null>>;
@@ -107,6 +108,7 @@ export interface UseSettingsHandlersParams {
   blocker: Blocker;
   dedupConfig: api.DedupConfig;
   embeddingConfig: api.EmbeddingConfig;
+  aiBackendConfig: api.AIBackendConfig;
   metadataScoringConfig: api.MetadataScoringConfig;
   maintenanceConfig: api.MaintenanceConfig;
   scheduledConfig: api.ScheduledTasksConfig | null;
@@ -126,6 +128,7 @@ export interface UseSettingsHandlersReturn {
   handleChange: (field: string, value: string | boolean | number | string[]) => void;
   handleDedupChange: (patch: Partial<api.DedupConfig>) => void;
   handleEmbeddingChange: (patch: Partial<api.EmbeddingConfig>) => void;
+  handleAIBackendChange: (patch: Partial<api.AIBackendConfig>) => void;
   handleMetadataScoringChange: (patch: Partial<api.MetadataScoringConfig>) => void;
   handleMaintenanceChange: (patch: Partial<api.MaintenanceConfig>) => void;
   handleScheduledChange: (patch: Partial<api.ScheduledTasksConfig>) => void;
@@ -181,6 +184,7 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
     setConfigLoaded: _setConfigLoaded,
     setDedupConfig,
     setEmbeddingConfig,
+    setAIBackendConfig,
     setMetadataScoringConfig,
     setMaintenanceConfig,
     setScheduledConfig,
@@ -239,6 +243,7 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
     blocker,
     dedupConfig,
     embeddingConfig,
+    aiBackendConfig,
     metadataScoringConfig,
     maintenanceConfig,
     scheduledConfig,
@@ -290,6 +295,11 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
 
   const handleEmbeddingChange = (patch: Partial<api.EmbeddingConfig>) => {
     setEmbeddingConfig((prev) => ({ ...prev, ...patch }));
+    setSaved(false);
+  };
+
+  const handleAIBackendChange = (patch: Partial<api.AIBackendConfig>) => {
+    setAIBackendConfig((prev) => ({ ...prev, ...patch }));
     setSaved(false);
   };
 
@@ -479,6 +489,7 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
         maintenance_window_end: maintenanceConfig.window_end,
         maintenance: maintenanceConfig,
         embedding: embeddingConfig,
+        ai_backend: aiBackendConfig,
         dedup: dedupConfig,
         metadata_scoring: metadataScoringConfig,
         ...(scheduledConfig ? { scheduled: scheduledConfig } : {}),
@@ -907,6 +918,7 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
     handleChange,
     handleDedupChange,
     handleEmbeddingChange,
+    handleAIBackendChange,
     handleMetadataScoringChange,
     handleMaintenanceChange,
     handleScheduledChange,

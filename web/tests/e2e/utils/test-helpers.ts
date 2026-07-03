@@ -1,7 +1,7 @@
 // file: web/tests/e2e/utils/test-helpers.ts
-// version: 2.7.0
+// version: 2.8.0
 // guid: a1b2c3d4-e5f6-7890-abcd-e1f2a3b4c5d6
-// last-edited: 2026-02-15
+// last-edited: 2026-07-03
 
 import { Page } from '@playwright/test';
 
@@ -55,6 +55,13 @@ export interface MockConfig {
   api_keys: Record<string, never>;
   supported_extensions: string[];
   exclude_patterns?: string[];
+  ai_backend?: {
+    embedding_mode?: string;
+    llm_mode?: string;
+    local_base_url?: string;
+    local_embedding_model?: string;
+    local_llm_model?: string;
+  };
 }
 
 interface MockImportPath {
@@ -251,6 +258,15 @@ export interface MockApiOptions {
   systemStatus?: Record<string, unknown>;
   authorDedup?: { groups: MockAuthorDedupGroup[]; needs_refresh?: boolean };
   seriesDedup?: { groups: MockSeriesDupGroup[]; total_series?: number };
+  aiBackendsStatus?: {
+    embedding_mode?: string;
+    llm_mode?: string;
+    local_base_url?: string;
+    local_reachable?: boolean;
+    embedding_model?: { name: string; pulled: boolean };
+    llm_model?: { name: string; pulled: boolean };
+    fallback_reason?: string;
+  };
 }
 
 export interface TestBook {
@@ -374,6 +390,13 @@ export async function setupMockApiRoutes(
     failures: options.failures || {},
     authorDedup: options.authorDedup || { groups: [] },
     seriesDedup: options.seriesDedup || { groups: [], total_series: 0 },
+    aiBackendsStatus: {
+      embedding_mode: 'disabled',
+      llm_mode: 'disabled',
+      local_base_url: '',
+      local_reachable: false,
+      ...options.aiBackendsStatus,
+    },
   };
 
   // Use addInitScript to set localStorage and basic state
@@ -1213,6 +1236,32 @@ export async function setupMockApiRoutes(
       }
       return route.fulfill(jsonResponse({ success: true, message: 'Connection successful' }));
     }
+
+    // AI backend-mode status/pull-model (TASK-11). Must come before the
+    // "/api/v1/ai/" prefix catch-all below, which would otherwise shadow
+    // these with a generic { message: 'OK' } response.
+    if (pathname === '/api/v1/ai/backends/status' && method === 'GET') {
+      return route.fulfill(jsonResponse({ data: mockState.aiBackendsStatus }));
+    }
+
+    if (pathname === '/api/v1/ai/backends/pull-model' && method === 'POST') {
+      let model = '';
+      try {
+        const body = route.request().postDataJSON();
+        model = (body && body.model) || '';
+      } catch {
+        // ignore parse errors
+      }
+      const status = mockState.aiBackendsStatus as Record<string, unknown>;
+      if (status.embedding_model && (status.embedding_model as { name: string }).name === model) {
+        status.embedding_model = { name: model, pulled: true };
+      }
+      if (status.llm_model && (status.llm_model as { name: string }).name === model) {
+        status.llm_model = { name: model, pulled: true };
+      }
+      return route.fulfill(jsonResponse({ data: { model, pulled: true } }));
+    }
+
     if (pathname.startsWith('/api/v1/ai/')) {
       return route.fulfill(jsonResponse({ message: 'OK' }));
     }

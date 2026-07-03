@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.49.0
+// version: 2.50.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-07-01
+// last-edited: 2026-07-03
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -631,6 +631,19 @@ export interface EmbeddingConfig {
   vector_backend: string;
 }
 
+// AI backend-mode toggle (TASK-10). embedding_mode/llm_mode select,
+// independently, whether the embedding/LLM pipeline runs against OpenAI, a
+// local OpenAI-compatible endpoint (e.g. Ollama), or is disabled.
+export type AIBackendMode = 'disabled' | 'openai' | 'local' | 'openai-fallback-local';
+
+export interface AIBackendConfig {
+  embedding_mode: string;
+  llm_mode: string;
+  local_base_url: string;
+  local_embedding_model: string;
+  local_llm_model: string;
+}
+
 export interface DedupSignalConfig {
   band_certain_min: number;
   band_high_min: number;
@@ -818,6 +831,7 @@ export interface Config {
 
   // Sub-structs (CFG-1 nested fields)
   embedding?: EmbeddingConfig;
+  ai_backend?: AIBackendConfig;
   dedup?: DedupConfig;
   metadata_scoring?: MetadataScoringConfig;
   itunes?: ITunesConfig;
@@ -5707,4 +5721,46 @@ export async function installTool(name: string): Promise<{ path: string; version
     throw await buildApiError(response, `Failed to install ${name}`);
   }
   return response.json();
+}
+
+// --- AI backend-mode toggle (TASK-11: FE for TASK-10's AIBackendConfig) ---
+
+export interface AIBackendModelStatus {
+  name: string;
+  pulled: boolean;
+}
+
+export interface AIBackendsStatus {
+  embedding_mode: string;
+  llm_mode: string;
+  local_base_url: string;
+  local_reachable: boolean;
+  embedding_model?: AIBackendModelStatus;
+  llm_model?: AIBackendModelStatus;
+  fallback_reason?: string;
+}
+
+export async function getAIBackendsStatus(): Promise<AIBackendsStatus> {
+  const response = await apiFetch(`${API_BASE}/ai/backends/status`, {
+    credentials: 'include',
+  });
+  if (!response.ok) {
+    throw await buildApiError(response, 'Failed to fetch AI backend status');
+  }
+  const body = await response.json();
+  return body.data;
+}
+
+export async function pullAIBackendModel(model: string): Promise<{ model: string; pulled: boolean }> {
+  const response = await apiFetch(`${API_BASE}/ai/backends/pull-model`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model }),
+  });
+  if (!response.ok) {
+    throw await buildApiError(response, `Failed to pull model ${model}`);
+  }
+  const body = await response.json();
+  return body.data;
 }

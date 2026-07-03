@@ -1,25 +1,28 @@
 // file: internal/server/wire_media_routes.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c9d0e1f2-a3b4-5678-cdef-901234567890
-// last-edited: 2026-06-23
+// last-edited: 2026-07-03
 
 package server
 
 import (
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
+	aibackendshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/aibackends"
 	toolshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/tools"
 	"github.com/gin-gonic/gin"
 )
 
-// wireMediaRoutes registers iTunes, AI, diagnostics, tools, and plugins routes
-// on the protected group. Handler instantiation stays in wireHandlers.
+// wireMediaRoutes registers iTunes, AI, diagnostics, tools, AI-backend, and
+// plugins routes on the protected group. Handler instantiation stays in
+// wireHandlers.
 func (s *Server) wireMediaRoutes(
 	protected *gin.RouterGroup,
 	itunesH *handlers.ITunesHandler,
 	aiH *handlers.AIHandler,
 	diagH *handlers.DiagnosticsHandler,
 	toolsH *toolshandler.Handler,
+	aiBackendsH *aibackendshandler.Handler,
 	pluginsH *handlers.PluginsHandler,
 ) {
 	// iTunes (12 migrated routes; survivors stay in server_lifecycle.go).
@@ -73,6 +76,10 @@ func (s *Server) wireMediaRoutes(
 	protected.GET("/tools", s.perm(auth.PermSettingsManage), toolsH.List)
 	protected.GET("/tools/:name/status", s.perm(auth.PermSettingsManage), toolsH.Status)
 	protected.POST("/tools/:name/install", s.perm(auth.PermSettingsManage), toolsH.Install)
+
+	// AI backend-mode toggle (TASK-11): status probe + on-demand model pull.
+	protected.GET("/ai/backends/status", s.perm(auth.PermSettingsManage), aiBackendsH.Status)
+	protected.POST("/ai/backends/pull-model", s.perm(auth.PermSettingsManage), aiBackendsH.PullModel)
 
 	// Plugins
 	plugins := protected.Group("/plugins")

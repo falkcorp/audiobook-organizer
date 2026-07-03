@@ -1,7 +1,7 @@
 // file: web/src/pages/Settings.tsx
-// version: 1.53.0
+// version: 1.54.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-06-19
+// last-edited: 2026-07-03
 
 import { useState, useEffect, useMemo, useRef, ChangeEvent } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
@@ -40,6 +40,7 @@ import { ITunesImport } from '../components/settings/ITunesImport';
 import { ITunesTransfer } from '../components/settings/ITunesTransfer';
 import { SystemInfoTab } from '../components/system/SystemInfoTab';
 import { EmbeddingSettingsSection } from '../components/settings/EmbeddingSettingsSection';
+import { AIBackendsSection } from '../components/settings/AIBackendsSection';
 import { DedupSettingsSection } from '../components/settings/DedupSettingsSection';
 import { MetadataScoringSection } from '../components/settings/MetadataScoringSection';
 import { MaintenanceSettingsSection } from '../components/settings/MaintenanceSettingsSection';
@@ -368,6 +369,13 @@ export function Settings() {
     base_url: '',
     vector_backend: 'hnsw',
   });
+  const [aiBackendConfig, setAIBackendConfig] = useState<api.AIBackendConfig>({
+    embedding_mode: 'disabled',
+    llm_mode: 'disabled',
+    local_base_url: '',
+    local_embedding_model: '',
+    local_llm_model: '',
+  });
   const [metadataScoringConfig, setMetadataScoringConfig] = useState<api.MetadataScoringConfig>({
     embedding_enabled: false,
     embedding_min_score: 0.82,
@@ -599,6 +607,7 @@ export function Settings() {
       };
       if (config.dedup) setDedupConfig(config.dedup);
       if (config.embedding) setEmbeddingConfig(config.embedding);
+      if (config.ai_backend) setAIBackendConfig(config.ai_backend);
       if (config.metadata_scoring) setMetadataScoringConfig(config.metadata_scoring);
       if (config.maintenance) setMaintenanceConfig(config.maintenance);
       if (config.scheduled) setScheduledConfig(config.scheduled);
@@ -619,6 +628,7 @@ export function Settings() {
     handleChange,
     handleDedupChange,
     handleEmbeddingChange,
+    handleAIBackendChange,
     handleMetadataScoringChange,
     handleMaintenanceChange,
     handleScheduledChange,
@@ -661,7 +671,7 @@ export function Settings() {
     handleCancelNavigation,
   } = useSettingsHandlers({
     settings, setSettings, setSaved, setSavedApiKeyMask, setConfigLoaded,
-    setDedupConfig, setEmbeddingConfig, setMetadataScoringConfig,
+    setDedupConfig, setEmbeddingConfig, setAIBackendConfig, setMetadataScoringConfig,
     setMaintenanceConfig, setScheduledConfig, setToolsConfig,
     setLibraryPathError, setOpenaiKeyError, setExtensionsError, setExcludePatternError,
     setImportFolders, setScanStatuses, setCancelScanTarget,
@@ -678,7 +688,7 @@ export function Settings() {
     restoreTarget, restoreVerify, deleteBackupTarget, cancelScanTarget,
     scanStatuses, importPayload, importFileName, savedSettings,
     extensionsInput, excludePatternInput, newFolderPath, selectedPath,
-    blocker, dedupConfig, embeddingConfig, metadataScoringConfig,
+    blocker, dedupConfig, embeddingConfig, aiBackendConfig, metadataScoringConfig,
     maintenanceConfig, scheduledConfig, toolsConfig,
     importInputRef, loadConfig, initialSettings,
   });
@@ -804,6 +814,9 @@ export function Settings() {
           <DedupSettingsSection config={dedupConfig} onChange={handleDedupChange} />
           <Box sx={{ mt: 4 }}>
             <EmbeddingSettingsSection config={embeddingConfig} onChange={handleEmbeddingChange} />
+          </Box>
+          <Box sx={{ mt: 4 }}>
+            <AIBackendsSection config={aiBackendConfig} onChange={handleAIBackendChange} />
           </Box>
           <Box sx={{ mt: 4 }}>
             <MetadataScoringSection config={metadataScoringConfig} onChange={handleMetadataScoringChange} />
