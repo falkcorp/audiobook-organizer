@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 9.52.0 -->
+<!-- version: 9.53.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-07-01 -->
+<!-- last-edited: 2026-07-02 -->
 
 # Project TODO
 
@@ -19,6 +19,25 @@ future agent) can scan the entire workspace in one page.
 - Claude project memory at `~/.claude/projects/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/memory/` — items still to graduate here
 
 ---
+
+## 🧾 Consultancy Evaluation — [`docs/consultancy/`](docs/consultancy/) (2026-07-02)
+
+Full 6-dimension evaluation (101 findings, `file:line`-cited, top code findings
+adversarially verified). Ranked roadmap: [`docs/consultancy/00-ROADMAP.md`](docs/consultancy/00-ROADMAP.md).
+Tier-0 items (high impact, low effort — do first):
+
+- [ ] **CONSULT-1** EmbeddingScorer store fast-path: model/dimension check + F1 fallback on degenerate zero-score results (MATCH-1/BUG-1 — live during bge-m3 re-embed) — `internal/ai/embedding_scorer.go:92-98`
+- [ ] **CONSULT-2** memdb preserve guard on `UpdateBook` (mirror PERF-7 BookFile guard); recover wiped Description/BookSigV1 from `book_ver:` snapshots BEFORE any pruning (STOR-1/QUAL-2) — `internal/database/pebble_store.go:2664`
+- [ ] **CONSULT-3** Model-aware re-embed skip in `EmbedAuthor` + `EmbedBooksAsync` (DEDUPC-1/TOGGLE-2) — `internal/dedup/engine.go:2243,2306`
+- [ ] **CONSULT-4** Unschedule/gate nightly `dedup.embed-async` (quota-dead OpenAI Batch API) (OPS-3) — `internal/plugins/dedup/embed_async.go:24`
+- [ ] **CONSULT-5** Drop OpenAIAPIKey requirement for keyless local backends (TOGGLE-1) — `internal/ai/register.go:35`
+- [ ] **CONSULT-6** Pre-commit hook doesn't actually block `.claude/.credentials/`; SHA-pin `security.yml` (SEC-2/SEC-5) — `scripts/setup-git-hooks.sh:17-27`
+- [ ] **CONSULT-7** Commit deploy recipe templates + `scripts/manage-ollama-windows.py`; add rollback target (OPS-1/OPS-6)
+- [ ] **CONSULT-8** API-key rotation/expiry for bootstrap-issued keys (SEC-1 — previously untracked anywhere)
+
+Tier-1+ (backend-mode toggle, 384K stale-candidate drain, bge-m3 threshold
+recalibration, fingerprint campaign, dedup auto-resolve op, slog-corruption
+sweep, shutdown escape-hatch, HNSW staleness, monitoring): see the roadmap.
 
 ## 🤖 Agent Task Package — [`docs/agent-tasks/`](docs/agent-tasks/) (refreshed July 1, 2026)
 
