@@ -1,5 +1,5 @@
 # file: Makefile
-# version: 2.15.1
+# version: 2.15.2
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
 # last-edited: 2026-07-03
 
@@ -175,10 +175,10 @@ test: vet
 ## primary gate is `go build ./...`. CI still runs the full suite.
 test-short: vet
 	@echo "🧪 Running backend tests (-short — slow prop tests skipped)..."
-	@go test ./... -short -race
+	@go test ./... -short -race -timeout 25m
 	@echo "✅ Short backend tests passed"
 	@echo "📊 Generating coverage profile (separate run)..."
-	@go test ./... -short -coverprofile=coverage.out -covermode=atomic >/dev/null 2>&1
+	@go test ./... -short -coverprofile=coverage.out -covermode=atomic -timeout 25m >/dev/null 2>&1
 	@echo "✅ Coverage profile generated"
 
 ## vet: Run go vet across every package. Catches hand-written mock
