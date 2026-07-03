@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.43.0
+// version: 1.44.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-07-03
 
@@ -504,8 +504,12 @@ func (de *Engine) runUnifiedScoringForBook(ctx context.Context, book *database.B
 
 	cfg := de.getScoreConfig()
 	embCfg := DefaultEmbeddingCollectorConfig()
-	embCfg.HighThreshold = de.BookHighThreshold
-	embCfg.LowThreshold = de.BookLowThreshold
+	// DEDUP-2/3: resolve the active embedding model's per-model thresholds
+	// (falls back to the engine's BookHighThreshold/BookLowThreshold fields for
+	// any model without a calibrated override — byte-for-byte unchanged).
+	embHigh, embLow := de.resolvedBookThresholds()
+	embCfg.HighThreshold = embHigh
+	embCfg.LowThreshold = embLow
 	durCfg := DefaultDurationCollectorConfig()
 	fuzCfg := DefaultMetaFuzzyConfig()
 	lshCfg := DefaultLSHAcoustIDConfig()
@@ -612,7 +616,7 @@ func (de *Engine) runUnifiedScoringForBook(ctx context.Context, book *database.B
 				signals = append(signals, unified.Signal{
 					Kind:       unified.SigEmbedHigh,
 					Raw:        cos,
-					Confidence: embedHighConfidence(cos32),
+					Confidence: embedHighConfidence(cos32, embCfg.HighThreshold),
 					Evidence: fmt.Sprintf(
 						"embedding cosine %.4f (high tier): book %s ↔ %s",
 						cos32, book.ID, candID),
@@ -621,7 +625,7 @@ func (de *Engine) runUnifiedScoringForBook(ctx context.Context, book *database.B
 				signals = append(signals, unified.Signal{
 					Kind:       unified.SigEmbedMedium,
 					Raw:        cos,
-					Confidence: embedMediumConfidence(cos32),
+					Confidence: embedMediumConfidence(cos32, embCfg.LowThreshold, embCfg.HighThreshold),
 					Evidence: fmt.Sprintf(
 						"embedding cosine %.4f (medium tier): book %s ↔ %s",
 						cos32, book.ID, candID),
@@ -1795,6 +1799,11 @@ func (de *Engine) findSimilarBooks(ctx context.Context, bookID string) error {
 		querySeriesNum = seriesNumberOf(queryBook)
 	}
 
+	// DEDUP-2/3: resolve the active embedding model's low threshold (the
+	// candidate-emission floor). Falls back to de.BookLowThreshold for any model
+	// without a per-model override — byte-for-byte unchanged.
+	_, bookLow := de.resolvedBookThresholds()
+
 	var results []database.SimilarityResult
 	if de.chromemStore != nil {
 		filter := map[string]string{"is_primary_version": "true"}
@@ -1803,7 +1812,7 @@ func (de *Engine) findSimilarBooks(ctx context.Context, bookID string) error {
 			return cErr
 		}
 		for _, cr := range chromemResults {
-			if cr.Similarity >= float32(de.BookLowThreshold) {
+			if cr.Similarity >= float32(bookLow) {
 				results = append(results, database.SimilarityResult{
 					EntityID:   cr.EntityID,
 					Similarity: cr.Similarity,
@@ -1817,7 +1826,7 @@ func (de *Engine) findSimilarBooks(ctx context.Context, bookID string) error {
 	// SQLite full-scan + cosine is ~50-200ms per query for 42K books vs
 	// chromem's <10ms; dedup queries are rare so the tradeoff is fine.
 	if len(results) == 0 && de.embedStore != nil {
-		fallback, fErr := de.embedStore.FindSimilar("book", emb.Vector, float32(de.BookLowThreshold), 20)
+		fallback, fErr := de.embedStore.FindSimilar("book", emb.Vector, float32(bookLow), 20)
 		if fErr != nil {
 			return fErr
 		}
@@ -2034,6 +2043,28 @@ func (de *Engine) EmbeddingModel() string {
 		return ""
 	}
 	return de.embedClient.Model()
+}
+
+// resolvedBookThresholds returns the active book high/low cosine thresholds for
+// the wired embedding client's model (DEDUP-2/3).
+//
+// It diverges from the engine's BookHighThreshold/BookLowThreshold fields ONLY
+// when the active model has an explicit calibrated entry in
+// config.AppConfig.Dedup.EmbeddingThresholdsByModel. For any model without such
+// an entry — including the legacy OpenAI model and every not-yet-calibrated
+// model — and when no embedding client is wired (the test-injection path), it
+// returns the engine's field values unchanged, guaranteeing byte-for-byte
+// behaviour and preserving the direct-field-set test seam.
+func (de *Engine) resolvedBookThresholds() (high, low float64) {
+	high, low = de.BookHighThreshold, de.BookLowThreshold
+	if de.embedClient == nil {
+		return high, low
+	}
+	model := de.embedClient.Model()
+	if _, ok := config.AppConfig.Dedup.EmbeddingThresholdsByModel[model]; ok {
+		return config.AppConfig.Dedup.ThresholdsForModel(model)
+	}
+	return high, low
 }
 
 // prepBookEmbed runs the per-book skip-checks and builds the embedding text +

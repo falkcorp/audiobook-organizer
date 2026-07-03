@@ -1,7 +1,7 @@
 // file: internal/dedup/collectors_embedding.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d0e1f2a3-b4c5-4d6e-9f0a-1b2c3d4e5f6a
-// last-edited: 2026-06-10
+// last-edited: 2026-07-03
 
 // Package dedup — embedding collector (fable5 T014).
 //
@@ -74,46 +74,55 @@ func DefaultEmbeddingCollectorConfig() EmbeddingCollectorConfig {
 	}
 }
 
-// embedHighConfidence maps a cosine similarity in [0.95, 1.00] to a confidence
+// embedHighConfidence maps a cosine similarity in [high, 1.00] to a confidence
 // in [0.88, 0.95] using linear interpolation.
 //
-// WHY: a cosine of 0.95 is a near-certainty for text embeddings in this domain;
-// the confidence floor of 0.88 reflects that embeddings can be tricked by
-// stylistic similarity (same author, different series).  The ceiling of 0.95
-// is below 1.0 to keep the noisy-OR product separable from exact-file (1.00).
-func embedHighConfidence(cos float32) float64 {
+// DEDUP-2/3: the lower cut-point (`high`) is now a parameter derived from the
+// active per-model threshold, not a hard-coded 0.95 literal — a model whose
+// true-duplicate cosines cluster lower (e.g. bge-m3) reshapes the ramp so the
+// confidence interpolation stays consistent with the similarity comparison. The
+// confidence endpoints (0.88..0.95) are intentionally NOT parameterized: they
+// express how much trust a high-tier embedding match earns, independent of
+// which model produced the cosine.
+//
+// WHY the 0.88 floor: embeddings can be tricked by stylistic similarity (same
+// author, different series). The 0.95 ceiling stays below 1.0 to keep the
+// noisy-OR product separable from exact-file (1.00).
+func embedHighConfidence(cos float32, high float64) float64 {
 	const (
-		cosMin  = 0.95
 		cosMax  = 1.00
 		confMin = 0.88
 		confMax = 0.95
 	)
-	if cos <= cosMin {
+	cosMin := high
+	if float64(cos) <= cosMin {
 		return confMin
 	}
-	if cos >= cosMax {
+	if float64(cos) >= cosMax {
 		return confMax
 	}
-	frac := float64(cos-cosMin) / float64(cosMax-cosMin)
+	frac := (float64(cos) - cosMin) / (cosMax - cosMin)
 	return confMin + frac*(confMax-confMin)
 }
 
-// embedMediumConfidence maps a cosine similarity in [0.85, 0.95) to a
-// confidence in [0.65, 0.80].
-func embedMediumConfidence(cos float32) float64 {
+// embedMediumConfidence maps a cosine similarity in [low, high) to a confidence
+// in [0.65, 0.80]. Like embedHighConfidence, the band cut-points (`low`, `high`)
+// derive from the active per-model thresholds; the confidence endpoints
+// (0.65..0.80) are fixed (DEDUP-2/3).
+func embedMediumConfidence(cos float32, low, high float64) float64 {
 	const (
-		cosMin  = 0.85
-		cosMax  = 0.95
 		confMin = 0.65
 		confMax = 0.80
 	)
-	if cos <= cosMin {
+	cosMin := low
+	cosMax := high
+	if float64(cos) <= cosMin {
 		return confMin
 	}
-	if cos >= cosMax {
+	if float64(cos) >= cosMax {
 		return confMax
 	}
-	frac := float64(cos-cosMin) / float64(cosMax-cosMin)
+	frac := (float64(cos) - cosMin) / (cosMax - cosMin)
 	return confMin + frac*(confMax-confMin)
 }
 
@@ -186,7 +195,7 @@ func CollectEmbedding(
 			sig = unified.Signal{
 				Kind:       unified.SigEmbedHigh,
 				Raw:        float64(r.Similarity),
-				Confidence: embedHighConfidence(r.Similarity),
+				Confidence: embedHighConfidence(r.Similarity, cfg.HighThreshold),
 				Evidence: fmt.Sprintf(
 					"embedding cosine %.4f (high tier): book %s ↔ %s",
 					r.Similarity, bookID, r.EntityID,
@@ -196,7 +205,7 @@ func CollectEmbedding(
 			sig = unified.Signal{
 				Kind:       unified.SigEmbedMedium,
 				Raw:        float64(r.Similarity),
-				Confidence: embedMediumConfidence(r.Similarity),
+				Confidence: embedMediumConfidence(r.Similarity, cfg.LowThreshold, cfg.HighThreshold),
 				Evidence: fmt.Sprintf(
 					"embedding cosine %.4f (medium tier): book %s ↔ %s",
 					r.Similarity, bookID, r.EntityID,

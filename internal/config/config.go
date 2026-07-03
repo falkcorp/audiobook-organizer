@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.61.0
+// version: 1.62.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-07-03
 
@@ -137,6 +137,40 @@ type DedupConfig struct {
 	ReviewModel string `json:"review_model" mapstructure:"review_model"`
 	// Signals holds the unified scoring band thresholds.
 	Signals DedupSignalConfig `json:"signals" mapstructure:"signals"`
+	// EmbeddingThresholdsByModel holds per-embedding-model overrides for the
+	// book high/low cosine thresholds, keyed by the producing model name
+	// (e.g. "text-embedding-3-large" or "bge-m3"). DEDUP-2/3: the flat
+	// BookHighThreshold/BookLowThreshold above were calibrated for OpenAI
+	// text-embedding-3-large's cosine distribution; a different embedding model
+	// (bge-m3) has a different distribution and needs its own thresholds.
+	// Any model NOT present in this map falls back to the flat
+	// BookHighThreshold/BookLowThreshold — so behaviour is byte-for-byte
+	// unchanged for the legacy model and any not-yet-calibrated model. Populate
+	// via the dedup.calibrate-embedding-thresholds report (owner-reviewed).
+	EmbeddingThresholdsByModel map[string]EmbeddingModelThresholds `json:"embedding_thresholds_by_model,omitempty" mapstructure:"embedding_thresholds_by_model"`
+}
+
+// EmbeddingModelThresholds is a per-model override of the book cosine-similarity
+// high/low thresholds. Used as the value type of
+// DedupConfig.EmbeddingThresholdsByModel.
+type EmbeddingModelThresholds struct {
+	// High is the cosine-similarity floor for the "high confidence" band.
+	High float64 `json:"high" mapstructure:"high"`
+	// Low is the cosine-similarity floor for the "low confidence" band.
+	Low float64 `json:"low" mapstructure:"low"`
+}
+
+// ThresholdsForModel resolves the book high/low cosine thresholds for the given
+// embedding model name. If the model has a calibrated entry in
+// EmbeddingThresholdsByModel, that entry is returned; otherwise the flat
+// BookHighThreshold/BookLowThreshold values are returned as the default
+// fallback. This guarantees zero behaviour change for any model not explicitly
+// calibrated (DEDUP-2/3).
+func (c DedupConfig) ThresholdsForModel(model string) (high, low float64) {
+	if t, ok := c.EmbeddingThresholdsByModel[model]; ok {
+		return t.High, t.Low
+	}
+	return c.BookHighThreshold, c.BookLowThreshold
 }
 
 // ITunesConfig holds all settings for the iTunes sync and write-back subsystem.
@@ -346,8 +380,8 @@ type Config struct {
 	// admin credentials and must always expire, so a non-positive value falls
 	// back to the default of 30. (SEC-1/PROC-6)
 	BootstrapKeyTTLDays int `json:"bootstrap_key_ttl_days"`
-	MemoryLimitPercent        int `json:"memory_limit_percent"` // % of system memory
-	MemoryLimitMB             int `json:"memory_limit_mb"`      // absolute MB
+	MemoryLimitPercent  int `json:"memory_limit_percent"` // % of system memory
+	MemoryLimitMB       int `json:"memory_limit_mb"`      // absolute MB
 
 	// Lifecycle / retention
 	PurgeSoftDeletedAfterDays   int  `json:"purge_soft_deleted_after_days"`
@@ -571,29 +605,29 @@ func InitConfig() {
 	viper.SetDefault("scheduled.reconcile.interval", 0)
 	viper.SetDefault("scheduled.reconcile.on_startup", false)
 	// BindEnv maps env vars so SCHEDULED_* overrides work even without AutomaticEnv.
-	viper.BindEnv("scheduled.dedup_refresh.enabled", "SCHEDULED_DEDUP_REFRESH_ENABLED")                               //nolint:errcheck
-	viper.BindEnv("scheduled.dedup_refresh.interval", "SCHEDULED_DEDUP_REFRESH_INTERVAL")                             //nolint:errcheck
-	viper.BindEnv("scheduled.dedup_refresh.on_startup", "SCHEDULED_DEDUP_REFRESH_ON_STARTUP")                         //nolint:errcheck
-	viper.BindEnv("scheduled.author_split.enabled", "SCHEDULED_AUTHOR_SPLIT_ENABLED")                                 //nolint:errcheck
-	viper.BindEnv("scheduled.author_split.interval", "SCHEDULED_AUTHOR_SPLIT_INTERVAL")                               //nolint:errcheck
-	viper.BindEnv("scheduled.author_split.on_startup", "SCHEDULED_AUTHOR_SPLIT_ON_STARTUP")                           //nolint:errcheck
-	viper.BindEnv("scheduled.db_optimize.enabled", "SCHEDULED_DB_OPTIMIZE_ENABLED")                                   //nolint:errcheck
-	viper.BindEnv("scheduled.db_optimize.interval", "SCHEDULED_DB_OPTIMIZE_INTERVAL")                                 //nolint:errcheck
-	viper.BindEnv("scheduled.db_optimize.on_startup", "SCHEDULED_DB_OPTIMIZE_ON_STARTUP")                             //nolint:errcheck
-	viper.BindEnv("scheduled.metadata_refresh.enabled", "SCHEDULED_METADATA_REFRESH_ENABLED")                         //nolint:errcheck
-	viper.BindEnv("scheduled.metadata_refresh.interval", "SCHEDULED_METADATA_REFRESH_INTERVAL")                       //nolint:errcheck
-	viper.BindEnv("scheduled.metadata_refresh.on_startup", "SCHEDULED_METADATA_REFRESH_ON_STARTUP")                   //nolint:errcheck
-	viper.BindEnv("scheduled.resolve_production_authors.enabled", "SCHEDULED_RESOLVE_PRODUCTION_AUTHORS_ENABLED")     //nolint:errcheck
-	viper.BindEnv("scheduled.resolve_production_authors.interval", "SCHEDULED_RESOLVE_PRODUCTION_AUTHORS_INTERVAL")   //nolint:errcheck
-	viper.BindEnv("scheduled.series_prune.enabled", "SCHEDULED_SERIES_PRUNE_ENABLED")                                 //nolint:errcheck
-	viper.BindEnv("scheduled.series_prune.interval", "SCHEDULED_SERIES_PRUNE_INTERVAL")                               //nolint:errcheck
-	viper.BindEnv("scheduled.series_prune.on_startup", "SCHEDULED_SERIES_PRUNE_ON_STARTUP")                           //nolint:errcheck
-	viper.BindEnv("scheduled.ai_dedup_batch.enabled", "SCHEDULED_AI_DEDUP_BATCH_ENABLED")                             //nolint:errcheck
-	viper.BindEnv("scheduled.ai_dedup_batch.interval", "SCHEDULED_AI_DEDUP_BATCH_INTERVAL")                           //nolint:errcheck
-	viper.BindEnv("scheduled.ai_dedup_batch.on_startup", "SCHEDULED_AI_DEDUP_BATCH_ON_STARTUP")                       //nolint:errcheck
-	viper.BindEnv("scheduled.reconcile.enabled", "SCHEDULED_RECONCILE_ENABLED")                                       //nolint:errcheck
-	viper.BindEnv("scheduled.reconcile.interval", "SCHEDULED_RECONCILE_INTERVAL")                                     //nolint:errcheck
-	viper.BindEnv("scheduled.reconcile.on_startup", "SCHEDULED_RECONCILE_ON_STARTUP")                                 //nolint:errcheck
+	viper.BindEnv("scheduled.dedup_refresh.enabled", "SCHEDULED_DEDUP_REFRESH_ENABLED")                             //nolint:errcheck
+	viper.BindEnv("scheduled.dedup_refresh.interval", "SCHEDULED_DEDUP_REFRESH_INTERVAL")                           //nolint:errcheck
+	viper.BindEnv("scheduled.dedup_refresh.on_startup", "SCHEDULED_DEDUP_REFRESH_ON_STARTUP")                       //nolint:errcheck
+	viper.BindEnv("scheduled.author_split.enabled", "SCHEDULED_AUTHOR_SPLIT_ENABLED")                               //nolint:errcheck
+	viper.BindEnv("scheduled.author_split.interval", "SCHEDULED_AUTHOR_SPLIT_INTERVAL")                             //nolint:errcheck
+	viper.BindEnv("scheduled.author_split.on_startup", "SCHEDULED_AUTHOR_SPLIT_ON_STARTUP")                         //nolint:errcheck
+	viper.BindEnv("scheduled.db_optimize.enabled", "SCHEDULED_DB_OPTIMIZE_ENABLED")                                 //nolint:errcheck
+	viper.BindEnv("scheduled.db_optimize.interval", "SCHEDULED_DB_OPTIMIZE_INTERVAL")                               //nolint:errcheck
+	viper.BindEnv("scheduled.db_optimize.on_startup", "SCHEDULED_DB_OPTIMIZE_ON_STARTUP")                           //nolint:errcheck
+	viper.BindEnv("scheduled.metadata_refresh.enabled", "SCHEDULED_METADATA_REFRESH_ENABLED")                       //nolint:errcheck
+	viper.BindEnv("scheduled.metadata_refresh.interval", "SCHEDULED_METADATA_REFRESH_INTERVAL")                     //nolint:errcheck
+	viper.BindEnv("scheduled.metadata_refresh.on_startup", "SCHEDULED_METADATA_REFRESH_ON_STARTUP")                 //nolint:errcheck
+	viper.BindEnv("scheduled.resolve_production_authors.enabled", "SCHEDULED_RESOLVE_PRODUCTION_AUTHORS_ENABLED")   //nolint:errcheck
+	viper.BindEnv("scheduled.resolve_production_authors.interval", "SCHEDULED_RESOLVE_PRODUCTION_AUTHORS_INTERVAL") //nolint:errcheck
+	viper.BindEnv("scheduled.series_prune.enabled", "SCHEDULED_SERIES_PRUNE_ENABLED")                               //nolint:errcheck
+	viper.BindEnv("scheduled.series_prune.interval", "SCHEDULED_SERIES_PRUNE_INTERVAL")                             //nolint:errcheck
+	viper.BindEnv("scheduled.series_prune.on_startup", "SCHEDULED_SERIES_PRUNE_ON_STARTUP")                         //nolint:errcheck
+	viper.BindEnv("scheduled.ai_dedup_batch.enabled", "SCHEDULED_AI_DEDUP_BATCH_ENABLED")                           //nolint:errcheck
+	viper.BindEnv("scheduled.ai_dedup_batch.interval", "SCHEDULED_AI_DEDUP_BATCH_INTERVAL")                         //nolint:errcheck
+	viper.BindEnv("scheduled.ai_dedup_batch.on_startup", "SCHEDULED_AI_DEDUP_BATCH_ON_STARTUP")                     //nolint:errcheck
+	viper.BindEnv("scheduled.reconcile.enabled", "SCHEDULED_RECONCILE_ENABLED")                                     //nolint:errcheck
+	viper.BindEnv("scheduled.reconcile.interval", "SCHEDULED_RECONCILE_INTERVAL")                                   //nolint:errcheck
+	viper.BindEnv("scheduled.reconcile.on_startup", "SCHEDULED_RECONCILE_ON_STARTUP")                               //nolint:errcheck
 
 	// iTunes sync defaults (nested under "itunes.*").
 	// BindEnv maps env vars so ITUNES_SYNC_ENABLED etc. override even without AutomaticEnv.
@@ -606,10 +640,10 @@ func InitConfig() {
 	viper.SetDefault("itunes.path_trim_enabled", false)
 	viper.SetDefault("itunes.windows_root_path", "")
 	viper.SetDefault("itunes.media_root", "")
-	viper.BindEnv("itunes.sync_enabled", "ITUNES_SYNC_ENABLED")           //nolint:errcheck
-	viper.BindEnv("itunes.sync_interval", "ITUNES_SYNC_INTERVAL")         //nolint:errcheck
+	viper.BindEnv("itunes.sync_enabled", "ITUNES_SYNC_ENABLED")             //nolint:errcheck
+	viper.BindEnv("itunes.sync_interval", "ITUNES_SYNC_INTERVAL")           //nolint:errcheck
 	viper.BindEnv("itunes.write_back_enabled", "ITUNES_WRITE_BACK_ENABLED") //nolint:errcheck
-	viper.BindEnv("itunes.auto_write_back", "ITUNES_AUTO_WRITE_BACK")     //nolint:errcheck
+	viper.BindEnv("itunes.auto_write_back", "ITUNES_AUTO_WRITE_BACK")       //nolint:errcheck
 
 	// Auto-update defaults
 	viper.SetDefault("auto_update.enabled", false)
@@ -617,11 +651,11 @@ func InitConfig() {
 	viper.SetDefault("auto_update.check_minutes", 60)
 	viper.SetDefault("auto_update.window_start", 2)
 	viper.SetDefault("auto_update.window_end", 5)
-	viper.BindEnv("auto_update.enabled", "AUTO_UPDATE_ENABLED")           //nolint:errcheck
-	viper.BindEnv("auto_update.channel", "AUTO_UPDATE_CHANNEL")           //nolint:errcheck
+	viper.BindEnv("auto_update.enabled", "AUTO_UPDATE_ENABLED")             //nolint:errcheck
+	viper.BindEnv("auto_update.channel", "AUTO_UPDATE_CHANNEL")             //nolint:errcheck
 	viper.BindEnv("auto_update.check_minutes", "AUTO_UPDATE_CHECK_MINUTES") //nolint:errcheck
-	viper.BindEnv("auto_update.window_start", "AUTO_UPDATE_WINDOW_START") //nolint:errcheck
-	viper.BindEnv("auto_update.window_end", "AUTO_UPDATE_WINDOW_END")     //nolint:errcheck
+	viper.BindEnv("auto_update.window_start", "AUTO_UPDATE_WINDOW_START")   //nolint:errcheck
+	viper.BindEnv("auto_update.window_end", "AUTO_UPDATE_WINDOW_END")       //nolint:errcheck
 
 	// Maintenance window defaults
 	viper.SetDefault("maintenance.enabled", true)
@@ -647,11 +681,11 @@ func InitConfig() {
 	viper.SetDefault("maintenance.acoustid_online_lookup", false)
 	viper.SetDefault("maintenance.acoustid_nightly_limit", 5000)
 	// BindEnv maps env vars so MAINTENANCE_ENABLED etc. override even without AutomaticEnv.
-	viper.BindEnv("maintenance.enabled", "MAINTENANCE_ENABLED")                                //nolint:errcheck
-	viper.BindEnv("maintenance.window_start", "MAINTENANCE_WINDOW_START")                      //nolint:errcheck
-	viper.BindEnv("maintenance.window_end", "MAINTENANCE_WINDOW_END")                          //nolint:errcheck
-	viper.BindEnv("maintenance.acoustid_online_lookup", "MAINTENANCE_ACOUSTID_ONLINE_LOOKUP")  //nolint:errcheck
-	viper.BindEnv("maintenance.acoustid_nightly_limit", "MAINTENANCE_ACOUSTID_NIGHTLY_LIMIT")  //nolint:errcheck
+	viper.BindEnv("maintenance.enabled", "MAINTENANCE_ENABLED")                               //nolint:errcheck
+	viper.BindEnv("maintenance.window_start", "MAINTENANCE_WINDOW_START")                     //nolint:errcheck
+	viper.BindEnv("maintenance.window_end", "MAINTENANCE_WINDOW_END")                         //nolint:errcheck
+	viper.BindEnv("maintenance.acoustid_online_lookup", "MAINTENANCE_ACOUSTID_ONLINE_LOOKUP") //nolint:errcheck
+	viper.BindEnv("maintenance.acoustid_nightly_limit", "MAINTENANCE_ACOUSTID_NIGHTLY_LIMIT") //nolint:errcheck
 
 	// Download client defaults
 	viper.SetDefault("download_client.torrent.type", "")
@@ -698,9 +732,9 @@ func InitConfig() {
 	viper.SetDefault("dedup.author_high_threshold", 0.92)
 	viper.SetDefault("dedup.author_low_threshold", 0.80)
 	viper.SetDefault("dedup.auto_merge_enabled", true)
-	viper.SetDefault("dedup.embeddings_enabled", true)                 // opt-out: set false on no-internet boxes
-	viper.SetDefault("dedup.llm_auto_merge_high_confidence", false)   // opt-in
-	viper.SetDefault("dedup.on_import_via_scheduler", false)          // opt-in — keep eager path until M4 confirmed
+	viper.SetDefault("dedup.embeddings_enabled", true)              // opt-out: set false on no-internet boxes
+	viper.SetDefault("dedup.llm_auto_merge_high_confidence", false) // opt-in
+	viper.SetDefault("dedup.on_import_via_scheduler", false)        // opt-in — keep eager path until M4 confirmed
 
 	// Metadata candidate scoring defaults (nested under "metadata_scoring.*").
 	// BindEnv maps env vars so METADATA_SCORING_* overrides even without AutomaticEnv.
@@ -711,13 +745,13 @@ func InitConfig() {
 	viper.SetDefault("metadata_scoring.llm_rerank_epsilon", 0.05)
 	viper.SetDefault("metadata_scoring.llm_rerank_top_k", 5)
 	viper.SetDefault("metadata_scoring.write_backup_before", true)
-	viper.BindEnv("metadata_scoring.embedding_enabled", "METADATA_SCORING_EMBEDDING_ENABLED")     //nolint:errcheck
-	viper.BindEnv("metadata_scoring.embedding_min_score", "METADATA_SCORING_EMBEDDING_MIN_SCORE") //nolint:errcheck
+	viper.BindEnv("metadata_scoring.embedding_enabled", "METADATA_SCORING_EMBEDDING_ENABLED")       //nolint:errcheck
+	viper.BindEnv("metadata_scoring.embedding_min_score", "METADATA_SCORING_EMBEDDING_MIN_SCORE")   //nolint:errcheck
 	viper.BindEnv("metadata_scoring.embedding_best_match", "METADATA_SCORING_EMBEDDING_BEST_MATCH") //nolint:errcheck
-	viper.BindEnv("metadata_scoring.llm_enabled", "METADATA_SCORING_LLM_ENABLED")                //nolint:errcheck
-	viper.BindEnv("metadata_scoring.llm_rerank_epsilon", "METADATA_SCORING_LLM_RERANK_EPSILON")  //nolint:errcheck
-	viper.BindEnv("metadata_scoring.llm_rerank_top_k", "METADATA_SCORING_LLM_RERANK_TOP_K")      //nolint:errcheck
-	viper.BindEnv("metadata_scoring.write_backup_before", "METADATA_SCORING_WRITE_BACKUP_BEFORE") //nolint:errcheck
+	viper.BindEnv("metadata_scoring.llm_enabled", "METADATA_SCORING_LLM_ENABLED")                   //nolint:errcheck
+	viper.BindEnv("metadata_scoring.llm_rerank_epsilon", "METADATA_SCORING_LLM_RERANK_EPSILON")     //nolint:errcheck
+	viper.BindEnv("metadata_scoring.llm_rerank_top_k", "METADATA_SCORING_LLM_RERANK_TOP_K")         //nolint:errcheck
+	viper.BindEnv("metadata_scoring.write_backup_before", "METADATA_SCORING_WRITE_BACKUP_BEFORE")   //nolint:errcheck
 
 	// Unified dedup scoring defaults (SPEC 1 §3–4, T011).
 	// These are consumed by internal/dedup/unified.LoadScoreConfig via Viper.
@@ -901,9 +935,9 @@ func InitConfig() {
 			},
 
 			// Path formatting & apply pipeline
-			PathFormat:           viper.GetString("path_format"),
-			SegmentTitleFormat:   viper.GetString("segment_title_format"),
-			AutoRenameOnApply:    viper.GetBool("auto_rename_on_apply"),
+			PathFormat:              viper.GetString("path_format"),
+			SegmentTitleFormat:      viper.GetString("segment_title_format"),
+			AutoRenameOnApply:       viper.GetBool("auto_rename_on_apply"),
 			AutoWriteTagsOnApply:    viper.GetBool("auto_write_tags_on_apply"),
 			VerifyAfterWrite:        viper.GetBool("verify_after_write"),
 			WriteStartupReadOnlyKey: viper.GetBool("write_startup_readonly_key"),
@@ -994,7 +1028,6 @@ func InitConfig() {
 			},
 		}
 
-
 		// Managed external-tool lifecycle
 		c.Tools = tools.ToolsConfig{
 			ManagedDir:          "/var/lib/audiobook-organizer/tools",
@@ -1003,7 +1036,6 @@ func InitConfig() {
 			AllowPeriodicOllama: false,
 			OllamaDebounceMin:   10,
 		}
-
 
 		// Default Open Library dump dir to {RootDir}/openlibrary-dumps if not set
 		if c.OpenLibraryDumpDir == "" && c.RootDir != "" {
@@ -1342,7 +1374,7 @@ func ResetToDefaults() {
 				AuthorHighThreshold:        0.92,
 				AuthorLowThreshold:         0.80,
 				AutoMergeEnabled:           true,
-				EmbeddingsEnabled:          true,  // opt-out: set false on no-internet boxes
+				EmbeddingsEnabled:          true, // opt-out: set false on no-internet boxes
 				LLMAutoMergeHighConfidence: false,
 				OnImportViaScheduler:       false, // opt-in
 				ReviewModel:                "gpt-5-mini",
@@ -1381,20 +1413,20 @@ func ResetToDefaults() {
 
 			// Maintenance window
 			Maintenance: MaintenanceConfig{
-				Enabled:          true,
-				WindowStart:      1,
-				WindowEnd:        4,
-				DedupRefresh:     true,
-				SeriesPrune:      true,
-				AuthorSplit:      true,
-				TombstoneCleanup: true,
-				Reconcile:        true,
-				PurgeDeleted:     true,
-				PurgeOldLogs:     true,
-				DbOptimize:       true,
-				LibraryScan:      false,
-				LibraryOrganize:  false,
-				MetadataRefresh:  false,
+				Enabled:            true,
+				WindowStart:        1,
+				WindowEnd:          4,
+				DedupRefresh:       true,
+				SeriesPrune:        true,
+				AuthorSplit:        true,
+				TombstoneCleanup:   true,
+				Reconcile:          true,
+				PurgeDeleted:       true,
+				PurgeOldLogs:       true,
+				DbOptimize:         true,
+				LibraryScan:        false,
+				LibraryOrganize:    false,
+				MetadataRefresh:    false,
 				LibrarySizeRefresh: true,
 				// AcoustID online lookup is OFF by default — uses third-party
 				// quota and only helps users who set ACOUSTID_API_KEY. Opt-in
@@ -1439,8 +1471,8 @@ func ResetToDefaults() {
 			},
 
 			// Path formatting & apply pipeline
-			PathFormat:           "{author}/{series_prefix}{title}/{track_title}.{ext}",
-			SegmentTitleFormat:   "{title} - {track}/{total_tracks}",
+			PathFormat:              "{author}/{series_prefix}{title}/{track_title}.{ext}",
+			SegmentTitleFormat:      "{title} - {track}/{total_tracks}",
 			AutoRenameOnApply:       true,
 			AutoWriteTagsOnApply:    true,
 			VerifyAfterWrite:        true,

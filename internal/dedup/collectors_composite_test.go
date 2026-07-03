@@ -1,7 +1,7 @@
 // file: internal/dedup/collectors_composite_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c3d4e5f6-a7b8-4c9d-8e0f-1a2b3c4d5e6f
-// last-edited: 2026-06-10
+// last-edited: 2026-07-03
 
 package dedup
 
@@ -49,7 +49,8 @@ func (s *stubEmbedStore) FindSimilar(entityType string, vector []float32, minSim
 
 // TestCompositeScore_EmbeddingPlusDuration verifies the acceptance criterion:
 // "A pair matched by embedding+duration produces a composed score with
-//  2-signal breakdown."
+//
+//	2-signal breakdown."
 //
 // The test constructs signals directly (skipping collector I/O) and feeds them
 // to ComposeScore, then checks the resulting UnifiedDedupScore fields.
@@ -60,7 +61,7 @@ func TestCompositeScore_EmbeddingPlusDuration(t *testing.T) {
 		{
 			Kind:       unified.SigEmbedHigh,
 			Raw:        float64(cosine),
-			Confidence: embedHighConfidence(cosine), // should be ~0.894
+			Confidence: embedHighConfidence(cosine, 0.95), // should be ~0.894
 			Evidence:   "embedding cosine 0.9700 (high tier): book A ↔ book B",
 		},
 		{
@@ -106,7 +107,7 @@ func TestCompositeScore_EmbeddingMediumPlusMetaFuzzy(t *testing.T) {
 		{
 			Kind:       unified.SigEmbedMedium,
 			Raw:        0.90,
-			Confidence: embedMediumConfidence(0.90), // 0.65 + (0.90-0.85)/(0.95-0.85)*0.15 = 0.65+0.075 = 0.725
+			Confidence: embedMediumConfidence(0.90, 0.85, 0.95), // 0.65 + (0.90-0.85)/(0.95-0.85)*0.15 = 0.65+0.075 = 0.725
 			Evidence:   "embedding cosine 0.9000 (medium tier): book A ↔ book B",
 		},
 		{
@@ -331,8 +332,8 @@ func TestNormalizedLevenshteinSimilarity(t *testing.T) {
 // TestBestLayerFromSignals verifies the layer priority ordering.
 func TestBestLayerFromSignals(t *testing.T) {
 	tests := []struct {
-		name     string
-		signals  []unified.Signal
+		name      string
+		signals   []unified.Signal
 		wantLayer string
 	}{
 		{

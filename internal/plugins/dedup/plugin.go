@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/plugin.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: d1e2f3a4-b5c6-7890-abcd-ef1234567890
 // last-edited: 2026-07-03
 
@@ -20,7 +20,7 @@ type Plugin struct {
 	engine         *dedupengine.Engine
 	store          database.Store
 	embeddingStore *database.EmbeddingStore
-	registry       sdk.Registry                    // set in Register; used by ops that enqueue follow-on work
+	registry       sdk.Registry                        // set in Register; used by ops that enqueue follow-on work
 	toolRegistry   interface{ Available(string) bool } // optional; guards ops that require external binaries
 }
 
@@ -64,16 +64,17 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.splitBookScanDef(),
 		p.purgeStaleDef(),
 		p.lshIndexBuildDef(),
-		p.purgeLegacyFPDef(),     // T015: legacy fingerprint purge op
-		p.embReencodeDef(),       // T021: float16+zstd re-encode op
-		p.bookfileSegDropDef(),   // T020: drop AcoustID segment fields from stored values
-		p.datasetBackfillDef(),   // C4: label + suppress residual pending candidates
-		p.mineGoldLabelsDef(),    // gold miner: auto-label high-confidence true_dup positives
-		p.quarantineChapterArtifactsDef(), // drain chapter-file-as-book artifacts (candidate explosion)
-		p.drainStaleDef(), // DEDUP-1: drain CONS-16/17-era stale exact candidates (dry-run gated)
-		p.checkBookDef(),         // M4: per-book dedup check via dependency scheduler
-		p.buildISBNIndexDef(),    // T022: ISBN/ASIN secondary index backfill
-		p.reembedEmbeddingsDef(), // Part B: re-embed corpus when the embedding model changes
+		p.purgeLegacyFPDef(),                // T015: legacy fingerprint purge op
+		p.embReencodeDef(),                  // T021: float16+zstd re-encode op
+		p.bookfileSegDropDef(),              // T020: drop AcoustID segment fields from stored values
+		p.datasetBackfillDef(),              // C4: label + suppress residual pending candidates
+		p.calibrateEmbeddingThresholdsDef(), // DEDUP-2/3: bge-m3 threshold calibration report (dry-run only)
+		p.mineGoldLabelsDef(),               // gold miner: auto-label high-confidence true_dup positives
+		p.quarantineChapterArtifactsDef(),   // drain chapter-file-as-book artifacts (candidate explosion)
+		p.drainStaleDef(),                   // DEDUP-1: drain CONS-16/17-era stale exact candidates (dry-run gated)
+		p.checkBookDef(),                    // M4: per-book dedup check via dependency scheduler
+		p.buildISBNIndexDef(),               // T022: ISBN/ASIN secondary index backfill
+		p.reembedEmbeddingsDef(),            // Part B: re-embed corpus when the embedding model changes
 	}
 
 	for _, op := range ops {
