@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_mock_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
-// last-edited: 2026-07-01
+// last-edited: 2026-07-03
 
 package metafetch
 
@@ -13,7 +13,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	tmock "github.com/stretchr/testify/mock"
 
+	"github.com/falkcorp/audiobook-organizer/internal/ai/mocks"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
@@ -1470,6 +1473,87 @@ func TestRerankTopK(t *testing.T) {
 	t.Run("empty_candidates", func(t *testing.T) {
 		result := svc.RerankTopK(context.TODO(), &database.Book{}, nil)
 		assert.Nil(t, result)
+	})
+
+	// boost_stacked_tail_rescale reproduces MATCH-2: an ambiguous top-K window
+	// whose original (boost-inflated) scores exceed 1.0, plus an untouched
+	// tail candidate also above 1.0 but below the window's floor. Before the
+	// fix, the LLM's clamped [0,1] scores overwrote the window directly, so
+	// the window could fall below or collide with the tail purely due to the
+	// clamp/unclamp scale mismatch. After the fix, the LLM's relative
+	// preference is preserved but rescaled back into the window's original
+	// [origMin, origMax] range, so the tail's relative position is
+	// unaffected.
+	t.Run("boost_stacked_tail_rescale", func(t *testing.T) {
+		rerankSvc := NewService(mock)
+
+		origEpsilon := config.AppConfig.MetadataScoring.LLMRerankEpsilon
+		origTopK := config.AppConfig.MetadataScoring.LLMRerankTopK
+		config.AppConfig.MetadataScoring.LLMRerankEpsilon = 0.2
+		config.AppConfig.MetadataScoring.LLMRerankTopK = 5
+		t.Cleanup(func() {
+			config.AppConfig.MetadataScoring.LLMRerankEpsilon = origEpsilon
+			config.AppConfig.MetadataScoring.LLMRerankTopK = origTopK
+		})
+
+		llmMock := mocks.NewMockMetadataCandidateScorer(t)
+		llmMock.EXPECT().Score(tmock.Anything, tmock.Anything, tmock.Anything).
+			Return([]float64{0.6, 0.95}, nil).Once()
+		rerankSvc.SetMetadataLLMScorer(llmMock)
+
+		const (
+			origMax = 2.0 // window best, boost-stacked (e.g. author x1.5 x series x1.4)
+			origMin = 1.9 // window worst, also boost-stacked
+			tail    = 1.5 // untouched tail candidate, below origMin
+		)
+		candidates := []MetadataCandidate{
+			{Title: "Window Best (pre-rerank)", Score: origMax},
+			{Title: "Window Second (pre-rerank)", Score: origMin},
+			{Title: "Tail (untouched)", Score: tail},
+		}
+
+		result := rerankSvc.RerankTopK(context.TODO(), &database.Book{}, candidates)
+		require.Len(t, result, 3)
+
+		var windowBest, windowSecond, tailCand *MetadataCandidate
+		for i := range result {
+			switch result[i].Title {
+			case "Window Best (pre-rerank)":
+				windowBest = &result[i]
+			case "Window Second (pre-rerank)":
+				windowSecond = &result[i]
+			case "Tail (untouched)":
+				tailCand = &result[i]
+			}
+		}
+		require.NotNil(t, windowBest)
+		require.NotNil(t, windowSecond)
+		require.NotNil(t, tailCand)
+
+		// The LLM scored "Window Second" (0.95) higher than "Window Best"
+		// (0.6) — its preference must be honored after rescale.
+		assert.Greater(t, windowSecond.Score, windowBest.Score,
+			"LLM's preferred candidate must end up with the higher final score")
+
+		// Both reranked window candidates must land within the window's
+		// original [origMin, origMax] range — never leaping into or out of
+		// the untouched tail's range purely due to clamp/unclamp mismatch.
+		assert.GreaterOrEqual(t, windowBest.Score, origMin)
+		assert.LessOrEqual(t, windowBest.Score, origMax)
+		assert.GreaterOrEqual(t, windowSecond.Score, origMin)
+		assert.LessOrEqual(t, windowSecond.Score, origMax)
+
+		// The tail candidate is untouched and remains below the rescaled
+		// window — no spurious leapfrogging in either direction.
+		assert.Equal(t, tail, tailCand.Score)
+		assert.Less(t, tailCand.Score, windowBest.Score)
+		assert.Less(t, tailCand.Score, windowSecond.Score)
+
+		// Final ordering: window candidates (by LLM preference) then tail.
+		require.Len(t, result, 3)
+		assert.Equal(t, "Window Second (pre-rerank)", result[0].Title)
+		assert.Equal(t, "Window Best (pre-rerank)", result[1].Title)
+		assert.Equal(t, "Tail (untouched)", result[2].Title)
 	})
 }
 
