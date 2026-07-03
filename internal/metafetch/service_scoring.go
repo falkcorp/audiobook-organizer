@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_scoring.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: d2226468-bed1-4989-93f3-b0bc3a344424
 // last-edited: 2026-07-03
 
@@ -667,13 +667,32 @@ func (mfs *Service) RerankTopK(
 		return candidates
 	}
 
-	// Replace top-K base scores with LLM scores directly — do not apply the
-	// author/narrator/series bonus multipliers again. The LLM prompt already
-	// sees those fields and judges them as part of its score; re-multiplying
-	// would double-count the same evidence and distort the top-K's position
-	// relative to the non-reranked tail.
+	// Replace top-K base scores with LLM scores — but rescale them back into
+	// the window's original [origMin, origMax] range first. The LLM scores
+	// come back hard-clamped to [0,1] (see LLMScorer.Score), while the
+	// untouched tail carries the full unclamped boost-multiplier stack
+	// (author/narrator/series, routinely 1.5-4.0 by design). Assigning the
+	// clamped LLM score directly would compare apples to oranges once the
+	// full list is re-sorted below: a tail candidate scoring >1.0 could
+	// outrank even an LLM-certain (1.0) reranked winner. Rescaling preserves
+	// the LLM's relative ranking within the window while keeping the window
+	// on the same scale as the tail.
+	//
+	// Do not apply the author/narrator/series bonus multipliers again when
+	// rescaling. The LLM prompt already sees those fields and judges them as
+	// part of its score; re-multiplying would double-count the same
+	// evidence.
+	origMax := bestScore
+	origMin := candidates[ambiguousEnd-1].Score
 	for i := range topCands {
-		candidates[i].Score = llmScores[i]
+		normFinal := llmScores[i]
+		if origMax == origMin {
+			// No spread in the original window — every candidate rescales
+			// to the same point.
+			candidates[i].Score = origMax
+			continue
+		}
+		candidates[i].Score = origMin + normFinal*(origMax-origMin)
 	}
 
 	// Resort the full list so the reranked top-K is in correct order against
