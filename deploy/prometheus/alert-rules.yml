@@ -1,0 +1,117 @@
+# file: deploy/prometheus/alert-rules.yml
+# version: 1.0.0
+# guid: d2e3f4a5-b6c7-4d8e-9f0a-1b2c3d4e5f6a
+# last-edited: 2026-07-03
+#
+# TEMPLATE / SNIPPET — Prometheus alerting rules for audiobook-organizer
+# (OPS-4/OPS-5). This is NOT installed or evaluated by this repo; it must be
+# loaded as a rule file by an operator's own Prometheus + Alertmanager
+# install (see docs/system/runbooks.md, "Monitoring & Alerting Runbook",
+# for the load + wiring procedure).
+#
+# Design goals covered by these rules: op failure rate, AI-backend
+# availability, memory pressure vs the real cgroup limit, service
+# down/unreachable, and disk space (prerequisite: node_exporter — NOT
+# installed by this repo, called out explicitly below rather than assumed).
+
+groups:
+  - name: audiobook-organizer
+    rules:
+      # OPS-5: operation wedges/failures were previously only noticed by a
+      # human. audiobook_organizer_operations_failed_total already exists
+      # (internal/metrics/metrics.go, IncOperationFailed) — alert on its
+      # rate rather than duplicating the counter. Threshold of 0.1/s
+      # sustained for 10m is conservative: on a single-instance deployment
+      # doing periodic imports/scans/dedup, transient failures are common,
+      # but a sustained ~6/min failure rate across a 10m window indicates a
+      # real regression (e.g. a bad importer run, a wedged op type) rather
+      # than isolated noise. Tune down as real-world false-positive/negative
+      # rates are observed.
+      - alert: AudiobookOrganizerOpFailuresHigh
+        expr: rate(audiobook_organizer_operations_failed_total[15m]) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "audiobook-organizer operation failure rate is high"
+          description: >-
+            Operation failure rate has exceeded 0.1/s (sustained over 15m)
+            for at least 10 minutes. Check `journalctl -u
+            audiobook-organizer` and the Operations tab for the failing op
+            type(s).
+
+      # OPS-4: covers "AI backend (OpenAI/local Ollama) down" — the case
+      # that was previously only discovered via OpenAI quota exhaustion
+      # symptoms. audiobook_organizer_ai_backend_available{backend} is set
+      # once at server-init time (internal/server/server.go, alongside
+      # EmbeddingClient.SetOllamaAvailable) — it reflects reachability at
+      # startup, not a continuous health-check loop, so this alert mainly
+      # catches "backend was down when the service last started/restarted"
+      # rather than a backend that fails mid-session. That's the same
+      # limitation the underlying signal has today; extending it to a
+      # polling loop is out of scope for this task.
+      - alert: AudiobookOrganizerBackendUnavailable
+        expr: audiobook_organizer_ai_backend_available == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "audiobook-organizer AI backend unavailable"
+          description: >-
+            The {{ $labels.backend }} AI backend has been reported
+            unavailable for at least 5 minutes. Embedding/LLM-dependent
+            features (dedup, transcription matching) will degrade or fail.
+
+      # Memory bloat (69GB cache-warmup incident) was discovered by a human
+      # noticing symptoms, not an alert. deploy/audiobook-organizer.service
+      # sets MemoryMax=12G (and GOMEMLIMIT=9GiB); 1.1e10 bytes is ~90% of
+      # 12G (12 * 1024^3 ~= 1.288e10; 90% ~= 1.16e10 — 1.1e10 is a slightly
+      # more conservative ~85% trigger point to leave headroom before the
+      # cgroup OOM-kills the process).
+      - alert: AudiobookOrganizerMemoryHigh
+        expr: process_resident_memory_bytes{job="audiobook-organizer"} > 1.1e10
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "audiobook-organizer memory usage approaching cgroup limit"
+          description: >-
+            RSS has exceeded ~1.1e10 bytes (~90% of the 12G MemoryMax in
+            deploy/audiobook-organizer.service) for at least 10 minutes.
+            Risk of cgroup OOM-kill; check for a warmup/cache regression.
+
+      # Standard "service is down/unreachable" proxy. There is no explicit
+      # restart-count metric today, so a scrape gap on the `up` series
+      # (Prometheus's own synthetic per-target metric) is the practical
+      # signal for both crashes and restarts.
+      - alert: AudiobookOrganizerDown
+        expr: up{job="audiobook-organizer"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "audiobook-organizer is down or unreachable"
+          description: >-
+            Prometheus has been unable to scrape the audiobook-organizer
+            target for at least 2 minutes.
+
+      # Disk space. PREREQUISITE: this rule requires node_exporter to also
+      # be scraped (not installed or configured by this repo/task — install
+      # separately, e.g. `apt install prometheus-node-exporter`, and add a
+      # matching scrape job). Without node_exporter this rule will simply
+      # never fire (no data), not silently succeed — do not assume it is
+      # active just because this rule file is loaded.
+      - alert: AudiobookOrganizerDiskLow
+        expr: >-
+          node_filesystem_avail_bytes{mountpoint="/var/lib/audiobook-organizer"}
+          / node_filesystem_size_bytes{mountpoint="/var/lib/audiobook-organizer"}
+          < 0.1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "audiobook-organizer data volume is low on disk space"
+          description: >-
+            Less than 10% free space remains on
+            /var/lib/audiobook-organizer for at least 10 minutes. Requires
+            node_exporter scraping the host (see prerequisite note above).

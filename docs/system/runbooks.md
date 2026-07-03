@@ -1,7 +1,7 @@
 <!-- file: docs/system/runbooks.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: e5f6a7b8-c9d0-1234-ef01-234567890123 -->
-<!-- last-edited: 2026-06-29 -->
+<!-- last-edited: 2026-07-03 -->
 
 # Operator Runbooks
 
@@ -173,3 +173,65 @@ These CI issues are pre-existing and not caused by your changes:
 - Build commands: [CLAUDE.md](../../CLAUDE.md)
 - Pipelines (operation internals): [pipelines.md](pipelines.md)
 - Storage (backup locations): [storage.md](storage.md)
+
+## Monitoring & Alerting Runbook
+
+Closes OPS-4/OPS-5: `/metrics` is served unauthenticated (LAN-only, accepted
+risk per pen-test finding MED-1 — see the comment in
+`internal/server/server_lifecycle.go`), but nothing scrapes it and there is
+no alerting layer. OpenAI quota exhaustion, the 69GB cache-warmup memory
+bloat, and op wedges were all discovered by a human noticing symptoms, not
+an alert. This section wires up a minimal, self-hostable
+Prometheus + Alertmanager setup using the config shipped in
+`deploy/prometheus/`.
+
+**Prerequisite:** a Prometheus + Alertmanager install, either on the
+production host itself or on a separate host that can reach it over the
+network. This repo does not install or manage Prometheus/Alertmanager —
+it only ships the scrape config and alert rules to plug into an existing
+install. No SaaS/hosted monitoring product (PagerDuty, Opsgenie, Datadog,
+etc.) is required or assumed.
+
+### Merge the scrape config
+
+1. Copy the job from
+   [`deploy/prometheus/scrape-config.yml`](../../deploy/prometheus/scrape-config.yml)
+   into your Prometheus's `prometheus.yml` under `scrape_configs:`. Replace
+   the placeholder target (`192.168.0.10:8484`) with your actual
+   audiobook-organizer host and port (default port `8484`, per
+   `deploy/audiobook-organizer.service` / `deploy/local.conf.example`).
+2. Reload Prometheus without restarting it:
+   ```bash
+   curl -X POST http://localhost:9090/-/reload
+   # or, if Prometheus is managed by systemd:
+   systemctl reload prometheus
+   ```
+3. Verify the target is up: Prometheus UI → Status → Targets → confirm
+   `audiobook-organizer` shows `UP`.
+
+### Load the alert rules
+
+1. Copy [`deploy/prometheus/alert-rules.yml`](../../deploy/prometheus/alert-rules.yml)
+   into your Prometheus's rule-file directory (or reference it directly via
+   a `rule_files:` entry in `prometheus.yml`), then reload Prometheus as
+   above.
+2. Wire up Alertmanager with at least one receiver so the rules actually
+   notify someone — a minimal self-hosted option is an email receiver or a
+   webhook to something you already run (e.g. a self-hosted ntfy/ Gotify
+   instance). No SaaS incident-management product is required; only add one
+   if you already operate one.
+3. Verify rules loaded: Prometheus UI → Status → Rules → confirm the
+   `audiobook-organizer` group's five alerts (`AudiobookOrganizerOpFailuresHigh`,
+   `AudiobookOrganizerBackendUnavailable`, `AudiobookOrganizerMemoryHigh`,
+   `AudiobookOrganizerDown`, `AudiobookOrganizerDiskLow`) appear with no
+   parse errors.
+
+### Disk-space alert prerequisite
+
+`AudiobookOrganizerDiskLow` depends on `node_filesystem_avail_bytes` /
+`node_filesystem_size_bytes`, which are exported by `node_exporter` — this
+is **not** installed by this task and must be set up separately (e.g.
+`apt install prometheus-node-exporter` on Debian/Ubuntu, or the equivalent
+for your distro), plus a matching scrape job added to `prometheus.yml`.
+Without `node_exporter` scraped, this alert simply never fires (no data) —
+it does not silently assume disk space is fine.

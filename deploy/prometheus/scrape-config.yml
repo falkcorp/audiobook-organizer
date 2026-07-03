@@ -1,0 +1,27 @@
+# file: deploy/prometheus/scrape-config.yml
+# version: 1.0.0
+# guid: c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e5f
+# last-edited: 2026-07-03
+#
+# TEMPLATE / SNIPPET — this is NOT a standalone runnable Prometheus config.
+# It is a `scrape_configs:` entry meant to be merged into an existing
+# Prometheus install's `prometheus.yml` (this repo does not install or run
+# Prometheus itself — see docs/system/runbooks.md, "Monitoring & Alerting
+# Runbook" section, for the merge + reload procedure).
+#
+# 192.168.0.10 below is a placeholder for the production host (see
+# deploy/local.conf.example / Makefile.local.example for the same
+# convention) — replace with your own audiobook-organizer host:port. Port
+# 8484 matches the default --port in deploy/audiobook-organizer.service and
+# deploy/local.conf.example.
+
+scrape_configs:
+  - job_name: audiobook-organizer
+    scrape_interval: 30s
+    metrics_path: /metrics
+    scheme: http
+    static_configs:
+      - targets:
+          - "192.168.0.10:8484"
+        labels:
+          service: audiobook-organizer

@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.32.1
+// version: 2.33.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-07-02
+// last-edited: 2026-07-03
 
 package server
 
@@ -621,6 +621,7 @@ func NewServer(store database.Store) *Server {
 		if server.embedClient != nil {
 			ollamaOK := server.toolRegistry.Available("ollama") || config.AppConfig.Embedding.BaseURL != ""
 			server.embedClient.SetOllamaAvailable(ollamaOK)
+			metrics.SetBackendAvailable("ollama", ollamaOK)
 		}
 
 		// Wire dedup plugin tool registry so Ollama-gated ops check availability.
