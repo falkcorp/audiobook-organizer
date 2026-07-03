@@ -1,7 +1,7 @@
 // file: internal/dedup/engine.go
-// version: 1.42.0
+// version: 1.43.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
-// last-edited: 2026-07-02
+// last-edited: 2026-07-03
 
 package dedup
 
@@ -2241,7 +2241,7 @@ func (de *Engine) EmbedAuthor(ctx context.Context, authorID int) error {
 	entityID := strconv.Itoa(authorID)
 
 	existing, err := de.embedStore.Get("author", entityID)
-	if err == nil && existing != nil && existing.TextHash == hash {
+	if err == nil && existing != nil && existing.TextHash == hash && de.embeddingModelMatches(existing.Model) {
 		// Mirror to chromem on cache hits too — see mirrorBookToChromem
 		// for the rationale (keeps ANN index in sync with sqlite).
 		de.mirrorAuthorToChromem(ctx, entityID, existing.Vector)
@@ -2305,7 +2305,7 @@ func (de *Engine) EmbedBooksAsync(ctx context.Context) (batchID string, count in
 
 		// Skip books that already have a current embedding.
 		existing, getErr := de.embedStore.Get("book", book.ID)
-		if getErr == nil && existing != nil && existing.TextHash == hash {
+		if getErr == nil && existing != nil && existing.TextHash == hash && de.embeddingModelMatches(existing.Model) {
 			continue
 		}
 		items = append(items, ai.EmbedBatchItem{BookID: book.ID, Text: text})
