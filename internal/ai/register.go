@@ -1,6 +1,6 @@
 // file: internal/ai/register.go
-// version: 1.2.1
-// last-edited: 2026-06-23
+// version: 1.3.0
+// last-edited: 2026-07-03
 
 // Service registry registrations for the AI cluster (W4).
 //
@@ -16,12 +16,30 @@
 package ai
 
 import (
+	"log/slog"
 	"os"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
 )
+
+// resolveAIEndpointKey decides whether an OpenAI-compatible client should be
+// constructed and what API key to hand it. When a real apiKey is configured
+// it's always used. When apiKey is empty but an explicit baseURL is
+// configured (a local OpenAI-compatible backend, e.g. Ollama, which ignores
+// the Authorization header), a dummy bearer is substituted so construction
+// proceeds. When neither is set, construction is skipped — the real-OpenAI
+// path (no baseURL) still requires a real key.
+func resolveAIEndpointKey(apiKey, baseURL string) (resolvedKey string, ok bool) {
+	if apiKey != "" {
+		return apiKey, true
+	}
+	if baseURL != "" {
+		return "ollama", true
+	}
+	return "", false
+}
 
 func init() {
 	// embedclient — OpenAI embedding client with optional cache.
@@ -32,10 +50,9 @@ func init() {
 		Groups: []string{"ai"},
 		Build: func(c *serviceregistry.Container) (any, error) {
 			cfg := serviceregistry.Get[*config.Config](c, serviceregistry.KeyConfig)
-			if cfg.OpenAIAPIKey == "" || !cfg.Embedding.Enabled {
+			if !cfg.Embedding.Enabled {
 				return (*EmbeddingClient)(nil), nil
 			}
-			embStore, _ := serviceregistry.TryGet[*database.EmbeddingStore](c, serviceregistry.KeyEmbeddingStore)
 			// Base URL is scoped to the embedding client ONLY (see
 			// NewEmbeddingClientWithOptions): cfg.Embedding.BaseURL points
 			// embeddings at a local OpenAI-compatible backend (e.g. Ollama)
@@ -46,7 +63,15 @@ func init() {
 			if baseURL == "" {
 				baseURL = os.Getenv("OPENAI_BASE_URL")
 			}
-			client := NewEmbeddingClientWithOptions(cfg.OpenAIAPIKey, cfg.Embedding.Model, baseURL)
+			resolvedKey, ok := resolveAIEndpointKey(cfg.OpenAIAPIKey, baseURL)
+			if !ok {
+				return (*EmbeddingClient)(nil), nil
+			}
+			if cfg.OpenAIAPIKey == "" {
+				slog.Warn("embedclient: constructing with keyless/local backend (no OpenAIAPIKey, using explicit base URL)", "baseURL", baseURL)
+			}
+			embStore, _ := serviceregistry.TryGet[*database.EmbeddingStore](c, serviceregistry.KeyEmbeddingStore)
+			client := NewEmbeddingClientWithOptions(resolvedKey, cfg.Embedding.Model, baseURL)
 			if embStore != nil {
 				client = client.WithCache(embStore)
 			}
@@ -62,10 +87,15 @@ func init() {
 		Groups: []string{"ai"},
 		Build: func(c *serviceregistry.Container) (any, error) {
 			cfg := serviceregistry.Get[*config.Config](c, serviceregistry.KeyConfig)
-			if cfg.OpenAIAPIKey == "" {
+			baseURL := os.Getenv("OPENAI_BASE_URL")
+			resolvedKey, ok := resolveAIEndpointKey(cfg.OpenAIAPIKey, baseURL)
+			if !ok {
 				return (*OpenAIParser)(nil), nil
 			}
-			return NewOpenAIParser(cfg, cfg.OpenAIAPIKey, cfg.EnableAIParsing), nil
+			if cfg.OpenAIAPIKey == "" {
+				slog.Warn("llmparser: constructing with keyless/local backend (no OpenAIAPIKey, using OPENAI_BASE_URL env)", "baseURL", baseURL)
+			}
+			return NewOpenAIParser(cfg, resolvedKey, cfg.EnableAIParsing), nil
 		},
 	})
 
