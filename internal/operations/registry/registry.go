@@ -1,7 +1,7 @@
 // file: internal/operations/registry/registry.go
-// version: 3.2.0
+// version: 3.3.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-07-02
+// last-edited: 2026-07-03
 
 package registry
 
@@ -80,6 +80,17 @@ type Registry struct {
 	// sweepInterval controls how often DepsScheduler.SweepTick fires.
 	// Zero means use the default (5m).
 	sweepInterval time.Duration
+
+	// sweepStopped is closed by the DepsScheduler sweep-ticker goroutine when
+	// it exits. Shutdown joins on it (after canceling the internal context) so
+	// an in-flight SweepTick — which reads the store via ListWaitingDepsOps —
+	// is guaranteed to finish before Shutdown returns and the caller closes the
+	// store. Without this, the generic goroutineWG.Wait() below abandons the
+	// tick goroutine after its 2s escape, letting the caller close the store
+	// while a sweep is mid-iteration (panic "pebble: closed",
+	// PEBBLE-CLOSED-SWEEPTICK-RESIDUAL). nil when no scheduler was wired at
+	// Start (no ticker goroutine spawned). Set fresh in each Start().
+	sweepStopped chan struct{}
 }
 
 // Options contains optional tunable parameters for a Registry. Zero values
@@ -319,14 +330,20 @@ func (r *Registry) Start(ctx context.Context) {
 	r.mu.RLock()
 	sched := r.depsScheduler
 	r.mu.RUnlock()
+	r.sweepStopped = nil
 	if sched != nil {
 		sweepInterval := r.sweepInterval
 		if sweepInterval <= 0 {
 			sweepInterval = 5 * time.Minute
 		}
+		sweepStopped := make(chan struct{})
+		r.sweepStopped = sweepStopped
 		r.goroutineWG.Add(1)
 		go func() {
 			defer r.goroutineWG.Done()
+			// Signal Shutdown that the ticker goroutine has fully exited so it
+			// can safely let the caller close the store. See sweepStopped.
+			defer close(sweepStopped)
 			ticker := time.NewTicker(sweepInterval)
 			defer ticker.Stop()
 			for {
@@ -334,6 +351,15 @@ func (r *Registry) Start(ctx context.Context) {
 				case <-internalCtx.Done():
 					return
 				case <-ticker.C:
+					// Skip (and exit) if shutdown has begun: a SweepTick started
+					// after the internal context is canceled reads the store via
+					// ListWaitingDepsOps and could touch it after the caller
+					// closes it (PEBBLE-CLOSED-SWEEPTICK-RESIDUAL). This closes
+					// the "next-tick" window; the explicit join in Shutdown
+					// closes the "in-flight tick" window.
+					if internalCtx.Err() != nil {
+						return
+					}
 					r.mu.RLock()
 					activeSched := r.depsScheduler
 					r.mu.RUnlock()
@@ -843,6 +869,22 @@ func (r *Registry) Shutdown(ctx context.Context) error {
 	// without racing against goroutines that are still making DB calls.
 	if r.cancelFn != nil {
 		r.cancelFn()
+	}
+	// Join the DepsScheduler sweep-ticker goroutine explicitly before returning.
+	// The tick goroutine reads the store via SweepTick → ListWaitingDepsOps; the
+	// generic goroutineWG.Wait() below abandons stragglers after its 2s escape,
+	// which would let the caller close the store while a sweep is mid-iteration
+	// (panic "pebble: closed", PEBBLE-CLOSED-SWEEPTICK-RESIDUAL). The gate in the
+	// tick loop guarantees no NEW sweep starts once the context is canceled, so
+	// this join blocks only on at most one in-flight, bounded store scan. It is
+	// bounded by the caller-provided ctx (never the arbitrary 2s) so a genuinely
+	// stuck sweep still cannot hang Shutdown forever.
+	if r.sweepStopped != nil {
+		select {
+		case <-r.sweepStopped:
+		case <-ctx.Done():
+			r.logger.Warn("registry: sweep ticker did not stop before shutdown deadline")
+		}
 	}
 	// Reject any further dep-notify enrollment before we wait, so a worker
 	// finishing its last op during teardown cannot Add to goroutineWG after the
