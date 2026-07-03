@@ -1,13 +1,30 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.100.0 -->
+<!-- version: 3.101.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
-<!-- last-edited: 2026-07-02 -->
+<!-- last-edited: 2026-07-03 -->
 
 # Changelog
 
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 3, 2026 - Consultancy-roadmap wave 2: 8 tasks shipped via parallel sweep (PRs #1761-#1770)
+
+Parallel-sweep run `2026-07-03-1010-consultancy-w2` — same coordinator pattern as wave 1 (Haiku ×3 / Sonnet ×3 / Opus ×2). All 8 wave-2 briefs merged; two prod-data ops shipped dry-run-only pending owner greenlight.
+
+- **`refactor(storage)`** #1770 — TASK-22 NutsDB retirement PR 1 of 2: activity + metrics cut over to Pebble-only, dual-write leg retired. Evidence: activity was dual-written (no NutsDB-only data), `metrics.nutsdb` 30-day history intentionally dropped (no backfill), Pebble TTL sweep already active. PR 2 (file/dependency removal) deferred pending prod soak + owner greenlight.
+- **`feat(dedup)`** #1768 — TASK-13 (Opus): dry-run-gated `dedup.drain-stale` op for the ~384K CONS-16/17-era mislabeled stale candidates; classifier + drain engine + plugin wiring (985 lines, mostly tests). Prod execution owner-gated.
+- **`fix(database)`** #1769 — TASK-20: HNSW derived-index hardening — staleness check discards mismatched snapshots on import, atomic temp-file+rename export, Delete no longer panics on absent IDs.
+- **`feat(server)`** #1763 — TASK-03 (Opus): BookSigV1/Description recovery audit op over `book_ver:` snapshots (dry-run-first; prod run owner-gated).
+- **`feat(ops)`** #1764 — TASK-21: Prometheus scrape config + alerting rules for the metrics endpoint (placeholder IPs only).
+- **`fix(covers)`** #1762 — TASK-24: cover-candidate filter ordering fixed (cheap filters before network fetches).
+- **`fix(metadata)`** #1761 — TASK-25: `IsGarbageValue` substring/prefix handling (incl. `"error "` prefix); conflicting legacy test expectation reconciled.
+- **`chore(ci)`** #1766 — TASK-29: coverage gate strengthened; `-timeout 25m` added to `test-short` (internal/server short suite runs ~10m).
+- **`fix(test)`** #1765 (aux) — removed `t.Parallel()` from config-mutating tests (data race found gating cr-05-adjacent suites).
+- **`chore(lint)`** #1767 (aux) — partial staticcheck cleanup (unused funcs); ~18 findings remain for a dedicated burndown.
+
+Follow-ups recorded in TODO.md: residual SweepTick leg of PEBBLE-CLOSED-SHUTDOWN-RACE (`registry.go:341` → `DepsScheduler.SweepTick` → `ListWaitingDepsOps` post-Close panic), `TestCreateIngestVersion_SecondVersionIsAlt` flake (SIGSEGV once, 16/16 local re-runs pass), staticcheck burndown (~18 findings), sdkguard violation (`pkg/plugin/sdk` imports `internal/logger` — fails `make ci` on main), Mock Freshness glob misses nested mocks dirs, NutsDB PR-2 removal after soak. Sweep state: `.claude/state/parallel-sweep-2026-07-03-1010-consultancy-w2.json`.
 
 #### July 3, 2026 - Consultancy-roadmap wave 1: 14 tasks shipped via parallel sweep (PRs #1744-#1759)
 

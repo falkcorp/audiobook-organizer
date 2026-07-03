@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.55.0 -->
+<!-- version: 9.56.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-03 -->
 
@@ -27,9 +27,16 @@ adversarially verified). Ranked roadmap: [`docs/consultancy/00-ROADMAP.md`](docs
 
 > **Task briefs exist for all of these (2026-07-03):**
 > [`docs/agent-tasks/consultancy-roadmap/`](docs/agent-tasks/consultancy-roadmap/)
-> — 31 briefs, 6 waves, model-tiered. **Wave 1 (14 tasks) SHIPPED 2026-07-03, PRs #1744–#1759.** Next: wave 2 (T03, T13, T20, T21, T22, T24, T25, T29) (Haiku/Sonnet, Opus only for the 8 complex
-> items). CONSULT-1..8 map to TASK-01..09 there. Run via that folder's
-> `run.sh` + `orchestration.md`.
+> — 31 briefs, 6 waves, model-tiered. **Wave 1 (14 tasks) SHIPPED 2026-07-03, PRs #1744–#1759.**
+> **Wave 2 (8 tasks) SHIPPED 2026-07-03, PRs #1761–#1770** (T03 #1763, T13 #1768, T20 #1769,
+> T21 #1764, T22 #1770, T24 #1762, T25 #1761, T29 #1766; aux #1765/#1767). Next: wave 3
+> (T10 backend-toggle core [Opus], T14, T15 [Opus], T26). CONSULT-1..8 map to TASK-01..09
+> there. Run via that folder's `run.sh` + `orchestration.md`.
+>
+> **Owner-greenlight queue from wave 2 (dry-run ops merged, NOT yet run on prod):**
+> - `dedup.drain-stale` (#1768) — dry-run against the ~384K stale candidates, review report, then apply
+> - BookSig/Description recovery audit (#1763) — dry-run over `book_ver:` snapshots, review, then apply
+> - NutsDB retirement PR 2 (file/dep removal) — after prod soak of #1770's Pebble-only cutover
 
 Tier-0 items (high impact, low effort — do first):
 
@@ -898,6 +905,27 @@ must sequence, but A and B are parallelizable. Spawn:
 
 ## 🐛 Open Bugs — May 17, 2026
 
+- [ ] **PEBBLE-CLOSED-SWEEPTICK-RESIDUAL** (2026-07-03, found by cr-22's gate during the wave-2
+  sweep) — a residual, separate leg of the shutdown race the entry below marked fixed: the ticker
+  path `registry.go:341` → `DepsScheduler.SweepTick` → `ListWaitingDepsOps` can still touch the
+  store after `Close()` and panic `pebble: closed`. The 2026-07-02 fix drained the dep-*notify*
+  goroutines and asserted SweepTick "was already enrolled" — the tick loop itself isn't gated by
+  `notifyStopped`, so a tick in flight at Close time races. Fix shape: gate the SweepTick body
+  behind the same `notifyStopped`/`r.mu` check (or stop the ticker before `goroutineWG.Wait()`)
+  + `-race` repro test mirroring `shutdown_race_test.go`.
+- [ ] **INGEST-VERSION-FLAKE** (2026-07-03, wave-2 gates) — `TestCreateIngestVersion_SecondVersionIsAlt`
+  SIGSEGV'd once on a GitHub runner; passes 16/16 locally under `-race`. Suspect ordering/teardown
+  sensitivity, not logic. Diagnose root cause per fix-flaky-tests policy; don't rerun-and-ignore.
+- [ ] **SDKGUARD-VIOLATION** (2026-07-03) — `pkg/plugin/sdk` imports `internal/logger`, so
+  `make ci` fails on main at the `sdkguard` step (masked all session by `| tail` swallowing exit
+  codes). Either break the import or add an allowlist entry in `tools/cmd/sdkguard/main.go` with
+  justification.
+- [ ] **STATICCHECK-BURNDOWN** (2026-07-03) — ~18 pre-existing findings remain after the partial
+  cleanup in #1767; `make ci`'s staticcheck step fails on main until drained. Good Haiku-sweep
+  candidate.
+- [ ] **MOCK-FRESHNESS-GLOB-GAP** (2026-07-03) — the Mock Freshness CI gate's `internal/*/mocks/`
+  glob misses nested mocks dirs (e.g. the dir holding `mock_dedup_engine.go`, stale since #1736
+  until hand-regenerated in #1757). Widen the glob to `internal/**/mocks/`.
 - [x] **PEBBLE-CLOSED-SHUTDOWN-RACE** (2026-07-01, found during the agent-task sweep) — ✅ **FIXED
   2026-07-02** (branch `fix/pebble-shutdown-race`). **Root cause was NOT `SweepTick`** as the
   original entry guessed — that path was already enrolled in `goroutineWG` and drained by
