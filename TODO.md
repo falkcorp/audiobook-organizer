@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 9.53.0 -->
+<!-- version: 9.54.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-07-02 -->
+<!-- last-edited: 2026-07-03 -->
 
 # Project TODO
 
@@ -24,6 +24,13 @@ future agent) can scan the entire workspace in one page.
 
 Full 6-dimension evaluation (101 findings, `file:line`-cited, top code findings
 adversarially verified). Ranked roadmap: [`docs/consultancy/00-ROADMAP.md`](docs/consultancy/00-ROADMAP.md).
+
+> **Task briefs exist for all of these (2026-07-03):**
+> [`docs/agent-tasks/consultancy-roadmap/`](docs/agent-tasks/consultancy-roadmap/)
+> — 31 briefs, 6 waves, model-tiered (Haiku/Sonnet, Opus only for the 8 complex
+> items). CONSULT-1..8 map to TASK-01..09 there. Run via that folder's
+> `run.sh` + `orchestration.md`.
+
 Tier-0 items (high impact, low effort — do first):
 
 - [ ] **CONSULT-1** EmbeddingScorer store fast-path: model/dimension check + F1 fallback on degenerate zero-score results (MATCH-1/BUG-1 — live during bge-m3 re-embed) — `internal/ai/embedding_scorer.go:92-98`

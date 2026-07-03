@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.98.0 -->
+<!-- version: 3.99.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-02 -->
 
@@ -8,6 +8,10 @@
 ## [Unreleased]
 
 ### Documentation
+
+#### July 3, 2026 - Consultancy-roadmap workstream: 31 executable task briefs
+
+- **`docs(agent-tasks)`** - New [`docs/agent-tasks/consultancy-roadmap/`](docs/agent-tasks/consultancy-roadmap/) workstream converting every consultancy-roadmap item into a self-contained, weak-model-proof brief (exemplar pattern: START-HERE worktree block, verified + re-verifiable code anchors, step-by-step, acceptance criteria, rollback). 31 briefs across 6 waves with a same-file collision table; model-tiered per owner policy — Haiku for mechanical, Sonnet standard, Opus only for the 8 genuinely complex items (booksig recovery, backend-toggle core, 384K stale-candidate drain, bge-m3 recalibration, auto-resolve, shutdown concurrency, the two structural splits). Prod-data ops (TASK-03/13/15/17) are dry-run-first and owner-greenlight gated. Needs-brainstorm items (bulk metadata review, health dashboard, CTR-1/2 redesign) listed without briefs per BREAKDOWN convention.
 
 #### July 2, 2026 - Full consultancy evaluation (6 dimensions, 101 findings)
 
