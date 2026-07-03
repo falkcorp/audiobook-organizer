@@ -1,6 +1,7 @@
 // file: internal/matcher/fuzzy.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+// last-edited: 2026-07-03
 
 package matcher
 
@@ -19,7 +20,9 @@ type FuzzyResult struct {
 func LevenshteinDistance(a, b string) int {
 	a = strings.ToLower(a)
 	b = strings.ToLower(b)
-	la, lb := len(a), len(b)
+	ra := []rune(a)
+	rb := []rune(b)
+	la, lb := len(ra), len(rb)
 	if la == 0 {
 		return lb
 	}
@@ -37,7 +40,7 @@ func LevenshteinDistance(a, b string) int {
 		curr[0] = i
 		for j := 1; j <= lb; j++ {
 			cost := 1
-			if a[i-1] == b[j-1] {
+			if ra[i-1] == rb[j-1] {
 				cost = 0
 			}
 			curr[j] = min(curr[j-1]+1, min(prev[j]+1, prev[j-1]+cost))
@@ -74,7 +77,7 @@ func ScoreMatch(query, target string) int {
 	// Substring match
 	if strings.Contains(t, q) {
 		// Score higher for shorter targets (more specific match)
-		ratio := float64(len(q)) / float64(len(t))
+		ratio := float64(len([]rune(q))) / float64(len([]rune(t)))
 		substringScore := 60 + int(ratio*25)
 		score = max(score, substringScore)
 	}
@@ -90,7 +93,7 @@ func ScoreMatch(query, target string) int {
 
 	// Fuzzy distance on the whole string
 	dist := LevenshteinDistance(q, t)
-	maxLen := max(len(q), len(t))
+	maxLen := max(len([]rune(q)), len([]rune(t)))
 	if maxLen > 0 {
 		similarity := 1.0 - float64(dist)/float64(maxLen)
 		fuzzyScore := int(similarity * 50)
@@ -103,7 +106,7 @@ func ScoreMatch(query, target string) int {
 	// Fuzzy distance on individual words (find best matching word)
 	for _, w := range words {
 		dist := LevenshteinDistance(q, w)
-		wLen := max(len(q), len(w))
+		wLen := max(len([]rune(q)), len([]rune(w)))
 		if wLen > 0 {
 			similarity := 1.0 - float64(dist)/float64(wLen)
 			wordScore := int(similarity * 70)
