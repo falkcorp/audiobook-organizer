@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/booksig_recovery_audit.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5f2a7c14-9b3e-4d6a-8e1f-2c0d5a9b7e34
 // last-edited: 2026-07-03
 
@@ -26,19 +26,25 @@ import (
 // snapshot therefore still carries the pre-wipe Description/BookSigV1, but ONLY
 // until STOR-2's snapshot pruning is ever enabled.
 //
-// This op is a read-only, dry-run audit that sizes existing damage: it scans
-// every book's current (Pebble-direct) row for missing Description/BookSigV1 and,
-// for each missing field, checks whether an older snapshot still carries it. It
-// never writes, never prunes snapshots, and must run before any STOR-2 pruning.
+// This op audits (always) and, only when explicitly requested via
+// dryRun=false, restores existing damage: it scans every book's current
+// (Pebble-direct) row for missing Description/BookSigV1 and, for each missing
+// field, checks whether an older snapshot still carries it. In apply mode it
+// writes back ONLY the missing field(s) recovered from the newest snapshot
+// that has them — it never prunes snapshots, and never overwrites a field
+// that already has a non-empty current value.
 //
 // IMPORTANT: recoverability is tracked PER FIELD, not per book. A book may have
 // had its Description and BookSigV1 wiped at different times, so the newest
 // snapshot carrying Description can differ from the newest carrying BookSigV1.
+//
+// Apply mode (dryRun=false) was greenlit by the owner on 2026-07-03 after a
+// prod dry-run audited 44,929 books and found 397 books with a recoverable
+// Description (0 BookSigV1 wipes). The BookSigV1 restore path shares the same
+// code but is exercised by tests only until real wipe damage appears.
 
-// bookSigRecoveryAuditParams controls the audit. DryRun defaults to true; this
-// task ships dry-run only. Apply mode (restoring wiped fields from snapshots) is
-// intentionally out of scope — it is an owner-greenlight-only follow-up, see the
-// op Description string.
+// bookSigRecoveryAuditParams controls the audit/restore. DryRun defaults to
+// true (safe default); callers must explicitly pass dryRun=false to write.
 type bookSigRecoveryAuditParams struct {
 	DryRun bool `json:"dryRun"`
 }
@@ -63,16 +69,16 @@ func (p *Plugin) bookSigRecoveryAuditDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.booksig-recovery-audit",
 		Plugin:      "maintenance",
-		DisplayName: "Audit wiped Description/BookSig recoverability from snapshots",
-		Description: "Read-only dry-run audit (STOR-1/STOR-2). Scans every book's " +
-			"Pebble-direct current row for missing Description and for BookSigV1 that " +
-			"was built (BookSigBuiltAt set) but is now nil, then checks each book's " +
-			"book_ver: CoW snapshots for the newest snapshot still carrying each missing " +
-			"field. Reports how much wipe damage from the memdb full-replacement bug is " +
-			"recoverable before STOR-2 snapshot pruning is ever enabled. This op is " +
-			"read-only: it never writes and never prunes snapshots. Applying recovered " +
-			"fields back to prod is a separate, owner-greenlight-only follow-up and is " +
-			"intentionally NOT implemented here.",
+		DisplayName: "Audit/restore wiped Description/BookSig from snapshots",
+		Description: "Dry-run audit (default) or owner-greenlit apply mode (STOR-1/STOR-2). " +
+			"Scans every book's Pebble-direct current row for missing Description and for " +
+			"BookSigV1 that was built (BookSigBuiltAt set) but is now nil, then checks each " +
+			"book's book_ver: CoW snapshots for the newest snapshot still carrying each " +
+			"missing field. Dry-run (default) only reports how much wipe damage from the " +
+			"memdb full-replacement bug is recoverable; it never writes and never prunes " +
+			"snapshots. Apply mode (dryRun=false, explicit only) writes back ONLY the " +
+			"recovered field(s) onto a freshly re-read current row, skipping any field " +
+			"that is no longer empty at write time. It never prunes snapshots.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.booksig-recovery-audit",
@@ -80,16 +86,21 @@ func (p *Plugin) bookSigRecoveryAuditDef() sdk.OperationDef {
 		Isolate:         false,
 		Timeout:         60 * time.Minute,
 		Schedule:        nil,
-		// Read-only path: no CapLibraryWrite. This op never writes.
-		Capabilities: []sdk.Capability{sdk.CapLibraryRead},
+		// Apply mode (dryRun=false) writes recovered fields back, so this op
+		// needs both read and write capabilities; the dry-run path itself
+		// never writes.
+		Capabilities: []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
 		Run:          p.runBookSigRecoveryAudit,
 	}
 }
 
-// newestSnapshotWithField scans snapshots (already newest-first) and returns the
-// timestamp of the newest snapshot whose Book has the named field non-nil, or nil
-// if no snapshot carries it. field is "description" or "booksig_v1".
-func newestSnapshotWithField(snaps []database.BookSnapshot, field string) *time.Time {
+// newestSnapshotBookWithField scans snapshots (already newest-first) and
+// returns the parsed Book of the newest snapshot whose Book has the named
+// field non-nil, along with its timestamp, or (nil, nil) if no snapshot
+// carries it. field is "description" or "booksig_v1". Callers needing only
+// the timestamp (dry-run reporting) can ignore the returned Book; apply mode
+// uses it to source the actual recovered value(s).
+func newestSnapshotBookWithField(snaps []database.BookSnapshot, field string) (*database.Book, *time.Time) {
 	for _, snap := range snaps {
 		var b database.Book
 		if err := json.Unmarshal(snap.Data, &b); err != nil {
@@ -99,16 +110,16 @@ func newestSnapshotWithField(snaps []database.BookSnapshot, field string) *time.
 		case "description":
 			if b.Description != nil {
 				ts := snap.Timestamp
-				return &ts
+				return &b, &ts
 			}
 		case "booksig_v1":
 			if b.BookSigV1 != nil {
 				ts := snap.Timestamp
-				return &ts
+				return &b, &ts
 			}
 		}
 	}
-	return nil
+	return nil, nil
 }
 
 func (p *Plugin) runBookSigRecoveryAudit(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
@@ -118,15 +129,11 @@ func (p *Plugin) runBookSigRecoveryAudit(ctx context.Context, raw json.RawMessag
 			return fmt.Errorf("invalid params: %w", err)
 		}
 	}
-	// This task ships dry-run only. Apply mode is an owner-greenlight follow-up
-	// and is intentionally not implemented; refuse rather than silently no-op so
-	// a caller passing dryRun=false gets a clear signal.
-	if !params.DryRun {
-		return fmt.Errorf("apply mode is not implemented: this op is read-only " +
-			"(STOR-2 sequencing). Restoring wiped fields from snapshots is an " +
-			"owner-greenlight-only follow-up; run with dryRun=true")
+	if params.DryRun {
+		_ = reporter.Log(slog.LevelInfo, "DRY RUN — read-only audit, no changes will be written")
+	} else {
+		_ = reporter.Log(slog.LevelInfo, "APPLY MODE — restoring recoverable fields from book_ver: snapshots (owner-greenlit)")
 	}
-	_ = reporter.Log(slog.LevelInfo, "DRY RUN — read-only audit, no changes will be written")
 
 	store := p.deps.Store()
 	if store == nil {
@@ -151,7 +158,7 @@ func (p *Plugin) runBookSigRecoveryAudit(ctx context.Context, raw json.RawMessag
 	)
 
 	var (
-		scanned int
+		scanned  int
 		errCount int
 
 		descMissing        int // Description == nil on current row
@@ -163,6 +170,11 @@ func (p *Plugin) runBookSigRecoveryAudit(ctx context.Context, raw json.RawMessag
 		sigNotRecoverable int // ...and no snapshot carries it
 
 		booksWithSnapshotLookup int // candidates for which we scanned snapshots
+
+		// Apply-mode-only counters (stay zero in dry-run).
+		restoredCount     int // fields actually written back
+		skippedNonEmpty   int // recoverable, but current value was non-empty at write time — skipped
+		restoreErrorCount int // GetBookByID re-read or UpdateBook failures during restore
 	)
 
 	// Small ring of recoverable + not-recoverable examples for heartbeat/report.
@@ -184,6 +196,10 @@ func (p *Plugin) runBookSigRecoveryAudit(ctx context.Context, raw json.RawMessag
 		}
 		msg := fmt.Sprintf("Audited %d/%d — desc missing %d (rec %d), sig missing %d (rec %d)",
 			scanned, total, descMissing, descRecoverable, sigMissing, sigRecoverable)
+		if !params.DryRun {
+			msg += fmt.Sprintf(" — restored %d, skipped-nonempty %d, restore errors %d",
+				restoredCount, skippedNonEmpty, restoreErrorCount)
+		}
 		if len(sample) > 0 {
 			msg += " — e.g. " + strings.Join(sample, "; ")
 		}
@@ -233,10 +249,15 @@ func (p *Plugin) runBookSigRecoveryAudit(ctx context.Context, raw json.RawMessag
 
 		title := book.Title
 
+		var descSnapBook *database.Book
+		var sigSnapBook *database.Book
+
 		if descIsMissing {
 			descMissing++
-			if ts := newestSnapshotWithField(snaps, "description"); ts != nil {
+			snapBook, ts := newestSnapshotBookWithField(snaps, "description")
+			if ts != nil {
 				descRecoverable++
+				descSnapBook = snapBook
 				addExample(auditExample{bookID: id, title: title, field: "description", snapTS: ts})
 			} else {
 				descNotRecoverable++
@@ -245,12 +266,31 @@ func (p *Plugin) runBookSigRecoveryAudit(ctx context.Context, raw json.RawMessag
 		}
 		if sigIsMissing {
 			sigMissing++
-			if ts := newestSnapshotWithField(snaps, "booksig_v1"); ts != nil {
+			snapBook, ts := newestSnapshotBookWithField(snaps, "booksig_v1")
+			if ts != nil {
 				sigRecoverable++
+				sigSnapBook = snapBook
 				addExample(auditExample{bookID: id, title: title, field: "booksig_v1", snapTS: ts})
 			} else {
 				sigNotRecoverable++
 				addExample(auditExample{bookID: id, title: title, field: "booksig_v1"})
+			}
+		}
+
+		// Apply mode: restore ONLY fields we just proved recoverable, writing
+		// back onto a freshly re-read current row (never the `book` struct
+		// captured above, which may be stale by the time we get here — the
+		// snapshot lookup above can take a moment on a large snapshot chain).
+		// This is the memdb-round-trip-footgun guard: we never construct a
+		// Book from scratch or from a memdb projection, only mutate a row we
+		// just read Pebble-direct.
+		if !params.DryRun && (descSnapBook != nil || sigSnapBook != nil) {
+			restored, skipped, rerr := restoreRecoverableFields(store, id, descSnapBook, sigSnapBook, reporter)
+			restoredCount += restored
+			skippedNonEmpty += skipped
+			if rerr != nil {
+				restoreErrorCount++
+				errCount++
 			}
 		}
 
@@ -259,14 +299,92 @@ func (p *Plugin) runBookSigRecoveryAudit(ctx context.Context, raw json.RawMessag
 
 	heartbeat(true)
 
+	mode := "DRY RUN"
+	if !params.DryRun {
+		mode = "APPLY MODE"
+	}
 	report := fmt.Sprintf(
-		"DRY RUN — audited %d books (%d candidates snapshot-scanned, %d read errors). "+
+		"%s — audited %d books (%d candidates snapshot-scanned, %d read errors). "+
 			"Description missing: %d (recoverable %d, not-recoverable %d). "+
 			"BookSigV1 built-then-wiped: %d (recoverable %d, not-recoverable %d).",
-		scanned, booksWithSnapshotLookup, errCount,
+		mode, scanned, booksWithSnapshotLookup, errCount,
 		descMissing, descRecoverable, descNotRecoverable,
 		sigMissing, sigRecoverable, sigNotRecoverable)
+	if !params.DryRun {
+		report += fmt.Sprintf(" Restored %d, skipped-nonempty %d, restore errors %d.",
+			restoredCount, skippedNonEmpty, restoreErrorCount)
+	}
 	_ = reporter.Log(slog.LevelInfo, report)
 	_ = reporter.UpdateProgress(total, total, report)
 	return nil
+}
+
+// restoreRecoverableFields re-reads book id fresh from the authoritative
+// store (Pebble-direct GetBookByID — never the memdb-stripped projection,
+// and never a struct captured earlier in the caller's scan loop) and writes
+// back ONLY the field(s) the caller already proved recoverable, skipping any
+// field that is no longer empty by the time we get here (a concurrent writer
+// may have filled it in between the scan and this restore). It never
+// constructs a Book from scratch and never full-replaces from a stale or
+// partial struct, which is the memdb round-trip footgun (STOR-1) this whole
+// op exists to remediate — the row we write is the same row we just read,
+// mutated in place for the recovered field(s) only.
+//
+// descSnapBook/sigSnapBook are the parsed snapshot Books already known (by
+// the caller) to carry a non-nil Description/BookSigV1 respectively; either
+// may be nil if that field isn't recoverable for this book.
+func restoreRecoverableFields(
+	store database.Store,
+	id string,
+	descSnapBook *database.Book,
+	sigSnapBook *database.Book,
+	reporter sdk.Reporter,
+) (restored int, skippedNonEmpty int, err error) {
+	fresh, gerr := store.GetBookByID(id)
+	if gerr != nil {
+		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("book %s: restore re-read failed: %v", id, gerr))
+		return 0, 0, gerr
+	}
+	if fresh == nil {
+		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("book %s: restore re-read found no row, skipping", id))
+		return 0, 0, fmt.Errorf("book %s: not found on restore re-read", id)
+	}
+
+	changed := false
+
+	if descSnapBook != nil {
+		if fresh.Description != nil {
+			skippedNonEmpty++
+			_ = reporter.Log(slog.LevelDebug, fmt.Sprintf("book %s: description no longer empty at write time, skipping", id))
+		} else {
+			fresh.Description = descSnapBook.Description
+			changed = true
+		}
+	}
+
+	if sigSnapBook != nil {
+		if fresh.BookSigV1 != nil {
+			skippedNonEmpty++
+			_ = reporter.Log(slog.LevelDebug, fmt.Sprintf("book %s: booksig_v1 no longer empty at write time, skipping", id))
+		} else {
+			fresh.BookSigV1 = sigSnapBook.BookSigV1
+			fresh.BookSigV1Mask = sigSnapBook.BookSigV1Mask
+			fresh.BookSigSegments = sigSnapBook.BookSigSegments
+			fresh.BookSigBuiltAt = sigSnapBook.BookSigBuiltAt
+			fresh.BookSigCoveragePct = sigSnapBook.BookSigCoveragePct
+			changed = true
+		}
+	}
+
+	if !changed {
+		return 0, skippedNonEmpty, nil
+	}
+
+	if _, uerr := store.UpdateBook(id, fresh); uerr != nil {
+		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("book %s: UpdateBook restore failed: %v", id, uerr))
+		return 0, skippedNonEmpty, uerr
+	}
+
+	_ = reporter.Log(slog.LevelDebug, fmt.Sprintf("book %s (%q): restored recovered field(s)", id, fresh.Title))
+	return 1, skippedNonEmpty, nil
 }
