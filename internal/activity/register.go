@@ -1,22 +1,22 @@
 // file: internal/activity/register.go
-// version: 1.2.1
-// last-edited: 2026-06-23
+// version: 1.3.0
+// last-edited: 2026-07-03
 // guid: c4d5e6f7-a8b9-0009-2345-000000000009
 
 // Package activity — service registry wiring for the activity log.
 //
-// WHY backend selection during the migration window (T024):
-//   - Before the "activity_pebble_v1_done" backfill flag is set in Pebble, reads
-//     come from NutsDB (source of truth). Both backends receive every write.
-//   - After the flag is set, reads flip to Pebble. NutsDB still receives writes
-//     so a rollback (flip ReadFromPebble=false) is safe without data loss.
-//   - The dual-write window ends when NutsDB is removed (follow-up task T024b).
+// WHY Pebble-only (TASK-22, 2026-07-03):
+//   - The NutsDB→Pebble migration (T024) is complete: the
+//     "activity_pebble_v1_done" backfill flag has been set on prod, so reads
+//     have already been coming from Pebble with no read benefit left in
+//     NutsDB. Activity is now Pebble-only — NutsDB is no longer opened here at
+//     all, which also removes the process-lifetime NutsDB Close() goroutine
+//     from this path (see TODO.md NUTSDB-CLOSE-GOROUTINE-LEAK).
 package activity
 
 import (
 	"fmt"
 	"log/slog"
-	"path/filepath"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -46,10 +46,10 @@ func init() {
 		},
 	})
 
-	// activitystore: activity log backend, wired to dual-write when Pebble is available.
-	// Lives in {dirname(DatabasePath)}/activity.nutsdb (NutsDB sidecar).
-	// Returns nil when DatabasePath is unset — host code must Override serviceregistry.KeyActivityStore
-	// with a pre-built instance in that case (test paths).
+	// activitystore: Pebble-only activity log backend (NutsDB retired — see
+	// package doc). Returns nil when DatabasePath is unset — host code must
+	// Override serviceregistry.KeyActivityStore with a pre-built instance in
+	// that case (test paths).
 	serviceregistry.Register(serviceregistry.ServiceDef{
 		Name:   serviceregistry.KeyActivityStore,
 		Needs:  []string{serviceregistry.KeyConfig, "pebble-activitystore"},
@@ -59,27 +59,16 @@ func init() {
 			if cfg.DatabasePath == "" {
 				return nil, fmt.Errorf("activitystore: DatabasePath not configured")
 			}
-			activityDir := filepath.Join(filepath.Dir(cfg.DatabasePath), "activity.nutsdb")
-			nutsStore, err := database.NewNutsActivityStore(activityDir)
-			if err != nil {
-				return nil, fmt.Errorf("activitystore: open nutsdb: %w", err)
-			}
 
-			// Try to wrap in dual-write if the Pebble backend is available.
 			pebbleStore, hasPebble := serviceregistry.TryGet[*database.PebbleActivityStore](c, "pebble-activitystore")
 			if !hasPebble || pebbleStore == nil {
-				// Pebble backend not available — NutsDB-only (degraded / test mode).
-				slog.Info("[activity] Pebble activity store not available; using NutsDB-only")
-				return nutsStore, nil
+				// No more NutsDB fallback — a missing Pebble backend is now a
+				// hard error rather than a degraded mode.
+				return nil, fmt.Errorf("activitystore: pebble activity store not available")
 			}
 
-			// Determine read source from backfill flag.
-			// Checked once at startup — the flag is not expected to change at runtime.
-			readFromPebble := database.IsActivityPebbleBackfillDone(pebbleStore.DB())
-			slog.Info("[activity] dual-write mode enabled",
-				"read_from_pebble", readFromPebble,
-				"flag", database.ActivityPebbleBackfillKey)
-			return database.NewDualWriteActivityStore(nutsStore, pebbleStore, readFromPebble), nil
+			slog.Info("[activity] Pebble-only activity store wired")
+			return pebbleStore, nil
 		},
 	})
 

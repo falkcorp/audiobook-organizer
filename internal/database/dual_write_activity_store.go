@@ -1,10 +1,18 @@
 // file: internal/database/dual_write_activity_store.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f6a7b8c9-d0e1-0006-f012-000000000006
+// last-edited: 2026-07-03
 
 // Package database — dual-write wrapper for the activity migration window.
 //
-// WHY a dual-write wrapper:
+// UNUSED as of 2026-07-03 (TASK-22): the activitystore service in
+// internal/activity/register.go now returns *PebbleActivityStore directly.
+// This wrapper is retained, unwired, for one release cycle as a rollback
+// reference; it will be deleted (along with NutsActivityStore/
+// NutsMetricsStore and the nutsdb dependency) in the follow-up NutsDB-removal
+// PR once the soak period has passed and an owner has greenlit removal.
+//
+// WHY a dual-write wrapper (historical):
 //   - The NutsDB → Pebble migration requires a hot-deploy cutover window during
 //     which BOTH backends receive every write. This prevents data loss if the
 //     Pebble flag is not yet set (e.g., prod hasn't backfilled yet).

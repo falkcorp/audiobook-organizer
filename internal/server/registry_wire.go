@@ -1,6 +1,6 @@
 // file: internal/server/registry_wire.go
-// version: 1.16.0
-// last-edited: 2026-06-23
+// version: 1.17.0
+// last-edited: 2026-07-03
 
 package server
 
@@ -155,26 +155,29 @@ func init() {
 		},
 	})
 
-	// metricsstore — NutsDB-backed cache-stats snapshot store. Lives at
-	// {dirname(DatabasePath)}/metrics.nutsdb. Returns nil + logs when
-	// DatabasePath is empty (test paths) or open fails — server code
-	// nil-checks before use.
+	// metricsstore — Pebble-backed cache-stats snapshot store (TASK-22 cutover
+	// from NutsMetricsStore). Shares the main PebbleDB instance under the
+	// "met:" key prefix; TTL is emulated via the sweep-pebble-metrics-ttl
+	// maintenance job rather than NutsDB's native per-key expiry. Returns a
+	// nil *PebbleMetricsStore + logs when DatabasePath is empty (test paths)
+	// or the store isn't a *database.PebbleStore — server code nil-checks
+	// before use.
 	serviceregistry.Register(serviceregistry.ServiceDef{
 		Name:   "metricsstore",
-		Needs:  []string{serviceregistry.KeyConfig},
+		Needs:  []string{serviceregistry.KeyConfig, serviceregistry.KeyStore},
 		Groups: []string{"core"},
 		Build: func(c *serviceregistry.Container) (any, error) {
 			cfg := serviceregistry.Get[*config.Config](c, serviceregistry.KeyConfig)
 			if cfg.DatabasePath == "" {
-				return (*database.NutsMetricsStore)(nil), nil
+				return (*database.PebbleMetricsStore)(nil), nil
 			}
-			dir := filepath.Join(filepath.Dir(cfg.DatabasePath), "metrics.nutsdb")
-			store, err := database.NewNutsMetricsStore(dir)
-			if err != nil {
-				slog.Warn("Failed to open metrics store", "err", err)
-				return (*database.NutsMetricsStore)(nil), nil
+			store := serviceregistry.Get[database.Store](c, serviceregistry.KeyStore)
+			ps, ok := store.(*database.PebbleStore)
+			if !ok {
+				slog.Warn("metricsstore: backend is not PebbleStore, metrics disabled")
+				return (*database.PebbleMetricsStore)(nil), nil
 			}
-			return store, nil
+			return database.NewPebbleMetricsStore(ps.DB()), nil
 		},
 	})
 
