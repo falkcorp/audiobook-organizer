@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/plugin.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: d1e2f3a4-b5c6-7890-abcd-ef1234567890
-// last-edited: 2026-06-15
+// last-edited: 2026-07-03
 
 // Package dedup is the UOS plugin for deduplication operations.
 // It wraps the internal dedup.Engine and registers OperationDefs through
@@ -70,6 +70,7 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.datasetBackfillDef(),   // C4: label + suppress residual pending candidates
 		p.mineGoldLabelsDef(),    // gold miner: auto-label high-confidence true_dup positives
 		p.quarantineChapterArtifactsDef(), // drain chapter-file-as-book artifacts (candidate explosion)
+		p.drainStaleDef(), // DEDUP-1: drain CONS-16/17-era stale exact candidates (dry-run gated)
 		p.checkBookDef(),         // M4: per-book dedup check via dependency scheduler
 		p.buildISBNIndexDef(),    // T022: ISBN/ASIN secondary index backfill
 		p.reembedEmbeddingsDef(), // Part B: re-embed corpus when the embedding model changes
