@@ -1,6 +1,7 @@
 // file: internal/metrics/metrics.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9f8e7d6c-5b4a-3210-9fed-cba876543210
+// last-edited: 2026-07-03
 
 package metrics
 
@@ -113,6 +114,15 @@ var (
 		Name:      "itunes_location_unmappable_total",
 		Help:      "Total iTunes writeback location values skipped because they could not be normalized into a valid 0x0B/0x0D pair (CRIT-2)",
 	}, []string{"reason"})
+
+	// aiBackendAvailable exports the reachability of AI backends (e.g. Ollama)
+	// so it can be alerted on (OPS-4). Values are 0/1, set at server-init time
+	// from the same signal that already feeds EmbeddingClient.SetOllamaAvailable.
+	aiBackendAvailable = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "audiobook_organizer",
+		Name:      "ai_backend_available",
+		Help:      "1 if the named AI backend was reachable/available at last check, else 0",
+	}, []string{"backend"})
 )
 
 // Register initializes metrics with the global Prometheus registry (idempotent)
@@ -121,7 +131,7 @@ func Register() {
 		prometheus.MustRegister(operationStarted, operationCompleted, operationFailed, operationCanceled, operationDuration,
 			booksGauge, foldersGauge, memoryAllocGauge, goroutinesGauge,
 			cacheHits, cacheMisses, cacheSets, cacheInvalidations, cacheEvictions, cacheSize, cacheGetDuration,
-			itunesLocationUnmappable)
+			itunesLocationUnmappable, aiBackendAvailable)
 	})
 }
 
@@ -130,6 +140,17 @@ func Register() {
 // reason is a small enum: "url_unmappable" or "invalid_path".
 func RecordITunesLocationUnmappable(reason string) {
 	itunesLocationUnmappable.WithLabelValues(reason).Inc()
+}
+
+// SetBackendAvailable records whether the named AI backend (e.g. "ollama")
+// was reachable/available at last check. Purely additive to the existing
+// in-memory EmbeddingClient.SetOllamaAvailable signal (OPS-4).
+func SetBackendAvailable(backend string, ok bool) {
+	v := 0.0
+	if ok {
+		v = 1.0
+	}
+	aiBackendAvailable.WithLabelValues(backend).Set(v)
 }
 
 // Operation lifecycle helpers
