@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.106.0 -->
+<!-- version: 3.107.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-04 -->
 
@@ -8,6 +8,34 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 4, 2026 - retroactive orphaned-embedding cleanup op (dedup.cleanup-orphan-embeddings)
+
+- **`feat(dedup)`** — new op `dedup.cleanup-orphan-embeddings`
+  (`internal/plugins/dedup/cleanup_orphan_embeddings.go`) is the retroactive
+  counterpart to PR #1802's `DeleteBook` fix. #1802 stopped *new* orphaned
+  `emb:v:book:<id>` rows from being created, but did nothing about rows
+  orphaned by book deletions (merges/purges) that happened before it landed —
+  those pre-existing orphans are the likely dominant cause of the
+  `dedup.calibrate-embedding-thresholds` `skipped_dim=2841` figure (out of
+  5301 scored gold-label pairs): the referenced book is gone, so nothing ever
+  revisits or re-embeds the stale row. The op walks every `emb:v:book:*` row
+  (via `EmbeddingStore.ListByType`, which already existed — no new database
+  iteration primitive needed) and checks `GetBookByID` for each entity ID.
+  Dry-run by default: reports orphaned/live/lookup-error counts and a bounded
+  10-row sample of orphaned entity IDs + their stored `.Model`, for a
+  reviewer to spot-check. `apply=true` deletes only rows confirmed orphaned
+  (`GetBookByID` returned nil) — a row whose book still exists is never
+  touched, regardless of that embedding's model/dimension; a live book's
+  stale-model embedding remains in scope for `dedup.embed-scan`/
+  `dedup.reembed-embeddings`, not this op. Idempotent: a second apply run
+  after a clean pass finds nothing left to delete. Registered in
+  `internal/plugins/dedup/plugin.go`. Tests in
+  `internal/plugins/dedup/cleanup_orphan_embeddings_test.go` cover dry-run
+  (no mutation), apply (deletes only orphans, leaves a live book's
+  wrong-model embedding untouched), and idempotency (second apply is a
+  no-op). Local code-build task only — dry-run has **not** been run against
+  prod as part of this change; that owner-gated run is a follow-up.
 
 #### July 4, 2026 - DeleteBook orphaned-embedding leak fix
 
@@ -41,8 +69,8 @@
   - **Forward-only.** This does NOT retroactively clean up the (likely
     thousands of) already-orphaned embedding rows left behind by historical
     book deletions — that needs a separate, dry-run-gated maintenance/backfill
-    op and is explicitly out of scope here. Tracked as a follow-up in
-    TODO.md.
+    op and is explicitly out of scope here. Addressed by
+    `dedup.cleanup-orphan-embeddings` below (same day).
 
 #### July 4, 2026 - dedup gold-label rebuild op (dedup.rebuild-gold-labels)
 
