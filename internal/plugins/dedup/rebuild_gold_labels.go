@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/rebuild_gold_labels.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 74b6de83-de1b-4231-8edc-6920a2f7b91c
 // last-edited: 2026-07-04
 
@@ -58,6 +58,40 @@ func (s rebuildBucketStats) String() string {
 		s.Examined, s.Changed, s.Unchanged, s.Unlabelable, s.NewTrueDup, s.NewNotDup)
 }
 
+// rebuildDiffSample is one changed-or-unlabelable row surfaced in the report
+// sample, so a reviewer can spot-check specific candidates before applying.
+type rebuildDiffSample struct {
+	CandidateID int64
+	Source      string // "rule" | "auto_high_conf"
+	OldLabel    string
+	NewLabel    string // empty when Unlabelable
+	Unlabelable bool
+}
+
+// rebuildSampleLimit bounds how many changed/unlabelable rows are captured
+// per bucket for the report sample, mirroring drain-stale's reason-breakdown
+// logging without holding onto an unbounded slice for huge label stores.
+const rebuildSampleLimit = 5
+
+// rebuildReport is the full result of computeRebuildDiff: per-bucket stats,
+// pass-through counts, the freshly computed rows ready to write on apply, and
+// a bounded sample of changed/unlabelable candidates for human review.
+type rebuildReport struct {
+	Rule       rebuildBucketStats
+	Auto       rebuildBucketStats
+	HumanCount int
+	OtherCount int // LabelSource=="" (unlabeled backfill rows) — untouched, counted for visibility
+	Fresh      []database.LabeledExample
+	Sample     []rebuildDiffSample
+}
+
+func (r rebuildReport) summary() string {
+	return fmt.Sprintf(
+		"rule[%s] auto_high_conf[%s] human=%d(passthrough) other_untouched=%d",
+		r.Rule.String(), r.Auto.String(), r.HumanCount, r.OtherCount,
+	)
+}
+
 func (p *Plugin) rebuildGoldLabelsDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.rebuild-gold-labels",
@@ -101,99 +135,32 @@ func (p *Plugin) runRebuildGoldLabels(ctx context.Context, rawParams json.RawMes
 	}
 	reporter.Logger().Info("rebuild-gold-labels: existing examples loaded", "count", len(existing))
 
-	adapter := builderAdapter{store: p.store}
-
-	var (
-		ruleStats  rebuildBucketStats
-		autoStats  rebuildBucketStats
-		humanCount int
-		otherCount int // LabelSource=="" (unlabeled backfill rows) — untouched, counted for visibility
-		fresh      []database.LabeledExample
-	)
-
 	_ = reporter.UpdateProgress(1, 3, fmt.Sprintf("Re-deriving %d existing examples…", len(existing)))
-	for i := range existing {
-		if reporter.IsCanceled() {
-			return context.Canceled
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		old := existing[i]
-		if (i+1)%1000 == 0 {
-			_ = reporter.UpdateProgress(1, 3, fmt.Sprintf("Re-derived %d/%d…", i+1, len(existing)))
-		}
-
-		switch old.LabelSource {
-		case "human":
-			humanCount++
-			continue
-		case "rule":
-			ruleStats.Examined++
-			ex, unlabelable, changed := p.rebuildRuleExample(adapter, old)
-			if unlabelable {
-				ruleStats.Unlabelable++
-				continue
-			}
-			if changed {
-				ruleStats.Changed++
-			} else {
-				ruleStats.Unchanged++
-			}
-			switch ex.Label {
-			case "true_dup":
-				ruleStats.NewTrueDup++
-			case "not_dup":
-				ruleStats.NewNotDup++
-			}
-			fresh = append(fresh, ex)
-		case "auto_high_conf":
-			autoStats.Examined++
-			ex, unlabelable, changed := p.rebuildAutoHighConfExample(adapter, old)
-			if unlabelable {
-				autoStats.Unlabelable++
-				continue
-			}
-			if changed {
-				autoStats.Changed++
-			} else {
-				autoStats.Unchanged++
-			}
-			switch ex.Label {
-			case "true_dup":
-				autoStats.NewTrueDup++
-			case "not_dup":
-				autoStats.NewNotDup++
-			}
-			fresh = append(fresh, ex)
-		default:
-			// Unlabeled backfill rows (LabelSource=="") and any unrecognized
-			// source are left entirely alone — out of scope for this op.
-			otherCount++
-		}
+	report, err := p.computeRebuildDiff(ctx, reporter, existing)
+	if err != nil {
+		return err
 	}
 
-	reporter.Logger().Info("rebuild-gold-labels: rule bucket", "stats", ruleStats.String())
-	reporter.Logger().Info("rebuild-gold-labels: auto_high_conf bucket", "stats", autoStats.String())
-	reporter.Logger().Info("rebuild-gold-labels: pass-through", "human", humanCount, "other_untouched", otherCount)
+	reporter.Logger().Info("rebuild-gold-labels: rule bucket", "stats", report.Rule.String())
+	reporter.Logger().Info("rebuild-gold-labels: auto_high_conf bucket", "stats", report.Auto.String())
+	reporter.Logger().Info("rebuild-gold-labels: pass-through", "human", report.HumanCount, "other_untouched", report.OtherCount)
+	for _, s := range report.Sample {
+		reporter.Logger().Info("rebuild-gold-labels: sample",
+			"candidate_id", s.CandidateID, "source", s.Source,
+			"old_label", s.OldLabel, "new_label", s.NewLabel, "unlabelable", s.Unlabelable)
+	}
 
-	summary := fmt.Sprintf(
-		"rule[%s] auto_high_conf[%s] human=%d(passthrough) other_untouched=%d",
-		ruleStats.String(), autoStats.String(), humanCount, otherCount,
-	)
+	summary := report.summary()
 
 	if !params.Apply {
 		_ = reporter.UpdateProgress(3, 3, fmt.Sprintf(
 			"Dry-run — %d rule + %d auto_high_conf would change, %d would become unlabelable. %s. Pass apply=true to write.",
-			ruleStats.Changed, autoStats.Changed, ruleStats.Unlabelable+autoStats.Unlabelable, summary))
+			report.Rule.Changed, report.Auto.Changed, report.Rule.Unlabelable+report.Auto.Unlabelable, summary))
 		reporter.Logger().Info("rebuild-gold-labels: dry-run only; nothing written")
 		return nil
 	}
 
-	_ = reporter.UpdateProgress(2, 3, fmt.Sprintf("Applying — deleting %d rule/auto_high_conf rows…", ruleStats.Examined+autoStats.Examined))
+	_ = reporter.UpdateProgress(2, 3, fmt.Sprintf("Applying — deleting %d rule/auto_high_conf rows…", report.Rule.Examined+report.Auto.Examined))
 	deleted, err := p.embeddingStore.DeleteLabeledExamplesBySource("rule", "auto_high_conf")
 	if err != nil {
 		return fmt.Errorf("delete rule/auto_high_conf examples: %w", err)
@@ -201,7 +168,7 @@ func (p *Plugin) runRebuildGoldLabels(ctx context.Context, rawParams json.RawMes
 	reporter.Logger().Info("rebuild-gold-labels: deleted stale mechanical labels", "deleted", deleted)
 
 	var written, writeErrs int
-	for _, ex := range fresh {
+	for _, ex := range report.Fresh {
 		if err := p.embeddingStore.UpsertLabeledExample(ex); err != nil {
 			writeErrs++
 			reporter.Logger().Error("rebuild-gold-labels: upsert error", "candidate_id", ex.CandidateID, "error", err)
@@ -214,6 +181,86 @@ func (p *Plugin) runRebuildGoldLabels(ctx context.Context, rawParams json.RawMes
 		"Complete — deleted %d, wrote %d fresh (%d errors). %s", deleted, written, writeErrs, summary))
 	reporter.Logger().Info("rebuild-gold-labels complete", "deleted", deleted, "written", written, "write_errs", writeErrs, "summary", summary)
 	return nil
+}
+
+// computeRebuildDiff is the pure(ish) core of the op: it re-derives every
+// rule/auto_high_conf example against current state and returns the full
+// diff — per-bucket stats, pass-through counts, the freshly computed rows
+// ready to write on apply, and a bounded sample of changed/unlabelable
+// candidates. Split out from runRebuildGoldLabels so the diff itself (the
+// deliverable of dry-run) is directly unit-testable, not just observable via
+// log lines. The only side effects are reads (GetCandidateByID, GetBook,
+// GetBookFiles via adapter) — no writes happen here.
+func (p *Plugin) computeRebuildDiff(ctx context.Context, reporter sdk.Reporter, existing []database.LabeledExample) (rebuildReport, error) {
+	adapter := builderAdapter{store: p.store}
+
+	var report rebuildReport
+
+	for i := range existing {
+		if reporter.IsCanceled() {
+			return rebuildReport{}, context.Canceled
+		}
+		select {
+		case <-ctx.Done():
+			return rebuildReport{}, ctx.Err()
+		default:
+		}
+
+		old := existing[i]
+		if (i+1)%1000 == 0 {
+			_ = reporter.UpdateProgress(1, 3, fmt.Sprintf("Re-derived %d/%d…", i+1, len(existing)))
+		}
+
+		switch old.LabelSource {
+		case "human":
+			report.HumanCount++
+		case "rule":
+			ex, unlabelable, changed := p.rebuildRuleExample(adapter, old)
+			report.applyBucketResult(&report.Rule, "rule", old, ex, unlabelable, changed)
+		case "auto_high_conf":
+			ex, unlabelable, changed := p.rebuildAutoHighConfExample(adapter, old)
+			report.applyBucketResult(&report.Auto, "auto_high_conf", old, ex, unlabelable, changed)
+		default:
+			// Unlabeled backfill rows (LabelSource=="") and any unrecognized
+			// source are left entirely alone — out of scope for this op.
+			report.OtherCount++
+		}
+	}
+
+	return report, nil
+}
+
+// applyBucketResult records one rebuilt example's outcome into the given
+// bucket's stats, appends it to the fresh set (unless unlabelable), and
+// grows the bounded diff sample for changed/unlabelable rows.
+func (r *rebuildReport) applyBucketResult(bucket *rebuildBucketStats, source string, old, fresh database.LabeledExample, unlabelable, changed bool) {
+	bucket.Examined++
+	if unlabelable {
+		bucket.Unlabelable++
+		if len(r.Sample) < rebuildSampleLimit {
+			r.Sample = append(r.Sample, rebuildDiffSample{
+				CandidateID: old.CandidateID, Source: source, OldLabel: old.Label, Unlabelable: true,
+			})
+		}
+		return
+	}
+	if changed {
+		bucket.Changed++
+		if len(r.Sample) < rebuildSampleLimit {
+			r.Sample = append(r.Sample, rebuildDiffSample{
+				CandidateID: old.CandidateID, Source: source, OldLabel: old.Label, NewLabel: fresh.Label,
+			})
+		}
+	} else {
+		bucket.Unchanged++
+	}
+	switch fresh.Label {
+	case "true_dup":
+		bucket.NewTrueDup++
+	case "not_dup":
+		bucket.NewNotDup++
+	}
+	r.Fresh = append(r.Fresh, fresh)
 }
 
 // rebuildRuleExample re-derives a label_source="rule" example's label against
