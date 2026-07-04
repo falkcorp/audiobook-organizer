@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_scoring.go
-// version: 1.5.3
+// version: 1.5.4
 // guid: d2226468-bed1-4989-93f3-b0bc3a344424
 // last-edited: 2026-07-03
 
@@ -518,7 +518,7 @@ func (mfs *Service) ScoreBaseCandidates(
 		case err != nil:
 			slog.Warn("metadata-scorer failed, falling back to F1", "name", mfs.metadataScorer.Name(), "error", err)
 		default:
-			slog.Warn("metadata-scorer returned scores for results, falling back to F1", "name", mfs.metadataScorer.Name(), "count", len(scores), "count", len(results))
+			slog.Warn("metadata-scorer returned scores for results, falling back to F1", "name", mfs.metadataScorer.Name(), "scoreCount", len(scores), "resultCount", len(results))
 		}
 	}
 
@@ -627,12 +627,12 @@ func (mfs *Service) RerankTopK(
 	}
 	if ambiguousEnd < 2 {
 		// Only one candidate within epsilon — nothing to resolve.
-				slog.Debug("metadata-search rerank skipped — only 1 candidate within %.3f of best (%.3f)", "value", epsilon, "value", bestScore)
+				slog.Debug("metadata-search rerank skipped — only 1 candidate within epsilon of best", "epsilon", epsilon, "bestScore", bestScore)
 		return candidates
 	}
 
 	topCands := candidates[:ambiguousEnd]
-		slog.Debug("metadata-search rerank firing on top candidates (epsilon%.3f, bestScore%.3f)", "count", len(topCands), "value", epsilon, "value", bestScore)
+		slog.Debug("metadata-search rerank firing on top candidates", "count", len(topCands), "epsilon", epsilon, "bestScore", bestScore)
 
 	// Resolve the book's author name for the query payload.
 	authorName := ""
@@ -662,7 +662,7 @@ func (mfs *Service) RerankTopK(
 		if err != nil {
 						slog.Warn("metadata-search rerank LLM call failed, keeping base scores", "error", err)
 		} else {
-						slog.Warn("metadata-search rerank returned scores for candidates, keeping base scores", "count", len(llmScores), "count", len(topCands))
+						slog.Warn("metadata-search rerank returned scores for candidates, keeping base scores", "llmScoreCount", len(llmScores), "candidateCount", len(topCands))
 		}
 		return candidates
 	}
@@ -716,7 +716,7 @@ func ApplySeriesPositionFilter(
 	wantPos := strconv.Itoa(knownPosition)
 	best := results[0]
 	if best.SeriesPosition != "" && best.SeriesPosition != wantPos {
-				slog.Debug("scorer rejecting result (series position ! expected )", "value", best.Title, "value", best.SeriesPosition, "value", wantPos)
+				slog.Debug("scorer rejecting result (series position ! expected )", "title", best.Title, "seriesPosition", best.SeriesPosition, "wantPos", wantPos)
 		return nil
 	}
 	return results

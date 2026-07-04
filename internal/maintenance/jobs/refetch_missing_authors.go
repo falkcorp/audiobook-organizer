@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/refetch_missing_authors.go
-// version: 2.0.1
+// version: 2.0.2
 // guid: a1000012-0000-0000-0000-000000000012
-// last-edited: 2026-05-05
+// last-edited: 2026-07-03
 
 package jobs
 
@@ -104,7 +104,7 @@ func (j *refetchMissingAuthorsJob) Run(ctx context.Context, store database.Store
 		}
 
 		if audioPath == "" {
-			slog.Warn("no audio file for book (), skipping", "b", b.ID, "b", b.Title)
+			slog.Warn("no audio file for book (), skipping", "bookID", b.ID, "bookTitle", b.Title)
 			skipped++
 			continue
 		}
@@ -141,7 +141,7 @@ func (j *refetchMissingAuthorsJob) Run(ctx context.Context, store database.Store
 		}
 
 		if authorName == "" {
-			slog.Warn("no author found in tags for book ()", "b", b.ID, "b", b.Title)
+			slog.Warn("no author found in tags for book ()", "bookID", b.ID, "bookTitle", b.Title)
 			skipped++
 			continue
 		}

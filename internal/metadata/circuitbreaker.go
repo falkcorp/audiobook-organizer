@@ -1,6 +1,7 @@
 // file: internal/metadata/circuitbreaker.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: e2f3a4b5-c6d7-8901-ef23-456789abcdef
+// last-edited: 2026-07-03
 
 package metadata
 
@@ -91,7 +92,7 @@ func (cb *CircuitBreaker) RecordFailure() {
 
 	if cb.failures >= cb.threshold {
 		cb.state = StateOpen
-		slog.Warn("circuit breaker opened after consecutive failures", "cb", cb.sourceName, "cb", cb.failures)
+		slog.Warn("circuit breaker opened after consecutive failures", "source", cb.sourceName, "failures", cb.failures)
 	}
 }
 

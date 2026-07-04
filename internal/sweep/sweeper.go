@@ -1,6 +1,7 @@
 // file: internal/sweep/sweeper.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: a1b2c3d4-e5f6-4789-abcd-ef2345678901
+// last-edited: 2026-07-03
 
 package sweep
 
@@ -57,7 +58,7 @@ func SweepTombstones(store database.BookStore) (*SweeperResult, error) {
 					result.Errors = append(result.Errors, fmt.Sprintf("tombstone %s: failed to delete orphaned file %s: %v", tomb.ID, tomb.FilePath, err))
 					continue
 				}
-				slog.Info("sweeper deleted orphaned file (tombstone )", "value0", "value0", "tomb", tomb.FilePath, "value1", tomb.ID)
+				slog.Info("sweeper deleted orphaned file (tombstone)", "path", tomb.FilePath, "tombstoneID", tomb.ID)
 			}
 			// File gone or just deleted — clean up tombstone
 		}
@@ -95,6 +96,6 @@ func AuditFileConsistency(store database.BookStore) (*SweeperResult, error) {
 		}
 	}
 
-	slog.Info("sweeper audit complete — books checked, missing files", "value0", "value0", "books_count", len(books), "value1", len(result.MissingFiles))
+	slog.Info("sweeper audit complete — books checked, missing files", "books_count", len(books), "missing_count", len(result.MissingFiles))
 	return result, nil
 }

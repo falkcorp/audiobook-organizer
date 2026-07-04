@@ -1,7 +1,7 @@
 // file: internal/server/itl_rebuild.go
-// version: 3.2.0
+// version: 3.2.2
 // guid: 8f7e6d5c-4b3a-2c1d-0e9f-8a7b6c5d4e3f
-// last-edited: 2026-06-16
+// last-edited: 2026-07-03
 //
 // iTunes library rebuild service: diffs the current DB state
 // against the current ITL file and computes the minimal set of
@@ -92,7 +92,7 @@ func (s *Server) rebuildITLHandler(c *gin.Context) {
 		return
 	}
 
-	slog.Info("ITL rebuild removed , added , updated-meta , updated-loc", "preview", preview.ToRemove, "preview", preview.ToAdd, "preview", preview.ToUpdateMeta, "preview", preview.ToUpdateLoc)
+	slog.Info("ITL rebuild removed , added , updated-meta , updated-loc", "toRemove", preview.ToRemove, "toAdd", preview.ToAdd, "toUpdateMeta", preview.ToUpdateMeta, "toUpdateLoc", preview.ToUpdateLoc)
 
 	httputil.RespondWithOK(c, itunes.ITLRebuildResult{
 		Preview: *preview,
@@ -142,7 +142,7 @@ func (s *Server) rebuildITLFullHandler(c *gin.Context) {
 		return
 	}
 
-	slog.Info("ITL full-rebuild removed existing tracks, inserted DB books", "value0", result.Preview.ToRemove, "value1", result.Preview.ToAdd)
+	slog.Info("ITL full-rebuild removed existing tracks, inserted DB books", "toRemove", result.Preview.ToRemove, "toAdd", result.Preview.ToAdd)
 	httputil.RespondWithOK(c, result)
 }
 

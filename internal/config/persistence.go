@@ -1,5 +1,5 @@
 // file: internal/config/persistence.go
-// version: 1.29.0
+// version: 1.29.1
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
 // last-edited: 2026-07-03
 
@@ -881,7 +881,7 @@ func MigrateMaintenanceWindow(store database.SettingsStore) {
 	})
 
 	_ = store.SetSetting("maintenance_window_migrated", "true", "bool", false)
-	slog.Info("Maintenance window migration complete (start, end)", "appConfig", logStart, "appConfig", logEnd)
+	slog.Info("Maintenance window migration complete (start, end)", "windowStart", logStart, "windowEnd", logEnd)
 }
 
 // applySetting applies a single setting to AppConfig.

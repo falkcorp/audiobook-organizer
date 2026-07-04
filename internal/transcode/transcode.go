@@ -1,6 +1,7 @@
 // file: internal/transcode/transcode.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: f8a1b2c3-d4e5-6789-abcd-ef0123456789
+// last-edited: 2026-07-03
 
 package transcode
 
@@ -380,7 +381,7 @@ func Transcode(ctx context.Context, opts TranscodeOpts, store interface {
 			chapterCmd := exec.CommandContext(ctx, ffmpegPath, chapterArgs...)
 			chOut, err := chapterCmd.CombinedOutput()
 			if err != nil {
-				slog.Warn("transcode chapter muxing failed, using unchaptered output \noutput", "value0", "err", "err", err, "value1", string(chOut))
+				slog.Warn("transcode chapter muxing failed, using unchaptered output", "err", err, "ffmpegOutput", string(chOut))
 			} else {
 				os.Remove(tmpOutput)
 				tmpOutput = chapteredOutput
@@ -408,7 +409,7 @@ func Transcode(ctx context.Context, opts TranscodeOpts, store interface {
 			}
 			coverCmd := exec.CommandContext(ctx, ffmpegPath, coverArgs...)
 			if coverOut, err := coverCmd.CombinedOutput(); err != nil {
-				slog.Warn("transcode cover art embedding failed \noutput", "value0", "err", "err", err, "value1", string(coverOut))
+				slog.Warn("transcode cover art embedding failed", "err", err, "ffmpegOutput", string(coverOut))
 			} else {
 				os.Remove(tmpOutput)
 				tmpOutput = coverOutput
@@ -425,7 +426,7 @@ func Transcode(ctx context.Context, opts TranscodeOpts, store interface {
 	progress.UpdateProgress(5, 5, "Complete")
 	progress.Log("info", fmt.Sprintf("Transcode complete: %s → %s", book.FilePath, outputPath), nil)
 
-	slog.Info("transcode completed →", "value0", "value0", "book", book.FilePath, "outputPath", outputPath)
+	slog.Info("transcode completed", "book", book.FilePath, "outputPath", outputPath)
 	return outputPath, nil
 }
 
@@ -463,7 +464,7 @@ func CleanupStaleTempFiles(rootDir string, maxAge time.Duration) int {
 		if strings.Contains(name, "-transcode.tmp") || strings.HasSuffix(name, ".ch.m4b") {
 			if time.Since(info.ModTime()) > maxAge {
 				if err := os.Remove(path); err == nil {
-					slog.Info("transcode cleaned up stale temp file (age )", "value0", "path", "path", path, "value1", time.Since(info.ModTime()).Round(time.Minute))
+					slog.Info("transcode cleaned up stale temp file", "path", path, "age", time.Since(info.ModTime()).Round(time.Minute))
 					cleaned++
 				}
 			}

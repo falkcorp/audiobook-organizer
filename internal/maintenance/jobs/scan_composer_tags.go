@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/scan_composer_tags.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: d9e5f3c4-6a7b-8c9d-0e1f-2a3b4c5d6e7f
-// last-edited: 2026-04-28
+// last-edited: 2026-07-03
 
 package jobs
 
@@ -193,7 +193,7 @@ func (j *scanComposerTagsJob) Run(ctx context.Context, store database.Store, rep
 							slog.Warn("scan-composer-tags write failed", "opID", opID, "w", w.filePath, "writeErr", writeErr)
 						} else {
 							r.Applied = true
-							slog.Info("scan-composer-tags COMPOSER %q→%q", "opID", opID, "composer", composer, willWrite, w.filePath)
+							slog.Info("scan-composer-tags COMPOSER", "opID", opID, "composer", composer, "newValue", willWrite, "filePath", w.filePath)
 						}
 					}
 				}

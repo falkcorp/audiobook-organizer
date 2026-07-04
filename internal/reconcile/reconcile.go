@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-06-16
+// last-edited: 2026-07-03
 
 package reconcile
 
@@ -495,7 +495,7 @@ func FindUntrackedFiles(store Store, knownPaths map[string]bool) ([]string, erro
 			return nil
 		})
 		if err != nil {
-			slog.Warn("reconcile error walking", "value0", "dir", "dir", dir, "err", err)
+			slog.Warn("reconcile error walking", "dir", dir, "err", err)
 		}
 	}
 
@@ -684,7 +684,7 @@ func CleanupDuplicateVersionGroups(store Store, rootDir string, dryRun bool) (*V
 				if rootDir != "" && strings.HasPrefix(dup.FilePath, rootDir) {
 					if _, err := os.Stat(dup.FilePath); err == nil {
 						if err := os.Remove(dup.FilePath); err != nil {
-							slog.Warn("failed to delete duplicate file", "value0", "value0", "dup", dup.FilePath, "err", err)
+							slog.Warn("failed to delete duplicate file", "dup", dup.FilePath, "err", err)
 						} else {
 							result.FilesDeleted++
 						}
@@ -692,7 +692,7 @@ func CleanupDuplicateVersionGroups(store Store, rootDir string, dryRun bool) (*V
 				}
 				// Delete the book record
 				if err := store.DeleteBook(dup.ID); err != nil {
-					slog.Warn("failed to delete duplicate book record", "value0", "value0", "dup", dup.ID, "err", err)
+					slog.Warn("failed to delete duplicate book record", "dup", dup.ID, "err", err)
 				}
 			}
 			result.DuplicatesRemoved++
@@ -775,7 +775,7 @@ func FindBrokenSegmentBooks(store Store, dryRun bool) (*BrokenSegmentResult, err
 			book.MarkedForDeletion = boolPtr(true)
 			book.MarkedForDeletionAt = &now
 			if _, uerr := store.UpdateBook(book.ID, &book); uerr != nil {
-				slog.Warn("failed to mark broken book", "value0", "value0", "book", book.ID, "uerr", uerr)
+				slog.Warn("failed to mark broken book", "book", book.ID, "uerr", uerr)
 			} else {
 				result.MarkedForReview++
 			}
@@ -860,7 +860,7 @@ func MergeNoVGDuplicates(store Store, rootDir string, dryRun bool) (*MergeDuplic
 		if !dryRun {
 			if len(merged) > 0 {
 				if _, err := store.UpdateBook(primary.ID, primary); err != nil {
-					slog.Warn("merge-dupes failed to update primary", "value0", "value0", "primary", primary.ID, "err", err)
+					slog.Warn("merge-dupes failed to update primary", "primary", primary.ID, "err", err)
 					entry.Action = "error"
 					result.Errors++
 					result.Details = append(result.Details, entry)
@@ -869,7 +869,7 @@ func MergeNoVGDuplicates(store Store, rootDir string, dryRun bool) (*MergeDuplic
 				result.MetadataMerged++
 			}
 			if err := softDelete(dupe); err != nil {
-				slog.Warn("merge-dupes failed to soft-delete", "value0", "value0", "dupe", dupe.ID, "err", err)
+				slog.Warn("merge-dupes failed to soft-delete", "dupe", dupe.ID, "err", err)
 				entry.Action = "error"
 				result.Errors++
 			} else {
@@ -941,13 +941,13 @@ func MergeNoVGDuplicates(store Store, rootDir string, dryRun bool) (*MergeDuplic
 			if !dryRun {
 				if len(merged) > 0 {
 					if _, err := store.UpdateBook(keeper.ID, keeper); err != nil {
-						slog.Warn("merge-self-dupes failed to update keeper", "value0", "value0", "keeper", keeper.ID, "err", err)
+						slog.Warn("merge-self-dupes failed to update keeper", "keeper", keeper.ID, "err", err)
 					} else {
 						result.MetadataMerged++
 					}
 				}
 				if err := softDelete(dupe); err != nil {
-					slog.Warn("merge-self-dupes failed to soft-delete", "value0", "value0", "dupe", dupe.ID, "err", err)
+					slog.Warn("merge-self-dupes failed to soft-delete", "dupe", dupe.ID, "err", err)
 					entry.Action = "error"
 					result.Errors++
 				} else {

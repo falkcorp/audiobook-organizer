@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_search.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
 // last-edited: 2026-07-03
 
@@ -251,7 +251,7 @@ func (mfs *Service) SearchMetadataForBookWithOptions(
 					allResults = append(allResults, results...)
 				} else {
 					lastErr = serr
-					slog.Debug("metadata-search SearchByTitleAndAuthor( ) error", "name", src.Name(), "value", searchTitle, "value", searchAuthor, "error", serr)
+					slog.Debug("metadata-search SearchByTitleAndAuthor( ) error", "name", src.Name(), "searchTitle", searchTitle, "searchAuthor", searchAuthor, "error", serr)
 				}
 			}
 
@@ -262,7 +262,7 @@ func (mfs *Service) SearchMetadataForBookWithOptions(
 				if results, serr := src.SearchByTitleAndAuthor(context.Background(), searchTitle, bookNarrator); serr == nil {
 					allResults = append(allResults, results...)
 				} else {
-					slog.Debug("metadata-search narrator-as-author fallback( ) error", "name", src.Name(), "value", searchTitle, "value", bookNarrator, "error", serr)
+					slog.Debug("metadata-search narrator-as-author fallback( ) error", "name", src.Name(), "searchTitle", searchTitle, "narrator", bookNarrator, "error", serr)
 				}
 			}
 
@@ -287,7 +287,7 @@ func (mfs *Service) SearchMetadataForBookWithOptions(
 				sourcesFailed[src.Name()] = lastErr.Error()
 			}
 
-			slog.Debug("metadata-search returned raw results for", "name", src.Name(), "count", len(allResults), "value", searchTitle)
+			slog.Debug("metadata-search returned raw results for", "name", src.Name(), "count", len(allResults), "searchTitle", searchTitle)
 
 			// Write to cache on a successful non-empty fetch.
 			// Empty and error cases are not cached so they can
@@ -303,7 +303,7 @@ func (mfs *Service) SearchMetadataForBookWithOptions(
 		}
 
 		baseScores, baseTier := mfs.ScoreBaseCandidates(context.Background(), book, allResults, searchWords)
-		slog.Debug("metadata-search scored results from with tier", "count", len(allResults), "name", src.Name(), "value", baseTier)
+		slog.Debug("metadata-search scored results from with tier", "count", len(allResults), "name", src.Name(), "baseTier", baseTier)
 
 		for i, r := range allResults {
 			key := strings.ToLower(r.Title + "|" + r.Author)
@@ -332,7 +332,7 @@ func (mfs *Service) SearchMetadataForBookWithOptions(
 				minScore = config.AppConfig.MetadataScoring.EmbeddingMinScore
 			}
 			if score <= minScore {
-				slog.Debug("metadata-search adjusted score%.3f (tier) below threshold for by from", "value", score, "value", baseTier, "value", r.Title, "value", r.Author, "name", src.Name())
+				slog.Debug("metadata-search adjusted score (tier) below threshold for by from", "score", score, "baseTier", baseTier, "title", r.Title, "author", r.Author, "name", src.Name())
 				continue
 			}
 
@@ -531,7 +531,7 @@ func (mfs *Service) SearchMetadataForBookWithOptions(
 		candidates = mfs.RerankTopK(context.Background(), book, candidates)
 	}
 
-	slog.Debug("metadata-search returning candidates for (search words )", "id", len(candidates), "value", searchTitle, "value", searchWords)
+	slog.Debug("metadata-search returning candidates for (search words )", "candidateCount", len(candidates), "searchTitle", searchTitle, "searchWords", searchWords)
 
 	return &SearchMetadataResponse{
 		Results:       candidates,

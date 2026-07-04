@@ -1,6 +1,7 @@
 // file: internal/openlibrary/downloader.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
+// last-edited: 2026-07-03
 
 package openlibrary
 
@@ -105,7 +106,7 @@ func DownloadDump(dumpType string, targetDir string, tracker *DownloadTracker) e
 		if err == nil {
 			return nil
 		}
-		slog.Warn("Download from failed , trying next source", "value0", "sourceURL", "sourceURL", sourceURL, "err", err)
+		slog.Warn("Download from failed, trying next source", "sourceURL", sourceURL, "err", err)
 		lastErr = err
 	}
 

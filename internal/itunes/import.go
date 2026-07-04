@@ -1,6 +1,7 @@
 // file: internal/itunes/import.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 4b58a17d-b2b4-4743-9b7e-3462e2ed55ac
+// last-edited: 2026-07-03
 
 package itunes
 
@@ -314,7 +315,7 @@ func ValidateImport(opts ImportOptions) (*ValidationResult, error) {
 	for sr := range results {
 		processed++
 		if processed%10000 == 0 {
-			slog.Info("iTunes validate checked / audiobooks ( found, missing)...", "processed", processed, "checks_count", len(checks), "result", result.FilesFound, "result", result.FilesMissing)
+			slog.Info("iTunes validate checked / audiobooks ( found, missing)...", "processed", processed, "checks_count", len(checks), "filesFound", result.FilesFound, "filesMissing", result.FilesMissing)
 		}
 		tc := checks[sr.idx]
 		if !tc.decodeOK {

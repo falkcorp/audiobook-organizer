@@ -1,7 +1,7 @@
 // file: internal/server/handlers/versions.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7e3c1a92-4b8d-4f60-9a2e-1c0d5f8b6a47
-// last-edited: 2026-06-03
+// last-edited: 2026-07-03
 
 package handlers
 
@@ -550,7 +550,7 @@ func (h *VersionsHandler) reassignExternalIDsForFiles(sourceBookID, targetBookID
 
 		m.BookID = targetBookID
 		if createErr := h.store.CreateExternalIDMapping(&m); createErr != nil {
-			slog.Warn("reassignExternalIDsForFiles failed to reassign to", "m", m.Source, "m", m.ExternalID, "targetBookID", targetBookID, "createErr", createErr)
+			slog.Warn("reassignExternalIDsForFiles failed to reassign to", "source", m.Source, "externalID", m.ExternalID, "targetBookID", targetBookID, "createErr", createErr)
 		}
 	}
 

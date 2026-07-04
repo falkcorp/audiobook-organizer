@@ -1,5 +1,7 @@
 // file: internal/plugin/events.go
-// version: 1.2.1
+// version: 1.2.2
+// guid: 819005bd-b9fa-482f-af3b-d454a7746bab
+// last-edited: 2026-07-03
 
 package plugin
 
@@ -90,11 +92,11 @@ func (b *EventBus) Publish(ctx context.Context, event Event) {
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
-					slog.Error("plugin event handler panicked for", "value0", "value0", "event", event.Type, "r", r)
+					slog.Error("plugin event handler panicked for", "event", event.Type, "r", r)
 				}
 			}()
 			if err := h(ctx, event); err != nil {
-				slog.Warn("plugin event handler error for", "value0", "value0", "event", event.Type, "err", err)
+				slog.Warn("plugin event handler error for", "event", event.Type, "err", err)
 			}
 		}()
 	}

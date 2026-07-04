@@ -1,6 +1,7 @@
 // file: internal/itunes/service/validate.go
-// version: 1.1.0
+// version: 1.1.2
 // guid: 9e3a7f2b-5d1c-4b8e-a6f0-3c8d5e7b9a1f
+// last-edited: 2026-07-03
 
 package itunesservice
 
@@ -55,7 +56,7 @@ func Validate(req ValidateRequest) (ValidateResponse, error) {
 		missingPaths = missingPaths[:100]
 	}
 
-	slog.Info("iTunes validate complete audiobooks, found, missing, prefixes", "result", result.AudiobookTracks, "result", result.FilesFound, "result", result.FilesMissing, "result", result.PathPrefixes)
+	slog.Info("iTunes validate complete audiobooks, found, missing, prefixes", "audiobookTracks", result.AudiobookTracks, "filesFound", result.FilesFound, "filesMissing", result.FilesMissing, "pathPrefixes", result.PathPrefixes)
 
 	return ValidateResponse{
 		TotalTracks:     result.TotalTracks,
@@ -78,7 +79,7 @@ func TestMapping(req TestMappingRequest) (TestMappingResponse, error) {
 		return TestMappingResponse{}, fmt.Errorf("failed to parse library: %w", err)
 	}
 
-	slog.Info("iTunes test-mapping from%q to%q", req.From, req.To)
+	slog.Info("iTunes test-mapping", "from", req.From, "to", req.To)
 	mapping := itunes.PathMapping{From: req.From, To: req.To}
 	opts := itunes.ImportOptions{PathMappings: []itunes.PathMapping{mapping}}
 
@@ -115,6 +116,6 @@ func TestMapping(req TestMappingRequest) (TestMappingResponse, error) {
 		}
 	}
 
-	slog.Info("iTunes test-mapping tested found examples", "response", response.Tested, "response", response.Found, "count", len(response.Examples))
+	slog.Info("iTunes test-mapping tested found examples", "tested", response.Tested, "found", response.Found, "count", len(response.Examples))
 	return response, nil
 }

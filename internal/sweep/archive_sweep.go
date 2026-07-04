@@ -1,6 +1,7 @@
 // file: internal/sweep/archive_sweep.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: a9f8e7d6-c5b4-3a21-9087-654321fedcba
+// last-edited: 2026-07-03
 //
 // Archive sweep for soft-deleted books (backlog 7.10).
 //
@@ -49,14 +50,14 @@ func SweepArchivedBooks(store interface {
 		for _, f := range files {
 			if f.FilePath != "" {
 				if err := os.Remove(f.FilePath); err != nil && !os.IsNotExist(err) {
-					slog.Warn("archive sweep remove", "value0", "value0", "f", f.FilePath, "err", err)
+					slog.Warn("archive sweep remove", "f", f.FilePath, "err", err)
 				}
 			}
 		}
 
 		// Hard-delete the book record.
 		if err := store.DeleteBook(book.ID); err != nil {
-			slog.Warn("archive sweep delete", "value0", "value0", "book", book.ID, "err", err)
+			slog.Warn("archive sweep delete", "book", book.ID, "err", err)
 			continue
 		}
 		cleaned++

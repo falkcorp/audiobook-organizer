@@ -1,6 +1,7 @@
 // file: internal/realtime/events.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 9e8d7f6a-5c4b-3a21-0f9e-8d7c6b5a4392
+// last-edited: 2026-07-03
 
 package realtime
 
@@ -55,7 +56,7 @@ func (c *Client) Subscribe(operationID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.Operations[operationID] = true
-	slog.Info("Client subscribed to operation", "value0", "value0", "c", c.ID, "operationID", operationID)
+	slog.Info("Client subscribed to operation", "clientID", c.ID, "operationID", operationID)
 }
 
 // Unsubscribe unsubscribes the client from an operation
@@ -63,7 +64,7 @@ func (c *Client) Unsubscribe(operationID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.Operations, operationID)
-	slog.Info("Client unsubscribed from operation", "value0", "value0", "c", c.ID, "operationID", operationID)
+	slog.Info("Client unsubscribed from operation", "clientID", c.ID, "operationID", operationID)
 }
 
 // IsSubscribed checks if client is subscribed to an operation
@@ -91,7 +92,7 @@ func (h *EventHub) RegisterClient(client *Client) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.clients[client.ID] = client
-	slog.Info("Client registered, total clients", "value0", "value0", "client", client.ID, "value1", len(h.clients))
+	slog.Info("Client registered, total clients", "client", client.ID, "totalClients", len(h.clients))
 }
 
 // UnregisterClient removes a client
@@ -105,7 +106,7 @@ func (h *EventHub) UnregisterClient(clientID string) {
 		close(client.Channel)
 		client.mu.Unlock()
 		delete(h.clients, clientID)
-		slog.Info("Client unregistered, remaining clients", "value0", "clientID", "clientID", clientID, "value1", len(h.clients))
+		slog.Info("Client unregistered, remaining clients", "clientID", clientID, "remainingClients", len(h.clients))
 	}
 }
 
@@ -269,7 +270,7 @@ func (h *EventHub) HandleSSE(c *gin.Context) {
 			// Write SSE format: data: {json}\n\n
 			_, err = c.Writer.Write([]byte(fmt.Sprintf("data: %s\n\n", data)))
 			if err != nil {
-				slog.Info("Error writing to client", "value0", "clientID", "clientID", clientID, "err", err)
+				slog.Info("Error writing to client", "clientID", clientID, "err", err)
 				return
 			}
 
@@ -280,7 +281,7 @@ func (h *EventHub) HandleSSE(c *gin.Context) {
 			// Comments are ignored by clients but prevent proxy timeouts
 			_, err := c.Writer.Write([]byte(": ping\n\n"))
 			if err != nil {
-				slog.Info("Error writing heartbeat to client", "value0", "clientID", "clientID", clientID, "err", err)
+				slog.Info("Error writing heartbeat to client", "clientID", clientID, "err", err)
 				return
 			}
 			c.Writer.Flush()

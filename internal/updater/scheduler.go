@@ -1,6 +1,7 @@
 // file: internal/updater/scheduler.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 3b4c5d6e-7f8a-9b0c-1d2e-3f4a5b6c7d8e
+// last-edited: 2026-07-03
 
 package updater
 
@@ -87,7 +88,7 @@ func (s *Scheduler) tick() {
 	}
 
 	if !info.UpdateAvailable {
-		slog.Debug("Auto-update check no update available (current, latest)", "value0", "value0", "info", info.CurrentVersion, "value1", info.LatestVersion)
+		slog.Debug("Auto-update check no update available", "currentVersion", info.CurrentVersion, "latestVersion", info.LatestVersion)
 		return
 	}
 

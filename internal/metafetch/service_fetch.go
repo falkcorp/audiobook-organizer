@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_fetch.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: b24c7a25-2efa-4b85-adb0-2d591218eff2
-// last-edited: 2026-07-02
+// last-edited: 2026-07-03
 
 package metafetch
 
@@ -138,7 +138,7 @@ func (mfs *Service) FetchMetadataForBook(id string) (*FetchMetadataResponse, err
 			if len(results) == 0 && currentAuthor != "" {
 				results, searchErr = src.SearchByTitleAndAuthor(context.Background(), searchTitle, currentAuthor)
 				if searchErr != nil {
-										slog.Warn("title+author search failed for by", "name", src.Name(), "value", searchTitle, "value", currentAuthor, "error", searchErr)
+										slog.Warn("title+author search failed for by", "name", src.Name(), "searchTitle", searchTitle, "currentAuthor", currentAuthor, "error", searchErr)
 				}
 			}
 

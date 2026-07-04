@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_writeback.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: fad73c11-30c2-4fdc-addd-45afef25d792
-// last-edited: 2026-06-10
+// last-edited: 2026-07-03
 
 package metafetch
 
@@ -120,7 +120,7 @@ func (mfs *Service) writeBackMetadata(book *database.Book, meta metadata.BookMet
 		tagMap := mfs.BuildFullTagMap(book, bookTitle, bookTitle, artistStr, narratorStr, year, "")
 				slog.Debug("write-back full tag map has entries for", "count", len(tagMap), "path", book.FilePath)
 		for k, v := range tagMap {
-						slog.Debug("write-back", "value", k, "value", v)
+						slog.Debug("write-back", "tagKey", k, "tagValue", v)
 		}
 
 		dirFiles := AudioFilesInDir(book.FilePath)
@@ -501,7 +501,7 @@ func (mfs *Service) runApplyPipeline(id string, book *database.Book) error {
 						slog.Warn("runApplyPipeline no library copy for protected book , skipping", "id", id)
 			return nil
 		}
-				slog.Info("runApplyPipeline using library copy for protected book", "id", libCopy.ID, "id", id)
+				slog.Info("runApplyPipeline using library copy for protected book", "libCopyID", libCopy.ID, "bookID", id)
 		id = libCopy.ID
 		book = libCopy
 	}

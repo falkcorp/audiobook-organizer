@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.44.0
+// version: 1.44.1
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-07-03
 
@@ -3092,7 +3092,7 @@ func (de *Engine) ApplyVerdicts(verdicts []ai.DedupPairVerdict, byIndex map[int]
 			"", // auto-pick primary via bookIsBetter
 		)
 		if mergeErr != nil {
-			slog.Error("dedup LLM auto-merge failed for candidate ( + )", "candidate", candidate.ID, "candidate", candidate.EntityAID, "candidate", candidate.EntityBID, "mergeErr", mergeErr)
+			slog.Error("dedup LLM auto-merge failed for candidate ( + )", "candidateID", candidate.ID, "entityAID", candidate.EntityAID, "entityBID", candidate.EntityBID, "mergeErr", mergeErr)
 			continue
 		}
 
@@ -3119,7 +3119,7 @@ func (de *Engine) ApplyVerdicts(verdicts []ai.DedupPairVerdict, byIndex map[int]
 		}
 
 		autoMerged++
-		slog.Info("dedup LLM auto-merged candidate ( + ) — reason", "candidate", candidate.ID, "candidate", candidate.EntityAID, "candidate", candidate.EntityBID, "reason", reason)
+		slog.Info("dedup LLM auto-merged candidate ( + ) — reason", "candidateID", candidate.ID, "entityAID", candidate.EntityAID, "entityBID", candidate.EntityBID, "reason", reason)
 	}
 	if autoMerged > 0 {
 		slog.Info("dedup LLM auto-merge fired on high-confidence pair(s)", "autoMerged", autoMerged)

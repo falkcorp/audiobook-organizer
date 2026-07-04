@@ -1,6 +1,7 @@
 // file: internal/itunes/service/track_provisioner.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 8e768742-5ace-4e4b-8495-9550ed4620b5
+// last-edited: 2026-07-03
 //
 // TrackProvisioner generates ITL tracks for books that weren't imported
 // from iTunes (e.g. books added via scan or manual upload). For each
@@ -158,7 +159,7 @@ func (p *TrackProvisioner) ProvisionAll(book *database.Book) error {
 	}
 	for i := range files {
 		if err := p.Provision(book, &files[i]); err != nil {
-			slog.Warn("Failed to provision ITL track for file", "value0", files[i].ID, "err", err)
+			slog.Warn("Failed to provision ITL track for file", "fileID", files[i].ID, "err", err)
 		}
 	}
 	return nil
