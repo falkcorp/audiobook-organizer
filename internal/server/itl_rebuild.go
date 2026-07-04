@@ -103,7 +103,10 @@ func (s *Server) rebuildITLHandler(c *gin.Context) {
 // rebuildITLFullHandler handles POST /api/v1/itunes/rebuild-full.
 // Strips ALL tracks from the ITL and re-inserts every DB book with an iTunes PID.
 // This is the "nuclear" reset path — use rebuildITLHandler (incremental diff) first.
-// Query param: dry_run=true returns a preview without applying.
+// Query params: dry_run=true returns a preview without applying;
+// acknowledge_shrink=true is the explicit K15 operator gate required when the
+// rebuild would shrink the library by more than half (under-populated DB
+// protection — without it such a rebuild is refused).
 func (s *Server) rebuildITLFullHandler(c *gin.Context) {
 	rawPath := config.AppConfig.ITunes.LibraryWritePath
 	if rawPath == "" {
@@ -136,7 +139,7 @@ func (s *Server) rebuildITLFullHandler(c *gin.Context) {
 		return
 	}
 
-	result, err := itunes.RebuildITLFromDB(store, itlPath, itlPath)
+	result, err := itunes.RebuildITLFromDB(store, itlPath, itlPath, c.Query("acknowledge_shrink") == "true")
 	if err != nil {
 		httputil.RespondWithInternalError(c, fmt.Sprintf("full rebuild failed: %v", err))
 		return

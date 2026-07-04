@@ -1,12 +1,13 @@
 // file: internal/itunes/rebuild.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 3f2e1d0c-9b8a-7c6d-5e4f-3a2b1c0d9e8f
-// last-edited: 2026-05-17
+// last-edited: 2026-07-03
 
 package itunes
 
 import (
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -246,7 +247,14 @@ type ITLRebuildResult struct {
 // The existing ITL is used as a structural template so the container format,
 // compression, and encryption are preserved — only the track data is replaced.
 // The result is written to outputPath via ApplyITLOperations.
-func RebuildITLFromDB(store RebuildStore, itlPath, outputPath string) (*ITLRebuildResult, error) {
+//
+// K15: acknowledgeShrink is the explicit operator gate for a rebuild that
+// would shrink the library by more than half. WHY: rebuild sources its track
+// list from the DB; an under-populated / mid-migration DB silently turns
+// "rebuild" into "mass deletion" (the July 2026 stub class), and Force
+// (needed legitimately for bounded-delta here) would otherwise be the only
+// gate. A >50% shrink without acknowledgment is an error, never a write.
+func RebuildITLFromDB(store RebuildStore, itlPath, outputPath string, acknowledgeShrink bool) (*ITLRebuildResult, error) {
 	lib, err := ParseITL(itlPath)
 	if err != nil {
 		return nil, fmt.Errorf("parse ITL: %w", err)
@@ -292,10 +300,25 @@ func RebuildITLFromDB(store RebuildStore, itlPath, outputPath string) (*ITLRebui
 		ToAdd:       len(adds),
 	}
 
+	// K15 shrink gate: a rebuild that halves the library needs an explicit
+	// operator acknowledgment — Force alone must not be able to authorize it.
+	if len(lib.Tracks) > 0 && len(adds)*2 < len(lib.Tracks) && !acknowledgeShrink {
+		return nil, fmt.Errorf(
+			"rebuild would shrink library from %d to %d tracks (>50%%); refusing without acknowledge_shrink — the DB may be under-populated (K15)",
+			len(lib.Tracks), len(adds))
+	}
+	// Report-mode magnitude: always leave the blast radius in the log, even
+	// when the write is authorized (K15 — Force must never be silent).
+	slog.Warn("RebuildITLFromDB applying nuclear rebuild",
+		"op", "itl-rebuild", "tracks_before", len(lib.Tracks),
+		"tracks_after", len(adds), "removes", len(removes),
+		"acknowledge_shrink", acknowledgeShrink)
+
 	// Nuclear rebuild removes EVERY existing track then re-adds from the DB, so
 	// it intentionally blows past the bounded-delta cap — pass Force (SPEC §2;
-	// structural guards still apply). Without this the contract would reject a
-	// real rebuild of a tens-of-thousands-track library.
+	// structural guards still apply, and the library-identity guard (K13) still
+	// checks PID continuity against the sidecar: a healthy DB re-adds the same
+	// PIDs, an under-populated one fails the overlap check).
 	ops := ITLOperationSet{Removes: removes, Adds: adds}
 	if _, err := ApplyITLOperations(itlPath, outputPath, ops, ForceContractConfig()); err != nil {
 		return nil, fmt.Errorf("apply rebuild ops: %w", err)
