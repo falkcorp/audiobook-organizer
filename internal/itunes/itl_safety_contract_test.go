@@ -547,6 +547,46 @@ func TestContract_TidUnsorted(t *testing.T) {
 	assertOnlyGuardFires(t, nil, after, hdr, defCfg(), "tid-pid-sanity")
 }
 
+// TestContract_BoundedDeltaSymmetric: the delta is PID-set based, so both a
+// wholesale population REPLACEMENT (count unchanged, all PIDs swapped) and a
+// mass INSERTION trip bounded-delta — count subtraction alone sees neither.
+func TestContract_BoundedDeltaSymmetric(t *testing.T) {
+	before := buildCleanPayload() // 3 tracks, tids 10/20/30
+	cfg := defCfg()
+	cfg.RemovedTracksMax = 2
+	cfg.RewrittenMhohPctMax = 100 // isolate the PID-delta checks
+
+	// Replacement: same track count, entirely new PIDs.
+	replaced := buildPayloadFromTracks([]fxTrack{
+		{tid: 110, name: "New One", location: `W:\m\n1.mp3`},
+		{tid: 120, name: "New Two", location: `W:\m\n2.mp3`},
+		{tid: 130, name: "New Three", location: `W:\m\n3.mp3`},
+	})
+	res := guardBoundedDelta(before, replaced, nil, normalizeConfig(cfg))
+	if res.Pass() {
+		t.Fatal("full population replacement with unchanged count must trip bounded-delta")
+	}
+
+	// Insertion: all original tracks retained, 3 new PIDs added (growth only).
+	grown := buildPayloadFromTracks(append(cleanTracks(),
+		fxTrack{tid: 110, name: "New One", location: `W:\m\n1.mp3`},
+		fxTrack{tid: 120, name: "New Two", location: `W:\m\n2.mp3`},
+		fxTrack{tid: 130, name: "New Three", location: `W:\m\n3.mp3`},
+	))
+	res = guardBoundedDelta(before, grown, nil, normalizeConfig(cfg))
+	if res.Pass() {
+		t.Fatal("mass insertion beyond the cap must trip bounded-delta")
+	}
+
+	// A small in-cap change stays green.
+	small := buildPayloadFromTracks(append(cleanTracks(),
+		fxTrack{tid: 110, name: "New One", location: `W:\m\n1.mp3`},
+	))
+	if res := guardBoundedDelta(before, small, nil, normalizeConfig(cfg)); !res.Pass() {
+		t.Fatalf("in-cap insertion must pass bounded-delta: %+v", res.Violations)
+	}
+}
+
 // TestContract_TruncatedContainer: shrink an msdh totalLen so the containers no
 // longer tile the payload exactly (the truncation/splice class).
 //

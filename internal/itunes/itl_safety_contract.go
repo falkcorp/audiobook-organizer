@@ -786,14 +786,19 @@ func guardLibraryIdentity(_, after []byte, hdr *hdfmHeader, cfg ContractConfig) 
 // Guard: bounded-delta  (blast-radius cap for HIGH-3-style bugs)
 // ---------------------------------------------------------------------------
 
-// guardBoundedDelta is the guardrail: a single writeback may not remove more
-// than cfg.RemovedTracksMax tracks (default 5000) nor rewrite more than
-// cfg.RewrittenMhohPctMax percent of mhoh blocks (default 20) unless cfg.Force.
-// In audit mode (before == nil) there is no delta to bound, so it passes.
+// guardBoundedDelta is the guardrail: a single writeback may not remove OR
+// introduce more than cfg.RemovedTracksMax tracks (default 5000) nor rewrite
+// more than cfg.RewrittenMhohPctMax percent of mhoh blocks (default 20) unless
+// cfg.Force. In audit mode (before == nil) there is no delta to bound, so it
+// passes.
+//
+// The delta is PID-SET based, not count-subtraction based (K15 symmetry fix):
+// a remove-all-then-add-equal replacement leaves the count unchanged but swaps
+// the entire population — counting PIDs present on only one side catches it.
 //
 // Catches: the blast-radius class behind HIGH-3 (writeback that re-stamps nearly
-// the whole library every sync) — a runaway removal or rewrite is refused before
-// it reaches disk.
+// the whole library every sync) — a runaway removal, mass insertion, or
+// wholesale replacement is refused before it reaches disk.
 func guardBoundedDelta(before, after []byte, _ *hdfmHeader, cfg ContractConfig) GuardResult {
 	const name = "bounded-delta"
 	if before == nil || cfg.Force {
@@ -801,11 +806,32 @@ func guardBoundedDelta(before, after []byte, _ *hdfmHeader, cfg ContractConfig) 
 	}
 	var viol []Violation
 
-	beforeTracks, _ := countMasterTracks(before)
-	afterTracks, _ := countMasterTracks(after)
-	removed := beforeTracks - afterTracks
+	_, beforePIDs := collectMithTidsPids(before)
+	_, afterPIDs := collectMithTidsPids(after)
+	beforeSet := make(map[string]struct{}, len(beforePIDs))
+	for _, p := range beforePIDs {
+		beforeSet[p] = struct{}{}
+	}
+	afterSet := make(map[string]struct{}, len(afterPIDs))
+	for _, p := range afterPIDs {
+		afterSet[p] = struct{}{}
+	}
+	removed, introduced := 0, 0
+	for p := range beforeSet {
+		if _, ok := afterSet[p]; !ok {
+			removed++
+		}
+	}
+	for p := range afterSet {
+		if _, ok := beforeSet[p]; !ok {
+			introduced++
+		}
+	}
 	if removed > cfg.RemovedTracksMax {
 		viol = append(viol, Violation{Offset: -1, Chunk: "mith", Message: fmt.Sprintf("writeback removes %d tracks > cap %d (set Force to override)", removed, cfg.RemovedTracksMax)})
+	}
+	if introduced > cfg.RemovedTracksMax {
+		viol = append(viol, Violation{Offset: -1, Chunk: "mith", Message: fmt.Sprintf("writeback introduces %d new track PIDs > cap %d — population replacement (set Force to override)", introduced, cfg.RemovedTracksMax)})
 	}
 
 	beforeMhoh := countMhohBlocks(before)
