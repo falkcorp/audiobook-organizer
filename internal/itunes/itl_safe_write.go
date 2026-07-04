@@ -1,6 +1,7 @@
 // file: internal/itunes/itl_safe_write.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
+// last-edited: 2026-07-03
 //
 // SafeWriteITL — the single atomic iTunes-library writeback chokepoint
 // (fable5 TASK-004). Implements SPEC 2 §3 (the 8-step atomic write protocol,
@@ -206,6 +207,18 @@ func SafeWriteITL(path string, mutate func(before []byte) (after []byte, err err
 		return nil, fmt.Errorf("SafeWriteITL: detecting compression: %w", err)
 	}
 
+	// K13: arm the library-identity guard from the .identity.json sidecar
+	// unless the caller supplied its own expectation or is explicitly adopting
+	// a new library. A missing sidecar (first run) leaves the guard disarmed;
+	// a corrupt/unreadable sidecar fails closed.
+	if o.contractCfg.ExpectedIdentity == nil && !o.contractCfg.AdoptLibrary {
+		sidecarID, idErr := LoadLibraryIdentity(path)
+		if idErr != nil {
+			return nil, fmt.Errorf("SafeWriteITL: identity sidecar for %s: %w", path, idErr)
+		}
+		o.contractCfg.ExpectedIdentity = sidecarID
+	}
+
 	// safeEncodeITL does steps 1(parse done) → 3: BE refusal, mutate, header
 	// regeneration, in-memory contract. It returns the final on-disk bytes. The
 	// in-memory verdict is already known-passing here; the authoritative verdict
@@ -273,6 +286,17 @@ func SafeWriteITL(path string, mutate func(before []byte) (after []byte, err err
 	// Rotation: keep the 10 newest .bak-<RFC3339>; never touch .bak-lkg.
 	if err := rotateBackups(path, o.backupRetention); err != nil {
 		slog.Warn("SafeWriteITL: backup rotation failed", "path", path, "err", err)
+	}
+
+	// K13: refresh the identity sidecar from the bytes that actually landed on
+	// disk (re-read payload + header), so the next write is anchored to THIS
+	// library state. Failure is WARN-only — the write already succeeded — and
+	// errs in the safe direction: a stale sidecar can only make the next
+	// identity check stricter, never looser.
+	if newID, idErr := ComputeLibraryIdentity(rrPayload, rrHdr); idErr != nil {
+		slog.Warn("SafeWriteITL: identity fingerprint failed; sidecar not updated", "path", path, "err", idErr)
+	} else if saveErr := SaveLibraryIdentity(path, newID); saveErr != nil {
+		slog.Warn("SafeWriteITL: identity sidecar save failed", "path", path, "err", saveErr)
 	}
 
 	slog.Info("SafeWriteITL applied",

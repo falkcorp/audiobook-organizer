@@ -1,6 +1,7 @@
 // file: internal/itunes/itl_safety_contract.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 404bbed1-87ba-4e56-b9e4-a492a2281163
+// last-edited: 2026-07-03
 //
 // ITLSafetyContract — the iTunes writeback write-safety contract (fable5 TASK-003).
 //
@@ -107,6 +108,30 @@ type ContractConfig struct {
 	// Force overrides the bounded-delta guardrail only. It does NOT disable any
 	// structural guard — corruption is never opt-out.
 	Force bool
+
+	// ExpectedIdentity, when non-nil, arms the library-identity guard (K13):
+	// the `after` payload must carry the same Library PID and retain at least
+	// IdentityMinOverlapPct of the fingerprinted track-PID sample. SafeWriteITL
+	// populates this from the .identity.json sidecar when present.
+	ExpectedIdentity *LibraryIdentity
+	// IdentityMinOverlapPct is the minimum percentage of ExpectedIdentity's
+	// PID sample that must be present in `after`. Default 90.
+	IdentityMinOverlapPct int
+	// AdoptLibrary is the explicit operator acknowledgment that the library at
+	// this path is intentionally a different library (fresh iTunes rebuild,
+	// deliberate baseline swap). It bypasses the library-identity guard for
+	// ONE write, after which the new identity is fingerprinted. Unlike Force
+	// it never affects any other guard.
+	AdoptLibrary bool
+
+	// ExpectedTrackCount, when > 0, arms the expected-magnitude guard (K14):
+	// the `after` track count must be within MagnitudeTolerancePct of it.
+	// Callers derive it from external truth (the DB's synced-book count, or
+	// the identity sidecar's TrackCount).
+	ExpectedTrackCount int
+	// MagnitudeTolerancePct is the allowed deviation for expected-magnitude.
+	// Default 10.
+	MagnitudeTolerancePct int
 }
 
 // DefaultContractConfig returns the SPEC-mandated defaults.
@@ -132,6 +157,8 @@ func orderedGuards() []guardFn {
 		guardMhohFormat,
 		guardLocationForm,
 		guardTidPidSanity,
+		guardExpectedMagnitude,
+		guardLibraryIdentity,
 		guardBoundedDelta,
 	}
 }
@@ -596,6 +623,92 @@ func guardTidPidSanity(_, after []byte, _ *hdfmHeader, _ ContractConfig) GuardRe
 			break
 		}
 		seen[p] = struct{}{}
+	}
+
+	return GuardResult{Guard: name, Violations: viol}
+}
+
+// ---------------------------------------------------------------------------
+// Guard: expected-magnitude  (K14 — external truth anchor for counts)
+// ---------------------------------------------------------------------------
+
+// guardExpectedMagnitude asserts the `after` track count is within
+// cfg.MagnitudeTolerancePct of cfg.ExpectedTrackCount. Unlike count-coherence
+// (which is self-referential — the header is regenerated from the same payload
+// it is compared to), the expected count comes from OUTSIDE the file: the DB's
+// synced-book census or the identity sidecar. Disarmed (vacuous pass) when
+// ExpectedTrackCount <= 0.
+//
+// Catches: K14 — a structurally-perfect library that is simply the wrong size
+// (rebuild from an under-populated DB; iTunes-authored fresh library; the
+// July 2026 374-track cloud stub, a 99.6% shrink that passed all 8 guards).
+func guardExpectedMagnitude(_, after []byte, _ *hdfmHeader, cfg ContractConfig) GuardResult {
+	const name = "expected-magnitude"
+	if cfg.ExpectedTrackCount <= 0 {
+		return pass(name)
+	}
+	_, actual := countMasterTracks(after)
+	deviation := actual - cfg.ExpectedTrackCount
+	if deviation < 0 {
+		deviation = -deviation
+	}
+	if deviation*100 > cfg.ExpectedTrackCount*cfg.MagnitudeTolerancePct {
+		return GuardResult{Guard: name, Violations: []Violation{{
+			Offset: -1, Chunk: "msdh",
+			Message: fmt.Sprintf("track count %d deviates from expected %d by more than %d%% (K14)",
+				actual, cfg.ExpectedTrackCount, cfg.MagnitudeTolerancePct),
+		}}}
+	}
+	return pass(name)
+}
+
+// ---------------------------------------------------------------------------
+// Guard: library-identity  (K13 — continuity with the last known library)
+// ---------------------------------------------------------------------------
+
+// guardLibraryIdentity asserts the `after` payload is a continuation of the
+// fingerprinted library in cfg.ExpectedIdentity: same Library Persistent ID
+// in the proposed header, and at least cfg.IdentityMinOverlapPct of the
+// fingerprint's track-PID sample still present. Disarmed when
+// ExpectedIdentity is nil (first run, no sidecar) or cfg.AdoptLibrary is set
+// (explicit operator baseline swap).
+//
+// Catches: K13 — "same path, different library": iTunes recreating a fresh
+// library after a failed load (same Library PID is NOT sufficient — the July
+// 2026 stub kept the Library PID with zero track-PID overlap), a wrong file
+// copied over the staging target, or a mutation that silently replaced the
+// track population. Structural guards cannot see this class at all.
+func guardLibraryIdentity(_, after []byte, hdr *hdfmHeader, cfg ContractConfig) GuardResult {
+	const name = "library-identity"
+	if cfg.ExpectedIdentity == nil || cfg.AdoptLibrary {
+		return pass(name)
+	}
+	var viol []Violation
+
+	if want := cfg.ExpectedIdentity.LibraryPID; want != "" {
+		if got := ExtractLibraryPIDHex(hdr); got != "" && got != want {
+			viol = append(viol, Violation{
+				Offset: -1, Chunk: "hdfm",
+				Message: fmt.Sprintf("library PID changed: %s != expected %s (K13); use AdoptLibrary to bless a new library", got, want),
+			})
+		}
+	}
+
+	switch overlap := cfg.ExpectedIdentity.SampleOverlapPct(after); {
+	case overlap < 0:
+		// Cannot assess (empty sample or unlocatable master list). The master
+		// list case is already a parse-roundtrip failure; an empty sample means
+		// the fingerprint itself is degenerate — fail closed rather than let
+		// every future write "match" a vacuous anchor.
+		viol = append(viol, Violation{
+			Offset: -1, Chunk: "mith",
+			Message: "identity fingerprint unassessable (empty PID sample or unlocatable master list) (K13)",
+		})
+	case overlap < cfg.IdentityMinOverlapPct:
+		viol = append(viol, Violation{
+			Offset: -1, Chunk: "mith",
+			Message: fmt.Sprintf("track-PID overlap %d%% below required %d%%: library population replaced (K13); use AdoptLibrary to bless a new library", overlap, cfg.IdentityMinOverlapPct),
+		})
 	}
 
 	return GuardResult{Guard: name, Violations: viol}
@@ -1145,6 +1258,12 @@ func normalizeConfig(cfg ContractConfig) ContractConfig {
 	}
 	if cfg.RewrittenMhohPctMax == 0 {
 		cfg.RewrittenMhohPctMax = 20
+	}
+	if cfg.IdentityMinOverlapPct == 0 {
+		cfg.IdentityMinOverlapPct = 90
+	}
+	if cfg.MagnitudeTolerancePct == 0 {
+		cfg.MagnitudeTolerancePct = 10
 	}
 	return cfg
 }

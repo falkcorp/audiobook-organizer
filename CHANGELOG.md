@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.102.0 -->
+<!-- version: 3.103.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-03 -->
 
@@ -8,6 +8,30 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 3, 2026 - .itl deep dive: library-identity & expected-magnitude guards (K13/K14)
+
+Full-format deep dive triggered by the `.itunes-writeback` 374-track cloud
+stub (an intentionally-planted fresh iTunes library) **passing all 8 safety
+guards** — proving the contract certifies well-formedness but not "this is
+our library at plausible size".
+
+- **`feat(itunes)`** — SPEC 3 Tier 1: `library-identity` guard (K13) with a
+  persisted `.identity.json` sidecar fingerprint (Library PID @0x34 + ≤1024
+  evenly-spaced track PIDs; ≥90% overlap required; explicit `AdoptLibrary`
+  bless for deliberate swaps) and `expected-magnitude` guard (K14, ±10% vs an
+  external track count). Sidecar lifecycle wired into `SafeWriteITL`
+  (load-before-mutate fail-closed, refresh-after-landing). End-to-end test
+  rejects the stub-class replacement byte-identically.
+- **`docs(specs)`** — SPEC 3 (`2026-07-03-itl-identity-and-external-truth-hardening.md`,
+  normative K13–K16 + Tier 2–4 roadmap) and the full deep-dive record
+  (`2026-07-03-itl-format-and-foolproofing-deep-dive.md`): byte-level format
+  map incl. known unknowns, server-wide library census (13 libraries
+  audited), adversarial guard vacuity map, swallowed-error sites, dead-code
+  safety hooks (`PinLastKnownGood`/`SetLibraryNotInUse` have no production
+  callers), FM-1..FM-17 failure taxonomy, and the K16 mhoh decoder
+  misclassification that makes `location-form` fire on every known-good
+  library.
 
 #### July 3, 2026 - Consultancy-roadmap wave 3 + flake eradication (PRs #1772-#1781, #1688)
 
