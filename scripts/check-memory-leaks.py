@@ -103,13 +103,11 @@ class MemoryLeakDetector:
             # Check if we're in a useEffect with cleanup
             in_use_effect = False
             has_cleanup = False
-            use_effect_start = -1
 
             # Look backwards for useEffect
             for j in range(i - 1, max(0, i - 50), -1):
                 if "useEffect" in lines[j]:
                     in_use_effect = True
-                    use_effect_start = j
                     # Check if there's a return statement (cleanup) within this useEffect
                     # Look forward from useEffect for return statement
                     for k in range(j, min(i + 20, len(lines))):
