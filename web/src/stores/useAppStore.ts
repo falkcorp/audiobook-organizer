@@ -1,12 +1,18 @@
 // file: web/src/stores/useAppStore.ts
-// version: 1.4.0
+// version: 1.5.0
 // guid: 1e2f3a4b-5c6d-7e8f-9a0b-1c2d3e4f5a6b
+// last-edited: 2026-07-03
 
 import { create } from 'zustand';
 import { devtools } from 'zustand/middleware';
 import { STORAGE_KEYS } from '../lib/storageKeys';
 
 type ThemeMode = 'dark' | 'light';
+
+// error/warning notifications persist (no auto-remove timer), so without a
+// cap the array grows unboundedly over a long session. Drop the oldest
+// entry once the cap is reached.
+const MAX_NOTIFICATIONS = 100;
 
 function readStoredThemeMode(): ThemeMode {
   if (typeof window === 'undefined') {
@@ -81,12 +87,16 @@ export const useAppStore = create<AppState>()(
       notifications: [],
       addNotification: (message, severity, action) => {
         const id = `${Date.now()}-${Math.random()}`;
-        set((state) => ({
-          notifications: [
+        set((state) => {
+          const next = [
             ...state.notifications,
             { id, message, severity, timestamp: Date.now(), action },
-          ],
-        }));
+          ];
+          return {
+            notifications:
+              next.length > MAX_NOTIFICATIONS ? next.slice(next.length - MAX_NOTIFICATIONS) : next,
+          };
+        });
         // Auto-remove success/info after 5 seconds; error/warning persist
         if (severity === 'success' || severity === 'info') {
           const timeoutId = setTimeout(() => {

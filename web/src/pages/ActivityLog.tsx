@@ -1,7 +1,7 @@
 // file: web/src/pages/ActivityLog.tsx
-// version: 2.18.0
+// version: 2.19.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-06-22
+// last-edited: 2026-07-03
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -318,7 +318,9 @@ export default function ActivityLog() {
   useEffect(() => {
     if (!latestLogEvent || latestLogEvent.op_id !== expandedOpId) return;
     setOpLogsLoaded(true);
-    setOpLogs((prev) => [...prev, latestLogEvent.message]);
+    // Cap retained log lines to avoid unbounded growth on long-running ops
+    // (mirrors OperationActivityPanel's per-op cap).
+    setOpLogs((prev) => [...prev, latestLogEvent.message].slice(-1000));
     const scrollTimeout = window.setTimeout(
       () => opLogsRef.current?.scrollTo({ top: opLogsRef.current.scrollHeight }),
       50,

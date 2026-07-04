@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.tsx
-// version: 1.75.0
+// version: 1.76.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-07-01
+// last-edited: 2026-07-03
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -47,6 +47,7 @@ import type {
   DuplicateDialogState,
   OrganizeErrorState,
 } from './libraryTypes';
+import { evictOldestOpLogKey, MAX_OPERATION_LOG_KEYS } from './libraryOperationLogs';
 
 // Types ImportPath, BulkActionResult, BulkActionProgress, DuplicateAction,
 // DuplicateDialogState, OrganizeErrorState imported from './libraryTypes'
@@ -401,15 +402,18 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
         try {
           const hist = await api.getOperationLogsTail(op.id, 100);
           if (hist && hist.length) {
-            setOperationLogs((prev) => ({
-              ...prev,
-              [op.id]: hist.map((h: api.OperationLog) => ({
-                level: h.level,
-                message: h.message,
-                details: h.details,
-                timestamp: Date.parse(h.created_at) || Date.now(),
-              })),
-            }));
+            setOperationLogs((prev) => {
+              const capped = evictOldestOpLogKey(prev, op.id, MAX_OPERATION_LOG_KEYS);
+              return {
+                ...capped,
+                [op.id]: hist.map((h: api.OperationLog) => ({
+                  level: h.level,
+                  message: h.message,
+                  details: h.details,
+                  timestamp: Date.parse(h.created_at) || Date.now(),
+                })),
+              };
+            });
           }
         } catch (_e) {
           // ignore hydration errors
@@ -425,7 +429,8 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
         if (evt.type === 'operation.log' && evt.data?.operation_id) {
           const opId = String(evt.data.operation_id);
           setOperationLogs((prev) => {
-            const existing = prev[opId] || [];
+            const capped = evictOldestOpLogKey(prev, opId, MAX_OPERATION_LOG_KEYS);
+            const existing = capped[opId] || [];
             const next = [
               ...existing,
               {
@@ -435,7 +440,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
                 timestamp: Date.now(),
               },
             ];
-            return { ...prev, [opId]: next.slice(-200) };
+            return { ...capped, [opId]: next.slice(-200) };
           });
         } else if (evt.type === 'operation.progress' && evt.data?.operation_id) {
           const opId = String(evt.data.operation_id);
