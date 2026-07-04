@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.103.0 -->
+<!-- version: 3.104.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-03 -->
 
@@ -8,6 +8,28 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 3, 2026 - .itl foolproofing wave 2: K15/K16 + dead-code safety wiring
+
+- **`fix(itunes)`** — **K16: the mhoh at24 encoding semantics were inverted
+  (1↔3)** — at24=1 is UTF-16LE, at24=3 is Windows-1252, exactly opposite to
+  the T002 table. Fixed decode + encode; the golden master and live library
+  now audit fully clean (first time ever). Guard follow-ups: bare `%` in real
+  filenames no longer flags (only `%XX` triples), and 0x0D/0x0B pair
+  consistency is a no-NEW check (iTunes itself leaves stale pairs). New
+  `TestGoldenCorpusAuditClean` fails the build if any guard fires on the
+  checked-in iTunes-authored testdata.
+- **`feat(itunes)`** — K15: nuclear rebuild refuses a >50% shrink without
+  `acknowledge_shrink=true`; always logs blast radius; identity guard armed
+  on distinct-path ApplyITLOperations. Bounded-delta is now PID-set based and
+  symmetric (removal, insertion, AND replacement all bounded).
+- **`feat(itunes)`** — wired the dead-code safety hooks: FileActivityLibraryCheck
+  (iTunes-in-use gate from library/journal mtimes, 2m window) set at service
+  construction; PinLastKnownGood after every successful flush (.bak-lkg now
+  actually exists). Batcher flush failures re-enqueue with a 3-attempt cap
+  instead of WARN+drop; parse failure defers instead of blind-writing; the
+  service wrapper re-reads the temp file and runs the FULL contract before
+  rename (step 4b); MarkExternalIDRemoved failures are logged.
 
 #### July 3, 2026 - .itl deep dive: library-identity & expected-magnitude guards (K13/K14)
 
