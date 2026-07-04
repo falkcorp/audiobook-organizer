@@ -1,5 +1,5 @@
 // file: internal/server/registry_wire.go
-// version: 1.17.0
+// version: 1.18.0
 // last-edited: 2026-07-03
 
 package server
@@ -130,14 +130,24 @@ func init() {
 		Groups: []string{"ai"},
 		Build: func(c *serviceregistry.Container) (any, error) {
 			cfg := serviceregistry.Get[*config.Config](c, serviceregistry.KeyConfig)
-			if cfg.OpenAIAPIKey == "" || !cfg.Embedding.Enabled {
+			// Keyless local backends are valid (TOGGLE-1/TASK-10): gate on the
+			// resolved effective mode, not on OpenAIAPIKey presence. The old
+			// key check silently disabled the whole dedup plugin on keyless
+			// prod once TASK-10 stopped injecting a dummy key into cfg.
+			if cfg.EffectiveEmbeddingMode() == config.AIBackendModeDisabled {
 				return (*dedup.Engine)(nil), nil
 			}
 			embStore, _ := serviceregistry.TryGet[*database.EmbeddingStore](c, serviceregistry.KeyEmbeddingStore)
 			embClient, _ := serviceregistry.TryGet[*ai.EmbeddingClient](c, "embedclient")
-			llmParser, _ := serviceregistry.TryGet[*ai.OpenAIParser](c, "llmparser")
-			if embStore == nil || embClient == nil || llmParser == nil {
+			if embStore == nil || embClient == nil {
 				return (*dedup.Engine)(nil), nil
+			}
+			// llmParser may legitimately be nil (EffectiveLLMMode disabled on a
+			// keyless local-embedding box) — NewEngine documents nil as "Layer 3
+			// LLM review disabled" and nil-guards every use.
+			llmParser, _ := serviceregistry.TryGet[*ai.OpenAIParser](c, "llmparser")
+			if llmParser == nil {
+				slog.Info("dedup engine: LLM parser unavailable (LLM mode disabled) — Layer 3 LLM review off")
 			}
 			store := serviceregistry.Get[database.Store](c, serviceregistry.KeyStore)
 			mergeSvc := serviceregistry.Get[*merge.Service](c, serviceregistry.KeyMerge)
