@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/rebuild_gold_labels_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2b8e5f14-6a37-4c92-9d05-3f7a8b1c6e40
 // last-edited: 2026-07-04
 
@@ -104,6 +104,122 @@ func TestRebuildGoldLabels_DryRun_RuleChangedAndUnchanged(t *testing.T) {
 	}
 }
 
+// TestRebuildGoldLabels_ComputeRebuildDiff_ReportCorrectness exercises
+// computeRebuildDiff directly (the pure diff core dry-run reports on) against
+// a fixture with one changed rule row, one unchanged rule row, and one
+// unlabelable rule row (orphaned candidate) — and asserts the exact stats,
+// not just "dry-run wrote nothing". This is the "dry-run diff report
+// correctness" test called for in PLAN.md; the log-only assertions in
+// TestRebuildGoldLabels_DryRun_RuleChangedAndUnchanged cannot catch a wrong
+// count because fakeReporter discards log output.
+func TestRebuildGoldLabels_ComputeRebuildDiff_ReportCorrectness(t *testing.T) {
+	pebble, es, p := rebuildFixture(t)
+
+	// Changed: stored true_dup, but missingFile fires not_dup today.
+	noFiles := createBookNoFiles(t, pebble, "Ghost")
+	hasFiles := createBookWithHashedFile(t, pebble, "Real", "hash-real-report-1")
+	changedCand := candidateID(t, es, noFiles, hasFiles)
+	if err := es.UpsertLabeledExample(database.LabeledExample{
+		CandidateID: changedCand, EntityAID: noFiles, EntityBID: hasFiles,
+		Label: "true_dup", LabelSource: "rule", LabelReason: "stale",
+	}); err != nil {
+		t.Fatalf("seed changed rule example: %v", err)
+	}
+
+	// Unchanged: already stored as the not_dup missingFile would produce today.
+	noFiles2 := createBookNoFiles(t, pebble, "Ghost2")
+	hasFiles2 := createBookWithHashedFile(t, pebble, "Real2", "hash-real-report-2")
+	unchangedCand := candidateID(t, es, noFiles2, hasFiles2)
+	if err := es.UpsertLabeledExample(database.LabeledExample{
+		CandidateID: unchangedCand, EntityAID: noFiles2, EntityBID: hasFiles2,
+		Label: "not_dup", LabelSource: "rule", LabelReason: "side A has no resolvable files",
+	}); err != nil {
+		t.Fatalf("seed unchanged rule example: %v", err)
+	}
+
+	// Unlabelable: candidate ID no longer exists.
+	if err := es.UpsertLabeledExample(database.LabeledExample{
+		CandidateID: 424242, EntityAID: "gone-a", EntityBID: "gone-b",
+		Label: "true_dup", LabelSource: "rule", LabelReason: "orphaned",
+	}); err != nil {
+		t.Fatalf("seed orphaned rule example: %v", err)
+	}
+
+	// A human row and an unlabeled/other row must be counted as pass-through,
+	// not folded into the rule bucket.
+	humanA := createBookWithHashedFile(t, pebble, "HumanA", "hash-human-report-a")
+	humanB := createBookWithHashedFile(t, pebble, "HumanB", "hash-human-report-b")
+	humanCand := candidateID(t, es, humanA, humanB)
+	if err := es.UpsertLabeledExample(database.LabeledExample{
+		CandidateID: humanCand, EntityAID: humanA, EntityBID: humanB,
+		Label: "not_dup", LabelSource: "human",
+	}); err != nil {
+		t.Fatalf("seed human example: %v", err)
+	}
+	otherA := createBookWithHashedFile(t, pebble, "OtherA", "hash-other-report-a")
+	otherB := createBookWithHashedFile(t, pebble, "OtherB", "hash-other-report-b")
+	otherCand := candidateID(t, es, otherA, otherB)
+	if err := es.UpsertLabeledExample(database.LabeledExample{
+		CandidateID: otherCand, EntityAID: otherA, EntityBID: otherB,
+	}); err != nil {
+		t.Fatalf("seed unlabeled example: %v", err)
+	}
+
+	existing, err := es.ListLabeledExamples(database.LabeledExampleFilter{})
+	if err != nil {
+		t.Fatalf("ListLabeledExamples: %v", err)
+	}
+
+	report, err := p.computeRebuildDiff(context.Background(), &fakeReporter{}, existing)
+	if err != nil {
+		t.Fatalf("computeRebuildDiff: %v", err)
+	}
+
+	// Both the changed row (true_dup -> not_dup) and the unchanged row
+	// (already not_dup) resolve to not_dup today, so NewNotDup counts both.
+	want := rebuildBucketStats{Examined: 3, Changed: 1, Unchanged: 1, Unlabelable: 1, NewNotDup: 2}
+	if report.Rule != want {
+		t.Fatalf("Rule stats = %+v, want %+v", report.Rule, want)
+	}
+	if (report.Auto != rebuildBucketStats{}) {
+		t.Fatalf("Auto stats = %+v, want zero value (no auto_high_conf rows seeded)", report.Auto)
+	}
+	if report.HumanCount != 1 {
+		t.Fatalf("HumanCount = %d, want 1", report.HumanCount)
+	}
+	if report.OtherCount != 1 {
+		t.Fatalf("OtherCount = %d, want 1", report.OtherCount)
+	}
+	if len(report.Fresh) != 2 { // changed + unchanged rows carry forward; unlabelable does not
+		t.Fatalf("len(Fresh) = %d, want 2", len(report.Fresh))
+	}
+
+	// The sample must include the changed row's before/after and flag the
+	// orphaned row as unlabelable, so a reviewer can spot-check specific
+	// candidates from the report before applying.
+	var sawChanged, sawUnlabelable bool
+	for _, s := range report.Sample {
+		if s.CandidateID == changedCand {
+			sawChanged = true
+			if s.OldLabel != "true_dup" || s.NewLabel != "not_dup" || s.Unlabelable {
+				t.Errorf("changed sample = %+v, want old=true_dup new=not_dup unlabelable=false", s)
+			}
+		}
+		if s.CandidateID == 424242 {
+			sawUnlabelable = true
+			if !s.Unlabelable || s.NewLabel != "" {
+				t.Errorf("unlabelable sample = %+v, want unlabelable=true new_label=\"\"", s)
+			}
+		}
+	}
+	if !sawChanged {
+		t.Error("diff sample missing the changed candidate")
+	}
+	if !sawUnlabelable {
+		t.Error("diff sample missing the unlabelable candidate")
+	}
+}
+
 // TestRebuildGoldLabels_Apply_WipesRuleAndAutoHighConf_PreservesHumanAndOther
 // verifies the apply path: rule/auto_high_conf rows are recomputed from
 // current state (stale labels corrected), human rows are passed through
@@ -156,8 +272,29 @@ func TestRebuildGoldLabels_Apply_WipesRuleAndAutoHighConf_PreservesHumanAndOther
 		t.Fatalf("seed unlabeled example: %v", err)
 	}
 
+	// Orphaned rule row: candidate ID no longer exists. Unlabelable rows are
+	// dropped by apply (not reinserted), since the fresh set only contains
+	// rows a catcher still fires on.
+	const orphanedRuleCandID int64 = 777777
+	if err := es.UpsertLabeledExample(database.LabeledExample{
+		CandidateID: orphanedRuleCandID, EntityAID: "gone-a", EntityBID: "gone-b",
+		Label: "true_dup", LabelSource: "rule", LabelReason: "orphaned",
+	}); err != nil {
+		t.Fatalf("seed orphaned rule example: %v", err)
+	}
+
 	if err := p.runRebuildGoldLabels(context.Background(), json.RawMessage(`{"apply":true}`), &fakeReporter{}); err != nil {
 		t.Fatalf("runRebuildGoldLabels apply: %v", err)
+	}
+
+	// Orphaned rule row must be gone after apply — deleted with the rest of
+	// the stale rule bucket and never reinserted (no candidate to rebuild from).
+	orphanEx, err := es.GetLabeledExample(orphanedRuleCandID)
+	if err != nil {
+		t.Fatalf("GetLabeledExample(orphaned): %v", err)
+	}
+	if orphanEx != nil {
+		t.Fatalf("orphaned/unlabelable row must be dropped by apply; got %+v", orphanEx)
 	}
 
 	// Rule row recomputed to not_dup.
