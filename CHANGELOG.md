@@ -1,13 +1,42 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.104.0 -->
+<!-- version: 3.105.1 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
-<!-- last-edited: 2026-07-03 -->
+<!-- last-edited: 2026-07-04 -->
 
 # Changelog
 
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 4, 2026 - dedup gold-label rebuild op (dedup.rebuild-gold-labels)
+
+- **`feat(dedup)`** — new op `dedup.rebuild-gold-labels`
+  (`internal/plugins/dedup/rebuild_gold_labels.go`) re-derives the
+  mechanically-generated portion of the gold-label store
+  (`label_source="rule"` via `dataset.Classify`, `label_source="auto_high_conf"`
+  via `dataset.MineHighConfidenceDup`) against *current* candidate/book/
+  embedding state — the label set predates the CONS-16/17/FRAG
+  candidate-quality fixes and the bge-m3 cutover, so a chunk of it currently
+  references merged/deleted/non-primary books or catchers that no longer fire.
+  This op keeps that mechanical portion of the gold-label set current; it is
+  an independent gold-label-quality fix and does **not** address the
+  embedding-side `skipped_dim` staleness seen in
+  `dedup.calibrate-embedding-thresholds` (stale `.Model`/dimension mismatches
+  on stored embeddings) — that's a separate, still-open problem tracked
+  elsewhere. Dry-run by default: reports changed/unchanged/unlabelable
+  counts per bucket (unlabelable = candidate no longer exists or the
+  catcher no longer fires) plus a pass-through count of `label_source="human"`
+  rows, which — like unlabeled backfill rows (`LabelSource==""`) — are never
+  touched. `apply=true` deletes all rule/auto_high_conf rows and reinserts the
+  freshly computed set; idempotent (re-running apply against unchanged state
+  yields the same label/source assignments). New primitive
+  `EmbeddingStore.DeleteLabeledExamplesBySource` (`internal/database/dedup_label.go`)
+  backs the bulk-delete. 3 unit tests (dry-run diff correctness, apply
+  wipe+reinsert with human/unlabeled preserved, apply idempotency) plus the
+  existing dedup plugin/database suites all pass. Prod validation: dry-run
+  via `/api/v1/operations/v2` first, review the diff, only then apply (owner
+  greenlight, per repo convention for destructive dedup ops).
 
 #### July 3, 2026 - .itl foolproofing wave 2: K15/K16 + dead-code safety wiring
 

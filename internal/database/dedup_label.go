@@ -1,7 +1,7 @@
 // file: internal/database/dedup_label.go
-// version: 1.0.4
+// version: 1.1.0
 // guid: 5a0319bd-8bc4-4135-91e6-dfd43628dcc5
-// last-edited: 2026-06-13
+// last-edited: 2026-07-04
 
 package database
 
@@ -168,6 +168,63 @@ func (s *EmbeddingStore) ListLabeledExamples(f LabeledExampleFilter) ([]LabeledE
 		}
 	}
 	return out, iter.Error()
+}
+
+// DeleteLabeledExample removes a single labeled example by candidate ID.
+// A no-op (no error) if the key does not exist.
+func (s *EmbeddingStore) DeleteLabeledExample(candidateID int64) error {
+	if err := s.checkClosed(); err != nil {
+		return err
+	}
+	return s.db.Delete(dedupLabelKey(candidateID), pebble.Sync)
+}
+
+// DeleteLabeledExamplesBySource deletes every labeled example whose
+// LabelSource matches one of the given sources, returning the count deleted.
+// Used by dedup.rebuild-gold-labels to wipe mechanically-derived labels
+// ("rule", "auto_high_conf") before reinserting a freshly computed set, while
+// leaving "human"-sourced (and any other) rows untouched.
+func (s *EmbeddingStore) DeleteLabeledExamplesBySource(sources ...string) (int, error) {
+	if err := s.checkClosed(); err != nil {
+		return 0, err
+	}
+	want := make(map[string]struct{}, len(sources))
+	for _, src := range sources {
+		want[src] = struct{}{}
+	}
+
+	prefix := []byte(dedupLabelPfx)
+	upper := prefixUpperBound(prefix)
+	iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: upper})
+	if err != nil {
+		return 0, fmt.Errorf("delete labeled examples by source: %w", err)
+	}
+
+	var keys [][]byte
+	for iter.First(); iter.Valid(); iter.Next() {
+		var ex LabeledExample
+		if err := json.Unmarshal(iter.Value(), &ex); err != nil {
+			continue // skip a corrupt row rather than abort the scan
+		}
+		if _, ok := want[ex.LabelSource]; !ok {
+			continue
+		}
+		keys = append(keys, append([]byte(nil), iter.Key()...))
+	}
+	if err := iter.Error(); err != nil {
+		_ = iter.Close()
+		return 0, err
+	}
+	if err := iter.Close(); err != nil {
+		return 0, err
+	}
+
+	for _, k := range keys {
+		if err := s.db.Delete(k, pebble.Sync); err != nil {
+			return len(keys), fmt.Errorf("delete labeled example key %q: %w", k, err)
+		}
+	}
+	return len(keys), nil
 }
 
 // CountLabeledExamples counts examples matching the filter (Limit/Offset ignored).

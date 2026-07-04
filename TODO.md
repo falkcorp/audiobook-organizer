@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 9.57.0 -->
+<!-- version: 9.58.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-07-03 -->
+<!-- last-edited: 2026-07-04 -->
 
 # Project TODO
 
@@ -458,6 +458,24 @@ Plan: [`docs/plans/2026-06-13-dedup-exact-gate-and-dataset.md`](docs/plans/2026-
   (`internal/dedup/dataset/highconf.go`), 7 unit tests + 2 op e2e tests. Dry-run default;
   reuses candidate ids (no synthetic rows). Complements `dedup.dataset-backfill` (rule negatives)
   + human capture. **Not yet run on prod** — dry-run first via `{"def_id":"dedup.mine-gold-labels","params":{}}`.
+- [x] **C-rebuild / gold rebuild** New op `dedup.rebuild-gold-labels`
+  (`internal/plugins/dedup/rebuild_gold_labels.go`) re-derives `label_source="rule"`
+  (`dataset.Classify`) and `label_source="auto_high_conf"` (`dataset.MineHighConfidenceDup`)
+  labels against current candidate/book/embedding state — the 6,095-row label store
+  (5,050 rule / 248 auto_high_conf / 3 human / 794 unlabeled) predates the
+  CONS-16/17/FRAG fixes and the bge-m3 cutover, so a chunk of the mechanical
+  labels currently reference merged/deleted/non-primary books or catchers that
+  no longer fire. This is a gold-label-quality fix only — it does **not**
+  address `dedup.calibrate-embedding-thresholds`'s `skipped_dim` count
+  (2,841/5,301 pairs on the 2026-07-04 prod run), which is a separate,
+  still-open embedding-side staleness problem (stale `.Model`/dimension
+  mismatches on stored embeddings, root cause not yet found — do not conflate
+  the two). Dry-run reports changed/unchanged/unlabelable counts per bucket;
+  `apply=true` deletes+reinserts the rule/auto_high_conf rows (idempotent),
+  never touching `label_source="human"` or unlabeled (`LabelSource==""`) rows.
+  New `EmbeddingStore.DeleteLabeledExamplesBySource` primitive. 3 unit tests.
+  **Not yet run on prod** — dry-run first via `{"def_id":"dedup.rebuild-gold-labels","params":{}}`,
+  review the diff, only then `apply=true` (owner greenlight).
 - [x] **C5** Live-capture: wire `BuildExample` + `Classify` into the candidate-upsert path  ✅ shipped #1729 (agent-task sweep 2026-07-01)
   so each new candidate automatically gets a feature snapshot + deterministic label on
   creation (no separate backfill needed going forward).
