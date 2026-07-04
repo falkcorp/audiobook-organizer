@@ -230,7 +230,9 @@ class MemoryLeakDetector:
             f for f in tsx_files if ".test." not in f.name and "setup.ts" not in f.name
         ]
 
-        print(f"🔍 Scanning {len(tsx_files)} files for memory leaks...", file=sys.stderr)
+        print(
+            f"🔍 Scanning {len(tsx_files)} files for memory leaks...", file=sys.stderr
+        )
 
         for filepath in tsx_files:
             try:
@@ -268,9 +270,13 @@ class MemoryLeakDetector:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Detect memory leak patterns in React/TS code")
+    parser = argparse.ArgumentParser(
+        description="Detect memory leak patterns in React/TS code"
+    )
     group = parser.add_mutually_exclusive_group()
-    group.add_argument("--json", action="store_true", help="Output findings as JSON array")
+    group.add_argument(
+        "--json", action="store_true", help="Output findings as JSON array"
+    )
     group.add_argument(
         "--todo-entry",
         metavar="DATE",
@@ -294,8 +300,7 @@ def main() -> int:
 
     if args.json:
         data = [
-            {"file": f, "line": ln, "message": msg}
-            for f, ln, msg in detector.issues
+            {"file": f, "line": ln, "message": msg} for f, ln, msg in detector.issues
         ]
         print(json.dumps(data, indent=2))
         return 0 if clean else 1
