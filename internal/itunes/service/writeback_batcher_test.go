@@ -1,12 +1,14 @@
 // file: internal/itunes/service/writeback_batcher_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: d4e5f6a7-b8c9-0123-def4-56789abcdef0
+// last-edited: 2026-07-03
 
 package itunesservice
 
 import (
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,9 +35,16 @@ func withFakeITLHooks(t *testing.T, validate func(string) error, apply func(in, 
 	itlApplyOperationsFn = func(in, out string, ops itunes.ITLOperationSet, _ ...itunes.ContractConfig) (*itunes.ITLWriteBackResult, error) {
 		return apply(in, out, ops)
 	}
+	// The full-contract audit hook (step 4b) is neutralized by default —
+	// these tests drive validate/apply flow control with placeholder files
+	// that no real audit could pass. TestSafeWriteITL_AuditRejection covers
+	// the audit path explicitly.
+	prevAudit := itlAuditFileFn
+	itlAuditFileFn = func(string) error { return nil }
 	t.Cleanup(func() {
 		itlValidateFn = prevValidate
 		itlApplyOperationsFn = prevApply
+		itlAuditFileFn = prevAudit
 	})
 }
 
@@ -109,6 +118,44 @@ func TestSafeWriteITL_HappyPath(t *testing.T) {
 	// No .tmp left over.
 	if _, err := os.Stat(itlPath + ".tmp"); !os.IsNotExist(err) {
 		t.Error("expected .tmp to be cleaned up")
+	}
+}
+
+// TestSafeWriteITL_AuditRejection: the step-4b full-contract audit of the
+// temp file rejects the write and preserves the original — the service
+// wrapper's equivalent of the hardened path's re-read validation.
+func TestSafeWriteITL_AuditRejection(t *testing.T) {
+	dir := t.TempDir()
+	itlPath := makeITL(t, dir, "library.itl", "original-content")
+
+	withFakeITLHooks(t,
+		func(string) error { return nil },
+		func(in, out string, _ itunes.ITLOperationSet) (*itunes.ITLWriteBackResult, error) {
+			data, err := os.ReadFile(in)
+			if err != nil {
+				return nil, err
+			}
+			if err := os.WriteFile(out, append(data, '!'), 0o644); err != nil {
+				return nil, err
+			}
+			return &itunes.ITLWriteBackResult{UpdatedCount: 1, OutputPath: out}, nil
+		},
+	)
+	itlAuditFileFn = func(string) error { return fmt.Errorf("mhoh-format: fake violation") }
+
+	err := SafeWriteITL(itlPath, itunes.ITLOperationSet{
+		LocationUpdates: []itunes.ITLLocationUpdate{{PersistentID: "aa", NewLocation: "x"}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "contract audit") {
+		t.Fatalf("expected contract-audit rejection, got: %v", err)
+	}
+	// Original untouched, no temp left behind.
+	out, _ := os.ReadFile(itlPath)
+	if string(out) != "original-content" {
+		t.Errorf("original modified after audit rejection: %q", string(out))
+	}
+	if _, err := os.Stat(itlPath + ".tmp"); !os.IsNotExist(err) {
+		t.Error("expected .tmp to be cleaned up after audit rejection")
 	}
 }
 
