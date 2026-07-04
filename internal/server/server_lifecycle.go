@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 1.40.0
+// version: 1.41.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-07-03
 
@@ -21,7 +21,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -38,6 +37,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
 	"github.com/falkcorp/audiobook-organizer/internal/transcode"
 	"github.com/falkcorp/audiobook-organizer/internal/watcher"
+	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/quic-go/quic-go/http3"
 	"golang.org/x/net/http2"
@@ -53,6 +53,15 @@ func (s *Server) resumeInterruptedOperations() {
 	if err != nil {
 		slog.Warn("Failed to query interrupted operations", "err", err)
 		return
+	}
+
+	// SYS-4 observability gate: count interrupted operations whose Type is a
+	// pre-UOS v1 legacy name still handled by the resumeLegacyOp shim. This is
+	// telemetry only (does not change resume behavior) and lays the groundwork
+	// for a future task that deletes resumeLegacyOp once this count is verified
+	// to stay at zero in production across a full release cycle.
+	if n := countLegacyV1Ops(interrupted); n > 0 {
+		slog.Info("legacy v1 op rows pending resume", "count", n)
 	}
 
 	for _, op := range interrupted {
@@ -104,6 +113,40 @@ func (s *Server) resumeV2Op(opID, opType string, policy opsregistry.ResumePolicy
 		_ = s.Store().UpdateOperationError(opID, fmt.Sprintf("interrupted during %s (unknown resume policy)", opType))
 		_ = operations.ClearState(s.Store(), opID)
 	}
+}
+
+// legacyV1OpTypes is the set of pre-UOS v1 operation type names still handled
+// by the resumeLegacyOp switch below. Kept in sync with that switch; used by
+// countLegacyV1Ops for the SYS-4 observability gate. The "maintenance:*"
+// default branch is intentionally excluded — it is a namespaced prefix, not a
+// fixed v1 type name, and is not a candidate for the future shim deletion.
+var legacyV1OpTypes = map[string]struct{}{
+	"itunes_import":         {},
+	"scan":                  {},
+	"organize":              {},
+	"bulk_write_back":       {},
+	"isbn-enrichment":       {},
+	"metadata-refresh":      {},
+	"itunes_path_reconcile": {},
+	"itunes_path_repair":    {},
+	"transcode":             {},
+	"diagnostics_export":    {},
+	"diagnostics_ai":        {},
+	"itunes_sync":           {},
+	"reconcile_scan":        {},
+}
+
+// countLegacyV1Ops returns how many of the given operations carry a pre-UOS v1
+// legacy Type name (see legacyV1OpTypes / resumeLegacyOp). Pure function so the
+// SYS-4 count gate is testable without constructing a Server.
+func countLegacyV1Ops(ops []database.Operation) int {
+	n := 0
+	for _, op := range ops {
+		if _, ok := legacyV1OpTypes[op.Type]; ok {
+			n++
+		}
+	}
+	return n
 }
 
 // resumeLegacyOp handles resume for pre-UOS v1 op type names that are not
@@ -262,183 +305,13 @@ func (s *Server) Start(cfg ServerConfig) error {
 	// so that dedup.Engine.PostInit can detect the populated store and skip the
 	// redundant HydrateChromem walk. Nothing to do here. (HNSW-CRASH-2026-06-18)
 
-	// Pre-warm facets cache (genres/languages) - lightweight, <1 second
-	go s.warmFacetsCache()
-	// Pre-warm library size cache via filesystem walk so any later refresh
-	// path (nightly maintenance, manual rescan) starts with current data.
-	// The hot path of /system/status reads DB stats (PR #1137); this just
-	// keeps the FS-based numbers fresh in the 24h-TTL package cache.
-	go s.warmLibrarySizes()
-	// Pre-warm the audiobook list cache after memdb is published. Fires
-	// the most common library-page queries (title asc/desc, -review:matched,
-	// library_state filter) so the user's first load doesn't pay the full
-	// cold-miss cost (~3 min on 50K-book library). Enrolled in bgWG and
-	// gated on bgCtx (it also spawns the ~30-min trickle warmer): the old
-	// fire-and-forget launch outlived test servers and kept querying the
-	// store after Close() — panic "pebble: closed" from a trickle-warmer
-	// tick minutes into an internal/server package run
-	// (PEBBLE-CLOSED-SWEEPTICK-RESIDUAL family, warmer leg).
-	s.bgWG.Add("library-list-warmer")
-	go func() {
-		defer s.bgWG.Done("library-list-warmer")
-		s.warmAudiobookListCache()
-	}()
-	go s.warmAuthorsCache()
-	go s.warmSeriesCache()
+	s.startCacheWarmers()
 
-	// Low-frequency background sweep that WARN-logs API keys approaching
-	// expiry or lacking one entirely (legacy keys) — observability only,
-	// never enforcement (SEC-1/PROC-6).
-	s.bgWG.Add("apikey-expiry-sweep")
-	go func() {
-		defer s.bgWG.Done("apikey-expiry-sweep")
-		s.warnExpiringAPIKeys()
-	}()
-
-	s.httpServer = &http.Server{
-		Addr:              fmt.Sprintf("%s:%s", cfg.Host, cfg.Port),
-		Handler:           s.router,
-		ReadHeaderTimeout: cfg.ReadTimeout, // Only limit header read, not body (allows large uploads)
-		WriteTimeout:      cfg.WriteTimeout,
-		IdleTimeout:       cfg.IdleTimeout,
-		MaxHeaderBytes:    1 << 20, // 1MB
+	if err := s.configureAndStartHTTP(cfg); err != nil {
+		return err
 	}
 
-	if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
-		if _, err := os.Stat(cfg.TLSCertFile); err != nil {
-			slog.Warn("TLS certificate not available () . Falling back to HTTP-only mode.", "cfg", cfg.TLSCertFile, "err", err)
-			cfg.TLSCertFile = ""
-			cfg.TLSKeyFile = ""
-			cfg.HTTP3Port = ""
-		} else if _, err := os.Stat(cfg.TLSKeyFile); err != nil {
-			slog.Warn("TLS key not available () . Falling back to HTTP-only mode.", "cfg", cfg.TLSKeyFile, "err", err)
-			cfg.TLSCertFile = ""
-			cfg.TLSKeyFile = ""
-			cfg.HTTP3Port = ""
-		}
-	}
-
-	// Enable HTTP/2 if TLS is configured
-	if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
-		// Configure TLS with HTTP/2 (and optionally HTTP/3)
-		nextProtos := []string{"h2", "http/1.1"}
-		if cfg.HTTP3Port != "" {
-			// Add h3 to advertised protocols
-			nextProtos = append([]string{"h3"}, nextProtos...)
-		}
-		tlsConfig := &tls.Config{
-			MinVersion: tls.VersionTLS12,
-			NextProtos: nextProtos,
-		}
-		s.httpServer.TLSConfig = tlsConfig
-
-		// Explicitly configure HTTP/2
-		if err := http2.ConfigureServer(s.httpServer, &http2.Server{}); err != nil {
-			return fmt.Errorf("failed to configure HTTP/2: %w", err)
-		}
-
-		// Add Alt-Svc header to advertise HTTP/3 if enabled
-		if cfg.HTTP3Port != "" {
-			s.router.Use(func(c *gin.Context) {
-				c.Header("Alt-Svc", fmt.Sprintf(`h3=":%s"; ma=2592000`, cfg.HTTP3Port))
-				c.Next()
-			})
-		}
-
-		// Start HTTPS server with HTTP/2
-		go func() {
-			protocols := "HTTPS/HTTP2"
-			if cfg.HTTP3Port != "" {
-				protocols = "HTTPS/HTTP2 (HTTP/3 on UDP port " + cfg.HTTP3Port + ")"
-			}
-			slog.Info("Starting server on", "protocols", protocols, "addr", s.httpServer.Addr)
-			if err := s.httpServer.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile); err != nil && err != http.ErrServerClosed {
-				slog.Error("Failed to start HTTPS server", "err", err)
-			}
-		}()
-
-		// Start HTTP/3 server if configured
-		if cfg.HTTP3Port != "" {
-			s.http3Server = &http3.Server{
-				Addr:      fmt.Sprintf("%s:%s", cfg.Host, cfg.HTTP3Port),
-				Handler:   s.router,
-				TLSConfig: tlsConfig,
-			}
-			go func() {
-				slog.Info("Starting HTTP/3 (QUIC) server on UDP", "host", cfg.Host, "port", cfg.HTTP3Port)
-				if err := s.http3Server.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile); err != nil {
-					slog.Error("Failed to start HTTP/3 server", "err", err)
-				}
-			}()
-		}
-
-		// Start HTTP to HTTPS redirect server on port 80
-		go func() {
-			redirectAddr := fmt.Sprintf("%s:80", cfg.Host)
-			httpsPort := cfg.Port
-			if httpsPort == "80" {
-				httpsPort = "443" // Don't redirect 80->80
-			}
-
-			redirectHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				// Build HTTPS URL
-				target := "https://" + r.Host
-				// Add port if not default HTTPS port
-				if httpsPort != "443" {
-					target = fmt.Sprintf("https://%s:%s", cfg.Host, httpsPort)
-				}
-				target += r.URL.RequestURI()
-
-				slog.Debug("HTTP->HTTPS redirect", "url", r.URL.String(), "target", target)
-				http.Redirect(w, r, target, http.StatusMovedPermanently)
-			})
-
-			slog.Info("Starting HTTP->HTTPS redirect server on (redirects to )", "redirectAddr", redirectAddr, "httpsPort", httpsPort)
-			httpRedirectServer := &http.Server{
-				Addr:    redirectAddr,
-				Handler: redirectHandler,
-			}
-			if err := httpRedirectServer.ListenAndServe(); err != nil {
-				// Don't fatal - port 80 might require sudo
-				slog.Warn("Warning HTTP redirect server failed (port 80 may require sudo)", "err", err)
-			}
-		}()
-	} else {
-		// Start HTTP/1.1 server without TLS
-		go func() {
-			slog.Info("Starting HTTP/1.1 server on (use --tls-cert and --tls-key for HTTP/2, add --http3-port for HTTP/3)", "addr", s.httpServer.Addr)
-			if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				slog.Error("Failed to start server", "err", err)
-			}
-		}()
-	}
-
-	// Seed / refresh the multi-user roles (spec 3.7). Idempotent: if
-	// the permission set in auth.SeedRoles has grown since last boot,
-	// existing roles pick up the new entries automatically.
-	if created, updated, err := auth.SeedRoles(s.Store()); err != nil {
-		slog.Warn("seed roles", "err", err)
-	} else if created > 0 || updated > 0 {
-		slog.Info("seed roles created, updated", "created", created, "updated", updated)
-	}
-	if err := auth.SeedSystemUser(s.Store()); err != nil {
-		slog.Warn("seed system user", "err", err)
-	}
-
-	// Initialize the one-time bootstrap token and startup read-only key.
-	// dataDir is derived and sanitised once here so both callers receive a
-	// clean path — mirrors the ConsumeBootstrapToken(store, dataDir, …) pattern.
-	if dbPath := config.AppConfig.DatabasePath; dbPath != "" {
-		dataDir := filepath.Clean(filepath.Dir(dbPath))
-		if err := InitBootstrapToken(s.Store(), dataDir); err != nil {
-			slog.Info("Failed to init bootstrap token", "err", err)
-		}
-		if config.AppConfig.WriteStartupReadOnlyKey {
-			if err := InitStartupReadOnlyKey(s.Store(), dataDir); err != nil {
-				slog.Info("Failed to init startup read-only key", "err", err)
-			}
-		}
-	}
+	s.seedRolesAndTokens()
 
 	// Resume any operations that were interrupted by a previous shutdown/crash
 	s.resumeInterruptedOperations()
@@ -449,81 +322,7 @@ func (s *Server) Start(cfg ServerConfig) error {
 	// Resume interrupted metadata candidate fetch operations
 	s.resumeInterruptedMetadataFetch()
 
-	// Backfill external ID mappings from existing iTunes PIDs (one-time,
-	// idempotent). Tracked via bgWG for the same reason as the embedding
-	// backfill: we can't let it hold Pebble iterators while CloseStore runs.
-	s.bgWG.Add("external-id-backfill")
-	go func() {
-		defer s.bgWG.Done("external-id-backfill")
-		s.backfillExternalIDs()
-	}()
-
-	s.bgWG.Add("acoustid-backfill")
-	go func() {
-		defer s.bgWG.Done("acoustid-backfill")
-		s.backfillAcoustIDs(s.bgCtx)
-	}()
-
-	// PERF-VERSIONS: write the book:versiongroup:<gid>:<id> secondary
-	// index for every existing book once so /audiobooks/:id/versions
-	// stops full-scanning. Idempotent and gated by a sentinel key.
-	s.bgWG.Add("versiongroup-backfill")
-	go func() {
-		defer s.bgWG.Done("versiongroup-backfill")
-		if err := s.bgCtx.Err(); err != nil {
-			return
-		}
-		type vgBackfiller interface{ BackfillVersionGroupIndex() error }
-		if b, ok := s.Store().(vgBackfiller); ok {
-			if err := b.BackfillVersionGroupIndex(); err != nil {
-				slog.Warn("versiongroup-backfill", "err", err)
-			}
-		}
-	}()
-
-	// Strip shwm/©mvi/©mvn atoms from audiobook files (one-time). These
-	// classical-music atoms crash Apple Devices for Windows at sync.
-	// Checks bgCtx per file (SYS-1) so shutdown stops the walk early instead
-	// of blowing the 30s grace period on a first-run walk over a large
-	// library; a canceled run resumes on the next startup.
-	s.bgWG.Add("strip-movement-atoms")
-	go func() {
-		defer s.bgWG.Done("strip-movement-atoms")
-		s.stripMovementAtoms(s.bgCtx)
-	}()
-
-	// Re-mux M4B/M4A files with malformed atom structures so taglib,
-	// AtomicParsley, and Apple Devices can read them (one-time).
-	// Checks bgCtx per file (SYS-1); same early-stop behavior as
-	// stripMovementAtoms above.
-	s.bgWG.Add("remux-malformed-m4b")
-	go func() {
-		defer s.bgWG.Done("remux-malformed-m4b")
-		s.remuxMalformedM4BFiles(s.bgCtx)
-	}()
-
-	// Build the search index on first startup (or if it got wiped).
-	// Tracked via bgWG so shutdown can wait for in-flight indexing
-	// instead of letting it run under a closing DB.
-	if s.searchIndex != nil {
-		s.bgWG.Add("build-search-index")
-		go func() {
-			defer s.bgWG.Done("build-search-index")
-			s.buildSearchIndexIfEmpty()
-		}()
-	}
-
-	// One-time startup jobs: transcode malformed M4B files, then quarantine any
-	// that remained permanently unreadable. Run sequentially in a bgWG goroutine
-	// so shutdown waits for them and they don't race against the HTTP server.
-	// transcodeMalformedM4BFiles checks bgCtx per file (SYS-1); same
-	// early-stop behavior as stripMovementAtoms above.
-	s.bgWG.Add("transcode+quarantine")
-	go func() {
-		defer s.bgWG.Done("transcode+quarantine")
-		s.transcodeMalformedM4BFiles(s.bgCtx)
-		s.quarantineKnownBadFiles()
-	}()
+	s.startBackfills()
 
 	// Start periodic cleanup of stale transcode temp files
 	if s.Store() != nil {
@@ -892,6 +691,285 @@ func (s *Server) Start(cfg ServerConfig) error {
 	backgroundWG.Wait()
 	slog.Info("Server exited")
 	return nil
+}
+
+// startCacheWarmers launches the fire-and-forget cache pre-warmers plus the
+// API-key expiry sweep. Extracted verbatim from Start as part of the SYS-2
+// decomposition; goroutine-tracking is unchanged — warmFacetsCache /
+// warmLibrarySizes / warmAuthorsCache / warmSeriesCache remain intentionally
+// untracked, while library-list-warmer and apikey-expiry-sweep stay enrolled
+// in bgWG (PR #1781 lifecycle work). Do not "promote" the untracked ones here.
+func (s *Server) startCacheWarmers() {
+	// Pre-warm facets cache (genres/languages) - lightweight, <1 second
+	go s.warmFacetsCache()
+	// Pre-warm library size cache via filesystem walk so any later refresh
+	// path (nightly maintenance, manual rescan) starts with current data.
+	// The hot path of /system/status reads DB stats (PR #1137); this just
+	// keeps the FS-based numbers fresh in the 24h-TTL package cache.
+	go s.warmLibrarySizes()
+	// Pre-warm the audiobook list cache after memdb is published. Fires
+	// the most common library-page queries (title asc/desc, -review:matched,
+	// library_state filter) so the user's first load doesn't pay the full
+	// cold-miss cost (~3 min on 50K-book library). Enrolled in bgWG and
+	// gated on bgCtx (it also spawns the ~30-min trickle warmer): the old
+	// fire-and-forget launch outlived test servers and kept querying the
+	// store after Close() — panic "pebble: closed" from a trickle-warmer
+	// tick minutes into an internal/server package run
+	// (PEBBLE-CLOSED-SWEEPTICK-RESIDUAL family, warmer leg).
+	s.bgWG.Add("library-list-warmer")
+	go func() {
+		defer s.bgWG.Done("library-list-warmer")
+		s.warmAudiobookListCache()
+	}()
+	go s.warmAuthorsCache()
+	go s.warmSeriesCache()
+
+	// Low-frequency background sweep that WARN-logs API keys approaching
+	// expiry or lacking one entirely (legacy keys) — observability only,
+	// never enforcement (SEC-1/PROC-6).
+	s.bgWG.Add("apikey-expiry-sweep")
+	go func() {
+		defer s.bgWG.Done("apikey-expiry-sweep")
+		s.warnExpiringAPIKeys()
+	}()
+}
+
+// configureAndStartHTTP builds s.httpServer (and, when TLS is configured,
+// s.http3Server plus the HTTP->HTTPS redirect listener) and launches the
+// listener goroutines. Extracted verbatim from Start; cfg is taken by value so
+// the local TLS-fallback mutations stay scoped to this phase exactly as before.
+func (s *Server) configureAndStartHTTP(cfg ServerConfig) error {
+	s.httpServer = &http.Server{
+		Addr:              fmt.Sprintf("%s:%s", cfg.Host, cfg.Port),
+		Handler:           s.router,
+		ReadHeaderTimeout: cfg.ReadTimeout, // Only limit header read, not body (allows large uploads)
+		WriteTimeout:      cfg.WriteTimeout,
+		IdleTimeout:       cfg.IdleTimeout,
+		MaxHeaderBytes:    1 << 20, // 1MB
+	}
+
+	if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
+		if _, err := os.Stat(cfg.TLSCertFile); err != nil {
+			slog.Warn("TLS certificate not available () . Falling back to HTTP-only mode.", "cfg", cfg.TLSCertFile, "err", err)
+			cfg.TLSCertFile = ""
+			cfg.TLSKeyFile = ""
+			cfg.HTTP3Port = ""
+		} else if _, err := os.Stat(cfg.TLSKeyFile); err != nil {
+			slog.Warn("TLS key not available () . Falling back to HTTP-only mode.", "cfg", cfg.TLSKeyFile, "err", err)
+			cfg.TLSCertFile = ""
+			cfg.TLSKeyFile = ""
+			cfg.HTTP3Port = ""
+		}
+	}
+
+	// Enable HTTP/2 if TLS is configured
+	if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
+		// Configure TLS with HTTP/2 (and optionally HTTP/3)
+		nextProtos := []string{"h2", "http/1.1"}
+		if cfg.HTTP3Port != "" {
+			// Add h3 to advertised protocols
+			nextProtos = append([]string{"h3"}, nextProtos...)
+		}
+		tlsConfig := &tls.Config{
+			MinVersion: tls.VersionTLS12,
+			NextProtos: nextProtos,
+		}
+		s.httpServer.TLSConfig = tlsConfig
+
+		// Explicitly configure HTTP/2
+		if err := http2.ConfigureServer(s.httpServer, &http2.Server{}); err != nil {
+			return fmt.Errorf("failed to configure HTTP/2: %w", err)
+		}
+
+		// Add Alt-Svc header to advertise HTTP/3 if enabled
+		if cfg.HTTP3Port != "" {
+			s.router.Use(func(c *gin.Context) {
+				c.Header("Alt-Svc", fmt.Sprintf(`h3=":%s"; ma=2592000`, cfg.HTTP3Port))
+				c.Next()
+			})
+		}
+
+		// Start HTTPS server with HTTP/2
+		go func() {
+			protocols := "HTTPS/HTTP2"
+			if cfg.HTTP3Port != "" {
+				protocols = "HTTPS/HTTP2 (HTTP/3 on UDP port " + cfg.HTTP3Port + ")"
+			}
+			slog.Info("Starting server on", "protocols", protocols, "addr", s.httpServer.Addr)
+			if err := s.httpServer.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile); err != nil && err != http.ErrServerClosed {
+				slog.Error("Failed to start HTTPS server", "err", err)
+			}
+		}()
+
+		// Start HTTP/3 server if configured
+		if cfg.HTTP3Port != "" {
+			s.http3Server = &http3.Server{
+				Addr:      fmt.Sprintf("%s:%s", cfg.Host, cfg.HTTP3Port),
+				Handler:   s.router,
+				TLSConfig: tlsConfig,
+			}
+			go func() {
+				slog.Info("Starting HTTP/3 (QUIC) server on UDP", "host", cfg.Host, "port", cfg.HTTP3Port)
+				if err := s.http3Server.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile); err != nil {
+					slog.Error("Failed to start HTTP/3 server", "err", err)
+				}
+			}()
+		}
+
+		// Start HTTP to HTTPS redirect server on port 80
+		go func() {
+			redirectAddr := fmt.Sprintf("%s:80", cfg.Host)
+			httpsPort := cfg.Port
+			if httpsPort == "80" {
+				httpsPort = "443" // Don't redirect 80->80
+			}
+
+			redirectHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// Build HTTPS URL
+				target := "https://" + r.Host
+				// Add port if not default HTTPS port
+				if httpsPort != "443" {
+					target = fmt.Sprintf("https://%s:%s", cfg.Host, httpsPort)
+				}
+				target += r.URL.RequestURI()
+
+				slog.Debug("HTTP->HTTPS redirect", "url", r.URL.String(), "target", target)
+				http.Redirect(w, r, target, http.StatusMovedPermanently)
+			})
+
+			slog.Info("Starting HTTP->HTTPS redirect server on (redirects to )", "redirectAddr", redirectAddr, "httpsPort", httpsPort)
+			httpRedirectServer := &http.Server{
+				Addr:    redirectAddr,
+				Handler: redirectHandler,
+			}
+			if err := httpRedirectServer.ListenAndServe(); err != nil {
+				// Don't fatal - port 80 might require sudo
+				slog.Warn("Warning HTTP redirect server failed (port 80 may require sudo)", "err", err)
+			}
+		}()
+	} else {
+		// Start HTTP/1.1 server without TLS
+		go func() {
+			slog.Info("Starting HTTP/1.1 server on (use --tls-cert and --tls-key for HTTP/2, add --http3-port for HTTP/3)", "addr", s.httpServer.Addr)
+			if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				slog.Error("Failed to start server", "err", err)
+			}
+		}()
+	}
+	return nil
+}
+
+// seedRolesAndTokens seeds/refreshes multi-user roles and the system user, then
+// initializes the one-time bootstrap token and (optionally) the startup
+// read-only key. Extracted verbatim from Start; all failures remain non-fatal.
+func (s *Server) seedRolesAndTokens() {
+	// Seed / refresh the multi-user roles (spec 3.7). Idempotent: if
+	// the permission set in auth.SeedRoles has grown since last boot,
+	// existing roles pick up the new entries automatically.
+	if created, updated, err := auth.SeedRoles(s.Store()); err != nil {
+		slog.Warn("seed roles", "err", err)
+	} else if created > 0 || updated > 0 {
+		slog.Info("seed roles created, updated", "created", created, "updated", updated)
+	}
+	if err := auth.SeedSystemUser(s.Store()); err != nil {
+		slog.Warn("seed system user", "err", err)
+	}
+
+	// Initialize the one-time bootstrap token and startup read-only key.
+	// dataDir is derived and sanitised once here so both callers receive a
+	// clean path — mirrors the ConsumeBootstrapToken(store, dataDir, …) pattern.
+	if dbPath := config.AppConfig.DatabasePath; dbPath != "" {
+		dataDir := filepath.Clean(filepath.Dir(dbPath))
+		if err := InitBootstrapToken(s.Store(), dataDir); err != nil {
+			slog.Info("Failed to init bootstrap token", "err", err)
+		}
+		if config.AppConfig.WriteStartupReadOnlyKey {
+			if err := InitStartupReadOnlyKey(s.Store(), dataDir); err != nil {
+				slog.Info("Failed to init startup read-only key", "err", err)
+			}
+		}
+	}
+}
+
+// startBackfills launches the one-time, idempotent bgWG-tracked backfill and
+// maintenance goroutines. Extracted verbatim from Start; every goroutine stays
+// enrolled in s.bgWG so shutdown drains them before the store closes (SYS-1).
+func (s *Server) startBackfills() {
+	// Backfill external ID mappings from existing iTunes PIDs (one-time,
+	// idempotent). Tracked via bgWG for the same reason as the embedding
+	// backfill: we can't let it hold Pebble iterators while CloseStore runs.
+	s.bgWG.Add("external-id-backfill")
+	go func() {
+		defer s.bgWG.Done("external-id-backfill")
+		s.backfillExternalIDs()
+	}()
+
+	s.bgWG.Add("acoustid-backfill")
+	go func() {
+		defer s.bgWG.Done("acoustid-backfill")
+		s.backfillAcoustIDs(s.bgCtx)
+	}()
+
+	// PERF-VERSIONS: write the book:versiongroup:<gid>:<id> secondary
+	// index for every existing book once so /audiobooks/:id/versions
+	// stops full-scanning. Idempotent and gated by a sentinel key.
+	s.bgWG.Add("versiongroup-backfill")
+	go func() {
+		defer s.bgWG.Done("versiongroup-backfill")
+		if err := s.bgCtx.Err(); err != nil {
+			return
+		}
+		type vgBackfiller interface{ BackfillVersionGroupIndex() error }
+		if b, ok := s.Store().(vgBackfiller); ok {
+			if err := b.BackfillVersionGroupIndex(); err != nil {
+				slog.Warn("versiongroup-backfill", "err", err)
+			}
+		}
+	}()
+
+	// Strip shwm/©mvi/©mvn atoms from audiobook files (one-time). These
+	// classical-music atoms crash Apple Devices for Windows at sync.
+	// Checks bgCtx per file (SYS-1) so shutdown stops the walk early instead
+	// of blowing the 30s grace period on a first-run walk over a large
+	// library; a canceled run resumes on the next startup.
+	s.bgWG.Add("strip-movement-atoms")
+	go func() {
+		defer s.bgWG.Done("strip-movement-atoms")
+		s.stripMovementAtoms(s.bgCtx)
+	}()
+
+	// Re-mux M4B/M4A files with malformed atom structures so taglib,
+	// AtomicParsley, and Apple Devices can read them (one-time).
+	// Checks bgCtx per file (SYS-1); same early-stop behavior as
+	// stripMovementAtoms above.
+	s.bgWG.Add("remux-malformed-m4b")
+	go func() {
+		defer s.bgWG.Done("remux-malformed-m4b")
+		s.remuxMalformedM4BFiles(s.bgCtx)
+	}()
+
+	// Build the search index on first startup (or if it got wiped).
+	// Tracked via bgWG so shutdown can wait for in-flight indexing
+	// instead of letting it run under a closing DB.
+	if s.searchIndex != nil {
+		s.bgWG.Add("build-search-index")
+		go func() {
+			defer s.bgWG.Done("build-search-index")
+			s.buildSearchIndexIfEmpty()
+		}()
+	}
+
+	// One-time startup jobs: transcode malformed M4B files, then quarantine any
+	// that remained permanently unreadable. Run sequentially in a bgWG goroutine
+	// so shutdown waits for them and they don't race against the HTTP server.
+	// transcodeMalformedM4BFiles checks bgCtx per file (SYS-1); same
+	// early-stop behavior as stripMovementAtoms above.
+	s.bgWG.Add("transcode+quarantine")
+	go func() {
+		defer s.bgWG.Done("transcode+quarantine")
+		s.transcodeMalformedM4BFiles(s.bgCtx)
+		s.quarantineKnownBadFiles()
+	}()
 }
 
 func (s *Server) perm(p auth.Permission) gin.HandlerFunc {
