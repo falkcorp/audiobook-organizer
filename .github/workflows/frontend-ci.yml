@@ -1,5 +1,5 @@
 # file: .github/workflows/frontend-ci.yml
-# version: 2.9.3
+# version: 2.9.4
 # guid: 1c2d3e4f-5a6b-7c8d-9e0f-1a2b3c4d5e6f
 # last-edited: 2026-07-03
 
@@ -57,4 +57,5 @@ jobs:
       go-experiment: 'jsonv2'
       node-version: ${{ needs.frontend-config.outputs.node-version }}
       system-packages: 'libtag1-dev'
+      coverage-threshold: '30'  # repo gate is 30% (coverage-check-short); reusable default of 80 is aspirational
     secrets: inherit
