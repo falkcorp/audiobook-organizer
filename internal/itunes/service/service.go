@@ -1,6 +1,7 @@
 // file: internal/itunes/service/service.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 81ccaec6-42b0-4828-83c8-7a96680112d9
+// last-edited: 2026-07-03
 
 package itunesservice
 
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
@@ -99,6 +101,15 @@ func New(deps Deps) (*Service, error) {
 		ITLWriteBackEnabled: deps.Config.ITLWriteBackEnabled,
 		LibraryWritePath:    deps.Config.LibraryWritePath,
 	}, deps.Store)
+
+	// SPEC 3 §4: wire the iTunes-in-use precondition. File-activity on the
+	// library and its journal siblings is the only signal visible from this
+	// side of the share; a hit defers the flush one debounce cycle (work is
+	// re-enqueued, never lost). Before this, SetLibraryNotInUse had no
+	// production caller and every write raced a potentially-open iTunes.
+	if p := deps.Config.LibraryWritePath; p != "" {
+		svc.Batcher.SetLibraryNotInUse(itunes.FileActivityLibraryCheck(p, 2*time.Minute))
+	}
 
 	// M1 step 1: Provisioner. Gets the real batcher directly — no
 	// SetEnqueuer hop needed now that Batcher is wired above.
