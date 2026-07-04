@@ -1,5 +1,5 @@
 // file: internal/remux/transcode.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-07-03
 
@@ -118,7 +118,7 @@ func (t *Transcoder) TranscodeMalformedFiles(ctx context.Context) {
 
 		// taglib failed — attempt full AAC transcode.
 		if err := TranscodeFile(path); err != nil {
-			slog.Warn("malformed M4B transcode failed for", "value0", "path", "path", path, "err", err)
+			slog.Warn("malformed M4B transcode failed for", "path", path, "err", err)
 			_ = t.store.SetSetting(TranscodeSkipKey(path), "true", "bool", false)
 			failed++
 			return nil
@@ -126,7 +126,7 @@ func (t *Transcoder) TranscodeMalformedFiles(ctx context.Context) {
 
 		// Verify the output is now readable.
 		if _, err := taglib.ReadTags(path); err != nil {
-			slog.Warn("malformed M4B transcode produced unreadable file for", "value0", "path", "path", path, "err", err)
+			slog.Warn("malformed M4B transcode produced unreadable file for", "path", path, "err", err)
 			_ = t.store.SetSetting(TranscodeSkipKey(path), "true", "bool", false)
 			failed++
 			return nil
@@ -137,7 +137,7 @@ func (t *Transcoder) TranscodeMalformedFiles(ctx context.Context) {
 		return nil
 	})
 
-	slog.Info("Malformed M4B transcode transcoded, already readable, failed ( permanently skipped)", "value0", "transcoded", "transcoded", transcoded, "value2", "clean", "clean", clean, "failed", failed, "skipped", skipped)
+	slog.Info("Malformed M4B transcode transcoded, already readable, failed, permanently skipped", "transcoded", transcoded, "clean", clean, "failed", failed, "skipped", skipped)
 	_ = t.store.SetSetting(TranscodeKey, "true", "bool", false)
 }
 

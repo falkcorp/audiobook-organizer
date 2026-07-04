@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
-// last-edited: 2026-06-23
+// last-edited: 2026-07-03
 
 package audiobooks
 
@@ -351,7 +351,7 @@ func (svc *AudiobookService) PurgeSoftDeletedBooks(ctx context.Context, deleteFi
 		// Step 3: Delete file if requested (only from organizer root, never from protected/import paths)
 		if deleteFiles && book.FilePath != "" {
 			if isProtectedPath(svc.store, book.FilePath) {
-				slog.Debug("purge skipping file deletion for — protected path", "book", book.ID, "book", book.FilePath)
+				slog.Debug("purge skipping file deletion for — protected path", "bookID", book.ID, "filePath", book.FilePath)
 			} else {
 				info, statErr := os.Stat(book.FilePath)
 				if statErr == nil && info.IsDir() {

@@ -1,6 +1,7 @@
 // file: internal/openlibrary/store.go
-// version: 2.3.1
+// version: 2.3.2
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
+// last-edited: 2026-07-03
 
 package openlibrary
 
@@ -33,7 +34,7 @@ func NewOLStore(path string) (*OLStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open OL store: %w", err)
 	}
-	slog.Info("OL PebbleDB opened at (format version )", "value0", "path", "path", path, "value1", db.FormatMajorVersion())
+	slog.Info("OL PebbleDB opened", "path", path, "formatVersion", db.FormatMajorVersion())
 	return &OLStore{db: db}, nil
 }
 
@@ -117,9 +118,9 @@ func (s *OLStore) ImportDump(dumpType, filePath string, progress func(int)) erro
 		}
 		if prev.LinesProcessed > 0 && prev.ImportProgress < 1.0 && prev.FileSize == fileSize {
 			skipLines = prev.LinesProcessed
-			slog.Info("Resuming import from line", "value0", "dumpType", "dumpType", dumpType, "skipLines", skipLines)
+			slog.Info("Resuming import from line", "dumpType", dumpType, "skipLines", skipLines)
 		} else if prev.ImportProgress >= 1.0 && prev.FileSize == fileSize {
-			slog.Info("import already complete ( records), skipping", "value0", "dumpType", "dumpType", dumpType, "value1", prev.RecordCount)
+			slog.Info("import already complete, skipping", "dumpType", dumpType, "recordCount", prev.RecordCount)
 			if progress != nil {
 				progress(int(prev.RecordCount))
 			}

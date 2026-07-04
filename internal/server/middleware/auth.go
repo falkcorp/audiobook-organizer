@@ -1,7 +1,7 @@
 // file: internal/server/middleware/auth.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 83c42ecb-1df2-4baf-9890-3f91ab4db6fe
-// last-edited: 2026-06-04
+// last-edited: 2026-07-03
 
 package middleware
 
@@ -176,7 +176,7 @@ func handleAPIKeyAuth(c *gin.Context, store interface {
 	hash := database.HashAPIKeyToken(rawToken)
 	key, err := store.GetAPIKeyByHash(hash)
 	if err != nil {
-		slog.Info("lookup error hash err", "value0", hash[:8], "err", err)
+		slog.Info("lookup error hash err", "hashPrefix", hash[:8], "err", err)
 		httputil.RespondWithInternalError(c, "internal error")
 		c.Abort()
 		return

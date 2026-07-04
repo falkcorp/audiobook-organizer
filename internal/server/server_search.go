@@ -1,7 +1,7 @@
 // file: internal/server/server_search.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 12815699-f9ea-4788-9af3-2e854d710315
-// last-edited: 2026-06-23
+// last-edited: 2026-07-03
 
 package server
 
@@ -86,7 +86,7 @@ func (s *Server) buildSearchIndexIfEmpty() {
 			}
 			doc := search.BookToDoc(store, &books[i])
 			if err := s.searchIndex.IndexBook(doc); err != nil {
-				slog.Warn("search backfill index", "value0", books[i].ID, "err", err)
+				slog.Warn("search backfill index", "bookID", books[i].ID, "err", err)
 				continue
 			}
 			indexed++

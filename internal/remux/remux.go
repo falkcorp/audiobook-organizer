@@ -1,5 +1,5 @@
 // file: internal/remux/remux.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-07-03
 
@@ -97,14 +97,14 @@ func (r *Remuxer) RemuxMalformedFiles(ctx context.Context) {
 
 		// taglib failed — attempt to remux with ffmpeg.
 		if err := RemuxFile(path); err != nil {
-			slog.Warn("malformed M4B remux failed for", "value0", "path", "path", path, "err", err)
+			slog.Warn("malformed M4B remux failed for", "path", path, "err", err)
 			failed++
 			return nil
 		}
 
 		// Verify the output is now readable.
 		if _, err := taglib.ReadTags(path); err != nil {
-			slog.Warn("malformed M4B remux produced unreadable file for", "value0", "path", "path", path, "err", err)
+			slog.Warn("malformed M4B remux produced unreadable file for", "path", path, "err", err)
 			failed++
 			return nil
 		}

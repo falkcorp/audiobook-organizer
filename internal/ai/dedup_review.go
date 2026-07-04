@@ -1,6 +1,7 @@
 // file: internal/ai/dedup_review.go
-// version: 2.0.1
+// version: 2.0.2
 // guid: b2e7c3d1-4a58-4f96-9e0b-7d3a1c8f5b24
+// last-edited: 2026-07-03
 
 package ai
 
@@ -174,7 +175,7 @@ func dedupReviewCallback(ctx context.Context, itemsJSON []byte, results []aijobs
 	for pairIdx, candID := range payload.ByIndex {
 		c, ok := dedupVerdictApplier.LookupCandidate(candID)
 		if !ok {
-			slog.Info("dedup_review candidate (pair ) not found — skipping", "value0", "candID", "candID", candID, "pairIdx", pairIdx)
+			slog.Info("dedup_review candidate (pair) not found — skipping", "candID", candID, "pairIdx", pairIdx)
 			continue
 		}
 		byIndex[pairIdx] = c

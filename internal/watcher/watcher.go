@@ -1,6 +1,7 @@
 // file: internal/watcher/watcher.go
-// version: 2.1.1
+// version: 2.1.2
 // guid: b2c3d4e5-f6a7-8901-bcde-f23456789012
+// last-edited: 2026-07-03
 
 package watcher
 
@@ -120,7 +121,7 @@ func (w *Watcher) addRecursive(root string) error {
 		}
 		if d.IsDir() {
 			if watchErr := w.fsWatcher.Add(path); watchErr != nil {
-				slog.Warn("watcher cannot watch", "value0", "path", "path", path, "watchErr", watchErr)
+				slog.Warn("watcher cannot watch", "path", path, "watchErr", watchErr)
 			}
 		}
 		return nil

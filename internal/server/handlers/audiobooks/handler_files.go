@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_files.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 82f8d1f7-46d5-4ead-b5c1-ba796fd785f9
-// last-edited: 2026-07-01
+// last-edited: 2026-07-03
 
 // File / segment endpoints for the audiobooks domain: segment listing,
 // book-file listing + patch, track-info extraction, relocate, and segment
@@ -298,7 +298,7 @@ func (h *Handler) ExtractTrackInfo(c *gin.Context) {
 			files[i].TrackCount = *info.TotalTracks
 		}
 		if err := store.UpdateBookFile(files[i].ID, &files[i]); err != nil {
-			slog.Warn("failed to update book file track info", "value0", files[i].ID, "err", err)
+			slog.Warn("failed to update book file track info", "fileID", files[i].ID, "err", err)
 			continue
 		}
 		updated++

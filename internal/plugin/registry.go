@@ -1,5 +1,7 @@
 // file: internal/plugin/registry.go
-// version: 1.2.1
+// version: 1.2.2
+// guid: 73ed97c1-8466-4a1b-bc07-cb81ce34c502
+// last-edited: 2026-07-03
 
 package plugin
 
@@ -31,7 +33,7 @@ func Register(p Plugin) {
 	globalRegistry.mu.Lock()
 	defer globalRegistry.mu.Unlock()
 	if _, exists := globalRegistry.plugins[p.ID()]; exists {
-		slog.Warn("plugin %q already registered, skipping duplicate")
+		slog.Warn("plugin already registered, skipping duplicate", "id", p.ID())
 		return
 	}
 	globalRegistry.plugins[p.ID()] = p

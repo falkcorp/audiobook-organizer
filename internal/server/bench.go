@@ -1,6 +1,7 @@
 // file: internal/server/bench.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 5e6f7a8b-9c0d-1234-ef01-555555555555
+// last-edited: 2026-07-03
 
 //go:build bench
 
@@ -142,7 +143,7 @@ func (s *Server) benchSubmit(c *gin.Context) {
 	// Run in background
 	go func() {
 		ctx := context.Background()
-		slog.Info("bench Starting run models mode server", "req", req.Models, "req", req.Mode, "serverURL", serverURL)
+		slog.Info("bench Starting run models mode server", "models", req.Models, "mode", req.Mode, "serverURL", serverURL)
 
 		authorData, err := benchFetchAuthors(serverURL)
 		if err != nil {

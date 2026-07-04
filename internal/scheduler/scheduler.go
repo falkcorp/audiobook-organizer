@@ -1,7 +1,7 @@
 // file: internal/scheduler/scheduler.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3f7a9c21-b4d8-4e05-a6f2-8c1d0e3b7a94
-// last-edited: 2026-06-16
+// last-edited: 2026-07-03
 
 // Package scheduler implements the unified task scheduling system.
 // TaskScheduler manages all registered tasks, their schedules, and manual
@@ -185,7 +185,7 @@ func (ts *TaskScheduler) Start(shutdown chan struct{}, wg *sync.WaitGroup) {
 			defer wg.Done()
 			ticker := time.NewTicker(60 * time.Second)
 			defer ticker.Stop()
-			slog.Info("Maintenance window enabled 00 - 00", "value0", config.AppConfig.Maintenance.WindowStart, "value1", config.AppConfig.Maintenance.WindowEnd)
+			slog.Info("Maintenance window enabled", "windowStart", config.AppConfig.Maintenance.WindowStart, "windowEnd", config.AppConfig.Maintenance.WindowEnd)
 			for {
 				select {
 				case <-ticker.C:

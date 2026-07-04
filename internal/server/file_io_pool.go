@@ -1,7 +1,7 @@
 // file: internal/server/file_io_pool.go
-// version: 2.3.2
+// version: 2.3.4
 // guid: c4d5e6f7-a8b9-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-05-19
+// last-edited: 2026-07-03
 //
 // Bounded worker pool for file I/O operations (cover embed, tag write,
 // rename). Tracks pending jobs in PebbleDB so they survive restarts.
@@ -122,7 +122,7 @@ func (p *FileIOPool) worker(id int) {
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
-					slog.Error("file I/O worker panicked on book (op)", "id", id, "job", job.bookID, "job", job.opType, "r", r)
+					slog.Error("file I/O worker panicked on book (op)", "workerID", id, "bookID", job.bookID, "opType", job.opType, "r", r)
 				}
 			}()
 			job.fn()
@@ -335,7 +335,7 @@ func recoverInterruptedFileOps(pool *FileIOPool) {
 
 		fn, ok := lookupFileOpRecovery(job.OpType)
 		if !ok {
-			slog.Warn("no recovery handler for op type %q (book ), removing stale key", "opType", job.OpType, "bookID", job.BookID)
+			slog.Warn("no recovery handler for op type, removing stale key", "opType", job.OpType, "bookID", job.BookID)
 			_ = store.DeleteRaw(kv.Key)
 			continue
 		}
