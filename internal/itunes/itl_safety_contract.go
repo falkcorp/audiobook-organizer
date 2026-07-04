@@ -24,6 +24,7 @@ package itunes
 
 import (
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 )
@@ -539,9 +540,17 @@ func mhohNonStandardLen(hohmType uint32) bool {
 //     markers (damaged-4 leaked staging-dir paths).
 //
 // Catches: K4 (URL written into 0x0D) and the staging-path leak.
-func guardLocationForm(_, after []byte, _ *hdfmHeader, _ ContractConfig) GuardResult {
+func guardLocationForm(before, after []byte, _ *hdfmHeader, _ ContractConfig) GuardResult {
 	const name = "location-form"
 	var viol []Violation
+
+	// Pair-consistency (0x0B decodes to the same path as 0x0D) is a NO-NEW
+	// check: the golden corpus proves iTunes itself leaves stale pairs behind
+	// (e.g. a 0x0D missing "iTunes Media" while its 0x0B still has it), so an
+	// absolute assertion fails known-good libraries forever (K16 follow-up).
+	// Format checks below remain absolute. In audit mode (before == nil)
+	// pre-existing mismatches are iTunes-authored warts, not our corruption.
+	preMismatch := collectPairMismatchPaths(before)
 
 	forEachTrackLocations(after, func(trackOffset int, loc0D, loc0B string, has0D, has0B bool) {
 		// Staging-dir leak: applies to either field, present or not.
@@ -567,8 +576,12 @@ func guardLocationForm(_, after []byte, _ *hdfmHeader, _ ContractConfig) GuardRe
 		if strings.Contains(strings.ToLower(loc0D), "file://") {
 			viol = append(viol, Violation{Offset: trackOffset, Chunk: "mhoh", Message: fmt.Sprintf("0x0D Location contains 'file://' — iTunes stores a native path here (K4): %q", truncStr(loc0D))})
 		}
-		if strings.Contains(loc0D, "%") {
-			viol = append(viol, Violation{Offset: trackOffset, Chunk: "mhoh", Message: fmt.Sprintf("0x0D Location contains '%%'-escape — native path must be unescaped (K4): %q", truncStr(loc0D))})
+		// Only an actual %XX escape TRIPLE marks an escaped path leaking into
+		// 0x0D
+		// — real filenames legitimately contain bare '%' ("Still 100% Human",
+		// "1% Lifesteal"; both present in the golden corpus).
+		if containsEscapeTriple(loc0D) {
+			viol = append(viol, Violation{Offset: trackOffset, Chunk: "mhoh", Message: fmt.Sprintf("0x0D Location contains '%%XX'-escape — native path must be unescaped (K4): %q", truncStr(loc0D))})
 		}
 
 		// Sibling 0x0B must be a round-tripping file://localhost/ URL.
@@ -580,12 +593,67 @@ func guardLocationForm(_, after []byte, _ *hdfmHeader, _ ContractConfig) GuardRe
 			viol = append(viol, Violation{Offset: trackOffset, Chunk: "mhoh", Message: fmt.Sprintf("0x0B LocalURL is not a 'file://localhost/' URL: %q", truncStr(loc0B))})
 			return
 		}
-		if want := winPathToLocalURL(loc0D); want != loc0B {
-			viol = append(viol, Violation{Offset: trackOffset, Chunk: "mhoh", Message: fmt.Sprintf("0x0B LocalURL does not round-trip 0x0D path: got %q, want %q", truncStr(loc0B), truncStr(want))})
+		// Round-trip comparison is SEMANTIC (percent-decoded), not byte-exact:
+		// iTunes leaves RFC-3986 sub-delims like '(' ')' ',' unescaped in 0x0B
+		// while winPathToLocalURL escapes them — both render the same path
+		// (K16 follow-up: 22,902 golden blocks differ only in escape strictness).
+		// And it is a NO-NEW check: mismatched pairs already in `before` (or, in
+		// audit mode, in the library itself) are iTunes-authored, not ours.
+		if want := winPathToLocalURL(loc0D); want != loc0B && !localURLsEquivalent(want, loc0B) {
+			if _, preexisting := preMismatch[loc0D]; !preexisting && before != nil {
+				viol = append(viol, Violation{Offset: trackOffset, Chunk: "mhoh", Message: fmt.Sprintf("0x0B LocalURL does not round-trip 0x0D path (newly introduced): got %q, want %q", truncStr(loc0B), truncStr(want))})
+			}
 		}
 	})
 
 	return GuardResult{Guard: name, Violations: viol}
+}
+
+// localURLsEquivalent reports whether two file://localhost/ URLs decode to the
+// same path — equal after percent-decoding. WHY: escape STRICTNESS varies
+// (iTunes leaves '(' ')' ',' etc. raw; RFC-3986 encoders escape them) but the
+// decoded path is the identity that matters. Malformed escapes fail closed.
+func localURLsEquivalent(a, b string) bool {
+	da, errA := url.PathUnescape(a)
+	db, errB := url.PathUnescape(b)
+	if errA != nil || errB != nil {
+		return false
+	}
+	return da == db
+}
+
+// containsEscapeTriple reports whether s contains a %XX percent-escape triple —
+// the K4 signature of an escaped URL leaking into the native-path 0x0D field.
+// A bare '%' is NOT flagged: real filenames contain it ("Still 100% Human").
+func containsEscapeTriple(s string) bool {
+	for i := 0; i+2 < len(s); i++ {
+		if s[i] == '%' && isHexDigit(s[i+1]) && isHexDigit(s[i+2]) {
+			return true
+		}
+	}
+	return false
+}
+
+func isHexDigit(c byte) bool {
+	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+}
+
+// collectPairMismatchPaths returns the set of 0x0D paths in `data` whose 0x0B
+// sibling does not (semantically) round-trip. nil input → empty set.
+func collectPairMismatchPaths(data []byte) map[string]struct{} {
+	out := make(map[string]struct{})
+	if data == nil {
+		return out
+	}
+	forEachTrackLocations(data, func(_ int, loc0D, loc0B string, has0D, has0B bool) {
+		if !has0D || !has0B {
+			return
+		}
+		if want := winPathToLocalURL(loc0D); want != loc0B && !localURLsEquivalent(want, loc0B) {
+			out[loc0D] = struct{}{}
+		}
+	})
+	return out
 }
 
 // ---------------------------------------------------------------------------

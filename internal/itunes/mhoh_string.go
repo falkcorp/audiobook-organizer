@@ -1,6 +1,7 @@
 // file: internal/itunes/mhoh_string.go
-// version: 1.0.0
+// version: 2.0.0
 // guid: 6f3b9d12-4a87-4c0e-9b21-7e5d2a8c1f04
+// last-edited: 2026-07-03
 
 // iTunes-conformant mhoh string encoders/decoders (fable5 TASK-005, CRIT-1).
 //
@@ -17,13 +18,22 @@
 //     is a corruption signature foreign to iTunes (CRIT-1 / SPEC §1 K3).
 //
 //  2. iTunes signals string encoding at byte +24 (a little-endian u32), NOT at
-//     +27. Corpus-observed values: 0=ASCII/percent-encoded, 1=Windows-1252 /
-//     Latin-1, 2=UTF-8, 3=UTF-16LE. The allowed set per hohmType is the
+//     +27. Corpus-observed values: 0=ASCII/percent-encoded, 1=UTF-16LE,
+//     2=UTF-8, 3=Windows-1252/Latin-1. The allowed set per hohmType is the
 //     authoritative ITunesMhohEncoding table (T002).
 //
+//     K16 CORRECTION (2026-07-03, SPEC 3): the original T002/T005 work assigned
+//     1=Latin-1 and 3=UTF-16LE — EXACTLY SWAPPED. Byte-level probes of
+//     golden-library blocks are unambiguous: at24==3 blocks hold single-byte
+//     text ("W:\itunes\...", "MPEG audio file") and at24==1 blocks hold
+//     UTF-16LE (curly quotes as `19 20`). The inverted table made every
+//     decoded golden string mojibake (location-form fired on known-good
+//     libraries) and made our writer stamp at24 values iTunes interprets as
+//     the OTHER charset — real write-path corruption on rewritten strings.
+//
 //  3. The OLD code, when it fell back to UTF-16, wrote UTF-16 BIG-endian. The
-//     corpus shows iTunes uses at24==3 == UTF-16 LITTLE-endian. Writing the
-//     correct Unicode string with the wrong byte order is itself corruption
+//     corpus shows iTunes' UTF-16 blocks (at24==1) are LITTLE-endian. Writing
+//     the correct Unicode string with the wrong byte order is itself corruption
 //     (SPEC §1b rule 4). encodeMhohITunes emits UTF-16LE.
 //
 // encodeMhohITunes is the single iTunes-conformant encoder. It is driven by the
@@ -61,9 +71,9 @@ const mhohFixedHeaderTotal = 40
 // These are the LITTLE-ENDIAN u32 written at byte offset +24 of an mhoh block.
 const (
 	at24ASCII   uint32 = 0 // ASCII / percent-encoded (0x0B LocalURL, advisory strings)
-	at24Latin1  uint32 = 1 // Windows-1252 / Latin-1 (Latin text)
+	at24UTF16LE uint32 = 1 // UTF-16 LITTLE-endian (non-Latin text) — K16-corrected
 	at24UTF8    uint32 = 2 // UTF-8 / pure ASCII (0x0B encoded URLs)
-	at24UTF16LE uint32 = 3 // UTF-16 LITTLE-endian (non-Latin text)
+	at24Latin1  uint32 = 3 // Windows-1252 / Latin-1 (Latin text) — K16-corrected
 )
 
 // MhohHeaderBytes carries the deterministic per-block header values the LE
@@ -90,12 +100,12 @@ type MhohHeaderBytes struct {
 //   - {0} or {2}: ASCII/percent-encoded field (e.g. 0x0B LocalURL). Encoded as
 //     raw bytes; at24 = the single allowed value (2 preferred over 0 when both
 //     are allowed, matching iTunes' dominant rendering for encoded URLs).
-//   - {3} only: UTF-16LE always, even for ASCII (e.g. 0x06 Kind — iTunes encodes
-//     Kind as UTF-16LE uniformly).
-//   - contains both 1 and 3: latin1 when every rune <= 0xFF, else UTF-16LE.
-//   - {1} only: Latin-1 (errors if a rune is non-representable — handled by
-//     falling back to the type's behaviour; {1}-only types in the corpus only
-//     ever hold Latin text).
+//   - {3} only: Windows-1252 always (e.g. 0x06 Kind — iTunes encodes Kind as
+//     single-byte text uniformly; the strings come from an internal enum).
+//   - contains both 1 and 3: latin1 (3) when every rune <= 0xFF, else
+//     UTF-16LE (1) — matching the golden distribution (Latin-representable
+//     names/locations dominate at 3; curly-quote/CJK strings carry 1).
+//   - {1} only: UTF-16LE always.
 func encodeMhohITunes(hohmType uint32, s string) ([]byte, MhohHeaderBytes, error) {
 	entry, ok := ITunesMhohEncoding[hohmType]
 	if !ok {
@@ -140,13 +150,13 @@ func encodeMhohITunes(hohmType uint32, s string) ([]byte, MhohHeaderBytes, error
 
 // chooseAt24 picks the corpus-allowed encoding indicator for s given the type's
 // AllowedAt24 set. WHY the priority order: it mirrors what iTunes itself writes —
-// UTF-16-only types always 3; URL/ASCII types take their single allowed code;
-// {1,3} text types use latin1 for Latin-representable strings and UTF-16LE
-// otherwise.
+// UTF-16-only types always 1; URL/ASCII types take their single allowed code;
+// {1,3} text types use latin1 (3) for Latin-representable strings and
+// UTF-16LE (1) otherwise.
 func chooseAt24(entry MhohEncodingEntry, s string) uint32 {
 	allows := func(v uint32) bool { return entry.AllowedAt24Contains(v) }
 
-	// UTF-16LE-only types (e.g. 0x06 Kind): always 3.
+	// UTF-16LE-only types: always 1.
 	if allows(at24UTF16LE) && !allows(at24Latin1) && !allows(at24ASCII) && !allows(at24UTF8) {
 		return at24UTF16LE
 	}
@@ -193,8 +203,8 @@ func isLatin1Representable(s string) bool {
 	return true
 }
 
-// encodeUTF16LE encodes s as UTF-16 LITTLE-endian (at24==3). WHY little-endian:
-// the corpus shows iTunes' at24==3 blocks are UTF-16LE; our OLD encoder wrote
+// encodeUTF16LE encodes s as UTF-16 LITTLE-endian (at24==1). WHY little-endian:
+// byte-level probes show iTunes' UTF-16 blocks are LE; our OLD encoder wrote
 // big-endian, which was part of the CRIT-1 corruption (SPEC §1b rule 4).
 // Astral-plane runes (> U+FFFF) are emitted as surrogate pairs.
 func encodeUTF16LE(s string) []byte {
@@ -217,7 +227,7 @@ func encodeUTF16LE(s string) []byte {
 	return buf
 }
 
-// decodeMhohUTF16LE decodes UTF-16 LITTLE-endian bytes (at24==3) into a string,
+// decodeMhohUTF16LE decodes UTF-16 LITTLE-endian bytes (at24==1) into a string,
 // handling surrogate pairs and embedded NULs. The inverse of encodeUTF16LE.
 // (Distinct from smart_criteria_reader.go's decodeUTF16LE, which stops at the
 // first NUL and ignores surrogates — wrong for full mhoh string payloads.)
@@ -253,7 +263,8 @@ func decodeMhohUTF16LE(data []byte) string {
 //     legacy flag at +27 (decodeHohmString: 1=UTF-16BE, 2=UTF-8, 3=Win-1252,
 //     0=ASCII). This keeps libraries we previously wrote parseable.
 //   - byte +27 == 0  → iTunes-conformant block. Read the +24 u32 indicator and
-//     decode per the corpus semantics (0/2=ASCII/UTF-8, 1=Latin-1, 3=UTF-16LE).
+//     decode per the corpus semantics (0/2=ASCII/UTF-8, 1=UTF-16LE, 3=Latin-1;
+//     K16-corrected 2026-07-03 — the original assignment had 1 and 3 swapped).
 //
 // The dual path is required because the two conventions assign DIFFERENT
 // meanings to the same numeric value (legacy 3 = Win-1252; corpus 3 = UTF-16LE),
