@@ -224,10 +224,16 @@ func (b *WriteBackBatcher) EnqueueRemove(pid string) {
 	b.pendingRemoves[strings.ToLower(pid)] = true
 	b.resetTimer()
 
-	// Mark as removed in DB (best-effort, outside lock)
+	// Mark as removed in DB (best-effort, outside lock). Failure leaves a
+	// stale external-id mapping that later re-triggers dispatch for an
+	// already-removed track — log it so the drift is visible instead of
+	// discarding the error.
 	go func() {
-		if b.store != nil {
-			_ = b.store.MarkExternalIDRemoved("itunes", pid)
+		if b.store == nil {
+			return
+		}
+		if err := b.store.MarkExternalIDRemoved("itunes", pid); err != nil {
+			slog.Warn("iTunes write-back MarkExternalIDRemoved failed; external-id map now stale", "pid", pid, "err", err)
 		}
 	}()
 }
@@ -618,7 +624,22 @@ var (
 	itlApplyOperationsFn = itunes.ApplyITLOperations
 	parseITLFn           = itunes.ParseITL
 	itlPinLKGFn          = itunes.PinLastKnownGood
+	itlAuditFileFn       = auditITLFile
 )
+
+// auditITLFile re-reads a written ITL and runs the full ITLSafetyContract
+// (AuditITL) on it — the service wrapper's equivalent of the hardened
+// path's step-5 re-read validation.
+func auditITLFile(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("re-reading %s: %w", path, err)
+	}
+	if v := itunes.AuditITL(data); !v.Pass {
+		return fmt.Errorf("%s", v.Error())
+	}
+	return nil
+}
 
 // SafeWriteITL performs a backup → write-temp → validate-temp →
 // rename → validate-final → cleanup cycle for ITL write-back. At
@@ -675,6 +696,16 @@ func SafeWriteITL(itlPath string, ops itunes.ITLOperationSet) error {
 	if err := itlValidateFn(tmpPath); err != nil {
 		_ = os.Remove(tmpPath)
 		return fmt.Errorf("validation of temp ITL failed (original preserved): %w", err)
+	}
+
+	// Step 4b: run the FULL safety contract on the re-read temp bytes —
+	// the same step-5 re-read audit the hardened itunes.SafeWriteITL
+	// performs. ValidateITL only proves the header decodes and a track
+	// exists; AuditITL catches encode/encrypt/deflate-path corruption
+	// (the historic risk area) before the rename lands it.
+	if err := itlAuditFileFn(tmpPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("contract audit of temp ITL failed (original preserved): %w", err)
 	}
 
 	// Step 5: rename .tmp over the original.
