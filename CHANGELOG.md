@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.107.0 -->
+<!-- version: 3.108.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-04 -->
 
@@ -8,6 +8,45 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 4, 2026 - calibration observability: best-achieved precision + high-cosine not_dup sample (dedup.calibrate-embedding-thresholds)
+
+- **`feat(dedup)`** — after tonight's orphan-embedding cleanup and gold-label
+  rebuild, `dedup.calibrate-embedding-thresholds` ran clean
+  (`skipped_dim=3, skipped_missing=110`, scoring 1,661 pairs: 953 true_dup,
+  708 not_dup) but reported `high=target-not-met low=target-not-met` — no
+  cosine cut-point in `[0.80, 0.99]` reached even the 90% low-band precision
+  floor. The op previously reported only `Met=false` on a miss, with no way
+  to tell "some gold labels are wrong" (fixable) apart from "bge-m3 cosine
+  genuinely can't separate this task at that precision" (a model ceiling,
+  not a bug) without manually re-deriving the sweep by hand.
+  `internal/plugins/dedup/calibrate_embedding_thresholds.go` adds two
+  report-only diagnostics, no new writes/apply mode:
+  1. `bandRecommendation` gains `BestPrecisionAchieved` /
+     `BestPrecisionThreshold` / `BestPrecisionSampleSize` — even on a miss,
+     `sweepThreshold` now reports the highest precision actually reached at
+     any cut-point with >= 5 pairs at/above it (the floor avoids a spurious
+     100% off a single lucky pair). `describeBand` and the structured log
+     fields (`*_best_precision_achieved` etc.) surface this so a miss shows
+     "how close we got," not just a boolean.
+  2. A bounded (10) sample of the highest-cosine `not_dup`-labeled pairs is
+     now logged via `reporter.Logger()` — entity IDs, cosine score, and book
+     titles (via `p.store.GetBookByID`, best-effort/nil-safe). These are, by
+     construction, the pairs actively dragging precision down, so an
+     operator can spot-check them: a real duplicate in the list points at a
+     mislabeled gold example; two genuinely different books at high cosine
+     points at a model-ceiling.
+  `calibrationPair` now carries `entityAID`/`entityBID` alongside
+  `label`/`cosine` so the sample can identify its pairs; this is additive to
+  the sweep math, which is unchanged. Tests added in
+  `internal/plugins/dedup/calibrate_embedding_thresholds_test.go`: best-achieved
+  precision is computed correctly on a miss including the minimum-sample-size
+  floor (`TestSweepThreshold_BestPrecisionReportedOnMiss`,
+  `TestSweepThreshold_BestPrecisionZeroWhenNoCutPointMeetsFloor`), and the
+  not_dup sample is sorted descending by cosine and bounded to the requested
+  limit (`TestNotDupHighCosineSample_SortedDescendingAndBounded`). Out of
+  scope: sweep targets/range/step and precision math are unchanged; no gold
+  labels or embeddings touched; not run against prod as part of this change.
 
 #### July 4, 2026 - retroactive orphaned-embedding cleanup op (dedup.cleanup-orphan-embeddings)
 

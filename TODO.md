@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.60.0 -->
+<!-- version: 9.61.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-04 -->
 
@@ -37,7 +37,15 @@ adversarially verified). Ranked roadmap: [`docs/consultancy/00-ROADMAP.md`](docs
 > **Owner-greenlight queue status (2026-07-03):**
 > - ✅ `dedup.drain-stale` (#1768) — dry-run AND apply DONE on prod: 12,531 inspected, 3,076 reclassified, 9,455 kept
 > - ✅ Recovery audit dry-run DONE: 0 BookSigV1 wipes; 397 descriptions recoverable; apply mode shipped #1776, restore run post-deploy
-> - ⏳ `dedup.calibrate-embedding-thresholds` (#1774) — run after re-embed completes, review, set `embedding_thresholds_by_model`, then full-scan (owner-gated)
+> - ⏳ `dedup.calibrate-embedding-thresholds` (#1774) — run after re-embed completes, review, set `embedding_thresholds_by_model`, then full-scan (owner-gated).
+>   **2026-07-04:** post-orphan-cleanup + gold-label-rebuild run came back
+>   `high=target-not-met low=target-not-met` (1,661 pairs scored, 953 true_dup /
+>   708 not_dup) — no cut-point in `[0.80, 0.99]` reaches even the 90% low
+>   target. Added observability (best-achieved-precision + highest-cosine
+>   not_dup sample, report-only, no code changed to targets/math) to
+>   distinguish mislabeled gold vs. a genuine bge-m3 cosine ceiling — see
+>   CHANGELOG. Next: re-run the op and read the new diagnostic fields/sample
+>   to make that call (owner-gated, not done as part of this change).
 > - ⏳ NutsDB retirement PR 2 (file/dep removal) — after prod soak of #1770's Pebble-only cutover
 > - 📋 29,083 books never had a Description — needs a metadata-fetch campaign (Audible / transcription metadata cache), separate from recovery
 
