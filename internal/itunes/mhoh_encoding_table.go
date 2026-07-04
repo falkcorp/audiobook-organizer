@@ -1,6 +1,7 @@
 // file: internal/itunes/mhoh_encoding_table.go
-// version: 1.1.0
+// version: 2.0.0
 // guid: a0dacfc4-01c3-4a83-9404-b510ca4d051a
+// last-edited: 2026-07-03
 
 // ITunesMhohEncoding is the authoritative per-hohmType encoding constant table
 // for mhoh string blocks in iTunes-authored .itl files.
@@ -40,9 +41,16 @@
 //
 // Encoding indicator values at byte +24 (not +27 as our old code assumed):
 //   0 = ASCII/percent-encoded (used exclusively by 0x0B LocalURL and similar)
-//   1 = Windows-1252 / Latin-1 (used for Latin text)
+//   1 = UTF-16LE (used for non-Latin text with characters > U+00FF)
 //   2 = UTF-8 / pure ASCII (used by 0x0B LocalURL for encoded URLs)
-//   3 = UTF-16LE (used for non-Latin text with characters > U+00FF)
+//   3 = Windows-1252 / Latin-1 (used for Latin text)
+//
+// K16 CORRECTION (2026-07-03): the 2026-06-09 derivation recorded the VALUE
+// SETS correctly but assigned the 1/3 semantics backwards. Byte-level probes
+// of golden blocks (see mhoh_string.go and SPEC 3 §6) prove at24==3 carries
+// single-byte text and at24==1 carries UTF-16LE. The AllowedAt24 sets below
+// are unchanged (they are numeric observations); only per-type semantic
+// commentary has been corrected.
 //
 // Note: this table covers ALL 44 text string hohmTypes found in the corpus.
 // The guard-critical types (used by our writers) are 0x02, 0x03, 0x04, 0x05,
@@ -60,7 +68,7 @@ type MhohEncodingEntry struct {
 	// encoding indicator field) in the corpus. The guard rejects any block
 	// whose +24 value is not in this set.
 	//
-	// Values seen: 0=ASCII/percent-encoded, 1=Windows-1252, 2=UTF-8, 3=UTF-16LE.
+	// Values seen: 0=ASCII/percent-encoded, 1=UTF-16LE, 2=UTF-8, 3=Windows-1252.
 	AllowedAt24 []uint32
 
 	// At27Uniform records whether byte +27 was exclusively 0x00 in the corpus.
@@ -96,8 +104,8 @@ var ITunesMhohEncoding = map[uint32]MhohEncodingEntry{
 	// --------------- Core track metadata (written by our writers) ---------------
 
 	// 0x02 = Name (track title).
-	// Corpus: 94,575 blocks. at24 ∈ {1=latin1, 3=utf16le}. +27=0 uniform.
-	// Non-zero count of 3 (utf16le) for titles with non-Latin characters.
+	// Corpus: 94,575 blocks. at24 ∈ {1=utf16le, 3=latin1}. +27=0 uniform.
+	// The minority value 1 (utf16le) appears for titles with non-Latin chars.
 	0x02: {HeaderLen: 24, AllowedAt24: []uint32{1, 3}, At27Uniform: true, Count: 94575},
 
 	// 0x03 = Album.
@@ -114,9 +122,8 @@ var ITunesMhohEncoding = map[uint32]MhohEncodingEntry{
 
 	// 0x06 = Kind (file format description, e.g. "AAC audio file").
 	// Corpus: 93,539 blocks. ONLY at24=3 observed — iTunes encodes "Kind"
-	// as UTF-16LE exclusively, even for pure-ASCII strings. +27=0 uniform.
-	// WHY: possibly because Kind strings always come from an internal enum,
-	// never from user input, and iTunes chose a uniform encoding for them.
+	// as single-byte Windows-1252 exclusively (K16-corrected; the strings are
+	// pure-ASCII values from an internal enum). +27=0 uniform.
 	0x06: {HeaderLen: 24, AllowedAt24: []uint32{3}, At27Uniform: true, Count: 93539},
 
 	// 0x0B = LocalURL (file://localhost/... percent-encoded URL, or https:// for podcasts).
@@ -130,8 +137,8 @@ var ITunesMhohEncoding = map[uint32]MhohEncodingEntry{
 	0x0B: {HeaderLen: 24, AllowedAt24: []uint32{0, 2}, At27Uniform: true, Count: 94201},
 
 	// 0x0D = Location (native Windows path, e.g. W:\itunes\...).
-	// Corpus: 93,014 blocks (1,736 are UTF-16LE-encoded for non-ASCII paths;
-	// 91,278 are Latin-1/Windows-1252).
+	// Corpus: 93,014 blocks (1,736 UTF-16LE at at24=1 for non-ASCII paths;
+	// 91,278 Latin-1/Windows-1252 at at24=3).
 	// at24 ∈ {1, 3}. +27=0 uniform; tail_zero=true.
 	0x0D: {HeaderLen: 24, AllowedAt24: []uint32{1, 3}, At27Uniform: true, Count: 93014},
 
@@ -150,7 +157,7 @@ var ITunesMhohEncoding = map[uint32]MhohEncodingEntry{
 	0x0C: {HeaderLen: 24, AllowedAt24: []uint32{1, 3}, At27Uniform: true, Count: 32289},
 
 	// 0x0E = Series / Work name (rare).
-	// Corpus: 1,915 blocks. Only at24=3 (UTF-16LE).
+	// Corpus: 1,915 blocks. Only at24=3 (Windows-1252, K16-corrected).
 	0x0E: {HeaderLen: 24, AllowedAt24: []uint32{3}, At27Uniform: true, Count: 1915},
 
 	// 0x12 = Sort Artist.

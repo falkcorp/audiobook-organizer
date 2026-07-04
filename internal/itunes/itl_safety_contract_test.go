@@ -76,7 +76,8 @@ func buildMhoh(hohmType uint32, at24 uint32, encFlag byte, str []byte) []byte {
 }
 
 // asciiMhoh builds a clean ASCII-encoded text mhoh. For 0x0D/0x0B fields iTunes
-// uses at24=1 (Windows-1252) for 0x0D and at24=0 (ASCII) for 0x0B URLs.
+// uses at24=3 (Windows-1252, K16-corrected) for 0x0D and at24=0 (ASCII) for
+// 0x0B URLs.
 func asciiMhoh(hohmType uint32, at24 uint32, s string) []byte {
 	return buildMhoh(hohmType, at24, 0x00, []byte(s))
 }
@@ -149,9 +150,9 @@ func buildMsdh(blockType int, body []byte) []byte {
 // children (or just Name+URL for podcasts with empty location).
 func buildTrackMith(tr fxTrack) []byte {
 	var children []byte
-	children = append(children, asciiMhoh(0x02, 1, tr.name)...)
+	children = append(children, asciiMhoh(0x02, 3, tr.name)...)
 	if tr.location != "" {
-		children = append(children, asciiMhoh(0x0D, 1, tr.location)...)
+		children = append(children, asciiMhoh(0x0D, 3, tr.location)...)
 		children = append(children, asciiMhoh(0x0B, 0, winPathToLocalURL(tr.location))...)
 	} else {
 		// Podcast: no 0x0D; 0x0B carries the http(s):// URL as given.
@@ -713,8 +714,8 @@ func TestLocationForm_PodcastExempt(t *testing.T) {
 // TestLocationForm_MissingSibling0B: a track with 0x0D but no 0x0B sibling fails.
 func TestLocationForm_MissingSibling0B(t *testing.T) {
 	// Build a mith with only a 0x0D child (no 0x0B).
-	children := asciiMhoh(0x02, 1, "Name")
-	children = append(children, asciiMhoh(0x0D, 1, `W:\m\a.mp3`)...)
+	children := asciiMhoh(0x02, 3, "Name")
+	children = append(children, asciiMhoh(0x0D, 3, `W:\m\a.mp3`)...)
 	mith := buildMith(10, children)
 	trackBody := append(buildMlth(1), mith...)
 	trackMsdh := buildMsdh(1, trackBody)
@@ -727,20 +728,34 @@ func TestLocationForm_MissingSibling0B(t *testing.T) {
 	}
 }
 
-// TestLocationForm_BadURLRoundTrip: a 0x0B URL that does not round-trip the 0x0D
-// path fails location-form.
+// TestLocationForm_BadURLRoundTrip: a NEWLY-INTRODUCED 0x0B URL that does not
+// round-trip the 0x0D path fails location-form in write mode. Pair
+// consistency is a no-new check (iTunes itself leaves stale pairs — see the
+// golden corpus), so audit mode (before == nil) tolerates pre-existing
+// mismatches; a clean `before` makes this mismatch new.
 func TestLocationForm_BadURLRoundTrip(t *testing.T) {
-	children := asciiMhoh(0x02, 1, "Name")
-	children = append(children, asciiMhoh(0x0D, 1, `W:\m\a.mp3`)...)
-	children = append(children, asciiMhoh(0x0B, 0, "file://localhost/W:/WRONG/path.mp3")...)
-	mith := buildMith(10, children)
-	trackMsdh := buildMsdh(1, append(buildMlth(1), mith...))
-	plMsdh := buildMsdh(2, append(buildMlph(1), buildMiph(1, buildMtph(10))...))
-	payload := append(append([]byte{}, trackMsdh...), plMsdh...)
+	buildWith0B := func(url string) []byte {
+		children := asciiMhoh(0x02, 3, "Name")
+		children = append(children, asciiMhoh(0x0D, 3, `W:\m\a.mp3`)...)
+		children = append(children, asciiMhoh(0x0B, 0, url)...)
+		mith := buildMith(10, children)
+		trackMsdh := buildMsdh(1, append(buildMlth(1), mith...))
+		plMsdh := buildMsdh(2, append(buildMlph(1), buildMiph(1, buildMtph(10))...))
+		return append(append([]byte{}, trackMsdh...), plMsdh...)
+	}
+	before := buildWith0B("file://localhost/W:/m/a.mp3")
+	after := buildWith0B("file://localhost/W:/WRONG/path.mp3")
 
-	res := guardLocationForm(nil, payload, nil, defCfg())
-	if res.Pass() {
-		t.Fatal("non-round-tripping 0x0B should fail location-form")
+	if res := guardLocationForm(before, after, nil, defCfg()); res.Pass() {
+		t.Fatal("newly non-round-tripping 0x0B should fail location-form in write mode")
+	}
+	// The same mismatch pre-existing in `before` is tolerated (no-new).
+	if res := guardLocationForm(after, after, nil, defCfg()); !res.Pass() {
+		t.Fatalf("pre-existing pair mismatch must not fail location-form: %+v", res.Violations)
+	}
+	// Audit mode tolerates iTunes-authored mismatches too.
+	if res := guardLocationForm(nil, after, nil, defCfg()); !res.Pass() {
+		t.Fatalf("audit mode must tolerate pre-existing pair mismatch: %+v", res.Violations)
 	}
 }
 

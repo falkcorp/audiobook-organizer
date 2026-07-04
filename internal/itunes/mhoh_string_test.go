@@ -43,7 +43,7 @@ func TestEncodeMhohITunes_RoundTrip(t *testing.T) {
 		hohmType uint32
 		value    string
 	}{
-		// 0x02 (Name) allows {1=latin1, 3=utf16le}.
+		// 0x02 (Name) allows {1=utf16le, 3=latin1} (K16-corrected).
 		{"ascii_name", 0x02, "The Way of Kings"},
 		{"latin1_name", 0x02, "Café Société — naïve"},
 		{"cjk_name", 0x02, "日本語のタイトル"},
@@ -54,9 +54,10 @@ func TestEncodeMhohITunes_RoundTrip(t *testing.T) {
 		{"cjk_album", 0x03, "村上春樹"},
 		{"latin1_genre", 0x05, "Fiction"},
 		{"latin1_composer", 0x0C, "Michael Kramer & Kate Reading"},
-		// 0x06 (Kind) is UTF-16LE-only in the corpus, even for ASCII.
-		{"kind_ascii_utf16", 0x06, "MPEG audio file"},
-		{"kind_unicode", 0x06, "AAC オーディオ"},
+		// 0x06 (Kind) is {3}-only = Windows-1252-only (K16-corrected): its
+		// values are ASCII enum strings. Non-Latin Kind is unrepresentable and
+		// must error — covered by TestEncodeMhohITunes_KindNonLatinErrors.
+		{"kind_ascii", 0x06, "MPEG audio file"},
 		// 0x0D (Location) Windows path, Latin-1 representable.
 		{"location_latin1", 0x0D, `W:\itunes\iTunes Media\Audiobooks\Author\book.mp3`},
 		{"location_unicode", 0x0D, `W:\itunes\著者\タイトル.m4b`},
@@ -82,7 +83,17 @@ func TestEncodeMhohITunes_Plus27AlwaysZero(t *testing.T) {
 	for _, ht := range []uint32{0x02, 0x03, 0x04, 0x05, 0x06, 0x0B, 0x0C, 0x0D, 0x64} {
 		for _, s := range []string{"ascii", "café", "日本語", "x’y"} {
 			block, ok := buildMhohLE(ht, s)
-			require.True(t, ok)
+			if !ok {
+				// Latin-1-only types (e.g. 0x06 Kind, K16-corrected) must
+				// refuse non-representable strings rather than invent an
+				// indicator; that refusal is the correct outcome here.
+				entry := ITunesMhohEncoding[ht]
+				require.False(t, entry.AllowedAt24Contains(at24UTF16LE),
+					"type 0x%X value %q: encode refused despite UTF-16LE being allowed", ht, s)
+				require.False(t, isLatin1Representable(s),
+					"type 0x%X value %q: encode refused a representable string", ht, s)
+				continue
+			}
 			require.GreaterOrEqual(t, len(block), 40)
 			assert.Equal(t, byte(0), block[27],
 				"type 0x%X value %q: byte +27 must be 0x00 (K3)", ht, s)
@@ -99,14 +110,19 @@ func TestEncodeMhohITunes_Plus27AlwaysZero(t *testing.T) {
 }
 
 // TestEncodeMhohITunes_UTF16IsLittleEndian proves the byte order: the OLD code
-// wrote UTF-16 BIG-endian; the corpus (at24==3) is LITTLE-endian. For "日" (U+65E5)
-// the LE bytes are 0xE5 0x65, NOT 0x65 0xE5.
+// wrote UTF-16 BIG-endian; iTunes' UTF-16 blocks (at24==1, K16-corrected) are
+// LITTLE-endian. For "日" (U+65E5) the LE bytes are 0xE5 0x65, NOT 0x65 0xE5.
 func TestEncodeMhohITunes_UTF16IsLittleEndian(t *testing.T) {
 	block, ok := buildMhohLE(0x02, "日") // U+65E5
 	require.True(t, ok)
 
-	// at24 must be 3 (UTF-16LE).
-	assert.Equal(t, uint32(3), binary.LittleEndian.Uint32(block[24:28]), "non-Latin → UTF-16LE (at24=3)")
+	// at24 must be 1 (UTF-16LE, K16-corrected).
+	assert.Equal(t, uint32(1), binary.LittleEndian.Uint32(block[24:28]), "non-Latin → UTF-16LE (at24=1)")
+
+	// And a non-Latin Kind (a {3}=latin1-only type) must refuse to encode
+	// rather than invent an indicator iTunes never writes for that field.
+	_, _, err := encodeMhohITunes(0x06, "AAC オーディオ")
+	assert.Error(t, err, "non-Latin Kind must error (latin1-only type)")
 
 	strLen := int(binary.LittleEndian.Uint32(block[28:32]))
 	require.Equal(t, 2, strLen, "one BMP rune → 2 bytes")
