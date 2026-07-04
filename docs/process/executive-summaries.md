@@ -1,7 +1,7 @@
 <!-- file: docs/process/executive-summaries.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: b608794a-eac5-44bc-95b9-643872bd0ca8 -->
-<!-- last-edited: 2026-07-03 -->
+<!-- last-edited: 2026-07-04 -->
 
 # Executive Summary Convention
 
@@ -48,10 +48,13 @@ to the merged PR at the top of the summary.
      not abstract correctness.
    - **The fix** — what was actually done, in one or two sentences.
 
-Write at a 9th-grade reading level: short sentences, no unexplained
-acronyms (spell out or define anything like PID, ECB, mhoh on first use if
-it must appear at all — prefer avoiding it), no code snippets, no file
-paths in the body (those belong in the spec, not the summary).
+Write at a 12th-grade / college-freshman reading level: clear sentences,
+but more technical detail than a pure lay summary — it's fine to name the
+actual mechanism (a specific check, flag, or concept) as long as it's
+explained in context. Define any acronym on first use (PID, ECB, mhoh,
+etc.) rather than assuming the reader already knows it. Avoid code
+snippets and file paths in the body (those belong in the spec, not the
+summary) — describe behavior and mechanism in prose instead.
 
 ## Workflow
 
