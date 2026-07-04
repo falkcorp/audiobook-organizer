@@ -1,5 +1,5 @@
 // file: web/src/pages/Library.tsx
-// version: 1.76.0
+// version: 1.77.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
 // last-edited: 2026-07-03
 
@@ -133,11 +133,19 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     1,
     parseInt(searchParams.get('page') || localStorage.getItem(STORAGE_KEYS.LIBRARY_PAGE) || '1', 10)
   );
-  const initialItemsPerPage = Math.max(
-    10,
-    parseInt(
-      searchParams.get('limit') || localStorage.getItem(STORAGE_KEYS.LIBRARY_ITEMS_PER_PAGE) || '20',
-      10
+  // Clamp both ends: an unclamped ?limit= URL (or stale localStorage) can
+  // request the whole 44K-book library into the DOM — same OOM class as the
+  // useLibraryCache leak. 1000 is the largest offered page-size option.
+  const initialItemsPerPage = Math.min(
+    1000,
+    Math.max(
+      10,
+      parseInt(
+        searchParams.get('limit') ||
+          localStorage.getItem(STORAGE_KEYS.LIBRARY_ITEMS_PER_PAGE) ||
+          '20',
+        10
+      ) || 20
     )
   );
   const [searchQuery, setSearchQuery] = useState(initialSearch);
