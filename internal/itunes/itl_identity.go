@@ -1,5 +1,5 @@
 // file: internal/itunes/itl_identity.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4f8a2b1c-9d3e-4c7a-b5f6-1e2d3c4b5a69
 // last-edited: 2026-07-03
 //
@@ -24,6 +24,8 @@
 package itunes
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -60,7 +62,28 @@ type LibraryIdentity struct {
 	PlaylistCount int       `json:"playlist_count"`
 	SampleStride  int       `json:"sample_stride"`
 	PIDSample     []string  `json:"pid_sample"` // evenly-spaced track PIDs, payload order
-	UpdatedAt     time.Time `json:"updated_at"`
+	// FileSHA256 is the hex SHA-256 of the exact ON-DISK bytes our last
+	// successful write produced (Tier 4 / K17): a mismatch on the next read
+	// means an external writer (iTunes) touched the file in between, so the
+	// content guards must vet a foreign state, not our own last output.
+	FileSHA256 string    `json:"file_sha256,omitempty"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+// FileSHA256Hex returns the hex SHA-256 of raw library file bytes, the value
+// stored in LibraryIdentity.FileSHA256.
+func FileSHA256Hex(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+// MatchesFileSHA reports whether data hashes to the recorded FileSHA256.
+// Returns true when no checksum is recorded (nothing to contradict).
+func (id *LibraryIdentity) MatchesFileSHA(data []byte) bool {
+	if id == nil || id.FileSHA256 == "" {
+		return true
+	}
+	return FileSHA256Hex(data) == id.FileSHA256
 }
 
 // ExtractLibraryPIDHex returns the Library Persistent ID from an hdfm header

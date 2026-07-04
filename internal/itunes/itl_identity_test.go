@@ -208,6 +208,79 @@ func TestIdentitySidecarRoundtrip(t *testing.T) {
 	}
 }
 
+// TestChecksumContinuity (K17): a successful write records the SHA-256 of the
+// exact on-disk bytes; a subsequent external modification is detectable.
+func TestChecksumContinuity(t *testing.T) {
+	dir := t.TempDir()
+	path := writeFixtureITL(t, dir, "iTunes Library.itl", buildCleanPayload())
+
+	if _, err := SafeWriteITL(path, identityMutate); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	id, err := LoadLibraryIdentity(path)
+	if err != nil || id == nil {
+		t.Fatalf("sidecar: %v", err)
+	}
+	if id.FileSHA256 == "" {
+		t.Fatal("FileSHA256 not recorded after successful write")
+	}
+	onDisk, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !id.MatchesFileSHA(onDisk) {
+		t.Fatal("recorded checksum must match the bytes on disk")
+	}
+	// External writer (iTunes) modifies the file → continuity broken.
+	if id.MatchesFileSHA(append(append([]byte(nil), onDisk...), 0x00)) {
+		t.Fatal("modified bytes must not match the recorded checksum")
+	}
+	// No recorded checksum → nothing to contradict.
+	if !(&LibraryIdentity{}).MatchesFileSHA(onDisk) {
+		t.Fatal("empty checksum must match (no anchor)")
+	}
+}
+
+// TestApplyOps_MagnitudeArming (K14/K17): ApplyITLOperations derives
+// ExpectedTrackCount from the sidecar's validated count plus the op delta, so
+// a library whose real size is far from the sidecar projection is rejected.
+func TestApplyOps_MagnitudeArming(t *testing.T) {
+	dir := t.TempDir()
+	path := writeFixtureITL(t, dir, "iTunes Library.itl", buildCleanPayload()) // 3 tracks
+
+	payload := buildCleanPayload()
+	id, err := ComputeLibraryIdentity(payload, buildHeaderFor(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Sidecar claims the validated state had 100 tracks; the file has 3.
+	id.TrackCount = 100
+	if err := SaveLibraryIdentity(path, id); err != nil {
+		t.Fatal(err)
+	}
+
+	ops := ITLOperationSet{MetadataUpdates: []ITLMetadataUpdate{{
+		PersistentID: "100000000000000a", Name: "Renamed", Album: "Renamed", Artist: "A", Genre: "Audiobook",
+	}}}
+	// One metadata update rewrites 50% of the tiny fixture's mhoh blocks, so
+	// relax the (unrelated) rewrite cap to isolate expected-magnitude.
+	cfg := DefaultContractConfig()
+	cfg.RewrittenMhohPctMax = 100
+	_, err = ApplyITLOperations(path, path, ops, cfg)
+	if err == nil || !strings.Contains(err.Error(), "expected-magnitude") {
+		t.Fatalf("expected expected-magnitude rejection, got: %v", err)
+	}
+
+	// With an accurate sidecar count the same op succeeds.
+	id.TrackCount = 3
+	if err := SaveLibraryIdentity(path, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ApplyITLOperations(path, path, ops, cfg); err != nil {
+		t.Fatalf("accurate projection must pass: %v", err)
+	}
+}
+
 // TestSafeWrite_IdentityLifecycle is the end-to-end K13 scenario: the first
 // write fingerprints the library; swapping in a disjoint population is then
 // rejected; AdoptLibrary blesses the swap and re-anchors to it.

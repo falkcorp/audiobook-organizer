@@ -95,6 +95,25 @@ func ApplyITLOperations(inputPath, outputPath string, ops ITLOperationSet, cfg .
 	}
 
 	contractCfg := contractCfgOrDefault(cfg)
+
+	// K13/K14/K17: arm the external-truth guards from the input library's
+	// sidecar for BOTH write routes. Identity (K13) anchors the population;
+	// ExpectedTrackCount (K14) is the sidecar's validated count adjusted by
+	// this operation's own add/remove delta — a flush landing far from that
+	// projection means the file under us is not the state we think it is.
+	if contractCfg.ExpectedIdentity == nil && !contractCfg.AdoptLibrary {
+		sidecarID, idErr := LoadLibraryIdentity(inputPath)
+		if idErr != nil {
+			return nil, fmt.Errorf("ApplyITLOperations: identity sidecar for %s: %w", inputPath, idErr)
+		}
+		contractCfg.ExpectedIdentity = sidecarID
+		if contractCfg.ExpectedTrackCount == 0 && sidecarID != nil && sidecarID.TrackCount > 0 {
+			if exp := sidecarID.TrackCount + len(ops.Adds) - len(ops.Removes); exp > 0 {
+				contractCfg.ExpectedTrackCount = exp
+			}
+		}
+	}
+
 	totalUpdated := 0
 	mutate := applyOpsMutate(ops, &totalUpdated)
 
@@ -112,16 +131,6 @@ func ApplyITLOperations(inputPath, outputPath string, ops ITLOperationSet, cfg .
 	raw, err := os.ReadFile(inputPath)
 	if err != nil {
 		return nil, fmt.Errorf("reading ITL: %w", err)
-	}
-	// K13: the distinct-output path bypasses SafeWriteITL's sidecar load, so
-	// arm the library-identity guard from the INPUT library's sidecar here —
-	// otherwise rebuild/export-to-tmp writes escape identity checking.
-	if contractCfg.ExpectedIdentity == nil && !contractCfg.AdoptLibrary {
-		sidecarID, idErr := LoadLibraryIdentity(inputPath)
-		if idErr != nil {
-			return nil, fmt.Errorf("ApplyITLOperations: identity sidecar for %s: %w", inputPath, idErr)
-		}
-		contractCfg.ExpectedIdentity = sidecarID
 	}
 	outBytes, err := safeEncodeITL(raw, mutate, contractCfg)
 	if err != nil {

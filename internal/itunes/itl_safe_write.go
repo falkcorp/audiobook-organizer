@@ -219,6 +219,16 @@ func SafeWriteITL(path string, mutate func(before []byte) (after []byte, err err
 		o.contractCfg.ExpectedIdentity = sidecarID
 	}
 
+	// K17 (Tier 4): checksum continuity. If the on-disk bytes differ from the
+	// SHA-256 our last successful write recorded, an external writer (iTunes)
+	// touched the library in between — expected co-authorship, but worth a
+	// visible record: the identity/magnitude guards are now vetting a foreign
+	// state, and this log line is the marker forensics will look for.
+	if exp := o.contractCfg.ExpectedIdentity; exp != nil && !exp.MatchesFileSHA(raw) {
+		slog.Info("SafeWriteITL: library modified by external writer since our last write (checksum continuity broken); guards will vet the foreign state",
+			"op", "itl-safe-write", "path", path, "last_write", exp.UpdatedAt)
+	}
+
 	// safeEncodeITL does steps 1(parse done) → 3: BE refusal, mutate, header
 	// regeneration, in-memory contract. It returns the final on-disk bytes. The
 	// in-memory verdict is already known-passing here; the authoritative verdict
@@ -295,8 +305,13 @@ func SafeWriteITL(path string, mutate func(before []byte) (after []byte, err err
 	// identity check stricter, never looser.
 	if newID, idErr := ComputeLibraryIdentity(rrPayload, rrHdr); idErr != nil {
 		slog.Warn("SafeWriteITL: identity fingerprint failed; sidecar not updated", "path", path, "err", idErr)
-	} else if saveErr := SaveLibraryIdentity(path, newID); saveErr != nil {
-		slog.Warn("SafeWriteITL: identity sidecar save failed", "path", path, "err", saveErr)
+	} else {
+		// K17: record the checksum of the exact bytes on disk so the next
+		// write can detect an external writer touching the file in between.
+		newID.FileSHA256 = FileSHA256Hex(diskBytes)
+		if saveErr := SaveLibraryIdentity(path, newID); saveErr != nil {
+			slog.Warn("SafeWriteITL: identity sidecar save failed", "path", path, "err", saveErr)
+		}
 	}
 
 	slog.Info("SafeWriteITL applied",
