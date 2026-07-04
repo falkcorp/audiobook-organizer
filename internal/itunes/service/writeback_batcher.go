@@ -1,6 +1,7 @@
 // file: internal/itunes/service/writeback_batcher.go
-// version: 5.3.0
+// version: 5.4.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e90
+// last-edited: 2026-07-03
 //
 // Combined write-back batcher: handles location updates, track additions,
 // and track removals in a single ITL read-modify-write cycle.
@@ -118,7 +119,18 @@ type WriteBackBatcher struct {
 	// the batch is re-queued on the next timer tick rather than lost.
 	// Set via SetLibraryNotInUse. Safe to call after construction.
 	libraryNotInUse func() error
+
+	// flushFailures counts CONSECUTIVE failed flush attempts (parse or
+	// write errors). Failed batches are re-enqueued for retry up to
+	// maxFlushFailures; after that the batch is dropped with a loud
+	// error so a persistent fault (contract rejection, corrupt library)
+	// cannot hot-loop a 30MB re-encode forever. Reset on any success.
+	flushFailures int
 }
+
+// maxFlushFailures caps consecutive failed-flush retries before the
+// pending batch is dropped (see WriteBackBatcher.flushFailures).
+const maxFlushFailures = 3
 
 // NewWriteBackBatcher creates a batcher with the given debounce delay.
 func NewWriteBackBatcher(delay time.Duration, cfg WriteBackBatcherConfig, store WriteBackStore) *WriteBackBatcher {
@@ -257,6 +269,25 @@ func (b *WriteBackBatcher) hasPending() bool {
 	return len(b.pendingBooks) > 0 || len(b.pendingAdds) > 0 || len(b.pendingRemoves) > 0
 }
 
+// reEnqueue restores a snapshotted-and-cleared batch into the pending state
+// and re-arms the timer, so a deferred or failed flush is retried on the next
+// tick instead of lost. Mirrors the Enqueue* locking discipline.
+func (b *WriteBackBatcher) reEnqueue(bookIDs []string, adds []itunes.ITLNewTrack, removes map[string]bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, id := range bookIDs {
+		b.pendingBooks[id] = true
+	}
+	b.pendingAdds = append(b.pendingAdds, adds...)
+	for pid := range removes {
+		b.pendingRemoves[pid] = true
+	}
+	if b.firstEnqueue.IsZero() && len(bookIDs)+len(adds)+len(removes) > 0 {
+		b.firstEnqueue = time.Now()
+	}
+	b.resetTimer()
+}
+
 // flush writes all pending operations to the iTunes ITL binary in one pass.
 func (b *WriteBackBatcher) flush() {
 	b.mu.Lock()
@@ -320,21 +351,7 @@ func (b *WriteBackBatcher) flush() {
 	if notInUse != nil {
 		if err := notInUse(); err != nil {
 			slog.Warn("iTunes write-back deferred: library in use", "reason", err)
-			// Re-enqueue so the work is not lost. resetTimer must be called
-			// while b.mu is held (same as Enqueue / EnqueueAdd / EnqueueRemove).
-			b.mu.Lock()
-			for _, id := range bookIDs {
-				b.pendingBooks[id] = true
-			}
-			b.pendingAdds = append(b.pendingAdds, adds...)
-			for pid := range removes {
-				b.pendingRemoves[pid] = true
-			}
-			if b.firstEnqueue.IsZero() && len(bookIDs)+len(adds)+len(removes) > 0 {
-				b.firstEnqueue = time.Now()
-			}
-			b.resetTimer()
-			b.mu.Unlock()
+			b.reEnqueue(bookIDs, adds, removes)
 			return
 		}
 	}
@@ -345,14 +362,29 @@ func (b *WriteBackBatcher) flush() {
 	// ~90K mhoh blocks every sync when only a handful of tracks have
 	// actually changed (HIGH-3 / T008 fix).
 	//
-	// Parse failure is non-fatal: if we can't read the library (e.g.
-	// first-run or file temporarily locked), we skip the metadata diff
-	// and write everything. The safety contract in SafeWriteITL still
-	// validates the output before landing it.
+	// Parse failure DEFERS the flush (SPEC 3 §4): an unreadable library
+	// means we cannot know what we would be writing over — a transiently
+	// locked file heals on the next tick, and a persistently unreadable
+	// one hits the maxFlushFailures cap instead of being blind-written.
+	// The old behavior (WARN + write ALL metadata updates without a diff)
+	// was the HIGH-3 blast-radius amplifier running exactly when the
+	// library was least trustworthy.
 	var tracksByPID map[string]*itunes.ITLTrack
 	if lib, err := parseITLFn(writePath); err != nil {
-		slog.Warn("iTunes write-back could not parse library for diff; writing all metadata updates",
-			"err", err, "path", writePath)
+		b.mu.Lock()
+		b.flushFailures++
+		failures := b.flushFailures
+		b.mu.Unlock()
+		if failures >= maxFlushFailures {
+			slog.Error("iTunes write-back DROPPING batch: library unparseable after retries",
+				"err", err, "path", writePath, "attempts", failures,
+				"dropped_updates", len(bookIDs), "dropped_adds", len(adds), "dropped_removes", len(removes))
+			return
+		}
+		slog.Warn("iTunes write-back deferred: library unparseable, will retry",
+			"err", err, "path", writePath, "attempt", failures)
+		b.reEnqueue(bookIDs, adds, removes)
+		return
 	} else {
 		tracksByPID = make(map[string]*itunes.ITLTrack, len(lib.Tracks))
 		for i := range lib.Tracks {
@@ -531,8 +563,35 @@ func (b *WriteBackBatcher) flush() {
 
 	itlPath := writePath // from b.flushEnabled() above
 	if err := SafeWriteITL(itlPath, ops); err != nil {
-		slog.Warn("iTunes write-back failed", "err", err)
+		b.mu.Lock()
+		b.flushFailures++
+		failures := b.flushFailures
+		b.mu.Unlock()
+		if failures >= maxFlushFailures {
+			// A persistent failure (contract rejection, corrupt library) —
+			// dropping after N attempts prevents a 30MB re-encode hot loop,
+			// and ERROR (not the old silent WARN) makes the loss visible.
+			slog.Error("iTunes write-back DROPPING batch after repeated failures",
+				"err", err, "attempts", failures,
+				"dropped_updates", len(bookIDs), "dropped_adds", len(adds), "dropped_removes", len(removes))
+			return
+		}
+		slog.Error("iTunes write-back failed; batch re-enqueued for retry",
+			"err", err, "attempt", failures)
+		b.reEnqueue(bookIDs, adds, removes)
 		return
+	}
+
+	// Success: reset the consecutive-failure counter and pin this state as
+	// the last-known-good anchor. .bak-lkg is exempt from rotation, so even
+	// after keep-10 churns through timestamped backups a validated copy of a
+	// successfully-written library survives (SPEC 3 §4 — before this wiring,
+	// PinLastKnownGood had no production caller and .bak-lkg never existed).
+	b.mu.Lock()
+	b.flushFailures = 0
+	b.mu.Unlock()
+	if err := itlPinLKGFn(itlPath); err != nil {
+		slog.Warn("iTunes write-back could not pin last-known-good", "err", err, "path", itlPath)
 	}
 
 	// Mark the books we wrote as iTunes-synced so downstream UI /
@@ -558,6 +617,7 @@ var (
 	itlValidateFn        = itunes.ValidateITL
 	itlApplyOperationsFn = itunes.ApplyITLOperations
 	parseITLFn           = itunes.ParseITL
+	itlPinLKGFn          = itunes.PinLastKnownGood
 )
 
 // SafeWriteITL performs a backup → write-temp → validate-temp →
