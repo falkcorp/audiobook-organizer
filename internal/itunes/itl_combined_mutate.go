@@ -1,6 +1,7 @@
 // file: internal/itunes/itl_combined_mutate.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: f7a8b9c0-d1e2-3f4a-5b6c-7d8e9f0a1b2c
+// last-edited: 2026-07-03
 //
 // Combined ITL mutation: applies removes, adds, and location patches in a
 // single read-modify-write pass. This avoids redundant decrypt/compress
@@ -111,6 +112,16 @@ func ApplyITLOperations(inputPath, outputPath string, ops ITLOperationSet, cfg .
 	raw, err := os.ReadFile(inputPath)
 	if err != nil {
 		return nil, fmt.Errorf("reading ITL: %w", err)
+	}
+	// K13: the distinct-output path bypasses SafeWriteITL's sidecar load, so
+	// arm the library-identity guard from the INPUT library's sidecar here —
+	// otherwise rebuild/export-to-tmp writes escape identity checking.
+	if contractCfg.ExpectedIdentity == nil && !contractCfg.AdoptLibrary {
+		sidecarID, idErr := LoadLibraryIdentity(inputPath)
+		if idErr != nil {
+			return nil, fmt.Errorf("ApplyITLOperations: identity sidecar for %s: %w", inputPath, idErr)
+		}
+		contractCfg.ExpectedIdentity = sidecarID
 	}
 	outBytes, err := safeEncodeITL(raw, mutate, contractCfg)
 	if err != nil {
