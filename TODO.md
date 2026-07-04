@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.59.0 -->
+<!-- version: 9.60.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-04 -->
 
@@ -496,14 +496,25 @@ Plan: [`docs/plans/2026-06-13-dedup-exact-gate-and-dataset.md`](docs/plans/2026-
   retroactively clean up already-orphaned embedding rows from historical
   deletions; that needs its own dry-run-gated backfill/maintenance op
   (tracked as a follow-up, not built here — see below).
-  - [ ] **Follow-up (not started):** dry-run-gated maintenance op to find and
-    purge/re-embed already-orphaned `emb:v:book:*` rows whose entity ID has
-    no corresponding live book (historical deletions predating this fix).
-    Needs its own brief — do not build ad hoc.
-  - [ ] **Follow-up (owner-gated, post-deploy):** re-run `dedup.embed-scan`
-    then `dedup.calibrate-embedding-thresholds` and confirm `skipped_dim`
-    trends down for newly-deleted books going forward (will NOT drop for
-    already-orphaned rows without the backfill op above).
+  - [x] **Follow-up built (2026-07-04):** `dedup.cleanup-orphan-embeddings`
+    (`internal/plugins/dedup/cleanup_orphan_embeddings.go`) — dry-run-gated
+    op that walks every `emb:v:book:*` row via the existing
+    `EmbeddingStore.ListByType("book")` (no new DB primitive needed), checks
+    `GetBookByID` per entity ID, and reports orphaned/live/lookup-error
+    counts + a bounded 10-row sample of orphaned IDs + `.Model`. `apply=true`
+    deletes only confirmed-orphaned rows; a live book's embedding is never
+    touched regardless of model (that's `dedup.embed-scan`/
+    `dedup.reembed-embeddings` territory, explicitly out of scope here).
+    Idempotent (second apply finds 0 orphans). 5 unit tests in
+    `internal/plugins/dedup/cleanup_orphan_embeddings_test.go`. **Not yet run
+    on prod** — dry-run first via
+    `{"def_id":"dedup.cleanup-orphan-embeddings","params":{}}`, review the
+    sample, only then `apply=true` (owner greenlight).
+  - [ ] **Follow-up (owner-gated, post-deploy):** run
+    `dedup.cleanup-orphan-embeddings` dry-run on prod, review, apply; then
+    re-run `dedup.embed-scan` and `dedup.calibrate-embedding-thresholds` and
+    confirm `skipped_dim` trends down (both from #1802 stopping new orphans
+    AND from this op clearing pre-existing ones).
 - [x] **C5** Live-capture: wire `BuildExample` + `Classify` into the candidate-upsert path  ✅ shipped #1729 (agent-task sweep 2026-07-01)
   so each new candidate automatically gets a feature snapshot + deterministic label on
   creation (no separate backfill needed going forward).
