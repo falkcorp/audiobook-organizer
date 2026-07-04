@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4d5e6f7a-8b9c-0d1e-2f3a-4b5c6d7e8f9a
 
 package database
@@ -176,6 +176,74 @@ func TestPebbleDeleteBook(t *testing.T) {
 	}
 	if deletedBook != nil {
 		t.Error("Expected book to be nil after deletion")
+	}
+}
+
+// TestPebbleDeleteBook_RemovesEmbedding locks in the fix for the orphaned-
+// embedding leak: DeleteBook must also delete the book's embedding row
+// (emb:v:book:<id>). Before this fix, deleting a book (e.g. the "loser" side
+// of a dedup merge) left its embedding behind forever at whatever
+// model/dimension it was last embedded with, since dedup.embed-scan only
+// ever iterates GetAllBooks and a deleted book never appears there again.
+func TestPebbleDeleteBook_RemovesEmbedding(t *testing.T) {
+	// Arrange
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+
+	pebbleStore, ok := store.(*PebbleStore)
+	if !ok {
+		t.Fatalf("expected *PebbleStore, got %T", store)
+	}
+
+	book := &Book{
+		Title:    "Book With Embedding",
+		FilePath: "/test/path/embedded-book.mp3",
+	}
+	createdBook, err := store.CreateBook(book)
+	if err != nil {
+		t.Fatalf("Failed to create book: %v", err)
+	}
+
+	embStore := NewEmbeddingStore(pebbleStore.DB())
+	if err := embStore.Upsert(Embedding{
+		EntityType: "book",
+		EntityID:   createdBook.ID,
+		Vector:     []float32{0.1, 0.2, 0.3},
+		Model:      "text-embedding-3-large",
+	}); err != nil {
+		t.Fatalf("Failed to upsert embedding: %v", err)
+	}
+
+	// Sanity check: embedding is present before delete.
+	before, err := embStore.Get("book", createdBook.ID)
+	if err != nil {
+		t.Fatalf("Failed to get embedding before delete: %v", err)
+	}
+	if before == nil {
+		t.Fatal("Expected embedding to exist before DeleteBook")
+	}
+
+	// Act
+	if err := store.DeleteBook(createdBook.ID); err != nil {
+		t.Fatalf("Failed to delete book: %v", err)
+	}
+
+	// Assert - book row is gone
+	deletedBook, err := store.GetBookByID(createdBook.ID)
+	if err != nil {
+		t.Fatalf("Unexpected error when getting deleted book: %v", err)
+	}
+	if deletedBook != nil {
+		t.Error("Expected book to be nil after deletion")
+	}
+
+	// Assert - embedding row is gone too (the orphan-leak fix)
+	after, err := embStore.Get("book", createdBook.ID)
+	if err != nil {
+		t.Fatalf("Unexpected error when getting embedding after delete: %v", err)
+	}
+	if after != nil {
+		t.Error("Expected embedding to be deleted along with the book, but it still exists")
 	}
 }
 

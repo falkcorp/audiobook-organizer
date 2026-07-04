@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.58.0 -->
+<!-- version: 9.59.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-04 -->
 
@@ -476,6 +476,34 @@ Plan: [`docs/plans/2026-06-13-dedup-exact-gate-and-dataset.md`](docs/plans/2026-
   New `EmbeddingStore.DeleteLabeledExamplesBySource` primitive. 3 unit tests.
   **Not yet run on prod** — dry-run first via `{"def_id":"dedup.rebuild-gold-labels","params":{}}`,
   review the diff, only then `apply=true` (owner greenlight).
+- [x] **C-orphan-embed / DeleteBook orphaned-embedding fix (2026-07-04)** —
+  `PebbleStore.DeleteBook` (`internal/database/pebble_store.go:1735`) deleted
+  the book row + path/version-group/metadata_state/ISBN/ASIN index rows but
+  never touched the book's embedding row (`emb:v:book:<id>`). Since
+  `dedup.embed-scan` only iterates `GetAllBooks`, a deleted book's embedding
+  was orphaned forever at its last model/dimension and never re-embedded.
+  This is **likely the dominant contributor** to the `skipped_dim` count
+  above (2,841/5,301) — directionally consistent with the rebuild-gold-labels
+  3,525/5,050-unlabelable finding — but is **not confirmed to be the sole
+  cause**; treat `skipped_dim` root-cause as still open until verified
+  post-deploy. Fix: delete `emb:v:book:<id>` in the same batch as the rest of
+  `DeleteBook`'s cleanup (atomic, no new `EmbeddingStore` plumbing). Verified
+  all merge/consolidate "loser book" removal paths (`internal/dedup/engine.go`,
+  `internal/dedup/book_dedup.go`, `internal/dedup/split_book_merge.go`,
+  `internal/merge/service.go`'s `SoftDeleteBook` hard-delete fallback) route
+  through `Store.DeleteBook`, so no separate path needs the same patch. New
+  test `TestPebbleDeleteBook_RemovesEmbedding`. **Forward-only** — does NOT
+  retroactively clean up already-orphaned embedding rows from historical
+  deletions; that needs its own dry-run-gated backfill/maintenance op
+  (tracked as a follow-up, not built here — see below).
+  - [ ] **Follow-up (not started):** dry-run-gated maintenance op to find and
+    purge/re-embed already-orphaned `emb:v:book:*` rows whose entity ID has
+    no corresponding live book (historical deletions predating this fix).
+    Needs its own brief — do not build ad hoc.
+  - [ ] **Follow-up (owner-gated, post-deploy):** re-run `dedup.embed-scan`
+    then `dedup.calibrate-embedding-thresholds` and confirm `skipped_dim`
+    trends down for newly-deleted books going forward (will NOT drop for
+    already-orphaned rows without the backfill op above).
 - [x] **C5** Live-capture: wire `BuildExample` + `Classify` into the candidate-upsert path  ✅ shipped #1729 (agent-task sweep 2026-07-01)
   so each new candidate automatically gets a feature snapshot + deterministic label on
   creation (no separate backfill needed going forward).

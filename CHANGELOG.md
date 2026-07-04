@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.105.1 -->
+<!-- version: 3.106.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-04 -->
 
@@ -8,6 +8,41 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 4, 2026 - DeleteBook orphaned-embedding leak fix
+
+- **`fix(database)`** — `PebbleStore.DeleteBook` (`internal/database/pebble_store.go`)
+  now also deletes the book's embedding row (`emb:v:book:<id>`) inside the
+  same batch as the rest of the book-deletion cleanup. Previously it deleted
+  the book row, path index, version-group index, `metadata_state` rows, and
+  ISBN/ASIN index rows, but left the embedding row behind untouched. Since
+  `dedup.embed-scan` only ever iterates `GetAllBooks` — which by construction
+  never returns a deleted book — an orphaned embedding was never revisited or
+  re-embedded to a current model/dimension once its book was deleted (e.g. as
+  the "loser" side of a dedup merge/consolidate). This is likely a dominant
+  contributor to the `skipped_dim=2841` figure reported by
+  `dedup.calibrate-embedding-thresholds` (embedding present but wrong
+  `.Model`/dimension out of 5301 scored gold-label pairs), and is
+  directionally consistent with the `dedup.rebuild-gold-labels` dry-run
+  finding of 3,525/5,050 rule-sourced gold labels referencing candidates that
+  no longer exist — but this fix has **not** been verified end-to-end to
+  fully explain that count, and should be described as the likely dominant
+  contributor, not the sole cause. Confirmed (via grep across
+  `internal/dedup/engine.go`, `internal/dedup/book_dedup.go`,
+  `internal/dedup/split_book_merge.go`, `internal/merge/service.go`) that all
+  merge/consolidate "loser book" removal paths route through
+  `Store.DeleteBook` (directly, or via `merge.SoftDeleteBook`'s hard-delete
+  fallback), so this single fix covers those paths too — no separate
+  removal path needed its own patch. New test
+  `TestPebbleDeleteBook_RemovesEmbedding`
+  (`internal/database/pebble_store_test.go`) locks in the behavior: create a
+  book, upsert an embedding for it via `EmbeddingStore`, delete the book,
+  assert the embedding row is now gone.
+  - **Forward-only.** This does NOT retroactively clean up the (likely
+    thousands of) already-orphaned embedding rows left behind by historical
+    book deletions — that needs a separate, dry-run-gated maintenance/backfill
+    op and is explicitly out of scope here. Tracked as a follow-up in
+    TODO.md.
 
 #### July 4, 2026 - dedup gold-label rebuild op (dedup.rebuild-gold-labels)
 

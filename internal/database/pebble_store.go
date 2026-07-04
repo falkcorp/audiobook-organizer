@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.102.0
+// version: 1.103.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-07-03
+// last-edited: 2026-07-04
 
 package database
 
@@ -1793,6 +1793,21 @@ func (p *PebbleStore) DeleteBook(id string) error {
 			batch.Close()
 			return err
 		}
+	}
+
+	// Delete the book's embedding row (emb:v:book:<id>), if any. Without
+	// this, a deleted book's embedding is orphaned forever: dedup.embed-scan
+	// iterates GetAllBooks, which by construction never returns a deleted
+	// book, so the orphaned row is never revisited or re-embedded to a
+	// current model/dimension. This targets the same keyspace as
+	// EmbeddingStore.Delete("book", id) (see embVecKey in
+	// embedding_store.go); deleted directly in this batch for atomicity
+	// with the rest of the book removal rather than wiring in a separate
+	// EmbeddingStore dependency on PebbleStore.
+	embKey := []byte(embVecPfx + "book:" + id)
+	if err := batch.Delete(embKey, nil); err != nil {
+		batch.Close()
+		return err
 	}
 
 	if err := batch.Commit(pebble.Sync); err != nil {
