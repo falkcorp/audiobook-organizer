@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/calibrate_embedding_thresholds.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6f1d2e3a-4b5c-4d6e-8f90-1a2b3c4d5e6f
-// last-edited: 2026-07-03
+// last-edited: 2026-07-04
 
 // Package dedup — op dedup.calibrate-embedding-thresholds (DEDUP-2/3).
 //
@@ -51,6 +51,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -75,6 +76,18 @@ const (
 	// is to surface plausible-but-uncertain pairs for a downstream check, so a
 	// precision floor materially below the high band is intentional.
 	defaultTargetPrecisionLow = 0.90
+
+	// minSampleSizeForBestPrecision is the minimum (true_dup+not_dup) sample
+	// size at/above a cut-point for that cut-point's precision to count toward
+	// the "best precision achieved" diagnostic. Without this floor, a
+	// high-cosine cut-point with a single lucky true_dup pair and zero
+	// not_dup pairs would report a spurious 100% precision.
+	minSampleSizeForBestPrecision = 5
+
+	// notDupSampleLimit bounds the "highest-cosine not_dup" diagnostic sample
+	// logged in the report — these are, by construction, the pairs actively
+	// dragging precision down at high cut-points.
+	notDupSampleLimit = 10
 )
 
 // calibrateEmbeddingThresholdsParams are the JSON parameters accepted by the op.
@@ -122,6 +135,11 @@ type embeddingGetter interface {
 type calibrationPair struct {
 	label  string // "true_dup" | "not_dup"
 	cosine float64
+	// entityAID/entityBID are carried through so diagnostics (e.g. the
+	// highest-cosine not_dup sample) can identify which books a pair refers
+	// to. They play no role in the sweep math itself.
+	entityAID string
+	entityBID string
 }
 
 // collectCalibrationPairs turns labeled examples into scored (label, cosine)
@@ -161,7 +179,12 @@ func collectCalibrationPairs(
 			continue
 		}
 		cos := float64(database.CosineSimilarity(a.Vector, b.Vector))
-		pairs = append(pairs, calibrationPair{label: ex.Label, cosine: cos})
+		pairs = append(pairs, calibrationPair{
+			label:     ex.Label,
+			cosine:    cos,
+			entityAID: ex.EntityAID,
+			entityBID: ex.EntityBID,
+		})
 	}
 	return pairs, skippedMissing, skippedMismatch
 }
@@ -177,6 +200,22 @@ type bandRecommendation struct {
 	// Recall is true_dup pairs at/above Threshold ÷ total true_dup pairs
 	// (valid only when Met) — reported so an operator can weigh the tradeoff.
 	Recall float64 `json:"recall"`
+
+	// BestPrecisionAchieved is the highest precision reached at any cut-point
+	// in the sweep range that had at least minSampleSizeForBestPrecision
+	// pairs at/above it. Populated even when Met is false, so a miss reports
+	// "how close we got" instead of a bare boolean. Valid only when
+	// BestPrecisionSampleSize > 0 — a zero sample size means no cut-point in
+	// the sweep range had enough samples to be trustworthy.
+	BestPrecisionAchieved float64 `json:"best_precision_achieved"`
+	// BestPrecisionThreshold is the cut-point at which BestPrecisionAchieved
+	// was observed. Valid only when BestPrecisionSampleSize > 0.
+	BestPrecisionThreshold float64 `json:"best_precision_threshold"`
+	// BestPrecisionSampleSize is the (true_dup+not_dup) sample size at/above
+	// BestPrecisionThreshold. Zero means every cut-point in the sweep range
+	// had fewer than minSampleSizeForBestPrecision pairs at/above it, so no
+	// best-achieved figure could be trusted.
+	BestPrecisionSampleSize int `json:"best_precision_sample_size"`
 }
 
 // sweepThreshold finds the LOWEST cut-point in [sweepGridLo, sweepGridHi]
@@ -185,7 +224,10 @@ type bandRecommendation struct {
 // (#true_dup with cos>=t) ÷ (#(true_dup+not_dup) with cos>=t); a cut-point with
 // no pairs at/above it is not eligible (precision undefined). If no cut-point
 // reaches the target, the returned recommendation has Met=false — the caller
-// must report that explicitly rather than fabricating a value.
+// must report that explicitly rather than fabricating a value. Even on a
+// miss, the recommendation still carries BestPrecision* fields describing the
+// closest the sweep got (see minSampleSizeForBestPrecision), so a target-miss
+// report shows "how close" rather than a bare boolean.
 func sweepThreshold(pairs []calibrationPair, targetPrecision float64) bandRecommendation {
 	totalTrue := 0
 	for _, pr := range pairs {
@@ -193,6 +235,10 @@ func sweepThreshold(pairs []calibrationPair, targetPrecision float64) bandRecomm
 			totalTrue++
 		}
 	}
+
+	var bestPrecision float64
+	var bestThreshold float64
+	var bestSampleSize int
 
 	// Iterate cut-points ascending so the FIRST meeting the target is the
 	// lowest (max recall). Use integer stepping to avoid float accumulation.
@@ -216,15 +262,50 @@ func sweepThreshold(pairs []calibrationPair, targetPrecision float64) bandRecomm
 			continue // no pairs at/above this cut-point — precision undefined
 		}
 		precision := float64(tp) / float64(tp+fp)
+		if tp+fp >= minSampleSizeForBestPrecision && precision > bestPrecision {
+			bestPrecision = precision
+			bestThreshold = t
+			bestSampleSize = tp + fp
+		}
 		if precision >= targetPrecision {
 			recall := 0.0
 			if totalTrue > 0 {
 				recall = float64(tp) / float64(totalTrue)
 			}
-			return bandRecommendation{Met: true, Threshold: t, Precision: precision, Recall: recall}
+			return bandRecommendation{
+				Met: true, Threshold: t, Precision: precision, Recall: recall,
+				BestPrecisionAchieved:   bestPrecision,
+				BestPrecisionThreshold:  bestThreshold,
+				BestPrecisionSampleSize: bestSampleSize,
+			}
 		}
 	}
-	return bandRecommendation{Met: false}
+	rec := bandRecommendation{Met: false}
+	if bestSampleSize > 0 {
+		rec.BestPrecisionAchieved = bestPrecision
+		rec.BestPrecisionThreshold = bestThreshold
+		rec.BestPrecisionSampleSize = bestSampleSize
+	}
+	return rec
+}
+
+// notDupHighCosineSample returns up to limit not_dup-labeled pairs sorted
+// descending by cosine — by construction, these are the pairs actively
+// dragging precision down at high cut-points, useful for distinguishing
+// "gold labels are wrong" from "the model genuinely can't separate this
+// pair" (see file-level doc comment). Does not mutate pairs.
+func notDupHighCosineSample(pairs []calibrationPair, limit int) []calibrationPair {
+	var notDup []calibrationPair
+	for _, pr := range pairs {
+		if pr.label == "not_dup" {
+			notDup = append(notDup, pr)
+		}
+	}
+	sort.Slice(notDup, func(i, j int) bool { return notDup[i].cosine > notDup[j].cosine })
+	if limit >= 0 && len(notDup) > limit {
+		notDup = notDup[:limit]
+	}
+	return notDup
 }
 
 // runCalibrateEmbeddingThresholds implements the op. It is read-only: it reads
@@ -308,6 +389,36 @@ func (p *Plugin) runCalibrateEmbeddingThresholds(ctx context.Context, rawParams 
 	high := sweepThreshold(pairs, targetHigh)
 	low := sweepThreshold(pairs, targetLow)
 
+	// --- Diagnostic sample: highest-cosine not_dup pairs ---
+	// These are, by construction, the pairs actively dragging precision down
+	// at high cut-points. Reported unconditionally (cheap, always useful) so
+	// an operator can tell "gold labels are wrong" (a listed pair is actually
+	// a duplicate) apart from "model ceiling" (the pair is genuinely
+	// different but scores close) without re-running anything.
+	notDupSample := notDupHighCosineSample(pairs, notDupSampleLimit)
+	if len(notDupSample) > 0 {
+		log.Info("calibrate-embedding-thresholds highest-cosine not_dup sample",
+			"count", len(notDupSample), "limit", notDupSampleLimit)
+		for i, pr := range notDupSample {
+			var titleA, titleB string
+			if p.store != nil {
+				if bookA, err := p.store.GetBookByID(pr.entityAID); err == nil && bookA != nil {
+					titleA = bookA.Title
+				}
+				if bookB, err := p.store.GetBookByID(pr.entityBID); err == nil && bookB != nil {
+					titleB = bookB.Title
+				}
+			}
+			log.Info("calibrate-embedding-thresholds not_dup sample pair",
+				"rank", i+1,
+				"cosine", pr.cosine,
+				"entity_a_id", pr.entityAID,
+				"entity_a_title", titleA,
+				"entity_b_id", pr.entityBID,
+				"entity_b_title", titleB)
+		}
+	}
+
 	// --- Report (structured log fields — read-only, no result sink to write) ---
 	fields := []any{
 		"model", model,
@@ -325,6 +436,12 @@ func (p *Plugin) runCalibrateEmbeddingThresholds(ctx context.Context, rawParams 
 			"recommended_high_recall", high.Recall)
 	} else {
 		fields = append(fields, "no_high_threshold_met_target", true)
+		if high.BestPrecisionSampleSize > 0 {
+			fields = append(fields,
+				"high_best_precision_achieved", high.BestPrecisionAchieved,
+				"high_best_precision_threshold", high.BestPrecisionThreshold,
+				"high_best_precision_sample_size", high.BestPrecisionSampleSize)
+		}
 	}
 	if low.Met {
 		fields = append(fields,
@@ -333,6 +450,12 @@ func (p *Plugin) runCalibrateEmbeddingThresholds(ctx context.Context, rawParams 
 			"recommended_low_recall", low.Recall)
 	} else {
 		fields = append(fields, "no_low_threshold_met_target", true)
+		if low.BestPrecisionSampleSize > 0 {
+			fields = append(fields,
+				"low_best_precision_achieved", low.BestPrecisionAchieved,
+				"low_best_precision_threshold", low.BestPrecisionThreshold,
+				"low_best_precision_sample_size", low.BestPrecisionSampleSize)
+		}
 	}
 	// no_threshold_met_target is set when NEITHER band reached its target, so a
 	// consumer scanning for a single flag still sees the total-miss case.
@@ -355,6 +478,10 @@ func (p *Plugin) runCalibrateEmbeddingThresholds(ctx context.Context, rawParams 
 // describeBand renders a band recommendation for the human-readable summary.
 func describeBand(b bandRecommendation) string {
 	if !b.Met {
+		if b.BestPrecisionSampleSize > 0 {
+			return fmt.Sprintf("target-not-met(best_p=%.3f@thr=%.2f,n=%d)",
+				b.BestPrecisionAchieved, b.BestPrecisionThreshold, b.BestPrecisionSampleSize)
+		}
 		return "target-not-met"
 	}
 	return fmt.Sprintf("thr=%.2f(p=%.3f,r=%.3f)", b.Threshold, b.Precision, b.Recall)
