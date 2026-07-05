@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 9.61.0 -->
+<!-- version: 9.62.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-07-04 -->
+<!-- last-edited: 2026-07-05 -->
 
 # Project TODO
 
@@ -19,6 +19,21 @@ future agent) can scan the entire workspace in one page.
 - Claude project memory at `~/.claude/projects/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/memory/` — items still to graduate here
 
 ---
+
+## ✅ FullScan cancel-responsiveness fix (2026-07-05)
+
+- **Incident:** cancelling a running `dedup.full-scan` op tonight took 90+
+  seconds to take effect and eventually required a hard `systemctl restart`.
+- **Root cause:** `runUnifiedScoringForBook`'s inner per-candidate loop
+  (`internal/dedup/engine.go`) had no `ctx.Err()` check — only the outer
+  FullScan per-book loop did. A book with an unusually large pending-candidate
+  set could keep the scan running well past cancellation.
+- **Fix shipped:** added a cancellation check at the top of the per-candidate
+  loop, returning `ctx.Err()` promptly. Regression test
+  `TestRunUnifiedScoringForBook_StopsPromptlyOnCancel`
+  (`internal/dedup/engine_cancellation_test.go`) verified to fail without the
+  fix and pass with it. No concurrency/worker-pool changes — that's separate,
+  larger work still to be scoped.
 
 ## 🧾 Consultancy Evaluation — [`docs/consultancy/`](docs/consultancy/) (2026-07-02)
 
