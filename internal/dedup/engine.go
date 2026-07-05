@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.49.0
+// version: 1.50.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-07-05
 
@@ -175,6 +175,21 @@ type Engine struct {
 	// Set via SetISBNIndexStore. When nil, checkExactISBN falls back to
 	// the GetAllBooks scan (safe — just slow).
 	isbnIndexStore ISBNIndexStore
+
+	// mergeMu serializes calls into mergeService.MergeBooks.
+	//
+	// CONC-4 (docs/audits/2026-07-05-concurrency-single-threaded-hotspots.md):
+	// FullScan's Layer-1 pass now runs checkExactFileHash for every book
+	// concurrently via registry.RunItems. handleFileHashMatch can call
+	// MergeBooks when AutoMergeEnabled is set, and merge.Service.MergeBooks
+	// does an unguarded read-then-write per book (no transaction/lock) — two
+	// workers independently discovering the same "other" book via two
+	// different file hashes could race and corrupt the version group. In the
+	// old strictly-serial loop this could never happen because merges always
+	// completed in book order before the next book's check ran. mergeMu
+	// restores that "only one merge in flight at a time" guarantee without
+	// serializing the (far more common) non-merge path.
+	mergeMu sync.Mutex
 }
 
 // NewEngine creates a Engine with sensible defaults.
@@ -902,7 +917,14 @@ func (de *Engine) handleFileHashMatch(book, other *database.Book, authorName str
 	sameTitle := normalizeTitle(book.Title) == normalizeTitle(other.Title)
 
 	if sameAuthor && sameTitle && de.AutoMergeEnabled && de.mergeService != nil {
+		// Serialize the actual merge (see mergeMu doc comment on Engine) —
+		// MergeBooks itself does an unguarded read-modify-write per book, so
+		// two FullScan Layer-1 workers merging into the same "other" book at
+		// once could race. This does not serialize the (far more common)
+		// non-merge candidate path above/below.
+		de.mergeMu.Lock()
 		_, err := de.mergeService.MergeBooks([]string{book.ID, other.ID}, other.ID)
+		de.mergeMu.Unlock()
 		if err != nil {
 			return false, fmt.Errorf("auto-merge failed: %w", err)
 		}
@@ -2511,35 +2533,99 @@ func (de *Engine) FullScan(ctx context.Context, progress func(phase string, done
 		return err // return the EmbedBooks error for circuit-breaker accounting
 	}
 
+	// --- Pass 1: Layer 1 exact checks (parallel) ---
+	//
+	// CONC-4 (docs/audits/2026-07-05-concurrency-single-threaded-hotspots.md):
+	// this used to be the first half of a single `for range books` loop
+	// shared with the Layer-2 embedding batching below. checkExactFileHash/
+	// checkExactISBN/checkExactTitle/checkDurationMatch are each
+	// self-contained per book (they read `books[i]` plus whatever the
+	// bookStore returns for OTHER books; they never touch loop-carried state
+	// from a previous iteration), so they shard cleanly across a bounded
+	// worker pool exactly like the unified-scoring pass at the bottom of
+	// this function (CONC-2). Two shared-write paths were checked before
+	// parallelizing:
+	//
+	//   - Every check funnels candidate writes through upsertExactCandidate
+	//     -> EmbeddingStore.UpsertCandidateNew, which canonicalises the pair
+	//     key and does the read-check-write under its own s.mu (see
+	//     internal/database/embedding_store.go) — concurrent upserts of the
+	//     same pair from two workers are safe and idempotent. Verified by
+	//     TestFullScanLayer1ParallelMatchesSerialCandidates below.
+	//   - checkExactFileHash -> handleFileHashMatch can call
+	//     mergeService.MergeBooks when AutoMergeEnabled is set. MergeBooks
+	//     itself is an unguarded read-modify-write per book, so it is now
+	//     serialized via de.mergeMu (see that field's doc comment) rather
+	//     than relying on loop order the way the old serial code implicitly
+	//     did.
+	//
+	// The bookStore/embedStore backend (PebbleStore) is itself safe for
+	// concurrent reads/writes — see the CONC-2 comment on the scoring pass
+	// below for details.
+	//
+	// Layer 2's chunk accumulation + circuit-breaker (chunkIDs, chunkStart,
+	// chunkIsPrimary, embedConsecutiveFails, embeddingsGaveUp, flushChunk)
+	// is loop-carried serial state and stays in the plain sequential Pass 2
+	// loop below — it must NOT be parallelized.
+	layer1Indices := make([]int, total)
+	for i := range layer1Indices {
+		layer1Indices[i] = i
+	}
+	// layer1Progress adapts FullScan's phase-prefixed progress(phase, done,
+	// total) callback to progressCallbackReporter's plain progress(done,
+	// total) shape (reused unchanged from BookSignatureScan/TASK-01), closing
+	// over the "scan" phase name so Layer 1 progress reports under the same
+	// phase the combined loop used to.
+	layer1Progress := func(done, progTotal int) {
+		if progress != nil {
+			progress("scan", done, progTotal)
+		}
+	}
+	err = registry.RunItems(ctx, &progressCallbackReporter{progress: layer1Progress}, layer1Indices,
+		func(_ context.Context, i int) error {
+			book := books[i]
+
+			// Resolve author name once — used by Layer 1 title/hash checks.
+			authorName := ""
+			if book.AuthorID != nil {
+				if author, err := de.bookStore.GetAuthorByID(*book.AuthorID); err == nil && author != nil {
+					authorName = author.Name
+				}
+			}
+
+			// Layer 1 exact checks (file hash, ISBN/ASIN, near-identical
+			// title, duration match). Cheap and synchronous, no API calls.
+			if _, err := de.checkExactFileHash(&book, authorName); err != nil {
+				slog.Error("dedup full scan hash check error for", "book", book.ID, "err", err)
+			}
+			if err := de.checkExactISBN(&book); err != nil {
+				slog.Error("dedup full scan ISBN check error for", "book", book.ID, "err", err)
+			}
+			if err := de.checkExactTitle(&book, authorName); err != nil {
+				slog.Error("dedup full scan title check error for", "book", book.ID, "err", err)
+			}
+			if err := de.checkDurationMatch(&book); err != nil {
+				slog.Error("dedup full scan duration check error for", "book", book.ID, "err", err)
+			}
+			return nil
+		},
+		registry.RunItemsOptions{Concurrency: runtime.NumCPU()},
+	)
+	if err != nil {
+		return err
+	}
+
+	// --- Pass 2: Layer 2 embedding batch accumulation + flush (serial) ---
+	//
+	// chunkIDs/chunkStart/chunkIsPrimary/embedConsecutiveFails/
+	// embeddingsGaveUp are mutated across iterations by flushChunk, so this
+	// pass stays a plain sequential loop exactly as before — see the Pass 1
+	// comment above for why it cannot be sharded.
 	for i, book := range books {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
-		}
-
-		// Resolve author name once — used by Layer 1 title check below.
-		authorName := ""
-		if book.AuthorID != nil {
-			if author, err := de.bookStore.GetAuthorByID(*book.AuthorID); err == nil && author != nil {
-				authorName = author.Name
-			}
-		}
-
-		// Layer 1 exact checks (file hash, ISBN/ASIN, near-identical title,
-		// duration match). Cheap and synchronous, no API calls — runs
-		// inline regardless of embed batching or the circuit-breaker state.
-		if _, err := de.checkExactFileHash(&book, authorName); err != nil {
-			slog.Error("dedup full scan hash check error for", "book", book.ID, "err", err)
-		}
-		if err := de.checkExactISBN(&book); err != nil {
-			slog.Error("dedup full scan ISBN check error for", "book", book.ID, "err", err)
-		}
-		if err := de.checkExactTitle(&book, authorName); err != nil {
-			slog.Error("dedup full scan title check error for", "book", book.ID, "err", err)
-		}
-		if err := de.checkDurationMatch(&book); err != nil {
-			slog.Error("dedup full scan duration check error for", "book", book.ID, "err", err)
 		}
 
 		// Layer 2 embedding: accumulate IDs and flush in batches to keep
