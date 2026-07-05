@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 1.42.0
+// version: 1.43.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-07-05
 
@@ -904,11 +904,26 @@ func (s *Server) startBackfills() {
 		s.backfillExternalIDs()
 	}()
 
-	// AcoustID fingerprint backfill is handled by the parallel plugin op
+	// AcoustID fingerprint backfill. CONC-9 removed the serial server-side
+	// duplicate (backfillAcoustIDs) in favor of the parallel plugin op
 	// acoustid.backfill (internal/plugins/acoustid/backfill.go, registry.RunItems
-	// with bounded Concurrency), a child of the library.optimize maintenance
-	// sweep. The serial server-side duplicate (backfillAcoustIDs) was removed in
-	// CONC-9; it fingerprinted one file at a time with an explicit per-item sleep.
+	// with bounded Concurrency). That deletion left startup no longer
+	// auto-fingerprinting — coverage only advanced when an operator ran the
+	// on-demand library.optimize sweep. Restore the original boot behavior by
+	// enqueuing the parallel op once at startup. It is idempotent (skips files
+	// that already have a fingerprint) and runs in the registry's own worker
+	// pool, so this is fire-and-forget — no bgWG enrollment (the op's lifecycle
+	// is owned by opRegistry, not the backfill WaitGroup).
+	go func() {
+		if err := s.bgCtx.Err(); err != nil {
+			return
+		}
+		if _, err := s.opRegistry.EnqueueOp(s.bgCtx, "acoustid.backfill", nil); err != nil {
+			slog.Warn("startup acoustid.backfill enqueue failed", "err", err)
+		} else {
+			slog.Info("startup: enqueued acoustid.backfill fingerprint op")
+		}
+	}()
 
 	// PERF-VERSIONS: write the book:versiongroup:<gid>:<id> secondary
 	// index for every existing book once so /audiobooks/:id/versions
