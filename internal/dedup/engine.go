@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.48.0
+// version: 1.49.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-07-05
 
@@ -3441,6 +3441,22 @@ func (de *Engine) AcoustIDScan(ctx context.Context, progress func(done, total in
 	for _, b := range books {
 		boilerplateBookCache[b.ID] = isBoilerplateTitle(b.Title)
 	}
+
+	// CONC-3 (docs/audits/2026-07-05-concurrency-single-threaded-hotspots.md):
+	// This per-book loop is embarrassingly parallel — each book's LSH lookup
+	// + Tier-1 segment walk only reads that book's own files — but it shares
+	// FOUR maps + a counter across every book, all mutated inside emit()/the
+	// loop: booksByID, boilerplateBookCache, parentDirCache, emitted, and
+	// identifierGateDrops. mu guards all five. Following TASK-01's
+	// (BookSignatureScan) pattern, the ENTIRE emit() body runs under mu: the
+	// emitted-key check-then-set must be atomic across workers (splitting it
+	// into separate lock/unlock windows would let two workers both pass the
+	// "not already emitted" check for the same pair and double-upsert), and
+	// emits are rare relative to the LSH/segment-walk traffic that stays
+	// lock-free, so this keeps the parallelized work on the hot path.
+	var mu sync.Mutex
+	// isBoilerplateBook is only called from within the locked emit() body
+	// below — mu is already held, so no internal locking here.
 	isBoilerplateBook := func(bookID string) bool {
 		if blocked, ok := boilerplateBookCache[bookID]; ok {
 			return blocked
@@ -3456,7 +3472,7 @@ func (de *Engine) AcoustIDScan(ctx context.Context, progress func(done, total in
 
 	// emitted tracks canonical pair keys we've already inserted this run so we
 	// don't call UpsertCandidate multiple times for the same pair (can happen
-	// when two books share several segments).
+	// when two books share several segments). Guarded by mu.
 	emitted := make(map[string]struct{})
 	pairKey := func(a, b string) string {
 		if a > b {
@@ -3467,6 +3483,9 @@ func (de *Engine) AcoustIDScan(ctx context.Context, progress func(done, total in
 
 	// Per-book parent-directory cache so we don't fetch BookFiles twice per
 	// comparison. Empty string = unknown / no files / different parents.
+	// Guarded by mu: populated both by the per-book priming step in the
+	// RunItems callback below and lazily inside parentDirForBook (which, like
+	// isBoilerplateBook, is only called from within the locked emit() body).
 	parentDirCache := make(map[string]string)
 	parentDirForBook := func(bookID string) string {
 		if v, ok := parentDirCache[bookID]; ok {
@@ -3489,6 +3508,8 @@ func (de *Engine) AcoustIDScan(ctx context.Context, progress func(done, total in
 	}
 
 	identifierGateDrops := 0
+	// bookForIdentifierGate is only called from within the locked emit()
+	// body below — mu is already held, so no internal locking here.
 	bookForIdentifierGate := func(bookID string) *database.Book {
 		if b := booksByID[bookID]; b != nil {
 			return b
@@ -3500,7 +3521,13 @@ func (de *Engine) AcoustIDScan(ctx context.Context, progress func(done, total in
 		booksByID[bookID] = b
 		return b
 	}
+	// emit runs the full pair decision + all four-map/counter mutation under
+	// mu (see CONC-3 comment above), so concurrent workers can never
+	// interleave on the same pair key and the guarded state sees exactly the
+	// same sequence of updates the serial scan produced.
 	emit := func(bookAID, bookBID string, sim float64) {
+		mu.Lock()
+		defer mu.Unlock()
 		if isBoilerplateBook(bookAID) || isBoilerplateBook(bookBID) {
 			return
 		}
@@ -3538,120 +3565,121 @@ func (de *Engine) AcoustIDScan(ctx context.Context, progress func(done, total in
 	}
 
 	total := len(books)
-	for i, book := range books {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
+	err = registry.RunItems(ctx, &progressCallbackReporter{progress: progress}, books,
+		func(_ context.Context, book database.Book) error {
+			files, err := de.bookStore.GetBookFiles(book.ID)
+			if err != nil {
+				slog.Info("[dedup] acoustid scan get files for", "book", book.ID, "err", err)
+				return nil
+			}
 
-		files, err := de.bookStore.GetBookFiles(book.ID)
-		if err != nil {
-			slog.Info("[dedup] acoustid scan get files for", "book", book.ID, "err", err)
-			continue
-		}
-
-		// Prime cache for this book (avoids the duplicate GetBookFiles
-		// inside parentDirForBook when emit is called for this side).
-		if _, cached := parentDirCache[book.ID]; !cached {
-			if len(files) == 0 {
-				parentDirCache[book.ID] = ""
-			} else {
-				dir := filepath.Dir(files[0].FilePath)
-				ok := true
-				for _, bf := range files[1:] {
-					if filepath.Dir(bf.FilePath) != dir {
-						ok = false
-						break
-					}
-				}
-				if ok {
-					parentDirCache[book.ID] = dir
-				} else {
+			// Prime cache for this book (avoids the duplicate GetBookFiles
+			// inside parentDirForBook when emit is called for this side).
+			// Pure in-memory (files already fetched above) — cheap even
+			// though every worker takes this lock once per book.
+			mu.Lock()
+			if _, cached := parentDirCache[book.ID]; !cached {
+				if len(files) == 0 {
 					parentDirCache[book.ID] = ""
-				}
-			}
-		}
-
-		// LSH-backed candidate lookup is optional — only PebbleStore
-		// implements it. SQLite/mock stores skip this path and fall
-		// through to the segment walk below.
-		lshStore, _ := de.bookStore.(interface {
-			LookupAcoustIDCandidates(fp []byte, maxCandidates int) ([]string, error)
-			GetBookFileByID(bookID, fileID string) (*database.BookFile, error)
-		})
-
-		for _, f := range files {
-			if isBoilerplateTitle(f.Title) {
-				continue
-			}
-			// Skip files whose fingerprint duration is below the minimum — these
-			// are typically short publisher jingles or intro clips that appear on
-			// many unrelated books and produce false-positive pairs.
-			if knownShortFingerprintFile(f) {
-				continue
-			}
-			// Tier-0: whole-file LSH candidate set + Hamming refine.
-			// Sub-linear via the fpidx: secondary index, so it runs
-			// unconditionally (index caps candidates, so work is bounded).
-			if lshStore != nil && len(f.AcoustIDFingerprint) > 0 {
-				cands, _ := lshStore.LookupAcoustIDCandidates(f.AcoustIDFingerprint, 200)
-				for _, candID := range cands {
-					if candID == f.ID {
-						continue
+				} else {
+					dir := filepath.Dir(files[0].FilePath)
+					ok := true
+					for _, bf := range files[1:] {
+						if filepath.Dir(bf.FilePath) != dir {
+							ok = false
+							break
+						}
 					}
-					cand, _ := lshStore.GetBookFileByID("", candID)
-					if cand == nil || cand.BookID == book.ID || len(cand.AcoustIDFingerprint) == 0 ||
-						isBoilerplateTitle(cand.Title) {
-						continue
-					}
-					sim, simErr := fingerprint.WholeFileSimilarity(f.AcoustIDFingerprint, cand.AcoustIDFingerprint)
-					if simErr != nil {
-						continue
-					}
-					if sim >= fingerprint.FuzzyMinSimilarity {
-						emit(book.ID, cand.BookID, sim)
+					if ok {
+						parentDirCache[book.ID] = dir
+					} else {
+						parentDirCache[book.ID] = ""
 					}
 				}
 			}
+			mu.Unlock()
 
-			// Tier-1 (exact) and Tier-2 (legacy fuzzy walk) over seg
-			// strings — still useful for rows that haven't been
-			// re-fingerprinted to whole-file yet (no AcoustIDFingerprint).
-			segs := []string{
-				f.AcoustIDSeg0, f.AcoustIDSeg1, f.AcoustIDSeg2,
-				f.AcoustIDSeg3, f.AcoustIDSeg4, f.AcoustIDSeg5,
-				f.AcoustIDSeg6,
-			}
-			for _, seg := range segs {
-				if seg == "" {
+			// LSH-backed candidate lookup is optional — only PebbleStore
+			// implements it. SQLite/mock stores skip this path and fall
+			// through to the segment walk below.
+			lshStore, _ := de.bookStore.(interface {
+				LookupAcoustIDCandidates(fp []byte, maxCandidates int) ([]string, error)
+				GetBookFileByID(bookID, fileID string) (*database.BookFile, error)
+			})
+
+			for _, f := range files {
+				if isBoilerplateTitle(f.Title) {
 					continue
 				}
-				// Reject degenerate fingerprints (e.g. "AQAAAA" sentinel
-				// from a failed ffmpeg seek). They'd otherwise match every
-				// other book carrying the same sentinel at similarity 1.0.
-				// The writer now drops these, but old rows in production
-				// still need this guard until reset-and-rescan clears them.
-				if !fingerprint.IsUsefulFingerprint(seg) {
+				// Skip files whose fingerprint duration is below the minimum — these
+				// are typically short publisher jingles or intro clips that appear on
+				// many unrelated books and produce false-positive pairs.
+				if knownShortFingerprintFile(f) {
 					continue
 				}
+				// Tier-0: whole-file LSH candidate set + Hamming refine.
+				// Sub-linear via the fpidx: secondary index, so it runs
+				// unconditionally (index caps candidates, so work is bounded).
+				if lshStore != nil && len(f.AcoustIDFingerprint) > 0 {
+					cands, _ := lshStore.LookupAcoustIDCandidates(f.AcoustIDFingerprint, 200)
+					for _, candID := range cands {
+						if candID == f.ID {
+							continue
+						}
+						cand, _ := lshStore.GetBookFileByID("", candID)
+						if cand == nil || cand.BookID == book.ID || len(cand.AcoustIDFingerprint) == 0 ||
+							isBoilerplateTitle(cand.Title) {
+							continue
+						}
+						sim, simErr := fingerprint.WholeFileSimilarity(f.AcoustIDFingerprint, cand.AcoustIDFingerprint)
+						if simErr != nil {
+							continue
+						}
+						if sim >= fingerprint.FuzzyMinSimilarity {
+							emit(book.ID, cand.BookID, sim)
+						}
+					}
+				}
 
-				// Tier 1: exact match (O(1) via Pebble book_file_acoustid: index).
-				exactHit, _ := de.bookStore.GetBookFileByAcoustID(seg)
-				if exactHit != nil && exactHit.BookID != book.ID {
-					if isBoilerplateTitle(exactHit.Title) {
+				// Tier-1 (exact) and Tier-2 (legacy fuzzy walk) over seg
+				// strings — still useful for rows that haven't been
+				// re-fingerprinted to whole-file yet (no AcoustIDFingerprint).
+				segs := []string{
+					f.AcoustIDSeg0, f.AcoustIDSeg1, f.AcoustIDSeg2,
+					f.AcoustIDSeg3, f.AcoustIDSeg4, f.AcoustIDSeg5,
+					f.AcoustIDSeg6,
+				}
+				for _, seg := range segs {
+					if seg == "" {
 						continue
 					}
-					emit(book.ID, exactHit.BookID, 1.0)
-					continue
+					// Reject degenerate fingerprints (e.g. "AQAAAA" sentinel
+					// from a failed ffmpeg seek). They'd otherwise match every
+					// other book carrying the same sentinel at similarity 1.0.
+					// The writer now drops these, but old rows in production
+					// still need this guard until reset-and-rescan clears them.
+					if !fingerprint.IsUsefulFingerprint(seg) {
+						continue
+					}
+
+					// Tier 1: exact match (O(1) via Pebble book_file_acoustid: index).
+					exactHit, _ := de.bookStore.GetBookFileByAcoustID(seg)
+					if exactHit != nil && exactHit.BookID != book.ID {
+						if isBoilerplateTitle(exactHit.Title) {
+							continue
+						}
+						emit(book.ID, exactHit.BookID, 1.0)
+						continue
+					}
+
 				}
-
 			}
-		}
-
-		if progress != nil && (i%50 == 0 || i == total-1) {
-			progress(i+1, total)
-		}
+			return nil
+		},
+		registry.RunItemsOptions{Concurrency: runtime.NumCPU()},
+	)
+	if err != nil {
+		return err
 	}
 
 	slog.Info("[dedup] acoustid scan complete books scanned, candidate pair(s) emitted",
