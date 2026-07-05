@@ -1,13 +1,27 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.108.0 -->
+<!-- version: 3.109.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
-<!-- last-edited: 2026-07-04 -->
+<!-- last-edited: 2026-07-05 -->
 
 # Changelog
 
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 5, 2026 - fix(release): unblock Production Release job stuck on missing GOEXPERIMENT in release-time go vet
+
+- **`fix(ci)`** — `release-prod.yml`'s Go build job started failing on
+  `go vet ./...` with `imports encoding/json/v2: build constraints exclude
+  all Go files`, even though `ci.yml`/`codeql.yml` vet the same commit
+  successfully. Root cause: `gha-release-go`'s "Run linters" step never
+  forwards its `go-experiment` input into `GOEXPERIMENT`, only the tag-push
+  and GoReleaser steps do — so `run-linters: true` (its default) always vets
+  without the experiment flag this repo requires. `falkcorp/github-common`
+  PR #314 adds a `go-run-linters` passthrough input to
+  `reusable-release.yml`; this repo now sets `go-run-linters: false` and
+  bumps the pin to that merge commit. Release-time linting was redundant
+  with `ci.yml` anyway. Root cause in `gha-release-go` itself is still open.
 
 #### July 4, 2026 - calibration observability: best-achieved precision + high-cosine not_dup sample (dedup.calibrate-embedding-thresholds)
 
