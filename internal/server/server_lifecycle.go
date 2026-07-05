@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 1.41.0
+// version: 1.42.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-07-03
+// last-edited: 2026-07-05
 
 package server
 
@@ -904,11 +904,11 @@ func (s *Server) startBackfills() {
 		s.backfillExternalIDs()
 	}()
 
-	s.bgWG.Add("acoustid-backfill")
-	go func() {
-		defer s.bgWG.Done("acoustid-backfill")
-		s.backfillAcoustIDs(s.bgCtx)
-	}()
+	// AcoustID fingerprint backfill is handled by the parallel plugin op
+	// acoustid.backfill (internal/plugins/acoustid/backfill.go, registry.RunItems
+	// with bounded Concurrency), a child of the library.optimize maintenance
+	// sweep. The serial server-side duplicate (backfillAcoustIDs) was removed in
+	// CONC-9; it fingerprinted one file at a time with an explicit per-item sleep.
 
 	// PERF-VERSIONS: write the book:versiongroup:<gid>:<id> secondary
 	// index for every existing book once so /audiobooks/:id/versions
