@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.110.0 -->
+<!-- version: 3.110.1 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-05 -->
 
@@ -8,6 +8,27 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 5, 2026 - fix(ci): unblock Production Release end-to-end (org ruleset + ghcommon repo-ref)
+
+- **`fix(ci)`** — the release pipeline was blocked by a chain of 4 issues,
+  now all resolved: (1) the `jdfalk-ci-bot` GitHub App was never
+  reinstalled on the `falkcorp` org after the June migration, causing
+  `create-github-app-token` to 404 on every release; (2) `gha-release-go`'s
+  lint step doesn't forward `GOEXPERIMENT`, so release-time `go vet` failed
+  on `jsonv2` imports CI had already vetted correctly — worked around via
+  `go-run-linters: false`; (3) an org ruleset added during the June 5
+  migration bundled `required_linear_history` onto all `v*` tag pushes,
+  which can never pass given this repo's pre-rebase-only history (old merge
+  commits like `95eaf063` are permanent ancestors of `main`) — confirmed via
+  3 independent tests that bypass_actors exemption doesn't work for
+  App-authenticated tag pushes, so the rule was removed org-wide rather than
+  chasing the bypass mechanism further; (4) `reusable-release.yml`'s
+  "Checkout ghcommon workflow scripts" step hardcoded the pre-migration
+  `jdfalk/ghcommon` repo path, 400'ing on every release's "Create GitHub
+  Release" job (`falkcorp/github-common#315`). Bumped the `reusable-release.yml`
+  pin to `e44a03f` (v2.14.1) in both `release-prod.yml` and `prerelease.yml`.
+  First clean end-to-end release verified: v0.217.1.
 
 #### July 5, 2026 - fix(dedup): make FullScan's unified-scoring pass respond promptly to op cancellation
 

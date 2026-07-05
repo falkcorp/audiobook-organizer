@@ -1,5 +1,5 @@
 # file: .github/workflows/release-prod.yml
-# version: 4.9.2
+# version: 4.9.3
 # guid: f1a2b3c4-d5e6-7f8a-9b0c-1d2e3f4a5b6c
 # last-edited: 2026-07-05
 
@@ -42,7 +42,7 @@ permissions:
 jobs:
   release:
     name: Create Production Release
-    uses: falkcorp/github-common/.github/workflows/reusable-release.yml@a0b07902d63eb6d732290805181fb02da6ad4fbf # v2.14.0 (go-run-linters passthrough)
+    uses: falkcorp/github-common/.github/workflows/reusable-release.yml@e44a03f9da7de181d31fc05e173a3a1ddaeda941 # v2.14.1 (ghcommon repo-ref fix)
     with:
       release-type: ${{ github.event.inputs.release-type }}
       prerelease: false
@@ -51,12 +51,6 @@ jobs:
       go-enabled: true
       frontend-enabled: true
       docker-enabled: true
-      # TEMPORARY: docker-enabled: false doesn't actually skip Docker --
-      # reusable-release.yml treats false as "auto" (auto-detects the
-      # Dockerfile and builds anyway). build-target is the real hard gate;
-      # restrict to 'go' while testing the tag-push ruleset fix, then
-      # revert to unset/'all' once confirmed working end-to-end.
-      build-target: 'go'
       system-packages: 'libtag1-dev'
       pre-build-script: 'cd web && npm ci && npm run build'
       go-experiment: 'jsonv2'

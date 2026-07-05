@@ -1,5 +1,5 @@
 # file: .github/workflows/prerelease.yml
-# version: 2.10.0
+# version: 2.10.1
 # guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
 # last-edited: 2026-07-05
 
@@ -28,21 +28,18 @@ env:
 jobs:
   prerelease:
     name: Create Prerelease Build
-    uses: falkcorp/github-common/.github/workflows/reusable-release.yml@a0b07902d63eb6d732290805181fb02da6ad4fbf # v2.14.0 (go-run-linters passthrough)
+    uses: falkcorp/github-common/.github/workflows/reusable-release.yml@e44a03f9da7de181d31fc05e173a3a1ddaeda941 # v2.14.1 (ghcommon repo-ref fix)
     with:
       release-type: 'auto'
       prerelease: true
       draft: false
       go-enabled: true
       frontend-enabled: true
-      docker-enabled: false
-      # TEMPORARY: docker-enabled: false doesn't actually skip Docker --
+      # NOTE: docker-enabled: false does not actually skip Docker --
       # reusable-release.yml treats false as "auto" (auto-detects the
-      # Dockerfile and builds anyway) -- this repo's prerelease builds have
-      # always built Docker images despite this flag. build-target is the
-      # real hard gate; restrict to 'go' while testing the tag-push
-      # ruleset fix, then revert to unset/'all' once confirmed working.
-      build-target: 'go'
+      # Dockerfile and builds anyway), so prerelease builds have always
+      # built Docker images despite this flag. Pre-existing, not fixed here.
+      docker-enabled: false
       system-packages: 'libtag1-dev'
       pre-build-script: 'cd web && npm ci && npm run build'
       go-experiment: 'jsonv2'
