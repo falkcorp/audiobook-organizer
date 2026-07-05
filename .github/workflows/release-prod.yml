@@ -1,5 +1,5 @@
 # file: .github/workflows/release-prod.yml
-# version: 4.9.1
+# version: 4.9.2
 # guid: f1a2b3c4-d5e6-7f8a-9b0c-1d2e3f4a5b6c
 # last-edited: 2026-07-05
 
@@ -50,9 +50,13 @@ jobs:
       stable: true
       go-enabled: true
       frontend-enabled: true
-      # TEMPORARY: disabled for release-pipeline testing (tag-push ruleset fix).
-      # Re-enable once Go build / tag push / GitHub Release are confirmed working.
-      docker-enabled: false
+      docker-enabled: true
+      # TEMPORARY: docker-enabled: false doesn't actually skip Docker --
+      # reusable-release.yml treats false as "auto" (auto-detects the
+      # Dockerfile and builds anyway). build-target is the real hard gate;
+      # restrict to 'go' while testing the tag-push ruleset fix, then
+      # revert to unset/'all' once confirmed working end-to-end.
+      build-target: 'go'
       system-packages: 'libtag1-dev'
       pre-build-script: 'cd web && npm ci && npm run build'
       go-experiment: 'jsonv2'

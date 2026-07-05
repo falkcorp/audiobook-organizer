@@ -1,7 +1,7 @@
 # file: .github/workflows/prerelease.yml
-# version: 2.9.4
+# version: 2.10.0
 # guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-# last-edited: 2026-07-03
+# last-edited: 2026-07-05
 
 name: Prerelease on Merge
 
@@ -28,7 +28,7 @@ env:
 jobs:
   prerelease:
     name: Create Prerelease Build
-    uses: falkcorp/github-common/.github/workflows/reusable-release.yml@1dec34cd8d8e2504d9be8298b522eff11448a401 # v2.13.4
+    uses: falkcorp/github-common/.github/workflows/reusable-release.yml@a0b07902d63eb6d732290805181fb02da6ad4fbf # v2.14.0 (go-run-linters passthrough)
     with:
       release-type: 'auto'
       prerelease: true
@@ -36,7 +36,18 @@ jobs:
       go-enabled: true
       frontend-enabled: true
       docker-enabled: false
+      # TEMPORARY: docker-enabled: false doesn't actually skip Docker --
+      # reusable-release.yml treats false as "auto" (auto-detects the
+      # Dockerfile and builds anyway) -- this repo's prerelease builds have
+      # always built Docker images despite this flag. build-target is the
+      # real hard gate; restrict to 'go' while testing the tag-push
+      # ruleset fix, then revert to unset/'all' once confirmed working.
+      build-target: 'go'
       system-packages: 'libtag1-dev'
       pre-build-script: 'cd web && npm ci && npm run build'
       go-experiment: 'jsonv2'
+      # gha-release-go's lint step doesn't set GOEXPERIMENT from go-experiment,
+      # so go vet fails on jsonv2 imports even though ci.yml already vetted
+      # this commit correctly. Skip until fixed upstream in gha-release-go.
+      go-run-linters: false
     secrets: inherit
