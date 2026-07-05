@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.111.0 -->
+<!-- version: 3.111.1 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-05 -->
 
@@ -8,6 +8,25 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 5, 2026 - fix(ci): bump ghcommon pin for ghcommon-scripts ref-resolution fix (5th release-pipeline blocker)
+
+- **`fix(ci)`** — the first full end-to-end release attempt (Go + frontend +
+  Docker all enabled) hit a 5th distinct blocker after the prior 4 fixes:
+  "Create GitHub Release" failed reproducibly (2 consecutive attempts,
+  identical error) fetching ghcommon's helper scripts, because two of
+  `reusable-release.yml`'s three "Determine ghcommon workflow ref" steps
+  parsed `GITHUB_WORKFLOW_REF`, which in a reusable-workflow context
+  extracts the *calling* repo's own ref rather than one specific to
+  `github-common`. That ref name happened to also be valid in
+  `github-common`, but `actions/checkout`'s resolution of it hit a
+  GitHub Actions-side bug: it consistently returned a commit SHA that
+  doesn't exist in either repo (confirmed via the GitHub API and via a
+  direct `git ls-remote`, which resolves the same ref correctly outside
+  Actions). Fixed in `falkcorp/github-common#316` by unifying all three
+  occurrences to a pinned-file lookup (`.github/ghcommon-ref.txt`)
+  instead of live ref resolution. Bumped the pin to `c4ea62e` (v2.14.2)
+  here.
 
 #### July 5, 2026 - fix(dedup): BookSignatureScan silently no-op under prod's memdb default (CONC-16)
 
