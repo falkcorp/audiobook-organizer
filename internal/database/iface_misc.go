@@ -1,7 +1,7 @@
 // file: internal/database/iface_misc.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 473781a7-1a31-4914-b7c7-8efc91f9f7e6
-// last-edited: 2026-07-03
+// last-edited: 2026-07-05
 
 package database
 
@@ -135,9 +135,14 @@ type BookFileStore interface {
 	CreateBookFile(file *BookFile) error
 	UpdateBookFile(id string, file *BookFile) error
 	GetBookFiles(bookID string) ([]BookFile, error)
+	// GetAllBookFiles is SLIM (memdb projection) — see
+	// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
 	GetAllBookFiles() ([]BookFile, error)
 	// GetBookFilesNeedingDelugeImport returns book_files that have a deluge_hash
 	// but have not yet been copied into the library (imported_from_deluge_at IS NULL).
+	//
+	// SLIM (memdb projection) — see
+	// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
 	GetBookFilesNeedingDelugeImport() ([]BookFile, error)
 	GetBookFileByID(bookID, fileID string) (*BookFile, error)
 	GetBookFileByPID(itunesPID string) (*BookFile, error)

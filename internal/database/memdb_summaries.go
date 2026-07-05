@@ -1,7 +1,7 @@
 // file: internal/database/memdb_summaries.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000008
-// last-edited: 2026-07-01
+// last-edited: 2026-07-05
 
 package database
 
@@ -129,7 +129,7 @@ func (m *MemStore) GetBookSummaries(limit, offset int, f BookSummaryFilter) ([]B
 	}
 
 	// excludeDeleted: by default we drop marked_for_deletion=true rows
-	// (mirrors GetAllBookSummaries_Pebble). An explicit filter overrides.
+	// (mirrors getAllBookSummariesFull). An explicit filter overrides.
 	excludeDeleted := true
 	requireDeleted := false
 	if f.MarkedForDeletion != nil {

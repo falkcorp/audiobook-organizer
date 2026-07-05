@@ -1,7 +1,7 @@
 // file: internal/database/iface_book.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: 668ec5a2-f8d9-4fdb-b0d5-09937b5d83ea
-// last-edited: 2026-06-23
+// last-edited: 2026-07-05
 
 package database
 
@@ -26,12 +26,14 @@ type UpdateBookRatingRequest struct {
 // read books. See spec 2026-04-17-store-interface-segregation-design.md.
 type BookReader interface {
 	GetBookByID(id string) (*Book, error)
+	// GetAllBooks is SLIM (memdb projection) — see
+	// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
 	GetAllBooks(limit, offset int) ([]Book, error)
-	// GetAllBooksFrom returns up to limit non-deleted books whose PebbleDB key
+	// GetAllBooksFullFrom returns up to limit non-deleted books whose PebbleDB key
 	// sorts after "book:<afterID>". Pass afterID="" to start from the beginning.
 	// This is an O(1) seek vs GetAllBooks's O(offset) skip — use for search
 	// index backfill and other full-table cursor scans.
-	GetAllBooksFrom(afterID string, limit int) ([]Book, error)
+	GetAllBooksFullFrom(afterID string, limit int) ([]Book, error)
 	// ListBookIDs returns just the IDs of all non-deleted books, without
 	// materializing Book structs. Saves ~50x memory vs GetAllBooks(0,0) when
 	// the caller only needs the ID set (e.g., diff'ing against another set).
@@ -44,10 +46,18 @@ type BookReader interface {
 	GetBookByOriginalHash(hash string) (*Book, error)
 	GetBookByOrganizedHash(hash string) (*Book, error)
 	GetDuplicateBooks() ([][]Book, error)
+	// GetFolderDuplicates is SLIM (memdb projection) — see
+	// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
 	GetFolderDuplicates() ([][]Book, error)
+	// GetDuplicateBooksByMetadata is SLIM (memdb projection) — see
+	// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
 	GetDuplicateBooksByMetadata(threshold float64) ([][]Book, error)
 	GetBooksByTitleInDir(normalizedTitle, dirPath string) ([]Book, error)
+	// GetBooksBySeriesID is SLIM (memdb projection) — see
+	// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
 	GetBooksBySeriesID(seriesID int) ([]Book, error)
+	// GetBooksByAuthorID is SLIM (memdb projection) — see
+	// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
 	GetBooksByAuthorID(authorID int) ([]Book, error)
 	GetBooksByVersionGroup(groupID string) ([]Book, error)
 	GetBooksByMetadataSourceHash(hash string) ([]Book, error)

@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.68.0
+// version: 1.69.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-07-03
+// last-edited: 2026-07-05
 
 package database
 
@@ -35,7 +35,7 @@ type MockStore struct {
 	GetBookByIDFunc                 func(id string) (*Book, error)
 	GetBookByFilePathFunc           func(path string) (*Book, error)
 	GetAllBooksFunc                 func(limit, offset int) ([]Book, error)
-	GetAllBooksFromFunc             func(afterID string, limit int) ([]Book, error)
+	GetAllBooksFullFromFunc         func(afterID string, limit int) ([]Book, error)
 	ListBookIDsFunc                 func() ([]string, error)
 	GetAllBookSummariesFunc         func(limit, offset int) ([]BookSummary, error)
 	GetBooksByWorkIDFunc            func(workID string) ([]Book, error)
@@ -669,9 +669,9 @@ func (m *MockStore) GetAllBooks(limit, offset int) ([]Book, error) {
 	return nil, nil
 }
 
-func (m *MockStore) GetAllBooksFrom(afterID string, limit int) ([]Book, error) {
-	if m.GetAllBooksFromFunc != nil {
-		return m.GetAllBooksFromFunc(afterID, limit)
+func (m *MockStore) GetAllBooksFullFrom(afterID string, limit int) ([]Book, error) {
+	if m.GetAllBooksFullFromFunc != nil {
+		return m.GetAllBooksFullFromFunc(afterID, limit)
 	}
 	return nil, nil
 }

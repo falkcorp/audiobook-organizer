@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.12.0
+// version: 3.12.1
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-07-01
+// last-edited: 2026-07-05
 
 package maintenance
 
@@ -120,7 +120,7 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 
 	// Load the FULL, ordered list of book IDs up front. This is the proven
 	// uncapped primitive (memdb ID-index walk). The previous implementation
-	// paginated via GetAllBooksFrom, whose memdb path silently stopped after
+	// paginated via GetAllBooksFullFrom, whose memdb path silently stopped after
 	// 2*pageSize books — so only the first ~400 books of the library were ever
 	// transcribed. See fix/transcribe-full-library.
 	allIDs, err := store.ListBookIDs()

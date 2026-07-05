@@ -1,7 +1,7 @@
 // file: internal/database/pebble_books_pagination_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7f2a9c14-3b6d-4e81-9a2c-0d5f1e8b4a37
-// last-edited: 2026-06-26
+// last-edited: 2026-07-05
 
 package database
 
@@ -13,13 +13,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestGetAllBooksFrom_PaginatesPastDoubleLimit is a regression test for the
-// memdb-path bug where GetAllBooksFrom loaded only limit*2+1 books from the
+// TestGetAllBooksFullFrom_PaginatesPastDoubleLimit is a regression test for the
+// memdb-path bug where GetAllBooksFullFrom loaded only limit*2+1 books from the
 // start and searched for the cursor within that window. Cursor pagination
 // therefore stalled at the 2*limit boundary, so full-table backfills (intro
 // transcription, search index) only ever processed the first ~2 pages of the
 // library. See fix/transcribe-full-library.
-func TestGetAllBooksFrom_PaginatesPastDoubleLimit(t *testing.T) {
+func TestGetAllBooksFullFrom_PaginatesPastDoubleLimit(t *testing.T) {
 	store := setupTestPebbleStore(t)
 	store.WaitForWarmup()
 	require.True(t, store.UseMemDB, "test must exercise the memdb path")
@@ -47,7 +47,7 @@ func TestGetAllBooksFrom_PaginatesPastDoubleLimit(t *testing.T) {
 	cursor := ""
 	pages := 0
 	for {
-		page, err := store.GetAllBooksFrom(cursor, pageSize)
+		page, err := store.GetAllBooksFullFrom(cursor, pageSize)
 		require.NoError(t, err)
 		if len(page) == 0 {
 			break
@@ -70,10 +70,10 @@ func TestGetAllBooksFrom_PaginatesPastDoubleLimit(t *testing.T) {
 		total, len(seen), pageSize*2)
 }
 
-// TestGetAllBooksFrom_UnknownCursorEndsIteration verifies that a stale/unknown
+// TestGetAllBooksFullFrom_UnknownCursorEndsIteration verifies that a stale/unknown
 // cursor returns no rows (ending iteration) rather than restarting from the
 // top — which would loop forever.
-func TestGetAllBooksFrom_UnknownCursorEndsIteration(t *testing.T) {
+func TestGetAllBooksFullFrom_UnknownCursorEndsIteration(t *testing.T) {
 	store := setupTestPebbleStore(t)
 	store.WaitForWarmup()
 
@@ -84,7 +84,7 @@ func TestGetAllBooksFrom_UnknownCursorEndsIteration(t *testing.T) {
 		store.UpsertBookToMemDB(context.Background(), created)
 	}
 
-	page, err := store.GetAllBooksFrom("zzzz-nonexistent-cursor", 10)
+	page, err := store.GetAllBooksFullFrom("zzzz-nonexistent-cursor", 10)
 	require.NoError(t, err)
 	require.Empty(t, page, "unknown cursor must end iteration, not restart")
 }
