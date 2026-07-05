@@ -1,5 +1,5 @@
 // file: internal/dedup/engine_booksig_parallel_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3c9e7d21-6b48-4f0a-9d2e-8a1f5c04b7e6
 // last-edited: 2026-07-05
 
@@ -109,6 +109,16 @@ func TestParallelBookSignatureScan_SameCandidatesAsSerial(t *testing.T) {
 		copy(out, books)
 		return out, nil
 	}
+	// BookSignatureScan now sources from GetAllBooksFrom, not GetAllBooks (see
+	// getAllPrimaryBooksWithFullFields's doc comment — GetAllBooks stands in
+	// for the memdb-projected, BookSigV1-stripped read path in production, so
+	// wiring it here too would make this test pass even if the scan regressed
+	// to reading the stripped source again).
+	mock.GetAllBooksFromFunc = func(afterID string, limit int) ([]database.Book, error) {
+		out := make([]database.Book, len(books))
+		copy(out, books)
+		return out, nil
+	}
 	// captureLiveLabel -> dataset.BuildExample reads books by ID; provide them
 	// so live-capture doesn't error (best-effort, but keeps the path realistic).
 	mock.GetBookByIDFunc = func(id string) (*database.Book, error) {
@@ -119,9 +129,9 @@ func TestParallelBookSignatureScan_SameCandidatesAsSerial(t *testing.T) {
 	}
 
 	// Ground truth: independent serial nested loop over the exact scanned set.
-	scanned, err := engine.getAllBooks()
+	scanned, err := engine.getAllPrimaryBooksWithFullFields()
 	if err != nil {
-		t.Fatalf("getAllBooks: %v", err)
+		t.Fatalf("getAllPrimaryBooksWithFullFields: %v", err)
 	}
 	withSig := scanned[:0:0]
 	for _, b := range scanned {
@@ -192,5 +202,57 @@ func TestParallelBookSignatureScan_SameCandidatesAsSerial(t *testing.T) {
 	}
 	if last != total {
 		t.Fatalf("final progress done = %d, want %d", last, total)
+	}
+}
+
+// TestBookSignatureScan_SurvivesMemdbStrippedGetAllBooks reproduces the
+// production shape directly: GetAllBooks stands in for PebbleStore's
+// UseMemDB=true default, which strips BookSigV1 before returning Book
+// copies (stripBookForMemdb). GetAllBooksFrom stands in for the bypass path
+// (walks IDs, then GetBookByID per book, which always reads full Pebble
+// JSON regardless of UseMemDB). Before this fix, BookSignatureScan read
+// GetAllBooks and filtered on the now-nil BookSigV1, silently matching zero
+// books. This test fails on the pre-fix code (0 candidates) and passes
+// once the scan sources from GetAllBooksFrom instead.
+func TestBookSignatureScan_SurvivesMemdbStrippedGetAllBooks(t *testing.T) {
+	engine, mock, es := setupTestEngine(t)
+
+	sig := sigWord(0x12345678)
+	full := []database.Book{
+		{ID: "book-a", Title: "Book A", BookSigV1: &sig},
+		{ID: "book-b", Title: "Book B", BookSigV1: &sig},
+	}
+	stripped := make([]database.Book, len(full))
+	for i, b := range full {
+		cp := b
+		cp.BookSigV1 = nil // mirrors stripBookForMemdb
+		stripped[i] = cp
+	}
+
+	mock.GetAllBooksFunc = func(limit, offset int) ([]database.Book, error) {
+		return stripped, nil
+	}
+	mock.GetAllBooksFromFunc = func(afterID string, limit int) ([]database.Book, error) {
+		return full, nil
+	}
+	mock.GetBookByIDFunc = func(id string) (*database.Book, error) {
+		for _, b := range full {
+			if b.ID == id {
+				return &b, nil
+			}
+		}
+		return nil, nil
+	}
+
+	if err := engine.BookSignatureScan(context.Background(), nil); err != nil {
+		t.Fatalf("BookSignatureScan: %v", err)
+	}
+
+	cands, _, err := es.ListCandidates(database.CandidateFilter{EntityType: "book", Status: "pending", Limit: 100})
+	if err != nil {
+		t.Fatalf("ListCandidates: %v", err)
+	}
+	if len(cands) != 1 {
+		t.Fatalf("got %d candidates, want 1 (scan read the memdb-stripped GetAllBooks source instead of GetAllBooksFrom)", len(cands))
 	}
 }

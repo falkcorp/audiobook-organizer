@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.110.1 -->
+<!-- version: 3.111.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-05 -->
 
@@ -8,6 +8,23 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 5, 2026 - fix(dedup): BookSignatureScan silently no-op under prod's memdb default (CONC-16)
+
+- **`fix(dedup)`** — `BookSignatureScan` filtered on `Book.BookSigV1`, but
+  under `PebbleStore.UseMemDB=true` (the shipped production default),
+  `GetAllBooks(0,0)` returns memdb-projected `Book` copies with
+  `BookSigV1`/`BookSigV1Mask`/etc. stripped to nil (`stripBookForMemdb`).
+  The filter matched zero books and the scan silently completed having
+  compared nothing — no error surfaced. Found while verifying the
+  concurrency-parallelization sweep's follow-ups. Fixed by adding
+  `Engine.getAllPrimaryBooksWithFullFields`, which sources from
+  `GetAllBooksFrom` instead — that path already bypasses memdb per-book via
+  `GetBookByID` (used elsewhere for cursor-based full-table iteration).
+  `AcoustIDScan` was checked and is **not** affected: it reads fingerprint
+  data via the per-book `GetBookFiles` call, which reads raw Pebble
+  unconditionally regardless of `UseMemDB` (only the plural
+  `GetBookFilesForIDs` batch variant touches memdb).
 
 #### July 5, 2026 - fix(ci): unblock Production Release end-to-end (org ruleset + ghcommon repo-ref)
 
