@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/mine_gold_labels.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8f4c2a16-5d70-4e93-bc28-1a6e9d3b7c52
-// last-edited: 2026-06-18
+// last-edited: 2026-07-05
 
 // Package dedup — op dedup.mine-gold-labels (dedup tuning dataset, positive miner).
 //
@@ -25,10 +25,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"runtime"
+	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/dataset"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -78,63 +81,89 @@ func (p *Plugin) runMineGoldLabels(ctx context.Context, rawParams json.RawMessag
 	}
 	reporter.Logger().Info("mine-gold-labels: candidates loaded", "count", len(cands))
 
-	adapter := builderAdapter{store: p.store}
-	var examined, mined, written, errs int
+	// Book-lookup memoization: a book referenced by many candidate rows was
+	// re-read from the store on every occurrence (up to 4 reads/candidate with
+	// no reuse). Mirrors the bookCache pattern in drain_stale.go /
+	// server_maintenance_deps.go, wrapped in a mutex since the cache is now
+	// shared across the RunItems worker pool below (CONC-8).
+	adapter := newMemoizedBuilderAdapter(builderAdapter{store: p.store})
+
+	// examined/mined/written/errs are incremented from every worker goroutine
+	// below, so they're guarded by statsMu (the candidate processing itself —
+	// the store reads/writes — is independent per candidate and needs no lock).
+	var (
+		statsMu                        sync.Mutex
+		examined, mined, written, errs int
+	)
 
 	_ = reporter.UpdateProgress(1, 2, fmt.Sprintf("Mining %d candidates…", len(cands)))
-	for i := range cands {
+	err = registry.RunItems(ctx, reporter, cands, func(ctx context.Context, c database.DedupCandidate) error {
 		if reporter.IsCanceled() {
 			return context.Canceled
 		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
 
-		c := cands[i]
+		statsMu.Lock()
 		examined++
-		if examined%1000 == 0 {
-			_ = reporter.UpdateProgress(1, 2, fmt.Sprintf("Mined %d/%d…", examined, len(cands)))
-		}
+		statsMu.Unlock()
 
 		a, aErr := adapter.GetBook(c.EntityAID)
 		b, bErr := adapter.GetBook(c.EntityBID)
 		if aErr != nil || bErr != nil || a == nil || b == nil {
+			statsMu.Lock()
 			errs++
-			continue
+			statsMu.Unlock()
+			return nil
 		}
 		aFiles, afErr := adapter.GetBookFiles(c.EntityAID)
 		bFiles, bfErr := adapter.GetBookFiles(c.EntityBID)
 		if afErr != nil || bfErr != nil {
+			statsMu.Lock()
 			errs++
-			continue
+			statsMu.Unlock()
+			return nil
 		}
 
 		label, reason, fires := dataset.MineHighConfidenceDup(a, b, aFiles, bFiles)
 		if !fires {
-			continue
+			return nil
 		}
+		statsMu.Lock()
 		mined++
+		statsMu.Unlock()
 
 		if params.Apply {
 			ex, buildErr := dataset.BuildExample(adapter, c)
 			if buildErr != nil {
+				statsMu.Lock()
 				errs++
+				statsMu.Unlock()
 				reporter.Logger().Warn("mine-gold-labels: build example failed", "candidate_id", c.ID, "error", buildErr)
-				continue
+				return nil
 			}
 			ex.Label = label
 			ex.LabelSource = "auto_high_conf"
 			ex.LabelReason = reason
 			ex.DecidedAt = time.Now().UTC().Format(time.RFC3339)
 			if err := p.embeddingStore.UpsertLabeledExample(ex); err != nil {
+				statsMu.Lock()
 				errs++
+				statsMu.Unlock()
 				reporter.Logger().Error("mine-gold-labels: upsert error", "candidate_id", c.ID, "error", err)
-				continue
+				return nil
 			}
+			statsMu.Lock()
 			written++
+			statsMu.Unlock()
 		}
+		return nil
+	}, registry.RunItemsOptions{
+		Concurrency: runtime.NumCPU(),
+		Label: func(i, total int) string {
+			return fmt.Sprintf("Mined %d/%d…", i+1, total)
+		},
+	})
+	if err != nil {
+		return err
 	}
 
 	summary := fmt.Sprintf("examined=%d mined=%d written=%d errs=%d (apply=%v)", examined, mined, written, errs, params.Apply)

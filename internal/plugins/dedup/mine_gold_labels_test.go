@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/mine_gold_labels_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c5a71e38-9b20-4d64-8f12-3e6a9c7b2d05
-// last-edited: 2026-06-18
+// last-edited: 2026-07-05
 
 // End-to-end test for the dedup.mine-gold-labels op against a real PebbleStore +
 // EmbeddingStore: a candidate whose two books share a file hash is labeled
@@ -11,6 +11,7 @@ package dedup
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -114,5 +115,67 @@ func TestMineGoldLabels_DryRunWritesNothing(t *testing.T) {
 		t.Fatalf("GetLabeledExample: %v", err)
 	} else if ex != nil {
 		t.Fatal("dry-run must write nothing")
+	}
+}
+
+// TestMineGoldLabels_ParallelMatchesSerialOutput exercises the RunItems-backed
+// parallel path (CONC-8) with enough candidates to spread across every
+// runtime.NumCPU() worker, and with a single "hub" book referenced by every
+// candidate so the mutex-guarded book-lookup cache in
+// memoizedBuilderAdapter.GetBook actually gets contended across goroutines.
+// The op's output (which candidates fire true_dup, counts) is fully
+// deterministic given the fixture, independent of item processing order or
+// worker count — that determinism IS the "parallel == serial" guarantee, since
+// registry.RunItems with Concurrency==1 (serial) and Concurrency>1 (parallel)
+// both drive the exact same per-item function. Run with -race to catch any
+// unguarded shared state.
+func TestMineGoldLabels_ParallelMatchesSerialOutput(t *testing.T) {
+	pebble := newPebbleForISBNIndexTest(t)
+	es := database.NewEmbeddingStore(pebble.DB())
+
+	const numLeaves = 60 // comfortably exceeds runtime.NumCPU() on any CI box
+	hub := createBookWithHashedFile(t, pebble, "Hub", "hubsharedhash0001")
+
+	var wantTrueDup, wantUnlabeled []int64
+	for i := 0; i < numLeaves; i++ {
+		fires := i%2 == 0
+		hash := "hubsharedhash0001" // shared with hub -> fires true_dup
+		if !fires {
+			hash = fmt.Sprintf("distincthash%04d", i) // unique -> no signal
+		}
+		leaf := createBookWithHashedFile(t, pebble, fmt.Sprintf("Leaf%03d", i), hash)
+		cand := candidateID(t, es, hub, leaf)
+		if fires {
+			wantTrueDup = append(wantTrueDup, cand)
+		} else {
+			wantUnlabeled = append(wantUnlabeled, cand)
+		}
+	}
+
+	p := &Plugin{store: pebble, embeddingStore: es}
+	if err := p.runMineGoldLabels(context.Background(), json.RawMessage(`{"apply":true}`), &fakeReporter{}); err != nil {
+		t.Fatalf("runMineGoldLabels: %v", err)
+	}
+
+	for _, cand := range wantTrueDup {
+		ex, err := es.GetLabeledExample(cand)
+		if err != nil {
+			t.Fatalf("GetLabeledExample(%d): %v", cand, err)
+		}
+		if ex == nil {
+			t.Fatalf("candidate %d: expected true_dup/auto_high_conf label, got nil", cand)
+		}
+		if ex.Label != "true_dup" || ex.LabelSource != "auto_high_conf" {
+			t.Fatalf("candidate %d: label=%q source=%q; want true_dup/auto_high_conf", cand, ex.Label, ex.LabelSource)
+		}
+	}
+	for _, cand := range wantUnlabeled {
+		ex, err := es.GetLabeledExample(cand)
+		if err != nil {
+			t.Fatalf("GetLabeledExample(%d): %v", cand, err)
+		}
+		if ex != nil {
+			t.Fatalf("candidate %d: expected no label (no shared signal), got %+v", cand, ex)
+		}
 	}
 }
