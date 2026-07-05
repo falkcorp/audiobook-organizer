@@ -1,7 +1,7 @@
 // file: internal/dedup/engine.go
-// version: 1.45.0
+// version: 1.46.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
-// last-edited: 2026-07-04
+// last-edited: 2026-07-05
 
 package dedup
 
@@ -554,6 +554,16 @@ func (de *Engine) runUnifiedScoringForBook(ctx context.Context, book *database.B
 	}
 
 	for _, ref := range embeddingCandIDs {
+		// Cancellation check per-candidate, not just per-book: a single book
+		// with an unusually large pending-candidate set can otherwise run
+		// for a long time after the caller (FullScan) has already given up
+		// on this scan, making op cancellation unresponsive. See the
+		// 2026-07-05 incident where a full-scan cancel took 90+s and
+		// required a hard service restart.
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
 		candID := ref.otherID
 		otherBook, err := de.bookStore.GetBookByID(candID)
 		if err != nil || otherBook == nil {

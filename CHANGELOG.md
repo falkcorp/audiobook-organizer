@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.109.0 -->
+<!-- version: 3.110.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-05 -->
 
@@ -8,6 +8,29 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 5, 2026 - fix(dedup): make FullScan's unified-scoring pass respond promptly to op cancellation
+
+- **`fix(dedup)`** — cancelling a running `dedup.full-scan` op tonight took
+  90+ seconds to take effect and eventually required a hard `systemctl
+  restart` to force it. Root cause:
+  `internal/dedup/engine.go`'s `runUnifiedScoringForBook` (invoked once per
+  book from `FullScan`'s unified composite-scoring pass) has an inner
+  `for _, ref := range embeddingCandIDs { ... }` loop over every pending
+  candidate for that one book, with zero cancellation check inside it. The
+  outer `FullScan` loop correctly checks `ctx.Err()` once per book, but a
+  single book with an unusually large pending-candidate set could keep that
+  inner loop running long after the op was cancelled, with no way to notice.
+  Added a `ctx.Err()` check at the top of the per-candidate loop, returning
+  `ctx.Err()` (the function's existing `error` contract) so cancellation is
+  now noticed at per-candidate granularity, not just per-book. Purely a
+  cancellation-check addition — no goroutines, worker pools, or other
+  concurrency mechanism (that's separate work being planned elsewhere). New
+  regression test `TestRunUnifiedScoringForBook_StopsPromptlyOnCancel`
+  (`internal/dedup/engine_cancellation_test.go`) seeds multiple pending
+  candidates for one book, cancels the context mid-loop via a
+  `GetBookByID` hook, and asserts the function returns `context.Canceled`
+  promptly instead of processing every candidate.
 
 #### July 5, 2026 - fix(release): unblock Production Release job stuck on missing GOEXPERIMENT in release-time go vet
 
