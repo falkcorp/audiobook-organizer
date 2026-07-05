@@ -426,7 +426,9 @@ func (de *Engine) CheckBook(ctx context.Context, bookID string) (bool, error) {
 	if de.embeddingsEnabled() {
 		if _, err := de.EmbedBook(ctx, bookID); err != nil {
 			slog.Error("dedup embed book error for", "bookID", bookID, "err", err)
-		} else {
+		} else if !isNonPrimaryVersion(book) {
+			// Non-primary books get embedded above (calibration/QA datapoint)
+			// but never seed new dedup candidates — that stays primary-only.
 			if err := de.findSimilarBooks(ctx, bookID); err != nil {
 				slog.Error("dedup similarity search error for", "bookID", bookID, "err", err)
 			}
@@ -1852,6 +1854,16 @@ func (de *Engine) findSimilarBooks(ctx context.Context, bookID string) error {
 			// Other book no longer exists — skip the candidate.
 			continue
 		}
+		// Drop candidates where the OTHER side is a non-primary version-group
+		// member. Non-primary books are now embedded (calibration/QA
+		// datapoint — see DEDUP-NONPRIMARY-EMBED-KEEP-2026-07), so the SQLite
+		// linear-scan fallback above can surface one as a similarity match
+		// even though the chromem ANN path already excludes them via its
+		// is_primary_version filter. Candidate generation stays primary-only
+		// on both sides regardless of which path found the match.
+		if isNonPrimaryVersion(otherBook) {
+			continue
+		}
 		// Drop candidates with no usable title on the other side. Their
 		// embedding is noise (same reason as the query-side guard above).
 		if !hasUsableTitle(otherBook.Title) {
@@ -1993,10 +2005,12 @@ const (
 	// library almost every book lands here.
 	EmbedStatusCached
 
-	// EmbedStatusSkippedNonPrimary means the book is a non-primary
-	// member of a version group (alternate format of another book).
-	// Its identity is owned by the primary, so it gets no embedding.
-	// Any stale row for the book is deleted on the way out.
+	// EmbedStatusSkippedNonPrimary is retained for backward compatibility
+	// with callers that switch on it (e.g. internal/server/embedding_backfill.go)
+	// but is no longer produced by prepBookEmbed/EmbedBook: non-primary
+	// version-group members now get a real embedding like any other book (kept
+	// as a calibration/QA datapoint), they just don't feed findSimilarBooks.
+	// See DEDUP-NONPRIMARY-EMBED-KEEP-2026-07.
 	EmbedStatusSkippedNonPrimary
 
 	// EmbedStatusSkippedEmptyTitle means the book has no usable title
@@ -2029,12 +2043,11 @@ func (s EmbedStatus) String() string {
 // distinguish live API calls from cache hits and skipped-by-policy books.
 //
 // Non-primary versions (members of a version group that are not the primary
-// representative) are skipped entirely: their embedding would be a duplicate
-// of the primary's by construction, and surfacing them as dedup candidates
-// just clutters the UI with noise. Any existing embedding for a non-primary
-// book is deleted on the spot so historical rows from earlier backfills get
-// cleaned up as we walk the library. Empty-title books are skipped with
-// the same cleanup behavior.
+// representative) are embedded exactly like any other book — the embedding
+// is retained as a calibration/QA datapoint even though the book itself will
+// never seed a new dedup candidate (see isNonPrimaryVersion gates around
+// findSimilarBooks in CheckBook/FullScan). Empty-title books are still
+// skipped, with any stale row for them deleted on the way out.
 func (de *Engine) EmbedBook(ctx context.Context, bookID string) (EmbedStatus, error) {
 	results, err := de.EmbedBooks(ctx, []string{bookID})
 	if err != nil {
@@ -2098,13 +2111,17 @@ func (de *Engine) prepBookEmbed(ctx context.Context, bookID string) (
 		return nil, "", "", 0, true, fmt.Errorf("book %s not found", bookID)
 	}
 
-	if book.IsPrimaryVersion != nil && !*book.IsPrimaryVersion {
-		if delErr := de.embedStore.Delete("book", bookID); delErr != nil {
-			slog.Info("dedup delete stale embedding for non-primary", "bookID", bookID, "delErr", delErr)
-		}
-		de.deleteBookFromChromem(ctx, bookID)
-		return book, "", "", EmbedStatusSkippedNonPrimary, true, nil
-	}
+	// Non-primary version-group members used to be skipped entirely (and
+	// their stale row deleted) because embeddings were OpenAI-billed and
+	// candidate generation is primary-only anyway. Embeddings are now local
+	// and free (Ollama), and skipping them entirely meant any dedup-candidate
+	// or gold-label pair referencing a non-primary book could never be
+	// scored during calibration (dedup.calibrate-embedding-thresholds counts
+	// it as skipped_missing since EmbeddingStore.Get returns nil). Non-primary
+	// books now flow through the same embed path as primary books — the
+	// embedding is retained as a calibration/QA datapoint. Candidate
+	// generation itself stays primary-only: see isNonPrimaryVersion gates at
+	// the findSimilarBooks call sites in CheckBook and FullScan.
 
 	if !hasUsableTitle(book.Title) {
 		if delErr := de.embedStore.Delete("book", bookID); delErr != nil {
@@ -2417,7 +2434,12 @@ func (de *Engine) FullScan(ctx context.Context, progress func(phase string, done
 	_, span := dedupTracer.Start(ctx, "dedup.full_scan")
 	defer span.End()
 
-	books, err := de.getAllBooks()
+	// Unfiltered (includes non-primary version-group members): FullScan is
+	// also the mechanism that keeps non-primary embeddings fresh as
+	// calibration/QA datapoints. Layer-1 emitters and unified scoring are
+	// no-ops for non-primary books (see getAllBooksUnfiltered doc comment);
+	// only the Layer-2 findSimilarBooks call below needs an explicit gate.
+	books, err := de.getAllBooksUnfiltered()
 	if err != nil {
 		err := fmt.Errorf("get all books: %w", err)
 		span.RecordError(err)
@@ -2446,12 +2468,17 @@ func (de *Engine) FullScan(ctx context.Context, progress func(phase string, done
 	span.SetAttributes(attribute.Int("total_books", total))
 	chunkIDs := make([]string, 0, embedChunkSize)
 	chunkStart := 0
+	// chunkIsPrimary tracks each ID's primary-ness alongside chunkIDs (the
+	// outer loop has the full book object in scope; flushChunk only has IDs).
+	// Reset alongside chunkIDs on every flush.
+	chunkIsPrimary := make(map[string]bool, embedChunkSize)
 
 	// flushChunk sends the accumulated book IDs to EmbedBooks and then runs
-	// findSimilarBooks for each successfully embedded book. It now returns the
-	// EmbedBooks error (if any) so the circuit-breaker above can count
-	// consecutive failures; chunkIDs is always reset so we advance past the
-	// failed chunk regardless.
+	// findSimilarBooks for each successfully embedded PRIMARY book. It now
+	// returns the EmbedBooks error (if any) so the circuit-breaker above can
+	// count consecutive failures; chunkIDs is always reset so we advance past
+	// the failed chunk regardless. Non-primary books still get embedded
+	// (calibration/QA datapoint) but never seed new dedup candidates.
 	flushChunk := func(endIdx int) error {
 		if len(chunkIDs) == 0 {
 			return nil
@@ -2465,6 +2492,9 @@ func (de *Engine) FullScan(ctx context.Context, progress func(phase string, done
 			if !ok {
 				continue
 			}
+			if !chunkIsPrimary[id] {
+				continue
+			}
 			if st == EmbedStatusEmbedded || st == EmbedStatusCached {
 				if simErr := de.findSimilarBooks(ctx, id); simErr != nil {
 					slog.Error("dedup full scan similarity error for", "id", id, "simErr", simErr)
@@ -2472,6 +2502,9 @@ func (de *Engine) FullScan(ctx context.Context, progress func(phase string, done
 			}
 		}
 		chunkIDs = chunkIDs[:0]
+		for k := range chunkIsPrimary {
+			delete(chunkIsPrimary, k)
+		}
 		chunkStart = endIdx
 		return err // return the EmbedBooks error for circuit-breaker accounting
 	}
@@ -2519,6 +2552,7 @@ func (de *Engine) FullScan(ctx context.Context, progress func(phase string, done
 		// are unaffected and the scan completes normally.
 		if de.embeddingsEnabled() && !embeddingsGaveUp {
 			chunkIDs = append(chunkIDs, book.ID)
+			chunkIsPrimary[book.ID] = !isNonPrimaryVersion(&book)
 			if len(chunkIDs) >= embedChunkSize {
 				if err := flushChunk(i + 1); err != nil {
 					embedConsecutiveFails++
@@ -2848,10 +2882,17 @@ func (de *Engine) PurgeStaleCandidates(ctx context.Context) (int, error) {
 	return deleted, nil
 }
 
-// getAllBooks fetches all PRIMARY-version books in a single pass.
-// Non-primary version-group members are filtered out so FullScan never
-// processes them (their identity is owned by the primary) and similarity
+// getAllBooks fetches all PRIMARY-version books in a single pass. It backs
+// the candidate-generation scans (AcoustIDScan, BookSignatureScan,
+// EmbedBooksAsync) that must only ever pair primary books against each other.
+// Non-primary version-group members are filtered out so those scans never
+// process them (their identity is owned by the primary) and similarity
 // scanning only produces primary-vs-primary candidate pairs.
+//
+// FullScan uses the unfiltered sibling getAllBooksUnfiltered instead, because
+// it also drives embedding generation (a non-primary book's embedding is a
+// useful calibration/QA datapoint even though it can't seed a new dedup
+// candidate — see isNonPrimaryVersion gates around findSimilarBooks).
 //
 // Previously this used batched pagination (500 per page, ~48 batches for
 // a 24K-book library). Each batch re-opened a Pebble iterator and walked
@@ -2874,6 +2915,20 @@ func (de *Engine) getAllBooks() ([]database.Book, error) {
 		filtered = append(filtered, b)
 	}
 	return filtered, nil
+}
+
+// getAllBooksUnfiltered fetches every book in the library, including
+// non-primary version-group members. FullScan uses this (instead of
+// getAllBooks) so non-primary books still get an embedding computed/cached
+// as a calibration/QA datapoint. This is safe for the rest of FullScan's
+// pipeline: every Layer-1 candidate emitter routes through
+// upsertExactCandidate, which already drops any pair where either side is
+// non-primary (isNonPrimaryVersion), and runUnifiedScoringForBook is a no-op
+// for a book with zero pending candidates — which a non-primary book always
+// has, since it can never appear in a candidate pair. Only the Layer-2
+// findSimilarBooks call needs an explicit gate; see flushChunk in FullScan.
+func (de *Engine) getAllBooksUnfiltered() ([]database.Book, error) {
+	return de.bookStore.GetAllBooks(0, 0)
 }
 
 // RunLLMReview processes ambiguous candidates through LLM review (Layer 3).

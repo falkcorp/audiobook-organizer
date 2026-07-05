@@ -301,6 +301,19 @@ for untagged tracks. Scanner uses folder name as book title for no-tag groups.
 > local embeddings (PR #1452, Ollama/bge-m3) + HNSW vector-index backend (PR #1453).
 > See `~/.claude/.../memory/project_embeddings_and_vector_index.md` and CHANGELOG (June 14, 2026).
 
+- [x] **EMB-5** ✅ 2026-07-05 — Non-primary version-group members now get a real
+  embedding computed/cached (calibration/QA datapoint) instead of having their
+  row deleted and generation skipped. Fixes the `skipped_missing` count in
+  `dedup.calibrate-embedding-thresholds` (110 as of the July 4 run) and
+  unscorable gold-label pairs referencing non-primary books. Candidate
+  generation stays primary-only (`findSimilarBooks` gated on
+  `isNonPrimaryVersion` in both `CheckBook` and `FullScan`); also closed a
+  related gap where the SQLite-fallback similarity path could surface a
+  non-primary book as the *other* side of a primary book's match (chromem's
+  ANN path already filtered this, the fallback didn't) —
+  `internal/dedup/engine.go` (`prepBookEmbed`, `CheckBook`, `FullScan`,
+  `findSimilarBooks`, new `getAllBooksUnfiltered`). See CHANGELOG.
+
 **Done**
 - [x] **VEC-1** HNSW backend flipped live on prod — `vector_index_backend=hnsw`, restarted 2026-06-15 (hydrates existing 3072-dim OpenAI vectors). Reversible: set back to `chromem` + restart.
 

@@ -32,6 +32,52 @@
   `GetBookByID` hook, and asserts the function returns `context.Canceled`
   promptly instead of processing every candidate.
 
+#### July 5, 2026 - feat(dedup): keep non-primary version embeddings as calibration/QA datapoints instead of deleting them
+
+- **`feat(dedup)`** — `internal/dedup/engine.go`'s `prepBookEmbed` used to
+  delete any existing embedding and skip generating a new one for any book
+  marked non-primary in a version group ("its identity is owned by the
+  primary"). That was the right call for "don't generate NEW dedup
+  candidates from a non-primary book" but wrong for "don't keep an
+  embedding at all" — a non-primary version's embedding is a useful
+  calibration/QA datapoint on its own, and its absence is the direct cause
+  of the `skipped_missing` count in `dedup.calibrate-embedding-thresholds`
+  (July 4 report: `skipped_missing=110`) and of dedup-candidate/gold-label
+  pairs that reference a non-primary book being unscorable forever. The
+  original skip-and-delete was a cost-saving measure from the OpenAI-billed
+  era; embeddings are local/free (Ollama) now, so that rationale no longer
+  applies.
+  - `prepBookEmbed` no longer special-cases `IsPrimaryVersion` — non-primary
+    books flow through the same text/hash/cache-check/embed path as
+    primary books. `EmbedStatusSkippedNonPrimary` is kept (still referenced
+    by `internal/server/embedding_backfill.go`'s status switch and its
+    tests) but is no longer produced by this path; doc comments updated.
+  - Candidate generation stays primary-only: `CheckBook` and `FullScan`'s
+    `flushChunk` now gate the `findSimilarBooks` call on the book's
+    primary-ness (`isNonPrimaryVersion`) instead of relying on the missing
+    embedding to make the book invisible. `FullScan` switches from
+    `getAllBooks()` (primary-only) to a new `getAllBooksUnfiltered()` so
+    non-primary books get an embedding refreshed on every full scan too;
+    Layer-1 emitters and unified scoring are unaffected (they already gate
+    on `isNonPrimaryVersion` via `upsertExactCandidate`, or no-op for a book
+    with zero pending candidates).
+  - Found and fixed a related gap while adding regression coverage:
+    `findSimilarBooks`'s SQLite linear-scan fallback (used whenever chromem
+    is nil or not yet populated) never filtered the *matched* book by
+    primary status — only the chromem ANN path's `is_primary_version`
+    filter did. Once non-primary books started getting real embeddings,
+    the fallback path could surface one as the "other" side of a primary
+    book's match, reintroducing exactly the candidate noise the original
+    skip was meant to prevent. `findSimilarBooks` now drops any match whose
+    other-side book is non-primary regardless of which path found it.
+  - New regression tests in `internal/dedup/engine_primary_gate_test.go`
+    cover: a non-primary book gets a real embedding (not
+    `EmbedStatusSkippedNonPrimary`); a pre-existing non-primary embedding
+    row survives instead of being deleted; `findSimilarBooks` is not called
+    for a non-primary book in either `CheckBook` or `FullScan`'s
+    `flushChunk` while still firing for a primary book in the same batch;
+    and the SQLite-fallback-surfaces-non-primary-as-other-side gap above.
+
 #### July 5, 2026 - fix(release): unblock Production Release job stuck on missing GOEXPERIMENT in release-time go vet
 
 - **`fix(ci)`** — `release-prod.yml`'s Go build job started failing on
