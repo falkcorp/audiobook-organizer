@@ -1,5 +1,5 @@
 # file: .github/workflows/release-prod.yml
-# version: 4.9.0
+# version: 4.9.1
 # guid: f1a2b3c4-d5e6-7f8a-9b0c-1d2e3f4a5b6c
 # last-edited: 2026-07-05
 
@@ -50,7 +50,9 @@ jobs:
       stable: true
       go-enabled: true
       frontend-enabled: true
-      docker-enabled: true
+      # TEMPORARY: disabled for release-pipeline testing (tag-push ruleset fix).
+      # Re-enable once Go build / tag push / GitHub Release are confirmed working.
+      docker-enabled: false
       system-packages: 'libtag1-dev'
       pre-build-script: 'cd web && npm ci && npm run build'
       go-experiment: 'jsonv2'
