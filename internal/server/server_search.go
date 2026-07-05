@@ -1,7 +1,7 @@
 // file: internal/server/server_search.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 12815699-f9ea-4788-9af3-2e854d710315
-// last-edited: 2026-07-03
+// last-edited: 2026-07-05
 
 package server
 
@@ -69,9 +69,9 @@ func (s *Server) buildSearchIndexIfEmpty() {
 			return
 		default:
 		}
-		books, err := store.GetAllBooksFrom(afterID, pageSize)
+		books, err := store.GetAllBooksFullFrom(afterID, pageSize)
 		if err != nil {
-			slog.Warn("search backfill GetAllBooksFrom", "err", err)
+			slog.Warn("search backfill GetAllBooksFullFrom", "err", err)
 			return
 		}
 		if len(books) == 0 {

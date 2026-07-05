@@ -1,7 +1,7 @@
 // file: internal/database/iface_author.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2e3b78c0-c989-48c0-a324-b88ea52b1ccd
-// last-edited: 2026-04-30
+// last-edited: 2026-07-05
 
 package database
 
@@ -16,6 +16,8 @@ type AuthorReader interface {
 	GetAllAuthorAliases() ([]AuthorAlias, error)
 	FindAuthorByAlias(aliasName string) (*Author, error)
 	GetBookAuthors(bookID string) ([]BookAuthor, error)
+	// GetBooksByAuthorIDWithRole is SLIM (memdb projection) — see
+	// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
 	GetBooksByAuthorIDWithRole(authorID int) ([]Book, error)
 	GetAllAuthorBookCounts() (map[int]int, error)
 	GetAllAuthorFileCounts() (map[int]int, error)

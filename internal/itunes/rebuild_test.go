@@ -1,6 +1,6 @@
 // file: internal/itunes/rebuild_test.go
-// version: 1.0.2
-// last-edited: 2026-06-23
+// version: 1.0.3
+// last-edited: 2026-07-05
 // guid: 1c2d3e4f-5a6b-7c8d-9e0f-1a2b3c4d5e6f
 
 package itunes
@@ -18,7 +18,7 @@ type mockRebuildStore struct {
 	bookFiles map[string][]database.BookFile
 }
 
-func (m *mockRebuildStore) GetAllBooksFrom(afterID string, limit int) ([]database.Book, error) {
+func (m *mockRebuildStore) GetAllBooksFullFrom(afterID string, limit int) ([]database.Book, error) {
 	return nil, nil
 }
 func (m *mockRebuildStore) GetAllBooks(pageSize, offset int) ([]database.Book, error) {

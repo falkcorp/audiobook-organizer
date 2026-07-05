@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
-// last-edited: 2026-07-03
+// last-edited: 2026-07-05
 
 package database
 
@@ -334,6 +334,12 @@ func (s *PebbleStore) GetBookFiles(bookID string) ([]BookFile, error) {
 //
 // Pebble full-scan retained as fallback for cold-start (before memdb
 // publishes) and tests with no memdb.
+//
+// SLIM (memdb projection): returns rows with heavy fields nil'd —
+// FingerprintFailureReason/Detail/DiagnosticJSON, AcoustIDFingerprint,
+// AcoustIDSeg0..6 (FingerprintFailedAt and AcoustIDFingerprintDurationSec are
+// kept). A caller that needs any of those MUST fetch via GetBookFiles(bookID)
+// (full Pebble). See docs/specs/2026-07-05-store-getter-fidelity-unification.md.
 func (s *PebbleStore) GetBookFilesForIDs(bookIDs []string) (map[string][]BookFile, error) {
 	if s.UseMemDB && s.mem() != nil {
 		return s.mem().GetBookFilesForIDs(bookIDs)
@@ -378,6 +384,12 @@ func (s *PebbleStore) getBookFilesForIDsPebbleScan(bookIDs []string) (map[string
 //
 // Pebble full-scan retained as fallback for cold-start (before memdb
 // publishes) and tests with no memdb.
+//
+// SLIM (memdb projection): returns rows with heavy fields nil'd —
+// FingerprintFailureReason/Detail/DiagnosticJSON, AcoustIDFingerprint,
+// AcoustIDSeg0..6 (FingerprintFailedAt and AcoustIDFingerprintDurationSec are
+// kept). A caller that needs any of those MUST fetch via GetBookFiles(bookID)
+// (full Pebble). See docs/specs/2026-07-05-store-getter-fidelity-unification.md.
 func (s *PebbleStore) GetAllBookFiles() ([]BookFile, error) {
 	if s.UseMemDB && s.mem() != nil {
 		return s.mem().GetAllBookFiles()
@@ -459,6 +471,12 @@ func (s *PebbleStore) getAllBooksPebbleScan() ([]Book, error) {
 // centralization plugin from a 308K full BookFile scan to walking just the
 // (much smaller) deluge-touched subset (H2 + H8). Pebble full-scan retained
 // as the cold-start fallback.
+//
+// SLIM (memdb projection): returns rows with heavy fields nil'd —
+// FingerprintFailureReason/Detail/DiagnosticJSON, AcoustIDFingerprint,
+// AcoustIDSeg0..6 (FingerprintFailedAt and AcoustIDFingerprintDurationSec are
+// kept). A caller that needs any of those MUST fetch via GetBookFiles(bookID)
+// (full Pebble). See docs/specs/2026-07-05-store-getter-fidelity-unification.md.
 func (s *PebbleStore) GetBookFilesNeedingDelugeImport() ([]BookFile, error) {
 	if s.UseMemDB && s.mem() != nil {
 		return s.mem().GetBookFilesNeedingDelugeImport()

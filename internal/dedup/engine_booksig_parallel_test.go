@@ -1,5 +1,5 @@
 // file: internal/dedup/engine_booksig_parallel_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3c9e7d21-6b48-4f0a-9d2e-8a1f5c04b7e6
 // last-edited: 2026-07-05
 
@@ -109,12 +109,12 @@ func TestParallelBookSignatureScan_SameCandidatesAsSerial(t *testing.T) {
 		copy(out, books)
 		return out, nil
 	}
-	// BookSignatureScan now sources from GetAllBooksFrom, not GetAllBooks (see
+	// BookSignatureScan now sources from GetAllBooksFullFrom, not GetAllBooks (see
 	// getAllPrimaryBooksWithFullFields's doc comment — GetAllBooks stands in
 	// for the memdb-projected, BookSigV1-stripped read path in production, so
 	// wiring it here too would make this test pass even if the scan regressed
 	// to reading the stripped source again).
-	mock.GetAllBooksFromFunc = func(afterID string, limit int) ([]database.Book, error) {
+	mock.GetAllBooksFullFromFunc = func(afterID string, limit int) ([]database.Book, error) {
 		out := make([]database.Book, len(books))
 		copy(out, books)
 		return out, nil
@@ -208,12 +208,12 @@ func TestParallelBookSignatureScan_SameCandidatesAsSerial(t *testing.T) {
 // TestBookSignatureScan_SurvivesMemdbStrippedGetAllBooks reproduces the
 // production shape directly: GetAllBooks stands in for PebbleStore's
 // UseMemDB=true default, which strips BookSigV1 before returning Book
-// copies (stripBookForMemdb). GetAllBooksFrom stands in for the bypass path
+// copies (stripBookForMemdb). GetAllBooksFullFrom stands in for the bypass path
 // (walks IDs, then GetBookByID per book, which always reads full Pebble
 // JSON regardless of UseMemDB). Before this fix, BookSignatureScan read
 // GetAllBooks and filtered on the now-nil BookSigV1, silently matching zero
 // books. This test fails on the pre-fix code (0 candidates) and passes
-// once the scan sources from GetAllBooksFrom instead.
+// once the scan sources from GetAllBooksFullFrom instead.
 func TestBookSignatureScan_SurvivesMemdbStrippedGetAllBooks(t *testing.T) {
 	engine, mock, es := setupTestEngine(t)
 
@@ -232,7 +232,7 @@ func TestBookSignatureScan_SurvivesMemdbStrippedGetAllBooks(t *testing.T) {
 	mock.GetAllBooksFunc = func(limit, offset int) ([]database.Book, error) {
 		return stripped, nil
 	}
-	mock.GetAllBooksFromFunc = func(afterID string, limit int) ([]database.Book, error) {
+	mock.GetAllBooksFullFromFunc = func(afterID string, limit int) ([]database.Book, error) {
 		return full, nil
 	}
 	mock.GetBookByIDFunc = func(id string) (*database.Book, error) {
@@ -253,6 +253,6 @@ func TestBookSignatureScan_SurvivesMemdbStrippedGetAllBooks(t *testing.T) {
 		t.Fatalf("ListCandidates: %v", err)
 	}
 	if len(cands) != 1 {
-		t.Fatalf("got %d candidates, want 1 (scan read the memdb-stripped GetAllBooks source instead of GetAllBooksFrom)", len(cands))
+		t.Fatalf("got %d candidates, want 1 (scan read the memdb-stripped GetAllBooks source instead of GetAllBooksFullFrom)", len(cands))
 	}
 }

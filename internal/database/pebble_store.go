@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.103.0
+// version: 1.104.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-07-04
+// last-edited: 2026-07-05
 
 package database
 
@@ -435,6 +435,11 @@ func (p *PebbleStore) migrateImportPathKeys() error {
 
 // Book operations
 
+// GetAllBooks is SLIM (memdb projection): returns rows with heavy fields nil'd —
+// Description, VersionNotes, BookSigV1, BookSigV1Mask, BookSigSegments,
+// BookSigBuiltAt, BookSigCoveragePct, Author, Series. A caller that needs any
+// of those MUST fetch via GetBookByID / GetAllBooksFullFrom (full Pebble).
+// See docs/specs/2026-07-05-store-getter-fidelity-unification.md.
 func (p *PebbleStore) GetAllBooks(limit, offset int) ([]Book, error) {
 	if p.UseMemDB && p.mem() != nil {
 		return p.mem().GetAllBooks(limit, offset, nil)
@@ -480,11 +485,11 @@ func (p *PebbleStore) GetAllBooks(limit, offset int) ([]Book, error) {
 	return books, nil
 }
 
-// GetAllBooksFrom returns up to limit non-deleted books in PebbleDB key order
+// GetAllBooksFullFrom returns up to limit non-deleted books in PebbleDB key order
 // after "book:<afterID>". Pass afterID="" to start from the beginning. This
 // is O(1) seek vs GetAllBooks's O(offset) linear scan — use for cursor-based
 // full-table iteration (e.g. search index backfill).
-func (p *PebbleStore) GetAllBooksFrom(afterID string, limit int) ([]Book, error) {
+func (p *PebbleStore) GetAllBooksFullFrom(afterID string, limit int) ([]Book, error) {
 	if p.UseMemDB && p.mem() != nil {
 		// MemDB path. NOTE: this IS the production path — UseMemDB defaults to
 		// true. The previous implementation loaded only limit*2+1 books from the
@@ -619,7 +624,7 @@ func (p *PebbleStore) GetAllBookSummaries(limit, offset int) ([]BookSummary, err
 	if p.UseMemDB && p.mem() != nil {
 		return p.mem().GetBookSummaries(limit, offset, BookSummaryFilter{})
 	}
-	return p.GetAllBookSummaries_Pebble(limit, offset)
+	return p.getAllBookSummariesFull(limit, offset)
 }
 
 // CountBookSummariesFiltered returns the count of rows that would match
@@ -650,7 +655,7 @@ func (p *PebbleStore) GetAllBookSummariesFiltered(limit, offset int, f BookSumma
 	// Pebble fallback: filter manually after a full scan. Matches the
 	// historical service behavior so we never regress correctness when
 	// memdb is unavailable.
-	summaries, err := p.GetAllBookSummaries_Pebble(0, 0)
+	summaries, err := p.getAllBookSummariesFull(0, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -682,10 +687,10 @@ func (p *PebbleStore) GetAllBookSummariesFiltered(limit, offset int, f BookSumma
 	return filtered[offset:end], nil
 }
 
-// GetAllBookSummaries_Pebble is the Pebble-backed implementation.
+// getAllBookSummariesFull is the Pebble-backed implementation.
 // It fetches all books via full iteration, then projects each Book into a BookSummary,
 // skipping books marked for deletion.
-func (p *PebbleStore) GetAllBookSummaries_Pebble(limit, offset int) ([]BookSummary, error) {
+func (p *PebbleStore) getAllBookSummariesFull(limit, offset int) ([]BookSummary, error) {
 	if limit <= 0 {
 		limit = 1_000_000
 	}
@@ -1030,26 +1035,44 @@ func (p *PebbleStore) GetBooksByTitleInDir(normalizedTitle, dirPath string) ([]B
 	return results, nil
 }
 
+// GetFolderDuplicates is SLIM (memdb projection): returns rows with heavy
+// fields nil'd — Description, VersionNotes, BookSigV1, BookSigV1Mask,
+// BookSigSegments, BookSigBuiltAt, BookSigCoveragePct, Author, Series. A
+// caller that needs any of those MUST fetch via GetBookByID /
+// GetAllBooksFullFrom (full Pebble). See
+// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
 func (p *PebbleStore) GetFolderDuplicates() ([][]Book, error) {
 	// PebbleStore doesn't support folder-based duplicate detection efficiently.
 	return nil, nil
 }
 
 // GetDuplicateBooksByMetadata is not efficiently supported in PebbleStore.
+//
+// SLIM (memdb projection): returns rows with heavy fields nil'd — Description,
+// VersionNotes, BookSigV1, BookSigV1Mask, BookSigSegments, BookSigBuiltAt,
+// BookSigCoveragePct, Author, Series. A caller that needs any of those MUST
+// fetch via GetBookByID / GetAllBooksFullFrom (full Pebble). See
+// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
 func (p *PebbleStore) GetDuplicateBooksByMetadata(threshold float64) ([][]Book, error) {
 	return nil, nil
 }
 
+// GetBooksBySeriesID is SLIM (memdb projection): returns rows with heavy
+// fields nil'd — Description, VersionNotes, BookSigV1, BookSigV1Mask,
+// BookSigSegments, BookSigBuiltAt, BookSigCoveragePct, Author, Series. A
+// caller that needs any of those MUST fetch via GetBookByID /
+// GetAllBooksFullFrom (full Pebble). See
+// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
 func (p *PebbleStore) GetBooksBySeriesID(seriesID int) ([]Book, error) {
 	if p.UseMemDB && p.mem() != nil {
 		return p.mem().GetBooksBySeriesID(seriesID, 0, 0)
 	}
-	return p.GetBooksBySeriesID_Pebble(seriesID)
+	return p.getBooksBySeriesIDFull(seriesID)
 }
 
-// GetBooksBySeriesID_Pebble performs a full Pebble book scan filtered by series ID.
+// getBooksBySeriesIDFull performs a full Pebble book scan filtered by series ID.
 // Fallback path after Task 3.4 index removal.
-func (p *PebbleStore) GetBooksBySeriesID_Pebble(seriesID int) ([]Book, error) {
+func (p *PebbleStore) getBooksBySeriesIDFull(seriesID int) ([]Book, error) {
 	var books []Book
 	iter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: []byte("book:0"),
@@ -1083,16 +1106,22 @@ func (p *PebbleStore) GetBooksBySeriesID_Pebble(seriesID int) ([]Book, error) {
 	return books, nil
 }
 
+// GetBooksByAuthorID is SLIM (memdb projection): returns rows with heavy
+// fields nil'd — Description, VersionNotes, BookSigV1, BookSigV1Mask,
+// BookSigSegments, BookSigBuiltAt, BookSigCoveragePct, Author, Series. A
+// caller that needs any of those MUST fetch via GetBookByID /
+// GetAllBooksFullFrom (full Pebble). See
+// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
 func (p *PebbleStore) GetBooksByAuthorID(authorID int) ([]Book, error) {
 	if p.UseMemDB && p.mem() != nil {
 		return p.mem().GetBooksByAuthorID(authorID, 0, 0)
 	}
-	return p.GetBooksByAuthorID_Pebble(authorID)
+	return p.getBooksByAuthorIDFull(authorID)
 }
 
-// GetBooksByAuthorID_Pebble performs a full Pebble book scan filtered by author ID.
+// getBooksByAuthorIDFull performs a full Pebble book scan filtered by author ID.
 // Fallback path after Task 3.4 index removal.
-func (p *PebbleStore) GetBooksByAuthorID_Pebble(authorID int) ([]Book, error) {
+func (p *PebbleStore) getBooksByAuthorIDFull(authorID int) ([]Book, error) {
 	var books []Book
 	iter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: []byte("book:0"),
@@ -1129,6 +1158,12 @@ func (p *PebbleStore) GetBooksByAuthorID_Pebble(authorID int) ([]Book, error) {
 // GetBooksByAuthorIDWithRole returns all books where the author appears in
 // the book_authors junction table (any role). It also falls back to the
 // legacy AuthorID field for books not yet migrated to the junction table.
+//
+// SLIM (memdb projection): returns rows with heavy fields nil'd — Description,
+// VersionNotes, BookSigV1, BookSigV1Mask, BookSigSegments, BookSigBuiltAt,
+// BookSigCoveragePct, Author, Series. A caller that needs any of those MUST
+// fetch via GetBookByID / GetAllBooksFullFrom (full Pebble). See
+// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
 func (p *PebbleStore) GetBooksByAuthorIDWithRole(authorID int) ([]Book, error) {
 	if p.UseMemDB && p.mem() != nil {
 		return p.mem().GetBooksByAuthorID(authorID, 0, 0)

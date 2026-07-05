@@ -1703,12 +1703,12 @@ func (_c *MockOperationsStore_GetAllBooks_Call) RunAndReturn(run func(limit int,
 	return _c
 }
 
-// GetAllBooksFrom provides a mock function for the type MockOperationsStore
-func (_mock *MockOperationsStore) GetAllBooksFrom(afterID string, limit int) ([]database.Book, error) {
+// GetAllBooksFullFrom provides a mock function for the type MockOperationsStore
+func (_mock *MockOperationsStore) GetAllBooksFullFrom(afterID string, limit int) ([]database.Book, error) {
 	ret := _mock.Called(afterID, limit)
 
 	if len(ret) == 0 {
-		panic("no return value specified for GetAllBooksFrom")
+		panic("no return value specified for GetAllBooksFullFrom")
 	}
 
 	var r0 []database.Book
@@ -1731,19 +1731,19 @@ func (_mock *MockOperationsStore) GetAllBooksFrom(afterID string, limit int) ([]
 	return r0, r1
 }
 
-// MockOperationsStore_GetAllBooksFrom_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetAllBooksFrom'
-type MockOperationsStore_GetAllBooksFrom_Call struct {
+// MockOperationsStore_GetAllBooksFullFrom_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetAllBooksFullFrom'
+type MockOperationsStore_GetAllBooksFullFrom_Call struct {
 	*mock.Call
 }
 
-// GetAllBooksFrom is a helper method to define mock.On call
+// GetAllBooksFullFrom is a helper method to define mock.On call
 //   - afterID string
 //   - limit int
-func (_e *MockOperationsStore_Expecter) GetAllBooksFrom(afterID any, limit any) *MockOperationsStore_GetAllBooksFrom_Call {
-	return &MockOperationsStore_GetAllBooksFrom_Call{Call: _e.mock.On("GetAllBooksFrom", afterID, limit)}
+func (_e *MockOperationsStore_Expecter) GetAllBooksFullFrom(afterID any, limit any) *MockOperationsStore_GetAllBooksFullFrom_Call {
+	return &MockOperationsStore_GetAllBooksFullFrom_Call{Call: _e.mock.On("GetAllBooksFullFrom", afterID, limit)}
 }
 
-func (_c *MockOperationsStore_GetAllBooksFrom_Call) Run(run func(afterID string, limit int)) *MockOperationsStore_GetAllBooksFrom_Call {
+func (_c *MockOperationsStore_GetAllBooksFullFrom_Call) Run(run func(afterID string, limit int)) *MockOperationsStore_GetAllBooksFullFrom_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 string
 		if args[0] != nil {
@@ -1761,12 +1761,12 @@ func (_c *MockOperationsStore_GetAllBooksFrom_Call) Run(run func(afterID string,
 	return _c
 }
 
-func (_c *MockOperationsStore_GetAllBooksFrom_Call) Return(books []database.Book, err error) *MockOperationsStore_GetAllBooksFrom_Call {
+func (_c *MockOperationsStore_GetAllBooksFullFrom_Call) Return(books []database.Book, err error) *MockOperationsStore_GetAllBooksFullFrom_Call {
 	_c.Call.Return(books, err)
 	return _c
 }
 
-func (_c *MockOperationsStore_GetAllBooksFrom_Call) RunAndReturn(run func(afterID string, limit int) ([]database.Book, error)) *MockOperationsStore_GetAllBooksFrom_Call {
+func (_c *MockOperationsStore_GetAllBooksFullFrom_Call) RunAndReturn(run func(afterID string, limit int) ([]database.Book, error)) *MockOperationsStore_GetAllBooksFullFrom_Call {
 	_c.Call.Return(run)
 	return _c
 }

@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.51.0
+// version: 1.52.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-07-05
 
@@ -3055,7 +3055,7 @@ func (de *Engine) getAllBooksUnfiltered() ([]database.Book, error) {
 }
 
 // getAllPrimaryBooksWithFullFields fetches all primary-version books via
-// GetAllBooksFrom instead of GetAllBooks. Under the production default
+// GetAllBooksFullFrom instead of GetAllBooks. Under the production default
 // (PebbleStore.UseMemDB=true), GetAllBooks(0,0) returns memdb-projected Book
 // copies with BookSigV1/BookSigV1Mask/BookSigSegments stripped to nil (see
 // stripBookForMemdb's doc comment: "Predicates that filter by these fields
@@ -3063,12 +3063,12 @@ func (de *Engine) getAllBooksUnfiltered() ([]database.Book, error) {
 // instead"). BookSignatureScan's own filter — `b.BookSigV1 != nil` — is
 // exactly such a predicate, so under UseMemDB=true it silently matched zero
 // books and every full-scan pairwise comparison compared nothing, with no
-// error surfaced. GetAllBooksFrom already implements the memdb-bypass
+// error surfaced. GetAllBooksFullFrom already implements the memdb-bypass
 // pattern the strip comment recommends (walks the ID index, then fetches
 // each book via GetBookByID, which always reads full Pebble JSON regardless
 // of UseMemDB) — reuse it here instead of adding a new store method.
 func (de *Engine) getAllPrimaryBooksWithFullFields() ([]database.Book, error) {
-	batch, err := de.bookStore.GetAllBooksFrom("", 0)
+	batch, err := de.bookStore.GetAllBooksFullFrom("", 0)
 	if err != nil {
 		return nil, err
 	}
