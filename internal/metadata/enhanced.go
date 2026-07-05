@@ -1,10 +1,12 @@
 // file: internal/metadata/enhanced.go
-// version: 1.9.1
+// version: 1.10.0
 // guid: 7e8d9c0b-1a2f-3e4d-5c6b-7a8d9c0b1a2f
+// last-edited: 2026-07-05
 
 package metadata
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -12,11 +14,44 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
+
+// metadataBulkOpConcurrency bounds the worker pool for BatchUpdateMetadata and
+// ImportMetadata (CONC-13). Both are request-driven bulk ops that run inline
+// on a user-facing HTTP request rather than as a background op with its own
+// budget, so concurrency is a small fixed value (fix-pattern #5 in
+// docs/audits/2026-07-05-concurrency-single-threaded-hotspots.md) — not
+// runtime.NumCPU() — to avoid starving the server on a large payload.
+const metadataBulkOpConcurrency = 4
+
+// inertMetadataReporter is a minimal registry.Reporter for BatchUpdateMetadata
+// and ImportMetadata, which are synchronous helpers called directly from HTTP
+// handlers (see internal/server/handlers/metadata/handler.go) with no live
+// operations.Reporter in scope. registry.RunItems's concurrent path only ever
+// calls UpdateProgress and SetCurrentItem (see run_items.go's runOne), so the
+// remaining methods are safe no-ops.
+type inertMetadataReporter struct{}
+
+func (inertMetadataReporter) UpdateProgress(current, total int, message string) error { return nil }
+func (inertMetadataReporter) Log(level slog.Level, message string, attrs ...slog.Attr) error {
+	return nil
+}
+func (inertMetadataReporter) Logger() *slog.Logger       { return slog.Default() }
+func (inertMetadataReporter) Checkpoint(state any) error { return nil }
+func (inertMetadataReporter) IsCanceled() bool           { return false }
+func (inertMetadataReporter) RunPhase(ctx context.Context, name string, fn func(context.Context, registry.Reporter) error) error {
+	return fn(ctx, inertMetadataReporter{})
+}
+func (inertMetadataReporter) Trigger(ctx context.Context, eventName string, payload any) error {
+	return nil
+}
+func (inertMetadataReporter) SetCurrentItem(label string) {}
 
 // MetadataUpdate represents a metadata update operation
 type MetadataUpdate struct {
@@ -157,27 +192,59 @@ func ValidateMetadata(updates map[string]interface{}, rules map[string]Validatio
 	return errors
 }
 
-// BatchUpdateMetadata applies metadata updates to multiple books with validation
+// BatchUpdateMetadata applies metadata updates to multiple books with validation.
+//
+// Parallelized via registry.RunItems (CONC-13): each worker processes one
+// update (validate → GetBookByID → mutate → UpdateBook) independently. The
+// only state shared across workers is the result aggregation (errs,
+// successCount), which is guarded by mu so the parallel pass produces the
+// same result set as the original serial loop (order-independent — item
+// index i is preserved in error messages for identification, but completion
+// order across workers is not guaranteed to match input order).
+//
+// Store-safety: store.UpdateBook (PebbleStore) commits via a Pebble batch
+// (safe for concurrent writers) and write-throughs to memdb via memSync,
+// which serializes on hashicorp/go-memdb's Txn(true) exclusive writer lock —
+// concurrent UpdateBook calls cannot race or corrupt state at this
+// concurrency. rules is read-only after construction, so sharing it across
+// workers needs no lock.
 func BatchUpdateMetadata(updates []MetadataUpdate, store database.BookStore, validate bool) ([]error, int) {
-	var errors []error
-	successCount := 0
 	rules := DefaultValidationRules()
 
-	for i, update := range updates {
+	var mu sync.Mutex
+	var errs []error
+	successCount := 0
+
+	// RunItems's fn signature doesn't carry the item's original index, and
+	// the error messages below identify updates by their request-payload
+	// index — so iterate over indices into updates rather than the updates
+	// themselves.
+	indices := make([]int, len(updates))
+	for i := range indices {
+		indices[i] = i
+	}
+
+	_ = registry.RunItems(context.Background(), inertMetadataReporter{}, indices, func(_ context.Context, i int) error {
+		update := updates[i]
+
 		// Validate if requested
 		if validate || update.Validate {
 			validationErrors := ValidateMetadata(update.Updates, rules)
 			if len(validationErrors) > 0 {
-				errors = append(errors, fmt.Errorf("update %d (book %s): %v", i, update.BookID, validationErrors))
-				continue
+				mu.Lock()
+				errs = append(errs, fmt.Errorf("update %d (book %s): %v", i, update.BookID, validationErrors))
+				mu.Unlock()
+				return nil
 			}
 		}
 
 		// Get current book
 		book, err := store.GetBookByID(update.BookID)
 		if err != nil {
-			errors = append(errors, fmt.Errorf("update %d: failed to get book %s: %w", i, update.BookID, err))
-			continue
+			mu.Lock()
+			errs = append(errs, fmt.Errorf("update %d: failed to get book %s: %w", i, update.BookID, err))
+			mu.Unlock()
+			return nil
 		}
 
 		// Apply updates
@@ -193,16 +260,20 @@ func BatchUpdateMetadata(updates []MetadataUpdate, store database.BookStore, val
 		}
 
 		// Update in database
-		_, err = store.UpdateBook(update.BookID, book)
-		if err != nil {
-			errors = append(errors, fmt.Errorf("update %d: failed to update book %s: %w", i, update.BookID, err))
-			continue
+		if _, err := store.UpdateBook(update.BookID, book); err != nil {
+			mu.Lock()
+			errs = append(errs, fmt.Errorf("update %d: failed to update book %s: %w", i, update.BookID, err))
+			mu.Unlock()
+			return nil
 		}
 
+		mu.Lock()
 		successCount++
-	}
+		mu.Unlock()
+		return nil
+	}, registry.RunItemsOptions{Concurrency: metadataBulkOpConcurrency})
 
-	return errors, successCount
+	return errs, successCount
 }
 
 // WriteMetadataToFile safely writes metadata to an audiobook file
@@ -622,29 +693,57 @@ func ExportMetadata(books []database.Book) (map[string]interface{}, error) {
 	return result, nil
 }
 
-// ImportMetadata imports book metadata from a structured format
+// ImportMetadata imports book metadata from a structured format.
+//
+// Parallelized via registry.RunItems (CONC-13): each worker processes one
+// book entry (decode → validate → CreateBook) independently. The only state
+// shared across workers is the result aggregation (errs, importCount),
+// guarded by mu so the parallel pass produces the same result set as the
+// original serial loop (order-independent — item index i is preserved in
+// error messages for identification).
+//
+// Store-safety: store.CreateBook (PebbleStore) generates its own ULID with a
+// call-local monotonic entropy source (no shared/global counter), commits via
+// a Pebble batch (safe for concurrent writers), and write-throughs to memdb
+// via memSync, which serializes on hashicorp/go-memdb's Txn(true) exclusive
+// writer lock — concurrent CreateBook calls cannot race or corrupt state at
+// this concurrency.
 func ImportMetadata(data map[string]interface{}, store database.BookStore, validate bool) (int, []error) {
-	var errors []error
-	importCount := 0
-
 	booksData, ok := data["books"].([]interface{})
 	if !ok {
 		return 0, []error{fmt.Errorf("invalid data format: books field missing or invalid")}
 	}
 
-	for i, bookInterface := range booksData {
-		bookData, ok := bookInterface.(map[string]interface{})
+	var mu sync.Mutex
+	var errs []error
+	importCount := 0
+
+	// RunItems's fn signature doesn't carry the item's original index, and
+	// the error messages below identify books by their request-payload
+	// index — so iterate over indices into booksData rather than the
+	// entries themselves.
+	indices := make([]int, len(booksData))
+	for i := range indices {
+		indices[i] = i
+	}
+
+	_ = registry.RunItems(context.Background(), inertMetadataReporter{}, indices, func(_ context.Context, i int) error {
+		bookData, ok := booksData[i].(map[string]interface{})
 		if !ok {
-			errors = append(errors, fmt.Errorf("book %d: invalid book data format", i))
-			continue
+			mu.Lock()
+			errs = append(errs, fmt.Errorf("book %d: invalid book data format", i))
+			mu.Unlock()
+			return nil
 		}
 
 		// Validate if requested
 		if validate {
 			validationErrors := ValidateMetadata(bookData, DefaultValidationRules())
 			if len(validationErrors) > 0 {
-				errors = append(errors, fmt.Errorf("book %d: validation failed: %v", i, validationErrors))
-				continue
+				mu.Lock()
+				errs = append(errs, fmt.Errorf("book %d: validation failed: %v", i, validationErrors))
+				mu.Unlock()
+				return nil
 			}
 		}
 
@@ -661,16 +760,20 @@ func ImportMetadata(data map[string]interface{}, store database.BookStore, valid
 		}
 
 		// Create or update book
-		_, err := store.CreateBook(book)
-		if err != nil {
-			errors = append(errors, fmt.Errorf("book %d: failed to import: %w", i, err))
-			continue
+		if _, err := store.CreateBook(book); err != nil {
+			mu.Lock()
+			errs = append(errs, fmt.Errorf("book %d: failed to import: %w", i, err))
+			mu.Unlock()
+			return nil
 		}
 
+		mu.Lock()
 		importCount++
-	}
+		mu.Unlock()
+		return nil
+	}, registry.RunItemsOptions{Concurrency: metadataBulkOpConcurrency})
 
-	return importCount, errors
+	return importCount, errs
 }
 
 // Helper functions for type-safe field extraction
