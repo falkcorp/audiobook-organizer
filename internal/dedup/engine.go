@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.47.0
+// version: 1.48.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-07-05
 
@@ -2595,24 +2595,59 @@ func (de *Engine) FullScan(ctx context.Context, progress func(phase string, done
 	// runUnifiedScoringForBook) may not have run yet for a given book when we
 	// are still iterating the book loop above.  Running the scoring pass after
 	// flushChunk(total) guarantees all embedding candidates are written.
+	//
+	// CONC-2 (docs/audits/2026-07-05-concurrency-single-threaded-hotspots.md):
+	// This loop was a single-threaded `for range books` that pinned one core
+	// for hours on a full library. Each book is scored independently —
+	// runUnifiedScoringForBook is self-contained per book (its collector
+	// caches live on its own stack; see the function body above), so we shard
+	// it across a bounded worker pool sized to runtime.NumCPU() via
+	// registry.RunItems. The only shared resource touched concurrently is the
+	// bookStore/embedStore backend (PebbleStore), which is safe for
+	// concurrent reads/writes (internal mutexes around counter/op-CAS state,
+	// an atomic pointer for the warm in-memory query layer, and the
+	// underlying cockroachdb/pebble.DB is itself concurrency-safe) — see
+	// internal/database/pebble_store.go.
+	//
+	// Per-book errors are logged and swallowed (never returned), exactly as
+	// the serial loop did, so a scoring failure for one book cannot abort or
+	// skip the rest. registry.RunItems polls ctx.Done() between items itself,
+	// so the manual `if ctx.Err() != nil { break }` check the serial loop used
+	// is dropped here; on cancellation RunItems returns ctx.Err(), which is
+	// now propagated (the sibling BookSignatureScan shard above does the
+	// same) rather than silently swallowed.
 	scoreTotal := len(books)
-	for i, book := range books {
-		if ctx.Err() != nil {
-			break
+	scoreIndices := make([]int, scoreTotal)
+	for i := range scoreIndices {
+		scoreIndices[i] = i
+	}
+	// scoreProgress adapts FullScan's phase-prefixed progress(phase, done,
+	// total) callback to progressCallbackReporter's plain progress(done,
+	// total) shape (reused unchanged from BookSignatureScan/TASK-01) by
+	// closing over the "score" phase name.
+	scoreProgress := func(done, total int) {
+		if progress != nil {
+			progress("score", done, total)
 		}
-		authorName := ""
-		if book.AuthorID != nil {
-			if author, err := de.bookStore.GetAuthorByID(*book.AuthorID); err == nil && author != nil {
-				authorName = author.Name
+	}
+	err = registry.RunItems(ctx, &progressCallbackReporter{progress: scoreProgress}, scoreIndices,
+		func(ctx context.Context, i int) error {
+			book := books[i]
+			authorName := ""
+			if book.AuthorID != nil {
+				if author, err := de.bookStore.GetAuthorByID(*book.AuthorID); err == nil && author != nil {
+					authorName = author.Name
+				}
 			}
-		}
-		if err := de.runUnifiedScoringForBook(ctx, &book, authorName); err != nil {
-			slog.Error("dedup full scan unified scoring error for", "book", book.ID, "err", err)
-		}
-
-		if progress != nil && (i%10 == 0 || i == scoreTotal-1) {
-			progress("score", i+1, scoreTotal)
-		}
+			if err := de.runUnifiedScoringForBook(ctx, &book, authorName); err != nil {
+				slog.Error("dedup full scan unified scoring error for", "book", book.ID, "err", err)
+			}
+			return nil
+		},
+		registry.RunItemsOptions{Concurrency: runtime.NumCPU()},
+	)
+	if err != nil {
+		return err
 	}
 
 	return nil
