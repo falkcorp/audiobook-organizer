@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 7e4b2a90-3c61-4d58-8f29-6a1c0e5b9d83
-// last-edited: 2026-06-23
+// last-edited: 2026-07-05
 
 package maintenance
 
@@ -10,10 +10,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -84,12 +87,8 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 
 	const pageSize = 500
 	offset := 0
-	var scanned int
-	// Fixes grouped per book, preserving book discovery order so Phase 2 can
-	// recompute each affected book's aggregates exactly once.
-	bookOrder := make([]string, 0)
-	fixesByBook := make(map[string][]durationFix)
-
+	// Gather all books first via pagination.
+	var allBooks []database.Book
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -102,44 +101,65 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 		if len(books) == 0 {
 			break
 		}
-
-		for _, book := range books {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			scanned++
-
-			files, ferr := store.GetBookFiles(book.ID)
-			if ferr != nil {
-				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
-					"book %s: GetBookFiles failed: %v", book.ID, ferr))
-				continue
-			}
-			for _, f := range files {
-				if durationLooksLikeMillis(f.FileSize, f.Duration) {
-					if _, seen := fixesByBook[book.ID]; !seen {
-						bookOrder = append(bookOrder, book.ID)
-					}
-					fixesByBook[book.ID] = append(fixesByBook[book.ID], durationFix{
-						file:        f,
-						newDuration: f.Duration / 1000,
-					})
-				}
-			}
-		}
-
+		allBooks = append(allBooks, books...)
 		offset += len(books)
-		total := totalBooks
-		if total == 0 {
-			total = scanned
-		}
-		_ = reporter.UpdateProgress(scanned, total, fmt.Sprintf(
-			"Phase 1/2: scanned %d/%d — %d books with ms durations", scanned, total, len(bookOrder)))
-
 		if len(books) < pageSize {
 			break
 		}
 	}
+
+	// Fixes grouped per book, preserving book discovery order so Phase 2 can
+	// recompute each affected book's aggregates exactly once. Guarded by mu since
+	// multiple workers will update these concurrently via registry.RunItems.
+	var mu sync.Mutex
+	bookOrder := make([]string, 0)
+	fixesByBook := make(map[string][]durationFix)
+
+	// Parallelize the per-book GetBookFiles and duration analysis via registry.RunItems.
+	// Each worker independently checks a book's files and accumulates fixes; the shared
+	// maps are guarded by mu so the parallel version produces identical output to serial.
+	scanned := 0
+	err := registry.RunItems(ctx, reporter, allBooks, func(ctx context.Context, book database.Book) error {
+		files, ferr := store.GetBookFiles(book.ID)
+		if ferr != nil {
+			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
+				"book %s: GetBookFiles failed: %v", book.ID, ferr))
+			return nil // non-fatal: skip this book
+		}
+
+		var bookFixes []durationFix
+		for _, f := range files {
+			if durationLooksLikeMillis(f.FileSize, f.Duration) {
+				bookFixes = append(bookFixes, durationFix{
+					file:        f,
+					newDuration: f.Duration / 1000,
+				})
+			}
+		}
+
+		// Atomically update shared state if this book has any fixes.
+		if len(bookFixes) > 0 {
+			mu.Lock()
+			bookOrder = append(bookOrder, book.ID)
+			fixesByBook[book.ID] = bookFixes
+			mu.Unlock()
+		}
+
+		return nil
+	}, registry.RunItemsOptions{
+		Concurrency: runtime.NumCPU(),
+		Label: func(i, total int) string {
+			mu.Lock()
+			curBooks := len(bookOrder)
+			mu.Unlock()
+			return fmt.Sprintf("Books %d/%d (found %d with ms durations)",
+				i+1, total, curBooks)
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("parallel GetBookFiles scan: %w", err)
+	}
+	scanned = len(allBooks)
 
 	totalFiles := 0
 	for _, fixes := range fixesByBook {
