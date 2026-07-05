@@ -1,5 +1,5 @@
 // file: internal/itunes/service/importer.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
 // last-edited: 2026-07-05
 
@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -86,7 +87,7 @@ type Importer struct {
 	eventBus         plugin.EventPublisher // may be nil; replaces OnBookCreated
 	cfg              Config
 	log              logger.Logger
-	mfs              *metafetch.Service
+	mfs              metadataFetcher
 	organizerFactory func() BookOrganizer
 	statusMap        importStatusMap
 
@@ -96,6 +97,25 @@ type Importer struct {
 	// purely as a test seam so a test can force the sequential path (1)
 	// and diff it against the parallel path (see organizeConcurrency).
 	organizeConcurrencyOverride int
+
+	// enrichConcurrencyOverride, when > 0, overrides the worker-pool size
+	// enrichImportedBooks passes to registry.RunItems. Zero (the default
+	// for every real Importer) means "use enrichConcurrency". Same test
+	// seam purpose as organizeConcurrencyOverride: lets a test force the
+	// sequential path (1) and diff it against a parallel path.
+	enrichConcurrencyOverride int
+}
+
+// metadataFetcher is the narrow, single-method subset of *metafetch.Service
+// that enrichImportedBooks depends on. enrichImportedBooks calls this
+// interface (rather than *metafetch.Service directly) purely as a test seam:
+// it lets tests fake FetchMetadataForBook's success/failure/timing to
+// exercise registry.RunItems' parallel fan-out and the CONC-11 circuit
+// breaker below without wiring a real metadata.MetadataSource +
+// database.Store pair through a live metafetch.Service. *metafetch.Service
+// satisfies this interface unmodified — newImporter's wiring is unaffected.
+type metadataFetcher interface {
+	FetchMetadataForBook(id string) (*metafetch.FetchMetadataResponse, error)
 }
 
 func newImporter(deps Deps) *Importer {
@@ -432,7 +452,7 @@ func (imp *Importer) Execute(ctx context.Context, opID string, req ImportRequest
 	if req.FetchMetadata {
 		_ = operations.SaveCheckpoint(imp.store, opID, "itunes_import", "enriching", 0, 0)
 		log.Info("Starting metadata enrichment phase...")
-		imp.enrichImportedBooks(status, log)
+		imp.enrichImportedBooks(ctx, status, log)
 	}
 
 	// Phase 5: Organize
@@ -1018,7 +1038,56 @@ func sortTracksByDiscTrack(tracks []*itunes.Track) {
 	})
 }
 
-func (imp *Importer) enrichImportedBooks(status *itunesImportStatus, log logger.Logger) {
+// enrichConcurrency is the FIXED registry.RunItems worker-pool size for
+// enrichImportedBooks's FetchMetadataForBook calls (CONC-11). Unlike
+// organizeConcurrency (CPU/local-disk-bound work, sized to
+// runtime.NumCPU()), FetchMetadataForBook is a network call against an
+// external, rate-limited metadata source — adding more workers would just
+// let more goroutines hammer the same rate limit at once, so this is a
+// small named constant instead of scaling with core count.
+const enrichConcurrency = 4
+
+// enrichBreakerThreshold is the shared-aggregate-failure trip point for the
+// circuit breaker below, carried over from the pre-parallelization
+// `consecutiveErrors >= 5` check (see enrichImportedBooks's doc comment for
+// how its meaning changes under concurrency).
+const enrichBreakerThreshold = 5
+
+// enrichImportedBooks runs the per-book metadata-fetch (FetchMetadataForBook)
+// step over every LibraryState=="imported" book via registry.RunItems
+// (CONC-11), fanning out over a small FIXED enrichConcurrency worker pool
+// (see its doc comment for why fixed-vs-NumCPU).
+//
+// Circuit-breaker semantic change under parallelization (read carefully —
+// this is the correctness-critical part of CONC-11):
+//   - The original sequential loop tracked a *consecutive* failure counter
+//     (consecutiveErrors) that reset to 0 on any success and, upon
+//     reaching 5, slept 10s and reset back to 0 so the caller would keep
+//     going once the rate limit had presumably recovered. "Consecutive"
+//     only has a well-defined meaning when exactly one FetchMetadataForBook
+//     call is in flight at a time.
+//   - Under a worker pool, several calls run concurrently, so there is no
+//     single consecutive sequence to track. This reframes the breaker as a
+//     SHARED AGGREGATE failure counter (breakerFails, an atomic int32):
+//     every failure increments it, every success resets it to 0. When it
+//     reaches enrichBreakerThreshold, the tripping worker — exactly once,
+//     via breakerTripped (sync.Once), so concurrent trippers don't each
+//     log/cancel — cancels a context derived from the caller's ctx.
+//     registry.RunItems' worker pool stops launching new items once that
+//     context is canceled (workers already in flight still finish, mirror-
+//     ing the "let the current call complete" behavior of the original
+//     loop), which preserves the "stop hammering a rate-limited source"
+//     intent without a "sleep 10s and silently resume" step that has no
+//     race-free meaning across concurrent workers. This is a deliberate,
+//     documented semantic change: tripping the breaker now aborts the REST
+//     of this enrichment pass instead of pausing then continuing it.
+//   - itunesImportStatus counters: enrichImportedBooks does not update
+//     `status` today — the pre-existing sequential loop didn't either — so
+//     no new locking is needed there; the mutex-guarded helpers in
+//     status.go remain available if a future change starts using it.
+//   - The local `enriched` tally is guarded by its own mutex, same pattern
+//     as organizeImportedBooks' `organized` counter.
+func (imp *Importer) enrichImportedBooks(ctx context.Context, status *itunesImportStatus, log logger.Logger) {
 	if imp.mfs == nil {
 		log.Warn("Metadata enrichment skipped: no metafetch service wired")
 		return
@@ -1030,30 +1099,50 @@ func (imp *Importer) enrichImportedBooks(status *itunesImportStatus, log logger.
 		return
 	}
 
-	enriched := 0
-	consecutiveErrors := 0
-	for i, book := range books {
+	// Pre-filter to the books this phase actually enriches, same filter the
+	// original sequential loop applied inline per iteration. Keeps
+	// RunItems' Concurrency fan-out and progress denominator scoped to real
+	// work only (mirrors organizeImportedBooks' toOrganize pre-filter).
+	toEnrich := make([]*database.Book, 0, len(books))
+	for i := range books {
+		book := &books[i]
 		if book.LibraryState == nil || *book.LibraryState != "imported" {
 			continue
 		}
 		if book.ITunesImportSource == nil {
 			continue
 		}
+		toEnrich = append(toEnrich, book)
+	}
 
+	var mu sync.Mutex
+	enriched := 0
+
+	// breakerFails / breakerTripped implement the shared-aggregate circuit
+	// breaker described in the doc comment above.
+	var breakerFails int32
+	var breakerTripped sync.Once
+
+	enrichCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	reporter := &loggerReporterAdapter{log: log}
+
+	runErr := registry.RunItems(enrichCtx, reporter, toEnrich, func(_ context.Context, book *database.Book) error {
 		resp, err := imp.mfs.FetchMetadataForBook(book.ID)
 		if err != nil {
 			log.Debug("No metadata found for '%s': %v", book.Title, err)
-			consecutiveErrors++
-			if consecutiveErrors >= 5 {
-				log.Info("Rate limit detected, pausing 10s...")
-				time.Sleep(10 * time.Second)
-				consecutiveErrors = 0
+			if atomic.AddInt32(&breakerFails, 1) >= enrichBreakerThreshold {
+				breakerTripped.Do(func() {
+					log.Info("Rate limit detected (%d aggregate failures), aborting remaining enrichment", enrichBreakerThreshold)
+					cancel()
+				})
 			}
-			continue
+			return nil
 		}
 
-		consecutiveErrors = 0
-		enriched++
+		atomic.StoreInt32(&breakerFails, 0)
+
 		if resp.Book != nil && resp.Book.AuthorID != nil {
 			existing, _ := imp.store.GetBookAuthors(book.ID)
 			if len(existing) <= 1 {
@@ -1063,12 +1152,38 @@ func (imp *Importer) enrichImportedBooks(status *itunesImportStatus, log logger.
 			}
 		}
 
-		if enriched%10 == 0 {
-			log.Info("Enriched %d books so far (processing %d/%d)...", enriched, i+1, len(books))
-			time.Sleep(2 * time.Second)
+		mu.Lock()
+		enriched++
+		n := enriched
+		mu.Unlock()
+		if n%10 == 0 {
+			log.Info("Enriched %d books so far", n)
 		}
+		return nil
+	}, registry.RunItemsOptions{
+		Concurrency: imp.enrichConcurrency(),
+	})
+	if runErr != nil {
+		// The per-book fn above always returns nil (errors are handled
+		// in-line via the breaker, matching the serial loop's "keep going"
+		// behavior for a single failure), so this only fires on ctx
+		// cancellation — including the breaker's own cancel() above.
+		log.Warn("Enrichment phase interrupted: %v", runErr)
 	}
+
 	log.Info("Metadata enrichment complete: %d books enriched", enriched)
+}
+
+// enrichConcurrency returns the registry.RunItems worker-pool size for
+// enrichImportedBooks: the fixed enrichConcurrency const by default (see the
+// package-level const's doc comment for why fixed-vs-NumCPU), or
+// enrichConcurrencyOverride when a test has set it to force a specific
+// pool size (e.g. 1 for the sequential path).
+func (imp *Importer) enrichConcurrency() int {
+	if imp.enrichConcurrencyOverride > 0 {
+		return imp.enrichConcurrencyOverride
+	}
+	return enrichConcurrency
 }
 
 // organizeImportedBooks runs the per-book organize (file-move) + UpdateBook
