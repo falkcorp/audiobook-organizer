@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1d31ef73-7c7a-4c3b-a840-01b0865023d7
-// last-edited: 2026-06-23
+// last-edited: 2026-07-05
 
 // Tests for the metadata-domain handlers. The store / metadata-fetch-service /
 // write-back-enqueuer / operations-registry / file-io-pool deps are generated
@@ -16,8 +16,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -408,6 +410,149 @@ func TestBulkFetchMetadata_Updates(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
 	}
+}
+
+// TestBulkFetchMetadata_ParallelPreservesOrderAndCounts exercises
+// bulkFetchMetadataImpl's registry.RunItems-based parallel pass (CONC-12)
+// with 6 book IDs against a concurrency of 4 (bulkFetchMetadataConcurrency),
+// so multiple workers are guaranteed to run at once. It asserts the response
+// is byte-for-byte what the old serial `for` loop would have produced:
+// results in the exact input order (written via results[i], not append) with
+// the expected per-book status, and the correct aggregate updated_count. Run
+// under `go test -race`, this also exercises the mutex guarding the shared
+// results slice / updatedCount (the "shared mutable state" named in the
+// CONC-12 brief) — the store/service mocks are testify mocks, which are
+// internally mutex-guarded and safe to call concurrently.
+//
+// The Handler here is built directly (not via the shared newHandler/recorders
+// helper used by the rest of this file) because recorders.updatedFetchedValues
+// is a plain unguarded field write — fine for the existing single-book,
+// strictly-sequential tests, but multiple of the book IDs below have
+// non-empty fetched values, so concurrent workers would race on that shared
+// field. The closures below are either pure (loadMetadataState) or
+// mutex-guarded (updateFetchedMetadataState) instead.
+func TestBulkFetchMetadata_ParallelPreservesOrderAndCounts(t *testing.T) {
+	store := metadatamocks.NewMockMetadataStore(t)
+	mfs := metadatamocks.NewMockMetadataFetchService(t)
+
+	// b0: book not found.
+	store.EXPECT().GetBookByID("b0").Return(nil, nil)
+
+	// b1: found but title is blank/whitespace-only → "missing title", status
+	// stays the zero-value "skipped".
+	store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "  "}, nil)
+
+	// b2: search errors out.
+	store.EXPECT().GetBookByID("b2").Return(&database.Book{ID: "b2", Title: "T2"}, nil)
+	mfs.EXPECT().SearchMetadataForBookWithOptions("b2", "", "", "", "", mock.Anything).
+		Return(nil, errors.New("boom"))
+
+	// b3: search returns no candidates.
+	store.EXPECT().GetBookByID("b3").Return(&database.Book{ID: "b3", Title: "T3"}, nil)
+	mfs.EXPECT().SearchMetadataForBookWithOptions("b3", "", "", "", "", mock.Anything).
+		Return(&metafetch.SearchMetadataResponse{Results: nil}, nil)
+
+	// b4: candidate title fetched but not applied (book already has a title
+	// and onlyMissing defaults true) → status "fetched", no write-back.
+	store.EXPECT().GetBookByID("b4").Return(&database.Book{ID: "b4", Title: "Old4"}, nil)
+	mfs.EXPECT().SearchMetadataForBookWithOptions("b4", "", "", "", "", mock.Anything).
+		Return(&metafetch.SearchMetadataResponse{Results: []metafetch.MetadataCandidate{
+			{Title: "New4", Source: "google"},
+		}}, nil)
+
+	// b5: publisher is missing on the book, so the fetched publisher gets
+	// applied → didUpdate → status "updated" (the only one counted in
+	// updated_count).
+	store.EXPECT().GetBookByID("b5").Return(&database.Book{ID: "b5", Title: "Old5"}, nil)
+	mfs.EXPECT().SearchMetadataForBookWithOptions("b5", "", "", "", "", mock.Anything).
+		Return(&metafetch.SearchMetadataResponse{Results: []metafetch.MetadataCandidate{
+			{Title: "Old5", Source: "audible", Publisher: "Pub5"},
+		}}, nil)
+	mfs.EXPECT().RecordChangeHistory(mock.Anything, mock.Anything, "audible").Return()
+	store.EXPECT().UpdateBook("b5", mock.Anything).Return(&database.Book{ID: "b5"}, nil)
+	mfs.EXPECT().ApplyMetadataSystemTags("b5", "audible", "").Return()
+
+	var utMu sync.Mutex
+	utValues := map[string]map[string]any{}
+
+	h := metadatahandler.New(
+		store,
+		mfs,
+		func() metadatahandler.WriteBackEnqueuer { return nil },
+		nil, // opRegistry: unused by bulkFetchMetadataImpl
+		nil, // fileIOPool: unused by bulkFetchMetadataImpl
+		cache.New[gin.H]("meta-test-parallel", time.Minute),
+		func(b *database.Book) any { return gin.H{"id": b.ID} },
+		func(p string) bool { return false },
+		func(bookID string) (map[string]metafetch.MetadataFieldState, error) {
+			return map[string]metafetch.MetadataFieldState{}, nil // pure — safe for concurrent calls
+		},
+		func(bookID string, values map[string]any) error {
+			utMu.Lock()
+			defer utMu.Unlock()
+			utValues[bookID] = values
+			return nil
+		},
+		func(ctx context.Context, e plugin.Event) {},
+	)
+
+	bookIDs := []string{"b0", "b1", "b2", "b3", "b4", "b5"}
+	w := doReq(h.BulkFetchMetadata, http.MethodPost, "/metadata/bulk-fetch",
+		map[string]any{"book_ids": bookIDs}, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var envelope struct {
+		Data struct {
+			UpdatedCount int `json:"updated_count"`
+			TotalCount   int `json:"total_count"`
+			Results      []struct {
+				BookID string `json:"book_id"`
+				Status string `json:"status"`
+			} `json:"results"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode response: %v: %s", err, w.Body.String())
+	}
+	resp := envelope.Data
+
+	if resp.TotalCount != len(bookIDs) {
+		t.Fatalf("total_count = %d, want %d", resp.TotalCount, len(bookIDs))
+	}
+	if resp.UpdatedCount != 1 {
+		t.Fatalf("updated_count = %d, want 1", resp.UpdatedCount)
+	}
+	if len(resp.Results) != len(bookIDs) {
+		t.Fatalf("len(results) = %d, want %d", len(resp.Results), len(bookIDs))
+	}
+
+	wantStatus := map[string]string{
+		"b0": "not_found",
+		"b1": "skipped",
+		"b2": "error",
+		"b3": "not_found",
+		"b4": "fetched",
+		"b5": "updated",
+	}
+	for i, id := range bookIDs {
+		if resp.Results[i].BookID != id {
+			t.Fatalf("results[%d].book_id = %q, want %q (order not preserved)", i, resp.Results[i].BookID, id)
+		}
+		if want := wantStatus[id]; resp.Results[i].Status != want {
+			t.Fatalf("results[%d] (%s).status = %q, want %q", i, id, resp.Results[i].Status, want)
+		}
+	}
+
+	utMu.Lock()
+	if len(utValues["b4"]) == 0 {
+		t.Fatalf("expected fetched-metadata-state write for b4 (title fetched but not applied)")
+	}
+	if len(utValues["b5"]) == 0 {
+		t.Fatalf("expected fetched-metadata-state write for b5")
+	}
+	utMu.Unlock()
 }
 
 // ── bulk / batch write-back enqueue ──────────────────────────────────────────

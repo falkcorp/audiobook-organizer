@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
-// last-edited: 2026-06-23
+// last-edited: 2026-07-05
 
 // Package metadatahandler hosts the metadata-domain HTTP handlers extracted
 // from the server package's metadata_handlers.go: batch-update / validate /
@@ -54,6 +54,7 @@ import (
 	"math"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -63,6 +64,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	metadatapkg "github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
+	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	ulid "github.com/oklog/ulid/v2"
@@ -194,6 +196,48 @@ type bulkFetchMetadataResult struct {
 	AppliedFields []string `json:"applied_fields,omitempty"`
 	FetchedFields []string `json:"fetched_fields,omitempty"`
 }
+
+// bulkFetchMetadataConcurrency bounds how many book IDs bulkFetchMetadataImpl
+// fetches from external metadata sources in parallel (CONC-12). This loop
+// runs inline on a user-facing HTTP request — not a background maintenance
+// job — and each iteration makes a network call to a rate-limited external
+// metadata source, so the pool is a small fixed constant (not
+// runtime.NumCPU()) to avoid starving the server and tripping the source's
+// rate limit on a "select all" bulk request with hundreds/thousands of IDs.
+const bulkFetchMetadataConcurrency = 4
+
+// bulkFetchNoopReporter is a tiny inert registry.Reporter adapter used only to
+// satisfy RunItems' Reporter parameter for bulkFetchMetadataImpl, which has no
+// backing async operation/run row — it is a synchronous HTTP request, not an
+// op-registry job. RunItems' concurrent path (runItemsPar) only ever calls
+// SetCurrentItem and UpdateProgress per item; the remaining methods are
+// unreachable from that path but are implemented as safe, nil-safe no-ops so
+// the type fully satisfies registry.Reporter.
+type bulkFetchNoopReporter struct{}
+
+func (bulkFetchNoopReporter) UpdateProgress(current, total int, message string) error {
+	return nil
+}
+
+func (bulkFetchNoopReporter) Log(level slog.Level, message string, attrs ...slog.Attr) error {
+	return nil
+}
+
+func (bulkFetchNoopReporter) Logger() *slog.Logger { return slog.Default() }
+
+func (bulkFetchNoopReporter) Checkpoint(state any) error { return nil }
+
+func (bulkFetchNoopReporter) IsCanceled() bool { return false }
+
+func (r bulkFetchNoopReporter) RunPhase(ctx context.Context, name string, fn func(context.Context, opsregistry.Reporter) error) error {
+	return fn(ctx, r)
+}
+
+func (bulkFetchNoopReporter) Trigger(ctx context.Context, eventName string, payload any) error {
+	return nil
+}
+
+func (bulkFetchNoopReporter) SetCurrentItem(label string) {}
 
 // bulkWriteBackOpParams mirrors the server-private op-param struct
 // (library_writeback_op.go) byte-for-byte so the JSON enqueued via
@@ -788,10 +832,39 @@ func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
 		onlyMissing = *req.OnlyMissing
 	}
 
-	results := make([]bulkFetchMetadataResult, 0, len(req.BookIDs))
+	// results is pre-sized and written by index (results[i], not append) so
+	// the parallel pass below preserves the exact input order of req.BookIDs,
+	// matching the original serial loop's output byte-for-byte. updatedCount
+	// and the results slice are the shared mutable state across workers (per
+	// CONC-12); both are guarded by resultsMu via setResult.
+	results := make([]bulkFetchMetadataResult, len(req.BookIDs))
 	updatedCount := 0
+	var resultsMu sync.Mutex
 
-	for _, bookID := range req.BookIDs {
+	setResult := func(i int, r bulkFetchMetadataResult) {
+		resultsMu.Lock()
+		results[i] = r
+		if r.Status == "updated" {
+			updatedCount++
+		}
+		resultsMu.Unlock()
+	}
+
+	// indices (not req.BookIDs directly) so each worker can write its result
+	// into the correct output slot via setResult(i, ...).
+	indices := make([]int, len(req.BookIDs))
+	for i := range indices {
+		indices[i] = i
+	}
+
+	// context.Background(), not c.Request.Context(): a client disconnect must
+	// not truncate the run and leave zero-value entries in results — the
+	// parallel pass must always run to completion, same as the serial loop
+	// did. Concurrency is a small fixed constant (bulkFetchMetadataConcurrency)
+	// because this is a request-scoped, network-bound, rate-limited fetch —
+	// not a CPU-bound background job.
+	_ = opsregistry.RunItems(context.Background(), bulkFetchNoopReporter{}, indices, func(_ context.Context, i int) error {
+		bookID := req.BookIDs[i]
 		result := bulkFetchMetadataResult{
 			BookID: bookID,
 			Status: "skipped",
@@ -801,22 +874,22 @@ func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
 		if err != nil || book == nil {
 			result.Status = "not_found"
 			result.Message = "audiobook not found"
-			results = append(results, result)
-			continue
+			setResult(i, result)
+			return nil
 		}
 
 		if strings.TrimSpace(book.Title) == "" {
 			result.Message = "missing title"
-			results = append(results, result)
-			continue
+			setResult(i, result)
+			return nil
 		}
 
 		state, err := h.loadMetadataState(bookID)
 		if err != nil {
 			result.Status = "error"
 			result.Message = "failed to load metadata state"
-			results = append(results, result)
-			continue
+			setResult(i, result)
+			return nil
 		}
 		if state == nil {
 			state = map[string]metafetch.MetadataFieldState{}
@@ -831,14 +904,14 @@ func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
 		if searchErr != nil {
 			result.Status = "error"
 			result.Message = fmt.Sprintf("search failed: %v", searchErr)
-			results = append(results, result)
-			continue
+			setResult(i, result)
+			return nil
 		}
 		if searchResp == nil || len(searchResp.Results) == 0 {
 			result.Status = "not_found"
 			result.Message = "no metadata found from any source"
-			results = append(results, result)
-			continue
+			setResult(i, result)
+			return nil
 		}
 
 		// Pick best match from service's scored candidates (first is already best)
@@ -931,16 +1004,16 @@ func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
 				if err != nil {
 					result.Status = "error"
 					result.Message = "failed to resolve author"
-					results = append(results, result)
-					continue
+					setResult(i, result)
+					return nil
 				}
 				if author == nil {
 					author, err = store.CreateAuthor(meta.Author)
 					if err != nil {
 						result.Status = "error"
 						result.Message = "failed to create author"
-						results = append(results, result)
-						continue
+						setResult(i, result)
+						return nil
 					}
 				}
 				book.AuthorID = &author.ID
@@ -1015,8 +1088,8 @@ func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
 				book.AudibleRatingPerformance = &v2
 				v3 := meta.AudibleRatingStory
 				book.AudibleRatingStory = &v3
-				c := meta.AudibleRatingCount
-				book.AudibleRatingCount = &c
+				cnt := meta.AudibleRatingCount
+				book.AudibleRatingCount = &cnt
 				r := meta.AudibleNumReviews
 				book.AudibleNumReviews = &r
 				appliedFields = append(appliedFields, "audible_ratings")
@@ -1030,8 +1103,8 @@ func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
 			if shouldApply("google_rating_average", hasBookValue("google_rating_average")) {
 				v := meta.GoogleRatingAverage
 				book.GoogleRatingAverage = &v
-				c := meta.GoogleRatingCount
-				book.GoogleRatingCount = &c
+				cnt := meta.GoogleRatingCount
+				book.GoogleRatingCount = &cnt
 				appliedFields = append(appliedFields, "google_rating")
 				didUpdate = true
 			}
@@ -1050,10 +1123,9 @@ func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
 			if _, err := store.UpdateBook(bookID, book); err != nil {
 				result.Status = "error"
 				result.Message = fmt.Sprintf("failed to update book: %v", err)
-				results = append(results, result)
-				continue
+				setResult(i, result)
+				return nil
 			}
-			updatedCount++
 			result.Status = "updated"
 
 			// System tag the source and language so the review UI
@@ -1065,8 +1137,11 @@ func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
 
 		result.AppliedFields = appliedFields
 		result.FetchedFields = fetchedFields
-		results = append(results, result)
-	}
+		setResult(i, result)
+		return nil
+	}, opsregistry.RunItemsOptions{
+		Concurrency: bulkFetchMetadataConcurrency,
+	})
 
 	httputil.RespondWithOK(c, gin.H{
 		"updated_count": updatedCount,
