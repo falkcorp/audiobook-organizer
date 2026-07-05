@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
-// last-edited: 2026-07-01
+// last-edited: 2026-07-05
 
 package itunesservice
 
@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -23,6 +24,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/oklog/ulid/v2"
@@ -87,6 +89,13 @@ type Importer struct {
 	mfs              *metafetch.Service
 	organizerFactory func() BookOrganizer
 	statusMap        importStatusMap
+
+	// organizeConcurrencyOverride, when > 0, overrides the worker-pool size
+	// organizeImportedBooks passes to registry.RunItems. Zero (the default
+	// for every real Importer) means "use runtime.NumCPU()". This exists
+	// purely as a test seam so a test can force the sequential path (1)
+	// and diff it against the parallel path (see organizeConcurrency).
+	organizeConcurrencyOverride int
 }
 
 func newImporter(deps Deps) *Importer {
@@ -430,7 +439,7 @@ func (imp *Importer) Execute(ctx context.Context, opID string, req ImportRequest
 	if importMode == itunes.ImportModeOrganize && !req.PreserveLocation {
 		_ = operations.SaveCheckpoint(imp.store, opID, "itunes_import", "organizing", 0, 0)
 		log.Info("Starting organize phase...")
-		imp.organizeImportedBooks(status, log)
+		imp.organizeImportedBooks(ctx, status, log)
 	}
 
 	_ = operations.ClearState(imp.store, opID)
@@ -1062,14 +1071,44 @@ func (imp *Importer) enrichImportedBooks(status *itunesImportStatus, log logger.
 	log.Info("Metadata enrichment complete: %d books enriched", enriched)
 }
 
-func (imp *Importer) organizeImportedBooks(status *itunesImportStatus, log logger.Logger) {
+// organizeImportedBooks runs the per-book organize (file-move) + UpdateBook
+// step over every LibraryState=="imported" book via registry.RunItems
+// (CONC-10). File I/O + a DB write per book is embarrassingly parallel
+// across DISTINCT books, so this fans out over a worker pool instead of a
+// plain sequential for-loop.
+//
+// Shared-state correctness:
+//   - itunesImportStatus counters: already guarded by status.mu via the
+//     recordImportFailure/incImport* helpers in status.go — reused as-is,
+//     no new locking needed there.
+//   - the local `organized` tally: guarded by its own mutex (mirrors the
+//     resultMu pattern in path_reconcile.go's CONC-15 fix).
+//   - destination path collisions: per-book target directories are NOT
+//     guaranteed disjoint — organizer.generateTargetPath derives the
+//     target from book metadata (title/author/narrator/series), not book
+//     ID, so two DIFFERENT imported books with identical metadata CAN
+//     resolve to the same destination. That's exactly the case
+//     organizer.OrganizeBook's stat-then-write + ErrTargetOccupied check
+//     exists to catch for a single caller — but that check is NOT atomic,
+//     so two goroutines racing on the same destination could both pass
+//     the "target doesn't exist yet" check and corrupt/overwrite each
+//     other's file. organizeDestKey + destLocks below serialize only the
+//     colliding pair (via a per-destination mutex), so the common case
+//     (distinct destinations) still runs fully in parallel while the rare
+//     colliding case gets the same one-wins/one-fails outcome the serial
+//     loop always produced (order-independent, same result set).
+func (imp *Importer) organizeImportedBooks(ctx context.Context, status *itunesImportStatus, log logger.Logger) {
 	books, err := imp.store.GetAllBooks(100000, 0)
 	if err != nil {
 		log.Error("Failed to list books for organize: %v", err)
 		return
 	}
 
-	organized := 0
+	// Pre-filter to the books this phase actually organizes, same filter
+	// the original sequential loop applied inline per iteration. Keeps
+	// RunItems' Concurrency fan-out and progress denominator scoped to
+	// real work only.
+	toOrganize := make([]*database.Book, 0, len(books))
 	for i := range books {
 		book := &books[i]
 		if book.LibraryState == nil || *book.LibraryState != "imported" {
@@ -1078,28 +1117,184 @@ func (imp *Importer) organizeImportedBooks(status *itunesImportStatus, log logge
 		if book.ITunesImportSource == nil {
 			continue
 		}
+		toOrganize = append(toOrganize, book)
+	}
+
+	var mu sync.Mutex
+	organized := 0
+
+	// destLocks serializes concurrent workers whose books resolve to the
+	// same destination path — see the doc comment above for why this is
+	// a correctness requirement, not just an optimization.
+	var destLocks sync.Map // map[string]*sync.Mutex
+
+	reporter := &loggerReporterAdapter{log: log}
+
+	runErr := registry.RunItems(ctx, reporter, toOrganize, func(_ context.Context, book *database.Book) error {
+		var files []database.BookFile
+		if imp.store != nil {
+			files, _ = imp.store.GetBookFiles(book.ID)
+		}
+
+		destKey := imp.organizeDestKey(book, files)
+		lockAny, _ := destLocks.LoadOrStore(destKey, &sync.Mutex{})
+		destMu := lockAny.(*sync.Mutex)
+		destMu.Lock()
+		defer destMu.Unlock()
 
 		oldPath := book.FilePath
 		if err := imp.organizeOneBook(book, log); err != nil {
 			recordImportFailure(status, fmt.Sprintf("Failed to organize '%s': %v", book.Title, err))
 			log.Warn("Failed to organize '%s': %v", book.Title, err)
-		} else {
-			book.LibraryState = strPtr("organized")
-			if _, err := imp.store.UpdateBook(book.ID, book); err != nil {
-				log.Error("Failed to update organized path for '%s': %v — rolling back", book.Title, err)
-				if book.FilePath != oldPath {
-					if rbErr := os.Rename(book.FilePath, oldPath); rbErr != nil {
-						log.Error("CRITICAL: rollback failed for %s: file at %s, DB expects %s", book.ID, book.FilePath, oldPath)
-					} else {
-						book.FilePath = oldPath
-					}
-				}
-			} else {
-				organized++
-			}
+			return nil
 		}
+
+		book.LibraryState = strPtr("organized")
+		if _, err := imp.store.UpdateBook(book.ID, book); err != nil {
+			log.Error("Failed to update organized path for '%s': %v — rolling back", book.Title, err)
+			if book.FilePath != oldPath {
+				if rbErr := os.Rename(book.FilePath, oldPath); rbErr != nil {
+					log.Error("CRITICAL: rollback failed for %s: file at %s, DB expects %s", book.ID, book.FilePath, oldPath)
+				} else {
+					book.FilePath = oldPath
+				}
+			}
+			return nil
+		}
+
+		mu.Lock()
+		organized++
+		mu.Unlock()
+		return nil
+	}, registry.RunItemsOptions{
+		Concurrency: imp.organizeConcurrency(),
+	})
+	if runErr != nil {
+		// The per-book fn above always returns nil (errors are recorded via
+		// recordImportFailure, matching the serial loop's "keep going"
+		// behavior), so this only fires on ctx cancellation.
+		log.Warn("Organize phase interrupted: %v", runErr)
 	}
+
 	log.Info("Organize phase complete: %d books organized", organized)
+}
+
+// organizeConcurrency returns the registry.RunItems worker-pool size for
+// organizeImportedBooks: runtime.NumCPU() by default (CPU/local-disk-bound
+// work — file copy/hardlink/reflink + a DB write, same shape as the
+// CONC-15/CONC-14 fixes), or organizeConcurrencyOverride when a test has
+// set it to force the sequential path.
+func (imp *Importer) organizeConcurrency() int {
+	if imp.organizeConcurrencyOverride > 0 {
+		return imp.organizeConcurrencyOverride
+	}
+	return runtime.NumCPU()
+}
+
+// organizeDestKey returns the destination path organizeOneBook will
+// resolve for book via imp.organizerFactory: the full target file path for
+// single-file books, or the target directory for merged multi-file books.
+// Used as the destLocks key in organizeImportedBooks so two books that
+// would collide on the same destination are never run through
+// organizeOneBook concurrently (see organizeImportedBooks' doc comment).
+//
+// If organizerFactory is nil or the constructed organizer doesn't expose
+// the path-preview API (e.g. a test double implementing only the
+// BookOrganizer interface), falls back to book.ID — a unique key that
+// serializes nothing, which is safe because organizeOneBook itself will
+// hit the same "not configured" / whatever-the-fake-does error path with
+// no destination-lock protection needed for those cases.
+func (imp *Importer) organizeDestKey(book *database.Book, files []database.BookFile) string {
+	if imp.organizerFactory == nil {
+		return book.ID
+	}
+	org := imp.organizerFactory()
+
+	type targetPather interface {
+		GenerateTargetPath(book *database.Book) (string, error)
+		GenerateTargetDirPath(book *database.Book) (string, error)
+	}
+	tp, ok := org.(targetPather)
+	if !ok {
+		return book.ID
+	}
+
+	if len(files) > 1 {
+		if dir, err := tp.GenerateTargetDirPath(book); err == nil && dir != "" {
+			return dir
+		}
+		return book.ID
+	}
+	if path, err := tp.GenerateTargetPath(book); err == nil && path != "" {
+		return path
+	}
+	return book.ID
+}
+
+// loggerReporterAdapter implements registry.Reporter by delegating to an
+// existing logger.Logger, so organizeImportedBooks can drive
+// registry.RunItems without changing its logger.Logger-based signature.
+// Checkpoint/RunPhase/Trigger/SetCurrentItem are inert no-ops:
+// organizeImportedBooks doesn't do per-item checkpointing (the caller
+// already calls operations.SaveCheckpoint once for the whole "organizing"
+// phase — see Execute) or emit registry-level trigger events.
+type loggerReporterAdapter struct {
+	log logger.Logger
+
+	// mu serializes UpdateProgress calls from concurrent RunItems workers;
+	// logger.Logger implementations are not documented as goroutine-safe.
+	mu sync.Mutex
+}
+
+func (a *loggerReporterAdapter) UpdateProgress(current, total int, message string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.log.UpdateProgress(current, total, message)
+	return nil
+}
+
+func (a *loggerReporterAdapter) Log(level slog.Level, message string, attrs ...slog.Attr) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	switch {
+	case level >= slog.LevelError:
+		a.log.Error("%s", message)
+	case level >= slog.LevelWarn:
+		a.log.Warn("%s", message)
+	case level >= slog.LevelInfo:
+		a.log.Info("%s", message)
+	default:
+		a.log.Debug("%s", message)
+	}
+	return nil
+}
+
+func (a *loggerReporterAdapter) Logger() *slog.Logger {
+	// Inert: registry.RunItems never calls Logger() itself; it's only
+	// here to satisfy the Reporter interface.
+	return slog.Default()
+}
+
+func (a *loggerReporterAdapter) Checkpoint(state any) error {
+	return nil
+}
+
+func (a *loggerReporterAdapter) IsCanceled() bool {
+	return a.log.IsCanceled()
+}
+
+func (a *loggerReporterAdapter) RunPhase(ctx context.Context, name string, fn func(context.Context, registry.Reporter) error) error {
+	return fn(ctx, a)
+}
+
+func (a *loggerReporterAdapter) Trigger(ctx context.Context, eventName string, payload any) error {
+	return nil
+}
+
+func (a *loggerReporterAdapter) SetCurrentItem(label string) {
+	// Inert: RunItems calls this before every item, but organizeImportedBooks
+	// had no per-item "current item" concept before this change and adding
+	// one is out of scope here.
 }
 
 func (imp *Importer) organizeOneBook(book *database.Book, log logger.Logger) error {
