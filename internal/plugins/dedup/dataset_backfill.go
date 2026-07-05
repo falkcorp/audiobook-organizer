@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/dataset_backfill.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 2d6f8a13-7c40-4e92-8b15-9a3e5c7d2f64
-// last-edited: 2026-06-13
+// last-edited: 2026-07-05
 
 // Package dedup — op dedup.dataset-backfill (spec C4 backfill).
 //
@@ -27,10 +27,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"runtime"
+	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/dataset"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -74,6 +77,57 @@ func (b builderAdapter) GetBookFiles(id string) ([]database.BookFile, error) {
 	return b.store.GetBookFiles(id)
 }
 
+// bookLookupResult is a memoized GetBook outcome (both the book and any error
+// are cached, so a candidate row referencing a not-found/errored book isn't
+// re-queried on every repeat occurrence either).
+type bookLookupResult struct {
+	book *database.Book
+	err  error
+}
+
+// memoizedBuilderAdapter wraps a builderAdapter with a mutex-guarded
+// book-lookup cache (CONC-8): dedup.mine-gold-labels and dedup.dataset-backfill
+// both iterate pending candidates where the same book can appear in many rows,
+// and previously re-read that book from the store every time. Mirrors the
+// bookCache pattern in internal/dedup/drain_stale.go and
+// internal/server/server_maintenance_deps.go, but mutex-guarded here because
+// the cache is shared across the registry.RunItems worker pool both callers
+// now use — a plain map would race under -race.
+//
+// Only GetBook is memoized, matching the referenced bookCache patterns;
+// GetBookFiles passes straight through to the inner adapter.
+type memoizedBuilderAdapter struct {
+	inner builderAdapter
+	mu    sync.Mutex
+	cache map[string]bookLookupResult
+}
+
+// newMemoizedBuilderAdapter returns a memoizedBuilderAdapter ready for
+// concurrent use across a registry.RunItems worker pool.
+func newMemoizedBuilderAdapter(inner builderAdapter) *memoizedBuilderAdapter {
+	return &memoizedBuilderAdapter{inner: inner, cache: make(map[string]bookLookupResult)}
+}
+
+func (m *memoizedBuilderAdapter) GetBook(id string) (*database.Book, error) {
+	m.mu.Lock()
+	if r, ok := m.cache[id]; ok {
+		m.mu.Unlock()
+		return r.book, r.err
+	}
+	m.mu.Unlock()
+
+	book, err := m.inner.GetBook(id)
+
+	m.mu.Lock()
+	m.cache[id] = bookLookupResult{book: book, err: err}
+	m.mu.Unlock()
+	return book, err
+}
+
+func (m *memoizedBuilderAdapter) GetBookFiles(id string) ([]database.BookFile, error) {
+	return m.inner.GetBookFiles(id)
+}
+
 // runDatasetBackfill implements the dedup.dataset-backfill op.
 func (p *Plugin) runDatasetBackfill(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
 	if p.embeddingStore == nil {
@@ -106,9 +160,16 @@ func (p *Plugin) runDatasetBackfill(ctx context.Context, rawParams json.RawMessa
 
 	reporter.Logger().Info("dataset-backfill: candidates loaded", "count", len(cands))
 
-	adapter := builderAdapter{store: p.store}
+	// Book-lookup memoization (CONC-8): see memoizedBuilderAdapter doc comment.
+	// The cache is mutex-guarded because it's shared across the RunItems
+	// worker pool below.
+	adapter := newMemoizedBuilderAdapter(builderAdapter{store: p.store})
 
+	// statsMu guards the counters below, which every worker goroutine
+	// increments. Each candidate's own store reads/writes are independent and
+	// need no lock — only the shared summary counters do.
 	var (
+		statsMu    sync.Mutex
 		examined   int
 		labeled    int
 		suppressed int
@@ -119,34 +180,27 @@ func (p *Plugin) runDatasetBackfill(ctx context.Context, rawParams json.RawMessa
 
 	_ = reporter.UpdateProgress(1, 2, fmt.Sprintf("Processing %d candidates…", len(cands)))
 
-	for i := range cands {
+	err = registry.RunItems(ctx, reporter, cands, func(ctx context.Context, c database.DedupCandidate) error {
 		if reporter.IsCanceled() {
 			return context.Canceled
 		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
 
-		c := cands[i]
+		statsMu.Lock()
 		examined++
-
-		// Periodic progress update so the op doesn't appear frozen on large sets.
-		if examined%1000 == 0 {
-			_ = reporter.UpdateProgress(1, 2, fmt.Sprintf("Processed %d/%d candidates…", examined, len(cands)))
-		}
+		statsMu.Unlock()
 
 		// Build feature vector for the candidate pair.
-		ex, err := dataset.BuildExample(adapter, c)
-		if err != nil {
+		ex, buildErr := dataset.BuildExample(adapter, c)
+		if buildErr != nil {
+			statsMu.Lock()
 			buildErrs++
+			statsMu.Unlock()
 			reporter.Logger().Warn("dataset-backfill: build error",
 				"candidate_id", c.ID,
 				"entity_a", c.EntityAID,
 				"entity_b", c.EntityBID,
-				"error", err)
-			continue
+				"error", buildErr)
+			return nil
 		}
 
 		// Run deterministic catchers.
@@ -157,9 +211,13 @@ func (p *Plugin) runDatasetBackfill(ctx context.Context, rawParams json.RawMessa
 			ex.DecidedAt = time.Now().UTC().Format(time.RFC3339)
 			switch label {
 			case "not_dup":
+				statsMu.Lock()
 				notDup++
+				statsMu.Unlock()
 			case "true_dup":
+				statsMu.Lock()
 				trueDup++
+				statsMu.Unlock()
 			}
 		}
 		// If no catcher fired, ex.Label remains "" — example is unlabeled, written
@@ -172,7 +230,9 @@ func (p *Plugin) runDatasetBackfill(ctx context.Context, rawParams json.RawMessa
 					"candidate_id", c.ID, "error", err)
 				// Continue — partial progress is better than aborting.
 			} else {
+				statsMu.Lock()
 				labeled++
+				statsMu.Unlock()
 			}
 
 			// Suppress only catchers-confirmed not_dup candidates.
@@ -181,10 +241,21 @@ func (p *Plugin) runDatasetBackfill(ctx context.Context, rawParams json.RawMessa
 					reporter.Logger().Error("dataset-backfill: suppress error",
 						"candidate_id", c.ID, "error", err)
 				} else {
+					statsMu.Lock()
 					suppressed++
+					statsMu.Unlock()
 				}
 			}
 		}
+		return nil
+	}, registry.RunItemsOptions{
+		Concurrency: runtime.NumCPU(),
+		Label: func(i, total int) string {
+			return fmt.Sprintf("Processed %d/%d candidates…", i+1, total)
+		},
+	})
+	if err != nil {
+		return err
 	}
 
 	summary := fmt.Sprintf(
