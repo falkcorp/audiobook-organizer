@@ -1,6 +1,7 @@
 // file: internal/server/embedding_backfill_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4f81c2ae-6b39-47d5-9ae1-3c5d8b12f7a4
+// last-edited: 2026-07-04
 
 package server
 
@@ -21,11 +22,12 @@ func TestDedupScanProgressLogger_BucketCrossings(t *testing.T) {
 
 	progress := newDedupScanProgressLogger(1000, logf)
 
-	// Simulate FullScan calling progress(i+1, total) on every i where i%10 == 0.
+	// Simulate FullScan calling progress("scan", i+1, total) on every i where
+	// i%10 == 0.
 	const total = 2500
 	for i := 0; i < total; i++ {
 		if i%10 == 0 || i == total-1 {
-			progress(i+1, total)
+			progress("scan", i+1, total)
 		}
 	}
 
@@ -36,14 +38,14 @@ func TestDedupScanProgressLogger_BucketCrossings(t *testing.T) {
 		t.Fatalf("expected %d log lines, got %d: %v", want, got, lines)
 	}
 	// First two should be at bucket crossings near 1000 and 2000.
-	if lines[0] != "[INFO] Dedup scan progress: 1001/2500" {
+	if lines[0] != "[INFO] Dedup scan progress (scan): 1001/2500" {
 		t.Errorf("first log line = %q", lines[0])
 	}
-	if lines[1] != "[INFO] Dedup scan progress: 2001/2500" {
+	if lines[1] != "[INFO] Dedup scan progress (scan): 2001/2500" {
 		t.Errorf("second log line = %q", lines[1])
 	}
 	// Last one is the completion line.
-	if lines[2] != "[INFO] Dedup scan progress: 2500/2500" {
+	if lines[2] != "[INFO] Dedup scan progress (scan): 2500/2500" {
 		t.Errorf("final log line = %q", lines[2])
 	}
 }
@@ -60,7 +62,7 @@ func TestDedupScanProgressLogger_EveryItem(t *testing.T) {
 
 	const total = 350
 	for i := 0; i < total; i++ {
-		progress(i+1, total)
+		progress("scan", i+1, total)
 	}
 
 	// Expected: one log line at each of done=100, 200, 300, and the completion
@@ -81,14 +83,14 @@ func TestDedupScanProgressLogger_SmallTotal(t *testing.T) {
 	const total = 42
 	for i := 0; i < total; i++ {
 		if i%10 == 0 || i == total-1 {
-			progress(i+1, total)
+			progress("scan", i+1, total)
 		}
 	}
 
 	if len(lines) != 1 {
 		t.Fatalf("expected 1 log line (completion only), got %d: %v", len(lines), lines)
 	}
-	if lines[0] != "[INFO] Dedup scan progress: 42/42" {
+	if lines[0] != "[INFO] Dedup scan progress (scan): 42/42" {
 		t.Errorf("completion line = %q", lines[0])
 	}
 }
@@ -103,7 +105,7 @@ func TestDedupScanProgressLogger_NonPositiveInterval(t *testing.T) {
 		count++
 	})
 	for i := 0; i < 5; i++ {
-		progress(i+1, 5)
+		progress("scan", i+1, 5)
 	}
 	if count != 5 {
 		t.Errorf("interval=0 should log every call; got %d calls", count)

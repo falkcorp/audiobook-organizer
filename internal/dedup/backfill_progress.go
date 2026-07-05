@@ -1,6 +1,7 @@
 // file: internal/dedup/backfill_progress.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f6a7b8c9-d0e1-f2a3-b4c5-d6e7f8a9b0c1
+// last-edited: 2026-07-04
 
 package dedup
 
@@ -22,7 +23,7 @@ const BackfillVersionMarker = "embedding_backfill_v5_done"
 
 // NewDedupScanProgressLogger returns a progress callback suitable for
 // Engine.FullScan that logs once every `interval` books processed (plus
-// one final line at completion).
+// one final line at completion), per phase.
 //
 // It exists because FullScan passes `done = i+1` at a step of 10, so values
 // are 1, 11, 21, ... which never satisfy `done % interval == 0` for interval
@@ -30,14 +31,29 @@ const BackfillVersionMarker = "embedding_backfill_v5_done"
 // the next threshold internally and advances past it on each bucket crossing,
 // so progress lines appear at ~interval granularity regardless of the caller's
 // step size.
-func NewDedupScanProgressLogger(interval int, logf func(format string, args ...any)) func(done, total int) {
+//
+// FullScan now reports two phases — "scan" (Layer 1/2 exact + embedding
+// checks) and "score" (unified composite scoring) — each of which iterates
+// over all books independently. The bucket-crossing state (nextLog) is reset
+// whenever the phase changes so the second phase doesn't inherit the first
+// phase's already-advanced threshold and go silent for its own first
+// `interval` books.
+func NewDedupScanProgressLogger(interval int, logf func(format string, args ...any)) func(phase string, done, total int) {
 	if interval <= 0 {
 		interval = 1
 	}
 	nextLog := interval
-	return func(done, total int) {
+	lastPhase := ""
+	return func(phase string, done, total int) {
+		if phase != lastPhase {
+			if lastPhase != "" {
+				logf("[INFO] Dedup scan phase %q complete, starting phase %q", lastPhase, phase)
+			}
+			lastPhase = phase
+			nextLog = interval
+		}
 		if done >= nextLog || (total > 0 && done == total) {
-			logf("[INFO] Dedup scan progress: %d/%d", done, total)
+			logf("[INFO] Dedup scan progress (%s): %d/%d", phase, done, total)
 			for nextLog <= done {
 				nextLog += interval
 			}

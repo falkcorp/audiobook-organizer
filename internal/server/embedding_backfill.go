@@ -1,6 +1,7 @@
 // file: internal/server/embedding_backfill.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
+// last-edited: 2026-07-04
 
 package server
 
@@ -180,6 +181,6 @@ func (s *Server) runEmbeddingBackfill() {
 }
 
 // newDedupScanProgressLogger is a thin wrapper around the domain implementation.
-func newDedupScanProgressLogger(interval int, logf func(format string, args ...any)) func(done, total int) {
+func newDedupScanProgressLogger(interval int, logf func(format string, args ...any)) func(phase string, done, total int) {
 	return dedup.NewDedupScanProgressLogger(interval, logf)
 }

@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/full_scan.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-06-10
+// last-edited: 2026-07-04
 
 // T018: full_scan.go enforces phase ordering for the full dedup scan:
 //
@@ -34,6 +34,35 @@ import (
 // (SQLite, mocks) that do not carry an LSH index should return false.
 type LSHFlagStore interface {
 	IsLSHIndexBuilt() bool
+}
+
+// etaSuffix renders a rough "(N.N books/sec, ~T remaining)" suffix for a
+// progress message, computed from how long the phase has been running and
+// how many of its items are done. It exists to answer "give us an ETA" for
+// the previously-silent unified-scoring pass, which can run for tens of
+// minutes on a large library with zero other feedback. Returns "" until at
+// least one item has completed (rate is undefined at done==0) or if elapsed
+// time is effectively zero (avoids a divide-by-near-zero rate spike right
+// after Start).
+func etaSuffix(phaseStart time.Time, done, total int) string {
+	if done <= 0 || phaseStart.IsZero() {
+		return ""
+	}
+	elapsed := time.Since(phaseStart)
+	if elapsed <= 0 {
+		return ""
+	}
+	rate := float64(done) / elapsed.Seconds()
+	if rate <= 0 {
+		return ""
+	}
+	remaining := total - done
+	if remaining < 0 {
+		remaining = 0
+	}
+	etaSeconds := float64(remaining) / rate
+	eta := time.Duration(etaSeconds * float64(time.Second))
+	return fmt.Sprintf(" (%.1f books/sec, ~%s remaining)", rate, eta.Round(time.Second))
 }
 
 func (p *Plugin) fullScanDef() sdk.OperationDef {
@@ -72,19 +101,43 @@ func (p *Plugin) runFullScan(ctx context.Context, _ json.RawMessage, reporter sd
 		reporter.Logger().Info("purged stale candidates before scan", "count", deleted)
 	}
 
-	// Phase 2 — Index: run exact + embedding collectors for every primary book.
-	// FullScan reports progress via a callback (done, total). Build the real
-	// Progress on the first callback once we know N.
-	var prog *sdk.Progress
-	fullScanErr := p.engine.FullScan(ctx, func(done, total int) {
+	// Phase 2 — Index + score: run exact + embedding collectors for every
+	// primary book ("scan" phase), then compose the unified score for every
+	// book ("score" phase). FullScan reports progress via a callback
+	// (phase, done, total) — both phases iterate over all books and used to
+	// report independently, but the "score" phase previously reported
+	// nothing at all, leaving the operation log silent for the CPU-heavy
+	// composite-scoring pass (observed: 25+ minutes silent on a ~29K-book
+	// library). Build a separate *sdk.Progress tracker per phase, lazily on
+	// that phase's first callback, same pattern as the original single
+	// tracker.
+	var (
+		prog      *sdk.Progress
+		scoreProg *sdk.Progress
+
+		scanStart  time.Time
+		scoreStart time.Time
+	)
+	fullScanErr := p.engine.FullScan(ctx, func(phase string, done, total int) {
 		if total <= 0 {
 			return
 		}
-		if prog == nil {
-			prog = sdk.NewProgress(reporter, total)
-			prog.Start(fmt.Sprintf("Scanning books: 0 / %d", total))
+		switch phase {
+		case "scan":
+			if prog == nil {
+				prog = sdk.NewProgress(reporter, total)
+				prog.Start(fmt.Sprintf("Scanning books: 0 / %d", total))
+				scanStart = time.Now()
+			}
+			prog.StepN(done, fmt.Sprintf("Scanning books: %d / %d%s", done, total, etaSuffix(scanStart, done, total)))
+		case "score":
+			if scoreProg == nil {
+				scoreProg = sdk.NewProgress(reporter, total)
+				scoreProg.Start(fmt.Sprintf("Composing scores: 0 / %d", total))
+				scoreStart = time.Now()
+			}
+			scoreProg.StepN(done, fmt.Sprintf("Composing scores: %d / %d%s", done, total, etaSuffix(scoreStart, done, total)))
 		}
-		prog.StepN(done, fmt.Sprintf("Scanning books: %d / %d", done, total))
 	})
 	if fullScanErr != nil {
 		reporter.Logger().Error("FullScan error", "error", fullScanErr)
@@ -95,6 +148,12 @@ func (p *Plugin) runFullScan(ctx context.Context, _ json.RawMessage, reporter sd
 		prog = sdk.NewProgress(reporter, 0)
 		prog.Start("Scanning books: 0 / 0")
 	}
+	if scoreProg == nil {
+		scoreProg = sdk.NewProgress(reporter, 0)
+		scoreProg.Start("Composing scores: 0 / 0")
+	}
+	scoreProg.Finalize("scoring complete")
+	scoreProg.Done("Composing scores complete")
 
 	// Phase 3 — LSH candidates: assert that the LSH index has been built
 	// before the engine's CollectLSHAcoustID collector runs. The collector
