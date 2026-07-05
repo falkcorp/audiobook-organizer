@@ -1,7 +1,7 @@
 // file: internal/dedup/engine.go
-// version: 1.44.1
+// version: 1.45.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
-// last-edited: 2026-07-03
+// last-edited: 2026-07-04
 
 package dedup
 
@@ -2390,15 +2390,20 @@ func (de *Engine) deleteBookFromChromem(ctx context.Context, bookID string) {
 }
 
 // FullScan re-embeds stale entities and runs both Layer 1 (exact) and
-// Layer 2 (embedding) dedup checks for every primary book in the library.
-// The progress callback is invoked periodically with (done, total).
+// Layer 2 (embedding) dedup checks for every primary book in the library,
+// followed by a second pass that composes the unified score for every book.
+// The progress callback is invoked periodically with (phase, done, total).
+// phase is "scan" during the Layer 1/2 pass and "score" during the unified
+// composite-scoring pass — the two phases each iterate over all books, so
+// callers should treat them as independent 0..total progressions rather than
+// summing them.
 //
 // Layer 1 used to only run on ingest and metadata-apply events, which meant
 // the `exact` bucket stayed at zero for libraries that hadn't seen new books
 // since the initial backfill. Running it inside FullScan populates the
 // bucket with the hash/ISBN/near-title-match candidates that were always
 // there but never surfaced.
-func (de *Engine) FullScan(ctx context.Context, progress func(done, total int)) error {
+func (de *Engine) FullScan(ctx context.Context, progress func(phase string, done, total int)) error {
 	_, span := dedupTracer.Start(ctx, "dedup.full_scan")
 	defer span.End()
 
@@ -2522,7 +2527,7 @@ func (de *Engine) FullScan(ctx context.Context, progress func(done, total int)) 
 		}
 
 		if progress != nil && (i%10 == 0 || i == total-1) {
-			progress(i+1, total)
+			progress("scan", i+1, total)
 		}
 	}
 
@@ -2544,7 +2549,8 @@ func (de *Engine) FullScan(ctx context.Context, progress func(done, total int)) 
 	// runUnifiedScoringForBook) may not have run yet for a given book when we
 	// are still iterating the book loop above.  Running the scoring pass after
 	// flushChunk(total) guarantees all embedding candidates are written.
-	for _, book := range books {
+	scoreTotal := len(books)
+	for i, book := range books {
 		if ctx.Err() != nil {
 			break
 		}
@@ -2556,6 +2562,10 @@ func (de *Engine) FullScan(ctx context.Context, progress func(done, total int)) 
 		}
 		if err := de.runUnifiedScoringForBook(ctx, &book, authorName); err != nil {
 			slog.Error("dedup full scan unified scoring error for", "book", book.ID, "err", err)
+		}
+
+		if progress != nil && (i%10 == 0 || i == scoreTotal-1) {
+			progress("score", i+1, scoreTotal)
 		}
 	}
 
