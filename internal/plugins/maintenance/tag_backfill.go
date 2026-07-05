@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/tag_backfill.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1f6b3d28-9a47-4c50-8e21-7b0c4a9d6e35
-// last-edited: 2026-06-20
+// last-edited: 2026-07-05
 
 // Package maintenance — op maintenance.tag-backfill.
 //
@@ -20,11 +20,14 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -79,58 +82,60 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 	total := len(files)
 	_ = reporter.UpdateProgress(0, total, fmt.Sprintf("Reading tags for %d files…", total))
 
-	const (
-		writeBatchSize = 1000
-		logInterval    = 15 * time.Second
-	)
-	var (
-		examined, needed, missing, readErr, written int
-		pending                                     = make([]*database.BookFile, 0, writeBatchSize)
-		examples                                    = make([]string, 0, 5)
-		lastLog                                     = time.Now()
-	)
-	flush := func() error {
-		if params.DryRun || len(pending) == 0 {
-			pending = pending[:0]
-			return nil
-		}
-		if err := store.BatchUpsertBookFiles(pending); err != nil {
-			return err
-		}
-		pending = pending[:0]
-		return nil
+	// Limit caps how many files are EXAMINED (not just how many are backfilled),
+	// matching the original serial semantics: only the first Limit files (in
+	// GetAllBookFiles order) are looked at at all. Truncating the input slice up
+	// front makes this equivalent under registry.RunItems regardless of the
+	// order workers finish in.
+	items := files
+	if params.Limit > 0 && params.Limit < total {
+		items = files[:params.Limit]
 	}
 
-	for i := range files {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if params.Limit > 0 && examined >= params.Limit {
-			break
-		}
-		f := files[i]
+	const writeBatchSize = 1000
+
+	// Per-item tag reads are pure I/O + CPU with no cross-item dependency, so
+	// Phase 1 fans them out via registry.RunItems (I/O-bound sizing, matching
+	// internal/itunes/service/path_repair_resolver.go: NumCPU()*4). All
+	// counters/slices below are written from multiple goroutines during Phase 1
+	// and are guarded by mu — the actual DB write (Phase 2) happens serially
+	// afterward from fixes, exactly mirroring the batch-write shape of the
+	// original serial loop.
+	var (
+		mu                                 sync.Mutex
+		examined, needed, missing, readErr int
+		fixes                              = make([]*database.BookFile, 0, len(items))
+		examples                           = make([]string, 0, 5)
+	)
+
+	err = registry.RunItems(ctx, reporter, items, func(_ context.Context, f database.BookFile) error {
+		mu.Lock()
 		examined++
+		mu.Unlock()
 
 		// Skip rows that already have tags unless forced.
 		if len(f.RawTags) > 0 && !params.Force {
-			continue
+			return nil
 		}
 		if f.FilePath == "" {
-			continue
+			return nil
 		}
 		if _, statErr := os.Stat(f.FilePath); statErr != nil {
+			mu.Lock()
 			missing++
-			continue
+			mu.Unlock()
+			return nil
 		}
 		meta, merr := metadata.ExtractMetadata(f.FilePath, nil)
 		if merr != nil {
+			mu.Lock()
 			readErr++
-			continue
+			mu.Unlock()
+			return nil
 		}
 		if len(meta.AllTags) == 0 {
-			continue // nothing capturable
+			return nil // nothing capturable
 		}
-		needed++
 
 		updated := f // copy
 		updated.RawTags = meta.AllTags
@@ -149,28 +154,57 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 		if updated.Title == "" && meta.Title != "" {
 			updated.Title = meta.Title
 		}
+
+		mu.Lock()
+		needed++
 		if len(examples) < 5 {
 			examples = append(examples, fmt.Sprintf("%s(%d tags,trk %d)", updated.ID, len(meta.AllTags), updated.TrackNumber))
 		}
+		fixes = append(fixes, &updated)
+		mu.Unlock()
+		return nil
+	}, registry.RunItemsOptions{
+		Concurrency:   runtime.NumCPU() * 4,
+		ProgressTotal: total,
+		Label: func(i, t int) string {
+			mu.Lock()
+			e, n, m, r := examined, needed, missing, readErr
+			mu.Unlock()
+			return fmt.Sprintf("%d/%d examined — %d to backfill, %d missing, %d read-err", e, t, n, m, r)
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("parallel tag scan: %w", err)
+	}
 
-		pending = append(pending, &updated)
-		if len(pending) >= writeBatchSize {
-			if err := flush(); err != nil {
-				return fmt.Errorf("batch write at file %d: %w", examined, err)
+	// Phase 2: write the collected fixes serially in the same batch size as the
+	// original loop. No concurrency needed here — fixes is already fully
+	// populated and Phase 1 has completed.
+	written := 0
+	if !params.DryRun {
+		pending := make([]*database.BookFile, 0, writeBatchSize)
+		flush := func() error {
+			if len(pending) == 0 {
+				return nil
+			}
+			if err := store.BatchUpsertBookFiles(pending); err != nil {
+				return err
+			}
+			pending = pending[:0]
+			return nil
+		}
+		for _, f := range fixes {
+			pending = append(pending, f)
+			written++
+			if len(pending) >= writeBatchSize {
+				if err := flush(); err != nil {
+					return fmt.Errorf("batch write at file %d: %w", written, err)
+				}
 			}
 		}
-		if !params.DryRun {
-			written++
+		if err := flush(); err != nil {
+			return fmt.Errorf("final batch write: %w", err)
 		}
-
-		if time.Since(lastLog) >= logInterval {
-			_ = reporter.UpdateProgress(examined, total, fmt.Sprintf(
-				"%d/%d examined — %d to backfill, %d missing, %d read-err", examined, total, needed, missing, readErr))
-			lastLog = time.Now()
-		}
-	}
-	if err := flush(); err != nil {
-		return fmt.Errorf("final batch write: %w", err)
 	}
 
 	verb := "would backfill"
