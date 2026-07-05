@@ -1,7 +1,7 @@
 <!-- file: CLAUDE.md -->
-<!-- version: 4.9.0 -->
+<!-- version: 4.10.0 -->
 <!-- guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f -->
-<!-- last-edited: 2026-06-28 -->
+<!-- last-edited: 2026-07-05 -->
 
 # CLAUDE.md
 
@@ -17,6 +17,38 @@ Key files:
 - **Go rules:** `.standards/instructions/go.md`
 - **TypeScript rules:** `.standards/instructions/typescript.md`
 - **Commit format:** `.standards/instructions/commit-messages.md`
+
+## Concurrency — Prefer Multi-Core Design (MANDATORY)
+
+Any loop that iterates a whole-library-scale collection (books, book files, dedup
+candidates, authors — hundreds/thousands+ items) and does meaningful per-item work
+(a DB read/write, network call, hashing/fingerprinting, fuzzy-string comparison, or
+subprocess call) **must** be written with concurrency in mind from the start, not
+bolted on later. A `dedup.full-scan` run went silent for 3+ hours at 100% CPU on a
+single core on 2026-07-05 because its "unified scoring" pass was a plain
+`for range books` loop with no worker pool — see
+[`docs/audits/2026-07-05-concurrency-single-threaded-hotspots.md`](docs/audits/2026-07-05-concurrency-single-threaded-hotspots.md)
+for the full list of similar hotspots found across the codebase and the fix patterns
+that apply to each shape of problem.
+
+- Default to a bounded worker pool (`errgroup.Group` + `SetLimit`, or a semaphore
+  channel) sized to `runtime.NumCPU()` for CPU-bound work, or a smaller fixed
+  concurrency for network-bound work that respects the target's own rate limits.
+  Never fan out unbounded goroutines over an unbounded collection.
+- If the loop has a pairwise/O(n²) shape (comparing every item against every other
+  item — e.g. signature/fingerprint similarity scans), shard the outer loop across
+  workers rather than parallelizing the inner loop alone; watch for shared mutable
+  state (a dedup-key map, etc.) that needs its own lock or sharding.
+- If the loop's correctness depends on strict ordering or exclusive access (e.g. an
+  auto-merge/auto-resolve apply path that must not double-merge a book processed by
+  two workers at once), don't naively add concurrency — partition the work into
+  disjoint sets (by book ID, group ID, etc.) so parallel workers can never touch the
+  same row, and say so in a comment.
+- When adding a new full-library maintenance/backfill op, look for an existing
+  parallel sibling first (e.g. `internal/plugins/acoustid/backfill.go`'s
+  `registry.RunItems`-based pattern) before writing a new sequential loop from
+  scratch — several serial hotspots in the audit above are sequential duplicates of
+  an already-correctly-parallelized twin elsewhere in the codebase.
 
 ## Worktree Discipline (MANDATORY)
 
