@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.46.0
+// version: 1.47.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-07-05
 
@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,6 +25,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -3671,7 +3673,20 @@ func (de *Engine) BookSignatureScan(ctx context.Context, progress func(done, tot
 		}
 	}
 
+	// CONC-1 (docs/audits/2026-07-05-concurrency-single-threaded-hotspots.md):
+	// This is an O(n²) pairwise scan and was previously a single-threaded loop
+	// that pinned one core for hours on a full library. The per-pair work is
+	// pure CPU (masked Hamming compare over in-memory signatures — no DB reads
+	// in the inner loop), so we shard the OUTER loop (index i) across a bounded
+	// worker pool sized to runtime.NumCPU() via registry.RunItems.
+	//
+	// Correctness: the triangular i<j loop still visits each unordered pair
+	// exactly once (worker for i only looks at j>i), so sharding cannot create
+	// duplicate or missing pairs. The only shared mutable state is the `emitted`
+	// map and the DB write inside emit(); both are serialized under emitMu below
+	// so the parallel pass emits the exact same candidate set as the serial one.
 	emitted := make(map[string]struct{})
+	var emitMu sync.Mutex
 	pairKey := func(a, b string) string {
 		if a > b {
 			a, b = b, a
@@ -3679,7 +3694,14 @@ func (de *Engine) BookSignatureScan(ctx context.Context, progress func(done, tot
 		return a + ":" + b
 	}
 
+	// emit is called concurrently from multiple shard workers. The whole body
+	// (map read-check-then-write + upsertCandidateWithLiveLabel DB write) runs
+	// under emitMu so neither the `emitted` map nor the candidate store races.
+	// Emits are rare (only sim>=FuzzyMinSimilarity pairs), so this lock is not
+	// on the hot path — the parallelized work is the CPU-bound comparison above.
 	emit := func(bookAID, bookBID string, sim float64) {
+		emitMu.Lock()
+		defer emitMu.Unlock()
 		key := pairKey(bookAID, bookBID)
 		if _, already := emitted[key]; already {
 			return
@@ -3698,13 +3720,11 @@ func (de *Engine) BookSignatureScan(ctx context.Context, progress func(done, tot
 	}
 
 	total := len(booksWithSig)
-	for i, bookA := range booksWithSig {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
 
+	// scanOuter runs the inner j-loop for a single outer index i (each unordered
+	// pair (i,j) with j>i visited once). Pure-CPU; the only side effect is emit().
+	scanOuter := func(i int) {
+		bookA := booksWithSig[i]
 		sigA := *bookA.BookSigV1
 		maskA := ""
 		if bookA.BookSigV1Mask != nil {
@@ -3734,12 +3754,68 @@ func (de *Engine) BookSignatureScan(ctx context.Context, progress func(done, tot
 				emit(bookA.ID, bookB.ID, sim)
 			}
 		}
+	}
 
-		if progress != nil {
-			progress(i+1, total)
-		}
+	// Shard the outer index across a pool sized to NumCPU. RunItems polls
+	// ctx.Done() between items and drives the progress adapter's UpdateProgress
+	// once per completed shard, preserving the original progress(done,total)
+	// callback (see progressCallbackReporter — mutex-serialized counter, no
+	// lost updates, serialized invocation for the non-thread-safe callback).
+	indices := make([]int, total)
+	for i := range indices {
+		indices[i] = i
+	}
+	err = registry.RunItems(ctx, &progressCallbackReporter{progress: progress}, indices,
+		func(_ context.Context, i int) error {
+			scanOuter(i)
+			return nil
+		},
+		registry.RunItemsOptions{Concurrency: runtime.NumCPU()},
+	)
+	if err != nil {
+		return err
 	}
 
 	slog.Info("[dedup] book signature scan complete books scanned, candidate pair(s) emitted", "total", total, "emitted_count", len(emitted))
 	return nil
 }
+
+// progressCallbackReporter adapts BookSignatureScan's plain progress(done,total)
+// callback to the registry.Reporter interface so the scan can drive
+// registry.RunItems without changing its public signature. RunItems only calls
+// UpdateProgress and SetCurrentItem; the remaining methods are inert no-ops.
+//
+// RunItems calls UpdateProgress concurrently from every shard worker, but the
+// wrapped progress callback (see book_signature_scan.go) is written for serial
+// invocation. The mutex therefore serializes every callback and, under the same
+// lock, increments a counter so the callback always sees a strictly increasing
+// done value with no lost updates. We intentionally ignore RunItems' per-item
+// `current` (== i+1, out of order under sharding) and report shards-finished.
+type progressCallbackReporter struct {
+	progress func(done, total int)
+	mu       sync.Mutex
+	done     int
+}
+
+func (p *progressCallbackReporter) UpdateProgress(_, total int, _ string) error {
+	if p.progress == nil {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.done++
+	p.progress(p.done, total)
+	return nil
+}
+
+func (p *progressCallbackReporter) Log(_ slog.Level, _ string, _ ...slog.Attr) error { return nil }
+func (p *progressCallbackReporter) Logger() *slog.Logger                             { return slog.Default() }
+func (p *progressCallbackReporter) Checkpoint(_ any) error                           { return nil }
+func (p *progressCallbackReporter) IsCanceled() bool                                 { return false }
+func (p *progressCallbackReporter) SetCurrentItem(_ string)                          {}
+
+func (p *progressCallbackReporter) RunPhase(ctx context.Context, _ string, fn func(context.Context, registry.Reporter) error) error {
+	return fn(ctx, p)
+}
+
+func (p *progressCallbackReporter) Trigger(_ context.Context, _ string, _ any) error { return nil }
