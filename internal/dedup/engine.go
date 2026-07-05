@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.50.0
+// version: 1.51.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-07-05
 
@@ -3054,6 +3054,34 @@ func (de *Engine) getAllBooksUnfiltered() ([]database.Book, error) {
 	return de.bookStore.GetAllBooks(0, 0)
 }
 
+// getAllPrimaryBooksWithFullFields fetches all primary-version books via
+// GetAllBooksFrom instead of GetAllBooks. Under the production default
+// (PebbleStore.UseMemDB=true), GetAllBooks(0,0) returns memdb-projected Book
+// copies with BookSigV1/BookSigV1Mask/BookSigSegments stripped to nil (see
+// stripBookForMemdb's doc comment: "Predicates that filter by these fields
+// silently miss against stripped books... route through GetBookByID
+// instead"). BookSignatureScan's own filter — `b.BookSigV1 != nil` — is
+// exactly such a predicate, so under UseMemDB=true it silently matched zero
+// books and every full-scan pairwise comparison compared nothing, with no
+// error surfaced. GetAllBooksFrom already implements the memdb-bypass
+// pattern the strip comment recommends (walks the ID index, then fetches
+// each book via GetBookByID, which always reads full Pebble JSON regardless
+// of UseMemDB) — reuse it here instead of adding a new store method.
+func (de *Engine) getAllPrimaryBooksWithFullFields() ([]database.Book, error) {
+	batch, err := de.bookStore.GetAllBooksFrom("", 0)
+	if err != nil {
+		return nil, err
+	}
+	filtered := make([]database.Book, 0, len(batch))
+	for _, b := range batch {
+		if b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion {
+			continue
+		}
+		filtered = append(filtered, b)
+	}
+	return filtered, nil
+}
+
 // RunLLMReview processes ambiguous candidates through LLM review (Layer 3).
 // Pending book candidates whose similarity falls in [LLMBookLow, LLMBookHigh] and
 // pending author candidates in [LLMAuthorLow, LLMAuthorHigh] are fetched, enriched
@@ -3809,7 +3837,10 @@ func bestSeg(f *database.BookFile) string {
 // Skips books that don't have a synthesized book_sig_v1 yet (not backfilled).
 // Progress callback receives (done, total) book counts.
 func (de *Engine) BookSignatureScan(ctx context.Context, progress func(done, total int)) error {
-	books, err := de.getAllBooks()
+	// getAllPrimaryBooksWithFullFields, not getAllBooks: this scan filters on
+	// BookSigV1 below, which getAllBooks's memdb-backed source strips to nil
+	// under the production default (see that method's doc comment).
+	books, err := de.getAllPrimaryBooksWithFullFields()
 	if err != nil {
 		return fmt.Errorf("book signature scan: get all books: %w", err)
 	}

@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.62.0 -->
+<!-- version: 9.63.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-05 -->
 
@@ -19,6 +19,20 @@ future agent) can scan the entire workspace in one page.
 - Claude project memory at `~/.claude/projects/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/memory/` — items still to graduate here
 
 ---
+
+## ✅ BookSignatureScan memdb no-op fix (2026-07-05)
+
+- **Found while verifying the CONC-1..15 concurrency sweep's follow-ups.**
+  `BookSignatureScan` filtered on `Book.BookSigV1`, which is stripped to nil
+  by memdb (`stripBookForMemdb`) under `PebbleStore.UseMemDB=true` — the
+  shipped production default. The scan silently matched zero books, no
+  error surfaced.
+- **Fix:** `Engine.getAllPrimaryBooksWithFullFields` sources from
+  `GetAllBooksFrom` (already bypasses memdb per-book via `GetBookByID`)
+  instead of `GetAllBooks`. Regression test proves the pre-fix shape (0
+  candidates) and post-fix shape (correct candidates) both explicitly.
+- **Checked, not affected:** `AcoustIDScan` — reads fingerprints via the
+  per-book `GetBookFiles` call, which is unconditionally Pebble-direct.
 
 ## ✅ FullScan cancel-responsiveness fix (2026-07-05)
 
