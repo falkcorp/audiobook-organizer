@@ -1,7 +1,7 @@
 // file: internal/server/audiobooks_helpers.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 439aa827-edea-481d-8918-ddacd2c140b7
-// last-edited: 2026-06-28
+// last-edited: 2026-07-05
 
 // Server-package helpers relocated out of audiobooks_handlers.go when the
 // audiobooks HTTP handlers were extracted into the handlers/audiobooks
@@ -69,7 +69,7 @@ func (s *Server) buildAudiobookListResponse(ctx context.Context, limit, offset i
 
 	// Fetch book_files ONCE up front; thread the map into both enrichment
 	// (for duration/file-size aggregation) and the fingerprint compute loop
-	// below. Previously each path independently called GetBookFilesForIDs.
+	// below. Previously each path independently called GetBookFilesForIDsCore.
 	bookFilesMap := s.audiobookService.FetchBookFilesForBooks(books)
 
 	enriched := s.audiobookService.EnrichAudiobooksWithNamesAndFiles(books, bookFilesMap)

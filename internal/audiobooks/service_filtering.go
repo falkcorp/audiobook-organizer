@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_filtering.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b4e8c3d2-e5f6-7a80-9b0c-1d2e3f4a5b6c
-// last-edited: 2026-07-01
+// last-edited: 2026-07-05
 
 package audiobooks
 
@@ -737,7 +737,7 @@ func splitMultipleNames(name string) []string {
 }
 
 // aggregateFileMetadata calculates total duration and file size from files
-// for each book. Uses GetBookFilesForIDs to fetch ONLY the files for the
+// for each book. Uses GetBookFilesForIDsCore to fetch ONLY the files for the
 // passed-in books — not GetAllBookFiles, which materialized all 308K+
 // book_file rows (~46GB heap) on every library list query and trampolined
 // the process to 67GB the moment the filter-pushdown warmer started.
@@ -758,9 +758,17 @@ func (svc *AudiobookService) aggregateFileMetadata(books []database.Book) {
 // book_id index, with the same unwrap + fallback semantics as the original
 // aggregateFileMetadata. Returns a non-nil map (possibly empty) so callers
 // can safely range over it without nil checks.
-func (svc *AudiobookService) FetchBookFilesForBooks(books []database.Book) map[string][]database.BookFile {
+//
+// Core-typed (STOREFID): returns BookFileCore, not BookFile. Every current
+// consumer of this map (duration/file-size aggregation, fingerprint_status
+// badge via fingerprint.FileWithFingerprint) only reads light/retained
+// fields, so this is not a behavior change — see
+// docs/specs/2026-07-05-store-getter-fidelity-unification.md. A future
+// caller that needs a heavy fingerprint-diagnostic field must fetch it via
+// svc.store.GetBookFiles(bookID) instead of adding it here.
+func (svc *AudiobookService) FetchBookFilesForBooks(books []database.Book) map[string][]database.BookFileCore {
 	if svc.store == nil || len(books) == 0 {
-		return map[string][]database.BookFile{}
+		return map[string][]database.BookFileCore{}
 	}
 	bookIDs := make([]string, 0, len(books))
 	for _, b := range books {
@@ -768,16 +776,16 @@ func (svc *AudiobookService) FetchBookFilesForBooks(books []database.Book) map[s
 	}
 
 	type batchFilesStore interface {
-		GetBookFilesForIDs(ids []string) (map[string][]database.BookFile, error)
+		GetBookFilesForIDsCore(ids []string) (map[string][]database.BookFileCore, error)
 	}
-	var filesByBookID map[string][]database.BookFile
+	var filesByBookID map[string][]database.BookFileCore
 	if fs, ok := svc.store.(batchFilesStore); ok {
-		if m, err := fs.GetBookFilesForIDs(bookIDs); err == nil {
+		if m, err := fs.GetBookFilesForIDsCore(bookIDs); err == nil {
 			filesByBookID = m
 		}
 	} else if uw, ok := svc.store.(interface{ Unwrap() database.Store }); ok {
 		if fs, ok2 := uw.Unwrap().(batchFilesStore); ok2 {
-			if m, err := fs.GetBookFilesForIDs(bookIDs); err == nil {
+			if m, err := fs.GetBookFilesForIDsCore(bookIDs); err == nil {
 				filesByBookID = m
 			}
 		}
@@ -785,28 +793,32 @@ func (svc *AudiobookService) FetchBookFilesForBooks(books []database.Book) map[s
 	if filesByBookID == nil {
 		// Store doesn't expose the batched method — fall back to per-book
 		// fetch. Slow (N+1) but bounded by len(books) (typically 20).
-		filesByBookID = make(map[string][]database.BookFile, len(books))
+		filesByBookID = make(map[string][]database.BookFileCore, len(books))
 		for _, id := range bookIDs {
 			files, err := svc.store.GetBookFiles(id)
 			if err != nil {
 				slog.Warn("FetchBookFilesForBooks: GetBookFiles failed", "book_id", id, "err", err)
 				continue
 			}
-			filesByBookID[id] = files
+			cores := make([]database.BookFileCore, len(files))
+			for i, f := range files {
+				cores[i] = f.Core()
+			}
+			filesByBookID[id] = cores
 		}
 	}
 	return filesByBookID
 }
 
 // aggregateFileMetadataWithFiles applies duration/file-size aggregation
-// using a pre-fetched files map. Skips the GetBookFilesForIDs call,
+// using a pre-fetched files map. Skips the GetBookFilesForIDsCore call,
 // allowing callers that already have the map to reuse it.
-func (svc *AudiobookService) aggregateFileMetadataWithFiles(books []database.Book, filesByBookID map[string][]database.BookFile) {
+func (svc *AudiobookService) aggregateFileMetadataWithFiles(books []database.Book, filesByBookID map[string][]database.BookFileCore) {
 	if len(books) == 0 {
 		return
 	}
 	if filesByBookID == nil {
-		filesByBookID = map[string][]database.BookFile{}
+		filesByBookID = map[string][]database.BookFileCore{}
 	}
 
 	bookIDMap := make(map[string]int, len(books))

@@ -1,7 +1,7 @@
 // file: internal/database/memdb_strip.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-stripbook0001
-// last-edited: 2026-06-11
+// last-edited: 2026-07-05
 
 package database
 
@@ -72,8 +72,9 @@ func stripBookForMemdb(src *Book) *Book {
 // AcoustIDSeg0..6 strip rationale (fable5 T019):
 //
 // Before T013: Seg0 was the last live memdb reader — fingerprint.ComputeFingerprintFields
-// called GetAcoustIDSeg0() on memdb-sourced BookFile rows (via GetBookFilesForIDs)
-// to compute the per-book fingerprint_status badge on every /api/v1/audiobooks list.
+// called GetAcoustIDSeg0() on memdb-sourced BookFile rows (via GetBookFilesForIDsCore,
+// renamed from GetBookFilesForIDs in STOREFID Phase 3) to compute the per-book
+// fingerprint_status badge on every /api/v1/audiobooks list.
 // Seg1..6 were read by MemStore.GetBookFileByAcoustIDFuzzy (the O(N) dedup path).
 //
 // After T013: the O(N) fuzzy scan (GetBookFileByAcoustIDFuzzy) is retired — the
@@ -100,7 +101,7 @@ func stripBookFileForMemdb(src *BookFile) *BookFile {
 	// AcoustIDSeg0..6: deprecated 7-segment fields (store.go:685-694).
 	// Stripped as of fable5 T019 — all memdb readers retired by T013:
 	//   - O(N) fuzzy scan (GetBookFileByAcoustIDFuzzy): deleted by T013.
-	//   - fingerprint_status badge (GetAcoustIDSeg0 via GetBookFilesForIDs):
+	//   - fingerprint_status badge (GetAcoustIDSeg0 via GetBookFilesForIDsCore):
 	//     migrated to AcoustIDFingerprintDurationSec proxy in T019.
 	// Pebble-direct paths (dedup engine, handler_files, dedup comparison
 	// handler) remain unaffected — they read via GetBookFiles / GetBookFile.

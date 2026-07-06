@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_authors.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1f8b9fd2-e424-4a09-9ee4-7b5b64660605
-// last-edited: 2026-07-03
+// last-edited: 2026-07-05
 
 package database
 
@@ -634,9 +634,9 @@ func (p *PebbleStore) GetAllAuthorFileCounts_Pebble() (map[int]int, error) {
 		bookIDs[i] = ab.BookID
 	}
 
-	filesMap := make(map[string][]BookFile)
+	filesMap := make(map[string][]BookFileCore)
 	if len(bookIDs) > 0 {
-		if bfm, err := p.GetBookFilesForIDs(bookIDs); err == nil {
+		if bfm, err := p.GetBookFilesForIDsCore(bookIDs); err == nil {
 			filesMap = bfm
 		}
 	}

@@ -1,7 +1,7 @@
 // file: internal/database/bookfile_fingerprint.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d1e2f3g4-h5i6-7890-jkml-no1234567890
-// last-edited: 2026-06-10
+// last-edited: 2026-07-05
 
 package database
 
@@ -42,4 +42,32 @@ func (bf *BookFile) GetUpdatedAt() time.Time {
 		return time.Time{}
 	}
 	return bf.UpdatedAt
+}
+
+// GetAcoustIDSeg0 satisfies fingerprint.FileWithFingerprint for BookFileCore
+// (the STOREFID-typed projection returned by GetBookFilesForIDsCore).
+// BookFileCore never carries the raw AcoustIDSeg0 field (it is one of the
+// heavy fields stripped from the memdb projection — see BookFileCore's doc
+// comment), so this always uses the AcoustIDFingerprintDurationSec presence
+// proxy described on (*BookFile).GetAcoustIDSeg0 above. This is not a
+// behavior change for memdb-sourced callers: AcoustIDSeg0 is already always
+// "" for memdb rows, so (*BookFile).GetAcoustIDSeg0 already fell through to
+// this same proxy for every caller of the old GetBookFilesForIDs.
+func (c *BookFileCore) GetAcoustIDSeg0() string {
+	if c == nil {
+		return ""
+	}
+	if c.AcoustIDFingerprintDurationSec > 0 {
+		return "wf" // non-empty sentinel; callers only test != ""
+	}
+	return ""
+}
+
+// GetUpdatedAt returns the UpdatedAt field for use with
+// fingerprint.FileWithFingerprint interface.
+func (c *BookFileCore) GetUpdatedAt() time.Time {
+	if c == nil {
+		return time.Time{}
+	}
+	return c.UpdatedAt
 }

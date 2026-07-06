@@ -1,5 +1,5 @@
 // file: internal/database/bookfilecore_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 29325171-4866-4142-82c6-e010f724ae5e
 // last-edited: 2026-07-05
 
@@ -30,13 +30,8 @@ var strippedBookFileFields = []string{
 	"FingerprintFailureReason",
 }
 
-func structFieldNames(t reflect.Type) map[string]struct{} {
-	names := make(map[string]struct{}, t.NumField())
-	for i := 0; i < t.NumField(); i++ {
-		names[t.Field(i).Name] = struct{}{}
-	}
-	return names
-}
+// structFieldNames is defined once in bookcore_test.go (same package) and
+// reused here — both *core_test.go files need the identical helper.
 
 // TestBookFileCoreIsBookFileMinusHeavyFields asserts the field-name set of
 // BookFileCore equals BookFile's set minus EXACTLY the stripped heavy set.

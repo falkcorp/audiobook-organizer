@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/interfaces.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 110386de-3e07-4ef3-b0e0-2e717a249e91
-// last-edited: 2026-06-03
+// last-edited: 2026-07-05
 
 // Narrow dependency interfaces for the audiobooks-domain HTTP handlers (the
 // main library list / CRUD domain: list, count, facets, soft-delete /
@@ -50,7 +50,7 @@ import (
 //
 // NOTE: the handlers ALSO probe the live store for optional/decorator-only
 // methods via inline type assertions (ListBooksWithFileErrors,
-// GetAllBookIDsForQuickQuery, GetBookFilesForIDs, Unwrap, InvalidateLibraryStats).
+// GetAllBookIDsForQuickQuery, GetBookFilesForIDsCore, Unwrap, InvalidateLibraryStats).
 // Those are intentionally NOT listed here — they resolve against the dynamic
 // type of the value the provider returns (s.Store(), the concrete store), so
 // they keep working as long as getStore returns the un-stripped store.
