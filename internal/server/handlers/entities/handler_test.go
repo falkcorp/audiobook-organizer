@@ -252,7 +252,7 @@ func TestSplitCompositeAuthor(t *testing.T) {
 	d.store.EXPECT().CreateAuthor("A").Return(&database.Author{ID: 10, Name: "A"}, nil)
 	d.store.EXPECT().GetAuthorByName("B").Return(nil, errString("not found"))
 	d.store.EXPECT().CreateAuthor("B").Return(&database.Author{ID: 11, Name: "B"}, nil)
-	d.store.EXPECT().GetBooksByAuthorIDWithRole(5).Return([]database.Book{}, nil)
+	d.store.EXPECT().GetBooksByAuthorIDWithRoleCore(5).Return([]database.BookCore{}, nil)
 	d.store.EXPECT().DeleteAuthor(5).Return(nil)
 	// Provide explicit names so the split is deterministic (not dependent on the
 	// dedup auto-detect heuristic).
@@ -365,7 +365,7 @@ func TestReclassifyAuthorAsNarrator(t *testing.T) {
 	d.store.EXPECT().GetAuthorByID(5).Return(&database.Author{ID: 5, Name: "Reader"}, nil)
 	d.store.EXPECT().GetNarratorByName("Reader").Return(nil, errString("not found"))
 	d.store.EXPECT().CreateNarrator("Reader").Return(&database.Narrator{ID: 3, Name: "Reader"}, nil)
-	d.store.EXPECT().GetBooksByAuthorIDWithRole(5).Return([]database.Book{}, nil)
+	d.store.EXPECT().GetBooksByAuthorIDWithRoleCore(5).Return([]database.BookCore{}, nil)
 	d.store.EXPECT().DeleteAuthor(5).Return(nil)
 	c, w := newCtx(http.MethodPost, "/authors/5/reclassify-as-narrator", "", idParam("5"))
 	h.ReclassifyAuthorAsNarrator(c)

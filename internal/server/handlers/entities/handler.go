@@ -1,5 +1,5 @@
 // file: internal/server/handlers/entities/handler.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b02a07d8-1806-4c86-bb72-f0688d6caff3
 // last-edited: 2026-07-05
 
@@ -397,7 +397,7 @@ func (h *Handler) SplitCompositeAuthor(c *gin.Context) {
 	}
 
 	// Get all books linked to the composite author
-	books, err := h.store.GetBooksByAuthorIDWithRole(authorID)
+	books, err := h.store.GetBooksByAuthorIDWithRoleCore(authorID)
 	if err != nil {
 		httputil.InternalError(c, "failed to get author books", err)
 		return
@@ -686,7 +686,7 @@ func (h *Handler) ReclassifyAuthorAsNarrator(c *gin.Context) {
 	}
 
 	// Get all books linked to this author
-	books, err := h.store.GetBooksByAuthorIDWithRole(authorID)
+	books, err := h.store.GetBooksByAuthorIDWithRoleCore(authorID)
 	if err != nil {
 		httputil.InternalError(c, "failed to get author books", err)
 		return

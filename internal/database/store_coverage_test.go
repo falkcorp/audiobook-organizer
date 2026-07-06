@@ -201,8 +201,8 @@ func TestCoverage_BookAuthors(t *testing.T) {
 	assert.Equal(t, "author", authors[0].Role)
 	assert.Equal(t, "co-author", authors[1].Role)
 
-	// GetBooksByAuthorIDWithRole
-	books, err := store.GetBooksByAuthorIDWithRole(author2.ID)
+	// GetBooksByAuthorIDWithRoleCore
+	books, err := store.GetBooksByAuthorIDWithRoleCore(author2.ID)
 	require.NoError(t, err)
 	assert.Len(t, books, 1)
 

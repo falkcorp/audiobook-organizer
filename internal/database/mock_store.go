@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.70.0
+// version: 1.71.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-07-05
 
@@ -41,7 +41,7 @@ type MockStore struct {
 	GetBooksByWorkIDFunc            func(workID string) ([]Book, error)
 	GetBooksBySeriesIDFunc          func(seriesID int) ([]Book, error)
 	GetBooksByAuthorIDCoreFunc      func(authorID int) ([]BookCore, error)
-	GetBooksByAuthorIDWithRoleFunc  func(authorID int) ([]Book, error)
+	GetBooksByAuthorIDWithRoleFunc  func(authorID int) ([]BookCore, error)
 	GetBookByITunesPersistentIDFunc func(persistentID string) (*Book, error)
 	ListBooksByITunesPIDFunc        func(limit, offset int) ([]Book, error)
 	GetBookByFileHashFunc           func(hash string) (*Book, error)
@@ -784,11 +784,7 @@ func (m *MockStore) SetBookAuthors(bookID string, authors []BookAuthor) error {
 	return nil
 }
 
-func (m *MockStore) GetBooksByAuthorIDWithRole(authorID int) ([]Book, error) {
-	// Can no longer delegate to GetBooksByAuthorIDCore (STOREFID P3-W2
-	// retyped it to []BookCore); GetBooksByAuthorIDWithRole itself is out of
-	// scope for this wave and stays []Book. Use its own func field —
-	// defaults to the same nil,nil zero-value stub as before when unset.
+func (m *MockStore) GetBooksByAuthorIDWithRoleCore(authorID int) ([]BookCore, error) {
 	if m.GetBooksByAuthorIDWithRoleFunc != nil {
 		return m.GetBooksByAuthorIDWithRoleFunc(authorID)
 	}

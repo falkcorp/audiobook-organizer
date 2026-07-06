@@ -171,7 +171,7 @@ func TestGetSystemAnnouncements_DuplicateAuthors(t *testing.T) {
 		{ID: 1, Name: "Brandon Sanderson"},
 		{ID: 2, Name: "Brandon Sanderson"},
 	}, nil)
-	d.store.EXPECT().GetBooksByAuthorIDWithRole(mock.AnythingOfType("int")).Return([]database.Book{{ID: "b1"}}, nil).Maybe()
+	d.store.EXPECT().GetBooksByAuthorIDWithRoleCore(mock.AnythingOfType("int")).Return([]database.BookCore{{ID: "b1"}}, nil).Maybe()
 	d.store.EXPECT().GetAllBooks(100, 0).Return([]database.Book{}, nil)
 
 	w := run(http.MethodGet, "/system/announcements", "/system/announcements", nil, func(r *gin.Engine) {

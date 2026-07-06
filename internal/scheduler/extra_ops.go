@@ -1,5 +1,5 @@
 // file: internal/scheduler/extra_ops.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: a9b8c7d6-e5f4-3210-fedc-ba9876543210
 
 // extra_ops registers OperationDefs for 13 scheduler tasks that previously
@@ -284,7 +284,7 @@ func (r *ExtraOpsRegistrar) RegisterAuthorSplitScanOp(reg *opsregistry.Registry)
 				}
 
 				// Re-link all books from composite author to individual authors
-				books, err := store.GetBooksByAuthorIDWithRole(author.ID)
+				books, err := store.GetBooksByAuthorIDWithRoleCore(author.ID)
 				if err != nil {
 					errCount++
 					_ = progress.Log("warning", fmt.Sprintf("Failed to get books for author %q: %v", author.Name, err), nil)
@@ -334,7 +334,14 @@ func (r *ExtraOpsRegistrar) RegisterAuthorSplitScanOp(reg *opsregistry.Registry)
 					if book.AuthorID != nil && *book.AuthorID == author.ID && len(newAuthors) > 0 {
 						firstID := newAuthors[0].ID
 						book.AuthorID = &firstID
-						_, _ = store.UpdateBook(book.ID, &book)
+						// book is BookCore (heavy fields nil) — bridge via
+						// .ToBook() so PebbleStore.UpdateBook sees the
+						// expected all-nil heavy fields and restores them
+						// from the stored row (STOR-1 guard in UpdateBook),
+						// rather than a type mismatch or an accidental
+						// heavy-field wipe.
+						full := book.ToBook()
+						_, _ = store.UpdateBook(book.ID, &full)
 					}
 					booksUpdated++
 				}
@@ -682,7 +689,7 @@ func (r *ExtraOpsRegistrar) RegisterResolveProductionAuthorsOp(reg *opsregistry.
 				if ctx.Err() != nil {
 					return ctx.Err()
 				}
-				books, err := store.GetBooksByAuthorIDWithRole(author.ID)
+				books, err := store.GetBooksByAuthorIDWithRoleCore(author.ID)
 				if err != nil {
 					p.StepN(i+1, fmt.Sprintf("Processed %d/%d production companies (%d books resolved)", i+1, total, resolved))
 					continue

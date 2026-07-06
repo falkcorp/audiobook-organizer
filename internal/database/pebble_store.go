@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.105.0
+// version: 1.106.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-07-05
 
@@ -1172,18 +1172,32 @@ func (p *PebbleStore) getBooksByAuthorIDFull(authorID int) ([]Book, error) {
 	return books, nil
 }
 
-// GetBooksByAuthorIDWithRole returns all books where the author appears in
-// the book_authors junction table (any role). It also falls back to the
+// GetBooksByAuthorIDWithRoleCore returns all books where the author appears
+// in the book_authors junction table (any role). It also falls back to the
 // legacy AuthorID field for books not yet migrated to the junction table.
 //
-// SLIM (memdb projection): returns rows with heavy fields nil'd — Description,
-// VersionNotes, BookSigV1, BookSigV1Mask, BookSigSegments, BookSigBuiltAt,
-// BookSigCoveragePct, Author, Series. A caller that needs any of those MUST
-// fetch via GetBookByID / GetAllBooksFullFrom (full Pebble). See
+// Core-typed (STOREFID P3-W2b): the return type is BookCore, not Book, so
+// the nine heavy fields (Description, VersionNotes, BookSigV1, BookSigV1Mask,
+// BookSigSegments, BookSigBuiltAt, BookSigCoveragePct, Author, Series) being
+// absent is compiler-enforced rather than silently nil'd. Both the memdb
+// fast-path rows and the junction/legacy-scan fallback below are already
+// stripped of those fields at the source (memdb never carries them; the
+// Pebble scan returns full Book only as an intermediate before projecting to
+// Core) — mapping via .Core() here just makes that guarantee visible in the
+// type system. A caller that needs any of the heavy fields MUST fetch via
+// GetBookByID / GetAllBooksFullFrom (full Pebble). See
 // docs/specs/2026-07-05-store-getter-fidelity-unification.md.
-func (p *PebbleStore) GetBooksByAuthorIDWithRole(authorID int) ([]Book, error) {
+func (p *PebbleStore) GetBooksByAuthorIDWithRoleCore(authorID int) ([]BookCore, error) {
 	if p.UseMemDB && p.mem() != nil {
-		return p.mem().GetBooksByAuthorID(authorID, 0, 0)
+		books, err := p.mem().GetBooksByAuthorID(authorID, 0, 0)
+		if err != nil {
+			return nil, err
+		}
+		cores := make([]BookCore, len(books))
+		for i := range books {
+			cores[i] = books[i].Core()
+		}
+		return cores, nil
 	}
 	// Collect book IDs from the book_authors junction table.
 	bookIDSet := make(map[string]struct{})
@@ -1239,7 +1253,11 @@ func (p *PebbleStore) GetBooksByAuthorIDWithRole(authorID int) ([]Book, error) {
 			books = append(books, book)
 		}
 	}
-	return books, nil
+	cores := make([]BookCore, len(books))
+	for i := range books {
+		cores[i] = books[i].Core()
+	}
+	return cores, nil
 }
 
 func (p *PebbleStore) CreateBook(book *Book) (*Book, error) {

@@ -1,7 +1,7 @@
 // file: internal/aiscan/pipeline.go
-// version: 3.1.2
+// version: 3.2.0
 // guid: b8c4d0e2-5f6a-7b8c-9d0e-1f2a3b4c5d6e
-// last-edited: 2026-05-05
+// last-edited: 2026-07-05
 
 package aiscan
 
@@ -264,7 +264,7 @@ func (pm *PipelineManager) buildGroupsInput(authors []database.Author) ([]ai.Aut
 		}
 		var sampleTitles []string
 		if group.Canonical.ID > 0 {
-			books, bErr := pm.mainStore.GetBooksByAuthorIDWithRole(group.Canonical.ID)
+			books, bErr := pm.mainStore.GetBooksByAuthorIDWithRoleCore(group.Canonical.ID)
 			if bErr == nil {
 				for j, b := range books {
 					if j >= 3 {
@@ -291,7 +291,7 @@ func (pm *PipelineManager) buildFullInput(authors []database.Author) []ai.Author
 	var inputs []ai.AuthorDiscoveryInput
 	for _, author := range authors {
 		var sampleTitles []string
-		books, err := pm.mainStore.GetBooksByAuthorIDWithRole(author.ID)
+		books, err := pm.mainStore.GetBooksByAuthorIDWithRoleCore(author.ID)
 		if err == nil {
 			for j, b := range books {
 				if j >= 3 {
@@ -622,7 +622,7 @@ func (pm *PipelineManager) runEnrichment(ctx context.Context, scanID int, source
 	for _, s := range uncertain {
 		bookTitles := make(map[int][]string)
 		for _, authorID := range s.AuthorIDs {
-			books, bErr := pm.mainStore.GetBooksByAuthorIDWithRole(authorID)
+			books, bErr := pm.mainStore.GetBooksByAuthorIDWithRoleCore(authorID)
 			if bErr == nil {
 				var titles []string
 				for j, b := range books {

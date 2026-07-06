@@ -1,5 +1,5 @@
 // file: cmd/dedup_bench_types.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f23456789012
 
 //go:build bench
@@ -70,7 +70,7 @@ func extractAuthorData(store database.AuthorReader) (*AuthorData, error) {
 
 	sampleBooks := make(map[int][]string, len(authors))
 	for _, a := range authors {
-		books, err := store.GetBooksByAuthorIDWithRole(a.ID)
+		books, err := store.GetBooksByAuthorIDWithRoleCore(a.ID)
 		if err != nil {
 			continue
 		}
