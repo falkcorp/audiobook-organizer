@@ -1,7 +1,7 @@
 # file: .github/workflows/release-prod.yml
-# version: 4.9.4
+# version: 4.9.5
 # guid: f1a2b3c4-d5e6-7f8a-9b0c-1d2e3f4a5b6c
-# last-edited: 2026-07-05
+# last-edited: 2026-07-06
 
 name: Production Release
 
@@ -42,7 +42,7 @@ permissions:
 jobs:
   release:
     name: Create Production Release
-    uses: falkcorp/github-common/.github/workflows/reusable-release.yml@c4ea62e7ca3794f13bb6e7a2546a04a90fcd3d1f # v2.14.2 (ghcommon ref-pin fix)
+    uses: falkcorp/github-common/.github/workflows/reusable-release.yml@f7e012d85bf1df8013304327c4831ab142eb209b # v2.14.3 (gha-release-go GORELEASER_CURRENT_TAG pin)
     with:
       release-type: ${{ github.event.inputs.release-type }}
       prerelease: false

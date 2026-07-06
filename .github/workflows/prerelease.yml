@@ -1,7 +1,7 @@
 # file: .github/workflows/prerelease.yml
-# version: 2.10.2
+# version: 2.10.3
 # guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-# last-edited: 2026-07-05
+# last-edited: 2026-07-06
 
 name: Prerelease on Merge
 
@@ -28,7 +28,7 @@ env:
 jobs:
   prerelease:
     name: Create Prerelease Build
-    uses: falkcorp/github-common/.github/workflows/reusable-release.yml@c4ea62e7ca3794f13bb6e7a2546a04a90fcd3d1f # v2.14.2 (ghcommon ref-pin fix)
+    uses: falkcorp/github-common/.github/workflows/reusable-release.yml@f7e012d85bf1df8013304327c4831ab142eb209b # v2.14.3 (gha-release-go GORELEASER_CURRENT_TAG pin)
     with:
       release-type: 'auto'
       prerelease: true

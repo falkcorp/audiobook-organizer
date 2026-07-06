@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.111.1 -->
+<!-- version: 3.111.2 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-06 -->
 
@@ -8,6 +8,22 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 6, 2026 - fix(ci): bump ghcommon pin for GORELEASER_CURRENT_TAG fix (6th release-pipeline blocker)
+
+- **`fix(ci)`** — after the first 5 release-pipeline fixes, 3 consecutive
+  Production Release attempts still failed: each computed the correct
+  stable tag (e.g. `v0.217.3`, `v0.217.4`, `v0.217.5`), but GoReleaser's
+  `git describe`-based "current tag" detection non-deterministically
+  picked a concurrent RC tag instead whenever a `Prerelease on Merge` run
+  (triggered by an ordinary PR merge) tagged the same commit first —
+  causing asset uploads to collide with that RC's already-published
+  assets (`422 already_exists`). Root cause traced to `gha-release-go`
+  never setting `GORELEASER_CURRENT_TAG`, GoReleaser's own documented
+  mechanism for "cases where one git commit is referenced by multiple
+  git tags." Fixed in `falkcorp/gha-release-go#7` (v2.0.1) and bumped the
+  `reusable-release.yml` pin here to `falkcorp/github-common@f7e012d`
+  (v2.14.3, PR #318).
 
 #### July 6, 2026 - fix(database): stop UpdateBookFile from wiping stored AcoustID fingerprints on memdb-slim writeback
 
