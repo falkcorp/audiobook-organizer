@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/lsh_backfill.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2c4d6e80-3b5a-4f9c-9b1d-7e8f0a2b4c6d
-// last-edited: 2026-06-24
+// last-edited: 2026-07-06
 
 package acoustid
 
@@ -16,10 +16,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
-// lshBackfillProgressEvery controls how often we emit a progress frame
-// during the walk. Matches the per-row fallback in resetAllDef.
-const lshBackfillProgressEvery = 500
-
 // lshIndexChecker is satisfied by any store that can answer "do I already
 // have an LSH index row for this BookFile?". The PebbleStore agent on the
 // sibling branch is adding this method; until it ships, the type assertion
@@ -30,14 +26,26 @@ type lshIndexChecker interface {
 }
 
 // lshBackfillDef registers acoustid.lsh-backfill — the one-shot admin op
-// that walks every BookFile with a stored AcoustIDFingerprint and forces
+// that walks every BookFile with a whole-file fingerprint and forces
 // the LSH secondary index (`fpidx:` + `fpidx_meta:`) to be (re)written.
 //
 // The index hook fires inside PebbleStore.UpdateBookFile, so the operation
-// itself does nothing fancy: it filters for rows that have a raw fp but no
-// existing fpidx_meta entry, then re-saves them. Safe to re-run — if the
-// index is already present the row is skipped (via HasLSHIndex when the
+// itself does nothing fancy: it filters for rows that have a whole-file fp
+// but no existing fpidx_meta entry, then re-saves them. Safe to re-run — if
+// the index is already present the row is skipped (via HasLSHIndex when the
 // store implements it) or harmlessly rewritten (when it does not).
+//
+// Gate uses AcoustIDFingerprintDurationSec (>0 ⇒ a whole-file fingerprint
+// exists) rather than len(AcoustIDFingerprint) == 0, because GetAllBookFiles
+// returns the memdb-slim projection in production (UseMemDB=true) where
+// stripBookFileForMemdb nils the raw AcoustIDFingerprint blob to save RAM —
+// the byte-length gate was always true under memdb, making this op a silent
+// no-op. The row we re-save still carries a nil AcoustIDFingerprint, but
+// PebbleStore.UpdateBookFile restores the stored blob from Pebble whenever
+// the incoming value is empty (the "preserve-on-empty" guard added for the
+// same memdb-slim-roundtrip class of bug) *before* writeBookFileSecondaryIndexes
+// runs, so writeFingerprintLSHIndexes still sees the real fingerprint bytes.
+// No hydrate call is needed here — UpdateBookFile does it for us.
 //
 // Use after deploying the LSH index code to populate the existing ~308K
 // fingerprinted rows without re-running fpcalc.
@@ -94,7 +102,11 @@ func (p *Plugin) runLSHBackfill(ctx context.Context, _ json.RawMessage, reporter
 	var indexed, skippedNoFP, skippedAlreadyIndexed, failed int
 
 	if err := registry.RunItems(ctx, reporter, files, func(ctx context.Context, f database.BookFile) error {
-		if len(f.AcoustIDFingerprint) == 0 {
+		// Proxy gate: AcoustIDFingerprintDurationSec > 0 means a whole-file
+		// fingerprint was computed, even when the memdb-slim row we're
+		// holding has AcoustIDFingerprint stripped to nil. See the doc
+		// comment above for why this is safe to re-save unmodified.
+		if f.AcoustIDFingerprintDurationSec == 0 {
 			skippedNoFP++
 		} else if hasChecker && checker.HasLSHIndex(f.ID) {
 			skippedAlreadyIndexed++

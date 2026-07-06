@@ -69,9 +69,17 @@ future agent) can scan the entire workspace in one page.
   `repair_missing_files` — DryRun true). Diagnostic fields NOT guarded here (backfill.go
   clears them on success via this method); the residual diagnostic wipe for failed-fp
   books is closed structurally by W3.
-- **PR-B (open):** reroute the 3 HEAVY-READ fingerprint no-ops (`acoustid online_lookup`,
-  `lsh_backfill`, `dedup lsh_index_build`) to proxy-then-hydrate — they currently drop
-  every candidate under memdb and do nothing.
+- **PR-B (✅ done):** rerouted the 3 HEAVY-READ fingerprint no-ops (`acoustid online_lookup`,
+  `lsh_backfill`, `dedup lsh_index_build`) to proxy-then-hydrate (gate on
+  `AcoustIDFingerprintDurationSec`, hydrate via `GetBookFiles`). `lsh_index_build`
+  converted to a `RunItems` pool partitioned by BookID (index-map grouping to avoid
+  doubling BookFile RSS). Restores LSH/online-lookup coverage that was silently a
+  no-op under prod memdb. Race-safe (mock mutex; prod code was already safe).
+  - **Follow-up (verify invariant):** all 3 ops gate on `AcoustIDFingerprintDurationSec > 0`
+    as the memdb-safe "has whole-file fp" proxy, assuming `AcoustIDFingerprint set ⇒
+    DurationSec > 0` (backfill.go writes both together). A historical row with a blob but
+    `DurationSec == 0` would be silently skipped. Verify with a prod query; if any exist,
+    backfill DurationSec or broaden the gate.
 - **PR-C = STOREFID W3:** retype `GetAllBookFiles → []BookFileCore`; the 4 writeback jobs
   move to field-scoped update/hydrate. **W3 landmine:** those 4 must NOT use a
   `BookFileCore.ToBookFile()` bridge then write back (re-introduces the wipe).

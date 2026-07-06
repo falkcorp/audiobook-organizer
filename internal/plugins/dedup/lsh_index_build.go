@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/lsh_index_build.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: e61b955e-93bf-4ea6-bb1f-7acd30491fdb
-// last-edited: 2026-06-11
+// last-edited: 2026-07-06
 
 package dedup
 
@@ -10,19 +10,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"runtime"
+	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
-
-// lshBuildBatchSize is the number of BookFiles processed per PebbleDB
-// batch write. 1000 keeps individual batch sizes well under Pebble's
-// internal 4 MB recommendation while amortizing commit overhead across
-// a large library (~15K whole-file fingerprints × 64 bands each = ~1 M
-// key writes for a full rebuild).
-const lshBuildBatchSize = 1000
 
 // LSHIndexStore is the narrow store interface required by the
 // lsh-index-build op. Using a narrow interface keeps the op decoupled
@@ -90,15 +86,28 @@ func (p *Plugin) lshIndexBuildDef() sdk.OperationDef {
 // runLSHIndexBuild is the op runner for dedup.lsh-index-build.
 //
 // Algorithm:
-//  1. Load all BookFiles.
-//  2. For each file with a whole-file fingerprint, derive subprints via
-//     fingerprint.Subprints, then call PutLSHEntries — unless HasLSHIndex
-//     already returns true (incremental skip).
-//  3. Files without a fingerprint are collected by BookID; on completion,
+//  1. Load all BookFiles (memdb-slim projection: AcoustIDFingerprint is nil'd
+//     by stripBookFileForMemdb; AcoustIDFingerprintDurationSec survives as the
+//     memdb-safe proxy for "a whole-file fingerprint exists").
+//  2. Group files by BookID and fan the groups out over a bounded worker pool
+//     (registry.RunItems, Concurrency=runtime.NumCPU()) per the CLAUDE.md
+//     whole-library-concurrency mandate — this loop now does a per-book
+//     Pebble read (hydrate) plus CPU Subprints work per file, which stalled
+//     a single core for hours before CONC remediation. Grouping by book
+//     means each worker touches a disjoint BookID, so no per-file lock or
+//     shared hydrate cache is needed.
+//  3. For each file with a whole-file fp (DurationSec>0) whose blob was
+//     memdb-stripped (len(AcoustIDFingerprint)==0), hydrate the real bytes
+//     via p.store.GetBookFiles(bookID) — a raw Pebble read, never memdb —
+//     once per book, then derive subprints and call PutLSHEntries — unless
+//     HasLSHIndex already returns true (incremental skip).
+//  4. Files without a fingerprint are collected by BookID; on completion,
 //     acoustid.fingerprint-rescan is enqueued for those books so the next
 //     lsh-index-build run can pick them up.
-//  4. Report progress every lshBuildBatchSize files.
-//  5. On completion, set lsh_index_v1_done so T013 can gate on it.
+//  5. Progress is reported per book (RunItems' Label/UpdateProgress) with a
+//     running file-level tally in the label text; a slog heartbeat fires at
+//     most once per logInterval to avoid flooding the log on a ~275K-file run.
+//  6. On completion, set lsh_index_v1_done so T013 can gate on it.
 func (p *Plugin) runLSHIndexBuild(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
 	// Obtain the LSH-capable store via type assertion. The concrete
 	// *PebbleStore satisfies LSHIndexStore; SQLite and mock stores may not.
@@ -123,101 +132,202 @@ func (p *Plugin) runLSHIndexBuild(ctx context.Context, _ json.RawMessage, report
 	}
 	slog.Info("lsh-index-build: loaded files", "total", total)
 
+	// Group files by BookID so each worker hydrates a book's full BookFile
+	// rows (via p.store.GetBookFiles, a raw Pebble read that bypasses memdb
+	// stripping) at most once, and so registry.RunItems can process disjoint
+	// books in parallel with no shared per-file state. We store INDICES into
+	// `files` (not copies of the BookFile structs) to avoid holding a second
+	// full copy of the whole-library slice — at ~275K+ rows that doubling is
+	// real RSS on a swap-pressured host. `files` and `groups` are built
+	// sequentially and only READ (never mutated) once RunItems starts, so
+	// concurrent reads from worker goroutines are race-free without a lock.
+	bookOrder := make([]string, 0, total)
+	groups := make(map[string][]int, total)
+	for i := range files {
+		bookID := files[i].BookID
+		if _, seen := groups[bookID]; !seen {
+			bookOrder = append(bookOrder, bookID)
+		}
+		groups[bookID] = append(groups[bookID], i)
+	}
+
 	prog := sdk.NewProgress(reporter, total)
 	prog.Start(fmt.Sprintf("Indexing LSH bands: 0 / %d files", total))
 
-	var indexed, skipped, noFP, noFPPermFailed, errs int
+	var mu sync.Mutex
+	var indexed, skipped, noFP, noFPPermFailed, errs, processedFiles int
 	// Track unique book IDs whose files lack a fingerprint so we can
 	// enqueue acoustid.fingerprint-rescan for them after the main loop.
 	// Books are only added if at least one file has never been tried
 	// (FingerprintFailedAt == nil) — permanently-failed files are excluded
-	// to prevent an infinite rescan loop.
+	// to prevent an infinite rescan loop. Guarded by mu (written by every
+	// worker goroutine).
 	noFPBookSet := make(map[string]struct{})
 
-	for i, f := range files {
-		// Respect cancellation at each file boundary.
+	const logInterval = 15 * time.Second
+	lastLog := time.Now()
+
+	runErr := registry.RunItems(ctx, reporter, bookOrder, func(ctx context.Context, bookID string) error {
 		if reporter.IsCanceled() {
-			slog.Info("lsh-index-build: canceled", "processed", i, "indexed", indexed)
 			return context.Canceled
 		}
-		select {
-		case <-ctx.Done():
-			slog.Info("lsh-index-build: context done", "processed", i, "indexed", indexed)
-			return ctx.Err()
-		default:
-		}
 
-		// Files without a fingerprint: only enqueue for fingerprinting if
-		// they haven't permanently failed. Permanently-failed files (too short,
-		// corrupt, DRM) will never yield a fingerprint — don't trigger an
-		// infinite rescan loop. AcoustIDFingerprintDurationSec > 0 is the
-		// memdb-safe proxy for "has whole-file fp" (fingerprint blob stripped
-		// from memdb rows by stripBookFileForMemdb).
-		if len(f.AcoustIDFingerprint) == 0 && f.AcoustIDFingerprintDurationSec == 0 {
-			noFP++
-			if f.FingerprintFailedAt == nil {
-				noFPBookSet[f.BookID] = struct{}{}
-			} else {
-				noFPPermFailed++
+		idxs := groups[bookID] // indices into the read-only `files` slice
+
+		// Does any file in this book carry the proxy (DurationSec>0) but a
+		// memdb-stripped blob (AcoustIDFingerprint==nil)? Only then do we pay
+		// for a hydrate read — most files either have no fp at all (skip) or
+		// (in a cold-start / Pebble-direct run) already carry the real bytes.
+		needsHydrate := false
+		for _, idx := range idxs {
+			f := &files[idx]
+			if f.AcoustIDFingerprintDurationSec > 0 && len(f.AcoustIDFingerprint) == 0 {
+				needsHydrate = true
+				break
 			}
-			continue
 		}
 
-		// Incremental resume: skip files that already have an fpidx_meta row.
-		// PutLSHEntries is idempotent, but the skip avoids unnecessary writes
-		// when re-running after a partial build.
-		if lshStore.HasLSHIndex(f.ID) {
-			skipped++
-			continue
-		}
-
-		// If the fingerprint bytes are nil but the duration proxy indicates a
-		// fingerprint was written (memdb strips AcoustIDFingerprint to save RAM),
-		// we cannot compute subprints. Skip silently; a Pebble-direct run
-		// (UseMemDB=false or cold-start) will index this file on the next pass.
-		if len(f.AcoustIDFingerprint) == 0 {
-			continue
-		}
-
-		subs, bands, fpErr := fingerprint.Subprints(f.AcoustIDFingerprint)
-		if fpErr != nil {
-			// Misaligned fingerprint bytes — log and continue. Don't abort
-			// the entire build for one corrupt row.
-			reporter.Logger().Error("lsh-index-build: Subprints error",
-				"file_id", f.ID, "error", fpErr)
-			errs++
-			continue
-		}
-		if len(subs) == 0 {
-			// Fingerprint too short to sample (< 4 frames after edge trim).
-			// Apply same permanent-failure exclusion as the noFP path above.
-			noFP++
-			if f.FingerprintFailedAt == nil {
-				noFPBookSet[f.BookID] = struct{}{}
+		var hydrated map[string]database.BookFile
+		if needsHydrate {
+			if full, ferr := p.store.GetBookFiles(bookID); ferr != nil {
+				reporter.Logger().Error("lsh-index-build: hydrate GetBookFiles error",
+					"book_id", bookID, "error", ferr)
+				// hydrated stays nil; affected files below fall through to the
+				// "no bytes after hydrate" error path instead of silently
+				// vanishing from the accounting.
 			} else {
-				noFPPermFailed++
+				hydrated = make(map[string]database.BookFile, len(full))
+				for _, hf := range full {
+					hydrated[hf.ID] = hf
+				}
 			}
-			continue
 		}
 
-		if putErr := lshStore.PutLSHEntries(f.ID, f.BookID, subs, bands); putErr != nil {
-			reporter.Logger().Error("lsh-index-build: PutLSHEntries error",
-				"file_id", f.ID, "error", putErr)
-			errs++
-			continue
-		}
-		indexed++
+		var (
+			localIndexed, localSkipped, localNoFP, localNoFPPermFailed, localErrs int
+			localNoFPBooks                                                        []string
+		)
 
-		// Progress every lshBuildBatchSize files and at the last file.
-		if (i+1)%lshBuildBatchSize == 0 || i == total-1 {
-			prog.StepN(i+1, fmt.Sprintf(
-				"Indexing LSH bands: %d / %d files (indexed=%d skipped=%d noFP=%d permFailed=%d errors=%d)",
-				i+1, total, indexed, skipped, noFP, noFPPermFailed, errs))
+		for _, idx := range idxs {
+			f := files[idx]
+			if reporter.IsCanceled() {
+				return context.Canceled
+			}
+
+			// AcoustIDFingerprintDurationSec > 0 is the memdb-safe proxy for
+			// "has whole-file fp" (the blob itself may be stripped to nil).
+			hasWholeFP := len(f.AcoustIDFingerprint) > 0 || f.AcoustIDFingerprintDurationSec > 0
+			if !hasWholeFP {
+				localNoFP++
+				if f.FingerprintFailedAt == nil {
+					localNoFPBooks = append(localNoFPBooks, f.BookID)
+				} else {
+					localNoFPPermFailed++
+				}
+				continue
+			}
+
+			// Incremental resume: skip files that already have an fpidx_meta
+			// row. PutLSHEntries is idempotent, but the skip avoids
+			// unnecessary writes when re-running after a partial build.
+			if lshStore.HasLSHIndex(f.ID) {
+				localSkipped++
+				continue
+			}
+
+			fp := f.AcoustIDFingerprint
+			if len(fp) == 0 {
+				// Memdb-stripped: hydrate from the raw-Pebble read above.
+				if hydrated != nil {
+					if hf, ok := hydrated[f.ID]; ok {
+						fp = hf.AcoustIDFingerprint
+					}
+					if len(fp) == 0 {
+						reporter.Logger().Warn("lsh-index-build: hydrate returned empty fingerprint (data drift)",
+							"file_id", f.ID, "book_id", f.BookID)
+					}
+				}
+				if len(fp) == 0 {
+					// Hydrate failed, or the raw row genuinely has no blob
+					// despite the DurationSec proxy claiming one exists.
+					// Count as an error (not noFP) so it isn't misrouted into
+					// the rescan-enqueue path — the file DOES have a
+					// fingerprint on record, we just couldn't read it this run.
+					localErrs++
+					continue
+				}
+			}
+
+			subs, bands, fpErr := fingerprint.Subprints(fp)
+			if fpErr != nil {
+				// Misaligned fingerprint bytes — log and continue. Don't abort
+				// the entire build for one corrupt row.
+				reporter.Logger().Error("lsh-index-build: Subprints error",
+					"file_id", f.ID, "error", fpErr)
+				localErrs++
+				continue
+			}
+			if len(subs) == 0 {
+				// Fingerprint too short to sample (< 4 frames after edge trim).
+				// Apply same permanent-failure exclusion as the noFP path above.
+				localNoFP++
+				if f.FingerprintFailedAt == nil {
+					localNoFPBooks = append(localNoFPBooks, f.BookID)
+				} else {
+					localNoFPPermFailed++
+				}
+				continue
+			}
+
+			if putErr := lshStore.PutLSHEntries(f.ID, f.BookID, subs, bands); putErr != nil {
+				reporter.Logger().Error("lsh-index-build: PutLSHEntries error",
+					"file_id", f.ID, "error", putErr)
+				localErrs++
+				continue
+			}
+			localIndexed++
+		}
+
+		mu.Lock()
+		indexed += localIndexed
+		skipped += localSkipped
+		noFP += localNoFP
+		noFPPermFailed += localNoFPPermFailed
+		errs += localErrs
+		processedFiles += len(idxs)
+		for _, id := range localNoFPBooks {
+			noFPBookSet[id] = struct{}{}
+		}
+		curProcessed, curIndexed, curSkipped, curNoFP, curPermFailed, curErrs :=
+			processedFiles, indexed, skipped, noFP, noFPPermFailed, errs
+		shouldLog := time.Since(lastLog) >= logInterval || curProcessed >= total
+		if shouldLog {
+			lastLog = time.Now()
+		}
+		mu.Unlock()
+
+		if shouldLog {
 			slog.Info("lsh-index-build: progress",
-				"processed", i+1, "total", total,
-				"indexed", indexed, "skipped", skipped,
-				"no_fp", noFP, "no_fp_perm_failed", noFPPermFailed, "errors", errs)
+				"processed", curProcessed, "total", total,
+				"indexed", curIndexed, "skipped", curSkipped,
+				"no_fp", curNoFP, "no_fp_perm_failed", curPermFailed, "errors", curErrs)
 		}
+
+		return nil
+	}, registry.RunItemsOptions{
+		Concurrency: runtime.NumCPU(),
+		Label: func(i, t int) string {
+			mu.Lock()
+			curProcessed, curIndexed, curSkipped, curNoFP, curPermFailed, curErrs :=
+				processedFiles, indexed, skipped, noFP, noFPPermFailed, errs
+			mu.Unlock()
+			return fmt.Sprintf("Indexing LSH bands: %d/%d files (indexed=%d skipped=%d noFP=%d permFailed=%d errors=%d) [book %d/%d]",
+				curProcessed, total, curIndexed, curSkipped, curNoFP, curPermFailed, curErrs, i+1, t)
+		},
+	})
+	if runErr != nil {
+		slog.Info("lsh-index-build: stopped", "processed", processedFiles, "indexed", indexed, "error", runErr)
+		return runErr
 	}
 
 	prog.Finalize("writing completion flag…")
