@@ -1,7 +1,7 @@
 // file: internal/database/memdb_strip_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: e6f7a8b9-c0d1-4e2f-3a4b-5c6d7e8f9012
-// last-edited: 2026-07-01
+// last-edited: 2026-07-05
 
 package database
 
@@ -199,7 +199,7 @@ func TestStripBookFileForMemdb_AlreadyEmpty(t *testing.T) {
 // even when AcoustIDSeg0 is empty (stripped by stripBookFileForMemdb).
 //
 // This is the regression test for the fingerprint_status badge path:
-//   GetBookFilesForIDs → ComputeFingerprintFields → GetAcoustIDSeg0()
+//   GetBookFilesForIDsCore → ComputeFingerprintFields → GetAcoustIDSeg0()
 //
 // Without this fallback, stripping Seg0 from memdb would make every book
 // appear as "fingerprint_status: none" on the /api/v1/audiobooks list.

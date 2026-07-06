@@ -1,7 +1,7 @@
 // file: internal/database/memdb_reads.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000006
-// last-edited: 2026-07-03
+// last-edited: 2026-07-05
 
 package database
 
@@ -774,15 +774,22 @@ func (m *MemStore) ComputeLibraryStats(rootDir string, importPaths []ImportPath)
 	return stats, nil
 }
 
-// GetBookFilesForIDs returns book files grouped by bookID, using the memdb
-// book_id index — O(sum-of-files-for-IDs), NOT O(all 308K book_files) like
-// the Pebble full-scan implementation. For a 500-book page query, this drops
-// from ~15s to <5ms.
+// GetBookFilesForIDsCore returns book files grouped by bookID, as the
+// BookFileCore projection, using the memdb book_id index —
+// O(sum-of-files-for-IDs), NOT O(all 308K book_files) like the Pebble
+// full-scan implementation. For a 500-book page query, this drops from ~15s
+// to <5ms.
 //
 // Returns an empty map for empty input. Caller-supplied IDs absent from
 // memdb appear as missing keys in the result (caller filters as needed).
-func (m *MemStore) GetBookFilesForIDs(bookIDs []string) (map[string][]BookFile, error) {
-	result := make(map[string][]BookFile, len(bookIDs))
+//
+// Core-typed (STOREFID): memdb rows are already the stripped BookFile
+// projection (stripBookFileForMemdb), so .Core() here is a lossless
+// re-projection onto BookFileCore — no additional fields are dropped beyond
+// what memdb already strips. See
+// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
+func (m *MemStore) GetBookFilesForIDsCore(bookIDs []string) (map[string][]BookFileCore, error) {
+	result := make(map[string][]BookFileCore, len(bookIDs))
 	if len(bookIDs) == 0 {
 		return result, nil
 	}
@@ -798,7 +805,7 @@ func (m *MemStore) GetBookFilesForIDs(bookIDs []string) (map[string][]BookFile, 
 			if !ok {
 				continue
 			}
-			result[id] = append(result[id], *bf)
+			result[id] = append(result[id], bf.Core())
 		}
 	}
 	return result, nil

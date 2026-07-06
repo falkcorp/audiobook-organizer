@@ -1,7 +1,7 @@
 // file: internal/server/wire_handlers.go
-// version: 2.15.0
+// version: 2.16.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
-// last-edited: 2026-07-03
+// last-edited: 2026-07-05
 
 package server
 
@@ -449,7 +449,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	// test swaps server.store post-wire; s.Store() returns the database.Store
 	// interface (un-stripped) so the handlers' inline type assertions
 	// (Unwrap / ListBooksWithFileErrors / GetAllBookIDsForQuickQuery /
-	// GetBookFilesForIDs / InvalidateLibraryStats) still resolve against the
+	// GetBookFilesForIDsCore / InvalidateLibraryStats) still resolve against the
 	// dynamic type. The caches are concrete (*cache.Cache[T], the cache exception).
 	//
 	// buildListResponse wraps the relocated *Server.buildAudiobookListResponse

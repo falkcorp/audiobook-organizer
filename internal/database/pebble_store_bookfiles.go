@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
 // last-edited: 2026-07-05
 
@@ -325,30 +325,31 @@ func (s *PebbleStore) GetBookFiles(bookID string) ([]BookFile, error) {
 	return files, nil
 }
 
-// GetBookFilesForIDs returns book files grouped by bookID. When memdb is
-// published, uses the memdb book_id index — O(sum of files per ID), not
-// O(all 308K book_files) like the Pebble full-scan fallback. For a
-// 500-book page query, this drops the call from ~15s to <5ms; for a
-// 20-book query, from ~15s to <1ms. The Pebble full-scan was the actual
-// killer behind 500-per-page taking 3m51s pre-fix.
+// GetBookFilesForIDsCore returns book files grouped by bookID, as the
+// BookFileCore projection. When memdb is published, uses the memdb book_id
+// index — O(sum of files per ID), not O(all 308K book_files) like the
+// Pebble full-scan fallback. For a 500-book page query, this drops the call
+// from ~15s to <5ms; for a 20-book query, from ~15s to <1ms. The Pebble
+// full-scan was the actual killer behind 500-per-page taking 3m51s pre-fix.
 //
 // Pebble full-scan retained as fallback for cold-start (before memdb
 // publishes) and tests with no memdb.
 //
-// SLIM (memdb projection): returns rows with heavy fields nil'd —
-// FingerprintFailureReason/Detail/DiagnosticJSON, AcoustIDFingerprint,
-// AcoustIDSeg0..6 (FingerprintFailedAt and AcoustIDFingerprintDurationSec are
-// kept). A caller that needs any of those MUST fetch via GetBookFiles(bookID)
-// (full Pebble). See docs/specs/2026-07-05-store-getter-fidelity-unification.md.
-func (s *PebbleStore) GetBookFilesForIDs(bookIDs []string) (map[string][]BookFile, error) {
+// Core-typed (STOREFID): the return type is BookFileCore, not BookFile, so
+// the missing heavy fingerprint fields (FingerprintFailureReason/Detail/
+// DiagnosticJSON, AcoustIDFingerprint, AcoustIDSeg0..6) are compiler-enforced
+// rather than silently nil'd. A caller that needs any of those MUST fetch via
+// GetBookFiles(bookID) (full Pebble). See
+// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
+func (s *PebbleStore) GetBookFilesForIDsCore(bookIDs []string) (map[string][]BookFileCore, error) {
 	if s.UseMemDB && s.mem() != nil {
-		return s.mem().GetBookFilesForIDs(bookIDs)
+		return s.mem().GetBookFilesForIDsCore(bookIDs)
 	}
 	return s.getBookFilesForIDsPebbleScan(bookIDs)
 }
 
-func (s *PebbleStore) getBookFilesForIDsPebbleScan(bookIDs []string) (map[string][]BookFile, error) {
-	result := make(map[string][]BookFile)
+func (s *PebbleStore) getBookFilesForIDsPebbleScan(bookIDs []string) (map[string][]BookFileCore, error) {
+	result := make(map[string][]BookFileCore)
 	if len(bookIDs) == 0 {
 		return result, nil
 	}
@@ -371,7 +372,7 @@ func (s *PebbleStore) getBookFilesForIDsPebbleScan(bookIDs []string) (map[string
 			return nil, err
 		}
 		if idSet[f.BookID] {
-			result[f.BookID] = append(result[f.BookID], f)
+			result[f.BookID] = append(result[f.BookID], f.Core())
 		}
 	}
 	return result, nil
@@ -380,7 +381,7 @@ func (s *PebbleStore) getBookFilesForIDsPebbleScan(bookIDs []string) (map[string
 // GetAllBookFiles returns every BookFile in the database. When memdb is
 // published, iterates the in-memory book_files table — a pointer walk over
 // ~308K rows — instead of a Pebble prefix scan with per-row JSON unmarshal.
-// Mirrors the GetBookFilesForIDs fastpath from PR #1153.
+// Mirrors the GetBookFilesForIDsCore fastpath from PR #1153.
 //
 // Pebble full-scan retained as fallback for cold-start (before memdb
 // publishes) and tests with no memdb.

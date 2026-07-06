@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
-// last-edited: 2026-06-23
+// last-edited: 2026-07-05
 
 // Package audiobookshandler hosts the main library list / CRUD HTTP handlers
 // extracted from the server package's audiobooks_handlers.go: book listing
@@ -79,7 +79,7 @@ type Handler struct {
 	// from this field directly (no lazy provider needed — no post-wire swap for
 	// this package's store). The concrete store value (un-stripped) is preserved
 	// so the handlers' inline type assertions (Unwrap / ListBooksWithFileErrors /
-	// GetAllBookIDsForQuickQuery / GetBookFilesForIDs / InvalidateLibraryStats)
+	// GetAllBookIDsForQuickQuery / GetBookFilesForIDsCore / InvalidateLibraryStats)
 	// still resolve against the dynamic type.
 	store AudiobooksStore
 
@@ -345,18 +345,18 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 			qqBookIDs[i] = book.ID
 		}
 
-		qqBookFilesMap := make(map[string][]database.BookFile)
+		qqBookFilesMap := make(map[string][]database.BookFileCore)
 		if qqGgf, ok := store.(interface {
-			GetBookFilesForIDs(ids []string) (map[string][]database.BookFile, error)
+			GetBookFilesForIDsCore(ids []string) (map[string][]database.BookFileCore, error)
 		}); ok {
-			if qqBfm, err := qqGgf.GetBookFilesForIDs(qqBookIDs); err == nil {
+			if qqBfm, err := qqGgf.GetBookFilesForIDsCore(qqBookIDs); err == nil {
 				qqBookFilesMap = qqBfm
 			}
 		} else if qqUw, ok := store.(interface{ Unwrap() database.Store }); ok {
 			if qqInner, ok2 := qqUw.Unwrap().(interface {
-				GetBookFilesForIDs(ids []string) (map[string][]database.BookFile, error)
+				GetBookFilesForIDsCore(ids []string) (map[string][]database.BookFileCore, error)
 			}); ok2 {
-				if qqBfm, err := qqInner.GetBookFilesForIDs(qqBookIDs); err == nil {
+				if qqBfm, err := qqInner.GetBookFilesForIDsCore(qqBookIDs); err == nil {
 					qqBookFilesMap = qqBfm
 				}
 			}

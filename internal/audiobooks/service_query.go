@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
-// last-edited: 2026-06-28
+// last-edited: 2026-07-05
 
 package audiobooks
 
@@ -422,7 +422,7 @@ func (svc *AudiobookService) CountAudiobooksFiltered(ctx context.Context, filter
 //
 // This is the fetch-then-enrich wrapper. Callers that have already fetched
 // the book_files map should use EnrichAudiobooksWithNamesAndFiles to avoid
-// a duplicate GetBookFilesForIDs call.
+// a duplicate GetBookFilesForIDsCore call.
 func (svc *AudiobookService) EnrichAudiobooksWithNames(books []database.Book) []AudiobookDetail {
 	filesByBookID := svc.FetchBookFilesForBooks(books)
 	return svc.EnrichAudiobooksWithNamesAndFiles(books, filesByBookID)
@@ -430,9 +430,9 @@ func (svc *AudiobookService) EnrichAudiobooksWithNames(books []database.Book) []
 
 // EnrichAudiobooksWithNamesAndFiles is the variant that accepts a pre-fetched
 // files map and threads it into aggregation, avoiding a duplicate
-// GetBookFilesForIDs call when the caller already has the map (e.g. the
+// GetBookFilesForIDsCore call when the caller already has the map (e.g. the
 // list handler uses it again for fingerprint compute).
-func (svc *AudiobookService) EnrichAudiobooksWithNamesAndFiles(books []database.Book, filesByBookID map[string][]database.BookFile) []AudiobookDetail {
+func (svc *AudiobookService) EnrichAudiobooksWithNamesAndFiles(books []database.Book, filesByBookID map[string][]database.BookFileCore) []AudiobookDetail {
 	// Aggregate file metadata for all books at once (avoids N+1)
 	svc.aggregateFileMetadataWithFiles(books, filesByBookID)
 
