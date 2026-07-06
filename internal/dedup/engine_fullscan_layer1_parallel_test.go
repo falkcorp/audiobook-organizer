@@ -1,5 +1,5 @@
 // file: internal/dedup/engine_fullscan_layer1_parallel_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c3d4e5f6-a7b8-49c0-8d1e-2f3a4b5c6d7e
 // last-edited: 2026-07-05
 
@@ -71,7 +71,7 @@ func fullScanLayer1FixtureBooks(n int) []database.Book {
 // unique file-hash index having exactly one owner per hash value, so
 // checkExactFileHash forms a "star" of pairs against books[0] rather than a
 // fabricated full clique) — the ISBN/title/duration checks independently
-// scan all books via GetAllBooks/GetBooksByAuthorID and form the full
+// scan all books via GetAllBooks/GetBooksByAuthorIDCore and form the full
 // clique on their own, so the combined want-set is still deterministic.
 func wireFullScanLayer1Mock(mock *database.MockStore, books []database.Book) {
 	byID := make(map[string]database.Book, len(books))
@@ -92,9 +92,11 @@ func wireFullScanLayer1Mock(mock *database.MockStore, books []database.Book) {
 	mock.GetAuthorByIDFunc = func(id int) (*database.Author, error) {
 		return &database.Author{ID: id, Name: "Layer1 Author"}, nil
 	}
-	mock.GetBooksByAuthorIDFunc = func(authorID int) ([]database.Book, error) {
-		out := make([]database.Book, len(books))
-		copy(out, books)
+	mock.GetBooksByAuthorIDCoreFunc = func(authorID int) ([]database.BookCore, error) {
+		out := make([]database.BookCore, len(books))
+		for i := range books {
+			out[i] = books[i].Core()
+		}
 		return out, nil
 	}
 	mock.GetBookByFileHashFunc = func(hash string) (*database.Book, error) {

@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.52.0
+// version: 1.53.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-07-05
 
@@ -1081,6 +1081,33 @@ func (de *Engine) checkExactMetadataSourceHash(book *database.Book) error {
 	return nil
 }
 
+// booksFromCore reconstructs []database.Book from the BookCore (memdb-slim)
+// projection returned by GetBooksByAuthorIDCore, via the reciprocal
+// database.BookCore.ToBook() projection. The nine heavy fields (Description,
+// VersionNotes, BookSigV1, BookSigV1Mask, BookSigSegments, BookSigBuiltAt,
+// BookSigCoveragePct, Author, Series) are left at their zero value —
+// exactly matching what GetBooksByAuthorID already returned before
+// STOREFID P3-W2, since memdb never carried them in the first place.
+//
+// This exists ONLY so checkExactTitle/checkDurationMatch/CollectDuration can
+// keep passing author-sibling books through the shared, Book-typed helpers
+// (hasPlausibleAudio, seriesNumberOf, sameMultiFileBook,
+// allNormalizedTitleForms(ForStore), upsertExactCandidate/identifiersConflict
+// et al.) unchanged. Those helpers are called from many other sites with
+// genuinely full Book values (e.g. GetBookByID results), so widening their
+// signatures to accept BookCore would ripple far outside this task's scope.
+// None of book/other's heavy fields are read anywhere in these three
+// functions or their callees — verified by inspection during STOREFID
+// P3-W2 — so this reconstruction is behavior-preserving, not a fidelity
+// downgrade.
+func booksFromCore(cores []database.BookCore) []database.Book {
+	books := make([]database.Book, len(cores))
+	for i := range cores {
+		books[i] = cores[i].ToBook()
+	}
+	return books
+}
+
 // checkExactTitle checks all books by the same author for near-identical
 // titles. Near-identical is defined as Levenshtein distance < 3 on the
 // normalized titles, WITH a series-volume safety check: if both books
@@ -1105,10 +1132,11 @@ func (de *Engine) checkExactTitle(book *database.Book, authorName string) error 
 		return nil // stub / unscanned shell — never anchor an exact-title match
 	}
 
-	others, err := de.bookStore.GetBooksByAuthorID(*book.AuthorID)
+	othersCore, err := de.bookStore.GetBooksByAuthorIDCore(*book.AuthorID)
 	if err != nil {
 		return fmt.Errorf("get books by author: %w", err)
 	}
+	others := booksFromCore(othersCore)
 
 	bookForms := de.allNormalizedTitleForms(book)
 	bookSeriesNum := seriesNumberOf(book)
@@ -1224,10 +1252,11 @@ func (de *Engine) checkDurationMatch(book *database.Book) error {
 		return nil
 	}
 
-	others, err := de.bookStore.GetBooksByAuthorID(*book.AuthorID)
+	othersCore, err := de.bookStore.GetBooksByAuthorIDCore(*book.AuthorID)
 	if err != nil {
 		return fmt.Errorf("get books by author: %w", err)
 	}
+	others := booksFromCore(othersCore)
 
 	bookDur := float64(*book.Duration)
 	bookNorm := normalizeTitle(book.Title)

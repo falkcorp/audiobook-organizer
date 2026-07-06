@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
 // last-edited: 2026-07-05
 
@@ -72,7 +72,18 @@ func (svc *AudiobookService) GetAudiobooks(ctx context.Context, limit int, offse
 			books, err = svc.store.SearchBooks(search, limit, offset)
 		}
 	} else if authorID != nil {
-		books, err = svc.store.GetBooksByAuthorID(*authorID)
+		// GetBooksByAuthorIDCore is Core-typed (STOREFID P3-W2); GetAudiobooks'
+		// public signature ([]database.Book, shared with SearchBooks/
+		// GetBooksBySeriesID below and the caller's downstream filtering) is
+		// out of scope to retype here, so convert back via BookCore.ToBook().
+		var booksCore []database.BookCore
+		booksCore, err = svc.store.GetBooksByAuthorIDCore(*authorID)
+		if err == nil {
+			books = make([]database.Book, len(booksCore))
+			for i := range booksCore {
+				books[i] = booksCore[i].ToBook()
+			}
+		}
 	} else if seriesID != nil {
 		books, err = svc.store.GetBooksBySeriesID(*seriesID)
 	}

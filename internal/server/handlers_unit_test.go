@@ -1,5 +1,5 @@
 // file: internal/server/handlers_unit_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: f8a2d1c3-4b5e-6789-abcd-ef0123456789
 //
 // Unit tests for HTTP handlers using MockStore + httptest.
@@ -1127,7 +1127,7 @@ func TestHandler_DeleteAuthorAlias_InvalidID(t *testing.T) {
 func TestHandler_DeleteAuthor_Success(t *testing.T) {
 	srv, mockStore, router := setupHandlerTest(t)
 
-	mockStore.EXPECT().GetBooksByAuthorID(42).Return([]database.Book{}, nil)
+	mockStore.EXPECT().GetBooksByAuthorIDCore(42).Return([]database.BookCore{}, nil)
 	mockStore.EXPECT().DeleteAuthor(42).Return(nil)
 
 	router.DELETE("/authors/:id", newEntitiesHandler(srv).DeleteAuthor)
@@ -1142,7 +1142,7 @@ func TestHandler_DeleteAuthor_Success(t *testing.T) {
 func TestHandler_DeleteAuthor_HasBooks(t *testing.T) {
 	srv, mockStore, router := setupHandlerTest(t)
 
-	mockStore.EXPECT().GetBooksByAuthorID(42).Return([]database.Book{{ID: "b1"}}, nil)
+	mockStore.EXPECT().GetBooksByAuthorIDCore(42).Return([]database.BookCore{{ID: "b1"}}, nil)
 
 	router.DELETE("/authors/:id", newEntitiesHandler(srv).DeleteAuthor)
 

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/entities/handler_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 163bc668-0761-43eb-9d85-f4983e8b014b
-// last-edited: 2026-06-03
+// last-edited: 2026-07-05
 
 package entities_test
 
@@ -288,7 +288,7 @@ func TestMergeAuthors_EmptyMergeIDs(t *testing.T) {
 
 func TestDeleteAuthor(t *testing.T) {
 	h, d := newHandler(t)
-	d.store.EXPECT().GetBooksByAuthorID(5).Return([]database.Book{}, nil)
+	d.store.EXPECT().GetBooksByAuthorIDCore(5).Return([]database.BookCore{}, nil)
 	d.store.EXPECT().DeleteAuthor(5).Return(nil)
 	c, w := newCtx(http.MethodDelete, "/authors/5", "", idParam("5"))
 	h.DeleteAuthor(c)
@@ -297,7 +297,7 @@ func TestDeleteAuthor(t *testing.T) {
 
 func TestDeleteAuthor_HasBooks(t *testing.T) {
 	h, d := newHandler(t)
-	d.store.EXPECT().GetBooksByAuthorID(5).Return([]database.Book{{ID: "b1"}}, nil)
+	d.store.EXPECT().GetBooksByAuthorIDCore(5).Return([]database.BookCore{{ID: "b1"}}, nil)
 	c, w := newCtx(http.MethodDelete, "/authors/5", "", idParam("5"))
 	h.DeleteAuthor(c)
 	assert.Equal(t, http.StatusConflict, w.Code)
@@ -305,9 +305,9 @@ func TestDeleteAuthor_HasBooks(t *testing.T) {
 
 func TestBulkDeleteAuthors(t *testing.T) {
 	h, d := newHandler(t)
-	d.store.EXPECT().GetBooksByAuthorID(1).Return([]database.Book{}, nil)
+	d.store.EXPECT().GetBooksByAuthorIDCore(1).Return([]database.BookCore{}, nil)
 	d.store.EXPECT().DeleteAuthor(1).Return(nil)
-	d.store.EXPECT().GetBooksByAuthorID(2).Return([]database.Book{{ID: "b"}}, nil) // skipped
+	d.store.EXPECT().GetBooksByAuthorIDCore(2).Return([]database.BookCore{{ID: "b"}}, nil) // skipped
 	c, w := newCtx(http.MethodPost, "/authors/bulk-delete", `{"ids":[1,2]}`, nil)
 	h.BulkDeleteAuthors(c)
 	assert.Equal(t, http.StatusOK, w.Code)
@@ -322,7 +322,7 @@ func TestBulkDeleteAuthors_BadJSON(t *testing.T) {
 
 func TestGetAuthorBooks(t *testing.T) {
 	h, d := newHandler(t)
-	d.store.EXPECT().GetBooksByAuthorID(5).Return([]database.Book{{ID: "b1"}, {ID: "b2"}}, nil)
+	d.store.EXPECT().GetBooksByAuthorIDCore(5).Return([]database.BookCore{{ID: "b1"}, {ID: "b2"}}, nil)
 	c, w := newCtx(http.MethodGet, "/authors/5/books", "", idParam("5"))
 	h.GetAuthorBooks(c)
 	assert.Equal(t, http.StatusOK, w.Code)

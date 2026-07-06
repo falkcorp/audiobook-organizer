@@ -1,5 +1,5 @@
 // file: internal/dedup/engine_primary_gate_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2f7b4c19-6d83-4e50-9a12-7c5e0a8b3d46
 // last-edited: 2026-07-05
 
@@ -35,7 +35,13 @@ func wireExactTitleOnly(mock *database.MockStore, books map[string]*database.Boo
 	mock.GetBookFilesFunc = func(bookID string) ([]database.BookFile, error) { return nil, nil }
 	mock.GetBookByFileHashFunc = func(hash string) (*database.Book, error) { return nil, nil }
 	mock.GetAllBooksFunc = func(limit, offset int) ([]database.Book, error) { return nil, nil }
-	mock.GetBooksByAuthorIDFunc = func(authorID int) ([]database.Book, error) { return byAuthor, nil }
+	mock.GetBooksByAuthorIDCoreFunc = func(authorID int) ([]database.BookCore, error) {
+		out := make([]database.BookCore, len(byAuthor))
+		for i := range byAuthor {
+			out[i] = byAuthor[i].Core()
+		}
+		return out, nil
+	}
 	mock.GetBooksByMetadataSourceHashFunc = func(h string) ([]database.Book, error) { return nil, nil }
 }
 

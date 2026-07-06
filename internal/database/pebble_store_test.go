@@ -1,6 +1,7 @@
 // file: internal/database/pebble_store_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 4d5e6f7a-8b9c-0d1e-2f3a-4b5c6d7e8f9a
+// last-edited: 2026-07-05
 
 package database
 
@@ -329,8 +330,8 @@ func TestPebbleGetBooksBySeriesID(t *testing.T) {
 	}
 }
 
-// TestPebbleGetBooksByAuthorID tests filtering books by author
-func TestPebbleGetBooksByAuthorID(t *testing.T) {
+// TestPebbleGetBooksByAuthorIDCore tests filtering books by author
+func TestPebbleGetBooksByAuthorIDCore(t *testing.T) {
 	// Arrange
 	store, cleanup := setupPebbleTestDB(t)
 	defer cleanup()
@@ -355,7 +356,7 @@ func TestPebbleGetBooksByAuthorID(t *testing.T) {
 	}
 
 	// Act - Get books by author
-	authorBooks, err := store.GetBooksByAuthorID(author.ID)
+	authorBooks, err := store.GetBooksByAuthorIDCore(author.ID)
 	if err != nil {
 		t.Fatalf("Failed to get books by author: %v", err)
 	}

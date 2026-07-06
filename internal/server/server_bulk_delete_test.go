@@ -1,6 +1,7 @@
 // file: internal/server/server_bulk_delete_test.go
-// version: 1.0.0
+// version: 1.2.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+// last-edited: 2026-07-05
 
 package server
 
@@ -154,7 +155,7 @@ func TestBulkDeleteAuthors_NonexistentIDs(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
 
-	// IDs that don't exist — GetBooksByAuthorID returns empty, DeleteAuthor may error or succeed
+	// IDs that don't exist — GetBooksByAuthorIDCore returns empty, DeleteAuthor may error or succeed
 	w := postJSON(server, "/api/v1/authors/bulk-delete", map[string]interface{}{
 		"ids": []int{99999, 99998},
 	})
@@ -215,7 +216,7 @@ func TestBulkDeleteAuthors_MixedResults(t *testing.T) {
 
 func TestBulkDeleteAuthors_StoreError(t *testing.T) {
 	mock := &database.MockStore{
-		GetBooksByAuthorIDFunc: func(authorID int) ([]database.Book, error) {
+		GetBooksByAuthorIDCoreFunc: func(authorID int) ([]database.BookCore, error) {
 			if authorID == 1 {
 				return nil, fmt.Errorf("db connection lost")
 			}
@@ -248,7 +249,7 @@ func TestBulkDeleteAuthors_StoreError(t *testing.T) {
 
 func TestBulkDeleteAuthors_DeleteError(t *testing.T) {
 	mock := &database.MockStore{
-		GetBooksByAuthorIDFunc: func(authorID int) ([]database.Book, error) {
+		GetBooksByAuthorIDCoreFunc: func(authorID int) ([]database.BookCore, error) {
 			return nil, nil // no books
 		},
 		DeleteAuthorFunc: func(id int) error {
