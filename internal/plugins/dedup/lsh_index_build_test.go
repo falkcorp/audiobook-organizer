@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/lsh_index_build_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c1cf5590-1bc1-4f88-9031-62333bcb593f
-// last-edited: 2026-06-11
+// last-edited: 2026-07-06
 
 package dedup
 
@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"math/rand"
+	"sync"
 	"testing"
 	"time"
 
@@ -39,8 +40,29 @@ func synthRawLSH(seed int64, frames int) []byte {
 type mockLSHStore struct {
 	files        []database.BookFile
 	indexedFiles map[string]bool // HasLSHIndex returns true for these IDs
+	mu           sync.Mutex      // guards putCalls (written concurrently by RunItems workers)
 	putCalls     []string        // fileIDs passed to PutLSHEntries
 	flagSet      bool
+
+	// hydrateFiles simulates the raw-Pebble GetBookFiles(bookID) read that
+	// the hydrate path falls back to when a memdb-slim BookFile row (from
+	// GetAllBookFiles) has AcoustIDFingerprintDurationSec > 0 but a nil
+	// AcoustIDFingerprint blob. Keyed by BookID.
+	hydrateFiles map[string][]database.BookFile
+	// hydrateErr, when non-nil, makes GetBookFiles fail for every book —
+	// simulates a Pebble read error during hydrate.
+	hydrateErr error
+}
+
+// GetBookFiles simulates the raw-Pebble read used to hydrate a memdb-slim
+// BookFile's stripped AcoustIDFingerprint blob. Unlike GetAllBookFiles, a
+// real PebbleStore.GetBookFiles never goes through memdb, so it always
+// returns full rows — the mock mirrors that by returning hydrateFiles as-is.
+func (m *mockLSHStore) GetBookFiles(bookID string) ([]database.BookFile, error) {
+	if m.hydrateErr != nil {
+		return nil, m.hydrateErr
+	}
+	return m.hydrateFiles[bookID], nil
 }
 
 // database.Store compliance: use nil for the plugin.store field — the
@@ -53,7 +75,9 @@ func (m *mockLSHStore) HasLSHIndex(id string) bool {
 	return m.indexedFiles[id]
 }
 func (m *mockLSHStore) PutLSHEntries(fileID, _ string, _ []fingerprint.Subprint, _ []byte) error {
+	m.mu.Lock()
 	m.putCalls = append(m.putCalls, fileID)
+	m.mu.Unlock()
 	return nil
 }
 func (m *mockLSHStore) IsLSHIndexBuilt() bool {
@@ -107,9 +131,14 @@ type mockLSHStoreAdapter struct {
 	inner          *mockLSHStore
 }
 
-// Override only the LSHIndexStore methods.
+// Override only the LSHIndexStore methods (plus GetBookFiles, used by the
+// hydrate path — it is part of database.BookFileStore/database.Store, not
+// LSHIndexStore, but runLSHIndexBuild calls it via p.store directly).
 func (a *mockLSHStoreAdapter) GetAllBookFiles() ([]database.BookFile, error) {
 	return a.inner.GetAllBookFiles()
+}
+func (a *mockLSHStoreAdapter) GetBookFiles(bookID string) ([]database.BookFile, error) {
+	return a.inner.GetBookFiles(bookID)
 }
 func (a *mockLSHStoreAdapter) HasLSHIndex(id string) bool {
 	return a.inner.HasLSHIndex(id)
@@ -354,5 +383,90 @@ func TestLSHIndexBuild_SkipsPermanentlyFailedBooksFromEnqueue(t *testing.T) {
 		if id == "book-perm-fail" {
 			t.Errorf("book-perm-fail (all files permanently failed) should not be enqueued")
 		}
+	}
+}
+
+// TestLSHIndexBuild_HydratesMemdbStrippedFingerprint is the regression test
+// for the memdb-slim no-op bug: GetAllBookFiles (the memdb-slim projection
+// under prod's UseMemDB=true) nils AcoustIDFingerprint while preserving
+// AcoustIDFingerprintDurationSec (>0 ⇒ a whole-file fingerprint exists on
+// the raw row). Before the fix, the gate was len(AcoustIDFingerprint)==0,
+// which is always true for a memdb-slim row, so every such file was silently
+// skipped and PutLSHEntries was never called — the op reported success but
+// indexed nothing.
+//
+// This test simulates that shape: file-1 arrives from GetAllBookFiles with a
+// nil blob + DurationSec>0, and GetBookFiles(bookID) — standing in for the
+// real PebbleStore.GetBookFiles, which always reads raw Pebble and is never
+// memdb-stripped — returns the same file WITH the real fingerprint bytes.
+// Asserts the hydrate path recovers the blob and the file gets indexed.
+func TestLSHIndexBuild_HydratesMemdbStrippedFingerprint(t *testing.T) {
+	fp := synthRawLSH(99, 57600)
+
+	ms := &mockLSHStore{
+		files: []database.BookFile{
+			// Memdb-slim projection: DurationSec survives, blob is nil'd.
+			{ID: "file-1", BookID: "book-1", AcoustIDFingerprint: nil, AcoustIDFingerprintDurationSec: 1800},
+		},
+		indexedFiles: map[string]bool{},
+		hydrateFiles: map[string][]database.BookFile{
+			"book-1": {
+				{ID: "file-1", BookID: "book-1", AcoustIDFingerprint: fp, AcoustIDFingerprintDurationSec: 1800},
+			},
+		},
+	}
+
+	p := &Plugin{store: &mockLSHStoreAdapter{inner: ms}}
+
+	if err := p.runLSHIndexBuild(context.Background(), json.RawMessage("{}"), &fakeReporter{}); err != nil {
+		t.Fatalf("runLSHIndexBuild: %v", err)
+	}
+
+	found := false
+	for _, id := range ms.putCalls {
+		if id == "file-1" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("file-1 (memdb-stripped fingerprint) should have been hydrated via GetBookFiles and indexed via PutLSHEntries; got calls=%v", ms.putCalls)
+	}
+	if !ms.flagSet {
+		t.Errorf("completion flag not set after successful op run")
+	}
+}
+
+// TestLSHIndexBuild_HydrateDataDriftCountsAsErrorNotNoFP verifies that when
+// the proxy (AcoustIDFingerprintDurationSec>0) claims a fingerprint exists
+// but the hydrate read (GetBookFiles) comes back empty — either because it
+// errored or because the raw row genuinely has no blob (data drift) — the
+// file is NOT misclassified as "no fingerprint" (which would enqueue a
+// pointless acoustid.fingerprint-rescan for a book that actually IS
+// fingerprinted). It should be skipped cleanly with no PutLSHEntries call
+// and no rescan enqueue.
+func TestLSHIndexBuild_HydrateDataDriftCountsAsErrorNotNoFP(t *testing.T) {
+	ms := &mockLSHStore{
+		files: []database.BookFile{
+			{ID: "file-1", BookID: "book-1", AcoustIDFingerprint: nil, AcoustIDFingerprintDurationSec: 1800},
+		},
+		indexedFiles: map[string]bool{},
+		hydrateFiles: map[string][]database.BookFile{
+			// GetBookFiles "succeeds" but returns no matching file / empty blob.
+			"book-1": {},
+		},
+	}
+
+	reg := &mockRegistry{}
+	p := &Plugin{store: &mockLSHStoreAdapter{inner: ms}, registry: reg}
+
+	if err := p.runLSHIndexBuild(context.Background(), json.RawMessage("{}"), &fakeReporter{}); err != nil {
+		t.Fatalf("runLSHIndexBuild: %v", err)
+	}
+
+	if len(ms.putCalls) != 0 {
+		t.Errorf("expected no PutLSHEntries calls for a data-drift hydrate miss, got %v", ms.putCalls)
+	}
+	if len(reg.enqueuedDefs) != 0 {
+		t.Errorf("book-1 has a fingerprint per the DurationSec proxy — it must NOT be enqueued for fingerprint-rescan, got %d enqueue(s)", len(reg.enqueuedDefs))
 	}
 }

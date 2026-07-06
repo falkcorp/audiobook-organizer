@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/online_lookup.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6e7f8091-a2b3-c4d5-e6f7-08192a3b4c5d
-// last-edited: 2026-05-31
+// last-edited: 2026-07-06
 
 package acoustid
 
@@ -101,30 +101,46 @@ func (p *Plugin) runOnlineLookup(ctx context.Context, params json.RawMessage, re
 
 	// Filter to candidates: must have a whole-file fp, must not already
 	// be looked up (unless Force).
+	//
+	// The gate uses AcoustIDFingerprintDurationSec (>0 ⇒ a whole-file
+	// fingerprint was computed) rather than len(AcoustIDFingerprint)==0,
+	// because GetAllBookFiles returns the memdb-slim projection in
+	// production (UseMemDB=true): stripBookFileForMemdb nils the raw
+	// AcoustIDFingerprint blob to save RAM but keeps DurationSec. The old
+	// byte-length gate was always true under memdb, so this op silently
+	// found zero candidates in prod. The raw bytes themselves are hydrated
+	// per-candidate at API-call time below (this loop is already
+	// network-bound and rate-limited, so a per-candidate Pebble read is
+	// negligible) — we deliberately do NOT stash `raw` from the slim struct
+	// here.
 	type candidate struct {
-		idx  int // original index in files
-		dur  int
-		raw  []byte
+		idx int // original index in files
+		dur int
 	}
 	cands := make([]candidate, 0, 8192)
 	for i := range files {
 		f := &files[i]
-		if len(f.AcoustIDFingerprint) == 0 {
+		dur := int(f.AcoustIDFingerprintDurationSec)
+		if dur <= 0 {
+			// No whole-file fingerprint recorded for this file. NOTE: under
+			// memdb the raw blob is stripped, so DurationSec is the ONLY
+			// surviving "has whole-file fp" signal. This assumes the invariant
+			// "AcoustIDFingerprint set ⇒ AcoustIDFingerprintDurationSec > 0"
+			// (backfill.go writes both together). A historical row with a blob
+			// but DurationSec==0 would be silently skipped here — see the
+			// follow-up in TODO.md (verify with a prod query) before relying on
+			// this for a completeness-critical sweep.
 			continue
 		}
 		if !req.Force && f.AcoustIDOnlineLookedUpAt != nil {
 			continue
-		}
-		dur := int(f.AcoustIDFingerprintDurationSec)
-		if dur <= 0 {
-			dur = int(f.Duration)
 		}
 		if dur < 30 {
 			// Sub-30s fingerprints won't survive AcoustID's matching;
 			// don't burn quota on them.
 			continue
 		}
-		cands = append(cands, candidate{idx: i, dur: dur, raw: f.AcoustIDFingerprint})
+		cands = append(cands, candidate{idx: i, dur: dur})
 	}
 
 	if req.Limit > 0 && len(cands) > req.Limit {
@@ -153,11 +169,46 @@ func (p *Plugin) runOnlineLookup(ctx context.Context, params json.RawMessage, re
 		}
 
 		f := &files[c.idx]
-		// Encode raw bytes to the canonical chromaprint base64+header form
-		// that AcoustID expects.
-		fpStr := fingerprint.EncodeWholeFingerprint(c.raw)
 
-		res, lerr := client.Lookup(ctx, fpStr, c.dur)
+		// Hydrate the raw whole-file fingerprint at API-call time.
+		// GetAllBookFiles strips AcoustIDFingerprint under memdb
+		// (stripBookFileForMemdb); the candidate filter above only checked
+		// the memdb-safe DurationSec proxy, so most candidates land here
+		// with a nil blob. GetBookFiles reads raw Pebble unconditionally
+		// (no UseMemDB check), so it always returns the real bytes.
+		raw := f.AcoustIDFingerprint
+		var hydrateErr error
+		if len(raw) == 0 {
+			if bookFiles, herr := p.store.GetBookFiles(f.BookID); herr != nil {
+				hydrateErr = fmt.Errorf("hydrate GetBookFiles: %w", herr)
+			} else {
+				for _, hf := range bookFiles {
+					if hf.ID == f.ID {
+						raw = hf.AcoustIDFingerprint
+						break
+					}
+				}
+				if len(raw) == 0 {
+					// Data drift: the DurationSec proxy claimed a fingerprint
+					// exists but the raw row has no blob either.
+					hydrateErr = fmt.Errorf("hydrate: no fingerprint bytes for file %s (data drift)", f.ID)
+				}
+			}
+		}
+
+		var res acoustid.LookupResult
+		var lerr error
+		if hydrateErr != nil {
+			// Skip the API call rather than send empty bytes; count it the
+			// same as any other failed lookup so the run's accounting stays
+			// honest and the file gets retried on the next pass.
+			lerr = hydrateErr
+		} else {
+			// Encode raw bytes to the canonical chromaprint base64+header form
+			// that AcoustID expects.
+			fpStr := fingerprint.EncodeWholeFingerprint(raw)
+			res, lerr = client.Lookup(ctx, fpStr, c.dur)
+		}
 		now := time.Now().UTC()
 		if lerr != nil {
 			failed++

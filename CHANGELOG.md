@@ -44,6 +44,22 @@
   `reusable-release.yml` pin here to `falkcorp/github-common@f7e012d`
   (v2.14.3, PR #318).
 
+#### July 6, 2026 - fix(fingerprint): reroute memdb-slim fingerprint no-ops to proxy-then-hydrate
+
+- **`fix(fingerprint)`** — three whole-library fingerprint ops (`acoustid.lsh-backfill`,
+  `dedup.lsh-index-build`, `acoustid.online-lookup`) gated on
+  `len(AcoustIDFingerprint) == 0`, which is **always true** under prod's memdb
+  projection (`stripBookFileForMemdb` nils the raw blob). They silently skipped
+  every file → reported success while doing nothing, stalling LSH indexing and
+  online AcoustID coverage. Fixed by gating on the memdb-safe
+  `AcoustIDFingerprintDurationSec` proxy and hydrating the real fingerprint on
+  demand via `GetBookFiles(bookID)` (raw Pebble): `lsh-backfill` leverages the
+  new `UpdateBookFile` guard (restores the blob on re-save); `lsh-index-build`
+  hydrates per book and was converted to a `registry.RunItems` pool
+  (`Concurrency=NumCPU`, partitioned by BookID) per the multi-core mandate;
+  `online-lookup` hydrates per candidate at API-call time. Empty-blob-after-hydrate
+  (data drift) is counted as an error, never sent to the API.
+
 #### July 6, 2026 - fix(database): stop UpdateBookFile from wiping stored AcoustID fingerprints on memdb-slim writeback
 
 - **`fix(database)`** — `PebbleStore.UpdateBookFile` was a blind full-record

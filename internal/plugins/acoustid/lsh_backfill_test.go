@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/lsh_backfill_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3d5e7f91-4c6b-5a0d-ac2e-8f9a1b3c5d7e
-// last-edited: 2026-05-30
+// last-edited: 2026-07-06
 
 package acoustid
 
@@ -65,11 +65,11 @@ func (i *indexableMockStore) HasLSHIndex(id string) bool {
 // should fire.
 func TestLSHBackfill_FiltersAndUpdates(t *testing.T) {
 	files := []database.BookFile{
-		{ID: "f1", BookID: "b1", AcoustIDFingerprint: []byte{0xde, 0xad, 0xbe, 0xef}},
+		{ID: "f1", BookID: "b1", AcoustIDFingerprint: []byte{0xde, 0xad, 0xbe, 0xef}, AcoustIDFingerprintDurationSec: 1800},
 		{ID: "f2", BookID: "b2"}, // no fp
-		{ID: "f3", BookID: "b3", AcoustIDFingerprint: []byte{0xfe, 0xed, 0xfa, 0xce}},
+		{ID: "f3", BookID: "b3", AcoustIDFingerprint: []byte{0xfe, 0xed, 0xfa, 0xce}, AcoustIDFingerprintDurationSec: 1800},
 		{ID: "f4", BookID: "b4"}, // no fp
-		{ID: "f5", BookID: "b5", AcoustIDFingerprint: []byte{0xca, 0xfe, 0xba, 0xbe}},
+		{ID: "f5", BookID: "b5", AcoustIDFingerprint: []byte{0xca, 0xfe, 0xba, 0xbe}, AcoustIDFingerprintDurationSec: 1800},
 	}
 
 	var (
@@ -126,9 +126,9 @@ func TestLSHBackfill_FiltersAndUpdates(t *testing.T) {
 // Models the second-run case after a previous successful backfill.
 func TestLSHBackfill_IdempotentWithHasLSHIndex(t *testing.T) {
 	files := []database.BookFile{
-		{ID: "f1", BookID: "b1", AcoustIDFingerprint: []byte{0x01, 0x02, 0x03, 0x04}},
-		{ID: "f2", BookID: "b2", AcoustIDFingerprint: []byte{0x05, 0x06, 0x07, 0x08}},
-		{ID: "f3", BookID: "b3", AcoustIDFingerprint: []byte{0x09, 0x0a, 0x0b, 0x0c}},
+		{ID: "f1", BookID: "b1", AcoustIDFingerprint: []byte{0x01, 0x02, 0x03, 0x04}, AcoustIDFingerprintDurationSec: 1800},
+		{ID: "f2", BookID: "b2", AcoustIDFingerprint: []byte{0x05, 0x06, 0x07, 0x08}, AcoustIDFingerprintDurationSec: 1800},
+		{ID: "f3", BookID: "b3", AcoustIDFingerprint: []byte{0x09, 0x0a, 0x0b, 0x0c}, AcoustIDFingerprintDurationSec: 1800},
 	}
 
 	updateCalls := 0
@@ -170,9 +170,9 @@ func TestLSHBackfill_IdempotentWithHasLSHIndex(t *testing.T) {
 // fp are updated.
 func TestLSHBackfill_PartialIndex(t *testing.T) {
 	files := []database.BookFile{
-		{ID: "f1", AcoustIDFingerprint: []byte{1}},
-		{ID: "f2", AcoustIDFingerprint: []byte{2}},
-		{ID: "f3", AcoustIDFingerprint: []byte{3}},
+		{ID: "f1", AcoustIDFingerprint: []byte{1}, AcoustIDFingerprintDurationSec: 1800},
+		{ID: "f2", AcoustIDFingerprint: []byte{2}, AcoustIDFingerprintDurationSec: 1800},
+		{ID: "f3", AcoustIDFingerprint: []byte{3}, AcoustIDFingerprintDurationSec: 1800},
 		{ID: "f4"}, // no fp at all
 	}
 	var updates []string
@@ -205,8 +205,9 @@ func TestLSHBackfill_CancelMidRun(t *testing.T) {
 	files := make([]database.BookFile, 100)
 	for i := range files {
 		files[i] = database.BookFile{
-			ID:                  string(rune('a'+i%26)) + "-" + string(rune('0'+i%10)),
-			AcoustIDFingerprint: []byte{byte(i)},
+			ID:                             string(rune('a'+i%26)) + "-" + string(rune('0'+i%10)),
+			AcoustIDFingerprint:            []byte{byte(i)},
+			AcoustIDFingerprintDurationSec: 1800,
 		}
 	}
 
@@ -236,6 +237,48 @@ func TestLSHBackfill_CancelMidRun(t *testing.T) {
 	}
 	if updates >= len(files) {
 		t.Errorf("expected updates < total after cancel, got %d/%d", updates, len(files))
+	}
+}
+
+// TestLSHBackfill_MemdbSlimRowStillTriggersUpdate is the regression test for
+// the memdb-slim no-op bug: GetAllBookFiles returns the memdb-slim projection
+// in production (UseMemDB=true), where stripBookFileForMemdb nils the raw
+// AcoustIDFingerprint blob but preserves AcoustIDFingerprintDurationSec.
+// Before the fix, the gate was len(AcoustIDFingerprint)==0 — always true for
+// a memdb-slim row — so this op silently skipped every fingerprinted file in
+// prod. This test supplies exactly that shape (nil blob, DurationSec>0) and
+// asserts UpdateBookFile still fires; PebbleStore.UpdateBookFile's own
+// preserve-on-empty guard (merged separately) is what restores the real
+// bytes before the LSH secondary index is written.
+func TestLSHBackfill_MemdbSlimRowStillTriggersUpdate(t *testing.T) {
+	files := []database.BookFile{
+		// Memdb-slim shape: blob stripped, duration proxy survives.
+		{ID: "f1", BookID: "b1", AcoustIDFingerprint: nil, AcoustIDFingerprintDurationSec: 1800},
+		// Genuinely unfingerprinted: neither blob nor duration.
+		{ID: "f2", BookID: "b2"},
+	}
+
+	var updates []string
+	store := &database.MockStore{
+		GetAllBookFilesFunc: func() ([]database.BookFile, error) { return files, nil },
+		UpdateBookFileFunc: func(id string, _ *database.BookFile) error {
+			updates = append(updates, id)
+			return nil
+		},
+	}
+
+	p := &Plugin{store: store}
+	r := &lshTestReporter{}
+
+	if err := p.runLSHBackfill(context.Background(), nil, r); err != nil {
+		t.Fatalf("runLSHBackfill: %v", err)
+	}
+
+	if got, want := len(updates), 1; got != want {
+		t.Fatalf("UpdateBookFile calls = %d, want %d (%v)", got, want, updates)
+	}
+	if updates[0] != "f1" {
+		t.Errorf("expected UpdateBookFile(f1) (memdb-slim, has fp per DurationSec proxy), got %v", updates)
 	}
 }
 
