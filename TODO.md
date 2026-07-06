@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 9.63.0 -->
+<!-- version: 9.64.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-07-05 -->
+<!-- last-edited: 2026-07-06 -->
 
 # Project TODO
 
@@ -19,6 +19,29 @@ future agent) can scan the entire workspace in one page.
 - Claude project memory at `~/.claude/projects/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/memory/` — items still to graduate here
 
 ---
+
+## 🟡 UpdateBookFile memdb-writeback fingerprint wipe (2026-07-05)
+
+- **Found during STOREFID P3-W3 caller audit.** Full write-up:
+  [`docs/audits/2026-07-05-updatebookfile-memdb-writeback-fingerprint-wipe.md`](docs/audits/2026-07-05-updatebookfile-memdb-writeback-fingerprint-wipe.md).
+  Independent of STOREFID — existed on `main`.
+- **Root cause:** `PebbleStore.UpdateBookFile` was a blind full-record replace with
+  no preserve-on-empty guard (unlike `UpsertBookFile` / `BatchUpsertBookFiles`). Jobs
+  that read `GetAllBookFiles()` (memdb-slim → `AcoustIDFingerprint` + 3 diagnostic
+  fields nil under prod `UseMemDB=true`) and write the struct back via bare
+  `UpdateBookFile` wiped the stored fingerprint in Pebble.
+- **PR-A (✅ done):** `AcoustIDFingerprint` preserve-on-empty guard on `UpdateBookFile`
+  + two-direction regression test. Stops the critical wipe for all 4 writeback jobs
+  (`recompute_itunes_paths`, `enrich_book_files` — DryRun false; `fix_book_file_paths`,
+  `repair_missing_files` — DryRun true). Diagnostic fields NOT guarded here (backfill.go
+  clears them on success via this method); the residual diagnostic wipe for failed-fp
+  books is closed structurally by W3.
+- **PR-B (open):** reroute the 3 HEAVY-READ fingerprint no-ops (`acoustid online_lookup`,
+  `lsh_backfill`, `dedup lsh_index_build`) to proxy-then-hydrate — they currently drop
+  every candidate under memdb and do nothing.
+- **PR-C = STOREFID W3:** retype `GetAllBookFiles → []BookFileCore`; the 4 writeback jobs
+  move to field-scoped update/hydrate. **W3 landmine:** those 4 must NOT use a
+  `BookFileCore.ToBookFile()` bridge then write back (re-introduces the wipe).
 
 ## ✅ BookSignatureScan memdb no-op fix (2026-07-05)
 

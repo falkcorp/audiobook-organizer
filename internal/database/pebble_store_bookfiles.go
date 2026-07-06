@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
-// last-edited: 2026-07-05
+// last-edited: 2026-07-06
 
 package database
 
@@ -253,6 +253,29 @@ func (s *PebbleStore) UpdateBookFile(id string, file *BookFile) error {
 	file.ID = id
 	file.CreatedAt = old.CreatedAt
 	file.UpdatedAt = time.Now()
+
+	// Preserve the memdb-stripped raw fingerprint on a slim round-trip.
+	// stripBookFileForMemdb nils AcoustIDFingerprint (~230 KB/file, expensive to
+	// recompute) in the memdb projection returned by GetAllBookFiles. A whole-library
+	// maintenance job that reads a slim BookFile, tweaks an unrelated field (path,
+	// track number, …), and writes the struct back here would otherwise blank the
+	// stored fingerprint — silent mass data-loss (recompute_itunes_paths /
+	// enrich_book_files / fix_book_file_paths / repair_missing_files). Restore from the
+	// stored row whenever the incoming value is empty. The fingerprint WRITE path
+	// (internal/plugins/acoustid/backfill.go) always supplies a fresh non-empty value,
+	// so this never blocks a real update.
+	//
+	// NOTE: unlike UpsertBookFile / BatchUpsertBookFiles, we deliberately do NOT guard
+	// the diagnostic fields (FingerprintFailureReason / Detail / DiagnosticJSON) here —
+	// backfill.go clears them to nil on a successful (re)fingerprint *via this method*,
+	// and a preserve-on-nil guard would strand a stale failure reason forever. Those 3
+	// fields are still wiped for failed-fp books touched by the slim-round-trip jobs
+	// above; FingerprintFailedAt (which drives backfill's skip logic) is memdb-KEPT so
+	// correctness is unaffected, and the structural fix is those callers moving to a
+	// field-scoped update under the GetAllBookFiles->BookFileCore retype (STOREFID W3).
+	if len(file.AcoustIDFingerprint) == 0 {
+		file.AcoustIDFingerprint = old.AcoustIDFingerprint
+	}
 
 	// T020: drop AcoustIDSeg0..6 from the stored value via a copy.
 	data, err := marshalBookFileDropSegs(file)

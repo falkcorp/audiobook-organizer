@@ -1,13 +1,33 @@
 <!-- file: CHANGELOG.md -->
 <!-- version: 3.111.1 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
-<!-- last-edited: 2026-07-05 -->
+<!-- last-edited: 2026-07-06 -->
 
 # Changelog
 
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 6, 2026 - fix(database): stop UpdateBookFile from wiping stored AcoustID fingerprints on memdb-slim writeback
+
+- **`fix(database)`** — `PebbleStore.UpdateBookFile` was a blind full-record
+  replace with no preserve-on-empty guard (unlike `UpsertBookFile` /
+  `BatchUpsertBookFiles`). Four whole-library maintenance jobs
+  (`recompute_itunes_paths`, `enrich_book_files`, `fix_book_file_paths`,
+  `repair_missing_files`) read book files via `GetAllBookFiles()` — the
+  memdb-slim projection that nils `AcoustIDFingerprint` under prod's
+  `UseMemDB=true` — tweaked one unrelated field, and wrote the whole struct
+  back, silently erasing the stored ~230 KB/file raw fingerprint in Pebble.
+  Two of those jobs default `DryRun=false`, so this was active data loss.
+- **Fix:** preserve-on-empty guard for `AcoustIDFingerprint` only (the field is
+  never intentionally cleared via this method; the fingerprint WRITE path in
+  `acoustid/backfill.go` always supplies a fresh non-empty value and
+  intentionally nil-clears the diagnostic fields on success, so those are
+  deliberately left unguarded here). Two-direction regression test proves the
+  fingerprint survives a slim round-trip AND a genuine write still overwrites +
+  clears failure diagnostics. See
+  [`docs/audits/2026-07-05-updatebookfile-memdb-writeback-fingerprint-wipe.md`](docs/audits/2026-07-05-updatebookfile-memdb-writeback-fingerprint-wipe.md).
 
 #### July 5, 2026 - fix(ci): bump ghcommon pin for ghcommon-scripts ref-resolution fix (5th release-pipeline blocker)
 

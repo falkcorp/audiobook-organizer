@@ -1,7 +1,7 @@
 // file: internal/database/pebble_bookfile_preserve_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7e1a9c43-2b86-4d05-9f71-3c6e8a0d2b54
-// last-edited: 2026-06-22
+// last-edited: 2026-07-06
 
 package database
 
@@ -217,6 +217,118 @@ func TestUpsertBookFile_PreservesFingerprintViaPIDLookup(t *testing.T) {
 	files, _ := s.GetBookFiles(book.ID)
 	if len(files) != 1 || string(files[0].AcoustIDFingerprint) != string([]byte{5, 6, 7, 8}) {
 		t.Errorf("AcoustIDFingerprint WIPED via PID path: got %v", files[0].AcoustIDFingerprint)
+	}
+}
+
+// UpdateBookFile must NOT wipe the raw AcoustID fingerprint when a caller writes
+// back a memdb-slim struct (AcoustIDFingerprint nil'd by stripBookFileForMemdb).
+// This is the recompute_itunes_paths / enrich_book_files / fix_book_file_paths /
+// repair_missing_files footgun: those jobs read via GetAllBookFiles (memdb view),
+// tweak one unrelated field, and write the whole struct back via UpdateBookFile —
+// without the preserve-on-empty guard the nil fingerprint erases the stored value.
+func TestUpdateBookFile_PreservesFingerprintOnEmptyIncoming(t *testing.T) {
+	s, err := NewPebbleStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewPebbleStore: %v", err)
+	}
+	defer s.Close()
+
+	book, err := s.CreateBook(&Book{Title: "Update FP Book"})
+	if err != nil {
+		t.Fatalf("CreateBook: %v", err)
+	}
+	path := "/lib/Update FP Book/01.m4b"
+	if err := s.CreateBookFile(&BookFile{
+		BookID:              book.ID,
+		FilePath:            path,
+		FileHash:            "feedface",
+		Duration:            5400,
+		AcoustIDFingerprint: []byte{11, 22, 33, 44},
+	}); err != nil {
+		t.Fatalf("CreateBookFile: %v", err)
+	}
+	created, err := s.GetBookFiles(book.ID)
+	if err != nil || len(created) != 1 {
+		t.Fatalf("GetBookFiles(created): err=%v len=%d", err, len(created))
+	}
+	id := created[0].ID
+
+	// Simulate a memdb-sourced maintenance write: fingerprint nil, an unrelated
+	// field (ITunesPath) changed. This is exactly what recompute_itunes_paths feeds.
+	slim := &BookFile{
+		ID:         id,
+		BookID:     book.ID,
+		FilePath:   path,
+		FileHash:   "feedface",
+		Duration:   5400,
+		ITunesPath: "/Music/Update FP Book/01.m4b",
+	}
+	if err := s.UpdateBookFile(id, slim); err != nil {
+		t.Fatalf("UpdateBookFile: %v", err)
+	}
+
+	got, err := s.GetBookFiles(book.ID) // pebble-direct → stored row
+	if err != nil || len(got) != 1 {
+		t.Fatalf("GetBookFiles: err=%v len=%d", err, len(got))
+	}
+	if string(got[0].AcoustIDFingerprint) != string([]byte{11, 22, 33, 44}) {
+		t.Errorf("AcoustIDFingerprint WIPED by UpdateBookFile: got %v, want [11 22 33 44]", got[0].AcoustIDFingerprint)
+	}
+	if got[0].ITunesPath != "/Music/Update FP Book/01.m4b" {
+		t.Errorf("ITunesPath not written: %q", got[0].ITunesPath)
+	}
+}
+
+// The other direction: UpdateBookFile is the fingerprint WRITE path
+// (internal/plugins/acoustid/backfill.go), which supplies a fresh non-empty
+// AcoustIDFingerprint AND nil'd diagnostic fields to clear a prior failure on
+// success. The guard must fire ONLY on empty incoming, so a genuine write still
+// overwrites the fingerprint and the intentional failure-diagnostic clear survives.
+// (This is the regression the guard could have introduced if it mirrored
+// UpsertBookFile's 4-field guard — it must not.)
+func TestUpdateBookFile_WritesFreshFingerprintAndClearsFailureDiagnostics(t *testing.T) {
+	s, err := NewPebbleStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewPebbleStore: %v", err)
+	}
+	defer s.Close()
+
+	book, _ := s.CreateBook(&Book{Title: "Update FP Book 2"})
+	path := "/lib/Update FP Book 2/01.m4b"
+	reason := "fpcalc_missing"
+	detail := "binary not on PATH"
+	if err := s.CreateBookFile(&BookFile{
+		BookID:                   book.ID,
+		FilePath:                 path,
+		FingerprintFailureReason: &reason, // a prior failure tombstone
+		FingerprintFailureDetail: &detail,
+	}); err != nil {
+		t.Fatalf("CreateBookFile: %v", err)
+	}
+	created, _ := s.GetBookFiles(book.ID)
+	id := created[0].ID
+
+	// Mimic backfill.go's success path: fresh non-empty fingerprint, diagnostics nil.
+	if err := s.UpdateBookFile(id, &BookFile{
+		ID:                       id,
+		BookID:                   book.ID,
+		FilePath:                 path,
+		AcoustIDFingerprint:      []byte{7, 7, 7, 7},
+		FingerprintFailureReason: nil,
+		FingerprintFailureDetail: nil,
+	}); err != nil {
+		t.Fatalf("UpdateBookFile: %v", err)
+	}
+
+	got, _ := s.GetBookFiles(book.ID)
+	if len(got) != 1 || string(got[0].AcoustIDFingerprint) != string([]byte{7, 7, 7, 7}) {
+		t.Errorf("fresh fingerprint not written: %v", got[0].AcoustIDFingerprint)
+	}
+	if got[0].FingerprintFailureReason != nil {
+		t.Errorf("failure reason NOT cleared on success (guard over-fired): %v", *got[0].FingerprintFailureReason)
+	}
+	if got[0].FingerprintFailureDetail != nil {
+		t.Errorf("failure detail NOT cleared on success (guard over-fired): %v", *got[0].FingerprintFailureDetail)
 	}
 }
 
