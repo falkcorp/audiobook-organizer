@@ -1,5 +1,5 @@
 # file: .github/workflows/prerelease.yml
-# version: 2.10.3
+# version: 2.10.4
 # guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
 # last-edited: 2026-07-06
 
@@ -28,7 +28,7 @@ env:
 jobs:
   prerelease:
     name: Create Prerelease Build
-    uses: falkcorp/github-common/.github/workflows/reusable-release.yml@f7e012d85bf1df8013304327c4831ab142eb209b # v2.14.3 (gha-release-go GORELEASER_CURRENT_TAG pin)
+    uses: falkcorp/github-common/.github/workflows/reusable-release.yml@b3f278f1b6fe7b08f428ce6335a1f24a961f1718 # v2.14.4 (cleanup-step self-delete guard)
     with:
       release-type: 'auto'
       prerelease: true
