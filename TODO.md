@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.64.0 -->
+<!-- version: 9.65.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-06 -->
 
@@ -20,7 +20,40 @@ future agent) can scan the entire workspace in one page.
 
 ---
 
-## 🟡 UpdateBookFile memdb-writeback fingerprint wipe (2026-07-05)
+## 🔴 dedup.full-scan freezes in composing-scores phase even after CONC-2/PR #1809 (2026-07-06)
+
+- **Recurrence of the original incident**, post-fix. Triggered `dedup.full-scan` on
+  prod (op `01KWTFW0T833JP6Y3PZCZK6YEG`) after shipping the `BookSignatureScan`
+  memdb fix (PR #1830). Layer-1 (CONC-4) completed normally. The unified-scoring
+  "Composing scores" pass (CONC-2) advanced to 21,407/48,623 (44%) then **produced
+  zero further progress log lines for 9+ hours** — not just slow, genuinely frozen
+  (confirmed via `journalctl`: only routine `/metrics` polling and scheduler ticks
+  during the entire window, no scan-related log lines at all).
+- **`DELETE /api/v1/operations/v2/:id` (graceful cancel) did not stop it** even
+  after several minutes of waiting — same non-responsive behavior the original
+  incident had, despite PR #1809's `ctx.Err()` check in
+  `runUnifiedScoringForBook`'s per-candidate loop. Whatever is actually blocking
+  isn't caught by that check — plausible causes: a lock held indefinitely
+  (`de.mergeMu` from CONC-4, or another guard), or a blocking call to the local
+  Ollama embedding/LLM backend (172.16.3.22) that doesn't respect context
+  cancellation.
+- **Service showed swap usage** (456M, peak 772M) at time of the stall — memory
+  pressure may be a contributing factor, not just a pure logic hang. Worth
+  correlating: does the stall coincide with a specific book having an unusually
+  large pending-candidate set (the same shape as the original incident), or with
+  memory exhaustion forcing the OS to swap and everything grinding to a halt?
+- **Resolved by `systemctl restart`** (hard restart, not graceful cancel) — same
+  remediation as the original incident. No data lost (per-candidate/embedding
+  writes are durable; book_signature layer retained 649 pending, acoustid layer
+  retained 211 pending across the restart).
+- **Root cause NOT yet identified.** Needs: (1) find which book/candidate pair was
+  in flight when it froze (no per-book log line was ever emitted for whichever
+  book started around the 21,407 mark, unlike the smooth progression before it),
+  (2) audit `runUnifiedScoringForBook` for any blocking call *after* the CONC-4/
+  PR #1809 cancellation check that itself doesn't respect `ctx`, (3) check whether
+  `de.mergeMu` (CONC-4) could deadlock under some interleaving, (4) correlate with
+  the swap/memory pressure — a heap profile (`make deploy-debug` for pprof) next
+  time would help nail this down live instead of just restarting.
 
 - **Found during STOREFID P3-W3 caller audit.** Full write-up:
   [`docs/audits/2026-07-05-updatebookfile-memdb-writeback-fingerprint-wipe.md`](docs/audits/2026-07-05-updatebookfile-memdb-writeback-fingerprint-wipe.md).
