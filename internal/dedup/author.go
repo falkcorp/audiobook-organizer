@@ -1,5 +1,5 @@
 // file: internal/dedup/author.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
 
 package dedup
@@ -740,12 +740,12 @@ type authorPrecomputed struct {
 // Returns a map of authorID → slice of normalized series names (lowercased, trimmed).
 // This is an optional input to FindDuplicateAuthors for series cross-referencing.
 func BuildAuthorSeriesMap(store interface {
-	GetBooksByAuthorID(authorID int) ([]database.Book, error)
+	GetBooksByAuthorIDCore(authorID int) ([]database.BookCore, error)
 	GetSeriesByID(id int) (*database.Series, error)
 }, authors []database.Author) map[int][]string {
 	result := make(map[int][]string, len(authors))
 	for _, a := range authors {
-		books, err := store.GetBooksByAuthorID(a.ID)
+		books, err := store.GetBooksByAuthorIDCore(a.ID)
 		if err != nil {
 			continue
 		}

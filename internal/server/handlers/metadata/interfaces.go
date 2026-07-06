@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/interfaces.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b1ab2e4a-1f73-42f2-955d-c4a30f0fbaac
-// last-edited: 2026-06-03
+// last-edited: 2026-07-05
 
 // Narrow dependency interfaces for the metadata-domain HTTP handlers (the 19
 // per-book + library metadata endpoints extracted from the server package's
@@ -69,7 +69,11 @@ type MetadataStore interface {
 	PruneBookSnapshots(id string, keepCount int) (int, error)
 
 	// Filtered book queries (handleBulkWriteBack).
-	GetBooksByAuthorID(authorID int) ([]database.Book, error)
+	// GetBooksByAuthorIDCore is Core-typed (STOREFID P3-W2) — already
+	// required via the embedded database.BookStore above; redeclared here
+	// (matching the GetBooksBySeriesID convention below) purely for the
+	// "what this handler touches" documentation grouping.
+	GetBooksByAuthorIDCore(authorID int) ([]database.BookCore, error)
 	GetBooksBySeriesID(seriesID int) ([]database.Book, error)
 
 	// Legacy supervisor op row (batchWriteBackAudiobooks).

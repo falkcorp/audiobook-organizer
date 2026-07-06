@@ -1,7 +1,7 @@
 // file: internal/server/handlers/entities/interfaces.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 43710377-fdb3-490c-872e-fd03309163be
-// last-edited: 2026-06-03
+// last-edited: 2026-07-05
 
 // Narrow dependency interfaces for the entities domain handlers (authors,
 // series, narrators, works). Each interface lists only the methods the
@@ -33,7 +33,9 @@ type EntitiesStore interface {
 	GetAuthorAliases(authorID int) ([]database.AuthorAlias, error)
 	CreateAuthorAlias(authorID int, aliasName string, aliasType string) (*database.AuthorAlias, error)
 	DeleteAuthorAlias(id int) error
-	GetBooksByAuthorID(authorID int) ([]database.Book, error)
+	// GetBooksByAuthorIDCore is Core-typed (STOREFID P3-W2) — see
+	// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
+	GetBooksByAuthorIDCore(authorID int) ([]database.BookCore, error)
 	GetBooksByAuthorIDWithRole(authorID int) ([]database.Book, error)
 
 	// Book authors / narrators join tables

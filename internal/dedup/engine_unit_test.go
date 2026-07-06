@@ -1,6 +1,7 @@
 // file: internal/dedup/engine_unit_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f1a2b3c4-d5e6-7890-abcd-1234567890ab
+// last-edited: 2026-07-05
 
 package dedup
 
@@ -164,8 +165,8 @@ func TestCheckBook_FileHashCheckError_ContinuesGracefully(t *testing.T) {
 	mock.GetBookFilesFunc = func(bookID string) ([]database.BookFile, error) {
 		return nil, fmt.Errorf("file lookup failed")
 	}
-	mock.GetBooksByAuthorIDFunc = func(authorID int) ([]database.Book, error) {
-		return []database.Book{*book}, nil // only itself
+	mock.GetBooksByAuthorIDCoreFunc = func(authorID int) ([]database.BookCore, error) {
+		return []database.BookCore{book.Core()}, nil // only itself
 	}
 	mock.GetAllBooksFunc = func(limit, offset int) ([]database.Book, error) {
 		return nil, nil

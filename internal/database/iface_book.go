@@ -1,5 +1,5 @@
 // file: internal/database/iface_book.go
-// version: 2.5.0
+// version: 2.6.0
 // guid: 668ec5a2-f8d9-4fdb-b0d5-09937b5d83ea
 // last-edited: 2026-07-05
 
@@ -56,9 +56,15 @@ type BookReader interface {
 	// GetBooksBySeriesID is SLIM (memdb projection) — see
 	// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
 	GetBooksBySeriesID(seriesID int) ([]Book, error)
-	// GetBooksByAuthorID is SLIM (memdb projection) — see
+	// GetBooksByAuthorIDCore is Core-typed (STOREFID P3-W2): the memdb
+	// projection is stripped of the nine heavy fields (Description,
+	// VersionNotes, BookSigV1, BookSigV1Mask, BookSigSegments,
+	// BookSigBuiltAt, BookSigCoveragePct, Author, Series), and that fact is
+	// now enforced by the return TYPE rather than left as a comment a caller
+	// can miss. A caller that needs any of those MUST fetch via GetBookByID
+	// / GetAllBooksFullFrom (full Pebble). See
 	// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
-	GetBooksByAuthorID(authorID int) ([]Book, error)
+	GetBooksByAuthorIDCore(authorID int) ([]BookCore, error)
 	GetBooksByVersionGroup(groupID string) ([]Book, error)
 	GetBooksByMetadataSourceHash(hash string) ([]Book, error)
 	// GetBookIDsByISBNASIN returns the distinct book IDs whose ISBN10, ISBN13,

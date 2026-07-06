@@ -1,5 +1,5 @@
 // file: internal/database/memdb_reads.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000006
 // last-edited: 2026-07-05
 
@@ -407,6 +407,15 @@ func (m *MemStore) GetBooksBySeriesID(seriesID int, limit, offset int) ([]Book, 
 // AuthorID field on the Book row. No default sort — matches the Pebble path
 // (which returned books in key/ULID order) and avoids per-call sort cost.
 // Callers that need a specific order should sort the slice themselves.
+//
+// Intentionally NOT renamed/retyped to *Core (STOREFID P3-W2): this helper
+// is shared by two PebbleStore callers with different fidelity contracts —
+// GetBooksByAuthorIDCore (Core-typed, maps this result via .Core()) and
+// GetBooksByAuthorIDWithRole (still []Book, not yet migrated — see the
+// GetBooksByAuthorIDWithRoleCore row in
+// docs/specs/2026-07-05-store-getter-fidelity-unification.md). Retyping
+// this method's return would force GetBooksByAuthorIDWithRole to convert
+// back to []Book, which is out of scope for P3-W2.
 func (m *MemStore) GetBooksByAuthorID(authorID int, limit, offset int) ([]Book, error) {
 	txn := m.db.Txn(false)
 	defer txn.Abort()

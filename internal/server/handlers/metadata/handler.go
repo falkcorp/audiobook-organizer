@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
 // last-edited: 2026-07-05
 
@@ -1180,7 +1180,20 @@ func (h *Handler) handleBulkWriteBackImpl(c *gin.Context) {
 	var err error
 
 	if req.Filter.AuthorID != nil {
-		books, err = store.GetBooksByAuthorID(*req.Filter.AuthorID)
+		// store.GetBooksByAuthorIDCore is Core-typed (STOREFID P3-W2); the
+		// GetBooksBySeriesID/GetAllBooks branches below are not yet migrated
+		// and still return []database.Book, so `books` stays []database.Book
+		// here too — convert back via BookCore.ToBook(). Only book.ID,
+		// MarkedForDeletion, FilePath, and LibraryState (all Core-safe, no
+		// heavy fields) are read from `books`/`filtered` below.
+		var booksCore []database.BookCore
+		booksCore, err = store.GetBooksByAuthorIDCore(*req.Filter.AuthorID)
+		if err == nil {
+			books = make([]database.Book, len(booksCore))
+			for i := range booksCore {
+				books[i] = booksCore[i].ToBook()
+			}
+		}
 	} else if req.Filter.SeriesID != nil {
 		books, err = store.GetBooksBySeriesID(*req.Filter.SeriesID)
 	} else {

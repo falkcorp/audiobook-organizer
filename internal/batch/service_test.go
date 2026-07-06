@@ -1,5 +1,5 @@
 // file: internal/batch/service_test.go
-// version: 1.0.5
+// version: 1.0.6
 // last-edited: 2026-07-05
 // guid: b2c3d4e5-f6a7-b8c9-0d1e-2f3a4b5c6d7e
 
@@ -109,7 +109,9 @@ func (m *MockBookStore) GetBooksByTitleInDir(normalizedTitle, dirPath string) ([
 	return nil, nil
 }
 func (m *MockBookStore) GetBooksBySeriesID(seriesID int) ([]database.Book, error) { return nil, nil }
-func (m *MockBookStore) GetBooksByAuthorID(authorID int) ([]database.Book, error) { return nil, nil }
+func (m *MockBookStore) GetBooksByAuthorIDCore(authorID int) ([]database.BookCore, error) {
+	return nil, nil
+}
 func (m *MockBookStore) GetBooksByVersionGroup(groupID string) ([]database.Book, error) {
 	return nil, nil
 }

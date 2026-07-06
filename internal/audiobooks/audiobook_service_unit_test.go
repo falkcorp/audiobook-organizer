@@ -1,5 +1,5 @@
 // file: internal/audiobooks/audiobook_service_unit_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 // last-edited: 2026-07-05
 
@@ -164,8 +164,8 @@ func TestAudiobookService_GetAudiobooks_ByAuthorID(t *testing.T) {
 	svc := NewAudiobookService(mockStore)
 
 	authorID := 42
-	expected := []database.Book{{ID: "b1"}, {ID: "b2"}}
-	mockStore.EXPECT().GetBooksByAuthorID(42).Return(expected, nil)
+	expected := []database.BookCore{{ID: "b1"}, {ID: "b2"}}
+	mockStore.EXPECT().GetBooksByAuthorIDCore(42).Return(expected, nil)
 
 	books, err := svc.GetAudiobooks(context.Background(), 10, 0, "", &authorID, nil)
 	assert.NoError(t, err)

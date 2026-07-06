@@ -1,7 +1,7 @@
 // file: internal/dedup/collectors_metadata.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e1f2a3b4-c5d6-4e7f-8a0b-1c2d3e4f5a6b
-// last-edited: 2026-06-10
+// last-edited: 2026-07-05
 
 // Package dedup — metadata-based collector family (fable5 T014).
 //
@@ -54,7 +54,7 @@ import (
 // In production code, the caller passes the same *database.PebbleStore
 // (or MockStore) for both parameters.
 type DurationCollectorStore interface {
-	GetBooksByAuthorID(authorID int) ([]database.Book, error)
+	GetBooksByAuthorIDCore(authorID int) ([]database.BookCore, error)
 	GetBookAlternativeTitles(bookID string) ([]database.BookAlternativeTitle, error)
 }
 
@@ -161,10 +161,11 @@ func CollectDuration(
 		return nil, nil
 	}
 
-	others, err := store.GetBooksByAuthorID(*book.AuthorID)
+	othersCore, err := store.GetBooksByAuthorIDCore(*book.AuthorID)
 	if err != nil {
 		return nil, fmt.Errorf("CollectDuration get books by author: %w", err)
 	}
+	others := booksFromCore(othersCore)
 
 	bookDur := float64(*book.Duration)
 	bookNorm := normalizeTitle(book.Title)

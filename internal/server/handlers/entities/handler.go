@@ -1,7 +1,7 @@
 // file: internal/server/handlers/entities/handler.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b02a07d8-1806-4c86-bb72-f0688d6caff3
-// last-edited: 2026-06-03
+// last-edited: 2026-07-05
 
 // Package entities hosts the entity-domain HTTP handlers extracted from the
 // server package: works, authors, series, and narrators — CRUD plus merges,
@@ -516,7 +516,7 @@ func (h *Handler) DeleteAuthor(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "invalid author ID")
 		return
 	}
-	books, err := h.store.GetBooksByAuthorID(authorID)
+	books, err := h.store.GetBooksByAuthorIDCore(authorID)
 	if err != nil {
 		httputil.InternalError(c, "failed to get author books", err)
 		return
@@ -547,7 +547,7 @@ func (h *Handler) BulkDeleteAuthors(c *gin.Context) {
 	skipped := 0
 	var errors []string
 	for _, id := range req.IDs {
-		books, err := h.store.GetBooksByAuthorID(id)
+		books, err := h.store.GetBooksByAuthorIDCore(id)
 		if err != nil {
 			errors = append(errors, fmt.Sprintf("author %d: %v", id, err))
 			continue
@@ -580,10 +580,20 @@ func (h *Handler) GetAuthorBooks(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "invalid author ID")
 		return
 	}
-	books, err := h.store.GetBooksByAuthorID(authorID)
+	booksCore, err := h.store.GetBooksByAuthorIDCore(authorID)
 	if err != nil {
 		httputil.InternalError(c, "failed to get author books", err)
 		return
+	}
+	// h.enrichBooks (injected from package server, see wire_handlers.go) is
+	// shared with full-fidelity Book sources elsewhere, so its signature
+	// stays []database.Book — convert back via BookCore.ToBook() rather than
+	// widening that shared response-building code (out of scope for
+	// STOREFID P3-W2). The heavy fields it would enrich with were already
+	// absent from this SLIM getter before this change; no behavior change.
+	books := make([]database.Book, len(booksCore))
+	for i := range booksCore {
+		books[i] = booksCore[i].ToBook()
 	}
 
 	enriched := h.enrichBooks(books)

@@ -1,7 +1,7 @@
 // file: internal/database/mock_store_coverage_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9f8e7d6c-5b4a-3c2d-1e0f-a9b8c7d6e5f4
-// last-edited: 2026-06-14
+// last-edited: 2026-07-05
 
 package database
 
@@ -54,7 +54,7 @@ func TestMockStore_CustomFuncPaths(t *testing.T) {
 	mock.GetBookByOrganizedHashFunc = func(string) (*Book, error) { return nil, nil }
 	mock.GetDuplicateBooksFunc = func() ([][]Book, error) { return nil, nil }
 	mock.GetBooksBySeriesIDFunc = func(int) ([]Book, error) { return nil, nil }
-	mock.GetBooksByAuthorIDFunc = func(int) ([]Book, error) { return nil, nil }
+	mock.GetBooksByAuthorIDCoreFunc = func(int) ([]BookCore, error) { return nil, nil }
 	mock.CreateBookFunc = func(*Book) (*Book, error) { return nil, nil }
 	mock.UpdateBookFunc = func(string, *Book) (*Book, error) { return nil, nil }
 	mock.DeleteBookFunc = func(string) error { return nil }
@@ -173,7 +173,7 @@ func TestMockStore_CustomFuncPaths(t *testing.T) {
 	_, _ = mock.GetBookByOrganizedHash("hash")
 	_, _ = mock.GetDuplicateBooks()
 	_, _ = mock.GetBooksBySeriesID(1)
-	_, _ = mock.GetBooksByAuthorID(1)
+	_, _ = mock.GetBooksByAuthorIDCore(1)
 	_, _ = mock.CreateBook(&Book{})
 	_, _ = mock.UpdateBook("book-1", &Book{})
 	_ = mock.DeleteBook("book-1")

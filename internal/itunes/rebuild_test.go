@@ -1,5 +1,5 @@
 // file: internal/itunes/rebuild_test.go
-// version: 1.0.3
+// version: 1.0.4
 // last-edited: 2026-07-05
 // guid: 1c2d3e4f-5a6b-7c8d-9e0f-1a2b3c4d5e6f
 
@@ -93,7 +93,7 @@ func (m *mockRebuildStore) GetBooksBySeriesID(seriesID int) ([]database.Book, er
 	return nil, nil
 }
 
-func (m *mockRebuildStore) GetBooksByAuthorID(authorID int) ([]database.Book, error) {
+func (m *mockRebuildStore) GetBooksByAuthorIDCore(authorID int) ([]database.BookCore, error) {
 	return nil, nil
 }
 

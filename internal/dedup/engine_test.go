@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_test.go
-// version: 2.6.0
+// version: 2.7.0
 // guid: 2a7e4d91-c538-4f06-b1d3-9e8c5a6f0d72
-// last-edited: 2026-07-01
+// last-edited: 2026-07-05
 
 package dedup
 
@@ -161,8 +161,8 @@ func TestEngine_ExactMatch_FileHash(t *testing.T) {
 	mock.GetBookFilesFunc = func(bookID string) ([]database.BookFile, error) {
 		return nil, nil // No separate files
 	}
-	mock.GetBooksByAuthorIDFunc = func(authorID int) ([]database.Book, error) {
-		return []database.Book{*bookA, *bookB}, nil
+	mock.GetBooksByAuthorIDCoreFunc = func(authorID int) ([]database.BookCore, error) {
+		return []database.BookCore{bookA.Core(), bookB.Core()}, nil
 	}
 	mock.GetAllBooksFunc = func(limit, offset int) ([]database.Book, error) {
 		return nil, nil // No ISBN matching needed
@@ -230,8 +230,8 @@ func TestEngine_ExactMatch_FileHash_AutoMerge(t *testing.T) {
 	mock.GetBookFilesFunc = func(bookID string) ([]database.BookFile, error) {
 		return nil, nil
 	}
-	mock.GetBooksByAuthorIDFunc = func(authorID int) ([]database.Book, error) {
-		return []database.Book{*bookA, *bookB}, nil
+	mock.GetBooksByAuthorIDCoreFunc = func(authorID int) ([]database.BookCore, error) {
+		return []database.BookCore{bookA.Core(), bookB.Core()}, nil
 	}
 	mock.GetAllBooksFunc = func(limit, offset int) ([]database.Book, error) {
 		return nil, nil
@@ -296,8 +296,8 @@ func TestEngine_DurationMatch_EmitsCandidate(t *testing.T) {
 	mock.GetBookFilesFunc = func(bookID string) ([]database.BookFile, error) {
 		return nil, nil
 	}
-	mock.GetBooksByAuthorIDFunc = func(id int) ([]database.Book, error) {
-		return []database.Book{*bookA, *bookB}, nil
+	mock.GetBooksByAuthorIDCoreFunc = func(id int) ([]database.BookCore, error) {
+		return []database.BookCore{bookA.Core(), bookB.Core()}, nil
 	}
 	mock.GetAllBooksFunc = func(limit, offset int) ([]database.Book, error) {
 		return nil, nil
@@ -354,13 +354,13 @@ func TestEngine_DurationMatch_RejectsAbridged(t *testing.T) {
 	mock.GetBookFilesFunc = func(bookID string) ([]database.BookFile, error) {
 		return nil, nil
 	}
-	mock.GetBooksByAuthorIDFunc = func(id int) ([]database.Book, error) {
+	mock.GetBooksByAuthorIDCoreFunc = func(id int) ([]database.BookCore, error) {
 		// checkExactTitle path — SAME titles would normally
 		// match, we specifically want to test that the
 		// duration signal's abridged guard doesn't emit a
 		// duration-based candidate. (checkExactTitle WILL
 		// emit its own candidate because titles match.)
-		return []database.Book{*bookA, *bookB}, nil
+		return []database.BookCore{bookA.Core(), bookB.Core()}, nil
 	}
 	mock.GetAllBooksFunc = func(limit, offset int) ([]database.Book, error) {
 		return nil, nil
@@ -414,7 +414,7 @@ func TestEngine_ExactMatch_ISBN(t *testing.T) {
 	mock.GetBookFilesFunc = func(bookID string) ([]database.BookFile, error) {
 		return nil, nil
 	}
-	mock.GetBooksByAuthorIDFunc = func(authorID int) ([]database.Book, error) {
+	mock.GetBooksByAuthorIDCoreFunc = func(authorID int) ([]database.BookCore, error) {
 		return nil, nil // No title matches
 	}
 	mock.GetAllBooksFunc = func(limit, offset int) ([]database.Book, error) {
@@ -477,9 +477,9 @@ func TestEngine_ExactMatch_NoMatch(t *testing.T) {
 	mock.GetBookFilesFunc = func(bookID string) ([]database.BookFile, error) {
 		return nil, nil
 	}
-	mock.GetBooksByAuthorIDFunc = func(authorID int) ([]database.Book, error) {
+	mock.GetBooksByAuthorIDCoreFunc = func(authorID int) ([]database.BookCore, error) {
 		if authorID == 1 {
-			return []database.Book{*bookA}, nil // Only the book itself, no others
+			return []database.BookCore{bookA.Core()}, nil // Only the book itself, no others
 		}
 		return nil, nil
 	}
@@ -1194,8 +1194,8 @@ func TestEngine_ExactTitle_RejectsStubFile(t *testing.T) {
 
 	real := &database.Book{ID: "book-real", Title: "Iron and Blood", AuthorID: &authorID, FileSize: sz(254_192_471)}
 	stub := &database.Book{ID: "book-stub", Title: "Iron and Blood", AuthorID: &authorID, FileSize: sz(32)}
-	mock.GetBooksByAuthorIDFunc = func(id int) ([]database.Book, error) {
-		return []database.Book{*real, *stub}, nil
+	mock.GetBooksByAuthorIDCoreFunc = func(id int) ([]database.BookCore, error) {
+		return []database.BookCore{real.Core(), stub.Core()}, nil
 	}
 
 	if err := engine.checkExactTitle(real, "Joshua Dalzelle"); err != nil {
@@ -1219,8 +1219,8 @@ func TestEngine_ExactTitle_KeepsGenuineLargePair(t *testing.T) {
 	a := &database.Book{ID: "book-a", Title: "Departure from the Script", AuthorID: &authorID, FileSize: sz(184_741_714)}
 	// Genuine same-file copy in another folder: large size, not yet scanned.
 	b := &database.Book{ID: "book-b", Title: "Departure from the Script", AuthorID: &authorID, FileSize: sz(184_741_714)}
-	mock.GetBooksByAuthorIDFunc = func(id int) ([]database.Book, error) {
-		return []database.Book{*a, *b}, nil
+	mock.GetBooksByAuthorIDCoreFunc = func(id int) ([]database.BookCore, error) {
+		return []database.BookCore{a.Core(), b.Core()}, nil
 	}
 
 	if err := engine.checkExactTitle(a, "Jae"); err != nil {
@@ -1279,7 +1279,7 @@ func buildFullScanMock(books []database.Book) *database.MockStore {
 	mock.GetAllBooksFunc = func(limit, offset int) ([]database.Book, error) { return books, nil }
 	mock.GetBookByIDFunc = func(id string) (*database.Book, error) { return byID[id], nil }
 	mock.GetAuthorByIDFunc = func(id int) (*database.Author, error) { return nil, nil }
-	mock.GetBooksByAuthorIDFunc = func(id int) ([]database.Book, error) { return nil, nil }
+	mock.GetBooksByAuthorIDCoreFunc = func(id int) ([]database.BookCore, error) { return nil, nil }
 	mock.GetBookByFileHashFunc = func(hash string) (*database.Book, error) { return nil, nil }
 	mock.GetBookFilesFunc = func(bookID string) ([]database.BookFile, error) { return nil, nil }
 	mock.GetAllBooksFunc = func(limit, offset int) ([]database.Book, error) { return books, nil }

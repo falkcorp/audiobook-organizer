@@ -1,5 +1,5 @@
 // file: internal/database/bookcore.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7f3c1e28-9a4d-4b61-8c2f-bookcore000001
 // last-edited: 2026-07-05
 
@@ -265,5 +265,117 @@ func (b *Book) Core() BookCore {
 		Authors:                  b.Authors,
 		MetadataProvenance:       b.MetadataProvenance,
 		MetadataProvenanceAt:     b.MetadataProvenanceAt,
+	}
+}
+
+// ToBook reconstructs a Book from its BookCore projection. The nine heavy
+// fields (Description, VersionNotes, BookSigV1, BookSigV1Mask,
+// BookSigSegments, BookSigBuiltAt, BookSigCoveragePct, Author, Series) are
+// left at their zero value — BookCore never carried them, so this is not a
+// lossy conversion relative to what the caller already had.
+//
+// This exists for call sites that receive a Core-typed result (e.g. from
+// GetBooksByAuthorIDCore) but must hand it to shared code that still takes
+// *Book/[]Book and is used elsewhere with genuinely full-fidelity Book
+// values (so widening THAT code's signature to BookCore is out of scope).
+// Added alongside STOREFID P3-W2; see
+// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
+func (c *BookCore) ToBook() Book {
+	return Book{
+		ID:                       c.ID,
+		Title:                    c.Title,
+		AuthorID:                 c.AuthorID,
+		SeriesID:                 c.SeriesID,
+		SeriesSequence:           c.SeriesSequence,
+		FilePath:                 c.FilePath,
+		Format:                   c.Format,
+		Duration:                 c.Duration,
+		WorkID:                   c.WorkID,
+		Narrator:                 c.Narrator,
+		Edition:                  c.Edition,
+		Language:                 c.Language,
+		Publisher:                c.Publisher,
+		Genre:                    c.Genre,
+		PrintYear:                c.PrintYear,
+		AudiobookReleaseYear:     c.AudiobookReleaseYear,
+		ISBN10:                   c.ISBN10,
+		ISBN13:                   c.ISBN13,
+		ASIN:                     c.ASIN,
+		OpenLibraryID:            c.OpenLibraryID,
+		HardcoverID:              c.HardcoverID,
+		GoogleBooksID:            c.GoogleBooksID,
+		ITunesPersistentID:       c.ITunesPersistentID,
+		ITunesDateAdded:          c.ITunesDateAdded,
+		ITunesPlayCount:          c.ITunesPlayCount,
+		ITunesLastPlayed:         c.ITunesLastPlayed,
+		ITunesRating:             c.ITunesRating,
+		ITunesBookmark:           c.ITunesBookmark,
+		ITunesImportSource:       c.ITunesImportSource,
+		ITunesPath:               c.ITunesPath,
+		OriginalFilename:         c.OriginalFilename,
+		Bitrate:                  c.Bitrate,
+		Codec:                    c.Codec,
+		SampleRate:               c.SampleRate,
+		Channels:                 c.Channels,
+		BitDepth:                 c.BitDepth,
+		Quality:                  c.Quality,
+		IsPrimaryVersion:         c.IsPrimaryVersion,
+		VersionGroupID:           c.VersionGroupID,
+		FileHash:                 c.FileHash,
+		FileSize:                 c.FileSize,
+		OriginalFileHash:         c.OriginalFileHash,
+		OrganizedFileHash:        c.OrganizedFileHash,
+		LibraryState:             c.LibraryState,
+		Quantity:                 c.Quantity,
+		MarkedForDeletion:        c.MarkedForDeletion,
+		MarkedForDeletionAt:      c.MarkedForDeletionAt,
+		QuarantineReason:         c.QuarantineReason,
+		QuarantinedAt:            c.QuarantinedAt,
+		CreatedAt:                c.CreatedAt,
+		UpdatedAt:                c.UpdatedAt,
+		MetadataUpdatedAt:        c.MetadataUpdatedAt,
+		LastWrittenAt:            c.LastWrittenAt,
+		LastOrganizeOperationID:  c.LastOrganizeOperationID,
+		LastOrganizedAt:          c.LastOrganizedAt,
+		MetadataReviewStatus:     c.MetadataReviewStatus,
+		MetadataSource:           c.MetadataSource,
+		ITunesSyncStatus:         c.ITunesSyncStatus,
+		AudibleRuntimeMin:        c.AudibleRuntimeMin,
+		DurationVerifiedAt:       c.DurationVerifiedAt,
+		MetadataSourceHash:       c.MetadataSourceHash,
+		MergedIntoBookID:         c.MergedIntoBookID,
+		AudibleRatingOverall:     c.AudibleRatingOverall,
+		AudibleRatingPerformance: c.AudibleRatingPerformance,
+		AudibleRatingStory:       c.AudibleRatingStory,
+		AudibleRatingCount:       c.AudibleRatingCount,
+		AudibleNumReviews:        c.AudibleNumReviews,
+		GoogleRatingAverage:      c.GoogleRatingAverage,
+		GoogleRatingCount:        c.GoogleRatingCount,
+		UserRatingOverall:        c.UserRatingOverall,
+		UserRatingStory:          c.UserRatingStory,
+		UserRatingPerformance:    c.UserRatingPerformance,
+		UserRatingNotes:          c.UserRatingNotes,
+		CoverURL:                 c.CoverURL,
+		NarratorsJSON:            c.NarratorsJSON,
+		SourceImportPath:         c.SourceImportPath,
+		LastScanMtime:            c.LastScanMtime,
+		LastScanSize:             c.LastScanSize,
+		NeedsRescan:              c.NeedsRescan,
+		IntroTranscription:       c.IntroTranscription,
+		TranscribedTitle:         c.TranscribedTitle,
+		TranscribedAuthor:        c.TranscribedAuthor,
+		TranscribedNarrator:      c.TranscribedNarrator,
+		IntroTranscribedAt:       c.IntroTranscribedAt,
+		TranscribeStatus:         c.TranscribeStatus,
+		TranscribeError:          c.TranscribeError,
+		TranscribeAttemptedAt:    c.TranscribeAttemptedAt,
+		FingerprintStatus:        c.FingerprintStatus,
+		FingerprintedFileCount:   c.FingerprintedFileCount,
+		TotalFileCount:           c.TotalFileCount,
+		CoveragePercent:          c.CoveragePercent,
+		LastFingerprintedAt:      c.LastFingerprintedAt,
+		Authors:                  c.Authors,
+		MetadataProvenance:       c.MetadataProvenance,
+		MetadataProvenanceAt:     c.MetadataProvenanceAt,
 	}
 }
