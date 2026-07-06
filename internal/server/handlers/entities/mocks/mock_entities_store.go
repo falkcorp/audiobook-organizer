@@ -1179,24 +1179,24 @@ func (_c *MockEntitiesStore_GetBooksByAuthorIDCore_Call) RunAndReturn(run func(a
 	return _c
 }
 
-// GetBooksByAuthorIDWithRole provides a mock function for the type MockEntitiesStore
-func (_mock *MockEntitiesStore) GetBooksByAuthorIDWithRole(authorID int) ([]database.Book, error) {
+// GetBooksByAuthorIDWithRoleCore provides a mock function for the type MockEntitiesStore
+func (_mock *MockEntitiesStore) GetBooksByAuthorIDWithRoleCore(authorID int) ([]database.BookCore, error) {
 	ret := _mock.Called(authorID)
 
 	if len(ret) == 0 {
-		panic("no return value specified for GetBooksByAuthorIDWithRole")
+		panic("no return value specified for GetBooksByAuthorIDWithRoleCore")
 	}
 
-	var r0 []database.Book
+	var r0 []database.BookCore
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(int) ([]database.Book, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(int) ([]database.BookCore, error)); ok {
 		return returnFunc(authorID)
 	}
-	if returnFunc, ok := ret.Get(0).(func(int) []database.Book); ok {
+	if returnFunc, ok := ret.Get(0).(func(int) []database.BookCore); ok {
 		r0 = returnFunc(authorID)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.Book)
+			r0 = ret.Get(0).([]database.BookCore)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(int) error); ok {
@@ -1207,18 +1207,18 @@ func (_mock *MockEntitiesStore) GetBooksByAuthorIDWithRole(authorID int) ([]data
 	return r0, r1
 }
 
-// MockEntitiesStore_GetBooksByAuthorIDWithRole_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetBooksByAuthorIDWithRole'
-type MockEntitiesStore_GetBooksByAuthorIDWithRole_Call struct {
+// MockEntitiesStore_GetBooksByAuthorIDWithRoleCore_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetBooksByAuthorIDWithRoleCore'
+type MockEntitiesStore_GetBooksByAuthorIDWithRoleCore_Call struct {
 	*mock.Call
 }
 
-// GetBooksByAuthorIDWithRole is a helper method to define mock.On call
+// GetBooksByAuthorIDWithRoleCore is a helper method to define mock.On call
 //   - authorID int
-func (_e *MockEntitiesStore_Expecter) GetBooksByAuthorIDWithRole(authorID any) *MockEntitiesStore_GetBooksByAuthorIDWithRole_Call {
-	return &MockEntitiesStore_GetBooksByAuthorIDWithRole_Call{Call: _e.mock.On("GetBooksByAuthorIDWithRole", authorID)}
+func (_e *MockEntitiesStore_Expecter) GetBooksByAuthorIDWithRoleCore(authorID any) *MockEntitiesStore_GetBooksByAuthorIDWithRoleCore_Call {
+	return &MockEntitiesStore_GetBooksByAuthorIDWithRoleCore_Call{Call: _e.mock.On("GetBooksByAuthorIDWithRoleCore", authorID)}
 }
 
-func (_c *MockEntitiesStore_GetBooksByAuthorIDWithRole_Call) Run(run func(authorID int)) *MockEntitiesStore_GetBooksByAuthorIDWithRole_Call {
+func (_c *MockEntitiesStore_GetBooksByAuthorIDWithRoleCore_Call) Run(run func(authorID int)) *MockEntitiesStore_GetBooksByAuthorIDWithRoleCore_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 int
 		if args[0] != nil {
@@ -1231,12 +1231,12 @@ func (_c *MockEntitiesStore_GetBooksByAuthorIDWithRole_Call) Run(run func(author
 	return _c
 }
 
-func (_c *MockEntitiesStore_GetBooksByAuthorIDWithRole_Call) Return(books []database.Book, err error) *MockEntitiesStore_GetBooksByAuthorIDWithRole_Call {
-	_c.Call.Return(books, err)
+func (_c *MockEntitiesStore_GetBooksByAuthorIDWithRoleCore_Call) Return(bookCores []database.BookCore, err error) *MockEntitiesStore_GetBooksByAuthorIDWithRoleCore_Call {
+	_c.Call.Return(bookCores, err)
 	return _c
 }
 
-func (_c *MockEntitiesStore_GetBooksByAuthorIDWithRole_Call) RunAndReturn(run func(authorID int) ([]database.Book, error)) *MockEntitiesStore_GetBooksByAuthorIDWithRole_Call {
+func (_c *MockEntitiesStore_GetBooksByAuthorIDWithRoleCore_Call) RunAndReturn(run func(authorID int) ([]database.BookCore, error)) *MockEntitiesStore_GetBooksByAuthorIDWithRoleCore_Call {
 	_c.Call.Return(run)
 	return _c
 }

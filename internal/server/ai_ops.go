@@ -1,7 +1,7 @@
 // file: internal/server/ai_ops.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-06-03
+// last-edited: 2026-07-05
 
 // ai_ops registers the ai.author-review and ai.author-merge-apply
 // OperationDefs that previously went through the legacy BridgeQueue.
@@ -164,7 +164,7 @@ func (s *Server) RegisterAIAuthorMergeApplyOp(reg *opsregistry.Registry) error {
 						if mergeID == sug.KeepID {
 							continue
 						}
-						books, err := store.GetBooksByAuthorIDWithRole(mergeID)
+						books, err := store.GetBooksByAuthorIDWithRoleCore(mergeID)
 						if err != nil {
 							applyErrors = append(applyErrors, fmt.Sprintf("get books for author %d: %v", mergeID, err))
 							continue
@@ -230,7 +230,7 @@ func (s *Server) RegisterAIAuthorMergeApplyOp(reg *opsregistry.Registry) error {
 								applyErrors = append(applyErrors, fmt.Sprintf("create alias for author %d: %v", sug.KeepID, err))
 							}
 							// Re-link books and delete the variant author
-							books, err := store.GetBooksByAuthorIDWithRole(mergeID)
+							books, err := store.GetBooksByAuthorIDWithRoleCore(mergeID)
 							if err != nil {
 								continue
 							}

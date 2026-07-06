@@ -1,7 +1,7 @@
 // file: internal/server/handlers/ai.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6ccf0c64-9654-46c5-aed0-584943acb1c5
-// last-edited: 2026-06-23
+// last-edited: 2026-07-05
 
 // AIHandler hosts the AI HTTP endpoints extracted from the server package:
 // filename parsing, OpenAI / metadata-source connection tests, per-book AI
@@ -742,7 +742,7 @@ func AIReviewGroupsMode(ctx context.Context, progress operations.ProgressReporte
 		}
 		var sampleTitles []string
 		if group.Canonical.ID > 0 {
-			books, err := store.GetBooksByAuthorIDWithRole(group.Canonical.ID)
+			books, err := store.GetBooksByAuthorIDWithRoleCore(group.Canonical.ID)
 			if err == nil {
 				for j, b := range books {
 					if j >= 3 {
@@ -817,7 +817,7 @@ func AIReviewFullMode(ctx context.Context, progress operations.ProgressReporter,
 	var inputs []ai.AuthorDiscoveryInput
 	for _, author := range allAuthors {
 		var sampleTitles []string
-		books, err := store.GetBooksByAuthorIDWithRole(author.ID)
+		books, err := store.GetBooksByAuthorIDWithRoleCore(author.ID)
 		if err == nil {
 			for j, b := range books {
 				if j >= 3 {
@@ -877,7 +877,7 @@ func AIReviewFullMode(ctx context.Context, progress operations.ProgressReporter,
 		// Fix book count — count books for all authors in the group
 		totalBooks := 0
 		for _, aid := range disc.AuthorIDs {
-			bks, err := store.GetBooksByAuthorIDWithRole(aid)
+			bks, err := store.GetBooksByAuthorIDWithRoleCore(aid)
 			if err == nil {
 				totalBooks += len(bks)
 			}

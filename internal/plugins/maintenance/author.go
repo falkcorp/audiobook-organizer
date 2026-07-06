@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e5f6a7b8-c9d0-1234-ef01-456789012345
-// last-edited: 2026-05-07
+// last-edited: 2026-07-05
 
 package maintenance
 
@@ -159,7 +159,7 @@ func (p *Plugin) runAuthorSplitScan(ctx context.Context, _ json.RawMessage, repo
 		}
 
 		// Re-link books from composite to individual authors
-		books, err := store.GetBooksByAuthorIDWithRole(author.ID)
+		books, err := store.GetBooksByAuthorIDWithRoleCore(author.ID)
 		if err != nil {
 			errCount++
 			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Failed to get books for author %q: %v", author.Name, err))
@@ -208,7 +208,13 @@ func (p *Plugin) runAuthorSplitScan(ctx context.Context, _ json.RawMessage, repo
 			if book.AuthorID != nil && *book.AuthorID == author.ID && len(newAuthors) > 0 {
 				firstID := newAuthors[0].ID
 				book.AuthorID = &firstID
-				_, _ = store.UpdateBook(book.ID, &book)
+				// book is BookCore (heavy fields nil) — bridge via .ToBook()
+				// so PebbleStore.UpdateBook sees the expected all-nil heavy
+				// fields and restores them from the stored row (STOR-1 guard
+				// in UpdateBook), rather than a type mismatch or an
+				// accidental heavy-field wipe.
+				full := book.ToBook()
+				_, _ = store.UpdateBook(book.ID, &full)
 			}
 			booksUpdated++
 		}

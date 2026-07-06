@@ -1,5 +1,5 @@
 // file: internal/server/handlers/entities/interfaces.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 43710377-fdb3-490c-872e-fd03309163be
 // last-edited: 2026-07-05
 
@@ -36,7 +36,9 @@ type EntitiesStore interface {
 	// GetBooksByAuthorIDCore is Core-typed (STOREFID P3-W2) — see
 	// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
 	GetBooksByAuthorIDCore(authorID int) ([]database.BookCore, error)
-	GetBooksByAuthorIDWithRole(authorID int) ([]database.Book, error)
+	// GetBooksByAuthorIDWithRoleCore is Core-typed (STOREFID P3-W2b) — see
+	// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
+	GetBooksByAuthorIDWithRoleCore(authorID int) ([]database.BookCore, error)
 
 	// Book authors / narrators join tables
 	GetBookAuthors(bookID string) ([]database.BookAuthor, error)

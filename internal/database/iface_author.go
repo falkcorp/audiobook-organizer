@@ -1,5 +1,5 @@
 // file: internal/database/iface_author.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 2e3b78c0-c989-48c0-a324-b88ea52b1ccd
 // last-edited: 2026-07-05
 
@@ -16,9 +16,13 @@ type AuthorReader interface {
 	GetAllAuthorAliases() ([]AuthorAlias, error)
 	FindAuthorByAlias(aliasName string) (*Author, error)
 	GetBookAuthors(bookID string) ([]BookAuthor, error)
-	// GetBooksByAuthorIDWithRole is SLIM (memdb projection) — see
+	// GetBooksByAuthorIDWithRoleCore is Core-typed (STOREFID P3-W2b): the
+	// return type is BookCore, not Book, so the nine heavy fields
+	// (Description, VersionNotes, BookSigV1, BookSigV1Mask, BookSigSegments,
+	// BookSigBuiltAt, BookSigCoveragePct, Author, Series) being absent is
+	// compiler-enforced rather than silently nil'd. See
 	// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
-	GetBooksByAuthorIDWithRole(authorID int) ([]Book, error)
+	GetBooksByAuthorIDWithRoleCore(authorID int) ([]BookCore, error)
 	GetAllAuthorBookCounts() (map[int]int, error)
 	GetAllAuthorFileCounts() (map[int]int, error)
 	GetAuthorTombstone(oldID int) (int, error)

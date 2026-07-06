@@ -1,5 +1,5 @@
 // file: internal/server/entities_ops.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f7e2a91-b4c6-4d85-9e13-7a2f10c84d32
 
 // entities_ops registers the UOS-02 OperationDefs for author entity
@@ -85,7 +85,7 @@ func (s *Server) RegisterAuthorMergeOp(reg *opsregistry.Registry) error {
 				if mergeID == keepID {
 					continue
 				}
-				books, err := store.GetBooksByAuthorIDWithRole(mergeID)
+				books, err := store.GetBooksByAuthorIDWithRoleCore(mergeID)
 				if err != nil {
 					mergeErrors = append(mergeErrors, fmt.Sprintf("failed to get books for author %d: %v", mergeID, err))
 					continue
@@ -217,7 +217,7 @@ func (s *Server) RegisterResolveProductionAuthorOp(reg *opsregistry.Registry) er
 
 			progress := registryProgressAdapter{r: reporter}
 
-			books, err := store.GetBooksByAuthorIDWithRole(authorID)
+			books, err := store.GetBooksByAuthorIDWithRoleCore(authorID)
 			if err != nil {
 				return fmt.Errorf("failed to get books: %w", err)
 			}

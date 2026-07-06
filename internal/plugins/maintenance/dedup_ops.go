@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedup_ops.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e1f2a3b4-c5d6-7890-4567-012345678901
-// last-edited: 2026-05-07
+// last-edited: 2026-07-05
 
 package maintenance
 
@@ -94,7 +94,7 @@ func (p *Plugin) runAIDedupBatch(ctx context.Context, _ json.RawMessage, reporte
 	var inputs []ai.AuthorDiscoveryInput
 	for _, author := range allAuthors {
 		var sampleTitles []string
-		books, bErr := store.GetBooksByAuthorIDWithRole(author.ID)
+		books, bErr := store.GetBooksByAuthorIDWithRoleCore(author.ID)
 		if bErr == nil {
 			for j, b := range books {
 				if j >= 3 {
