@@ -1,5 +1,5 @@
 # file: .github/workflows/release-prod.yml
-# version: 4.9.5
+# version: 4.9.6
 # guid: f1a2b3c4-d5e6-7f8a-9b0c-1d2e3f4a5b6c
 # last-edited: 2026-07-06
 
@@ -42,7 +42,7 @@ permissions:
 jobs:
   release:
     name: Create Production Release
-    uses: falkcorp/github-common/.github/workflows/reusable-release.yml@f7e012d85bf1df8013304327c4831ab142eb209b # v2.14.3 (gha-release-go GORELEASER_CURRENT_TAG pin)
+    uses: falkcorp/github-common/.github/workflows/reusable-release.yml@b3f278f1b6fe7b08f428ce6335a1f24a961f1718 # v2.14.4 (cleanup-step self-delete guard)
     with:
       release-type: ${{ github.event.inputs.release-type }}
       prerelease: false

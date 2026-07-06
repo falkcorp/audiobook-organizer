@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.111.2 -->
+<!-- version: 3.111.3 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-06 -->
 
@@ -8,6 +8,25 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 6, 2026 - fix(ci): bump ghcommon pin for cleanup-step self-delete guard (7th release-pipeline blocker)
+
+- **`fix(ci)`** — after the `GORELEASER_CURRENT_TAG` fix resolved the tag
+  ambiguity, the very next Production Release run (`v0.217.6`) reported
+  full success end-to-end (binaries, Docker artifact, changelog all
+  uploaded, "🎉 Release ready" logged) — but `gh release view v0.217.6`
+  404'd immediately afterward. Traced to the same job's own
+  "Clean up superseded drafts and prereleases" step: its `gh release
+  list --json tagName,isDraft,isPrerelease` query returned the
+  just-created stable release's own tag as if it were a draft/prerelease
+  (likely a stale list read, or a leftover rolling-draft placeholder
+  reused under the same tag), and the step deleted it seconds after
+  publish (job log: `Deleting superseded release: v0.217.6 (base
+  0.217.6 <= 0.217.6)`). Fixed in `falkcorp/github-common#319` (v2.14.4)
+  by hard-guarding the cleanup loop against ever deleting a tag matching
+  `$STABLE_VERSION`, independent of what `isDraft`/`isPrerelease` report.
+  Bumped the `reusable-release.yml` pin here to
+  `falkcorp/github-common@b3f278f`.
 
 #### July 6, 2026 - fix(ci): bump ghcommon pin for GORELEASER_CURRENT_TAG fix (6th release-pipeline blocker)
 
