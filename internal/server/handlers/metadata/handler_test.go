@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/handler_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 1d31ef73-7c7a-4c3b-a840-01b0865023d7
 // last-edited: 2026-07-07
 
@@ -169,7 +169,7 @@ func TestValidateMetadata_BadBody(t *testing.T) {
 
 func TestExportMetadata(t *testing.T) {
 	h, d := newHandler(t)
-	d.store.EXPECT().GetAllBooks(0, 0).Return([]database.Book{{ID: "b1", Title: "T"}}, nil)
+	d.store.EXPECT().GetAllBooksCore(0, 0).Return([]database.BookCore{{ID: "b1", Title: "T"}}, nil)
 	w := doReq(h.ExportMetadata, http.MethodGet, "/metadata/export", nil, nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())

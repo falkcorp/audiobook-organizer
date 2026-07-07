@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
 // last-edited: 2026-07-07
 
@@ -331,7 +331,7 @@ func (h *Handler) exportMetadataImpl(c *gin.Context) {
 	}
 
 	// Get all books
-	books, err := store.GetAllBooks(0, 0) // No limit/offset
+	books, err := store.GetAllBooksCore(0, 0) // No limit/offset
 	if err != nil {
 		httputil.InternalError(c, "failed to get audiobooks", err)
 		return

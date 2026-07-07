@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.116.0 -->
+<!-- version: 3.117.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-07 -->
 
@@ -8,6 +8,34 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 7, 2026 - refactor(store): migrate package-local GetAllBooks callers (STOREFID W5d-1)
+
+- **`refactor(store)`** — migrated the **10 package-local `GetAllBooks` call sites** (first of three
+  W5d batches; the interface/mock-touching sites are deferred to W5d-2/W5d-3). No shared interface or
+  mockery mock changed.
+- **CORE retypes (compile-certified — these read ONLY Core-safe fields, no writeback):**
+  `dedup/engine.go` (`checkExactISBNScan` + `getAllBooks()`/`getAllBooksUnfiltered()` whose `[]Book`
+  returns are retyped `[]BookCore`, ripple followed through FullScan/EmbedBooksAsync/AcoustIDScan —
+  all Core-safe or re-fetch full rows via `GetBookByID`), `maintenance/jobs/{generate_itl_tests,
+  merge_chapter_groups,scan_chapter_groups}.go`, and `metadata` export (`ExportMetadata` param →
+  `[]BookCore`). A green `go build` is the audit — a stripped-field read cannot compile.
+- **PageBooks SDK (`pkg/plugin/sdk/iterate.go`):** rerouted the internal fetch from `GetAllBooks`
+  (offset) to `GetAllBooksFullFrom` (afterID cursor) so the public `func(database.Book)` callback keeps
+  receiving FULL books (external plugins may read heavy fields). The exported `PageBooks` signature and
+  callback are byte-identical; only the SDK's local `BookStore` interface changed (drops `GetAllBooks`,
+  requires `GetAllBooksFullFrom`) — which also keeps `database.Store` satisfying it after W5z removes
+  `GetAllBooks`.
+- **Organizer writebacks (`organizer/service.go`):** the two `PerformOrganize` fetches use
+  `GetAllBooksCore`; the downstream `organizeBooks`/`ReOrganizeInPlace` writebacks now hydrate the full
+  row via a shared `hydrateAndUpdateBook` helper (fail-closed) before `UpdateBook`. This is defensive
+  consistency for most sites (STOR-1 already guards 7/9 heavy fields, and Author/Series are inert here
+  since `GetBookByID` doesn't populate them). **One genuine (pre-existing) slim-writeback was found and
+  fixed:** `CreateOrganizedVersion` wrote the page-sourced original book back with the version-group /
+  non-primary / `organized_source` state stamp — under prod's memdb default that struct is heavy-field-
+  nil, so it wiped the original's denormalized `Author`/`Series`. Now hydrated before write.
+- `go build` / `go vet` / `-race` tests green across dedup, organizer, maintenance/jobs, metadata,
+  itunes, scanner, sdk. Test mocks forward through the Core path with real data (no vacuous stubs).
 
 #### July 7, 2026 - refactor(store): route GetAllBooks heavy-field readers to GetAllBooksFullFrom cursor (STOREFID W5c)
 

@@ -1,7 +1,7 @@
 // file: internal/scanner/chapter_consolidator.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
-// last-edited: 2026-04-30
+// last-edited: 2026-07-07
 
 package scanner
 
@@ -92,7 +92,7 @@ func chapterTitlesAreSimilar(a, b string) bool {
 //
 // minFiles defaults to 3 when ≤ 0. maxPerFileDuration defaults to 600 s
 // (10 min) when ≤ 0.
-func DetectChapterGroups(books []database.Book, minFiles, maxPerFileDuration int) []ChapterGroup {
+func DetectChapterGroups(books []database.BookCore, minFiles, maxPerFileDuration int) []ChapterGroup {
 	if len(books) == 0 {
 		return nil
 	}
@@ -104,7 +104,7 @@ func DetectChapterGroups(books []database.Book, minFiles, maxPerFileDuration int
 	}
 
 	type candidate struct {
-		book          database.Book
+		book          database.BookCore
 		strippedTitle string
 	}
 

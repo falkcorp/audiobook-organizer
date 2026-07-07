@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/scan_chapter_groups.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: a1000019-0000-0000-0000-000000000019
-// last-edited: 2026-05-01
+// last-edited: 2026-07-07
 
 package jobs
 
@@ -32,7 +32,7 @@ func (j *scanChapterGroupsJob) Description() string {
 }
 func (j *scanChapterGroupsJob) CanResume() bool { return false }
 func (j *scanChapterGroupsJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, _ bool) error {
-	books, err := store.GetAllBooks(0, 0)
+	books, err := store.GetAllBooksCore(0, 0)
 	if err != nil {
 		return err
 	}

@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_test.go
-// version: 2.7.0
+// version: 2.8.0
 // guid: 2a7e4d91-c538-4f06-b1d3-9e8c5a6f0d72
-// last-edited: 2026-07-05
+// last-edited: 2026-07-07
 
 package dedup
 
@@ -42,6 +42,27 @@ func setupTestEngine(t *testing.T) (*Engine, *database.MockStore, *database.Embe
 	t.Cleanup(func() { config.AppConfig.Dedup.EmbeddingsEnabled = prev })
 
 	mock := &database.MockStore{}
+	// GetAllBooksCoreFunc forwards to whatever GetAllBooksFunc the calling
+	// test configures (even if set AFTER setupTestEngine returns — this
+	// closure looks it up at call time, not at assignment time), converting
+	// to []database.BookCore. STOREFID W5d-1 moved getAllBooks/
+	// getAllBooksUnfiltered/checkExactISBNScan onto GetAllBooksCore, so every
+	// test that only sets GetAllBooksFunc must still get real data back
+	// through the Core path rather than the mock's nil-nil default.
+	mock.GetAllBooksCoreFunc = func(limit, offset int) ([]database.BookCore, error) {
+		if mock.GetAllBooksFunc == nil {
+			return nil, nil
+		}
+		books, err := mock.GetAllBooksFunc(limit, offset)
+		if err != nil {
+			return nil, err
+		}
+		cores := make([]database.BookCore, len(books))
+		for i := range books {
+			cores[i] = books[i].Core()
+		}
+		return cores, nil
+	}
 	ms := merge.NewService(mock)
 	engine := NewEngine(es, mock, nil, nil, ms)
 
@@ -1283,6 +1304,17 @@ func buildFullScanMock(books []database.Book) *database.MockStore {
 	mock.GetBookByFileHashFunc = func(hash string) (*database.Book, error) { return nil, nil }
 	mock.GetBookFilesFunc = func(bookID string) ([]database.BookFile, error) { return nil, nil }
 	mock.GetAllBooksFunc = func(limit, offset int) ([]database.Book, error) { return books, nil }
+	// FullScan's getAllBooksUnfiltered routes through GetAllBooksCore
+	// (STOREFID W5d-1); this mock is constructed standalone (not via
+	// setupTestEngine), so it needs its own real-data GetAllBooksCoreFunc
+	// rather than the mock's nil-nil default.
+	mock.GetAllBooksCoreFunc = func(limit, offset int) ([]database.BookCore, error) {
+		cores := make([]database.BookCore, len(books))
+		for i := range books {
+			cores[i] = books[i].Core()
+		}
+		return cores, nil
+	}
 	return mock
 }
 
