@@ -1,6 +1,7 @@
 // file: internal/server/itunes_error_test.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: b2c3d4e5-f6a7-8901-2345-678901abcdef
+// last-edited: 2026-07-07
 
 package server
 
@@ -101,7 +102,7 @@ func TestITunesImport_EmptyXML(t *testing.T) {
 	testutil.WaitForOp(t, env.Store, resp.OperationID, 15*time.Second)
 
 	// Should complete with 0 books
-	books, err := env.Store.GetAllBooks(100, 0)
+	books, err := env.Store.GetAllBooksCore(100, 0)
 	require.NoError(t, err)
 	assert.Len(t, books, 0)
 }
@@ -148,7 +149,7 @@ func TestITunesImport_MissingFilesPartial(t *testing.T) {
 	testutil.WaitForOp(t, env.Store, resp.OperationID, 15*time.Second)
 
 	// Should have imported the existing book, failed on the missing ones
-	books, err := env.Store.GetAllBooks(100, 0)
+	books, err := env.Store.GetAllBooksCore(100, 0)
 	require.NoError(t, err)
 	assert.Equal(t, 1, len(books), "should import 1 existing book, skip 2 missing")
 	assert.Equal(t, "Existing Book", books[0].Title)

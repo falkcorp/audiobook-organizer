@@ -1,7 +1,7 @@
 // file: internal/server/scan_integration_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: f6a7b8c9-d0e1-2345-fabc-678901234def
-// last-edited: 2026-05-03
+// last-edited: 2026-07-07
 
 package server
 
@@ -35,7 +35,7 @@ func TestScanService_ScanWithRealFiles(t *testing.T) {
 	}, logger.New("test"))
 	require.NoError(t, err)
 
-	books, err := env.Store.GetAllBooks(100, 0)
+	books, err := env.Store.GetAllBooksCore(100, 0)
 	require.NoError(t, err)
 	assert.Len(t, books, 3, "should find 3 audiobook files")
 
@@ -92,7 +92,7 @@ func TestScanService_AutoOrganize(t *testing.T) {
 	}, logger.New("test"))
 	require.NoError(t, err)
 
-	books, err := env.Store.GetAllBooks(100, 0)
+	books, err := env.Store.GetAllBooksCore(100, 0)
 	require.NoError(t, err)
 	require.Len(t, books, 1)
 
@@ -123,7 +123,7 @@ func TestScanService_MultipleFolders(t *testing.T) {
 	}, logger.New("test"))
 	require.NoError(t, err)
 
-	books, err := env.Store.GetAllBooks(100, 0)
+	books, err := env.Store.GetAllBooksCore(100, 0)
 	require.NoError(t, err)
 	assert.Len(t, books, 2, "should find books from both import dirs")
 }

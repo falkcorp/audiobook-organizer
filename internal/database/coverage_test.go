@@ -1,7 +1,7 @@
 // file: internal/database/coverage_test.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: 3b82b22e-cd28-49b8-8b9c-e0a34b18e631
-// last-edited: 2026-07-06
+// last-edited: 2026-07-07
 
 // NOTE(fable5 T022): TestInitializeStoreAndClose, TestDBInterfaceWrapper,
 // and TestWebHelpers removed — they tested SQLite initialisation and global
@@ -192,8 +192,8 @@ func TestMockStore_AllMethods(t *testing.T) {
 	}
 
 	// Test book methods
-	if books, err := mock.GetAllBooks(10, 0); err != nil || books != nil {
-		t.Errorf("GetAllBooks() = %v, %v; want nil, nil", books, err)
+	if books, err := mock.GetAllBooksCore(10, 0); err != nil || books != nil {
+		t.Errorf("GetAllBooksCore() = %v, %v; want nil, nil", books, err)
 	}
 	if book, err := mock.GetBookByID("book-1"); err != nil || book != nil {
 		t.Errorf("GetBookByID() = %v, %v; want nil, nil", book, err)

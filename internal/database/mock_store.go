@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.74.0
+// version: 1.75.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-07-07
 
@@ -33,7 +33,12 @@ var _ Store = (*MockStore)(nil)
 type MockStore struct {
 	// Book methods
 	GetBookByIDFunc                 func(id string) (*Book, error)
-	GetBookByFilePathFunc           func(path string) (*Book, error)
+	GetBookByFilePathFunc func(path string) (*Book, error)
+	// GetAllBooksFunc is test-only plumbing (NOT a Store interface method —
+	// GetAllBooks was removed from the interface in STOREFID W5z). Several
+	// dedup tests set only this; GetAllBooksCoreFunc's default (see
+	// setupTestEngine in internal/dedup) forwards to it so those tests keep
+	// working without a mechanical per-file migration.
 	GetAllBooksFunc                 func(limit, offset int) ([]Book, error)
 	GetAllBooksCoreFunc             func(limit, offset int) ([]BookCore, error)
 	GetAllBooksFullFromFunc         func(afterID string, limit int) ([]Book, error)
@@ -660,13 +665,6 @@ func (m *MockStore) DeleteWork(id string) error {
 func (m *MockStore) GetBooksByWorkID(workID string) ([]Book, error) {
 	if m.GetBooksByWorkIDFunc != nil {
 		return m.GetBooksByWorkIDFunc(workID)
-	}
-	return nil, nil
-}
-
-func (m *MockStore) GetAllBooks(limit, offset int) ([]Book, error) {
-	if m.GetAllBooksFunc != nil {
-		return m.GetAllBooksFunc(limit, offset)
 	}
 	return nil, nil
 }

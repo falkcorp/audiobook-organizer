@@ -1,6 +1,7 @@
 // file: internal/server/organize_integration_test.go
-// version: 1.0.3
+// version: 1.1.0
 // guid: b8c9d0e1-f2a3-4567-bcde-890123456f01
+// last-edited: 2026-07-07
 
 package server
 
@@ -72,12 +73,12 @@ func TestOrganizeService_ViaHTTP(t *testing.T) {
 	testutil.WaitForOp(t, env.Store, opID, 15*time.Second)
 
 	// Verify book was organized — now creates a new version record
-	books, err := env.Store.GetAllBooks(100, 0)
+	books, err := env.Store.GetAllBooksCore(100, 0)
 	require.NoError(t, err)
 	require.Len(t, books, 2, "should have original + organized version")
 
 	// Find the organized version (in library dir) and original
-	var organized, original *database.Book
+	var organized, original *database.BookCore
 	for i := range books {
 		if strings.HasPrefix(books[i].FilePath, env.RootDir) {
 			organized = &books[i]

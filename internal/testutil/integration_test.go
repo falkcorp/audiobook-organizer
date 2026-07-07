@@ -1,7 +1,7 @@
 // file: internal/testutil/integration_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b7c8d9e0-f1a2-4b3c-8d9e-0f1a2b3c4d5e
-// last-edited: 2026-07-01
+// last-edited: 2026-07-07
 
 package testutil
 
@@ -53,14 +53,14 @@ func TestSetupIntegration_MemDBWarmupComplete(t *testing.T) {
 		t.Fatalf("CreateBook: %v", err)
 	}
 
-	books, err := ps.GetAllBooks(100, 0)
+	books, err := ps.GetAllBooksCore(100, 0)
 	if err != nil {
-		t.Fatalf("GetAllBooks: %v", err)
+		t.Fatalf("GetAllBooksCore: %v", err)
 	}
 	for _, b := range books {
 		if b.ID == book.ID {
 			return
 		}
 	}
-	t.Fatalf("created book %s not visible via GetAllBooks immediately after creation (memdb warmup race)", book.ID)
+	t.Fatalf("created book %s not visible via GetAllBooksCore immediately after creation (memdb warmup race)", book.ID)
 }

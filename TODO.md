@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.68.0 -->
+<!-- version: 9.69.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-07 -->
 
@@ -34,7 +34,8 @@ future agent) can scan the entire workspace in one page.
   Under prod's memdb default `book` has nil `Author`/`Series` (not STOR-1-guarded), so this
   wipes the original's denormalized author/series. Prod behavior is unchanged by W5d-1
   (memdb already stripped these); the `.ToBook()` in W5d-1 just makes it no longer
-  compile-visible once `GetAllBooks` is removed in W5z.
+  compile-visible — `GetAllBooks` was removed entirely in W5z (2026-07-07), so this is now
+  the only remaining route back to a full `Book` in this code path.
 - **Fix must be careful:** hydrating via `GetBookByID` before the write (the usual pattern)
   preserves Author/Series BUT must NOT regress the version-group state transition to
   fail-closed — a `GetBookByID` error must still demote the original to non-primary, or the

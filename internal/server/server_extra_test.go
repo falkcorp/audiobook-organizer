@@ -1,7 +1,7 @@
 // file: internal/server/server_extra_test.go
-// version: 1.4.2
+// version: 1.5.0
 // guid: 61a2d3c4-80ab-4f6f-8c39-15a2ac5b7f0c
-// last-edited: 2026-07-01
+// last-edited: 2026-07-07
 
 package server
 
@@ -712,7 +712,7 @@ func TestSoftDeleteExcludeFromList(t *testing.T) {
 	require.NoError(t, err)
 
 	// List all books
-	all, err := database.GetGlobalStore().GetAllBooks(100, 0)
+	all, err := database.GetGlobalStore().GetAllBooksCore(100, 0)
 	require.NoError(t, err)
 
 	// Count them

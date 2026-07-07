@@ -1,7 +1,7 @@
 // file: internal/database/memdb_reads_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000007
-// last-edited: 2026-07-06
+// last-edited: 2026-07-07
 
 package database
 
@@ -197,7 +197,7 @@ func TestMemStore_GetBooksByAuthorID(t *testing.T) {
 	}
 }
 
-func TestMemStore_GetAllBooks_Filters(t *testing.T) {
+func TestMemStore_GetAllBooksCore_Filters(t *testing.T) {
 	m, err := NewMemStore()
 	if err != nil {
 		t.Fatalf("NewMemStore: %v", err)
@@ -211,13 +211,13 @@ func TestMemStore_GetAllBooks_Filters(t *testing.T) {
 	seedMemStore(t, m, books, nil, nil, nil)
 
 	// author_id=1 && is_primary && !deleted → only b1
-	got, err := m.GetAllBooks(100, 0, map[string]interface{}{
+	got, err := m.GetAllBooksCore(100, 0, map[string]interface{}{
 		"author_id":           1,
 		"is_primary_version":  true,
 		"marked_for_deletion": false,
 	})
 	if err != nil {
-		t.Fatalf("GetAllBooks: %v", err)
+		t.Fatalf("GetAllBooksCore: %v", err)
 	}
 	if len(got) != 1 || got[0].ID != "b1" {
 		ids := []string{}
