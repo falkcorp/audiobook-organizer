@@ -1,5 +1,5 @@
 // file: internal/itunes/service/importer.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
 // last-edited: 2026-07-07
 
@@ -532,13 +532,17 @@ func (imp *Importer) Sync(ctx context.Context, libraryPath string, pathMappings 
 	}
 
 	log.UpdateProgress(0, 0, "Building persistent ID index...")
-	allBooks, err := imp.store.GetAllBooks(100000, 0)
+	// Core-typed: the matching indices below only ever read/write Core-safe
+	// fields (ITunesPersistentID, FilePath, Title, ITunesPlayCount,
+	// ITunesRating, ITunesBookmark, ITunesLastPlayed). The actual writeback
+	// hydrates a full row (see below) so it never wipes Author/Series.
+	allBooks, err := imp.store.GetAllBooksCore(100000, 0)
 	if err != nil {
 		return fmt.Errorf("failed to load books for index: %w", err)
 	}
-	pidIndex := make(map[string]*database.Book, len(allBooks))
-	pathIndex := make(map[string]*database.Book, len(allBooks))
-	titleIndex := make(map[string]*database.Book, len(allBooks))
+	pidIndex := make(map[string]*database.BookCore, len(allBooks))
+	pathIndex := make(map[string]*database.BookCore, len(allBooks))
+	titleIndex := make(map[string]*database.BookCore, len(allBooks))
 	for i := range allBooks {
 		if allBooks[i].ITunesPersistentID != nil && *allBooks[i].ITunesPersistentID != "" {
 			pidIndex[*allBooks[i].ITunesPersistentID] = &allBooks[i]
@@ -636,20 +640,32 @@ func (imp *Importer) Sync(ctx context.Context, libraryPath string, pathMappings 
 			}
 
 			if changed {
-				if _, err := imp.store.UpdateBook(existing.ID, existing); err != nil {
-					log.Error("Failed to update '%s': %v", existing.Title, err)
+				// Hydrate full row before writeback — existing is Core (slim);
+				// writing it straight through UpdateBook would wipe Author/Series.
+				full, hydrateErr := imp.store.GetBookByID(existing.ID)
+				if hydrateErr != nil || full == nil {
+					log.Error("Failed to hydrate '%s' for update: %v", existing.Title, hydrateErr)
 				} else {
-					updated++
-					if activityFn != nil {
-						activityFn(database.ActivityEntry{
-							Tier:    "change",
-							Type:    "itunes_sync",
-							Level:   "info",
-							Source:  "scheduler",
-							BookID:  existing.ID,
-							Summary: fmt.Sprintf("iTunes sync updated: %s", existing.Title),
-							Tags:    []string{"itunes"},
-						})
+					full.ITunesPersistentID = existing.ITunesPersistentID
+					full.ITunesPlayCount = existing.ITunesPlayCount
+					full.ITunesRating = existing.ITunesRating
+					full.ITunesBookmark = existing.ITunesBookmark
+					full.ITunesLastPlayed = existing.ITunesLastPlayed
+					if _, err := imp.store.UpdateBook(full.ID, full); err != nil {
+						log.Error("Failed to update '%s': %v", full.Title, err)
+					} else {
+						updated++
+						if activityFn != nil {
+							activityFn(database.ActivityEntry{
+								Tier:    "change",
+								Type:    "itunes_sync",
+								Level:   "info",
+								Source:  "scheduler",
+								BookID:  full.ID,
+								Summary: fmt.Sprintf("iTunes sync updated: %s", full.Title),
+								Tags:    []string{"itunes"},
+							})
+						}
 					}
 				}
 			} else {
@@ -1213,7 +1229,7 @@ func (imp *Importer) enrichConcurrency() int {
 //     colliding case gets the same one-wins/one-fails outcome the serial
 //     loop always produced (order-independent, same result set).
 func (imp *Importer) organizeImportedBooks(ctx context.Context, status *itunesImportStatus, log logger.Logger) {
-	books, err := imp.store.GetAllBooks(100000, 0)
+	core, err := imp.store.GetAllBooksCore(100000, 0)
 	if err != nil {
 		log.Error("Failed to list books for organize: %v", err)
 		return
@@ -1222,17 +1238,26 @@ func (imp *Importer) organizeImportedBooks(ctx context.Context, status *itunesIm
 	// Pre-filter to the books this phase actually organizes, same filter
 	// the original sequential loop applied inline per iteration. Keeps
 	// RunItems' Concurrency fan-out and progress denominator scoped to
-	// real work only.
-	toOrganize := make([]*database.Book, 0, len(books))
-	for i := range books {
-		book := &books[i]
-		if book.LibraryState == nil || *book.LibraryState != "imported" {
+	// real work only. The filter itself only needs Core-safe fields
+	// (LibraryState, ITunesImportSource), but organizeOneBook/organizeDestKey
+	// generate the destination path from Author/Series (heavy fields), and
+	// the writeback below must never persist a slim struct — so every
+	// surviving candidate is hydrated via GetBookByID before being queued.
+	toOrganize := make([]*database.Book, 0, len(core))
+	for i := range core {
+		c := &core[i]
+		if c.LibraryState == nil || *c.LibraryState != "imported" {
 			continue
 		}
-		if book.ITunesImportSource == nil {
+		if c.ITunesImportSource == nil {
 			continue
 		}
-		toOrganize = append(toOrganize, book)
+		full, hydrateErr := imp.store.GetBookByID(c.ID)
+		if hydrateErr != nil || full == nil {
+			log.Warn("Failed to hydrate book %s for organize: %v", c.ID, hydrateErr)
+			continue
+		}
+		toOrganize = append(toOrganize, full)
 	}
 
 	var mu sync.Mutex

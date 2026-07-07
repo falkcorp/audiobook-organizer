@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
-// last-edited: 2026-07-03
+// last-edited: 2026-07-07
 
 package maintenance
 
@@ -110,7 +110,7 @@ var _ ServerDeps = fakeDeps{}
 func newTestPlugin(books []database.Book) (*Plugin, *[]database.Book) {
 	written := make([]database.Book, 0)
 	store := &database.MockStore{
-		GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) {
+		GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) {
 			if offset >= len(books) {
 				return nil, nil
 			}
@@ -118,7 +118,20 @@ func newTestPlugin(books []database.Book) (*Plugin, *[]database.Book) {
 			if end > len(books) {
 				end = len(books)
 			}
-			return books[offset:end], nil
+			core := make([]database.BookCore, end-offset)
+			for i, b := range books[offset:end] {
+				core[i] = b.Core()
+			}
+			return core, nil
+		},
+		GetBookByIDFunc: func(id string) (*database.Book, error) {
+			for i := range books {
+				if books[i].ID == id {
+					b := books[i]
+					return &b, nil
+				}
+			}
+			return nil, nil
 		},
 		UpdateBookFunc: func(_ string, b *database.Book) (*database.Book, error) {
 			written = append(written, *b)

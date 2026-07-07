@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/fix_library_states.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: a1000008-0000-0000-0000-000000000008
-// last-edited: 2026-05-01
+// last-edited: 2026-07-07
 
 package jobs
 
@@ -30,7 +30,7 @@ func (j *fixLibraryStatesJob) Description() string {
 }
 func (j *fixLibraryStatesJob) CanResume() bool { return false }
 func (j *fixLibraryStatesJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, dryRun bool) error {
-	books, err := store.GetAllBooks(0, 0)
+	books, err := store.GetAllBooksCore(0, 0)
 	if err != nil {
 		return err
 	}
@@ -55,9 +55,15 @@ func (j *fixLibraryStatesJob) Run(ctx context.Context, store database.Store, rep
 			continue
 		}
 		if !dryRun {
-			updated := *book
-			updated.LibraryState = &wantState
-			if _, uerr := store.UpdateBook(book.ID, &updated); uerr != nil {
+			// Hydrate before writeback — book is Core (slim); writing it
+			// straight through UpdateBook would wipe Author/Series.
+			full, herr := store.GetBookByID(book.ID)
+			if herr != nil || full == nil {
+				slog.Error("fix-library-states hydrate failed", "id", book.ID, "err", herr)
+				continue
+			}
+			full.LibraryState = &wantState
+			if _, uerr := store.UpdateBook(full.ID, full); uerr != nil {
 				msg := uerr.Error()
 				slog.Error("fix-library-states UpdateBook failed", "details", msg)
 			} else {

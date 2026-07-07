@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/refetch_missing_authors_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e4f5a6b7-c8d9-0123-efab-456789012789
-// last-edited: 2026-05-05
+// last-edited: 2026-07-07
 
 package jobs_test
 
@@ -47,7 +47,7 @@ func TestRefetchMissingAuthorsJob_DefaultParamsDryRunTrue(t *testing.T) {
 func TestRefetchMissingAuthorsJob_NoBooksReturned(t *testing.T) {
 	// No books at all — job should complete cleanly.
 	store := &database.MockStore{
-		GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) {
+		GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) {
 			return nil, nil
 		},
 	}
@@ -63,8 +63,8 @@ func TestRefetchMissingAuthorsJob_AllBooksHaveAuthor(t *testing.T) {
 	// No books without author — nothing to update.
 	authorID := 1
 	store := &database.MockStore{
-		GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) {
-			return []database.Book{
+		GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) {
+			return []database.BookCore{
 				{ID: "b1", Title: "Book One", AuthorID: &authorID},
 			}, nil
 		},
@@ -87,8 +87,8 @@ func TestRefetchMissingAuthorsJob_AllBooksHaveAuthor(t *testing.T) {
 func TestRefetchMissingAuthorsJob_SkipsBookWithNoFiles(t *testing.T) {
 	// Book with no author and no files — should be skipped without error.
 	store := &database.MockStore{
-		GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) {
-			return []database.Book{
+		GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) {
+			return []database.BookCore{
 				{ID: "b-nofile", Title: "Orphan Book", AuthorID: nil, FilePath: ""},
 			}, nil
 		},
@@ -109,13 +109,13 @@ func TestRefetchMissingAuthorsJob_SkipsBookWithNoFiles(t *testing.T) {
 }
 
 func TestRefetchMissingAuthorsJob_CancelationRespected(t *testing.T) {
-	books := make([]database.Book, 5)
+	books := make([]database.BookCore, 5)
 	for i := range books {
-		books[i] = database.Book{ID: "b-cancel-" + string(rune('0'+i)), Title: "T"}
+		books[i] = database.BookCore{ID: "b-cancel-" + string(rune('0'+i)), Title: "T"}
 	}
 
 	store := &database.MockStore{
-		GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) {
+		GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) {
 			return books, nil
 		},
 	}
