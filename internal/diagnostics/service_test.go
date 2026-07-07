@@ -1,6 +1,7 @@
 // file: internal/diagnostics/service_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: d1a9n0st-1cs0-t3st-s3rv-1c3t3st0001
+// last-edited: 2026-07-07
 
 package diagnostics
 
@@ -22,10 +23,10 @@ import (
 
 func setupDiagnosticsMocks(t *testing.T) *dbmocks.MockStore {
 	store := dbmocks.NewMockStore(t)
-	store.EXPECT().GetAllBooks(10000, 0).Return([]database.Book{
+	store.EXPECT().GetAllBooksCore(10000, 0).Return([]database.BookCore{
 		{ID: "book1", Title: "Test Book"},
 	}, nil).Maybe()
-	store.EXPECT().GetAllBooks(10000, 10000).Return([]database.Book{}, nil).Maybe()
+	store.EXPECT().GetAllBooksCore(10000, 10000).Return([]database.BookCore{}, nil).Maybe()
 	store.EXPECT().GetAllAuthors().Return([]database.Author{}, nil).Maybe()
 	store.EXPECT().GetAllSeries().Return([]database.Series{}, nil).Maybe()
 	store.EXPECT().GetAllAuthorBookCounts().Return(map[int]int{}, nil).Maybe()
@@ -150,14 +151,14 @@ func TestService_GenerateExport_MetadataQuality(t *testing.T) {
 
 	authorID := 1
 	seriesID := 1
-	store.EXPECT().GetAllBooks(10000, 0).Unset()
-	store.EXPECT().GetAllBooks(10000, 0).Return([]database.Book{
+	store.EXPECT().GetAllBooksCore(10000, 0).Unset()
+	store.EXPECT().GetAllBooksCore(10000, 0).Return([]database.BookCore{
 		{ID: "book1", Title: "Complete Book", AuthorID: &authorID, SeriesID: &seriesID},
 		{ID: "book2", Title: "", AuthorID: nil},          // missing title, author, series
 		{ID: "book3", Title: "No Author", AuthorID: nil}, // missing author, series
 	}, nil).Maybe()
-	store.EXPECT().GetAllBooks(10000, 10000).Unset()
-	store.EXPECT().GetAllBooks(10000, 10000).Return([]database.Book{}, nil).Maybe()
+	store.EXPECT().GetAllBooksCore(10000, 10000).Unset()
+	store.EXPECT().GetAllBooksCore(10000, 10000).Return([]database.BookCore{}, nil).Maybe()
 	store.EXPECT().CountPrimaryBooks().Unset()
 	store.EXPECT().CountPrimaryBooks().Return(3, nil).Maybe()
 
