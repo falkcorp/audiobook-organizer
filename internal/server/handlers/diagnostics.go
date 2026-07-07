@@ -1,7 +1,7 @@
 // file: internal/server/handlers/diagnostics.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 14e70c44-73ca-456a-bc67-8dc6ba6e5736
-// last-edited: 2026-06-16
+// last-edited: 2026-07-07
 
 // DiagnosticsHandler hosts the diagnostics HTTP endpoints extracted from the
 // server package: ZIP export start/download, AI batch submit + results, applying
@@ -37,7 +37,7 @@ import (
 // the diagnostics service. Only CollectAllBooks is called by the handlers; the
 // concrete *diagnostics.Service satisfies it.
 type DiagnosticsService interface {
-	CollectAllBooks() ([]database.Book, error)
+	CollectAllBooks() ([]database.BookCore, error)
 }
 
 // MergeService is the narrow interface DiagnosticsHandler requires from the

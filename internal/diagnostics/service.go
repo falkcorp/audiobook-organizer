@@ -1,6 +1,7 @@
 // file: internal/diagnostics/service.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: d1a9n0st-1cs0-s3rv-1c3z-1pexp0rt001
+// last-edited: 2026-07-07
 
 package diagnostics
 
@@ -52,8 +53,8 @@ type SlimBook struct {
 	MarkedForDeletion    *bool   `json:"marked_for_deletion,omitempty"`
 }
 
-// ToSlimBook converts a database.Book to a SlimBook.
-func ToSlimBook(b database.Book) SlimBook {
+// ToSlimBook converts a database.BookCore to a SlimBook.
+func ToSlimBook(b database.BookCore) SlimBook {
 	return SlimBook{
 		ID:                   b.ID,
 		Title:                b.Title,
@@ -235,13 +236,13 @@ func (ds *Service) GenerateExport(category, description string) (string, error) 
 	return zipPath, nil
 }
 
-// CollectAllBooks paginates through GetAllBooks until no more results.
-func (ds *Service) CollectAllBooks() ([]database.Book, error) {
+// CollectAllBooks paginates through GetAllBooksCore until no more results.
+func (ds *Service) CollectAllBooks() ([]database.BookCore, error) {
 	const pageSize = 10000
-	var allBooks []database.Book
+	var allBooks []database.BookCore
 	offset := 0
 	for {
-		books, err := ds.db.GetAllBooks(pageSize, offset)
+		books, err := ds.db.GetAllBooksCore(pageSize, offset)
 		if err != nil {
 			return nil, err
 		}
@@ -293,7 +294,7 @@ func (ds *Service) writeSystemInfo(zw *zip.Writer, category, description string)
 	return WriteJSON(zw, "system_info.json", info)
 }
 
-func (ds *Service) writeBooks(zw *zip.Writer, allBooks []database.Book) error {
+func (ds *Service) writeBooks(zw *zip.Writer, allBooks []database.BookCore) error {
 	slim := make([]SlimBook, len(allBooks))
 	for i, b := range allBooks {
 		slim[i] = ToSlimBook(b)
@@ -356,7 +357,7 @@ func (ds *Service) writeSeries(zw *zip.Writer) error {
 }
 
 // writeBatchJSONL writes a batch.jsonl file based on current category and books.
-func (ds *Service) writeBatchJSONL(zw *zip.Writer, category, description string, allBooks []database.Book) error {
+func (ds *Service) writeBatchJSONL(zw *zip.Writer, category, description string, allBooks []database.BookCore) error {
 	slimBooks := make([]SlimBook, len(allBooks))
 	for i, b := range allBooks {
 		slimBooks[i] = ToSlimBook(b)
@@ -395,7 +396,7 @@ func (ds *Service) writeOperations(zw *zip.Writer) error {
 	return WriteJSON(zw, "operations.json", ops)
 }
 
-func (ds *Service) writeVersionGroups(zw *zip.Writer, allBooks []database.Book) error {
+func (ds *Service) writeVersionGroups(zw *zip.Writer, allBooks []database.BookCore) error {
 	groups := map[string][]SlimBook{}
 	for _, b := range allBooks {
 		if b.VersionGroupID != nil && *b.VersionGroupID != "" {
@@ -445,7 +446,7 @@ func (ds *Service) writeITunesAlbums(zw *zip.Writer) error {
 	return WriteJSON(zw, "itunes_albums.json", result)
 }
 
-func (ds *Service) writeMissingFields(zw *zip.Writer, allBooks []database.Book) error {
+func (ds *Service) writeMissingFields(zw *zip.Writer, allBooks []database.BookCore) error {
 	var missing []missingFieldEntry
 	for _, b := range allBooks {
 		var fields []string

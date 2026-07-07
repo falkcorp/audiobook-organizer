@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.118.0 -->
+<!-- version: 3.119.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-07 -->
 
@@ -8,6 +8,29 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 7, 2026 - refactor(store): diagnostics CollectAllBooks → GetAllBooksCore (STOREFID W5d-3, final GetAllBooks batch)
+
+- **`refactor(store)`** — last of the three W5d batches (Batch D). Retyped
+  `internal/diagnostics.Service.CollectAllBooks() []Book` → `[]BookCore`, with its internal paged loop
+  now calling `GetAllBooksCore` instead of `GetAllBooks`. `ToSlimBook`, `writeBooks`, `writeBatchJSONL`,
+  `writeVersionGroups`, and `writeMissingFields` all retyped their `[]database.Book` params to
+  `[]database.BookCore`. `ToSlimBook` was pre-verified to read only Core-safe fields (ID, Title,
+  AuthorID, Narrator, SeriesID, Format, Duration, FilePath, FileSize, VersionGroupID,
+  IsPrimaryVersion, WorkID, ITunesPersistentID, AudiobookReleaseYear, Publisher, LibraryState,
+  MarkedForDeletion) — a clean compile-certified retype, no hydrate needed (read-only export path,
+  no writeback).
+- **Shared-interface + mockery ripple:** `DiagnosticsService` in
+  `internal/server/handlers/diagnostics.go` retyped to `CollectAllBooks() ([]database.BookCore,
+  error)`; `make mocks` regenerated only `internal/server/handlers/mocks/mock_diagnostics_service.go`
+  (verified via `git diff --name-only`). Updated the hand-written test literal in
+  `diagnostics_test.go` and the `GetAllBooks`→`GetAllBooksCore` mock expectations in
+  `internal/diagnostics/service_test.go`.
+- **This closes W5 caller migration:** all `GetAllBooks` callers identified in the original 60-site
+  audit are now migrated (W5a add + 45 safe callers, W5b 12 writeback/DUAL sites, W5c 9 heavy-field
+  readers via `GetAllBooksFullFrom` cursor, W5d-1/2/3 the remaining cross-package/exported-signature
+  sites). `GetAllBooks` itself still exists on the interface — removing it is W5z, whose red
+  `go build` at removal is the actual completeness proof that no caller was missed.
 
 #### July 7, 2026 - refactor(store): ExternalIDBackfillStore.GetAllBooks → GetAllBooksCore (STOREFID W5d-2)
 

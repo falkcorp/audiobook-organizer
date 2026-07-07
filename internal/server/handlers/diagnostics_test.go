@@ -1,7 +1,7 @@
 // file: internal/server/handlers/diagnostics_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8ab4b825-05c3-4569-b450-0dca6b872771
-// last-edited: 2026-06-03
+// last-edited: 2026-07-07
 
 package handlers_test
 
@@ -139,7 +139,7 @@ func TestDiagnosticsHandler_SubmitAI_NilParserFallback(t *testing.T) {
 		Run(func(_ string, _ string, _ int, _ int, _ string) { close(done) }).
 		Return(nil)
 
-	diagSvc.EXPECT().CollectAllBooks().Return([]database.Book{{ID: "b1", Title: "X"}}, nil)
+	diagSvc.EXPECT().CollectAllBooks().Return([]database.BookCore{{ID: "b1", Title: "X"}}, nil)
 
 	// batchParser is nil → the no-parser fallback path.
 	h := handlers.NewDiagnosticsHandler(store, diagSvc, nil, nil, nil, nil, nil)

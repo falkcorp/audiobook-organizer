@@ -37,23 +37,23 @@ func (_m *MockDiagnosticsService) EXPECT() *MockDiagnosticsService_Expecter {
 }
 
 // CollectAllBooks provides a mock function for the type MockDiagnosticsService
-func (_mock *MockDiagnosticsService) CollectAllBooks() ([]database.Book, error) {
+func (_mock *MockDiagnosticsService) CollectAllBooks() ([]database.BookCore, error) {
 	ret := _mock.Called()
 
 	if len(ret) == 0 {
 		panic("no return value specified for CollectAllBooks")
 	}
 
-	var r0 []database.Book
+	var r0 []database.BookCore
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func() ([]database.Book, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func() ([]database.BookCore, error)); ok {
 		return returnFunc()
 	}
-	if returnFunc, ok := ret.Get(0).(func() []database.Book); ok {
+	if returnFunc, ok := ret.Get(0).(func() []database.BookCore); ok {
 		r0 = returnFunc()
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.Book)
+			r0 = ret.Get(0).([]database.BookCore)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func() error); ok {
@@ -81,12 +81,12 @@ func (_c *MockDiagnosticsService_CollectAllBooks_Call) Run(run func()) *MockDiag
 	return _c
 }
 
-func (_c *MockDiagnosticsService_CollectAllBooks_Call) Return(books []database.Book, err error) *MockDiagnosticsService_CollectAllBooks_Call {
-	_c.Call.Return(books, err)
+func (_c *MockDiagnosticsService_CollectAllBooks_Call) Return(bookCores []database.BookCore, err error) *MockDiagnosticsService_CollectAllBooks_Call {
+	_c.Call.Return(bookCores, err)
 	return _c
 }
 
-func (_c *MockDiagnosticsService_CollectAllBooks_Call) RunAndReturn(run func() ([]database.Book, error)) *MockDiagnosticsService_CollectAllBooks_Call {
+func (_c *MockDiagnosticsService_CollectAllBooks_Call) RunAndReturn(run func() ([]database.BookCore, error)) *MockDiagnosticsService_CollectAllBooks_Call {
 	_c.Call.Return(run)
 	return _c
 }
