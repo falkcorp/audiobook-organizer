@@ -30,12 +30,17 @@
   `GetAllBooksCore`; the downstream `organizeBooks`/`ReOrganizeInPlace` writebacks now hydrate the full
   row via a shared `hydrateAndUpdateBook` helper (fail-closed) before `UpdateBook`. This is defensive
   consistency for most sites (STOR-1 already guards 7/9 heavy fields, and Author/Series are inert here
-  since `GetBookByID` doesn't populate them). **One genuine (pre-existing) slim-writeback was found and
-  fixed:** `CreateOrganizedVersion` wrote the page-sourced original book back with the version-group /
-  non-primary / `organized_source` state stamp — under prod's memdb default that struct is heavy-field-
-  nil, so it wiped the original's denormalized `Author`/`Series`. Now hydrated before write.
+  since `GetBookByID` doesn't populate them). One additional **pre-existing** slim-writeback was
+  identified — `CreateOrganizedVersion` writes the page-sourced original book back with the
+  version-group / non-primary / `organized_source` stamp (heavy-field-nil under prod memdb) — but its
+  correct fix must preserve `Author`/`Series` *without* regressing the version-group state transition
+  to fail-closed (a `GetBookByID` error must not leave two primaries). That's deferred to its own
+  follow-up (tracked in TODO) rather than bolted onto this migration; behavior here is unchanged from
+  prod today.
 - `go build` / `go vet` / `-race` tests green across dedup, organizer, maintenance/jobs, metadata,
-  itunes, scanner, sdk. Test mocks forward through the Core path with real data (no vacuous stubs).
+  itunes, scanner, sdk, **plugins/dedup**, **plugins/maintenance**, and the `internal/server`
+  organize/CreateOrganizedVersion regression. Test mocks forward through the Core /
+  `GetAllBooksFullFrom` paths with real fixture data (no vacuous stubs).
 
 #### July 7, 2026 - refactor(store): route GetAllBooks heavy-field readers to GetAllBooksFullFrom cursor (STOREFID W5c)
 
