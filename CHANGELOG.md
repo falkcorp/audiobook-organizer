@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.115.0 -->
+<!-- version: 3.116.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-07 -->
 
@@ -8,6 +8,26 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 7, 2026 - refactor(store): route GetAllBooks heavy-field readers to GetAllBooksFullFrom cursor (STOREFID W5c)
+
+- **`refactor(store)` + latent-bug fix** — migrated the **9 `GetAllBooks` call sites (7 files)** that
+  read a memdb-stripped HEAVY field (`Author`/`Series`/`Description`/`BookSigV1`) off every iterated
+  book. Under prod `UseMemDB=true` these loops were silently reading `nil`/empty heavy fields (same
+  latent class as the BookSignatureScan no-op fixed earlier) — the memdb projection strips those
+  fields and `GetAllBooks` returned the slim copies. Each now uses `GetAllBooksFullFrom(afterID,
+  limit)`, which fetches every book via `GetBookByID` (full Pebble JSON, memdb-bypassed), so the
+  heavy reads return real data AND any writeback writes a full, write-safe struct (the old slim
+  writeback would have wiped `Author`/`Series`).
+- **Files:** `itunes/rebuild.go` (3 paged loops → `afterID` cursor: ComputeITLDiff / RebuildITLFromDB
+  / BuildExportITL), `maintenance/jobs/{relink_report,dedup_books}.go`,
+  `plugins/acoustid/{backfill,fingerprint_rescan}.go` (backfill keeps its `registry.RunItems` pool),
+  `plugins/maintenance/{fs_regroup_xml,itunes_regroup}.go`. Slurp sites (`GetAllBooks(0,0)`) →
+  `GetAllBooksFullFrom("", 0)`; paged sites → the server-search-style `afterID` cursor loop.
+- Unlike the Core waves this is **not** compiler-certified (the return type stays `[]Book`), so every
+  site was reviewed to confirm it genuinely reads a heavy field. `mockRebuildStore.GetAllBooksFullFrom`
+  in the itunes test was upgraded from an empty stub to real sorted-ID cursor semantics.
+  `go build` / `go vet` / package tests green.
 
 #### July 7, 2026 - refactor(store): migrate GetAllBooks writeback/DUAL callers to hydrate (STOREFID W5b)
 

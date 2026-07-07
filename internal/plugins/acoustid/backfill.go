@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/backfill.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: f6a7b8c9-d0e1-2345-def0-123456789abc
-// last-edited: 2026-06-25
+// last-edited: 2026-07-07
 
 package acoustid
 
@@ -79,7 +79,7 @@ func (p *Plugin) runBackfill(ctx context.Context, params json.RawMessage, report
 	prog := sdk.NewProgress(reporter, 0)
 	prog.Start("Loading books for fingerprint backfill...")
 
-	books, err := p.store.GetAllBooks(100000, 0)
+	books, err := p.store.GetAllBooksFullFrom("", 0)
 	if err != nil {
 		reporter.Logger().Error("load books", "error", err)
 		return fmt.Errorf("load books: %w", err)

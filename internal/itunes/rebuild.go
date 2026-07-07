@@ -1,7 +1,7 @@
 // file: internal/itunes/rebuild.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 3f2e1d0c-9b8a-7c6d-5e4f-3a2b1c0d9e8f
-// last-edited: 2026-07-03
+// last-edited: 2026-07-07
 
 package itunes
 
@@ -46,8 +46,9 @@ func ComputeITLDiff(store RebuildStore, itlPath string) (*ITLOperationSet, *ITLR
 	// all primary-version books that have an iTunes PID.
 	dbPIDs := make(map[string]*database.Book)
 	const pageSize = 500
-	for offset := 0; ; offset += pageSize {
-		books, err := store.GetAllBooks(pageSize, offset)
+	afterID := ""
+	for {
+		books, err := store.GetAllBooksFullFrom(afterID, pageSize)
 		if err != nil {
 			return nil, nil, fmt.Errorf("get books: %w", err)
 		}
@@ -69,6 +70,10 @@ func ComputeITLDiff(store RebuildStore, itlPath string) (*ITLOperationSet, *ITLR
 			if b.ITunesPersistentID != nil && *b.ITunesPersistentID != "" {
 				dbPIDs[strings.ToUpper(*b.ITunesPersistentID)] = b
 			}
+		}
+		afterID = books[len(books)-1].ID
+		if len(books) < pageSize {
+			break
 		}
 	}
 
@@ -270,10 +275,11 @@ func RebuildITLFromDB(store RebuildStore, itlPath, outputPath string, acknowledg
 	// Collect all DB books to add back.
 	var adds []ITLNewTrack
 	const pageSize = 500
-	for offset := 0; ; offset += pageSize {
-		books, err := store.GetAllBooks(pageSize, offset)
+	afterID := ""
+	for {
+		books, err := store.GetAllBooksFullFrom(afterID, pageSize)
 		if err != nil {
-			return nil, fmt.Errorf("get books page %d: %w", offset/pageSize, err)
+			return nil, fmt.Errorf("get books page after %q: %w", afterID, err)
 		}
 		if len(books) == 0 {
 			break
@@ -290,6 +296,10 @@ func RebuildITLFromDB(store RebuildStore, itlPath, outputPath string, acknowledg
 				continue
 			}
 			adds = append(adds, buildNewTrackFromBook(store, b))
+		}
+		afterID = books[len(books)-1].ID
+		if len(books) < pageSize {
+			break
 		}
 	}
 
@@ -341,10 +351,11 @@ func BuildExportITL(store RebuildStore, templatePath string, bookIDs []string) (
 
 	var adds []ITLNewTrack
 	const pageSize = 500
-	for offset := 0; ; offset += pageSize {
-		books, err := store.GetAllBooks(pageSize, offset)
+	afterID := ""
+	for {
+		books, err := store.GetAllBooksFullFrom(afterID, pageSize)
 		if err != nil {
-			return nil, fmt.Errorf("get books page %d: %w", offset/pageSize, err)
+			return nil, fmt.Errorf("get books page after %q: %w", afterID, err)
 		}
 		if len(books) == 0 {
 			break
@@ -364,6 +375,10 @@ func BuildExportITL(store RebuildStore, templatePath string, bookIDs []string) (
 				continue
 			}
 			adds = append(adds, buildNewTrackFromBook(store, b))
+		}
+		afterID = books[len(books)-1].ID
+		if len(books) < pageSize {
+			break
 		}
 	}
 

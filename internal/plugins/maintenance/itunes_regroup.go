@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_regroup.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-07-06
+// last-edited: 2026-07-07
 
 package maintenance
 
@@ -143,14 +143,15 @@ func (p *Plugin) buildRegroupSnapshot(ctx context.Context, store database.Store,
 	meta := make(map[string]partialMeta)
 	vgNonPrimary := make(map[string]bool) // version-group id -> has a non-primary member
 	const page = 1000
-	off := 0
+	afterID := ""
+	scanned := 0
 	for {
 		if ctx.Err() != nil {
 			return snap, ctx.Err()
 		}
-		books, err := store.GetAllBooks(page, off)
+		books, err := store.GetAllBooksFullFrom(afterID, page)
 		if err != nil {
-			return snap, fmt.Errorf("GetAllBooks offset=%d: %w", off, err)
+			return snap, fmt.Errorf("GetAllBooksFullFrom afterID=%q: %w", afterID, err)
 		}
 		if len(books) == 0 {
 			break
@@ -171,8 +172,9 @@ func (p *Plugin) buildRegroupSnapshot(ctx context.Context, store database.Store,
 				vgNonPrimary[vg] = true
 			}
 		}
-		off += len(books)
-		_ = reporter.UpdateProgress(1, 4, fmt.Sprintf("Phase 2/4: scanned %d books…", off))
+		scanned += len(books)
+		afterID = books[len(books)-1].ID
+		_ = reporter.UpdateProgress(1, 4, fmt.Sprintf("Phase 2/4: scanned %d books…", scanned))
 		if len(books) < page {
 			break
 		}
