@@ -1,6 +1,7 @@
 // file: internal/audiobooks/audiobook_service_prop_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 864889b2-5529-4d23-9220-2f17e11fab35
+// last-edited: 2026-07-07
 
 // Property-based tests for the library-list sort, filter, and pagination
 // code paths in internal/server/audiobook_service.go. These properties
@@ -53,6 +54,17 @@ func bookIDsInOrder(books []database.Book) []string {
 	for i, b := range books {
 		ids[i] = b.ID
 	}
+	return ids
+}
+
+// bookCoreIDs is bookIDs for []database.BookCore — used by the pagination
+// property test, whose PebbleStore reads come back Core-typed.
+func bookCoreIDs(books []database.BookCore) []string {
+	ids := make([]string, len(books))
+	for i, b := range books {
+		ids[i] = b.ID
+	}
+	sort.Strings(ids)
 	return ids
 }
 
@@ -269,17 +281,17 @@ func TestProp_PaginationConsistency(outer *testing.T) {
 			}
 		}
 
-		page1, err := store.GetAllBooks(pageSize, 0)
+		page1, err := store.GetAllBooksCore(pageSize, 0)
 		if err != nil {
-			t.Fatalf("GetAllBooks page1: %v", err)
+			t.Fatalf("GetAllBooksCore page1: %v", err)
 		}
-		page2, err := store.GetAllBooks(pageSize, pageSize)
+		page2, err := store.GetAllBooksCore(pageSize, pageSize)
 		if err != nil {
-			t.Fatalf("GetAllBooks page2: %v", err)
+			t.Fatalf("GetAllBooksCore page2: %v", err)
 		}
-		fullPage, err := store.GetAllBooks(2*pageSize, 0)
+		fullPage, err := store.GetAllBooksCore(2*pageSize, 0)
 		if err != nil {
-			t.Fatalf("GetAllBooks fullPage: %v", err)
+			t.Fatalf("GetAllBooksCore fullPage: %v", err)
 		}
 
 		// Invariant 1: no duplicates across page1 and page2.
@@ -299,9 +311,9 @@ func TestProp_PaginationConsistency(outer *testing.T) {
 		// fullPage. The fullPage request asks for up to 2*pageSize, so
 		// any IDs a caller could see in the stitched read are exactly
 		// those they'd see in the single read.
-		stitched := append(append([]database.Book(nil), page1...), page2...)
-		gotIDs := bookIDs(stitched)
-		wantIDs := bookIDs(fullPage)
+		stitched := append(append([]database.BookCore(nil), page1...), page2...)
+		gotIDs := bookCoreIDs(stitched)
+		wantIDs := bookCoreIDs(fullPage)
 		if len(gotIDs) != len(wantIDs) {
 			t.Fatalf("stitched has %d ids, fullPage has %d (total=%d pageSize=%d)",
 				len(gotIDs), len(wantIDs), total, pageSize)

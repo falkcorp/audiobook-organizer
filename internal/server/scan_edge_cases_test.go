@@ -1,6 +1,7 @@
 // file: internal/server/scan_edge_cases_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: c3d4e5f6-a7b8-9012-3456-789012abcdef
+// last-edited: 2026-07-07
 
 package server
 
@@ -35,7 +36,7 @@ func TestScanService_EmptyDirectory(t *testing.T) {
 	}, logger.New("test"))
 	require.NoError(t, err)
 
-	books, err := env.Store.GetAllBooks(100, 0)
+	books, err := env.Store.GetAllBooksCore(100, 0)
 	require.NoError(t, err)
 	assert.Len(t, books, 0, "empty directory should produce no books")
 }
@@ -55,7 +56,7 @@ func TestScanService_DeepNestedDirectories(t *testing.T) {
 	}, logger.New("test"))
 	require.NoError(t, err)
 
-	books, err := env.Store.GetAllBooks(100, 0)
+	books, err := env.Store.GetAllBooksCore(100, 0)
 	require.NoError(t, err)
 	assert.Len(t, books, 1, "should find book in deeply nested directory")
 }
@@ -82,7 +83,7 @@ func TestScanService_SpecialCharsInFilenames(t *testing.T) {
 	}, logger.New("test"))
 	require.NoError(t, err)
 
-	books, err := env.Store.GetAllBooks(100, 0)
+	books, err := env.Store.GetAllBooksCore(100, 0)
 	require.NoError(t, err)
 	assert.Len(t, books, 3, "should handle special characters in filenames")
 }
@@ -104,7 +105,7 @@ func TestScanService_UnsupportedFileExtensions(t *testing.T) {
 	}, logger.New("test"))
 	require.NoError(t, err)
 
-	books, err := env.Store.GetAllBooks(100, 0)
+	books, err := env.Store.GetAllBooksCore(100, 0)
 	require.NoError(t, err)
 	assert.Len(t, books, 1, "should only scan supported extensions")
 }
@@ -124,7 +125,7 @@ func TestScanService_RescanUpdatesExistingBooks(t *testing.T) {
 	}, logger.New("test"))
 	require.NoError(t, err)
 
-	books1, _ := env.Store.GetAllBooks(100, 0)
+	books1, _ := env.Store.GetAllBooksCore(100, 0)
 	require.Len(t, books1, 1)
 
 	// Second scan (should not create duplicate)
@@ -133,7 +134,7 @@ func TestScanService_RescanUpdatesExistingBooks(t *testing.T) {
 	}, logger.New("test"))
 	require.NoError(t, err)
 
-	books2, _ := env.Store.GetAllBooks(100, 0)
+	books2, _ := env.Store.GetAllBooksCore(100, 0)
 	assert.Len(t, books2, 1, "rescan should not create duplicate books")
 }
 
@@ -157,7 +158,7 @@ func TestScanService_OrphanBooks_FileDeleted(t *testing.T) {
 	require.NoError(t, err)
 
 	// Book should still be in DB (not deleted, just skipped)
-	books, _ := env.Store.GetAllBooks(100, 0)
+	books, _ := env.Store.GetAllBooksCore(100, 0)
 	assert.Len(t, books, 1, "orphan book should still exist in DB")
 }
 
@@ -173,7 +174,7 @@ func TestScanService_NonexistentScanFolder(t *testing.T) {
 	// Should complete without error (logs warning about missing folder)
 	require.NoError(t, err)
 
-	books, _ := env.Store.GetAllBooks(100, 0)
+	books, _ := env.Store.GetAllBooksCore(100, 0)
 	assert.Len(t, books, 0)
 }
 
@@ -194,7 +195,7 @@ func TestScanService_MultiChapterAudiobook(t *testing.T) {
 	}, logger.New("test"))
 	require.NoError(t, err)
 
-	books, err := env.Store.GetAllBooks(100, 0)
+	books, err := env.Store.GetAllBooksCore(100, 0)
 	require.NoError(t, err)
 	// Scanner groups all files in the same directory into one multi-chapter book.
 	assert.Equal(t, 1, len(books), "all chapter files under one directory should be one book")
@@ -217,7 +218,7 @@ func TestScanService_RealLibrivoxFiles(t *testing.T) {
 	}, logger.New("test"))
 	require.NoError(t, err)
 
-	books, err := env.Store.GetAllBooks(100, 0)
+	books, err := env.Store.GetAllBooksCore(100, 0)
 	require.NoError(t, err)
 	// Scanner groups MP3s in the same directory as one album-book with segments
 	assert.GreaterOrEqual(t, len(books), 1, "should find at least 1 book from 6 MP3 chapter files")
@@ -253,6 +254,6 @@ func TestScanService_LongFilePaths(t *testing.T) {
 	}, logger.New("test"))
 	require.NoError(t, err)
 
-	books, _ := env.Store.GetAllBooks(100, 0)
+	books, _ := env.Store.GetAllBooksCore(100, 0)
 	assert.Len(t, books, 1, "should handle long file paths")
 }

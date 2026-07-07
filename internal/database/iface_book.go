@@ -1,5 +1,5 @@
 // file: internal/database/iface_book.go
-// version: 2.8.0
+// version: 2.9.0
 // guid: 668ec5a2-f8d9-4fdb-b0d5-09937b5d83ea
 // last-edited: 2026-07-07
 
@@ -26,26 +26,22 @@ type UpdateBookRatingRequest struct {
 // read books. See spec 2026-04-17-store-interface-segregation-design.md.
 type BookReader interface {
 	GetBookByID(id string) (*Book, error)
-	// GetAllBooks is SLIM (memdb projection) — see
-	// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
-	GetAllBooks(limit, offset int) ([]Book, error)
-	// GetAllBooksCore is Core-typed (STOREFID W5a): the return type is
+	// GetAllBooksCore is Core-typed (STOREFID W5a/W5z): the return type is
 	// BookCore, not Book, so the nine heavy fields (Description,
 	// VersionNotes, BookSigV1, BookSigV1Mask, BookSigSegments,
 	// BookSigBuiltAt, BookSigCoveragePct, Author, Series) being absent is
-	// compiler-enforced rather than silently nil'd. This coexists with
-	// GetAllBooks during the W5 migration; a caller that needs any of the
-	// heavy fields MUST fetch via GetBookByID / GetAllBooksFullFrom (full
-	// Pebble). See docs/specs/2026-07-05-store-getter-fidelity-unification.md.
+	// compiler-enforced rather than silently nil'd. A caller that needs any
+	// of the heavy fields MUST fetch via GetBookByID / GetAllBooksFullFrom
+	// (full Pebble). See docs/specs/2026-07-05-store-getter-fidelity-unification.md.
 	GetAllBooksCore(limit, offset int) ([]BookCore, error)
 	// GetAllBooksFullFrom returns up to limit non-deleted books whose PebbleDB key
 	// sorts after "book:<afterID>". Pass afterID="" to start from the beginning.
-	// This is an O(1) seek vs GetAllBooks's O(offset) skip — use for search
+	// This is an O(1) seek vs GetAllBooksCore's O(offset) skip — use for search
 	// index backfill and other full-table cursor scans.
 	GetAllBooksFullFrom(afterID string, limit int) ([]Book, error)
 	// ListBookIDs returns just the IDs of all non-deleted books, without
-	// materializing Book structs. Saves ~50x memory vs GetAllBooks(0,0) when
-	// the caller only needs the ID set (e.g., diff'ing against another set).
+	// materializing Book structs. Saves ~50x memory vs GetAllBooksCore(0,0)
+	// when the caller only needs the ID set (e.g., diff'ing against another set).
 	ListBookIDs() ([]string, error)
 	GetAllBookSummaries(limit, offset int) ([]BookSummary, error)
 	GetBookByFilePath(path string) (*Book, error)
@@ -92,7 +88,7 @@ type BookReader interface {
 	SearchBooks(query string, limit, offset int) ([]Book, error)
 	CountPrimaryBooks() (int, error)
 	// CountAllBooks returns the total number of non-deleted books regardless of
-	// IsPrimaryVersion. Use this when iterating with GetAllBooks/PageBooks so
+	// IsPrimaryVersion. Use this when iterating with GetAllBooksCore/PageBooks so
 	// progress denominators match what the iterator actually visits.
 	CountAllBooks() (int, error)
 	GetDistinctGenres() ([]string, error)

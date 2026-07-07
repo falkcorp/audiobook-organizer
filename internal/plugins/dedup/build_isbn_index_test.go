@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/build_isbn_index_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f1e2d3c4-b5a6-7890-fedc-ba0987654321
-// last-edited: 2026-06-14
+// last-edited: 2026-07-07
 
 // End-to-end tests for the build-isbn-index op.
 //
@@ -23,8 +23,9 @@ import (
 
 // isbnIndexStoreAdapter wraps a *PebbleStore so it satisfies database.Store
 // (via embedding) while also satisfying ISBNIndexStore (WriteISBNIndexForBook
-// + SetISBNIndexBuilt + IsISBNIndexBuilt) and providing GetAllBooks.
-// This is the minimal surface the build-isbn-index op needs.
+// + SetISBNIndexBuilt + IsISBNIndexBuilt). This is the minimal surface the
+// build-isbn-index op needs; GetAllBooksCore is satisfied by the embedded
+// database.Store field routing to the real PebbleStore method.
 type isbnIndexStoreAdapter struct {
 	database.Store // embed for all methods we don't override
 	pebble         *database.PebbleStore
@@ -44,12 +45,6 @@ func (a *isbnIndexStoreAdapter) SetISBNIndexBuilt() error {
 // IsISBNIndexBuilt routes to PebbleStore.
 func (a *isbnIndexStoreAdapter) IsISBNIndexBuilt() bool {
 	return a.pebble.IsISBNIndexBuilt()
-}
-
-// GetAllBooks routes to PebbleStore (already embedded, but PebbleStore is
-// concrete, not an interface — the embed dispatches correctly).
-func (a *isbnIndexStoreAdapter) GetAllBooks(limit, offset int) ([]database.Book, error) {
-	return a.pebble.GetAllBooks(limit, offset)
 }
 
 // GetSetting / SetSetting route to PebbleStore (used by isFlagSet inside the op).
@@ -188,9 +183,6 @@ func (e *errWriteISBNStore) SetISBNIndexBuilt() error {
 }
 func (e *errWriteISBNStore) IsISBNIndexBuilt() bool {
 	return e.pebble.IsISBNIndexBuilt()
-}
-func (e *errWriteISBNStore) GetAllBooks(limit, offset int) ([]database.Book, error) {
-	return e.pebble.GetAllBooks(limit, offset)
 }
 func (e *errWriteISBNStore) GetSetting(key string) (*database.Setting, error) {
 	return e.pebble.GetSetting(key)

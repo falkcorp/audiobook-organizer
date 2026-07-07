@@ -1,7 +1,7 @@
 // file: internal/database/mock_store_coverage_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9f8e7d6c-5b4a-3c2d-1e0f-a9b8c7d6e5f4
-// last-edited: 2026-07-06
+// last-edited: 2026-07-07
 
 package database
 
@@ -46,7 +46,7 @@ func TestMockStore_CustomFuncPaths(t *testing.T) {
 	mock.GetBooksByWorkIDFunc = func(string) ([]Book, error) { return nil, nil }
 
 	// Books
-	mock.GetAllBooksFunc = func(int, int) ([]Book, error) { return nil, nil }
+	mock.GetAllBooksCoreFunc = func(int, int) ([]BookCore, error) { return nil, nil }
 	mock.GetBookByIDFunc = func(string) (*Book, error) { return nil, nil }
 	mock.GetBookByFilePathFunc = func(string) (*Book, error) { return nil, nil }
 	mock.GetBookByFileHashFunc = func(string) (*Book, error) { return nil, nil }
@@ -165,7 +165,7 @@ func TestMockStore_CustomFuncPaths(t *testing.T) {
 	_, _ = mock.UpdateWork("work-1", &Work{})
 	_ = mock.DeleteWork("work-1")
 	_, _ = mock.GetBooksByWorkID("work-1")
-	_, _ = mock.GetAllBooks(10, 0)
+	_, _ = mock.GetAllBooksCore(10, 0)
 	_, _ = mock.GetBookByID("book-1")
 	_, _ = mock.GetBookByFilePath("/path")
 	_, _ = mock.GetBookByFileHash("hash")

@@ -1,6 +1,7 @@
 // file: internal/server/e2e_workflow_test.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: c9d0e1f2-a3b4-5678-cdef-901234567012
+// last-edited: 2026-07-07
 
 package server
 
@@ -65,7 +66,7 @@ func TestE2E_ITunesImportOrganizeWriteBack(t *testing.T) {
 	testutil.WaitForOp(t, env.Store, opID, 15*time.Second)
 
 	// Step 4: Verify 2 books in DB
-	books, err := env.Store.GetAllBooks(100, 0)
+	books, err := env.Store.GetAllBooksCore(100, 0)
 	require.NoError(t, err)
 	require.Len(t, books, 2)
 
@@ -107,7 +108,7 @@ func TestE2E_ITunesImportOrganizeWriteBack(t *testing.T) {
 	time.Sleep(1 * time.Second)
 
 	// Verify books exist in DB (organize may trigger rescan that creates new entries)
-	books, err = env.Store.GetAllBooks(100, 0)
+	books, err = env.Store.GetAllBooksCore(100, 0)
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, len(books), 2, "should have at least 2 books")
 
@@ -155,7 +156,7 @@ func TestE2E_ScanAndFetchMetadata(t *testing.T) {
 	}, logger.New("test"))
 	require.NoError(t, err)
 
-	books, err := env.Store.GetAllBooks(100, 0)
+	books, err := env.Store.GetAllBooksCore(100, 0)
 	require.NoError(t, err)
 	require.Len(t, books, 1)
 	bookID := books[0].ID

@@ -1,6 +1,7 @@
 // file: internal/server/itunes_integration_test.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: e5f6a7b8-c9d0-1234-efab-567890123cde
+// last-edited: 2026-07-07
 
 package server
 
@@ -74,7 +75,7 @@ func TestITunesImport_FullWorkflow(t *testing.T) {
 	testutil.WaitForOp(t, env.Store, opID, 15*time.Second)
 
 	// Verify books in database
-	books, err := env.Store.GetAllBooks(100, 0)
+	books, err := env.Store.GetAllBooksCore(100, 0)
 	require.NoError(t, err)
 	// At least the Hobbit and Art of War should be imported (they have audiobook-like genres/kinds)
 	assert.GreaterOrEqual(t, len(books), 2, "should have imported at least 2 audiobooks")
@@ -104,7 +105,7 @@ func TestITunesImport_FullWorkflow(t *testing.T) {
 }
 
 type hobbitBookResult struct {
-	book database.Book
+	book database.BookCore
 }
 
 func TestITunesImport_OrganizeMode(t *testing.T) {
@@ -140,7 +141,7 @@ func TestITunesImport_OrganizeMode(t *testing.T) {
 	testutil.WaitForOp(t, env.Store, opID, 15*time.Second)
 
 	// Verify book was imported and organized
-	books, err := env.Store.GetAllBooks(100, 0)
+	books, err := env.Store.GetAllBooksCore(100, 0)
 	require.NoError(t, err)
 	require.Len(t, books, 1)
 
@@ -185,7 +186,7 @@ func TestITunesImport_SkipDuplicates(t *testing.T) {
 		}
 		json.Unmarshal(w.Body.Bytes(), &wrapper)
 		testutil.WaitForOp(t, env.Store, wrapper.Data.OperationID, 15*time.Second)
-		books, _ := env.Store.GetAllBooks(100, 0)
+		books, _ := env.Store.GetAllBooksCore(100, 0)
 		return len(books)
 	}
 

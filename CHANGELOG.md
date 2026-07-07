@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.119.0 -->
+<!-- version: 3.120.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-07 -->
 
@@ -8,6 +8,46 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 7, 2026 - refactor(store): remove GetAllBooks entirely (STOREFID W5z)
+
+- **`refactor(store)`** — the completeness step for STOREFID W5. Removed `GetAllBooks(limit,
+  offset int) ([]Book, error)` entirely from the `BookReader`/`BookStore`/`Store` interface
+  (`internal/database/iface_book.go`), `PebbleStore` (`internal/database/pebble_store.go` — the old
+  method's Pebble-scan body was fully duplicated by `GetAllBooksCore`'s own independent
+  implementation, so it was deleted rather than kept as a private helper), `MemStore`
+  (`internal/database/memdb_reads.go` — the 3-arg filtered `GetAllBooks` was dead once its only two
+  callers, both inside `PebbleStore`, were rerouted to `GetAllBooksCore`), and the hand-written
+  `MockStore` interface-satisfying method (`internal/database/mock_store.go`; the `GetAllBooksFunc`
+  struct field itself was **kept** as pure test-plumbing — an intentional W5d-1 shim in
+  `internal/dedup/engine_test.go`'s `setupTestEngine` forwards it into `GetAllBooksCoreFunc` at call
+  time, and migrating the 12 dedup test files that rely on that shim individually would have been
+  unnecessary churn for zero behavior change).
+- **`go build ./...` going green with zero production (non-test) call sites remaining was the
+  completeness proof** this wave's design was built around: before removal, a repo-wide grep for
+  `.GetAllBooks(` outside `_test.go`/`mocks/` found exactly the three internal `PebbleStore` callers
+  fixed here (`getAllBookSummariesFull`, `CountAllBooks` ×1 via `mem()`) — confirming every
+  production caller from the original 60-site W5 audit was already migrated in W5a–W5d-3.
+- **`make mocks` regenerated exactly 4 files** (verified via `git diff --name-only`):
+  `internal/database/mocks/mock_store.go` (MockBookReader/MockBookStore/MockStore),
+  `internal/server/handlers/mocks/mock_playlist_store.go`,
+  `internal/server/handlers/operations/mocks/mock_operations_store.go`,
+  `internal/server/handlers/metadata/mocks/mock_metadata_store.go`.
+- **18 hand-edited test/adapter files** fixed by the resulting red build, all confirmed Core-safe
+  (no read of Description/VersionNotes/BookSigV1\*/Author/Series) before retyping: 6 in
+  `internal/database` (interface + impl + 4 of its own tests), `internal/audiobooks` (pagination
+  property test — added a `bookCoreIDs` sibling helper alongside the existing `bookIDs` since that
+  helper is shared with `[]database.Book`-typed callers elsewhere in the file), `internal/testutil`,
+  `internal/plugins/dedup/build_isbn_index_test.go` (2 dead adapter-method overrides deleted — the
+  op itself already called `GetAllBooksCore`, so the adapters' embedded `database.Store` field
+  satisfies the method without an override), and 7 files in `internal/server` (all mechanical
+  `env.Store.GetAllBooks(100, 0)` → `GetAllBooksCore` retypes plus 2 struct-field/pointer-var
+  retypes in `organize_integration_test.go` and `itunes_integration_test.go`).
+- Full suite (`go test ./... -short`) is green: 97 packages `ok`, `internal/server` verified
+  separately at 485.907s (matches this session's established "300–520s but passes locally" pattern
+  for that package, well under a CI timeout).
+- `GetAllBooks` no longer exists anywhere in the codebase outside test-only mock plumbing. This
+  closes STOREFID W5 in full (W5a–W5d-3 caller migration + W5z removal).
 
 #### July 7, 2026 - refactor(store): diagnostics CollectAllBooks → GetAllBooksCore (STOREFID W5d-3, final GetAllBooks batch)
 
