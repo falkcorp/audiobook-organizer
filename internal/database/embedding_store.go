@@ -1,6 +1,6 @@
 // file: internal/database/embedding_store.go
-// version: 2.5.0
-// last-edited: 2026-07-01
+// version: 2.6.0
+// last-edited: 2026-07-07
 // guid: 7c4a9b2e-d831-4f5c-a07e-3b8d6e1f9c42
 
 package database
@@ -458,6 +458,30 @@ func (s *EmbeddingStore) nextID(b *pebble.Batch) (int64, error) {
 	return id, b.Set([]byte(dedupSeqKey), buf[:], nil)
 }
 
+// candidateWriteOpts is the Pebble write option for per-row dedup-candidate
+// writes (UpsertCandidateNew, DeleteCandidate). It is deliberately pebble.NoSync.
+//
+// WHY (issue #19): those calls run once per candidate from FullScan's unified
+// scoring pass — a registry.RunItems worker pool at runtime.NumCPU(). With
+// pebble.Sync every call forced an fdatasync, and holding EmbeddingStore.mu
+// across that fsync serialized the whole "parallel" pass behind one lock whose
+// critical section blocked on disk. Worse, the per-write fsync flooded Pebble's
+// L0; once compaction fell behind (amplified by host swap pressure) Pebble's
+// write-stall froze every read and write DB-wide, so all workers parked inside a
+// Pebble call that never returned — the op became uncancellable (a mutex/fsync
+// wait is not ctx-aware) and only `systemctl restart` recovered it. Observed on
+// prod 2026-07-06: 9+ hours at 44%, zero progress.
+//
+// The durability tradeoff is bounded and acceptable: NoSync changes only fsync
+// timing, not atomicity or visibility (the s.mu-guarded pair-uniqueness + ID
+// counter invariants are untouched). Pebble still flushes memtables to durable
+// SSTs as they fill, and a graceful Close — the systemctl-restart / SIGTERM
+// path — flushes the WAL, so a graceful restart loses nothing (see
+// TestUpsertCandidate_SurvivesGracefulClose). Only a hard crash (kill -9 / power
+// loss) can drop the last few seconds of writes, and dedup-candidate scores are
+// recomputable derived data — a re-scan regenerates them.
+var candidateWriteOpts = pebble.NoSync
+
 // UpsertCandidate inserts or updates a dedup candidate pair.
 //
 // Layer precedence (exact > llm > embedding): a more-specific layer never gets
@@ -536,7 +560,7 @@ func (s *EmbeddingStore) UpsertCandidateNew(c DedupCandidate) (id int64, isNew b
 		if err := b.Set(dedupEntityKey(c.EntityType, c.EntityBID, id), nil, nil); err != nil {
 			return 0, false, err
 		}
-		if err := b.Commit(pebble.Sync); err != nil {
+		if err := b.Commit(candidateWriteOpts); err != nil { // NoSync — see candidateWriteOpts (#19)
 			return 0, false, err
 		}
 		return id, true, nil
@@ -610,7 +634,7 @@ func (s *EmbeddingStore) UpsertCandidateNew(c DedupCandidate) (id int64, isNew b
 	if err := b.Set(dedupEntityKey(existing.EntityType, existing.EntityBID, id), nil, nil); err != nil {
 		return 0, false, err
 	}
-	if err := b.Commit(pebble.Sync); err != nil {
+	if err := b.Commit(candidateWriteOpts); err != nil { // NoSync — see candidateWriteOpts (#19)
 		return 0, false, err
 	}
 	return id, false, nil
@@ -884,7 +908,7 @@ func (s *EmbeddingStore) DeleteCandidate(id int64) error {
 	_ = b.Delete(dedupPairKey(rec.EntityType, rec.EntityAID, rec.EntityBID), nil)
 	_ = b.Delete(dedupEntityKey(rec.EntityType, rec.EntityAID, id), nil)
 	_ = b.Delete(dedupEntityKey(rec.EntityType, rec.EntityBID, id), nil)
-	return b.Commit(pebble.Sync)
+	return b.Commit(candidateWriteOpts) // NoSync — see candidateWriteOpts (#19)
 }
 
 // MarkCandidatesAsMergedForEntity sets status="merged" on every candidate row

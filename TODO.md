@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.70.1 -->
+<!-- version: 9.71.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-07 -->
 
@@ -92,7 +92,31 @@ future agent) can scan the entire workspace in one page.
 
 ---
 
-## 🔴 dedup.full-scan freezes in composing-scores phase even after CONC-2/PR #1809 (2026-07-06)
+## 🟡 dedup.full-scan freezes in composing-scores phase even after CONC-2/PR #1809 (2026-07-06) — ROOT-CAUSED + FIX SHIPPED, prod confirmation pending
+
+- **✅ ROOT CAUSE (2026-07-07, static trace):** per-candidate `EmbeddingStore.UpsertCandidate`
+  (`UpsertCandidateNew`) took the store-wide `s.mu` **and held it across
+  `b.Commit(pebble.Sync)` — a synchronous fsync**. Every `NumCPU` score worker
+  serialized behind that one lock+fsync (a `sync.Mutex.Lock` wait is not
+  ctx-cancellable → why graceful cancel did nothing), and the per-write fsyncs
+  flooded Pebble L0 until compaction fell behind (amplified by swap) and Pebble's
+  **write-stall** froze all DB reads/writes → workers parked inside Pebble, 9+ h,
+  hard-restart-only. The two named suspects (`de.mergeMu`, Ollama-ignoring-ctx) were
+  **ruled out**: mergeMu guards only the scan phase; the embed client is already
+  ctx-bounded and the score phase makes no network calls.
+- **✅ FIX SHIPPED:** per-row candidate writes (`UpsertCandidateNew` ×2,
+  `DeleteCandidate`) → `pebble.NoSync` (`candidateWriteOpts`). Correctness-identical
+  (only fsync durability changes); graceful restart still loses nothing (WAL flushes
+  on Close — `TestUpsertCandidate_SurvivesGracefulClose`); hard-crash loses only the
+  last few seconds of *recomputable* scores. Guards: durability + `-race`
+  concurrency test. Full write-up:
+  [`docs/audits/2026-07-07-dedup-fullscan-composing-scores-writestall.md`](docs/audits/2026-07-07-dedup-fullscan-composing-scores-writestall.md).
+- **⏳ GATE before closing #19:** `make deploy-debug` (pprof) → re-run `dedup.full-scan`
+  → capture periodic goroutine+heap dumps → require a **clean full completion** (also
+  clears the ~10,114 backlog). Escalation held in reserve if any residual stall:
+  per-pair striped locks for truly-concurrent commits (WAL group-commit coalesces).
+
+### Original incident notes (2026-07-06, pre-root-cause — kept for history)
 
 - **Recurrence of the original incident**, post-fix. Triggered `dedup.full-scan` on
   prod (op `01KWTFW0T833JP6Y3PZCZK6YEG`) after shipping the `BookSignatureScan`
