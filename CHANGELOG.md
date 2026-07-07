@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.122.0 -->
+<!-- version: 3.123.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-07 -->
 
@@ -8,6 +8,26 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 7, 2026 - feat(database): expose DurationSec-invariant fingerprint count (STOREFID follow-up)
+
+- **`feat(database)`** — added `AcoustIDStats.WithFingerprintZeroDuration`, surfaced on the existing
+  `GET /maintenance/acoustid-stats` endpoint. Counts rows where an `AcoustIDFingerprint` blob is
+  present but `AcoustIDFingerprintDurationSec == 0`. This matters because the 3 PR-B fingerprint ops
+  (`lsh_backfill`, `lsh_index_build`, `online_lookup`) gate on `DurationSec > 0` as a memdb-surviving
+  proxy for "has a fingerprint" (the blob itself is stripped from memdb) — a nonzero count here means
+  that proxy is unsound for those rows, and they're being silently skipped.
+- Purely additive: new JSON field on an existing authenticated read-only endpoint, zero behavior
+  change to any existing field or caller. Computed in the same full-Pebble-scan pass
+  `GetAcoustIDStats` already does (`getAllBookFilesPebbleScan`), no new scan added.
+- Regression test `TestGetAcoustIDStats_ZeroDurationInvariant` added
+  (`internal/database/pebble_acoustid_stats_test.go`): seeds a normal fingerprinted row, an
+  invariant-violating (blob-but-zero-duration) row, and a no-fingerprint row; asserts the new counter
+  isolates exactly the violating row.
+- Closes the STOREFID "DurationSec invariant" BLOCKED item's *build* half — after this deploys, the
+  endpoint will be queried once against prod to determine the actual count and close the item fully.
+  Background: `.claude/notes/2026-07-07-storefid-session-resume.md`,
+  `docs/audits/2026-07-05-updatebookfile-memdb-writeback-fingerprint-wipe.md`.
 
 #### July 7, 2026 - fix(dedup): stop dedup.full-scan freezing in the composing-scores phase (#19)
 

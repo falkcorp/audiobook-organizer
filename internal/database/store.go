@@ -1,7 +1,7 @@
 // file: internal/database/store.go
-// version: 2.83.0
+// version: 2.84.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-07-03
+// last-edited: 2026-07-07
 
 package database
 
@@ -305,24 +305,24 @@ type Book struct {
 // by avoiding unnecessary data transfer. Companion field to Book for read-only
 // projection use cases (PROJ-2 SQL query optimization).
 type BookSummary struct {
-	ID                   string     `json:"id"`
-	Title                string     `json:"title"`
-	AuthorID             *int       `json:"author_id,omitempty"`
-	SeriesID             *int       `json:"series_id,omitempty"`
-	SeriesSequence       *int       `json:"series_sequence,omitempty"`
-	FilePath             string     `json:"file_path"`
-	Format               string     `json:"format,omitempty"`
-	Duration             *int       `json:"duration,omitempty"`
-	OriginalFilename     *string    `json:"original_filename,omitempty"`
-	FileSize             *int64     `json:"file_size,omitempty"`
-	FileHash             *string    `json:"file_hash,omitempty"`
-	OriginalFileHash     *string    `json:"original_file_hash,omitempty"`
-	OrganizedFileHash    *string    `json:"organized_file_hash,omitempty"`
-	LibraryState         *string    `json:"library_state,omitempty"`
-	QuarantinedAt        *time.Time `json:"quarantined_at,omitempty"`
-	QuarantineReason     *string    `json:"quarantine_reason,omitempty"`
-	CoverURL             *string    `json:"cover_url,omitempty"`
-	Narrator             *string    `json:"narrator,omitempty"`
+	ID                string     `json:"id"`
+	Title             string     `json:"title"`
+	AuthorID          *int       `json:"author_id,omitempty"`
+	SeriesID          *int       `json:"series_id,omitempty"`
+	SeriesSequence    *int       `json:"series_sequence,omitempty"`
+	FilePath          string     `json:"file_path"`
+	Format            string     `json:"format,omitempty"`
+	Duration          *int       `json:"duration,omitempty"`
+	OriginalFilename  *string    `json:"original_filename,omitempty"`
+	FileSize          *int64     `json:"file_size,omitempty"`
+	FileHash          *string    `json:"file_hash,omitempty"`
+	OriginalFileHash  *string    `json:"original_file_hash,omitempty"`
+	OrganizedFileHash *string    `json:"organized_file_hash,omitempty"`
+	LibraryState      *string    `json:"library_state,omitempty"`
+	QuarantinedAt     *time.Time `json:"quarantined_at,omitempty"`
+	QuarantineReason  *string    `json:"quarantine_reason,omitempty"`
+	CoverURL          *string    `json:"cover_url,omitempty"`
+	Narrator          *string    `json:"narrator,omitempty"`
 	// TranscribedTitle is the Whisper-parsed intro title, carried in the
 	// summary projection so filter-pushdown callers (e.g.
 	// FilterSpec.OnlyParsedTranscription) can distinguish parsed from
@@ -981,7 +981,7 @@ type LibraryStats struct {
 	// file error (from the book_file_errors_by_book: index). Populated alongside
 	// TotalBooks/TotalFiles in computeLibraryStats so all three counts share a
 	// single cache entry and invalidation path.
-	BrokenFiles int       `json:"broken_files"`
+	BrokenFiles int `json:"broken_files"`
 	// FingerprintedBooks/PartiallyFingerprintedBooks/UnfingerprintedBooks
 	// classify every non-deleted book by whether its active book_files have
 	// any/all/none of them fingerprinted (BookFile.GetAcoustIDSeg0() != "",
@@ -1081,6 +1081,12 @@ type AcoustIDStats struct {
 	TotalFiles      int                      `json:"total_files"`
 	WithFingerprint int                      `json:"with_fingerprint"` // ≥1 segment populated
 	ByLibrary       []AcoustIDStatsByLibrary `json:"by_library"`
+	// WithFingerprintZeroDuration counts fingerprinted rows where
+	// AcoustIDFingerprintDurationSec==0 (STOREFID DurationSec invariant check).
+	// The PR-B ops gate on this field surviving the memdb strip as a proxy for
+	// "has a fingerprint" — a nonzero count here means that proxy is unsound
+	// for those rows and they're being silently skipped by those ops.
+	WithFingerprintZeroDuration int `json:"with_fingerprint_zero_duration"`
 }
 
 // AcoustIDStatsByLibrary breaks down fingerprint coverage for one library root.

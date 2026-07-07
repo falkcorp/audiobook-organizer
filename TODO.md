@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.71.0 -->
+<!-- version: 9.72.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-07 -->
 
@@ -81,7 +81,7 @@ future agent) can scan the entire workspace in one page.
   already has full fuzzy-matching logic downstream (`applyTranscriptionMetadataTiebreaker`,
   `metadataPairSimilarity`) that's just never fed any candidates today.
 
-## 🟡 Verify DurationSec invariant for the 3 PR-B fingerprint ops (2026-07-06)
+## 🟡 Verify DurationSec invariant for the 3 PR-B fingerprint ops (2026-07-06, diagnostic added 2026-07-07)
 
 - The 3 rerouted ops (lsh_backfill / lsh_index_build / online_lookup) gate on
   `AcoustIDFingerprintDurationSec > 0` as the memdb-safe proxy for "has a whole-file
@@ -89,6 +89,12 @@ future agent) can scan the entire workspace in one page.
   query** for `book_file` rows with a non-empty fingerprint blob but `DurationSec == 0`;
   if any exist they are silently skipped — backfill `DurationSec` or broaden the gate.
   Code comment in `internal/plugins/acoustid/online_lookup.go`.
+- **Diagnostic added (2026-07-07):** `AcoustIDStats.WithFingerprintZeroDuration`, surfaced on the
+  existing `GET /maintenance/acoustid-stats` endpoint, now answers this directly — no new op or
+  prod DB access needed. **Still needs one prod query run post-deploy to actually close this item**:
+  hit the endpoint and check `with_fingerprint_zero_duration`. If 0, the invariant holds and this
+  item is fully resolved. If nonzero, that count identifies exactly how many rows need a
+  `DurationSec` backfill.
 
 ---
 

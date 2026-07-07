@@ -1,7 +1,7 @@
 // file: internal/database/pebble_acoustid_stats_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: e5f6a7b8-c9d0-1234-efab-234567890123
-// last-edited: 2026-06-17
+// last-edited: 2026-07-07
 
 package database
 
@@ -110,6 +110,53 @@ func TestGetAcoustIDStats_StaleMemDBDoesNotBreakLibraryGrouping(t *testing.T) {
 	assert.Equal(t, "/lib/audiobooks", stats.ByLibrary[0].LibraryRoot)
 	assert.Equal(t, 2, stats.ByLibrary[0].TotalFiles)
 	assert.Equal(t, 1, stats.ByLibrary[0].WithFingerprint)
+}
+
+// TestGetAcoustIDStats_ZeroDurationInvariant is the regression test for the
+// STOREFID DurationSec invariant check: PR-B ops gate on
+// AcoustIDFingerprintDurationSec>0 as a memdb-surviving proxy for "has a
+// fingerprint." A row with a fingerprint blob but DurationSec==0 breaks that
+// proxy and is silently skipped by those ops. WithFingerprintZeroDuration
+// exists so this can be verified against production data.
+func TestGetAcoustIDStats_ZeroDurationInvariant(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+
+	importPath := "/lib"
+	src := "audible"
+	asin1, asin2, asin3 := "B010", "B011", "B012"
+	books := []Book{
+		{Title: "Normal FP", MetadataSource: &src, ASIN: &asin1, SourceImportPath: &importPath},
+		{Title: "Zero Duration FP", MetadataSource: &src, ASIN: &asin2, SourceImportPath: &importPath},
+		{Title: "No FP", MetadataSource: &src, ASIN: &asin3, SourceImportPath: &importPath},
+	}
+	for i := range books {
+		created, err := store.CreateBook(&books[i])
+		require.NoError(t, err)
+		books[i].ID = created.ID
+	}
+
+	// Normal row: fingerprint + a real duration.
+	require.NoError(t, store.CreateBookFile(&BookFile{
+		BookID: books[0].ID, FilePath: "/lib/normal.m4b",
+		AcoustIDFingerprint: []byte{1, 2, 3, 4}, AcoustIDFingerprintDurationSec: 1800,
+	}))
+	// Invariant-violating row: fingerprint present, but DurationSec==0.
+	require.NoError(t, store.CreateBookFile(&BookFile{
+		BookID: books[1].ID, FilePath: "/lib/zero-duration.m4b",
+		AcoustIDFingerprint: []byte{5, 6, 7, 8}, AcoustIDFingerprintDurationSec: 0,
+	}))
+	// No fingerprint at all: must not count either way.
+	require.NoError(t, store.CreateBookFile(&BookFile{
+		BookID: books[2].ID, FilePath: "/lib/no-fp.m4b",
+	}))
+
+	ps := store.(*PebbleStore)
+	stats, err := ps.GetAcoustIDStats()
+	require.NoError(t, err)
+	assert.Equal(t, 3, stats.TotalFiles)
+	assert.Equal(t, 2, stats.WithFingerprint, "2 rows have a fingerprint blob")
+	assert.Equal(t, 1, stats.WithFingerprintZeroDuration, "exactly 1 fingerprinted row has DurationSec==0")
 }
 
 func TestGetAcoustIDStats_AllSegmentsChecked(t *testing.T) {
