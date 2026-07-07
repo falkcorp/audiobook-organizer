@@ -1,6 +1,7 @@
 // file: internal/itunes/backfill_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: c9d0e1f2-a3b4-c5d6-e7f8-a9b0c1d2e3f4
+// last-edited: 2026-07-07
 
 package itunes
 
@@ -30,17 +31,17 @@ func NewMockBackfillStore() *MockBackfillStore {
 	}
 }
 
-func (m *MockBackfillStore) GetAllBooks(limit, offset int) ([]database.Book, error) {
+func (m *MockBackfillStore) GetAllBooksCore(limit, offset int) ([]database.BookCore, error) {
 	if m.hasError {
 		return nil, errMockFailure
 	}
-	var all []database.Book
+	var all []database.BookCore
 	for _, b := range m.books {
-		all = append(all, b)
+		all = append(all, b.Core())
 	}
 	// Simulate pagination via limit/offset to allow backfill loop to terminate.
 	if offset >= len(all) {
-		return []database.Book{}, nil
+		return []database.BookCore{}, nil
 	}
 	end := offset + limit
 	if end > len(all) {
