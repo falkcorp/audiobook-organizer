@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 9.67.0 -->
+<!-- version: 9.68.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-07-06 -->
+<!-- last-edited: 2026-07-07 -->
 
 # Project TODO
 
@@ -19,6 +19,31 @@ future agent) can scan the entire workspace in one page.
 - Claude project memory at `~/.claude/projects/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/memory/` — items still to graduate here
 
 ---
+
+## 🟠 CreateOrganizedVersion original-book slim-writeback (Author/Series) — follow-up (STOREFID W5d-1, 2026-07-07)
+
+- **Pre-existing latent bug** surfaced during STOREFID W5d-1 review.
+  `internal/organizer/service.go` `CreateOrganizedVersion` writes the page-sourced
+  *original* book back with the version-group / non-primary / `organized_source` stamp:
+  ```go
+  book.VersionGroupID = &versionGroupID
+  book.IsPrimaryVersion = &isNotPrimary
+  book.LibraryState = &organizedSourceState
+  orgSvc.db.UpdateBook(book.ID, book)   // book is GetAllBooksCore→ToBook, heavy-field-nil
+  ```
+  Under prod's memdb default `book` has nil `Author`/`Series` (not STOR-1-guarded), so this
+  wipes the original's denormalized author/series. Prod behavior is unchanged by W5d-1
+  (memdb already stripped these); the `.ToBook()` in W5d-1 just makes it no longer
+  compile-visible once `GetAllBooks` is removed in W5z.
+- **Fix must be careful:** hydrating via `GetBookByID` before the write (the usual pattern)
+  preserves Author/Series BUT must NOT regress the version-group state transition to
+  fail-closed — a `GetBookByID` error must still demote the original to non-primary, or the
+  version group ends up with **two primaries**. So: hydrate-and-write on success, but fall
+  back to the direct state write (accepting the rare Author/Series wipe) if hydrate fails —
+  i.e. fail-OPEN for the state transition, preserve-heavy-when-possible. Add a regression
+  test asserting Author survives AND the original is demoted even when GetBookByID errors.
+- Same writeback shape as the W5d-1 organizer writebacks that DID get the `hydrateAndUpdateBook`
+  helper; this one was deliberately left out pending the fail-open design above.
 
 ## 🟠 PR-D: deluge import fingerprint-wipe (3 impls) — fast-follow after STOREFID W3 (2026-07-06)
 

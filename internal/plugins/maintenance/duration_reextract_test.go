@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_reextract_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 4a7d1e92-8c63-4f50-a1b8-3e6c9d2f5a04
-// last-edited: 2026-07-03
+// last-edited: 2026-07-07
 
 package maintenance
 
@@ -37,7 +37,8 @@ func newReextractPlugin(books []database.Book) (*Plugin, *[]database.Book) {
 		byID[b.ID] = b
 	}
 	store := &database.MockStore{
-		CountAllBooksFunc: func() (int, error) { return len(books), nil },
+		CountAllBooksFunc:       func() (int, error) { return len(books), nil },
+		GetAllBooksFullFromFunc: pageBooksFullFrom(books),
 		GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) {
 			if offset >= len(books) {
 				return nil, nil
@@ -65,6 +66,33 @@ func newReextractPlugin(books []database.Book) (*Plugin, *[]database.Book) {
 }
 
 func intPtr(v int) *int { return &v }
+
+// pageBooksFullFrom mirrors PebbleStore.GetAllBooksFullFrom's afterID cursor
+// over a fixed fixture slice. STOREFID W5d-1 rerouted the SDK's PageBooks
+// (which duration-reextract iterates through) from GetAllBooks(offset) onto
+// GetAllBooksFullFrom(afterID); without this the mock's nil default returns
+// zero books and every apply-path assertion sees 0 examined/written.
+func pageBooksFullFrom(books []database.Book) func(string, int) ([]database.Book, error) {
+	return func(afterID string, limit int) ([]database.Book, error) {
+		start := 0
+		if afterID != "" {
+			for i, b := range books {
+				if b.ID == afterID {
+					start = i + 1
+					break
+				}
+			}
+		}
+		if start >= len(books) {
+			return nil, nil
+		}
+		end := len(books)
+		if limit > 0 && start+limit < end {
+			end = start + limit
+		}
+		return books[start:end], nil
+	}
+}
 
 // TestDurationReextract_Registered verifies the op def carries the expected ID,
 // capabilities, and dry-run-friendly defaults.
@@ -169,7 +197,8 @@ func TestDurationReextract_MultiFileMissingSegmentsSkipped(t *testing.T) {
 	writes := 0
 	books := []database.Book{{ID: "bm", Title: "Multi", FilePath: "/lib/Multi", Duration: intPtr(100)}}
 	store := &database.MockStore{
-		CountAllBooksFunc: func() (int, error) { return len(books), nil },
+		CountAllBooksFunc:       func() (int, error) { return len(books), nil },
+		GetAllBooksFullFromFunc: pageBooksFullFrom(books),
 		GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) {
 			if offset >= len(books) {
 				return nil, nil
@@ -205,7 +234,8 @@ func TestDurationReextract_FingerprintDurationFirst(t *testing.T) {
 	var written []database.BookFile
 	books := []database.Book{{ID: "bf", Title: "Fingerprinted", FilePath: "/lib/Fingerprinted", Duration: intPtr(120)}}
 	store := &database.MockStore{
-		CountAllBooksFunc: func() (int, error) { return len(books), nil },
+		CountAllBooksFunc:       func() (int, error) { return len(books), nil },
+		GetAllBooksFullFromFunc: pageBooksFullFrom(books),
 		GetAllBooksFunc: func(_, offset int) ([]database.Book, error) {
 			if offset >= len(books) {
 				return nil, nil
@@ -250,7 +280,8 @@ func TestDurationReextract_MixedFingerprintAndFfprobe(t *testing.T) {
 	bookPID := itunesPID
 	books := []database.Book{{ID: "bm", Title: "Mixed", FilePath: "/lib/Mixed", Duration: intPtr(120), ITunesPersistentID: &bookPID}}
 	store := &database.MockStore{
-		CountAllBooksFunc: func() (int, error) { return len(books), nil },
+		CountAllBooksFunc:       func() (int, error) { return len(books), nil },
+		GetAllBooksFullFromFunc: pageBooksFullFrom(books),
 		GetAllBooksFunc: func(_, offset int) ([]database.Book, error) {
 			if offset >= len(books) {
 				return nil, nil
@@ -291,7 +322,8 @@ func TestDurationReextract_ParallelWorkers_AllBooksProcessed(t *testing.T) {
 	}
 
 	store := &database.MockStore{
-		CountAllBooksFunc: func() (int, error) { return n, nil },
+		CountAllBooksFunc:       func() (int, error) { return n, nil },
+		GetAllBooksFullFromFunc: pageBooksFullFrom(books),
 		GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) {
 			if offset >= n {
 				return nil, nil
@@ -416,7 +448,8 @@ func TestDurationReextract_FingerprintIdempotent(t *testing.T) {
 	writes := 0
 	books := []database.Book{{ID: "bi", Title: "Correct", FilePath: "/lib/Correct", Duration: intPtr(3600)}}
 	store := &database.MockStore{
-		CountAllBooksFunc: func() (int, error) { return len(books), nil },
+		CountAllBooksFunc:       func() (int, error) { return len(books), nil },
+		GetAllBooksFullFromFunc: pageBooksFullFrom(books),
 		GetAllBooksFunc: func(_, offset int) ([]database.Book, error) {
 			if offset >= len(books) {
 				return nil, nil
@@ -456,7 +489,8 @@ func onlyMissingDurationTestBooks() []database.Book {
 
 func newOnlyMissingDurationStore(books []database.Book) *database.MockStore {
 	return &database.MockStore{
-		CountAllBooksFunc: func() (int, error) { return len(books), nil },
+		CountAllBooksFunc:       func() (int, error) { return len(books), nil },
+		GetAllBooksFullFromFunc: pageBooksFullFrom(books),
 		GetAllBooksFunc: func(_, offset int) ([]database.Book, error) {
 			if offset >= len(books) {
 				return nil, nil

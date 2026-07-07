@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/full_scan_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c3d4e5f6-a7b8-49c0-b1d2-e3f4a5b6c7d8
-// last-edited: 2026-07-04
+// last-edited: 2026-07-07
 
 // Tests for the dedup.full-scan op's dual-phase progress reporting.
 //
@@ -56,9 +56,20 @@ func fullScanMockStore(n int) *database.MockStore {
 			IsPrimaryVersion: &primary,
 		}
 	}
+	cores := make([]database.BookCore, len(books))
+	for i := range books {
+		cores[i] = books[i].Core()
+	}
 	return &database.MockStore{
 		GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) {
 			return books, nil
+		},
+		// STOREFID W5d-1 moved the engine's getAllBooks/getAllBooksUnfiltered
+		// onto GetAllBooksCore, so FullScan now reads through this method —
+		// return the same fixture (as Core) rather than the mock's nil default,
+		// or the scan sees 0 books.
+		GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) {
+			return cores, nil
 		},
 		GetBookFilesFunc: func(bookID string) ([]database.BookFile, error) {
 			return nil, nil

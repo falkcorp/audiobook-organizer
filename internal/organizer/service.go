@@ -924,17 +924,19 @@ func (orgSvc *Service) CreateOrganizedVersion(org *Organizer, book *database.Boo
 		}
 	}
 
-	// Update original book: set version group, mark as non-primary, update
-	// state. Hydrate the full row first — `book` here is a page-derived
-	// (GetAllBooksCore→ToBook, heavy-field-nil) projection, so writing it
-	// directly would wipe the original's denormalized Author/Series. Same
-	// hydrate-before-write pattern as the other organizer writebacks.
+	// Update original book: set version group, mark as non-primary, update state.
+	// NOTE: `book` here is a page-derived (GetAllBooksCore→ToBook, heavy-field-nil)
+	// projection, so this direct write wipes the original's denormalized
+	// Author/Series under a full-fidelity backend — a PRE-EXISTING latent bug
+	// (memdb already stripped these in prod before STOREFID). Deliberately NOT
+	// fixed here: a correct fix must hydrate to preserve Author/Series WITHOUT
+	// regressing the version-group state transition to fail-closed (a GetBookByID
+	// error must not leave two primaries in the group). Tracked as a follow-up.
 	organizedSourceState := "organized_source"
-	if err := orgSvc.hydrateAndUpdateBook(book.ID, func(b *database.Book) {
-		b.VersionGroupID = &versionGroupID
-		b.IsPrimaryVersion = &isNotPrimary
-		b.LibraryState = &organizedSourceState
-	}); err != nil {
+	book.VersionGroupID = &versionGroupID
+	book.IsPrimaryVersion = &isNotPrimary
+	book.LibraryState = &organizedSourceState
+	if _, err := orgSvc.db.UpdateBook(book.ID, book); err != nil {
 		log.Warn("Failed to update original book %s version group: %v", book.ID, err)
 	}
 
