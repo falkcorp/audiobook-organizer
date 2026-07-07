@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_stats.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8643a893-1898-4098-8e69-c312531d962c
 // last-edited: 2026-07-07
 
@@ -693,6 +693,9 @@ func (p *PebbleStore) GetAcoustIDStats() (*AcoustIDStats, error) {
 			f.AcoustIDSeg3 != "" || f.AcoustIDSeg4 != "" || f.AcoustIDSeg5 != "" || f.AcoustIDSeg6 != ""
 		if hasFP {
 			stats.WithFingerprint++
+			if f.AcoustIDFingerprintDurationSec == 0 {
+				stats.WithFingerprintZeroDuration++
+			}
 		}
 
 		root := bookLib[f.BookID]
