@@ -1,7 +1,7 @@
 // file: internal/server/handlers/entities/handler.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b02a07d8-1806-4c86-bb72-f0688d6caff3
-// last-edited: 2026-07-05
+// last-edited: 2026-07-06
 
 // Package entities hosts the entity-domain HTTP handlers extracted from the
 // server package: works, authors, series, and narrators — CRUD plus merges,
@@ -820,10 +820,21 @@ func (h *Handler) GetSeriesBooks(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "invalid series ID")
 		return
 	}
-	books, err := h.store.GetBooksBySeriesID(seriesID)
+	booksCore, err := h.store.GetBooksBySeriesIDCore(seriesID)
 	if err != nil {
 		httputil.InternalError(c, "failed to get series books", err)
 		return
+	}
+	// h.enrichBooks (injected from package server, see wire_handlers.go) is
+	// shared with full-fidelity Book sources elsewhere, so its signature
+	// stays []database.Book — convert back via BookCore.ToBook() rather than
+	// widening that shared response-building code (out of scope for
+	// STOREFID W4, matching the GetAuthorBooks convention above). The heavy
+	// fields it would enrich with were already absent from this SLIM getter
+	// before this change; no behavior change.
+	books := make([]database.Book, len(booksCore))
+	for i := range booksCore {
+		books[i] = booksCore[i].ToBook()
 	}
 
 	enriched := h.enrichBooks(books)
@@ -918,7 +929,7 @@ func (h *Handler) DeleteEmptySeries(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "invalid series ID")
 		return
 	}
-	books, err := h.store.GetBooksBySeriesID(seriesID)
+	books, err := h.store.GetBooksBySeriesIDCore(seriesID)
 	if err != nil {
 		httputil.InternalError(c, "failed to get series books", err)
 		return
@@ -949,7 +960,7 @@ func (h *Handler) BulkDeleteSeries(c *gin.Context) {
 	skipped := 0
 	var errors []string
 	for _, id := range req.IDs {
-		books, err := h.store.GetBooksBySeriesID(id)
+		books, err := h.store.GetBooksBySeriesIDCore(id)
 		if err != nil {
 			errors = append(errors, fmt.Sprintf("series %d: %v", id, err))
 			continue

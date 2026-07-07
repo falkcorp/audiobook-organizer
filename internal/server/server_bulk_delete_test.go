@@ -1,7 +1,7 @@
 // file: internal/server/server_bulk_delete_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-07-05
+// last-edited: 2026-07-06
 
 package server
 
@@ -431,7 +431,7 @@ func TestBulkDeleteSeries_MixedResults(t *testing.T) {
 
 func TestBulkDeleteSeries_StoreError(t *testing.T) {
 	mock := &database.MockStore{
-		GetBooksBySeriesIDFunc: func(seriesID int) ([]database.Book, error) {
+		GetBooksBySeriesIDCoreFunc: func(seriesID int) ([]database.BookCore, error) {
 			if seriesID == 1 {
 				return nil, fmt.Errorf("db read error")
 			}
@@ -464,7 +464,7 @@ func TestBulkDeleteSeries_StoreError(t *testing.T) {
 
 func TestBulkDeleteSeries_DeleteError(t *testing.T) {
 	mock := &database.MockStore{
-		GetBooksBySeriesIDFunc: func(seriesID int) ([]database.Book, error) {
+		GetBooksBySeriesIDCoreFunc: func(seriesID int) ([]database.BookCore, error) {
 			return nil, nil
 		},
 		DeleteSeriesFunc: func(id int) error {

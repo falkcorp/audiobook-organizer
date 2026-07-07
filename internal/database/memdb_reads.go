@@ -1,5 +1,5 @@
 // file: internal/database/memdb_reads.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000006
 // last-edited: 2026-07-06
 
@@ -354,11 +354,21 @@ func (m *MemStore) GetAllAuthorFileCounts() (map[int]int, error) {
 	return out, nil
 }
 
-// GetBooksBySeriesID returns primary, not-deleted books for a series with
-// pagination. Sort order is series_sequence (nulls last) then title, but
-// the comparator pre-lowercases titles ONCE per row instead of on every
+// GetBooksBySeriesIDCore returns primary, not-deleted books for a series
+// with pagination. Sort order is series_sequence (nulls last) then title,
+// but the comparator pre-lowercases titles ONCE per row instead of on every
 // compare to avoid O(n log n) string allocations.
-func (m *MemStore) GetBooksBySeriesID(seriesID int, limit, offset int) ([]Book, error) {
+//
+// Core-typed (STOREFID W4): the return type is BookCore, not Book — memdb
+// rows never carry the nine heavy fields (Description, VersionNotes,
+// BookSigV1, BookSigV1Mask, BookSigSegments, BookSigBuiltAt,
+// BookSigCoveragePct, Author, Series) in the first place, so projecting via
+// .Core() here just makes that guarantee visible in the type system. Unlike
+// GetBooksByAuthorID (kept []Book because it is shared by two PebbleStore
+// callers), this method has exactly one caller
+// (PebbleStore.GetBooksBySeriesIDCore), so retyping it directly is the
+// smaller change. See docs/specs/2026-07-05-store-getter-fidelity-unification.md.
+func (m *MemStore) GetBooksBySeriesIDCore(seriesID int, limit, offset int) ([]BookCore, error) {
 	txn := m.db.Txn(false)
 	defer txn.Abort()
 
@@ -399,7 +409,12 @@ func (m *MemStore) GetBooksBySeriesID(seriesID int, limit, offset int) ([]Book, 
 			}
 		})
 	}
-	return paginate(all, limit, offset), nil
+	paged := paginate(all, limit, offset)
+	cores := make([]BookCore, len(paged))
+	for i := range paged {
+		cores[i] = paged[i].Core()
+	}
+	return cores, nil
 }
 
 // GetBooksByAuthorID returns primary, not-deleted books for an author with

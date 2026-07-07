@@ -1,7 +1,7 @@
 // file: internal/database/memdb_reads_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000007
-// last-edited: 2026-07-03
+// last-edited: 2026-07-06
 
 package database
 
@@ -139,7 +139,7 @@ func TestMemStore_GetAllSeriesFileCounts(t *testing.T) {
 	}
 }
 
-func TestMemStore_GetBooksBySeriesID(t *testing.T) {
+func TestMemStore_GetBooksBySeriesIDCore(t *testing.T) {
 	m, err := NewMemStore()
 	if err != nil {
 		t.Fatalf("NewMemStore: %v", err)
@@ -152,9 +152,9 @@ func TestMemStore_GetBooksBySeriesID(t *testing.T) {
 	}
 	seedMemStore(t, m, books, nil, nil, nil)
 
-	got, err := m.GetBooksBySeriesID(10, 10, 0)
+	got, err := m.GetBooksBySeriesIDCore(10, 10, 0)
 	if err != nil {
-		t.Fatalf("GetBooksBySeriesID: %v", err)
+		t.Fatalf("GetBooksBySeriesIDCore: %v", err)
 	}
 	if len(got) != 3 {
 		t.Fatalf("expected 3 books, got %d", len(got))

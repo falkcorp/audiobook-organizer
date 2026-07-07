@@ -1,7 +1,7 @@
 // file: internal/database/iface_book.go
-// version: 2.6.0
+// version: 2.7.0
 // guid: 668ec5a2-f8d9-4fdb-b0d5-09937b5d83ea
-// last-edited: 2026-07-05
+// last-edited: 2026-07-06
 
 package database
 
@@ -53,9 +53,14 @@ type BookReader interface {
 	// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
 	GetDuplicateBooksByMetadata(threshold float64) ([][]Book, error)
 	GetBooksByTitleInDir(normalizedTitle, dirPath string) ([]Book, error)
-	// GetBooksBySeriesID is SLIM (memdb projection) — see
-	// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
-	GetBooksBySeriesID(seriesID int) ([]Book, error)
+	// GetBooksBySeriesIDCore is Core-typed (STOREFID W4): the return type is
+	// BookCore, not Book, so the nine heavy fields (Description,
+	// VersionNotes, BookSigV1, BookSigV1Mask, BookSigSegments,
+	// BookSigBuiltAt, BookSigCoveragePct, Author, Series) being absent is
+	// compiler-enforced rather than silently nil'd. A caller that needs any
+	// of those MUST fetch via GetBookByID / GetAllBooksFullFrom (full
+	// Pebble). See docs/specs/2026-07-05-store-getter-fidelity-unification.md.
+	GetBooksBySeriesIDCore(seriesID int) ([]BookCore, error)
 	// GetBooksByAuthorIDCore is Core-typed (STOREFID P3-W2): the memdb
 	// projection is stripped of the nine heavy fields (Description,
 	// VersionNotes, BookSigV1, BookSigV1Mask, BookSigSegments,

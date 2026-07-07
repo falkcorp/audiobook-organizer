@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/cleanup_series.go
-// version: 2.1.1
+// version: 2.2.0
 // guid: a1000002-0000-0000-0000-000000000002
-// last-edited: 2026-05-01
+// last-edited: 2026-07-06
 
 package jobs
 
@@ -64,7 +64,7 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store database.Store, report
 			continue
 		}
 
-		books, bErr := store.GetBooksBySeriesID(ser.ID)
+		books, bErr := store.GetBooksBySeriesIDCore(ser.ID)
 		if bErr != nil || len(books) == 0 {
 			reporter.Increment()
 			continue
@@ -132,7 +132,10 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store database.Store, report
 	return nil
 }
 
-func csUnlinkAndDeleteSeries(store database.Store, book *database.Book, seriesID int) error {
+// csUnlinkAndDeleteSeries only reads book.ID from the passed-in row (BookCore
+// is sufficient — see caller) and hydrates the real writeback target via
+// GetBookByID below, so no heavy-field fidelity is lost.
+func csUnlinkAndDeleteSeries(store database.Store, book *database.BookCore, seriesID int) error {
 	current, err := store.GetBookByID(book.ID)
 	if err != nil {
 		return fmt.Errorf("GetBookByID: %w", err)
@@ -153,9 +156,9 @@ func csUnlinkAndDeleteSeries(store database.Store, book *database.Book, seriesID
 
 func csMergeSeriesGroup(store database.Store, keepID int, mergeIDs []int) error {
 	for _, fromID := range mergeIDs {
-		books, err := store.GetBooksBySeriesID(fromID)
+		books, err := store.GetBooksBySeriesIDCore(fromID)
 		if err != nil {
-			return fmt.Errorf("GetBooksBySeriesID(%d): %w", fromID, err)
+			return fmt.Errorf("GetBooksBySeriesIDCore(%d): %w", fromID, err)
 		}
 		for _, book := range books {
 			current, err := store.GetBookByID(book.ID)

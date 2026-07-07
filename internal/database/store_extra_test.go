@@ -1,7 +1,7 @@
 // file: internal/database/store_extra_test.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 68b2b2f9-2b8f-4f7f-9d8f-26e6306a3c8e
-// last-edited: 2026-07-05
+// last-edited: 2026-07-06
 
 // NOTE(fable5 T022): SQLiteStore type assertions replaced with PebbleStore;
 // TestSQLiteExtendedFeatures renamed to TestPebbleExtendedFeatures.
@@ -341,8 +341,8 @@ func exerciseStoreCommon(t *testing.T, store Store) {
 	if count, err := store.CountPrimaryBooks(); err != nil || count < 1 {
 		t.Fatalf("CountPrimaryBooks failed: %v", err)
 	}
-	if _, err := store.GetBooksBySeriesID(series.ID); err != nil {
-		t.Fatalf("GetBooksBySeriesID failed: %v", err)
+	if _, err := store.GetBooksBySeriesIDCore(series.ID); err != nil {
+		t.Fatalf("GetBooksBySeriesIDCore failed: %v", err)
 	}
 	if _, err := store.GetBooksByAuthorIDCore(author.ID); err != nil {
 		t.Fatalf("GetBooksByAuthorIDCore failed: %v", err)

@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_helpers.go
-// version: 1.0.0
+// version: 1.2.0
 // guid: 550a807d-8c00-4e34-9a8c-52a80710a0b9
-// last-edited: 2026-06-03
+// last-edited: 2026-07-07
 //
 // Shared, non-HTTP helpers that were extracted from duplicates_handlers.go when
 // the 17 duplicates HTTP handlers moved to internal/server/handlers/duplicates.
@@ -144,7 +144,7 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store interface {
 		canonicalIdx := 0
 		canonicalBookCount := 0
 		for i, s := range group {
-			books, err := store.GetBooksBySeriesID(s.ID)
+			books, err := store.GetBooksBySeriesIDCore(s.ID)
 			if err != nil {
 				continue
 			}
@@ -160,21 +160,36 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store interface {
 			if i == canonicalIdx {
 				continue
 			}
-			books, err := store.GetBooksBySeriesID(ser.ID)
+			// Hydrate the full row via GetBookByID and mutate/write THAT. The
+			// tempting shortcut — bookCore.ToBook() then UpdateBook — would drop
+			// the denormalized Author/Series (db:"-"): they are NOT covered by
+			// UpdateBook's STOR-1 preserve-on-empty guard (which only restores
+			// Description/VersionNotes/BookSig*). Hydrating keeps the write
+			// correct and self-contained.
+			// See docs/specs/2026-07-05-store-getter-fidelity-unification.md.
+			books, err := store.GetBooksBySeriesIDCore(ser.ID)
 			if err != nil {
 				mergeErrors = append(mergeErrors, fmt.Sprintf("failed to get books for series %d: %v", ser.ID, err))
 				continue
 			}
-			for _, book := range books {
+			for _, bookCore := range books {
 				oldSeriesID := ser.ID
-				book.SeriesID = &keepID
-				if _, err := store.UpdateBook(book.ID, &book); err != nil {
-					mergeErrors = append(mergeErrors, fmt.Sprintf("failed to reassign book %s: %v", book.ID, err))
+				full, herr := store.GetBookByID(bookCore.ID)
+				if herr != nil {
+					mergeErrors = append(mergeErrors, fmt.Sprintf("failed to hydrate book %s: %v", bookCore.ID, herr))
+					continue
+				}
+				if full == nil {
+					continue
+				}
+				full.SeriesID = &keepID
+				if _, err := store.UpdateBook(full.ID, full); err != nil {
+					mergeErrors = append(mergeErrors, fmt.Sprintf("failed to reassign book %s: %v", bookCore.ID, err))
 				} else if operationID != "" {
 					_ = store.CreateOperationChange(&database.OperationChange{
 						ID:          ulid.Make().String(),
 						OperationID: operationID,
-						BookID:      book.ID,
+						BookID:      bookCore.ID,
 						ChangeType:  "series_merge",
 						FieldName:   "series_id",
 						OldValue:    fmt.Sprintf("%d (%s)", oldSeriesID, ser.Name),
@@ -215,7 +230,7 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store interface {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			books, err := store.GetBooksBySeriesID(ser.ID)
+			books, err := store.GetBooksBySeriesIDCore(ser.ID)
 			if err != nil {
 				continue
 			}
@@ -310,7 +325,7 @@ func computeSeriesNormalizeActions(store interface {
 		cleaned, pos, flagged := metadata.StripSeriesContamination(s.Name, "")
 
 		if flagged {
-			books, _ := store.GetBooksBySeriesID(s.ID)
+			books, _ := store.GetBooksBySeriesIDCore(s.ID)
 			actions = append(actions, seriesNormalizeAction{
 				SeriesID:  s.ID,
 				OldName:   s.Name,
@@ -330,7 +345,7 @@ func computeSeriesNormalizeActions(store interface {
 			aid = *s.AuthorID
 		}
 		key := groupKey{name: strings.ToLower(cleaned), authorID: aid}
-		books, _ := store.GetBooksBySeriesID(s.ID)
+		books, _ := store.GetBooksBySeriesIDCore(s.ID)
 
 		if existingID, ok := canonical[key]; ok {
 			actions = append(actions, seriesNormalizeAction{
@@ -393,9 +408,9 @@ func buildSeriesNormalizePreview(store interface {
 // collision with the duplicates handler MergeSeriesGroup.
 func mergeSeriesGroupHelper(store maintenanceStore, keepID int, mergeIDs []int) error {
 	for _, fromID := range mergeIDs {
-		books, err := store.GetBooksBySeriesID(fromID)
+		books, err := store.GetBooksBySeriesIDCore(fromID)
 		if err != nil {
-			return fmt.Errorf("GetBooksBySeriesID(%d): %w", fromID, err)
+			return fmt.Errorf("GetBooksBySeriesIDCore(%d): %w", fromID, err)
 		}
 
 		for _, book := range books {
@@ -438,7 +453,7 @@ func executeSeriesNormalizeCore(
 		if a.Action == "flag" {
 			continue
 		}
-		books, bErr := store.GetBooksBySeriesID(a.SeriesID)
+		books, bErr := store.GetBooksBySeriesIDCore(a.SeriesID)
 		if bErr != nil {
 			continue
 		}

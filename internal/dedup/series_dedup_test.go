@@ -1,6 +1,7 @@
 // file: internal/dedup/series_dedup_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f6a7b8c9-d0e1-2345-fabc-456789012345
+// last-edited: 2026-07-07
 
 package dedup
 
@@ -125,15 +126,23 @@ func TestDedupSeries_MergesDuplicates(t *testing.T) {
 	var deletedIDs []int
 	var updatedBooks []database.Book
 
+	heavyDesc := "heavy description that must survive the series reassign"
+
 	mock := &database.MockStore{}
 	mock.GetAllSeriesFunc = func() ([]database.Series, error) {
 		return []database.Series{seriesA, seriesB}, nil
 	}
-	mock.GetBooksBySeriesIDFunc = func(id int) ([]database.Book, error) {
+	mock.GetBooksBySeriesIDCoreFunc = func(id int) ([]database.BookCore, error) {
 		if id == 2 {
-			return []database.Book{{ID: "BOOK1", SeriesID: &id}}, nil
+			return []database.BookCore{{ID: "BOOK1", SeriesID: &id}}, nil
 		}
 		return nil, nil
+	}
+	// DedupSeries hydrates the full row via GetBookByID before writing, so the
+	// heavy Description field is present at write time and must be preserved.
+	mock.GetBookByIDFunc = func(id string) (*database.Book, error) {
+		sid := 2
+		return &database.Book{ID: id, SeriesID: &sid, Description: strPtr(heavyDesc)}, nil
 	}
 	mock.UpdateBookFunc = func(id string, book *database.Book) (*database.Book, error) {
 		updatedBooks = append(updatedBooks, *book)
@@ -153,6 +162,9 @@ func TestDedupSeries_MergesDuplicates(t *testing.T) {
 	require.Len(t, updatedBooks, 1)
 	require.NotNil(t, updatedBooks[0].SeriesID)
 	assert.Equal(t, 1, *updatedBooks[0].SeriesID)
+	// Regression: the hydrate-mutate-update path must NOT wipe heavy fields.
+	require.NotNil(t, updatedBooks[0].Description)
+	assert.Equal(t, heavyDesc, *updatedBooks[0].Description)
 }
 
 func TestDedupSeries_NoDuplicates(t *testing.T) {
@@ -191,11 +203,18 @@ func TestMergeSeries_BasicMerge(t *testing.T) {
 		}
 		return nil, nil
 	}
-	mock.GetBooksBySeriesIDFunc = func(id int) ([]database.Book, error) {
+	mock.GetBooksBySeriesIDCoreFunc = func(id int) ([]database.BookCore, error) {
 		if id == mergeID {
-			return []database.Book{{ID: "BOOK_X", SeriesID: &id}}, nil
+			return []database.BookCore{{ID: "BOOK_X", SeriesID: &id}}, nil
 		}
 		return nil, nil
+	}
+	// MergeSeries hydrates the full row via GetBookByID before writing, so the
+	// heavy Description field is present at write time and must be preserved.
+	heavyDesc := "heavy description that must survive the merge"
+	mock.GetBookByIDFunc = func(id string) (*database.Book, error) {
+		sid := mergeID
+		return &database.Book{ID: id, SeriesID: &sid, Description: strPtr(heavyDesc)}, nil
 	}
 	mock.UpdateBookFunc = func(id string, book *database.Book) (*database.Book, error) {
 		updatedBooks = append(updatedBooks, *book)
@@ -213,6 +232,9 @@ func TestMergeSeries_BasicMerge(t *testing.T) {
 	assert.Contains(t, deletedIDs, mergeID)
 	require.Len(t, updatedBooks, 1)
 	assert.Equal(t, keepID, *updatedBooks[0].SeriesID)
+	// Regression: the hydrate-mutate-update path must NOT wipe heavy fields.
+	require.NotNil(t, updatedBooks[0].Description)
+	assert.Equal(t, heavyDesc, *updatedBooks[0].Description)
 }
 
 func TestMergeSeries_CustomRename(t *testing.T) {
@@ -228,7 +250,7 @@ func TestMergeSeries_CustomRename(t *testing.T) {
 		renamedTo = name
 		return nil
 	}
-	mock.GetBooksBySeriesIDFunc = func(id int) ([]database.Book, error) { return nil, nil }
+	mock.GetBooksBySeriesIDCoreFunc = func(id int) ([]database.BookCore, error) { return nil, nil }
 	mock.DeleteSeriesFunc = func(id int) error { return nil }
 
 	result, err := MergeSeries(context.Background(), mock, "op2", keepID, []int{}, "New Name", nil)
