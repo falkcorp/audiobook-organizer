@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
-// last-edited: 2026-07-06
+// last-edited: 2026-07-07
 
 package database
 
@@ -497,8 +497,10 @@ func (s *PebbleStore) getAllBooksPebbleScan() ([]Book, error) {
 	return books, nil
 }
 
-// GetBookFilesNeedingDelugeImport returns book_files that have a non-empty
-// deluge_hash but have not yet been imported (imported_from_deluge_at IS NULL).
+// GetBookFilesNeedingDelugeImportCore returns book_files that have a
+// non-empty deluge_hash but have not yet been imported
+// (imported_from_deluge_at IS NULL). Core-typed (STOREFID W6) — see the
+// interface doc comment.
 //
 // When memdb is published, walks the sparse deluge_hash index — only rows
 // where DelugeHash is non-empty are indexed — and post-filters on the
@@ -506,24 +508,18 @@ func (s *PebbleStore) getAllBooksPebbleScan() ([]Book, error) {
 // centralization plugin from a 308K full BookFile scan to walking just the
 // (much smaller) deluge-touched subset (H2 + H8). Pebble full-scan retained
 // as the cold-start fallback.
-//
-// SLIM (memdb projection): returns rows with heavy fields nil'd —
-// FingerprintFailureReason/Detail/DiagnosticJSON, AcoustIDFingerprint,
-// AcoustIDSeg0..6 (FingerprintFailedAt and AcoustIDFingerprintDurationSec are
-// kept). A caller that needs any of those MUST fetch via GetBookFiles(bookID)
-// (full Pebble). See docs/specs/2026-07-05-store-getter-fidelity-unification.md.
-func (s *PebbleStore) GetBookFilesNeedingDelugeImport() ([]BookFile, error) {
+func (s *PebbleStore) GetBookFilesNeedingDelugeImportCore() ([]BookFileCore, error) {
 	if s.UseMemDB && s.mem() != nil {
-		return s.mem().GetBookFilesNeedingDelugeImport()
+		return s.mem().GetBookFilesNeedingDelugeImportCore()
 	}
 	all, err := s.getAllBookFilesPebbleScan()
 	if err != nil {
 		return nil, err
 	}
-	var out []BookFile
+	var out []BookFileCore
 	for _, f := range all {
 		if f.DelugeHash != "" && f.ImportedFromDelugeAt == nil {
-			out = append(out, f)
+			out = append(out, f.Core())
 		}
 	}
 	return out, nil

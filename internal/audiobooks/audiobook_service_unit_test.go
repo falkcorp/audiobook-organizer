@@ -1,7 +1,7 @@
 // file: internal/audiobooks/audiobook_service_unit_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-07-06
+// last-edited: 2026-07-07
 
 package audiobooks
 
@@ -390,7 +390,7 @@ func TestAudiobookService_GetDuplicateBooks_NoDuplicates(t *testing.T) {
 	svc := NewAudiobookService(mockStore)
 
 	mockStore.EXPECT().GetDuplicateBooks().Return(nil, nil)
-	mockStore.EXPECT().GetFolderDuplicates().Return(nil, nil)
+	mockStore.EXPECT().GetFolderDuplicatesCore().Return(nil, nil)
 
 	result, err := svc.GetDuplicateBooks(context.Background())
 	assert.NoError(t, err)
@@ -409,7 +409,7 @@ func TestAudiobookService_GetDuplicateBooks_CountsCorrectly(t *testing.T) {
 		{{ID: "d"}, {ID: "e"}},            // 1 duplicate
 	}
 	mockStore.EXPECT().GetDuplicateBooks().Return(groups, nil)
-	mockStore.EXPECT().GetFolderDuplicates().Return(nil, nil)
+	mockStore.EXPECT().GetFolderDuplicatesCore().Return(nil, nil)
 
 	result, err := svc.GetDuplicateBooks(context.Background())
 	assert.NoError(t, err)

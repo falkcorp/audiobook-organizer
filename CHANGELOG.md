@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.120.0 -->
+<!-- version: 3.121.1 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-07 -->
 
@@ -8,6 +8,64 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 7, 2026 - refactor(store): 3 remaining getters → Core, closes STOREFID W6 + PR-D (fingerprint-wipe)
+
+- **`refactor(store)`** — STOREFID W6: the last 3 non-`GetAllBooks` slim getters retyped to Core,
+  following the same direct-rename pattern used for W1/W3/W4 (small caller counts, no interim
+  dual-existence period needed):
+  - `GetBookFilesNeedingDelugeImport` → `GetBookFilesNeedingDelugeImportCore` (`[]BookFileCore`).
+    The existing SLIM strip set documented on this getter was verified to match `BookFileCore`'s
+    strip set exactly (`FingerprintFailureReason/Detail/DiagnosticJSON`, `AcoustIDFingerprint`,
+    `AcoustIDSeg0..6`, retaining `FingerprintFailedAt`/`AcoustIDFingerprintDurationSec`) — a clean,
+    compile-certified fit. `PebbleStore`'s old body called `s.mem().GetBookFilesNeedingDelugeImport`
+    which itself now returns `BookFileCore` via `.Core()`.
+  - `GetFolderDuplicates`/`GetDuplicateBooksByMetadata` → `...Core` (`[][]BookCore`). **New finding
+    during this retype: neither getter has a `MemStore` implementation at all** — `PebbleStore`'s
+    versions are hard stub `return nil, nil` regardless of `UseMemDB`, meaning folder-based and
+    metadata-based duplicate-book detection are non-functional no-ops in production today. This is
+    a pre-existing gap unrelated to STOREFID (tracked as a new TODO item, not fixed here — fixing it
+    means implementing real detection logic, a materially different task than a type retype).
+    `internal/dedup/book_dedup.go` and `internal/audiobooks/service_single.go` convert the Core
+    result to `[]Book` immediately at the store boundary via a small `coreGroupsToBookGroups`
+    helper (one copy per package) — the shared merge/tiebreaker pipeline and the public
+    `BookDupGroup.Books []database.Book` JSON contract are untouched, and every function that
+    touches the merged groups was verified to read only Core-safe fields (Title, AuthorID via a
+    separate `GetAuthorByID` call — never `book.Author` — and `TranscribedTitle`).
+- **This retype also force-surfaced and closes PR-D** (the deluge import fingerprint-wipe
+  fast-follow tracked since STOREFID W3, 2026-07-06): `GetBookFilesNeedingDelugeImportCore`'s
+  narrower return type made the `UpdateBookFile(bf.ID, bf)` writeback in all 3 known impls a
+  compile error (a `*BookFileCore` can't stand in for the `*BookFile` those write paths need)
+  rather than a silent runtime wipe. Fixed all 3 with the standard hydrate-mutate-update pattern
+  (`GetBookFileByID(bookID, fileID)` before mutating `DelugeOriginalPath`/`FilePath`/
+  `ImportedFromDelugeAt` and writing back the full row):
+  `internal/plugins/deluge/centralization.go` (inline `RunItems` closure),
+  `internal/server/deluge_discovery.go` (`handleDelugeImport` before calling
+  `deluge.ImportToLibrary`), `internal/maintenance/jobs/bulk_deluge_import.go` (before calling the
+  package-local `bdi_importToLibrary`). Both `ImportToLibrary` and `bdi_importToLibrary` keep their
+  existing `*database.BookFile` signatures unchanged — the hydrate happens at each call site, not
+  inside the shared helpers, since `ImportToLibrary` is exported and used more widely.
+- **Regression test added** (`internal/plugins/deluge/centralization_test.go`,
+  `TestRunCentralization_HydratesBeforeWriteback`): seeds a `BookFile` with
+  `FingerprintDiagnosticJSON` set, runs it through `runCentralization`, and asserts the field
+  survives the `UpdateBookFile` writeback. Manually verified this test fails on the pre-fix
+  behavior (a naive Core→`UpdateBookFile` writeback with no hydrate) before confirming it passes
+  with the actual fix — the wipe was invisible to the existing suite precisely because nothing
+  asserted on it. Required adding `GetBookFilesNeedingDelugeImportCoreFunc` to `MockStore` (it was
+  previously a hard stub with no test seam).
+- `make mocks` regenerated 5 files (verified via `git diff --name-only`): `mock_store.go`
+  (MockBookFileStore/MockBookReader/MockBookStore/MockStore), `mock_reading_store.go`,
+  `mock_metadata_store.go`, `mock_playlist_store.go`, `mock_operations_store.go`.
+- 18 hand-edited files fixed by the resulting red build (interface, 2 storage-backend impls, 2
+  production writeback call sites, and 13 test/mock files), all confirmed Core-safe before
+  retyping. Full suite green: `internal/database`/`internal/dedup`/`internal/audiobooks` and 9
+  other directly-touched packages all `ok`; `internal/server` verified separately at 467.900s
+  (matches this session's established "300–520s but passes locally" pattern); remaining 74
+  packages `ok`, 0 FAIL.
+- This closes STOREFID W6 (the last 3 slim getters) and PR-D (deluge fingerprint-wipe) in the same
+  PR. Remaining STOREFID work: Phase-4 naming lint (no exported getter should return a full
+  `Book`/`BookFile` while delegating to memdb — spot-check every `p.mem()` call site's exported
+  wrapper return type).
 
 #### July 7, 2026 - refactor(store): remove GetAllBooks entirely (STOREFID W5z)
 

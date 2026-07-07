@@ -1,7 +1,7 @@
 // file: internal/dedup/book_dedup_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e5f6a7b8-c9d0-1234-efab-345678901234
-// last-edited: 2026-06-28
+// last-edited: 2026-07-07
 
 package dedup
 
@@ -127,9 +127,9 @@ func TestScanBookDuplicates_TranscriptionPromotesBorderlineMetadataMatch(t *test
 
 	var metadataThreshold float64
 	mock := &database.MockStore{}
-	mock.GetDuplicateBooksByMetadataFunc = func(threshold float64) ([][]database.Book, error) {
+	mock.GetDuplicateBooksByMetadataFunc = func(threshold float64) ([][]database.BookCore, error) {
 		metadataThreshold = threshold
-		return [][]database.Book{{bookA, bookB}}, nil
+		return [][]database.BookCore{{bookA.Core(), bookB.Core()}}, nil
 	}
 	mock.GetAuthorByIDFunc = func(id int) (*database.Author, error) {
 		return &database.Author{ID: id, Name: "Shared Author"}, nil
@@ -162,8 +162,8 @@ func TestScanBookDuplicates_TranscriptionDemotesBorderlineMetadataMismatch(t *te
 	}
 
 	mock := &database.MockStore{}
-	mock.GetDuplicateBooksByMetadataFunc = func(threshold float64) ([][]database.Book, error) {
-		return [][]database.Book{{bookA, bookB}}, nil
+	mock.GetDuplicateBooksByMetadataFunc = func(threshold float64) ([][]database.BookCore, error) {
+		return [][]database.BookCore{{bookA.Core(), bookB.Core()}}, nil
 	}
 	mock.GetAuthorByIDFunc = func(id int) (*database.Author, error) {
 		return &database.Author{ID: id, Name: "Shared Author"}, nil
@@ -181,8 +181,8 @@ func TestScanBookDuplicates_TranscriptionMissingLeavesMetadataDecisionUnchanged(
 	bookB := database.Book{ID: "BBB", Title: "Kingdom of Glass", AuthorID: &authorID}
 
 	mock := &database.MockStore{}
-	mock.GetDuplicateBooksByMetadataFunc = func(threshold float64) ([][]database.Book, error) {
-		return [][]database.Book{{bookA, bookB}}, nil
+	mock.GetDuplicateBooksByMetadataFunc = func(threshold float64) ([][]database.BookCore, error) {
+		return [][]database.BookCore{{bookA.Core(), bookB.Core()}}, nil
 	}
 	mock.GetAuthorByIDFunc = func(id int) (*database.Author, error) {
 		return &database.Author{ID: id, Name: "Shared Author"}, nil

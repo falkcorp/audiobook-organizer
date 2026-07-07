@@ -1,5 +1,5 @@
 // file: internal/itunes/rebuild_test.go
-// version: 1.0.7
+// version: 1.0.8
 // last-edited: 2026-07-07
 // guid: 1c2d3e4f-5a6b-7c8d-9e0f-1a2b3c4d5e6f
 
@@ -109,11 +109,11 @@ func (m *mockRebuildStore) GetDuplicateBooks() ([][]database.Book, error) {
 	return nil, nil
 }
 
-func (m *mockRebuildStore) GetFolderDuplicates() ([][]database.Book, error) {
+func (m *mockRebuildStore) GetFolderDuplicatesCore() ([][]database.BookCore, error) {
 	return nil, nil
 }
 
-func (m *mockRebuildStore) GetDuplicateBooksByMetadata(threshold float64) ([][]database.Book, error) {
+func (m *mockRebuildStore) GetDuplicateBooksByMetadataCore(threshold float64) ([][]database.BookCore, error) {
 	return nil, nil
 }
 

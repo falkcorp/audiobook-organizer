@@ -133,7 +133,7 @@ func (s *Server) handleDiscoveryImport(c *gin.Context) {
 	// Centralized store method — uses the memdb deluge_hash fastpath
 	// when published (avoids loading all 308K BookFiles just to filter
 	// to the small Deluge-touched subset).
-	pending, err := store.GetBookFilesNeedingDelugeImport()
+	pending, err := store.GetBookFilesNeedingDelugeImportCore()
 	if err != nil {
 		httputil.InternalError(c, "failed to load book files", err)
 		return
@@ -160,7 +160,21 @@ func (s *Server) handleDiscoveryImport(c *gin.Context) {
 			skipped++
 			continue
 		}
-		newPath, importErr := delugeclient.ImportToLibrary(&config.AppConfig, client, store, f)
+		// Hydrate the full row before writing back — f is the Core (memdb-slim)
+		// projection, and passing it straight to ImportToLibrary would silently
+		// wipe the fingerprint-diagnostic fields on its UpdateBookFile call
+		// (STOREFID PR-D).
+		full, hydrateErr := store.GetBookFileByID(f.BookID, f.ID)
+		if hydrateErr != nil || full == nil {
+			errMsg := "book file not found"
+			if hydrateErr != nil {
+				errMsg = hydrateErr.Error()
+			}
+			results = append(results, result{FileID: f.ID, Path: f.FilePath, Error: errMsg})
+			failed++
+			continue
+		}
+		newPath, importErr := delugeclient.ImportToLibrary(&config.AppConfig, client, store, full)
 		if importErr != nil {
 			results = append(results, result{FileID: f.ID, Path: f.FilePath, Error: importErr.Error()})
 			failed++

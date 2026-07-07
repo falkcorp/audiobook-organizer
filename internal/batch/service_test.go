@@ -1,5 +1,5 @@
 // file: internal/batch/service_test.go
-// version: 1.0.8
+// version: 1.0.9
 // last-edited: 2026-07-07
 // guid: b2c3d4e5-f6a7-b8c9-0d1e-2f3a4b5c6d7e
 
@@ -104,8 +104,8 @@ func (m *MockBookStore) GetBookIDsByISBNASIN(isbn10, isbn13, asin string) ([]str
 func (m *MockBookStore) GetBookByOriginalHash(hash string) (*database.Book, error)  { return nil, nil }
 func (m *MockBookStore) GetBookByOrganizedHash(hash string) (*database.Book, error) { return nil, nil }
 func (m *MockBookStore) GetDuplicateBooks() ([][]database.Book, error)              { return nil, nil }
-func (m *MockBookStore) GetFolderDuplicates() ([][]database.Book, error)            { return nil, nil }
-func (m *MockBookStore) GetDuplicateBooksByMetadata(threshold float64) ([][]database.Book, error) {
+func (m *MockBookStore) GetFolderDuplicatesCore() ([][]database.BookCore, error)    { return nil, nil }
+func (m *MockBookStore) GetDuplicateBooksByMetadataCore(threshold float64) ([][]database.BookCore, error) {
 	return nil, nil
 }
 func (m *MockBookStore) GetBooksByTitleInDir(normalizedTitle, dirPath string) ([]database.Book, error) {

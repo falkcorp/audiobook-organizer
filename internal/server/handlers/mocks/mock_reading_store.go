@@ -971,24 +971,24 @@ func (_c *MockReadingStore_GetBookFiles_Call) RunAndReturn(run func(bookID strin
 	return _c
 }
 
-// GetBookFilesNeedingDelugeImport provides a mock function for the type MockReadingStore
-func (_mock *MockReadingStore) GetBookFilesNeedingDelugeImport() ([]database.BookFile, error) {
+// GetBookFilesNeedingDelugeImportCore provides a mock function for the type MockReadingStore
+func (_mock *MockReadingStore) GetBookFilesNeedingDelugeImportCore() ([]database.BookFileCore, error) {
 	ret := _mock.Called()
 
 	if len(ret) == 0 {
-		panic("no return value specified for GetBookFilesNeedingDelugeImport")
+		panic("no return value specified for GetBookFilesNeedingDelugeImportCore")
 	}
 
-	var r0 []database.BookFile
+	var r0 []database.BookFileCore
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func() ([]database.BookFile, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func() ([]database.BookFileCore, error)); ok {
 		return returnFunc()
 	}
-	if returnFunc, ok := ret.Get(0).(func() []database.BookFile); ok {
+	if returnFunc, ok := ret.Get(0).(func() []database.BookFileCore); ok {
 		r0 = returnFunc()
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.BookFile)
+			r0 = ret.Get(0).([]database.BookFileCore)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func() error); ok {
@@ -999,29 +999,29 @@ func (_mock *MockReadingStore) GetBookFilesNeedingDelugeImport() ([]database.Boo
 	return r0, r1
 }
 
-// MockReadingStore_GetBookFilesNeedingDelugeImport_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetBookFilesNeedingDelugeImport'
-type MockReadingStore_GetBookFilesNeedingDelugeImport_Call struct {
+// MockReadingStore_GetBookFilesNeedingDelugeImportCore_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetBookFilesNeedingDelugeImportCore'
+type MockReadingStore_GetBookFilesNeedingDelugeImportCore_Call struct {
 	*mock.Call
 }
 
-// GetBookFilesNeedingDelugeImport is a helper method to define mock.On call
-func (_e *MockReadingStore_Expecter) GetBookFilesNeedingDelugeImport() *MockReadingStore_GetBookFilesNeedingDelugeImport_Call {
-	return &MockReadingStore_GetBookFilesNeedingDelugeImport_Call{Call: _e.mock.On("GetBookFilesNeedingDelugeImport")}
+// GetBookFilesNeedingDelugeImportCore is a helper method to define mock.On call
+func (_e *MockReadingStore_Expecter) GetBookFilesNeedingDelugeImportCore() *MockReadingStore_GetBookFilesNeedingDelugeImportCore_Call {
+	return &MockReadingStore_GetBookFilesNeedingDelugeImportCore_Call{Call: _e.mock.On("GetBookFilesNeedingDelugeImportCore")}
 }
 
-func (_c *MockReadingStore_GetBookFilesNeedingDelugeImport_Call) Run(run func()) *MockReadingStore_GetBookFilesNeedingDelugeImport_Call {
+func (_c *MockReadingStore_GetBookFilesNeedingDelugeImportCore_Call) Run(run func()) *MockReadingStore_GetBookFilesNeedingDelugeImportCore_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run()
 	})
 	return _c
 }
 
-func (_c *MockReadingStore_GetBookFilesNeedingDelugeImport_Call) Return(bookFiles []database.BookFile, err error) *MockReadingStore_GetBookFilesNeedingDelugeImport_Call {
-	_c.Call.Return(bookFiles, err)
+func (_c *MockReadingStore_GetBookFilesNeedingDelugeImportCore_Call) Return(bookFileCores []database.BookFileCore, err error) *MockReadingStore_GetBookFilesNeedingDelugeImportCore_Call {
+	_c.Call.Return(bookFileCores, err)
 	return _c
 }
 
-func (_c *MockReadingStore_GetBookFilesNeedingDelugeImport_Call) RunAndReturn(run func() ([]database.BookFile, error)) *MockReadingStore_GetBookFilesNeedingDelugeImport_Call {
+func (_c *MockReadingStore_GetBookFilesNeedingDelugeImportCore_Call) RunAndReturn(run func() ([]database.BookFileCore, error)) *MockReadingStore_GetBookFilesNeedingDelugeImportCore_Call {
 	_c.Call.Return(run)
 	return _c
 }

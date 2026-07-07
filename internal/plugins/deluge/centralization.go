@@ -1,7 +1,7 @@
 // file: internal/plugins/deluge/centralization.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-06-23
+// last-edited: 2026-07-07
 
 package deluge
 
@@ -63,12 +63,12 @@ func (p *Plugin) runCentralization(ctx context.Context, params json.RawMessage, 
 
 	sdk.NewProgress(reporter, 0).Start("Loading Deluge-imported files...")
 
-	pending, err := p.store.GetBookFilesNeedingDelugeImport()
+	pending, err := p.store.GetBookFilesNeedingDelugeImportCore()
 	if err != nil {
 		return fmt.Errorf("load deluge-pending book files: %w", err)
 	}
 
-	toImport := make([]*database.BookFile, 0, len(pending))
+	toImport := make([]*database.BookFileCore, 0, len(pending))
 	for i := range pending {
 		toImport = append(toImport, &pending[i])
 	}
@@ -99,7 +99,7 @@ func (p *Plugin) runCentralization(ctx context.Context, params json.RawMessage, 
 	// atomic keeps the intent clear if concurrency is raised later.
 	var localCount atomic.Int64
 
-	runErr := registry.RunItems(ctx, reporter, resumeSlice, func(ctx context.Context, bf *database.BookFile) error {
+	runErr := registry.RunItems(ctx, reporter, resumeSlice, func(ctx context.Context, bf *database.BookFileCore) error {
 		globalIdx := baseIdx + int(localCount.Add(1)) - 1
 
 		srcPath := bf.FilePath
@@ -138,12 +138,23 @@ func (p *Plugin) runCentralization(ctx context.Context, params json.RawMessage, 
 			}
 		}
 
-		now := time.Now()
-		bf.DelugeOriginalPath = srcPath
-		bf.FilePath = dest
-		bf.ImportedFromDelugeAt = &now
+		// Hydrate the full row before writing back — bf is the Core (memdb-slim)
+		// projection, and a naive UpdateBookFile(bf.ID, bf) here would silently
+		// wipe the fingerprint-diagnostic fields (STOREFID PR-D).
+		full, hydrateErr := p.store.GetBookFileByID(bf.BookID, bf.ID)
+		if hydrateErr != nil || full == nil {
+			errCount.Add(1)
+			checkpoint.LastError = fmt.Sprintf("hydrate book file %s: %v", bf.ID, hydrateErr)
+			reporter.Logger().Error("hydrate book file failed", "id", bf.ID, "error", hydrateErr)
+			return nil // non-fatal
+		}
 
-		if err := p.store.UpdateBookFile(bf.ID, bf); err != nil {
+		now := time.Now()
+		full.DelugeOriginalPath = srcPath
+		full.FilePath = dest
+		full.ImportedFromDelugeAt = &now
+
+		if err := p.store.UpdateBookFile(full.ID, full); err != nil {
 			errCount.Add(1)
 			checkpoint.LastError = fmt.Sprintf("update book file: %v", err)
 			reporter.Logger().Error("update book file failed", "id", bf.ID, "error", err)

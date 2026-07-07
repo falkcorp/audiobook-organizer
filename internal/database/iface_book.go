@@ -1,5 +1,5 @@
 // file: internal/database/iface_book.go
-// version: 2.9.0
+// version: 2.10.0
 // guid: 668ec5a2-f8d9-4fdb-b0d5-09937b5d83ea
 // last-edited: 2026-07-07
 
@@ -51,12 +51,15 @@ type BookReader interface {
 	GetBookByOriginalHash(hash string) (*Book, error)
 	GetBookByOrganizedHash(hash string) (*Book, error)
 	GetDuplicateBooks() ([][]Book, error)
-	// GetFolderDuplicates is SLIM (memdb projection) — see
+	// GetFolderDuplicatesCore is Core-typed (STOREFID W6): the return type is
+	// BookCore, not Book, so the nine heavy fields being absent is
+	// compiler-enforced rather than silently nil'd. A caller that needs any
+	// of the heavy fields MUST fetch via GetBookByID (full Pebble). See
 	// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
-	GetFolderDuplicates() ([][]Book, error)
-	// GetDuplicateBooksByMetadata is SLIM (memdb projection) — see
-	// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
-	GetDuplicateBooksByMetadata(threshold float64) ([][]Book, error)
+	GetFolderDuplicatesCore() ([][]BookCore, error)
+	// GetDuplicateBooksByMetadataCore is Core-typed (STOREFID W6): see
+	// GetFolderDuplicatesCore's doc comment.
+	GetDuplicateBooksByMetadataCore(threshold float64) ([][]BookCore, error)
 	GetBooksByTitleInDir(normalizedTitle, dirPath string) ([]Book, error)
 	// GetBooksBySeriesIDCore is Core-typed (STOREFID W4): the return type is
 	// BookCore, not Book, so the nine heavy fields (Description,
