@@ -1,13 +1,30 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.112.0 -->
+<!-- version: 3.113.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
-<!-- last-edited: 2026-07-06 -->
+<!-- last-edited: 2026-07-07 -->
 
 # Changelog
 
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 7, 2026 - refactor(store): GetBooksBySeriesID → GetBooksBySeriesIDCore ([]BookCore) (STOREFID W4)
+
+- **`refactor(store)`** — renamed the slim series getter `GetBooksBySeriesID()` →
+  `GetBooksBySeriesIDCore()` returning `[]BookCore` (same pattern as W2's
+  `GetBooksByAuthorIDCore`), atomic across the `Store` interface, `PebbleStore`,
+  `MemStore`, the hand-written `MockStore`, and the mockery-generated mock. A caller
+  reading a memdb-stripped heavy Book field is now a compile error.
+- **3 writeback call sites hardened** — the retype compile-surfaced three loops
+  (`duplicates_helpers.executeSeriesPrune`, `series_dedup.DedupSeries`,
+  `series_dedup.MergeSeries`) that set `SeriesID` on a memdb-slim book and wrote the
+  whole struct back via `UpdateBook`. `UpdateBook`'s STOR-1 preserve-on-empty guard
+  already restored the 7 persisted heavy fields (Description/VersionNotes/BookSig*),
+  but the denormalized `Author`/`Series` (`db:"-"`) were not guard-covered. All three
+  now hydrate the full row via `GetBookByID` and mutate only `SeriesID` — matching the
+  existing `cleanup_series.go` pattern — removing the guard reliance entirely.
+  Regression assertions confirm the heavy `Description` field survives a series reassign.
 
 #### July 6, 2026 - refactor(store): GetAllBookFiles → GetAllBookFilesCore ([]BookFileCore) (STOREFID W3)
 

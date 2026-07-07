@@ -1339,24 +1339,24 @@ func (_c *MockPlaylistStore_GetBooksByMetadataSourceHash_Call) RunAndReturn(run 
 	return _c
 }
 
-// GetBooksBySeriesID provides a mock function for the type MockPlaylistStore
-func (_mock *MockPlaylistStore) GetBooksBySeriesID(seriesID int) ([]database.Book, error) {
+// GetBooksBySeriesIDCore provides a mock function for the type MockPlaylistStore
+func (_mock *MockPlaylistStore) GetBooksBySeriesIDCore(seriesID int) ([]database.BookCore, error) {
 	ret := _mock.Called(seriesID)
 
 	if len(ret) == 0 {
-		panic("no return value specified for GetBooksBySeriesID")
+		panic("no return value specified for GetBooksBySeriesIDCore")
 	}
 
-	var r0 []database.Book
+	var r0 []database.BookCore
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(int) ([]database.Book, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(int) ([]database.BookCore, error)); ok {
 		return returnFunc(seriesID)
 	}
-	if returnFunc, ok := ret.Get(0).(func(int) []database.Book); ok {
+	if returnFunc, ok := ret.Get(0).(func(int) []database.BookCore); ok {
 		r0 = returnFunc(seriesID)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.Book)
+			r0 = ret.Get(0).([]database.BookCore)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(int) error); ok {
@@ -1367,18 +1367,18 @@ func (_mock *MockPlaylistStore) GetBooksBySeriesID(seriesID int) ([]database.Boo
 	return r0, r1
 }
 
-// MockPlaylistStore_GetBooksBySeriesID_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetBooksBySeriesID'
-type MockPlaylistStore_GetBooksBySeriesID_Call struct {
+// MockPlaylistStore_GetBooksBySeriesIDCore_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetBooksBySeriesIDCore'
+type MockPlaylistStore_GetBooksBySeriesIDCore_Call struct {
 	*mock.Call
 }
 
-// GetBooksBySeriesID is a helper method to define mock.On call
+// GetBooksBySeriesIDCore is a helper method to define mock.On call
 //   - seriesID int
-func (_e *MockPlaylistStore_Expecter) GetBooksBySeriesID(seriesID any) *MockPlaylistStore_GetBooksBySeriesID_Call {
-	return &MockPlaylistStore_GetBooksBySeriesID_Call{Call: _e.mock.On("GetBooksBySeriesID", seriesID)}
+func (_e *MockPlaylistStore_Expecter) GetBooksBySeriesIDCore(seriesID any) *MockPlaylistStore_GetBooksBySeriesIDCore_Call {
+	return &MockPlaylistStore_GetBooksBySeriesIDCore_Call{Call: _e.mock.On("GetBooksBySeriesIDCore", seriesID)}
 }
 
-func (_c *MockPlaylistStore_GetBooksBySeriesID_Call) Run(run func(seriesID int)) *MockPlaylistStore_GetBooksBySeriesID_Call {
+func (_c *MockPlaylistStore_GetBooksBySeriesIDCore_Call) Run(run func(seriesID int)) *MockPlaylistStore_GetBooksBySeriesIDCore_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 int
 		if args[0] != nil {
@@ -1391,12 +1391,12 @@ func (_c *MockPlaylistStore_GetBooksBySeriesID_Call) Run(run func(seriesID int))
 	return _c
 }
 
-func (_c *MockPlaylistStore_GetBooksBySeriesID_Call) Return(books []database.Book, err error) *MockPlaylistStore_GetBooksBySeriesID_Call {
-	_c.Call.Return(books, err)
+func (_c *MockPlaylistStore_GetBooksBySeriesIDCore_Call) Return(bookCores []database.BookCore, err error) *MockPlaylistStore_GetBooksBySeriesIDCore_Call {
+	_c.Call.Return(bookCores, err)
 	return _c
 }
 
-func (_c *MockPlaylistStore_GetBooksBySeriesID_Call) RunAndReturn(run func(seriesID int) ([]database.Book, error)) *MockPlaylistStore_GetBooksBySeriesID_Call {
+func (_c *MockPlaylistStore_GetBooksBySeriesIDCore_Call) RunAndReturn(run func(seriesID int) ([]database.BookCore, error)) *MockPlaylistStore_GetBooksBySeriesIDCore_Call {
 	_c.Call.Return(run)
 	return _c
 }

@@ -1,6 +1,7 @@
 // file: internal/server/handlers_unit_test.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: f8a2d1c3-4b5e-6789-abcd-ef0123456789
+// last-edited: 2026-07-06
 //
 // Unit tests for HTTP handlers using MockStore + httptest.
 // Focuses on handlers that directly call s.Store() without
@@ -1271,7 +1272,7 @@ func TestHandler_UpdateSeriesName_InvalidID(t *testing.T) {
 func TestHandler_DeleteEmptySeries_Success(t *testing.T) {
 	srv, mockStore, router := setupHandlerTest(t)
 
-	mockStore.EXPECT().GetBooksBySeriesID(10).Return([]database.Book{}, nil)
+	mockStore.EXPECT().GetBooksBySeriesIDCore(10).Return([]database.BookCore{}, nil)
 	mockStore.EXPECT().DeleteSeries(10).Return(nil)
 
 	router.DELETE("/series/:id", newEntitiesHandler(srv).DeleteEmptySeries)
@@ -1286,7 +1287,7 @@ func TestHandler_DeleteEmptySeries_Success(t *testing.T) {
 func TestHandler_DeleteEmptySeries_HasBooks(t *testing.T) {
 	srv, mockStore, router := setupHandlerTest(t)
 
-	mockStore.EXPECT().GetBooksBySeriesID(10).Return([]database.Book{{ID: "b1"}}, nil)
+	mockStore.EXPECT().GetBooksBySeriesIDCore(10).Return([]database.BookCore{{ID: "b1"}}, nil)
 
 	router.DELETE("/series/:id", newEntitiesHandler(srv).DeleteEmptySeries)
 

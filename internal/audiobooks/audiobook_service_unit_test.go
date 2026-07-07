@@ -1,7 +1,7 @@
 // file: internal/audiobooks/audiobook_service_unit_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-07-05
+// last-edited: 2026-07-06
 
 package audiobooks
 
@@ -177,8 +177,8 @@ func TestAudiobookService_GetAudiobooks_BySeriesID(t *testing.T) {
 	svc := NewAudiobookService(mockStore)
 
 	seriesID := 7
-	expected := []database.Book{{ID: "s1"}}
-	mockStore.EXPECT().GetBooksBySeriesID(7).Return(expected, nil)
+	expected := []database.BookCore{{ID: "s1"}}
+	mockStore.EXPECT().GetBooksBySeriesIDCore(7).Return(expected, nil)
 
 	books, err := svc.GetAudiobooks(context.Background(), 10, 0, "", nil, &seriesID)
 	assert.NoError(t, err)

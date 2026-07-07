@@ -1,6 +1,7 @@
 // file: internal/server/duplicates_handlers_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9c1e2f3a-4b5d-6e7f-8a9b-0c1d2e3f4a5b
+// last-edited: 2026-07-06
 
 package server
 
@@ -22,8 +23,8 @@ func TestComputeSeriesNormalizeActions_Basic(t *testing.T) {
 			{ID: 3, Name: "Discworld", AuthorID: &authorID},
 		}, nil
 	}
-	store.GetBooksBySeriesIDFunc = func(id int) ([]database.Book, error) {
-		return []database.Book{{ID: fmt.Sprintf("book-%d", id)}}, nil
+	store.GetBooksBySeriesIDCoreFunc = func(id int) ([]database.BookCore, error) {
+		return []database.BookCore{{ID: fmt.Sprintf("book-%d", id)}}, nil
 	}
 
 	actions := computeSeriesNormalizeActions(store)
@@ -76,8 +77,8 @@ func TestComputeSeriesNormalizeActions_FlaggedCase(t *testing.T) {
 			{ID: 10, Name: "Clean Series Name", AuthorID: &authorID},
 		}, nil
 	}
-	store.GetBooksBySeriesIDFunc = func(id int) ([]database.Book, error) {
-		return []database.Book{{ID: "book-10"}}, nil
+	store.GetBooksBySeriesIDCoreFunc = func(id int) ([]database.BookCore, error) {
+		return []database.BookCore{{ID: "book-10"}}, nil
 	}
 
 	actions := computeSeriesNormalizeActions(store)
@@ -95,12 +96,12 @@ func TestExecuteSeriesNormalizeCore_RenamesAndEnqueues(t *testing.T) {
 			{ID: 2, Name: "The Long Earth Two", AuthorID: &authorID},
 		}, nil
 	}
-	store.GetBooksBySeriesIDFunc = func(id int) ([]database.Book, error) {
+	store.GetBooksBySeriesIDCoreFunc = func(id int) ([]database.BookCore, error) {
 		switch id {
 		case 1:
-			return []database.Book{{ID: "book-1"}}, nil
+			return []database.BookCore{{ID: "book-1"}}, nil
 		case 2:
-			return []database.Book{{ID: "book-2"}}, nil
+			return []database.BookCore{{ID: "book-2"}}, nil
 		}
 		return nil, nil
 	}

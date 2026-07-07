@@ -1,6 +1,6 @@
 // file: internal/itunes/rebuild_test.go
-// version: 1.0.4
-// last-edited: 2026-07-05
+// version: 1.0.5
+// last-edited: 2026-07-06
 // guid: 1c2d3e4f-5a6b-7c8d-9e0f-1a2b3c4d5e6f
 
 package itunes
@@ -89,7 +89,7 @@ func (m *mockRebuildStore) GetBooksByTitleInDir(normalizedTitle, dirPath string)
 	return nil, nil
 }
 
-func (m *mockRebuildStore) GetBooksBySeriesID(seriesID int) ([]database.Book, error) {
+func (m *mockRebuildStore) GetBooksBySeriesIDCore(seriesID int) ([]database.BookCore, error) {
 	return nil, nil
 }
 

@@ -1,6 +1,7 @@
 // file: internal/dedup/series_dedup.go
-// version: 1.0.0
+// version: 1.2.0
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
+// last-edited: 2026-07-07
 
 // Package dedup: series_dedup.go contains the extracted execution logic for the
 // "dedup.series-scan", "dedup.series-dedup", and "dedup.series-merge" async
@@ -101,7 +102,7 @@ func enrichSeries(store database.Store, seriesList []database.Series, authorName
 			authorName = authorNameMap[*s.AuthorID]
 		}
 		sw := SeriesWithBooks{Series: s, AuthorName: authorName}
-		if books, err := store.GetBooksBySeriesID(s.ID); err == nil {
+		if books, err := store.GetBooksBySeriesIDCore(s.ID); err == nil {
 			limit := 5
 			if len(books) < limit {
 				limit = len(books)
@@ -333,17 +334,33 @@ func DedupSeries(
 			if i == keepIdx {
 				continue
 			}
-			books, err := store.GetBooksBySeriesID(s.ID)
+			// Hydrate the full row via GetBookByID and mutate/write THAT. The
+			// tempting shortcut — bookCore.ToBook() then UpdateBook — would drop
+			// the denormalized Author/Series (db:"-"): they are NOT covered by
+			// UpdateBook's STOR-1 preserve-on-empty guard (which only restores
+			// Description/VersionNotes/BookSig*). Hydrating keeps the write
+			// correct and self-contained.
+			// See docs/specs/2026-07-05-store-getter-fidelity-unification.md.
+			books, err := store.GetBooksBySeriesIDCore(s.ID)
 			if err != nil {
 				result.Errors = append(result.Errors,
 					fmt.Sprintf("failed to get books for series %d: %v", s.ID, err))
 				continue
 			}
-			for _, book := range books {
-				book.SeriesID = &keepID
-				if _, err := store.UpdateBook(book.ID, &book); err != nil {
+			for _, bookCore := range books {
+				full, herr := store.GetBookByID(bookCore.ID)
+				if herr != nil {
 					result.Errors = append(result.Errors,
-						fmt.Sprintf("failed to reassign book %s: %v", book.ID, err))
+						fmt.Sprintf("failed to hydrate book %s: %v", bookCore.ID, herr))
+					continue
+				}
+				if full == nil {
+					continue
+				}
+				full.SeriesID = &keepID
+				if _, err := store.UpdateBook(full.ID, full); err != nil {
+					result.Errors = append(result.Errors,
+						fmt.Sprintf("failed to reassign book %s: %v", bookCore.ID, err))
 				}
 			}
 			if err := store.DeleteSeries(s.ID); err != nil {
@@ -465,27 +482,43 @@ func MergeSeries(
 		if mergeID == keepID {
 			continue
 		}
-		books, err := store.GetBooksBySeriesID(mergeID)
+		// Hydrate the full row via GetBookByID and mutate/write THAT. The
+		// tempting shortcut — bookCore.ToBook() then UpdateBook — would drop
+		// the denormalized Author/Series (db:"-"): they are NOT covered by
+		// UpdateBook's STOR-1 preserve-on-empty guard (which only restores
+		// Description/VersionNotes/BookSig*). Hydrating keeps the write
+		// correct and self-contained.
+		// See docs/specs/2026-07-05-store-getter-fidelity-unification.md.
+		books, err := store.GetBooksBySeriesIDCore(mergeID)
 		if err != nil {
 			result.Errors = append(result.Errors,
 				fmt.Sprintf("failed to get books for series %d: %v", mergeID, err))
 			continue
 		}
 
-		for _, book := range books {
+		for _, bookCore := range books {
 			oldSeriesID := ""
-			if book.SeriesID != nil {
-				oldSeriesID = fmt.Sprintf("%d", *book.SeriesID)
+			if bookCore.SeriesID != nil {
+				oldSeriesID = fmt.Sprintf("%d", *bookCore.SeriesID)
 			}
-			book.SeriesID = &keepID
-			if _, err := store.UpdateBook(book.ID, &book); err != nil {
+			full, herr := store.GetBookByID(bookCore.ID)
+			if herr != nil {
 				result.Errors = append(result.Errors,
-					fmt.Sprintf("failed to reassign book %s: %v", book.ID, err))
+					fmt.Sprintf("failed to hydrate book %s: %v", bookCore.ID, herr))
+				continue
+			}
+			if full == nil {
+				continue
+			}
+			full.SeriesID = &keepID
+			if _, err := store.UpdateBook(full.ID, full); err != nil {
+				result.Errors = append(result.Errors,
+					fmt.Sprintf("failed to reassign book %s: %v", bookCore.ID, err))
 			} else {
 				_ = store.CreateOperationChange(&database.OperationChange{
 					ID:          ulid.Make().String(),
 					OperationID: opID,
-					BookID:      book.ID,
+					BookID:      bookCore.ID,
 					ChangeType:  "metadata_update",
 					FieldName:   "series_id",
 					OldValue:    oldSeriesID,
@@ -529,7 +562,7 @@ func MergeSeries(
 			_ = progress.Log("info",
 				fmt.Sprintf("Linking books to %d authors", len(allAuthorIDs)), nil)
 		}
-		allBooks, err := store.GetBooksBySeriesID(keepID)
+		allBooks, err := store.GetBooksBySeriesIDCore(keepID)
 		if err == nil {
 			for _, book := range allBooks {
 				existing, _ := store.GetBookAuthors(book.ID)

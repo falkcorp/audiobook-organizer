@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.106.0
+// version: 1.107.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-07-05
+// last-edited: 2026-07-06
 
 package database
 
@@ -39,7 +39,7 @@ func prefixEnd(prefix []byte) []byte {
 }
 
 // serializeBookForIndex marshals a Book to JSON for index storage.
-// This enables GetBooksBySeriesID and GetBooksByAuthorIDCore to deserialize
+// This enables GetBooksBySeriesIDCore and GetBooksByAuthorIDCore to deserialize
 // directly from the index without secondary point lookups.
 func serializeBookForIndex(book *Book) ([]byte, error) {
 	return json.Marshal(book)
@@ -92,7 +92,7 @@ func isValidULID(s string) bool {
 // - book:<id>                  -> Book JSON
 // - book:path:<path>           -> book_id (for lookups)
 // NOTE: book:series and book:author prefix indexes were removed in Task 3.4.
-//       GetBooksBySeriesID and GetBooksByAuthorIDCore fall back to a full Pebble scan
+//       GetBooksBySeriesIDCore and GetBooksByAuthorIDCore fall back to a full Pebble scan
 //       (the in-memory query layer covers the hot paths).
 // - import_path:<id>           -> ImportPath JSON
 // - import_path:path:<path>    -> import_path_id (for lookups)
@@ -1057,17 +1057,29 @@ func (p *PebbleStore) GetDuplicateBooksByMetadata(threshold float64) ([][]Book, 
 	return nil, nil
 }
 
-// GetBooksBySeriesID is SLIM (memdb projection): returns rows with heavy
-// fields nil'd — Description, VersionNotes, BookSigV1, BookSigV1Mask,
-// BookSigSegments, BookSigBuiltAt, BookSigCoveragePct, Author, Series. A
-// caller that needs any of those MUST fetch via GetBookByID /
-// GetAllBooksFullFrom (full Pebble). See
-// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
-func (p *PebbleStore) GetBooksBySeriesID(seriesID int) ([]Book, error) {
+// GetBooksBySeriesIDCore is Core-typed (STOREFID W4): the return type is
+// BookCore, not Book, so the nine heavy fields (Description, VersionNotes,
+// BookSigV1, BookSigV1Mask, BookSigSegments, BookSigBuiltAt,
+// BookSigCoveragePct, Author, Series) being absent is compiler-enforced
+// rather than silently nil'd. Both the memdb-fast-path rows (already
+// stripped at the source) and the getBooksBySeriesIDFull scan fallback
+// (full Book, projected via .Core() here) are covered — mapping via .Core()
+// just makes that guarantee visible in the type system. A caller that needs
+// any of the heavy fields MUST fetch via GetBookByID / GetAllBooksFullFrom
+// (full Pebble). See docs/specs/2026-07-05-store-getter-fidelity-unification.md.
+func (p *PebbleStore) GetBooksBySeriesIDCore(seriesID int) ([]BookCore, error) {
 	if p.UseMemDB && p.mem() != nil {
-		return p.mem().GetBooksBySeriesID(seriesID, 0, 0)
+		return p.mem().GetBooksBySeriesIDCore(seriesID, 0, 0)
 	}
-	return p.getBooksBySeriesIDFull(seriesID)
+	books, err := p.getBooksBySeriesIDFull(seriesID)
+	if err != nil {
+		return nil, err
+	}
+	cores := make([]BookCore, len(books))
+	for i := range books {
+		cores[i] = books[i].Core()
+	}
+	return cores, nil
 }
 
 // getBooksBySeriesIDFull performs a full Pebble book scan filtered by series ID.

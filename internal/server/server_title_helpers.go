@@ -1,7 +1,7 @@
 // file: internal/server/server_title_helpers.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: b4b0048c-d778-43c9-871e-21f9a9b6705d
-// last-edited: 2026-05-01
+// last-edited: 2026-07-06
 
 package server
 
@@ -46,7 +46,7 @@ func computeSeriesPrunePreview(store database.Store) (*seriesPrunePreviewResult,
 		canonicalIdx := 0
 		canonicalBookCount := 0
 		for i, s := range group {
-			books, err := store.GetBooksBySeriesID(s.ID)
+			books, err := store.GetBooksBySeriesIDCore(s.ID)
 			if err != nil {
 				continue
 			}
@@ -64,10 +64,10 @@ func computeSeriesPrunePreview(store database.Store) (*seriesPrunePreviewResult,
 				continue
 			}
 			mergeIDs = append(mergeIDs, s.ID)
-			books, _ := store.GetBooksBySeriesID(s.ID)
+			books, _ := store.GetBooksBySeriesIDCore(s.ID)
 			totalBooks += len(books)
 		}
-		books, _ := store.GetBooksBySeriesID(group[canonicalIdx].ID)
+		books, _ := store.GetBooksBySeriesIDCore(group[canonicalIdx].ID)
 		totalBooks += len(books)
 
 		result.Groups = append(result.Groups, seriesPrunePreviewGroup{
@@ -82,7 +82,7 @@ func computeSeriesPrunePreview(store database.Store) (*seriesPrunePreviewResult,
 
 	// Find orphan series with 0 books
 	for _, s := range allSeries {
-		books, err := store.GetBooksBySeriesID(s.ID)
+		books, err := store.GetBooksBySeriesIDCore(s.ID)
 		if err != nil {
 			continue
 		}

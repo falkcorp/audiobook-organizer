@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
-// last-edited: 2026-07-05
+// last-edited: 2026-07-06
 
 // Package metadatahandler hosts the metadata-domain HTTP handlers extracted
 // from the server package's metadata_handlers.go: batch-update / validate /
@@ -1180,12 +1180,12 @@ func (h *Handler) handleBulkWriteBackImpl(c *gin.Context) {
 	var err error
 
 	if req.Filter.AuthorID != nil {
-		// store.GetBooksByAuthorIDCore is Core-typed (STOREFID P3-W2); the
-		// GetBooksBySeriesID/GetAllBooks branches below are not yet migrated
-		// and still return []database.Book, so `books` stays []database.Book
-		// here too — convert back via BookCore.ToBook(). Only book.ID,
-		// MarkedForDeletion, FilePath, and LibraryState (all Core-safe, no
-		// heavy fields) are read from `books`/`filtered` below.
+		// store.GetBooksByAuthorIDCore / GetBooksBySeriesIDCore are Core-typed
+		// (STOREFID P3-W2 / W4); the GetAllBooks branch below is not yet
+		// migrated and still returns []database.Book, so `books` stays
+		// []database.Book here too — convert back via BookCore.ToBook(). Only
+		// book.ID, MarkedForDeletion, FilePath, and LibraryState (all
+		// Core-safe, no heavy fields) are read from `books`/`filtered` below.
 		var booksCore []database.BookCore
 		booksCore, err = store.GetBooksByAuthorIDCore(*req.Filter.AuthorID)
 		if err == nil {
@@ -1195,7 +1195,14 @@ func (h *Handler) handleBulkWriteBackImpl(c *gin.Context) {
 			}
 		}
 	} else if req.Filter.SeriesID != nil {
-		books, err = store.GetBooksBySeriesID(*req.Filter.SeriesID)
+		var booksCore []database.BookCore
+		booksCore, err = store.GetBooksBySeriesIDCore(*req.Filter.SeriesID)
+		if err == nil {
+			books = make([]database.Book, len(booksCore))
+			for i := range booksCore {
+				books[i] = booksCore[i].ToBook()
+			}
+		}
 	} else {
 		// Get all books, then filter by library_state
 		books, err = store.GetAllBooks(1_000_000, 0)

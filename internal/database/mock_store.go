@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.72.0
+// version: 1.73.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-07-06
 
@@ -39,7 +39,7 @@ type MockStore struct {
 	ListBookIDsFunc                 func() ([]string, error)
 	GetAllBookSummariesFunc         func(limit, offset int) ([]BookSummary, error)
 	GetBooksByWorkIDFunc            func(workID string) ([]Book, error)
-	GetBooksBySeriesIDFunc          func(seriesID int) ([]Book, error)
+	GetBooksBySeriesIDCoreFunc      func(seriesID int) ([]BookCore, error)
 	GetBooksByAuthorIDCoreFunc      func(authorID int) ([]BookCore, error)
 	GetBooksByAuthorIDWithRoleFunc  func(authorID int) ([]BookCore, error)
 	GetBookByITunesPersistentIDFunc func(persistentID string) (*Book, error)
@@ -762,9 +762,9 @@ func (m *MockStore) GetDuplicateBooksByMetadata(threshold float64) ([][]Book, er
 	return nil, nil
 }
 
-func (m *MockStore) GetBooksBySeriesID(seriesID int) ([]Book, error) {
-	if m.GetBooksBySeriesIDFunc != nil {
-		return m.GetBooksBySeriesIDFunc(seriesID)
+func (m *MockStore) GetBooksBySeriesIDCore(seriesID int) ([]BookCore, error) {
+	if m.GetBooksBySeriesIDCoreFunc != nil {
+		return m.GetBooksBySeriesIDCoreFunc(seriesID)
 	}
 	return nil, nil
 }

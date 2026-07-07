@@ -1,7 +1,7 @@
 // file: internal/server/handlers/entities/handler_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 163bc668-0761-43eb-9d85-f4983e8b014b
-// last-edited: 2026-07-05
+// last-edited: 2026-07-06
 
 package entities_test
 
@@ -416,7 +416,7 @@ func TestListSeries_Cached(t *testing.T) {
 
 func TestGetSeriesBooks(t *testing.T) {
 	h, d := newHandler(t)
-	d.store.EXPECT().GetBooksBySeriesID(5).Return([]database.Book{{ID: "b1"}}, nil)
+	d.store.EXPECT().GetBooksBySeriesIDCore(5).Return([]database.BookCore{{ID: "b1"}}, nil)
 	c, w := newCtx(http.MethodGet, "/series/5/books", "", idParam("5"))
 	h.GetSeriesBooks(c)
 	assert.Equal(t, http.StatusOK, w.Code)
@@ -459,7 +459,7 @@ func TestSplitSeries_EmptyBookIDs(t *testing.T) {
 
 func TestDeleteEmptySeries(t *testing.T) {
 	h, d := newHandler(t)
-	d.store.EXPECT().GetBooksBySeriesID(5).Return([]database.Book{}, nil)
+	d.store.EXPECT().GetBooksBySeriesIDCore(5).Return([]database.BookCore{}, nil)
 	d.store.EXPECT().DeleteSeries(5).Return(nil)
 	c, w := newCtx(http.MethodDelete, "/series/5", "", idParam("5"))
 	h.DeleteEmptySeries(c)
@@ -468,7 +468,7 @@ func TestDeleteEmptySeries(t *testing.T) {
 
 func TestDeleteEmptySeries_HasBooks(t *testing.T) {
 	h, d := newHandler(t)
-	d.store.EXPECT().GetBooksBySeriesID(5).Return([]database.Book{{ID: "b"}}, nil)
+	d.store.EXPECT().GetBooksBySeriesIDCore(5).Return([]database.BookCore{{ID: "b"}}, nil)
 	c, w := newCtx(http.MethodDelete, "/series/5", "", idParam("5"))
 	h.DeleteEmptySeries(c)
 	assert.Equal(t, http.StatusConflict, w.Code)
@@ -476,7 +476,7 @@ func TestDeleteEmptySeries_HasBooks(t *testing.T) {
 
 func TestBulkDeleteSeries(t *testing.T) {
 	h, d := newHandler(t)
-	d.store.EXPECT().GetBooksBySeriesID(1).Return([]database.Book{}, nil)
+	d.store.EXPECT().GetBooksBySeriesIDCore(1).Return([]database.BookCore{}, nil)
 	d.store.EXPECT().DeleteSeries(1).Return(nil)
 	c, w := newCtx(http.MethodPost, "/series/bulk-delete", `{"ids":[1]}`, nil)
 	h.BulkDeleteSeries(c)
