@@ -1,7 +1,7 @@
 // file: internal/database/memdb_reads.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000006
-// last-edited: 2026-07-05
+// last-edited: 2026-07-06
 
 package database
 
@@ -821,24 +821,25 @@ func (m *MemStore) GetBookFilesForIDsCore(bookIDs []string) (map[string][]BookFi
 	return result, nil
 }
 
-// GetAllBookFiles returns every BookFile in the memdb book_files table by
-// iterating the primary ID index. O(N) pointer walk over the in-memory table
-// — no JSON unmarshal, no Pebble disk scan. For 308K book_files this is
-// roughly two orders of magnitude faster than the Pebble full-scan fallback.
-func (m *MemStore) GetAllBookFiles() ([]BookFile, error) {
+// GetAllBookFilesCore returns the BookFileCore projection of every BookFile
+// in the memdb book_files table by iterating the primary ID index. O(N)
+// pointer walk over the in-memory table — no JSON unmarshal, no Pebble disk
+// scan. For 308K book_files this is roughly two orders of magnitude faster
+// than the Pebble full-scan fallback.
+func (m *MemStore) GetAllBookFilesCore() ([]BookFileCore, error) {
 	txn := m.db.Txn(false)
 	defer txn.Abort()
 	iter, err := txn.Get(memTableBookFiles, memIdxID)
 	if err != nil {
 		return nil, fmt.Errorf("memdb book_files scan: %w", err)
 	}
-	var files []BookFile
+	var files []BookFileCore
 	for obj := iter.Next(); obj != nil; obj = iter.Next() {
 		bf, ok := obj.(*BookFile)
 		if !ok {
 			continue
 		}
-		files = append(files, *bf)
+		files = append(files, bf.Core())
 	}
 	return files, nil
 }

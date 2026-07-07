@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/fix_book_file_paths_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b1c2d3e4-f5a6-7890-bcde-123456789456
-// last-edited: 2026-05-05
+// last-edited: 2026-07-06
 
 // Package jobs_test exercises the fix-book-file-paths maintenance job.
 package jobs_test
@@ -47,8 +47,8 @@ func TestFixBookFilePathsJob_DefaultParams_DryRunTrue(t *testing.T) {
 func TestFixBookFilePathsJob_EmptyStore_NoOp(t *testing.T) {
 	// No book_files → nothing to process, no error.
 	store := &database.MockStore{
-		GetAllBookFilesFunc: func() ([]database.BookFile, error) {
-			return []database.BookFile{}, nil
+		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) {
+			return []database.BookFileCore{}, nil
 		},
 	}
 	j, err := maintenance.Get("fix-book-file-paths")
@@ -60,13 +60,13 @@ func TestFixBookFilePathsJob_EmptyStore_NoOp(t *testing.T) {
 
 func TestFixBookFilePathsJob_DryRun_DoesNotUpdateDB(t *testing.T) {
 	// A book_file whose stored path doesn't exist on disk.
-	files := []database.BookFile{
+	files := []database.BookFileCore{
 		{ID: "bf-1", BookID: "book-1", FilePath: "/nonexistent/path/chapter.mp3"},
 	}
 
 	var updateCalled bool
 	store := &database.MockStore{
-		GetAllBookFilesFunc: func() ([]database.BookFile, error) {
+		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) {
 			return files, nil
 		},
 		UpdateBookFileFunc: func(id string, bf *database.BookFile) error {
@@ -91,13 +91,13 @@ func TestFixBookFilePathsJob_SkipsExistingPaths(t *testing.T) {
 	require.NoError(t, err)
 	f.Close()
 
-	files := []database.BookFile{
+	files := []database.BookFileCore{
 		{ID: "bf-exists", BookID: "book-exists", FilePath: realFile},
 	}
 
 	var updateCalled bool
 	store := &database.MockStore{
-		GetAllBookFilesFunc: func() ([]database.BookFile, error) {
+		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) {
 			return files, nil
 		},
 		UpdateBookFileFunc: func(id string, bf *database.BookFile) error {
@@ -116,15 +116,22 @@ func TestFixBookFilePathsJob_SkipsExistingPaths(t *testing.T) {
 
 func TestFixBookFilePathsJob_Apply_MarksAsMissing(t *testing.T) {
 	// A book_file whose path doesn't exist on disk → in apply mode it should be updated (marked missing).
-	files := []database.BookFile{
+	files := []database.BookFileCore{
 		{ID: "bf-missing", BookID: "book-m", FilePath: "/no/such/file.mp3", Missing: false},
 	}
 
 	var updatedID string
 	var updatedMissing bool
 	store := &database.MockStore{
-		GetAllBookFilesFunc: func() ([]database.BookFile, error) {
+		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) {
 			return files, nil
+		},
+		// The job now hydrates the full row via GetBookFiles(bookID) before
+		// writing back (see docs/audits/2026-07-05-updatebookfile-memdb-writeback-fingerprint-wipe.md).
+		GetBookFilesFunc: func(bookID string) ([]database.BookFile, error) {
+			return []database.BookFile{
+				{ID: "bf-missing", BookID: "book-m", FilePath: "/no/such/file.mp3", Missing: false},
+			}, nil
 		},
 		UpdateBookFileFunc: func(id string, bf *database.BookFile) error {
 			updatedID = id
@@ -144,9 +151,9 @@ func TestFixBookFilePathsJob_Apply_MarksAsMissing(t *testing.T) {
 
 func TestFixBookFilePathsJob_CancelRespected(t *testing.T) {
 	// Many files — cancellation should cause the job to return early.
-	files := make([]database.BookFile, 20)
+	files := make([]database.BookFileCore, 20)
 	for i := range files {
-		files[i] = database.BookFile{
+		files[i] = database.BookFileCore{
 			ID:       "bf-cancel-" + string(rune('0'+i%10)),
 			BookID:   "book-cancel",
 			FilePath: "/nonexistent/cancel-" + string(rune('0'+i%10)) + ".mp3",
@@ -154,7 +161,7 @@ func TestFixBookFilePathsJob_CancelRespected(t *testing.T) {
 	}
 
 	store := &database.MockStore{
-		GetAllBookFilesFunc: func() ([]database.BookFile, error) {
+		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) {
 			return files, nil
 		},
 		UpdateBookFileFunc: func(id string, bf *database.BookFile) error {

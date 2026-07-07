@@ -1,7 +1,7 @@
 // file: internal/database/iface_misc.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 473781a7-1a31-4914-b7c7-8efc91f9f7e6
-// last-edited: 2026-07-05
+// last-edited: 2026-07-06
 
 package database
 
@@ -135,9 +135,12 @@ type BookFileStore interface {
 	CreateBookFile(file *BookFile) error
 	UpdateBookFile(id string, file *BookFile) error
 	GetBookFiles(bookID string) ([]BookFile, error)
-	// GetAllBookFiles is SLIM (memdb projection) — see
-	// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
-	GetAllBookFiles() ([]BookFile, error)
+	// GetAllBookFilesCore returns the BookFileCore projection (SLIM — memdb
+	// projection under UseMemDB, projected via .Core() under Pebble-direct) —
+	// see docs/specs/2026-07-05-store-getter-fidelity-unification.md. The
+	// BookFileCore return type makes reading a stripped fingerprint field a
+	// compile error instead of a silent nil.
+	GetAllBookFilesCore() ([]BookFileCore, error)
 	// GetBookFilesNeedingDelugeImport returns book_files that have a deluge_hash
 	// but have not yet been copied into the library (imported_from_deluge_at IS NULL).
 	//

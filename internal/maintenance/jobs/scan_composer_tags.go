@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/scan_composer_tags.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: d9e5f3c4-6a7b-8c9d-0e1f-2a3b4c5d6e7f
-// last-edited: 2026-07-03
+// last-edited: 2026-07-06
 
 package jobs
 
@@ -68,11 +68,11 @@ func (j *scanComposerTagsJob) Run(ctx context.Context, store database.Store, rep
 	for _, a := range allAuthors {
 		authorByID[a.ID] = a.Name
 	}
-	allFiles, err := store.GetAllBookFiles()
+	allFiles, err := store.GetAllBookFilesCore()
 	if err != nil {
-		return fmt.Errorf("GetAllBookFiles: %w", err)
+		return fmt.Errorf("GetAllBookFilesCore: %w", err)
 	}
-	filesByBook := make(map[string][]database.BookFile, len(allFiles))
+	filesByBook := make(map[string][]database.BookFileCore, len(allFiles))
 	for i := range allFiles {
 		f := &allFiles[i]
 		filesByBook[f.BookID] = append(filesByBook[f.BookID], *f)

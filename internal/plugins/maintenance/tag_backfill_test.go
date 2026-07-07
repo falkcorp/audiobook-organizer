@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/tag_backfill_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5b6e7f4a-9c1d-4e0a-8f2b-3a6d1c9e5b70
-// last-edited: 2026-07-05
+// last-edited: 2026-07-06
 
 package maintenance
 
@@ -123,13 +123,23 @@ func TestTagBackfill_ParallelProducesSameResultAsSerial(t *testing.T) {
 		wantBackfilled[id] = true
 	}
 
+	// core is the BookFileCore projection of files — the op's
+	// GetAllBookFilesCore call. GetBookFiles (the hydrate path for each
+	// backfill candidate) returns the full rows directly since none of the
+	// fixtures set a BookID (all share the empty-string bucket).
+	core := make([]database.BookFileCore, len(files))
+	for i := range files {
+		core[i] = files[i].Core()
+	}
+
 	var (
 		upsertMu      sync.Mutex
 		upserted      []*database.BookFile
 		upsertBatches int
 	)
 	store := &database.MockStore{
-		GetAllBookFilesFunc: func() ([]database.BookFile, error) { return files, nil },
+		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return core, nil },
+		GetBookFilesFunc:        func(bookID string) ([]database.BookFile, error) { return files, nil },
 		BatchUpsertBookFilesFunc: func(batch []*database.BookFile) error {
 			upsertMu.Lock()
 			upserted = append(upserted, batch...)

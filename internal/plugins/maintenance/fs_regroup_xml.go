@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fs_regroup_xml.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7d2a9c14-3e86-4b50-9f71-2c8e0a6d4b95
-// last-edited: 2026-06-21
+// last-edited: 2026-07-06
 
 // Package maintenance — op maintenance.fs-regroup-xml.
 //
@@ -124,9 +124,9 @@ func (p *Plugin) runFSRegroupXML(ctx context.Context, raw json.RawMessage, repor
 
 	// Pass 2: file counts so already-multi-file books are excluded.
 	_ = reporter.UpdateProgress(1, 3, "Phase 2/3: counting book files…")
-	files, err := store.GetAllBookFiles()
+	files, err := store.GetAllBookFilesCore()
 	if err != nil {
-		return fmt.Errorf("GetAllBookFiles: %w", err)
+		return fmt.Errorf("GetAllBookFilesCore: %w", err)
 	}
 	for i := range files {
 		if fsb := bookMeta[files[i].BookID]; fsb != nil {

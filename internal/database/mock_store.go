@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.71.0
+// version: 1.72.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-07-05
+// last-edited: 2026-07-06
 
 package database
 
@@ -340,7 +340,7 @@ type MockStore struct {
 
 	// BookFile methods
 	CreateBookFileFunc                  func(file *BookFile) error
-	GetAllBookFilesFunc                 func() ([]BookFile, error)
+	GetAllBookFilesCoreFunc             func() ([]BookFileCore, error)
 	UpdateBookFileFunc                  func(id string, file *BookFile) error
 	UpdateBookFileHashesFunc            func(id, originalHash, postMetadataHash string) error
 	GetBookFilesFunc                    func(bookID string) ([]BookFile, error)
@@ -2388,9 +2388,9 @@ func (m *MockStore) GetBookFiles(bookID string) ([]BookFile, error) {
 	}
 	return nil, nil
 }
-func (m *MockStore) GetAllBookFiles() ([]BookFile, error) {
-	if m.GetAllBookFilesFunc != nil {
-		return m.GetAllBookFilesFunc()
+func (m *MockStore) GetAllBookFilesCore() ([]BookFileCore, error) {
+	if m.GetAllBookFilesCoreFunc != nil {
+		return m.GetAllBookFilesCoreFunc()
 	}
 	return nil, nil
 }

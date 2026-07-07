@@ -1,6 +1,7 @@
 // file: internal/plugins/dedup/purge_legacy_fp_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9e4b7f3a-2c1d-4e8b-b6a5-0d7c9e2f5b8a
+// last-edited: 2026-07-06
 
 // Table-driven tests for the dedup.purge-legacy-fp-candidates op (T015).
 //
@@ -192,9 +193,9 @@ func TestPurgeLegacyFP(t *testing.T) {
 			es := newTestEmbeddingStorePurge(t)
 
 			// Build file-hash fixtures for the mock store.
-			var bookFiles []database.BookFile
+			var bookFiles []database.BookFileCore
 			if tc.fileHashA != "" {
-				bookFiles = append(bookFiles, database.BookFile{
+				bookFiles = append(bookFiles, database.BookFileCore{
 					ID:       "file-a",
 					BookID:   "book-a",
 					FileHash: tc.fileHashA,
@@ -207,7 +208,7 @@ func TestPurgeLegacyFP(t *testing.T) {
 				if tc.sharedHash {
 					bHash = tc.fileHashA // same hash → genuine dupe
 				}
-				bookFiles = append(bookFiles, database.BookFile{
+				bookFiles = append(bookFiles, database.BookFileCore{
 					ID:       "file-b",
 					BookID:   "book-b",
 					FileHash: bHash,
@@ -215,7 +216,7 @@ func TestPurgeLegacyFP(t *testing.T) {
 			}
 
 			ms := &database.MockStore{
-				GetAllBookFilesFunc: func() ([]database.BookFile, error) {
+				GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) {
 					return bookFiles, nil
 				},
 				GetSettingFunc: func(key string) (*database.Setting, error) {
@@ -265,7 +266,7 @@ func TestPurgeLegacyFP_FlagSkip(t *testing.T) {
 	es := newTestEmbeddingStorePurge(t)
 
 	ms := &database.MockStore{
-		GetAllBookFilesFunc: func() ([]database.BookFile, error) { return nil, nil },
+		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return nil, nil },
 		GetSettingFunc: func(key string) (*database.Setting, error) {
 			if key == purgeLegacyFPDoneFlag {
 				return &database.Setting{Key: key, Value: "true"}, nil // flag set

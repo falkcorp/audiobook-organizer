@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/enrich_book_files.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: a1000009-0000-0000-0000-000000000009
-// last-edited: 2026-05-01
+// last-edited: 2026-07-06
 
 package jobs
 
@@ -35,7 +35,7 @@ func (j *enrichBookFilesJob) Description() string {
 }
 func (j *enrichBookFilesJob) CanResume() bool { return false }
 func (j *enrichBookFilesJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, dryRun bool) error {
-	files, err := store.GetAllBookFiles()
+	files, err := store.GetAllBookFilesCore()
 	if err != nil {
 		return err
 	}
@@ -46,11 +46,11 @@ func (j *enrichBookFilesJob) Run(ctx context.Context, store database.Store, repo
 			return ctx.Err()
 		}
 		reporter.Increment()
-		bf := files[i]
-		if bf.TrackNumber != 0 {
+		c := files[i]
+		if c.TrackNumber != 0 {
 			continue
 		}
-		stem := strings.TrimSuffix(filepath.Base(bf.FilePath), filepath.Ext(bf.FilePath))
+		stem := strings.TrimSuffix(filepath.Base(c.FilePath), filepath.Ext(c.FilePath))
 		m := trackNumRe.FindStringSubmatch(stem)
 		if m == nil {
 			continue
@@ -60,8 +60,28 @@ func (j *enrichBookFilesJob) Run(ctx context.Context, store database.Store, repo
 			continue
 		}
 		if !dryRun {
-			bf.TrackNumber = n
-			if uerr := store.UpdateBookFile(bf.ID, &bf); uerr != nil {
+			// Hydrate the full row and mutate/write THAT — never a
+			// hand-built BookFile{} from Core fields, which would wipe the
+			// stored fingerprint. See
+			// docs/audits/2026-07-05-updatebookfile-memdb-writeback-fingerprint-wipe.md.
+			full, herr := store.GetBookFiles(c.BookID)
+			if herr != nil {
+				slog.Error("enrich-book-files hydrate failed", "details", herr.Error())
+				continue
+			}
+			var target *database.BookFile
+			for j := range full {
+				if full[j].ID == c.ID {
+					target = &full[j]
+					break
+				}
+			}
+			if target == nil {
+				slog.Warn("enrich-book-files: hydrate: row not found", "id", c.ID)
+				continue
+			}
+			target.TrackNumber = n
+			if uerr := store.UpdateBookFile(target.ID, target); uerr != nil {
 				msg := uerr.Error()
 				slog.Error("enrich-book-files UpdateBookFile failed", "details", msg)
 				continue

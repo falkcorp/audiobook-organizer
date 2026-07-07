@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.111.3 -->
+<!-- version: 3.112.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-06 -->
 
@@ -8,6 +8,26 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 6, 2026 - refactor(store): GetAllBookFiles → GetAllBookFilesCore ([]BookFileCore) (STOREFID W3)
+
+- **`refactor(store)`** — renamed the slim store getter `GetAllBookFiles()` →
+  `GetAllBookFilesCore()` returning `[]BookFileCore`, so any caller that reads a
+  memdb-stripped fingerprint field is now a **compile error** instead of a silent
+  nil read. Atomic across the `Store` interface, `PebbleStore`, `MemStore`, the
+  hand-written `MockStore`, and the mockery-generated mock.
+- **Fingerprint-wipe closure** — the retype compile-forced **8 whole-library
+  writeback jobs** off the "read memdb-slim → write the whole struct back"
+  anti-pattern (which wiped stored fingerprint diagnostics) and onto
+  hydrate-mutate-update (`GetBookFiles(bookID)` → mutate the full row →
+  `UpdateBookFile`): recompute_itunes_paths, enrich_book_files, fix_book_file_paths,
+  repair_missing_files, tag_backfill, reset_all (slow path), acoustid online_lookup,
+  acoustid lsh_backfill. The compile audit also corrected the caller census: two of
+  these (tag_backfill, reset_all) were originally mis-classified as safe/test-only.
+- The deluge getter `GetBookFilesNeedingDelugeImport` is kept byte-identical (its
+  non-memdb branch re-points to the internal full `getAllBookFilesPebbleScan()`); the
+  3 indirect deluge import writeback vectors it feeds are documented and deferred to a
+  fast-follow (see TODO / the memdb-writeback audit doc).
 
 #### July 6, 2026 - fix(ci): bump ghcommon pin for cleanup-step self-delete guard (7th release-pipeline blocker)
 

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_stats.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8643a893-1898-4098-8e69-c312531d962c
-// last-edited: 2026-07-03
+// last-edited: 2026-07-06
 
 package database
 
@@ -462,7 +462,7 @@ func (p *PebbleStore) GetDuplicateFilesByHash(limit int) ([]DuplicateFileGroup, 
 	if limit <= 0 {
 		limit = 50
 	}
-	files, err := p.GetAllBookFiles()
+	files, err := p.GetAllBookFilesCore()
 	if err != nil {
 		return nil, fmt.Errorf("GetDuplicateFilesByHash: %w", err)
 	}
@@ -477,7 +477,7 @@ func (p *PebbleStore) GetDuplicateFilesByHash(limit int) ([]DuplicateFileGroup, 
 	}
 
 	type group struct {
-		files []BookFile
+		files []BookFileCore
 	}
 	byHash := make(map[string]*group)
 	for i := range files {
@@ -533,7 +533,7 @@ func (p *PebbleStore) GetDuplicateFilesByHash(limit int) ([]DuplicateFileGroup, 
 // returns aggregate hash-coverage statistics, including a per-library breakdown
 // derived from each file's source_import_path on its parent book.
 func (p *PebbleStore) GetBookFileHashStats() (*BookFileHashStats, error) {
-	files, err := p.GetAllBookFiles()
+	files, err := p.GetAllBookFilesCore()
 	if err != nil {
 		return nil, fmt.Errorf("GetBookFileHashStats: %w", err)
 	}
@@ -653,8 +653,9 @@ func (p *PebbleStore) GetBookMetadataHashStats() (*BookMetadataHashStats, error)
 // GetAcoustIDStats returns fingerprint coverage across all book files, grouped by
 // library root (the parent book's source_import_path).
 //
-// Uses getAllBookFilesPebbleScan (Pebble-direct) rather than GetAllBookFiles
-// so that the hasFP check reads the full AcoustIDSeg0..6 fields from storage.
+// Uses getAllBookFilesPebbleScan (Pebble-direct) rather than
+// GetAllBookFilesCore so that the hasFP check reads the full AcoustIDSeg0..6
+// fields from storage.
 // After fable5 T019 those fields are stripped from memdb projections; reading
 // them from memdb would return all-zeros and undercount fingerprinted files.
 func (p *PebbleStore) GetAcoustIDStats() (*AcoustIDStats, error) {

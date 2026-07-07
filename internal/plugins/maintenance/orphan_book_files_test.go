@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/orphan_book_files_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0bd4f9a2-1c3e-4f5a-8b6c-7d9e0f1a2b3c
-// last-edited: 2026-05-29
+// last-edited: 2026-07-06
 
 package maintenance
 
@@ -26,7 +26,7 @@ func TestFindOrphanBookFiles_ReportOnly(t *testing.T) {
 		{ID: "book-keep-2", Title: "Kept 2"},
 		{ID: "book-keep-3", Title: "Kept 3"},
 	}
-	files := []database.BookFile{
+	files := []database.BookFileCore{
 		{ID: "f1", BookID: "book-keep-1", FilePath: "/lib/a.m4b"},
 		{ID: "f2", BookID: "book-keep-2", FilePath: "/lib/b.m4b"},
 		{ID: "f3", BookID: "book-ghost-9", FilePath: "/lib/orphan-1.m4b"}, // orphan
@@ -37,7 +37,7 @@ func TestFindOrphanBookFiles_ReportOnly(t *testing.T) {
 
 	var deleteCalls []string
 	store := &database.MockStore{
-		GetAllBookFilesFunc: func() ([]database.BookFile, error) {
+		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) {
 			return files, nil
 		},
 		GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) {
@@ -86,14 +86,14 @@ func TestFindOrphanBookFiles_ReportOnly(t *testing.T) {
 // empty slice with no error.
 func TestFindOrphanBookFiles_NoOrphans(t *testing.T) {
 	books := []database.Book{{ID: "b1"}, {ID: "b2"}}
-	files := []database.BookFile{
+	files := []database.BookFileCore{
 		{ID: "f1", BookID: "b1"},
 		{ID: "f2", BookID: "b2"},
 		{ID: "f3", BookID: "b1"},
 	}
 	store := &database.MockStore{
-		GetAllBookFilesFunc: func() ([]database.BookFile, error) { return files, nil },
-		GetAllBooksFunc:     func(limit, offset int) ([]database.Book, error) { return books, nil },
+		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },
+		GetAllBooksFunc:         func(limit, offset int) ([]database.Book, error) { return books, nil },
 	}
 	orphans, _, _, err := findOrphanBookFiles(context.Background(), store)
 	if err != nil {

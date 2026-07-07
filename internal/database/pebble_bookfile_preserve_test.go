@@ -1,5 +1,5 @@
 // file: internal/database/pebble_bookfile_preserve_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7e1a9c43-2b86-4d05-9f71-3c6e8a0d2b54
 // last-edited: 2026-07-06
 
@@ -336,9 +336,9 @@ func TestUpdateBookFile_WritesFreshFingerprintAndClearsFailureDiagnostics(t *tes
 func strPtr(s string) *string { return &s }
 
 // BatchUpsertBookFiles must refresh the memdb view so batch-written rows are
-// immediately visible to memdb-backed reads (GetAllBookFiles / the UI). Without
-// the post-commit UpsertBookFileToMemDB, the row would be absent from memdb until
-// the next warmup — the tag-backfill non-convergence bug.
+// immediately visible to memdb-backed reads (GetAllBookFilesCore / the UI).
+// Without the post-commit UpsertBookFileToMemDB, the row would be absent
+// from memdb until the next warmup — the tag-backfill non-convergence bug.
 func TestBatchUpsertBookFiles_RefreshesMemDB(t *testing.T) {
 	s, err := NewPebbleStore(t.TempDir())
 	if err != nil {
@@ -358,9 +358,9 @@ func TestBatchUpsertBookFiles_RefreshesMemDB(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("BatchUpsertBookFiles: %v", err)
 	}
-	all, err := s.GetAllBookFiles() // memdb-backed view
+	all, err := s.GetAllBookFilesCore() // memdb-backed view
 	if err != nil {
-		t.Fatalf("GetAllBookFiles: %v", err)
+		t.Fatalf("GetAllBookFilesCore: %v", err)
 	}
 	found := false
 	for i := range all {

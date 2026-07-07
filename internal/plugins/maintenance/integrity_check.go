@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/integrity_check.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7f4a2b3c-9d1e-4f6a-8b5c-2e0d1f3a4b5c
-// last-edited: 2026-07-01
+// last-edited: 2026-07-06
 
 package maintenance
 
@@ -73,15 +73,15 @@ func (p *Plugin) runIntegrityCheck(ctx context.Context, raw json.RawMessage, rep
 //
 // This is the testable core of runIntegrityCheck. It is purely a scan — it
 // never calls any store write or delete method.
-func findIntegrityMismatches(ctx context.Context, store database.Store) (flagged []database.BookFile, totalFiles int, err error) {
+func findIntegrityMismatches(ctx context.Context, store database.Store) (flagged []database.BookFileCore, totalFiles int, err error) {
 	if ctx.Err() != nil {
 		return nil, 0, ctx.Err()
 	}
-	files, ferr := store.GetAllBookFiles()
+	files, ferr := store.GetAllBookFilesCore()
 	if ferr != nil {
-		return nil, 0, fmt.Errorf("GetAllBookFiles: %w", ferr)
+		return nil, 0, fmt.Errorf("GetAllBookFilesCore: %w", ferr)
 	}
-	flagged = make([]database.BookFile, 0)
+	flagged = make([]database.BookFileCore, 0)
 	for _, f := range files {
 		if ctx.Err() != nil {
 			return nil, 0, ctx.Err()

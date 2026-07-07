@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_regroup.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-06-20
+// last-edited: 2026-07-06
 
 package maintenance
 
@@ -179,9 +179,9 @@ func (p *Plugin) buildRegroupSnapshot(ctx context.Context, store database.Store,
 	}
 
 	// Pass 2: all book files → PID→location + per-book file counts.
-	files, err := store.GetAllBookFiles()
+	files, err := store.GetAllBookFilesCore()
 	if err != nil {
-		return snap, fmt.Errorf("GetAllBookFiles: %w", err)
+		return snap, fmt.Errorf("GetAllBookFilesCore: %w", err)
 	}
 	fileCount := make(map[string]int, len(meta))
 	for i := range files {

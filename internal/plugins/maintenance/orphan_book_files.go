@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/orphan_book_files.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9d2c4f6a-8e1b-4c5d-9a7b-3e5f1a2c4b6d
-// last-edited: 2026-05-29
+// last-edited: 2026-07-06
 
 package maintenance
 
@@ -125,19 +125,19 @@ func (p *Plugin) runOrphanBookFilesCleanup(ctx context.Context, raw json.RawMess
 // findOrphanBookFiles returns every BookFile whose BookID does not match any
 // existing book ID. Returns the orphan slice, the total number of book_files
 // scanned, and the number of valid book IDs found. The scan uses the memdb
-// fastpath via Store.GetAllBookFiles / Store.GetAllBooks; both calls return
-// projections of the underlying tables without per-row decoding cost.
+// fastpath via Store.GetAllBookFilesCore / Store.GetAllBooks; both calls
+// return projections of the underlying tables without per-row decoding cost.
 //
 // This is the testable core of runOrphanBookFilesCleanup. It does not delete
 // anything — callers that want to delete iterate over the result and call
 // Store.DeleteBookFile themselves.
-func findOrphanBookFiles(ctx context.Context, store database.Store) (orphans []database.BookFile, totalFiles int, totalBooks int, err error) {
+func findOrphanBookFiles(ctx context.Context, store database.Store) (orphans []database.BookFileCore, totalFiles int, totalBooks int, err error) {
 	if ctx.Err() != nil {
 		return nil, 0, 0, ctx.Err()
 	}
-	files, ferr := store.GetAllBookFiles()
+	files, ferr := store.GetAllBookFilesCore()
 	if ferr != nil {
-		return nil, 0, 0, fmt.Errorf("GetAllBookFiles: %w", ferr)
+		return nil, 0, 0, fmt.Errorf("GetAllBookFilesCore: %w", ferr)
 	}
 	if ctx.Err() != nil {
 		return nil, 0, 0, ctx.Err()
@@ -152,7 +152,7 @@ func findOrphanBookFiles(ctx context.Context, store database.Store) (orphans []d
 	for _, b := range books {
 		valid[b.ID] = struct{}{}
 	}
-	orphans = make([]database.BookFile, 0)
+	orphans = make([]database.BookFileCore, 0)
 	for _, f := range files {
 		if ctx.Err() != nil {
 			return nil, 0, 0, ctx.Err()

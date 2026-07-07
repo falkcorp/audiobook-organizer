@@ -14459,24 +14459,24 @@ func (_c *MockBookFileStore_GetAcoustIDStats_Call) RunAndReturn(run func() (*dat
 	return _c
 }
 
-// GetAllBookFiles provides a mock function for the type MockBookFileStore
-func (_mock *MockBookFileStore) GetAllBookFiles() ([]database.BookFile, error) {
+// GetAllBookFilesCore provides a mock function for the type MockBookFileStore
+func (_mock *MockBookFileStore) GetAllBookFilesCore() ([]database.BookFileCore, error) {
 	ret := _mock.Called()
 
 	if len(ret) == 0 {
-		panic("no return value specified for GetAllBookFiles")
+		panic("no return value specified for GetAllBookFilesCore")
 	}
 
-	var r0 []database.BookFile
+	var r0 []database.BookFileCore
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func() ([]database.BookFile, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func() ([]database.BookFileCore, error)); ok {
 		return returnFunc()
 	}
-	if returnFunc, ok := ret.Get(0).(func() []database.BookFile); ok {
+	if returnFunc, ok := ret.Get(0).(func() []database.BookFileCore); ok {
 		r0 = returnFunc()
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.BookFile)
+			r0 = ret.Get(0).([]database.BookFileCore)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func() error); ok {
@@ -14487,29 +14487,29 @@ func (_mock *MockBookFileStore) GetAllBookFiles() ([]database.BookFile, error) {
 	return r0, r1
 }
 
-// MockBookFileStore_GetAllBookFiles_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetAllBookFiles'
-type MockBookFileStore_GetAllBookFiles_Call struct {
+// MockBookFileStore_GetAllBookFilesCore_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetAllBookFilesCore'
+type MockBookFileStore_GetAllBookFilesCore_Call struct {
 	*mock.Call
 }
 
-// GetAllBookFiles is a helper method to define mock.On call
-func (_e *MockBookFileStore_Expecter) GetAllBookFiles() *MockBookFileStore_GetAllBookFiles_Call {
-	return &MockBookFileStore_GetAllBookFiles_Call{Call: _e.mock.On("GetAllBookFiles")}
+// GetAllBookFilesCore is a helper method to define mock.On call
+func (_e *MockBookFileStore_Expecter) GetAllBookFilesCore() *MockBookFileStore_GetAllBookFilesCore_Call {
+	return &MockBookFileStore_GetAllBookFilesCore_Call{Call: _e.mock.On("GetAllBookFilesCore")}
 }
 
-func (_c *MockBookFileStore_GetAllBookFiles_Call) Run(run func()) *MockBookFileStore_GetAllBookFiles_Call {
+func (_c *MockBookFileStore_GetAllBookFilesCore_Call) Run(run func()) *MockBookFileStore_GetAllBookFilesCore_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run()
 	})
 	return _c
 }
 
-func (_c *MockBookFileStore_GetAllBookFiles_Call) Return(bookFiles []database.BookFile, err error) *MockBookFileStore_GetAllBookFiles_Call {
-	_c.Call.Return(bookFiles, err)
+func (_c *MockBookFileStore_GetAllBookFilesCore_Call) Return(bookFileCores []database.BookFileCore, err error) *MockBookFileStore_GetAllBookFilesCore_Call {
+	_c.Call.Return(bookFileCores, err)
 	return _c
 }
 
-func (_c *MockBookFileStore_GetAllBookFiles_Call) RunAndReturn(run func() ([]database.BookFile, error)) *MockBookFileStore_GetAllBookFiles_Call {
+func (_c *MockBookFileStore_GetAllBookFilesCore_Call) RunAndReturn(run func() ([]database.BookFileCore, error)) *MockBookFileStore_GetAllBookFilesCore_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -34008,24 +34008,24 @@ func (_c *MockStore_GetAllBlockedHashes_Call) RunAndReturn(run func() ([]databas
 	return _c
 }
 
-// GetAllBookFiles provides a mock function for the type MockStore
-func (_mock *MockStore) GetAllBookFiles() ([]database.BookFile, error) {
+// GetAllBookFilesCore provides a mock function for the type MockStore
+func (_mock *MockStore) GetAllBookFilesCore() ([]database.BookFileCore, error) {
 	ret := _mock.Called()
 
 	if len(ret) == 0 {
-		panic("no return value specified for GetAllBookFiles")
+		panic("no return value specified for GetAllBookFilesCore")
 	}
 
-	var r0 []database.BookFile
+	var r0 []database.BookFileCore
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func() ([]database.BookFile, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func() ([]database.BookFileCore, error)); ok {
 		return returnFunc()
 	}
-	if returnFunc, ok := ret.Get(0).(func() []database.BookFile); ok {
+	if returnFunc, ok := ret.Get(0).(func() []database.BookFileCore); ok {
 		r0 = returnFunc()
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.BookFile)
+			r0 = ret.Get(0).([]database.BookFileCore)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func() error); ok {
@@ -34036,29 +34036,29 @@ func (_mock *MockStore) GetAllBookFiles() ([]database.BookFile, error) {
 	return r0, r1
 }
 
-// MockStore_GetAllBookFiles_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetAllBookFiles'
-type MockStore_GetAllBookFiles_Call struct {
+// MockStore_GetAllBookFilesCore_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetAllBookFilesCore'
+type MockStore_GetAllBookFilesCore_Call struct {
 	*mock.Call
 }
 
-// GetAllBookFiles is a helper method to define mock.On call
-func (_e *MockStore_Expecter) GetAllBookFiles() *MockStore_GetAllBookFiles_Call {
-	return &MockStore_GetAllBookFiles_Call{Call: _e.mock.On("GetAllBookFiles")}
+// GetAllBookFilesCore is a helper method to define mock.On call
+func (_e *MockStore_Expecter) GetAllBookFilesCore() *MockStore_GetAllBookFilesCore_Call {
+	return &MockStore_GetAllBookFilesCore_Call{Call: _e.mock.On("GetAllBookFilesCore")}
 }
 
-func (_c *MockStore_GetAllBookFiles_Call) Run(run func()) *MockStore_GetAllBookFiles_Call {
+func (_c *MockStore_GetAllBookFilesCore_Call) Run(run func()) *MockStore_GetAllBookFilesCore_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run()
 	})
 	return _c
 }
 
-func (_c *MockStore_GetAllBookFiles_Call) Return(bookFiles []database.BookFile, err error) *MockStore_GetAllBookFiles_Call {
-	_c.Call.Return(bookFiles, err)
+func (_c *MockStore_GetAllBookFilesCore_Call) Return(bookFileCores []database.BookFileCore, err error) *MockStore_GetAllBookFilesCore_Call {
+	_c.Call.Return(bookFileCores, err)
 	return _c
 }
 
-func (_c *MockStore_GetAllBookFiles_Call) RunAndReturn(run func() ([]database.BookFile, error)) *MockStore_GetAllBookFiles_Call {
+func (_c *MockStore_GetAllBookFilesCore_Call) RunAndReturn(run func() ([]database.BookFileCore, error)) *MockStore_GetAllBookFilesCore_Call {
 	_c.Call.Return(run)
 	return _c
 }
