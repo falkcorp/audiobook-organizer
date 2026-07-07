@@ -1,6 +1,7 @@
 // file: internal/itunes/generate_test_itls.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: e0f1a2b3-4c5d-6e7f-8a9b-0c1d2e3f4a5b
+// last-edited: 2026-07-07
 //
 // Generates ITL test files by using the REAL production ITL as a template.
 // Previous approach (v1) built synthetic ITLs from scratch using BE format,
@@ -42,7 +43,7 @@ import (
 // case. If they are nil/empty the full-library test is skipped.
 func GenerateTestITLSuite(
 	outputDir string,
-	books []database.Book,
+	books []database.BookCore,
 	bookFiles []database.BookFile,
 ) error {
 	if err := os.MkdirAll(outputDir, 0775); err != nil {

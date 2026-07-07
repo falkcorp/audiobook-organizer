@@ -1,6 +1,7 @@
 // file: internal/organizer/service.go
-// version: 1.3.1
+// version: 1.6.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
+// last-edited: 2026-07-07
 
 package organizer
 
@@ -165,12 +166,20 @@ func (orgSvc *Service) PerformOrganize(ctx context.Context, req *Request, log lo
 		}
 	} else {
 		for offset := 0; ; offset += fetchPageSize {
-			page, fetchErr := orgSvc.db.GetAllBooks(fetchPageSize, offset)
+			// GetAllBooksCore: under prod's memdb-backed default, GetAllBooks
+			// already returned heavy-field-nil'd (Description/BookSig*/
+			// Author/Series) projections here, and expandPattern already
+			// falls back to AuthorID/SeriesID lookups when Author/Series are
+			// nil (see organizer.go) — so ToBook() is a lossless read-only
+			// projection for this call site, not a behavior change.
+			page, fetchErr := orgSvc.db.GetAllBooksCore(fetchPageSize, offset)
 			if fetchErr != nil {
 				log.Error("Failed to fetch books: %s", fetchErr.Error())
 				return fmt.Errorf("failed to fetch books: %w", fetchErr)
 			}
-			allBooks = append(allBooks, page...)
+			for i := range page {
+				allBooks = append(allBooks, page[i].ToBook())
+			}
 			if len(page) < fetchPageSize {
 				break
 			}
@@ -199,11 +208,13 @@ func (orgSvc *Service) PerformOrganize(ctx context.Context, req *Request, log lo
 		// Re-fetch all books since metadata may have changed
 		allBooks = nil
 		for offset := 0; ; offset += fetchPageSize {
-			page, fetchErr := orgSvc.db.GetAllBooks(fetchPageSize, offset)
+			page, fetchErr := orgSvc.db.GetAllBooksCore(fetchPageSize, offset)
 			if fetchErr != nil {
 				return fmt.Errorf("failed to re-fetch books after metadata: %w", fetchErr)
 			}
-			allBooks = append(allBooks, page...)
+			for i := range page {
+				allBooks = append(allBooks, page[i].ToBook())
+			}
 			if len(page) < fetchPageSize {
 				break
 			}
@@ -414,12 +425,19 @@ func (orgSvc *Service) ReOrganizeInPlace(book *database.Book, log logger.Logger)
 	}
 
 	if oldPath == targetPath {
-		// Already in correct location — still stamp as organized
+		// Already in correct location — still stamp as organized. Written via
+		// hydrateAndUpdateBook (hydrate-before-write), not the in-memory
+		// `book` pointer directly — see that helper's doc comment.
 		organizedState := "organized"
 		book.LibraryState = &organizedState
 		now := time.Now()
 		book.LastOrganizedAt = &now
-		orgSvc.db.UpdateBook(book.ID, book)
+		if err := orgSvc.hydrateAndUpdateBook(book.ID, func(b *database.Book) {
+			b.LibraryState = &organizedState
+			b.LastOrganizedAt = &now
+		}); err != nil {
+			log.Debug("Organize: failed to stamp already-in-place book %s: %s", book.ID, err.Error())
+		}
 		return targetPath, nil
 	}
 
@@ -434,13 +452,19 @@ func (orgSvc *Service) ReOrganizeInPlace(book *database.Book, log logger.Logger)
 		return "", fmt.Errorf("cannot move %s -> %s: %w (verify both paths exist, target not in use, same filesystem, write permission)", oldPath, targetPath, err)
 	}
 
-	// Update the book record — set path and mark as organized.
+	// Update the book record — set path and mark as organized. Written via
+	// hydrateAndUpdateBook (hydrate-before-write), not the in-memory `book`
+	// pointer directly — see that helper's doc comment.
 	book.FilePath = targetPath
 	organizedState := "organized"
 	book.LibraryState = &organizedState
 	now := time.Now()
 	book.LastOrganizedAt = &now
-	if _, err := orgSvc.db.UpdateBook(book.ID, book); err != nil {
+	if err := orgSvc.hydrateAndUpdateBook(book.ID, func(b *database.Book) {
+		b.FilePath = targetPath
+		b.LibraryState = &organizedState
+		b.LastOrganizedAt = &now
+	}); err != nil {
 		log.Warn("Failed to update book path for %s: %s", book.ID, err.Error())
 	}
 
@@ -481,6 +505,43 @@ func (orgSvc *Service) cleanupEmptyParents(dir, stopAt string, log logger.Logger
 		log.Debug("Removed empty directory: %s", dir)
 		dir = filepath.Dir(dir)
 	}
+}
+
+// hydrateAndUpdateBook fetches the full book row via GetBookByID, applies
+// mutate to that hydrated struct, and writes it back via UpdateBook — never
+// writing a BookCore-derived (.ToBook()) copy directly, so a full-fidelity
+// store backend never has its heavy fields (Description, BookSigV1, etc.)
+// wiped by an organizer writeback. This does not rely on
+// PebbleStore.UpdateBook's own STOR-1 self-heal (which already restores 7/9
+// heavy fields from the old row); doing it explicitly here matches the
+// STOREFID sweep's pattern so every organizer writeback call site is correct
+// independent of that store-internal guard.
+//
+// If hydration fails (book deleted mid-organize, store error) the write is
+// skipped entirely (fail-closed) rather than falling back to writing the
+// possibly-Core-derived in-memory copy — the one shape of write this helper
+// exists to prevent.
+func (orgSvc *Service) hydrateAndUpdateBook(bookID string, mutate func(*database.Book)) error {
+	hydrated, err := orgSvc.db.GetBookByID(bookID)
+	if err != nil {
+		return err
+	}
+	if hydrated == nil {
+		return fmt.Errorf("book %s not found for hydrate-before-write", bookID)
+	}
+	mutate(hydrated)
+	_, err = orgSvc.db.UpdateBook(bookID, hydrated)
+	return err
+}
+
+// stampOrganizeMetadata hydrates the full book row via GetBookByID and writes
+// the LastOrganizeOperationID/LastOrganizedAt stamp back onto that hydrated
+// struct. See hydrateAndUpdateBook for the rationale.
+func (orgSvc *Service) stampOrganizeMetadata(bookID, operationID string, when time.Time) error {
+	return orgSvc.hydrateAndUpdateBook(bookID, func(b *database.Book) {
+		b.LastOrganizeOperationID = &operationID
+		b.LastOrganizedAt = &when
+	})
 }
 
 func (orgSvc *Service) organizeBooks(ctx context.Context, booksToOrganize []database.Book, alreadyCorrect []database.Book, log logger.Logger, operationID string) *Stats {
@@ -555,9 +616,7 @@ func (orgSvc *Service) organizeBooks(ctx context.Context, booksToOrganize []data
 					}
 				} else if oldPath == newPath {
 					now := time.Now()
-					book.LastOrganizeOperationID = &operationID
-					book.LastOrganizedAt = &now
-					if _, updateErr := orgSvc.db.UpdateBook(book.ID, &book); updateErr != nil {
+					if updateErr := orgSvc.stampOrganizeMetadata(book.ID, operationID, now); updateErr != nil {
 						log.Debug("Organize: failed to stamp book %s: %s", book.ID, updateErr.Error())
 					}
 					statsMu.Lock()
@@ -577,9 +636,7 @@ func (orgSvc *Service) organizeBooks(ctx context.Context, booksToOrganize []data
 					}
 				} else if alreadyInRoot {
 					now := time.Now()
-					book.LastOrganizeOperationID = &operationID
-					book.LastOrganizedAt = &now
-					if _, updateErr := orgSvc.db.UpdateBook(book.ID, &book); updateErr != nil {
+					if updateErr := orgSvc.stampOrganizeMetadata(book.ID, operationID, now); updateErr != nil {
 						log.Debug("Organize: failed to stamp re-organized book %s: %s", book.ID, updateErr.Error())
 					}
 					log.Info("Re-organized %s: %s → %s", book.Title, oldPath, newPath)
@@ -664,14 +721,16 @@ func (orgSvc *Service) organizeBooks(ctx context.Context, booksToOrganize []data
 	close(jobs)
 	wg.Wait()
 
-	// Stamp already-correct books with this operation ID (sequential — bulk stamp)
+	// Stamp already-correct books with this operation ID (sequential — bulk stamp).
+	// Same hydrate-before-write treatment as the two per-book writebacks above:
+	// alreadyCorrect is sourced from the same Core-fetched allBooks slice, so
+	// stamping goes through stampOrganizeMetadata rather than writing back the
+	// in-memory (ToBook()-derived) copy directly.
 	if operationID != "" && len(alreadyCorrect) > 0 {
 		stampNow := time.Now()
 		for i := range alreadyCorrect {
 			b := &alreadyCorrect[i]
-			b.LastOrganizeOperationID = &operationID
-			b.LastOrganizedAt = &stampNow
-			if _, updateErr := orgSvc.db.UpdateBook(b.ID, b); updateErr != nil {
+			if updateErr := orgSvc.stampOrganizeMetadata(b.ID, operationID, stampNow); updateErr != nil {
 				log.Debug("Organize: failed to stamp already-correct book %s: %s", b.ID, updateErr.Error())
 			}
 		}
@@ -865,12 +924,17 @@ func (orgSvc *Service) CreateOrganizedVersion(org *Organizer, book *database.Boo
 		}
 	}
 
-	// Update original book: set version group, mark as non-primary, update state
+	// Update original book: set version group, mark as non-primary, update
+	// state. Hydrate the full row first — `book` here is a page-derived
+	// (GetAllBooksCore→ToBook, heavy-field-nil) projection, so writing it
+	// directly would wipe the original's denormalized Author/Series. Same
+	// hydrate-before-write pattern as the other organizer writebacks.
 	organizedSourceState := "organized_source"
-	book.VersionGroupID = &versionGroupID
-	book.IsPrimaryVersion = &isNotPrimary
-	book.LibraryState = &organizedSourceState
-	if _, err := orgSvc.db.UpdateBook(book.ID, book); err != nil {
+	if err := orgSvc.hydrateAndUpdateBook(book.ID, func(b *database.Book) {
+		b.VersionGroupID = &versionGroupID
+		b.IsPrimaryVersion = &isNotPrimary
+		b.LibraryState = &organizedSourceState
+	}); err != nil {
 		log.Warn("Failed to update original book %s version group: %v", book.ID, err)
 	}
 

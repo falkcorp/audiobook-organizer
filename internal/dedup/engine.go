@@ -1,7 +1,7 @@
 // file: internal/dedup/engine.go
-// version: 1.53.0
+// version: 1.54.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
-// last-edited: 2026-07-05
+// last-edited: 2026-07-07
 
 package dedup
 
@@ -1011,7 +1011,7 @@ func (de *Engine) checkExactISBNScan(book *database.Book, bookISBN10, bookISBN13
 	const batchSize = 500
 	offset := 0
 	for {
-		batch, err := de.bookStore.GetAllBooks(batchSize, offset)
+		batch, err := de.bookStore.GetAllBooksCore(batchSize, offset)
 		if err != nil {
 			return fmt.Errorf("get all books at offset %d: %w", offset, err)
 		}
@@ -1024,7 +1024,7 @@ func (de *Engine) checkExactISBNScan(book *database.Book, bookISBN10, bookISBN13
 			if other.ID == book.ID {
 				continue
 			}
-			if !hasPlausibleAudio(other) {
+			if !hasPlausibleAudioCore(other) {
 				continue // stub / unscanned shell on the other side
 			}
 			matched := false
@@ -1038,7 +1038,8 @@ func (de *Engine) checkExactISBNScan(book *database.Book, bookISBN10, bookISBN13
 				matched = true
 			}
 			if matched {
-				if err := de.upsertExactCandidate(book, other, "exact", 1.0); err != nil {
+				otherBook := other.ToBook()
+				if err := de.upsertExactCandidate(book, &otherBook, "exact", 1.0); err != nil {
 					slog.Error("dedup upsert ISBN candidate error", "err", err)
 				}
 			}
@@ -1387,6 +1388,12 @@ func isNonPrimaryVersion(b *database.Book) bool {
 	return b != nil && b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion
 }
 
+// isNonPrimaryVersionCore is the BookCore-typed twin of isNonPrimaryVersion
+// (IsPrimaryVersion is a Core-safe field).
+func isNonPrimaryVersionCore(b *database.BookCore) bool {
+	return b != nil && b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion
+}
+
 // upsertExactCandidate writes one exact-family dedup candidate (layer
 // "exact"/"metadata_hash"), skipping any pair where either side is a non-primary
 // version-group member. ALL exact emitters route through here so the primary gate
@@ -1729,6 +1736,22 @@ func hasPlausibleAudio(book *database.Book) bool {
 	return false
 }
 
+// hasPlausibleAudioCore is the BookCore-typed twin of hasPlausibleAudio, used
+// by call sites reading from GetAllBooksCore (Duration/FileSize are both
+// Core-safe fields, so no stripped-field risk here).
+func hasPlausibleAudioCore(book *database.BookCore) bool {
+	if book == nil {
+		return false
+	}
+	if book.Duration != nil && *book.Duration > 0 {
+		return true
+	}
+	if book.FileSize != nil && *book.FileSize >= minPlausibleAudioBytes {
+		return true
+	}
+	return false
+}
+
 // seriesNumberOf returns a stable string representation of a book's
 // series position, if one can be determined. It prefers the structured
 // Book.SeriesSequence field; if that's unset it falls back to extracting
@@ -1736,6 +1759,15 @@ func hasPlausibleAudio(book *database.Book) bool {
 // "Title 3", "Title, Book 3", "Title (Book 3)", "Title #3"). Returns ""
 // if no position can be determined.
 func seriesNumberOf(book *database.Book) string {
+	if book.SeriesSequence != nil {
+		return strconv.Itoa(*book.SeriesSequence)
+	}
+	return extractSeriesNumberFromTitle(book.Title)
+}
+
+// seriesNumberOfCore is the BookCore-typed twin of seriesNumberOf (both
+// SeriesSequence and Title are Core-safe fields).
+func seriesNumberOfCore(book *database.BookCore) string {
 	if book.SeriesSequence != nil {
 		return strconv.Itoa(*book.SeriesSequence)
 	}
@@ -2419,7 +2451,7 @@ func (de *Engine) EmbedBooksAsync(ctx context.Context) (batchID string, count in
 				seriesName = s.Name
 			}
 		}
-		text := ai.BuildBookEmbeddingText(book.Title, authorName, derefStr(book.Narrator), seriesName, seriesNumberOf(&book))
+		text := ai.BuildBookEmbeddingText(book.Title, authorName, derefStr(book.Narrator), seriesName, seriesNumberOfCore(&book))
 		hash := ai.TextHash(text)
 
 		// Skip books that already have a current embedding.
@@ -2613,6 +2645,13 @@ func (de *Engine) FullScan(ctx context.Context, progress func(phase string, done
 	err = registry.RunItems(ctx, &progressCallbackReporter{progress: layer1Progress}, layer1Indices,
 		func(_ context.Context, i int) error {
 			book := books[i]
+			// checkExactFileHash/checkExactISBN/checkExactTitle/checkDurationMatch
+			// are shared with non-Core call sites elsewhere in the package and
+			// still take *database.Book; all four only read Core-safe fields
+			// (FileHash/ID/Title/AuthorID/Duration/ISBN/ASIN), so converting
+			// via ToBook() here is a lossless read-only projection, not a
+			// writeback (see BookCore.ToBook doc comment).
+			bFull := book.ToBook()
 
 			// Resolve author name once — used by Layer 1 title/hash checks.
 			authorName := ""
@@ -2624,16 +2663,16 @@ func (de *Engine) FullScan(ctx context.Context, progress func(phase string, done
 
 			// Layer 1 exact checks (file hash, ISBN/ASIN, near-identical
 			// title, duration match). Cheap and synchronous, no API calls.
-			if _, err := de.checkExactFileHash(&book, authorName); err != nil {
+			if _, err := de.checkExactFileHash(&bFull, authorName); err != nil {
 				slog.Error("dedup full scan hash check error for", "book", book.ID, "err", err)
 			}
-			if err := de.checkExactISBN(&book); err != nil {
+			if err := de.checkExactISBN(&bFull); err != nil {
 				slog.Error("dedup full scan ISBN check error for", "book", book.ID, "err", err)
 			}
-			if err := de.checkExactTitle(&book, authorName); err != nil {
+			if err := de.checkExactTitle(&bFull, authorName); err != nil {
 				slog.Error("dedup full scan title check error for", "book", book.ID, "err", err)
 			}
-			if err := de.checkDurationMatch(&book); err != nil {
+			if err := de.checkDurationMatch(&bFull); err != nil {
 				slog.Error("dedup full scan duration check error for", "book", book.ID, "err", err)
 			}
 			return nil
@@ -2669,7 +2708,7 @@ func (de *Engine) FullScan(ctx context.Context, progress func(phase string, done
 		// are unaffected and the scan completes normally.
 		if de.embeddingsEnabled() && !embeddingsGaveUp {
 			chunkIDs = append(chunkIDs, book.ID)
-			chunkIsPrimary[book.ID] = !isNonPrimaryVersion(&book)
+			chunkIsPrimary[book.ID] = !isNonPrimaryVersionCore(&book)
 			if len(chunkIDs) >= embedChunkSize {
 				if err := flushChunk(i + 1); err != nil {
 					embedConsecutiveFails++
@@ -2754,7 +2793,13 @@ func (de *Engine) FullScan(ctx context.Context, progress func(phase string, done
 					authorName = author.Name
 				}
 			}
-			if err := de.runUnifiedScoringForBook(ctx, &book, authorName); err != nil {
+			// runUnifiedScoringForBook only reads book.ID directly and passes
+			// book into Collect*(bookStore, book) helpers that read Core-safe
+			// identifier/duration/hash fields — see its call sites' field
+			// usage. ToBook() is a lossless read-only projection here (no
+			// writeback).
+			bFull := book.ToBook()
+			if err := de.runUnifiedScoringForBook(ctx, &bFull, authorName); err != nil {
 				slog.Error("dedup full scan unified scoring error for", "book", book.ID, "err", err)
 			}
 			return nil
@@ -3054,12 +3099,12 @@ func (de *Engine) PurgeStaleCandidates(ctx context.Context) (int, error) {
 // which is O(n). The memory cost is ~50MB for 24K Book structs — same
 // order of magnitude as the old cumulative batch allocation and far
 // cheaper than the wasted CPU on re-walked iterators.
-func (de *Engine) getAllBooks() ([]database.Book, error) {
-	batch, err := de.bookStore.GetAllBooks(0, 0)
+func (de *Engine) getAllBooks() ([]database.BookCore, error) {
+	batch, err := de.bookStore.GetAllBooksCore(0, 0)
 	if err != nil {
 		return nil, err
 	}
-	filtered := make([]database.Book, 0, len(batch))
+	filtered := make([]database.BookCore, 0, len(batch))
 	for _, b := range batch {
 		if b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion {
 			continue
@@ -3079,8 +3124,8 @@ func (de *Engine) getAllBooks() ([]database.Book, error) {
 // for a book with zero pending candidates — which a non-primary book always
 // has, since it can never appear in a candidate pair. Only the Layer-2
 // findSimilarBooks call needs an explicit gate; see flushChunk in FullScan.
-func (de *Engine) getAllBooksUnfiltered() ([]database.Book, error) {
-	return de.bookStore.GetAllBooks(0, 0)
+func (de *Engine) getAllBooksUnfiltered() ([]database.BookCore, error) {
+	return de.bookStore.GetAllBooksCore(0, 0)
 }
 
 // getAllPrimaryBooksWithFullFields fetches all primary-version books via
@@ -3575,9 +3620,15 @@ func (de *Engine) AcoustIDScan(ctx context.Context, progress func(done, total in
 	if err != nil {
 		return fmt.Errorf("acoustid scan: get all books: %w", err)
 	}
+	// booksByID must hold *database.Book (bookForIdentifierGate below feeds
+	// identifiersConflict, and the fallback path returns full Books from
+	// GetBookByID), so each BookCore is converted once here via ToBook() — a
+	// lossless read-only projection (identifiersConflict only reads
+	// ISBN10/13/ASIN, all Core-safe).
 	booksByID := make(map[string]*database.Book, len(books))
 	for i := range books {
-		booksByID[books[i].ID] = &books[i]
+		full := books[i].ToBook()
+		booksByID[books[i].ID] = &full
 	}
 
 	boilerplateBookCache := make(map[string]bool, len(books))
@@ -3709,7 +3760,7 @@ func (de *Engine) AcoustIDScan(ctx context.Context, progress func(done, total in
 
 	total := len(books)
 	err = registry.RunItems(ctx, &progressCallbackReporter{progress: progress}, books,
-		func(_ context.Context, book database.Book) error {
+		func(_ context.Context, book database.BookCore) error {
 			files, err := de.bookStore.GetBookFiles(book.ID)
 			if err != nil {
 				slog.Info("[dedup] acoustid scan get files for", "book", book.ID, "err", err)

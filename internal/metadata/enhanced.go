@@ -1,7 +1,7 @@
 // file: internal/metadata/enhanced.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 7e8d9c0b-1a2f-3e4d-5c6b-7a8d9c0b1a2f
-// last-edited: 2026-07-05
+// last-edited: 2026-07-07
 
 package metadata
 
@@ -669,7 +669,7 @@ func GetMetadataHistory(bookID string, store database.BookStore) ([]MetadataHist
 }
 
 // ExportMetadata exports book metadata to a structured format
-func ExportMetadata(books []database.Book) (map[string]interface{}, error) {
+func ExportMetadata(books []database.BookCore) (map[string]interface{}, error) {
 	result := make(map[string]interface{})
 
 	bookData := make([]map[string]interface{}, 0, len(books))

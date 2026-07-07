@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/generate_itl_tests.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: b7e3f1a2-4c5d-6e7f-8a9b-0c1d2e3f4a5b
-// last-edited: 2026-05-01
+// last-edited: 2026-07-07
 
 package jobs
 
@@ -41,9 +41,9 @@ func (j *generateITLTestsJob) Run(ctx context.Context, store database.Store, rep
 		return fmt.Errorf("unsafe output dir path: %w", err)
 	}
 
-	allBooks, err := store.GetAllBooks(100000, 0)
+	allBooks, err := store.GetAllBooksCore(100000, 0)
 	if err != nil {
-		return fmt.Errorf("GetAllBooks: %w", err)
+		return fmt.Errorf("GetAllBooksCore: %w", err)
 	}
 
 	var allBookFiles []database.BookFile

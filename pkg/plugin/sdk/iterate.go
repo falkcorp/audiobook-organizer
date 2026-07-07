@@ -1,7 +1,7 @@
 // file: pkg/plugin/sdk/iterate.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef0123456789
-// last-edited: 2026-06-22
+// last-edited: 2026-07-07
 
 package sdk
 
@@ -13,13 +13,22 @@ import (
 )
 
 // BookStore is the narrow interface PageBooks needs — a paginated book reader.
+//
+// GetAllBooksFullFrom (not GetAllBooksCore): PageBooks's callback hands full
+// database.Book values to arbitrary external plugins (the public SDK
+// contract), so the internal fetch must always return full-fidelity rows —
+// under prod's memdb-backed default, GetAllBooksCore/GetAllBooks would return
+// heavy-field-nil'd (Description/BookSig*/Author/Series) projections here,
+// silently breaking any plugin that reads those fields. GetAllBooksFullFrom
+// bypasses memdb and reads the authoritative Pebble row directly (see
+// server_search.go's backfill loop for the same cursor pattern).
 type BookStore interface {
-	GetAllBooks(limit, offset int) ([]database.Book, error)
+	GetAllBooksFullFrom(afterID string, limit int) ([]database.Book, error)
 }
 
 // PageBooks calls fn for every book in the library, paging at pageSize.
 //
-// During each blocking GetAllBooks call, a keepalive goroutine fires
+// During each blocking GetAllBooksFullFrom call, a keepalive goroutine fires
 // reporter.UpdateProgress every 60s so the stuck-op watchdog does not cancel
 // the operation while the DB read is in progress (Scenario B: memdb rebuild or
 // raidz2 full scan taking longer than ProgressTimeout).
@@ -39,15 +48,15 @@ func PageBooks(
 	if pageSize <= 0 {
 		pageSize = 500
 	}
-	offset := 0
+	afterID := ""
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 
-		// Start keepalive goroutine only for the duration of the GetAllBooks call.
-		// close(stop) immediately after the call so we never over-stamp progress
-		// while fn is doing real work.
+		// Start keepalive goroutine only for the duration of the
+		// GetAllBooksFullFrom call. close(stop) immediately after the call so
+		// we never over-stamp progress while fn is doing real work.
 		stop := make(chan struct{})
 		go func() {
 			ticker := time.NewTicker(60 * time.Second)
@@ -64,7 +73,7 @@ func PageBooks(
 			}
 		}()
 
-		books, err := store.GetAllBooks(pageSize, offset)
+		books, err := store.GetAllBooksFullFrom(afterID, pageSize)
 		close(stop) // keepalive exits immediately after DB read completes
 
 		if err != nil {
@@ -83,9 +92,9 @@ func PageBooks(
 			}
 		}
 
+		afterID = books[len(books)-1].ID
 		if len(books) < pageSize {
 			return nil // last page
 		}
-		offset += pageSize
 	}
 }
