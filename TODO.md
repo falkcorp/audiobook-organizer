@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.69.0 -->
+<!-- version: 9.70.1 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-07 -->
 
@@ -46,20 +46,40 @@ future agent) can scan the entire workspace in one page.
 - Same writeback shape as the W5d-1 organizer writebacks that DID get the `hydrateAndUpdateBook`
   helper; this one was deliberately left out pending the fail-open design above.
 
-## 🟠 PR-D: deluge import fingerprint-wipe (3 impls) — fast-follow after STOREFID W3 (2026-07-06)
+## ✅ PR-D: deluge import fingerprint-wipe (3 impls) — RESOLVED (STOREFID W6, 2026-07-07)
 
-- **NEW finding** during STOREFID W3 caller audit. Three deluge import paths read a
-  BookFile from `GetBookFilesNeedingDelugeImport` (memdb-slim in prod) and write it
-  back via `UpdateBookFile`, wiping fingerprint **diagnostic** fields (the
-  `AcoustIDFingerprint` blob is guarded by PR-A #1839):
-  - `internal/deluge/import.go` `ImportToLibrary` (~L68-72)
-  - `internal/maintenance/jobs/bulk_deluge_import.go` `bdi_importToLibrary` (~L200-202)
-  - `internal/plugins/deluge/centralization.go` (~L144-146)
-- **Fix:** hydrate the full row via `GetBookFiles(bookID)` at each writeback point
-  (same shape as the W3 jobs). Do NOT make the getter return full via bulk hydrate —
-  `maxBooks` defaults to 0 (uncapped) and caps AFTER the getter, so a full-blob slice
-  would reintroduce the memdb RAM anti-pattern.
-- Root cause + census: `docs/audits/2026-07-05-updatebookfile-memdb-writeback-fingerprint-wipe.md`.
+- **Fixed as a side effect of STOREFID W6's `GetBookFilesNeedingDelugeImport` → Core retype**:
+  the narrower `BookFileCore` return type made the `UpdateBookFile(bf.ID, bf)` writeback in all 3
+  impls a compile error, forcing (not just documenting) the hydrate fix at the same time as the
+  retype. Fixed via `GetBookFileByID(bookID, fileID)` hydrate-mutate-update at each call site:
+  `internal/plugins/deluge/centralization.go`, `internal/server/deluge_discovery.go` (before
+  calling `deluge.ImportToLibrary`), `internal/maintenance/jobs/bulk_deluge_import.go` (before
+  calling `bdi_importToLibrary`). `ImportToLibrary`/`bdi_importToLibrary` signatures unchanged.
+- Regression test: `internal/plugins/deluge/centralization_test.go`
+  `TestRunCentralization_HydratesBeforeWriteback` covers the `centralization.go` path only
+  (seeds `FingerprintDiagnosticJSON`, asserts it survives `UpdateBookFile`; manually verified to
+  fail against the pre-fix naive writeback). The other 2 impls (`deluge_discovery.go`,
+  `bulk_deluge_import.go`) share the identical hydrate pattern but do not yet have their own
+  regression tests — same shape, could be added as a follow-up if one of them regresses.
+- Root cause + census (historical): `docs/audits/2026-07-05-updatebookfile-memdb-writeback-fingerprint-wipe.md`.
+
+## 🟠 GetFolderDuplicates / GetDuplicateBooksByMetadata are no-op stubs in production (found 2026-07-07)
+
+- **NEW finding** during STOREFID W6's Core retype of these 2 getters. `PebbleStore.GetFolderDuplicatesCore`
+  and `PebbleStore.GetDuplicateBooksByMetadataCore` (`internal/database/pebble_store.go`) are hard
+  `return nil, nil` stubs — **no `MemStore` implementation exists for either getter**, so unlike
+  every other slim getter in this codebase, these two ALWAYS return empty regardless of
+  `UseMemDB`. Folder-based duplicate detection (same title, same folder — e.g. M4B + MP3 pairs) and
+  metadata-based fuzzy duplicate detection are therefore non-functional in production today; only
+  hash-based duplicate detection (`GetDuplicateBooks`) actually works.
+  Callers: `internal/dedup/book_dedup.go` (`ScanBookDuplicates`, tiers 2 and 3 of the 3-tier scan),
+  `internal/audiobooks/service_single.go` (`GetDuplicateBooks`).
+- **Not fixed as part of W6** — implementing real folder/metadata duplicate detection is a
+  materially different task than a type retype (the retype only made the existing no-op behavior
+  Core-typed; the STOREFID work does not change or fix this gap). Needs its own scoped design:
+  folder-based detection would need a folder→books index or a scan; metadata-based detection
+  already has full fuzzy-matching logic downstream (`applyTranscriptionMetadataTiebreaker`,
+  `metadataPairSimilarity`) that's just never fed any candidates today.
 
 ## 🟡 Verify DurationSec invariant for the 3 PR-B fingerprint ops (2026-07-06)
 

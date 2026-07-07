@@ -1,5 +1,5 @@
 // file: internal/database/memdb_reads.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000006
 // last-edited: 2026-07-07
 
@@ -866,8 +866,9 @@ func (m *MemStore) GetAllBookFilesCore() ([]BookFileCore, error) {
 	return files, nil
 }
 
-// GetBookFilesNeedingDelugeImport returns BookFiles that have a non-empty
-// DelugeHash AND have not yet been imported (ImportedFromDelugeAt is nil).
+// GetBookFilesNeedingDelugeImportCore returns BookFileCores that have a
+// non-empty DelugeHash AND have not yet been imported (ImportedFromDelugeAt
+// is nil). Core-typed (STOREFID W6) — see the interface doc comment.
 //
 // Walks the sparse memdb deluge_hash index — only rows with a non-empty
 // DelugeHash exist in that index — then post-filters on the
@@ -875,14 +876,14 @@ func (m *MemStore) GetAllBookFilesCore() ([]BookFileCore, error) {
 // O(308K), which mirrors the GetAllBookFiles fastpath from PR #1166 but
 // trims the working set to the deluge-relevant subset for the discovery
 // handler and centralization plugin (H2 + H8).
-func (m *MemStore) GetBookFilesNeedingDelugeImport() ([]BookFile, error) {
+func (m *MemStore) GetBookFilesNeedingDelugeImportCore() ([]BookFileCore, error) {
 	txn := m.db.Txn(false)
 	defer txn.Abort()
 	iter, err := txn.Get(memTableBookFiles, memIdxDelugeHash)
 	if err != nil {
 		return nil, fmt.Errorf("memdb deluge_hash scan: %w", err)
 	}
-	var out []BookFile
+	var out []BookFileCore
 	for obj := iter.Next(); obj != nil; obj = iter.Next() {
 		bf, ok := obj.(*BookFile)
 		if !ok {
@@ -891,7 +892,7 @@ func (m *MemStore) GetBookFilesNeedingDelugeImport() ([]BookFile, error) {
 		if bf.ImportedFromDelugeAt != nil {
 			continue
 		}
-		out = append(out, *bf)
+		out = append(out, bf.Core())
 	}
 	return out, nil
 }

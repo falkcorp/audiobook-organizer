@@ -1,5 +1,5 @@
 // file: internal/database/memdb_reads_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000007
 // last-edited: 2026-07-07
 
@@ -253,7 +253,7 @@ func TestMemStore_CountFiles(t *testing.T) {
 	}
 }
 
-func TestMemStore_GetBookFilesNeedingDelugeImport(t *testing.T) {
+func TestMemStore_GetBookFilesNeedingDelugeImportCore(t *testing.T) {
 	m, err := NewMemStore()
 	if err != nil {
 		t.Fatalf("NewMemStore: %v", err)
@@ -274,9 +274,9 @@ func TestMemStore_GetBookFilesNeedingDelugeImport(t *testing.T) {
 	}
 	seedMemStore(t, m, nil, files, nil, nil)
 
-	got, err := m.GetBookFilesNeedingDelugeImport()
+	got, err := m.GetBookFilesNeedingDelugeImportCore()
 	if err != nil {
-		t.Fatalf("GetBookFilesNeedingDelugeImport: %v", err)
+		t.Fatalf("GetBookFilesNeedingDelugeImportCore: %v", err)
 	}
 	gotIDs := map[string]bool{}
 	for _, f := range got {

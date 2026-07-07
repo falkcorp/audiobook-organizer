@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.75.0
+// version: 1.77.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-07-07
 
@@ -32,7 +32,7 @@ var _ Store = (*MockStore)(nil)
 // MockStore is a simple mock implementation for testing services
 type MockStore struct {
 	// Book methods
-	GetBookByIDFunc                 func(id string) (*Book, error)
+	GetBookByIDFunc       func(id string) (*Book, error)
 	GetBookByFilePathFunc func(path string) (*Book, error)
 	// GetAllBooksFunc is test-only plumbing (NOT a Store interface method —
 	// GetAllBooks was removed from the interface in STOREFID W5z). Several
@@ -58,7 +58,7 @@ type MockStore struct {
 	RevertBookToVersionFunc         func(id string, ts time.Time) (*Book, error)
 	PruneBookVersionsFunc           func(id string, keepCount int) (int, error)
 	GetDuplicateBooksFunc           func() ([][]Book, error)
-	GetDuplicateBooksByMetadataFunc func(threshold float64) ([][]Book, error)
+	GetDuplicateBooksByMetadataFunc func(threshold float64) ([][]BookCore, error)
 	CreateBookFunc                  func(book *Book) (*Book, error)
 	UpdateBookFunc                  func(id string, book *Book) (*Book, error)
 	UpdateBookRatingError           error
@@ -345,30 +345,31 @@ type MockStore struct {
 	BulkCreateExternalIDMappingsFunc func(mappings []ExternalIDMapping) error
 
 	// BookFile methods
-	CreateBookFileFunc                  func(file *BookFile) error
-	GetAllBookFilesCoreFunc             func() ([]BookFileCore, error)
-	UpdateBookFileFunc                  func(id string, file *BookFile) error
-	UpdateBookFileHashesFunc            func(id, originalHash, postMetadataHash string) error
-	GetBookFilesFunc                    func(bookID string) ([]BookFile, error)
-	GetBookFileByIDFunc                 func(bookID, fileID string) (*BookFile, error)
-	GetBookFileByPIDFunc                func(itunesPID string) (*BookFile, error)
-	ClearITunesPIDFunc                  func(itunesPID string) (bool, error)
-	GetBookFileByPathFunc               func(filePath string) (*BookFile, error)
-	MarkFileImportedFromDelugeFunc      func(ctx context.Context, originalPath, libraryPath, torrentHash string) error
-	GetBookFileByAcoustIDFunc           func(fingerprint string) (*BookFile, error)
-	GetBookFileByAcoustIDFuzzyFunc      func(fingerprint string, minSimilarity float64) (*BookFile, error)
-	DeleteBookFileFunc                  func(id string) error
-	DeleteBookFilesForBookFunc          func(bookID string) error
-	UpsertBookFileFunc                  func(file *BookFile) error
-	BatchUpsertBookFilesFunc            func(files []*BookFile) error
-	MoveBookFilesToBookFunc             func(fileIDs []string, sourceBookID, targetBookID string) error
-	GetDuplicateFilesByHashFunc         func(limit int) ([]DuplicateFileGroup, error)
-	GetBookBySegmentFileHashFunc        func(hash string) (*Book, error)
-	SetBookFileHashFunc                 func(id, hash string) error
-	GetBookFileHashStatsFunc            func() (*BookFileHashStats, error)
-	GetBookMetadataHashStatsFunc        func() (*BookMetadataHashStats, error)
-	GetFilesWithFingerprintFailuresFunc func(reason string, limit, offset int) ([]BookFile, int64, error)
-	GetAcoustIDStatsFunc                func() (*AcoustIDStats, error)
+	CreateBookFileFunc                      func(file *BookFile) error
+	GetAllBookFilesCoreFunc                 func() ([]BookFileCore, error)
+	GetBookFilesNeedingDelugeImportCoreFunc func() ([]BookFileCore, error)
+	UpdateBookFileFunc                      func(id string, file *BookFile) error
+	UpdateBookFileHashesFunc                func(id, originalHash, postMetadataHash string) error
+	GetBookFilesFunc                        func(bookID string) ([]BookFile, error)
+	GetBookFileByIDFunc                     func(bookID, fileID string) (*BookFile, error)
+	GetBookFileByPIDFunc                    func(itunesPID string) (*BookFile, error)
+	ClearITunesPIDFunc                      func(itunesPID string) (bool, error)
+	GetBookFileByPathFunc                   func(filePath string) (*BookFile, error)
+	MarkFileImportedFromDelugeFunc          func(ctx context.Context, originalPath, libraryPath, torrentHash string) error
+	GetBookFileByAcoustIDFunc               func(fingerprint string) (*BookFile, error)
+	GetBookFileByAcoustIDFuzzyFunc          func(fingerprint string, minSimilarity float64) (*BookFile, error)
+	DeleteBookFileFunc                      func(id string) error
+	DeleteBookFilesForBookFunc              func(bookID string) error
+	UpsertBookFileFunc                      func(file *BookFile) error
+	BatchUpsertBookFilesFunc                func(files []*BookFile) error
+	MoveBookFilesToBookFunc                 func(fileIDs []string, sourceBookID, targetBookID string) error
+	GetDuplicateFilesByHashFunc             func(limit int) ([]DuplicateFileGroup, error)
+	GetBookBySegmentFileHashFunc            func(hash string) (*Book, error)
+	SetBookFileHashFunc                     func(id, hash string) error
+	GetBookFileHashStatsFunc                func() (*BookFileHashStats, error)
+	GetBookMetadataHashStatsFunc            func() (*BookMetadataHashStats, error)
+	GetFilesWithFingerprintFailuresFunc     func(reason string, limit, offset int) ([]BookFile, int64, error)
+	GetAcoustIDStatsFunc                    func() (*AcoustIDStats, error)
 
 	// Path history
 	RecordPathChangeFunc   func(change *BookPathChange) error
@@ -757,11 +758,11 @@ func (m *MockStore) GetBooksByTitleInDir(normalizedTitle, dirPath string) ([]Boo
 	return nil, nil
 }
 
-func (m *MockStore) GetFolderDuplicates() ([][]Book, error) {
+func (m *MockStore) GetFolderDuplicatesCore() ([][]BookCore, error) {
 	return nil, nil
 }
 
-func (m *MockStore) GetDuplicateBooksByMetadata(threshold float64) ([][]Book, error) {
+func (m *MockStore) GetDuplicateBooksByMetadataCore(threshold float64) ([][]BookCore, error) {
 	if m.GetDuplicateBooksByMetadataFunc != nil {
 		return m.GetDuplicateBooksByMetadataFunc(threshold)
 	}
@@ -2400,7 +2401,12 @@ func (m *MockStore) GetAllBookFilesCore() ([]BookFileCore, error) {
 	}
 	return nil, nil
 }
-func (m *MockStore) GetBookFilesNeedingDelugeImport() ([]BookFile, error) { return nil, nil }
+func (m *MockStore) GetBookFilesNeedingDelugeImportCore() ([]BookFileCore, error) {
+	if m.GetBookFilesNeedingDelugeImportCoreFunc != nil {
+		return m.GetBookFilesNeedingDelugeImportCoreFunc()
+	}
+	return nil, nil
+}
 
 func (m *MockStore) MarkFileImportedFromDeluge(ctx context.Context, originalPath, libraryPath, torrentHash string) error {
 	if m.MarkFileImportedFromDelugeFunc != nil {

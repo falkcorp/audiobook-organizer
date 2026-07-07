@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.109.0
+// version: 1.110.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-07-07
 
@@ -1037,25 +1037,21 @@ func (p *PebbleStore) GetBooksByTitleInDir(normalizedTitle, dirPath string) ([]B
 	return results, nil
 }
 
-// GetFolderDuplicates is SLIM (memdb projection): returns rows with heavy
-// fields nil'd — Description, VersionNotes, BookSigV1, BookSigV1Mask,
-// BookSigSegments, BookSigBuiltAt, BookSigCoveragePct, Author, Series. A
-// caller that needs any of those MUST fetch via GetBookByID /
-// GetAllBooksFullFrom (full Pebble). See
-// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
-func (p *PebbleStore) GetFolderDuplicates() ([][]Book, error) {
-	// PebbleStore doesn't support folder-based duplicate detection efficiently.
+// GetFolderDuplicatesCore is Core-typed (STOREFID W6) — see the interface
+// doc comment.
+//
+// PebbleStore doesn't support folder-based duplicate detection efficiently
+// (no MemStore implementation exists for this getter either — it is a
+// known-unimplemented stub on both storage backends today, always returning
+// an empty result; see TODO.md for the tracked gap).
+func (p *PebbleStore) GetFolderDuplicatesCore() ([][]BookCore, error) {
 	return nil, nil
 }
 
-// GetDuplicateBooksByMetadata is not efficiently supported in PebbleStore.
-//
-// SLIM (memdb projection): returns rows with heavy fields nil'd — Description,
-// VersionNotes, BookSigV1, BookSigV1Mask, BookSigSegments, BookSigBuiltAt,
-// BookSigCoveragePct, Author, Series. A caller that needs any of those MUST
-// fetch via GetBookByID / GetAllBooksFullFrom (full Pebble). See
-// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
-func (p *PebbleStore) GetDuplicateBooksByMetadata(threshold float64) ([][]Book, error) {
+// GetDuplicateBooksByMetadataCore is Core-typed (STOREFID W6) — see the
+// interface doc comment. Not efficiently supported in PebbleStore (see
+// GetFolderDuplicatesCore's doc comment for the same known gap).
+func (p *PebbleStore) GetDuplicateBooksByMetadataCore(threshold float64) ([][]BookCore, error) {
 	return nil, nil
 }
 

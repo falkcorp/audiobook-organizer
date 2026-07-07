@@ -1,7 +1,7 @@
 // file: internal/database/iface_misc.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: 473781a7-1a31-4914-b7c7-8efc91f9f7e6
-// last-edited: 2026-07-06
+// last-edited: 2026-07-07
 
 package database
 
@@ -141,12 +141,17 @@ type BookFileStore interface {
 	// BookFileCore return type makes reading a stripped fingerprint field a
 	// compile error instead of a silent nil.
 	GetAllBookFilesCore() ([]BookFileCore, error)
-	// GetBookFilesNeedingDelugeImport returns book_files that have a deluge_hash
-	// but have not yet been copied into the library (imported_from_deluge_at IS NULL).
-	//
-	// SLIM (memdb projection) — see
-	// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
-	GetBookFilesNeedingDelugeImport() ([]BookFile, error)
+	// GetBookFilesNeedingDelugeImportCore returns book_files that have a
+	// deluge_hash but have not yet been copied into the library
+	// (imported_from_deluge_at IS NULL). Core-typed (STOREFID W6): the return
+	// type is BookFileCore, not BookFile, so the heavy fingerprint-diagnostic
+	// fields (FingerprintFailureReason/Detail/DiagnosticJSON,
+	// AcoustIDFingerprint, AcoustIDSeg0..6) being absent is compiler-enforced
+	// rather than silently nil'd (FingerprintFailedAt and
+	// AcoustIDFingerprintDurationSec are retained on Core). A caller that
+	// needs any of the stripped fields MUST fetch via GetBookFiles(bookID)
+	// (full Pebble). See docs/specs/2026-07-05-store-getter-fidelity-unification.md.
+	GetBookFilesNeedingDelugeImportCore() ([]BookFileCore, error)
 	GetBookFileByID(bookID, fileID string) (*BookFile, error)
 	GetBookFileByPID(itunesPID string) (*BookFile, error)
 	// ClearITunesPID surgically clears itunes_persistent_id and itunes_path

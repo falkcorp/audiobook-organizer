@@ -1,7 +1,7 @@
 // file: internal/database/store_coverage_test.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef0123456789
-// last-edited: 2026-06-10
+// last-edited: 2026-07-07
 
 // NOTE(fable5 T022): setupCoverageDB ported to PebbleStore; SQLiteStore
 // type assertions updated. Tests for SQLite-only methods (CountTableRows,
@@ -1129,7 +1129,7 @@ func TestCoverage_GetFolderDuplicates(t *testing.T) {
 	_ = createTestBook(t, store, "Duplicate", "/same/folder/dup1.m4b", nil, nil)
 	_ = createTestBook(t, store, "Duplicate", "/same/folder/dup2.m4b", nil, nil)
 
-	dupes, err := store.GetFolderDuplicates()
+	dupes, err := store.GetFolderDuplicatesCore()
 	require.NoError(t, err)
 	// May or may not find dupes depending on implementation (normalized title matching),
 	// but the function should not error
@@ -1147,7 +1147,7 @@ func TestCoverage_GetDuplicateBooksByMetadata(t *testing.T) {
 	_ = createBookWithDuration(t, store, "Almost Same Title", "/tmp/dupe1.m4b", &author.ID, &dur)
 	_ = createBookWithDuration(t, store, "Almost Same Title", "/tmp/dupe2.m4b", &author.ID, &dur)
 
-	dupes, err := store.GetDuplicateBooksByMetadata(0.8)
+	dupes, err := store.GetDuplicateBooksByMetadataCore(0.8)
 	require.NoError(t, err)
 	_ = dupes // just testing it doesn't error
 }

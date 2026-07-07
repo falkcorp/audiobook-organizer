@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/bulk_deluge_import.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: a2b8c6d7-9e0f-1a2b-3c4d-5e6f7a8b9c0d
-// last-edited: 2026-05-01
+// last-edited: 2026-07-07
 
 package jobs
 
@@ -56,9 +56,9 @@ func (j *bulkDelugeImportJob) Run(ctx context.Context, store database.Store, rep
 
 	client := bdi_buildDelugeClient()
 
-	pending, err := store.GetBookFilesNeedingDelugeImport()
+	pending, err := store.GetBookFilesNeedingDelugeImportCore()
 	if err != nil {
-		return fmt.Errorf("GetBookFilesNeedingDelugeImport: %w", err)
+		return fmt.Errorf("GetBookFilesNeedingDelugeImportCore: %w", err)
 	}
 	if maxBooks > 0 && len(pending) > maxBooks {
 		pending = pending[:maxBooks]
@@ -88,7 +88,31 @@ func (j *bulkDelugeImportJob) Run(ctx context.Context, store database.Store, rep
 			}
 			imported++
 		} else {
-			newPath, importErr := bdi_importToLibrary(&config.AppConfig, client, store, f)
+			// Hydrate the full row before writing back — f is the Core
+			// (memdb-slim) projection, and passing it straight to
+			// bdi_importToLibrary would silently wipe the
+			// fingerprint-diagnostic fields on its UpdateBookFile call
+			// (STOREFID PR-D).
+			full, hydrateErr := store.GetBookFileByID(f.BookID, f.ID)
+			if hydrateErr != nil || full == nil {
+				errMsg := "book file not found"
+				if hydrateErr != nil {
+					errMsg = hydrateErr.Error()
+				}
+				slog.Warn("bulk-deluge-import hydrate failed", "opID", opID, "f", f.FilePath, "err", errMsg)
+				resultJSON, _ := json.Marshal(map[string]any{"path": f.FilePath, "error": errMsg})
+				if opID != "" {
+					_ = store.CreateOperationResult(&database.OperationResult{
+						OperationID: opID,
+						BookID:      f.ID,
+						ResultJSON:  string(resultJSON),
+						Status:      "error",
+					})
+				}
+				failed++
+				continue
+			}
+			newPath, importErr := bdi_importToLibrary(&config.AppConfig, client, store, full)
 			if importErr != nil {
 				slog.Warn("bulk-deluge-import", "opID", opID, "f", f.FilePath, "importErr", importErr)
 				resultJSON, _ := json.Marshal(map[string]any{"path": f.FilePath, "error": importErr.Error()})

@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
-// last-edited: 2026-07-03
+// last-edited: 2026-07-07
 
 package audiobooks
 
@@ -207,6 +207,27 @@ func (svc *AudiobookService) extractBookFileMetadata(book *database.Book, author
 	return m
 }
 
+// coreGroupsToBookGroups widens [][]database.BookCore to [][]database.Book
+// via .ToBook() (heavy fields left at their zero value — never populated by
+// GetFolderDuplicatesCore in the first place, so this is not a lossy
+// conversion). Used at the store boundary so the shared merge logic below
+// (which only reads b.ID and stays []Book to match GetDuplicateBooks)
+// doesn't need its own Core variant.
+func coreGroupsToBookGroups(groups [][]database.BookCore) [][]database.Book {
+	if groups == nil {
+		return nil
+	}
+	out := make([][]database.Book, len(groups))
+	for i, group := range groups {
+		converted := make([]database.Book, len(group))
+		for j, c := range group {
+			converted[j] = c.ToBook()
+		}
+		out[i] = converted
+	}
+	return out
+}
+
 // GetDuplicateBooks retrieves all duplicate book groups
 func (svc *AudiobookService) GetDuplicateBooks(ctx context.Context) (*DuplicatesResult, error) {
 	if svc.store == nil {
@@ -222,8 +243,13 @@ func (svc *AudiobookService) GetDuplicateBooks(ctx context.Context) (*Duplicates
 		duplicateGroups = [][]database.Book{}
 	}
 
-	// Get folder-based duplicates (same title in same folder, e.g. M4B + MP3)
-	folderGroups, err := svc.store.GetFolderDuplicates()
+	// Get folder-based duplicates (same title in same folder, e.g. M4B + MP3).
+	// Converted immediately at the store boundary — everything below only
+	// reads b.ID (Core-safe), so .ToBook() is a lossless widen, not the
+	// hydrate-before-writeback landmine (this path only reports duplicate
+	// groups; it never writes a book back).
+	folderGroupsCore, err := svc.store.GetFolderDuplicatesCore()
+	folderGroups := coreGroupsToBookGroups(folderGroupsCore)
 	if err != nil {
 		slog.Warn("folder duplicate detection failed", "err", err)
 	} else {

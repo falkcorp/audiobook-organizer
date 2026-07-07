@@ -1,7 +1,7 @@
 // file: internal/dedup/book_dedup.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-06-28
+// last-edited: 2026-07-07
 
 // Package dedup: book_dedup.go contains the extracted execution logic for the
 // "dedup.book-scan" and "dedup.book-merge" async operations.  The *Server
@@ -38,6 +38,28 @@ type BookDupGroup struct {
 type BookScanResult struct {
 	Groups          []BookDupGroup
 	TotalDuplicates int
+}
+
+// coreGroupsToBookGroups widens [][]database.BookCore to [][]database.Book
+// via .ToBook() (heavy fields left at their zero value — never populated by
+// GetFolderDuplicatesCore/GetDuplicateBooksByMetadataCore in the first
+// place, so this is not a lossy conversion). Used at the ScanBookDuplicates
+// store boundary so the shared addGroups/tiebreaker pipeline (which stays
+// []Book to match hashGroups from GetDuplicateBooks and the public
+// BookDupGroup.Books JSON contract) doesn't need its own Core variant.
+func coreGroupsToBookGroups(groups [][]database.BookCore) [][]database.Book {
+	if groups == nil {
+		return nil
+	}
+	out := make([][]database.Book, len(groups))
+	for i, group := range groups {
+		converted := make([]database.Book, len(group))
+		for j, c := range group {
+			converted[j] = c.ToBook()
+		}
+		out[i] = converted
+	}
+	return out
 }
 
 // ScanBookDuplicates runs the three-tier duplicate-book scan (hash, folder,
@@ -77,19 +99,26 @@ func ScanBookDuplicates(
 
 	// Step 2: Folder duplicates (same title in same folder)
 	report(2, "Finding folder-based duplicates...")
-	folderGroups, err := store.GetFolderDuplicates()
+	folderGroupsCore, err := store.GetFolderDuplicatesCore()
 	if err != nil {
 		slog.Warn("folder dedup failed", "error", err)
-		folderGroups = nil
+		folderGroupsCore = nil
 	}
+	// Converted immediately at the store boundary — everything downstream
+	// (addGroups, dismissed-key lookups) only ever reads Core-safe fields
+	// (ID, Title), so .ToBook() here is a lossless widen, not the
+	// hydrate-before-writeback landmine (this pipeline never writes a book
+	// back; it only reports duplicate groups).
+	folderGroups := coreGroupsToBookGroups(folderGroupsCore)
 
 	// Step 3: Metadata-based fuzzy matching
 	report(3, "Finding metadata-based duplicates...")
-	metadataGroups, err := store.GetDuplicateBooksByMetadata(metadataBorderlineFloor)
+	metadataGroupsCore, err := store.GetDuplicateBooksByMetadataCore(metadataBorderlineFloor)
 	if err != nil {
 		slog.Warn("metadata dedup failed", "error", err)
-		metadataGroups = nil
+		metadataGroupsCore = nil
 	}
+	metadataGroups := coreGroupsToBookGroups(metadataGroupsCore)
 	metadataGroups, metadataConfidence, metadataReason := applyTranscriptionMetadataTiebreaker(store, metadataGroups)
 
 	report(4, "Merging results...")

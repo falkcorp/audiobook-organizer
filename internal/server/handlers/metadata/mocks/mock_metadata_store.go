@@ -2047,24 +2047,24 @@ func (_c *MockMetadataStore_GetDuplicateBooks_Call) RunAndReturn(run func() ([][
 	return _c
 }
 
-// GetDuplicateBooksByMetadata provides a mock function for the type MockMetadataStore
-func (_mock *MockMetadataStore) GetDuplicateBooksByMetadata(threshold float64) ([][]database.Book, error) {
+// GetDuplicateBooksByMetadataCore provides a mock function for the type MockMetadataStore
+func (_mock *MockMetadataStore) GetDuplicateBooksByMetadataCore(threshold float64) ([][]database.BookCore, error) {
 	ret := _mock.Called(threshold)
 
 	if len(ret) == 0 {
-		panic("no return value specified for GetDuplicateBooksByMetadata")
+		panic("no return value specified for GetDuplicateBooksByMetadataCore")
 	}
 
-	var r0 [][]database.Book
+	var r0 [][]database.BookCore
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(float64) ([][]database.Book, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(float64) ([][]database.BookCore, error)); ok {
 		return returnFunc(threshold)
 	}
-	if returnFunc, ok := ret.Get(0).(func(float64) [][]database.Book); ok {
+	if returnFunc, ok := ret.Get(0).(func(float64) [][]database.BookCore); ok {
 		r0 = returnFunc(threshold)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([][]database.Book)
+			r0 = ret.Get(0).([][]database.BookCore)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(float64) error); ok {
@@ -2075,18 +2075,18 @@ func (_mock *MockMetadataStore) GetDuplicateBooksByMetadata(threshold float64) (
 	return r0, r1
 }
 
-// MockMetadataStore_GetDuplicateBooksByMetadata_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetDuplicateBooksByMetadata'
-type MockMetadataStore_GetDuplicateBooksByMetadata_Call struct {
+// MockMetadataStore_GetDuplicateBooksByMetadataCore_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetDuplicateBooksByMetadataCore'
+type MockMetadataStore_GetDuplicateBooksByMetadataCore_Call struct {
 	*mock.Call
 }
 
-// GetDuplicateBooksByMetadata is a helper method to define mock.On call
+// GetDuplicateBooksByMetadataCore is a helper method to define mock.On call
 //   - threshold float64
-func (_e *MockMetadataStore_Expecter) GetDuplicateBooksByMetadata(threshold any) *MockMetadataStore_GetDuplicateBooksByMetadata_Call {
-	return &MockMetadataStore_GetDuplicateBooksByMetadata_Call{Call: _e.mock.On("GetDuplicateBooksByMetadata", threshold)}
+func (_e *MockMetadataStore_Expecter) GetDuplicateBooksByMetadataCore(threshold any) *MockMetadataStore_GetDuplicateBooksByMetadataCore_Call {
+	return &MockMetadataStore_GetDuplicateBooksByMetadataCore_Call{Call: _e.mock.On("GetDuplicateBooksByMetadataCore", threshold)}
 }
 
-func (_c *MockMetadataStore_GetDuplicateBooksByMetadata_Call) Run(run func(threshold float64)) *MockMetadataStore_GetDuplicateBooksByMetadata_Call {
+func (_c *MockMetadataStore_GetDuplicateBooksByMetadataCore_Call) Run(run func(threshold float64)) *MockMetadataStore_GetDuplicateBooksByMetadataCore_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 float64
 		if args[0] != nil {
@@ -2099,34 +2099,34 @@ func (_c *MockMetadataStore_GetDuplicateBooksByMetadata_Call) Run(run func(thres
 	return _c
 }
 
-func (_c *MockMetadataStore_GetDuplicateBooksByMetadata_Call) Return(bookss [][]database.Book, err error) *MockMetadataStore_GetDuplicateBooksByMetadata_Call {
-	_c.Call.Return(bookss, err)
+func (_c *MockMetadataStore_GetDuplicateBooksByMetadataCore_Call) Return(bookCoress [][]database.BookCore, err error) *MockMetadataStore_GetDuplicateBooksByMetadataCore_Call {
+	_c.Call.Return(bookCoress, err)
 	return _c
 }
 
-func (_c *MockMetadataStore_GetDuplicateBooksByMetadata_Call) RunAndReturn(run func(threshold float64) ([][]database.Book, error)) *MockMetadataStore_GetDuplicateBooksByMetadata_Call {
+func (_c *MockMetadataStore_GetDuplicateBooksByMetadataCore_Call) RunAndReturn(run func(threshold float64) ([][]database.BookCore, error)) *MockMetadataStore_GetDuplicateBooksByMetadataCore_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
-// GetFolderDuplicates provides a mock function for the type MockMetadataStore
-func (_mock *MockMetadataStore) GetFolderDuplicates() ([][]database.Book, error) {
+// GetFolderDuplicatesCore provides a mock function for the type MockMetadataStore
+func (_mock *MockMetadataStore) GetFolderDuplicatesCore() ([][]database.BookCore, error) {
 	ret := _mock.Called()
 
 	if len(ret) == 0 {
-		panic("no return value specified for GetFolderDuplicates")
+		panic("no return value specified for GetFolderDuplicatesCore")
 	}
 
-	var r0 [][]database.Book
+	var r0 [][]database.BookCore
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func() ([][]database.Book, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func() ([][]database.BookCore, error)); ok {
 		return returnFunc()
 	}
-	if returnFunc, ok := ret.Get(0).(func() [][]database.Book); ok {
+	if returnFunc, ok := ret.Get(0).(func() [][]database.BookCore); ok {
 		r0 = returnFunc()
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([][]database.Book)
+			r0 = ret.Get(0).([][]database.BookCore)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func() error); ok {
@@ -2137,29 +2137,29 @@ func (_mock *MockMetadataStore) GetFolderDuplicates() ([][]database.Book, error)
 	return r0, r1
 }
 
-// MockMetadataStore_GetFolderDuplicates_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetFolderDuplicates'
-type MockMetadataStore_GetFolderDuplicates_Call struct {
+// MockMetadataStore_GetFolderDuplicatesCore_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetFolderDuplicatesCore'
+type MockMetadataStore_GetFolderDuplicatesCore_Call struct {
 	*mock.Call
 }
 
-// GetFolderDuplicates is a helper method to define mock.On call
-func (_e *MockMetadataStore_Expecter) GetFolderDuplicates() *MockMetadataStore_GetFolderDuplicates_Call {
-	return &MockMetadataStore_GetFolderDuplicates_Call{Call: _e.mock.On("GetFolderDuplicates")}
+// GetFolderDuplicatesCore is a helper method to define mock.On call
+func (_e *MockMetadataStore_Expecter) GetFolderDuplicatesCore() *MockMetadataStore_GetFolderDuplicatesCore_Call {
+	return &MockMetadataStore_GetFolderDuplicatesCore_Call{Call: _e.mock.On("GetFolderDuplicatesCore")}
 }
 
-func (_c *MockMetadataStore_GetFolderDuplicates_Call) Run(run func()) *MockMetadataStore_GetFolderDuplicates_Call {
+func (_c *MockMetadataStore_GetFolderDuplicatesCore_Call) Run(run func()) *MockMetadataStore_GetFolderDuplicatesCore_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run()
 	})
 	return _c
 }
 
-func (_c *MockMetadataStore_GetFolderDuplicates_Call) Return(bookss [][]database.Book, err error) *MockMetadataStore_GetFolderDuplicates_Call {
-	_c.Call.Return(bookss, err)
+func (_c *MockMetadataStore_GetFolderDuplicatesCore_Call) Return(bookCoress [][]database.BookCore, err error) *MockMetadataStore_GetFolderDuplicatesCore_Call {
+	_c.Call.Return(bookCoress, err)
 	return _c
 }
 
-func (_c *MockMetadataStore_GetFolderDuplicates_Call) RunAndReturn(run func() ([][]database.Book, error)) *MockMetadataStore_GetFolderDuplicates_Call {
+func (_c *MockMetadataStore_GetFolderDuplicatesCore_Call) RunAndReturn(run func() ([][]database.BookCore, error)) *MockMetadataStore_GetFolderDuplicatesCore_Call {
 	_c.Call.Return(run)
 	return _c
 }
