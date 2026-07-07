@@ -24,7 +24,7 @@ on:
 
 jobs:
   burndown:
-    uses: falkcorp/github-common/.github/workflows/reusable-burndown.yml@66059b7eba8a00bee7e45a114c00251f0a6c3a07 # v1.11.2 + submodules:recursive + triage-poll pin fix
+    uses: falkcorp/github-common/.github/workflows/reusable-burndown.yml@b3f278f1b6fe7b08f428ce6335a1f24a961f1718 # v1.11.2 + submodules:recursive + triage-poll pin fix
     with:
       mode: ${{ inputs.mode || 'draft-only' }}
       hub_repo: falkcorp/burndown-tasks
