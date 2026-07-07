@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/build_isbn_index.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-06-14
+// last-edited: 2026-07-07
 
 // Package dedup — op dedup.build-isbn-index.
 //
@@ -125,7 +125,7 @@ func (p *Plugin) runBuildISBNIndex(ctx context.Context, rawParams json.RawMessag
 		default:
 		}
 
-		batch, err := p.store.GetAllBooks(batchSize, offset)
+		batch, err := p.store.GetAllBooksCore(batchSize, offset)
 		if err != nil {
 			return fmt.Errorf("get all books at offset %d: %w", offset, err)
 		}

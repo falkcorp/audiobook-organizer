@@ -1,7 +1,7 @@
 // file: internal/itunes/service/path_reconcile.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: 9e3b7a1d-4c2f-4a60-b8d5-2f1e8c0d9a47
-// last-edited: 2026-07-05
+// last-edited: 2026-07-07
 //
 // One-time (repeatable) backfill that walks every book with an
 // iTunes persistent ID, recomputes book_files.ITunesPath from the
@@ -71,7 +71,7 @@ func (r *PathReconciler) Reconcile(ctx context.Context, opID string, progress op
 	_ = progress.Log("info", "Starting iTunes path reconcile", nil)
 
 	// Load all books — 100k is the same cap other maintenance ops use.
-	books, err := r.store.GetAllBooks(100000, 0)
+	books, err := r.store.GetAllBooksCore(100000, 0)
 	if err != nil {
 		return fmt.Errorf("load books: %w", err)
 	}
@@ -88,7 +88,7 @@ func (r *PathReconciler) Reconcile(ctx context.Context, opID string, progress op
 
 	// Use RunItems to parallelize per-book processing.
 	// Concurrency defaults to runtime.NumCPU() for DB-read-bound work.
-	err = registry.RunItems(ctx, reporterAdapter, books, func(ctx context.Context, b database.Book) error {
+	err = registry.RunItems(ctx, reporterAdapter, books, func(ctx context.Context, b database.BookCore) error {
 		hasITunesBook := b.ITunesPersistentID != nil && *b.ITunesPersistentID != ""
 
 		bookFiles, _ := r.store.GetBookFiles(b.ID)

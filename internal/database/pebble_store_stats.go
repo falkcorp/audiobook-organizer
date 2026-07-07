@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_stats.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8643a893-1898-4098-8e69-c312531d962c
-// last-edited: 2026-07-06
+// last-edited: 2026-07-07
 
 package database
 
@@ -137,7 +137,7 @@ func (p *PebbleStore) CountSeries() (int, error) {
 // starts with rootDir (organized) vs. those that don't (import/unorganized).
 // When rootDir is empty, all books are counted as unorganized.
 func (p *PebbleStore) GetBookCountsByLocation(rootDir string) (library, import_ int, err error) {
-	books, err := p.GetAllBooks(0, 0)
+	books, err := p.GetAllBooksCore(0, 0)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -154,7 +154,7 @@ func (p *PebbleStore) GetBookCountsByLocation(rootDir string) (library, import_ 
 // GetBookSizesByLocation sums file sizes for books in the library root vs. outside.
 // When rootDir is empty, all sizes go to the import (unorganized) bucket.
 func (p *PebbleStore) GetBookSizesByLocation(rootDir string) (librarySize, importSize int64, err error) {
-	books, err := p.GetAllBooks(0, 0)
+	books, err := p.GetAllBooksCore(0, 0)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -468,7 +468,7 @@ func (p *PebbleStore) GetDuplicateFilesByHash(limit int) ([]DuplicateFileGroup, 
 	}
 
 	// Build book title map for annotating results.
-	books, _ := p.GetAllBooks(0, 0)
+	books, _ := p.GetAllBooksCore(0, 0)
 	bookTitles := make(map[string]string, len(books))
 	bookPaths := make(map[string]string, len(books))
 	for _, b := range books {
@@ -551,7 +551,7 @@ func (p *PebbleStore) GetBookFileHashStats() (*BookFileHashStats, error) {
 
 	// Gather per-library stats by grouping files under their parent book's source_import_path.
 	// Build a bookID → source_import_path map first.
-	allBooks, berr := p.GetAllBooks(0, 0)
+	allBooks, berr := p.GetAllBooksCore(0, 0)
 	if berr == nil {
 		bookPaths := make(map[string]string, len(allBooks))
 		stats.TotalBooks = len(allBooks)
@@ -597,7 +597,7 @@ func (p *PebbleStore) GetBookFileHashStats() (*BookFileHashStats, error) {
 
 // GetBookMetadataHashStats returns metadata_source_hash coverage across all books.
 func (p *PebbleStore) GetBookMetadataHashStats() (*BookMetadataHashStats, error) {
-	allBooks, err := p.GetAllBooks(0, 0)
+	allBooks, err := p.GetAllBooksCore(0, 0)
 	if err != nil {
 		return nil, fmt.Errorf("GetBookMetadataHashStats: %w", err)
 	}

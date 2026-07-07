@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
-// last-edited: 2026-07-06
+// last-edited: 2026-07-07
 
 // Package metadatahandler hosts the metadata-domain HTTP handlers extracted
 // from the server package's metadata_handlers.go: batch-update / validate /
@@ -1175,37 +1175,22 @@ func (h *Handler) handleBulkWriteBackImpl(c *gin.Context) {
 	}
 	_ = c.ShouldBindJSON(&req)
 
-	// Gather matching books based on filters
-	var books []database.Book
+	// Gather matching books based on filters. store.GetBooksByAuthorIDCore /
+	// GetBooksBySeriesIDCore / GetAllBooksCore are all Core-typed (STOREFID
+	// P3-W2 / W4 / W5a), so `books` is uniformly []database.BookCore now — no
+	// ToBook() round-trip needed. Only book.ID, MarkedForDeletion, FilePath,
+	// and LibraryState (all Core-safe, no heavy fields) are read from
+	// `books`/`filtered` below.
+	var books []database.BookCore
 	var err error
 
 	if req.Filter.AuthorID != nil {
-		// store.GetBooksByAuthorIDCore / GetBooksBySeriesIDCore are Core-typed
-		// (STOREFID P3-W2 / W4); the GetAllBooks branch below is not yet
-		// migrated and still returns []database.Book, so `books` stays
-		// []database.Book here too — convert back via BookCore.ToBook(). Only
-		// book.ID, MarkedForDeletion, FilePath, and LibraryState (all
-		// Core-safe, no heavy fields) are read from `books`/`filtered` below.
-		var booksCore []database.BookCore
-		booksCore, err = store.GetBooksByAuthorIDCore(*req.Filter.AuthorID)
-		if err == nil {
-			books = make([]database.Book, len(booksCore))
-			for i := range booksCore {
-				books[i] = booksCore[i].ToBook()
-			}
-		}
+		books, err = store.GetBooksByAuthorIDCore(*req.Filter.AuthorID)
 	} else if req.Filter.SeriesID != nil {
-		var booksCore []database.BookCore
-		booksCore, err = store.GetBooksBySeriesIDCore(*req.Filter.SeriesID)
-		if err == nil {
-			books = make([]database.Book, len(booksCore))
-			for i := range booksCore {
-				books[i] = booksCore[i].ToBook()
-			}
-		}
+		books, err = store.GetBooksBySeriesIDCore(*req.Filter.SeriesID)
 	} else {
 		// Get all books, then filter by library_state
-		books, err = store.GetAllBooks(1_000_000, 0)
+		books, err = store.GetAllBooksCore(1_000_000, 0)
 	}
 	if err != nil {
 		httputil.InternalError(c, "failed to query books", err)
@@ -1218,7 +1203,7 @@ func (h *Handler) handleBulkWriteBackImpl(c *gin.Context) {
 		targetStates = map[string]bool{*req.Filter.LibraryState: true}
 	}
 
-	var filtered []database.Book
+	var filtered []database.BookCore
 	for _, book := range books {
 		// Skip soft-deleted books
 		if book.MarkedForDeletion != nil && *book.MarkedForDeletion {

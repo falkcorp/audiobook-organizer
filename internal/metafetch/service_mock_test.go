@@ -169,16 +169,16 @@ func TestNeedsIdentifierEnrichment(t *testing.T) {
 
 	tests := []struct {
 		name   string
-		book   *database.Book
+		book   *database.BookCore
 		expect bool
 	}{
 		{"nil_book", nil, false},
-		{"no_isbn_fields", &database.Book{}, true},
-		{"has_isbn10", &database.Book{ISBN10: &isbn10}, false},
-		{"has_isbn13", &database.Book{ISBN13: &isbn13}, false},
-		{"empty_isbn10", &database.Book{ISBN10: &empty}, true},
-		{"whitespace_isbn10", &database.Book{ISBN10: &whitespace}, true},
-		{"has_both", &database.Book{ISBN10: &isbn10, ISBN13: &isbn13}, false},
+		{"no_isbn_fields", &database.BookCore{}, true},
+		{"has_isbn10", &database.BookCore{ISBN10: &isbn10}, false},
+		{"has_isbn13", &database.BookCore{ISBN13: &isbn13}, false},
+		{"empty_isbn10", &database.BookCore{ISBN10: &empty}, true},
+		{"whitespace_isbn10", &database.BookCore{ISBN10: &whitespace}, true},
+		{"has_both", &database.BookCore{ISBN10: &isbn10, ISBN13: &isbn13}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/reembed_embeddings.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9d8c7b6a-5e4f-3a2b-1c0d-9e8f7a6b5c4d
-// last-edited: 2026-06-16
+// last-edited: 2026-07-07
 
 // Package dedup — op dedup.reembed-embeddings.
 //
@@ -171,7 +171,7 @@ func (p *Plugin) runReembedEmbeddings(ctx context.Context, rawParams json.RawMes
 		default:
 		}
 
-		batch, err := p.store.GetAllBooks(scanBatch, offset)
+		batch, err := p.store.GetAllBooksCore(scanBatch, offset)
 		if err != nil {
 			return fmt.Errorf("get all books at offset %d: %w", offset, err)
 		}
@@ -304,7 +304,7 @@ func (p *Plugin) runReembedEmbeddings(ctx context.Context, rawParams json.RawMes
 // instead of re-selecting un-embeddable books on every run. Books that already
 // carry a stale-model vector are handled separately (they must be deleted
 // regardless of embeddability) and do not go through this check.
-func embeddableForReembed(b *database.Book) bool {
+func embeddableForReembed(b *database.BookCore) bool {
 	if b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion {
 		return false
 	}

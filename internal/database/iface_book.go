@@ -1,7 +1,7 @@
 // file: internal/database/iface_book.go
-// version: 2.7.0
+// version: 2.8.0
 // guid: 668ec5a2-f8d9-4fdb-b0d5-09937b5d83ea
-// last-edited: 2026-07-06
+// last-edited: 2026-07-07
 
 package database
 
@@ -29,6 +29,15 @@ type BookReader interface {
 	// GetAllBooks is SLIM (memdb projection) — see
 	// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
 	GetAllBooks(limit, offset int) ([]Book, error)
+	// GetAllBooksCore is Core-typed (STOREFID W5a): the return type is
+	// BookCore, not Book, so the nine heavy fields (Description,
+	// VersionNotes, BookSigV1, BookSigV1Mask, BookSigSegments,
+	// BookSigBuiltAt, BookSigCoveragePct, Author, Series) being absent is
+	// compiler-enforced rather than silently nil'd. This coexists with
+	// GetAllBooks during the W5 migration; a caller that needs any of the
+	// heavy fields MUST fetch via GetBookByID / GetAllBooksFullFrom (full
+	// Pebble). See docs/specs/2026-07-05-store-getter-fidelity-unification.md.
+	GetAllBooksCore(limit, offset int) ([]BookCore, error)
 	// GetAllBooksFullFrom returns up to limit non-deleted books whose PebbleDB key
 	// sorts after "book:<afterID>". Pass afterID="" to start from the beginning.
 	// This is an O(1) seek vs GetAllBooks's O(offset) skip — use for search

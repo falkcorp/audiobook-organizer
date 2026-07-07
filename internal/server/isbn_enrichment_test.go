@@ -1,7 +1,7 @@
 // file: internal/server/isbn_enrichment_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 5b7766bc-1f00-4f32-b8ca-8cb0e815c9a1
-// last-edited: 2026-07-01
+// last-edited: 2026-07-07
 
 package server
 
@@ -207,11 +207,15 @@ func TestEnrichMissingISBNs_RespectsLimit(t *testing.T) {
 		{ID: "book-3", Title: "Three"},
 	}
 	mock := &database.MockStore{
-		GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) {
+		GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) {
 			if offset > 0 {
 				return nil, nil
 			}
-			return books, nil
+			cores := make([]database.BookCore, len(books))
+			for i := range books {
+				cores[i] = books[i].Core()
+			}
+			return cores, nil
 		},
 		GetBookByIDFunc: func(id string) (*database.Book, error) {
 			for i := range books {

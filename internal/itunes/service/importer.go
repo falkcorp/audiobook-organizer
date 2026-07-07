@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
-// last-edited: 2026-07-05
+// last-edited: 2026-07-07
 
 package itunesservice
 
@@ -765,7 +765,7 @@ func (imp *Importer) Sync(ctx context.Context, libraryPath string, pathMappings 
 
 // DiscoverLibraryPath finds the library path from the most recently imported book.
 func (imp *Importer) DiscoverLibraryPath() string {
-	books, err := imp.store.GetAllBooks(100, 0)
+	books, err := imp.store.GetAllBooksCore(100, 0)
 	if err != nil {
 		return ""
 	}
@@ -807,7 +807,7 @@ func (imp *Importer) CollectITLUpdates() []itunes.ITLLocationUpdate {
 			defer wg.Done()
 			var local []itunes.ITLLocationUpdate
 			for offset := range pageCh {
-				books, err := imp.store.GetAllBooks(pageSize, offset)
+				books, err := imp.store.GetAllBooksCore(pageSize, offset)
 				if err != nil || len(books) == 0 {
 					break
 				}
@@ -853,7 +853,7 @@ func (imp *Importer) CollectITLUpdates() []itunes.ITLLocationUpdate {
 
 // CollectITLUpdatesWithBookIDs returns updates and the book IDs that contributed them.
 func (imp *Importer) CollectITLUpdatesWithBookIDs() ([]itunes.ITLLocationUpdate, []string) {
-	allBooks, err := imp.store.GetAllBooks(100000, 0)
+	allBooks, err := imp.store.GetAllBooksCore(100000, 0)
 	if err != nil {
 		return nil, nil
 	}
@@ -1093,7 +1093,7 @@ func (imp *Importer) enrichImportedBooks(ctx context.Context, status *itunesImpo
 		return
 	}
 
-	books, err := imp.store.GetAllBooks(10000, 0)
+	books, err := imp.store.GetAllBooksCore(10000, 0)
 	if err != nil {
 		log.Error("Failed to list books for enrichment: %v", err)
 		return
@@ -1103,7 +1103,7 @@ func (imp *Importer) enrichImportedBooks(ctx context.Context, status *itunesImpo
 	// original sequential loop applied inline per iteration. Keeps
 	// RunItems' Concurrency fan-out and progress denominator scoped to real
 	// work only (mirrors organizeImportedBooks' toOrganize pre-filter).
-	toEnrich := make([]*database.Book, 0, len(books))
+	toEnrich := make([]*database.BookCore, 0, len(books))
 	for i := range books {
 		book := &books[i]
 		if book.LibraryState == nil || *book.LibraryState != "imported" {
@@ -1128,7 +1128,7 @@ func (imp *Importer) enrichImportedBooks(ctx context.Context, status *itunesImpo
 
 	reporter := &loggerReporterAdapter{log: log}
 
-	runErr := registry.RunItems(enrichCtx, reporter, toEnrich, func(_ context.Context, book *database.Book) error {
+	runErr := registry.RunItems(enrichCtx, reporter, toEnrich, func(_ context.Context, book *database.BookCore) error {
 		resp, err := imp.mfs.FetchMetadataForBook(book.ID)
 		if err != nil {
 			log.Debug("No metadata found for '%s': %v", book.Title, err)

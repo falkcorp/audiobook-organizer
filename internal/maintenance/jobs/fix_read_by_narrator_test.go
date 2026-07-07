@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/fix_read_by_narrator_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a3b4c5d6-e7f8-9012-abcd-345678901234
-// last-edited: 2026-05-05
+// last-edited: 2026-07-07
 
 // Package jobs_test exercises the fix-read-by-narrator maintenance job.
 // Importing the jobs package (via the blank import below) triggers all
@@ -62,8 +62,8 @@ func TestFixReadByNarratorJob_DryRun(t *testing.T) {
 
 	var updateCalled bool
 	store := &database.MockStore{
-		GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) {
-			return []database.Book{book}, nil
+		GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) {
+			return []database.BookCore{book.Core()}, nil
 		},
 		GetAuthorByIDFunc: func(id int) (*database.Author, error) {
 			if id == authorID {
@@ -103,8 +103,8 @@ func TestFixReadByNarratorJob_Apply(t *testing.T) {
 	updated := book
 
 	store := &database.MockStore{
-		GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) {
-			return []database.Book{book}, nil
+		GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) {
+			return []database.BookCore{book.Core()}, nil
 		},
 		GetAuthorByIDFunc: func(id int) (*database.Author, error) {
 			if id == authorID {
@@ -144,8 +144,8 @@ func TestFixReadByNarratorJob_NoMatchBooks(t *testing.T) {
 
 	var updateCalled bool
 	store := &database.MockStore{
-		GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) {
-			return []database.Book{book}, nil
+		GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) {
+			return []database.BookCore{book.Core()}, nil
 		},
 		UpdateBookFunc: func(id string, b *database.Book) (*database.Book, error) {
 			updateCalled = true
@@ -176,8 +176,8 @@ func TestFixReadByNarratorJob_TitleDashReadBy(t *testing.T) {
 	var updatedTitle string
 
 	store := &database.MockStore{
-		GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) {
-			return []database.Book{book}, nil
+		GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) {
+			return []database.BookCore{book.Core()}, nil
 		},
 		GetAuthorByIDFunc: func(id int) (*database.Author, error) {
 			return nil, nil
@@ -223,8 +223,12 @@ func TestFixReadByNarratorJob_Cancellation(t *testing.T) {
 	cancel() // cancel immediately
 
 	store := &database.MockStore{
-		GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) {
-			return books, nil
+		GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) {
+			cores := make([]database.BookCore, len(books))
+			for i := range books {
+				cores[i] = books[i].Core()
+			}
+			return cores, nil
 		},
 		GetAuthorByIDFunc: func(id int) (*database.Author, error) {
 			return nil, nil

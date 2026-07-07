@@ -1,6 +1,7 @@
 // file: internal/itunes/service/importer_execute_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
+// last-edited: 2026-07-07
 
 package itunesservice
 
@@ -242,7 +243,7 @@ func TestCollectITLUpdates_Empty(t *testing.T) {
 	m := dbmocks.NewMockStore(t)
 	// CollectITLUpdates paginates via 4 workers; each worker gets offset 0
 	// and breaks on empty result.
-	m.EXPECT().GetAllBooks(10000, mock.Anything).Return(nil, nil).Maybe()
+	m.EXPECT().GetAllBooksCore(10000, mock.Anything).Return(nil, nil).Maybe()
 
 	imp := newImporter(Deps{Store: m, Config: Config{}})
 	updates := imp.CollectITLUpdates()

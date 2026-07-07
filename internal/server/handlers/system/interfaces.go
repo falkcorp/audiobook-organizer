@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/interfaces.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7a91ad40-5c96-4423-ad24-715acb791cf8
-// last-edited: 2026-07-05
+// last-edited: 2026-07-07
 
 // Narrow dependency interfaces for the system domain handlers (health, status,
 // announcements, storage, logs, activity-log, reset/factory-reset, config
@@ -49,7 +49,7 @@ type SystemStore interface {
 	// GetBooksByAuthorIDWithRoleCore is Core-typed (STOREFID P3-W2b) — see
 	// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
 	GetBooksByAuthorIDWithRoleCore(authorID int) ([]database.BookCore, error) // AuthorStore
-	GetAllBooks(limit, offset int) ([]database.Book, error)                  // BookStore
+	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)           // BookStore
 
 	// activity log
 	GetSystemActivityLogs(source string, limit int) ([]database.SystemActivityLog, error) // SystemActivityStore

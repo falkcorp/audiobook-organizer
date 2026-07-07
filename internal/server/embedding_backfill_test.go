@@ -1,7 +1,7 @@
 // file: internal/server/embedding_backfill_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4f81c2ae-6b39-47d5-9ae1-3c5d8b12f7a4
-// last-edited: 2026-07-05
+// last-edited: 2026-07-07
 
 package server
 
@@ -149,9 +149,9 @@ func fakeEmbedBookStatus(id string) (dedup.EmbedStatus, error) {
 // counters mutex actually prevents a data race under concurrency>1.
 func TestEmbedBooksConcurrent_ParallelMatchesSerial(t *testing.T) {
 	const n = 500
-	books := make([]database.Book, n)
+	books := make([]database.BookCore, n)
 	for i := 0; i < n; i++ {
-		books[i] = database.Book{ID: strconv.Itoa(i)}
+		books[i] = database.BookCore{ID: strconv.Itoa(i)}
 	}
 
 	serial, err := embedBooksConcurrent(context.Background(), books, 1, func(_ context.Context, id string) (dedup.EmbedStatus, error) {
@@ -188,9 +188,9 @@ func TestEmbedBooksConcurrent_ParallelMatchesSerial(t *testing.T) {
 // interleavings to catch if the mutex were ever removed.
 func TestEmbedBooksConcurrent_ConcurrentCallsAreSerialized(t *testing.T) {
 	const n = 2000
-	books := make([]database.Book, n)
+	books := make([]database.BookCore, n)
 	for i := 0; i < n; i++ {
-		books[i] = database.Book{ID: strconv.Itoa(i)}
+		books[i] = database.BookCore{ID: strconv.Itoa(i)}
 	}
 
 	var calls sync.Map // set of visited IDs, to also confirm no double-processing

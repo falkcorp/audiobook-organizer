@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/fix_author_narrator_swap_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a7b8c9d0-e1f2-3456-abcd-789012345678
-// last-edited: 2026-05-05
+// last-edited: 2026-07-07
 
 package jobs_test
 
@@ -39,11 +39,15 @@ func TestFixAuthorNarratorSwapJob_DryRun_NoChanges(t *testing.T) {
 		{ID: "book-1", Title: "Normal Book", AuthorID: &authorID, Narrator: &narratorName},
 	}
 	store := &database.MockStore{
-		GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) {
+		GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) {
 			if offset > 0 {
 				return nil, nil
 			}
-			return books, nil
+			cores := make([]database.BookCore, len(books))
+			for i := range books {
+				cores[i] = books[i].Core()
+			}
+			return cores, nil
 		},
 		GetAuthorByIDFunc: func(id int) (*database.Author, error) {
 			return &database.Author{ID: id, Name: "Real Author"}, nil
@@ -64,11 +68,15 @@ func TestFixAuthorNarratorSwapJob_DryRun_DetectsSwap(t *testing.T) {
 		{ID: "book-swap", Title: "Swapped Book", AuthorID: &authorID, Narrator: &swappedName},
 	}
 	store := &database.MockStore{
-		GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) {
+		GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) {
 			if offset > 0 {
 				return nil, nil
 			}
-			return books, nil
+			cores := make([]database.BookCore, len(books))
+			for i := range books {
+				cores[i] = books[i].Core()
+			}
+			return cores, nil
 		},
 		GetAuthorByIDFunc: func(id int) (*database.Author, error) {
 			return &database.Author{ID: id, Name: "Stephen King"}, nil
@@ -101,11 +109,15 @@ func TestFixAuthorNarratorSwapJob_CancelRespected(t *testing.T) {
 	}
 
 	store := &database.MockStore{
-		GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) {
+		GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) {
 			if offset > 0 {
 				return nil, nil
 			}
-			return books, nil
+			cores := make([]database.BookCore, len(books))
+			for i := range books {
+				cores[i] = books[i].Core()
+			}
+			return cores, nil
 		},
 		GetAuthorByIDFunc: func(id int) (*database.Author, error) {
 			return &database.Author{ID: id, Name: "Same Name"}, nil

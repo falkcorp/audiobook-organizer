@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 7e4b2a90-3c61-4d58-8f29-6a1c0e5b9d83
-// last-edited: 2026-07-05
+// last-edited: 2026-07-07
 
 package maintenance
 
@@ -88,15 +88,15 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 	const pageSize = 500
 	offset := 0
 	// Gather all books first via pagination.
-	var allBooks []database.Book
+	var allBooks []database.BookCore
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 
-		books, err := store.GetAllBooks(pageSize, offset)
+		books, err := store.GetAllBooksCore(pageSize, offset)
 		if err != nil {
-			return fmt.Errorf("GetAllBooks offset=%d: %w", offset, err)
+			return fmt.Errorf("GetAllBooksCore offset=%d: %w", offset, err)
 		}
 		if len(books) == 0 {
 			break
@@ -119,7 +119,7 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 	// Each worker independently checks a book's files and accumulates fixes; the shared
 	// maps are guarded by mu so the parallel version produces identical output to serial.
 	scanned := 0
-	err := registry.RunItems(ctx, reporter, allBooks, func(ctx context.Context, book database.Book) error {
+	err := registry.RunItems(ctx, reporter, allBooks, func(ctx context.Context, book database.BookCore) error {
 		files, ferr := store.GetBookFiles(book.ID)
 		if ferr != nil {
 			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(

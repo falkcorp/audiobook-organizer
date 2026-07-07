@@ -1,7 +1,7 @@
 // file: internal/dedup/collectors_exact.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: c9d0e1f2-a3b4-4c5d-8e6f-7a8b9c0d1e2f
-// last-edited: 2026-06-13
+// last-edited: 2026-07-07
 
 // Package dedup — exact-tier collector family (fable5 T014).
 //
@@ -48,7 +48,7 @@ type ExactFileHashStore interface {
 
 // ISBNASINStore is the subset of database.Store required by CollectISBNASIN.
 type ISBNASINStore interface {
-	GetAllBooks(limit, offset int) ([]database.Book, error)
+	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
 }
 
 // MetaSrcHashStore is the subset of database.Store required by
@@ -167,7 +167,7 @@ func CollectISBNASIN(
 	const batchSize = 500
 	offset := 0
 	for {
-		batch, err := store.GetAllBooks(batchSize, offset)
+		batch, err := store.GetAllBooksCore(batchSize, offset)
 		if err != nil {
 			return nil, fmt.Errorf("CollectISBNASIN get all books at offset %d: %w", offset, err)
 		}

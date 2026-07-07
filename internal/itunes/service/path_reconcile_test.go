@@ -1,7 +1,7 @@
 // file: internal/itunes/service/path_reconcile_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-07-05
+// last-edited: 2026-07-07
 
 package itunesservice
 
@@ -52,7 +52,7 @@ func TestPathReconcilerReconcile_NilStore(t *testing.T) {
 
 func TestPathReconcilerReconcile_EmptyLibrary(t *testing.T) {
 	m := dbmocks.NewMockStore(t)
-	m.EXPECT().GetAllBooks(100000, 0).Return([]database.Book{}, nil).Once()
+	m.EXPECT().GetAllBooksCore(100000, 0).Return([]database.BookCore{}, nil).Once()
 	m.EXPECT().DeleteOperationState("op-2").Return(nil).Once()
 
 	r := newPathReconciler(m, nil)
@@ -69,7 +69,11 @@ func TestPathReconcilerReconcile_SkipsNonITunesBooks(t *testing.T) {
 	books := []database.Book{
 		{ID: "b1", Title: "No iTunes", FilePath: "/mnt/books/b1.m4b"},
 	}
-	m.EXPECT().GetAllBooks(100000, 0).Return(books, nil).Once()
+	cores := make([]database.BookCore, len(books))
+	for i := range books {
+		cores[i] = books[i].Core()
+	}
+	m.EXPECT().GetAllBooksCore(100000, 0).Return(cores, nil).Once()
 	m.EXPECT().GetBookFiles("b1").Return([]database.BookFile{}, nil).Once()
 	m.EXPECT().DeleteOperationState("op-3").Return(nil).Once()
 
@@ -84,7 +88,7 @@ func TestPathReconcilerReconcile_SkipsNonITunesBooks(t *testing.T) {
 
 func TestPathReconcilerReconcile_LoadBooksError(t *testing.T) {
 	m := dbmocks.NewMockStore(t)
-	m.EXPECT().GetAllBooks(100000, 0).Return(nil, assert.AnError).Once()
+	m.EXPECT().GetAllBooksCore(100000, 0).Return(nil, assert.AnError).Once()
 
 	r := newPathReconciler(m, nil)
 	err := r.Reconcile(context.Background(), "op-4", noopProgress{})
@@ -131,7 +135,11 @@ func TestPathReconcilerReconcile_ParallelOutputMatchesSerial(t *testing.T) {
 
 	// Set up mock store to return test data and accept updates.
 	m := dbmocks.NewMockStore(t)
-	m.EXPECT().GetAllBooks(100000, 0).Return(books, nil).Once()
+	prCores := make([]database.BookCore, len(books))
+	for i := range books {
+		prCores[i] = books[i].Core()
+	}
+	m.EXPECT().GetAllBooksCore(100000, 0).Return(prCores, nil).Once()
 
 	// Expect GetBookFiles calls for each book.
 	// With parallelization, the order is non-deterministic, so use RunFn for dynamic matching.

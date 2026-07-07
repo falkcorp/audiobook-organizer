@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/embed_scan.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: e2f3a4b5-c6d7-8901-bcde-f12345678901
-// last-edited: 2026-07-05
+// last-edited: 2026-07-07
 
 // T018: embed_scan.go is the canonical implementation for both
 // dedup.embed-scan (sync) and dedup.embed-async (async/batch API).
@@ -119,7 +119,7 @@ func (p *Plugin) runEmbedScanMode(ctx context.Context, async bool, reporter sdk.
 	loadProg := sdk.NewProgress(reporter, 0)
 	loadProg.Start("Loading books for embedding...")
 
-	books, err := p.store.GetAllBooks(0, 0)
+	books, err := p.store.GetAllBooksCore(0, 0)
 	if err != nil {
 		return fmt.Errorf("load books: %w", err)
 	}
@@ -137,7 +137,7 @@ func (p *Plugin) runEmbedScanMode(ctx context.Context, async bool, reporter sdk.
 	// so they must be atomic rather than plain ints.
 	var embedded, cached, skipped, errs atomic.Int64
 
-	runErr := registry.RunItems(ctx, reporter, books, func(ctx context.Context, book database.Book) error {
+	runErr := registry.RunItems(ctx, reporter, books, func(ctx context.Context, book database.BookCore) error {
 		status, embedErr := p.engine.EmbedBook(ctx, book.ID)
 		if embedErr != nil {
 			reporter.Logger().Error("embed error", "book_id", book.ID, "error", embedErr)

@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/scan_composer_tags.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d9e5f3c4-6a7b-8c9d-0e1f-2a3b4c5d6e7f
-// last-edited: 2026-07-06
+// last-edited: 2026-07-07
 
 package jobs
 
@@ -56,9 +56,9 @@ func (j *scanComposerTagsJob) Run(ctx context.Context, store database.Store, rep
 		}
 	}
 
-	allBooks, err := store.GetAllBooks(0, 0)
+	allBooks, err := store.GetAllBooksCore(0, 0)
 	if err != nil {
-		return fmt.Errorf("GetAllBooks: %w", err)
+		return fmt.Errorf("GetAllBooksCore: %w", err)
 	}
 	allAuthors, err := store.GetAllAuthors()
 	if err != nil {

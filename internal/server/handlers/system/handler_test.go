@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: af6670e5-d640-4339-b0b2-3b0cf1596ce7
-// last-edited: 2026-06-16
+// last-edited: 2026-07-07
 
 // Unit tests for the system-domain HTTP handlers. Each public method has at
 // least one test; happy paths plus key branches (config mask-secrets path,
@@ -172,7 +172,7 @@ func TestGetSystemAnnouncements_DuplicateAuthors(t *testing.T) {
 		{ID: 2, Name: "Brandon Sanderson"},
 	}, nil)
 	d.store.EXPECT().GetBooksByAuthorIDWithRoleCore(mock.AnythingOfType("int")).Return([]database.BookCore{{ID: "b1"}}, nil).Maybe()
-	d.store.EXPECT().GetAllBooks(100, 0).Return([]database.Book{}, nil)
+	d.store.EXPECT().GetAllBooksCore(100, 0).Return([]database.BookCore{}, nil)
 
 	w := run(http.MethodGet, "/system/announcements", "/system/announcements", nil, func(r *gin.Engine) {
 		r.GET("/system/announcements", h.GetSystemAnnouncements)
@@ -187,7 +187,7 @@ func TestGetSystemAnnouncements_DuplicateAuthors(t *testing.T) {
 func TestGetSystemAnnouncements_Empty(t *testing.T) {
 	h, d := newTestHandler(t)
 	d.store.EXPECT().GetAllAuthors().Return([]database.Author{}, nil)
-	d.store.EXPECT().GetAllBooks(100, 0).Return([]database.Book{}, nil)
+	d.store.EXPECT().GetAllBooksCore(100, 0).Return([]database.BookCore{}, nil)
 
 	w := run(http.MethodGet, "/system/announcements", "/system/announcements", nil, func(r *gin.Engine) {
 		r.GET("/system/announcements", h.GetSystemAnnouncements)

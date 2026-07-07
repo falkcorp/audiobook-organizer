@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.107.0
+// version: 1.108.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-07-06
+// last-edited: 2026-07-07
 
 package database
 
@@ -479,6 +479,59 @@ func (p *PebbleStore) GetAllBooks(limit, offset int) ([]Book, error) {
 			break
 		}
 		books = append(books, book)
+		count++
+	}
+
+	return books, nil
+}
+
+// GetAllBooksCore is Core-typed (STOREFID W5a): the return type is BookCore,
+// not Book, so the nine heavy fields (Description, VersionNotes, BookSigV1,
+// BookSigV1Mask, BookSigSegments, BookSigBuiltAt, BookSigCoveragePct, Author,
+// Series) being absent is compiler-enforced rather than silently nil'd. Mirrors
+// GetAllBooks exactly, just Core-typed; coexists with it during the W5
+// migration. A caller that needs any of the heavy fields MUST fetch via
+// GetBookByID / GetAllBooksFullFrom (full Pebble). See
+// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
+func (p *PebbleStore) GetAllBooksCore(limit, offset int) ([]BookCore, error) {
+	if p.UseMemDB && p.mem() != nil {
+		return p.mem().GetAllBooksCore(limit, offset, nil)
+	}
+	var books []BookCore
+	iter, err := p.db.NewIter(&pebble.IterOptions{
+		LowerBound: []byte("book:0"),
+		UpperBound: []byte("book:;"),
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	skipped := 0
+	count := 0
+
+	for iter.First(); iter.Valid(); iter.Next() {
+		// Skip path index keys (book:series and book:author indexes removed in Task 3.4)
+		key := string(iter.Key())
+		if strings.Contains(key, ":path:") {
+			continue
+		}
+
+		var book Book
+		if err := json.Unmarshal(iter.Value(), &book); err != nil {
+			return nil, err
+		}
+		if book.MarkedForDeletion != nil && *book.MarkedForDeletion {
+			continue
+		}
+		if skipped < offset {
+			skipped++
+			continue
+		}
+		if limit > 0 && count >= limit {
+			break
+		}
+		books = append(books, book.Core())
 		count++
 	}
 

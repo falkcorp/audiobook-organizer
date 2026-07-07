@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
-// last-edited: 2026-07-06
+// last-edited: 2026-07-07
 
 package audiobooks
 
@@ -362,7 +362,7 @@ func (svc *AudiobookService) CountAudiobooksFiltered(ctx context.Context, filter
 	// Unreachable in practice — buildBookSummaryFilter now returns pushdownOK=true
 	// for fingerprint filters (FingerprintStatus/CoveragePercent are denormalized
 	// on Book). Kept as a defensive fallback.
-	books, err := svc.store.GetAllBooks(0, 0)
+	books, err := svc.store.GetAllBooksCore(0, 0)
 	if err != nil {
 		return 0, err
 	}

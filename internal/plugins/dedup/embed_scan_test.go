@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/embed_scan_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6a1d9c3e-4b7f-4a2d-9e6c-8f1b2c3d4e5f
-// last-edited: 2026-07-05
+// last-edited: 2026-07-07
 
 // Tests for CONC-5: parallelizing the dedup.embed-scan synchronous per-book
 // EmbedBook loop with registry.RunItems.
@@ -61,8 +61,12 @@ func newEmbedScanFixture(t *testing.T, n int) (*Plugin, *database.MockStore, *da
 	}
 
 	mock := &database.MockStore{
-		GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) {
-			return books, nil
+		GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) {
+			cores := make([]database.BookCore, len(books))
+			for i := range books {
+				cores[i] = books[i].Core()
+			}
+			return cores, nil
 		},
 		GetBookByIDFunc: func(id string) (*database.Book, error) {
 			return byID[id], nil

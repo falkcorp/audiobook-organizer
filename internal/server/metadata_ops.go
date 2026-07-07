@@ -1,7 +1,7 @@
 // file: internal/server/metadata_ops.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
-// last-edited: 2026-07-01
+// last-edited: 2026-07-07
 //
 // Async-operation machinery for the metadata domain, relocated verbatim from
 // metadata_handlers.go (ADR-003 Phase 4) when the 19 metadata HTTP handlers
@@ -70,11 +70,11 @@ func (s *Server) runBulkMetadataFetchAll(
 	// Total unknown until books load; use placeholder (0/1) to avoid 0/0.
 	_ = progress.UpdateProgress(0, 1, "loading books (0/1 0.00%)")
 
-	allBooks, err := store.GetAllBooks(0, 0)
+	allBooks, err := store.GetAllBooksCore(0, 0)
 	if err != nil {
 		op.SetStatus("failed")
 		logging.Error(ctx, "failed to load all books", "err", err)
-		return fmt.Errorf("GetAllBooks: %w", err)
+		return fmt.Errorf("GetAllBooksCore: %w", err)
 	}
 
 	maxAge := time.Duration(config.AppConfig.MetadataFetchCacheTTLDays) * 24 * time.Hour
@@ -95,7 +95,7 @@ func (s *Server) runBulkMetadataFetchAll(
 	}
 
 	type bookWork struct {
-		book       database.Book
+		book       database.BookCore
 		authorName string
 	}
 	var work []bookWork
@@ -788,7 +788,7 @@ func (s *Server) runMetadataRefreshScan(ctx context.Context, progress operations
 	_ = progress.Log("info", "Starting metadata refresh scan", nil)
 	// Pre-load total is unknown; placeholder (0/1) avoids 0/0.
 	_ = progress.UpdateProgress(0, 1, "Scanning books for incomplete metadata... (0/1 0.00%)")
-	books, err := store.GetAllBooks(10000, 0)
+	books, err := store.GetAllBooksCore(10000, 0)
 	if err != nil {
 		return fmt.Errorf("failed to get books: %w", err)
 	}

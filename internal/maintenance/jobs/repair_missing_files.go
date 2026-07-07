@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/repair_missing_files.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: f1a7b5e6-8c9d-0e1f-2a3b-4c5d6e7f8a90
-// last-edited: 2026-07-06
+// last-edited: 2026-07-07
 
 package jobs
 
@@ -49,9 +49,9 @@ func (j *repairMissingFilesJob) Run(ctx context.Context, store database.Store, r
 	if err != nil {
 		return fmt.Errorf("GetAllBookFilesCore: %w", err)
 	}
-	allBooks, err := store.GetAllBooks(0, 0)
+	allBooks, err := store.GetAllBooksCore(0, 0)
 	if err != nil {
-		return fmt.Errorf("GetAllBooks: %w", err)
+		return fmt.Errorf("GetAllBooksCore: %w", err)
 	}
 	allAuthors, err := store.GetAllAuthors()
 	if err != nil {

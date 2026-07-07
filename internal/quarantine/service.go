@@ -1,7 +1,7 @@
 // file: internal/quarantine/service.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-07-03
+// last-edited: 2026-07-07
 
 package quarantine
 
@@ -27,7 +27,7 @@ type Store interface {
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
 	RecordPathChange(change *database.BookPathChange) error
 	GetBookPathHistory(bookID string) ([]database.BookPathChange, error)
-	GetAllBooks(limit, offset int) ([]database.Book, error)
+	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
 	GetScanFailCount(pathHash string) (int, error)
 	GetITunesPurgePendingBooks() ([]database.Book, error)
 }
@@ -229,7 +229,7 @@ func (qs *QuarantineService) AutoQuarantineFailedScans() {
 	const pageSize = 1000
 	var offset int
 	for {
-		page, err := qs.store.GetAllBooks(pageSize, offset)
+		page, err := qs.store.GetAllBooksCore(pageSize, offset)
 		if err != nil || len(page) == 0 {
 			break
 		}
