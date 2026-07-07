@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/reset_all.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: f3b1e8c4-2d7a-4d62-aabb-1f1d6e2c4a01
-// last-edited: 2026-07-01
+// last-edited: 2026-07-06
 
 package acoustid
 
@@ -84,8 +84,14 @@ func (p *Plugin) runResetAll(ctx context.Context, _ json.RawMessage, reporter sd
 		cleared = c
 		log.Info("acoustid reset-all: bulk clear done", "cleared", c, "total", t, "elapsed", time.Since(startedAt).Round(time.Second))
 	} else {
-		// Per-row fallback (mock/sqlite tests).
-		files, err := p.store.GetAllBookFiles()
+		// Per-row fallback (mock/sqlite tests). AcoustIDSeg0..6 are stripped
+		// from BookFileCore entirely (heavy fingerprint-diagnostic fields),
+		// so this path must hydrate each candidate's full row via
+		// GetBookFiles just to read them, then clear + write back THAT full
+		// row — never a hand-built BookFile{} from Core fields. Only reached
+		// in mock/sqlite tests (prod uses the bulk-clear fast path above),
+		// so the extra per-row hydrate read is not a perf concern.
+		files, err := p.store.GetAllBookFilesCore()
 		if err != nil {
 			return fmt.Errorf("load book files: %w", err)
 		}
@@ -93,21 +99,36 @@ func (p *Plugin) runResetAll(ctx context.Context, _ json.RawMessage, reporter sd
 		log.Info("acoustid reset-all: clearing fingerprints (slow path)", "book_files", total)
 		prog = sdk.NewProgress(reporter, total)
 		prog.Start("Clearing fingerprints (slow path)…")
-		err = registry.RunItems(ctx, reporter, files, func(_ context.Context, f database.BookFile) error {
-			if f.AcoustIDSeg0 == "" && f.AcoustIDSeg1 == "" && f.AcoustIDSeg2 == "" &&
-				f.AcoustIDSeg3 == "" && f.AcoustIDSeg4 == "" && f.AcoustIDSeg5 == "" &&
-				f.AcoustIDSeg6 == "" {
+		err = registry.RunItems(ctx, reporter, files, func(_ context.Context, f database.BookFileCore) error {
+			full, herr := p.store.GetBookFiles(f.BookID)
+			if herr != nil {
+				log.Warn("acoustid reset-all: hydrate failed", "id", f.ID, "err", herr)
 				return nil
 			}
-			updated := f
-			updated.AcoustIDSeg0 = ""
-			updated.AcoustIDSeg1 = ""
-			updated.AcoustIDSeg2 = ""
-			updated.AcoustIDSeg3 = ""
-			updated.AcoustIDSeg4 = ""
-			updated.AcoustIDSeg5 = ""
-			updated.AcoustIDSeg6 = ""
-			if err := p.store.UpdateBookFile(f.ID, &updated); err != nil {
+			var target *database.BookFile
+			for j := range full {
+				if full[j].ID == f.ID {
+					target = &full[j]
+					break
+				}
+			}
+			if target == nil {
+				log.Warn("acoustid reset-all: hydrate: row not found", "id", f.ID)
+				return nil
+			}
+			if target.AcoustIDSeg0 == "" && target.AcoustIDSeg1 == "" && target.AcoustIDSeg2 == "" &&
+				target.AcoustIDSeg3 == "" && target.AcoustIDSeg4 == "" && target.AcoustIDSeg5 == "" &&
+				target.AcoustIDSeg6 == "" {
+				return nil
+			}
+			target.AcoustIDSeg0 = ""
+			target.AcoustIDSeg1 = ""
+			target.AcoustIDSeg2 = ""
+			target.AcoustIDSeg3 = ""
+			target.AcoustIDSeg4 = ""
+			target.AcoustIDSeg5 = ""
+			target.AcoustIDSeg6 = ""
+			if err := p.store.UpdateBookFile(target.ID, target); err != nil {
 				log.Warn("acoustid reset-all: update file failed", "id", f.ID, "err", err)
 				return nil
 			}

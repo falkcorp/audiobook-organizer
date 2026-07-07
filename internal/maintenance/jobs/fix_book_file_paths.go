@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/fix_book_file_paths.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: a1000011-0000-0000-0000-000000000011
-// last-edited: 2026-05-01
+// last-edited: 2026-07-06
 
 package jobs
 
@@ -30,7 +30,7 @@ func (j *fixBookFilePathsJob) Description() string {
 }
 func (j *fixBookFilePathsJob) CanResume() bool { return false }
 func (j *fixBookFilePathsJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, dryRun bool) error {
-	files, err := store.GetAllBookFiles()
+	files, err := store.GetAllBookFilesCore()
 	if err != nil {
 		return err
 	}
@@ -41,14 +41,34 @@ func (j *fixBookFilePathsJob) Run(ctx context.Context, store database.Store, rep
 			return ctx.Err()
 		}
 		reporter.Increment()
-		bf := files[i]
-		if bf.Missing {
+		c := files[i]
+		if c.Missing {
 			continue
 		}
-		if _, serr := os.Stat(bf.FilePath); os.IsNotExist(serr) {
+		if _, serr := os.Stat(c.FilePath); os.IsNotExist(serr) {
 			if !dryRun {
-				bf.Missing = true
-				if uerr := store.UpdateBookFile(bf.ID, &bf); uerr != nil {
+				// Hydrate the full row and mutate/write THAT — never a
+				// hand-built BookFile{} from Core fields, which would wipe
+				// the stored fingerprint. See
+				// docs/audits/2026-07-05-updatebookfile-memdb-writeback-fingerprint-wipe.md.
+				full, herr := store.GetBookFiles(c.BookID)
+				if herr != nil {
+					slog.Error("fix-book-file-paths hydrate failed", "details", herr.Error())
+					continue
+				}
+				var target *database.BookFile
+				for j := range full {
+					if full[j].ID == c.ID {
+						target = &full[j]
+						break
+					}
+				}
+				if target == nil {
+					slog.Warn("fix-book-file-paths: hydrate: row not found", "id", c.ID)
+					continue
+				}
+				target.Missing = true
+				if uerr := store.UpdateBookFile(target.ID, target); uerr != nil {
 					msg := uerr.Error()
 					slog.Error("fix-book-file-paths UpdateBookFile failed", "details", msg)
 					continue

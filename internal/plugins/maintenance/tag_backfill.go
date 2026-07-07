@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/tag_backfill.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1f6b3d28-9a47-4c50-8e21-7b0c4a9d6e35
-// last-edited: 2026-07-05
+// last-edited: 2026-07-06
 
 // Package maintenance — op maintenance.tag-backfill.
 //
@@ -75,18 +75,18 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 		_ = reporter.Log(slog.LevelInfo, "DRY RUN — no changes will be written")
 	}
 
-	files, err := store.GetAllBookFiles()
+	files, err := store.GetAllBookFilesCore()
 	if err != nil {
-		return fmt.Errorf("GetAllBookFiles: %w", err)
+		return fmt.Errorf("GetAllBookFilesCore: %w", err)
 	}
 	total := len(files)
 	_ = reporter.UpdateProgress(0, total, fmt.Sprintf("Reading tags for %d files…", total))
 
 	// Limit caps how many files are EXAMINED (not just how many are backfilled),
 	// matching the original serial semantics: only the first Limit files (in
-	// GetAllBookFiles order) are looked at at all. Truncating the input slice up
-	// front makes this equivalent under registry.RunItems regardless of the
-	// order workers finish in.
+	// GetAllBookFilesCore order) are looked at at all. Truncating the input
+	// slice up front makes this equivalent under registry.RunItems regardless
+	// of the order workers finish in.
 	items := files
 	if params.Limit > 0 && params.Limit < total {
 		items = files[:params.Limit]
@@ -108,7 +108,7 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 		examples                           = make([]string, 0, 5)
 	)
 
-	err = registry.RunItems(ctx, reporter, items, func(_ context.Context, f database.BookFile) error {
+	err = registry.RunItems(ctx, reporter, items, func(_ context.Context, f database.BookFileCore) error {
 		mu.Lock()
 		examined++
 		mu.Unlock()
@@ -137,7 +137,34 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 			return nil // nothing capturable
 		}
 
-		updated := f // copy
+		// Hydrate the full row and mutate/write THAT — never a hand-built
+		// BookFile{} from Core fields, which would wipe the stored
+		// fingerprint. BatchUpsertBookFiles' preserve-on-empty guard also
+		// covers this, but hydrating here keeps the write self-contained
+		// rather than relying on that guard for correctness. See
+		// docs/audits/2026-07-05-updatebookfile-memdb-writeback-fingerprint-wipe.md.
+		full, herr := store.GetBookFiles(f.BookID)
+		if herr != nil {
+			mu.Lock()
+			readErr++
+			mu.Unlock()
+			return nil
+		}
+		var target *database.BookFile
+		for j := range full {
+			if full[j].ID == f.ID {
+				target = &full[j]
+				break
+			}
+		}
+		if target == nil {
+			mu.Lock()
+			readErr++
+			mu.Unlock()
+			return nil
+		}
+
+		updated := *target // copy of the full hydrated row
 		updated.RawTags = meta.AllTags
 		if meta.TrackNumber > 0 {
 			updated.TrackNumber = meta.TrackNumber

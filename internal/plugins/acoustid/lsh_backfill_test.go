@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/lsh_backfill_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3d5e7f91-4c6b-5a0d-ac2e-8f9a1b3c5d7e
 // last-edited: 2026-07-06
 
@@ -64,21 +64,32 @@ func (i *indexableMockStore) HasLSHIndex(id string) bool {
 // three with fingerprints, two without — exactly three UpdateBookFile calls
 // should fire.
 func TestLSHBackfill_FiltersAndUpdates(t *testing.T) {
-	files := []database.BookFile{
-		{ID: "f1", BookID: "b1", AcoustIDFingerprint: []byte{0xde, 0xad, 0xbe, 0xef}, AcoustIDFingerprintDurationSec: 1800},
+	files := []database.BookFileCore{
+		{ID: "f1", BookID: "b1", AcoustIDFingerprintDurationSec: 1800},
 		{ID: "f2", BookID: "b2"}, // no fp
-		{ID: "f3", BookID: "b3", AcoustIDFingerprint: []byte{0xfe, 0xed, 0xfa, 0xce}, AcoustIDFingerprintDurationSec: 1800},
+		{ID: "f3", BookID: "b3", AcoustIDFingerprintDurationSec: 1800},
 		{ID: "f4", BookID: "b4"}, // no fp
-		{ID: "f5", BookID: "b5", AcoustIDFingerprint: []byte{0xca, 0xfe, 0xba, 0xbe}, AcoustIDFingerprintDurationSec: 1800},
+		{ID: "f5", BookID: "b5", AcoustIDFingerprintDurationSec: 1800},
+	}
+	// hydrateFiles simulates GetBookFiles(bookID) — the full-row read the op
+	// now hydrates from before writing back (see the writeback-wipe audit
+	// doc). Keyed by BookID.
+	hydrateFiles := map[string][]database.BookFile{
+		"b1": {{ID: "f1", BookID: "b1", AcoustIDFingerprint: []byte{0xde, 0xad, 0xbe, 0xef}}},
+		"b3": {{ID: "f3", BookID: "b3", AcoustIDFingerprint: []byte{0xfe, 0xed, 0xfa, 0xce}}},
+		"b5": {{ID: "f5", BookID: "b5", AcoustIDFingerprint: []byte{0xca, 0xfe, 0xba, 0xbe}}},
 	}
 
 	var (
-		mu       sync.Mutex
-		updates  []string
+		mu      sync.Mutex
+		updates []string
 	)
 	store := &database.MockStore{
-		GetAllBookFilesFunc: func() ([]database.BookFile, error) {
+		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) {
 			return files, nil
+		},
+		GetBookFilesFunc: func(bookID string) ([]database.BookFile, error) {
+			return hydrateFiles[bookID], nil
 		},
 		UpdateBookFileFunc: func(id string, _ *database.BookFile) error {
 			mu.Lock()
@@ -125,15 +136,15 @@ func TestLSHBackfill_FiltersAndUpdates(t *testing.T) {
 // reports rows are already indexed, the op makes zero UpdateBookFile calls.
 // Models the second-run case after a previous successful backfill.
 func TestLSHBackfill_IdempotentWithHasLSHIndex(t *testing.T) {
-	files := []database.BookFile{
-		{ID: "f1", BookID: "b1", AcoustIDFingerprint: []byte{0x01, 0x02, 0x03, 0x04}, AcoustIDFingerprintDurationSec: 1800},
-		{ID: "f2", BookID: "b2", AcoustIDFingerprint: []byte{0x05, 0x06, 0x07, 0x08}, AcoustIDFingerprintDurationSec: 1800},
-		{ID: "f3", BookID: "b3", AcoustIDFingerprint: []byte{0x09, 0x0a, 0x0b, 0x0c}, AcoustIDFingerprintDurationSec: 1800},
+	files := []database.BookFileCore{
+		{ID: "f1", BookID: "b1", AcoustIDFingerprintDurationSec: 1800},
+		{ID: "f2", BookID: "b2", AcoustIDFingerprintDurationSec: 1800},
+		{ID: "f3", BookID: "b3", AcoustIDFingerprintDurationSec: 1800},
 	}
 
 	updateCalls := 0
 	mock := &database.MockStore{
-		GetAllBookFilesFunc: func() ([]database.BookFile, error) {
+		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) {
 			return files, nil
 		},
 		UpdateBookFileFunc: func(string, *database.BookFile) error {
@@ -169,15 +180,27 @@ func TestLSHBackfill_IdempotentWithHasLSHIndex(t *testing.T) {
 // for some rows and false for others, only the unindexed rows with a stored
 // fp are updated.
 func TestLSHBackfill_PartialIndex(t *testing.T) {
-	files := []database.BookFile{
-		{ID: "f1", AcoustIDFingerprint: []byte{1}, AcoustIDFingerprintDurationSec: 1800},
-		{ID: "f2", AcoustIDFingerprint: []byte{2}, AcoustIDFingerprintDurationSec: 1800},
-		{ID: "f3", AcoustIDFingerprint: []byte{3}, AcoustIDFingerprintDurationSec: 1800},
+	files := []database.BookFileCore{
+		{ID: "f1", AcoustIDFingerprintDurationSec: 1800},
+		{ID: "f2", AcoustIDFingerprintDurationSec: 1800},
+		{ID: "f3", AcoustIDFingerprintDurationSec: 1800},
 		{ID: "f4"}, // no fp at all
+	}
+	// hydrateFiles simulates GetBookFiles(bookID="") — none of the files set
+	// BookID, so they all share the empty-string bucket; the op matches by
+	// file ID within the returned slice.
+	hydrateFiles := map[string][]database.BookFile{
+		"": {
+			{ID: "f2", AcoustIDFingerprint: []byte{2}},
+			{ID: "f3", AcoustIDFingerprint: []byte{3}},
+		},
 	}
 	var updates []string
 	mock := &database.MockStore{
-		GetAllBookFilesFunc: func() ([]database.BookFile, error) { return files, nil },
+		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },
+		GetBookFilesFunc: func(bookID string) ([]database.BookFile, error) {
+			return hydrateFiles[bookID], nil
+		},
 		UpdateBookFileFunc: func(id string, _ *database.BookFile) error {
 			updates = append(updates, id)
 			return nil
@@ -202,12 +225,17 @@ func TestLSHBackfill_PartialIndex(t *testing.T) {
 // TestLSHBackfill_CancelMidRun verifies that cancelling the context part-way
 // returns ctx.Err() and stops further updates.
 func TestLSHBackfill_CancelMidRun(t *testing.T) {
-	files := make([]database.BookFile, 100)
+	files := make([]database.BookFileCore, 100)
+	hydrateFiles := make([]database.BookFile, 100)
 	for i := range files {
-		files[i] = database.BookFile{
-			ID:                             string(rune('a'+i%26)) + "-" + string(rune('0'+i%10)),
-			AcoustIDFingerprint:            []byte{byte(i)},
+		id := string(rune('a'+i%26)) + "-" + string(rune('0'+i%10))
+		files[i] = database.BookFileCore{
+			ID:                             id,
 			AcoustIDFingerprintDurationSec: 1800,
+		}
+		hydrateFiles[i] = database.BookFile{
+			ID:                  id,
+			AcoustIDFingerprint: []byte{byte(i)},
 		}
 	}
 
@@ -215,7 +243,10 @@ func TestLSHBackfill_CancelMidRun(t *testing.T) {
 
 	var updates int
 	store := &database.MockStore{
-		GetAllBookFilesFunc: func() ([]database.BookFile, error) { return files, nil },
+		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },
+		// None of the files set BookID, so every hydrate call shares the
+		// same full slice; the op matches by file ID within it.
+		GetBookFilesFunc: func(bookID string) ([]database.BookFile, error) { return hydrateFiles, nil },
 		UpdateBookFileFunc: func(id string, _ *database.BookFile) error {
 			updates++
 			if updates == 5 {
@@ -241,26 +272,31 @@ func TestLSHBackfill_CancelMidRun(t *testing.T) {
 }
 
 // TestLSHBackfill_MemdbSlimRowStillTriggersUpdate is the regression test for
-// the memdb-slim no-op bug: GetAllBookFiles returns the memdb-slim projection
-// in production (UseMemDB=true), where stripBookFileForMemdb nils the raw
-// AcoustIDFingerprint blob but preserves AcoustIDFingerprintDurationSec.
-// Before the fix, the gate was len(AcoustIDFingerprint)==0 — always true for
-// a memdb-slim row — so this op silently skipped every fingerprinted file in
-// prod. This test supplies exactly that shape (nil blob, DurationSec>0) and
-// asserts UpdateBookFile still fires; PebbleStore.UpdateBookFile's own
-// preserve-on-empty guard (merged separately) is what restores the real
-// bytes before the LSH secondary index is written.
+// the memdb-slim no-op bug: GetAllBookFilesCore returns BookFileCore, which
+// never carries the raw AcoustIDFingerprint bytes at all (heavy field,
+// stripped on both the memdb and Pebble-direct paths); DurationSec is the
+// KEPT proxy. Before the fix, the gate was len(AcoustIDFingerprint)==0 —
+// always true — so this op silently skipped every fingerprinted file in
+// prod. This test supplies exactly that shape (DurationSec>0, no blob to
+// even check) and asserts UpdateBookFile still fires against the row
+// hydrated via GetBookFiles.
 func TestLSHBackfill_MemdbSlimRowStillTriggersUpdate(t *testing.T) {
-	files := []database.BookFile{
-		// Memdb-slim shape: blob stripped, duration proxy survives.
-		{ID: "f1", BookID: "b1", AcoustIDFingerprint: nil, AcoustIDFingerprintDurationSec: 1800},
-		// Genuinely unfingerprinted: neither blob nor duration.
+	files := []database.BookFileCore{
+		// Memdb-slim shape: duration proxy survives.
+		{ID: "f1", BookID: "b1", AcoustIDFingerprintDurationSec: 1800},
+		// Genuinely unfingerprinted: no duration.
 		{ID: "f2", BookID: "b2"},
+	}
+	hydrateFiles := map[string][]database.BookFile{
+		"b1": {{ID: "f1", BookID: "b1", AcoustIDFingerprint: []byte{0xAA, 0xBB}}},
 	}
 
 	var updates []string
 	store := &database.MockStore{
-		GetAllBookFilesFunc: func() ([]database.BookFile, error) { return files, nil },
+		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },
+		GetBookFilesFunc: func(bookID string) ([]database.BookFile, error) {
+			return hydrateFiles[bookID], nil
+		},
 		UpdateBookFileFunc: func(id string, _ *database.BookFile) error {
 			updates = append(updates, id)
 			return nil
@@ -286,7 +322,7 @@ func TestLSHBackfill_MemdbSlimRowStillTriggersUpdate(t *testing.T) {
 // Done frames so the UI never sees a 0/0 bar.
 func TestLSHBackfill_EmptyStore(t *testing.T) {
 	store := &database.MockStore{
-		GetAllBookFilesFunc: func() ([]database.BookFile, error) {
+		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) {
 			return nil, nil
 		},
 	}

@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/scan_duplicate_files.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: a1000016-0000-0000-0000-000000000016
-// last-edited: 2026-05-01
+// last-edited: 2026-07-06
 
 package jobs
 
@@ -31,7 +31,7 @@ func (j *scanDuplicateFilesJob) Description() string {
 }
 func (j *scanDuplicateFilesJob) CanResume() bool { return false }
 func (j *scanDuplicateFilesJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, _ bool) error {
-	files, err := store.GetAllBookFiles()
+	files, err := store.GetAllBookFilesCore()
 	if err != nil {
 		return err
 	}

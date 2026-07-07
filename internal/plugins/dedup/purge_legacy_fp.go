@@ -1,6 +1,7 @@
 // file: internal/plugins/dedup/purge_legacy_fp.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3b7a2e9f-c1d4-4f8b-a5e0-6d3c8b2f1e47
+// last-edited: 2026-07-06
 
 // Package dedup — op dedup.purge-legacy-fp-candidates (T015, SPEC 1 §8 step 2).
 //
@@ -260,7 +261,7 @@ func (p *Plugin) runPurgeLegacyFP(ctx context.Context, rawParams json.RawMessage
 // for all current BookFiles. This is used to re-verify whether a candidate pair
 // still has a genuine whole-file hash match before marking it stale.
 func (p *Plugin) buildFileHashIndex(_ context.Context) (map[string]map[string]struct{}, error) {
-	files, err := p.store.GetAllBookFiles()
+	files, err := p.store.GetAllBookFilesCore()
 	if err != nil {
 		return nil, err
 	}

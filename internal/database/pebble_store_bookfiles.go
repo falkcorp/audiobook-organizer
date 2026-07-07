@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
 // last-edited: 2026-07-06
 
@@ -401,24 +401,35 @@ func (s *PebbleStore) getBookFilesForIDsPebbleScan(bookIDs []string) (map[string
 	return result, nil
 }
 
-// GetAllBookFiles returns every BookFile in the database. When memdb is
-// published, iterates the in-memory book_files table — a pointer walk over
-// ~308K rows — instead of a Pebble prefix scan with per-row JSON unmarshal.
-// Mirrors the GetBookFilesForIDsCore fastpath from PR #1153.
+// GetAllBookFilesCore returns the BookFileCore projection of every BookFile
+// in the database. When memdb is published, iterates the in-memory
+// book_files table — a pointer walk over ~308K rows — instead of a Pebble
+// prefix scan with per-row JSON unmarshal. Mirrors the GetBookFilesForIDsCore
+// fastpath from PR #1153.
 //
 // Pebble full-scan retained as fallback for cold-start (before memdb
-// publishes) and tests with no memdb.
+// publishes) and tests with no memdb; rows are projected via .Core() so the
+// return type is identical (slim) regardless of path.
 //
-// SLIM (memdb projection): returns rows with heavy fields nil'd —
+// SLIM: BookFileCore drops the heavy fields nil'd by the memdb strip —
 // FingerprintFailureReason/Detail/DiagnosticJSON, AcoustIDFingerprint,
 // AcoustIDSeg0..6 (FingerprintFailedAt and AcoustIDFingerprintDurationSec are
-// kept). A caller that needs any of those MUST fetch via GetBookFiles(bookID)
-// (full Pebble). See docs/specs/2026-07-05-store-getter-fidelity-unification.md.
-func (s *PebbleStore) GetAllBookFiles() ([]BookFile, error) {
+// kept on Core). A caller that needs any of those MUST fetch via
+// GetBookFiles(bookID) (full Pebble). See
+// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
+func (s *PebbleStore) GetAllBookFilesCore() ([]BookFileCore, error) {
 	if s.UseMemDB && s.mem() != nil {
-		return s.mem().GetAllBookFiles()
+		return s.mem().GetAllBookFilesCore()
 	}
-	return s.getAllBookFilesPebbleScan()
+	full, err := s.getAllBookFilesPebbleScan()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]BookFileCore, len(full))
+	for i := range full {
+		out[i] = full[i].Core()
+	}
+	return out, nil
 }
 
 func (s *PebbleStore) getAllBookFilesPebbleScan() ([]BookFile, error) {
@@ -505,7 +516,7 @@ func (s *PebbleStore) GetBookFilesNeedingDelugeImport() ([]BookFile, error) {
 	if s.UseMemDB && s.mem() != nil {
 		return s.mem().GetBookFilesNeedingDelugeImport()
 	}
-	all, err := s.GetAllBookFiles()
+	all, err := s.getAllBookFilesPebbleScan()
 	if err != nil {
 		return nil, err
 	}

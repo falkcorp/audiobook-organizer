@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/integrity_check_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3a9d1e2f-4b5c-4d6e-8f7a-1b2c3d4e5f6a
-// last-edited: 2026-07-01
+// last-edited: 2026-07-06
 
 package maintenance
 
@@ -17,7 +17,7 @@ import (
 // record, mismatched hashes explained by an AO tag write, and rows with no
 // baseline hash, only the true mismatches (no AO write) are flagged.
 func TestFindIntegrityMismatches_ReportOnly(t *testing.T) {
-	files := []database.BookFile{
+	files := []database.BookFileCore{
 		// (a) matching hashes — not flagged.
 		{ID: "f1", FilePath: "/lib/a.m4b", FileHash: "hash-a", OriginalFileHash: "hash-a"},
 		// (b) mismatch with no AO write on record — flagged.
@@ -30,7 +30,7 @@ func TestFindIntegrityMismatches_ReportOnly(t *testing.T) {
 
 	var writeCalls, deleteCalls []string
 	store := &database.MockStore{
-		GetAllBookFilesFunc: func() ([]database.BookFile, error) {
+		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) {
 			return files, nil
 		},
 		DeleteBookFileFunc: func(id string) error {
@@ -64,12 +64,12 @@ func TestFindIntegrityMismatches_ReportOnly(t *testing.T) {
 // TestFindIntegrityMismatches_NoMismatches verifies the clean-library case
 // returns an empty slice with no error.
 func TestFindIntegrityMismatches_NoMismatches(t *testing.T) {
-	files := []database.BookFile{
+	files := []database.BookFileCore{
 		{ID: "f1", FileHash: "h1", OriginalFileHash: "h1"},
 		{ID: "f2", FileHash: "h2", OriginalFileHash: "h2"},
 	}
 	store := &database.MockStore{
-		GetAllBookFilesFunc: func() ([]database.BookFile, error) { return files, nil },
+		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },
 	}
 	flagged, _, err := findIntegrityMismatches(context.Background(), store)
 	if err != nil {

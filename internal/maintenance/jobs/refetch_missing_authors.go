@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/refetch_missing_authors.go
-// version: 2.0.2
+// version: 2.1.0
 // guid: a1000012-0000-0000-0000-000000000012
-// last-edited: 2026-07-03
+// last-edited: 2026-07-06
 
 package jobs
 
@@ -53,11 +53,11 @@ func (j *refetchMissingAuthorsJob) Run(ctx context.Context, store database.Store
 	slog.Info("refetch-missing-authors / books have no author", "opID", opID, "books_count", len(books), "allBooks_count", len(allBooks))
 
 	// Load all book files upfront to avoid N+1 queries.
-	allFiles, err := store.GetAllBookFiles()
+	allFiles, err := store.GetAllBookFilesCore()
 	if err != nil {
-		return fmt.Errorf("GetAllBookFiles: %w", err)
+		return fmt.Errorf("GetAllBookFilesCore: %w", err)
 	}
-	filesByBook := make(map[string][]database.BookFile, len(allFiles))
+	filesByBook := make(map[string][]database.BookFileCore, len(allFiles))
 	for i := range allFiles {
 		f := &allFiles[i]
 		filesByBook[f.BookID] = append(filesByBook[f.BookID], *f)

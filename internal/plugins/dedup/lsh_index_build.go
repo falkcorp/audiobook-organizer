@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/lsh_index_build.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: e61b955e-93bf-4ea6-bb1f-7acd30491fdb
 // last-edited: 2026-07-06
 
@@ -27,9 +27,12 @@ import (
 // The *PebbleStore satisfies this interface; other store implementations
 // may return errors from the LSH methods (they carry no index).
 type LSHIndexStore interface {
-	// GetAllBookFiles returns every BookFile row. The op iterates all files
-	// and indexes only those with a non-empty AcoustIDFingerprint.
-	GetAllBookFiles() ([]database.BookFile, error)
+	// GetAllBookFilesCore returns the BookFileCore projection of every
+	// BookFile row. The op iterates all files and indexes only those with a
+	// whole-file fingerprint (AcoustIDFingerprintDurationSec > 0 — the KEPT
+	// proxy; the raw AcoustIDFingerprint bytes are a heavy field never
+	// present on Core and must be hydrated per-book via GetBookFiles).
+	GetAllBookFilesCore() ([]database.BookFileCore, error)
 
 	// HasLSHIndex reports whether a BookFile already has an fpidx_meta row.
 	// The op uses this to skip already-indexed files on incremental re-runs —
@@ -120,7 +123,7 @@ func (p *Plugin) runLSHIndexBuild(ctx context.Context, _ json.RawMessage, report
 	loadProg := sdk.NewProgress(reporter, 0)
 	loadProg.Start("Loading BookFiles for LSH indexing…")
 
-	files, err := lshStore.GetAllBookFiles()
+	files, err := lshStore.GetAllBookFilesCore()
 	if err != nil {
 		return fmt.Errorf("lsh-index-build: load files: %w", err)
 	}
@@ -174,14 +177,14 @@ func (p *Plugin) runLSHIndexBuild(ctx context.Context, _ json.RawMessage, report
 
 		idxs := groups[bookID] // indices into the read-only `files` slice
 
-		// Does any file in this book carry the proxy (DurationSec>0) but a
-		// memdb-stripped blob (AcoustIDFingerprint==nil)? Only then do we pay
-		// for a hydrate read — most files either have no fp at all (skip) or
-		// (in a cold-start / Pebble-direct run) already carry the real bytes.
+		// Does any file in this book carry the proxy (DurationSec>0)? Core
+		// never carries the raw AcoustIDFingerprint bytes at all (heavy
+		// field, stripped on both the memdb and Pebble-direct paths), so any
+		// file with a whole-file fp always needs the hydrate read now.
 		needsHydrate := false
 		for _, idx := range idxs {
 			f := &files[idx]
-			if f.AcoustIDFingerprintDurationSec > 0 && len(f.AcoustIDFingerprint) == 0 {
+			if f.AcoustIDFingerprintDurationSec > 0 {
 				needsHydrate = true
 				break
 			}
@@ -215,8 +218,9 @@ func (p *Plugin) runLSHIndexBuild(ctx context.Context, _ json.RawMessage, report
 			}
 
 			// AcoustIDFingerprintDurationSec > 0 is the memdb-safe proxy for
-			// "has whole-file fp" (the blob itself may be stripped to nil).
-			hasWholeFP := len(f.AcoustIDFingerprint) > 0 || f.AcoustIDFingerprintDurationSec > 0
+			// "has whole-file fp" — Core carries no AcoustIDFingerprint bytes
+			// to check directly.
+			hasWholeFP := f.AcoustIDFingerprintDurationSec > 0
 			if !hasWholeFP {
 				localNoFP++
 				if f.FingerprintFailedAt == nil {
@@ -235,27 +239,26 @@ func (p *Plugin) runLSHIndexBuild(ctx context.Context, _ json.RawMessage, report
 				continue
 			}
 
-			fp := f.AcoustIDFingerprint
-			if len(fp) == 0 {
-				// Memdb-stripped: hydrate from the raw-Pebble read above.
-				if hydrated != nil {
-					if hf, ok := hydrated[f.ID]; ok {
-						fp = hf.AcoustIDFingerprint
-					}
-					if len(fp) == 0 {
-						reporter.Logger().Warn("lsh-index-build: hydrate returned empty fingerprint (data drift)",
-							"file_id", f.ID, "book_id", f.BookID)
-					}
+			// Core never carries the raw bytes; the op always hydrates via
+			// the per-book GetBookFiles map built above.
+			var fp []byte
+			if hydrated != nil {
+				if hf, ok := hydrated[f.ID]; ok {
+					fp = hf.AcoustIDFingerprint
 				}
 				if len(fp) == 0 {
-					// Hydrate failed, or the raw row genuinely has no blob
-					// despite the DurationSec proxy claiming one exists.
-					// Count as an error (not noFP) so it isn't misrouted into
-					// the rescan-enqueue path — the file DOES have a
-					// fingerprint on record, we just couldn't read it this run.
-					localErrs++
-					continue
+					reporter.Logger().Warn("lsh-index-build: hydrate returned empty fingerprint (data drift)",
+						"file_id", f.ID, "book_id", f.BookID)
 				}
+			}
+			if len(fp) == 0 {
+				// Hydrate failed, or the raw row genuinely has no blob
+				// despite the DurationSec proxy claiming one exists.
+				// Count as an error (not noFP) so it isn't misrouted into
+				// the rescan-enqueue path — the file DOES have a
+				// fingerprint on record, we just couldn't read it this run.
+				localErrs++
+				continue
 			}
 
 			subs, bands, fpErr := fingerprint.Subprints(fp)

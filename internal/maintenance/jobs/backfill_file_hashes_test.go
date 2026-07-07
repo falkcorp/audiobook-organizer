@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_file_hashes_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
-// last-edited: 2026-05-16
+// last-edited: 2026-07-06
 
 package jobs_test
 
@@ -35,10 +35,10 @@ func TestBackfillFileHashesJob_Metadata(t *testing.T) {
 
 func TestBackfillFileHashesJob_SkipsAlreadyHashed(t *testing.T) {
 	hash := "existinghash"
-	files := []database.BookFile{{ID: "f1", FilePath: "/tmp/audio.m4b", FileHash: hash}}
+	files := []database.BookFileCore{{ID: "f1", FilePath: "/tmp/audio.m4b", FileHash: hash}}
 	var setCalled bool
 	store := &database.MockStore{
-		GetAllBookFilesFunc: func() ([]database.BookFile, error) { return files, nil },
+		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },
 		SetBookFileHashFunc: func(id, h string) error { setCalled = true; return nil },
 	}
 
@@ -60,10 +60,10 @@ func TestBackfillFileHashesJob_HashesNewFile(t *testing.T) {
 	wantSum := sha256.Sum256(content)
 	wantHash := fmt.Sprintf("%x", wantSum)
 
-	files := []database.BookFile{{ID: "f2", FilePath: f.Name(), FileHash: ""}}
+	files := []database.BookFileCore{{ID: "f2", FilePath: f.Name(), FileHash: ""}}
 	var gotHash string
 	store := &database.MockStore{
-		GetAllBookFilesFunc: func() ([]database.BookFile, error) { return files, nil },
+		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },
 		SetBookFileHashFunc: func(id, h string) error { gotHash = h; return nil },
 	}
 
@@ -79,10 +79,10 @@ func TestBackfillFileHashesJob_DryRun_SkipsWrite(t *testing.T) {
 	_, _ = f.WriteString("audio")
 	f.Close()
 
-	files := []database.BookFile{{ID: "f3", FilePath: f.Name(), FileHash: ""}}
+	files := []database.BookFileCore{{ID: "f3", FilePath: f.Name(), FileHash: ""}}
 	var setCalled bool
 	store := &database.MockStore{
-		GetAllBookFilesFunc: func() ([]database.BookFile, error) { return files, nil },
+		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },
 		SetBookFileHashFunc: func(id, h string) error { setCalled = true; return nil },
 	}
 
@@ -93,11 +93,11 @@ func TestBackfillFileHashesJob_DryRun_SkipsWrite(t *testing.T) {
 }
 
 func TestBackfillFileHashesJob_MissingFile_Warns(t *testing.T) {
-	files := []database.BookFile{{ID: "f4", FilePath: "/nonexistent/path/audio.m4b", FileHash: ""}}
+	files := []database.BookFileCore{{ID: "f4", FilePath: "/nonexistent/path/audio.m4b", FileHash: ""}}
 	var setCalled bool
 	rep := &noopReporter{}
 	store := &database.MockStore{
-		GetAllBookFilesFunc: func() ([]database.BookFile, error) { return files, nil },
+		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },
 		SetBookFileHashFunc: func(id, h string) error { setCalled = true; return nil },
 	}
 
@@ -109,12 +109,12 @@ func TestBackfillFileHashesJob_MissingFile_Warns(t *testing.T) {
 }
 
 func TestBackfillFileHashesJob_Cancellation(t *testing.T) {
-	files := make([]database.BookFile, 10)
+	files := make([]database.BookFileCore, 10)
 	for i := range files {
-		files[i] = database.BookFile{ID: fmt.Sprintf("f%d", i), FilePath: "/tmp/x.m4b", FileHash: ""}
+		files[i] = database.BookFileCore{ID: fmt.Sprintf("f%d", i), FilePath: "/tmp/x.m4b", FileHash: ""}
 	}
 	store := &database.MockStore{
-		GetAllBookFilesFunc: func() ([]database.BookFile, error) { return files, nil },
+		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

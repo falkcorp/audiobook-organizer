@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/lsh_backfill.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2c4d6e80-3b5a-4f9c-9b1d-7e8f0a2b4c6d
 // last-edited: 2026-07-06
 
@@ -36,16 +36,20 @@ type lshIndexChecker interface {
 // store implements it) or harmlessly rewritten (when it does not).
 //
 // Gate uses AcoustIDFingerprintDurationSec (>0 ⇒ a whole-file fingerprint
-// exists) rather than len(AcoustIDFingerprint) == 0, because GetAllBookFiles
-// returns the memdb-slim projection in production (UseMemDB=true) where
-// stripBookFileForMemdb nils the raw AcoustIDFingerprint blob to save RAM —
-// the byte-length gate was always true under memdb, making this op a silent
-// no-op. The row we re-save still carries a nil AcoustIDFingerprint, but
-// PebbleStore.UpdateBookFile restores the stored blob from Pebble whenever
-// the incoming value is empty (the "preserve-on-empty" guard added for the
-// same memdb-slim-roundtrip class of bug) *before* writeBookFileSecondaryIndexes
-// runs, so writeFingerprintLSHIndexes still sees the real fingerprint bytes.
-// No hydrate call is needed here — UpdateBookFile does it for us.
+// exists) rather than len(AcoustIDFingerprint) == 0, because
+// GetAllBookFilesCore returns BookFileCore — the raw AcoustIDFingerprint blob
+// is a heavy field that never exists on Core. DurationSec is the KEPT proxy.
+//
+// The row we re-save is hydrated via GetBookFiles(bookID) first and the
+// UpdateBookFile call writes THAT full row — not the Core candidate (which
+// has no fingerprint bytes at all and can't be passed to UpdateBookFile
+// without either a compile error or a hand-built BookFile{} literal that
+// would wipe the stored fingerprint). This drops the prior reliance on
+// PebbleStore.UpdateBookFile's preserve-on-empty guard, which only restores
+// AcoustIDFingerprint — not the diagnostic fields
+// (FingerprintFailureReason/Detail/DiagnosticJSON) — so a hydrate-then-write
+// here also closes that residual gap for this op. See
+// docs/audits/2026-07-05-updatebookfile-memdb-writeback-fingerprint-wipe.md.
 //
 // Use after deploying the LSH index code to populate the existing ~308K
 // fingerprinted rows without re-running fpcalc.
@@ -85,7 +89,7 @@ func (p *Plugin) runLSHBackfill(ctx context.Context, _ json.RawMessage, reporter
 	prog := sdk.NewProgress(reporter, 0)
 	prog.Start("Loading book files for LSH backfill…")
 
-	files, err := p.store.GetAllBookFiles()
+	files, err := p.store.GetAllBookFilesCore()
 	if err != nil {
 		return fmt.Errorf("load book files: %w", err)
 	}
@@ -101,20 +105,38 @@ func (p *Plugin) runLSHBackfill(ctx context.Context, _ json.RawMessage, reporter
 
 	var indexed, skippedNoFP, skippedAlreadyIndexed, failed int
 
-	if err := registry.RunItems(ctx, reporter, files, func(ctx context.Context, f database.BookFile) error {
+	if err := registry.RunItems(ctx, reporter, files, func(ctx context.Context, f database.BookFileCore) error {
 		// Proxy gate: AcoustIDFingerprintDurationSec > 0 means a whole-file
-		// fingerprint was computed, even when the memdb-slim row we're
-		// holding has AcoustIDFingerprint stripped to nil. See the doc
-		// comment above for why this is safe to re-save unmodified.
+		// fingerprint was computed, even though BookFileCore never carries
+		// the AcoustIDFingerprint bytes themselves. See the doc comment
+		// above for why this is safe.
 		if f.AcoustIDFingerprintDurationSec == 0 {
 			skippedNoFP++
 		} else if hasChecker && checker.HasLSHIndex(f.ID) {
 			skippedAlreadyIndexed++
 		} else {
-			// Re-save the row so PebbleStore.writeBookFileSecondaryIndexes writes
-			// the fpidx + fpidx_meta entries. Passed unmodified — just a hook trigger.
-			updated := f
-			if err := p.store.UpdateBookFile(f.ID, &updated); err != nil {
+			// Hydrate the full row and re-save THAT so
+			// PebbleStore.writeBookFileSecondaryIndexes writes the fpidx +
+			// fpidx_meta entries with the real fingerprint bytes intact.
+			full, herr := p.store.GetBookFiles(f.BookID)
+			if herr != nil {
+				log.Warn("acoustid lsh-backfill: hydrate failed", "id", f.ID, "err", herr)
+				failed++
+				return nil
+			}
+			var target *database.BookFile
+			for j := range full {
+				if full[j].ID == f.ID {
+					target = &full[j]
+					break
+				}
+			}
+			if target == nil {
+				log.Warn("acoustid lsh-backfill: hydrate: row not found", "id", f.ID)
+				failed++
+				return nil
+			}
+			if err := p.store.UpdateBookFile(target.ID, target); err != nil {
 				log.Warn("acoustid lsh-backfill: update failed", "id", f.ID, "err", err)
 				failed++
 			} else {

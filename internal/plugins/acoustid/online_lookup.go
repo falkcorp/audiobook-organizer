@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/online_lookup.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6e7f8091-a2b3-c4d5-e6f7-08192a3b4c5d
 // last-edited: 2026-07-06
 
@@ -15,6 +15,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/acoustid"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -94,7 +95,7 @@ func (p *Plugin) runOnlineLookup(ctx context.Context, params json.RawMessage, re
 	prog := sdk.NewProgress(reporter, 0)
 	prog.Start("Loading book files for online lookup…")
 
-	files, err := p.store.GetAllBookFiles()
+	files, err := p.store.GetAllBookFilesCore()
 	if err != nil {
 		return fmt.Errorf("load book files: %w", err)
 	}
@@ -104,15 +105,13 @@ func (p *Plugin) runOnlineLookup(ctx context.Context, params json.RawMessage, re
 	//
 	// The gate uses AcoustIDFingerprintDurationSec (>0 ⇒ a whole-file
 	// fingerprint was computed) rather than len(AcoustIDFingerprint)==0,
-	// because GetAllBookFiles returns the memdb-slim projection in
-	// production (UseMemDB=true): stripBookFileForMemdb nils the raw
-	// AcoustIDFingerprint blob to save RAM but keeps DurationSec. The old
-	// byte-length gate was always true under memdb, so this op silently
-	// found zero candidates in prod. The raw bytes themselves are hydrated
-	// per-candidate at API-call time below (this loop is already
+	// because GetAllBookFilesCore returns BookFileCore — the raw
+	// AcoustIDFingerprint blob is a heavy field that never exists on Core
+	// (stripped under memdb, and not projected under Pebble-direct either).
+	// DurationSec is the KEPT proxy field. The raw bytes themselves are
+	// hydrated per-candidate at API-call time below (this loop is already
 	// network-bound and rate-limited, so a per-candidate Pebble read is
-	// negligible) — we deliberately do NOT stash `raw` from the slim struct
-	// here.
+	// negligible).
 	type candidate struct {
 		idx int // original index in files
 		dur int
@@ -170,29 +169,33 @@ func (p *Plugin) runOnlineLookup(ctx context.Context, params json.RawMessage, re
 
 		f := &files[c.idx]
 
-		// Hydrate the raw whole-file fingerprint at API-call time.
-		// GetAllBookFiles strips AcoustIDFingerprint under memdb
-		// (stripBookFileForMemdb); the candidate filter above only checked
-		// the memdb-safe DurationSec proxy, so most candidates land here
-		// with a nil blob. GetBookFiles reads raw Pebble unconditionally
-		// (no UseMemDB check), so it always returns the real bytes.
-		raw := f.AcoustIDFingerprint
+		// Hydrate the full row (raw whole-file fingerprint + writeback
+		// target) at API-call time. BookFileCore never carries
+		// AcoustIDFingerprint (heavy field, not on Core at all); GetBookFiles
+		// reads raw Pebble unconditionally (no UseMemDB check), so it always
+		// returns the real bytes. The hydrated *BookFile is also reused below
+		// as the UpdateBookFile target — writing back the Core-derived
+		// candidate would compile-error (no such method) or, worse, wipe
+		// fingerprint fields if hand-reconstructed; see
+		// docs/audits/2026-07-05-updatebookfile-memdb-writeback-fingerprint-wipe.md.
+		var raw []byte
+		var hydrated *database.BookFile
 		var hydrateErr error
-		if len(raw) == 0 {
-			if bookFiles, herr := p.store.GetBookFiles(f.BookID); herr != nil {
-				hydrateErr = fmt.Errorf("hydrate GetBookFiles: %w", herr)
-			} else {
-				for _, hf := range bookFiles {
-					if hf.ID == f.ID {
-						raw = hf.AcoustIDFingerprint
-						break
-					}
+		if bookFiles, herr := p.store.GetBookFiles(f.BookID); herr != nil {
+			hydrateErr = fmt.Errorf("hydrate GetBookFiles: %w", herr)
+		} else {
+			for j := range bookFiles {
+				if bookFiles[j].ID == f.ID {
+					hydrated = &bookFiles[j]
+					raw = hydrated.AcoustIDFingerprint
+					break
 				}
-				if len(raw) == 0 {
-					// Data drift: the DurationSec proxy claimed a fingerprint
-					// exists but the raw row has no blob either.
-					hydrateErr = fmt.Errorf("hydrate: no fingerprint bytes for file %s (data drift)", f.ID)
-				}
+			}
+			if hydrated == nil || len(raw) == 0 {
+				// Data drift: the DurationSec proxy claimed a fingerprint
+				// exists but the raw row has no blob either (or the row
+				// disappeared between the slim scan and this hydrate).
+				hydrateErr = fmt.Errorf("hydrate: no fingerprint bytes for file %s (data drift)", f.ID)
 			}
 		}
 
@@ -227,10 +230,13 @@ func (p *Plugin) runOnlineLookup(ctx context.Context, params json.RawMessage, re
 			log.Warn("acoustid online lookup: request failed",
 				"file_id", f.ID, "err", lerr)
 		} else {
-			f.AcoustIDOnlineLookedUpAt = &now
+			// Mutate + write back the hydrated FULL row (not the Core
+			// candidate) so fingerprint fields already on the Pebble row
+			// survive the update. See the hydrate block above.
+			hydrated.AcoustIDOnlineLookedUpAt = &now
 			if res.Score >= AcoustIDOnlineMinScore && res.RecordingID != "" {
-				f.AcoustIDOnlineRecordingID = res.RecordingID
-				f.AcoustIDOnlineScore = res.Score
+				hydrated.AcoustIDOnlineRecordingID = res.RecordingID
+				hydrated.AcoustIDOnlineScore = res.Score
 				matched++
 				log.Info("acoustid online lookup: matched",
 					"file_id", f.ID,
@@ -240,11 +246,11 @@ func (p *Plugin) runOnlineLookup(ctx context.Context, params json.RawMessage, re
 			} else {
 				// Persist the looked-up timestamp so we don't re-query
 				// every run; clear any stale match below threshold.
-				f.AcoustIDOnlineRecordingID = ""
-				f.AcoustIDOnlineScore = 0
+				hydrated.AcoustIDOnlineRecordingID = ""
+				hydrated.AcoustIDOnlineScore = 0
 				noMatch++
 			}
-			if uerr := p.store.UpdateBookFile(f.ID, f); uerr != nil {
+			if uerr := p.store.UpdateBookFile(hydrated.ID, hydrated); uerr != nil {
 				log.Warn("acoustid online lookup: persist failed",
 					"file_id", f.ID, "err", uerr)
 			}

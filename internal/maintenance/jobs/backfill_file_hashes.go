@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_file_hashes.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: a1000014-0000-0000-0000-000000000014
-// last-edited: 2026-05-16
+// last-edited: 2026-07-06
 
 package jobs
 
@@ -28,7 +28,7 @@ func (j *backfillFileHashesJob) Description() string { return "Compute and store
 // Job supports checkpoint-based resume after restart.
 func (j *backfillFileHashesJob) CanResume() bool { return true }
 func (j *backfillFileHashesJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, dryRun bool) error {
-	files, err := store.GetAllBookFiles()
+	files, err := store.GetAllBookFilesCore()
 	if err != nil {
 		return err
 	}

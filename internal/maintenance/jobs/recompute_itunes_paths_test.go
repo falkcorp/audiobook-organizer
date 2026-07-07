@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/recompute_itunes_paths_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b7c8d9e0-f1a2-3456-bcde-789012345012
-// last-edited: 2026-05-05
+// last-edited: 2026-07-06
 
 // Package jobs_test exercises the recompute-itunes-paths maintenance job.
 // noopReporter and the blank jobs import are provided by fix_read_by_narrator_test.go.
@@ -48,8 +48,8 @@ func TestRecomputeItunesPathsJob_DefaultParams(t *testing.T) {
 func TestRecomputeItunesPathsJob_EmptyStore(t *testing.T) {
 	// No book files → no-op, no error.
 	store := &database.MockStore{
-		GetAllBookFilesFunc: func() ([]database.BookFile, error) {
-			return []database.BookFile{}, nil
+		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) {
+			return []database.BookFileCore{}, nil
 		},
 	}
 
@@ -65,13 +65,13 @@ func TestRecomputeItunesPathsJob_EmptyStore(t *testing.T) {
 
 func TestRecomputeItunesPathsJob_DryRunDoesNotUpdate(t *testing.T) {
 	// File with a mismatched itunes_path; in dry-run no UpdateBookFile should be called.
-	files := []database.BookFile{
+	files := []database.BookFileCore{
 		{ID: "bf-1", BookID: "book-1", FilePath: "/books/author/title/chapter.mp3", ITunesPath: "/old/path.mp3"},
 	}
 
 	var updateCalled bool
 	store := &database.MockStore{
-		GetAllBookFilesFunc: func() ([]database.BookFile, error) {
+		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) {
 			return files, nil
 		},
 		UpdateBookFileFunc: func(id string, file *database.BookFile) error {
@@ -96,13 +96,13 @@ func TestRecomputeItunesPathsJob_DryRunDoesNotUpdate(t *testing.T) {
 func TestRecomputeItunesPathsJob_SkipsAlreadyCorrect(t *testing.T) {
 	// When computed path == stored path, UpdateBookFile must not be called.
 	// Use an empty ITunesPath so ComputeITunesPath returns "" and both sides match.
-	files := []database.BookFile{
+	files := []database.BookFileCore{
 		{ID: "bf-2", BookID: "book-2", FilePath: "/books/author/title/chapter.mp3", ITunesPath: ""},
 	}
 
 	var updateCalled bool
 	store := &database.MockStore{
-		GetAllBookFilesFunc: func() ([]database.BookFile, error) {
+		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) {
 			return files, nil
 		},
 		UpdateBookFileFunc: func(id string, file *database.BookFile) error {
@@ -125,16 +125,16 @@ func TestRecomputeItunesPathsJob_SkipsAlreadyCorrect(t *testing.T) {
 }
 
 func TestRecomputeItunesPathsJob_CancelRespected(t *testing.T) {
-	files := make([]database.BookFile, 5)
+	files := make([]database.BookFileCore, 5)
 	for i := range files {
-		files[i] = database.BookFile{ID: "bf-cancel-" + string(rune('0'+i)), FilePath: "/books/b/c.mp3"}
+		files[i] = database.BookFileCore{ID: "bf-cancel-" + string(rune('0'+i)), FilePath: "/books/b/c.mp3"}
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // pre-cancel
 
 	store := &database.MockStore{
-		GetAllBookFilesFunc: func() ([]database.BookFile, error) {
+		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) {
 			return files, nil
 		},
 	}

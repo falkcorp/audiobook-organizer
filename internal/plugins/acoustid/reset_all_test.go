@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/reset_all_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8b2f4a6c-1d3e-4f5a-9c7b-0e1a2b3c4d5f
-// last-edited: 2026-07-01
+// last-edited: 2026-07-06
 
 package acoustid
 
@@ -65,7 +65,15 @@ func newTestResetAllEmbeddingStore(t *testing.T) *database.EmbeddingStore {
 // on every file that has at least one non-empty segment, and leaves
 // already-clear files untouched while still counting only real clears.
 func TestResetAll_SlowPathClearsFingerprints(t *testing.T) {
-	files := []database.BookFile{
+	// AcoustIDSeg0..6 are stripped from BookFileCore entirely, so the
+	// candidate list carries only IDs and the real segment values live in
+	// the hydrated full row returned by GetBookFiles.
+	files := []database.BookFileCore{
+		{ID: "f1"},
+		{ID: "f2"}, // already clear
+		{ID: "f3"},
+	}
+	hydrateFiles := []database.BookFile{
 		{ID: "f1", AcoustIDSeg0: "AQADtAcSRY"},
 		{ID: "f2"}, // already clear
 		{ID: "f3", AcoustIDSeg3: "AQADtAcSRZ", AcoustIDSeg6: "AQADtAcSRA"},
@@ -74,8 +82,11 @@ func TestResetAll_SlowPathClearsFingerprints(t *testing.T) {
 	var mu sync.Mutex
 	var updates []string
 	store := &database.MockStore{
-		GetAllBookFilesFunc: func() ([]database.BookFile, error) {
+		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) {
 			return files, nil
+		},
+		GetBookFilesFunc: func(bookID string) ([]database.BookFile, error) {
+			return hydrateFiles, nil
 		},
 		UpdateBookFileFunc: func(id string, updated *database.BookFile) error {
 			mu.Lock()
@@ -140,7 +151,7 @@ func TestResetAll_DeletesCandidatesAcrossPages(t *testing.T) {
 	}
 
 	store := &database.MockStore{
-		GetAllBookFilesFunc: func() ([]database.BookFile, error) { return nil, nil },
+		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return nil, nil },
 	}
 	p := &Plugin{store: store, embeddingStore: emb}
 	r := &resetAllTestReporter{}
@@ -170,12 +181,12 @@ func TestResetAll_DeletesCandidatesAcrossPages(t *testing.T) {
 // context causes runResetAll to return a non-nil error promptly, relying on
 // RunItems's built-in ctx.Done() polling in the slow-path loop.
 func TestResetAll_CancelledContextReturnsError(t *testing.T) {
-	files := []database.BookFile{
-		{ID: "f1", AcoustIDSeg0: "AQADtAcSRY"},
-		{ID: "f2", AcoustIDSeg0: "AQADtAcSRZ"},
+	files := []database.BookFileCore{
+		{ID: "f1"},
+		{ID: "f2"},
 	}
 	store := &database.MockStore{
-		GetAllBookFilesFunc: func() ([]database.BookFile, error) { return files, nil },
+		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },
 		UpdateBookFileFunc: func(string, *database.BookFile) error {
 			t.Error("UpdateBookFile should not be called with a pre-cancelled context")
 			return nil

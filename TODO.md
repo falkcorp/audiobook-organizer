@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.65.0 -->
+<!-- version: 9.66.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-06 -->
 
@@ -17,6 +17,32 @@ future agent) can scan the entire workspace in one page.
 - [`docs/implementation-guide.md`](docs/implementation-guide.md) — integration guide for open items
 - [`docs/codebase-evaluation.md`](docs/codebase-evaluation.md) — 2026-04-30 codebase audit (12 issue groups, 38 bot-tasks)
 - Claude project memory at `~/.claude/projects/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/memory/` — items still to graduate here
+
+---
+
+## 🟠 PR-D: deluge import fingerprint-wipe (3 impls) — fast-follow after STOREFID W3 (2026-07-06)
+
+- **NEW finding** during STOREFID W3 caller audit. Three deluge import paths read a
+  BookFile from `GetBookFilesNeedingDelugeImport` (memdb-slim in prod) and write it
+  back via `UpdateBookFile`, wiping fingerprint **diagnostic** fields (the
+  `AcoustIDFingerprint` blob is guarded by PR-A #1839):
+  - `internal/deluge/import.go` `ImportToLibrary` (~L68-72)
+  - `internal/maintenance/jobs/bulk_deluge_import.go` `bdi_importToLibrary` (~L200-202)
+  - `internal/plugins/deluge/centralization.go` (~L144-146)
+- **Fix:** hydrate the full row via `GetBookFiles(bookID)` at each writeback point
+  (same shape as the W3 jobs). Do NOT make the getter return full via bulk hydrate —
+  `maxBooks` defaults to 0 (uncapped) and caps AFTER the getter, so a full-blob slice
+  would reintroduce the memdb RAM anti-pattern.
+- Root cause + census: `docs/audits/2026-07-05-updatebookfile-memdb-writeback-fingerprint-wipe.md`.
+
+## 🟡 Verify DurationSec invariant for the 3 PR-B fingerprint ops (2026-07-06)
+
+- The 3 rerouted ops (lsh_backfill / lsh_index_build / online_lookup) gate on
+  `AcoustIDFingerprintDurationSec > 0` as the memdb-safe proxy for "has a whole-file
+  fingerprint". This assumes `AcoustIDFingerprint set ⇒ DurationSec > 0`. **Run a prod
+  query** for `book_file` rows with a non-empty fingerprint blob but `DurationSec == 0`;
+  if any exist they are silently skipped — backfill `DurationSec` or broaden the gate.
+  Code comment in `internal/plugins/acoustid/online_lookup.go`.
 
 ---
 

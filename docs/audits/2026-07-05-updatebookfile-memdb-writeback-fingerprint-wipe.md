@@ -1,5 +1,5 @@
 <!-- file: docs/audits/2026-07-05-updatebookfile-memdb-writeback-fingerprint-wipe.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 3f9b1c22-7a4e-4d19-9c66-2e0a5b8d4471 -->
 <!-- last-edited: 2026-07-06 -->
 
@@ -68,6 +68,17 @@ no longer write a whole `BookFile` back, forcing a field-scoped update or a full
 PR-A's `AcoustIDFingerprint` guard stops the critical wipe for all four immediately; W3
 closes the diagnostic-field residue by making them field-scoped/hydrate.
 
+**W3 caller-audit correction (2026-07-06):** the `GetAllBookFilesCore` retype (W3/PR-C)
+compile-surfaced **two more direct writeback sites the original census under-classified** —
+both now on hydrate-mutate-update in W3:
+- `tag_backfill` (`internal/plugins/maintenance/tag_backfill.go`) — builds `pending` from the
+  slim list and writes via `BatchUpsertBookFiles`. The batch guard protects the
+  `AcoustIDFingerprint` blob but NOT the 3 diagnostic fields; originally listed as "safe".
+- `reset_all` slow path (`internal/plugins/acoustid/reset_all.go`) — writes back `AcoustIDSeg0..6`;
+  those fields are memdb-STRIPPED (not on Core), so the retype forces a hydrate to even read
+  them. Prod still uses the `ClearAllAcoustIDFingerprints` fast path (this path is mock/sqlite
+  only), so no prod exposure — but it is a writeback of stripped fields, not a pure test-fallback.
+
 ### HEAVY-READ — functional no-op under memdb (prod)  → PR-B
 | Op | file:line | Symptom |
 |---|---|---|
@@ -85,13 +96,36 @@ RAM blowup memdb prevents).
 `UpdateBookFile` path is gated behind a `*PebbleStore` type assertion for mock/sqlite
 tests; prod uses the bulk-clear path (`ClearAllAcoustIDFingerprints`). Unreachable in prod.
 
+### INDIRECT (via `GetBookFilesNeedingDelugeImport`) — NEW finding 2026-07-06, deferred to PR-D
+The original census scanned only **direct** `GetAllBookFiles` callers. `GetBookFilesNeedingDelugeImport`
+also returns the memdb-slim projection under prod, and **three deluge import paths** read a file
+struct from it and write it back via `UpdateBookFile`:
+| Path | file:line | mutates |
+|---|---|---|
+| shared `ImportToLibrary` | `internal/deluge/import.go` (~68-72) | `DelugeOriginalPath`, `FilePath`, `ImportedFromDelugeAt` |
+| `bulk_deluge_import` | `internal/maintenance/jobs/bulk_deluge_import.go` (`bdi_importToLibrary` ~200-202) | `ImportedFromDelugeAt` |
+| `deluge centralization` | `internal/plugins/deluge/centralization.go` (~144-146) | `ImportedFromDelugeAt` |
+
+Post-PR-A the `AcoustIDFingerprint` blob is guarded; the 3 diagnostic fields are still wiped for
+any fingerprinted file these paths import. **NOT fixed in W3** — W3 keeps
+`GetBookFilesNeedingDelugeImport` byte-identical (its non-memdb branch was re-pointed to the
+internal full `getAllBookFilesPebbleScan()`; the memdb branch is unchanged). Fix rides in a
+fast-follow **PR-D**: hydrate the full row at each of the three writeback points (same
+hydrate-mutate-update shape as the W3 jobs). Option Y (making the getter return full via a bulk
+hydrate) was rejected — `bulk_deluge_import`'s `maxBooks` defaults to 0 and caps AFTER the getter
+returns, so a full-blob slice of the whole un-imported subset would reintroduce the RAM anti-pattern.
+
 ## Fix sequencing
 
 1. **PR-A (shipped):** `AcoustIDFingerprint` preserve-on-empty guard on `UpdateBookFile` + two-direction regression test. Stops the critical wipe.
 2. **PR-B:** reroute the 3 HEAVY-READ fingerprint ops to proxy-then-hydrate (restores coverage).
 3. **PR-C (= STOREFID W3):** retype `GetAllBookFiles → []BookFileCore`; 13 LIGHT callers retype; the 4 writeback jobs move to field-scoped update/hydrate (closing the diagnostic residue). **W3 landmine: do NOT let the 4 writeback jobs use a `BookFileCore.ToBookFile()` bridge then write back — that reconstructs a nil-fingerprint `BookFile` and re-introduces the wipe (the guard only saves `AcoustIDFingerprint`, not diagnostics). Require field-scoped update or full hydrate.**
 
-## Full per-caller classification
-13 LIGHT, 3 HEAVY-READ, 4 HEAVY-WRITEBACK, 1 TEST-FALLBACK (of 21 external callers).
-`tag_backfill` + `backfill_file_hashes` write back but via the GUARDED
-`BatchUpsertBookFiles` / named-field `SetBookFileHash` respectively — safe.
+## Full per-caller classification (revised after W3 compile audit, 2026-07-06)
+Direct `GetAllBookFiles` callers: **~11 LIGHT**, 3 HEAVY-READ, **6 HEAVY-WRITEBACK**
+(recompute_itunes_paths, enrich_book_files, fix_book_file_paths, repair_missing_files,
+**tag_backfill**, **reset_all** slow path), all moved to hydrate-mutate-update in W3.
+`backfill_file_hashes` writes via the named-field `SetBookFileHash` — safe, stays LIGHT.
+`fs_regroup_xml` reads only `BookID` from the slim list; its `UpdateBookFile` writes a
+separately-fetched `GetBookFileByPath` full row — safe, stays LIGHT. Plus 3 INDIRECT deluge
+vectors via `GetBookFilesNeedingDelugeImport` (see above) — deferred to PR-D.

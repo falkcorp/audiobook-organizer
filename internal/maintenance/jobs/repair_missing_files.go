@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/repair_missing_files.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: f1a7b5e6-8c9d-0e1f-2a3b-4c5d6e7f8a90
-// last-edited: 2026-06-16
+// last-edited: 2026-07-06
 
 package jobs
 
@@ -45,9 +45,9 @@ func (j *repairMissingFilesJob) Run(ctx context.Context, store database.Store, r
 
 	searchRoots := rmfr_searchRoots()
 
-	allFiles, err := store.GetAllBookFiles()
+	allFiles, err := store.GetAllBookFilesCore()
 	if err != nil {
-		return fmt.Errorf("GetAllBookFiles: %w", err)
+		return fmt.Errorf("GetAllBookFilesCore: %w", err)
 	}
 	allBooks, err := store.GetAllBooks(0, 0)
 	if err != nil {
@@ -72,7 +72,7 @@ func (j *repairMissingFilesJob) Run(ctx context.Context, store database.Store, r
 	}
 
 	// Collect candidates.
-	var candidates []database.BookFile
+	var candidates []database.BookFileCore
 	for i := range allFiles {
 		f := &allFiles[i]
 		if f.FilePath == "" || f.Missing {
@@ -93,7 +93,7 @@ func (j *repairMissingFilesJob) Run(ctx context.Context, store database.Store, r
 	for _, r := range existingResults {
 		done[r.BookID] = true
 	}
-	var work []database.BookFile
+	var work []database.BookFileCore
 	for _, f := range candidates {
 		if !done[f.ID] {
 			work = append(work, f)
@@ -170,7 +170,7 @@ func (j *repairMissingFilesJob) Run(ctx context.Context, store database.Store, r
 	var completed int64 = int64(alreadyDone)
 	var progressMu sync.Mutex
 
-	workCh := make(chan database.BookFile, len(work))
+	workCh := make(chan database.BookFileCore, len(work))
 	for _, f := range work {
 		workCh <- f
 	}
@@ -244,9 +244,13 @@ type rmfr_result struct {
 }
 
 // rmfr_repairOne tries four escalating strategies and returns a result.
-// Only calls UpdateBookFile — never creates new Book or BookFile rows.
+// Only calls UpdateBookFile — never creates new Book or BookFile rows. On a
+// successful match it hydrates the full row via GetBookFiles(f.BookID) and
+// writes THAT — never a hand-built BookFile{} from the Core candidate, which
+// would wipe the stored fingerprint. See
+// docs/audits/2026-07-05-updatebookfile-memdb-writeback-fingerprint-wipe.md.
 func rmfr_repairOne(
-	f database.BookFile,
+	f database.BookFileCore,
 	metaByBook map[string]rmfr_bookMeta,
 	pidToLocation map[string]string,
 	itunesOpts itunes.ImportOptions,
@@ -530,16 +534,36 @@ func rmfr_repairOne(
 	}
 
 	fi, _ := os.Stat(candidate)
-	f.FilePath = candidate
-	f.OriginalFilename = filepath.Base(candidate)
-	f.Missing = false
+
+	// Hydrate the full row and mutate/write THAT — see the doc comment above.
+	full, herr := store.GetBookFiles(f.BookID)
+	if herr != nil {
+		res.Error = herr.Error()
+		slog.Warn("repair-missing-files hydrate failed", "opID", opID, "f", f.ID, "herr", herr)
+		return res
+	}
+	var target *database.BookFile
+	for j := range full {
+		if full[j].ID == f.ID {
+			target = &full[j]
+			break
+		}
+	}
+	if target == nil {
+		res.Error = "hydrate: row not found"
+		slog.Warn("repair-missing-files hydrate: row not found", "opID", opID, "f", f.ID)
+		return res
+	}
+	target.FilePath = candidate
+	target.OriginalFilename = filepath.Base(candidate)
+	target.Missing = false
 	if fi != nil {
-		f.FileSize = fi.Size()
+		target.FileSize = fi.Size()
 	}
 	if ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(candidate), ".")); ext != "" {
-		f.Format = ext
+		target.Format = ext
 	}
-	if upErr := store.UpdateBookFile(f.ID, &f); upErr != nil {
+	if upErr := store.UpdateBookFile(target.ID, target); upErr != nil {
 		res.Error = upErr.Error()
 		slog.Warn("repair-missing-files UpdateBookFile", "opID", opID, "f", f.ID, "upErr", upErr)
 	} else {
