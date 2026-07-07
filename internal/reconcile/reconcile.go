@@ -1,5 +1,5 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-07-07
 
@@ -624,11 +624,12 @@ func CountMatchType(matches []ReconcileMatch, matchType string) int {
 func CleanupDuplicateVersionGroups(store Store, rootDir string, dryRun bool) (*VersionGroupCleanupResult, error) {
 	result := &VersionGroupCleanupResult{}
 
-	// Fetch all books and group by version_group_id
-	versionGroups := make(map[string][]database.Book)
+	// Fetch all books and group by version_group_id. Core-typed: grouping and
+	// dup-selection only need ID/FilePath/VersionGroupID, all Core-safe fields.
+	versionGroups := make(map[string][]database.BookCore)
 	const pageSize = 1000
 	for offset := 0; ; offset += pageSize {
-		books, err := store.GetAllBooks(pageSize, offset)
+		books, err := store.GetAllBooksCore(pageSize, offset)
 		if err != nil {
 			return nil, fmt.Errorf("failed to fetch books: %w", err)
 		}
@@ -649,7 +650,7 @@ func CleanupDuplicateVersionGroups(store Store, rootDir string, dryRun bool) (*V
 		}
 
 		// Separate into originals (non-primary, outside library) and organized copies (in library)
-		var originals, libraryCopies []database.Book
+		var originals, libraryCopies []database.BookCore
 		for _, m := range members {
 			if rootDir != "" && strings.HasPrefix(m.FilePath, rootDir) {
 				libraryCopies = append(libraryCopies, m)
@@ -698,16 +699,28 @@ func CleanupDuplicateVersionGroups(store Store, rootDir string, dryRun bool) (*V
 			result.DuplicatesRemoved++
 		}
 
-		// Ensure the kept library copy is primary and the original(s) are non-primary
+		// Ensure the kept library copy is primary and the original(s) are non-primary.
+		// Hydrate each target via GetBookByID before writing back — kept/orig are
+		// Core (slim) values here, and writing a slim struct through UpdateBook
+		// would wipe the denormalized Author/Series on Pebble.
 		if !dryRun {
 			isPrimary := true
 			isNotPrimary := false
-			kept := libraryCopies[keepIdx]
-			kept.IsPrimaryVersion = &isPrimary
-			store.UpdateBook(kept.ID, &kept)
-			for _, orig := range originals {
+			keptCore := libraryCopies[keepIdx]
+			if kept, err := store.GetBookByID(keptCore.ID); err != nil || kept == nil {
+				slog.Warn("version-group cleanup failed to hydrate kept book", "kept", keptCore.ID, "err", err)
+			} else {
+				kept.IsPrimaryVersion = &isPrimary
+				store.UpdateBook(kept.ID, kept)
+			}
+			for _, origCore := range originals {
+				orig, err := store.GetBookByID(origCore.ID)
+				if err != nil || orig == nil {
+					slog.Warn("version-group cleanup failed to hydrate original book", "orig", origCore.ID, "err", err)
+					continue
+				}
 				orig.IsPrimaryVersion = &isNotPrimary
-				store.UpdateBook(orig.ID, &orig)
+				store.UpdateBook(orig.ID, orig)
 			}
 		}
 	}
@@ -718,7 +731,7 @@ func CleanupDuplicateVersionGroups(store Store, rootDir string, dryRun bool) (*V
 // FindBrokenSegmentBooks finds books whose segment files don't exist on disk
 // and optionally marks them as needs_review.
 func FindBrokenSegmentBooks(store Store, dryRun bool) (*BrokenSegmentResult, error) {
-	allBooks, err := store.GetAllBooks(100000, 0)
+	allBooks, err := store.GetAllBooksCore(100000, 0)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get books: %w", err)
 	}
@@ -771,13 +784,20 @@ func FindBrokenSegmentBooks(store Store, dryRun bool) (*BrokenSegmentResult, err
 		result.BrokenBooks++
 
 		if !dryRun {
-			book.LibraryState = &needsReview
-			book.MarkedForDeletion = boolPtr(true)
-			book.MarkedForDeletionAt = &now
-			if _, uerr := store.UpdateBook(book.ID, &book); uerr != nil {
-				slog.Warn("failed to mark broken book", "book", book.ID, "uerr", uerr)
+			// Hydrate before writeback — book is a Core (slim) value here, and
+			// writing it straight through UpdateBook would wipe Author/Series.
+			full, ferr := store.GetBookByID(book.ID)
+			if ferr != nil || full == nil {
+				slog.Warn("failed to hydrate broken book for update", "book", book.ID, "ferr", ferr)
 			} else {
-				result.MarkedForReview++
+				full.LibraryState = &needsReview
+				full.MarkedForDeletion = boolPtr(true)
+				full.MarkedForDeletionAt = &now
+				if _, uerr := store.UpdateBook(full.ID, full); uerr != nil {
+					slog.Warn("failed to mark broken book", "book", full.ID, "uerr", uerr)
+				} else {
+					result.MarkedForReview++
+				}
 			}
 		}
 	}
@@ -790,11 +810,12 @@ func FindBrokenSegmentBooks(store Store, dryRun bool) (*BrokenSegmentResult, err
 func MergeNoVGDuplicates(store Store, rootDir string, dryRun bool) (*MergeDuplicatesResult, error) {
 	result := &MergeDuplicatesResult{}
 
-	// Load all books in pages
-	var allBooks []database.Book
+	// Load all books in pages. Core-typed: grouping/keeper-selection only needs
+	// ID/Title/FilePath/VersionGroupID/IsPrimaryVersion, all Core-safe fields.
+	var allBooks []database.BookCore
 	pageSize := 5000
 	for offset := 0; ; offset += pageSize {
-		books, err := store.GetAllBooks(pageSize, offset)
+		books, err := store.GetAllBooksCore(pageSize, offset)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get books: %w", err)
 		}
@@ -805,8 +826,8 @@ func MergeNoVGDuplicates(store Store, rootDir string, dryRun bool) (*MergeDuplic
 	}
 
 	// Index VG primary books by normalized title
-	vgPrimaryByTitle := make(map[string]*database.Book)
-	var noVGBooks []database.Book
+	vgPrimaryByTitle := make(map[string]*database.BookCore)
+	var noVGBooks []database.BookCore
 
 	for i := range allBooks {
 		b := &allBooks[i]
@@ -835,23 +856,60 @@ func MergeNoVGDuplicates(store Store, rootDir string, dryRun bool) (*MergeDuplic
 		return err
 	}
 
+	// hydrated caches full (heavy-field) Book rows fetched via GetBookByID, keyed
+	// by ID. MergeBookMetadata reads/writes heavy fields (e.g. Description) that
+	// BookCore does not carry, and every writeback below MUST target a hydrated
+	// full row, never a Core value, or Author/Series would be wiped on Pebble.
+	// The shared cache also preserves the original in-memory-accumulation
+	// semantics: when several dupes merge into the same primary/keeper, later
+	// merges see the earlier ones' effects (matches pre-refactor pointer reuse).
+	hydrated := make(map[string]*database.Book)
+	hydrate := func(id string) (*database.Book, error) {
+		if b, ok := hydrated[id]; ok {
+			return b, nil
+		}
+		full, err := store.GetBookByID(id)
+		if err != nil || full == nil {
+			return nil, err
+		}
+		hydrated[id] = full
+		return full, nil
+	}
+
 	// Phase 1: Match no-VG books against existing VG primaries
 	handled := make(map[string]bool)
 
 	for i := range noVGBooks {
-		dupe := &noVGBooks[i]
-		normTitle := strings.TrimSpace(strings.ToLower(dupe.Title))
-		primary, found := vgPrimaryByTitle[normTitle]
+		dupeCore := &noVGBooks[i]
+		normTitle := strings.TrimSpace(strings.ToLower(dupeCore.Title))
+		primaryCore, found := vgPrimaryByTitle[normTitle]
 		if !found {
 			continue
 		}
 
-		handled[dupe.ID] = true
+		handled[dupeCore.ID] = true
 		result.MatchedToVG++
 		entry := MergeDuplicateEntry{
-			DuplicateID: dupe.ID,
-			PrimaryID:   primary.ID,
-			Title:       dupe.Title,
+			DuplicateID: dupeCore.ID,
+			PrimaryID:   primaryCore.ID,
+			Title:       dupeCore.Title,
+		}
+
+		primary, perr := hydrate(primaryCore.ID)
+		if perr != nil || primary == nil {
+			slog.Warn("merge-dupes failed to hydrate primary", "primary", primaryCore.ID, "err", perr)
+			entry.Action = "error"
+			result.Errors++
+			result.Details = append(result.Details, entry)
+			continue
+		}
+		dupe, derr := hydrate(dupeCore.ID)
+		if derr != nil || dupe == nil {
+			slog.Warn("merge-dupes failed to hydrate dupe", "dupe", dupeCore.ID, "err", derr)
+			entry.Action = "error"
+			result.Errors++
+			result.Details = append(result.Details, entry)
+			continue
 		}
 
 		merged := MergeBookMetadata(primary, dupe)
@@ -893,7 +951,7 @@ func MergeNoVGDuplicates(store Store, rootDir string, dryRun bool) (*MergeDuplic
 	}
 
 	// Phase 2: Deduplicate among remaining no-VG orphans (same title → keep one, delete rest)
-	orphansByTitle := make(map[string][]*database.Book)
+	orphansByTitle := make(map[string][]*database.BookCore)
 	for i := range noVGBooks {
 		b := &noVGBooks[i]
 		if handled[b.ID] {
@@ -922,17 +980,31 @@ func MergeNoVGDuplicates(store Store, rootDir string, dryRun bool) (*MergeDuplic
 			}
 		}
 
-		keeper := group[bestIdx]
-		for i, dupe := range group {
+		keeperCore := group[bestIdx]
+		keeper, kerr := hydrate(keeperCore.ID)
+		if kerr != nil || keeper == nil {
+			slog.Warn("merge-self-dupes failed to hydrate keeper", "keeper", keeperCore.ID, "err", kerr)
+			continue
+		}
+		for i, dupeCore := range group {
 			if i == bestIdx {
 				continue
 			}
 
 			result.SelfDuplicates++
 			entry := MergeDuplicateEntry{
-				DuplicateID: dupe.ID,
+				DuplicateID: dupeCore.ID,
 				PrimaryID:   keeper.ID,
-				Title:       dupe.Title,
+				Title:       dupeCore.Title,
+			}
+
+			dupe, derr := hydrate(dupeCore.ID)
+			if derr != nil || dupe == nil {
+				slog.Warn("merge-self-dupes failed to hydrate dupe", "dupe", dupeCore.ID, "err", derr)
+				entry.Action = "error"
+				result.Errors++
+				result.Details = append(result.Details, entry)
+				continue
 			}
 
 			merged := MergeBookMetadata(keeper, dupe)
@@ -1109,10 +1181,10 @@ func MergeBookMetadata(dst, src *database.Book) []string {
 func AssignOrphanVGs(store Store, rootDir string) (*AssignVGResult, error) {
 	result := &AssignVGResult{}
 
-	var allBooks []database.Book
+	var allBooks []database.BookCore
 	pageSize := 5000
 	for offset := 0; ; offset += pageSize {
-		books, err := store.GetAllBooks(pageSize, offset)
+		books, err := store.GetAllBooksCore(pageSize, offset)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get books: %w", err)
 		}
@@ -1123,18 +1195,27 @@ func AssignOrphanVGs(store Store, rootDir string) (*AssignVGResult, error) {
 	}
 
 	for i := range allBooks {
-		b := &allBooks[i]
+		c := &allBooks[i]
 		result.TotalChecked++
 
 		// Skip books that already have a VG
-		if b.VersionGroupID != nil && *b.VersionGroupID != "" {
+		if c.VersionGroupID != nil && *c.VersionGroupID != "" {
 			result.AlreadyHasVG++
 			continue
 		}
 
 		// Only process books in the library directory
-		if rootDir == "" || !strings.HasPrefix(b.FilePath, rootDir) {
+		if rootDir == "" || !strings.HasPrefix(c.FilePath, rootDir) {
 			result.NotInLibrary++
+			continue
+		}
+
+		// Hydrate before writeback — c is a Core (slim) value here, and writing
+		// it straight through UpdateBook would wipe Author/Series.
+		b, herr := store.GetBookByID(c.ID)
+		if herr != nil || b == nil {
+			slog.Warn("assign-orphan-vgs failed to hydrate book", "book", c.ID, "herr", herr)
+			result.Errors++
 			continue
 		}
 

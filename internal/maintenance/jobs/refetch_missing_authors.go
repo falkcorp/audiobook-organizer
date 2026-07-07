@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/refetch_missing_authors.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: a1000012-0000-0000-0000-000000000012
-// last-edited: 2026-07-06
+// last-edited: 2026-07-07
 
 package jobs
 
@@ -36,14 +36,16 @@ func (j *refetchMissingAuthorsJob) CanResume() bool    { return true }
 func (j *refetchMissingAuthorsJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, dryRun bool) error {
 	opID := maintenance.OperationIDFromCtx(ctx)
 
-	// Load all books without an author.
-	allBooks, err := store.GetAllBooks(0, 0)
+	// Load all books without an author. Core-typed: the filter/lookup below
+	// only needs AuthorID/ID/Title/FilePath, all Core-safe fields; the actual
+	// writeback hydrates a full row (see below) so it never wipes Author/Series.
+	allBooks, err := store.GetAllBooksCore(0, 0)
 	if err != nil {
-		return fmt.Errorf("GetAllBooks: %w", err)
+		return fmt.Errorf("GetAllBooksCore: %w", err)
 	}
 
 	// Filter to only books with no author.
-	var books []database.Book
+	var books []database.BookCore
 	for i := range allBooks {
 		if allBooks[i].AuthorID == nil {
 			books = append(books, allBooks[i])
@@ -164,9 +166,17 @@ func (j *refetchMissingAuthorsJob) Run(ctx context.Context, store database.Store
 			slog.Info("refetch-missing-authors created author", "opID", opID, "authorName", authorName, "authorID", author.ID)
 		}
 
-		b.AuthorID = &author.ID
-		if _, err := store.UpdateBook(b.ID, b); err != nil {
-			slog.Error("failed to update book", "b", b.ID, "err", err)
+		// Hydrate before writeback — b is Core (slim); writing it straight
+		// through UpdateBook would wipe the denormalized Author/Series.
+		full, herr := store.GetBookByID(b.ID)
+		if herr != nil || full == nil {
+			slog.Error("failed to hydrate book for update", "b", b.ID, "err", herr)
+			errors++
+			continue
+		}
+		full.AuthorID = &author.ID
+		if _, err := store.UpdateBook(full.ID, full); err != nil {
+			slog.Error("failed to update book", "b", full.ID, "err", err)
 			errors++
 			continue
 		}

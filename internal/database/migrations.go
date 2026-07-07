@@ -1,7 +1,7 @@
 // file: internal/database/migrations.go
-// version: 1.40.0
+// version: 1.41.0
 // guid: 9a8b7c6d-5e4f-3d2c-1b0a-9f8e7d6c5b4a
-// last-edited: 2026-06-10
+// last-edited: 2026-07-07
 
 package database
 
@@ -612,20 +612,27 @@ func migration014Up(store Store) error {
 
 // migration014UpPebble handles the corrupted-path check for PebbleDB stores.
 func migration014UpPebble(store Store) error {
-	books, err := store.GetAllBooks(1000000, 0)
+	books, err := store.GetAllBooksCore(1000000, 0)
 	if err != nil {
 		return fmt.Errorf("migration 14: failed to list books: %w", err)
 	}
 
 	flagged := 0
-	for _, book := range books {
-		if !strings.Contains(book.FilePath, "{") {
+	for _, core := range books {
+		if !strings.Contains(core.FilePath, "{") {
 			continue
 		}
-		// FilePath contains a literal brace — flag for review
+		// FilePath contains a literal brace — flag for review. Hydrate before
+		// writeback: core is Core (slim); writing it straight through
+		// UpdateBook would wipe the denormalized Author/Series on Pebble.
+		book, hydrateErr := store.GetBookByID(core.ID)
+		if hydrateErr != nil || book == nil {
+			slog.Info("- Warning could not hydrate book", "value", core.ID, "path", core.FilePath, "error", hydrateErr)
+			continue
+		}
 		state := "needs_review"
 		book.LibraryState = &state
-		if _, updateErr := store.UpdateBook(book.ID, &book); updateErr != nil {
+		if _, updateErr := store.UpdateBook(book.ID, book); updateErr != nil {
 			slog.Info("- Warning could not flag book", "value", book.ID, "path", book.FilePath, "error", updateErr)
 			continue
 		}

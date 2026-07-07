@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/fix_library_states_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e2f3a4b5-c6d7-8901-efab-234567890567
-// last-edited: 2026-05-05
+// last-edited: 2026-07-07
 
 // Package jobs_test exercises the fix-library-states maintenance job.
 package jobs_test
@@ -44,11 +44,15 @@ func TestFixLibraryStatesJob_DryRun_NoUpdate(t *testing.T) {
 
 	var updateCalled bool
 	store := &database.MockStore{
-		GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) {
+		GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) {
 			if offset > 0 {
 				return nil, nil
 			}
-			return []database.Book{book}, nil
+			return []database.BookCore{book.Core()}, nil
+		},
+		GetBookByIDFunc: func(id string) (*database.Book, error) {
+			b := book
+			return &b, nil
 		},
 		UpdateBookFunc: func(id string, b *database.Book) (*database.Book, error) {
 			updateCalled = true
@@ -75,11 +79,15 @@ func TestFixLibraryStatesJob_Apply_UpdatesBook(t *testing.T) {
 
 	var updatedState string
 	store := &database.MockStore{
-		GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) {
+		GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) {
 			if offset > 0 {
 				return nil, nil
 			}
-			return []database.Book{book}, nil
+			return []database.BookCore{book.Core()}, nil
+		},
+		GetBookByIDFunc: func(id string) (*database.Book, error) {
+			b := book
+			return &b, nil
 		},
 		UpdateBookFunc: func(id string, b *database.Book) (*database.Book, error) {
 			if b.LibraryState != nil {
@@ -108,11 +116,15 @@ func TestFixLibraryStatesJob_NoChanges_WhenStateCorrect(t *testing.T) {
 
 	var updateCalled bool
 	store := &database.MockStore{
-		GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) {
+		GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) {
 			if offset > 0 {
 				return nil, nil
 			}
-			return []database.Book{book}, nil
+			return []database.BookCore{book.Core()}, nil
+		},
+		GetBookByIDFunc: func(id string) (*database.Book, error) {
+			b := book
+			return &b, nil
 		},
 		UpdateBookFunc: func(id string, b *database.Book) (*database.Book, error) {
 			updateCalled = true
@@ -142,12 +154,16 @@ func TestFixLibraryStatesJob_Cancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
 
+	core := make([]database.BookCore, len(books))
+	for i := range books {
+		core[i] = books[i].Core()
+	}
 	store := &database.MockStore{
-		GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) {
+		GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) {
 			if offset > 0 {
 				return nil, nil
 			}
-			return books, nil
+			return core, nil
 		},
 	}
 

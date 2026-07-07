@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_backfill.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-06-23
+// last-edited: 2026-07-07
 
 package maintenance
 
@@ -21,9 +21,12 @@ type titleBackfillParams struct {
 	DryRun bool `json:"dryRun"`
 }
 
-// pendingUpdate holds a book whose title needs stripping.
+// pendingUpdate holds a book whose title needs stripping. book is Core (slim)
+// — Title/ID are Core-safe fields, and the actual writeback in phase 2
+// hydrates a full row via GetBookByID before applying newTitle, so it never
+// wipes the denormalized Author/Series on Pebble.
 type pendingUpdate struct {
-	book     database.Book
+	book     database.BookCore
 	newTitle string
 }
 
@@ -80,9 +83,9 @@ func (p *Plugin) runTitleBackfill(ctx context.Context, raw json.RawMessage, repo
 			return ctx.Err()
 		}
 
-		books, err := store.GetAllBooks(pageSize, offset)
+		books, err := store.GetAllBooksCore(pageSize, offset)
 		if err != nil {
-			return fmt.Errorf("GetAllBooks offset=%d: %w", offset, err)
+			return fmt.Errorf("GetAllBooksCore offset=%d: %w", offset, err)
 		}
 		if len(books) == 0 {
 			break
@@ -149,8 +152,17 @@ func (p *Plugin) runTitleBackfill(ctx context.Context, raw json.RawMessage, repo
 			"book %s: %q → %q", u.book.ID, u.book.Title, u.newTitle))
 
 		if !params.DryRun {
-			u.book.Title = u.newTitle
-			if _, err := store.UpdateBook(u.book.ID, &u.book); err != nil {
+			// Hydrate before writeback — u.book is Core (slim); writing it
+			// straight through UpdateBook would wipe Author/Series.
+			full, herr := store.GetBookByID(u.book.ID)
+			if herr != nil || full == nil {
+				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
+					"book %s: hydrate failed: %v", u.book.ID, herr))
+				errCount++
+				continue
+			}
+			full.Title = u.newTitle
+			if _, err := store.UpdateBook(full.ID, full); err != nil {
 				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
 					"book %s: UpdateBook failed: %v", u.book.ID, err))
 				errCount++

@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_metadata_source_hash_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
-// last-edited: 2026-05-16
+// last-edited: 2026-07-07
 
 package jobs_test
 
@@ -42,11 +42,11 @@ func TestBackfillMetadataSourceHashJob_SkipsAlreadyHashed(t *testing.T) {
 	}
 	var updateCalled bool
 	store := &database.MockStore{
-		GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) {
+		GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) {
 			if offset > 0 {
 				return nil, nil
 			}
-			return []database.Book{book}, nil
+			return []database.BookCore{book.Core()}, nil
 		},
 		UpdateBookFunc: func(id string, b *database.Book) (*database.Book, error) {
 			updateCalled = true
@@ -64,11 +64,11 @@ func TestBackfillMetadataSourceHashJob_SkipsNilSourceAndID(t *testing.T) {
 	book := database.Book{ID: "book-noid", Title: "No Source"}
 	var updateCalled bool
 	store := &database.MockStore{
-		GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) {
+		GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) {
 			if offset > 0 {
 				return nil, nil
 			}
-			return []database.Book{book}, nil
+			return []database.BookCore{book.Core()}, nil
 		},
 		UpdateBookFunc: func(id string, b *database.Book) (*database.Book, error) {
 			updateCalled = true
@@ -93,11 +93,15 @@ func TestBackfillMetadataSourceHashJob_HashesAudibleBook(t *testing.T) {
 	}
 	var writtenHash string
 	store := &database.MockStore{
-		GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) {
+		GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) {
 			if offset > 0 {
 				return nil, nil
 			}
-			return []database.Book{book}, nil
+			return []database.BookCore{book.Core()}, nil
+		},
+		GetBookByIDFunc: func(id string) (*database.Book, error) {
+			b := book
+			return &b, nil
 		},
 		UpdateBookFunc: func(id string, b *database.Book) (*database.Book, error) {
 			if b.MetadataSourceHash != nil {
@@ -126,11 +130,11 @@ func TestBackfillMetadataSourceHashJob_DryRun(t *testing.T) {
 	}
 	var updateCalled bool
 	store := &database.MockStore{
-		GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) {
+		GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) {
 			if offset > 0 {
 				return nil, nil
 			}
-			return []database.Book{book}, nil
+			return []database.BookCore{book.Core()}, nil
 		},
 		UpdateBookFunc: func(id string, b *database.Book) (*database.Book, error) {
 			updateCalled = true
@@ -147,9 +151,9 @@ func TestBackfillMetadataSourceHashJob_DryRun(t *testing.T) {
 func TestBackfillMetadataSourceHashJob_Cancellation(t *testing.T) {
 	src := "audible"
 	asin := "B000000001"
-	books := make([]database.Book, 5)
+	books := make([]database.BookCore, 5)
 	for i := range books {
-		books[i] = database.Book{
+		books[i] = database.BookCore{
 			ID:             fmt.Sprintf("b%d", i),
 			Title:          "Book",
 			MetadataSource: &src,
@@ -157,7 +161,7 @@ func TestBackfillMetadataSourceHashJob_Cancellation(t *testing.T) {
 		}
 	}
 	store := &database.MockStore{
-		GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) {
+		GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) {
 			if offset > 0 {
 				return nil, nil
 			}

@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_metadata_source_hash.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: a1000015-0000-0000-0000-000000000015
-// last-edited: 2026-05-01
+// last-edited: 2026-07-07
 
 package jobs
 
@@ -31,7 +31,7 @@ func (j *backfillMetadataSourceHashJob) Description() string {
 }
 func (j *backfillMetadataSourceHashJob) CanResume() bool { return false }
 func (j *backfillMetadataSourceHashJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, dryRun bool) error {
-	books, err := store.GetAllBooks(0, 0)
+	books, err := store.GetAllBooksCore(0, 0)
 	if err != nil {
 		return err
 	}
@@ -54,9 +54,15 @@ func (j *backfillMetadataSourceHashJob) Run(ctx context.Context, store database.
 		sum := sha256.Sum256([]byte(raw))
 		hash := fmt.Sprintf("%x", sum)
 		if !dryRun {
-			updBook := *book
-			updBook.MetadataSourceHash = &hash
-			if _, uerr := store.UpdateBook(book.ID, &updBook); uerr != nil {
+			// Hydrate before writeback — book is Core (slim); writing it
+			// straight through UpdateBook would wipe Author/Series.
+			full, herr := store.GetBookByID(book.ID)
+			if herr != nil || full == nil {
+				slog.Error("backfill-metadata-source-hash hydrate failed", "id", book.ID, "err", herr)
+				continue
+			}
+			full.MetadataSourceHash = &hash
+			if _, uerr := store.UpdateBook(full.ID, full); uerr != nil {
 				msg := uerr.Error()
 				slog.Error("backfill-metadata-source-hash UpdateBook failed", "details", msg)
 				continue
@@ -69,7 +75,7 @@ func (j *backfillMetadataSourceHashJob) Run(ctx context.Context, store database.
 	return nil
 }
 
-func bookMetadataSourceAndID(book *database.Book) (string, string) {
+func bookMetadataSourceAndID(book *database.BookCore) (string, string) {
 	if book.MetadataSource == nil {
 		return "", ""
 	}

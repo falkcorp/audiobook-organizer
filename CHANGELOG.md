@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.114.0 -->
+<!-- version: 3.115.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-07 -->
 
@@ -8,6 +8,30 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 7, 2026 - refactor(store): migrate GetAllBooks writeback/DUAL callers to hydrate (STOREFID W5b)
+
+- **`refactor(store)`** — migrated the **12 remaining `GetAllBooks` writeback/DUAL call sites**
+  (across 8 files) to `GetAllBooksCore` + hydrate-on-writeback, the second W5 batch after W5a's
+  45 mechanically-safe sites. Files: `database/migrations.go`, `reconcile/reconcile.go` (4 sites),
+  `itunes/service/importer.go` (2), and `maintenance/jobs/{backfill_metadata_source_hash,
+  fix_library_states,refetch_missing_authors,relink_missing_to_itunes}.go` +
+  `plugins/maintenance/title_backfill.go` (1 each). Package-local only — no interface / mock
+  signature change (`GetAllBooksCore` and `GetBookByID` already exist from prior waves).
+- **Data-loss vector closed (bounded).** Each of these loops iterated the whole library from the
+  memdb-slim `GetAllBooks` projection and wrote a page-sourced struct straight back through
+  `UpdateBook`, wiping the denormalized `Author`/`Series` (`db:"-"`, the 2 heavy Book fields NOT
+  covered by `UpdateBook`'s STOR-1 preserve-on-empty guard; the other 7 —
+  Description/VersionNotes/BookSig* — were already guarded). Every site now hydrates the full row
+  via `GetBookByID`, mutates only its target field, and writes the hydrated struct — never a
+  `BookCore`-derived or hand-built `Book{}` (both would compile and both would wipe). Severity is
+  bounded to Author/Series, but those are persisted and read elsewhere, so it was a real wipe.
+- **`reconcile.MergeNoVGDuplicates`** additionally routed `MergeBookMetadata` (which reads/writes
+  the heavy `Description` field) and `softDelete` (a full-struct writeback) through an ID-keyed
+  `hydrate()` cache, preserving the pre-refactor in-memory accumulation semantics (repeated merges
+  into the same primary/keeper still see earlier merges) while guaranteeing every write targets a
+  hydrated full row. `go build`, `go vet`, and the `-race` suite for all five affected packages
+  pass; test mocks migrated to `GetAllBooksCoreFunc` + `GetBookByIDFunc` stubs.
 
 #### July 7, 2026 - refactor(store): add GetAllBooksCore, migrate safe callers (STOREFID W5a)
 

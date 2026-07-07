@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/relink_missing_to_itunes.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: e0f6a4d5-7b8c-9d0e-1f2a-3b4c5d6e7f80
-// last-edited: 2026-06-16
+// last-edited: 2026-07-07
 
 package jobs
 
@@ -54,9 +54,9 @@ func (j *relinkMissingToITunesJob) Run(ctx context.Context, store database.Store
 		return fmt.Errorf("root_dir is not configured")
 	}
 
-	allBooks, err := store.GetAllBooks(0, 0)
+	allBooks, err := store.GetAllBooksCore(0, 0)
 	if err != nil {
-		return fmt.Errorf("GetAllBooks: %w", err)
+		return fmt.Errorf("GetAllBooksCore: %w", err)
 	}
 
 	reporter.SetTotal(len(allBooks))
@@ -71,14 +71,25 @@ func (j *relinkMissingToITunesJob) Run(ctx context.Context, store database.Store
 		}
 		reporter.Increment()
 
-		book := &allBooks[i]
-		fp := book.FilePath
+		core := &allBooks[i]
+		fp := core.FilePath
 		if !strings.HasPrefix(fp, organizerRoot) {
 			skipped++
 			continue
 		}
 		if _, err := os.Stat(fp); err == nil {
 			skipped++
+			continue
+		}
+
+		// Hydrate before further processing — DUAL site: Author (a heavy
+		// field) is read below AND the eventual writeback must never persist
+		// a slim struct (that would wipe Author/Series on Pebble). A single
+		// hydrate serves both needs.
+		book, herr := store.GetBookByID(core.ID)
+		if herr != nil || book == nil {
+			slog.Warn("relink-missing-to-itunes failed to hydrate book", "book", core.ID, "herr", herr)
+			unresolved++
 			continue
 		}
 
