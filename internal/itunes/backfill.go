@@ -1,7 +1,7 @@
 // file: internal/itunes/backfill.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: b8c9d0e1-f2a3-b4c5-d6e7-f8a9b0c1d2e3
-// last-edited: 2026-06-23
+// last-edited: 2026-07-07
 
 package itunes
 
@@ -16,7 +16,9 @@ import (
 
 // ExternalIDBackfillStore defines the store interface needed for external ID backfill.
 type ExternalIDBackfillStore interface {
-	GetAllBooks(limit, offset int) ([]database.Book, error)
+	// GetAllBooksCore returns the memdb-slim projection — the backfill loops
+	// only read Core-safe fields (ITunesPersistentID, ID) off each book.
+	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
 	GetBookFiles(bookID string) ([]database.BookFile, error)
 	CreateExternalIDMapping(mapping *database.ExternalIDMapping) error
 	BulkCreateExternalIDMappings(mappings []database.ExternalIDMapping) error
@@ -51,7 +53,7 @@ func BackfillExternalIDs(ctx context.Context, store ExternalIDBackfillStore) err
 			slog.Info("external ID backfill canceled at offset after mappings", "offset", offset, "backfilled", backfilled, "err", err)
 			return nil
 		}
-		books, err := store.GetAllBooks(10000, offset)
+		books, err := store.GetAllBooksCore(10000, offset)
 		if err != nil || len(books) == 0 {
 			break
 		}
@@ -148,7 +150,7 @@ func BackfillITunesTrackPIDs(ctx context.Context, store ExternalIDBackfillStore)
 			slog.Info("BackfillITunesTrackPIDs canceled mid-index at offset", "offset", offset)
 			return 0, nil
 		}
-		books, err := store.GetAllBooks(10000, offset)
+		books, err := store.GetAllBooksCore(10000, offset)
 		if err != nil || len(books) == 0 {
 			break
 		}

@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.117.0 -->
+<!-- version: 3.118.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-07 -->
 
@@ -8,6 +8,18 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 7, 2026 - refactor(store): ExternalIDBackfillStore.GetAllBooks → GetAllBooksCore (STOREFID W5d-2)
+
+- **`refactor(store)`** — second W5d batch (Batch C). Atomically renamed the
+  `itunes.ExternalIDBackfillStore` interface method `GetAllBooks(limit,offset) []Book` →
+  `GetAllBooksCore(limit,offset) []BookCore`, across all three coupled sites in one commit: the
+  interface (`internal/itunes/backfill.go`), its sole real implementer — the
+  `externalIDStoreAdapter` in `internal/server/external_id_backfill.go` (delegates to
+  `database.Store.GetAllBooksCore`) — and the hand-rolled `MockBackfillStore`
+  (`internal/itunes/backfill_test.go`). The two callers (`BackfillExternalIDs`,
+  `BackfillITunesTrackPIDs`) read only Core-safe fields (`ITunesPersistentID`, `ID`), so the
+  retype is compile-certified. Package-local to itunes+server; no mockery mock involved.
 
 #### July 7, 2026 - refactor(store): migrate package-local GetAllBooks callers (STOREFID W5d-1)
 

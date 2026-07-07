@@ -1,7 +1,7 @@
 // file: internal/server/external_id_backfill.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: a3b4c5d6-e7f8-4a9b-0c1d-2e3f4a5b6c7d
-// last-edited: 2026-05-11
+// last-edited: 2026-07-07
 
 package server
 
@@ -71,8 +71,8 @@ type externalIDStoreAdapter struct {
 	store    database.Store
 }
 
-func (a *externalIDStoreAdapter) GetAllBooks(limit, offset int) ([]database.Book, error) {
-	return a.store.GetAllBooks(limit, offset)
+func (a *externalIDStoreAdapter) GetAllBooksCore(limit, offset int) ([]database.BookCore, error) {
+	return a.store.GetAllBooksCore(limit, offset)
 }
 
 func (a *externalIDStoreAdapter) GetBookFiles(bookID string) ([]database.BookFile, error) {
