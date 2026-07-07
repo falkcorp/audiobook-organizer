@@ -413,24 +413,24 @@ func (_c *MockSystemStore_GetAllBlockedHashes_Call) RunAndReturn(run func() ([]d
 	return _c
 }
 
-// GetAllBooks provides a mock function for the type MockSystemStore
-func (_mock *MockSystemStore) GetAllBooks(limit int, offset int) ([]database.Book, error) {
+// GetAllBooksCore provides a mock function for the type MockSystemStore
+func (_mock *MockSystemStore) GetAllBooksCore(limit int, offset int) ([]database.BookCore, error) {
 	ret := _mock.Called(limit, offset)
 
 	if len(ret) == 0 {
-		panic("no return value specified for GetAllBooks")
+		panic("no return value specified for GetAllBooksCore")
 	}
 
-	var r0 []database.Book
+	var r0 []database.BookCore
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(int, int) ([]database.Book, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(int, int) ([]database.BookCore, error)); ok {
 		return returnFunc(limit, offset)
 	}
-	if returnFunc, ok := ret.Get(0).(func(int, int) []database.Book); ok {
+	if returnFunc, ok := ret.Get(0).(func(int, int) []database.BookCore); ok {
 		r0 = returnFunc(limit, offset)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.Book)
+			r0 = ret.Get(0).([]database.BookCore)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(int, int) error); ok {
@@ -441,19 +441,19 @@ func (_mock *MockSystemStore) GetAllBooks(limit int, offset int) ([]database.Boo
 	return r0, r1
 }
 
-// MockSystemStore_GetAllBooks_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetAllBooks'
-type MockSystemStore_GetAllBooks_Call struct {
+// MockSystemStore_GetAllBooksCore_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetAllBooksCore'
+type MockSystemStore_GetAllBooksCore_Call struct {
 	*mock.Call
 }
 
-// GetAllBooks is a helper method to define mock.On call
+// GetAllBooksCore is a helper method to define mock.On call
 //   - limit int
 //   - offset int
-func (_e *MockSystemStore_Expecter) GetAllBooks(limit any, offset any) *MockSystemStore_GetAllBooks_Call {
-	return &MockSystemStore_GetAllBooks_Call{Call: _e.mock.On("GetAllBooks", limit, offset)}
+func (_e *MockSystemStore_Expecter) GetAllBooksCore(limit any, offset any) *MockSystemStore_GetAllBooksCore_Call {
+	return &MockSystemStore_GetAllBooksCore_Call{Call: _e.mock.On("GetAllBooksCore", limit, offset)}
 }
 
-func (_c *MockSystemStore_GetAllBooks_Call) Run(run func(limit int, offset int)) *MockSystemStore_GetAllBooks_Call {
+func (_c *MockSystemStore_GetAllBooksCore_Call) Run(run func(limit int, offset int)) *MockSystemStore_GetAllBooksCore_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 int
 		if args[0] != nil {
@@ -471,12 +471,12 @@ func (_c *MockSystemStore_GetAllBooks_Call) Run(run func(limit int, offset int))
 	return _c
 }
 
-func (_c *MockSystemStore_GetAllBooks_Call) Return(books []database.Book, err error) *MockSystemStore_GetAllBooks_Call {
-	_c.Call.Return(books, err)
+func (_c *MockSystemStore_GetAllBooksCore_Call) Return(bookCores []database.BookCore, err error) *MockSystemStore_GetAllBooksCore_Call {
+	_c.Call.Return(bookCores, err)
 	return _c
 }
 
-func (_c *MockSystemStore_GetAllBooks_Call) RunAndReturn(run func(limit int, offset int) ([]database.Book, error)) *MockSystemStore_GetAllBooks_Call {
+func (_c *MockSystemStore_GetAllBooksCore_Call) RunAndReturn(run func(limit int, offset int) ([]database.BookCore, error)) *MockSystemStore_GetAllBooksCore_Call {
 	_c.Call.Return(run)
 	return _c
 }

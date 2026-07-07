@@ -1,7 +1,7 @@
 // file: internal/server/embedding_backfill.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
-// last-edited: 2026-07-05
+// last-edited: 2026-07-07
 
 package server
 
@@ -104,14 +104,14 @@ type embeddingBackfillStats struct {
 // Extracted from runEmbeddingBackfill so the concurrency behavior (parallel
 // output identical to serial output, order-independent) can be exercised in
 // a unit test with a fake embedFn instead of a live dedup.Engine.
-func embedBooksConcurrent(ctx context.Context, books []database.Book, concurrency int, embedFn func(ctx context.Context, bookID string) (dedup.EmbedStatus, error)) (embeddingBackfillStats, error) {
+func embedBooksConcurrent(ctx context.Context, books []database.BookCore, concurrency int, embedFn func(ctx context.Context, bookID string) (dedup.EmbedStatus, error)) (embeddingBackfillStats, error) {
 	var (
 		mu    sync.Mutex
 		stats embeddingBackfillStats
 	)
 	reporter := &embeddingBackfillReporter{ctx: ctx, logEvery: 500}
 
-	err := registry.RunItems(ctx, reporter, books, func(ctx context.Context, book database.Book) error {
+	err := registry.RunItems(ctx, reporter, books, func(ctx context.Context, book database.BookCore) error {
 		status, embedErr := embedFn(ctx, book.ID)
 
 		mu.Lock()
@@ -215,7 +215,7 @@ func (s *Server) runEmbeddingBackfill() {
 	// call rather than a nested per-page loop. Swallow the error exactly as
 	// the previous pagination loop did (it only used the error to stop
 	// fetching, never logged it).
-	books, err := store.GetAllBooks(0, 0)
+	books, err := store.GetAllBooksCore(0, 0)
 	if err != nil {
 		books = nil
 	}

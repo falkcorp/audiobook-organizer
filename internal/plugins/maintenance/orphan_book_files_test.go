@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/orphan_book_files_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0bd4f9a2-1c3e-4f5a-8b6c-7d9e0f1a2b3c
-// last-edited: 2026-07-06
+// last-edited: 2026-07-07
 
 package maintenance
 
@@ -40,8 +40,12 @@ func TestFindOrphanBookFiles_ReportOnly(t *testing.T) {
 		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) {
 			return files, nil
 		},
-		GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) {
-			return books, nil
+		GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) {
+			cores := make([]database.BookCore, len(books))
+			for i := range books {
+				cores[i] = books[i].Core()
+			}
+			return cores, nil
 		},
 		DeleteBookFileFunc: func(id string) error {
 			deleteCalls = append(deleteCalls, id)
@@ -93,7 +97,13 @@ func TestFindOrphanBookFiles_NoOrphans(t *testing.T) {
 	}
 	store := &database.MockStore{
 		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },
-		GetAllBooksFunc:         func(limit, offset int) ([]database.Book, error) { return books, nil },
+		GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) {
+			cores := make([]database.BookCore, len(books))
+			for i := range books {
+				cores[i] = books[i].Core()
+			}
+			return cores, nil
+		},
 	}
 	orphans, _, _, err := findOrphanBookFiles(context.Background(), store)
 	if err != nil {

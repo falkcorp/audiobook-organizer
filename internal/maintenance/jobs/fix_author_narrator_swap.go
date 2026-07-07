@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/fix_author_narrator_swap.go
-// version: 2.1.1
+// version: 2.2.0
 // guid: a1000003-0000-0000-0000-000000000003
-// last-edited: 2026-05-01
+// last-edited: 2026-07-07
 
 package jobs
 
@@ -38,7 +38,7 @@ func (j *fixAuthorNarratorSwapJob) Run(ctx context.Context, store database.Store
 	var found, applied int
 
 	for {
-		batch, err := store.GetAllBooks(batchSize, offset)
+		batch, err := store.GetAllBooksCore(batchSize, offset)
 		if err != nil {
 			return fmt.Errorf("failed to list books: %w", err)
 		}

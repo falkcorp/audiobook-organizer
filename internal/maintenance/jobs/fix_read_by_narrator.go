@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/fix_read_by_narrator.go
-// version: 2.1.1
+// version: 2.2.0
 // guid: a1000001-0000-0000-0000-000000000001
-// last-edited: 2026-05-01
+// last-edited: 2026-07-07
 
 package jobs
 
@@ -34,7 +34,7 @@ func (j *fixReadByNarratorJob) Description() string {
 func (j *fixReadByNarratorJob) CanResume() bool { return false }
 
 func (j *fixReadByNarratorJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, dryRun bool) error {
-	allBooks, err := store.GetAllBooks(0, 0)
+	allBooks, err := store.GetAllBooksCore(0, 0)
 	if err != nil {
 		return fmt.Errorf("failed to list books: %w", err)
 	}
@@ -102,7 +102,7 @@ type rbnrFixResult struct {
 	FilePath    string
 }
 
-func rbnrPattern1(book *database.Book, authorName string) *rbnrFixResult {
+func rbnrPattern1(book *database.BookCore, authorName string) *rbnrFixResult {
 	narrator := strings.TrimSpace(book.Title[len("read by "):])
 	if narrator == "" {
 		return nil
@@ -124,7 +124,7 @@ func rbnrPattern1(book *database.Book, authorName string) *rbnrFixResult {
 	}
 }
 
-func rbnrPattern2(book *database.Book, authorName string) *rbnrFixResult {
+func rbnrPattern2(book *database.BookCore, authorName string) *rbnrFixResult {
 	idx := rbnrCaseInsensitiveIndex(book.Title, " - read by ")
 	if idx < 0 {
 		return nil
@@ -154,7 +154,7 @@ func rbnrPattern2(book *database.Book, authorName string) *rbnrFixResult {
 	}
 }
 
-func rbnrPattern3(book *database.Book, authorName string) *rbnrFixResult {
+func rbnrPattern3(book *database.BookCore, authorName string) *rbnrFixResult {
 	narrator := strings.TrimSpace(book.Title[len("read by "):])
 	newTitle := rbnrTitleFromFilePath(book.FilePath)
 	if newTitle == "" {
@@ -189,7 +189,7 @@ func rbnrTitleFromFilePath(fp string) string {
 	return title
 }
 
-func rbnrApplyFix(store database.Store, book *database.Book, fix *rbnrFixResult) error {
+func rbnrApplyFix(store database.Store, book *database.BookCore, fix *rbnrFixResult) error {
 	current, err := store.GetBookByID(book.ID)
 	if err != nil {
 		return fmt.Errorf("GetBookByID: %w", err)

@@ -1,7 +1,7 @@
 // file: internal/writeback/outbox.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 5c3d4e2f-6a7b-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-05-01
+// last-edited: 2026-07-07
 //
 // Durable outbox for the ITL write-back queue (backlog 4.3).
 //
@@ -80,7 +80,7 @@ func (o *WriteBackOutbox) ReplayOrphans(batcher Enqueuer) int {
 	// Scan all _system preferences for outbox keys.
 	// This is a linear scan — acceptable at startup since the outbox
 	// should be small (< 100 items typically).
-	books, err := o.store.GetAllBooks(0, 0)
+	books, err := o.store.GetAllBooksCore(0, 0)
 	if err != nil {
 		return 0
 	}

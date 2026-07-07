@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 8475f406-df31-4286-95b0-30787397603e
-// last-edited: 2026-07-05
+// last-edited: 2026-07-07
 
 // Package system hosts the system-level HTTP handlers extracted from the server
 // package: health, status, announcements, storage, logs, activity-log,
@@ -271,7 +271,7 @@ func (h *Handler) GetSystemAnnouncements(c *gin.Context) {
 	}
 
 	// Check for missing files (sample first 100 books)
-	books, err := store.GetAllBooks(100, 0)
+	books, err := store.GetAllBooksCore(100, 0)
 	if err == nil {
 		missingCount := 0
 		for _, book := range books {

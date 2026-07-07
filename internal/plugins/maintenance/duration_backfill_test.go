@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2c9f5a1b-4d83-4e07-9f6a-1b8e3c0d7a52
-// last-edited: 2026-07-05
+// last-edited: 2026-07-07
 
 package maintenance
 
@@ -148,7 +148,7 @@ func TestDurationBackfill_ParallelProducesCorrectResults(t *testing.T) {
 			CountPrimaryBooksFunc: func() (int, error) {
 				return len(books), nil
 			},
-			GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) {
+			GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) {
 				if offset >= len(books) {
 					return nil, nil
 				}
@@ -156,7 +156,12 @@ func TestDurationBackfill_ParallelProducesCorrectResults(t *testing.T) {
 				if end > len(books) {
 					end = len(books)
 				}
-				return books[offset:end], nil
+				page := books[offset:end]
+				cores := make([]database.BookCore, len(page))
+				for i := range page {
+					cores[i] = page[i].Core()
+				}
+				return cores, nil
 			},
 			GetBookFilesFunc: func(bookID string) ([]database.BookFile, error) {
 				return filesByID[bookID], nil

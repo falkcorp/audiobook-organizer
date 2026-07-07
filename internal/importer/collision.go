@@ -1,7 +1,7 @@
 // file: internal/importer/collision.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 5c7d8e9f-0a1b-2c3d-4e5f-6a7b8c9d0e1f
-// last-edited: 2026-06-17
+// last-edited: 2026-07-07
 //
 // Import-time collision preview. Before importing a file, check whether
 // it collides with an existing book (by title match, file hash, or fingerprint)
@@ -90,7 +90,7 @@ func CheckImportCollisions(store database.Store, req *CollisionPreviewRequest) *
 	}
 	if err == nil && meta.Title != "" {
 		titleLower := strings.ToLower(strings.TrimSpace(meta.Title))
-		books, _ := store.GetAllBooks(0, 0)
+		books, _ := store.GetAllBooksCore(0, 0)
 		for _, b := range books {
 			if strings.ToLower(strings.TrimSpace(b.Title)) == titleLower {
 				alreadyListed := false

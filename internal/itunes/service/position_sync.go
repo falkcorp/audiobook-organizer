@@ -1,6 +1,7 @@
 // file: internal/itunes/service/position_sync.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 9f7a8b5c-0d6e-4a70-b8c5-3d7e0f1b9a99
+// last-edited: 2026-07-07
 //
 // Bidirectional sync between the app's per-user position/state
 // tracking (spec 3.6) and the iTunes Bookmark / Play Count fields
@@ -69,7 +70,7 @@ func (p *PositionSync) Sync() (pulled, pushed int) {
 // Iterates books with an iTunes Bookmark value and creates a position
 // row if none exists yet.
 func (p *PositionSync) pullBookmarks() int {
-	books, err := p.store.GetAllBooks(0, 0)
+	books, err := p.store.GetAllBooksCore(0, 0)
 	if err != nil {
 		slog.Warn("itunes position sync list books", "err", err)
 		return 0

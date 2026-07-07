@@ -1,6 +1,7 @@
 // file: cmd/seed.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7d2e9a4f-1b85-4c63-9f0a-3e8d7b2c1f56
+// last-edited: 2026-07-07
 //
 // `seed` populates a fresh database with synthetic books for local
 // development. Use it after `make build` so a dev can hit `make run`
@@ -243,7 +244,7 @@ func upsertSeries(store database.SeriesStore, name string, authorID *int) (*data
 }
 
 func purgeSeedBooks(store database.BookStore) (int, error) {
-	books, err := store.GetAllBooks(100000, 0)
+	books, err := store.GetAllBooksCore(100000, 0)
 	if err != nil {
 		return 0, err
 	}

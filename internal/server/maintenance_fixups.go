@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_fixups.go
-// version: 2.6.0
+// version: 2.7.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-06-23
+// last-edited: 2026-07-07
 
 package server
 
@@ -116,9 +116,9 @@ func (s *Server) handleWipe(c *gin.Context) {
 		offset := 0
 		batchSize := 500
 		for {
-			books, err := store.GetAllBooks(batchSize, offset)
+			books, err := store.GetAllBooksCore(batchSize, offset)
 			if err != nil {
-				slog.Warn("wipe files GetAllBooks failed", "error", err)
+				slog.Warn("wipe files GetAllBooksCore failed", "error", err)
 				break
 			}
 			for _, book := range books {
@@ -251,7 +251,7 @@ func wipeBookFiles(store maintenanceStore, dryRun bool) (int64, error) {
 	var count int64
 	offset := 0
 	for {
-		books, err := store.GetAllBooks(500, offset)
+		books, err := store.GetAllBooksCore(500, offset)
 		if err != nil {
 			return count, err
 		}

@@ -1,6 +1,7 @@
 // file: internal/scheduler/extra_ops.go
-// version: 1.0.3
+// version: 1.1.0
 // guid: a9b8c7d6-e5f4-3210-fedc-ba9876543210
+// last-edited: 2026-07-07
 
 // extra_ops registers OperationDefs for 13 scheduler tasks that previously
 // used the legacy triggerOperation / triggerOperationWithID helpers.  Each def
@@ -817,7 +818,7 @@ func (r *ExtraOpsRegistrar) runMetadataRefreshScan(ctx context.Context, progress
 		return fmt.Errorf("database not initialized")
 	}
 	_ = progress.Log("info", "Starting metadata refresh scan", nil)
-	books, err := store.GetAllBooks(10000, 0)
+	books, err := store.GetAllBooksCore(10000, 0)
 	if err != nil {
 		return fmt.Errorf("failed to get books: %w", err)
 	}

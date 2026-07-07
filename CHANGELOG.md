@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.113.0 -->
+<!-- version: 3.114.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-07 -->
 
@@ -8,6 +8,18 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 7, 2026 - refactor(store): add GetAllBooksCore, migrate safe callers (STOREFID W5a)
+
+- **`refactor(store)`** — added `GetAllBooksCore(limit, offset) []BookCore` alongside the
+  existing `GetAllBooks` (interface + `PebbleStore` + `MemStore` + mocks). W5 is staged as an
+  ADD-then-migrate-then-remove sequence rather than an atomic rename, because `GetAllBooks` has
+  ~60 callers. This first step migrates the **45 mechanically-safe call sites** (39 files) that
+  read only Core-safe fields and do not write a page-sourced struct back. No behavior change:
+  purely additive interface + type-narrowing retypes, fully certified by `go build` (a migrated
+  caller reading a stripped heavy field, or writing its `BookCore` page-struct back, cannot
+  compile). Writeback and heavy-field-reader call sites remain on `GetAllBooks` and are migrated
+  in follow-up batches (W5b…) before `GetAllBooks` is removed (W5z).
 
 #### July 7, 2026 - refactor(store): GetBooksBySeriesID → GetBooksBySeriesIDCore ([]BookCore) (STOREFID W4)
 

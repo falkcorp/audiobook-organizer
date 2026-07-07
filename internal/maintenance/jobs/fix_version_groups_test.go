@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/fix_version_groups_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d0e1f2a3-b4c5-6789-defa-012345678901
-// last-edited: 2026-05-05
+// last-edited: 2026-07-07
 
 // Package jobs_test exercises the fix-version-groups maintenance job.
 // The blank import in fix_read_by_narrator_test.go already registers all
@@ -49,8 +49,8 @@ func TestFixVersionGroupsJob_DefaultParams(t *testing.T) {
 func TestFixVersionGroupsJob_DryRunNoGroups(t *testing.T) {
 	// No books → no-op, no error.
 	store := &database.MockStore{
-		GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) {
-			return []database.Book{}, nil
+		GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) {
+			return []database.BookCore{}, nil
 		},
 	}
 
@@ -75,8 +75,12 @@ func TestFixVersionGroupsJob_DryRunDoesNotUpdate(t *testing.T) {
 
 	var updateCalled bool
 	store := &database.MockStore{
-		GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) {
-			return books, nil
+		GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) {
+			cores := make([]database.BookCore, len(books))
+			for i := range books {
+				cores[i] = books[i].Core()
+			}
+			return cores, nil
 		},
 		UpdateBookFunc: func(id string, b *database.Book) (*database.Book, error) {
 			updateCalled = true
@@ -115,8 +119,12 @@ func TestFixVersionGroupsJob_ApplyUnlinksOutlier(t *testing.T) {
 
 	var updatedIDs []string
 	store := &database.MockStore{
-		GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) {
-			return books, nil
+		GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) {
+			cores := make([]database.BookCore, len(books))
+			for i := range books {
+				cores[i] = books[i].Core()
+			}
+			return cores, nil
 		},
 		GetBookByIDFunc: func(id string) (*database.Book, error) {
 			b := bookMap[id]
@@ -169,8 +177,12 @@ func TestFixVersionGroupsJob_Cancellation(t *testing.T) {
 	cancel() // pre-cancel
 
 	store := &database.MockStore{
-		GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) {
-			return books, nil
+		GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) {
+			cores := make([]database.BookCore, len(books))
+			for i := range books {
+				cores[i] = books[i].Core()
+			}
+			return cores, nil
 		},
 	}
 

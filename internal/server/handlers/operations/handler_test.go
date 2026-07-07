@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/handler_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 36cf7fbb-8b23-4edb-ad4b-079ab2bd6cf1
-// last-edited: 2026-06-03
+// last-edited: 2026-07-07
 
 // Unit tests for the operations-domain HTTP handlers. Each public method has at
 // least one test; happy paths plus key branches (cancel not-found fallback,
@@ -266,7 +266,7 @@ func TestDeleteOperationHistory_Deletes(t *testing.T) {
 
 func TestOptimizeDatabase_NoBooks(t *testing.T) {
 	h, store, _, _, _, _ := newTestHandler(t)
-	store.EXPECT().GetAllBooks(10000, 0).Return([]database.Book{}, nil)
+	store.EXPECT().GetAllBooksCore(10000, 0).Return([]database.BookCore{}, nil)
 	w := run(http.MethodPost, "/operations/optimize-database", "/operations/optimize-database", nil, func(r *gin.Engine) {
 		r.POST("/operations/optimize-database", h.OptimizeDatabase)
 	})
@@ -307,7 +307,7 @@ func TestSetInternalFlag_RequiresKey(t *testing.T) {
 
 func TestAuditFileConsistency_Empty(t *testing.T) {
 	h, store, _, _, _, _ := newTestHandler(t)
-	store.EXPECT().GetAllBooks(100000, 0).Return([]database.Book{}, nil)
+	store.EXPECT().GetAllBooksCore(100000, 0).Return([]database.BookCore{}, nil)
 	w := run(http.MethodGet, "/operations/audit-files", "/operations/audit-files", nil, func(r *gin.Engine) {
 		r.GET("/operations/audit-files", h.AuditFileConsistency)
 	})

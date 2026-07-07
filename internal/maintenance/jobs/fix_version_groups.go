@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/fix_version_groups.go
-// version: 2.1.1
+// version: 2.2.0
 // guid: a1000004-0000-0000-0000-000000000004
-// last-edited: 2026-05-01
+// last-edited: 2026-07-07
 
 package jobs
 
@@ -36,14 +36,14 @@ func (j *fixVersionGroupsJob) Description() string { return "Fix and normalize v
 func (j *fixVersionGroupsJob) CanResume() bool     { return false }
 
 func (j *fixVersionGroupsJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, dryRun bool) error {
-	allBooks, err := store.GetAllBooks(0, 0)
+	allBooks, err := store.GetAllBooksCore(0, 0)
 	if err != nil {
 		return fmt.Errorf("failed to list books: %w", err)
 	}
 	reporter.SetTotal(len(allBooks))
 
 	// Phase 1: title mismatch within version groups
-	groupMap := make(map[string][]database.Book)
+	groupMap := make(map[string][]database.BookCore)
 	for i := range allBooks {
 		b := &allBooks[i]
 		if b.VersionGroupID == nil || *b.VersionGroupID == "" {
@@ -70,7 +70,7 @@ func (j *fixVersionGroupsJob) Run(ctx context.Context, store database.Store, rep
 		}
 		majorityCore := vgFindMajorityCore(cores)
 
-		var outliers []database.Book
+		var outliers []database.BookCore
 		for _, bc := range cores {
 			if !vgCoreTitlesMatch(bc.core, majorityCore) {
 				outliers = append(outliers, bc.book)
@@ -134,7 +134,7 @@ func (j *fixVersionGroupsJob) Run(ctx context.Context, store database.Store, rep
 }
 
 type vgBookCore struct {
-	book database.Book
+	book database.BookCore
 	core string
 }
 
@@ -200,7 +200,7 @@ func vgLongWords(s string) map[string]bool {
 	return set
 }
 
-func vgUnlinkOutliers(store database.Store, outliers []database.Book) error {
+func vgUnlinkOutliers(store database.Store, outliers []database.BookCore) error {
 	for _, ob := range outliers {
 		current, err := store.GetBookByID(ob.ID)
 		if err != nil {
@@ -273,7 +273,7 @@ func vgBestMatchSubdir(parent, title string) string {
 	return bestPath
 }
 
-func vgFixAuthorDirPath(store database.Store, book *database.Book, subdir string) error {
+func vgFixAuthorDirPath(store database.Store, book *database.BookCore, subdir string) error {
 	current, err := store.GetBookByID(book.ID)
 	if err != nil {
 		return fmt.Errorf("GetBookByID: %w", err)

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/orphan_book_files.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9d2c4f6a-8e1b-4c5d-9a7b-3e5f1a2c4b6d
-// last-edited: 2026-07-06
+// last-edited: 2026-07-07
 
 package maintenance
 
@@ -142,11 +142,11 @@ func findOrphanBookFiles(ctx context.Context, store database.Store) (orphans []d
 	if ctx.Err() != nil {
 		return nil, 0, 0, ctx.Err()
 	}
-	// GetAllBooks(0, 0) is the unbounded form across the existing maintenance
+	// GetAllBooksCore(0, 0) is the unbounded form across the existing maintenance
 	// plugin (see pebble_store.go:9210, 9256, 9318) — limit=0 means "all".
-	books, berr := store.GetAllBooks(0, 0)
+	books, berr := store.GetAllBooksCore(0, 0)
 	if berr != nil {
-		return nil, 0, 0, fmt.Errorf("GetAllBooks: %w", berr)
+		return nil, 0, 0, fmt.Errorf("GetAllBooksCore: %w", berr)
 	}
 	valid := make(map[string]struct{}, len(books))
 	for _, b := range books {

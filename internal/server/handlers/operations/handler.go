@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/handler.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 1b7fbd86-cdda-4921-b2d0-786f5cadb438
-// last-edited: 2026-06-22
+// last-edited: 2026-07-07
 
 // Package operations hosts the background-operation HTTP handlers extracted
 // from the server package: the long-running scan / organize / optimize /
@@ -306,7 +306,7 @@ func (h *Handler) OptimizeDatabase(c *gin.Context) {
 		return
 	}
 
-	books, err := h.store.GetAllBooks(10000, 0)
+	books, err := h.store.GetAllBooksCore(10000, 0)
 	if err != nil {
 		httputil.InternalError(c, "failed to get audiobooks", err)
 		return

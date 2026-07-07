@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/bulk_fetch_metadata.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: b3c9d7e8-0f1a-2b3c-4d5e-6f7a8b9c0d1e
-// last-edited: 2026-05-05
+// last-edited: 2026-07-07
 
 package jobs
 
@@ -57,9 +57,9 @@ func (j *bulkFetchMetadataJob) Run(ctx context.Context, store database.Store, re
 		}
 	}
 
-	allBooks, err := store.GetAllBooks(0, 0)
+	allBooks, err := store.GetAllBooksCore(0, 0)
 	if err != nil {
-		return fmt.Errorf("GetAllBooks: %w", err)
+		return fmt.Errorf("GetAllBooksCore: %w", err)
 	}
 
 	ttlDays := config.AppConfig.MetadataFetchCacheTTLDays
@@ -98,7 +98,7 @@ func (j *bulkFetchMetadataJob) Run(ctx context.Context, store database.Store, re
 	}
 
 	type bookWork struct {
-		book       database.Book
+		book       database.BookCore
 		authorName string
 	}
 	var work []bookWork

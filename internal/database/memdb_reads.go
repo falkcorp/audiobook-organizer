@@ -1,7 +1,7 @@
 // file: internal/database/memdb_reads.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000006
-// last-edited: 2026-07-06
+// last-edited: 2026-07-07
 
 package database
 
@@ -561,6 +561,92 @@ func (m *MemStore) GetAllBooks(limit, offset int, filters map[string]interface{}
 		all = append(all, *b)
 	}
 	return paginate(all, limit, offset), nil
+}
+
+// GetAllBooksCore is Core-typed (STOREFID W5a): the return type is BookCore,
+// not Book — memdb rows never carry the nine heavy fields (Description,
+// VersionNotes, BookSigV1, BookSigV1Mask, BookSigSegments, BookSigBuiltAt,
+// BookSigCoveragePct, Author, Series) in the first place, so projecting via
+// .Core() here just makes that guarantee visible in the type system. Mirrors
+// GetAllBooks exactly (same filters, same no-default-sort behavior), just
+// Core-typed; coexists with it during the W5 migration. See
+// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
+func (m *MemStore) GetAllBooksCore(limit, offset int, filters map[string]interface{}) ([]BookCore, error) {
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+
+	var (
+		iter interface {
+			Next() interface{}
+		}
+		err error
+	)
+
+	switch {
+	case filters["series_id"] != nil:
+		iter, err = txn.Get(memTableBooks, memIdxSeriesID, filters["series_id"])
+	case filters["author_id"] != nil:
+		iter, err = txn.Get(memTableBooks, memIdxAuthorID, filters["author_id"])
+	case filters["version_group_id"] != nil:
+		iter, err = txn.Get(memTableBooks, memIdxVersionGroupID, filters["version_group_id"])
+	case filters["is_primary_version"] != nil:
+		iter, err = txn.Get(memTableBooks, memIdxIsPrimaryVersion, filters["is_primary_version"])
+	default:
+		iter, err = txn.Get(memTableBooks, memIdxID)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("memdb books scan: %w", err)
+	}
+
+	cap0 := limit
+	if cap0 <= 0 || cap0 > 100_000 {
+		cap0 = 1024
+	}
+	all := make([]Book, 0, cap0)
+
+	for obj := iter.Next(); obj != nil; obj = iter.Next() {
+		b := obj.(*Book)
+		if v, ok := filters["is_primary_version"].(bool); ok {
+			eff := true
+			if b.IsPrimaryVersion != nil {
+				eff = *b.IsPrimaryVersion
+			}
+			if eff != v {
+				continue
+			}
+		}
+		if v, ok := filters["marked_for_deletion"].(bool); ok {
+			eff := false
+			if b.MarkedForDeletion != nil {
+				eff = *b.MarkedForDeletion
+			}
+			if eff != v {
+				continue
+			}
+		}
+		if v, ok := filters["series_id"].(int); ok {
+			if b.SeriesID == nil || *b.SeriesID != v {
+				continue
+			}
+		}
+		if v, ok := filters["author_id"].(int); ok {
+			if b.AuthorID == nil || *b.AuthorID != v {
+				continue
+			}
+		}
+		if v, ok := filters["version_group_id"].(string); ok {
+			if b.VersionGroupID == nil || *b.VersionGroupID != v {
+				continue
+			}
+		}
+		all = append(all, *b)
+	}
+	paged := paginate(all, limit, offset)
+	cores := make([]BookCore, len(paged))
+	for i := range paged {
+		cores[i] = paged[i].Core()
+	}
+	return cores, nil
 }
 
 // ListBookIDs returns the IDs of all non-deleted books. Walks the memdb

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 1d31ef73-7c7a-4c3b-a840-01b0865023d7
-// last-edited: 2026-07-05
+// last-edited: 2026-07-07
 
 // Tests for the metadata-domain handlers. The store / metadata-fetch-service /
 // write-back-enqueuer / operations-registry / file-io-pool deps are generated
@@ -559,7 +559,7 @@ func TestBulkFetchMetadata_ParallelPreservesOrderAndCounts(t *testing.T) {
 
 func TestHandleBulkWriteBack_DryRun(t *testing.T) {
 	h, d := newHandler(t)
-	d.store.EXPECT().GetAllBooks(1_000_000, 0).Return([]database.Book{
+	d.store.EXPECT().GetAllBooksCore(1_000_000, 0).Return([]database.BookCore{
 		{ID: "b1", FilePath: "/x/a.m4b", LibraryState: strptr("organized")},
 	}, nil)
 	w := doReq(h.HandleBulkWriteBack, http.MethodPost, "/audiobooks/bulk-write-back",
@@ -571,7 +571,7 @@ func TestHandleBulkWriteBack_DryRun(t *testing.T) {
 
 func TestHandleBulkWriteBack_Enqueue202(t *testing.T) {
 	h, d := newHandler(t)
-	d.store.EXPECT().GetAllBooks(1_000_000, 0).Return([]database.Book{
+	d.store.EXPECT().GetAllBooksCore(1_000_000, 0).Return([]database.BookCore{
 		{ID: "b1", FilePath: "/x/a.m4b", LibraryState: strptr("organized")},
 	}, nil)
 	d.reg.EXPECT().EnqueueOp(mock.Anything, "library.bulk-write-back", mock.Anything).Return("op-123", nil)

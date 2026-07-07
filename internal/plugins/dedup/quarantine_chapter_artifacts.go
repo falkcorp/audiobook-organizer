@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/quarantine_chapter_artifacts.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1d7a4f92-3c60-4e85-9b21-6a5e8c0d3f47
-// last-edited: 2026-06-19
+// last-edited: 2026-07-07
 
 // Package dedup — op dedup.quarantine-chapter-artifacts.
 //
@@ -89,7 +89,7 @@ func (p *Plugin) runQuarantineChapterArtifacts(ctx context.Context, rawParams js
 		"apply", params.Apply, "min_collisions", params.MinTitleCollisions, "max_duration_sec", params.MaxDurationSec)
 
 	_ = reporter.UpdateProgress(0, 3, "Loading library…")
-	books, err := p.store.GetAllBooks(0, 0)
+	books, err := p.store.GetAllBooksCore(0, 0)
 	if err != nil {
 		return fmt.Errorf("get all books: %w", err)
 	}

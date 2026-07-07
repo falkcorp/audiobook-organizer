@@ -1,7 +1,7 @@
 // file: internal/sweep/archive_sweep.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: a9f8e7d6-c5b4-3a21-9087-654321fedcba
-// last-edited: 2026-07-03
+// last-edited: 2026-07-07
 //
 // Archive sweep for soft-deleted books (backlog 7.10).
 //
@@ -28,7 +28,7 @@ func SweepArchivedBooks(store interface {
 	database.BookStore
 	database.BookFileStore
 }) int {
-	books, err := store.GetAllBooks(0, 0)
+	books, err := store.GetAllBooksCore(0, 0)
 	if err != nil {
 		slog.Warn("archive sweep list books", "err", err)
 		return 0

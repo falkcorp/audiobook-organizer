@@ -1,7 +1,7 @@
 // file: internal/sweep/sweeper_test.go
-// version: 1.0.6
+// version: 1.1.0
 // guid: b2c3d4e5-f6a7-8910-abcd-ef2345678902
-// last-edited: 2026-07-06
+// last-edited: 2026-07-07
 
 package sweep
 
@@ -68,6 +68,18 @@ func (m *MockBookStore) GetAllBooks(limit, offset int) ([]database.Book, error) 
 		end = len(m.books)
 	}
 	return m.books[offset:end], nil
+}
+
+func (m *MockBookStore) GetAllBooksCore(limit, offset int) ([]database.BookCore, error) {
+	books, err := m.GetAllBooks(limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	cores := make([]database.BookCore, len(books))
+	for i := range books {
+		cores[i] = books[i].Core()
+	}
+	return cores, nil
 }
 
 // Stub out other required BookStore methods

@@ -1,7 +1,7 @@
 // file: internal/metafetch/isbn.go
-// version: 1.4.2
+// version: 1.5.0
 // guid: 34290bd0-745e-4509-ad2d-e237785bb7ef
-// last-edited: 2026-07-01
+// last-edited: 2026-07-07
 
 package metafetch
 
@@ -113,7 +113,7 @@ func (s *ISBNService) EnrichMissingISBNs(ctx context.Context, limit int, w *acti
 			return checked, updated, ctx.Err()
 		}
 
-		books, err := s.db.GetAllBooks(pageSize, offset)
+		books, err := s.db.GetAllBooksCore(pageSize, offset)
 		if err != nil {
 			return checked, updated, err
 		}
@@ -163,7 +163,7 @@ func (s *ISBNService) resolveAuthor(book *database.Book) string {
 	return a.Name
 }
 
-func needsIdentifierEnrichment(book *database.Book) bool {
+func needsIdentifierEnrichment(book *database.BookCore) bool {
 	if book == nil {
 		return false
 	}

@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_enrich_parallel_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8d3a5b1e-6f2c-4a97-9e1d-3c7b8f4a2d6e
-// last-edited: 2026-07-05
+// last-edited: 2026-07-07
 
 package itunesservice
 
@@ -96,8 +96,13 @@ func buildEnrichFixture(t *testing.T, n int) ([]database.Book, *dbmocks.MockStor
 		}
 	}
 
+	cores := make([]database.BookCore, len(books))
+	for i := range books {
+		cores[i] = books[i].Core()
+	}
+
 	m := dbmocks.NewMockStore(t)
-	m.EXPECT().GetAllBooks(10000, 0).Return(books, nil)
+	m.EXPECT().GetAllBooksCore(10000, 0).Return(cores, nil)
 	for i := range books {
 		id := books[i].ID
 		m.EXPECT().GetBookAuthors(id).Return(nil, nil).Maybe()
@@ -164,7 +169,7 @@ func TestEnrichImportedBooks_ParallelMatchesSerial(t *testing.T) {
 // imported books) — RunItems must be a no-op and must not panic.
 func TestEnrichImportedBooks_EmptyList(t *testing.T) {
 	m := dbmocks.NewMockStore(t)
-	m.EXPECT().GetAllBooks(10000, 0).Return(nil, nil)
+	m.EXPECT().GetAllBooksCore(10000, 0).Return(nil, nil)
 
 	fetcher := newFakeMetadataFetcher(nil)
 	imp := &Importer{store: m, mfs: fetcher, enrichConcurrencyOverride: 4}

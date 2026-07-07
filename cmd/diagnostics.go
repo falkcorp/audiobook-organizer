@@ -1,6 +1,7 @@
 // file: cmd/diagnostics.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c8f6a0d4-2a8b-48cf-9d08-02cc9915d9fc
+// last-edited: 2026-07-07
 
 package cmd
 
@@ -85,11 +86,11 @@ func runCleanupInvalidBooks(force, dryRun bool) error {
 
 	const batchSize = 5000
 	offset := 0
-	invalid := make([]database.Book, 0)
+	invalid := make([]database.BookCore, 0)
 	placeholders := []string{"{series}", "{narrator}", "{author}", "{title}"}
 
 	for {
-		books, err := store.GetAllBooks(batchSize, offset)
+		books, err := store.GetAllBooksCore(batchSize, offset)
 		if err != nil {
 			return fmt.Errorf("failed to fetch books: %w", err)
 		}
@@ -166,7 +167,7 @@ func runDiagnosticsQuery(limit int, prefix string, raw bool) error {
 	}
 	defer closer()
 
-	books, err := store.GetAllBooks(limit, 0)
+	books, err := store.GetAllBooksCore(limit, 0)
 	if err != nil {
 		return fmt.Errorf("failed to fetch books: %w", err)
 	}

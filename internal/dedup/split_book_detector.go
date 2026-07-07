@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_detector.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9c1f0a3e-b7d2-4e84-8c12-3fa8e1d6b9c0
-// last-edited: 2026-05-29
+// last-edited: 2026-07-07
 
 // Package dedup — split-book backfill detector.
 //
@@ -111,9 +111,9 @@ func loadSlimBooks(ctx context.Context, store database.Store) ([]splitBookSlim, 
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		batch, err := store.GetAllBooks(pageSize, offset)
+		batch, err := store.GetAllBooksCore(pageSize, offset)
 		if err != nil {
-			return nil, fmt.Errorf("split-book detector: GetAllBooks offset=%d: %w", offset, err)
+			return nil, fmt.Errorf("split-book detector: GetAllBooksCore offset=%d: %w", offset, err)
 		}
 		if len(batch) == 0 {
 			break

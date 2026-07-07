@@ -1,6 +1,6 @@
 // file: internal/itunes/rebuild_test.go
-// version: 1.0.5
-// last-edited: 2026-07-06
+// version: 1.0.6
+// last-edited: 2026-07-07
 // guid: 1c2d3e4f-5a6b-7c8d-9e0f-1a2b3c4d5e6f
 
 package itunes
@@ -31,6 +31,18 @@ func (m *mockRebuildStore) GetAllBooks(pageSize, offset int) ([]database.Book, e
 		idx++
 	}
 	return result, nil
+}
+
+func (m *mockRebuildStore) GetAllBooksCore(pageSize, offset int) ([]database.BookCore, error) {
+	books, err := m.GetAllBooks(pageSize, offset)
+	if err != nil {
+		return nil, err
+	}
+	cores := make([]database.BookCore, len(books))
+	for i := range books {
+		cores[i] = books[i].Core()
+	}
+	return cores, nil
 }
 
 func (m *mockRebuildStore) GetBookByID(id string) (*database.Book, error) {
