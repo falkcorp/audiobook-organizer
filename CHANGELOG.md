@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.121.1 -->
+<!-- version: 3.122.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-07 -->
 
@@ -8,6 +8,25 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 7, 2026 - fix(dedup): stop dedup.full-scan freezing in the composing-scores phase (#19)
+
+- **`fix(dedup)`** — root-caused and fixed the `dedup.full-scan` "Composing scores"
+  freeze (9+ hours at 44%, uncancellable, hard-restart-only on prod 2026-07-06).
+  Per-candidate `EmbeddingStore.UpsertCandidate`/`DeleteCandidate` held the store-wide
+  `s.mu` across a synchronous `pebble.Sync` fsync, so the `NumCPU` score-worker pool
+  serialized behind one lock+fsync (a `sync.Mutex.Lock` wait is not ctx-cancellable →
+  graceful cancel was ignored), and the per-write fsyncs flooded Pebble L0 until a
+  compaction **write-stall** (amplified by host swap) froze all DB I/O.
+- **Fix:** per-row dedup-candidate writes now use `pebble.NoSync` (`candidateWriteOpts`).
+  Correctness-identical (NoSync changes only fsync durability, not atomicity/visibility;
+  the pair-uniqueness + ID-counter invariants under `s.mu` are untouched). A graceful
+  restart still loses nothing (WAL flushes on `Close`); only a hard crash can drop the
+  last few seconds of *recomputable* candidate scores. Batch candidate ops and the
+  embedding-vector/cache paths keep `pebble.Sync`.
+- **Guards:** `TestUpsertCandidate_SurvivesGracefulClose` (durability contract) and
+  `TestCandidateWritePath_ConcurrentNoRace` (`-race` + same-pair no-duplication).
+  Root-cause write-up: `docs/audits/2026-07-07-dedup-fullscan-composing-scores-writestall.md`.
 
 #### July 7, 2026 - refactor(store): 3 remaining getters → Core, closes STOREFID W6 + PR-D (fingerprint-wipe)
 
