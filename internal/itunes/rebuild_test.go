@@ -1,11 +1,12 @@
 // file: internal/itunes/rebuild_test.go
-// version: 1.0.6
+// version: 1.0.7
 // last-edited: 2026-07-07
 // guid: 1c2d3e4f-5a6b-7c8d-9e0f-1a2b3c4d5e6f
 
 package itunes
 
 import (
+	"sort"
 	"testing"
 	"time"
 
@@ -19,7 +20,26 @@ type mockRebuildStore struct {
 }
 
 func (m *mockRebuildStore) GetAllBooksFullFrom(afterID string, limit int) ([]database.Book, error) {
-	return nil, nil
+	// Cursor semantics matching PebbleStore.GetAllBooksFullFrom: walk books in
+	// sorted-ID order, skip everything up to and including afterID, return the
+	// next `limit` (0 = all). Returns full books (the map holds full structs),
+	// so ComputeITLDiff/RebuildITLFromDB/BuildExportITL exercise real data.
+	ids := make([]string, 0, len(m.books))
+	for id := range m.books {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	var result []database.Book
+	for _, id := range ids {
+		if id <= afterID {
+			continue
+		}
+		result = append(result, *m.books[id])
+		if limit > 0 && len(result) >= limit {
+			break
+		}
+	}
+	return result, nil
 }
 func (m *mockRebuildStore) GetAllBooks(pageSize, offset int) ([]database.Book, error) {
 	var result []database.Book

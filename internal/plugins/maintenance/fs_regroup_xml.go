@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fs_regroup_xml.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7d2a9c14-3e86-4b50-9f71-2c8e0a6d4b95
-// last-edited: 2026-07-06
+// last-edited: 2026-07-07
 
 // Package maintenance — op maintenance.fs-regroup-xml.
 //
@@ -83,14 +83,15 @@ func (p *Plugin) runFSRegroupXML(ctx context.Context, raw json.RawMessage, repor
 	// Pass 1: all books → slim FSBook view (id, title, authorID, asin, path, primary, duration).
 	bookMeta := make(map[string]*itunesservice.FSBook)
 	const page = 1000
-	off := 0
+	afterID := ""
+	scanned := 0
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		books, err := store.GetAllBooks(page, off)
+		books, err := store.GetAllBooksFullFrom(afterID, page)
 		if err != nil {
-			return fmt.Errorf("GetAllBooks offset=%d: %w", off, err)
+			return fmt.Errorf("GetAllBooksFullFrom afterID=%q: %w", afterID, err)
 		}
 		if len(books) == 0 {
 			break
@@ -115,8 +116,9 @@ func (p *Plugin) runFSRegroupXML(ctx context.Context, raw json.RawMessage, repor
 			fsb.EnrichScore = enrichScore(b)
 			bookMeta[b.ID] = &fsb
 		}
-		off += len(books)
-		_ = reporter.UpdateProgress(0, 3, fmt.Sprintf("Phase 1/3: scanned %d books…", off))
+		scanned += len(books)
+		afterID = books[len(books)-1].ID
+		_ = reporter.UpdateProgress(0, 3, fmt.Sprintf("Phase 1/3: scanned %d books…", scanned))
 		if len(books) < page {
 			break
 		}

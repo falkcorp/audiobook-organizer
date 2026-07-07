@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/relink_report.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: a1000022-0000-0000-0000-000000000022
-// last-edited: 2026-06-16
+// last-edited: 2026-07-07
 
 package jobs
 
@@ -49,7 +49,7 @@ func (j *relinkReportJob) Run(ctx context.Context, store database.Store, reporte
 		return fmt.Errorf("root_dir not configured")
 	}
 
-	allBooks, err := store.GetAllBooks(0, 0)
+	allBooks, err := store.GetAllBooksFullFrom("", 0)
 	if err != nil {
 		return fmt.Errorf("failed to list books: %w", err)
 	}

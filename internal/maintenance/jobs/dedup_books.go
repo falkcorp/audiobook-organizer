@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/dedup_books.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: a1000010-0000-0000-0000-000000000010
-// last-edited: 2026-05-01
+// last-edited: 2026-07-07
 
 package jobs
 
@@ -237,9 +237,9 @@ func (j *dedupBooksJob) Run(ctx context.Context, store database.Store, reporter 
 func ddFetchAllBooksPaginated(store database.Store) ([]database.Book, error) {
 	const pageSize = 500
 	var all []database.Book
-	offset := 0
+	afterID := ""
 	for {
-		page, err := store.GetAllBooks(pageSize, offset)
+		page, err := store.GetAllBooksFullFrom(afterID, pageSize)
 		if err != nil {
 			return nil, err
 		}
@@ -247,7 +247,7 @@ func ddFetchAllBooksPaginated(store database.Store) ([]database.Book, error) {
 		if len(page) < pageSize {
 			break
 		}
-		offset += pageSize
+		afterID = page[len(page)-1].ID
 	}
 	return all, nil
 }

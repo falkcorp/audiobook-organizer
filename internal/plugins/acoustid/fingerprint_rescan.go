@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/fingerprint_rescan.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: a7b8c9d0-e1f2-3456-def0-123456789abc
-// last-edited: 2026-05-31
+// last-edited: 2026-07-07
 
 package acoustid
 
@@ -306,7 +306,11 @@ func fpRescanWorkers() int {
 func loadBooksForRescan(store database.Store, scope string, bookIDs []string) ([]database.Book, error) {
 	switch scope {
 	case scopeAll, scopeMissing:
-		return store.GetAllBooks(0, 0)
+		// GetAllBooksFullFrom returns FULL (GetBookByID-sourced) books, matching
+		// the scopeBooks branch below. loadBooksForRescan's contract is full
+		// books — the rescan reads/writes heavy fingerprint fields — so the
+		// memdb-slim GetAllBooks projection would have silently stripped them.
+		return store.GetAllBooksFullFrom("", 0)
 	case scopeBooks:
 		out := make([]database.Book, 0, len(bookIDs))
 		for _, id := range bookIDs {
