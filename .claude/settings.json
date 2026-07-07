@@ -113,5 +113,8 @@
         ]
       }
     ]
+  },
+  "enabledPlugins": {
+    "audiobook-organizer@falkcorp": true
   }
 }
