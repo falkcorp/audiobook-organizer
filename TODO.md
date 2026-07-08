@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.78.0 -->
+<!-- version: 9.79.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-08 -->
 
@@ -31,8 +31,11 @@ future agent) can scan the entire workspace in one page.
   `runEmbeddingBackfill`'s author loop is already model-aware (PR #1744) but gated by
   `BackfillVersionMarker`, which predates the cutover and was never bumped, so it never re-ran.
 - **Fix**: bumped `BackfillVersionMarker` v5 → v6 (`internal/dedup/backfill_progress.go`) — one
-  constant, zero new code, reuses the existing tested concurrent author-embed path. Takes effect
-  on next server restart/deploy.
+  constant, zero new code, reuses the existing tested concurrent author-embed path. Deployed and
+  verified on prod: 9,080/9,083 authors reconciled, warning count dropped from 10,350/restart to 0.
+- **Residual**: 3 authors (39755, 40861, 42076) were touched after the v6 run's `GetAllAuthors()`
+  snapshot and missed the pass — still warning post-v6. Bumped v6 → v7 to close the gap; cheap
+  re-run since everything else already cache-hits at bge-m3.
 
 ---
 
