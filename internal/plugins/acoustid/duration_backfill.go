@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/duration_backfill.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e5f6a7b8-c9d0-4e1f-9a2b-3c4d5e6f7a8b
 // last-edited: 2026-07-07
 
@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -57,9 +56,11 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, params json.RawMessage
 	if p.store == nil {
 		return fmt.Errorf("database store not available")
 	}
-	if !fingerprint.Available() {
-		return fmt.Errorf("no fingerprint backend (fpcalc / ffmpeg) found")
-	}
+	// No top-level fingerprint.Available() gate: dry-run mode never calls
+	// fpcalc, and the live path already handles backend unavailability
+	// per-file via doFingerprintFile's fpcalc→ffmpeg→fail fallback chain
+	// (markFingerprintFailure), so a hard stop here would only abort the
+	// whole batch unnecessarily.
 
 	var req DurationBackfillParams
 	if len(params) > 0 {
