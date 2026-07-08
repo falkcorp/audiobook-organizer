@@ -1,13 +1,24 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.127.0 -->
+<!-- version: 3.128.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
-<!-- last-edited: 2026-07-07 -->
+<!-- last-edited: 2026-07-08 -->
 
 # Changelog
 
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 8, 2026 - docs: STOREFID DurationSec invariant RESOLVED + prod-confirmed
+
+- **`docs`** — closes out the STOREFID DurationSec invariant follow-up. `acoustid.duration-backfill`
+  (merged as commit `1194c726`) was deployed to prod, dry-run triggered first (confirmed 2,781
+  affected rows, reviewed a sample), then run live (op `01KWZW9ZGB5EP537643BAESPXR`):
+  **2781/2781 fixed, 0 failed, 0 ineligible, 1m9s.** Re-queried `GET /maintenance/acoustid-stats`:
+  `with_fingerprint_zero_duration` **2781 → 0**. The invariant the 3 PR-B fingerprint ops depend on
+  (`AcoustIDFingerprint set ⇒ DurationSec > 0`) now holds across the full library — this was the
+  last open item from STOREFID (all other waves closed 2026-07-07, see PR #1854/#1856/#1858).
+  TODO.md's DurationSec section flipped 🟠 → ✅.
 
 #### July 7, 2026 - feat(acoustid): add duration-backfill op for legacy zero-DurationSec fingerprints (STOREFID follow-up)
 
