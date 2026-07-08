@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.130.0 -->
+<!-- version: 3.131.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-08 -->
 
@@ -8,6 +8,27 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 8, 2026 - fix(dedup): HydrateChromem skips stale-model embedding rows instead of spamming warnings
+
+- **`fix(dedup)`** — `internal/dedup/engine.go` `HydrateChromem`: both the book and author loops now
+  skip any stored embedding row whose model doesn't match the currently-wired embed client
+  (`embeddingModelMatches`), instead of attempting to mirror it into the ANN store where it fails
+  the dimension check and logs a per-row warning.
+- **Root cause of the v6/v7 residual**: 3 author IDs (39755, 40861, 42076) kept logging
+  `dedup chromem upsert author ... vector dim 3072 != store dim 1024` on every restart even after
+  the v7 backfill (#1862, #1865). Root-caused via `GetAllAuthors()` returning `total=9080` in both
+  backfill runs while `ListByType("author")` returns `9083` rows — an exact, reproducible 3-row gap,
+  not a race. `GetAuthorByID` has explicit tombstone-redirect logic for merged authors that
+  `GetAllAuthors()` doesn't apply (it iterates literal `author:N` keys), so these 3 are embedding
+  rows orphaned by an author merge/delete — the entity is gone, so no amount of re-running the
+  backfill (`GetAllAuthors()`-driven) can ever reach them.
+- **Fix**: rather than another marker bump (which cannot work — confirmed dead-end), add the guard
+  HydrateChromem should have had from the start. Also adds a single summary `slog.Warn` per hydrate
+  run (`stale_books`, `stale_authors` counts) when any are skipped, so these rows stay visible as
+  candidates for re-embed or a future orphan-cleanup pass instead of silently vanishing from the
+  logs. Covered by new test `TestHydrateChromem_SkipsStaleModelRows` (both the "still-resolvable but
+  stale" and "orphaned, doesn't resolve at all" cases, for both books and authors).
 
 #### July 8, 2026 - fix(dedup): bump BackfillVersionMarker v6 -> v7 to close 3-author gap
 
