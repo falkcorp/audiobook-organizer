@@ -1,7 +1,7 @@
 // file: internal/dedup/engine.go
-// version: 1.55.0
+// version: 1.56.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
-// last-edited: 2026-07-07
+// last-edited: 2026-07-08
 
 package dedup
 
@@ -323,7 +323,14 @@ func (de *Engine) getScoreConfig() unified.ScoreConfig {
 //
 // Books that no longer exist or are non-primary version-group members are
 // skipped; the embedding table may contain stale rows that EmbedBook would
-// have cleaned up on its next visit.
+// have cleaned up on its next visit. Rows stamped with a different model
+// than the currently-wired embed client are also skipped — mirroring one
+// would only fail the ANN store's dimension check (e.g. after a model
+// cutover) and log a warning for no benefit. Orphaned rows left behind by a
+// merge/delete (the entity no longer exists to re-embed) hit this same
+// guard, since a re-embed can never reach them either; the mismatched
+// vector just sits inert in the embedding table instead of spamming logs
+// every restart.
 //
 // Returns counts so the caller can log progress. Errors on individual rows
 // are logged but never abort the hydrate — partial coverage is better than
@@ -332,6 +339,8 @@ func (de *Engine) HydrateChromem(ctx context.Context) (booksHydrated, authorsHyd
 	if de.chromemStore == nil || de.embedStore == nil {
 		return 0, 0, nil
 	}
+
+	var staleBooks, staleAuthors int
 
 	bookEmbeds, err := de.embedStore.ListByType("book")
 	if err != nil {
@@ -342,6 +351,10 @@ func (de *Engine) HydrateChromem(ctx context.Context) (booksHydrated, authorsHyd
 			return booksHydrated, authorsHydrated, err
 		}
 		if len(e.Vector) == 0 {
+			continue
+		}
+		if !de.embeddingModelMatches(e.Model) {
+			staleBooks++
 			continue
 		}
 		book, _ := de.bookStore.GetBookByID(e.EntityID)
@@ -368,9 +381,26 @@ func (de *Engine) HydrateChromem(ctx context.Context) (booksHydrated, authorsHyd
 		if len(e.Vector) == 0 {
 			continue
 		}
+		if !de.embeddingModelMatches(e.Model) {
+			staleAuthors++
+			continue
+		}
 		de.mirrorAuthorToChromem(ctx, e.EntityID, e.Vector)
 		authorsHydrated++
 	}
+
+	// Surface stale-model rows once, as a single summary, instead of either
+	// spamming a warning per row (the old behavior this guard replaces) or
+	// silently dropping them where nobody would ever notice they exist.
+	// These rows are candidates for a re-embed (if the entity is real and
+	// just missed a backfill pass) or a future orphan-embedding cleanup (if
+	// the entity was merged/deleted and the row is dead weight) — either way
+	// this line is the trigger to go look, not a fire-and-forget skip.
+	if staleBooks > 0 || staleAuthors > 0 {
+		slog.Warn("chromem hydrate: skipped stale-model embedding rows (candidates for re-embed or orphan cleanup)",
+			"stale_books", staleBooks, "stale_authors", staleAuthors)
+	}
+
 	return booksHydrated, authorsHydrated, nil
 }
 

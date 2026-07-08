@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.79.0 -->
+<!-- version: 9.80.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-08 -->
 
@@ -33,9 +33,20 @@ future agent) can scan the entire workspace in one page.
 - **Fix**: bumped `BackfillVersionMarker` v5 → v6 (`internal/dedup/backfill_progress.go`) — one
   constant, zero new code, reuses the existing tested concurrent author-embed path. Deployed and
   verified on prod: 9,080/9,083 authors reconciled, warning count dropped from 10,350/restart to 0.
-- **Residual**: 3 authors (39755, 40861, 42076) were touched after the v6 run's `GetAllAuthors()`
-  snapshot and missed the pass — still warning post-v6. Bumped v6 → v7 to close the gap; cheap
-  re-run since everything else already cache-hits at bge-m3.
+- **Residual (corrected)**: 3 authors (39755, 40861, 42076) still warned post-v6. Initially assumed
+  a `GetAllAuthors()` snapshot race and bumped v6 → v7 to retry — but the same 3 IDs recurred
+  identically after v7, proving it wasn't a race. Root cause: `GetAllAuthors()` iterates literal
+  `author:N` Pebble keys and returned `total=9080` both times, while the embedding store has 9083
+  rows — these 3 are orphaned rows left by an author merge/delete (`GetAuthorByID` has
+  tombstone-redirect logic for merged authors that `GetAllAuthors()` doesn't apply). No backfill
+  re-run can ever reach them, since the entity is gone.
+- **Final fix**: `HydrateChromem` (both book and author loops) now skips any row whose stored model
+  doesn't match the current embed client, instead of attempting a doomed mirror + warning. Logs one
+  summary line per hydrate (`stale_books`/`stale_authors` counts) so orphaned/stale rows stay
+  visible instead of silently vanishing. No marker bump needed — deploy + restart only.
+- **Optional future work (not blocking)**: an author-side `cleanup-orphan-embeddings` (the book-side
+  one already exists) to actually delete these dead rows from Pebble, for clean data. The hydrate
+  guard already makes them harmless, so this is cosmetic/hygiene only.
 
 ---
 
