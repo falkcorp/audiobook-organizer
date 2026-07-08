@@ -9,6 +9,22 @@
 
 ### Features & Fixes
 
+#### July 8, 2026 - fix(ci): bump stale github-common pin causing Nightly Full CI failure
+
+- **`fix(ci)`** — `Nightly Full CI` (and `Security`/`Frontend CI` which share the same reusable
+  workflows) was pinned to `falkcorp/github-common@1dec34c`, a commit that predates
+  `github-common`'s own `a575899` fix ("update remaining jdfalk/ghcommon references to
+  falkcorp/github-common"). `reusable-ci.yml` at that stale pin still had 5 occurrences of the
+  pre-org-migration `jdfalk/ghcommon` submodule path, causing
+  `fatal: unable to access 'https://github.com/jdfalk/ghcommon/': ... 400` on every nightly run.
+- Bumped all 4 `falkcorp/github-common` pins in this repo (`ci.yml`, `nightly.yml`, `security.yml`,
+  `frontend-ci.yml`) to `github-common`'s current main (`7ff6ed8`), which includes the fix plus
+  subsequent accumulated improvements (release cleanup-guard, gha-release-go/gha-docs-generator pin
+  bumps). Verified zero remaining `1dec34c` references and valid YAML on all 4 files.
+- Found while investigating a general CI-health check; `ci.yml`'s `reusable-ci-minimal.yml` was not
+  itself in the buggy-file list (Minimal CI/PR checks were unaffected), bumped anyway for
+  consistency and to track the same current pin across all 4 callers.
+
 #### July 8, 2026 - fix(dedup): bump BackfillVersionMarker to re-embed authors stranded on stale model
 
 - **`fix(dedup)`** — `internal/dedup/backfill_progress.go`: bumped `BackfillVersionMarker`
