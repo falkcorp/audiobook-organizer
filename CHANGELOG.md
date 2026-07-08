@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.123.0 -->
+<!-- version: 3.124.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-07 -->
 
@@ -8,6 +8,28 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 7, 2026 - perf(dedup): index the scoring-path ISBN/ASIN collector (O(N²) → O(matches)) (#19 follow-up)
+
+- **`perf(dedup)`** — `CollectISBNASIN` (the ISBN/ASIN collector on the unified *scoring* path)
+  previously did a full ~48K-book `GetAllBooksCore` scan **per book that has an external ID**,
+  making `dedup.full-scan`'s "Composing scores" phase O(N²) (~50 books/min → ~16 h projected on
+  prod). PR #1451 fixed this same O(N²) on the *emission* path (`checkExactISBN`) via an ISBN index,
+  but the scoring-path collector was a copy of the pre-#1451 logic and never got it. This grafts the
+  emission path's indexed fast path onto the collector: `GetBookIDsByISBNASIN` + per-match
+  `GetBookByID` when `IsISBNIndexBuilt()`, with the O(N) scan kept as the fallback when the index
+  isn't built. Behavior-preserving: same field precedence (isbn10 → isbn13 → asin), same evidence
+  strings, same `MarkedForDeletion` filtering (deletion parity with the scan).
+- `CollectISBNASIN` now takes a `context.Context` and checks `ctx.Err()` between units of work on
+  both paths, so cancellation is prompt — the previous ~1m48s cancel latency observed on prod came
+  from this loop having no ctx check (`registry.RunItems` only polls ctx between books).
+- Unblocks the #19 prod-confirmation gate: only after this can `dedup.full-scan` reach a clean
+  completion (clearing the ~10,114 "unknown" candidate backlog) *and* drive candidate writes fast
+  enough to actually load-test the `pebble.NoSync` write-stall fix (commit `087d0dbe`). #19 stays
+  open until that clean run is observed.
+- Tests (`internal/dedup/collectors_isbn_test.go`): indexed-vs-scan **signal-set equivalence**,
+  ctx-cancel promptness on both paths, empty-ISBN early return, index-not-built fallback. Whole
+  `internal/dedup/...` package passes under `-race`.
 
 #### July 7, 2026 - feat(database): expose DurationSec-invariant fingerprint count (STOREFID follow-up)
 
