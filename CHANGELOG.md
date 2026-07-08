@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.124.0 -->
+<!-- version: 3.125.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-07 -->
 
@@ -8,6 +8,19 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 7, 2026 - docs: #19 dedup.full-scan freeze RESOLVED + prod-confirmed
+
+- **`docs`** — closes the #19 investigation. After the O(N²) collector fix (PR #1857, commit
+  `c36c05f4`) deployed with pprof, `dedup.build-isbn-index` set `IsISBNIndexBuilt()=true`
+  (7524/7524 books indexed, 0 failed) and `dedup.full-scan` ran **end-to-end to 100%**
+  (`44329/44329`, `duration_ms=675848` ≈ 11 min, op `01KWZQPTFYZY64AD1YB16A433D`) — the first
+  clean completion since the 2026-07-06 incident. Backlog cleared/rescored: **10869 pending
+  candidates**. The score phase reached **606 books/sec** (vs ~0.8/sec while broken), and the
+  `pebble.NoSync` write-stall fix (commit `087d0dbe`) was finally load-tested under a *fast*
+  write rate — candidate writes flowing, mutex waiters cycling to single digits, **zero swap**,
+  no L0 write-stall. Prod reverted to the pprof-off build afterward. TODO.md #19 section flipped
+  🟡 → ✅.
 
 #### July 7, 2026 - perf(dedup): index the scoring-path ISBN/ASIN collector (O(N²) → O(matches)) (#19 follow-up)
 

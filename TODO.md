@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.73.0 -->
+<!-- version: 9.74.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-07 -->
 
@@ -98,7 +98,7 @@ future agent) can scan the entire workspace in one page.
 
 ---
 
-## 🟡 dedup.full-scan freezes in composing-scores phase even after CONC-2/PR #1809 (2026-07-06) — ROOT-CAUSED + FIX SHIPPED, prod confirmation pending
+## ✅ dedup.full-scan freezes in composing-scores phase even after CONC-2/PR #1809 (2026-07-06) — RESOLVED + PROD-CONFIRMED 2026-07-07
 
 - **✅ ROOT CAUSE (2026-07-07, static trace):** per-candidate `EmbeddingStore.UpsertCandidate`
   (`UpsertCandidateNew`) took the store-wide `s.mu` **and held it across
@@ -130,11 +130,19 @@ future agent) can scan the entire workspace in one page.
   ~50 books/min → ~16 h), previously *masked* by the write-stall. Caveat: because the
   O(N²) throttled candidate writes to a trickle, this run proved *mechanism + cancel*,
   **not** stall-cured-under-load — the real load test needs the fast pass below.
-- **⏳ Now blocked on the O(N²) fix** (PR `fix/dedup-scoring-isbn-index`): grafts the
-  emission path's ISBN index onto `CollectISBNASIN` (O(matches)) + adds a `ctx.Err()`
-  check. After it deploys: confirm `IsISBNIndexBuilt()` on prod (run
-  `dedup.isbn-index-build` if not), then re-run `dedup.full-scan` to the clean
-  completion that finally closes #19 and load-tests NoSync.
+- **✅ O(N²) fix MERGED** (PR #1857 / commit `c36c05f4`): grafts the emission path's
+  ISBN index onto `CollectISBNASIN` (O(matches)) + a `ctx.Err()` check on both paths.
+- **✅ CLEAN COMPLETION PROD-CONFIRMED 2026-07-07 22:19** (op `01KWZQPTFYZY64AD1YB16A433D`,
+  build `gc36c05f4-debug`): after `dedup.build-isbn-index` (7524/7524 indexed, 0 failed)
+  set `IsISBNIndexBuilt()=true`, `dedup.full-scan` ran **end-to-end to 100%**
+  (`44329/44329`, `duration_ms=675848` ≈ 11 min) — first clean completion since the
+  incident. **Backlog cleared/rescored: 10869 pending candidates.** The score phase hit
+  **606 books/sec** (was ~0.8/sec broken), and NoSync was finally load-tested under a
+  *fast* write rate: candidate writes flowing (`UpsertCandidate` active) with mutex
+  waiters cycling to single digits and **zero swap** — no write-stall. pprof build then
+  reverted to the normal prod build (`make deploy`, pprof off). **#19 CLOSED.**
+- Downstream (separate, owner-gated): `dedup.calibrate-embedding-thresholds`
+  (precision-target-not-met) can now be re-run against the freshly-scored 10869 backlog.
 
 ### Original incident notes (2026-07-06, pre-root-cause — kept for history)
 
