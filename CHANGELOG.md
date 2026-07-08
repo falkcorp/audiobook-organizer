@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.125.0 -->
+<!-- version: 3.126.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-07 -->
 
@@ -18,9 +18,12 @@
   clean completion since the 2026-07-06 incident. Backlog cleared/rescored: **10869 pending
   candidates**. The score phase reached **606 books/sec** (vs ~0.8/sec while broken), and the
   `pebble.NoSync` write-stall fix (commit `087d0dbe`) was finally load-tested under a *fast*
-  write rate — candidate writes flowing, mutex waiters cycling to single digits, **zero swap**,
-  no L0 write-stall. Prod reverted to the pprof-off build afterward. TODO.md #19 section flipped
-  🟡 → ✅.
+  write rate: `s.mu` is still a serialization point — waiters oscillate up to ~NumCPU (observed
+  44–46 in the write-heavy tail) — but with the fsync gone from the critical section each hold is
+  microseconds, so the queue **drains rather than accumulating into a write-stall** (hence 606
+  books/sec sustained, clean 11-min finish, **zero swap**). Per-pair striped locks remain a live
+  *throughput* optimization, never needed for correctness/stall. Prod reverted to the pprof-off
+  build afterward. TODO.md #19 section flipped 🟡 → ✅.
 
 #### July 7, 2026 - perf(dedup): index the scoring-path ISBN/ASIN collector (O(N²) → O(matches)) (#19 follow-up)
 
