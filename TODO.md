@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.81.0 -->
+<!-- version: 9.82.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-08 -->
 
@@ -20,7 +20,7 @@ future agent) can scan the entire workspace in one page.
 
 ---
 
-## ✅ Author embeddings stranded on stale model (bge-m3 cutover follow-up) — RESOLVED (2026-07-08)
+## ✅ Author embeddings stranded on stale model (bge-m3 cutover follow-up) — FULLY RESOLVED (2026-07-08)
 
 - **Found via prod journalctl**: every restart since the Jul 2 2026 local-embeddings cutover
   (OpenAI text-embedding-3-large 3072-dim → bge-m3 1024-dim), `HydrateChromem` logged
@@ -44,12 +44,18 @@ future agent) can scan the entire workspace in one page.
   doesn't match the current embed client, instead of attempting a doomed mirror + warning. Logs one
   summary line per hydrate (`stale_books`/`stale_authors` counts) so orphaned/stale rows stay
   visible instead of silently vanishing. No marker bump needed — deploy + restart only.
-- **Follow-up shipped**: `dedup.cleanup-orphan-author-embeddings` op built (author-side counterpart
-  to the existing book op) to actually delete these dead rows from Pebble. Had to diverge from the
-  book op's `GetBookByID(id) == nil` pattern — `GetAuthorByID` follows the same tombstone redirect
-  that caused the original bug, so the op checks existence against `GetAllAuthors()` instead.
-  Covered by a regression test that reproduces the redirect. Not yet run on prod (dry-run first);
-  the hydrate guard already makes the rows harmless, so this is cleanup/hygiene, not urgent.
+- **Follow-up shipped + run**: `dedup.cleanup-orphan-author-embeddings` op built (author-side
+  counterpart to the existing book op) and deployed. Had to diverge from the book op's
+  `GetBookByID(id) == nil` pattern — `GetAuthorByID` follows the same tombstone redirect that caused
+  the original bug, so the op checks existence against `GetAllAuthors()` instead. Covered by a
+  regression test that reproduces the redirect.
+- **Final closure (prod, 2026-07-08)**: dry-run confirmed exactly the predicted 3 orphans
+  (39755, 40861, 42076; 9080 live, 9083 total) — apply deleted **3/3, 0 errors**. Idempotency
+  re-check: dry-run now reports **0 orphaned, 9080 live, 9080 total**. Fresh restart's
+  `chromem hydrate` summary line confirms **stale_authors=0**. The whole saga — 10,350
+  warnings/restart → 0, plus the underlying dead rows physically removed — is fully closed across
+  PRs #1862 (backfill v6), #1865 (v7, proved it wasn't a race), #1866 (hydrate model-guard), #1867
+  (orphan-cleanup op).
 
 ---
 

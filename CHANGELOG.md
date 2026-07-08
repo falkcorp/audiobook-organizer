@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.132.0 -->
+<!-- version: 3.133.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-08 -->
 
@@ -8,6 +8,17 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 8, 2026 - docs: close author-embed-backfill + orphan-cleanup saga (prod-confirmed)
+
+- **`docs`** — closes out the author-embeddings-stranded-on-stale-model saga (PRs #1862, #1865,
+  #1866, #1867). Ran `dedup.cleanup-orphan-author-embeddings` on prod: dry-run confirmed exactly
+  the predicted 3 orphaned authors (39755, 40861, 42076; 9080 live, 9083 total), apply deleted
+  **3/3, 0 errors**. Idempotency re-check (dry-run again): **0 orphaned, 9080 live, 9080 total**.
+  A fresh restart's `chromem hydrate` summary line confirms **stale_authors=0** — the last vestige
+  of the Jul 2 2026 local-embeddings cutover's author-side gap is gone: 10,350 warnings/restart at
+  the start of this investigation, 0 now, and the underlying dead Pebble rows are physically
+  removed (not just silently skipped). TODO.md's entry flipped to FULLY RESOLVED.
 
 #### July 8, 2026 - feat(dedup): add dedup.cleanup-orphan-author-embeddings op
 
