@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.129.0 -->
+<!-- version: 3.130.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-08 -->
 
@@ -8,6 +8,19 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 8, 2026 - fix(dedup): bump BackfillVersionMarker v6 -> v7 to close 3-author gap
+
+- **`fix(dedup)`** — `internal/dedup/backfill_progress.go`: bumped `BackfillVersionMarker`
+  (`embedding_backfill_v6_done` → `embedding_backfill_v7_done`).
+- **Follow-up to v6** (below): deploying v6 re-embedded 9,080/9,083 authors cleanly, but 3
+  (authorIDs 39755, 40861, 42076) were touched after `runEmbeddingBackfill`'s `GetAllAuthors()`
+  snapshot was taken and missed that pass — confirmed via prod journalctl, still logging the
+  `vector dim 3072 != store dim 1024` warning after a fresh restart post-v6.
+- **Cost**: since everything except these 3 stragglers is already reconciled at bge-m3, this re-run
+  should be fast — books and the other 9,080 authors cache-hit immediately (TextHash + model match),
+  only the 3 do real embedding work. Still re-runs the full `PurgeStaleCandidates` + `FullScan` pass
+  as a side effect of the shared `runEmbeddingBackfill` pipeline.
 
 #### July 8, 2026 - fix(ci): bump stale github-common pin causing Nightly Full CI failure
 
