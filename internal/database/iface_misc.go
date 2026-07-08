@@ -1,5 +1,5 @@
 // file: internal/database/iface_misc.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: 473781a7-1a31-4914-b7c7-8efc91f9f7e6
 // last-edited: 2026-07-07
 
@@ -199,6 +199,11 @@ type BookFileStore interface {
 	// GetFilesWithFingerprintFailures returns book_files where FingerprintFailedAt is set,
 	// optionally filtered by reason. Returns the filtered page plus total matching count.
 	GetFilesWithFingerprintFailures(reason string, limit, offset int) ([]BookFile, int64, error)
+	// GetFilesWithZeroDurationFingerprint returns book_files where AcoustIDFingerprint is
+	// set but AcoustIDFingerprintDurationSec==0 (STOREFID DurationSec invariant violation
+	// — legacy rows the memdb-proxy-based fingerprint ops silently skip). Returns the
+	// filtered page plus total matching count.
+	GetFilesWithZeroDurationFingerprint(limit, offset int) ([]BookFile, int64, error)
 	// GetAcoustIDStats returns AcoustID fingerprint coverage across all book files,
 	// including a per-library-root breakdown.
 	GetAcoustIDStats() (*AcoustIDStats, error)

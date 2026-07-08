@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.126.0 -->
+<!-- version: 3.127.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-07 -->
 
@@ -8,6 +8,42 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 7, 2026 - feat(acoustid): add duration-backfill op for legacy zero-DurationSec fingerprints (STOREFID follow-up)
+
+- **`feat(acoustid)`** — new manual-trigger operation `acoustid.duration-backfill`
+  (`internal/plugins/acoustid/duration_backfill.go`) that fixes the 2,781 prod `book_file` rows
+  found via the newly-deployed `with_fingerprint_zero_duration` counter: rows with an
+  `AcoustIDFingerprint` blob but `AcoustIDFingerprintDurationSec == 0`. These rows are invisible to
+  the 3 PR-B fingerprint ops (which gate on `DurationSec > 0`) and to the daily `acoustid.backfill`
+  cron op (which always skips rows that already have a blob, `force` is never set).
+- **Root cause**: `AcoustIDFingerprintDurationSec` is only ever set together with the fingerprint
+  blob, both from a single `fingerprint.FileWholeFingerprint()` call — there's no code path that
+  sets one without the other today. These rows are historical/legacy data (predate that invariant),
+  not an active bug in current write paths.
+- **Scoping**: added `Store.GetFilesWithZeroDurationFingerprint(limit, offset)` (`internal/database/
+  iface_misc.go` + `pebble_store_stats.go`), a Pebble-direct scan+filter mirroring the existing
+  sibling `GetFilesWithFingerprintFailures`. The new op scopes to exactly the violating rows via
+  this getter — not a full-library force-rescan (which would redundantly re-process ~293K already-
+  correct rows).
+- **Safety**: `DurationBackfillParams.Live` defaults to `false` (the Go zero value), so triggering
+  the op with no params — or any params JSON that omits the field — is always a read-only dry run
+  that reports the affected count + a capped sample of paths. Explicit `{"live": true}` required to
+  write. Re-running fpcalc is idempotent (same input file → same output), so there's no "wrong data
+  written" risk beyond what the existing `acoustid.backfill`/`acoustid.fingerprint-rescan` ops
+  already carry. **A top-level `fingerprint.Available()` gate was removed after CI caught it blocking
+  even the dry-run path** (which never calls fpcalc); the live path already handles backend
+  unavailability per-file via `doFingerprintFile`'s existing fallback chain.
+- **Concurrency**: bounded worker pool (`fpRescanWorkers()`, same tunable as `fingerprint_rescan.go`)
+  — the correctly-parallel sibling for this exact fpcalc-subprocess workload, per this repo's
+  concurrency-first convention. Not a book-level loop like `acoustid.backfill`; operates directly on
+  the scoped file list.
+- Regression test `TestGetFilesWithZeroDurationFingerprint_ScopesToViolatingRows`
+  (`internal/database/pebble_acoustid_stats_test.go`) plus 3 op-level tests
+  (`internal/plugins/acoustid/duration_backfill_test.go`): dry-run never writes, zero-affected-rows
+  is a clean no-op, live run correctly counts ineligible (missing-file) rows without erroring out.
+- `make mocks` regenerated 2 files (verified via `git diff --name-only`): `internal/database/mocks/
+  mock_store.go`, `internal/server/handlers/mocks/mock_reading_store.go`.
 
 #### July 7, 2026 - docs: #19 dedup.full-scan freeze RESOLVED + prod-confirmed
 

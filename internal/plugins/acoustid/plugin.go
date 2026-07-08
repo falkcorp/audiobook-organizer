@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/plugin.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d4e5f6a7-b8c9-0123-def0-123456789abc
-// last-edited: 2026-05-06
+// last-edited: 2026-07-07
 
 // Package acoustid is the UOS plugin for AcoustID fingerprinting operations.
 // It wraps the internal dedup.Engine and registers OperationDefs through
@@ -50,6 +50,7 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.resetAllDef(),
 		p.lshBackfillDef(),
 		p.onlineLookupDef(),
+		p.durationBackfillDef(),
 	}
 
 	for _, op := range ops {

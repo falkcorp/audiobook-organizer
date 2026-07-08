@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.75.0 -->
+<!-- version: 9.76.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-07 -->
 
@@ -81,20 +81,26 @@ future agent) can scan the entire workspace in one page.
   already has full fuzzy-matching logic downstream (`applyTranscriptionMetadataTiebreaker`,
   `metadataPairSimilarity`) that's just never fed any candidates today.
 
-## 🟡 Verify DurationSec invariant for the 3 PR-B fingerprint ops (2026-07-06, diagnostic added 2026-07-07)
+## 🟠 DurationSec invariant for the 3 PR-B fingerprint ops — CONFIRMED VIOLATED, fix built (2026-07-06 → 07)
 
 - The 3 rerouted ops (lsh_backfill / lsh_index_build / online_lookup) gate on
   `AcoustIDFingerprintDurationSec > 0` as the memdb-safe proxy for "has a whole-file
-  fingerprint". This assumes `AcoustIDFingerprint set ⇒ DurationSec > 0`. **Run a prod
-  query** for `book_file` rows with a non-empty fingerprint blob but `DurationSec == 0`;
-  if any exist they are silently skipped — backfill `DurationSec` or broaden the gate.
+  fingerprint". This assumes `AcoustIDFingerprint set ⇒ DurationSec > 0`.
   Code comment in `internal/plugins/acoustid/online_lookup.go`.
 - **Diagnostic added (2026-07-07):** `AcoustIDStats.WithFingerprintZeroDuration`, surfaced on the
-  existing `GET /maintenance/acoustid-stats` endpoint, now answers this directly — no new op or
-  prod DB access needed. **Still needs one prod query run post-deploy to actually close this item**:
-  hit the endpoint and check `with_fingerprint_zero_duration`. If 0, the invariant holds and this
-  item is fully resolved. If nonzero, that count identifies exactly how many rows need a
-  `DurationSec` backfill.
+  existing `GET /maintenance/acoustid-stats` endpoint.
+- **Prod query run (2026-07-07, post-deploy of `b28e9d9e`): 2,781 of 296,010 fingerprinted rows
+  (0.94%) violate the invariant.** These rows are permanently invisible to the 3 PR-B ops, and to
+  the daily `acoustid.backfill` cron (which also always skips rows with an existing blob).
+- **Fix built (2026-07-07):** new manual-trigger op `acoustid.duration-backfill`
+  (`internal/plugins/acoustid/duration_backfill.go`) scoped to exactly these rows via the new
+  `Store.GetFilesWithZeroDurationFingerprint` getter. Dry-run by default (`live` param must be
+  explicitly `true` to write); bounded worker pool matching `fingerprint_rescan.go`. See the
+  CHANGELOG entry for full detail.
+- **Still open:** the op is built and merged but has not yet been triggered against prod. Once run
+  with `live=true`, re-query `/maintenance/acoustid-stats` and confirm
+  `with_fingerprint_zero_duration` drops to (near) 0 — some rows may legitimately fail if the
+  source audio file no longer exists on disk (counted as `ineligible`, not silently dropped).
 
 ---
 

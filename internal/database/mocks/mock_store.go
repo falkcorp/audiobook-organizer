@@ -15267,6 +15267,80 @@ func (_c *MockBookFileStore_GetFilesWithFingerprintFailures_Call) RunAndReturn(r
 	return _c
 }
 
+// GetFilesWithZeroDurationFingerprint provides a mock function for the type MockBookFileStore
+func (_mock *MockBookFileStore) GetFilesWithZeroDurationFingerprint(limit int, offset int) ([]database.BookFile, int64, error) {
+	ret := _mock.Called(limit, offset)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetFilesWithZeroDurationFingerprint")
+	}
+
+	var r0 []database.BookFile
+	var r1 int64
+	var r2 error
+	if returnFunc, ok := ret.Get(0).(func(int, int) ([]database.BookFile, int64, error)); ok {
+		return returnFunc(limit, offset)
+	}
+	if returnFunc, ok := ret.Get(0).(func(int, int) []database.BookFile); ok {
+		r0 = returnFunc(limit, offset)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]database.BookFile)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(int, int) int64); ok {
+		r1 = returnFunc(limit, offset)
+	} else {
+		r1 = ret.Get(1).(int64)
+	}
+	if returnFunc, ok := ret.Get(2).(func(int, int) error); ok {
+		r2 = returnFunc(limit, offset)
+	} else {
+		r2 = ret.Error(2)
+	}
+	return r0, r1, r2
+}
+
+// MockBookFileStore_GetFilesWithZeroDurationFingerprint_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetFilesWithZeroDurationFingerprint'
+type MockBookFileStore_GetFilesWithZeroDurationFingerprint_Call struct {
+	*mock.Call
+}
+
+// GetFilesWithZeroDurationFingerprint is a helper method to define mock.On call
+//   - limit int
+//   - offset int
+func (_e *MockBookFileStore_Expecter) GetFilesWithZeroDurationFingerprint(limit any, offset any) *MockBookFileStore_GetFilesWithZeroDurationFingerprint_Call {
+	return &MockBookFileStore_GetFilesWithZeroDurationFingerprint_Call{Call: _e.mock.On("GetFilesWithZeroDurationFingerprint", limit, offset)}
+}
+
+func (_c *MockBookFileStore_GetFilesWithZeroDurationFingerprint_Call) Run(run func(limit int, offset int)) *MockBookFileStore_GetFilesWithZeroDurationFingerprint_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 int
+		if args[0] != nil {
+			arg0 = args[0].(int)
+		}
+		var arg1 int
+		if args[1] != nil {
+			arg1 = args[1].(int)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockBookFileStore_GetFilesWithZeroDurationFingerprint_Call) Return(bookFiles []database.BookFile, n int64, err error) *MockBookFileStore_GetFilesWithZeroDurationFingerprint_Call {
+	_c.Call.Return(bookFiles, n, err)
+	return _c
+}
+
+func (_c *MockBookFileStore_GetFilesWithZeroDurationFingerprint_Call) RunAndReturn(run func(limit int, offset int) ([]database.BookFile, int64, error)) *MockBookFileStore_GetFilesWithZeroDurationFingerprint_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // MarkFileImportedFromDeluge provides a mock function for the type MockBookFileStore
 func (_mock *MockBookFileStore) MarkFileImportedFromDeluge(ctx context.Context, originalPath string, libraryPath string, torrentHash string) error {
 	ret := _mock.Called(ctx, originalPath, libraryPath, torrentHash)
@@ -38881,6 +38955,80 @@ func (_c *MockStore_GetFilesWithFingerprintFailures_Call) Return(bookFiles []dat
 }
 
 func (_c *MockStore_GetFilesWithFingerprintFailures_Call) RunAndReturn(run func(reason string, limit int, offset int) ([]database.BookFile, int64, error)) *MockStore_GetFilesWithFingerprintFailures_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// GetFilesWithZeroDurationFingerprint provides a mock function for the type MockStore
+func (_mock *MockStore) GetFilesWithZeroDurationFingerprint(limit int, offset int) ([]database.BookFile, int64, error) {
+	ret := _mock.Called(limit, offset)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetFilesWithZeroDurationFingerprint")
+	}
+
+	var r0 []database.BookFile
+	var r1 int64
+	var r2 error
+	if returnFunc, ok := ret.Get(0).(func(int, int) ([]database.BookFile, int64, error)); ok {
+		return returnFunc(limit, offset)
+	}
+	if returnFunc, ok := ret.Get(0).(func(int, int) []database.BookFile); ok {
+		r0 = returnFunc(limit, offset)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]database.BookFile)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(int, int) int64); ok {
+		r1 = returnFunc(limit, offset)
+	} else {
+		r1 = ret.Get(1).(int64)
+	}
+	if returnFunc, ok := ret.Get(2).(func(int, int) error); ok {
+		r2 = returnFunc(limit, offset)
+	} else {
+		r2 = ret.Error(2)
+	}
+	return r0, r1, r2
+}
+
+// MockStore_GetFilesWithZeroDurationFingerprint_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetFilesWithZeroDurationFingerprint'
+type MockStore_GetFilesWithZeroDurationFingerprint_Call struct {
+	*mock.Call
+}
+
+// GetFilesWithZeroDurationFingerprint is a helper method to define mock.On call
+//   - limit int
+//   - offset int
+func (_e *MockStore_Expecter) GetFilesWithZeroDurationFingerprint(limit any, offset any) *MockStore_GetFilesWithZeroDurationFingerprint_Call {
+	return &MockStore_GetFilesWithZeroDurationFingerprint_Call{Call: _e.mock.On("GetFilesWithZeroDurationFingerprint", limit, offset)}
+}
+
+func (_c *MockStore_GetFilesWithZeroDurationFingerprint_Call) Run(run func(limit int, offset int)) *MockStore_GetFilesWithZeroDurationFingerprint_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 int
+		if args[0] != nil {
+			arg0 = args[0].(int)
+		}
+		var arg1 int
+		if args[1] != nil {
+			arg1 = args[1].(int)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_GetFilesWithZeroDurationFingerprint_Call) Return(bookFiles []database.BookFile, n int64, err error) *MockStore_GetFilesWithZeroDurationFingerprint_Call {
+	_c.Call.Return(bookFiles, n, err)
+	return _c
+}
+
+func (_c *MockStore_GetFilesWithZeroDurationFingerprint_Call) RunAndReturn(run func(limit int, offset int) ([]database.BookFile, int64, error)) *MockStore_GetFilesWithZeroDurationFingerprint_Call {
 	_c.Call.Return(run)
 	return _c
 }
