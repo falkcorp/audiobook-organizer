@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.131.0 -->
+<!-- version: 3.132.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-08 -->
 
@@ -8,6 +8,29 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 8, 2026 - feat(dedup): add dedup.cleanup-orphan-author-embeddings op
+
+- **`feat(dedup)`** — new op `internal/plugins/dedup/cleanup_orphan_author_embeddings.go`, the
+  author-side counterpart to `dedup.cleanup-orphan-embeddings` (books, PR #1802 follow-up).
+  Finds `emb:v:author:*` rows whose author ID no longer exists as a live author (merged into
+  another author, or hard-deleted) and reports/deletes them. Dry-run by default; `apply=true`
+  deletes only confirmed-orphaned rows; idempotent.
+- **Why a separate implementation, not a shared helper with the book op**: the book op's orphan
+  check (`GetBookByID(id) == nil`) is unsound for authors. `PebbleStore.GetAuthorByID` follows a
+  tombstone redirect for merged authors — `GetAuthorByID(mergedID)` returns the CANONICAL author's
+  data (non-nil), not nil — so a merged-away ID would look "live" and never get flagged. This op
+  instead builds its live-ID set from `GetAllAuthors()` (literal `author:N` key enumeration, no
+  tombstone-following), the same definition that let the 3 orphaned rows (authorIDs 39755, 40861,
+  42076) survive HydrateChromem's model-mismatch guard (#1866) indefinitely — confirmed via prod
+  journalctl during the #1862/#1865/#1866 investigation.
+- **Test coverage** includes a regression test
+  (`TestCleanupOrphanAuthorEmbeddingsOp_ScanFlagsMergedAuthorAsOrphan`) that wires a mock
+  reproducing the real tombstone-redirect behavior, to prove the op doesn't fall into the same trap.
+- **Follow-up, not urgent**: #1866's hydrate guard already makes these rows harmless (skipped, not
+  spammed); this op is for actually deleting the dead rows from Pebble. Not yet run on prod —
+  dry-run first to confirm the expected 3-author (plus the 18 stale-book rows #1866 also surfaced,
+  out of scope for this author-only op) count before applying.
 
 #### July 8, 2026 - fix(dedup): HydrateChromem skips stale-model embedding rows instead of spamming warnings
 

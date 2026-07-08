@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/plugin.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: d1e2f3a4-b5c6-7890-abcd-ef1234567890
-// last-edited: 2026-07-04
+// last-edited: 2026-07-08
 
 // Package dedup is the UOS plugin for deduplication operations.
 // It wraps the internal dedup.Engine and registers OperationDefs through
@@ -64,20 +64,21 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.splitBookScanDef(),
 		p.purgeStaleDef(),
 		p.lshIndexBuildDef(),
-		p.purgeLegacyFPDef(),                // T015: legacy fingerprint purge op
-		p.embReencodeDef(),                  // T021: float16+zstd re-encode op
-		p.bookfileSegDropDef(),              // T020: drop AcoustID segment fields from stored values
-		p.datasetBackfillDef(),              // C4: label + suppress residual pending candidates
-		p.calibrateEmbeddingThresholdsDef(), // DEDUP-2/3: bge-m3 threshold calibration report (dry-run only)
-		p.mineGoldLabelsDef(),               // gold miner: auto-label high-confidence true_dup positives
-		p.rebuildGoldLabelsDef(),            // rebuild rule/auto_high_conf gold labels against current state
-		p.quarantineChapterArtifactsDef(),   // drain chapter-file-as-book artifacts (candidate explosion)
-		p.drainStaleDef(),                   // DEDUP-1: drain CONS-16/17-era stale exact candidates (dry-run gated)
-		p.checkBookDef(),                    // M4: per-book dedup check via dependency scheduler
-		p.buildISBNIndexDef(),               // T022: ISBN/ASIN secondary index backfill
-		p.reembedEmbeddingsDef(),            // Part B: re-embed corpus when the embedding model changes
-		p.autoResolveDef(),                  // TASK-17: Tier-1 CERTAIN auto-merge (dry-run default, kill-switch gated)
-		p.cleanupOrphanEmbeddingsDef(),      // retroactive counterpart to #1802: deletes emb:v:book:* rows whose book is gone
+		p.purgeLegacyFPDef(),                 // T015: legacy fingerprint purge op
+		p.embReencodeDef(),                   // T021: float16+zstd re-encode op
+		p.bookfileSegDropDef(),               // T020: drop AcoustID segment fields from stored values
+		p.datasetBackfillDef(),               // C4: label + suppress residual pending candidates
+		p.calibrateEmbeddingThresholdsDef(),  // DEDUP-2/3: bge-m3 threshold calibration report (dry-run only)
+		p.mineGoldLabelsDef(),                // gold miner: auto-label high-confidence true_dup positives
+		p.rebuildGoldLabelsDef(),             // rebuild rule/auto_high_conf gold labels against current state
+		p.quarantineChapterArtifactsDef(),    // drain chapter-file-as-book artifacts (candidate explosion)
+		p.drainStaleDef(),                    // DEDUP-1: drain CONS-16/17-era stale exact candidates (dry-run gated)
+		p.checkBookDef(),                     // M4: per-book dedup check via dependency scheduler
+		p.buildISBNIndexDef(),                // T022: ISBN/ASIN secondary index backfill
+		p.reembedEmbeddingsDef(),             // Part B: re-embed corpus when the embedding model changes
+		p.autoResolveDef(),                   // TASK-17: Tier-1 CERTAIN auto-merge (dry-run default, kill-switch gated)
+		p.cleanupOrphanEmbeddingsDef(),       // retroactive counterpart to #1802: deletes emb:v:book:* rows whose book is gone
+		p.cleanupOrphanAuthorEmbeddingsDef(), // author-side counterpart: deletes emb:v:author:* rows orphaned by a merge/delete (#1866 follow-up)
 	}
 
 	for _, op := range ops {

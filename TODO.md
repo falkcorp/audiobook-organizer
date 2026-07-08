@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.80.0 -->
+<!-- version: 9.81.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-08 -->
 
@@ -44,9 +44,12 @@ future agent) can scan the entire workspace in one page.
   doesn't match the current embed client, instead of attempting a doomed mirror + warning. Logs one
   summary line per hydrate (`stale_books`/`stale_authors` counts) so orphaned/stale rows stay
   visible instead of silently vanishing. No marker bump needed — deploy + restart only.
-- **Optional future work (not blocking)**: an author-side `cleanup-orphan-embeddings` (the book-side
-  one already exists) to actually delete these dead rows from Pebble, for clean data. The hydrate
-  guard already makes them harmless, so this is cosmetic/hygiene only.
+- **Follow-up shipped**: `dedup.cleanup-orphan-author-embeddings` op built (author-side counterpart
+  to the existing book op) to actually delete these dead rows from Pebble. Had to diverge from the
+  book op's `GetBookByID(id) == nil` pattern — `GetAuthorByID` follows the same tombstone redirect
+  that caused the original bug, so the op checks existence against `GetAllAuthors()` instead.
+  Covered by a regression test that reproduces the redirect. Not yet run on prod (dry-run first);
+  the hydrate guard already makes the rows harmless, so this is cleanup/hygiene, not urgent.
 
 ---
 
