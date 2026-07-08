@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.74.0 -->
+<!-- version: 9.75.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-07 -->
 
@@ -138,8 +138,10 @@ future agent) can scan the entire workspace in one page.
   (`44329/44329`, `duration_ms=675848` ≈ 11 min) — first clean completion since the
   incident. **Backlog cleared/rescored: 10869 pending candidates.** The score phase hit
   **606 books/sec** (was ~0.8/sec broken), and NoSync was finally load-tested under a
-  *fast* write rate: candidate writes flowing (`UpsertCandidate` active) with mutex
-  waiters cycling to single digits and **zero swap** — no write-stall. pprof build then
+  *fast* write rate: `s.mu` stays a serialization point (waiters oscillate up to ~NumCPU,
+  observed 44–46 in the write-heavy tail) but with the fsync gone each hold is microseconds,
+  so the queue **drains rather than stalling** — **zero swap**, clean finish. Striped locks
+  remain a live *throughput* optimization, never needed for correctness. pprof build then
   reverted to the normal prod build (`make deploy`, pprof off). **#19 CLOSED.**
 - Downstream (separate, owner-gated): `dedup.calibrate-embedding-thresholds`
   (precision-target-not-met) can now be re-run against the freshly-scored 10869 backlog.
