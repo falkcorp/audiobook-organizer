@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.54.0
+// version: 1.55.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-07-07
 
@@ -541,7 +541,9 @@ func (de *Engine) runUnifiedScoringForBook(ctx context.Context, book *database.B
 	// of its pending candidates; we filter per candidate inside the loop below.
 	// Running these N times (once per candidate) multiplied DB reads by N.
 	allExactHashSigs, _ := CollectExactFileHash(de.bookStore, book)
-	allISBNSigs, _ := CollectISBNASIN(de.bookStore, book)
+	// Indexed ISBN/ASIN when the index is built (O(matches)); O(N) scan fallback
+	// otherwise. Passing ctx makes the scan cancellable mid-flight (#19).
+	allISBNSigs, _ := CollectISBNASIN(ctx, de.bookStore, de.isbnIndexStore, book)
 	allMetaSrcSigs, _ := CollectMetaSrcHash(de.bookStore, book)
 	allDurationSigs, _ := CollectDuration(de.bookStore, de.bookStore, book, durCfg)
 

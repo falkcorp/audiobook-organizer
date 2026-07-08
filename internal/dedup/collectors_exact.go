@@ -1,5 +1,5 @@
 // file: internal/dedup/collectors_exact.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c9d0e1f2-a3b4-4c5d-8e6f-7a8b9c0d1e2f
 // last-edited: 2026-07-07
 
@@ -31,6 +31,7 @@
 package dedup
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -47,8 +48,11 @@ type ExactFileHashStore interface {
 }
 
 // ISBNASINStore is the subset of database.Store required by CollectISBNASIN.
+// GetAllBooksCore drives the O(N) scan fallback; GetBookByID hydrates the
+// indexed fast path (one point-read per index match).
 type ISBNASINStore interface {
 	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
+	GetBookByID(id string) (*database.Book, error)
 }
 
 // MetaSrcHashStore is the subset of database.Store required by
@@ -131,12 +135,16 @@ func CollectExactFileHash(
 
 // ─── ISBN/ASIN collector ──────────────────────────────────────────────────────
 
-// CollectISBNASIN scans all books for matching ISBN10, ISBN13, or ASIN and
-// emits a SigISBNASIN signal (confidence 0.98) per unique matching book.
+// CollectISBNASIN finds books that share an ISBN10, ISBN13, or ASIN with book
+// and emits a SigISBNASIN signal (confidence 0.98) per unique matching book.
 //
-// The scan is O(N) over all books.  This is acceptable because it only runs
-// when the query book has at least one ISBN/ASIN value — books without external
-// IDs are skipped immediately.
+// Two paths, mirroring checkExactISBN (engine.go): when a built ISBN index is
+// wired, the indexed fast path resolves matches in O(matches) via
+// GetBookIDsByISBNASIN + per-match GetBookByID; otherwise it falls back to the
+// O(N) GetAllBooksCore scan (the original behavior). Both paths are exercised
+// only when the query book has at least one external ID. Prior to this the
+// scoring path always took the O(N) scan — an O(N²) hotspot over the full score
+// pass (#19). Both paths honor ctx cancellation between units of work.
 //
 // Logic unchanged from checkExactISBN (engine.go:350-426); emission shape only.
 //
@@ -144,9 +152,12 @@ func CollectExactFileHash(
 // (re-scoring pre-existing candidates), NOT the emission path. The
 // hasPlausibleAudio gate — which lives on checkExactISBN in engine.go — is
 // intentionally not applied here; it is an emission-time guard and does not
-// belong on a scoring-only collector.
+// belong on a scoring-only collector. MarkedForDeletion IS filtered, so the
+// indexed set equals what the scan (via GetAllBooksCore's deletion filter) sees.
 func CollectISBNASIN(
+	ctx context.Context,
 	store ISBNASINStore,
+	index ISBNIndexStore,
 	book *database.Book,
 ) ([]unified.Signal, error) {
 	if book == nil {
@@ -160,13 +171,77 @@ func CollectISBNASIN(
 	if bookISBN10 == "" && bookISBN13 == "" && bookASIN == "" {
 		return nil, nil
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	// matchFieldFor derives the evidence field with the same precedence the scan
+	// used (isbn10 > isbn13 > asin); "" means no shared external ID.
+	matchFieldFor := func(oISBN10, oISBN13, oASIN string) string {
+		switch {
+		case bookISBN10 != "" && oISBN10 == bookISBN10:
+			return "isbn10:" + bookISBN10
+		case bookISBN13 != "" && oISBN13 == bookISBN13:
+			return "isbn13:" + bookISBN13
+		case bookASIN != "" && oASIN == bookASIN:
+			return "asin:" + bookASIN
+		}
+		return ""
+	}
+	emit := func(sigs []unified.Signal, otherID, matchField string) []unified.Signal {
+		return append(sigs, unified.Signal{
+			Kind:       unified.SigISBNASIN,
+			Raw:        1.0,
+			Confidence: 0.98,
+			Evidence:   fmt.Sprintf("isbn/asin match %s: book %s ↔ %s", matchField, book.ID, otherID),
+		})
+	}
 
 	seen := make(map[string]bool)
 	var signals []unified.Signal
 
+	// Fast path: indexed lookup, O(matches). Mirrors checkExactISBNIndexed.
+	if index != nil && index.IsISBNIndexBuilt() {
+		ids, err := index.GetBookIDsByISBNASIN(bookISBN10, bookISBN13, bookASIN)
+		if err != nil {
+			return nil, fmt.Errorf("CollectISBNASIN index lookup: %w", err)
+		}
+		for _, otherID := range ids {
+			if otherID == book.ID || seen[otherID] {
+				continue
+			}
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			other, err := store.GetBookByID(otherID)
+			if err != nil {
+				return nil, fmt.Errorf("CollectISBNASIN hydrate %s: %w", otherID, err)
+			}
+			if other == nil {
+				continue // deleted between index scan and point lookup
+			}
+			// Deletion parity: GetAllBooksCore excludes MarkedForDeletion books,
+			// so the scan path never sees them; match that here.
+			if other.MarkedForDeletion != nil && *other.MarkedForDeletion {
+				continue
+			}
+			matchField := matchFieldFor(derefStr(other.ISBN10), derefStr(other.ISBN13), derefStr(other.ASIN))
+			if matchField == "" {
+				continue // index over-returned (normalization); re-check keeps parity
+			}
+			seen[otherID] = true
+			signals = emit(signals, otherID, matchField)
+		}
+		return signals, nil
+	}
+
+	// Fallback: O(N) GetAllBooksCore scan (original behavior).
 	const batchSize = 500
 	offset := 0
 	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		batch, err := store.GetAllBooksCore(batchSize, offset)
 		if err != nil {
 			return nil, fmt.Errorf("CollectISBNASIN get all books at offset %d: %w", offset, err)
@@ -180,24 +255,12 @@ func CollectISBNASIN(
 			if other.ID == book.ID || seen[other.ID] {
 				continue
 			}
-			var matchField string
-			if bookISBN10 != "" && derefStr(other.ISBN10) == bookISBN10 {
-				matchField = "isbn10:" + bookISBN10
-			} else if bookISBN13 != "" && derefStr(other.ISBN13) == bookISBN13 {
-				matchField = "isbn13:" + bookISBN13
-			} else if bookASIN != "" && derefStr(other.ASIN) == bookASIN {
-				matchField = "asin:" + bookASIN
-			}
+			matchField := matchFieldFor(derefStr(other.ISBN10), derefStr(other.ISBN13), derefStr(other.ASIN))
 			if matchField == "" {
 				continue
 			}
 			seen[other.ID] = true
-			signals = append(signals, unified.Signal{
-				Kind:       unified.SigISBNASIN,
-				Raw:        1.0,
-				Confidence: 0.98,
-				Evidence:   fmt.Sprintf("isbn/asin match %s: book %s ↔ %s", matchField, book.ID, other.ID),
-			})
+			signals = emit(signals, other.ID, matchField)
 		}
 
 		if len(batch) < batchSize {

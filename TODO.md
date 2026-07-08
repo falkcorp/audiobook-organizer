@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.72.0 -->
+<!-- version: 9.73.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-07 -->
 
@@ -121,6 +121,20 @@ future agent) can scan the entire workspace in one page.
   → capture periodic goroutine+heap dumps → require a **clean full completion** (also
   clears the ~10,114 backlog). Escalation held in reserve if any residual stall:
   per-pair striped locks for truly-concurrent commits (WAL group-commit coalesces).
+- **✅ Prod run 2026-07-07 (pprof build):** the NoSync write-stall did **not** recur —
+  during the score phase pprof showed 0 mutex waiters, 0 goroutines parked on `s.mu`,
+  48 workers runnable in compute, 0 swap; graceful cancel **worked** this time
+  (`context canceled` propagated, worker pool drained, no restart, ~1m48s). BUT the
+  run could not reach clean completion: it exposed a **separate O(N²)** in the
+  scoring-path `CollectISBNASIN` (full `GetAllBooksCore` scan per ISBN-bearing book,
+  ~50 books/min → ~16 h), previously *masked* by the write-stall. Caveat: because the
+  O(N²) throttled candidate writes to a trickle, this run proved *mechanism + cancel*,
+  **not** stall-cured-under-load — the real load test needs the fast pass below.
+- **⏳ Now blocked on the O(N²) fix** (PR `fix/dedup-scoring-isbn-index`): grafts the
+  emission path's ISBN index onto `CollectISBNASIN` (O(matches)) + adds a `ctx.Err()`
+  check. After it deploys: confirm `IsISBNIndexBuilt()` on prod (run
+  `dedup.isbn-index-build` if not), then re-run `dedup.full-scan` to the clean
+  completion that finally closes #19 and load-tests NoSync.
 
 ### Original incident notes (2026-07-06, pre-root-cause — kept for history)
 
