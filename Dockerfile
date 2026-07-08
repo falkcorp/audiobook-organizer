@@ -23,7 +23,7 @@ RUN npm run build
 # Stage 2: Build Go application with embedded frontend
 # Uses native platform (no cross-compile) so CGO works without cross-toolchain.
 # SHA pinned 2026-06-23 (golang:1.26-alpine manifest-list).
-FROM golang:1.26-alpine@sha256:3ad57304ad93bbec8548a0437ad9e06a455660655d9af011d58b993f6f615648 AS go-builder
+FROM golang:1.26-alpine@sha256:9097beb5536220f7857bdcb65c1b4b340630dd7a70b85f03d5af29640b06693d AS go-builder
 
 WORKDIR /build
 
