@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.77.0 -->
+<!-- version: 9.78.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-08 -->
 
@@ -17,6 +17,22 @@ future agent) can scan the entire workspace in one page.
 - [`docs/implementation-guide.md`](docs/implementation-guide.md) — integration guide for open items
 - [`docs/codebase-evaluation.md`](docs/codebase-evaluation.md) — 2026-04-30 codebase audit (12 issue groups, 38 bot-tasks)
 - Claude project memory at `~/.claude/projects/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/memory/` — items still to graduate here
+
+---
+
+## ✅ Author embeddings stranded on stale model (bge-m3 cutover follow-up) — RESOLVED (2026-07-08)
+
+- **Found via prod journalctl**: every restart since the Jul 2 2026 local-embeddings cutover
+  (OpenAI text-embedding-3-large 3072-dim → bge-m3 1024-dim), `HydrateChromem` logged
+  `dedup chromem upsert author ... vector dim 3072 != store dim 1024` for ~3,450 authors
+  (10,350 warnings in one startup burst; confirmed not ongoing — no recurrence since).
+- **Root cause**: `dedup.reembed-embeddings` (built for this exact cutover) is books-only by its
+  own doc comment ("re-embedding authors is left to a follow-up" — never built).
+  `runEmbeddingBackfill`'s author loop is already model-aware (PR #1744) but gated by
+  `BackfillVersionMarker`, which predates the cutover and was never bumped, so it never re-ran.
+- **Fix**: bumped `BackfillVersionMarker` v5 → v6 (`internal/dedup/backfill_progress.go`) — one
+  constant, zero new code, reuses the existing tested concurrent author-embed path. Takes effect
+  on next server restart/deploy.
 
 ---
 

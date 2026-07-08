@@ -1,7 +1,7 @@
 // file: internal/dedup/backfill_progress.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: f6a7b8c9-d0e1-f2a3-b4c5-d6e7f8a9b0c1
-// last-edited: 2026-07-04
+// last-edited: 2026-07-08
 
 package dedup
 
@@ -18,8 +18,22 @@ package dedup
 //     "number", "no", "part", "pt", "episode", "ep", "#", and added a
 //     last-ditch digit-only-difference fallback to catch series volumes
 //     whose marker the regex doesn't recognize
-//   - v5: current version
-const BackfillVersionMarker = "embedding_backfill_v5_done"
+//   - v5: previous version
+//   - v6: re-run to pick up authors stranded on a stale embedding model.
+//     The Jul 2 2026 cutover from OpenAI text-embedding-3-large (3072-dim)
+//     to local bge-m3 (1024-dim) reconciled books via the dedicated
+//     dedup.reembed-embeddings op, but that op is books-only — author
+//     vectors were never re-embedded. Every restart since then,
+//     HydrateChromem tried to mirror ~3,450 authors' stale 3072-dim
+//     vectors into the 1024-dim ANN store and logged a dimension-mismatch
+//     warning per author (harmless spam, but those authors also had zero
+//     Layer 2 embedding-dedup coverage). runEmbeddingBackfill's author
+//     loop (embedAuthorsConcurrent -> EmbedAuthor) is already model-aware
+//     (PR #1744) and would have fixed this on its own, but it only runs
+//     once per marker generation — v5 predates the cutover, so it never
+//     fired again. Bumping to v6 triggers one more pass; books cache-hit
+//     immediately (already reconciled), authors get freshly embedded.
+const BackfillVersionMarker = "embedding_backfill_v6_done"
 
 // NewDedupScanProgressLogger returns a progress callback suitable for
 // Engine.FullScan that logs once every `interval` books processed (plus

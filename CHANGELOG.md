@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.128.0 -->
+<!-- version: 3.129.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-08 -->
 
@@ -8,6 +8,31 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 8, 2026 - fix(dedup): bump BackfillVersionMarker to re-embed authors stranded on stale model
+
+- **`fix(dedup)`** — `internal/dedup/backfill_progress.go`: bumped `BackfillVersionMarker`
+  (`embedding_backfill_v5_done` → `embedding_backfill_v6_done`) to force one more run of
+  `runEmbeddingBackfill` on next startup.
+- **Root cause**: the Jul 2 2026 cutover from OpenAI `text-embedding-3-large` (3072-dim) to local
+  bge-m3 (1024-dim) was reconciled for books via the dedicated `dedup.reembed-embeddings` op, but
+  that op is explicitly books-only ("re-embedding authors is left to a follow-up" per its own doc
+  comment) — that follow-up was never built. `runEmbeddingBackfill`'s author loop
+  (`embedAuthorsConcurrent` → `EmbedAuthor`) is already model-aware (PR #1744,
+  `embeddingModelMatches`) and would have fixed this on its own, but it's gated by
+  `BackfillVersionMarker` and only runs once per marker generation — v5 predates the cutover, so it
+  never fired again.
+- **Observed symptom**: every server restart since Jul 2, `HydrateChromem` tried to mirror ~3,450
+  authors' stale 3072-dim vectors into the reconfigured 1024-dim chromem/HNSW ANN store, logging a
+  `dedup chromem upsert author ... vector dim 3072 != store dim 1024` warning per author (confirmed
+  via prod journalctl: 10,350 warnings / 3,450 unique author IDs in one startup burst, none since —
+  it's a one-time-per-restart burst, not an ongoing failure). Cosmetically noisy, but the real
+  defect is that those 3,450 authors had zero Layer 2 embedding-dedup coverage since the cutover.
+- **Fix scope**: one constant bump, zero new code — reuses the existing, tested, concurrent
+  author-embed path instead of building a new author-scoped reembed op. Next restart re-embeds the
+  affected authors via the model-aware path; books cache-hit immediately since they're already
+  reconciled. Also re-runs `PurgeStaleCandidates` + `FullScan`, both already hardened (see #19
+  closure, 2026-07-07).
 
 #### July 8, 2026 - docs: STOREFID DurationSec invariant RESOLVED + prod-confirmed
 
