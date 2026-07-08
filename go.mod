@@ -11,11 +11,11 @@ require (
 	github.com/gin-contrib/gzip v1.2.6
 	github.com/gin-gonic/gin v1.12.0
 	github.com/hashicorp/go-memdb v1.3.5
-	github.com/klauspost/compress v1.18.7
+	github.com/klauspost/compress v1.19.0
 	github.com/lithammer/fuzzysearch v1.1.8
 	github.com/nutsdb/nutsdb v1.1.0
 	github.com/oklog/ulid/v2 v2.1.1
-	github.com/openai/openai-go/v3 v3.41.0
+	github.com/openai/openai-go/v3 v3.41.1
 	github.com/philippgille/chromem-go v0.7.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
@@ -30,10 +30,10 @@ require (
 	go.opentelemetry.io/otel/sdk v1.44.0
 	go.opentelemetry.io/otel/sdk/metric v1.44.0
 	go.opentelemetry.io/otel/trace v1.44.0
-	go.senan.xyz/taglib v0.12.0
+	go.senan.xyz/taglib v0.13.0
 	golang.org/x/crypto v0.53.0
 	golang.org/x/net v0.56.0
-	golang.org/x/text v0.38.0
+	golang.org/x/text v0.39.0
 	golang.org/x/time v0.15.0
 	gopkg.in/yaml.v3 v3.0.1
 	howett.net/plist v1.0.1

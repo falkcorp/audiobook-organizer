@@ -25,7 +25,7 @@ on:
 
 jobs:
   burndown:
-    uses: falkcorp/github-common/.github/workflows/reusable-burndown.yml@66059b7eba8a00bee7e45a114c00251f0a6c3a07 # v1.11.2 + submodules:recursive + triage-poll pin fix
+    uses: falkcorp/github-common/.github/workflows/reusable-burndown.yml@7ff6ed85d901b86dd836254c973134a7a764fa51 # v1.11.2 + submodules:recursive + triage-poll pin fix
     with:
       # Scheduled runs always use full mode (auto-merge ready PRs).
       # Manual dispatch respects the input selection (default: draft-only for safety).
