@@ -1,5 +1,5 @@
 // file: internal/database/pebble_acoustid_stats_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: e5f6a7b8-c9d0-1234-efab-234567890123
 // last-edited: 2026-07-07
 
@@ -157,6 +157,49 @@ func TestGetAcoustIDStats_ZeroDurationInvariant(t *testing.T) {
 	assert.Equal(t, 3, stats.TotalFiles)
 	assert.Equal(t, 2, stats.WithFingerprint, "2 rows have a fingerprint blob")
 	assert.Equal(t, 1, stats.WithFingerprintZeroDuration, "exactly 1 fingerprinted row has DurationSec==0")
+}
+
+// TestGetFilesWithZeroDurationFingerprint_ScopesToViolatingRows verifies the
+// row-level getter that backs the acoustid.duration-backfill op: it must
+// return exactly the rows with a fingerprint blob but DurationSec==0, and
+// nothing else (not normal fingerprinted rows, not fingerprint-less rows).
+func TestGetFilesWithZeroDurationFingerprint_ScopesToViolatingRows(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+
+	importPath := "/lib"
+	src := "audible"
+	asin1, asin2, asin3 := "B020", "B021", "B022"
+	books := []Book{
+		{Title: "Normal FP", MetadataSource: &src, ASIN: &asin1, SourceImportPath: &importPath},
+		{Title: "Zero Duration FP", MetadataSource: &src, ASIN: &asin2, SourceImportPath: &importPath},
+		{Title: "No FP", MetadataSource: &src, ASIN: &asin3, SourceImportPath: &importPath},
+	}
+	for i := range books {
+		created, err := store.CreateBook(&books[i])
+		require.NoError(t, err)
+		books[i].ID = created.ID
+	}
+
+	require.NoError(t, store.CreateBookFile(&BookFile{
+		BookID: books[0].ID, FilePath: "/lib/normal.m4b",
+		AcoustIDFingerprint: []byte{1, 2, 3, 4}, AcoustIDFingerprintDurationSec: 1800,
+	}))
+	require.NoError(t, store.CreateBookFile(&BookFile{
+		BookID: books[1].ID, FilePath: "/lib/zero-duration.m4b",
+		AcoustIDFingerprint: []byte{5, 6, 7, 8}, AcoustIDFingerprintDurationSec: 0,
+	}))
+	require.NoError(t, store.CreateBookFile(&BookFile{
+		BookID: books[2].ID, FilePath: "/lib/no-fp.m4b",
+	}))
+
+	ps := store.(*PebbleStore)
+	matched, total, err := ps.GetFilesWithZeroDurationFingerprint(0, 0)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), total)
+	require.Len(t, matched, 1)
+	assert.Equal(t, "/lib/zero-duration.m4b", matched[0].FilePath)
+	assert.Equal(t, books[1].ID, matched[0].BookID)
 }
 
 func TestGetAcoustIDStats_AllSegmentsChecked(t *testing.T) {

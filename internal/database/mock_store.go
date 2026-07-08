@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.77.0
+// version: 1.78.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-07-07
 
@@ -369,6 +369,7 @@ type MockStore struct {
 	GetBookFileHashStatsFunc                func() (*BookFileHashStats, error)
 	GetBookMetadataHashStatsFunc            func() (*BookMetadataHashStats, error)
 	GetFilesWithFingerprintFailuresFunc     func(reason string, limit, offset int) ([]BookFile, int64, error)
+	GetFilesWithZeroDurationFingerprintFunc func(limit, offset int) ([]BookFile, int64, error)
 	GetAcoustIDStatsFunc                    func() (*AcoustIDStats, error)
 
 	// Path history
@@ -2513,6 +2514,13 @@ func (m *MockStore) GetBookMetadataHashStats() (*BookMetadataHashStats, error) {
 func (m *MockStore) GetFilesWithFingerprintFailures(reason string, limit, offset int) ([]BookFile, int64, error) {
 	if m.GetFilesWithFingerprintFailuresFunc != nil {
 		return m.GetFilesWithFingerprintFailuresFunc(reason, limit, offset)
+	}
+	return nil, 0, nil
+}
+
+func (m *MockStore) GetFilesWithZeroDurationFingerprint(limit, offset int) ([]BookFile, int64, error) {
+	if m.GetFilesWithZeroDurationFingerprintFunc != nil {
+		return m.GetFilesWithZeroDurationFingerprintFunc(limit, offset)
 	}
 	return nil, 0, nil
 }

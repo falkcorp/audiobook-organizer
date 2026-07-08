@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_stats.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8643a893-1898-4098-8e69-c312531d962c
 // last-edited: 2026-07-07
 
@@ -739,6 +739,37 @@ func (p *PebbleStore) GetFilesWithFingerprintFailures(reason string, limit, offs
 			continue
 		}
 		if reason != "" && (f.FingerprintFailureReason == nil || *f.FingerprintFailureReason != reason) {
+			continue
+		}
+		matched = append(matched, f)
+	}
+	total := int64(len(matched))
+	if offset >= len(matched) {
+		return nil, total, nil
+	}
+	end := offset + limit
+	if limit <= 0 || end > len(matched) {
+		end = len(matched)
+	}
+	return matched[offset:end], total, nil
+}
+
+// GetFilesWithZeroDurationFingerprint scans all book_files and returns those
+// where AcoustIDFingerprint is set but AcoustIDFingerprintDurationSec==0
+// (STOREFID DurationSec invariant violation). Same Pebble-direct scan as
+// GetFilesWithFingerprintFailures for the same reason: the fingerprint blob
+// is stripped from memdb-resident rows.
+func (p *PebbleStore) GetFilesWithZeroDurationFingerprint(limit, offset int) ([]BookFile, int64, error) {
+	allFiles, err := p.getAllBookFilesPebbleScan()
+	if err != nil {
+		return nil, 0, fmt.Errorf("GetFilesWithZeroDurationFingerprint: %w", err)
+	}
+	var matched []BookFile
+	for _, f := range allFiles {
+		if len(f.AcoustIDFingerprint) == 0 {
+			continue
+		}
+		if f.AcoustIDFingerprintDurationSec != 0 {
 			continue
 		}
 		matched = append(matched, f)
