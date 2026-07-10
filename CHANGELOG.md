@@ -1,7 +1,7 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.133.0 -->
+<!-- version: 3.134.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
-<!-- last-edited: 2026-07-08 -->
+<!-- last-edited: 2026-07-10 -->
 
 # Changelog
 
@@ -9,7 +9,19 @@
 
 ### Features & Fixes
 
-#### July 8, 2026 - docs: close author-embed-backfill + orphan-cleanup saga (prod-confirmed)
+#### July 10, 2026 - docs(plan): 10 remaining-work planning packages (INIT-1..10)
+
+- **`docs`** — full planning packages for the remaining-work catalog: 10 design specs,
+  10 implementation plans, 50 executable TASK briefs (+ STOP/HOLD stubs for the
+  workflow-system, community-fingerprint-index, and responses-api-migration initiatives),
+  and the orchestrator entry point
+  [`docs/plans/2026-07-10-execution-manifest.md`](docs/plans/2026-07-10-execution-manifest.md).
+  Every cited anchor grep-verified at HEAD `fce58498` (14 master-plan anchor drifts
+  corrected, incl. `service_query.go` → `internal/audiobooks/`, the dangling INIT-7 spec
+  link, and the already-shipped User-Ratings items). Quality pipeline: 3-lens adversarial
+  design-judge panel per package (20 blockers / 50 majors / 95 minors → 134 fixes applied,
+  21 rejected with reasons), 50 cold-executor brief verifications with repair loop, and a
+  4-agent mechanical audit (all CLEAN). Planning only — no product code changed.
 
 - **`docs`** — closes out the author-embeddings-stranded-on-stale-model saga (PRs #1862, #1865,
   #1866, #1867). Ran `dedup.cleanup-orphan-author-embeddings` on prod: dry-run confirmed exactly
