@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 9.82.0 -->
+<!-- version: 9.83.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-07-08 -->
+<!-- last-edited: 2026-07-10 -->
 
 # Project TODO
 
@@ -17,6 +17,27 @@ future agent) can scan the entire workspace in one page.
 - [`docs/implementation-guide.md`](docs/implementation-guide.md) — integration guide for open items
 - [`docs/codebase-evaluation.md`](docs/codebase-evaluation.md) — 2026-04-30 codebase audit (12 issue groups, 38 bot-tasks)
 - Claude project memory at `~/.claude/projects/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/memory/` — items still to graduate here
+
+---
+
+## 📦 2026-07-10 Remaining-Work Planning Packages — READY FOR EXECUTION
+
+Ten full planning packages (spec + plan + task briefs) covering INIT-1..10 of the
+remaining-work catalog, produced, adversarially judged (3 lenses × 10), brief-verified
+(50 cold-executor role-plays), and mechanically audited on 2026-07-10.
+
+- **Entry point (read this first):**
+  [`docs/plans/2026-07-10-execution-manifest.md`](docs/plans/2026-07-10-execution-manifest.md)
+  — per-initiative spec/plan/tasks paths, gates, cross-initiative constraints
+  (engine.go partition, metadata_ops.go serialization), recommended execution order
+  (Phase A parallel-autonomous → Phase B post-merge → Phase C human decision points),
+  and the out-of-catalog TODO appendix.
+- Executable now (autonomous lane): INIT-2, INIT-3, INIT-4, INIT-9 (minus REPO-SIZE-1),
+  INIT-10 (minus C8), INIT-1 waves W1–W3, INIT-5 T1.
+- Human decision points: INIT-5 T2 Deluge spike sign-off; INIT-6 + INIT-8 spec reviews
+  (STOP-FOR-HUMAN); INIT-9 REPO-SIZE-1 history-rewrite plan; INIT-7 hold-lift (#1260–#1265).
+- Prod-data mutations (INIT-1 T7, INIT-2 T3/T6 drains, INIT-10 C8) are dry-run →
+  AskUserQuestion gated in the briefs.
 
 ---
 
