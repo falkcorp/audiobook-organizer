@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
-// last-edited: 2026-07-07
+// last-edited: 2026-07-10
 
 package audiobooks
 
@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 )
@@ -67,7 +68,7 @@ func (svc *AudiobookService) GetAudiobooks(ctx context.Context, limit int, offse
 	// Apply filters in order of precedence
 	if search != "" {
 		if svc.searchIndex != nil {
-			books, err = svc.searchWithBleve(search, limit, offset)
+			books, err = svc.searchWithBleve(search, limit, offset, f.UserID)
 		} else {
 			books, err = svc.store.SearchBooks(search, limit, offset)
 		}
@@ -512,16 +513,29 @@ func (svc *AudiobookService) EnrichAudiobooksWithNamesAndFiles(books []database.
 	return enrichedBooks
 }
 
+// searchPostFilterWindow bounds the Bleve over-fetch used when
+// per-user DSL filters (read_status / progress_pct / last_played)
+// must be applied in Go after the index returns candidates. Mirrors
+// the playlist evaluator's defaultEvalPageSize precedent
+// (internal/playlist/evaluator.go) — kept as a private, package-local
+// constant rather than importing the playlist one.
+const searchPostFilterWindow = 10000
+
 // searchWithBleve parses the query via the DSL, translates to a
 // Bleve native query, and returns the matching books. Per-user
 // filters produced by the translator (read_status / progress_pct /
-// last_played) are currently dropped here — the library-list route
-// doesn't carry user state. Spec 3.6 will wire them back in at the
-// handler layer once the user context is plumbed.
+// last_played) are applied here (INIT-4 T2) via
+// search.MatchPerUserFilters: Bleve is over-fetched up to
+// searchPostFilterWindow, each hit's per-user state is read and
+// matched, then offset/limit slicing is applied to the filtered
+// slice. Requires userID (the authenticated caller, plumbed in by
+// GetAudiobooks via f.UserID); with no userID the filters are
+// skipped and a warning is logged rather than silently
+// over-suppressing results.
 //
 // Falls back to an empty slice (not nil) on zero matches so callers
 // get consistent JSON shape.
-func (svc *AudiobookService) searchWithBleve(query string, limit, offset int) ([]database.Book, error) {
+func (svc *AudiobookService) searchWithBleve(query string, limit, offset int, userID string) ([]database.Book, error) {
 	ast, err := search.ParseQuery(query)
 	if err != nil {
 		// Parser failure: fall back to the substring search path so
@@ -529,10 +543,64 @@ func (svc *AudiobookService) searchWithBleve(query string, limit, offset int) ([
 		// rejects (e.g. punctuation-heavy book titles).
 		return svc.store.SearchBooks(query, limit, offset)
 	}
-	bleveQ, _, err := search.Translate(ast)
+	bleveQ, perUser, err := search.Translate(ast)
 	if err != nil {
 		return svc.store.SearchBooks(query, limit, offset)
 	}
+
+	if len(perUser) > 0 && userID != "" && !config.AppConfig.DisablePerUserSearchFilters {
+		hits, _, err := svc.searchIndex.SearchNative(bleveQ, 0, searchPostFilterWindow)
+		if err != nil {
+			return nil, fmt.Errorf("bleve search: %w", err)
+		}
+		if len(hits) >= searchPostFilterWindow {
+			slog.Warn("search: post-filter window exhausted; results beyond it are truncated",
+				"window", searchPostFilterWindow)
+		}
+		filtered := make([]database.Book, 0, len(hits))
+		for _, h := range hits {
+			b, _ := svc.store.GetBookByID(h.BookID)
+			if b == nil {
+				continue
+			}
+			state, stateErr := svc.store.GetUserBookState(userID, b.ID)
+			if stateErr != nil {
+				// FAIL-OPEN (Decision 5): evaluate the zero-value state, loudly.
+				slog.Warn("search: per-user state read failed; evaluating zero-value state",
+					"book_id", b.ID, "err", stateErr)
+				state = nil
+			}
+			if !search.MatchPerUserFilters(state, perUser) {
+				continue
+			}
+			filtered = append(filtered, *b)
+		}
+		// Apply pagination after filtering — offset beyond len yields an
+		// empty slice, not an error (mirrors GetAudiobooks' heavy
+		// post-filter slicing above).
+		if offset > 0 && offset < len(filtered) {
+			filtered = filtered[offset:]
+		} else if offset >= len(filtered) {
+			filtered = nil
+		}
+		if limit > 0 && limit < len(filtered) {
+			filtered = filtered[:limit]
+		}
+		if filtered == nil {
+			filtered = []database.Book{}
+		}
+		return filtered, nil
+	}
+
+	if len(perUser) > 0 {
+		reason := "no_user_context"
+		if config.AppConfig.DisablePerUserSearchFilters {
+			reason = "disabled_by_config"
+		}
+		slog.Warn("search: per-user filters dropped, no user context",
+			"filters", len(perUser), "reason", reason)
+	}
+
 	hits, _, err := svc.searchIndex.SearchNative(bleveQ, offset, limit)
 	if err != nil {
 		return nil, fmt.Errorf("bleve search: %w", err)
