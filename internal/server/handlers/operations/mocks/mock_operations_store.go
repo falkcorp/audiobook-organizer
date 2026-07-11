@@ -2518,68 +2518,6 @@ func (_c *MockOperationsStore_GetBookByID_Call) RunAndReturn(run func(id string)
 	return _c
 }
 
-// GetBooksByIDs provides a mock function for the type MockOperationsStore
-func (_mock *MockOperationsStore) GetBooksByIDs(ids []string) ([]database.Book, error) {
-	ret := _mock.Called(ids)
-
-	if len(ret) == 0 {
-		panic("no return value specified for GetBooksByIDs")
-	}
-
-	var r0 []database.Book
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func([]string) ([]database.Book, error)); ok {
-		return returnFunc(ids)
-	}
-	if returnFunc, ok := ret.Get(0).(func([]string) []database.Book); ok {
-		r0 = returnFunc(ids)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.Book)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func([]string) error); ok {
-		r1 = returnFunc(ids)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockOperationsStore_GetBooksByIDs_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetBooksByIDs'
-type MockOperationsStore_GetBooksByIDs_Call struct {
-	*mock.Call
-}
-
-// GetBooksByIDs is a helper method to define mock.On call
-//   - ids []string
-func (_e *MockOperationsStore_Expecter) GetBooksByIDs(ids any) *MockOperationsStore_GetBooksByIDs_Call {
-	return &MockOperationsStore_GetBooksByIDs_Call{Call: _e.mock.On("GetBooksByIDs", ids)}
-}
-
-func (_c *MockOperationsStore_GetBooksByIDs_Call) Run(run func(ids []string)) *MockOperationsStore_GetBooksByIDs_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 []string
-		if args[0] != nil {
-			arg0 = args[0].([]string)
-		}
-		run(
-			arg0,
-		)
-	})
-	return _c
-}
-
-func (_c *MockOperationsStore_GetBooksByIDs_Call) Return(books []database.Book, err error) *MockOperationsStore_GetBooksByIDs_Call {
-	_c.Call.Return(books, err)
-	return _c
-}
-
-func (_c *MockOperationsStore_GetBooksByIDs_Call) RunAndReturn(run func(ids []string) ([]database.Book, error)) *MockOperationsStore_GetBooksByIDs_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // GetBookByITunesPersistentID provides a mock function for the type MockOperationsStore
 func (_mock *MockOperationsStore) GetBookByITunesPersistentID(persistentID string) (*database.Book, error) {
 	ret := _mock.Called(persistentID)
@@ -3214,6 +3152,68 @@ func (_c *MockOperationsStore_GetBooksByAuthorIDWithRoleCore_Call) Return(bookCo
 }
 
 func (_c *MockOperationsStore_GetBooksByAuthorIDWithRoleCore_Call) RunAndReturn(run func(authorID int) ([]database.BookCore, error)) *MockOperationsStore_GetBooksByAuthorIDWithRoleCore_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// GetBooksByIDs provides a mock function for the type MockOperationsStore
+func (_mock *MockOperationsStore) GetBooksByIDs(ids []string) ([]database.Book, error) {
+	ret := _mock.Called(ids)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetBooksByIDs")
+	}
+
+	var r0 []database.Book
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func([]string) ([]database.Book, error)); ok {
+		return returnFunc(ids)
+	}
+	if returnFunc, ok := ret.Get(0).(func([]string) []database.Book); ok {
+		r0 = returnFunc(ids)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]database.Book)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func([]string) error); ok {
+		r1 = returnFunc(ids)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockOperationsStore_GetBooksByIDs_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetBooksByIDs'
+type MockOperationsStore_GetBooksByIDs_Call struct {
+	*mock.Call
+}
+
+// GetBooksByIDs is a helper method to define mock.On call
+//   - ids []string
+func (_e *MockOperationsStore_Expecter) GetBooksByIDs(ids any) *MockOperationsStore_GetBooksByIDs_Call {
+	return &MockOperationsStore_GetBooksByIDs_Call{Call: _e.mock.On("GetBooksByIDs", ids)}
+}
+
+func (_c *MockOperationsStore_GetBooksByIDs_Call) Run(run func(ids []string)) *MockOperationsStore_GetBooksByIDs_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 []string
+		if args[0] != nil {
+			arg0 = args[0].([]string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockOperationsStore_GetBooksByIDs_Call) Return(books []database.Book, err error) *MockOperationsStore_GetBooksByIDs_Call {
+	_c.Call.Return(books, err)
+	return _c
+}
+
+func (_c *MockOperationsStore_GetBooksByIDs_Call) RunAndReturn(run func(ids []string) ([]database.Book, error)) *MockOperationsStore_GetBooksByIDs_Call {
 	_c.Call.Return(run)
 	return _c
 }
