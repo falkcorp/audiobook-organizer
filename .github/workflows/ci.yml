@@ -1,7 +1,7 @@
 # file: .github/workflows/ci.yml
-# version: 3.0.6
+# version: 3.0.7
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
-# last-edited: 2026-07-08
+# last-edited: 2026-07-11
 
 # Fast parallel CI for PRs and pushes.
 # Runs go vet/build, short tests, frontend lint/build, and frontend unit tests
@@ -86,9 +86,9 @@ jobs:
         run: |
           set -e
           mockery
-          if ! git diff --quiet -- internal/*/mocks/ internal/ai/mock_*_test.go internal/metadata/mock_*_test.go 2>/dev/null; then
+          if ! git diff --quiet -- ':(glob)internal/**/mocks/**' internal/ai/mock_*_test.go internal/metadata/mock_*_test.go 2>/dev/null; then
             echo "❌ Committed mocks are stale. Run 'make mocks' and commit."
-            git diff --stat -- internal/*/mocks/ internal/ai/mock_*_test.go internal/metadata/mock_*_test.go
+            git diff --stat -- ':(glob)internal/**/mocks/**' internal/ai/mock_*_test.go internal/metadata/mock_*_test.go
             exit 1
           fi
           echo "✅ Mocks are up to date"
