@@ -1,6 +1,6 @@
 // file: internal/itunes/rebuild_test.go
-// version: 1.0.8
-// last-edited: 2026-07-07
+// version: 1.0.9
+// last-edited: 2026-07-11
 // guid: 1c2d3e4f-5a6b-7c8d-9e0f-1a2b3c4d5e6f
 
 package itunes
@@ -70,6 +70,23 @@ func (m *mockRebuildStore) GetBookByID(id string) (*database.Book, error) {
 		return book, nil
 	}
 	return nil, nil
+}
+
+// GetBooksByIDs is a test double for the interface-ripple from INIT-4 T3:
+// order-preserving, skip-missing, built on top of GetBookByID so it stays
+// consistent with the existing lookup-by-ID semantics above.
+func (m *mockRebuildStore) GetBooksByIDs(ids []string) ([]database.Book, error) {
+	books := make([]database.Book, 0, len(ids))
+	for _, id := range ids {
+		b, err := m.GetBookByID(id)
+		if err != nil {
+			return books, err
+		}
+		if b != nil {
+			books = append(books, *b)
+		}
+	}
+	return books, nil
 }
 
 func (m *mockRebuildStore) CountAllBooks() (int, error)     { return 0, nil }
