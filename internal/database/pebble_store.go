@@ -760,6 +760,47 @@ func (p *PebbleStore) GetBookByID(id string) (*Book, error) {
 	return &book, nil
 }
 
+// GetBooksByIDs returns the full Book rows for ids, preserving input order
+// and silently skipping IDs that do not resolve (mirrors GetBookByID's
+// nil-on-not-found). It reuses GetBookByID's exact read pattern per item —
+// the same book:<id> point-get + json.Unmarshal — so it is full-fidelity,
+// never a memdb-slim projection; heavy fields (AcoustIDFingerprint etc.)
+// survive.
+//
+// Concurrency: this is a plain sequential loop, not a worker pool. Per
+// CLAUDE.md's concurrency rule, that's correct here because callers bound
+// ids to a single request page (searchWithBleve caps at
+// searchPostFilterWindow = 10000 hits), not whole-library scale, and each
+// item is a cheap local Pebble point-get.
+//
+// Error semantics (spec §C3, verbatim contract): a per-item not-found is
+// skipped silently, matching GetBookByID. On the FIRST non-not-found
+// read/unmarshal error, the loop stops and returns the rows read so far
+// ALONGSIDE the error (not a bare nil, err) so the caller can still serve a
+// partial page instead of failing the whole request.
+func (p *PebbleStore) GetBooksByIDs(ids []string) ([]Book, error) {
+	books := make([]Book, 0, len(ids))
+	for _, id := range ids {
+		key := []byte(fmt.Sprintf("book:%s", id))
+		value, closer, err := p.db.Get(key)
+		if err == pebble.ErrNotFound {
+			continue
+		}
+		if err != nil {
+			return books, fmt.Errorf("get book %q: %w", id, err)
+		}
+
+		var book Book
+		unmarshalErr := json.Unmarshal(value, &book)
+		closer.Close()
+		if unmarshalErr != nil {
+			return books, fmt.Errorf("unmarshal book %q: %w", id, unmarshalErr)
+		}
+		books = append(books, book)
+	}
+	return books, nil
+}
+
 func (p *PebbleStore) GetBookByFilePath(path string) (*Book, error) {
 	indexKey := []byte(fmt.Sprintf("book:path:%s", path))
 	value, closer, err := p.db.Get(indexKey)

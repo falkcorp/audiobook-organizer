@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
 // last-edited: 2026-07-10
 
@@ -557,12 +557,22 @@ func (svc *AudiobookService) searchWithBleve(query string, limit, offset int, us
 			slog.Warn("search: post-filter window exhausted; results beyond it are truncated",
 				"window", searchPostFilterWindow)
 		}
-		filtered := make([]database.Book, 0, len(hits))
+		ids := make([]string, 0, len(hits))
 		for _, h := range hits {
-			b, _ := svc.store.GetBookByID(h.BookID)
-			if b == nil {
-				continue
-			}
+			ids = append(ids, h.BookID)
+		}
+		// Batch-hydrate (INIT-4 T3): one store call instead of one per hit.
+		// FAIL-OPEN at the call site (spec §C3): a non-nil error from
+		// GetBooksByIDs must not fail the whole search page — warn and
+		// keep serving the rows hydrated so far, mirroring the old
+		// per-hit loop's silent-skip-on-error semantics.
+		hydrated, hydrateErr := svc.store.GetBooksByIDs(ids)
+		if hydrateErr != nil {
+			slog.Warn("search: batch hydrate failed; serving partial page",
+				"err", hydrateErr, "hydrated", len(hydrated))
+		}
+		filtered := make([]database.Book, 0, len(hydrated))
+		for _, b := range hydrated {
 			state, stateErr := svc.store.GetUserBookState(userID, b.ID)
 			if stateErr != nil {
 				// FAIL-OPEN (Decision 5): evaluate the zero-value state, loudly.
@@ -573,7 +583,7 @@ func (svc *AudiobookService) searchWithBleve(query string, limit, offset int, us
 			if !search.MatchPerUserFilters(state, perUser) {
 				continue
 			}
-			filtered = append(filtered, *b)
+			filtered = append(filtered, b)
 		}
 		// Apply pagination after filtering — offset beyond len yields an
 		// empty slice, not an error (mirrors GetAudiobooks' heavy
@@ -605,12 +615,22 @@ func (svc *AudiobookService) searchWithBleve(query string, limit, offset int, us
 	if err != nil {
 		return nil, fmt.Errorf("bleve search: %w", err)
 	}
-	books := make([]database.Book, 0, len(hits))
+	ids := make([]string, 0, len(hits))
 	for _, h := range hits {
-		b, _ := svc.store.GetBookByID(h.BookID)
-		if b != nil {
-			books = append(books, *b)
-		}
+		ids = append(ids, h.BookID)
+	}
+	// Batch-hydrate (INIT-4 T3): one store call instead of one per hit.
+	// FAIL-OPEN at the call site (spec §C3): a non-nil error from
+	// GetBooksByIDs must not fail the whole search page — warn and keep
+	// serving the rows hydrated so far, mirroring the old per-hit loop's
+	// silent-skip-on-error semantics.
+	books, hydrateErr := svc.store.GetBooksByIDs(ids)
+	if hydrateErr != nil {
+		slog.Warn("search: batch hydrate failed; serving partial page",
+			"err", hydrateErr, "hydrated", len(books))
+	}
+	if books == nil {
+		books = []database.Book{}
 	}
 	return books, nil
 }

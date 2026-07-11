@@ -33,6 +33,7 @@ var _ Store = (*MockStore)(nil)
 type MockStore struct {
 	// Book methods
 	GetBookByIDFunc       func(id string) (*Book, error)
+	GetBooksByIDsFunc     func(ids []string) ([]Book, error)
 	GetBookByFilePathFunc func(path string) (*Book, error)
 	// GetAllBooksFunc is test-only plumbing (NOT a Store interface method —
 	// GetAllBooks was removed from the interface in STOREFID W5z). Several
@@ -703,6 +704,13 @@ func (m *MockStore) GetAllBookSummaries(limit, offset int) ([]BookSummary, error
 func (m *MockStore) GetBookByID(id string) (*Book, error) {
 	if m.GetBookByIDFunc != nil {
 		return m.GetBookByIDFunc(id)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetBooksByIDs(ids []string) ([]Book, error) {
+	if m.GetBooksByIDsFunc != nil {
+		return m.GetBooksByIDsFunc(ids)
 	}
 	return nil, nil
 }
