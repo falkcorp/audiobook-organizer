@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.110.0
+// version: 1.111.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-07-07
+// last-edited: 2026-07-10
 
 package database
 
@@ -1040,12 +1040,123 @@ func (p *PebbleStore) GetBooksByTitleInDir(normalizedTitle, dirPath string) ([]B
 // GetFolderDuplicatesCore is Core-typed (STOREFID W6) — see the interface
 // doc comment.
 //
-// PebbleStore doesn't support folder-based duplicate detection efficiently
-// (no MemStore implementation exists for this getter either — it is a
-// known-unimplemented stub on both storage backends today, always returning
-// an empty result; see TODO.md for the tracked gap).
+// Groups books for dedup tier 2 ("same title in same folder, e.g. M4B +
+// MP3"): buckets non-deleted, primary-version books by
+// (util.NormalizeTitle(title), single-parent-dir) and emits every bucket
+// with >=2 members as one []BookCore group. A book with no files, or whose
+// files span more than one distinct parent directory, has an UNKNOWN parent
+// dir — it is silently skipped (never grouped, never an error); an
+// empty/whitespace title is skipped too (an empty-title bucket would glue
+// unrelated books together). Delegates to the memdb twin when published
+// (mirrors GetBooksBySeriesIDCore's delegation shape); otherwise pages
+// through GetAllBooksCore (bounded pages) and resolves each book's parent
+// dir via GetBookFiles — a single pass over books, never a per-book
+// title-query fan-out (that O(N^2) shape is what GetBooksByTitleInDir would
+// produce if called per book, so this method never calls it).
 func (p *PebbleStore) GetFolderDuplicatesCore() ([][]BookCore, error) {
-	return nil, nil
+	if p.UseMemDB && p.mem() != nil {
+		return p.mem().GetFolderDuplicatesCore()
+	}
+
+	var entries []folderDupEntry
+	const folderDupPageSize = 500
+	offset := 0
+	for {
+		page, err := p.GetAllBooksCore(folderDupPageSize, offset)
+		if err != nil {
+			return nil, err
+		}
+		for _, book := range page {
+			// GetAllBooksCore already excludes MarkedForDeletion rows; primary
+			// version is not one of its filters, so it's checked here to
+			// mirror GetBooksBySeriesIDCore's memdb-twin exclusions.
+			if book.IsPrimaryVersion != nil && !*book.IsPrimaryVersion {
+				continue
+			}
+			if strings.TrimSpace(book.Title) == "" {
+				continue
+			}
+
+			files, ferr := p.GetBookFiles(book.ID)
+			if ferr != nil {
+				return nil, ferr
+			}
+			paths := make([]string, len(files))
+			for i, f := range files {
+				paths[i] = f.FilePath
+			}
+			dir, ok := singleParentDir(paths)
+			if !ok {
+				continue
+			}
+
+			entries = append(entries, folderDupEntry{
+				book:      book,
+				normTitle: util.NormalizeTitle(book.Title),
+				dir:       dir,
+			})
+		}
+		if len(page) < folderDupPageSize {
+			break
+		}
+		offset += folderDupPageSize
+	}
+
+	return bucketFolderDuplicates(entries), nil
+}
+
+// folderDupEntry is one qualifying book (already filtered for
+// deleted/non-primary/empty-title/unknown-dir) awaiting bucketing by
+// GetFolderDuplicatesCore's bucketing pass. Shared between the PebbleStore
+// scan-fallback (above) and the MemStore twin (memdb_reads.go) so the two
+// backends can never drift in bucketing semantics.
+type folderDupEntry struct {
+	book      BookCore
+	normTitle string
+	dir       string
+}
+
+// bucketFolderDuplicates buckets entries by (normTitle, dir) and emits every
+// bucket with >=2 members as one group, preserving first-seen bucket order.
+func bucketFolderDuplicates(entries []folderDupEntry) [][]BookCore {
+	type bucketKey struct {
+		title string
+		dir   string
+	}
+	buckets := make(map[bucketKey][]BookCore)
+	order := make([]bucketKey, 0, len(entries))
+	for _, e := range entries {
+		key := bucketKey{title: e.normTitle, dir: e.dir}
+		if _, exists := buckets[key]; !exists {
+			order = append(order, key)
+		}
+		buckets[key] = append(buckets[key], e.book)
+	}
+
+	var groups [][]BookCore
+	for _, key := range order {
+		if len(buckets[key]) >= 2 {
+			groups = append(groups, buckets[key])
+		}
+	}
+	return groups
+}
+
+// singleParentDir returns the shared filepath.Dir of every path, or ("",
+// false) when there are no paths, or the paths span more than one distinct
+// directory — the "UNKNOWN parent dir" case documented on
+// GetFolderDuplicatesCore, a non-disqualifying skip.
+func singleParentDir(paths []string) (string, bool) {
+	if len(paths) == 0 {
+		return "", false
+	}
+	dir := filepath.Dir(paths[0])
+	for _, p := range paths[1:] {
+		if filepath.Dir(p) != dir {
+			return "", false
+		}
+	}
+	return dir, true
 }
 
 // GetDuplicateBooksByMetadataCore is Core-typed (STOREFID W6) — see the

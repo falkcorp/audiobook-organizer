@@ -1,7 +1,7 @@
 // file: internal/database/memdb_reads.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000006
-// last-edited: 2026-07-07
+// last-edited: 2026-07-10
 
 package database
 
@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
+	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
 // Read-side implementations for the queries previously handled by Chai SQL.
@@ -352,6 +353,63 @@ func (m *MemStore) GetAllAuthorFileCounts() (map[int]int, error) {
 		out[authorID] += n
 	}
 	return out, nil
+}
+
+// GetFolderDuplicatesCore is the MemStore twin of
+// PebbleStore.GetFolderDuplicatesCore's memdb-delegation branch
+// (pebble_store.go) — see that method's doc comment for full bucketing
+// semantics (normalizedTitle + single-parent-dir, >=2 members per group,
+// deleted/non-primary/empty-title/multi-dir books silently skipped). Walks
+// the memdb books table once via the ID index, resolving each qualifying
+// book's parent dir from the memdb book_files table (memIdxBookID) — a
+// pointer walk, no JSON unmarshal, no Pebble disk scan — then defers to the
+// shared bucketFolderDuplicates helper so the two backends can never drift
+// in bucketing behavior.
+func (m *MemStore) GetFolderDuplicatesCore() ([][]BookCore, error) {
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+
+	iter, err := txn.Get(memTableBooks, memIdxID)
+	if err != nil {
+		return nil, fmt.Errorf("memdb folder duplicates scan: %w", err)
+	}
+
+	var entries []folderDupEntry
+	for obj := iter.Next(); obj != nil; obj = iter.Next() {
+		b := obj.(*Book)
+		if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+			continue
+		}
+		if b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion {
+			continue
+		}
+		if strings.TrimSpace(b.Title) == "" {
+			continue
+		}
+
+		fIter, ferr := txn.Get(memTableBookFiles, memIdxBookID, b.ID)
+		if ferr != nil {
+			return nil, fmt.Errorf("memdb book_files for %s: %w", b.ID, ferr)
+		}
+		var paths []string
+		for fo := fIter.Next(); fo != nil; fo = fIter.Next() {
+			if bf, ok := fo.(*BookFile); ok {
+				paths = append(paths, bf.FilePath)
+			}
+		}
+		dir, ok := singleParentDir(paths)
+		if !ok {
+			continue
+		}
+
+		entries = append(entries, folderDupEntry{
+			book:      b.Core(),
+			normTitle: util.NormalizeTitle(b.Title),
+			dir:       dir,
+		})
+	}
+
+	return bucketFolderDuplicates(entries), nil
 }
 
 // GetBooksBySeriesIDCore returns primary, not-deleted books for a series
