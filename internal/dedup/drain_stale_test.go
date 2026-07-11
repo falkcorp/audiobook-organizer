@@ -1,7 +1,7 @@
 // file: internal/dedup/drain_stale_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6b8c9a6c-b168-4fb9-ba23-99937427b562
-// last-edited: 2026-07-03
+// last-edited: 2026-07-11
 
 // Tests for Engine.DrainStaleCandidates (DEDUP-1 / CONS-16 / CONS-17).
 //
@@ -21,11 +21,12 @@ import (
 
 // drainBook is a compact spec for a book fixture in these tests.
 type drainBook struct {
-	id       string
-	title    string
-	duration *int
-	isbn13   *string
-	files    []database.BookFile
+	id               string
+	title            string
+	duration         *int
+	isbn13           *string
+	files            []database.BookFile
+	isPrimaryVersion *bool // nil = unknown/conservative (never non-primary)
 }
 
 // setupDrainTest wires an Engine whose GetBookByID / GetBookFiles resolve from
@@ -45,10 +46,11 @@ func setupDrainTest(t *testing.T, books []drainBook) (*Engine, *database.Embeddi
 			return nil, nil // since-deleted book
 		}
 		return &database.Book{
-			ID:       b.id,
-			Title:    b.title,
-			Duration: b.duration,
-			ISBN13:   b.isbn13,
+			ID:               b.id,
+			Title:            b.title,
+			Duration:         b.duration,
+			ISBN13:           b.isbn13,
+			IsPrimaryVersion: b.isPrimaryVersion,
 		}, nil
 	}
 	mock.GetBookFilesFunc = func(bookID string) ([]database.BookFile, error) {
@@ -143,6 +145,52 @@ func TestDrainStale_PartVsWhole(t *testing.T) {
 	}
 	if res.WouldPurge != 1 || res.ReasonCounts[drainReasonPartVsWhole] != 1 {
 		t.Fatalf("part_vs_whole bucket wrong: wouldPurge %d, reasons %v", res.WouldPurge, res.ReasonCounts)
+	}
+}
+
+// TestDrainStale_NonPrimaryVersion is the INIT-2 T3 drain-gate-parity
+// regression: the chokepoint's FIRST gate (isNonPrimaryVersion) must have a
+// drain twin bucketed as non_primary_version, matching upsertExactCandidate's
+// behavior of never emitting a candidate involving a non-primary
+// version-group member.
+func TestDrainStale_NonPrimaryVersion(t *testing.T) {
+	primary := true
+	nonPrimary := false
+	engine, es := setupDrainTest(t, []drainBook{
+		{id: "BOOK_A", title: "A Real Book", duration: intPtr(3600), isPrimaryVersion: &primary},
+		{id: "BOOK_B", title: "A Real Book", duration: intPtr(3600), isPrimaryVersion: &nonPrimary},
+	})
+	seedDrainCandidate(t, es, "BOOK_A", "BOOK_B")
+
+	res, err := engine.DrainStaleCandidates(context.Background(), "", false)
+	if err != nil {
+		t.Fatalf("DrainStaleCandidates: %v", err)
+	}
+	if res.WouldPurge != 1 || res.ReasonCounts[drainReasonNonPrimaryVersion] != 1 {
+		t.Fatalf("non_primary_version bucket wrong: wouldPurge %d, reasons %v", res.WouldPurge, res.ReasonCounts)
+	}
+}
+
+// TestDrainStale_NonPrimaryVersion_ConservativeNilKept is the
+// anti-over-suppression proof for the new gate: a pair whose IsPrimaryVersion
+// is unknown (nil) on both sides — the common case for older rows and for
+// stores that never set the flag — must NOT be treated as non-primary.
+// isNonPrimaryVersion(nil-flag book) returns false, matching
+// upsertExactCandidate's own conservative default, so this pair must be KEPT
+// by the drain exactly like it would still be emitted by the chokepoint.
+func TestDrainStale_NonPrimaryVersion_ConservativeNilKept(t *testing.T) {
+	engine, es := setupDrainTest(t, []drainBook{
+		{id: "BOOK_A", title: "A Real Book", duration: intPtr(3600)}, // isPrimaryVersion left nil
+		{id: "BOOK_B", title: "A Real Book", duration: intPtr(3600)}, // isPrimaryVersion left nil
+	})
+	seedDrainCandidate(t, es, "BOOK_A", "BOOK_B")
+
+	res, err := engine.DrainStaleCandidates(context.Background(), "", false)
+	if err != nil {
+		t.Fatalf("DrainStaleCandidates: %v", err)
+	}
+	if res.Inspected != 1 || res.WouldPurge != 0 || res.Kept != 1 {
+		t.Fatalf("nil-primary-flag pair over-suppressed: inspected %d, wouldPurge %d, kept %d (want 1/0/1)", res.Inspected, res.WouldPurge, res.Kept)
 	}
 }
 

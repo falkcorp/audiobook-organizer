@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/drain_stale.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a6103a90-d68c-4db5-ace4-e2a9fb2a51e1
-// last-edited: 2026-07-03
+// last-edited: 2026-07-11
 
 // Package dedup — op dedup.drain-stale (DEDUP-1 / CONS-16 / CONS-17).
 //
@@ -13,8 +13,12 @@
 //
 // Dry-run by default. Pass {"apply":true} to soft-reclassify would-purge rows
 // to "stale-drain" (never a hard delete). The apply path is gated behind a
-// versioned Settings done-flag (dedup_stale_drain_v1_done) so a second apply
+// versioned Settings done-flag (dedup_stale_drain_v2_done) so a second apply
 // run after completion is a safe no-op — the M0 purge_legacy_fp precedent.
+// (v1 -> v2, INIT-2 T3: DrainStaleCandidates' gate chain gained a
+// non_primary_version twin so it now mirrors upsertExactCandidate
+// gate-for-gate; the flag bumped so a prior v1 "done" state never blocks the
+// re-run needed to apply the corrected criteria.)
 //
 // DATA-LOSS GATE: this op ships the tool only. Running apply=true against
 // production requires a separate, explicit owner greenlight after the dry-run
@@ -32,9 +36,14 @@ import (
 )
 
 // drainStaleDoneFlag is the versioned Settings key that prevents re-running the
-// apply path after it has completed once. Bump to v2 if the drain criteria ever
-// change and a re-run is required.
-const drainStaleDoneFlag = "dedup_stale_drain_v1_done"
+// apply path after it has completed once. Bump to v3 if the drain criteria ever
+// change again and a re-run is required.
+//
+// v1 -> v2 (INIT-2 T3, 2026-07-11): DrainStaleCandidates gained a
+// non_primary_version gate twin (drain-gate parity with upsertExactCandidate)
+// — bumped so a v1 "done" apply does not silently block the re-run needed to
+// apply the corrected criteria against the ~387k backlog.
+const drainStaleDoneFlag = "dedup_stale_drain_v2_done"
 
 // drainStaleCheckpointID is the stable checkpoint key for the op's resumable
 // scan. A constant is safe because ConcurrencyKey serialises runs, so no two

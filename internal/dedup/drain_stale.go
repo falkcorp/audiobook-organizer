@@ -1,7 +1,7 @@
 // file: internal/dedup/drain_stale.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 60d982e2-6836-4327-9ddf-9b55375f39ea
-// last-edited: 2026-07-03
+// last-edited: 2026-07-11
 
 // Package dedup — DrainStaleCandidates (DEDUP-1 / CONS-16 / CONS-17).
 //
@@ -55,6 +55,7 @@ const staleDrainStatus = "stale-drain"
 // Reason buckets — which gate first rejected a would-purge candidate.
 const (
 	drainReasonMissingBook        = "missing_book"
+	drainReasonNonPrimaryVersion  = "non_primary_version"
 	drainReasonIdentifierConflict = "identifier_conflict"
 	drainReasonBoilerplateTitle   = "boilerplate_title"
 	drainReasonShortDuration      = "short_duration"
@@ -277,21 +278,40 @@ func (de *Engine) DrainStaleCandidates(ctx context.Context, opID string, apply b
 	return result, nil
 }
 
-// classifyStaleCandidate re-runs upsertExactCandidate's guard chain (minus the
-// isNonPrimaryVersion gate, which PurgeStaleCandidates already drains separately)
-// against a pair's CURRENT data. It returns the first rejecting reason and true
-// if the candidate would no longer be emitted today, or ("", false) if it still
-// passes every gate and must be kept.
+// classifyStaleCandidate re-runs upsertExactCandidate's full guard chain —
+// isNonPrimaryVersion, identifiersConflict, isBoilerplateTitle,
+// hasKnownShortDuration, isPartVsWholeMismatch, in the SAME order the
+// chokepoint applies them — against a pair's CURRENT data. It returns the
+// first rejecting reason and true if the candidate would no longer be
+// emitted today, or ("", false) if it still passes every gate and must be
+// kept.
 //
-// This reuses the real predicate functions verbatim (identifiersConflict,
-// isBoilerplateTitle, hasKnownShortDuration, isPartVsWholeMismatch) rather than
-// reimplementing them, so the re-evaluation can never drift from what the live
-// emitter actually does.
+// This reuses the real predicate functions verbatim rather than
+// reimplementing them, so the re-evaluation can never drift from what the
+// live emitter actually does.
+//
+// non_primary_version (INIT-2 T3, drain-gate parity): originally omitted
+// here on the theory that PurgeStaleCandidates already handles non-primary
+// pairs — but PurgeStaleCandidates is a DIFFERENT op (hard-delete, all
+// layers, run at startup/rescan, not scoped to this drain's pending
+// exact-layer backlog). A pending exact candidate can still involve a
+// non-primary book between PurgeStaleCandidates runs, so the chokepoint's
+// first gate needs its own twin here for the drain's report/apply to be a
+// true preview of what upsertExactCandidate would (not) emit today. The
+// soft-reclassify (never delete) semantics keep this idempotent alongside
+// PurgeStaleCandidates' separate hard-delete sweep — a row either path
+// already removed simply never appears in this scan again.
 func (de *Engine) classifyStaleCandidate(a, b drainBookMeta) (string, bool) {
 	// A missing book on either side means the candidate can't be actioned — the
 	// same conservative treatment PurgeStaleCandidates gives missing books.
+	// This check has no chokepoint twin (upsertExactCandidate always receives
+	// live, already-loaded *database.Book pointers, never a dangling ID) — it
+	// exists only because the drain re-resolves books by ID.
 	if a.missing || b.missing {
 		return drainReasonMissingBook, true
+	}
+	if isNonPrimaryVersion(a.stub) || isNonPrimaryVersion(b.stub) {
+		return drainReasonNonPrimaryVersion, true
 	}
 	if identifiersConflict(a.stub, b.stub) {
 		return drainReasonIdentifierConflict, true
