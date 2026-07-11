@@ -550,6 +550,24 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
   // Sync state FROM URL when user navigates (back/forward) or edits URL directly
   const isInternalUpdate = useRef(false);
   useEffect(() => {
+    // Explicit full-reset request (Sidebar's "All Books" link uses
+    // /library?reset=1). Checked BEFORE the isInternalUpdate guard below
+    // so a reset request can never be swallowed as an internal echo of a
+    // prior filter/search/sort change — that swallow is what previously
+    // left tag (and other) filters "stuck" after clicking All Books.
+    if (searchParams.get('reset') === '1') {
+      setPage(1);
+      setSearchQuery('');
+      setSortBy(SortField.Title);
+      setSortOrder(SortOrder.Ascending);
+      setViewMode('grid');
+      setItemsPerPage(20);
+      setSelectedTags([]);
+      baseHandleFiltersChange({});
+      isInternalUpdate.current = true;
+      setSearchParams(new URLSearchParams(), { replace: true });
+      return;
+    }
     if (isInternalUpdate.current) {
       isInternalUpdate.current = false;
       return;

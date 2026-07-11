@@ -1,7 +1,7 @@
 // file: internal/database/store_coverage_test.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef0123456789
-// last-edited: 2026-07-07
+// last-edited: 2026-07-11
 
 // NOTE(fable5 T022): setupCoverageDB ported to PebbleStore; SQLiteStore
 // type assertions updated. Tests for SQLite-only methods (CountTableRows,
@@ -816,6 +816,90 @@ func TestCoverage_BookTags(t *testing.T) {
 	tags, err = store.GetBookTags(bookID)
 	require.NoError(t, err)
 	assert.Len(t, tags, 1)
+}
+
+// TestCoverage_BookTagsColonCollision regression-tests a bug where a
+// colon-containing tag (e.g. a system tag like "metadata:source:audible")
+// and a bare tag that is its prefix (e.g. "metadata") coexisted in the tag
+// index. ListAllTags/GetBooksByTag used to truncate or byte-prefix-collide
+// on the colon, collapsing counts and returning zero (or garbage) results
+// for the namespaced tag. See internal/database/pebble_store_tags.go.
+func TestCoverage_BookTagsColonCollision(t *testing.T) {
+	store := setupCoverageDB(t)
+
+	bareBook := createTestBook(t, store, "Bare Tag Book", "/tmp/bare.m4b", nil, nil)
+	nsBook := createTestBook(t, store, "Namespaced Tag Book", "/tmp/ns.m4b", nil, nil)
+	bothBook := createTestBook(t, store, "Both Tags Book", "/tmp/both.m4b", nil, nil)
+
+	require.NoError(t, store.AddBookTagWithSource(bareBook, "metadata", "system"))
+	require.NoError(t, store.AddBookTagWithSource(nsBook, "metadata:source:audible", "system"))
+	require.NoError(t, store.AddBookTagWithSource(bothBook, "metadata", "system"))
+	require.NoError(t, store.AddBookTagWithSource(bothBook, "metadata:source:audible", "system"))
+
+	allTags, err := store.ListAllTags()
+	require.NoError(t, err)
+	counts := make(map[string]int)
+	for _, tc := range allTags {
+		counts[tc.Tag] = tc.Count
+	}
+	assert.Equal(t, 2, counts["metadata"], "bare tag count must not include namespaced-tag rows")
+	assert.Equal(t, 2, counts["metadata:source:audible"], "namespaced tag must be preserved whole, not truncated")
+
+	bareResults, err := store.GetBooksByTag("metadata")
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{bareBook, bothBook}, bareResults, "bare-tag lookup must not match the namespaced tag's rows")
+
+	nsResults, err := store.GetBooksByTag("metadata:source:audible")
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{nsBook, bothBook}, nsResults, "namespaced-tag lookup must resolve to real book IDs, not zero results")
+}
+
+// TestCoverage_AuthorSeriesTagsColonCollision is the author/series
+// counterpart of TestCoverage_BookTagsColonCollision, covering the shared
+// pebbleListAllTags/pebbleEntitiesByTag helpers.
+func TestCoverage_AuthorSeriesTagsColonCollision(t *testing.T) {
+	store := setupCoverageDB(t)
+
+	bareAuthor, err := store.CreateAuthor("Bare Tag Author")
+	require.NoError(t, err)
+	nsAuthor, err := store.CreateAuthor("Namespaced Tag Author")
+	require.NoError(t, err)
+
+	require.NoError(t, store.AddAuthorTagWithSource(bareAuthor.ID, "metadata", "system"))
+	require.NoError(t, store.AddAuthorTagWithSource(nsAuthor.ID, "metadata:source:audible", "system"))
+
+	allAuthorTags, err := store.ListAllAuthorTags()
+	require.NoError(t, err)
+	authorCounts := make(map[string]int)
+	for _, tc := range allAuthorTags {
+		authorCounts[tc.Tag] = tc.Count
+	}
+	assert.Equal(t, 1, authorCounts["metadata"])
+	assert.Equal(t, 1, authorCounts["metadata:source:audible"])
+
+	bareAuthorIDs, err := store.GetAuthorsByTag("metadata")
+	require.NoError(t, err)
+	assert.Equal(t, []int{bareAuthor.ID}, bareAuthorIDs, "bare-tag lookup must not pull in the namespaced tag's author, and must not return a garbage ID")
+
+	nsAuthorIDs, err := store.GetAuthorsByTag("metadata:source:audible")
+	require.NoError(t, err)
+	assert.Equal(t, []int{nsAuthor.ID}, nsAuthorIDs)
+
+	bareSeries, err := store.CreateSeries("Bare Tag Series", nil)
+	require.NoError(t, err)
+	nsSeries, err := store.CreateSeries("Namespaced Tag Series", nil)
+	require.NoError(t, err)
+
+	require.NoError(t, store.AddSeriesTagWithSource(bareSeries.ID, "dedup", "system"))
+	require.NoError(t, store.AddSeriesTagWithSource(nsSeries.ID, "dedup:merge-survivor:auto-hash", "system"))
+
+	bareSeriesIDs, err := store.GetSeriesByTag("dedup")
+	require.NoError(t, err)
+	assert.Equal(t, []int{bareSeries.ID}, bareSeriesIDs)
+
+	nsSeriesIDs, err := store.GetSeriesByTag("dedup:merge-survivor:auto-hash")
+	require.NoError(t, err)
+	assert.Equal(t, []int{nsSeries.ID}, nsSeriesIDs)
 }
 
 // --- User Tags (on book_tags via BookUserTag interface) ---
