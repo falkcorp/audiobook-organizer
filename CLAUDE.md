@@ -219,5 +219,20 @@ the entire sequence:
 
 ## Post-Task Hygiene
 
-- After completing any feature/fix: update CHANGELOG, update TODO, and commit before moving on.
+- After completing any feature/fix: update CHANGELOG, update TODO, **and check the
+  executive-summary criteria** (`docs/process/executive-summaries.md`), then commit before
+  moving on. Do all three together — don't treat the executive summary as a separate,
+  deferrable step.
+- **Why a third check, not just two:** CHANGELOG and TODO are written for engineers — file
+  paths, function names, PR numbers. Most users find that gibberish. The executive summary
+  (`docs/executive-summaries/`) is the one written for them: plain language, no jargon, what
+  changed and why it mattered. A data-loss fix isn't done, from a user's point of view, until
+  that's updated too.
+- The criteria (full list in `docs/process/executive-summaries.md`): it fixes something that
+  could have silently caused data loss or corruption; it spans multiple files/PRs or one PR
+  with a wide blast radius; it closes out a tracked set of issues; or the user signed off on a
+  multi-step plan that got executed to completion. If it qualifies, update the **current
+  month's** summary in `docs/executive-summaries/` in the SAME PR as the CHANGELOG/TODO edit —
+  not a follow-up PR, not "later." If it doesn't qualify (a typo fix, a single small change),
+  skip it — that's what CHANGELOG/TODO are for.
 - When editing release notes, PREPEND to existing auto-generated content; never replace the body wholesale.

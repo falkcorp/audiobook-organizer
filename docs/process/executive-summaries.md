@@ -1,5 +1,5 @@
 <!-- file: docs/process/executive-summaries.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: b608794a-eac5-44bc-95b9-643872bd0ca8 -->
 <!-- last-edited: 2026-07-11 -->
 
@@ -27,7 +27,22 @@ for.
 
 ## Where it goes
 
-`docs/executive-summaries/YYYY-MM-DD-<short-topic>-executive-summary.md`,
+**Check for an existing rolling summary for the current month first**
+(`docs/executive-summaries/YYYY-MM-*-executive-summary.md`). If one exists,
+ADD a new Executive Summary bullet + a new numbered section to it — do not
+create a second file for the same month. One doc per month is the goal;
+several small dated files fragmenting the same month is exactly the sprawl
+this convention exists to prevent (it happened once, in three separate
+files, and had to be manually consolidated back into one roundup).
+
+Only create a new file when either no summary exists yet for the current
+month (first qualifying change of the month), or the work is big/
+self-contained enough to warrant its own deep-dive report that the monthly
+roundup then links to instead of repeating (see the iTunes-hardening report
+linked at the top of the current roundup for the pattern) — that's the
+exception, not the default.
+
+New-file naming: `docs/executive-summaries/YYYY-MM-DD-<short-topic>-executive-summary.md`,
 using the date the work shipped (merge date), not the date work started.
 
 If the work also produced a formal spec (see `docs/specs/`), link to it and
@@ -66,10 +81,13 @@ summary) — describe behavior and mechanism in prose instead.
 
 ## Workflow
 
-1. Do the work, ship it (PR merged).
-2. Draft the summary using the structure above, reusing language from any
-   spec/CHANGELOG entries already written during the work — don't
-   re-derive from scratch.
+1. Do the work, ship it (PR merged) — update CHANGELOG.md and TODO.md as
+   normal (see CLAUDE.md's Post-Task Hygiene section).
+2. **Same PR, not a follow-up:** check the "When to produce one" criteria
+   above. If it qualifies, draft the summary using the structure above,
+   reusing language from any spec/CHANGELOG entries already written during
+   the work — don't re-derive from scratch. Bundling it with the
+   CHANGELOG/TODO edit is what keeps this from being skipped.
 3. Commit it and open a normal PR like any other change (same review/merge
    flow as the rest of the repo — this doc does not grant an exception to
    branch protection or bypass review).
