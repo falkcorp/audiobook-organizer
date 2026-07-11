@@ -1,7 +1,7 @@
 // file: internal/dedup/engine.go
-// version: 1.56.0
+// version: 1.57.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
-// last-edited: 2026-07-08
+// last-edited: 2026-07-11
 
 package dedup
 
@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
@@ -3633,6 +3634,93 @@ func minLevenshteinBetweenForms(a, b []string) int {
 	return minDist
 }
 
+// acoustidEmitShardCount is the number of independent mutex/map shards the
+// full-scan emit() uses to track which canonical pair keys it has already
+// handled. 16 keeps lock contention negligible under a runtime.NumCPU()
+// worker pool while staying small enough that the final count() scan is
+// trivial.
+const acoustidEmitShardCount = 16
+
+// acoustidEmitShard is one bucket of the sharded "already handled this pair"
+// set: a mutex guarding its own map. A canonical pair key always hashes to
+// the same shard, so all operations on a given pair serialize on one mutex.
+type acoustidEmitShard struct {
+	mu      sync.Mutex
+	handled map[string]struct{}
+}
+
+// acoustidEmitShards replaces the single global emit() mutex (CONC-3). It
+// shards the per-pair check-then-set across acoustidEmitShardCount mutexes so
+// the NumCPU worker pool no longer serializes behind one lock, while
+// preserving the invariant that matters: because the SAME canonical pair key
+// always hashes (FNV-1a) to the SAME shard, two workers can never both
+// observe a pair as unhandled and both emit it. Distinct pairs on different
+// shards proceed in parallel; distinct pairs that collide on a shard still
+// each get their own map entry, so no emission is ever lost.
+type acoustidEmitShards [acoustidEmitShardCount]acoustidEmitShard
+
+// newAcoustidEmitShards returns a ready-to-use shard set with every bucket's
+// map initialized.
+func newAcoustidEmitShards() *acoustidEmitShards {
+	s := &acoustidEmitShards{}
+	for i := range s {
+		s[i].handled = make(map[string]struct{})
+	}
+	return s
+}
+
+// fnv1aStr is an allocation-free FNV-1a hash of s, used to pick a pair's
+// shard. Same string always maps to the same shard.
+func fnv1aStr(s string) uint32 {
+	const (
+		offset32 = 2166136261
+		prime32  = 16777619
+	)
+	h := uint32(offset32)
+	for i := 0; i < len(s); i++ {
+		h ^= uint32(s[i])
+		h *= prime32
+	}
+	return h
+}
+
+// shardFor returns the shard that owns key. The same key always resolves to
+// the same shard, which is what makes mark()'s check-then-set atomic per pair.
+func (s *acoustidEmitShards) shardFor(key string) *acoustidEmitShard {
+	return &s[fnv1aStr(key)%acoustidEmitShardCount]
+}
+
+// mark records key as handled and returns true ONLY the first time it is
+// called for that key (across all goroutines). The check-then-insert runs
+// under the key's shard mutex, so two workers can never both see the key as
+// unhandled — this is the per-pair check-then-set atomicity the CONC-3
+// comment mandates, now scoped to one shard instead of a global lock. It
+// touches only in-memory map state (never a store write), so holding the
+// shard mutex across it is safe; callers perform any store write AFTER mark()
+// returns and the shard lock is released.
+func (s *acoustidEmitShards) mark(key string) bool {
+	sh := s.shardFor(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	if _, ok := sh.handled[key]; ok {
+		return false
+	}
+	sh.handled[key] = struct{}{}
+	return true
+}
+
+// count returns the total number of distinct handled pair keys across all
+// shards (for the completion log's emitted_count).
+func (s *acoustidEmitShards) count() int {
+	n := 0
+	for i := range s {
+		s[i].mu.Lock()
+		n += len(s[i].handled)
+		s[i].mu.Unlock()
+	}
+	return n
+}
+
 // AcoustIDScan walks all primary books, extracts their stored acoustic
 // fingerprint segments, and emits DedupCandidate rows (layer="acoustid")
 // for any two books whose audio content matches.
@@ -3670,36 +3758,77 @@ func (de *Engine) AcoustIDScan(ctx context.Context, progress func(done, total in
 
 	// CONC-3 (docs/audits/2026-07-05-concurrency-single-threaded-hotspots.md):
 	// This per-book loop is embarrassingly parallel — each book's LSH lookup
-	// + Tier-1 segment walk only reads that book's own files — but it shares
-	// FOUR maps + a counter across every book, all mutated inside emit()/the
-	// loop: booksByID, boilerplateBookCache, parentDirCache, emitted, and
-	// identifierGateDrops. mu guards all five. Following TASK-01's
-	// (BookSignatureScan) pattern, the ENTIRE emit() body runs under mu: the
-	// emitted-key check-then-set must be atomic across workers (splitting it
-	// into separate lock/unlock windows would let two workers both pass the
-	// "not already emitted" check for the same pair and double-upsert), and
-	// emits are rare relative to the LSH/segment-walk traffic that stays
-	// lock-free, so this keeps the parallelized work on the hot path.
-	var mu sync.Mutex
-	// isBoilerplateBook is only called from within the locked emit() body
-	// below — mu is already held, so no internal locking here.
+	// + Tier-1 segment walk only reads that book's own files — and runs on a
+	// runtime.NumCPU() worker pool via registry.RunItems below. It used to
+	// funnel every emit() through ONE global mutex (which also held that lock
+	// across the fallback GetBookByID/GetBookFiles store reads), so one
+	// straggling store read stalled every worker. That single lock is now
+	// split two ways:
+	//
+	//  1. Per-pair "already handled" state lives in emitShards: the canonical
+	//     pair key is hashed (FNV-1a) to one of acoustidEmitShardCount shard
+	//     mutexes, and emitShards.mark(key) does the check-then-set under that
+	//     one shard's lock. Because the SAME pair always hashes to the SAME
+	//     shard, the check-then-set stays atomic per pair — two workers can
+	//     never both see a pair as unhandled and both upsert it — which is the
+	//     exact invariant the old global lock guaranteed, now without
+	//     serializing unrelated pairs.
+	//  2. Per-book caches (booksByID, boilerplateBookCache, parentDirCache)
+	//     move behind bookCacheMu, a small dedicated mutex used only inside the
+	//     three gate helpers. Crucially their fallback store reads run OUTSIDE
+	//     any lock (double-checked: read cache under bookCacheMu, miss ⇒ unlock
+	//     ⇒ store read ⇒ relock ⇒ recheck-then-store), so no store read ever
+	//     executes under a pair-shard lock (PR #1855: never hold a lock across
+	//     a Pebble commit). A duplicate concurrent fetch of the same book is
+	//     acceptable — the reads are idempotent and the results deterministic.
+	//
+	// The three gates (boilerplate, identifier-conflict, same-directory) are
+	// deterministic pure functions of the two books' immutable-during-scan
+	// data, so emit() evaluates them BEFORE claiming the shard. Only the
+	// mark() check-then-set needs per-pair atomicity; evaluating the gates
+	// first changes nothing observable (a repeat emit of an already-handled
+	// pair just does a few extra cache-hit reads before mark() returns false).
+	// This is a deliberate deviation from a literal "gates inside the lock"
+	// reading: it is the only arrangement that keeps the lazy store fallbacks
+	// while honoring "no store read under a pair-shard lock".
+	//
+	// identifierGateDrops is an atomic counter (workers increment it
+	// concurrently from the conflict path).
+	var bookCacheMu sync.Mutex
+	// isBoilerplateBook reads/fills boilerplateBookCache under bookCacheMu; on
+	// a miss it does its GetBookByID fallback with NO lock held (the store read
+	// is only reachable for LSH-returned books outside the pre-seeded scan
+	// slice), then recheck-then-stores. Never called under a pair-shard lock.
 	isBoilerplateBook := func(bookID string) bool {
+		bookCacheMu.Lock()
 		if blocked, ok := boilerplateBookCache[bookID]; ok {
+			bookCacheMu.Unlock()
 			return blocked
 		}
+		bookCacheMu.Unlock()
+
 		book, err := de.bookStore.GetBookByID(bookID)
 		if err != nil {
 			slog.Warn("dedup: isBoilerplateBook fallback GetBookByID failed", "book_id", bookID, "err", err)
 		}
 		blocked := err == nil && book != nil && isBoilerplateTitle(book.Title)
+
+		bookCacheMu.Lock()
+		if existing, ok := boilerplateBookCache[bookID]; ok {
+			bookCacheMu.Unlock()
+			return existing
+		}
 		boilerplateBookCache[bookID] = blocked
+		bookCacheMu.Unlock()
 		return blocked
 	}
 
-	// emitted tracks canonical pair keys we've already inserted this run so we
-	// don't call UpsertCandidate multiple times for the same pair (can happen
-	// when two books share several segments). Guarded by mu.
-	emitted := make(map[string]struct{})
+	// emitShards tracks canonical pair keys we've already handled this run so
+	// we never call UpsertCandidate more than once for the same pair (can
+	// happen when two books share several segments, and — since A's worker
+	// emits (A,B) while B's worker emits (B,A) — from two workers at once).
+	// Sharded by pair-key hash; see the CONC-3 comment above.
+	emitShards := newAcoustidEmitShards()
 	pairKey := func(a, b string) string {
 		if a > b {
 			a, b = b, a
@@ -3709,61 +3838,86 @@ func (de *Engine) AcoustIDScan(ctx context.Context, progress func(done, total in
 
 	// Per-book parent-directory cache so we don't fetch BookFiles twice per
 	// comparison. Empty string = unknown / no files / different parents.
-	// Guarded by mu: populated both by the per-book priming step in the
-	// RunItems callback below and lazily inside parentDirForBook (which, like
-	// isBoilerplateBook, is only called from within the locked emit() body).
+	// Guarded by bookCacheMu: populated both by the per-book priming step in
+	// the RunItems callback below and lazily inside parentDirForBook. Like the
+	// other two gate helpers, its GetBookFiles fallback runs with NO lock held.
 	parentDirCache := make(map[string]string)
 	parentDirForBook := func(bookID string) string {
+		bookCacheMu.Lock()
 		if v, ok := parentDirCache[bookID]; ok {
+			bookCacheMu.Unlock()
 			return v
 		}
+		bookCacheMu.Unlock()
+
 		bfs, err := de.bookStore.GetBookFiles(bookID)
-		if err != nil || len(bfs) == 0 {
-			parentDirCache[bookID] = ""
-			return ""
-		}
-		dir := filepath.Dir(bfs[0].FilePath)
-		for _, bf := range bfs[1:] {
-			if filepath.Dir(bf.FilePath) != dir {
-				parentDirCache[bookID] = ""
-				return ""
+		result := ""
+		if err == nil && len(bfs) > 0 {
+			dir := filepath.Dir(bfs[0].FilePath)
+			result = dir
+			for _, bf := range bfs[1:] {
+				if filepath.Dir(bf.FilePath) != dir {
+					result = ""
+					break
+				}
 			}
 		}
-		parentDirCache[bookID] = dir
-		return dir
+
+		bookCacheMu.Lock()
+		if v, ok := parentDirCache[bookID]; ok {
+			bookCacheMu.Unlock()
+			return v
+		}
+		parentDirCache[bookID] = result
+		bookCacheMu.Unlock()
+		return result
 	}
 
-	identifierGateDrops := 0
-	// bookForIdentifierGate is only called from within the locked emit()
-	// body below — mu is already held, so no internal locking here.
+	var identifierGateDrops atomic.Int64
+	// bookForIdentifierGate reads booksByID under bookCacheMu; on a miss it
+	// does its GetBookByID fallback with NO lock held. A book the fallback
+	// cannot fetch (err or nil) yields nil — and identifiersConflict(nil, x)
+	// is false, so an un-fetchable book never blocks emission (conservative,
+	// unchanged). Never called under a pair-shard lock.
 	bookForIdentifierGate := func(bookID string) *database.Book {
+		bookCacheMu.Lock()
 		if b := booksByID[bookID]; b != nil {
+			bookCacheMu.Unlock()
 			return b
 		}
+		bookCacheMu.Unlock()
+
 		b, err := de.bookStore.GetBookByID(bookID)
 		if err != nil || b == nil {
 			return nil
 		}
+
+		bookCacheMu.Lock()
+		if existing := booksByID[bookID]; existing != nil {
+			bookCacheMu.Unlock()
+			return existing
+		}
 		booksByID[bookID] = b
+		bookCacheMu.Unlock()
 		return b
 	}
-	// emit runs the full pair decision + all four-map/counter mutation under
-	// mu (see CONC-3 comment above), so concurrent workers can never
-	// interleave on the same pair key and the guarded state sees exactly the
-	// same sequence of updates the serial scan produced.
+	// emit evaluates the three deterministic gates first (their fallbacks are
+	// safe under bookCacheMu with store reads unlocked), then claims the pair
+	// once via emitShards.mark(). The store upsert runs AFTER mark() returns
+	// and its shard lock is released — mark-before-upsert means a claimed pair
+	// is never retried, so no lock is ever held across the candidate write.
 	emit := func(bookAID, bookBID string, sim float64) {
-		mu.Lock()
-		defer mu.Unlock()
 		if isBoilerplateBook(bookAID) || isBoilerplateBook(bookBID) {
 			return
 		}
 		key := pairKey(bookAID, bookBID)
-		if _, already := emitted[key]; already {
-			return
-		}
+
 		if identifiersConflict(bookForIdentifierGate(bookAID), bookForIdentifierGate(bookBID)) {
-			emitted[key] = struct{}{}
-			identifierGateDrops++
+			// Claim the pair once (so it is counted once and never retried),
+			// but never upsert a conflicting pair.
+			if emitShards.mark(key) {
+				identifierGateDrops.Add(1)
+			}
 			return
 		}
 		// Suppress when both books' files live in the same directory: those
@@ -3771,13 +3925,18 @@ func (de *Engine) AcoustIDScan(ctx context.Context, progress func(done, total in
 		// The scanner's split-book detection (PR #1167) prevents this for
 		// new imports, but the library has thousands of pre-PR splits that
 		// would otherwise be flagged as 100% AcoustID matches just because
-		// their fingerprint segments happen to overlap.
+		// their fingerprint segments happen to overlap. Deliberately NOT
+		// marked (matches the pre-sharding scan): parentDirForBook returns ""
+		// (unknown) on any fetch miss, and unknown never suppresses.
 		if dirA := parentDirForBook(bookAID); dirA != "" {
 			if dirB := parentDirForBook(bookBID); dirB == dirA {
 				return
 			}
 		}
-		emitted[key] = struct{}{}
+		// Real candidate: claim once, then upsert with no lock held.
+		if !emitShards.mark(key) {
+			return
+		}
 		if err := de.upsertCandidateWithLiveLabel(database.DedupCandidate{
 			EntityType: "book",
 			EntityAID:  bookAID,
@@ -3802,8 +3961,8 @@ func (de *Engine) AcoustIDScan(ctx context.Context, progress func(done, total in
 			// Prime cache for this book (avoids the duplicate GetBookFiles
 			// inside parentDirForBook when emit is called for this side).
 			// Pure in-memory (files already fetched above) — cheap even
-			// though every worker takes this lock once per book.
-			mu.Lock()
+			// though every worker takes bookCacheMu once per book.
+			bookCacheMu.Lock()
 			if _, cached := parentDirCache[book.ID]; !cached {
 				if len(files) == 0 {
 					parentDirCache[book.ID] = ""
@@ -3823,7 +3982,7 @@ func (de *Engine) AcoustIDScan(ctx context.Context, progress func(done, total in
 					}
 				}
 			}
-			mu.Unlock()
+			bookCacheMu.Unlock()
 
 			// LSH-backed candidate lookup is optional — only PebbleStore
 			// implements it. SQLite/mock stores skip this path and fall
@@ -3910,8 +4069,8 @@ func (de *Engine) AcoustIDScan(ctx context.Context, progress func(done, total in
 
 	slog.Info("[dedup] acoustid scan complete books scanned, candidate pair(s) emitted",
 		"total", total,
-		"emitted_count", len(emitted),
-		"identifier_gate_dropped_count", identifierGateDrops)
+		"emitted_count", emitShards.count(),
+		"identifier_gate_dropped_count", identifierGateDrops.Load())
 	return nil
 }
 

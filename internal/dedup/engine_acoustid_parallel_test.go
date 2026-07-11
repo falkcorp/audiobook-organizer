@@ -1,17 +1,20 @@
 // file: internal/dedup/engine_acoustid_parallel_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9d3b6f1a-2c47-4e8b-9a0d-5f61c8e0a3b2
-// last-edited: 2026-07-05
+// last-edited: 2026-07-11
 
-// Regression tests for CONC-3: AcoustIDScan's per-book loop is now sharded
-// across a bounded worker pool (registry.RunItems) instead of running
-// single-threaded. AcoustIDScan mutates FOUR shared maps + a counter inside
-// emit()/the loop (booksByID, boilerplateBookCache, parentDirCache, emitted,
-// identifierGateDrops) — this test proves the parallel pass emits the EXACT
-// same candidate set as an independent ground truth (no lost/duplicated
-// updates through the guarded state) and exercises every one of the four
-// gates (boilerplate book, conflicting identifiers, same-parent-dir
-// suppression, and a genuine match) concurrently under -race.
+// Regression tests for CONC-3: AcoustIDScan's per-book loop is sharded across
+// a bounded worker pool (registry.RunItems) instead of running
+// single-threaded. Its per-pair "already handled" state now lives in the
+// emitShards shard set (keyed by canonical pair-key hash) rather than one
+// global mutex, and the per-book caches (booksByID, boilerplateBookCache,
+// parentDirCache) sit behind bookCacheMu with store reads run unlocked; the
+// identifier-gate counter is atomic. This test proves the parallel pass emits
+// the EXACT same candidate set as an independent ground truth (no
+// lost/duplicated emissions) and exercises every one of the four gates
+// (boilerplate book, conflicting identifiers, same-parent-dir suppression,
+// and a genuine match) concurrently under -race. The per-pair single-emission
+// invariant is proven directly in engine_emit_shard_race_test.go.
 package dedup
 
 import (
