@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-07-04-monthly-roundup-executive-summary.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 5b0ee171-8a4f-4669-a2dd-91ffeabaa486 -->
 <!-- last-edited: 2026-07-11 -->
 
@@ -586,13 +586,14 @@ a read-only fix with no changes needed to any tag data already stored,
 so nothing had to be migrated or backfilled. The "All Books" link was also
 changed to explicitly request a full reset, closing a timing gap where a
 plain "go to this page" navigation could be silently ignored by an internal
-safeguard meant to prevent an unrelated update loop. Two further
-improvements the user asked about — a "still loading, want to cancel?"
-affordance for large tag filters, and whether internal bookkeeping tags
-should be hidden from the browsable list at all — were deliberately held
-back pending a second look at real tag sizes now that the miscounting bug
-is fixed, rather than building them against numbers that were never
-accurate to begin with.
+safeguard meant to prevent an unrelated update loop. A same-day follow-up
+then added the "still loading, want to cancel?" affordance the user asked
+for: after a few seconds, any slow book-list load now offers a cancel
+button, and cancelling also clears the active tag filter so the same slow
+search doesn't just fire again immediately. One remaining question — whether
+internal bookkeeping tags should be hidden from the browsable tag list at
+all — was deliberately left open as a preference for a human to decide,
+rather than a bug for us to silently fix one way or the other.
 
 Dependency updates this month (7 pull requests, entirely automated version
 bumps) had no behavior changes worth a full write-up and are noted here for

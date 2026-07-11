@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.139.0 -->
+<!-- version: 3.140.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-11 -->
 
@@ -8,6 +8,23 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 11, 2026 - feat(library): cancelable, timeout-aware loading for the book list
+
+- **`library`** (frontend) — the book grid/list previously showed a bare, indefinite spinner
+  with no way out while a query was in flight, including for tag filters. `AudiobookGrid` and
+  `AudiobookList` now render a shared `LoadingWithCancel` component: after ~3s it grows a "Still
+  loading… Cancel" button. Cancelling aborts the in-flight request via a new `AbortController` in
+  `useLibraryQuery.ts` (same pattern already used in `UnifiedDedupTab.tsx`/
+  `CandidateCompareDrawer.tsx`) and, per the original bug report, also clears the active tag
+  filter so the same slow query doesn't immediately re-fire. `getBooks`, `searchBooksPage`, and
+  `getImportPaths` in `api.ts` now accept an optional `signal`. A cancelled/aborted request is
+  treated as a no-op, not a failure — no error toast, and it doesn't clobber a newer in-flight
+  request's result.
+- Known limitation, not addressed here: whether large, slow-to-filter tags still exist in
+  practice can only be re-measured once the tag-index parsing fix (see above) has been deployed
+  to production — this change builds the general-purpose cancel mechanism the original report
+  asked for regardless of that measurement.
 
 #### July 11, 2026 - fix(database): correct Pebble tag-index colon parsing for namespaced tags; fix(library): true reset on "All Books"
 

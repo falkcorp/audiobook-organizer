@@ -1,7 +1,7 @@
 // file: web/src/components/library/LibraryBookGrid.tsx
-// version: 1.6.0
+// version: 1.7.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-07-01
+// last-edited: 2026-07-11
 
 import {
   Typography,
@@ -41,6 +41,7 @@ import { STORAGE_KEYS } from '../../lib/storageKeys';
 interface LibraryBookGridProps {
   audiobooks: Audiobook[];
   loading: boolean;
+  onCancelLoad?: () => void;
   searchQuery: string;
   setSearchQuery: (q: string) => void;
   setParsedSearch: (p: ParsedSearch) => void;
@@ -111,6 +112,7 @@ interface LibraryBookGridProps {
 export const LibraryBookGrid = ({
   audiobooks,
   loading,
+  onCancelLoad,
   searchQuery,
   setSearchQuery,
   setParsedSearch,
@@ -346,6 +348,7 @@ export const LibraryBookGrid = ({
           <BookGrid
             audiobooks={audiobooks}
             loading={loading}
+            onCancelLoad={onCancelLoad}
             viewMode={viewMode}
             page={page}
             totalPages={totalPages}

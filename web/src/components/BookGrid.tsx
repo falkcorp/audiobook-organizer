@@ -1,7 +1,7 @@
 // file: web/src/components/BookGrid.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6e7f8a9b-0c1d-2e3f-4a5b-6c7d8e9f0a1b
-// last-edited: 2026-05-20
+// last-edited: 2026-07-11
 
 import React from 'react';
 import {
@@ -18,6 +18,7 @@ import type { ColumnDefinition } from '../config/columnDefinitions';
 interface BookGridProps {
   audiobooks: Audiobook[];
   loading: boolean;
+  onCancelLoad?: () => void;
   viewMode: ViewMode;
   page: number;
   totalPages: number;
@@ -46,6 +47,7 @@ interface BookGridProps {
 export const BookGrid: React.FC<BookGridProps> = ({
   audiobooks,
   loading,
+  onCancelLoad,
   viewMode,
   page,
   totalPages,
@@ -88,6 +90,7 @@ export const BookGrid: React.FC<BookGridProps> = ({
         <AudiobookGrid
           audiobooks={audiobooks}
           loading={loading}
+          onCancelLoad={onCancelLoad}
           onEdit={onEdit}
           onDelete={onDelete}
           onClick={onClick}
@@ -103,6 +106,7 @@ export const BookGrid: React.FC<BookGridProps> = ({
         <AudiobookList
           audiobooks={audiobooks}
           loading={loading}
+          onCancelLoad={onCancelLoad}
           onEdit={onEdit}
           onDelete={onDelete}
           onClick={onClick}
