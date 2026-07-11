@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.137.0 -->
+<!-- version: 3.138.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-11 -->
 
@@ -8,6 +8,19 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 11, 2026 - fix(organizer): stop wiping Author/Series on CreateOrganizedVersion write-back (STOREFID W5d-1)
+
+- **`organizer`** — **prod data-loss fix.** Creating an organized version of a book was silently
+  wiping that book's Author and Series on the original record, because the write-back that
+  demotes the original to a non-primary version wrote a lightweight, heavy-field-nil projection
+  of the book instead of the full record. Confirmed by an executable test against a real
+  PebbleStore (#1887) before this fix landed. Fixed by hydrating the full book record
+  immediately before that write and mutating/persisting it instead of the slim projection; if
+  hydration fails, the code still falls back to the old direct write so the version-group state
+  transition always completes (a missed demotion — two primary versions in one group — would be
+  worse than the rare Author/Series loss on that fallback path). The regression test added in
+  #1887 now passes instead of skipping.
 
 #### July 11, 2026 - feat(search): Bleve facet counts for genres/languages/tags (INIT-4 T04, #1888)
 

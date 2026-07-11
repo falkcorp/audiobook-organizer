@@ -1,7 +1,7 @@
 // file: internal/organizer/service.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
-// last-edited: 2026-07-07
+// last-edited: 2026-07-11
 
 package organizer
 
@@ -925,19 +925,34 @@ func (orgSvc *Service) CreateOrganizedVersion(org *Organizer, book *database.Boo
 	}
 
 	// Update original book: set version group, mark as non-primary, update state.
-	// NOTE: `book` here is a page-derived (GetAllBooksCore→ToBook, heavy-field-nil)
-	// projection, so this direct write wipes the original's denormalized
-	// Author/Series under a full-fidelity backend — a PRE-EXISTING latent bug
-	// (memdb already stripped these in prod before STOREFID). Deliberately NOT
-	// fixed here: a correct fix must hydrate to preserve Author/Series WITHOUT
-	// regressing the version-group state transition to fail-closed (a GetBookByID
-	// error must not leave two primaries in the group). Tracked as a follow-up.
+	// `book` here is a page-derived (GetAllBooksCore→ToBook, heavy-field-nil)
+	// projection, so writing it directly would wipe the original's denormalized
+	// Author/Series under a full-fidelity backend (STOREFID W5d-1, #1887).
+	// Fixed via hydrate-before-write, matching hydrateAndUpdateBook's pattern —
+	// but NOT that helper itself: its fail-closed skip-on-hydrate-error would
+	// leave the version group with two primaries, which is worse than the rare
+	// Author/Series wipe this fallback accepts. So: hydrate and write the full
+	// row on success; if hydration fails, fall back to the direct state-only
+	// write (today's pre-fix behavior) so the state transition always lands —
+	// fail-OPEN for the state transition, preserve-heavy-when-possible.
 	organizedSourceState := "organized_source"
 	book.VersionGroupID = &versionGroupID
 	book.IsPrimaryVersion = &isNotPrimary
 	book.LibraryState = &organizedSourceState
-	if _, err := orgSvc.db.UpdateBook(book.ID, book); err != nil {
-		log.Warn("Failed to update original book %s version group: %v", book.ID, err)
+	if hydrated, hydrateErr := orgSvc.db.GetBookByID(book.ID); hydrateErr == nil && hydrated != nil {
+		hydrated.VersionGroupID = &versionGroupID
+		hydrated.IsPrimaryVersion = &isNotPrimary
+		hydrated.LibraryState = &organizedSourceState
+		if _, err := orgSvc.db.UpdateBook(book.ID, hydrated); err != nil {
+			log.Warn("Failed to update original book %s version group: %v", book.ID, err)
+		}
+	} else {
+		if hydrateErr != nil {
+			log.Warn("organize: hydrate-before-write failed for original book %s, falling back to state-only write (Author/Series may be wiped): %v", book.ID, hydrateErr)
+		}
+		if _, err := orgSvc.db.UpdateBook(book.ID, book); err != nil {
+			log.Warn("Failed to update original book %s version group: %v", book.ID, err)
+		}
 	}
 
 	// Record operation changes for undo
