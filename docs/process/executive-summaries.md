@@ -1,7 +1,7 @@
 <!-- file: docs/process/executive-summaries.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: b608794a-eac5-44bc-95b9-643872bd0ca8 -->
-<!-- last-edited: 2026-07-04 -->
+<!-- last-edited: 2026-07-11 -->
 
 # Executive Summary Convention
 
@@ -27,11 +27,19 @@ for.
 
 ## Where it goes
 
-`docs/status/YYYY-MM-DD-<short-topic>-executive-summary.md`, using the date
-the work shipped (merge date), not the date work started.
+`docs/executive-summaries/YYYY-MM-DD-<short-topic>-executive-summary.md`,
+using the date the work shipped (merge date), not the date work started.
 
 If the work also produced a formal spec (see `docs/specs/`), link to it and
 to the merged PR at the top of the summary.
+
+An executive summary is the polished, stakeholder-facing narrative for a
+body of work — distinct from a status report (see
+[`docs/process/status-reports.md`](status-reports.md)), which is a terse,
+internal/operational update (a TL;DR, a table of what shipped, and what's
+still in flight or blocked) aimed at the maintainer/engineer rather than a
+non-engineer stakeholder; the two are not mutually exclusive and a large
+execution wave often warrants both.
 
 ## Structure
 
