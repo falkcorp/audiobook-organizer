@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.134.0 -->
+<!-- version: 3.135.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-10 -->
 
@@ -8,6 +8,22 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 10, 2026 - fix(server): enroll all four cache warmers in bgWG with shutdown skip (#1794)
+
+- **`fix(server)`** — `warmFacetsCache`/`warmLibrarySizes`/`warmAuthorsCache`/`warmSeriesCache`
+  were fire-and-forget and could outlive `Close()` (PEBBLE-CLOSED family lifecycle gap;
+  follow-up to #1781, which enrolled the sibling `library-list-warmer` +
+  `apikey-expiry-sweep`). Each launch in `startCacheWarmers`
+  (`internal/server/server_lifecycle.go`) now registers a named `s.bgWG` entry
+  (`facets-warmer`/`library-sizes-warmer`/`authors-warmer`/`series-warmer`) and skips on an
+  already-canceled `s.bgCtx` before touching the store, mirroring the enrolled sibling. The
+  stale "remain intentionally untracked" doc comment above `startCacheWarmers` is rewritten to
+  match. No warmer function signature changed. New tests
+  `TestStartCacheWarmers_SkipOnCanceledCtx` / `TestStartCacheWarmers_EnrolledInBgWG`
+  (`internal/server/cache_warmers_bgwg_test.go`) cover both the shutdown-skip path and the
+  anti-over-suppression case (a live `bgCtx` must still run every warmer), green under `-race`.
+  TODO.md's WARMERS-NOT-IN-BGWG item checked off.
 
 #### July 10, 2026 - docs(plan): 10 remaining-work planning packages (INIT-1..10)
 

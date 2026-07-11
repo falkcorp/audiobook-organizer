@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.83.0 -->
+<!-- version: 9.84.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-10 -->
 
@@ -1281,10 +1281,15 @@ must sequence, but A and B are parallelizable. Spawn:
   finds fixed in #1781: latent prod nil-deref in `ProtectedPathCache.refresh()` with Deluge
   unconfigured (tag-write pre-flights would 500), deluge singleton test leak, RootDir test
   pollution. Proof: `internal/server -short -race -count=2` green (952s).
-- [ ] **WARMERS-NOT-IN-BGWG** (2026-07-03, follow-up from #1781) — sibling fire-and-forget cache
-  warmers (`warmFacetsCache`/`warmLibrarySizes`/`warmAuthorsCache`/`warmSeriesCache`) are
-  short-lived and haven't struck, but share the trickle-warmer's lifecycle gap. Enroll in
-  bgWG/bgCtx like `runTrickleWarmer` (server_lifecycle.go / library_list_warmer.go pattern).
+- [x] **WARMERS-NOT-IN-BGWG** (2026-07-03, follow-up from #1781) — ✅ **FIXED 2026-07-10 (#1794,
+  TASK-05).** Sibling fire-and-forget cache warmers (`warmFacetsCache`/`warmLibrarySizes`/
+  `warmAuthorsCache`/`warmSeriesCache`) were short-lived and hadn't struck, but shared the
+  trickle-warmer's lifecycle gap. Enrolled in bgWG/bgCtx exactly like `runTrickleWarmer`
+  (server_lifecycle.go `startCacheWarmers`): each launch now does
+  `bgWG.Add(name)`/`defer bgWG.Done(name)` plus a `bgCtx.Err()` shutdown-skip check. New tests
+  `TestStartCacheWarmers_SkipOnCanceledCtx` / `TestStartCacheWarmers_EnrolledInBgWG` in
+  `internal/server/cache_warmers_bgwg_test.go` cover both the skip-on-shutdown and
+  anti-over-suppression (live ctx still runs warmers) cases under `-race`.
 - [x] **INGEST-VERSION-FLAKE** (2026-07-03) — ✅ **FIXED #1777.** Root cause was NOT ordering:
   PebbleStore async memdb-warmup race — `CreateImportPath`'s memdb write no-ops before warmup
   publishes, so `GetAllImportPaths` (memdb-backed) missed the test's temp dir →
