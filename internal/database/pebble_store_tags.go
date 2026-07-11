@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_tags.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c2ad6d2b-75c3-446d-9f67-08cc517050e2
-// last-edited: 2026-07-03
+// last-edited: 2026-07-11
 
 package database
 
@@ -232,11 +232,15 @@ func (p *PebbleStore) ListAllTags() ([]TagWithCount, error) {
 
 	counts := make(map[string]int)
 	for iter.First(); iter.Valid(); iter.Next() {
-		// Key format: tag_idx:<tag>:<bookID>
+		// Key format: tag_idx:<tag>:<bookID>. Tags may themselves contain
+		// colons (e.g. "metadata:source:audible"), so the tag/bookID
+		// boundary is the LAST colon, not a fixed split arity — bookIDs
+		// (ULIDs) are guaranteed colon-free, which is what makes this
+		// unambiguous.
 		key := string(iter.Key())
-		parts := strings.SplitN(key, ":", 3)
-		if len(parts) >= 2 {
-			counts[parts[1]]++
+		rest := strings.TrimPrefix(key, "tag_idx:")
+		if idx := strings.LastIndex(rest, ":"); idx > 0 {
+			counts[rest[:idx]]++
 		}
 	}
 
@@ -269,12 +273,21 @@ func (p *PebbleStore) GetBooksByTag(tag string) ([]string, error) {
 
 	var bookIDs []string
 	for iter.First(); iter.Valid(); iter.Next() {
-		// Key format: tag_idx:<tag>:<bookID>
+		// Key format: tag_idx:<tag>:<bookID>. A byte-prefix scan for
+		// "tag_idx:<tag>:" also matches longer tags sharing that prefix
+		// (e.g. tag="metadata" matches keys belonging to
+		// "metadata:source:audible" too), so every match must be
+		// re-validated: the segment before the LAST colon must equal the
+		// requested tag exactly, or the key belongs to a different
+		// (longer) tag and is skipped rather than mis-parsed into a fake
+		// bookID.
 		key := string(iter.Key())
-		parts := strings.SplitN(key, ":", 3)
-		if len(parts) == 3 {
-			bookIDs = append(bookIDs, parts[2])
+		rest := strings.TrimPrefix(key, "tag_idx:")
+		idx := strings.LastIndex(rest, ":")
+		if idx <= 0 || rest[:idx] != tag {
+			continue
 		}
+		bookIDs = append(bookIDs, rest[idx+1:])
 	}
 	return bookIDs, nil
 }
@@ -448,12 +461,14 @@ func (p *PebbleStore) pebbleListAllTags(ks pebbleTagKeyspace) ([]TagWithCount, e
 
 	counts := make(map[string]int)
 	for iter.First(); iter.Valid(); iter.Next() {
-		// Key format: <indexPrefix><tag>:<entityID>
+		// Key format: <indexPrefix><tag>:<entityID>. Tags may themselves
+		// contain colons, so the tag/entityID boundary is the LAST colon —
+		// entityIDs (strconv.Itoa'd author/series IDs) are guaranteed
+		// colon-free.
 		key := string(iter.Key())
 		rest := strings.TrimPrefix(key, ks.indexPrefix)
-		parts := strings.SplitN(rest, ":", 2)
-		if len(parts) >= 1 {
-			counts[parts[0]]++
+		if idx := strings.LastIndex(rest, ":"); idx > 0 {
+			counts[rest[:idx]]++
 		}
 	}
 
@@ -484,10 +499,20 @@ func (p *PebbleStore) pebbleEntitiesByTag(ks pebbleTagKeyspace, tag string) ([]s
 
 	var ids []string
 	for iter.First(); iter.Valid(); iter.Next() {
+		// A byte-prefix scan for "<indexPrefix><tag>:" also matches longer
+		// tags sharing that prefix (e.g. tag="metadata" matches keys
+		// belonging to "metadata:source:audible" too). Re-validate via the
+		// LAST colon: the segment before it must equal the requested tag
+		// exactly, or the key belongs to a different (longer) tag and must
+		// be skipped rather than returned as a garbage entity ID.
 		key := string(iter.Key())
-		rest := strings.TrimPrefix(key, fmt.Sprintf("%s%s:", ks.indexPrefix, tag))
-		if rest != "" {
-			ids = append(ids, rest)
+		rest := strings.TrimPrefix(key, ks.indexPrefix)
+		idx := strings.LastIndex(rest, ":")
+		if idx <= 0 || rest[:idx] != tag {
+			continue
+		}
+		if id := rest[idx+1:]; id != "" {
+			ids = append(ids, id)
 		}
 	}
 	return ids, nil

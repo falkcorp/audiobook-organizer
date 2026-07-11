@@ -1,11 +1,11 @@
 <!-- file: docs/executive-summaries/2026-07-04-monthly-roundup-executive-summary.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 5b0ee171-8a4f-4669-a2dd-91ffeabaa486 -->
 <!-- last-edited: 2026-07-11 -->
 
 # Executive Summary: June–July Monthly Roundup
 
-**Shipped:** PRs [#1240–#1893](https://github.com/falkcorp/audiobook-organizer/pulls?q=is%3Apr+is%3Amerged+merged%3A2026-06-05..2026-07-11), covering 2026-06-05 through 2026-07-11 (~430 merged PRs total; the July 5–11 remaining-work execution added 12 code/CI PRs (#1878–#1888) plus the same-day Author/Series data-loss fix, #1893)
+**Shipped:** PRs [#1240–#1893+](https://github.com/falkcorp/audiobook-organizer/pulls?q=is%3Apr+is%3Amerged+merged%3A2026-06-05..2026-07-11), covering 2026-06-05 through 2026-07-11 (~430 merged PRs total; the July 5–11 remaining-work execution added 12 code/CI PRs (#1878–#1888) plus the same-day Author/Series data-loss fix (#1893) and the library tag-browsing fix that follows)
 **Related doc:** [2026-07-03-itl-hardening-executive-summary.md](2026-07-03-itl-hardening-executive-summary.md) — full write-up of this month's iTunes library (`.itl`) write-back hardening (K13–K17), linked rather than repeated below.
 
 This is a monthly roundup rather than a single-change summary: instead of one
@@ -558,6 +558,41 @@ erased that book's Author and Series information (#1887) — a genuine
 production data-loss bug. It was fixed the same day (#1893): see the
 highest-risk list above for the plain-language write-up of the bug and the
 fix.
+
+### 17. Library tag-browsing bug fix
+
+**What it was:** A user reported that the "Metadata" and "Dedup" bubbles in
+the library's browsable tag list showed suspiciously large counts, and
+clicking either one failed to load any books at all. Separately, clicking
+"All Books" in the left-hand navigation didn't reliably clear an active tag
+filter, so the library could stay stuck showing a filtered view even after
+asking for the unfiltered one.
+
+**Why it mattered:** The initial theory — that these were two separate,
+mostly cosmetic problems (some internal bookkeeping tags leaking into a
+user-facing list, and a missing loading indicator) — turned out to be
+wrong. Verifying the theory against real production data before writing any
+fix found the actual cause: a text-parsing bug in how the database reads
+back tag names that contain colons, which is how the system labels
+auto-applied tags internally (for example, "which online catalog this
+book's metadata came from"). Any tag with a colon in its name was either
+being mislabeled and miscounted, or made completely unsearchable — the
+"Metadata" and "Dedup" bubbles were a visible symptom of a bug that
+affected every auto-applied tag in the system, not just those two.
+
+**The fix:** The database's tag-lookup logic was corrected to read colon-
+containing tag names properly instead of truncating or misreading them —
+a read-only fix with no changes needed to any tag data already stored,
+so nothing had to be migrated or backfilled. The "All Books" link was also
+changed to explicitly request a full reset, closing a timing gap where a
+plain "go to this page" navigation could be silently ignored by an internal
+safeguard meant to prevent an unrelated update loop. Two further
+improvements the user asked about — a "still loading, want to cancel?"
+affordance for large tag filters, and whether internal bookkeeping tags
+should be hidden from the browsable list at all — were deliberately held
+back pending a second look at real tag sizes now that the miscounting bug
+is fixed, rather than building them against numbers that were never
+accurate to begin with.
 
 Dependency updates this month (7 pull requests, entirely automated version
 bumps) had no behavior changes worth a full write-up and are noted here for

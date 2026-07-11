@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.89.0 -->
+<!-- version: 9.90.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-11 -->
 
@@ -125,6 +125,42 @@ remaining-work catalog, produced, adversarially judged (3 lenses × 10), brief-v
   (orphan-cleanup op).
 
 ---
+
+## ✅ RESOLVED — library "Metadata"/"Dedup" tag bubbles miscounted + zero-result on click; "All Books" left tag filters stuck (2026-07-11)
+
+- **User report:** the library's browsable tag cloud showed "Metadata" and "Dedup" bubbles with
+  huge counts that failed to load ("too many books") when clicked; separately, clicking "All
+  Books" in the left nav never actually cleared an active tag filter.
+- **Initial hypothesis (source-based system-tag filtering + missing pagination/cancel UX) was
+  wrong** — advisor-requested empirical verification against production (44,325 books) found the
+  real root cause: a byte-prefix/fixed-split-arity parsing bug in the Pebble tag index's read
+  path, in **4 functions**, not 2 — `ListAllTags`/`GetBooksByTag` (books) and the shared
+  `pebbleListAllTags`/`pebbleEntitiesByTag` helpers (author/series tags, same file, same bug
+  class, not part of the original report but caught alongside). Any colon-namespaced tag
+  (`metadata:*`, `dedup:*`, `import:*`, `organize:*` — see `internal/database/migrations.go:935-965`)
+  was either truncated to its first segment (collapsing all variants into one bogus bucket) or
+  mis-parsed after a prefix-scan collision (returning 0 results, or for author/series, would have
+  returned garbage entity IDs). Confirmed: `tag=metadata`, `tag=dedup`, and even the fully-correct
+  `tag=metadata:source:audible` all returned `count: 0` in prod; ordinary tags like "fantasy"
+  filtered correctly.
+- **Fix:** parse on the *last* colon (bookID/entityID are guaranteed colon-free) instead of a
+  fixed split arity, and re-validate every prefix-scan match against the requested tag before
+  including it. Pure read-path fix, no backfill needed. Separately, `Sidebar.tsx`'s Library-root
+  links now navigate to `/library?reset=1`, and `Library.tsx` handles that marker *before* its
+  `isInternalUpdate` echo-suppression guard so a reset request can never be silently swallowed —
+  that swallow (not a missing clear-tags call) was the actual cause of "stuck" filters.
+- **Deferred, not in this fix (open follow-ups):** cancel/timeout-aware loading UX for tag
+  filters — needs re-measuring which corrected system tags are actually large enough to warrant
+  it, now that the fake giant buckets are gone; and whether system-sourced tags should still be
+  hidden from the general "Browse by Tag" cloud, now a genuine UX preference rather than a
+  required bug fix.
+- **Verified:** new regression tests (`TestCoverage_BookTagsColonCollision`,
+  `TestCoverage_AuthorSeriesTagsColonCollision` in `internal/database/store_coverage_test.go`;
+  `Library.resetNavigation.test.tsx`) all fail against the pre-fix code and pass against the fix.
+  Backend: `go build ./...`, `go vet ./...` clean; `internal/database` green under `-race`;
+  97-package suite (excluding the pre-existing `internal/server` stall, unrelated to this change)
+  green with zero FAIL/panic/DATA RACE. Frontend: `tsc --noEmit` clean, `eslint` clean, full
+  vitest suite 54/54 files, 345/345 tests green.
 
 ## ✅ RESOLVED — CreateOrganizedVersion original-book slim-writeback wiped Author/Series (STOREFID W5d-1, 2026-07-07; CONFIRMED 2026-07-11 by #1887; FIXED 2026-07-11)
 

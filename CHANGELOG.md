@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.138.0 -->
+<!-- version: 3.139.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-11 -->
 
@@ -8,6 +8,39 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 11, 2026 - fix(database): correct Pebble tag-index colon parsing for namespaced tags; fix(library): true reset on "All Books"
+
+- **`database`** — **prod correctness fix.** Every colon-namespaced tag (the auto-applied
+  `metadata:*`, `dedup:*`, `import:*`, `organize:*` system tags — see `internal/database/migrations.go:935-965`)
+  was mishandled by the Pebble tag index's read path in four functions in
+  `internal/database/pebble_store_tags.go`: `ListAllTags` and the shared `pebbleListAllTags`
+  helper (used by author/series tags too) truncated any tag at its first colon, collapsing every
+  `metadata:*` variant into one bogus "metadata" bucket and every `dedup:*` variant into "dedup";
+  `GetBooksByTag` and the shared `pebbleEntitiesByTag` helper prefix-scanned `tag_idx:<tag>:`,
+  which Pebble also matches against any longer tag sharing that byte prefix, then mis-parsed the
+  match into a garbage ID — for books this always returned zero results, for author/series tags
+  it would have silently returned wrong entity IDs. Confirmed against production (44,325 books):
+  the bogus "metadata"/"dedup" buckets showed 30,372/28,177 books each, but filtering by
+  `tag=metadata`, `tag=dedup`, or even the fully-correct `tag=metadata:source:audible` all
+  returned 0 results. Fixed by parsing on the *last* colon (the tag/entityID boundary, since
+  entity IDs are guaranteed colon-free) instead of a fixed split arity, and by re-validating
+  every prefix-scan match against the requested tag before including it. Pure read-path fix — the
+  write path was already correct, so no backfill or data migration is needed. New regression
+  tests (`TestCoverage_BookTagsColonCollision`, `TestCoverage_AuthorSeriesTagsColonCollision` in
+  `internal/database/store_coverage_test.go`) cover a bare tag and its colon-suffixed namespaced
+  sibling coexisting across all three tag keyspaces (book/author/series); both fail against the
+  pre-fix code and pass against the fix.
+- **`library`** (frontend) — clicking "All Books" in the left nav (or the collapsed-sidebar
+  Library icon, or the Library group header — all three navigate to the same route) previously
+  left the tag filter "stuck": a plain `navigate('/library')` could be swallowed by the
+  page's internal echo-suppression guard (`isInternalUpdate`, used to stop a read-from-URL effect
+  from re-triggering its own write-back), so `selectedTags` (and therefore the actual book query)
+  sometimes never cleared even though the URL looked reset. The sidebar's Library-root links now
+  navigate to `/library?reset=1`; `Library.tsx` checks for that marker *before* the echo-guard so
+  it can never be swallowed, explicitly clears page/search/sort/filters/tags, then strips the
+  marker from the URL. New tests in `web/src/pages/Library.resetNavigation.test.tsx` cover both
+  the tag-filter and search-box cases; both fail against the pre-fix code and pass against the fix.
 
 #### July 11, 2026 - fix(organizer): stop wiping Author/Series on CreateOrganizedVersion write-back (STOREFID W5d-1)
 

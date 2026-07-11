@@ -45,7 +45,11 @@ interface SidebarProps {
 }
 
 const librarySubItems = [
-  { text: 'All Books', icon: <LibraryBooksIcon />, path: '/library' },
+  // path carries ?reset=1 so Library.tsx does a true full reset (page,
+  // search, sort, filters, tags) instead of the state-preserving nav most
+  // other sidebar links use; matchPath (query-free) drives the selected
+  // highlight so it still lights up on a plain /library visit.
+  { text: 'All Books', icon: <LibraryBooksIcon />, path: '/library?reset=1', matchPath: '/library' },
   { text: 'In Progress', icon: <MenuBookIcon />, path: '/library?search=read_status:in_progress' },
   { text: 'Finished', icon: <LibraryBooksIcon />, path: '/library?search=read_status:finished' },
   { text: 'Fingerprints', icon: <WavesIcon />, path: '/fingerprints' },
@@ -135,7 +139,7 @@ export function Sidebar({ open, onClose, drawerWidth, collapsed = false, onToggl
                   <ListItem key={item.text} disablePadding>
                     <ListItemButton
                       sx={{ pl: 4 }}
-                      selected={location.pathname === item.path}
+                      selected={location.pathname === (item.matchPath ?? item.path)}
                       onClick={() => handleNavigation(item.path)}
                     >
                       <ListItemIcon>{item.icon}</ListItemIcon>
