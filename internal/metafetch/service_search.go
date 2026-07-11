@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_search.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
-// last-edited: 2026-07-03
+// last-edited: 2026-07-11
 
 package metafetch
 
@@ -365,7 +365,7 @@ func (mfs *Service) SearchMetadataForBookWithOptions(
 				rSeriesLower := strings.ToLower(r.Series)
 				sSeriesLower := strings.ToLower(searchSeries)
 				if strings.Contains(rSeriesLower, sSeriesLower) || strings.Contains(sSeriesLower, rSeriesLower) {
-					score *= 1.4 // Boost for series match
+					score *= scoringKnobs().SeriesNameMatchBoost // Boost for series match
 				}
 			}
 
@@ -497,6 +497,7 @@ func (mfs *Service) SearchMetadataForBookWithOptions(
 		originalTitle = book.Title
 	}
 	if expectedNum := extractTrailingNumber(originalTitle); expectedNum != "" {
+		k := scoringKnobs()
 		for i := range candidates {
 			c := &candidates[i]
 			candidateNum := ""
@@ -509,9 +510,9 @@ func (mfs *Service) SearchMetadataForBookWithOptions(
 				candidateNum = extractTrailingNumber(c.Title)
 			}
 			if candidateNum == expectedNum {
-				c.Score *= 2.0 // Strong boost for exact number match
+				c.Score *= k.SeriesNumberExactBoost // Strong boost for exact number match
 			} else if candidateNum != "" && candidateNum != expectedNum {
-				c.Score *= 0.5 // Penalize wrong number in same series
+				c.Score *= k.SeriesNumberWrongPenalty // Penalize wrong number in same series
 			}
 		}
 	}

@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.65.0
+// version: 1.66.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-07-10
+// last-edited: 2026-07-11
 
 package config
 
@@ -224,6 +224,70 @@ type MetadataScoringConfig struct {
 	LLMRerankEpsilon   float64 `json:"llm_rerank_epsilon"   mapstructure:"llm_rerank_epsilon"`
 	LLMRerankTopK      int     `json:"llm_rerank_top_k"     mapstructure:"llm_rerank_top_k"`
 	WriteBackupBefore  bool    `json:"write_backup_before"  mapstructure:"write_backup_before"`
+
+	// --- new: transcription boosts (defaults 2.0 / 1.4 / 1.6 / 1.4) ---
+	TranscriptionTitleExactBoost  float64 `json:"transcription_title_exact_boost"  mapstructure:"transcription_title_exact_boost"`
+	TranscriptionTitleSubstrBoost float64 `json:"transcription_title_substr_boost" mapstructure:"transcription_title_substr_boost"`
+	TranscriptionAuthorBoost      float64 `json:"transcription_author_boost"       mapstructure:"transcription_author_boost"`
+	TranscriptionNarratorBoost    float64 `json:"transcription_narrator_boost"     mapstructure:"transcription_narrator_boost"`
+
+	// --- new: base-score adjustments (defaults 0.15 / 0.05 / 0.15 / 0.35).
+	// POINTER knobs: 0 is a legitimate operator value for CompilationPenalty,
+	// RichMetadataBonusCap, and F1MinScore, so "unset" is nil, NOT 0. ---
+	CompilationPenalty     *float64 `json:"compilation_penalty"       mapstructure:"compilation_penalty"`
+	RichMetadataFieldBonus float64  `json:"rich_metadata_field_bonus" mapstructure:"rich_metadata_field_bonus"`
+	RichMetadataBonusCap   *float64 `json:"rich_metadata_bonus_cap"   mapstructure:"rich_metadata_bonus_cap"`
+	F1MinScore             *float64 `json:"f1_min_score"              mapstructure:"f1_min_score"`
+
+	// --- new: series boosts (defaults 1.4 / 2.0 / 0.5) ---
+	SeriesNameMatchBoost     float64 `json:"series_name_match_boost"     mapstructure:"series_name_match_boost"`
+	SeriesNumberExactBoost   float64 `json:"series_number_exact_boost"   mapstructure:"series_number_exact_boost"`
+	SeriesNumberWrongPenalty float64 `json:"series_number_wrong_penalty" mapstructure:"series_number_wrong_penalty"`
+
+	// --- new: duration tier VALUES (defaults = the multiplier/score columns of
+	// the durationTiers table in internal/metafetch/service_scoring.go). Tier
+	// STRUCTURE (edges + count) stays fixed in code. ---
+	DurationTierMultipliers []float64 `json:"duration_tier_multipliers" mapstructure:"duration_tier_multipliers"`
+	DurationTierScores      []float64 `json:"duration_tier_scores"      mapstructure:"duration_tier_scores"`
+
+	// --- new: bulk-fetch concurrency (default 4; consumed by TASK-05) ---
+	BulkFetchWorkers int `json:"bulk_fetch_workers" mapstructure:"bulk_fetch_workers"`
+}
+
+// f64Ptr returns a pointer to v. Used to populate the pointer-typed scoring
+// knobs (CompilationPenalty, RichMetadataBonusCap, F1MinScore) from a
+// viper.GetFloat64 result, which can't have its address taken inline.
+func f64Ptr(v float64) *float64 {
+	return &v
+}
+
+// getFloat64Slice reads a []float64 out of viper. Viper has no
+// GetFloat64Slice; SetDefault stores our []float64 default verbatim, but a
+// value loaded from YAML/JSON typically comes back as []any with each
+// element as float64 (or int for whole numbers), so this normalizes both
+// shapes defensively. Any other shape (missing key, wrong type) returns nil
+// — the metafetch-side resolver treats nil/mismatched-length as "unset" and
+// falls back to the built-in duration tier table.
+func getFloat64Slice(key string) []float64 {
+	switch v := viper.Get(key).(type) {
+	case []float64:
+		return v
+	case []any:
+		out := make([]float64, 0, len(v))
+		for _, item := range v {
+			switch n := item.(type) {
+			case float64:
+				out = append(out, n)
+			case int:
+				out = append(out, float64(n))
+			default:
+				return nil
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 // AIBackend mode constants. They control, independently for embeddings and
@@ -846,6 +910,23 @@ func InitConfig() {
 	viper.SetDefault("metadata_scoring.llm_rerank_epsilon", 0.05)
 	viper.SetDefault("metadata_scoring.llm_rerank_top_k", 5)
 	viper.SetDefault("metadata_scoring.write_backup_before", true)
+	// Scoring literals extracted into config (INIT-3-T1) — defaults equal
+	// today's hardcoded literals so behavior is bit-identical until an
+	// operator tunes a knob. See MetadataScoringConfig for field docs.
+	viper.SetDefault("metadata_scoring.transcription_title_exact_boost", 2.0)
+	viper.SetDefault("metadata_scoring.transcription_title_substr_boost", 1.4)
+	viper.SetDefault("metadata_scoring.transcription_author_boost", 1.6)
+	viper.SetDefault("metadata_scoring.transcription_narrator_boost", 1.4)
+	viper.SetDefault("metadata_scoring.compilation_penalty", 0.15)
+	viper.SetDefault("metadata_scoring.rich_metadata_field_bonus", 0.05)
+	viper.SetDefault("metadata_scoring.rich_metadata_bonus_cap", 0.15)
+	viper.SetDefault("metadata_scoring.f1_min_score", 0.35)
+	viper.SetDefault("metadata_scoring.series_name_match_boost", 1.4)
+	viper.SetDefault("metadata_scoring.series_number_exact_boost", 2.0)
+	viper.SetDefault("metadata_scoring.series_number_wrong_penalty", 0.5)
+	viper.SetDefault("metadata_scoring.duration_tier_multipliers", []float64{1.30, 1.20, 1.10, 1.00, 0.75, 0.50})
+	viper.SetDefault("metadata_scoring.duration_tier_scores", []float64{20, 15, 10, 0, -10, -20})
+	viper.SetDefault("metadata_scoring.bulk_fetch_workers", 4)
 
 	// AI backend-mode toggle. Modes default empty (resolved from legacy fields
 	// by EffectiveEmbeddingMode / EffectiveLLMMode). LocalBaseURL uses a
@@ -868,6 +949,18 @@ func InitConfig() {
 	viper.BindEnv("metadata_scoring.llm_rerank_epsilon", "METADATA_SCORING_LLM_RERANK_EPSILON")     //nolint:errcheck
 	viper.BindEnv("metadata_scoring.llm_rerank_top_k", "METADATA_SCORING_LLM_RERANK_TOP_K")         //nolint:errcheck
 	viper.BindEnv("metadata_scoring.write_backup_before", "METADATA_SCORING_WRITE_BACKUP_BEFORE")   //nolint:errcheck
+	viper.BindEnv("metadata_scoring.transcription_title_exact_boost", "METADATA_SCORING_TRANSCRIPTION_TITLE_EXACT_BOOST")   //nolint:errcheck
+	viper.BindEnv("metadata_scoring.transcription_title_substr_boost", "METADATA_SCORING_TRANSCRIPTION_TITLE_SUBSTR_BOOST") //nolint:errcheck
+	viper.BindEnv("metadata_scoring.transcription_author_boost", "METADATA_SCORING_TRANSCRIPTION_AUTHOR_BOOST")             //nolint:errcheck
+	viper.BindEnv("metadata_scoring.transcription_narrator_boost", "METADATA_SCORING_TRANSCRIPTION_NARRATOR_BOOST")         //nolint:errcheck
+	viper.BindEnv("metadata_scoring.compilation_penalty", "METADATA_SCORING_COMPILATION_PENALTY")                           //nolint:errcheck
+	viper.BindEnv("metadata_scoring.rich_metadata_field_bonus", "METADATA_SCORING_RICH_METADATA_FIELD_BONUS")               //nolint:errcheck
+	viper.BindEnv("metadata_scoring.rich_metadata_bonus_cap", "METADATA_SCORING_RICH_METADATA_BONUS_CAP")                   //nolint:errcheck
+	viper.BindEnv("metadata_scoring.f1_min_score", "METADATA_SCORING_F1_MIN_SCORE")                                         //nolint:errcheck
+	viper.BindEnv("metadata_scoring.series_name_match_boost", "METADATA_SCORING_SERIES_NAME_MATCH_BOOST")                   //nolint:errcheck
+	viper.BindEnv("metadata_scoring.series_number_exact_boost", "METADATA_SCORING_SERIES_NUMBER_EXACT_BOOST")               //nolint:errcheck
+	viper.BindEnv("metadata_scoring.series_number_wrong_penalty", "METADATA_SCORING_SERIES_NUMBER_WRONG_PENALTY")           //nolint:errcheck
+	viper.BindEnv("metadata_scoring.bulk_fetch_workers", "METADATA_SCORING_BULK_FETCH_WORKERS")                             //nolint:errcheck
 
 	// Unified dedup scoring defaults (SPEC 1 §3–4, T011).
 	// These are consumed by internal/dedup/unified.LoadScoreConfig via Viper.
@@ -1099,6 +1192,25 @@ func InitConfig() {
 				LLMRerankEpsilon:   viper.GetFloat64("metadata_scoring.llm_rerank_epsilon"),
 				LLMRerankTopK:      viper.GetInt("metadata_scoring.llm_rerank_top_k"),
 				WriteBackupBefore:  viper.GetBool("metadata_scoring.write_backup_before"),
+
+				TranscriptionTitleExactBoost:  viper.GetFloat64("metadata_scoring.transcription_title_exact_boost"),
+				TranscriptionTitleSubstrBoost: viper.GetFloat64("metadata_scoring.transcription_title_substr_boost"),
+				TranscriptionAuthorBoost:      viper.GetFloat64("metadata_scoring.transcription_author_boost"),
+				TranscriptionNarratorBoost:    viper.GetFloat64("metadata_scoring.transcription_narrator_boost"),
+
+				CompilationPenalty:     f64Ptr(viper.GetFloat64("metadata_scoring.compilation_penalty")),
+				RichMetadataFieldBonus: viper.GetFloat64("metadata_scoring.rich_metadata_field_bonus"),
+				RichMetadataBonusCap:   f64Ptr(viper.GetFloat64("metadata_scoring.rich_metadata_bonus_cap")),
+				F1MinScore:             f64Ptr(viper.GetFloat64("metadata_scoring.f1_min_score")),
+
+				SeriesNameMatchBoost:     viper.GetFloat64("metadata_scoring.series_name_match_boost"),
+				SeriesNumberExactBoost:   viper.GetFloat64("metadata_scoring.series_number_exact_boost"),
+				SeriesNumberWrongPenalty: viper.GetFloat64("metadata_scoring.series_number_wrong_penalty"),
+
+				DurationTierMultipliers: getFloat64Slice("metadata_scoring.duration_tier_multipliers"),
+				DurationTierScores:      getFloat64Slice("metadata_scoring.duration_tier_scores"),
+
+				BulkFetchWorkers: viper.GetInt("metadata_scoring.bulk_fetch_workers"),
 			},
 
 			// AI backend-mode toggle (nested sub-struct). Modes default empty
@@ -1524,6 +1636,25 @@ func ResetToDefaults() {
 				LLMRerankEpsilon:   0.05,
 				LLMRerankTopK:      5,
 				WriteBackupBefore:  true,
+
+				TranscriptionTitleExactBoost:  2.0,
+				TranscriptionTitleSubstrBoost: 1.4,
+				TranscriptionAuthorBoost:      1.6,
+				TranscriptionNarratorBoost:    1.4,
+
+				CompilationPenalty:     f64Ptr(0.15),
+				RichMetadataFieldBonus: 0.05,
+				RichMetadataBonusCap:   f64Ptr(0.15),
+				F1MinScore:             f64Ptr(0.35),
+
+				SeriesNameMatchBoost:     1.4,
+				SeriesNumberExactBoost:   2.0,
+				SeriesNumberWrongPenalty: 0.5,
+
+				DurationTierMultipliers: []float64{1.30, 1.20, 1.10, 1.00, 0.75, 0.50},
+				DurationTierScores:      []float64{20, 15, 10, 0, -10, -20},
+
+				BulkFetchWorkers: 4,
 			},
 
 			// AI backend-mode toggle. Modes empty at rest (derived from legacy
