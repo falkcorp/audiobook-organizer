@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_scoring.go
-// version: 1.5.4
+// version: 1.6.0
 // guid: d2226468-bed1-4989-93f3-b0bc3a344424
-// last-edited: 2026-07-03
+// last-edited: 2026-07-10
 
 package metafetch
 
@@ -151,59 +151,111 @@ func ApplyNonBaseAdjustments(baseScore float64, r metadata.BookMetadata, baseWor
 	return score + bonus
 }
 
-// durationScoreMultiplier returns a score multiplier based on how closely the
-// candidate's runtime matches the book's known duration.
+// durationTiers is the ONE canonical, ratio-based classification of how
+// closely a candidate's runtime matches a book's known duration. Both
+// durationScoreMultiplier and computeDurationScore look up the same tier by
+// ratio = |candidateDurationSec-bookDurationSec| / bookDurationSec, so they
+// can never disagree about how close a duration match is (INIT-3-T2 —
+// before this table existed the two functions used independent bucket
+// systems — absolute-delta-seconds vs delta-ratio — that could and did
+// disagree on the same pair; see golden fixtures in
+// service_scoring_test.go for the divergent pre-unification behavior).
 //
-// Both values are in seconds. If either is zero (unknown), the multiplier is
-// 1.0 (no adjustment). The multiplier is symmetric — only the absolute delta
-// matters, not the direction (candidate longer vs shorter).
+// Unknown semantics (handled by the callers below, NOT a table row): if
+// either duration is <= 0, the comparison is UNKNOWN, never disqualifying —
+// durationScoreMultiplier returns 1.0 (no adjustment) and
+// computeDurationScore returns 0 (neutral).
 //
-// Scale (chosen so a near-identical runtime is a meaningful tiebreaker but
-// a huge mismatch is a strong rejection signal):
-//
-//	Δ ≤  1 min  → ×1.30  (essentially identical — almost certainly the same edition)
-//	Δ ≤  5 min  → ×1.20  (very close — same edition, minor encoding difference)
-//	Δ ≤ 10 min  → ×1.10  (close — probably correct)
-//	Δ ≤ 20 min  → ×1.05  (within margin)
-//	Δ ≤ 30 min  → ×1.00  (no adjustment — acceptable range)
-//	Δ ≤ 60 min  → ×0.90  (possible different edition or trim)
-//	Δ ≤ 120 min → ×0.75  (likely different edition, apply cautiously)
-//	Δ > 120 min → ×0.50  (almost certainly wrong edition or different book)
-func durationScoreMultiplier(bookDurationSec, candidateDurationSec int) float64 {
-	if bookDurationSec <= 0 || candidateDurationSec <= 0 {
-		return 1.0
+// Tier boundaries are looked up by durationTier, which mirrors the historical
+// computeDurationScore boundary semantics exactly: the first three tiers are
+// upper-bound-EXCLUSIVE (ratio strictly less than MaxRatio) and the next two
+// are upper-bound-INCLUSIVE (ratio <= MaxRatio), so a ratio landing exactly
+// on 0.05/0.10/0.20 falls into the NEXT tier while one landing exactly on
+// 0.50/1.00 stays in the CURRENT tier. This asymmetry is preserved on
+// purpose: computeDurationScore's Score column must reproduce bit-for-bit
+// what it already returned in production before this unification (see
+// acceptance criteria — zero additive-score cells may change).
+var durationTiers = []struct {
+	MaxRatio   float64 // upper bound of |Δ|/bookDurationSec for this tier
+	Multiplier float64 // durationScoreMultiplier result for this tier
+	Score      float64 // computeDurationScore result for this tier
+}{
+	{MaxRatio: 0.05, Multiplier: 1.30, Score: 20},  // essentially identical — same edition
+	{MaxRatio: 0.10, Multiplier: 1.20, Score: 15},  // very close — minor encoding difference
+	{MaxRatio: 0.20, Multiplier: 1.10, Score: 10},  // close — probably correct
+	{MaxRatio: 0.50, Multiplier: 1.00, Score: 0},   // acceptable range — no adjustment
+	{MaxRatio: 1.00, Multiplier: 0.75, Score: -10}, // likely different edition, apply cautiously
+	{MaxRatio: 0, Multiplier: 0.50, Score: -20},    // catch-all: ratio > 1.00 — almost certainly wrong book
+}
+
+// durationTier looks up the canonical (multiplier, score) pair for a
+// duration-match ratio. See durationTiers for the boundary-inclusivity
+// contract this switch implements.
+func durationTier(ratio float64) (multiplier, score float64) {
+	switch {
+	case ratio < durationTiers[0].MaxRatio:
+		return durationTiers[0].Multiplier, durationTiers[0].Score
+	case ratio < durationTiers[1].MaxRatio:
+		return durationTiers[1].Multiplier, durationTiers[1].Score
+	case ratio < durationTiers[2].MaxRatio:
+		return durationTiers[2].Multiplier, durationTiers[2].Score
+	case ratio <= durationTiers[3].MaxRatio:
+		return durationTiers[3].Multiplier, durationTiers[3].Score
+	case ratio <= durationTiers[4].MaxRatio:
+		return durationTiers[4].Multiplier, durationTiers[4].Score
+	default:
+		return durationTiers[5].Multiplier, durationTiers[5].Score
 	}
+}
+
+// durationDeltaRatio computes the symmetric duration-match ratio shared by
+// durationScoreMultiplier and computeDurationScore: |candidateDurationSec -
+// bookDurationSec| / bookDurationSec. Callers must have already verified
+// bookDurationSec > 0.
+func durationDeltaRatio(bookDurationSec, candidateDurationSec int) float64 {
 	delta := bookDurationSec - candidateDurationSec
 	if delta < 0 {
 		delta = -delta
 	}
-	switch {
-	case delta <= 60:
-		return 1.30
-	case delta <= 300:
-		return 1.20
-	case delta <= 600:
-		return 1.10
-	case delta <= 1200:
-		return 1.05
-	case delta <= 1800:
-		return 1.00
-	case delta <= 3600:
-		return 0.90
-	case delta <= 7200:
-		return 0.75
-	default:
-		return 0.50
+	return float64(delta) / float64(bookDurationSec)
+}
+
+// durationScoreMultiplier returns a score multiplier based on how closely the
+// candidate's runtime matches the book's known duration, via a lookup into
+// the canonical durationTiers table (shared with computeDurationScore).
+//
+// Both values are in seconds. If either is <= 0 (unknown), the multiplier is
+// 1.0 (no adjustment) — UNKNOWN, never disqualifying. The multiplier is
+// symmetric — only the ratio of the absolute delta to the book's duration
+// matters, not the direction (candidate longer vs shorter).
+//
+// Ratio-based scale (monotonic in the match ratio; replaces the former
+// absolute-delta-second buckets so the multiplier can never disagree with
+// computeDurationScore's ratio-based additive score on the same pair):
+//
+//	ratio <  5%       → ×1.30  (essentially identical — almost certainly the same edition)
+//	ratio <  5–10%     → ×1.20  (very close — same edition, minor encoding difference)
+//	ratio < 10–20%     → ×1.10  (close — probably correct)
+//	ratio ≤ 20–50%     → ×1.00  (acceptable range — no adjustment)
+//	ratio ≤ 50–100%    → ×0.75  (likely different edition, apply cautiously)
+//	ratio  > 100%      → ×0.50  (almost certainly wrong edition or different book)
+func durationScoreMultiplier(bookDurationSec, candidateDurationSec int) float64 {
+	if bookDurationSec <= 0 || candidateDurationSec <= 0 {
+		return 1.0
 	}
+	multiplier, _ := durationTier(durationDeltaRatio(bookDurationSec, candidateDurationSec))
+	return multiplier
 }
 
 // computeDurationScore returns an additive score component (in points) based on
 // how closely a candidate's runtime matches the book's known duration. Unlike
 // durationScoreMultiplier (which scales the overall score multiplicatively),
 // this function produces a human-readable breakdown value that surfaces in the
-// MetadataCandidate.DurationScore field.
+// MetadataCandidate.DurationScore field. Both functions share the same
+// canonical durationTiers lookup (see durationTier), so this Score column is
+// unchanged from the pre-unification implementation.
 //
-// Both values are in seconds. If either is zero (unknown), the result is 0.
+// Both values are in seconds. If either is <= 0 (unknown), the result is 0.
 // The delta ratio = |candidate_dur - book_dur| / book_dur:
 //
 //	ratio < 0.05  → +20  (within 5% — essentially the same edition)
@@ -216,25 +268,8 @@ func computeDurationScore(bookDurationSec, candidateDurationSec int) float64 {
 	if bookDurationSec <= 0 || candidateDurationSec <= 0 {
 		return 0
 	}
-	delta := bookDurationSec - candidateDurationSec
-	if delta < 0 {
-		delta = -delta
-	}
-	ratio := float64(delta) / float64(bookDurationSec)
-	switch {
-	case ratio < 0.05:
-		return 20
-	case ratio < 0.10:
-		return 15
-	case ratio < 0.20:
-		return 10
-	case ratio > 1.00:
-		return -20
-	case ratio > 0.50:
-		return -10
-	default:
-		return 0
-	}
+	_, score := durationTier(durationDeltaRatio(bookDurationSec, candidateDurationSec))
+	return score
 }
 
 // pickBestMatchFromScored takes pre-computed base scores from any tier and

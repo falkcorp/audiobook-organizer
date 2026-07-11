@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_mock_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
-// last-edited: 2026-07-03
+// last-edited: 2026-07-10
 
 package metafetch
 
@@ -1201,6 +1201,16 @@ func TestPickBestMatchFromScored(t *testing.T) {
 // durationScoreMultiplier
 // ---------------------------------------------------------------------------
 
+// TestDurationScoreMultiplier's expectations below were rewritten for
+// INIT-3-T2 (unify duration scoring): durationScoreMultiplier used to bucket
+// on the ABSOLUTE delta in seconds, independent of the book's own duration;
+// it now looks up the shared ratio-based durationTiers table (ratio =
+// |Δ|/bookDurationSec), the same table computeDurationScore uses, so the
+// two functions can never disagree on the same pair again. Every case below
+// with a book duration of 36000s (10h) is re-derived from the new ratio —
+// see the golden fixtures in service_scoring_test.go
+// (TestDurationScoringGolden) for the full old-value/new-value/why diff
+// across a wider grid including a very-long (40h) book.
 func TestDurationScoreMultiplier(t *testing.T) {
 	cases := []struct {
 		bookSec, candSec int
@@ -1210,14 +1220,29 @@ func TestDurationScoreMultiplier(t *testing.T) {
 		{0, 36000, 1.0, "unknown book duration → no adjustment"},
 		{36000, 0, 1.0, "unknown candidate duration → no adjustment"},
 		{36000, 36000, 1.30, "exact match → huge bonus"},
-		{36000, 36030, 1.30, "30s delta → huge bonus"},
-		{36000, 36300, 1.20, "5 min delta → strong bonus"},
-		{36000, 36600, 1.10, "10 min delta → good bonus"},
-		{36000, 37200, 1.05, "20 min delta → small bonus"},
-		{36000, 37800, 1.00, "30 min delta → no adjustment"},
-		{36000, 39600, 0.90, "60 min delta → minor penalty"},
-		{36000, 43200, 0.75, "120 min delta → significant penalty"},
-		{36000, 50400, 0.50, ">120 min delta → strong penalty (wrong edition)"},
+		{36000, 36030, 1.30, "30s delta, ratio 0.08% → huge bonus"},
+		// 300s delta, ratio 0.83%: was ×1.20 under the old 300s bucket;
+		// still deep in the new <5% ratio tier → ×1.30.
+		{36000, 36300, 1.30, "5 min delta, ratio 0.83% → huge bonus"},
+		// 600s delta, ratio 1.67%: was ×1.10 under the old 600s bucket;
+		// still <5% ratio → ×1.30.
+		{36000, 36600, 1.30, "10 min delta, ratio 1.67% → huge bonus"},
+		// 1200s delta, ratio 3.33%: was ×1.05 under the old 1200s bucket;
+		// still <5% ratio → ×1.30.
+		{36000, 37200, 1.30, "20 min delta, ratio 3.33% → huge bonus"},
+		// 1800s delta, ratio exactly 5%: was ×1.00 under the old 1800s
+		// bucket; 5% ratio lands in the new 5-10% tier → ×1.20.
+		{36000, 37800, 1.20, "30 min delta, ratio 5.00% → strong bonus"},
+		// 3600s delta, ratio exactly 10%: was ×0.90 under the old 3600s
+		// bucket; 10% ratio lands in the new 10-20% tier → ×1.10.
+		{36000, 39600, 1.10, "60 min delta, ratio 10.00% → good bonus"},
+		// 7200s delta, ratio exactly 20%: was ×0.75 under the old 7200s
+		// bucket; 20% ratio lands in the new 20-50% "acceptable range" tier
+		// → ×1.00.
+		{36000, 43200, 1.00, "120 min delta, ratio 20.00% → no adjustment"},
+		// 14400s delta, ratio 40%: was ×0.50 under the old >7200s
+		// catch-all; 40% ratio is still within the new 20-50% tier → ×1.00.
+		{36000, 50400, 1.00, ">120 min delta, ratio 40.00% → no adjustment"},
 	}
 	for _, tc := range cases {
 		tc := tc
