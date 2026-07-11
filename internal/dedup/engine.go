@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.57.0
+// version: 1.58.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-07-11
 
@@ -27,73 +27,12 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
-	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 )
 
 var dedupTracer = otel.Tracer("audiobook-organizer/dedup")
-
-// boilerplateTitlePatterns are exact publisher intro/outro "titles" that are
-// not real books and must not seed dedup matches. Seeded from
-// docs/agent-tasks/dedup-intro-falsepositive/FINDINGS.md and safe to extend.
-var boilerplateTitlePatterns = []string{
-	"this is audible",
-	"audible hopes you have enjoyed this program",
-	"audible hopes you have enjoyed this book",
-	"audible studios presents",
-	"audible presents",
-	"this is an audible original",
-	"end credits",
-	"credits",
-	"opening credits",
-	"closing credits",
-	"intro",
-	"introduction",
-	"outro",
-	"epilogue music",
-	"publisher introduction",
-	"publisher's note",
-	"produced by audible studios",
-	"recorded books presents",
-	"graphic audio presents",
-	"brilliance audio presents",
-}
-
-// boilerplateTitlePrefixPatterns are anchored boilerplate phrases that may carry
-// trailing publisher copy. Keep this list narrower than the exact-title list so
-// real books like "Introduction to Algorithms" still match normally.
-var boilerplateTitlePrefixPatterns = []string{
-	"this is audible",
-	"audible hopes you have enjoyed this program",
-	"audible hopes you have enjoyed this book",
-	"audible studios presents",
-	"audible presents",
-	"this is an audible original",
-	"produced by audible studios",
-	"recorded books presents",
-	"graphic audio presents",
-	"brilliance audio presents",
-}
-
-func isBoilerplateTitle(title string) bool {
-	normalized := util.NormalizeTitle(util.CollapseSpaces(title))
-	if normalized == "" {
-		return false
-	}
-	for _, pattern := range boilerplateTitlePatterns {
-		if normalized == pattern {
-			return true
-		}
-	}
-	for _, pattern := range boilerplateTitlePrefixPatterns {
-		if strings.HasPrefix(normalized, pattern+" ") {
-			return true
-		}
-	}
-	return false
-}
 
 // minFingerprintMatchSeconds: files shorter than this are publisher
 // intro/outro clips, not book content — their fingerprints must not seed or
