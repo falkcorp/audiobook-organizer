@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.86.0 -->
+<!-- version: 9.87.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-11 -->
 
@@ -42,9 +42,12 @@ remaining-work catalog, produced, adversarially judged (3 lenses × 10), brief-v
 ### ✅ Execution Wave 1 + Wave 2 + Wave 2b shipped (2026-07-10/11) — 15/50 tasks merged
 
 - **Wave 1 (5 PRs, #1871–#1875, merged 2026-07-10):** see
-  [`docs/status/2026-07-10-execution-wave1-executive-summary.md`](docs/status/2026-07-10-execution-wave1-executive-summary.md).
+  [`docs/status/2026-07-04-monthly-roundup-executive-summary.md`](docs/status/2026-07-04-monthly-roundup-executive-summary.md)
+  (theme 16, "Remaining-work execution wave" — the three wave docs were folded into the monthly
+  roundup and removed).
 - **Wave 2 (6 PRs, #1878–#1883, merged 2026-07-11):** see
-  [`docs/status/2026-07-11-execution-wave2-executive-summary.md`](docs/status/2026-07-11-execution-wave2-executive-summary.md).
+  [`docs/status/2026-07-04-monthly-roundup-executive-summary.md`](docs/status/2026-07-04-monthly-roundup-executive-summary.md)
+  (theme 16).
   - [x] INIT-2 T04 — dedup candidate status secondary index (#1878).
   - [x] INIT-3 T02 — extract metadata scoring literals into `MetadataScoringConfig` (#1879).
   - [x] INIT-9 T03 — break sdkguard violations via decorator inversion + type move (#1880) —
@@ -56,7 +59,8 @@ remaining-work catalog, produced, adversarially judged (3 lenses × 10), brief-v
   - **INIT-2's `internal/dedup/engine.go` tasks (T03 + T05) are both merged**, which unblocks
     Phase B: INIT-1 TASK-08 and INIT-4 TASK-05 (both rebase on that file) can now start.
 - **Wave 2b (4 PRs, #1885–#1888, merged 2026-07-11):** see
-  [`docs/status/2026-07-11-execution-wave2b-executive-summary.md`](docs/status/2026-07-11-execution-wave2b-executive-summary.md).
+  [`docs/status/2026-07-04-monthly-roundup-executive-summary.md`](docs/status/2026-07-04-monthly-roundup-executive-summary.md)
+  (theme 16, plus the #1887 prod data-loss confirmation in the "Highest-risk items" list).
   - [x] INIT-4 T05 — move boilerplate title blocklist to config-extendable module (#1885).
   - [x] INIT-9 T04 — quote mock-freshness pathspec so nested mocks dirs are checked (#1886) — see
     follow-up B below (Makefile has the same unfixed bug).
