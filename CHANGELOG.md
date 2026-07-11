@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.136.0 -->
+<!-- version: 3.137.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-11 -->
 
@@ -8,6 +8,51 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 11, 2026 - feat(search): Bleve facet counts for genres/languages/tags (INIT-4 T04, #1888)
+
+- **`search`** — added `*_counts` facet aggregations (genres/languages/tags) to Bleve search
+  responses via a single shared `buildFacetsResponse` builder that both the search handler and the
+  facets cache warmer now route through, so the two response shapes can never drift out of
+  lockstep with each other. Additive and fail-open: on any facet-building error the new
+  `*_counts` keys are simply omitted, leaving the response byte-identical to the pre-change shape
+  at HTTP 200. No frontend change required to adopt.
+
+#### July 11, 2026 - test(organizer): verify Author/Series fate in CreateOrganizedVersion write-back (STOREFID W5d-1, INIT-9 T07, #1887)
+
+- **`organizer`** — added regression coverage for the original-book slim write-back tracked in
+  TODO.md (`🟠 CreateOrganizedVersion original-book slim-writeback`). **Confirms a real prod
+  data-loss bug (Outcome B):** Author/Series do **not** survive the `CreateOrganizedVersion`
+  original-book write-back. `PebbleStore.UpdateBook`'s STOR-1 preserve-on-nil guard
+  (`internal/database/pebble_store.go:1571-1598`) restores Description/VersionNotes/BookSig* from
+  the old row when the incoming value is nil, but has no equivalent case for Author/Series — so
+  the page-derived, heavy-field-nil `book` written back at
+  `internal/organizer/service.go:927-941` silently wipes them on the original book. The new test
+  `TestCreateOrganizedVersion_AuthorSeriesSurviveOriginalWriteback`
+  (`internal/organizer/organized_version_writeback_test.go`) documents this executably via
+  `t.Skipf("W5d-1 KNOWN BUG CONFIRMED")` — it will flip to a real PASS once the fail-open hydrate
+  fix lands. The companion demotion-invariant test (VersionGroupID/IsPrimaryVersion/LibraryState)
+  passes today. **This PR is test-only and does not fix the bug** — the fix is a deliberately
+  deferred, decision-carrying follow-up (see TODO.md).
+
+#### July 11, 2026 - ci(mocks): quote mock-freshness pathspec so nested mocks dirs are checked (INIT-9 T04, #1797, #1886)
+
+- **`ci`** — fixed the Mock-Freshness CI check's glob: the unquoted shell pattern
+  `internal/*/mocks/` only ever matched one path segment, so nested mock directories such as
+  `internal/server/handlers/*/mocks/` were silently excluded from the staleness diff. Replaced
+  with the quoted git pathspec `:(glob)internal/**/mocks/**` in `.github/workflows/ci.yml`, which
+  recurses into nested `mocks/` dirs at any depth. This is the exact gap that let a stale nested
+  mock slip past CI earlier this session. `.github/workflows/ci.yml` only; all nested mocks were
+  already fresh, so this is a coverage fix with no behavior change today.
+
+#### July 11, 2026 - refactor(dedup): move boilerplate title blocklist to config-extendable module (INIT-4 T05, #1885)
+
+- **`dedup`** — moved the hardcoded boilerplate-title blocklist out of `internal/dedup/engine.go`
+  into a new self-initializing `internal/dedup/boilerplate.go` (`sync.Once`-guarded, defaults
+  byte-identical to the old inline lists), and added an extension-only `DedupBoilerplateConfig` to
+  config so operators can append additional boilerplate titles without a code change. Purely
+  behavior-preserving — the emit()-sharding from #1883 is untouched, and all 9 existing call sites
+  plus the 3 existing test files stayed green.
 
 #### July 11, 2026 - perf(search): batch-hydrate Bleve hits with GetBooksByIDs (INIT-4 T03, #1882)
 
