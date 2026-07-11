@@ -1,11 +1,11 @@
 <!-- file: docs/status/2026-07-04-monthly-roundup-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 5b0ee171-8a4f-4669-a2dd-91ffeabaa486 -->
-<!-- last-edited: 2026-07-04 -->
+<!-- last-edited: 2026-07-11 -->
 
 # Executive Summary: June–July Monthly Roundup
 
-**Shipped:** PRs [#1240–#1799](https://github.com/falkcorp/audiobook-organizer/pulls?q=is%3Apr+is%3Amerged+merged%3A2026-06-05..2026-07-04), covering 2026-06-05 through 2026-07-04 (412 merged PRs total; 405 non-dependency-bump PRs)
+**Shipped:** PRs [#1240–#1890](https://github.com/falkcorp/audiobook-organizer/pulls?q=is%3Apr+is%3Amerged+merged%3A2026-06-05..2026-07-11), covering 2026-06-05 through 2026-07-11 (~430 merged PRs total; the July 5–11 remaining-work execution added 12: #1878–#1890)
 **Related doc:** [2026-07-03-itl-hardening-executive-summary.md](2026-07-03-itl-hardening-executive-summary.md) — full write-up of this month's iTunes library (`.itl`) write-back hardening (K13–K17), linked rather than repeated below.
 
 This is a monthly roundup rather than a single-change summary: instead of one
@@ -59,6 +59,50 @@ changes. The most important pull request numbers are named inline as evidence.
   browser-tab memory, another exploitable via a crafted URL), plus a
   same-day revert of a dependency bump that had crashed the entire UI in
   production.
+- **Store-getter fidelity unification.** The recurring class of bug where
+  saving a book stripped heavy fields (fingerprints, durations) was attacked
+  at its root: the distinction between a "full-fidelity" record and a
+  "lightweight" in-memory copy is now encoded in the data type the code
+  hands around, so the compiler itself prevents accidentally writing a
+  lightweight copy back over a full record. A production data fix corrected
+  a per-book duration field on 2,781 records.
+- **Whole-library concurrency sweep.** Fifteen maintenance operations that
+  walked the entire library one item at a time on a single CPU core were
+  rewritten to use bounded worker pools. The headline case: a duplicate-scan
+  had gone silent for over three hours pinned at 100% on one core; that bug
+  and a latent race in the book-merge path were both fixed.
+- **Full-scan nine-hour freeze root-caused and fixed.** A full
+  duplicate-scan operation could freeze for roughly nine hours. Two root
+  causes were found: the storage engine was stalling under a file-sync lock
+  (relaxing the sync mode cut a nine-hour run to under two minutes, #1855)
+  and an inefficient identifier-collection step that scaled quadratically
+  with library size was made linear (#1857). Verified in production at
+  roughly 606 books per second across 44,300 books.
+- **First stable release since the organization migration — v0.217.7.**
+  Seven unrelated release-blocking bugs across the build and release
+  pipeline were fixed, producing the project's first clean stable release
+  since the organization migration.
+- **Duplicate-detection label quality and orphan cleanup.** The
+  gold-standard label set the duplicate detector calibrates against was
+  rebuilt, 14,257 orphaned AI-embedding records (pointing at already-deleted
+  books) were purged, and the full-scan operation gained progress and
+  time-remaining reporting. A precision ceiling in the detector was traced
+  to contaminated "not a duplicate" labels rather than to the underlying
+  model.
+- **Remaining-work execution wave (PRs #1871–#1888).** A planned catalog of
+  outstanding work was executed as ten code and CI pull requests across
+  three waves: a dead search-relevance boost was fixed and per-user search
+  filters that were being silently ignored were restored (#1871, #1874); a
+  duplicate-detection candidate index (#1878) and a previously stubbed
+  "same folder" duplicate-detection tier (#1875) were brought live;
+  metadata-scoring constants were made configurable with no behavior
+  change (#1879); a duplicate-scan hot loop was de-serialized off a single
+  project-wide lock and verified race-free (#1883); search results are now
+  hydrated in one batched database call instead of one call per result
+  (#1882); the boilerplate-title blocklist used by duplicate detection was
+  made operator-extendable (#1885); a broken internal dependency-direction
+  guard was fixed (#1880); and a gap in a CI freshness check that could let
+  nested test-mock files go stale unnoticed was closed (#1886).
 - Dependency updates (7 PRs, entirely automated) were routine version bumps
   with no behavior changes and aren't broken out into their own section
   below.
@@ -105,6 +149,13 @@ data before it was caught:
 - **#1431** — a routine dependency bump (a JavaScript build tool, Vite,
   version 7 to 8) crashed the entire frontend in production; reverted the
   same day it was noticed.
+- **#1887** — a confirmed production data-loss bug: creating an "organized
+  version" of a book silently erases that book's Author and Series
+  information. A test now proves this happens against the real production
+  storage engine, not just an in-memory approximation of it. The fix is
+  deliberately deferred pending a human decision on a trade-off it
+  involves; the test will flip from confirming the bug to passing once that
+  fix lands.
 
 Verification note: each item above shipped with its own fix verified in
 context (tests, code review, or direct reproduction of the original bug);
@@ -342,6 +393,170 @@ production for every user shows the value of fast detection and reversion.
 items-per-page parameter was clamped to a sane maximum (#1789), and the
 Vite upgrade was reverted the same day it was noticed, pending a proper
 compatibility fix (#1431).
+
+### 11. Store-getter fidelity unification
+
+**What it was:** A recurring family of bugs kept resurfacing throughout the
+month (see items 4 and elsewhere in this roundup): a book gets loaded into
+memory, some operation saves it back to the database, and a field the
+in-memory copy wasn't carrying — an audio fingerprint, a duration — gets
+silently wiped because the save path can't tell the difference between a
+"lightweight" in-memory copy and the full record on disk.
+
+**Why it mattered:** Each individual instance of this bug looked like a
+one-off, but by July the pattern had repeated often enough (PRs #1552,
+#1747, and others earlier in this roundup) that a point fix wouldn't have
+stopped the next occurrence — the underlying ambiguity between "full
+record" and "lightweight copy" lived in ordinary data structures that
+looked interchangeable in the code, so nothing stopped a future change from
+reintroducing the same bug.
+
+**The fix:** The distinction between a full-fidelity record and a
+lightweight in-memory copy was encoded directly into the data type the code
+passes around (PRs #1837–#1861), so the compiler itself now refuses code
+that would write a lightweight copy back over a full record — turning a
+class of silent data-loss bug into a build-time error. As part of this
+work, a production data fix corrected a per-book duration field on 2,781
+records that had drifted from the earlier duration-calculation bugs
+described in item 4.
+
+### 12. Whole-library concurrency sweep
+
+**What it was:** Fifteen separate maintenance operations across the
+codebase — duplicate scans, backfills, and similar whole-library jobs —
+walked the entire book library one item at a time in a plain loop, using
+only a single CPU core no matter how many were available. The most visible
+case: a duplicate-detection full scan went completely silent for more than
+three hours while pinned at 100% CPU on a single core, with no indication
+anything had gone wrong short of it simply never finishing.
+
+**Why it mattered:** On a library with tens of thousands of books, a
+single-threaded loop over every item turns a job that should take minutes
+into one that can take hours, and — as the three-hour incident showed —
+looks indistinguishable from a hang until someone investigates. A separate,
+unrelated race condition in the book-merge path was also found during this
+work, sitting latent until enough concurrent operations collided.
+
+**The fix:** All fifteen operations were rewritten to use bounded worker
+pools sized to the number of available CPU cores instead of a single serial
+loop, cutting wall-clock time proportionally. The three-hour duplicate-scan
+hang and the latent book-merge race were both fixed as part of the same
+sweep.
+
+### 13. Full-scan nine-hour freeze root-caused and fixed
+
+**What it was:** Separately from the concurrency sweep above, a full
+duplicate-detection scan could freeze for roughly nine hours on production
+data. Two distinct root causes were found once it was properly
+investigated: the underlying storage engine was stalling under a
+file-synchronization lock during heavy write activity, and a step that
+collects unique book identifiers was written in a way that got
+disproportionately slower as the library grew (a quadratic, rather than
+linear, relationship between library size and time taken).
+
+**Why it mattered:** A nine-hour freeze on a routine maintenance job isn't
+just slow — it can leave the system in an ambiguous state for the entire
+duration, block other operations that depend on the same data, and (before
+root-caused) looks exactly like an unrecoverable hang rather than a job
+that will eventually finish.
+
+**The fix:** The storage engine's write-synchronization mode was relaxed
+for this workload, cutting the nine-hour run down to under two minutes
+(#1855), and the identifier-collection step was rewritten so its running
+time grows linearly with library size instead of quadratically (#1857).
+The fix was verified directly in production, processing roughly 606 books
+per second across a 44,300-book library.
+
+### 14. First stable release since the organization migration — v0.217.7
+
+**What it was:** An attempt to cut a new stable release surfaced seven
+separate, unrelated bugs across the build and release pipeline — issues
+that had accumulated since the project's move to its current organization
+and had never been exercised end-to-end by an actual release attempt.
+
+**Why it mattered:** A release pipeline that silently fails in multiple
+independent ways isn't just an inconvenience — it means users can't
+reliably get a working build of the software, and each new bug found
+during the process indicated another gap the team didn't know it had.
+
+**The fix:** All seven release-blocking bugs were fixed one at a time,
+producing the project's first clean stable release, v0.217.7, since the
+organization migration.
+
+### 15. Duplicate-detection label quality and orphan cleanup
+
+**What it was:** The duplicate-audiobook detector is calibrated against a
+"gold standard" set of example pairs that are already known to be
+duplicates or known not to be. That label set had accumulated errors, an
+unrelated cleanup found 14,257 AI-embedding records still pointing at
+books that had already been deleted, and the full duplicate-scan operation
+gave users no indication of how far along it was or how much longer it
+would take.
+
+**Why it mattered:** A contaminated calibration set makes it impossible to
+tell whether the duplicate detector's accuracy problems come from the
+model or from bad training data — without cleaning the labels first, any
+tuning work risks optimizing against the wrong target. Orphaned embedding
+records are pure waste that slows down every search over that data. And a
+long-running scan with no progress indicator is difficult to distinguish
+from the kind of silent hang described in items 12 and 13.
+
+**The fix:** The gold-standard label set was rebuilt, the 14,257 orphaned
+embedding records were purged, and the full-scan operation gained
+progress and estimated-time-remaining reporting. Investigating a
+long-standing precision ceiling in the detector traced the problem to
+contaminated "not a duplicate" labels in the gold set rather than to the
+underlying matching model — meaning the fix belongs in how labels are
+produced, not in further model tuning.
+
+### 16. Remaining-work execution wave
+
+**What it was:** Following a planning pass that cataloged roughly fifty
+remaining items of outstanding work across the codebase, a first slice of
+that catalog — ten separate code and CI changes — was actually built,
+tested, and shipped over July 10–11.
+
+**Why it mattered:** Several of the ten changes fixed real, live
+correctness bugs rather than just technical debt: a search-relevance
+setting that was supposed to make title and author matches count for more
+than random tag matches turned out to be silently doing nothing, so search
+results weren't reliably ranked by relevance. Separately, per-user search
+filters computed correctly but were then thrown away without ever being
+applied, meaning a filtered search could return results that didn't match
+the filter at all — a plain, visible bug that erodes trust in search.
+
+**The fix:** The dead search-relevance boost was wired in (#1871) and
+per-user search filters were restored so they're actually applied to
+results (#1874). A duplicate-detection candidate lookup index was added
+(#1878), and a previously built but never-connected "same folder,
+different file format" duplicate-detection tier was wired up so it returns
+real results instead of always reporting nothing found (#1875).
+Metadata-scoring constants used to judge how well a file matches an online
+catalog entry were moved into configuration with no change in today's
+behavior (#1879). A duplicate-scan hot loop that serialized unrelated work
+behind a single project-wide lock was split into sixteen independent locks
+and verified free of race conditions with the project's built-in race
+detector (#1883). Library search was changed to fetch all the books needed
+for a page of results in one batched database call instead of one call per
+result (#1882). The boilerplate-title list used by duplicate detection
+(generic placeholder titles that aren't real book identifiers) was moved
+out of a heavily-edited shared file into its own operator-extendable
+configuration (#1885). A project-wide code-health check that verifies a
+low-level shared code package never depends on higher-level internal
+code — which had been failing all session — was fixed by restructuring
+which package owns which piece of logic (#1880). And a gap in the CI check
+that verifies generated test-mock code is up to date was closed: the
+check's folder-matching pattern only looked one level deep, so mock
+folders nested two or more levels down could go stale without CI ever
+noticing (#1886).
+
+One more result from this wave belongs in the highest-risk list above
+rather than here: a test written to settle whether a long-suspected bug was
+real confirmed that creating an "organized version" of a book silently
+erases that book's Author and Series information (#1887) — a genuine
+production data-loss bug, deliberately left unfixed pending a human
+decision on a trade-off in the correct fix, and tracked as the newest entry
+in the highest-risk list above.
 
 Dependency updates this month (7 pull requests, entirely automated version
 bumps) had no behavior changes worth a full write-up and are noted here for
