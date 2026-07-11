@@ -1,12 +1,13 @@
 // file: internal/search/bleve_index_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8e2c4a1d-5b9f-4f70-a7d6-2f8e0c1b9a58
-// last-edited: 2026-07-10
+// last-edited: 2026-07-11
 
 package search
 
 import (
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -218,4 +219,78 @@ func hitIDs(hits []SearchResult) []string {
 		out[i] = h.BookID
 	}
 	return out
+}
+
+// TestBleveIndex_FacetCounts_KnownDocs indexes fixture docs with known
+// genres/languages/tags and asserts the exact count maps FacetCounts
+// returns (INIT-4 T4).
+func TestBleveIndex_FacetCounts_KnownDocs(t *testing.T) {
+	idx := openTestIndex(t)
+
+	docs := []BookDocument{
+		{BookID: "a", Title: "A", Genre: "Fantasy", Language: "en", Tags: []string{"epic", "series"}},
+		{BookID: "b", Title: "B", Genre: "Fantasy", Language: "en", Tags: []string{"epic"}},
+		// Genre uses a single-word value (no hyphen/space) because the
+		// genre field's "standard" analyzer tokenizes on punctuation, so a
+		// hyphenated value like "Sci-Fi" would fragment into two facet
+		// terms ("sci", "fi") rather than staying one term — orthogonal to
+		// what FacetCounts itself needs to prove here.
+		{BookID: "c", Title: "C", Genre: "Mystery", Language: "fr", Tags: []string{"series"}},
+	}
+	for _, d := range docs {
+		if err := idx.IndexBook(d); err != nil {
+			t.Fatalf("index %s: %v", d.BookID, err)
+		}
+	}
+
+	genres, languages, tags, err := idx.FacetCounts(0)
+	if err != nil {
+		t.Fatalf("FacetCounts: %v", err)
+	}
+
+	wantGenres := map[string]int{"fantasy": 2, "mystery": 1}
+	if !reflect.DeepEqual(genres, wantGenres) {
+		t.Errorf("genres = %v, want %v", genres, wantGenres)
+	}
+	wantLanguages := map[string]int{"en": 2, "fr": 1}
+	if !reflect.DeepEqual(languages, wantLanguages) {
+		t.Errorf("languages = %v, want %v", languages, wantLanguages)
+	}
+	wantTags := map[string]int{"epic": 2, "series": 2}
+	if !reflect.DeepEqual(tags, wantTags) {
+		t.Errorf("tags = %v, want %v", tags, wantTags)
+	}
+}
+
+// TestBleveIndex_FacetCounts_EmptyIndex pins the empty-library edge case:
+// an open index with zero documents returns empty (never nil) maps and no
+// error.
+func TestBleveIndex_FacetCounts_EmptyIndex(t *testing.T) {
+	idx := openTestIndex(t)
+
+	genres, languages, tags, err := idx.FacetCounts(0)
+	if err != nil {
+		t.Fatalf("FacetCounts: %v", err)
+	}
+	if genres == nil || len(genres) != 0 {
+		t.Errorf("genres = %v, want empty non-nil map", genres)
+	}
+	if languages == nil || len(languages) != 0 {
+		t.Errorf("languages = %v, want empty non-nil map", languages)
+	}
+	if tags == nil || len(tags) != 0 {
+		t.Errorf("tags = %v, want empty non-nil map", tags)
+	}
+}
+
+// TestBleveIndex_FacetCounts_NotOpen pins the not-open-index error path
+// (mirrors Search/SearchNative's own nil-idx guard).
+func TestBleveIndex_FacetCounts_NotOpen(t *testing.T) {
+	idx := openTestIndex(t)
+	_ = idx.Close()
+
+	_, _, _, err := idx.FacetCounts(0)
+	if err == nil {
+		t.Error("FacetCounts on a closed index should error")
+	}
 }
