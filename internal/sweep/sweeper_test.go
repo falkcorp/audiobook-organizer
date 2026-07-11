@@ -1,7 +1,7 @@
 // file: internal/sweep/sweeper_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b2c3d4e5-f6a7-8910-abcd-ef2345678902
-// last-edited: 2026-07-07
+// last-edited: 2026-07-11
 
 package sweep
 
@@ -41,6 +41,23 @@ func (m *MockBookStore) GetBookByID(id string) (*database.Book, error) {
 		}
 	}
 	return nil, nil
+}
+
+// GetBooksByIDs is a test double for the interface-ripple from INIT-4 T3:
+// order-preserving, skip-missing, built on top of GetBookByID so it stays
+// consistent with the existing lookup-by-ID semantics above.
+func (m *MockBookStore) GetBooksByIDs(ids []string) ([]database.Book, error) {
+	books := make([]database.Book, 0, len(ids))
+	for _, id := range ids {
+		b, err := m.GetBookByID(id)
+		if err != nil {
+			return books, err
+		}
+		if b != nil {
+			books = append(books, *b)
+		}
+	}
+	return books, nil
 }
 
 func (m *MockBookStore) DeleteBookTombstone(id string) error {

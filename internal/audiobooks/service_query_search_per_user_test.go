@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query_search_per_user_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e3a7c1d9-4b2f-4a68-9c1e-5f8a2d3b7c40
-// last-edited: 2026-07-10
+// last-edited: 2026-07-11
 
 // Tests for the searchWithBleve per-user DSL filter fix (INIT-4 T2).
 // read_status / progress_pct / last_played filters are peeled off by
@@ -67,8 +67,12 @@ func captureWarnLog(t *testing.T) *bytes.Buffer {
 func TestSearchWithBleveAppliesReadStatusFilter(t *testing.T) {
 	idx := buildSearchTestIndex(t, "b1", "b2", "b3")
 	mockStore := mocks.NewMockStore(t)
-	mockStore.EXPECT().GetBookByID(mock.Anything).RunAndReturn(func(id string) (*database.Book, error) {
-		return &database.Book{ID: id}, nil
+	mockStore.EXPECT().GetBooksByIDs(mock.Anything).RunAndReturn(func(ids []string) ([]database.Book, error) {
+		books := make([]database.Book, 0, len(ids))
+		for _, id := range ids {
+			books = append(books, database.Book{ID: id})
+		}
+		return books, nil
 	})
 	mockStore.EXPECT().GetUserBookState("alice", "b1").
 		Return(&database.UserBookState{Status: database.UserBookStatusInProgress}, nil)
@@ -92,8 +96,12 @@ func TestSearchWithBleveAppliesReadStatusFilter(t *testing.T) {
 func TestSearchWithBleveNoFilterQueryUnchanged(t *testing.T) {
 	idx := buildSearchTestIndex(t, "b1", "b2", "b3")
 	mockStore := mocks.NewMockStore(t)
-	mockStore.EXPECT().GetBookByID(mock.Anything).RunAndReturn(func(id string) (*database.Book, error) {
-		return &database.Book{ID: id}, nil
+	mockStore.EXPECT().GetBooksByIDs(mock.Anything).RunAndReturn(func(ids []string) ([]database.Book, error) {
+		books := make([]database.Book, 0, len(ids))
+		for _, id := range ids {
+			books = append(books, database.Book{ID: id})
+		}
+		return books, nil
 	})
 
 	svc := NewAudiobookService(mockStore)
@@ -117,8 +125,12 @@ func TestSearchWithBleveNoFilterQueryUnchanged(t *testing.T) {
 func TestSearchWithBlevePaginationAfterFilter(t *testing.T) {
 	idx := buildSearchTestIndex(t, "b1", "b2", "b3", "b4", "b5")
 	mockStore := mocks.NewMockStore(t)
-	mockStore.EXPECT().GetBookByID(mock.Anything).RunAndReturn(func(id string) (*database.Book, error) {
-		return &database.Book{ID: id}, nil
+	mockStore.EXPECT().GetBooksByIDs(mock.Anything).RunAndReturn(func(ids []string) ([]database.Book, error) {
+		books := make([]database.Book, 0, len(ids))
+		for _, id := range ids {
+			books = append(books, database.Book{ID: id})
+		}
+		return books, nil
 	})
 	inProgress := &database.UserBookState{Status: database.UserBookStatusInProgress}
 	finished := &database.UserBookState{Status: database.UserBookStatusFinished}
@@ -143,8 +155,12 @@ func TestSearchWithBlevePaginationAfterFilter(t *testing.T) {
 func TestSearchWithBleveEmptyUserIDReturnsAllMatches(t *testing.T) {
 	idx := buildSearchTestIndex(t, "b1", "b2", "b3")
 	mockStore := mocks.NewMockStore(t)
-	mockStore.EXPECT().GetBookByID(mock.Anything).RunAndReturn(func(id string) (*database.Book, error) {
-		return &database.Book{ID: id}, nil
+	mockStore.EXPECT().GetBooksByIDs(mock.Anything).RunAndReturn(func(ids []string) ([]database.Book, error) {
+		books := make([]database.Book, 0, len(ids))
+		for _, id := range ids {
+			books = append(books, database.Book{ID: id})
+		}
+		return books, nil
 	})
 	// No GetUserBookState expectation set — asserting the code path
 	// never calls it when userID == "".
@@ -170,8 +186,12 @@ func TestSearchWithBleveEmptyUserIDReturnsAllMatches(t *testing.T) {
 func TestSearchWithBleveStateErrorFailsOpen(t *testing.T) {
 	idx := buildSearchTestIndex(t, "b1", "b2")
 	mockStore := mocks.NewMockStore(t)
-	mockStore.EXPECT().GetBookByID(mock.Anything).RunAndReturn(func(id string) (*database.Book, error) {
-		return &database.Book{ID: id}, nil
+	mockStore.EXPECT().GetBooksByIDs(mock.Anything).RunAndReturn(func(ids []string) ([]database.Book, error) {
+		books := make([]database.Book, 0, len(ids))
+		for _, id := range ids {
+			books = append(books, database.Book{ID: id})
+		}
+		return books, nil
 	})
 	mockStore.EXPECT().GetUserBookState("alice", "b1").
 		Return(nil, fmt.Errorf("pebble: i/o error"))
@@ -203,8 +223,12 @@ func TestSearchWithBleveWindowExhaustionWarns(t *testing.T) {
 	idx := buildSearchTestIndex(t, ids...)
 
 	mockStore := mocks.NewMockStore(t)
-	mockStore.EXPECT().GetBookByID(mock.Anything).RunAndReturn(func(id string) (*database.Book, error) {
-		return &database.Book{ID: id}, nil
+	mockStore.EXPECT().GetBooksByIDs(mock.Anything).RunAndReturn(func(ids []string) ([]database.Book, error) {
+		books := make([]database.Book, 0, len(ids))
+		for _, id := range ids {
+			books = append(books, database.Book{ID: id})
+		}
+		return books, nil
 	})
 	// Every state read returns nil,nil (no record) -> zero-value state.
 	// Filter is negated read_status:finished so the zero-value state
@@ -234,8 +258,12 @@ func TestSearchWithBleveKillSwitchDrops(t *testing.T) {
 
 	idx := buildSearchTestIndex(t, "b1", "b2", "b3")
 	mockStore := mocks.NewMockStore(t)
-	mockStore.EXPECT().GetBookByID(mock.Anything).RunAndReturn(func(id string) (*database.Book, error) {
-		return &database.Book{ID: id}, nil
+	mockStore.EXPECT().GetBooksByIDs(mock.Anything).RunAndReturn(func(ids []string) ([]database.Book, error) {
+		books := make([]database.Book, 0, len(ids))
+		for _, id := range ids {
+			books = append(books, database.Book{ID: id})
+		}
+		return books, nil
 	})
 	// No GetUserBookState expectation: the kill switch must prevent any
 	// state reads at all — an unexpected call here fails the test.

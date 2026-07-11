@@ -1,6 +1,6 @@
 // file: internal/batch/service_test.go
-// version: 1.0.9
-// last-edited: 2026-07-07
+// version: 1.1.0
+// last-edited: 2026-07-11
 // guid: b2c3d4e5-f6a7-b8c9-0d1e-2f3a4b5c6d7e
 
 package batch
@@ -59,6 +59,23 @@ func (m *MockBookStore) GetBookByID(id string) (*database.Book, error) {
 		FilePath:             book.FilePath,
 		LibraryState:         book.LibraryState,
 	}, nil
+}
+
+// GetBooksByIDs is a test double for the interface-ripple from INIT-4 T3:
+// order-preserving, skip-missing, built on top of GetBookByID so it stays
+// consistent with the existing deep-copy semantics above.
+func (m *MockBookStore) GetBooksByIDs(ids []string) ([]database.Book, error) {
+	books := make([]database.Book, 0, len(ids))
+	for _, id := range ids {
+		b, err := m.GetBookByID(id)
+		if err != nil {
+			return books, err
+		}
+		if b != nil {
+			books = append(books, *b)
+		}
+	}
+	return books, nil
 }
 
 func (m *MockBookStore) UpdateBook(id string, book *database.Book) (*database.Book, error) {
