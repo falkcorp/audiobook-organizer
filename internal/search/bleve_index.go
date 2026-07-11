@@ -1,6 +1,7 @@
 // file: internal/search/bleve_index.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3c8e1a2f-4d9b-4f70-a5c6-2f8d0e1b9a47
+// last-edited: 2026-07-10
 //
 // BleveIndex is the single-package wrapper around a Bleve v2 scorch
 // index backing library search (spec DES-1 / backlog §4.7). The
@@ -209,10 +210,23 @@ func (b *BleveIndex) DocCount() (uint64, error) {
 	return b.idx.DocCount()
 }
 
+// textFieldBoosts is the query-time boost table for free-text search.
+// bleve v2 has no index-time field boost, so translateFreeText fans a
+// free-text term out across these fields with these weights. Keep in
+// sync with the analyzed-text fields registered in bookIndexMapping.
+var textFieldBoosts = []struct {
+	Field string
+	Boost float64
+}{
+	{"title", 3.0}, {"author", 2.0}, {"series", 1.5}, {"narrator", 1.2},
+	{"publisher", 1.0}, {"description", 0.5}, {"file_path", 0.5},
+}
+
 // bookIndexMapping returns the bleve.IndexMapping for BookDocument.
-// Field boosts, analyzer choices, and keyword vs text distinctions
-// live here — changing a field's treatment requires rebuilding the
-// index (full re-index on next startup).
+// Analyzer choices and keyword vs text distinctions live here —
+// changing a field's treatment requires rebuilding the index (full
+// re-index on next startup). Free-text field weighting is query-time
+// (see textFieldBoosts above), not part of this mapping.
 func bookIndexMapping() mapping.IndexMapping {
 	im := bleve.NewIndexMapping()
 
@@ -221,7 +235,11 @@ func bookIndexMapping() mapping.IndexMapping {
 	// Building a custom analyzer at mapping construction time is
 	// brittle because the registry lookup happens at index open, so
 	// we stick to the guaranteed-available built-in.
-	textAnalyzed := func(boost float64) *mapping.FieldMapping {
+	// textAnalyzed no longer takes a boost: bleve v2 has no index-time
+	// field boost, so that parameter was dead. Query-time weighting for
+	// free-text search lives in textFieldBoosts (bleve_index.go) and is
+	// applied by translateFreeText in bleve_translator.go.
+	textAnalyzed := func() *mapping.FieldMapping {
 		f := bleve.NewTextFieldMapping()
 		f.Analyzer = en.AnalyzerName
 		f.Store = true
@@ -248,15 +266,15 @@ func bookIndexMapping() mapping.IndexMapping {
 
 	book := bleve.NewDocumentMapping()
 
-	// Analyzed text with field-level boost — set on the mapping so
-	// it's applied at index time rather than per-query.
-	title := textAnalyzed(3.0)
-	author := textAnalyzed(2.0)
-	series := textAnalyzed(1.5)
-	narrator := textAnalyzed(1.2)
-	publisher := textAnalyzed(1.0)
-	description := textAnalyzed(0.5)
-	filePath := textAnalyzed(0.5)
+	// Analyzed text fields. Field weighting for free-text search is
+	// applied at query time (see textFieldBoosts below), not here.
+	title := textAnalyzed()
+	author := textAnalyzed()
+	series := textAnalyzed()
+	narrator := textAnalyzed()
+	publisher := textAnalyzed()
+	description := textAnalyzed()
+	filePath := textAnalyzed()
 
 	book.AddFieldMappingsAt("title", title)
 	book.AddFieldMappingsAt("author", author)
