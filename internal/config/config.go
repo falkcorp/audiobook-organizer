@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.64.0
+// version: 1.65.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-07-03
+// last-edited: 2026-07-10
 
 package config
 
@@ -541,6 +541,13 @@ type Config struct {
 	// token (.bootstrap-token) is always generated — it is emergency access
 	// infrastructure and is not affected by this flag.
 	WriteStartupReadOnlyKey bool `json:"write_startup_readonly_key" mapstructure:"write_startup_readonly_key"`
+
+	// DisablePerUserSearchFilters, when true, makes searchWithBleve skip
+	// per-user DSL post-filtering (read_status/progress_pct/last_played)
+	// and warn — the pre-fix drop-and-warn behavior. Ops escape hatch for
+	// the up-to-10K sequential state reads per per-user-filtered request
+	// (spec Decision 11); NOT a feature flag. Default false = filters ON.
+	DisablePerUserSearchFilters bool `json:"disable_per_user_search_filters"`
 }
 
 // mu guards AppConfig against concurrent writes.

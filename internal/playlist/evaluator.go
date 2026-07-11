@@ -1,6 +1,7 @@
 // file: internal/playlist/evaluator.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 9c2d5f1e-6b4a-4a70-b8c5-3d7e0f1b9a68
+// last-edited: 2026-07-10
 //
 // Smart playlist query evaluator (spec 3.4 task 2).
 //
@@ -28,7 +29,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -123,7 +123,9 @@ func EvaluateSmartPlaylist(
 // whose per-user state doesn't satisfy every filter. Filters for
 // fields the user never wrote are treated as "no match" (the user
 // hasn't engaged with the book, so e.g. `read_status:finished`
-// doesn't match an unstarted book).
+// doesn't match an unstarted book). Matching itself delegates to
+// search.MatchPerUserFilters — the single exported source of truth
+// shared with searchWithBleve (INIT-4 T2).
 func applyPerUserFilters(
 	store database.UserPositionStore,
 	ids []string,
@@ -136,116 +138,11 @@ func applyPerUserFilters(
 	kept := make([]string, 0, len(ids))
 	for _, id := range ids {
 		state, _ := store.GetUserBookState(userID, id)
-		match := true
-		for _, f := range filters {
-			ok := perUserFilterMatches(state, f.Node)
-			if f.Negated {
-				ok = !ok
-			}
-			if !ok {
-				match = false
-				break
-			}
-		}
-		if match {
+		if search.MatchPerUserFilters(state, filters) {
 			kept = append(kept, id)
 		}
 	}
 	return kept
-}
-
-// perUserFilterMatches evaluates a single FieldNode against a
-// UserBookState. A nil state means the user has no record — only
-// negated filters can succeed against nil.
-func perUserFilterMatches(state *database.UserBookState, node *search.FieldNode) bool {
-	if state == nil {
-		// Treat absence as a zero-value state: status="" + progress=0.
-		// That way `read_status:unstarted` (if the caller maps
-		// "unstarted"→"") matches and `read_status:finished` rejects.
-		state = &database.UserBookState{}
-	}
-	switch node.Field {
-	case "read_status":
-		return strings.EqualFold(state.Status, node.Value)
-	case "progress_pct":
-		return numericFieldMatches(float64(state.ProgressPct), node)
-	case "last_played":
-		if state.LastActivityAt.IsZero() {
-			return false
-		}
-		return timeFieldMatches(state.LastActivityAt, node)
-	default:
-		return false
-	}
-}
-
-func numericFieldMatches(got float64, node *search.FieldNode) bool {
-	switch node.Op {
-	case "range":
-		lo, err1 := strconv.ParseFloat(node.RangeMin, 64)
-		hi, err2 := strconv.ParseFloat(node.RangeMax, 64)
-		if err1 != nil || err2 != nil {
-			return false
-		}
-		return got >= lo && got <= hi
-	case ">", "<", ">=", "<=", "=", "":
-		want, err := strconv.ParseFloat(node.Value, 64)
-		if err != nil {
-			return false
-		}
-		switch node.Op {
-		case ">":
-			return got > want
-		case "<":
-			return got < want
-		case ">=":
-			return got >= want
-		case "<=":
-			return got <= want
-		default:
-			return got == want
-		}
-	}
-	return false
-}
-
-func timeFieldMatches(got time.Time, node *search.FieldNode) bool {
-	parse := func(s string) (time.Time, bool) {
-		// Accept RFC3339 + plain YYYY-MM-DD.
-		if t, err := time.Parse(time.RFC3339, s); err == nil {
-			return t, true
-		}
-		if t, err := time.Parse("2006-01-02", s); err == nil {
-			return t, true
-		}
-		return time.Time{}, false
-	}
-	switch node.Op {
-	case "range":
-		lo, ok1 := parse(node.RangeMin)
-		hi, ok2 := parse(node.RangeMax)
-		if !ok1 || !ok2 {
-			return false
-		}
-		return !got.Before(lo) && !got.After(hi)
-	default:
-		want, ok := parse(node.Value)
-		if !ok {
-			return false
-		}
-		switch node.Op {
-		case ">":
-			return got.After(want)
-		case "<":
-			return got.Before(want)
-		case ">=":
-			return got.After(want) || got.Equal(want)
-		case "<=":
-			return got.Before(want) || got.Equal(want)
-		default:
-			return got.Equal(want)
-		}
-	}
 }
 
 // sortBookIDs reorders ids per the playlist's SortJSON directives.
