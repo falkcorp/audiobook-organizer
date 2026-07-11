@@ -1,5 +1,5 @@
 <!-- file: docs/status/2026-07-11-remaining-work-execution.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: 8877ac6a-c413-408f-b4b3-fd48a6ece32a -->
 <!-- last-edited: 2026-07-11 -->
 
@@ -20,8 +20,8 @@ landed (#1875, #1878, #1881, #1883). Remaining autonomous-lane work is still
 open: INIT-1, INIT-3 (T03–T08), INIT-4 (T06), INIT-9 (T01/T02), and INIT-10.
 
 This document itself is a further follow-up: it, and the folder split it
-belongs to (`docs/status/` vs `docs/executive-summaries/`), landed in a PR
-opened after #1891 — see that PR for the taxonomy change.
+belongs to (`docs/status/` vs `docs/executive-summaries/`), landed in
+[PR #1892](https://github.com/falkcorp/audiobook-organizer/pull/1892).
 
 For the polished, stakeholder-facing narrative version of this same body of
 work, see the "Remaining-work execution wave" theme in
