@@ -1,7 +1,7 @@
 // file: internal/server/wire_handlers.go
-// version: 2.16.0
+// version: 2.17.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
-// last-edited: 2026-07-05
+// last-edited: 2026-07-11
 
 package server
 
@@ -504,6 +504,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		s.authorsCache,
 		s.seriesCache,
 		s.buildAudiobookListResponse,
+		s.buildFacetsResponse,
 		s.isProtectedPath,
 		func(b *database.Book) any { return s.enrichBookForResponseSingle(b) },
 		func(id string) (any, error) { return s.metadataStateService.LoadMetadataState(id) },

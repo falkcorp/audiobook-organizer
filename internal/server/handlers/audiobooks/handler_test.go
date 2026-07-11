@@ -1,15 +1,15 @@
 // file: internal/server/handlers/audiobooks/handler_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5cd764d5-8036-425c-842e-c49d0d44acec
-// last-edited: 2026-07-01
+// last-edited: 2026-07-11
 
 // Tests for the audiobooks-domain handlers (main library list / CRUD). The
 // store / audiobook-service / updater / write-back / metadata-state /
 // metadata-fetch / batch / changelog / external-id deps are generated mocks; the
-// injected helper funcs (buildListResponse, isProtectedPath, enrichBook,
-// getFieldStates, getExternalIDStore, publishEvent) are stub closures returning
-// canned payloads or recording invocations. There is at least one test per
-// public method (36 methods) plus key branches.
+// injected helper funcs (buildListResponse, buildFacetsResponse, isProtectedPath,
+// enrichBook, getFieldStates, getExternalIDStore, publishEvent) are stub closures
+// returning canned payloads or recording invocations. There is at least one test
+// per public method (36 methods) plus key branches.
 
 package audiobookshandler_test
 
@@ -20,8 +20,10 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/mock"
@@ -48,6 +50,9 @@ type recorders struct {
 	publishedEvents  []plugin.Event
 	listResp         gin.H
 	listErr          error
+	facetsResp       gin.H
+	facetsErr        error
+	facetsCalls      int
 	extIDStore       audiobookshandler.ExternalIDStore
 }
 
@@ -101,6 +106,13 @@ func newHandler(t *testing.T) (*audiobookshandler.Handler, testDeps) {
 				rec.listResp = gin.H{"items": []any{}, "count": 0, "limit": limit, "offset": offset}
 			}
 			return rec.listResp, rec.listErr
+		},
+		func(ctx context.Context) (gin.H, error) {
+			rec.facetsCalls++
+			if rec.facetsResp == nil && rec.facetsErr == nil {
+				rec.facetsResp = gin.H{"genres": []string{}, "languages": []string{}}
+			}
+			return rec.facetsResp, rec.facetsErr
 		},
 		func(filePath string) bool {
 			rec.protectedPaths = append(rec.protectedPaths, filePath)
@@ -189,14 +201,92 @@ func TestCountAudiobooks(t *testing.T) {
 	}
 }
 
-func TestAudiobookFacets(t *testing.T) {
+// TestAudiobookFacets_NilIndexFallbackShape pins the INIT-4 T4 nil-index
+// fallback contract: when buildFacetsResponse (the shared handler+warmer
+// builder in package server) can't reach the Bleve index, the response
+// deep-equals the pre-task shape exactly — the genre_counts/language_counts/
+// tag_counts keys are OMITTED, not present-but-empty.
+func TestAudiobookFacets_NilIndexFallbackShape(t *testing.T) {
 	h, d := newHandler(t)
-	d.store.EXPECT().GetDistinctGenres().Return([]string{"Fantasy"}, nil)
-	d.store.EXPECT().GetDistinctLanguages().Return([]string{"en"}, nil)
+	d.rec.facetsResp = gin.H{"genres": []string{"Fantasy"}, "languages": []string{"en"}}
 	c, w := newCtx("GET", "/audiobooks/facets", nil, nil)
 	h.AudiobookFacets(c)
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", w.Code)
+	}
+	var resp struct {
+		Data map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	want := map[string]any{
+		"genres":    []any{"Fantasy"},
+		"languages": []any{"en"},
+	}
+	if !reflect.DeepEqual(resp.Data, want) {
+		t.Errorf("body = %#v, want %#v (no *_counts keys)", resp.Data, want)
+	}
+	if d.rec.facetsCalls != 1 {
+		t.Errorf("facetsCalls = %d, want 1", d.rec.facetsCalls)
+	}
+}
+
+// TestAudiobookFacets_WithIndexShape pins the with-index shape: the
+// additive genre_counts/language_counts/tag_counts keys are present
+// alongside the unchanged genres/languages lists.
+func TestAudiobookFacets_WithIndexShape(t *testing.T) {
+	h, d := newHandler(t)
+	d.rec.facetsResp = gin.H{
+		"genres":          []string{"Fantasy"},
+		"languages":       []string{"en"},
+		"genre_counts":    map[string]int{"Fantasy": 3},
+		"language_counts": map[string]int{"en": 3},
+		"tag_counts":      map[string]int{},
+	}
+	c, w := newCtx("GET", "/audiobooks/facets", nil, nil)
+	h.AudiobookFacets(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", w.Code)
+	}
+	body := w.Body.String()
+	for _, key := range []string{"genre_counts", "language_counts", "tag_counts"} {
+		if !strings.Contains(body, key) {
+			t.Errorf("body missing %q: %s", key, body)
+		}
+	}
+}
+
+// TestAudiobookFacets_CacheHitSkipsBuilder confirms a warm cache entry is
+// served without invoking buildFacetsResponse again.
+func TestAudiobookFacets_CacheHitSkipsBuilder(t *testing.T) {
+	h, d := newHandler(t)
+	// newHandler's caches use a 0 default TTL (always-expired, so every other
+	// test here forces a cache miss on purpose) — this test needs an entry
+	// that is still live when AudiobookFacets reads it, hence SetWithTTL.
+	d.facetCache.SetWithTTL("all", gin.H{"genres": []string{"Fantasy"}, "languages": []string{"en"}}, time.Minute)
+	c, w := newCtx("GET", "/audiobooks/facets", nil, nil)
+	h.AudiobookFacets(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", w.Code)
+	}
+	if d.rec.facetsCalls != 0 {
+		t.Errorf("facetsCalls = %d, want 0 (cache hit should skip the builder)", d.rec.facetsCalls)
+	}
+}
+
+// TestAudiobookFacets_BuilderError covers the pre-existing (unrelated to
+// INIT-4 T4) DB-fetch-failure path: buildFacetsResponse returning an error
+// (e.g. store not initialized, GetDistinctGenres/Languages erroring) is
+// still a 500 — only a FacetCounts-specific error fails open, per the
+// builder's own doc comment (audiobooks_helpers.go).
+func TestAudiobookFacets_BuilderError(t *testing.T) {
+	h, d := newHandler(t)
+	d.rec.facetsErr = errString("database not initialized")
+	c, w := newCtx("GET", "/audiobooks/facets", nil, nil)
+	h.AudiobookFacets(c)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("want 500, got %d", w.Code)
 	}
 }
 

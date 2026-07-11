@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
-// last-edited: 2026-07-05
+// last-edited: 2026-07-11
 
 // Package audiobookshandler hosts the main library list / CRUD HTTP handlers
 // extracted from the server package's audiobooks_handlers.go: book listing
@@ -54,7 +54,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/gin-gonic/gin"
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -65,6 +64,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
+	"github.com/gin-gonic/gin"
 )
 
 // facetsCacheKey is the single cache key under which audiobookFacets stores /
@@ -117,6 +117,16 @@ type Handler struct {
 	// byte-for-byte identical.
 	buildListResponse func(ctx context.Context, limit, offset int, search string, authorID, seriesID *int, filters audiobookspkg.ListFilters, showQuarantined bool) (gin.H, error)
 
+	// buildFacetsResponse wraps *Server.buildFacetsResponse (audiobooks_helpers.go),
+	// shared with the startup facets cache warmer (warmFacetsCache) so both
+	// produce the identical {"genres":[...],"languages":[...]} shape, plus the
+	// additive genre_counts/language_counts/tag_counts keys (INIT-4 T4). The
+	// wrapped method folds in AudiobookService.FacetCounts() (internal/audiobooks/
+	// service_facets.go) for those additive keys, failing open to the
+	// DB-distinct-only shape on any FacetCounts error (including the nil-index
+	// ErrSearchIndexUnavailable sentinel) — never a 500 from this handler.
+	buildFacetsResponse func(ctx context.Context) (gin.H, error)
+
 	// isProtectedPath wraps *Server.isProtectedPath (server_middleware.go), used
 	// by updateAudiobook to skip write-back for protected paths.
 	isProtectedPath func(filePath string) bool
@@ -153,6 +163,7 @@ func New(
 	authorsCache *cache.Cache[*audiobookspkg.AuthorWithCountListResponse],
 	seriesCache *cache.Cache[*audiobookspkg.SeriesWithCountsResponse],
 	buildListResponse func(ctx context.Context, limit, offset int, search string, authorID, seriesID *int, filters audiobookspkg.ListFilters, showQuarantined bool) (gin.H, error),
+	buildFacetsResponse func(ctx context.Context) (gin.H, error),
 	isProtectedPath func(filePath string) bool,
 	enrichBook func(book *database.Book) any,
 	getFieldStates func(id string) (any, error),
@@ -173,6 +184,7 @@ func New(
 		authorsCache:         authorsCache,
 		seriesCache:          seriesCache,
 		buildListResponse:    buildListResponse,
+		buildFacetsResponse:  buildFacetsResponse,
 		isProtectedPath:      isProtectedPath,
 		enrichBook:           enrichBook,
 		getFieldStates:       getFieldStates,
@@ -634,11 +646,15 @@ func (h *Handler) CountAudiobooks(c *gin.Context) {
 }
 
 // AudiobookFacets handles GET /audiobooks/facets. Returns lightweight lists of
-// distinct genres and languages for filter dropdowns. Results are cached for 5
-// minutes and pre-warmed at startup (warmFacetsCache stays in package server).
+// distinct genres and languages for filter dropdowns, plus (INIT-4 T4)
+// additive genre_counts/language_counts/tag_counts maps when the Bleve index
+// is available. Results are cached for 5 minutes and pre-warmed at startup
+// (warmFacetsCache stays in package server); both the cache-miss path here
+// and the warmer build the response through the shared buildFacetsResponse
+// closure (see its doc comment on the Handler struct) so they can never
+// drift into different shapes.
 func (h *Handler) AudiobookFacets(c *gin.Context) {
-	store := h.store
-	if store == nil {
+	if h.store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
 	}
@@ -647,23 +663,11 @@ func (h *Handler) AudiobookFacets(c *gin.Context) {
 		return
 	}
 	// Cache miss (e.g. first request before warm-up goroutine completes, or after TTL expiry).
-	genres, err := store.GetDistinctGenres()
+	result, err := h.buildFacetsResponse(c.Request.Context())
 	if err != nil {
-		httputil.InternalError(c, "failed to fetch genres", err)
+		httputil.InternalError(c, "failed to fetch facets", err)
 		return
 	}
-	languages, err := store.GetDistinctLanguages()
-	if err != nil {
-		httputil.InternalError(c, "failed to fetch languages", err)
-		return
-	}
-	if genres == nil {
-		genres = []string{}
-	}
-	if languages == nil {
-		languages = []string{}
-	}
-	result := gin.H{"genres": genres, "languages": languages}
 	h.facetsCache.Set(facetsCacheKey, result)
 	httputil.RespondWithOK(c, result)
 }

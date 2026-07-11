@@ -1,7 +1,7 @@
 // file: internal/search/bleve_index.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3c8e1a2f-4d9b-4f70-a5c6-2f8d0e1b9a47
-// last-edited: 2026-07-10
+// last-edited: 2026-07-11
 //
 // BleveIndex is the single-package wrapper around a Bleve v2 scorch
 // index backing library search (spec DES-1 / backlog §4.7). The
@@ -197,6 +197,45 @@ func (b *BleveIndex) SearchNative(q query.Query, from, size int) ([]SearchResult
 		})
 	}
 	return out, res.Total, nil
+}
+
+// FacetCounts returns value->count maps for the genre, language, and
+// tags keyword fields via a MatchAll facet search. size caps distinct
+// values per facet; <=0 defaults to 200. A facet with no matching
+// documents yields an empty map, never nil (e.g. an empty index).
+func (b *BleveIndex) FacetCounts(size int) (genres, languages, tags map[string]int, err error) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if b.idx == nil {
+		return nil, nil, nil, fmt.Errorf("bleve index not open")
+	}
+	if size <= 0 {
+		size = 200
+	}
+	req := bleve.NewSearchRequestOptions(bleve.NewMatchAllQuery(), 0, 0, false)
+	req.AddFacet("genres", bleve.NewFacetRequest("genre", size))
+	req.AddFacet("languages", bleve.NewFacetRequest("language", size))
+	req.AddFacet("tags", bleve.NewFacetRequest("tags", size))
+	res, err := b.idx.Search(req)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return facetTermCounts(res, "genres"), facetTermCounts(res, "languages"), facetTermCounts(res, "tags"), nil
+}
+
+// facetTermCounts extracts one named term-facet's value->count map from a
+// Bleve search result. A missing facet (e.g. zero indexed documents) yields
+// an empty map, never nil.
+func facetTermCounts(res *bleve.SearchResult, facetName string) map[string]int {
+	out := map[string]int{}
+	fr := res.Facets[facetName]
+	if fr == nil || fr.Terms == nil {
+		return out
+	}
+	for _, t := range fr.Terms.Terms() {
+		out[t.Term] = t.Count
+	}
+	return out
 }
 
 // DocCount returns the number of documents currently indexed. Useful

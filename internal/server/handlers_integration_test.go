@@ -1,7 +1,7 @@
 // file: internal/server/handlers_integration_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-06-23
+// last-edited: 2026-07-11
 
 package server
 
@@ -15,7 +15,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/batch"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
@@ -26,6 +25,7 @@ import (
 	system "github.com/falkcorp/audiobook-organizer/internal/server/handlers/system"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/internal/work"
+	"github.com/gin-gonic/gin"
 )
 
 // newOperationsHandler constructs an operations.Handler from the test server's
@@ -171,6 +171,7 @@ func newAudiobooksHandler(s *Server) *audiobookshandler.Handler {
 		s.authorsCache,
 		s.seriesCache,
 		s.buildAudiobookListResponse,
+		s.buildFacetsResponse,
 		s.isProtectedPath,
 		func(b *database.Book) any { return s.enrichBookForResponseSingle(b) },
 		func(id string) (any, error) { return s.metadataStateService.LoadMetadataState(id) },
