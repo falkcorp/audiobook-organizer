@@ -123,22 +123,30 @@ remaining-work catalog, produced, adversarially judged (3 lenses × 10), brief-v
   regression tests — same shape, could be added as a follow-up if one of them regresses.
 - Root cause + census (historical): `docs/audits/2026-07-05-updatebookfile-memdb-writeback-fingerprint-wipe.md`.
 
-## 🟠 GetFolderDuplicates / GetDuplicateBooksByMetadata are no-op stubs in production (found 2026-07-07)
+## 🟠 GetDuplicateBooksByMetadata is still a no-op stub in production (found 2026-07-07, folder half fixed 2026-07-10)
 
 - **NEW finding** during STOREFID W6's Core retype of these 2 getters. `PebbleStore.GetFolderDuplicatesCore`
-  and `PebbleStore.GetDuplicateBooksByMetadataCore` (`internal/database/pebble_store.go`) are hard
-  `return nil, nil` stubs — **no `MemStore` implementation exists for either getter**, so unlike
-  every other slim getter in this codebase, these two ALWAYS return empty regardless of
+  and `PebbleStore.GetDuplicateBooksByMetadataCore` (`internal/database/pebble_store.go`) were both hard
+  `return nil, nil` stubs — **no `MemStore` implementation existed for either getter**, so unlike
+  every other slim getter in this codebase, these two ALWAYS returned empty regardless of
   `UseMemDB`. Folder-based duplicate detection (same title, same folder — e.g. M4B + MP3 pairs) and
-  metadata-based fuzzy duplicate detection are therefore non-functional in production today; only
-  hash-based duplicate detection (`GetDuplicateBooks`) actually works.
+  metadata-based fuzzy duplicate detection were therefore non-functional in production; only
+  hash-based duplicate detection (`GetDuplicateBooks`) actually worked.
   Callers: `internal/dedup/book_dedup.go` (`ScanBookDuplicates`, tiers 2 and 3 of the 3-tier scan),
   `internal/audiobooks/service_single.go` (`GetDuplicateBooks`).
-- **Not fixed as part of W6** — implementing real folder/metadata duplicate detection is a
-  materially different task than a type retype (the retype only made the existing no-op behavior
-  Core-typed; the STOREFID work does not change or fix this gap). Needs its own scoped design:
-  folder-based detection would need a folder→books index or a scan; metadata-based detection
-  already has full fuzzy-matching logic downstream (`applyTranscriptionMetadataTiebreaker`,
+- **✅ Folder half FIXED 2026-07-10 (INIT-2 TASK-01)**: `PebbleStore.GetFolderDuplicatesCore` now
+  delegates to a real `MemStore.GetFolderDuplicatesCore` twin when memdb is published, with a
+  Pebble-scan fallback (paged `GetAllBooksCore` + per-book `GetBookFiles`) for cold start/tests.
+  Both backends bucket non-deleted, primary-version books by
+  `(util.NormalizeTitle(title), single-parent-dir)` via a shared `bucketFolderDuplicates` helper so
+  the two paths can't drift. A book with no files, or files spanning multiple dirs, has an
+  UNKNOWN parent dir and is silently skipped (never grouped, never an error). Dedup tier 2 in
+  `ScanBookDuplicates` / `AudiobookService.GetDuplicateBooks` now returns real folder-duplicate
+  groups. Tests: `internal/database/pebble_store_folder_dups_test.go` (both backends, incl. the
+  anti-over-suppression case where a multi-dir book is skipped but other groups still return).
+- **Metadata half still open (TASK-02, same files, later wave)** — implementing real
+  metadata-based fuzzy duplicate detection is a separate scoped task: it already has full
+  fuzzy-matching logic downstream (`applyTranscriptionMetadataTiebreaker`,
   `metadataPairSimilarity`) that's just never fed any candidates today.
 
 ## ✅ DurationSec invariant for the 3 PR-B fingerprint ops — RESOLVED + PROD-CONFIRMED (2026-07-06 → 08)

@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.78.0
+// version: 1.79.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-07-07
+// last-edited: 2026-07-10
 
 package database
 
@@ -58,6 +58,7 @@ type MockStore struct {
 	RevertBookToVersionFunc         func(id string, ts time.Time) (*Book, error)
 	PruneBookVersionsFunc           func(id string, keepCount int) (int, error)
 	GetDuplicateBooksFunc           func() ([][]Book, error)
+	GetFolderDuplicatesCoreFunc     func() ([][]BookCore, error)
 	GetDuplicateBooksByMetadataFunc func(threshold float64) ([][]BookCore, error)
 	CreateBookFunc                  func(book *Book) (*Book, error)
 	UpdateBookFunc                  func(id string, book *Book) (*Book, error)
@@ -760,6 +761,9 @@ func (m *MockStore) GetBooksByTitleInDir(normalizedTitle, dirPath string) ([]Boo
 }
 
 func (m *MockStore) GetFolderDuplicatesCore() ([][]BookCore, error) {
+	if m.GetFolderDuplicatesCoreFunc != nil {
+		return m.GetFolderDuplicatesCoreFunc()
+	}
 	return nil, nil
 }
 

@@ -25,6 +25,27 @@
   anti-over-suppression case (a live `bgCtx` must still run every warmer), green under `-race`.
   TODO.md's WARMERS-NOT-IN-BGWG item checked off.
 
+#### July 10, 2026 - feat(database): implement GetFolderDuplicatesCore on Pebble + MemStore (INIT-2 T1)
+
+- **`database`** — replaced the known-unimplemented `GetFolderDuplicatesCore` stub (previously a
+  hard `return nil, nil` on both storage backends) with a real implementation: `PebbleStore`
+  delegates to a new `MemStore.GetFolderDuplicatesCore` twin when memdb is published, with a
+  Pebble-scan fallback (paged `GetAllBooksCore` + per-book `GetBookFiles`, never a per-book
+  title-query fan-out) for cold start/tests. Both backends bucket non-deleted, primary-version
+  books by `(util.NormalizeTitle(title), single-parent-dir)` through a shared
+  `bucketFolderDuplicates` helper so the two paths can never drift; a book with no files or files
+  spanning multiple dirs has an UNKNOWN parent dir and is silently skipped (never grouped, never
+  an error). Dedup tier 2 ("same title in same folder, e.g. M4B + MP3") in
+  `internal/dedup/book_dedup.go`'s `ScanBookDuplicates` and
+  `AudiobookService.GetDuplicateBooks` now returns real groups instead of an always-empty tier.
+  Added `MockStore.GetFolderDuplicatesCoreFunc` hook mirroring the existing
+  `GetDuplicateBooksByMetadataFunc` shape. `GetDuplicateBooksByMetadataCore` (the metadata-fuzzy
+  sibling) is untouched — deferred to a follow-up task.
+- Tests: `internal/database/pebble_store_folder_dups_test.go` runs a shared fixture through both
+  the memdb-delegation path and the Pebble scan-fallback path and asserts identical groups,
+  including an anti-over-suppression case where a multi-dir book is skipped but other valid
+  groups still return.
+
 #### July 10, 2026 - docs(plan): 10 remaining-work planning packages (INIT-1..10)
 
 - **`docs`** — full planning packages for the remaining-work catalog: 10 design specs,
