@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_scoring.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: d2226468-bed1-4989-93f3-b0bc3a344424
-// last-edited: 2026-07-10
+// last-edited: 2026-07-11
 
 package metafetch
 
@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // isGarbageValue returns true if a string value is effectively useless metadata.
@@ -112,11 +113,12 @@ func computeF1Base(r metadata.BookMetadata, searchWords map[string]bool) float64
 // ApplyNonBaseAdjustments applies bonuses/penalties to a base similarity score
 // based on metadata heuristics (series, narrator, language, etc.).
 func ApplyNonBaseAdjustments(baseScore float64, r metadata.BookMetadata, baseWordCount int) float64 {
+	k := scoringKnobs()
 	score := baseScore
 
 	// Compilation penalty
 	if isCompilation(r.Title) {
-		score *= 0.15
+		score *= k.CompilationPenalty
 	}
 
 	// Length penalty: penalise results that are much longer than the search.
@@ -130,22 +132,22 @@ func ApplyNonBaseAdjustments(baseScore float64, r metadata.BookMetadata, baseWor
 		}
 	}
 
-	// Rich-metadata bonus (capped at +0.15, additive)
+	// Rich-metadata bonus (capped at +RichMetadataBonusCap, additive)
 	bonus := 0.0
 	if r.Description != "" {
-		bonus += 0.05
+		bonus += k.RichMetadataFieldBonus
 	}
 	if r.CoverURL != "" {
-		bonus += 0.05
+		bonus += k.RichMetadataFieldBonus
 	}
 	if r.Narrator != "" {
-		bonus += 0.05
+		bonus += k.RichMetadataFieldBonus
 	}
 	if r.ISBN != "" {
-		bonus += 0.05
+		bonus += k.RichMetadataFieldBonus
 	}
-	if bonus > 0.15 {
-		bonus = 0.15
+	if bonus > k.RichMetadataBonusCap {
+		bonus = k.RichMetadataBonusCap
 	}
 
 	return score + bonus
@@ -190,22 +192,174 @@ var durationTiers = []struct {
 
 // durationTier looks up the canonical (multiplier, score) pair for a
 // duration-match ratio. See durationTiers for the boundary-inclusivity
-// contract this switch implements.
+// contract this switch implements. The tier EDGES (MaxRatio, from
+// durationTiers) stay fixed in code; the Multiplier/Score VALUES are
+// resolved through scoringKnobs so an operator can retune them (INIT-3-T1)
+// without touching the boundary structure.
 func durationTier(ratio float64) (multiplier, score float64) {
+	k := scoringKnobs()
 	switch {
 	case ratio < durationTiers[0].MaxRatio:
-		return durationTiers[0].Multiplier, durationTiers[0].Score
+		return k.DurationTierMultipliers[0], k.DurationTierScores[0]
 	case ratio < durationTiers[1].MaxRatio:
-		return durationTiers[1].Multiplier, durationTiers[1].Score
+		return k.DurationTierMultipliers[1], k.DurationTierScores[1]
 	case ratio < durationTiers[2].MaxRatio:
-		return durationTiers[2].Multiplier, durationTiers[2].Score
+		return k.DurationTierMultipliers[2], k.DurationTierScores[2]
 	case ratio <= durationTiers[3].MaxRatio:
-		return durationTiers[3].Multiplier, durationTiers[3].Score
+		return k.DurationTierMultipliers[3], k.DurationTierScores[3]
 	case ratio <= durationTiers[4].MaxRatio:
-		return durationTiers[4].Multiplier, durationTiers[4].Score
+		return k.DurationTierMultipliers[4], k.DurationTierScores[4]
 	default:
-		return durationTiers[5].Multiplier, durationTiers[5].Score
+		return k.DurationTierMultipliers[5], k.DurationTierScores[5]
 	}
+}
+
+// resolvedScoringKnobs holds the metadata-scoring literals extracted into
+// config (INIT-3-T1), resolved from config.AppConfig.MetadataScoring with
+// legacy-literal fallback. Every field here corresponds 1:1 to a hardcoded
+// literal that existed before this task; see scoringKnobs for the per-knob
+// fail-open semantics.
+type resolvedScoringKnobs struct {
+	TranscriptionTitleExactBoost  float64
+	TranscriptionTitleSubstrBoost float64
+	TranscriptionAuthorBoost      float64
+	TranscriptionNarratorBoost    float64
+
+	CompilationPenalty     float64
+	RichMetadataFieldBonus float64
+	RichMetadataBonusCap   float64
+	F1MinScore             float64
+
+	SeriesNameMatchBoost     float64
+	SeriesNumberExactBoost   float64
+	SeriesNumberWrongPenalty float64
+
+	// DurationTierMultipliers/DurationTierScores are the Multiplier/Score
+	// columns durationTier looks up by tier index; always the same length as
+	// the built-in durationTiers table (a mismatched-length config falls
+	// back to the built-in columns — see resolveDurationTierValues).
+	DurationTierMultipliers []float64
+	DurationTierScores      []float64
+}
+
+// defaultDurationTierMultipliers/defaultDurationTierScores are the
+// Multiplier/Score columns of durationTiers, precomputed once so the
+// duration-tier fail-open path (resolveDurationTierValues) never allocates
+// on the common case of "operator hasn't overridden this knob".
+var defaultDurationTierMultipliers, defaultDurationTierScores = func() ([]float64, []float64) {
+	multipliers := make([]float64, len(durationTiers))
+	scores := make([]float64, len(durationTiers))
+	for i, t := range durationTiers {
+		multipliers[i] = t.Multiplier
+		scores[i] = t.Score
+	}
+	return multipliers, scores
+}()
+
+// durationTierMismatchWarnOnce ensures a misconfigured (non-empty but wrong
+// length) duration-tier override is logged once, not once per scored
+// candidate.
+var durationTierMismatchWarnOnce sync.Once
+
+// scoringKnobs resolves every extracted scoring literal (INIT-3-T1) from
+// config.AppConfig.MetadataScoring, with defaults exactly equal to the
+// pre-extraction hardcoded literals — so a zero-value MetadataScoringConfig
+// (e.g. a test that never calls config.InitConfig) reproduces today's scores
+// bit-for-bit.
+//
+// Per-knob fail-open semantics (spec C2, normative — a blanket
+// zero-as-unset rule would make 0 unreachable for knobs where 0 is a
+// legitimate operator value):
+//
+//   - Multiplicative boosts (the four transcription boosts, the three
+//     series boosts, RichMetadataFieldBonus) are plain float64 in the
+//     config struct: a zero/missing value falls back to the legacy
+//     literal — NEVER "multiply by zero", since 0 would silently zero out
+//     every score on that path.
+//   - F1MinScore / CompilationPenalty / RichMetadataBonusCap are *float64
+//     in the config struct: nil (unset) falls back to the legacy literal,
+//     but an EXPLICIT 0 is honored — 0 is a real operator value (e.g.
+//     F1MinScore=0 disables the reject floor; CompilationPenalty=0
+//     disables the compilation penalty entirely).
+//   - Duration tier value arrays: config must supply BOTH arrays at the
+//     same length as the built-in durationTiers table, or the whole
+//     built-in table is used (fail-open); a non-empty-but-mismatched-length
+//     override is logged once so a misconfiguration stays visible without
+//     spamming logs per candidate.
+func scoringKnobs() resolvedScoringKnobs {
+	cfg := config.AppConfig.MetadataScoring
+
+	k := resolvedScoringKnobs{
+		TranscriptionTitleExactBoost:  cfg.TranscriptionTitleExactBoost,
+		TranscriptionTitleSubstrBoost: cfg.TranscriptionTitleSubstrBoost,
+		TranscriptionAuthorBoost:      cfg.TranscriptionAuthorBoost,
+		TranscriptionNarratorBoost:    cfg.TranscriptionNarratorBoost,
+		RichMetadataFieldBonus:        cfg.RichMetadataFieldBonus,
+		SeriesNameMatchBoost:          cfg.SeriesNameMatchBoost,
+		SeriesNumberExactBoost:        cfg.SeriesNumberExactBoost,
+		SeriesNumberWrongPenalty:      cfg.SeriesNumberWrongPenalty,
+	}
+	if k.TranscriptionTitleExactBoost == 0 {
+		k.TranscriptionTitleExactBoost = 2.0
+	}
+	if k.TranscriptionTitleSubstrBoost == 0 {
+		k.TranscriptionTitleSubstrBoost = 1.4
+	}
+	if k.TranscriptionAuthorBoost == 0 {
+		k.TranscriptionAuthorBoost = 1.6
+	}
+	if k.TranscriptionNarratorBoost == 0 {
+		k.TranscriptionNarratorBoost = 1.4
+	}
+	if k.RichMetadataFieldBonus == 0 {
+		k.RichMetadataFieldBonus = 0.05
+	}
+	if k.SeriesNameMatchBoost == 0 {
+		k.SeriesNameMatchBoost = 1.4
+	}
+	if k.SeriesNumberExactBoost == 0 {
+		k.SeriesNumberExactBoost = 2.0
+	}
+	if k.SeriesNumberWrongPenalty == 0 {
+		k.SeriesNumberWrongPenalty = 0.5
+	}
+
+	if cfg.CompilationPenalty != nil {
+		k.CompilationPenalty = *cfg.CompilationPenalty
+	} else {
+		k.CompilationPenalty = 0.15
+	}
+	if cfg.RichMetadataBonusCap != nil {
+		k.RichMetadataBonusCap = *cfg.RichMetadataBonusCap
+	} else {
+		k.RichMetadataBonusCap = 0.15
+	}
+	if cfg.F1MinScore != nil {
+		k.F1MinScore = *cfg.F1MinScore
+	} else {
+		k.F1MinScore = 0.35
+	}
+
+	k.DurationTierMultipliers, k.DurationTierScores = resolveDurationTierValues(cfg.DurationTierMultipliers, cfg.DurationTierScores)
+
+	return k
+}
+
+// resolveDurationTierValues applies the duration-tier fail-open rule
+// documented on scoringKnobs: config must supply both arrays at exactly
+// len(durationTiers), or the built-in Multiplier/Score columns are used
+// unmodified.
+func resolveDurationTierValues(multipliers, scores []float64) ([]float64, []float64) {
+	if len(multipliers) == len(durationTiers) && len(scores) == len(durationTiers) {
+		return multipliers, scores
+	}
+	if len(multipliers) != 0 || len(scores) != 0 {
+		durationTierMismatchWarnOnce.Do(func() {
+			slog.Warn("metadata-scoring duration tier config length mismatch, falling back to built-in table",
+				"wantLen", len(durationTiers), "gotMultipliers", len(multipliers), "gotScores", len(scores))
+		})
+	}
+	return defaultDurationTierMultipliers, defaultDurationTierScores
 }
 
 // durationDeltaRatio computes the symmetric duration-match ratio shared by
@@ -325,6 +479,7 @@ func containsCI(a, b string) bool {
 // is read aloud verbatim in the intro.
 // Returns (adjusted score, true) when any boost was applied; (score, false) otherwise.
 func transcriptionBoost(score float64, r metadata.BookMetadata, th transcriptionHints) (float64, bool) {
+	k := scoringKnobs()
 	// The transcribed TITLE is the anchor — it is read aloud verbatim in the
 	// intro. The author/narrator boosts only apply when the title ALSO agrees;
 	// otherwise a same-author, wrong-title candidate gets multiplied to the top
@@ -335,10 +490,10 @@ func transcriptionBoost(score float64, r metadata.BookMetadata, th transcription
 	titleMatched := false
 	if titleHintPresent && r.Title != "" {
 		if util.NormalizeTitle(r.Title) == util.NormalizeTitle(th.title) {
-			score *= 2.0
+			score *= k.TranscriptionTitleExactBoost
 			titleMatched = true
 		} else if containsCI(r.Title, th.title) {
-			score *= 1.4
+			score *= k.TranscriptionTitleSubstrBoost
 			titleMatched = true
 		}
 	}
@@ -353,11 +508,11 @@ func transcriptionBoost(score float64, r metadata.BookMetadata, th transcription
 	}
 	boosted := titleMatched
 	if th.author != "" && containsCI(r.Author, th.author) {
-		score *= 1.6
+		score *= k.TranscriptionAuthorBoost
 		boosted = true
 	}
 	if th.narrator != "" && containsCI(r.Narrator, th.narrator) {
-		score *= 1.4
+		score *= k.TranscriptionNarratorBoost
 		boosted = true
 	}
 	return score, boosted
@@ -387,7 +542,7 @@ func pickBestMatchFromScored(
 	bookDurationSec int,
 	hints ...transcriptionHints,
 ) []metadata.BookMetadata {
-	const f1MinScore = 0.35
+	f1MinScore := scoringKnobs().F1MinScore
 
 	var th transcriptionHints
 	if len(hints) > 0 {

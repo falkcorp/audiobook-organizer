@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_scoring_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7e3f6a1c-9b4d-4e2a-8c1f-6d5b3a2e9f70
-// last-edited: 2026-07-10
+// last-edited: 2026-07-11
 
 package metafetch
 
@@ -341,4 +341,185 @@ func TestDurationScoringGolden(t *testing.T) {
 			assert.InDelta(t, c.wantScore, gotScore, 1e-9, "computeDurationScore(%d, %d)", c.book, c.cand)
 		})
 	}
+}
+
+// ---------------------------------------------------------------------------
+// INIT-3-T1 — MetadataScoringConfig extraction equivalence proof.
+//
+// These tests prove the gate's zero-behavior-change requirement
+// mechanically: scoringKnobs() must resolve every extracted literal to
+// today's hardcoded value whenever config.AppConfig.MetadataScoring is a
+// zero-value struct (no operator tuning, or a context — like most of this
+// package's tests — that never called config.InitConfig), and must honor an
+// EXPLICIT zero on the three pointer knobs where zero is a legitimate
+// operator value.
+// ---------------------------------------------------------------------------
+
+// withMetadataScoringConfig sets config.AppConfig.MetadataScoring for the
+// duration of the test and restores the prior value on cleanup, so these
+// knob mutations can never leak into another test sharing the same
+// config.AppConfig global.
+func withMetadataScoringConfig(t *testing.T, cfg config.MetadataScoringConfig) {
+	t.Helper()
+	prev := config.AppConfig.MetadataScoring
+	config.AppConfig.MetadataScoring = cfg
+	t.Cleanup(func() {
+		config.AppConfig.MetadataScoring = prev
+	})
+}
+
+// TestScoringConfigDefaultsMatchLegacyLiterals is the acceptance-criteria
+// gate test: a zero-value MetadataScoringConfig must reproduce every
+// pre-extraction literal exactly, across transcriptionBoost,
+// ApplyNonBaseAdjustments, and the duration-tier/series knobs.
+func TestScoringConfigDefaultsMatchLegacyLiterals(t *testing.T) {
+	withMetadataScoringConfig(t, config.MetadataScoringConfig{})
+
+	t.Run("transcriptionBoost", func(t *testing.T) {
+		const base = 1.0
+		cand := metadata.BookMetadata{Title: "The Way of Kings", Author: "Brandon Sanderson", Narrator: "Michael Kramer"}
+
+		gotExact, boosted := transcriptionBoost(base, cand, transcriptionHints{title: "The Way of Kings"})
+		require.True(t, boosted)
+		assert.InDelta(t, base*2.0, gotExact, 1e-9, "legacy exact-title boost was score *= 2.0")
+
+		gotSubstr, boosted := transcriptionBoost(base, metadata.BookMetadata{Title: "The Way of Kings (Stormlight 1)"}, transcriptionHints{title: "The Way of Kings"})
+		require.True(t, boosted)
+		assert.InDelta(t, base*1.4, gotSubstr, 1e-9, "legacy substring-title boost was score *= 1.4")
+
+		gotAuthor, boosted := transcriptionBoost(base, cand, transcriptionHints{author: "Brandon Sanderson"})
+		require.True(t, boosted)
+		assert.InDelta(t, base*1.6, gotAuthor, 1e-9, "legacy author boost was score *= 1.6")
+
+		gotNarrator, boosted := transcriptionBoost(base, cand, transcriptionHints{narrator: "Michael Kramer"})
+		require.True(t, boosted)
+		assert.InDelta(t, base*1.4, gotNarrator, 1e-9, "legacy narrator boost was score *= 1.4")
+	})
+
+	t.Run("compilationPenalty", func(t *testing.T) {
+		got := ApplyNonBaseAdjustments(1.0, metadata.BookMetadata{Title: "The Best of Everything: Omnibus"}, 0)
+		assert.InDelta(t, 0.15, got, 1e-9, "legacy compilation penalty was score *= 0.15")
+	})
+
+	t.Run("richMetadataBonusSingleField", func(t *testing.T) {
+		got := ApplyNonBaseAdjustments(0.0, metadata.BookMetadata{Title: "Single Field Book", ISBN: "123"}, 0)
+		assert.InDelta(t, 0.05, got, 1e-9, "legacy rich-metadata bonus per field was +0.05")
+	})
+
+	t.Run("richMetadataBonusCapped", func(t *testing.T) {
+		r := metadata.BookMetadata{
+			Title: "Uncapped Bonus Book", Description: "d", CoverURL: "c", Narrator: "n", ISBN: "i",
+		}
+		// legacy: 4 fields * 0.05 = 0.20, capped at 0.15.
+		got := ApplyNonBaseAdjustments(0.0, r, 0)
+		assert.InDelta(t, 0.15, got, 1e-9, "legacy rich-metadata bonus was capped at 0.15")
+	})
+
+	t.Run("f1MinScore", func(t *testing.T) {
+		assert.InDelta(t, 0.35, scoringKnobs().F1MinScore, 1e-9, "legacy F1 min score was const f1MinScore = 0.35")
+	})
+
+	t.Run("seriesBoosts", func(t *testing.T) {
+		k := scoringKnobs()
+		assert.InDelta(t, 1.4, k.SeriesNameMatchBoost, 1e-9, "legacy series-name boost was score *= 1.4")
+		assert.InDelta(t, 2.0, k.SeriesNumberExactBoost, 1e-9, "legacy series-number exact boost was c.Score *= 2.0")
+		assert.InDelta(t, 0.5, k.SeriesNumberWrongPenalty, 1e-9, "legacy series-number wrong-number penalty was c.Score *= 0.5")
+	})
+
+	t.Run("durationTierDefaults", func(t *testing.T) {
+		k := scoringKnobs()
+		assert.Equal(t, []float64{1.30, 1.20, 1.10, 1.00, 0.75, 0.50}, k.DurationTierMultipliers, "legacy durationTiers Multiplier column")
+		assert.Equal(t, []float64{20, 15, 10, 0, -10, -20}, k.DurationTierScores, "legacy durationTiers Score column")
+	})
+}
+
+// TestScoringConfigZeroMultiplicativeKnobFallsBackToLegacy proves the
+// multiplicative-knob fail-open rule: an explicit (or missing) 0 on a
+// plain-float64 knob is treated as "unset" and falls back to the legacy
+// literal — it must NEVER multiply a score by zero, which would silently
+// zero out every candidate on that scoring path.
+func TestScoringConfigZeroMultiplicativeKnobFallsBackToLegacy(t *testing.T) {
+	withMetadataScoringConfig(t, config.MetadataScoringConfig{
+		TranscriptionTitleExactBoost: 0, // explicit zero, indistinguishable from unset for a plain float64
+	})
+
+	got, boosted := transcriptionBoost(1.0, metadata.BookMetadata{Title: "The Way of Kings"}, transcriptionHints{title: "The Way of Kings"})
+	require.True(t, boosted)
+	assert.InDelta(t, 2.0, got, 1e-9, "a zero/missing multiplicative knob must fall back to the legacy literal, never multiply by zero")
+}
+
+// TestScoringConfigExplicitZeroHonored proves the pointer-knob fail-open
+// rule: nil (unset) falls back to the legacy literal, but an EXPLICIT 0 is
+// honored — 0 is a real operator value for F1MinScore (disables the reject
+// floor), CompilationPenalty (disables the penalty), and RichMetadataBonusCap
+// (suppresses the bonus).
+func TestScoringConfigExplicitZeroHonored(t *testing.T) {
+	zero := 0.0
+
+	t.Run("F1MinScore explicit zero disables the reject floor", func(t *testing.T) {
+		withMetadataScoringConfig(t, config.MetadataScoringConfig{F1MinScore: &zero})
+		assert.InDelta(t, 0.0, scoringKnobs().F1MinScore, 1e-9)
+	})
+
+	t.Run("F1MinScore nil falls back to legacy default", func(t *testing.T) {
+		withMetadataScoringConfig(t, config.MetadataScoringConfig{F1MinScore: nil})
+		assert.InDelta(t, 0.35, scoringKnobs().F1MinScore, 1e-9)
+	})
+
+	t.Run("CompilationPenalty explicit zero disables the penalty", func(t *testing.T) {
+		withMetadataScoringConfig(t, config.MetadataScoringConfig{CompilationPenalty: &zero})
+		got := ApplyNonBaseAdjustments(1.0, metadata.BookMetadata{Title: "Omnibus Collection"}, 0)
+		assert.InDelta(t, 0.0, got, 1e-9, "explicit CompilationPenalty=0 must zero the score for a compilation, not fall back to 0.15")
+	})
+
+	t.Run("CompilationPenalty nil falls back to legacy default", func(t *testing.T) {
+		withMetadataScoringConfig(t, config.MetadataScoringConfig{CompilationPenalty: nil})
+		got := ApplyNonBaseAdjustments(1.0, metadata.BookMetadata{Title: "Omnibus Collection"}, 0)
+		assert.InDelta(t, 0.15, got, 1e-9)
+	})
+
+	t.Run("RichMetadataBonusCap explicit zero suppresses the bonus", func(t *testing.T) {
+		withMetadataScoringConfig(t, config.MetadataScoringConfig{RichMetadataBonusCap: &zero})
+		got := ApplyNonBaseAdjustments(0.0, metadata.BookMetadata{Title: "Bonus Book", ISBN: "i"}, 0)
+		assert.InDelta(t, 0.0, got, 1e-9, "explicit RichMetadataBonusCap=0 must suppress the bonus entirely")
+	})
+
+	t.Run("RichMetadataBonusCap nil falls back to legacy default", func(t *testing.T) {
+		withMetadataScoringConfig(t, config.MetadataScoringConfig{RichMetadataBonusCap: nil})
+		got := ApplyNonBaseAdjustments(0.0, metadata.BookMetadata{Title: "Bonus Book", ISBN: "i"}, 0)
+		assert.InDelta(t, 0.05, got, 1e-9)
+	})
+}
+
+// TestScoringConfigDurationTierMismatchedLengthFallsBackToBuiltinTable
+// proves the duration-tier array fail-open rule: config must supply BOTH
+// arrays at exactly len(durationTiers), or the built-in Multiplier/Score
+// columns are used unmodified — a non-empty-but-wrong-length override must
+// never be truncated, padded, or partially applied.
+func TestScoringConfigDurationTierMismatchedLengthFallsBackToBuiltinTable(t *testing.T) {
+	withMetadataScoringConfig(t, config.MetadataScoringConfig{
+		DurationTierMultipliers: []float64{9.9, 9.9, 9.9}, // wrong length: built-in table has 6 tiers
+		DurationTierScores:      []float64{99, 99, 99},
+	})
+
+	k := scoringKnobs()
+	assert.Equal(t, []float64{1.30, 1.20, 1.10, 1.00, 0.75, 0.50}, k.DurationTierMultipliers)
+	assert.Equal(t, []float64{20, 15, 10, 0, -10, -20}, k.DurationTierScores)
+
+	// End-to-end: durationScoreMultiplier/computeDurationScore must also see
+	// the built-in table, not the mismatched override.
+	assert.InDelta(t, 1.30, durationScoreMultiplier(7200, 7200+59), 1e-9)
+	assert.InDelta(t, float64(20), computeDurationScore(7200, 7200+59), 1e-9)
+}
+
+// TestScoringConfigDurationTierMatchedLengthOverrideApplied proves the
+// positive case: a correctly-sized override IS honored end-to-end.
+func TestScoringConfigDurationTierMatchedLengthOverrideApplied(t *testing.T) {
+	withMetadataScoringConfig(t, config.MetadataScoringConfig{
+		DurationTierMultipliers: []float64{5, 4, 3, 2, 1, 0},
+		DurationTierScores:      []float64{50, 40, 30, 20, 10, 0},
+	})
+
+	assert.InDelta(t, 5.0, durationScoreMultiplier(7200, 7200+59), 1e-9)
+	assert.InDelta(t, float64(50), computeDurationScore(7200, 7200+59), 1e-9)
 }
