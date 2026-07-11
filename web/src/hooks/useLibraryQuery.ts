@@ -1,7 +1,7 @@
 // file: web/src/hooks/useLibraryQuery.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: d4e5f6a7-b8c9-0123-def0-123456789003
-// last-edited: 2026-07-01
+// last-edited: 2026-07-11
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -75,6 +75,11 @@ export function useLibraryQuery({
   // overwrite good data with stale data.
   const latestRequestIdRef = useRef(0);
 
+  // AbortController for the in-flight loadAudiobooks fetch, so a slow tag
+  // filter (or any slow query) can be cancelled from the UI. Same pattern as
+  // UnifiedDedupTab.tsx / CandidateCompareDrawer.tsx.
+  const abortControllerRef = useRef<AbortController | null>(null);
+
   const loadSoftDeleted = useCallback(async () => {
     setSoftDeletedLoading(true);
     try {
@@ -92,6 +97,9 @@ export function useLibraryQuery({
 
   const loadAudiobooks = useCallback(async () => {
     const requestId = ++latestRequestIdRef.current;
+    abortControllerRef.current?.abort();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
     setLoading(true);
     try {
       const offset = (page - 1) * itemsPerPage;
@@ -123,7 +131,7 @@ export function useLibraryQuery({
 
       const [page_, folders] = await Promise.all([
         searchText
-          ? api.searchBooksPage(searchText, itemsPerPage, offset, filters.showFailed)
+          ? api.searchBooksPage(searchText, itemsPerPage, offset, filters.showFailed, controller.signal)
           : api.getBooks(itemsPerPage, offset, {
               sortBy,
               sortOrder,
@@ -135,8 +143,9 @@ export function useLibraryQuery({
               fingerprintStatus: filters.fingerprintStatus,
               coveragePercentMin: filters.coveragePercentMin,
               coveragePercentMax: filters.coveragePercentMax,
+              signal: controller.signal,
             }),
-        api.getImportPaths(),
+        api.getImportPaths(controller.signal),
       ]);
 
       // A newer loadAudiobooks call has since been issued (e.g. page size or
@@ -178,6 +187,13 @@ export function useLibraryQuery({
       setTotalPages(totalPages);
       setImportPaths(importPathsData);
     } catch (error) {
+      // A cancelled fetch (user clicked Cancel, or a newer request superseded
+      // this one and aborted it) is not a failure — skip the error toast/
+      // empty-state handling entirely. loading/audiobooks state is already
+      // whatever cancelLoad() or the newer request set it to.
+      if (error instanceof Error && error.name === 'AbortError') {
+        return;
+      }
       if (error instanceof api.ApiError && error.status === 401) {
         navigate('/login');
         return;
@@ -242,6 +258,15 @@ export function useLibraryQuery({
     useLibraryCache.getState().clear();
   }, []);
 
+  // cancelLoad aborts the in-flight loadAudiobooks fetch and flips loading
+  // off immediately — don't wait for the aborted promise to reject and run
+  // through its own finally block, since that adds a round trip's worth of
+  // latency to what should feel instant.
+  const cancelLoad = useCallback(() => {
+    abortControllerRef.current?.abort();
+    setLoading(false);
+  }, []);
+
   return {
     audiobooks,
     setAudiobooks,
@@ -255,5 +280,6 @@ export function useLibraryQuery({
     loadAudiobooks,
     loadSoftDeleted,
     clearLibraryCache,
+    cancelLoad,
   };
 }

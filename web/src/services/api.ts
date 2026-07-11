@@ -897,6 +897,7 @@ export async function getBooks(
     fingerprintStatus?: 'complete' | 'partial' | 'none';
     coveragePercentMin?: number;
     coveragePercentMax?: number;
+    signal?: AbortSignal;
   }
 ): Promise<BooksPage> {
   const params = new URLSearchParams();
@@ -922,7 +923,7 @@ export async function getBooks(
     params.set('coverage_percent_max', String(options.coveragePercentMax));
   params.set('is_primary_version', 'true');
 
-  const response = await apiFetch(`${API_BASE}/audiobooks?${params}`);
+  const response = await apiFetch(`${API_BASE}/audiobooks?${params}`, { signal: options?.signal });
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to fetch books');
   }
@@ -975,7 +976,8 @@ export async function searchBooksPage(
   query: string,
   limit = 50,
   offset = 0,
-  showFailed = false
+  showFailed = false,
+  signal?: AbortSignal
 ): Promise<BooksPage> {
   const params = new URLSearchParams({
     search: query,
@@ -984,7 +986,7 @@ export async function searchBooksPage(
     is_primary_version: 'true',
   });
   if (showFailed) params.set('show_quarantined', 'true');
-  const response = await apiFetch(`${API_BASE}/audiobooks?${params}`);
+  const response = await apiFetch(`${API_BASE}/audiobooks?${params}`, { signal });
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to search books');
   }
@@ -1705,8 +1707,8 @@ export async function getWorks(): Promise<Work[]> {
 }
 
 // Import Paths
-export async function getImportPaths(): Promise<ImportPath[]> {
-  const response = await apiFetch(`${API_BASE}/import-paths`);
+export async function getImportPaths(signal?: AbortSignal): Promise<ImportPath[]> {
+  const response = await apiFetch(`${API_BASE}/import-paths`, { signal });
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to fetch import paths');
   }

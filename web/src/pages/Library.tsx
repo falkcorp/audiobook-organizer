@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.tsx
-// version: 1.77.0
+// version: 1.78.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-07-03
+// last-edited: 2026-07-11
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -652,6 +652,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     loadAudiobooks,
     loadSoftDeleted,
     clearLibraryCache,
+    cancelLoad,
   } = useLibraryQuery({
     page,
     itemsPerPage,
@@ -669,6 +670,15 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     buildFieldFilters,
     convertBook: convertApiBook,
   });
+
+  // Cancelling a slow load also clears the active tag filter — a slow tag
+  // filter is exactly the case a user is likely cancelling out of, and
+  // leaving it selected would just re-trigger the same slow query on the
+  // next render.
+  const handleCancelLoad = useCallback(() => {
+    cancelLoad();
+    handleTagFilterChange([]);
+  }, [cancelLoad, handleTagFilterChange]);
 
   const {
     selectedAudiobooks,
@@ -1874,6 +1884,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
         <LibraryBookGrid
           audiobooks={audiobooks}
           loading={loading}
+          onCancelLoad={handleCancelLoad}
           searchQuery={searchQuery}
           setSearchQuery={setSearchQuery}
           setParsedSearch={setParsedSearch}

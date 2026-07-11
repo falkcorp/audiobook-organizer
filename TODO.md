@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.90.0 -->
+<!-- version: 9.91.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-11 -->
 
@@ -149,18 +149,25 @@ remaining-work catalog, produced, adversarially judged (3 lenses × 10), brief-v
   links now navigate to `/library?reset=1`, and `Library.tsx` handles that marker *before* its
   `isInternalUpdate` echo-suppression guard so a reset request can never be silently swallowed —
   that swallow (not a missing clear-tags call) was the actual cause of "stuck" filters.
-- **Deferred, not in this fix (open follow-ups):** cancel/timeout-aware loading UX for tag
-  filters — needs re-measuring which corrected system tags are actually large enough to warrant
-  it, now that the fake giant buckets are gone; and whether system-sourced tags should still be
-  hidden from the general "Browse by Tag" cloud, now a genuine UX preference rather than a
-  required bug fix.
+- **Follow-up shipped same day:** cancel/timeout-aware loading UX for tag filters —
+  `AudiobookGrid`/`AudiobookList` now render a shared `LoadingWithCancel` component (grows a
+  "Still loading… Cancel" affordance after ~3s); `useLibraryQuery.ts` gained an `AbortController`
+  + `cancelLoad()` (`getBooks`/`searchBooksPage`/`getImportPaths` now accept a `signal`); cancel
+  also clears the active tag filter, per the original ask. Built as a general-purpose mechanism
+  independent of tag size, since real post-deploy tag-size numbers weren't available yet to
+  re-validate the original "is this still needed" question at build time.
+- **Still deferred (open follow-up):** whether system-sourced tags should be hidden from the
+  general "Browse by Tag" cloud — now a genuine UX preference rather than a required bug fix,
+  since correctly-parsed system tags render as many small correct bubbles instead of two broken
+  giant ones.
 - **Verified:** new regression tests (`TestCoverage_BookTagsColonCollision`,
   `TestCoverage_AuthorSeriesTagsColonCollision` in `internal/database/store_coverage_test.go`;
-  `Library.resetNavigation.test.tsx`) all fail against the pre-fix code and pass against the fix.
-  Backend: `go build ./...`, `go vet ./...` clean; `internal/database` green under `-race`;
-  97-package suite (excluding the pre-existing `internal/server` stall, unrelated to this change)
-  green with zero FAIL/panic/DATA RACE. Frontend: `tsc --noEmit` clean, `eslint` clean, full
-  vitest suite 54/54 files, 345/345 tests green.
+  `Library.resetNavigation.test.tsx`; `useLibraryQuery.test.ts`'s `cancelLoad` suite;
+  `LoadingWithCancel.test.tsx`) all fail against their respective pre-fix code and pass against
+  the fix. Backend: `go build ./...`, `go vet ./...` clean; `internal/database` green under
+  `-race`; 97-package suite (excluding the pre-existing `internal/server` stall, unrelated to
+  this change) green with zero FAIL/panic/DATA RACE. Frontend: `tsc --noEmit` clean, `eslint`
+  clean, full vitest suite green (55/55 files, 351/351 tests after the loading-UX follow-up).
 
 ## ✅ RESOLVED — CreateOrganizedVersion original-book slim-writeback wiped Author/Series (STOREFID W5d-1, 2026-07-07; CONFIRMED 2026-07-11 by #1887; FIXED 2026-07-11)
 

@@ -1,6 +1,7 @@
 // file: web/src/components/layout/Sidebar.tsx
-// version: 1.13.0
+// version: 1.14.0
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
+// last-edited: 2026-07-11
 
 import { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';

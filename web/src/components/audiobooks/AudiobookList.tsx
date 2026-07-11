@@ -1,7 +1,7 @@
 // file: web/src/components/audiobooks/AudiobookList.tsx
-// version: 2.7.1
+// version: 2.8.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-05-20
+// last-edited: 2026-07-11
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -41,10 +41,12 @@ import type { Audiobook, BookFile, FilterOptions } from '../../types';
 import { type ColumnDefinition, getDefaultVisibleColumns } from '../../config/columnDefinitions';
 import * as api from '../../services/api';
 import type { QuickQueryItem } from '../../services/api';
+import { LoadingWithCancel } from './LoadingWithCancel';
 
 interface AudiobookListProps {
   audiobooks: Audiobook[];
   loading?: boolean;
+  onCancelLoad?: () => void;
   onEdit?: (audiobook: Audiobook) => void;
   onDelete?: (audiobook: Audiobook) => void;
   onClick?: (audiobook: Audiobook) => void;
@@ -68,6 +70,7 @@ const fallbackColumns = getDefaultVisibleColumns();
 export const AudiobookList: React.FC<AudiobookListProps> = ({
   audiobooks,
   loading = false,
+  onCancelLoad,
   onEdit,
   onDelete,
   onClick,
@@ -314,11 +317,7 @@ export const AudiobookList: React.FC<AudiobookListProps> = ({
   };
 
   if (loading) {
-    return (
-      <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
-        <CircularProgress />
-      </Box>
-    );
+    return <LoadingWithCancel onCancel={onCancelLoad} />;
   }
 
   if (audiobooks.length === 0) {
