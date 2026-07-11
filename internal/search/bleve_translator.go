@@ -1,6 +1,7 @@
 // file: internal/search/bleve_translator.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9c2a4f1d-5b3e-4f70-a7d6-2e8c0f1b9a47
+// last-edited: 2026-07-10
 //
 // AST → Bleve query translator (spec DES-1 v1.1). Walks the AST
 // produced by ParseQuery and emits a bleve/v2 query.Query suitable
@@ -252,7 +253,17 @@ func translateFreeText(n *FreeTextNode) query.Query {
 	if n.Quoted {
 		return bleve.NewMatchPhraseQuery(n.Value)
 	}
-	return bleve.NewMatchQuery(n.Value)
+	children := make([]query.Query, 0, len(textFieldBoosts)+1)
+	for _, fb := range textFieldBoosts {
+		mq := bleve.NewMatchQuery(n.Value)
+		mq.SetField(fb.Field)
+		mq.SetBoost(fb.Boost)
+		children = append(children, mq)
+	}
+	// Unfielded child preserves recall: anything that matched via _all
+	// before (tags, genre, isbn text) still matches, at neutral weight.
+	children = append(children, bleve.NewMatchQuery(n.Value))
+	return bleve.NewDisjunctionQuery(children...)
 }
 
 // buildNumericRange constructs a NumericRangeQuery for the given
