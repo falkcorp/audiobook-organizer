@@ -1,7 +1,7 @@
 // file: internal/database/iface_book.go
-// version: 2.10.0
+// version: 2.11.0
 // guid: 668ec5a2-f8d9-4fdb-b0d5-09937b5d83ea
-// last-edited: 2026-07-07
+// last-edited: 2026-07-10
 
 package database
 
@@ -26,6 +26,11 @@ type UpdateBookRatingRequest struct {
 // read books. See spec 2026-04-17-store-interface-segregation-design.md.
 type BookReader interface {
 	GetBookByID(id string) (*Book, error)
+	// GetBooksByIDs returns the full Book rows for ids, preserving input
+	// order and silently skipping IDs that do not resolve (mirrors
+	// GetBookByID's nil-on-not-found). Full fidelity: reads the complete
+	// book:<id> row — heavy fields (AcoustIDFingerprint etc.) intact.
+	GetBooksByIDs(ids []string) ([]Book, error)
 	// GetAllBooksCore is Core-typed (STOREFID W5a/W5z): the return type is
 	// BookCore, not Book, so the nine heavy fields (Description,
 	// VersionNotes, BookSigV1, BookSigV1Mask, BookSigSegments,
