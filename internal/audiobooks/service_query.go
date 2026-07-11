@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
-// last-edited: 2026-07-10
+// last-edited: 2026-07-11
 
 package audiobooks
 

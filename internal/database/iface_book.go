@@ -1,7 +1,7 @@
 // file: internal/database/iface_book.go
-// version: 2.11.0
+// version: 2.11.1
 // guid: 668ec5a2-f8d9-4fdb-b0d5-09937b5d83ea
-// last-edited: 2026-07-10
+// last-edited: 2026-07-11
 
 package database
 
