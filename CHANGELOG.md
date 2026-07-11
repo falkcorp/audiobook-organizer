@@ -1,13 +1,77 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.135.0 -->
+<!-- version: 3.136.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
-<!-- last-edited: 2026-07-10 -->
+<!-- last-edited: 2026-07-11 -->
 
 # Changelog
 
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 11, 2026 - perf(search): batch-hydrate Bleve hits with GetBooksByIDs (INIT-4 T03, #1882)
+
+- **`search`** — replaced the per-hit `GetBookByID` loop in `searchWithBleve` with a single
+  order-preserving, skip-missing `BookReader.GetBooksByIDs` batch getter, so a Bleve search page
+  hydrates in one store round-trip instead of N. Full-fidelity: the batch getter returns the same
+  shape of `Book` as the old per-hit path, just fetched together. Fail-open at the call site — if
+  the batch getter errors, the code warns and returns a partial page rather than failing the whole
+  request; a single bad row can no longer sink an entire search response.
+- Six mock consumers rippled by the interface addition were hand-fixed, and the `database` mocks
+  were regenerated via the pinned mockery v3.7.1 (per the repo's mockery-version-drift note —
+  scoped regen, not an unscoped `mockery` run).
+
+#### July 11, 2026 - perf(dedup): shard full-scan emit() mutex; move book lookups off the pair lock (INIT-2 T05, CONC-3, #1883)
+
+- **`dedup`** — replaced the single global `emit()` mutex in the full-scan path with 16-way FNV-1a
+  pair-key sharding, preserving the existing per-pair check-then-set atomicity (two workers can
+  never double-emit the same pair) while letting unrelated pairs proceed on different shards
+  concurrently. Per-book cache lookups were moved onto their own separate mutex with
+  double-checked locking, so no lock is held across store reads/writes anymore. The drop counter
+  is now atomic instead of mutex-guarded.
+- Verified under `-race` with dedicated concurrency tests. This was CONC-3 from the
+  concurrency-parallelization sweep audit and, together with #1881 (INIT-2 T03), completes both of
+  INIT-2's `internal/dedup/engine.go` tasks for this wave — unblocking Phase B (INIT-1 T08 and
+  INIT-4 T05, both of which rebase on this file).
+
+#### July 11, 2026 - fix(dedup): drain-gate parity with upsertExactCandidate + drain flag v2 (INIT-2 T03, #1512, #1881)
+
+- **`dedup`** — added the missing `non_primary_version` gate to
+  `DrainStaleCandidates.classifyStaleCandidate` so its guard chain now mirrors the
+  `upsertExactCandidate` chokepoint gate-for-gate instead of drifting from it. Bumped the drain
+  done-flag v1 → v2 so a prior partial/stale drain run doesn't get silently treated as complete
+  under the new gate logic.
+- Code + tests only — the actual prod drain run stays the separate, human-gated TASK-06; nothing
+  here touches production data.
+
+#### July 11, 2026 - refactor(sdk): break sdkguard violations via decorator inversion + type move (INIT-9 T03, #1795, #1880)
+
+- **`sdk`** — broke both forbidden `pkg/plugin/sdk` dependency chains without touching `sdk`
+  itself. Added `Registry.SetRunContextDecorator`, wired to `logger.WithOperation` in
+  `registry_wire.go`, which preserves the existing SLOG op-ID correlation while inverting the
+  dependency direction. Moved `UnifiedDedupScore`/`Signal`/`SignalKind` out of
+  `internal/dedup/unified` into a new neutral `internal/models` package, leaving type aliases
+  behind in `internal/dedup/unified` so existing call sites keep compiling unchanged.
+- `make sdkguard` is now green on `main` (was red). Closes the `SDKGUARD-VIOLATION` item in
+  TODO.md.
+
+#### July 11, 2026 - feat(config): extract metadata scoring literals into MetadataScoringConfig (INIT-3 T02, #1879)
+
+- **`config`** — extracted 13 hardcoded metadata-scoring literals into a new
+  `MetadataScoringConfig` struct. Behavior-preserving by construction: the struct's defaults equal
+  today's literals, proven by unchanged golden fixtures across the metadata-matching scorer. The
+  resolver that reads the config fails open — on a zero-value or malformed config it falls back to
+  the legacy hardcoded literals rather than silently scoring with zeros.
+
+#### July 11, 2026 - perf(dedup): status secondary index over candidates; named both_unmatched ceiling (INIT-2 T04, #1878)
+
+- **`dedup`** — added a `dedup:s:` status secondary index (status/band/similarity) over dedup
+  candidates in `internal/database/embedding_store.go`, plus a new
+  `dedup.build-candidate-status-index` op built on the existing `registry.RunItems` worker-pool
+  pattern (no new sequential loop). The indexed `ListCandidates` path is flag-gated, and the
+  backfill op writes only rebuildable index rows — it was not run against prod as part of this
+  change.
+- Also names the previously-magic `both_unmatched` ceiling constant used in candidate banding.
 
 #### July 10, 2026 - fix(server): enroll all four cache warmers in bgWG with shutdown skip (#1794)
 
