@@ -1,6 +1,6 @@
 // file: internal/database/embedding_store.go
-// version: 2.6.0
-// last-edited: 2026-07-07
+// version: 2.7.1
+// last-edited: 2026-07-11
 // guid: 7c4a9b2e-d831-4f5c-a07e-3b8d6e1f9c42
 
 package database
@@ -77,15 +77,17 @@ func init() {
 //	dedup:r:<id16hex>               → candRec JSON      (dedup candidate)
 //	dedup:p:<type>:<aID>:<bID>      → id16hex           (pair uniqueness index)
 //	dedup:e:<type>:<entityID>:<id16hex> → empty         (entity secondary index — both sides)
+//	dedup:s:<status>:<id16hex>      → empty             (status secondary index, INIT-2 T4)
 //	dedup:seq                       → [8]byte LE int64  (auto-increment counter)
 //	dedup:label:<id16hex>           → LabeledExample JSON   (dataset labels)
 const (
-	embVecPfx      = "emb:v:"
-	embCachePfx    = "emb:c:"
-	dedupRecPfx    = "dedup:r:"
-	dedupPairPfx   = "dedup:p:"
-	dedupEntityPfx = "dedup:e:"
-	dedupSeqKey    = "dedup:seq"
+	embVecPfx         = "emb:v:"
+	embCachePfx       = "emb:c:"
+	dedupRecPfx       = "dedup:r:"
+	dedupPairPfx      = "dedup:p:"
+	dedupEntityPfx    = "dedup:e:"
+	dedupStatusIdxPfx = "dedup:s:"
+	dedupSeqKey       = "dedup:seq"
 )
 
 // embRec is the stored value for a vector embedding.
@@ -440,6 +442,14 @@ func dedupEntityKey(entityType, entityID string, id int64) []byte {
 	return []byte(fmt.Sprintf("%s%s:%s:%016x", dedupEntityPfx, entityType, entityID, id))
 }
 
+// dedupStatusIdxKey builds a presence-only secondary-index key for a
+// candidate's status (INIT-2 T4), mirroring dedupEntityKey's %016x id
+// encoding. Prefix-scanning "dedup:s:<status>:" yields every candidate ID
+// with that status in O(k), instead of ListCandidates' full dedup:r: scan.
+func dedupStatusIdxKey(status string, id int64) []byte {
+	return []byte(fmt.Sprintf("%s%s:%016x", dedupStatusIdxPfx, status, id))
+}
+
 // nextID reads and increments the sequential counter. Must be called with s.mu held.
 // The new counter value is written into the supplied batch so counter + record land atomically.
 func (s *EmbeddingStore) nextID(b *pebble.Batch) (int64, error) {
@@ -560,6 +570,10 @@ func (s *EmbeddingStore) UpsertCandidateNew(c DedupCandidate) (id int64, isNew b
 		if err := b.Set(dedupEntityKey(c.EntityType, c.EntityBID, id), nil, nil); err != nil {
 			return 0, false, err
 		}
+		// Status secondary index (INIT-2 T4) — same batch, no new commit.
+		if err := b.Set(dedupStatusIdxKey(rec.Status, id), nil, nil); err != nil {
+			return 0, false, err
+		}
 		if err := b.Commit(candidateWriteOpts); err != nil { // NoSync — see candidateWriteOpts (#19)
 			return 0, false, err
 		}
@@ -617,6 +631,7 @@ func (s *EmbeddingStore) UpsertCandidateNew(c DedupCandidate) (id int64, isNew b
 	if c.LLMReason != "" {
 		existing.LLMReason = c.LLMReason
 	}
+	oldStatus := existing.Status
 	existing.Status = c.Status
 	existing.UpdatedAt = now
 
@@ -634,10 +649,93 @@ func (s *EmbeddingStore) UpsertCandidateNew(c DedupCandidate) (id int64, isNew b
 	if err := b.Set(dedupEntityKey(existing.EntityType, existing.EntityBID, id), nil, nil); err != nil {
 		return 0, false, err
 	}
+	// Status secondary index (INIT-2 T4) — this update branch can change
+	// Status, so drop the old-status row (when it actually changed) and
+	// ensure the current-status row exists. Same batch, no new commit.
+	if oldStatus != "" && oldStatus != existing.Status {
+		if err := b.Delete(dedupStatusIdxKey(oldStatus, id), nil); err != nil {
+			return 0, false, err
+		}
+	}
+	if err := b.Set(dedupStatusIdxKey(existing.Status, id), nil, nil); err != nil {
+		return 0, false, err
+	}
 	if err := b.Commit(candidateWriteOpts); err != nil { // NoSync — see candidateWriteOpts (#19)
 		return 0, false, err
 	}
 	return id, false, nil
+}
+
+// dedupCandidateStatusIndexBuiltFlagKey is stored in Settings when the
+// dedup.build-candidate-status-index backfill op completes (INIT-2 T4). The
+// v1 suffix lets us force a re-run by bumping to v2. Mirrors
+// isbnIndexBuiltFlagKey's naming convention (pebble_store_isbn_index.go).
+//
+// EmbeddingStore reads/writes this directly via the same "setting:" key
+// namespace + JSON Setting{} schema that PebbleStore.GetSetting/SetSetting
+// use (settings.go) — both structs wrap the SAME underlying *pebble.DB
+// (see NewEmbeddingStore), so this is not a second settings mechanism, just
+// a second Go-level accessor for the identical physical rows.
+const dedupCandidateStatusIndexBuiltFlagKey = "dedup_candidate_status_index_v1_done"
+
+// IsCandidateStatusIndexBuilt reports whether the
+// dedup.build-candidate-status-index backfill op has completed. ListCandidates
+// gates its indexed read path on this flag; an unbuilt index falls back to
+// today's full dedup:r: scan (fail-open — no candidate can ever be silently
+// dropped by an incomplete index).
+func (s *EmbeddingStore) IsCandidateStatusIndexBuilt() bool {
+	if err := s.checkClosed(); err != nil {
+		return false
+	}
+	data, closer, err := s.db.Get([]byte("setting:" + dedupCandidateStatusIndexBuiltFlagKey))
+	if err != nil {
+		return false // ErrNotFound or any other error — fail open to the full scan.
+	}
+	defer closer.Close()
+	var setting Setting
+	if err := json.Unmarshal(data, &setting); err != nil {
+		return false
+	}
+	return setting.Value == "true"
+}
+
+// SetCandidateStatusIndexBuilt marks the status-index backfill complete.
+// Called by the dedup.build-candidate-status-index op when its full scan
+// finishes.
+func (s *EmbeddingStore) SetCandidateStatusIndexBuilt() error {
+	if err := s.checkClosed(); err != nil {
+		return err
+	}
+	setting := Setting{Key: dedupCandidateStatusIndexBuiltFlagKey, Value: "true", Type: "bool"}
+	data, err := json.Marshal(setting)
+	if err != nil {
+		return fmt.Errorf("marshal candidate status index flag: %w", err)
+	}
+	return s.db.Set([]byte("setting:"+dedupCandidateStatusIndexBuiltFlagKey), data, pebble.Sync)
+}
+
+// WriteCandidateStatusIndexRow writes a single "dedup:s:" presence-only
+// index row for a candidate (INIT-2 T4). Used only by the
+// dedup.build-candidate-status-index backfill op to populate the index for
+// rows that predate the write-path maintenance added to
+// UpsertCandidateNew/UpdateCandidateStatus/DeleteCandidate. Idempotent —
+// re-writing the same (status, id) pair is a harmless no-op set.
+//
+// Uses candidateWriteOpts (NoSync) rather than a shared batch — see its doc
+// comment (PR #1855 / issue #19): the backfill op fans this out over a
+// bounded worker pool (registry.RunItems), and each call here is an
+// independent single-key Pebble write, so there is no shared batch/lock to
+// serialize workers behind a per-row fsync. A blank status is a no-op
+// (a candidate can never legitimately have an empty status — UpsertCandidateNew
+// defaults it to "pending" — so this only guards against corrupt/legacy rows).
+func (s *EmbeddingStore) WriteCandidateStatusIndexRow(id int64, status string) error {
+	if err := s.checkClosed(); err != nil {
+		return err
+	}
+	if status == "" {
+		return nil
+	}
+	return s.db.Set(dedupStatusIdxKey(status, id), nil, candidateWriteOpts)
 }
 
 // GetCandidateByID retrieves a single candidate by its ID.
@@ -662,10 +760,30 @@ func (s *EmbeddingStore) GetCandidateByID(id int64) (*DedupCandidate, error) {
 
 // ListCandidates returns a paginated list of dedup candidates matching the filter
 // along with the total count of matching rows.
+//
+// Fallback semantics (INIT-2 T4): when the "dedup:s:" status index has not
+// finished building (IsCandidateStatusIndexBuilt() == false) OR the caller
+// did not set a status filter, this is BYTE-FOR-BYTE today's full dedup:r:
+// scan — the flag/filter combination fails open, never closed, so no
+// candidate can ever be silently dropped by an incomplete index. Only when
+// the flag is set AND f.Status != "" does it switch to the indexed path:
+// prefix-scan "dedup:s:<status>:", point-read each dedup:r: record, apply
+// the REMAINING filters in Go, then the same sort + pagination tail. A
+// dangling index row (record missing) is skipped silently, never an error.
 func (s *EmbeddingStore) ListCandidates(f CandidateFilter) ([]DedupCandidate, int, error) {
 	if err := s.checkClosed(); err != nil {
 		return nil, 0, err
 	}
+
+	if f.Status != "" && s.IsCandidateStatusIndexBuilt() {
+		all, err := s.listCandidatesByStatusIndex(f)
+		if err != nil {
+			return nil, 0, err
+		}
+		page, total := paginateCandidates(all, f)
+		return page, total, nil
+	}
+
 	prefix := []byte(dedupRecPfx)
 	upper := prefixUpperBound(prefix)
 
@@ -687,23 +805,7 @@ func (s *EmbeddingStore) ListCandidates(f CandidateFilter) ([]DedupCandidate, in
 			continue
 		}
 		c := candRecToCandidate(id, rec)
-
-		if f.EntityType != "" && c.EntityType != f.EntityType {
-			continue
-		}
-		if f.Status != "" && c.Status != f.Status {
-			continue
-		}
-		if f.Layer != "" && c.Layer != f.Layer {
-			continue
-		}
-		if f.MinSimilarity != nil && (c.Similarity == nil || *c.Similarity < *f.MinSimilarity) {
-			continue
-		}
-		if f.MaxSimilarity != nil && (c.Similarity == nil || *c.Similarity > *f.MaxSimilarity) {
-			continue
-		}
-		if f.Band != "" && c.Band != f.Band {
+		if !matchesCandidateFilter(c, f, true) {
 			continue
 		}
 		all = append(all, c)
@@ -712,7 +814,96 @@ func (s *EmbeddingStore) ListCandidates(f CandidateFilter) ([]DedupCandidate, in
 		return nil, 0, fmt.Errorf("list candidates scan: %w", err)
 	}
 
-	// Sort by similarity descending (mirrors SQL ORDER BY COALESCE(similarity,0) DESC).
+	page, total := paginateCandidates(all, f)
+	return page, total, nil
+}
+
+// listCandidatesByStatusIndex is the indexed read path: prefix-scan
+// "dedup:s:<f.Status>:" for candidate IDs, point-read each dedup:r: record,
+// and apply every filter EXCEPT Status (already satisfied by the index scan)
+// in Go. A dangling index row (dedup:r: record missing — e.g. a delete that
+// raced the read) is skipped silently rather than treated as an error.
+func (s *EmbeddingStore) listCandidatesByStatusIndex(f CandidateFilter) ([]DedupCandidate, error) {
+	prefix := dedupStatusIdxKey(f.Status, 0)
+	prefix = prefix[:len(prefix)-16] // strip the %016x id suffix, keep "dedup:s:<status>:"
+	upper := prefixUpperBound(prefix)
+
+	iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: upper})
+	if err != nil {
+		return nil, fmt.Errorf("list candidates by status index: %w", err)
+	}
+	defer iter.Close()
+
+	var all []DedupCandidate
+	for iter.First(); iter.Valid(); iter.Next() {
+		idHex := string(iter.Key()[len(prefix):])
+		id, err := strconv.ParseInt(idHex, 16, 64)
+		if err != nil {
+			continue
+		}
+		val, closer, err := s.db.Get(dedupRecKey(id))
+		if err == pebble.ErrNotFound {
+			continue // dangling index row — tolerated, never an error.
+		}
+		if err != nil {
+			return nil, fmt.Errorf("list candidates by status index fetch %d: %w", id, err)
+		}
+		var rec candRec
+		unmarshalErr := json.Unmarshal(val, &rec)
+		closer.Close()
+		if unmarshalErr != nil {
+			continue
+		}
+		c := candRecToCandidate(id, rec)
+		// Status is already guaranteed by the index scan; still re-check so a
+		// stale/dangling row pointing at a record whose status has since
+		// changed (write raced the read) cannot leak into the result.
+		if c.Status != f.Status {
+			continue
+		}
+		if !matchesCandidateFilter(c, f, false) {
+			continue
+		}
+		all = append(all, c)
+	}
+	if err := iter.Error(); err != nil {
+		return nil, fmt.Errorf("list candidates by status index scan: %w", err)
+	}
+	return all, nil
+}
+
+// matchesCandidateFilter applies CandidateFilter's fields to c. When
+// checkStatus is false, the Status field is assumed already satisfied (the
+// indexed read path pre-filtered by status via the prefix scan) and is
+// skipped here.
+func matchesCandidateFilter(c DedupCandidate, f CandidateFilter, checkStatus bool) bool {
+	if f.EntityType != "" && c.EntityType != f.EntityType {
+		return false
+	}
+	if checkStatus && f.Status != "" && c.Status != f.Status {
+		return false
+	}
+	if f.Layer != "" && c.Layer != f.Layer {
+		return false
+	}
+	if f.MinSimilarity != nil && (c.Similarity == nil || *c.Similarity < *f.MinSimilarity) {
+		return false
+	}
+	if f.MaxSimilarity != nil && (c.Similarity == nil || *c.Similarity > *f.MaxSimilarity) {
+		return false
+	}
+	if f.Band != "" && c.Band != f.Band {
+		return false
+	}
+	return true
+}
+
+// paginateCandidates sorts by similarity descending (mirrors SQL ORDER BY
+// COALESCE(similarity,0) DESC) and applies f.Limit/f.Offset, returning the
+// page plus the total matching count. Shared by both the full-scan and
+// indexed ListCandidates read paths so pagination stays byte-for-byte
+// identical between them.
+func paginateCandidates(all []DedupCandidate, f CandidateFilter) ([]DedupCandidate, int) {
 	sort.Slice(all, func(i, j int) bool {
 		si, sj := 0.0, 0.0
 		if all[i].Similarity != nil {
@@ -737,7 +928,7 @@ func (s *EmbeddingStore) ListCandidates(f CandidateFilter) ([]DedupCandidate, in
 	if end > total {
 		end = total
 	}
-	return all[start:end], total, nil
+	return all[start:end], total
 }
 
 // ListCandidatesForEntity returns all dedup candidates that involve the given
@@ -832,11 +1023,54 @@ func (s *EmbeddingStore) BackfillEntityIndex() (int, error) {
 }
 
 // UpdateCandidateStatus updates the status of a single candidate by ID.
+//
+// Unlike updateCandidate (used by UpdateCandidateScore/UpdateCandidateLLM,
+// neither of which touches Status), this maintains the "dedup:s:" status
+// secondary index (INIT-2 T4): the old-status row is deleted and the
+// new-status row is set in the SAME pebble.Batch as the record write, using
+// candidateWriteOpts (NoSync — see PR #1855 / candidateWriteOpts doc). No new
+// lock, no new commit beyond the single write this function already made.
 func (s *EmbeddingStore) UpdateCandidateStatus(id int64, status string) error {
-	return s.updateCandidate(id, func(rec *candRec) {
-		rec.Status = status
-		rec.UpdatedAt = time.Now().UnixNano()
-	})
+	if err := s.checkClosed(); err != nil {
+		return err
+	}
+	val, closer, err := s.db.Get(dedupRecKey(id))
+	if err == pebble.ErrNotFound {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("update candidate status read %d: %w", id, err)
+	}
+	var rec candRec
+	if err := json.Unmarshal(val, &rec); err != nil {
+		closer.Close()
+		return fmt.Errorf("update candidate status unmarshal %d: %w", id, err)
+	}
+	closer.Close()
+
+	oldStatus := rec.Status
+	rec.Status = status
+	rec.UpdatedAt = time.Now().UnixNano()
+
+	data, err := json.Marshal(rec)
+	if err != nil {
+		return fmt.Errorf("update candidate status marshal %d: %w", id, err)
+	}
+
+	b := s.db.NewBatch()
+	defer b.Close()
+	if err := b.Set(dedupRecKey(id), data, nil); err != nil {
+		return err
+	}
+	if oldStatus != "" && oldStatus != status {
+		if err := b.Delete(dedupStatusIdxKey(oldStatus, id), nil); err != nil {
+			return err
+		}
+	}
+	if err := b.Set(dedupStatusIdxKey(status, id), nil, nil); err != nil {
+		return err
+	}
+	return b.Commit(candidateWriteOpts) // NoSync — see candidateWriteOpts (#19)
 }
 
 // UpdateCandidateScore persists a new ScoreBreakdown, Band, and
@@ -908,7 +1142,8 @@ func (s *EmbeddingStore) DeleteCandidate(id int64) error {
 	_ = b.Delete(dedupPairKey(rec.EntityType, rec.EntityAID, rec.EntityBID), nil)
 	_ = b.Delete(dedupEntityKey(rec.EntityType, rec.EntityAID, id), nil)
 	_ = b.Delete(dedupEntityKey(rec.EntityType, rec.EntityBID, id), nil)
-	return b.Commit(candidateWriteOpts) // NoSync — see candidateWriteOpts (#19)
+	_ = b.Delete(dedupStatusIdxKey(rec.Status, id), nil) // INIT-2 T4
+	return b.Commit(candidateWriteOpts)                  // NoSync — see candidateWriteOpts (#19)
 }
 
 // MarkCandidatesAsMergedForEntity sets status="merged" on every candidate row

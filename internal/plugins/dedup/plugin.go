@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/plugin.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: d1e2f3a4-b5c6-7890-abcd-ef1234567890
-// last-edited: 2026-07-08
+// last-edited: 2026-07-11
 
 // Package dedup is the UOS plugin for deduplication operations.
 // It wraps the internal dedup.Engine and registers OperationDefs through
@@ -79,6 +79,7 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.autoResolveDef(),                   // TASK-17: Tier-1 CERTAIN auto-merge (dry-run default, kill-switch gated)
 		p.cleanupOrphanEmbeddingsDef(),       // retroactive counterpart to #1802: deletes emb:v:book:* rows whose book is gone
 		p.cleanupOrphanAuthorEmbeddingsDef(), // author-side counterpart: deletes emb:v:author:* rows orphaned by a merge/delete (#1866 follow-up)
+		p.buildCandidateStatusIndexDef(),     // INIT-2 T4: dedup:s: status secondary index backfill over dedup candidates
 	}
 
 	for _, op := range ops {

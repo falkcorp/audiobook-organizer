@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/handler.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: d1b9e024-d28c-4d62-8f90-96d7064559c4
-// last-edited: 2026-07-02
+// last-edited: 2026-07-11
 
 // Package deduphandler hosts the dedup-domain HTTP handlers extracted from the
 // server package: dedup candidate / cluster / series listing, merge / dismiss /
@@ -44,6 +44,16 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	"github.com/gin-gonic/gin"
 )
+
+// bothUnmatchedScanLimit is the ceiling ≥ the max candidate population;
+// ListCandidates treats limit <= 0 as 50, so this must never be removed or
+// set below the population — see spec §C4. The both_unmatched triage view
+// filters on the Book side (which book has matched metadata), a signal the
+// store cannot pre-filter on, so the handler must fetch the whole
+// status/layer-filtered candidate set and filter + paginate in-handler
+// (see the both_unmatched handling below); 1_000_000 comfortably exceeds
+// the ~387k pending pre-drain candidate population.
+const bothUnmatchedScanLimit = 1_000_000
 
 // Handler hosts the dedup-domain HTTP endpoints.
 type Handler struct {
@@ -172,7 +182,7 @@ func (h *Handler) ListDedupCandidates(c *gin.Context) {
 	if bothUnmatched {
 		// Fetch everything matching the base filter; the store scans the whole
 		// candidate table regardless, so this only widens the returned slice.
-		filter.Limit = 1_000_000
+		filter.Limit = bothUnmatchedScanLimit
 		filter.Offset = 0
 	} else {
 		filter.Limit = limit
