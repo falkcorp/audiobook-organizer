@@ -1,5 +1,5 @@
 // file: internal/database/embedding_store.go
-// version: 2.7.1
+// version: 2.7.2
 // last-edited: 2026-07-11
 // guid: 7c4a9b2e-d831-4f5c-a07e-3b8d6e1f9c42
 
@@ -17,8 +17,8 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
-	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
+	"github.com/falkcorp/audiobook-organizer/internal/models"
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -119,9 +119,9 @@ type candRec struct {
 
 	// Unified scoring fields (T015, SPEC 1 §3). All omitempty so pre-T015
 	// rows round-trip without growing their stored size.
-	ScoreBreakdown *unified.UnifiedDedupScore `json:"sb,omitempty"`
-	Band           string                     `json:"band,omitempty"`
-	FormulaVersion string                     `json:"fv,omitempty"`
+	ScoreBreakdown *models.UnifiedDedupScore `json:"sb,omitempty"`
+	Band           string                    `json:"band,omitempty"`
+	FormulaVersion string                    `json:"fv,omitempty"`
 }
 
 // Embedding holds a vector embedding for a single entity.
@@ -160,9 +160,9 @@ type DedupCandidate struct {
 	UpdatedAt  time.Time `json:"updated_at"`
 
 	// Unified scoring fields (T015, SPEC 1 §3). Nil/empty on pre-T015 rows.
-	ScoreBreakdown *unified.UnifiedDedupScore `json:"score_breakdown,omitempty"`
-	Band           string                     `json:"band,omitempty"`
-	FormulaVersion string                     `json:"formula_version,omitempty"`
+	ScoreBreakdown *models.UnifiedDedupScore `json:"score_breakdown,omitempty"`
+	Band           string                    `json:"band,omitempty"`
+	FormulaVersion string                    `json:"formula_version,omitempty"`
 }
 
 // CandidateFilter controls ListCandidates queries.
@@ -1076,7 +1076,7 @@ func (s *EmbeddingStore) UpdateCandidateStatus(id int64, status string) error {
 // UpdateCandidateScore persists a new ScoreBreakdown, Band, and
 // FormulaVersion onto an existing candidate. Called by Engine.Rescore
 // when apply=true to commit re-computed scores without re-collecting signals.
-func (s *EmbeddingStore) UpdateCandidateScore(id int64, score *unified.UnifiedDedupScore, band, formulaVersion string) error {
+func (s *EmbeddingStore) UpdateCandidateScore(id int64, score *models.UnifiedDedupScore, band, formulaVersion string) error {
 	return s.updateCandidate(id, func(rec *candRec) {
 		rec.ScoreBreakdown = score
 		rec.Band = band

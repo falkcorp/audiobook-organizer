@@ -1,7 +1,7 @@
 // file: internal/operations/registry/worker.go
-// version: 2.9.0
+// version: 2.10.1
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-07-03
+// last-edited: 2026-07-11
 
 package registry
 
@@ -15,7 +15,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -153,8 +152,13 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 		}
 	}
 	runCtx, cancel := context.WithTimeout(parentCtx, timeout)
-	// Install a context-bound slog.Logger that tags every line with the operation id.
-	runCtx = logger.WithOperation(runCtx, qr.opID)
+	// Decorate the run context (e.g. install a context-bound slog.Logger that
+	// tags every line with the operation id) via the optional decorator hook.
+	// Nil is the default when no decorator was wired via
+	// SetRunContextDecorator — runs proceed undecorated.
+	if r.runContextDecorator != nil {
+		runCtx = r.runContextDecorator(runCtx, qr.opID)
+	}
 	defer cancel()
 
 	// Register the handle.
