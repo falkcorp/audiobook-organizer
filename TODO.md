@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.85.0 -->
+<!-- version: 9.86.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-11 -->
 
@@ -39,7 +39,7 @@ remaining-work catalog, produced, adversarially judged (3 lenses × 10), brief-v
 - Prod-data mutations (INIT-1 T7, INIT-2 T3/T6 drains, INIT-10 C8) are dry-run →
   AskUserQuestion gated in the briefs.
 
-### ✅ Execution Wave 1 + Wave 2 shipped (2026-07-10/11) — 11/50 tasks merged
+### ✅ Execution Wave 1 + Wave 2 + Wave 2b shipped (2026-07-10/11) — 15/50 tasks merged
 
 - **Wave 1 (5 PRs, #1871–#1875, merged 2026-07-10):** see
   [`docs/status/2026-07-10-execution-wave1-executive-summary.md`](docs/status/2026-07-10-execution-wave1-executive-summary.md).
@@ -55,10 +55,29 @@ remaining-work catalog, produced, adversarially judged (3 lenses × 10), brief-v
     (#1883).
   - **INIT-2's `internal/dedup/engine.go` tasks (T03 + T05) are both merged**, which unblocks
     Phase B: INIT-1 TASK-08 and INIT-4 TASK-05 (both rebase on that file) can now start.
-- **REMAINING: 39** of the 50-brief catalog across INIT-1..10 (11 shipped across the two waves;
-  39 not started), plus Phase B/C follow-ups.
+- **Wave 2b (4 PRs, #1885–#1888, merged 2026-07-11):** see
+  [`docs/status/2026-07-11-execution-wave2b-executive-summary.md`](docs/status/2026-07-11-execution-wave2b-executive-summary.md).
+  - [x] INIT-4 T05 — move boilerplate title blocklist to config-extendable module (#1885).
+  - [x] INIT-9 T04 — quote mock-freshness pathspec so nested mocks dirs are checked (#1886) — see
+    follow-up B below (Makefile has the same unfixed bug).
+  - [x] INIT-9 T07 — verify Author/Series fate in `CreateOrganizedVersion` write-back (#1887) —
+    **test-only; confirmed a real HIGH prod-data-loss bug, see the "🔴 HIGH — PROD DATA-LOSS"
+    section above.** Does not fix it.
+  - [x] INIT-4 T04 — Bleve facet counts for genres/languages/tags (#1888).
+  - **INIT-4 is now 5/6** (T01–T05 shipped across Wave 1/Wave 2/Wave 2b; only T06 heavy-filter
+    perf-pushdown remains — review-critical since it touches search query construction).
+- **REMAINING: 35** of the 50-brief catalog across INIT-1..10 (15 shipped across the three
+  waves; 35 not started), plus Phase B/C follow-ups, plus the two Wave-2b follow-ups below.
 - **BLOCKED: 3** — INIT-5 T2 (needs Deluge-spike sign-off), INIT-9 REPO-SIZE-1
   (STOP-FOR-HUMAN plan review), INIT-7 (held on #1260–#1265).
+- **Wave 2b follow-ups (new, open, not yet fixed):**
+  - **A.** 🔴 HIGH prod data-loss — see the dedicated section above
+    ("CreateOrganizedVersion original-book slim-writeback wipes Author/Series").
+  - **B.** `Makefile` lines ~212/214 (`mocks-check` target) use the identical unquoted
+    `internal/*/mocks/` pathspec that #1886 just fixed in `.github/workflows/ci.yml` — it
+    currently passes only because all committed mocks happen to be fresh, not because the glob is
+    correct. Quote it the same way: `:(glob)internal/**/mocks/**`. Low-risk, mechanical,
+    good next-wave candidate.
 
 ---
 
@@ -101,31 +120,40 @@ remaining-work catalog, produced, adversarially judged (3 lenses × 10), brief-v
 
 ---
 
-## 🟠 CreateOrganizedVersion original-book slim-writeback (Author/Series) — follow-up (STOREFID W5d-1, 2026-07-07)
+## 🔴 HIGH — PROD DATA-LOSS: CreateOrganizedVersion original-book slim-writeback wipes Author/Series (STOREFID W5d-1, 2026-07-07; CONFIRMED 2026-07-11 by #1887) — needs human decision
 
-- **Pre-existing latent bug** surfaced during STOREFID W5d-1 review.
-  `internal/organizer/service.go` `CreateOrganizedVersion` writes the page-sourced
-  *original* book back with the version-group / non-primary / `organized_source` stamp:
+- **⚠️ CONFIRMED, not just suspected, as of 2026-07-11 (#1887, INIT-9 T07).** The executable test
+  `TestCreateOrganizedVersion_AuthorSeriesSurviveOriginalWriteback`
+  (`internal/organizer/organized_version_writeback_test.go`) proves this against a real
+  `PebbleStore`, not just memdb: `t.Skipf("W5d-1 KNOWN BUG CONFIRMED")`. It will flip to a real
+  PASS once the fix below lands — use it as the acceptance test, don't write a new one.
+- **Root cause, exact locations:**
+  `PebbleStore.UpdateBook`'s STOR-1 preserve-on-nil guard
+  (`internal/database/pebble_store.go:1571-1598`) restores Description/VersionNotes/BookSig* from
+  the old row when the incoming value is nil, but has **no equivalent case for Author/Series**.
+  The call site at `internal/organizer/service.go:927-941` writes back a page-derived
+  (`GetAllBooksCore`→`ToBook`), heavy-field-nil `book` with the version-group / non-primary /
+  `organized_source` stamp:
   ```go
   book.VersionGroupID = &versionGroupID
   book.IsPrimaryVersion = &isNotPrimary
   book.LibraryState = &organizedSourceState
   orgSvc.db.UpdateBook(book.ID, book)   // book is GetAllBooksCore→ToBook, heavy-field-nil
   ```
-  Under prod's memdb default `book` has nil `Author`/`Series` (not STOR-1-guarded), so this
-  wipes the original's denormalized author/series. Prod behavior is unchanged by W5d-1
-  (memdb already stripped these); the `.ToBook()` in W5d-1 just makes it no longer
-  compile-visible — `GetAllBooks` was removed entirely in W5z (2026-07-07), so this is now
-  the only remaining route back to a full `Book` in this code path.
+  so the original book's denormalized Author/Series are silently wiped on every
+  `CreateOrganizedVersion` call, under the production PebbleStore backend, not just memdb.
 - **Fix must be careful:** hydrating via `GetBookByID` before the write (the usual pattern)
   preserves Author/Series BUT must NOT regress the version-group state transition to
   fail-closed — a `GetBookByID` error must still demote the original to non-primary, or the
   version group ends up with **two primaries**. So: hydrate-and-write on success, but fall
   back to the direct state write (accepting the rare Author/Series wipe) if hydrate fails —
-  i.e. fail-OPEN for the state transition, preserve-heavy-when-possible. Add a regression
-  test asserting Author survives AND the original is demoted even when GetBookByID errors.
+  i.e. fail-OPEN for the state transition, preserve-heavy-when-possible.
 - Same writeback shape as the W5d-1 organizer writebacks that DID get the `hydrateAndUpdateBook`
   helper; this one was deliberately left out pending the fail-open design above.
+- **DEFERRED TO A HUMAN.** Both the fail-open hydrate fix (a decision-carrying change to a
+  version-group state-transition invariant) and filing a tracking GitHub issue are intentionally
+  left undone by #1887 — that PR is test-only. Do not implement the fix or file the issue without
+  explicit sign-off; when approved, the fix should flip the #1887 test from SKIP to PASS.
 
 ## ✅ PR-D: deluge import fingerprint-wipe (3 impls) — RESOLVED (STOREFID W6, 2026-07-07)
 
