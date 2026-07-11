@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 1.43.0
+// version: 1.44.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-07-05
+// last-edited: 2026-07-10
 
 package server
 
@@ -695,18 +695,36 @@ func (s *Server) Start(cfg ServerConfig) error {
 
 // startCacheWarmers launches the fire-and-forget cache pre-warmers plus the
 // API-key expiry sweep. Extracted verbatim from Start as part of the SYS-2
-// decomposition; goroutine-tracking is unchanged — warmFacetsCache /
-// warmLibrarySizes / warmAuthorsCache / warmSeriesCache remain intentionally
-// untracked, while library-list-warmer and apikey-expiry-sweep stay enrolled
-// in bgWG (PR #1781 lifecycle work). Do not "promote" the untracked ones here.
+// decomposition; all four cache warmers (warmFacetsCache / warmLibrarySizes /
+// warmAuthorsCache / warmSeriesCache) are now bgWG-enrolled per #1794 (the
+// follow-up to #1781, which enrolled library-list-warmer + apikey-expiry-sweep
+// first) so a Shutdown drains every warmer before the store closes instead of
+// letting it outlive Close() and hit a closed Pebble store
+// (PEBBLE-CLOSED family). Each launch also skips on an already-canceled
+// bgCtx — a SKIP-on-shutdown guard, not a startup gate: a live bgCtx must
+// still run every warmer.
 func (s *Server) startCacheWarmers() {
 	// Pre-warm facets cache (genres/languages) - lightweight, <1 second
-	go s.warmFacetsCache()
+	s.bgWG.Add("facets-warmer")
+	go func() {
+		defer s.bgWG.Done("facets-warmer")
+		if s.bgCtx.Err() != nil {
+			return // server already shutting down — skip, never warm a closing store
+		}
+		s.warmFacetsCache()
+	}()
 	// Pre-warm library size cache via filesystem walk so any later refresh
 	// path (nightly maintenance, manual rescan) starts with current data.
 	// The hot path of /system/status reads DB stats (PR #1137); this just
 	// keeps the FS-based numbers fresh in the 24h-TTL package cache.
-	go s.warmLibrarySizes()
+	s.bgWG.Add("library-sizes-warmer")
+	go func() {
+		defer s.bgWG.Done("library-sizes-warmer")
+		if s.bgCtx.Err() != nil {
+			return // server already shutting down — skip, never warm a closing store
+		}
+		s.warmLibrarySizes()
+	}()
 	// Pre-warm the audiobook list cache after memdb is published. Fires
 	// the most common library-page queries (title asc/desc, -review:matched,
 	// library_state filter) so the user's first load doesn't pay the full
@@ -721,8 +739,22 @@ func (s *Server) startCacheWarmers() {
 		defer s.bgWG.Done("library-list-warmer")
 		s.warmAudiobookListCache()
 	}()
-	go s.warmAuthorsCache()
-	go s.warmSeriesCache()
+	s.bgWG.Add("authors-warmer")
+	go func() {
+		defer s.bgWG.Done("authors-warmer")
+		if s.bgCtx.Err() != nil {
+			return // server already shutting down — skip, never warm a closing store
+		}
+		s.warmAuthorsCache()
+	}()
+	s.bgWG.Add("series-warmer")
+	go func() {
+		defer s.bgWG.Done("series-warmer")
+		if s.bgCtx.Err() != nil {
+			return // server already shutting down — skip, never warm a closing store
+		}
+		s.warmSeriesCache()
+	}()
 
 	// Low-frequency background sweep that WARN-logs API keys approaching
 	// expiry or lacking one entirely (legacy keys) — observability only,
