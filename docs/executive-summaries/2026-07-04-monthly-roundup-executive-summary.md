@@ -1,11 +1,11 @@
 <!-- file: docs/executive-summaries/2026-07-04-monthly-roundup-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 5b0ee171-8a4f-4669-a2dd-91ffeabaa486 -->
 <!-- last-edited: 2026-07-11 -->
 
 # Executive Summary: June–July Monthly Roundup
 
-**Shipped:** PRs [#1240–#1890](https://github.com/falkcorp/audiobook-organizer/pulls?q=is%3Apr+is%3Amerged+merged%3A2026-06-05..2026-07-11), covering 2026-06-05 through 2026-07-11 (~430 merged PRs total; the July 5–11 remaining-work execution added 12: #1878–#1890)
+**Shipped:** PRs [#1240–#1893](https://github.com/falkcorp/audiobook-organizer/pulls?q=is%3Apr+is%3Amerged+merged%3A2026-06-05..2026-07-11), covering 2026-06-05 through 2026-07-11 (~430 merged PRs total; the July 5–11 remaining-work execution added 12 code/CI PRs (#1878–#1888) plus the same-day Author/Series data-loss fix, #1893)
 **Related doc:** [2026-07-03-itl-hardening-executive-summary.md](2026-07-03-itl-hardening-executive-summary.md) — full write-up of this month's iTunes library (`.itl`) write-back hardening (K13–K17), linked rather than repeated below.
 
 This is a monthly roundup rather than a single-change summary: instead of one
@@ -149,13 +149,14 @@ data before it was caught:
 - **#1431** — a routine dependency bump (a JavaScript build tool, Vite,
   version 7 to 8) crashed the entire frontend in production; reverted the
   same day it was noticed.
-- **#1887** — a confirmed production data-loss bug: creating an "organized
-  version" of a book silently erases that book's Author and Series
-  information. A test now proves this happens against the real production
-  storage engine, not just an in-memory approximation of it. The fix is
-  deliberately deferred pending a human decision on a trade-off it
-  involves; the test will flip from confirming the bug to passing once that
-  fix lands.
+- **#1887 / #1893** — a production data-loss bug: creating an "organized
+  version" of a book silently erased that book's Author and Series
+  information. A test proved this happened against the real production
+  storage engine, not just an in-memory approximation of it (#1887); the
+  fix landed the same day on explicit sign-off (#1893), fetching the full
+  book record before the write instead of a stripped-down copy, with a
+  safe fallback so a book is never left in a broken half-organized state
+  if that fetch fails.
 
 Verification note: each item above shipped with its own fix verified in
 context (tests, code review, or direct reproduction of the original bug);
@@ -553,10 +554,10 @@ noticing (#1886).
 One more result from this wave belongs in the highest-risk list above
 rather than here: a test written to settle whether a long-suspected bug was
 real confirmed that creating an "organized version" of a book silently
-erases that book's Author and Series information (#1887) — a genuine
-production data-loss bug, deliberately left unfixed pending a human
-decision on a trade-off in the correct fix, and tracked as the newest entry
-in the highest-risk list above.
+erased that book's Author and Series information (#1887) — a genuine
+production data-loss bug. It was fixed the same day (#1893): see the
+highest-risk list above for the plain-language write-up of the bug and the
+fix.
 
 Dependency updates this month (7 pull requests, entirely automated version
 bumps) had no behavior changes worth a full write-up and are noted here for
