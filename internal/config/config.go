@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.66.0
+// version: 1.67.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-07-11
 
@@ -178,6 +178,24 @@ func (c DedupConfig) ThresholdsForModel(model string) (high, low float64) {
 		return t.High, t.Low
 	}
 	return c.BookHighThreshold, c.BookLowThreshold
+}
+
+// DedupBoilerplateConfig holds extension-only additions to the compiled-in
+// publisher-boilerplate title blocklist (internal/dedup/boilerplate.go,
+// INIT-4 T5). Config entries are ALWAYS additive to the built-in
+// Audible/publisher patterns — there is intentionally no replace/override
+// field: that would let a misconfigured deployment silently drop the entire
+// compiled-in list and re-open the dedup false-positive bug the list exists
+// to prevent (spec docs/specs/2026-07-10-filtering-search-design.md Decision
+// 8). Empty (the default) is byte-identical to the pre-config hardcoded
+// behavior.
+type DedupBoilerplateConfig struct {
+	// ExtraTitlePatterns are additional exact-match boilerplate titles,
+	// appended to (never replacing) the compiled-in defaults.
+	ExtraTitlePatterns []string `json:"extra_title_patterns" mapstructure:"extra_title_patterns"`
+	// ExtraPrefixPatterns are additional anchored-prefix boilerplate
+	// patterns, appended to (never replacing) the compiled-in defaults.
+	ExtraPrefixPatterns []string `json:"extra_prefix_patterns" mapstructure:"extra_prefix_patterns"`
 }
 
 // ITunesConfig holds all settings for the iTunes sync and write-back subsystem.
@@ -496,6 +514,12 @@ type Config struct {
 
 	// Dedup holds all deduplication settings (thresholds, auto-merge, LLM model, signal bands).
 	Dedup DedupConfig `json:"dedup" mapstructure:"dedup"`
+
+	// DedupBoilerplate holds extension-only additions to the compiled-in
+	// publisher-boilerplate title blocklist (internal/dedup/boilerplate.go,
+	// INIT-4 T5). Empty (default) is byte-identical to the pre-config
+	// hardcoded behavior.
+	DedupBoilerplate DedupBoilerplateConfig `json:"dedup_boilerplate" mapstructure:"dedup_boilerplate"`
 
 	// MetadataScoring holds all AI-assisted metadata candidate scoring settings
 	// (embedding scoring, LLM rerank tier, and tag-write backup policy).
@@ -901,6 +925,12 @@ func InitConfig() {
 	viper.SetDefault("dedup.llm_auto_merge_high_confidence", false) // opt-in
 	viper.SetDefault("dedup.on_import_via_scheduler", false)        // opt-in — keep eager path until M4 confirmed
 
+	// Dedup boilerplate-blocklist extras (nested under "dedup_boilerplate.*",
+	// INIT-4 T5). Empty by default — the compiled-in blocklist in
+	// internal/dedup/boilerplate.go is always active regardless.
+	viper.SetDefault("dedup_boilerplate.extra_title_patterns", []string{})
+	viper.SetDefault("dedup_boilerplate.extra_prefix_patterns", []string{})
+
 	// Metadata candidate scoring defaults (nested under "metadata_scoring.*").
 	// BindEnv maps env vars so METADATA_SCORING_* overrides even without AutomaticEnv.
 	viper.SetDefault("metadata_scoring.embedding_enabled", false)
@@ -1181,6 +1211,13 @@ func InitConfig() {
 					BandMediumMin:  viper.GetFloat64("dedup.signals.band_medium_min"),
 					BandReviewMin:  viper.GetFloat64("dedup.signals.band_review_min"),
 				},
+			},
+
+			// Dedup boilerplate-blocklist extras (nested sub-struct, INIT-4 T5).
+			// Empty by default — see DedupBoilerplateConfig.
+			DedupBoilerplate: DedupBoilerplateConfig{
+				ExtraTitlePatterns:  viper.GetStringSlice("dedup_boilerplate.extra_title_patterns"),
+				ExtraPrefixPatterns: viper.GetStringSlice("dedup_boilerplate.extra_prefix_patterns"),
 			},
 
 			// Metadata candidate scoring + tag-write backup policy (nested sub-struct)
@@ -1625,6 +1662,14 @@ func ResetToDefaults() {
 					BandMediumMin:  75.0,
 					BandReviewMin:  60.0,
 				},
+			},
+
+			// Dedup boilerplate-blocklist extras (nested sub-struct, INIT-4 T5).
+			// Empty by default — the compiled-in blocklist in
+			// internal/dedup/boilerplate.go is always active regardless.
+			DedupBoilerplate: DedupBoilerplateConfig{
+				ExtraTitlePatterns:  nil,
+				ExtraPrefixPatterns: nil,
 			},
 
 			// Metadata candidate scoring + tag-write backup policy (nested sub-struct)
