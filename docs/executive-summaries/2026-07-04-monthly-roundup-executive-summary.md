@@ -1,4 +1,4 @@
-<!-- file: docs/status/2026-07-04-monthly-roundup-executive-summary.md -->
+<!-- file: docs/executive-summaries/2026-07-04-monthly-roundup-executive-summary.md -->
 <!-- version: 1.1.0 -->
 <!-- guid: 5b0ee171-8a4f-4669-a2dd-91ffeabaa486 -->
 <!-- last-edited: 2026-07-11 -->

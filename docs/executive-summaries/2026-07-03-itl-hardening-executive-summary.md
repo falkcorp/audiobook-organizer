@@ -1,7 +1,7 @@
-<!-- file: docs/status/2026-07-03-itl-hardening-executive-summary.md -->
+<!-- file: docs/executive-summaries/2026-07-03-itl-hardening-executive-summary.md -->
 <!-- version: 1.0.0 -->
 <!-- guid: d6272ad6-0339-46b6-af79-209576b0cf24 -->
-<!-- last-edited: 2026-07-03 -->
+<!-- last-edited: 2026-07-11 -->
 
 # Executive Summary: iTunes Library (.itl) Write-Back Hardening
 
