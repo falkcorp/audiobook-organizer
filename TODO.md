@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 9.84.0 -->
+<!-- version: 9.85.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-07-10 -->
+<!-- last-edited: 2026-07-11 -->
 
 # Project TODO
 
@@ -38,6 +38,27 @@ remaining-work catalog, produced, adversarially judged (3 lenses × 10), brief-v
   (STOP-FOR-HUMAN); INIT-9 REPO-SIZE-1 history-rewrite plan; INIT-7 hold-lift (#1260–#1265).
 - Prod-data mutations (INIT-1 T7, INIT-2 T3/T6 drains, INIT-10 C8) are dry-run →
   AskUserQuestion gated in the briefs.
+
+### ✅ Execution Wave 1 + Wave 2 shipped (2026-07-10/11) — 11/50 tasks merged
+
+- **Wave 1 (5 PRs, #1871–#1875, merged 2026-07-10):** see
+  [`docs/status/2026-07-10-execution-wave1-executive-summary.md`](docs/status/2026-07-10-execution-wave1-executive-summary.md).
+- **Wave 2 (6 PRs, #1878–#1883, merged 2026-07-11):** see
+  [`docs/status/2026-07-11-execution-wave2-executive-summary.md`](docs/status/2026-07-11-execution-wave2-executive-summary.md).
+  - [x] INIT-2 T04 — dedup candidate status secondary index (#1878).
+  - [x] INIT-3 T02 — extract metadata scoring literals into `MetadataScoringConfig` (#1879).
+  - [x] INIT-9 T03 — break sdkguard violations via decorator inversion + type move (#1880) —
+    also closes the `SDKGUARD-VIOLATION` item below.
+  - [x] INIT-2 T03 — drain-gate parity with `upsertExactCandidate` + drain flag v2 (#1881).
+  - [x] INIT-4 T03 — batch-hydrate Bleve hits with `GetBooksByIDs` (#1882).
+  - [x] INIT-2 T05 — shard full-scan `emit()` mutex; move book lookups off the pair lock, CONC-3
+    (#1883).
+  - **INIT-2's `internal/dedup/engine.go` tasks (T03 + T05) are both merged**, which unblocks
+    Phase B: INIT-1 TASK-08 and INIT-4 TASK-05 (both rebase on that file) can now start.
+- **REMAINING: 39** of the 50-brief catalog across INIT-1..10 (11 shipped across the two waves;
+  39 not started), plus Phase B/C follow-ups.
+- **BLOCKED: 3** — INIT-5 T2 (needs Deluge-spike sign-off), INIT-9 REPO-SIZE-1
+  (STOP-FOR-HUMAN plan review), INIT-7 (held on #1260–#1265).
 
 ---
 
@@ -399,6 +420,16 @@ SLOG-PROD-VERIFY, DEDUP-CANDIDATE-EXPLOSION).
 
 - 🟢 **Mock Freshness** ✅ FIXED (#1718, 2026-07-01) — pinned mockery to v3.7.1 (CI + Makefile + setup script); v2 could not generate the merged-file `.mockery.yaml`. `make mocks-check` green.
 - 🟢 `TestBackupEndpointsErrors` ✅ FIXED (#1711 — dead `os.Chdir` race removed, 20/20) · `TestScanService_MultiChapterAudiobook` ✅ FIXED (#1713 — missing `WaitForWarmup` in `SetupIntegration`, 20/20). NOTE: a *separate* pre-existing `pebble: closed` shutdown race remains under package-wide `-race` — see `PEBBLE-CLOSED-SHUTDOWN-RACE` in Open Bugs.
+- [ ] **INTERNAL-SERVER-PKG-STALL** (found 2026-07-11, during execution wave 2) — the
+  `internal/server` top-level test package intermittently stalls to the CI's 10-minute
+  `go test -short -race` timeout under concurrent CPU load, with zero `--- FAIL` lines (the run
+  just times out, it doesn't fail a specific test). Root-cause hint from observed goroutine dumps:
+  goroutines parked on a channel receive inside `FileIOPool`/Pebble/nutsdb infra, consistent with
+  a worker-pool or background-goroutine waiting on work that never arrives when the runner is
+  CPU-starved by other concurrent jobs — not a deadlock in the code under test. Reproduces on
+  pristine `main` (unrelated to any of wave 2's 6 PRs), and caused repeated CI Go Tests re-runs
+  this session before each PR went green on retry. Worth a dedicated flaky-test investigation
+  ticket rather than continuing to absorb it as CI re-run noise.
 
 ### 🐛 Known bug: Library page's client-side cache is never invalidated on mutation (2026-07-01) — ✅ FIXED #1719
 
@@ -1312,10 +1343,13 @@ must sequence, but A and B are parallelizable. Spawn:
   `go test -short -race ./...` with Go's 10m default; internal/server exceeds it on runners.
   github-common had the `-timeout 30m` fix since v1.12.1+ (written FOR this repo) but the pin
   was never bumped. All 5 workflow pins updated to `1dec34cd`.
-- [ ] **SDKGUARD-VIOLATION** (2026-07-03) — `pkg/plugin/sdk` imports `internal/logger`, so
-  `make ci` fails on main at the `sdkguard` step (masked all session by `| tail` swallowing exit
-  codes). Either break the import or add an allowlist entry in `tools/cmd/sdkguard/main.go` with
-  justification.
+- [x] **SDKGUARD-VIOLATION** (2026-07-03) — ✅ **FIXED 2026-07-11 (#1880, INIT-9 T03).**
+  `pkg/plugin/sdk` imported `internal/logger`, so `make ci` failed on main at the `sdkguard` step
+  (masked all session by `| tail` swallowing exit codes). Fixed by breaking both forbidden
+  dependency chains without touching `sdk`: added `Registry.SetRunContextDecorator` (wired to
+  `logger.WithOperation` in `registry_wire.go`) to invert the dependency direction, and moved
+  `UnifiedDedupScore`/`Signal`/`SignalKind` to a new neutral `internal/models` package with type
+  aliases left in `internal/dedup/unified`. `make sdkguard` is green on main.
 - [ ] **STATICCHECK-BURNDOWN** (2026-07-03) — ~18 pre-existing findings remain after the partial
   cleanup in #1767; `make ci`'s staticcheck step fails on main until drained. Good Haiku-sweep
   candidate.
