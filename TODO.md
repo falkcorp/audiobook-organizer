@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.88.0 -->
+<!-- version: 9.89.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-11 -->
 
@@ -67,8 +67,8 @@ remaining-work catalog, produced, adversarially judged (3 lenses × 10), brief-v
   - [x] INIT-9 T04 — quote mock-freshness pathspec so nested mocks dirs are checked (#1886) — see
     follow-up B below (Makefile has the same unfixed bug).
   - [x] INIT-9 T07 — verify Author/Series fate in `CreateOrganizedVersion` write-back (#1887) —
-    **test-only; confirmed a real HIGH prod-data-loss bug, see the "🔴 HIGH — PROD DATA-LOSS"
-    section above.** Does not fix it.
+    test-only; confirmed a real HIGH prod-data-loss bug. **Now fixed** — see the "✅ RESOLVED"
+    section above (fixed same-session, 2026-07-11, on user sign-off).
   - [x] INIT-4 T04 — Bleve facet counts for genres/languages/tags (#1888).
   - **INIT-4 is now 5/6** (T01–T05 shipped across Wave 1/Wave 2/Wave 2b; only T06 heavy-filter
     perf-pushdown remains — review-critical since it touches search query construction).
@@ -76,10 +76,10 @@ remaining-work catalog, produced, adversarially judged (3 lenses × 10), brief-v
   waves; 35 not started), plus Phase B/C follow-ups, plus the two Wave-2b follow-ups below.
 - **BLOCKED: 3** — INIT-5 T2 (needs Deluge-spike sign-off), INIT-9 REPO-SIZE-1
   (STOP-FOR-HUMAN plan review), INIT-7 (held on #1260–#1265).
-- **Wave 2b follow-ups (new, open, not yet fixed):**
-  - **A.** 🔴 HIGH prod data-loss — see the dedicated section above
-    ("CreateOrganizedVersion original-book slim-writeback wipes Author/Series").
-  - **B.** `Makefile` lines ~212/214 (`mocks-check` target) use the identical unquoted
+- **Wave 2b follow-ups:**
+  - **A.** ✅ RESOLVED 2026-07-11 — the 🔴 HIGH prod data-loss bug (Author/Series wiped on
+    `CreateOrganizedVersion` write-back) is fixed; see the dedicated section above.
+  - **B.** (still open) `Makefile` lines ~212/214 (`mocks-check` target) use the identical unquoted
     `internal/*/mocks/` pathspec that #1886 just fixed in `.github/workflows/ci.yml` — it
     currently passes only because all committed mocks happen to be fresh, not because the glob is
     correct. Quote it the same way: `:(glob)internal/**/mocks/**`. Low-risk, mechanical,
@@ -126,40 +126,38 @@ remaining-work catalog, produced, adversarially judged (3 lenses × 10), brief-v
 
 ---
 
-## 🔴 HIGH — PROD DATA-LOSS: CreateOrganizedVersion original-book slim-writeback wipes Author/Series (STOREFID W5d-1, 2026-07-07; CONFIRMED 2026-07-11 by #1887) — needs human decision
+## ✅ RESOLVED — CreateOrganizedVersion original-book slim-writeback wiped Author/Series (STOREFID W5d-1, 2026-07-07; CONFIRMED 2026-07-11 by #1887; FIXED 2026-07-11)
 
-- **⚠️ CONFIRMED, not just suspected, as of 2026-07-11 (#1887, INIT-9 T07).** The executable test
-  `TestCreateOrganizedVersion_AuthorSeriesSurviveOriginalWriteback`
-  (`internal/organizer/organized_version_writeback_test.go`) proves this against a real
-  `PebbleStore`, not just memdb: `t.Skipf("W5d-1 KNOWN BUG CONFIRMED")`. It will flip to a real
-  PASS once the fix below lands — use it as the acceptance test, don't write a new one.
+- **Was CONFIRMED, not just suspected, as of 2026-07-11 (#1887, INIT-9 T07).** The executable
+  test `TestCreateOrganizedVersion_AuthorSeriesSurviveOriginalWriteback`
+  (`internal/organizer/organized_version_writeback_test.go`) proved this against a real
+  `PebbleStore`, not just memdb, via a guarded `t.Skipf("W5d-1 KNOWN BUG CONFIRMED")`.
 - **Root cause, exact locations:**
   `PebbleStore.UpdateBook`'s STOR-1 preserve-on-nil guard
   (`internal/database/pebble_store.go:1571-1598`) restores Description/VersionNotes/BookSig* from
-  the old row when the incoming value is nil, but has **no equivalent case for Author/Series**.
-  The call site at `internal/organizer/service.go:927-941` writes back a page-derived
-  (`GetAllBooksCore`→`ToBook`), heavy-field-nil `book` with the version-group / non-primary /
-  `organized_source` stamp:
-  ```go
-  book.VersionGroupID = &versionGroupID
-  book.IsPrimaryVersion = &isNotPrimary
-  book.LibraryState = &organizedSourceState
-  orgSvc.db.UpdateBook(book.ID, book)   // book is GetAllBooksCore→ToBook, heavy-field-nil
-  ```
-  so the original book's denormalized Author/Series are silently wiped on every
-  `CreateOrganizedVersion` call, under the production PebbleStore backend, not just memdb.
-- **Fix must be careful:** hydrating via `GetBookByID` before the write (the usual pattern)
-  preserves Author/Series BUT must NOT regress the version-group state transition to
-  fail-closed — a `GetBookByID` error must still demote the original to non-primary, or the
-  version group ends up with **two primaries**. So: hydrate-and-write on success, but fall
-  back to the direct state write (accepting the rare Author/Series wipe) if hydrate fails —
-  i.e. fail-OPEN for the state transition, preserve-heavy-when-possible.
-- Same writeback shape as the W5d-1 organizer writebacks that DID get the `hydrateAndUpdateBook`
-  helper; this one was deliberately left out pending the fail-open design above.
-- **DEFERRED TO A HUMAN.** Both the fail-open hydrate fix (a decision-carrying change to a
-  version-group state-transition invariant) and filing a tracking GitHub issue are intentionally
-  left undone by #1887 — that PR is test-only. Do not implement the fix or file the issue without
-  explicit sign-off; when approved, the fix should flip the #1887 test from SKIP to PASS.
+  the old row when the incoming value is nil, but had **no equivalent case for Author/Series**.
+  The call site at `internal/organizer/service.go` (the version-group demotion write in
+  `CreateOrganizedVersion`) wrote back a page-derived (`GetAllBooksCore`→`ToBook`),
+  heavy-field-nil `book`, so the original book's denormalized Author/Series were silently wiped
+  on every `CreateOrganizedVersion` call under the production PebbleStore backend, not just
+  memdb.
+- **Fix (approved by user 2026-07-11, implemented same session):** hydrate the original book via
+  `GetBookByID` immediately before the version-group write and mutate/persist that full row
+  instead of the slim projection. Deliberately did NOT reuse the existing `hydrateAndUpdateBook`
+  helper, because that helper fails **closed** on a hydrate error (skips the write entirely) —
+  here that would leave the version group with **two primaries**, worse than the rare Author/Series
+  wipe being fixed. Instead: hydrate-and-write the full row on success; if hydration fails, fall
+  back to the direct state-only write (today's pre-fix behavior, accepting the rare wipe) so the
+  state transition always lands — fail-OPEN for the state transition,
+  preserve-heavy-when-possible.
+- **Verified:** `TestCreateOrganizedVersion_AuthorSeriesSurviveOriginalWriteback` flips from SKIP
+  to PASS; the sibling invariant test `TestCreateOrganizedVersion_OriginalDemotedToNonPrimary`
+  (proves the version-group demotion still holds) stays green; full `internal/organizer` package
+  green under `-race`; whole-repo `go build ./... && go vet ./...` and `go test ./... -short`
+  green (98/98 packages, zero failures).
+- No separate tracking GitHub issue filed — the bug was fixed in the same session it was
+  confirmed, so an issue would have been opened and closed in the same breath; this TODO entry
+  plus the PR that landed the fix are the durable record.
 
 ## ✅ PR-D: deluge import fingerprint-wipe (3 impls) — RESOLVED (STOREFID W6, 2026-07-07)
 
