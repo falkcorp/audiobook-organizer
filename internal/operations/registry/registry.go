@@ -1,7 +1,7 @@
 // file: internal/operations/registry/registry.go
-// version: 3.5.0
+// version: 3.6.1
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-07-03
+// last-edited: 2026-07-11
 
 package registry
 
@@ -54,6 +54,18 @@ type Registry struct {
 	// Set via SetDepBookStore before Start(). Nil is safe: combinedDepStore()
 	// falls back to OpsV2DepAdapter (conservative: field_set always unmet).
 	depBookStore DepBookStore
+
+	// runContextDecorator optionally decorates each run's context before the
+	// op's Run func is invoked (e.g. to stamp SLOG operation-id correlation).
+	// Set via SetRunContextDecorator before Start(). Nil is safe: the worker
+	// skips decoration and runs with the plain per-run context.
+	//
+	// This indirection exists so this package never imports the internal
+	// logging package directly — that import would leak into
+	// pkg/plugin/sdk's dependency tree via this package
+	// (SDKGUARD-VIOLATION #1795). Production wiring happens
+	// post-construction in internal/server/registry_wire.go.
+	runContextDecorator func(ctx context.Context, opID string) context.Context
 
 	// batch manages the M3 per-op-type debounce buckets for Batchable ops.
 	batch *batchManager
@@ -175,6 +187,27 @@ type DepBookStore interface {
 func (r *Registry) SetDepBookStore(bs DepBookStore) {
 	r.mu.Lock()
 	r.depBookStore = bs
+	r.mu.Unlock()
+}
+
+// SetRunContextDecorator wires a function that decorates each run's context
+// immediately before Run is invoked (e.g. logger.WithOperation, which stamps
+// a context-bound *slog.Logger tagged with the operation id for SLOG
+// correlation). Must be called BEFORE Start(), mirroring SetDepBookStore:
+// the worker reads r.runContextDecorator without locking (see
+// combinedDepStore's identical precedent), so it is only safe to set once
+// at startup. Nil is safe and simply disables decoration — runs then
+// execute with the plain per-run context.
+//
+// This setter exists so the registry package never has to import the
+// internal logging package (or any other decorator source) directly:
+// importing it here would leak into pkg/plugin/sdk's allowed-dependency
+// tree, since the SDK's public surface is built on type aliases into this
+// package (SDKGUARD-VIOLATION #1795). Callers wire the concrete decorator
+// post-construction — see internal/server/registry_wire.go.
+func (r *Registry) SetRunContextDecorator(fn func(ctx context.Context, opID string) context.Context) {
+	r.mu.Lock()
+	r.runContextDecorator = fn
 	r.mu.Unlock()
 }
 
