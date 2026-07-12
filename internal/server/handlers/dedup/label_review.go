@@ -1,5 +1,5 @@
 // file: internal/server/handlers/dedup/label_review.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5e2a9c41-7b30-4d68-8f12-3a6e0c9d5b27
 // last-edited: 2026-07-11
 
@@ -58,6 +58,107 @@ func (h *Handler) ListDedupLabels(c *gin.Context) {
 		"total":  total,
 		"limit":  filter.Limit,
 		"offset": filter.Offset,
+	})
+}
+
+// suspiciousRow is a labeled example plus the reasons it was flagged as
+// suspicious, so the review UI can show WHY a rule-sourced not_dup is being
+// surfaced for human confirmation. LabeledExample is embedded so its fields
+// promote to the top level of the JSON object (mirroring ListDedupLabels rows).
+type suspiciousRow struct {
+	database.LabeledExample
+	SuspicionReasons []string `json:"suspicion_reasons"`
+}
+
+// isSuspiciousLabel: rule-sourced not_dup with duplicate-shaped evidence.
+func isSuspiciousLabel(ex database.LabeledExample) bool {
+	return len(suspicionReasons(ex)) > 0
+}
+
+// suspicionReasons returns the human-readable evidence that makes a rule-sourced
+// not_dup label suspicious, or nil when the row is not suspicious. Only
+// rule-sourced rows can fire (human/auto rows are never second-guessed here).
+// Empty/unknown fields never fire an arm — they are non-disqualifying, the row
+// simply isn't suspicious on that evidence.
+func suspicionReasons(ex database.LabeledExample) []string {
+	if ex.LabelSource != "rule" {
+		return nil
+	}
+	var reasons []string
+	// Arm (a) — TRANSITIONAL: reuses the exported dataset.SharesIdentity helper
+	// (same ASIN / same version-group / identical primary path). After TASK-07
+	// re-mines with TASK-01's guard, identity-sharing pairs are emitted as
+	// "unsure" (not rule not_dup), so this arm can only surface the historical
+	// pre-re-mine backlog and then goes quiet. The queue's durable value is arms
+	// (b)/(c)/(d). One identity implementation, two consumers — do NOT
+	// re-implement identity comparisons here.
+	if dataset.SharesIdentity(ex) {
+		reasons = append(reasons, "shares hard identity (ASIN / version-group / path)")
+	}
+	// Arm (b) — landed in a duplicate-likely band.
+	if ex.Band == "CERTAIN" || ex.Band == "HIGH" {
+		reasons = append(reasons, "duplicate-likely band ("+ex.Band+")")
+	}
+	// Arm (c) — near-identical embedding cosine.
+	if ex.Similarity != nil && *ex.Similarity >= 0.95 {
+		reasons = append(reasons, "cosine similarity >= 0.95")
+	}
+	// Arm (d) — same title with the ms/sec duration-ratio signature (~0.001).
+	if ex.A.Title != "" && ex.A.Title == ex.B.Title && ex.DurationRatio > 0 && ex.DurationRatio < 0.01 {
+		reasons = append(reasons, "ms/sec duration-ratio signature (identical title)")
+	}
+	return reasons
+}
+
+// ListSuspiciousDedupLabels handles GET /api/v1/dedup/labels/suspicious — the
+// suspicious-label review queue. It loads every rule-sourced not_dup label and
+// surfaces only those carrying duplicate-shaped evidence (see suspicionReasons),
+// so a reviewer can one-click override them via the existing
+// POST /dedup/labels/:id/override route. Read-only: it never mutates a label.
+//
+// The suspicion predicate is an in-handler filter (not a store index) over the
+// not_dup rows — trivial per-row string compares at ~7k-row dataset scale.
+// Pagination mirrors ListDedupLabels (limit/offset), applied to the filtered
+// set; total is the count of suspicious rows for the same predicate.
+func (h *Handler) ListSuspiciousDedupLabels(c *gin.Context) {
+	es := h.embeddingStore
+	if es == nil {
+		httputil.RespondWithServiceUnavailable(c, "embedding store not available")
+		return
+	}
+
+	// Limit:0 = load all not_dup rows; the suspicion predicate + pagination are
+	// applied in-handler below.
+	all, err := es.ListLabeledExamples(database.LabeledExampleFilter{Label: labelNotDup, Limit: 0})
+	if err != nil {
+		httputil.InternalError(c, "failed to list labeled examples", err)
+		return
+	}
+
+	suspicious := make([]suspiciousRow, 0)
+	for _, ex := range all {
+		if !isSuspiciousLabel(ex) {
+			continue
+		}
+		suspicious = append(suspicious, suspiciousRow{LabeledExample: ex, SuspicionReasons: suspicionReasons(ex)})
+	}
+
+	total := len(suspicious)
+	limit := clampAtoi(c.Query("limit"), 50, 1, 500)
+	offset := clampAtoi(c.Query("offset"), 0, 0, 1<<31)
+	if offset > total {
+		offset = total
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+
+	httputil.RespondWithOK(c, gin.H{
+		"labels": suspicious[offset:end],
+		"total":  total,
+		"limit":  limit,
+		"offset": offset,
 	})
 }
 

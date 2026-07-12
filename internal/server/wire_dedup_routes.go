@@ -1,7 +1,7 @@
 // file: internal/server/wire_dedup_routes.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b8c9d0e1-f2a3-4567-bcde-890123456789
-// last-edited: 2026-07-02
+// last-edited: 2026-07-11
 
 package server
 
@@ -40,7 +40,8 @@ func (s *Server) wireDedupRoutes(
 	// C6 — gold-dataset review (the dedup feedback-loop labels).
 	protected.GET("/dedup/labels", s.perm(auth.PermLibraryView), dedupH.ListDedupLabels)
 	protected.GET("/dedup/labels/stats", s.perm(auth.PermLibraryView), dedupH.GetDedupLabelStats)
-	protected.GET("/dedup/labels/export", s.perm(auth.PermLibraryView), dedupH.ExportLabeledExamples) // C7 — JSONL export of the labeled dataset.
+	protected.GET("/dedup/labels/export", s.perm(auth.PermLibraryView), dedupH.ExportLabeledExamples)         // C7 — JSONL export of the labeled dataset.
+	protected.GET("/dedup/labels/suspicious", s.perm(auth.PermLibraryView), dedupH.ListSuspiciousDedupLabels) // INIT-1 T4 — read-only suspicious-label review queue.
 	protected.POST("/dedup/labels/:id/override", s.perm(auth.PermLibraryEditMetadata), dedupH.OverrideDedupLabel)
 	protected.POST("/dedup/candidates/merge-series", s.perm(auth.PermLibraryEditMetadata), dedupH.MergeDedupCandidateSeries)
 	protected.POST("/dedup/scan", s.perm(auth.PermScanTrigger), dedupH.TriggerDedupScan)
