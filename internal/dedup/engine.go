@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.58.0
+// version: 1.59.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-07-11
 
@@ -44,7 +44,8 @@ const minFingerprintMatchSeconds = 60
 // it is being compared against (CONS-15). Conservative on purpose: genuine
 // single-file duplicates of comparable length must never be suppressed, only
 // pairs where the single-file side is clearly a small slice of the whole.
-const partVsWholeDurationRatioMax = 0.6
+// aligned with dataset/rules.go partVsWholeRatioMax (INIT-1 T8)
+const partVsWholeDurationRatioMax = 0.5
 
 // Engine orchestrates a 3-layer dedup system:
 //   - Layer 1: Exact matching (free, instant) — same file hash, ISBN/ASIN, or near-identical titles
