@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/dataset_backfill_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2f8ff156-b5ec-4480-ac97-27acc54fd013
-// last-edited: 2026-07-05
+// last-edited: 2026-07-11
 
 // End-to-end test for the dedup.dataset-backfill op against a real PebbleStore
 // + EmbeddingStore, added alongside the CONC-8 memoize-then-parallelize change
@@ -18,9 +18,11 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
-// createBookNoFiles (a book with zero BookFile rows, so BookFeatures.FilesExist
-// is false and dataset.Classify's missingFile rule fires "not_dup") is defined
-// once in rebuild_gold_labels_test.go and reused here.
+// createBookStubAudio (a book whose only file is a sub-256 KiB, zero-duration
+// stub, so dataset.Classify's implausibleAudio rule fires "not_dup") is defined
+// once in rebuild_gold_labels_test.go and reused here. (missingFile no longer
+// emits not_dup — file absence is evidence-free for dup-ness — so a stub side
+// is used to exercise the not_dup dismiss path.)
 
 // TestDatasetBackfill_ParallelMatchesSerialOutput exercises the RunItems-backed
 // parallel path (CONC-8) with enough candidates to spread across every
@@ -28,8 +30,8 @@ import (
 // candidate so the mutex-guarded book-lookup cache in
 // memoizedBuilderAdapter.GetBook is actually contended across goroutines.
 // Every candidate's classification is deterministic given the fixture
-// (missingFile fires not_dup; a normal-duration/size pair with no shared
-// signature is left unlabeled), independent of item order or worker count —
+// (implausibleAudio fires not_dup on the stub side; a normal-duration/size pair
+// with no shared signature is left unlabeled), independent of item order or worker count —
 // that determinism is the "parallel == serial" guarantee, since
 // registry.RunItems with Concurrency==1 and Concurrency>1 both drive the same
 // per-item function. Run with -race to catch any unguarded shared state.
@@ -42,17 +44,17 @@ func TestDatasetBackfill_ParallelMatchesSerialOutput(t *testing.T) {
 
 	var wantNotDup, wantUnlabeled []int64
 	for i := 0; i < numLeaves; i++ {
-		missingFiles := i%2 == 0
+		stubSide := i%2 == 0
 		var leaf string
-		if missingFiles {
-			leaf = createBookNoFiles(t, pebble, fmt.Sprintf("NoFileLeaf%03d", i))
+		if stubSide {
+			leaf = createBookStubAudio(t, pebble, fmt.Sprintf("StubLeaf%03d", i))
 		} else {
 			// Same duration/size as the hub -> duration ratio 1.0, no
 			// part-vs-whole or stub signal, and no shared hash -> unlabeled.
 			leaf = createBookWithHashedFile(t, pebble, fmt.Sprintf("NormalLeaf%03d", i), fmt.Sprintf("distincthash%04d", i))
 		}
 		cand := candidateID(t, es, hub, leaf)
-		if missingFiles {
+		if stubSide {
 			wantNotDup = append(wantNotDup, cand)
 		} else {
 			wantUnlabeled = append(wantUnlabeled, cand)
@@ -75,7 +77,7 @@ func TestDatasetBackfill_ParallelMatchesSerialOutput(t *testing.T) {
 		if ex.Label != "not_dup" || ex.LabelSource != "rule" {
 			t.Fatalf("candidate %d: label=%q source=%q; want not_dup/rule", cand, ex.Label, ex.LabelSource)
 		}
-		// missingFile candidates must be suppressed (status -> dismissed).
+		// not_dup (stub-side) candidates must be suppressed (status -> dismissed).
 		cands, _, err := es.ListCandidates(database.CandidateFilter{Status: "dismissed", Limit: 1_000_000})
 		if err != nil {
 			t.Fatalf("ListCandidates(dismissed): %v", err)
@@ -111,7 +113,7 @@ func TestDatasetBackfill_DryRunWritesNothing(t *testing.T) {
 	es := database.NewEmbeddingStore(pebble.DB())
 
 	hub := createBookWithHashedFile(t, pebble, "DryHub", "dryhubhash0001")
-	leaf := createBookNoFiles(t, pebble, "DryLeafNoFiles")
+	leaf := createBookStubAudio(t, pebble, "DryLeafStub")
 	cand := candidateID(t, es, hub, leaf)
 
 	p := &Plugin{store: pebble, embeddingStore: es}

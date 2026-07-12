@@ -1,7 +1,7 @@
 // file: internal/dedup/dataset/builder_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b3e7f2a1-9c45-4d80-8e62-5f1a3d6c7b90
-// last-edited: 2026-07-01
+// last-edited: 2026-07-11
 
 package dataset
 
@@ -402,5 +402,25 @@ func TestBuildExample_FileSizeBytes(t *testing.T) {
 	}
 	if ex.B.FileSizeBytes != 32 {
 		t.Fatalf("B.FileSizeBytes = %d, want 32 (stub)", ex.B.FileSizeBytes)
+	}
+}
+
+// TestBuildFeatures_IdentityFields verifies buildFeatures snapshots the book's
+// ASIN and VersionGroupID pointers, and that a nil pointer becomes "" (the
+// intended "unknown" value the SharesIdentity guard treats as non-disqualifying).
+func TestBuildFeatures_IdentityFields(t *testing.T) {
+	asin := "B002V8MAAM"
+	vg := "vg-123"
+	set := buildFeatures(&database.Book{ID: "x", Title: "Set", ASIN: &asin, VersionGroupID: &vg}, nil)
+	if set.ASIN != asin {
+		t.Fatalf("ASIN = %q, want %q", set.ASIN, asin)
+	}
+	if set.VersionGroupID != vg {
+		t.Fatalf("VersionGroupID = %q, want %q", set.VersionGroupID, vg)
+	}
+
+	bare := buildFeatures(&database.Book{ID: "y", Title: "Bare"}, nil)
+	if bare.ASIN != "" || bare.VersionGroupID != "" {
+		t.Fatalf("nil identity pointers must snapshot as empty; got ASIN=%q VG=%q", bare.ASIN, bare.VersionGroupID)
 	}
 }

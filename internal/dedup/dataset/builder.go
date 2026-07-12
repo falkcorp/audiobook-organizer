@@ -1,7 +1,7 @@
 // file: internal/dedup/dataset/builder.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4a91c7e0-6d83-4b25-9f10-2c5a8e7d4b31
-// last-edited: 2026-07-01
+// last-edited: 2026-07-11
 
 // Package dataset builds labeled dedup examples and runs deterministic catchers
 // over them. Pure: a store interface in, a database.LabeledExample out, no
@@ -134,6 +134,13 @@ func buildFeatures(bk *database.Book, files []database.BookFile) database.BookFe
 	if bk != nil {
 		f.Title = bk.Title
 		f.WholeBookSigPresent = bk.BookSigV1 != nil && *bk.BookSigV1 != ""
+		// Snapshot hard-identity fields; nil pointer → "" (unknown, non-disqualifying).
+		if bk.ASIN != nil {
+			f.ASIN = *bk.ASIN
+		}
+		if bk.VersionGroupID != nil {
+			f.VersionGroupID = *bk.VersionGroupID
+		}
 		if bk.CoverURL != nil && *bk.CoverURL != "" {
 			f.HasCover = true
 		}
