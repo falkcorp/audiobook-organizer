@@ -1,7 +1,7 @@
 // file: internal/config/persistence_test.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-07-03
+// last-edited: 2026-07-10
 
 package config
 
@@ -856,43 +856,6 @@ func TestMigrateEmbeddingFields_EmptyBlob(t *testing.T) {
 	assert.False(t, changed, "empty blob should be a no-op")
 }
 
-func TestRemapEmbeddingKeys_FlatKeys(t *testing.T) {
-	payload := map[string]any{
-		"embedding_enabled":    true,
-		"embedding_model":      "bge-m3",
-		"embedding_dimensions": float64(1024),
-		"root_dir":             "/data",
-	}
-	result := applyLegacyRemaps(payload)
-
-	emb, ok := result["embedding"].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, true, emb["enabled"])
-	assert.Equal(t, "bge-m3", emb["model"])
-	assert.Equal(t, float64(1024), emb["dimensions"])
-	assert.Equal(t, "/data", result["root_dir"]) // untouched
-	assert.NotContains(t, result, "embedding_enabled")
-	assert.NotContains(t, result, "embedding_model")
-}
-
-func TestRemapEmbeddingKeys_MixedKeys(t *testing.T) {
-	// Client sends both flat legacy key AND new nested key — merge, don't overwrite
-	payload := map[string]any{
-		"embedding_enabled": false,
-		"embedding":         map[string]any{"model": "bge-m3"},
-	}
-	result := applyLegacyRemaps(payload)
-	emb := result["embedding"].(map[string]any)
-	assert.Equal(t, false, emb["enabled"])
-	assert.Equal(t, "bge-m3", emb["model"])
-}
-
-func TestRemapEmbeddingKeys_NoFlatKeys(t *testing.T) {
-	payload := map[string]any{"root_dir": "/data"}
-	result := applyLegacyRemaps(payload)
-	assert.Equal(t, map[string]any{"root_dir": "/data"}, result)
-}
-
 func TestMigrateDedupFields_FlatBlob(t *testing.T) {
 	flatBlob := `{
 		"dedup_book_high_threshold": 0.95,
@@ -928,27 +891,6 @@ func TestMigrateDedupFields_AlreadyNested(t *testing.T) {
 func TestMigrateDedupFields_EmptyBlob(t *testing.T) {
 	_, changed := migrateDedupBlob(`{}`)
 	assert.False(t, changed)
-}
-
-func TestRemapDedupKeys_FlatKeys(t *testing.T) {
-	payload := map[string]any{
-		"dedup_book_high_threshold": float64(0.95),
-		"dedup_review_model":        "gpt-5-mini",
-		"root_dir":                  "/data",
-	}
-	result := applyLegacyRemaps(payload)
-	d, ok := result["dedup"].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, float64(0.95), d["book_high_threshold"])
-	assert.Equal(t, "gpt-5-mini", d["review_model"])
-	assert.Equal(t, "/data", result["root_dir"])
-	assert.NotContains(t, result, "dedup_book_high_threshold")
-}
-
-func TestRemapDedupKeys_NoFlatKeys(t *testing.T) {
-	payload := map[string]any{"root_dir": "/data"}
-	result := applyLegacyRemaps(payload)
-	assert.Equal(t, map[string]any{"root_dir": "/data"}, result)
 }
 
 func TestMigrateMetadataScoringFields_FlatBlob(t *testing.T) {
@@ -987,27 +929,6 @@ func TestMigrateMetadataScoringFields_AlreadyNested(t *testing.T) {
 func TestMigrateMetadataScoringFields_EmptyBlob(t *testing.T) {
 	_, changed := migrateMetadataScoringBlob(`{}`)
 	assert.False(t, changed)
-}
-
-func TestRemapMetadataScoringKeys_FlatKeys(t *testing.T) {
-	payload := map[string]any{
-		"metadata_embedding_scoring_enabled": true,
-		"write_backup_before_tag_write":      false,
-		"root_dir":                           "/data",
-	}
-	result := applyLegacyRemaps(payload)
-	ms, ok := result["metadata_scoring"].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, true, ms["embedding_enabled"])
-	assert.Equal(t, false, ms["write_backup_before"])
-	assert.Equal(t, "/data", result["root_dir"])
-	assert.NotContains(t, result, "metadata_embedding_scoring_enabled")
-}
-
-func TestRemapMetadataScoringKeys_NoFlatKeys(t *testing.T) {
-	payload := map[string]any{"root_dir": "/data"}
-	result := applyLegacyRemaps(payload)
-	assert.Equal(t, map[string]any{"root_dir": "/data"}, result)
 }
 
 func TestMigrateITunesFields_FlatBlob(t *testing.T) {
@@ -1049,27 +970,6 @@ func TestMigrateITunesFields_EmptyBlob(t *testing.T) {
 	assert.False(t, changed)
 }
 
-func TestRemapITunesKeys_FlatKeys(t *testing.T) {
-	payload := map[string]any{
-		"itunes_sync_enabled":    true,
-		"itl_write_back_enabled": false,
-		"root_dir":               "/data",
-	}
-	result := applyLegacyRemaps(payload)
-	it, ok := result["itunes"].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, true, it["sync_enabled"])
-	assert.Equal(t, false, it["write_back_enabled"])
-	assert.Equal(t, "/data", result["root_dir"])
-	assert.NotContains(t, result, "itunes_sync_enabled")
-}
-
-func TestRemapITunesKeys_NoFlatKeys(t *testing.T) {
-	payload := map[string]any{"root_dir": "/data"}
-	result := applyLegacyRemaps(payload)
-	assert.Equal(t, map[string]any{"root_dir": "/data"}, result)
-}
-
 func TestMigrateMaintenanceFields_FlatBlob(t *testing.T) {
 	flatBlob := `{
 		"maintenance_window_enabled": false,
@@ -1105,27 +1005,6 @@ func TestMigrateMaintenanceFields_AlreadyNested(t *testing.T) {
 func TestMigrateMaintenanceFields_EmptyBlob(t *testing.T) {
 	_, changed := migrateMaintenanceBlob(`{}`)
 	assert.False(t, changed)
-}
-
-func TestRemapMaintenanceKeys_FlatKeys(t *testing.T) {
-	payload := map[string]any{
-		"maintenance_window_enabled":           false,
-		"acoustid_online_lookup_nightly_limit": float64(500),
-		"root_dir":                             "/data",
-	}
-	result := applyLegacyRemaps(payload)
-	m, ok := result["maintenance"].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, false, m["enabled"])
-	assert.Equal(t, float64(500), m["acoustid_nightly_limit"])
-	assert.Equal(t, "/data", result["root_dir"])
-	assert.NotContains(t, result, "maintenance_window_enabled")
-}
-
-func TestRemapMaintenanceKeys_NoFlatKeys(t *testing.T) {
-	payload := map[string]any{"root_dir": "/data"}
-	result := applyLegacyRemaps(payload)
-	assert.Equal(t, map[string]any{"root_dir": "/data"}, result)
 }
 
 func TestMigrateScheduledFields_FlatBlob(t *testing.T) {
@@ -1225,27 +1104,6 @@ func TestMigrateAutoUpdateFields_AlreadyNested(t *testing.T) {
 func TestMigrateAutoUpdateFields_EmptyBlob(t *testing.T) {
 	_, changed := migrateAutoUpdateBlob(`{}`)
 	assert.False(t, changed)
-}
-
-func TestRemapAutoUpdateKeys_FlatKeys(t *testing.T) {
-	payload := map[string]any{
-		"auto_update_enabled": false,
-		"auto_update_channel": "beta",
-		"root_dir":            "/data",
-	}
-	result := applyLegacyRemaps(payload)
-	au, ok := result["auto_update"].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, false, au["enabled"])
-	assert.Equal(t, "beta", au["channel"])
-	assert.Equal(t, "/data", result["root_dir"])
-	assert.NotContains(t, result, "auto_update_enabled")
-}
-
-func TestRemapAutoUpdateKeys_NoFlatKeys(t *testing.T) {
-	payload := map[string]any{"root_dir": "/data"}
-	result := applyLegacyRemaps(payload)
-	assert.Equal(t, map[string]any{"root_dir": "/data"}, result)
 }
 
 // TestMigrateAIBackend_LocalFromBaseURL: a nested embedding.base_url signals a

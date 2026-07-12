@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.91.0 -->
+<!-- version: 9.92.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-11 -->
 
@@ -613,7 +613,8 @@ for untagged tracks. Scanner uses folder name as book title for no-tag groups.
 - [ ] **CONS-10** **Track D3** — drain stale exact candidates. **Code fixes CONS-16 + CONS-17 now MERGED**; remaining blocker is the **backfill/re-scan** on prod (run `maintenance.duration-backfill` dry-run → apply; re-scan affected filesystem books so corrected titles land) so candidates self-resolve, THEN re-scope. ⚠️ Prod investigation (candidate 211) proved the 380K exact candidates are a MIX: some real dups + many real multi-file books mislabeled by the duration-ms + title-leak bugs. Quarantining before backfill = **DATA LOSS**. **Re-run `dedup.quarantine-chapter-artifacts` dry-run AFTER backfill, show the list, get explicit user OK before any apply.**  <!-- 2026-07-01: ⏳ code fixes (CONS-16/17) merged; blocked on prod duration-backfill + re-scan (DATA-LOSS gate — dry-run + user OK). -->
 - [x] **CONS-11** **Track D4** — manual-import UI button (op `library.import` already merged/deployed; no frontend yet). Add a button/dialog on the Library page that POSTs `{def_id:"library.import", params:{path}}` to `/api/v1/operations/v2` and polls. ~Lowest-effort remaining UI task. — ✅ verified done 2026-07-01: Library.tsx manualImport dialog + api.startLibraryImport
 - [x] **CONS-12** = **DEDUP-INTRO-1** (see Dedup UX section) — Audible intro/outro false-positive dedup candidates. — ✅ verified done 2026-07-01: = DEDUP-INTRO-1 (done)
-- [ ] **CONS-13** = **CFG-2 Phase D** — retire flat-key compat shim in `internal/server/update_service.go` (low priority; after 1+ wk prod stability).
+- [x] **CONS-13** = **CFG-2 Phase D** — retire flat-key compat shim in `internal/config/update_service.go` (low priority; after 1+ wk prod stability). — ✅ done 2026-07-10 (TASK-01): removed legacyRemapGroup/configRemapGroups/applyLegacyRemaps + their tests; kept remapScheduledKeys + JSON round-trip; added a one-release detection warn-log (retiredLegacyFlatKeys).
+- [ ] **CFG-2-D-LOG** — remove the `retiredLegacyFlatKeys` detection warn-log from `internal/config/update_service.go` after one stable release with zero flat-only-key warnings in prod logs (added by TASK-01).
 
 ### Metadata-repair track (root causes of the dedup candidate explosion) — investigated 2026-06-19
 
@@ -674,7 +675,7 @@ for untagged tracks. Scanner uses folder name as book title for no-tag groups.
 - [x] **CFG-2 Phase A** — 11 nested TS interfaces added to `api.ts`. PR #1514.
 - [x] **CFG-2 Phase B** — `loadConfig`/`handleSave` wired to nested keys; Dedup tab at index 3. PR #1514.
 - [x] **CFG-2 Phase C** — Settings.tsx 3,077 → 1,395 lines; 9 section components + `useSettingsHandlers`. PR #1514.
-- [ ] **CFG-2 Phase D — Retire the flat-key compat shim.** Remove flat→nested remap in `update_service.go`; keep blob migration. Gate on Phase B+C proven stable. (open — future PR)
+- [x] **CFG-2 Phase D — Retire the flat-key compat shim.** Remove flat→nested remap in `update_service.go`; keep blob migration. Gate on Phase B+C proven stable. — ✅ done 2026-07-10 (TASK-01)
 - [x] **CFG-2 Phase E** — 5 Vitest unit tests + 1 E2E spec. 280 tests pass. PR #1514.
 
 ---
