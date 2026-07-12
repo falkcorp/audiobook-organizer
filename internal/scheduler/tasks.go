@@ -1,7 +1,7 @@
 // file: internal/scheduler/tasks.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9b4c7e21-a5f3-4d08-b2e6-3c8d1f7a0e54
-// last-edited: 2026-06-16
+// last-edited: 2026-07-12
 
 // Package scheduler — task registrations.
 // All 22 registered tasks are defined here. Each task's TriggerFn and
@@ -47,6 +47,19 @@ type seriesNormalizeOpParams struct {
 type schedulerExtraOpParams struct {
 	LegacyOpID string `json:"legacy_op_id"`
 }
+
+// labelRefinementRebuildParams / labelRefinementCalibrateParams are the params
+// the label_refinement scheduled chain passes to dedup.rebuild-gold-labels and
+// dedup.calibrate-composite. They are EMPTY ON PURPOSE: with no apply key,
+// both ops fall back to their built-in dry-run/report default (Apply=false) —
+// rebuild_gold_labels.go takes the guarded `if !params.Apply` no-write return,
+// calibrate_composite.go reports without persisting bands. The scheduled path
+// has NO way to set apply=true; enabling an apply is an operator AskUserQuestion
+// decision only. The Apply==false-on-empty-params guarantee is pinned by
+// canaries in internal/plugins/dedup/{rebuild_gold_labels,calibrate_composite}_test.go.
+type labelRefinementRebuildParams struct{}
+
+type labelRefinementCalibrateParams struct{}
 
 // ---- registration -------------------------------------------------------
 
@@ -189,6 +202,42 @@ func (ts *TaskScheduler) registerAllTasks() {
 		},
 		RunOnStart:             func() bool { return config.AppConfig.Scheduled.DedupRefresh.OnStartup },
 		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.DedupRefresh },
+	})
+
+	// label_refinement (INIT-1 T6): built-in-DISABLED scheduled chain that, only
+	// when an owner sets scheduled.label_refinement.enabled=true, periodically
+	// runs dedup.rebuild-gold-labels then dedup.calibrate-composite in DRY-RUN
+	// mode and logs a summary. It writes NOTHING — there is no apply on this path.
+	// Deliberately minimal; INIT-6 WF-3 is expected to subsume scheduled.* keys.
+	ts.registerTask(TaskDefinition{
+		Name:        "label_refinement",
+		Description: "Dry-run gold-label refinement chain: rebuild-gold-labels → calibrate-composite (report only; applies are operator-gated)",
+		Category:    "maintenance",
+		TriggerFn: func(source string) (*database.Operation, error) {
+			if ts.deps.Store() == nil {
+				return nil, fmt.Errorf("database not initialized")
+			}
+			if ts.deps.OpRegistry == nil {
+				return nil, fmt.Errorf("operations registry not initialized")
+			}
+			// Run the two-op chain detached so the scheduler tick / manual
+			// Run-Now returns promptly (each op can run for tens of minutes).
+			// No legacy op row is created, so TriggerFn returns a nil op.
+			go ts.runLabelRefinementChain()
+			return nil, nil
+		},
+		IsEnabled: func() bool { return config.AppConfig.Scheduled.LabelRefinement.Enabled },
+		GetInterval: func() time.Duration {
+			mins := config.AppConfig.Scheduled.LabelRefinement.Interval
+			if mins <= 0 {
+				return 0
+			}
+			return time.Duration(mins) * time.Minute
+		},
+		RunOnStart: func() bool { return config.AppConfig.Scheduled.LabelRefinement.OnStartup },
+		// Intentionally NOT part of the maintenance window (also absent from
+		// maintenanceOrder): keeps the task fully inert under default config.
+		RunInMaintenanceWindow: func() bool { return false },
 	})
 
 	ts.registerTask(TaskDefinition{
@@ -793,4 +842,85 @@ func (ts *TaskScheduler) registerAllTasks() {
 		RunOnStart:             func() bool { return false },
 		RunInMaintenanceWindow: func() bool { return true },
 	})
+}
+
+// labelRefinementChainTimeout bounds the whole dry-run chain so a hung op can
+// never leak the detached goroutine forever. It exceeds the sum of the two ops'
+// own timeouts (rebuild-gold-labels 60m + calibrate-composite 30m) plus slack.
+const labelRefinementChainTimeout = 2 * time.Hour
+
+// runLabelRefinementChain enqueues dedup.rebuild-gold-labels then
+// dedup.calibrate-composite, both in DRY-RUN mode (empty params ⇒ Apply=false),
+// waiting for each to reach a terminal state before starting the next, and logs
+// one summary line. It runs detached from TriggerFn and writes NOTHING: neither
+// op mutates state without apply=true, which is never sent on this path.
+func (ts *TaskScheduler) runLabelRefinementChain() {
+	ctx, cancel := context.WithTimeout(context.Background(), labelRefinementChainTimeout)
+	defer cancel()
+	// Cancel promptly on scheduler shutdown so we don't outlive the process.
+	if ts.shutdown != nil {
+		go func() {
+			select {
+			case <-ts.shutdown:
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
+	}
+
+	rebuildID, err := ts.deps.OpRegistry.EnqueueOp(ctx, "dedup.rebuild-gold-labels", labelRefinementRebuildParams{})
+	if err != nil {
+		slog.Warn("label_refinement: failed to enqueue dedup.rebuild-gold-labels", "err", err)
+		return
+	}
+	if !ts.waitForOpV2(ctx, rebuildID) {
+		slog.Warn("label_refinement: rebuild-gold-labels did not complete cleanly; aborting chain", "op", rebuildID)
+		return
+	}
+
+	calibrateID, err := ts.deps.OpRegistry.EnqueueOp(ctx, "dedup.calibrate-composite", labelRefinementCalibrateParams{})
+	if err != nil {
+		slog.Warn("label_refinement: failed to enqueue dedup.calibrate-composite", "err", err)
+		return
+	}
+	if !ts.waitForOpV2(ctx, calibrateID) {
+		slog.Warn("label_refinement: calibrate-composite did not complete cleanly", "op", calibrateID)
+		return
+	}
+
+	slog.Info("label_refinement: dry-run chain complete (report only, nothing written)",
+		"rebuild_op", rebuildID, "calibrate_op", calibrateID)
+}
+
+// waitForOpV2 polls the v2 operation store until opID reaches a terminal state
+// or ctx is canceled; it returns true only on "completed". NOTE: the scheduler's
+// WaitForOperation reads the LEGACY operation:<id> table and would nil-deref on
+// a v2 registry op id (GetOperationByID returns (nil,nil) on not-found), so this
+// polls GetOperationV2 instead — mirroring Server.WaitForOp's terminal set.
+func (ts *TaskScheduler) waitForOpV2(ctx context.Context, opID string) bool {
+	store := ts.deps.Store()
+	if store == nil {
+		return false
+	}
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-ticker.C:
+			row, err := store.GetOperationV2(opID)
+			if err != nil || row == nil {
+				// DB error or not-yet-visible — keep polling until ctx expires.
+				continue
+			}
+			switch row.Status {
+			case "completed":
+				return true
+			case "failed", "canceled", "interrupted_dropped", "interrupted_quiesced":
+				return false
+			}
+			// queued or running — keep polling.
+		}
+	}
 }

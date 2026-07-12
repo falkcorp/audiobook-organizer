@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.67.0
+// version: 1.68.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-07-11
+// last-edited: 2026-07-12
 
 package config
 
@@ -409,6 +409,7 @@ type AutoUpdateConfig struct {
 // ScheduledTasksConfig holds settings for all background scheduled tasks.
 type ScheduledTasksConfig struct {
 	DedupRefresh             ScheduledTaskConfig `json:"dedup_refresh"               mapstructure:"dedup_refresh"`
+	LabelRefinement          ScheduledTaskConfig `json:"label_refinement"            mapstructure:"label_refinement"`
 	AuthorSplit              ScheduledTaskConfig `json:"author_split"                mapstructure:"author_split"`
 	DbOptimize               ScheduledTaskConfig `json:"db_optimize"                 mapstructure:"db_optimize"`
 	MetadataRefresh          ScheduledTaskConfig `json:"metadata_refresh"            mapstructure:"metadata_refresh"`
@@ -773,6 +774,12 @@ func InitConfig() {
 	viper.SetDefault("scheduled.dedup_refresh.enabled", false)
 	viper.SetDefault("scheduled.dedup_refresh.interval", 360)
 	viper.SetDefault("scheduled.dedup_refresh.on_startup", false)
+	// label_refinement ships DISABLED (INIT-1 T6): the scheduled dry-run chain
+	// (dedup.rebuild-gold-labels → dedup.calibrate-composite) only runs when an
+	// owner flips enabled=true. Interval is weekly (10080 min).
+	viper.SetDefault("scheduled.label_refinement.enabled", false)
+	viper.SetDefault("scheduled.label_refinement.interval", 10080)
+	viper.SetDefault("scheduled.label_refinement.on_startup", false)
 	viper.SetDefault("scheduled.author_split.enabled", false)
 	viper.SetDefault("scheduled.author_split.interval", 0)
 	viper.SetDefault("scheduled.author_split.on_startup", false)
@@ -797,6 +804,9 @@ func InitConfig() {
 	viper.BindEnv("scheduled.dedup_refresh.enabled", "SCHEDULED_DEDUP_REFRESH_ENABLED")                             //nolint:errcheck
 	viper.BindEnv("scheduled.dedup_refresh.interval", "SCHEDULED_DEDUP_REFRESH_INTERVAL")                           //nolint:errcheck
 	viper.BindEnv("scheduled.dedup_refresh.on_startup", "SCHEDULED_DEDUP_REFRESH_ON_STARTUP")                       //nolint:errcheck
+	viper.BindEnv("scheduled.label_refinement.enabled", "SCHEDULED_LABEL_REFINEMENT_ENABLED")                       //nolint:errcheck
+	viper.BindEnv("scheduled.label_refinement.interval", "SCHEDULED_LABEL_REFINEMENT_INTERVAL")                     //nolint:errcheck
+	viper.BindEnv("scheduled.label_refinement.on_startup", "SCHEDULED_LABEL_REFINEMENT_ON_STARTUP")                 //nolint:errcheck
 	viper.BindEnv("scheduled.author_split.enabled", "SCHEDULED_AUTHOR_SPLIT_ENABLED")                               //nolint:errcheck
 	viper.BindEnv("scheduled.author_split.interval", "SCHEDULED_AUTHOR_SPLIT_INTERVAL")                             //nolint:errcheck
 	viper.BindEnv("scheduled.author_split.on_startup", "SCHEDULED_AUTHOR_SPLIT_ON_STARTUP")                         //nolint:errcheck
@@ -1267,6 +1277,11 @@ func InitConfig() {
 					Enabled:   viper.GetBool("scheduled.dedup_refresh.enabled"),
 					Interval:  viper.GetInt("scheduled.dedup_refresh.interval"),
 					OnStartup: viper.GetBool("scheduled.dedup_refresh.on_startup"),
+				},
+				LabelRefinement: ScheduledTaskConfig{
+					Enabled:   viper.GetBool("scheduled.label_refinement.enabled"),
+					Interval:  viper.GetInt("scheduled.label_refinement.interval"),
+					OnStartup: viper.GetBool("scheduled.label_refinement.on_startup"),
 				},
 				AuthorSplit: ScheduledTaskConfig{
 					Enabled:   viper.GetBool("scheduled.author_split.enabled"),
