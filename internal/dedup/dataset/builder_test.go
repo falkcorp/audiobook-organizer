@@ -1,5 +1,5 @@
 // file: internal/dedup/dataset/builder_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: b3e7f2a1-9c45-4d80-8e62-5f1a3d6c7b90
 // last-edited: 2026-07-11
 
@@ -58,6 +58,94 @@ type fakeStore struct {
 
 func (f *fakeStore) GetBook(id string) (*database.Book, error)           { return f.books[id], nil }
 func (f *fakeStore) GetBookFiles(id string) ([]database.BookFile, error) { return f.files[id], nil }
+
+// sizeForKbps returns the byte size of a file of durationSec seconds at kbps
+// kilobits/sec, so per-file bitrate lands inside the plausible band and the
+// ms/sec heuristic behaves as it would on real rows.
+func sizeForKbps(durationSec, kbps int) int64 {
+	return int64(durationSec) * int64(kbps) * 1000 / 8
+}
+
+// TestBuildExampleNormalizesDurationRatio proves the mining boundary normalizes
+// a historical ms-scale row at read time, so an ms-vs-sec pair of the same book
+// yields a ratio ≈ 1.0 rather than ≈ 0.001. The anti-over-suppression subtest
+// proves a genuinely short part is NOT normalized and still scores low.
+func TestBuildExampleNormalizesDurationRatio(t *testing.T) {
+	t.Run("ms_vs_sec_pair_normalizes_to_1", func(t *testing.T) {
+		// Same ~5.8h audiobook at 64 kbps: A holds the corrupt ms-scale duration
+		// (20810840), B holds the correct seconds value (20810).
+		size := sizeForKbps(20810, 64) // 166_480_000 bytes
+		bkA := &database.Book{ID: "a", Title: "Same Book"}
+		bkB := &database.Book{ID: "b", Title: "Same Book"}
+		fs := &fakeStore{
+			books: map[string]*database.Book{"a": bkA, "b": bkB},
+			files: map[string][]database.BookFile{
+				"a": {{BookID: "a", FilePath: "/lib/x/a.m4b", FileSize: size, Duration: 20810840}},
+				"b": {{BookID: "b", FilePath: "/lib/x/b.m4b", FileSize: size, Duration: 20810}},
+			},
+		}
+		cand := database.DedupCandidate{ID: 30, EntityAID: "a", EntityBID: "b", Layer: "exact"}
+		ex, err := BuildExample(fs, cand)
+		if err != nil {
+			t.Fatalf("BuildExample: %v", err)
+		}
+		if ex.A.TotalDurationSec != 20810 {
+			t.Fatalf("A.TotalDurationSec = %v, want 20810 (ms-scale normalized at read time)", ex.A.TotalDurationSec)
+		}
+		if ex.B.TotalDurationSec != 20810 {
+			t.Fatalf("B.TotalDurationSec = %v, want 20810 (plausible, untouched)", ex.B.TotalDurationSec)
+		}
+		if ex.DurationRatio < 1.0-1e-9 || ex.DurationRatio > 1.0+1e-9 {
+			t.Fatalf("DurationRatio = %v, want ≈ 1.0 (not the ≈ 0.001 raw ms/sec mismatch)", ex.DurationRatio)
+		}
+	})
+
+	t.Run("genuine_short_part_still_low_ratio", func(t *testing.T) {
+		// Both durations are plausible seconds → neither is normalized. A real
+		// 300s part vs a 20000s whole must still yield a low ratio.
+		sizeA := sizeForKbps(300, 64)
+		sizeB := sizeForKbps(20000, 64)
+		bkA := &database.Book{ID: "a", Title: "Part"}
+		bkB := &database.Book{ID: "b", Title: "Whole"}
+		fs := &fakeStore{
+			books: map[string]*database.Book{"a": bkA, "b": bkB},
+			files: map[string][]database.BookFile{
+				"a": {{BookID: "a", FilePath: "/lib/x/part.m4b", FileSize: sizeA, Duration: 300}},
+				"b": {{BookID: "b", FilePath: "/lib/x/whole.m4b", FileSize: sizeB, Duration: 20000}},
+			},
+		}
+		cand := database.DedupCandidate{ID: 31, EntityAID: "a", EntityBID: "b", Layer: "exact"}
+		ex, err := BuildExample(fs, cand)
+		if err != nil {
+			t.Fatalf("BuildExample: %v", err)
+		}
+		if ex.A.TotalDurationSec != 300 || ex.B.TotalDurationSec != 20000 {
+			t.Fatalf("durations must be untouched: a=%v b=%v", ex.A.TotalDurationSec, ex.B.TotalDurationSec)
+		}
+		wantRatio := 300.0 / 20000.0
+		if ex.DurationRatio < wantRatio-1e-9 || ex.DurationRatio > wantRatio+1e-9 {
+			t.Fatalf("DurationRatio = %v, want %v (genuine short part not over-suppressed)", ex.DurationRatio, wantRatio)
+		}
+	})
+}
+
+// TestBuildFeaturesMixedCorruptFiles is the proof that normalization is per file,
+// not on the aggregate: one ms-corrupted file among clean seconds-files must sum
+// to the correct per-file-normalized total. An aggregate-level implementation
+// (normalizing the raw sum) fails this fixture.
+func TestBuildFeaturesMixedCorruptFiles(t *testing.T) {
+	// Three files, each a 1h/64 kbps part; the middle one holds an ms-scale value.
+	size := sizeForKbps(3600, 64) // 28_800_000 bytes
+	files := []database.BookFile{
+		{BookID: "x", FilePath: "/lib/x/p1.m4b", FileSize: size, Duration: 3600},
+		{BookID: "x", FilePath: "/lib/x/p2.m4b", FileSize: size, Duration: 3600000}, // ms-scale
+		{BookID: "x", FilePath: "/lib/x/p3.m4b", FileSize: size, Duration: 3600},
+	}
+	f := buildFeatures(&database.Book{ID: "x", Title: "Mixed"}, files)
+	if f.TotalDurationSec != 3*3600 {
+		t.Fatalf("TotalDurationSec = %v, want %d (per-file normalized 3×3600)", f.TotalDurationSec, 3*3600)
+	}
+}
 
 func TestBuildExample_PartVsWholeFeatures(t *testing.T) {
 	whole := &database.Book{ID: "whole", Title: "The Crafter's Defense"}

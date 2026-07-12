@@ -1,5 +1,5 @@
 // file: internal/dedup/dataset/builder.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4a91c7e0-6d83-4b25-9f10-2c5a8e7d4b31
 // last-edited: 2026-07-11
 
@@ -164,7 +164,11 @@ func buildFeatures(bk *database.Book, files []database.BookFile) database.BookFe
 		if fl.AcoustIDFingerprintDurationSec > 0 {
 			total += fl.AcoustIDFingerprintDurationSec
 		} else if fl.Duration > 0 {
-			total += float64(fl.Duration)
+			// Normalize per file BEFORE summing: historical rows written before the
+			// CONS-18 write chokepoint may hold ms-scale durations. The bitrate test
+			// is a per-file contract (this file's size vs its duration), so an
+			// aggregate-level check would miss one corrupt file among clean ones.
+			total += float64(database.NormalizeDurationSec(fl.FileSize, fl.Duration))
 		}
 		if fl.AcoustIDOnlineRecordingID != "" {
 			f.RecordingIDs = append(f.RecordingIDs, fl.AcoustIDOnlineRecordingID)

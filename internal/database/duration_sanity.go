@@ -1,7 +1,7 @@
 // file: internal/database/duration_sanity.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8b1f4d2c-5e69-4a30-9c71-2f8a6b0d4e95
-// last-edited: 2026-06-19
+// last-edited: 2026-07-11
 
 package database
 
@@ -50,6 +50,19 @@ func DurationLooksLikeMillis(fileSize int64, durationSec int) bool {
 	correctedBitsPerSec := fileSize * 8 / int64(correctedSec)
 	return correctedBitsPerSec >= minPlausibleBitsPerSec &&
 		correctedBitsPerSec <= maxPlausibleBitsPerSec
+}
+
+// NormalizeDurationSec returns durationSec/1000 when DurationLooksLikeMillis
+// reports the value is milliseconds, else durationSec unchanged. Inputs
+// <= 0 (unknown) are returned unchanged. Pure read-time twin of
+// normalizeBookFileDuration (which repairs at the write chokepoint); used by
+// the dedup dataset builder to normalize historical pre-CONS-18 rows at
+// read time.
+func NormalizeDurationSec(fileSizeBytes int64, durationSec int) int {
+	if DurationLooksLikeMillis(fileSizeBytes, durationSec) {
+		return durationSec / 1000
+	}
+	return durationSec
 }
 
 // normalizeBookFileDuration repairs a millisecond-valued Duration in place at the
