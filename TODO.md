@@ -1,5 +1,6 @@
 <!-- file: TODO.md -->
 <!-- version: 9.97.0 -->
+<!-- version: 9.93.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-12 -->
 
@@ -1689,6 +1690,7 @@ incrementally:
   - Plan: move test media files to an external host (GitHub Releases asset, S3, or a simple HTTP server on 172.16.2.30); have tests download on-demand via a `testdata/fetch.go` helper that caches locally and skips if `TEST_SKIP_LARGE_FIXTURES=1`.
   - Use `git filter-repo` (NOT `git filter-branch`) to rewrite history and remove the blobs. Coordinate with any forks/clones before force-push.
   - After rewrite: add the large-file extensions to `.gitignore` and optionally enable GitHub's push protection to prevent recurrence.
+  - ⛔ **Plan written, awaiting owner decision** (2026-07-11): see [`docs/plans/2026-07-10-repo-size-history-rewrite-plan.md`](docs/plans/2026-07-10-repo-size-history-rewrite-plan.md). Audit finding: the reported 1.69 GB is ~1.47 GB of GitHub-owned `refs/pull/*` (1778 PR refs) + un-gc'd unreachable objects vs a 224.86 MiB local reachable pack — reclaimable via **GitHub Support gc with NO rewrite**. Recommendation is **Option (d) forward-only + Support gc** (remove live `mtls-bridge`, externalize `testdata/series_*.json`, file gc ticket); the rewrite options are dominated (can't remove the PR-ref bulk, yet rewrite up to 764 tags/break GoReleaser, invalidate 14+ worktrees, un-rebase ~889 PRs). STOP-FOR-HUMAN — do NOT check this item off until the human decides + executes.
 
 ## 🧹 Tech Debt Sweep — Deprecated Code & Warnings
 
