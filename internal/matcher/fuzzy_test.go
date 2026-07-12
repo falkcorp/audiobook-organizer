@@ -150,15 +150,90 @@ func TestRankResults_MinScore(t *testing.T) {
 	}
 }
 
-// TestScoreMatchGolden locks the current ScoreMatch behavior. In this commit it
-// asserts EQUALITY against the captured golden values; a later commit relaxes it
-// to a floor (got >= golden) once the raise-only TokenSetRatio blend lands.
+// TestScoreMatchGolden enforces the raise-only contract of the TokenSetRatio
+// blend: every pre-blend golden value is a MINIMUM floor, so no pair may score
+// LOWER than it did before the blend (got >= golden). Reordered-token rows are
+// expected to rise; that is allowed and annotated in each row's note.
 func TestScoreMatchGolden(t *testing.T) {
 	for _, r := range scoreMatchGolden {
 		got := ScoreMatch(r.query, r.target)
-		if got != r.golden {
-			t.Errorf("ScoreMatch(%q, %q) = %d, golden %d (%s)", r.query, r.target, got, r.golden, r.note)
+		if got < r.golden {
+			t.Errorf("ScoreMatch(%q, %q) = %d regressed below golden floor %d (%s)",
+				r.query, r.target, got, r.golden, r.note)
 		}
+	}
+}
+
+// TestTokenSetRatioNoRegression is the anti-over-suppression guard: every
+// known-good pair that previously passed a given RankResults minScore must
+// still pass it after the blend (the happy path still matches).
+func TestTokenSetRatioNoRegression(t *testing.T) {
+	// Known-good matches and the minScore threshold they cleared pre-blend.
+	goodMatches := []struct {
+		query, target string
+		minScore      int
+	}{
+		{"Harry Potter", "Harry Potter", 100},
+		{"Harry", "Harry Potter and the Philosopher's Stone", 80},
+		{"Potter", "Harry Potter", 60},
+		{"Dune", "Dune Messiah", 80},
+		{"Neuromancer", "Neuromancer by William Gibson", 80},
+		// Reordered-token pairs that scored poorly before now clear a real bar.
+		{"The Hobbit - Tolkien", "Tolkien: The Hobbit", 50},
+		{"Brandon Sanderson Mistborn", "Mistborn Brandon Sanderson", 50},
+	}
+	for _, m := range goodMatches {
+		res := RankResults(m.query, []string{m.target}, m.minScore)
+		if len(res) != 1 {
+			t.Errorf("RankResults(%q, [%q], %d) suppressed a known-good match: got %d results, score=%d",
+				m.query, m.target, m.minScore, len(res), ScoreMatch(m.query, m.target))
+		}
+	}
+}
+
+// TestTokenSetRatio covers symmetry, order-insensitivity, empty/whitespace input,
+// and single-token degradation.
+func TestTokenSetRatio(t *testing.T) {
+	// Symmetry: TokenSetRatio(a,b) == TokenSetRatio(b,a).
+	symPairs := [][2]string{
+		{"The Hobbit - Tolkien", "Tolkien: The Hobbit"},
+		{"Dune", "Dune Messiah"},
+		{"Foundation Isaac Asimov", "Asimov Foundation"},
+		{"totally different", "unrelated words here"},
+	}
+	for _, p := range symPairs {
+		ab := TokenSetRatio(p[0], p[1])
+		ba := TokenSetRatio(p[1], p[0])
+		if ab != ba {
+			t.Errorf("TokenSetRatio not symmetric: (%q,%q)=%g vs (%q,%q)=%g", p[0], p[1], ab, p[1], p[0], ba)
+		}
+	}
+
+	// Empty / whitespace-only input -> 0 (unknown, not a match), no crash.
+	empties := [][2]string{
+		{"", "Harry Potter"},
+		{"Harry Potter", ""},
+		{"   ", "Harry Potter"},
+		{"!!! ---", "Harry Potter"}, // normalize strips to empty
+		{"", ""},
+	}
+	for _, p := range empties {
+		if got := TokenSetRatio(p[0], p[1]); got != 0 {
+			t.Errorf("TokenSetRatio(%q, %q) = %g, want 0 for empty input", p[0], p[1], got)
+		}
+	}
+
+	// Order-insensitivity: identical token sets in different order -> 1.0.
+	if got := TokenSetRatio("The Hobbit Tolkien", "Tolkien The Hobbit"); got != 1.0 {
+		t.Errorf("TokenSetRatio for reordered identical tokens = %g, want 1.0", got)
+	}
+
+	// Single-token exact -> 1.0; single-token mismatch degrades gracefully to (0,1).
+	if got := TokenSetRatio("dune", "Dune"); got != 1.0 {
+		t.Errorf("TokenSetRatio(dune, Dune) = %g, want 1.0", got)
+	}
+	if got := TokenSetRatio("dune", "june"); got <= 0 || got >= 1 {
+		t.Errorf("TokenSetRatio(dune, june) = %g, want in (0,1)", got)
 	}
 }
 
