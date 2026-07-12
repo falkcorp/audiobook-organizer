@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/optimize.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d4e5f6a7-b8c9-0123-4567-890123456789
-// last-edited: 2026-05-19
+// last-edited: 2026-07-12
 
 package maintenance
 
@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -51,7 +52,7 @@ func (p *Plugin) runOptimize(ctx context.Context, _ json.RawMessage, reporter sd
 	opID := ctxOpID(ctx)
 	start := time.Now()
 
-	slog.Info("library.optimize: sweep started",
+	logging.Info(ctx, "library.optimize: sweep started",
 		"operation_id", opID,
 	)
 	_ = reporter.Log(slog.LevelInfo, "Library optimize sweep started")
@@ -90,7 +91,7 @@ func (p *Plugin) runOptimize(ctx context.Context, _ json.RawMessage, reporter sd
 
 	for i, ch := range children {
 		if reporter.IsCanceled() {
-			slog.Info("library.optimize: sweep canceled",
+			logging.Info(ctx, "library.optimize: sweep canceled",
 				"operation_id", opID,
 				"completed", completed,
 				"failed", failed,
@@ -108,7 +109,7 @@ func (p *Plugin) runOptimize(ctx context.Context, _ json.RawMessage, reporter sd
 		prog.StepN(i, fmt.Sprintf("Running child op %d/%d: %s", i+1, total, ch.name))
 
 		childStart := time.Now()
-		slog.Info("library.optimize: child started",
+		logging.Info(ctx, "library.optimize: child started",
 			"operation_id", opID,
 			"child", ch.name,
 			"def_id", ch.defID,
@@ -120,7 +121,7 @@ func (p *Plugin) runOptimize(ctx context.Context, _ json.RawMessage, reporter sd
 		childID, err := p.deps.EnqueueOp(ctx, ch.defID, ch.params)
 		if err != nil {
 			elapsed := time.Since(childStart)
-			slog.Warn("library.optimize: child enqueue failed",
+			logging.Warn(ctx, "library.optimize: child enqueue failed",
 				"operation_id", opID,
 				"child", ch.name,
 				"def_id", ch.defID,
@@ -133,7 +134,7 @@ func (p *Plugin) runOptimize(ctx context.Context, _ json.RawMessage, reporter sd
 			continue
 		}
 
-		slog.Info("library.optimize: child enqueued",
+		logging.Info(ctx, "library.optimize: child enqueued",
 			"operation_id", opID,
 			"child", ch.name,
 			"child_id", childID,
@@ -142,7 +143,7 @@ func (p *Plugin) runOptimize(ctx context.Context, _ json.RawMessage, reporter sd
 		// Wait for the child to reach a terminal state.
 		if waitErr := p.deps.WaitForOp(ctx, childID); waitErr != nil {
 			elapsed := time.Since(childStart)
-			slog.Warn("library.optimize: child failed or timed out",
+			logging.Warn(ctx, "library.optimize: child failed or timed out",
 				"operation_id", opID,
 				"child", ch.name,
 				"child_id", childID,
@@ -156,7 +157,7 @@ func (p *Plugin) runOptimize(ctx context.Context, _ json.RawMessage, reporter sd
 		}
 
 		elapsed := time.Since(childStart)
-		slog.Info("library.optimize: child completed",
+		logging.Info(ctx, "library.optimize: child completed",
 			"operation_id", opID,
 			"child", ch.name,
 			"child_id", childID,
@@ -168,7 +169,7 @@ func (p *Plugin) runOptimize(ctx context.Context, _ json.RawMessage, reporter sd
 	}
 
 	totalElapsed := time.Since(start)
-	slog.Info("library.optimize: sweep complete",
+	logging.Info(ctx, "library.optimize: sweep complete",
 		"operation_id", opID,
 		"children_completed", completed,
 		"children_failed", failed,

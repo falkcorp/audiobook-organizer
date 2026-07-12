@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 9.94.0 -->
+<!-- version: 9.95.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-07-11 -->
+<!-- last-edited: 2026-07-12 -->
 
 # Project TODO
 
@@ -1589,7 +1589,7 @@ must sequence, but A and B are parallelizable. Spawn:
 
 ### Remaining slog / logging work
 
-- [ ] **SLOG-W13** [hold] Wire `logging.Info(ctx, ...)` into long-tail async ops that currently use raw `slog.Info`: `runBulkWriteBack`, ISBN enrichment goroutine, iTunes sync ops, batch poller, scanner deep paths. ~1363 raw `slog.Info/Warn/Error/Debug` calls across 193 files remain. Priority: any code inside an op-context flow (where `logging.WithOp` has been called upstream). Code outside ops (startup, background goroutines) can stay as raw slog.  <!-- 2026-07-01: ◑ PARTIAL: batch_poller + isbn flows wired (commit 7f5c28f1); runBulkWriteBack, iTunes sync, scanner deep paths remain (~1363 raw slog calls). Re-held per db977ae3 (context overflow). -->  <!-- 2026-07-01: further progress — writeback+ISBN #1715, scanner deep paths #1724 done; iTunes sync n/a (ops are stubs); broad ~1363-call residual remains open -->
+- [ ] **SLOG-W13** [hold] Wire `logging.Info(ctx, ...)` into long-tail async ops that currently use raw `slog.Info`: `runBulkWriteBack`, ISBN enrichment goroutine, iTunes sync ops, batch poller, scanner deep paths. ~1363 raw `slog.Info/Warn/Error/Debug` calls across 193 files remain. Priority: any code inside an op-context flow (where `logging.WithOp` has been called upstream). Code outside ops (startup, background goroutines) can stay as raw slog.  <!-- 2026-07-01: ◑ PARTIAL: batch_poller + isbn flows wired (commit 7f5c28f1); runBulkWriteBack, iTunes sync, scanner deep paths remain (~1363 raw slog calls). Re-held per db977ae3 (context overflow). -->  <!-- 2026-07-01: further progress — writeback+ISBN #1715, scanner deep paths #1724 done; iTunes sync n/a (ops are stubs); broad ~1363-call residual remains open -->  <!-- 2026-07-12: SLOG-W13 sweep shard (ux-small-items TASK-07): wired 14 op-flow sites across 4 op-plugin files — deluge import.go(2)+centralization.go(1), maintenance optimize.go(8)+cleanup.go(3). Residual = 1422 raw slog.Info/Warn/Error/Debug (non-test) across internal/. Out-of-scope (staying raw, per in/out test): no-ctx-in-scope funcs (itunes/adapter.go, acoustid/backfill.go fingerprint helpers, internal/organizer/*), startup/lifecycle (plugin PostInit hooks, plugin/registry.go Register/InitAll/ShutdownAll), and background goroutines (plugin/events.go EventBus.Publish). Deferred-contested (NOT swept — dispatch trailing shard only AFTER sibling branches merge): internal/dedup/** (116), internal/plugins/dedup/** (19) — actively edited by agent/dedup-label-quality-* and agent/metadata-matching-* branches at sweep time; internal/database/embedding_store.go and internal/server/metadata_ops.go currently have 0 raw slog. -->
 - [ ] **SLOG-PROD-VERIFY** Smoke-test metadata-fetch on prod to verify the full chain (opID in logs, `/api/v1/operations/:id/activity` returns rows).  <!-- 2026-07-01: ⏳ code/endpoint exist (docs/slog-prod-verify.md); remaining is a live-prod smoke-test run. -->
 - [x] **CACHE-WARMUP-ROOT-CAUSE** Investigate root cause of cache warm-up OOM. Likely issue: `List*WithCounts()` allocates unboundedly during scan, or the `Server` struct cache fields retain full API response objects. Once fixed, re-enable startup preload. — ✅ verified done 2026-07-01: startup preload re-enabled (server_lifecycle.go:277); warmers rewritten to typed counts, no gin.H (entity_cache_warmers.go, commit 4515cb2c). Live OOM re-confirmation is operational.
 

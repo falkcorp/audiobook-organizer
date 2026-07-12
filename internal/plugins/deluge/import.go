@@ -1,7 +1,7 @@
 // file: internal/plugins/deluge/import.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: f1e2d3c4-b5a6-7890-cdef-0123456789ab
-// last-edited: 2026-05-15
+// last-edited: 2026-07-12
 
 package deluge
 
@@ -11,9 +11,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"log/slog"
-
 	delugeclient "github.com/falkcorp/audiobook-organizer/internal/deluge"
+	"github.com/falkcorp/audiobook-organizer/internal/logging"
 )
 
 // importToLibrary reflinks src into dst (falls back to copy), updates the DB,
@@ -41,7 +40,7 @@ func (p *Plugin) importToLibrary(ctx context.Context, torrentHash, srcPath, dstP
 	// 4. Update DB: set imported_from_deluge_at, deluge_original_path
 	if p.store != nil {
 		if err := p.store.MarkFileImportedFromDeluge(ctx, srcPath, dstPath, torrentHash); err != nil {
-			slog.Warn("failed to update deluge import record", "err", err)
+			logging.Warn(ctx, "failed to update deluge import record", "err", err)
 			// non-fatal: file is already copied
 		}
 	}
@@ -49,7 +48,7 @@ func (p *Plugin) importToLibrary(ctx context.Context, torrentHash, srcPath, dstP
 	// 5. Call core.move_storage (best-effort)
 	if p.client != nil && torrentHash != "" {
 		if err := p.client.MoveStorage([]string{torrentHash}, filepath.Dir(dstPath)); err != nil {
-			slog.Warn("core.move_storage failed; Deluge will seed from original path", "err", err, "torrent", torrentHash)
+			logging.Warn(ctx, "core.move_storage failed; Deluge will seed from original path", "err", err, "torrent", torrentHash)
 			// non-fatal: the import succeeded even if seeding location doesn't update
 		}
 	}
