@@ -1,15 +1,104 @@
 // file: internal/plugins/dedup/calibrate_embedding_thresholds_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8a7b6c5d-4e3f-4a2b-9c1d-0e9f8a7b6c5d
-// last-edited: 2026-07-04
+// last-edited: 2026-07-11
 
 package dedup
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
+
+// captureReporter is an sdk.Reporter whose Logger() writes JSON records to an
+// in-memory buffer, so a test can inspect the structured report fields emitted
+// by an op (here: rows_in / pairs_out on the "…report" line).
+type captureReporter struct {
+	buf    *bytes.Buffer
+	logger *slog.Logger
+}
+
+func newCaptureReporter() *captureReporter {
+	buf := &bytes.Buffer{}
+	return &captureReporter{buf: buf, logger: slog.New(slog.NewJSONHandler(buf, nil))}
+}
+
+func (r *captureReporter) UpdateProgress(_, _ int, _ string) error          { return nil }
+func (r *captureReporter) Log(_ slog.Level, _ string, _ ...slog.Attr) error { return nil }
+func (r *captureReporter) Logger() *slog.Logger                             { return r.logger }
+func (r *captureReporter) Checkpoint(_ any) error                           { return nil }
+func (r *captureReporter) IsCanceled() bool                                 { return false }
+func (r *captureReporter) RunPhase(_ context.Context, _ string, fn func(context.Context, sdk.Reporter) error) error {
+	return fn(context.Background(), r)
+}
+func (r *captureReporter) Trigger(_ context.Context, _ string, _ any) error { return nil }
+func (r *captureReporter) SetCurrentItem(_ string)                          {}
+
+// TestCalibrationReport_RowsInGePairsOut runs the calibration op against a real
+// EmbeddingStore holding two true_dup rows for the SAME book-pair plus one row
+// for a distinct pair, and asserts the structured report line carries rows_in
+// and pairs_out with rows_in >= pairs_out (the INIT-1 T3 pair-collapse is
+// observable). Embeddings are intentionally absent, so every pair is skipped as
+// missing — the report counts still emit.
+func TestCalibrationReport_RowsInGePairsOut(t *testing.T) {
+	pebble := newPebbleForISBNIndexTest(t)
+	es := database.NewEmbeddingStore(pebble.DB())
+
+	rows := []database.LabeledExample{
+		{CandidateID: 1, EntityAID: "book-a", EntityBID: "book-b", Label: "true_dup", LabelSource: "rule", DecidedAt: "2026-07-01T00:00:00Z"},
+		{CandidateID: 2, EntityAID: "book-a", EntityBID: "book-b", Label: "true_dup", LabelSource: "human", DecidedAt: "2026-07-05T00:00:00Z"},
+		{CandidateID: 3, EntityAID: "book-c", EntityBID: "book-d", Label: "true_dup", LabelSource: "rule", DecidedAt: "2026-07-01T00:00:00Z"},
+	}
+	for _, ex := range rows {
+		if err := es.UpsertLabeledExample(ex); err != nil {
+			t.Fatalf("upsert labeled example %d: %v", ex.CandidateID, err)
+		}
+	}
+
+	p := &Plugin{store: pebble, embeddingStore: es}
+	rep := newCaptureReporter()
+	if err := p.runCalibrateEmbeddingThresholds(context.Background(), json.RawMessage(`{"model":"bge-m3"}`), rep); err != nil {
+		t.Fatalf("runCalibrateEmbeddingThresholds: %v", err)
+	}
+
+	var rowsIn, pairsOut float64
+	found := false
+	for _, line := range strings.Split(strings.TrimSpace(rep.buf.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			continue
+		}
+		if rec["msg"] != "calibrate-embedding-thresholds report" {
+			continue
+		}
+		ri, riOK := rec["rows_in"].(float64)
+		po, poOK := rec["pairs_out"].(float64)
+		if !riOK || !poOK {
+			t.Fatalf("report line missing rows_in/pairs_out: %s", line)
+		}
+		rowsIn, pairsOut, found = ri, po, true
+	}
+	if !found {
+		t.Fatalf("no calibration report line found in output:\n%s", rep.buf.String())
+	}
+	if rowsIn < pairsOut {
+		t.Fatalf("expected rows_in >= pairs_out, got rows_in=%v pairs_out=%v", rowsIn, pairsOut)
+	}
+	// The two same-pair rows must collapse: 3 rows in, 2 pairs out.
+	if rowsIn != 3 || pairsOut != 2 {
+		t.Fatalf("expected rows_in=3 pairs_out=2, got rows_in=%v pairs_out=%v", rowsIn, pairsOut)
+	}
+}
 
 // fakeEmbGetter is a map-backed embeddingGetter for the calibration tests.
 // A missing key returns (nil, nil), which the collector treats as a missing
@@ -199,7 +288,7 @@ func TestCollectCalibrationPairs_SkipsMismatchAndMissing(t *testing.T) {
 		{EntityAID: "missing_a", EntityBID: "missing_b", Label: "true_dup"},
 	}
 
-	pairs, skippedMissing, skippedMismatch := collectCalibrationPairs(examples, getter, model)
+	pairs, skippedMissing, skippedMismatch, _, _ := collectCalibrationPairs(examples, getter, model)
 
 	if len(pairs) != 1 {
 		t.Fatalf("expected exactly 1 scored pair, got %d", len(pairs))

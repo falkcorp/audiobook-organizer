@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/label_review.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5e2a9c41-7b30-4d68-8f12-3a6e0c9d5b27
-// last-edited: 2026-07-01
+// last-edited: 2026-07-11
 
 package deduphandler
 
@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup/dataset"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/gin-gonic/gin"
 )
@@ -158,7 +159,9 @@ func (h *Handler) OverrideDedupLabel(c *gin.Context) {
 // Query params (all optional, mirror LabeledExampleFilter — empty means "no
 // filter"): label, label_source, band, folder_relation, signature_relation.
 // Unlike ListDedupLabels this endpoint is unpaginated: it exports every row
-// matching the filter.
+// matching the filter. By default rows are collapsed to one per canonical
+// book-pair (INIT-1 T3); pass raw=true to skip the collapse and stream every
+// stored row.
 func (h *Handler) ExportLabeledExamples(c *gin.Context) {
 	es := h.embeddingStore
 	if es == nil {
@@ -178,6 +181,14 @@ func (h *Handler) ExportLabeledExamples(c *gin.Context) {
 	if err != nil {
 		httputil.InternalError(c, "failed to list labeled examples for export", err)
 		return
+	}
+
+	// Collapse to one row per canonical book-pair by default (INIT-1 T3): the
+	// dedup:label store keys by candidateID, so multi-layer pairs otherwise
+	// export ~2.7× duplicate rows. raw=true is a debugging escape hatch that
+	// streams every stored row without deduping.
+	if c.Query("raw") != "true" {
+		items = dataset.DedupeByPair(items)
 	}
 
 	filename := fmt.Sprintf("dedup-labels-%s.jsonl", time.Now().Format("20060102-150405"))

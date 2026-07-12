@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/calibrate_embedding_thresholds.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6f1d2e3a-4b5c-4d6e-8f90-1a2b3c4d5e6f
-// last-edited: 2026-07-04
+// last-edited: 2026-07-11
 
 // Package dedup — op dedup.calibrate-embedding-thresholds (DEDUP-2/3).
 //
@@ -55,6 +55,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup/dataset"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -145,6 +146,15 @@ type calibrationPair struct {
 // collectCalibrationPairs turns labeled examples into scored (label, cosine)
 // pairs using only same-model, same-dimension embeddings for the target model.
 //
+// Before scoring, examples are collapsed to ONE row per canonical book-pair via
+// dataset.DedupeByPair (INIT-1 T3): the dedup:label store keys rows by
+// candidateID, so a single book-pair produces multiple labeled rows across
+// layers that would otherwise be double-counted in the precision math. Dedup
+// runs across both label classes together, so a pair holding both a rule
+// not_dup and a human true_dup resolves to the human row rather than appearing
+// in both classes. rowsIn is the pre-dedup count and pairsOut the post-dedup
+// count (rowsIn >= pairsOut), reported so the collapse is observable.
+//
 // Skip rules (DEDUP-3 contamination guard) — a skipped pair is counted, never
 // scored:
 //   - either embedding missing (Get errors or returns nil) → skippedMissing
@@ -152,14 +162,17 @@ type calibrationPair struct {
 //     length → skippedMismatch
 //
 // It is a pure function of its inputs (the getter is the only side channel), so
-// the sweep and skip behaviour are unit-testable with synthetic data.
+// the dedupe, sweep, and skip behaviour are unit-testable with synthetic data.
 func collectCalibrationPairs(
 	examples []database.LabeledExample,
 	getter embeddingGetter,
 	model string,
-) (pairs []calibrationPair, skippedMissing, skippedMismatch int) {
-	for i := range examples {
-		ex := examples[i]
+) (pairs []calibrationPair, skippedMissing, skippedMismatch, rowsIn, pairsOut int) {
+	rowsIn = len(examples)
+	deduped := dataset.DedupeByPair(examples)
+	pairsOut = len(deduped)
+	for i := range deduped {
+		ex := deduped[i]
 		a, aErr := getter.Get("book", ex.EntityAID)
 		if aErr != nil || a == nil {
 			skippedMissing++
@@ -186,7 +199,7 @@ func collectCalibrationPairs(
 			entityBID: ex.EntityBID,
 		})
 	}
-	return pairs, skippedMissing, skippedMismatch
+	return pairs, skippedMissing, skippedMismatch, rowsIn, pairsOut
 }
 
 // bandRecommendation is the sweep result for one band.
@@ -372,7 +385,14 @@ func (p *Plugin) runCalibrateEmbeddingThresholds(ctx context.Context, rawParams 
 
 	// --- Score pairs (same-model, same-dim only) ---
 	_ = reporter.UpdateProgress(1, 3, fmt.Sprintf("Scoring %d labeled pairs…", len(examples)))
-	pairs, skippedMissing, skippedMismatch := collectCalibrationPairs(examples, p.embeddingStore, model)
+	pairs, skippedMissing, skippedMismatch, rowsIn, pairsOut := collectCalibrationPairs(examples, p.embeddingStore, model)
+
+	// Observability for the INIT-1 T3 pair-collapse: rowsIn is the number of
+	// labeled rows loaded, pairsOut the count after collapsing to one per
+	// book-pair (rowsIn >= pairsOut). A large gap means the store held many
+	// per-layer duplicate rows for the same pair.
+	log.Info("calibrate-embedding-thresholds pair-dedupe",
+		"rows_in", rowsIn, "pairs_out", pairsOut)
 
 	var sampleTrue, sampleNot int
 	for _, pr := range pairs {
@@ -422,6 +442,8 @@ func (p *Plugin) runCalibrateEmbeddingThresholds(ctx context.Context, rawParams 
 	// --- Report (structured log fields — read-only, no result sink to write) ---
 	fields := []any{
 		"model", model,
+		"rows_in", rowsIn,
+		"pairs_out", pairsOut,
 		"sample_true_dup", sampleTrue,
 		"sample_not_dup", sampleNot,
 		"skipped_dimension_mismatch", skippedMismatch,
