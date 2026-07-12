@@ -1,7 +1,7 @@
 // file: internal/plugins/deluge/centralization.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-07-07
+// last-edited: 2026-07-12
 
 package deluge
 
@@ -9,7 +9,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -17,6 +16,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -165,7 +165,7 @@ func (p *Plugin) runCentralization(ctx context.Context, params json.RawMessage, 
 			if moveErr := p.client.MoveStorage([]string{bf.DelugeHash}, filepath.Dir(dest)); moveErr != nil {
 				reporter.Logger().Warn("deluge move_storage failed", "hash", bf.DelugeHash, "error", moveErr)
 			} else {
-				slog.Info("deluge move_storage succeeded", "hash", bf.DelugeHash, "dir", filepath.Dir(dest))
+				logging.Info(ctx, "deluge move_storage succeeded", "hash", bf.DelugeHash, "dir", filepath.Dir(dest))
 			}
 		}
 

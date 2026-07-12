@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
-// last-edited: 2026-05-07
+// last-edited: 2026-07-12
 
 package maintenance
 
@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -153,7 +154,7 @@ func (p *Plugin) runCleanupActivityLog(ctx context.Context, _ json.RawMessage, r
 	}
 	msg := fmt.Sprintf("Activity log cleanup: compacted %d, summarized %d, pruned %d",
 		compacted, summarized, pruned)
-	slog.Info(msg)
+	logging.Info(ctx, msg)
 	_ = reporter.Log(slog.LevelInfo, msg)
 	return nil
 }
@@ -238,10 +239,10 @@ func (p *Plugin) runCleanupOldBackups(ctx context.Context, _ json.RawMessage, re
 			age := time.Since(info.ModTime())
 			if age > maxAge {
 				if rmErr := os.Remove(path); rmErr != nil {
-					slog.Warn("failed to remove old backup", "path", path, "err", rmErr)
+					logging.Warn(ctx, "failed to remove old backup", "path", path, "err", rmErr)
 				} else {
 					removed++
-					slog.Info("cleaned up old backup", "path", path, "age", age.Round(time.Hour))
+					logging.Info(ctx, "cleaned up old backup", "path", path, "age", age.Round(time.Hour))
 				}
 			}
 		}
