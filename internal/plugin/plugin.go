@@ -1,5 +1,6 @@
 // file: internal/plugin/plugin.go
-// version: 1.1.0
+// version: 1.1.1
+// last-edited: 2026-07-12
 
 package plugin
 
@@ -43,7 +44,14 @@ type Deps struct {
 	Router PluginRouter
 }
 
-// DownloadClient is implemented by plugins that manage a download client.
+// DownloadClient is VESTIGIAL — it has zero implementors and is NOT the seam
+// for torrent-client work. It embeds this package's Plugin base
+// (Capabilities/Init/Shutdown/HealthCheck), but the real download plugin
+// (internal/plugins/deluge) implements a DIFFERENT base — pkg/plugin/sdk.Plugin
+// — so a compile-assert against this interface can never hold without bridging
+// two plugin frameworks. New torrent-client work extends
+// internal/download.TorrentClient (which has real implementors and a config
+// factory) instead of this interface.
 type DownloadClient interface {
 	Plugin
 	TestConnection() error

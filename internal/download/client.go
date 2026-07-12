@@ -1,14 +1,22 @@
 // file: internal/download/client.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 404055b4-a238-453f-80a7-f6303ab23ec1
+// last-edited: 2026-07-12
 
 // Package download provides torrent and Usenet client integrations.
 package download
 
 import (
 	"context"
+	"errors"
 	"time"
 )
+
+// ErrRePointUnsupported is returned by TorrentClient.UpdateStoragePath
+// implementations that have not yet implemented re-point-only relocation.
+// It is fail-closed: callers must treat it as "the old path is still the one
+// registered with the client" and must NOT assume the storage path changed.
+var ErrRePointUnsupported = errors.New("re-point-only relocation not supported by this client")
 
 // TorrentInfo is the read-only view of a single torrent that the organizer
 // needs. Fields map directly to the native API responses of each client; the
@@ -64,8 +72,23 @@ type TorrentClient interface {
 	// It returns only the fields the cleanup loop needs.
 	GetUploadStats(ctx context.Context, id string) (*UploadStats, error)
 
-	// SetDownloadPath relocates a torrent to a new directory on disk.
+	// SetDownloadPath performs a PHYSICAL relocation of a torrent: it asks the
+	// client to move the data to a new directory on disk (Deluge
+	// core.move_storage / qBittorrent setLocation). Use UpdateStoragePath
+	// instead when the caller has ALREADY moved the data and only needs the
+	// client's registered path re-pointed.
 	SetDownloadPath(ctx context.Context, id, newPath string) error
+
+	// UpdateStoragePath is a RE-POINT-ONLY relocation: the caller has already
+	// moved the data on disk and only needs the client's registered storage
+	// path updated to match. Implementations MUST be fail-closed on RPC errors
+	// — on any RPC failure the OLD path must stay registered (return the error;
+	// never leave the client pointed at a path whose move was not confirmed).
+	// A process crash inside a remove-before-re-add window (mechanism-A
+	// residual) is documented in the spec's T2 spike protocol and is not
+	// promisable away here. Implementors that have not yet landed a real
+	// mechanism MUST return ErrRePointUnsupported (fail-closed).
+	UpdateStoragePath(ctx context.Context, id, newPath string) error
 
 	// RemoveTorrent removes the torrent from the client.
 	RemoveTorrent(ctx context.Context, id string, deleteFiles bool) error
