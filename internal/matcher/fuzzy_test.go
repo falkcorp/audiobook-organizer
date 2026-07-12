@@ -1,11 +1,47 @@
 // file: internal/matcher/fuzzy_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f23456789012
-// last-edited: 2026-07-03
+// last-edited: 2026-07-11
 
 package matcher
 
 import "testing"
+
+// scoreMatchGoldenRow captures a (query, target) pair and the ScoreMatch value
+// it produced BEFORE the TokenSetRatio raise-only blend was introduced. The
+// blend must never DECREASE any pair's score, so golden is treated as a
+// MINIMUM floor (see TestScoreMatchGolden). Rows expected to RISE from the
+// order-insensitive token-set signal are annotated in the note.
+type scoreMatchGoldenRow struct {
+	query, target string
+	golden        int
+	note          string
+}
+
+// scoreMatchGolden is the shared fixture table used by TestScoreMatchGolden and
+// TestTokenSetRatioNoRegression. Values are the pre-blend ScoreMatch outputs.
+var scoreMatchGolden = []scoreMatchGoldenRow{
+	{"Harry Potter", "Harry Potter", 100, "exact"},
+	{"harry potter", "Harry Potter", 100, "exact case-insensitive"},
+	{"Harry", "Harry Potter and the Philosopher's Stone", 90, "prefix; token-set subset -> 70, prefix 90 wins, unchanged"},
+	{"Potter", "Harry Potter", 80, "word-start subset; token-set 70, 80 wins, unchanged"},
+	{"Hary Poter", "Harry Potter", 41, "typo, no token intersection"},
+	{"xyzzy", "Harry Potter", 13, "unrelated"},
+	{"Zola", "Émile Zola", 80, "non-ASCII substring subset; unchanged"},
+	{"The Hobbit - Tolkien", "Tolkien: The Hobbit", 25, "reordered tokens -> rises to token-set floor"},
+	{"Tolkien The Hobbit", "The Hobbit Tolkien", 27, "reordered tokens -> rises to token-set floor"},
+	{"Dune", "Dune Messiah", 90, "prefix; token-set 70, 90 wins, unchanged"},
+	{"dune", "June", 52, "single-token typo"},
+	{"The Lord of the Rings", "Lord of the Rings The", 30, "reordered tokens -> rises to token-set floor"},
+	{"Ender's Game - Orson Scott Card", "Orson Scott Card - Ender's Game", 14, "reordered tokens -> rises to token-set floor"},
+	{"Neuromancer", "Neuromancer by William Gibson", 90, "prefix; unchanged"},
+	{"Foundation Isaac Asimov", "Asimov Foundation", 30, "reordered/appended -> rises to token-set floor"},
+	{"1984", "Nineteen Eighty-Four", 0, "unrelated spelled-out number"},
+	{"The Great Gatsby", "Great Gatsby", 37, "author/prefix drop -> rises to token-set floor"},
+	{"Brandon Sanderson Mistborn", "Mistborn Brandon Sanderson", 24, "reordered tokens -> rises to token-set floor"},
+	{"A Game of Thrones", "Game of Thrones A", 38, "reordered tokens -> rises to token-set floor"},
+	{"Snow Crash", "Cryptonomicon", 5, "unrelated"},
+}
 
 func TestLevenshteinDistance(t *testing.T) {
 	tests := []struct {
@@ -111,6 +147,18 @@ func TestRankResults_MinScore(t *testing.T) {
 	// Only the exact match should pass
 	if len(results) != 1 {
 		t.Errorf("expected 1 result with minScore 90, got %d", len(results))
+	}
+}
+
+// TestScoreMatchGolden locks the current ScoreMatch behavior. In this commit it
+// asserts EQUALITY against the captured golden values; a later commit relaxes it
+// to a floor (got >= golden) once the raise-only TokenSetRatio blend lands.
+func TestScoreMatchGolden(t *testing.T) {
+	for _, r := range scoreMatchGolden {
+		got := ScoreMatch(r.query, r.target)
+		if got != r.golden {
+			t.Errorf("ScoreMatch(%q, %q) = %d, golden %d (%s)", r.query, r.target, got, r.golden, r.note)
+		}
 	}
 }
 
