@@ -1,6 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.92.1 -->
-<!-- version: 9.93.0 -->
+<!-- version: 9.94.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-11 -->
 
@@ -59,6 +58,13 @@ remaining-work catalog, produced, adversarially judged (3 lenses × 10), brief-v
   - [x] INIT-4 T03 — batch-hydrate Bleve hits with `GetBooksByIDs` (#1882).
   - [x] INIT-2 T05 — shard full-scan `emit()` mutex; move book lookups off the pair lock, CONC-3
     (#1883).
+  - [x] INIT-1 T05 — `dedup.calibrate-composite` op: coordinate-wise noisy-OR band calibration
+    over the pair-deduped gold set (`internal/plugins/dedup/calibrate_composite.go`), dry-run
+    by default, operator-gated band apply. **Follow-up (potential future work):** per-signal
+    `MinConfidence`/`MaxConfidence` recommendations are ADVISORY-only because
+    `config.DedupSignalConfig` persists band thresholds but has no per-kind confidence field —
+    adding one (a `map[string]KindConfig` under `dedup.signals`) would let the confidence round
+    become applyable instead of a manual config.yaml edit.
   - **INIT-2's `internal/dedup/engine.go` tasks (T03 + T05) are both merged**, which unblocks
     Phase B: INIT-1 TASK-08 and INIT-4 TASK-05 (both rebase on that file) can now start.
 - **Wave 2b (4 PRs, #1885–#1888, merged 2026-07-11):** see

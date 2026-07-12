@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/plugin.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: d1e2f3a4-b5c6-7890-abcd-ef1234567890
 // last-edited: 2026-07-11
 
@@ -69,6 +69,7 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.bookfileSegDropDef(),               // T020: drop AcoustID segment fields from stored values
 		p.datasetBackfillDef(),               // C4: label + suppress residual pending candidates
 		p.calibrateEmbeddingThresholdsDef(),  // DEDUP-2/3: bge-m3 threshold calibration report (dry-run only)
+		p.calibrateCompositeDef(),            // INIT-1 T5: noisy-OR composite band calibration (dry-run; band apply operator-gated)
 		p.mineGoldLabelsDef(),                // gold miner: auto-label high-confidence true_dup positives
 		p.rebuildGoldLabelsDef(),             // rebuild rule/auto_high_conf gold labels against current state
 		p.quarantineChapterArtifactsDef(),    // drain chapter-file-as-book artifacts (candidate explosion)
