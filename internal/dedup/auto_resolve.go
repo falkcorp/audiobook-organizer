@@ -1,13 +1,14 @@
 // file: internal/dedup/auto_resolve.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6d1e9b52-4f70-4c83-a2b9-1e5c8d0f7a34
-// last-edited: 2026-07-03
+// last-edited: 2026-07-12
 
 package dedup
 
 import (
 	"context"
 	"fmt"
+	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"log/slog"
 	"strings"
 	"time"
@@ -162,7 +163,7 @@ func (de *Engine) AutoResolveCertain(ctx context.Context, apply bool, maxMerges,
 
 		winnerID, mergeErr := de.autoMergeCertain(c)
 		if mergeErr != nil {
-			slog.Error("dedup auto-resolve merge failed",
+			logging.Error(ctx, "dedup auto-resolve merge failed",
 				"candidate", c.ID, "a", c.EntityAID, "b", c.EntityBID, "err", mergeErr)
 			continue
 		}
@@ -174,7 +175,7 @@ func (de *Engine) AutoResolveCertain(ctx context.Context, apply bool, maxMerges,
 		}
 	}
 
-	slog.Info("dedup auto-resolve pass complete",
+	logging.Info(ctx, "dedup auto-resolve pass complete",
 		"dry_run", res.DryRun, "checked", res.Checked, "eligible", res.Eligible,
 		"merged", res.Merged, "skipped_cap", res.SkippedCap)
 	return res, nil

@@ -1,7 +1,7 @@
 // file: internal/dedup/drain_stale.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 60d982e2-6836-4327-9ddf-9b55375f39ea
-// last-edited: 2026-07-11
+// last-edited: 2026-07-12
 
 // Package dedup — DrainStaleCandidates (DEDUP-1 / CONS-16 / CONS-17).
 //
@@ -31,7 +31,7 @@ package dedup
 import (
 	"context"
 	"fmt"
-	"log/slog"
+	"github.com/falkcorp/audiobook-organizer/internal/logging"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
@@ -166,10 +166,10 @@ func (de *Engine) DrainStaleCandidates(ctx context.Context, opID string, apply b
 	offset := 0
 	if checkpoint {
 		if cp, cperr := operations.LoadCheckpoint(de.bookStore, opID); cperr != nil {
-			slog.Warn("drain-stale: checkpoint load failed (starting from 0)", "op_id", opID, "error", cperr)
+			logging.Warn(ctx, "drain-stale: checkpoint load failed (starting from 0)", "op_id", opID, "error", cperr)
 		} else if cp != nil {
 			offset = cp.PhaseIndex
-			slog.Info("drain-stale: resuming from checkpoint", "op_id", opID, "offset", offset)
+			logging.Info(ctx, "drain-stale: resuming from checkpoint", "op_id", opID, "offset", offset)
 		}
 	}
 
@@ -229,7 +229,7 @@ func (de *Engine) DrainStaleCandidates(ctx context.Context, opID string, apply b
 		offset += len(page)
 		if checkpoint {
 			if serr := operations.SaveCheckpoint(de.bookStore, opID, "dedup:drain-stale", "scanning", offset, totalPendingExact); serr != nil {
-				slog.Warn("drain-stale: checkpoint save failed", "op_id", opID, "offset", offset, "error", serr)
+				logging.Warn(ctx, "drain-stale: checkpoint save failed", "op_id", opID, "offset", offset, "error", serr)
 			}
 		}
 
@@ -256,7 +256,7 @@ func (de *Engine) DrainStaleCandidates(ctx context.Context, opID string, apply b
 			default:
 			}
 			if uerr := de.embedStore.UpdateCandidateStatus(id, staleDrainStatus); uerr != nil {
-				slog.Error("drain-stale: reclassify failed", "candidate_id", id, "error", uerr)
+				logging.Error(ctx, "drain-stale: reclassify failed", "candidate_id", id, "error", uerr)
 			}
 		}
 	}
@@ -264,11 +264,11 @@ func (de *Engine) DrainStaleCandidates(ctx context.Context, opID string, apply b
 	// Clean completion — drop the checkpoint so the next run starts fresh.
 	if checkpoint {
 		if cerr := operations.ClearState(de.bookStore, opID); cerr != nil {
-			slog.Warn("drain-stale: clear checkpoint failed", "op_id", opID, "error", cerr)
+			logging.Warn(ctx, "drain-stale: clear checkpoint failed", "op_id", opID, "error", cerr)
 		}
 	}
 
-	slog.Info("drain-stale: complete",
+	logging.Info(ctx, "drain-stale: complete",
 		"inspected", result.Inspected,
 		"would_purge", result.WouldPurge,
 		"kept", result.Kept,

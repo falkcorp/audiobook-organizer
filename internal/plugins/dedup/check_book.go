@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/check_book.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3f2e1d0c-b9a8-7654-3210-fedcba987654
-// last-edited: 2026-06-14
+// last-edited: 2026-07-12
 
 // check_book.go implements the dedup.check-book UOS operation (M4).
 //
@@ -26,7 +26,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
+	"github.com/falkcorp/audiobook-organizer/internal/logging"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -132,7 +132,7 @@ func runCheckBookWith(ctx context.Context, checker bookChecker, raw json.RawMess
 		isDup, err := checker.CheckBook(ctx, sub.ID)
 		if err != nil {
 			// Mirror the eager import path: log warning, continue to next book.
-			slog.Warn("dedup.check-book CheckBook error", "id", sub.ID, "err", err)
+			logging.Warn(ctx, "dedup.check-book CheckBook error", "id", sub.ID, "err", err)
 			continue
 		}
 
