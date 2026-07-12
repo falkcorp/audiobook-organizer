@@ -497,6 +497,74 @@ func (_c *MockMetadataStore_CreateOperation_Call) RunAndReturn(run func(id strin
 	return _c
 }
 
+// CreateSeries provides a mock function for the type MockMetadataStore
+func (_mock *MockMetadataStore) CreateSeries(name string, authorID *int) (*database.Series, error) {
+	ret := _mock.Called(name, authorID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for CreateSeries")
+	}
+
+	var r0 *database.Series
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string, *int) (*database.Series, error)); ok {
+		return returnFunc(name, authorID)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string, *int) *database.Series); ok {
+		r0 = returnFunc(name, authorID)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*database.Series)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string, *int) error); ok {
+		r1 = returnFunc(name, authorID)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockMetadataStore_CreateSeries_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CreateSeries'
+type MockMetadataStore_CreateSeries_Call struct {
+	*mock.Call
+}
+
+// CreateSeries is a helper method to define mock.On call
+//   - name string
+//   - authorID *int
+func (_e *MockMetadataStore_Expecter) CreateSeries(name any, authorID any) *MockMetadataStore_CreateSeries_Call {
+	return &MockMetadataStore_CreateSeries_Call{Call: _e.mock.On("CreateSeries", name, authorID)}
+}
+
+func (_c *MockMetadataStore_CreateSeries_Call) Run(run func(name string, authorID *int)) *MockMetadataStore_CreateSeries_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 *int
+		if args[1] != nil {
+			arg1 = args[1].(*int)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockMetadataStore_CreateSeries_Call) Return(series *database.Series, err error) *MockMetadataStore_CreateSeries_Call {
+	_c.Call.Return(series, err)
+	return _c
+}
+
+func (_c *MockMetadataStore_CreateSeries_Call) RunAndReturn(run func(name string, authorID *int) (*database.Series, error)) *MockMetadataStore_CreateSeries_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // DeleteBook provides a mock function for the type MockMetadataStore
 func (_mock *MockMetadataStore) DeleteBook(id string) error {
 	ret := _mock.Called(id)
@@ -2526,6 +2594,74 @@ func (_c *MockMetadataStore_GetScanFailCount_Call) RunAndReturn(run func(pathHas
 	return _c
 }
 
+// GetSeriesByName provides a mock function for the type MockMetadataStore
+func (_mock *MockMetadataStore) GetSeriesByName(name string, authorID *int) (*database.Series, error) {
+	ret := _mock.Called(name, authorID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetSeriesByName")
+	}
+
+	var r0 *database.Series
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string, *int) (*database.Series, error)); ok {
+		return returnFunc(name, authorID)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string, *int) *database.Series); ok {
+		r0 = returnFunc(name, authorID)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*database.Series)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string, *int) error); ok {
+		r1 = returnFunc(name, authorID)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockMetadataStore_GetSeriesByName_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetSeriesByName'
+type MockMetadataStore_GetSeriesByName_Call struct {
+	*mock.Call
+}
+
+// GetSeriesByName is a helper method to define mock.On call
+//   - name string
+//   - authorID *int
+func (_e *MockMetadataStore_Expecter) GetSeriesByName(name any, authorID any) *MockMetadataStore_GetSeriesByName_Call {
+	return &MockMetadataStore_GetSeriesByName_Call{Call: _e.mock.On("GetSeriesByName", name, authorID)}
+}
+
+func (_c *MockMetadataStore_GetSeriesByName_Call) Run(run func(name string, authorID *int)) *MockMetadataStore_GetSeriesByName_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 *int
+		if args[1] != nil {
+			arg1 = args[1].(*int)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockMetadataStore_GetSeriesByName_Call) Return(series *database.Series, err error) *MockMetadataStore_GetSeriesByName_Call {
+	_c.Call.Return(series, err)
+	return _c
+}
+
+func (_c *MockMetadataStore_GetSeriesByName_Call) RunAndReturn(run func(name string, authorID *int) (*database.Series, error)) *MockMetadataStore_GetSeriesByName_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // IncrScanFailCount provides a mock function for the type MockMetadataStore
 func (_mock *MockMetadataStore) IncrScanFailCount(pathHash string) (int, error) {
 	ret := _mock.Called(pathHash)
@@ -3087,6 +3223,57 @@ func (_c *MockMetadataStore_RecomputeBookAggregates_Call) Return(err error) *Moc
 }
 
 func (_c *MockMetadataStore_RecomputeBookAggregates_Call) RunAndReturn(run func(bookID string) error) *MockMetadataStore_RecomputeBookAggregates_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// RecordMetadataChange provides a mock function for the type MockMetadataStore
+func (_mock *MockMetadataStore) RecordMetadataChange(record *database.MetadataChangeRecord) error {
+	ret := _mock.Called(record)
+
+	if len(ret) == 0 {
+		panic("no return value specified for RecordMetadataChange")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(*database.MetadataChangeRecord) error); ok {
+		r0 = returnFunc(record)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockMetadataStore_RecordMetadataChange_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RecordMetadataChange'
+type MockMetadataStore_RecordMetadataChange_Call struct {
+	*mock.Call
+}
+
+// RecordMetadataChange is a helper method to define mock.On call
+//   - record *database.MetadataChangeRecord
+func (_e *MockMetadataStore_Expecter) RecordMetadataChange(record any) *MockMetadataStore_RecordMetadataChange_Call {
+	return &MockMetadataStore_RecordMetadataChange_Call{Call: _e.mock.On("RecordMetadataChange", record)}
+}
+
+func (_c *MockMetadataStore_RecordMetadataChange_Call) Run(run func(record *database.MetadataChangeRecord)) *MockMetadataStore_RecordMetadataChange_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 *database.MetadataChangeRecord
+		if args[0] != nil {
+			arg0 = args[0].(*database.MetadataChangeRecord)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockMetadataStore_RecordMetadataChange_Call) Return(err error) *MockMetadataStore_RecordMetadataChange_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockMetadataStore_RecordMetadataChange_Call) RunAndReturn(run func(record *database.MetadataChangeRecord) error) *MockMetadataStore_RecordMetadataChange_Call {
 	_c.Call.Return(run)
 	return _c
 }

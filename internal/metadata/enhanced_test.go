@@ -1,7 +1,7 @@
 // file: internal/metadata/enhanced_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8f7e6d5c-4b3a-2c1d-0e9f-8a7b6c5d4e3f
-// last-edited: 2026-07-07
+// last-edited: 2026-07-11
 
 package metadata
 
@@ -373,43 +373,135 @@ func TestBatchUpdateMetadata_UpdateError(t *testing.T) {
 	}
 }
 
-func TestRecordMetadataChange(t *testing.T) {
-	history := RecordMetadataChange("book123", "title", "Old Title", "New Title", "user123")
+// TestAuthorSeriesResolution proves the INIT-3-T4 author/series name → ID
+// resolution edge semantics: reuse (no duplicate created), create-once,
+// empty-name skip (never clears an ID), store-error fail-open (other fields
+// still applied, ID left unset), and a MetadataChangeRecord per ID change.
+func TestAuthorSeriesResolution(t *testing.T) {
+	t.Run("existing author reused, no duplicate created", func(t *testing.T) {
+		store := newMockStore(t)
+		existingID := 5
+		book := &database.Book{ID: "b1", Title: "T"}
+		store.EXPECT().GetBookByID("b1").Return(book, nil).Once()
+		store.EXPECT().GetAuthorByName("Ursula Le Guin").
+			Return(&database.Author{ID: existingID, Name: "Ursula Le Guin"}, nil).Once()
+		// CreateAuthor must NOT be called (no expectation set → call would fail).
+		store.EXPECT().RecordMetadataChange(mock.MatchedBy(func(r *database.MetadataChangeRecord) bool {
+			return r.Field == "author_id" && r.BookID == "b1"
+		})).Return(nil).Once()
+		store.EXPECT().UpdateBook("b1", mock.MatchedBy(func(b *database.Book) bool {
+			return b.AuthorID != nil && *b.AuthorID == existingID
+		})).Return(book, nil).Once()
 
-	if history == nil {
-		t.Fatal("Expected non-nil history record")
-	}
-	if history.BookID != "book123" {
-		t.Errorf("Expected BookID=book123, got %s", history.BookID)
-	}
-	if history.Field != "title" {
-		t.Errorf("Expected Field=title, got %s", history.Field)
-	}
-	if history.OldValue != "Old Title" {
-		t.Errorf("Expected OldValue=Old Title, got %s", history.OldValue)
-	}
-	if history.NewValue != "New Title" {
-		t.Errorf("Expected NewValue=New Title, got %s", history.NewValue)
-	}
-	if history.UpdatedBy != "user123" {
-		t.Errorf("Expected UpdatedBy=user123, got %s", history.UpdatedBy)
-	}
-	if history.UpdatedAt.IsZero() {
-		t.Error("Expected UpdatedAt to be set")
-	}
+		errs, ok := BatchUpdateMetadata([]MetadataUpdate{{
+			BookID:  "b1",
+			Updates: map[string]interface{}{"author": "Ursula Le Guin"},
+		}}, store, false)
+		if len(errs) != 0 || ok != 1 {
+			t.Fatalf("expected 0 errors / 1 success, got %d errors / %d success: %v", len(errs), ok, errs)
+		}
+	})
+
+	t.Run("unknown author created once, series created scoped to author", func(t *testing.T) {
+		store := newMockStore(t)
+		newAuthorID := 7
+		newSeriesID := 3
+		book := &database.Book{ID: "b2", Title: "T"}
+		store.EXPECT().GetBookByID("b2").Return(book, nil).Once()
+		store.EXPECT().GetAuthorByName("New Author").Return(nil, nil).Once()
+		store.EXPECT().CreateAuthor("New Author").
+			Return(&database.Author{ID: newAuthorID, Name: "New Author"}, nil).Once()
+		// Series lookup must be scoped to the just-resolved author ID.
+		store.EXPECT().GetSeriesByName("New Series", mock.MatchedBy(func(a *int) bool {
+			return a != nil && *a == newAuthorID
+		})).Return(nil, nil).Once()
+		store.EXPECT().CreateSeries("New Series", mock.MatchedBy(func(a *int) bool {
+			return a != nil && *a == newAuthorID
+		})).Return(&database.Series{ID: newSeriesID, Name: "New Series"}, nil).Once()
+		store.EXPECT().RecordMetadataChange(mock.MatchedBy(func(r *database.MetadataChangeRecord) bool {
+			return r.Field == "author_id"
+		})).Return(nil).Once()
+		store.EXPECT().RecordMetadataChange(mock.MatchedBy(func(r *database.MetadataChangeRecord) bool {
+			return r.Field == "series_id"
+		})).Return(nil).Once()
+		store.EXPECT().UpdateBook("b2", mock.MatchedBy(func(b *database.Book) bool {
+			return b.AuthorID != nil && *b.AuthorID == newAuthorID &&
+				b.SeriesID != nil && *b.SeriesID == newSeriesID
+		})).Return(book, nil).Once()
+
+		errs, ok := BatchUpdateMetadata([]MetadataUpdate{{
+			BookID:  "b2",
+			Updates: map[string]interface{}{"author": "New Author", "series": "New Series"},
+		}}, store, false)
+		if len(errs) != 0 || ok != 1 {
+			t.Fatalf("expected 0 errors / 1 success, got %d errors / %d success: %v", len(errs), ok, errs)
+		}
+	})
+
+	t.Run("empty author name skipped, existing ID preserved", func(t *testing.T) {
+		store := newMockStore(t)
+		existingID := 9
+		book := &database.Book{ID: "b3", Title: "Old", AuthorID: &existingID}
+		store.EXPECT().GetBookByID("b3").Return(book, nil).Once()
+		// No GetAuthorByName/CreateAuthor/RecordMetadataChange expectations:
+		// an empty name is a no-op that must not clear the existing ID.
+		store.EXPECT().UpdateBook("b3", mock.MatchedBy(func(b *database.Book) bool {
+			return b.AuthorID != nil && *b.AuthorID == existingID && b.Title == "New"
+		})).Return(book, nil).Once()
+
+		errs, ok := BatchUpdateMetadata([]MetadataUpdate{{
+			BookID:  "b3",
+			Updates: map[string]interface{}{"author": "", "title": "New"},
+		}}, store, false)
+		if len(errs) != 0 || ok != 1 {
+			t.Fatalf("expected 0 errors / 1 success, got %d errors / %d success: %v", len(errs), ok, errs)
+		}
+	})
+
+	t.Run("resolution store error is fail-open: other fields still applied, ID left unset", func(t *testing.T) {
+		store := newMockStore(t)
+		book := &database.Book{ID: "b4", Title: "Old"}
+		store.EXPECT().GetBookByID("b4").Return(book, nil).Once()
+		store.EXPECT().GetAuthorByName("Boom").Return(nil, errors.New("store down")).Once()
+		// No RecordMetadataChange (no successful ID change). Title still applied,
+		// AuthorID left unset.
+		store.EXPECT().UpdateBook("b4", mock.MatchedBy(func(b *database.Book) bool {
+			return b.AuthorID == nil && b.Title == "New"
+		})).Return(book, nil).Once()
+
+		errs, ok := BatchUpdateMetadata([]MetadataUpdate{{
+			BookID:  "b4",
+			Updates: map[string]interface{}{"author": "Boom", "title": "New"},
+		}}, store, false)
+		if len(errs) != 0 || ok != 1 {
+			t.Fatalf("fail-open expected 0 errors / 1 success, got %d errors / %d success: %v", len(errs), ok, errs)
+		}
+	})
 }
 
-func TestGetMetadataHistory(t *testing.T) {
+// TestLegacyHistoryStubRetired asserts the dead enhanced.go history stub
+// (MetadataHistory / RecordMetadataChange-free-func / GetMetadataHistory) is
+// retired: this file compiles without referencing any of those symbols
+// (compile-level absence), and author/series ID changes are now recorded
+// through the shipped store-backed metadata-history subsystem
+// (store.RecordMetadataChange), not a local stub.
+func TestLegacyHistoryStubRetired(t *testing.T) {
 	store := newMockStore(t)
+	book := &database.Book{ID: "b5", Title: "T"}
+	recorded := false
+	store.EXPECT().GetBookByID("b5").Return(book, nil).Once()
+	store.EXPECT().GetAuthorByName("A").Return(&database.Author{ID: 1, Name: "A"}, nil).Once()
+	store.EXPECT().RecordMetadataChange(mock.Anything).
+		Run(func(r *database.MetadataChangeRecord) { recorded = true }).Return(nil).Once()
+	store.EXPECT().UpdateBook("b5", mock.Anything).Return(book, nil).Once()
 
-	history, err := GetMetadataHistory("book123", store)
+	BatchUpdateMetadata([]MetadataUpdate{{
+		BookID:  "b5",
+		Updates: map[string]interface{}{"author": "A"},
+	}}, store, false)
 
-	// Function is not yet implemented, should return error
-	if err == nil {
-		t.Error("Expected error for unimplemented function")
-	}
-	if history != nil {
-		t.Error("Expected nil history for unimplemented function")
+	if !recorded {
+		t.Fatal("expected ID change recorded via shipped store.RecordMetadataChange subsystem")
 	}
 }
 
