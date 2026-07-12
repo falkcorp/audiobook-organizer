@@ -1,6 +1,7 @@
 // file: internal/download/qbittorrent.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b1275f4a-b460-48d6-9a95-ac95ac9056fb
+// last-edited: 2026-07-12
 
 package download
 
@@ -177,7 +178,9 @@ func (q *QBittorrentClient) GetUploadStats(ctx context.Context, id string) (*Upl
 	}, nil
 }
 
-// SetDownloadPath moves a torrent to a new download directory.
+// SetDownloadPath performs a PHYSICAL move of a torrent's data to a new
+// download directory (qBittorrent setLocation). For re-point-only relocation
+// where the caller has already moved the data, use UpdateStoragePath instead.
 func (q *QBittorrentClient) SetDownloadPath(ctx context.Context, id, newPath string) error {
 	data := url.Values{"hashes": {id}, "location": {newPath}}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, q.baseURL+"/api/v2/torrents/setLocation", strings.NewReader(data.Encode()))
@@ -194,6 +197,14 @@ func (q *QBittorrentClient) SetDownloadPath(ctx context.Context, id, newPath str
 		return fmt.Errorf("qbittorrent: setLocation returned status %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// UpdateStoragePath is the re-point-only relocation stub. It is fail-closed:
+// until the guarded qBittorrent re-point work (TASK-05) lands a confirmed
+// mechanism, it returns ErrRePointUnsupported so callers never assume a path
+// change that did not happen.
+func (q *QBittorrentClient) UpdateStoragePath(ctx context.Context, id, newPath string) error {
+	return ErrRePointUnsupported
 }
 
 // RemoveTorrent removes a torrent from the client.

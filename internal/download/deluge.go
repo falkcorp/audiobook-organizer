@@ -1,6 +1,7 @@
 // file: internal/download/deluge.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 466129e8-037a-4da5-a961-078808151e0e
+// last-edited: 2026-07-12
 
 package download
 
@@ -189,7 +190,9 @@ func (d *DelugeClient) GetUploadStats(ctx context.Context, id string) (*UploadSt
 	}, nil
 }
 
-// SetDownloadPath moves a torrent to a new download directory.
+// SetDownloadPath performs a PHYSICAL move of a torrent's data to a new
+// download directory (Deluge core.move_storage). For re-point-only relocation
+// where the caller has already moved the data, use UpdateStoragePath instead.
 func (d *DelugeClient) SetDownloadPath(ctx context.Context, id, newPath string) error {
 	_, err := d.call(ctx, "core.set_torrent_move_completed_path", id, newPath)
 	if err != nil {
@@ -197,6 +200,14 @@ func (d *DelugeClient) SetDownloadPath(ctx context.Context, id, newPath string) 
 	}
 	_, err = d.call(ctx, "core.move_storage", []string{id}, newPath)
 	return err
+}
+
+// UpdateStoragePath is the re-point-only relocation stub. It is fail-closed:
+// until the real-Deluge spike (TASK-02) lands a confirmed mechanism, it returns
+// ErrRePointUnsupported so callers never assume a path change that did not
+// happen.
+func (d *DelugeClient) UpdateStoragePath(ctx context.Context, id, newPath string) error {
+	return ErrRePointUnsupported
 }
 
 // RemoveTorrent removes a torrent from the client.

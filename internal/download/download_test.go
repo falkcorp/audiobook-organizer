@@ -1,5 +1,6 @@
 // file: internal/download/download_test.go
-// version: 1.1.0
+// version: 1.2.0
+// last-edited: 2026-07-12
 
 package download
 
@@ -58,6 +59,31 @@ func TestUsenetClientInterface(t *testing.T) {
 			// Just checking that the type assertions work
 			if tt.client == nil {
 				t.Error("client should not be nil")
+			}
+		})
+	}
+}
+
+// TestUpdateStoragePathFailClosed verifies that the re-point-only relocation
+// stubs on both torrent clients are fail-closed: they return
+// ErrRePointUnsupported until TASK-02 (Deluge) / TASK-05 (qBittorrent) land a
+// real mechanism.
+func TestUpdateStoragePathFailClosed(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name   string
+		client TorrentClient
+	}{
+		{name: "DelugeClient", client: &DelugeClient{}},
+		{name: "QBittorrentClient", client: &QBittorrentClient{}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.client.UpdateStoragePath(ctx, "test-id", "/new/path")
+			if !errors.Is(err, ErrRePointUnsupported) {
+				t.Errorf("expected ErrRePointUnsupported, got %v", err)
 			}
 		})
 	}
