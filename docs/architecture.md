@@ -1,8 +1,13 @@
 <!-- file: docs/architecture.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: 1a9b8c7d-6e5f-4a3b-92c1-d0e9f8a7b6c5 -->
+<!-- last-edited: 2026-07-11 -->
 
 # Architecture
+
+> **See also:** the deeper, per-subsystem system-documentation set lives in
+> [`docs/system/`](system/README.md) — architecture, pipelines, storage, API,
+> runbooks, components, incidents, and deploy/GPU ops, with process/data-flow diagrams.
 
 ## Overview
 
