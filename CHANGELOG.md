@@ -22,6 +22,21 @@
   timeline section, and matching diagnostic-entry rows. Added a cross-link from
   `docs/architecture.md` to `docs/system/README.md`. Docs-only; grounded in code symbols at HEAD.
 
+#### July 10, 2026 - refactor(config): retire CFG-2 Phase D flat-key compat shim (#1536, CONS-13)
+
+- **`config`** (backend) — removed the flat→nested config migration shim
+  (`legacyRemapGroup` type, `configRemapGroups` var, `applyLegacyRemaps` func) from
+  `internal/config/update_service.go`. Phases B+C (PR #1514, stable in prod since
+  2026-06-19) mean the frontend sends nested keys, so config updates now accept nested
+  keys only. `remapScheduledKeys` (INIT-6/WF-3) and the JSON round-trip apply path are
+  untouched.
+- To keep any regression observable rather than silent, added a one-release
+  detection-only warn-log (`retiredLegacyFlatKeys`): a flat-only POST that would have
+  been remapped is now dropped by the JSON round-trip, but each such key is warn-logged
+  (`legacy flat config key ... no longer remapped, dropped`). Removal follow-up filed as
+  CFG-2-D-LOG in TODO.md. Also fixed TODO.md's stale `internal/server/update_service.go`
+  path claim (that file does not exist).
+
 #### July 11, 2026 - feat(library): cancelable, timeout-aware loading for the book list
 
 - **`library`** (frontend) — the book grid/list previously showed a bare, indefinite spinner
