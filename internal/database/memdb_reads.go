@@ -1,7 +1,7 @@
 // file: internal/database/memdb_reads.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000006
-// last-edited: 2026-07-10
+// last-edited: 2026-07-11
 
 package database
 
@@ -410,6 +410,42 @@ func (m *MemStore) GetFolderDuplicatesCore() ([][]BookCore, error) {
 	}
 
 	return bucketFolderDuplicates(entries), nil
+}
+
+// GetDuplicateBooksByMetadataCore is the MemStore twin of
+// PebbleStore.GetDuplicateBooksByMetadataCore's memdb-delegation branch
+// (pebble_store.go) — see that method's doc comment for the full bucketing
+// semantics (author + first-significant-title-token, pairwise title
+// similarity within a bucket, transitive grouping, the metadataFuzzyBucketCap
+// anti-freeze guard, deleted/non-primary/empty-title books skipped). Walks the
+// memdb books table once via the ID index (a pointer walk, no JSON unmarshal,
+// no Pebble disk scan), builds the SAME metadataDupEntry values, and defers to
+// the SAME shared bucketMetadataDuplicates helper so the two backends can never
+// drift.
+func (m *MemStore) GetDuplicateBooksByMetadataCore(threshold float64) ([][]BookCore, error) {
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+
+	iter, err := txn.Get(memTableBooks, memIdxID)
+	if err != nil {
+		return nil, fmt.Errorf("memdb metadata duplicates scan: %w", err)
+	}
+
+	var entries []metadataDupEntry
+	for obj := iter.Next(); obj != nil; obj = iter.Next() {
+		b := obj.(*Book)
+		if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+			continue
+		}
+		if b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion {
+			continue
+		}
+		if e, ok := newMetadataDupEntry(b.Core()); ok {
+			entries = append(entries, e)
+		}
+	}
+
+	return bucketMetadataDuplicates(entries, threshold), nil
 }
 
 // GetBooksBySeriesIDCore returns primary, not-deleted books for a series

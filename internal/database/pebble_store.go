@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.112.0
+// version: 1.113.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-07-11
 
@@ -24,6 +24,7 @@ import (
 
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
+	"github.com/falkcorp/audiobook-organizer/internal/matcher"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	ulid "github.com/oklog/ulid/v2"
 )
@@ -1200,11 +1201,237 @@ func singleParentDir(paths []string) (string, bool) {
 	return dir, true
 }
 
-// GetDuplicateBooksByMetadataCore is Core-typed (STOREFID W6) — see the
-// interface doc comment. Not efficiently supported in PebbleStore (see
-// GetFolderDuplicatesCore's doc comment for the same known gap).
+// GetDuplicateBooksByMetadataCore returns COARSE candidate duplicate groups
+// for dedup tier 3 (metadata-fuzzy). It buckets non-deleted, primary-version,
+// non-empty-title books by (author, first-significant-title-token), then runs
+// pairwise title similarity ONLY within a bucket and transitively groups pairs
+// scoring >= threshold. The result is deliberately coarse: fine-grained pair
+// scoring (title + author) stays downstream in
+// internal/dedup/book_dedup.go's metadataPairSimilarity — this getter only
+// feeds it candidates, it is NOT a second scoring authority.
+//
+// Bucketing (spec Decision 3): the author component of the bucket key is
+// AuthorID, not a re-normalized author name. This is EQUIVALENT to the locked
+// "normalize author" decision, not a deviation: CreateAuthor
+// (pebble_store_authors.go) deduplicates author rows on
+// util.NormalizeAuthor(name), so two books whose author names are equal under
+// that normalization already share one AuthorID. AuthorID is therefore a 1:1
+// proxy for the normalized author name, and it avoids a per-book author-name
+// join. BookCore.Authors is deliberately NOT used — it is empty on
+// memdb-resident rows.
+//
+// O(N^2) guard: the pairwise comparison is provably confined to a single
+// bucket (never the whole library), and a bucket larger than
+// metadataFuzzyBucketCap is skipped with a slog.Warn (non-disqualifying: the
+// run continues and returns every other group). This is the PR #1451
+// index-then-narrow shape and forbids the per-book full-library scan that
+// froze full-scan on 2026-07-07 (#19).
+//
+// Delegates to the memdb twin when published (mirrors
+// GetFolderDuplicatesCore's delegation shape); otherwise pages through
+// GetAllBooksCore in bounded pages. Fail-open contract: on error the consumer
+// logs "metadata dedup failed" and continues, so a returned error just means
+// tier 3 is empty for this run.
 func (p *PebbleStore) GetDuplicateBooksByMetadataCore(threshold float64) ([][]BookCore, error) {
-	return nil, nil
+	if p.UseMemDB && p.mem() != nil {
+		return p.mem().GetDuplicateBooksByMetadataCore(threshold)
+	}
+
+	var entries []metadataDupEntry
+	const metadataDupPageSize = 500
+	offset := 0
+	for {
+		page, err := p.GetAllBooksCore(metadataDupPageSize, offset)
+		if err != nil {
+			return nil, err
+		}
+		for _, book := range page {
+			// GetAllBooksCore already excludes MarkedForDeletion rows; primary
+			// version is not one of its filters, so it's checked here to mirror
+			// GetFolderDuplicatesCore's memdb-twin exclusions.
+			if book.IsPrimaryVersion != nil && !*book.IsPrimaryVersion {
+				continue
+			}
+			if e, ok := newMetadataDupEntry(book); ok {
+				entries = append(entries, e)
+			}
+		}
+		if len(page) < metadataDupPageSize {
+			break
+		}
+		offset += metadataDupPageSize
+	}
+
+	return bucketMetadataDuplicates(entries, threshold), nil
+}
+
+// metadataFuzzyBucketCap bounds the pairwise (O(k^2)) work inside one bucket.
+// A bucket with more than this many members is skipped entirely with a
+// slog.Warn rather than compared pairwise — the anti-freeze guard for the
+// #19 (2026-07-07) full-library-scan incident. Skipping is non-disqualifying.
+const metadataFuzzyBucketCap = 200
+
+// metadataDupEntry is one qualifying book (already filtered for
+// deleted/non-primary/empty-title) awaiting bucketing by
+// GetDuplicateBooksByMetadataCore. Shared between the PebbleStore
+// scan-fallback and the MemStore twin (memdb_reads.go) so the two backends can
+// never drift in bucketing/grouping semantics.
+type metadataDupEntry struct {
+	book       BookCore
+	authorKey  string // "a:<id>" when AuthorID is set, "" when unknown
+	titleToken string // first significant (non-article) normalized title token
+	normTitle  string // full normalized title, used for pairwise scoring
+}
+
+// newMetadataDupEntry builds a metadataDupEntry from a BookCore, returning
+// ok=false when the book must be skipped (empty title ⇒ never bucketed). An
+// empty author (nil AuthorID) is NON-disqualifying: the book is still bucketed
+// by its title token alone (authorKey ""), which just widens that bucket.
+func newMetadataDupEntry(book BookCore) (metadataDupEntry, bool) {
+	if strings.TrimSpace(book.Title) == "" {
+		return metadataDupEntry{}, false
+	}
+	authorKey := ""
+	if book.AuthorID != nil {
+		authorKey = "a:" + strconv.Itoa(*book.AuthorID)
+	}
+	return metadataDupEntry{
+		book:       book,
+		authorKey:  authorKey,
+		titleToken: firstSignificantTitleToken(book.Title),
+		normTitle:  util.NormalizeTitle(book.Title),
+	}, true
+}
+
+// metadataTitleArticles are leading articles stripped before picking the
+// first significant title token. Without this, every "The ..." title collapses
+// into one huge "the" bucket that trips metadataFuzzyBucketCap and is skipped,
+// silently killing recall (and "The Hobbit" would never bucket with "Hobbit").
+var metadataTitleArticles = map[string]bool{"the": true, "a": true, "an": true}
+
+// firstSignificantTitleToken returns the first non-article whitespace token of
+// the normalized title, edge-trimmed of punctuation. Titles consisting only of
+// articles/punctuation fall back to their first non-empty token so the book
+// still buckets (never returns "" for a non-empty title).
+func firstSignificantTitleToken(title string) string {
+	fields := strings.Fields(util.NormalizeTitle(title))
+	fallback := ""
+	for _, f := range fields {
+		tok := strings.Trim(f, `.,:;!?"'()[]{}`)
+		if tok == "" {
+			continue
+		}
+		if fallback == "" {
+			fallback = tok
+		}
+		if metadataTitleArticles[tok] {
+			continue
+		}
+		return tok
+	}
+	return fallback
+}
+
+// bucketMetadataDuplicates buckets entries by (authorKey, titleToken), then
+// within each bucket (>=2 members, at/under the cap) transitively groups books
+// whose pairwise title similarity is >= threshold, emitting components of >=2
+// books as groups. Bucket and group order is first-seen-stable. A
+// threshold <= 0 means "no floor" (every in-bucket pair unions) but the bucket
+// cap still bounds the work and guarantees termination.
+func bucketMetadataDuplicates(entries []metadataDupEntry, threshold float64) [][]BookCore {
+	buckets := make(map[string][]metadataDupEntry)
+	order := make([]string, 0, len(entries))
+	for _, e := range entries {
+		key := e.authorKey + "\x00" + e.titleToken
+		if _, exists := buckets[key]; !exists {
+			order = append(order, key)
+		}
+		buckets[key] = append(buckets[key], e)
+	}
+
+	var groups [][]BookCore
+	for _, key := range order {
+		bucket := buckets[key]
+		if len(bucket) < 2 {
+			continue
+		}
+		if len(bucket) > metadataFuzzyBucketCap {
+			slog.Warn("metadata dedup bucket exceeds cap; skipping",
+				"bucketKey", key, "size", len(bucket), "cap", metadataFuzzyBucketCap)
+			continue
+		}
+		groups = append(groups, groupMetadataBucket(bucket, threshold)...)
+	}
+	return groups
+}
+
+// groupMetadataBucket runs union-find over the pairwise (O(k^2), k <= cap)
+// title-similarity graph of a single bucket and returns its connected
+// components of size >= 2, in first-seen order. Author is constant within a
+// bucket (it is part of the bucket key), so scoring reduces to title
+// similarity — the coarse, grouping-only metric; downstream re-scores
+// title+author.
+func groupMetadataBucket(bucket []metadataDupEntry, threshold float64) [][]BookCore {
+	n := len(bucket)
+	parent := make([]int, n)
+	for i := range parent {
+		parent[i] = i
+	}
+	find := func(x int) int {
+		for parent[x] != x {
+			parent[x] = parent[parent[x]]
+			x = parent[x]
+		}
+		return x
+	}
+	union := func(a, b int) {
+		ra, rb := find(a), find(b)
+		if ra != rb {
+			parent[ra] = rb
+		}
+	}
+
+	for i := 0; i < n; i++ {
+		for j := i + 1; j < n; j++ {
+			if metadataTitleSimilarity(bucket[i].normTitle, bucket[j].normTitle) >= threshold {
+				union(i, j)
+			}
+		}
+	}
+
+	comps := make(map[int][]BookCore)
+	rootsOrder := make([]int, 0, n)
+	for i := 0; i < n; i++ {
+		r := find(i)
+		if _, ok := comps[r]; !ok {
+			rootsOrder = append(rootsOrder, r)
+		}
+		comps[r] = append(comps[r], bucket[i].book)
+	}
+
+	var groups [][]BookCore
+	for _, r := range rootsOrder {
+		if len(comps[r]) >= 2 {
+			groups = append(groups, comps[r])
+		}
+	}
+	return groups
+}
+
+// metadataTitleSimilarity is the coarse, grouping-only title metric: it reuses
+// internal/matcher.ScoreMatch (spec §C2 "reuse the existing fuzzy similarity
+// path", never a second metric) and symmetrizes its search-flavored,
+// asymmetric score to a 0..1 float. It is INTENTIONALLY coarse — the real
+// title+author scoring authority is book_dedup.go's metadataPairSimilarity.
+func metadataTitleSimilarity(a, b string) float64 {
+	if a == "" || b == "" {
+		return 0
+	}
+	s := matcher.ScoreMatch(a, b)
+	if r := matcher.ScoreMatch(b, a); r > s {
+		s = r
+	}
+	return float64(s) / 100.0
 }
 
 // GetBooksBySeriesIDCore is Core-typed (STOREFID W4): the return type is
