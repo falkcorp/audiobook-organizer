@@ -1,5 +1,6 @@
 <!-- file: CHANGELOG.md -->
 <!-- version: 3.145.0 -->
+<!-- version: 3.142.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-12 -->
 
@@ -106,6 +107,19 @@
   operator-gated apply that survives restart) and ADVISORY-only confidence suggestions
   (round 2, reported for a manual config.yaml edit, never persisted, never gates the apply).
   Apply is refused unless every tunable band met its target. Registered in `plugin.go`.
+#### July 11, 2026 - docs(plans): REPO-SIZE-1 history-rewrite migration plan — STOP-FOR-HUMAN (#1650)
+
+- **`docs/plans/2026-07-10-repo-size-history-rewrite-plan.md`** — evidence-grounded,
+  human-decidable plan for the reported 1.69 GB repo size. Read-only blob audit found the
+  top offender is `audiobook-organizer-test` (a compiled test binary, 269 MiB across 5
+  historical versions, reachable from tags v0.1.0–v0.56.0) plus a live `mtls-bridge` binary
+  (9.3 MiB) and live `testdata/series_*.json` fixtures. Resolved the 1.69 GB vs local
+  224.86 MiB-pack discrepancy: ~1.47 GB is GitHub-owned `refs/pull/*` (1778 PR refs) +
+  un-gc'd unreachable objects — reclaimable via GitHub Support gc **without any rewrite**.
+  Recommendation: forward-only hygiene + Support gc (Option d); the rewrite options are
+  dominated (can't remove the PR-ref bulk, yet would rewrite up to 764 tags/break
+  GoReleaser, invalidate 14+ worktrees, un-rebase ~889 PRs). No history-mutating command
+  run. Plan-only, awaiting owner decision.
 
 #### July 11, 2026 - docs(system): comprehensive system documentation set (DOCS-1, #1276)
 
