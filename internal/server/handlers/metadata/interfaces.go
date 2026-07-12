@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/interfaces.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b1ab2e4a-1f73-42f2-955d-c4a30f0fbaac
-// last-edited: 2026-07-06
+// last-edited: 2026-07-11
 
 // Narrow dependency interfaces for the metadata-domain HTTP handlers (the 19
 // per-book + library metadata endpoints extracted from the server package's
@@ -55,9 +55,15 @@ import (
 type MetadataStore interface {
 	database.BookStore
 
-	// Author resolution (bulkFetchMetadata).
+	// Author/series resolution (bulkFetchMetadata + metadata.BatchUpdateMetadata's
+	// author/series name → ID resolution, INIT-3-T4). The series/history methods
+	// were added so this type satisfies metadata.BatchUpdateMetadata's widened
+	// store parameter without a cast (the doc above notes it is passed straight in).
 	GetAuthorByName(name string) (*database.Author, error)
 	CreateAuthor(name string) (*database.Author, error)
+	GetSeriesByName(name string, authorID *int) (*database.Series, error)
+	CreateSeries(name string, authorID *int) (*database.Series, error)
+	RecordMetadataChange(record *database.MetadataChangeRecord) error
 
 	// Metadata rejections (markAudiobookNoMatch / handleGetMetadataRejections).
 	AddMetadataRejection(r database.MetadataRejection) error

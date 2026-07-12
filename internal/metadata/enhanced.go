@@ -1,12 +1,13 @@
 // file: internal/metadata/enhanced.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 7e8d9c0b-1a2f-3e4d-5c6b-7a8d9c0b1a2f
-// last-edited: 2026-07-07
+// last-edited: 2026-07-11
 
 package metadata
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -58,17 +59,6 @@ type MetadataUpdate struct {
 	BookID   string                 `json:"book_id" binding:"required"`
 	Updates  map[string]interface{} `json:"updates" binding:"required"`
 	Validate bool                   `json:"validate"`
-}
-
-// MetadataHistory represents a historical metadata change
-type MetadataHistory struct {
-	ID        int       `json:"id"`
-	BookID    string    `json:"book_id"`
-	Field     string    `json:"field"`
-	OldValue  string    `json:"old_value"`
-	NewValue  string    `json:"new_value"`
-	UpdatedAt time.Time `json:"updated_at"`
-	UpdatedBy string    `json:"updated_by,omitempty"`
 }
 
 // ValidationRule defines a validation constraint
@@ -192,6 +182,24 @@ func ValidateMetadata(updates map[string]interface{}, rules map[string]Validatio
 	return errors
 }
 
+// batchUpdateStore is the store surface BatchUpdateMetadata needs (INIT-3-T4):
+// the book reader/writer (embedded database.BookStore, as the parameter was
+// before) plus the author/series lookup-or-create helpers and the
+// metadata-change recorder used for author/series name → ID resolution.
+// Widening the parameter from database.BookStore leaves ImportMetadata (still
+// database.BookStore) untouched; the sole production caller passes
+// handlers/metadata's MetadataStore, which already embeds database.BookStore
+// and declares these methods. No internal/database interface, mock, or
+// generated file changes — this is a call-signature widening only.
+type batchUpdateStore interface {
+	database.BookStore
+	GetAuthorByName(name string) (*database.Author, error)
+	CreateAuthor(name string) (*database.Author, error)
+	GetSeriesByName(name string, authorID *int) (*database.Series, error)
+	CreateSeries(name string, authorID *int) (*database.Series, error)
+	RecordMetadataChange(record *database.MetadataChangeRecord) error
+}
+
 // BatchUpdateMetadata applies metadata updates to multiple books with validation.
 //
 // Parallelized via registry.RunItems (CONC-13): each worker processes one
@@ -208,10 +216,22 @@ func ValidateMetadata(updates map[string]interface{}, rules map[string]Validatio
 // concurrent UpdateBook calls cannot race or corrupt state at this
 // concurrency. rules is read-only after construction, so sharing it across
 // workers needs no lock.
-func BatchUpdateMetadata(updates []MetadataUpdate, store database.BookStore, validate bool) ([]error, int) {
+//
+// Author/series resolution (INIT-3-T4) is guarded by resolveMu: GetAuthorByName
+// → CreateAuthor (and the series equivalent) is a check-then-create that the
+// store does NOT make atomic (nextID is locked, but the existence check and the
+// name-index write are not), so two workers resolving the SAME new name at this
+// concurrency could otherwise create duplicate author/series rows whose
+// name-index points at only one — a data-integrity bug on a prod write path
+// (CLAUDE.md concurrency rule: exclusive access where parallel workers must
+// never double-create the same row). Serializing only the lookup-or-create
+// section is cheap (local Pebble point-gets) and correctness outranks the small
+// throughput hit here.
+func BatchUpdateMetadata(updates []MetadataUpdate, store batchUpdateStore, validate bool) ([]error, int) {
 	rules := DefaultValidationRules()
 
 	var mu sync.Mutex
+	var resolveMu sync.Mutex
 	var errs []error
 	successCount := 0
 
@@ -247,14 +267,57 @@ func BatchUpdateMetadata(updates []MetadataUpdate, store database.BookStore, val
 			return nil
 		}
 
-		// Apply updates
+		// Apply updates. book is the FULL hydrated row from GetBookByID (a
+		// direct book:<id> point-get + unmarshal, not a memdb-slim projection),
+		// so mutating and writing it back cannot wipe heavy fields.
 		if title, ok := update.Updates["title"].(string); ok {
 			book.Title = title
 		}
-		// TODO: Resolve author name to ID and update book.AuthorID
-		// For now, skip author updates pending author resolution implementation
-		// TODO: Resolve series name to ID and update book.SeriesID
-		// For now, skip series updates pending series resolution implementation
+		// Resolve author name → book.AuthorID (INIT-3-T4). Edge semantics:
+		//   - empty/absent name → no change (skip; never clear an existing ID)
+		//   - lookup MISS → CreateAuthor, then assign
+		//   - store ERROR on lookup/create → FAIL-OPEN: log, leave AuthorID
+		//     unset, and still persist the other applied fields (a store hiccup
+		//     never aborts the whole apply; only UpdateBook stays fatal-to-item).
+		// resolveMu makes the check-then-create atomic across workers.
+		if name, ok := update.Updates["author"].(string); ok && name != "" {
+			resolveMu.Lock()
+			author, aerr := store.GetAuthorByName(name)
+			if aerr == nil && author == nil {
+				author, aerr = store.CreateAuthor(name)
+			}
+			resolveMu.Unlock()
+			switch {
+			case aerr != nil:
+				slog.Warn("BatchUpdateMetadata: author resolution failed; leaving AuthorID unset (fail-open)",
+					"book", update.BookID, "author", name, "error", aerr)
+			case author != nil && (book.AuthorID == nil || *book.AuthorID != author.ID):
+				oldID := book.AuthorID
+				newID := author.ID
+				book.AuthorID = &newID
+				recordIDChange(store, update.BookID, "author_id", oldID, newID)
+			}
+		}
+		// Resolve series name → book.SeriesID, scoped to the (possibly
+		// just-resolved) author. Same edge semantics + fail-open posture.
+		if name, ok := update.Updates["series"].(string); ok && name != "" {
+			resolveMu.Lock()
+			series, serr := store.GetSeriesByName(name, book.AuthorID)
+			if serr == nil && series == nil {
+				series, serr = store.CreateSeries(name, book.AuthorID)
+			}
+			resolveMu.Unlock()
+			switch {
+			case serr != nil:
+				slog.Warn("BatchUpdateMetadata: series resolution failed; leaving SeriesID unset (fail-open)",
+					"book", update.BookID, "series", name, "error", serr)
+			case series != nil && (book.SeriesID == nil || *book.SeriesID != series.ID):
+				oldID := book.SeriesID
+				newID := series.ID
+				book.SeriesID = &newID
+				recordIDChange(store, update.BookID, "series_id", oldID, newID)
+			}
+		}
 		if format, ok := update.Updates["format"].(string); ok {
 			book.Format = format
 		}
@@ -648,24 +711,44 @@ func writeFLACMetadata(filePath string, metadata map[string]interface{}, config 
 	return nil
 }
 
-// RecordMetadataChange records a metadata change in history
-// This would typically be stored in the database
-func RecordMetadataChange(bookID string, field, oldValue, newValue, updatedBy string) *MetadataHistory {
-	return &MetadataHistory{
-		BookID:    bookID,
-		Field:     field,
-		OldValue:  oldValue,
-		NewValue:  newValue,
-		UpdatedAt: time.Now(),
-		UpdatedBy: updatedBy,
+// recordIDChange records a successful author/series ID resolution as a
+// MetadataChangeRecord (old → new) through the shipped metadata-history store,
+// so a mis-resolution (name collision → wrong existing author) is auditable and
+// reversible. Fail-open: a recording error is logged, never fatal. Previous/new
+// values are JSON-encoded to match the existing history writers in
+// internal/metafetch (nil previous → "null").
+//
+// The legacy enhanced.go history stub (MetadataHistory / RecordMetadataChange /
+// GetMetadataHistory) that used to live here was dead code shadowing this
+// already-shipped subsystem (database.MetadataChangeRecord + PebbleStore impl +
+// live /metadata-history routes + MetadataHistory.tsx) and has been retired
+// (INIT-3-T4, spec Decision 6 — no new history storage).
+func recordIDChange(store batchUpdateStore, bookID, field string, oldID *int, newID int) {
+	prev := jsonEncodeIDPtr(oldID)
+	next := jsonEncodeIDPtr(&newID)
+	rec := &database.MetadataChangeRecord{
+		BookID:        bookID,
+		Field:         field,
+		PreviousValue: &prev,
+		NewValue:      &next,
+		ChangeType:    "bulk_update",
+		Source:        "manual",
+		ChangedAt:     time.Now(),
+	}
+	if err := store.RecordMetadataChange(rec); err != nil {
+		slog.Warn("BatchUpdateMetadata: failed to record ID change history (non-fatal)",
+			"book", bookID, "field", field, "error", err)
 	}
 }
 
-// GetMetadataHistory retrieves metadata change history for a book
-// This is a placeholder for future database implementation
-func GetMetadataHistory(bookID string, store database.BookStore) ([]MetadataHistory, error) {
-	// TODO: Implement metadata history storage and retrieval in database
-	return nil, fmt.Errorf("metadata history not yet implemented in database")
+// jsonEncodeIDPtr JSON-encodes a nullable int ID (nil → "null") to match the
+// JSON-encoded PreviousValue/NewValue convention of the metadata-history store.
+func jsonEncodeIDPtr(id *int) string {
+	b, err := json.Marshal(id)
+	if err != nil {
+		return "null"
+	}
+	return string(b)
 }
 
 // ExportMetadata exports book metadata to a structured format
