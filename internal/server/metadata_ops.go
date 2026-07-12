@@ -1,7 +1,7 @@
 // file: internal/server/metadata_ops.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
-// last-edited: 2026-07-07
+// last-edited: 2026-07-11
 //
 // Async-operation machinery for the metadata domain, relocated verbatim from
 // metadata_handlers.go (ADR-003 Phase 4) when the 19 metadata HTTP handlers
@@ -45,7 +45,100 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/policy"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	ulid "github.com/oklog/ulid/v2"
+	"golang.org/x/sync/errgroup"
 )
+
+// perProviderFetchCap bounds the number of concurrent live search calls issued
+// to any single metadata provider during a bulk fetch. It is a FIXED internal
+// constant (INIT-3-T3, reviewed): the ProtectedSource circuit breaker and the
+// per-provider limiters (e.g. Hardcover's 60-rpm limiter) sit beneath it, so no
+// per-deployment tuning is needed. Deliberately NOT config.
+const perProviderFetchCap = 2
+
+// defaultBulkFetchWorkers is the fallback outer-loop pool size when
+// config.AppConfig.MetadataScoring.BulkFetchWorkers is unset (<=0). Network-bound,
+// deliberately smaller than NumCPU per the CLAUDE.md concurrency mandate.
+const defaultBulkFetchWorkers = 4
+
+// bulkFetchWorkers resolves the configured outer-loop worker count, falling back
+// to defaultBulkFetchWorkers when unset. Kept trivially greppable so TASK-02 can
+// promote the value cleanly.
+func bulkFetchWorkers() int {
+	if w := config.AppConfig.MetadataScoring.BulkFetchWorkers; w > 0 {
+		return w
+	}
+	return defaultBulkFetchWorkers
+}
+
+// providerSemaphore bounds in-flight live search calls per source name. The map
+// is built ONCE before dispatch and is read-only thereafter, so concurrent
+// workers only ever touch a per-name buffered channel — never the map itself.
+type providerSemaphore struct{ byName map[string]chan struct{} }
+
+// newProviderSemaphore builds a per-source-name semaphore (capacity cap per name)
+// from a source chain. Duplicate names share one channel.
+func newProviderSemaphore(chain []metadata.MetadataSource, cap int) *providerSemaphore {
+	m := make(map[string]chan struct{}, len(chain))
+	for _, src := range chain {
+		n := src.Name()
+		if _, ok := m[n]; !ok {
+			m[n] = make(chan struct{}, cap)
+		}
+	}
+	return &providerSemaphore{byName: m}
+}
+
+// acquire blocks until a slot for name is free or ctx is done. An unknown name
+// (no channel) is treated as unbounded and acquire is a no-op — release then
+// matches. Returns ctx.Err() when the context is canceled while waiting.
+func (p *providerSemaphore) acquire(ctx context.Context, name string) error {
+	if p == nil {
+		return nil
+	}
+	ch := p.byName[name]
+	if ch == nil {
+		return nil
+	}
+	select {
+	case ch <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// release returns a slot previously taken by acquire. Paired with acquire via
+// defer, so the channel always holds a token to drain; a no-op for unknown names.
+func (p *providerSemaphore) release(name string) {
+	if p == nil {
+		return
+	}
+	if ch := p.byName[name]; ch != nil {
+		<-ch
+	}
+}
+
+// runBookFetchPool runs processOne over indices [0,n) on a bounded errgroup pool
+// (the CLAUDE.md-sanctioned worker pool — errgroup.Group + SetLimit). Dispatch
+// stops promptly when ctx is canceled, and the first non-nil processOne error is
+// returned. Per-book fetch errors must be handled INSIDE processOne (record a
+// result row, return nil) so a single book never fails the whole op; processOne
+// should return an error only for genuine context cancellation.
+func runBookFetchPool(ctx context.Context, workers, n int, processOne func(context.Context, int) error) error {
+	if workers <= 0 {
+		workers = defaultBulkFetchWorkers
+	}
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(workers)
+	for i := 0; i < n; i++ {
+		if gctx.Err() != nil {
+			break // stop dispatching promptly on cancellation
+		}
+		i := i
+		g.Go(func() error { return processOne(gctx, i) })
+	}
+	return g.Wait()
+}
 
 // runBulkMetadataFetchAll is the resumable core of the full-library metadata
 // fetch. It ONLY fetches and caches — it never writes to book records.
@@ -157,15 +250,35 @@ func (s *Server) runBulkMetadataFetchAll(
 		sourceChain = append([]metadata.MetadataSource{audible}, rest...)
 	}
 
+	// Counters shared across the worker pool: completed (running total, seeded
+	// with the already-cached count) plus found/notFound as atomics. The `done`
+	// resume map above is fully built before dispatch and read-only inside workers.
 	completed := int64(alreadyDone)
-	found := 0
-	notFound := 0
+	var found, notFound atomic.Int64
 
-	for i, w := range work {
-		if ctx.Err() != nil {
-			return ctx.Err()
+	// Per-provider semaphore (fixed cap 2) shared by all workers so N pool workers
+	// can never stampede a single provider. Built from the read-only sourceChain.
+	sem := newProviderSemaphore(sourceChain, perProviderFetchCap)
+
+	// progressMu serializes ProgressReporter calls — the reporter is not assumed
+	// concurrency-safe (see runBulkWriteBack for the same precaution).
+	var progressMu sync.Mutex
+	reportProgress := func(current, total int, message string) {
+		progressMu.Lock()
+		_ = progress.UpdateProgress(current, total, message)
+		progressMu.Unlock()
+	}
+
+	// processOne handles a single book. Its body is the former serial loop body,
+	// unchanged except: counters use atomics, the live source calls are wrapped in
+	// the per-provider semaphore (cache reads / result writes stay outside), and it
+	// returns an error ONLY for genuine context cancellation. A per-book fetch
+	// error records a not_found row and returns nil so it never fails the op.
+	processOne := func(gctx context.Context, i int) error {
+		if gctx.Err() != nil {
+			return gctx.Err()
 		}
-
+		w := work[i]
 		bookID := w.book.ID
 		currentAuthor := w.authorName
 
@@ -180,13 +293,13 @@ func (s *Server) runBulkMetadataFetchAll(
 				ResultJSON:  `{"status":"skipped_fragment","source":""}`,
 				Status:      "skipped_fragment",
 			})
-			notFound++
+			notFound.Add(1)
 			n := atomic.AddInt64(&completed, 1)
-			if i%50 == 0 || int(n) == totalBooks {
-				_ = progress.UpdateProgress(int(n), totalBooks,
-					fmt.Sprintf("fetched %d/%d — cached:%d not_found:%d", n, totalBooks, found, notFound))
+			if n%50 == 0 || int(n) == totalBooks {
+				reportProgress(int(n), totalBooks,
+					fmt.Sprintf("fetched %d/%d — cached:%d not_found:%d", n, totalBooks, found.Load(), notFound.Load()))
 			}
-			continue
+			return nil
 		}
 
 		searchTitle := stripChapterFromTitle(w.book.Title)
@@ -195,42 +308,58 @@ func (s *Server) runBulkMetadataFetchAll(
 		var sourceName string
 		cacheHit := false
 
+		// Per-book source chain stays SEQUENTIAL (priority-ordered, early-exit on
+		// first success, each source behind its ProtectedSource breaker). Only the
+		// OUTER book loop is parallel.
 		for _, src := range sourceChain {
-			if cached, _, cerr := database.GetCachedMetadataFetchWithMaxAge(store, bookID, src.Name(), maxAge); cerr == nil && cached != nil {
+			name := src.Name()
+			if cached, _, cerr := database.GetCachedMetadataFetchWithMaxAge(store, bookID, name, maxAge); cerr == nil && cached != nil {
 				var cachedResults []metadata.BookMetadata
 				if jerr := json.Unmarshal(cached.Results, &cachedResults); jerr == nil && len(cachedResults) > 0 {
 					metaResults = cachedResults
-					sourceName = src.Name()
+					sourceName = name
 					cacheHit = true
 					break
 				}
 			}
-			var fetchErr error
-			if currentAuthor != "" {
-				metaResults, fetchErr = src.SearchByTitleAndAuthor(ctx, searchTitle, currentAuthor)
-				if fetchErr == nil && len(metaResults) > 0 {
-					sourceName = src.Name()
-					break
-				}
+			// Live calls only: bound concurrency per provider. ctx cancel while
+			// waiting on the semaphore aborts the book with ctx.Err().
+			if err := sem.acquire(gctx, name); err != nil {
+				return err
 			}
-			metaResults, fetchErr = src.SearchByTitle(ctx, searchTitle)
-			if fetchErr == nil && len(metaResults) > 0 {
-				sourceName = src.Name()
-				break
-			}
-			if searchTitle != w.book.Title {
+			ok := func() bool {
+				defer sem.release(name)
+				var fetchErr error
 				if currentAuthor != "" {
-					metaResults, fetchErr = src.SearchByTitleAndAuthor(ctx, w.book.Title, currentAuthor)
+					metaResults, fetchErr = src.SearchByTitleAndAuthor(gctx, searchTitle, currentAuthor)
 					if fetchErr == nil && len(metaResults) > 0 {
-						sourceName = src.Name()
-						break
+						sourceName = name
+						return true
 					}
 				}
-				metaResults, fetchErr = src.SearchByTitle(ctx, w.book.Title)
+				metaResults, fetchErr = src.SearchByTitle(gctx, searchTitle)
 				if fetchErr == nil && len(metaResults) > 0 {
-					sourceName = src.Name()
-					break
+					sourceName = name
+					return true
 				}
+				if searchTitle != w.book.Title {
+					if currentAuthor != "" {
+						metaResults, fetchErr = src.SearchByTitleAndAuthor(gctx, w.book.Title, currentAuthor)
+						if fetchErr == nil && len(metaResults) > 0 {
+							sourceName = name
+							return true
+						}
+					}
+					metaResults, fetchErr = src.SearchByTitle(gctx, w.book.Title)
+					if fetchErr == nil && len(metaResults) > 0 {
+						sourceName = name
+						return true
+					}
+				}
+				return false
+			}()
+			if ok {
+				break
 			}
 		}
 
@@ -241,10 +370,10 @@ func (s *Server) runBulkMetadataFetchAll(
 					_ = database.PutCachedMetadataFetch(store, bookID, sourceName, blob, 0)
 				}
 			}
-			found++
+			found.Add(1)
 			resultStatus = "cached"
 		} else {
-			notFound++
+			notFound.Add(1)
 		}
 
 		_ = store.CreateOperationResult(&database.OperationResult{
@@ -255,26 +384,34 @@ func (s *Server) runBulkMetadataFetchAll(
 		})
 
 		n := atomic.AddInt64(&completed, 1)
-		if i%50 == 0 || int(n) == totalBooks {
-			_ = progress.UpdateProgress(int(n), totalBooks,
-				fmt.Sprintf("fetched %d/%d — cached:%d not_found:%d", n, totalBooks, found, notFound))
+		if n%50 == 0 || int(n) == totalBooks {
+			reportProgress(int(n), totalBooks,
+				fmt.Sprintf("fetched %d/%d — cached:%d not_found:%d", n, totalBooks, found.Load(), notFound.Load()))
 		}
 
 		// Rate-limit live API calls; cache hits are instant so skip the delay.
 		if !cacheHit && sourceName != "" && i < len(work)-1 {
 			select {
-			case <-ctx.Done():
-				return ctx.Err()
+			case <-gctx.Done():
+				return gctx.Err()
 			case <-time.After(200 * time.Millisecond):
 			}
 		}
+		return nil
+	}
+
+	if err := runBookFetchPool(ctx, bulkFetchWorkers(), len(work), processOne); err != nil {
+		return err
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
 	}
 
 	finalCount := atomic.LoadInt64(&completed)
 	_ = progress.UpdateProgress(int(finalCount), totalBooks,
-		fmt.Sprintf("complete — cached:%d not_found:%d", found, notFound))
+		fmt.Sprintf("complete — cached:%d not_found:%d", found.Load(), notFound.Load()))
 	op.SetStatus("success")
-	logging.Info(ctx, "bulk-metadata-fetch complete", "finalCount", finalCount, "found", found, "notFound", notFound)
+	logging.Info(ctx, "bulk-metadata-fetch complete", "finalCount", finalCount, "found", found.Load(), "notFound", notFound.Load())
 	return nil
 }
 
@@ -527,12 +664,33 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 		sourceChain = append([]metadata.MetadataSource{audible}, rest...)
 	}
 
+	// Counters shared across the worker pool: completed (running total, seeded with
+	// the already-done count) plus found/notFound as atomics. The `done` resume map
+	// above is fully built before dispatch and read-only inside workers.
 	completed := int64(alreadyDone)
-	found, notFound := 0, 0
-	for i, w := range work {
-		if ctx.Err() != nil {
-			return ctx.Err()
+	var found, notFound atomic.Int64
+
+	// Per-provider semaphore (fixed cap 2) shared by all workers, built from the
+	// read-only sourceChain — see runBulkMetadataFetchAll.
+	sem := newProviderSemaphore(sourceChain, perProviderFetchCap)
+
+	var progressMu sync.Mutex
+	reportProgress := func(current, total int, message string) {
+		progressMu.Lock()
+		_ = progress.UpdateProgress(current, total, message)
+		progressMu.Unlock()
+	}
+
+	// processOne handles one book; body is the former serial loop body, unchanged
+	// except counters are atomics and the live source calls are wrapped in the
+	// per-provider semaphore (cache reads / result writes stay outside). Returns an
+	// error only for genuine context cancellation; per-book fetch errors record a
+	// not_found row and return nil.
+	processOne := func(gctx context.Context, i int) error {
+		if gctx.Err() != nil {
+			return gctx.Err()
 		}
+		w := work[i]
 		bookID := w.book.ID
 
 		// Skip obvious chapter fragments of shattered audiobooks (see
@@ -545,13 +703,13 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 				ResultJSON:  `{"status":"skipped_fragment","source":""}`,
 				Status:      "skipped_fragment",
 			})
-			notFound++
+			notFound.Add(1)
 			n := atomic.AddInt64(&completed, 1)
-			if i%50 == 0 || int(n) == totalBooks {
-				_ = progress.UpdateProgress(int(n), totalBooks,
-					fmt.Sprintf("fetched %d/%d — cached:%d not_found:%d", n, totalBooks, found, notFound))
+			if n%50 == 0 || int(n) == totalBooks {
+				reportProgress(int(n), totalBooks,
+					fmt.Sprintf("fetched %d/%d — cached:%d not_found:%d", n, totalBooks, found.Load(), notFound.Load()))
 			}
-			continue
+			return nil
 		}
 
 		searchTitle := stripChapterFromTitle(w.book.Title)
@@ -559,25 +717,37 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 		var metaResults []metadata.BookMetadata
 		var sourceName string
 		cacheHit := false
+		// Per-book source chain stays SEQUENTIAL (priority early-exit + breakers).
 		for _, src := range sourceChain {
-			if cached, _, cerr := database.GetCachedMetadataFetchWithMaxAge(store, bookID, src.Name(), maxAge); cerr == nil && cached != nil {
+			name := src.Name()
+			if cached, _, cerr := database.GetCachedMetadataFetchWithMaxAge(store, bookID, name, maxAge); cerr == nil && cached != nil {
 				var cr []metadata.BookMetadata
 				if jerr := json.Unmarshal(cached.Results, &cr); jerr == nil && len(cr) > 0 {
-					metaResults, sourceName, cacheHit = cr, src.Name(), true
+					metaResults, sourceName, cacheHit = cr, name, true
 					break
 				}
 			}
-			var ferr error
-			if w.authorName != "" {
-				metaResults, ferr = src.SearchByTitleAndAuthor(ctx, searchTitle, w.authorName)
+			if err := sem.acquire(gctx, name); err != nil {
+				return err
+			}
+			ok := func() bool {
+				defer sem.release(name)
+				var ferr error
+				if w.authorName != "" {
+					metaResults, ferr = src.SearchByTitleAndAuthor(gctx, searchTitle, w.authorName)
+					if ferr == nil && len(metaResults) > 0 {
+						sourceName = name
+						return true
+					}
+				}
+				metaResults, ferr = src.SearchByTitle(gctx, searchTitle)
 				if ferr == nil && len(metaResults) > 0 {
-					sourceName = src.Name()
-					break
+					sourceName = name
+					return true
 				}
-			}
-			metaResults, ferr = src.SearchByTitle(ctx, searchTitle)
-			if ferr == nil && len(metaResults) > 0 {
-				sourceName = src.Name()
+				return false
+			}()
+			if ok {
 				break
 			}
 		}
@@ -589,10 +759,10 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 					_ = database.PutCachedMetadataFetch(store, bookID, sourceName, blob, 0)
 				}
 			}
-			found++
+			found.Add(1)
 			resultStatus = "cached"
 		} else {
-			notFound++
+			notFound.Add(1)
 		}
 		_ = store.CreateOperationResult(&database.OperationResult{
 			OperationID: opID,
@@ -602,24 +772,32 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 		})
 
 		n := atomic.AddInt64(&completed, 1)
-		if i%50 == 0 || int(n) == totalBooks {
-			_ = progress.UpdateProgress(int(n), totalBooks,
-				fmt.Sprintf("fetched %d/%d — cached:%d not_found:%d", n, totalBooks, found, notFound))
+		if n%50 == 0 || int(n) == totalBooks {
+			reportProgress(int(n), totalBooks,
+				fmt.Sprintf("fetched %d/%d — cached:%d not_found:%d", n, totalBooks, found.Load(), notFound.Load()))
 		}
 		if !cacheHit && sourceName != "" && i < len(work)-1 {
 			select {
-			case <-ctx.Done():
-				return ctx.Err()
+			case <-gctx.Done():
+				return gctx.Err()
 			case <-time.After(200 * time.Millisecond):
 			}
 		}
+		return nil
+	}
+
+	if err := runBookFetchPool(ctx, bulkFetchWorkers(), len(work), processOne); err != nil {
+		return err
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
 	}
 
 	finalCount := atomic.LoadInt64(&completed)
 	_ = progress.UpdateProgress(int(finalCount), totalBooks,
-		fmt.Sprintf("complete — cached:%d not_found:%d", found, notFound))
+		fmt.Sprintf("complete — cached:%d not_found:%d", found.Load(), notFound.Load()))
 	op.SetStatus("success")
-	logging.Info(ctx, "bulk-metadata-fetch-ids complete", "finalCount", finalCount, "found", found, "notFound", notFound)
+	logging.Info(ctx, "bulk-metadata-fetch-ids complete", "finalCount", finalCount, "found", found.Load(), "notFound", notFound.Load())
 	return nil
 }
 
