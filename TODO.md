@@ -88,6 +88,39 @@ remaining-work catalog, produced, adversarially judged (3 lenses × 10), brief-v
 
 ---
 
+## 🟠 Library heavy-filter + non-title sort drops all books when the filter field isn't in the BookSummary projection (found 2026-07-11, INIT-4 T6)
+
+- **Symptom:** a library-list query that combines a non-title sort (`SortBy` any of
+  duration/author/genre/... — anything except `title`) with a filter on a field that
+  is **not** carried in the `BookSummary` projection returns **zero books**, even
+  though the same filter without a sort returns the full set.
+- **Confirmed empirically** (during TASK-06 parity-test authoring, real PebbleStore +
+  warm memdb): `genre=fantasy` alone → 17 books; `genre=fantasy` + `SortBy:"duration"`
+  → **0**; `FingerprintStatus:"complete"` + `SortBy:"duration"` → **0**. `LibraryState`
+  + sort works because `LibraryState` *is* projected.
+- **Root cause:** in `GetAudiobooks` (`internal/audiobooks/service_query.go`), a
+  non-title sort sets `heavySorting=true`, which keeps `hasPostFilters=true` so the
+  post-filter block re-runs. The pushdown correctly filtered in memdb, but its results
+  are `bookSummariesToBooks(...)` projections — and `bookSummaryToBook` does NOT copy
+  `FingerprintStatus`, `CoveragePercent`, or the FieldFilter source fields
+  (`Genre`/`Description`/etc). The post-filter fingerprint/FieldFilter pass then
+  compares those now-empty fields and drops every row.
+- **Affected fields:** anything read by the post-filter pass but absent from the
+  `BookSummary` projection — `FingerprintStatus`, `CoveragePercent`, and FieldFilters
+  on non-projected columns. `LibraryState`/`IsPrimaryVersion`/tags are safe.
+- **Not fixed here (out of TASK-06 scope):** TASK-06 only parity-locks the shipped
+  pushdown + narrows the fallback; the brief forbids touching the post-filter/predicate
+  closures. Parity tests intentionally do **not** assert result-parity on the
+  filter+sort combination (the anti-narrowing pin locks *routing* only).
+- **Fix hints for a follow-up:** either (a) when `didPushdown` is true, skip the
+  post-filter re-application of predicates already pushed down even for `heavySorting`
+  (sort the already-filtered set), or (b) carry the missing fields into the
+  `BookSummary` projection / `bookSummaryToBook` so the re-application is correct.
+  Option (a) is the smaller change and matches how the non-sort branch already trusts
+  the pushdown.
+
+---
+
 ## ✅ Author embeddings stranded on stale model (bge-m3 cutover follow-up) — FULLY RESOLVED (2026-07-08)
 
 - **Found via prod journalctl**: every restart since the Jul 2 2026 local-embeddings cutover

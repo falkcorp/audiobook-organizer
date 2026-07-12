@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.141.0 -->
+<!-- version: 3.142.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-11 -->
 
@@ -8,6 +8,23 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 11, 2026 - test(audiobooks): parity-lock the shipped heavy-filter pushdown (INIT-4 T6)
+
+- **`audiobooks`** (backend, tests) — added `internal/audiobooks/service_filtering_pushdown_test.go`,
+  a parity/regression suite that locks the shipped `GetAudiobooks` heavy-filter pushdown
+  (`buildBookSummaryFilterWithLookupCount` + `summariesPushdownFiltered`) so no future change
+  can silently narrow it (a regression there surfaces as missing books in the library list).
+  Exercises the real service path (PebbleStore + warm memdb) and asserts page IDs+order equal
+  a reference evaluated directly from ~50 seeded fixtures for library_state / tag / tags-multi /
+  FieldFilter / fingerprint / coverage across several limit/offset combos, plus anti-over-suppression
+  and empty-tag edge cases. Anti-narrowing pins use a `pushdownSpyStore` wrapper to prove the
+  fingerprint filter (alone and paired with a non-title sort) routes through the pushdown with a
+  real `Predicate` and never the zero-value fetch-all fallback (spec Decision 9).
+- Made the `pushdownOK == false` tag-resolution fallback in `service_query.go` loud: it now
+  `slog.Warn`s before the full-corpus fetch instead of silently scanning the whole library.
+- Documented a confirmed pre-existing bug found while authoring the tests (non-title sort +
+  a filter on a non-projected field → zero books) in TODO.md; out of scope to fix here.
 
 #### July 11, 2026 - docs(system): comprehensive system documentation set (DOCS-1, #1276)
 

@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
 // last-edited: 2026-07-11
 
@@ -169,6 +169,18 @@ func (svc *AudiobookService) GetAudiobooks(ctx context.Context, limit int, offse
 					hasPostFilters = false
 				}
 			} else {
+				// pushdownOK == false is only reachable when tag→ID
+				// resolution (GetBooksByTag) errored inside
+				// buildBookSummaryFilterWithLookupCount. The old behavior
+				// silently fetched the entire corpus (zero-value filter =
+				// no pushdown), which is a full-library scan hidden behind
+				// an error. Make it loud so the fetch-all is visible in logs;
+				// the subsequent post-filter tag pass re-calls GetBooksByTag
+				// and surfaces the same error to the caller, so this branch's
+				// result is discarded anyway — the warn is the observable
+				// signal that the fallback fired.
+				slog.Warn("GetAudiobooks: pushdown filter construction failed; falling back to full fetch",
+					"tag", f.Tag, "tags", f.Tags, "library_state", f.LibraryState)
 				summaries, _, sErr := svc.summariesPushdownFiltered(storeLimit, storeOffset, database.BookSummaryFilter{})
 				if sErr == nil && summaries != nil {
 					books = bookSummariesToBooks(summaries)
