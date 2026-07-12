@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.140.0 -->
+<!-- version: 3.141.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-11 -->
 
@@ -8,6 +8,19 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 11, 2026 - docs(system): comprehensive system documentation set (DOCS-1, #1276)
+
+- **`docs/system`** — audited the existing 9-page system-documentation set against issue
+  #1276's six-item scope (process graphs/data flow, architecture diagrams, component
+  inventory, operations runbooks, incident history, API/storage) and gap-filled. Added the
+  missing `deploy-and-gpu-ops.md` link to `docs/system/README.md` (index table + site-map
+  diagram). Refreshed `docs/system/incidents.md` (stale at 2026-06-29) with post-June work:
+  INC-07 (`dedup.full-scan` single-core/write-stall/O(N²) freeze, #19), INC-08 (Author/Series
+  write-back wipe on `organizer.CreateOrganizedVersion`, PR #1888), INC-09 (Pebble tag-index
+  colon-parse bug, #1893), decision DEC-04 (STOREFID Core-vs-Full getter fidelity), a July
+  timeline section, and matching diagnostic-entry rows. Added a cross-link from
+  `docs/architecture.md` to `docs/system/README.md`. Docs-only; grounded in code symbols at HEAD.
 
 #### July 11, 2026 - feat(library): cancelable, timeout-aware loading for the book list
 

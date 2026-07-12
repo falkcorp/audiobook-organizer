@@ -1,7 +1,7 @@
 <!-- file: docs/system/incidents.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: a7b8c9d0-e1f2-3456-0123-456789012345 -->
-<!-- last-edited: 2026-06-29 -->
+<!-- last-edited: 2026-07-11 -->
 
 # Incidents and Decisions
 
@@ -72,6 +72,39 @@ This document records known failure modes, historical incidents, architectural d
 
 ---
 
+### INC-07: `dedup.full-scan` freeze — single-core scoring, Pebble write-stall, O(N²) ISBN collector (#19)
+
+**Date:** 2026-07-05 (root-caused and fixed 2026-07-05 to 2026-07-08)
+**Component:** `internal/dedup` — full-scan scoring path; `internal/plugins/dedup`
+**Root cause:** A `dedup.full-scan` run went silent for hours at 100% CPU on a single core. Three distinct causes compounded, discovered across the concurrency audit and issue #19:
+- **Single-threaded scoring (concurrency audit, CONC-2):** the "unified scoring" pass was a plain `for range books` loop with no worker pool, so a whole-library-scale scan ran on one core. See [`docs/audits/2026-07-05-concurrency-single-threaded-hotspots.md`](../audits/2026-07-05-concurrency-single-threaded-hotspots.md) for the full hotspot inventory and per-shape fix patterns.
+- **Pebble write-stall:** synchronous candidate writes during the compose-scores phase stalled behind PebbleDB fsync, so the scan appeared frozen mid-run.
+- **O(N²) ISBN/ASIN collection:** `dedup.CollectISBNASIN` (`internal/dedup/collectors_exact.go`) compared every book against every other book pairwise instead of indexing matches.
+**Fix:** NoSync candidate writes during full-scan compose-scores (commit `087d0dbe`); `CollectISBNASIN` re-indexed O(N²)→O(matches) (commit `c36c05f4`); the `emit()` mutex was sharded and per-pair book lookups moved off the pair lock (commit `dd5aa9c7`, CONC-3). Prod-confirmed clean completion at ~606 books/sec (commit `b4058e10`).
+**Prevention:** Any full-library loop doing per-item DB/hash/fuzzy-compare work must ship with a bounded worker pool from the start (see the Concurrency section of `CLAUDE.md`). Pairwise/O(n²) collectors must index, not double-loop. Prefer `NoSync` for bulk intermediate writes that are recomputable on restart.
+
+---
+
+### INC-08: Author/Series wiped on organized-version write-back (STOREFID W5d-1, PR #1888)
+
+**Date:** 2026-07-08 (fix committed `98c2a218`)
+**Component:** `internal/organizer` — `CreateOrganizedVersion` (`internal/organizer/service.go`)
+**Root cause:** `CreateOrganizedVersion` read books via a memdb-slim getter (which strips heavy fields) and then wrote the whole book back. Because `UpdateBook` does a full column replacement, the slimmed round-trip wrote empty `Author`/`Series` over the curated values — a silent data-loss on every organized-version creation. Same footgun class as the earlier `AcoustIDFingerprint` wipe (see DEC-04).
+**Fix:** Stopped the write-back from clobbering `Author`/`Series` on `CreateOrganizedVersion`; regression test added (`internal/organizer/organized_version_writeback_test.go`).
+**Prevention:** Never full-replace a book/book-file that was read through a memdb-slim getter. Read via a `*Full`/hydrate getter, or preserve the stripped fields explicitly. See the memdb round-trip write footgun.
+
+---
+
+### INC-09: Namespaced tag bubbles return 0 books / bogus counts (#1893)
+
+**Date:** 2026-07-11 (fix committed `c6d1ccbc`)
+**Component:** `internal/database` — Pebble tag index (`ListAllTags`, `GetBooksByTag`, and the shared `pebbleListAllTags`/`pebbleEntitiesByTag` helpers)
+**Root cause:** The `tag_idx` key was parsed on a fixed split arity / unvalidated byte-prefix scan, so any colon-containing tag (all auto-applied `metadata:*`, `dedup:*`, `import:*`, `organize:*` system tags) was truncated or matched against the wrong entity. Prod-confirmed: `tag=metadata`, `tag=dedup`, and the fully-qualified `tag=metadata:source:audible` all returned 0 results, and the library-sidebar tag bubbles showed miscounted totals.
+**Fix:** Parse the index key on the **last** colon and re-validate every prefix-scan match (entity IDs are guaranteed colon-free). Also fixed the sidebar "All Books" navigation that left tag filters stuck.
+**Prevention:** Index keys that embed a variable-length, colon-containing value must split on the last delimiter and re-validate the scanned prefix — never assume a fixed field count.
+
+---
+
 ## Architectural Decisions
 
 ### DEC-01: PebbleDB as sole durable store
@@ -91,6 +124,12 @@ This document records known failure modes, historical incidents, architectural d
 **Date:** 2026-05
 **Decision:** All long-running jobs are implemented as `OperationDef` entries registered with the v2 operations registry. HTTP API provides launch + poll. State persists to PebbleDB (`opv2:*` keys). Checkpoint support allows resume after server restart.
 **Rationale:** Replaces a tangled mix of goroutines, channels, and ad-hoc HTTP endpoints. Provides uniform progress reporting, cancellation, and history.
+
+### DEC-04: Store-getter Core-vs-Full fidelity encoded in the type (STOREFID)
+
+**Date:** 2026-07 (waves W3–W6, PRs #1837–#1888)
+**Decision:** Store getters now return an explicit fidelity in their type. "Core" getters (`GetAllBooksCore`, `GetAllBookFilesCore`, `GetBooksBySeriesIDCore`) return slim `BookCore`/`BookFileCore` values (`internal/database/bookcore.go`) that intentionally omit heavy/strippable fields; callers that need every field must use a `*Full`/hydrate variant (`GetAllBooksFullFrom`, proxy-then-hydrate). The catch-all `GetAllBooks` was removed entirely (commit `3266f6d7`).
+**Rationale:** The `AcoustIDFingerprint` wipe and the Author/Series wipe (INC-08) were both the same footgun — a memdb-slim read followed by a full-column write-back. Making the slimness visible in the return type (`BookCore` vs full `Book`) turns a silent runtime data-loss into a compile-time-obvious choice at every call site. After a getter change, run `go test ./... -short` (not a subset) so old-signature mocks don't vacuous-pass.
 
 ---
 
@@ -126,6 +165,13 @@ gantt
     section Pagination
     Library double-pagination fix (PR #1660) :done, 2026-06-28, 2026-06-28
     memdb pagination cap fix (PR #1647)  :done, 2026-06-20, 2026-06-21
+
+    section STOREFID + Concurrency (July)
+    Concurrency single-core hotspot sweep :done, 2026-07-05, 2026-07-05
+    dedup.full-scan freeze resolved (#19) :done, 2026-07-05, 2026-07-08
+    STOREFID Core/Full getter fidelity   :done, 2026-07-05, 2026-07-08
+    Author/Series write-back wipe fix (PR #1888) :done, 2026-07-08, 2026-07-08
+    Pebble tag-index colon parse fix (#1893) :done, 2026-07-11, 2026-07-11
 ```
 
 ## Diagnostic Entry Points
@@ -142,6 +188,9 @@ When investigating an issue, start here:
 | Fingerprinting not progressing | Check `FingerprintFailedAt` on `BookFile`; fpcalc may need reinstall |
 | memdb shows stale counts | `InvalidateLibraryStats` should have been called; check for missed `UpdateBook` callers |
 | Operation stuck in "running" | Check `opv2:act:<id>` key exists; if server restarted mid-op, op may need manual cancel |
+| `dedup.full-scan` frozen at 100% CPU on one core | Confirm it is running on a worker pool, not a serial `for range books`; check for O(N²) collectors and synchronous Pebble writes (INC-07) |
+| Author/Series (or fingerprint) blank after organize/write-back | A memdb-slim getter was full-replaced; audit for `Core` getters feeding a full `UpdateBook`/`UpdateBookFile` (INC-08, DEC-04) |
+| Tag bubble shows wrong count or 0 books on click | Namespaced (`metadata:*`/`dedup:*`) tag-index parse; verify last-colon split in `pebbleEntitiesByTag` (INC-09) |
 
 ## Cross-references
 

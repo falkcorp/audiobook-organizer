@@ -1,11 +1,15 @@
 <!-- file: docs/system/README.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 42030117-6ba8-4f26-a2c6-9b5f9014ef88 -->
-<!-- last-edited: 2026-06-29 -->
+<!-- last-edited: 2026-07-11 -->
 
 # System Documentation
 
-> **Status:** DOCS-1 workstream complete. All 6 area documents are written and cross-linked below.
+> **Status:** DOCS-1 workstream complete (#1276). All eight area documents below are
+> written and cross-linked, covering the issue's six-item scope (process graphs/data
+> flow, architecture diagrams, component inventory, operations runbooks, incident
+> history, and API/storage detail). No scope item is deferred. Incident history was
+> last refreshed 2026-07-11 with the July STOREFID/concurrency work.
 
 Audiobook Organizer is a single-binary server (Go backend, React frontend) for scanning,
 normalizing, enriching, deduplicating, organizing, and serving audiobook
@@ -25,6 +29,7 @@ changes, metadata fetches, AI-assisted parsing, and operational workflows.
 | [Runbooks](runbooks.md) | Operational procedures for local builds, production service care, deployments, backups, and recovery. |
 | [Components](components.md) | Backend packages, frontend surfaces, integrations, and their primary ownership areas. |
 | [Incidents](incidents.md) | Known failure modes, historical incident notes, diagnostic entry points, and prevention follow-ups. |
+| [Deploy & GPU Ops](deploy-and-gpu-ops.md) | Deploy rollback flow, local-config templates, and Windows GPU (Ollama) keepalive. |
 
 ## Site Map
 
@@ -38,6 +43,7 @@ flowchart TD
     Runbooks["runbooks.md<br/>Operations and recovery"]
     Components["components.md<br/>Implementation inventory"]
     Incidents["incidents.md<br/>Failures and follow-ups"]
+    DeployGPU["deploy-and-gpu-ops.md<br/>Rollback and GPU keepalive"]
 
     Index --> Architecture
     Index --> Pipelines
@@ -46,6 +52,7 @@ flowchart TD
     Index --> Runbooks
     Index --> Components
     Index --> Incidents
+    Index --> DeployGPU
 
     Architecture --> Components
     Architecture --> API
@@ -54,6 +61,7 @@ flowchart TD
     Pipelines --> API
     Runbooks --> Pipelines
     Runbooks --> Storage
+    Runbooks --> DeployGPU
     Incidents --> Runbooks
     Incidents --> Components
 ```
