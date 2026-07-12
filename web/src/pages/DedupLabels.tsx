@@ -1,7 +1,7 @@
 // file: web/src/pages/DedupLabels.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7e3a1c92-4b60-4d85-9f21-6a5e0c9d3f58
-// last-edited: 2026-06-28
+// last-edited: 2026-07-11
 
 // DedupLabels — the C6 gold-dataset review page for the dedup feedback loop.
 // Lists labeled dedup examples (the dedup:label: keyspace), filterable by label
@@ -12,7 +12,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box, Typography, Paper, Table, TableBody, TableCell, TableContainer, TableHead,
   TableRow, Chip, Select, MenuItem, FormControl, InputLabel, Button, Stack,
-  CircularProgress, Alert, Tooltip, Link as MuiLink, TextField,
+  CircularProgress, Alert, Tooltip, Link as MuiLink, TextField, Tabs, Tab,
 } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
 import { LabelToggle } from '../components/dedup/LabelToggle';
@@ -46,6 +46,13 @@ interface LabeledExample {
   decided_at?: string;
   a?: BookFeatures;
   b?: BookFeatures;
+}
+
+// SuspiciousExample extends a labeled row with the reasons the backend flagged
+// it (rule-sourced not_dup carrying duplicate-shaped evidence). Rendered on the
+// "Suspicious" tab where each row can be one-click overridden to a human label.
+interface SuspiciousExample extends LabeledExample {
+  suspicion_reasons?: string[];
 }
 
 interface LabelStats {
@@ -105,6 +112,94 @@ function BookCell({
   );
 }
 
+// fmtDuration renders seconds as a compact h:mm label ("—" when unknown).
+function fmtDuration(sec?: number): string {
+  if (!sec || sec <= 0) return '—';
+  const h = Math.floor(sec / 3600);
+  const m = Math.round((sec % 3600) / 60);
+  return `${h}h${m.toString().padStart(2, '0')}m`;
+}
+
+// SuspiciousQueue renders the rule-sourced not_dup labels that carry
+// duplicate-shaped evidence, with per-row one-click overrides. Each button
+// POSTs the EXISTING /dedup/labels/:id/override route (source→human) and, on
+// success, the row is removed from the queue by the parent.
+function SuspiciousQueue({
+  rows,
+  loading,
+  error,
+  pathVars,
+  onOpen,
+  onOverride,
+}: {
+  rows: SuspiciousExample[];
+  loading: boolean;
+  error: string | null;
+  pathVars: PathVar[];
+  onOpen: (id: string) => void;
+  onOverride: (candidateId: number, label: string) => void;
+}) {
+  return (
+    <Box>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+        Rule-sourced <code>not_dup</code> labels carrying duplicate-shaped evidence
+        (shared ASIN/path, CERTAIN/HIGH band, cosine&nbsp;≥&nbsp;0.95, or the ms/sec
+        duration-ratio signature). Each override becomes a permanent human gold label.
+      </Typography>
+      {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+      <TableContainer component={Paper}>
+        <Table size="small" stickyHeader>
+          <TableHead>
+            <TableRow>
+              <TableCell>Book A</TableCell>
+              <TableCell>Book B</TableCell>
+              <TableCell>Duration A / B</TableCell>
+              <TableCell>Why suspicious</TableCell>
+              <TableCell align="center">Actions</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {loading ? (
+              <TableRow><TableCell colSpan={5} align="center"><CircularProgress size={24} sx={{ my: 2 }} /></TableCell></TableRow>
+            ) : rows.length === 0 ? (
+              <TableRow><TableCell colSpan={5} align="center"><Typography variant="body2" color="text.secondary" sx={{ py: 2 }}>No suspicious labels in the queue.</Typography></TableCell></TableRow>
+            ) : rows.map((r) => (
+              <TableRow key={r.candidate_id} hover>
+                <TableCell>
+                  <BookCell bookId={r.entity_a_id} title={r.a?.title} path={r.a?.primary_path} pathVars={pathVars} onOpen={onOpen} />
+                </TableCell>
+                <TableCell>
+                  <BookCell bookId={r.entity_b_id} title={r.b?.title} path={r.b?.primary_path} pathVars={pathVars} onOpen={onOpen} />
+                </TableCell>
+                <TableCell>
+                  <Typography variant="caption">{fmtDuration(r.a?.total_duration_sec)} / {fmtDuration(r.b?.total_duration_sec)}</Typography>
+                </TableCell>
+                <TableCell>
+                  <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5 }}>
+                    {(r.suspicion_reasons || []).map((reason) => (
+                      <Chip key={reason} size="small" color="warning" variant="outlined" label={reason} />
+                    ))}
+                  </Stack>
+                </TableCell>
+                <TableCell align="center">
+                  <Stack direction="row" spacing={1} justifyContent="center">
+                    <Button size="small" color="success" variant="outlined" onClick={() => onOverride(r.candidate_id, 'true_dup')}>
+                      Mark true_dup
+                    </Button>
+                    <Button size="small" color="error" variant="outlined" onClick={() => onOverride(r.candidate_id, 'not_dup')}>
+                      Confirm not_dup
+                    </Button>
+                  </Stack>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </TableContainer>
+    </Box>
+  );
+}
+
 export default function DedupLabels() {
   const navigate = useNavigate();
   const pathVars = usePathVars();
@@ -119,6 +214,11 @@ export default function DedupLabels() {
   const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // tab 0 = all labels (existing view), tab 1 = suspicious review queue.
+  const [tab, setTab] = useState(0);
+  const [suspRows, setSuspRows] = useState<SuspiciousExample[]>([]);
+  const [suspLoading, setSuspLoading] = useState(false);
+  const [suspError, setSuspError] = useState<string | null>(null);
   const openBook = useCallback((bookId: string) => navigate(`/library/${bookId}`), [navigate]);
 
   const loadStats = useCallback(async () => {
@@ -146,6 +246,37 @@ export default function DedupLabels() {
       await loadStats();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Override failed');
+    }
+  }, [loadStats]);
+
+  const loadSuspicious = useCallback(async () => {
+    setSuspLoading(true);
+    setSuspError(null);
+    try {
+      const r = await apiFetch(`${API_BASE}/dedup/labels/suspicious?limit=${PAGE}`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = (await r.json()).data;
+      setSuspRows(d.labels || []);
+    } catch (e) {
+      setSuspError(e instanceof Error ? e.message : 'Failed to load suspicious labels');
+    } finally {
+      setSuspLoading(false);
+    }
+  }, []);
+
+  // overrideSuspicious POSTs the EXISTING override route (stamping
+  // label_source=human) and drops the row from the queue on success.
+  const overrideSuspicious = useCallback(async (candidateId: number, label: string) => {
+    try {
+      const r = await apiFetch(`${API_BASE}/dedup/labels/${candidateId}/override`, {
+        method: 'POST',
+        body: JSON.stringify({ label, reason: 'ui_override' }),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      setSuspRows((current) => current.filter((row) => row.candidate_id !== candidateId));
+      await loadStats();
+    } catch (e) {
+      setSuspError(e instanceof Error ? e.message : 'Override failed');
     }
   }, [loadStats]);
 
@@ -264,6 +395,7 @@ export default function DedupLabels() {
 
   useEffect(() => { void loadStats(); }, [loadStats]);
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => { if (tab === 1) void loadSuspicious(); }, [tab, loadSuspicious]);
   useEffect(() => () => { if (bandDebounceRef.current) clearTimeout(bandDebounceRef.current); }, []);
 
   return (
@@ -286,6 +418,13 @@ export default function DedupLabels() {
         </Stack>
       )}
 
+      <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>
+        <Tab label="All Labels" />
+        <Tab label="Suspicious" />
+      </Tabs>
+
+      {tab === 0 && (
+      <>
       <Stack direction="row" spacing={2} sx={{ mb: 2 }}>
         <FormControl size="small" sx={{ minWidth: 160 }}>
           <InputLabel id="dedup-label-filter-label">Label</InputLabel>
@@ -393,6 +532,19 @@ export default function DedupLabels() {
         </Typography>
         <Button disabled={offset + PAGE >= total} onClick={() => setOffset(offset + PAGE)}>Next</Button>
       </Stack>
+      </>
+      )}
+
+      {tab === 1 && (
+        <SuspiciousQueue
+          rows={suspRows}
+          loading={suspLoading}
+          error={suspError}
+          pathVars={pathVars}
+          onOpen={openBook}
+          onOverride={overrideSuspicious}
+        />
+      )}
 
       <PathVarsLegend />
     </Box>

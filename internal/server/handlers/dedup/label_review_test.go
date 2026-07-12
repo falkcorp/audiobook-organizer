@@ -1,5 +1,5 @@
 // file: internal/server/handlers/dedup/label_review_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8a3e1c46-9b20-4d75-8f31-2a6e0c9d5b39
 // last-edited: 2026-07-11
 
@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	deduphandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/dedup"
 	"github.com/gin-gonic/gin"
 )
 
@@ -284,6 +285,181 @@ func TestExportLabeledExamples_DedupesByPairDefaultAndRaw(t *testing.T) {
 func TestExportLabeledExamples_NoEmbedStore(t *testing.T) {
 	h, _ := newHandler(t, noEmbed)
 	w := doReq(t, h.ExportLabeledExamples, http.MethodGet, "/api/v1/dedup/labels/export", nil, nil)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d want 503; body=%s", w.Code, w.Body.String())
+	}
+}
+
+// ───────────────────────── suspicious-label review queue (T4) ────────────────
+
+// upsertEx writes an arbitrary LabeledExample with a distinct book-pair derived
+// from candID (so no pair collides), applying opt to shape the evidence fields.
+func upsertEx(t *testing.T, d testDeps, candID int64, label, source string, opt func(*database.LabeledExample)) {
+	t.Helper()
+	ex := database.LabeledExample{
+		CandidateID: candID,
+		EntityAID:   fmt.Sprintf("a%d", candID),
+		EntityBID:   fmt.Sprintf("b%d", candID),
+		Layer:       "exact",
+		Label:       label,
+		LabelSource: source,
+		LabelReason: "seed",
+	}
+	if opt != nil {
+		opt(&ex)
+	}
+	if err := d.es.UpsertLabeledExample(ex); err != nil {
+		t.Fatalf("UpsertLabeledExample: %v", err)
+	}
+}
+
+// getSuspicious drives ListSuspiciousDedupLabels and returns total + rows.
+func getSuspicious(t *testing.T, h *deduphandler.Handler) (int, []map[string]any) {
+	t.Helper()
+	w := doReq(t, h.ListSuspiciousDedupLabels, http.MethodGet, "/api/v1/dedup/labels/suspicious", nil, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	return decodeLabels(t, w)
+}
+
+func fptr(v float64) *float64 { return &v }
+
+// TestSuspiciousPredicateIdentity covers arm (a): a rule not_dup that shares hard
+// identity (ASIN, version group, or identical primary path) is flagged, and the
+// flag routes through the exported dataset.SharesIdentity helper.
+func TestSuspiciousPredicateIdentity(t *testing.T) {
+	cases := []struct {
+		name string
+		opt  func(*database.LabeledExample)
+	}{
+		{"asin", func(ex *database.LabeledExample) { ex.A.ASIN, ex.B.ASIN = "B00SAME", "B00SAME" }},
+		{"version_group", func(ex *database.LabeledExample) { ex.A.VersionGroupID, ex.B.VersionGroupID = "vg-1", "vg-1" }},
+		{"path", func(ex *database.LabeledExample) { ex.A.PrimaryPath, ex.B.PrimaryPath = "/lib/x.m4b", "/lib/x.m4b" }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h, d := newHandler(t)
+			upsertEx(t, d, 1, "not_dup", "rule", tc.opt)
+			total, rows := getSuspicious(t, h)
+			if total != 1 || len(rows) != 1 {
+				t.Fatalf("expected 1 suspicious row, got total=%d len=%d", total, len(rows))
+			}
+			reasons, _ := rows[0]["suspicion_reasons"].([]any)
+			if len(reasons) == 0 {
+				t.Fatalf("expected a suspicion reason; row=%v", rows[0])
+			}
+		})
+	}
+}
+
+// TestSuspiciousPredicateBand covers arm (b): a rule not_dup in a CERTAIN/HIGH
+// band is flagged; a LOW-band one (all else disjoint) is not.
+func TestSuspiciousPredicateBand(t *testing.T) {
+	h, d := newHandler(t)
+	upsertEx(t, d, 1, "not_dup", "rule", func(ex *database.LabeledExample) { ex.Band = "CERTAIN" })
+	upsertEx(t, d, 2, "not_dup", "rule", func(ex *database.LabeledExample) { ex.Band = "HIGH" })
+	upsertEx(t, d, 3, "not_dup", "rule", func(ex *database.LabeledExample) { ex.Band = "LOW" })
+	total, _ := getSuspicious(t, h)
+	if total != 2 {
+		t.Fatalf("expected 2 suspicious (CERTAIN,HIGH), got %d", total)
+	}
+}
+
+// TestSuspiciousPredicateSimilarity covers arm (c): cosine >= 0.95 flags; below
+// does not.
+func TestSuspiciousPredicateSimilarity(t *testing.T) {
+	h, d := newHandler(t)
+	upsertEx(t, d, 1, "not_dup", "rule", func(ex *database.LabeledExample) { ex.Similarity = fptr(0.96) })
+	upsertEx(t, d, 2, "not_dup", "rule", func(ex *database.LabeledExample) { ex.Similarity = fptr(0.80) })
+	total, _ := getSuspicious(t, h)
+	if total != 1 {
+		t.Fatalf("expected 1 suspicious (sim>=0.95), got %d", total)
+	}
+}
+
+// TestSuspiciousPredicateMsSecSignature covers arm (d): identical title with a
+// ms/sec duration-ratio (~0.001) flags; a sane ratio does not.
+func TestSuspiciousPredicateMsSecSignature(t *testing.T) {
+	h, d := newHandler(t)
+	upsertEx(t, d, 1, "not_dup", "rule", func(ex *database.LabeledExample) {
+		ex.A.Title, ex.B.Title = "Same Book", "Same Book"
+		ex.DurationRatio = 0.001
+	})
+	upsertEx(t, d, 2, "not_dup", "rule", func(ex *database.LabeledExample) {
+		ex.A.Title, ex.B.Title = "Same Book", "Same Book"
+		ex.DurationRatio = 0.30
+	})
+	total, _ := getSuspicious(t, h)
+	if total != 1 {
+		t.Fatalf("expected 1 suspicious (ms/sec signature), got %d", total)
+	}
+}
+
+// TestSuspiciousPredicateCleanRuleLabelNotFlagged is the anti-over-suppression
+// case: a rule not_dup with disjoint ASINs/paths, LOW band, similarity 0.5, and
+// a sane ratio 0.3 carries NO duplicate-shaped evidence and must NOT be flagged.
+func TestSuspiciousPredicateCleanRuleLabelNotFlagged(t *testing.T) {
+	h, d := newHandler(t)
+	upsertEx(t, d, 1, "not_dup", "rule", func(ex *database.LabeledExample) {
+		ex.A.ASIN, ex.B.ASIN = "B00AAA", "B00BBB"
+		ex.A.PrimaryPath, ex.B.PrimaryPath = "/lib/a.m4b", "/lib/b.m4b"
+		ex.A.Title, ex.B.Title = "Book A", "Book B"
+		ex.Band = "LOW"
+		ex.Similarity = fptr(0.5)
+		ex.DurationRatio = 0.3
+	})
+	total, _ := getSuspicious(t, h)
+	if total != 0 {
+		t.Fatalf("clean rule label must not be flagged; got total=%d", total)
+	}
+}
+
+// TestSuspiciousPredicateEmptyFieldsNotFlagged asserts a rule not_dup with
+// all-empty identity, no band, no similarity, and zero ratio is not suspicious
+// (unknown fields are non-disqualifying, never firing an arm).
+func TestSuspiciousPredicateEmptyFieldsNotFlagged(t *testing.T) {
+	h, d := newHandler(t)
+	upsertEx(t, d, 1, "not_dup", "rule", nil) // no evidence set at all
+	total, _ := getSuspicious(t, h)
+	if total != 0 {
+		t.Fatalf("empty-evidence rule label must not be flagged; got total=%d", total)
+	}
+}
+
+// TestSuspiciousPredicateHumanLabelNeverFlagged asserts human-sourced rows are
+// excluded regardless of evidence — even a shared ASIN plus CERTAIN band does
+// not surface a human label into the queue (only rule rows are second-guessed).
+func TestSuspiciousPredicateHumanLabelNeverFlagged(t *testing.T) {
+	h, d := newHandler(t)
+	upsertEx(t, d, 1, "not_dup", "human", func(ex *database.LabeledExample) {
+		ex.A.ASIN, ex.B.ASIN = "B00SAME", "B00SAME"
+		ex.Band = "CERTAIN"
+		ex.Similarity = fptr(0.99)
+	})
+	total, _ := getSuspicious(t, h)
+	if total != 0 {
+		t.Fatalf("human label must never be flagged; got total=%d", total)
+	}
+}
+
+// TestSuspiciousExcludesNonNotDupAndNonRule confirms the queue only ever
+// contains rule-sourced not_dup rows: a true_dup rule row and an auto_high_conf
+// not_dup row (both with strong evidence) are excluded.
+func TestSuspiciousExcludesNonNotDupAndNonRule(t *testing.T) {
+	h, d := newHandler(t)
+	upsertEx(t, d, 1, "true_dup", "rule", func(ex *database.LabeledExample) { ex.Band = "CERTAIN" })
+	upsertEx(t, d, 2, "not_dup", "auto_high_conf", func(ex *database.LabeledExample) { ex.Band = "CERTAIN" })
+	total, _ := getSuspicious(t, h)
+	if total != 0 {
+		t.Fatalf("non-not_dup/non-rule rows must be excluded; got total=%d", total)
+	}
+}
+
+// TestSuspiciousNoEmbedStore mirrors the 503 nil-store guard.
+func TestSuspiciousNoEmbedStore(t *testing.T) {
+	h, _ := newHandler(t, noEmbed)
+	w := doReq(t, h.ListSuspiciousDedupLabels, http.MethodGet, "/api/v1/dedup/labels/suspicious", nil, nil)
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status=%d want 503; body=%s", w.Code, w.Body.String())
 	}
