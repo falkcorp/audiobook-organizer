@@ -1,7 +1,7 @@
 // file: web/src/components/bookdetail/BookDetailVersionGroup.tsx
-// version: 1.0.2
+// version: 1.1.0
 // guid: f6a7b8c9-d0e1-2345-fabc-456789012345
-// last-edited: 2026-05-31
+// last-edited: 2026-07-11
 
 import {
   Alert,
@@ -36,6 +36,38 @@ import { formatDuration, formatBytes, formatTagValue } from './bookDetailUtils';
 import { useNavigate } from 'react-router-dom';
 
 const SEGMENT_PREVIEW_COUNT = 5;
+
+// Hash chain (HASH-CHAIN-2, #1270): Download -> Original -> Post-metadata -> Current.
+// Sourced PER FILE from the BookFile prop — never from Book (which lacks these fields).
+const HASH_CHAIN_LINKS: ReadonlyArray<{
+  key: 'download_hash' | 'original_file_hash' | 'post_metadata_hash' | 'file_hash';
+  label: string;
+}> = [
+  { key: 'download_hash', label: 'Download' },
+  { key: 'original_file_hash', label: 'Original' },
+  { key: 'post_metadata_hash', label: 'Post-metadata' },
+  { key: 'file_hash', label: 'Current' },
+];
+
+const HashChainLink = ({ label, value }: { label: string; value?: string }) => {
+  const hasValue = typeof value === 'string' && value.length > 0;
+  // Missing/absent hashes render as an em dash (never hidden, never an error).
+  const shown = hasValue ? value.slice(0, 12) : '—';
+  const content = (
+    <Box component="span" sx={{ display: 'inline-flex', flexDirection: 'column', minWidth: 0 }}>
+      <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.2 }}>
+        {label}
+      </Typography>
+      <Typography
+        variant="caption"
+        sx={{ fontFamily: 'monospace', wordBreak: 'break-all', lineHeight: 1.2 }}
+      >
+        {shown}
+      </Typography>
+    </Box>
+  );
+  return hasValue ? <Tooltip title={value}>{content}</Tooltip> : content;
+};
 const OVERALL_METADATA_FIELDS = [
   { key: 'title', label: 'Title' },
   { key: 'author_name', label: 'Author' },
@@ -533,6 +565,54 @@ export const BookDetailVersionGroup = ({
                   </Box>
                 );
               })()}
+
+              {/* Hash chain per file (HASH-CHAIN-2, #1270). Only the current
+                  version carries per-file hash data (bookFiles); non-current
+                  versions have no hash data and are out of scope. */}
+              {isCurrent && bookFiles.length > 0 && (
+                <Box sx={{ mt: 2 }} data-testid="hash-chain-section">
+                  <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>
+                    Hash Chain
+                  </Typography>
+                  <Stack spacing={1}>
+                    {bookFiles.map((f) => (
+                      <Box
+                        key={f.id}
+                        sx={{
+                          p: 1,
+                          border: '1px solid',
+                          borderColor: 'divider',
+                          borderRadius: 1,
+                          bgcolor: 'background.default',
+                        }}
+                      >
+                        <Typography
+                          variant="caption"
+                          sx={{ display: 'block', wordBreak: 'break-all', mb: 0.5 }}
+                        >
+                          {f.file_path}
+                        </Typography>
+                        <Stack
+                          direction="row"
+                          spacing={1.5}
+                          alignItems="flex-start"
+                          flexWrap="wrap"
+                          useFlexGap
+                          divider={
+                            <Box component="span" sx={{ alignSelf: 'center', color: 'text.disabled' }}>
+                              →
+                            </Box>
+                          }
+                        >
+                          {HASH_CHAIN_LINKS.map((link) => (
+                            <HashChainLink key={link.key} label={link.label} value={f[link.key]} />
+                          ))}
+                        </Stack>
+                      </Box>
+                    ))}
+                  </Stack>
+                </Box>
+              )}
             </Box>
           );
         })}

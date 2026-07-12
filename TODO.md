@@ -1,5 +1,6 @@
 <!-- file: TODO.md -->
 <!-- version: 9.92.1 -->
+<!-- version: 9.93.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-11 -->
 
@@ -2198,7 +2199,7 @@ Track the full lifecycle of a file's hash so we can answer "has this file change
 Proposed chain: **DownloadHash** (as-downloaded) → **OriginalFileHash** (after iTunes/external tagger) → **FileHash** (current, after AO).
 
 - [x] **HASH-CHAIN-1** Add `download_hash` column to `book_files` (SQLite migration + PebbleDB field). Populate it from Deluge import data (already have `deluge_hash`) and allow manual set via API.  ✅ shipped #1722 (agent-task sweep 2026-07-01)
-- [ ] **HASH-CHAIN-2** [hold] UI: show hash chain in book file detail view so users can see when/where a file changed.
+- [x] **HASH-CHAIN-2** [hold] UI: show hash chain in book file detail view so users can see when/where a file changed. — shipped, see #1270 / this PR
 - [x] **HASH-CHAIN-3** Integrity alert: flag files where `file_hash != original_file_hash` and no AO tag-write is on record (possible external modification / bit-rot).  ✅ shipped #1726 (agent-task sweep 2026-07-01)
 
 *Low priority — AcoustID fingerprinting covers the identity-across-re-encode case better. Useful mainly for strict download-integrity auditing.*

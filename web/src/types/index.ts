@@ -1,7 +1,7 @@
 // file: web/src/types/index.ts
-// version: 1.17.0
+// version: 1.18.0
 // guid: 0d1e2f3a-4b5c-6d7e-8f9a-0b1c2d3e4f5a
-// last-edited: 2026-05-20
+// last-edited: 2026-07-11
 
 // Audiobook (Book) type
 export interface Audiobook {
@@ -226,6 +226,7 @@ export interface BookFile {
   channels?: number;
   bit_depth?: number;
   file_hash?: string;
+  download_hash?: string;
   original_file_hash?: string;
   post_metadata_hash?: string;
   // Acoustic fingerprint segments (0=intro, 1-5=body, 6=outro)
