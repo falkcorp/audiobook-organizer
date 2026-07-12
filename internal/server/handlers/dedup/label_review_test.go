@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/label_review_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8a3e1c46-9b20-4d75-8f31-2a6e0c9d5b39
-// last-edited: 2026-07-01
+// last-edited: 2026-07-11
 
 package deduphandler_test
 
@@ -9,6 +9,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -17,11 +18,17 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// seedLabel writes one labeled example. Each candidate gets its OWN distinct
+// book-pair (entity IDs derived from candID) so that export/calibration
+// pair-dedupe (INIT-1 T3) leaves distinct candidates intact — tests that want
+// same-pair collapse construct colliding pairs explicitly.
 func seedLabel(t *testing.T, d testDeps, candID int64, label, source string) {
 	t.Helper()
 	if err := d.es.UpsertLabeledExample(database.LabeledExample{
-		CandidateID: candID, EntityAID: "a", EntityBID: "b",
-		Layer: "exact", Label: label, LabelSource: source, LabelReason: "seed",
+		CandidateID: candID,
+		EntityAID:   fmt.Sprintf("a%d", candID),
+		EntityBID:   fmt.Sprintf("b%d", candID),
+		Layer:       "exact", Label: label, LabelSource: source, LabelReason: "seed",
 	}); err != nil {
 		t.Fatalf("UpsertLabeledExample: %v", err)
 	}
@@ -207,6 +214,68 @@ func TestExportLabeledExamples_FilterByLabelSource(t *testing.T) {
 	}
 	if lines != 1 {
 		t.Fatalf("expected 1 JSONL line for label_source=human filter, got %d; body=%s", lines, w.Body.String())
+	}
+}
+
+// countJSONLines counts the non-empty lines in a JSONL response body.
+func countJSONLines(t *testing.T, w *httptest.ResponseRecorder) int {
+	t.Helper()
+	scanner := bufio.NewScanner(bytes.NewReader(w.Body.Bytes()))
+	n := 0
+	for scanner.Scan() {
+		if len(scanner.Bytes()) > 0 {
+			n++
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	return n
+}
+
+// TestExportLabeledExamples_DedupesByPairDefaultAndRaw verifies the INIT-1 T3
+// pair-collapse on the export path: two labeled rows for the SAME book-pair
+// (a rule not_dup and a human true_dup) export as ONE row by default (the human
+// row wins), while raw=true streams both stored rows unchanged.
+func TestExportLabeledExamples_DedupesByPairDefaultAndRaw(t *testing.T) {
+	h, d := newHandler(t)
+	// Same pair (dup-pair-a / dup-pair-b), two candidate IDs across layers.
+	if err := d.es.UpsertLabeledExample(database.LabeledExample{
+		CandidateID: 100, EntityAID: "dup-pair-a", EntityBID: "dup-pair-b",
+		Layer: "exact", Label: "not_dup", LabelSource: "rule", DecidedAt: "2026-07-01T00:00:00Z",
+	}); err != nil {
+		t.Fatalf("UpsertLabeledExample rule: %v", err)
+	}
+	if err := d.es.UpsertLabeledExample(database.LabeledExample{
+		CandidateID: 101, EntityAID: "dup-pair-a", EntityBID: "dup-pair-b",
+		Layer: "embedding", Label: "true_dup", LabelSource: "human", DecidedAt: "2026-07-05T00:00:00Z",
+	}); err != nil {
+		t.Fatalf("UpsertLabeledExample human: %v", err)
+	}
+
+	// Default: deduped to one row, the human true_dup.
+	w := doReq(t, h.ExportLabeledExamples, http.MethodGet, "/api/v1/dedup/labels/export", nil, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d want 200; body=%s", w.Code, w.Body.String())
+	}
+	if got := countJSONLines(t, w); got != 1 {
+		t.Fatalf("default export: expected 1 deduped line, got %d; body=%s", got, w.Body.String())
+	}
+	var ex database.LabeledExample
+	if err := json.Unmarshal(bytes.TrimSpace(w.Body.Bytes()), &ex); err != nil {
+		t.Fatalf("decode deduped row: %v", err)
+	}
+	if ex.LabelSource != "human" || ex.Label != "true_dup" {
+		t.Fatalf("deduped row should be human true_dup, got source=%q label=%q", ex.LabelSource, ex.Label)
+	}
+
+	// raw=true: escape hatch streams both stored rows.
+	wRaw := doReq(t, h.ExportLabeledExamples, http.MethodGet, "/api/v1/dedup/labels/export?raw=true", nil, nil)
+	if wRaw.Code != http.StatusOK {
+		t.Fatalf("raw status=%d want 200; body=%s", wRaw.Code, wRaw.Body.String())
+	}
+	if got := countJSONLines(t, wRaw); got != 2 {
+		t.Fatalf("raw=true export: expected 2 raw lines, got %d; body=%s", got, wRaw.Body.String())
 	}
 }
 
