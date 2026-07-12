@@ -1,14 +1,22 @@
 // file: internal/matcher/fuzzy.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-07-03
+// last-edited: 2026-07-11
 
 package matcher
 
 import (
+	"sort"
 	"strings"
 	"unicode"
 )
+
+// tokenSetScale maps a TokenSetRatio (0..1) onto the int ScoreMatch scale. It
+// mirrors the strongest existing Levenshtein-based term (the per-word match at
+// *70, see ScoreMatch) so the order-insensitive signal stays a strong hint
+// while remaining below the exact/prefix heuristic tier (90-100). Because the
+// blend is raise-only, this constant only bounds how much a score can RISE.
+const tokenSetScale = 70
 
 // FuzzyResult holds a scored search result.
 type FuzzyResult struct {
@@ -117,7 +125,80 @@ func ScoreMatch(query, target string) int {
 		}
 	}
 
+	// Order-insensitive token-set signal, blended RAISE-ONLY: it can lift a
+	// score (e.g. "Author: Title" vs "Title - Author", which the lexical terms
+	// above punish) but never lower one, so no caller threshold can newly
+	// reject a previously-accepted match.
+	if tokenScore := int(TokenSetRatio(query, target) * tokenSetScale); tokenScore > score {
+		score = tokenScore
+	}
+
 	return score
+}
+
+// TokenSetRatio computes an order-insensitive similarity in [0,1] between two
+// strings, following fuzzywuzzy's token_set_ratio construction. It tokenizes
+// with the shared normalize helper (so punctuation/case are ignored), then
+// compares the sorted intersection against the sorted intersection-plus-remainder
+// of each side and returns the best Levenshtein-based similarity of those three
+// comparisons. The result is symmetric (TokenSetRatio(a,b) == TokenSetRatio(b,a));
+// empty or whitespace-only input on either side returns 0 (unknown, not a match).
+func TokenSetRatio(a, b string) float64 {
+	fieldsA := strings.Fields(normalize(a))
+	fieldsB := strings.Fields(normalize(b))
+	if len(fieldsA) == 0 || len(fieldsB) == 0 {
+		return 0
+	}
+
+	setA := make(map[string]struct{}, len(fieldsA))
+	for _, tok := range fieldsA {
+		setA[tok] = struct{}{}
+	}
+	setB := make(map[string]struct{}, len(fieldsB))
+	for _, tok := range fieldsB {
+		setB[tok] = struct{}{}
+	}
+
+	var inter, onlyA, onlyB []string
+	for tok := range setA {
+		if _, ok := setB[tok]; ok {
+			inter = append(inter, tok)
+		} else {
+			onlyA = append(onlyA, tok)
+		}
+	}
+	for tok := range setB {
+		if _, ok := setA[tok]; !ok {
+			onlyB = append(onlyB, tok)
+		}
+	}
+	sort.Strings(inter)
+	sort.Strings(onlyA)
+	sort.Strings(onlyB)
+
+	t0 := strings.Join(inter, " ")                                        // shared tokens
+	t1 := strings.TrimSpace(t0 + " " + strings.Join(onlyA, " "))          // shared + a-only
+	t2 := strings.TrimSpace(t0 + " " + strings.Join(onlyB, " "))          // shared + b-only
+
+	return max(tokenSimilarity(t0, t1), tokenSimilarity(t0, t2), tokenSimilarity(t1, t2))
+}
+
+// tokenSimilarity returns a Levenshtein-based similarity in [0,1] for two
+// already-normalized token strings (1.0 == identical). Two empty strings are
+// treated as identical; anything vs empty is 0.
+func tokenSimilarity(a, b string) float64 {
+	if a == "" && b == "" {
+		return 1.0
+	}
+	maxLen := max(len([]rune(a)), len([]rune(b)))
+	if maxLen == 0 {
+		return 0
+	}
+	sim := 1.0 - float64(LevenshteinDistance(a, b))/float64(maxLen)
+	if sim < 0 {
+		sim = 0
+	}
+	return sim
 }
 
 // RankResults scores each candidate against the query and returns results
