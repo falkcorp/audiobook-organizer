@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.50.0
+// version: 2.51.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-07-03
+// last-edited: 2026-07-11
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -674,6 +674,36 @@ export interface MetadataScoringConfig {
   llm_rerank_epsilon: number;
   llm_rerank_top_k: number;
   write_backup_before: boolean;
+
+  // --- new scoring knobs (TASK-02). All optional; the backend fail-open
+  // defaults apply when a field is absent. Names mirror the Go json tags.
+  //
+  // Transcription boosts (legacy defaults 2.0 / 1.4 / 1.6 / 1.4):
+  transcription_title_exact_boost?: number;
+  transcription_title_substr_boost?: number;
+  transcription_author_boost?: number;
+  transcription_narrator_boost?: number;
+
+  // Base-score adjustments. compilation_penalty, rich_metadata_bonus_cap, and
+  // f1_min_score are POINTER knobs on the Go side: 0 is a real operator value,
+  // so send an empty input as absent (never 0) and an explicit 0 as 0.
+  compilation_penalty?: number;
+  rich_metadata_field_bonus?: number;
+  rich_metadata_bonus_cap?: number;
+  f1_min_score?: number;
+
+  // Series boosts (legacy defaults 1.4 / 2.0 / 0.5):
+  series_name_match_boost?: number;
+  series_number_exact_boost?: number;
+  series_number_wrong_penalty?: number;
+
+  // Duration tier VALUE arrays (multiplier/score columns). Tier edges + count
+  // stay fixed in code; a mismatched-length array is ignored by the backend.
+  duration_tier_multipliers?: number[];
+  duration_tier_scores?: number[];
+
+  // Bulk-fetch concurrency (legacy default 4):
+  bulk_fetch_workers?: number;
 }
 
 export interface ITunesPathMap {
