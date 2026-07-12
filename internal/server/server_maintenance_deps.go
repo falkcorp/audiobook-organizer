@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-07-03
+// last-edited: 2026-07-11
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -390,6 +390,14 @@ func (s *Server) SearchTranscriptionCandidate(_ context.Context, bookID, _, _ st
 // close that window, verify the re-read cache slot 0 still matches the gated
 // identity before applying, and error out on mismatch — the caller already
 // treats a non-nil error as "skip + log".
+//
+// SourceHash layer (INIT-3-T5): the slot-0 identity re-check catches a cache
+// row whose top candidate was swapped, but NOT a row whose search INPUTS
+// drifted (the book's title/author/narrator/series was edited) while the top
+// candidate happened to stay put. ValidateCachedIdentity recomputes the stored
+// SourceHash over the book's CURRENT fields and refuses on mismatch (fail
+// closed); legacy rows with an empty hash fail open with a warning. This runs
+// BEFORE the slot-0 check as a first, independent layer — both guards are kept.
 func (s *Server) ApplyTranscriptionCandidate(_ context.Context, bookID, gatedTitle, gatedAuthor string) error {
 	if s.metadataFetchService == nil {
 		return fmt.Errorf("metadata fetch service not initialized")
@@ -401,6 +409,39 @@ func (s *Server) ApplyTranscriptionCandidate(_ context.Context, bookID, gatedTit
 	if entry == nil || len(entry.Candidates) == 0 {
 		return fmt.Errorf("no cached candidates for book %s", bookID)
 	}
+
+	// SourceHash guard: recompute the cache row's search-input hash over the
+	// book's CURRENT fields and refuse if it drifted since the write. A missing
+	// store or book is anomalous at apply time — fail closed (skip + log).
+	store := s.Store()
+	if store == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	book, err := store.GetBookByID(bookID)
+	if err != nil {
+		return fmt.Errorf("get book %s for cache-identity check: %w", bookID, err)
+	}
+	if book == nil {
+		return fmt.Errorf("book %s not found for cache-identity check", bookID)
+	}
+	curAuthor := ""
+	if book.Author != nil && book.Author.Name != "" {
+		curAuthor = book.Author.Name
+	}
+	curNarrator := ""
+	if book.Narrator != nil {
+		curNarrator = *book.Narrator
+	}
+	curSeries := ""
+	if book.Series != nil && book.Series.Name != "" {
+		curSeries = book.Series.Name
+	}
+	if verr := s.metadataFetchService.ValidateCachedIdentity(entry, bookID, book.Title, curAuthor, curNarrator, curSeries); verr != nil {
+		slog.Warn("apply-transcription-candidate: cache source-hash drift since write",
+			"book_id", bookID, "error", verr)
+		return verr
+	}
+
 	var cand metafetch.MetadataCandidate
 	if err := json.Unmarshal(entry.Candidates[0], &cand); err != nil {
 		return fmt.Errorf("decode cached candidate for book %s: %w", bookID, err)

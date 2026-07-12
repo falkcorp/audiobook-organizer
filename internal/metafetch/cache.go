@@ -1,5 +1,5 @@
 // file: internal/metafetch/cache.go
-// version: 1.1.0
+// version: 1.2.0
 //
 // Cache-layer on top of metafetch.Service. The persisted record type
 // lives in internal/database (MetadataCandidateCache) — re-exported
@@ -14,12 +14,19 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
+
+// ErrStaleMetadataCache is returned by ValidateCachedIdentity when the cache
+// entry's stored SourceHash does not match a hash recomputed over the book's
+// CURRENT search inputs — i.e. the book's identity drifted since the cache was
+// written. Callers treat a non-nil error as "skip + log" (fail-closed).
+var ErrStaleMetadataCache = errors.New("metadata cache stale: source hash mismatch")
 
 // MetadataCandidateCache is a re-export of the persistence type so
 // metafetch callers don't need to know about internal/database.
@@ -50,6 +57,45 @@ func (mfs *Service) GetCachedCandidates(bookID string) (*MetadataCandidateCache,
 		return nil, false, nil
 	}
 	return entry, entry.IsFresh(), nil
+}
+
+// ValidateCachedIdentity closes the metadata-cache TOCTOU window (INIT-3-T5):
+// the cache is keyed only by book ID, so an entry can be refreshed between the
+// gate read and the apply. This recomputes the existing hashSearchInputs over
+// the book's CURRENT fields and compares it to the SourceHash stored at write
+// time. It reuses hashSearchInputs exactly — no second hashing scheme — and
+// does not touch mfs.db, so it is safe on a minimal Service.
+//
+// Three-case semantics (mirrored in the tests):
+//   - stored hash EMPTY (legacy row predating the field being load-bearing) →
+//     fail-OPEN: slog.Warn + nil, so an UNCHANGED book still applies via the
+//     existing slot-0 identity guard;
+//   - hash MISMATCH → fail-CLOSED: ErrStaleMetadataCache (wrapped with book ID);
+//   - hash MATCH → nil.
+//
+// Note: the two production cache writers hash different input shapes — the batch
+// path (metadata_batch_candidates.go) passes narrator/series as empty strings;
+// the UI handler path passes user-typed values. Recomputing over the book's
+// current fields therefore fails CLOSED for a row whose stored hash came from
+// inputs that differ from the book's fields (e.g. a book with a narrator cached
+// via the batch path). That is intentional and conservative: refusing an apply
+// never mutates data — it only declines to reuse a cache row whose provenance
+// no longer matches the book.
+func (mfs *Service) ValidateCachedIdentity(entry *MetadataCandidateCache, bookID, query, author, narrator, series string) error {
+	if entry == nil {
+		return nil
+	}
+	if entry.SourceHash == "" {
+		// Legacy row written before SourceHash was load-bearing. Fail open so
+		// an unchanged book still applies; the slot-0 identity guard remains.
+		slog.Warn("metafetch ValidateCachedIdentity: legacy cache row has empty SourceHash, applying (fail-open)", "id", bookID)
+		return nil
+	}
+	want := hashSearchInputs(bookID, query, author, narrator, series)
+	if entry.SourceHash != want {
+		return fmt.Errorf("%w: book %s (stored %s, current %s)", ErrStaleMetadataCache, bookID, entry.SourceHash, want)
+	}
+	return nil
 }
 
 // FetchAndCache runs the existing search pipeline, writes top-N to

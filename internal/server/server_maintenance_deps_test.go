@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9c1e4f6a-2b7d-4a3e-8f5c-6d1a9b2e4c7f
-// last-edited: 2026-07-03
+// last-edited: 2026-07-11
 
 // Package server tests for TASK-23 (MATCH-6/BUG-3/QUAL-3): ApplyTranscriptionCandidate
 // must verify the identity of the re-read cached candidate against the
@@ -14,6 +14,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -131,5 +132,76 @@ func TestApplyTranscriptionCandidate_NoRegression_SameCandidateBothReads(t *test
 	}
 	if len(*updateCalls) != 1 {
 		t.Fatalf("UpdateBook was called %d times, want 1 — the matching candidate must still be applied", len(*updateCalls))
+	}
+}
+
+// TestApplyTranscriptionCandidateSourceHashDriftRefused proves the INIT-3-T5
+// SourceHash layer catches a drift the slot-0 identity check cannot: the top
+// candidate is unchanged between the gate and apply reads (so the slot-0 guard
+// would pass), but the cache row's stored SourceHash no longer matches a hash
+// recomputed over the book's current fields. The apply must fail closed and
+// never reach the write path.
+func TestApplyTranscriptionCandidateSourceHashDriftRefused(t *testing.T) {
+	bookID := "book-3"
+	book := &database.Book{ID: bookID, Title: "Current Title"}
+
+	cand := metafetch.MetadataCandidate{Title: "The Stable Book", Author: "Stable Author", Score: 0.9, Source: "test"}
+	entry := mustCandidateCache(t, bookID, cand)
+	// Non-empty hash that cannot match a recompute over the book's real fields:
+	// simulates a row whose search inputs drifted since the cache write.
+	entry.SourceHash = "deadbeefdeadbeef"
+
+	store, updateCalls := newTOCTOUCacheStore(t, book, entry, entry)
+	s := &Server{store: store, metadataFetchService: metafetch.NewService(store)}
+	ctx := context.Background()
+
+	candTitle, candAuthor, _, found, err := s.SearchTranscriptionCandidate(ctx, bookID, "irrelevant", "irrelevant")
+	if err != nil || !found {
+		t.Fatalf("SearchTranscriptionCandidate() = (found=%v, err=%v), want found=true, err=nil", found, err)
+	}
+
+	applyErr := s.ApplyTranscriptionCandidate(ctx, bookID, candTitle, candAuthor)
+	if applyErr == nil {
+		t.Fatal("ApplyTranscriptionCandidate() = nil error, want non-nil on SourceHash drift")
+	}
+	if !errors.Is(applyErr, metafetch.ErrStaleMetadataCache) {
+		t.Fatalf("ApplyTranscriptionCandidate() error = %v, want errors.Is ErrStaleMetadataCache", applyErr)
+	}
+	if len(*updateCalls) != 0 {
+		t.Fatalf("UpdateBook was called %d times, want 0 — a drifted cache row must never be applied", len(*updateCalls))
+	}
+}
+
+// TestApplyTranscriptionCandidateUnchangedStillApplies is the anti-over-
+// suppression check for the INIT-3-T5 guard: a legacy cache row with an empty
+// SourceHash (predating the field being load-bearing) must fail OPEN so an
+// UNCHANGED, known-good book still applies with the new guard active. This is
+// the mustCandidateCache shape (SourceHash == ""), so it exercises the
+// fail-open branch of ValidateCachedIdentity end-to-end through the apply path.
+func TestApplyTranscriptionCandidateUnchangedStillApplies(t *testing.T) {
+	bookID := "book-4"
+	book := &database.Book{ID: bookID, Title: "Old Title"}
+
+	cand := metafetch.MetadataCandidate{Title: "The Stable Book", Author: "Stable Author", Score: 0.9, Source: "test"}
+	entry := mustCandidateCache(t, bookID, cand) // SourceHash == "" → fail-open
+	if entry.SourceHash != "" {
+		t.Fatalf("precondition: expected empty SourceHash, got %q", entry.SourceHash)
+	}
+
+	store, updateCalls := newTOCTOUCacheStore(t, book, entry, entry)
+	s := &Server{store: store, metadataFetchService: metafetch.NewService(store)}
+	ctx := context.Background()
+
+	candTitle, candAuthor, _, found, err := s.SearchTranscriptionCandidate(ctx, bookID, "irrelevant", "irrelevant")
+	if err != nil || !found {
+		t.Fatalf("SearchTranscriptionCandidate() = (found=%v, err=%v), want found=true, err=nil", found, err)
+	}
+
+	applyErr := s.ApplyTranscriptionCandidate(ctx, bookID, candTitle, candAuthor)
+	if applyErr != nil {
+		t.Fatalf("ApplyTranscriptionCandidate() = %v, want nil — an unchanged book must still apply with the new guard active", applyErr)
+	}
+	if len(*updateCalls) != 1 {
+		t.Fatalf("UpdateBook was called %d times, want 1 — the legit apply must not be over-suppressed", len(*updateCalls))
 	}
 }
