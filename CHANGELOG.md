@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.142.0 -->
+<!-- version: 3.143.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-11 -->
 
@@ -25,6 +25,23 @@
   `slog.Warn`s before the full-corpus fetch instead of silently scanning the whole library.
 - Documented a confirmed pre-existing bug found while authoring the tests (non-title sort +
   a filter on a non-projected field → zero books) in TODO.md; out of scope to fix here.
+
+#### July 11, 2026 - feat(dedup): dedup.calibrate-composite op — tune noisy-OR bands (INIT-1 T5)
+
+- **`dedup`** (backend) — new op `dedup.calibrate-composite`
+  (`internal/plugins/dedup/calibrate_composite.go`) that calibrates the noisy-OR composite
+  scorer against the pair-deduped gold-label set, replaying each labeled pair's stored
+  `ScoreBreakdown` signals through `unified.ComposeScore` under coordinate-wise config
+  variants. The existing `dedup.calibrate-embedding-thresholds` sweeps only a single
+  embedding cosine cut-point; ~47% of true_dup pairs score below cosine 0.98, so the
+  composite is the right calibration surface. Fail-closed coverage floor (skips + counts
+  nil-breakdown rows), bounded `errgroup` sweep pool sized to `runtime.NumCPU()`. Dry-run by
+  default. **Applicability finding:** only the four band thresholds have a config-blob
+  persistence surface (`config.DedupSignalConfig`); per-signal confidence bounds do not, so
+  the op splits into an APPLICABLE band recommendation (round 1, under baseline confidences,
+  operator-gated apply that survives restart) and ADVISORY-only confidence suggestions
+  (round 2, reported for a manual config.yaml edit, never persisted, never gates the apply).
+  Apply is refused unless every tunable band met its target. Registered in `plugin.go`.
 
 #### July 11, 2026 - docs(system): comprehensive system documentation set (DOCS-1, #1276)
 
