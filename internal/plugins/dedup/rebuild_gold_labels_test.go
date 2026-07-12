@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/rebuild_gold_labels_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2b8e5f14-6a37-4c92-9d05-3f7a8b1c6e40
-// last-edited: 2026-07-04
+// last-edited: 2026-07-11
 
 // Tests for the dedup.rebuild-gold-labels op against a real PebbleStore +
 // EmbeddingStore: dry-run diff reporting (changed/unchanged/unlabelable),
@@ -17,14 +17,25 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
-// createBookNoFiles creates a book with no BookFile records, so
-// dataset.Classify's missingFile catcher fires not_dup for any pair
-// involving it.
-func createBookNoFiles(t *testing.T, pebble *database.PebbleStore, title string) string {
+// createBookStubAudio creates a book whose only file is a stub/placeholder
+// (sub-256 KiB, zero duration), so dataset.Classify's implausibleAudio catcher
+// fires not_dup for any pair involving it. (missingFile no longer emits not_dup
+// as of the not_dup-mining-guard change — file absence is evidence-free for
+// dup-ness — so these rebuild/backfill tests use a stub side, which is still a
+// hard not_dup, to exercise the not_dup recompute/dismiss paths.)
+func createBookStubAudio(t *testing.T, pebble *database.PebbleStore, title string) string {
 	t.Helper()
 	created, err := pebble.CreateBook(&database.Book{Title: title, FilePath: "/audio/" + title + ".m4b"})
 	if err != nil {
 		t.Fatalf("CreateBook %q: %v", title, err)
+	}
+	if err := pebble.CreateBookFile(&database.BookFile{
+		BookID:   created.ID,
+		FilePath: "/audio/" + title + ".m4b",
+		FileSize: 32, // < 256 KiB stub floor
+		Duration: 0,  // no positive duration
+	}); err != nil {
+		t.Fatalf("CreateBookFile %q: %v", title, err)
 	}
 	return created.ID
 }
@@ -44,8 +55,8 @@ func rebuildFixture(t *testing.T) (*database.PebbleStore, *database.EmbeddingSto
 func TestRebuildGoldLabels_DryRun_RuleChangedAndUnchanged(t *testing.T) {
 	pebble, es, p := rebuildFixture(t)
 
-	// missingFile fires not_dup for any pair where one side has no files.
-	noFiles := createBookNoFiles(t, pebble, "Ghost")
+	// implausibleAudio fires not_dup for any pair with a stub/placeholder side.
+	noFiles := createBookStubAudio(t, pebble, "Ghost")
 	hasFiles := createBookWithHashedFile(t, pebble, "Real", "hash-real-0001")
 	changedCand := candidateID(t, es, noFiles, hasFiles)
 
@@ -58,7 +69,7 @@ func TestRebuildGoldLabels_DryRun_RuleChangedAndUnchanged(t *testing.T) {
 	}
 
 	// Unchanged: another no-files pair, already stored as not_dup.
-	noFiles2 := createBookNoFiles(t, pebble, "Ghost2")
+	noFiles2 := createBookStubAudio(t, pebble, "Ghost2")
 	hasFiles2 := createBookWithHashedFile(t, pebble, "Real2", "hash-real-0002")
 	unchangedCand := candidateID(t, es, noFiles2, hasFiles2)
 	if err := es.UpsertLabeledExample(database.LabeledExample{
@@ -115,8 +126,8 @@ func TestRebuildGoldLabels_DryRun_RuleChangedAndUnchanged(t *testing.T) {
 func TestRebuildGoldLabels_ComputeRebuildDiff_ReportCorrectness(t *testing.T) {
 	pebble, es, p := rebuildFixture(t)
 
-	// Changed: stored true_dup, but missingFile fires not_dup today.
-	noFiles := createBookNoFiles(t, pebble, "Ghost")
+	// Changed: stored true_dup, but implausibleAudio fires not_dup today.
+	noFiles := createBookStubAudio(t, pebble, "Ghost")
 	hasFiles := createBookWithHashedFile(t, pebble, "Real", "hash-real-report-1")
 	changedCand := candidateID(t, es, noFiles, hasFiles)
 	if err := es.UpsertLabeledExample(database.LabeledExample{
@@ -127,7 +138,7 @@ func TestRebuildGoldLabels_ComputeRebuildDiff_ReportCorrectness(t *testing.T) {
 	}
 
 	// Unchanged: already stored as the not_dup missingFile would produce today.
-	noFiles2 := createBookNoFiles(t, pebble, "Ghost2")
+	noFiles2 := createBookStubAudio(t, pebble, "Ghost2")
 	hasFiles2 := createBookWithHashedFile(t, pebble, "Real2", "hash-real-report-2")
 	unchangedCand := candidateID(t, es, noFiles2, hasFiles2)
 	if err := es.UpsertLabeledExample(database.LabeledExample{
@@ -228,7 +239,7 @@ func TestRebuildGoldLabels_Apply_WipesRuleAndAutoHighConf_PreservesHumanAndOther
 	pebble, es, p := rebuildFixture(t)
 
 	// Rule bucket: stale true_dup that should become not_dup.
-	noFiles := createBookNoFiles(t, pebble, "Ghost")
+	noFiles := createBookStubAudio(t, pebble, "Ghost")
 	hasFiles := createBookWithHashedFile(t, pebble, "Real", "hash-real-1111")
 	ruleCand := candidateID(t, es, noFiles, hasFiles)
 	if err := es.UpsertLabeledExample(database.LabeledExample{
@@ -342,7 +353,7 @@ func TestRebuildGoldLabels_Apply_WipesRuleAndAutoHighConf_PreservesHumanAndOther
 func TestRebuildGoldLabels_Apply_Idempotent(t *testing.T) {
 	pebble, es, p := rebuildFixture(t)
 
-	noFiles := createBookNoFiles(t, pebble, "Ghost")
+	noFiles := createBookStubAudio(t, pebble, "Ghost")
 	hasFiles := createBookWithHashedFile(t, pebble, "Real", "hash-real-2222")
 	ruleCand := candidateID(t, es, noFiles, hasFiles)
 	if err := es.UpsertLabeledExample(database.LabeledExample{

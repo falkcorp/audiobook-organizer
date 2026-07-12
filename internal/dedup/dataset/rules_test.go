@@ -1,7 +1,7 @@
 // file: internal/dedup/dataset/rules_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c1d4e8b5-7f23-4a90-9b01-6e2c5d8f3a47
-// last-edited: 2026-06-13
+// last-edited: 2026-07-11
 
 package dataset
 
@@ -29,12 +29,14 @@ func TestCatchers(t *testing.T) {
 			wantFires: true, wantLabel: "not_dup",
 		},
 		{
-			name: "missing file one side",
+			// missingFile now emits unsure — file absence is evidence-free for
+			// dup-ness, so it must never poison the gold set with a not_dup.
+			name: "missing file one side => unsure",
 			ex: database.LabeledExample{
 				A: database.BookFeatures{FilesExist: true, TotalDurationSec: 100},
 				B: database.BookFeatures{FilesExist: false},
 			},
-			wantFires: true, wantLabel: "not_dup",
+			wantFires: true, wantLabel: "unsure",
 		},
 		{
 			name: "whole-book signature match => true_dup",
@@ -68,14 +70,15 @@ func TestCatchers(t *testing.T) {
 			wantFires: true, wantLabel: "true_dup",
 		},
 		{
-			// missing-file fires before part-vs-whole
+			// missing-file fires before part-vs-whole (priority preserved); it now
+			// yields unsure rather than not_dup.
 			name: "missing file beats part-vs-whole (priority check)",
 			ex: database.LabeledExample{
 				A:             database.BookFeatures{FilesExist: true, TotalDurationSec: 36000},
 				B:             database.BookFeatures{FilesExist: false, TotalDurationSec: 100},
 				DurationRatio: 100.0 / 36000.0,
 			},
-			wantFires: true, wantLabel: "not_dup",
+			wantFires: true, wantLabel: "unsure",
 		},
 		{
 			// disjoint signature should not trigger signature-match catcher
@@ -151,5 +154,108 @@ func TestClassify_ReasonContainsRatio(t *testing.T) {
 	// Reason assertion: must describe the rule, not just echo the label.
 	if !strings.Contains(reason, "part vs whole") {
 		t.Fatalf("reason should describe the rule (want substring %q); got %q", "part vs whole", reason)
+	}
+}
+
+// The following regression tests pin the not_dup-mining guards added to stop
+// contaminated gold labels. Each part-vs-whole case is shaped like one of the
+// 2026-07-08 hand-verified prod mislabels (a ms/sec duration-unit corruption on
+// a pair that is really a duplicate), and must go unsure — never not_dup —
+// because the pair shares hard identity.
+
+// TestPartVsWholeSharedASINGoesUnsure mirrors "Way of the Wolf" (ASIN
+// B002V8MAAM): same ASIN, same primary path, durations 21171 vs 20810840
+// ("sec") — a ratio ≈ 0.001 that misfired the part-vs-whole rule.
+func TestPartVsWholeSharedASINGoesUnsure(t *testing.T) {
+	ex := database.LabeledExample{
+		A:             database.BookFeatures{FilesExist: true, TotalDurationSec: 21171, ASIN: "B002V8MAAM", PrimaryPath: "/lib/wolf/wolf.m4b"},
+		B:             database.BookFeatures{FilesExist: true, TotalDurationSec: 20810840, ASIN: "B002V8MAAM", PrimaryPath: "/lib/wolf/wolf.m4b"},
+		DurationRatio: 21171.0 / 20810840.0,
+	}
+	label, reason, fires := partVsWhole(ex)
+	if !fires || label != "unsure" {
+		t.Fatalf("partVsWhole = (%q, fires=%v), want unsure/true; reason=%q", label, fires, reason)
+	}
+	if !strings.Contains(reason, "shares identity") {
+		t.Fatalf("reason should flag the identity guard; got %q", reason)
+	}
+}
+
+// TestPartVsWholeSharedVersionGroupGoesUnsure exercises the version-group arm of
+// SharesIdentity: no ASIN, disjoint paths, but a shared VersionGroupID.
+func TestPartVsWholeSharedVersionGroupGoesUnsure(t *testing.T) {
+	ex := database.LabeledExample{
+		A:             database.BookFeatures{FilesExist: true, TotalDurationSec: 34535, VersionGroupID: "vg-empire", PrimaryPath: "/lib/foundation/a.m4b"},
+		B:             database.BookFeatures{FilesExist: true, TotalDurationSec: 57989869, VersionGroupID: "vg-empire", PrimaryPath: "/lib/foundation/b.m4b"},
+		DurationRatio: 34535.0 / 57989869.0,
+	}
+	label, _, fires := partVsWhole(ex)
+	if !fires || label != "unsure" {
+		t.Fatalf("partVsWhole = (%q, fires=%v), want unsure/true", label, fires)
+	}
+}
+
+// TestPartVsWholeSharedPathGoesUnsure mirrors "Alcatraz vs the Evil Librarians"
+// (ASIN B005GGGC3M, same path): the path arm alone must trigger the guard even
+// when ASIN and version group carry no matching evidence.
+func TestPartVsWholeSharedPathGoesUnsure(t *testing.T) {
+	ex := database.LabeledExample{
+		A:             database.BookFeatures{FilesExist: true, TotalDurationSec: 18000, PrimaryPath: "/lib/alcatraz/alcatraz.m4b"},
+		B:             database.BookFeatures{FilesExist: true, TotalDurationSec: 18000000, PrimaryPath: "/lib/alcatraz/alcatraz.m4b"},
+		DurationRatio: 18000.0 / 18000000.0,
+	}
+	label, _, fires := partVsWhole(ex)
+	if !fires || label != "unsure" {
+		t.Fatalf("partVsWhole = (%q, fires=%v), want unsure/true", label, fires)
+	}
+}
+
+// TestMissingFileGoesUnsure pins the missingFile rule to unsure on either side —
+// file absence is evidence-free for dup-ness and can no longer emit not_dup.
+func TestMissingFileGoesUnsure(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ex   database.LabeledExample
+	}{
+		{"side A missing", database.LabeledExample{A: database.BookFeatures{FilesExist: false}, B: database.BookFeatures{FilesExist: true}}},
+		{"side B missing", database.LabeledExample{A: database.BookFeatures{FilesExist: true}, B: database.BookFeatures{FilesExist: false}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			label, _, fires := missingFile(tc.ex)
+			if !fires || label != "unsure" {
+				t.Fatalf("missingFile = (%q, fires=%v), want unsure/true", label, fires)
+			}
+		})
+	}
+}
+
+// TestPartVsWholeGenuineStillNotDup is the anti-over-suppression guard: a genuine
+// part-vs-whole pair with disjoint identity (different ASINs, different paths, no
+// version group, sane durations, ratio 0.3) is STILL not_dup — and a pair whose
+// identity fields are all empty (unknown is non-disqualifying) likewise stays
+// not_dup rather than being forced unsure.
+func TestPartVsWholeGenuineStillNotDup(t *testing.T) {
+	disjoint := database.LabeledExample{
+		A:             database.BookFeatures{FilesExist: true, TotalDurationSec: 36000, ASIN: "AAAAAAAAAA", PrimaryPath: "/lib/x/whole.m4b"},
+		B:             database.BookFeatures{FilesExist: true, TotalDurationSec: 10800, ASIN: "BBBBBBBBBB", PrimaryPath: "/lib/y/part.m4b"},
+		DurationRatio: 10800.0 / 36000.0,
+	}
+	if label, _, fires := partVsWhole(disjoint); !fires || label != "not_dup" {
+		t.Fatalf("disjoint identity: partVsWhole = (%q, fires=%v), want not_dup/true", label, fires)
+	}
+	if SharesIdentity(disjoint) {
+		t.Fatal("disjoint identity must not report SharesIdentity")
+	}
+
+	bothEmpty := database.LabeledExample{
+		A:             database.BookFeatures{FilesExist: true, TotalDurationSec: 36000},
+		B:             database.BookFeatures{FilesExist: true, TotalDurationSec: 10800},
+		DurationRatio: 10800.0 / 36000.0,
+	}
+	if label, _, fires := partVsWhole(bothEmpty); !fires || label != "not_dup" {
+		t.Fatalf("both-identity-empty: partVsWhole = (%q, fires=%v), want not_dup/true (unknown is non-disqualifying)", label, fires)
+	}
+	if SharesIdentity(bothEmpty) {
+		t.Fatal("all-empty identity must not report SharesIdentity")
 	}
 }

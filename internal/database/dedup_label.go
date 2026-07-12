@@ -1,7 +1,7 @@
 // file: internal/database/dedup_label.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5a0319bd-8bc4-4135-91e6-dfd43628dcc5
-// last-edited: 2026-07-04
+// last-edited: 2026-07-11
 
 package database
 
@@ -40,6 +40,10 @@ type BookFeatures struct {
 	// hasPlausibleAudio signal so the dataset can tell a genuine but unscanned
 	// copy (large file, zero duration) from a stub/placeholder (tiny file).
 	FileSizeBytes int64 `json:"file_size_bytes"`
+	// ASIN is the book's Amazon/Audible ID ("" when the book has none).
+	ASIN string `json:"asin,omitempty"`
+	// VersionGroupID links books that are versions of the same work ("" when ungrouped).
+	VersionGroupID string `json:"version_group_id,omitempty"`
 }
 
 // LabeledExample is one labeled dedup candidate pair plus the features behind
