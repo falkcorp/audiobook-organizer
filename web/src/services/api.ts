@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.51.0
+// version: 2.52.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-07-11
 
@@ -267,7 +267,11 @@ export interface BookFile {
   sample_rate_hz?: number;
   channels?: number;
   bit_depth?: number;
+  // Hash chain (HASH-CHAIN-2, #1270): download -> original -> post-metadata -> current.
   file_hash?: string;
+  download_hash?: string;
+  original_file_hash?: string;
+  post_metadata_hash?: string;
   missing: boolean;
   file_exists?: boolean;
   // Deluge import fields (DELUGE-1, PR #540)
