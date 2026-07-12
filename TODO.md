@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.92.0 -->
+<!-- version: 9.92.1 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-11 -->
 
@@ -1998,7 +1998,7 @@ Bot-tasks at [`docs/superpowers/bot-tasks/2026-05-01-struct-*.md`](docs/superpow
 
 ---
 
-## ⭐ User Ratings UI — DB + schema done, API + UI pending
+## ⭐ User Ratings UI — ✅ fully shipped (DB + schema + API + UI)
 
 PR #516 added full Audible rating dimensions (5 dims + count + reviews) and Google Books
 (rating + count) to DB and metadata pipeline. PR #517 reserved `user_rating_overall`,
@@ -2013,7 +2013,7 @@ PR #520 wires Audible `runtime_length_min` into candidate scoring. Still needed:
 - [x] **RATE-2** Book detail UI: star rating widget (overall / story / performance + notes) — PR #552
 - [x] **RATE-3** Audible/Google ratings shown on MetadataReviewDialog candidate cards — PR #553
 - [x] **RATE-4** Library search/filter with numeric operators (>, <, >=, <=, ==, !=) for user_rating_* — PR #554
-- [x] **RATE-5** Bulk rating view / quick-rate from list
+- [x] **RATE-5** Bulk rating view / quick-rate from list — BulkRatingDialog.tsx, commit 399ea3f9 (verified 2026-07-10)
 
 ---
 
