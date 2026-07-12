@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/build_candidate_index.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 87487445-8923-477d-866c-b8153fd7755b
-// last-edited: 2026-07-11
+// last-edited: 2026-07-12
 
 // Package dedup — op dedup.build-candidate-status-index (INIT-2 T4).
 //
@@ -30,7 +30,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
+	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"runtime"
 	"sync"
 	"time"
@@ -101,7 +101,7 @@ func (p *Plugin) runBuildCandidateStatusIndex(ctx context.Context, _ json.RawMes
 		return fmt.Errorf("embedding store not available")
 	}
 
-	slog.Info("build-candidate-status-index: starting")
+	logging.Info(ctx, "build-candidate-status-index: starting")
 	loadProg := sdk.NewProgress(reporter, 0)
 	loadProg.Start("Loading dedup candidates…")
 
@@ -114,10 +114,10 @@ func (p *Plugin) runBuildCandidateStatusIndex(ctx context.Context, _ json.RawMes
 	total := len(candidates)
 	if total == 0 {
 		loadProg.Done("No candidates found — nothing to index")
-		slog.Info("build-candidate-status-index: no candidates, exiting")
+		logging.Info(ctx, "build-candidate-status-index: no candidates, exiting")
 		return nil
 	}
-	slog.Info("build-candidate-status-index: loaded candidates", "total", total)
+	logging.Info(ctx, "build-candidate-status-index: loaded candidates", "total", total)
 
 	prog := sdk.NewProgress(reporter, total)
 	prog.Start(fmt.Sprintf("Indexing candidate status: 0 / %d", total))
@@ -159,7 +159,7 @@ func (p *Plugin) runBuildCandidateStatusIndex(ctx context.Context, _ json.RawMes
 		}
 		mu.Unlock()
 		if shouldLog {
-			slog.Info("build-candidate-status-index: progress",
+			logging.Info(ctx, "build-candidate-status-index: progress",
 				"written", curWritten, "skipped", curSkipped, "errors", curErrs, "total", total)
 		}
 		return nil
@@ -174,7 +174,7 @@ func (p *Plugin) runBuildCandidateStatusIndex(ctx context.Context, _ json.RawMes
 		},
 	})
 	if runErr != nil {
-		slog.Info("build-candidate-status-index: stopped", "written", written, "error", runErr)
+		logging.Info(ctx, "build-candidate-status-index: stopped", "written", written, "error", runErr)
 		return runErr
 	}
 
@@ -191,7 +191,7 @@ func (p *Plugin) runBuildCandidateStatusIndex(ctx context.Context, _ json.RawMes
 		"Candidate status index build complete — %d written, %d skipped (empty status), %d errors (of %d candidates)",
 		written, skipped, errs, total)
 	prog.Done(summary)
-	slog.Info("build-candidate-status-index: complete",
+	logging.Info(ctx, "build-candidate-status-index: complete",
 		"written", written, "skipped", skipped, "errors", errs, "total", total)
 	return nil
 }

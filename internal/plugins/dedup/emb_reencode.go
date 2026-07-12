@@ -1,6 +1,7 @@
 // file: internal/plugins/dedup/emb_reencode.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9f4e2a1c-d7b3-4e8f-b5c0-2a1d9e4f7b3c
+// last-edited: 2026-07-12
 
 // Package dedup — op dedup.emb-reencode (T021, SPEC 3 §3).
 //
@@ -31,6 +32,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"log/slog"
 	"time"
 
@@ -131,12 +133,12 @@ func (p *Plugin) runEmbReencode(ctx context.Context, rawParams json.RawMessage, 
 	}
 
 	var (
-		totalRows   int
-		v0Rows      int
-		v1Rows      int
+		totalRows    int
+		v0Rows       int
+		v1Rows       int
 		totalV0Bytes int64
 		totalV1Bytes int64
-		batch       []reencodeTarget
+		batch        []reencodeTarget
 	)
 
 	// We collect all targets in memory first (one embRec JSON decode per row).
@@ -167,7 +169,7 @@ func (p *Plugin) runEmbReencode(ctx context.Context, rawParams json.RawMessage, 
 		}
 		var rec embRecPartial
 		if err := json.Unmarshal(iter.Value(), &rec); err != nil {
-			slog.Warn("emb-reencode: skip malformed row", "key", string(iter.Key()), "error", err)
+			logging.Warn(ctx, "emb-reencode: skip malformed row", "key", string(iter.Key()), "error", err)
 			continue
 		}
 
@@ -198,7 +200,7 @@ func (p *Plugin) runEmbReencode(ctx context.Context, rawParams json.RawMessage, 
 		// v0 row: decode float32 then re-encode to v1.
 		vec := database.DecodeVectorExported(row.oldVBlob)
 		if vec == nil {
-			slog.Warn("emb-reencode: skip empty vector blob", "key", string(row.key))
+			logging.Warn(ctx, "emb-reencode: skip empty vector blob", "key", string(row.key))
 			continue
 		}
 		newBlob := database.EncodeVectorExported(vec)
