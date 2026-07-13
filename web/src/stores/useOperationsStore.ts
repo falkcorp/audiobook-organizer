@@ -1,6 +1,7 @@
 // file: web/src/stores/useOperationsStore.ts
-// version: 3.6.0
+// version: 3.6.2
 // guid: 2a3b4c5d-6e7f-8a9b-0c1d-2e3f4a5b6c7d
+// last-edited: 2026-07-13
 
 import { create } from 'zustand';
 import * as api from '../services/api';
@@ -377,10 +378,25 @@ export const useOperationsStore = create<OperationsState>()((set, get) => ({
         }
       },
       onError: () => {
-        // On error, clear the source so the next openSSE() call reconnects.
-        // The browser EventSource already retries automatically, but if the
-        // connection is truly closed we want the next call to re-open it.
-        set({ _sseSource: null });
+        // The native EventSource auto-reconnects on TRANSIENT drops (network
+        // blip, laptop sleep/wake, a server restart) — on those it sets
+        // readyState back to CONNECTING and keeps this exact `es` alive with
+        // no action needed from us. It only reaches CLOSED when it has
+        // permanently given up (e.g. a fatal HTTP status). openSSE() is only
+        // ever called once per login (App.tsx effect keyed on auth state),
+        // with nothing that re-invokes it on error, so unconditionally
+        // closing `es` here would kill live reconnect on the first blip.
+        //
+        // So: only tear down + clear the ref once the browser has truly
+        // given up (readyState === CLOSED). That still fixes the leak this
+        // guard exists for — on a transient drop the ref stays valid so
+        // closeSSE() (e.g. on logout) can still reach and close this same
+        // `es`, and the `_sseSource !== null` guard keeps blocking a second
+        // openSSE() from spawning a duplicate live source.
+        if (es.readyState === EventSource.CLOSED) {
+          es.close();
+          set({ _sseSource: null });
+        }
         // Reconcile after a likely server restart: pull the timeline so any
         // ops the server auto-resumed (which won't emit op.created) show up
         // in the bell again. Delay so we don't fire during transient blips.

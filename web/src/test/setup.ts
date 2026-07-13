@@ -1,6 +1,7 @@
 // file: web/src/test/setup.ts
-// version: 1.0.5
+// version: 1.0.6
 // guid: 8f9a0b1c-2d3e-4f5a-6b7c-8d9e0f1a2b3c
+// last-edited: 2026-07-13
 
 import '@testing-library/jest-dom';
 import { cleanup } from '@testing-library/react';
@@ -61,12 +62,20 @@ Object.defineProperty(global, 'localStorage', {
   },
 });
 
-// Mock EventSource (SSE) for tests
+// Mock EventSource (SSE) for tests. Mirrors the native readyState numbering
+// (0 CONNECTING / 1 OPEN / 2 CLOSED) and exposes the same static constants,
+// since store code (useOperationsStore's openSSE) branches on
+// `es.readyState === EventSource.CLOSED` to distinguish a transient,
+// auto-reconnecting drop from a terminal one.
 class MockEventSource {
+  static readonly CONNECTING = 0;
+  static readonly OPEN = 1;
+  static readonly CLOSED = 2;
+
   url: string;
   onmessage: ((event: MessageEvent) => void) | null = null;
   onerror: ((event: Event) => void) | null = null;
-  readyState = 1;
+  readyState = MockEventSource.OPEN;
 
   constructor(url: string) {
     this.url = url;
@@ -75,7 +84,7 @@ class MockEventSource {
   addEventListener() {}
   removeEventListener() {}
   close() {
-    this.readyState = 2;
+    this.readyState = MockEventSource.CLOSED;
   }
 }
 

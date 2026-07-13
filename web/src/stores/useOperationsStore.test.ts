@@ -1,7 +1,7 @@
 // file: web/src/stores/useOperationsStore.test.ts
-// version: 2.3.0
+// version: 2.5.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-05-08
+// last-edited: 2026-07-13
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { useOperationsStore } from './useOperationsStore';
@@ -195,5 +195,86 @@ describe('useOperationsStore', () => {
     });
 
     expect(useOperationsStore.getState().latestLogEvent).toBeNull();
+  });
+
+  it('onError leaves a transiently-erroring (still auto-reconnecting) EventSource alone', () => {
+    vi.useFakeTimers();
+    useOperationsStore.setState({ _sseSource: null } as Parameters<typeof useOperationsStore.setState>[0]);
+    vi.mocked(api.getOperationTimeline).mockResolvedValue([]);
+
+    const closeSpy = vi.fn();
+    // readyState CONNECTING (0): the browser is auto-reconnecting this exact
+    // source on its own — matches a transient drop / server restart.
+    const fakeSource = { close: closeSpy, readyState: EventSource.CONNECTING } as unknown as EventSource;
+    let capturedOnError: ((err: Event) => void) | null = null;
+    vi.mocked(api.openOperationsSSE).mockImplementation(({ onError }) => {
+      capturedOnError = onError ?? null;
+      return fakeSource;
+    });
+
+    useOperationsStore.getState().openSSE();
+    expect(useOperationsStore.getState()._sseSource).toBe(fakeSource);
+
+    capturedOnError!(new Event('error'));
+
+    // Must NOT close or null the ref — openSSE() is only ever called once
+    // per login (see App.tsx), so nulling here with nothing to re-open it
+    // would kill live reconnect on the first blip. Leaving the ref intact
+    // also means closeSSE() (e.g. on logout) can still reach and close this
+    // same source, so there's no orphan.
+    expect(closeSpy).not.toHaveBeenCalled();
+    expect(useOperationsStore.getState()._sseSource).toBe(fakeSource);
+
+    vi.useRealTimers();
+  });
+
+  it('onError closes and clears _sseSource once the EventSource has permanently given up (no orphaned reconnecting source)', () => {
+    vi.useFakeTimers();
+    useOperationsStore.setState({ _sseSource: null } as Parameters<typeof useOperationsStore.setState>[0]);
+    vi.mocked(api.getOperationTimeline).mockResolvedValue([]);
+
+    const closeSpy = vi.fn();
+    // readyState CLOSED (2): the browser has given up for good — this is the
+    // only case that should tear down and null the ref.
+    const fakeSource = { close: closeSpy, readyState: EventSource.CLOSED } as unknown as EventSource;
+    let capturedOnError: ((err: Event) => void) | null = null;
+    vi.mocked(api.openOperationsSSE).mockImplementation(({ onError }) => {
+      capturedOnError = onError ?? null;
+      return fakeSource;
+    });
+
+    useOperationsStore.getState().openSSE();
+    expect(useOperationsStore.getState()._sseSource).toBe(fakeSource);
+    expect(capturedOnError).not.toBeNull();
+
+    capturedOnError!(new Event('error'));
+
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+    expect(useOperationsStore.getState()._sseSource).toBeNull();
+
+    vi.useRealTimers();
+  });
+
+  it('a subsequent openSSE after a terminal error creates exactly one new EventSource', () => {
+    useOperationsStore.setState({ _sseSource: null } as Parameters<typeof useOperationsStore.setState>[0]);
+    vi.mocked(api.getOperationTimeline).mockResolvedValue([]);
+    vi.mocked(api.openOperationsSSE).mockClear();
+
+    let capturedOnError: ((err: Event) => void) | null = null;
+    const firstSource = { close: vi.fn(), readyState: EventSource.CLOSED } as unknown as EventSource;
+    const secondSource = { close: vi.fn(), readyState: EventSource.OPEN } as unknown as EventSource;
+    vi.mocked(api.openOperationsSSE)
+      .mockImplementationOnce(({ onError }) => {
+        capturedOnError = onError ?? null;
+        return firstSource;
+      })
+      .mockImplementationOnce(() => secondSource);
+
+    useOperationsStore.getState().openSSE();
+    capturedOnError!(new Event('error'));
+    useOperationsStore.getState().openSSE();
+
+    expect(api.openOperationsSSE).toHaveBeenCalledTimes(2);
+    expect(useOperationsStore.getState()._sseSource).toBe(secondSource);
   });
 });

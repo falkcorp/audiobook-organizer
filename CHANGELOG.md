@@ -1,4 +1,5 @@
 <!-- file: CHANGELOG.md -->
+<!-- version: 3.150.0 -->
 <!-- version: 3.149.0 -->
 <!-- version: 3.148.0 -->
 <!-- version: 3.147.0 -->
@@ -13,6 +14,42 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 13, 2026 - fix(web): stop BookDetail load race + orphaned SSE EventSource leak
+
+- **BookDetail load race (frontend, wrong book shown)** — `BookDetail.tsx`'s
+  id-keyed load effect (`loadBook`, `loadVersions`, `getBookExternalIDs`,
+  the `metadata-rejections` fetch, and the detailed-tags effect) had no
+  request-sequence guard. Navigating book A -> book B quickly (or A's
+  `getBook` simply resolving after B's) let A's stale response overwrite
+  B's already-rendered state, showing the wrong book under the current URL.
+  Fixed with the same `cancelled`-flag idiom already used elsewhere in the
+  file: `loadBook`/`loadVersions` take an optional `isStale` check, and the
+  id-keyed effects skip every `setState` once their run has been
+  superseded by a newer navigation.
+- **Orphaned SSE EventSource on error (frontend, leaked API calls after
+  logout)** — `useOperationsStore.openSSE()`'s `onError` unconditionally
+  cleared `_sseSource` without ever closing the underlying `EventSource`.
+  Since `openSSE()` is only invoked once per login (`App.tsx`, no retry
+  call site), on a *terminal* error (browser gave up, `readyState ===
+  CLOSED`) the orphaned source stayed referenced by nothing — `closeSSE()`
+  (e.g. on logout) could no longer reach it, so it kept firing `onEvent` /
+  `loadFromServer()` forever, and a later `openSSE()` could spawn a second
+  live source past the `_sseSource !== null` guard. Fixed by closing +
+  nulling the ref only when `es.readyState === EventSource.CLOSED`; on a
+  *transient* drop (network blip, sleep/wake, server restart) the ref is
+  left intact so the browser's own auto-reconnect keeps working and
+  `closeSSE()` can still reach the same live source — closing
+  unconditionally here would have killed reconnect on the first blip.
+- Tests: `BookDetail.race.test.tsx` (out-of-order `getBook` resolution,
+  asserts the last-navigated book wins — verified to fail against the
+  pre-fix code) and 3 new `useOperationsStore.test.ts` cases (transient
+  error leaves the source open; terminal error closes + nulls it; a
+  subsequent `openSSE()` after a terminal error creates exactly one new
+  source). `web/src/test/setup.ts`'s mock `EventSource` gained the
+  standard `CONNECTING`/`OPEN`/`CLOSED` static constants so tests (and the
+  store) can reference `EventSource.CLOSED` the same way the real browser
+  API does.
 
 #### July 13, 2026 - fix(dedup): serialize CombineBooks + dedup.MergeBooks (close merge-race follow-ups from #1930)
 
