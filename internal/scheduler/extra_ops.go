@@ -1,7 +1,7 @@
 // file: internal/scheduler/extra_ops.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a9b8c7d6-e5f4-3210-fedc-ba9876543210
-// last-edited: 2026-07-07
+// last-edited: 2026-07-13
 
 // extra_ops registers OperationDefs for 13 scheduler tasks that previously
 // used the legacy triggerOperation / triggerOperationWithID helpers.  Each def
@@ -24,7 +24,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
@@ -39,6 +38,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/sweep"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/gin-gonic/gin"
 )
 
 // ExtraOpsDeps holds the typed dependencies needed by ExtraOpsRegistrar.
@@ -331,18 +331,33 @@ func (r *ExtraOpsRegistrar) RegisterAuthorSplitScanOp(reg *opsregistry.Registry)
 						errCount++
 						continue
 					}
-					// Update primary AuthorID to first individual author
+					// Update primary AuthorID to first individual author.
 					if book.AuthorID != nil && *book.AuthorID == author.ID && len(newAuthors) > 0 {
 						firstID := newAuthors[0].ID
-						book.AuthorID = &firstID
-						// book is BookCore (heavy fields nil) — bridge via
-						// .ToBook() so PebbleStore.UpdateBook sees the
-						// expected all-nil heavy fields and restores them
-						// from the stored row (STOR-1 guard in UpdateBook),
-						// rather than a type mismatch or an accidental
-						// heavy-field wipe.
-						full := book.ToBook()
-						_, _ = store.UpdateBook(book.ID, &full)
+						// `book` is a BookCore (heavy fields nil). Do NOT write
+						// its ToBook() projection: it carries nil Author/Series
+						// AND, because this op changes AuthorID, the
+						// guard-preserved Author would be STALE (still the
+						// composite). Hydrate the full stored row and set BOTH
+						// the new AuthorID and a fresh denormalized Author so
+						// the row stays consistent (Author.ID == AuthorID), not
+						// preserved-stale (STOREFID W5d-1 / #1887). Duplicate of
+						// internal/plugins/maintenance/author.go — keep in sync.
+						if full, err := store.GetBookByID(book.ID); err == nil && full != nil {
+							newPrimary := newAuthors[0]
+							full.AuthorID = &firstID
+							full.Author = &newPrimary
+							_, _ = store.UpdateBook(book.ID, full)
+						} else {
+							// Hydration failed — fall back to the projection
+							// write so the AuthorID change still lands
+							// (UpdateBook's guard preserves the old
+							// Author/Series). Never skip the split.
+							_ = progress.Log("warning", fmt.Sprintf("author split: hydrate book %s failed, writing projection: %v", book.ID, err), nil)
+							book.AuthorID = &firstID
+							full := book.ToBook()
+							_, _ = store.UpdateBook(book.ID, &full)
+						}
 					}
 					booksUpdated++
 				}

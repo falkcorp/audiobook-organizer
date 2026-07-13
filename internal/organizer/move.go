@@ -1,6 +1,7 @@
 // file: internal/organizer/move.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+// last-edited: 2026-07-13
 
 package organizer
 
@@ -55,14 +56,30 @@ func MoveBookFile(store database.Store, bookID, oldPath, newPath string, extraUp
 		return fmt.Errorf("failed to move file %s → %s: %w", oldPath, newPath, err)
 	}
 
-	// Step 5: Update database
-	update := &database.Book{
-		FilePath: newPath,
-	}
-	if extraUpdates != nil {
-		// Merge extra updates
+	// Step 5: Update database.
+	//
+	// A bare {FilePath} update is a full-replace under the full-fidelity
+	// PebbleStore backend, so writing it directly would total-wipe the row
+	// (Author/Series/Description/... all nil). Hydrate the stored row first and
+	// mutate only FilePath on it. Latent today (no live caller passes
+	// extraUpdates==nil through this path), but fixed before it is wired.
+	// If a caller supplied extraUpdates, honor those as-is; on hydrate failure
+	// fall back to the bare write so the path change still lands.
+	var update *database.Book
+	switch {
+	case extraUpdates != nil:
 		update = extraUpdates
 		update.FilePath = newPath
+	default:
+		if full, err := store.GetBookByID(bookID); err == nil && full != nil {
+			full.FilePath = newPath
+			update = full
+		} else {
+			if err != nil {
+				slog.Warn("file_move: hydrate failed, writing bare FilePath update", "bookID", bookID, "err", err)
+			}
+			update = &database.Book{FilePath: newPath}
+		}
 	}
 
 	if _, err := store.UpdateBook(bookID, update); err != nil {

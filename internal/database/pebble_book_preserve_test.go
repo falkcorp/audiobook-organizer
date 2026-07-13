@@ -1,7 +1,7 @@
 // file: internal/database/pebble_book_preserve_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9a2f1c6e-4d3b-4a71-8e2c-6b7d8f9012ab
-// last-edited: 2026-07-03
+// last-edited: 2026-07-13
 
 package database
 
@@ -139,5 +139,76 @@ func TestUpdateBook_ExplicitClearStillOverwrites(t *testing.T) {
 	}
 	if *got.Description != "" {
 		t.Errorf("Description not cleared: got %q, want empty string", *got.Description)
+	}
+}
+
+// UpdateBook must NOT wipe the denormalized Author/Series when the incoming
+// row leaves them nil (STOREFID W5d-1 / #1887). Author/Series carry
+// json:",omitempty" and Pebble persists them (db:"-" only suppresses SQLite),
+// so a BookCore->ToBook or memdb-projection write-back with them nil erased
+// them from the stored Pebble row before this guard existed. They are
+// recomputed display objects, never user-cleared to nil, so preserve-on-nil is
+// correct — the same class of fix as the seven memdb-stripped fields above.
+func TestUpdateBook_PreservesAuthorSeriesOnNilIncoming(t *testing.T) {
+	s, err := NewPebbleStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewPebbleStore: %v", err)
+	}
+	defer s.Close()
+
+	book, err := s.CreateBook(&Book{Title: "Denorm Book"})
+	if err != nil {
+		t.Fatalf("CreateBook: %v", err)
+	}
+
+	authorID := 42
+	seriesID := 7
+	author := &Author{ID: authorID, Name: "Ursula K. Le Guin"}
+	series := &Series{ID: seriesID, Name: "Earthsea"}
+
+	// Seed the denormalized Author/Series (plus the identity IDs) via a full
+	// write, as a hydrated caller would.
+	if _, err := s.UpdateBook(book.ID, &Book{
+		ID:       book.ID,
+		Title:    book.Title,
+		AuthorID: &authorID,
+		SeriesID: &seriesID,
+		Author:   author,
+		Series:   series,
+	}); err != nil {
+		t.Fatalf("UpdateBook (seed): %v", err)
+	}
+
+	// Simulate a BookCore->ToBook / memdb-projection round trip: incoming
+	// *Book has nil Author/Series (as ToBook leaves them) but changes an
+	// unrelated field.
+	newTitle := "Denorm Book Renamed"
+	if _, err := s.UpdateBook(book.ID, &Book{
+		ID:       book.ID,
+		Title:    newTitle,
+		AuthorID: &authorID,
+		SeriesID: &seriesID,
+	}); err != nil {
+		t.Fatalf("UpdateBook (projection round trip): %v", err)
+	}
+
+	got, err := s.GetBookByID(book.ID) // pebble-direct → the stored row
+	if err != nil || got == nil {
+		t.Fatalf("GetBookByID: err=%v got=%v", err, got)
+	}
+	if got.Title != newTitle {
+		t.Errorf("Title not updated: got %q, want %q", got.Title, newTitle)
+	}
+	if got.Author == nil {
+		t.Fatal("Author WIPED: got nil, want preserved denormalized author")
+	}
+	if got.Author.ID != authorID || got.Author.Name != author.Name {
+		t.Errorf("Author corrupted: got %+v, want %+v", got.Author, author)
+	}
+	if got.Series == nil {
+		t.Fatal("Series WIPED: got nil, want preserved denormalized series")
+	}
+	if got.Series.ID != seriesID || got.Series.Name != series.Name {
+		t.Errorf("Series corrupted: got %+v, want %+v", got.Series, series)
 	}
 }

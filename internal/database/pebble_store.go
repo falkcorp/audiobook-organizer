@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.113.1
+// version: 1.114.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-07-12
+// last-edited: 2026-07-13
 
 package database
 
@@ -1797,11 +1797,13 @@ func (p *PebbleStore) UpdateBook(id string, book *Book) (*Book, error) {
 
 	// Preserve fields stripped by stripBookForMemdb (STOR-1). Callers that
 	// sourced `book` from the memdb projection (GetAllBooks on the production
-	// UseMemDB path) carry nil Description/VersionNotes/BookSig* even though
-	// the stored row has real values. Restoring from oldBook — already fetched
-	// above via the Pebble-direct GetBookByID — costs zero extra reads.
-	// Mirrors the UpsertBookFile/BatchUpsertBookFiles fingerprint-preserve
-	// guard (PERF-7) — keep both in sync.
+	// UseMemDB path) or from a BookCore->ToBook projection carry nil
+	// Description/VersionNotes/BookSig*/Author/Series even though the stored
+	// row has real values. Restoring from oldBook — already fetched above via
+	// the Pebble-direct GetBookByID — costs zero extra reads. Mirrors the
+	// UpsertBookFile/BatchUpsertBookFiles fingerprint-preserve guard (PERF-7)
+	// — keep both in sync. stripBookForMemdb nils exactly these nine fields,
+	// so the guard restores exactly them.
 	if book.Description == nil {
 		book.Description = oldBook.Description
 	}
@@ -1822,6 +1824,21 @@ func (p *PebbleStore) UpdateBook(id string, book *Book) (*Book, error) {
 	}
 	if book.BookSigCoveragePct == nil {
 		book.BookSigCoveragePct = oldBook.BookSigCoveragePct
+	}
+	// Author/Series are denormalized display objects derived from
+	// AuthorID/SeriesID; they are recomputed on read, never user-cleared to
+	// nil (no empty-string-style sentinel exists for these pointer structs),
+	// so preserve-on-nil is correct — the same class of fix as the seven
+	// fields above (STOREFID W5d-1 / #1887; the CreateOrganizedVersion write
+	// wiped these before the call-site hydrate landed). A write that
+	// legitimately changes the author must set BOTH AuthorID and a fresh
+	// Author object (see the author-split ops); this guard only stops the
+	// nil-projection wipe, it does not re-derive.
+	if book.Author == nil {
+		book.Author = oldBook.Author
+	}
+	if book.Series == nil {
+		book.Series = oldBook.Series
 	}
 
 	data, err := json.Marshal(book)
