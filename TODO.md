@@ -27,6 +27,19 @@ future agent) can scan the entire workspace in one page.
 
 ---
 
+## ✅ RESOLVED — book user-tags write routes had no permission guard (2026-07-13)
+
+`PUT/POST /audiobooks/:id/user-tags` and `DELETE /audiobooks/:id/user-tags/:tag`
+(`internal/server/user_tags.go`) were registered with no `s.perm(...)` check, so
+any authenticated principal — even a view-only role or a zero-permission scoped
+API key — could rewrite or wipe a book's global tags. **Fixed** by adding
+`s.perm(auth.PermLibraryEditMetadata)` to all three routes. Same PR also closed
+a matching gap on `GET /ai/scans/compare` (missing `PermLibraryView`), swapped 7
+`err.Error()`-to-client info-leak sites for `httputil.InternalError` (logs the
+real error, returns a generic message), and clamped the metadata-history
+`?limit=` to 1000. Test: `internal/server/user_tags_authz_test.go` (viewer → 403,
+admin → 200 on all three write routes).
+
 ## 📦 2026-07-10 Remaining-Work Planning Packages — READY FOR EXECUTION
 
 Ten full planning packages (spec + plan + task briefs) covering INIT-1..10 of the

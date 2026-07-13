@@ -1,7 +1,7 @@
 // file: internal/server/user_tags.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef0123456789
-// last-edited: 2026-06-10
+// last-edited: 2026-07-13
 
 package server
 
@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 )
 
@@ -20,10 +21,15 @@ func normalizeTag(t string) string {
 }
 
 // setupUserTagRoutes registers the user tag API routes on the given router group.
+//
+// These mutate global per-book tags (SetBookTags/AddBookTag/RemoveBookTag, not
+// user-scoped), so they require library.edit_metadata — the same guard used by
+// the sibling write POST /audiobooks/batch-tags, and consistent with the read
+// side (GET .../user-tags requiring library.view).
 func (s *Server) setupUserTagRoutes(protected *gin.RouterGroup) {
-	protected.PUT("/audiobooks/:id/user-tags", s.setBookUserTags)
-	protected.POST("/audiobooks/:id/user-tags", s.addBookUserTag)
-	protected.DELETE("/audiobooks/:id/user-tags/:tag", s.removeBookUserTag)
+	protected.PUT("/audiobooks/:id/user-tags", s.perm(auth.PermLibraryEditMetadata), s.setBookUserTags)
+	protected.POST("/audiobooks/:id/user-tags", s.perm(auth.PermLibraryEditMetadata), s.addBookUserTag)
+	protected.DELETE("/audiobooks/:id/user-tags/:tag", s.perm(auth.PermLibraryEditMetadata), s.removeBookUserTag)
 }
 
 // setBookUserTags replaces all user-defined tags on a book.

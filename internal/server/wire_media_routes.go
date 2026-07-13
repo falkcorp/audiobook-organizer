@@ -1,7 +1,7 @@
 // file: internal/server/wire_media_routes.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c9d0e1f2-a3b4-5678-cdef-901234567890
-// last-edited: 2026-07-03
+// last-edited: 2026-07-13
 
 package server
 
@@ -53,7 +53,7 @@ func (s *Server) wireMediaRoutes(
 	{
 		aiScans.POST("", s.perm(auth.PermLibraryEditMetadata), aiH.StartScan)
 		aiScans.GET("", s.perm(auth.PermLibraryView), aiH.ListScans)
-		aiScans.GET("/compare", aiH.CompareScans) // Must be before /:id to avoid conflict
+		aiScans.GET("/compare", s.perm(auth.PermLibraryView), aiH.CompareScans) // Must be before /:id to avoid conflict
 		aiScans.GET("/:id", s.perm(auth.PermLibraryView), aiH.GetScan)
 		aiScans.GET("/:id/results", s.perm(auth.PermLibraryView), aiH.GetScanResults)
 		aiScans.POST("/:id/apply", s.perm(auth.PermLibraryEditMetadata), aiH.ApplyScanResults)
