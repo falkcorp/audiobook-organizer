@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.173.0 -->
+<!-- version: 3.174.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-17 -->
 
@@ -134,6 +134,17 @@ only be replaced by another terminal verdict. Machine-derived statuses
 (`pending`, `stale-drain`, `stale-fp`) stay refreshable, so rescans can still
 reclassify freely.
 
+
+#### July 13, 2026 - docs(plans): INIT-6 workflow-system implementation plan (owner sign-off)
+
+- Added `docs/plans/2026-07-13-workflow-system-implementation-plan.md` — a READ-ONLY grounding of
+  the INIT-6 workflow-system spec against HEAD, with a phased build order, test/rollback strategy,
+  and a **defer-WF-3 recommendation**. Key drift findings vs the 2026-07-10 spec: INIT-1 T5+T6 both
+  shipped (`dedup.calibrate-composite` + the `label_refinement` scheduled chain), so WF-3's marquee
+  use case already exists without WF-3; the spec's completeness safety-gate (a flat
+  `scheduled_*_enabled` grep) is structurally blind to the nested-config `label_refinement` family;
+  and "scattered config booleans" is overstated (config is already a uniform `ScheduledTaskConfig`).
+  Recommendation: build WF-2 (low-risk, probes already exist), defer WF-3/WF-4/WF-5. No code.
 
 #### July 16, 2026 - fix(metadata): a per-chapter tag title could become the whole book's title (CONS-17b)
 
