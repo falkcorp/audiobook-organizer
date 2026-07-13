@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/calibrate_composite.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4c2f7a91-8d3b-4e6a-9f10-5b7c2d1e8a34
-// last-edited: 2026-07-11
+// last-edited: 2026-07-12
 
 // Package dedup — op dedup.calibrate-composite (INIT-1 T5).
 //
@@ -381,7 +381,7 @@ func (p *Plugin) runCalibrateComposite(ctx context.Context, rawParams json.RawMe
 	pairsOut := len(deduped)
 
 	var pairs []compositePair
-	var scoredTrue, scoredNot, skippedNoBreakdown, skippedLabel int
+	var scoredTrue, scoredNot, skippedNoBreakdown, skippedLabel, joinedFromCandidate int
 	for i := range deduped {
 		ex := deduped[i]
 		switch ex.Label {
@@ -393,8 +393,27 @@ func (p *Plugin) runCalibrateComposite(ctx context.Context, rawParams json.RawMe
 		}
 		sigs, ok := parseBreakdownSignals(ex.ScoreBreakdown)
 		if !ok {
-			// nil / unparseable / empty-signal breakdown — counted, NEVER scored
-			// as zero (a zero score would poison the not_dup precision math).
+			// The labeled example holds a stale nil/empty breakdown snapshot. The
+			// example's ScoreBreakdown is, by construction, a COPY taken from the
+			// candidate at label-write time (dataset.BuildExample), but a later
+			// full-scan updates the CANDIDATE record's breakdown in-place WITHOUT
+			// re-snapshotting the example for already-existing pairs
+			// (engine.upsertCandidateWithLiveLabel re-captures only brand-new pairs),
+			// and dataset-backfill re-snapshots only PENDING candidates — so a
+			// dismissed not_dup example keeps its stale snapshot forever. Recover the
+			// breakdown by JOINING to the candidate record by CandidateID. This reads
+			// data of the IDENTICAL kind as the examples that already parse (same
+			// *models.UnifiedDedupScore the collectors persisted), so it introduces no
+			// heterogeneity and no scorer fork — it is a pure read-mismatch repair.
+			sigs, ok = p.candidateBreakdownSignals(ex.CandidateID)
+			if ok {
+				joinedFromCandidate++
+			}
+		}
+		if !ok {
+			// nil / unparseable / empty-signal breakdown on BOTH the example and its
+			// candidate — counted, NEVER scored as zero (a zero score would poison
+			// the not_dup precision math).
 			skippedNoBreakdown++
 			continue
 		}
@@ -410,6 +429,7 @@ func (p *Plugin) runCalibrateComposite(ctx context.Context, rawParams json.RawMe
 	log.Info("calibrate-composite coverage",
 		"rows_in", rowsIn, "pairs_out", pairsOut,
 		"scored_true_dup", scoredTrue, "scored_not_dup", scoredNot,
+		"joined_from_candidate", joinedFromCandidate,
 		"skipped_no_breakdown", skippedNoBreakdown, "skipped_label", skippedLabel)
 
 	// --- Fail-closed coverage floor ---
@@ -418,6 +438,7 @@ func (p *Plugin) runCalibrateComposite(ctx context.Context, rawParams json.RawMe
 			"status", "insufficient-coverage",
 			"rows_in", rowsIn, "pairs_out", pairsOut,
 			"scored_true_dup", scoredTrue, "scored_not_dup", scoredNot,
+			"joined_from_candidate", joinedFromCandidate,
 			"skipped_no_breakdown", skippedNoBreakdown,
 			"min_scored_pairs", minScored)
 		_ = reporter.UpdateProgress(4, 4, fmt.Sprintf(
@@ -524,6 +545,7 @@ func (p *Plugin) runCalibrateComposite(ctx context.Context, rawParams json.RawMe
 		"pairs_out", pairsOut,
 		"scored_true_dup", scoredTrue,
 		"scored_not_dup", scoredNot,
+		"joined_from_candidate", joinedFromCandidate,
 		"skipped_no_breakdown", skippedNoBreakdown,
 		"target_precision_certain", targetCertain,
 		"target_precision_high", targetHigh,
@@ -649,6 +671,28 @@ func describeBandRec(r bandRec, orderingConflict bool) string {
 		return "target-not-met"
 	}
 	return fmt.Sprintf("min=%.2f(p=%.3f,r=%.3f)", r.Rec.Min, r.Rec.Precision, r.Rec.Recall)
+}
+
+// candidateBreakdownSignals recovers a labeled pair's signal set by JOINING to
+// its candidate record's persisted ScoreBreakdown. It is the fallback for a
+// labeled example whose own ScoreBreakdown snapshot is stale (nil/empty) while
+// the candidate — updated in-place by a later full-scan — carries a fresh one.
+// Strictly READ-ONLY: GetCandidateByID is a point read and this never writes.
+// Returns ok=false for a zero/missing CandidateID, a read/unmarshal error, an
+// absent candidate, or a candidate whose breakdown carries no signals — every
+// un-scorable case is skipped+counted upstream, never treated as a zero score.
+func (p *Plugin) candidateBreakdownSignals(candidateID int64) ([]models.Signal, bool) {
+	if candidateID == 0 || p.embeddingStore == nil {
+		return nil, false
+	}
+	cand, err := p.embeddingStore.GetCandidateByID(candidateID)
+	if err != nil || cand == nil || cand.ScoreBreakdown == nil {
+		return nil, false
+	}
+	if len(cand.ScoreBreakdown.Signals) == 0 {
+		return nil, false
+	}
+	return cand.ScoreBreakdown.Signals, true
 }
 
 // parseBreakdownSignals recovers the signal set from a stored ScoreBreakdown JSON

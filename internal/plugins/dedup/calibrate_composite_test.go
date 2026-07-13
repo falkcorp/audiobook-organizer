@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/calibrate_composite_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7e5a1c3b-9d2f-4a08-8b61-3c4d5e6f7a89
 // last-edited: 2026-07-12
 
@@ -294,5 +294,89 @@ func TestCalibrateCompositeParamsDefaultNoApply(t *testing.T) {
 	}
 	if p.Apply {
 		t.Fatal("empty params must default Apply=false (report only); scheduled label_refinement chain depends on this")
+	}
+}
+
+// upsertCandidateBreakdown writes a candidate record carrying a single-signal
+// ScoreBreakdown and returns its assigned ID, so a test can point a
+// stale-snapshot labeled example at it and exercise the CandidateID join.
+func upsertCandidateBreakdown(t *testing.T, es *database.EmbeddingStore, tag string, kind unified.SignalKind, conf float64) int64 {
+	t.Helper()
+	id, _, err := es.UpsertCandidateNew(database.DedupCandidate{
+		EntityType: "book",
+		EntityAID:  "ca-" + tag,
+		EntityBID:  "cb-" + tag,
+		Status:     "pending",
+		ScoreBreakdown: &models.UnifiedDedupScore{
+			Signals: []models.Signal{{Kind: kind, Confidence: conf, Raw: conf}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("upsert candidate %s: %v", tag, err)
+	}
+	return id
+}
+
+// upsertStaleLabel writes a labeled example with a NIL ScoreBreakdown (a stale
+// snapshot) pointing at candidateID — the exact shape the CandidateID join must
+// repair.
+func upsertStaleLabel(t *testing.T, es *database.EmbeddingStore, candidateID int64, label string) {
+	t.Helper()
+	ex := database.LabeledExample{
+		CandidateID: candidateID,
+		EntityAID:   fmt.Sprintf("la%08d", candidateID),
+		EntityBID:   fmt.Sprintf("lb%08d", candidateID),
+		Label:       label,
+		LabelSource: "rule",
+		DecidedAt:   "2026-07-01T00:00:00Z",
+		// ScoreBreakdown intentionally nil — the stale-snapshot condition.
+	}
+	if err := es.UpsertLabeledExample(ex); err != nil {
+		t.Fatalf("upsert stale label %d: %v", candidateID, err)
+	}
+}
+
+// TestCalibrateCompositeJoinsCandidateBreakdown proves the read-mismatch repair:
+// a labeled example whose own ScoreBreakdown is stale (nil) but whose CANDIDATE
+// record carries a fresh breakdown is recovered by the CandidateID join and
+// scored — while a stale example whose candidate is absent stays skipped, and
+// examples carrying their own breakdown never consult the join (pin preserved).
+func TestCalibrateCompositeJoinsCandidateBreakdown(t *testing.T) {
+	pebble := newPebbleForISBNIndexTest(t)
+	es := database.NewEmbeddingStore(pebble.DB())
+
+	// A true_dup carrying its OWN breakdown — the join is never consulted for it.
+	upsertPairs(t, es, 500000, 1, "true_dup", breakdownWith(unified.SigEmbedHigh, 0.94))
+
+	// A not_dup with a stale (nil) snapshot whose candidate carries a fresh
+	// breakdown — this is the pair the join must recover.
+	notDupCandID := upsertCandidateBreakdown(t, es, "notdup", unified.SigMetaFuzzy, 0.80)
+	upsertStaleLabel(t, es, notDupCandID, "not_dup")
+
+	// A not_dup stale snapshot whose CandidateID references NO candidate record —
+	// nothing to join to, so it must stay skipped (never scored as zero).
+	upsertStaleLabel(t, es, 99999999, "not_dup")
+
+	p := &Plugin{store: pebble, embeddingStore: es}
+	rep := newCaptureReporter()
+	if err := p.runCalibrateComposite(context.Background(), json.RawMessage(`{"min_scored_pairs":1}`), rep); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	f := reportFields(t, rep.buf.String())
+
+	if f["status"] != "ok" {
+		t.Fatalf("status = %v, want ok (join lifts coverage over the floor)", f["status"])
+	}
+	if got := f["joined_from_candidate"].(float64); got != 1 {
+		t.Errorf("joined_from_candidate = %v, want 1", got)
+	}
+	if got := f["scored_not_dup"].(float64); got != 1 {
+		t.Errorf("scored_not_dup = %v, want 1 (recovered via join)", got)
+	}
+	if got := f["scored_true_dup"].(float64); got != 1 {
+		t.Errorf("scored_true_dup = %v, want 1", got)
+	}
+	if got := f["skipped_no_breakdown"].(float64); got != 1 {
+		t.Errorf("skipped_no_breakdown = %v, want 1 (orphan stale label, no candidate)", got)
 	}
 }
