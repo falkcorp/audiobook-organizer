@@ -69,6 +69,39 @@
   book, enriches it with ratings/transcription/review-status/media-info, rescans the same path with
   new tags and NO author/series, and asserts scanner-owned fields update while 20 previously-wiped
   fields survive. Proven to FAIL against the old write path. `-race` clean.
+#### July 13, 2026 - fix: harden write-path error handling in reorganize + dedup ops; drop leaky dead ITL code
+
+- **`ReOrganizeInPlace` self-heal on partial write** (backend) — when re-organizing a
+  directory-based book, a `book_files` row's path-rewrite (`UpdateBookFile`) is written
+  after the physical directory move already succeeded. Previously that write's error was
+  discarded (`_ = ...`), so a failed row left the DB pointing at the now-nonexistent old
+  path with no self-heal trigger — the file would show missing/unplayable until a manual
+  rescan. Now the error is logged and the book is marked `MarkNeedsRescan` (once per call,
+  regardless of how many rows failed) so it self-heals on the next library scan. The
+  enclosing `GetBookFiles` call had the identical failure shape one level up (an error
+  there skipped the whole rewrite loop with no rescan either) — fixed the same way.
+- **`dedup.dataset-backfill` no longer dismisses on a failed label write** (backend) — the
+  apply path dismissed a `not_dup`-classified candidate (`status → dismissed`) independent
+  of whether its `UpsertLabeledExample` write succeeded. A label-write failure therefore
+  removed the candidate from the pending queue with the label never persisted and no error
+  counted. Dismissal is now gated on the upsert actually succeeding; failures are counted in
+  a new `upsertErrs` reported in the op's summary.
+- **`dedup.rescore-labeled-examples` now counts upsert failures** (backend) — the narrow
+  read-modify-write's `UpsertLabeledExample` failure was logged but never counted, so the
+  op's summary silently under-reported write failures alongside its existing
+  `score_errs`/`get_errs` counters. Added `upsert_errs` to both the structured log and the
+  human-readable summary.
+- **Removed dead, goroutine-leaking `CollectITLUpdates`** (backend) — this iTunes-import
+  helper had zero production callers (only `CollectITLUpdatesWithBookIDs` is wired into the
+  handler); its 4-worker pagination pool broke on the first short/empty page without
+  draining or closing its offset channel, leaking one blocked producer goroutine per call.
+  Deleted the function and its one test; `normalizeITunesLocation`, its only shared helper,
+  is still used by `CollectITLUpdatesWithBookIDs` and was kept.
+- Tests: new regression tests prove each fix trips on the pre-fix code and passes after —
+  `TestReOrganizeInPlace_UpdateBookFileError_MarksNeedsRescan` (+ a control test proving
+  the rescan call is gated, not unconditional), `TestDatasetBackfill_ApplyUpsertFailure_NotDismissed`,
+  `TestRescoreLabeledExamples_ApplyUpsertFailure_CountsError`. `internal/organizer/...`,
+  `internal/plugins/dedup/...`, `internal/itunes/...` all green under `-race`.
 
 #### July 13, 2026 - feat(dedup): keep labeled-example ScoreBreakdown fresh on dismiss/relabel
 
