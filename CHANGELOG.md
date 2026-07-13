@@ -1,4 +1,5 @@
 <!-- file: CHANGELOG.md -->
+<!-- version: 3.146.0 -->
 <!-- version: 3.145.0 -->
 <!-- version: 3.142.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
@@ -9,6 +10,31 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 12, 2026 - feat(dedup): rescore-labeled-examples op to populate ScoreBreakdowns for calibration
+
+- **`dedup.rescore-labeled-examples`** (backend, NEW op) — recomputes each labeled dedup pair's
+  `ScoreBreakdown` with the engine's existing scorer and narrow-writes it onto the
+  `LabeledExample`, so `dedup.calibrate-composite` can meet its ≥500-scored-pairs-per-class floor.
+  The prior CandidateID-join fix (same day) recovered zero because dismissed pairs' candidate
+  records are pruned/breakdown-less; this op instead manufactures the breakdowns on the labeled set
+  where the calibrator's primary read looks.
+- Two deliberate divergences from the operational unified scan: (1) the labeled pairs — including
+  **dismissed** ones that are in no candidate list — are injected as an explicit work list; (2) the
+  `if composed.Band == "" { continue }` below-band skip is **bypassed**, so the low-scoring
+  negatives the scan discards (the calibration signal) get persisted. Zero-signal pairs stay
+  reported-but-unscorable (never written as a poisoning zero).
+- **Bit-identical scoring, no scorer fork:** the scan loop's per-pair signal gather was extracted
+  into a shared `collectPairSignals` helper (`internal/dedup/rescore.go`); both
+  `runUnifiedScoringForBook` and the new `Engine.ScorePairsForBook` call it. The embedding cosine is
+  sourced from each labeled example's stored `Similarity` gated on `Layer=="embedding"`, mirroring
+  the scan's `embeddingMap` exactly — never recomputed. Existing unified-scan tests pass unchanged.
+- **Data safety:** persistence is a narrow read-modify-write (`GetLabeledExample` → set only
+  `Score`/`ScoreBreakdown`/`Band` → `UpsertLabeledExample`); `Label`, `LabelSource` (esp. `human`),
+  `LabelReason`, `DecidedAt` are never touched, and a row deleted between list and write is skipped
+  (never re-created). A test asserts a `human`-sourced example survives rescore with its label
+  intact. Concurrency via `registry.RunItems` sharded across A-groups (disjoint by candidateID);
+  `-race` clean. Dry-run by default; `apply=true` writes.
 
 #### July 12, 2026 - chore(lint): drain staticcheck backlog to zero findings (#1796, TASK-02)
 

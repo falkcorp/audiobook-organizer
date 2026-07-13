@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.59.2
+// version: 1.60.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-07-12
 
@@ -537,13 +537,29 @@ func (de *Engine) runUnifiedScoringForBook(ctx context.Context, book *database.B
 	// PH-3b: build O(1) embedding map so the per-candidate inner scan
 	// (previously O(k)) becomes a single map lookup.
 	// Index both directions so lookup works regardless of which side is EntityA.
-	type pairKey = [2]string
 	embeddingMap := make(map[pairKey]float64, len(bookCandidates))
 	for _, c := range bookCandidates {
 		if c.Layer == "embedding" && c.Similarity != nil {
 			embeddingMap[pairKey{c.EntityAID, c.EntityBID}] = *c.Similarity
 			embeddingMap[pairKey{c.EntityBID, c.EntityAID}] = *c.Similarity
 		}
+	}
+
+	// Bundle the per-book precomputed signal batches so the per-pair gather can be
+	// shared verbatim with dedup.rescore-labeled-examples (ScorePairsForBook).
+	// Reusing the SAME collectPairSignals helper is what keeps the two scoring
+	// paths bit-identical — there is no second copy of the collection logic.
+	batches := pairSignalBatches{
+		exactHashSigs:   allExactHashSigs,
+		isbnSigs:        allISBNSigs,
+		metaSrcSigs:     allMetaSrcSigs,
+		durationSigs:    allDurationSigs,
+		exactAcoustSigs: allExactAcoustSigs,
+		lshAcoustSigs:   allLSHAcoustSigs,
+		embeddingMap:    embeddingMap,
+		embCfg:          embCfg,
+		fuzCfg:          fuzCfg,
+		authorName:      authorName,
 	}
 
 	for _, ref := range embeddingCandIDs {
@@ -588,77 +604,10 @@ func (de *Engine) runUnifiedScoringForBook(ctx context.Context, book *database.B
 			continue
 		}
 
-		// 2. Collect signals from all available collectors.
-		var signals []unified.Signal
-
-		// Exact-file hash signals (pre-computed above).
-		for _, s := range allExactHashSigs {
-			if isSigForPair(s, book.ID, candID) {
-				signals = append(signals, s)
-			}
-		}
-
-		// ISBN/ASIN (pre-computed above).
-		for _, s := range allISBNSigs {
-			if isSigForPair(s, book.ID, candID) {
-				signals = append(signals, s)
-			}
-		}
-
-		// Metadata source hash (pre-computed above).
-		for _, s := range allMetaSrcSigs {
-			if isSigForPair(s, book.ID, candID) {
-				signals = append(signals, s)
-			}
-		}
-
-		// Embedding signal — O(1) map lookup (PH-3b).
-		if cos, ok := embeddingMap[pairKey{book.ID, candID}]; ok {
-			cos32 := float32(cos)
-			if cos >= embCfg.HighThreshold {
-				signals = append(signals, unified.Signal{
-					Kind:       unified.SigEmbedHigh,
-					Raw:        cos,
-					Confidence: embedHighConfidence(cos32, embCfg.HighThreshold),
-					Evidence: fmt.Sprintf(
-						"embedding cosine %.4f (high tier): book %s ↔ %s",
-						cos32, book.ID, candID),
-				})
-			} else if cos >= embCfg.LowThreshold {
-				signals = append(signals, unified.Signal{
-					Kind:       unified.SigEmbedMedium,
-					Raw:        cos,
-					Confidence: embedMediumConfidence(cos32, embCfg.LowThreshold, embCfg.HighThreshold),
-					Evidence: fmt.Sprintf(
-						"embedding cosine %.4f (medium tier): book %s ↔ %s",
-						cos32, book.ID, candID),
-				})
-			}
-		}
-
-		// Duration signal (pre-computed above).
-		for _, s := range allDurationSigs {
-			if isDurationSigFor(s.Evidence, book.ID, candID) {
-				signals = append(signals, s)
-			}
-		}
-
-		// Metadata-fuzzy (per-candidate by design — takes candIDs param).
-		if sigs, err := CollectMetaFuzzy(de.bookStore, book, authorName, []string{candID}, fuzCfg); err == nil {
-			signals = append(signals, sigs...)
-		}
-
-		// AcoustID signals (pre-computed above).
-		for _, s := range allExactAcoustSigs {
-			if isSigForBookID(s.Evidence, candID) {
-				signals = append(signals, s)
-			}
-		}
-		for _, s := range allLSHAcoustSigs {
-			if isSigForBookID(s.Evidence, candID) {
-				signals = append(signals, s)
-			}
-		}
+		// 2. Collect signals from all available collectors. Shared verbatim with
+		// dedup.rescore-labeled-examples (ScorePairsForBook) via collectPairSignals
+		// so both scoring paths gather identical evidence for a pair.
+		signals := de.collectPairSignals(book, candID, batches)
 
 		if len(signals) == 0 {
 			continue

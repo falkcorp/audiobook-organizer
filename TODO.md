@@ -1,4 +1,5 @@
 <!-- file: TODO.md -->
+<!-- version: 9.98.0 -->
 <!-- version: 9.97.0 -->
 <!-- version: 9.93.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
@@ -73,6 +74,15 @@ remaining-work catalog, produced, adversarially judged (3 lenses × 10), brief-v
     contamination class the re-mine (T07) surfaced. **Follow-up (operator):** re-run
     `dedup.dataset-backfill` (apply) to relabel the ~267 already-mislabeled prod rows, then
     `dedup.calibrate-composite` / embedding-threshold calibration to realize the precision gain.
+  - [x] `dedup.rescore-labeled-examples` op (`internal/plugins/dedup/rescore_labeled_examples.go`,
+    `internal/dedup/rescore.go`) — recomputes each labeled pair's `ScoreBreakdown` with the engine's
+    existing scorer (shared `collectPairSignals` helper, bit-identical) and narrow-writes it onto the
+    `LabeledExample`, INCLUDING below-band + dismissed pairs, so `dedup.calibrate-composite` can meet
+    its ≥500-per-class coverage floor. Dry-run default; `apply=true` writes only Score/ScoreBreakdown/Band.
+    **Follow-up (operator):** run `dedup.rescore-labeled-examples` (apply) on prod, then re-run
+    `dedup.calibrate-composite` — check the reported `zero_signal_*_by_class` counts to decide whether
+    the remaining unscorable negatives warrant a separate "score-missing-as-zero" policy change (a
+    decision deliberately left to the operator; the op never scores a zero-signal pair as zero).
   - **INIT-2's `internal/dedup/engine.go` tasks (T03 + T05) are both merged**, which unblocks
     Phase B: INIT-1 TASK-08 and INIT-4 TASK-05 (both rebase on that file) can now start.
 - **Wave 2b (4 PRs, #1885–#1888, merged 2026-07-11):** see
