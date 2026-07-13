@@ -277,6 +277,21 @@ present) — so nothing outside the scanner's remit can be lost, and any
 field added in the future is preserved automatically rather than having to
 be remembered. A regression test proves twenty previously-wiped fields now
 survive a rescan.
+**A worse variant of the same bug, caught and fixed (2026-07-13):** the
+"resolve production author" tool — which tries to find a real author for
+books credited only to a production company — had two save steps that were
+even more destructive than dropping a field or two. Each one saved the book
+back to the database carrying *only* the single value it had just worked out
+(the publisher in one step, the author in the other) and nothing else. Because
+the save is a full overwrite, that erased everything else on the record — the
+title, the file location, the series, narrator, genre, ISBN, every rating,
+and more — for every book the tool touched. Blanking the file location also
+broke the internal index the app uses to find a book by its path. The fix is
+the same principle as above: before writing, the tool now loads the book's
+complete current record, changes only the one intended value, and saves that
+whole record back. And it now fails safe — if it can't load the current
+record first, it skips that book's update entirely rather than risk wiping it,
+logs the skip, and moves on.
 
 ### 5. Whisper transcription pipeline and GPU infrastructure
 
