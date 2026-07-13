@@ -1,5 +1,6 @@
 // file: internal/merge/service_test.go
 // version: 1.1.0
+// guid: 9b3d7e21-4a6c-4f08-8e15-7c2a9d4b6e30
 // last-edited: 2026-07-13
 
 package merge
