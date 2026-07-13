@@ -1,8 +1,8 @@
 <!-- file: TODO.md -->
+<!-- version: 9.99.1 -->
 <!-- version: 9.99.0 -->
 <!-- version: 9.98.0 -->
 <!-- version: 9.97.0 -->
-<!-- version: 9.93.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-13 -->
 
@@ -2109,9 +2109,11 @@ Audible product was matched or the file is an abridged version.
 
 - [x] WARN log + `duration_mismatch` flag on candidate result when delta > 600s — PR #549
 - [x] `GET /api/v1/maintenance/scan-duration-mismatch` bulk scan endpoint — PR #549
-- [x] **DUR-1** Surface in `MetadataReviewDialog`: show a yellow warning chip on the candidate row when `audible_runtime_min` and book `duration` differ by > 10 min, e.g. "⚠ runtime differs by 45 min" — chip implemented at `MetadataReviewDialog.tsx:604`
+- [x] **DUR-1** Surface in `MetadataReviewDialog`: show a yellow warning chip on the candidate row when `audible_runtime_min` and book `duration` differ by > 10 min, e.g. "⚠ runtime differs by 45 min" — see the "runtime differs by" chip in web/src/components/audiobooks/MetadataReviewDialog.tsx
 - [x] Book detail panel: show Audible runtime alongside local duration so mismatches are obvious — PR #561
 - [x] Threshold configurable via query param `?max_delta_min=10` — PR #549
+
+<!-- 2026-07-13 closeout: section verified fully shipped; prod scan-duration-mismatch job (fixed 120s threshold) reported 125 mismatches — INIT-10 TASK-03 -->
 
 ---
 
