@@ -5,6 +5,7 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -53,7 +54,7 @@ func TestMetadataFetch_WithMockAPI(t *testing.T) {
 	require.NoError(t, err)
 
 	svc := metafetch.NewService(env.Store)
-	resp, err := svc.FetchMetadataForBook(created.ID)
+	resp, err := svc.FetchMetadataForBook(context.Background(), created.ID)
 	require.NoError(t, err)
 	assert.NotNil(t, resp)
 
@@ -99,7 +100,7 @@ func TestMetadataFetch_FallbackToAuthorSearch(t *testing.T) {
 	require.NoError(t, err)
 
 	svc := metafetch.NewService(env.Store)
-	resp, err := svc.FetchMetadataForBook(created.ID)
+	resp, err := svc.FetchMetadataForBook(context.Background(), created.ID)
 	require.NoError(t, err)
 	assert.NotNil(t, resp)
 
@@ -129,7 +130,7 @@ func TestMetadataFetch_NotFound(t *testing.T) {
 	require.NoError(t, err)
 
 	svc := metafetch.NewService(env.Store)
-	_, err = svc.FetchMetadataForBook(created.ID)
+	_, err = svc.FetchMetadataForBook(context.Background(), created.ID)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no metadata found")
 }

@@ -223,7 +223,7 @@ func TestGetMetadataFields(t *testing.T) {
 
 func TestFetchAudiobookMetadata(t *testing.T) {
 	h, d := newHandler(t)
-	d.mfs.EXPECT().FetchMetadataForBook("b1").Return(&metafetch.FetchMetadataResponse{
+	d.mfs.EXPECT().FetchMetadataForBook(mock.Anything, "b1").Return(&metafetch.FetchMetadataResponse{
 		Message: "ok", Source: "audible", Book: &database.Book{ID: "b1", Title: "T"},
 	}, nil)
 	d.mfs.EXPECT().InvalidateCachedCandidates("b1").Return(nil)
@@ -240,7 +240,7 @@ func TestFetchAudiobookMetadata(t *testing.T) {
 
 func TestFetchAudiobookMetadata_NotFound(t *testing.T) {
 	h, d := newHandler(t)
-	d.mfs.EXPECT().FetchMetadataForBook("bx").Return(nil, assertErr("nope"))
+	d.mfs.EXPECT().FetchMetadataForBook(mock.Anything, "bx").Return(nil, assertErr("nope"))
 	w := doReq(h.FetchAudiobookMetadata, http.MethodPost, "/audiobooks/bx/fetch-metadata", nil, idParam("bx"))
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("want 404, got %d", w.Code)

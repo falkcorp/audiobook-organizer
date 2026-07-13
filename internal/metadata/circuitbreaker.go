@@ -1,7 +1,7 @@
 // file: internal/metadata/circuitbreaker.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: e2f3a4b5-c6d7-8901-ef23-456789abcdef
-// last-edited: 2026-07-03
+// last-edited: 2026-07-13
 
 package metadata
 
@@ -186,7 +186,7 @@ func (ps *ProtectedSource) Breaker() *CircuitBreaker {
 // method, wrapping an Audnexus or Hardcover client in a
 // ProtectedSource would strip the optional interface and the
 // contextual fast-path would silently never run.
-func (ps *ProtectedSource) SearchByContext(ctx *SearchContext) ([]BookMetadata, error) {
+func (ps *ProtectedSource) SearchByContext(ctx context.Context, sc *SearchContext) ([]BookMetadata, error) {
 	inner, ok := ps.source.(ContextualSearch)
 	if !ok {
 		return nil, nil
@@ -194,7 +194,7 @@ func (ps *ProtectedSource) SearchByContext(ctx *SearchContext) ([]BookMetadata, 
 	if err := ps.breaker.AllowRequest(); err != nil {
 		return nil, err
 	}
-	results, err := inner.SearchByContext(ctx)
+	results, err := inner.SearchByContext(ctx, sc)
 	if err != nil {
 		ps.breaker.RecordFailure()
 		return nil, err

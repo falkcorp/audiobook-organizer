@@ -1,5 +1,5 @@
 // file: internal/metadata/audnexus.go
-// version: 2.5.0
+// version: 2.6.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-a3b4c5d6e7f8
 // last-edited: 2026-07-13
 
@@ -137,18 +137,17 @@ func (c *AudnexusClient) SearchByTitleAndAuthor(ctx context.Context, title, auth
 // SearchByContext implements ContextualSearch interface.
 // Audnexus prefers ASIN-based lookups. If an ASIN is available, we look it up.
 // Otherwise, return nil to let the chain fall through to the next source.
-func (c *AudnexusClient) SearchByContext(ctx *SearchContext) ([]BookMetadata, error) {
-	if ctx == nil || ctx.ASIN == "" {
+func (c *AudnexusClient) SearchByContext(ctx context.Context, sc *SearchContext) ([]BookMetadata, error) {
+	if sc == nil || sc.ASIN == "" {
 		return nil, nil
 	}
 
-	// Look up the book by ASIN. This ContextualSearch entry point carries no
-	// Go context.Context (its caller, FetchMetadataForBook, has none to thread),
-	// so we use context.Background(); LookupByASIN still bounds each region
-	// request with a per-request timeout so a missing/unreachable ASIN can't burn
-	// the full 9×30s. Callers that DO hold a cancellable ctx (the candidate op's
-	// direct-ASIN path) call LookupByASIN directly with it.
-	metadata, err := c.LookupByASIN(context.Background(), ctx.ASIN)
+	// Look up the book by ASIN, threading the caller's real context so a
+	// batch/import cancel aborts the 9-region loop promptly (LookupByASIN also
+	// bounds each region request with a per-request timeout). This entry point
+	// used to get context.Background() because FetchMetadataForBook had no ctx to
+	// thread — that ctx is now plumbed end-to-end.
+	metadata, err := c.LookupByASIN(ctx, sc.ASIN)
 	if err != nil {
 		return nil, err
 	}

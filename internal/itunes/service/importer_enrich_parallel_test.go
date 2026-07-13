@@ -40,7 +40,7 @@ func newFakeMetadataFetcher(fails func(id string) bool) *fakeMetadataFetcher {
 	return &fakeMetadataFetcher{fails: fails, seen: map[string]int{}}
 }
 
-func (f *fakeMetadataFetcher) FetchMetadataForBook(id string) (*metafetch.FetchMetadataResponse, error) {
+func (f *fakeMetadataFetcher) FetchMetadataForBook(_ context.Context, id string) (*metafetch.FetchMetadataResponse, error) {
 	f.mu.Lock()
 	f.calls++
 	f.inFlight++

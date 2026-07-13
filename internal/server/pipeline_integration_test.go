@@ -5,6 +5,7 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -74,7 +75,7 @@ func TestPipeline_ImportThenFetchMetadata(t *testing.T) {
 
 	// 6. Call FetchMetadataForBook
 	svc := metafetch.NewService(env.Store)
-	resp, err := svc.FetchMetadataForBook(book.ID)
+	resp, err := svc.FetchMetadataForBook(context.Background(), book.ID)
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 
@@ -141,7 +142,7 @@ func TestPipeline_FetchMetadata_MultiSourceFallback(t *testing.T) {
 
 	// 5. Call FetchMetadataForBook
 	svc := metafetch.NewService(env.Store)
-	resp, err := svc.FetchMetadataForBook(book.ID)
+	resp, err := svc.FetchMetadataForBook(context.Background(), book.ID)
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 
@@ -204,7 +205,7 @@ func TestPipeline_ChapterTitle_StillFindsBook(t *testing.T) {
 
 	// 4. Call FetchMetadataForBook
 	svc := metafetch.NewService(env.Store)
-	resp, err := svc.FetchMetadataForBook(book.ID)
+	resp, err := svc.FetchMetadataForBook(context.Background(), book.ID)
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 
@@ -254,7 +255,7 @@ func TestPipeline_FetchMetadata_NoResults_AllSources(t *testing.T) {
 
 	// 4. Call FetchMetadataForBook
 	svc := metafetch.NewService(env.Store)
-	resp, err := svc.FetchMetadataForBook(book.ID)
+	resp, err := svc.FetchMetadataForBook(context.Background(), book.ID)
 
 	// 5. Assert: error contains "no metadata found"
 	require.Error(t, err)

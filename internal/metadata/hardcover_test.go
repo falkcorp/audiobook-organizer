@@ -136,7 +136,7 @@ func TestHardcoverClient_SearchByContext_PrefersISBN(t *testing.T) {
 	client := NewHardcoverClientWithBaseURL(server.URL, "test-token")
 
 	// ISBN-13 path: query text must contain the ISBN, not the title.
-	_, _ = client.SearchByContext(&SearchContext{
+	_, _ = client.SearchByContext(context.Background(), &SearchContext{
 		Title:  "Foundation and Empire",
 		Author: "Isaac Asimov",
 		ISBN13: "9780553293371",
@@ -146,7 +146,7 @@ func TestHardcoverClient_SearchByContext_PrefersISBN(t *testing.T) {
 	}
 
 	// Fall-through: no ISBN → use title+author.
-	_, _ = client.SearchByContext(&SearchContext{
+	_, _ = client.SearchByContext(context.Background(), &SearchContext{
 		Title:  "Foundation and Empire",
 		Author: "Isaac Asimov",
 	})
@@ -171,7 +171,7 @@ func TestHardcoverClient_NoToken_NoOps(t *testing.T) {
 		t.Errorf("expected 0 results with no token, got %d", len(results))
 	}
 
-	results, err = client.SearchByContext(&SearchContext{
+	results, err = client.SearchByContext(context.Background(), &SearchContext{
 		Title:  "anything",
 		ISBN13: "9780553293371",
 	})

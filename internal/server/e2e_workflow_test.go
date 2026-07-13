@@ -163,7 +163,7 @@ func TestE2E_ScanAndFetchMetadata(t *testing.T) {
 
 	// Step 2: Fetch metadata
 	metaSvc := metafetch.NewService(env.Store)
-	resp, err := metaSvc.FetchMetadataForBook(bookID)
+	resp, err := metaSvc.FetchMetadataForBook(context.Background(), bookID)
 	require.NoError(t, err)
 	assert.NotNil(t, resp)
 

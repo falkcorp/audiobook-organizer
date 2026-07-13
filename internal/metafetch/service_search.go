@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_search.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
 // last-edited: 2026-07-13
 
@@ -339,6 +339,17 @@ func (mfs *Service) searchMetadataForBook(
 		if cached, _, cerr := database.GetCachedMetadataFetchWithMaxAge(mfs.db, id, src.Name(), maxAge); cerr == nil && cached != nil {
 			var cachedResults []metadata.BookMetadata
 			if jerr := json.Unmarshal(cached.Results, &cachedResults); jerr == nil {
+				// Keep the in-memory []BookMetadata internally consistent with the
+				// year-kind flag (#1940): entries cached before it shipped
+				// deserialize with PublishYearIsAudiobookRelease=false, so re-derive
+				// it from the source (cache key includes src.Name()). NOTE: on the
+				// search path this is defensive-only — candidates carry Source and
+				// re-derive the flag at apply time (service_apply.go) — but it keeps
+				// the two cache-replay sites symmetric.
+				isRelease := metadata.SourceProducesAudiobookReleaseYear(src.Name())
+				for i := range cachedResults {
+					cachedResults[i].PublishYearIsAudiobookRelease = isRelease
+				}
 				allResults = cachedResults
 				cacheHit = true
 				slog.Debug("metadata-search cache HIT for ( ) — results, age", "id", id, "name", src.Name(), "count", len(cachedResults), "value", time.Since(cached.CachedAt).Round(time.Second))

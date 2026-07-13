@@ -12,8 +12,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	tmock "github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -1979,7 +1979,7 @@ func TestFetchMetadataForBook(t *testing.T) {
 			},
 		}
 		svc := NewService(mock)
-		_, err := svc.FetchMetadataForBook("nonexistent")
+		_, err := svc.FetchMetadataForBook(context.Background(), "nonexistent")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "not found")
 	})
@@ -1992,7 +1992,7 @@ func TestFetchMetadataForBook(t *testing.T) {
 			},
 		}
 		svc := NewService(mock)
-		_, err := svc.FetchMetadataForBook("b1")
+		_, err := svc.FetchMetadataForBook(context.Background(), "b1")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "no-match")
 	})
@@ -2005,7 +2005,7 @@ func TestFetchMetadataForBook(t *testing.T) {
 		}
 		svc := NewService(mock)
 		svc.SetOverrideSources([]metadata.MetadataSource{})
-		_, err := svc.FetchMetadataForBook("b1")
+		_, err := svc.FetchMetadataForBook(context.Background(), "b1")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "no metadata sources")
 	})
@@ -2020,7 +2020,7 @@ func TestFetchMetadataForBook(t *testing.T) {
 		svc.SetOverrideSources([]metadata.MetadataSource{
 			&mockMetadataSource{name: "test", results: nil},
 		})
-		_, err := svc.FetchMetadataForBook("b1")
+		_, err := svc.FetchMetadataForBook(context.Background(), "b1")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "no metadata found")
 	})
@@ -2058,7 +2058,7 @@ func TestFetchMetadataForBook(t *testing.T) {
 			},
 		})
 
-		resp, err := svc.FetchMetadataForBook("b1")
+		resp, err := svc.FetchMetadataForBook(context.Background(), "b1")
 		require.NoError(t, err)
 		assert.Equal(t, "test-source", resp.Source)
 		assert.Equal(t, "metadata fetched and applied", resp.Message)
@@ -2082,7 +2082,7 @@ func TestFetchMetadataForBook(t *testing.T) {
 			},
 		})
 
-		_, err := svc.FetchMetadataForBook("b1")
+		_, err := svc.FetchMetadataForBook(context.Background(), "b1")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "no metadata found")
 	})

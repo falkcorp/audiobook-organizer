@@ -1,6 +1,7 @@
 // file: internal/metadata/source.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
+// last-edited: 2026-07-13
 
 package metadata
 
@@ -59,6 +60,10 @@ type SearchContext struct {
 // methods if SearchByContext returns no results. This lets Audnexus
 // skip straight to LookupByASIN when we already have an ASIN, and
 // lets Hardcover do a cleaner GraphQL search when we have an ISBN.
+//
+// ctx is a real Go context.Context threaded from the caller so a batch/import
+// cancel aborts an in-flight lookup promptly (Audnexus's 9-region ASIN loop in
+// particular). sc carries the richer search fields.
 type ContextualSearch interface {
-	SearchByContext(ctx *SearchContext) ([]BookMetadata, error)
+	SearchByContext(ctx context.Context, sc *SearchContext) ([]BookMetadata, error)
 }
