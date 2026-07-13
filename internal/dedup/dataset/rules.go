@@ -1,15 +1,31 @@
 // file: internal/dedup/dataset/rules.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9e2b4c71-3a85-4d60-8f29-1b7c6a4e5d02
-// last-edited: 2026-07-11
+// last-edited: 2026-07-12
 
 package dataset
 
 import (
 	"fmt"
 
+	"github.com/falkcorp/audiobook-organizer/internal/boilerplate"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
+
+// sameTitleHighSimThreshold is the candidate-similarity floor at/above which a
+// same-title pair is treated as "suspected same work" by the partVsWhole guard.
+// Set to the whole-book signature match threshold (0.95) for consistency.
+//
+// Caveat: for the dominant "exact" candidate layer, LabeledExample.Similarity is
+// an exact-title-match score (≈1.0 whenever titles match), NOT the author-aware
+// embedding cosine — so on that layer this gate does NOT separate same-work from
+// a genuine same-title/different-work collision. The guard's safety does not
+// rest on the gate: it routes to unsure (a review-queue holding state that never
+// merges), so even a genuine collision landing in unsure cannot cause a wrong
+// merge. The threshold is kept as a conservative filter for the non-exact layers
+// (embedding/acoustid/llm) and to require *some* positive similarity evidence.
+const sameTitleHighSimThreshold = 0.95
 
 // partVsWholeRatioMax is the duration-ratio ceiling below which a pair is
 // classified as a part matched against a whole book (not a duplicate).
@@ -30,7 +46,7 @@ const minPlausibleAudioBytes = 256 * 1024 // 256 KiB
 //  1. wholeBookSignatureMatch → true_dup  (strong positive oracle)
 //  2. missingFile             → unsure   (file absence is evidence-free for dup-ness)
 //  3. implausibleAudio        → not_dup  (hard negative: stub/placeholder side)
-//  4. partVsWhole             → not_dup  (hard negative: duration mismatch; unsure when the pair shares identity — unit corruption)
+//  4. partVsWhole             → not_dup  (hard negative: duration mismatch; unsure when the pair shares identity — unit corruption — OR shares a non-boilerplate title at high similarity — suspected same work)
 func Classify(ex database.LabeledExample) (label, reason string, fires bool) {
 	if l, r, ok := wholeBookSignatureMatch(ex); ok {
 		return l, r, true
@@ -134,7 +150,38 @@ func partVsWhole(ex database.LabeledExample) (string, string, bool) {
 		if SharesIdentity(ex) {
 			return "unsure", fmt.Sprintf("duration ratio %.3f but pair shares identity — suspected unit corruption", ex.DurationRatio), true
 		}
+		// A same-title, high-similarity pair whose only negative evidence is the
+		// duration ratio is far more likely a same-work mismatch (a partial/sample
+		// file, an abridged edition, or — very commonly on prod — a corrupt
+		// duration inflating the ratio) than a genuine part-vs-whole. Rather than
+		// poison the gold set with a false not_dup (which dataset-backfill would
+		// then *dismiss*, pulling a real duplicate out of review), route to unsure.
+		// Boilerplate idents (e.g. "Big Finish Ident") are excluded: they are
+		// embedding-identical to every copy of themselves but are legitimately
+		// not_dup at the book level, so they keep the not_dup label.
+		if sharesNonBoilerplateTitleAtHighSim(ex) {
+			return "unsure", fmt.Sprintf("duration ratio %.3f but same title at high similarity — suspected same work", ex.DurationRatio), true
+		}
 		return "not_dup", fmt.Sprintf("duration ratio %.3f — part vs whole", ex.DurationRatio), true
 	}
 	return "", "", false
+}
+
+// sharesNonBoilerplateTitleAtHighSim reports whether the pair has identical
+// normalized (non-empty) titles, a candidate similarity at/above
+// sameTitleHighSimThreshold, and a title that is NOT a compiled-in boilerplate
+// ident. It is the predicate for partVsWhole's same-work guard. Similarity is
+// unknown (nil) on some rows; treat unknown as "not high" so the guard stays
+// conservative and only fires on positive similarity evidence.
+func sharesNonBoilerplateTitleAtHighSim(ex database.LabeledExample) bool {
+	ta := util.NormalizeTitle(util.CollapseSpaces(ex.A.Title))
+	tb := util.NormalizeTitle(util.CollapseSpaces(ex.B.Title))
+	if ta == "" || ta != tb {
+		return false
+	}
+	if ex.Similarity == nil || *ex.Similarity < sameTitleHighSimThreshold {
+		return false
+	}
+	// Both titles are equal here, so checking either side is sufficient.
+	return !boilerplate.IsBoilerplateTitle(ex.A.Title)
 }
