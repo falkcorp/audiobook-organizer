@@ -1,7 +1,7 @@
 // file: internal/server/audiobooks_compat.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b1c2d3e4-f5a6-7890-bcde-f01234560020
-// last-edited: 2026-05-05
+// last-edited: 2026-07-12
 //
 // Type aliases and function variables that let the rest of internal/server/
 // continue using the old unqualified names after the seven service files
@@ -13,7 +13,6 @@ package server
 import (
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"strings"
 )
 
 // --- AudiobookService -------------------------------------------------------
@@ -183,18 +182,3 @@ func NewRenameService(db database.Store) *RenameService {
 // applyOverrideToPayload delegates to the audiobooks package.
 // Kept unexported so server-package whitebox tests can reference it directly.
 var applyOverrideToPayload = audiobookspkg.ApplyOverrideToPayload
-
-func splitMultipleNames(name string) []string {
-	parts := strings.Split(name, " & ")
-	var result []string
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			result = append(result, p)
-		}
-	}
-	if len(result) == 0 {
-		return []string{name}
-	}
-	return result
-}

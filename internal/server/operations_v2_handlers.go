@@ -1,7 +1,7 @@
 // file: internal/server/operations_v2_handlers.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-06-23
+// last-edited: 2026-07-12
 
 // UOS-06: SSE event hub, /operations/timeline, single-op introspection,
 // cancel, trigger-op, and /op-defs endpoints.
@@ -51,19 +51,6 @@ type opLogV2Response struct {
 	Message     string    `json:"message"`
 	Attrs       any       `json:"attrs"`
 	CreatedAt   time.Time `json:"created_at"`
-}
-
-// opDefResponse is the JSON shape returned by /op-defs.
-type opDefResponse struct {
-	ID           string   `json:"id"`
-	Plugin       string   `json:"plugin"`
-	DisplayName  string   `json:"display_name"`
-	Description  string   `json:"description"`
-	Cancellable  bool     `json:"cancellable"`
-	Isolate      bool     `json:"isolate"`
-	ResumePolicy string   `json:"resume_policy"`
-	Triggers     []string `json:"triggers"`
-	DependsOn    []string `json:"depends_on"`
 }
 
 // handleGetOperationTimeline implements GET /api/v1/operations/timeline?since=15m.

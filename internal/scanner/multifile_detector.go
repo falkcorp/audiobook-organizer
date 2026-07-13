@@ -1,7 +1,7 @@
 // file: internal/scanner/multifile_detector.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7a3e4c8b-1d2f-4a5b-9c6d-8e0f1a2b3c4d
-// last-edited: 2026-06-24
+// last-edited: 2026-07-12
 
 // Package scanner — multi-file audiobook detection.
 //
@@ -35,10 +35,9 @@ type MultiFileInfo struct {
 
 // detectedNum is a per-file detection result used internally.
 type detectedNum struct {
-	idx       int // index back into the input slice
-	number    int // detected sequential number (1-based), 0 = none
-	total     int // detected total (from "N of M" or tag), 0 = unknown
-	source    string
+	idx    int // index back into the input slice
+	number int // detected sequential number (1-based), 0 = none
+	total  int // detected total (from "N of M" or tag), 0 = unknown
 }
 
 // MultiFileDetectionConfig tunes the detector. Defaults via DefaultMultiFileConfig().

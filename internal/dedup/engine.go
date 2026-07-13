@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.59.1
+// version: 1.59.2
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-07-12
 
@@ -4018,21 +4018,6 @@ func (de *Engine) AcoustIDScan(ctx context.Context, progress func(done, total in
 func knownShortFingerprintFile(f database.BookFile) bool {
 	return f.AcoustIDFingerprintDurationSec > 0 &&
 		f.AcoustIDFingerprintDurationSec < minFingerprintMatchSeconds
-}
-
-// bestSeg returns the first non-empty segment string from a BookFile,
-// used as the representative fingerprint for Hamming similarity comparison.
-func bestSeg(f *database.BookFile) string {
-	for _, s := range []string{
-		f.AcoustIDSeg0, f.AcoustIDSeg1, f.AcoustIDSeg2,
-		f.AcoustIDSeg3, f.AcoustIDSeg4, f.AcoustIDSeg5,
-		f.AcoustIDSeg6,
-	} {
-		if s != "" {
-			return s
-		}
-	}
-	return ""
 }
 
 // derefStr is defined in audiobook_service.go

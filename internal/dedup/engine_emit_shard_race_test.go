@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_emit_shard_race_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7e1f2a93-4b6c-4d5e-8f01-2a3b4c5d6e7f
-// last-edited: 2026-07-11
+// last-edited: 2026-07-12
 
 // Race/invariant tests for CONC-3 (INIT-2 T5): the full-scan emit() no longer
 // runs under one global mutex. Per-pair "already handled" state is sharded
@@ -130,7 +130,11 @@ func TestAcoustidEmitShards_DistinctPairsNoLoss(t *testing.T) {
 func TestAcoustidEmitShards_ShardForStable(t *testing.T) {
 	shards := newAcoustidEmitShards()
 	for _, k := range []string{"", "A:B", "BOOK_A:BOOK_B", "zzz:aaa"} {
-		if shards.shardFor(k) != shards.shardFor(k) {
+		// Two separate calls with the same key must resolve identically
+		// (determinism). Bound to distinct locals so the equality check reads as
+		// a genuine cross-call comparison rather than a tautology.
+		first, second := shards.shardFor(k), shards.shardFor(k)
+		if first != second {
 			t.Fatalf("shardFor(%q) is not stable across calls", k)
 		}
 	}

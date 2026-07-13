@@ -1,7 +1,7 @@
 // file: internal/dedup/series_dedup.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
-// last-edited: 2026-07-07
+// last-edited: 2026-07-12
 
 // Package dedup: series_dedup.go contains the extracted execution logic for the
 // "dedup.series-scan", "dedup.series-dedup", and "dedup.series-merge" async
@@ -621,13 +621,6 @@ func MergeSeries(
 
 func minInt(a, b int) int {
 	if a < b {
-		return a
-	}
-	return b
-}
-
-func maxInt(a, b int) int {
-	if a > b {
 		return a
 	}
 	return b

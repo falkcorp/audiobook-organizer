@@ -1,7 +1,7 @@
 // file: internal/dedup/collectors_acoustid_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: b8c4d952-e0f3-5a26-99b1-6cd23f458g7e
-// last-edited: 2026-06-28
+// last-edited: 2026-07-12
 
 package dedup
 
@@ -62,17 +62,6 @@ func makeFP(n int) []byte {
 	return b
 }
 
-// makeDifferentFP returns a fingerprint of n uint32 frames with all bits set
-// in the first half and all zeros in the second half, producing a Hamming
-// similarity of 0.50 when compared against makeFP(n).
-func makeDifferentFP(n int) []byte {
-	b := make([]byte, n*4)
-	for i := 0; i < (n/2)*4; i += 4 {
-		binary.LittleEndian.PutUint32(b[i:], 0xFFFFFFFF)
-	}
-	return b
-}
-
 // makeLowHammingFP returns a fingerprint whose Hamming similarity against
 // makeFP(n) will be exactly (n-flipCount)/n*32/32 ≈ 1-(flipCount/n).
 // We flip every bit in the first flipCount frames, yielding:
@@ -83,17 +72,6 @@ func makeDifferentFP(n int) []byte {
 //
 // For n=100, flipCount=20 → similarity = 0.80 (below MinHamming 0.85).
 func makeLowHammingFP(n, flipCount int) []byte {
-	b := make([]byte, n*4)
-	for i := 0; i < flipCount*4; i += 4 {
-		binary.LittleEndian.PutUint32(b[i:], 0xFFFFFFFF)
-	}
-	return b
-}
-
-// makeHighHammingFP returns a fingerprint with Hamming similarity ≈ 0.9
-// against makeFP(n) by flipping all bits in 10% of frames.
-// n=100, flipCount=10 → similarity = 0.90.
-func makeHighHammingFP(n, flipCount int) []byte {
 	b := make([]byte, n*4)
 	for i := 0; i < flipCount*4; i += 4 {
 		binary.LittleEndian.PutUint32(b[i:], 0xFFFFFFFF)

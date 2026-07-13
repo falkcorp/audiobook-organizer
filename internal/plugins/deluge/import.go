@@ -1,5 +1,5 @@
 // file: internal/plugins/deluge/import.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: f1e2d3c4-b5a6-7890-cdef-0123456789ab
 // last-edited: 2026-07-12
 
@@ -17,6 +17,8 @@ import (
 
 // importToLibrary reflinks src into dst (falls back to copy), updates the DB,
 // then calls core.move_storage so Deluge continues seeding from dst.
+//
+//lint:ignore U1000 kept: deluge import mechanism; server shim was removed pointing at a not-yet-existing deluge.ImportToLibrary — wire-up inconsistency to resolve (2026-07-12)
 func (p *Plugin) importToLibrary(ctx context.Context, torrentHash, srcPath, dstPath string) error {
 	if p == nil {
 		return fmt.Errorf("plugin not initialized")

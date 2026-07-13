@@ -1,7 +1,7 @@
 // file: internal/operations/registry/deps_scheduler.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: a3b4c5d6-e7f8-9a0b-1c2d-3e4f5a6b7c8d
-// last-edited: 2026-06-14
+// last-edited: 2026-07-12
 
 // deps_scheduler.go implements the event-driven + sweep re-evaluation loop for
 // waiting_deps operations. It is the bridge between op lifecycle events
@@ -98,18 +98,6 @@ func (s *DepsScheduler) addToIndex(subjectType, subjectID, opID string) {
 func (s *DepsScheduler) removeFromIndex(subjectType, subjectID, opID string) {
 	key := subjectType + ":" + subjectID
 	delete(s.index[key], opID)
-}
-
-// opsForSubject returns a copy of the op IDs waiting on the given subject.
-// mu must be held by caller.
-func (s *DepsScheduler) opsForSubject(subjectType, subjectID string) []string {
-	key := subjectType + ":" + subjectID
-	set := s.index[key]
-	out := make([]string, 0, len(set))
-	for id := range set {
-		out = append(out, id)
-	}
-	return out
 }
 
 // OnOpCompleted is called (asynchronously from worker.go) when an op completes

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_book_aggregates.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-06-10
+// last-edited: 2026-07-12
 
 // Package database — book aggregate recomputation from BookFiles.
 //
@@ -28,7 +28,6 @@ package database
 import (
 	"fmt"
 	"log/slog"
-	"strings"
 
 	"github.com/cockroachdb/pebble/v2"
 )
@@ -186,41 +185,4 @@ func (p *PebbleStore) IsBookAggregatesBackfillDone() bool {
 // re-running the full backfill sweep.
 func (p *PebbleStore) MarkBookAggregatesBackfillDone() error {
 	return p.db.Set([]byte(bookAggregatesBackfillKey), []byte("1"), pebble.Sync)
-}
-
-// listAllBookIDsFromPebble iterates book primary keys to return all book IDs
-// without materialising full Book objects. Used by the backfill job for
-// memory-efficient iteration over large libraries.
-func (p *PebbleStore) listAllBookIDsFromPebble() ([]string, error) {
-	iter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("book:0"),
-		UpperBound: []byte("book:;"),
-	})
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
-
-	var ids []string
-	for iter.First(); iter.Valid(); iter.Next() {
-		key := string(iter.Key())
-		// Skip all secondary index keys (contain extra colons after the id segment).
-		if strings.Contains(key, ":path:") || strings.Contains(key, ":series:") ||
-			strings.Contains(key, ":author:") || strings.Contains(key, ":version:") ||
-			strings.Contains(key, ":versiongroup:") || strings.Contains(key, ":hash:") ||
-			strings.Contains(key, ":originalhash:") || strings.Contains(key, ":organizedhash:") {
-			continue
-		}
-		// Primary key is "book:<id>"; id must not contain another colon.
-		idx := strings.IndexByte(key, ':')
-		if idx < 0 || idx == len(key)-1 {
-			continue
-		}
-		id := key[idx+1:]
-		if strings.IndexByte(id, ':') >= 0 {
-			continue
-		}
-		ids = append(ids, id)
-	}
-	return ids, nil
 }

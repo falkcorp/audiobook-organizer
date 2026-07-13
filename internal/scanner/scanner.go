@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.47.0
+// version: 1.47.1
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-07-01
+// last-edited: 2026-07-12
 
 package scanner
 
@@ -183,10 +183,9 @@ func ClearScanCache() {
 // Set via InitWorksLookupCache / cleared via ClearWorksLookupCache from
 // ScanService.performScanInternal. Protected by worksLookupMu.
 var (
-	worksLookupCache    map[string]string // key = normalizedTitle + "|" + authorID(or "nil")
-	worksLookupReady    bool              // true when cache has been populated (or attempted) for this scan
-	worksLookupDisabled bool              // true outside a scan window (lazy fallback to GetAllWorks)
-	worksLookupMu       sync.RWMutex
+	worksLookupCache map[string]string // key = normalizedTitle + "|" + authorID(or "nil")
+	worksLookupReady bool              // true when cache has been populated (or attempted) for this scan
+	worksLookupMu    sync.RWMutex
 )
 
 // worksLookupKey builds the cache key used by both lookups and inserts.
@@ -207,7 +206,6 @@ func InitWorksLookupCache() {
 	defer worksLookupMu.Unlock()
 	worksLookupCache = make(map[string]string)
 	worksLookupReady = true
-	worksLookupDisabled = false
 	store := getStore()
 	if store == nil {
 		return
@@ -230,7 +228,6 @@ func ClearWorksLookupCache() {
 	defer worksLookupMu.Unlock()
 	worksLookupCache = nil
 	worksLookupReady = false
-	worksLookupDisabled = true
 }
 
 // lookupWorkID returns the cached workID for (normalizedTitle, authorID), or
@@ -334,7 +331,7 @@ type Book struct {
 	FileHash         string            // Pre-computed hash from ProcessFile (avoids double-read)
 	SegmentHashes    map[string]string // filePath→hash written back by saveBookToDatabase dedup loop
 	LibraryState     string            // If set, overrides the default "imported" state in saveBookToDatabase
-	SourceImportPath string // Top-level import path this file was discovered in; set by scan_service
+	SourceImportPath string            // Top-level import path this file was discovered in; set by scan_service
 }
 
 // ScanDirectory scans the given directory for audiobook files.
