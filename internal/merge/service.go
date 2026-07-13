@@ -1,7 +1,7 @@
 // file: internal/merge/service.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
-// last-edited: 2026-06-30
+// last-edited: 2026-07-13
 
 package merge
 
@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -45,6 +46,24 @@ func AsExternalIDReassigner(s any) ExternalIDReassigner {
 type Service struct {
 	db               database.Store
 	writeBackBatcher WriteBackEnqueuer
+
+	// mergeMu serializes MergeBooks across ALL callers of this Service.
+	//
+	// merge.Service is a process-wide singleton (serviceregistry KeyMerge):
+	// the same instance is shared by the dedup Engine (full-scan auto-merge,
+	// auto-resolve, and LLM ApplyVerdicts) and by the HTTP merge handlers.
+	// Those dedup ops have distinct ConcurrencyKeys and run in an 8-worker
+	// pool, so two of them (or a manual HTTP merge racing an auto-merge) can
+	// call MergeBooks at the same time. MergeBooks does an unguarded
+	// read-modify-write per book (GetBookByID -> mutate -> full-column
+	// UpdateBook -> soft-delete losers) with no transaction, so interleaved
+	// writes to a shared book could leave it both primary AND soft-deleted,
+	// strand a version group across two ulids, or soft-delete the winner.
+	// Holding this lock for the whole read-modify-write makes every merge
+	// atomic w.r.t. every other merge. It lives on the Service (not on the
+	// Engine) so the guard cannot be forgotten by a future caller, and the
+	// scope is only the merge itself — nothing slow/blocking runs under it.
+	mergeMu sync.Mutex
 }
 
 // SetWriteBackBatcher sets the iTunes write-back batcher.
@@ -95,6 +114,12 @@ func (ms *Service) MergeBooks(bookIDs []string, primaryID string) (*Result, erro
 	if len(bookIDs) < 2 {
 		return nil, fmt.Errorf("need at least 2 book IDs to merge")
 	}
+
+	// Serialize the entire read-modify-write against every other merge on this
+	// (singleton) Service — see the mergeMu doc comment. Scoped to the merge
+	// itself; nothing slow/blocking runs while it is held.
+	ms.mergeMu.Lock()
+	defer ms.mergeMu.Unlock()
 
 	// Fetch all books
 	var books []*database.Book

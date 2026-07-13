@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_test.go
-// version: 2.8.0
+// version: 2.9.0
 // guid: 2a7e4d91-c538-4f06-b1d3-9e8c5a6f0d72
-// last-edited: 2026-07-07
+// last-edited: 2026-07-13
 
 package dedup
 
@@ -994,6 +994,98 @@ func TestApplyVerdicts_AutoMergeOnHighConfidence(t *testing.T) {
 	}
 	if got[0].Status != "merged" {
 		t.Errorf("expected status='merged' after auto-merge, got %q", got[0].Status)
+	}
+}
+
+// TestApplyVerdicts_SkipsSoftDeletedAndCleansLoser exercises the two safety
+// rails added to ApplyVerdicts. A single batch carries verdicts (A,B) then
+// (B,C). A wins (m4b) so B is soft-deleted by the first merge; the second
+// verdict must be SKIPPED by the soft-deleted pre-check (no double-merge of B,
+// leaving C untouched), and the loser B's residual candidates must be cleaned
+// up. Uses a real PebbleStore so soft-delete state persists between the two
+// verdicts within the batch.
+func TestApplyVerdicts_SkipsSoftDeletedAndCleansLoser(t *testing.T) {
+	engine, store, es := setupRealStoreEngine(t)
+
+	prev := config.AppConfig.Dedup.LLMAutoMergeHighConfidence
+	config.AppConfig.Dedup.LLMAutoMergeHighConfidence = true
+	defer func() { config.AppConfig.Dedup.LLMAutoMergeHighConfidence = prev }()
+
+	// A is m4b so BookIsBetter picks A as the winner of (A,B) — B becomes the
+	// soft-deleted loser. C is uninvolved and must stay untouched.
+	mkBook := func(id, format string) *database.Book {
+		d := 3600
+		return &database.Book{ID: id, Title: "Dup Title", Format: format, Duration: &d}
+	}
+	if _, err := store.CreateBook(mkBook("VA", "m4b")); err != nil {
+		t.Fatalf("CreateBook VA: %v", err)
+	}
+	if _, err := store.CreateBook(mkBook("VB", "mp3")); err != nil {
+		t.Fatalf("CreateBook VB: %v", err)
+	}
+	if _, err := store.CreateBook(mkBook("VC", "mp3")); err != nil {
+		t.Fatalf("CreateBook VC: %v", err)
+	}
+
+	// Seed both candidate pairs. The (B,C) pair shares the loser-to-be B.
+	seed := func(aID, bID string) database.DedupCandidate {
+		sim := 0.99
+		if err := es.UpsertCandidate(database.DedupCandidate{
+			EntityType: "book", EntityAID: aID, EntityBID: bID,
+			Layer: "embedding", Similarity: &sim, Status: "pending",
+		}); err != nil {
+			t.Fatalf("UpsertCandidate(%s,%s): %v", aID, bID, err)
+		}
+		cands, _, _ := es.ListCandidates(database.CandidateFilter{EntityType: "book", Status: "pending"})
+		for _, c := range cands {
+			if c.EntityAID == aID && c.EntityBID == bID {
+				return c
+			}
+		}
+		t.Fatalf("seeded candidate (%s,%s) not found", aID, bID)
+		return database.DedupCandidate{}
+	}
+	candAB := seed("VA", "VB")
+	candBC := seed("VB", "VC")
+
+	// Deterministic slice order: (A,B) at index 0, (B,C) at index 1.
+	byIndex := map[int]database.DedupCandidate{0: candAB, 1: candBC}
+	verdicts := []ai.DedupPairVerdict{
+		{Index: 0, IsDuplicate: true, Confidence: "high", Reason: "same book"},
+		{Index: 1, IsDuplicate: true, Confidence: "high", Reason: "same book"},
+	}
+
+	engine.ApplyVerdicts(verdicts, byIndex)
+
+	// (A,B) merged: A alive+primary, B soft-deleted.
+	a, _ := store.GetBookByID("VA")
+	b, _ := store.GetBookByID("VB")
+	c, _ := store.GetBookByID("VC")
+	if a == nil || b == nil || c == nil {
+		t.Fatalf("book missing after batch: a=%v b=%v c=%v", a, b, c)
+	}
+	if b.MarkedForDeletion == nil || !*b.MarkedForDeletion {
+		t.Fatalf("expected loser B soft-deleted after (A,B) merge")
+	}
+	if a.MarkedForDeletion != nil && *a.MarkedForDeletion {
+		t.Fatalf("winner A must not be soft-deleted")
+	}
+
+	// (B,C) must NOT have merged: C is untouched (no soft-delete, no group).
+	if c.MarkedForDeletion != nil && *c.MarkedForDeletion {
+		t.Fatalf("C was soft-deleted — the already-soft-deleted book B got double-merged")
+	}
+	if c.VersionGroupID != nil {
+		t.Fatalf("C got a version group — the (B,C) pair was not skipped")
+	}
+
+	// Loser B's residual candidates were cleaned up (no pending candidate
+	// referencing B remains).
+	remaining, _, _ := es.ListCandidates(database.CandidateFilter{EntityType: "book", Status: "pending"})
+	for _, cd := range remaining {
+		if cd.EntityAID == "VB" || cd.EntityBID == "VB" {
+			t.Fatalf("pending candidate referencing loser B was not cleaned up: %+v", cd)
+		}
 	}
 }
 

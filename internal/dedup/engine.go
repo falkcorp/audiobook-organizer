@@ -1,7 +1,7 @@
 // file: internal/dedup/engine.go
-// version: 1.60.0
+// version: 1.61.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
-// last-edited: 2026-07-12
+// last-edited: 2026-07-13
 
 package dedup
 
@@ -118,20 +118,16 @@ type Engine struct {
 	// the GetAllBooks scan (safe — just slow).
 	isbnIndexStore ISBNIndexStore
 
-	// mergeMu serializes calls into mergeService.MergeBooks.
-	//
-	// CONC-4 (docs/audits/2026-07-05-concurrency-single-threaded-hotspots.md):
-	// FullScan's Layer-1 pass now runs checkExactFileHash for every book
-	// concurrently via registry.RunItems. handleFileHashMatch can call
-	// MergeBooks when AutoMergeEnabled is set, and merge.Service.MergeBooks
-	// does an unguarded read-then-write per book (no transaction/lock) — two
-	// workers independently discovering the same "other" book via two
-	// different file hashes could race and corrupt the version group. In the
-	// old strictly-serial loop this could never happen because merges always
-	// completed in book order before the next book's check ran. mergeMu
-	// restores that "only one merge in flight at a time" guarantee without
-	// serializing the (far more common) non-merge path.
-	mergeMu sync.Mutex
+	// NOTE (CONC-4, docs/audits/2026-07-05-concurrency-single-threaded-hotspots.md):
+	// FullScan's Layer-1 pass runs checkExactFileHash for every book
+	// concurrently via registry.RunItems, and handleFileHashMatch /
+	// autoMergeCertain / ApplyVerdicts can each call mergeService.MergeBooks
+	// when auto-merge is enabled. Serialization of that unguarded
+	// read-modify-write now lives INSIDE merge.Service.MergeBooks itself
+	// (a sync.Mutex on the singleton Service — see its mergeMu doc comment),
+	// so the Engine no longer holds its own merge lock: a Service-level guard
+	// covers every caller (including the HTTP merge handlers) and cannot be
+	// forgotten by a future call site the way an Engine-level wrap could.
 }
 
 // NewEngine creates a Engine with sensible defaults.
@@ -840,14 +836,12 @@ func (de *Engine) handleFileHashMatch(book, other *database.Book, authorName str
 	sameTitle := normalizeTitle(book.Title) == normalizeTitle(other.Title)
 
 	if sameAuthor && sameTitle && de.AutoMergeEnabled && de.mergeService != nil {
-		// Serialize the actual merge (see mergeMu doc comment on Engine) —
-		// MergeBooks itself does an unguarded read-modify-write per book, so
-		// two FullScan Layer-1 workers merging into the same "other" book at
-		// once could race. This does not serialize the (far more common)
-		// non-merge candidate path above/below.
-		de.mergeMu.Lock()
+		// MergeBooks serializes its own read-modify-write internally (a mutex
+		// on the singleton merge.Service), so two FullScan Layer-1 workers
+		// merging into the same "other" book at once are made atomic there —
+		// no Engine-level lock needed. The (far more common) non-merge
+		// candidate path above/below is unaffected.
 		_, err := de.mergeService.MergeBooks([]string{book.ID, other.ID}, other.ID)
-		de.mergeMu.Unlock()
 		if err != nil {
 			return false, fmt.Errorf("auto-merge failed: %w", err)
 		}
@@ -2539,9 +2533,9 @@ func (de *Engine) FullScan(ctx context.Context, progress func(phase string, done
 	//   - checkExactFileHash -> handleFileHashMatch can call
 	//     mergeService.MergeBooks when AutoMergeEnabled is set. MergeBooks
 	//     itself is an unguarded read-modify-write per book, so it is now
-	//     serialized via de.mergeMu (see that field's doc comment) rather
-	//     than relying on loop order the way the old serial code implicitly
-	//     did.
+	//     serialized by a sync.Mutex INSIDE merge.Service.MergeBooks (see the
+	//     mergeMu field on merge.Service) rather than relying on loop order
+	//     the way the old serial code implicitly did.
 	//
 	// The bookStore/embedStore backend (PebbleStore) is itself safe for
 	// concurrent reads/writes — see the CONC-2 comment on the scoring pass
@@ -3310,6 +3304,23 @@ func (de *Engine) ApplyVerdicts(verdicts []ai.DedupPairVerdict, byIndex map[int]
 			continue
 		}
 
+		// Soft-deleted pre-check (mirrors autoMergeCertain): a batch can carry
+		// two verdicts that share a book — e.g. (A,B) then (B,C). Once (A,B)
+		// merges and soft-deletes B, re-merging (B,C) would double-merge an
+		// already-merged-away book and can leave two live primaries in one
+		// version group. GetBookByID does NOT filter soft-deleted rows, so
+		// check the flag explicitly and skip the pair if either side is gone.
+		bookA, errA := de.bookStore.GetBookByID(candidate.EntityAID)
+		bookB, errB := de.bookStore.GetBookByID(candidate.EntityBID)
+		if errA != nil || errB != nil || bookA == nil || bookB == nil {
+			slog.Info("dedup LLM auto-merge skipped — could not load both books", "candidate", candidate.ID, "errA", errA, "errB", errB)
+			continue
+		}
+		if bookSoftDeleted(bookA) || bookSoftDeleted(bookB) {
+			slog.Info("dedup LLM auto-merge skipped — a side was already soft-deleted (merged away earlier in this batch)", "candidate", candidate.ID, "a", candidate.EntityAID, "b", candidate.EntityBID)
+			continue
+		}
+
 		result, mergeErr := de.mergeService.MergeBooks(
 			[]string{candidate.EntityAID, candidate.EntityBID},
 			"", // auto-pick primary via bookIsBetter
@@ -3317,6 +3328,17 @@ func (de *Engine) ApplyVerdicts(verdicts []ai.DedupPairVerdict, byIndex map[int]
 		if mergeErr != nil {
 			slog.Error("dedup LLM auto-merge failed for candidate ( + )", "candidateID", candidate.ID, "entityAID", candidate.EntityAID, "entityBID", candidate.EntityBID, "mergeErr", mergeErr)
 			continue
+		}
+
+		// Clean up residual pending candidates that referenced the merged-away
+		// loser so they don't drift into the stale-candidate backlog (mirrors
+		// autoMergeCertain). The loser is whichever side did NOT win.
+		if result != nil && result.PrimaryID != "" {
+			loserID := candidate.EntityAID
+			if loserID == result.PrimaryID {
+				loserID = candidate.EntityBID
+			}
+			de.CleanupCandidatesAfterMerge([]string{loserID})
 		}
 
 		// Mark candidate as merged in the dedup store so it

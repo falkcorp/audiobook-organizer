@@ -1,7 +1,7 @@
 // file: internal/dedup/auto_resolve_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2f4b8c19-7a03-4d56-9e18-5c0d7f2a6b91
-// last-edited: 2026-07-03
+// last-edited: 2026-07-13
 
 // Tests for the Tier-1 (Band CERTAIN) auto-resolution pass:
 // Engine.AutoResolveCertain, autoResolveEligible, and UnmergeAuto.
@@ -374,6 +374,68 @@ func TestAutoResolveCertain_SkipsAlreadyMergedBook(t *testing.T) {
 	}
 	if res2.Eligible != 0 {
 		t.Fatalf("expected Eligible=0 (skipped before eligibility), got %d", res2.Eligible)
+	}
+}
+
+// TestAutoMergeCertain_ProvisionalJournalFailureSkipsMerge proves the
+// reversibility rail: when the PROVISIONAL journal write fails, autoMergeCertain
+// returns an error and does NOT perform the merge — so we never leave a
+// completed, irreversible merge with no journal key. Failure is injected by
+// closing the EmbeddingStore, which makes PutAutoMergeJournalEntry error.
+func TestAutoMergeCertain_ProvisionalJournalFailureSkipsMerge(t *testing.T) {
+	// Build the engine with a READ-ONLY embed DB so the provisional journal
+	// write (a Pebble Set, BEFORE MergeBooks) fails with an error — modelling a
+	// real journal-write failure. Book reads/writes use `store` (writable).
+	store, err := database.NewPebbleStore(filepath.Join(t.TempDir(), "pebble"))
+	if err != nil {
+		t.Fatalf("NewPebbleStore: %v", err)
+	}
+	origStore := database.GetGlobalStore()
+	database.SetGlobalStore(store)
+
+	edbDir := t.TempDir()
+	edb0, err := pebble.Open(edbDir, &pebble.Options{})
+	if err != nil {
+		t.Fatalf("pebble.Open embed (init): %v", err)
+	}
+	_ = edb0.Close() // create the store, then reopen it read-only.
+	edb, err := pebble.Open(edbDir, &pebble.Options{ReadOnly: true})
+	if err != nil {
+		t.Fatalf("pebble.Open embed (read-only): %v", err)
+	}
+	es := database.NewEmbeddingStore(edb)
+	t.Cleanup(func() {
+		database.SetGlobalStore(origStore)
+		_ = edb.Close()
+		_ = store.Close()
+	})
+	engine := NewEngine(es, store, nil, nil, merge.NewService(store))
+
+	for _, id := range []string{"JA", "JB"} {
+		if _, err := store.CreateBook(arPlausibleBook(id, "Dup Title "+id)); err != nil {
+			t.Fatalf("CreateBook %s: %v", id, err)
+		}
+	}
+
+	c := database.DedupCandidate{ID: 4242, EntityType: "book", EntityAID: "JA", EntityBID: "JB"}
+	winner, err := engine.autoMergeCertain(c)
+	if err == nil {
+		t.Fatalf("expected error when provisional journal write fails, got winner=%q nil err", winner)
+	}
+
+	// Neither book may have been merged/soft-deleted — the destructive act must
+	// be skipped when reversibility could not be recorded first.
+	for _, id := range []string{"JA", "JB"} {
+		b, gerr := store.GetBookByID(id)
+		if gerr != nil || b == nil {
+			t.Fatalf("GetBookByID %s: %v", id, gerr)
+		}
+		if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+			t.Fatalf("book %s was soft-deleted despite provisional journal failure (merge not skipped)", id)
+		}
+		if b.VersionGroupID != nil {
+			t.Fatalf("book %s got a version group despite provisional journal failure", id)
+		}
 	}
 }
 

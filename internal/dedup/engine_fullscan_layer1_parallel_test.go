@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_fullscan_layer1_parallel_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c3d4e5f6-a7b8-49c0-8d1e-2f3a4b5c6d7e
-// last-edited: 2026-07-05
+// last-edited: 2026-07-13
 
 // Regression tests for CONC-4: FullScan's main pass now splits into a
 // parallel Pass 1 (Layer-1 exact checks — checkExactFileHash/ISBN/Title/
@@ -27,7 +27,7 @@
 // expected end state is fully deterministic regardless of goroutine
 // scheduling; the test proves every pair merged exactly once, into the
 // correct winner, with no data race on the shared mock store — verifying
-// the mergeMu guard documented on the Engine struct.
+// the serialization guard now living inside merge.Service.MergeBooks.
 package dedup
 
 import (
@@ -175,8 +175,8 @@ func TestFullScanLayer1Parallel_SameCandidatesAsSerial(t *testing.T) {
 // GetBookByID/UpdateBook halves of database.Store, used by
 // TestFullScanLayer1AutoMergeConcurrent_NoRace so MergeBooks' read-modify-
 // write sequence has somewhere real to land. Guarded by mu because,
-// absent the mergeMu fix under test, concurrent Layer-1 workers could call
-// MergeBooks at the same time and race on these very maps.
+// absent the merge.Service serialization fix under test, concurrent Layer-1
+// workers could call MergeBooks at the same time and race on these very maps.
 type mergeRaceStore struct {
 	mu    sync.Mutex
 	books map[string]*database.Book
@@ -211,7 +211,7 @@ func (s *mergeRaceStore) update(id string, b *database.Book) (*database.Book, er
 	return &out, nil
 }
 
-// TestFullScanLayer1AutoMergeConcurrent_NoRace exercises the mergeMu guard:
+// TestFullScanLayer1AutoMergeConcurrent_NoRace exercises the merge.Service guard:
 // with AutoMergeEnabled, checkExactFileHash's handleFileHashMatch calls the
 // UNguarded merge.Service.MergeBooks, so FullScan's parallel Layer-1 pass
 // must serialize those calls or risk two workers racing on the same
@@ -220,7 +220,7 @@ func (s *mergeRaceStore) update(id string, b *database.Book) (*database.Book, er
 // end state is fully deterministic: run under -race, then assert every
 // pair merged exactly once into the expected winner.
 func TestFullScanLayer1AutoMergeConcurrent_NoRace(t *testing.T) {
-	const numPairs = 20 // > typical runtime.NumCPU(); many pairs contend for mergeMu at once
+	const numPairs = 20 // > typical runtime.NumCPU(); many pairs contend for the merge lock at once
 
 	type pair struct{ loserID, winnerID, hash string }
 	pairs := make([]pair, numPairs)
