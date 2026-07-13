@@ -1,5 +1,5 @@
 // file: internal/metadata/audnexus.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-a3b4c5d6e7f8
 // last-edited: 2026-07-13
 
@@ -142,8 +142,13 @@ func (c *AudnexusClient) SearchByContext(ctx *SearchContext) ([]BookMetadata, er
 		return nil, nil
 	}
 
-	// Look up the book by ASIN
-	metadata, err := c.LookupByASIN(ctx.ASIN)
+	// Look up the book by ASIN. This ContextualSearch entry point carries no
+	// Go context.Context (its caller, FetchMetadataForBook, has none to thread),
+	// so we use context.Background(); LookupByASIN still bounds each region
+	// request with a per-request timeout so a missing/unreachable ASIN can't burn
+	// the full 9×30s. Callers that DO hold a cancellable ctx (the candidate op's
+	// direct-ASIN path) call LookupByASIN directly with it.
+	metadata, err := c.LookupByASIN(context.Background(), ctx.ASIN)
 	if err != nil {
 		return nil, err
 	}
@@ -157,36 +162,80 @@ func (c *AudnexusClient) SearchByContext(ctx *SearchContext) ([]BookMetadata, er
 // Some books are only available in certain regional Audible stores.
 var audnexusRegions = []string{"", "us", "uk", "au", "ca", "in", "de", "fr", "jp"}
 
+// audnexusPerRegionTimeout bounds a single region request so one slow/unreachable
+// regional Audible store can't consume the whole lookup budget. Nine regions ×
+// this cap is the worst case for a missing ASIN (was 9×30s = 270s uninterruptible
+// before contexts were threaded).
+const audnexusPerRegionTimeout = 10 * time.Second
+
 // LookupByASIN fetches a book directly by its Audible ASIN.
 // Tries multiple regions since books may only be indexed in certain Audible stores.
-func (c *AudnexusClient) LookupByASIN(asin string) (*BookMetadata, error) {
+//
+// The region loop honors ctx: it bails immediately when ctx is cancelled/expired
+// (so a batch cancel aborts promptly instead of grinding through all 9 regions),
+// and each region request is additionally bounded by audnexusPerRegionTimeout via
+// http.NewRequestWithContext so a single hung region can't stall the lookup.
+func (c *AudnexusClient) LookupByASIN(ctx context.Context, asin string) (*BookMetadata, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	var lastErr error
 	for _, region := range audnexusRegions {
-		bookURL := fmt.Sprintf("%s/books/%s", c.baseURL, url.PathEscape(asin))
-		if region != "" {
-			bookURL += "?region=" + region
-		}
-		resp, err := c.httpClient.Get(bookURL)
-		if err != nil {
-			lastErr = fmt.Errorf("failed to lookup Audnexus book: %w", err)
-			continue
-		}
-
-		if resp.StatusCode == http.StatusOK {
-			var book audnexusBook
-			if err := json.UnmarshalRead(resp.Body, &book); err != nil {
-				resp.Body.Close()
-				lastErr = fmt.Errorf("failed to decode Audnexus book: %w", err)
-				continue
+		// Bail promptly on cancellation rather than starting another region.
+		if err := ctx.Err(); err != nil {
+			if lastErr == nil {
+				lastErr = err
 			}
-			resp.Body.Close()
-			slog.Debug("Audnexus found ASIN in region", "asin", asin, "region", region)
-			return c.bookToMetadata(&book), nil
+			return nil, lastErr
 		}
-		resp.Body.Close()
-		lastErr = fmt.Errorf("audnexus book lookup returned status %d (region=%s)", resp.StatusCode, region)
+		meta, done, err := c.lookupRegion(ctx, asin, region)
+		if done {
+			return meta, nil
+		}
+		if err != nil {
+			// Propagate a context error immediately — no other region will
+			// fare better once the caller has cancelled/timed out.
+			if ctx.Err() != nil {
+				return nil, err
+			}
+			lastErr = err
+		}
 	}
 	return nil, lastErr
+}
+
+// lookupRegion issues a single-region ASIN lookup bounded by
+// audnexusPerRegionTimeout. Returns done=true with the metadata on a hit;
+// done=false with an error to try the next region. Kept as its own function so
+// the per-request context cancel is deferred cleanly (vet-safe) rather than
+// juggling cancel() across the loop's multiple continue paths.
+func (c *AudnexusClient) lookupRegion(ctx context.Context, asin, region string) (*BookMetadata, bool, error) {
+	reqCtx, cancel := context.WithTimeout(ctx, audnexusPerRegionTimeout)
+	defer cancel()
+
+	bookURL := fmt.Sprintf("%s/books/%s", c.baseURL, url.PathEscape(asin))
+	if region != "" {
+		bookURL += "?region=" + region
+	}
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, bookURL, nil)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to create Audnexus request: %w", err)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to lookup Audnexus book: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		var book audnexusBook
+		if err := json.UnmarshalRead(resp.Body, &book); err != nil {
+			return nil, false, fmt.Errorf("failed to decode Audnexus book: %w", err)
+		}
+		slog.Debug("Audnexus found ASIN in region", "asin", asin, "region", region)
+		return c.bookToMetadata(&book), true, nil
+	}
+	return nil, false, fmt.Errorf("audnexus book lookup returned status %d (region=%s)", resp.StatusCode, region)
 }
 
 func (c *AudnexusClient) bookToMetadata(book *audnexusBook) *BookMetadata {

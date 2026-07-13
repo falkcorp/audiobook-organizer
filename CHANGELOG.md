@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.150.0 -->
+<!-- version: 3.151.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-13 -->
 
@@ -8,6 +8,51 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 13, 2026 - fix(metafetch): share rate-limiter/breaker across batch + per-request throttle + cancellable Audnexus lookup
+
+Three confirmed reliability bugs in the external-metadata layer:
+
+- **Hardcover limiter + circuit breaker recreated per book (rate limit never
+  enforced across a batch)** — `Service.BuildSourceChain()`
+  (`internal/metafetch/service_search.go`) built fresh source clients and
+  `ProtectedSource` circuit breakers on every call, and it is called once per
+  book by `FetchMetadataForBook`, `SearchMetadataForBookWithOptions`,
+  `FetchMetadataForBookByTitle`, and the metadata-upgrade op. Hardcover's 60-rpm
+  limiter (its `requestLog`) and each source's breaker state therefore reset
+  every book, so across a batch they never accumulated: a thundering herd got
+  through and the breaker could never trip for a down source. **Fixed** by
+  memoizing the chain on the `Service`, keyed on a fingerprint of the
+  metadata-source config — the same `*ProtectedSource`/client instances are reused
+  across every per-book fetch (limiter + breaker persist), and the chain rebuilds
+  only when the source config changes at runtime. The shared chain is
+  goroutine-safe: all source clients are stateless (`http.Client` + immutable
+  config) and the Hardcover limiter and `CircuitBreaker` each carry their own mutex.
+- **Global 10 req/s limiter consumed once per book, not per HTTP call** — the
+  candidate-fetch op (`internal/server/metadata_batch_candidates.go`) called
+  `limiter.Wait(ctx)` ONCE per book, then issued many HTTP calls (up to 5 sources ×
+  several title attempts). With `rate.NewLimiter(10, 1)` and 8 workers, "10/sec"
+  actually permitted ~10 *books*/sec = a large multiple in outbound requests.
+  **Fixed** by threading the limiter into the search core
+  (`searchMetadataForBook` + new `FetchAndCacheLimited`) so each LIVE source call
+  acquires one token (cache hits consume none) — the 10/s ceiling now governs
+  actual requests. The interactive search-dialog and bulk-fetch paths pass a nil
+  limiter and are unchanged.
+- **Audnexus ASIN lookup ignored context (up to 270s uninterruptible)** —
+  `AudnexusClient.LookupByASIN` (`internal/metadata/audnexus.go`) looped 9 regions
+  with `httpClient.Get` and no context, so a missing/unreachable record burned up
+  to 9×30s and could not be cancelled by a batch cancel. **Fixed** by threading a
+  `context.Context` into the region loop (`http.NewRequestWithContext`), bailing on
+  `ctx.Done()`, and bounding each region request with a 10s per-request timeout
+  (worst case ~90s). The candidate op's direct-ASIN path now passes a real
+  cancellable ctx; the auto-fetch `SearchByContext` caller has no ctx to thread
+  yet (its `FetchMetadataForBook` entry point is context-free) so it is bounded to
+  ~90s but not promptly cancellable — full cancellation there is a follow-up that
+  needs a ctx on `FetchMetadataForBook`.
+- Tests: `BuildSourceChain` memoization + breaker-persistence-across-calls
+  (`internal/metafetch/reliability_test.go`), per-request limiter granularity
+  (timing), and cancelled-context / already-cancelled Audnexus region-loop abort
+  (`internal/metadata/audnexus_test.go`).
 
 #### July 13, 2026 - fix(web): stop BookDetail load race + orphaned SSE EventSource leak
 

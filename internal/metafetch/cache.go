@@ -1,5 +1,5 @@
 // file: internal/metafetch/cache.go
-// version: 1.2.0
+// version: 1.3.0
 //
 // Cache-layer on top of metafetch.Service. The persisted record type
 // lives in internal/database (MetadataCandidateCache) — re-exported
@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"golang.org/x/time/rate"
 )
 
 // ErrStaleMetadataCache is returned by ValidateCachedIdentity when the cache
@@ -112,6 +113,29 @@ func (mfs *Service) FetchAndCache(ctx context.Context, bookID, query, author, na
 	if err != nil {
 		return nil, err
 	}
+	return mfs.cacheSearchResponse(bookID, query, author, narrator, series, resp), nil
+}
+
+// FetchAndCacheLimited is FetchAndCache for batch callers that must throttle
+// ACTUAL outbound requests: the limiter is threaded into the search core so each
+// live source call (not each book) acquires a token, and ctx is propagated so a
+// batch cancel aborts in-flight requests. Cache hits consume no tokens. A nil
+// limiter behaves exactly like FetchAndCache.
+func (mfs *Service) FetchAndCacheLimited(ctx context.Context, limiter *rate.Limiter, bookID, query, author, narrator, series string, opts SearchOptions) (*MetadataCandidateCache, error) {
+	if mfs == nil {
+		return nil, fmt.Errorf("FetchAndCacheLimited: nil Service")
+	}
+	resp, err := mfs.searchMetadataForBook(ctx, limiter, bookID, query, author, narrator, series, opts)
+	if err != nil {
+		return nil, err
+	}
+	return mfs.cacheSearchResponse(bookID, query, author, narrator, series, resp), nil
+}
+
+// cacheSearchResponse writes the top-N candidates from a search response to the
+// candidate cache (always replaces) and returns the resulting entry. Shared by
+// FetchAndCache and FetchAndCacheLimited so both persist results identically.
+func (mfs *Service) cacheSearchResponse(bookID, query, author, narrator, series string, resp *SearchMetadataResponse) *MetadataCandidateCache {
 	candidates := resp.Results
 	if len(candidates) > metadataCacheTopN {
 		candidates = candidates[:metadataCacheTopN]
@@ -136,11 +160,11 @@ func (mfs *Service) FetchAndCache(ctx context.Context, bookID, query, author, na
 		if err := mfs.db.PutMetadataCache(entry); err != nil {
 			// Cache failure should not break the user's fetch; log and
 			// continue (callers can still consume the in-memory entry).
-						slog.Warn("metafetch FetchAndCache write", "id", bookID, "error", err)
-			return entry, nil
+			slog.Warn("metafetch FetchAndCache write", "id", bookID, "error", err)
+			return entry
 		}
 	}
-	return entry, nil
+	return entry
 }
 
 // ListCachedSummaries returns one summary per cached entry, ordered

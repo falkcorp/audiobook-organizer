@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_search.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
-// last-edited: 2026-07-11
+// last-edited: 2026-07-13
 
 package metafetch
 
@@ -12,6 +12,8 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/openlibrary"
+	"golang.org/x/time/rate"
 	"log/slog"
 	"sort"
 	"strings"
@@ -52,7 +54,70 @@ func (mfs *Service) buildSearchContext(book *database.Book, searchTitle, author,
 	}
 	return ctx
 }
+
+// BuildSourceChain returns the metadata-source chain, MEMOIZED on the Service so
+// the same *ProtectedSource (and the underlying source clients) are reused across
+// every per-book fetch in a batch. This is what makes the Hardcover 60-rpm limiter
+// and the per-source circuit breakers accumulate across a batch instead of being
+// recreated fresh on each book (which let a thundering herd through and prevented
+// the breaker from ever tripping for a down source).
+//
+// The memo is keyed on a fingerprint of the metadata-source config, so a runtime
+// settings change (enabling/disabling a source, editing a token/priority) rebuilds
+// the chain; an unchanged config returns the identical chain instances. The
+// returned slice must be treated as read-only (callers append to NEW slices, never
+// mutate in place) — the underlying clients are shared and concurrency-safe.
 func (mfs *Service) BuildSourceChain() []metadata.MetadataSource {
+	fp := sourceChainFingerprint()
+	mfs.chainMu.Lock()
+	defer mfs.chainMu.Unlock()
+	if mfs.cachedChain != nil && mfs.cachedChainFP == fp {
+		return mfs.cachedChain
+	}
+	chain := buildSourceChainFromConfig(mfs.olStore)
+	mfs.cachedChain = chain
+	mfs.cachedChainFP = fp
+	return chain
+}
+
+// waitForLimiter acquires one token from limiter, blocking until a token is
+// available or ctx is cancelled. A nil limiter is a no-op (returns nil), so the
+// non-batch search paths (interactive dialog, bulk fetch) are unthrottled exactly
+// as before. Returns ctx's error if the wait is cancelled.
+func waitForLimiter(ctx context.Context, limiter *rate.Limiter) error {
+	if limiter == nil {
+		return nil
+	}
+	return limiter.Wait(ctx)
+}
+
+// sourceChainFingerprint is a deterministic digest of the config that
+// BuildSourceChain reads, so the memoized chain is rebuilt exactly when that
+// config changes. encoding/json sorts map keys (the per-source Credentials map),
+// so the marshaled form is stable for equal configs.
+func sourceChainFingerprint() string {
+	payload := struct {
+		Sources   []config.MetadataSource
+		Hardcover string
+		Google    string
+	}{
+		Sources:   config.AppConfig.MetadataSources,
+		Hardcover: config.AppConfig.HardcoverAPIToken,
+		Google:    config.AppConfig.GoogleBooksAPIKey,
+	}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		// Marshal of plain config structs shouldn't fail; on the off chance it
+		// does, return a unique-ish value so we rebuild rather than serve stale.
+		return fmt.Sprintf("fp-error-%d", time.Now().UnixNano())
+	}
+	return string(b)
+}
+
+// buildSourceChainFromConfig constructs a fresh source chain from the current
+// config. Extracted from BuildSourceChain so the memoization wrapper stays small;
+// olStore is passed explicitly (rather than reading mfs) to keep it a pure builder.
+func buildSourceChainFromConfig(olStore *openlibrary.OLStore) []metadata.MetadataSource {
 	// Copy and sort by priority
 	sources := make([]config.MetadataSource, len(config.AppConfig.MetadataSources))
 	copy(sources, config.AppConfig.MetadataSources)
@@ -69,8 +134,8 @@ func (mfs *Service) BuildSourceChain() []metadata.MetadataSource {
 		switch src.ID {
 		case "openlibrary":
 			client := metadata.NewOpenLibraryClient()
-			if mfs.olStore != nil {
-				client.SetOLStore(mfs.olStore)
+			if olStore != nil {
+				client.SetOLStore(olStore)
 			}
 			rawSource = client
 		case "google-books":
@@ -135,7 +200,28 @@ func (mfs *Service) SearchMetadataForBook(id string, query string, authorHint ..
 // old variadic signature wraps this and passes default options. All new call
 // sites should use this method directly so they can pass SearchOptions fields
 // (UseRerank etc.) explicitly.
+//
+// This is a thin wrapper over searchMetadataForBook with no rate limiter
+// (nil) and a background context — behavior is identical to the historical
+// method, so the interactive search-dialog path and the bulk-fetch path are
+// unchanged. Batch callers that need per-request rate limiting or cancellation
+// (the candidate-fetch op) go through FetchAndCacheLimited instead.
 func (mfs *Service) SearchMetadataForBookWithOptions(
+	id, query, author, narrator, series string,
+	opts SearchOptions,
+) (*SearchMetadataResponse, error) {
+	return mfs.searchMetadataForBook(context.Background(), nil, id, query, author, narrator, series, opts)
+}
+
+// searchMetadataForBook is the core search pipeline. When limiter != nil, every
+// LIVE outbound source call (each SearchByTitle/SearchByTitleAndAuthor attempt and
+// each direct ASIN lookup) first acquires one limiter token, so the configured
+// rate governs ACTUAL requests rather than books. Cache hits skip the source calls
+// entirely and therefore consume no tokens. ctx is threaded to every source call
+// (and to the Audnexus ASIN lookup) so a batch cancel aborts in-flight requests.
+func (mfs *Service) searchMetadataForBook(
+	ctx context.Context,
+	limiter *rate.Limiter,
 	id, query, author, narrator, series string,
 	opts SearchOptions,
 ) (*SearchMetadataResponse, error) {
@@ -217,7 +303,22 @@ func (mfs *Service) SearchMetadataForBookWithOptions(
 	var sourcesTried []string
 	sourcesFailed := map[string]string{}
 
+	// gatedSearch runs one LIVE source call after acquiring a limiter token
+	// (when a limiter is set) and threads ctx through. Cache hits never call this,
+	// so they consume no tokens — the limiter therefore governs actual outbound
+	// requests, not books. A cancelled/expired ctx short-circuits without a call.
+	gatedSearch := func(fn func(context.Context) ([]metadata.BookMetadata, error)) ([]metadata.BookMetadata, error) {
+		if err := waitForLimiter(ctx, limiter); err != nil {
+			return nil, err
+		}
+		return fn(ctx)
+	}
+
 	for _, src := range sources {
+		// Stop promptly if the caller cancelled — don't start another source.
+		if err := ctx.Err(); err != nil {
+			break
+		}
 		var allResults []metadata.BookMetadata
 		var lastErr error
 		sourcesTried = append(sourcesTried, src.Name())
@@ -247,7 +348,9 @@ func (mfs *Service) SearchMetadataForBookWithOptions(
 		if !cacheHit {
 			// If author hint provided, use title+author search for better results
 			if searchAuthor != "" {
-				if results, serr := src.SearchByTitleAndAuthor(context.Background(), searchTitle, searchAuthor); serr == nil {
+				if results, serr := gatedSearch(func(c context.Context) ([]metadata.BookMetadata, error) {
+					return src.SearchByTitleAndAuthor(c, searchTitle, searchAuthor)
+				}); serr == nil {
 					allResults = append(allResults, results...)
 				} else {
 					lastErr = serr
@@ -259,7 +362,9 @@ func (mfs *Service) SearchMetadataForBookWithOptions(
 			// swapped in audiobook metadata. Try searching with the narrator as
 			// author to catch these cases.
 			if bookNarrator != "" && bookNarrator != searchAuthor {
-				if results, serr := src.SearchByTitleAndAuthor(context.Background(), searchTitle, bookNarrator); serr == nil {
+				if results, serr := gatedSearch(func(c context.Context) ([]metadata.BookMetadata, error) {
+					return src.SearchByTitleAndAuthor(c, searchTitle, bookNarrator)
+				}); serr == nil {
 					allResults = append(allResults, results...)
 				} else {
 					slog.Debug("metadata-search narrator-as-author fallback( ) error", "name", src.Name(), "searchTitle", searchTitle, "narrator", bookNarrator, "error", serr)
@@ -267,7 +372,9 @@ func (mfs *Service) SearchMetadataForBookWithOptions(
 			}
 
 			// Always also search by title only to get broader results
-			if results, serr := src.SearchByTitle(context.Background(), searchTitle); serr == nil {
+			if results, serr := gatedSearch(func(c context.Context) ([]metadata.BookMetadata, error) {
+				return src.SearchByTitle(c, searchTitle)
+			}); serr == nil {
 				allResults = append(allResults, results...)
 			} else {
 				lastErr = serr
@@ -275,7 +382,9 @@ func (mfs *Service) SearchMetadataForBookWithOptions(
 			}
 			// SearchByTitle with original title if different
 			if searchTitle != book.Title {
-				if results, serr := src.SearchByTitle(context.Background(), book.Title); serr == nil {
+				if results, serr := gatedSearch(func(c context.Context) ([]metadata.BookMetadata, error) {
+					return src.SearchByTitle(c, book.Title)
+				}); serr == nil {
 					allResults = append(allResults, results...)
 				} else {
 					lastErr = serr
@@ -302,7 +411,7 @@ func (mfs *Service) SearchMetadataForBookWithOptions(
 			}
 		}
 
-		baseScores, baseTier := mfs.ScoreBaseCandidates(context.Background(), book, allResults, searchWords)
+		baseScores, baseTier := mfs.ScoreBaseCandidates(ctx, book, allResults, searchWords)
 		slog.Debug("metadata-search scored results from with tier", "count", len(allResults), "name", src.Name(), "baseTier", baseTier)
 
 		for i, r := range allResults {
@@ -430,13 +539,25 @@ func (mfs *Service) SearchMetadataForBookWithOptions(
 		asinToLookup = extractASIN(searchTitle)
 	}
 	if asinToLookup != "" {
-		// Try Audible API first (more complete), fall back to Audnexus
+		// Try Audible API first (more complete), fall back to Audnexus. Each is a
+		// live request, so acquire a limiter token before it (when limiter != nil)
+		// to keep the per-request rate ceiling honest. The Audnexus lookup is now
+		// ctx-aware — a batch cancel aborts its 9-region loop promptly instead of
+		// burning up to 9×30s.
 		audibleClient := metadata.NewAudibleClient()
-		result, err := audibleClient.LookupByASIN(asinToLookup)
+		var result *metadata.BookMetadata
+		err := waitForLimiter(ctx, limiter)
+		if err == nil {
+			result, err = audibleClient.LookupByASIN(asinToLookup)
+		}
 		if err != nil || result == nil {
 			slog.Debug("metadata-search Audible API lookup for failed, trying Audnexus", "value", asinToLookup, "error", err)
 			audnexus := metadata.NewAudnexusClient()
-			result, err = audnexus.LookupByASIN(asinToLookup)
+			if werr := waitForLimiter(ctx, limiter); werr != nil {
+				err = werr
+			} else {
+				result, err = audnexus.LookupByASIN(ctx, asinToLookup)
+			}
 		}
 		if err == nil && result != nil {
 			key := strings.ToLower(result.Title + "|" + result.Author)
@@ -529,7 +650,7 @@ func (mfs *Service) SearchMetadataForBookWithOptions(
 
 	// Optional LLM rerank pass on the top ambiguous candidates.
 	if opts.UseRerank && mfs.llmScorer != nil && config.AppConfig.MetadataScoring.LLMEnabled {
-		candidates = mfs.RerankTopK(context.Background(), book, candidates)
+		candidates = mfs.RerankTopK(ctx, book, candidates)
 	}
 
 	slog.Debug("metadata-search returning candidates for (search words )", "candidateCount", len(candidates), "searchTitle", searchTitle, "searchWords", searchWords)
@@ -546,6 +667,7 @@ func (mfs *Service) SearchMetadataForBookWithOptions(
 //   - the direct ASIN-lookup candidate (Source == "Audnexus (Audible)"),
 //   - any TranscriptionBoosted candidate,
 //   - the single highest-scored candidate in the input slice.
+//
 // If every candidate lacks a cover, the input is returned unchanged.
 func filterCoverlessCandidates(candidates []MetadataCandidate) []MetadataCandidate {
 	if len(candidates) == 0 {
