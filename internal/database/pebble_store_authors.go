@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_authors.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1f8b9fd2-e424-4a09-9ee4-7b5b64660605
-// last-edited: 2026-07-05
+// last-edited: 2026-07-13
 
 package database
 
@@ -665,7 +665,7 @@ func (p *PebbleStore) GetAllAuthorFileCounts_Pebble() (map[int]int, error) {
 }
 
 func (p *PebbleStore) CreateNarrator(name string) (*Narrator, error) {
-	// Check if narrator already exists
+	// Fast path: return the existing narrator without taking the counter lock.
 	existing, err := p.GetNarratorByName(name)
 	if err != nil {
 		return nil, err
@@ -674,11 +674,31 @@ func (p *PebbleStore) CreateNarrator(name string) (*Narrator, error) {
 		return existing, nil
 	}
 
-	// Generate a new ID by incrementing a counter
+	// Allocation path. Serialize the counter read-modify-write plus all three
+	// writes under counterMu — the same mutex nextID uses for every other ID —
+	// so concurrent CreateNarrator calls can't allocate a duplicate/lost
+	// narrator ID, and commit record + name index + counter in a SINGLE batch so
+	// a crash can't leave a record with no name index (or an un-bumped counter).
+	// NOTE: we keep the legacy narrator_counter key rather than switching to
+	// nextID("narrator"), which uses a different (uninitialized) counter:narrator
+	// key that would collide with / orphan the existing narrator numbering. The
+	// lock is held across the pebble.Sync commit, which is acceptable on this
+	// cold create path.
+	p.counterMu.Lock()
+	defer p.counterMu.Unlock()
+
+	// Re-check under the lock: another goroutine may have created it between our
+	// fast-path check and acquiring the lock.
+	if existing, err := p.GetNarratorByName(name); err != nil {
+		return nil, err
+	} else if existing != nil {
+		return existing, nil
+	}
+
 	counterKey := []byte("narrator_counter")
 	var nextID int
 	if val, closer, err := p.db.Get(counterKey); err == nil {
-		json.Unmarshal(val, &nextID)
+		_ = json.Unmarshal(val, &nextID)
 		closer.Close()
 	}
 	nextID++
@@ -688,23 +708,27 @@ func (p *PebbleStore) CreateNarrator(name string) (*Narrator, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	key := []byte(fmt.Sprintf("narrator:%d", nextID))
-	if err := p.db.Set(key, data, pebble.Sync); err != nil {
+	idData, err := json.Marshal(nextID)
+	if err != nil {
 		return nil, err
 	}
 
-	// Save name index
+	batch := p.db.NewBatch()
+	if err := batch.Set([]byte(fmt.Sprintf("narrator:%d", nextID)), data, nil); err != nil {
+		batch.Close()
+		return nil, err
+	}
 	nameKey := []byte(fmt.Sprintf("narrator_name:%s", util.NormalizeAuthor(name)))
-	idData, _ := json.Marshal(nextID)
-	if err := p.db.Set(nameKey, idData, pebble.Sync); err != nil {
+	if err := batch.Set(nameKey, idData, nil); err != nil {
+		batch.Close()
 		return nil, fmt.Errorf("pebble Set narrator name index: %w", err)
 	}
-
-	// Update counter
-	counterData, _ := json.Marshal(nextID)
-	if err := p.db.Set(counterKey, counterData, pebble.Sync); err != nil {
+	if err := batch.Set(counterKey, idData, nil); err != nil {
+		batch.Close()
 		return nil, fmt.Errorf("pebble Set narrator counter: %w", err)
+	}
+	if err := batch.Commit(pebble.Sync); err != nil {
+		return nil, err
 	}
 
 	p.UpsertNarratorToMemDB(narrator)

@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.114.0
+// version: 1.115.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-07-13
 
@@ -39,48 +39,21 @@ func prefixEnd(prefix []byte) []byte {
 	return upper
 }
 
-// serializeBookForIndex marshals a Book to JSON for index storage.
-// This enables GetBooksBySeriesIDCore and GetBooksByAuthorIDCore to deserialize
-// directly from the index without secondary point lookups.
+// serializeBookForIndex marshals a Book to JSON for index storage in the
+// book:work:<wid>:<id> and book:versiongroup:<vg>:<id> rows.
+//
+// INDEX-CONSISTENCY: the embedded snapshot is a write-time convenience only. As
+// of the point-verify-on-read fix, GetBooksByWorkID and GetBooksByVersionGroup
+// no longer trust this value — they extract the book ID from the row KEY and
+// point-look-up the authoritative book:<id> row — so a snapshot that goes stale
+// (e.g. UpdateBook flipping MarkedForDeletion without changing WorkID) can no
+// longer surface a phantom live book. The value is retained for backward
+// compatibility with existing rows and any future value-consuming reader.
+// GetBooksBySeriesIDCore / GetBooksByAuthorIDCore do NOT use this index at all
+// (they full-scan the authoritative book:<id> rows post "Task 3.4 index
+// removal").
 func serializeBookForIndex(book *Book) ([]byte, error) {
 	return json.Marshal(book)
-}
-
-// deserializeBookFromIndex unmarshals a Book from index storage.
-// Handles both new format (full Book JSON) and old format (just book ID).
-// If the value looks like a ULID (32 chars, alphanumeric), treat it as a legacy format
-// that still needs a point lookup. Otherwise, unmarshal as Book JSON.
-func deserializeBookFromIndex(value []byte, fallbackLookup func(string) (*Book, error)) (*Book, error) {
-	if len(value) == 0 {
-		return nil, nil
-	}
-
-	// Check if this looks like a legacy format (just a ULID)
-	valueStr := string(value)
-	if len(valueStr) == 26 && isValidULID(valueStr) {
-		// Legacy format: just the book ID. Fall back to point lookup.
-		return fallbackLookup(valueStr)
-	}
-
-	// New format: full Book JSON
-	var book Book
-	if err := json.Unmarshal(value, &book); err != nil {
-		return nil, err
-	}
-	return &book, nil
-}
-
-// isValidULID checks if a string looks like a ULID (26 alphanumeric chars)
-func isValidULID(s string) bool {
-	if len(s) != 26 {
-		return false
-	}
-	for _, c := range s {
-		if !((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z')) {
-			return false
-		}
-	}
-	return true
 }
 
 // PebbleStore implements the Store interface using PebbleDB (LSM key-value store)
@@ -2242,6 +2215,41 @@ func (p *PebbleStore) DeleteBook(id string) error {
 		}
 	}
 
+	// Delete work-ID index (INDEX-CONSISTENCY). CreateBook writes
+	// book:work:<WorkID>:<id> but the original DeleteBook never tore it down,
+	// leaving a dangling index row that surfaced the hard-deleted book as a
+	// live phantom in GetBooksByWorkID. Mirror UpdateBook's teardown.
+	if book.WorkID != nil && *book.WorkID != "" {
+		workKey := []byte(fmt.Sprintf("book:work:%s:%s", *book.WorkID, id))
+		if err := batch.Delete(workKey, nil); err != nil {
+			batch.Close()
+			return err
+		}
+	}
+
+	// Delete the three file-hash index rows CreateBook writes. Same dangling-row
+	// class as the work index above: without these, book:hash / book:originalhash
+	// / book:organizedhash lookups resolve to a hard-deleted book ID. Guards
+	// mirror CreateBook's (nil / empty-string skipped).
+	if book.FileHash != nil && *book.FileHash != "" {
+		if err := batch.Delete([]byte(fmt.Sprintf("book:hash:%s", *book.FileHash)), nil); err != nil {
+			batch.Close()
+			return err
+		}
+	}
+	if book.OriginalFileHash != nil && *book.OriginalFileHash != "" {
+		if err := batch.Delete([]byte(fmt.Sprintf("book:originalhash:%s", *book.OriginalFileHash)), nil); err != nil {
+			batch.Close()
+			return err
+		}
+	}
+	if book.OrganizedFileHash != nil && *book.OrganizedFileHash != "" {
+		if err := batch.Delete([]byte(fmt.Sprintf("book:organizedhash:%s", *book.OrganizedFileHash)), nil); err != nil {
+			batch.Close()
+			return err
+		}
+	}
+
 	statePrefix := []byte(fmt.Sprintf("metadata_state:%s:", id))
 	iter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: statePrefix,
@@ -2580,6 +2588,15 @@ func (p *PebbleStore) GetBooksByVersionGroup(groupID string) ([]Book, error) {
 	// Fast path: use the book:versiongroup:<gid>:<id> index added in
 	// PERF-VERSIONS so we touch O(|group|) keys instead of full-scanning
 	// the entire books table (was ~15s on 10K books).
+	//
+	// INDEX-CONSISTENCY: like GetBooksByWorkID, the index value embeds a
+	// serialized Book snapshot that UpdateBook only refreshes when the
+	// VersionGroupID changes, so a same-group edit (SoftDeleteBook sets
+	// MarkedForDeletion via UpdateBook without touching the group) leaves it
+	// stale. Treat the index as a POINTER: the trailing key segment is the book
+	// ID (a ULID, no nested colons); point-look-up the authoritative book:<id>
+	// row and skip anything absent (hard-deleted) or MarkedForDeletion
+	// (soft-deleted). This can never desync from the source of truth.
 	prefix := []byte(fmt.Sprintf("book:versiongroup:%s:", groupID))
 	upper := append([]byte(nil), prefix...)
 	upper[len(upper)-1] = ';' // ':' + 1
@@ -2589,9 +2606,11 @@ func (p *PebbleStore) GetBooksByVersionGroup(groupID string) ([]Book, error) {
 	}
 	var books []Book
 	for idxIter.First(); idxIter.Valid(); idxIter.Next() {
-		b, err := deserializeBookFromIndex(idxIter.Value(), func(id string) (*Book, error) {
-			return p.GetBookByID(id)
-		})
+		bookID := string(idxIter.Key()[len(prefix):])
+		if bookID == "" {
+			continue
+		}
+		b, err := p.GetBookByID(bookID)
 		if err != nil || b == nil {
 			continue
 		}

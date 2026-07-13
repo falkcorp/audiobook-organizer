@@ -59,6 +59,26 @@ remaining-work catalog, produced, adversarially judged (3 lenses × 10), brief-v
 - Prod-data mutations (INIT-1 T7, INIT-2 T3/T6 drains, INIT-10 C8) are dry-run →
   AskUserQuestion gated in the briefs.
 
+## ✅ RESOLVED — stale work/version-group indexes showed soft/hard-deleted books as live; narrator-create id-race (2026-07-13)
+
+The `book:work:<wid>:<id>` and `book:versiongroup:<vg>:<id>` index rows embed a
+serialized `Book` snapshot that `UpdateBook` only refreshed on WorkID/VersionGroupID
+change, so a same-group edit (notably `merge.SoftDeleteBook` setting
+`MarkedForDeletion` via `UpdateBook`) left the snapshot stale — soft-deleted /
+merged-away books stayed live in `GetBooksByWorkID` / `GetBooksByVersionGroup`.
+**Fixed** by making both readers pointer-verify: take the book ID from the row KEY,
+point-look-up `book:<id>`, skip if absent / `MarkedForDeletion`. Removed the now-dead
+`deserializeBookFromIndex` / `isValidULID`; corrected the stale `serializeBookForIndex`
+doc comment. Also: `DeleteBook` now tears down the `book:work` row + the three
+`book:*hash` rows it previously leaked (dangling-row phantom); and `CreateNarrator`
+now does its existence re-check + counter read-modify-write + all three writes under
+`counterMu` in a single atomic batch (kept the legacy `narrator_counter` key — not
+`nextID("narrator")`, which uses a different uninitialized key). Author/Series `Core`
+readers were never affected (they full-scan authoritative `book:<id>` rows post
+"Task 3.4 index removal"). Tests: real-`PebbleStore` regressions + a `-race`
+concurrent-`CreateNarrator` test. See
+`docs/executive-summaries/2026-07-13-index-consistency-executive-summary.md`.
+
 ## ✅ RESOLVED — concurrent dedup merges could corrupt/vanish a version group (2026-07-13)
 
 `merge.Service.MergeBooks` (a process-wide singleton shared by `dedup.full-scan`

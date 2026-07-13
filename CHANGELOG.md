@@ -68,6 +68,39 @@
 - Tests: new `internal/server/user_tags_authz_test.go` proves a viewer-role
   session (library.view only) gets 403 on all three user-tags write routes and
   an admin session succeeds.
+#### July 13, 2026 - fix(database): consistent work/version-group indexes + atomic narrator create (phantom-listing + id-race)
+
+- **Phantom soft-deleted books in work & version-group listings** (backend, REVIEW-CRITICAL) — the
+  `book:work:<wid>:<id>` and `book:versiongroup:<vg>:<id>` secondary-index rows embed a full
+  serialized `Book` snapshot, but `UpdateBook` only rewrote that snapshot inside its
+  WorkID-changed / VersionGroupID-changed branches. Any edit that KEPT the same group left the
+  embedded copy stale forever — including `merge.SoftDeleteBook` / the audiobooks mutation service,
+  which set `MarkedForDeletion=true` via `UpdateBook` without touching WorkID. Result:
+  soft-deleted / merged-away books kept showing as live in `GetBooksByWorkID` /
+  `GetBooksByVersionGroup` (and stale title/author on any same-group metadata edit). Fixed by making
+  both readers treat the index as a **pointer**: the book ID is taken from the row KEY and
+  point-looked-up against the authoritative `book:<id>` row (skip if absent or `MarkedForDeletion`),
+  so the index can never desync from the source of truth again. The now-unused
+  `deserializeBookFromIndex` / `isValidULID` helpers were removed; the stale `serializeBookForIndex`
+  doc comment was corrected. (`GetBooksByAuthorIDCore` / `GetBooksBySeriesIDCore` were never
+  affected — they full-scan the authoritative `book:<id>` rows post "Task 3.4 index removal".)
+- **`DeleteBook` left dangling index rows → hard-deleted phantom** — `DeleteBook` never removed the
+  `book:work:<WorkID>:<id>` row (nor the three `book:hash` / `book:originalhash` /
+  `book:organizedhash` rows) that `CreateBook` writes, so a hard-deleted book still appeared in
+  `GetBooksByWorkID` and its hashes still resolved to a dead ID. Added the matching `batch.Delete`s
+  to the existing delete batch (the pointer-verify read above also neutralizes the work phantom, but
+  the dangling rows are now cleaned up).
+- **`CreateNarrator` id-race + non-atomic writes** — the narrator counter was a bare
+  `Get`→`++`→`Set` under NO lock (every other ID goes through `nextID` under `counterMu`) plus three
+  separate `pebble.Sync` `Set`s. Concurrent creates (reachable from import / metadata worker pools)
+  could allocate a duplicate/lost narrator ID; a crash between the writes could leave a record with
+  no name index. Fixed by re-checking existence and doing the counter read-modify-write + all three
+  writes under `counterMu` in a SINGLE atomic batch. Kept the legacy `narrator_counter` key
+  (switching to `nextID("narrator")` would use a different, uninitialized `counter:narrator` key and
+  collide with existing narrator numbering). Existing-narrator fast path preserved.
+- Tests: real-`PebbleStore` regression tests for soft-delete exclusion (work + version-group),
+  same-group metadata-edit reflection, `DeleteBook` dangling-row removal (raw key scan), and a
+  `-race` concurrent-`CreateNarrator` test asserting exactly one ID / one record.
 
 #### July 13, 2026 - fix(dedup): serialize MergeBooks + harden auto-merge journal/guards (data-loss risk)
 
