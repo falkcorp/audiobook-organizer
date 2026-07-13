@@ -1,5 +1,5 @@
 // file: internal/metadata/audnexus_test.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-c5d6e7f8a9b0
 // last-edited: 2026-07-13
 
@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestAudnexusClient_Name(t *testing.T) {
@@ -54,7 +55,7 @@ func TestAudnexusClient_LookupByASIN(t *testing.T) {
 	defer server.Close()
 
 	client := NewAudnexusClientWithBaseURL(server.URL)
-	meta, err := client.LookupByASIN("B003JVHRU0")
+	meta, err := client.LookupByASIN(context.Background(), "B003JVHRU0")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -119,9 +120,76 @@ func TestAudnexusClient_LookupByASIN_NotFound(t *testing.T) {
 	defer server.Close()
 
 	client := NewAudnexusClientWithBaseURL(server.URL)
-	_, err := client.LookupByASIN("BADASIN")
+	_, err := client.LookupByASIN(context.Background(), "BADASIN")
 	if err == nil {
 		t.Error("expected error on 404 response")
+	}
+}
+
+// TestAudnexusClient_LookupByASIN_CancelledContext verifies that a cancelled
+// context aborts the multi-region ASIN loop PROMPTLY rather than grinding
+// through all 9 regions (which previously burned up to 9×30s = 270s and could
+// not be cancelled by a batch cancel). The server hangs on every request, so
+// without context honoring, this test would time out.
+func TestAudnexusClient_LookupByASIN_CancelledContext(t *testing.T) {
+	blocked := make(chan struct{})
+	defer close(blocked)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Hang until the request's context is cancelled (or the test ends).
+		select {
+		case <-r.Context().Done():
+		case <-blocked:
+		}
+	}))
+	defer server.Close()
+
+	client := NewAudnexusClientWithBaseURL(server.URL)
+
+	// Cancel shortly after starting so the FIRST region request is in-flight.
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	_, err := client.LookupByASIN(ctx, "B0HANGHANG")
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected an error from a cancelled lookup")
+	}
+	// Must return in well under the 270s (or even the 9×10s bounded) worst case.
+	if elapsed > 5*time.Second {
+		t.Fatalf("cancelled lookup took %v; expected prompt abort (< 5s)", elapsed)
+	}
+}
+
+// TestAudnexusClient_LookupByASIN_AlreadyCancelled verifies the loop bails on
+// the very first iteration when handed an already-cancelled context, without
+// issuing any HTTP request.
+func TestAudnexusClient_LookupByASIN_AlreadyCancelled(t *testing.T) {
+	var hits int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel before the call
+
+	client := NewAudnexusClientWithBaseURL(server.URL)
+	start := time.Now()
+	_, err := client.LookupByASIN(ctx, "B0CANCELED")
+	if err == nil {
+		t.Fatal("expected an error from an already-cancelled lookup")
+	}
+	if time.Since(start) > time.Second {
+		t.Fatalf("already-cancelled lookup was not prompt: %v", time.Since(start))
+	}
+	if hits != 0 {
+		t.Fatalf("expected 0 HTTP requests for an already-cancelled ctx, got %d", hits)
 	}
 }
 

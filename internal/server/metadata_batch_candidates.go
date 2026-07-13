@@ -1,7 +1,7 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 3.2.0
+// version: 3.3.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
-// last-edited: 2026-06-21
+// last-edited: 2026-07-13
 //
 // HTTP handlers for the metadata candidate batch fetch / apply pipeline.
 // Pure service types and logic live in internal/metabatch.
@@ -210,29 +210,25 @@ func (s *Server) fetchCandidateForBook(
 		}
 	}
 
-	// Wait for rate limiter before making external requests.
-	if err := limiter.Wait(ctx); err != nil {
-		return CandidateResult{
-			Book:   bookInfo,
-			Status: "error",
-			Error:  fmt.Sprintf("rate limiter cancelled: %v", err),
-		}
-	}
-
 	var authorHint []string
 	if book.Author != nil && book.Author.Name != "" {
 		authorHint = append(authorHint, book.Author.Name)
 	}
 
 	// METADATA-CACHED-MATCHER: batch fetch always invalidates + writes
-	// the persistent cache for each book. FetchAndCache runs the same
+	// the persistent cache for each book. FetchAndCacheLimited runs the same
 	// search chain and replaces the cache row in one call, so the
 	// per-book Review UI hits a fresh top-10 next render.
+	//
+	// The shared limiter is threaded into the search core so it throttles ACTUAL
+	// outbound requests (one token per live source call), not books — previously a
+	// single limiter.Wait per book let each book fan out to many HTTP calls, so
+	// "10/s" permitted 10 books/s = a large multiple of the intended request rate.
 	authorForHash := ""
 	if len(authorHint) > 0 {
 		authorForHash = authorHint[0]
 	}
-	entry, err := mfs.FetchAndCache(ctx, bookID, book.Title, authorForHash, "", "", metafetch.SearchOptions{})
+	entry, err := mfs.FetchAndCacheLimited(ctx, limiter, bookID, book.Title, authorForHash, "", "", metafetch.SearchOptions{})
 	if err != nil {
 		return CandidateResult{
 			Book:   bookInfo,

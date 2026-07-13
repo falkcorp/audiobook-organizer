@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.102.0 -->
+<!-- version: 9.103.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-13 -->
 
@@ -17,6 +17,32 @@ future agent) can scan the entire workspace in one page.
 - [`docs/implementation-guide.md`](docs/implementation-guide.md) — integration guide for open items
 - [`docs/codebase-evaluation.md`](docs/codebase-evaluation.md) — 2026-04-30 codebase audit (12 issue groups, 38 bot-tasks)
 - Claude project memory at `~/.claude/projects/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/memory/` — items still to graduate here
+
+---
+
+## ✅ RESOLVED — Metadata rate-limit sharing + per-request throttle + cancellable Audnexus (2026-07-13)
+
+Three confirmed reliability bugs in the external-metadata layer. (1) `BuildSourceChain`
+rebuilt the source clients + circuit breakers on every per-book call, so Hardcover's
+60-rpm limiter and each source's breaker never accumulated across a batch (thundering
+herd; breaker could never trip). **Fixed** by memoizing the chain on the `Service`
+(fingerprinted on source config), so limiter + breaker persist. (2) The candidate-fetch
+op consumed the 10 req/s limiter once per book while issuing many HTTP calls per book —
+"10/s" meant ~10 books/s. **Fixed** by threading the limiter into the search core
+(`FetchAndCacheLimited`) so it gates each live source call. (3) Audnexus `LookupByASIN`
+looped 9 regions with no context (up to 270s, uncancellable). **Fixed** with
+`http.NewRequestWithContext` per region + `ctx.Done()` bail + 10s per-request timeout.
+
+**Follow-up (open):** the auto-fetch/importer path (`FetchMetadataForBook` →
+`SearchByContext` → `LookupByASIN`) is now bounded to ~90s but not promptly cancellable,
+because `FetchMetadataForBook` has no `context.Context`. Threading a ctx through
+`FetchMetadataForBook` (+ its interface, mock, and the itunes-importer/organizer/handler
+call sites) would make that path fully cancellable.
+
+Files: `internal/metafetch/service.go`, `internal/metafetch/service_search.go`,
+`internal/metafetch/cache.go`, `internal/metadata/audnexus.go`,
+`internal/server/metadata_batch_candidates.go`. Tests in
+`internal/metafetch/reliability_test.go` + `internal/metadata/audnexus_test.go`.
 
 ---
 
