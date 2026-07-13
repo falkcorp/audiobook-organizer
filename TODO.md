@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.2.0 -->
+<!-- version: 10.3.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-17 -->
 
@@ -87,7 +87,11 @@ Companion docs:
 
 24. **Workflow system WF-0/2/3/4/5 (INIT-6)** (H1:1128-1133;
     [plan](docs/plans/2026-07-10-workflow-system.md)) — STOP-FOR-HUMAN spec review;
-    PR #1935 open. WF-6 closed NOT-DOING.
+    WF-6 closed NOT-DOING. Implementation plan (owner-approved 2026-07-18, PR #1935):
+    [`docs/plans/2026-07-13-workflow-system-implementation-plan.md`](docs/plans/2026-07-13-workflow-system-implementation-plan.md)
+    — grounds the spec against HEAD; recommends **build WF-2, defer WF-3/WF-4/WF-5**
+    (INIT-1 T5+T6 shipped, so WF-3's headline use case exists without it; the spec's
+    completeness gate is blind to the nested-config `label_refinement` family).
 25. **PD-1 — subprocess isolation via parent-RPC bridge + MDA3 `Isolate:false` revert**
     (H1:1554-1561, 1435-1438; [spec](docs/specs/subprocess-isolation-rpc.md)) — [hold].
 26. **INTERNAL-SERVER-PKG-STALL structural decision** (H1:849-877) — leak fixed;
