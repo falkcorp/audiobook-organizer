@@ -89,7 +89,8 @@
   - **T3 store-consistency invariants** — `dbtest.AssertStoreInvariants` (public, for the merge
     package) + a white-box `assertStoreInvariants` (raw index-row scan): no book both live-primary and
     soft-deleted, no index listing surfaces a deleted book, no dangling secondary-index row. Wired into
-    the existing merge/combine tests.
+    the existing merge/combine tests AND the concurrent-merge/-combine race tests (where merge bug
+    class #3 is actually triggered).
   - **T4 concurrency harness** (`-race`) — partitioned interleaved mutations then invariant check.
   - **T5 key-encoding property test** — delimiter/unicode-laden titles, paths, tags, work IDs, and
     author/series names resolve to exactly the right record (generalizes the tag-colon-parse fix).

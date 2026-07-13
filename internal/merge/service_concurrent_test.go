@@ -1,5 +1,5 @@
 // file: internal/merge/service_concurrent_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5c8a1f42-9d6b-4e73-8a10-2b4c6d9e0f13
 // last-edited: 2026-07-13
 
@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/database/dbtest"
 	ulid "github.com/oklog/ulid/v2"
 )
 
@@ -136,6 +137,13 @@ func TestMergeBooks_ConcurrentSamePair_Serializes(t *testing.T) {
 	if a.MarkedForDeletion == nil || !*a.MarkedForDeletion {
 		t.Fatalf("loser A was not soft-deleted")
 	}
+
+	// Whole-store data-loss invariant, asserted AFTER the concurrent-merge race
+	// that actually produces bug class #3. This is the only place the merge-race
+	// corruption condition is triggered, so it is the meaningful place to assert
+	// no book is both live-primary and soft-deleted, no listing shows a deleted
+	// book, and no index row dangles.
+	dbtest.AssertStoreInvariants(t, real)
 }
 
 // TestMergeFamily_CombineAndMerge_ShareOneLock proves CombineBooks serializes on
@@ -206,4 +214,8 @@ func TestMergeFamily_CombineAndMerge_ShareOneLock(t *testing.T) {
 		*a1.VersionGroupID == "" || *a1.VersionGroupID != *b1.VersionGroupID {
 		t.Fatalf("merged pair not in one consistent version group: a=%+v b=%+v", a1, b1)
 	}
+
+	// Whole-store invariant after the concurrent Combine+Merge race across all
+	// pairs (combine hard-deletes an absorbed book; merge soft-deletes a loser).
+	dbtest.AssertStoreInvariants(t, real)
 }
