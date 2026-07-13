@@ -1,7 +1,7 @@
 // file: web/src/pages/BookDetail.tsx
-// version: 1.51.0
+// version: 1.52.0
 // guid: 4d2f7c6a-1b3e-4c5d-8f7a-9b0c1d2e3f4a
-// last-edited: 2026-06-22
+// last-edited: 2026-07-13
 
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -115,18 +115,29 @@ export const BookDetail = () => {
   // Load detailed tags for source attribution (CAT-1 / PR #548)
   useEffect(() => {
     if (!id) return;
+    let cancelled = false;
     api.getBookTagsDetailed(id)
-      .then(setDetailedTags)
-      .catch(() => setDetailedTags([]));
+      .then((data) => { if (!cancelled) setDetailedTags(data); })
+      .catch(() => { if (!cancelled) setDetailedTags([]); });
+    return () => { cancelled = true; };
   }, [id, filesRefreshKey]);
 
-  const loadBook = useCallback(async () => {
+  // loadBook/loadVersions accept an optional `isStale` check so the
+  // id-keyed load effect below can detect when its `id` has been
+  // superseded by a faster navigation and skip applying a stale response
+  // (BOOKDETAIL-RACE: navigating book A -> book B quickly, or A's response
+  // simply arriving after B's, used to let A's setBook overwrite B's).
+  // Callers outside that effect (button handlers, onRefresh, etc.) call
+  // these with no argument, which is unconditional/unchanged behavior.
+  const loadBook = useCallback(async (isStale?: () => boolean) => {
     if (!id) return;
     setLoading(true);
     try {
       const data = await api.getBook(id);
+      if (isStale?.()) return;
       setBook(data);
     } catch (error) {
+      if (isStale?.()) return;
       if (error instanceof api.ApiError) {
         if (error.status === 404) {
           setBook(null);
@@ -141,7 +152,9 @@ export const BookDetail = () => {
       console.error('Failed to load book', error);
       toast('Failed to load audiobook details.', 'error');
     } finally {
-      setLoading(false);
+      // Don't clear loading for a stale request — a newer request for a
+      // different id may still be in flight and already owns `loading`.
+      if (!isStale?.()) setLoading(false);
     }
   }, [id, navigate, toast]);
 
@@ -156,22 +169,32 @@ export const BookDetail = () => {
     }
   }, [id]);
 
-  const loadVersions = useCallback(async () => {
+  const loadVersions = useCallback(async (isStale?: () => boolean) => {
     if (!id) return;
     try {
       const data = await api.getBookVersions(id);
+      if (isStale?.()) return;
       setVersions(data);
     } catch (error) {
+      if (isStale?.()) return;
       console.error('Failed to load versions', error);
     }
   }, [id]);
 
 
+  // Primary id-keyed load. A `cancelled` flag (same idiom used elsewhere in
+  // this file, e.g. the linkSearch and tag-preload effects) guards every
+  // setState below so a slow/out-of-order response for a book we've already
+  // navigated away from can't overwrite state for the book now on screen
+  // (BOOKDETAIL-RACE).
   useEffect(() => {
-    loadBook();
-    loadVersions();
+    let cancelled = false;
+    const isStale = () => cancelled;
+    loadBook(isStale);
+    loadVersions(isStale);
     // Load external ID info (iTunes linkage)
     api.getBookExternalIDs(id!).then((data) => {
+      if (cancelled) return;
       setItunesLinked(data.itunes_linked);
       setItunesPidCount(data.total);
       setItunesExternalIDs(data.external_ids.filter((e) => e.source === 'itunes' && !e.tombstoned));
@@ -179,8 +202,9 @@ export const BookDetail = () => {
     // Load rejection history (META-REJ-1)
     fetch(`/api/v1/audiobooks/${id}/metadata-rejections`, { credentials: 'include' })
       .then((r) => r.ok ? r.json() : Promise.reject(r))
-      .then((data) => setRejections(data.rejections ?? []))
+      .then((data) => { if (!cancelled) setRejections(data.rejections ?? []); })
       .catch(() => {});
+    return () => { cancelled = true; };
   }, [id, loadBook, loadVersions]);
 
   // Inline version link search

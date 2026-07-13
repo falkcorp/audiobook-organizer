@@ -1,4 +1,5 @@
 <!-- file: TODO.md -->
+<!-- version: 9.102.0 -->
 <!-- version: 9.101.0 -->
 <!-- version: 9.100.0 -->
 <!-- version: 9.99.2 -->
@@ -26,6 +27,29 @@ future agent) can scan the entire workspace in one page.
 - Claude project memory at `~/.claude/projects/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/memory/` — items still to graduate here
 
 ---
+
+## ✅ RESOLVED — BookDetail load race + orphaned SSE EventSource leak (2026-07-13)
+
+Two confirmed frontend correctness bugs. (1) `BookDetail.tsx`'s id-keyed load
+effect had no request-sequence guard, so navigating between books quickly (or
+a slow response for the previously-viewed book) could let a stale `getBook`
+response overwrite the currently-displayed book. **Fixed** by adding a
+`cancelled`-flag guard (the idiom already used elsewhere in the file) to
+`loadBook`/`loadVersions` and the id-keyed effects (external IDs, rejection
+history, detailed tags). (2) `useOperationsStore.openSSE()`'s `onError`
+unconditionally nulled `_sseSource` without closing the underlying
+`EventSource`; since `openSSE()` is only called once per login with no retry
+site, a *terminal* error left the source orphaned — unreachable by
+`closeSSE()` (e.g. on logout), so it kept firing `loadFromServer()` forever,
+and a later `openSSE()` could open a second live source. **Fixed** by
+closing + nulling the ref only when `es.readyState === EventSource.CLOSED`;
+a *transient* drop (network blip, server restart) leaves the ref intact so
+the browser's own reconnect keeps working (closing unconditionally would
+have killed reconnect on the first blip — caught in review before merge).
+Tests: `web/src/pages/BookDetail.race.test.tsx` (out-of-order resolution,
+last navigation wins — verified to fail against the pre-fix code) and 3
+cases in `web/src/stores/useOperationsStore.test.ts` covering the
+transient/terminal split plus the exactly-one-new-source guarantee.
 
 ## ✅ RESOLVED — book user-tags write routes had no permission guard (2026-07-13)
 
