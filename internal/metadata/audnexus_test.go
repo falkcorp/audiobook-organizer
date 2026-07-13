@@ -1,6 +1,7 @@
 // file: internal/metadata/audnexus_test.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-c5d6e7f8a9b0
+// last-edited: 2026-07-13
 
 package metadata
 
@@ -71,6 +72,9 @@ func TestAudnexusClient_LookupByASIN(t *testing.T) {
 	}
 	if meta.PublishYear != 2012 {
 		t.Errorf("expected year 2012, got %d", meta.PublishYear)
+	}
+	if !meta.PublishYearIsAudiobookRelease {
+		t.Error("Audnexus PublishYear must be flagged as an audiobook release year")
 	}
 	if meta.ISBN != "9780007489943" {
 		t.Errorf("expected ISBN, got %q", meta.ISBN)

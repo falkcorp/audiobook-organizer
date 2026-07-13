@@ -1,6 +1,7 @@
 // file: internal/metadata/audible_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b8c7d6e5-f4a3-2b1c-0d9e-8f7a6b5c4d3e
+// last-edited: 2026-07-13
 
 package metadata
 
@@ -84,6 +85,9 @@ func TestAudibleClient_SearchByTitle(t *testing.T) {
 	}
 	if r.PublishYear != 2024 {
 		t.Errorf("year: got %d", r.PublishYear)
+	}
+	if !r.PublishYearIsAudiobookRelease {
+		t.Error("Audible PublishYear must be flagged as an audiobook release year")
 	}
 	if r.CoverURL != "https://example.com/cover.jpg" {
 		t.Errorf("cover: got %q", r.CoverURL)

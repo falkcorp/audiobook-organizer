@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
-// last-edited: 2026-07-03
+// last-edited: 2026-07-13
 
 package metafetch
 
@@ -44,8 +44,22 @@ func (mfs *Service) ApplyMetadataToBook(book *database.Book, meta metadata.BookM
 	if meta.Language != "" && IsBetterStringPtr(book.Language, meta.Language) {
 		book.Language = stringPtr(meta.Language)
 	}
+	// Route the year by its source KIND. meta.PublishYear is OVERLOADED:
+	// Audible/Audnexus report the audiobook RELEASE year, while Open Library /
+	// Google Books / Hardcover / Wikipedia report the original PRINT/work year
+	// (often decades earlier). This used to write PublishYear into
+	// AudiobookReleaseYear unconditionally, so a print-year candidate clobbered a
+	// correct Audible release year — which then propagated to the file `year` tag
+	// via service_writeback.go. Now: release → AudiobookReleaseYear (unchanged
+	// behavior), print → PrintYear (only when empty). The `!= 0` gate means a
+	// present year is never overwritten with 0, and the two fields never
+	// cross-contaminate.
 	if meta.PublishYear != 0 {
-		book.AudiobookReleaseYear = intPtrHelper(meta.PublishYear)
+		if meta.PublishYearIsAudiobookRelease {
+			book.AudiobookReleaseYear = intPtrHelper(meta.PublishYear)
+		} else if book.PrintYear == nil || *book.PrintYear == 0 {
+			book.PrintYear = intPtrHelper(meta.PublishYear)
+		}
 	}
 	if meta.CoverURL != "" {
 		book.CoverURL = stringPtr(meta.CoverURL)
@@ -163,11 +177,20 @@ func (mfs *Service) RecordChangeHistory(book *database.Book, meta metadata.BookM
 	}
 
 	if meta.PublishYear != 0 {
+		// Record against the field the year actually routes to (see
+		// ApplyMetadataToBook): release-kind → audiobook_release_year,
+		// print-kind → print_year.
+		yearField := "print_year"
+		yearOld := derefIntAsString(book.PrintYear)
+		if meta.PublishYearIsAudiobookRelease {
+			yearField = "audiobook_release_year"
+			yearOld = derefIntAsString(book.AudiobookReleaseYear)
+		}
 		changes = append(changes, struct {
 			field  string
 			oldVal string
 			newVal string
-		}{"audiobook_release_year", derefIntAsString(book.AudiobookReleaseYear), strconv.Itoa(meta.PublishYear)})
+		}{yearField, yearOld, strconv.Itoa(meta.PublishYear)})
 	}
 
 	for _, c := range changes {
@@ -406,7 +429,12 @@ func (mfs *Service) persistFetchedMetadata(bookID string, meta metadata.BookMeta
 		fetchedValues["language"] = meta.Language
 	}
 	if meta.PublishYear != 0 {
-		fetchedValues["audiobook_release_year"] = meta.PublishYear
+		// Provenance key mirrors the routed field (see ApplyMetadataToBook).
+		if meta.PublishYearIsAudiobookRelease {
+			fetchedValues["audiobook_release_year"] = meta.PublishYear
+		} else {
+			fetchedValues["print_year"] = meta.PublishYear
+		}
 	}
 	if meta.CoverURL != "" {
 		fetchedValues["cover_url"] = meta.CoverURL
@@ -470,6 +498,10 @@ func (mfs *Service) ApplyMetadataCandidate(id string, candidate MetadataCandidat
 		Description:    candidate.Description,
 		Language:       candidate.Language,
 		DurationSec:    candidate.DurationSec,
+		// candidate.Year is a bare int with no kind attached; derive whether it
+		// is an audiobook release year (Audible/Audnexus) from the source name so
+		// ApplyMetadataToBook routes it to the same field as the auto-fetch path.
+		PublishYearIsAudiobookRelease: metadata.SourceProducesAudiobookReleaseYear(candidate.Source),
 	}
 
 	// If fields list is non-empty, zero out fields NOT in the list

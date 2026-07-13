@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_mock_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
-// last-edited: 2026-07-10
+// last-edited: 2026-07-13
 
 package metafetch
 
@@ -974,7 +974,12 @@ func TestApplyMetadataToBook(t *testing.T) {
 		assert.Equal(t, "The Way of Kings", book.Title)
 		assert.Equal(t, "Tor Books", *book.Publisher)
 		assert.Equal(t, "en", *book.Language)
-		assert.Equal(t, 2010, *book.AudiobookReleaseYear)
+		// A source-less meta defaults to print-kind, so the year routes to
+		// PrintYear (not AudiobookReleaseYear). See TestApplyMetadataToBook_YearRouting.
+		assert.Nil(t, book.AudiobookReleaseYear)
+		if assert.NotNil(t, book.PrintYear) {
+			assert.Equal(t, 2010, *book.PrintYear)
+		}
 		assert.Equal(t, "http://cover.jpg", *book.CoverURL)
 		assert.Equal(t, "Michael Kramer", *book.Narrator)
 		assert.Equal(t, 10, *book.AuthorID)
@@ -1072,6 +1077,50 @@ func TestApplyMetadataToBook(t *testing.T) {
 		assert.True(t, seriesCreated, "should create new series")
 		assert.Equal(t, 77, *book.SeriesID)
 		assert.Equal(t, 3, *book.SeriesSequence)
+	})
+}
+
+// TestApplyMetadataToBook_YearRouting proves the print-vs-audiobook-release
+// year routing that fixes the data-corruption bug: a print/work year (Open
+// Library, Google Books) must land in PrintYear, an audiobook release year
+// (Audible, Audnexus) in AudiobookReleaseYear, and applying a print-year
+// candidate must NEVER overwrite an existing correct AudiobookReleaseYear.
+func TestApplyMetadataToBook_YearRouting(t *testing.T) {
+	svc := NewService(&database.MockStore{})
+
+	t.Run("print_year_routes_to_PrintYear", func(t *testing.T) {
+		book := &database.Book{ID: "b1", Title: "T"}
+		// Default flag (false) == print/work year (OpenLibrary/GoogleBooks).
+		meta := metadata.BookMetadata{Title: "T", PublishYear: 1937}
+		svc.ApplyMetadataToBook(book, meta)
+		assert.Nil(t, book.AudiobookReleaseYear, "print year must not touch AudiobookReleaseYear")
+		if assert.NotNil(t, book.PrintYear) {
+			assert.Equal(t, 1937, *book.PrintYear)
+		}
+	})
+
+	t.Run("release_year_routes_to_AudiobookReleaseYear", func(t *testing.T) {
+		book := &database.Book{ID: "b1", Title: "T"}
+		meta := metadata.BookMetadata{Title: "T", PublishYear: 2010, PublishYearIsAudiobookRelease: true}
+		svc.ApplyMetadataToBook(book, meta)
+		assert.Nil(t, book.PrintYear, "release year must not touch PrintYear")
+		if assert.NotNil(t, book.AudiobookReleaseYear) {
+			assert.Equal(t, 2010, *book.AudiobookReleaseYear)
+		}
+	})
+
+	t.Run("print_candidate_does_not_overwrite_release_year", func(t *testing.T) {
+		existing := 2010
+		book := &database.Book{ID: "b1", Title: "T", AudiobookReleaseYear: &existing}
+		// A Google Books / Open Library candidate with a print year decades earlier.
+		meta := metadata.BookMetadata{Title: "T", PublishYear: 1985}
+		svc.ApplyMetadataToBook(book, meta)
+		if assert.NotNil(t, book.AudiobookReleaseYear) {
+			assert.Equal(t, 2010, *book.AudiobookReleaseYear, "correct release year must survive a print-year apply")
+		}
+		if assert.NotNil(t, book.PrintYear) {
+			assert.Equal(t, 1985, *book.PrintYear, "print year lands in PrintYear")
+		}
 	})
 }
 

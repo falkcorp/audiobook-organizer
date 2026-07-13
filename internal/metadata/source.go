@@ -1,10 +1,26 @@
 // file: internal/metadata/source.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
 
 package metadata
 
 import "context"
+
+// SourceProducesAudiobookReleaseYear reports whether the named metadata source
+// populates PublishYear with an audiobook RELEASE/issue year (Audible,
+// Audnexus) rather than a print/work publication year. The candidate-apply path
+// no longer has the source's BookMetadata (and its PublishYearIsAudiobookRelease
+// flag) in scope — only the candidate's Source name survives — so it derives the
+// year kind from the source name here. Uses the clients' own Name() values so it
+// can never drift from what search stores in MetadataCandidate.Source.
+func SourceProducesAudiobookReleaseYear(sourceName string) bool {
+	switch sourceName {
+	case (&AudibleClient{}).Name(), (&AudnexusClient{}).Name():
+		return true
+	default:
+		return false
+	}
+}
 
 // MetadataSource is a pluggable metadata provider.
 type MetadataSource interface {

@@ -1,6 +1,7 @@
 // file: internal/metadata/openlibrary_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
+// last-edited: 2026-07-13
 
 package metadata
 
@@ -419,5 +420,61 @@ func TestNewOpenLibraryClientWithBaseURL_TrailingSlash(t *testing.T) {
 
 	if client.baseURL != "https://example.com" {
 		t.Errorf("Expected trailing slash to be trimmed, got %q", client.baseURL)
+	}
+}
+
+// TestUnambiguousLanguage covers the helper directly.
+func TestUnambiguousLanguage(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []string
+		want string
+	}{
+		{"empty", nil, ""},
+		{"single", []string{"eng"}, "eng"},
+		{"duplicate_same", []string{"eng", "eng"}, "eng"},
+		{"case_insensitive_same", []string{"eng", "ENG"}, "eng"},
+		{"ambiguous_differ", []string{"spa", "eng"}, ""},
+		{"blank_then_single", []string{"", "spa"}, "spa"},
+	}
+	for _, c := range cases {
+		if got := unambiguousLanguage(c.in); got != c.want {
+			t.Errorf("%s: unambiguousLanguage(%v) = %q, want %q", c.name, c.in, got, c.want)
+		}
+	}
+}
+
+// TestSearchByTitle_AmbiguousLanguageSkipped proves an Open Library search doc
+// whose editions list differing languages does NOT persist a guessed language,
+// while a single-language doc still does. Guessing Language[0] on an unordered
+// array mislabels a book whose first-listed edition is a translation, because
+// the value becomes a metadata:language:<code> system tag driving the review
+// language filter.
+func TestSearchByTitle_AmbiguousLanguageSkipped(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"numFound":2,
+			"start":0,
+			"docs":[
+				{"title":"Translated First","language":["spa","eng"]},
+				{"title":"English Only","language":["eng"]}
+			]
+		}`))
+	}))
+	defer server.Close()
+
+	client := NewOpenLibraryClientWithBaseURL(server.URL)
+	results, err := client.SearchByTitle(context.Background(), "anything")
+	if err != nil {
+		t.Fatalf("SearchByTitle failed: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+	if results[0].Language != "" {
+		t.Errorf("ambiguous language should be skipped, got %q", results[0].Language)
+	}
+	if results[1].Language != "eng" {
+		t.Errorf("single-language doc should set language 'eng', got %q", results[1].Language)
 	}
 }

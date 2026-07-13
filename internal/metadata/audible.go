@@ -1,6 +1,7 @@
 // file: internal/metadata/audible.go
-// version: 1.5.3
+// version: 1.6.0
 // guid: a9b8c7d6-e5f4-3a2b-1c0d-9e8f7a6b5c4d
+// last-edited: 2026-07-13
 
 package metadata
 
@@ -280,7 +281,9 @@ func (c *AudibleClient) productToMetadata(p *audibleProduct) BookMetadata {
 		meta.Narrator = strings.Join(narratorNames, ", ")
 	}
 
-	// Year from issue_date or release_date
+	// Year from issue_date or release_date — this is the AUDIOBOOK release year,
+	// not the work's original print year. Flag it so apply routes it to
+	// Book.AudiobookReleaseYear (never PrintYear).
 	dateStr := p.IssueDate
 	if dateStr == "" {
 		dateStr = p.ReleaseDate
@@ -288,6 +291,7 @@ func (c *AudibleClient) productToMetadata(p *audibleProduct) BookMetadata {
 	if len(dateStr) >= 4 {
 		fmt.Sscanf(dateStr[:4], "%d", &meta.PublishYear)
 	}
+	meta.PublishYearIsAudiobookRelease = true
 
 	// Cover image — prefer largest available
 	for _, size := range []string{"500", "252", "128"} {
