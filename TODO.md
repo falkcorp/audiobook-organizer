@@ -359,6 +359,32 @@ Adjacent unguarded paths NOT covered (separate follow-up): `dedup.MergeBooks`
   confirmed, so an issue would have been opened and closed in the same breath; this TODO entry
   plus the PR that landed the fix are the durable record.
 
+## ✅ RESOLVED — root-cause guard + remaining Author/Series wipe call sites (follow-on to W5d-1, 2026-07-13)
+
+- The #1887/98c2a218 fix patched only the `CreateOrganizedVersion` call site; the **root-cause
+  gap in `PebbleStore.UpdateBook`'s preserve-on-nil guard** (no Author/Series case) and two other
+  slim-projection call sites remained. All fixed this session on sign-off:
+  - **Fix 1 (root, `internal/database/pebble_store.go`):** added `Author`/`Series` to the
+    preserve-on-nil guard, mirroring the seven-field pattern. A backstop for the whole
+    Core-projection write class. Justification for preserve-on-nil: Author/Series are denormalized
+    display objects derived from AuthorID/SeriesID, recomputed on read, never user-cleared to nil
+    (pointer structs, no empty-string sentinel) — verified 0 of 135 `UpdateBook` call sites
+    intentionally nil-clear them.
+  - **Fix 2 (`internal/plugins/maintenance/author.go`, `internal/scheduler/extra_ops.go`):** the
+    two duplicate composite-author-split ops wrote `book.ToBook()` (nil Author/Series) AND changed
+    `AuthorID`, so a merely-preserved Author would be *stale* (old composite). Both now hydrate via
+    `GetBookByID` and write the full row with the new `AuthorID` + a fresh `Author`
+    (`Author.ID == AuthorID`); on hydrate failure they fall back to the projection write (guard
+    preserves the rest) so the AuthorID change still lands. False "guard restores Author/Series"
+    comments deleted.
+  - **Fix 3 (`internal/organizer/move.go`):** `MoveBookFile`'s bare `{FilePath}` write (dead/latent,
+    no live caller) hydrates before the write; falls back to bare write on hydrate failure.
+- **Verified:** new `TestUpdateBook_PreservesAuthorSeriesOnNilIncoming` (real `PebbleStore`) and
+  `TestAuthorSplit_WritesFreshAuthorNotStaleOrNil` (op leaves `Author.ID == AuthorID`, Series
+  preserved) pass; `MoveBookFile` tests updated for the hydrate call; `internal/database`,
+  `internal/plugins/maintenance`, `internal/scheduler`, `internal/organizer` green under `-race`;
+  `go build ./...`, `go vet`, `gofmt -l` clean.
+
 ## ✅ PR-D: deluge import fingerprint-wipe (3 impls) — RESOLVED (STOREFID W6, 2026-07-07)
 
 - **Fixed as a side effect of STOREFID W6's `GetBookFilesNeedingDelugeImport` → Core retype**:

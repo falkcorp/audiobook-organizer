@@ -128,6 +128,30 @@
   ratings/ISBN/etc. intact and the `book:path:` index still resolves; a missing-book write returns an
   error and creates no phantom row. Reverting a call site to the bare literal reintroduces the wipe
   inside the tested function and fails the test.
+#### July 13, 2026 - fix(database): preserve Author/Series in UpdateBook + hydrate author-split write-backs (data-loss)
+
+- **`database`** — **prod data-loss fix.** `PebbleStore.UpdateBook`'s preserve-on-nil guard restored
+  seven memdb-stripped heavy fields (Description/VersionNotes/BookSig*) but OMITTED the denormalized
+  `Author`/`Series`. Those fields carry `json:",omitempty"` and Pebble persists them (`db:"-"` only
+  suppresses SQLite), so any write sourced from a `BookCore`→`ToBook()` or memdb projection (both nil
+  Author/Series) silently erased them from the stored Pebble row. Added Author/Series to the guard,
+  mirroring the existing seven-field pattern. They are recomputed display objects, never user-cleared
+  to nil (no empty-string-style sentinel; verified 0 of 135 `UpdateBook` call sites intentionally
+  nil-clear them), so preserve-on-nil is the correct semantics — the same class as the CreateOrganizedVersion
+  fix (STOREFID W5d-1 / #1887).
+- **`maintenance` / `scheduler`** — the two duplicate composite-author-split ops wrote a
+  heavy-field-nil `ToBook()` projection AND changed the book's `AuthorID`, so a merely-preserved
+  Author would have been *stale* (naming the old composite). Both now hydrate the full row via
+  `GetBookByID` and write it with BOTH the new `AuthorID` and a fresh denormalized `Author`
+  (`Author.ID == AuthorID`), not preserved-stale. On hydrate failure they fall back to the projection
+  write so the AuthorID change still lands (guard preserves the rest). Deleted the false inline
+  comments that claimed the guard restored Author/Series.
+- **`organizer`** — `MoveBookFile`'s bare `{FilePath}` write (dead/latent — no live caller today)
+  would total-wipe the row under the full-fidelity backend; it now hydrates before setting FilePath.
+- Regression tests: a nil-Author/Series `UpdateBook` over a populated row keeps both (real
+  `PebbleStore`); the author-split op leaves `Author.ID == AuthorID` and preserves Series after an
+  AuthorID change (`TestAuthorSplit_WritesFreshAuthorNotStaleOrNil`). Targeted packages green under
+  `-race`; `go vet` + `gofmt` clean.
 
 #### July 13, 2026 - feat(dedup): keep labeled-example ScoreBreakdown fresh on dismiss/relabel
 

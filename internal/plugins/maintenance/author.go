@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e5f6a7b8-c9d0-1234-ef01-456789012345
-// last-edited: 2026-07-05
+// last-edited: 2026-07-13
 
 package maintenance
 
@@ -207,14 +207,29 @@ func (p *Plugin) runAuthorSplitScan(ctx context.Context, _ json.RawMessage, repo
 			}
 			if book.AuthorID != nil && *book.AuthorID == author.ID && len(newAuthors) > 0 {
 				firstID := newAuthors[0].ID
-				book.AuthorID = &firstID
-				// book is BookCore (heavy fields nil) — bridge via .ToBook()
-				// so PebbleStore.UpdateBook sees the expected all-nil heavy
-				// fields and restores them from the stored row (STOR-1 guard
-				// in UpdateBook), rather than a type mismatch or an
-				// accidental heavy-field wipe.
-				full := book.ToBook()
-				_, _ = store.UpdateBook(book.ID, &full)
+				// `book` is a BookCore (heavy fields nil). Do NOT write its
+				// ToBook() projection: that carries nil Author/Series AND,
+				// because this op changes AuthorID, the guard-preserved Author
+				// would be STALE (it still names the composite author). Hydrate
+				// the full stored row and set BOTH the new AuthorID and a fresh
+				// denormalized Author so the row stays consistent
+				// (Author.ID == AuthorID), not preserved-stale (STOREFID
+				// W5d-1 / #1887).
+				if full, err := store.GetBookByID(book.ID); err == nil && full != nil {
+					newPrimary := newAuthors[0]
+					full.AuthorID = &firstID
+					full.Author = &newPrimary
+					_, _ = store.UpdateBook(book.ID, full)
+				} else {
+					// Hydration failed — fall back to the projection write so
+					// the AuthorID change still lands (UpdateBook's guard
+					// preserves the old Author/Series; the denormalized Author
+					// is re-derived from AuthorID on read). Never skip the split.
+					_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("author split: hydrate book %s failed, writing projection: %v", book.ID, err))
+					book.AuthorID = &firstID
+					full := book.ToBook()
+					_, _ = store.UpdateBook(book.ID, &full)
+				}
 			}
 			booksUpdated++
 		}
