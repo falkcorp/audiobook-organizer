@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-07-13-merge-serialization-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 3b7f0c92-6a41-4d58-8e12-9c05a2f7e6d4 -->
 <!-- last-edited: 2026-07-13 -->
 
@@ -45,3 +45,18 @@ but the library's record of which copy is the "real" one could be scrambled.
 
 All three fixes ship together and are covered by new tests, including one that
 deliberately runs many merges at once and confirms they no longer collide.
+
+## Follow-up: two more merge paths closed (same day)
+
+The original fix protected the main merge path but deliberately left two related
+paths for a follow-up: **"combine"** (the manual action that folds several
+separate entries into one multi-file book) and the **duplicate-cleanup merge**
+used by the iTunes reconcile and the book-merge cleanup job. Both did the same
+kind of unprotected update and could run at the same time as a regular merge —
+so the exact collision above was still possible through them.
+
+Both are now protected by the *same* lock as the main merge path, so no two
+book-merging actions of any kind can ever overlap on the same book. This closes
+the whole class of problem, not just the one path. New tests run the combine and
+the cleanup-merge concurrently against a regular merge and confirm they take
+turns; each test was checked to genuinely fail if the protection is removed.

@@ -1,5 +1,5 @@
 // file: internal/merge/service_concurrent_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5c8a1f42-9d6b-4e73-8a10-2b4c6d9e0f13
 // last-edited: 2026-07-13
 
@@ -135,5 +135,75 @@ func TestMergeBooks_ConcurrentSamePair_Serializes(t *testing.T) {
 	}
 	if a.MarkedForDeletion == nil || !*a.MarkedForDeletion {
 		t.Fatalf("loser A was not soft-deleted")
+	}
+}
+
+// TestMergeFamily_CombineAndMerge_ShareOneLock proves CombineBooks serializes on
+// the SAME lock as MergeBooks (the package-level mergeSerializeMu). Each
+// goroutine operates on its OWN disjoint pair, so a maxActive>1 can only mean two
+// read-modify-writes overlapped — i.e. the lock was NOT shared — not a data
+// conflict. Even goroutines Combine, odd goroutines Merge; all go through one
+// shared Service+probe. WITH the shared lock maxActive stays 1. Discriminates:
+// reverting CombineBooks' mergeSerializeMu.Lock() lets a Combine overlap a Merge
+// and maxActive reaches 2 (verified during development).
+func TestMergeFamily_CombineAndMerge_ShareOneLock(t *testing.T) {
+	real := setupTestStore(t)
+	probe := &serializeProbe{Store: real}
+	ms := NewService(probe)
+
+	const goroutines = 16
+	type pair struct{ a, b string }
+	pairs := make([]pair, goroutines)
+	for i := range pairs {
+		a := ulid.Make().String()
+		b := ulid.Make().String()
+		// Unique file paths so combine's per-book file materialization never
+		// collides across goroutines.
+		if _, err := real.CreateBook(&database.Book{ID: a, Title: "A", Format: "mp3", FilePath: "/tmp/" + a + ".mp3"}); err != nil {
+			t.Fatalf("CreateBook A: %v", err)
+		}
+		if _, err := real.CreateBook(&database.Book{ID: b, Title: "B", Format: "m4b", FilePath: "/tmp/" + b + ".m4b"}); err != nil {
+			t.Fatalf("CreateBook B: %v", err)
+		}
+		pairs[i] = pair{a, b}
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for i := 0; i < goroutines; i++ {
+		i := i
+		go func() {
+			defer wg.Done()
+			p := pairs[i]
+			if i%2 == 0 {
+				// Combine b into a (a survives, b absorbed + hard-deleted).
+				_, _ = ms.CombineBooks([]string{p.a, p.b}, p.a, nil)
+			} else {
+				// Merge auto-picks the m4b winner (b); a is soft-deleted.
+				_, _ = ms.MergeBooks([]string{p.a, p.b}, "")
+			}
+		}()
+	}
+	wg.Wait()
+
+	if got := atomic.LoadInt32(&probe.maxActive); got != 1 {
+		t.Fatalf("Combine and Merge did NOT share one lock: maxActive=%d, want 1 "+
+			"(a CombineBooks read-modify-write overlapped a MergeBooks)", got)
+	}
+
+	// Spot-check consistency of one pair of each kind.
+	// pair[0] was combined: survivor a alive, absorbed b hard-deleted (gone).
+	if a0, err := real.GetBookByID(pairs[0].a); err != nil || a0 == nil {
+		t.Fatalf("combine survivor A missing: %v", err)
+	}
+	if b0, _ := real.GetBookByID(pairs[0].b); b0 != nil {
+		t.Fatalf("combine absorbed B was not deleted")
+	}
+	// pair[1] was merged: both books share one non-empty version group.
+	a1, _ := real.GetBookByID(pairs[1].a)
+	b1, _ := real.GetBookByID(pairs[1].b)
+	if a1 == nil || b1 == nil || a1.VersionGroupID == nil || b1.VersionGroupID == nil ||
+		*a1.VersionGroupID == "" || *a1.VersionGroupID != *b1.VersionGroupID {
+		t.Fatalf("merged pair not in one consistent version group: a=%+v b=%+v", a1, b1)
 	}
 }

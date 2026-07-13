@@ -1,4 +1,5 @@
 <!-- file: TODO.md -->
+<!-- version: 9.101.0 -->
 <!-- version: 9.100.0 -->
 <!-- version: 9.99.2 -->
 <!-- version: 9.99.1 -->
@@ -56,8 +57,12 @@ redundant Engine-level `mergeMu`). Also: `autoMergeCertain` now writes a provisi
 reversal-journal entry *before* the merge (hard error → skip if it fails) and patches it
 after; `ApplyVerdicts` gained the soft-deleted pre-check + loser candidate cleanup.
 See `docs/executive-summaries/2026-07-13-merge-serialization-executive-summary.md`.
-Adjacent unguarded paths NOT covered (separate follow-up): `dedup.MergeBooks`
-(book_dedup.go, its own store read-modify-write) and `merge.Service.CombineBooks`.
+**Follow-up (2026-07-13, RESOLVED):** the two adjacent unguarded paths flagged here —
+`dedup.MergeBooks` (book_dedup.go) and `merge.Service.CombineBooks` — are now serialized
+on the SAME lock. #1930's per-instance `mergeMu` was promoted to a package-level
+`mergeSerializeMu` (`internal/merge/serialize.go`, exported `LockMergeRMW`/`UnlockMergeRMW`)
+so all three merge-family read-modify-writes are mutually exclusive on a shared book row.
+Shared-lock `-race` tests in both packages, each verified to fail with its lock reverted.
 
 ### ✅ Execution Wave 1 + Wave 2 + Wave 2b shipped (2026-07-10/11) — 15/50 tasks merged
 
