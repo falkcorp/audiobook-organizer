@@ -30,6 +30,28 @@
   calls to distinct locals — same assertion, no permanent suppression.
 - No runtime behavior changed: everything deleted was statically unreachable or a
   deprecated-but-inert sentinel. staticcheck version: 2026.1 (v0.7.0).
+#### July 12, 2026 - fix(dedup): recover composite-calibration coverage via CandidateID join
+
+- **`dedup.calibrate-composite`** (backend) — the composite scorer calibrator was returning
+  `insufficient-coverage` even after a fresh `dedup.full-scan` (only ~234 of ~2,305 labeled
+  pairs carried a `ScoreBreakdown`; `skipped_no_breakdown` ≈ 2,069, below the 500-per-class
+  floor), so the multi-signal path meant to beat the embedding-cosine precision ceiling could
+  not be tuned at all. Root cause: a labeled example snapshots its `ScoreBreakdown` from the
+  candidate at label-write time (`dataset.BuildExample`), but a later full-scan updates the
+  *candidate* record's breakdown in-place without re-snapshotting the example for
+  already-existing pairs (`engine.upsertCandidateWithLiveLabel` re-captures only brand-new
+  pairs), and `dedup.dataset-backfill` re-snapshots only *pending* candidates — so a dismissed
+  `not_dup` example keeps a stale (nil) snapshot forever (the 226-true-dup / 8-not-dup
+  asymmetry seen in the calibrate report).
+- The calibrator now falls back to **joining each stale labeled pair to its candidate record's
+  persisted `ScoreBreakdown` by `CandidateID`** (`GetCandidateByID`) when the example's own
+  snapshot is nil/empty. The join reads data of the identical kind the collectors persisted —
+  no scorer fork, strictly read-only in the calibration path (the operator-gated band-apply is
+  unchanged). A new `joined_from_candidate` counter is reported/logged for observability.
+- Existing examples that already carry their own breakdown never consult the join, so the
+  INIT-1 T5 bit-for-bit scoring pin is preserved. Whether prod coverage now crosses the
+  500-per-class floor must be confirmed by an operator-gated `dedup.calibrate-composite` run
+  (the fix cannot be verified offline).
 
 #### July 12, 2026 - fix(dedup): same-title/high-similarity not_dup mining guard (INIT-1 adjacent)
 
