@@ -74,6 +74,28 @@
 - Tests: year-routing + no-overwrite (`TestApplyMetadataToBook_YearRouting`), Open Library language
   ambiguity (`TestUnambiguousLanguage`, `TestSearchByTitle_AmbiguousLanguageSkipped`), and
   Audible/Audnexus flag assertions. `internal/metafetch` + `internal/metadata` green under `-race`.
+#### July 13, 2026 - test(database): data-loss invariants + regression suite
+
+- **Class-level regression coverage for the four data-loss bug classes** (test-only, no production
+  change). Complements the existing point regression tests with invariants that fail automatically
+  when a future change reintroduces a whole class of bug:
+  - **T1 reflective heavy-field preservation** (`dataloss_preserve_invariant_test.go`) — derives the
+    must-preserve field set by diffing a fully-populated `Book` against `stripBookForMemdb`, then
+    asserts each stripped field survives a memdb-round-trip `UpdateBook`. Adding a heavy field to
+    `stripBookForMemdb` without a matching `UpdateBook` preserve-on-nil guard now fails the build.
+  - **T2 round-trip fidelity** (`dataloss_roundtrip_test.go`) — writes a fully-populated record back
+    UNCHANGED via `UpdateBook`/`UpdateBookFile` and asserts field-by-field equality, with a documented
+    a-priori exclusion set (only derived/dropped fields). A generic wipe detector.
+  - **T3 store-consistency invariants** — `dbtest.AssertStoreInvariants` (public, for the merge
+    package) + a white-box `assertStoreInvariants` (raw index-row scan): no book both live-primary and
+    soft-deleted, no index listing surfaces a deleted book, no dangling secondary-index row. Wired into
+    the existing merge/combine tests.
+  - **T4 concurrency harness** (`-race`) — partitioned interleaved mutations then invariant check.
+  - **T5 key-encoding property test** — delimiter/unicode-laden titles, paths, tags, work IDs, and
+    author/series names resolve to exactly the right record (generalizes the tag-colon-parse fix).
+  - **T6** — added the missing path-rename stale-index-row regression; other scenarios already covered
+    were intentionally not duplicated.
+  - All green under `-race`; no NEW production bug was surfaced by the new invariants.
 
 #### July 13, 2026 - fix(dedup): serialize CombineBooks + dedup.MergeBooks (close merge-race follow-ups from #1930)
 

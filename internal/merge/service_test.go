@@ -1,5 +1,6 @@
 // file: internal/merge/service_test.go
-// version: 1.0.0
+// version: 1.1.0
+// last-edited: 2026-07-13
 
 package merge
 
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/database/dbtest"
 	ulid "github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -74,6 +76,10 @@ func TestService_MergeBooks(t *testing.T) {
 	assert.Equal(t, result.VersionGroupID, *b2.VersionGroupID)
 	require.NotNil(t, b2.IsPrimaryVersion)
 	assert.True(t, *b2.IsPrimaryVersion)
+
+	// Data-loss invariant: a merge must never leave the store inconsistent
+	// (e.g. a book both live-primary and soft-deleted, or a survivor vanished).
+	dbtest.AssertStoreInvariants(t, store)
 }
 
 func TestService_MergeBooks_ExplicitPrimary(t *testing.T) {
