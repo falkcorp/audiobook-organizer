@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/TagEditor.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: b3c4d5e6-f7a8-4b9c-0d1e-2f3a4b5c6d7e
 
 import React, { useState, useRef } from 'react';
@@ -15,6 +15,7 @@ import {
 } from '@mui/material';
 import { Add as AddIcon } from '@mui/icons-material';
 import * as api from '../../services/api';
+import { formatTagLabel, shouldRenderTagChip } from '../../utils/tagDisplay';
 
 interface TagEditorProps {
   bookId: string;
@@ -87,7 +88,11 @@ export const TagEditor: React.FC<TagEditorProps> = ({
     : tags.map((t) => ({ tag: t, source: 'user', created_at: '' }));
 
   const userTags = effectiveTags.filter((t) => !isSystemTag(t.source));
-  const systemTags = effectiveTags.filter((t) => isSystemTag(t.source));
+  // metadata:source:* tags are filter-only (see FilterSidebar) — they never
+  // render as chips here, same as on the book cards.
+  const systemTags = effectiveTags.filter(
+    (t) => isSystemTag(t.source) && shouldRenderTagChip(t.tag)
+  );
 
   const availableSuggestions = allTags.filter(
     (t) => !tags.includes(t.toLowerCase())
@@ -124,7 +129,7 @@ export const TagEditor: React.FC<TagEditorProps> = ({
       title={`System tag (${bt.source}) — applied automatically by the server`}
     >
       <Chip
-        label={bt.tag}
+        label={formatTagLabel(bt.tag)}
         size="small"
         variant="outlined"
         color={systemTagColor(bt.tag)}

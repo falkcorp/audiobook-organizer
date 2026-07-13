@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 9.105.0 -->
+<!-- version: 9.106.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-07-13 -->
+<!-- last-edited: 2026-07-14 -->
 
 # Project TODO
 
@@ -36,6 +36,18 @@ scanner imports are in-place, so their empty `OldPath` is legitimate. Forward-on
 `internal/organizer/service.go` (Store += `PathHistoryStore`). Tests:
 `internal/activity/service_unit_test.go`,
 `internal/organizer/organized_version_writeback_test.go`.
+## ✅ RESOLVED — Display-only cleanup of metadata:* system tags (2026-07-13)
+
+`metadata:language:<code>` and `metadata:source:<name>` tags rendered as raw
+namespaced strings in chips (`metadata:language:en`, `metadata:source:audible`).
+**Fixed**, display-only — storage/API/filter payloads unchanged. New shared helper
+`web/src/utils/tagDisplay.ts` (`formatTagLabel`, `isSourceTag`,
+`shouldRenderTagChip`): language tags now show the language name
+(`Intl.DisplayNames`, uppercased-code fallback); source tags no longer render as
+chips on book cards or in `TagEditor` (filter-only, still listed with a clean
+label in `FilterSidebar`); other `metadata:*` tags have the prefix stripped.
+Changed `AudiobookCard.tsx`, `FilterSidebar.tsx`, `TagEditor.tsx`. 20 new unit/
+component tests; full frontend suite 388/388 passing.
 
 ## ✅ RESOLVED — Metadata rate-limit sharing + per-request throttle + cancellable Audnexus (2026-07-13)
 
