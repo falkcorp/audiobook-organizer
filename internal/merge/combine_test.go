@@ -1,6 +1,7 @@
 // file: internal/merge/combine_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2c8e4d1a-9f3b-4e6a-8b7c-1d2e3f4a5b6c
+// last-edited: 2026-07-13
 // last-edited: 2026-06-21
 
 package merge
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/database/dbtest"
 	ulid "github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -104,6 +106,11 @@ func TestService_CombineBooks(t *testing.T) {
 		assert.True(t, got["PID-1"], "PID-1 reassigned to survivor")
 		assert.True(t, got["PID-3"], "PID-3 reassigned to survivor")
 	}
+
+	// Data-loss invariant: after a combine (which deletes the absorbed books and
+	// materializes files on the survivor) the store must have no dangling index
+	// rows or contradictory book states.
+	dbtest.AssertStoreInvariants(t, store)
 }
 
 func TestService_CombineBooks_TooFew(t *testing.T) {

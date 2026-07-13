@@ -81,6 +81,18 @@ real error, returns a generic message), and clamped the metadata-history
 `?limit=` to 1000. Test: `internal/server/user_tags_authz_test.go` (viewer → 403,
 admin → 200 on all three write routes).
 
+## ✅ DONE — data-loss invariants + regression test suite (test-only, 2026-07-13)
+
+Class-level regression coverage for the four recently-fixed data-loss bug classes
+(write-back wipe, stale embedded-copy/phantom, merge corruption, key-encoding),
+all real tests on a real `PebbleStore`. New: `internal/database/dataloss_*.go`
+(T1 reflective heavy-field preservation, T2 round-trip fidelity, T4 `-race`
+concurrency, T5 key-encoding property, T6 path-rename regression),
+`store_invariants_test.go` (white-box `assertStoreInvariants`), and
+`internal/database/dbtest/invariants.go` (public `AssertStoreInvariants`, wired
+into `internal/merge` combine/merge tests). All green under `-race`; no new
+production bug surfaced. No production code changed.
+
 ## 📦 2026-07-10 Remaining-Work Planning Packages — READY FOR EXECUTION
 
 Ten full planning packages (spec + plan + task briefs) covering INIT-1..10 of the
