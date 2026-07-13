@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
-// last-edited: 2026-07-07
+// last-edited: 2026-07-13
 
 // Package metadatahandler hosts the metadata-domain HTTP handlers extracted
 // from the server package's metadata_handlers.go: batch-update / validate /
@@ -57,7 +57,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -67,6 +66,7 @@ import (
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
+	"github.com/gin-gonic/gin"
 	ulid "github.com/oklog/ulid/v2"
 )
 
@@ -427,7 +427,7 @@ func (h *Handler) fetchAudiobookMetadataImpl(c *gin.Context) {
 		return
 	}
 
-	resp, err := h.metadataFetchService.FetchMetadataForBook(id)
+	resp, err := h.metadataFetchService.FetchMetadataForBook(c.Request.Context(), id)
 	if err != nil {
 		httputil.RespondWithError(c, 404, err.Error(), "NOT_FOUND")
 		return

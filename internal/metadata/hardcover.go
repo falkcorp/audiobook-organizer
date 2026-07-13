@@ -1,6 +1,7 @@
 // file: internal/metadata/hardcover.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: e7e02554-8931-49ba-9528-d3d51279da1d
+// last-edited: 2026-07-13
 
 package metadata
 
@@ -209,23 +210,24 @@ language`
 // precise than the fuzzy search_books endpoint), falling back to a
 // title+author query. ASIN isn't something Hardcover indexes directly
 // so we ignore that field.
-func (c *HardcoverClient) SearchByContext(ctx *SearchContext) ([]BookMetadata, error) {
+func (c *HardcoverClient) SearchByContext(ctx context.Context, sc *SearchContext) ([]BookMetadata, error) {
 	if c.apiToken == "" {
 		return nil, nil
 	}
-	if ctx == nil {
+	if sc == nil {
 		return nil, nil
 	}
-	// Prefer ISBN-13 → ISBN-10 → title+author.
+	// Prefer ISBN-13 → ISBN-10 → title+author. ctx is the caller's real context
+	// so a batch/import cancel aborts the GraphQL request promptly.
 	switch {
-	case ctx.ISBN13 != "":
-		return c.search(context.Background(), ctx.ISBN13)
-	case ctx.ISBN10 != "":
-		return c.search(context.Background(), ctx.ISBN10)
-	case ctx.Title != "" && ctx.Author != "":
-		return c.search(context.Background(), ctx.Title+" "+ctx.Author)
-	case ctx.Title != "":
-		return c.search(context.Background(), ctx.Title)
+	case sc.ISBN13 != "":
+		return c.search(ctx, sc.ISBN13)
+	case sc.ISBN10 != "":
+		return c.search(ctx, sc.ISBN10)
+	case sc.Title != "" && sc.Author != "":
+		return c.search(ctx, sc.Title+" "+sc.Author)
+	case sc.Title != "":
+		return c.search(ctx, sc.Title)
 	}
 	return nil, nil
 }

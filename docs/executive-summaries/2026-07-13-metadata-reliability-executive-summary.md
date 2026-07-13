@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-07-13-metadata-reliability-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 9d2f6b41-8c37-4e5a-b0d9-1a2c3e4f5b6a -->
 <!-- last-edited: 2026-07-13 -->
 
@@ -43,10 +43,19 @@ individual problem books — with a "cancel" that didn't fully work. No book dat
 was lost or corrupted; this is about the app being well-behaved and responsive
 when talking to the outside world.
 
-## Known limitation
+## Known limitation (now resolved — 2026-07-13)
 
-The everyday auto-fetch path (used when importing) is now *bounded* — it can no
-longer hang for 270 seconds — but it can't yet be *instantly* cancelled mid-book,
-because that entry point doesn't carry a cancellation signal. Worst case there is
-about 90 seconds per stuck book. Making it instantly cancellable is a tracked
-follow-up.
+The everyday auto-fetch path (used when importing) was *bounded* — it could no
+longer hang for 270 seconds — but it could not yet be *instantly* cancelled
+mid-book, because that entry point did not carry a cancellation signal (worst case
+~90 seconds per stuck book). **This is now fixed:** the cancellation signal is
+threaded all the way from the caller (import, organize, or a web request) down
+through the lookup and into the regional-store loop, so pressing "cancel" on a
+batch or import stops an in-flight lookup right away instead of waiting out the
+~90-second bound.
+
+Shipped alongside it: a small cache-correctness fix. When the app remembers a
+previous Audible/Audnexus lookup, older remembered entries (saved before a recent
+release-vs-print-year fix) could briefly file the audiobook's *release* year in the
+*print* year slot until that memory expired. Those entries now correct themselves
+the moment they're re-read, so the year lands in the right place with no re-fetch.

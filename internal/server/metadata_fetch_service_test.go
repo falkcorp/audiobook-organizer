@@ -67,7 +67,7 @@ func TestMetadataFetchService_FetchMetadataForBook_NotFound(t *testing.T) {
 	}
 	mfs := metafetch.NewService(mockDB)
 
-	_, err := mfs.FetchMetadataForBook("nonexistent")
+	_, err := mfs.FetchMetadataForBook(context.Background(), "nonexistent")
 
 	if err == nil {
 		t.Error("expected error for nonexistent book")
@@ -136,7 +136,7 @@ func TestMetadataFetchService_NoSourcesEnabled(t *testing.T) {
 	}
 	mfs := metafetch.NewService(mockDB)
 
-	_, err := mfs.FetchMetadataForBook("book1")
+	_, err := mfs.FetchMetadataForBook(context.Background(), "book1")
 	if err == nil {
 		t.Error("expected error when no sources enabled")
 	}
@@ -171,7 +171,7 @@ func TestMetadataFetchService_Source1Fails_Source2Succeeds(t *testing.T) {
 	}
 	mfs.SetOverrideSources([]metadata.MetadataSource{source1, source2})
 
-	resp, err := mfs.FetchMetadataForBook("book1")
+	resp, err := mfs.FetchMetadataForBook(context.Background(), "book1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -211,7 +211,7 @@ func TestMetadataFetchService_TitleStrippingFallback(t *testing.T) {
 	}
 	mfs.SetOverrideSources([]metadata.MetadataSource{src})
 
-	resp, err := mfs.FetchMetadataForBook("book1")
+	resp, err := mfs.FetchMetadataForBook(context.Background(), "book1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -243,7 +243,7 @@ func TestMetadataFetchService_AllSourcesNoResults(t *testing.T) {
 	}
 	mfs.SetOverrideSources([]metadata.MetadataSource{emptySrc("A"), emptySrc("B"), emptySrc("C")})
 
-	_, err := mfs.FetchMetadataForBook("book1")
+	_, err := mfs.FetchMetadataForBook(context.Background(), "book1")
 	if err == nil {
 		t.Fatal("expected error when all sources return no results")
 	}
@@ -270,7 +270,7 @@ func TestMetadataFetchService_AllSourcesError(t *testing.T) {
 	}
 	mfs.SetOverrideSources([]metadata.MetadataSource{errSrc("SourceA"), errSrc("SourceB")})
 
-	_, err := mfs.FetchMetadataForBook("book1")
+	_, err := mfs.FetchMetadataForBook(context.Background(), "book1")
 	if err == nil {
 		t.Fatal("expected error when all sources return errors")
 	}
@@ -378,7 +378,7 @@ func TestMetadataFetchService_AuthorLookupFails(t *testing.T) {
 	}
 	mfs.SetOverrideSources([]metadata.MetadataSource{src})
 
-	resp, err := mfs.FetchMetadataForBook("book1")
+	resp, err := mfs.FetchMetadataForBook(context.Background(), "book1")
 	if err != nil {
 		t.Fatalf("search should proceed despite author lookup failure: %v", err)
 	}
@@ -895,7 +895,7 @@ func TestFetchMetadataForBook_BoxSetRejected_IndividualBookApplied(t *testing.T)
 	mfs := metafetch.NewService(mockDB)
 	mfs.SetOverrideSources([]metadata.MetadataSource{src})
 
-	resp, err := mfs.FetchMetadataForBook("book1")
+	resp, err := mfs.FetchMetadataForBook(context.Background(), "book1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

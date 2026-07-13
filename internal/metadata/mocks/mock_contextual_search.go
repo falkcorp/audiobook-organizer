@@ -5,6 +5,8 @@
 package mocks
 
 import (
+	"context"
+
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	mock "github.com/stretchr/testify/mock"
 )
@@ -37,8 +39,8 @@ func (_m *MockContextualSearch) EXPECT() *MockContextualSearch_Expecter {
 }
 
 // SearchByContext provides a mock function for the type MockContextualSearch
-func (_mock *MockContextualSearch) SearchByContext(ctx *metadata.SearchContext) ([]metadata.BookMetadata, error) {
-	ret := _mock.Called(ctx)
+func (_mock *MockContextualSearch) SearchByContext(ctx context.Context, sc *metadata.SearchContext) ([]metadata.BookMetadata, error) {
+	ret := _mock.Called(ctx, sc)
 
 	if len(ret) == 0 {
 		panic("no return value specified for SearchByContext")
@@ -46,18 +48,18 @@ func (_mock *MockContextualSearch) SearchByContext(ctx *metadata.SearchContext) 
 
 	var r0 []metadata.BookMetadata
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(*metadata.SearchContext) ([]metadata.BookMetadata, error)); ok {
-		return returnFunc(ctx)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, *metadata.SearchContext) ([]metadata.BookMetadata, error)); ok {
+		return returnFunc(ctx, sc)
 	}
-	if returnFunc, ok := ret.Get(0).(func(*metadata.SearchContext) []metadata.BookMetadata); ok {
-		r0 = returnFunc(ctx)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, *metadata.SearchContext) []metadata.BookMetadata); ok {
+		r0 = returnFunc(ctx, sc)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).([]metadata.BookMetadata)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(*metadata.SearchContext) error); ok {
-		r1 = returnFunc(ctx)
+	if returnFunc, ok := ret.Get(1).(func(context.Context, *metadata.SearchContext) error); ok {
+		r1 = returnFunc(ctx, sc)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -70,19 +72,25 @@ type MockContextualSearch_SearchByContext_Call struct {
 }
 
 // SearchByContext is a helper method to define mock.On call
-//   - ctx *metadata.SearchContext
-func (_e *MockContextualSearch_Expecter) SearchByContext(ctx any) *MockContextualSearch_SearchByContext_Call {
-	return &MockContextualSearch_SearchByContext_Call{Call: _e.mock.On("SearchByContext", ctx)}
+//   - ctx context.Context
+//   - sc *metadata.SearchContext
+func (_e *MockContextualSearch_Expecter) SearchByContext(ctx any, sc any) *MockContextualSearch_SearchByContext_Call {
+	return &MockContextualSearch_SearchByContext_Call{Call: _e.mock.On("SearchByContext", ctx, sc)}
 }
 
-func (_c *MockContextualSearch_SearchByContext_Call) Run(run func(ctx *metadata.SearchContext)) *MockContextualSearch_SearchByContext_Call {
+func (_c *MockContextualSearch_SearchByContext_Call) Run(run func(ctx context.Context, sc *metadata.SearchContext)) *MockContextualSearch_SearchByContext_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 *metadata.SearchContext
+		var arg0 context.Context
 		if args[0] != nil {
-			arg0 = args[0].(*metadata.SearchContext)
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 *metadata.SearchContext
+		if args[1] != nil {
+			arg1 = args[1].(*metadata.SearchContext)
 		}
 		run(
 			arg0,
+			arg1,
 		)
 	})
 	return _c
@@ -93,7 +101,7 @@ func (_c *MockContextualSearch_SearchByContext_Call) Return(bookMetadatas []meta
 	return _c
 }
 
-func (_c *MockContextualSearch_SearchByContext_Call) RunAndReturn(run func(ctx *metadata.SearchContext) ([]metadata.BookMetadata, error)) *MockContextualSearch_SearchByContext_Call {
+func (_c *MockContextualSearch_SearchByContext_Call) RunAndReturn(run func(ctx context.Context, sc *metadata.SearchContext) ([]metadata.BookMetadata, error)) *MockContextualSearch_SearchByContext_Call {
 	_c.Call.Return(run)
 	return _c
 }

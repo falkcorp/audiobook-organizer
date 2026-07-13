@@ -6,6 +6,7 @@
 package organizer
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1192,7 +1193,7 @@ func TestNewService(t *testing.T) {
 	if p := svc.ComputeITunesPath("/file"); p != "" {
 		t.Errorf("default ComputeITunesPath should return empty, got %q", p)
 	}
-	r, err := svc.FetchMetadataForBook("any")
+	r, err := svc.FetchMetadataForBook(context.Background(), "any")
 	if r != nil || err != nil {
 		t.Errorf("default FetchMetadataForBook should return nil/nil, got %v/%v", r, err)
 	}

@@ -1,5 +1,5 @@
 // file: internal/organizer/service.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
 // last-edited: 2026-07-13
 
@@ -73,7 +73,9 @@ type Service struct {
 
 	// FetchMetadataForBook fetches metadata for a book by ID.
 	// Returns (result, error). Breaks the metafetch import cycle.
-	FetchMetadataForBook func(bookID string) (interface{}, error)
+	// ctx is threaded so a cancelled organize op aborts an in-flight external
+	// metadata fetch promptly.
+	FetchMetadataForBook func(ctx context.Context, bookID string) (interface{}, error)
 }
 
 // SetWriteBackBatcher sets the iTunes write-back batcher.
@@ -107,7 +109,7 @@ func NewService(db Store) *Service {
 		},
 		ApplyOrganizedFileMetadata: func(book *database.Book, newPath string) {},
 		ComputeITunesPath:          func(_ string) string { return "" },
-		FetchMetadataForBook:       func(_ string) (interface{}, error) { return nil, nil },
+		FetchMetadataForBook:       func(_ context.Context, _ string) (interface{}, error) { return nil, nil },
 	}
 }
 
@@ -199,7 +201,7 @@ func (orgSvc *Service) PerformOrganize(ctx context.Context, req *Request, log lo
 			if book.CoverURL != nil {
 				continue // already enriched
 			}
-			if _, err := orgSvc.FetchMetadataForBook(book.ID); err == nil {
+			if _, err := orgSvc.FetchMetadataForBook(ctx, book.ID); err == nil {
 				enriched++
 			}
 		}

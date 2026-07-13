@@ -1,5 +1,5 @@
 // file: internal/itunes/service/importer.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
 // last-edited: 2026-07-13
 
@@ -115,7 +115,7 @@ type Importer struct {
 // database.Store pair through a live metafetch.Service. *metafetch.Service
 // satisfies this interface unmodified — newImporter's wiring is unaffected.
 type metadataFetcher interface {
-	FetchMetadataForBook(id string) (*metafetch.FetchMetadataResponse, error)
+	FetchMetadataForBook(ctx context.Context, id string) (*metafetch.FetchMetadataResponse, error)
 }
 
 func newImporter(deps Deps) *Importer {
@@ -1070,8 +1070,8 @@ func (imp *Importer) enrichImportedBooks(ctx context.Context, status *itunesImpo
 
 	reporter := &loggerReporterAdapter{log: log}
 
-	runErr := registry.RunItems(enrichCtx, reporter, toEnrich, func(_ context.Context, book *database.BookCore) error {
-		resp, err := imp.mfs.FetchMetadataForBook(book.ID)
+	runErr := registry.RunItems(enrichCtx, reporter, toEnrich, func(itemCtx context.Context, book *database.BookCore) error {
+		resp, err := imp.mfs.FetchMetadataForBook(itemCtx, book.ID)
 		if err != nil {
 			log.Debug("No metadata found for '%s': %v", book.Title, err)
 			if atomic.AddInt32(&breakerFails, 1) >= enrichBreakerThreshold {

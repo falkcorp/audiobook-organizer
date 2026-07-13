@@ -214,7 +214,7 @@ func TestAudnexusClient_SearchByContext_UsesASIN(t *testing.T) {
 	client := NewAudnexusClientWithBaseURL(server.URL)
 
 	// With ASIN: should hit LookupByASIN and return one result.
-	results, err := client.SearchByContext(&SearchContext{
+	results, err := client.SearchByContext(context.Background(), &SearchContext{
 		Title:  "The Hobbit",
 		Author: "Tolkien",
 		ASIN:   "B003JVHRU0",
@@ -230,7 +230,7 @@ func TestAudnexusClient_SearchByContext_UsesASIN(t *testing.T) {
 	}
 
 	// Without ASIN: should return (nil, nil) so the chain falls through.
-	results, err = client.SearchByContext(&SearchContext{
+	results, err = client.SearchByContext(context.Background(), &SearchContext{
 		Title:  "The Hobbit",
 		Author: "Tolkien",
 	})
@@ -242,7 +242,7 @@ func TestAudnexusClient_SearchByContext_UsesASIN(t *testing.T) {
 	}
 
 	// Nil context: same — return (nil, nil) cleanly, not a panic.
-	results, err = client.SearchByContext(nil)
+	results, err = client.SearchByContext(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

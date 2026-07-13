@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.103.0 -->
+<!-- version: 9.104.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-13 -->
 
@@ -33,11 +33,15 @@ op consumed the 10 req/s limiter once per book while issuing many HTTP calls per
 looped 9 regions with no context (up to 270s, uncancellable). **Fixed** with
 `http.NewRequestWithContext` per region + `ctx.Done()` bail + 10s per-request timeout.
 
-**Follow-up (open):** the auto-fetch/importer path (`FetchMetadataForBook` →
-`SearchByContext` → `LookupByASIN`) is now bounded to ~90s but not promptly cancellable,
-because `FetchMetadataForBook` has no `context.Context`. Threading a ctx through
-`FetchMetadataForBook` (+ its interface, mock, and the itunes-importer/organizer/handler
-call sites) would make that path fully cancellable.
+**Follow-up (RESOLVED 2026-07-13):** the auto-fetch/importer path
+(`FetchMetadataForBook` → `SearchByContext` → `LookupByASIN`) is now fully
+cancellable. A real `context.Context` is threaded (first param) from every caller
+through `FetchMetadataForBook` → the source loop → each `Search*` call and the
+Audnexus `LookupByASIN`; `ContextualSearch.SearchByContext` now takes a ctx too.
+A cancelled context aborts an in-flight fetch promptly, well under the ~90s bound.
+(`FetchMetadataForBookByTitle` left as-is — it never touches SearchByContext/
+LookupByASIN, so it is not the ~90s hotspot.) Test:
+`internal/metafetch/service_fetch_followups_test.go`.
 
 Files: `internal/metafetch/service.go`, `internal/metafetch/service_search.go`,
 `internal/metafetch/cache.go`, `internal/metadata/audnexus.go`,
@@ -87,12 +91,15 @@ path derives the kind from `candidate.Source` via
 `TestUnambiguousLanguage`, `TestSearchByTitle_AmbiguousLanguageSkipped`, plus
 Audible/Audnexus flag assertions.
 
-- **Optional follow-up (deferred, low priority):** the fetch cache stores parsed
-  `[]BookMetadata`; pre-deploy Audible/Audnexus entries deserialize with the flag
-  `false` and transiently route release year to `PrintYear` until TTL expiry
-  (bounded, non-clobbering). Could be hardened by re-deriving the flag from
-  `src.Name()` at the two cache-hit replay sites (`service_fetch.go`,
-  `service_search.go`) — left out to keep this PR off `service_search.go`.
+- **Optional follow-up (RESOLVED 2026-07-13):** the fetch cache stores parsed
+  `[]BookMetadata`; pre-deploy Audible/Audnexus entries deserialized with the flag
+  `false` and transiently routed release year to `PrintYear` until TTL expiry.
+  **Fixed** by re-deriving `PublishYearIsAudiobookRelease` from `src.Name()` (via
+  `metadata.SourceProducesAudiobookReleaseYear`) on cache READ at both replay sites
+  (`service_fetch.go` — load-bearing, feeds `ApplyMetadataToBook`; `service_search.go`
+  — mirrored for consistency). Cheap, self-healing, no re-fetch. Test:
+  `internal/metafetch/service_fetch_followups_test.go`
+  (`TestFetchMetadataForBook_StaleCacheYearKindSelfCorrected`).
 
 ## ✅ RESOLVED — book user-tags write routes had no permission guard (2026-07-13)
 

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/interfaces.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b1ab2e4a-1f73-42f2-955d-c4a30f0fbaac
-// last-edited: 2026-07-11
+// last-edited: 2026-07-13
 
 // Narrow dependency interfaces for the metadata-domain HTTP handlers (the 19
 // per-book + library metadata endpoints extracted from the server package's
@@ -99,7 +99,7 @@ type MetadataStore interface {
 // (writeBackAudiobookMetadata) can invoke it both with and without a segment
 // list, matching the original.
 type MetadataFetchService interface {
-	FetchMetadataForBook(id string) (*metafetch.FetchMetadataResponse, error)
+	FetchMetadataForBook(ctx context.Context, id string) (*metafetch.FetchMetadataResponse, error)
 	InvalidateCachedCandidates(bookID string) error
 	GetCachedCandidates(bookID string) (*metafetch.MetadataCandidateCache, bool, error)
 	FetchAndCache(ctx context.Context, bookID, query, author, narrator, series string, opts metafetch.SearchOptions) (*metafetch.MetadataCandidateCache, error)

@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.151.0 -->
+<!-- version: 3.152.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-13 -->
 
@@ -8,6 +8,47 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 13, 2026 - fix(metafetch): thread context through FetchMetadataForBook + self-correct stale year-kind cache entries
+
+Resolves the two documented follow-ups left by PRs #1940/#1942 in the metadata layer:
+
+- **Auto-fetch/importer path was not promptly cancellable (follow-up from #1942).**
+  #1942 made the Audnexus multi-region ASIN lookup cancellable and ~90s-bounded,
+  but `FetchMetadataForBook` (and the interface + search/fetch chain it drives)
+  carried no `context.Context`, so a batch/import cancel could not interrupt an
+  in-flight external fetch until the ~90s bound elapsed. **Fixed** by threading a
+  real `context.Context` (as the first parameter, Go convention) from every caller
+  through `FetchMetadataForBook` → the source loop → each `SearchByTitle` /
+  `SearchByTitleAndAuthor` / `SearchByContext` call, and wiring it into the
+  already-ctx-aware Audnexus `LookupByASIN`. `ContextualSearch.SearchByContext` now
+  takes a `context.Context` (Audnexus/Hardcover/ProtectedSource + mock updated), so
+  the placeholder `context.Background()` those paths used is gone. Callers updated:
+  itunes importer (uses the RunItems per-item ctx), the metadata HTTP handler
+  (`c.Request.Context()`), and the organizer's injected fetch closure (threads
+  `PerformOrganize`'s ctx). A cancelled context now aborts an in-flight
+  `FetchMetadataForBook` promptly, well under the ~90s bound. `FetchMetadataForBookByTitle`
+  is intentionally left as-is (it never calls `SearchByContext`/`LookupByASIN`, so
+  it is not the ~90s hotspot); its scheduler/entities-ops callers are unchanged.
+- **Stale fetch-cache entries routed an Audible/Audnexus release year to PrintYear
+  (follow-up from #1940).** #1940 added `PublishYearIsAudiobookRelease` to
+  `BookMetadata`; the fetch cache stores parsed `[]BookMetadata`, so entries cached
+  BEFORE the deploy deserialize with the new bool defaulting to `false` and, on
+  replay, routed an Audible/Audnexus RELEASE year to `PrintYear` for one cache-TTL
+  window. **Fixed** on cache READ by re-deriving `PublishYearIsAudiobookRelease`
+  from the entry's stored source (the cache key includes `src.Name()`) via
+  `metadata.SourceProducesAudiobookReleaseYear` — cheaper than a schema bump and
+  self-healing with no re-fetch. Applied at the load-bearing fetch-path replay site
+  (`service_fetch.go`, which feeds `ApplyMetadataToBook`) and mirrored on the
+  search-path replay site (`service_search.go`) for consistency.
+
+Tests: cancelled-context aborts an in-flight `FetchMetadataForBook` promptly, and a
+pre-#1940 cached Audible entry is corrected on read so its year routes to
+`AudiobookReleaseYear` (not `PrintYear`) — both in
+`internal/metafetch/service_fetch_followups_test.go`. `go build ./...` clean (proves
+every caller was updated); `internal/metafetch` + `internal/metadata` +
+`internal/metabatch` green under `-race`; targeted `internal/server` metadata/import
+tests green; `go vet` + `gofmt` clean.
 
 #### July 13, 2026 - fix(metafetch): share rate-limiter/breaker across batch + per-request throttle + cancellable Audnexus lookup
 

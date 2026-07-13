@@ -305,8 +305,8 @@ func (_c *MockMetadataFetchService_FetchAndCache_Call) RunAndReturn(run func(ctx
 }
 
 // FetchMetadataForBook provides a mock function for the type MockMetadataFetchService
-func (_mock *MockMetadataFetchService) FetchMetadataForBook(id string) (*metafetch.FetchMetadataResponse, error) {
-	ret := _mock.Called(id)
+func (_mock *MockMetadataFetchService) FetchMetadataForBook(ctx context.Context, id string) (*metafetch.FetchMetadataResponse, error) {
+	ret := _mock.Called(ctx, id)
 
 	if len(ret) == 0 {
 		panic("no return value specified for FetchMetadataForBook")
@@ -314,18 +314,18 @@ func (_mock *MockMetadataFetchService) FetchMetadataForBook(id string) (*metafet
 
 	var r0 *metafetch.FetchMetadataResponse
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string) (*metafetch.FetchMetadataResponse, error)); ok {
-		return returnFunc(id)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) (*metafetch.FetchMetadataResponse, error)); ok {
+		return returnFunc(ctx, id)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string) *metafetch.FetchMetadataResponse); ok {
-		r0 = returnFunc(id)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) *metafetch.FetchMetadataResponse); ok {
+		r0 = returnFunc(ctx, id)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*metafetch.FetchMetadataResponse)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
-		r1 = returnFunc(id)
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string) error); ok {
+		r1 = returnFunc(ctx, id)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -338,19 +338,25 @@ type MockMetadataFetchService_FetchMetadataForBook_Call struct {
 }
 
 // FetchMetadataForBook is a helper method to define mock.On call
+//   - ctx context.Context
 //   - id string
-func (_e *MockMetadataFetchService_Expecter) FetchMetadataForBook(id any) *MockMetadataFetchService_FetchMetadataForBook_Call {
-	return &MockMetadataFetchService_FetchMetadataForBook_Call{Call: _e.mock.On("FetchMetadataForBook", id)}
+func (_e *MockMetadataFetchService_Expecter) FetchMetadataForBook(ctx any, id any) *MockMetadataFetchService_FetchMetadataForBook_Call {
+	return &MockMetadataFetchService_FetchMetadataForBook_Call{Call: _e.mock.On("FetchMetadataForBook", ctx, id)}
 }
 
-func (_c *MockMetadataFetchService_FetchMetadataForBook_Call) Run(run func(id string)) *MockMetadataFetchService_FetchMetadataForBook_Call {
+func (_c *MockMetadataFetchService_FetchMetadataForBook_Call) Run(run func(ctx context.Context, id string)) *MockMetadataFetchService_FetchMetadataForBook_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 string
+		var arg0 context.Context
 		if args[0] != nil {
-			arg0 = args[0].(string)
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
 		}
 		run(
 			arg0,
+			arg1,
 		)
 	})
 	return _c
@@ -361,7 +367,7 @@ func (_c *MockMetadataFetchService_FetchMetadataForBook_Call) Return(fetchMetada
 	return _c
 }
 
-func (_c *MockMetadataFetchService_FetchMetadataForBook_Call) RunAndReturn(run func(id string) (*metafetch.FetchMetadataResponse, error)) *MockMetadataFetchService_FetchMetadataForBook_Call {
+func (_c *MockMetadataFetchService_FetchMetadataForBook_Call) RunAndReturn(run func(ctx context.Context, id string) (*metafetch.FetchMetadataResponse, error)) *MockMetadataFetchService_FetchMetadataForBook_Call {
 	_c.Call.Return(run)
 	return _c
 }

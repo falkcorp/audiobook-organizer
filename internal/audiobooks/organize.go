@@ -1,7 +1,7 @@
 // file: internal/audiobooks/organize.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
-// last-edited: 2026-05-05
+// last-edited: 2026-07-13
 //
 // Thin forwarding layer — the real implementation now lives in
 // internal/organizer/service.go. This file provides type aliases and
@@ -11,6 +11,8 @@
 package audiobooks
 
 import (
+	"context"
+
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
@@ -33,9 +35,9 @@ func NewOrganizeService(db database.Store) *OrganizeService {
 		scanner.ApplyOrganizedFileMetadata(book, newPath)
 	}
 	svc.ComputeITunesPath = metafetch.ComputeITunesPath
-	svc.FetchMetadataForBook = func(bookID string) (interface{}, error) {
+	svc.FetchMetadataForBook = func(ctx context.Context, bookID string) (interface{}, error) {
 		mfs := metafetch.NewService(db)
-		return mfs.FetchMetadataForBook(bookID)
+		return mfs.FetchMetadataForBook(ctx, bookID)
 	}
 
 	return svc

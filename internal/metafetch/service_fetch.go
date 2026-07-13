@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_fetch.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: b24c7a25-2efa-4b85-adb0-2d591218eff2
-// last-edited: 2026-07-03
+// last-edited: 2026-07-13
 
 package metafetch
 
@@ -32,16 +32,25 @@ func (mfs *Service) queueISBNEnrichment(id string, book *database.Book) {
 	go func(bid string) {
 		found, err := mfs.isbnEnrichment.EnrichBookISBN(context.Background(), bid)
 		if err != nil {
-						slog.Warn("ISBN enrichment failed for", "id", bid, "error", err)
+			slog.Warn("ISBN enrichment failed for", "id", bid, "error", err)
 		} else if found {
-						slog.Info("ISBN enrichment succeeded for", "id", bid)
+			slog.Info("ISBN enrichment succeeded for", "id", bid)
 		}
 	}(id)
 }
 
 // FetchMetadataForBook fetches and applies metadata for a single audiobook,
 // trying each configured source in priority order until one succeeds.
-func (mfs *Service) FetchMetadataForBook(id string) (*FetchMetadataResponse, error) {
+//
+// ctx is threaded end-to-end into every source Search* call and the Audnexus
+// ASIN lookup, so a batch/import cancel (or timeout) aborts an in-flight
+// external fetch promptly instead of waiting out the ~90s Audnexus region-loop
+// bound. Callers with no natural context may pass context.Background().
+func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*FetchMetadataResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	book, err := mfs.db.GetBookByID(id)
 	if err != nil || book == nil {
 		return nil, fmt.Errorf("audiobook not found")
@@ -100,6 +109,11 @@ func (mfs *Service) FetchMetadataForBook(id string) (*FetchMetadataResponse, err
 
 	var lastErr error
 	for _, src := range sources {
+		// Stop promptly if the caller cancelled — don't start another source.
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
 		var results []metadata.BookMetadata
 		var searchErr error
 
@@ -111,8 +125,21 @@ func (mfs *Service) FetchMetadataForBook(id string) (*FetchMetadataResponse, err
 		if cached, _, cerr := database.GetCachedMetadataFetchWithMaxAge(mfs.db, id, src.Name(), maxAge); cerr == nil && cached != nil {
 			var cachedResults []metadata.BookMetadata
 			if jerr := json.Unmarshal(cached.Results, &cachedResults); jerr == nil && len(cachedResults) > 0 {
+				// Self-correct stale entries: the fetch cache stores parsed
+				// []BookMetadata, and entries cached BEFORE the year-kind flag
+				// (PublishYearIsAudiobookRelease, #1940) shipped deserialize with
+				// it defaulting to false — so an Audible/Audnexus RELEASE year
+				// would wrongly route to PrintYear on replay for one TTL window.
+				// The cache key includes src.Name(), so we re-derive the flag from
+				// the source here (cheap, self-healing, no re-fetch). This is the
+				// load-bearing site — results below feed ApplyMetadataToBook, which
+				// reads meta.PublishYearIsAudiobookRelease directly.
+				isRelease := metadata.SourceProducesAudiobookReleaseYear(src.Name())
+				for i := range cachedResults {
+					cachedResults[i].PublishYearIsAudiobookRelease = isRelease
+				}
 				results = cachedResults
-								slog.Debug("metadata-fetch cache HIT for ( ) — results, age", "id", id, "name", src.Name(), "count", len(cachedResults), "value", time.Since(cached.CachedAt).Round(time.Second))
+				slog.Debug("metadata-fetch cache HIT for ( ) — results, age", "id", id, "name", src.Name(), "count", len(cachedResults), "value", time.Since(cached.CachedAt).Round(time.Second))
 			}
 		}
 
@@ -125,10 +152,10 @@ func (mfs *Service) FetchMetadataForBook(id string) (*FetchMetadataResponse, err
 			// search. Sources that don't implement the interface just
 			// fall through to the title/author path below.
 			if ctxSearch, ok := src.(metadata.ContextualSearch); ok {
-				ctx := mfs.buildSearchContext(book, searchTitle, currentAuthor, currentNarrator)
-				results, searchErr = ctxSearch.SearchByContext(ctx)
+				sctx := mfs.buildSearchContext(book, searchTitle, currentAuthor, currentNarrator)
+				results, searchErr = ctxSearch.SearchByContext(ctx, sctx)
 				if searchErr != nil {
-										slog.Warn("context search failed for", "name", src.Name(), "value", book.Title, "error", searchErr)
+					slog.Warn("context search failed for", "name", src.Name(), "value", book.Title, "error", searchErr)
 					// Context search failure is non-fatal — fall through
 					// to the regular title/author path in case that works.
 				}
@@ -136,24 +163,24 @@ func (mfs *Service) FetchMetadataForBook(id string) (*FetchMetadataResponse, err
 
 			// Try title+author search first for better match quality
 			if len(results) == 0 && currentAuthor != "" {
-				results, searchErr = src.SearchByTitleAndAuthor(context.Background(), searchTitle, currentAuthor)
+				results, searchErr = src.SearchByTitleAndAuthor(ctx, searchTitle, currentAuthor)
 				if searchErr != nil {
-										slog.Warn("title+author search failed for by", "name", src.Name(), "searchTitle", searchTitle, "currentAuthor", currentAuthor, "error", searchErr)
+					slog.Warn("title+author search failed for by", "name", src.Name(), "searchTitle", searchTitle, "currentAuthor", currentAuthor, "error", searchErr)
 				}
 			}
 
 			// Fall back to title-only search
 			if len(results) == 0 {
-				results, searchErr = src.SearchByTitle(context.Background(), searchTitle)
+				results, searchErr = src.SearchByTitle(ctx, searchTitle)
 				if searchErr != nil {
-										slog.Warn("failed for", "name", src.Name(), "value", searchTitle, "error", searchErr)
+					slog.Warn("failed for", "name", src.Name(), "value", searchTitle, "error", searchErr)
 					lastErr = searchErr
 				}
 			}
 
 			// Try original title if cleaned title returned nothing
 			if len(results) == 0 && searchTitle != book.Title {
-				results, searchErr = src.SearchByTitle(context.Background(), book.Title)
+				results, searchErr = src.SearchByTitle(ctx, book.Title)
 				if searchErr != nil {
 					lastErr = searchErr
 					continue
@@ -164,7 +191,7 @@ func (mfs *Service) FetchMetadataForBook(id string) (*FetchMetadataResponse, err
 			if len(results) == 0 {
 				strippedTitle := stripSubtitle(searchTitle)
 				if strippedTitle != searchTitle && strippedTitle != book.Title {
-					results, searchErr = src.SearchByTitle(context.Background(), strippedTitle)
+					results, searchErr = src.SearchByTitle(ctx, strippedTitle)
 					if searchErr != nil {
 						lastErr = searchErr
 						continue
@@ -179,10 +206,10 @@ func (mfs *Service) FetchMetadataForBook(id string) (*FetchMetadataResponse, err
 			// have one for a tighter match.
 			if len(results) == 0 && th.title != "" && th.title != searchTitle && th.title != book.Title {
 				if th.author != "" {
-					results, searchErr = src.SearchByTitleAndAuthor(context.Background(), th.title, th.author)
+					results, searchErr = src.SearchByTitleAndAuthor(ctx, th.title, th.author)
 				}
 				if len(results) == 0 {
-					results, searchErr = src.SearchByTitle(context.Background(), th.title)
+					results, searchErr = src.SearchByTitle(ctx, th.title)
 				}
 				if searchErr != nil {
 					lastErr = searchErr
@@ -194,14 +221,14 @@ func (mfs *Service) FetchMetadataForBook(id string) (*FetchMetadataResponse, err
 			if len(results) > 0 {
 				if blob, merr := json.Marshal(results); merr == nil {
 					if perr := database.PutCachedMetadataFetch(mfs.db, id, src.Name(), blob, 0); perr != nil {
-												slog.Warn("metadata-fetch cache put failed for ( )", "id", id, "name", src.Name(), "error", perr)
+						slog.Warn("metadata-fetch cache put failed for ( )", "id", id, "name", src.Name(), "error", perr)
 					}
 				}
 			}
 		}
 
 		if len(results) == 0 {
-						slog.Debug("returned 0 results for", "name", src.Name(), "value", searchTitle)
+			slog.Debug("returned 0 results for", "name", src.Name(), "value", searchTitle)
 		}
 		if len(results) > 0 {
 			// Score all results and pick the best; reject if below quality threshold.
@@ -213,14 +240,14 @@ func (mfs *Service) FetchMetadataForBook(id string) (*FetchMetadataResponse, err
 			}
 			scored := mfs.bestTitleMatchForBook(book, results, currentAuthor, currentNarrator, scoreTitles...)
 			if len(scored) == 0 {
-								slog.Debug("all results rejected by quality scorer for", "name", src.Name(), "count", len(results), "value", searchTitle)
+				slog.Debug("all results rejected by quality scorer for", "name", src.Name(), "count", len(results), "value", searchTitle)
 				continue // try next source
 			}
 			// Apply series position filter if the book's position is already known.
 			if book.SeriesSequence != nil {
 				scored = ApplySeriesPositionFilter(scored, *book.SeriesSequence)
 				if len(scored) == 0 {
-										slog.Debug("best result rejected by series position filter for", "name", src.Name(), "value", searchTitle)
+					slog.Debug("best result rejected by series position filter for", "name", src.Name(), "value", searchTitle)
 					continue
 				}
 			}
@@ -260,9 +287,9 @@ func (mfs *Service) FetchMetadataForBook(id string) (*FetchMetadataResponse, err
 			if meta.CoverURL != "" && config.AppConfig.RootDir != "" {
 				coverPath, coverErr := metadata.DownloadCoverArt(meta.CoverURL, config.AppConfig.RootDir, id)
 				if coverErr != nil {
-										slog.Warn("cover art download failed for", "id", id, "error", coverErr)
+					slog.Warn("cover art download failed for", "id", id, "error", coverErr)
 				} else {
-										slog.Info("cover art saved to", "path", coverPath)
+					slog.Info("cover art saved to", "path", coverPath)
 					// Update book's cover_url to the local path for serving
 					localCoverURL := "/api/v1/covers/local/" + filepath.Base(coverPath)
 					if updatedBook != nil {
