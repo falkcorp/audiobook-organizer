@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.104.0 -->
+<!-- version: 9.105.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-13 -->
 
@@ -19,6 +19,23 @@ future agent) can scan the entire workspace in one page.
 - Claude project memory at `~/.claude/projects/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/memory/` — items still to graduate here
 
 ---
+
+## ✅ RESOLVED — change-log mislabeled imports as renames + organize dropped source path (2026-07-13)
+
+Change-log entry showed `📁 Rename — Renamed — → /mnt/.../book.mp3` (empty "from") for
+an import. Root cause: `internal/activity/changelog.go` hardcoded `Type:"rename"` +
+`"Renamed — <old> → <new>"` for every `book_path_history` row, so the empty-`OldPath`
+import record CreateBook writes rendered as a phantom rename. **Fixed:** branch on
+`ChangeType`/`OldPath` — empty-from → `import` + "Imported — <path>"; real moves keep
+`rename` with a ChangeType-specific verb; op-changes loop gained `organize_rename` /
+`book_create` cases. Underlying provenance gap: `CreateOrganizedVersion` renamed the
+file but only recorded CreateBook's empty-from import marker — it now records a second
+`organize` path-change with the real old → new (`library_copy` convention). iTunes/
+scanner imports are in-place, so their empty `OldPath` is legitimate. Forward-only fix
+(immutable rows). Files: `internal/activity/changelog.go`,
+`internal/organizer/service.go` (Store += `PathHistoryStore`). Tests:
+`internal/activity/service_unit_test.go`,
+`internal/organizer/organized_version_writeback_test.go`.
 
 ## ✅ RESOLVED — Metadata rate-limit sharing + per-request throttle + cancellable Audnexus (2026-07-13)
 
