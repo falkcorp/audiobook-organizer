@@ -1,13 +1,33 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.143.0 -->
+<!-- version: 3.144.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
-<!-- last-edited: 2026-07-11 -->
+<!-- last-edited: 2026-07-12 -->
 
 # Changelog
 
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 12, 2026 - fix(dedup): same-title/high-similarity not_dup mining guard (INIT-1 adjacent)
+
+- **`dedup`** (backend) — the deterministic mining rule `partVsWhole`
+  (`internal/dedup/dataset/rules.go`) no longer emits `not_dup` for a pair whose only
+  negative evidence is a duration ratio when the two books share an identical normalized
+  title AND carry high candidate similarity (≥0.95) AND the title is not a compiled-in
+  boilerplate ident — such pairs now go `unsure` (queued for review) instead. Prod evidence
+  (`/dedup/labels/export`, 2026-07-12): 565 of 1332 `not_dup` were same-title part-vs-whole,
+  of which ~267 are real books (e.g. "Foundation", "The Last Hunter") split by corrupt/part
+  durations (durations of 154h/4147h) at cosine ~1.0 — real duplicates that
+  `dedup.dataset-backfill` was then *dismissing* out of the review queue.
+- Boilerplate idents are carved out: "Big Finish Ident" (298 of the 565 pairs — a recurring
+  publisher jingle, legitimately not a book duplicate) is added to the shared boilerplate
+  blocklist and keeps its `not_dup` label. The compiled-in default patterns + a pure matcher
+  moved to a new leaf package `internal/boilerplate` so the offline mining rules can reuse the
+  exact same list the live engine gate uses (the two previously could not share it — an import
+  cycle). The engine gate now also drops future "Big Finish Ident" candidates.
+- Rule change affects only future `Classify` runs; the ~267 already-mislabeled rows require an
+  operator `dedup.dataset-backfill` (apply) re-run to be relabeled.
 
 #### July 11, 2026 - test(audiobooks): parity-lock the shipped heavy-filter pushdown (INIT-4 T6)
 

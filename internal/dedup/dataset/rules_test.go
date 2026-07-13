@@ -1,7 +1,7 @@
 // file: internal/dedup/dataset/rules_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c1d4e8b5-7f23-4a90-9b01-6e2c5d8f3a47
-// last-edited: 2026-07-11
+// last-edited: 2026-07-12
 
 package dataset
 
@@ -257,5 +257,109 @@ func TestPartVsWholeGenuineStillNotDup(t *testing.T) {
 	}
 	if SharesIdentity(bothEmpty) {
 		t.Fatal("all-empty identity must not report SharesIdentity")
+	}
+}
+
+// simPtr is a test helper for the *float64 LabeledExample.Similarity field.
+func simPtr(v float64) *float64 { return &v }
+
+// The following tests pin the same-title / high-similarity partVsWhole guard
+// (2026-07-12). Each fixture is anchored on a real row pulled from the prod
+// labeled-example export (/dedup/labels/export). The guard converts a same-title
+// pair whose only negative evidence is a duration ratio into unsure — but only
+// when it is NOT a compiled-in boilerplate ident and carries high candidate
+// similarity, so it never over-suppresses the legitimate not_dup classes.
+
+// TestPartVsWholeSameTitleHighSimGoesUnsure mirrors the real-book mislabels:
+// e.g. "Foundation" (Asimov) at similarity 1.0 with a corrupt/part duration
+// ratio (0.268) — same author, same work, but split into not_dup by the ratio.
+// These must go unsure so dataset-backfill stops dismissing real duplicates.
+func TestPartVsWholeSameTitleHighSimGoesUnsure(t *testing.T) {
+	ex := database.LabeledExample{
+		Layer:         "exact",
+		Similarity:    simPtr(1.0),
+		A:             database.BookFeatures{FilesExist: true, TotalDurationSec: 82569, Title: "Foundation"},
+		B:             database.BookFeatures{FilesExist: true, TotalDurationSec: 22130, Title: "Foundation"},
+		DurationRatio: 22130.0 / 82569.0,
+	}
+	label, reason, fires := partVsWhole(ex)
+	if !fires || label != "unsure" {
+		t.Fatalf("partVsWhole = (%q, fires=%v), want unsure/true; reason=%q", label, fires, reason)
+	}
+	if !strings.Contains(reason, "same title at high similarity") {
+		t.Fatalf("reason should flag the same-work guard; got %q", reason)
+	}
+	// Full Classify path must also surface unsure (no earlier catcher steals it).
+	if l, _, f := Classify(ex); !f || l != "unsure" {
+		t.Fatalf("Classify = (%q, fires=%v), want unsure/true", l, f)
+	}
+}
+
+// TestPartVsWholeBoilerplateIdentStaysNotDup is the anti-over-suppression carve-
+// out: "Big Finish Ident" is embedding-identical to every copy of itself (sim
+// 1.0) and hits the duration-ratio rule (0.483), but is a legitimate not_dup at
+// the book level — the boilerplate exclusion must keep it not_dup (298 such
+// pairs on prod, 2026-07-12).
+func TestPartVsWholeBoilerplateIdentStaysNotDup(t *testing.T) {
+	ex := database.LabeledExample{
+		Layer:         "exact",
+		Similarity:    simPtr(1.0),
+		A:             database.BookFeatures{FilesExist: true, TotalDurationSec: 8293, Title: "Big Finish Ident"},
+		B:             database.BookFeatures{FilesExist: true, TotalDurationSec: 4008, Title: "Big Finish Ident"},
+		DurationRatio: 4008.0 / 8293.0,
+	}
+	label, reason, fires := partVsWhole(ex)
+	if !fires || label != "not_dup" {
+		t.Fatalf("boilerplate ident: partVsWhole = (%q, fires=%v), want not_dup/true; reason=%q", label, fires, reason)
+	}
+	if !strings.Contains(reason, "part vs whole") {
+		t.Fatalf("reason should be the plain part-vs-whole not_dup; got %q", reason)
+	}
+}
+
+// TestPartVsWholeSameTitleLowSimStaysNotDup pins the low-similarity path: a
+// same-title pair whose candidate similarity is below the high-sim floor (e.g.
+// the "The Improbable Adventures of Sherlock Holmes" anthology collision at
+// 0.859) is a plausible genuine title collision and keeps not_dup — the guard
+// requires positive high-similarity evidence before downgrading.
+func TestPartVsWholeSameTitleLowSimStaysNotDup(t *testing.T) {
+	ex := database.LabeledExample{
+		Layer:         "embedding",
+		Similarity:    simPtr(0.859),
+		A:             database.BookFeatures{FilesExist: true, TotalDurationSec: 40000, Title: "The Improbable Adventures of Sherlock Holmes"},
+		B:             database.BookFeatures{FilesExist: true, TotalDurationSec: 12000, Title: "The Improbable Adventures of Sherlock Holmes"},
+		DurationRatio: 12000.0 / 40000.0,
+	}
+	if label, _, fires := partVsWhole(ex); !fires || label != "not_dup" {
+		t.Fatalf("same-title low-sim: partVsWhole = (%q, fires=%v), want not_dup/true", label, fires)
+	}
+}
+
+// TestPartVsWholeSameTitleUnknownSimStaysNotDup covers rows where Similarity is
+// nil (unknown): the guard treats unknown as "not high" and stays not_dup.
+func TestPartVsWholeSameTitleUnknownSimStaysNotDup(t *testing.T) {
+	ex := database.LabeledExample{
+		A:             database.BookFeatures{FilesExist: true, TotalDurationSec: 36000, Title: "Foundation"},
+		B:             database.BookFeatures{FilesExist: true, TotalDurationSec: 10800, Title: "Foundation"},
+		DurationRatio: 10800.0 / 36000.0,
+	}
+	if label, _, fires := partVsWhole(ex); !fires || label != "not_dup" {
+		t.Fatalf("same-title unknown-sim: partVsWhole = (%q, fires=%v), want not_dup/true", label, fires)
+	}
+}
+
+// TestPartVsWholeDifferentTitleHighSimStaysNotDup pins that the guard keys on
+// TITLE identity, not similarity alone: a genuine part-vs-whole with DIFFERENT
+// titles but high similarity remains not_dup.
+func TestPartVsWholeDifferentTitleHighSimStaysNotDup(t *testing.T) {
+	ex := database.LabeledExample{
+		Layer:         "embedding",
+		Similarity:    simPtr(0.97),
+		A:             database.BookFeatures{FilesExist: true, TotalDurationSec: 36000, Title: "Foundation"},
+		B:             database.BookFeatures{FilesExist: true, TotalDurationSec: 10800, Title: "Foundation and Empire"},
+		DurationRatio: 10800.0 / 36000.0,
+	}
+	if label, _, fires := partVsWhole(ex); !fires || label != "not_dup" {
+		t.Fatalf("different-title high-sim: partVsWhole = (%q, fires=%v), want not_dup/true", label, fires)
 	}
 }

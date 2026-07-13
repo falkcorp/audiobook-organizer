@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.95.1 -->
+<!-- version: 9.96.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-12 -->
 
@@ -65,6 +65,13 @@ remaining-work catalog, produced, adversarially judged (3 lenses × 10), brief-v
     `config.DedupSignalConfig` persists band thresholds but has no per-kind confidence field —
     adding one (a `map[string]KindConfig` under `dedup.signals`) would let the confidence round
     become applyable instead of a manual config.yaml edit.
+  - [x] INIT-1 T07 follow-up — same-title / high-similarity `not_dup` mining guard: `partVsWhole`
+    routes same-title + sim≥0.95 + non-boilerplate pairs to `unsure` instead of `not_dup`
+    (`internal/dedup/dataset/rules.go`); "Big Finish Ident" added to a shared leaf blocklist
+    (`internal/boilerplate`) and kept `not_dup`. Fixes the residual cosine-1.0 `not_dup`
+    contamination class the re-mine (T07) surfaced. **Follow-up (operator):** re-run
+    `dedup.dataset-backfill` (apply) to relabel the ~267 already-mislabeled prod rows, then
+    `dedup.calibrate-composite` / embedding-threshold calibration to realize the precision gain.
   - **INIT-2's `internal/dedup/engine.go` tasks (T03 + T05) are both merged**, which unblocks
     Phase B: INIT-1 TASK-08 and INIT-4 TASK-05 (both rebase on that file) can now start.
 - **Wave 2b (4 PRs, #1885–#1888, merged 2026-07-11):** see

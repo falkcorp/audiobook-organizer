@@ -1,7 +1,7 @@
 // file: internal/dedup/boilerplate.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2349d60e-e5e8-4c03-b3a7-0123a0b0bf36
-// last-edited: 2026-07-11
+// last-edited: 2026-07-12
 
 package dedup
 
@@ -9,58 +9,24 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/falkcorp/audiobook-organizer/internal/boilerplate"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
-// boilerplateTitlePatterns are exact publisher intro/outro "titles" that are
-// not real books and must not seed dedup matches. Seeded from
-// docs/agent-tasks/dedup-intro-falsepositive/FINDINGS.md and safe to extend.
-//
-// This list is the compiled-in DEFAULT set and is ALWAYS active — config
-// extras (config.DedupBoilerplateConfig, INIT-4 T5) only APPEND to it, never
-// replace it (spec docs/specs/2026-07-10-filtering-search-design.md Decision
-// 8: a replace escape hatch would let a misconfigured deployment silently
-// drop all Audible/publisher suppression and re-open the dedup false-positive
-// bug this list exists to prevent).
-var boilerplateTitlePatterns = []string{
-	"this is audible",
-	"audible hopes you have enjoyed this program",
-	"audible hopes you have enjoyed this book",
-	"audible studios presents",
-	"audible presents",
-	"this is an audible original",
-	"end credits",
-	"credits",
-	"opening credits",
-	"closing credits",
-	"intro",
-	"introduction",
-	"outro",
-	"epilogue music",
-	"publisher introduction",
-	"publisher's note",
-	"produced by audible studios",
-	"recorded books presents",
-	"graphic audio presents",
-	"brilliance audio presents",
-}
+// boilerplateTitlePatterns / boilerplateTitlePrefixPatterns are the compiled-in
+// DEFAULT sets, now owned by the shared leaf package internal/boilerplate so the
+// offline mining rules (internal/dedup/dataset, which cannot import this package
+// without an import cycle) can reuse the exact same list. These defaults are
+// ALWAYS active — config extras (config.DedupBoilerplateConfig, INIT-4 T5) only
+// APPEND to them, never replace them (spec
+// docs/specs/2026-07-10-filtering-search-design.md Decision 8: a replace escape
+// hatch would let a misconfigured deployment silently drop all Audible/publisher
+// suppression and re-open the dedup false-positive bug this list exists to
+// prevent).
+var boilerplateTitlePatterns = boilerplate.DefaultTitlePatterns
 
-// boilerplateTitlePrefixPatterns are anchored boilerplate phrases that may carry
-// trailing publisher copy. Keep this list narrower than the exact-title list so
-// real books like "Introduction to Algorithms" still match normally.
-var boilerplateTitlePrefixPatterns = []string{
-	"this is audible",
-	"audible hopes you have enjoyed this program",
-	"audible hopes you have enjoyed this book",
-	"audible studios presents",
-	"audible presents",
-	"this is an audible original",
-	"produced by audible studios",
-	"recorded books presents",
-	"graphic audio presents",
-	"brilliance audio presents",
-}
+var boilerplateTitlePrefixPatterns = boilerplate.DefaultPrefixPatterns
 
 // boilerplateInit guards the one-time build of effectiveTitlePatterns /
 // effectivePrefixPatterns from the compiled-in defaults above plus any
