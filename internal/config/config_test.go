@@ -1,7 +1,7 @@
 // file: internal/config/config_test.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-06-16
+// last-edited: 2026-07-13
 
 package config
 
@@ -274,7 +274,10 @@ func TestSupportedExtensionsDefaults(t *testing.T) {
 
 	// Assert
 	extensions := AppConfig.SupportedExtensions
-	expectedExtensions := []string{".m4b", ".mp3", ".m4a", ".aac", ".ogg", ".flac", ".wma"}
+	expectedExtensions := []string{
+		".m4b", ".mp3", ".m4a", ".aac", ".ogg", ".flac", ".wma",
+		".opus", ".oga", ".wav", ".aiff", ".aif", ".mka", ".aax", ".aaxc",
+	}
 
 	if len(extensions) != len(expectedExtensions) {
 		t.Errorf("Expected %d extensions, got %d", len(expectedExtensions), len(extensions))
