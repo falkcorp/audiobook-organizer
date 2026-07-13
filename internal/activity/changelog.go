@@ -1,6 +1,7 @@
 // file: internal/activity/changelog.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 93167949-a587-41e9-8ef9-92d03f86aea6
+// last-edited: 2026-07-13
 
 package activity
 
@@ -57,10 +58,11 @@ func (svc *ChangelogService) GetBookChangelog(bookID string) ([]ChangeLogEntry, 
 		slog.Warn("changelog GetBookPathHistory", "bookID", bookID, "err", err)
 	} else {
 		for _, ph := range pathHistory {
+			entryType, summary := pathChangeEntry(ph)
 			entries = append(entries, ChangeLogEntry{
 				Timestamp: ph.CreatedAt,
-				Type:      "rename",
-				Summary:   fmt.Sprintf("Renamed — %s → %s", ph.OldPath, ph.NewPath),
+				Type:      entryType,
+				Summary:   summary,
 				Details: map[string]any{
 					"old_path":    ph.OldPath,
 					"new_path":    ph.NewPath,
@@ -118,6 +120,12 @@ func (svc *ChangelogService) GetBookChangelog(bookID string) ([]ChangeLogEntry, 
 			case "file_move":
 				entryType = "rename"
 				summary = fmt.Sprintf("File moved — %s → %s", oc.OldValue, oc.NewValue)
+			case "organize_rename":
+				entryType = "rename"
+				summary = fmt.Sprintf("Organized — %s → %s", oc.OldValue, oc.NewValue)
+			case "book_create":
+				entryType = "import"
+				summary = "Organized version created"
 			case "tag_write":
 				entryType = "tag_write"
 				summary = fmt.Sprintf("Tags written — %s: %s → %s", oc.FieldName, oc.OldValue, oc.NewValue)
@@ -157,6 +165,46 @@ func (svc *ChangelogService) GetBookChangelog(bookID string) ([]ChangeLogEntry, 
 	}
 
 	return entries, nil
+}
+
+// pathChangeEntry maps a BookPathChange to a changelog (type, summary) pair.
+//
+// The change-log frontend (web/src/components/ChangeLog.tsx) only has icons/labels
+// for a fixed set of types — rename (📁), import (📦), metadata_apply, tag_write,
+// transcode — so this deliberately emits only "import" or "rename" and encodes the
+// specific verb in the summary. A "label — detail" em-dash separator matches the
+// sibling summaries ("Metadata applied — …").
+//
+// The historical bug: this loop hardcoded Type "rename" and "Renamed — <old> → <new>"
+// for EVERY record, so an import record (OldPath == "", ChangeType "import" written by
+// PebbleStore.CreateBook) rendered as "Renamed — → /newpath" — a phantom rename with
+// an empty "from". Import records now render as "Imported — /newpath".
+func pathChangeEntry(ph database.BookPathChange) (entryType, summary string) {
+	// Import records legitimately have no source path (the file was ingested in
+	// place, e.g. by the scanner or iTunes importer). Treat any empty-OldPath row
+	// as an import regardless of the stored ChangeType.
+	if ph.ChangeType == "import" || ph.OldPath == "" {
+		return "import", fmt.Sprintf("Imported — %s", ph.NewPath)
+	}
+
+	verb := "Moved"
+	switch ph.ChangeType {
+	case "organize":
+		verb = "Organized"
+	case "rename":
+		verb = "Renamed"
+	case "library_copy":
+		verb = "Copied to library"
+	case "version_swap":
+		verb = "Version swapped"
+	case "quarantine":
+		verb = "Quarantined"
+	case "unquarantine":
+		verb = "Restored from quarantine"
+	case "itunes_path_repair":
+		verb = "Path repaired"
+	}
+	return "rename", fmt.Sprintf("%s — %s → %s", verb, ph.OldPath, ph.NewPath)
 }
 
 // DerefStrDisplay safely dereferences a *string, returning "<nil>" for nil pointers (display-oriented).

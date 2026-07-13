@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.152.0 -->
+<!-- version: 3.153.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-13 -->
 
@@ -8,6 +8,41 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 13, 2026 - fix(activity): label imports correctly in change log (+ import-provenance path capture)
+
+Fixes a change-log entry that showed `📁 Rename — Renamed — → /mnt/.../book.mp3` (an
+empty "from" path, mislabeled as a rename) for what was actually an import, plus the
+underlying provenance gap that discarded the real source path when organize renamed a
+file.
+
+- **Bug 1 (display).** `internal/activity/changelog.go` hardcoded `Type:"rename"` and
+  `"Renamed — <old> → <new>"` for EVERY `book_path_history` row, including import
+  records that `PebbleStore.CreateBook` writes with an empty `OldPath` and
+  `ChangeType:"import"`. The `—` in that summary is the "label — detail" separator
+  (matching the sibling "Metadata applied — …" summaries), NOT the old path, so an
+  empty `OldPath` rendered as `Renamed — → /newpath`. Now branches on
+  `ChangeType`/`OldPath`: import (empty `OldPath`) → `Type:"import"` +
+  `"Imported — <path>"` (no phantom `→`); real moves keep `Type:"rename"` with a
+  ChangeType-specific verb (Renamed / Organized / Copied to library / Version swapped /
+  Quarantined / Restored from quarantine / Path repaired; unknown+from → "Moved"). The
+  operation-changes loop also gained `organize_rename` and `book_create` cases so an
+  organized book's change log no longer shows raw "Operation change — …" junk. The
+  frontend already maps `import`→📦/"Import" and `rename`→📁/"Rename", so no frontend
+  change was needed.
+- **Bug 2 (provenance).** `internal/organizer/service.go` `CreateOrganizedVersion`
+  renames/moves the file from `book.FilePath` → `newPath` but only recorded
+  CreateBook's empty-from "import" marker, dropping the known source path. It now
+  records a second `organize` path-change carrying the real old → new (mirroring the
+  `library_copy` convention in `metafetch/service_apply.go`), so the change log shows
+  where a file was organized FROM. `organizer.Store` gained `database.PathHistoryStore`
+  (already satisfied by `PebbleStore` and the full `database` mock — no regen).
+  Forward-only: existing rows are immutable, so a book organized before this deploy
+  cannot regain its never-stored old path — its entry simply relabels to "Imported".
+- **Investigation finding.** The iTunes importers and the scanner ingest **in place**
+  (`FilePath` = the on-disk location, no rename), so their empty `OldPath` is correct
+  and "Imported" is the right label — no lost path there. The organize→new-version path
+  was the sole place a real source path was being discarded.
 
 #### July 13, 2026 - fix(metafetch): thread context through FetchMetadataForBook + self-correct stale year-kind cache entries
 

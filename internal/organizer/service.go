@@ -1,5 +1,5 @@
 // file: internal/organizer/service.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
 // last-edited: 2026-07-13
 
@@ -35,6 +35,7 @@ type Store interface {
 	database.NarratorStore
 	database.MaintenanceStore
 	database.TagStore
+	database.PathHistoryStore
 }
 
 // Compile-time proof that PebbleStore satisfies organizer.Store.
@@ -911,6 +912,24 @@ func (orgSvc *Service) CreateOrganizedVersion(org *Organizer, book *database.Boo
 		}
 		return nil, err
 	}
+	// Import-provenance: CreateBook records an "import" path-change with an empty
+	// OldPath for the new organized book. But organize RENAMED/MOVED the file from
+	// book.FilePath → newPath, and that source path is known here, so record a
+	// second "organize" path-change carrying the real old→new. Without this the
+	// change log would only show "Imported — <newPath>" and drop where the file was
+	// organized FROM. Mirrors the library_copy convention in
+	// metafetch/service_apply.go (CreateBook import marker + explicit old→new).
+	if book.FilePath != "" && book.FilePath != newPath {
+		if err := orgSvc.db.RecordPathChange(&database.BookPathChange{
+			BookID:     createdBook.ID,
+			OldPath:    book.FilePath,
+			NewPath:    newPath,
+			ChangeType: "organize",
+		}); err != nil {
+			log.Warn("organize: failed to record organize path change for %s: %v", createdBook.ID, err)
+		}
+	}
+
 	// Mark both the organized copy and the original for rescan
 	_ = orgSvc.db.MarkNeedsRescan(createdBook.ID)
 	_ = orgSvc.db.MarkNeedsRescan(book.ID)

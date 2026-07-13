@@ -1,7 +1,7 @@
 // file: internal/organizer/organized_version_writeback_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8eea5b3c-7be2-4f84-a629-aca6c5044dbb
-// last-edited: 2026-07-11
+// last-edited: 2026-07-13
 
 package organizer
 
@@ -105,6 +105,60 @@ func TestCreateOrganizedVersion_OriginalDemotedToNonPrimary(t *testing.T) {
 	}
 	if *got.LibraryState != "organized_source" {
 		t.Errorf("LibraryState = %q, want %q", *got.LibraryState, "organized_source")
+	}
+}
+
+// TestCreateOrganizedVersion_RecordsOrganizeProvenance proves the Bug-2
+// import-provenance fix: CreateOrganizedVersion moves the file from the original
+// path to newPath, and that source path is known here, so it must record an
+// "organize" path-change on the new book carrying the real old → new. Without it
+// the change log only shows CreateBook's empty-from "import" marker and drops
+// where the file was organized FROM.
+func TestCreateOrganizedVersion_RecordsOrganizeProvenance(t *testing.T) {
+	store, err := database.NewPebbleStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewPebbleStore: %v", err)
+	}
+	store.WaitForWarmup()
+	t.Cleanup(func() { _ = store.Close() })
+
+	svc := NewService(store)
+	org := &Organizer{config: &config.Config{}}
+
+	seeded := newWritebackTestBook(t, store)
+	oldPath := seeded.FilePath
+
+	newPath := filepath.Join(t.TempDir(), "organized.m4b")
+	created, err := svc.CreateOrganizedVersion(org, seeded, newPath, false, "", &noopLogger{})
+	if err != nil {
+		t.Fatalf("CreateOrganizedVersion: %v", err)
+	}
+
+	history, err := store.GetBookPathHistory(created.ID)
+	if err != nil {
+		t.Fatalf("GetBookPathHistory: %v", err)
+	}
+
+	var foundOrganize, foundImport bool
+	for _, ph := range history {
+		switch ph.ChangeType {
+		case "organize":
+			foundOrganize = true
+			if ph.OldPath != oldPath {
+				t.Errorf("organize OldPath = %q, want %q (the real source path)", ph.OldPath, oldPath)
+			}
+			if ph.NewPath != newPath {
+				t.Errorf("organize NewPath = %q, want %q", ph.NewPath, newPath)
+			}
+		case "import":
+			foundImport = true
+		}
+	}
+	if !foundOrganize {
+		t.Errorf("no organize path-change recorded for organized book %q; history=%+v", created.ID, history)
+	}
+	if !foundImport {
+		t.Errorf("expected CreateBook import path-change to still be present; history=%+v", history)
 	}
 }
 
