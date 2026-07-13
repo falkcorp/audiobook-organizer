@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_works.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1d915e6f-133a-4fba-995b-8e4b26b04486
-// last-edited: 2026-07-03
+// last-edited: 2026-07-13
 
 package database
 
@@ -167,7 +167,17 @@ func (p *PebbleStore) DeleteWork(id string) error {
 }
 
 func (p *PebbleStore) GetBooksByWorkID(workID string) ([]Book, error) {
-	// Use book:work:<workID>:<bookID> index to avoid O(50K) full-scan
+	// Use book:work:<workID>:<bookID> index to avoid O(50K) full-scan.
+	//
+	// INDEX-CONSISTENCY: the index VALUE embeds a serialized Book snapshot, but
+	// UpdateBook only refreshes that snapshot when the WorkID itself changes — a
+	// same-work edit (notably SoftDeleteBook, which sets MarkedForDeletion via
+	// UpdateBook without touching WorkID) leaves the embedded copy stale, and a
+	// DeleteBook historically left the row dangling. So we treat the index as a
+	// POINTER: the trailing key segment is the book ID (a ULID, no nested
+	// colons), which we point-look-up against the authoritative book:<id> row.
+	// A book that is absent (hard-deleted) or MarkedForDeletion (soft-deleted)
+	// is skipped. This can never desync from the source of truth.
 	prefix := []byte(fmt.Sprintf("book:work:%s:", workID))
 	upper := append([]byte(nil), prefix...)
 	upper[len(upper)-1] = ';' // ':' + 1
@@ -179,9 +189,11 @@ func (p *PebbleStore) GetBooksByWorkID(workID string) ([]Book, error) {
 
 	var books []Book
 	for iter.First(); iter.Valid(); iter.Next() {
-		b, err := deserializeBookFromIndex(iter.Value(), func(id string) (*Book, error) {
-			return p.GetBookByID(id)
-		})
+		bookID := string(iter.Key()[len(prefix):])
+		if bookID == "" {
+			continue
+		}
+		b, err := p.GetBookByID(bookID)
 		if err != nil || b == nil {
 			continue
 		}
