@@ -1,7 +1,7 @@
 <!-- file: docs/executive-summaries/2026-07-04-monthly-roundup-executive-summary.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: 5b0ee171-8a4f-4669-a2dd-91ffeabaa486 -->
-<!-- last-edited: 2026-07-11 -->
+<!-- last-edited: 2026-07-13 -->
 
 # Executive Summary: June–July Monthly Roundup
 
@@ -260,6 +260,23 @@ database expects rather than only the ones the in-memory object happened
 to be carrying (#1552, #1747). Durations are now read from the real audio
 file via `ffprobe` (a standard audio-inspection tool) instead of estimated
 from bitrate (#1555), and stored consistently in seconds (#1523).
+
+**A third instance on the library-scan path (rescans):** the same
+full-replace-save-wipes-fields shape was found on the scanner's hot path.
+Every time an already-imported file was re-scanned (e.g. after being
+re-processed or moved), the scanner wrote back a record built only from the
+file's own audio tags — which meant it silently erased everything the tags
+don't carry: the book's author and series links (whenever the file had no
+author/series tag), all fetched ratings, the Whisper-generated
+transcriptions used to identify unlabeled books, the "metadata reviewed"
+status, genre, and the technical audio details (bitrate, codec, etc.). The
+fix inverts the save so it starts from the book's complete existing record
+and overlays only the handful of fields the scanner legitimately owns
+(file path, hashes, size, and the tag-derived title/author/narrator when
+present) — so nothing outside the scanner's remit can be lost, and any
+field added in the future is preserved automatically rather than having to
+be remembered. A regression test proves twenty previously-wiped fields now
+survive a rescan.
 
 ### 5. Whisper transcription pipeline and GPU infrastructure
 
