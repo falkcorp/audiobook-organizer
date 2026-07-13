@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.47.1
+// version: 1.48.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-07-12
+// last-edited: 2026-07-13
 
 package scanner
 
@@ -2018,21 +2018,27 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 			return err
 		}
 
-		// Preserve original hash if already stored and we are rescanning a library file
-		if existing.OriginalFileHash != nil {
-			dbBook.OriginalFileHash = existing.OriginalFileHash
-		}
-		if dbBook.OrganizedFileHash == nil && existing.OrganizedFileHash != nil {
-			dbBook.OrganizedFileHash = existing.OrganizedFileHash
-		}
+		// Rescan of an already-imported file (matched by path, or an existing
+		// hash-duplicate whose organized path we are promoting above). Writing
+		// the partial dbBook literal via a full-replace UpdateBook wiped every
+		// Book field the scanner does not populate — fetched metadata, ratings,
+		// Whisper transcriptions, media-info, review status, quarantine state,
+		// lifecycle timestamps, etc. — because UpdateBook replaces the whole row
+		// (data-loss bug).
+		//
+		// Fix (INVERT): start from the COMPLETE existing row and overlay ONLY
+		// the fields the scanner is authoritative for. Everything else survives
+		// by construction, so a newly-added Book field can never silently
+		// regress. `existing` is already loaded (GetBookByFilePath ->
+		// GetBookByID is a full-fidelity point-get), so this adds no extra DB
+		// read. Copy it first so the getter's pointer is never mutated in place.
+		merged := *existing
+		applyScannerFields(&merged, dbBook)
 
-		// Preserve enriched fields that scanner doesn't extract (e.g. from metadata fetch or AI parse)
-		preserveExistingFields(dbBook, existing)
-
-		_, err = getStore().UpdateBook(existing.ID, dbBook)
+		_, err = getStore().UpdateBook(existing.ID, &merged)
 		if err == nil {
 			// Check for metadata hash duplicates after update
-			detectMetadataHashDuplicate(dbBook, defaultLog)
+			detectMetadataHashDuplicate(&merged, defaultLog)
 		}
 		return err
 	}
@@ -2341,6 +2347,101 @@ func preserveExistingFields(scanned *database.Book, existing *database.Book) {
 	if scanned.SourceImportPath == nil && existing.SourceImportPath != nil {
 		scanned.SourceImportPath = existing.SourceImportPath
 	}
+}
+
+// applyScannerFields overlays the fields the scanner freshly derives from the
+// file and its tags onto dst (a copy of the COMPLETE existing row), leaving
+// every other field untouched. It is the write-side of the rescan data-loss
+// fix: previously a rescan wrote a partial Book literal via a full-replace
+// UpdateBook, wiping fetched metadata, ratings, Whisper transcriptions,
+// media-info (Bitrate/Codec/…), MetadataReviewStatus/Source/Hash,
+// ITunesSyncStatus, quarantine state, version links, and lifecycle timestamps.
+// Starting from the full row and overlaying only scanner-owned fields makes
+// data loss impossible by construction — a future Book field is preserved
+// automatically rather than silently dropped.
+//
+// The rule for every overlaid field is "scanned value wins if present (non-nil
+// / non-zero), else keep existing." This reproduces the prior behavior for the
+// fields preserveExistingFields already guarded and for the always-set
+// LibraryState/Quantity, and adds the same guard to the fields the old code
+// overwrote unconditionally (Title/AuthorID/SeriesID/Format/hashes/Duration) —
+// which is precisely the wipe this fixes (an untagged file yields nil
+// AuthorID/SeriesID), applied consistently.
+func applyScannerFields(dst *database.Book, scanned *database.Book) {
+	// Identity / file-derived fields (freshly read from the file this scan).
+	if scanned.FilePath != "" {
+		dst.FilePath = scanned.FilePath
+	}
+	if scanned.Format != "" {
+		dst.Format = scanned.Format
+	}
+	if scanned.FileHash != nil {
+		dst.FileHash = scanned.FileHash
+	}
+	if scanned.FileSize != nil {
+		dst.FileSize = scanned.FileSize
+	}
+	// OriginalFileHash records the pre-organize hash; once stored it must be
+	// preserved, so only adopt the scanned value when none is stored yet.
+	if dst.OriginalFileHash == nil && scanned.OriginalFileHash != nil {
+		dst.OriginalFileHash = scanned.OriginalFileHash
+	}
+	// OrganizedFileHash: scanned value wins when the file is under RootDir.
+	if scanned.OrganizedFileHash != nil {
+		dst.OrganizedFileHash = scanned.OrganizedFileHash
+	}
+	if scanned.Duration != nil {
+		dst.Duration = scanned.Duration
+	}
+	if scanned.LibraryState != nil {
+		dst.LibraryState = scanned.LibraryState
+	}
+	if scanned.Quantity != nil {
+		dst.Quantity = scanned.Quantity
+	}
+
+	// Tag-derived identity fields.
+	if scanned.Title != "" {
+		dst.Title = scanned.Title
+	}
+	if scanned.AuthorID != nil {
+		dst.AuthorID = scanned.AuthorID
+	}
+	if scanned.SeriesID != nil {
+		dst.SeriesID = scanned.SeriesID
+	}
+	if scanned.SeriesSequence != nil && *scanned.SeriesSequence != 0 {
+		dst.SeriesSequence = scanned.SeriesSequence
+	}
+	if scanned.WorkID != nil {
+		dst.WorkID = scanned.WorkID
+	}
+
+	// Tag-derived enrichment fields.
+	if scanned.Narrator != nil {
+		dst.Narrator = scanned.Narrator
+	}
+	if scanned.Language != nil {
+		dst.Language = scanned.Language
+	}
+	if scanned.Publisher != nil {
+		dst.Publisher = scanned.Publisher
+	}
+	if scanned.ASIN != nil {
+		dst.ASIN = scanned.ASIN
+	}
+	if scanned.OpenLibraryID != nil {
+		dst.OpenLibraryID = scanned.OpenLibraryID
+	}
+	if scanned.HardcoverID != nil {
+		dst.HardcoverID = scanned.HardcoverID
+	}
+	if scanned.GoogleBooksID != nil {
+		dst.GoogleBooksID = scanned.GoogleBooksID
+	}
+
+	// SourceImportPath is set on CreateBook only and must never be mutated on
+	// UpdateBook, so it is deliberately NOT overlaid here (dst keeps existing's).
 }
 
 // identifySeriesUsingExternalAPIs tries to match books to series using external APIs

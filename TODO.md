@@ -243,6 +243,31 @@ Adjacent unguarded paths NOT covered (separate follow-up): `dedup.MergeBooks`
   this change) green with zero FAIL/panic/DATA RACE. Frontend: `tsc --noEmit` clean, `eslint`
   clean, full vitest suite green (55/55 files, 351/351 tests after the loading-UX follow-up).
 
+## ✅ RESOLVED — library-scan RESCAN wiped metadata/ratings/transcriptions via full-replace UpdateBook (2026-07-13)
+
+- **Sibling to the W5d-1 write-back wipe below, but on the SCANNER hot path.** `saveBookToDatabase`
+  (`internal/scanner/scanner.go`) built a partial `&database.Book{...}` literal from freshly-scanned
+  tags and, on a path-match rescan (or organized-path promotion of an existing hash-duplicate), wrote
+  it via a full-replace `getStore().UpdateBook(existing.ID, dbBook)`. Only a subset was copied back
+  via `preserveExistingFields`, so every omitted field was WIPED on EVERY rescan: `AuthorID`/
+  `SeriesID` (whenever the file had no author/series tag — `resolveAuthorID`/`resolveSeriesID` return
+  nil), `Genre`, `MetadataReviewStatus`/`MetadataSource`/`MetadataSourceHash`, all Audible/Google/
+  User/iTunes rating fields, media-info (`Bitrate`/`Codec`/`SampleRate`/`Channels`/`BitDepth`/
+  `Quality`), `ITunesSyncStatus`, `AudibleRuntimeMin`, `DurationVerifiedAt`, `MergedIntoBookID`,
+  `Quarantine*`, and all transcription fields (`IntroTranscription`/`Transcribed*`/`Transcribe*`).
+- **Fix — invert the write** (chosen over extending `preserveExistingFields`, which fails OPEN — a
+  future field not added to the list is silently wiped). New `applyScannerFields(dst, scanned)`
+  overlays only the scanner-owned fields onto a copy of the COMPLETE existing row
+  (`GetBookByFilePath`→`GetBookByID` is a full-fidelity Pebble point-get, verified), then writes that
+  copy. Everything else survives by construction; fails CLOSED. Reuses the already-loaded `existing`,
+  no extra DB read. Rule: scanned-wins-if-present-else-keep-existing for every overlaid field;
+  `SourceImportPath` never overlaid (CreateBook-only). Org-ID re-link, hash-dup, sibling, and create
+  branches untouched.
+- **Load-bearing regression test:** `internal/scanner/rescan_preserve_test.go` drives the real
+  `saveBookToDatabase` + `PebbleStore.UpdateBook` round-trip and asserts 20 previously-wiped fields
+  survive a rescan; proven to FAIL against the old write path. `-race` clean; full scanner package
+  green. CHANGELOG + July monthly executive summary (§4 data-integrity) updated.
+
 ## ✅ RESOLVED — CreateOrganizedVersion original-book slim-writeback wiped Author/Series (STOREFID W5d-1, 2026-07-07; CONFIRMED 2026-07-11 by #1887; FIXED 2026-07-11)
 
 - **Was CONFIRMED, not just suspected, as of 2026-07-11 (#1887, INIT-9 T07).** The executable

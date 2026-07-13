@@ -38,6 +38,37 @@
   loser, mirroring `autoMergeCertain`.
 - Tests: a load-bearing `-race` merge-serialization test (verified to fail with the lock reverted:
   `maxActive=16`), a journal-failure-skips-merge test, and an `ApplyVerdicts` batch skip/cleanup test.
+#### July 13, 2026 - fix(scanner): stop wiping metadata/ratings/transcriptions on rescan (data-loss)
+
+- **Rescan data-loss fixed** (backend, `internal/scanner/scanner.go`) — re-scanning an
+  already-imported file (matched by path, or an existing hash-duplicate whose organized path is
+  being promoted) used to write a partial scanner-built `database.Book` literal via a full-replace
+  `UpdateBook(existing.ID, dbBook)`. Only a hand-maintained subset of the existing row was copied
+  back via `preserveExistingFields`, so every omitted field was WIPED on every rescan: `AuthorID`
+  and `SeriesID` (whenever the file had no author/series tag → `resolveAuthorID`/`resolveSeriesID`
+  return nil), `Genre`, `MetadataReviewStatus`/`MetadataSource`/`MetadataSourceHash`, all
+  Audible/Google/User/iTunes rating fields, media-info (`Bitrate`/`Codec`/`SampleRate`/`Channels`/
+  `BitDepth`/`Quality`), `ITunesSyncStatus`, `AudibleRuntimeMin`, `DurationVerifiedAt`,
+  `MergedIntoBookID`, `QuarantineReason`/`QuarantinedAt`, and all transcription fields
+  (`IntroTranscription`, `Transcribed*`, `Transcribe*`).
+- **Fix — invert the write:** the rescan path now starts from the COMPLETE existing row
+  (`GetBookByFilePath` → `GetBookByID` is a full-fidelity Pebble point-get, verified) and overlays
+  ONLY the scanner-owned fields via a new `applyScannerFields` helper — file path/format/hashes/size,
+  duration, library-state, and the tag-derived title/author/series/narrator/publisher/language/
+  provider-IDs when present. Everything else survives by construction, so a newly-added Book field
+  can never silently regress (fails closed, not open). Reuses the already-loaded `existing`, no extra
+  DB read on the hot path.
+- **Field-ownership rule:** every overlaid field is "scanned value wins if present (non-nil /
+  non-zero), else keep existing" — reproducing prior behavior for the fields `preserveExistingFields`
+  already guarded, and adding that same guard to the fields the old code overwrote unconditionally
+  (Title/AuthorID/SeriesID/Format/hashes/Duration), which is precisely the wipe this fixes.
+  `SourceImportPath` is deliberately not overlaid ("set on CreateBook only, never mutated on
+  UpdateBook"). The org-ID re-link, hash-dup, sibling, and create branches are untouched.
+- **Load-bearing regression test** (`internal/scanner/rescan_preserve_test.go`) — drives the real
+  `saveBookToDatabase` + `PebbleStore.UpdateBook` round-trip (not the helper in isolation): imports a
+  book, enriches it with ratings/transcription/review-status/media-info, rescans the same path with
+  new tags and NO author/series, and asserts scanner-owned fields update while 20 previously-wiped
+  fields survive. Proven to FAIL against the old write path. `-race` clean.
 
 #### July 13, 2026 - feat(dedup): keep labeled-example ScoreBreakdown fresh on dismiss/relabel
 
