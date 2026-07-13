@@ -1,7 +1,7 @@
 // file: internal/organizer/service.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
-// last-edited: 2026-07-11
+// last-edited: 2026-07-13
 
 package organizer
 
@@ -471,15 +471,36 @@ func (orgSvc *Service) ReOrganizeInPlace(book *database.Book, log logger.Logger)
 	// Update book_files paths if this is a directory book
 	if info.IsDir() {
 		if bookFiles, bfErr := orgSvc.db.GetBookFiles(book.ID); bfErr == nil {
+			// rescanNeeded is set if any book_files row fails to update below.
+			// The physical move already succeeded at this point, so a failed
+			// row update leaves the DB pointing at the old (now-nonexistent)
+			// path; MarkNeedsRescan (called once, after the loop) self-heals
+			// it on the next library scan instead of leaving the file
+			// silently missing/unplayable. Mirrors the MarkNeedsRescan idiom
+			// used elsewhere in this file (see CreateOrganizedVersion).
+			var rescanNeeded bool
 			for _, bf := range bookFiles {
 				if strings.HasPrefix(bf.FilePath, oldPath) {
 					bf.FilePath = filepath.Join(targetPath, strings.TrimPrefix(bf.FilePath, oldPath+"/"))
 					if bf.FilePath != "" {
 						bf.ITunesPath = orgSvc.ComputeITunesPath(bf.FilePath)
 					}
-					_ = orgSvc.db.UpdateBookFile(bf.ID, &bf)
+					if err := orgSvc.db.UpdateBookFile(bf.ID, &bf); err != nil {
+						log.Warn("ReOrganizeInPlace: failed to update book_file %s path for book %s: %s", bf.ID, book.ID, err.Error())
+						rescanNeeded = true
+					}
 				}
 			}
+			if rescanNeeded {
+				_ = orgSvc.db.MarkNeedsRescan(book.ID)
+			}
+		} else {
+			// Same failure class as above, one level up: the directory move
+			// already succeeded, but we couldn't even read the book_files
+			// rows to rewrite them, so every one of them now points at the
+			// old (moved-away) path. Mark for rescan so it self-heals.
+			log.Warn("ReOrganizeInPlace: failed to load book_files for %s after move, marking for rescan: %s", book.ID, bfErr.Error())
+			_ = orgSvc.db.MarkNeedsRescan(book.ID)
 		}
 	}
 

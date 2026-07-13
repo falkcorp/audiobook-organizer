@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/rescore_labeled_examples_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6d2b8f14-3a97-4e05-9c81-7f0a5d3e2c68
-// last-edited: 2026-07-12
+// last-edited: 2026-07-13
 
 // Tests for dedup.rescore-labeled-examples. A fake pairScorer stands in for the
 // real Engine so the persistence contract (below-band write, narrow write that
@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -218,6 +219,46 @@ func TestRescoreLabeledExamples_DuplicatePairRowsBothRescored(t *testing.T) {
 	human, _ := es.GetLabeledExample(402)
 	if human.LabelSource != "human" || human.Label != "not_dup" {
 		t.Fatalf("row 402: label provenance clobbered: source=%q label=%q", human.LabelSource, human.Label)
+	}
+}
+
+// TestRescoreLabeledExamples_ApplyUpsertFailure_CountsError is the regression
+// test for the missing upsert-error counter: before the fix, a persist
+// (UpsertLabeledExample) failure was logged but never counted, so the op's
+// summary silently under-reported write failures. failingUpsertStore (shared
+// with dataset_backfill_test.go) forces the write to fail for one candidate;
+// the test asserts no breakdown was persisted for it AND the final summary
+// reports upsert_errs=1.
+func TestRescoreLabeledExamples_ApplyUpsertFailure_CountsError(t *testing.T) {
+	pebble := newPebbleForISBNIndexTest(t)
+	es := database.NewEmbeddingStore(pebble.DB())
+
+	seedLabeled(t, es, database.LabeledExample{
+		CandidateID: 501, EntityAID: "failA", EntityBID: "failB",
+		Label: "not_dup", LabelSource: "rule",
+	})
+
+	wrapped := &failingUpsertStore{EmbeddingStore: es, failIDs: map[int64]bool{501: true}}
+	rep := &capturingReporter{}
+
+	if err := runRescoreLabeledExamplesWith(context.Background(), belowBandScorer(), wrapped,
+		json.RawMessage(`{"apply":true}`), rep); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	got, err := es.GetLabeledExample(501)
+	if err != nil {
+		t.Fatalf("GetLabeledExample: %v", err)
+	}
+	if got == nil {
+		t.Fatal("labeled example vanished")
+	}
+	if len(got.ScoreBreakdown) != 0 {
+		t.Fatalf("expected no ScoreBreakdown persisted after upsert failure, got %d bytes", len(got.ScoreBreakdown))
+	}
+
+	if !strings.Contains(rep.lastMsg, "upsert_errs=1") {
+		t.Fatalf("expected final summary to report upsert_errs=1, got %q", rep.lastMsg)
 	}
 }
 

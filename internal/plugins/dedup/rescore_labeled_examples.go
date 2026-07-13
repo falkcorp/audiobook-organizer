@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/rescore_labeled_examples.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3e9c1a70-5d84-4b62-8f01-6a2d7c0e9b53
-// last-edited: 2026-07-12
+// last-edited: 2026-07-13
 
 // Package dedup — op dedup.rescore-labeled-examples.
 //
@@ -213,6 +213,7 @@ func runRescoreLabeledExamplesWith(
 		humanPreserved int
 		scoreErrs      int
 		getErrs        int
+		upsertErrs     int
 		missingAtWrite int
 		skippedNoBook  int
 	)
@@ -313,6 +314,9 @@ func runRescoreLabeledExamplesWith(
 
 			if uErr := store.UpsertLabeledExample(*cur); uErr != nil {
 				log.Error("rescore-labeled-examples: upsert error", "candidate_id", ref.candidateID, "error", uErr)
+				mu.Lock()
+				upsertErrs++
+				mu.Unlock()
 				continue
 			}
 			mu.Lock()
@@ -347,13 +351,14 @@ func runRescoreLabeledExamplesWith(
 		"human_labels_preserved", humanPreserved,
 		"score_errs", scoreErrs,
 		"get_errs", getErrs,
+		"upsert_errs", upsertErrs,
 		"missing_at_write", missingAtWrite,
 		"skipped_no_book", skippedNoBook,
 	)
 
 	summary := fmt.Sprintf(
-		"scored true_dup=%d not_dup=%d; zero_signal true_dup=%d not_dup=%d; would_write=%d wrote=%d human_preserved=%d",
-		scoredTrue, scoredNot, zeroSignalTrue, zeroSignalNot, wouldWrite, wrote, humanPreserved)
+		"scored true_dup=%d not_dup=%d; zero_signal true_dup=%d not_dup=%d; would_write=%d wrote=%d human_preserved=%d upsert_errs=%d",
+		scoredTrue, scoredNot, zeroSignalTrue, zeroSignalNot, wouldWrite, wrote, humanPreserved, upsertErrs)
 
 	if !params.Apply {
 		_ = reporter.UpdateProgress(3, 3, "Dry-run — "+summary+". Pass apply=true to persist ScoreBreakdowns.")

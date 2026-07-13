@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
-// last-edited: 2026-07-07
+// last-edited: 2026-07-13
 
 package itunesservice
 
@@ -791,80 +791,6 @@ func (imp *Importer) DiscoverLibraryPath() string {
 		}
 	}
 	return ""
-}
-
-// CollectITLUpdates builds location updates for all primary-version books with iTunes PIDs.
-func (imp *Importer) CollectITLUpdates() []itunes.ITLLocationUpdate {
-	const (
-		pageSize   = 10000
-		numWorkers = 4
-	)
-
-	pageCh := make(chan int, 256)
-	go func() {
-		offset := 0
-		for {
-			pageCh <- offset
-			offset += pageSize
-			if offset > 50_000_000 {
-				break
-			}
-		}
-		close(pageCh)
-	}()
-
-	type result struct{ updates []itunes.ITLLocationUpdate }
-	resultCh := make(chan result, numWorkers)
-
-	var wg sync.WaitGroup
-	for w := 0; w < numWorkers; w++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			var local []itunes.ITLLocationUpdate
-			for offset := range pageCh {
-				books, err := imp.store.GetAllBooksCore(pageSize, offset)
-				if err != nil || len(books) == 0 {
-					break
-				}
-				for i := range books {
-					if books[i].IsPrimaryVersion != nil && !*books[i].IsPrimaryVersion {
-						continue
-					}
-					files, _ := imp.store.GetBookFiles(books[i].ID)
-					if len(files) > 0 {
-						for _, f := range files {
-							if f.ITunesPersistentID != "" && f.ITunesPath != "" {
-								// TASK-006: normalize to canonical WinPath; skip
-								// unmappable (WARN + metric), never write raw (CRIT-2).
-								if winPath, ok := normalizeITunesLocation(f.ITunesPersistentID, f.ITunesPath); ok {
-									local = append(local, itunes.ITLLocationUpdate{
-										PersistentID: f.ITunesPersistentID,
-										NewLocation:  winPath,
-									})
-								}
-							}
-						}
-					}
-				}
-				if len(books) < pageSize {
-					break
-				}
-			}
-			resultCh <- result{updates: local}
-		}()
-	}
-
-	go func() {
-		wg.Wait()
-		close(resultCh)
-	}()
-
-	var updates []itunes.ITLLocationUpdate
-	for r := range resultCh {
-		updates = append(updates, r.updates...)
-	}
-	return updates
 }
 
 // CollectITLUpdatesWithBookIDs returns updates and the book IDs that contributed them.

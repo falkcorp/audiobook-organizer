@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/dataset_backfill_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2f8ff156-b5ec-4480-ac97-27acc54fd013
-// last-edited: 2026-07-11
+// last-edited: 2026-07-13
 
 // End-to-end test for the dedup.dataset-backfill op against a real PebbleStore
 // + EmbeddingStore, added alongside the CONC-8 memoize-then-parallelize change
@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -105,6 +106,96 @@ func TestDatasetBackfill_ParallelMatchesSerialOutput(t *testing.T) {
 		if ex.Label != "" {
 			t.Fatalf("candidate %d: expected no rule label, got label=%q source=%q", cand, ex.Label, ex.LabelSource)
 		}
+	}
+}
+
+// failingUpsertStore wraps a real *database.EmbeddingStore but forces
+// UpsertLabeledExample to fail for a chosen set of candidate IDs. It exists
+// to test the dismiss-gate fix: a not_dup candidate whose LabeledExample
+// write fails must stay "pending" (never dismissed) so it's retried on the
+// next run, and the op must count the failure in upsertErrs.
+type failingUpsertStore struct {
+	*database.EmbeddingStore
+	failIDs map[int64]bool
+}
+
+func (f *failingUpsertStore) UpsertLabeledExample(ex database.LabeledExample) error {
+	if f.failIDs[ex.CandidateID] {
+		return fmt.Errorf("simulated upsert failure")
+	}
+	return f.EmbeddingStore.UpsertLabeledExample(ex)
+}
+
+// capturingReporter records the last UpdateProgress message so the test can
+// assert on the human-readable summary (which embeds upsert_errs).
+type capturingReporter struct {
+	fakeReporter
+	lastMsg string
+}
+
+func (r *capturingReporter) UpdateProgress(_, _ int, msg string) error {
+	r.lastMsg = msg
+	return nil
+}
+
+// TestDatasetBackfill_ApplyUpsertFailure_NotDismissed is the regression test
+// for the fix: before it, a not_dup candidate was dismissed regardless of
+// whether UpsertLabeledExample succeeded, so a write failure silently
+// dropped the candidate from the pending queue with no LabeledExample ever
+// persisted and no error counted. After the fix, the candidate stays
+// pending, no LabeledExample is written, and upsert_errs is reported.
+func TestDatasetBackfill_ApplyUpsertFailure_NotDismissed(t *testing.T) {
+	pebble := newPebbleForISBNIndexTest(t)
+	es := database.NewEmbeddingStore(pebble.DB())
+
+	hub := createBookWithHashedFile(t, pebble, "FailHub", "failhubhash0001")
+	leaf := createBookStubAudio(t, pebble, "FailLeafStub")
+	cand := candidateID(t, es, hub, leaf)
+
+	wrapped := &failingUpsertStore{EmbeddingStore: es, failIDs: map[int64]bool{cand: true}}
+	rep := &capturingReporter{}
+
+	if err := runDatasetBackfillWith(context.Background(), wrapped, pebble, json.RawMessage(`{"apply":true}`), rep); err != nil {
+		t.Fatalf("runDatasetBackfillWith: %v", err)
+	}
+
+	// No LabeledExample should have been persisted — the upsert failed.
+	ex, err := es.GetLabeledExample(cand)
+	if err != nil {
+		t.Fatalf("GetLabeledExample(%d): %v", cand, err)
+	}
+	if ex != nil {
+		t.Fatalf("candidate %d: expected no labeled example persisted after upsert failure, got %+v", cand, ex)
+	}
+
+	// The candidate must remain pending — NOT dismissed — so it's retried.
+	dismissed, _, err := es.ListCandidates(database.CandidateFilter{Status: "dismissed", Limit: 1_000_000})
+	if err != nil {
+		t.Fatalf("ListCandidates(dismissed): %v", err)
+	}
+	for _, c := range dismissed {
+		if c.ID == cand {
+			t.Fatalf("candidate %d: must not be dismissed when its label write failed", cand)
+		}
+	}
+	pending, _, err := es.ListCandidates(database.CandidateFilter{Status: "pending", Limit: 1_000_000})
+	if err != nil {
+		t.Fatalf("ListCandidates(pending): %v", err)
+	}
+	found := false
+	for _, c := range pending {
+		if c.ID == cand {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("candidate %d: expected to remain status=pending after upsert failure", cand)
+	}
+
+	// The summary must report the upsert failure.
+	if !strings.Contains(rep.lastMsg, "upsert_errs=1") {
+		t.Fatalf("expected final summary to report upsert_errs=1, got %q", rep.lastMsg)
 	}
 }
 

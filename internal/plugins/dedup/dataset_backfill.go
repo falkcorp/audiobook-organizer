@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/dataset_backfill.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2d6f8a13-7c40-4e92-8b15-9a3e5c7d2f64
-// last-edited: 2026-07-05
+// last-edited: 2026-07-13
 
 // Package dedup — op dedup.dataset-backfill (spec C4 backfill).
 //
@@ -128,6 +128,19 @@ func (m *memoizedBuilderAdapter) GetBookFiles(id string) ([]database.BookFile, e
 	return m.inner.GetBookFiles(id)
 }
 
+// datasetBackfillEmbeddingStore is the narrow embedding-store surface
+// runDatasetBackfill needs: list pending candidates, upsert a labeled
+// example, and (apply=true) flip a candidate's status. Abstracted so the
+// apply-path's upsert-failure handling can be unit-tested with a fake that
+// simulates a write failure (the real *database.EmbeddingStore satisfies
+// this interface unmodified). Mirrors labeledExampleStore in
+// rescore_labeled_examples.go.
+type datasetBackfillEmbeddingStore interface {
+	ListCandidates(f database.CandidateFilter) ([]database.DedupCandidate, int, error)
+	UpsertLabeledExample(ex database.LabeledExample) error
+	UpdateCandidateStatus(id int64, status string) error
+}
+
 // runDatasetBackfill implements the dedup.dataset-backfill op.
 func (p *Plugin) runDatasetBackfill(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
 	if p.embeddingStore == nil {
@@ -136,7 +149,19 @@ func (p *Plugin) runDatasetBackfill(ctx context.Context, rawParams json.RawMessa
 	if p.store == nil {
 		return fmt.Errorf("main store not available")
 	}
+	return runDatasetBackfillWith(ctx, p.embeddingStore, p.store, rawParams, reporter)
+}
 
+// runDatasetBackfillWith is the testable core: it lists pending candidates,
+// classifies each with the deterministic catchers, and (apply=true)
+// writes/dismisses through the given embStore.
+func runDatasetBackfillWith(
+	ctx context.Context,
+	embStore datasetBackfillEmbeddingStore,
+	mainStore database.Store,
+	rawParams json.RawMessage,
+	reporter sdk.Reporter,
+) error {
 	// --- Parse params ---
 	var params datasetBackfillParams
 	if len(rawParams) > 0 {
@@ -153,7 +178,7 @@ func (p *Plugin) runDatasetBackfill(ctx context.Context, rawParams json.RawMessa
 		Status: "pending",
 		Limit:  1_000_000,
 	}
-	cands, _, err := p.embeddingStore.ListCandidates(filter)
+	cands, _, err := embStore.ListCandidates(filter)
 	if err != nil {
 		return fmt.Errorf("list candidates: %w", err)
 	}
@@ -163,7 +188,7 @@ func (p *Plugin) runDatasetBackfill(ctx context.Context, rawParams json.RawMessa
 	// Book-lookup memoization (CONC-8): see memoizedBuilderAdapter doc comment.
 	// The cache is mutex-guarded because it's shared across the RunItems
 	// worker pool below.
-	adapter := newMemoizedBuilderAdapter(builderAdapter{store: p.store})
+	adapter := newMemoizedBuilderAdapter(builderAdapter{store: mainStore})
 
 	// statsMu guards the counters below, which every worker goroutine
 	// increments. Each candidate's own store reads/writes are independent and
@@ -176,6 +201,7 @@ func (p *Plugin) runDatasetBackfill(ctx context.Context, rawParams json.RawMessa
 		notDup     int
 		trueDup    int
 		buildErrs  int
+		upsertErrs int
 	)
 
 	_ = reporter.UpdateProgress(1, 2, fmt.Sprintf("Processing %d candidates…", len(cands)))
@@ -225,19 +251,27 @@ func (p *Plugin) runDatasetBackfill(ctx context.Context, rawParams json.RawMessa
 
 		if params.Apply {
 			// Write the labeled (or unlabeled) example to the store.
-			if err := p.embeddingStore.UpsertLabeledExample(ex); err != nil {
+			upsertOK := false
+			if err := embStore.UpsertLabeledExample(ex); err != nil {
 				reporter.Logger().Error("dataset-backfill: upsert error",
 					"candidate_id", c.ID, "error", err)
+				statsMu.Lock()
+				upsertErrs++
+				statsMu.Unlock()
 				// Continue — partial progress is better than aborting.
 			} else {
+				upsertOK = true
 				statsMu.Lock()
 				labeled++
 				statsMu.Unlock()
 			}
 
-			// Suppress only catchers-confirmed not_dup candidates.
-			if ex.Label == "not_dup" {
-				if err := p.embeddingStore.UpdateCandidateStatus(c.ID, "dismissed"); err != nil {
+			// Suppress only catchers-confirmed not_dup candidates whose label
+			// write actually succeeded. On an upsert failure the candidate
+			// stays "pending" for retry — dismissing it here would leave the
+			// label unwritten AND the candidate unreachable for re-examination.
+			if upsertOK && ex.Label == "not_dup" {
+				if err := embStore.UpdateCandidateStatus(c.ID, "dismissed"); err != nil {
 					reporter.Logger().Error("dataset-backfill: suppress error",
 						"candidate_id", c.ID, "error", err)
 				} else {
@@ -259,8 +293,8 @@ func (p *Plugin) runDatasetBackfill(ctx context.Context, rawParams json.RawMessa
 	}
 
 	summary := fmt.Sprintf(
-		"examined=%d not_dup=%d true_dup=%d labeled=%d suppressed=%d build_errs=%d (apply=%v)",
-		examined, notDup, trueDup, labeled, suppressed, buildErrs, params.Apply,
+		"examined=%d not_dup=%d true_dup=%d labeled=%d suppressed=%d build_errs=%d upsert_errs=%d (apply=%v)",
+		examined, notDup, trueDup, labeled, suppressed, buildErrs, upsertErrs, params.Apply,
 	)
 	reporter.Logger().Info("dataset-backfill complete", "summary", summary)
 

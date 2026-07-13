@@ -1,5 +1,6 @@
 <!-- file: TODO.md -->
 <!-- version: 9.100.0 -->
+<!-- version: 9.99.2 -->
 <!-- version: 9.99.1 -->
 <!-- version: 9.99.0 -->
 <!-- version: 9.98.0 -->
@@ -199,6 +200,36 @@ Adjacent unguarded paths NOT covered (separate follow-up): `dedup.MergeBooks`
   (orphan-cleanup op).
 
 ---
+
+## ✅ RESOLVED — silent-failure/robustness sweep: reorganize partial-write self-heal, dedup dismiss-on-failed-write, leaky dead ITL goroutine (2026-07-13)
+
+- **`ReOrganizeInPlace` partial-write self-heal** — after a directory-book's physical move
+  (`os.Rename`) succeeds, each `book_files` row's path rewrite went through
+  `_ = orgSvc.db.UpdateBookFile(...)` — error discarded. A failed row left the DB pointing at
+  the moved-away old path with no self-heal trigger, so the file would appear
+  missing/unplayable until a manual rescan. Now the error is logged and the book is marked
+  `MarkNeedsRescan` (once per call) so it self-heals on the next scan. Also fixed the
+  identical failure shape in the enclosing `GetBookFiles` error branch (skipped the whole
+  rewrite loop with no rescan trigger either).
+- **`dedup.dataset-backfill` dismiss gated on a successful label write** — previously a
+  `not_dup`-classified candidate was dismissed regardless of whether its
+  `UpsertLabeledExample` write succeeded, so a write failure silently dropped the candidate
+  from the pending queue with no label ever persisted and no failure counted. Dismissal now
+  requires the upsert to have succeeded; failures are counted (`upsertErrs`) and surfaced in
+  the op's summary.
+- **`dedup.rescore-labeled-examples` upsert failures now counted** — the narrow
+  read-modify-write's persist failure was logged but never counted, unlike the op's sibling
+  `score_errs`/`get_errs` counters. Added `upsert_errs` to the structured log + summary.
+- **Removed dead `CollectITLUpdates`** (`internal/itunes/service/importer.go`) — zero
+  production callers (only `CollectITLUpdatesWithBookIDs` is wired into the handler); its
+  4-worker pagination pool broke on the first short/empty page without draining or closing
+  its offset channel, leaking one blocked producer goroutine per call.
+- **Verified:** `TestReOrganizeInPlace_UpdateBookFileError_MarksNeedsRescan` (+ control test),
+  `TestDatasetBackfill_ApplyUpsertFailure_NotDismissed`,
+  `TestRescoreLabeledExamples_ApplyUpsertFailure_CountsError` all fail against pre-fix code
+  and pass against the fix. `internal/organizer/...`, `internal/plugins/dedup/...`,
+  `internal/itunes/...` green under `-race`; `go build ./...`, `go vet`, `gofmt -l` on touched
+  files, and `staticcheck` (touched packages + full `./...`) all clean.
 
 ## ✅ RESOLVED — library "Metadata"/"Dedup" tag bubbles miscounted + zero-result on click; "All Books" left tag filters stuck (2026-07-11)
 
