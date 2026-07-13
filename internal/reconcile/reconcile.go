@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-07-07
+// last-edited: 2026-07-13
 
 package reconcile
 
@@ -460,7 +460,7 @@ func FindUntrackedFiles(store Store, knownPaths map[string]bool) ([]string, erro
 	}
 	// Fallback if no extensions configured
 	if len(extSet) == 0 {
-		for _, ext := range []string{".m4b", ".mp3", ".m4a", ".flac", ".aac", ".ogg", ".wma"} {
+		for _, ext := range []string{".m4b", ".mp3", ".m4a", ".flac", ".aac", ".ogg", ".wma", ".opus", ".oga", ".wav", ".aiff", ".aif", ".mka", ".aax", ".aaxc"} {
 			extSet[ext] = true
 		}
 	}
