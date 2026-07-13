@@ -1,6 +1,7 @@
 // file: web/src/components/audiobooks/AudiobookCard.tsx
-// version: 1.12.0
+// version: 1.13.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
+// last-edited: 2026-07-13
 
 import React from 'react';
 import {
@@ -27,6 +28,7 @@ import {
 } from '@mui/icons-material';
 import type { Audiobook } from '../../types';
 import type { ColumnDefinition } from '../../config/columnDefinitions';
+import { formatTagLabel, shouldRenderTagChip } from '../../utils/tagDisplay';
 
 interface AudiobookCardProps {
   audiobook: Audiobook;
@@ -112,6 +114,11 @@ export const AudiobookCard: React.FC<AudiobookCardProps> = ({
   const getCoverPlaceholder = () => {
     return audiobook.title?.charAt(0).toUpperCase() || '?';
   };
+
+  // metadata:source:* tags never render as chips here — they stay
+  // filter-only (see FilterSidebar). Filter BEFORE slicing to 3 so the
+  // "+N more" overflow count below reflects the actually-visible set.
+  const visibleTags = (audiobook.tags ?? []).filter(shouldRenderTagChip);
 
   return (
     <Card
@@ -295,19 +302,19 @@ export const AudiobookCard: React.FC<AudiobookCardProps> = ({
           {audiobook.language && (
             <Chip label={audiobook.language} size="small" variant="outlined" />
           )}
-          {audiobook.tags && audiobook.tags.length > 0 && audiobook.tags.slice(0, 3).map((tag) => (
+          {visibleTags.slice(0, 3).map((tag) => (
             <Chip
               key={tag}
-              label={tag}
+              label={formatTagLabel(tag)}
               size="small"
               variant="outlined"
               color="secondary"
               icon={<LocalOfferIcon />}
             />
           ))}
-          {audiobook.tags && audiobook.tags.length > 3 && (
+          {visibleTags.length > 3 && (
             <Chip
-              label={`+${audiobook.tags.length - 3}`}
+              label={`+${visibleTags.length - 3}`}
               size="small"
               variant="outlined"
               color="secondary"

@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/FilterSidebar.tsx
-// version: 1.6.0
+// version: 1.7.0
 // guid: 2e3f4a5b-6c7d-8e9f-0a1b-2c3d4e5f6a7b
 
 import React from 'react';
@@ -23,6 +23,7 @@ import {
 } from '@mui/material';
 import { FilterList as FilterListIcon } from '@mui/icons-material';
 import type { FilterOptions } from '../../types';
+import { formatTagLabel } from '../../utils/tagDisplay';
 
 interface FilterSidebarProps {
   open: boolean;
@@ -204,7 +205,7 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
                 {availableTags.map((t) => (
                   <Chip
                     key={t.tag}
-                    label={`${t.tag} (${t.count})`}
+                    label={`${formatTagLabel(t.tag)} (${t.count})`}
                     size="small"
                     onClick={() => {
                       const exists = selectedTags.includes(t.tag);
@@ -229,7 +230,7 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
                     return (
                       <Chip
                         key={key}
-                        label={tag}
+                        label={formatTagLabel(tag)}
                         size="small"
                         variant="outlined"
                         {...rest}
@@ -249,7 +250,7 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
                           width: '100%',
                         }}
                       >
-                        <span>{option}</span>
+                        <span>{formatTagLabel(option)}</span>
                         {tagInfo && (
                           <Typography
                             variant="caption"

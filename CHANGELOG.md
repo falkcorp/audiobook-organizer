@@ -1,7 +1,7 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.156.0 -->
+<!-- version: 3.157.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
-<!-- last-edited: 2026-07-13 -->
+<!-- last-edited: 2026-07-14 -->
 
 # Changelog
 
@@ -204,6 +204,32 @@ pre-#1940 cached Audible entry is corrected on read so its year routes to
 every caller was updated); `internal/metafetch` + `internal/metadata` +
 `internal/metabatch` green under `-race`; targeted `internal/server` metadata/import
 tests green; `go vet` + `gofmt` clean.
+#### July 13, 2026 - feat(web): render metadata:language as language name, hide metadata:source chips (filter-only)
+
+Display-only cleanup of `metadata:*` system tags in the React frontend — storage and
+the API are unchanged; raw tags like `metadata:language:en` and
+`metadata:source:audible` are still stored and filtered on exactly as before. New
+shared helper `web/src/utils/tagDisplay.ts` (`formatTagLabel`, `isSourceTag`,
+`shouldRenderTagChip`):
+
+- **`metadata:language:<code>`** now renders as the language name (e.g. "English",
+  "Spanish") via `Intl.DisplayNames`, falling back to the code uppercased if the
+  runtime can't resolve it.
+- **`metadata:source:<name>`** (audible, openlibrary, googlebooks, audnexus, etc.)
+  no longer renders as a chip on book cards or in `TagEditor`'s system-tag row — it
+  remains a filter-only option in `FilterSidebar`, shown there with a clean label
+  ("Audible", "Open Library", "Google Books").
+- Any other `metadata:*` tag has the `metadata:` prefix stripped for display; plain
+  user tags are unaffected.
+- `AudiobookCard.tsx` filters out source tags before slicing to the visible 3, so the
+  "+N more" overflow count reflects only the chips actually shown.
+
+Changed: `web/src/utils/tagDisplay.ts` (new), `web/src/components/audiobooks/AudiobookCard.tsx`,
+`web/src/components/audiobooks/FilterSidebar.tsx`, `web/src/components/audiobooks/TagEditor.tsx`.
+New tests: `web/src/utils/__tests__/tagDisplay.test.ts` (18 cases),
+`web/src/components/audiobooks/AudiobookCard.test.tsx` (2 cases). Full frontend suite:
+388/388 passing across 59 files; `tsc && vite build` and `eslint .` both clean on the
+changed files.
 
 #### July 13, 2026 - fix(metafetch): share rate-limiter/breaker across batch + per-request throttle + cancellable Audnexus lookup
 
