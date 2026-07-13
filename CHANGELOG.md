@@ -102,6 +102,32 @@
   the rescan call is gated, not unconditional), `TestDatasetBackfill_ApplyUpsertFailure_NotDismissed`,
   `TestRescoreLabeledExamples_ApplyUpsertFailure_CountsError`. `internal/organizer/...`,
   `internal/plugins/dedup/...`, `internal/itunes/...` all green under `-race`.
+#### July 13, 2026 - fix(server): hydrate before write in entities_ops to stop full-record wipe (DATA-LOSS)
+
+- **Catastrophic data-loss fix** (backend) — the `entities.resolve-production-author` op had two
+  write sites that passed a near-empty `database.Book{}` literal to the **full-replace** `UpdateBook`,
+  wiping the ENTIRE stored Pebble record for each processed book:
+  - Publisher-reclassify branch: `UpdateBook(id, &database.Book{Publisher: &pub})` — kept only
+    Publisher.
+  - AI-cover author-resolve branch: `UpdateBook(id, &database.Book{AuthorID: &aid})` — kept only
+    AuthorID.
+  Everything else was destroyed: `Title`, `FilePath` (which also **corrupts the `book:path:` index**),
+  `SeriesID`, `Author`/`Series`, `Narrator`, `Genre`, `ISBN`/`ASIN`, all ratings, media-info,
+  transcription, and metadata-review state. `UpdateBook`'s preserve-on-nil guard only restores 7 heavy
+  `Description`/`BookSig*` fields — the rest were gone permanently.
+- **Fix:** both sites now hydrate the full current row via `GetBookByID` immediately before the write
+  and mutate ONLY the intended field, matching the STOREFID W5d-1 pattern (PR #1888). The write logic
+  is extracted into `assignPublisherPreservingRecord` / `assignResolvedAuthorPreservingRecord`.
+- **Fail-closed:** if hydration fails, NOTHING is written (a skipped publisher/author tag is far better
+  than a wiped record). The op logs the skip, increments a new hydrate-skip counter (surfaced in the
+  result message), and continues to the next book — a hydrate error never wedges the run. The
+  author-resolve site skips both the Book row and the `book_authors` join on hydrate error, so the
+  book stays consistently attributed to the production company rather than half-applied.
+- **Regression test** (`internal/server/entities_ops_hydrate_test.go`, real PebbleStore, `-race`):
+  a fully-populated book run through each write path keeps Title/FilePath/AuthorID (or Publisher)/
+  ratings/ISBN/etc. intact and the `book:path:` index still resolves; a missing-book write returns an
+  error and creates no phantom row. Reverting a call site to the bare literal reintroduces the wipe
+  inside the tested function and fails the test.
 
 #### July 13, 2026 - feat(dedup): keep labeled-example ScoreBreakdown fresh on dismiss/relabel
 

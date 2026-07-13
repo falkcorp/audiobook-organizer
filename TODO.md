@@ -2,6 +2,7 @@
 <!-- version: 9.100.0 -->
 <!-- version: 9.99.2 -->
 <!-- version: 9.99.1 -->
+<!-- version: 9.99.2 -->
 <!-- version: 9.99.0 -->
 <!-- version: 9.98.0 -->
 <!-- version: 9.97.0 -->
@@ -298,6 +299,32 @@ Adjacent unguarded paths NOT covered (separate follow-up): `dedup.MergeBooks`
   `saveBookToDatabase` + `PebbleStore.UpdateBook` round-trip and asserts 20 previously-wiped fields
   survive a rescan; proven to FAIL against the old write path. `-race` clean; full scanner package
   green. CHANGELOG + July monthly executive summary (§4 data-integrity) updated.
+## ✅ RESOLVED — entities.resolve-production-author empty-literal UpdateBook wiped the WHOLE book record (2026-07-13)
+
+- **Root cause, exact locations:** `internal/server/entities_ops.go` — the
+  `entities.resolve-production-author` op had **two** write sites passing a near-empty
+  `database.Book{}` literal to the full-replace `UpdateBook`:
+  - publisher-reclassify branch: `UpdateBook(book.ID, &database.Book{Publisher: &pub})` (kept only Publisher);
+  - AI-cover author-resolve branch: `UpdateBook(book.ID, &database.Book{AuthorID: &aid})` (kept only AuthorID).
+  `book` came from `GetBooksByAuthorIDWithRoleCore` (a `BookCore` projection) but the writes ignored
+  it. Because `UpdateBook`'s STOR-1 preserve-on-nil guard only restores 7 heavy
+  `Description`/`BookSig*` fields, every other stored field — `Title`, `FilePath` (which also
+  **corrupts the `book:path:` index**), `SeriesID`, `Author`/`Series`, `Narrator`, `Genre`,
+  `ISBN`/`ASIN`, all ratings, media-info, transcription, metadata-review state — was permanently
+  wiped for every processed book. Same footgun family as W5d-1 (below) and the deluge
+  fingerprint-wipe.
+- **Fix (2026-07-13):** both sites hydrate the full current row via `GetBookByID` immediately before
+  the write and mutate ONLY the intended field (STOREFID W5d-1 idiom, PR #1888). Write logic
+  extracted into `assignPublisherPreservingRecord` / `assignResolvedAuthorPreservingRecord` so the
+  regression test binds to the real write path. **Fail-CLOSED** here (unlike W5d-1's fail-OPEN): on a
+  hydrate error nothing is written — a skipped publisher/author tag beats a wiped record — the op
+  logs the skip, bumps a new hydrate-skip counter (surfaced in the result message), and continues to
+  the next book. Only these two sites had the empty-literal footgun; the author-merge op in the same
+  file already hydrates via `GetBookByID` before its `UpdateBook`.
+- **Verified:** `internal/server/entities_ops_hydrate_test.go` (real `PebbleStore`, `-race`) — a
+  fully-populated book run through each path keeps every previously-wiped field and the `book:path:`
+  index intact; a missing-book write returns an error and writes no phantom row. `go build ./...`,
+  `go vet`, `gofmt -l` clean.
 
 ## ✅ RESOLVED — CreateOrganizedVersion original-book slim-writeback wiped Author/Series (STOREFID W5d-1, 2026-07-07; CONFIRMED 2026-07-11 by #1887; FIXED 2026-07-11)
 

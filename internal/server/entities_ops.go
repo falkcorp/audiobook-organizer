@@ -1,6 +1,7 @@
 // file: internal/server/entities_ops.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f7e2a91-b4c6-4d85-9e13-7a2f10c84d32
+// last-edited: 2026-07-13
 
 // entities_ops registers the UOS-02 OperationDefs for author entity
 // operations: author-merge and resolve-production-author. Each def is
@@ -225,6 +226,7 @@ func (s *Server) RegisterResolveProductionAuthorOp(reg *opsregistry.Registry) er
 
 			resolved := 0
 			failed := 0
+			hydrateSkipped := 0
 			for i, book := range books {
 				if ctx.Err() != nil {
 					return ctx.Err()
@@ -238,11 +240,15 @@ func (s *Server) RegisterResolveProductionAuthorOp(reg *opsregistry.Registry) er
 					newAuthor, _ := store.GetAuthorByID(*resp.Book.AuthorID)
 					if newAuthor != nil && !dedup.IsProductionCompany(newAuthor.Name) {
 						_ = progress.Log("info", fmt.Sprintf("Resolved %q → author %q (source: %s)", book.Title, newAuthor.Name, resp.Source), nil)
-						// Reclassify production company as publisher
+						// Reclassify production company as publisher. Hydrate the
+						// full stored row before the write (see
+						// assignPublisherPreservingRecord) so the full-replace
+						// UpdateBook cannot wipe Title/FilePath/ratings/etc.
 						if book.Publisher == nil || *book.Publisher == "" {
-							pub := prodAuthorName
-							book.Publisher = &pub
-							store.UpdateBook(book.ID, &database.Book{Publisher: &pub})
+							if err := assignPublisherPreservingRecord(store, book.ID, prodAuthorName); err != nil {
+								_ = progress.Log("warn", fmt.Sprintf("Skipped publisher reclassify for %q (hydrate failed, record left intact): %v", book.Title, err), nil)
+								hydrateSkipped++
+							}
 						}
 						resolved++
 						continue
@@ -263,24 +269,20 @@ func (s *Server) RegisterResolveProductionAuthorOp(reg *opsregistry.Registry) er
 								existing, _ = store.CreateAuthor(parsed.Author)
 							}
 							if existing != nil {
-								aid := existing.ID
-								book.AuthorID = &aid
-								store.UpdateBook(book.ID, &database.Book{AuthorID: &aid})
-								// Update book_authors
-								bookAuthors, _ := store.GetBookAuthors(book.ID)
-								var updated []database.BookAuthor
-								for _, ba := range bookAuthors {
-									if ba.AuthorID != authorID {
-										updated = append(updated, ba)
-									}
+								// Assign the discovered author. Hydrate the full
+								// stored row before the AuthorID write (see
+								// assignResolvedAuthorPreservingRecord) so the
+								// full-replace UpdateBook cannot wipe the record.
+								// Fail-closed: on hydrate error nothing is written
+								// (neither the Book row nor the join), leaving the
+								// book consistently attributed to the production
+								// company rather than half-resolved or wiped.
+								if err := assignResolvedAuthorPreservingRecord(store, book.ID, existing.ID, authorID); err != nil {
+									_ = progress.Log("warn", fmt.Sprintf("Skipped author resolve for %q (hydrate failed, record left intact): %v", book.Title, err), nil)
+									hydrateSkipped++
+									failed++
+									continue
 								}
-								updated = append(updated, database.BookAuthor{
-									BookID:   book.ID,
-									AuthorID: existing.ID,
-									Role:     "author",
-									Position: 0,
-								})
-								store.SetBookAuthors(book.ID, updated)
 								resolved++
 								continue
 							}
@@ -297,12 +299,89 @@ func (s *Server) RegisterResolveProductionAuthorOp(reg *opsregistry.Registry) er
 			}
 			s.authorsCache.InvalidateAll()
 
-			resultMsg := fmt.Sprintf("Resolved %d/%d books for %q (%d unresolved)", resolved, len(books), prodAuthorName, failed)
+			resultMsg := fmt.Sprintf("Resolved %d/%d books for %q (%d unresolved, %d skipped on hydrate error)", resolved, len(books), prodAuthorName, failed, hydrateSkipped)
 			_ = progress.Log("info", resultMsg, nil)
 			_ = progress.UpdateProgress(len(books), len(books), resultMsg)
 			return nil
 		},
 	})
+}
+
+// assignPublisherPreservingRecord reclassifies a production company as the
+// book's Publisher WITHOUT wiping the rest of the stored record.
+//
+// database.Store.UpdateBook is a FULL-REPLACE write: it marshals the whole Book
+// passed to it (only seven heavy Description/BookSig* fields are restored from
+// the old row). Passing a near-empty literal such as &database.Book{Publisher:…}
+// therefore wipes Title, FilePath (which also corrupts the book:path: index),
+// AuthorID, ratings, media-info, and everything else. This helper instead
+// hydrates the current full row via GetBookByID and mutates only Publisher, so
+// every other field survives the write.
+//
+// Fail-closed: if hydration fails it returns the error and writes NOTHING. A
+// skipped publisher tag is far better than a wiped record; the caller counts the
+// skip and moves on to the next book.
+func assignPublisherPreservingRecord(store database.Store, bookID, publisher string) error {
+	full, err := store.GetBookByID(bookID)
+	if err != nil {
+		return fmt.Errorf("hydrate book %s before publisher write: %w", bookID, err)
+	}
+	if full == nil {
+		return fmt.Errorf("hydrate book %s before publisher write: not found", bookID)
+	}
+	pub := publisher
+	full.Publisher = &pub
+	if _, err := store.UpdateBook(bookID, full); err != nil {
+		return fmt.Errorf("update book %s publisher: %w", bookID, err)
+	}
+	return nil
+}
+
+// assignResolvedAuthorPreservingRecord points a book at a newly discovered
+// author: it sets the denormalized Book.AuthorID and rewrites the book_authors
+// join to drop the production-company author and add the resolved one — WITHOUT
+// wiping the rest of the stored record (see assignPublisherPreservingRecord for
+// why a bare UpdateBook literal is catastrophic).
+//
+// Fail-closed: if hydration fails it returns the error before touching anything,
+// so neither the Book row nor the join is written and the book stays consistently
+// attributed to the production company (unresolved) rather than half-applied or
+// wiped. The join rewrite itself is best-effort: an error there is logged by the
+// caller path but does not roll back the AuthorID write (matching prior behavior).
+func assignResolvedAuthorPreservingRecord(store database.Store, bookID string, resolvedAuthorID, prodAuthorID int) error {
+	full, err := store.GetBookByID(bookID)
+	if err != nil {
+		return fmt.Errorf("hydrate book %s before author write: %w", bookID, err)
+	}
+	if full == nil {
+		return fmt.Errorf("hydrate book %s before author write: not found", bookID)
+	}
+	aid := resolvedAuthorID
+	full.AuthorID = &aid
+	if _, err := store.UpdateBook(bookID, full); err != nil {
+		return fmt.Errorf("update book %s author: %w", bookID, err)
+	}
+
+	// Rewrite the book_authors join: drop the production-company author, add the
+	// resolved author. Best-effort, as before — a failure here is logged but does
+	// not fail the resolution (the denormalized AuthorID already points correctly).
+	bookAuthors, _ := store.GetBookAuthors(bookID)
+	var updated []database.BookAuthor
+	for _, ba := range bookAuthors {
+		if ba.AuthorID != prodAuthorID {
+			updated = append(updated, ba)
+		}
+	}
+	updated = append(updated, database.BookAuthor{
+		BookID:   bookID,
+		AuthorID: resolvedAuthorID,
+		Role:     "author",
+		Position: 0,
+	})
+	if err := store.SetBookAuthors(bookID, updated); err != nil {
+		slog.Warn("resolve-production-author: failed to rewrite book_authors join", "book", bookID, "err", err)
+	}
+	return nil
 }
 
 func init() {
