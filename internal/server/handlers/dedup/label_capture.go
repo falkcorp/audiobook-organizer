@@ -1,15 +1,18 @@
 // file: internal/server/handlers/dedup/label_capture.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7c1d9e42-3a8b-4f60-9c21-5e0a7b2d6f48
-// last-edited: 2026-06-23
+// last-edited: 2026-07-13
 
 package deduphandler
 
 import (
+	"context"
+	"encoding/json"
 	"log/slog"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/dataset"
 )
 
@@ -81,6 +84,12 @@ func (h *Handler) recordHumanLabel(ex *database.LabeledExample, label, reason st
 	ex.LabelSource = labelSourceHuman
 	ex.LabelReason = reason
 	ex.DecidedAt = time.Now().UTC().Format(time.RFC3339)
+	// (Re)snapshot the pair's current ScoreBreakdown onto this example BEFORE the
+	// single upsert, so a dismissed/below-band pair still carries a persisted
+	// breakdown for calibration coverage. Best-effort: touches only the score
+	// fields and never blocks the label write. Background context — this gold
+	// capture should complete regardless of the request's own cancellation.
+	h.refreshExampleBreakdown(context.Background(), ex)
 	if err := es.UpsertLabeledExample(*ex); err != nil {
 		slog.Warn("dedup label capture: upsert failed", "candidate_id", ex.CandidateID, "error", err)
 		return
@@ -104,4 +113,67 @@ func (h *Handler) captureHumanLabelByID(candidateID int64, label, reason string)
 		return
 	}
 	h.recordHumanLabel(h.snapshotCandidateExample(cand), label, reason)
+}
+
+// refreshExampleBreakdown recomputes the pair's current ScoreBreakdown with the
+// engine's shared scorer (Engine.ScorePairsForBook — the same collectors +
+// unified.ComposeScore the operational scan uses, no fork) and narrow-writes ONLY
+// ex.Score / ex.ScoreBreakdown / ex.Band in place. It is the ongoing counterpart
+// to the one-shot dedup.rescore-labeled-examples backfill: without it, dismissing
+// or relabeling a pair rewrites the label but never re-snapshots its breakdown
+// (engine.upsertCandidateWithLiveLabel captures only brand-new pairs), so the
+// calibration gold set slowly rots back to no-coverage as new labels accrue.
+//
+// Contract:
+//   - Best-effort: any failure (nil engine, nil book, score error, marshal error)
+//     is logged at debug and swallowed — the caller's label write MUST still
+//     proceed. A user dismissing a pair always succeeds even if rescoring hiccups.
+//   - Below-band pairs are persisted: ScorePairsForBook does NOT drop below-band
+//     scores, and this method persists whenever a score with >=1 signal is
+//     produced — those low-scoring negatives ARE the calibration signal.
+//   - Zero-signal / merge-deleted-book pairs no-op cleanly (nil result or
+//     NumSignals==0), so no bogus breakdown is ever written.
+//   - Data safety: it touches ONLY the three score fields. Label, LabelSource
+//     (esp. "human"), LabelReason, DecidedAt and every other field the caller
+//     just set are left exactly as they are.
+//
+// EmbeddingCos is sourced from the example's stored Similarity ONLY when its Layer
+// is "embedding" — identical to dedup.rescore-labeled-examples, so the two paths
+// reconstruct the embedding signal the same way and stay bit-consistent.
+func (h *Handler) refreshExampleBreakdown(ctx context.Context, ex *database.LabeledExample) {
+	if ex == nil || h.dedupEngine == nil {
+		return
+	}
+	if ex.EntityAID == "" || ex.EntityBID == "" {
+		return
+	}
+
+	in := dedup.RescorePairInput{OtherID: ex.EntityBID}
+	if ex.Layer == "embedding" && ex.Similarity != nil {
+		cos := *ex.Similarity
+		in.EmbeddingCos = &cos
+	}
+
+	results, err := h.dedupEngine.ScorePairsForBook(ctx, ex.EntityAID, []dedup.RescorePairInput{in})
+	if err != nil {
+		slog.Debug("dedup label capture: rescore failed",
+			"candidate_id", ex.CandidateID, "entity_a", ex.EntityAID, "entity_b", ex.EntityBID, "error", err)
+		return
+	}
+	if len(results) == 0 || results[0].Score == nil || results[0].NumSignals == 0 {
+		// Zero-signal / unscorable / merge-deleted-book pair — never persist a
+		// bogus (empty) breakdown; leave whatever the example already carried.
+		return
+	}
+
+	sc := results[0].Score
+	raw, mErr := json.Marshal(sc)
+	if mErr != nil {
+		slog.Debug("dedup label capture: marshal score failed", "candidate_id", ex.CandidateID, "error", mErr)
+		return
+	}
+	// Narrow write: ONLY the score fields.
+	ex.Score = sc.Score
+	ex.ScoreBreakdown = raw
+	ex.Band = sc.Band
 }
