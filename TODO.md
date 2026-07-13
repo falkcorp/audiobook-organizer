@@ -1,4 +1,5 @@
 <!-- file: TODO.md -->
+<!-- version: 9.100.0 -->
 <!-- version: 9.99.1 -->
 <!-- version: 9.99.0 -->
 <!-- version: 9.98.0 -->
@@ -41,6 +42,20 @@ remaining-work catalog, produced, adversarially judged (3 lenses × 10), brief-v
   (STOP-FOR-HUMAN); INIT-9 REPO-SIZE-1 history-rewrite plan; INIT-7 hold-lift (#1260–#1265).
 - Prod-data mutations (INIT-1 T7, INIT-2 T3/T6 drains, INIT-10 C8) are dry-run →
   AskUserQuestion gated in the briefs.
+
+## ✅ RESOLVED — concurrent dedup merges could corrupt/vanish a version group (2026-07-13)
+
+`merge.Service.MergeBooks` (a process-wide singleton shared by `dedup.full-scan`
+auto-merge, `dedup.auto-resolve`, LLM `ApplyVerdicts`, and the HTTP merge handlers)
+did an unguarded read-modify-write per book. Two concurrent merges on a shared book
+could leave it both primary and soft-deleted, split a version group across two ULIDs,
+or soft-delete the winner. **Fixed** by a `sync.Mutex` inside `MergeBooks` (removed the
+redundant Engine-level `mergeMu`). Also: `autoMergeCertain` now writes a provisional
+reversal-journal entry *before* the merge (hard error → skip if it fails) and patches it
+after; `ApplyVerdicts` gained the soft-deleted pre-check + loser candidate cleanup.
+See `docs/executive-summaries/2026-07-13-merge-serialization-executive-summary.md`.
+Adjacent unguarded paths NOT covered (separate follow-up): `dedup.MergeBooks`
+(book_dedup.go, its own store read-modify-write) and `merge.Service.CombineBooks`.
 
 ### ✅ Execution Wave 1 + Wave 2 + Wave 2b shipped (2026-07-10/11) — 15/50 tasks merged
 

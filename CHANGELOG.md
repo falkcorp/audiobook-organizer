@@ -1,4 +1,5 @@
 <!-- file: CHANGELOG.md -->
+<!-- version: 3.148.0 -->
 <!-- version: 3.147.0 -->
 <!-- version: 3.146.0 -->
 <!-- version: 3.145.0 -->
@@ -11,6 +12,32 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 13, 2026 - fix(dedup): serialize MergeBooks + harden auto-merge journal/guards (data-loss risk)
+
+- **Concurrent-merge corruption fix** (backend, REVIEW-CRITICAL) — `merge.Service.MergeBooks` did an
+  unguarded read-modify-write per book (`GetBookByID` → mutate → full-column `UpdateBook` →
+  soft-delete losers) with no lock. The `merge.Service` is a process-wide singleton shared by the
+  dedup ops (`dedup.full-scan` auto-merge, `dedup.auto-resolve`, LLM `ApplyVerdicts`) AND the HTTP
+  merge handlers, which run concurrently (distinct ConcurrencyKeys, 8-worker pool). Two merges
+  touching a shared book could interleave and leave it BOTH primary and soft-deleted, strand a
+  version group across two ULIDs, or soft-delete the winner (an entire version group vanishing from
+  the library). `AutoMergeEnabled` is on in prod. Fixed by a `sync.Mutex` INSIDE `MergeBooks` so the
+  whole read-modify-write is atomic against every other merge across all callers; the now-redundant
+  Engine-level `mergeMu` was removed. Scoped to the merge only (fast Pebble/in-memory ops — no slow
+  work under the lock).
+- **Auto-merge journal reversibility** — `autoMergeCertain` wrote its reversal journal entry *after*
+  the destructive merge and swallowed write errors, so a crash (or any journal-write failure) between
+  merge and journal left a completed, irreversible merge with no undo key. Now a provisional entry
+  (candidate + predicted winner/loser via the same `merge.BookIsBetter`) is written BEFORE the merge;
+  a provisional-write failure is a hard error that SKIPS the merge, and the entry is patched with the
+  authoritative winner/loser + pre-merge snapshot timestamps afterward.
+- **`ApplyVerdicts` safety rails** (behind `LLMAutoMergeHighConfidence`, off in prod) — added the
+  soft-deleted pre-check (skip a pair when either book was already merged away earlier in the batch,
+  preventing a double-merge that leaves two live primaries) and `CleanupCandidatesAfterMerge` for the
+  loser, mirroring `autoMergeCertain`.
+- Tests: a load-bearing `-race` merge-serialization test (verified to fail with the lock reverted:
+  `maxActive=16`), a journal-failure-skips-merge test, and an `ApplyVerdicts` batch skip/cleanup test.
 
 #### July 13, 2026 - feat(dedup): keep labeled-example ScoreBreakdown fresh on dismiss/relabel
 
