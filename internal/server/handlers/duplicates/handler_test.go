@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/handler_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 62637af9-347f-4f38-b42b-d90ff3ab3654
-// last-edited: 2026-07-01
+// last-edited: 2026-07-12
 
 // Tests for the duplicates-domain handlers. The store / merge-service /
 // audiobook-service / metadata-fetch-service / operations-registry deps are
@@ -62,11 +62,7 @@ type cfg struct {
 	hasReg, hasMerge, hasAud, hasMeta, hasDedupEng bool
 }
 
-func noReg(c *cfg)      { c.hasReg = false }
-func noMerge(c *cfg)    { c.hasMerge = false }
-func noAud(c *cfg)      { c.hasAud = false }
-func noMeta(c *cfg)     { c.hasMeta = false }
-func noDedupEng(c *cfg) { c.hasDedupEng = false }
+func noReg(c *cfg) { c.hasReg = false }
 
 // newHandler builds a Handler with fresh mocks. The dedupCache is a real
 // in-memory cache.Cache[gin.H]. Any dep can be left out via the no* options to

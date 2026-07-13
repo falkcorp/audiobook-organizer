@@ -1,7 +1,7 @@
 // file: internal/server/handlers/diagnostics.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 14e70c44-73ca-456a-bc67-8dc6ba6e5736
-// last-edited: 2026-07-07
+// last-edited: 2026-07-12
 
 // DiagnosticsHandler hosts the diagnostics HTTP endpoints extracted from the
 // server package: ZIP export start/download, AI batch submit + results, applying
@@ -88,6 +88,7 @@ type dbHealthResponse struct {
 }
 
 type dbHealthSQLite struct {
+	//lint:ignore SA1019 kept for db-health JSON compat (2026-07-12); replaced by a PebbleDB key-count table in a future cleanup
 	Tables    []database.SQLiteTableStat `json:"tables"`
 	SizeBytes int64                      `json:"size_bytes"`
 }

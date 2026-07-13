@@ -1,7 +1,7 @@
 // file: internal/operations/registry/teststore_test.go
-// version: 2.8.0
+// version: 2.8.1
 // guid: c9d0e1f2-a3b4-5c6d-7e8f-9a0b1c2d3e4f
-// last-edited: 2026-06-24
+// last-edited: 2026-07-12
 
 package registry_test
 
@@ -58,13 +58,6 @@ func newFakeStore() *fakeStore {
 		completions: make(map[string]uint64),
 		batchBucket: make(map[string]database.BatchBucketEntry),
 	}
-}
-
-// setDepRev sets the dep_rev for a subject (for test control).
-func (f *fakeStore) setDepRev(subType, subID string, rev uint64) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.depRevs[subType+":"+subID] = rev
 }
 
 // setCompletion records an op completion at a given dep_rev (for test control).
@@ -587,20 +580,6 @@ func (f *fakeStore) ClearBatchBucket(opType string, subs []database.OpSubject) e
 		delete(f.batchBucket, opType+":"+sub.Type+":"+sub.ID)
 	}
 	return nil
-}
-
-// batchBucketSize returns the number of pending subjects in the bucket for opType.
-func (f *fakeStore) batchBucketSize(opType string) int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	prefix := opType + ":"
-	n := 0
-	for k := range f.batchBucket {
-		if len(k) >= len(prefix) && k[:len(prefix)] == prefix {
-			n++
-		}
-	}
-	return n
 }
 
 // timeNowNano is a variable so tests can override the clock.

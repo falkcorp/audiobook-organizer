@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.113.0
+// version: 1.113.1
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-07-11
+// last-edited: 2026-07-12
 
 package database
 
@@ -3869,6 +3869,8 @@ func deleteFingerprintLSHIndexesByIDWithStore(s *PebbleStore, batch *pebble.Batc
 // access to the *PebbleStore handle (see deleteFingerprintLSHIndexesByIDWithStore)
 // because UpdateBookFile uses a non-indexed batch and we have to read the
 // meta row from the committed DB state.
+//
+//lint:ignore U1000 kept: no-op placeholder for the secondary-index-delete hook signature (see doc above, 2026-07-12)
 func deleteFingerprintLSHIndexesByID(_ *pebble.Batch, _ string) error {
 	return nil
 }

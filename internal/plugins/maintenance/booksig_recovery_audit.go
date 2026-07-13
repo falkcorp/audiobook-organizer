@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/booksig_recovery_audit.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5f2a7c14-9b3e-4d6a-8e1f-2c0d5a9b7e34
-// last-edited: 2026-07-03
+// last-edited: 2026-07-12
 
 package maintenance
 
@@ -51,11 +51,10 @@ type bookSigRecoveryAuditParams struct {
 
 // auditExample is one concrete finding surfaced in the report.
 type auditExample struct {
-	bookID  string
-	title   string
-	field   string // "description" or "booksig_v1"
-	snapTS  *time.Time
-	details string
+	bookID string
+	title  string
+	field  string // "description" or "booksig_v1"
+	snapTS *time.Time
 }
 
 func (e auditExample) String() string {

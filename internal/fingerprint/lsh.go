@@ -1,7 +1,7 @@
 // file: internal/fingerprint/lsh.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 1f2a3b4c-5d6e-7f80-9a1b-2c3d4e5f6071
-// last-edited: 2026-05-30
+// last-edited: 2026-07-12
 
 package fingerprint
 
@@ -43,13 +43,6 @@ const LSHSubprintBytes = 8
 // single-collision noise (which happens on unrelated material at a low
 // but nonzero rate) while still surviving meaningful encoder drift.
 const LSHMinBandHits = 2
-
-// minFramesForLSH is the smallest fp we can sample. Need enough frames
-// after edge-trimming to fit LSHBandCount non-overlapping 2-frame
-// windows. Anything smaller returns zero subprints (no panic, no
-// fallback — caller treats it as "no index entry").
-const minFramesForLSH = 2 * 240 // 2*30s edge skip when fp >= ~12min;
-//                                    fp <= this just yields fewer bands.
 
 // Subprint is a single LSH bucket value: 8 raw bytes (two consecutive
 // little-endian uint32 chromaprint frames). Compare with byte equality.

@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.96.0 -->
+<!-- version: 9.97.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-12 -->
 
@@ -1473,9 +1473,19 @@ must sequence, but A and B are parallelizable. Spawn:
   `logger.WithOperation` in `registry_wire.go`) to invert the dependency direction, and moved
   `UnifiedDedupScore`/`Signal`/`SignalKind` to a new neutral `internal/models` package with type
   aliases left in `internal/dedup/unified`. `make sdkguard` is green on main.
-- [ ] **STATICCHECK-BURNDOWN** (2026-07-03) — ~18 pre-existing findings remain after the partial
-  cleanup in #1767; `make ci`'s staticcheck step fails on main until drained. Good Haiku-sweep
-  candidate.
+- [x] **STATICCHECK-BURNDOWN** (2026-07-03) — ✅ done 2026-07-12 (TASK-02, 42 findings drained):
+  37 U1000 + 4 SA1019 + 1 SA4000. 31 grep-verified-dead U1000 symbols deleted; 4 U1000 kept with
+  `//lint:ignore` + reason (migration014UpPebble, deleteFingerprintLSHIndexesByID placeholder,
+  rewriteChunksBE BE-write subsystem, deluge importToLibrary — each a documented placeholder or
+  dropped wire-up worth surfacing, see follow-up note below); 3 SA1019 SQLite-RBAC sentinel
+  callers removed (dead always-false guards) and the `ErrSQLiteRBACUnsupported` sentinel deleted;
+  1 SA1019 (`SQLiteTableStat`) kept as a deliberate JSON-compat `//lint:ignore`; SA4000 fixed by
+  binding two `shardFor` calls to distinct locals. `staticcheck ./...` now exits 0, so `make ci`'s
+  staticcheck step is green on main for the first time since #1767.
+  Follow-up (non-blocking): 4 `//lint:ignore U1000` symbols flag latent/unwired code a human should
+  review — migration014UpPebble (Pebble corrupted-path migration not dispatched), deluge
+  importToLibrary (server shim points at a non-existent `deluge.ImportToLibrary`), rewriteChunksBE
+  (BE ITL write-back not hooked into the write path).
 - [ ] **MOCK-FRESHNESS-GLOB-GAP** (2026-07-03) — the Mock Freshness CI gate's `internal/*/mocks/`
   glob misses nested mocks dirs (e.g. the dir holding `mock_dedup_engine.go`, stale since #1736
   until hand-regenerated in #1757). Widen the glob to `internal/**/mocks/`.

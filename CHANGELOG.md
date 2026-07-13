@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.144.0 -->
+<!-- version: 3.145.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-12 -->
 
@@ -8,6 +8,28 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 12, 2026 - chore(lint): drain staticcheck backlog to zero findings (#1796, TASK-02)
+
+- **`lint`** (backend) — `staticcheck ./...` now exits 0 for the first time since #1767, so the
+  local `make ci` staticcheck step is honest again (the per-PR merge gate, Minimal CI, never ran
+  staticcheck). 42 findings drained: 37 U1000 (unused), 4 SA1019 (deprecated), 1 SA4000.
+- 31 grep-verified-dead U1000 symbols removed (dead-duplicate handlers/aliases/helpers, superseded
+  wrappers, redundant `maxInt`, unused test helpers, write-only `worksLookupDisabled`, unused
+  struct fields). Every deletion was confirmed dead across all build configs by a repo-wide grep
+  before removal; the whole dead-duplicate file `internal/server/metadata_cached_handlers.go` was
+  deleted (its route-wired twin is `internal/server/handlers/metadata_cache.go`).
+- 4 U1000 symbols were **kept** with per-line `//lint:ignore U1000 <reason>` because they are
+  documented placeholders or dropped wire-ups a human should see, not truly dead:
+  `migration014UpPebble`, `deleteFingerprintLSHIndexesByID`, `rewriteChunksBE` (root of the
+  big-endian ITL write subsystem), and the deluge `importToLibrary`.
+- SA1019: the 3 `database.ErrSQLiteRBACUnsupported` callers (permanently-dead always-false guards
+  against a backend that no longer exists) were removed and the sentinel itself deleted; the
+  `database.SQLiteTableStat` use is a deliberate db-health JSON-compat keep (`//lint:ignore`).
+- SA4000: a determinism test comparing `shardFor(k) != shardFor(k)` was rewritten to bind the two
+  calls to distinct locals — same assertion, no permanent suppression.
+- No runtime behavior changed: everything deleted was statically unreachable or a
+  deprecated-but-inert sentinel. staticcheck version: 2026.1 (v0.7.0).
 
 #### July 12, 2026 - fix(dedup): same-title/high-similarity not_dup mining guard (INIT-1 adjacent)
 

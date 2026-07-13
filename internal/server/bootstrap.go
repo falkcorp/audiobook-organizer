@@ -1,7 +1,7 @@
 // file: internal/server/bootstrap.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: 3e7c9a12-4f6b-4d8e-b5a1-2c8f0e3d9b47
-// last-edited: 2026-07-03
+// last-edited: 2026-07-12
 
 package server
 
@@ -399,13 +399,8 @@ func (s *Server) handleBootstrap(c *gin.Context) {
 // one if none exists. Returns (user, generatedPassword, error); generatedPassword
 // is non-empty only when a new user was created.
 func findOrCreateAdminUser(store database.Store) (*database.User, string, error) {
-	// Fail loudly on backends without RBAC (SQLite). Proceeding silently would
-	// create an admin whose role never resolves, so every authenticated request
-	// would then 403 with no explanation (pen-test finding HIGH-4b).
-	if _, err := store.GetRoleByName("admin"); errors.Is(err, database.ErrSQLiteRBACUnsupported) {
-		return nil, "", fmt.Errorf("bootstrap requires a role-capable backend: %w", err)
-	}
-
+	// (Removed the SQLite-RBAC-unsupported guard: PebbleDB is the only backend and
+	// always resolves roles, so the guard's sentinel check was permanently dead.)
 	users, err := store.ListUsers()
 	if err != nil {
 		return nil, "", err

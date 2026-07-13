@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_filtering.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: b4e8c3d2-e5f6-7a80-9b0c-1d2e3f4a5b6c
-// last-edited: 2026-07-05
+// last-edited: 2026-07-12
 
 package audiobooks
 
@@ -734,24 +734,6 @@ func splitMultipleNames(name string) []string {
 		return []string{name}
 	}
 	return result
-}
-
-// aggregateFileMetadata calculates total duration and file size from files
-// for each book. Uses GetBookFilesForIDsCore to fetch ONLY the files for the
-// passed-in books — not GetAllBookFiles, which materialized all 308K+
-// book_file rows (~46GB heap) on every library list query and trampolined
-// the process to 67GB the moment the filter-pushdown warmer started.
-//
-// This is the fetch-then-aggregate wrapper. Callers that already have a
-// files map (e.g. the list handler which uses it twice) should call
-// FetchBookFilesForBooks once and then aggregateFileMetadataWithFiles +
-// EnrichAudiobooksWithNamesAndFiles to avoid a duplicate fetch.
-func (svc *AudiobookService) aggregateFileMetadata(books []database.Book) {
-	if svc.store == nil || len(books) == 0 {
-		return
-	}
-	filesByBookID := svc.FetchBookFilesForBooks(books)
-	svc.aggregateFileMetadataWithFiles(books, filesByBookID)
 }
 
 // FetchBookFilesForBooks performs the targeted batch fetch via memdb's

@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_ops.go
-// version: 2.4.0
+// version: 2.4.1
 // guid: 8b3e1f92-d4c7-4a6e-b5f0-2a7c9d1e3f45
-// last-edited: 2026-07-01
+// last-edited: 2026-07-12
 
 // duplicates_ops registers v2 OperationDefs for the 8 async dedup operations
 // that previously used s.queue.Enqueue.  HTTP handlers in duplicates_handlers.go
@@ -638,20 +638,6 @@ func init() {
 	addOpRegistrar(func(s *Server, reg *opsregistry.Registry) error { return s.RegisterSeriesMergeOp(reg) })
 	addOpRegistrar(func(s *Server, reg *opsregistry.Registry) error { return s.RegisterSeriesNormalizeOp(reg) })
 }
-
-// ── local type aliases for backward compatibility ─────────────────────────────
-// duplicates_handlers.go and scheduler_tasks.go reference the old unexported
-// param struct names.  These aliases keep those files compiling without
-// modification while the canonical definitions live in internal/dedup/op_params.go.
-
-type bookDedupScanOpParams = dedup.BookDedupScanParams
-type bookMergeOpParams = dedup.BookMergeParams
-type authorDedupScanOpParams = dedup.AuthorDedupScanParams
-type seriesDedupScanOpParams = dedup.SeriesDedupScanParams
-type seriesDedupOpParams = dedup.SeriesDedupParams
-type seriesPruneOpParams = dedup.SeriesPruneParams
-type seriesMergeOpParams = dedup.SeriesMergeParams
-type seriesNormalizeOpParams = dedup.SeriesNormalizeParams
 
 // ── kept for reference: unused import guard ───────────────────────────────────
 

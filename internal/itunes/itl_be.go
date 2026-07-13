@@ -1,6 +1,7 @@
 // file: internal/itunes/itl_be.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: a3f7c821-5b4e-4d92-8f01-e6a2b9c3d47f
+// last-edited: 2026-07-12
 
 package itunes
 
@@ -363,6 +364,8 @@ func parsePlaylistHohmBE(data []byte, offset, length int, playlist *ITLPlaylist)
 // rewriteChunksBE walks through decompressed ITL data chunk by chunk,
 // replacing location strings (hohm type 0x0D) for matching persistent IDs.
 // Returns the new data buffer and count of updates made.
+//
+//lint:ignore U1000 kept: big-endian ITL write-back, parallel to the wired rewriteChunksLE; not yet hooked into the write path (BE write-back pending, 2026-07-12)
 func rewriteChunksBE(data []byte, updateMap map[string]string) ([]byte, int) {
 	var out bytes.Buffer
 	offset := 0

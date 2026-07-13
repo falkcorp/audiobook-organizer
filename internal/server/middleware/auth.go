@@ -1,16 +1,14 @@
 // file: internal/server/middleware/auth.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 83c42ecb-1df2-4baf-9890-3f91ab4db6fe
-// last-edited: 2026-07-03
+// last-edited: 2026-07-12
 
 package middleware
 
 import (
-	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -18,10 +16,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 )
-
-// rbacUnsupportedWarnOnce ensures the "RBAC unsupported on this backend" warning
-// is emitted at most once, not on every request (HIGH-4b).
-var rbacUnsupportedWarnOnce sync.Once
 
 const (
 	// SessionCookieName is the auth session cookie used by API clients.
@@ -266,14 +260,9 @@ func effectivePermissionsFor(store database.RoleStore, user *database.User) []au
 	for _, roleID := range user.Roles {
 		role, err := store.GetRoleByID(roleID)
 		if err != nil || role == nil {
-			// On a backend without RBAC (SQLite) every lookup fails, yielding an
-			// empty permission set so every request 403s. Explain it once rather
-			// than failing silently (HIGH-4b).
-			if errors.Is(err, database.ErrSQLiteRBACUnsupported) {
-				rbacUnsupportedWarnOnce.Do(func() {
-					slog.Error("permission checks will deny every request: " + database.ErrSQLiteRBACUnsupported.Error())
-				})
-			}
+			// PebbleDB is the only backend and always resolves roles; the former
+			// SQLite-RBAC-unsupported warning branch was permanently dead and has
+			// been removed (HIGH-4b no longer reachable).
 			continue
 		}
 		for _, p := range role.Permissions {
