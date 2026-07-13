@@ -1,7 +1,7 @@
 // file: internal/dedup/book_dedup.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-07-07
+// last-edited: 2026-07-13
 
 // Package dedup: book_dedup.go contains the extracted execution logic for the
 // "dedup.book-scan" and "dedup.book-merge" async operations.  The *Server
@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	ulid "github.com/oklog/ulid/v2"
 )
@@ -335,6 +336,20 @@ type BookMergeResult struct {
 //
 // opID is the legacy operation ID written into OperationChange records.
 // keepID is the ID of the book to keep; every ID in mergeIDs is deleted.
+//
+// Concurrency: this is a package-level function (NOT merge.Service.MergeBooks)
+// with its own unguarded read-modify-write, reached from two async ops with
+// DIFFERENT ConcurrencyKeys (dedup.book-merge and the iTunes-heal op), so it can
+// race itself AND merge.Service.MergeBooks/CombineBooks on a shared book row. It
+// therefore acquires the SAME process-wide lock those Service methods use
+// (merge.LockMergeRMW, see internal/merge/serialize.go) for the whole
+// read-modify-write, making every merge atomic w.r.t. every other merge. The
+// per-book loop is bounded by one request's merge set and does only local DB /
+// in-memory progress work under the lock — nothing network/large-scan. Semantics
+// differ from merge.Service.MergeBooks (hard-delete + iTunes-metadata transfer,
+// no version group), so it is intentionally NOT routed through the Service; it
+// only shares the lock. Non-reentrant: this never calls the Service merge paths,
+// so the lock is taken exactly once.
 func MergeBooks(
 	_ context.Context,
 	store database.Store,
@@ -342,6 +357,9 @@ func MergeBooks(
 	mergeIDs []string,
 	progress ProgressReporter,
 ) (BookMergeResult, error) {
+	merge.LockMergeRMW()
+	defer merge.UnlockMergeRMW()
+
 	keepBook, err := store.GetBookByID(keepID)
 	if err != nil || keepBook == nil {
 		return BookMergeResult{}, fmt.Errorf("keep book %s not found", keepID)

@@ -1,4 +1,5 @@
 <!-- file: CHANGELOG.md -->
+<!-- version: 3.149.0 -->
 <!-- version: 3.148.0 -->
 <!-- version: 3.147.0 -->
 <!-- version: 3.146.0 -->
@@ -12,6 +13,31 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 13, 2026 - fix(dedup): serialize CombineBooks + dedup.MergeBooks (close merge-race follow-ups from #1930)
+
+- **Two adjacent concurrent-merge corruption paths closed** (backend, REVIEW-CRITICAL) — the #1930
+  fix serialized `merge.Service.MergeBooks` but explicitly left two sibling read-modify-writes of the
+  same data-corruption class unguarded. Both are now serialized on the SAME process-wide lock so any
+  two merge-family operations are mutually exclusive on a shared book row:
+  - `merge.Service.CombineBooks` — the manual "combine into one multi-file book" path. It is a
+    synchronous HTTP handler (no ConcurrencyKey), so two combines, or a combine racing a `MergeBooks`,
+    could interleave `GetBookByID` → `MoveBookFilesToBook` → `ReassignExternalIDs` → `DeleteBook` →
+    `UpdateBook` and corrupt the same way (orphaned files, a book both survivor and deleted).
+  - `dedup.MergeBooks` — a package-level function (NOT `merge.Service`) with its own read-modify-write
+    (iTunes-metadata transfer + hard-delete, no version group), reachable from two async ops with
+    DIFFERENT ConcurrencyKeys (`dedup.book-merge` and the iTunes-heal op), so it could race itself AND
+    `merge.Service.MergeBooks`/`CombineBooks`. Its distinct semantics mean it is intentionally NOT
+    routed through the Service — it only shares the lock.
+- **Implementation** — #1930's per-instance `merge.Service.mergeMu` was promoted to a package-level
+  `mergeSerializeMu` in `internal/merge/serialize.go` with exported `LockMergeRMW`/`UnlockMergeRMW`
+  helpers, so `dedup.MergeBooks` (which cannot reach a `*merge.Service` from the reconcile op path)
+  shares the exact same lock. Single lock, three acquirers; non-reentrant and deadlock-free (none of
+  the three calls another, and no store method calls back up). Scoped to the read-modify-write only —
+  local Pebble/in-memory work, no network/large-scan under the lock.
+- Tests: shared-lock `-race` serialization tests in both packages (CombineBooks-vs-MergeBooks and
+  dedup.MergeBooks-vs-merge.Service.MergeBooks, disjoint per-goroutine data), each verified to fail
+  with its lock reverted (`maxActive=9` and `maxActive=2` respectively).
 
 #### July 13, 2026 - fix(dedup): serialize MergeBooks + harden auto-merge journal/guards (data-loss risk)
 
