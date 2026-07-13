@@ -1,9 +1,10 @@
 <!-- file: TODO.md -->
+<!-- version: 9.99.0 -->
 <!-- version: 9.98.0 -->
 <!-- version: 9.97.0 -->
 <!-- version: 9.93.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-07-12 -->
+<!-- last-edited: 2026-07-13 -->
 
 # Project TODO
 
@@ -1463,6 +1464,19 @@ must sequence, but A and B are parallelizable. Spawn:
   `TestStartCacheWarmers_SkipOnCanceledCtx` / `TestStartCacheWarmers_EnrolledInBgWG` in
   `internal/server/cache_warmers_bgwg_test.go` cover both the skip-on-shutdown and
   anti-over-suppression (live ctx still runs warmers) cases under `-race`.
+- [x] **DEDUP-EXAMPLE-FRESHNESS** (2026-07-13) — ✅ **DONE.** Root cause of the calibration
+  coverage rot: `engine.upsertCandidateWithLiveLabel` snapshots a pair's `ScoreBreakdown` onto its
+  `LabeledExample` only when the pair is brand-new (`if !isNew { return nil }`); dismiss/relabel
+  never re-snapshots, so the gold set decays back to no-coverage as new labels accrue and
+  `dedup.rescore-labeled-examples` would have to be re-run forever. Fix: the two human-label write
+  chokepoints (`recordHumanLabel` for dismiss/merge/bulk; `OverrideDedupLabel` for relabel) now
+  best-effort call a shared `refreshExampleBreakdown` that recomputes via the SAME
+  `Engine.ScorePairsForBook` scorer (no fork) and narrow-writes only `Score`/`ScoreBreakdown`/`Band`
+  before the existing upsert — below-band persisted, human label fields preserved, failures
+  swallowed. `ScorePairsForBook` added to the handler's `DedupEngine` seam (mock hand-edited, no
+  mockery regen). NOTE (latency, for follow-up): the cluster/bulk dismiss loops call the refresh
+  per-pair synchronously inside one request — an async best-effort variant may be warranted at
+  scale.
 - [x] **INGEST-VERSION-FLAKE** (2026-07-03) — ✅ **FIXED #1777.** Root cause was NOT ordering:
   PebbleStore async memdb-warmup race — `CreateImportPath`'s memdb write no-ops before warmup
   publishes, so `GetAllImportPaths` (memdb-backed) missed the test's temp dir →
@@ -1485,7 +1499,7 @@ must sequence, but A and B are parallelizable. Spawn:
   `UnifiedDedupScore`/`Signal`/`SignalKind` to a new neutral `internal/models` package with type
   aliases left in `internal/dedup/unified`. `make sdkguard` is green on main.
 - [x] **STATICCHECK-BURNDOWN** (2026-07-03) — ✅ done 2026-07-12 (TASK-02, 42 findings drained):
-  37 U1000 + 4 SA1019 + 1 SA4000. 31 grep-verified-dead U1000 symbols deleted; 4 U1000 kept with
+  37 U1000 + 4 SA1019 + 1 SA4000. 33 grep-verified-dead U1000 symbols deleted; 4 U1000 kept with
   `//lint:ignore` + reason (migration014UpPebble, deleteFingerprintLSHIndexesByID placeholder,
   rewriteChunksBE BE-write subsystem, deluge importToLibrary — each a documented placeholder or
   dropped wire-up worth surfacing, see follow-up note below); 3 SA1019 SQLite-RBAC sentinel

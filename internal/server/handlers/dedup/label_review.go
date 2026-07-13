@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/label_review.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 5e2a9c41-7b30-4d68-8f12-3a6e0c9d5b27
-// last-edited: 2026-07-11
+// last-edited: 2026-07-13
 
 package deduphandler
 
@@ -243,6 +243,11 @@ func (h *Handler) OverrideDedupLabel(c *gin.Context) {
 		ex.LabelReason = "ui_override"
 	}
 	ex.DecidedAt = time.Now().UTC().Format(time.RFC3339)
+	// (Re)snapshot the pair's current ScoreBreakdown onto the example BEFORE the
+	// single upsert, so a relabeled (incl. below-band) pair keeps a fresh,
+	// calibratable breakdown. Best-effort: touches only the score fields and
+	// never blocks the override.
+	h.refreshExampleBreakdown(c.Request.Context(), ex)
 	if err := es.UpsertLabeledExample(*ex); err != nil {
 		httputil.InternalError(c, "failed to save label override", err)
 		return

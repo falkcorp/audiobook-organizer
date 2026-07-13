@@ -222,3 +222,77 @@ func (_c *MockDedupEngine_Rescore_Call) RunAndReturn(run func(ctx context.Contex
 	_c.Call.Return(run)
 	return _c
 }
+
+// ScorePairsForBook provides a mock function for the type MockDedupEngine
+func (_mock *MockDedupEngine) ScorePairsForBook(ctx context.Context, aID string, inputs []dedup.RescorePairInput) ([]dedup.RescorePairResult, error) {
+	ret := _mock.Called(ctx, aID, inputs)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ScorePairsForBook")
+	}
+
+	var r0 []dedup.RescorePairResult
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, []dedup.RescorePairInput) ([]dedup.RescorePairResult, error)); ok {
+		return returnFunc(ctx, aID, inputs)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, []dedup.RescorePairInput) []dedup.RescorePairResult); ok {
+		r0 = returnFunc(ctx, aID, inputs)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]dedup.RescorePairResult)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, []dedup.RescorePairInput) error); ok {
+		r1 = returnFunc(ctx, aID, inputs)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockDedupEngine_ScorePairsForBook_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ScorePairsForBook'
+type MockDedupEngine_ScorePairsForBook_Call struct {
+	*mock.Call
+}
+
+// ScorePairsForBook is a helper method to define mock.On call
+//   - ctx context.Context
+//   - aID string
+//   - inputs []dedup.RescorePairInput
+func (_e *MockDedupEngine_Expecter) ScorePairsForBook(ctx any, aID any, inputs any) *MockDedupEngine_ScorePairsForBook_Call {
+	return &MockDedupEngine_ScorePairsForBook_Call{Call: _e.mock.On("ScorePairsForBook", ctx, aID, inputs)}
+}
+
+func (_c *MockDedupEngine_ScorePairsForBook_Call) Run(run func(ctx context.Context, aID string, inputs []dedup.RescorePairInput)) *MockDedupEngine_ScorePairsForBook_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 []dedup.RescorePairInput
+		if args[2] != nil {
+			arg2 = args[2].([]dedup.RescorePairInput)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockDedupEngine_ScorePairsForBook_Call) Return(rescorePairResults []dedup.RescorePairResult, err error) *MockDedupEngine_ScorePairsForBook_Call {
+	_c.Call.Return(rescorePairResults, err)
+	return _c
+}
+
+func (_c *MockDedupEngine_ScorePairsForBook_Call) RunAndReturn(run func(ctx context.Context, aID string, inputs []dedup.RescorePairInput) ([]dedup.RescorePairResult, error)) *MockDedupEngine_ScorePairsForBook_Call {
+	_c.Call.Return(run)
+	return _c
+}

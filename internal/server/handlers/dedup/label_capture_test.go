@@ -25,6 +25,12 @@ func allowLabelCaptureReads(d testDeps) {
 		Return(&database.Book{ID: "x", Title: "T"}, nil).Maybe()
 	d.store.EXPECT().GetBookFiles(mock.Anything).
 		Return([]database.BookFile{{FilePath: "/lib/a.m4b", FileSize: 5 << 20, Duration: 3600}}, nil).Maybe()
+	// The label-write path now (re)snapshots the pair's ScoreBreakdown via the
+	// engine's shared scorer. It is best-effort; allow it any number of times
+	// (incl. zero) and return an empty (zero-signal) result so nothing is
+	// persisted onto the example unless a test wires a richer return.
+	d.engine.EXPECT().ScorePairsForBook(mock.Anything, mock.Anything, mock.Anything).
+		Return(nil, nil).Maybe()
 }
 
 func TestDismissDedupCandidate_RecordsHumanNotDupLabel(t *testing.T) {

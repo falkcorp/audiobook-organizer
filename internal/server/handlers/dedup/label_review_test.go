@@ -17,6 +17,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	deduphandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/dedup"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/mock"
 )
 
 // seedLabel writes one labeled example. Each candidate gets its OWN distinct
@@ -105,6 +106,9 @@ func TestGetDedupLabelStats_UnlabeledDerived(t *testing.T) {
 func TestOverrideDedupLabel_SetsHuman(t *testing.T) {
 	h, d := newHandler(t)
 	seedLabel(t, d, 7, "true_dup", "auto_high_conf")
+	// The override path now best-effort re-snapshots the breakdown; allow it.
+	d.engine.EXPECT().ScorePairsForBook(mock.Anything, mock.Anything, mock.Anything).
+		Return(nil, nil).Maybe()
 
 	w := doReq(t, h.OverrideDedupLabel, http.MethodPost, "/api/v1/dedup/labels/7/override",
 		map[string]string{"label": "not_dup", "reason": "reviewer says different book"},

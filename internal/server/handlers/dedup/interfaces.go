@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/interfaces.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: e84f746d-28e9-4c8a-9520-66191e582881
-// last-edited: 2026-07-02
+// last-edited: 2026-07-13
 
 // Narrow dependency interfaces for the dedup-domain HTTP handlers (candidate /
 // cluster / series listing, merge / dismiss / remove, bulk merge, stats,
@@ -73,6 +73,15 @@ type MergeService interface {
 // The concrete *dedup.Engine satisfies it.
 type DedupEngine interface {
 	CleanupCandidatesAfterMerge(mergedAwayBookIDs []string) int
+	// ScorePairsForBook recomputes the ScoreBreakdown for a work list of pairs
+	// sharing book A, using the SAME collectors + unified.ComposeScore as the
+	// operational scan (via the shared collectPairSignals helper — no scorer
+	// fork). Below-band pairs are NOT dropped. Used by the label-write path to
+	// re-snapshot a dismissed/relabeled pair's breakdown onto its LabeledExample
+	// so the calibration gold set doesn't rot back to no-coverage as new labels
+	// accrue (the ongoing counterpart to the one-shot dedup.rescore-labeled-examples
+	// backfill).
+	ScorePairsForBook(ctx context.Context, aID string, inputs []dedup.RescorePairInput) ([]dedup.RescorePairResult, error)
 	// Rescore re-runs unified.ComposeScore over stored signal sets for every
 	// pending candidate. When apply=false this is a dry-run (no writes);
 	// apply=true persists new bands and scores. Returns a delta summary

@@ -1,15 +1,39 @@
 <!-- file: CHANGELOG.md -->
+<!-- version: 3.147.0 -->
 <!-- version: 3.146.0 -->
 <!-- version: 3.145.0 -->
 <!-- version: 3.142.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
-<!-- last-edited: 2026-07-12 -->
+<!-- last-edited: 2026-07-13 -->
 
 # Changelog
 
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 13, 2026 - feat(dedup): keep labeled-example ScoreBreakdown fresh on dismiss/relabel
+
+- **Label-write freshness** (backend) — when a human (re)writes a dedup label (dismiss, bulk/cluster
+  dismiss, merge, or a review override/relabel), the pair's current `ScoreBreakdown` is now
+  (re)snapshotted onto its `LabeledExample` at write time. Previously only *brand-new* candidate
+  pairs got a snapshot (`engine.upsertCandidateWithLiveLabel` returns early on `!isNew`), so a
+  dismissed/relabeled pair's breakdown was never refreshed and the calibration gold set slowly rotted
+  back to no-coverage as new labels accrued — making `dedup.rescore-labeled-examples` (the one-shot
+  backfill) a forever-rerun chore. This closes that gap going forward.
+- **No scorer drift:** the refresh calls the SAME shared `Engine.ScorePairsForBook`
+  (`collectPairSignals` + `unified.ComposeScore`) that PR #1926 introduced — no fork, no weight
+  changes. Embedding cosine is sourced from the example's stored `Similarity` gated on
+  `Layer=="embedding"`, identical to the backfill. Below-band pairs are **persisted** (no band-skip
+  on the snapshot) — those low-scoring negatives are the calibration signal.
+- **Best-effort, never blocks the user:** a scoring/persist failure is logged at debug and swallowed
+  — a dismiss always succeeds even if rescoring hiccups. Zero-signal and merge-deleted-book pairs
+  no-op cleanly (no bogus breakdown written).
+- **Data safety:** the refresh narrow-writes ONLY `Score`/`ScoreBreakdown`/`Band` in place before the
+  existing single upsert; `Label`, `LabelSource` (esp. `human`), `LabelReason`, `DecidedAt` are never
+  touched. Tests prove: a below-band dismiss persists a non-nil breakdown; a human override keeps its
+  `human` source + label + reason through the refresh; a scoring failure still writes the label and
+  persists no bogus breakdown. `-race` clean.
 
 #### July 12, 2026 - feat(dedup): rescore-labeled-examples op to populate ScoreBreakdowns for calibration
 
@@ -41,7 +65,7 @@
 - **`lint`** (backend) — `staticcheck ./...` now exits 0 for the first time since #1767, so the
   local `make ci` staticcheck step is honest again (the per-PR merge gate, Minimal CI, never ran
   staticcheck). 42 findings drained: 37 U1000 (unused), 4 SA1019 (deprecated), 1 SA4000.
-- 31 grep-verified-dead U1000 symbols removed (dead-duplicate handlers/aliases/helpers, superseded
+- 33 grep-verified-dead U1000 symbols removed (dead-duplicate handlers/aliases/helpers, superseded
   wrappers, redundant `maxInt`, unused test helpers, write-only `worksLookupDisabled`, unused
   struct fields). Every deletion was confirmed dead across all build configs by a repo-wide grep
   before removal; the whole dead-duplicate file `internal/server/metadata_cached_handlers.go` was
