@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.68.0
+// version: 1.69.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-07-12
+// last-edited: 2026-07-13
 
 package config
 
@@ -982,13 +982,13 @@ func InitConfig() {
 	viper.BindEnv("ai_backend.local_embedding_model", "AI_BACKEND_LOCAL_EMBEDDING_MODEL") //nolint:errcheck
 	viper.BindEnv("ai_backend.local_llm_model", "AI_BACKEND_LOCAL_LLM_MODEL")             //nolint:errcheck
 
-	viper.BindEnv("metadata_scoring.embedding_enabled", "METADATA_SCORING_EMBEDDING_ENABLED")       //nolint:errcheck
-	viper.BindEnv("metadata_scoring.embedding_min_score", "METADATA_SCORING_EMBEDDING_MIN_SCORE")   //nolint:errcheck
-	viper.BindEnv("metadata_scoring.embedding_best_match", "METADATA_SCORING_EMBEDDING_BEST_MATCH") //nolint:errcheck
-	viper.BindEnv("metadata_scoring.llm_enabled", "METADATA_SCORING_LLM_ENABLED")                   //nolint:errcheck
-	viper.BindEnv("metadata_scoring.llm_rerank_epsilon", "METADATA_SCORING_LLM_RERANK_EPSILON")     //nolint:errcheck
-	viper.BindEnv("metadata_scoring.llm_rerank_top_k", "METADATA_SCORING_LLM_RERANK_TOP_K")         //nolint:errcheck
-	viper.BindEnv("metadata_scoring.write_backup_before", "METADATA_SCORING_WRITE_BACKUP_BEFORE")   //nolint:errcheck
+	viper.BindEnv("metadata_scoring.embedding_enabled", "METADATA_SCORING_EMBEDDING_ENABLED")                               //nolint:errcheck
+	viper.BindEnv("metadata_scoring.embedding_min_score", "METADATA_SCORING_EMBEDDING_MIN_SCORE")                           //nolint:errcheck
+	viper.BindEnv("metadata_scoring.embedding_best_match", "METADATA_SCORING_EMBEDDING_BEST_MATCH")                         //nolint:errcheck
+	viper.BindEnv("metadata_scoring.llm_enabled", "METADATA_SCORING_LLM_ENABLED")                                           //nolint:errcheck
+	viper.BindEnv("metadata_scoring.llm_rerank_epsilon", "METADATA_SCORING_LLM_RERANK_EPSILON")                             //nolint:errcheck
+	viper.BindEnv("metadata_scoring.llm_rerank_top_k", "METADATA_SCORING_LLM_RERANK_TOP_K")                                 //nolint:errcheck
+	viper.BindEnv("metadata_scoring.write_backup_before", "METADATA_SCORING_WRITE_BACKUP_BEFORE")                           //nolint:errcheck
 	viper.BindEnv("metadata_scoring.transcription_title_exact_boost", "METADATA_SCORING_TRANSCRIPTION_TITLE_EXACT_BOOST")   //nolint:errcheck
 	viper.BindEnv("metadata_scoring.transcription_title_substr_boost", "METADATA_SCORING_TRANSCRIPTION_TITLE_SUBSTR_BOOST") //nolint:errcheck
 	viper.BindEnv("metadata_scoring.transcription_author_boost", "METADATA_SCORING_TRANSCRIPTION_AUTHOR_BOOST")             //nolint:errcheck
@@ -1015,11 +1015,13 @@ func InitConfig() {
 
 	viper.SetDefault("supported_extensions", []string{
 		".m4b", ".mp3", ".m4a", ".aac", ".ogg", ".flac", ".wma",
+		".opus", ".oga", ".wav", ".aiff", ".aif", ".mka", ".aax", ".aaxc",
 	})
 	viper.SetDefault("exclude_patterns", []string{})
 
 	supportedExtensions := []string{
 		".m4b", ".mp3", ".m4a", ".aac", ".ogg", ".flac", ".wma",
+		".opus", ".oga", ".wav", ".aiff", ".aif", ".mka", ".aax", ".aaxc",
 	}
 	if viper.IsSet("supported_extensions") {
 		supportedExtensions = viper.GetStringSlice("supported_extensions")
@@ -1812,6 +1814,7 @@ func ResetToDefaults() {
 
 			SupportedExtensions: []string{
 				".m4b", ".mp3", ".m4a", ".aac", ".ogg", ".flac", ".wma",
+				".opus", ".oga", ".wav", ".aiff", ".aif", ".mka", ".aax", ".aaxc",
 			},
 			ExcludePatterns: []string{},
 
