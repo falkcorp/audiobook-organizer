@@ -1,6 +1,7 @@
 // file: internal/server/metadata_fetch_service_test.go
-// version: 4.4.0
+// version: 4.4.1
 // guid: f6a7b8c9-d0e1-f2a3-b4c5-d6e7f8a9b0c1
+// last-edited: 2026-07-13
 
 package server
 
@@ -288,7 +289,11 @@ func TestMetadataFetchService_ApplyMetadata_AllFields(t *testing.T) {
 		Publisher:   "Acme Press",
 		Language:    "en",
 		PublishYear: 2023,
-		CoverURL:    "https://example.com/cover.jpg",
+		// PublishYear is an audiobook release year (Audible/Audnexus-style source),
+		// so it routes to AudiobookReleaseYear; without this flag it would route to
+		// PrintYear (see fix/metadata-year-and-language-corruption).
+		PublishYearIsAudiobookRelease: true,
+		CoverURL:                      "https://example.com/cover.jpg",
 	}
 
 	mfs.ApplyMetadataToBook(book, meta)
