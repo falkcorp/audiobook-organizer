@@ -1,7 +1,7 @@
 // file: internal/server/handlers/cache.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: c9d0e1f2-a3b4-5678-cdef-678901234567
-// last-edited: 2026-06-22
+// last-edited: 2026-07-13
 
 package handlers
 
@@ -169,7 +169,7 @@ func (h *CacheHandler) HandleCacheStatsHistory(c *gin.Context) {
 	}
 	snaps, err := h.metricsStore.GetCacheStatsHistory(cacheName, since, limit)
 	if err != nil {
-		httputil.RespondWithInternalError(c, err.Error())
+		httputil.InternalError(c, "failed to get cache stats history", err)
 		return
 	}
 	httputil.RespondWithOK(c, struct {

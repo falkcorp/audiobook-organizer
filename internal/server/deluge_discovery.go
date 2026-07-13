@@ -1,7 +1,7 @@
 // file: internal/server/deluge_discovery.go
-// version: 3.0.0
+// version: 3.1.0
 // guid: e6f7a8b9-c0d1-2e3f-4a5b-6c7d8e9f0a1b
-// last-edited: 2026-05-11
+// last-edited: 2026-07-13
 //
 // Deluge label-based audiobook discovery — HTTP handlers.
 //
@@ -97,7 +97,7 @@ func (s *Server) handleDelugeDiscoverImport(c *gin.Context) {
 		Organize: false,
 	})
 	if err != nil {
-		httputil.RespondWithInternalError(c, err.Error())
+		httputil.InternalError(c, "failed to import file", err)
 		return
 	}
 

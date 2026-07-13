@@ -1,7 +1,7 @@
 // file: internal/server/deluge_integration.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 1c9d0e8f-2a3b-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-05-11
+// last-edited: 2026-07-13
 //
 // Deluge integration — HTTP handlers and thin shims.
 //
@@ -77,7 +77,7 @@ func (s *Server) handleDelugeTestConnection(c *gin.Context) {
 	}
 	client, err := deluge.New(url, pass)
 	if err != nil {
-		httputil.RespondWithInternalError(c, err.Error())
+		httputil.InternalError(c, "failed to create deluge client", err)
 		return
 	}
 	if err := client.Login(); err != nil {

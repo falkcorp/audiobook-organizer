@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_tags.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: ff2e3609-5ce3-4414-a18b-976d21b929fb
-// last-edited: 2026-06-23
+// last-edited: 2026-07-13
 
 // Tag read/write, alternative-title CRUD, and batch tag-update endpoints for
 // the audiobooks domain. Split out of handler.go for readability; one Handler,
@@ -46,7 +46,7 @@ func (h *Handler) GetAudiobookTags(c *gin.Context) {
 func (h *Handler) ListAllUserTags(c *gin.Context) {
 	tags, err := h.audiobookService.ListAllUserTags()
 	if err != nil {
-		httputil.RespondWithInternalError(c, err.Error())
+		httputil.InternalError(c, "failed to list user tags", err)
 		return
 	}
 	if tags == nil {
@@ -60,7 +60,7 @@ func (h *Handler) GetBookUserTags(c *gin.Context) {
 	id := c.Param("id")
 	tags, err := h.audiobookService.GetBookUserTags(id)
 	if err != nil {
-		httputil.RespondWithInternalError(c, err.Error())
+		httputil.InternalError(c, "failed to get book user tags", err)
 		return
 	}
 	if tags == nil {
@@ -79,7 +79,7 @@ func (h *Handler) GetBookTagsDetailed(c *gin.Context) {
 	}
 	tags, err := h.store.GetBookTagsDetailed(id)
 	if err != nil {
-		httputil.RespondWithInternalError(c, err.Error())
+		httputil.InternalError(c, "failed to get detailed book tags", err)
 		return
 	}
 	if tags == nil {
@@ -194,7 +194,7 @@ func (h *Handler) BatchUpdateTags(c *gin.Context) {
 	body.RemoveTags = filterEmpty(body.RemoveTags)
 	updated, err := h.audiobookService.BatchUpdateUserTags(body.BookIDs, body.AddTags, body.RemoveTags)
 	if err != nil {
-		httputil.RespondWithInternalError(c, err.Error())
+		httputil.InternalError(c, "failed to batch update tags", err)
 		return
 	}
 	httputil.RespondWithOK(c, gin.H{"updated": updated})

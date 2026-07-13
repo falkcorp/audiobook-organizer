@@ -38,6 +38,36 @@
 - Tests: shared-lock `-race` serialization tests in both packages (CombineBooks-vs-MergeBooks and
   dedup.MergeBooks-vs-merge.Service.MergeBooks, disjoint per-goroutine data), each verified to fail
   with its lock reverted (`maxActive=9` and `maxActive=2` respectively).
+#### July 13, 2026 - fix(security): guard book user-tags writes + ai/scans/compare, stop internal-error leaks, clamp history limit
+
+- **Authorization gap (primary fix)** — `PUT/POST /audiobooks/:id/user-tags` and
+  `DELETE /audiobooks/:id/user-tags/:tag` (`internal/server/user_tags.go`) were
+  registered with no `s.perm(...)` guard, so any authenticated principal — even
+  a view-only role or a zero-permission scoped API key — could rewrite or wipe a
+  book's global tags (`SetBookTags`/`AddBookTag`/`RemoveBookTag`). Added
+  `s.perm(auth.PermLibraryEditMetadata)` to all three routes, matching the
+  sibling `POST /audiobooks/batch-tags` write guard and the read side's
+  `PermLibraryView` requirement.
+- **`GET /ai/scans/compare`** (`internal/server/wire_media_routes.go`) was
+  missing the `PermLibraryView` guard every sibling `/ai/scans*` read route
+  requires. Added the guard without disturbing its route-ordering comment
+  (must stay registered before `/:id`).
+- **Internal-error info leaks** — 7 handlers across
+  `internal/server/deluge_integration.go`, `internal/server/deluge_discovery.go`,
+  `internal/server/handlers/cache.go`, and
+  `internal/server/handlers/audiobooks/handler_tags.go` called
+  `httputil.RespondWithInternalError(c, err.Error())`, serializing raw
+  internal error text (DB/driver detail, filesystem paths) to the client.
+  Swapped to `httputil.InternalError(c, "<static message>", err)`, which logs
+  the full error server-side but returns only a generic message.
+- **Unbounded metadata-history `?limit=`** — `GetBookMetadataHistory` and
+  `GetFieldMetadataHistory` (`internal/server/handlers/audiobooks/handler_metadata.go`)
+  only validated `limit > 0`, allowing an attacker-supplied huge value to force
+  an unbounded read. Clamped to 1000, matching the ceiling
+  `httputil.ParsePaginationParams` uses elsewhere.
+- Tests: new `internal/server/user_tags_authz_test.go` proves a viewer-role
+  session (library.view only) gets 403 on all three user-tags write routes and
+  an admin session succeeds.
 
 #### July 13, 2026 - fix(dedup): serialize MergeBooks + harden auto-merge journal/guards (data-loss risk)
 

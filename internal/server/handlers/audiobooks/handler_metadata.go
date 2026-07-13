@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_metadata.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 591661c3-5e87-4559-9a08-3203eec4fb68
-// last-edited: 2026-06-23
+// last-edited: 2026-07-13
 
 // Metadata-history / undo / field-state / path-history / external-id /
 // changelog / changes endpoints for the audiobooks domain. Split out of
@@ -23,6 +23,12 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 )
 
+// maxHistoryLimit caps the ?limit= query param on the per-book metadata
+// history endpoints, matching the ceiling httputil.ParsePaginationParams
+// applies elsewhere. An attacker-supplied huge limit could otherwise force
+// an unbounded history read/allocation.
+const maxHistoryLimit = 1000
+
 // GetBookMetadataHistory handles GET /audiobooks/:id/metadata-history.
 func (h *Handler) GetBookMetadataHistory(c *gin.Context) {
 	id := c.Param("id")
@@ -35,6 +41,9 @@ func (h *Handler) GetBookMetadataHistory(c *gin.Context) {
 	if l := c.Query("limit"); l != "" {
 		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
 			limit = parsed
+			if limit > maxHistoryLimit {
+				limit = maxHistoryLimit
+			}
 		}
 	}
 	records, err := store.GetBookChangeHistory(id, limit)
@@ -74,6 +83,9 @@ func (h *Handler) GetFieldMetadataHistory(c *gin.Context) {
 	if l := c.Query("limit"); l != "" {
 		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
 			limit = parsed
+			if limit > maxHistoryLimit {
+				limit = maxHistoryLimit
+			}
 		}
 	}
 	records, err := store.GetMetadataChangeHistory(id, field, limit)
