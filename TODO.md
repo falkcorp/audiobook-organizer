@@ -1,13 +1,5 @@
 <!-- file: TODO.md -->
 <!-- version: 9.102.0 -->
-<!-- version: 9.101.0 -->
-<!-- version: 9.100.0 -->
-<!-- version: 9.99.2 -->
-<!-- version: 9.99.1 -->
-<!-- version: 9.99.2 -->
-<!-- version: 9.99.0 -->
-<!-- version: 9.98.0 -->
-<!-- version: 9.97.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-13 -->
 
@@ -50,6 +42,31 @@ Tests: `web/src/pages/BookDetail.race.test.tsx` (out-of-order resolution,
 last navigation wins — verified to fail against the pre-fix code) and 3
 cases in `web/src/stores/useOperationsStore.test.ts` covering the
 transient/terminal split plus the exactly-one-new-source guarantee.
+## ✅ RESOLVED — metadata print-year clobbered audiobook release year; Open Library language mislabel (2026-07-13)
+
+`meta.PublishYear` was OVERLOADED: Audible/Audnexus = audiobook release year,
+Open Library/Google Books/Hardcover/Wikipedia = original print year (often
+decades earlier). `ApplyMetadataToBook` wrote it into `AudiobookReleaseYear`
+unconditionally and never set `PrintYear`, so a print-year candidate overwrote a
+correct release year and reached the file `year` tag via `service_writeback.go`.
+**Fixed** with a `PublishYearIsAudiobookRelease` year-kind flag on `BookMetadata`
+(default print; only Audible/Audnexus set true); apply routes release →
+`AudiobookReleaseYear`, print → `PrintYear`, never cross-contaminating. Candidate
+path derives the kind from `candidate.Source` via
+`metadata.SourceProducesAudiobookReleaseYear`. Also **fixed** Open Library
+`Language[0]` picking an arbitrary edition from an unordered array (persisted as a
+`metadata:language:<code>` filter-driving tag) — `SearchByTitle`/
+`SearchByTitleAndAuthor` now set language only when editions agree
+(`unambiguousLanguage`). Tests: `TestApplyMetadataToBook_YearRouting`,
+`TestUnambiguousLanguage`, `TestSearchByTitle_AmbiguousLanguageSkipped`, plus
+Audible/Audnexus flag assertions.
+
+- **Optional follow-up (deferred, low priority):** the fetch cache stores parsed
+  `[]BookMetadata`; pre-deploy Audible/Audnexus entries deserialize with the flag
+  `false` and transiently route release year to `PrintYear` until TTL expiry
+  (bounded, non-clobbering). Could be hardened by re-deriving the flag from
+  `src.Name()` at the two cache-hit replay sites (`service_fetch.go`,
+  `service_search.go`) — left out to keep this PR off `service_search.go`.
 
 ## ✅ RESOLVED — book user-tags write routes had no permission guard (2026-07-13)
 

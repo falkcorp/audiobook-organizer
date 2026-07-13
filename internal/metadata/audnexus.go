@@ -1,6 +1,7 @@
 // file: internal/metadata/audnexus.go
-// version: 2.3.2
+// version: 2.4.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-a3b4c5d6e7f8
+// last-edited: 2026-07-13
 
 package metadata
 
@@ -223,12 +224,15 @@ func (c *AudnexusClient) bookToMetadata(book *audnexusBook) *BookMetadata {
 		meta.Narrator = strings.Join(narratorNames, ", ")
 	}
 
-	// Year from releaseDate or copyright
+	// Year from releaseDate or copyright — this is the AUDIOBOOK release year,
+	// not the work's original print year. Flag it so apply routes it to
+	// Book.AudiobookReleaseYear (never PrintYear).
 	if len(book.ReleaseDate) >= 4 {
 		fmt.Sscanf(book.ReleaseDate[:4], "%d", &meta.PublishYear)
 	} else if book.Copyright > 0 {
 		meta.PublishYear = book.Copyright
 	}
+	meta.PublishYearIsAudiobookRelease = true
 
 	// Series
 	if book.SeriesPrimary != nil {

@@ -1,11 +1,5 @@
 <!-- file: CHANGELOG.md -->
 <!-- version: 3.150.0 -->
-<!-- version: 3.149.0 -->
-<!-- version: 3.148.0 -->
-<!-- version: 3.147.0 -->
-<!-- version: 3.146.0 -->
-<!-- version: 3.145.0 -->
-<!-- version: 3.142.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-13 -->
 
@@ -50,6 +44,36 @@
   standard `CONNECTING`/`OPEN`/`CLOSED` static constants so tests (and the
   store) can reference `EventSource.CLOSED` the same way the real browser
   API does.
+#### July 13, 2026 - fix(metafetch): route print vs audiobook-release year + stop OpenLibrary language mislabel (data-corruption)
+
+- **Print year no longer clobbers a correct audiobook release year** (backend, data-integrity) —
+  `meta.PublishYear` was OVERLOADED: Audible/Audnexus report the audiobook's release year, while Open
+  Library/Google Books/Hardcover/Wikipedia report the work's original PRINT year (often decades
+  earlier). `ApplyMetadataToBook` wrote `PublishYear` into `book.AudiobookReleaseYear`
+  unconditionally and never set `book.PrintYear`, so a Google/Open Library candidate overwrote a
+  correct Audible release year — which then propagated to the file `year` tag via
+  `service_writeback.go`. Fixed with a `PublishYearIsAudiobookRelease` year-kind flag on
+  `BookMetadata` (default = print; only Audible/Audnexus set it true). Apply now routes release →
+  `AudiobookReleaseYear` (unchanged behavior) and print → `PrintYear`, gated so a present year is
+  never overwritten with 0 and the two fields never cross-contaminate. The candidate-apply path
+  derives the kind from `candidate.Source` via `metadata.SourceProducesAudiobookReleaseYear`.
+  `RecordChangeHistory` and `persistFetchedMetadata` provenance now key off the routed field too.
+- **Open Library no longer mislabels language from an unordered array** (backend, data-integrity) —
+  the search-doc `Language`/`Publisher`/`ISBN` arrays are UNORDERED aggregates across editions;
+  `Language[0]` picked an arbitrary edition. Because language is persisted as a
+  `metadata:language:<code>` system tag that drives the review language filter, a book whose
+  first-listed edition was a translation got mislabeled and mis-filtered. `SearchByTitle` /
+  `SearchByTitleAndAuthor` now set language only when the editions agree (new `unambiguousLanguage`
+  helper); when ambiguous, no tag is set — no value beats a wrong one. `Publisher`/`ISBN` `[0]` are
+  intentionally left (not filter-driving tags; skipping would broadly regress publisher population,
+  and any ISBN is a valid identifier).
+- Note: the metadata fetch cache stores parsed `[]BookMetadata`; pre-deploy Audible/Audnexus cache
+  entries deserialize with the new flag `false` and transiently route their release year to
+  `PrintYear` until the cache TTL (`MetadataFetchCacheTTLDays`) expires. This is bounded and
+  non-clobbering (it fails to populate `AudiobookReleaseYear`; it never overwrites a good one).
+- Tests: year-routing + no-overwrite (`TestApplyMetadataToBook_YearRouting`), Open Library language
+  ambiguity (`TestUnambiguousLanguage`, `TestSearchByTitle_AmbiguousLanguageSkipped`), and
+  Audible/Audnexus flag assertions. `internal/metafetch` + `internal/metadata` green under `-race`.
 
 #### July 13, 2026 - fix(dedup): serialize CombineBooks + dedup.MergeBooks (close merge-race follow-ups from #1930)
 

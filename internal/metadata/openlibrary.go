@@ -1,6 +1,7 @@
 // file: internal/metadata/openlibrary.go
-// version: 1.8.2
+// version: 1.9.0
 // guid: 1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
+// last-edited: 2026-07-13
 
 package metadata
 
@@ -119,6 +120,17 @@ type BookMetadata struct {
 	SeriesPosition string
 	DurationSec    int // audio runtime in seconds (Audible: runtime_length_min × 60)
 
+	// PublishYearIsAudiobookRelease disambiguates the OVERLOADED PublishYear.
+	// When true, PublishYear is the audiobook's release/issue year (Audible,
+	// Audnexus). When false (the default), it is the work's original PRINT /
+	// first-publication year (Open Library, Google Books, Hardcover, Wikipedia),
+	// which is often decades earlier. ApplyMetadataToBook routes the year to the
+	// correct Book field by this flag: a print/work year must NEVER be written to
+	// AudiobookReleaseYear (it clobbers a correct release year and reaches the
+	// file `year` tag via writeback), and a release year must never land in
+	// PrintYear.
+	PublishYearIsAudiobookRelease bool
+
 	// Audible-specific ratings (1–5 scale). Performance and Story are
 	// audiobook-specific dimensions not available from other sources.
 	AudibleRatingOverall     float64
@@ -135,6 +147,30 @@ type BookMetadata struct {
 	// response group. Each element is a ladder node name (e.g. "Science Fiction",
 	// "Space Opera"). Applied as book_tags with source="audible_category".
 	CategoryTags []string
+}
+
+// unambiguousLanguage returns the single distinct (case-insensitive) value in
+// vals, or "" when vals is empty or holds differing values. Open Library search
+// docs return Language as an UNORDERED aggregate across every edition, so
+// Language[0] is not "most relevant" — a book whose first-listed edition is a
+// translation would be mislabeled. That value is persisted as a
+// metadata:language:<code> system tag driving the review language filter, so a
+// guessed language is actively harmful: when ambiguous we set none, because no
+// tag beats a wrong one.
+func unambiguousLanguage(vals []string) string {
+	first := ""
+	for _, v := range vals {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			continue
+		}
+		if first == "" {
+			first = v
+		} else if !strings.EqualFold(v, first) {
+			return "" // ambiguous — differing languages across editions
+		}
+	}
+	return first
 }
 
 // SearchByTitle searches for books by title. Checks local dump store first if available.
@@ -197,8 +233,9 @@ func (c *OpenLibraryClient) SearchByTitle(ctx context.Context, title string) ([]
 			metadata.ISBN = doc.ISBN[0]
 		}
 
-		if len(doc.Language) > 0 {
-			metadata.Language = doc.Language[0]
+		// Only set language when the editions agree — see unambiguousLanguage.
+		if lang := unambiguousLanguage(doc.Language); lang != "" {
+			metadata.Language = lang
 		}
 
 		if doc.CoverI > 0 {
@@ -260,8 +297,9 @@ func (c *OpenLibraryClient) SearchByTitleAndAuthor(ctx context.Context, title, a
 			metadata.ISBN = doc.ISBN[0]
 		}
 
-		if len(doc.Language) > 0 {
-			metadata.Language = doc.Language[0]
+		// Only set language when the editions agree — see unambiguousLanguage.
+		if lang := unambiguousLanguage(doc.Language); lang != "" {
+			metadata.Language = lang
 		}
 
 		if doc.CoverI > 0 {
