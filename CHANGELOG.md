@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.154.0 -->
+<!-- version: 3.155.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-13 -->
 
@@ -8,6 +8,41 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 13, 2026 - feat(maintenance): shattered-book regroup dry-run op (first review-queue producer, PR-B1)
+
+Adds `maintenance.regroup-shattered-ai`, the FIRST producer into the universal
+review queue (PR-A1). It re-derives real audiobooks from the thousands of single-file
+"books" the broken iTunes import left behind (one track = one book), using the library
+**folder** as the identity signal (tags are unreliable). **Dry-run only:** it writes
+ZERO book/file changes — the only writes are review-queue holds via `UpsertReviewItem`.
+The apply path (CombineBooks / version-group writes) is a later PR.
+
+- New pure, no-I/O regex classifier `ClassifyShatteredFolders`
+  (`internal/itunes/service/fs_regroup_shape.go`). It groups single-file books by their
+  **book folder** — the file's grandparent when its parent is a chapter (`<prefix> - N`),
+  disc (`Disc N`), or edition (`... (Unabridged)`) sub-dir, else the parent (flat
+  multi-track) — and classifies each folder into one of four load-bearing Kind strings
+  the A1 frontend maps: `regroup.multidisc` (confident collapse: flat numbered tracks,
+  disc sets, or chapter shells matching the folder name), `regroup.version-group`
+  (Abridged + Unabridged editions), `regroup.anthology` (anthology/trilogy/omnibus
+  markers), and `regroup.ambiguous` (book-like but mixed/weak identity). Folders that are
+  clearly collections of distinct books (author dirs, correctly-stored series volumes,
+  flat dumps) are skipped so the queue is not flooded; genuine single-file books are left
+  alone. Table-tested (no DB).
+- The op (`internal/plugins/maintenance/regroup_shattered_ai.go`, registered in
+  `plugin.go`) enumerates the full library with the memdb-cap-safe `ListBookIDs` +
+  `registry.RunItems` bounded worker pool (`Concurrency: runtime.NumCPU()`) — never a
+  serial full-library `for range` (cites the 2026-07-05 3-hr single-core incident).
+  Grouping and the idempotent review-row writes run single-threaded after the read-only
+  scan (no write races). Emits a `RECONCILE:` line accounting for every book.
+- Each detected group becomes one `pending` hold keyed by a stable
+  `DedupKey = hash(Kind + FolderRef)`, so re-running the dry-run never duplicates a row
+  or resurfaces a human-decided (rejected/applied) one. Payload carries the folder, file
+  list, proposed action, member book IDs, derived survivor title, and confidence.
+- Tests: pure detector table tests + a dry-run op test over a temp Pebble store asserting
+  ZERO book/file mutation, correct hold count, upsert idempotency, and decision
+  preservation (`-race`).
 
 #### July 13, 2026 - feat(review): universal review-queue frontend (PR-A2)
 
