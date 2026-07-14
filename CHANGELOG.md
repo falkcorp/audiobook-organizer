@@ -9,6 +9,35 @@
 
 ### Features & Fixes
 
+#### July 13, 2026 - feat(review): universal review-queue frontend (PR-A2)
+
+Adds the React/TypeScript frontend for the universal review queue (backend =
+PR-A1), the single glanceable home for everything the system flags for a human
+decision. v1 producer is the regroup op (Track B), so the count starts at 0 and
+grows only with intentional holds.
+
+- **API client** (`web/src/services/api.ts`): `getReviewCount`, `getReviewItems`,
+  `approveReviewItem`, `rejectReviewItem`, `bulkReviewAction` over the protected
+  `/api/v1/review` endpoints via the existing `apiFetch`. Types mirror the exact
+  wire shapes (snake_case item fields, camelCase `byKind`, flat `RespondWithList`
+  list, `data.item` unwrap, bulk `processed`).
+- **Store** (`web/src/stores/useReviewStore.ts`): `count`/`byKind`/`items` with
+  `loadCount`/`loadItems`, plus a self-owned count poller
+  (`startPolling`/`stopPolling`, double-start guarded), mirroring
+  `useOperationsStore`'s SSE lifecycle. App.tsx starts it on auth-ready.
+- **Banner** (`web/src/components/ReviewBanner.tsx`): single aggregate "You have
+  N items to review" in `MainLayout` above every route; hidden at 0; click →
+  `/review`.
+- **Sidebar**: Review nav entry after Dedup with a live count `Badge` read from
+  the store in render.
+- **Page** (`web/src/pages/ReviewQueue.tsx`, lazy-routed `/review`): pending
+  items bucketed by kind (human labels in `web/src/lib/reviewKinds.ts`) with
+  Approve/Reject-all per bucket and per item, defensive payload rendering, and an
+  empty state. Refreshes count + items after any action.
+- Tests: `useReviewStore` (count refresh/error/items) + `ReviewBanner` (hidden at
+  0, shows N, singular form, click navigates). Additive UI only — rollback is a
+  revert.
+
 #### July 13, 2026 - feat(review): universal review-queue backend (store + API + apply registry)
 
 Adds the backend for a universal review queue — a single home for items the system
