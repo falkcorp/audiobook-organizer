@@ -1,7 +1,7 @@
 // file: internal/server/wire_handlers.go
-// version: 2.18.0
+// version: 2.19.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
-// last-edited: 2026-07-13
+// last-edited: 2026-07-14
 
 package server
 
@@ -10,7 +10,9 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
+	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
+	maintenanceplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	aibackendshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/aibackends"
 	audiobookshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/audiobooks"
@@ -580,6 +582,22 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	// stays a nil interface (the handler guards on store == nil). Apply handlers
 	// are registered later by producers (Track B2); none exist at A1.
 	reviewH := reviewhandler.New(s.Store())
+
+	// Register the regroup APPLY handlers (PR-B2) so approving a confident hold in
+	// the review UI performs the real merge. Only the two confident kinds get a
+	// handler; anthology/ambiguous stay handler-less (approve → "approved", never
+	// auto-applied). Guarded on a real store — with a nil store the review handler
+	// short-circuits before dispatch, so the closures would never run anyway.
+	if s.Store() != nil {
+		mergeSvc := s.mergeService
+		if mergeSvc == nil {
+			mergeSvc = merge.NewService(s.Store())
+		}
+		reviewH.RegisterApplyHandler(itunesservice.KindMultidisc,
+			maintenanceplugin.ApplyMultidisc(s.Store(), mergeSvc))
+		reviewH.RegisterApplyHandler(itunesservice.KindVersionGroup,
+			maintenanceplugin.ApplyVersionGroup(s.Store()))
+	}
 
 	// ── Register protected routes via per-domain methods ─────────────────────
 	s.wireLibraryRoutes(protected, cacheH, activityH, splitBookH, filesystemH, organizeH, metaCacheH, readingH, playlistH, userH, versionsH)
