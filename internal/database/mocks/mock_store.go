@@ -30375,6 +30375,66 @@ func (_c *MockStore_CountQuarantinedBooks_Call) RunAndReturn(run func() (int, er
 	return _c
 }
 
+// CountReviewItems provides a mock function for the type MockStore
+func (_mock *MockStore) CountReviewItems(status string) (int, error) {
+	ret := _mock.Called(status)
+
+	if len(ret) == 0 {
+		panic("no return value specified for CountReviewItems")
+	}
+
+	var r0 int
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string) (int, error)); ok {
+		return returnFunc(status)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string) int); ok {
+		r0 = returnFunc(status)
+	} else {
+		r0 = ret.Get(0).(int)
+	}
+	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
+		r1 = returnFunc(status)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_CountReviewItems_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CountReviewItems'
+type MockStore_CountReviewItems_Call struct {
+	*mock.Call
+}
+
+// CountReviewItems is a helper method to define mock.On call
+//   - status string
+func (_e *MockStore_Expecter) CountReviewItems(status any) *MockStore_CountReviewItems_Call {
+	return &MockStore_CountReviewItems_Call{Call: _e.mock.On("CountReviewItems", status)}
+}
+
+func (_c *MockStore_CountReviewItems_Call) Run(run func(status string)) *MockStore_CountReviewItems_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_CountReviewItems_Call) Return(n int, err error) *MockStore_CountReviewItems_Call {
+	_c.Call.Return(n, err)
+	return _c
+}
+
+func (_c *MockStore_CountReviewItems_Call) RunAndReturn(run func(status string) (int, error)) *MockStore_CountReviewItems_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // CountRunningByPluginV2 provides a mock function for the type MockStore
 func (_mock *MockStore) CountRunningByPluginV2(plugin string) (int, error) {
 	ret := _mock.Called(plugin)
@@ -41542,6 +41602,68 @@ func (_c *MockStore_GetRemovedExternalIDs_Call) RunAndReturn(run func(source str
 	return _c
 }
 
+// GetReviewItem provides a mock function for the type MockStore
+func (_mock *MockStore) GetReviewItem(id string) (*database.ReviewItem, error) {
+	ret := _mock.Called(id)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetReviewItem")
+	}
+
+	var r0 *database.ReviewItem
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string) (*database.ReviewItem, error)); ok {
+		return returnFunc(id)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string) *database.ReviewItem); ok {
+		r0 = returnFunc(id)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*database.ReviewItem)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
+		r1 = returnFunc(id)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_GetReviewItem_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetReviewItem'
+type MockStore_GetReviewItem_Call struct {
+	*mock.Call
+}
+
+// GetReviewItem is a helper method to define mock.On call
+//   - id string
+func (_e *MockStore_Expecter) GetReviewItem(id any) *MockStore_GetReviewItem_Call {
+	return &MockStore_GetReviewItem_Call{Call: _e.mock.On("GetReviewItem", id)}
+}
+
+func (_c *MockStore_GetReviewItem_Call) Run(run func(id string)) *MockStore_GetReviewItem_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_GetReviewItem_Call) Return(reviewItem *database.ReviewItem, err error) *MockStore_GetReviewItem_Call {
+	_c.Call.Return(reviewItem, err)
+	return _c
+}
+
+func (_c *MockStore_GetReviewItem_Call) RunAndReturn(run func(id string) (*database.ReviewItem, error)) *MockStore_GetReviewItem_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetRoleByID provides a mock function for the type MockStore
 func (_mock *MockStore) GetRoleByID(id string) (*database.Role, error) {
 	ret := _mock.Called(id)
@@ -45058,6 +45180,74 @@ func (_c *MockStore_ListQueuedOperationsV2_Call) RunAndReturn(run func() ([]data
 	return _c
 }
 
+// ListReviewItems provides a mock function for the type MockStore
+func (_mock *MockStore) ListReviewItems(filter database.ReviewFilter) ([]database.ReviewItem, int, error) {
+	ret := _mock.Called(filter)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListReviewItems")
+	}
+
+	var r0 []database.ReviewItem
+	var r1 int
+	var r2 error
+	if returnFunc, ok := ret.Get(0).(func(database.ReviewFilter) ([]database.ReviewItem, int, error)); ok {
+		return returnFunc(filter)
+	}
+	if returnFunc, ok := ret.Get(0).(func(database.ReviewFilter) []database.ReviewItem); ok {
+		r0 = returnFunc(filter)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]database.ReviewItem)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(database.ReviewFilter) int); ok {
+		r1 = returnFunc(filter)
+	} else {
+		r1 = ret.Get(1).(int)
+	}
+	if returnFunc, ok := ret.Get(2).(func(database.ReviewFilter) error); ok {
+		r2 = returnFunc(filter)
+	} else {
+		r2 = ret.Error(2)
+	}
+	return r0, r1, r2
+}
+
+// MockStore_ListReviewItems_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListReviewItems'
+type MockStore_ListReviewItems_Call struct {
+	*mock.Call
+}
+
+// ListReviewItems is a helper method to define mock.On call
+//   - filter database.ReviewFilter
+func (_e *MockStore_Expecter) ListReviewItems(filter any) *MockStore_ListReviewItems_Call {
+	return &MockStore_ListReviewItems_Call{Call: _e.mock.On("ListReviewItems", filter)}
+}
+
+func (_c *MockStore_ListReviewItems_Call) Run(run func(filter database.ReviewFilter)) *MockStore_ListReviewItems_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 database.ReviewFilter
+		if args[0] != nil {
+			arg0 = args[0].(database.ReviewFilter)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_ListReviewItems_Call) Return(reviewItems []database.ReviewItem, n int, err error) *MockStore_ListReviewItems_Call {
+	_c.Call.Return(reviewItems, n, err)
+	return _c
+}
+
+func (_c *MockStore_ListReviewItems_Call) RunAndReturn(run func(filter database.ReviewFilter) ([]database.ReviewItem, int, error)) *MockStore_ListReviewItems_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // ListRoles provides a mock function for the type MockStore
 func (_mock *MockStore) ListRoles() ([]database.Role, error) {
 	ret := _mock.Called()
@@ -48051,6 +48241,61 @@ func (_c *MockStore_RevertOperationChanges_Call) RunAndReturn(run func(operation
 	return _c
 }
 
+// ReviewStatsByKind provides a mock function for the type MockStore
+func (_mock *MockStore) ReviewStatsByKind() ([]database.ReviewKindStat, error) {
+	ret := _mock.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for ReviewStatsByKind")
+	}
+
+	var r0 []database.ReviewKindStat
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func() ([]database.ReviewKindStat, error)); ok {
+		return returnFunc()
+	}
+	if returnFunc, ok := ret.Get(0).(func() []database.ReviewKindStat); ok {
+		r0 = returnFunc()
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]database.ReviewKindStat)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func() error); ok {
+		r1 = returnFunc()
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_ReviewStatsByKind_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ReviewStatsByKind'
+type MockStore_ReviewStatsByKind_Call struct {
+	*mock.Call
+}
+
+// ReviewStatsByKind is a helper method to define mock.On call
+func (_e *MockStore_Expecter) ReviewStatsByKind() *MockStore_ReviewStatsByKind_Call {
+	return &MockStore_ReviewStatsByKind_Call{Call: _e.mock.On("ReviewStatsByKind")}
+}
+
+func (_c *MockStore_ReviewStatsByKind_Call) Run(run func()) *MockStore_ReviewStatsByKind_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockStore_ReviewStatsByKind_Call) Return(reviewKindStats []database.ReviewKindStat, err error) *MockStore_ReviewStatsByKind_Call {
+	_c.Call.Return(reviewKindStats, err)
+	return _c
+}
+
+func (_c *MockStore_ReviewStatsByKind_Call) RunAndReturn(run func() ([]database.ReviewKindStat, error)) *MockStore_ReviewStatsByKind_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // RevokeAPIKey provides a mock function for the type MockStore
 func (_mock *MockStore) RevokeAPIKey(id string) error {
 	ret := _mock.Called(id)
@@ -49281,6 +49526,74 @@ func (_c *MockStore_SetRaw_Call) Return(err error) *MockStore_SetRaw_Call {
 }
 
 func (_c *MockStore_SetRaw_Call) RunAndReturn(run func(key string, value []byte) error) *MockStore_SetRaw_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// SetReviewItemStatus provides a mock function for the type MockStore
+func (_mock *MockStore) SetReviewItemStatus(id string, status string) (*database.ReviewItem, error) {
+	ret := _mock.Called(id, status)
+
+	if len(ret) == 0 {
+		panic("no return value specified for SetReviewItemStatus")
+	}
+
+	var r0 *database.ReviewItem
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string, string) (*database.ReviewItem, error)); ok {
+		return returnFunc(id, status)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string, string) *database.ReviewItem); ok {
+		r0 = returnFunc(id, status)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*database.ReviewItem)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string, string) error); ok {
+		r1 = returnFunc(id, status)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_SetReviewItemStatus_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SetReviewItemStatus'
+type MockStore_SetReviewItemStatus_Call struct {
+	*mock.Call
+}
+
+// SetReviewItemStatus is a helper method to define mock.On call
+//   - id string
+//   - status string
+func (_e *MockStore_Expecter) SetReviewItemStatus(id any, status any) *MockStore_SetReviewItemStatus_Call {
+	return &MockStore_SetReviewItemStatus_Call{Call: _e.mock.On("SetReviewItemStatus", id, status)}
+}
+
+func (_c *MockStore_SetReviewItemStatus_Call) Run(run func(id string, status string)) *MockStore_SetReviewItemStatus_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_SetReviewItemStatus_Call) Return(reviewItem *database.ReviewItem, err error) *MockStore_SetReviewItemStatus_Call {
+	_c.Call.Return(reviewItem, err)
+	return _c
+}
+
+func (_c *MockStore_SetReviewItemStatus_Call) RunAndReturn(run func(id string, status string) (*database.ReviewItem, error)) *MockStore_SetReviewItemStatus_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -51372,10 +51685,7 @@ func (_c *MockStore_UpsertOpStateV2_Call) RunAndReturn(run func(row database.OpS
 	return _c
 }
 
-// ReviewStore methods (PR-A1). Hand-added: local mockery version drifts from the
-// pinned one, so regenerating would rewrite every mock in the repo. These mirror
-// the testify template the generator emits.
-
+// UpsertReviewItem provides a mock function for the type MockStore
 func (_mock *MockStore) UpsertReviewItem(item database.ReviewItem) (database.ReviewItem, error) {
 	ret := _mock.Called(item)
 
@@ -51395,145 +51705,6 @@ func (_mock *MockStore) UpsertReviewItem(item database.ReviewItem) (database.Rev
 	}
 	if returnFunc, ok := ret.Get(1).(func(database.ReviewItem) error); ok {
 		r1 = returnFunc(item)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-func (_mock *MockStore) GetReviewItem(id string) (*database.ReviewItem, error) {
-	ret := _mock.Called(id)
-
-	if len(ret) == 0 {
-		panic("no return value specified for GetReviewItem")
-	}
-
-	var r0 *database.ReviewItem
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string) (*database.ReviewItem, error)); ok {
-		return returnFunc(id)
-	}
-	if returnFunc, ok := ret.Get(0).(func(string) *database.ReviewItem); ok {
-		r0 = returnFunc(id)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.ReviewItem)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
-		r1 = returnFunc(id)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-func (_mock *MockStore) ListReviewItems(filter database.ReviewFilter) ([]database.ReviewItem, int, error) {
-	ret := _mock.Called(filter)
-
-	if len(ret) == 0 {
-		panic("no return value specified for ListReviewItems")
-	}
-
-	var r0 []database.ReviewItem
-	var r1 int
-	var r2 error
-	if returnFunc, ok := ret.Get(0).(func(database.ReviewFilter) ([]database.ReviewItem, int, error)); ok {
-		return returnFunc(filter)
-	}
-	if returnFunc, ok := ret.Get(0).(func(database.ReviewFilter) []database.ReviewItem); ok {
-		r0 = returnFunc(filter)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.ReviewItem)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func(database.ReviewFilter) int); ok {
-		r1 = returnFunc(filter)
-	} else {
-		r1 = ret.Get(1).(int)
-	}
-	if returnFunc, ok := ret.Get(2).(func(database.ReviewFilter) error); ok {
-		r2 = returnFunc(filter)
-	} else {
-		r2 = ret.Error(2)
-	}
-	return r0, r1, r2
-}
-
-func (_mock *MockStore) CountReviewItems(status string) (int, error) {
-	ret := _mock.Called(status)
-
-	if len(ret) == 0 {
-		panic("no return value specified for CountReviewItems")
-	}
-
-	var r0 int
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string) (int, error)); ok {
-		return returnFunc(status)
-	}
-	if returnFunc, ok := ret.Get(0).(func(string) int); ok {
-		r0 = returnFunc(status)
-	} else {
-		r0 = ret.Get(0).(int)
-	}
-	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
-		r1 = returnFunc(status)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-func (_mock *MockStore) ReviewStatsByKind() ([]database.ReviewKindStat, error) {
-	ret := _mock.Called()
-
-	if len(ret) == 0 {
-		panic("no return value specified for ReviewStatsByKind")
-	}
-
-	var r0 []database.ReviewKindStat
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func() ([]database.ReviewKindStat, error)); ok {
-		return returnFunc()
-	}
-	if returnFunc, ok := ret.Get(0).(func() []database.ReviewKindStat); ok {
-		r0 = returnFunc()
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.ReviewKindStat)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func() error); ok {
-		r1 = returnFunc()
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-func (_mock *MockStore) SetReviewItemStatus(id string, status string) (*database.ReviewItem, error) {
-	ret := _mock.Called(id, status)
-
-	if len(ret) == 0 {
-		panic("no return value specified for SetReviewItemStatus")
-	}
-
-	var r0 *database.ReviewItem
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string, string) (*database.ReviewItem, error)); ok {
-		return returnFunc(id, status)
-	}
-	if returnFunc, ok := ret.Get(0).(func(string, string) *database.ReviewItem); ok {
-		r0 = returnFunc(id, status)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.ReviewItem)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func(string, string) error); ok {
-		r1 = returnFunc(id, status)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -51570,175 +51741,6 @@ func (_c *MockStore_UpsertReviewItem_Call) Return(reviewItem database.ReviewItem
 }
 
 func (_c *MockStore_UpsertReviewItem_Call) RunAndReturn(run func(item database.ReviewItem) (database.ReviewItem, error)) *MockStore_UpsertReviewItem_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// MockStore_GetReviewItem_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetReviewItem'
-type MockStore_GetReviewItem_Call struct {
-	*mock.Call
-}
-
-// GetReviewItem is a helper method to define mock.On call
-//   - id string
-func (_e *MockStore_Expecter) GetReviewItem(id any) *MockStore_GetReviewItem_Call {
-	return &MockStore_GetReviewItem_Call{Call: _e.mock.On("GetReviewItem", id)}
-}
-
-func (_c *MockStore_GetReviewItem_Call) Run(run func(id string)) *MockStore_GetReviewItem_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 string
-		if args[0] != nil {
-			arg0 = args[0].(string)
-		}
-		run(
-			arg0,
-		)
-	})
-	return _c
-}
-
-func (_c *MockStore_GetReviewItem_Call) Return(reviewItem *database.ReviewItem, err error) *MockStore_GetReviewItem_Call {
-	_c.Call.Return(reviewItem, err)
-	return _c
-}
-
-func (_c *MockStore_GetReviewItem_Call) RunAndReturn(run func(id string) (*database.ReviewItem, error)) *MockStore_GetReviewItem_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// MockStore_ListReviewItems_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListReviewItems'
-type MockStore_ListReviewItems_Call struct {
-	*mock.Call
-}
-
-// ListReviewItems is a helper method to define mock.On call
-//   - filter database.ReviewFilter
-func (_e *MockStore_Expecter) ListReviewItems(filter any) *MockStore_ListReviewItems_Call {
-	return &MockStore_ListReviewItems_Call{Call: _e.mock.On("ListReviewItems", filter)}
-}
-
-func (_c *MockStore_ListReviewItems_Call) Run(run func(filter database.ReviewFilter)) *MockStore_ListReviewItems_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 database.ReviewFilter
-		if args[0] != nil {
-			arg0 = args[0].(database.ReviewFilter)
-		}
-		run(
-			arg0,
-		)
-	})
-	return _c
-}
-
-func (_c *MockStore_ListReviewItems_Call) Return(reviewItems []database.ReviewItem, n int, err error) *MockStore_ListReviewItems_Call {
-	_c.Call.Return(reviewItems, n, err)
-	return _c
-}
-
-func (_c *MockStore_ListReviewItems_Call) RunAndReturn(run func(filter database.ReviewFilter) ([]database.ReviewItem, int, error)) *MockStore_ListReviewItems_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// MockStore_CountReviewItems_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CountReviewItems'
-type MockStore_CountReviewItems_Call struct {
-	*mock.Call
-}
-
-// CountReviewItems is a helper method to define mock.On call
-//   - status string
-func (_e *MockStore_Expecter) CountReviewItems(status any) *MockStore_CountReviewItems_Call {
-	return &MockStore_CountReviewItems_Call{Call: _e.mock.On("CountReviewItems", status)}
-}
-
-func (_c *MockStore_CountReviewItems_Call) Run(run func(status string)) *MockStore_CountReviewItems_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 string
-		if args[0] != nil {
-			arg0 = args[0].(string)
-		}
-		run(
-			arg0,
-		)
-	})
-	return _c
-}
-
-func (_c *MockStore_CountReviewItems_Call) Return(n int, err error) *MockStore_CountReviewItems_Call {
-	_c.Call.Return(n, err)
-	return _c
-}
-
-func (_c *MockStore_CountReviewItems_Call) RunAndReturn(run func(status string) (int, error)) *MockStore_CountReviewItems_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// MockStore_ReviewStatsByKind_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ReviewStatsByKind'
-type MockStore_ReviewStatsByKind_Call struct {
-	*mock.Call
-}
-
-// ReviewStatsByKind is a helper method to define mock.On call
-func (_e *MockStore_Expecter) ReviewStatsByKind() *MockStore_ReviewStatsByKind_Call {
-	return &MockStore_ReviewStatsByKind_Call{Call: _e.mock.On("ReviewStatsByKind")}
-}
-
-func (_c *MockStore_ReviewStatsByKind_Call) Run(run func()) *MockStore_ReviewStatsByKind_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run()
-	})
-	return _c
-}
-
-func (_c *MockStore_ReviewStatsByKind_Call) Return(reviewKindStats []database.ReviewKindStat, err error) *MockStore_ReviewStatsByKind_Call {
-	_c.Call.Return(reviewKindStats, err)
-	return _c
-}
-
-func (_c *MockStore_ReviewStatsByKind_Call) RunAndReturn(run func() ([]database.ReviewKindStat, error)) *MockStore_ReviewStatsByKind_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// MockStore_SetReviewItemStatus_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SetReviewItemStatus'
-type MockStore_SetReviewItemStatus_Call struct {
-	*mock.Call
-}
-
-// SetReviewItemStatus is a helper method to define mock.On call
-//   - id string
-//   - status string
-func (_e *MockStore_Expecter) SetReviewItemStatus(id any, status any) *MockStore_SetReviewItemStatus_Call {
-	return &MockStore_SetReviewItemStatus_Call{Call: _e.mock.On("SetReviewItemStatus", id, status)}
-}
-
-func (_c *MockStore_SetReviewItemStatus_Call) Run(run func(id string, status string)) *MockStore_SetReviewItemStatus_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 string
-		if args[0] != nil {
-			arg0 = args[0].(string)
-		}
-		var arg1 string
-		if args[1] != nil {
-			arg1 = args[1].(string)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
-	return _c
-}
-
-func (_c *MockStore_SetReviewItemStatus_Call) Return(reviewItem *database.ReviewItem, err error) *MockStore_SetReviewItemStatus_Call {
-	_c.Call.Return(reviewItem, err)
-	return _c
-}
-
-func (_c *MockStore_SetReviewItemStatus_Call) RunAndReturn(run func(id string, status string) (*database.ReviewItem, error)) *MockStore_SetReviewItemStatus_Call {
 	_c.Call.Return(run)
 	return _c
 }
