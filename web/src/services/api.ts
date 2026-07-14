@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.52.0
+// version: 2.53.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-07-11
+// last-edited: 2026-07-13
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -5796,6 +5796,136 @@ export async function pullAIBackendModel(model: string): Promise<{ model: string
   });
   if (!response.ok) {
     throw await buildApiError(response, `Failed to pull model ${model}`);
+  }
+  const body = await response.json();
+  return body.data;
+}
+
+// =====================================================================
+// Universal Review Queue (PR-A2 frontend for the PR-A1 backend).
+//
+// Field-name note: the backend serialises ReviewItem with snake_case struct
+// tags (dedup_key, folder_ref, created_at, updated_at) but the count endpoint's
+// byKind map is a camelCase gin.H literal key — so this contract is genuinely
+// mixed-case. Types below mirror the wire shapes exactly; do not normalise.
+// =====================================================================
+
+/** A single review-queue hold. `payload` is a JSON STRING (opaque here — the
+ *  producer op decides its shape); callers JSON.parse it defensively. */
+export interface ReviewItem {
+  id: string;
+  kind: string;
+  dedup_key: string;
+  folder_ref: string;
+  status: string;
+  summary: string;
+  payload: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** GET /review/count → data.{count, byKind}. Both cover PENDING items only. */
+export interface ReviewCount {
+  count: number;
+  byKind: Record<string, number>;
+}
+
+/** GET /review/items → flat {items, count, limit, offset, total} (RespondWithList,
+ *  no `data` wrapper). */
+export interface ReviewItemsPage {
+  items: ReviewItem[];
+  count: number;
+  limit: number;
+  offset: number;
+  total: number;
+}
+
+export interface ReviewItemsFilter {
+  status?: string;
+  kind?: string;
+  limit?: number;
+  offset?: number;
+}
+
+/** POST /review/bulk → data.{action, processed, ...id buckets}. Note: the
+ *  backend reports `processed`, NOT an `affected` count. */
+export interface ReviewBulkResult {
+  action: string;
+  approved?: string[];
+  applied?: string[];
+  rejected?: string[];
+  not_found?: string[];
+  processed: number;
+}
+
+export interface ReviewBulkRequest {
+  action: 'approve' | 'reject';
+  /** At least one of kind / ids must be set — the backend refuses an unscoped
+   *  bulk over the entire queue. */
+  kind?: string;
+  ids?: string[];
+}
+
+export async function getReviewCount(): Promise<ReviewCount> {
+  const response = await apiFetch(`${API_BASE}/review/count`);
+  if (!response.ok) {
+    throw await buildApiError(response, 'Failed to fetch review count');
+  }
+  const body = await response.json();
+  const data = body.data ?? {};
+  return { count: data.count ?? 0, byKind: data.byKind ?? {} };
+}
+
+export async function getReviewItems(filter: ReviewItemsFilter = {}): Promise<ReviewItemsPage> {
+  const params = new URLSearchParams();
+  params.set('status', filter.status ?? 'pending');
+  if (filter.kind) params.set('kind', filter.kind);
+  if (filter.limit !== undefined) params.set('limit', String(filter.limit));
+  if (filter.offset !== undefined) params.set('offset', String(filter.offset));
+  const response = await apiFetch(`${API_BASE}/review/items?${params.toString()}`);
+  if (!response.ok) {
+    throw await buildApiError(response, 'Failed to fetch review items');
+  }
+  const body = await response.json();
+  return {
+    items: body.items ?? [],
+    count: body.count ?? 0,
+    limit: body.limit ?? 0,
+    offset: body.offset ?? 0,
+    total: body.total ?? 0,
+  };
+}
+
+export async function approveReviewItem(id: string): Promise<ReviewItem> {
+  const response = await apiFetch(`${API_BASE}/review/items/${encodeURIComponent(id)}/approve`, {
+    method: 'POST',
+  });
+  if (!response.ok) {
+    throw await buildApiError(response, 'Failed to approve review item');
+  }
+  const body = await response.json();
+  return body.data?.item;
+}
+
+export async function rejectReviewItem(id: string): Promise<ReviewItem> {
+  const response = await apiFetch(`${API_BASE}/review/items/${encodeURIComponent(id)}/reject`, {
+    method: 'POST',
+  });
+  if (!response.ok) {
+    throw await buildApiError(response, 'Failed to reject review item');
+  }
+  const body = await response.json();
+  return body.data?.item;
+}
+
+export async function bulkReviewAction(req: ReviewBulkRequest): Promise<ReviewBulkResult> {
+  const response = await apiFetch(`${API_BASE}/review/bulk`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  });
+  if (!response.ok) {
+    throw await buildApiError(response, 'Failed to run bulk review action');
   }
   const body = await response.json();
   return body.data;

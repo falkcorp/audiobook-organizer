@@ -1,6 +1,7 @@
 // file: web/src/App.tsx
-// version: 1.21.1
+// version: 1.22.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
+// last-edited: 2026-07-13
 
 import { useState, useEffect, useCallback, lazy, Suspense, useRef } from 'react';
 import { STORAGE_KEYS } from './lib/storageKeys';
@@ -22,6 +23,7 @@ import { eventSourceManager } from './services/eventSourceManager';
 import * as api from './services/api';
 import { useAuth } from './contexts/AuthContext';
 import { useOperationsStore } from './stores/useOperationsStore';
+import { useReviewStore } from './stores/useReviewStore';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 
 // Lazy-loaded pages (code-split for smaller initial bundle)
@@ -62,6 +64,9 @@ const PlaylistDetail = lazy(() => import('./pages/PlaylistDetail'));
 const Setup = lazy(() => import('./pages/Setup'));
 const Users = lazy(() => import('./pages/Users'));
 const TrashedVersions = lazy(() => import('./pages/TrashedVersions'));
+const ReviewQueue = lazy(() =>
+  import('./pages/ReviewQueue').then((m) => ({ default: m.ReviewQueue }))
+);
 
 function App() {
   const auth = useAuth();
@@ -126,6 +131,16 @@ function App() {
     store.openSSE();
     void store.loadFromServer();
     return () => store.closeSSE();
+  }, [auth.initialized, auth.isAuthenticated, auth.requiresAuth]);
+
+  // Poll the review-queue count once the user is authenticated so the banner +
+  // sidebar badge stay live. The interval lifecycle lives in the store (guarded
+  // against double-start), mirroring the ops SSE effect above.
+  useEffect(() => {
+    if (!auth.initialized || (auth.requiresAuth && !auth.isAuthenticated)) return;
+    const review = useReviewStore.getState();
+    review.startPolling();
+    return () => review.stopPolling();
   }, [auth.initialized, auth.isAuthenticated, auth.requiresAuth]);
 
   // Listen for server shutdown events and handle reconnection
@@ -247,6 +262,7 @@ function App() {
               <Route path="/setup" element={<ErrorBoundary><Setup /></ErrorBoundary>} />
               <Route path="/users" element={<ErrorBoundary><Users /></ErrorBoundary>} />
               <Route path="/versions" element={<ErrorBoundary><TrashedVersions /></ErrorBoundary>} />
+              <Route path="/review" element={<ErrorBoundary><ReviewQueue /></ErrorBoundary>} />
             </Routes>
           </Suspense>
         </MainLayout>
