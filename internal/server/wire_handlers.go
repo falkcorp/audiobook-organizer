@@ -1,7 +1,7 @@
 // file: internal/server/wire_handlers.go
-// version: 2.17.0
+// version: 2.18.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
-// last-edited: 2026-07-11
+// last-edited: 2026-07-13
 
 package server
 
@@ -19,6 +19,7 @@ import (
 	entities "github.com/falkcorp/audiobook-organizer/internal/server/handlers/entities"
 	metadatahandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/metadata"
 	operations "github.com/falkcorp/audiobook-organizer/internal/server/handlers/operations"
+	reviewhandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/review"
 	system "github.com/falkcorp/audiobook-organizer/internal/server/handlers/system"
 	toolshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/tools"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
@@ -574,6 +575,12 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	// lifecycle as the tools handler above.
 	aiBackendsH := aibackendshandler.New(s.toolRegistry, s.ollamaDaemon)
 
+	// Review-queue handler (PR-A1). The store is the wide database.Store, which
+	// embeds database.ReviewStore. s.Store() returns the interface so a nil store
+	// stays a nil interface (the handler guards on store == nil). Apply handlers
+	// are registered later by producers (Track B2); none exist at A1.
+	reviewH := reviewhandler.New(s.Store())
+
 	// ── Register protected routes via per-domain methods ─────────────────────
 	s.wireLibraryRoutes(protected, cacheH, activityH, splitBookH, filesystemH, organizeH, metaCacheH, readingH, playlistH, userH, versionsH)
 	s.wireMediaRoutes(protected, itunesH, aiH, diagH, toolsH, aiBackendsH, pluginsH)
@@ -581,6 +588,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	s.wireOperationsRoutes(protected, opsV2H, operationsH)
 	s.wireSystemRoutes(protected, systemH)
 	s.wireDedupRoutes(protected, dedupH, duplicatesH)
+	s.wireReviewRoutes(protected, reviewH)
 	s.wireAudiobooksRoutes(protected, audiobooksH)
 	s.wireMetadataRoutes(protected, metadataH)
 }

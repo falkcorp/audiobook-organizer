@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.80.0
+// version: 1.81.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-07-11
+// last-edited: 2026-07-13
 
 package database
 
@@ -2690,3 +2690,14 @@ func (m *MockStore) PromoteToQueued(_ string) error                { return nil 
 func (m *MockStore) AddToBatchBucket(_ string, _ OpSubject) error         { return nil }
 func (m *MockStore) ListBatchBucket(_ string) ([]BatchBucketEntry, error) { return nil, nil }
 func (m *MockStore) ClearBatchBucket(_ string, _ []OpSubject) error       { return nil }
+
+// ReviewStore stubs (PR-A1) — permissive no-ops for tests that don't exercise
+// the review queue. Handler/store tests use a real *PebbleStore, not this mock.
+func (m *MockStore) UpsertReviewItem(item ReviewItem) (ReviewItem, error) { return item, nil }
+func (m *MockStore) GetReviewItem(_ string) (*ReviewItem, error)          { return nil, nil }
+func (m *MockStore) ListReviewItems(_ ReviewFilter) ([]ReviewItem, int, error) {
+	return nil, 0, nil
+}
+func (m *MockStore) CountReviewItems(_ string) (int, error)               { return 0, nil }
+func (m *MockStore) ReviewStatsByKind() ([]ReviewKindStat, error)         { return nil, nil }
+func (m *MockStore) SetReviewItemStatus(_, _ string) (*ReviewItem, error) { return nil, nil }

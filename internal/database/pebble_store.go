@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.115.0
+// version: 1.116.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-07-13
 
@@ -99,6 +99,7 @@ type PebbleStore struct {
 	memPtr                   atomic.Pointer[MemStore]
 	counterMu                sync.Mutex // protects nextID read-modify-write
 	opsMu                    sync.Mutex // serializes v2 op CAS operations (SetOperationV2StatusIfQueued)
+	reviewMu                 sync.Mutex // serializes review-item upserts so concurrent same-DedupKey writes can't duplicate rows (review_store.go)
 	opsLogSeq                int64      // monotonic counter for log key uniqueness; accessed via atomic
 	rootDir                  string     // organized library root; set via SetRootDir after config load
 	libraryCountsRecomputeMu sync.Mutex // gates recompute to prevent stampede when N callers see dirty cache
