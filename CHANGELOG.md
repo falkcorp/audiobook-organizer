@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.155.0 -->
+<!-- version: 3.156.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-13 -->
 
@@ -8,6 +8,41 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 13, 2026 - fix(regroup): anthology counts distinct works + fold in original iTunes album path (B1 tuning)
+
+Tunes the shattered-book regroup classifier after a real prod dry-run (44,327 books →
+440 holds) surfaced one classification bug and one coverage gap. Still dry-run only —
+no book/file writes.
+
+- **Bug 1 (anthology false positive):** a single novel split into sequential chapter
+  files was mis-flagged as a many-work anthology (prod: `Anthology/collection: 133 works
+  — .../The Traitor Spy Trilogy/01-The Ambassadors Mission`). Two root causes fixed in
+  `ClassifyShatteredFolders` (`internal/itunes/service/fs_regroup_shape.go`): (1) the
+  anthology marker is now matched **only against the book-folder name**, so a parent
+  series dir or a track's album tag ("The Traitor Spy Trilogy") can no longer reclassify
+  a child single-book folder; (2) `regroup.anthology` now requires **multiple genuinely
+  distinct title stems** in addition to the folder marker — sequential chapters of one
+  title (`Chapter NNN`, `Track NN`, bare `NN`, or one dominant stem) collapse to
+  `regroup.multidisc`, and a marker-bearing-but-sequential folder (e.g. `Foundation
+  Trilogy - 1/2/3`, which could be chapters or volumes) is held as `regroup.ambiguous`
+  rather than a confident-but-wrong split. When it *is* an anthology, the summary count
+  is now **distinct works, not the raw file count** (new `RegroupGroup.DistinctWorks`).
+  The anthology folder-marker set also now includes `collection`/`collected` (safe now
+  that the distinct-titles gate prevents flooding).
+- **Bug 2 (iTunes-path coverage):** `BookFile.ITunesPath` (the original `W:\` album
+  folder) is now folded in as an **additional** grouping signal via a small union-find —
+  a book joins a group if its FilePath book-folder **or** its ITunesPath book-folder
+  matches another member's. The FilePath-only path is unchanged (no iTunes path ⇒
+  identical grouping, no regression). When the two signals disagree (a group spans
+  multiple FilePath folders, glued only by a shared iTunes album), the group leans
+  `regroup.ambiguous`. The op now populates `ShatterBook.ITunesPath` from the BookFile.
+- Tests: the exact prod failures are covered (133 sequential chapters → multidisc not
+  anthology; genuine anthology with distinct titles → count = distinct works; parent
+  "Trilogy/" marker → child judged on its own merits; two books sharing an iTunes album
+  but different FilePaths → grouped). One intentional expectation change: the former
+  `TestClassify_Anthology` (`Foundation Trilogy - 1/2/3`) now asserts `ambiguous`, the
+  correct classification for a sequential single-stem folder under the tightened rules.
 
 #### July 13, 2026 - feat(maintenance): shattered-book regroup dry-run op (first review-queue producer, PR-B1)
 

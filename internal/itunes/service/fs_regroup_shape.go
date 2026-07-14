@@ -1,5 +1,5 @@
 // file: internal/itunes/service/fs_regroup_shape.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1e7d4a92-3c85-4b60-9f21-6a8c0d5e2b47
 // last-edited: 2026-07-13
 
@@ -29,6 +29,21 @@
 // of "the book folder" and matches docs/dedup-import-pipeline-audit.md's
 // (grandparent_dir, normalized-album) recommendation.
 //
+// Two identity signals (v1.1): grouping now folds in a book's ORIGINAL iTunes album
+// folder (BookFile.ITunesPath, `W:\…`) IN ADDITION to its FilePath book-folder, via a
+// small union-find — a book joins a group if EITHER key matches another member's. When
+// only FilePath is present (the common non-iTunes case) this reduces exactly to the old
+// map grouping. When the two signals disagree (a group spans several FilePath folders,
+// glued only by a shared iTunes album), the group is held as ambiguous, not collapsed.
+//
+// Anthology precision (v1.1): the anthology marker is matched ONLY against the book
+// folder's own name (never a parent series dir or a track's album tag), and a folder is
+// classified as an anthology ONLY with strong evidence — a folder marker AND multiple
+// genuinely-distinct title stems. Sequential chapters of one title (a novel split into
+// N chapter files) collapse to multidisc; a marked-but-sequential folder is held as
+// ambiguous. This fixes a prod false positive that counted 133 chapter FILES of one
+// novel as 133 distinct WORKS.
+//
 // Pure function over DB-derived metadata: no I/O, fully unit-testable.
 
 package itunesservice
@@ -55,12 +70,20 @@ const (
 // real BookFile path when the book owns exactly one file, else the virtual
 // Book.FilePath.
 type ShatterBook struct {
-	BookID    string
-	FilePath  string // real BookFile path (preferred) or virtual Book.FilePath
-	FileCount int    // BookFiles owned; > 1 means already a real multi-file book
-	IsPrimary bool   // non-primary version members are ignored
-	Title     string // scanner-derived title (album tag); may be empty
-	Author    string // display author when known; never used for the FOLDER key
+	BookID   string
+	FilePath string // real BookFile path (preferred) or virtual Book.FilePath
+	// ITunesPath is the ORIGINAL iTunes album-folder path (`W:\…`) captured at import,
+	// when present. These shattered books are largely an iTunes-import artifact and the
+	// original album folder is often a STRONGER identity signal than the reorganized
+	// FilePath, so it is folded in as an ADDITIONAL grouping signal: a book joins a group
+	// if its FilePath book-folder OR its ITunesPath book-folder matches another member's
+	// (see ClassifyShatteredFolders). Empty for non-iTunes books (the common prod case),
+	// where grouping falls back to FilePath alone with no behavior change.
+	ITunesPath string
+	FileCount  int    // BookFiles owned; > 1 means already a real multi-file book
+	IsPrimary  bool   // non-primary version members are ignored
+	Title      string // scanner-derived title (album tag); may be empty
+	Author     string // display author when known; never used for the FOLDER key
 }
 
 // RegroupGroup is one book folder the classifier flagged for a review hold.
@@ -71,6 +94,11 @@ type RegroupGroup struct {
 	SurvivorTitle  string        // derived: strip "NN - " prefix and "(era/year)" / " - N" suffix
 	ProposedAction string        // human-readable proposed action
 	Members        []ShatterBook // ordered by chapter/track number then BookID
+	// DistinctWorks is the count of DISTINCT title stems in the folder — set ONLY for
+	// KindAnthology, where the human-facing count must be the number of distinct WORKS,
+	// not the raw file count (a novel split into 133 sequential chapter files is ONE
+	// work, not 133). Zero for every other Kind (callers fall back to len(Members)).
+	DistinctWorks int
 }
 
 // ShapeStats reconciles every input book so the record count ties out (no silent
@@ -120,11 +148,17 @@ var (
 	abridgedRe   = regexp.MustCompile(`(?i)abridged`)
 )
 
-// anthologyRe detects STRONG markers that a folder holds "multiple distinct works"
-// — which regex cannot reliably split, so these are held for review. Deliberately
-// excludes weak terms like "collection"/"complete" that appear on legitimate single
-// audiobooks ("The Complete Collection", unabridged) to avoid mislabeling them.
-var anthologyRe = regexp.MustCompile(`(?i)\b(antholog(?:y|ies)|omnibus|trilog(?:y|ies)|tetralog(?:y|ies)|quartet|boxed?\s*set)\b`)
+// anthologyRe detects markers that a folder holds "multiple distinct works" —
+// which regex cannot reliably split. It is now matched ONLY against the BOOK FOLDER
+// NAME (never a parent dir or a track's album tag — see classifyGroup) AND is only
+// promoted to KindAnthology when the members also show multiple distinct title stems
+// (manyDistinctTitles). Because of that second gate, "collection"/"collected" are now
+// SAFE to include: a genuine single "The Complete Collection" (sequential chapters,
+// one stem) fails the distinct-titles gate and falls to an ambiguous review hold, not
+// a wrong anthology split — so the term no longer risks flooding, and a real
+// short-story "…Collection" folder is no longer missed. "complete" alone stays out
+// (too weak — appears on ordinary unabridged titles).
+var anthologyRe = regexp.MustCompile(`(?i)\b(antholog(?:y|ies)|omnibus|trilog(?:y|ies)|tetralog(?:y|ies)|quartet|boxed?\s*set|collect(?:ion|ions|ed))\b`)
 
 // leadingNumRe / trailingParenRe / trailingNumSuffixRe clean a derived survivor title.
 var (
@@ -146,6 +180,8 @@ type memberInfo struct {
 	normPrefix string // normalized prefix for consensus voting
 	num        int    // chapter/track/disc number (0 when none)
 	hasNum     bool
+	fpKey      string // FilePath-derived book-folder key (always set)
+	itKey      string // ITunesPath-derived book-folder key, namespaced; "" when no iTunes path
 }
 
 // folderKeyOf computes the BOOK FOLDER key and per-member layout for one file path.
@@ -240,6 +276,65 @@ func stripEditionMarkers(name string) string {
 	return strings.TrimSpace(strings.Join(strings.Fields(t), " "))
 }
 
+// itunesFolderKey derives a stable book-folder key from a raw iTunes path (`W:\…`).
+// It normalizes backslashes to forward slashes so folderKeyOf's filepath logic works
+// on a non-native path, then namespaces the result ("itunes\x00…") so an iTunes key can
+// never collide with a Linux FilePath key — the two only ever match keys of their own
+// kind. Returns "" for a blank/degenerate path.
+func itunesFolderKey(raw string) string {
+	norm := strings.ReplaceAll(strings.TrimSpace(raw), `\`, "/")
+	if norm == "" {
+		return ""
+	}
+	key, _ := folderKeyOf(norm)
+	if strings.TrimSpace(key) == "" || key == "." || key == "/" {
+		return ""
+	}
+	return "itunes\x00" + key
+}
+
+// unionFind is a tiny disjoint-set over grouping-connector strings. It lets a book
+// join a group through EITHER its FilePath book-folder OR its ITunesPath book-folder:
+// each book unions its two connector keys, so any two books that share either key land
+// in the same set. With no iTunes path a book contributes only its FilePath key, which
+// reproduces the old plain-map grouping exactly (no regression).
+type unionFind struct{ parent map[string]string }
+
+func newUnionFind() *unionFind { return &unionFind{parent: map[string]string{}} }
+
+func (u *unionFind) add(x string) {
+	if _, ok := u.parent[x]; !ok {
+		u.parent[x] = x
+	}
+}
+
+func (u *unionFind) find(x string) string {
+	for u.parent[x] != x {
+		u.parent[x] = u.parent[u.parent[x]] // path halving
+		x = u.parent[x]
+	}
+	return x
+}
+
+func (u *unionFind) union(a, b string) {
+	ra, rb := u.find(a), u.find(b)
+	if ra != rb {
+		u.parent[ra] = rb
+	}
+}
+
+// dominantKey returns the highest-voted key, breaking ties by smallest string so the
+// choice is deterministic (map iteration order is not).
+func dominantKey(votes map[string]int) string {
+	best, bestCount := "", -1
+	for k, v := range votes {
+		if v > bestCount || (v == bestCount && k < best) {
+			best, bestCount = k, v
+		}
+	}
+	return best
+}
+
 // ClassifyShatteredFolders groups single-file books by their book folder and
 // classifies each folder's shape. It emits ONE RegroupGroup per candidate folder
 // that plausibly represents a single book needing review; folders that are clearly
@@ -252,7 +347,12 @@ func stripEditionMarkers(name string) string {
 func ClassifyShatteredFolders(books []ShatterBook) ([]RegroupGroup, ShapeStats) {
 	st := ShapeStats{TotalBooks: len(books), ByKind: map[string]int{}}
 
-	byKey := make(map[string][]memberInfo)
+	// Two-pass grouping via union-find so a book can join a group through EITHER its
+	// FilePath book-folder OR its ITunesPath book-folder (Bug 2). Pass 1 builds each
+	// member and unions its connector keys; pass 2 buckets members by set root. With no
+	// iTunes paths this is identical to the old grouping (each set == one FilePath key).
+	uf := newUnionFind()
+	kept := make([]memberInfo, 0, len(books))
 	for _, b := range books {
 		if !b.IsPrimary {
 			st.NonPrimary++
@@ -266,18 +366,31 @@ func ClassifyShatteredFolders(books []ShatterBook) ([]RegroupGroup, ShapeStats) 
 			st.NoPath++
 			continue
 		}
-		key, mi := folderKeyOf(b.FilePath)
+		fpKey, mi := folderKeyOf(b.FilePath)
 		mi.book = b
-		byKey[key] = append(byKey[key], mi)
+		mi.fpKey = fpKey
+		uf.add(fpKey)
+		if itKey := itunesFolderKey(b.ITunesPath); itKey != "" {
+			mi.itKey = itKey
+			uf.add(itKey)
+			uf.union(fpKey, itKey) // this book's two locations are the same book
+		}
+		kept = append(kept, mi)
 	}
 
-	groups := make([]RegroupGroup, 0, len(byKey))
-	for key, members := range byKey {
+	byRoot := make(map[string][]memberInfo)
+	for _, mi := range kept {
+		root := uf.find(mi.fpKey)
+		byRoot[root] = append(byRoot[root], mi)
+	}
+
+	groups := make([]RegroupGroup, 0, len(byRoot))
+	for _, members := range byRoot {
 		if len(members) < 2 {
 			st.Singletons++ // genuine single-file book — leave alone
 			continue
 		}
-		g, emit := classifyGroup(key, members)
+		g, emit := classifyGroup(members)
 		if !emit {
 			st.DistinctSkip++
 			continue
@@ -311,13 +424,28 @@ func versionMarkers(text string) (hasUnabridged, hasAbridged bool) {
 // review hold. Thresholds are documented inline; the classifier biases conservative
 // (ambiguous, not confident) whenever the evidence is weak — every group is a
 // human-reviewed hold, so the human is the backstop.
-func classifyGroup(key string, members []memberInfo) (RegroupGroup, bool) {
+func classifyGroup(members []memberInfo) (RegroupGroup, bool) {
 	n := len(members)
-	folderName := filepath.Base(key)
+
+	// FolderRef = the dominant FilePath book-folder among the members (deterministic).
+	// mergedViaItunes is true when the set spans MORE THAN ONE distinct FilePath folder,
+	// which can only happen when an ITunesPath album glued otherwise-separate FilePath
+	// folders together (Bug 2). That is the "the two identity signals disagree" case, so
+	// the maintainer's rule applies: lean ambiguous (grouped, but hold for review).
+	fpVotes := map[string]int{}
+	for _, m := range members {
+		fpVotes[m.fpKey]++
+	}
+	folderRef := dominantKey(fpVotes)
+	mergedViaItunes := len(fpVotes) > 1
+	folderName := filepath.Base(folderRef)
 	normFolder := normTitle(folderName)
 
-	// Marker text = the folder name + every member's parent-dir basename, filename,
-	// and title. Editions/anthology markers can live on any of them.
+	// Version/edition markers may live on any member (parent-dir basename, filename, or
+	// album tag), so the version check scans the whole text blob. The ANTHOLOGY marker,
+	// by contrast, is matched ONLY against the book-folder name below — a parent series
+	// dir or a track's album tag ("The Traitor Spy Trilogy") must NOT reclassify a child
+	// single-book folder as an anthology (Bug 1).
 	var sb strings.Builder
 	sb.WriteString(folderName)
 	for _, m := range members {
@@ -330,7 +458,7 @@ func classifyGroup(key string, members []memberInfo) (RegroupGroup, bool) {
 	}
 	text := sb.String()
 	hasUnab, hasAb := versionMarkers(text)
-	hasAnthology := anthologyRe.MatchString(text)
+	hasFolderAnthologyMarker := anthologyRe.MatchString(folderName)
 
 	// Structural tallies.
 	var discCount, chapterCount, flatCount, numberedCount int
@@ -355,6 +483,15 @@ func classifyGroup(key string, members []memberInfo) (RegroupGroup, bool) {
 	distinctPrefixes := len(prefixVotes)
 	structure := majorityStructure(discCount, chapterCount, flatCount)
 
+	// distinctStems / manyDistinctTitles are the CORE anthology signal (Bug 1): the
+	// per-file title stems, ordinals already stripped when the prefix was derived. A
+	// novel split into 133 sequential chapter files shares ONE stem ("Chapter", or the
+	// book title) → distinctStems==1 → NOT an anthology, just a multi-track book. A real
+	// SF anthology carries a DIFFERENT short-story title per track → distinctStems large.
+	// We require a strong majority of members to carry their own stem to call it "many".
+	distinctStems := distinctPrefixes
+	manyDistinctTitles := distinctStems >= 3 && distinctStems*2 > n
+
 	// folderNamedAfterBook: the members' dominant title prefix is a majority AND is a
 	// substring of the book-folder name. This is the high-precision "these chapters
 	// belong to THIS book" guard (mirrors fs_regroup.go's prefix ⊆ parent). It is
@@ -365,22 +502,30 @@ func classifyGroup(key string, members []memberInfo) (RegroupGroup, bool) {
 		dominantCount*2 >= n
 
 	sortMembers(members)
-	build := func(kind string, confident bool, action string) RegroupGroup {
+	build := func(kind string, confident bool, action string, distinctWorks int) RegroupGroup {
 		out := make([]ShatterBook, 0, n)
 		for _, m := range members {
 			out = append(out, m.book)
 		}
 		return RegroupGroup{
-			FolderRef:      key,
+			FolderRef:      folderRef,
 			Kind:           kind,
 			Confident:      confident,
 			SurvivorTitle:  deriveSurvivorTitle(folderName),
 			ProposedAction: action,
 			Members:        out,
+			DistinctWorks:  distinctWorks,
 		}
 	}
 
 	switch {
+	case mergedViaItunes:
+		// The set spans multiple FilePath folders, glued only by a shared iTunes album
+		// (Bug 2). The two identity signals disagree, so we hold rather than guess a
+		// confident collapse — the human confirms whether these are one book.
+		return build(KindAmbiguous, false,
+			"review: grouped by a shared original iTunes album, but the file paths differ", 0), true
+
 	case hasUnab && hasAb && dominantCount*2 >= n:
 		// Abridged + Unabridged editions of the SAME book share a folder → 2-book
 		// version group (decision #8). The dominant-prefix guard (a majority of members
@@ -388,43 +533,54 @@ func classifyGroup(key string, members []memberInfo) (RegroupGroup, bool) {
 		// an AUTHOR folder that merely happens to hold one abridged + one unabridged of
 		// two DIFFERENT books. Held for review; the human confirms the primary edition.
 		return build(KindVersionGroup, false,
-			"create a version group (Abridged + Unabridged), Unabridged primary"), true
+			"create a version group (Abridged + Unabridged), Unabridged primary", 0), true
 
-	case hasAnthology:
-		// Anthology/trilogy/omnibus → multiple distinct works; regex cannot split
-		// them (decision #9), so hold for review.
+	case hasFolderAnthologyMarker && manyDistinctTitles:
+		// STRONG evidence: an anthology/omnibus/collection marker on the BOOK FOLDER
+		// itself AND multiple genuinely-distinct title stems → a real anthology. The
+		// human-facing count is the number of DISTINCT WORKS, not the raw file count.
 		return build(KindAnthology, false,
-			"split into separate works (held — needs review to identify boundaries)"), true
+			"split into separate works (held — needs review to identify boundaries)",
+			distinctStems), true
+
+	case hasFolderAnthologyMarker:
+		// Anthology/trilogy/omnibus marker on the folder, but the members are sequential
+		// / share one title stem (e.g. `Foundation Trilogy - 1/2/3` could be 3 chapters
+		// OR 3 volumes). We cannot confirm distinct works, and a confident multi-disc
+		// collapse would be wrong if they are separate volumes → hold as ambiguous
+		// (maintainer rule: prefer ambiguous over confident-but-wrong).
+		return build(KindAmbiguous, false,
+			"review: collection/anthology marker on the folder, but work boundaries are unclear", 0), true
 
 	case structure == "disc" && discCount*2 > n:
 		// Majority of members live in Disc N / CD N subfolders → one multi-disc book.
 		return build(KindMultidisc, true,
-			"collapse disc set into 1 multi-file audiobook"), true
+			"collapse disc set into 1 multi-file audiobook", 0), true
 
 	case structure == "flat" && numberedCount*2 >= n && n >= flatMultitrackMin:
 		// Many members sit directly in ONE book folder and are sequentially numbered →
 		// flat multi-track collapse. The shared parent folder IS the book identity.
 		return build(KindMultidisc, true,
-			"collapse flat multi-track folder into 1 multi-file audiobook"), true
+			"collapse flat multi-track folder into 1 multi-file audiobook", 0), true
 
 	case (structure == "chapter" || structure == "edition") && folderNamedAfterBook && distinctPrefixes <= 1:
 		// Classic shatter (`<Book>/<Book> - N/file`) or a single edition folder
 		// (`<Book>/<Book> (Unabridged)/file`), one consistent identity matching the
 		// book folder → confident collapse.
 		return build(KindMultidisc, true,
-			"collapse chapter/edition shells into 1 multi-file audiobook"), true
+			"collapse chapter/edition shells into 1 multi-file audiobook", 0), true
 
 	case (structure == "chapter" || structure == "edition") && folderNamedAfterBook && distinctPrefixes >= 2:
 		// Book folder, but the sub-dirs carry ≥2 distinct title prefixes — mixed
 		// identity. Confident collapse is unsafe; hold for review.
 		return build(KindAmbiguous, false,
-			"review: folder with mixed identities"), true
+			"review: folder with mixed identities", 0), true
 
 	case structure == "flat" && dominantPrefix != "" && dominantCount*2 >= n:
 		// Flat folder whose members share a dominant title but are NOT cleanly
 		// numbered (or too few to be confident) — book-like but uncertain. Hold.
 		return build(KindAmbiguous, false,
-			"review: flat folder shares a title but ordering is unclear"), true
+			"review: flat folder shares a title but ordering is unclear", 0), true
 
 	default:
 		// No positive single-book evidence: an author folder, correctly-stored series
