@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.9.2
+// version: 1.10.0
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
-// last-edited: 2026-07-03
+// last-edited: 2026-07-13
 
 package maintenance
 
@@ -93,6 +93,9 @@ func (p *Plugin) Register(r sdk.Registry) error {
 
 		// --- filesystem shattered-book heal (tag-anchored) ---
 		p.fsRegroupXMLDef(),
+
+		// --- shattered-book regroup (dry-run, review-queue producer; PR-B1) ---
+		p.regroupShatteredAIDef(),
 
 		// --- lossless tag backfill for existing rows ---
 		p.tagBackfillDef(),
