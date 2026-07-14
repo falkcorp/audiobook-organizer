@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/regroup_shattered_ai.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8b3e6d21-4f97-4c05-a1d8-2e7b9c0f5a63
 // last-edited: 2026-07-13
 
@@ -139,6 +139,13 @@ func (p *Plugin) runRegroupShatteredAI(ctx context.Context, raw json.RawMessage,
 		} else {
 			v.FilePath = b.FilePath
 		}
+		// Fold in the ORIGINAL iTunes album-folder path as an ADDITIONAL grouping
+		// signal when present (Bug 2). These shattered books are largely an
+		// iTunes-import artifact, so the original album folder is often a stronger
+		// identity signal than the reorganized FilePath. Empty for non-iTunes books.
+		if len(files) >= 1 {
+			v.ITunesPath = files[0].ITunesPath
+		}
 		mu.Lock()
 		views = append(views, v)
 		mu.Unlock()
@@ -237,7 +244,14 @@ func regroupSummary(g itunesservice.RegroupGroup) string {
 	case itunesservice.KindVersionGroup:
 		return fmt.Sprintf("Version group (Abridged + Unabridged): %d files — %s", n, g.FolderRef)
 	case itunesservice.KindAnthology:
-		return fmt.Sprintf("Anthology/collection: %d works — %s", n, g.FolderRef)
+		// Count is DISTINCT WORKS, not the raw file count (Bug 1): a novel split into
+		// N sequential chapter files is one work, not N. DistinctWorks is set by the
+		// classifier for anthologies; fall back to the file count only if it is unset.
+		works := g.DistinctWorks
+		if works <= 0 {
+			works = n
+		}
+		return fmt.Sprintf("Anthology/collection: %d works — %s", works, g.FolderRef)
 	default:
 		return fmt.Sprintf("Ambiguous folder (%d files) — needs review — %s", n, g.FolderRef)
 	}
