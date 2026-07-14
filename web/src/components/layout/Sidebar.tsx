@@ -1,11 +1,12 @@
 // file: web/src/components/layout/Sidebar.tsx
-// version: 1.14.0
+// version: 1.15.0
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-07-11
+// last-edited: 2026-07-13
 
 import { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
+  Badge,
   Box,
   Collapse,
   Drawer,
@@ -34,6 +35,8 @@ import CollectionsBookmarkIcon from '@mui/icons-material/CollectionsBookmark.js'
 import PeopleIcon from '@mui/icons-material/People.js';
 import TimelineIcon from '@mui/icons-material/Timeline.js';
 import WavesIcon from '@mui/icons-material/Waves.js';
+import FactCheckIcon from '@mui/icons-material/FactCheck.js';
+import { useReviewStore } from '../../stores/useReviewStore';
 
 const MOBILE_DRAWER_WIDTH = 240;
 
@@ -65,6 +68,7 @@ const menuItems = [
   { text: 'Playlists', icon: <MenuBookIcon />, path: '/playlists' },
   { text: 'Activity', icon: <TimelineIcon />, path: '/activity' },
   { text: 'Dedup', icon: <MergeTypeIcon />, path: '/dedup' },
+  { text: 'Review', icon: <FactCheckIcon />, path: '/review' },
   { text: 'Gold Labels', icon: <LibraryBooksIcon />, path: '/dedup/labels' },
   { text: 'Diagnostics', icon: <BugReportIcon />, path: '/diagnostics' },
   { text: 'System', icon: <MonitorIcon />, path: '/system' },
@@ -75,8 +79,24 @@ const menuItems = [
 export function Sidebar({ open, onClose, drawerWidth, collapsed = false, onToggleCollapse }: SidebarProps) {
   const navigate = useNavigate();
   const location = useLocation();
+  // Live pending-review count → a Badge on the Review nav icon. Read from the
+  // store in render (NOT baked into the static menuItems array, whose icons are
+  // built once at module load and would freeze the count at 0).
+  const reviewCount = useReviewStore((s) => s.count);
 
   const [libraryOpen, setLibraryOpen] = useState(true);
+
+  // Wrap a menu item's icon in a count Badge for the Review entry.
+  const renderMenuIcon = (item: (typeof menuItems)[number]) => {
+    if (item.path === '/review') {
+      return (
+        <Badge badgeContent={reviewCount || undefined} color="warning">
+          {item.icon}
+        </Badge>
+      );
+    }
+    return item.icon;
+  };
 
   const handleNavigation = (path: string) => {
     navigate(path);
@@ -163,7 +183,7 @@ export function Sidebar({ open, onClose, drawerWidth, collapsed = false, onToggl
                 sx={{ justifyContent: isCollapsed ? 'center' : 'flex-start' }}
               >
                 <ListItemIcon sx={{ minWidth: isCollapsed ? 0 : undefined }}>
-                  {item.icon}
+                  {renderMenuIcon(item)}
                 </ListItemIcon>
                 {!isCollapsed && <ListItemText primary={item.text} />}
               </ListItemButton>
