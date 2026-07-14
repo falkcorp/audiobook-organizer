@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.157.1 -->
+<!-- version: 3.157.2 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-16 -->
 
@@ -56,6 +56,34 @@ author/collection over-merge holds would linger as approvable "70 tracks → 1" 
 - Tests: store delete round-trip (record + both indexes gone, re-upsert creates a fresh
   row); reconcile purges superseded pending only, preserves decided/other-producer/emitted;
   capped-run no-op.
+#### July 14, 2026 - feat(regroup): review-queue APPLY path for confident holds (PR-B2)
+
+Turns the review queue's "Approve" from a status label-flip into a real merge for the
+two *confident* regroup kinds, closing the loop opened by B1 (the dry-run producer).
+Approving a hold now dispatches on its `Kind` to a registered apply function; on
+success the item transitions to `applied`.
+
+- **`regroup.multidisc`** (196 prod holds) → collapses the folder's single-file books
+  into ONE multi-file book via `merge.Service.CombineBooks(members, primary, nil)`. The
+  **nil override** is load-bearing: the only `UpdateBook`-on-survivor path in the merge
+  service is gated behind a non-nil override, so with nil the survivor row is never
+  rewritten and its `AcoustIDFingerprint` / Author / Series survive. Absorbed books'
+  files move by file ID (fingerprints ride along); absorbed rows are hard-deleted.
+- **`regroup.version-group`** (1 prod hold) → links the folder's editions into one
+  version group via **re-fetch-and-patch**: `GetBookByID` (full-fidelity row) → set only
+  `VersionGroupID` → `UpdateBook`. Never writes a fresh/partial `Book` back (UpdateBook
+  is a full-column replace — the historic Author/Series wipe class).
+- `regroup.anthology` and `regroup.ambiguous` are deliberately **handler-less** — they
+  need human sub-decisions, so approving one only marks it `approved`, never `applied`.
+- Survivor selection is deterministic (smallest ULID = earliest-created), and apply is
+  **retry-tolerant**: fewer than two surviving members is an idempotent no-op, so a
+  double-approve or a re-approve after a partial failure never errors.
+- New: `internal/plugins/maintenance/regroup_apply.go` (+ tests); registration wired in
+  `internal/server/wire_handlers.go`. Tests assert the data-loss invariants (survivor
+  keeps fingerprint + author; version-group members keep theirs) via
+  `dbtest.AssertStoreInvariants` — the same drift-proof guard as the Jul-13 fixes.
+- **Not auto-applied.** This PR only *arms* the button; every collapse remains a
+  human-approved hold. Merging + deploying is the gated prod-apply decision.
 
 #### July 13, 2026 - fix(regroup): anthology counts distinct works + fold in original iTunes album path (B1 tuning)
 

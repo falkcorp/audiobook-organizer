@@ -20,6 +20,21 @@ future agent) can scan the entire workspace in one page.
 
 ---
 
+## 🔨 PR OPEN (unmerged) — review-queue APPLY path, PR-B2 (2026-07-14)
+
+Branch `feat/regroup-apply-path-b2`. Makes the review queue's "Approve" perform the
+real merge for the two confident regroup kinds: `regroup.multidisc` →
+`CombineBooks(members, primary, nil)` (nil override = survivor row never rewritten),
+`regroup.version-group` → shared `VersionGroupID` + one primary via re-fetch-and-patch
+`UpdateBook` (NOT MergeBooks — both editions stay visible, locked #8). Anthology/
+ambiguous stay handler-less. Deterministic smallest-ULID survivor; retry-tolerant
+(<2 present members = no-op). Files: `internal/plugins/maintenance/regroup_apply.go`
+(+ `_test.go` with data-loss invariants), `internal/server/wire_handlers.go`. **Not
+merged/deployed** — merging is the gated prod-apply decision. See
+[`docs/plans/2026-07-13-review-queue-and-regroup.md`](docs/plans/2026-07-13-review-queue-and-regroup.md).
+Follow-ups still open: AI enrichment tier (adjudicates the ambiguous pile), cover
+recovery, dedup REVIEW-band producer.
+
 ## ✅ RESOLVED — change-log mislabeled imports as renames + organize dropped source path (2026-07-13)
 
 Change-log entry showed `📁 Rename — Renamed — → /mnt/.../book.mp3` (empty "from") for
