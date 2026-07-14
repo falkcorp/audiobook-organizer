@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.153.0 -->
+<!-- version: 3.154.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-13 -->
 
@@ -8,6 +8,27 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 13, 2026 - feat(review): universal review-queue backend (store + API + apply registry)
+
+Adds the backend for a universal review queue — a single home for items the system
+flags for human review (PR-A1 of the review-queue + shattered-book-regroup plan). No
+user-facing behavior yet; the banner/panel is PR-A2 and the first producer (the regroup
+op) is PR-B1.
+
+- New Pebble-backed `ReviewItem` store (`internal/database/review_store.go`) with a
+  `review_item:*` keyspace and a status secondary index (mirroring the dedup
+  candidate-status index). **Idempotent upsert keyed by `DedupKey` (Kind+FolderRef):**
+  re-running a producer scan never duplicates rows and never un-rejects a
+  human-decided item.
+- `ReviewStore` interface + `PebbleStore` impl + store-mock methods.
+- HTTP API (`/review/count`, `/review/items`, `/review/items/:id/approve|reject`,
+  `/review/bulk`): reads gated on `library.view`, mutations on `library.edit-metadata`
+  (matching dedup). Bulk action refuses a request with neither `kind` nor `ids` to
+  prevent an accidental approve/reject-all.
+- Apply-handler registry keyed by `Kind`: `approve` runs the registered producer
+  handler (then marks `applied`) or, when none is registered yet, marks `approved`
+  without erroring — the regroup apply handler plugs in at PR-B2.
 
 #### July 13, 2026 - fix(activity): label imports correctly in change log (+ import-provenance path capture)
 
