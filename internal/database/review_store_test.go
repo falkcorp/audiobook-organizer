@@ -1,7 +1,7 @@
 // file: internal/database/review_store_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9d3b7f21-4a58-4c69-b8e2-1f0a6c5d4e37
-// last-edited: 2026-07-13
+// last-edited: 2026-07-14
 
 package database
 
@@ -27,6 +27,47 @@ func mkReviewItem(kind, dedupKey, folder, summary, payload string) ReviewItem {
 		FolderRef: folder,
 		Summary:   summary,
 		Payload:   payload,
+	}
+}
+
+func TestDeleteReviewItem_RemovesRecordAndAllIndexes(t *testing.T) {
+	s := newReviewTestStore(t)
+	it, err := s.UpsertReviewItem(mkReviewItem("regroup.multidisc", "dk-del", "/books/a", "sum", `{}`))
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	if err := s.DeleteReviewItem(it.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	// Record gone.
+	if got, _ := s.GetReviewItem(it.ID); got != nil {
+		t.Fatalf("expected item gone after delete, got %+v", got)
+	}
+	// Status index gone → pending count is 0.
+	if n, _ := s.CountReviewItems(ReviewStatusPending); n != 0 {
+		t.Fatalf("expected 0 pending after delete, got %d", n)
+	}
+	// Dedup index gone → re-upserting the same DedupKey creates a FRESH row (a new
+	// ID), not an update of the deleted one. This is what lets the regroup reconcile
+	// safely purge-then-re-emit.
+	again, err := s.UpsertReviewItem(mkReviewItem("regroup.multidisc", "dk-del", "/books/a", "sum2", `{}`))
+	if err != nil {
+		t.Fatalf("re-upsert: %v", err)
+	}
+	if again.ID == it.ID {
+		t.Fatal("expected a fresh ID after delete+re-upsert (dedup index must have been torn down)")
+	}
+	if again.Status != ReviewStatusPending {
+		t.Fatalf("re-upserted item should be pending, got %q", again.Status)
+	}
+}
+
+func TestDeleteReviewItem_MissingIsNoOp(t *testing.T) {
+	s := newReviewTestStore(t)
+	if err := s.DeleteReviewItem("does-not-exist"); err != nil {
+		t.Fatalf("deleting a missing id must be a no-op, got %v", err)
 	}
 }
 

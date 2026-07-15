@@ -457,3 +457,43 @@ func (p *PebbleStore) SetReviewItemStatus(id, status string) (*ReviewItem, error
 	}
 	return item, nil
 }
+
+// DeleteReviewItem removes a review item and ALL its index rows (record, status
+// index, dedup index). Idempotent: deleting a missing id is a no-op returning nil.
+//
+// Deleting the dedup index means a future producer re-scan of that folder can create
+// a FRESH hold — exactly what the regroup reconcile wants for a hold whose folder is
+// no longer a candidate. Because this forgets a remembered decision, callers that
+// must PRESERVE one (rejected-is-remembered) must only delete PENDING items; the
+// regroup reconcile enforces that.
+func (p *PebbleStore) DeleteReviewItem(id string) error {
+	// Serialize against UpsertReviewItem, which reads the dedup index to decide
+	// create-vs-update: deleting that index concurrently could let a duplicate slip
+	// in. Same mutex, same reason as Upsert.
+	p.reviewMu.Lock()
+	defer p.reviewMu.Unlock()
+
+	item, err := p.getReviewItem(id)
+	if err != nil {
+		return err
+	}
+	if item == nil {
+		return nil // idempotent no-op
+	}
+	b := p.db.NewBatch()
+	defer b.Close()
+	if err := b.Delete(reviewItemRecKey(id), nil); err != nil {
+		return err
+	}
+	if item.Status != "" {
+		if err := b.Delete(reviewItemStatusKey(item.Status, id), nil); err != nil {
+			return err
+		}
+	}
+	if item.DedupKey != "" {
+		if err := b.Delete(reviewItemDedupIdxKey(item.DedupKey), nil); err != nil {
+			return err
+		}
+	}
+	return b.Commit(pebble.Sync)
+}

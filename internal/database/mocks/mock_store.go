@@ -33194,6 +33194,57 @@ func (_c *MockStore_DeleteRaw_Call) RunAndReturn(run func(key string) error) *Mo
 	return _c
 }
 
+// DeleteReviewItem provides a mock function for the type MockStore
+func (_mock *MockStore) DeleteReviewItem(id string) error {
+	ret := _mock.Called(id)
+
+	if len(ret) == 0 {
+		panic("no return value specified for DeleteReviewItem")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string) error); ok {
+		r0 = returnFunc(id)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockStore_DeleteReviewItem_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DeleteReviewItem'
+type MockStore_DeleteReviewItem_Call struct {
+	*mock.Call
+}
+
+// DeleteReviewItem is a helper method to define mock.On call
+//   - id string
+func (_e *MockStore_Expecter) DeleteReviewItem(id any) *MockStore_DeleteReviewItem_Call {
+	return &MockStore_DeleteReviewItem_Call{Call: _e.mock.On("DeleteReviewItem", id)}
+}
+
+func (_c *MockStore_DeleteReviewItem_Call) Run(run func(id string)) *MockStore_DeleteReviewItem_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_DeleteReviewItem_Call) Return(err error) *MockStore_DeleteReviewItem_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockStore_DeleteReviewItem_Call) RunAndReturn(run func(id string) error) *MockStore_DeleteReviewItem_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // DeleteRole provides a mock function for the type MockStore
 func (_mock *MockStore) DeleteRole(id string) error {
 	ret := _mock.Called(id)

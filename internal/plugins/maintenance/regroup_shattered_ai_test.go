@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 )
 
 // seedShatterBook creates a single-file book at a chapter-shatter path so the dry-run
@@ -160,5 +161,93 @@ func TestRegroupShatteredAI_DryRun_PreservesDecision(t *testing.T) {
 	}
 	if after[0].Status != database.ReviewStatusRejected {
 		t.Errorf("re-scan resurfaced a rejected hold: status=%q", after[0].Status)
+	}
+}
+
+// seedHold writes one pending review hold directly (bypassing the scan) so reconcile
+// tests can set up a queue state precisely.
+func seedHold(t *testing.T, s *database.PebbleStore, kind, dedupKey, folder string) database.ReviewItem {
+	t.Helper()
+	it, err := s.UpsertReviewItem(database.ReviewItem{
+		Kind: kind, DedupKey: dedupKey, FolderRef: folder, Summary: "s", Payload: "{}",
+	})
+	if err != nil {
+		t.Fatalf("seedHold: %v", err)
+	}
+	return it
+}
+
+// remainingKeys returns the set of DedupKeys still present across all statuses.
+func remainingKeys(t *testing.T, s *database.PebbleStore) map[string]bool {
+	t.Helper()
+	items, _, err := s.ListReviewItems(database.ReviewFilter{Limit: 1000})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	keys := map[string]bool{}
+	for _, it := range items {
+		keys[it.DedupKey] = true
+	}
+	return keys
+}
+
+// TestReconcileStaleHolds_PurgesSupersededPendingOnly: a full run deletes PENDING
+// regroup holds whose folder is no longer emitted, while preserving emitted holds,
+// human-decided (rejected) holds, and another producer's (non-regroup) holds.
+func TestReconcileStaleHolds_PurgesSupersededPendingOnly(t *testing.T) {
+	s := regroupStore(t)
+
+	emittedKey := regroupDedupKey(itunesservice.KindMultidisc, "/books/keep")
+	seedHold(t, s, itunesservice.KindMultidisc, emittedKey, "/books/keep")
+
+	staleKey := regroupDedupKey(itunesservice.KindAnthology, "/books/stale")
+	seedHold(t, s, itunesservice.KindAnthology, staleKey, "/books/stale")
+
+	rejKey := regroupDedupKey(itunesservice.KindMultidisc, "/books/rej")
+	rej := seedHold(t, s, itunesservice.KindMultidisc, rejKey, "/books/rej")
+	if _, err := s.SetReviewItemStatus(rej.ID, database.ReviewStatusRejected); err != nil {
+		t.Fatalf("reject: %v", err)
+	}
+
+	// A different producer's pending hold — must never be purged by the regroup reconcile.
+	seedHold(t, s, "dedup.candidate", "dedup-key-1", "/books/dedup")
+
+	// This run emits only the "keep" folder.
+	groups := []itunesservice.RegroupGroup{
+		{Kind: itunesservice.KindMultidisc, FolderRef: "/books/keep"},
+	}
+	purged := reconcileStaleHolds(context.Background(), s, &fakeReporter{}, groups, 0)
+	if purged != 1 {
+		t.Fatalf("expected exactly 1 stale hold purged, got %d", purged)
+	}
+
+	keys := remainingKeys(t, s)
+	if !keys[emittedKey] {
+		t.Error("emitted hold was wrongly purged")
+	}
+	if keys[staleKey] {
+		t.Error("stale pending regroup hold was NOT purged")
+	}
+	if !keys[rejKey] {
+		t.Error("human-decided (rejected) hold was wrongly purged — only PENDING may be purged")
+	}
+	if !keys["dedup-key-1"] {
+		t.Error("another producer's hold was wrongly purged — reconcile must only touch regroup.*")
+	}
+}
+
+// TestReconcileStaleHolds_SkippedOnCappedRun: a canary run (limit > 0) emits only a
+// subset, so reconcile must be a no-op rather than purging the un-emitted remainder.
+func TestReconcileStaleHolds_SkippedOnCappedRun(t *testing.T) {
+	s := regroupStore(t)
+	staleKey := regroupDedupKey(itunesservice.KindMultidisc, "/books/x")
+	seedHold(t, s, itunesservice.KindMultidisc, staleKey, "/books/x")
+
+	purged := reconcileStaleHolds(context.Background(), s, &fakeReporter{}, nil, 5) // limit > 0
+	if purged != 0 {
+		t.Fatalf("capped run must not purge, got %d", purged)
+	}
+	if n, _ := s.CountReviewItems(""); n != 1 {
+		t.Fatalf("hold must remain after a capped run, got %d", n)
 	}
 }
