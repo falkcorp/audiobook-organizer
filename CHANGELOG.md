@@ -1,7 +1,7 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.157.0 -->
+<!-- version: 3.157.1 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
-<!-- last-edited: 2026-07-14 -->
+<!-- last-edited: 2026-07-16 -->
 
 # Changelog
 
@@ -34,6 +34,28 @@ of unrelated audiobooks.
 - Test: `TestClassify_FlatNumberedDistinctBooks_NotMultidisc` reproduces the prod shape
   (numbered distinct books in an author folder → must not be confident multidisc). Still
   dry-run only; no book writes.
+#### July 14, 2026 - feat(regroup): reconcile purge — self-heal superseded review holds
+
+The regroup dry-run producer only ever UPSERTs the folders it emits — it never removed
+holds for folders it *stopped* emitting. So every classifier change left orphans in the
+review queue: a folder that flipped Kind kept its stale hold under the old Kind's dedup
+key (why the queue showed 458, not 435), and once the over-merge fix lands, the 24
+author/collection over-merge holds would linger as approvable "70 tracks → 1" rows.
+
+- **New `DeleteReviewItem(id)` on `ReviewStore`** (`internal/database/review_store.go`,
+  `iface_review.go`, mocks): removes the record + status-index + dedup-index rows;
+  idempotent. Tearing down the dedup index lets a later re-scan re-emit the folder fresh.
+- **Producer reconcile** (`internal/plugins/maintenance/regroup_shattered_ai.go`): after
+  writing holds, on a FULL run (`limit == 0`) it deletes any **pending** `regroup.*` hold
+  whose folder is not in this run's emitted set. Human-decided holds (approved/rejected/
+  applied) are always preserved; other producers' holds are never touched; a capped/canary
+  run skips reconcile (its emitted set is intentionally partial). Result line now reports
+  `stale-purged=N`.
+- Effect: after deploying the over-merge fix, one full dry-run self-heals the queue — the
+  24 stale over-merge holds and the Kind-flip orphans are removed automatically.
+- Tests: store delete round-trip (record + both indexes gone, re-upsert creates a fresh
+  row); reconcile purges superseded pending only, preserves decided/other-producer/emitted;
+  capped-run no-op.
 
 #### July 13, 2026 - fix(regroup): anthology counts distinct works + fold in original iTunes album path (B1 tuning)
 

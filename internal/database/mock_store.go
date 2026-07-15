@@ -2701,3 +2701,4 @@ func (m *MockStore) ListReviewItems(_ ReviewFilter) ([]ReviewItem, int, error) {
 func (m *MockStore) CountReviewItems(_ string) (int, error)               { return 0, nil }
 func (m *MockStore) ReviewStatsByKind() ([]ReviewKindStat, error)         { return nil, nil }
 func (m *MockStore) SetReviewItemStatus(_, _ string) (*ReviewItem, error) { return nil, nil }
+func (m *MockStore) DeleteReviewItem(_ string) error                      { return nil }

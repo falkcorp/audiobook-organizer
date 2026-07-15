@@ -33,4 +33,10 @@ type ReviewStore interface {
 	// SetReviewItemStatus transitions an item to a new status, moving its
 	// status-index row. Returns (nil, nil) when the item does not exist.
 	SetReviewItemStatus(id, status string) (*ReviewItem, error)
+
+	// DeleteReviewItem removes an item and all its index rows (record, status,
+	// dedup). Idempotent — deleting a missing id is a no-op. Deleting the dedup
+	// index forgets a remembered decision, so producers must only delete PENDING
+	// items (the regroup reconcile relies on this to purge superseded holds).
+	DeleteReviewItem(id string) error
 }

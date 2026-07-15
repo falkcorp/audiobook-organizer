@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_shattered_ai.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8b3e6d21-4f97-4c05-a1d8-2e7b9c0f5a63
-// last-edited: 2026-07-13
+// last-edited: 2026-07-14
 
 // Package maintenance — op maintenance.regroup-shattered-ai (PR-B1).
 //
@@ -39,6 +39,7 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -214,15 +215,74 @@ func (p *Plugin) runRegroupShatteredAI(ctx context.Context, raw json.RawMessage,
 		}
 	}
 
+	// RECONCILE-PURGE: delete PENDING regroup holds whose folder is no longer a
+	// candidate this run — a folder that flipped Kind (leaving an orphan under the old
+	// Kind's DedupKey) or one the tuned classifier stopped emitting entirely (e.g. an
+	// author/collection folder that used to over-merge). UpsertReviewItem only ever
+	// UPSERTs folders it emits, so without this a superseded hold lingers in the queue
+	// forever. Only PENDING holds are purged — a human decision (approved/rejected/
+	// applied) is always preserved. Skipped on a capped/canary run (Limit > 0), where
+	// the emitted set is intentionally partial and would wrongly purge the remainder.
+	purged := reconcileStaleHolds(ctx, store, reporter, groups, params.Limit)
+
 	result := fmt.Sprintf(
-		"DRY RUN — review holds written=%d (already-decided=%d, write-errors=%d) from %d detected groups; library untouched. bykind=%v",
-		written, alreadyDecided, writeErrs, len(groups), st.ByKind)
+		"DRY RUN — review holds written=%d (already-decided=%d, write-errors=%d, stale-purged=%d) from %d detected groups; library untouched. bykind=%v",
+		written, alreadyDecided, writeErrs, purged, len(groups), st.ByKind)
 	_ = reporter.Log(slog.LevelInfo, result)
 	_ = reporter.UpdateProgress(len(ids)+1, len(ids)+1, result)
 	if writeErrs > 0 {
 		return fmt.Errorf("%d review-hold write errors during regroup dry-run (see op log)", writeErrs)
 	}
 	return nil
+}
+
+// reconcileScanLimit bounds the pending-holds fetch during reconcile. Comfortably
+// exceeds any realistic regroup hold population (intentional holds only).
+const reconcileScanLimit = 100_000
+
+// reconcileStaleHolds deletes PENDING regroup.* holds whose DedupKey is not in the set
+// this run emitted, returning the number purged. Returns 0 (a no-op) when limit > 0 (a
+// canary run emits only a subset, so purging the rest would be wrong). It never touches
+// non-regroup holds (another producer's rows) or human-decided holds. Sequential by
+// design: the pending-hold count is bounded (intentional holds only), each delete is a
+// cheap local Pebble write, and DeleteReviewItem/UpsertReviewItem share one mutex, so a
+// worker pool would only add contention.
+func reconcileStaleHolds(ctx context.Context, store database.Store, reporter sdk.Reporter, groups []itunesservice.RegroupGroup, limit int) int {
+	if limit > 0 {
+		return 0
+	}
+	emitted := make(map[string]struct{}, len(groups))
+	for i := range groups {
+		emitted[regroupDedupKey(groups[i].Kind, groups[i].FolderRef)] = struct{}{}
+	}
+	pending, _, err := store.ListReviewItems(database.ReviewFilter{
+		Status: database.ReviewStatusPending,
+		Limit:  reconcileScanLimit,
+	})
+	if err != nil {
+		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("reconcile: list pending review items: %v", err))
+		return 0
+	}
+	purged := 0
+	for _, it := range pending {
+		if ctx.Err() != nil {
+			break
+		}
+		if !strings.HasPrefix(it.Kind, "regroup.") {
+			continue // never purge another producer's holds
+		}
+		if _, ok := emitted[it.DedupKey]; ok {
+			continue // still a candidate this run
+		}
+		if derr := store.DeleteReviewItem(it.ID); derr != nil {
+			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("reconcile: delete stale hold %s (%s): %v", it.ID, it.FolderRef, derr))
+			continue
+		}
+		purged++
+	}
+	_ = reporter.Log(slog.LevelInfo,
+		fmt.Sprintf("RECONCILE-PURGE: deleted %d superseded pending regroup holds (folder no longer emitted)", purged))
+	return purged
 }
 
 // regroupDedupKey is the STABLE upsert target: a hash of (Kind, FolderRef). Re-running
