@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.69.0
+// version: 1.70.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-07-13
+// last-edited: 2026-07-14
 
 package config
 
@@ -539,6 +539,14 @@ type Config struct {
 	UploadBodyLimitMB      int  `json:"upload_body_limit_mb"`
 	EnableAuth             bool `json:"enable_auth"`
 	EnableRateLimit        bool `json:"enable_rate_limit"`
+
+	// ReviewApplyEnabled is the GLOBAL "big switch" for the review-queue apply path.
+	// When false (the default), approving a review hold records the decision but NEVER
+	// executes the real-world action (e.g. a regroup CombineBooks merge) — every hold
+	// stays visible in the review pane for human eyes. Flip to true only when you want
+	// approvals to actually apply. Producer-agnostic: gates ALL registered apply
+	// handlers, not just regroup.
+	ReviewApplyEnabled bool `json:"review_apply_enabled"`
 
 	// Basic HTTP auth (lightweight single-user alternative)
 	BasicAuthEnabled  bool   `json:"basic_auth_enabled"`
@@ -1091,6 +1099,7 @@ func InitConfig() {
 			UploadBodyLimitMB:                viper.GetInt("upload_body_limit_mb"),
 			EnableAuth:                       viper.GetBool("enable_auth"),
 			EnableRateLimit:                  viper.GetBool("enable_rate_limit"),
+			ReviewApplyEnabled:               viper.GetBool("review_apply_enabled"),
 			BasicAuthEnabled:                 viper.GetBool("basic_auth_enabled"),
 			BasicAuthUsername:                viper.GetString("basic_auth_username"),
 			BasicAuthPassword:                viper.GetString("basic_auth_password"),
@@ -1635,6 +1644,7 @@ func ResetToDefaults() {
 			UploadBodyLimitMB:       10,
 			EnableAuth:              true,
 			EnableRateLimit:         true,
+			ReviewApplyEnabled:      false, // OFF by default — review-only until explicitly enabled
 			BasicAuthEnabled:        false,
 			BasicAuthUsername:       "",
 			BasicAuthPassword:       "",

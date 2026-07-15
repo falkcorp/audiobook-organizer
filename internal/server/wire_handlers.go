@@ -581,7 +581,11 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	// embeds database.ReviewStore. s.Store() returns the interface so a nil store
 	// stays a nil interface (the handler guards on store == nil). Apply handlers
 	// are registered later by producers (Track B2); none exist at A1.
-	reviewH := reviewhandler.New(s.Store())
+	// The global apply "big switch" (default OFF): when disabled, approving a hold
+	// records the decision but never executes its apply handler — everything stays
+	// visible in the review pane. Read at approve time so a config change takes effect
+	// without re-wiring.
+	reviewH := reviewhandler.New(s.Store(), func() bool { return config.AppConfig.ReviewApplyEnabled })
 
 	// Register the regroup APPLY handlers (PR-B2) so approving a confident hold in
 	// the review UI performs the real merge. Only the two confident kinds get a

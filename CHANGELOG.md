@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.157.2 -->
+<!-- version: 3.158.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-16 -->
 
@@ -82,8 +82,13 @@ success the item transitions to `applied`.
   `internal/server/wire_handlers.go`. Tests assert the data-loss invariants (survivor
   keeps fingerprint + author; version-group members keep theirs) via
   `dbtest.AssertStoreInvariants` — the same drift-proof guard as the Jul-13 fixes.
-- **Not auto-applied.** This PR only *arms* the button; every collapse remains a
-  human-approved hold. Merging + deploying is the gated prod-apply decision.
+- **Global apply "off switch" (`config.review_apply_enabled`, default OFF).** Even with
+  this code deployed, approving a hold records the decision but NEVER runs the merge
+  while the switch is off — everything stays visible in the review pane. The gate lives
+  in the review handler (producer-agnostic) and is read at approve time. Flip to `true`
+  only when you want approvals to actually apply. New tests cover both switch states.
+- **Not auto-applied.** This PR only *arms* the button, and even then only when the
+  switch is on; every collapse remains a human-approved hold.
 
 #### July 13, 2026 - fix(regroup): anthology counts distinct works + fold in original iTunes album path (B1 tuning)
 
