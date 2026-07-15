@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-07-13-review-queue-and-regroup.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 3d9f2a6c-7e14-4b8a-9c2d-5f1e6a3b7c40 -->
 <!-- last-edited: 2026-07-14 -->
 
@@ -202,11 +202,13 @@ Approving an item in the panel (or enabling the confident-auto-apply toggle) exe
    producing review-queue holds. No apply path. (This is what populates the queue with real data.)
 4. **PR-B2** Regroup apply path (CombineBooks collapse + version-group) wired to review-approve.
    `-race` invariant tests. **✅ BUILT — branch `feat/regroup-apply-path-b2` (PR open, UNMERGED).**
-   Deviation from plan: dropped the `confident-auto-apply` toggle. The human review-approve *is*
-   the gate — nothing auto-applies, so a toggle would only re-introduce the auto-apply risk the
-   review queue exists to remove. Multidisc uses a **nil** CombineBooks override (survivor row
-   never rewritten); version-group uses re-fetch-and-patch UpdateBook. Anthology/ambiguous stay
-   handler-less. Merging+deploying is the gated prod-apply decision.
+   Kept the global apply switch as `config.review_apply_enabled` (**default OFF**): even with the
+   code deployed, approving a hold records the decision but NEVER merges while the switch is off —
+   everything stays visible in the review pane (per the user's explicit "no auto-merge until the
+   big switch" requirement). The gate lives in the review handler (producer-agnostic), read at
+   approve time. Multidisc uses a **nil** CombineBooks override (survivor row never rewritten);
+   version-group uses re-fetch-and-patch UpdateBook. Anthology/ambiguous stay handler-less.
+   Merging+deploying + flipping the switch is the gated prod-apply decision.
 5. **Fast-follow (separate PRs, not in this plan's critical path):**
    - AI enrichment tier (`OpenAIParser.ClassifyFolderShape`, batched, small model, `ProbeOllamaAvailable`
      graceful-degrade) — **blocked on Ollama serving on the box.**

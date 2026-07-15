@@ -1,7 +1,7 @@
 // file: internal/server/handlers/review/handler.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2b6f9c14-8e37-4a5d-91c6-0f4a7d2e8b53
-// last-edited: 2026-07-13
+// last-edited: 2026-07-14
 
 // Package reviewhandler hosts the universal review-queue HTTP handlers (PR-A1).
 //
@@ -12,11 +12,14 @@
 // B, not built yet), so at A1 the queue starts empty and no apply handlers are
 // registered.
 //
-// Apply-handler registry: because producers don't exist yet, approving an item
-// dispatches on its Kind to a registered ApplyFunc. When a Kind has a handler,
-// approve runs it and then sets the item to "applied". When it does NOT (the A1
-// state for every Kind), approve simply sets "approved" and returns OK with a
-// note — it never errors. Track B's B2 registers the regroup apply handler.
+// Apply-handler registry + global switch: approving an item dispatches on its Kind
+// to a registered ApplyFunc, BUT only when the global apply "big switch"
+// (applyEnabled) is on. When a Kind has a handler AND the switch is on, approve runs
+// it and sets the item to "applied". Otherwise — no handler, OR the switch is off
+// (review-only mode, the default) — approve just sets "approved" and returns OK with
+// a note, never executing anything. This makes "see everything in the review pane,
+// nothing auto-merges" the default until the switch is deliberately flipped. Track
+// B's B2 registers the regroup apply handlers; config.ReviewApplyEnabled is the switch.
 package reviewhandler
 
 import (
@@ -38,6 +41,12 @@ type Handler struct {
 	// store is the wire-time snapshot of the review-queue store.
 	store database.ReviewStore
 
+	// applyEnabled is the GLOBAL "big switch" gate, read at approve time. When it
+	// returns false (the default), approving a hold records the decision but NEVER
+	// executes its apply handler — every hold stays visible/reviewable. A nil gate is
+	// treated as disabled (fail-safe: never auto-apply unless explicitly turned on).
+	applyEnabled func() bool
+
 	// applyHandlers maps a review item's Kind to the action that applies it.
 	// Empty in A1; populated by producers (e.g. B2's regroup) via
 	// RegisterApplyHandler. Guarded by mu because registration may happen during
@@ -46,12 +55,21 @@ type Handler struct {
 	applyHandlers map[string]ApplyFunc
 }
 
-// New constructs a review Handler from its store dependency.
-func New(store database.ReviewStore) *Handler {
+// New constructs a review Handler. applyEnabled is the global apply gate (see the
+// field doc); pass nil to keep the queue review-only (apply handlers registered but
+// never executed).
+func New(store database.ReviewStore, applyEnabled func() bool) *Handler {
 	return &Handler{
 		store:         store,
+		applyEnabled:  applyEnabled,
 		applyHandlers: make(map[string]ApplyFunc),
 	}
+}
+
+// applyGloballyEnabled reports whether the apply "big switch" is on. A nil gate is
+// fail-safe OFF.
+func (h *Handler) applyGloballyEnabled() bool {
+	return h.applyEnabled != nil && h.applyEnabled()
 }
 
 // RegisterApplyHandler registers the apply action for a given review Kind.
@@ -166,18 +184,27 @@ func (h *Handler) approveOne(ctx context.Context, id string) (*database.ReviewIt
 	if item == nil {
 		return nil, "", nil
 	}
-	if fn, ok := h.applyHandlerFor(item.Kind); ok {
+	fn, hasHandler := h.applyHandlerFor(item.Kind)
+	if hasHandler && h.applyGloballyEnabled() {
 		if err := fn(ctx, *item); err != nil {
 			return nil, "", err
 		}
 		updated, err := h.store.SetReviewItemStatus(id, database.ReviewStatusApplied)
 		return updated, "", err
 	}
+	// Either no apply handler for this Kind, OR the global apply switch is OFF
+	// (review-only mode). Record the decision as "approved" but do NOT execute — the
+	// item stays visible/reviewable and nothing is merged.
 	updated, err := h.store.SetReviewItemStatus(id, database.ReviewStatusApproved)
 	if err != nil {
 		return nil, "", err
 	}
-	return updated, "no apply handler registered for kind " + item.Kind + "; marked approved", nil
+	note := "no apply handler registered for kind " + item.Kind + "; marked approved"
+	if hasHandler {
+		note = "apply is disabled (review-only mode): item approved but NOT applied — " +
+			"enable review_apply_enabled to perform the merge"
+	}
+	return updated, note, nil
 }
 
 // RejectReviewItem handles POST /api/v1/review/items/:id/reject.
