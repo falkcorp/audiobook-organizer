@@ -1,7 +1,7 @@
 // file: internal/itunes/service/fs_regroup_shape.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1e7d4a92-3c85-4b60-9f21-6a8c0d5e2b47
-// last-edited: 2026-07-13
+// last-edited: 2026-07-14
 
 // Package service — deterministic (regex-only) shape classifier for the
 // shattered-book REGROUP review producer (PR-B1).
@@ -43,6 +43,15 @@
 // N chapter files) collapse to multidisc; a marked-but-sequential folder is held as
 // ambiguous. This fixes a prod false positive that counted 133 chapter FILES of one
 // novel as 133 distinct WORKS.
+//
+// Over-merge guard (v1.2): the flat-multitrack branch now also requires
+// !manyDistinctTitles. A plain AUTHOR/COLLECTION folder of distinct single-file books
+// (e.g. `.../Terry Pratchett Discworld` = 70 different novels, or a flat
+// `.../unsorted/books` dump) is flat-and-numbered too — most audiobook filenames carry
+// SOME number — so numberedCount alone mistook 70 different books for 70 chapters of
+// one. The distinct-title-stems signal (already the anthology discriminator) now also
+// VETOES a confident collapse, dropping such folders to no-hold. A prod dry-run on
+// 2026-07-14 flagged 24 of 196 confident-multidisc holds as this over-merge shape.
 //
 // Pure function over DB-derived metadata: no I/O, fully unit-testable.
 
@@ -557,9 +566,23 @@ func classifyGroup(members []memberInfo) (RegroupGroup, bool) {
 		return build(KindMultidisc, true,
 			"collapse disc set into 1 multi-file audiobook", 0), true
 
-	case structure == "flat" && numberedCount*2 >= n && n >= flatMultitrackMin:
+	case structure == "flat" && numberedCount*2 >= n && n >= flatMultitrackMin && !manyDistinctTitles:
 		// Many members sit directly in ONE book folder and are sequentially numbered →
 		// flat multi-track collapse. The shared parent folder IS the book identity.
+		//
+		// OVER-MERGE GUARD (!manyDistinctTitles): a plain AUTHOR or COLLECTION folder
+		// holding N *distinct* single-file books (e.g. `.../Audiobooks/Terry Pratchett
+		// Discworld` = 70 different novels, or a flat `.../unsorted/books` dump) also
+		// looks flat-and-numbered — most audiobook filenames carry SOME number (series
+		// #, year, bitrate), so numberedCount alone can't tell 70 chapters of one book
+		// from 70 different books. `manyDistinctTitles` (a strong majority of members
+		// carry their OWN distinct title stem) is exactly that discriminator, and it
+		// was already the anthology signal — here we also use it to REFUSE a confident
+		// collapse. Such folders fall through to the flat-ambiguous / default cases
+		// (no confident merge). This errs toward NOT grouping: a real book with
+		// per-chapter descriptive titles is left shattered (recoverable later) rather
+		// than N distinct books being wrongly merged into one (corruption). A dry-run
+		// on 2026-07-14 flagged 24/196 confident-multidisc holds as this shape.
 		return build(KindMultidisc, true,
 			"collapse flat multi-track folder into 1 multi-file audiobook", 0), true
 

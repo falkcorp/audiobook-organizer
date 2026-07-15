@@ -9,6 +9,32 @@
 
 ### Features & Fixes
 
+#### July 14, 2026 - fix(regroup): multidisc classifier over-merged author/collection folders
+
+A prod dry-run (op `01KXGZG8…`) surfaced that **24 of 196** confident `regroup.multidisc`
+holds were over-merges: a plain **author or collection folder** of *distinct* single-file
+books was being collapsed into ONE book — e.g. `.../Terry Pratchett Discworld` (70 different
+novels → 1), `.../Clive Barker` (19), `iTunes Media/Audiobooks/<Author>` folders, and a flat
+`.../unsorted/books` dump (103 unrelated titles → 1). Approving one would have merged dozens
+of unrelated audiobooks.
+
+- **Root cause:** the flat-multitrack branch in `ClassifyShatteredFolders`
+  (`internal/itunes/service/fs_regroup_shape.go`) fired on `structure=="flat" &&
+  numberedCount*2>=n`. Most audiobook filenames carry *some* number (series #, year,
+  bitrate), so `numberedCount` alone couldn't tell 70 chapters of one book from 70 different
+  books. The existing `FlatDumpDistinctBooks_Skipped` test only used *un-numbered* files
+  (`The Hobbit.m4b`), so it never exercised this path.
+- **Fix:** the flat-multitrack branch now also requires `!manyDistinctTitles` — the same
+  distinct-title-stems signal already used as the anthology discriminator now also **vetoes**
+  a confident collapse. Author/collection folders drop to no-hold (they aren't single-book
+  candidates). Errs toward NOT grouping: a real book with per-chapter descriptive titles is
+  left shattered (recoverable) rather than distinct books merged (corruption).
+- Legit collapses are unaffected: numbered same-stem chapters (`01 - Chapter`, `Chapter NNN`,
+  disc sets) still collapse — verified incl. the 133-sequential-chapter case.
+- Test: `TestClassify_FlatNumberedDistinctBooks_NotMultidisc` reproduces the prod shape
+  (numbered distinct books in an author folder → must not be confident multidisc). Still
+  dry-run only; no book writes.
+
 #### July 13, 2026 - fix(regroup): anthology counts distinct works + fold in original iTunes album path (B1 tuning)
 
 Tunes the shattered-book regroup classifier after a real prod dry-run (44,327 books →

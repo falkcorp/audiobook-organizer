@@ -1,7 +1,7 @@
 // file: internal/itunes/service/fs_regroup_shape_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4d2a7f81-6c93-4e50-b8a1-0f5e2c9d3b76
-// last-edited: 2026-07-13
+// last-edited: 2026-07-14
 
 package itunesservice
 
@@ -309,6 +309,32 @@ func TestClassify_FlatDumpDistinctBooks_Skipped(t *testing.T) {
 	}
 	if st.DistinctSkip != 1 {
 		t.Errorf("DistinctSkip=%d, want 1 (stats %+v)", st.DistinctSkip, st)
+	}
+}
+
+// Real prod over-merge (2026-07-14): an AUTHOR/COLLECTION folder of distinct,
+// individually-numbered single-file books looked flat-and-numbered and was wrongly
+// collapsed into ONE confident multidisc book (e.g. `.../Terry Pratchett Discworld`
+// = 70 different novels → 1). The earlier FlatDump test only used UN-numbered files
+// (numberedCount=0), so it never exercised the flat-multitrack branch; real filenames
+// carry series #/year/bitrate numbers that trip it. The distinct-title-stems guard
+// must veto the confident collapse for these.
+func TestClassify_FlatNumberedDistinctBooks_NotMultidisc(t *testing.T) {
+	base := shatterRoot + "/Terry Pratchett Discworld"
+	books := []ShatterBook{
+		sb("d1", base+"/01 - The Colour of Magic.mp3"),
+		sb("d2", base+"/02 - The Light Fantastic.mp3"),
+		sb("d3", base+"/03 - Equal Rites.mp3"),
+		sb("d4", base+"/04 - Mort.mp3"),
+		sb("d5", base+"/05 - Sourcery.mp3"),
+		sb("d6", base+"/06 - Wyrd Sisters.mp3"),
+	}
+	groups, _ := ClassifyShatteredFolders(books)
+	for _, g := range groups {
+		if g.Kind == KindMultidisc && g.Confident {
+			t.Fatalf("author folder of distinct numbered books must NOT be a confident "+
+				"multidisc collapse; got %+v", g)
+		}
 	}
 }
 
