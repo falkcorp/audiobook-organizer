@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_mutation.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e7b1f6a5-b8c9-0d12-ce3f-4a5b6c7d8e9f
-// last-edited: 2026-06-23
+// last-edited: 2026-07-16
 
 package audiobooks
 
@@ -349,6 +349,26 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 		entry.OverrideLocked = false
 		entry.UpdatedAt = now
 		state[field] = entry
+	}
+
+	// Sync the denormalized Author/Series display objects to the resolved IDs
+	// BEFORE persisting. Read paths prefer the embedded object when non-nil and
+	// only fall back to a GetAuthorByID/GetSeriesByID lookup when it is nil
+	// (see resolveAuthorAndSeriesNames in helpers.go and
+	// EnrichAudiobooksWithNames in service_query.go). currentBook — and thus
+	// payload.Book — carries the *old* Author/Series struct loaded by
+	// GetBookByID above; changing AuthorID/SeriesID here (via the direct
+	// author_id/series_id fields at the top, or the name-resolution branches)
+	// without refreshing the embedded object would persist a stale name.
+	// UpdateBook's preserve-on-nil guard cannot fix this (the stale object is
+	// non-nil), so the write side must honor its documented contract of setting
+	// BOTH the ID and a fresh object. This mirrors the response-enrichment block
+	// below, but must run before UpdateBook so the stored blob is correct too.
+	if payload.AuthorID != nil && resolvedAuthorName != "" {
+		payload.Book.Author = &database.Author{ID: *payload.AuthorID, Name: resolvedAuthorName}
+	}
+	if payload.SeriesID != nil && resolvedSeriesName != "" {
+		payload.Book.Series = &database.Series{ID: *payload.SeriesID, Name: resolvedSeriesName, AuthorID: payload.AuthorID}
 	}
 
 	// Save to database

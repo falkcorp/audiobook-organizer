@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.106.6 -->
+<!-- version: 9.106.7 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-16 -->
 
@@ -1770,6 +1770,17 @@ must sequence, but A and B are parallelizable. Spawn:
   slices — so needs partitioning/sharded-collect + a test, not a naive fan-out). No tests exist in
   this package yet beyond `reconcile_hash_test.go`.
 
+- [x] **UPDATEBOOK-STALE-DENORMALIZED-AUTHOR** (2026-07-16, write-path bug hunt) — ✅ **FIXED
+  2026-07-16** (branch `fix/update-audiobook-stale-denormalized-author`). `UpdateAudiobook`
+  (`service_mutation.go`) changed `AuthorID`/`SeriesID` (reachable via the `author_id`/`series_id`
+  API fields, `update_service.go:86`) but left the embedded denormalized `Author`/`Series` display
+  struct pointing at the OLD record. `UpdateBook`'s preserve-on-nil guard can't fix a stale *non-nil*
+  struct, so the stale name was persisted; read paths (`resolveAuthorAndSeriesNames`,
+  `EnrichAudiobooksWithNames`) prefer the embedded object when present → wrong author/series shown
+  indefinitely. Inverse of the July 13 blank-on-nil fix. Fix syncs the embedded object to the resolved
+  ID BEFORE persist (honors `UpdateBook`'s "set BOTH ID and fresh object" contract); self-heals prior
+  mismatches on any edit. Regression test re-reads from the store to assert what was written. Exec
+  summary: `docs/executive-summaries/2026-07-16-stale-author-on-id-edit-executive-summary.md`.
 - [x] **APPLY-GUARD-ITUNES-REGROUP-FAILOPEN** (2026-07-16, silent-failure hunt) — ✅ **FIXED
   2026-07-16** (branch `fix/harden-apply-path-guards`). `itunes_regroup.go` delete guard read
   `files, _ :=`/`exts, _ :=` and fell open on a read error (nil→len 0→delete a possibly-non-empty
