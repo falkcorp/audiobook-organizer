@@ -1,7 +1,7 @@
 // file: web/tests/e2e/utils/setup-modes.ts
-// version: 3.0.0
+// version: 3.0.1
 // guid: f1e2d3c4-b5a6-7890-cdef-a1b2c3d4e5f6
-// last-edited: 2026-02-07
+// last-edited: 2026-07-16
 
 import { Page } from '@playwright/test';
 import type { MockApiOptions } from './test-helpers';
@@ -30,7 +30,9 @@ export async function resetToFactoryDefaults(
           const res = await fetch(`${baseURL}/api/v1/system/reset`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({}),
+            // /system/reset now requires the same {"confirm":"RESET"} token as
+            // /system/factory-reset (a bare POST is rejected with 400).
+            body: JSON.stringify({ confirm: 'RESET' }),
           });
           return { success: res.ok, status: res.status };
         } catch (error) {
