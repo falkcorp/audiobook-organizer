@@ -1,7 +1,7 @@
 # file: Makefile
-# version: 2.15.2
+# version: 2.15.3
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
-# last-edited: 2026-07-03
+# last-edited: 2026-07-16
 
 BINARY := audiobook-organizer
 ROOT_DIR := $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
@@ -209,9 +209,9 @@ mocks:
 mocks-check:
 	@echo "🎭 Checking that committed mocks are up to date..."
 	@mockery --log-level warn
-	@if ! git diff --quiet -- internal/*/mocks/ internal/ai/mock_*_test.go internal/metadata/mock_*_test.go; then \
+	@if ! git diff --quiet -- ':(glob)internal/**/mocks/**' internal/ai/mock_*_test.go internal/metadata/mock_*_test.go; then \
 		echo "❌ Committed mocks are stale. Run 'make mocks' and commit the result."; \
-		git diff --stat -- internal/*/mocks/ internal/ai/mock_*_test.go internal/metadata/mock_*_test.go; \
+		git diff --stat -- ':(glob)internal/**/mocks/**' internal/ai/mock_*_test.go internal/metadata/mock_*_test.go; \
 		exit 1; \
 	fi
 	@echo "✅ Mocks are up to date"

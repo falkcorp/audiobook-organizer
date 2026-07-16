@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.158.0 -->
+<!-- version: 3.158.1 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-16 -->
 
@@ -8,6 +8,22 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 16, 2026 - fix(ci): widen local mocks-check glob to catch nested mocks dirs (MOCK-FRESHNESS-GLOB-GAP)
+
+The Makefile `mocks-check` target diffed only `internal/*/mocks/` — a shell glob that
+matches exactly one directory level. It silently **missed all 8 nested mocks dirs** under
+`internal/server/handlers/**/mocks/` (audiobooks, dedup, duplicates, entities, metadata,
+operations, system, and the handlers-root mocks). A stale mock in any of those — e.g. the
+dir holding `mock_dedup_engine.go`, stale from #1736 until hand-regenerated in #1757 —
+passed `make mocks-check` locally while the real CI gate (`ci.yml`, which already used
+`:(glob)internal/**/mocks/**`) failed. Devs got a false green.
+
+- **Fix:** the Makefile target now uses the same recursive git pathspec as CI,
+  `:(glob)internal/**/mocks/**`, restoring local/CI parity.
+- Verified empirically: with the old glob a modified `internal/server/handlers/mocks/…`
+  file left `mocks-check` reporting clean (false pass); with the new glob the same change
+  is caught. `make mocks-check` still passes clean on fresh mocks.
 
 #### July 14, 2026 - fix(regroup): multidisc classifier over-merged author/collection folders
 
