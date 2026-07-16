@@ -1,5 +1,5 @@
 // file: internal/reconcile/reconcile_parallel_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2c7f1a94-3e60-4d18-9b5a-8f0c6d2e1a37
 // last-edited: 2026-07-16
 
@@ -212,6 +212,71 @@ func TestBuildReconcilePreview_ParallelBrokenOrder(t *testing.T) {
 	}
 	if !equalStrings(gotIDs, wantBrokenIDs) {
 		t.Errorf("BrokenRecords order = %v, want %v (book order, not pool order)", gotIDs, wantBrokenIDs)
+	}
+}
+
+// TestFindBrokenSegmentBooks_RealStoreConcurrent drives the non-dry-run write
+// path against a REAL PebbleStore (not the mutex-guarded fake) so `go test
+// -race` exercises concurrent GetBookByID / GetBookFiles / UpdateBook —
+// including the memdb write-through — across the worker pool. This is the
+// check that actually proves the production behavior change is safe: a
+// concurrent unlocked-map access in the store would surface here as a race or a
+// fatal panic. Every book is broken, so every worker performs a hydrate+update,
+// maximizing write concurrency.
+func TestFindBrokenSegmentBooks_RealStoreConcurrent(t *testing.T) {
+	ps, err := database.NewPebbleStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new pebble store: %v", err)
+	}
+
+	prevRoot := config.AppConfig.RootDir
+	config.AppConfig.RootDir = "" // disable the library-prefix skip; check all books
+	defer func() { config.AppConfig.RootDir = prevRoot }()
+
+	base := t.TempDir()
+	const n = 40 // enough books to keep NumCPU workers genuinely contending
+	ids := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		dir := filepath.Join(base, fmt.Sprintf("book-%02d", i))
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		seg0 := writeFile(t, dir, "seg0.m4b", "s0")             // present
+		seg1 := filepath.Join(dir, "seg1-missing.m4b")         // never written → missing
+		book, err := ps.CreateBook(&database.Book{Title: fmt.Sprintf("book %d", i), FilePath: dir})
+		if err != nil {
+			t.Fatalf("create book: %v", err)
+		}
+		ids = append(ids, book.ID)
+		for _, fp := range []string{seg0, seg1} {
+			if err := ps.CreateBookFile(&database.BookFile{BookID: book.ID, FilePath: fp}); err != nil {
+				t.Fatalf("create book file: %v", err)
+			}
+		}
+	}
+
+	res, err := FindBrokenSegmentBooks(ps, false)
+	if err != nil {
+		t.Fatalf("FindBrokenSegmentBooks: %v", err)
+	}
+	if res.BooksChecked != n {
+		t.Errorf("BooksChecked = %d, want %d", res.BooksChecked, n)
+	}
+	if res.BrokenBooks != n {
+		t.Errorf("BrokenBooks = %d, want %d", res.BrokenBooks, n)
+	}
+	if res.MarkedForReview != n {
+		t.Errorf("MarkedForReview = %d, want %d", res.MarkedForReview, n)
+	}
+	// Confirm the writes actually persisted through the store (not just counted).
+	for _, id := range ids {
+		b, err := ps.GetBookByID(id)
+		if err != nil || b == nil {
+			t.Fatalf("re-read %s: %v", id, err)
+		}
+		if b.LibraryState == nil || *b.LibraryState != "needs_review" {
+			t.Errorf("book %s LibraryState = %v, want needs_review", id, b.LibraryState)
+		}
 	}
 }
 
