@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_merge.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3b5d7f9a-2e4c-6b8d-0f1a-3c5e7d9f1b3e
-// last-edited: 2026-05-29
+// last-edited: 2026-07-16
 
 // Split-book cluster merge — portable across SQLite and Pebble.
 //
@@ -58,6 +58,14 @@ func MergeSplitBookCluster(store database.Store, keepID string, srcIDs []string,
 
 	result := &SplitBookMergeResult{KeepID: keepID}
 
+	// safeToDelete tracks srcs that are PROVABLY empty after Step 1 — either they
+	// had no files to begin with, or their files were successfully moved to keep.
+	// A src whose GetBookFiles or MoveBookFilesToBook errored is NOT recorded, so
+	// Step 4 leaves it intact rather than soft-deleting a book that still owns its
+	// files (which would orphan that audio — a deleted book still referenced by
+	// live BookFile rows). The operator can retry the whole cluster.
+	safeToDelete := make(map[string]bool, len(srcIDs))
+
 	// Step 1: move bookfiles from each src to keep.
 	for _, srcID := range srcIDs {
 		if srcID == keepID {
@@ -70,6 +78,7 @@ func MergeSplitBookCluster(store database.Store, keepID string, srcIDs []string,
 			continue
 		}
 		if len(files) == 0 {
+			safeToDelete[srcID] = true // nothing to orphan
 			continue
 		}
 		ids := make([]string, 0, len(files))
@@ -82,6 +91,7 @@ func MergeSplitBookCluster(store database.Store, keepID string, srcIDs []string,
 			continue
 		}
 		result.FilesMoved += len(files)
+		safeToDelete[srcID] = true // files reassigned to keep
 	}
 
 	// Step 2: recompute keep duration as sum of all bookfile durations.
@@ -109,10 +119,15 @@ func MergeSplitBookCluster(store database.Store, keepID string, srcIDs []string,
 			fmt.Sprintf("update keep book: %v", err))
 	}
 
-	// Step 4: soft-delete each src (files have already been moved away).
+	// Step 4: soft-delete each src whose files were provably moved away. A src
+	// that errored in Step 1 still owns its files and is deliberately left intact
+	// to avoid orphaning that audio.
 	for _, srcID := range srcIDs {
 		if srcID == keepID {
 			continue
+		}
+		if !safeToDelete[srcID] {
+			continue // Step 1 failed for this src; leave it (and its files) intact
 		}
 		if err := merge.SoftDeleteBook(store, srcID); err != nil {
 			result.Errors = append(result.Errors,

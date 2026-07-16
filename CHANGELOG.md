@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.158.1 -->
+<!-- version: 3.159.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-16 -->
 
@@ -24,6 +24,27 @@ passed `make mocks-check` locally while the real CI gate (`ci.yml`, which alread
 - Verified empirically: with the old glob a modified `internal/server/handlers/mocks/…`
   file left `mocks-check` reporting clean (false pass); with the new glob the same change
   is caught. `make mocks-check` still passes clean on fresh mocks.
+#### July 16, 2026 - fix(dedup): split-book merge no longer orphans files when a move fails
+
+`MergeSplitBookCluster` (`internal/dedup/split_book_merge.go`) absorbs several
+single-book entries into one keeper: Step 1 moves each source's `BookFile`s onto the
+keeper, Step 4 soft-deletes the emptied sources. Step 4 deleted **every** source
+unconditionally — even one whose `GetBookFiles` or `MoveBookFilesToBook` had errored
+in Step 1 and therefore still owned its files. That source was then soft-deleted while
+live `BookFile` rows still pointed at it → the audio was **orphaned** (belonged to a
+deleted book, dropped from the library view). `SoftDeleteBook` has no owned-files guard,
+and the handler (`split_book.go:155`) returned **200 OK** with the errors buried in the
+response body, so a partial-loss merge looked successful.
+
+- **Fix:** Step 1 now records a `safeToDelete` set — a source is added only if it had no
+  files or its move succeeded. Step 4 soft-deletes **only** sources in that set; a source
+  whose move failed is left fully intact (files and all) so the operator can retry.
+- No behavior change on the happy path: when every move succeeds, all sources are still
+  soft-deleted. An already-empty source is still cleaned up (nothing to orphan).
+- Tests (`split_book_merge_test.go`): a simulated failed move leaves that source
+  un-deleted and still owning its file; all-success still deletes all; empty source still
+  deleted. Each assertion fails if the guard is removed.
+- Executive summary: `docs/executive-summaries/2026-07-16-split-book-merge-orphan-executive-summary.md`.
 
 #### July 14, 2026 - fix(regroup): multidisc classifier over-merged author/collection folders
 
