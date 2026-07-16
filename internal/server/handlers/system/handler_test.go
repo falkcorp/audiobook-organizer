@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: af6670e5-d640-4339-b0b2-3b0cf1596ce7
-// last-edited: 2026-07-07
+// last-edited: 2026-07-16
 
 // Unit tests for the system-domain HTTP handlers. Each public method has at
 // least one test; happy paths plus key branches (config mask-secrets path,
@@ -274,7 +274,7 @@ func TestResetSystem_OK(t *testing.T) {
 	d.store.EXPECT().Reset().Return(nil)
 	d.store.EXPECT().InvalidateLibraryStats().Return()
 
-	w := run(http.MethodPost, "/system/reset", "/system/reset", nil, func(r *gin.Engine) {
+	w := run(http.MethodPost, "/system/reset", "/system/reset", []byte(`{"confirm":"RESET"}`), func(r *gin.Engine) {
 		r.POST("/system/reset", h.ResetSystem)
 	})
 	assert.Equal(t, http.StatusOK, w.Code)
@@ -284,10 +284,23 @@ func TestResetSystem_DBError(t *testing.T) {
 	h, d := newTestHandler(t)
 	d.store.EXPECT().Reset().Return(errors.New("reset failed"))
 
-	w := run(http.MethodPost, "/system/reset", "/system/reset", nil, func(r *gin.Engine) {
+	w := run(http.MethodPost, "/system/reset", "/system/reset", []byte(`{"confirm":"RESET"}`), func(r *gin.Engine) {
 		r.POST("/system/reset", h.ResetSystem)
 	})
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+// TestResetSystem_RequiresConfirm is a regression guard: ResetSystem wipes the
+// whole database, so a bare POST (or a wrong token) must be rejected with 400
+// before store.Reset() is ever called — matching FactoryReset. Without the
+// confirm gate this returned 200 and wiped the DB. The mock store asserts no
+// Reset() call (unexpected calls fail the test).
+func TestResetSystem_RequiresConfirm(t *testing.T) {
+	h, _ := newTestHandler(t)
+	w := run(http.MethodPost, "/system/reset", "/system/reset", []byte(`{"confirm":"nope"}`), func(r *gin.Engine) {
+		r.POST("/system/reset", h.ResetSystem)
+	})
+	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
 // --- FactoryReset ---

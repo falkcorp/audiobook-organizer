@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 8475f406-df31-4286-95b0-30787397603e
-// last-edited: 2026-07-07
+// last-edited: 2026-07-16
 
 // Package system hosts the system-level HTTP handlers extracted from the server
 // package: health, status, announcements, storage, logs, activity-log,
@@ -368,6 +368,19 @@ func (h *Handler) GetSystemActivityLog(c *gin.Context) {
 
 // ResetSystem implements POST /system/reset.
 func (h *Handler) ResetSystem(c *gin.Context) {
+	// Require the same explicit {"confirm":"RESET"} token that the more
+	// destructive FactoryReset requires — ResetSystem also wipes the entire
+	// database (books, authors, series, settings), so a bare POST must not be
+	// enough to trigger it. Keep the token string identical to FactoryReset so
+	// callers use one confirmation contract for both.
+	var req struct {
+		Confirm string `json:"confirm"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.Confirm != "RESET" {
+		httputil.RespondWithBadRequest(c, "request body must contain {\"confirm\": \"RESET\"}")
+		return
+	}
+
 	store := h.resolveStore()
 	// Reset database
 	if err := store.Reset(); err != nil {

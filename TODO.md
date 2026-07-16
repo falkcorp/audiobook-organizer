@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.106.7 -->
+<!-- version: 9.106.8 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-16 -->
 
@@ -1751,13 +1751,14 @@ must sequence, but A and B are parallelizable. Spawn:
   library grows. ✅ **FIXED 2026-07-16** (branch `fix/whole-library-fragile-limits`): all 11 switched
   to `GetAllBooksCore(0, 0)` after verifying each is whole-library intent. The two `itunes/backfill.go`
   sites were correctly left as-is (proper offset-cursor loops, not truncations). Closes the class.
-- [ ] **RESET-AUTHZ-CONSISTENCY** (2026-07-16, API authz bug hunt) — LOW: `/system/reset` &
-  `/system/factory-reset` (`wire_system_routes.go:31-32`) gate on `PermSettingsManage` while the
-  sibling `/maintenance/wipe` (`server_lifecycle.go:1284`) gates on `RequireAdmin()`. No live
-  escalation in default roles (only admin has settings.manage), but a custom non-admin role with
-  settings.manage could full-wipe via reset. Also `ResetSystem` (full DB wipe) lacks the
-  `{"confirm":"RESET"}` token that the *more* destructive `FactoryReset` requires. Fix: gate all
-  three destructive endpoints on one model (`RequireAdmin()`) + add confirm token to `ResetSystem`.
+- [x] **RESET-AUTHZ-CONSISTENCY** (2026-07-16, API authz bug hunt) — ✅ **FIXED 2026-07-16**
+  (branch `fix/reset-authz-consistency`). `/system/reset` & `/system/factory-reset` now go through
+  the same admin-only subgroup (`RequireAdmin()`) as `/maintenance/wipe` and `/admin/*`, instead of
+  the weaker `PermSettingsManage` — a custom non-admin role granted `settings.manage` can no longer
+  full-wipe via reset. `ResetSystem` now requires the same `{"confirm":"RESET"}` token as the more
+  destructive `FactoryReset`, so a bare/mis-fired POST can't silently wipe the DB. Regression test
+  `TestResetSystem_RequiresConfirm` asserts 400 + no `store.Reset()` call without the token; existing
+  reset tests updated to send it. `wire_system_routes.go`, `handlers/system/handler.go`.
 
 - [ ] **RECONCILE-SERIAL-LOOPS** (2026-07-16, concurrency bug hunt) — two remaining serial
   full-library loops in `internal/reconcile/reconcile.go` (the hashing loop was parallelized
