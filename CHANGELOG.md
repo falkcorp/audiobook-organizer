@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.161.0 -->
+<!-- version: 3.162.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-16 -->
 
@@ -8,6 +8,29 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 16, 2026 - perf(reconcile): parallelize untracked-file hashing (concurrency-mandate hotspot)
+
+The reconcile preview builder (`internal/reconcile/reconcile.go`,
+`BuildReconcilePreviewWithProgress`) hashed every untracked on-disk file in a plain
+single-core `for range` loop — the exact anti-pattern called out by the CLAUDE.md
+concurrency mandate and the 2026-07-05 hotspot audit (hashing is explicitly named as
+work that must use a bounded pool). On a large library with thousands of untracked
+files this pinned one core while the rest sat idle.
+
+- **Fix:** extracted the hashing into `hashFilesConcurrent`, a bounded
+  `errgroup.Group` pool sized to `runtime.NumCPU()`. Each file hashes into its own
+  index-ordered slot and the hash→path map is folded serially afterwards, so the
+  former "highest-indexed file wins on a hash collision" behavior is preserved
+  **exactly**. `scanner.ComputeSegmentFileHash` opens its own file and shares no
+  state, so it is safe to call concurrently.
+- Tests (`reconcile_hash_test.go`, first tests in this package): correct indexing,
+  collision last-wins, skip-on-hash-error, empty input, and progress reporting — all
+  run under `-race`.
+- Follow-ups tracked in TODO (`RECONCILE-SERIAL-LOOPS`): the two remaining serial
+  full-library loops in this file (`FindBrokenSegmentBooks` per-book stat+DB, and the
+  path-check `os.Stat` loop) are lower priority (I/O-bound, order-sensitive shared
+  state) and deferred to a follow-up with proper partitioning + tests.
 
 #### July 16, 2026 - fix(ai): author merge/alias no longer deletes an author whose books failed to reassign
 

@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.106.3 -->
+<!-- version: 9.106.4 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-16 -->
 
@@ -1736,6 +1736,17 @@ must sequence, but A and B are parallelizable. Spawn:
 ---
 
 ## 🐛 Open Bugs — May 17, 2026
+
+- [ ] **RECONCILE-SERIAL-LOOPS** (2026-07-16, concurrency bug hunt) — two remaining serial
+  full-library loops in `internal/reconcile/reconcile.go` (the hashing loop was parallelized
+  2026-07-16 via `hashFilesConcurrent`, branch `perf/reconcile-parallel-loops`): (1)
+  `FindBrokenSegmentBooks` (~L750) does per-book `os.Stat` + `GetBookFiles` + `GetBookByID` +
+  `UpdateBook` over `GetAllBooksCore(100000,0)` fully serially — the per-book `UpdateBook` writes
+  are per-distinct-book so they parallelize safely; (2) the path-check loop (~L217) does serial
+  `os.Stat` over up to 100k books. Both are lower priority than the hash loop (I/O-bound; #2 also
+  mutates order-sensitive shared state — `knownPaths` map + ordered `brokenBooks`/`BrokenRecords`
+  slices — so needs partitioning/sharded-collect + a test, not a naive fan-out). No tests exist in
+  this package yet beyond `reconcile_hash_test.go`.
 
 - [x] **APPLY-GUARD-ITUNES-REGROUP-FAILOPEN** (2026-07-16, silent-failure hunt) — ✅ **FIXED
   2026-07-16** (branch `fix/harden-apply-path-guards`). `itunes_regroup.go` delete guard read
