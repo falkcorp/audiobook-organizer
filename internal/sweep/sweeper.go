@@ -1,7 +1,7 @@
 // file: internal/sweep/sweeper.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: a1b2c3d4-e5f6-4789-abcd-ef2345678901
-// last-edited: 2026-07-07
+// last-edited: 2026-07-16
 
 package sweep
 
@@ -82,7 +82,7 @@ func AuditFileConsistency(store database.BookStore) (*SweeperResult, error) {
 		Errors:       []string{},
 	}
 
-	books, err := store.GetAllBooksCore(100000, 0)
+	books, err := store.GetAllBooksCore(0, 0)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list books: %w", err)
 	}

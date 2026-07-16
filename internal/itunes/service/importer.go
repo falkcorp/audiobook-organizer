@@ -1,5 +1,5 @@
 // file: internal/itunes/service/importer.go
-// version: 1.12.1
+// version: 1.12.2
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
 // last-edited: 2026-07-16
 
@@ -536,7 +536,7 @@ func (imp *Importer) Sync(ctx context.Context, libraryPath string, pathMappings 
 	// fields (ITunesPersistentID, FilePath, Title, ITunesPlayCount,
 	// ITunesRating, ITunesBookmark, ITunesLastPlayed). The actual writeback
 	// hydrates a full row (see below) so it never wipes Author/Series.
-	allBooks, err := imp.store.GetAllBooksCore(100000, 0)
+	allBooks, err := imp.store.GetAllBooksCore(0, 0)
 	if err != nil {
 		return fmt.Errorf("failed to load books for index: %w", err)
 	}
@@ -795,7 +795,7 @@ func (imp *Importer) DiscoverLibraryPath() string {
 
 // CollectITLUpdatesWithBookIDs returns updates and the book IDs that contributed them.
 func (imp *Importer) CollectITLUpdatesWithBookIDs() ([]itunes.ITLLocationUpdate, []string) {
-	allBooks, err := imp.store.GetAllBooksCore(100000, 0)
+	allBooks, err := imp.store.GetAllBooksCore(0, 0)
 	if err != nil {
 		return nil, nil
 	}
@@ -1155,7 +1155,7 @@ func (imp *Importer) enrichConcurrency() int {
 //     colliding case gets the same one-wins/one-fails outcome the serial
 //     loop always produced (order-independent, same result set).
 func (imp *Importer) organizeImportedBooks(ctx context.Context, status *itunesImportStatus, log logger.Logger) {
-	core, err := imp.store.GetAllBooksCore(100000, 0)
+	core, err := imp.store.GetAllBooksCore(0, 0)
 	if err != nil {
 		log.Error("Failed to list books for organize: %v", err)
 		return

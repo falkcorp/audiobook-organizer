@@ -1,7 +1,7 @@
 // file: internal/database/migrations.go
-// version: 1.41.1
+// version: 1.41.2
 // guid: 9a8b7c6d-5e4f-3d2c-1b0a-9f8e7d6c5b4a
-// last-edited: 2026-07-12
+// last-edited: 2026-07-16
 
 package database
 
@@ -614,7 +614,7 @@ func migration014Up(store Store) error {
 //
 //lint:ignore U1000 kept: real Pebble corrupted-path migration logic not yet dispatched from the migration014Up no-op stub (follow-up wire-up, 2026-07-12)
 func migration014UpPebble(store Store) error {
-	books, err := store.GetAllBooksCore(1000000, 0)
+	books, err := store.GetAllBooksCore(0, 0)
 	if err != nil {
 		return fmt.Errorf("migration 14: failed to list books: %w", err)
 	}

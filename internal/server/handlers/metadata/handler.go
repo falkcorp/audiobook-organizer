@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
-// last-edited: 2026-07-13
+// last-edited: 2026-07-16
 
 // Package metadatahandler hosts the metadata-domain HTTP handlers extracted
 // from the server package's metadata_handlers.go: batch-update / validate /
@@ -1190,7 +1190,7 @@ func (h *Handler) handleBulkWriteBackImpl(c *gin.Context) {
 		books, err = store.GetBooksBySeriesIDCore(*req.Filter.SeriesID)
 	} else {
 		// Get all books, then filter by library_state
-		books, err = store.GetAllBooksCore(1_000_000, 0)
+		books, err = store.GetAllBooksCore(0, 0)
 	}
 	if err != nil {
 		httputil.InternalError(c, "failed to query books", err)
