@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.166.0 -->
+<!-- version: 3.167.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-16 -->
 
@@ -8,6 +8,27 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 16, 2026 - perf(reconcile): parallelize the last two serial whole-library loops
+
+Follow-up to #1960 (`hashFilesConcurrent`). The two remaining single-core hotspots in
+`internal/reconcile/reconcile.go` now run across a bounded `errgroup` pool sized to
+`runtime.NumCPU()`:
+
+- **`BuildReconcilePreviewWithProgress` path-check** — the per-book `os.Stat` over the
+  whole library now runs concurrently; `knownPaths` is built in a cheap serial pre-pass,
+  and each stat records into its own index slot so the ordered `brokenBooks` /
+  `BrokenRecords` fold is byte-for-byte identical to the former sequential build.
+- **`FindBrokenSegmentBooks`** — the outer per-book loop (directory stat + `GetBookFiles`
+  + per-segment stat storm + non-dry-run hydrate/`UpdateBook`) is now sharded across
+  workers. Work partitions by book index, so each book's DB row is touched by exactly one
+  worker and the per-book `UpdateBook` writes never race (they only flip
+  `LibraryState`/`MarkedForDeletion`, no secondary-indexed field). `Details` lands in
+  per-index slots and folds in book order; counters are atomic.
+
+Output is unchanged — same broken records, same order, same counts. Adds the package's
+first behavioral tests (`reconcile_parallel_test.go`), run under `-race`, asserting
+order-preservation and exact counts for both loops. Closes `RECONCILE-SERIAL-LOOPS`.
 
 #### July 16, 2026 - fix(server): unify destructive-reset authz on RequireAdmin + require confirm token on /system/reset
 

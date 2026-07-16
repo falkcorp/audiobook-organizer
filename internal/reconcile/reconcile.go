@@ -1,5 +1,5 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-07-16
 
@@ -256,22 +256,49 @@ func BuildReconcilePreviewWithProgress(store Store, log logger.Logger) (*Reconci
 		return result, nil
 	}
 	report(0, totalBooks, fmt.Sprintf("Checking file paths for %d books...", totalBooks))
-	for i, book := range books {
-		if book.FilePath == "" {
+	// knownPaths is a cheap in-memory set build with no I/O, so keep it serial.
+	for i := range books {
+		if books[i].FilePath != "" {
+			knownPaths[books[i].FilePath] = true
+		}
+	}
+	// The per-book os.Stat is the expensive part — on whole-library scans over
+	// network/ZFS storage a serial loop of tens of thousands of stat syscalls is
+	// a CLAUDE.md concurrency-mandate hotspot (twin of hashFilesConcurrent, added
+	// in #1960). Run the stats across a bounded worker pool, recording each
+	// result into its own index slot so the ordered brokenBooks / BrokenRecords
+	// fold below is byte-for-byte identical to the former sequential build. Books
+	// with an empty FilePath were skipped before (never broken); brokenFlag stays
+	// false for them.
+	brokenFlag := make([]bool, len(books))
+	var statDone int64
+	var g errgroup.Group
+	g.SetLimit(max(runtime.NumCPU(), 1))
+	for i := range books {
+		if books[i].FilePath == "" {
 			continue
 		}
-		knownPaths[book.FilePath] = true
-		if _, err := os.Stat(book.FilePath); err != nil {
-			brokenBooks = append(brokenBooks, book)
+		g.Go(func() error {
+			if _, err := os.Stat(books[i].FilePath); err != nil {
+				brokenFlag[i] = true
+			}
+			if n := atomic.AddInt64(&statDone, 1); n%1000 == 0 {
+				report(int(n), totalBooks, fmt.Sprintf("Checked %d/%d book paths", n, totalBooks))
+			}
+			return nil
+		})
+	}
+	_ = g.Wait() // os.Stat errors are the signal (broken), never fatal here
+
+	for i := range books {
+		if brokenFlag[i] {
+			brokenBooks = append(brokenBooks, books[i])
 			result.BrokenRecords = append(result.BrokenRecords, ReconcileBrokenRecord{
-				BookID:   book.ID,
-				Title:    book.Title,
-				FilePath: book.FilePath,
-				FileHash: book.FileHash,
+				BookID:   books[i].ID,
+				Title:    books[i].Title,
+				FilePath: books[i].FilePath,
+				FileHash: books[i].FileHash,
 			})
-		}
-		if i%1000 == 0 && i > 0 {
-			report(i, totalBooks, fmt.Sprintf("Checked %d/%d book paths (%d broken so far)", i, totalBooks, len(brokenBooks)))
 		}
 	}
 	report(totalBooks, totalBooks, fmt.Sprintf("Checked %d/%d book paths (%d broken)", totalBooks, totalBooks, len(brokenBooks)))
@@ -773,67 +800,96 @@ func FindBrokenSegmentBooks(store Store, dryRun bool) (*BrokenSegmentResult, err
 	now := time.Now()
 	needsReview := "needs_review"
 
-	for _, book := range allBooks {
+	// Each book does a directory stat + GetBookFiles + a per-segment stat storm +
+	// (non-dry-run) a hydrate/UpdateBook — a whole-library-scale I/O-bound loop and
+	// a CLAUDE.md concurrency-mandate hotspot. Shard the OUTER loop across a bounded
+	// worker pool. Correctness under concurrency:
+	//   - Work partitions by book index, so each book (and its DB row) is touched
+	//     by exactly one worker; the per-book UpdateBook writes are to disjoint keys
+	//     and never race (they also only flip LibraryState/MarkedForDeletion, not
+	//     any secondary-indexed field, so no cross-book index contention).
+	//   - Per-book output lands in its own index slot (entries[i]); result.Details
+	//     is folded in book order afterwards, so it is identical to the former
+	//     sequential append order.
+	//   - Counters are atomic and assigned once at the end.
+	entries := make([]*BrokenSegmentEntry, len(allBooks))
+	var booksChecked, brokenBooks, markedForReview int64
+	var g errgroup.Group
+	g.SetLimit(max(runtime.NumCPU(), 1))
+	for i := range allBooks {
+		book := allBooks[i]
 		// Only check directory-based books in import paths (not in library)
 		if config.AppConfig.RootDir != "" && strings.HasPrefix(book.FilePath, config.AppConfig.RootDir) {
 			continue
 		}
-		info, serr := os.Stat(book.FilePath)
-		if serr != nil || !info.IsDir() {
-			continue
-		}
-
-		files, segErr := store.GetBookFiles(book.ID)
-		if segErr != nil || len(files) == 0 {
-			continue
-		}
-
-		result.BooksChecked++
-		var missingPaths []string
-		activeCount := 0
-		for _, f := range files {
-			if f.Missing || f.FilePath == "" {
-				continue
+		g.Go(func() error {
+			info, serr := os.Stat(book.FilePath)
+			if serr != nil || !info.IsDir() {
+				return nil
 			}
-			activeCount++
-			if _, ferr := os.Stat(f.FilePath); os.IsNotExist(ferr) {
-				missingPaths = append(missingPaths, f.FilePath)
+
+			files, segErr := store.GetBookFiles(book.ID)
+			if segErr != nil || len(files) == 0 {
+				return nil
 			}
-		}
 
-		if len(missingPaths) == 0 {
-			continue
-		}
-
-		entry := BrokenSegmentEntry{
-			BookID:          book.ID,
-			Title:           book.Title,
-			FilePath:        book.FilePath,
-			TotalSegments:   activeCount,
-			MissingSegments: len(missingPaths),
-			MissingPaths:    missingPaths,
-		}
-		result.Details = append(result.Details, entry)
-		result.BrokenBooks++
-
-		if !dryRun {
-			// Hydrate before writeback — book is a Core (slim) value here, and
-			// writing it straight through UpdateBook would wipe Author/Series.
-			full, ferr := store.GetBookByID(book.ID)
-			if ferr != nil || full == nil {
-				slog.Warn("failed to hydrate broken book for update", "book", book.ID, "ferr", ferr)
-			} else {
-				full.LibraryState = &needsReview
-				full.MarkedForDeletion = boolPtr(true)
-				full.MarkedForDeletionAt = &now
-				if _, uerr := store.UpdateBook(full.ID, full); uerr != nil {
-					slog.Warn("failed to mark broken book", "book", full.ID, "uerr", uerr)
-				} else {
-					result.MarkedForReview++
+			atomic.AddInt64(&booksChecked, 1)
+			var missingPaths []string
+			activeCount := 0
+			for _, f := range files {
+				if f.Missing || f.FilePath == "" {
+					continue
+				}
+				activeCount++
+				if _, ferr := os.Stat(f.FilePath); os.IsNotExist(ferr) {
+					missingPaths = append(missingPaths, f.FilePath)
 				}
 			}
+
+			if len(missingPaths) == 0 {
+				return nil
+			}
+
+			entries[i] = &BrokenSegmentEntry{
+				BookID:          book.ID,
+				Title:           book.Title,
+				FilePath:        book.FilePath,
+				TotalSegments:   activeCount,
+				MissingSegments: len(missingPaths),
+				MissingPaths:    missingPaths,
+			}
+			atomic.AddInt64(&brokenBooks, 1)
+
+			if !dryRun {
+				// Hydrate before writeback — book is a Core (slim) value here, and
+				// writing it straight through UpdateBook would wipe Author/Series.
+				full, ferr := store.GetBookByID(book.ID)
+				if ferr != nil || full == nil {
+					slog.Warn("failed to hydrate broken book for update", "book", book.ID, "ferr", ferr)
+				} else {
+					full.LibraryState = &needsReview
+					full.MarkedForDeletion = boolPtr(true)
+					full.MarkedForDeletionAt = &now
+					if _, uerr := store.UpdateBook(full.ID, full); uerr != nil {
+						slog.Warn("failed to mark broken book", "book", full.ID, "uerr", uerr)
+					} else {
+						atomic.AddInt64(&markedForReview, 1)
+					}
+				}
+			}
+			return nil
+		})
+	}
+	_ = g.Wait() // per-book errors are logged and skipped, never fatal
+
+	for _, e := range entries {
+		if e != nil {
+			result.Details = append(result.Details, *e)
 		}
 	}
+	result.BooksChecked = int(booksChecked)
+	result.BrokenBooks = int(brokenBooks)
+	result.MarkedForReview = int(markedForReview)
 
 	return result, nil
 }

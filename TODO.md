@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.106.8 -->
+<!-- version: 9.106.9 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-16 -->
 
@@ -1760,16 +1760,17 @@ must sequence, but A and B are parallelizable. Spawn:
   `TestResetSystem_RequiresConfirm` asserts 400 + no `store.Reset()` call without the token; existing
   reset tests updated to send it. `wire_system_routes.go`, `handlers/system/handler.go`.
 
-- [ ] **RECONCILE-SERIAL-LOOPS** (2026-07-16, concurrency bug hunt) — two remaining serial
-  full-library loops in `internal/reconcile/reconcile.go` (the hashing loop was parallelized
-  2026-07-16 via `hashFilesConcurrent`, branch `perf/reconcile-parallel-loops`): (1)
-  `FindBrokenSegmentBooks` (~L750) does per-book `os.Stat` + `GetBookFiles` + `GetBookByID` +
-  `UpdateBook` over `GetAllBooksCore(100000,0)` fully serially — the per-book `UpdateBook` writes
-  are per-distinct-book so they parallelize safely; (2) the path-check loop (~L217) does serial
-  `os.Stat` over up to 100k books. Both are lower priority than the hash loop (I/O-bound; #2 also
-  mutates order-sensitive shared state — `knownPaths` map + ordered `brokenBooks`/`BrokenRecords`
-  slices — so needs partitioning/sharded-collect + a test, not a naive fan-out). No tests exist in
-  this package yet beyond `reconcile_hash_test.go`.
+- [x] **RECONCILE-SERIAL-LOOPS** (2026-07-16, concurrency bug hunt) — ✅ **FIXED 2026-07-16**
+  (branch `perf/reconcile-parallel-loops-2`). Both remaining serial full-library loops in
+  `internal/reconcile/reconcile.go` now run across an `errgroup` pool sized to `runtime.NumCPU()`:
+  (1) `FindBrokenSegmentBooks` — outer per-book loop (dir stat + `GetBookFiles` + per-segment stat +
+  non-dry-run hydrate/`UpdateBook`) sharded by book index (each row touched by one worker → writes
+  never race; only `LibraryState`/`MarkedForDeletion` flip, no secondary-indexed field), `Details`
+  collected in index slots + folded in book order, atomic counters; (2) the `BuildReconcilePreview`
+  path-check — per-book `os.Stat` parallelized, `knownPaths` built in a serial pre-pass, results in
+  index slots so the ordered `brokenBooks`/`BrokenRecords` fold is identical to the sequential build.
+  Output byte-for-byte unchanged. Added the package's first behavioral tests
+  (`reconcile_parallel_test.go`, run under `-race`) asserting order-preservation + exact counts.
 
 - [x] **UPDATEBOOK-STALE-DENORMALIZED-AUTHOR** (2026-07-16, write-path bug hunt) — ✅ **FIXED
   2026-07-16** (branch `fix/update-audiobook-stale-denormalized-author`). `UpdateAudiobook`
