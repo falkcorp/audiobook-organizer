@@ -1,7 +1,7 @@
 // file: internal/deluge/discovery.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-07-07
+// last-edited: 2026-07-16
 //
 // Four-tier matching to decide if a labeled Deluge torrent is already in
 // the library — run in order, stop on first hit:
@@ -68,7 +68,7 @@ func BuildLibraryIndex(store BookLister) LibraryIndex {
 		Paths:  make(map[string]struct{}),
 		Titles: make(map[string]struct{}),
 	}
-	books, err := store.GetAllBooksCore(100000, 0)
+	books, err := store.GetAllBooksCore(0, 0)
 	if err != nil {
 		slog.Warn("deluge discovery failed to load books", "err", err)
 		return idx

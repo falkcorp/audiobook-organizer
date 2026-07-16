@@ -1,5 +1,5 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-07-16
 
@@ -240,7 +240,7 @@ func BuildReconcilePreviewWithProgress(store Store, log logger.Logger) (*Reconci
 
 	// Step 1: Find broken DB records
 	report(0, 1, "Loading all books from database...")
-	books, err := store.GetAllBooksCore(100000, 0)
+	books, err := store.GetAllBooksCore(0, 0)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list books: %w", err)
 	}
@@ -764,7 +764,7 @@ func CleanupDuplicateVersionGroups(store Store, rootDir string, dryRun bool) (*V
 // FindBrokenSegmentBooks finds books whose segment files don't exist on disk
 // and optionally marks them as needs_review.
 func FindBrokenSegmentBooks(store Store, dryRun bool) (*BrokenSegmentResult, error) {
-	allBooks, err := store.GetAllBooksCore(100000, 0)
+	allBooks, err := store.GetAllBooksCore(0, 0)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get books: %w", err)
 	}

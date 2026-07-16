@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.163.0 -->
+<!-- version: 3.164.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-16 -->
 
@@ -8,6 +8,27 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 16, 2026 - fix(maintenance): future-proof remaining whole-library ops against fixed-limit truncation
+
+Follow-up to the same-day truncation fix. Eleven more whole-library operations fetched
+books with a fixed `GetAllBooksCore(100000, 0)` / `(1_000_000, 0)` limit — safe at the
+current ~30K-book library but silently truncating once it grows past the cap. All now
+use the unbounded `GetAllBooksCore(0, 0)` form (semantics locked by the contract test
+added in the prior fix):
+
+- `cmd/seed.go` (purgeSeedBooks), `internal/database/migrations.go` (migration014UpPebble,
+  currently unwired), `internal/reconcile/reconcile.go` (×2: preview builder +
+  FindBrokenSegmentBooks), `internal/deluge/discovery.go` (BuildLibraryIndex),
+  `internal/itunes/service/importer.go` (×3: ITL-update collection + organizeImportedBooks),
+  `internal/itunes/service/path_reconcile.go`, `internal/sweep/sweeper.go`,
+  `internal/maintenance/jobs/generate_itl_tests.go`,
+  `internal/server/handlers/metadata/handler.go` (library-state filter).
+- The two `internal/itunes/backfill.go` sites were left as-is — they are correct
+  offset-cursor loops (`GetAllBooksCore(10000, offset)` terminating on a short/empty page),
+  not single-call truncations.
+
+This closes the `WHOLE-LIBRARY-FIXED-LIMIT` class entirely (live + fragile).
 
 #### July 16, 2026 - fix(maintenance): whole-library ops silently processed only a fixed-limit subset
 
