@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.106.9 -->
+<!-- version: 9.106.10 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-16 -->
 
@@ -846,7 +846,26 @@ SLOG-PROD-VERIFY, DEDUP-CANDIDATE-EXPLOSION).
 
 - 🟢 **Mock Freshness** ✅ FIXED (#1718, 2026-07-01) — pinned mockery to v3.7.1 (CI + Makefile + setup script); v2 could not generate the merged-file `.mockery.yaml`. `make mocks-check` green.
 - 🟢 `TestBackupEndpointsErrors` ✅ FIXED (#1711 — dead `os.Chdir` race removed, 20/20) · `TestScanService_MultiChapterAudiobook` ✅ FIXED (#1713 — missing `WaitForWarmup` in `SetupIntegration`, 20/20). NOTE: a *separate* pre-existing `pebble: closed` shutdown race remains under package-wide `-race` — see `PEBBLE-CLOSED-SHUTDOWN-RACE` in Open Bugs.
-- [ ] **INTERNAL-SERVER-PKG-STALL** (found 2026-07-11, during execution wave 2) — the
+- [~] **INTERNAL-SERVER-PKG-STALL** — ◑ **ROOT-CAUSED 2026-07-16 + leak fixed; structural residual open**
+  (branch `chore/backlog-sweep-jul16`). **It is NOT a deadlock.** Reproduced deterministically with
+  `GOMAXPROCS=2 go test ./internal/server/ -short -race`. The timeout dump shows the *only* running test at
+  the moment of the panic was `TestServerStartGracefulShutdown` at **2s** in — nothing was hung; the package
+  had simply burned the whole budget on the tests before it. Measured: **664 tests, 357s cumulative** at
+  `GOMAXPROCS=2 -race`, with **no pathological test** (slowest = `TestServerStartGracefulShutdown` 13.9s,
+  `TestValidateITunesLibrary` 8.5s, `TestSetupTestServerCleanup_…` 8.5s). Against CI's 600s budget, a
+  CPU-starved runner simply doesn't finish. The "parked on a channel receive in FileIOPool" hint in the
+  original note was a **red herring** — those goroutines are parked (cheap), not deadlocked.
+  **Fixed here:** a real goroutine leak the dump exposed — 414 goroutines at timeout, **352 of them
+  `FileIOPool.worker`** (= ~88 leaked Servers × 4 workers). `NewServer` starts a 4-worker pool and
+  `setupHandlerTestServer` never stopped it; now `t.Cleanup(srv.fileIOPool.Stop)`. (`setupTestServer` /
+  `setupTestServerWithStore` already stopped theirs.)
+  **Residual (structural, needs a decision, NOT a bug):** ~60 direct `NewServer(` calls in the package's tests
+  still leak their pool, and more importantly the package is simply too big to fit CI's 10m under contention.
+  Real options: (a) raise the per-package timeout, (b) split `internal/server` tests into sub-packages, or
+  (c) add a `newTestServer(t, store)` helper and migrate the 60 call sites. Not doing any of the three
+  unilaterally — (a) papers over it, (b)/(c) are wide refactors that want owner buy-in.
+  <!-- original note: -->
+  (found 2026-07-11, during execution wave 2) — the
   `internal/server` top-level test package intermittently stalls to the CI's 10-minute
   `go test -short -race` timeout under concurrent CPU load, with zero `--- FAIL` lines (the run
   just times out, it doesn't fail a specific test). Root-cause hint from observed goroutine dumps:
@@ -965,7 +984,11 @@ for untagged tracks. Scanner uses folder name as book title for no-tag groups.
 - [x] **CONS-11** **Track D4** — manual-import UI button (op `library.import` already merged/deployed; no frontend yet). Add a button/dialog on the Library page that POSTs `{def_id:"library.import", params:{path}}` to `/api/v1/operations/v2` and polls. ~Lowest-effort remaining UI task. — ✅ verified done 2026-07-01: Library.tsx manualImport dialog + api.startLibraryImport
 - [x] **CONS-12** = **DEDUP-INTRO-1** (see Dedup UX section) — Audible intro/outro false-positive dedup candidates. — ✅ verified done 2026-07-01: = DEDUP-INTRO-1 (done)
 - [x] **CONS-13** = **CFG-2 Phase D** — retire flat-key compat shim in `internal/config/update_service.go` (low priority; after 1+ wk prod stability). — ✅ done 2026-07-10 (TASK-01): removed legacyRemapGroup/configRemapGroups/applyLegacyRemaps + their tests; kept remapScheduledKeys + JSON round-trip; added a one-release detection warn-log (retiredLegacyFlatKeys).
-- [ ] **CFG-2-D-LOG** — remove the `retiredLegacyFlatKeys` detection warn-log from `internal/config/update_service.go` after one stable release with zero flat-only-key warnings in prod logs (added by TASK-01).
+- [x] **CFG-2-D-LOG** — ✅ **DONE 2026-07-16** (branch `chore/backlog-sweep-jul16`). Gate verified before
+  removing: `journalctl -u audiobook-organizer --since '30 days ago' | grep -c 'legacy flat config key'` → **0**
+  across multiple stable releases, so no client has sent a retired flat key. Removed the 54-entry
+  `retiredLegacyFlatKeys` var + its detection loop from `internal/config/update_service.go`.
+  `remapScheduledKeys` (the deeper two-level `scheduled_*` nesting, owned by INIT-6/WF-3) intentionally stays.
 
 ### Metadata-repair track (root causes of the dedup candidate explosion) — investigated 2026-06-19
 
@@ -978,7 +1001,18 @@ for untagged tracks. Scanner uses folder name as book title for no-tag groups.
 - [x] **CONS-15** **(D3-emitter)** part-vs-whole guard in the exact dedup emitter — defense-in-depth so a part can't pair 100% against a whole even if metadata is wrong. **Deprioritized** (fixing CONS-16/17 removes most of the cause).  ✅ shipped #1712 (agent-task sweep 2026-07-01)
 - [x] **CONS-16** ✅ **Duration-unit bug** — FIXED. (a) Extracted `trackDurationSeconds()` in `internal/itunes/service/importer.go`; routed all 3 write sites (now lines ~311/655/703) through it with `/1000`; added `trackDurationSeconds` unit test + a seconds assertion in the integration test (which previously mirrored the bug). (b) New dry-run-gated maintenance op `maintenance.duration-backfill` heals existing inflated rows. **Detection changed from the planned filesize/bitrate formula** — the iTunes importer never populates `BitrateKbps` (the `itunes.Track` struct has no BitRate field), so those rows have `BitrateKbps=0`. Replaced with an **implied-bitrate** test (millis if duration-as-seconds implies <4 kbps, with a 3 Mbps upper sanity bound) that needs only `FileSize` and never flags genuine low-bitrate audiobooks (advisor-reviewed: a 16 kbps floor would have corrupted 12 kbps spoken-word books). Per book: corrects each file then re-runs `RecomputeBookAggregates`. Dry-run default — no prod data touched until run with `dryRun=false`. Shipped in PR (branch `fix/cons16-duration-units`).
 - [x] **CONS-17** ✅ **Multi-file title leak** — FIXED, both paths. (1) **iTunes** `buildBookFromAlbumGroup`: empty album on a multi-file group now derives the title from the common parent **folder** before falling to the per-chapter track Name (scoped to multi-file; single-file keeps stripped track Name). (2) **Filesystem scanner**: sequential multi-file groups (`SegmentFiles>1`, `FilePath=segs[0]`) are now routed through `AssembleBookMetadata` via a condition change at `scanner.go:670` (`IsGenericPartFilename(filePath) || len(SegmentFiles)>1`) — NOT by setting `FilePath=dir` (which would drop the detected `SegmentFiles` subset and rescan the whole dir). Segments still created at the saveBook step. Tests: `TestBuildBookFromAlbumGroup_EmptyAlbumUsesFolder`, `TestAssembleBookMetadata_GenericChapterUsesFolder`. Shipped in PR (branch `fix/cons17-title-leak`).
-- [ ] **CONS-17b** **(follow-up, residual)** Multi-file group whose first chapter has a *non-generic* tag title (e.g. "Big Finish Ident") still prefers that tag over the folder, because `resolveTitle` (`assemble.go:88`) trusts non-generic tag titles. Robust fix needs a **"do all chapters agree on their `tag.Title`?"** discriminator (agree → it's the book title; disagree → fall to folder). ⚠️ Album-preference was **rejected**: album frequently equals the *series* name (`assemble.go:139` already notes this), so preferring album would replace correct titles with series names. Needs a small design before code. **Partially done (CONS-FRAG):** the iTunes importer path now implements exactly this all-chapters-agree discriminator (`agreedStrippedTitle`); the residual is the **filesystem scanner** `resolveTitle` path.
+- [x] **CONS-17b** ✅ **DONE 2026-07-16** (branch `chore/backlog-sweep-jul16`). The filesystem scanner now
+  has the same all-chapters-agree discriminator the iTunes path got in CONS-FRAG. `resolveTitle` takes
+  `dirPath` + supported exts (no caller signature churn — `AssembleBookMetadata` already had `dirPath`), and
+  `agreedChapterTitle` reads the chapters' tag titles: all strip to the same non-empty title → that's the book
+  title (`tag.Title(agreed)`, e.g. "Aces Abroad - Part 1…3" → "Aces Abroad"); they disagree → fall to the
+  folder. Single-file books keep trusting their tag outright. **Cost bounded** (the iTunes twin checks every
+  track for free off the XML; here each check is a real tag read): capped at a 5-file sample with early-exit on
+  the first disagreement, and only entered for multi-file books whose first tag is non-generic — the exact bug
+  case. Album-preference stayed rejected (album ≈ series name). 2 regression tests, both verified to FAIL
+  without the fix (pre-fix title = "Big Finish Ident"). Mirrors `agreedStrippedTitle` — keep the two in sync.
+  <!-- original: -->
+  Multi-file group whose first chapter has a *non-generic* tag title (e.g. "Big Finish Ident") still prefers that tag over the folder, because `resolveTitle` (`assemble.go:88`) trusts non-generic tag titles. Robust fix needs a **"do all chapters agree on their `tag.Title`?"** discriminator (agree → it's the book title; disagree → fall to folder). ⚠️ Album-preference was **rejected**: album frequently equals the *series* name (`assemble.go:139` already notes this), so preferring album would replace correct titles with series names. Needs a small design before code. **Partially done (CONS-FRAG):** the iTunes importer path now implements exactly this all-chapters-agree discriminator (`agreedStrippedTitle`); the residual is the **filesystem scanner** `resolveTitle` path.
 - [x] **CONS-FRAG** ✅ **iTunes book fragmentation** — FIXED. `groupTracksByAlbum` keyed `artist+"|"+album`, fragmenting (1) multi-author anthologies (constant album, per-story Artist → one book per author, e.g. "Wild Cards I") and (2) empty-album chapter files whose " - Part NN" suffix wouldn't strip ("Aces Abroad - Part 19"). Verified against prod via `/external-ids` (both iTunes-PID-linked) + ffprobe. Now keys on **album alone** when present, `name:<artist>|<stripped>` when empty, with a track-number-repeat **over-merge guard** (`splitOverMergedGroup`) protecting series-as-album. `titleutil.StripChapterSuffix` strips bare `- Part NN`/`- Chapter N`/`- CD N` (excludes `Book N`/`Volume N`). CONS-17b agree-title discriminator applied to the iTunes path. Forward-only; tests in `grouping_test.go` + `strip_test.go`. ⚠️ Existing fragmented+organized books need a **separate dry-run-gated re-group op** (un-organize = destructive; surface before applying — see CONS-10).
 - [x] **CONS-FRAG-HEAL** ✅ **built + dry-run → library already correctly grouped (no mass heal needed).** Dry-run-gated `maintenance.itunes-regroup` op (PRs #1542–#1546): in-place re-group via per-PID `ReassignExternalID` + `MoveBookFilesToBook` (NOT delete+reimport — canary proved purge tombstones PIDs; `.claude/notes/itunes-heal-canary-findings.md`); frozen deterministic exclusive-claim plan. **Prod dry-run: consolidate=0, fresh=0 → ZERO fragmentation/over-merge remain.** Completeness: complete-groups≈11,000, partial≈712, single-file-in-album=554. **Duration-backfill applied (17,684 files / 1,210 books ms→s)** then duration-bucketed the 554: <15min=7 (anthology pieces, correct), 15-90min=181 (short books), ≥90min=366 (complete books, false alarm). ⇒ **No orphaned-chapter problem; grouping healthy.** `dryRun:false` would change ~nothing (only 173 entangled groups, skipped). Residual (separate, NOT auto-run as unsafe/unclear): 173 entangled-would-move (task: manual/v2); 10,374 unresolved PIDs = import gap (benign, complete books present); **~383,902 stale dedup candidates** computed pre-fix — next workstream is dedup re-detection/purge to clear the original 6/47 false-match backlog.
 - [x] **CONS-FRAG-2** **(follow-up)** A newly-merged multi-file iTunes book whose chapter files are scattered across folders gets `Book.FilePath` = their common parent dir. `organizeOneBook` calls only the single-file `OrganizeBook`, which **safely refuses a directory `FilePath`** (early return at `organizer.go:98`, no file move) — so the book stays `imported` instead of organizing. Non-destructive but incomplete: route multi-file books (BookFiles>1) to `OrganizeBookDirectory(book, segmentPaths)` in `organizeOneBook`. BookFiles already carry correct per-track paths.  ✅ shipped #1709 (agent-task sweep 2026-07-01)
@@ -1097,7 +1131,8 @@ for untagged tracks. Scanner uses folder name as book title for no-tag groups.
 - [ ] **WF-3** Introduce a persisted **`Workflow`** object = enable/disable/schedule-able composition (DAG/ordered) of registered ops. Seed built-in workflows from today's scheduled ops. Collapse `scheduled_*` + `dedup_embeddings_enabled` flags into workflow state. Built-in workflows auto-enabled; user-added start **disabled** until explicitly enabled.
 - [ ] **WF-4** Registration-time dependency checks: refuse to register an action that invokes another plugin's actions without declaring the dependency (best-effort runtime check — true static isolation isn't feasible with Go compile-time plugin registration).
 - [ ] **WF-5** **UI workflow builder** — LAST, once the backend model is proven (smart-home / CI-CD-style composition). Biggest single cost; treat as its own product surface.
-- [ ] **WF-6** (Re-evaluate only) adopt `go-workflows` *iff* durable mid-run crash recovery becomes a hard requirement; (re-evaluate only) extract to a standalone Go package *iff* the model stabilizes and a second consumer wants it.
+- [-] **WF-6** — ⛔ **NOT DOING (2026-07-16): this is a trigger condition, not work.** Both halves are self-declared "(re-evaluate only) *iff*" — adopt `go-workflows` iff durable mid-run crash recovery becomes a hard requirement; extract a standalone package iff a second consumer appears. Neither condition holds, so there is nothing to build. Re-open only when a condition actually fires. Original text:
+  (Re-evaluate only) adopt `go-workflows` *iff* durable mid-run crash recovery becomes a hard requirement; (re-evaluate only) extract to a standalone Go package *iff* the model stabilizes and a second consumer wants it.
 
 ---
 
@@ -1319,7 +1354,8 @@ Plan: [`docs/plans/2026-06-13-dedup-exact-gate-and-dataset.md`](docs/plans/2026-
 
 ## 📚 Project Documentation (TODO — not yet done)
 
-- [ ] **DOCS-1** [hold] Write comprehensive system documentation for `falkcorp/audiobook-organizer` into `docs/` — full process graphs, architecture diagrams, data flow, component inventory, operations runbooks, incident history. Target: ≥9 files, ≥7 Mermaid diagrams (flowchart, sequence, state machine, Gantt). Model after `falkcorp/burndown-tasks/docs/` (PR #73, 2216 lines). Invoke as a dedicated documentation subagent: "write full process graphs, literally all the documentation you can write. The more graphs and charts the better."  <!-- 2026-07-01: ℹ️ quantitative bar already exceeded (418 md files, 59 mermaid); a single cohesive burndown-style deliverable is the only residual. -->
+- [-] **DOCS-1** — ⛔ **NOT DOING (2026-07-16): the bar it sets is already met.** The item's own 2026-07-01 note concedes it: the repo has **418 markdown files and 59 mermaid diagrams**, well past the "≥9 files, ≥7 diagrams" target modelled on burndown-tasks. The only residual was "one cohesive burndown-style deliverable" — a re-packaging of docs that already exist, with no consumer asking for it. Writing hundreds more pages of agent-generated prose has a real maintenance cost (doc rot) against no demand. Re-open if a specific audience needs a specific document. Original text:
+  [hold] Write comprehensive system documentation for `falkcorp/audiobook-organizer` into `docs/` — full process graphs, architecture diagrams, data flow, component inventory, operations runbooks, incident history. Target: ≥9 files, ≥7 Mermaid diagrams (flowchart, sequence, state machine, Gantt). Model after `falkcorp/burndown-tasks/docs/` (PR #73, 2216 lines). Invoke as a dedicated documentation subagent: "write full process graphs, literally all the documentation you can write. The more graphs and charts the better."  <!-- 2026-07-01: ℹ️ quantitative bar already exceeded (418 md files, 59 mermaid); a single cohesive burndown-style deliverable is the only residual. -->
 
 ---
 
@@ -1551,10 +1587,12 @@ Copy + pause-on-hover in #1182.
   Low priority; defer until profiler shows actual cost.
 - [x] **MAYDEPLOY-H7** [hold] — Cache `isProtectedPath` / `GetAllImportPaths`  ✅ shipped #1725 (agent-task sweep 2026-07-01)
   with TTL or mutation invalidation. Low priority (~10 rows).
-- [ ] **MAYDEPLOY-I1** [hold] — Verify D1 (`DEDUP_CHROMEM_LAZY`) and D2  <!-- 2026-07-01: ⏳ duplicate of I1 — code shipped; prod verification remains. -->
+- [x] **MAYDEPLOY-I1** — ✅ **CLOSED 2026-07-16 as a DUPLICATE of I1** (same D1/`DEDUP_CHROMEM_LAZY` + D2 prod-pprof verification, tracked twice). Track it under **I1** only. Original text:
+  [hold] — Verify D1 (`DEDUP_CHROMEM_LAZY`) and D2  <!-- 2026-07-01: ⏳ duplicate of I1 — code shipped; prod verification remains. -->
   (`NewDB()`) shipped behaviour matches design. Needs live prod
   observation (`/system/status`, heap dump).
-- [ ] **MAYDEPLOY-I6** [hold] — Re-run heap audit with live pprof from prod  <!-- 2026-07-01: ⏳ duplicate of I6 — prod pprof measurement. -->
+- [x] **MAYDEPLOY-I6** — ✅ **CLOSED 2026-07-16 as a DUPLICATE of I6** (same heap-audit-rerun, tracked twice). Track it under **I6** only. Original text:
+  [hold] — Re-run heap audit with live pprof from prod  <!-- 2026-07-01: ⏳ duplicate of I6 — prod pprof measurement. -->
   via `pprof_endpoint`. Replace structural estimates in
   `docs/perf-audit-2026-05-29-heap-breakdown.md` with measured bytes.
   Target: baseline ~18 GB → ~10 GB.
@@ -2557,8 +2595,10 @@ next picks up. Full plan in
 
 - [ ] **AI-RESP-A** [hold] Migrate `metadata_llm_review.go` (single call) — design spec linked above
 - [ ] **AI-RESP-B** [hold] Migrate `openai_parser.go` single-shot calls (6 sites) — depends on A clean
-- [ ] **AI-RESP-C** [hold] **DO NOT MIGRATE EMBEDDINGS** — `/v1/embeddings` stays as-is. This entry is here only to make the bot aware not to touch `embedding_client.go`.
-- [ ] **AI-RESP-D** [hold] Migrate Batches API (`openai_batch.go`) once OpenAI supports `/v1/responses` URLs in batch lines — verify endpoint allowlist before pickup
+- [x] **AI-RESP-C** — ✅ **CLOSED 2026-07-16: NOT A TASK.** This entry is a standing *guardrail note* ("don't touch `embedding_client.go`"), not work to be done, so it should never have sat in the open-item count. The instruction still stands and is preserved below; the checkbox is closed so the backlog reflects real work. Original text:
+  [hold] **DO NOT MIGRATE EMBEDDINGS** — `/v1/embeddings` stays as-is. This entry is here only to make the bot aware not to touch `embedding_client.go`.
+- [-] **AI-RESP-D** — ⛔ **NOT DOING (2026-07-16): externally blocked, not schedulable.** Its own precondition is "*once* OpenAI supports `/v1/responses` URLs in batch lines" — that's a vendor dependency we don't control, so it can't be planned or estimated. Re-open when OpenAI ships it. Original text:
+  [hold] Migrate Batches API (`openai_batch.go`) once OpenAI supports `/v1/responses` URLs in batch lines — verify endpoint allowlist before pickup
 - [ ] **AI-RESP-E** [hold] Migrate `aijobs/aijobs.go` multi-turn flows — adds `last_response_id` to job state; biggest token win
 - [ ] **AI-RESP-F** [hold] Cleanup: delete remaining Chat Completions call sites in `internal/ai/`
 
@@ -2735,13 +2775,15 @@ since it was last edited on 2026-04-11).
 
 ### 4. Architecture / Future-Proofing — [section](docs/backlog-2026-04-10.md#4-architecture--future-proofing)
 
-- [ ] **4.1** [hold] PostgreSQL research track (**XL**)
+- [-] **4.1** — ⛔ **NOT DOING (2026-07-16): settled architecture.** PebbleDB is the committed production store ("PebbleDB is the only production DB"); a Postgres migration is an **XL** research track with no driver — no capability gap, scale wall, or incident points at the store. Re-open only if a concrete requirement Pebble can't meet appears. Original text:
+  [hold] PostgreSQL research track (**XL**)
 - [x] **4.2** Split the monolithic `server.go` (commit `c858ceb`)
 - [x] **4.3** Move write-back queue to a durable outbox (**M**) — #344
 - [x] **4.4** Replace `database.GlobalStore` package var with DI (**L**) — complete (#280-#291)
 - [x] **4.5** Property-based tests for dedup engine (expanded to full codebase) (**M**) — complete (#357, #359, #361, #362, #363, #365, #366, #367, #368 — ~57 property tests across database / search / server / auth)
 - [x] **4.6** Chaos tests for the embedding store under shutdown (**M**) — 7 tests: double-close, ops-after-close, concurrent write/read during close, mixed access, durability, WAL checkpoint
-- [ ] **4.7** [hold] Per-workload store evaluation: Pebble vs SQLite vs PostgreSQL vs Go-native NoSQL (**L** research)
+- [-] **4.7** — ⛔ **NOT DOING (2026-07-16): same reason as 4.1, and it presupposes it.** Re-evaluating the store per workload is **L** research whose realistic outcome is "keep Pebble" — the store isn't a bottleneck; the measured problems this month were fixed-limit truncation, stale mocks, and single-core loops, none of them storage-engine choices. Original text:
+  [hold] Per-workload store evaluation: Pebble vs SQLite vs PostgreSQL vs Go-native NoSQL (**L** research)
 - [~] **4.8** Split the `database.Store` interface (ISP refactor) (**L**) — foundation + 3 proof-points shipped (#372, #376, #379, #380, #381, #382); ~38-file sweep + 18-file noop cleanup remain per [`docs/superpowers/plans/2026-04-17-store-iface-sweep.md`](docs/superpowers/plans/2026-04-17-store-iface-sweep.md)
 - [x] **4.9** Eliminate remaining package globals (DI Phase 2) (**M**) — 10 globals replaced with interface injection + Server fields (#386)
 - [ ] **4.10** [hold] Service-layer unit tests with mock stores (**L**) — leverage DI + ISP to unit-test AudiobookService, OrganizeService, MetadataFetchService, MergeService with MockStore; test error paths, edge cases, and business logic in isolation without HTTP or real DB  <!-- 2026-07-01: ◑ PARTIAL: unit tests exist for AudiobookService/OrganizeService/MetadataFetchService; MergeService lacks a dedicated mock-store unit-test file. -->
@@ -3053,7 +3095,8 @@ Activity page mobile layout, adaptive refresh, version vs snapshot UI polish, co
 
 ## ⚠️ Automated Findings
 
-- [ ] **DEDUP-CANDIDATE-EXPLOSION-2026-06-18** The `exact` dedup layer has **387,597 pending**  <!-- 2026-07-01: ⏳ = CONS-10 — prod backfill/investigation of the exact-candidate backlog; not a code deliverable. -->
+- [x] **DEDUP-CANDIDATE-EXPLOSION-2026-06-18** — ✅ **CLOSED 2026-07-16 as a DUPLICATE of CONS-10** (the 2026-07-01 note already said "= CONS-10"). The exact-candidate backlog is one workstream, gated on the prod duration-backfill + re-scan and an explicit apply decision — tracked under **CONS-10** only. Original text:
+  The `exact` dedup layer has **387,597 pending**  <!-- 2026-07-01: ⏳ = CONS-10 — prod backfill/investigation of the exact-candidate backlog; not a code deliverable. -->
   candidates (of 388,998 total; acoustid 1,028 / embedding 164 / llm 209 are sane) against only
   **49,573 final books** (`GET /api/v1/audiobooks` count) — yet memdb holds **401,968 raw `books`
   rows**. The exact emitters (`checkExactTitle` / `checkExactMetadataSourceHash` /

@@ -1,7 +1,7 @@
 // file: internal/config/update_service.go
-// version: 3.10.0
+// version: 3.11.0
 // guid: f6g7h8i9-j0k1-l2m3-n4o5-p6q7r8s9t0u1
-// last-edited: 2026-07-10
+// last-edited: 2026-07-16
 
 package config
 
@@ -67,68 +67,6 @@ var secretFieldKeys = []string{
 // immutableFieldKeys cannot be changed at runtime and are rejected if present.
 var immutableFieldKeys = []string{"database_type", "enable_sqlite"}
 
-// retiredLegacyFlatKeys lists the flat config keys whose flat→nested remapping
-// shim was retired in CFG-2 Phase D (#1536, CONS-13). The frontend has sent nested
-// keys since PR #1514; these flat forms are no longer remapped and are dropped by
-// the JSON round-trip (no matching top-level json tag). UpdateConfig warn-logs any
-// that still arrive so a lost write is observable rather than silent. This list —
-// and its warn-log — should be removed after one stable release with zero warnings
-// in prod (follow-up CFG-2-D-LOG in TODO.md).
-var retiredLegacyFlatKeys = []string{
-	"embedding_enabled",
-	"embedding_model",
-	"embedding_dimensions",
-	"embedding_base_url",
-	"vector_index_backend",
-	"dedup_book_high_threshold",
-	"dedup_book_low_threshold",
-	"dedup_author_high_threshold",
-	"dedup_author_low_threshold",
-	"dedup_auto_merge_enabled",
-	"dedup_embeddings_enabled",
-	"dedup_llm_auto_merge_high_confidence",
-	"dedup_on_import_via_scheduler",
-	"dedup_review_model",
-	"metadata_embedding_scoring_enabled",
-	"metadata_embedding_min_score",
-	"metadata_embedding_best_match_min",
-	"metadata_llm_scoring_enabled",
-	"metadata_llm_rerank_epsilon",
-	"metadata_llm_rerank_top_k",
-	"write_backup_before_tag_write",
-	"itunes_sync_enabled",
-	"itunes_sync_interval",
-	"itl_write_back_enabled",
-	"itunes_library_write_path",
-	"itunes_library_read_path",
-	"itunes_auto_write_back",
-	"itunes_path_trim_enabled",
-	"itunes_windows_root_path",
-	"itunes_media_root",
-	"maintenance_window_enabled",
-	"maintenance_window_start",
-	"maintenance_window_end",
-	"maintenance_window_dedup_refresh",
-	"maintenance_window_series_prune",
-	"maintenance_window_author_split",
-	"maintenance_window_tombstone_cleanup",
-	"maintenance_window_reconcile",
-	"maintenance_window_purge_deleted",
-	"maintenance_window_purge_old_logs",
-	"maintenance_window_db_optimize",
-	"maintenance_window_library_scan",
-	"maintenance_window_library_organize",
-	"maintenance_window_metadata_refresh",
-	"maintenance_window_library_size_refresh",
-	"maintenance_window_acoustid_online_lookup",
-	"acoustid_online_lookup_nightly_limit",
-	"auto_update_enabled",
-	"auto_update_channel",
-	"auto_update_check_minutes",
-	"auto_update_window_start",
-	"auto_update_window_end",
-}
-
 // UpdateConfig applies a config update payload to AppConfig and persists it.
 //
 // Architecture: non-secret fields are applied via JSON round-trip onto AppConfig.
@@ -179,16 +117,6 @@ func (us *UpdateService) UpdateConfig(payload map[string]any) (int, map[string]a
 	}
 	for _, k := range secretFieldKeys {
 		delete(filtered, k)
-	}
-
-	// Detection-only (CFG-2 Phase D, #1536/CONS-13): the flat→nested remap shim was
-	// retired — the frontend sends nested keys. Any flat-only key that still arrives
-	// is dropped by the JSON round-trip below (no matching top-level json tag); warn
-	// so a lost write is observable rather than silent. Log only — no remapping.
-	for _, k := range retiredLegacyFlatKeys {
-		if _, ok := filtered[k]; ok {
-			slog.Warn("legacy flat config key received; no longer remapped, dropped", "key", k)
-		}
 	}
 
 	// remapScheduledKeys handles the deeper two-level scheduled_* nesting that the

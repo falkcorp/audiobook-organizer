@@ -1,5 +1,5 @@
 // file: internal/metadata/assemble_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2c3d4e5f-6a7b-8c9d-0e1f-2a3b4c5d6e7f
 
 package metadata
@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/stretchr/testify/mock"
 )
 
@@ -28,7 +29,7 @@ func newAssembleExtractorStub(t *testing.T, meta Metadata, err error) *mockMetad
 func TestResolveTitlePrefersTag(t *testing.T) {
 	tag := &Metadata{Title: "The Great Book"}
 	fm := &FolderMetadata{Title: "Folder Title"}
-	title, source := resolveTitle(tag, fm, "/some/path")
+	title, source := resolveTitle(tag, fm, "/some/path", "", nil)
 	if title != "The Great Book" || source != "tag.Title" {
 		t.Errorf("got title=%q source=%q, want 'The Great Book' / 'tag.Title'", title, source)
 	}
@@ -37,7 +38,7 @@ func TestResolveTitlePrefersTag(t *testing.T) {
 func TestResolveTitleSkipsGenericTag(t *testing.T) {
 	tag := &Metadata{Title: "Part 1"}
 	fm := &FolderMetadata{Title: "Real Book Title"}
-	title, source := resolveTitle(tag, fm, "/some/path")
+	title, source := resolveTitle(tag, fm, "/some/path", "", nil)
 	if title != "Real Book Title" || source != "folder.Title" {
 		t.Errorf("got title=%q source=%q, want 'Real Book Title' / 'folder.Title'", title, source)
 	}
@@ -78,10 +79,91 @@ func TestAssembleBookMetadata_GenericChapterUsesFolder(t *testing.T) {
 	}
 }
 
+// newPerFileExtractorStub returns a MetadataExtractor whose result depends on
+// the file's base name, so a test can give each chapter its own tag title.
+func newPerFileExtractorStub(t *testing.T, byBase map[string]Metadata) *mockMetadataExtractorInternal {
+	t.Helper()
+	m := newMockMetadataExtractorInternal(t)
+	m.EXPECT().ExtractMetadata(mock.Anything).RunAndReturn(func(path string) (Metadata, error) {
+		return byBase[filepath.Base(path)], nil
+	}).Maybe()
+	return m
+}
+
+// withChapterFiles builds <base>/<author>/<book>/ containing the named files and
+// points config at .mp3 so the CONS-17b agree-check can enumerate them.
+func withChapterFiles(t *testing.T, names ...string) (bookDir, firstChapter string) {
+	t.Helper()
+	prevExts := config.AppConfig.SupportedExtensions
+	config.AppConfig.SupportedExtensions = []string{".mp3"}
+	t.Cleanup(func() { config.AppConfig.SupportedExtensions = prevExts })
+
+	bookDir = filepath.Join(t.TempDir(), "Douglas Adams", "The Hitchhikers Guide")
+	if err := os.MkdirAll(bookDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range names {
+		if err := os.WriteFile(filepath.Join(bookDir, n), []byte("not a real mp3"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return bookDir, filepath.Join(bookDir, names[0])
+}
+
+// TestAssembleBookMetadata_DisagreeingChapterTagsUseFolder is the CONS-17b
+// regression guard. The first chapter's tag title ("Big Finish Ident") is NOT
+// generic, so isGenericTitle doesn't catch it and the pre-fix resolveTitle
+// adopted it as the whole book's title — leaking a per-chapter ident into
+// Book.Title and colliding across every book with that ident. Because the
+// chapters disagree on their stripped tag titles, the title must come from the
+// folder instead.
+func TestAssembleBookMetadata_DisagreeingChapterTagsUseFolder(t *testing.T) {
+	bookDir, firstChapter := withChapterFiles(t, "chapter01.mp3", "chapter02.mp3")
+
+	SetMetadataExtractor(newPerFileExtractorStub(t, map[string]Metadata{
+		"chapter01.mp3": {Title: "Big Finish Ident", Artist: "Douglas Adams"},
+		"chapter02.mp3": {Title: "The Hitchhikers Guide - Part 2", Artist: "Douglas Adams"},
+	}))
+	defer func() { SetMetadataExtractor(nil) }()
+
+	bm, err := AssembleBookMetadata(bookDir, firstChapter, 2, 0)
+	if err != nil {
+		t.Fatalf("AssembleBookMetadata error: %v", err)
+	}
+	if bm.Title != "The Hitchhikers Guide" || bm.TitleSource != "folder.Title" {
+		t.Errorf("Title = %q (source %q), want 'The Hitchhikers Guide' / 'folder.Title' — "+
+			"a per-chapter ident must not become the book title", bm.Title, bm.TitleSource)
+	}
+}
+
+// TestAssembleBookMetadata_AgreeingChapterTagsWin is the positive half of
+// CONS-17b: when every chapter strips to the SAME title, that IS the book title
+// and must beat the folder name (mirrors the iTunes agreedStrippedTitle case,
+// e.g. "Aces Abroad - Part 1…14" → "Aces Abroad").
+func TestAssembleBookMetadata_AgreeingChapterTagsWin(t *testing.T) {
+	bookDir, firstChapter := withChapterFiles(t, "chapter01.mp3", "chapter02.mp3", "chapter03.mp3")
+
+	SetMetadataExtractor(newPerFileExtractorStub(t, map[string]Metadata{
+		"chapter01.mp3": {Title: "Aces Abroad - Part 1", Artist: "George R. R. Martin"},
+		"chapter02.mp3": {Title: "Aces Abroad - Part 2", Artist: "George R. R. Martin"},
+		"chapter03.mp3": {Title: "Aces Abroad - Part 3", Artist: "George R. R. Martin"},
+	}))
+	defer func() { SetMetadataExtractor(nil) }()
+
+	bm, err := AssembleBookMetadata(bookDir, firstChapter, 3, 0)
+	if err != nil {
+		t.Fatalf("AssembleBookMetadata error: %v", err)
+	}
+	if bm.Title != "Aces Abroad" || bm.TitleSource != "tag.Title(agreed)" {
+		t.Errorf("Title = %q (source %q), want 'Aces Abroad' / 'tag.Title(agreed)'",
+			bm.Title, bm.TitleSource)
+	}
+}
+
 func TestResolveTitleFallsBackToFilename(t *testing.T) {
 	tag := &Metadata{Title: "Chapter 3"}
 	fm := &FolderMetadata{}
-	title, source := resolveTitle(tag, fm, "/audiobooks/My Novel.mp3")
+	title, source := resolveTitle(tag, fm, "/audiobooks/My Novel.mp3", "", nil)
 	if title != "My Novel" || source != "filename" {
 		t.Errorf("got title=%q source=%q, want 'My Novel' / 'filename'", title, source)
 	}
@@ -89,7 +171,7 @@ func TestResolveTitleFallsBackToFilename(t *testing.T) {
 
 func TestResolveTitleNoSources(t *testing.T) {
 	fm := &FolderMetadata{}
-	title, source := resolveTitle(nil, fm, "")
+	title, source := resolveTitle(nil, fm, "", "", nil)
 	if title != "" || source != "unknown" {
 		t.Errorf("got title=%q source=%q, want '' / 'unknown'", title, source)
 	}

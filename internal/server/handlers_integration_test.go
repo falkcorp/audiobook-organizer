@@ -1,7 +1,7 @@
 // file: internal/server/handlers_integration_test.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-07-11
+// last-edited: 2026-07-16
 
 package server
 
@@ -217,7 +217,14 @@ func setupHandlerTestServer(t *testing.T) *Server {
 		database.SetGlobalStore(oldStore)
 	})
 
-	return NewServer(mockDB)
+	srv := NewServer(mockDB)
+	// INTERNAL-SERVER-PKG-STALL: NewServer starts a 4-worker FileIOPool. Without
+	// this cleanup every test that builds a server leaks those workers for the
+	// rest of the binary's life — a timed-out run's dump showed 352 parked
+	// FileIOPool.worker goroutines (≈88 leaked servers), which is pure race-
+	// detector and scheduler overhead piled onto an already-slow package.
+	t.Cleanup(srv.fileIOPool.Stop)
+	return srv
 }
 
 // TestListWorks_Success tests the listWorks handler with successful response
