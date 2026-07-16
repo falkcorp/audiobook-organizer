@@ -1,7 +1,7 @@
 // file: internal/itunes/service/path_reconcile_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-07-07
+// last-edited: 2026-07-16
 
 package itunesservice
 
@@ -52,7 +52,7 @@ func TestPathReconcilerReconcile_NilStore(t *testing.T) {
 
 func TestPathReconcilerReconcile_EmptyLibrary(t *testing.T) {
 	m := dbmocks.NewMockStore(t)
-	m.EXPECT().GetAllBooksCore(100000, 0).Return([]database.BookCore{}, nil).Once()
+	m.EXPECT().GetAllBooksCore(0, 0).Return([]database.BookCore{}, nil).Once()
 	m.EXPECT().DeleteOperationState("op-2").Return(nil).Once()
 
 	r := newPathReconciler(m, nil)
@@ -73,7 +73,7 @@ func TestPathReconcilerReconcile_SkipsNonITunesBooks(t *testing.T) {
 	for i := range books {
 		cores[i] = books[i].Core()
 	}
-	m.EXPECT().GetAllBooksCore(100000, 0).Return(cores, nil).Once()
+	m.EXPECT().GetAllBooksCore(0, 0).Return(cores, nil).Once()
 	m.EXPECT().GetBookFiles("b1").Return([]database.BookFile{}, nil).Once()
 	m.EXPECT().DeleteOperationState("op-3").Return(nil).Once()
 
@@ -88,7 +88,7 @@ func TestPathReconcilerReconcile_SkipsNonITunesBooks(t *testing.T) {
 
 func TestPathReconcilerReconcile_LoadBooksError(t *testing.T) {
 	m := dbmocks.NewMockStore(t)
-	m.EXPECT().GetAllBooksCore(100000, 0).Return(nil, assert.AnError).Once()
+	m.EXPECT().GetAllBooksCore(0, 0).Return(nil, assert.AnError).Once()
 
 	r := newPathReconciler(m, nil)
 	err := r.Reconcile(context.Background(), "op-4", noopProgress{})
@@ -139,7 +139,7 @@ func TestPathReconcilerReconcile_ParallelOutputMatchesSerial(t *testing.T) {
 	for i := range books {
 		prCores[i] = books[i].Core()
 	}
-	m.EXPECT().GetAllBooksCore(100000, 0).Return(prCores, nil).Once()
+	m.EXPECT().GetAllBooksCore(0, 0).Return(prCores, nil).Once()
 
 	// Expect GetBookFiles calls for each book.
 	// With parallelization, the order is non-deterministic, so use RunFn for dynamic matching.
