@@ -1,5 +1,5 @@
 // file: internal/metadata/assemble.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1b2c3d4e-5f6a-7b8c-9d0e-1f2a3b4c5d6e
 
 package metadata
@@ -10,7 +10,9 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/titleutil"
 )
 
 // AssembledMetadata is the combined, priority-resolved metadata for an audiobook.
@@ -62,7 +64,7 @@ func AssembleBookMetadata(dirPath, firstFilePath string, fileCount int, totalDur
 		}
 	}
 
-	bm.Title, bm.TitleSource = resolveTitle(tagMeta, fm, firstFilePath)
+	bm.Title, bm.TitleSource = resolveTitle(tagMeta, fm, firstFilePath, dirPath, config.AppConfig.SupportedExtensions)
 	bm.Authors, bm.AuthorSource = resolveAuthors(tagMeta, fm)
 	bm.SeriesName, bm.SeriesPosition, bm.SeriesSource = resolveSeries(tagMeta, fm)
 	bm.Narrator, bm.NarratorSource = resolveNarrator(tagMeta, fm)
@@ -85,12 +87,81 @@ func AssembleBookMetadata(dirPath, firstFilePath string, fileCount int, totalDur
 	return bm, nil
 }
 
-func resolveTitle(tag *Metadata, fm *FolderMetadata, firstFilePath string) (string, string) {
+// agreedTagTitleSample bounds how many chapter files the CONS-17b agree-title
+// discriminator reads. The iTunes twin (agreedStrippedTitle) can check every
+// track for free — track names come from the library XML — but here each check
+// is a real tag read off disk, so cap it. A disagreement almost always shows on
+// the second file (chapter titles differ per chapter), and the loop early-exits
+// the moment two disagree, so the common cost is 2 reads; only a genuinely
+// agreeing multi-chapter book pays the full sample.
+const agreedTagTitleSample = 5
+
+// agreedChapterTitle implements the CONS-17b discriminator for the filesystem
+// scanner: it returns the chapter-stripped tag title when EVERY sampled chapter
+// in dirPath strips to the same non-empty title (e.g. "Aces Abroad - Part 1" …
+// "- Part 14" all → "Aces Abroad"), and "" when they disagree (per-chapter names
+// like "Big Finish Ident" / "Opening Credits"), letting the caller fall back to
+// the folder name.
+//
+// multi reports whether dirPath actually holds more than one audio file; a
+// single-file book has nothing to agree with, so the caller keeps trusting its
+// tag title outright.
+//
+// This mirrors agreedStrippedTitle in internal/itunes/service/importer.go —
+// keep the two in sync. Album-preference was rejected for this decision: album
+// frequently equals the *series* name (see resolveSeries below), so preferring
+// it would replace correct titles with series names.
+func agreedChapterTitle(dirPath string, supportedExts []string) (agreed string, multi bool) {
+	files := listAudioFiles(dirPath, supportedExts)
+	if len(files) < 2 {
+		return "", false
+	}
+	if len(files) > agreedTagTitleSample {
+		files = files[:agreedTagTitleSample]
+	}
+	for _, fp := range files {
+		m, err := ExtractMetadata(fp, nil)
+		if err != nil {
+			return "", true // unreadable tag → can't establish agreement
+		}
+		s := titleutil.StripChapterSuffix(titleutil.StripChapterPrefix(strings.TrimSpace(m.Title)))
+		if s == "" {
+			return "", true
+		}
+		if agreed == "" {
+			agreed = s
+		} else if !strings.EqualFold(agreed, s) {
+			return "", true // chapters disagree → not a book title
+		}
+	}
+	return agreed, true
+}
+
+// resolveTitle picks the book title. dirPath + supportedExts enable the CONS-17b
+// all-chapters-agree check; pass an empty dirPath (or no exts) to skip it and
+// trust a non-generic tag title outright (the pre-CONS-17b behaviour).
+func resolveTitle(tag *Metadata, fm *FolderMetadata, firstFilePath, dirPath string, supportedExts []string) (string, string) {
 	if tag != nil && tag.Title != "" {
 		if !isGenericTitle(tag.Title) {
-			return tag.Title, "tag.Title"
+			// CONS-17b: a non-generic tag title on the FIRST chapter is only the
+			// book's title if every chapter agrees on it. A per-chapter name that
+			// merely dodges isGenericTitle (e.g. "Big Finish Ident") would
+			// otherwise be adopted as the whole book's title.
+			if dirPath == "" || len(supportedExts) == 0 {
+				return tag.Title, "tag.Title"
+			}
+			agreed, multi := agreedChapterTitle(dirPath, supportedExts)
+			switch {
+			case !multi:
+				return tag.Title, "tag.Title" // single-file book — nothing to disagree
+			case agreed != "":
+				return agreed, "tag.Title(agreed)"
+			}
+			logger.New("assemble").Debug(
+				"tag title %q not shared by all chapters; trying folder parser", tag.Title)
+		} else {
+			logger.New("assemble").Debug("tag title %q looks generic; trying folder parser", tag.Title)
 		}
-		logger.New("assemble").Debug("tag title %q looks generic; trying folder parser", tag.Title)
 	}
 	if fm.Title != "" {
 		return fm.Title, "folder.Title"
@@ -185,11 +256,13 @@ func (bm *AssembledMetadata) PrimaryAuthor() string {
 	return bm.Authors[0]
 }
 
-// FindFirstAudioFile returns the alphabetically first audio file in dirPath.
-func FindFirstAudioFile(dirPath string, supportedExts []string) string {
+// listAudioFiles returns dirPath's audio files in stable alphabetical order
+// (non-recursive). Shared by FindFirstAudioFile and the CONS-17b agree-title
+// check so both see the same file set in the same order.
+func listAudioFiles(dirPath string, supportedExts []string) []string {
 	entries, err := os.ReadDir(dirPath)
 	if err != nil {
-		return ""
+		return nil
 	}
 
 	extSet := make(map[string]bool, len(supportedExts))
@@ -208,9 +281,15 @@ func FindFirstAudioFile(dirPath string, supportedExts []string) string {
 		}
 	}
 
+	sort.Strings(audioFiles)
+	return audioFiles
+}
+
+// FindFirstAudioFile returns the alphabetically first audio file in dirPath.
+func FindFirstAudioFile(dirPath string, supportedExts []string) string {
+	audioFiles := listAudioFiles(dirPath, supportedExts)
 	if len(audioFiles) == 0 {
 		return ""
 	}
-	sort.Strings(audioFiles)
 	return audioFiles[0]
 }

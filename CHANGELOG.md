@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.167.0 -->
+<!-- version: 3.168.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-16 -->
 
@@ -8,6 +8,40 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 16, 2026 - fix(metadata): a per-chapter tag title could become the whole book's title (CONS-17b)
+
+The filesystem scanner now has the same all-chapters-agree discriminator the iTunes path
+got in CONS-FRAG. `resolveTitle` trusted any first-chapter tag title that wasn't obviously
+generic, so a chapter-level name that dodged `isGenericTitle` — e.g. a studio ident like
+"Big Finish Ident" — was adopted as the book's title, leaking into `Book.Title` and
+colliding across every book carrying that ident.
+
+`agreedChapterTitle` now reads the chapters' tag titles: if they all strip to the same
+non-empty title that IS the book title (`tag.Title(agreed)`, e.g. "Aces Abroad - Part 1…3"
+→ "Aces Abroad"); if they disagree, the title falls back to the folder. Single-file books
+keep trusting their tag outright. Cost is bounded — unlike the iTunes twin, which reads
+track names for free from the library XML, each check here is a real tag read, so it is
+capped at a 5-file sample with early-exit on the first disagreement and is only entered for
+multi-file books whose first tag is non-generic (the exact bug case). Album-preference
+stays rejected: album frequently equals the *series* name. No caller signature churn —
+`AssembleBookMetadata` already had `dirPath`. Two regression tests, both verified to fail
+without the fix. `internal/metadata/assemble.go`.
+
+#### July 16, 2026 - chore: backlog sweep — retire the CFG-2 flat-key shim, fix a test goroutine leak
+
+- **CFG-2-D-LOG**: removed the 54-entry `retiredLegacyFlatKeys` list and its detection
+  warn-log from `internal/config/update_service.go`. Its gate was "one stable release with
+  zero flat-only-key warnings in prod" — verified before removal: **0** occurrences in 30
+  days of prod logs across multiple releases. `remapScheduledKeys` intentionally stays.
+- **INTERNAL-SERVER-PKG-STALL**: root-caused. It is **not** a deadlock — the timeout dump's
+  only running test was 2s in; the package had simply spent its budget (measured: **664
+  tests, 357s cumulative** at `GOMAXPROCS=2 -race`, no pathological test), so a CPU-starved
+  CI runner can't fit it in 10m. The "parked in FileIOPool" hint was a red herring. Fixed
+  the real defect the dump exposed: a goroutine leak of **352 parked `FileIOPool.worker`s**
+  (≈88 servers × 4) — `setupHandlerTestServer` built a server and never stopped its pool.
+  The structural residual (package too big for the CI budget) is written up in TODO.md with
+  options rather than papered over.
 
 #### July 16, 2026 - perf(reconcile): parallelize the last two serial whole-library loops
 
