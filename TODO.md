@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 9.106.0 -->
+<!-- version: 9.106.1 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-07-14 -->
+<!-- last-edited: 2026-07-16 -->
 
 # Project TODO
 
@@ -1803,9 +1803,12 @@ must sequence, but A and B are parallelizable. Spawn:
   review — migration014UpPebble (Pebble corrupted-path migration not dispatched), deluge
   importToLibrary (server shim points at a non-existent `deluge.ImportToLibrary`), rewriteChunksBE
   (BE ITL write-back not hooked into the write path).
-- [ ] **MOCK-FRESHNESS-GLOB-GAP** (2026-07-03) — the Mock Freshness CI gate's `internal/*/mocks/`
-  glob misses nested mocks dirs (e.g. the dir holding `mock_dedup_engine.go`, stale since #1736
-  until hand-regenerated in #1757). Widen the glob to `internal/**/mocks/`.
+- [x] **MOCK-FRESHNESS-GLOB-GAP** (2026-07-03) — ✅ **FIXED 2026-07-16** (branch
+  `fix/mock-freshness-glob-gap`). CI's `ci.yml` gate already used the recursive
+  `:(glob)internal/**/mocks/**` pathspec; only the local Makefile `mocks-check` target
+  still used the one-level `internal/*/mocks/` glob, missing all 8
+  `internal/server/handlers/**/mocks/` dirs. Brought the Makefile to parity with CI.
+  Verified: old glob false-passes a modified nested mock, new glob catches it.
 - [x] **PEBBLE-CLOSED-SHUTDOWN-RACE** (2026-07-01, found during the agent-task sweep) — ✅ **FIXED
   2026-07-02** (branch `fix/pebble-shutdown-race`). **Root cause was NOT `SweepTick`** as the
   original entry guessed — that path was already enrolled in `goroutineWG` and drained by
