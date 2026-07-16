@@ -1,7 +1,7 @@
 // file: internal/sweep/sweeper_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: b2c3d4e5-f6a7-8910-abcd-ef2345678902
-// last-edited: 2026-07-11
+// last-edited: 2026-07-16
 
 package sweep
 
@@ -80,9 +80,13 @@ func (m *MockBookStore) GetAllBooks(limit, offset int) ([]database.Book, error) 
 	if offset >= len(m.books) {
 		return []database.Book{}, nil
 	}
-	end := offset + limit
-	if end > len(m.books) {
-		end = len(m.books)
+	// Match the real store: limit <= 0 means "unbounded" (return everything
+	// from offset), not "zero rows". Whole-library callers now pass
+	// GetAllBooksCore(0, 0) (the #1961/#1962 truncation fix); a naive
+	// offset+limit slice would return m.books[0:0] and silently hide every book.
+	end := len(m.books)
+	if limit > 0 && offset+limit < end {
+		end = offset + limit
 	}
 	return m.books[offset:end], nil
 }
