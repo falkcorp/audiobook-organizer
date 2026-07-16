@@ -1,7 +1,7 @@
 // file: internal/server/ai_ops.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-07-05
+// last-edited: 2026-07-16
 
 // ai_ops registers the ai.author-review and ai.author-merge-apply
 // OperationDefs that previously went through the legacy BridgeQueue.
@@ -17,7 +17,6 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
@@ -164,41 +163,14 @@ func (s *Server) RegisterAIAuthorMergeApplyOp(reg *opsregistry.Registry) error {
 						if mergeID == sug.KeepID {
 							continue
 						}
-						books, err := store.GetBooksByAuthorIDWithRoleCore(mergeID)
-						if err != nil {
-							applyErrors = append(applyErrors, fmt.Sprintf("get books for author %d: %v", mergeID, err))
+						reassignErrs := reassignBooksFromAuthor(store, mergeID, sug.KeepID)
+						applyErrors = append(applyErrors, reassignErrs...)
+						// Only delete the merged-away author once EVERY book that
+						// credited it has been re-pointed. Deleting while a book still
+						// credits mergeID would leave a dangling author reference.
+						if len(reassignErrs) > 0 {
+							applyErrors = append(applyErrors, fmt.Sprintf("author %d NOT deleted: %d book(s) could not be reassigned", mergeID, len(reassignErrs)))
 							continue
-						}
-
-						_ = progress.Log("info", fmt.Sprintf("Snapshotting %d books before merge of author %d", len(books), mergeID), nil)
-
-						for _, book := range books {
-							bookAuthors, err := store.GetBookAuthors(book.ID)
-							if err != nil {
-								continue
-							}
-							hasKeep := false
-							for _, ba := range bookAuthors {
-								if ba.AuthorID == sug.KeepID {
-									hasKeep = true
-									break
-								}
-							}
-							var newAuthors []database.BookAuthor
-							for _, ba := range bookAuthors {
-								if ba.AuthorID == mergeID {
-									if !hasKeep {
-										ba.AuthorID = sug.KeepID
-										newAuthors = append(newAuthors, ba)
-										hasKeep = true
-									}
-								} else {
-									newAuthors = append(newAuthors, ba)
-								}
-							}
-							if err := store.SetBookAuthors(book.ID, newAuthors); err != nil {
-								applyErrors = append(applyErrors, fmt.Sprintf("update book %s: %v", book.ID, err))
-							}
 						}
 
 						if err := store.DeleteAuthor(mergeID); err != nil {
@@ -229,38 +201,15 @@ func (s *Server) RegisterAIAuthorMergeApplyOp(reg *opsregistry.Registry) error {
 							if _, err := store.CreateAuthorAlias(sug.KeepID, variant.Name, "pen_name"); err != nil {
 								applyErrors = append(applyErrors, fmt.Sprintf("create alias for author %d: %v", sug.KeepID, err))
 							}
-							// Re-link books and delete the variant author
-							books, err := store.GetBooksByAuthorIDWithRoleCore(mergeID)
-							if err != nil {
-								continue
+							// Re-link books and delete the variant author only if every
+							// book was successfully re-pointed (see reassignBooksFromAuthor).
+							reassignErrs := reassignBooksFromAuthor(store, mergeID, sug.KeepID)
+							for _, e := range reassignErrs {
+								applyErrors = append(applyErrors, e+" (alias)")
 							}
-							for _, book := range books {
-								bookAuthors, err := store.GetBookAuthors(book.ID)
-								if err != nil {
-									continue
-								}
-								hasKeep := false
-								for _, ba := range bookAuthors {
-									if ba.AuthorID == sug.KeepID {
-										hasKeep = true
-										break
-									}
-								}
-								var newAuthors []database.BookAuthor
-								for _, ba := range bookAuthors {
-									if ba.AuthorID == mergeID {
-										if !hasKeep {
-											ba.AuthorID = sug.KeepID
-											newAuthors = append(newAuthors, ba)
-											hasKeep = true
-										}
-									} else {
-										newAuthors = append(newAuthors, ba)
-									}
-								}
-								if err := store.SetBookAuthors(book.ID, newAuthors); err != nil {
-									applyErrors = append(applyErrors, fmt.Sprintf("update book %s for alias: %v", book.ID, err))
-								}
+							if len(reassignErrs) > 0 {
+								applyErrors = append(applyErrors, fmt.Sprintf("aliased author %d NOT deleted: %d book(s) could not be reassigned", mergeID, len(reassignErrs)))
+								continue
 							}
 							if err := store.DeleteAuthor(mergeID); err != nil {
 								applyErrors = append(applyErrors, fmt.Sprintf("delete aliased author %d: %v", mergeID, err))

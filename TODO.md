@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.106.2 -->
+<!-- version: 9.106.3 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-16 -->
 
@@ -1744,12 +1744,13 @@ must sequence, but A and B are parallelizable. Spawn:
 - [x] **APPLY-GUARD-COMBINE-AUTHOR-OVERRIDE** (2026-07-16, silent-failure hunt) — ✅ **FIXED
   2026-07-16** (same branch). `merge/service.go` Combine dropped the user's author override via
   `_ = SetBookAuthors`/`_,_ = UpdateBook`; now `slog.Warn`s on error like the sibling title path.
-- [ ] **APPLY-GUARD-AI-AUTHOR-MERGE-DELETE** (2026-07-16, silent-failure hunt) — the AI author
-  merge/alias apply (`internal/server/ai_ops.go` `RegisterAIAuthorMergeApplyOp`) calls
-  `DeleteAuthor(mergeID)` unconditionally even when a book's `SetBookAuthors` reassignment failed
-  → dangling author reference / lost attribution. FIX (follow-up PR): track per-mergeID reassign
-  success (incl. the `GetBookAuthors` continue), skip `DeleteAuthor` if any book failed. Needs a
-  test seam — the apply is an inline op closure; extract a testable `reassignBooksAuthor` helper.
+- [x] **APPLY-GUARD-AI-AUTHOR-MERGE-DELETE** (2026-07-16, silent-failure hunt) — ✅ **FIXED
+  2026-07-16** (branch `fix/ai-author-merge-delete-guard`). Extracted the duplicated per-book
+  reassignment loop (merge + alias cases in `internal/server/ai_ops.go`) into a testable
+  `reassignBooksFromAuthor` helper (`ai_author_reassign.go`) returning per-book errors; the variant
+  `DeleteAuthor` now runs only when that result is empty. A previously-silent `GetBookAuthors` read
+  error now also blocks the delete. Tests in `ai_author_reassign_test.go` cover all-succeed, set
+  failure, authors-read failure, book-list failure, and the already-credits-keep dedup path.
 
 - [x] **SPLITBOOK-MERGE-ORPHAN** (2026-07-16, found via silent-failure bug hunt) — ✅ **FIXED
   2026-07-16** (branch `fix/splitbook-merge-orphan`). `MergeSplitBookCluster`
