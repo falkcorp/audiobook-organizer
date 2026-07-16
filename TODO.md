@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.106.1 -->
+<!-- version: 9.106.2 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-16 -->
 
@@ -1736,6 +1736,15 @@ must sequence, but A and B are parallelizable. Spawn:
 ---
 
 ## 🐛 Open Bugs — May 17, 2026
+
+- [x] **SPLITBOOK-MERGE-ORPHAN** (2026-07-16, found via silent-failure bug hunt) — ✅ **FIXED
+  2026-07-16** (branch `fix/splitbook-merge-orphan`). `MergeSplitBookCluster`
+  (`internal/dedup/split_book_merge.go`) soft-deleted **every** source book in Step 4, including
+  a source whose Step-1 `GetBookFiles`/`MoveBookFilesToBook` had errored and therefore still owned
+  its files → the audio was orphaned (live `BookFile` rows pointing at a deleted book), and the
+  handler returned 200 OK. Fix: Step 1 records a `safeToDelete` set (no files, or move succeeded);
+  Step 4 deletes only those. Regression tests simulate a failed move and assert the source stays
+  intact. Data-loss class → executive summary written.
 
 - [x] **PEBBLE-CLOSED-SWEEPTICK-RESIDUAL** (2026-07-03) — ✅ **FIXED 2026-07-03 in three PRs**
   as the true scope emerged (4 gate kills, 3 distinct legs, all the same leaked-lifecycle family):
