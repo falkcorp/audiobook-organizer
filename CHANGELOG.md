@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.165.0 -->
+<!-- version: 3.166.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-16 -->
 
@@ -8,6 +8,21 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 16, 2026 - fix(server): unify destructive-reset authz on RequireAdmin + require confirm token on /system/reset
+
+Two consistency gaps on the full-wipe endpoints:
+
+- `/system/reset` and `/system/factory-reset` gated on `PermSettingsManage` while the
+  sibling `/maintenance/wipe` uses `RequireAdmin()`. No live escalation in the default
+  roles (only admin has `settings.manage`), but a custom non-admin role granted
+  `settings.manage` could wipe the whole library via reset. Both now go through the same
+  admin-only subgroup (`RequireAdmin()`) as `/maintenance/wipe` and `/admin/*`.
+- `ResetSystem` (a full DB wipe) accepted a bare POST, while the *more* destructive
+  `FactoryReset` already required `{"confirm":"RESET"}`. `ResetSystem` now requires the
+  same token, so a mis-fired request can't silently erase the database.
+
+`internal/server/wire_system_routes.go`, `internal/server/handlers/system/handler.go`.
 
 #### July 16, 2026 - fix(audiobooks): editing a book's author by ID persisted a stale author name
 

@@ -1,13 +1,14 @@
 // file: internal/server/wire_system_routes.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a7b8c9d0-e1f2-3456-abcd-789012345678
-// last-edited: 2026-06-30
+// last-edited: 2026-07-16
 
 package server
 
 import (
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	system "github.com/falkcorp/audiobook-organizer/internal/server/handlers/system"
+	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 )
 
@@ -28,8 +29,17 @@ func (s *Server) wireSystemRoutes(
 	protected.GET("/system/storage", s.perm(auth.PermSettingsManage), systemH.GetSystemStorage)
 	protected.GET("/system/logs", s.perm(auth.PermSettingsManage), systemH.GetSystemLogs)
 	protected.GET("/system/activity-log", s.perm(auth.PermSettingsManage), systemH.GetSystemActivityLog)
-	protected.POST("/system/reset", s.perm(auth.PermSettingsManage), systemH.ResetSystem)
-	protected.POST("/system/factory-reset", s.perm(auth.PermSettingsManage), systemH.FactoryReset)
+	// Destructive full-wipe endpoints: gate on RequireAdmin() to match the
+	// sibling /maintenance/wipe (server_lifecycle.go) rather than the weaker
+	// PermSettingsManage — a custom non-admin role granted settings.manage must
+	// not be able to wipe the whole library via reset. Same admin-only subgroup
+	// pattern used in server_lifecycle.go and wire_library_routes.go.
+	adminOnly := protected.Group("")
+	adminOnly.Use(servermiddleware.RequireAdmin())
+	{
+		adminOnly.POST("/system/reset", systemH.ResetSystem)
+		adminOnly.POST("/system/factory-reset", systemH.FactoryReset)
+	}
 	protected.GET("/config", s.perm(auth.PermSettingsManage), systemH.GetConfig)
 	protected.PUT("/config", s.perm(auth.PermSettingsManage), systemH.UpdateConfig)
 	protected.GET("/dashboard", s.perm(auth.PermLibraryView), systemH.GetDashboard)
