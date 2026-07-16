@@ -1,6 +1,7 @@
-# Dependabot Configuration
-# version: 1.1.0
-# guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+# file: .github/dependabot.yml
+# version: 1.2.0
+# guid: 9f416cf7-2df6-4a47-93b9-630339256aec
+# last-edited: 2026-07-16
 
 version: 2
 
@@ -26,8 +27,6 @@ updates:
     multi-ecosystem-group: dependencies
     labels:
       - containers
-    schedule:
-      interval: monthly
 
   # Github Actions
   - package-ecosystem: github-actions
