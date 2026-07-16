@@ -1,7 +1,7 @@
 // file: internal/server/handlers_unit_test.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: f8a2d1c3-4b5e-6789-abcd-ef0123456789
-// last-edited: 2026-07-06
+// last-edited: 2026-07-16
 //
 // Unit tests for HTTP handlers using MockStore + httptest.
 // Focuses on handlers that directly call s.Store() without
@@ -762,7 +762,7 @@ func TestHandler_ResetSystem_Success(t *testing.T) {
 
 	router.POST("/system/reset", newSystemHandler(srv).ResetSystem)
 
-	req := httptest.NewRequest("POST", "/system/reset", nil)
+	req := httptest.NewRequest("POST", "/system/reset", bytes.NewReader([]byte(`{"confirm":"RESET"}`)))
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
@@ -776,7 +776,7 @@ func TestHandler_ResetSystem_StoreError(t *testing.T) {
 
 	router.POST("/system/reset", newSystemHandler(srv).ResetSystem)
 
-	req := httptest.NewRequest("POST", "/system/reset", nil)
+	req := httptest.NewRequest("POST", "/system/reset", bytes.NewReader([]byte(`{"confirm":"RESET"}`)))
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 

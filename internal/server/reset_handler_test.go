@@ -1,6 +1,7 @@
 // file: internal/server/reset_handler_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
+// last-edited: 2026-07-16
 
 package server
 
@@ -38,7 +39,7 @@ func TestResetSystem_Success(t *testing.T) {
 	config.AppConfig.AutoOrganize = false
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/api/v1/system/reset", bytes.NewReader([]byte("{}")))
+	req := httptest.NewRequest("POST", "/api/v1/system/reset", bytes.NewReader([]byte(`{"confirm":"RESET"}`)))
 	req.Header.Set("Content-Type", "application/json")
 	c, _ := gin.CreateTestContext(w)
 	c.Request = req
@@ -87,7 +88,7 @@ func TestResetSystem_Error(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/api/v1/system/reset", bytes.NewReader([]byte("{}")))
+	req := httptest.NewRequest("POST", "/api/v1/system/reset", bytes.NewReader([]byte(`{"confirm":"RESET"}`)))
 	req.Header.Set("Content-Type", "application/json")
 	c, _ := gin.CreateTestContext(w)
 	c.Request = req
@@ -118,7 +119,7 @@ func TestResetSystem_MultipleResets(t *testing.T) {
 	config.AppConfig.LogLevel = "debug"
 
 	w1 := httptest.NewRecorder()
-	req1 := httptest.NewRequest("POST", "/api/v1/system/reset", bytes.NewReader([]byte("{}")))
+	req1 := httptest.NewRequest("POST", "/api/v1/system/reset", bytes.NewReader([]byte(`{"confirm":"RESET"}`)))
 	req1.Header.Set("Content-Type", "application/json")
 	c1, _ := gin.CreateTestContext(w1)
 	c1.Request = req1
@@ -137,7 +138,7 @@ func TestResetSystem_MultipleResets(t *testing.T) {
 	config.AppConfig.LogLevel = "debug"
 
 	w2 := httptest.NewRecorder()
-	req2 := httptest.NewRequest("POST", "/api/v1/system/reset", bytes.NewReader([]byte("{}")))
+	req2 := httptest.NewRequest("POST", "/api/v1/system/reset", bytes.NewReader([]byte(`{"confirm":"RESET"}`)))
 	req2.Header.Set("Content-Type", "application/json")
 	c2, _ := gin.CreateTestContext(w2)
 	c2.Request = req2
