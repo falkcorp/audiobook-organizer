@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_mutation_author_sync_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f9a0c71-6d24-4e83-b1a7-5c8e9f0a2d13
 // last-edited: 2026-07-16
 
@@ -67,4 +67,47 @@ func TestUpdateAudiobook_SyncsDenormalizedAuthorOnIDChange(t *testing.T) {
 		"persisted Author.ID is stale — still points at the old author")
 	require.Equal(t, "New Author", reread.Author.Name,
 		"persisted Author.Name is stale — read paths would display the old author name")
+}
+
+// TestUpdateAudiobook_SyncsDenormalizedSeriesOnIDChange is the Series twin of
+// the author regression above — changing a book's series by series_id must keep
+// the embedded Series display object in sync with the FK, not persist the old
+// series' name.
+func TestUpdateAudiobook_SyncsDenormalizedSeriesOnIDChange(t *testing.T) {
+	ps, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+
+	oldSeries, err := ps.CreateSeries("Old Series", nil)
+	require.NoError(t, err)
+	newSeries, err := ps.CreateSeries("New Series", nil)
+	require.NoError(t, err)
+
+	book, err := ps.CreateBook(&database.Book{
+		Title:    "Test Book",
+		SeriesID: &oldSeries.ID,
+		Series:   &database.Series{ID: oldSeries.ID, Name: "Old Series"},
+	})
+	require.NoError(t, err)
+
+	svc := NewAudiobookService(ps)
+
+	_, err = svc.UpdateAudiobook(context.Background(), book.ID, &UpdateAudiobookRequest{
+		Updates: &AudiobookUpdate{
+			Book: &database.Book{SeriesID: &newSeries.ID},
+		},
+	})
+	require.NoError(t, err)
+
+	reread, err := ps.GetBookByID(book.ID)
+	require.NoError(t, err)
+	require.NotNil(t, reread)
+
+	require.NotNil(t, reread.SeriesID)
+	require.Equal(t, newSeries.ID, *reread.SeriesID, "SeriesID should be updated to the new series")
+
+	require.NotNil(t, reread.Series, "embedded Series should be populated")
+	require.Equal(t, newSeries.ID, reread.Series.ID,
+		"persisted Series.ID is stale — still points at the old series")
+	require.Equal(t, "New Series", reread.Series.Name,
+		"persisted Series.Name is stale — read paths would display the old series name")
 }
