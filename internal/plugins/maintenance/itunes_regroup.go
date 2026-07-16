@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_regroup.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-07-07
+// last-edited: 2026-07-16
 
 package maintenance
 
@@ -298,8 +298,17 @@ func (p *Plugin) applyRegroupPlan(ctx context.Context, store database.Store, pla
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		files, _ := store.GetBookFiles(id)
-		exts, _ := store.GetExternalIDsForBook(id)
+		files, ferr := store.GetBookFiles(id)
+		exts, eerr := store.GetExternalIDsForBook(id)
+		// Fail CLOSED: if either read errored we cannot prove the book is empty,
+		// so both slices may be a misleading nil (len 0). Skip the delete rather
+		// than risk removing a book that still owns files or iTunes PID ext-ids —
+		// the exact canary this guard exists to prevent.
+		if ferr != nil || eerr != nil {
+			deleteSkipped++
+			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: could not verify empty (files err=%v, ext-ids err=%v)", id, ferr, eerr))
+			continue
+		}
 		if len(files) != 0 || len(exts) != 0 {
 			deleteSkipped++
 			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: %d files, %d ext-ids remain", id, len(files), len(exts)))

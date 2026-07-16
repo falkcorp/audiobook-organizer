@@ -1737,6 +1737,20 @@ must sequence, but A and B are parallelizable. Spawn:
 
 ## 🐛 Open Bugs — May 17, 2026
 
+- [x] **APPLY-GUARD-ITUNES-REGROUP-FAILOPEN** (2026-07-16, silent-failure hunt) — ✅ **FIXED
+  2026-07-16** (branch `fix/harden-apply-path-guards`). `itunes_regroup.go` delete guard read
+  `files, _ :=`/`exts, _ :=` and fell open on a read error (nil→len 0→delete a possibly-non-empty
+  book). Now fails closed: any read error → skip delete. Regression test drives the error branch.
+- [x] **APPLY-GUARD-COMBINE-AUTHOR-OVERRIDE** (2026-07-16, silent-failure hunt) — ✅ **FIXED
+  2026-07-16** (same branch). `merge/service.go` Combine dropped the user's author override via
+  `_ = SetBookAuthors`/`_,_ = UpdateBook`; now `slog.Warn`s on error like the sibling title path.
+- [ ] **APPLY-GUARD-AI-AUTHOR-MERGE-DELETE** (2026-07-16, silent-failure hunt) — the AI author
+  merge/alias apply (`internal/server/ai_ops.go` `RegisterAIAuthorMergeApplyOp`) calls
+  `DeleteAuthor(mergeID)` unconditionally even when a book's `SetBookAuthors` reassignment failed
+  → dangling author reference / lost attribution. FIX (follow-up PR): track per-mergeID reassign
+  success (incl. the `GetBookAuthors` continue), skip `DeleteAuthor` if any book failed. Needs a
+  test seam — the apply is an inline op closure; extract a testable `reassignBooksAuthor` helper.
+
 - [x] **SPLITBOOK-MERGE-ORPHAN** (2026-07-16, found via silent-failure bug hunt) — ✅ **FIXED
   2026-07-16** (branch `fix/splitbook-merge-orphan`). `MergeSplitBookCluster`
   (`internal/dedup/split_book_merge.go`) soft-deleted **every** source book in Step 4, including

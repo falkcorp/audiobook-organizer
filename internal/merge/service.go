@@ -1,7 +1,7 @@
 // file: internal/merge/service.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
-// last-edited: 2026-07-13
+// last-edited: 2026-07-16
 
 package merge
 
@@ -377,13 +377,20 @@ func (ms *Service) CombineBooks(bookIDs []string, primaryID string, override *Co
 				author, err = ms.db.CreateAuthor(override.Author)
 			}
 			if err == nil && author != nil {
-				_ = ms.db.SetBookAuthors(primaryID, []database.BookAuthor{
+				// Surface failures instead of swallowing them: a dropped write here
+				// silently discards the user's explicit author choice while Combine
+				// still reports success (matches the sibling title/narrator path above).
+				if saErr := ms.db.SetBookAuthors(primaryID, []database.BookAuthor{
 					{BookID: primaryID, AuthorID: author.ID, Role: "author", Position: 0},
-				})
+				}); saErr != nil {
+					slog.Warn("combine override SetBookAuthors", "id", primaryID, "author", override.Author, "err", saErr)
+				}
 				// Also set AuthorID on the book row for backward compat.
 				if b, err2 := ms.db.GetBookByID(primaryID); err2 == nil && b != nil {
 					b.AuthorID = &author.ID
-					_, _ = ms.db.UpdateBook(b.ID, b)
+					if _, ubErr := ms.db.UpdateBook(b.ID, b); ubErr != nil {
+						slog.Warn("combine override author UpdateBook", "id", b.ID, "err", ubErr)
+					}
 				}
 			}
 			if err != nil {

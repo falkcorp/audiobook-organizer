@@ -1,17 +1,32 @@
 // file: internal/plugins/maintenance/itunes_regroup_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-07-03
+// last-edited: 2026-07-16
 
 package maintenance
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 )
+
+// errExtIDStore wraps a Store and makes GetExternalIDsForBook error for one book
+// ID, so a test can drive the delete guard's "read failed" branch.
+type errExtIDStore struct {
+	database.Store
+	failID string
+}
+
+func (e *errExtIDStore) GetExternalIDsForBook(bookID string) ([]database.ExternalIDMapping, error) {
+	if bookID == e.failID {
+		return nil, fmt.Errorf("simulated ext-id read error")
+	}
+	return e.Store.GetExternalIDsForBook(bookID)
+}
 
 func regroupStore(t *testing.T) *database.PebbleStore {
 	t.Helper()
@@ -125,5 +140,41 @@ func TestITunesRegroupApply_DeleteGuardSkipsResidualExtID(t *testing.T) {
 	// b2 still has the residual mapping → must NOT have been deleted.
 	if b, _ := s.GetBookByID(b2); b == nil {
 		t.Fatalf("b2 deleted despite residual ext-id (guard failed)")
+	}
+}
+
+// The delete guard must fail CLOSED: if the ext-id (or file) read errors, the
+// book's emptiness can't be proven, so it must be skipped rather than deleted.
+// Without the fix, `exts, _ :=` swallowed the error → nil slice (len 0) → the
+// guard passed and DeleteBook ran on an unverifiable book.
+func TestITunesRegroupApply_DeleteGuardFailsClosedOnReadError(t *testing.T) {
+	s := regroupStore(t)
+	b1 := seedBook(t, s, "Frag A")
+	b2 := seedBook(t, s, "Frag B")
+	seedFilePID(t, s, b1, "p1")
+	seedFilePID(t, s, b2, "p2")
+
+	p := &Plugin{}
+	rep := &fakeReporter{}
+	groups := []itunesservice.HealGroup{{Title: "Merged Book", PIDs: []string{"p1", "p2"}}}
+	snap, _ := p.buildRegroupSnapshot(context.Background(), s, rep)
+	plan := itunesservice.PlanRegroup(groups, snap)
+
+	survivor := plan.Groups[0].Target
+	loser := b1
+	if survivor == b1 {
+		loser = b2
+	}
+
+	// Wrap so the delete-guard's ext-id read for the loser errors. The merge
+	// phase does not call GetExternalIDsForBook, so only the guard is affected.
+	wrapped := &errExtIDStore{Store: s, failID: loser}
+	if err := p.applyRegroupPlan(context.Background(), wrapped, plan, rep); err != nil {
+		t.Fatalf("applyRegroupPlan: %v", err)
+	}
+
+	// Fail-closed: the loser must survive because its emptiness could not be verified.
+	if b, _ := s.GetBookByID(loser); b == nil {
+		t.Fatalf("loser %s deleted despite ext-id read error (guard failed open)", loser)
 	}
 }
