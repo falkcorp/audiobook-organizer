@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.164.0 -->
+<!-- version: 3.165.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-16 -->
 
@@ -8,6 +8,21 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 16, 2026 - fix(audiobooks): editing a book's author by ID persisted a stale author name
+
+`UpdateAudiobook` changed a book's `AuthorID` (and `SeriesID`) but left the embedded,
+denormalized `Author`/`Series` display object pointing at the *old* record. `UpdateBook`'s
+preserve-on-nil guard could not correct it — the stale struct is non-nil — so the wrong
+name was written to the stored row. Every read path
+(`resolveAuthorAndSeriesNames`, `EnrichAudiobooksWithNames`) prefers the embedded object
+when present, so the book displayed the previous author/series indefinitely — the FK said
+one author, the visible name said another. Reachable through the `author_id` / `series_id`
+API fields (`update_service.go:86`). The fix syncs the embedded object to the resolved ID
+**before** persisting (the write side now honors `UpdateBook`'s documented "set BOTH the ID
+and a fresh object" contract). Every subsequent edit also self-heals any pre-existing
+mismatch. Regression test re-reads the row straight from the store to assert on what was
+actually written. `internal/audiobooks/service_mutation.go`.
 
 #### July 16, 2026 - fix(maintenance): future-proof remaining whole-library ops against fixed-limit truncation
 
