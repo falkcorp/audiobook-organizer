@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.106.4 -->
+<!-- version: 9.106.5 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-16 -->
 
@@ -1736,6 +1736,27 @@ must sequence, but A and B are parallelizable. Spawn:
 ---
 
 ## 🐛 Open Bugs — May 17, 2026
+
+- [x] **WHOLE-LIBRARY-FIXED-LIMIT-LIVE** (2026-07-16, pagination bug hunt) — ✅ **FIXED 2026-07-16**
+  (branch `fix/whole-library-truncation`). Five whole-library ops fetched books with a fixed
+  positive limit and no loop, silently processing only the first N of ~30K–44K: `OptimizeDatabase`
+  (10K), `enrichImportedBooks` (10K), `runMetadataRefreshScan` ×2 (10K), `quarantineKnownBadFiles`
+  (20K, one-time+done-flag → rest never scanned). All → `GetAllBooksCore(0, 0)` (unbounded, verified
+  in both memdb `paginate` and Pebble iterator). Contract test `TestMemStore_GetAllBooksCore_LimitZeroIsUnbounded`.
+- [ ] **WHOLE-LIBRARY-FIXED-LIMIT-FRAGILE** (2026-07-16, pagination bug hunt) — ~10 whole-library
+  sites use `GetAllBooksCore(100000, 0)` or `(1000000, 0)`: `cmd/seed.go:247`, `migrations.go:617`,
+  `reconcile.go:243/767`, `deluge/discovery.go:71`, `itunes/service/importer.go:539/798/1158`,
+  `itunes/service/path_reconcile.go:74`, `sweep/sweeper.go:85`, `maintenance/jobs/generate_itl_tests.go:44`,
+  `handlers/metadata/handler.go:1193`. Safe today (~30K < 100K) but will silently truncate as the
+  library grows. Switch each to `GetAllBooksCore(0, 0)` or a cursor loop. Verify each is whole-library
+  intent first (migrations.go is sensitive — check the migration semantics before changing).
+- [ ] **RESET-AUTHZ-CONSISTENCY** (2026-07-16, API authz bug hunt) — LOW: `/system/reset` &
+  `/system/factory-reset` (`wire_system_routes.go:31-32`) gate on `PermSettingsManage` while the
+  sibling `/maintenance/wipe` (`server_lifecycle.go:1284`) gates on `RequireAdmin()`. No live
+  escalation in default roles (only admin has settings.manage), but a custom non-admin role with
+  settings.manage could full-wipe via reset. Also `ResetSystem` (full DB wipe) lacks the
+  `{"confirm":"RESET"}` token that the *more* destructive `FactoryReset` requires. Fix: gate all
+  three destructive endpoints on one model (`RequireAdmin()`) + add confirm token to `ResetSystem`.
 
 - [ ] **RECONCILE-SERIAL-LOOPS** (2026-07-16, concurrency bug hunt) — two remaining serial
   full-library loops in `internal/reconcile/reconcile.go` (the hashing loop was parallelized

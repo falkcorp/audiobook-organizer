@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.162.0 -->
+<!-- version: 3.163.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-16 -->
 
@@ -8,6 +8,35 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 16, 2026 - fix(maintenance): whole-library ops silently processed only a fixed-limit subset
+
+Five maintenance/scan operations fetched "all books" with a **fixed positive page
+limit** and no pagination loop, so on the production library (~30K–44K books) they
+silently processed only the first N and skipped the rest. `GetAllBooksCore` treats
+`limit <= 0` as unbounded (verified against both the memdb `paginate` and the Pebble
+iterator paths), so each was one call away from correct.
+
+- **`OptimizeDatabase`** (`internal/server/handlers/operations/handler.go`) — split
+  compound `A & B` author/narrator names across the library; capped at 10,000 →
+  ~20K–34K books never split.
+- **`enrichImportedBooks`** (`internal/itunes/service/importer.go`) — post-import
+  metadata enrichment; capped at 10,000 while its sibling `organizeImportedBooks`
+  used 100,000. On a fresh 44K import only the first 10K got enriched.
+- **`runMetadataRefreshScan`** (both copies: `internal/scheduler/extra_ops.go` and
+  `internal/server/metadata_ops.go`) — the "incomplete metadata" report capped its
+  denominator at 10,000, silently under-reporting.
+- **`quarantineKnownBadFiles`** (`internal/server/quarantine_known_bad.go`) — a
+  one-time startup scan (guarded by a done-flag so it never re-runs) capped at 20,000
+  → the remaining books would *never* be scanned for permanently-unreadable files.
+
+All five now call `GetAllBooksCore(0, 0)`. A new getter-contract test
+(`TestMemStore_GetAllBooksCore_LimitZeroIsUnbounded`) locks the `limit <= 0 ==
+unbounded` semantics so the cap can't silently return. Follow-ups tracked in TODO
+(`WHOLE-LIBRARY-FIXED-LIMIT-FRAGILE`): ~10 more sites use a 100K/1M limit that is
+safe today but will truncate as the library grows.
+
+Executive summary: `docs/executive-summaries/2026-07-16-whole-library-truncation-executive-summary.md`.
 
 #### July 16, 2026 - perf(reconcile): parallelize untracked-file hashing (concurrency-mandate hotspot)
 

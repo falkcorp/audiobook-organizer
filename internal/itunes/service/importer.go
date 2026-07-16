@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
-// last-edited: 2026-07-13
+// last-edited: 2026-07-16
 
 package itunesservice
 
@@ -1035,7 +1035,7 @@ func (imp *Importer) enrichImportedBooks(ctx context.Context, status *itunesImpo
 		return
 	}
 
-	books, err := imp.store.GetAllBooksCore(10000, 0)
+	books, err := imp.store.GetAllBooksCore(0, 0)
 	if err != nil {
 		log.Error("Failed to list books for enrichment: %v", err)
 		return
