@@ -1,7 +1,7 @@
 // file: internal/server/quarantine_known_bad.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-07-07
+// last-edited: 2026-07-16
 
 package server
 
@@ -26,7 +26,7 @@ func (s *Server) quarantineKnownBadFiles() {
 		return
 	}
 
-	books, err := store.GetAllBooksCore(20000, 0)
+	books, err := store.GetAllBooksCore(0, 0)
 	if err != nil {
 		slog.Warn("quarantineKnownBadFiles GetAllBooksCore", "err", err)
 		return

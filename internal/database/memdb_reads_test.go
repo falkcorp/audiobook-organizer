@@ -1,11 +1,12 @@
 // file: internal/database/memdb_reads_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000007
-// last-edited: 2026-07-07
+// last-edited: 2026-07-16
 
 package database
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -225,6 +226,56 @@ func TestMemStore_GetAllBooksCore_Filters(t *testing.T) {
 			ids = append(ids, b.ID)
 		}
 		t.Errorf("expected [b1], got %v", ids)
+	}
+}
+
+// GetAllBooksCore must treat limit <= 0 as UNBOUNDED (return every row), while a
+// positive limit truncates. Whole-library maintenance ops rely on the limit==0
+// form to avoid silently processing only a subset (see the July-16 truncation
+// fixes: OptimizeDatabase, enrichImportedBooks, runMetadataRefreshScan,
+// quarantineKnownBadFiles). This test locks that contract so a future change to
+// the getter can't reintroduce a silent cap on limit==0.
+func TestMemStore_GetAllBooksCore_LimitZeroIsUnbounded(t *testing.T) {
+	m, err := NewMemStore()
+	if err != nil {
+		t.Fatalf("NewMemStore: %v", err)
+	}
+	books := make([]Book, 0, 5)
+	for i := range 5 {
+		books = append(books, Book{
+			ID:                fmt.Sprintf("b%d", i),
+			Title:             fmt.Sprintf("Book %d", i),
+			IsPrimaryVersion:  ptrBool_mem(true),
+			MarkedForDeletion: ptrBool_mem(false),
+		})
+	}
+	seedMemStore(t, m, books, nil, nil, nil)
+
+	// Positive limit below the row count truncates.
+	got, err := m.GetAllBooksCore(3, 0, nil)
+	if err != nil {
+		t.Fatalf("GetAllBooksCore(3,0): %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("limit=3 returned %d rows, want 3 (truncated)", len(got))
+	}
+
+	// limit == 0 returns everything.
+	all, err := m.GetAllBooksCore(0, 0, nil)
+	if err != nil {
+		t.Fatalf("GetAllBooksCore(0,0): %v", err)
+	}
+	if len(all) != 5 {
+		t.Fatalf("limit=0 returned %d rows, want all 5 (unbounded)", len(all))
+	}
+
+	// Negative limit is also unbounded.
+	allNeg, err := m.GetAllBooksCore(-1, 0, nil)
+	if err != nil {
+		t.Fatalf("GetAllBooksCore(-1,0): %v", err)
+	}
+	if len(allNeg) != 5 {
+		t.Fatalf("limit=-1 returned %d rows, want all 5 (unbounded)", len(allNeg))
 	}
 }
 
