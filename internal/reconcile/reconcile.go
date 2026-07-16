@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-07-13
+// last-edited: 2026-07-16
 
 package reconcile
 
@@ -12,7 +12,9 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -22,6 +24,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/security/safepath"
 	"github.com/oklog/ulid/v2"
+	"golang.org/x/sync/errgroup"
 )
 
 // Store is the database dependency for reconcile operations.
@@ -157,6 +160,44 @@ func BuildReconcilePreview(store Store) (*ReconcilePreviewResult, error) {
 	return BuildReconcilePreviewWithProgress(store, nil)
 }
 
+// hashFilesConcurrent computes a segment hash for every file across a bounded
+// worker pool (runtime.NumCPU()) and returns a hash→path index. This replaces a
+// former single-core loop that hashed potentially thousands of on-disk files
+// serially (a CLAUDE.md concurrency-mandate hotspot). ComputeSegmentFileHash
+// opens its own file and shares no state, so it is safe to call concurrently.
+//
+// Behaviour is preserved exactly: each file hashes into its own index-ordered
+// slot and the map is folded serially afterwards, so on a hash collision the
+// highest-indexed file still wins (as the sequential map-build did). Files that
+// fail to hash are skipped. report, if non-nil, is called ~every 100 files with
+// the running completed count.
+func hashFilesConcurrent(files []string, report func(done int)) map[string]string {
+	hashes := make([]string, len(files))
+	var done int64
+	var g errgroup.Group
+	g.SetLimit(max(runtime.NumCPU(), 1))
+	for i, fp := range files {
+		g.Go(func() error {
+			if h, err := scanner.ComputeSegmentFileHash(fp); err == nil {
+				hashes[i] = h // sha256 hex is never empty; "" == unhashed
+			}
+			if n := atomic.AddInt64(&done, 1); report != nil && n%100 == 0 {
+				report(int(n))
+			}
+			return nil
+		})
+	}
+	_ = g.Wait() // per-file hash errors are skipped, matching prior behaviour
+
+	idx := make(map[string]string, len(files))
+	for i, h := range hashes {
+		if h != "" {
+			idx[h] = files[i]
+		}
+	}
+	return idx
+}
+
 // BuildReconcilePreviewWithProgress builds the full reconciliation preview with
 // progress reporting for background operations. log may be nil.
 func BuildReconcilePreviewWithProgress(store Store, log logger.Logger) (*ReconcilePreviewResult, error) {
@@ -261,17 +302,9 @@ func BuildReconcilePreviewWithProgress(store Store, log logger.Logger) (*Reconci
 	// Step 3: Hash untracked files for matching
 	totalUntracked := len(untrackedFiles)
 	report(0, totalUntracked, fmt.Sprintf("Hashing %d untracked files...", totalUntracked))
-	hashIndex := make(map[string]string)
-	for i, fp := range untrackedFiles {
-		h, err := scanner.ComputeSegmentFileHash(fp)
-		if err != nil {
-			continue
-		}
-		hashIndex[h] = fp
-		if i%100 == 0 && i > 0 {
-			report(i, totalUntracked, fmt.Sprintf("Hashed %d/%d untracked files", i, totalUntracked))
-		}
-	}
+	hashIndex := hashFilesConcurrent(untrackedFiles, func(done int) {
+		report(done, totalUntracked, fmt.Sprintf("Hashed %d/%d untracked files", done, totalUntracked))
+	})
 	report(totalUntracked, totalUntracked, fmt.Sprintf("Hashed %d/%d untracked files", totalUntracked, totalUntracked))
 	logMsg("info", fmt.Sprintf("Computed hashes for %d untracked files", len(hashIndex)))
 
