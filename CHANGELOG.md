@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.160.0 -->
+<!-- version: 3.161.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-16 -->
 
@@ -8,6 +8,26 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 16, 2026 - fix(ai): author merge/alias no longer deletes an author whose books failed to reassign
+
+Completes the apply-path guard hardening. The AI author-review apply
+(`internal/server/ai_ops.go`, `RegisterAIAuthorMergeApplyOp`) — both the `merge`
+and `alias` actions — re-points every book crediting a variant author onto the
+canonical author, then deletes the variant. The delete ran **unconditionally**:
+a book whose `SetBookAuthors` reassignment failed (or whose `GetBookAuthors` read
+failed and was silently `continue`d) still credited the variant, which was then
+deleted anyway → a **dangling `BookAuthor` row** / lost author attribution.
+
+- **Fix:** the per-book reassignment loop (duplicated in both actions) is extracted
+  into a testable `reassignBooksFromAuthor` helper that returns per-book errors. The
+  variant author is deleted **only** when that result is empty (every book re-pointed);
+  otherwise the delete is skipped and the failure is reported. A previously-silent
+  `GetBookAuthors` read error now also blocks the delete.
+- Tests (`ai_author_reassign_test.go`): all-succeed re-points both books; a
+  `SetBookAuthors` failure, a `GetBookAuthors` read failure, and a book-list failure
+  each block the delete; a book already crediting the canonical author has the variant
+  credit de-duplicated (remap logic preserved).
 
 #### July 16, 2026 - fix(apply-paths): harden two silent-failure guards against data loss
 
