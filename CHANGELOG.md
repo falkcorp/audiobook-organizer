@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.159.0 -->
+<!-- version: 3.160.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-16 -->
 
@@ -8,6 +8,27 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 16, 2026 - fix(apply-paths): harden two silent-failure guards against data loss
+
+Two error-swallowing sites in destructive apply paths, found via a read-only
+silent-failure bug hunt and verified against source:
+
+- **iTunes regroup delete guard now fails CLOSED** (`internal/plugins/maintenance/itunes_regroup.go`).
+  The projected-empty-book delete guard read `files, _ := store.GetBookFiles(id)` and
+  `exts, _ := store.GetExternalIDsForBook(id)`, discarding both errors. On a transient
+  read error the slices were a misleading `nil` (len 0), so the guard `len(files)!=0 ||
+  len(exts)!=0` passed and `DeleteBook` ran on a book whose emptiness was never proven —
+  potentially deleting one that still owned files or iTunes PID ext-ids. The guard now
+  captures both errors and skips the delete (counts it as skipped) when either read fails.
+  Regression test drives the read-error branch and asserts the book survives.
+- **Combine author override no longer silently dropped** (`internal/merge/service.go`).
+  The user-supplied author override wrote via `_ = SetBookAuthors(...)` / `_, _ =
+  UpdateBook(...)`, so a failed write discarded the user's explicit choice while Combine
+  still reported success. Both now `slog.Warn` on error, matching the sibling title/narrator
+  override path. Behavior on the success path is unchanged.
+
+Executive summary: `docs/executive-summaries/2026-07-16-apply-path-guard-hardening-executive-summary.md`.
 
 #### July 16, 2026 - fix(ci): widen local mocks-check glob to catch nested mocks dirs (MOCK-FRESHNESS-GLOB-GAP)
 
