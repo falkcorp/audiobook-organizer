@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_organize_parallel_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 3f9a1c7e-2b6d-4a58-9e0f-7c1d5b8a4e2f
-// last-edited: 2026-07-07
+// last-edited: 2026-07-16
 
 package itunesservice
 
@@ -116,7 +116,7 @@ func buildOrganizeFixture(t *testing.T, n, distinctTitles int) ([]database.Book,
 	}
 
 	m := dbmocks.NewMockStore(t)
-	m.EXPECT().GetAllBooksCore(100000, 0).Return(core, nil)
+	m.EXPECT().GetAllBooksCore(0, 0).Return(core, nil)
 	for i := range books {
 		id := books[i].ID
 		b := books[i]
@@ -207,7 +207,7 @@ func TestOrganizeImportedBooks_ParallelMatchesSerial_NoDestinationRace(t *testin
 // no-op and must not panic on an empty slice.
 func TestOrganizeImportedBooks_EmptyList(t *testing.T) {
 	m := dbmocks.NewMockStore(t)
-	m.EXPECT().GetAllBooksCore(100000, 0).Return(nil, nil)
+	m.EXPECT().GetAllBooksCore(0, 0).Return(nil, nil)
 
 	imp := &Importer{store: m, organizeConcurrencyOverride: 4}
 	status := &itunesImportStatus{}

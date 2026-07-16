@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_error_paths_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: a7c3f2e1-4d8b-4e6a-9f0c-2b5d7e3a8c1f
-// last-edited: 2026-07-07
+// last-edited: 2026-07-16
 
 // Package itunesservice - error and edge-case tests for importer.go (TODO 4.13d).
 //
@@ -367,7 +367,7 @@ func TestSync_GetAllBooksFails_ReturnsError(t *testing.T) {
 
 	m := dbmocks.NewMockStore(t)
 	// After parsing and grouping, Sync calls GetAllBooksCore for the PID index.
-	m.EXPECT().GetAllBooksCore(100000, 0).Return(nil, fmt.Errorf("database connection lost")).Once()
+	m.EXPECT().GetAllBooksCore(0, 0).Return(nil, fmt.Errorf("database connection lost")).Once()
 	// No deferred iTunes updates (ITLWriteBackEnabled = false).
 
 	imp := newImporter(Deps{Store: m, Config: Config{ITLWriteBackEnabled: false}})

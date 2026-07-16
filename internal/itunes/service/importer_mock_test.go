@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_mock_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: e7f1a2b3-4c5d-6e7f-8a9b-0c1d2e3f4a5b
-// last-edited: 2026-07-07
+// last-edited: 2026-07-16
 
 package itunesservice
 
@@ -105,7 +105,7 @@ func TestGetStatusBulk_Mixed(t *testing.T) {
 
 func TestCollectITLUpdatesWithBookIDs_Empty(t *testing.T) {
 	m := dbmocks.NewMockStore(t)
-	m.EXPECT().GetAllBooksCore(100000, 0).Return([]database.BookCore{}, nil)
+	m.EXPECT().GetAllBooksCore(0, 0).Return([]database.BookCore{}, nil)
 
 	imp := newMockImporter(m)
 	updates, bookIDs := imp.CollectITLUpdatesWithBookIDs()
@@ -128,7 +128,7 @@ func TestCollectITLUpdatesWithBookIDs_SkipsNonPrimary(t *testing.T) {
 	}
 
 	m := dbmocks.NewMockStore(t)
-	m.EXPECT().GetAllBooksCore(100000, 0).Return([]database.BookCore{book.Core()}, nil)
+	m.EXPECT().GetAllBooksCore(0, 0).Return([]database.BookCore{book.Core()}, nil)
 
 	imp := newMockImporter(m)
 	updates, bookIDs := imp.CollectITLUpdatesWithBookIDs()
@@ -153,7 +153,7 @@ func TestCollectITLUpdatesWithBookIDs_BookLevel(t *testing.T) {
 	}
 
 	m := dbmocks.NewMockStore(t)
-	m.EXPECT().GetAllBooksCore(100000, 0).Return([]database.BookCore{book.Core()}, nil)
+	m.EXPECT().GetAllBooksCore(0, 0).Return([]database.BookCore{book.Core()}, nil)
 	m.EXPECT().GetBookFiles("book-2").Return(nil, nil)
 
 	imp := newMockImporter(m)
@@ -201,7 +201,7 @@ func TestCollectITLUpdatesWithBookIDs_FileLevel(t *testing.T) {
 	}
 
 	m := dbmocks.NewMockStore(t)
-	m.EXPECT().GetAllBooksCore(100000, 0).Return([]database.BookCore{book.Core()}, nil)
+	m.EXPECT().GetAllBooksCore(0, 0).Return([]database.BookCore{book.Core()}, nil)
 	m.EXPECT().GetBookFiles("book-3").Return(files, nil)
 
 	imp := newMockImporter(m)
