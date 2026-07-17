@@ -1,6 +1,7 @@
 // file: internal/itunes/service/status.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7a4f1e3c-9b2d-4e8f-a0c1-5d7e9f3b6a2c
+// last-edited: 2026-07-17
 
 package itunesservice
 
@@ -23,7 +24,14 @@ type itunesImportStatus struct {
 	Skipped   int
 	Linked    int
 	Failed    int
-	Errors    []string
+	// M5 soft-failure counters: previously-swallowed per-track errors that
+	// don't fail the book but do lose data (external-ID mapping writes,
+	// author links, undecodable iTunes locations). Surfaced in the import
+	// summary so drops are visible instead of silent.
+	MappingErrors      int
+	AuthorSetErrors    int
+	MalformedLocations int
+	Errors             []string
 }
 
 // importStatusMap is a concurrent map from opID → *itunesImportStatus,
@@ -48,13 +56,16 @@ func (sm *importStatusMap) snapshot(opID string) *itunesImportStatus {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return &itunesImportStatus{
-		Total:     s.Total,
-		Processed: s.Processed,
-		Imported:  s.Imported,
-		Skipped:   s.Skipped,
-		Linked:    s.Linked,
-		Failed:    s.Failed,
-		Errors:    append([]string(nil), s.Errors...),
+		Total:              s.Total,
+		Processed:          s.Processed,
+		Imported:           s.Imported,
+		Skipped:            s.Skipped,
+		Linked:             s.Linked,
+		Failed:             s.Failed,
+		MappingErrors:      s.MappingErrors,
+		AuthorSetErrors:    s.AuthorSetErrors,
+		MalformedLocations: s.MalformedLocations,
+		Errors:             append([]string(nil), s.Errors...),
 	}
 }
 
@@ -85,6 +96,27 @@ func incImportSkipped(s *itunesImportStatus) {
 func incImportLinked(s *itunesImportStatus) {
 	s.mu.Lock()
 	s.Linked++
+	s.mu.Unlock()
+}
+
+// incImportMappingError counts a failed CreateExternalIDMapping write (M5).
+func incImportMappingError(s *itunesImportStatus) {
+	s.mu.Lock()
+	s.MappingErrors++
+	s.mu.Unlock()
+}
+
+// incImportAuthorSetError counts a failed SetBookAuthors write (M5).
+func incImportAuthorSetError(s *itunesImportStatus) {
+	s.mu.Lock()
+	s.AuthorSetErrors++
+	s.mu.Unlock()
+}
+
+// incImportMalformedLocation counts an undecodable iTunes track location (M5).
+func incImportMalformedLocation(s *itunesImportStatus) {
+	s.mu.Lock()
+	s.MalformedLocations++
 	s.mu.Unlock()
 }
 
@@ -131,8 +163,15 @@ func updateImportProgress(log logger.Logger, s *itunesImportStatus, processed, t
 func buildImportSummary(s *itunesImportStatus) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return fmt.Sprintf(
+	summary := fmt.Sprintf(
 		"Import completed: %d new, %d linked, %d skipped, %d failed",
 		s.Imported, s.Linked, s.Skipped, s.Failed,
 	)
+	// M5: surface soft-failure counters so silently-dropped writes are
+	// visible in the summary instead of hidden behind a clean-looking line.
+	if s.MappingErrors > 0 || s.AuthorSetErrors > 0 || s.MalformedLocations > 0 {
+		summary += fmt.Sprintf(" (%d mapping errors, %d author-set errors, %d malformed locations)",
+			s.MappingErrors, s.AuthorSetErrors, s.MalformedLocations)
+	}
+	return summary
 }

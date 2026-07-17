@@ -219,9 +219,14 @@ func TestRewriteChunksLE_UpdatesLocation(t *testing.T) {
 		"aabbccddeeff1122": newLocation,
 	}
 
-	rewritten, count := rewriteChunksLEImpl(data, updateMap)
+	matched := map[string]bool{}
+	rewritten, count := rewriteChunksLEImpl(data, updateMap, matched)
 	if count != 1 {
 		t.Fatalf("expected 1 update, got %d", count)
+	}
+	// DL-5: the per-PID accounting must record exactly the rewritten PID.
+	if len(matched) != 1 || !matched["aabbccddeeff1122"] {
+		t.Fatalf("expected matched map to record aabbccddeeff1122, got %v", matched)
 	}
 
 	// Parse the rewritten data to verify
@@ -342,9 +347,14 @@ func TestRewriteChunksLE_NoMatchReturnsUnchanged(t *testing.T) {
 		"0000000000000000": "/new/path.m4b",
 	}
 
-	rewritten, count := rewriteChunksLEImpl(data, updateMap)
+	matched := map[string]bool{}
+	rewritten, count := rewriteChunksLEImpl(data, updateMap, matched)
 	if count != 0 {
 		t.Fatalf("expected 0 updates, got %d", count)
+	}
+	// DL-5: no rewrite → no PID recorded.
+	if len(matched) != 0 {
+		t.Fatalf("expected empty matched map, got %v", matched)
 	}
 
 	// Parse and verify location unchanged
@@ -374,7 +384,7 @@ func TestRewriteChunksLE_LocalURLUpdate(t *testing.T) {
 		"aabbccddeeff1122": `W:\new\path.m4b`,
 	}
 
-	rewritten, count := rewriteChunksLEImpl(data, updateMap)
+	rewritten, count := rewriteChunksLEImpl(data, updateMap, nil)
 	if count != 1 {
 		t.Fatalf("expected 1 update, got %d", count)
 	}
@@ -711,7 +721,7 @@ func TestRewriteMithContentLE(t *testing.T) {
 	}
 
 	// Invoke the function under test.
-	rewritten, count := rewriteMithContentLE(mithContainer, updateMap, currentPID)
+	rewritten, count := rewriteMithContentLE(mithContainer, updateMap, currentPID, nil)
 	if count != 1 {
 		t.Fatalf("expected 1 rewrite, got %d", count)
 	}

@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer.go
-// version: 1.12.2
+// version: 1.13.0
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
-// last-edited: 2026-07-16
+// last-edited: 2026-07-17
 
 package itunesservice
 
@@ -104,6 +104,15 @@ type Importer struct {
 	// seam purpose as organizeConcurrencyOverride: lets a test force the
 	// sequential path (1) and diff it against a parallel path.
 	enrichConcurrencyOverride int
+
+	// itlUpdateFn / itlRenameFn are test seams for the deferred ITL
+	// location-fix application (applyDeferredITunesUpdates, DL-5). Nil —
+	// the default for every real Importer — means the real
+	// itunes.UpdateITLLocations / itunes.RenameITLFile. Tests inject
+	// fakes so the applied-vs-pending bookkeeping can be exercised
+	// without a real binary ITL fixture.
+	itlUpdateFn func(inputPath, outputPath string, updates []itunes.ITLLocationUpdate) (*itunes.ITLWriteBackResult, error)
+	itlRenameFn func(oldPath, newPath string) error
 }
 
 // metadataFetcher is the narrow, single-method subset of *metafetch.Service
@@ -312,14 +321,25 @@ func (imp *Importer) Execute(ctx context.Context, opID string, req ImportRequest
 			}
 			trackNum := albumTrack.TrackNumber
 			trackLoc := importOpts.RemapPath(albumTrack.Location)
-			trackPath, _ := itunes.DecodeLocation(trackLoc)
-			_ = imp.store.CreateExternalIDMapping(&database.ExternalIDMapping{
+			trackPath, decErr := itunes.DecodeLocation(trackLoc)
+			if decErr != nil {
+				// M5: still create the mapping (PID linkage matters even
+				// without a path), but count + surface the malformed location.
+				incImportMalformedLocation(status)
+				log.Warn("Malformed iTunes location for track %d of '%s' (pid=%s): %v", trackNum, book.Title, albumTrack.PersistentID, decErr)
+			}
+			if mapErr := imp.store.CreateExternalIDMapping(&database.ExternalIDMapping{
 				Source:      "itunes",
 				ExternalID:  albumTrack.PersistentID,
 				BookID:      created.ID,
 				TrackNumber: &trackNum,
 				FilePath:    trackPath,
-			})
+			}); mapErr != nil {
+				// M5: a silently dropped mapping means the next sync can't
+				// match this track by PID — count it and say so.
+				incImportMappingError(status)
+				log.Warn("Failed to create iTunes external-ID mapping for '%s' (pid=%s, track %d): %v", book.Title, albumTrack.PersistentID, trackNum, mapErr)
+			}
 		}
 
 		if len(group.tracks) > 1 {
@@ -328,6 +348,10 @@ func (imp *Importer) Execute(ctx context.Context, opID string, req ImportRequest
 				trackLoc := importOpts.RemapPath(track.Location)
 				trackPath, decErr := itunes.DecodeLocation(trackLoc)
 				if decErr != nil {
+					// M5: a skipped segment here silently loses a book_files
+					// row for a multi-file book — count + log it.
+					incImportMalformedLocation(status)
+					log.Warn("Skipping book file for track %d of '%s': undecodable iTunes location: %v", track.TrackNumber, book.Title, decErr)
 					continue
 				}
 				trackFormat := strings.TrimPrefix(strings.ToLower(filepath.Ext(trackPath)), ".")
@@ -355,11 +379,19 @@ func (imp *Importer) Execute(ctx context.Context, opID string, req ImportRequest
 			for i := range book.Authors {
 				book.Authors[i].BookID = created.ID
 			}
-			_ = imp.store.SetBookAuthors(created.ID, book.Authors)
+			if saErr := imp.store.SetBookAuthors(created.ID, book.Authors); saErr != nil {
+				// M5: a dropped author link leaves the book unattributed —
+				// count + log instead of swallowing.
+				incImportAuthorSetError(status)
+				log.Warn("Failed to set %d author(s) on '%s' (%s): %v", len(book.Authors), book.Title, created.ID, saErr)
+			}
 		} else if created.AuthorID != nil {
-			_ = imp.store.SetBookAuthors(created.ID, []database.BookAuthor{
+			if saErr := imp.store.SetBookAuthors(created.ID, []database.BookAuthor{
 				{BookID: created.ID, AuthorID: *created.AuthorID, Role: "author", Position: 0},
-			})
+			}); saErr != nil {
+				incImportAuthorSetError(status)
+				log.Warn("Failed to set primary author on '%s' (%s): %v", book.Title, created.ID, saErr)
+			}
 		}
 
 		if req.ImportPlaylists {
@@ -388,6 +420,7 @@ func (imp *Importer) Execute(ctx context.Context, opID string, req ImportRequest
 
 		hashLinked := 0
 		hashBlocked := 0
+		hashBlockFailed := 0
 		for hi, bookID := range newBookIDs {
 			if log.IsCanceled() {
 				log.Info("Hash validation canceled")
@@ -415,13 +448,14 @@ func (imp *Importer) Execute(ctx context.Context, opID string, req ImportRequest
 			}
 
 			if blocked, err := imp.store.IsHashBlocked(hash); err == nil && blocked {
-				log.Warn("Hash validation: blocked hash for %s, soft-deleting", book.Title)
-				marked := true
-				now := time.Now()
-				book.MarkedForDeletion = &marked
-				book.MarkedForDeletionAt = &now
-				imp.store.UpdateBook(book.ID, book)
-				hashBlocked++
+				// C-6: only count (and claim) the soft-delete if the write
+				// actually landed — the sibling UpdateBook at the end of this
+				// loop checks its returns; this one must too.
+				if imp.softDeleteBlockedBook(book, log) {
+					hashBlocked++
+				} else {
+					hashBlockFailed++
+				}
 				continue
 			}
 
@@ -445,7 +479,7 @@ func (imp *Importer) Execute(ctx context.Context, opID string, req ImportRequest
 				log.UpdateProgress(totalGroups, totalGroups, msg)
 			}
 		}
-		log.Info("Hash validation completed: %d linked, %d blocked out of %d new books", hashLinked, hashBlocked, len(newBookIDs))
+		log.Info("Hash validation completed: %d linked, %d blocked, %d blocked-but-soft-delete-failed out of %d new books", hashLinked, hashBlocked, hashBlockFailed, len(newBookIDs))
 	}
 
 	// Phase 4: Metadata enrichment
@@ -475,6 +509,125 @@ func (imp *Importer) Execute(ctx context.Context, opID string, req ImportRequest
 	return nil
 }
 
+// softDeleteBlockedBook marks a blocked-hash book as MarkedForDeletion and
+// persists it, returning true only if the write actually landed (C-6). book
+// must be a full-fidelity row (Execute's hash-validation loop hydrates via
+// GetBookByID) so the write-back never persists a slim struct.
+func (imp *Importer) softDeleteBlockedBook(book *database.Book, log logger.Logger) bool {
+	marked := true
+	now := time.Now()
+	book.MarkedForDeletion = &marked
+	book.MarkedForDeletionAt = &now
+	if _, err := imp.store.UpdateBook(book.ID, book); err != nil {
+		log.Warn("Hash validation: blocked hash for '%s' (%s) but soft-delete write FAILED — book stays live: %v", book.Title, book.ID, err)
+		return false
+	}
+	log.Warn("Hash validation: blocked hash for '%s', soft-deleted", book.Title)
+	return true
+}
+
+// applyDeferredITunesUpdates applies pending deferred ITL location fixes
+// (accumulated while write-back was disabled) to the ITL file, then marks
+// applied ONLY the rows whose persistent IDs were actually rewritten in
+// the file (DL-5). Every other row stays pending and retries on the next
+// sync:
+//   - rows whose NewPath fails normalizeITunesLocation (WARN + metric
+//     logged there — CRIT-2) are never sent to the writer;
+//   - rows whose PID matched no location block in the ITL are reported
+//     via ITLWriteBackResult.UpdatedPersistentIDs and left pending;
+//   - a write error or a RenameITLFile failure commits nothing, so the
+//     whole batch stays pending (the .tmp is kept on rename failure per
+//     RenameITLFile's contract, for manual recovery).
+//
+// "Pending" = DeferredITunesUpdate.AppliedAt == nil (see
+// GetPendingDeferredITunesUpdates); MarkDeferredITunesUpdateApplied stamps
+// AppliedAt, permanently retiring the row — which is exactly why it must
+// only ever be called for rows really written to the ITL.
+func (imp *Importer) applyDeferredITunesUpdates(log logger.Logger) {
+	if !imp.cfg.ITLWriteBackEnabled || imp.cfg.LibraryWritePath == "" {
+		return
+	}
+	pending, pendErr := imp.store.GetPendingDeferredITunesUpdates()
+	if pendErr != nil {
+		log.Warn("Failed to load pending deferred iTunes updates: %v", pendErr)
+		return
+	}
+	if len(pending) == 0 {
+		return
+	}
+
+	// TASK-006: normalize each deferred NewPath into the canonical WinPath
+	// (the LE writer derives the 0x0B URL). Unmappable values are skipped
+	// with a WARN + metric, never written raw (CRIT-2) — and stay pending
+	// rather than being falsely marked applied (DL-5).
+	updates := make([]itunes.ITLLocationUpdate, 0, len(pending))
+	included := make([]database.DeferredITunesUpdate, 0, len(pending))
+	for _, p := range pending {
+		if winPath, ok := normalizeITunesLocation(p.PersistentID, p.NewPath); ok {
+			updates = append(updates, itunes.ITLLocationUpdate{PersistentID: p.PersistentID, NewLocation: winPath})
+			included = append(included, p)
+		}
+	}
+	if len(updates) == 0 {
+		log.Warn("Deferred iTunes updates: 0 of %d pending rows normalized to a writable location; all stay pending", len(pending))
+		return
+	}
+
+	updateFn := imp.itlUpdateFn
+	if updateFn == nil {
+		updateFn = itunes.UpdateITLLocations
+	}
+	renameFn := imp.itlRenameFn
+	if renameFn == nil {
+		renameFn = itunes.RenameITLFile
+	}
+
+	itlPath := imp.cfg.LibraryWritePath
+	tmpPath := itlPath + ".deferred-update.tmp"
+	result, itlErr := updateFn(itlPath, tmpPath, updates)
+	if itlErr != nil {
+		log.Warn("Failed to apply deferred iTunes updates: %v — all %d rows stay pending", itlErr, len(pending))
+		_ = os.Remove(tmpPath)
+		return
+	}
+	if result.UpdatedCount == 0 {
+		log.Warn("Deferred iTunes updates: none of %d normalized PIDs matched a track location in the ITL; all %d rows stay pending", len(updates), len(pending))
+		_ = os.Remove(tmpPath)
+		return
+	}
+	if renameErr := renameFn(tmpPath, itlPath); renameErr != nil {
+		// The real ITL was never replaced — nothing committed. Keep the .tmp
+		// (RenameITLFile's contract: left for manual recovery/retry) and keep
+		// every row pending for the next sync (DL-5).
+		log.Error("Deferred iTunes updates: wrote %d location fixes to %s but rename into place failed: %v — all %d rows stay pending", result.UpdatedCount, tmpPath, renameErr, len(pending))
+		return
+	}
+
+	written := make(map[string]bool, len(result.UpdatedPersistentIDs))
+	for _, pid := range result.UpdatedPersistentIDs {
+		written[strings.ToLower(pid)] = true
+	}
+	applied, markFailed, notInITL := 0, 0, 0
+	for _, p := range included {
+		if !written[strings.ToLower(p.PersistentID)] {
+			// PID absent from the ITL (track removed / never present):
+			// stays pending so a future ITL that contains it gets fixed.
+			notInITL++
+			continue
+		}
+		if markErr := imp.store.MarkDeferredITunesUpdateApplied(p.ID); markErr != nil {
+			// Row WAS written to the ITL; a failed mark means it will be
+			// re-applied (idempotently) next sync — safe, but log it.
+			markFailed++
+			log.Warn("Deferred iTunes update %d (pid=%s) written to ITL but failed to mark applied (will re-apply next sync): %v", p.ID, p.PersistentID, markErr)
+			continue
+		}
+		applied++
+	}
+	log.Info("Applied %d deferred iTunes updates: %d rows marked applied, %d mark failures, %d PIDs not in ITL, %d unmappable (unmarked rows stay pending)",
+		result.UpdatedCount, applied, markFailed, notInITL, len(pending)-len(included))
+}
+
 // Sync performs an incremental sync from the iTunes library XML.
 func (imp *Importer) Sync(ctx context.Context, libraryPath string, pathMappings []itunes.PathMapping, activityFn func(database.ActivityEntry), log logger.Logger) error {
 	log.UpdateProgress(0, 0, "Parsing iTunes library XML...")
@@ -498,33 +651,7 @@ func (imp *Importer) Sync(ctx context.Context, libraryPath string, pathMappings 
 	}
 
 	// Apply deferred iTunes updates before sync
-	if imp.cfg.ITLWriteBackEnabled && imp.cfg.LibraryWritePath != "" {
-		pending, _ := imp.store.GetPendingDeferredITunesUpdates()
-		if len(pending) > 0 {
-			// TASK-006: normalize each deferred NewPath into the canonical WinPath
-			// (the LE writer derives the 0x0B URL). Unmappable values are skipped
-			// with a WARN + metric, never written raw (CRIT-2).
-			updates := make([]itunes.ITLLocationUpdate, 0, len(pending))
-			for _, p := range pending {
-				if winPath, ok := normalizeITunesLocation(p.PersistentID, p.NewPath); ok {
-					updates = append(updates, itunes.ITLLocationUpdate{PersistentID: p.PersistentID, NewLocation: winPath})
-				}
-			}
-			itlPath := imp.cfg.LibraryWritePath
-			tmpPath := itlPath + ".deferred-update.tmp"
-			result, itlErr := itunes.UpdateITLLocations(itlPath, tmpPath, updates)
-			if itlErr == nil && result.UpdatedCount > 0 {
-				_ = itunes.RenameITLFile(tmpPath, itlPath)
-				for _, p := range pending {
-					_ = imp.store.MarkDeferredITunesUpdateApplied(p.ID)
-				}
-				log.Info("Applied %d deferred iTunes updates", result.UpdatedCount)
-			} else if itlErr != nil {
-				log.Warn("Failed to apply deferred iTunes updates: %v", itlErr)
-				_ = os.Remove(tmpPath)
-			}
-		}
-	}
+	imp.applyDeferredITunesUpdates(log)
 
 	importOpts := itunes.ImportOptions{
 		LibraryPath:  libraryPath,
@@ -1217,6 +1344,29 @@ func (imp *Importer) organizeImportedBooks(ctx context.Context, status *itunesIm
 
 		book.LibraryState = strPtr("organized")
 		if _, err := imp.store.UpdateBook(book.ID, book); err != nil {
+			if len(files) > 1 {
+				// C-7: a multi-file book got here via organizeMultiFileBook,
+				// which already MOVED each segment on disk and COMMITTED the
+				// matching per-file UpdateBookFile writes. Renaming the target
+				// directory back (the old single-file rollback) would strand
+				// those committed book_files rows pointing at paths that no
+				// longer exist — the segments were moved (and possibly
+				// renamed) individually, so a directory rename cannot restore
+				// them. The organized state on disk + book_files rows is
+				// self-consistent; only THIS Book row (FilePath/LibraryState)
+				// is stale. Don't touch the disk — fail loudly with a
+				// reconcile hint instead.
+				ids := make([]string, 0, len(files))
+				for _, f := range files {
+					ids = append(ids, f.ID)
+				}
+				msg := fmt.Sprintf(
+					"CRITICAL: UpdateBook failed after multi-file organize for '%s' (%s): %v — book row still points at %s but the segments and %d book_files rows moved to %s; reconcile book_file IDs: %s",
+					book.Title, book.ID, err, oldPath, len(files), book.FilePath, strings.Join(ids, ","))
+				log.Error("%s", msg)
+				recordImportFailure(status, msg)
+				return nil
+			}
 			log.Error("Failed to update organized path for '%s': %v — rolling back", book.Title, err)
 			if book.FilePath != oldPath {
 				if rbErr := os.Rename(book.FilePath, oldPath); rbErr != nil {
@@ -1646,6 +1796,10 @@ func (imp *Importer) commonParentDir(tracks []*itunes.Track, opts itunes.ImportO
 		location := opts.RemapPath(t.Location)
 		p, err := itunes.DecodeLocation(location)
 		if err != nil {
+			// M5: an undecodable location silently narrows the common-parent
+			// computation (and can mistitle/misplace the book) — say so.
+			slog.Warn("iTunes import: undecodable track location excluded from common-parent-dir computation",
+				"track", t.Name, "pid", t.PersistentID, "error", err)
 			continue
 		}
 		paths = append(paths, filepath.Dir(p))
