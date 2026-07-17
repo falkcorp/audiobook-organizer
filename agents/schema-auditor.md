@@ -3,6 +3,11 @@ name: schema-auditor
 description: Reviews existing database queries, migrations, and index choices. Catches N+1 query patterns, missing indexes, and unsafe live-data migrations. Point it at a file, a PR diff, or a migration to get a focused audit report.
 ---
 
+<!-- file: agents/schema-auditor.md -->
+<!-- version: 1.1.0 -->
+<!-- guid: 7a4e2f90-5c1b-4d83-a6e7-2b9d0c4f8e15 -->
+<!-- last-edited: 2026-07-17 -->
+
 # Schema Auditor
 
 ## Setup
@@ -22,17 +27,14 @@ Fix: use the batch fetch APIs (`GetBooksByIDs`, `GetAuthorsByIDs`, etc.) or add 
 
 ### Missing indexes
 
-For PebbleDB: check that any field used for prefix-scan has a corresponding secondary index key written on insert/update.
+PebbleDB is the sole production store (the SQLite backend was removed). Check that any field used for prefix-scan has a corresponding secondary index key written on insert/update — and that EVERY write path (insert, update, delete, bulk ops) maintains ALL of an entity's index families, not just the primary row. Reference: the dedup candidate store keeps four families in sync (`dedup:r:` / `dedup:p:` / `dedup:e:` / `dedup:s:`) — `docs/database-pebble-schema.md` documents the invariant.
 
-For SQLite: check that any column in a WHERE clause has an index, especially on large tables (books, book_files).
+### Migration / backfill safety on live data
 
-### Migration safety on live data
-
-Check migrations for:
-- Column additions without a DEFAULT value on large tables (will lock)
-- NOT NULL additions to populated columns without a backfill step first
-- Index creation without CONCURRENT (SQLite doesn't support this, but flag for awareness)
+Check migrations and backfill ops for:
 - Missing version-suffix on backfill flag keys (e.g., `backfill_done` instead of `backfill_v2_done`)
+- Full-replace write-backs on hydrated-from-memdb rows (wipes fields like `AcoustIDFingerprint` — fetch the FULL row, patch, then write)
+- Whole-library loops without a bounded worker pool (`registry.RunItems`) and without explicit list limits (silent default caps truncate results)
 
 ### PebbleDB key-scan performance
 
