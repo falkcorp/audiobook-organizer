@@ -1,7 +1,11 @@
-<!-- file: docs/dedup-feedback-loop.md -->
-<!-- version: 1.0.0 -->
+<!-- file: docs/archive/2026-07-consolidation/dedup-feedback-loop.md -->
+<!-- version: 1.1.0 -->
 <!-- guid: 4e1b9c27-7a30-4d85-9f62-1c8a5e0b3d74 -->
-<!-- last-edited: 2026-06-18 -->
+<!-- last-edited: 2026-07-17 -->
+
+> Archived 2026-07-17 — superseded by [`docs/dedup/STATUS.md`](../../dedup/STATUS.md)
+> (still-valid content folded in there). Candidate figures below (387K etc.) are
+> obsolete; real 2026-07 backlog is 15,269 pending / 9,074 exact-pending.
 
 # Dedup Feedback Loop — Architecture
 
