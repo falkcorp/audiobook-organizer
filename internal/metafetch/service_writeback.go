@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_writeback.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: fad73c11-30c2-4fdc-addd-45afef25d792
-// last-edited: 2026-07-03
+// last-edited: 2026-07-17
 
 package metafetch
 
@@ -560,10 +560,12 @@ func (mfs *Service) runApplyPipeline(id string, book *database.Book) error {
 	entries := ComputeTargetPaths(config.AppConfig.RootDir, pathFormat, segTitleFormat, book, bookFiles, vars)
 
 	if config.AppConfig.AutoRenameOnApply && !hasCheckpoint(mfs.db, id, phaseRename) {
-		renameResult, err := RenameFiles(entries)
-		if err != nil {
-			return fmt.Errorf("rename files: %w", err)
-		}
+		renameResult, renameErr := RenameFiles(entries)
+		// Even when RenameFiles returns an error, entries in
+		// renameResult.Succeeded have physically moved on disk — their DB
+		// paths MUST still be updated below, or the library loses track of
+		// files that did move. The error is returned after the DB sync,
+		// before the rename checkpoint is set.
 		if len(renameResult.Skipped) > 0 {
 						slog.Warn("files skipped (source missing) during rename", "count", len(renameResult.Skipped))
 		}
@@ -616,6 +618,13 @@ func (mfs *Service) runApplyPipeline(id string, book *database.Book) error {
 										slog.Info("updated book path for", "id", id, "path", newBookPath)
 				}
 			}
+		}
+
+		// DB paths for every succeeded rename are persisted; now surface the
+		// rename failure. The checkpoint is NOT set, so the next apply run
+		// retries the rename (including any stranded-temp resume).
+		if renameErr != nil {
+			return fmt.Errorf("rename files: %w", renameErr)
 		}
 		setCheckpoint(mfs.db, id, phaseRename)
 	}
