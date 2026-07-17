@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/README.md -->
-<!-- version: 2.2.0 -->
+<!-- version: 2.2.1 -->
 <!-- guid: 7a1e0c44-9d2b-4f08-bc31-2e5a6b7c8d90 -->
 <!-- last-edited: 2026-07-17 -->
 
@@ -133,7 +133,7 @@ go test ./<changed-packages>/ -count=1     # exact packages named in the task
 > fails on every branch due to a `mockery` version drift (`interface{}`→`any`);
 > and `TestBackupEndpointsErrors` / `TestScanService_MultiChapterAudiobook` are
 > pre-existing flaky tests. Your gate is your changed packages passing locally.
-> See [`dedup-intro-falsepositive/`](dedup-intro-falsepositive/) sibling note and
+> See [`dedup-intro-falsepositive/`](../archive/agent-tasks/dedup-intro-falsepositive/) sibling note and
 > the `flaky-tests` follow-up in this repo's TODO.md.
 
 ## Definition of Done (every task)
