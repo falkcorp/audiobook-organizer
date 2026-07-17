@@ -1,13 +1,14 @@
 // file: internal/plugins/itunes/import.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-05-15
+// last-edited: 2026-07-17
 
 package itunes
 
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -35,6 +36,10 @@ func (p *Plugin) importDef() sdk.OperationDef {
 func (p *Plugin) runImport(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
 	// TODO: Implement iTunes import operation.
 	// This should handle parameterized imports (genre, selection, etc.).
+	// NOTE: the canonical itunes.import op is registered by
+	// server.RegisterITunesImportOp (itunes_ops.go); this stub is
+	// intentionally unregistered (see Register in plugin.go).
+	_ = reporter.Log(slog.LevelWarn, "op not implemented — no-op", slog.String("def_id", "itunes.import"))
 	return nil
 }
 

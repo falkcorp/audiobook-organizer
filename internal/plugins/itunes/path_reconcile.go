@@ -1,13 +1,14 @@
 // file: internal/plugins/itunes/path_reconcile.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d4e5f6a7-b8c9-0123-defg-234567890123
-// last-edited: 2026-05-07
+// last-edited: 2026-07-17
 
 package itunes
 
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -35,5 +36,6 @@ func (p *Plugin) pathReconciledDef() sdk.OperationDef {
 func (p *Plugin) runPathReconcile(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
 	// TODO: Implement iTunes path reconciliation operation.
 	// This should call p.svc.Paths.Reconcile(ctx, opID, progress).
+	_ = reporter.Log(slog.LevelWarn, "op not implemented — no-op", slog.String("def_id", "itunes.path-reconcile"))
 	return nil
 }
