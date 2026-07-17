@@ -1,14 +1,21 @@
 <!-- file: docs/AI-REFERENCE.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: e5f4g3h2-i1j0-k9l8-m7n6-o5p4q3r2s1t0 -->
-<!-- last-edited: 2026-07-03 -->
+<!-- last-edited: 2026-07-17 -->
 
 # AI Reference Guide — Audiobook Organizer
 
 > **Purpose**: Complete project reference for AI agents. Read this before making any changes.
 > Keep this file updated with every architectural change.
 
-**Last updated**: 2026-07-01 | **Server version**: 1.117.0 | **Total API routes**: see `grep -rn '\.GET(\|\.POST(\|\.PUT(\|\.DELETE(\|\.PATCH(' --include='*.go' internal/server | grep -v _test.go | wc -l` for current count (~395 as of 2026-07-03)
+**Last updated**: 2026-07-17 | **Server version**: `v0.217.x` (ldflags-injected from the git tag into `main.version` → `server.SetVersion()`; defaults to `dev` in local builds — latest stable release `v0.217.7`) | **Total API routes**: see `grep -rn '\.GET(\|\.POST(\|\.PUT(\|\.DELETE(\|\.PATCH(' --include='*.go' internal/server | grep -v _test.go | wc -l` for current count (~608 as of 2026-07-17)
+
+**Live status docs** (read these for current numbers — this file documents structure, not state):
+
+- [`docs/dedup/STATUS.md`](dedup/STATUS.md) — dedup single source of truth (candidate counts, backlog composition; "if a number conflicts with an older doc, this doc wins")
+- [`docs/operations/pending-prod-actions.md`](operations/pending-prod-actions.md) — queued prod actions awaiting execution/human decision
+- [`docs/plans/DECISIONS-PENDING.md`](plans/DECISIONS-PENDING.md) — open decisions awaiting the owner
+- [`docs/audits/2026-07-17-multi-discipline-review.md`](audits/2026-07-17-multi-discipline-review.md) — latest cross-cutting code review findings
 
 ## Quick Facts
 
@@ -55,7 +62,10 @@ The Go binary embeds the compiled React app. A single process serves both the AP
 ### `internal/database` — Data layer
 - **store.go** — `Store` interface (composite of ~36 role interfaces: `BookStore`, `AuthorStore`, `MetadataCacheStore`, …; PebbleStore is the ONLY implementation), ALL entity struct definitions (Book, Author, Series, Work, Narrator, BookSegment, Operation, etc.)
 - **pebble_store.go** — Primary implementation. Key schema: `book:<ulid>`, `book:path:<filepath>`, `book:hash:<hash>`, `author:<id>`, `series:<id>`, etc.
-- **embedding_store.go** — `EmbeddingStore` wrapping the main audiobooks.pebble DB for embeddings + dedup candidates + labeled dataset. Key-space: `emb:v:*`, `emb:c:*`, `dedup:r:*`, `dedup:p:*`, `dedup:seq`, `dedup:label:*`.
+- **embedding_store.go** — `EmbeddingStore` wrapping the main audiobooks.pebble DB for embeddings + dedup candidates + labeled dataset. Key-space: `emb:v:*`, `emb:c:*`, `dedup:r:*`, `dedup:p:*`, `dedup:e:*` (entity index), `dedup:s:*` (status index), `dedup:seq`, `dedup:label:*`.
+- **dedup_automerge_journal.go** — `dedup:automerge:<unixNano16hex>` journal entries written by the `dedup.auto-resolve` apply path; each merge records the book_ver snapshot timestamps so `Engine.UnmergeAuto` can reverse it.
+- **review_store.go** — generic human-review queue on `*PebbleStore` (`review_item:r:*` records, `review_item:status:*` index, `review_item:dedupkey:*` idempotency index). v1 producer is the regroup op; `UpsertReviewItem` upserts by stable DedupKey and never resurfaces an already-decided (approved/rejected/applied) item.
+- **pebble_store_ops_v2.go** — operations-registry-v2 persistence (`opv2:*` keyspace, see below).
 - **dedup_label.go** — Labeled dedup training dataset keyspace (`dedup:label:<candidateID,16hex>`). Types: `LabeledExample` (candidate pair + feature snapshot + label fields), `BookFeatures` (per-book evidence: title, author, path, durations, file count, has_cover, files_exist, recording_ids, itunes_pid_present, whole_book_sig_present), `LabeledExampleFilter`. Methods on `*EmbeddingStore`: `UpsertLabeledExample`, `GetLabeledExample`, `ListLabeledExamples`, `CountLabeledExamples`.
 - **ai_scan_store.go** — Separate PebbleDB (`ai_scans.db`) for AI dedup pipeline
 - **mock_store.go** — Test mock (generated with mockery patterns)
@@ -90,9 +100,35 @@ The Go binary embeds the compiled React app. A single process serves both the AP
 - **openai_parser.go** — `OpenAIParser` with methods: `ParseFilename()`, `ParseAudiobook()`, `ParseCoverArt()`, `ReviewAuthorDuplicates()`, `DiscoverAuthorDuplicates()`, `CreateBatchAuthorDedup()`, `CheckBatchStatus()`, `DownloadBatchResults()`
 - **embedding_client.go** — Local embedding/LLM backend via Ollama: `bge-m3` (1024-dim vectors) for embeddings; `qwen2.5:7b-instruct` for LLM tasks. Primary backend for dedup/candidate ranking. See `internal/database/hnsw_embedding_store.go`, `internal/dedup/engine.go`, `internal/server/registry_wire.go` for integration points. OpenAI backend (`openai_parser.go`) remains in use for specific flows already documented above.
 
-### `internal/operations` — Background job queue
+### `internal/operations` — Background job queue (legacy v1)
 - **queue.go** — `OperationQueue` with timeout (configurable, default 30min), checkpoint/resume support, cancellation
 - Key: `Enqueue(id, type, folderPath, fn)`, `SetOperationTimeout()`, `SaveCheckpoint()`, `LoadCheckpoint()`
+
+### `internal/operations/registry` — Operations registry v2 (UOS)
+The plugin-op execution system. All `<plugin>.<op-name>` ops (dedup.*, maintenance.*, acoustid.*, …) run through this, persisted in the `opv2:` keyspace via `database.OpsV2Store` (`internal/database/pebble_store_ops_v2.go`).
+
+- **registry.go** — central `Registry`: owns every `OperationDef`, run handles, per-plugin `max_concurrent` caps, the ConcurrencyKey holder map, enqueue/cancel entry points
+- **dispatcher.go** — `runDispatcher`: 100ms-tick dispatch loop; walks queued ops in priority DESC / queued_at ASC order and promotes eligible ones to the worker pool (gates: plugin cap, ConcurrencyKey, deps)
+- **worker.go** — worker goroutines that execute op handlers with panic recovery, OTel tracing, abandoned-goroutine tracking (grace period before freeing the slot), infinite-restart detection
+- **watchdog.go** — periodic (30s) inspection of in-flight ops; writes `opv2:strike:` rows for uncheckpointed `ResumeRestart` ops and cancels ops stuck past `def.ProgressTimeout`
+- **resume.go** — `resumeAfterStartup`: walks `queued|running` rows on start and applies the def's `ResumePolicy` (`ResumeRestart` = re-dispatch with saved state, `ResumeRequeue` = fresh queued op, drop = discard)
+- **batch.go** — coalesces burst enqueues of a `Batchable` op type into ONE operation row via a debounce timer
+- **run_items.go** — `RunItems[T]`: generic bounded worker-pool helper (Concurrency, PerItemTimeout, ErrModeFail/ErrModeCollect). **The mandated pattern for any whole-library per-item loop** (see CLAUDE.md concurrency rules); never write a plain `for range books` loop with per-item DB/network/subprocess work
+
+`opv2:` key families (from the `pebble_store_ops_v2.go` header comment):
+
+```text
+opv2:def:{def_id}                                → OpDefinitionV2Row JSON
+opv2:op:{op_id}                                  → OperationV2Row JSON
+opv2:q:{999-priority:03d}:{ts_nano:020d}:{op_id} → op_id   (queue index; low byte-order = high priority, FIFO within priority)
+opv2:act:{op_id}                                 → ""      (active index: present while queued|running)
+opv2:state:{op_id}                               → OpStateV2Row JSON (checkpoint state)
+opv2:log:{op_id}:{ts_nano:020d}:{seq:010d}       → OpLogV2Row JSON
+opv2:err:{op_id}:{ts_nano:020d}                  → OpErrorV2Row JSON
+opv2:strike:{def_id}:{ts_nano:020d}:{op_id}      → OpStrikeV2Row JSON (watchdog strikes)
+```
+
+**ConcurrencyKey dedupe semantics**: an `OperationDef` may declare a `ConcurrencyKey` string; the dispatcher never runs two ops holding the same key simultaneously (the holder map in `Registry` maps key → running op ID; a queued op whose key is held stays queued). Use it to serialize op families that would corrupt shared state if overlapped.
 
 ### `internal/config` — Configuration
 - **config.go** — `Config` struct with 100+ fields. Global: `config.AppConfig`
@@ -113,6 +149,9 @@ The Go binary embeds the compiled React app. A single process serves both the AP
 
 ### `internal/dedup` — Book deduplication engine
 - **engine.go** — `Engine` type; per-layer candidate emitters (`checkExactTitle`, `checkExactISBN`, `checkExactFileHash`, `checkExactMetadataSourceHash`, `checkDurationMatch`; the AcoustID/LSH/embedding/metadata-fuzzy collectors live in `collectors_*.go`); `PairEligibility` pre-filter; `hasPlausibleAudio(book) bool` gate (returns true when `Duration > 0` OR `FileSize >= 256 KiB`). The exact-title and exact-ISBN emitters call this gate for both sides before emitting a candidate — prevents stub/unscanned books from creating false-positive pairs.
+- **Candidate `Status` is a VERDICT, not derived data** (PR #1973): `dismissed` and `merged` record a decision (human review or auto-resolve). `EmbeddingStore.UpsertCandidateNew` never lets a rescan's `pending` overwrite a terminal status (`isTerminalCandidateStatus`) — before the fix, every `dedup.full-scan` resurrected dismissals (43 flips measured on a prod replica), so the review queue could never converge. Layer precedence on re-upsert: `exact` never overwritten; `llm` protected except by `exact`; a row with a non-empty `FormulaVersion` is never downgraded by a legacy writer without one (T015).
+- **No-silent-caps pattern**: whole-backlog list calls pass an explicit `Limit: 1_000_000` (e.g. `auto_resolve.go`, `engine.go`) instead of relying on a default page size that silently truncates; `drain_stale.go` deliberately streams with real Limit/Offset paging instead of materializing the backlog. Never add a whole-library read that inherits a silent default cap (see `feedback_getallbooksfrom_memdb_cap`).
+- **auto_resolve.go** — `Engine.AutoResolveCertain`: Tier-1 auto-merge of Band-CERTAIN candidates (≥2 primary signals or a whole-book-signature `true_dup` label). Dry-run by default; `apply=true` is refused unless the `dedup.auto_resolve_enabled` kill switch is on (owner greenlight) and respects a `max_merges` cap. Every applied merge writes a `dedup:automerge:` journal entry so `UnmergeAuto` can reverse it via book_ver snapshots.
 - **dataset/** (sub-package) — Pure builder + deterministic catchers for the labeled training dataset. No side effects.
   - `BuilderStore` interface: `GetBook(id string)`, `GetBookFiles(id string)`
   - `BuildExample(BuilderStore, DedupCandidate) (LabeledExample, error)` — loads both books, computes `DurationRatio`, `FolderRelation`, `SharesRecordingID`, `SignatureRelation`. Label fields left empty; caller must run `Classify`.
@@ -123,6 +162,14 @@ The Go binary embeds the compiled React app. A single process serves both the AP
 - **dataset_backfill.go** — `dedup.dataset-backfill` UOS op. Iterates all pending candidates, calls `dataset.BuildExample` + `dataset.Classify`, writes `LabeledExample` to `dedup:label:` keyspace. With `apply=true`, dismisses candidates labeled `not_dup` by a catcher. Dry-run by default. Idempotent.
   - `builderAdapter` bridges `database.Store.GetBookByID` → `BuilderStore.GetBook` (name mismatch bridged without touching either interface).
   - Known limitation: pairs where one side has `Duration=0` but file records exist are NOT caught by the current catchers — they are left unlabeled for human/ML review. The engine gate stops NEW such pairs from being created; existing residual pairs need a future FileSize-aware catcher.
+- **auto_resolve.go** — `dedup.auto-resolve` op wrapping `Engine.AutoResolveCertain` (dry-run default; apply gated by the `dedup.auto_resolve_enabled` kill switch + `max_merges` cap — see engine section above).
+- **rescore_labeled_examples.go** — `dedup.rescore-labeled-examples` op: recomputes each labeled pair's `ScoreBreakdown` with the engine's existing scorer (calibration was blocked because labeled examples captured before T015 carry no breakdowns). A sibling backfill for pre-T015 CANDIDATE rows (`dedup:r:` records lacking `ScoreBreakdown`) is in progress on a feature branch, not yet in this tree.
+- **drain_stale.go** — `dedup.drain-stale` op: pages the pending-exact backlog with real Limit/Offset (never a one-shot 1M materialization), checkpoint/resume via `SaveCheckpoint`, capped per-bucket samples in the dry-run report.
+
+### `internal/plugins/maintenance` — Maintenance ops (selected)
+- **regroup_shattered_ai.go** (PR-B1) — dry-run producer: writes one review-queue HOLD per candidate regroup folder; touches ZERO books.
+- **regroup_apply.go** (PR-B2) — the APPLY path for the regroup review queue. One apply function per CONFIDENT kind: `regroup.multidisc` → `CombineBooks(ids, primary, nil)` (nil override so the survivor row is never rewritten — no write-back wipe), `regroup.version-group` → re-fetch-and-patch `UpdateBook` mutating ONLY `VersionGroupID`. `regroup.anthology`/`regroup.ambiguous` are deliberately handler-less (need human sub-decisions). Prod apply is gated by config `review_apply_enabled` (`internal/config/config.go`, **default OFF** — plain `viper.GetBool`, no default set); the review handler refuses the merge and says so when the flag is off.
+- **title_backfill.go** — `maintenance.title-backfill` ("Strip chapter prefixes from book titles", the CONS-17b title-leak repair — called "title-repair" in `docs/operations/pending-prod-actions.md`). Two-phase: slim `BookCore` scan, then per-book hydrate-full-row-then-write so denormalized Author/Series are never wiped.
 
 ---
 
@@ -363,15 +410,20 @@ sess:<session_ulid>            → Session JSON
 ### Dedup / Embedding keyspace (within the main audiobooks.pebble DB)
 
 ```
-emb:v:<entityType>:<entityID>  → embRec JSON          (embedding vector record)
-emb:c:<model>:<textHash>       → raw float32 blob      (embedding cache)
-dedup:r:<id16hex>              → DedupCandidate JSON   (candidate record)
-dedup:p:<type>:<aID>:<bID>     → id16hex               (pair uniqueness index)
-dedup:seq                      → [8]byte LE int64      (auto-increment counter)
-dedup:label:<id16hex>          → LabeledExample JSON   (labeled training dataset)
+emb:v:<entityType>:<entityID>            → embRec JSON          (embedding vector record)
+emb:c:<model>:<textHash>                 → raw float32 blob      (embedding cache)
+dedup:r:<id16hex>                        → DedupCandidate JSON   (candidate record)
+dedup:p:<type>:<aID>:<bID>               → id16hex               (pair uniqueness index; A/B canonicalized aID < bID)
+dedup:e:<entityType>:<entityID>:<id16hex>→ (empty)               (entity index — BOTH sides written, so "all candidates for entity X" is O(k))
+dedup:s:<status>:<id16hex>               → (empty)               (status index, INIT-2 T4 — "all pending" without a full dedup:r: scan)
+dedup:seq                                → [8]byte LE int64      (auto-increment counter)
+dedup:label:<id16hex>                    → LabeledExample JSON   (labeled training dataset)
+dedup:automerge:<unixNano16hex>          → AutoMergeJournalEntry JSON (auto-resolve merge journal; UnmergeAuto reversal)
 ```
 
 Key format note: `<id16hex>` is a 16-character lowercase hex string encoding a signed int64 as uint64 (e.g., `fmt.Sprintf("%016x", uint64(candidateID))`). This zero-pads the key so prefix scans return rows in stable order.
+
+**Index-maintenance invariant** (fixed 2026-07-17): `DeleteCandidate` deletes all four candidate key families in one batch — `dedup:r:`, `dedup:p:`, both `dedup:e:` entries, and `dedup:s:`. Any bulk delete/purge path MUST do the same; deleting only `dedup:r:` leaves orphaned pair/entity/status index rows that block re-emission and corrupt status-filtered counts. Status changes must move the `dedup:s:` row (delete old-status key, write new-status key) — see `UpdateCandidateStatus` / `WriteCandidateStatusIndexRow` in `embedding_store.go`.
 
 ---
 

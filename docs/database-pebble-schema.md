@@ -1,7 +1,7 @@
 <!-- file: docs/database-pebble-schema.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 8f6e2c1b-7d4a-4f86-9f2a-5a6b7c8d9e0f -->
-<!-- last-edited: 2026-07-03 -->
+<!-- last-edited: 2026-07-17 -->
 
 # PebbleDB Keyspace Schema and Data Model
 
@@ -275,8 +275,26 @@ prefix: `emb:` for embeddings, `dedup:` for candidates and labels.
 | Key pattern | Value | Notes |
 |-------------|-------|-------|
 | `dedup:r:<id16hex>` | `DedupCandidate` JSON | Candidate record; primary row |
-| `dedup:p:<type>:<aID>:<bID>` | `<id16hex>` | Pair uniqueness index (prevents re-emission) |
-| `dedup:seq` | `[8]byte` little-endian int64 | Auto-increment counter for candidate IDs |
+| `dedup:p:<type>:<aID>:<bID>` | `<id16hex>` | Pair uniqueness index (prevents re-emission); entity IDs canonicalized so `aID < bID` before write |
+| `dedup:e:<entityType>:<entityID>:<id16hex>` | empty | Entity secondary index. Written for BOTH sides of the pair, so "all candidates touching entity X" is an O(k) prefix scan (`dedupEntityKey`, used by `ListCandidatesForEntity`; backfillable via `BackfillEntityIndex`) |
+| `dedup:s:<status>:<id16hex>` | empty | Status secondary index (INIT-2 T4, `dedupStatusIdxKey`). Presence-only: prefix-scan `dedup:s:pending:` yields every pending candidate ID without a full `dedup:r:` scan. Falls back to a full scan when the index has not been built; status-filtered reads re-check the record's status on point-read |
+| `dedup:seq` | `[8]byte` little-endian int64 | Auto-increment counter for candidate IDs; incremented in the same batch as the new record so counter + row land atomically |
+| `dedup:automerge:<unixNano16hex>` | `AutoMergeJournalEntry` JSON | Auto-merge journal written by the `dedup.auto-resolve` apply path (one entry per merge). Records winner/loser IDs + their pre-merge `book_ver` snapshot timestamps so `Engine.UnmergeAuto` can reverse the merge. Fixed-width hex nano timestamp keeps scans chronological |
+
+**Index maintenance (invariant, fixed 2026-07-17):** every write path must keep
+all four candidate families consistent. `UpsertCandidateNew` writes `dedup:r:` +
+`dedup:p:` + both `dedup:e:` rows + `dedup:s:` in one batch; `DeleteCandidate`
+deletes all of them in one batch; `UpdateCandidateStatus` moves the `dedup:s:`
+row (delete old-status key, write new-status key). Bulk delete/purge code MUST
+mirror `DeleteCandidate` — deleting only the `dedup:r:` row orphans the pair
+index (blocking re-emission) and corrupts status-filtered counts. Candidate
+batches commit with `pebble.NoSync` (`candidateWriteOpts`) to avoid write
+stalls (#19).
+
+Status semantics: `Status` is a verdict (`pending` → `dismissed` | `merged`),
+not derived data. `UpsertCandidateNew` never overwrites a terminal status
+(`dismissed`/`merged`) with a rescan's `pending` (`isTerminalCandidateStatus`,
+PR #1973).
 
 ### Labeled dataset keyspace
 
@@ -295,6 +313,50 @@ files_exist, recording_ids, itunes_pid_present, whole_book_sig_present);
 `duration_ratio`, `folder_relation`, `shares_recording_id`,
 `signature_relation`; `label`, `label_source`, `label_reason`, `decided_at`,
 `formula_version`. Empty `label` = unlabeled, features only.
+
+## Review-queue keyspace (`internal/database/review_store.go`, PR-A1)
+
+A generic, producer-agnostic queue of items flagged for a human decision,
+implemented on `*PebbleStore` (main DB). v1 producer is the regroup op
+(`internal/plugins/maintenance/regroup_shattered_ai.go`); the apply path is
+`regroup_apply.go`, gated by config `review_apply_enabled` (default OFF).
+Mirrors the dedup store's record/status-index split but in its own keyspace.
+
+| Key pattern | Value | Notes |
+|-------------|-------|-------|
+| `review_item:r:<id>` | `ReviewItem` JSON | Primary record. `id` is a ULID. Fields: `id`, `kind` (e.g. `regroup.multidisc`, `regroup.anthology`), `dedup_key`, `folder_ref`, `status` (`pending` \| `approved` \| `rejected` \| `applied`), `summary`, `payload` (producer JSON blob), `created_at`, `updated_at` |
+| `review_item:status:<status>:<id>` | empty | Status secondary index. Greenfield keyspace, so the index is authoritative from row one — no build-flag/fallback machinery; status-filtered reads still re-check the record's status on point-read |
+| `review_item:dedupkey:<dedupKey>` | `<id>` | Idempotency index. `DedupKey` = producer-computed stable hash of (Kind, FolderRef) — the upsert target |
+
+Index maintenance / idempotency contract (`UpsertReviewItem`): new DedupKey →
+create row + status index + dedupkey index; existing DedupKey with status
+`pending` → update Summary/Payload/UpdatedAt only; existing DedupKey with a
+DECIDED status (approved/rejected/applied) → **full no-op**, so a producer
+re-scan never resurrects a rejected hold. Status transitions must move the
+`review_item:status:` row (delete old, write new). The dedupkey index is
+written once on create and never deleted in A1.
+
+## Operations registry v2 keyspace (`internal/database/pebble_store_ops_v2.go`)
+
+Persistence for `internal/operations/registry` (the UOS plugin-op system).
+All keys share the `opv2:` prefix; numeric key segments are fixed-width
+zero-padded so prefix scans return rows in stable order.
+
+| Key pattern | Value | Notes |
+|-------------|-------|-------|
+| `opv2:def:<def_id>` | `OpDefinitionV2Row` JSON | Registered operation definition (one per `<plugin>.<op-name>`) |
+| `opv2:op:<op_id>` | `OperationV2Row` JSON | One operation run. No status index exists — status-filtered queries (e.g. `waiting_deps`) scan all `opv2:op:` rows |
+| `opv2:q:<999-priority:03d>:<ts_nano:020d>:<op_id>` | `<op_id>` | Queue index. Priority is stored as `999-priority` so higher priority sorts FIRST in byte order; timestamp gives FIFO within a priority. Deleted when the op leaves `queued` |
+| `opv2:act:<op_id>` | empty | Active index: present while the op is `queued` or `running`; removed on terminal status. Startup resume scans this instead of all rows |
+| `opv2:state:<op_id>` | `OpStateV2Row` JSON | Checkpoint state for resume (`ResumePolicy`: restart with saved state vs requeue fresh) |
+| `opv2:log:<op_id>:<ts_nano:020d>:<seq:010d>` | `OpLogV2Row` JSON | Per-op log lines; ts+seq keeps same-nanosecond lines ordered |
+| `opv2:err:<op_id>:<ts_nano:020d>` | `OpErrorV2Row` JSON | Per-op error records |
+| `opv2:strike:<def_id>:<ts_nano:020d>:<op_id>` | `OpStrikeV2Row` JSON | Watchdog strikes (uncheckpointed / stuck-progress detections), keyed by DEF so repeat offenders cluster |
+
+Index maintenance: enqueue writes the row JSON + `opv2:q:` + `opv2:act:` keys
+together; dispatch deletes the `opv2:q:` entry; terminal status deletes
+`opv2:act:`. Anything that flips a row's status by hand must mirror those
+index writes or startup resume / the dispatcher will see phantom ops.
 
 ## Write patterns & atomicity
 
