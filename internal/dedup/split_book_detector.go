@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_detector.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9c1f0a3e-b7d2-4e84-8c12-3fa8e1d6b9c0
-// last-edited: 2026-07-07
+// last-edited: 2026-07-17
 
 // Package dedup — split-book backfill detector.
 //
@@ -89,8 +89,10 @@ type splitBookSlim struct {
 
 // DetectSplitBookCandidates walks every book in the store and returns the
 // list of split-book clusters. No DB writes — purely analytical.
-func DetectSplitBookCandidates(ctx context.Context, store database.Store) ([]SplitBookCandidate, error) {
-	all, err := loadSlimBooks(ctx, store)
+// progress, if non-nil, is invoked with the running count of books loaded
+// (every page of 1000) so long scans stay observable up to the op timeout.
+func DetectSplitBookCandidates(ctx context.Context, store database.Store, progress func(loaded int)) ([]SplitBookCandidate, error) {
+	all, err := loadSlimBooks(ctx, store, progress)
 	if err != nil {
 		return nil, err
 	}
@@ -103,10 +105,13 @@ func DetectSplitBookCandidates(ctx context.Context, store database.Store) ([]Spl
 }
 
 // loadSlimBooks paginates through every book and projects to splitBookSlim.
-func loadSlimBooks(ctx context.Context, store database.Store) ([]splitBookSlim, error) {
+// progress, if non-nil, is called once per page with the total books loaded
+// so far (pages are 1000 books).
+func loadSlimBooks(ctx context.Context, store database.Store, progress func(loaded int)) ([]splitBookSlim, error) {
 	const pageSize = 1000
 	var all []splitBookSlim
 	offset := 0
+	loaded := 0
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -133,6 +138,10 @@ func loadSlimBooks(ctx context.Context, store database.Store) ([]splitBookSlim, 
 				AuthorID: b.AuthorID,
 				SeriesID: b.SeriesID,
 			})
+		}
+		loaded += len(batch)
+		if progress != nil {
+			progress(loaded)
 		}
 		if len(batch) < pageSize {
 			break
