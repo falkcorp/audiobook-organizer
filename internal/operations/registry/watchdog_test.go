@@ -1,7 +1,7 @@
 // file: internal/operations/registry/watchdog_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4d5e6f7a-8b9c-0123-def0-1234567890ab
-// last-edited: 2026-06-22
+// last-edited: 2026-07-17
 
 package registry_test
 
@@ -79,6 +79,10 @@ func TestWatchdog_UncheckpointedOpGetsStrike(t *testing.T) {
 	def := makeValidDef("test.wdog-uncheckpointed")
 	def.ResumePolicy = registry.ResumeRestart
 	def.MinCheckpointInterval = 100 * time.Millisecond
+	// Backdating started_at (below) would otherwise also trip the stuck check's
+	// StartedAt fallback (R-2) and cancel the op before the uncheckpointed
+	// branch is reached; a large ProgressTimeout keeps the stuck path quiet.
+	def.ProgressTimeout = 30 * time.Minute
 	def.Run = func(runCtx context.Context, _ json.RawMessage, _ registry.Reporter) error {
 		close(started)
 		<-runCtx.Done()

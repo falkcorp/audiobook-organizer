@@ -1,7 +1,7 @@
 // file: internal/operations/registry/shutdown_stub_handle_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7b3c9d1e-4a52-4c8f-9e0a-2f6b1d8c4a37
-// last-edited: 2026-06-03
+// last-edited: 2026-07-17
 
 // White-box regression tests for the "stub handle" nil-cancel race.
 //
@@ -61,9 +61,15 @@ func TestShutdown_StubHandleNilCancel_NoPanic(t *testing.T) {
 }
 
 // TestCancel_StubHandleNilCancel_NoPanic verifies Cancel does not panic when
-// the targeted op is a stub handle (nil cancel).
+// the targeted op is a stub handle (nil cancel), and that it flags the stub +
+// attempts the DB cancel (C-1: canceling a channel-queued op used to be a
+// silent no-op — the op ran anyway).
 func TestCancel_StubHandleNilCancel_NoPanic(t *testing.T) {
 	store := databasemocks.NewMockOpsV2Store(t)
+	// The stub path now marks the still-'queued' row canceled in the DB.
+	store.EXPECT().
+		SetOperationV2StatusIfQueued("stub-op", "canceled").
+		Return(true, nil).Once()
 
 	r := New(store, slog.Default(), 1, nil)
 	insertStubHandle(r, "stub-op")
@@ -72,4 +78,10 @@ func TestCancel_StubHandleNilCancel_NoPanic(t *testing.T) {
 		err := r.Cancel("stub-op")
 		require.NoError(t, err)
 	})
+
+	// The stub must be flagged so the worker drops the run before invoking it.
+	r.mu.Lock()
+	flagged := r.running["stub-op"].queuedCancel
+	r.mu.Unlock()
+	require.True(t, flagged, "Cancel must set queuedCancel on the stub handle")
 }

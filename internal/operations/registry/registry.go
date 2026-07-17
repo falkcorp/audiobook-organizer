@@ -1,7 +1,7 @@
 // file: internal/operations/registry/registry.go
-// version: 3.6.1
+// version: 3.7.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-07-11
+// last-edited: 2026-07-17
 
 package registry
 
@@ -551,11 +551,23 @@ func (r *Registry) EnqueueOp(ctx context.Context, defID string, params any, opts
 	if def.ConcurrencyKey != "" {
 		if active, listErr := r.store.ListActiveOperationsV2(); listErr == nil {
 			for _, op := range active {
-				if op.DefID == defID {
-					r.logger.Info("registry: enqueue deduped — active op exists",
-						"op_id", op.ID, "def_id", defID, "status", op.Status)
-					return op.ID, nil
+				if op.DefID != defID {
+					continue
 				}
+				// C-3: skip zombie rows — a row can be left "running" with no
+				// live run handle (crash windows, historical abandonment bugs).
+				// Deduping against such a row returns a dead op's ID for every
+				// future enqueue of this def until restart, silently disabling
+				// the op type. Only "running" rows are checked: "queued" rows
+				// legitimately have no handle until dispatched.
+				if op.Status == "running" && !r.hasLiveHandle(op.ID) {
+					r.logger.Warn("registry: enqueue dedupe skipping zombie running row (no live handle)",
+						"op_id", op.ID, "def_id", defID)
+					continue
+				}
+				r.logger.Info("registry: enqueue deduped — active op exists",
+					"op_id", op.ID, "def_id", defID, "status", op.Status)
+				return op.ID, nil
 			}
 		}
 	}
@@ -770,14 +782,36 @@ func (r *Registry) publishOpCreated(row database.OperationV2Row, resumed bool) {
 // Cancel cancels an operation by id.
 // If the op is queued, it is marked canceled in the DB.
 // If the op is running, its context is canceled.
+// If the op has been claimed by the dispatcher but not yet picked up by a
+// worker (a stub handle with nil cancel, the op sitting in the buffered
+// nextRun channel), it is flagged so the worker drops it before Run and its
+// DB row is marked canceled (C-1 — this case used to be a silent no-op and
+// the op ran anyway).
 func (r *Registry) Cancel(opID string) error {
 	r.mu.Lock()
 	h, running := r.running[opID]
+	if running && h.cancel == nil {
+		// Stub handle: no context to cancel yet. Flag it under the same lock
+		// the worker uses when overwriting the stub (see executeRun), so the
+		// worker is guaranteed to observe the flag and skip the run.
+		h.queuedCancel = true
+	}
 	r.mu.Unlock()
 
 	if running {
-		r.logger.Info("registry: canceling running op", "op_id", opID)
-		h.cancelIfActive()
+		if h.cancel != nil {
+			r.logger.Info("registry: canceling running op", "op_id", opID)
+			h.cancelIfActive()
+			return nil
+		}
+		// Stub path: the DB row is still "queued" (the worker only marks it
+		// running on pickup) — mark it canceled now so the UI reflects the
+		// cancel immediately instead of after worker pickup.
+		updated, err := r.store.SetOperationV2StatusIfQueued(opID, "canceled")
+		if err != nil {
+			return fmt.Errorf("registry: cancel op %s: %w", opID, err)
+		}
+		r.logger.Info("registry: canceled op awaiting worker pickup", "op_id", opID, "db_updated", updated)
 		return nil
 	}
 
@@ -790,6 +824,16 @@ func (r *Registry) Cancel(opID string) error {
 		r.logger.Info("registry: canceled queued op", "op_id", opID)
 	}
 	return nil
+}
+
+// hasLiveHandle reports whether opID currently has an in-memory run handle
+// (stub or full). Used by EnqueueOp's ConcurrencyKey dedupe to distinguish a
+// genuinely running op from a zombie "running" DB row.
+func (r *Registry) hasLiveHandle(opID string) bool {
+	r.mu.RLock()
+	_, ok := r.running[opID]
+	r.mu.RUnlock()
+	return ok
 }
 
 // AbandonedCount returns the current number of abandoned goroutines for a
