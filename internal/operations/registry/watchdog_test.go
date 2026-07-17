@@ -1,5 +1,5 @@
 // file: internal/operations/registry/watchdog_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 4d5e6f7a-8b9c-0123-def0-1234567890ab
 // last-edited: 2026-07-17
 
@@ -194,14 +194,15 @@ func TestWatchdog_InfiniteRestartForceDrop(t *testing.T) {
 		return nil
 	}
 	_ = r.RegisterOp(def)
-	r.Start(ctx)
 
-	// Enqueue an op and pre-set resume_count=3 (no high_water_progress).
+	// Enqueue and set resume_count=3 BEFORE starting the registry: enqueueing
+	// after Start races the dispatcher — on a loaded runner the worker can pick
+	// the op up and complete it before setResumeCount lands (observed in CI).
+	// With the registry not yet started, the row is queued and the state is in
+	// place before the first dispatch tick can reach checkInfiniteRestart.
 	opID, _ := r.EnqueueOp(ctx, "test.wdog-infinite-restart", nil)
-	// Wait for it to be picked up (queued), then set resume_count before dispatch.
-	// We need to set it before the worker calls checkInfiniteRestart.
-	// Insert directly with resume_count=3.
 	store.setResumeCount(opID, 3)
+	r.Start(ctx)
 
 	// Wait for the op to be force-dropped (executeRun calls checkInfiniteRestart).
 	awaitStatus(t, store, opID, "interrupted_dropped", 5*time.Second)
