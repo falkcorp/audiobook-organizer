@@ -1,13 +1,45 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.168.0 -->
+<!-- version: 3.169.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
-<!-- last-edited: 2026-07-16 -->
+<!-- last-edited: 2026-07-17 -->
 
 # Changelog
 
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 17, 2026 - fix(dedup): a rescan silently resurrected dismissed candidates
+
+`UpsertCandidateNew` guarded `Layer`, `Similarity`, `ScoreBreakdown`, `Band` and
+`FormulaVersion` behind a `protected` check, then assigned `Status`
+**unconditionally**:
+
+```go
+oldStatus := existing.Status
+existing.Status = c.Status   // clobbered a human verdict
+```
+
+Every dedup scan re-upserts the same pairs with status `pending`, so any candidate
+a reviewer had `dismissed` returned to the review queue on the next run. Because
+dismissals never stuck, the queue could not converge: the same false positives came
+back after every scan, forever.
+
+Measured on a full-fidelity replica of production: a single `dedup.full-scan`
+flipped exactly **43** candidates `dismissed` -> `pending` (all `layer=exact`,
+`similarity=1`), while an untouched production control stayed at 1351 dismissed.
+The diff showed that transition and no other.
+
+The engine already assumed this stickiness elsewhere — the purge path is explicit
+about it ("CRITICAL: Only purge PENDING candidates. Merged and dismissed rows...",
+`internal/dedup/engine.go`) — so the upsert path was inconsistent with the rest of
+the engine rather than deliberately permissive.
+
+Status is now treated as a verdict: `dismissed`/`merged` survive a rescan and may
+only be replaced by another terminal verdict. Machine-derived statuses
+(`pending`, `stale-drain`, `stale-fp`) stay refreshable, so rescans can still
+reclassify freely.
+
 
 #### July 16, 2026 - fix(metadata): a per-chapter tag title could become the whole book's title (CONS-17b)
 

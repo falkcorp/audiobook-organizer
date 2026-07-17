@@ -1,6 +1,6 @@
 // file: internal/database/embedding_store.go
-// version: 2.7.2
-// last-edited: 2026-07-11
+// version: 2.8.0
+// last-edited: 2026-07-17
 // guid: 7c4a9b2e-d831-4f5c-a07e-3b8d6e1f9c42
 
 package database
@@ -427,6 +427,20 @@ func (s *EmbeddingStore) PutCachedEmbedding(textHash, model string, vector []flo
 
 // ─── Dedup candidate methods ──────────────────────────────────────────────────
 
+// isTerminalCandidateStatus reports whether a dedup candidate status records a
+// VERDICT rather than a machine-derived classification.
+//
+// "dismissed" and "merged" are decisions — a human reviewed the pair, or
+// auto-resolve acted on it. They must survive a rescan: every scan re-upserts
+// the same pairs with status "pending", so a resurrected dismissal puts a known
+// false positive back in the review queue after every run.
+//
+// "pending", "stale-drain" and "stale-fp" are deliberately NOT terminal: they
+// are reclassifications a rescan should be free to revise.
+func isTerminalCandidateStatus(status string) bool {
+	return status == "dismissed" || status == "merged"
+}
+
 func dedupRecKey(id int64) []byte {
 	return []byte(fmt.Sprintf("%s%016x", dedupRecPfx, id))
 }
@@ -632,7 +646,24 @@ func (s *EmbeddingStore) UpsertCandidateNew(c DedupCandidate) (id int64, isNew b
 		existing.LLMReason = c.LLMReason
 	}
 	oldStatus := existing.Status
-	existing.Status = c.Status
+	// Status is a VERDICT, not derived data: "dismissed" and "merged" record a
+	// decision (human review or auto-resolve), while every rescan re-upserts the
+	// same pair with Status "pending". Overwriting unconditionally therefore
+	// resurrected dismissals on every dedup.full-scan — measured on a
+	// full-fidelity replica of production: 43 candidates flipped
+	// dismissed -> pending in a single scan, so the same false positives return
+	// to the review queue after each run and the queue can never converge.
+	//
+	// The purge path already treats these as sticky ("CRITICAL: Only purge
+	// PENDING candidates. Merged and dismissed rows..." — dedup/engine.go), so
+	// this restores the intent the rest of the engine already assumes.
+	//
+	// Machine-derived statuses (stale-drain, stale-fp) stay refreshable: they are
+	// reclassifications a rescan SHOULD be able to revise. Only another terminal
+	// verdict may replace a terminal verdict (e.g. dismissed -> merged).
+	if !isTerminalCandidateStatus(existing.Status) || isTerminalCandidateStatus(c.Status) {
+		existing.Status = c.Status
+	}
 	existing.UpdatedAt = now
 
 	data, err := json.Marshal(existing)
