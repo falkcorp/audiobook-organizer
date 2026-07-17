@@ -1,5 +1,5 @@
 // file: internal/plugins/itunes/path_reconcile.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: d4e5f6a7-b8c9-0123-defg-234567890123
 // last-edited: 2026-07-17
 
@@ -15,13 +15,14 @@ import (
 )
 
 func (p *Plugin) pathReconciledDef() sdk.OperationDef {
-	sched := "0 4 * * *"
+	// No Schedule: the Run below is an unimplemented stub (C1). The former
+	// daily "0 4 * * *" cron burned an op-history row every night doing
+	// nothing. Restore a schedule only together with a real implementation.
 	return sdk.OperationDef{
 		ID:                    "itunes.path-reconcile",
 		Plugin:                "itunes",
 		DisplayName:           "iTunes Path Reconcile",
 		Description:           "Reconcile iTunes track paths after library reorganizations.",
-		Schedule:              &sched,
 		Isolate:               false,
 		ResumePolicy:          sdk.ResumeDrop,
 		DefaultPriority:       sdk.PriorityLow,

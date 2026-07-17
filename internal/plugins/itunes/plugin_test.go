@@ -1,5 +1,5 @@
 // file: internal/plugins/itunes/plugin_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: a7b8c9d0-e1f2-3456-ghij-567890123456
 // last-edited: 2026-07-17
 
@@ -35,6 +35,9 @@ func TestStubOps_NoCronSchedule(t *testing.T) {
 	}
 	if s := p.positionSyncDef().Schedule; s != nil {
 		t.Errorf("itunes.position-sync is a stub but has schedule %q — remove it or implement the op", *s)
+	}
+	if s := p.pathReconciledDef().Schedule; s != nil {
+		t.Errorf("itunes.path-reconcile is a stub but has schedule %q — remove it or implement the op", *s)
 	}
 }
 
