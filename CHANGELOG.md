@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.171.0 -->
+<!-- version: 3.172.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-17 -->
 
@@ -8,6 +8,43 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 17, 2026 - docs: repository-wide docs consolidation
+
+- **`docs(archive)`** — Archive sweep: **194 doc files** moved (git mv, content
+  preserved) into `docs/archive/2026-07-consolidation/` — 17 shipped agent-task
+  workstreams + 2 BREAKDOWN docs, completed plan+spec pairs (claude-plugin,
+  dedup-exact-gate, uos-scheduling, config-nesting, gold-labels-UI,
+  duration-reextract-v3, ITL deep-dive, concurrency, store-fidelity,
+  bug-techdebt, dedup-label-quality, filtering-search, metadata-matching),
+  HANDOFF/E2E-report/perf-audit/database-eval root docs, the
+  concurrency-parallelization dir, audit-remediation tracking, the 2026-07-02
+  status doc, and `dedup-feedback-loop.md` (folded into the new dedup STATUS
+  doc). All live-doc links repointed at the archive paths.
+- **`docs(todo)`** — TODO.md split: the 3,220-line history is frozen verbatim at
+  `docs/archive/todo-2026-H1.md`; the live TODO.md is now a 152-line index of
+  the 49 items confirmed ACTIVE by the 2026-07-17 docs audit, plus the
+  2026-07-17 multi-discipline review-findings backlog section (5 in-flight fix
+  worktrees + every uncovered finding as one [severity] file:line entry — the
+  crash-recovery record). Staleness corrections applied (PR-B2 merged #1953;
+  INIT ~46/50; tool-lifecycle built); every obsolete 380K-era dedup figure
+  purged (real: 15,269 pending / 9,074 exact-pending); no internal host
+  addresses remain in live content.
+- **`docs(operations)`** — New `docs/operations/pending-prod-actions.md`: the
+  9-row run-on-prod queue (PH-2 triage, CONS-10 drain, duration tail, Layer-6
+  re-trigger, SLOG-PROD-VERIFY, PD-3, I1/I6 pprof, apply-switch flip,
+  SEC-AUDIT-11) with op shapes and operator-run vs human-decision gating.
+- **`docs(dedup)`** — New `docs/dedup/STATUS.md`: single source of truth on
+  dedup state — real backlog composition, the four-population triage basis, the
+  title-repair → breakdown-backfill → triage → rescan remediation path, the
+  fixed/open ledger, and the feedback-loop architecture.
+- **`docs(plans)`** — New `docs/plans/DECISIONS-PENDING.md`: the unified 9-row
+  STOP-FOR-HUMAN decision queue. Execution manifest refreshed to shipped
+  reality (~46/50 briefs) with a per-initiative status column.
+- **`docs(audits)`** — New `docs/audits/2026-07-17-multi-discipline-review.md`:
+  complete findings from the four 2026-07-17 discipline reviews (dedup F1–F7,
+  pipeline DL/C/R/P, logging C1–C7/H1–H9/M1–M8, devops 1–12) with a
+  cross-discipline top-15 fix shortlist; internal addresses scrubbed.
 
 #### July 17, 2026 - fix(database): secondary index keys aborted every unbounded book scan
 
