@@ -1,6 +1,7 @@
 // file: internal/metadata/assemble.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 1b2c3d4e-5f6a-7b8c-9d0e-1f2a3b4c5d6e
+// last-edited: 2026-07-17
 
 package metadata
 
@@ -135,6 +136,14 @@ func agreedChapterTitle(dirPath string, supportedExts []string) (agreed string, 
 		}
 	}
 	return agreed, true
+}
+
+// AgreedChapterTitle exposes the CONS-17b agree-title discriminator for callers
+// outside this package (e.g. the maintenance.title-repair op, which re-derives
+// titles for books stored before CONS-17b shipped). It is a thin wrapper over
+// the unexported agreedChapterTitle — the logic stays in one place.
+func AgreedChapterTitle(dirPath string, supportedExts []string) (agreed string, multi bool) {
+	return agreedChapterTitle(dirPath, supportedExts)
 }
 
 // resolveTitle picks the book title. dirPath + supportedExts enable the CONS-17b
