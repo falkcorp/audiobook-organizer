@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedup_triage_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8f9a0b1c-2d3e-4f50-a6b7-c8d9e0f12345
-// last-edited: 2026-06-24
+// last-edited: 2026-07-17
 
 package maintenance
 
@@ -141,6 +141,88 @@ func TestClassifyCandidate_TitleLeak(t *testing.T) {
 	cls, reason := ClassifyCandidate(c, a, b)
 	if cls != TriageClassTitleLeak {
 		t.Errorf("got %s (%s), want title_leak", cls, reason)
+	}
+}
+
+// TestClassifyCandidate_TitleLeak_NonITunes_SameTitle proves the relaxed
+// precondition: a pair with NO iTunes provenance (e.g. books moved under the
+// organized library path) classifies as title_leak when the title-identity
+// evidence fires — identical normalized title, exact layer, no hard signal.
+func TestClassifyCandidate_TitleLeak_NonITunes_SameTitle(t *testing.T) {
+	a := makeBook("a", 5*1024*1024, 3600, "")
+	b := makeBook("b", 5*1024*1024, 3500, "")
+	a.Title = "The Leaked Title"
+	b.Title = "The Leaked Title"
+	c := withBreakdown(database.DedupCandidate{Layer: "exact"}, sig(unified.SigMetaFuzzy))
+
+	cls, reason := ClassifyCandidate(c, a, b)
+	if cls != TriageClassTitleLeak {
+		t.Errorf("got %s (%s), want title_leak for non-iTunes identical-title pair", cls, reason)
+	}
+}
+
+// TestClassifyCandidate_TitleLeak_NonITunes_SameTitle_NilBreakdown covers the
+// pre-T015 shape of the same leak: no ScoreBreakdown at all, identical titles,
+// exact layer, no iTunes IDs — previously fell through to unknown.
+func TestClassifyCandidate_TitleLeak_NonITunes_SameTitle_NilBreakdown(t *testing.T) {
+	a := makeBook("a", 5*1024*1024, 3600, "")
+	b := makeBook("b", 5*1024*1024, 3500, "")
+	a.Title = "Chapter Leak Book"
+	b.Title = "chapter  leak BOOK" // normalization: case + whitespace runs
+	c := database.DedupCandidate{Layer: "exact"} // pre-T015, nil breakdown
+
+	cls, reason := ClassifyCandidate(c, a, b)
+	if cls != TriageClassTitleLeak {
+		t.Errorf("got %s (%s), want title_leak for pre-T015 identical-title pair", cls, reason)
+	}
+}
+
+// TestClassifyCandidate_NonITunes_DifferentTitles_NotLeak guards the
+// conservative side of the relaxation: without iTunes provenance AND without
+// title identity, an exact-layer soft-signal pair must NOT be purgeable.
+func TestClassifyCandidate_NonITunes_DifferentTitles_NotLeak(t *testing.T) {
+	a := makeBook("a", 5*1024*1024, 3600, "") // titles "Book a" vs "Book b"
+	b := makeBook("b", 5*1024*1024, 3500, "")
+	c := withBreakdown(database.DedupCandidate{Layer: "exact"}, sig(unified.SigMetaFuzzy))
+
+	cls, reason := ClassifyCandidate(c, a, b)
+	if cls == TriageClassTitleLeak {
+		t.Errorf("different-title non-iTunes pair must not be title_leak (%s)", reason)
+	}
+	if cls != TriageClassUnknown {
+		t.Errorf("got %s (%s), want unknown", cls, reason)
+	}
+}
+
+// TestClassifyCandidate_SameTitle_HardSignal_StaysGenuine proves purge safety
+// of the relaxation ordering: an identical-title pair whose breakdown carries a
+// hard signal (ISBN) is classified genuine at step 2 and never reaches the
+// title-leak branch.
+func TestClassifyCandidate_SameTitle_HardSignal_StaysGenuine(t *testing.T) {
+	a := makeBook("a", 10*1024*1024, 3600, "")
+	b := makeBook("b", 10*1024*1024, 3600, "")
+	a.Title = "Same Real Book"
+	b.Title = "Same Real Book"
+	c := withBreakdown(database.DedupCandidate{Layer: "exact"}, sig(unified.SigISBNASIN))
+
+	cls, reason := ClassifyCandidate(c, a, b)
+	if cls != TriageClassGenuine {
+		t.Errorf("got %s (%s), want genuine — hard signal must outrank title-leak", cls, reason)
+	}
+}
+
+// TestClassifyCandidate_EmptyTitles_NotLeak guards against two empty/blank
+// titles counting as "identical".
+func TestClassifyCandidate_EmptyTitles_NotLeak(t *testing.T) {
+	a := makeBook("a", 5*1024*1024, 3600, "")
+	b := makeBook("b", 5*1024*1024, 3500, "")
+	a.Title = "   "
+	b.Title = ""
+	c := database.DedupCandidate{Layer: "exact"}
+
+	cls, reason := ClassifyCandidate(c, a, b)
+	if cls == TriageClassTitleLeak {
+		t.Errorf("blank titles must not classify as title_leak (%s)", reason)
 	}
 }
 

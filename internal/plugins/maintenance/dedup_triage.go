@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedup_triage.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3a4b5c6d-7e8f-9012-abcd-ef1234567890
-// last-edited: 2026-06-24
+// last-edited: 2026-07-17
 
 package maintenance
 
@@ -39,11 +39,18 @@ const (
 	// DurationVerifiedAt stamp) — otherwise falls through to unknown.
 	TriageClassFragment TriageClass = "fragment"
 
-	// TriageClassTitleLeak — both books are iTunes imports, the candidate layer is
-	// "exact" (title match), and no hard signal (file-hash / ISBN / meta-hash) is
-	// present in the ScoreBreakdown. These are CONS-17 artifacts: the iTunes
-	// importer set every track's title to the first track's title, causing
-	// spurious title-identity matches across unrelated chapters.
+	// TriageClassTitleLeak — an exact-layer candidate with no hard signal
+	// (file-hash / ISBN / meta-hash) in the ScoreBreakdown, where EITHER
+	//   (a) both books are iTunes imports (the original CONS-17 signature), OR
+	//   (b) the two books carry an identical normalized title (the leak's own
+	//       evidence, provenance-independent).
+	// These are CONS-17 artifacts: the iTunes importer set every track's title
+	// to the first track's title, causing spurious title-identity matches
+	// across unrelated chapters. Branch (b) exists because proven title-leak
+	// books live under the organized library path after being moved out of the
+	// iTunes tree — the both-iTunes precondition alone classified 0 of 6,921
+	// proven title-leak pairs. Books under ANY library path qualify when the
+	// title-identity evidence fires.
 	TriageClassTitleLeak TriageClass = "title_leak"
 
 	// TriageClassUnknown — pre-T015 candidate with no ScoreBreakdown, or a
@@ -128,9 +135,24 @@ func ClassifyCandidate(c database.DedupCandidate, a, b *database.Book) (TriageCl
 		return cls, reason
 	}
 
-	// 4. Title-leak: both books are iTunes imports, layer = exact, no hard signal.
-	if a.ITunesPersistentID != nil && b.ITunesPersistentID != nil && c.Layer == "exact" {
-		return TriageClassTitleLeak, "both books are iTunes imports with exact-layer title match and no hard signal"
+	// 4. Title-leak: exact-layer candidate, no hard signal (step 2 already
+	// returned genuine for any hard-signal breakdown), and EITHER both books
+	// are iTunes imports (original CONS-17 signature) OR the two books share
+	// an identical normalized title (the leak's own evidence). The identical-
+	// title branch is deliberately stricter than the engine's Levenshtein<=2
+	// exact-title matcher: title-leak classification feeds a purge decision,
+	// so only verified title identity qualifies a non-iTunes pair. Note the
+	// "exact" layer also covers ISBN / file-hash / duration emitters — for a
+	// pre-T015 nil-breakdown row that provenance is unknowable, which is why
+	// the title-identity evidence is required rather than layer alone.
+	if c.Layer == "exact" {
+		if a.ITunesPersistentID != nil && b.ITunesPersistentID != nil {
+			return TriageClassTitleLeak, "both books are iTunes imports with exact-layer title match and no hard signal"
+		}
+		if t := normalizedLeakTitle(a.Title); t != "" && t == normalizedLeakTitle(b.Title) {
+			return TriageClassTitleLeak, fmt.Sprintf(
+				"identical normalized title %q with exact-layer match and no hard signal (CONS-17 title leak)", t)
+		}
 	}
 
 	// 5. Pre-T015 (no ScoreBreakdown) or unclassifiable mixed signals.
@@ -138,6 +160,14 @@ func ClassifyCandidate(c database.DedupCandidate, a, b *database.Book) (TriageCl
 		return TriageClassUnknown, "pre-T015 candidate, no ScoreBreakdown"
 	}
 	return TriageClassUnknown, fmt.Sprintf("layer=%s, no hard signal, signals=%s", c.Layer, signalList(c))
+}
+
+// normalizedLeakTitle canonicalizes a title for the title-leak identity check:
+// lowercase with whitespace runs collapsed. Deliberately conservative — no
+// punctuation stripping, no fuzzy distance — because a title_leak verdict is
+// purgeable and must only fire on verified title identity.
+func normalizedLeakTitle(t string) string {
+	return strings.Join(strings.Fields(strings.ToLower(t)), " ")
 }
 
 func isTriageStub(b *database.Book) bool {
