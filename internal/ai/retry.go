@@ -1,7 +1,7 @@
 // file: internal/ai/retry.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: f6a7b8c9-d0e1-2345-fabc-678901234567
-// last-edited: 2026-07-03
+// last-edited: 2026-07-17
 
 // Package ai — shared retry helper for OpenAI / Ollama API calls.
 package ai
@@ -9,6 +9,7 @@ package ai
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/openai/openai-go/v3"
@@ -71,6 +72,8 @@ func DoWithRetry(ctx context.Context, maxAttempts int, base time.Duration, fn fu
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if attempt > 0 {
 			backoff := time.Duration(attempt*attempt) * base
+			slog.Warn("ai call failed, retrying after backoff",
+				"attempt", attempt, "max_attempts", maxAttempts, "backoff", backoff, "err", lastErr)
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -86,5 +89,6 @@ func DoWithRetry(ctx context.Context, maxAttempts int, base time.Duration, fn fu
 		}
 		return nil
 	}
+	slog.Error("ai call retries exhausted", "max_attempts", maxAttempts, "err", lastErr)
 	return lastErr
 }
