@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
+# file: scripts/dedup_bench_submit.py
+# version: 1.1.0
+# guid: 3b9e1c5a-7d2f-4e8b-a6c1-9f4d0e2b8a53
+# last-edited: 2026-07-17
 """Submit dedup benchmark batch jobs to OpenAI.
 
 Fetches author data from a remote server, builds test configurations,
 and submits them as batch API jobs (50% cheaper than real-time).
 
 Usage:
-    python3 scripts/dedup_bench_submit.py --server https://172.16.2.30:8484
+    python3 scripts/dedup_bench_submit.py --server https://<server>:8484
 
-Loads API keys from scripts/.env automatically.
+The server URL may also be supplied via the ABK_API_URL environment
+variable; one of the two is required. Loads API keys from scripts/.env
+automatically.
 """
 
 import argparse
@@ -350,7 +356,9 @@ def submit_batch(
 def main():
     parser = argparse.ArgumentParser(description="Submit dedup benchmark batch jobs")
     parser.add_argument(
-        "--server", required=True, help="Server URL (e.g., https://172.16.2.30:8484)"
+        "--server",
+        default=os.environ.get("ABK_API_URL"),
+        help="Server URL (e.g., https://<server>:8484); defaults to $ABK_API_URL",
     )
     parser.add_argument(
         "--output", default="testdata/dedup-bench", help="Output directory"
@@ -367,6 +375,12 @@ def main():
         "--groups-json", help="Path to pre-computed groups.json (from Go binary)"
     )
     args = parser.parse_args()
+
+    if not args.server:
+        parser.error(
+            "--server is required (or set the ABK_API_URL environment variable "
+            "to your server URL, e.g. https://<server>:8484)"
+        )
 
     api_key = os.environ.get("OPENAI_API_KEY", "")
     if not api_key and not args.dry_run:

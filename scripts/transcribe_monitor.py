@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/transcribe_monitor.py
-# version: 1.0.1
+# version: 1.1.0
 # guid: 2f7c4a91-8b03-4d6e-9a52-1c6e8f0b3d47
-# last-edited: 2026-06-30
+# last-edited: 2026-07-17
 """Transcription progress monitor + alerter.
 
 Polls the audiobook-organizer transcribe-stats aggregate
@@ -34,8 +34,11 @@ Examples:
   # continuous, poll every 30s, alert + auto-relaunch when idle
   python3 transcribe_monitor.py --interval 30 --relaunch
 
-  # against prod explicitly
-  python3 transcribe_monitor.py --base https://172.16.2.30:8484 --insecure
+  # against a specific server explicitly
+  python3 transcribe_monitor.py --base https://<server>:8484 --insecure
+
+The API base URL is required: pass --base or set the ABK_API_URL environment
+variable (ABK_BASE is also honored for backward compatibility).
 """
 
 import argparse
@@ -262,12 +265,16 @@ def _try_relaunch(args, token, state, record):
 
 def main():
     ap = argparse.ArgumentParser(description="Transcription progress monitor + alerter")
-    ap.add_argument("--base", default=os.environ.get("ABK_BASE", "https://172.16.2.30:8484"),
-                    help="API base URL (default https://172.16.2.30:8484)")
+    ap.add_argument("--base",
+                    default=os.environ.get("ABK_API_URL", os.environ.get("ABK_BASE")),
+                    help="API base URL, e.g. https://<server>:8484 "
+                         "(required; defaults to $ABK_API_URL, then $ABK_BASE)")
     ap.add_argument("--token-file", default=os.environ.get("ABK_TOKEN_FILE", ".api-token"),
                     help="file with 'api_key=abk_...' (default ./.api-token)")
-    ap.add_argument("--whisper-url", default=os.environ.get("WHISPER_URL", "http://172.16.3.22:19847"),
-                    help="Whisper server base for /health check ('' to skip)")
+    ap.add_argument("--whisper-url", default=os.environ.get("WHISPER_URL", ""),
+                    help="Whisper server base for /health check, e.g. "
+                         "http://<whisper-host>:19847 (defaults to $WHISPER_URL; "
+                         "'' skips the check)")
     ap.add_argument("--interval", type=int, default=30, help="poll interval seconds (default 30)")
     ap.add_argument("--stall-secs", type=int, default=300,
                     help="alert if in-flight counters unchanged this long (default 300)")
@@ -285,6 +292,10 @@ def main():
                          "Off by default to avoid silently disabling verification.")
     ap.add_argument("--once", action="store_true", help="run a single poll and exit")
     args = ap.parse_args()
+
+    if not args.base:
+        ap.error("--base is required (or set the ABK_API_URL environment variable "
+                 "to your server URL, e.g. https://<server>:8484)")
 
     token = read_token(args.token_file)
     state = {}

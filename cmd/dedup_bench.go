@@ -1,6 +1,7 @@
 // file: cmd/dedup_bench.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+// last-edited: 2026-07-17
 
 //go:build bench
 
@@ -71,7 +72,7 @@ func init() {
 	}, "Models to test")
 	dedupBenchCmd.Flags().StringVar(&benchMode, "mode", "both", "Mode: groups, full, or both")
 	dedupBenchCmd.Flags().BoolVar(&benchDryRun, "dry-run", false, "Extract data only, don't call API")
-	dedupBenchCmd.Flags().StringVar(&benchServerURL, "server", "", "Remote server URL to fetch authors (e.g., https://172.16.2.30:8484)")
+	dedupBenchCmd.Flags().StringVar(&benchServerURL, "server", "", "Remote server URL to fetch authors (e.g., https://<server>:8484)")
 	dedupBenchCmd.Flags().IntVar(&benchChunkSize, "chunk-size", 500, "Max authors per AI request chunk")
 	dedupBenchCmd.Flags().BoolVar(&benchBatch, "batch", false, "Submit as async batch jobs (50% cheaper, ~24h completion)")
 }
