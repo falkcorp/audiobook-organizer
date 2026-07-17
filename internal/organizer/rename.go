@@ -1,6 +1,7 @@
 // file: internal/organizer/rename.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
+// last-edited: 2026-07-17
 
 package organizer
 
@@ -388,9 +389,15 @@ func (rs *RenameService) moveFile(src, dst string) error {
 		}
 	}
 
-	// Try os.Rename first (same filesystem)
-	if err := os.Rename(src, dst); err == nil {
+	// Try rename first (same filesystem). safeRename refuses to overwrite an
+	// existing destination — a bare os.Rename would silently REPLACE it,
+	// destroying another book's bytes on a path collision.
+	err := safeRename(src, dst)
+	if err == nil {
 		return nil
+	}
+	if os.IsExist(err) {
+		return fmt.Errorf("destination already exists, refusing to overwrite: %s", dst)
 	}
 
 	// Fallback: copy + delete for cross-filesystem moves
@@ -424,7 +431,9 @@ func (rs *RenameService) copyAndDelete(src, dst string) error {
 		_ = os.Remove(tmpDst)
 		return fmt.Errorf("failed to close: %w", err)
 	}
-	if err := os.Rename(tmpDst, dst); err != nil {
+	// safeRename: refuse to overwrite a destination that appeared during the
+	// copy (bare os.Rename would silently replace it).
+	if err := safeRename(tmpDst, dst); err != nil {
 		_ = os.Remove(tmpDst)
 		return fmt.Errorf("failed to finalize: %w", err)
 	}
@@ -446,9 +455,13 @@ func (rs *RenameService) hardlinkOrCopy(src, dst string) error {
 		}
 	}
 
-	// Try hardlink first
+	// Try hardlink first. os.Link fails with EEXIST if dst exists — treat
+	// that as a terminal collision instead of falling through to the copy
+	// path, whose finalize rename would silently overwrite the existing file.
 	if err := os.Link(src, dst); err == nil {
 		return nil
+	} else if os.IsExist(err) {
+		return fmt.Errorf("destination already exists, refusing to overwrite: %s", dst)
 	}
 
 	// Fallback: copy (never deletes source)
@@ -477,7 +490,13 @@ func (rs *RenameService) hardlinkOrCopy(src, dst string) error {
 		_ = os.Remove(tmpDst)
 		return fmt.Errorf("failed to close: %w", err)
 	}
-	return os.Rename(tmpDst, dst)
+	// safeRename: refuse to overwrite a destination that appeared during the
+	// copy (bare os.Rename would silently replace it).
+	if err := safeRename(tmpDst, dst); err != nil {
+		_ = os.Remove(tmpDst)
+		return fmt.Errorf("failed to finalize: %w", err)
+	}
+	return nil
 }
 
 // stringPtr returns a pointer to the given string.
