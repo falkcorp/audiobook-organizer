@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.116.0
+// version: 1.117.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-07-13
+// last-edited: 2026-07-17
 
 package database
 
@@ -533,7 +533,20 @@ func (p *PebbleStore) GetAllBooksFullFrom(afterID string, limit int) ([]Book, er
 	count := 0
 	for iter.First(); iter.Valid(); iter.Next() {
 		key := string(iter.Key())
-		if strings.Contains(key, ":path:") {
+		// The "book:0".."book:~" range holds record keys ("book:<id>") AND every
+		// secondary index that shares the prefix: book:asin:, book:author:,
+		// book:hash:, book:isbn13:, book:organizedhash:, book:originalhash:,
+		// book:path:, book:series:, book:versiongroup:, book:work:. Only ":path:"
+		// used to be skipped, so the others were unmarshalled as Books. Several
+		// index families store an empty value (the data lives in the key), and
+		// json.Unmarshal of zero bytes returns "unexpected end of JSON input",
+		// which aborted the entire scan at the first book:asin: key.
+		//
+		// Record IDs (ULID/UUID) never contain ':', so a colon in the remainder
+		// is what distinguishes an index key from a record. Match on that rather
+		// than maintaining a list of index prefixes that new indexes can outgrow.
+		rest, ok := strings.CutPrefix(key, "book:")
+		if !ok || strings.Contains(rest, ":") {
 			continue
 		}
 		var book Book

@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.169.0 -->
+<!-- version: 3.170.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-17 -->
 
@@ -8,6 +8,36 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 17, 2026 - fix(database): secondary index keys aborted every unbounded book scan
+
+`GetAllBooksFullFrom` iterates the Pebble range `book:0`..`book:~`, which holds book
+records *and* ten secondary indexes that share the `book:` prefix (`asin`, `author`,
+`hash`, `isbn13`, `organizedhash`, `originalhash`, `path`, `series`, `versiongroup`,
+`work`). Only `:path:` was skipped, so every other index key was handed to
+`json.Unmarshal` as if it were a `Book`. Several index families store an **empty**
+value — the data lives entirely in the key — and unmarshalling zero bytes returns
+`unexpected end of JSON input`, which aborted the whole scan at the first
+`book:asin:` key.
+
+It only reproduced with `limit=0` (unbounded): any caller passing a limit below the
+book count stopped iterating before reaching the index keys, so the bug stayed latent.
+It also needed the raw Pebble path — the memdb path swallows per-record errors with
+`continue` — which is why it surfaced on **startup tasks**, before memdb warm-up.
+
+On production this made `acoustid.backfill` fail on **every restart** with
+`load books: unexpected end of JSON input`, silently stalling fingerprint coverage —
+the acknowledged bottleneck for dedup quality. Verified against a full-fidelity copy
+of the production database: 48,369 real book records, and 6,685 `book:asin:` +
+2,400 `book:isbn13:` keys with empty values sitting directly after them in key order.
+
+Affected unbounded callers: `plugins/acoustid/backfill.go`,
+`plugins/acoustid/fingerprint_rescan.go`, `dedup/engine.go`,
+`maintenance/jobs/relink_report.go`.
+
+The predicate now keys off structure rather than a hardcoded list: record IDs
+(ULID/UUID) never contain `:`, so a colon after the `book:` prefix marks an index
+key. New indexes cannot silently outgrow it.
 
 #### July 17, 2026 - fix(dedup): a rescan silently resurrected dismissed candidates
 
