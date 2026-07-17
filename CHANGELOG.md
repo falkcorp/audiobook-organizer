@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.170.0 -->
+<!-- version: 3.171.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-17 -->
 
@@ -2333,7 +2333,7 @@ Sweep state: `.claude/state/parallel-sweep-2026-07-03-0429-consultancy-w1.json`.
 
 #### July 2, 2026 - Full consultancy evaluation (6 dimensions, 101 findings)
 
-- **`docs(consultancy)`** - Read-only multi-agent consultancy evaluation across storage/architecture, dedup, matching/backends, code quality, feature portfolio, and process/ops/security. 25 agents (repo specialist subagents + adversarial verifiers), all findings cited `file:line`; the 5 critical/high code findings independently verified real. Reports in [`docs/consultancy/`](docs/consultancy/) — start at [`00-ROADMAP.md`](docs/consultancy/00-ROADMAP.md) (impact × effort tiers, deferred-work verdicts, validated-don't-re-fix list). Headline defects: `EmbeddingScorer` model-blind cache fast-path zeroes search scores during the bge-m3 re-embed (MATCH-1/BUG-1); memdb-stripped `Book` → `UpdateBook` full-replace wipes `Description`/`BookSigV1` (STOR-1/QUAL-2). Also committed the previously-untracked `docs/status/2026-07-02-local-cutover-and-matching.md` handoff doc (PROC-1 verdict: commit now).
+- **`docs(consultancy)`** - Read-only multi-agent consultancy evaluation across storage/architecture, dedup, matching/backends, code quality, feature portfolio, and process/ops/security. 25 agents (repo specialist subagents + adversarial verifiers), all findings cited `file:line`; the 5 critical/high code findings independently verified real. Reports in [`docs/consultancy/`](docs/consultancy/) — start at [`00-ROADMAP.md`](docs/consultancy/00-ROADMAP.md) (impact × effort tiers, deferred-work verdicts, validated-don't-re-fix list). Headline defects: `EmbeddingScorer` model-blind cache fast-path zeroes search scores during the bge-m3 re-embed (MATCH-1/BUG-1); memdb-stripped `Book` → `UpdateBook` full-replace wipes `Description`/`BookSigV1` (STOR-1/QUAL-2). Also committed the previously-untracked `docs/archive/2026-07-consolidation/status/2026-07-02-local-cutover-and-matching.md` handoff doc (PROC-1 verdict: commit now).
 
 ### Bug Fixes
 
@@ -2405,7 +2405,7 @@ Deferred by explicit gate (not shipped): `ai-responses-migration` (×5), dedup-d
 #### July 1, 2026 — Agent-task package refresh (archive shipped, author remaining)
 
 - **`docs(agent-tasks)`** — Archived the 4 completed workstreams (`transcription-matching` 5/5, `dedup-intro-falsepositive` 4/4, `dedup-ui` 5/5, `system-docs` → `docs/system/`) to `docs/archive/agent-tasks/` after verifying each is fully shipped in code. Authored **8 new workstreams / 30 weak-model-proof briefs** for the remaining actionable TODO items: `dedup-hardening` (the confirmed `upsertExactCandidate` boilerplate/min-duration residual + CONS-15 + CONS-FRAG-2), `ci-flaky-fixes`, `library-ui`, `dedup-dataset` (C5 family), `provenance-hash-chain`, `perf-cleanup`, `logging-slog`, and the deferred `ai-responses-migration`. Each brief names a model tier (Haiku for mechanical, Sonnet for logic/risk) and a wave that serializes same-file tasks (engine.go, builder.go, Library.tsx) to avoid rebase conflicts.
-- **`docs(agent-tasks)`** — Added [`BREAKDOWN-2026-07-01.md`](docs/agent-tasks/BREAKDOWN-2026-07-01.md): the planning/fan-out doc sorting every remaining open item into authored-as-brief / needs-brainstorm-first / operational-no-task, with the cost/efficiency strategy and the same-file collision→wave table. Refreshed the package `README.md` (v2.0.0) and the TODO.md "Agent Task Package" section to match.
+- **`docs(agent-tasks)`** — Added [`BREAKDOWN-2026-07-01.md`](docs/archive/2026-07-consolidation/agent-tasks/BREAKDOWN-2026-07-01.md): the planning/fan-out doc sorting every remaining open item into authored-as-brief / needs-brainstorm-first / operational-no-task, with the cost/efficiency strategy and the same-file collision→wave table. Refreshed the package `README.md` (v2.0.0) and the TODO.md "Agent Task Package" section to match.
 
 #### July 1, 2026 — TODO/docs accuracy sweep (evaluation + done-item reconciliation)
 
@@ -2695,7 +2695,7 @@ TypeScript: 0 errors after extraction.
   `prefix ⊆ parent-folder-name` (the production-validated precision guard; excludes
   flat dumps + series volumes). Path-based, no extra tag I/O. Gated by
   `config.CoalesceShatteredSiblings`, **default OFF**. Audit:
-  `docs/dedup-import-pipeline-audit.md`.
+  `docs/archive/2026-07-consolidation/dedup-import-pipeline-audit.md`.
 
 ### Fixed
 
@@ -3368,7 +3368,7 @@ flag-OFF (`DedupOnImportViaScheduler` default false) — dormant on prod until e
   flag-off default for instant rollback). This makes dedup run *after* the whole-book
   signature exists, batched across an import burst.
 
-Design: `docs/specs/2026-06-13-uos-dependency-scheduling-design.md`. To enable on
+Design: `docs/archive/2026-07-consolidation/specs/2026-06-13-uos-dependency-scheduling-design.md`. To enable on
 prod: flip `DedupOnImportViaScheduler` and validate ordering.
 
 #### June 13, 2026 — Dedup: "both unmatched metadata" candidate filter
@@ -3722,11 +3722,11 @@ documentation:
 - `docs/specs/fable5-spec-itunes-writeback-hardening.md` — `ITLSafetyContract` (8 named
   guards), `SafeWriteITL` atomic write protocol with header regeneration + backup
   retention, Apple-Devices compatibility checklist, 13-test regression suite design.
-- `docs/specs/fable5-spec-unified-dedup-pipeline.md` — composite scoring (noisy-OR,
+- `docs/archive/2026-07-consolidation/specs/fable5-spec-unified-dedup-pipeline.md` — composite scoring (noisy-OR,
   normalized 0–100 with stored per-signal breakdown), LSH `fpidx:` PebbleDB index design,
   unified dedup UI tab, provenance purge for ~14K stale 100% candidates. Corrects stale
   assumptions: folder/metadata-fuzzy "signals" are stubs; embeddings already in PebbleDB.
-- `docs/specs/fable5-spec-memory-db-optimization.md` — corrected premises (embeddings.db
+- `docs/archive/2026-07-consolidation/specs/fable5-spec-memory-db-optimization.md` — corrected premises (embeddings.db
   and ai_scans.db already migrated to Pebble; memdb warm-up enabled + stripped);
   prioritized list topped by stripping deprecated AcoustID segments from memdb
   (~550–900MB RSS) and removing the legacy 7.9K-line SQLite store.
@@ -4061,7 +4061,7 @@ field stripping. Wave 4 (H+I batch) cut steady-state RSS from
 **Net deploy impact:** RSS 67.8 GB → 39.6 GB at steady-state;
 500-per-page list query 3m51s → 241 ms; iTunes PID lookup <200 ms
 warm; Deluge discover <500 ms warm. Post-deploy verification
-checklist: `docs/specs/post-deploy-2026-05-29-verification.md`.
+checklist: `docs/archive/2026-07-consolidation/specs/post-deploy-2026-05-29-verification.md`.
 
 #### May 28, 2026 — Perf sprint: OOM fix, filter pushdown, files-via-memdb, registry double-dispatch
 

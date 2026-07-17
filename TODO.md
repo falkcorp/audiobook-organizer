@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.108.0 -->
+<!-- version: 9.109.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-17 -->
 
@@ -852,7 +852,7 @@ Hand-run, weak-model-proof task briefs (worktree-disciplined, portable subagent
 roster, multi-agent orchestration scripts). Use these instead of the unreliable
 TODO→GitHub-issues bot. Planning + cost/efficiency rationale (buckets, per-task
 model tier, same-file collision→wave table) is in
-[`docs/agent-tasks/BREAKDOWN-2026-07-01.md`](docs/agent-tasks/BREAKDOWN-2026-07-01.md).
+[`docs/archive/2026-07-consolidation/agent-tasks/BREAKDOWN-2026-07-01.md`](docs/archive/2026-07-consolidation/agent-tasks/BREAKDOWN-2026-07-01.md).
 
 **Active workstreams (8 · 30 briefs):**
 
@@ -951,7 +951,7 @@ First page: 199 books transcribed. Run auto-resumed after deploy restart.
 
 ## 🛠️ Pipeline Hardening — remaining (2026-06-21)
 
-> Full audit + prioritized fixes: [`docs/dedup-import-pipeline-audit.md`](docs/dedup-import-pipeline-audit.md).
+> Full audit + prioritized fixes: [`docs/archive/2026-07-consolidation/dedup-import-pipeline-audit.md`](docs/archive/2026-07-consolidation/dedup-import-pipeline-audit.md).
 > Session handoff: `.remember/remember.md`.
 
 - [x] **PH-1** ✅ Tag-backfill completed 314,893/314,893 (op `01KVQVAZK0TH0FRFPNMMBYJKJQ`, 2026-06-22). Lossless-library goal done.
@@ -1181,7 +1181,7 @@ for untagged tracks. Scanner uses folder name as book title for no-tag groups.
 ## 🔮 Needs Serious Planning — Open Audiobook Acoustic-Fingerprint Index (a community-owned "AcoustID for audiobooks")
 
 > Captured 2026-06-13. **Not yet specced — needs a dedicated brainstorming → spec session.**
-> Related: [`docs/specs/2026-06-13-dedup-tuning-dataset-design.md`](docs/specs/2026-06-13-dedup-tuning-dataset-design.md)
+> Related: [`docs/archive/2026-07-consolidation/specs/2026-06-13-dedup-tuning-dataset-design.md`](docs/archive/2026-07-consolidation/specs/2026-06-13-dedup-tuning-dataset-design.md)
 
 **Vision.** MusicBrainz/AcoustID model audiobooks poorly (their DB is song/recording-based; a 9-hour book is not a "recording"). Build our own, better, **community-usable** index of audiobook acoustic fingerprints + verified identity (title/author/series/narrator/edition). It should be good enough that submitting back to AcoustID becomes unnecessary.
 
@@ -1204,8 +1204,8 @@ for untagged tracks. Scanner uses folder name as book title for no-tag groups.
 All 27 planned tasks + 1 bonus task shipped. Specs and plan docs:
 - [`docs/specs/fable5-review-findings.md`](docs/specs/fable5-review-findings.md) — 3 CRITICAL / 6 HIGH / 8 MEDIUM / 2 LOW
 - [`docs/specs/fable5-spec-itunes-writeback-hardening.md`](docs/specs/fable5-spec-itunes-writeback-hardening.md)
-- [`docs/specs/fable5-spec-unified-dedup-pipeline.md`](docs/specs/fable5-spec-unified-dedup-pipeline.md)
-- [`docs/specs/fable5-spec-memory-db-optimization.md`](docs/specs/fable5-spec-memory-db-optimization.md)
+- [`docs/archive/2026-07-consolidation/specs/fable5-spec-unified-dedup-pipeline.md`](docs/archive/2026-07-consolidation/specs/fable5-spec-unified-dedup-pipeline.md)
+- [`docs/archive/2026-07-consolidation/specs/fable5-spec-memory-db-optimization.md`](docs/archive/2026-07-consolidation/specs/fable5-spec-memory-db-optimization.md)
 - [`docs/plans/fable5-implementation-plan.md`](docs/plans/fable5-implementation-plan.md)
 
 ### P2 — iTunes writeback hardening ✅ all done
@@ -1250,7 +1250,7 @@ All 27 planned tasks + 1 bonus task shipped. Specs and plan docs:
 
 ## ✅ Dedup Tuning Dataset — COMPLETE (June 13, 2026)
 
-Spec: [`docs/specs/2026-06-13-dedup-tuning-dataset-design.md`](docs/specs/2026-06-13-dedup-tuning-dataset-design.md)
+Spec: [`docs/archive/2026-07-consolidation/specs/2026-06-13-dedup-tuning-dataset-design.md`](docs/archive/2026-07-consolidation/specs/2026-06-13-dedup-tuning-dataset-design.md)
 Plan: [`docs/plans/2026-06-13-dedup-exact-gate-and-dataset.md`](docs/plans/2026-06-13-dedup-exact-gate-and-dataset.md)
 
 ### M0 — Legacy false-positive purge ✅ applied on production June 13

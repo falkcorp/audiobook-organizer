@@ -1,7 +1,7 @@
 <!-- file: docs/consultancy/02-dedup.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: eb002776-8824-40c5-915b-67f4f146e852 -->
-<!-- last-edited: 2026-07-02 -->
+<!-- last-edited: 2026-07-17 -->
 
 # Consultancy Evaluation — Dedup Engine & Strategy (2026-07-02)
 
@@ -82,7 +82,7 @@ Sequence: (1) run maintenance re-scan + `dedup.quarantine-chapter-artifacts` dry
 - `internal/dedup/engine.go:1351-1359`
 - `TODO.md:170`
 - `TODO.md:188`
-- `docs/status/2026-07-02-local-cutover-and-matching.md:63-66`
+- `docs/archive/2026-07-consolidation/status/2026-07-02-local-cutover-and-matching.md:63-66`
 
 ## DEDUP-2 — Embedding thresholds and confidence maps are calibrated for text-embedding-3-large; no recalibration or candidate regeneration exists for the bge-m3 cutover
 
@@ -121,7 +121,7 @@ Accept the transient gap but schedule a `FullScan` after re-embed completion (al
 
 - `internal/database/embedding_store.go:1213-1216`
 - `internal/plugins/dedup/reembed_embeddings.go:29-38`
-- `docs/status/2026-07-02-local-cutover-and-matching.md:55-58`
+- `docs/archive/2026-07-consolidation/status/2026-07-02-local-cutover-and-matching.md:55-58`
 
 ## DEDUP-4 — Duration coverage is the cheap complementary lever: the Duration=0-with-files residual is unlabeled by design and blocks the not_dup catchers
 

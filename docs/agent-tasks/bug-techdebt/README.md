@@ -1,7 +1,7 @@
 <!-- file: docs/agent-tasks/bug-techdebt/README.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 5da65c60-ea12-46fa-9dce-5c2d896b431e -->
-<!-- last-edited: 2026-07-10 -->
+<!-- last-edited: 2026-07-17 -->
 
 # Workstream — Bug + Tech-Debt Cluster (INIT-9)
 
@@ -11,7 +11,7 @@ CI glob, enroll the cache warmers in bgWG, plan (NOT execute) the repo-size hist
 rewrite, and verify the W5d-1 Author/Series write-back. From the 2026-07-10
 remaining-work master plan (INIT-9 section) and GitHub issues #1536, #1796, #1795,
 #1797, #1794, #1650 + TODO.md:62 (STOREFID W5d-1). Spec:
-`docs/specs/2026-07-10-bug-techdebt-design.md`; taskboard:
+`docs/archive/2026-07-consolidation/specs/2026-07-10-bug-techdebt-design.md`; taskboard:
 `docs/plans/2026-07-10-bug-techdebt.md` (the authoritative skeleton).
 
 **Initiative gate (verbatim, applies to every task):** PLAN -> EXECUTE AUTONOMOUSLY

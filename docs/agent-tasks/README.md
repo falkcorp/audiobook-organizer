@@ -1,7 +1,7 @@
 <!-- file: docs/agent-tasks/README.md -->
-<!-- version: 2.1.0 -->
+<!-- version: 2.2.0 -->
 <!-- guid: 7a1e0c44-9d2b-4f08-bc31-2e5a6b7c8d90 -->
-<!-- last-edited: 2026-07-03 -->
+<!-- last-edited: 2026-07-17 -->
 
 # Agent Task Package
 
@@ -19,20 +19,20 @@ tasks in parallel on isolated git worktrees.
 ## Workstreams (2026-07-01 refresh)
 
 Planning + cost/efficiency rationale for this set is in
-[`BREAKDOWN-2026-07-01.md`](BREAKDOWN-2026-07-01.md) (three buckets: authored as
+[`BREAKDOWN-2026-07-01.md`](../archive/2026-07-consolidation/agent-tasks/BREAKDOWN-2026-07-01.md) (three buckets: authored as
 briefs / needs-brainstorm / operational-no-task, plus per-task model tier and the
 same-file collision→wave table).
 
 | Folder | What | Priority | Tasks |
 |--------|------|----------|-------|
-| [`consultancy-roadmap/`](consultancy-roadmap/) | **2026-07-02 consultancy evaluation** implementation tasks — Tier-0 live-defect fixes (CONSULT-1..8), backend-mode toggle, dedup drain/recalibration/auto-resolve, shutdown correctness, ops hardening ([roadmap](../consultancy/00-ROADMAP.md)) | **P0–P3** | 31 |
-| [`dedup-hardening/`](dedup-hardening/) | Close the residual exact-layer false-positive leak + defensive guards (DEDUP-INTRO-1 residual, CONS-15, CONS-FRAG-2) | **P1** | 3 |
-| [`ci-flaky-fixes/`](ci-flaky-fixes/) | Make the mock-freshness + 2 flaky-test gates trustworthy | **P1** | 3 |
-| [`library-ui/`](library-ui/) | Saved filter presets, tag search, Ollama link, Library stale-cache bugfix | P2 | 4 |
-| [`dedup-dataset/`](dedup-dataset/) | Labeled-dataset follow-ups: relation classifiers, live-capture, JSONL export (C5, C5-sig, C5-folder, C7, C8) | P2 | 5 |
-| [`provenance-hash-chain/`](provenance-hash-chain/) | Download-hash field + integrity alert (HASH-CHAIN-1/3) | P2 | 2 |
-| [`perf-cleanup/`](perf-cleanup/) | RunItems migration, caching fast-paths, config-shim retire (ARCH-4b, MAYDEPLOY-H5/H7, NUTSDB, CONS-13) | P3 | 5 |
-| [`logging-slog/`](logging-slog/) | Wire `logging.Info(ctx)` into the remaining raw-slog op paths (SLOG-W13 residual) | P3 | 3 |
+| [`consultancy-roadmap/`](../archive/2026-07-consolidation/agent-tasks/consultancy-roadmap/) | **2026-07-02 consultancy evaluation** implementation tasks — Tier-0 live-defect fixes (CONSULT-1..8), backend-mode toggle, dedup drain/recalibration/auto-resolve, shutdown correctness, ops hardening ([roadmap](../consultancy/00-ROADMAP.md)) | **P0–P3** | 31 |
+| [`dedup-hardening/`](../archive/2026-07-consolidation/agent-tasks/dedup-hardening/) | Close the residual exact-layer false-positive leak + defensive guards (DEDUP-INTRO-1 residual, CONS-15, CONS-FRAG-2) | **P1** | 3 |
+| [`ci-flaky-fixes/`](../archive/2026-07-consolidation/agent-tasks/ci-flaky-fixes/) | Make the mock-freshness + 2 flaky-test gates trustworthy | **P1** | 3 |
+| [`library-ui/`](../archive/2026-07-consolidation/agent-tasks/library-ui/) | Saved filter presets, tag search, Ollama link, Library stale-cache bugfix | P2 | 4 |
+| [`dedup-dataset/`](../archive/2026-07-consolidation/agent-tasks/dedup-dataset/) | Labeled-dataset follow-ups: relation classifiers, live-capture, JSONL export (C5, C5-sig, C5-folder, C7, C8) | P2 | 5 |
+| [`provenance-hash-chain/`](../archive/2026-07-consolidation/agent-tasks/provenance-hash-chain/) | Download-hash field + integrity alert (HASH-CHAIN-1/3) | P2 | 2 |
+| [`perf-cleanup/`](../archive/2026-07-consolidation/agent-tasks/perf-cleanup/) | RunItems migration, caching fast-paths, config-shim retire (ARCH-4b, MAYDEPLOY-H5/H7, NUTSDB, CONS-13) | P3 | 5 |
+| [`logging-slog/`](../archive/2026-07-consolidation/agent-tasks/logging-slog/) | Wire `logging.Info(ctx)` into the remaining raw-slog op paths (SLOG-W13 residual) | P3 | 3 |
 | [`ai-responses-migration/`](ai-responses-migration/) | **DEFERRED/optional** — Chat Completions → `/v1/responses` (AI-RESP-A/B/D/E/F) | P3 (deferred) | 5 |
 
 Each workstream folder has its own `README.md` (overview + wave table),

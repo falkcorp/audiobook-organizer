@@ -1,7 +1,7 @@
 <!-- file: docs/consultancy/01-storage-architecture.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 8eda33bd-6c97-42bd-95bd-98f2f8e81e12 -->
-<!-- last-edited: 2026-07-02 -->
+<!-- last-edited: 2026-07-17 -->
 
 # Consultancy Evaluation — Storage & Architecture (2026-07-02)
 
@@ -223,7 +223,7 @@ All three specialists independently flagged NutsDB; this section consolidates th
 **Citations:**
 - internal/config/config.go:1165-1167
 - cmd/root.go:350-351
-- docs/status/2026-07-02-local-cutover-and-matching.md:51
+- docs/archive/2026-07-consolidation/status/2026-07-02-local-cutover-and-matching.md:51
 - internal/database/chromem_embedding_store.go:12-14
 
 ## SYS-5 — pebble_store.go at 11,398 lines is the navigability and merge-conflict hotspot (Low)

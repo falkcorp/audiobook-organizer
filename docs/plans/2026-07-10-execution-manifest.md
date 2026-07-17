@@ -1,7 +1,7 @@
 <!-- file: docs/plans/2026-07-10-execution-manifest.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 11f6e9cc-9c04-4da8-89aa-090f0408cb42 -->
-<!-- last-edited: 2026-07-10 -->
+<!-- last-edited: 2026-07-17 -->
 
 # Execution Manifest — 2026-07-10 remaining-work planning packages
 
@@ -17,15 +17,15 @@ verification, a repair loop, and a mechanical audit before landing.
 
 | # | Initiative | Spec | Plan | Tasks | Gate |
 |---|-----------|------|------|-------|------|
-| INIT-1 | Dedup label-quality & refinement loop | [spec](../specs/2026-07-10-dedup-label-quality-design.md) | [plan](2026-07-10-dedup-label-quality.md) | [8 briefs](../agent-tasks/dedup-label-quality/) | SPEC → GATED APPLY (every prod-data mutation: dry-run → AskUserQuestion) |
+| INIT-1 | Dedup label-quality & refinement loop | [spec](../archive/2026-07-consolidation/specs/2026-07-10-dedup-label-quality-design.md) | [plan](../archive/2026-07-consolidation/plans/2026-07-10-dedup-label-quality.md) | [8 briefs](../archive/2026-07-consolidation/agent-tasks/dedup-label-quality/) | SPEC → GATED APPLY (every prod-data mutation: dry-run → AskUserQuestion) |
 | INIT-2 | Dedup pipeline hardening | [spec](../specs/2026-07-10-dedup-pipeline-hardening-design.md) | [plan](2026-07-10-dedup-pipeline-hardening.md) | [6 briefs](../agent-tasks/dedup-pipeline-hardening/) | PLAN → EXECUTE autonomously; T3/T6 prod drains dry-run → AskUserQuestion |
-| INIT-3 | Metadata matching pipeline | [spec](../specs/2026-07-10-metadata-matching-design.md) | [plan](2026-07-10-metadata-matching.md) | [8 briefs](../agent-tasks/metadata-matching/) | PLAN → EXECUTE autonomously; config extraction defaults = today's literals |
-| INIT-4 | Filtering & search pipeline | [spec](../specs/2026-07-10-filtering-search-design.md) | [plan](2026-07-10-filtering-search.md) | [6 briefs](../agent-tasks/filtering-search/) | PLAN → EXECUTE autonomously; T1/T2 correctness fixes ship first |
+| INIT-3 | Metadata matching pipeline | [spec](../archive/2026-07-consolidation/specs/2026-07-10-metadata-matching-design.md) | [plan](../archive/2026-07-consolidation/plans/2026-07-10-metadata-matching.md) | [8 briefs](../archive/2026-07-consolidation/agent-tasks/metadata-matching/) | PLAN → EXECUTE autonomously; config extraction defaults = today's literals |
+| INIT-4 | Filtering & search pipeline | [spec](../archive/2026-07-consolidation/specs/2026-07-10-filtering-search-design.md) | [plan](../archive/2026-07-consolidation/plans/2026-07-10-filtering-search.md) | [6 briefs](../archive/2026-07-consolidation/agent-tasks/filtering-search/) | PLAN → EXECUTE autonomously; T1/T2 correctness fixes ship first |
 | INIT-5 | Torrent client-agnostic relocation | [spec](../specs/2026-07-10-torrent-relocation-design.md) | [plan](2026-07-10-torrent-relocation.md) | [7 briefs](../agent-tasks/torrent-relocation/) | SPEC → EXECUTE; **T2 = real-Deluge spike, STOP-FOR-HUMAN sign-off before T3** |
 | INIT-6 | Pluggable Workflow System (WF-2..6) | [spec](../specs/2026-07-10-workflow-system-design.md) | [plan (stub)](2026-07-10-workflow-system.md) | [AWAIT-APPROVAL](../agent-tasks/workflow-system/AWAIT-APPROVAL.md) | **STOP-FOR-HUMAN** — spec-only, core-infra blast radius |
 | INIT-7 | OpenAI Responses API migration | [spec](../specs/2026-07-10-responses-api-migration-design.md) | [plan](2026-07-10-responses-api-migration.md) | [HOLD-STATUS](../agent-tasks/responses-api-migration/HOLD-STATUS.md) | **CONFIRM-HOLD** — blocked on #1260–#1265 hold-lift |
 | INIT-8 | Community fingerprint index | [spec](../specs/2026-07-10-community-fingerprint-index-design.md) | [plan (stub)](2026-07-10-community-fingerprint-index.md) | [AWAIT-APPROVAL](../agent-tasks/community-fingerprint-index/AWAIT-APPROVAL.md) | **STOP-FOR-HUMAN** — spec-only, new-product blast radius |
-| INIT-9 | Bug + tech-debt cluster | [spec](../specs/2026-07-10-bug-techdebt-design.md) | [plan](2026-07-10-bug-techdebt.md) | [7 briefs](../agent-tasks/bug-techdebt/) | PLAN → EXECUTE autonomously; **TASK-06 REPO-SIZE-1 = STOP-FOR-HUMAN plan-only** |
+| INIT-9 | Bug + tech-debt cluster | [spec](../archive/2026-07-consolidation/specs/2026-07-10-bug-techdebt-design.md) | [plan](../archive/2026-07-consolidation/plans/2026-07-10-bug-techdebt.md) | [7 briefs](../agent-tasks/bug-techdebt/) | PLAN → EXECUTE autonomously; **TASK-06 REPO-SIZE-1 = STOP-FOR-HUMAN plan-only** |
 | INIT-10 | Small UX/feature items | [spec](../specs/2026-07-10-ux-small-items-design.md) | [plan](2026-07-10-ux-small-items.md) | [8 briefs](../agent-tasks/ux-small-items/) | PLAN → EXECUTE where cheap; C8 issue-filing dry-run → AskUserQuestion |
 
 50 executable TASK briefs total (INIT-6/7/8 carry stop/hold stubs instead).

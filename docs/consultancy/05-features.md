@@ -1,7 +1,7 @@
 <!-- file: docs/consultancy/05-features.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 40d501df-868a-4c5f-9ed4-cb64c1c6ff1c -->
-<!-- last-edited: 2026-07-02 -->
+<!-- last-edited: 2026-07-17 -->
 
 # Consultancy Evaluation — Feature Portfolio (2026-07-02)
 
@@ -76,8 +76,8 @@ Advisor verification confirmed the load-bearing facts directly: `embed_scan.go:7
 - TODO.md:1538-1556
 - docs/agent-tasks/ai-responses-migration/README.md:1
 - internal/ai/openai_parser.go:85-87
-- docs/status/2026-07-02-local-cutover-and-matching.md:10-14
-- docs/status/2026-07-02-local-cutover-and-matching.md:70-77
+- docs/archive/2026-07-consolidation/status/2026-07-02-local-cutover-and-matching.md:10-14
+- docs/archive/2026-07-consolidation/status/2026-07-02-local-cutover-and-matching.md:70-77
 
 ### FEAT-2 — dedup C8 auto-bug-filing: defer (correctly gated); consider downgrading to a report op
 
@@ -115,8 +115,8 @@ TODO.md:283-285 already carries the correct stance: evolve UOS (op registry + pl
 
 **Citations:**
 - TODO.md:281-296
-- docs/agent-tasks/BREAKDOWN-2026-07-01.md:129
-- docs/status/2026-07-02-local-cutover-and-matching.md:70-72
+- docs/archive/2026-07-consolidation/agent-tasks/BREAKDOWN-2026-07-01.md:129
+- docs/archive/2026-07-consolidation/status/2026-07-02-local-cutover-and-matching.md:70-72
 
 ### FEAT-5 — Plex-style HTTP media server API (3.8): defer — no spec, no consumer, wrong time
 
@@ -128,21 +128,21 @@ A one-line backlog entry (TODO.md:1722, size L) with no spec, no named client (n
 
 **Citations:**
 - TODO.md:1722
-- docs/agent-tasks/BREAKDOWN-2026-07-01.md:130
+- docs/archive/2026-07-consolidation/agent-tasks/BREAKDOWN-2026-07-01.md:130
 
 ### FEAT-6 — PostgreSQL research track (4.1) + per-workload store eval (4.7): consolidate already-held items into a decision record
 
 **Verdict: retire as standing backlog items.** (Per advisor verification: both items are already `[hold]`-tagged, so "kill" overstates the change — this is a consolidation of parked items, not a status reversal.)
 
-4.1 (XL, `[hold]`) and 4.7 (L, `[hold]`) are overlapping research tracks with no spec and no driving pain point. The architecture has since committed hard the other way: PebbleDB is the mandated sole production store (project memory: "always implement PebbleStore fully before shipping"), the memdb-optimization spec (`docs/specs/fable5-spec-memory-db-optimization.md`) invested in Pebble-side performance, vector data lives in Pebble's EmbeddingStore with chromem/HNSW as derived indexes (status doc:49-51), and SQLite is already legacy/stale. A Postgres migration would be the largest project in the backlog while every observed bottleneck (aggregates, cache warm-up, pagination caps) was fixed within the Pebble architecture. Keeping an XL "research" item alive invites periodic re-litigation cost.
+4.1 (XL, `[hold]`) and 4.7 (L, `[hold]`) are overlapping research tracks with no spec and no driving pain point. The architecture has since committed hard the other way: PebbleDB is the mandated sole production store (project memory: "always implement PebbleStore fully before shipping"), the memdb-optimization spec (`docs/archive/2026-07-consolidation/specs/fable5-spec-memory-db-optimization.md`) invested in Pebble-side performance, vector data lives in Pebble's EmbeddingStore with chromem/HNSW as derived indexes (status doc:49-51), and SQLite is already legacy/stale. A Postgres migration would be the largest project in the backlog while every observed bottleneck (aggregates, cache warm-up, pagination caps) was fixed within the Pebble architecture. Keeping an XL "research" item alive invites periodic re-litigation cost.
 
 **Recommendation:** Remove 4.1 and fold 4.7 into a single one-paragraph decision record: "Pebble is primary; revisit only if a concrete relational/query requirement (multi-node, ad-hoc reporting, >500K books) emerges." That preserves the option without carrying an XL item on the board.
 
 **Citations:**
 - TODO.md:1728
 - TODO.md:1734
-- docs/agent-tasks/BREAKDOWN-2026-07-01.md:131
-- docs/status/2026-07-02-local-cutover-and-matching.md:49-51
+- docs/archive/2026-07-consolidation/agent-tasks/BREAKDOWN-2026-07-01.md:131
+- docs/archive/2026-07-consolidation/status/2026-07-02-local-cutover-and-matching.md:49-51
 
 ---
 
@@ -157,8 +157,8 @@ The status doc concludes the AcoustID dedup veto is "NOT viable at current cover
 **Recommendation:** Add a tracked workstream: (a) library-wide fingerprint-coverage stat in the system stats endpoint + Dashboard tile, (b) a resumable campaign op (reuse `fingerprint-rescan-missing` + acoustid backfill, honoring the 4,882 perm-fail tombstones), (c) re-run `ReevaluateAcoustIDConflicts` (#1736) when coverage crosses a threshold. Sequence before any new dedup feature and before the community index (NEWF-8).
 
 **Citations:**
-- docs/status/2026-07-02-local-cutover-and-matching.md:64-66
-- docs/status/2026-07-02-local-cutover-and-matching.md:73-74
+- docs/archive/2026-07-consolidation/status/2026-07-02-local-cutover-and-matching.md:64-66
+- docs/archive/2026-07-consolidation/status/2026-07-02-local-cutover-and-matching.md:73-74
 - internal/plugins/maintenance/optimize.go:66
 - internal/fingerprint/calculator.go:31
 - internal/plugins/acoustid/backfill.go:247
@@ -170,8 +170,8 @@ The cutover to Ollama was done by hand-editing prod config (`embedding.base_url=
 **Recommendation:** Build as specced in the status doc. Implement the fallback mode as a runtime health-check chain (reuse `ToolRegistry.Available` / `SetOllamaAvailable` gates from TOOL-6) rather than a static choice, so a dead backend degrades instead of erroring. This is also the concrete first consumer for WF-2 capability declarations (see NEWF-6 / FEAT-4).
 
 **Citations:**
-- docs/status/2026-07-02-local-cutover-and-matching.md:70-72
-- docs/status/2026-07-02-local-cutover-and-matching.md:42-47
+- docs/archive/2026-07-consolidation/status/2026-07-02-local-cutover-and-matching.md:70-72
+- docs/archive/2026-07-consolidation/status/2026-07-02-local-cutover-and-matching.md:42-47
 
 ### NEWF-3 — Missing: bulk metadata-review queue (middle ground between auto-fetch and one-by-one dialog) — severity: medium
 
@@ -192,7 +192,7 @@ Every data-quality signal lives in its own diagnostic endpoint: duration-mismatc
 **Citations:**
 - internal/server/handlers/system/handler.go:708
 - TODO.md:1468
-- docs/status/2026-07-02-local-cutover-and-matching.md:23
+- docs/archive/2026-07-consolidation/status/2026-07-02-local-cutover-and-matching.md:23
 - internal/fingerprint/calculator.go:31
 
 ### NEWF-5 — Over-built/stale: deprecated dedup.embed-async still nightly-scheduled against quota-dead OpenAI Batch API — severity: medium
@@ -203,7 +203,7 @@ Every data-quality signal lives in its own diagnostic endpoint: duration-mismatc
 
 **Citations:**
 - internal/plugins/dedup/embed_async.go:26-38
-- docs/status/2026-07-02-local-cutover-and-matching.md:55-57
+- docs/archive/2026-07-consolidation/status/2026-07-02-local-cutover-and-matching.md:55-57
 - internal/server/batch_poller_register.go:1
 - internal/plugins/maintenance/batch_poller.go:1
 
@@ -216,7 +216,7 @@ ai-responses-migration (Chat Completions → OpenAI `/v1/responses`, 5 tasks, al
 **Citations:**
 - docs/agent-tasks/README.md:35
 - TODO.md:281-292
-- docs/status/2026-07-02-local-cutover-and-matching.md:76-77
+- docs/archive/2026-07-consolidation/status/2026-07-02-local-cutover-and-matching.md:76-77
 
 ### NEWF-7 — Missing: consumption/player integration (progress-sync API) — foundations already built, no consumer — severity: low
 
@@ -236,7 +236,7 @@ TODO.md:296-313 sketches a git-repo-backed community index ("AcoustID for audiob
 
 **Citations:**
 - TODO.md:296-313
-- docs/status/2026-07-02-local-cutover-and-matching.md:64-66
+- docs/archive/2026-07-consolidation/status/2026-07-02-local-cutover-and-matching.md:64-66
 
 ### NEWF-9 — Backlog hygiene: "duration/filesize aggregation" is already shipped; memory/TODO reconciliation needed (and BUG-1/QUAL-2 untracked) — severity: low
 
