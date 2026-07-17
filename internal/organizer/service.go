@@ -1,7 +1,7 @@
 // file: internal/organizer/service.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
-// last-edited: 2026-07-13
+// last-edited: 2026-07-17
 
 package organizer
 
@@ -450,8 +450,13 @@ func (orgSvc *Service) ReOrganizeInPlace(book *database.Book, log logger.Logger)
 		return "", fmt.Errorf("cannot create target directory %s: %w (check parent permissions and disk space)", parentDir, err)
 	}
 
-	// Rename (move) the file or directory
-	if err := os.Rename(oldPath, targetPath); err != nil {
+	// Rename (move) the file or directory. safeRename refuses to overwrite an
+	// existing destination — a bare os.Rename would silently REPLACE it,
+	// destroying whichever book already lives at the target path.
+	if err := safeRename(oldPath, targetPath); err != nil {
+		if os.IsExist(err) {
+			return "", fmt.Errorf("cannot move %s -> %s: destination already exists — refusing to overwrite; resolve the collision first", oldPath, targetPath)
+		}
 		return "", fmt.Errorf("cannot move %s -> %s: %w (verify both paths exist, target not in use, same filesystem, write permission)", oldPath, targetPath, err)
 	}
 
