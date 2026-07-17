@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedup_triage.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3a4b5c6d-7e8f-9012-abcd-ef1234567890
-// last-edited: 2026-06-24
+// last-edited: 2026-07-17
 
 package maintenance
 
@@ -54,31 +54,35 @@ const (
 
 // TriageExample records minimal context on a sampled candidate for the report.
 type TriageExample struct {
-	CandidateID int64       `json:"candidate_id"`
-	BookAID     string      `json:"book_a_id"`
-	BookBID     string      `json:"book_b_id"`
-	BookATitle  string      `json:"book_a_title"`
-	BookBTitle  string      `json:"book_b_title"`
-	Layer       string      `json:"layer"`
-	Reason      string      `json:"reason"`
+	CandidateID int64  `json:"candidate_id"`
+	BookAID     string `json:"book_a_id"`
+	BookBID     string `json:"book_b_id"`
+	BookATitle  string `json:"book_a_title"`
+	BookBTitle  string `json:"book_b_title"`
+	Layer       string `json:"layer"`
+	Reason      string `json:"reason"`
 }
 
 // TriagePopulation holds the count and up to 5 examples for one class.
 type TriagePopulation struct {
-	Class    TriageClass    `json:"class"`
-	Count    int            `json:"count"`
+	Class    TriageClass     `json:"class"`
+	Count    int             `json:"count"`
 	Examples []TriageExample `json:"examples,omitempty"`
 }
 
 // TriageReport is the output of the dry-run triage op.
 // It is logged as JSON at the end of the run and returned as op result data.
 type TriageReport struct {
-	ScannedAt      time.Time                    `json:"scanned_at"`
-	TotalScanned   int                          `json:"total_scanned"`
+	ScannedAt      time.Time                        `json:"scanned_at"`
+	TotalScanned   int                              `json:"total_scanned"`
 	Populations    map[TriageClass]TriagePopulation `json:"populations"`
-	PurgeableCount int                          `json:"purgeable_count"`
-	KeepCount      int                          `json:"keep_count"`
-	ReviewCount    int                          `json:"review_count"`
+	PurgeableCount int                              `json:"purgeable_count"`
+	KeepCount      int                              `json:"keep_count"`
+	ReviewCount    int                              `json:"review_count"`
+	// BookLookupErrors counts GetBookByID failures during triage. Failed
+	// lookups classify with a nil book, so a nonzero value means the
+	// population counts may be skewed toward stub/unknown.
+	BookLookupErrors int `json:"book_lookup_errors,omitempty"`
 }
 
 // purgeableClasses are the populations safe to delete without human review.
