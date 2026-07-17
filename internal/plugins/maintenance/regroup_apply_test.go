@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_apply_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a9d3f1c7-6b40-4e28-8f95-2c1e7b0a4d63
-// last-edited: 2026-07-14
+// last-edited: 2026-07-17
 
 package maintenance
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/database/dbtest"
@@ -269,6 +270,276 @@ func TestApplyVersionGroup_Idempotent(t *testing.T) {
 func TestPickPrimary_SmallestID(t *testing.T) {
 	assert.Equal(t, "01AAAA", pickPrimary([]string{"01ZZZZ", "01AAAA", "01MMMM"}))
 	assert.Equal(t, "solo", pickPrimary([]string{"solo"}))
+}
+
+// softDeleteBook marks a book soft-deleted the same way merge.Service does:
+// re-fetch the full row, set only MarkedForDeletion(+At), write back.
+func softDeleteBook(t *testing.T, store database.Store, id string) {
+	t.Helper()
+	b, err := store.GetBookByID(id)
+	require.NoError(t, err)
+	require.NotNil(t, b)
+	deleted := true
+	now := time.Now().UTC()
+	b.MarkedForDeletion = &deleted
+	b.MarkedForDeletionAt = &now
+	_, err = store.UpdateBook(id, b)
+	require.NoError(t, err)
+}
+
+// putInGroup places an existing book into a version group with the given primary
+// flag via the same re-fetch-and-patch pattern the apply path uses.
+func putInGroup(t *testing.T, store database.Store, id, groupID string, primary bool) {
+	t.Helper()
+	b, err := store.GetBookByID(id)
+	require.NoError(t, err)
+	require.NotNil(t, b)
+	b.VersionGroupID = &groupID
+	b.IsPrimaryVersion = &primary
+	_, err = store.UpdateBook(id, b)
+	require.NoError(t, err)
+}
+
+// TestApplyVersionGroup_SoftDeletedMembers is BUG 1 for the version-group path:
+// a hold created days before apply can reference a member that was merged away
+// (soft-deleted) in between. The corpse must be treated exactly like a vanished
+// member — never re-linked into the group and never designated primary.
+func TestApplyVersionGroup_SoftDeletedMembers(t *testing.T) {
+	cases := []struct {
+		name      string
+		liveCount int // live members created AFTER the corpse (corpse has smallest ULID)
+		wantGroup bool
+	}{
+		// The corpse holds the smallest ULID, so if it leaked through it WOULD be
+		// chosen primary — this case proves it is skipped entirely.
+		{name: "corpse skipped, two live members grouped", liveCount: 2, wantGroup: true},
+		// Only one live member remains → short-circuit no-op, nothing written.
+		{name: "corpse leaves fewer than two members — no-op", liveCount: 1, wantGroup: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newApplyTestStore(t)
+
+			corpse := ulid.Make().String() // created first → smallest ULID
+			_, err := store.CreateBook(&database.Book{ID: corpse, Title: "Corpse", Format: "mp3", FilePath: "/lib/sd/corpse.mp3"})
+			require.NoError(t, err)
+			softDeleteBook(t, store, corpse)
+
+			live := make([]string, 0, tc.liveCount)
+			for i := 0; i < tc.liveCount; i++ {
+				id := ulid.Make().String()
+				live = append(live, id)
+				_, err := store.CreateBook(&database.Book{
+					ID: id, Title: "Edition", Format: "mp3",
+					FilePath: "/lib/sd/ed" + string(rune('1'+i)) + ".mp3",
+				})
+				require.NoError(t, err)
+			}
+
+			apply := ApplyVersionGroup(store)
+			members := append([]string{corpse}, live...)
+			require.NoError(t, apply(context.Background(), versionGroupItem(t, "/lib/sd", members)))
+
+			// The corpse is untouched: still soft-deleted, never linked, never primary.
+			cb, err := store.GetBookByID(corpse)
+			require.NoError(t, err)
+			require.NotNil(t, cb)
+			require.NotNil(t, cb.MarkedForDeletion)
+			assert.True(t, *cb.MarkedForDeletion, "corpse must stay soft-deleted")
+			assert.Nil(t, cb.VersionGroupID, "corpse must NOT be re-linked into the group")
+			assert.True(t, cb.IsPrimaryVersion == nil || !*cb.IsPrimaryVersion,
+				"corpse must never be designated primary")
+
+			for _, id := range live {
+				b, err := store.GetBookByID(id)
+				require.NoError(t, err)
+				require.NotNil(t, b)
+				if tc.wantGroup {
+					require.NotNil(t, b.VersionGroupID, "live member %s must be grouped", id)
+					require.NotEmpty(t, *b.VersionGroupID)
+				} else {
+					assert.Nil(t, b.VersionGroupID, "no-op case must not write any member")
+				}
+			}
+
+			dbtest.AssertStoreInvariants(t, store)
+		})
+	}
+}
+
+// TestApplyMultidisc_SoftDeletedMembers is BUG 1 for the multidisc path: a
+// soft-deleted member must never be fed to CombineBooks — its files must not be
+// moved onto a survivor, and it counts as absent for the <2-members short-circuit.
+func TestApplyMultidisc_SoftDeletedMembers(t *testing.T) {
+	cases := []struct {
+		name        string
+		liveCount   int
+		wantCombine bool
+	}{
+		{name: "corpse skipped, two live members combined", liveCount: 2, wantCombine: true},
+		{name: "corpse leaves fewer than two members — no-op", liveCount: 1, wantCombine: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newApplyTestStore(t)
+
+			corpse := ulid.Make().String() // smallest ULID — would be picked survivor if it leaked
+			_, err := store.CreateBook(&database.Book{ID: corpse, Title: "Corpse", Format: "mp3", FilePath: "/lib/md/corpse.mp3"})
+			require.NoError(t, err)
+			require.NoError(t, store.CreateBookFile(&database.BookFile{
+				ID: ulid.Make().String(), BookID: corpse, FilePath: "/lib/md/corpse.mp3", Format: "mp3",
+				AcoustIDFingerprint: []byte("fp-corpse"),
+			}))
+			softDeleteBook(t, store, corpse)
+
+			live := make([]string, 0, tc.liveCount)
+			for i := 0; i < tc.liveCount; i++ {
+				id := ulid.Make().String()
+				live = append(live, id)
+				path := "/lib/md/ch" + string(rune('1'+i)) + ".mp3"
+				_, err := store.CreateBook(&database.Book{ID: id, Title: "Chapter", Format: "mp3", FilePath: path})
+				require.NoError(t, err)
+				require.NoError(t, store.CreateBookFile(&database.BookFile{
+					ID: ulid.Make().String(), BookID: id, FilePath: path, Format: "mp3",
+					AcoustIDFingerprint: []byte("fp-" + id),
+				}))
+			}
+
+			apply := ApplyMultidisc(store, merge.NewService(store))
+			members := append([]string{corpse}, live...)
+			require.NoError(t, apply(context.Background(), multidiscItem(t, "/lib/md", members)))
+
+			// The corpse row still exists (soft-deleted, NOT hard-deleted by the
+			// combine) and still owns its own file.
+			cb, err := store.GetBookByID(corpse)
+			require.NoError(t, err)
+			require.NotNil(t, cb, "corpse must not be absorbed/hard-deleted")
+			require.NotNil(t, cb.MarkedForDeletion)
+			assert.True(t, *cb.MarkedForDeletion)
+			corpseFiles, err := store.GetBookFiles(corpse)
+			require.NoError(t, err)
+			assert.Len(t, corpseFiles, 1, "corpse's files must not be moved onto a survivor")
+
+			if tc.wantCombine {
+				survivor := minID(live...)
+				files, err := store.GetBookFiles(survivor)
+				require.NoError(t, err)
+				assert.Len(t, files, tc.liveCount, "survivor owns only the LIVE members' files")
+				for _, id := range live {
+					b, _ := store.GetBookByID(id)
+					if id == survivor {
+						assert.NotNil(t, b)
+					} else {
+						assert.Nil(t, b, "absorbed live member %s must be hard-deleted", id)
+					}
+				}
+			} else {
+				b, err := store.GetBookByID(live[0])
+				require.NoError(t, err)
+				require.NotNil(t, b, "no-op case must leave the lone live member untouched")
+			}
+
+			dbtest.AssertStoreInvariants(t, store)
+		})
+	}
+}
+
+// TestApplyVersionGroup_DemotesStaleExistingPrimary is BUG 2: when the target
+// group is reused, books already in the group but NOT in the hold must not keep
+// a stale IsPrimaryVersion=true alongside the newly chosen primary. Also covers
+// idempotent re-apply of the demotion path.
+func TestApplyVersionGroup_DemotesStaleExistingPrimary(t *testing.T) {
+	store := newApplyTestStore(t)
+	groupID := ulid.Make().String()
+
+	// X: existing group member + current primary, NOT in the hold.
+	xID := ulid.Make().String()
+	_, err := store.CreateBook(&database.Book{ID: xID, Title: "Existing Primary", Format: "mp3", FilePath: "/lib/dp/x.mp3"})
+	require.NoError(t, err)
+	putInGroup(t, store, xID, groupID, true)
+
+	// A: already in the group (non-primary), in the hold. B: ungrouped, in the hold.
+	aID := ulid.Make().String()
+	_, err = store.CreateBook(&database.Book{ID: aID, Title: "Edition A", Format: "mp3", FilePath: "/lib/dp/a.mp3"})
+	require.NoError(t, err)
+	putInGroup(t, store, aID, groupID, false)
+	bID := ulid.Make().String()
+	_, err = store.CreateBook(&database.Book{ID: bID, Title: "Edition B", Format: "mp3", FilePath: "/lib/dp/b.mp3"})
+	require.NoError(t, err)
+
+	apply := ApplyVersionGroup(store)
+	item := versionGroupItem(t, "/lib/dp", []string{aID, bID})
+	require.NoError(t, apply(context.Background(), item))
+
+	assertSinglePrimary := func() {
+		members, err := store.GetBooksByVersionGroup(groupID)
+		require.NoError(t, err)
+		require.Len(t, members, 3, "X, A, B must all be in the reused group")
+		wantPrimary := minID(aID, bID)
+		primaries := 0
+		for _, m := range members {
+			if m.IsPrimaryVersion != nil && *m.IsPrimaryVersion {
+				primaries++
+				assert.Equal(t, wantPrimary, m.ID, "the only primary must be the hold's chosen primary")
+			}
+		}
+		assert.Equal(t, 1, primaries, "group must have exactly ONE primary after apply")
+	}
+	assertSinglePrimary()
+
+	// X was demoted but otherwise untouched (still visible, still in the group).
+	x, err := store.GetBookByID(xID)
+	require.NoError(t, err)
+	require.NotNil(t, x)
+	require.NotNil(t, x.IsPrimaryVersion)
+	assert.False(t, *x.IsPrimaryVersion, "stale existing primary must be demoted")
+	require.NotNil(t, x.VersionGroupID)
+	assert.Equal(t, groupID, *x.VersionGroupID)
+	assert.Equal(t, "Existing Primary", x.Title, "demotion must patch ONLY IsPrimaryVersion")
+	assert.True(t, x.MarkedForDeletion == nil || !*x.MarkedForDeletion)
+
+	// Idempotent re-apply: same single primary, no flapping.
+	require.NoError(t, apply(context.Background(), item))
+	assertSinglePrimary()
+
+	dbtest.AssertStoreInvariants(t, store)
+}
+
+// TestApplyVersionGroup_RefusesCrossGroupMerge is BUG 3: when hold members sit in
+// TWO different non-empty version groups, silently merging them can strand the
+// losing group (or leave it primary-less). The apply must refuse with an error —
+// the review item goes to "failed" with a reason — and mutate NOTHING.
+func TestApplyVersionGroup_RefusesCrossGroupMerge(t *testing.T) {
+	store := newApplyTestStore(t)
+	g1 := ulid.Make().String()
+	g2 := ulid.Make().String()
+
+	aID := ulid.Make().String()
+	_, err := store.CreateBook(&database.Book{ID: aID, Title: "In G1", Format: "mp3", FilePath: "/lib/xg/a.mp3"})
+	require.NoError(t, err)
+	putInGroup(t, store, aID, g1, true)
+	bID := ulid.Make().String()
+	_, err = store.CreateBook(&database.Book{ID: bID, Title: "In G2", Format: "mp3", FilePath: "/lib/xg/b.mp3"})
+	require.NoError(t, err)
+	putInGroup(t, store, bID, g2, true)
+
+	apply := ApplyVersionGroup(store)
+	err = apply(context.Background(), versionGroupItem(t, "/lib/xg", []string{aID, bID}))
+	require.Error(t, err, "members in two different groups must be refused, not merged")
+	assert.Contains(t, err.Error(), "version group", "error must explain the refusal")
+
+	// Nothing was mutated: both members keep their original group + primary flag.
+	for id, wantGroup := range map[string]string{aID: g1, bID: g2} {
+		b, gerr := store.GetBookByID(id)
+		require.NoError(t, gerr)
+		require.NotNil(t, b)
+		require.NotNil(t, b.VersionGroupID)
+		assert.Equal(t, wantGroup, *b.VersionGroupID, "member %s must keep its original group", id)
+		require.NotNil(t, b.IsPrimaryVersion)
+		assert.True(t, *b.IsPrimaryVersion, "member %s must keep its primary flag", id)
+	}
+
+	dbtest.AssertStoreInvariants(t, store)
 }
 
 // TestApplyMultidisc_BadPayload surfaces a decode error rather than silently
