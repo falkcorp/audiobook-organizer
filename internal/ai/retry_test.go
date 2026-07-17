@@ -1,13 +1,15 @@
 // file: internal/ai/retry_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
-// last-edited: 2026-07-03
+// last-edited: 2026-07-17
 
 package ai
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -80,4 +82,38 @@ func TestDoWithRetry_TransientErrorStillRetries(t *testing.T) {
 
 	var pe *PermanentError
 	assert.False(t, errors.As(err, &pe), "transient error must not be wrapped as PermanentError")
+}
+
+// TestDoWithRetry_LogsRetriesAndExhaustion proves C6 observability: each
+// retry emits a Warn with attempt/backoff/err, and exhausting all attempts
+// emits an Error. Uses a buffer-backed default slog handler.
+func TestDoWithRetry_LogsRetriesAndExhaustion(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	transientErr := &openai.Error{StatusCode: 500}
+	err := DoWithRetry(context.Background(), 3, time.Millisecond, func() error {
+		return transientErr
+	})
+	require.Error(t, err)
+
+	out := buf.String()
+	assert.Contains(t, out, "ai call failed, retrying after backoff", "each retry must be logged at Warn")
+	assert.Contains(t, out, "max_attempts=3")
+	assert.Contains(t, out, "ai call retries exhausted", "exhaustion must be logged at Error")
+}
+
+// TestDoWithRetry_SuccessLogsNothing proves the happy path stays silent —
+// no retry Warn and no exhaustion Error when fn succeeds first try.
+func TestDoWithRetry_SuccessLogsNothing(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	err := DoWithRetry(context.Background(), 3, time.Millisecond, func() error { return nil })
+	require.NoError(t, err)
+	assert.Empty(t, buf.String(), "successful first attempt must not log retry noise")
 }
