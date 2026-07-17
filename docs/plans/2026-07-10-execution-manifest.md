@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-07-10-execution-manifest.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 11f6e9cc-9c04-4da8-89aa-090f0408cb42 -->
 <!-- last-edited: 2026-07-17 -->
 
@@ -15,20 +15,29 @@ verification, a repair loop, and a mechanical audit before landing.
 
 ## Package inventory
 
-| # | Initiative | Spec | Plan | Tasks | Gate |
-|---|-----------|------|------|-------|------|
-| INIT-1 | Dedup label-quality & refinement loop | [spec](../archive/2026-07-consolidation/specs/2026-07-10-dedup-label-quality-design.md) | [plan](../archive/2026-07-consolidation/plans/2026-07-10-dedup-label-quality.md) | [8 briefs](../archive/2026-07-consolidation/agent-tasks/dedup-label-quality/) | SPEC → GATED APPLY (every prod-data mutation: dry-run → AskUserQuestion) |
-| INIT-2 | Dedup pipeline hardening | [spec](../specs/2026-07-10-dedup-pipeline-hardening-design.md) | [plan](2026-07-10-dedup-pipeline-hardening.md) | [6 briefs](../agent-tasks/dedup-pipeline-hardening/) | PLAN → EXECUTE autonomously; T3/T6 prod drains dry-run → AskUserQuestion |
-| INIT-3 | Metadata matching pipeline | [spec](../archive/2026-07-consolidation/specs/2026-07-10-metadata-matching-design.md) | [plan](../archive/2026-07-consolidation/plans/2026-07-10-metadata-matching.md) | [8 briefs](../archive/2026-07-consolidation/agent-tasks/metadata-matching/) | PLAN → EXECUTE autonomously; config extraction defaults = today's literals |
-| INIT-4 | Filtering & search pipeline | [spec](../archive/2026-07-consolidation/specs/2026-07-10-filtering-search-design.md) | [plan](../archive/2026-07-consolidation/plans/2026-07-10-filtering-search.md) | [6 briefs](../archive/2026-07-consolidation/agent-tasks/filtering-search/) | PLAN → EXECUTE autonomously; T1/T2 correctness fixes ship first |
-| INIT-5 | Torrent client-agnostic relocation | [spec](../specs/2026-07-10-torrent-relocation-design.md) | [plan](2026-07-10-torrent-relocation.md) | [7 briefs](../agent-tasks/torrent-relocation/) | SPEC → EXECUTE; **T2 = real-Deluge spike, STOP-FOR-HUMAN sign-off before T3** |
-| INIT-6 | Pluggable Workflow System (WF-2..6) | [spec](../specs/2026-07-10-workflow-system-design.md) | [plan (stub)](2026-07-10-workflow-system.md) | [AWAIT-APPROVAL](../agent-tasks/workflow-system/AWAIT-APPROVAL.md) | **STOP-FOR-HUMAN** — spec-only, core-infra blast radius |
-| INIT-7 | OpenAI Responses API migration | [spec](../specs/2026-07-10-responses-api-migration-design.md) | [plan](2026-07-10-responses-api-migration.md) | [HOLD-STATUS](../agent-tasks/responses-api-migration/HOLD-STATUS.md) | **CONFIRM-HOLD** — blocked on #1260–#1265 hold-lift |
-| INIT-8 | Community fingerprint index | [spec](../specs/2026-07-10-community-fingerprint-index-design.md) | [plan (stub)](2026-07-10-community-fingerprint-index.md) | [AWAIT-APPROVAL](../agent-tasks/community-fingerprint-index/AWAIT-APPROVAL.md) | **STOP-FOR-HUMAN** — spec-only, new-product blast radius |
-| INIT-9 | Bug + tech-debt cluster | [spec](../archive/2026-07-consolidation/specs/2026-07-10-bug-techdebt-design.md) | [plan](../archive/2026-07-consolidation/plans/2026-07-10-bug-techdebt.md) | [7 briefs](../agent-tasks/bug-techdebt/) | PLAN → EXECUTE autonomously; **TASK-06 REPO-SIZE-1 = STOP-FOR-HUMAN plan-only** |
-| INIT-10 | Small UX/feature items | [spec](../specs/2026-07-10-ux-small-items-design.md) | [plan](2026-07-10-ux-small-items.md) | [8 briefs](../agent-tasks/ux-small-items/) | PLAN → EXECUTE where cheap; C8 issue-filing dry-run → AskUserQuestion |
+| # | Initiative | Spec | Plan | Tasks | Gate | Status (2026-07-17) |
+|---|-----------|------|------|-------|------|------|
+| INIT-1 | Dedup label-quality & refinement loop | [spec](../archive/2026-07-consolidation/specs/2026-07-10-dedup-label-quality-design.md) | [plan](../archive/2026-07-consolidation/plans/2026-07-10-dedup-label-quality.md) | [8 briefs](../archive/2026-07-consolidation/agent-tasks/dedup-label-quality/) | SPEC → GATED APPLY (every prod-data mutation: dry-run → AskUserQuestion) | **DONE 8/8** (merged through 2026-07-12; T05 per-kind-confidence follow-up → live TODO #6) |
+| INIT-2 | Dedup pipeline hardening | [spec](../specs/2026-07-10-dedup-pipeline-hardening-design.md) | [plan](2026-07-10-dedup-pipeline-hardening.md) | [6 briefs](../agent-tasks/dedup-pipeline-hardening/) | PLAN → EXECUTE autonomously; T3/T6 prod drains dry-run → AskUserQuestion | **5/6** — code merged; T6 prod drain NOT run (live TODO #1; pending-prod-actions row 2) |
+| INIT-3 | Metadata matching pipeline | [spec](../archive/2026-07-consolidation/specs/2026-07-10-metadata-matching-design.md) | [plan](../archive/2026-07-consolidation/plans/2026-07-10-metadata-matching.md) | [8 briefs](../archive/2026-07-consolidation/agent-tasks/metadata-matching/) | PLAN → EXECUTE autonomously; config extraction defaults = today's literals | **DONE 8/8** |
+| INIT-4 | Filtering & search pipeline | [spec](../archive/2026-07-consolidation/specs/2026-07-10-filtering-search-design.md) | [plan](../archive/2026-07-consolidation/plans/2026-07-10-filtering-search.md) | [6 briefs](../archive/2026-07-consolidation/agent-tasks/filtering-search/) | PLAN → EXECUTE autonomously; T1/T2 correctness fixes ship first | **DONE 6/6** (heavy-filter+sort zero-results bug was explicitly out of T06 scope → live TODO #16) |
+| INIT-5 | Torrent client-agnostic relocation | [spec](../specs/2026-07-10-torrent-relocation-design.md) | [plan](2026-07-10-torrent-relocation.md) | [7 briefs](../agent-tasks/torrent-relocation/) | SPEC → EXECUTE; **T2 = real-Deluge spike, STOP-FOR-HUMAN sign-off before T3** | **1/7** — T1 shipped (18570a39); T2 spike = human gate blocking T3–T7 (DECISIONS-PENDING #2) |
+| INIT-6 | Pluggable Workflow System (WF-2..6) | [spec](../specs/2026-07-10-workflow-system-design.md) | [plan (stub)](2026-07-10-workflow-system.md) | [AWAIT-APPROVAL](../agent-tasks/workflow-system/AWAIT-APPROVAL.md) | **STOP-FOR-HUMAN** — spec-only, core-infra blast radius | **GATED** — STOP-FOR-HUMAN spec review open (PR #1935; DECISIONS-PENDING #3) |
+| INIT-7 | OpenAI Responses API migration | [spec](../specs/2026-07-10-responses-api-migration-design.md) | [plan](2026-07-10-responses-api-migration.md) | [HOLD-STATUS](../agent-tasks/responses-api-migration/HOLD-STATUS.md) | **CONFIRM-HOLD** — blocked on #1260–#1265 hold-lift | **HOLD** — greenlight not given (DECISIONS-PENDING #5) |
+| INIT-8 | Community fingerprint index | [spec](../specs/2026-07-10-community-fingerprint-index-design.md) | [plan (stub)](2026-07-10-community-fingerprint-index.md) | [AWAIT-APPROVAL](../agent-tasks/community-fingerprint-index/AWAIT-APPROVAL.md) | **STOP-FOR-HUMAN** — spec-only, new-product blast radius | **GATED** — STOP-FOR-HUMAN review session (DECISIONS-PENDING #4) |
+| INIT-9 | Bug + tech-debt cluster | [spec](../archive/2026-07-consolidation/specs/2026-07-10-bug-techdebt-design.md) | [plan](../archive/2026-07-consolidation/plans/2026-07-10-bug-techdebt.md) | [7 briefs](../agent-tasks/bug-techdebt/) | PLAN → EXECUTE autonomously; **TASK-06 REPO-SIZE-1 = STOP-FOR-HUMAN plan-only** | **DONE 7/7** (T06 REPO-SIZE-1 plan written, decision pending — DECISIONS-PENDING #1) |
+| INIT-10 | Small UX/feature items | [spec](../specs/2026-07-10-ux-small-items-design.md) | [plan](2026-07-10-ux-small-items.md) | [8 briefs](../agent-tasks/ux-small-items/) | PLAN → EXECUTE where cheap; C8 issue-filing dry-run → AskUserQuestion | **6/8** — open: T5 C8 issue-filing (live TODO #5) + one residual brief (live TODO #36 area) |
 
 50 executable TASK briefs total (INIT-6/7/8 carry stop/hold stubs instead).
+
+> **2026-07-17 status refresh:** **~46/50 briefs shipped** (INIT-1 8/8, INIT-3 8/8,
+> INIT-4 6/6, INIT-9 7/7, INIT-10 6/8, INIT-2 5/6; INIT-5 1/7 gated at T2). The
+> earlier "35 of 50 remaining" count in TODO.md was stale. Residual open tasks are
+> tracked as live items in [TODO.md](../../TODO.md); the human gates are queued in
+> [DECISIONS-PENDING.md](DECISIONS-PENDING.md); the outstanding prod runs are in
+> [pending-prod-actions.md](../operations/pending-prod-actions.md). Archived
+> spec/plan/brief links above point into `docs/archive/2026-07-consolidation/`
+> for the completed initiatives.
 
 ## Cross-initiative constraints (hard — never violate)
 
