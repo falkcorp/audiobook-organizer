@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 9.106.10 -->
+<!-- version: 9.107.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-07-16 -->
+<!-- last-edited: 2026-07-17 -->
 
 # Project TODO
 
@@ -17,6 +17,24 @@ future agent) can scan the entire workspace in one page.
 - [`docs/implementation-guide.md`](docs/implementation-guide.md) — integration guide for open items
 - [`docs/codebase-evaluation.md`](docs/codebase-evaluation.md) — 2026-04-30 codebase audit (12 issue groups, 38 bot-tasks)
 - Claude project memory at `~/.claude/projects/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/memory/` — items still to graduate here
+
+---
+
+## ✅ FIXED (2026-07-17) — DEDUP-DISMISS-RESURRECT: rescans undid human dismissals
+
+`UpsertCandidateNew` protected Layer/Similarity/ScoreBreakdown/Band/FormulaVersion but
+assigned `Status` unconditionally. Every scan re-upserts pairs as `pending`, so
+`dismissed` candidates returned to the queue on each run — the review queue could never
+converge.
+
+Found on the dedup sandbox: one `dedup.full-scan` flipped exactly **43** candidates
+`dismissed`→`pending` (all layer=exact, sim=1); prod control unchanged at 1351 dismissed.
+Diff showed that transition and no other.
+
+Fixed by treating `dismissed`/`merged` as terminal verdicts (replaceable only by another
+terminal verdict); `pending`/`stale-drain`/`stale-fp` stay refreshable. Regression test
+`TestUpsertCandidate_TerminalStatusSurvivesRescan`
+(`internal/database/embedding_candidate_status_sticky_test.go`) fails without the fix.
 
 ---
 
