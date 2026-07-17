@@ -1,5 +1,5 @@
 // file: internal/database/embedding_store.go
-// version: 2.8.0
+// version: 2.9.0
 // last-edited: 2026-07-17
 // guid: 7c4a9b2e-d831-4f5c-a07e-3b8d6e1f9c42
 
@@ -1239,6 +1239,7 @@ func (s *EmbeddingStore) MarkCandidatesAsMergedForEntity(entityType, entityID st
 	b := s.db.NewBatch()
 	defer b.Close()
 	for _, t := range targets {
+		oldStatus := t.rec.Status
 		t.rec.Status = "merged"
 		t.rec.UpdatedAt = now
 		data, err := json.Marshal(t.rec)
@@ -1247,6 +1248,21 @@ func (s *EmbeddingStore) MarkCandidatesAsMergedForEntity(entityType, entityID st
 		}
 		if err := b.Set(dedupRecKey(t.id), data, nil); err != nil {
 			return 0, fmt.Errorf("mark candidates merged set %d: %w", t.id, err)
+		}
+		// Maintain the "dedup:s:" status secondary index in the SAME batch,
+		// mirroring UpdateCandidateStatus: delete the old-status row, set the
+		// new one. Without this, bulk merges left stale dedup:s:pending: rows
+		// behind (and never wrote dedup:s:merged:), so the indexed read path
+		// kept surfacing merged candidates as pending. The "dedup:e:" entity
+		// rows are intentionally untouched — the candidate still exists and
+		// references the same entities; only its status changed.
+		if oldStatus != "" && oldStatus != "merged" {
+			if err := b.Delete(dedupStatusIdxKey(oldStatus, t.id), nil); err != nil {
+				return 0, fmt.Errorf("mark candidates merged status-index delete %d: %w", t.id, err)
+			}
+		}
+		if err := b.Set(dedupStatusIdxKey("merged", t.id), nil, nil); err != nil {
+			return 0, fmt.Errorf("mark candidates merged status-index set %d: %w", t.id, err)
 		}
 	}
 	if err := b.Commit(pebble.Sync); err != nil {
@@ -1293,8 +1309,14 @@ func (s *EmbeddingStore) RemoveCandidatesForEntity(entityType, entityID string) 
 	b := s.db.NewBatch()
 	defer b.Close()
 	for _, t := range targets {
+		// Mirror DeleteCandidate: clean ALL four key classes, not just the
+		// record + pair keys — otherwise every removal leaked two "dedup:e:"
+		// entity rows and one "dedup:s:" status row forever.
 		_ = b.Delete(dedupRecKey(t.id), nil)
 		_ = b.Delete(dedupPairKey(t.rec.EntityType, t.rec.EntityAID, t.rec.EntityBID), nil)
+		_ = b.Delete(dedupEntityKey(t.rec.EntityType, t.rec.EntityAID, t.id), nil)
+		_ = b.Delete(dedupEntityKey(t.rec.EntityType, t.rec.EntityBID, t.id), nil)
+		_ = b.Delete(dedupStatusIdxKey(t.rec.Status, t.id), nil)
 	}
 	if err := b.Commit(pebble.Sync); err != nil {
 		return 0, err
@@ -1365,10 +1387,18 @@ func (s *EmbeddingStore) CanonicalizeCandidates() (rewritten, deleted int, err e
 			rewritten++
 		} else if existingErr == nil {
 			// Canonical row already exists — delete the non-canonical duplicate.
+			// Mirror DeleteCandidate: clean ALL four key classes (record, pair,
+			// entity both sides, status), not just record + pair — otherwise
+			// each canonicalized duplicate leaked its "dedup:e:" and "dedup:s:"
+			// secondary-index rows forever. The entity keys are symmetric in
+			// (A,B), so the swapped duplicate's rows are addressable directly.
 			existingCloser.Close()
 			b := s.db.NewBatch()
 			_ = b.Delete(dedupRecKey(t.id), nil)
 			_ = b.Delete(oldPairKey, nil)
+			_ = b.Delete(dedupEntityKey(t.rec.EntityType, t.rec.EntityAID, t.id), nil)
+			_ = b.Delete(dedupEntityKey(t.rec.EntityType, t.rec.EntityBID, t.id), nil)
+			_ = b.Delete(dedupStatusIdxKey(t.rec.Status, t.id), nil)
 			if err := b.Commit(pebble.Sync); err != nil {
 				b.Close()
 				return rewritten, deleted, fmt.Errorf("canonicalize delete: %w", err)

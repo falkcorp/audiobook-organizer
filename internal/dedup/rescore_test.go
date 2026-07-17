@@ -1,7 +1,7 @@
 // file: internal/dedup/rescore_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c4a70f81-92db-4e35-8a16-0d5f7c2e9b41
-// last-edited: 2026-07-12
+// last-edited: 2026-07-17
 
 package dedup
 
@@ -149,5 +149,17 @@ func TestScorePairsForBook_BelowBandNotDropped(t *testing.T) {
 	// DefaultScoreConfig), well under the 60.0 review floor.
 	if r.Score.Score != 4.0 {
 		t.Fatalf("below-band pair: expected composite == duration boost 4.0, got %.4f", r.Score.Score)
+	}
+}
+
+// TestWholeBacklogCandidateLimit_NoSilentCaps pins the shared whole-backlog
+// ListCandidates limit used by Rescore / PurgeStaleCandidates /
+// ReevaluateAcoustIDConflicts at 1M. Rescore previously used a private 100K
+// limit: paginateCandidates hard-slices after the similarity-desc sort, so a
+// >100K pending backlog silently rescored only the top-similarity subset.
+// Any future lowering of this constant must be a deliberate, reviewed change.
+func TestWholeBacklogCandidateLimit_NoSilentCaps(t *testing.T) {
+	if wholeBacklogCandidateLimit != 1_000_000 {
+		t.Fatalf("wholeBacklogCandidateLimit = %d, want 1_000_000 (matches every whole-backlog sibling op; lowering it reintroduces the silent Rescore cap)", wholeBacklogCandidateLimit)
 	}
 }

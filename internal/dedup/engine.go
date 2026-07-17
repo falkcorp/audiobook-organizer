@@ -1,7 +1,7 @@
 // file: internal/dedup/engine.go
-// version: 1.61.0
+// version: 1.62.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
-// last-edited: 2026-07-13
+// last-edited: 2026-07-17
 
 package dedup
 
@@ -47,6 +47,14 @@ const minFingerprintMatchSeconds = 60
 // pairs where the single-file side is clearly a small slice of the whole.
 // aligned with dataset/rules.go partVsWholeRatioMax (INIT-1 T8)
 const partVsWholeDurationRatioMax = 0.5
+
+// wholeBacklogCandidateLimit is the ListCandidates limit shared by every
+// whole-backlog pass (Rescore, PurgeStaleCandidates,
+// ReevaluateAcoustIDConflicts). paginateCandidates hard-slices AFTER the
+// similarity-desc sort, so a limit smaller than the pending backlog silently
+// processes only the top-similarity subset — any op meaning "all pending
+// candidates" must use this shared value and warn when it is hit exactly.
+const wholeBacklogCandidateLimit = 1_000_000
 
 // Engine orchestrates a 3-layer dedup system:
 //   - Layer 1: Exact matching (free, instant) — same file hash, ISBN/ASIN, or near-identical titles
@@ -558,6 +566,14 @@ func (de *Engine) runUnifiedScoringForBook(ctx context.Context, book *database.B
 		authorName:      authorName,
 	}
 
+	// C7: accumulate suppression outcomes across the whole per-book scan so ONE
+	// Info summary (with per-reason counts) survives at the end, instead of the
+	// suppression reasons from PairEligibility being discarded into per-pair
+	// Debug lines that are invisible at default log level.
+	suppressedByReason := map[string]int{}
+	suppressedDeleted := 0
+	suppressedDeleteFailures := 0
+
 	for _, ref := range embeddingCandIDs {
 		// Cancellation check per-candidate, not just per-book: a single book
 		// with an unusually large pending-candidate set can otherwise run
@@ -590,12 +606,18 @@ func (de *Engine) runUnifiedScoringForBook(ctx context.Context, book *database.B
 		// for any emitter (incl. LSH/AcoustID) that lacks the emit-time guard.
 		ok, suppressors := PairEligibility(book, otherBook)
 		if !ok {
+			for _, reason := range suppressors {
+				suppressedByReason[reason]++
+			}
 			logging.Debug(ctx, "dedup unified: suppressed pair → delete",
 				"book", book.ID, "other", candID,
 				"cand", ref.candID, "suppressors", suppressors)
 			if err := de.embedStore.DeleteCandidate(ref.candID); err != nil {
+				suppressedDeleteFailures++
 				logging.Debug(ctx, "dedup unified: delete suppressed candidate failed",
 					"cand", ref.candID, "err", err)
+			} else {
+				suppressedDeleted++
 			}
 			continue
 		}
@@ -635,6 +657,23 @@ func (de *Engine) runUnifiedScoringForBook(ctx context.Context, book *database.B
 			logging.Debug(ctx, "dedup unified: upsert error",
 				"book", book.ID, "other", candID, "err", err)
 		}
+	}
+
+	// C7: one Info summary per scan with the per-reason suppression breakdown
+	// (the per-pair Debug lines above are invisible at default log level, so
+	// without this the DELETE of suppressed candidates was effectively silent).
+	if suppressedDeleted > 0 || suppressedDeleteFailures > 0 {
+		logging.Info(ctx, "dedup unified: suppressed candidates deleted",
+			"book", book.ID,
+			"deleted", suppressedDeleted,
+			"by_reason", suppressedByReason,
+		)
+	}
+	if suppressedDeleteFailures > 0 {
+		logging.Warn(ctx, "dedup unified: suppressed candidate deletes failed",
+			"book", book.ID,
+			"failures", suppressedDeleteFailures,
+		)
 	}
 
 	return nil
@@ -1552,10 +1591,15 @@ func (de *Engine) ReevaluateAcoustIDConflicts(ctx context.Context, dryRun bool) 
 	candidates, _, err := de.embedStore.ListCandidates(database.CandidateFilter{
 		EntityType: "book",
 		Status:     "pending",
-		Limit:      1000000,
+		Limit:      wholeBacklogCandidateLimit,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list candidates: %w", err)
+	}
+	if len(candidates) == wholeBacklogCandidateLimit {
+		logging.Warn(ctx, "dedup acoustid-conflict reevaluate: candidate list truncated at limit — some pending candidates were not examined",
+			"limit", wholeBacklogCandidateLimit,
+		)
 	}
 
 	res := &AcoustIDConflictResult{DryRun: dryRun}
@@ -2815,10 +2859,20 @@ func (de *Engine) Rescore(ctx context.Context, apply bool) (RescoreResult, error
 
 	candidates, _, err := de.embedStore.ListCandidates(database.CandidateFilter{
 		Status: "pending",
-		Limit:  100000,
+		Limit:  wholeBacklogCandidateLimit,
 	})
 	if err != nil {
 		return RescoreResult{}, fmt.Errorf("rescore: list candidates: %w", err)
+	}
+	// "No silent caps": paginateCandidates hard-slices after the
+	// similarity-desc sort, so hitting the limit exactly means an unknown tail
+	// of pending candidates was NOT rescored — say so instead of silently
+	// processing only the top-similarity subset (the old 100K limit did
+	// exactly that on >100K-pending backlogs).
+	if len(candidates) == wholeBacklogCandidateLimit {
+		logging.Warn(ctx, "dedup rescore: candidate list truncated at limit — some pending candidates were not rescored",
+			"limit", wholeBacklogCandidateLimit,
+		)
 	}
 
 	cfg := de.getScoreConfig()
@@ -2896,13 +2950,18 @@ func (de *Engine) PurgeStaleCandidates(ctx context.Context) (int, error) {
 	candidates, _, err := de.embedStore.ListCandidates(database.CandidateFilter{
 		EntityType: "book",
 		Status:     "pending",
-		Limit:      1000000,
+		Limit:      wholeBacklogCandidateLimit,
 	})
 	if err != nil {
 		err := fmt.Errorf("list candidates: %w", err)
 		span.RecordError(err)
 		span.SetAttributes(attribute.Bool("error", true))
 		return 0, err
+	}
+	if len(candidates) == wholeBacklogCandidateLimit {
+		logging.Warn(ctx, "dedup purge stale: candidate list truncated at limit — some pending candidates were not examined",
+			"limit", wholeBacklogCandidateLimit,
+		)
 	}
 
 	// Memoise book lookups so a book referenced by many candidates is only
@@ -3162,7 +3221,11 @@ func (de *Engine) listAmbiguousCandidates(entityType string, low, high float64) 
 		Layer:         "embedding",
 		MinSimilarity: &low,
 		MaxSimilarity: &high,
-		Limit:         10000,
+		// Intentionally bounded (NOT wholeBacklogCandidateLimit): this feeds
+		// RunLLMReview, a paid per-pair external LLM batch that is further
+		// capped by LLMMaxPairsPerRun. Each run consumes from the top of the
+		// similarity-sorted ambiguous window; subsequent runs drain the rest.
+		Limit: 10000,
 	}
 	candidates, _, err := de.embedStore.ListCandidates(filter)
 	return candidates, err
