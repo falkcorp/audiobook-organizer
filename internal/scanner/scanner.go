@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.48.0
+// version: 1.49.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-07-13
+// last-edited: 2026-07-17
 
 package scanner
 
@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/dhowden/tag"
@@ -42,6 +43,33 @@ var saveBook func(ctx context.Context, book *Book) error = saveBookToDatabase
 
 // defaultLog is a package-level logger for functions that cannot accept a logger parameter.
 var defaultLog = logger.New("scanner")
+
+// Counters for store failures that were previously swallowed silently
+// (audit 2026-07-17 H5). Package-level atomics because saveBookToDatabase is
+// reached through the saveBook variable, whose fixed signature cannot carry
+// per-run state; each ProcessBooksParallel run snapshots the totals at entry
+// and logs the delta in its completion summary. Concurrent runs may attribute
+// a few of each other's failures to their own summary — acceptable for logs.
+var (
+	dupLookupErrCount       atomic.Int64 // duplicate-detection hash lookup store errors
+	dupLookupSkipCount      atomic.Int64 // files skipped: duplicate status undeterminable
+	scanCacheUpdateErrCount atomic.Int64 // UpdateScanCache failures (file re-hashed every scan until it succeeds)
+	scanFailCountErrCount   atomic.Int64 // IncrScanFailCount failures
+)
+
+// warnSampled increments c and logs at Warn on the first occurrence and every
+// 1000th after — bounded noise on a mass store failure without ever being
+// fully silent. Returns the new count.
+func warnSampled(c *atomic.Int64, log logger.Logger, format string, args ...interface{}) int64 {
+	n := c.Add(1)
+	if n == 1 || n%1000 == 0 {
+		if log == nil {
+			log = defaultLog
+		}
+		log.Warn(format, args...)
+	}
+	return n
+}
 
 // Scanner defines the interface for scanning and processing audiobook files.
 // Tests can swap in a mock implementation via SetScanner.
@@ -166,8 +194,70 @@ func SetScanCache(cache map[string]database.ScanCacheEntry) {
 }
 
 // ClearScanCache removes the cached map after a scan completes.
+// Test/legacy direct-clear; production scan runs use AcquireScanCache's
+// release func so concurrent runs don't clear each other's cache.
 func ClearScanCache() {
 	SetScanCache(nil)
+}
+
+// scanCacheRefs / scanCacheFullRuns reference-count concurrent scan runs that
+// share globalScanCache (audit 2026-07-17 R-4): library.scan and
+// library.import have distinct ConcurrencyKeys and can run this code path
+// concurrently; without refcounting, the first finisher's deferred clear
+// nils the cache under the still-running op, silently disabling incremental
+// skip mid-run. Both guarded by globalScanCacheMu.
+var (
+	scanCacheRefs     int
+	scanCacheFullRuns int
+)
+
+// AcquireScanCache registers a scan run with the shared incremental-skip
+// cache and returns an idempotent release func the run must call (defer)
+// when it finishes.
+//
+// Design choice (R-4): a refcount around the existing package-level cache was
+// chosen over threading a per-run cache instance through the scan context
+// because ProcessBooksParallel sits behind the Scanner interface (mocked by
+// tests); changing its signature would ripple through every implementation
+// and mock, while the refcount confines the fix to this file.
+//
+// Rules:
+//   - The first acquirer installs its cache; later concurrent acquirers share
+//     it (all production callers load the same map from GetScanCacheMap, so
+//     sharing is safe).
+//   - A run that passes nil requested a FULL scan (incremental skip disabled).
+//     Any active full run disables the cache for every concurrent run:
+//     skipping unchanged files under a force-rescan would be a correctness
+//     bug, whereas re-processing unchanged files under an incremental run is
+//     only slower. The cache stays disabled until the last run releases.
+//   - The cache is cleared when the last active run releases.
+func AcquireScanCache(cache map[string]database.ScanCacheEntry) func() {
+	globalScanCacheMu.Lock()
+	defer globalScanCacheMu.Unlock()
+	scanCacheRefs++
+	isFull := cache == nil
+	if isFull {
+		scanCacheFullRuns++
+		globalScanCache = nil
+	} else if scanCacheFullRuns == 0 && globalScanCache == nil {
+		globalScanCache = cache
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			globalScanCacheMu.Lock()
+			defer globalScanCacheMu.Unlock()
+			scanCacheRefs--
+			if isFull {
+				scanCacheFullRuns--
+			}
+			if scanCacheRefs <= 0 {
+				scanCacheRefs = 0
+				scanCacheFullRuns = 0
+				globalScanCache = nil
+			}
+		})
+	}
 }
 
 // worksLookupCache caches a (normalizedTitle|authorID) → workID map for the
@@ -197,13 +287,21 @@ func worksLookupKey(normalizedTitle string, authorID *int) string {
 }
 
 // InitWorksLookupCache builds the (normalizedTitle|authorID) → workID map by
-// calling GetAllWorks once. Called by ScanService at the start of each scan.
+// calling GetAllWorks once. Test/legacy direct-init; production scan runs use
+// AcquireWorksLookupCache / ReleaseWorksLookupCache so concurrent runs don't
+// clear each other's cache (audit 2026-07-17 R-4).
 // If GetAllWorks fails, the cache is left empty but enabled — saveBookToDatabase
 // will fall through to a direct CreateWork (which is the same fallback path as
 // when nothing matched).
 func InitWorksLookupCache() {
 	worksLookupMu.Lock()
 	defer worksLookupMu.Unlock()
+	initWorksLookupCacheLocked()
+}
+
+// initWorksLookupCacheLocked is the body of InitWorksLookupCache; callers must
+// hold worksLookupMu.
+func initWorksLookupCacheLocked() {
 	worksLookupCache = make(map[string]string)
 	worksLookupReady = true
 	store := getStore()
@@ -221,13 +319,50 @@ func InitWorksLookupCache() {
 	defaultLog.Info("InitWorksLookupCache: loaded %d works", len(works))
 }
 
-// ClearWorksLookupCache drops the per-scan works lookup map. Called by
-// ScanService after the scan completes (deferred).
+// ClearWorksLookupCache drops the per-scan works lookup map. Test/legacy
+// direct-clear counterpart of InitWorksLookupCache; production scan runs use
+// ReleaseWorksLookupCache.
 func ClearWorksLookupCache() {
 	worksLookupMu.Lock()
 	defer worksLookupMu.Unlock()
 	worksLookupCache = nil
 	worksLookupReady = false
+}
+
+// worksLookupRefs reference-counts concurrent scan runs sharing the works
+// lookup cache (audit 2026-07-17 R-4). Guarded by worksLookupMu. Without it,
+// the first finishing run's deferred clear dropped the cache under a
+// still-running concurrent run, degrading every remaining saveBookToDatabase
+// call to an O(N) GetAllWorks scan per book.
+var worksLookupRefs int
+
+// AcquireWorksLookupCache registers a scan run with the shared works lookup
+// cache, populating it on first use (one GetAllWorks call). Later concurrent
+// acquirers share the same map — safe because all runs resolve works against
+// the same store and rememberCreatedWork keeps the map coherent under
+// worksLookupMu. Pair with a deferred ReleaseWorksLookupCache.
+func AcquireWorksLookupCache() {
+	worksLookupMu.Lock()
+	defer worksLookupMu.Unlock()
+	worksLookupRefs++
+	if worksLookupReady && worksLookupCache != nil {
+		return // already populated by a concurrent run
+	}
+	initWorksLookupCacheLocked()
+}
+
+// ReleaseWorksLookupCache decrements the refcount and drops the cache when the
+// last active scan run finishes.
+func ReleaseWorksLookupCache() {
+	worksLookupMu.Lock()
+	defer worksLookupMu.Unlock()
+	if worksLookupRefs > 0 {
+		worksLookupRefs--
+	}
+	if worksLookupRefs == 0 {
+		worksLookupCache = nil
+		worksLookupReady = false
+	}
 }
 
 // lookupWorkID returns the cached workID for (normalizedTitle, authorID), or
@@ -363,12 +498,22 @@ func ScanDirectoryParallel(ctx context.Context, rootDir string, workers int, sca
 	visitedInodes := make(map[uint64]struct{})
 	var visitedMu sync.Mutex
 
+	// walkErrCount tallies non-fatal walk/read/stat failures so dropped
+	// subtrees are visible in the scan summary instead of silent
+	// (audit 2026-07-17 R-5/M8). Atomic: ReadDir failures occur in workers.
+	var walkErrCount atomic.Int64
+
 	registerDirectory := func(path string, info os.FileInfo) bool {
 		if info == nil {
 			return false
 		}
 		statInfo, err := os.Stat(path)
-		if err != nil || !statInfo.IsDir() {
+		if err != nil {
+			walkErrCount.Add(1)
+			scanLog.Warn("scan walk: cannot stat %s: %v (subtree skipped)", path, err)
+			return false
+		}
+		if !statInfo.IsDir() {
 			return false
 		}
 		inode, ok := getInode(statInfo)
@@ -392,13 +537,20 @@ func ScanDirectoryParallel(ctx context.Context, rootDir string, workers int, sca
 			if path == rootDir {
 				return err
 			}
+			walkErrCount.Add(1)
+			scanLog.Warn("scan walk: error at %s: %v (subtree skipped)", path, err)
 			return nil
 		}
 		info, err := d.Info()
 		if err != nil {
+			walkErrCount.Add(1)
+			scanLog.Warn("scan walk: cannot read entry info for %s: %v (entry skipped)", path, err)
 			return nil
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
+			// Symlinked directories are registered for scanning. Non-directory
+			// symlinks return false and are intentionally ignored; stat
+			// failures are warn-logged + counted inside registerDirectory (M8).
 			_ = registerDirectory(path, info)
 			return nil
 		}
@@ -432,6 +584,8 @@ func ScanDirectoryParallel(ctx context.Context, rootDir string, workers int, sca
 			// Read directory entries
 			entries, err := os.ReadDir(scanDir)
 			if err != nil {
+				walkErrCount.Add(1)
+				scanLog.Warn("scan walk: cannot read directory %s: %v (directory skipped)", scanDir, err)
 				return
 			}
 
@@ -467,6 +621,12 @@ func ScanDirectoryParallel(ctx context.Context, rootDir string, workers int, sca
 	}
 
 	wg.Wait()
+
+	// Surface dropped-subtree count in the scan summary (R-5): each failure was
+	// warn-logged above, but a single aggregate makes a mass-failure obvious.
+	if n := walkErrCount.Load(); n > 0 {
+		scanLog.Warn("scan walk summary: walk_errors=%d (directories or entries skipped due to I/O errors; library may be undercounted)", n)
+	}
 
 	// Prevention post-pass: groupFilesIntoBooks runs per-leaf-dir, so a book laid
 	// out as one chapter per "<prefix> - N" subdir shatters into one book per
@@ -509,6 +669,13 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 
 	total := len(books)
 	scanLog.Info("scan started: %d total files", total)
+
+	// Snapshot swallowed-store-failure counters so the completion summary can
+	// report this run's delta (audit 2026-07-17 H5).
+	dupLookupErrStart := dupLookupErrCount.Load()
+	dupLookupSkipStart := dupLookupSkipCount.Load()
+	scanCacheErrStart := scanCacheUpdateErrCount.Load()
+	scanFailCountErrStart := scanFailCountErrCount.Load()
 
 	// progressCh serializes progress updates so callbacks and progress output
 	// are handled in a single goroutine.
@@ -611,7 +778,10 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 						defer func() { recover() }()
 						if store := getStore(); store != nil {
 							if dbBook, dbErr := store.GetBookByFilePath(filePath); dbErr == nil && dbBook != nil {
-								_ = store.UpdateScanCache(dbBook.ID, fi.ModTime().Unix(), fi.Size())
+								if uerr := store.UpdateScanCache(dbBook.ID, fi.ModTime().Unix(), fi.Size()); uerr != nil {
+									// Silent failure meant the file was re-hashed every scan forever (H5).
+									warnSampled(&scanCacheUpdateErrCount, scanLog, "UpdateScanCache failed for %s: %v (file will be re-hashed next scan)", filePath, uerr)
+								}
 							}
 						}
 					}()
@@ -730,7 +900,10 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 					fallbackUsed = true
 					if gs := getStore(); gs != nil {
 						sum := sha256.Sum256([]byte(filePath))
-						_, _ = gs.IncrScanFailCount(fmt.Sprintf("%x", sum[:8]))
+						if _, ierr := gs.IncrScanFailCount(fmt.Sprintf("%x", sum[:8])); ierr != nil {
+							// Silent failure disabled the auto-quarantine escalation path (H5).
+							warnSampled(&scanFailCountErrCount, scanLog, "IncrScanFailCount failed for %s: %v", filePath, ierr)
+						}
 					}
 				} else {
 					// Reset fail counter on successful parse so transient failures
@@ -864,7 +1037,10 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 					}
 					if fi, statErr := os.Stat(books[idx].FilePath); statErr == nil {
 						if dbBook, dbErr := store.GetBookByFilePath(books[idx].FilePath); dbErr == nil && dbBook != nil {
-							_ = store.UpdateScanCache(dbBook.ID, fi.ModTime().Unix(), fi.Size())
+							if uerr := store.UpdateScanCache(dbBook.ID, fi.ModTime().Unix(), fi.Size()); uerr != nil {
+								// Silent failure meant the file was re-hashed every scan forever (H5).
+								warnSampled(&scanCacheUpdateErrCount, scanLog, "UpdateScanCache failed for %s: %v (file will be re-hashed next scan)", books[idx].FilePath, uerr)
+							}
 						}
 					}
 				}()
@@ -885,6 +1061,20 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 
 	if len(errs) > 0 {
 		scanLog.Warn("%d books failed to save", len(errs))
+	}
+
+	// Per-run store-failure summary (H5): once per run, not per file.
+	if d := dupLookupErrCount.Load() - dupLookupErrStart; d > 0 {
+		scanLog.Warn("scan summary: %d duplicate-detection hash lookups failed (store errors)", d)
+	}
+	if d := dupLookupSkipCount.Load() - dupLookupSkipStart; d > 0 {
+		scanLog.Warn("scan summary: %d files skipped because duplicate status was undeterminable (store errors during hash lookup)", d)
+	}
+	if d := scanCacheUpdateErrCount.Load() - scanCacheErrStart; d > 0 {
+		scanLog.Warn("scan summary: %d scan-cache updates failed (affected files will be re-hashed next scan)", d)
+	}
+	if d := scanFailCountErrCount.Load() - scanFailCountErrStart; d > 0 {
+		scanLog.Warn("scan summary: %d scan-fail-count increments failed", d)
 	}
 
 	if ctxErr != nil {
@@ -1839,15 +2029,35 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 				getStore().GetBookByOriginalHash,
 				getStore().GetBookByOrganizedHash,
 			}
+			lookupErrs := 0
+			var firstLookupErr error
 			for _, lookup := range hashLookups {
-				candidate, err := lookup(*fileHash)
-				if err != nil {
+				candidate, lerr := lookup(*fileHash)
+				if lerr != nil {
+					// Not-found is (nil, nil) on every store; a non-nil error
+					// is a real store failure (audit 2026-07-17 H5).
+					lookupErrs++
+					if firstLookupErr == nil {
+						firstLookupErr = lerr
+					}
+					warnSampled(&dupLookupErrCount, defaultLog, "duplicate-detection hash lookup failed for %s: %v", book.FilePath, lerr)
 					continue
 				}
 				if candidate != nil {
 					existing = candidate
 					break
 				}
+			}
+
+			// A failing store must not silently re-import an existing book: if
+			// any lookup errored and none found a match, this file cannot be
+			// proven NOT to be a duplicate — skip importing it (conservative;
+			// H5). The file is untouched on disk and will import on the next
+			// scan once the store recovers.
+			if existing == nil && lookupErrs > 0 {
+				dupLookupSkipCount.Add(1)
+				return fmt.Errorf("skipping import of %s: duplicate status undeterminable (%d/%d hash lookups failed, first error: %w)",
+					book.FilePath, lookupErrs, len(hashLookups), firstLookupErr)
 			}
 
 			if existing != nil {
@@ -2099,7 +2309,12 @@ func ComputeFileHash(filePath string) (string, error) {
 
 		// Last chunk
 		if info.Size() > chunkSize {
-			file.Seek(-chunkSize, io.SeekEnd)
+			// A discarded Seek error would hash the wrong window and poison
+			// dedup (audit 2026-07-17 DL-4); matches the check in
+			// process_file.go computeHashFromReader.
+			if _, err := file.Seek(-chunkSize, io.SeekEnd); err != nil {
+				return "", err
+			}
 			last := make([]byte, chunkSize)
 			n, err := file.Read(last)
 			if err != nil && err != io.EOF {

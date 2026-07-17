@@ -1,7 +1,7 @@
 // file: internal/scanner/service.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-07-01
+// last-edited: 2026-07-17
 package scanner
 
 import (
@@ -157,15 +157,20 @@ func (ss *ScanService) performScanInternal(ctx context.Context, opID string, req
 		log.Info("Incremental scan: ~%d known files, checking for changes", totalFilesAcrossFolders)
 	}
 
-	// Install scan cache into the scanner package so workers can skip unchanged files.
-	SetScanCache(scanCache)
-	defer ClearScanCache()
+	// Install scan cache into the scanner package so workers can skip unchanged
+	// files. Reference-counted (audit 2026-07-17 R-4): library.scan and
+	// library.import have distinct ConcurrencyKeys and can run this path
+	// concurrently — with a plain deferred clear, the first finisher nilled the
+	// cache under the still-running run.
+	releaseScanCache := AcquireScanCache(scanCache)
+	defer releaseScanCache()
 
 	// Build the per-scan works lookup cache so saveBookToDatabase does not
 	// run GetAllWorks() once per book (MAYDEPLOY-H6: 50K books × 50K works
-	// = 2.5B lookups → single load + map access).
-	InitWorksLookupCache()
-	defer ClearWorksLookupCache()
+	// = 2.5B lookups → single load + map access). Reference-counted for the
+	// same R-4 concurrent-run reason as the scan cache above.
+	AcquireWorksLookupCache()
+	defer ReleaseWorksLookupCache()
 
 	// Scan each folder
 	stats := &ScanStats{}
@@ -239,8 +244,19 @@ func (ss *ScanService) countFilesAcrossFolders(foldersToScan []string, log logge
 			continue
 		}
 		fileCount := 0
-		_ = filepath.WalkDir(folderPath, func(path string, d fs.DirEntry, err error) error {
-			if err != nil || d.IsDir() {
+		walkErrLogged := false
+		walkErr := filepath.WalkDir(folderPath, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				// Permission/I-O errors here undercount the progress
+				// denominator; log the first per folder so the undercount is
+				// not silent (audit 2026-07-17 H6), then keep counting.
+				if !walkErrLogged {
+					walkErrLogged = true
+					log.Warn("count phase: walk error under %s at %s: %v (progress total may undercount)", folderPath, path, err)
+				}
+				return nil
+			}
+			if d.IsDir() {
 				return nil
 			}
 			ext := strings.ToLower(filepath.Ext(path))
@@ -252,6 +268,10 @@ func (ss *ScanService) countFilesAcrossFolders(foldersToScan []string, log logge
 			}
 			return nil
 		})
+		if walkErr != nil && !walkErrLogged {
+			// Only reachable when the root itself fails to stat.
+			log.Warn("count phase: walk failed for %s: %v (progress total may undercount)", folderPath, walkErr)
+		}
 		log.Info("Folder %s: Found %d audiobook files", folderPath, fileCount)
 		totalFilesAcrossFolders += fileCount
 	}
