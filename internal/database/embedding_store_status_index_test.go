@@ -1,12 +1,15 @@
 // file: internal/database/embedding_store_status_index_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5a2c7e1f-9d3b-4a6e-8c1d-2f4b6a8e0c3d
-// last-edited: 2026-07-11
+// last-edited: 2026-07-17
 
 package database
 
 import (
+	"encoding/json"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/stretchr/testify/assert"
@@ -248,6 +251,161 @@ func TestCandidateStatusIndex_FlagUnsetFallback_HonorsAllFilters(t *testing.T) {
 	require.Len(t, results, 1)
 	assert.Equal(t, "b3", results[0].EntityAID)
 	assert.Equal(t, "b4", results[0].EntityBID)
+}
+
+// entityIndexRows returns every "dedup:e:" key currently stored, for direct
+// assertion on the entity secondary-index contents.
+func entityIndexRows(t *testing.T, s *EmbeddingStore) []string {
+	t.Helper()
+	prefix := []byte(dedupEntityPfx)
+	upper := prefixUpperBound(prefix)
+	iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: upper})
+	require.NoError(t, err)
+	defer iter.Close()
+
+	var rows []string
+	for iter.First(); iter.Valid(); iter.Next() {
+		rows = append(rows, string(iter.Key()))
+	}
+	require.NoError(t, iter.Error())
+	return rows
+}
+
+// (F3) MarkCandidatesAsMergedForEntity must move each affected candidate's
+// "dedup:s:" row from its old status to "merged" in the same batch as the
+// record rewrite — and must leave the "dedup:e:" entity rows intact (the
+// candidate still references both entities; only its status changed).
+func TestCandidateStatusIndex_MarkCandidatesAsMergedForEntity_MaintainsIndex(t *testing.T) {
+	store := newTestEmbeddingStore(t)
+
+	// Two pending candidates referencing bX (one on each side), plus one
+	// unrelated pending pair that must not be touched.
+	require.NoError(t, store.UpsertCandidate(DedupCandidate{
+		EntityType: "book", EntityAID: "bX", EntityBID: "bY", Layer: "embedding", Status: "pending",
+	}))
+	require.NoError(t, store.UpsertCandidate(DedupCandidate{
+		EntityType: "book", EntityAID: "bW", EntityBID: "bX", Layer: "embedding", Status: "pending",
+	}))
+	require.NoError(t, store.UpsertCandidate(DedupCandidate{
+		EntityType: "book", EntityAID: "p1", EntityBID: "p2", Layer: "embedding", Status: "pending",
+	}))
+
+	all, _, err := store.ListCandidates(CandidateFilter{})
+	require.NoError(t, err)
+	require.Len(t, all, 3)
+	idsByPair := map[string]int64{}
+	for _, c := range all {
+		idsByPair[c.EntityAID+":"+c.EntityBID] = c.ID
+	}
+	entityRowsBefore := entityIndexRows(t, store)
+	require.Len(t, entityRowsBefore, 6, "2 entity rows per candidate")
+
+	n, err := store.MarkCandidatesAsMergedForEntity("book", "bX")
+	require.NoError(t, err)
+	assert.Equal(t, 2, n)
+
+	rows := statusIndexRows(t, store)
+	require.Len(t, rows, 3, "one status row per candidate — old rows replaced, not accumulated")
+	assert.Contains(t, rows, string(dedupStatusIdxKey("merged", idsByPair["bX:bY"])))
+	assert.Contains(t, rows, string(dedupStatusIdxKey("merged", idsByPair["bW:bX"])))
+	assert.Contains(t, rows, string(dedupStatusIdxKey("pending", idsByPair["p1:p2"])))
+	assert.NotContains(t, rows, string(dedupStatusIdxKey("pending", idsByPair["bX:bY"])))
+	assert.NotContains(t, rows, string(dedupStatusIdxKey("pending", idsByPair["bW:bX"])))
+
+	// Entity index untouched — the candidates still exist and reference the
+	// same entities.
+	assert.ElementsMatch(t, entityRowsBefore, entityIndexRows(t, store))
+
+	// The indexed read path must now see the transition too.
+	require.NoError(t, store.SetCandidateStatusIndexBuilt())
+	pending, _, err := store.ListCandidates(CandidateFilter{Status: "pending"})
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	assert.Equal(t, "p1", pending[0].EntityAID)
+	merged, _, err := store.ListCandidates(CandidateFilter{Status: "merged"})
+	require.NoError(t, err)
+	assert.Len(t, merged, 2)
+}
+
+// (F4a) RemoveCandidatesForEntity must clean ALL four key classes for each
+// deleted candidate (dedup:r:, dedup:p:, dedup:e: both sides, dedup:s:),
+// mirroring DeleteCandidate — not just the record + pair keys.
+func TestCandidateIndexes_RemoveCandidatesForEntity_CleansAllIndexRows(t *testing.T) {
+	store := newTestEmbeddingStore(t)
+
+	require.NoError(t, store.UpsertCandidate(DedupCandidate{
+		EntityType: "book", EntityAID: "b1", EntityBID: "b2", Layer: "embedding", Status: "pending",
+	}))
+	require.NoError(t, store.UpsertCandidate(DedupCandidate{
+		EntityType: "book", EntityAID: "b3", EntityBID: "b4", Layer: "embedding", Status: "merged",
+	}))
+
+	n, err := store.RemoveCandidatesForEntity("book", "b1")
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
+
+	// Status index: only the survivor's row remains.
+	survivors, _, err := store.ListCandidates(CandidateFilter{})
+	require.NoError(t, err)
+	require.Len(t, survivors, 1)
+	rows := statusIndexRows(t, store)
+	require.Len(t, rows, 1, "deleted candidate's status-index row must be removed")
+	assert.Equal(t, string(dedupStatusIdxKey("merged", survivors[0].ID)), rows[0])
+
+	// Entity index: b1/b2 rows gone, b3/b4 rows intact.
+	entityRows := entityIndexRows(t, store)
+	require.Len(t, entityRows, 2, "deleted candidate's entity-index rows must be removed")
+	gone, err := store.ListCandidatesForEntity("book", "b2", "")
+	require.NoError(t, err)
+	assert.Empty(t, gone, "entity index must not point at the deleted candidate")
+}
+
+// (F4b) CanonicalizeCandidates' duplicate-delete branch must clean the
+// non-canonical row's dedup:e: and dedup:s: rows too, not just dedup:r: +
+// dedup:p: — otherwise every canonicalized duplicate leaks two entity rows
+// and one status row forever.
+func TestCandidateIndexes_CanonicalizeDuplicateDelete_CleansAllIndexRows(t *testing.T) {
+	store := newTestEmbeddingStore(t)
+
+	// Canonical row via the normal path (h < w).
+	require.NoError(t, store.UpsertCandidate(DedupCandidate{
+		EntityType: "book", EntityAID: "hello", EntityBID: "world", Layer: "embedding", Status: "pending",
+	}))
+	all, _, err := store.ListCandidates(CandidateFilter{})
+	require.NoError(t, err)
+	require.Len(t, all, 1)
+	canonID := all[0].ID
+
+	// Non-canonical duplicate written raw (bypasses upsert canonicalization),
+	// WITH its secondary-index rows present — simulating a fully indexed
+	// pre-canonicalization row.
+	const dupID = int64(7777)
+	rec := candRec{
+		EntityType: "book", EntityAID: "world", EntityBID: "hello",
+		Layer: "exact", Status: "pending",
+		CreatedAt: time.Now().UnixNano(), UpdatedAt: time.Now().UnixNano(),
+	}
+	data, err := json.Marshal(rec)
+	require.NoError(t, err)
+	require.NoError(t, store.db.Set(dedupRecKey(dupID), data, pebble.Sync))
+	require.NoError(t, store.db.Set(dedupPairKey("book", "world", "hello"), []byte(fmt.Sprintf("%016x", dupID)), pebble.Sync))
+	require.NoError(t, store.db.Set(dedupEntityKey("book", "world", dupID), nil, pebble.Sync))
+	require.NoError(t, store.db.Set(dedupEntityKey("book", "hello", dupID), nil, pebble.Sync))
+	require.NoError(t, store.db.Set(dedupStatusIdxKey("pending", dupID), nil, pebble.Sync))
+
+	rewritten, deleted, err := store.CanonicalizeCandidates()
+	require.NoError(t, err)
+	assert.Equal(t, 0, rewritten)
+	assert.Equal(t, 1, deleted)
+
+	rows := statusIndexRows(t, store)
+	require.Len(t, rows, 1, "duplicate's status-index row must be removed")
+	assert.Equal(t, string(dedupStatusIdxKey("pending", canonID)), rows[0])
+
+	entityRows := entityIndexRows(t, store)
+	require.Len(t, entityRows, 2, "duplicate's entity-index rows must be removed")
+	assert.Contains(t, entityRows, string(dedupEntityKey("book", "hello", canonID)))
+	assert.Contains(t, entityRows, string(dedupEntityKey("book", "world", canonID)))
 }
 
 // The backfill write path (WriteCandidateStatusIndexRow, used by the
