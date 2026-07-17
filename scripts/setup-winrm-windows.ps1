@@ -1,26 +1,48 @@
 # file: scripts/setup-winrm-windows.ps1
-# version: 1.0.0
+# version: 1.1.0
 # guid: d5e6f7a8-b9c0-1234-defa-456789012345
-# last-edited: 2026-06-27
+# last-edited: 2026-07-17
 #
-# Run ONCE as Administrator on the Windows GPU machine (172.16.3.22).
+# Run ONCE as Administrator on the Windows GPU machine (<windows-gpu-host>).
 # Enables PowerShell Remoting (WinRM) so the Mac and Linux server can
 # deploy and control this machine via Invoke-Command / Copy-Item.
 #
 # No OpenSSH required — WinRM is built into Windows.
 #
+# Your LAN subnet is REQUIRED (no default) — pass it as parameters or set
+# the environment variables before running:
+#   .\setup-winrm-windows.ps1 -LanSubnetWildcard "10.0.*" -LanSubnetCidr "10.0.0.0/16"
+# or:
+#   $env:ABK_LAN_SUBNET_WILDCARD = "10.0.*"
+#   $env:ABK_LAN_SUBNET_CIDR    = "10.0.0.0/16"
+#
 # After running: test from Mac with:
-#   pwsh -Command "Invoke-Command -ComputerName 172.16.3.22 -Credential (Get-Credential) -ScriptBlock { hostname }"
+#   pwsh -Command "Invoke-Command -ComputerName <windows-gpu-host> -Credential (Get-Credential) -ScriptBlock { hostname }"
 #
 # Or save credentials once:
 #   $cred = Get-Credential
 #   $cred | Export-Clixml ~/windows-gpu.cred   # stored encrypted, current user only
-#   Invoke-Command -ComputerName 172.16.3.22 -Credential (Import-Clixml ~/windows-gpu.cred) -ScriptBlock { hostname }
+#   Invoke-Command -ComputerName <windows-gpu-host> -Credential (Import-Clixml ~/windows-gpu.cred) -ScriptBlock { hostname }
 
 #Requires -RunAsAdministrator
 
+param(
+    # Wildcard form of your LAN subnet for WinRM TrustedHosts (e.g. "10.0.*").
+    [string]$LanSubnetWildcard = $env:ABK_LAN_SUBNET_WILDCARD,
+    # CIDR form of your LAN subnet for firewall scoping (e.g. "10.0.0.0/16").
+    [string]$LanSubnetCidr = $env:ABK_LAN_SUBNET_CIDR
+)
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+if (-not $LanSubnetWildcard -or -not $LanSubnetCidr) {
+    Write-Host "ERROR: LAN subnet not specified — refusing to guess." -ForegroundColor Red
+    Write-Host "Pass -LanSubnetWildcard/-LanSubnetCidr or set ABK_LAN_SUBNET_WILDCARD /"
+    Write-Host "ABK_LAN_SUBNET_CIDR, e.g.:"
+    Write-Host '  .\setup-winrm-windows.ps1 -LanSubnetWildcard "10.0.*" -LanSubnetCidr "10.0.0.0/16"'
+    exit 1
+}
 
 function Write-Step($msg) { Write-Host "`n==> $msg" -ForegroundColor Cyan }
 function Write-Ok($msg)   { Write-Host "    OK: $msg" -ForegroundColor Green }
@@ -31,10 +53,10 @@ Enable-PSRemoting -Force -SkipNetworkProfileCheck
 Write-Ok "PSRemoting enabled"
 
 # ── 2. Allow connections from the LAN (trusted hosts) ────────────────────────
-# Restrict to the 172.16.x.x subnet; adjust if your LAN differs.
-Write-Step "Setting trusted hosts to 172.16.*"
+# Restrict to your LAN subnet (from -LanSubnetWildcard / ABK_LAN_SUBNET_WILDCARD).
+Write-Step "Setting trusted hosts to $LanSubnetWildcard"
 $current = (Get-Item WSMan:\localhost\Client\TrustedHosts).Value
-$lanSubnet = "172.16.*"
+$lanSubnet = $LanSubnetWildcard
 if ($current -notlike "*$lanSubnet*") {
     $newValue = if ($current) { "$current,$lanSubnet" } else { $lanSubnet }
     Set-Item WSMan:\localhost\Client\TrustedHosts -Value $newValue -Force
@@ -55,9 +77,9 @@ if (-not $existing) {
         -Direction     Inbound `
         -Protocol      TCP `
         -LocalPort     5985 `
-        -RemoteAddress "172.16.0.0/16" `
+        -RemoteAddress $LanSubnetCidr `
         -Action        Allow | Out-Null
-    Write-Ok "Firewall rule created (172.16.0.0/16 → TCP 5985)"
+    Write-Ok "Firewall rule created ($LanSubnetCidr → TCP 5985)"
 } else {
     Enable-NetFirewallRule -Name $ruleName
     Write-Ok "Firewall rule already exists (enabled)"
@@ -74,9 +96,9 @@ if (-not $w8000) {
         -Direction     Inbound `
         -Protocol      TCP `
         -LocalPort     8000 `
-        -RemoteAddress "172.16.0.0/16" `
+        -RemoteAddress $LanSubnetCidr `
         -Action        Allow | Out-Null
-    Write-Ok "Firewall rule created (172.16.0.0/16 → TCP 8000)"
+    Write-Ok "Firewall rule created ($LanSubnetCidr → TCP 8000)"
 } else {
     Write-Ok "Whisper Server firewall rule already exists"
 }
@@ -91,4 +113,4 @@ Write-Host "Then deploy whisper_server.py and restart:"
 Write-Host "  pwsh scripts/manage-whisper-server.ps1 -Deploy -Restart"
 Write-Host ""
 Write-Host "Or just run a quick command:"
-Write-Host '  pwsh -Command "Invoke-Command -ComputerName 172.16.3.22 -Credential (Get-Credential) -ScriptBlock { whoami }"'
+Write-Host '  pwsh -Command "Invoke-Command -ComputerName <windows-gpu-host> -Credential (Get-Credential) -ScriptBlock { whoami }"'
