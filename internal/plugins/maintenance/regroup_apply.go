@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_apply.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e2a7c9d4-1f68-4b03-9c5e-7a0d3f814b62
-// last-edited: 2026-07-14
+// last-edited: 2026-07-17
 
 // Package maintenance — the APPLY path for the regroup review queue (PR-B2).
 //
@@ -30,6 +30,15 @@
 //     mutate ONLY VersionGroupID, then UpdateBook. Never construct a fresh/partial
 //     Book and write it back — UpdateBook is a full-column replace.
 // Both paths are covered by regroup_apply_test.go's invariant assertions.
+//
+// GROUP-INTEGRITY GUARDS (holds can be DAYS older than their approve):
+//   - Soft-deleted members (merged away since the dry-run) are skipped exactly
+//     like vanished ones — GetBookByID does not filter MarkedForDeletion, so both
+//     paths check it explicitly (a corpse must never be re-linked or made primary).
+//   - On group reuse, ALL current group members are enumerated and any stale
+//     primary outside the hold is demoted — one primary per group, always.
+//   - Members spanning TWO different existing version groups are REFUSED (error →
+//     item goes to "failed" with a reason) instead of silently merging groups.
 
 package maintenance
 
@@ -38,6 +47,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
+	"strings"
 
 	ulid "github.com/oklog/ulid/v2"
 
@@ -110,28 +121,56 @@ func ApplyVersionGroup(store database.Store) func(context.Context, database.Revi
 		}
 		// Resolve all members up front (atomic-validate-then-write). Prefer an
 		// existing VersionGroupID for idempotency — a re-approve then re-links to the
-		// same group instead of minting a fresh one every time.
+		// same group instead of minting a fresh one every time. A soft-deleted member
+		// (merged away between the B1 dry-run and this approve) is treated exactly
+		// like a vanished one: GetBookByID does NOT filter MarkedForDeletion rows, so
+		// without the explicit check a corpse could be re-linked into the group —
+		// or, having the smallest ULID, even be designated primary.
 		books := make([]*database.Book, 0, len(p.MemberBookIDs))
-		target := ""
+		groups := map[string][]string{} // existing non-empty VersionGroupID → member IDs holding it
 		for _, id := range p.MemberBookIDs {
 			b, err := store.GetBookByID(id)
 			if err != nil {
 				return fmt.Errorf("regroup version-group apply: lookup %s: %w", id, err)
 			}
 			if b == nil {
-				continue // tolerate a vanished member
+				slog.Info("regroup version-group apply: skipping member",
+					"item", item.ID, "book", id, "reason", "not found (hard-deleted since hold was created)")
+				continue
+			}
+			if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+				slog.Info("regroup version-group apply: skipping member",
+					"item", item.ID, "book", id, "reason", "soft-deleted (merged away since hold was created)")
+				continue
 			}
 			books = append(books, b)
 			if b.VersionGroupID != nil && *b.VersionGroupID != "" {
-				if target == "" || *b.VersionGroupID < target {
-					target = *b.VersionGroupID
-				}
+				groups[*b.VersionGroupID] = append(groups[*b.VersionGroupID], id)
 			}
 		}
 		if len(books) < 2 {
 			slog.Info("regroup version-group apply: <2 members remain — nothing to group",
 				"item", item.ID, "folder", p.Folder, "present", len(books))
 			return nil
+		}
+		// REFUSE cross-group merges: members already split across two different
+		// non-empty version groups is ambiguous — silently picking one group would
+		// move members out of the other, potentially stranding it or leaving it
+		// primary-less. Error out so the review item lands in "failed" with a
+		// reason and a human resolves it. Single-existing-group reuse stays as-is.
+		if len(groups) > 1 {
+			parts := make([]string, 0, len(groups))
+			for gid, memberIDs := range groups {
+				parts = append(parts, fmt.Sprintf("%s(members %v)", gid, memberIDs))
+			}
+			sort.Strings(parts)
+			return fmt.Errorf(
+				"regroup version-group apply: item %s members span %d existing version groups %s — refusing to merge groups; resolve manually",
+				item.ID, len(groups), strings.Join(parts, ", "))
+		}
+		target := ""
+		for gid := range groups {
+			target = gid // at most one entry
 		}
 		if target == "" {
 			target = ulid.Make().String()
@@ -163,6 +202,39 @@ func ApplyVersionGroup(store database.Store) func(context.Context, database.Revi
 				return fmt.Errorf("regroup version-group apply: set version group on %s: %w", b.ID, err)
 			}
 		}
+		// Single-primary invariant across the WHOLE group: when target is a reused
+		// group it can contain books that are NOT in this hold (e.g. its existing
+		// primary). The loop above only touches hold members, so a stale primary
+		// would otherwise survive alongside the new one. Enumerate every current
+		// member and demote strays. (GetBooksByVersionGroup already filters
+		// soft-deleted rows.)
+		if len(groups) > 0 { // group pre-existed → may contain non-hold members
+			all, err := store.GetBooksByVersionGroup(target)
+			if err != nil {
+				return fmt.Errorf("regroup version-group apply: list group %s members: %w", target, err)
+			}
+			for _, m := range all {
+				if m.ID == primaryID || m.IsPrimaryVersion == nil || !*m.IsPrimaryVersion {
+					continue
+				}
+				// Re-fetch-and-patch (UpdateBook is a full-column replace): mutate
+				// ONLY IsPrimaryVersion on the authoritative row.
+				full, err := store.GetBookByID(m.ID)
+				if err != nil {
+					return fmt.Errorf("regroup version-group apply: refetch stale primary %s: %w", m.ID, err)
+				}
+				if full == nil {
+					continue
+				}
+				notPrimary := false
+				full.IsPrimaryVersion = &notPrimary
+				if _, err := store.UpdateBook(full.ID, full); err != nil {
+					return fmt.Errorf("regroup version-group apply: demote stale primary %s: %w", full.ID, err)
+				}
+				slog.Info("regroup version-group apply: demoted stale primary",
+					"item", item.ID, "book", full.ID, "version_group", target, "new_primary", primaryID)
+			}
+		}
 		slog.Info("regroup version-group apply: linked members",
 			"item", item.ID, "folder", p.Folder, "version_group", target,
 			"primary", primaryID, "members", len(books))
@@ -180,8 +252,14 @@ func decodeRegroupPayload(item database.ReviewItem) (regroupPayload, error) {
 	return p, nil
 }
 
-// presentMembers returns the subset of ids whose Book rows still resolve, preserving
-// order. A read error is fatal (aborts before any mutation); a not-found is skipped.
+// presentMembers returns the subset of ids whose Book rows still resolve AND are
+// not soft-deleted, preserving order. A read error is fatal (aborts before any
+// mutation); a not-found is skipped. A MarkedForDeletion row is skipped too:
+// GetBookByID does NOT filter soft-deleted books, and a hold can be days older
+// than its approve — a member merged away in between must be treated exactly
+// like a vanished one, or CombineBooks would move a corpse's files onto a
+// survivor (and the corpse, holding the smallest ULID, could even be picked as
+// the survivor itself).
 func presentMembers(store database.Store, ids []string) ([]string, error) {
 	present := make([]string, 0, len(ids))
 	for _, id := range ids {
@@ -189,9 +267,17 @@ func presentMembers(store database.Store, ids []string) ([]string, error) {
 		if err != nil {
 			return nil, fmt.Errorf("regroup apply: lookup %s: %w", id, err)
 		}
-		if b != nil {
-			present = append(present, id)
+		if b == nil {
+			slog.Info("regroup apply: skipping member",
+				"book", id, "reason", "not found (hard-deleted since hold was created)")
+			continue
 		}
+		if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+			slog.Info("regroup apply: skipping member",
+				"book", id, "reason", "soft-deleted (merged away since hold was created)")
+			continue
+		}
+		present = append(present, id)
 	}
 	return present, nil
 }
