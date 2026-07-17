@@ -1,7 +1,7 @@
 <!-- file: docs/system/deploy-and-gpu-ops.md -->
-<!-- version: 1.0.1 -->
+<!-- version: 1.1.0 -->
 <!-- guid: d5e7f9a1-b3c5-4d7e-9f1a-3b5c7d9e1f3a -->
-<!-- last-edited: 2026-07-03 -->
+<!-- last-edited: 2026-07-17 -->
 
 # Deploy Rollback & Windows GPU Keepalive
 
@@ -10,7 +10,7 @@ This document closes the operational gaps flagged in
 as **OPS-1** (single-machine deploy recipe, no rollback), **OPS-2** (Windows
 GPU box kept alive by a scheduled task whose setup scripts existed only in a
 scratchpad), and **OPS-6** (operational knowledge landing outside git). See
-also [`docs/status/2026-07-02-local-cutover-and-matching.md`](../status/2026-07-02-local-cutover-and-matching.md)
+also [`docs/archive/2026-07-consolidation/status/2026-07-02-local-cutover-and-matching.md`](../archive/2026-07-consolidation/status/2026-07-02-local-cutover-and-matching.md)
 for the local-backend cutover this Windows box supports.
 
 ## 1. Instantiating the local, gitignored config from the committed templates
@@ -111,5 +111,5 @@ hardening item, not something silently folded in here.
 ## Cross-references
 
 - [`docs/consultancy/06-process-and-security.md`](../consultancy/06-process-and-security.md) — OPS-1, OPS-2, OPS-6 findings this document addresses.
-- [`docs/status/2026-07-02-local-cutover-and-matching.md`](../status/2026-07-02-local-cutover-and-matching.md) — origin of the Windows GPU setup and the `-EncodedCommand` gotcha.
+- [`docs/archive/2026-07-consolidation/status/2026-07-02-local-cutover-and-matching.md`](../archive/2026-07-consolidation/status/2026-07-02-local-cutover-and-matching.md) — origin of the Windows GPU setup and the `-EncodedCommand` gotcha.
 - [`runbooks.md`](runbooks.md) — general deploy runbook and systemd service management.

@@ -1,7 +1,7 @@
 <!-- file: docs/consultancy/00-ROADMAP.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 5c960e64-01d1-498e-8316-6bf5193c3deb -->
-<!-- last-edited: 2026-07-02 -->
+<!-- last-edited: 2026-07-17 -->
 
 # Consultancy Evaluation — Roadmap (2026-07-02)
 
@@ -68,7 +68,7 @@ Dimension reports (full detail lives there, not here):
 | 3 | Apply model-aware re-embed skip to `EmbedAuthor` + `EmbedBooksAsync` | DEDUPC-1, TOGGLE-2 | Author embeddings stranded on OpenAI vectors post-cutover |
 | 4 | Unschedule/gate nightly `dedup.embed-async` (OpenAI Batch API) | OPS-3, NEWF-5, PROC-2 | Fires nightly against a quota-dead API |
 | 5 | Drop `OpenAIAPIKey` requirement for keyless local backends | TOGGLE-1, MATCH-8 | One-line-class fix; blocks clean local-only operation |
-| 6 | Commit `docs/status/2026-07-02-local-cutover-and-matching.md` | PROC-1 | Verdict: commit now — done in this PR |
+| 6 | Commit `docs/archive/2026-07-consolidation/status/2026-07-02-local-cutover-and-matching.md` | PROC-1 | Verdict: commit now — done in this PR |
 | 7 | Fix pre-commit hook to actually block `.claude/.credentials/`; SHA-pin `security.yml` | SEC-2, SEC-5/PROC-7 | Cheap, closes claimed-but-absent protections |
 | 8 | Commit deploy recipe (`Makefile.local` template + `deploy/local.conf` sample) and the Windows Ollama scripts as `scripts/manage-ollama-windows.py`; add a rollback target | OPS-1, OPS-6, status-doc TODO | The entire prod deploy story currently lives on one laptop |
 

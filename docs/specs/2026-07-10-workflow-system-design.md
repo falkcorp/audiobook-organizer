@@ -1,7 +1,7 @@
 <!-- file: docs/specs/2026-07-10-workflow-system-design.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: a3c496fd-5102-4b2a-a71e-c48847ac243f -->
-<!-- last-edited: 2026-07-10 -->
+<!-- last-edited: 2026-07-17 -->
 
 # Pluggable Workflow System (WF-2..WF-6) — Design Spec
 
@@ -108,7 +108,7 @@ workflow composition (WF-2→WF-5), chosen from the options below by the human r
 | Op registry has `Requires []Requirement`, `RequirementKind` (`ReqOpCompleted`, `ReqFieldSet`), `WithRequires` enqueue option — landed, opt-in | `internal/operations/registry/types.go:85-90,217-232,268-272` (re-verify: `grep -n 'Requires \[\]Requirement\|RequirementKind\|ReqOpCompleted' internal/operations/registry/types.go`) |
 | **`OperationDef` ALREADY has `Capabilities []Capability`** — a static, coarse permission vocabulary ("system capabilities the op needs", lint-enforced today, runtime-enforced vNext) with constants incl. `CapNetworkOpenAI = "network.openai"`, `CapSubprocessSpawn`, etc. Populated by ~28 live ops and it is the documented plugin-authoring pattern | `internal/operations/registry/types.go:73` (field), `:173-193` (type + constants, `CapNetworkOpenAI` at `:182`); re-exported via `pkg/plugin/sdk/capability.go:21`; live declarations e.g. `internal/plugins/dedup/llm_review.go:29` (`sdk.CapNetworkOpenAI`), `calibrate_embedding_thresholds.go:123`, `reembed_embeddings.go:101`; docs `docs/development/writing-a-plugin.md:155-217`. Re-verify: `grep -rn 'Capabilities: \[\]sdk.Capability' internal/ \| wc -l` |
 | `OperationDef` also has `DependsOn []string` — op def IDs that must **NOT be running** for this op to start (mutual exclusion, NOT an invocation graph) | `internal/operations/registry/types.go:83` |
-| Dependency/condition/batching design (systemd-inspired) already specified | `docs/specs/2026-06-13-uos-dependency-scheduling-design.md` |
+| Dependency/condition/batching design (systemd-inspired) already specified | `docs/archive/2026-07-consolidation/specs/2026-06-13-uos-dependency-scheduling-design.md` |
 | Research base incl. Go workflow-library survey + devil's advocate | `docs/research/2026-06-15-tool-lifecycle-and-workflow-system.md:1` (re-verify: `grep -n 'Managed Tool Lifecycle' docs/research/2026-06-15-tool-lifecycle-and-workflow-system.md`) |
 | Scattered scheduling/feature toggles to collapse — **eight** `scheduled_*` families, exhaustive | `internal/config/` `Scheduled.*` tree (`scheduled_dedup_refresh_*`, `scheduled_author_split_*`, `scheduled_db_optimize_*`, `scheduled_metadata_refresh_*`, `scheduled_resolve_production_authors_*`, `scheduled_series_prune_*`, `scheduled_ai_dedup_batch_*` [`persistence.go:558,1285`], `scheduled_reconcile_*` [`persistence.go:561,1298`]) + `dedup_embeddings_enabled` (config `persistence.go` / `update_service.go`; consumer `internal/plugins/dedup/reembed_embeddings.go`). Re-verify the set is still complete at impl time: `grep -oE 'scheduled_[a-z_]+_enabled' internal/config/persistence.go \| sort -u` |
 

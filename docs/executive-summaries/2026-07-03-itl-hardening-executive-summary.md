@@ -1,12 +1,12 @@
 <!-- file: docs/executive-summaries/2026-07-03-itl-hardening-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: d6272ad6-0339-46b6-af79-209576b0cf24 -->
-<!-- last-edited: 2026-07-11 -->
+<!-- last-edited: 2026-07-17 -->
 
 # Executive Summary: iTunes Library (.itl) Write-Back Hardening
 
 **Shipped:** PR [#1793](https://github.com/falkcorp/audiobook-organizer/pull/1793), merged `496a3ba`
-**Related spec:** [2026-07-03-itl-identity-and-external-truth-hardening.md](../specs/2026-07-03-itl-identity-and-external-truth-hardening.md), [2026-07-03-itl-format-and-foolproofing-deep-dive.md](../specs/2026-07-03-itl-format-and-foolproofing-deep-dive.md)
+**Related spec:** [2026-07-03-itl-identity-and-external-truth-hardening.md](../archive/2026-07-consolidation/specs/2026-07-03-itl-identity-and-external-truth-hardening.md), [2026-07-03-itl-format-and-foolproofing-deep-dive.md](../archive/2026-07-consolidation/specs/2026-07-03-itl-format-and-foolproofing-deep-dive.md)
 
 ## Executive Summary
 

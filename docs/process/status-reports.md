@@ -1,7 +1,7 @@
 <!-- file: docs/process/status-reports.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 3cbd8de8-4d8e-442d-958e-fc04662bc325 -->
-<!-- last-edited: 2026-07-11 -->
+<!-- last-edited: 2026-07-17 -->
 
 # Status Report Convention
 
@@ -39,7 +39,7 @@ Note the naming difference from executive summaries: status reports do
 
 ## Structure
 
-Based on `docs/status/2026-07-02-local-cutover-and-matching.md` as the
+Based on `docs/archive/2026-07-consolidation/status/2026-07-02-local-cutover-and-matching.md` as the
 reference example:
 
 1. **Header block**: the standard 4-line file header.

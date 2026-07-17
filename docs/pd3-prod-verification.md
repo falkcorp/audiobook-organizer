@@ -1,7 +1,7 @@
 <!-- file: docs/pd3-prod-verification.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 9f1b0c2a-6ebd-43b8-94e9-8d2d1c4b5f7a -->
-<!-- last-edited: 2026-06-07 -->
+<!-- last-edited: 2026-07-17 -->
 
 # PD-3 / Post-deploy verification — plan + results capture
 
@@ -70,5 +70,5 @@ Fill in this table each time PD-3 is exercised in prod. Attach `systemctl status
 
 ## Reference
 
-* Spec: [`docs/specs/post-deploy-2026-05-29-verification.md`](docs/specs/post-deploy-2026-05-29-verification.md)
-* Result log: append new observations to `docs/perf-audit-2026-05-29-verification.md` with timestamps and `/system/status` output.
+* Spec: [`docs/archive/2026-07-consolidation/specs/post-deploy-2026-05-29-verification.md`](docs/archive/2026-07-consolidation/specs/post-deploy-2026-05-29-verification.md)
+* Result log: append new observations to `docs/archive/2026-07-consolidation/perf-audit-2026-05-29-verification.md` with timestamps and `/system/status` output.

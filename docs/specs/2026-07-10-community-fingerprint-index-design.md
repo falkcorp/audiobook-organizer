@@ -1,7 +1,7 @@
 <!-- file: docs/specs/2026-07-10-community-fingerprint-index-design.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: d75b9f4a-e871-4391-8371-885320cb6f76 -->
-<!-- last-edited: 2026-07-10 -->
+<!-- last-edited: 2026-07-17 -->
 
 # Community Audiobook Acoustic-Fingerprint Index — Design Spec
 
@@ -15,7 +15,7 @@
 
 MusicBrainz/AcoustID model audiobooks poorly: their database is song/recording-based, and a
 9-hour multi-file book is not a "recording". Measured consequence (Experiment 0 in
-`docs/specs/2026-06-13-dedup-tuning-dataset-design.md`): **recording_id oracle coverage was
+`docs/archive/2026-07-consolidation/specs/2026-06-13-dedup-tuning-dataset-design.md`): **recording_id oracle coverage was
 0 / 9,842 books (0.0%)** — the AcoustID online lookup has never returned a usable MusicBrainz
 recording_id for this library. Every fingerprint→identity mapping we have was earned locally by
 human verification, and it currently lives only on one prod box (172.16.2.30).
@@ -28,7 +28,7 @@ We already have the acoustic substrate:
   `BookSignatureSimilarity` (line 131 per the verified anchor) compares two signatures by
   normalized Hamming distance. Partial-coverage variants (`SynthesizePartialBookSignature`,
   masked similarity) exist in the same file.
-- The labeled-dataset loop (`docs/specs/2026-06-13-dedup-tuning-dataset-design.md`, sub-project
+- The labeled-dataset loop (`docs/archive/2026-07-consolidation/specs/2026-06-13-dedup-tuning-dataset-design.md`, sub-project
   #1) produces human-verified book identities and explicitly names this index as the "separate
   future track" (#7) that exports from it.
 - TODO.md:617-636 (§"Needs Serious Planning — Open Audiobook Acoustic-Fingerprint Index")
@@ -200,7 +200,7 @@ buys nothing).
 1. **Export op in the organizer** (future `communityindex.export-verified`, registered like
    other plugin ops): selects books whose identity is human-verified (per the labeled-dataset
    loop, `LabelSource="human"` / verified records from
-   `docs/specs/2026-06-13-dedup-tuning-dataset-design.md`), synthesizes each book's
+   `docs/archive/2026-07-consolidation/specs/2026-06-13-dedup-tuning-dataset-design.md`), synthesizes each book's
    `IndexRecord` (D4), and diffs against a local clone of the index. **Dry-run first** (prints
    would-add / would-update counts), then a **real AskUserQuestion apply gate** before any PR
    is opened — this is an external publication of library-derived data.
@@ -444,7 +444,7 @@ clear `AcoustIDFingerprint` or any other heavy field (see Testing).
 ## Migration / integration
 
 - Upstream source of truth: the labeled-dataset loop
-  (`docs/specs/2026-06-13-dedup-tuning-dataset-design.md`) — this index exports only records
+  (`docs/archive/2026-07-consolidation/specs/2026-06-13-dedup-tuning-dataset-design.md`) — this index exports only records
   that loop marks human-verified. No changes to that loop are required; the export op reads it.
 - `internal/fingerprint/book_signature.go` is consumed as-is; if the validator needs the
   similarity function outside this repo, OQ2 decides copy vs extract.

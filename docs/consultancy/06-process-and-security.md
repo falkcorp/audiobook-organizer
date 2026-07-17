@@ -1,7 +1,7 @@
 <!-- file: docs/consultancy/06-process-and-security.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 4e1100f3-fcf8-47e2-86d7-d63f0dc1d80a -->
-<!-- last-edited: 2026-07-02 -->
+<!-- last-edited: 2026-07-17 -->
 
 # Consultancy Evaluation — Process, Ops & Security (2026-07-02)
 
@@ -13,7 +13,7 @@ The security and process posture is materially **better than the stale June proj
 
 The bootstrap auth flow is well-engineered post pen-test: raw tokens are never logged (CRIT-1 fixed), 10-minute TTL, hash-at-rest, one-time consume under mutex, per-IP rate limiting, and `SetTrustedProxies(nil)` blocking XFF spoofing. Remaining security gaps are the untracked key-rotation item, a pre-commit hook that claims to protect `.claude/.credentials/` but structurally cannot, weak (`$RANDOM`, ~27-bit) per-worktree credential passwords, internal-infrastructure PII saturating 27+ tracked files (a public-release blocker, acceptable while private), and a single `@main`-pinned reusable security workflow violating the repo's own SHA-pin policy.
 
-On process: the deflaking pattern is durable (root-cause fixes with regression proof, codified "never rerun-and-ignore" rule), the mockery v2-vs-v3 CI drift is resolved (though two docs still teach the old pin), and the 30% coverage gate exists but is weak — duplicate test run, swallowed output, static floor. Documentation drift is real: AI-REFERENCE.md claims 189 API routes against ~395 actual gin registrations and omits the Ollama/bge-m3 cutover entirely. **PROC-1 carries an explicit verdict: the untracked `docs/status/2026-07-02-local-cutover-and-matching.md` must be committed — and that commit is being executed in this very PR.**
+On process: the deflaking pattern is durable (root-cause fixes with regression proof, codified "never rerun-and-ignore" rule), the mockery v2-vs-v3 CI drift is resolved (though two docs still teach the old pin), and the 30% coverage gate exists but is weak — duplicate test run, swallowed output, static floor. Documentation drift is real: AI-REFERENCE.md claims 189 API routes against ~395 actual gin registrations and omits the Ollama/bge-m3 cutover entirely. **PROC-1 carries an explicit verdict: the untracked `docs/archive/2026-07-consolidation/status/2026-07-02-local-cutover-and-matching.md` must be committed — and that commit is being executed in this very PR.**
 
 On ops: the deploy recipe (`Makefile.local` + `deploy/local.conf`, both gitignored) exists only on one laptop with no rollback path; the Windows GPU box at 172.16.3.22 is a triple single-point-of-failure (Whisper, embeddings, LLM) kept alive by an interactive-session scheduled task whose setup scripts live only in a scratchpad; the deprecated nightly `dedup.embed-async` op is still cron-scheduled against the quota-exhausted OpenAI Batch API; there is no cost/quota monitoring (the OpenAI exhaustion was discovered via runtime 429s); and `/metrics` exists but nothing scrapes it — prod observability is manual journalctl. The recurring meta-pattern is operational knowledge landing outside git.
 
@@ -27,7 +27,7 @@ On ops: the deploy recipe (`Makefile.local` + `deploy/local.conf`, both gitignor
 | SEC-4 | low | low | low | Per-worktree credential passwords generated with non-crypto $RANDOM (~27 bits entropy) |
 | SEC-5 | low | low | low | Reusable security workflow pinned to @main, violating the repo's SHA-pin policy |
 | SEC-6 | info | low | low | Status reconciliation: SEC-2/SEC-7/PERF-7 verified done; only SEC-AUDIT-11 and rotation remain open |
-| PROC-1 | high | high | low | Commit docs/status/2026-07-02-local-cutover-and-matching.md — verdict: COMMIT NOW |
+| PROC-1 | high | high | low | Commit docs/archive/2026-07-consolidation/status/2026-07-02-local-cutover-and-matching.md — verdict: COMMIT NOW |
 | PROC-2 | medium | medium | low | Deprecated nightly dedup.embed-async still cron-scheduled against quota-exhausted OpenAI Batch API |
 | PROC-3 | medium | medium | low | AI-REFERENCE.md drift: route count off by ~2x and no mention of the Ollama/local-embedding cutover |
 | PROC-4 | low | medium | medium | 30% coverage gate is real but weak: duplicate test run, swallowed output, static low bar |
@@ -77,8 +77,8 @@ On ops: the deploy recipe (`Makefile.local` + `deploy/local.conf`, both gitignor
 
 **Citations:**
 - docs/system/runbooks.md:61
-- docs/status/2026-07-02-local-cutover-and-matching.md:11
-- docs/status/2026-07-02-local-cutover-and-matching.md:43
+- docs/archive/2026-07-consolidation/status/2026-07-02-local-cutover-and-matching.md:11
+- docs/archive/2026-07-consolidation/status/2026-07-02-local-cutover-and-matching.md:43
 - docs/archive/superpowers/plans/2026-04-22-failed-quarantine.md:1361-1375
 - skills/project-context/SKILL.md:1
 
@@ -121,7 +121,7 @@ On ops: the deploy recipe (`Makefile.local` + `deploy/local.conf`, both gitignor
 
 ## Process, CI & Documentation Findings (PROC-)
 
-### PROC-1 — Commit docs/status/2026-07-02-local-cutover-and-matching.md — verdict: COMMIT NOW (high)
+### PROC-1 — Commit docs/archive/2026-07-consolidation/status/2026-07-02-local-cutover-and-matching.md — verdict: COMMIT NOW (high)
 
 > **Note:** This verdict is being executed in this very PR — the status doc is committed as part of the consultancy change set.
 
@@ -130,8 +130,8 @@ On ops: the deploy recipe (`Makefile.local` + `deploy/local.conf`, both gitignor
 **Recommendation:** Commit docs/status/ immediately (docs commit, no code risk). In the same change, commit the Windows Ollama scripts as `scripts/manage-ollama-windows.py` per the file's own TODO, so the doc and the automation land together.
 
 **Citations:**
-- docs/status/2026-07-02-local-cutover-and-matching.md:30-47
-- docs/status/2026-07-02-local-cutover-and-matching.md:37-38
+- docs/archive/2026-07-consolidation/status/2026-07-02-local-cutover-and-matching.md:30-47
+- docs/archive/2026-07-consolidation/status/2026-07-02-local-cutover-and-matching.md:37-38
 - git status: `?? docs/status/`
 
 ### PROC-2 — Deprecated nightly dedup.embed-async still cron-scheduled against quota-exhausted OpenAI Batch API (medium)
@@ -143,7 +143,7 @@ On ops: the deploy recipe (`Makefile.local` + `deploy/local.conf`, both gitignor
 **Citations:**
 - internal/plugins/dedup/embed_async.go:24
 - internal/plugins/dedup/embed_async.go:27-36
-- docs/status/2026-07-02-local-cutover-and-matching.md:55-57
+- docs/archive/2026-07-consolidation/status/2026-07-02-local-cutover-and-matching.md:55-57
 
 ### PROC-3 — AI-REFERENCE.md drift: route count off by ~2x and no mention of the Ollama/local-embedding cutover (medium)
 
@@ -235,7 +235,7 @@ On ops: the deploy recipe (`Makefile.local` + `deploy/local.conf`, both gitignor
 **Recommendation:** Immediately commit the Windows management scripts as scripts/manage-ollama-windows.py (already TODO'd). Configure the scheduled task with "run whether user is logged on or not" + restart-on-failure, or move Ollama to a Windows service wrapper (NSSM). Add a periodic reachability probe of :11434 and :19847 exposed via /metrics so an outage is visible.
 
 **Citations:**
-- docs/status/2026-07-02-local-cutover-and-matching.md:30-38
+- docs/archive/2026-07-consolidation/status/2026-07-02-local-cutover-and-matching.md:30-38
 - deploy/local.conf:26-28
 
 ### OPS-3 — Nightly dedup.embed-async still hardwired to OpenAI Batch API after Ollama cutover (high)
@@ -256,8 +256,8 @@ On ops: the deploy recipe (`Makefile.local` + `deploy/local.conf`, both gitignor
 **Recommendation:** Keep local as primary — the economics are sound. Add: (a) a token/request counter per AI backend exposed on /metrics, (b) the backend-mode toggle with OpenAI+local-fallback so a restored OpenAI key is a config change not a code change, (c) a one-time dedup-recall spot-check comparing bge-m3 vs archived OpenAI embeddings before deleting legacy vectors.
 
 **Citations:**
-- docs/status/2026-07-02-local-cutover-and-matching.md:10-14
-- docs/status/2026-07-02-local-cutover-and-matching.md:68-77
+- docs/archive/2026-07-consolidation/status/2026-07-02-local-cutover-and-matching.md:10-14
+- docs/archive/2026-07-consolidation/status/2026-07-02-local-cutover-and-matching.md:68-77
 
 ### OPS-5 — /metrics exists but nothing scrapes it — no alerting layer at all (medium)
 
@@ -276,7 +276,7 @@ On ops: the deploy recipe (`Makefile.local` + `deploy/local.conf`, both gitignor
 **Recommendation:** Commit docs/status/ now (it already has a proper version header — executed in this PR, see PROC-1). Establish a rule: any artifact referenced by prod (scripts, drop-ins, runbooks) must exist in-repo, with only secrets externalized. Track OPS-1's local.conf template under this same item.
 
 **Citations:**
-- docs/status/2026-07-02-local-cutover-and-matching.md:37-38
+- docs/archive/2026-07-consolidation/status/2026-07-02-local-cutover-and-matching.md:37-38
 - Makefile.local:1-6
 
 ### OPS-7 — Agent dev-workflow is strong but CLAUDE.md triplicates rules and burns per-session tokens (low)
