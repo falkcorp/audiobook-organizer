@@ -1,7 +1,7 @@
 // file: internal/operations/registry/worker.go
-// version: 2.10.1
+// version: 2.11.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-07-11
+// last-edited: 2026-07-17
 
 package registry
 
@@ -54,6 +54,16 @@ type runHandle struct {
 	// Stored as Unix nanoseconds; zero means progress has never been reported.
 	// The watchdog reads this first (lock-free) before falling back to the DB row.
 	lastProgressAt atomic.Int64
+	// lastUncheckpointedStrike (Unix nanoseconds) dedupes the watchdog's
+	// uncheckpointed strikes: at most one strike per threshold interval per op
+	// (C-4). Only the watchdog goroutine touches it; atomic for -race hygiene.
+	lastUncheckpointedStrike atomic.Int64
+	// queuedCancel is set by Registry.Cancel on a dispatcher STUB handle (nil
+	// cancel func) when the op is canceled while sitting in the buffered
+	// nextRun channel. The worker checks it — under Registry.mu, the same lock
+	// that guards the write — before registering the full handle, and drops
+	// the run without ever invoking Run (C-1). Guarded by Registry.mu.
+	queuedCancel bool
 }
 
 // cancelIfActive cancels the run's context if it has been wired up.
@@ -131,6 +141,9 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 	r.mu.RUnlock()
 	if !ok {
 		r.logger.Warn("registry: worker got run for unknown def; skipping", "def_id", qr.defID)
+		// Release the dispatcher's stub handle so its plugin slot and
+		// ConcurrencyKey don't leak (same leak shape as the force-drop path, C-2).
+		r.releaseRunHandle(qr.opID)
 		return false
 	}
 
@@ -161,7 +174,12 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 	}
 	defer cancel()
 
-	// Register the handle.
+	// Register the handle. Before overwriting the dispatcher's stub, honor a
+	// cancel that arrived while the run sat in the buffered nextRun channel
+	// (C-1): the stub has a nil cancel func, so Registry.Cancel flags it with
+	// queuedCancel instead. The flag is written and read under r.mu, so this
+	// check races with nothing — if Cancel got the lock first, we see the flag
+	// and drop the run without ever invoking Run.
 	h := &runHandle{
 		id:             qr.opID,
 		defID:          qr.defID,
@@ -171,6 +189,17 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 		cancel:         cancel,
 	}
 	r.mu.Lock()
+	if prev, exists := r.running[qr.opID]; exists && prev.queuedCancel {
+		r.mu.Unlock()
+		r.releaseRunHandle(qr.opID)
+		now := time.Now().UTC()
+		msg := "canceled before start (canceled while queued for a worker)"
+		if err := r.store.UpdateOperationV2Status(qr.opID, "canceled", nil, &now, &msg); err != nil {
+			r.logger.Warn("registry: failed to mark channel-canceled op canceled", "op_id", qr.opID, "error", err)
+		}
+		r.logger.Info("registry: dropped run canceled while queued in worker channel", "op_id", qr.opID, "def_id", qr.defID)
+		return false
+	}
 	r.running[qr.opID] = h
 	r.mu.Unlock()
 
@@ -220,6 +249,12 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 		completedAt := time.Now().UTC()
 		if runCtx.Err() != nil {
 			finalStatus = "canceled"
+			// C-5: distinguish def.Timeout expiry from a user/watchdog cancel.
+			if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+				msg := fmt.Sprintf("timeout: run exceeded %s", timeout)
+				errMsg = &msg
+				r.logger.Warn("registry: subprocess run timed out", "op_id", qr.opID, "def_id", qr.defID, "timeout", timeout)
+			}
 		} else if runErr != nil {
 			finalStatus = "failed"
 			msg := runErr.Error()
@@ -230,6 +265,9 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 		if err := r.store.UpdateOperationV2Status(qr.opID, finalStatus, nil, &completedAt, errMsg); err != nil {
 			r.logger.Warn("registry: failed to update subprocess op terminal status", "op_id", qr.opID, "error", err)
 		}
+		// C-5: notify the dep scheduler on ALL terminal transitions (the
+		// subprocess path previously notified on none of them).
+		r.notifyDepTerminal(finalStatus, qr)
 		emitOpFinishedLog(runCtx, reporter, runStartedAt, finalStatus, runErr, true)
 		r.logger.Info("registry: subprocess run finished", "op_id", qr.opID, "status", finalStatus)
 		return false
@@ -301,6 +339,24 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 			// goroutine is monitored so the abandoned counter drains when it
 			// eventually returns.
 			r.releaseRunHandle(qr.opID)
+			// C-3: write a terminal status so the row leaves the opv2 active
+			// index. Without this the row stayed "running" forever, and the
+			// ConcurrencyKey enqueue-dedupe in EnqueueOp kept returning this
+			// zombie op's ID for every future enqueue of the def — silently
+			// disabling the op type until restart. Mirror Shutdown's semantics:
+			// interrupted_* per the def's ResumePolicy. Nothing else writes this
+			// row's status afterwards: the runaway goroutine's eventual return
+			// only decrements the abandoned counter (below).
+			abandonedAt := time.Now().UTC()
+			abandonMsg := "abandoned: op goroutine did not exit within grace after context cancellation"
+			if err := r.store.UpdateOperationV2Status(qr.opID, interruptedStatus(qr.resumePolicy), nil, &abandonedAt, &abandonMsg); err != nil {
+				r.logger.Warn("registry: failed to mark abandoned op interrupted", "op_id", qr.opID, "error", err)
+			}
+			// Terminal transition: resolve dep-waiting subjects now rather than
+			// leaving them to the 5m sweep (C-5).
+			for _, sub := range subjectsFromParams(qr.params) {
+				r.notifyDepFailed(sub, qr.defID)
+			}
 			r.logger.Warn("registry: op goroutine abandoned; spawning replacement worker",
 				"op_id", qr.opID, "plugin", qr.plugin)
 			r.goroutineWG.Add(1)
@@ -325,6 +381,17 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 	switch {
 	case ctxCanceled:
 		finalStatus = "canceled"
+		// C-5: def.Timeout expiry used to be recorded as a bare "canceled" —
+		// indistinguishable from a user cancel. The run context carries the
+		// timeout deadline, so DeadlineExceeded means the run timed out (user/
+		// watchdog cancels yield context.Canceled). Status stays "canceled"
+		// (no new schema/UI status value) but the reason is persisted in
+		// error_message and logged distinctly.
+		if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+			msg := fmt.Sprintf("timeout: run exceeded %s", timeout)
+			errMsg = &msg
+			r.logger.Warn("registry: run timed out", "op_id", qr.opID, "def_id", qr.defID, "timeout", timeout)
+		}
 	case runErr != nil:
 		finalStatus = "failed"
 		msg := runErr.Error()
@@ -339,21 +406,28 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 
 	// Notify the dependency scheduler (async; non-blocking) so waiting_deps ops
 	// for the same subject can be re-evaluated or failed as appropriate.
-	// subjectsFromParams handles both single-subject {"book_id":"..."} params
-	// and batched {"subjects":[...]} params so every subject in a batch op
-	// receives its completion/failure notification.
-	for _, sub := range subjectsFromParams(qr.params) {
-		switch finalStatus {
-		case "completed":
-			r.notifyDepCompletion(sub, qr.defID)
-		case "failed":
-			r.notifyDepFailed(sub, qr.defID)
-		}
-	}
+	r.notifyDepTerminal(finalStatus, qr)
 
 	emitOpFinishedLog(runCtx, reporter, runStartedAt, finalStatus, runErr, false)
 	r.logger.Info("registry: run finished", "op_id", qr.opID, "status", finalStatus)
 	return false
+}
+
+// notifyDepTerminal notifies the dependency scheduler for every subject of a
+// run that reached a terminal status. C-5: ALL terminal transitions notify —
+// "completed" as a completion, everything else (failed, canceled, timeout,
+// interrupted_*) as a failure — so dep-waiting subjects are resolved
+// immediately instead of falling back to the 5m sweep. subjectsFromParams
+// handles both single-subject {"book_id":"..."} params and batched
+// {"subjects":[...]} params so every subject in a batch op is notified.
+func (r *Registry) notifyDepTerminal(finalStatus string, qr *queuedRun) {
+	for _, sub := range subjectsFromParams(qr.params) {
+		if finalStatus == "completed" {
+			r.notifyDepCompletion(sub, qr.defID)
+		} else {
+			r.notifyDepFailed(sub, qr.defID)
+		}
+	}
 }
 
 // emitOpFinishedLog emits the canonical "operation finished" line through
@@ -408,6 +482,15 @@ func (r *Registry) checkInfiniteRestart(qr *queuedRun, def OperationDef) bool {
 	completed := time.Now().UTC()
 	msg := "force-dropped: infinite restart without progress"
 	_ = r.store.UpdateOperationV2Status(qr.opID, "interrupted_dropped", nil, &completed, &msg)
+	// C-2: release the dispatcher's stub handle. The force-drop path returned
+	// before executeRun ever registered/released the run, leaking the
+	// ConcurrencyKey and the pluginRunning slot until restart — which blocked
+	// every def sharing that key (e.g. "acoustid.fingerprint").
+	r.releaseRunHandle(qr.opID)
+	// Terminal transition: notify dep-waiting subjects (C-5).
+	for _, sub := range subjectsFromParams(qr.params) {
+		r.notifyDepFailed(sub, qr.defID)
+	}
 	r.logger.Warn("registry: force-dropping op due to infinite restart",
 		"op_id", qr.opID, "def_id", qr.defID, "resume_count", row.ResumeCount)
 	return true

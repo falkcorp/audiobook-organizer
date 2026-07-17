@@ -1,7 +1,7 @@
 // file: internal/operations/registry/watchdog.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2b3c4d5e-6f7a-8901-bcde-f01234567890
-// last-edited: 2026-06-22
+// last-edited: 2026-07-17
 
 package registry
 
@@ -75,6 +75,17 @@ func (r *Registry) watchdogCycle() {
 			continue
 		}
 
+		// Skip rows that are not actually running yet. A handle can exist for a
+		// row still marked "queued": the dispatcher inserts a stub handle the
+		// instant an op is claimed, but the worker only marks the row "running"
+		// on pickup from the nextRun channel. While an op sits in that channel
+		// (e.g. saturated workers), its row may carry stale StartedAt /
+		// LastProgressAt values from a previous resumed run — inspecting those
+		// here would write spurious stuck strikes.
+		if row.Status != "running" {
+			continue
+		}
+
 		// --- Strike: stuck ---
 		// Cancel the op's context. The worker detects cancellation and sets
 		// terminal status when Run returns; we do NOT set status here.
@@ -91,6 +102,14 @@ func (r *Registry) watchdogCycle() {
 			lastProgress = time.Unix(0, ts).UTC()
 		} else if row.LastProgressAt != nil {
 			lastProgress = *row.LastProgressAt
+		} else if row.StartedAt != nil {
+			// R-2: no progress has EVER been reported (atomic unset, DB row nil).
+			// Marking an op running stamps StartedAt but never LastProgressAt, so
+			// without this fallback an op that hangs BEFORE its first
+			// UpdateProgress call was undetectable — the exact "silent for hours"
+			// incident class. Fall back to StartedAt so a hang-from-birth op
+			// accrues stuck time from the moment it started.
+			lastProgress = *row.StartedAt
 		}
 		if !lastProgress.IsZero() && now.Sub(lastProgress) > progressTimeout {
 			r.writeStrike(h.id, def.ID, def.Plugin, "stuck",
@@ -111,6 +130,13 @@ func (r *Registry) watchdogCycle() {
 		if minInterval == 0 {
 			minInterval = defaultMinCheckpointInterval
 		}
+		// C-4: the strike threshold honors the def's own MinCheckpointInterval,
+		// with defaultMinCheckpointTimeout as the floor. The old code compared
+		// against the 5m constant alone, striking long-interval defs spuriously.
+		threshold := minInterval
+		if threshold < defaultMinCheckpointTimeout {
+			threshold = defaultMinCheckpointTimeout
+		}
 
 		// Reference time: last_checkpoint_at if set, else started_at.
 		var refTime *time.Time
@@ -124,9 +150,17 @@ func (r *Registry) watchdogCycle() {
 		}
 
 		elapsed := now.Sub(*refTime)
-		if elapsed >= defaultMinCheckpointTimeout {
-			r.writeStrike(h.id, def.ID, def.Plugin, "uncheckpointed",
-				fmt.Sprintf("no checkpoint for %s (min_interval=%s)", elapsed.Round(time.Second), minInterval))
+		if elapsed < threshold {
+			continue
 		}
+		// C-4: dedupe. The watchdog cycles every ~30s; without this gate a
+		// persistently uncheckpointed op re-inserted a strike row every cycle.
+		// Write at most one strike per threshold interval per op.
+		if last := h.lastUncheckpointedStrike.Load(); last != 0 && now.Sub(time.Unix(0, last).UTC()) < threshold {
+			continue
+		}
+		h.lastUncheckpointedStrike.Store(now.UnixNano())
+		r.writeStrike(h.id, def.ID, def.Plugin, "uncheckpointed",
+			fmt.Sprintf("no checkpoint for %s (threshold=%s, min_interval=%s)", elapsed.Round(time.Second), threshold, minInterval))
 	}
 }
