@@ -1,6 +1,7 @@
 // file: internal/itunes/itl_le.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b4e8d927-6c3f-4a81-9e02-f7b3c8d4e56a
+// last-edited: 2026-07-17
 
 package itunes
 
@@ -448,7 +449,9 @@ func parsePlaylistMhohLE(data []byte, offset, length int, playlist *ITLPlaylist)
 // ---------------------------------------------------------------------------
 
 // rewriteChunksLEImpl walks msdh containers and rewrites location mhoh blocks.
-func rewriteChunksLEImpl(data []byte, updateMap map[string]string) ([]byte, int) {
+// matched, when non-nil, receives the lowercased persistent ID of every track
+// whose location block was actually rewritten (DL-5 per-row accounting).
+func rewriteChunksLEImpl(data []byte, updateMap map[string]string, matched map[string]bool) ([]byte, int) {
 	var out bytes.Buffer
 	offset := 0
 	updatedCount := 0
@@ -474,7 +477,7 @@ func rewriteChunksLEImpl(data []byte, updateMap map[string]string) ([]byte, int)
 			// Track-list container: rewrite sub-chunks
 			msdh := data[offset : offset+totalLen]
 			var currentPID string
-			rewritten, cnt := rewriteMsdhContentLE(msdh, updateMap, &currentPID)
+			rewritten, cnt := rewriteMsdhContentLE(msdh, updateMap, &currentPID, matched)
 			out.Write(rewritten)
 			updatedCount += cnt
 		} else {
@@ -488,8 +491,16 @@ func rewriteChunksLEImpl(data []byte, updateMap map[string]string) ([]byte, int)
 	return out.Bytes(), updatedCount
 }
 
+// recordMatchedPID marks pid (already lowercased) as actually rewritten in
+// matched, when the caller asked for per-PID accounting (DL-5).
+func recordMatchedPID(matched map[string]bool, pid string) {
+	if matched != nil && pid != "" {
+		matched[pid] = true
+	}
+}
+
 // rewriteMsdhContentLE rewrites mith/mhoh content inside an msdh container.
-func rewriteMsdhContentLE(msdh []byte, updateMap map[string]string, currentPID *string) ([]byte, int) {
+func rewriteMsdhContentLE(msdh []byte, updateMap map[string]string, currentPID *string, matched map[string]bool) ([]byte, int) {
 	if len(msdh) < 16 {
 		return msdh, 0
 	}
@@ -532,7 +543,7 @@ func rewriteMsdhContentLE(msdh []byte, updateMap map[string]string, currentPID *
 			// Track item array wrapper — contains mith + mhoh sub-blocks
 			// We need to descend into it and rewrite its content
 			miahData := msdh[subOffset : subOffset+chunkLen]
-			rewritten, cnt := rewriteMiahContentLE(miahData, updateMap, currentPID)
+			rewritten, cnt := rewriteMiahContentLE(miahData, updateMap, currentPID, matched)
 			out.Write(rewritten)
 			updatedCount += cnt
 			trackCount++
@@ -546,7 +557,7 @@ func rewriteMsdhContentLE(msdh []byte, updateMap map[string]string, currentPID *
 			}
 			// Walk mhoh sub-blocks inside this mith
 			mithData := msdh[subOffset : subOffset+chunkLen]
-			rewritten, cnt := rewriteMithContentLE(mithData, updateMap, *currentPID)
+			rewritten, cnt := rewriteMithContentLE(mithData, updateMap, *currentPID, matched)
 			out.Write(rewritten)
 			updatedCount += cnt
 
@@ -555,6 +566,7 @@ func rewriteMsdhContentLE(msdh []byte, updateMap map[string]string, currentPID *
 				rewritten := rewriteHohmLocationLE(msdh, subOffset, chunkLen, newLoc)
 				out.Write(rewritten)
 				updatedCount++
+				recordMatchedPID(matched, *currentPID)
 			} else {
 				out.Write(msdh[subOffset : subOffset+chunkLen])
 			}
@@ -581,7 +593,7 @@ func rewriteMsdhContentLE(msdh []byte, updateMap map[string]string, currentPID *
 
 // rewriteMiahContentLE walks mith + mhoh blocks inside a miah (track item array) wrapper.
 // miah layout: tag(4) + headerLen(4) + totalLen(4) + ... then sub-blocks
-func rewriteMiahContentLE(miah []byte, updateMap map[string]string, currentPID *string) ([]byte, int) {
+func rewriteMiahContentLE(miah []byte, updateMap map[string]string, currentPID *string, matched map[string]bool) ([]byte, int) {
 	if len(miah) < 12 {
 		return miah, 0
 	}
@@ -624,6 +636,7 @@ func rewriteMiahContentLE(miah []byte, updateMap map[string]string, currentPID *
 				rewritten := rewriteHohmLocationLE(miah, subOffset, chunkLen, newLoc)
 				out.Write(rewritten)
 				updatedCount++
+				recordMatchedPID(matched, *currentPID)
 			} else {
 				out.Write(miah[subOffset : subOffset+chunkLen])
 			}
@@ -650,7 +663,7 @@ func rewriteMiahContentLE(miah []byte, updateMap map[string]string, currentPID *
 }
 
 // rewriteMithContentLE walks mhoh sub-blocks inside a mith container and rewrites locations.
-func rewriteMithContentLE(mith []byte, updateMap map[string]string, currentPID string) ([]byte, int) {
+func rewriteMithContentLE(mith []byte, updateMap map[string]string, currentPID string, matched map[string]bool) ([]byte, int) {
 	if len(mith) < 12 {
 		return mith, 0
 	}
@@ -685,6 +698,7 @@ func rewriteMithContentLE(mith []byte, updateMap map[string]string, currentPID s
 				rewritten := rewriteHohmLocationLE(mith, subOffset, chunkLen, newLoc)
 				out.Write(rewritten)
 				updatedCount++
+				recordMatchedPID(matched, currentPID)
 			} else {
 				out.Write(mith[subOffset : subOffset+chunkLen])
 			}

@@ -1,7 +1,7 @@
 // file: internal/itunes/itl.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 7f2a8b3c-4d5e-6f01-a2b3-c4d5e6f7a8b9
-// last-edited: 2026-06-10
+// last-edited: 2026-07-17
 
 package itunes
 
@@ -16,6 +16,7 @@ import (
 	"io"
 	"os"
 	osexec "os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -95,6 +96,12 @@ type ITLWriteBackResult struct {
 	UpdatedCount int
 	BackupPath   string
 	OutputPath   string
+	// UpdatedPersistentIDs lists the (lowercased hex) persistent IDs whose
+	// location blocks were actually rewritten. Populated by
+	// UpdateITLLocations only; callers use it to mark per-row bookkeeping
+	// (e.g. deferred-update rows) applied ONLY for rows really written
+	// (DL-5) — a requested PID absent from the ITL never appears here.
+	UpdatedPersistentIDs []string
 }
 
 // ITLNewTrack describes a track to insert into an ITL file.
@@ -554,7 +561,15 @@ func walkChunksLE(data []byte, lib *ITLLibrary) {
 
 // rewriteChunksLE dispatches to the LE implementation in itl_le.go.
 func rewriteChunksLE(data []byte, updateMap map[string]string) ([]byte, int) {
-	return rewriteChunksLEImpl(data, updateMap)
+	return rewriteChunksLEMatched(data, updateMap, nil)
+}
+
+// rewriteChunksLEMatched is rewriteChunksLE plus per-PID accounting: when
+// matched is non-nil, every persistent ID (lowercased hex) whose location
+// block was actually rewritten is recorded into it. Lets callers
+// distinguish "requested" from "actually written" PIDs (DL-5).
+func rewriteChunksLEMatched(data []byte, updateMap map[string]string, matched map[string]bool) ([]byte, int) {
+	return rewriteChunksLEImpl(data, updateMap, matched)
 }
 
 // ---------------------------------------------------------------------------
@@ -696,12 +711,25 @@ func UpdateITLLocations(inputPath, outputPath string, updates []ITLLocationUpdat
 	// regeneration (CRIT-3) + the full ITLSafetyContract + BE refusal all happen
 	// inside the SafeWriteITL chokepoint (TASK-004) — no direct writeITLFile here.
 	updatedCount := 0
+	matched := make(map[string]bool, len(updates))
 	mutate := func(decompressed []byte) ([]byte, error) {
 		var newData []byte
-		newData, updatedCount = rewriteChunksLE(decompressed, updateMap)
+		newData, updatedCount = rewriteChunksLEMatched(decompressed, updateMap, matched)
 		return newData, nil
 	}
-	return safeWriteOrEncodeToFile(inputPath, outputPath, mutate, &updatedCount)
+	result, err := safeWriteOrEncodeToFile(inputPath, outputPath, mutate, &updatedCount)
+	if err != nil {
+		return nil, err
+	}
+	// Surface which requested PIDs were actually rewritten (DL-5): callers
+	// must not mark bookkeeping applied for PIDs that never matched a
+	// location block in this ITL.
+	result.UpdatedPersistentIDs = make([]string, 0, len(matched))
+	for pid := range matched {
+		result.UpdatedPersistentIDs = append(result.UpdatedPersistentIDs, pid)
+	}
+	sort.Strings(result.UpdatedPersistentIDs)
+	return result, nil
 }
 
 // safeWriteOrEncodeToFile routes an itl.go writeback entry point through the

@@ -1,7 +1,7 @@
 // file: internal/itunes/service/path_repair.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 01ad6c79-5f3f-4ee1-a07a-1f4b3a8c0d12
-// last-edited: 2026-05-01
+// last-edited: 2026-07-17
 //
 // PathRepairer dumps the iTunes XML, finds tracks whose Location no
 // longer exists on disk, re-discovers the correct path via three tiers
@@ -95,12 +95,17 @@ func extractBookOrganizerID(audioFilePath string) (string, error) {
 // logs and the operation result. Field names mirror the dry-run JSON
 // payload that callers consume.
 type iTunesPathRepairResult struct {
-	XMLTracks        int               `json:"xml_tracks"`
-	Missing          int               `json:"missing"`
-	AutoResolved     int               `json:"auto_resolved"`
-	NeedsReview      int               `json:"needs_review"`
-	Unresolved       int               `json:"unresolved"`
-	Enqueued         int               `json:"enqueued"`
+	XMLTracks    int `json:"xml_tracks"`
+	Missing      int `json:"missing"`
+	AutoResolved int `json:"auto_resolved"`
+	NeedsReview  int `json:"needs_review"`
+	Unresolved   int `json:"unresolved"`
+	Enqueued     int `json:"enqueued"`
+	// Undecodable counts audiobook tracks whose iTunes Location could not
+	// be decoded at all (M6) — these are skipped before the missing-file
+	// check, so without this counter they'd vanish from the report even
+	// though their on-disk state is unknown.
+	Undecodable      int               `json:"undecodable"`
 	DryRun           bool              `json:"dry_run"`
 	ReportPath       string            `json:"report_path,omitempty"`
 	Resolutions      []resolvedTrack   `json:"resolutions,omitempty"`
@@ -242,6 +247,9 @@ func (r *PathRepairer) repairWithResult(ctx context.Context, opID string, dryRun
 		}
 		decoded, derr := itunes.DecodeLocation(track.Location)
 		if derr != nil || decoded == "" {
+			// M6: count skipped-undecodable locations so the repair summary
+			// reflects them instead of silently dropping them.
+			result.Undecodable++
 			continue
 		}
 		if pathExists(decoded) {
@@ -325,8 +333,8 @@ func (r *PathRepairer) repairWithResult(ctx context.Context, opID string, dryRun
 	_ = operations.ClearState(r.store, opID)
 
 	summary := fmt.Sprintf(
-		"iTunes path repair complete: tracks=%d missing=%d auto=%d review=%d unresolved=%d enqueued=%d dry_run=%t",
-		result.XMLTracks, result.Missing, result.AutoResolved, result.NeedsReview, result.Unresolved, result.Enqueued, result.DryRun,
+		"iTunes path repair complete: tracks=%d missing=%d auto=%d review=%d unresolved=%d undecodable=%d enqueued=%d dry_run=%t",
+		result.XMLTracks, result.Missing, result.AutoResolved, result.NeedsReview, result.Unresolved, result.Undecodable, result.Enqueued, result.DryRun,
 	)
 	_ = progress.Log("info", summary, nil)
 	_ = progress.UpdateProgress(scanned, scanned, summary)
