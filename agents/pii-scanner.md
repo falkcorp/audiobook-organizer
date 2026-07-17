@@ -35,17 +35,17 @@ When invoked with a path or "staged changes":
 2. If given "staged": run `git diff --cached --name-only` and read those files
 3. If given no argument: scan `docs/` and `.claude-plugin/` as the highest-risk areas
 
-For each file, reason about whether values are real vs placeholders. A value like `172.16.2.30` in a curl example is real PII. A value like `<your-server-ip>` is a safe placeholder.
+For each file, reason about whether values are real vs placeholders. A value like `172.16.99.99` in a curl example is real PII. A value like `<your-server-ip>` is a safe placeholder.
 
 ## Output format
 
 ```
 FILE: docs/AI-REFERENCE.md
-  LINE 19: 172.16.2.30 — private IP address [BLOCKER]
+  LINE 19: 172.16.99.99 — private IP address [BLOCKER]
   LINE 19: unimatrixzero — internal hostname [BLOCKER]
 
 FILE: docs/implementation-guide.md
-  LINE 4: 172.16.2.30 — private IP address (appears in curl examples) [BLOCKER]
+  LINE 4: 172.16.99.99 — private IP address (appears in curl examples) [BLOCKER]
 
 SUMMARY: 2 files, 3 blockers, 0 warnings
 ACTION: Replace with <your-server-ip> and <your-hostname> before public release
