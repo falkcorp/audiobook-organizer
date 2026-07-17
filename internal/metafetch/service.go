@@ -1,7 +1,7 @@
 // file: internal/metafetch/service.go
-// version: 5.3.0
+// version: 5.4.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
-// last-edited: 2026-07-13
+// last-edited: 2026-07-17
 
 package metafetch
 
@@ -441,10 +441,11 @@ func (mfs *Service) RunApplyPipelineRenameOnly(id string, book *database.Book) e
 
 	entries := ComputeTargetPaths(config.AppConfig.RootDir, pathFormat, segTitleFormat, book, bookFiles, vars)
 
-	renameResult, err := RenameFiles(entries)
-	if err != nil {
-		return fmt.Errorf("rename files: %w", err)
-	}
+	renameResult, renameErr := RenameFiles(entries)
+	// Even when RenameFiles returns an error, entries in renameResult.Succeeded
+	// have physically moved on disk — their DB paths MUST still be updated
+	// below, or the library loses track of files that did move. The error is
+	// returned after the DB sync + empty-dir cleanup.
 
 	// Update book file records with new paths
 	bfMap := make(map[string]*database.BookFile, len(bookFiles))
@@ -527,6 +528,12 @@ func (mfs *Service) RunApplyPipelineRenameOnly(id string, book *database.Book) e
 		if oldDir != filepath.Dir(entry.TargetPath) {
 			removeEmptyDirs(oldDir, config.AppConfig.RootDir)
 		}
+	}
+
+	// Now that DB paths for every succeeded rename are persisted, surface the
+	// rename failure (skipping dedup/writeback follow-ups for the failed run).
+	if renameErr != nil {
+		return fmt.Errorf("rename files: %w", renameErr)
 	}
 
 	// Trigger dedup check after metadata apply
