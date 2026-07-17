@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/plugin.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: d1e2f3a4-b5c6-7890-abcd-ef1234567890
-// last-edited: 2026-07-12
+// last-edited: 2026-07-17
 
 // Package dedup is the UOS plugin for deduplication operations.
 // It wraps the internal dedup.Engine and registers OperationDefs through
@@ -82,6 +82,7 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.cleanupOrphanAuthorEmbeddingsDef(), // author-side counterpart: deletes emb:v:author:* rows orphaned by a merge/delete (#1866 follow-up)
 		p.buildCandidateStatusIndexDef(),     // INIT-2 T4: dedup:s: status secondary index backfill over dedup candidates
 		p.rescoreLabeledExamplesDef(),        // recompute ScoreBreakdowns onto labeled examples (incl. below-band/dismissed) for calibration coverage
+		p.breakdownBackfillDef(),             // backfill ScoreBreakdowns onto pre-T015 nil-breakdown pending candidates (unblocks Rescore + exact-triage)
 	}
 
 	for _, op := range ops {
