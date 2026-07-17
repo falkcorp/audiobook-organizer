@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 9.107.0 -->
+<!-- version: 9.108.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-17 -->
 
@@ -19,6 +19,30 @@ future agent) can scan the entire workspace in one page.
 - Claude project memory at `~/.claude/projects/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/memory/` — items still to graduate here
 
 ---
+
+## ✅ FIXED (2026-07-17) — GETALLBOOKS-INDEX-KEYS: unbounded book scans died on index keys
+
+`GetAllBooksFullFrom` iterated `book:0`..`book:~` and skipped only `:path:`, then
+`json.Unmarshal`'d the other nine `book:`-prefixed secondary indexes as Books. The
+`book:asin:` / `book:isbn13:` families store empty values, so unmarshal returned
+`unexpected end of JSON input` and killed the scan.
+
+Only reproduced with `limit=0` **and** the raw Pebble path (memdb swallows per-record
+errors), i.e. **startup tasks before warm-up**. Prod effect: `acoustid.backfill` failed
+on every restart → fingerprint coverage silently stalled.
+
+Fixed by matching on structure (a `:` after the `book:` prefix ⇒ index key) instead of
+a hardcoded prefix list. Regression test `TestGetAllBooksFullFrom_SkipsSecondaryIndexKeys`
+(`internal/database/pebble_books_index_keys_test.go`) reproduces the exact prod error and
+fails without the fix.
+
+**Follow-up found while verifying on the dedup sandbox — still open:**
+- **DEDUP-DURATION-NOT-THE-CAUSE:** applying `maintenance.duration-backfill` (7,845 file
+  durations across 719 books) changed candidate counts by **zero** — `exact` stayed at
+  13,008. The long-held premise that the exact-layer backlog is driven by the duration-ms
+  bug does not hold for the current data; `dedup.full-scan` is embedding-only and does not
+  recompute the `exact` layer. Identify what actually generates `exact` candidates.
+  (The other follow-up, DEDUP-DISMISS-RESURRECT, is now fixed — see the entry below.)
 
 ## ✅ FIXED (2026-07-17) — DEDUP-DISMISS-RESURRECT: rescans undid human dismissals
 
