@@ -1,11 +1,16 @@
 #!/bin/bash
 # file: scripts/setup-git-hooks.sh
-# version: 1.1.0
+# version: 1.2.0
 # guid: e8c4b7a2-1f3d-44e7-9c5e-8f2d1b4a9e3c
-# last-edited: 2026-07-03
+# last-edited: 2026-07-17
 # Set up git pre-commit hook to prevent accidentally committing .api-token
+#
+# Uses --git-common-dir (NOT --git-dir): in a linked worktree, --git-dir
+# resolves to .git/worktrees/<name>, whose hooks/ directory git never
+# consults — a hook installed there silently never fires. The common dir's
+# hooks/ applies to the main checkout AND every worktree.
 
-HOOK_DIR="$(git rev-parse --git-dir)/hooks"
+HOOK_DIR="$(git rev-parse --path-format=absolute --git-common-dir)/hooks"
 HOOK_FILE="$HOOK_DIR/pre-commit"
 
 # Create hooks directory if it doesn't exist
@@ -14,7 +19,7 @@ mkdir -p "$HOOK_DIR"
 # Create pre-commit hook
 cat > "$HOOK_FILE" <<'EOF'
 #!/bin/bash
-# Pre-commit hook: prevent .api-token from being committed
+# Pre-commit hook: prevent credentials/secrets from being committed
 
 PROTECTED_FILES=(
     ".api-token"
@@ -47,6 +52,28 @@ for FILE in "${PROTECTED_FILES[@]}"; do
     fi
 done
 
+# Content scan: block staged diffs that ADD API tokens or internal IPs.
+# Patterns: abk_ API keys, and 172.16.x.x internal-network addresses.
+# NOTE: all greps use -E (ERE) — in BRE, '\+' is a repetition operator and
+# '^\+\+\+ ' errors out ("repetition-operator operand invalid").
+SECRET_RE='abk_[A-Za-z0-9]{16,}|172\.16\.[0-9]{1,3}\.[0-9]{1,3}'
+ADDED_SECRETS=$(git diff --cached --unified=0 --no-color \
+    | grep -E '^\+' | grep -Ev '^\+\+\+ ' | grep -E "$SECRET_RE")
+if [[ -n "$ADDED_SECRETS" ]]; then
+    echo "❌ Error: staged changes add content matching a secret/internal-IP pattern:"
+    echo ""
+    echo "$ADDED_SECRETS" | head -10
+    echo ""
+    echo "This is a public repo — API tokens (abk_...) and internal network"
+    echo "addresses (172.16.x.x) must never be committed. Replace with an env"
+    echo "variable or a placeholder like https://<server>:8484."
+    echo ""
+    echo "If this is a deliberate false positive, bypass once with:"
+    echo "  git commit --no-verify"
+    echo ""
+    exit 1
+fi
+
 exit 0
 EOF
 
@@ -62,8 +89,13 @@ echo "  - .bootstrap-token (temporary bootstrap auth token)"
 echo "  - .readonly-key (startup read-only API key)"
 echo "  - .claude/.credentials/ (per-worktree username/password)"
 echo ""
-echo "The hook will prevent these from being committed."
-echo "If you accidentally stage one, you'll get an error message."
+echo "Staged-content scan also blocks diffs that ADD:"
+echo "  - API tokens matching abk_<16+ alphanumerics>"
+echo "  - internal IPs matching 172.16.x.x"
+echo "(bypass a false positive with: git commit --no-verify)"
+echo ""
+echo "The hook is installed in the COMMON git dir, so it fires for the main"
+echo "checkout and every linked worktree."
 echo ""
 echo "To manage worktree credentials, use:"
 echo "  ./scripts/manage-credentials.sh --help"
