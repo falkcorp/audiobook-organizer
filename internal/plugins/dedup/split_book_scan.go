@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/split_book_scan.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4c6e8f0b-3a5b-7c9d-1e2f-4a6b8c0d2e3f
-// last-edited: 2026-05-29
+// last-edited: 2026-07-17
 
 package dedup
 
@@ -49,7 +49,15 @@ func (p *Plugin) runSplitBookScan(ctx context.Context, _ json.RawMessage, report
 
 	scanProg := sdk.NewProgress(reporter, 0)
 	scanProg.Start("Scanning library for split-book clusters...")
-	cands, err := dedupengine.DetectSplitBookCandidates(ctx, p.store)
+	// Book-loading progress: total is unknown up front, so the callback
+	// updates the indeterminate frame's message (and the op log) every
+	// 1000 books instead of a percentage.
+	cands, err := dedupengine.DetectSplitBookCandidates(ctx, p.store, func(loaded int) {
+		scanProg.StepN(0, fmt.Sprintf("Loading books: %d loaded...", loaded))
+		if loaded%10000 == 0 {
+			reporter.Logger().Info("split-book scan: loading books", "loaded", loaded)
+		}
+	})
 	if err != nil {
 		reporter.Logger().Error("split-book detector error", "error", err)
 		return fmt.Errorf("split-book scan: %w", err)
