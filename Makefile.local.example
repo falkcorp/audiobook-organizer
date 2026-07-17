@@ -1,13 +1,13 @@
 # file: Makefile.local.example
-# version: 1.0.1
+# version: 1.1.0
 # guid: a2b4c6d8-e0f2-4a6b-8c0d-2e4f6a8b0c2d
-# last-edited: 2026-07-03
+# last-edited: 2026-07-17
 #
 # TEMPLATE — copy to Makefile.local (gitignored) and fill in your own values.
 # Makefile.local is included by the committed Makefile via `-include
 # Makefile.local` and supplies the machine-local deployment variables
-# (DEPLOY_HOST, DEPLOY_BIN) plus the `deploy`/`deploy-debug` targets. None of
-# this is committed — only this sanitized example is.
+# (DEPLOY_HOST, DEPLOY_BIN, DEPLOY_URL) plus the `deploy`/`deploy-debug`
+# targets. None of this is committed — only this sanitized example is.
 #
 # Usage:
 #   cp Makefile.local.example Makefile.local
@@ -25,28 +25,73 @@ DEPLOY_HOST := 192.168.0.10
 # committed `make rollback` target as well as this file's `deploy:` recipe.
 DEPLOY_BIN := /usr/local/bin/audiobook-organizer
 
-## deploy: Cross-compile, ship the binary, preserve a .prev copy, and restart
+# Base URL of the deployed server, used by the post-deploy version check.
+DEPLOY_URL := https://$(DEPLOY_HOST):8484
+
+## deploy: Build frontend + cross-compile embedded binary, ship it, preserve a
+## .prev copy, restart, and verify the deployed version.
+#
+# Mirrors the committed `build-linux` target's build chain: web-build first
+# (so web/dist is fresh — embed_frontend embeds whatever is on disk, stale or
+# absent), then cross-compile with the SAME tag set the real build uses
+# (embed_frontend fts5 native_taglib). Cross-compiling CGO (fts5/native_taglib)
+# from macOS requires: brew install filosottile/musl-cross/musl-cross
 .PHONY: deploy
-deploy: build-api
+deploy: web-build
+	@echo "→ Pre-flight: checking local branch is not behind origin/main..."
+	@git fetch origin main
+	@git merge-base --is-ancestor origin/main HEAD || (echo "❌ local main behind origin — pull first"; exit 1)
 	@echo "→ Cross-compiling linux/amd64 binary..."
-	GOOS=linux GOARCH=amd64 go build -tags embed_frontend -o dist/$(BINARY)-linux-amd64 .
+	@mkdir -p dist
+	CC=x86_64-linux-musl-gcc GOOS=linux GOARCH=amd64 CGO_ENABLED=1 go build \
+		-tags "embed_frontend fts5 native_taglib" \
+		-ldflags="-s -w -linkmode external -extldflags '-static' -X main.version=$$(git describe --tags --always)" \
+		-o dist/$(BINARY)-linux-amd64 .
 	@echo "→ Copying binary to $(DEPLOY_HOST)..."
 	scp dist/$(BINARY)-linux-amd64 $(DEPLOY_HOST):/home/USER/audiobook-organizer
 	@echo "→ Preserving previous binary as .prev, installing new binary, restarting service..."
 	ssh $(DEPLOY_HOST) 'sudo cp $(DEPLOY_BIN) $(DEPLOY_BIN).prev 2>/dev/null; \
 	  sudo mv /home/USER/audiobook-organizer $(DEPLOY_BIN) && \
 	  sudo systemctl restart audiobook-organizer.service'
+	@echo "→ Post-deploy: verifying deployed version matches git describe..."
+	@sleep 3; \
+	  expected=$$(git describe --tags --always); \
+	  deployed=$$(curl -ksf $(DEPLOY_URL)/api/v1/system/version || echo "UNREACHABLE"); \
+	  echo "   expected: $$expected"; \
+	  echo "   deployed: $$deployed"; \
+	  case "$$deployed" in \
+	    *"$$expected"*) echo "✅ Deployed version matches." ;; \
+	    *) echo "❌ Deployed version does NOT match git describe — stale binary shipped?"; exit 1 ;; \
+	  esac
 	@echo "✅ Deployed to $(DEPLOY_HOST). Roll back with: make rollback DEPLOY_HOST=$(DEPLOY_HOST) DEPLOY_BIN=$(DEPLOY_BIN)"
 
 ## deploy-debug: Same as deploy, but ships a debug (non-stripped) build
 .PHONY: deploy-debug
-deploy-debug: build-api
+deploy-debug: web-build
+	@echo "→ Pre-flight: checking local branch is not behind origin/main..."
+	@git fetch origin main
+	@git merge-base --is-ancestor origin/main HEAD || (echo "❌ local main behind origin — pull first"; exit 1)
 	@echo "→ Cross-compiling linux/amd64 debug binary..."
-	GOOS=linux GOARCH=amd64 go build -gcflags="all=-N -l" -tags embed_frontend -o dist/$(BINARY)-linux-amd64-debug .
+	@mkdir -p dist
+	CC=x86_64-linux-musl-gcc GOOS=linux GOARCH=amd64 CGO_ENABLED=1 go build \
+		-gcflags="all=-N -l" \
+		-tags "embed_frontend fts5 native_taglib" \
+		-ldflags="-linkmode external -extldflags '-static' -X main.version=$$(git describe --tags --always)" \
+		-o dist/$(BINARY)-linux-amd64-debug .
 	@echo "→ Copying debug binary to $(DEPLOY_HOST)..."
 	scp dist/$(BINARY)-linux-amd64-debug $(DEPLOY_HOST):/home/USER/audiobook-organizer
 	@echo "→ Preserving previous binary as .prev, installing new binary, restarting service..."
 	ssh $(DEPLOY_HOST) 'sudo cp $(DEPLOY_BIN) $(DEPLOY_BIN).prev 2>/dev/null; \
 	  sudo mv /home/USER/audiobook-organizer $(DEPLOY_BIN) && \
 	  sudo systemctl restart audiobook-organizer.service'
+	@echo "→ Post-deploy: verifying deployed version matches git describe..."
+	@sleep 3; \
+	  expected=$$(git describe --tags --always); \
+	  deployed=$$(curl -ksf $(DEPLOY_URL)/api/v1/system/version || echo "UNREACHABLE"); \
+	  echo "   expected: $$expected"; \
+	  echo "   deployed: $$deployed"; \
+	  case "$$deployed" in \
+	    *"$$expected"*) echo "✅ Deployed version matches." ;; \
+	    *) echo "❌ Deployed version does NOT match git describe — stale binary shipped?"; exit 1 ;; \
+	  esac
 	@echo "✅ Debug build deployed to $(DEPLOY_HOST)."
