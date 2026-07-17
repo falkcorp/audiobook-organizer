@@ -1,6 +1,7 @@
 // file: internal/organizer/reflink_unix.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
+// last-edited: 2026-07-17
 
 //go:build darwin || linux
 
@@ -22,9 +23,18 @@ func (o *Organizer) reflinkFilePlatform(sourcePath, targetPath string) error {
 	}
 	defer srcFile.Close()
 
-	// Create destination file
-	dstFile, err := os.Create(targetPath)
+	// Create destination file. O_EXCL: os.Create would TRUNCATE an existing
+	// destination — under the concurrent organize worker pool a stat→create
+	// TOCTOU race could zero out a file another worker just finished (unlike
+	// os.Link, which fails with EEXIST). With O_EXCL an existing destination
+	// errors instead; the raw error is returned un-wrapped when it is an
+	// exists-error so callers' os.IsExist recovery works, mirroring the
+	// hardlink fallback.
+	dstFile, err := os.OpenFile(targetPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o664)
 	if err != nil {
+		if os.IsExist(err) {
+			return err
+		}
 		return fmt.Errorf("failed to create destination file: %w", err)
 	}
 	defer dstFile.Close()

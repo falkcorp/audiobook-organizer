@@ -1,6 +1,7 @@
 // file: internal/organizer/organizer.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
+// last-edited: 2026-07-17
 
 package organizer
 
@@ -493,8 +494,15 @@ func (o *Organizer) copyFile(src, dst string) error {
 		_ = os.Remove(tempPath)
 		return fmt.Errorf("failed to close destination file: %w", err)
 	}
-	if err := os.Rename(tempPath, dst); err != nil {
+	// safeRename: a bare os.Rename would silently replace a destination that
+	// appeared between the caller's exists-check and now (concurrent organize
+	// workers) — refuse instead. The wrapped error still satisfies
+	// os.IsExist, so organizeFile callers' race recovery keeps working.
+	if err := safeRename(tempPath, dst); err != nil {
 		_ = os.Remove(tempPath)
+		if os.IsExist(err) {
+			return err
+		}
 		return fmt.Errorf("failed to finalize destination file: %w", err)
 	}
 
