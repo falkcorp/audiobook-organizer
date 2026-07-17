@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-07-11
+// last-edited: 2026-07-17
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -270,14 +270,25 @@ func (s *Server) DedupTriageExactPending(ctx context.Context) (*maintenanceplugi
 	if err != nil {
 		return nil, fmt.Errorf("list candidates: %w", err)
 	}
+	slog.Info("dedup triage: starting", "candidates", len(candidates))
 
 	// Memoize book lookups — a book may appear in many candidate pairs.
+	// Failed lookups are counted (not swallowed) — a nil book skews the
+	// classification toward stub/unknown, so the report must disclose them.
+	var lookupErrs int
+	var firstLookupErr error
 	bookCache := make(map[string]*database.Book, len(candidates))
 	getBook := func(id string) *database.Book {
 		if b, ok := bookCache[id]; ok {
 			return b
 		}
-		b, _ := s.Store().GetBookByID(id)
+		b, gerr := s.Store().GetBookByID(id)
+		if gerr != nil {
+			lookupErrs++
+			if firstLookupErr == nil {
+				firstLookupErr = fmt.Errorf("get book %s: %w", id, gerr)
+			}
+		}
 		bookCache[id] = b
 		return b
 	}
@@ -299,6 +310,10 @@ func (s *Server) DedupTriageExactPending(ctx context.Context) (*maintenanceplugi
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		default:
+		}
+		if i > 0 && i%5000 == 0 {
+			slog.Info("dedup triage: progress",
+				"processed", i, "total", len(candidates), "lookup_errors", lookupErrs)
 		}
 		c := candidates[i]
 		a := getBook(c.EntityAID)
@@ -328,9 +343,10 @@ func (s *Server) DedupTriageExactPending(ctx context.Context) (*maintenanceplugi
 	}
 
 	report := &maintenanceplugin.TriageReport{
-		ScannedAt:    time.Now(),
-		TotalScanned: len(candidates),
-		Populations:  make(map[maintenanceplugin.TriageClass]maintenanceplugin.TriagePopulation, len(pops)),
+		ScannedAt:        time.Now(),
+		TotalScanned:     len(candidates),
+		Populations:      make(map[maintenanceplugin.TriageClass]maintenanceplugin.TriagePopulation, len(pops)),
+		BookLookupErrors: lookupErrs,
 	}
 	for cls, ps := range pops {
 		report.Populations[cls] = maintenanceplugin.TriagePopulation{
@@ -347,6 +363,16 @@ func (s *Server) DedupTriageExactPending(ctx context.Context) (*maintenanceplugi
 			report.ReviewCount += ps.count
 		}
 	}
+	if lookupErrs > 0 {
+		slog.Warn("dedup triage: book lookups failed — population counts may be skewed",
+			"lookup_errors", lookupErrs, "first_error", firstLookupErr)
+	}
+	slog.Info("dedup triage: complete",
+		"scanned", report.TotalScanned,
+		"purgeable", report.PurgeableCount,
+		"keep", report.KeepCount,
+		"review", report.ReviewCount,
+		"lookup_errors", lookupErrs)
 	return report, nil
 }
 
