@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.4.2 -->
+<!-- version: 10.4.3 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-18 -->
 
@@ -193,7 +193,6 @@ R-1 (T06) + R-3/R-7/P-2 (T08) (#2002).
 F7/R-9/R-8 (#PENDING — T11, see CHANGELOG July 18, 2026).
 F7/R-9/R-8 (#2004 — T11).
 C2/H7 remux/transcode/external-ID-backfill reporter threading (#2006).
-F6 (#PR_PLACEHOLDER — book-merge rerouted off hard-delete to soft-delete +
 F6 (#2007 — book-merge rerouted off hard-delete to soft-delete +
 external-ID reassignment + ITL removal, T10).
 
@@ -214,7 +213,6 @@ external-ID reassignment + ITL removal, T10).
 - [ ] **T06** — R-1: `op.terminal` SSE has zero backend publishers (phantom "running" ops in UI)
 - [ ] **T07** — R-6: AssignOrphanVGs serial loop + VersionGroupID clobber guard (`internal/reconcile/reconcile.go:1270-1327`)
 - [ ] **T08** — R-3 (abandoned-reporter logBuf growth) · R-7 (dead scan checkpoint code) · P-2 (RunItems backwards progress)
-- [ ] **T10** — F6: legacy dedup.MergeBooks hard-deletes losers without external-ID reassignment/ITL removal — VERIFY then reroute
 - [ ] **T09** — C2: remux/transcode 6-h ops have no reporter threading + can't fail · H7 (external-id backfill, same shape)
 - [ ] **T11** — F7 (quarantine serial loops → RunItems) · R-9 (path_repair serial loop) · R-8 (all-unreadable-durations group misclassified "short")
 - [x] **T12** — devops: 8 remaining scripts with internal IPs · op-stall alert (commented, metric doesn't exist yet — see Infra #36) · coverage floor on PR gate · systemd unit dedupe · credential entropy — #2001
