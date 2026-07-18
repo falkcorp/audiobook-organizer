@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
+# file: scripts/dedup_bench_apply.py
+# version: 1.1.0
+# guid: 6f4a2e8c-9d1b-4c7a-8e3f-2b6d5a9c0f14
+# last-edited: 2026-07-18
 """Apply agreed AI dedup suggestions to the audiobook-organizer database.
 
 Reads testdata/dedup-bench/agreed_suggestions.json and applies each suggestion
-via the server API. Requires a running server at SERVER_URL.
+via the server API. Requires a running server, passed via --server or the
+ABK_API_URL environment variable (required; no internal-network default).
 
 Usage:
     python3 scripts/dedup_bench_apply.py [--dry-run] [--server URL]
+    ABK_API_URL=https://<server>:8484 python3 scripts/dedup_bench_apply.py --dry-run
 
 Actions:
     merge       → POST /api/v1/authors/merge  {keep_id, merge_ids}
@@ -36,7 +42,7 @@ GROUPS_PATH = os.path.join(
     ROOT_DIR, "testdata", "dedup-bench", "2026-03-07T18-56-37", "groups.json"
 )
 
-DEFAULT_SERVER = "https://172.16.2.30:8484"
+DEFAULT_SERVER = os.environ.get("ABK_API_URL")
 
 # Known compound entries that contain multiple people and must be split
 # before reclassifying. Verified against live database 2026-03-08.
@@ -450,7 +456,8 @@ def main():
     parser.add_argument(
         "--server",
         default=DEFAULT_SERVER,
-        help=f"Server URL (default: {DEFAULT_SERVER})",
+        help="Server URL, e.g. https://<server>:8484 "
+        "(required; defaults to $ABK_API_URL)",
     )
     parser.add_argument(
         "--agreed", default=AGREED_PATH, help="Path to agreed_suggestions.json"
@@ -467,6 +474,12 @@ def main():
         help="Which section to apply (default: all)",
     )
     args = parser.parse_args()
+
+    if not args.server:
+        parser.error(
+            "--server is required (or set the ABK_API_URL environment variable "
+            "to your server URL, e.g. https://<server>:8484)"
+        )
 
     print(f"Server:  {args.server}")
     print(f"Agreed:  {args.agreed}")

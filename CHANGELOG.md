@@ -9,6 +9,33 @@
 
 ### Features & Fixes
 
+#### July 18, 2026 - devops follow-ups (T12, 5 independent items)
+
+- **IP scrub, remaining 8 scripts**: `test-tag-roundtrip.py`, `series_dedup.py`,
+  `dedup_bench_apply.py`, `dedup_bench_crossval.py`, `dedup_bench_pass2.py`,
+  `manage-whisper-server.py`, `setup-openssh-windows.ps1`,
+  `setup-ssh-from-mac.sh` — hardcoded internal IPs replaced with required
+  `ABK_API_URL` / `ABK_GPU_HOST` env vars (or existing `--server`/`--host`
+  flags made required), no internal-network default; same pattern as #1983.
+- **Op-stall alert (commented, gated on future metric)**: added a documented,
+  commented-out Prometheus rule to `deploy/prometheus/alert-rules.yml` for "op
+  active but no items processed for 30m" — no `items_processed`-shaped metric
+  exists yet (`internal/metrics/metrics.go` only has op start/complete/fail/
+  cancel counts, not in-flight progress); added a TODO.md line for building
+  that exporter rather than guessing at one.
+- **Coverage floor on PR gate**: `.github/workflows/ci.yml` gained a
+  `coverage-gate` job running `make test-short` + `make coverage-check-short`
+  (floor from `.ci/coverage-floor.txt`) on every PR — previously this gate only
+  ran nightly via a different mechanism (`reusable-ci.yml`'s
+  `go-test-coverage`/`.testcoverage.yml`), never blocking a PR.
+- **systemd unit dedupe**: `deploy/systemd/audiobook-organizer.service` (stale,
+  v4.0.0) replaced with a symlink to the canonical top-level
+  `deploy/audiobook-organizer.service` (v4.4.0, the one `Makefile.local`'s
+  deploy targets actually ship); `deploy/README.md` updated to match.
+- **Credential entropy**: `scripts/manage-credentials.sh`'s 3-word+4-digit
+  generator (~27 bits) replaced with `openssl rand -base64 15` (120 bits);
+  `create` now prints the credential file path instead of echoing the secret.
+
 #### July 18, 2026 - registry SSE + reporter/scanner hygiene (T06 + T08)
 
 - **R-1 (op.terminal SSE, T06):** the backend now publishes an `op.terminal`

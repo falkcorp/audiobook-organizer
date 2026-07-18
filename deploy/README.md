@@ -1,3 +1,8 @@
+<!-- file: deploy/README.md -->
+<!-- version: 1.1.0 -->
+<!-- guid: 67014893-53d8-4968-8ba4-2208288e61f2 -->
+<!-- last-edited: 2026-07-18 -->
+
 # Audiobook Organizer - Deployment Files
 
 Service configuration files for running audiobook-organizer as a background service on macOS (launchd) and Linux (systemd).
@@ -43,7 +48,7 @@ sudo cp audiobook-organizer /usr/local/bin/
 sudo chmod 0755 /usr/local/bin/audiobook-organizer
 
 # 4. Install service file
-sudo cp deploy/systemd/audiobook-organizer.service /etc/systemd/system/
+sudo cp deploy/audiobook-organizer.service /etc/systemd/system/
 
 # 5. Reload systemd and enable service
 sudo systemctl daemon-reload
@@ -85,8 +90,8 @@ Edit the respective service file before installation to set these values.
 | File | Platform | Purpose |
 |------|----------|---------|
 | `launchd/com.jdfalk.audiobook-organizer.plist` | macOS | User-level launchd service (recommended) |
-| `systemd/audiobook-organizer.service` | Linux | systemd service unit (recommended) |
-| `audiobook-organizer.service` | Linux | Legacy compatibility (use systemd subdirectory) |
+| `audiobook-organizer.service` | Linux | systemd service unit (recommended; this is the one `Makefile.local`'s `deploy`/`deploy-debug` targets ship) |
+| `systemd/audiobook-organizer.service` | Linux | Symlink to `../audiobook-organizer.service` — kept for the historical `deploy/systemd/...` path; do not edit independently |
 | `com.audiobook-organizer.plist` | macOS | Legacy compatibility (use launchd subdirectory) |
 
 ## Management Commands

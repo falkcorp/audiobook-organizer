@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 # file: scripts/series_dedup.py
-# version: 1.1.0
+# version: 1.2.0
 # guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+# last-edited: 2026-07-18
 #
 # Series deduplication script for audiobook-organizer.
 # Fetches all series, analyzes duplicates, and applies fixes via the API.
+#
+# The server base URL is REQUIRED via the ABK_API_URL environment variable
+# (e.g. https://<server>:8484) — there is no internal-network default.
 
 import argparse
 import json
@@ -20,7 +24,14 @@ import requests
 # Suppress InsecureRequestWarning for self-signed certs
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-BASE_URL = "https://172.16.2.30:8484/api/v1"
+_ABK_API_URL = os.environ.get("ABK_API_URL")
+if not _ABK_API_URL:
+    sys.stderr.write(
+        "ERROR: ABK_API_URL environment variable is required "
+        "(e.g. https://<server>:8484)\n"
+    )
+    sys.exit(1)
+BASE_URL = f"{_ABK_API_URL.rstrip('/')}/api/v1"
 VERIFY_SSL = False
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))

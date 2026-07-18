@@ -1,7 +1,7 @@
 # file: scripts/manage-whisper-server.py
-# version: 1.0.0
+# version: 1.1.0
 # guid: f7a8b9c0-d1e2-3456-fabc-678901234567
-# last-edited: 2026-06-27
+# last-edited: 2026-07-18
 #
 # /// script
 # requires-python = ">=3.11"
@@ -16,8 +16,12 @@
 #   1. Run scripts/setup-winrm-windows.ps1 as Administrator on the Windows machine
 #   2. uv installed locally: curl -LsSf https://astral.sh/uv/install.sh | sh
 #
+# The GPU host is REQUIRED via the ABK_GPU_HOST environment variable
+# (hostname or IP, e.g. <windows-gpu-host>) — there is no internal-network
+# default.
+#
 # Usage:
-#   uv run scripts/manage-whisper-server.py --deploy            # copy whisper_server.py
+#   ABK_GPU_HOST=<windows-gpu-host> uv run scripts/manage-whisper-server.py --deploy
 #   uv run scripts/manage-whisper-server.py --restart           # kill + relaunch
 #   uv run scripts/manage-whisper-server.py --deploy --restart  # both (most common)
 #   uv run scripts/manage-whisper-server.py --status            # check /health
@@ -39,7 +43,13 @@ except ImportError:
     print("ERROR: pywinrm not found. Run via: uv run scripts/manage-whisper-server.py")
     sys.exit(1)
 
-COMPUTER   = "172.16.3.22"
+COMPUTER = os.environ.get("ABK_GPU_HOST")
+if not COMPUTER:
+    print(
+        "ERROR: ABK_GPU_HOST environment variable is required "
+        "(hostname or IP of the Windows GPU machine, e.g. <windows-gpu-host>)"
+    )
+    sys.exit(1)
 WIN_USER   = "jdfalk"
 REMOTE_PATH = r"C:\Users\jdfalk\whisper_server.py"
 MODEL      = "base.en"

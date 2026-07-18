@@ -1,9 +1,9 @@
 # file: scripts/setup-openssh-windows.ps1
-# version: 1.0.0
+# version: 1.1.0
 # guid: b3c4d5e6-f7a8-9012-bcde-234567890123
-# last-edited: 2026-06-27
+# last-edited: 2026-07-18
 #
-# Run ONCE as Administrator on the Windows GPU machine (172.16.3.22).
+# Run ONCE as Administrator on the Windows GPU machine (<windows-gpu-host>).
 # Enables OpenSSH Server so you can SSH/SCP in from Mac or Linux.
 #
 #   Set-ExecutionPolicy Bypass -Scope Process -Force

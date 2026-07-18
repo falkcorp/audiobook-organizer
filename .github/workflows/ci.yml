@@ -1,7 +1,7 @@
 # file: .github/workflows/ci.yml
-# version: 3.0.7
+# version: 3.1.0
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
-# last-edited: 2026-07-11
+# last-edited: 2026-07-18
 
 # Fast parallel CI for PRs and pushes.
 # Runs go vet/build, short tests, frontend lint/build, and frontend unit tests
@@ -101,3 +101,48 @@ jobs:
             exit 1
           fi
           echo "✅ Database mocks are fresh"
+
+  # Project-specific: coverage floor gate on every PR (T12 follow-up).
+  # Previously this gate (`make ci`'s coverage-check-short, floor read from
+  # .ci/coverage-floor.txt) only ran nightly via reusable-ci.yml's separate
+  # go-test-coverage/.testcoverage.yml mechanism — never on PRs. This job
+  # mirrors `make ci`'s local gate exactly (same two targets a contributor
+  # runs locally) so a coverage regression is caught before merge, not the
+  # next morning.
+  coverage-gate:
+    name: Coverage Floor (PR gate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GOEXPERIMENT: jsonv2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          submodules: recursive
+
+      - name: Set up Go (no built-in cache)
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26'
+          cache: false
+
+      - name: Restore Go cache (manual)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-1.26-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-1.26-
+            ${{ runner.os }}-go-
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libtag1-dev bc
+
+      - name: Run short tests with coverage profile
+        run: make test-short
+
+      - name: Check coverage floor (.ci/coverage-floor.txt)
+        run: make coverage-check-short
