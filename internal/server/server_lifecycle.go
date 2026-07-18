@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 1.44.0
+// version: 1.46.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-07-10
+// last-edited: 2026-07-18
 
 package server
 
@@ -933,7 +933,16 @@ func (s *Server) startBackfills() {
 	s.bgWG.Add("external-id-backfill")
 	go func() {
 		defer s.bgWG.Done("external-id-backfill")
-		s.backfillExternalIDs()
+		// This startup-goroutine path has no op reporter (only the UOS plugin
+		// op maintenance.external-id-backfill does), so progress is surfaced
+		// via a plain slog.Info instead of reporter.UpdateProgress — this is
+		// the path that actually runs at every boot, so it's the one that
+		// needs the "more than one log line" fix (H7), not just the UOS
+		// plugin op (unclear whether that path is ever enqueued). The error
+		// is no longer silently swallowed either.
+		if err := s.backfillExternalIDs(startupProgressLogger("external-id-backfill")); err != nil {
+			slog.Warn("startup external-id-backfill failed", "err", err)
+		}
 	}()
 
 	// AcoustID fingerprint backfill. CONC-9 removed the serial server-side
@@ -992,7 +1001,11 @@ func (s *Server) startBackfills() {
 	s.bgWG.Add("remux-malformed-m4b")
 	go func() {
 		defer s.bgWG.Done("remux-malformed-m4b")
-		s.remuxMalformedM4BFiles(s.bgCtx)
+		// See the external-id-backfill goroutine above for why this logs
+		// progress via slog rather than a reporter (C2).
+		if err := s.remuxMalformedM4BFiles(s.bgCtx, startupProgressLogger("remux-malformed-m4b")); err != nil {
+			slog.Warn("startup remux-malformed-m4b failed", "err", err)
+		}
 	}()
 
 	// Build the search index on first startup (or if it got wiped).
@@ -1014,9 +1027,26 @@ func (s *Server) startBackfills() {
 	s.bgWG.Add("transcode+quarantine")
 	go func() {
 		defer s.bgWG.Done("transcode+quarantine")
-		s.transcodeMalformedM4BFiles(s.bgCtx)
+		// See the external-id-backfill goroutine above for why this logs
+		// progress via slog rather than a reporter (C2).
+		if err := s.transcodeMalformedM4BFiles(s.bgCtx, startupProgressLogger("transcode-malformed-m4b")); err != nil {
+			slog.Warn("startup transcode-malformed-m4b failed", "err", err)
+		}
 		s.quarantineKnownBadFiles()
 	}()
+}
+
+// startupProgressLogger returns a C2/H7 progress callback that logs via slog,
+// for use by the raw startBackfills goroutines above, which run outside the
+// UOS op registry and so have no reporter.UpdateProgress to call. Without
+// this, these ops — which run unconditionally at every boot — would still
+// show only a single "starting"/"complete" log line across a multi-hour run,
+// even after threading progress through the dep layer, because nil progress
+// is a no-op.
+func startupProgressLogger(op string) func(processed, total int, msg string) {
+	return func(processed, total int, msg string) {
+		slog.Info("startup progress", "op", op, "processed", processed, "total", total, "msg", msg)
+	}
 }
 
 func (s *Server) perm(p auth.Permission) gin.HandlerFunc {

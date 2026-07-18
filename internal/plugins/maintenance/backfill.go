@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/backfill.go
-// version: 1.1.0
+// version: 1.3.0
 // guid: f2a3b4c5-d6e7-8901-5678-123456789012
-// last-edited: 2026-07-03
+// last-edited: 2026-07-18
 
 package maintenance
 
@@ -39,7 +39,13 @@ func (p *Plugin) externalIDBackfillDef() sdk.OperationDef {
 
 func (p *Plugin) runExternalIDBackfill(_ context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
 	_ = reporter.Log(slog.LevelInfo, "Starting external ID backfill")
-	p.deps.BackfillExternalIDs()
+	err := p.deps.BackfillExternalIDs(func(processed, total int, msg string) {
+		_ = reporter.UpdateProgress(processed, total, msg)
+	})
+	if err != nil {
+		_ = reporter.Log(slog.LevelError, "External ID backfill failed", slog.String("error", err.Error()))
+		return err
+	}
 	_ = reporter.Log(slog.LevelInfo, "External ID backfill complete")
 	return nil
 }
@@ -89,7 +95,13 @@ func (p *Plugin) malformedM4BRemuxDef() sdk.OperationDef {
 
 func (p *Plugin) runMalformedM4BRemux(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
 	_ = reporter.Log(slog.LevelInfo, "Starting malformed M4B remux")
-	p.deps.RemuxMalformedM4BFiles(ctx)
+	err := p.deps.RemuxMalformedM4BFiles(ctx, func(processed, total int, msg string) {
+		_ = reporter.UpdateProgress(processed, total, msg)
+	})
+	if err != nil {
+		_ = reporter.Log(slog.LevelError, "Malformed M4B remux failed", slog.String("error", err.Error()))
+		return err
+	}
 	_ = reporter.Log(slog.LevelInfo, "Malformed M4B remux complete")
 	return nil
 }
@@ -108,6 +120,14 @@ func (p *Plugin) malformedM4BTranscodeDef() sdk.OperationDef {
 		Cancellable:     true,
 		Isolate:         false, // DISABLED 2026-05-29: PR #1172 child-mode wire-up cannot work because Pebble is single-writer; child re-open fails. See MAYDEPLOY-A revisit.
 		Timeout:         6 * time.Hour,
+		// C2: a full AAC re-encode can take minutes per file, so the every-25
+		// -files progress cadence can leave a long gap between UpdateProgress
+		// stamps. The registry watchdog's default ProgressTimeout is 5 minutes
+		// (see internal/operations/registry/watchdog.go) — without an explicit
+		// override here a slow but healthy transcode run risks being killed as
+		// "stuck". 30m matches the precedent in intro_transcribe.go for a
+		// similarly slow per-item op.
+		ProgressTimeout: 30 * time.Minute,
 		Schedule:        nil,
 		Capabilities:    []sdk.Capability{sdk.CapLibraryRead, sdk.CapFilesRead, sdk.CapFilesWrite, sdk.CapSubprocessSpawn},
 		Run:             p.runMalformedM4BTranscode,
@@ -116,7 +136,13 @@ func (p *Plugin) malformedM4BTranscodeDef() sdk.OperationDef {
 
 func (p *Plugin) runMalformedM4BTranscode(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
 	_ = reporter.Log(slog.LevelInfo, "Starting malformed M4B transcode")
-	p.deps.TranscodeMalformedM4BFiles(ctx)
+	err := p.deps.TranscodeMalformedM4BFiles(ctx, func(processed, total int, msg string) {
+		_ = reporter.UpdateProgress(processed, total, msg)
+	})
+	if err != nil {
+		_ = reporter.Log(slog.LevelError, "Malformed M4B transcode failed", slog.String("error", err.Error()))
+		return err
+	}
 	_ = reporter.Log(slog.LevelInfo, "Malformed M4B transcode complete")
 	return nil
 }

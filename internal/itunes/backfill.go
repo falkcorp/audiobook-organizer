@@ -1,12 +1,13 @@
 // file: internal/itunes/backfill.go
-// version: 1.5.0
+// version: 1.7.0
 // guid: b8c9d0e1-f2a3-b4c5-d6e7-f8a9b0c1d2e3
-// last-edited: 2026-07-07
+// last-edited: 2026-07-18
 
 package itunes
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 
@@ -34,7 +35,17 @@ type ExternalIDBackfillStore interface {
 // loop runs to completion (potentially minutes on a large library) and
 // crashes with "pebble: closed" if the store closes mid-iteration. The
 // caller (Server.Start's background goroutine) passes s.bgCtx.
-func BackfillExternalIDs(ctx context.Context, store ExternalIDBackfillStore) error {
+//
+// progress is called after every page of the book-pagination pass (total is
+// unknown ahead of a pass over a paginated store, so 0 is reported for it —
+// the message still conveys real counts) and every 10000 tracks during the
+// iTunes-XML streaming pass, so a whole-library run surfaces progress instead
+// of one log line at the end (H7). progress may be nil.
+//
+// Persistence errors (bulk-write failures, the track-PID pass) are now
+// returned instead of silently discarded — previously the op always reported
+// success even when nothing was actually written (H7).
+func BackfillExternalIDs(ctx context.Context, store ExternalIDBackfillStore, progress func(processed, total int, msg string)) error {
 	if store == nil {
 		return nil
 	}
@@ -48,13 +59,20 @@ func BackfillExternalIDs(ctx context.Context, store ExternalIDBackfillStore) err
 
 	offset := 0
 	backfilled := 0
+	booksScanned := 0
 	for {
 		if err := ctx.Err(); err != nil {
 			slog.Info("external ID backfill canceled at offset after mappings", "offset", offset, "backfilled", backfilled, "err", err)
 			return nil
 		}
 		books, err := store.GetAllBooksCore(10000, offset)
-		if err != nil || len(books) == 0 {
+		if err != nil {
+			// H7: a read failure here used to `break` silently, letting the
+			// loop fall through to the track-PID pass and mark the whole
+			// backfill "done" despite skipping the rest of the library.
+			return fmt.Errorf("external ID backfill: read books at offset %d: %w", offset, err)
+		}
+		if len(books) == 0 {
 			break
 		}
 
@@ -95,10 +113,16 @@ func BackfillExternalIDs(ctx context.Context, store ExternalIDBackfillStore) err
 			}
 		}
 		if len(batch) > 0 {
-			_ = store.BulkCreateExternalIDMappings(batch)
+			if err := store.BulkCreateExternalIDMappings(batch); err != nil {
+				return fmt.Errorf("external ID backfill: bulk write at offset %d: %w", offset, err)
+			}
 			backfilled += len(batch)
 		}
+		booksScanned += len(books)
 		offset += 10000
+		if progress != nil {
+			progress(booksScanned, 0, fmt.Sprintf("Backfilling external IDs: %d books scanned (%d mappings written)", booksScanned, backfilled))
+		}
 	}
 
 	if err := ctx.Err(); err != nil {
@@ -108,7 +132,10 @@ func BackfillExternalIDs(ctx context.Context, store ExternalIDBackfillStore) err
 	slog.Info("Backfilled external ID mappings from book + file records", "backfilled", backfilled)
 
 	// Backfill ALL track-level PIDs from the iTunes XML
-	itunesBackfilled, _ := BackfillITunesTrackPIDs(ctx, store)
+	itunesBackfilled, err := BackfillITunesTrackPIDs(ctx, store, progress)
+	if err != nil {
+		return fmt.Errorf("external ID backfill: track-PID pass: %w", err)
+	}
 	if itunesBackfilled > 0 {
 		slog.Info("Backfilled track-level PIDs from iTunes XML", "itunesBackfilled", itunesBackfilled)
 	}
@@ -127,7 +154,11 @@ func BackfillExternalIDs(ctx context.Context, store ExternalIDBackfillStore) err
 //
 // Uses streaming XML parser to avoid loading the entire library into memory.
 // ctx aborts the stream and book index operations; passing context.Background is safe.
-func BackfillITunesTrackPIDs(ctx context.Context, store ExternalIDBackfillStore) (int, error) {
+// progress is called every 10000 tracks streamed (may be nil). Bulk-write
+// failures now abort the stream and return an error instead of being logged
+// and discarded (H7) — a caller relying on the returned count/error to decide
+// whether the backfill "done" flag can be set needs it to be accurate.
+func BackfillITunesTrackPIDs(ctx context.Context, store ExternalIDBackfillStore, progress func(processed, total int, msg string)) (int, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -151,7 +182,12 @@ func BackfillITunesTrackPIDs(ctx context.Context, store ExternalIDBackfillStore)
 			return 0, nil
 		}
 		books, err := store.GetAllBooksCore(10000, offset)
-		if err != nil || len(books) == 0 {
+		if err != nil {
+			// H7: a read failure here used to `break` silently and fall through
+			// to a stream parse over a partial (or empty) PID/title index.
+			return 0, fmt.Errorf("BackfillITunesTrackPIDs: read books at offset %d: %w", offset, err)
+		}
+		if len(books) == 0 {
 			break
 		}
 		for _, book := range books {
@@ -176,6 +212,9 @@ func BackfillITunesTrackPIDs(ctx context.Context, store ExternalIDBackfillStore)
 		trackedCount++
 		if trackedCount%10000 == 0 {
 			slog.Info("BackfillITunesTrackPIDs streaming progress", "tracks_processed", trackedCount)
+			if progress != nil {
+				progress(trackedCount, 0, fmt.Sprintf("Backfilling iTunes track PIDs: %d tracks scanned (%d registered)", trackedCount, registered))
+			}
 		}
 
 		// Group tracks by album as we stream them
@@ -209,7 +248,7 @@ func BackfillITunesTrackPIDs(ctx context.Context, store ExternalIDBackfillStore)
 					// Flush in batches of 5000
 					if len(batch) >= 5000 {
 						if batchErr := store.BulkCreateExternalIDMappings(batch); batchErr != nil {
-							slog.Warn("BackfillITunesTrackPIDs failed to write batch", "err", batchErr)
+							return fmt.Errorf("BackfillITunesTrackPIDs: bulk write mid-stream: %w", batchErr)
 						}
 						batch = batch[:0]
 					}
@@ -254,7 +293,7 @@ func BackfillITunesTrackPIDs(ctx context.Context, store ExternalIDBackfillStore)
 	// Flush remaining batch
 	if len(batch) > 0 {
 		if batchErr := store.BulkCreateExternalIDMappings(batch); batchErr != nil {
-			slog.Warn("BackfillITunesTrackPIDs failed to write final batch", "err", batchErr)
+			return registered, fmt.Errorf("BackfillITunesTrackPIDs: bulk write final batch: %w", batchErr)
 		}
 	}
 

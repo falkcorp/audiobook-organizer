@@ -1,7 +1,7 @@
 // file: internal/remux/transcode_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-07-03
+// last-edited: 2026-07-18
 
 package remux
 
@@ -10,9 +10,12 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
@@ -30,7 +33,9 @@ func TestTranscoderNew(t *testing.T) {
 
 func TestTranscodeMalformedFilesWithoutStore(t *testing.T) {
 	transcoder := &Transcoder{store: nil}
-	transcoder.TranscodeMalformedFiles(context.Background()) // Should not panic
+	if err := transcoder.TranscodeMalformedFiles(context.Background(), nil); err != nil {
+		t.Errorf("TranscodeMalformedFiles() with nil store should return nil, got %v", err)
+	}
 }
 
 func TestTranscodeMalformedFilesAlreadyCompleted(t *testing.T) {
@@ -44,7 +49,71 @@ func TestTranscodeMalformedFilesAlreadyCompleted(t *testing.T) {
 		},
 	}
 	transcoder := NewTranscoder(store)
-	transcoder.TranscodeMalformedFiles(context.Background()) // Should skip due to already completed
+	if err := transcoder.TranscodeMalformedFiles(context.Background(), nil); err != nil {
+		t.Errorf("TranscodeMalformedFiles() already-completed should return nil, got %v", err)
+	}
+}
+
+// TestTranscodeMalformedFilesRootDirNotConfigured proves the C2 fix: a fatal
+// setup failure (no RootDir configured) now returns an error instead of
+// being swallowed as a Warn log, so the op can actually fail.
+func TestTranscodeMalformedFilesRootDirNotConfigured(t *testing.T) {
+	origRoot := config.AppConfig.RootDir
+	config.AppConfig.RootDir = ""
+	defer func() { config.AppConfig.RootDir = origRoot }()
+
+	store := &MockStore{}
+	transcoder := NewTranscoder(store)
+	err := transcoder.TranscodeMalformedFiles(context.Background(), nil)
+	if err == nil {
+		t.Fatal("TranscodeMalformedFiles() expected error when RootDir is not configured, got nil")
+	}
+	if !strings.Contains(err.Error(), "RootDir") {
+		t.Errorf("TranscodeMalformedFiles() error = %q, want it to mention RootDir", err.Error())
+	}
+}
+
+// TestTranscodeMalformedFilesProgressCallback proves the C2 fix: progress is
+// threaded through with an accurate total from the pre-count pass.
+func TestTranscodeMalformedFilesProgressCallback(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg not available, skipping")
+	}
+
+	origRoot := config.AppConfig.RootDir
+	tmpDir := t.TempDir()
+	config.AppConfig.RootDir = tmpDir
+	defer func() { config.AppConfig.RootDir = origRoot }()
+
+	for i := 0; i < 3; i++ {
+		p := filepath.Join(tmpDir, fmt.Sprintf("test%d.m4b", i))
+		if err := os.WriteFile(p, []byte("not a real m4b"), 0o644); err != nil {
+			t.Fatalf("write test file: %v", err)
+		}
+	}
+
+	store := &MockStore{}
+	transcoder := NewTranscoder(store)
+
+	var calls int
+	var lastProcessed, lastTotal int
+	err := transcoder.TranscodeMalformedFiles(context.Background(), func(processed, total int, _ string) {
+		calls++
+		lastProcessed = processed
+		lastTotal = total
+	})
+	if err != nil {
+		t.Fatalf("TranscodeMalformedFiles() unexpected error: %v", err)
+	}
+	if calls == 0 {
+		t.Fatal("TranscodeMalformedFiles() progress callback was never called")
+	}
+	if lastTotal != 3 {
+		t.Errorf("TranscodeMalformedFiles() final total = %d, want 3", lastTotal)
+	}
+	if lastProcessed != 3 {
+		t.Errorf("TranscodeMalformedFiles() final processed = %d, want 3", lastProcessed)
+	}
 }
 
 func TestTranscodeSkipKey(t *testing.T) {
