@@ -1,5 +1,5 @@
 <!-- file: docs/dedup/STATUS.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 09dc17af-0c96-4f15-bc27-e5f48edb9e74 -->
 <!-- last-edited: 2026-07-18 -->
 
@@ -75,12 +75,20 @@ are genuine plausible duplicates + review-band + a small full-scan embedding
 re-emission — the real review backlog that *should* remain. This validates the
 whole title-repair → backfill → relaxed-triage → purge design predicted at 76%.
 
-Prod execution of this path is tracked in
-[`docs/operations/pending-prod-actions.md`](../operations/pending-prod-actions.md)
-(rows 1–2) and is **human-gated** (not yet run on prod). High-risk steps validate
-on **the dedup sandbox** first — a disposable replica of prod; isolation is proven
-(a destructive test at the prod path left prod byte-identical). Mechanics are
-deliberately not documented here: **private runbook in falkcorp/infra-docs**.
+### ✅ EXECUTED ON PRODUCTION 2026-07-18 (human-gated go-ahead)
+
+After the build was deployed to prod (`v0.217.8-rc.80-2-g0b474707`) and the prod
+**dry-run matched the sandbox within 0.1%** (would_retitle 558 vs 556,
+would_backfill 9,416 vs 9,419), the same sequence was applied live under explicit
+human sign-off. **Prod result is identical to the sandbox:** title-repair 555,
+backfill 9,421, triage dismissed **7,891**, and **exact-pending 9,074 → 1,311
+(−85.5%), total-pending 10,319 → 2,554, dismissed 1,351 → 9,242, 0 errors.** Prod
+healthy post-run. The dismissals are reversible; no books or files were deleted.
+
+High-risk steps validated on **the dedup sandbox** first — a disposable replica of
+prod; isolation is proven (a destructive test at the prod path left prod
+byte-identical). Mechanics are deliberately not documented here: **private runbook
+in falkcorp/infra-docs**.
 
 ## What's fixed (recent)
 
@@ -101,24 +109,28 @@ deliberately not documented here: **private runbook in falkcorp/infra-docs**.
 - Importer prevention — title-leak (CONS-17/17b) and chapter-shatter
   (cross-directory grouping) bugs fixed upstream; exact emitters gated.
 
-## What's open
+## What's DONE (2026-07-18) and what's open
 
-- **CONS-10 / INIT-2 T6** — the actual prod drain run (operator-gated; TODO #1).
-- **PH-2 / PH-2b** — triage run + per-population purge wave (TODO #2).
-- **REVIEW-band producer** for the review queue; **AI-enrichment tier** and
-  **cover recovery** fast-follows (TODO #3, #11, #12).
+- ✅ **CONS-10 / INIT-2 T6 / PH-2 / PH-2b — the prod drain ran** (see the
+  "EXECUTED ON PRODUCTION" section above): exact-pending 9,074 → 1,311, 7,891
+  purgeable dismissed, 0 errors.
+- ✅ **2026-07-17 review findings F2–F7 fixed** (F2 ApplyVersionGroup integrity
+  #1976, F3/F4/F5 index/Rescore-cap #1977, F6 legacy MergeBooks rerouted off
+  hard-delete #2007, F7 quarantine RunItems #2004) — full map in
+  [`docs/audits/2026-07-17-multi-discipline-review.md`](../audits/2026-07-17-multi-discipline-review.md).
+- ✅ **Differentiated residual-disposition op built + shipped + run on prod**
+  (`dedup-exact-triage {"apply":true}` dismisses title-leak/stub, PR #2008); the
+  Rescore/purge whole-backlog caps were raised to 1M (#1977).
+
+Still open (fast-follows, not blockers):
+
+- The remaining **~1,311 exact-pending** are the genuine review backlog — the
+  review UI drains these; a **REVIEW-band producer**, **AI-enrichment tier**, and
+  **cover recovery** are the fast-follows (TODO #3, #11, #12).
 - **`review_apply_enabled` flip** — human decision
   ([DECISIONS-PENDING](../plans/DECISIONS-PENDING.md)).
-- **2026-07-17 review findings F2–F7 are now FIXED** (F2 ApplyVersionGroup
-  integrity #1976, F3/F4/F5 index/Rescore-cap #1977, F6 legacy MergeBooks
-  rerouted off hard-delete #2007, F7 quarantine RunItems #2004) — full map in
-  [`docs/audits/2026-07-17-multi-discipline-review.md`](../audits/2026-07-17-multi-discipline-review.md).
-- The differentiated residual-disposition op is now **built** (`dedup-exact-triage`
-  `{"apply":true}` dismisses title-leak/stub, PR #2008) and **validated on the
-  sandbox** (see the validation table above). The Rescore/purge whole-backlog caps
-  were raised to 1M (#1977).
-- **Only prod execution remains** (human-gated) — the sandbox run proved the
-  full chain; the equivalent prod run is TODO #2 / pending-prod-actions rows 1–2.
+- A **fragment-floor rule** for the fragment-vs-full population (not yet a triage
+  purgeable class).
 
 ## Architecture — the feedback loop
 
