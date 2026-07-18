@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedup_triage.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3a4b5c6d-7e8f-9012-abcd-ef1234567890
-// last-edited: 2026-07-17
+// last-edited: 2026-07-18
 
 package maintenance
 
@@ -90,6 +90,11 @@ type TriageReport struct {
 	// lookups classify with a nil book, so a nonzero value means the
 	// population counts may be skewed toward stub/unknown.
 	BookLookupErrors int `json:"book_lookup_errors,omitempty"`
+	// DismissedCount is the number of purgeable candidates (stub/title_leak)
+	// actually dismissed via UpdateCandidateStatus. Only populated when the op
+	// ran with apply=true; stays 0 in dry-run mode, where PurgeableCount above
+	// already communicates "would dismiss this many".
+	DismissedCount int `json:"dismissed_count,omitempty"`
 }
 
 // purgeableClasses are the populations safe to delete without human review.
@@ -278,14 +283,25 @@ func signalList(c database.DedupCandidate) string {
 	return strings.Join(kinds, ",")
 }
 
+// dedupExactTriageParams are the JSON parameters accepted by
+// maintenance.dedup-exact-triage.
+type dedupExactTriageParams struct {
+	// Apply, if true, dismisses every purgeable candidate (stub/title_leak)
+	// via UpdateCandidateStatus(id, "dismissed"). Default false — the
+	// original report-only contract is preserved: no candidates are
+	// modified, and the report's PurgeableCount communicates what WOULD be
+	// dismissed.
+	Apply bool `json:"apply"`
+}
+
 // --- op definition ---
 
 func (p *Plugin) dedupExactTriageDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.dedup-exact-triage",
 		Plugin:          "maintenance",
-		DisplayName:     "Dedup exact-pending triage (dry-run)",
-		Description:     "Classifies all pending exact-layer dedup candidates into 4 populations (genuine/stub/fragment/title_leak) and reports counts. Dry-run only — no candidates are deleted.",
+		DisplayName:     "Dedup exact-pending triage (dry-run / apply)",
+		Description:     "Classifies all pending exact-layer dedup candidates into 5 populations (genuine/stub/fragment/title_leak/unknown) and reports counts. Dry-run by default — no candidates are deleted. With apply=true, dismisses every purgeable candidate (stub/title_leak) via a status update; genuine/fragment/unknown candidates are never touched.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.dedup-exact-triage",
@@ -293,21 +309,32 @@ func (p *Plugin) dedupExactTriageDef() sdk.OperationDef {
 		Isolate:         false,
 		Timeout:         30 * time.Minute,
 		Schedule:        nil,
-		Capabilities:    []sdk.Capability{sdk.CapLibraryRead},
+		Capabilities:    []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
 		Run:             p.runDedupExactTriage,
 	}
 }
 
-func (p *Plugin) runDedupExactTriage(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
+func (p *Plugin) runDedupExactTriage(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
 	if !p.deps.HasDedupEngine() {
 		_ = reporter.Log(slog.LevelInfo, "Dedup engine not initialized, skipping exact triage")
 		return nil
 	}
 
-	_ = reporter.Log(slog.LevelInfo, "Starting exact-pending dedup triage (dry-run — no deletes)")
+	var params dedupExactTriageParams
+	if len(rawParams) > 0 {
+		if err := json.Unmarshal(rawParams, &params); err != nil {
+			return fmt.Errorf("parse params: %w", err)
+		}
+	}
+
+	if params.Apply {
+		_ = reporter.Log(slog.LevelInfo, "Starting exact-pending dedup triage (apply=true — purgeable candidates will be dismissed)")
+	} else {
+		_ = reporter.Log(slog.LevelInfo, "Starting exact-pending dedup triage (dry-run — no deletes)")
+	}
 	_ = reporter.UpdateProgress(0, 0, "Scanning candidates…")
 
-	report, err := p.deps.DedupTriageExactPending(ctx)
+	report, err := p.deps.DedupTriageExactPending(ctx, params.Apply)
 	if err != nil {
 		return fmt.Errorf("triage scan: %w", err)
 	}
@@ -329,8 +356,8 @@ func (p *Plugin) runDedupExactTriage(ctx context.Context, _ json.RawMessage, rep
 	}
 
 	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
-		"Summary: total=%d  purgeable=%d  keep=%d  review=%d",
-		report.TotalScanned, report.PurgeableCount, report.KeepCount, report.ReviewCount,
+		"Summary: total=%d  purgeable=%d  keep=%d  review=%d  dismissed=%d",
+		report.TotalScanned, report.PurgeableCount, report.KeepCount, report.ReviewCount, report.DismissedCount,
 	))
 
 	// Emit the full report as a structured log entry so the UI can surface it.

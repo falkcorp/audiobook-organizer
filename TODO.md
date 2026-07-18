@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.4.1 -->
+<!-- version: 10.4.2 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-18 -->
 
@@ -34,7 +34,11 @@ Companion docs:
    falkcorp/infra-docs). Real backlog ~15,269 pending.
 2. **PH-2 — run `maintenance.dedup-exact-triage` on prod + review populations; PH-2b
    per-population purge wave** (H1:916) — never blanket-purge; four residual
-   populations (see `docs/dedup/STATUS.md`).
+   populations (see `docs/dedup/STATUS.md`). **Apply path now exists** (T03-BUILD):
+   `maintenance.dedup-exact-triage {"apply":true}` dismisses purgeable classes
+   (stub/title_leak) via `UpdateCandidateStatus(id, "dismissed")` — dry-run
+   (`apply=false`, the default) is unchanged report-only. Unblocks brief T03's
+   sandbox purge wave.
 3. **REVIEW-band candidate producer for the review queue** (H1:35) — B2 fast-follow;
    no commit yet.
 4. **Flip `review_apply_enabled` ON in prod** — apply path merged (#1953) but default
@@ -198,6 +202,9 @@ external-ID reassignment + ITL removal, T10).
 - [ ] **T01** — land PR #1986 (organizer data-loss fixes; CI was running)
 - [ ] **T02** — sandbox: verify breakdown-backfill apply, run dedup-exact-triage, record populations (backfill apply op `01KXSJHBDDP17AMR8WYKSTQH30` was in flight at stop)
 - [ ] **T03** — sandbox: triage purge wave → purge-stale → full-scan → final backlog measurement vs 9,074 baseline
+      (T03-BUILD landed: `maintenance.dedup-exact-triage {"apply":true}` now dismisses
+      purgeable stub/title_leak candidates — see Dedup item 2 above. Sandbox run itself
+      still not executed.)
 - [ ] **T04** — prod deploy (nothing deployed 2026-07-17) + prod dry-runs + ⚠️ HUMAN-GATED apply
 - [ ] **T05** — logging H/M batch: H1 H2 H3 H4 H8 H9 M1 M2 M3 M7 (file:line anchors in the brief)
 - [x] **T06** — R-1: `op.terminal` SSE backend publisher added (see Fixed list, #2002)

@@ -107,10 +107,14 @@ type ServerDeps interface {
 	) (compacted int, summarized int, pruned int, err error)
 
 	// DedupTriageExactPending scans all pending book dedup candidates,
-	// classifies each into one of four populations (genuine / stub / fragment /
-	// title_leak), and returns a TriageReport. No candidates are deleted.
-	// Returns an error if the embedding store is not initialised.
-	DedupTriageExactPending(ctx context.Context) (*TriageReport, error)
+	// classifies each into one of five populations (genuine / stub / fragment /
+	// title_leak / unknown), and returns a TriageReport. When apply is false
+	// (dry-run, the default), no candidates are modified. When apply is true,
+	// every candidate whose class is IsPurgeable (stub, title_leak) is
+	// dismissed via UpdateCandidateStatus(id, "dismissed") — genuine, fragment,
+	// and unknown candidates are never touched. Returns an error if the
+	// embedding store is not initialised.
+	DedupTriageExactPending(ctx context.Context, apply bool) (*TriageReport, error)
 
 	// ----- feature flags -----
 

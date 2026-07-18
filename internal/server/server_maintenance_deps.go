@@ -256,8 +256,17 @@ func (s *Server) EnqueueOp(ctx context.Context, defID string, params any) (strin
 // DedupTriageExactPending implements maintenance.ServerDeps. It pages all
 // pending book dedup candidates, classifies each via ClassifyCandidate, and
 // returns a TriageReport with per-population counts and up to 5 examples each.
-// No candidates are deleted regardless of their class.
-func (s *Server) DedupTriageExactPending(ctx context.Context) (*maintenanceplugin.TriageReport, error) {
+// When apply is false (dry-run), no candidates are modified — PurgeableCount
+// communicates what WOULD be dismissed. When apply is true, every candidate
+// whose class is maintenanceplugin.IsPurgeable (stub/title_leak) is dismissed
+// via s.embeddingStore.UpdateCandidateStatus(id, "dismissed") — never
+// DeleteCandidate: dismiss keeps the historical record, maintains the
+// "dedup:s:" status secondary index, is reversible, and (per PR #1973's
+// terminal-status guard) prevents a dismissed candidate from resurrecting on
+// a later rescan. genuine/fragment/unknown candidates are never touched.
+// Individual dismiss failures are counted, not fatal — the first error is
+// logged and the pass continues so one bad row can't abort the whole apply.
+func (s *Server) DedupTriageExactPending(ctx context.Context, apply bool) (*maintenanceplugin.TriageReport, error) {
 	if s.embeddingStore == nil {
 		return nil, fmt.Errorf("embedding store not initialized")
 	}
@@ -305,6 +314,13 @@ func (s *Server) DedupTriageExactPending(ctx context.Context) (*maintenanceplugi
 		maintenanceplugin.TriageClassUnknown:   {},
 	}
 
+	// dismissedCount / dismissErrs / firstDismissErr only accumulate when
+	// apply=true; dismiss failures are logged (first one) but do not abort
+	// the pass — one bad row must not stop the rest of the purge.
+	var dismissedCount int
+	var dismissErrs int
+	var firstDismissErr error
+
 	for i := range candidates {
 		select {
 		case <-ctx.Done():
@@ -322,6 +338,20 @@ func (s *Server) DedupTriageExactPending(ctx context.Context) (*maintenanceplugi
 		cls, reason := maintenanceplugin.ClassifyCandidate(c, a, b)
 		ps := pops[cls]
 		ps.count++
+
+		if apply && maintenanceplugin.IsPurgeable(cls) {
+			if derr := s.embeddingStore.UpdateCandidateStatus(c.ID, "dismissed"); derr != nil {
+				dismissErrs++
+				if firstDismissErr == nil {
+					firstDismissErr = fmt.Errorf("dismiss candidate %d: %w", c.ID, derr)
+					slog.Error("dedup triage: dismiss failed, continuing pass",
+						"candidate_id", c.ID, "class", string(cls), "error", derr)
+				}
+			} else {
+				dismissedCount++
+			}
+		}
+
 		if len(ps.examples) < 5 {
 			titleA, titleB := "", ""
 			if a != nil {
@@ -347,6 +377,7 @@ func (s *Server) DedupTriageExactPending(ctx context.Context) (*maintenanceplugi
 		TotalScanned:     len(candidates),
 		Populations:      make(map[maintenanceplugin.TriageClass]maintenanceplugin.TriagePopulation, len(pops)),
 		BookLookupErrors: lookupErrs,
+		DismissedCount:   dismissedCount,
 	}
 	for cls, ps := range pops {
 		report.Populations[cls] = maintenanceplugin.TriagePopulation{
@@ -367,12 +398,19 @@ func (s *Server) DedupTriageExactPending(ctx context.Context) (*maintenanceplugi
 		slog.Warn("dedup triage: book lookups failed — population counts may be skewed",
 			"lookup_errors", lookupErrs, "first_error", firstLookupErr)
 	}
+	if dismissErrs > 0 {
+		slog.Warn("dedup triage: some dismiss writes failed — DismissedCount is a lower bound",
+			"dismiss_errors", dismissErrs, "first_error", firstDismissErr)
+	}
 	slog.Info("dedup triage: complete",
 		"scanned", report.TotalScanned,
 		"purgeable", report.PurgeableCount,
 		"keep", report.KeepCount,
 		"review", report.ReviewCount,
-		"lookup_errors", lookupErrs)
+		"lookup_errors", lookupErrs,
+		"apply", apply,
+		"dismissed", dismissedCount,
+		"dismiss_errors", dismissErrs)
 	return report, nil
 }
 
