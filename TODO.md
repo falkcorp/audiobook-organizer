@@ -1,5 +1,6 @@
 <!-- file: TODO.md -->
 <!-- version: 10.4.1 -->
+<!-- version: 10.4.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-18 -->
 
@@ -186,6 +187,7 @@ breakdown-backfill op + title-leak relax (#1982) · devops 1(code)/2(template)/
 3/4/5/9 (#1983) · DL-5/C-6/C-7/M5/M6 (#1984) · R-4/H5/R-5/H6/DL-4/M8 (#1985) ·
 DL-1/DL-2/DL-3/M4 (#1986 — OPEN in CI at time of writing, see brief T01) ·
 R-1 (T06) + R-3/R-7/P-2 (T08) (#2002).
+F7/R-9/R-8 (#PENDING — T11, see CHANGELOG July 18, 2026).
 
 ### Remaining — execution state (briefs)
 
@@ -201,4 +203,5 @@ R-1 (T06) + R-3/R-7/P-2 (T08) (#2002).
 - [ ] **T10** — F6: legacy dedup.MergeBooks hard-deletes losers without external-ID reassignment/ITL removal — VERIFY then reroute
 - [ ] **T11** — F7 (quarantine serial loops → RunItems) · R-9 (path_repair serial loop) · R-8 (all-unreadable-durations group misclassified "short")
 - [x] **T12** — devops: 8 remaining scripts with internal IPs · op-stall alert (commented, metric doesn't exist yet — see Infra #36) · coverage floor on PR gate · systemd unit dedupe · credential entropy — #2001
+- [ ] **T12** — devops: 8 remaining scripts with internal IPs · op-stall alert · coverage floor on PR gate · systemd unit dedupe · credential entropy
 - [ ] **T13** — docs truth-up with measured sandbox/prod numbers (dedup/STATUS.md, pending-prod-actions.md, exec summary)

@@ -1,7 +1,7 @@
 // file: internal/scanner/chapter_consolidation.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: f9a0b1c2-d3e4-5f60-a7b8-c9d0e1f2a3b4
-// last-edited: 2026-07-01
+// last-edited: 2026-07-18
 
 package scanner
 
@@ -85,6 +85,7 @@ func consolidateChapterGroups(ctx context.Context, files []string) []Book {
 	}
 
 	var books []Book
+	unknownDurationGroups := 0
 	for _, key := range groupOrder {
 		group := groups[key]
 
@@ -99,11 +100,36 @@ func consolidateChapterGroups(ctx context.Context, files []string) []Book {
 			continue
 		}
 
-		// Read duration for every file in the group (best-effort).
+		// Read duration for every file in the group (best-effort). readable
+		// tracks how many files mediainfo actually returned a duration for —
+		// distinct from "duration is short", it means "duration is KNOWN".
+		readable := 0
 		for i := range group {
 			if mi, err := mediainfo.Extract(group[i].path); err == nil && mi != nil && mi.Duration > 0 {
 				group[i].duration = mi.Duration
+				readable++
 			}
+		}
+
+		// R-8: when mediainfo failed for every file in the group, duration
+		// is UNKNOWN for the whole group, not "short". Without this guard,
+		// totalSec/avgSec below are computed from all-zero durations, so
+		// avgSec == 0 < thresholdSec always looks like "short" and the group
+		// gets silently consolidated even though we have no idea how long
+		// any of these files actually are. Skip consolidation for this group
+		// (each file stands alone, same as the mixed/long-group path) and
+		// count + warn so an operator can see unreadable groups accumulating.
+		if readable == 0 {
+			unknownDurationGroups++
+			logging.Warn(ctx, "scanner chapter consolidation skipped: all files in group unreadable, duration unknown",
+				"count", len(group), "key", key)
+			for _, c := range group {
+				books = append(books, Book{
+					FilePath: c.path,
+					Format:   strings.ToLower(filepath.Ext(c.path)),
+				})
+			}
+			continue
 		}
 
 		// Check for mixed durations (at least one file above the threshold).
@@ -140,6 +166,11 @@ func consolidateChapterGroups(ctx context.Context, files []string) []Book {
 			Duration:     totalSec,
 			SegmentFiles: paths,
 		})
+	}
+
+	if unknownDurationGroups > 0 {
+		logging.Warn(ctx, "scanner chapter consolidation: groups skipped due to unknown duration",
+			"unknown_duration_groups", unknownDurationGroups)
 	}
 
 	return books

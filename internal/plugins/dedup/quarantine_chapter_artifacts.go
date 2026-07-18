@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/quarantine_chapter_artifacts.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 1d7a4f92-3c60-4e85-9b21-6a5e8c0d3f47
-// last-edited: 2026-07-07
+// last-edited: 2026-07-18
 
 // Package dedup — op dedup.quarantine-chapter-artifacts.
 //
@@ -28,9 +28,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"runtime"
 	"sort"
+	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -110,23 +114,23 @@ func (p *Plugin) runQuarantineChapterArtifacts(ctx context.Context, rawParams js
 	}
 
 	// Pass 2: identify chapter artifacts among the colliding-title books.
+	//
+	// Cheap in-memory pre-filter stays sequential (no DB I/O); only books that
+	// clear the title-collision bar go on to the per-book GetBookFiles read,
+	// which IS a per-item DB call and therefore runs through registry.RunItems
+	// with a bounded worker pool (mandatory concurrency rule — see CLAUDE.md).
 	_ = reporter.UpdateProgress(2, 3, "Identifying chapter artifacts…")
 	type artifact struct {
 		ID    string
 		Title string
 	}
-	var artifacts []artifact
-	sampleByTitle := make(map[string]int)
-	examined := 0
+	type candidate struct {
+		ID    string
+		Title string
+		Norm  string
+	}
+	var candidates []candidate
 	for i := range books {
-		if reporter.IsCanceled() {
-			return context.Canceled
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
 		b := &books[i]
 		if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
 			continue
@@ -135,10 +139,26 @@ func (p *Plugin) runQuarantineChapterArtifacts(ctx context.Context, rawParams js
 		if norm == "" || titleCount[norm] < params.MinTitleCollisions {
 			continue
 		}
+		candidates = append(candidates, candidate{ID: b.ID, Title: b.Title, Norm: norm})
+	}
+
+	// Shared mutable state written from worker goroutines below — all guarded
+	// by mu. titleCount is read-only in this phase (safe for concurrent reads,
+	// no writers), so it needs no lock.
+	var (
+		mu            sync.Mutex
+		artifacts     []artifact
+		examined      int
+		sampleByTitle = make(map[string]int)
+	)
+	if err := registry.RunItems(ctx, reporter, candidates, func(ctx context.Context, c candidate) error {
+		mu.Lock()
 		examined++
-		files, ferr := p.store.GetBookFiles(b.ID)
+		mu.Unlock()
+
+		files, ferr := p.store.GetBookFiles(c.ID)
 		if ferr != nil || len(files) != 1 {
-			continue // multi-file audiobook (or unreadable) — not a single-segment artifact
+			return nil // multi-file audiobook (or unreadable) — not a single-segment artifact
 		}
 		dur := files[0].AcoustIDFingerprintDurationSec
 		if dur <= 0 {
@@ -146,19 +166,29 @@ func (p *Plugin) runQuarantineChapterArtifacts(ctx context.Context, rawParams js
 		}
 		switch {
 		case dur >= float64(params.MaxDurationSec):
-			continue // long — a real audiobook, never an artifact
+			return nil // long — a real audiobook, never an artifact
 		case dur > 0:
 			// Scanned + short: the ≥ MinTitleCollisions gate above is enough.
 		default:
 			// Unscanned (duration unknown — most idents/credits are unscanned mp3
 			// segments). Require the higher collision bar so we don't quarantine a
 			// few unscanned copies of a genuine book.
-			if titleCount[norm] < params.MinTitleCollisionsUnscanned {
-				continue
+			if titleCount[c.Norm] < params.MinTitleCollisionsUnscanned {
+				return nil
 			}
 		}
-		artifacts = append(artifacts, artifact{ID: b.ID, Title: b.Title})
-		sampleByTitle[b.Title]++
+		mu.Lock()
+		artifacts = append(artifacts, artifact{ID: c.ID, Title: c.Title})
+		sampleByTitle[c.Title]++
+		mu.Unlock()
+		return nil
+	}, registry.RunItemsOptions{
+		Concurrency: runtime.NumCPU(),
+		Label: func(i, total int) string {
+			return fmt.Sprintf("Identifying chapter artifacts %d/%d…", i+1, total)
+		},
+	}); err != nil {
+		return err
 	}
 
 	// Build a short, human-readable sample of the offending titles.
@@ -176,27 +206,38 @@ func (p *Plugin) runQuarantineChapterArtifacts(ctx context.Context, rawParams js
 		sampleStr += fmt.Sprintf("%q×%d ", samples[i].Title, samples[i].N)
 	}
 
-	quarantined := 0
+	var quarantinedCount int64
 	if params.Apply {
 		now := time.Now()
-		for _, a := range artifacts {
-			if reporter.IsCanceled() {
-				return context.Canceled
-			}
+		// Each artifact is a distinct book ID (built once per book above), so
+		// workers never touch the same row — safe to run concurrently without
+		// any additional partitioning. The soft-delete itself keeps the
+		// correct fetch-full-mutate pattern (GetBookByID then UpdateBook with
+		// the full record), unchanged from the sequential version.
+		if err := registry.RunItems(ctx, reporter, artifacts, func(ctx context.Context, a artifact) error {
 			full, gerr := p.store.GetBookByID(a.ID)
 			if gerr != nil || full == nil {
-				continue
+				return nil
 			}
 			marked := true
 			full.MarkedForDeletion = &marked
 			full.MarkedForDeletionAt = &now
 			if _, uerr := p.store.UpdateBook(full.ID, full); uerr != nil {
 				reporter.Logger().Error("quarantine soft-delete error", "book_id", a.ID, "error", uerr)
-				continue
+				return nil // one book's write error doesn't abort the whole op
 			}
-			quarantined++
+			atomic.AddInt64(&quarantinedCount, 1)
+			return nil
+		}, registry.RunItemsOptions{
+			Concurrency: runtime.NumCPU(),
+			Label: func(i, total int) string {
+				return fmt.Sprintf("Quarantining %d/%d chapter artifacts…", i+1, total)
+			},
+		}); err != nil {
+			return err
 		}
 	}
+	quarantined := int(quarantinedCount)
 
 	summary := fmt.Sprintf("examined=%d artifacts=%d quarantined=%d (apply=%v) top: %s",
 		examined, len(artifacts), quarantined, params.Apply, sampleStr)
