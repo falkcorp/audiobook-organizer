@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.172.0 -->
+<!-- version: 3.173.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-17 -->
 
@@ -8,6 +8,33 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 17, 2026 - error-correction fix wave (15 PRs) + sandbox verification
+
+- **Fix wave** (findings from `docs/audits/2026-07-17-multi-discipline-review.md`):
+  #1976 regroup version-group integrity (soft-deleted-corpse filter, stale-primary
+  demotion, cross-group refusal); #1977 dedup status/entity index maintenance in
+  bulk ops + 1M whole-backlog cap + suppression summary; #1978 NEW op
+  `maintenance.title-repair`; #1980 registry reliability (birth-hang watchdog,
+  zombie-op terminal status, queued-op cancel, strike/timeout hygiene); #1981
+  logging criticals (iTunes stub crons removed, AI retry logging,
+  triage/split-scan/cleanup progress); #1982 NEW op `dedup.breakdown-backfill` +
+  relaxed title-leak triage; #1983 devops hygiene (IP scrub in shipped
+  code/scripts, worktree-proof pre-commit hook + secret/IP content scan, deploy
+  template, embed_frontend pre-merge smoke); #1984 iTunes importer integrity
+  (ITL deferred fixes marked applied only when written, blocked-hash delete
+  verified, multi-file rollback fails loud); #1985 scanner reliability
+  (refcounted caches, store-error-aware dup detection, walk-error visibility,
+  tail-hash Seek check); #1986 organizer data-loss (rename rollback +
+  stranded-temp resume, overwrite refusal, O_EXCL reflink).
+- **Sandbox verification** (isolation gate passed; baseline 9,074 exact-pending):
+  title-repair applied — 555 retitled, 0 errors; breakdown-backfill dry-run —
+  9,419 of 10,062 backfillable, 0 errors; purge-stale post-retitle removed only
+  15 (shattered single-file chapter-books live in separate dirs — triage+purge
+  is the designed lever, briefs T02/T03). Prod untouched.
+- **Follow-on**: status record `docs/status/2026-07-17-error-correction-session.md`;
+  13 weak-model-proof task briefs `docs/agent-tasks/error-correction-2026-07/TASKS.md`;
+  TODO.md findings section rewritten to post-wave state (fixed list + T01–T13).
 
 #### July 17, 2026 - docs: repository-wide docs consolidation
 

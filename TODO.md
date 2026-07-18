@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.1.0 -->
+<!-- version: 10.2.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-17 -->
 
@@ -153,80 +153,37 @@ Companion docs:
 49. **iTunes heal Layer-6 re-trigger** (H1:897) — re-run after path-heal residuals
     shrink (see pending-prod-actions).
 
-## 2026-07-17 multi-discipline review — open findings
+## 2026-07-17 review findings — remaining (post-fix-wave)
 
-Crash-recovery record for the four 2026-07-17 discipline reviews (full detail:
-[`docs/audits/2026-07-17-multi-discipline-review.md`](docs/audits/2026-07-17-multi-discipline-review.md);
-anchors verified at main @ a3cef740). Dedup **F1 is already FIXED** by PR #1973
-(dismissed candidates no longer resurrect to pending).
+The 2026-07-17 multi-discipline review produced 66 findings
+([`docs/audits/2026-07-17-multi-discipline-review.md`](docs/audits/2026-07-17-multi-discipline-review.md)).
+The same-day fix wave closed most of them across PRs #1972–#1986 — see
+[`docs/status/2026-07-17-error-correction-session.md`](docs/status/2026-07-17-error-correction-session.md)
+for the PR↔finding map and the sandbox verification results. **Remaining work is
+specified as weak-model-proof task briefs T01–T13 in
+[`docs/agent-tasks/error-correction-2026-07/TASKS.md`](docs/agent-tasks/error-correction-2026-07/TASKS.md)**
+— work from the briefs, tick lines here as they land.
 
-### Fixes in flight (worktrees, unpushed — verify/land before re-fixing)
+### Fixed (2026-07-17 wave — do not re-fix)
 
-- `fix/regroup-apply-integrity` — dedup **F2**: ApplyVersionGroup/ApplyMultidisc double-primary, stranded-group, and soft-deleted-corpse bugs (`internal/plugins/maintenance/regroup_apply.go:102-170`). Must land before `review_apply_enabled` flips ON.
-- `fix/dedup-index-maintenance` — dedup **F3** (MarkCandidatesAsMergedForEntity status-index bypass, `embedding_store.go:1194-1256`), **F4** (bulk-delete index-row leaks, `:1293-1303`/`:1367-1377`), **F5** (Rescore 100K truncation, `engine.go:2816-2819`) + logging **C7** (Debug-only destructive suppression deletes, `engine.go:591-600`).
-- `fix/registry-reliability` — pipeline **R-2** (watchdog blind to never-progressed ops), **C-3** (abandoned op = zombie running row + ConcurrencyKey dedupe swallow), **C-2** (force-drop leaks run handle), **C-4** (uncheckpointed-strike constant + strike-row spam), **C-5** (timeout recorded as canceled; dep scheduler not notified), **C-1** (Cancel no-op for queued ops) — all `internal/operations/registry/`.
-- `fix/logging-observability-criticals` — logging **C1** (5 silent iTunes stub ops, 2 on cron), **C6** (silent AI retries, `internal/ai/retry.go:66-90`), **C4** (DedupTriageExactPending zero logging + swallowed errors, `server_maintenance_deps.go:260-351`), **C5** (split-book-scan silent detection pass), **C3** (movement-atom-cleanup no heartbeat + swallowed done-flag write).
-- `feat/title-repair-op` — title-leak remediation step 1 (repair leaked/junk titles so exact-title cliques dissolve; prerequisite for the triage → rescan → drain sequence in `docs/dedup/STATUS.md`).
+F1 (#1973) · F2 (#1976) · F3/F4/F5/C7 (#1977) · title-repair op (#1978) ·
+R-2/C-3/C-2/C-4/C-5/C-1 (#1980) · C1/C6/C4/C5/C3 (#1981) ·
+breakdown-backfill op + title-leak relax (#1982) · devops 1(code)/2(template)/
+3/4/5/9 (#1983) · DL-5/C-6/C-7/M5/M6 (#1984) · R-4/H5/R-5/H6/DL-4/M8 (#1985) ·
+DL-1/DL-2/DL-3/M4 (#1986 — OPEN in CI at time of writing, see brief T01).
 
-### Remaining backlog — pipeline / operations
+### Remaining — execution state (briefs)
 
-- [DATA-LOSS] `internal/organizer/pipeline.go:194-203` — DL-1: RenameFiles phase-2 failure strands files at `.tmp-rename`, no rollback; `result.Succeeded` discarded so moved files never get DB path updates.
-- [DATA-LOSS] `internal/itunes/service/importer.go:502-521` — DL-5: deferred ITL location fixes marked applied for ALL pending rows when only a filtered subset was written; RenameITLFile error discarded; dropped fixes never retried.
-- [CORRECTNESS] `internal/itunes/service/importer.go:417-425` — C-6: blocked-hash soft-delete UpdateBook return ignored; counters/logs claim a delete that may not have happened.
-- [RELIABILITY] `internal/operations/registry` (`bus.go:15`; terminal writes `worker.go:230,336`) — R-1: `op.terminal` SSE is in the FE/BE contract but has zero backend publishers; completed ops linger as phantom "running" in the UI bell.
-- [RELIABILITY] `internal/scanner/scanner.go:161-231` vs `service.go:161-168` — R-4: package-singleton scan/works caches; concurrent library.scan + library.import → first finisher nils caches under the other (incremental skip off, O(N²) works lookup).
-- [RELIABILITY] `internal/scanner/scanner.go:390-396,370-373,433-436` — R-5: WalkDir/ReadDir/stat failures silently drop whole subtrees, zero logging.
-- [RELIABILITY] `internal/reconcile/reconcile.go:1270-1327` — R-6: AssignOrphanVGs serial unpooled whole-library loop + unconditional VersionGroupID overwrite clobbers concurrent VG assignments.
-- [RELIABILITY] `internal/scanner/service.go:73-83` — R-7: scan "checkpoint support" saves ScanParams no code ever loads; ClearState unconditional; crash mid-scan resumes nothing.
-- [DATA-LOSS, plausible] `internal/organizer/service.go:454`, `rename.go:392,450,480` — DL-2: wired move paths have no target-exists check; os.Rename silently replaces on path collision (safe `MoveBookFile` at `move.go:42-45` has zero production callers).
-- [DATA-LOSS, plausible] `internal/organizer/reflink_unix.go:26` — DL-3: os.Create truncates an existing destination; stat→create TOCTOU under the 8-worker organize pool.
-- [DATA-LOSS, plausible] `internal/scanner/scanner.go:2102` — DL-4: `file.Seek(-chunkSize, io.SeekEnd)` return discarded → wrong-window hash poisons dedup (sibling `process_file.go:123-125` checks).
-- [CORRECTNESS, plausible] `internal/itunes/service/importer.go:1199-1229` — C-7: multi-file rollback reverts only Book.FilePath; committed per-file UpdateBookFile writes not reverted → DB/disk inconsistent.
-- [RELIABILITY, plausible] `internal/scanner/chapter_consolidation.go:103-106` — R-8: mediainfo failure leaves duration 0; all-unreadable group consolidated as "short" when duration is unknown.
-- [PERF] `internal/itunes/service/path_repair.go:218-317` — R-9: main track loop fully sequential per-track DB read/write (concurrency-mandate shape; does report every 500).
-- [PERF] `internal/operations/registry/run_items.go:114` — P-2: parallel RunItems reports item index not completion count; progress can jump backwards (cosmetic).
-- [RELIABILITY] `reporter_db.go:217-245` + `worker.go:162` — R-3: after abandonment the reporter flushLoop exits while the wedged Run keeps logging; logBuf grows unbounded, lines lost (land with `fix/registry-reliability` or after).
-
-### Remaining backlog — dedup
-
-- [MED, verify] `internal/dedup/book_dedup.go:353-462` — F6: legacy dedup.MergeBooks (POST /audiobooks/merge) copies six iTunes fields first-win then HARD-deletes losers — no external-ID reassignment, no ITL removal, no recovery window; verify whether DeleteBook tombstones mappings, then fix or retire the path in favor of merge.Service.MergeBooks.
-- [LOW] `internal/plugins/dedup/quarantine_chapter_artifacts.go:121-162,180-199` — F7: serial whole-subset loops in a mandated `registry.RunItems` shape (no wipe risk; hygiene).
-- [OP] ScoreBreakdown-backfill op — populate breakdowns on labeled/pending pairs (remediation step 2 in `docs/dedup/STATUS.md`); required before the next calibration round.
-- [OP] Relax the title-leak triage precondition once `feat/title-repair-op` lands, so triage classifies against repaired titles.
-- [OP] Post-title-repair rescan/drain sequence — full-scan/rescore, then PH-2b per-population purge (pending-prod-actions rows 1–2; human-gated).
-
-### Remaining backlog — logging (H/M batch)
-
-- [HIGH] `internal/dedup/engine.go:574,805-811` — H1: GetBookByID/GetBookByFileHash err → bare continue; failing store scores nothing silently.
-- [HIGH] `internal/dedup/author.go:745-752,759` — H2: store errs silently degrade the all-authors series map (author-dedup).
-- [HIGH] `internal/reconcile/itunes_heal.go:366-371,379-381,476` — H3: fpcalc/AcoustID/Whisper failures indistinguishable from "no match"; inflates `ambiguous`.
-- [HIGH] `internal/itunes/service/writeback_batcher.go:409` (+ `position_sync.go:162`, `importer.go:398`) — H4: GetBookByID err treated as legit skip; flush-time store errors silently drop iTunes writes.
-- [HIGH] `internal/scanner/scanner.go:1844-1847,614,867,733` — H5: dup-detection hash-lookup errs → possible silent re-import; swallowed UpdateScanCache/IncrScanFailCount.
-- [HIGH] `internal/scanner/service.go:242` — H6: count-phase WalkDir errors ignored; undercounts the scan denominator.
-- [HIGH] `internal/plugins/maintenance/backfill.go:40-45` → `internal/server/external_id_backfill.go:47-65` — H7: error demoted to Warn, op logs "complete" unconditionally; no progress on whole-library pagination (`internal/itunes/backfill.go:37`).
-- [HIGH] `internal/plugins/maintenance/author.go:167-172` — H8: GetBookAuthors err → continue in the author-merge path (data-affecting miscounts).
-- [HIGH] `internal/plugins/dedup/llm_review.go:35-49` + `internal/dedup/engine.go:3114-3124` — H9: no op-log progress while building up to 10K pair inputs on a 120-min op; wire NewProgress/StepN.
-- [MED] `internal/plugins/maintenance/transcribe_stats_accum.go:112` — M1: swallowed PutTranscribeStats; live-monitor key can go stale silently.
-- [MED] `internal/dedup/collectors_metadata.go:401,240-253` — M2: GetBookByID err no counter; 4 swallowed EnsureSingletonBookTag (evidence tags dropped).
-- [MED] `internal/dedup/engine.go:1247-1267` — M3: four more swallowed EnsureSingletonBookTag calls.
-- [MED] `internal/organizer/pipeline.go:187` — M4: swallowed os.Rename in the ROLLBACK path; failed rollback strands a file at temp path with no log.
-- [MED] `internal/itunes/service/importer.go:316,358-360,1648` — M5: swallowed CreateExternalIDMapping/SetBookAuthors; DecodeLocation err uncounted.
-- [MED] `internal/itunes/service/path_repair.go:244` — M6: undecodable locations skipped without a count in the repair summary.
-- [MED] `internal/plugins/maintenance/metadata.go:66-80` + `server_maintenance_deps.go:124` — M7: MetadataUpgradeRun network-bound 30+ min with no progress between start and result.
-- [MED] `internal/scanner/scanner.go:402` — M8: swallowed registerDirectory (watcher coverage failures invisible).
-- [CRIT, partial] `internal/plugins/maintenance/backfill.go:90-95,117-122` → `internal/remux/{remux,transcode}.go` — C2: remux/transcode ops (up to 6 h ffmpeg) never pass the reporter down; deps return void so failures can't fail the op (NOT covered by `fix/logging-observability-criticals`).
-
-### Remaining backlog — devops (1–12)
-
-- [CRIT] Internal-IP scrub — internal fleet addresses in 61 tracked files (code: `cmd/dedup_bench.go:74`, `tools/cmd/reconcile-paths/main.go`, `scripts/transcribe_monitor.py`, `scripts/dedup_bench_submit.py`, `scripts/setup-winrm-windows.ps1`; plus `docs/system/runbooks.md`, `agents/pii-scanner.md`, `skills/project-context/SKILL.md`, many docs). Env-var the script/code URLs now; docs history rides on the REPO-SIZE-1 decision; add IP grep to hook + CI.
-- [HIGH] `Makefile.local` deploy — no origin-freshness pre-flight, no -dirty refusal, no post-restart version verify (~10 lines; stale-binary footgun).
-- [HIGH] `Makefile.local.example:30-52` — template deploy cross-compiles `-tags embed_frontend` without web-build; omits fts5/native_taglib/static-link; ships binary only.
-- [HIGH] `scripts/setup-git-hooks.sh:8` — pre-commit hook silently no-ops when installed from a linked worktree (`--git-dir` → `--git-common-dir`, 1 line).
-- [MED] CI — `embed_frontend` never built pre-merge; add one step to binary-smoke.
-- [MED] Observability — no "op went silent" alert (op-progress metric + rate==0-while-active-30m rule); AI-backend gauge startup-only; Prometheus deployment on prod unverified.
-- [MED] CI — 30% coverage floor (`.ci/coverage-floor.txt`) not enforced on the PR path.
-- [MED] Sandbox tooling — zero in repo; build public-safe `scripts/op_verify.py` (`--base-url --token-file --op DEF_ID --dry-run`) and de-hardcode the 2 prod-URL scripts (`ABK_API_URL`).
-- [LOW] Pre-commit hook — add staged-content scan for API-key + internal-IP patterns; CI backstop (bypassable with --no-verify today).
-- [LOW] `scripts/manage-credentials.sh` — ~27-bit passwords, secrets echoed to stdout; use `openssl rand -base64 15`, print path not secret.
-- [LOW] Duplicate systemd unit files `deploy/` vs `deploy/systemd/` — drift risk; pick one source of truth.
-- [LOW] Flaky "Go Tests (short, race)" stalls — no automation; reproduce-in-isolation guidance only.
+- [ ] **T01** — land PR #1986 (organizer data-loss fixes; CI was running)
+- [ ] **T02** — sandbox: verify breakdown-backfill apply, run dedup-exact-triage, record populations (backfill apply op `01KXSJHBDDP17AMR8WYKSTQH30` was in flight at stop)
+- [ ] **T03** — sandbox: triage purge wave → purge-stale → full-scan → final backlog measurement vs 9,074 baseline
+- [ ] **T04** — prod deploy (nothing deployed 2026-07-17) + prod dry-runs + ⚠️ HUMAN-GATED apply
+- [ ] **T05** — logging H/M batch: H1 H2 H3 H4 H8 H9 M1 M2 M3 M7 (file:line anchors in the brief)
+- [ ] **T06** — R-1: `op.terminal` SSE has zero backend publishers (phantom "running" ops in UI)
+- [ ] **T07** — R-6: AssignOrphanVGs serial loop + VersionGroupID clobber guard (`internal/reconcile/reconcile.go:1270-1327`)
+- [ ] **T08** — R-3 (abandoned-reporter logBuf growth) · R-7 (dead scan checkpoint code) · P-2 (RunItems backwards progress)
+- [ ] **T09** — C2: remux/transcode 6-h ops have no reporter threading + can't fail · H7 (external-id backfill, same shape)
+- [ ] **T10** — F6: legacy dedup.MergeBooks hard-deletes losers without external-ID reassignment/ITL removal — VERIFY then reroute
+- [ ] **T11** — F7 (quarantine serial loops → RunItems) · R-9 (path_repair serial loop) · R-8 (all-unreadable-durations group misclassified "short")
+- [ ] **T12** — devops: 8 remaining scripts with internal IPs · op-stall alert · coverage floor on PR gate · systemd unit dedupe · credential entropy
+- [ ] **T13** — docs truth-up with measured sandbox/prod numbers (dedup/STATUS.md, pending-prod-actions.md, exec summary)
