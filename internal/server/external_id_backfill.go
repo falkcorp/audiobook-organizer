@@ -1,7 +1,7 @@
 // file: internal/server/external_id_backfill.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: a3b4c5d6-e7f8-4a9b-0c1d-2e3f4a5b6c7d
-// last-edited: 2026-07-07
+// last-edited: 2026-07-18
 
 package server
 
@@ -44,24 +44,32 @@ func asExternalIDStore(s any) ExternalIDStore {
 // backfillExternalIDs delegates to itunes.BackfillExternalIDs.
 // The domain package handles idempotency checks and coordinates book-level,
 // file-level, and track-level PID registration.
-func (s *Server) backfillExternalIDs() {
+//
+// progress is forwarded straight to itunes.BackfillExternalIDs so the
+// whole-library pagination reports live progress (H7). The domain error is
+// now returned to the caller instead of being demoted to a Warn log — a
+// failure here (e.g. a write error mid-backfill) used to leave the op
+// reporting success unconditionally.
+func (s *Server) backfillExternalIDs(progress func(processed, total int, msg string)) error {
 	store := s.Store()
 	if store == nil {
-		return
+		return nil
 	}
 
 	eidStore := asExternalIDStore(store)
 	if eidStore == nil {
 		slog.Debug("backfillExternalIDs store does not implement ExternalIDStore, skipping")
-		return
+		return nil
 	}
 
 	// Delegate to the itunes domain package. s.bgCtx aborts the backfill
 	// on shutdown so it can't outlive the store and crash on
 	// "pebble: closed" in CreateExternalIDMapping.
-	if err := itunes.BackfillExternalIDs(s.bgCtx, &externalIDStoreAdapter{eidStore: eidStore, store: store}); err != nil {
+	if err := itunes.BackfillExternalIDs(s.bgCtx, &externalIDStoreAdapter{eidStore: eidStore, store: store}, progress); err != nil {
 		slog.Warn("backfillExternalIDs", "err", err)
+		return err
 	}
+	return nil
 }
 
 // externalIDStoreAdapter adapts ExternalIDStore and database.Store to

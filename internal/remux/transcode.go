@@ -1,7 +1,7 @@
 // file: internal/remux/transcode.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-07-03
+// last-edited: 2026-07-18
 
 package remux
 
@@ -39,31 +39,54 @@ func TranscodeSkipKey(path string) string {
 	return fmt.Sprintf("transcode_skip_%x", h[:8])
 }
 
+// isTranscodeCandidate reports whether path is an M4B/M4A file this pass
+// should consider (used identically by the pre-count pass and the work pass
+// so the reported "total" never drifts from what actually gets processed).
+func isTranscodeCandidate(path string, d fs.DirEntry) bool {
+	if d.IsDir() {
+		return false
+	}
+	ext := strings.ToLower(filepath.Ext(path))
+	if ext != ".m4b" && ext != ".m4a" {
+		return false
+	}
+	return !strings.Contains(filepath.Base(path), ".tmp.")
+}
+
 // TranscodeMalformedFiles walks the library and re-encodes any M4B/M4A
 // file that taglib cannot parse even after the remux pass. Full AAC transcode
 // at 64 kbps rebuilds the file from scratch, which fixes corruption that a
 // stream copy cannot repair. Runs once at startup. The walk checks ctx per
 // file and stops early via fs.SkipAll when canceled (SYS-1); a canceled run
 // does not write the done flag, so the next startup resumes.
-func (t *Transcoder) TranscodeMalformedFiles(ctx context.Context) {
+//
+// progress is called every 25 processed files (and once more at the end)
+// with the running counts, so a caller wired to an op reporter's
+// UpdateProgress can surface a live "X/Y" during a multi-hour ffmpeg walk
+// instead of a single log line at completion (C2). progress may be nil.
+//
+// A non-nil error is returned only for fatal setup problems (RootDir not
+// configured, ffmpeg missing) — those used to be swallowed as a Warn log,
+// letting the op report success while doing nothing. Per-file transcode
+// failures are expected (files get marked permanently-unfixable and are
+// counted in the progress message) rather than failing the whole run.
+func (t *Transcoder) TranscodeMalformedFiles(ctx context.Context, progress func(processed, total int, msg string)) error {
 	if t.store == nil {
-		return
+		return nil
 	}
 
 	if setting, err := t.store.GetSetting(TranscodeKey); err == nil && setting != nil && setting.Value == "true" {
 		slog.Info("Malformed M4B transcode already completed, skipping")
-		return
+		return nil
 	}
 
 	root := config.AppConfig.RootDir
 	if root == "" {
-		slog.Warn("TranscodeMalformedFiles RootDir not configured, skipping")
-		return
+		return fmt.Errorf("TranscodeMalformedFiles: RootDir not configured")
 	}
 
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		slog.Warn("TranscodeMalformedFiles ffmpeg not found, skipping")
-		return
+		return fmt.Errorf("TranscodeMalformedFiles: ffmpeg not found: %w", err)
 	}
 
 	// Pre-mark files confirmed permanently unfixable by full transcode.
@@ -80,8 +103,27 @@ func (t *Transcoder) TranscodeMalformedFiles(ctx context.Context) {
 		}
 	}
 
-	slog.Info("Starting malformed M4B transcode scan under", "root", root)
-	transcoded, clean, failed, skipped := 0, 0, 0, 0
+	// Pre-count candidates so progress can report an accurate "X/Y" instead
+	// of an unbounded counter. Cheap relative to the ffmpeg work itself —
+	// this pass does no file content reads, just a directory walk.
+	total := 0
+	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+		select {
+		case <-ctx.Done():
+			return fs.SkipAll
+		default:
+		}
+		if walkErr != nil {
+			return nil
+		}
+		if isTranscodeCandidate(path, d) {
+			total++
+		}
+		return nil
+	})
+
+	slog.Info("Starting malformed M4B transcode scan under", "root", root, "candidates", total)
+	transcoded, clean, failed, skipped, processed := 0, 0, 0, 0, 0
 
 	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
 		// Stop the walk cleanly on shutdown (SYS-1). fs.SkipAll ends WalkDir
@@ -94,13 +136,13 @@ func (t *Transcoder) TranscodeMalformedFiles(ctx context.Context) {
 		if walkErr != nil || d.IsDir() {
 			return nil
 		}
-		ext := strings.ToLower(filepath.Ext(path))
-		if ext != ".m4b" && ext != ".m4a" {
+		if !isTranscodeCandidate(path, d) {
 			return nil
 		}
 
-		if strings.Contains(filepath.Base(path), ".tmp.") {
-			return nil
+		processed++
+		if progress != nil && processed%25 == 0 {
+			progress(processed, total, fmt.Sprintf("Transcoding M4B: %d/%d (transcoded=%d failed=%d skipped=%d)", processed, total, transcoded, failed, skipped))
 		}
 
 		if _, err := taglib.ReadTags(path); err == nil {
@@ -137,8 +179,13 @@ func (t *Transcoder) TranscodeMalformedFiles(ctx context.Context) {
 		return nil
 	})
 
+	if progress != nil {
+		progress(processed, total, fmt.Sprintf("Transcoding M4B: %d/%d (transcoded=%d failed=%d skipped=%d)", processed, total, transcoded, failed, skipped))
+	}
+
 	slog.Info("Malformed M4B transcode transcoded, already readable, failed, permanently skipped", "transcoded", transcoded, "clean", clean, "failed", failed, "skipped", skipped)
 	_ = t.store.SetSetting(TranscodeKey, "true", "bool", false)
+	return nil
 }
 
 // TranscodeFile re-encodes an M4B/M4A file to 64 kbps AAC in-place.

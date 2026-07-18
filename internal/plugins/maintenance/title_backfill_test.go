@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
-// last-edited: 2026-07-07
+// last-edited: 2026-07-18
 
 package maintenance
 
@@ -58,10 +58,14 @@ func (d fakeDeps) ExecuteSeriesPrune(_ context.Context, _ database.Store, _ oper
 func (d fakeDeps) ExecuteSeriesNormalizeCore(_ context.Context, _ database.Store, _ func(string)) ([]string, error) {
 	return nil, nil
 }
-func (d fakeDeps) BackfillExternalIDs()                            {}
-func (d fakeDeps) StripMovementAtoms(_ context.Context)            {}
-func (d fakeDeps) RemuxMalformedM4BFiles(_ context.Context)        {}
-func (d fakeDeps) TranscodeMalformedM4BFiles(_ context.Context)    {}
+func (d fakeDeps) BackfillExternalIDs(_ func(int, int, string)) error { return nil }
+func (d fakeDeps) StripMovementAtoms(_ context.Context)               {}
+func (d fakeDeps) RemuxMalformedM4BFiles(_ context.Context, _ func(int, int, string)) error {
+	return nil
+}
+func (d fakeDeps) TranscodeMalformedM4BFiles(_ context.Context, _ func(int, int, string)) error {
+	return nil
+}
 func (d fakeDeps) CleanupOrphanedTempFiles(_ string, _ string) int { return 0 }
 func (d fakeDeps) CleanupTrashedVersions() int                     { return 0 }
 func (d fakeDeps) SweepArchivedBooks() int                         { return 0 }

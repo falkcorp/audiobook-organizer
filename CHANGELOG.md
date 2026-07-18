@@ -1,5 +1,6 @@
 <!-- file: CHANGELOG.md -->
 <!-- version: 3.176.0 -->
+<!-- version: 3.175.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-18 -->
 
@@ -112,6 +113,30 @@
   operator can see unreadable groups accumulating.
 - All three packages (`internal/plugins/dedup`, `internal/itunes/...`,
   `internal/scanner`) pass `go test ./... -race -count=1`.
+#### July 18, 2026 - T09: remux/transcode/external-ID-backfill reporter threading (C2/H7)
+
+- **fix(maintenance):** the malformed-M4B remux op, its transcode twin, and the
+  external-ID backfill op each logged one "starting" line, called into a void
+  dependency method that could run for hours, then unconditionally logged
+  "complete" — a multi-hour ffmpeg walk gave no progress and could never fail
+  the op, even on a fatal setup problem (no RootDir configured, ffmpeg
+  missing) or a real persistence error.
+- Reworked the dependency chain
+  (`internal/plugins/maintenance/backfill.go` → `ServerDeps` →
+  `internal/server/malformed_m4b_wrappers.go` / `external_id_backfill.go` →
+  `internal/remux/remux.go` + `transcode.go` / `internal/itunes/backfill.go`)
+  so each now takes a `func(processed, total int, msg string)` progress
+  callback and returns `error`. The plugin wires the callback to
+  `reporter.UpdateProgress` and fails the op on a non-nil error.
+- Remux/transcode report an accurate "X/Y" (a cheap pre-count walk over the
+  same candidate predicate) every 25 files; external-ID backfill reports
+  after every page of book pagination and every 10,000 iTunes-XML tracks.
+  Per-file remux/transcode failures stay non-fatal (expected — transcode is
+  the designed fallback for files remux can't fix); a track-PID bulk-write
+  failure that was previously logged and discarded now fails the op.
+- No behavior change for the startup goroutines in `server_lifecycle.go`
+  that call these directly (outside the UOS op registry) — they now surface
+  the returned error via a Warn log instead of it being silently unreachable.
 
 #### July 17, 2026 - error-correction fix wave (15 PRs) + sandbox verification
 
