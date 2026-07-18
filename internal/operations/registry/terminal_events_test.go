@@ -209,6 +209,55 @@ func TestTerminalEvent_ForceDropped(t *testing.T) {
 	}
 }
 
+// TestTerminalEvent_DepFailPropagation asserts op.terminal fires with
+// status=failed when a waiting_deps op is failed because its prerequisite
+// failed (DepsScheduler.OnOpFailed) — a live-operation terminal transition
+// with no worker to publish it, so the scheduler must.
+func TestTerminalEvent_DepFailPropagation(t *testing.T) {
+	store := newSmartFakeStore()
+	bus := &t06TermBus{}
+	r := registry.New(store, slog.Default(), 4, bus)
+
+	prereq := makeValidDef("test.term-prereq-fail")
+	if err := r.RegisterOp(prereq); err != nil {
+		t.Fatalf("RegisterOp prereq: %v", err)
+	}
+	dep := makeValidDef("test.term-dep-fail")
+	dep.Requires = []registry.Requirement{{Kind: registry.ReqOpCompleted, OpType: "test.term-prereq-fail"}}
+	if err := r.RegisterOp(dep); err != nil {
+		t.Fatalf("RegisterOp dep: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r.Start(ctx)
+
+	params := map[string]string{"book_id": "b-term-fail"}
+	depOpID, err := r.EnqueueOp(ctx, "test.term-dep-fail", params)
+	if err != nil {
+		t.Fatalf("EnqueueOp dep: %v", err)
+	}
+	if store.statusOf(depOpID) != "waiting_deps" {
+		t.Fatalf("expected dep parked, got %q", store.statusOf(depOpID))
+	}
+
+	sched := registry.NewDepsScheduler(r, store)
+	if err := sched.OnOpFailed(ctx, registry.Subject{Type: "book", ID: "b-term-fail"}, "test.term-prereq-fail"); err != nil {
+		t.Fatalf("OnOpFailed: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && store.statusOf(depOpID) != "failed" {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := store.statusOf(depOpID); got != "failed" {
+		t.Fatalf("expected dep failed, got %q", got)
+	}
+	if got := bus.waitTerminal(t, depOpID, 2*time.Second); got != "failed" {
+		t.Errorf("op.terminal status: got %q want failed", got)
+	}
+}
+
 // TestTerminalEvent_CanceledQueued asserts op.terminal fires with
 // status=canceled when a purely-queued op (never picked up) is canceled — the
 // path with no worker to publish the event on the op's behalf.
