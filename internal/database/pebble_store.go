@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.117.0
+// version: 1.118.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-07-17
+// last-edited: 2026-07-18
 
 package database
 
@@ -105,6 +105,19 @@ type PebbleStore struct {
 	libraryCountsRecomputeMu sync.Mutex // gates recompute to prevent stampede when N callers see dirty cache
 	UseMemDB                 bool       // feature flag: use in-memory query layer for aggregations / filtered reads
 
+	// Primary-book-count cache. CountPrimaryBooks full-scans every book: key and
+	// json.Unmarshal's each Book (~5.6s on a ~44K-book library). The 5s metrics
+	// ticker (server_lifecycle.go) called it on every tick, saturating ~2 cores
+	// on an otherwise-idle server. These fields cache the count for a short TTL so
+	// the expensive scan runs at most once per primaryCountCacheTTL. primaryCountMu
+	// guards the value fields; primaryCountRecomputeMu gates the recompute so a
+	// burst of callers collapses to a single scan per window.
+	primaryCountMu          sync.Mutex
+	primaryCountRecomputeMu sync.Mutex
+	primaryCount            int
+	primaryCountComputedAt  time.Time
+	primaryCountValid       bool
+
 	// warmupCancel cancels the async memdb warmup goroutine; warmupDone is
 	// closed when that goroutine exits. Close() cancels and waits on these
 	// before closing the underlying Pebble DB — otherwise the warmup's db.NewIter
@@ -146,6 +159,12 @@ func (p *PebbleStore) WaitForWarmup() {
 const statsLibraryKey = "stats:library"
 const statsLibraryTTL = 10 * time.Minute
 const defaultLibraryCountsMinIntervalSeconds = 600 // 10 minutes
+
+// primaryCountCacheTTL bounds how stale the cached CountPrimaryBooks value may
+// be. A metrics gauge / health probe tolerating tens of seconds of staleness is
+// fine; this caps the 5.6s full-scan to at most once per window so the 5s status
+// ticker stops re-scanning the whole library on every tick.
+const primaryCountCacheTTL = 30 * time.Second
 
 func getLibraryCountsMinIntervalSeconds() int {
 	if s := os.Getenv("LIBRARY_COUNTS_CACHE_MIN_INTERVAL_SECONDS"); s != "" {
@@ -2395,7 +2414,55 @@ func (p *PebbleStore) SearchBooks(query string, limit, offset int) ([]Book, erro
 	return filtered, nil
 }
 
+// CountPrimaryBooks returns the number of primary, non-deleted books.
+//
+// The underlying scan (countPrimaryBooksScan) iterates every book: key and
+// json.Unmarshal's each Book — ~5.6s on a ~44K-book library. The 5s metrics/status
+// ticker (server_lifecycle.go) and GET /health both call this, so an uncached scan
+// pinned ~2 cores continuously on an idle server. The result is cached for
+// primaryCountCacheTTL; the count may lag a write by up to that window, which is
+// fine for a metrics gauge / health probe.
 func (p *PebbleStore) CountPrimaryBooks() (int, error) {
+	// Fast path: fresh cached value.
+	p.primaryCountMu.Lock()
+	if p.primaryCountValid && time.Since(p.primaryCountComputedAt) < primaryCountCacheTTL {
+		c := p.primaryCount
+		p.primaryCountMu.Unlock()
+		return c, nil
+	}
+	p.primaryCountMu.Unlock()
+
+	// Gate the recompute so a burst of callers (e.g. concurrent /health probes)
+	// collapses to a single scan per window instead of each running its own 5.6s
+	// scan. Double-check the cache after acquiring the gate — a peer may have just
+	// refreshed it.
+	p.primaryCountRecomputeMu.Lock()
+	defer p.primaryCountRecomputeMu.Unlock()
+
+	p.primaryCountMu.Lock()
+	if p.primaryCountValid && time.Since(p.primaryCountComputedAt) < primaryCountCacheTTL {
+		c := p.primaryCount
+		p.primaryCountMu.Unlock()
+		return c, nil
+	}
+	p.primaryCountMu.Unlock()
+
+	count, err := p.countPrimaryBooksScan()
+	if err != nil {
+		return 0, err
+	}
+
+	p.primaryCountMu.Lock()
+	p.primaryCount = count
+	p.primaryCountComputedAt = time.Now()
+	p.primaryCountValid = true
+	p.primaryCountMu.Unlock()
+
+	return count, nil
+}
+
+// countPrimaryBooksScan is the uncached full scan behind CountPrimaryBooks.
+func (p *PebbleStore) countPrimaryBooksScan() (int, error) {
 	count := 0
 	iter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: []byte("book:0"),
