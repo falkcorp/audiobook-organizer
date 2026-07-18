@@ -162,7 +162,14 @@ Companion docs:
 ## Other / close-out (10)
 
 40. **4.8 — Store ISP sweep** (H1:2787) — ~38-file sweep + 18-file noop cleanup remain.
-41. **4.10 — MergeService mock-store unit tests** (H1:2789) — partial.
+41. ~~**4.10 — MergeService mock-store unit tests** (H1:2789)~~ — DONE: `internal/merge`
+    coverage 70.3%→96.6%. Added 34 tests across external-ID reassignment, ITL-removal
+    enqueue, loser soft-delete, nil/empty-override wipe-safety, version-group integrity
+    (incl. a real bug found: `MergeBooks` didn't de-dupe `bookIDs`, so a caller passing
+    the primary twice — the exact class PR #2007 patched only at one caller — silently
+    demoted the winner to non-primary with no soft-delete; fixed defensively in
+    `Service.MergeBooks` itself), CombineBooks file-transfer/author-override error paths,
+    and the merge-family serialization lock helpers.
 42. **2026-05-01 re-audit block close-out pass** (H1:3137-3177) — TEST-2, DEP-1a-e,
     DEAD-1, CTX-4, LOG-5, R-9, R-10 mostly stale: DEP-1 0 non-test hits, DEP-1e moot
     (post-SQLite removal), PERF-1 OBSOLETE as scoped (Jul-16 truncation fix made

@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-07-18-duplicate-merge-orphaned-itunes-links-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 2f8a6c34-9b71-4d02-8e15-3a7c0d5e9b46 -->
 <!-- last-edited: 2026-07-18 -->
 
@@ -42,3 +42,20 @@ The fix ships with tests that merge books on a real database and confirm the
 dropped entry is retired (not erased), its iTunes link now resolves to the kept
 entry, its listening stats moved across, and the kept entry can never be
 accidentally deleted or demoted when it appears on both sides of a merge.
+
+## Follow-up: the same-day fix only protected the one button that had it
+
+The "listed on both sides of the merge" guard above was added at the call site
+for the duplicate-merge button (it de-duplicates before handing the list to the
+shared merge engine). A same-day pass writing exhaustive tests for that shared
+merge engine confirmed the engine itself had no equivalent guard — so every
+*other* place in the app that also uses it (the main "merge these books"
+button, an automatic dedup-resolution job, and others) was still exposed to the
+identical bug: asking to keep a book that also appears elsewhere in the list
+being merged could silently leave that book neither the kept copy nor the
+retired one — invisible in the version history and not shown in search either
+way.
+
+This was caught by a test, not by a user report, and is now fixed inside the
+shared merge engine itself, so every caller is protected the same way going
+forward regardless of whether it remembers to filter the list first.

@@ -60,6 +60,37 @@
   `internal/fingerprint/duration_unify_test.go`,
   `internal/transcode/duration_unify_test.go`) proving each still returns the
   correct value/unit after the reroute.
+#### July 18, 2026 - test(merge): MergeService/CombineBooks unit-test coverage (4.10)
+
+- **`internal/merge` coverage 70.3% → 96.6%**: 34 new tests covering
+  external-ID (PID/ASIN) reassignment to the merge winner, iTunes ITL-removal
+  enqueue for losers (including filtering out non-itunes and tombstoned
+  mappings), loser soft-delete vs winner survival, the `CombineBooks`
+  nil-override and empty-override wipe-safety guarantee (a combine must never
+  blank Title/Author/Narrator via a partial write), the Title/Narrator/Author
+  override happy paths (including author reuse-vs-create), version-group
+  integrity (exactly one live primary across N books), the merge-family
+  serialization lock helpers (`LockMergeRMW`/`UnlockMergeRMW`), and the
+  `CombineBooks` file-transfer path (`ensureOwnFile`/`attachVirtualFile`,
+  including the #1549 reattach-safe branch) plus its warn-and-continue error
+  paths (failed external-ID reassignment, failed aggregate recompute, failed
+  author lookup/creation/link) and its hard-abort error paths (a book still
+  owning files after a move, a failed file move, a failed delete).
+- **Fixed a genuine bug found while writing the version-group-integrity
+  test**: `Service.MergeBooks` did not de-duplicate its `bookIDs` argument. If
+  a caller passed the primary ID twice (exactly the caller mistake PR #2007
+  / F6-T10 patched, but only at the one call site in
+  `applyBookMergeReroute`), the version-group loop wrote that book's row
+  twice — the second write's index no longer matched `bestIdx`, silently
+  demoting the winner back to `IsPrimaryVersion=false` — while the
+  loser-cleanup loop still skipped both occurrences as "the primary" and
+  never soft-deleted it. Net effect: the winner ended up neither primary nor
+  soft-deleted, and the version group lost its only live primary. Several
+  other callers (e.g. `POST /audiobooks/merge`) pass request-supplied
+  `BookIDs` straight through without de-duping, so this was reachable outside
+  the already-patched caller. Fixed by de-duplicating `bookIDs` at the top of
+  `MergeBooks` itself so every caller is protected regardless of whether it
+  remembers to de-dupe first.
 
 #### July 18, 2026 - fix(logging): H/M observability batch (T05)
 
