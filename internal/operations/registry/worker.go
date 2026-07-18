@@ -1,7 +1,7 @@
 // file: internal/operations/registry/worker.go
-// version: 2.11.0
+// version: 2.12.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-07-17
+// last-edited: 2026-07-18
 
 package registry
 
@@ -197,6 +197,9 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 		if err := r.store.UpdateOperationV2Status(qr.opID, "canceled", nil, &now, &msg); err != nil {
 			r.logger.Warn("registry: failed to mark channel-canceled op canceled", "op_id", qr.opID, "error", err)
 		}
+		// R-1: this is a terminal transition too — publish op.terminal so the UI
+		// bell drops the op instead of leaving it phantom-"running".
+		r.publishOpTerminal(qr.opID, qr.defID, "canceled")
 		r.logger.Info("registry: dropped run canceled while queued in worker channel", "op_id", qr.opID, "def_id", qr.defID)
 		return false
 	}
@@ -265,6 +268,8 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 		if err := r.store.UpdateOperationV2Status(qr.opID, finalStatus, nil, &completedAt, errMsg); err != nil {
 			r.logger.Warn("registry: failed to update subprocess op terminal status", "op_id", qr.opID, "error", err)
 		}
+		// R-1: fan out op.terminal so the UI bell stops showing this op as running.
+		r.publishOpTerminal(qr.opID, qr.defID, finalStatus)
 		// C-5: notify the dep scheduler on ALL terminal transitions (the
 		// subprocess path previously notified on none of them).
 		r.notifyDepTerminal(finalStatus, qr)
@@ -327,6 +332,11 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 				// so Shutdown (bounded by its own context) genuinely drains.
 				r.logger.Info("registry: op goroutine abandoned during shutdown; waiting for it to exit before freeing slot",
 					"op_id", qr.opID, "plugin", qr.plugin)
+				// R-3: same rationale as the genuine-abandonment path — the
+				// wedged goroutine's flushLoop is gone, so no-op its Log calls.
+				if dbr, ok := reporter.(*dbReporter); ok {
+					dbr.markTerminal()
+				}
 				go func() {
 					<-done
 					r.releaseRunHandle(qr.opID)
@@ -348,10 +358,20 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 			// row's status afterwards: the runaway goroutine's eventual return
 			// only decrements the abandoned counter (below).
 			abandonedAt := time.Now().UTC()
+			abandonStatus := interruptedStatus(qr.resumePolicy)
 			abandonMsg := "abandoned: op goroutine did not exit within grace after context cancellation"
-			if err := r.store.UpdateOperationV2Status(qr.opID, interruptedStatus(qr.resumePolicy), nil, &abandonedAt, &abandonMsg); err != nil {
+			if err := r.store.UpdateOperationV2Status(qr.opID, abandonStatus, nil, &abandonedAt, &abandonMsg); err != nil {
 				r.logger.Warn("registry: failed to mark abandoned op interrupted", "op_id", qr.opID, "error", err)
 			}
+			// R-3: the runaway goroutine keeps calling reporter.Log even though
+			// its flushLoop has exited (runCtx canceled) — the buffered lines are
+			// unrecoverable by design, so flip the reporter's terminal flag to make
+			// those Log calls cheap no-ops and stop logBuf from growing unbounded.
+			if dbr, ok := reporter.(*dbReporter); ok {
+				dbr.markTerminal()
+			}
+			// R-1: fan out op.terminal for the abandonment transition.
+			r.publishOpTerminal(qr.opID, qr.defID, abandonStatus)
 			// Terminal transition: resolve dep-waiting subjects now rather than
 			// leaving them to the 5m sweep (C-5).
 			for _, sub := range subjectsFromParams(qr.params) {
@@ -403,6 +423,9 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 	if err := r.store.UpdateOperationV2Status(qr.opID, finalStatus, nil, &completedAt, errMsg); err != nil {
 		r.logger.Warn("registry: failed to update op terminal status", "op_id", qr.opID, "error", err)
 	}
+
+	// R-1: fan out op.terminal so the UI bell stops showing this op as running.
+	r.publishOpTerminal(qr.opID, qr.defID, finalStatus)
 
 	// Notify the dependency scheduler (async; non-blocking) so waiting_deps ops
 	// for the same subject can be re-evaluated or failed as appropriate.
@@ -482,6 +505,8 @@ func (r *Registry) checkInfiniteRestart(qr *queuedRun, def OperationDef) bool {
 	completed := time.Now().UTC()
 	msg := "force-dropped: infinite restart without progress"
 	_ = r.store.UpdateOperationV2Status(qr.opID, "interrupted_dropped", nil, &completed, &msg)
+	// R-1: fan out op.terminal for the force-drop transition.
+	r.publishOpTerminal(qr.opID, def.ID, "interrupted_dropped")
 	// C-2: release the dispatcher's stub handle. The force-drop path returned
 	// before executeRun ever registered/released the run, leaking the
 	// ConcurrencyKey and the pluginRunning slot until restart — which blocked

@@ -1,13 +1,42 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.174.0 -->
+<!-- version: 3.175.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
-<!-- last-edited: 2026-07-17 -->
+<!-- last-edited: 2026-07-18 -->
 
 # Changelog
 
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 18, 2026 - registry SSE + reporter/scanner hygiene (T06 + T08)
+
+- **R-1 (op.terminal SSE, T06):** the backend now publishes an `op.terminal`
+  event on every terminal transition — completed, failed, canceled, timeout,
+  abandonment (`interrupted_*`), force-drop, canceled-before-start, and
+  canceled-while-queued. Previously the event contract existed only on the
+  frontend, so finished operations lingered as phantom "running" entries in the
+  operations bell until a manual refresh. New helper
+  `Registry.publishOpTerminal` fans out `{op_id, def_id, status}` via the
+  existing bus (nil-safe; no direct SSE-hub import). Covered by
+  `terminal_events_test.go`.
+- **R-3 (abandoned-reporter log buffer, T08):** after a run is abandoned its
+  reporter's flush goroutine has already exited, but the wedged goroutine kept
+  calling `Log`, growing `logBuf` without bound and losing every line anyway.
+  The buffer is now capped at 1,000 entries (drop-oldest with a dropped-counter)
+  and the worker flips a terminal flag (`markTerminal`) on the abandonment paths
+  so subsequent `Log` calls are cheap no-ops. Covered by
+  `reporter_terminal_test.go`.
+- **R-7 (dead scan-checkpoint code, T08):** removed the unused
+  `ScanService.PerformScanWithID` (zero callers) and its
+  `operations.SaveParams(ScanParams)`/`ClearState` calls — `LoadParams[ScanParams]`
+  had zero callers and `library.scan` uses `ResumePolicy=ResumeDrop`, so an
+  interrupted scan restarts from scratch (idempotent re-walk) rather than
+  resuming from a checkpoint that was never read.
+- **P-2 (parallel progress counter, T08):** `RunItems` now reports an atomic
+  completion count instead of the item index, so parallel progress no longer
+  jumps backwards when items finish out of order. Covered by
+  `run_items_p2_test.go`.
 
 #### July 17, 2026 - error-correction fix wave (15 PRs) + sandbox verification
 
