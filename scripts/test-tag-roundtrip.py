@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
+# file: scripts/test-tag-roundtrip.py
+# version: 1.1.0
+# guid: 5c8e2a4f-1d6b-4f9c-a3e7-8b2d0f6c4a19
+# last-edited: 2026-07-18
 """Test tag write/read round-trip against a running audiobook-organizer server.
 
 Usage:
     python3 scripts/test-tag-roundtrip.py [--host HOST] [--book-id BOOK_ID]
+
+The server host:port is REQUIRED via --host or the ABK_API_URL environment
+variable (e.g. <server>:8484) — there is no internal-network default.
 
 This script:
 1. Reads current tags from a book via the /tags API
@@ -13,6 +20,7 @@ This script:
 
 import argparse
 import json
+import os
 import sys
 import time
 import urllib.request
@@ -46,11 +54,21 @@ def api(host, method, path, data=None):
 
 def main():
     parser = argparse.ArgumentParser(description="Test tag write/read round-trip")
-    parser.add_argument("--host", default="172.16.2.30:8484", help="Server host:port")
+    parser.add_argument(
+        "--host",
+        default=os.environ.get("ABK_API_URL"),
+        help="Server host:port, e.g. <server>:8484 (required; defaults to $ABK_API_URL)",
+    )
     parser.add_argument(
         "--book-id", help="Book ID to test (uses first book if not specified)"
     )
     args = parser.parse_args()
+
+    if not args.host:
+        parser.error(
+            "--host is required (or set the ABK_API_URL environment variable "
+            "to your server host:port, e.g. <server>:8484)"
+        )
 
     host = args.host
     book_id = args.book_id

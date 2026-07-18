@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# file: scripts/dedup_bench_crossval.py
+# version: 1.1.0
+# guid: 8b1e4d6f-2a9c-4e7b-b3d5-1f6a8c0e4b72
+# last-edited: 2026-07-18
 """Cross-validation: send one model's output to another for a second opinion.
 
 Submits batch jobs where model B reviews model A's suggestions, optionally
@@ -6,7 +10,7 @@ with the full original input data included for context.
 
 Usage:
     python3 scripts/dedup_bench_crossval.py \
-        --server https://172.16.2.30:8484 \
+        --server https://<server>:8484 \
         --results-a testdata/dedup-bench/.../batch_output.jsonl \
         --model-a gpt-5.1 --mode-a groups \
         --input-data testdata/dedup-bench/.../groups.json \

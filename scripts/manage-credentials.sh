@@ -1,6 +1,8 @@
 #!/bin/bash
 # file: scripts/manage-credentials.sh
-# version: 1.0.0
+# version: 1.1.0
+# guid: a001a982-8d13-4ad6-8f85-9c16c388fa90
+# last-edited: 2026-07-18
 # Manage per-worktree credentials (username/password for API access)
 
 set -euo pipefail
@@ -18,23 +20,12 @@ sanitize_branch() {
     echo "$1" | sed 's/[^a-zA-Z0-9_-]/_/g' | tr '[:upper:]' '[:lower:]' | sed 's/^-//; s/-$//'
 }
 
-# Helper: Generate readable password
+# Helper: Generate a high-entropy password.
+# 15 random bytes base64-encoded = 120 bits of entropy (vs. the previous
+# 3-word+4-digit scheme's ~27 bits — found LOW in the 2026-07-17
+# multi-discipline review, finding #10).
 generate_password() {
-    # 4 random words + random number
-    local words=("aurora" "brave" "cedar" "delta" "eagle" "frost" "gale" "harbor" "iris" "jade" "kelp" "lunar" "marble" "nova" "ocean" "pearl" "quest" "river" "stone" "tide" "ultra" "vale" "wheat" "yacht" "zenith")
-    local n=${#words[@]}
-
-    local w1=${words[$((RANDOM % n))]}
-    local w2=${words[$((RANDOM % n))]}
-    local w3=${words[$((RANDOM % n))]}
-    local num=$(( (RANDOM % 9000) + 1000 ))
-
-    # Capitalize first letter of each word using awk
-    w1=$(echo "$w1" | awk '{print toupper(substr($0,1,1)) substr($0,2)}')
-    w2=$(echo "$w2" | awk '{print toupper(substr($0,1,1)) substr($0,2)}')
-    w3=$(echo "$w3" | awk '{print toupper(substr($0,1,1)) substr($0,2)}')
-
-    echo "${w1}-${w2}-${w3}-${num}"
+    openssl rand -base64 15
 }
 
 # Helper: Generate credential filename
@@ -76,11 +67,10 @@ EOF
     echo "✅ Credentials created for branch '$branch'"
     echo ""
     echo "Username: $username"
-    echo "Password: $password"
-    echo "File: $cred_path"
+    echo "File:     $cred_path"
     echo ""
-    echo "⚠️  Keep this password safe — it won't be shown again."
-    echo "    (It's stored in $cred_path which is .gitignored)"
+    echo "The password is not echoed here — read it from the file above"
+    echo "(chmod 600, .gitignored), or run: $0 get $branch"
 }
 
 # Command: get

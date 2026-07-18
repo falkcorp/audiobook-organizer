@@ -114,7 +114,7 @@ Companion docs:
 32. **I1 + I6 — prod pprof verification** (H1:1515, 1538) — measure chromem-lazy
     effect + heap re-audit; measurement only.
 
-## Infra (3)
+## Infra (4)
 
 33. **REPO-SIZE-1 decision** ([plan](docs/plans/2026-07-10-repo-size-history-rewrite-plan.md),
     [package](docs/plans/2026-07-12-repo-size-targeted-purge-package.md)) —
@@ -125,6 +125,16 @@ Companion docs:
     review, REPO-SIZE-1.
 35. **Consultancy wave 4+ residuals** ([roadmap](docs/consultancy/00-ROADMAP.md)) —
     unverified; needs a close-out sweep against shipped work.
+36. **Op-progress Prometheus metric (T12 follow-up)** — no metric today exports
+    per-operation item-processed progress; `internal/metrics/metrics.go` only
+    has started/completed/failed/canceled counts by type, not progress within
+    a running op. Build an exporter (e.g. a gauge
+    `audiobook_organizer_op_items_processed{op_id,op_type}`, updated from
+    `internal/operations/progress.go`'s `ProgressReporter.UpdateProgress`) so
+    the commented-out "op stalled" alert in `deploy/prometheus/alert-rules.yml`
+    can be uncommented and wired up. This closes the observability gap behind
+    the 3+ hour `dedup.full-scan` hang and the 9hr Pebble write-stall freeze —
+    both were only noticed by a human watching the UI.
 
 ## UX (4)
 
@@ -190,5 +200,5 @@ R-1 (T06) + R-3/R-7/P-2 (T08) (#2002).
 - [ ] **T09** — C2: remux/transcode 6-h ops have no reporter threading + can't fail · H7 (external-id backfill, same shape)
 - [ ] **T10** — F6: legacy dedup.MergeBooks hard-deletes losers without external-ID reassignment/ITL removal — VERIFY then reroute
 - [ ] **T11** — F7 (quarantine serial loops → RunItems) · R-9 (path_repair serial loop) · R-8 (all-unreadable-durations group misclassified "short")
-- [ ] **T12** — devops: 8 remaining scripts with internal IPs · op-stall alert · coverage floor on PR gate · systemd unit dedupe · credential entropy
+- [x] **T12** — devops: 8 remaining scripts with internal IPs · op-stall alert (commented, metric doesn't exist yet — see Infra #36) · coverage floor on PR gate · systemd unit dedupe · credential entropy — PR pending, see CHANGELOG "July 18, 2026" entry
 - [ ] **T13** — docs truth-up with measured sandbox/prod numbers (dedup/STATUS.md, pending-prod-actions.md, exec summary)

@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# file: scripts/dedup_bench_pass2.py
+# version: 1.1.0
+# guid: 3d7f9a1c-5e2b-4c8d-9a6f-0b3e5d7c1a94
+# last-edited: 2026-07-18
 """Second-pass enrichment for uncertain dedup suggestions.
 
 Takes medium/low confidence results from a first-pass groups run,
@@ -7,7 +11,7 @@ for a more informed decision.
 
 Usage:
     python3 scripts/dedup_bench_pass2.py \
-        --server https://172.16.2.30:8484 \
+        --server https://<server>:8484 \
         --results testdata/dedup-bench/2026-03-07T20-11-15/runs/gpt-5.1_baseline_t0.0_groups/batch_output.jsonl \
         --groups testdata/dedup-bench/2026-03-07T20-11-15/groups.json \
         --model gpt-5.1

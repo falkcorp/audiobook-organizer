@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
 # file: scripts/setup-ssh-from-mac.sh
-# version: 1.0.0
+# version: 1.1.0
 # guid: c4d5e6f7-a8b9-0123-cdef-345678901234
-# last-edited: 2026-06-27
+# last-edited: 2026-07-18
 #
 # Run on Mac AFTER setup-openssh-windows.ps1 has been run on Windows.
 # Generates an SSH key and installs it on the Windows machine.
 #
-#   bash scripts/setup-ssh-from-mac.sh
+#   ABK_GPU_HOST=<windows-gpu-host> bash scripts/setup-ssh-from-mac.sh
 #
 # You'll be prompted for your Windows password once, then never again.
 
 set -euo pipefail
 
 WIN_USER="jdfalk"
-WIN_IP="172.16.3.22"
+WIN_IP="${ABK_GPU_HOST:?ERROR: ABK_GPU_HOST environment variable is required (hostname or IP of the Windows GPU machine, e.g. <windows-gpu-host>)}"
 KEY="$HOME/.ssh/id_ed25519_windows"
 
 # Generate key if it doesn't exist

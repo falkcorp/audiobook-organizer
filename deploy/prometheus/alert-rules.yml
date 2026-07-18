@@ -1,7 +1,7 @@
 # file: deploy/prometheus/alert-rules.yml
-# version: 1.0.0
+# version: 1.1.0
 # guid: d2e3f4a5-b6c7-4d8e-9f0a-1b2c3d4e5f6a
-# last-edited: 2026-07-03
+# last-edited: 2026-07-18
 #
 # TEMPLATE / SNIPPET — Prometheus alerting rules for audiobook-organizer
 # (OPS-4/OPS-5). This is NOT installed or evaluated by this repo; it must be
@@ -115,3 +115,44 @@ groups:
             Less than 10% free space remains on
             /var/lib/audiobook-organizer for at least 10 minutes. Requires
             node_exporter scraping the host (see prerequisite note above).
+
+      # OP-STALL (2026-07-17 devops follow-up, T12 item 2): "op active but
+      # making no progress" — the class of incident behind the 3+ hour
+      # dedup.full-scan hang (docs/audits/2026-07-05-concurrency-single-
+      # threaded-hotspots.md) and the 9hr Pebble write-stall freeze
+      # (project_concurrency_followups_jul5). Both were only noticed by a
+      # human watching the UI, not by an alert.
+      #
+      # BLOCKED: there is currently NO Prometheus metric that exports
+      # per-operation item-processed progress. internal/metrics/metrics.go
+      # only has operations_started/completed/failed/canceled_total (count
+      # by type, not progress within a still-running op) and
+      # operation_duration_seconds (only observed once an op finishes, so it
+      # cannot detect a wedged/still-running op). The actual progress signal
+      # today is internal/operations/progress.go's ProgressReporter.
+      # UpdateProgress(current, total, message) — purely in-process, stored
+      # on the op record and returned via GET
+      # /api/v1/operations/v2/<op_id>, never exported to Prometheus.
+      #
+      # A TODO.md line has been added for building the exporter (a gauge
+      # such as audiobook_organizer_op_items_processed{op_id,op_type} updated
+      # from UpdateProgress, likely via a small adapter around ProgressReporter
+      # in internal/operations). Once that metric exists, uncomment and wire
+      # up a rule of this shape:
+      #
+      # - alert: AudiobookOrganizerOpStalled
+      #   expr: >-
+      #     (audiobook_organizer_op_active == 1)
+      #     and
+      #     (rate(audiobook_organizer_op_items_processed_total[30m]) == 0)
+      #   for: 30m
+      #   labels:
+      #     severity: warning
+      #   annotations:
+      #     summary: "audiobook-organizer operation appears stalled"
+      #     description: >-
+      #       An operation ({{ $labels.op_type }}, {{ $labels.op_id }}) has
+      #       been active for at least 30 minutes with zero items processed
+      #       in that window — likely wedged rather than merely slow. Check
+      #       `journalctl -u audiobook-organizer` and GET
+      #       /api/v1/operations/v2/{{ $labels.op_id }} for the last log line.
