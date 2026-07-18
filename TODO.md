@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.7.0 -->
+<!-- version: 10.8.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-18 -->
 
@@ -217,6 +217,39 @@ Companion docs:
     endpoint omits transcription fields.
 49. **iTunes heal Layer-6 re-trigger** (H1:897) — re-run after path-heal residuals
     shrink (see pending-prod-actions).
+
+## Dedup + review consolidation (3) — 2026-07-18 owner request
+
+Owner directive (2026-07-18) while reviewing the live dedup/review experience: the
+current dedup page is too heavy, the review UI is poor, and obvious near-identical
+duplicates (same file, differing by a character or two) should be auto-confirmed by
+audio fingerprint. Investigate read-only first (dedup page vs review page component
+boundaries; current review-queue flow) and present a plan before building — this is
+frontend + backend feature work, not a mechanical change.
+
+50. **AcoustID confirmatory pass to narrow near-dupe candidates** — use audio
+    fingerprint match as a *confirming* signal on title/filename near-dupes (the
+    "same file, one extra character" cases = title-leak residue) to auto-promote them
+    to high-confidence / auto-merge, leaving genuinely-distinct pairs to normal scoring.
+    **CAVEAT (do not re-litigate):** AcoustID is NOT viable as a *blanket* veto — the
+    2026-07-02 finding was ~65% of books unfingerprinted, so a fingerprint-required gate
+    silently drops most pairs (see [[matching_and_dedup_findings_jul2]],
+    [[fingerprint_lsh_dedup_state]]). It only helps where BOTH sides are fingerprinted;
+    the real lever for broad coverage remains the fingerprint-coverage campaign
+    (consultancy-roadmap TASK-16). **First step:** re-measure current fingerprint
+    coverage (may have improved via the backfill campaign) before scoping the design.
+    Cross-ref: `internal/dedup/engine.go`, `internal/plugins/acoustid/`.
+51. **Overhaul the review interface ("make it not suck")** — the review page UX is a
+    pain point. Needs a concrete redesign spec: read-only audit of the current review
+    page (what it shows today, interaction friction, per-hold actions) → propose
+    redesign. Ties to the review-queue track (A1/A2/B1 shipped; B2 apply path merged
+    #1953, default OFF — see [[project_review_queue_regroup]]). Prereq for item 52.
+52. **Consolidate the dedup page into the review page** — slim the dedup page down to
+    run-control only (start/stop dedup runs + run status/progress); move ALL candidate
+    and result display + review actions into the review page so there is one place to
+    review everything. Depends on item 51 (the review UI must be good enough to absorb
+    the dedup results first). Investigate current dedup-page vs review-page component
+    boundaries before committing to a plan.
 
 ## 2026-07-17 review findings — remaining (post-fix-wave)
 
