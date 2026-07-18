@@ -1,5 +1,5 @@
 // file: internal/operations/registry/registry.go
-// version: 3.8.0
+// version: 3.9.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-07-18
 
@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"github.com/oklog/ulid/v2"
 )
 
@@ -792,7 +793,17 @@ func (r *Registry) publishOpCreated(row database.OperationV2Row, resumed bool) {
 // (canceled/timeout/abandon paths) or is about to be, so passing runCtx would
 // make the publish a no-op on exactly the paths that most need it. The bus is
 // nil-safe; publishOpTerminal is a no-op when no bus is wired.
+//
+// This is also the single choke point every terminal-transition call site
+// (worker.go's canceled/subprocess/abandoned/normal paths, deps_scheduler.go,
+// and Cancel below) already routes through, so it doubles as the cleanup
+// point for the OPS-5 per-op progress gauges (metrics.SetOpProgress): without
+// deleting them here, audiobook_organizer_op_items_processed/_total would
+// accumulate one label-series per historical op_id forever. This runs
+// regardless of whether a bus is wired.
 func (r *Registry) publishOpTerminal(opID, defID, status string) {
+	metrics.ClearOpProgress(opID, defID)
+
 	if r.bus == nil {
 		return
 	}

@@ -1,7 +1,7 @@
 // file: internal/metrics/metrics.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9f8e7d6c-5b4a-3210-9fed-cba876543210
-// last-edited: 2026-07-03
+// last-edited: 2026-07-18
 
 package metrics
 
@@ -123,6 +123,32 @@ var (
 		Name:      "ai_backend_available",
 		Help:      "1 if the named AI backend was reachable/available at last check, else 0",
 	}, []string{"backend"})
+
+	// opItemsProcessed/opItemsTotal export per-operation *progress* while an op
+	// is still running (OPS-5 op-stall detection). Unlike the started/completed/
+	// failed/canceled counters above (count of ops by type, only incremented at
+	// lifecycle edges), these gauges reflect the in-flight ProgressReporter.
+	// UpdateProgress(current, total, ...) state so a wedged-but-still-"running"
+	// op (e.g. the 2026-07-05 dedup.full-scan 3hr hang, or the 9hr Pebble
+	// write-stall freeze — both only noticed by a human watching the UI) can be
+	// alerted on via rate(op_items_processed) == 0 for a sustained window.
+	//
+	// Labeled by {op_id, op_type} rather than just {op_type} because the alert
+	// needs to identify the *specific* wedged run, not just its type. This is
+	// bounded cardinality in practice: only currently in-flight ops have a
+	// series at all — ClearOpProgress deletes both series the instant an op
+	// reaches a terminal state (see registry.publishOpTerminal), so historical
+	// op_ids never accumulate.
+	opItemsProcessed = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "audiobook_organizer",
+		Name:      "op_items_processed",
+		Help:      "Current items-processed count for an in-flight operation, by op_id and op_type. Deleted once the op reaches a terminal state.",
+	}, []string{"op_id", "op_type"})
+	opItemsTotal = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "audiobook_organizer",
+		Name:      "op_items_total",
+		Help:      "Total items expected for an in-flight operation (0 if not yet known), by op_id and op_type. Deleted once the op reaches a terminal state.",
+	}, []string{"op_id", "op_type"})
 )
 
 // Register initializes metrics with the global Prometheus registry (idempotent)
@@ -131,7 +157,8 @@ func Register() {
 		prometheus.MustRegister(operationStarted, operationCompleted, operationFailed, operationCanceled, operationDuration,
 			booksGauge, foldersGauge, memoryAllocGauge, goroutinesGauge,
 			cacheHits, cacheMisses, cacheSets, cacheInvalidations, cacheEvictions, cacheSize, cacheGetDuration,
-			itunesLocationUnmappable, aiBackendAvailable)
+			itunesLocationUnmappable, aiBackendAvailable,
+			opItemsProcessed, opItemsTotal)
 	})
 }
 
@@ -167,6 +194,26 @@ func SetBooks(n int)          { booksGauge.Set(float64(n)) }
 func SetFolders(n int)        { foldersGauge.Set(float64(n)) }
 func SetMemoryAlloc(b uint64) { memoryAllocGauge.Set(float64(b)) }
 func SetGoroutines(n int)     { goroutinesGauge.Set(float64(n)) }
+
+// SetOpProgress records the current/total items-processed progress for an
+// in-flight operation (OPS-5 op-stall detection). Call on every
+// ProgressReporter.UpdateProgress. opType should be the op's def_id (stable
+// type identifier), not a free-form message, to keep cardinality bounded.
+func SetOpProgress(opID, opType string, current, total int) {
+	opItemsProcessed.WithLabelValues(opID, opType).Set(float64(current))
+	opItemsTotal.WithLabelValues(opID, opType).Set(float64(total))
+}
+
+// ClearOpProgress deletes the per-op progress gauge series for opID/opType.
+// Call exactly once when an operation reaches a terminal state (completed,
+// failed, canceled, or interrupted) — without this, op_items_processed and
+// op_items_total would accumulate one label-series per historical op_id
+// forever (unbounded cardinality growth). Safe to call even if no series was
+// ever set for this opID (no-op).
+func ClearOpProgress(opID, opType string) {
+	opItemsProcessed.DeleteLabelValues(opID, opType)
+	opItemsTotal.DeleteLabelValues(opID, opType)
+}
 
 // Cache helpers
 func RecordCacheHit(cache string)          { cacheHits.WithLabelValues(cache).Inc() }

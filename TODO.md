@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.5.0 -->
+<!-- version: 10.6.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-18 -->
 
@@ -129,16 +129,22 @@ Companion docs:
     review, REPO-SIZE-1.
 35. **Consultancy wave 4+ residuals** ([roadmap](docs/consultancy/00-ROADMAP.md)) —
     unverified; needs a close-out sweep against shipped work.
-36. **Op-progress Prometheus metric (T12 follow-up)** — no metric today exports
-    per-operation item-processed progress; `internal/metrics/metrics.go` only
-    has started/completed/failed/canceled counts by type, not progress within
-    a running op. Build an exporter (e.g. a gauge
-    `audiobook_organizer_op_items_processed{op_id,op_type}`, updated from
-    `internal/operations/progress.go`'s `ProgressReporter.UpdateProgress`) so
-    the commented-out "op stalled" alert in `deploy/prometheus/alert-rules.yml`
-    can be uncommented and wired up. This closes the observability gap behind
-    the 3+ hour `dedup.full-scan` hang and the 9hr Pebble write-stall freeze —
-    both were only noticed by a human watching the UI.
+36. **Op-progress Prometheus metric (T12 follow-up)** — ✅ DONE (PR #2014,
+    2026-07-18): added `audiobook_organizer_op_items_processed{op_id,op_type}`
+    + companion `audiobook_organizer_op_items_total{op_id,op_type}` gauges
+    (`internal/metrics/metrics.go`, `SetOpProgress`/`ClearOpProgress`), set on
+    every `dbReporter.UpdateProgress` call
+    (`internal/operations/registry/reporter_db.go`) and deleted on every
+    terminal transition via `registry.publishOpTerminal`
+    (`internal/operations/registry/registry.go`) so stale op_ids never
+    accumulate. Uncommented + finalized the "op stalled" alert in
+    `deploy/prometheus/alert-rules.yml` (`AudiobookOrganizerOpStalled`,
+    `rate(audiobook_organizer_op_items_processed[30m]) == 0` for 30m —
+    existence of the series itself proxies "op is active" since it's deleted
+    at terminal, so no separate `op_active` gauge was needed). Closes the
+    observability gap behind the 3+ hour `dedup.full-scan` hang and the 9hr
+    Pebble write-stall freeze — both were only noticed by a human watching
+    the UI.
 
 ## UX (4)
 
