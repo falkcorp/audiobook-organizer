@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.178.0 -->
+<!-- version: 3.179.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-18 -->
 
@@ -8,6 +8,30 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 18, 2026 - feat(metrics): per-operation progress exporter + op-stall alert (TODO #36)
+
+- **`audiobook_organizer_op_items_processed{op_id,op_type}`** and a companion
+  **`audiobook_organizer_op_items_total{op_id,op_type}`** gauge were added
+  (`internal/metrics/metrics.go`, `SetOpProgress`/`ClearOpProgress`) —
+  previously `internal/metrics/metrics.go` only counted ops
+  started/completed/failed/canceled by type; nothing exported a running op's
+  items-processed progress, so a wedged-but-"running" op (the 2026-07-05
+  `dedup.full-scan` 3+ hour hang, the 9hr Pebble write-stall freeze) was only
+  ever noticed by a human watching the UI.
+- Wired from the registry's DB-backed progress reporter
+  (`internal/operations/registry/reporter_db.go`, `dbReporter.UpdateProgress`)
+  on every `ProgressReporter.UpdateProgress` call, and cleared via
+  `registry.publishOpTerminal` (`internal/operations/registry/registry.go`) —
+  the single choke point every terminal transition (completed/failed/
+  canceled/interrupted/dep-failure-propagated) already routes through — so
+  stale op_ids never accumulate as unbounded label-series cardinality.
+- Uncommented + finalized the "op stalled" alert left by PR #2001/T12 in
+  `deploy/prometheus/alert-rules.yml`: `AudiobookOrganizerOpStalled` fires on
+  `rate(audiobook_organizer_op_items_processed[30m]) == 0` for 30m. No
+  separate `op_active` gauge was needed — the series' own existence (created
+  at op start, deleted at terminal) already proxies "is this op still
+  running". Validated with `promtool check rules`.
 
 #### July 18, 2026 - fix(logging): H/M observability batch (T05)
 

@@ -1,5 +1,5 @@
 // file: internal/operations/registry/reporter_db.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 1a2b3c4d-5e6f-7890-abcd-ef0123456789
 // last-edited: 2026-07-18
 
@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 )
 
 // Bus is satisfied by the EventHub in UOS-06. A nil Bus is safe; all
@@ -322,6 +323,12 @@ func (r *dbReporter) UpdateProgress(current, total int, message string) error {
 	r.lastProgressMessage = message
 	r.progressMu.Unlock()
 	r.progressGen.Add(1)
+
+	// OPS-5: export current/total to Prometheus on every progress update so a
+	// wedged-but-"running" op is detectable via rate(op_items_processed) == 0
+	// rather than only by a human watching the UI. Cleared on terminal
+	// transition by registry.publishOpTerminal -> metrics.ClearOpProgress.
+	metrics.SetOpProgress(r.opID, r.defID, current, total)
 
 	if r.synchronous {
 		if err := r.store.UpdateOpProgressV2(r.opID, current, total, message); err != nil {
