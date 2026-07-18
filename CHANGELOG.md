@@ -91,6 +91,41 @@
   the already-patched caller. Fixed by de-duplicating `bookIDs` at the top of
   `MergeBooks` itself so every caller is protected regardless of whether it
   remembers to de-dupe first.
+#### July 18, 2026 - fix(library): heavy filter + non-title sort returned 0 books (TODO #16)
+
+- **Root cause**: `AudiobookService.GetAudiobooks` (`internal/audiobooks/service_query.go`)
+  pushes heavy filters (FieldFilters like `language`/`genre`/`publisher`, fingerprint
+  status/coverage, per-user filters) down to the memdb walker as a
+  `database.BookSummaryFilter` predicate, which matches correctly against the real
+  memdb `*Book`. But when the request also carried a non-title sort (author, series,
+  date_added, duration, etc.), the code kept `hasPostFilters = true` and re-ran the
+  *same* filters again — this time against `bookSummariesToBooks(summaries)`
+  projections. `database.BookSummary` doesn't carry every `Book` field (Language,
+  Genre, Publisher, Edition, Codec, Quality, FingerprintStatus, CoveragePercent are
+  all absent), so the re-check read those as `""`/zero and rejected every row,
+  returning an empty page while `CountAudiobooksFiltered` (which clears `SortBy`
+  before counting, so it never re-filters) reported the correct non-zero count —
+  exactly the count/list divergence users saw on the Library page.
+- **Fix**: once the memdb pushdown has applied a filter (`didPushdown=true`), never
+  re-apply it in the post-filter pass — the pushdown predicate is authoritative.
+  For non-title sorts, the full filtered (but unpaginated) set returned by the
+  pushdown is now sorted and paginated directly (new shared `paginateFilteredBooks`
+  helper), instead of silently discarding it via a redundant, field-incomplete
+  re-filter.
+- Added `internal/audiobooks/service_query_heavyfilter_sort_test.go`
+  (`TestB1HeavyFilterNonTitleSort_*`) proving the language/fingerprint/coverage
+  filter + non-title-sort combination returns the correct non-empty, correctly
+  sorted, correctly paginated page and agrees with `CountAudiobooksFiltered`.
+  Confirmed each new test fails against the pre-fix code and passes after.
+- **Separately identified, NOT fixed here** (documented as a new backlog item):
+  the advanced-search `FieldFilters` entries with `Field: "author"` or
+  `Field: "series"` (filtering by resolved name, not `author_id`/`series_id`)
+  always return 0 books, independent of sort — `book.Author`/`book.Series` are
+  never hydrated on memdb-resident or BookSummary-projected `Book`s, so
+  `fieldMatchesValue`'s `book.Author.Name`/`book.Series.Name` lookups are always
+  nil. Direct `?author_id=`/`?series_id=` query-param filtering (the Library UI's
+  actual author/series filter control) is unaffected — it resolves via
+  `GetBooksByAuthorIDCore`/`GetBooksBySeriesIDCore`, not this FieldFilter path.
 
 #### July 18, 2026 - fix(logging): H/M observability batch (T05)
 

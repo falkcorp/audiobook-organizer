@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.7.2
+// version: 1.8.0
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
-// last-edited: 2026-07-11
+// last-edited: 2026-07-18
 
 package audiobooks
 
@@ -64,6 +64,11 @@ func (svc *AudiobookService) GetAudiobooks(ctx context.Context, limit int, offse
 	// Initialize as empty slice to ensure we return [] instead of null
 	books := []database.Book{}
 	var err error
+	// alreadySortedAndPaginated is set true only by the didPushdown+heavySorting
+	// branch below, which sorts and paginates the pushdown result itself. It
+	// skips the trailing applySorting call so an already-paginated (≤limit-sized)
+	// page isn't needlessly re-sorted.
+	alreadySortedAndPaginated := false
 
 	// Apply filters in order of precedence
 	if search != "" {
@@ -145,9 +150,9 @@ func (svc *AudiobookService) GetAudiobooks(ctx context.Context, limit int, offse
 			// go through pushdown with predicates, reducing fetched rows from
 			// ~68K (unfiltered) to only the filtered subset (e.g. ~38K primary).
 			if bsf, pushdownOK, pebbleLookups := svc.buildBookSummaryFilterWithLookupCount(f, sortAsc); pushdownOK {
-				// Non-title sorts need the post-filter pass for pagination
-				// (sort happens after paginate — pre-existing design). Fetch all
-				// filtered books so the service can slice after sorting.
+				// Non-title sorts can't be pushed to memdb's title radix index,
+				// so fetch the FULL filtered set (pdLimit/pdOffset zeroed) and
+				// sort+paginate in application memory below.
 				pdLimit, pdOffset := limit, offset
 				if heavySorting {
 					pdLimit, pdOffset = 0, 0
@@ -160,13 +165,37 @@ func (svc *AudiobookService) GetAudiobooks(ctx context.Context, limit int, offse
 					slog.Debug("GetAudiobooks: stripped-field predicate Pebble fallback",
 						"lookups", *pebbleLookups, "books_returned", len(books))
 				}
-				// When the store pushed down AND the walker already handled
-				// pagination (no heavy sort), the post-filter pass would
-				// double-apply pagination. Skip it. For heavy sorts, keep
-				// hasPostFilters = true so the pagination block runs after
-				// applySorting recombines the filtered set.
-				if didPushdown && !heavySorting {
+				if didPushdown {
+					// The memdb walker already applied every predicate carried
+					// on bsf — tags (RestrictToIDs), IsPrimaryVersion,
+					// LibraryState, ReviewStatus, and the closure covering
+					// FieldFilters/FingerprintStatus/CoveragePercent/
+					// PerUserFilters — against the real memdb *Book. Re-running
+					// those same filters below would evaluate them against
+					// bookSummariesToBooks(summaries) projections instead, and
+					// BookSummary doesn't carry every Book field (Language,
+					// Genre, Publisher, Edition, Codec, Quality,
+					// FingerprintStatus, CoveragePercent are all
+					// BookSummary-absent — see database.BookSummary). A
+					// re-check would read those as "" / zero and drop every
+					// row, so a heavy filter combined with a non-title sort
+					// came back with 0 books despite CountAudiobooksFiltered
+					// (which never re-filters) reporting the correct N. Skip
+					// the post-filter pass unconditionally once the store has
+					// pushed the filter down — never re-apply it.
 					hasPostFilters = false
+					if heavySorting {
+						// The fetch above returned the full filtered set,
+						// unpaginated and unsorted (pdLimit/pdOffset were
+						// zeroed). Sort it now, then paginate ourselves —
+						// mirrors the title-sort branch's filter-then-sort-
+						// then-paginate semantics. alreadySortedAndPaginated
+						// skips the redundant trailing applySorting call
+						// below.
+						applySorting(books, f)
+						books = paginateFilteredBooks(books, limit, offset)
+						alreadySortedAndPaginated = true
+					}
 				}
 			} else {
 				// pushdownOK == false is only reachable when tag→ID
@@ -330,19 +359,16 @@ func (svc *AudiobookService) GetAudiobooks(ctx context.Context, limit int, offse
 		}
 
 		// Apply pagination after filtering
-		if offset > 0 && offset < len(filtered) {
-			filtered = filtered[offset:]
-		} else if offset >= len(filtered) {
-			filtered = nil
-		}
-		if limit > 0 && limit < len(filtered) {
-			filtered = filtered[:limit]
-		}
-		books = filtered
+		books = paginateFilteredBooks(filtered, limit, offset)
 	}
 
-	// Apply sorting after all filtering but before returning
-	applySorting(books, f)
+	// Apply sorting after all filtering but before returning. Skipped when the
+	// didPushdown+heavySorting branch above already sorted (and paginated) the
+	// pushdown result — re-sorting an already-paginated ≤limit-sized page is
+	// wasted work, not a correctness issue, but there is no reason to pay it.
+	if !alreadySortedAndPaginated {
+		applySorting(books, f)
+	}
 
 	// Ensure we never return null - always return empty array
 	if books == nil {
