@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.8.0 -->
+<!-- version: 10.9.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-18 -->
 
@@ -202,7 +202,22 @@ Companion docs:
 
 ## Other / close-out (10)
 
-40. **4.8 — Store ISP sweep** (H1:2787) — ~38-file sweep + 18-file noop cleanup remain.
+40. **4.8 — Store ISP sweep** (H1:2787) — **RE-SCOPED 2026-07-18; the "~38-file + 18
+    noop" count below was pre-reorg and is WRONG.** Re-audit found `database.Store` is a
+    field/param in **~151 prod + 35 test files** (a package reorg since the April plan
+    split `internal/server` into `internal/audiobooks|metafetch|merge|organizer|
+    maintenance/jobs|server/handlers/*`, obsoleting the file lists in
+    `docs/archive/superpowers/plans/2026-04-17-store-iface-sweep.md` — whose COMPLETE
+    stamp reflected a deliberate "diminishing returns on the hubs" stop that STILL holds
+    post-reorg). **Decision 2026-07-18: do the DI-seams + shallow-consumer subset only**
+    (narrow the 8 `internal/server/handlers/*/interfaces.go` + `internal/server/
+    interfaces.go`, plus genuinely-shallow post-April consumers; leave hubs/bootstrap/
+    wiring/decorators wide with justification comments) — NOT the full 151-file sweep.
+    Type-only change (no runtime/data impact); existing `mocks.Store` already satisfies
+    every sub-interface so no wave triggers a mockery regen. Old sweep tooling
+    (`scripts/{check_store_noops,narrow_struct_services,apply_narrowing}.py`) survives but
+    its hardcoded file lists must be regenerated. **Not started; deferred behind the
+    dedup+review consolidation work (items 50–52).**
 41. ~~**4.10 — MergeService mock-store unit tests** (H1:2789)~~ — DONE: `internal/merge`
     coverage 70.3%→96.6%. Added 34 tests across external-ID reassignment, ITL-removal
     enqueue, loser soft-delete, nil/empty-override wipe-safety, version-group integrity
