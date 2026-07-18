@@ -1,7 +1,7 @@
 // file: internal/itunes/service/path_repair.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 01ad6c79-5f3f-4ee1-a07a-1f4b3a8c0d12
-// last-edited: 2026-07-17
+// last-edited: 2026-07-18
 //
 // PathRepairer dumps the iTunes XML, finds tracks whose Location no
 // longer exists on disk, re-discovers the correct path via three tiers
@@ -19,6 +19,10 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
+	"sync/atomic"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -27,6 +31,39 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 )
+
+// pathRepairWorkers bounds the track-loop worker pool (R-9). 8 is a fixed,
+// modest concurrency for network/NAS-bound per-track DB + filesystem work —
+// not runtime.NumCPU(), since the loop is I/O-bound (DB reads/writes, disk
+// stat), not CPU-bound.
+const pathRepairWorkers = 8
+
+// bookWriteLocks serializes applyResolution calls that target the SAME
+// bookID across worker goroutines. Two tracks belonging to one multi-file
+// audiobook could otherwise both take applyResolution's book-level fallback
+// path (GetBookByID → mutate → UpdateBook) concurrently — a classic
+// fetch-full-mutate lost-update race (the same shape as the prior
+// Author/Series write-back wipe bug). Different bookIDs still run fully in
+// parallel; only same-book writes are serialized. Locks are created lazily
+// and live only for the duration of one repair run.
+type bookWriteLocks struct {
+	mu    sync.Mutex
+	locks map[string]*sync.Mutex
+}
+
+func (l *bookWriteLocks) forBook(bookID string) *sync.Mutex {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.locks == nil {
+		l.locks = make(map[string]*sync.Mutex)
+	}
+	m, ok := l.locks[bookID]
+	if !ok {
+		m = &sync.Mutex{}
+		l.locks[bookID] = m
+	}
+	return m
+}
 
 // PathRepairConfig holds the immutable inputs the repairer needs:
 // where to read the iTunes XML, where the audiobook tree lives for
@@ -179,27 +216,31 @@ func (r *PathRepairer) repairWithResult(ctx context.Context, opID string, dryRun
 	// tag extraction across runtime.NumCPU()*4 workers and report
 	// progress every 250 files so the operator sees the long step
 	// is actually moving.
-	var tierB tagScanner
-	tierBBuiltLogged := false
+	//
+	// getTierB is called from multiple worker goroutines below, so the
+	// lazy-build itself is guarded by sync.Once — the previous plain
+	// `if tierB == nil { tierB = ... }` was a data race (and possible
+	// double-build) once the track loop went concurrent.
+	var (
+		tierBOnce sync.Once
+		tierB     tagScanner
+	)
 	getTierB := func() tagScanner {
-		if tierB == nil {
+		tierBOnce.Do(func() {
 			if r.cfg.AudiobookRoot == "" || r.bookIDExtractor == nil {
 				tierB = noopTagScanner{}
-			} else {
-				_ = progress.Log("info",
-					fmt.Sprintf("tier B: scanning audiobook root in parallel root=%s workers=%d",
-						r.cfg.AudiobookRoot, runtime.NumCPU()*4), nil)
-				scanner := newFSTagScanner(r.cfg.AudiobookRoot, r.bookIDExtractor).
-					withProgress(func(done, total int) {
-						_ = progress.Log("info",
-							fmt.Sprintf("tier B: tag scan progress %d/%d", done, total), nil)
-					}, 500)
-				tierB = scanner
+				return
 			}
-		}
-		if !tierBBuiltLogged {
-			tierBBuiltLogged = true
-		}
+			_ = progress.Log("info",
+				fmt.Sprintf("tier B: scanning audiobook root in parallel root=%s workers=%d",
+					r.cfg.AudiobookRoot, runtime.NumCPU()*4), nil)
+			scanner := newFSTagScanner(r.cfg.AudiobookRoot, r.bookIDExtractor).
+				withProgress(func(done, total int) {
+					_ = progress.Log("info",
+						fmt.Sprintf("tier B: tag scan progress %d/%d", done, total), nil)
+				}, 500)
+			tierB = scanner
+		})
 		return tierB
 	}
 
@@ -219,110 +260,193 @@ func (r *PathRepairer) repairWithResult(ctx context.Context, opID string, dryRun
 		_ = persistRepairResult(r.store, opID, result)
 	}()
 
-	scanned := 0
+	// Main track loop, parallelized (R-9): each track does a per-track DB
+	// read (lookupBookID/resolveTierA/B) and, when resolved outside
+	// dry-run, a per-track DB write (applyResolution) — exactly the
+	// per-item-DB-I/O shape CLAUDE.md's concurrency mandate requires a
+	// bounded worker pool for. Fixed at pathRepairWorkers (8): this is
+	// I/O-bound work (DB + disk stat), not CPU-bound, so it isn't sized to
+	// runtime.NumCPU().
+	//
+	// Shared mutable state crossing goroutines, and how each is protected:
+	//   - `result` (counters + slices: Missing/AutoResolved/NeedsReview/
+	//     Unresolved/Undecodable/Enqueued/ReportPath/Resolutions/
+	//     NeedsReviewItems/UnresolvedPIDs/Errors) — every read AND write
+	//     goes through resMu. applyResolution itself no longer touches
+	//     `result` (see its doc comment) so its bookID-scoped lock and
+	//     resMu never nest.
+	//   - `scanned` — atomic.AddInt64, so the "every Nth track" progress/
+	//     persist cadence never double-fires (each returned value is unique).
+	//   - `tierB` (lazy fsTagScanner) — built exactly once via sync.Once
+	//     (see getTierB above); was a plain nil-check race before.
+	//   - book-level writes — applyResolution does a fetch-full-mutate
+	//     (GetBookFiles/GetBookByID → mutate → UpdateBookFile/UpdateBook).
+	//     Two tracks that resolve to the SAME bookID (a multi-file
+	//     audiobook with more than one missing track) must never run that
+	//     fetch-mutate concurrently, so the write is serialized per-bookID
+	//     via bookLocks — disjoint books still run fully in parallel.
+	var (
+		resMu     sync.Mutex
+		scanned   int64
+		bookLocks bookWriteLocks
+	)
+
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(pathRepairWorkers)
+
 	for _, track := range lib.Tracks {
-		select {
-		case <-ctx.Done():
-			return result, ctx.Err()
-		default:
-		}
-		scanned++
-		if scanned%progressEvery == 0 {
-			_ = progress.UpdateProgress(scanned, len(lib.Tracks),
-				fmt.Sprintf("scanning iTunes locations: %d/%d missing=%d auto=%d review=%d unresolved=%d",
-					scanned, len(lib.Tracks), result.Missing, result.AutoResolved, result.NeedsReview, result.Unresolved))
-		}
-		if scanned%persistEvery == 0 {
-			// Snapshot the partial result so an interrupted run still
-			// leaves something the operator can review.
-			if r.cfg.ReportDir != "" {
-				if reportPath, err := writeReportFile(r.cfg.ReportDir, opID, result); err == nil {
-					result.ReportPath = reportPath
+		track := track
+		g.Go(func() error {
+			select {
+			case <-gctx.Done():
+				return gctx.Err()
+			default:
+			}
+
+			n := atomic.AddInt64(&scanned, 1)
+			if n%progressEvery == 0 {
+				resMu.Lock()
+				snap := result
+				resMu.Unlock()
+				_ = progress.UpdateProgress(int(n), len(lib.Tracks),
+					fmt.Sprintf("scanning iTunes locations: %d/%d missing=%d auto=%d review=%d unresolved=%d",
+						n, len(lib.Tracks), snap.Missing, snap.AutoResolved, snap.NeedsReview, snap.Unresolved))
+			}
+			if n%persistEvery == 0 {
+				// Snapshot the partial result so an interrupted run still
+				// leaves something the operator can review.
+				resMu.Lock()
+				snap := result
+				resMu.Unlock()
+				if r.cfg.ReportDir != "" {
+					if reportPath, werr := writeReportFile(r.cfg.ReportDir, opID, snap); werr == nil {
+						resMu.Lock()
+						result.ReportPath = reportPath
+						resMu.Unlock()
+						snap.ReportPath = reportPath
+					}
 				}
+				_ = persistRepairResult(r.store, opID, snap)
 			}
-			_ = persistRepairResult(r.store, opID, result)
-		}
-		if !itunes.IsAudiobook(track) {
-			continue
-		}
-		decoded, derr := itunes.DecodeLocation(track.Location)
-		if derr != nil || decoded == "" {
-			// M6: count skipped-undecodable locations so the repair summary
-			// reflects them instead of silently dropping them.
-			result.Undecodable++
-			continue
-		}
-		if pathExists(decoded) {
-			continue
-		}
-		result.Missing++
-
-		// Single PID → bookID lookup shared by tier A and tier B.
-		bookID := lookupBookID(r.store, track.PersistentID)
-
-		// Tier A: bookID → DB-known on-disk path
-		if newPath, ok := resolveTierA(r.store, track.PersistentID, bookID, pathExists); ok {
-			result.AutoResolved++
-			result.Resolutions = append(result.Resolutions, resolvedTrack{
-				PID: track.PersistentID, OldPath: decoded, NewPath: newPath, Tier: "A", BookID: bookID,
-			})
-			if r.activityWriter != nil {
-				activity.LogBatch(r.activityWriter, opID, "path-repair", "path-repairer",
-					activity.BatchItem{Name: filepath.Base(decoded), Detail: "tier-A"})
+			if !itunes.IsAudiobook(track) {
+				return nil
 			}
-			if !dryRun {
-				if err := r.applyResolution(track.PersistentID, bookID, decoded, newPath, &result); err != nil {
-					result.Errors = append(result.Errors, fmt.Sprintf("apply tier=A pid=%s: %v", track.PersistentID, err))
+			decoded, derr := itunes.DecodeLocation(track.Location)
+			if derr != nil || decoded == "" {
+				// M6: count skipped-undecodable locations so the repair summary
+				// reflects them instead of silently dropping them.
+				resMu.Lock()
+				result.Undecodable++
+				resMu.Unlock()
+				return nil
+			}
+			if pathExists(decoded) {
+				return nil
+			}
+			resMu.Lock()
+			result.Missing++
+			resMu.Unlock()
+
+			// Single PID → bookID lookup shared by tier A and tier B.
+			bookID := lookupBookID(r.store, track.PersistentID)
+
+			// Tier A: bookID → DB-known on-disk path
+			if newPath, ok := resolveTierA(r.store, track.PersistentID, bookID, pathExists); ok {
+				resMu.Lock()
+				result.AutoResolved++
+				result.Resolutions = append(result.Resolutions, resolvedTrack{
+					PID: track.PersistentID, OldPath: decoded, NewPath: newPath, Tier: "A", BookID: bookID,
+				})
+				arCount := result.AutoResolved
+				resMu.Unlock()
+				if r.activityWriter != nil {
+					activity.LogBatch(r.activityWriter, opID, "path-repair", "path-repairer",
+						activity.BatchItem{Name: filepath.Base(decoded), Detail: "tier-A"})
 				}
-			}
-			if result.AutoResolved%detailLogEvery == 1 {
-				_ = progress.Log("info",
-					fmt.Sprintf("sample tier=A pid=%s old=%s new=%s action=%s",
-						track.PersistentID, decoded, newPath, applyAction(dryRun)), nil)
-			}
-			continue
-		}
-
-		// Tier B: embedded AUDIOBOOK_ORGANIZER_ID tag scan
-		if newPath, ok := resolveTierB(getTierB(), bookID, pathExists); ok {
-			result.AutoResolved++
-			result.Resolutions = append(result.Resolutions, resolvedTrack{
-				PID: track.PersistentID, OldPath: decoded, NewPath: newPath, Tier: "B", BookID: bookID,
-			})
-			if r.activityWriter != nil {
-				activity.LogBatch(r.activityWriter, opID, "path-repair", "path-repairer",
-					activity.BatchItem{Name: filepath.Base(decoded), Detail: "tier-B"})
-			}
-			if !dryRun {
-				if err := r.applyResolution(track.PersistentID, bookID, decoded, newPath, &result); err != nil {
-					result.Errors = append(result.Errors, fmt.Sprintf("apply tier=B pid=%s: %v", track.PersistentID, err))
+				if !dryRun {
+					bl := bookLocks.forBook(bookID)
+					bl.Lock()
+					enq, aerr := r.applyResolution(track.PersistentID, bookID, decoded, newPath)
+					bl.Unlock()
+					resMu.Lock()
+					if enq {
+						result.Enqueued++
+					}
+					if aerr != nil {
+						result.Errors = append(result.Errors, fmt.Sprintf("apply tier=A pid=%s: %v", track.PersistentID, aerr))
+					}
+					resMu.Unlock()
 				}
+				if arCount%detailLogEvery == 1 {
+					_ = progress.Log("info",
+						fmt.Sprintf("sample tier=A pid=%s old=%s new=%s action=%s",
+							track.PersistentID, decoded, newPath, applyAction(dryRun)), nil)
+				}
+				return nil
 			}
-			if result.AutoResolved%detailLogEvery == 1 {
-				_ = progress.Log("info",
-					fmt.Sprintf("sample tier=B pid=%s old=%s new=%s action=%s",
-						track.PersistentID, decoded, newPath, applyAction(dryRun)), nil)
+
+			// Tier B: embedded AUDIOBOOK_ORGANIZER_ID tag scan
+			if newPath, ok := resolveTierB(getTierB(), bookID, pathExists); ok {
+				resMu.Lock()
+				result.AutoResolved++
+				result.Resolutions = append(result.Resolutions, resolvedTrack{
+					PID: track.PersistentID, OldPath: decoded, NewPath: newPath, Tier: "B", BookID: bookID,
+				})
+				arCount := result.AutoResolved
+				resMu.Unlock()
+				if r.activityWriter != nil {
+					activity.LogBatch(r.activityWriter, opID, "path-repair", "path-repairer",
+						activity.BatchItem{Name: filepath.Base(decoded), Detail: "tier-B"})
+				}
+				if !dryRun {
+					bl := bookLocks.forBook(bookID)
+					bl.Lock()
+					enq, aerr := r.applyResolution(track.PersistentID, bookID, decoded, newPath)
+					bl.Unlock()
+					resMu.Lock()
+					if enq {
+						result.Enqueued++
+					}
+					if aerr != nil {
+						result.Errors = append(result.Errors, fmt.Sprintf("apply tier=B pid=%s: %v", track.PersistentID, aerr))
+					}
+					resMu.Unlock()
+				}
+				if arCount%detailLogEvery == 1 {
+					_ = progress.Log("info",
+						fmt.Sprintf("sample tier=B pid=%s old=%s new=%s action=%s",
+							track.PersistentID, decoded, newPath, applyAction(dryRun)), nil)
+				}
+				return nil
 			}
-			continue
-		}
 
-		// Tier C: fuzzy candidates for human review. Never auto-applied.
-		info := trackInfo{Title: track.Name, OldBasename: filepath.Base(decoded)}
-		candidates := resolveTierC(getTierB().allPaths(), info, tierCThreshold, tierCTopN)
-		if len(candidates) > 0 {
-			result.NeedsReview++
-			result.NeedsReviewItems = append(result.NeedsReviewItems, needsReviewItem{
-				PID:        track.PersistentID,
-				OldPath:    decoded,
-				Title:      track.Name,
-				Candidates: candidates,
-			})
-			continue
-		}
+			// Tier C: fuzzy candidates for human review. Never auto-applied.
+			info := trackInfo{Title: track.Name, OldBasename: filepath.Base(decoded)}
+			candidates := resolveTierC(getTierB().allPaths(), info, tierCThreshold, tierCTopN)
+			if len(candidates) > 0 {
+				resMu.Lock()
+				result.NeedsReview++
+				result.NeedsReviewItems = append(result.NeedsReviewItems, needsReviewItem{
+					PID:        track.PersistentID,
+					OldPath:    decoded,
+					Title:      track.Name,
+					Candidates: candidates,
+				})
+				resMu.Unlock()
+				return nil
+			}
 
-		result.Unresolved++
-		result.UnresolvedPIDs = append(result.UnresolvedPIDs, track.PersistentID)
+			resMu.Lock()
+			result.Unresolved++
+			result.UnresolvedPIDs = append(result.UnresolvedPIDs, track.PersistentID)
+			resMu.Unlock()
+			return nil
+		})
 	}
+	if err := g.Wait(); err != nil {
+		return result, err
+	}
+	scannedTotal := int(atomic.LoadInt64(&scanned))
 
 	// The defer at the top of this function handles the final
 	// persistRepairResult + writeReportFile call. Just clear the
@@ -337,7 +461,7 @@ func (r *PathRepairer) repairWithResult(ctx context.Context, opID string, dryRun
 		result.XMLTracks, result.Missing, result.AutoResolved, result.NeedsReview, result.Unresolved, result.Undecodable, result.Enqueued, result.DryRun,
 	)
 	_ = progress.Log("info", summary, nil)
-	_ = progress.UpdateProgress(scanned, scanned, summary)
+	_ = progress.UpdateProgress(scannedTotal, scannedTotal, summary)
 	return result, nil
 }
 
@@ -346,7 +470,14 @@ func (r *PathRepairer) repairWithResult(ctx context.Context, opID string, dryRun
 // a path-history entry, and enqueues the book through the
 // WriteBackBatcher so the existing flush loop pushes the corrected
 // location to the .itl on its normal cadence.
-func (r *PathRepairer) applyResolution(pid, bookID, oldPath, newPath string, result *iTunesPathRepairResult) error {
+//
+// Returns whether the book was enqueued so the caller can fold that into
+// the shared result counters under its own lock — this function must not
+// touch iTunesPathRepairResult directly, since the main loop now calls it
+// from multiple worker goroutines (see repairWithResult's bookLocks: this
+// call is already serialized per-bookID, but the result struct is shared
+// across ALL books' goroutines, so any field write here would race).
+func (r *PathRepairer) applyResolution(pid, bookID, oldPath, newPath string) (enqueued bool, err error) {
 	wantITunesPath := metafetch.ComputeITunesPath(newPath)
 
 	// Prefer the matching BookFile when one exists.
@@ -365,7 +496,7 @@ func (r *PathRepairer) applyResolution(pid, bookID, oldPath, newPath string, res
 				bf.ITunesPath = wantITunesPath
 			}
 			if err := r.store.UpdateBookFile(bf.ID, &bf); err != nil {
-				return fmt.Errorf("update book_file %s: %w", bf.ID, err)
+				return false, fmt.Errorf("update book_file %s: %w", bf.ID, err)
 			}
 			updated = true
 			break
@@ -376,7 +507,7 @@ func (r *PathRepairer) applyResolution(pid, bookID, oldPath, newPath string, res
 	if !updated {
 		book, err := r.store.GetBookByID(bookID)
 		if err != nil || book == nil {
-			return fmt.Errorf("get book %s: %w", bookID, err)
+			return false, fmt.Errorf("get book %s: %w", bookID, err)
 		}
 		changed := false
 		if book.FilePath != newPath {
@@ -385,7 +516,7 @@ func (r *PathRepairer) applyResolution(pid, bookID, oldPath, newPath string, res
 		}
 		if changed {
 			if _, err := r.store.UpdateBook(bookID, book); err != nil {
-				return fmt.Errorf("update book %s: %w", bookID, err)
+				return false, fmt.Errorf("update book %s: %w", bookID, err)
 			}
 		}
 	}
@@ -396,14 +527,14 @@ func (r *PathRepairer) applyResolution(pid, bookID, oldPath, newPath string, res
 		NewPath:    newPath,
 		ChangeType: "itunes_path_repair",
 	}); err != nil {
-		return fmt.Errorf("record path change: %w", err)
+		return false, fmt.Errorf("record path change: %w", err)
 	}
 
 	if r.enqueuer != nil {
 		r.enqueuer.Enqueue(bookID)
-		result.Enqueued++
+		return true, nil
 	}
-	return nil
+	return false, nil
 }
 
 // pathExists is the production existsFn for the resolver. Test code

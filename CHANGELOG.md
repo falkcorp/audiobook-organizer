@@ -64,6 +64,38 @@
   completion count instead of the item index, so parallel progress no longer
   jumps backwards when items finish out of order. Covered by
   `run_items_p2_test.go`.
+#### July 18, 2026 - T11: concurrency + duration hygiene (F7, R-9, R-8)
+
+- **F7** `dedup.quarantine-chapter-artifacts`: the pass-2 per-book
+  `GetBookFiles` identification loop and the apply (soft-delete) loop were
+  plain serial `for` loops over whole-library-scale book lists. Both now run
+  through a `registry.RunItems`-style bounded worker pool
+  (`runtime.NumCPU()` workers), with shared counters/slices/maps protected by
+  a mutex and the apply-loop's quarantined counter made atomic. The apply
+  path's existing fetch-full-mutate soft-delete (GetBookByID → mutate →
+  UpdateBook) is unchanged and safe here since each artifact is a distinct
+  book ID.
+- **R-9** `internal/itunes/service/path_repair.go`: the main iTunes-track
+  repair loop (sequential per-track DB read + write) now runs on a bounded
+  8-worker pool. Fixed three real concurrency hazards found while
+  parallelizing: (1) the shared `result` counters/slices needed a mutex —
+  `applyResolution` was changed to return `(enqueued bool, err error)`
+  instead of mutating the shared result struct directly; (2) the lazily-built
+  tier-B tag scanner had a plain `if tierB == nil` race, now a `sync.Once`;
+  (3) two tracks belonging to the same multi-file audiobook could both hit
+  `applyResolution`'s book-level fetch-full-mutate fallback concurrently — a
+  lost-update race — now serialized per-bookID via a keyed mutex
+  (`bookWriteLocks`) so different books still repair fully in parallel.
+- **R-8** `internal/scanner/chapter_consolidation.go`: a chapter-file group
+  where mediainfo failed to read a duration for EVERY file averaged to
+  `0 < threshold` and was silently consolidated as "short", even though the
+  true duration was unknown, not short. Now tracks a per-group readable-file
+  count; when zero files in a group were readable, the group is classified
+  as unknown-duration, consolidation is skipped (each file becomes its own
+  Book, same as the mixed/long-group path), and a Warn + counter fire so an
+  operator can see unreadable groups accumulating.
+- All three packages (`internal/plugins/dedup`, `internal/itunes/...`,
+  `internal/scanner`) pass `go test ./... -race -count=1`.
 
 #### July 17, 2026 - error-correction fix wave (15 PRs) + sandbox verification
 
