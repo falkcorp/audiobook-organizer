@@ -1,7 +1,7 @@
 <!-- file: docs/plans/DECISIONS-PENDING.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 38115603-5a52-4745-83a5-2c9ca4528a9d -->
-<!-- last-edited: 2026-07-17 -->
+<!-- last-edited: 2026-07-18 -->
 
 # Decisions Pending — the STOP-FOR-HUMAN queue
 
@@ -20,6 +20,7 @@ not a passing text reply). Consolidated from the 2026-07-17 docs audit.
 | 7 | **Product rename** (1.17) | pick a name | — | Branding sweep across UI/docs/binary | TODO #37 (H1:2751) |
 | 8 | **Flip `review_apply_enabled` ON in prod** | enable globally / enable per-hold-type / keep OFF | Sandbox-first validation before any enable | Review-queue apply path doing real work (merged #1953, default OFF) | [`2026-07-13-review-queue-and-regroup.md`](2026-07-13-review-queue-and-regroup.md); [`../operations/pending-prod-actions.md`](../operations/pending-prod-actions.md) row 8 |
 | 9 | **PH-2b purge wave scope** — which residual populations get purged, and how | per-population ops (fragment-floor / title-leak / stub) vs review-only drain | Never blanket-purge (four-population analysis) | Draining the ~9,074 exact-pending backlog | [`../dedup/STATUS.md`](../dedup/STATUS.md); [`../operations/pending-prod-actions.md`](../operations/pending-prod-actions.md) row 1 |
+| 10 | **Should `unified.ComposeScore` clamp primary-signal `Confidence` against `cfg.Signals[kind].Min/MaxConfidence`?** (TODO item 6 follow-up, 2026-07-18) — `config.DedupSignalConfig.Confidence` now persists per-kind confidence bounds and `unified.LoadScoreConfig` merges them, but `ComposeScore` still reads `Signal.Confidence` verbatim and ignores those bounds, so they have zero effect on live scoring (only `dedup.calibrate-composite`'s own simulation consumes them today) | (a) add clamping to `ComposeScore` for primary kinds only (mirrors the `scoreWithClamp` simulation already in `calibrate_composite.go`), confirmed no-op under default config by a test, THEN also route `calibrate-composite`'s Round 2 confidence suggestions through `UpdateConfig` (behind a separate `apply_confidence` param, not the existing `apply` band gate); (b) leave `ComposeScore` untouched and keep Round 2 advisory-only — the new field only helps a hand-edited `config.yaml`-equivalent persist across restarts | — | Whether the confidence round can ever move production auto-merge scores, vs. remaining report-only | [`../../internal/plugins/dedup/calibrate_composite.go`](../../internal/plugins/dedup/calibrate_composite.go) (see "Two calibration surfaces" doc comment); [`../../internal/dedup/unified/compose.go`](../../internal/dedup/unified/compose.go) |
 
 ## Process
 

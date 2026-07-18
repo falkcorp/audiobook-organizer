@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/calibrate_composite_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7e5a1c3b-9d2f-4a08-8b61-3c4d5e6f7a89
-// last-edited: 2026-07-12
+// last-edited: 2026-07-18
 
 package dedup
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -131,7 +132,7 @@ func TestCalibrateCompositeDryRunWritesNothing(t *testing.T) {
 		t.Error("expected a recommended_high_min in the dry-run report")
 	}
 	after := config.Snapshot().Dedup.Signals
-	if before != after {
+	if !reflect.DeepEqual(before, after) {
 		t.Errorf("dry-run mutated config store: before=%+v after=%+v", before, after)
 	}
 }
@@ -213,7 +214,7 @@ func TestCalibrateCompositeTargetNotMetApplyWritesNothing(t *testing.T) {
 	if err := p.runCalibrateComposite(context.Background(), json.RawMessage(`{"min_scored_pairs":10,"apply":true}`), rep); err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if after := config.Snapshot().Dedup.Signals; before != after {
+	if after := config.Snapshot().Dedup.Signals; !reflect.DeepEqual(before, after) {
 		t.Errorf("apply on target-not-met mutated config: before=%+v after=%+v", before, after)
 	}
 }

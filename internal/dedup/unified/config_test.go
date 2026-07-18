@@ -1,6 +1,7 @@
 // file: internal/dedup/unified/config_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4f7a2c9b-8e3d-4b6f-a1c5-9e7b3d2f6a8c
+// last-edited: 2026-07-18
 
 package unified
 
@@ -268,5 +269,175 @@ func TestLoadScoreConfig_PerKindMinConfidenceOverride(t *testing.T) {
 	kc := cfg.Signals[string(SigEmbedMedium)]
 	if kc.MinConfidence != 0.70 {
 		t.Errorf("min_confidence override: expected 0.70, got %.4f", kc.MinConfidence)
+	}
+}
+
+// b6ResetConfidenceOverrides clears the package-level DB-persisted per-kind
+// confidence override state (SetKindConfidenceOverrides) before the test body
+// runs and again on cleanup, so TestSetKindConfidenceOverrides_* tests never
+// bleed into each other or into unrelated tests in this package (mirrors
+// resetViper's role for the Viper-backed state). Name is task-scoped (b6xxx,
+// INIT-1 T05 follow-up / TODO item 6) to avoid colliding with any other
+// worktree's helper of the same shape.
+func b6ResetConfidenceOverrides(t *testing.T) {
+	t.Helper()
+	SetKindConfidenceOverrides(nil)
+	t.Cleanup(func() { SetKindConfidenceOverrides(nil) })
+}
+
+// TestSetKindConfidenceOverrides_NoOverridesIsANoOp verifies that a nil/unset
+// override map (the default, and what SetKindConfidenceOverrides(nil) means)
+// leaves LoadScoreConfig's per-kind confidence bounds at their Viper/default
+// values — i.e. existing behaviour (and existing configs) are unaffected by
+// this feature existing at all.
+func TestSetKindConfidenceOverrides_NoOverridesIsANoOp(t *testing.T) {
+	resetViper(t)
+	b6ResetConfidenceOverrides(t)
+
+	cfg, err := LoadScoreConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	kc := cfg.Signals[string(SigEmbedMedium)]
+	if kc.MinConfidence != 0.65 || kc.MaxConfidence != 0.80 {
+		t.Fatalf("expected untouched defaults 0.65/0.80, got %.4f/%.4f", kc.MinConfidence, kc.MaxConfidence)
+	}
+}
+
+// TestSetKindConfidenceOverrides_OverridesOnlyThatKind verifies that a
+// DB-persisted override for one kind changes only that kind's bounds in the
+// resulting ScoreConfig — every other kind (spot-checked here) keeps its
+// compiled-in default. This is the "(a) a per-kind confidence overrides the
+// default for that kind only" requirement.
+func TestSetKindConfidenceOverrides_OverridesOnlyThatKind(t *testing.T) {
+	resetViper(t)
+	b6ResetConfidenceOverrides(t)
+
+	SetKindConfidenceOverrides(map[string]KindConfidenceOverride{
+		string(SigEmbedMedium): {MinConfidence: 0.72, MaxConfidence: 0.83},
+	})
+
+	cfg, err := LoadScoreConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	overridden := cfg.Signals[string(SigEmbedMedium)]
+	if overridden.MinConfidence != 0.72 || overridden.MaxConfidence != 0.83 {
+		t.Errorf("SigEmbedMedium: expected 0.72/0.83, got %.4f/%.4f", overridden.MinConfidence, overridden.MaxConfidence)
+	}
+
+	// Untouched kind must still be at its compiled-in default.
+	untouched := cfg.Signals[string(SigEmbedHigh)]
+	if untouched.MinConfidence != 0.88 || untouched.MaxConfidence != 0.95 {
+		t.Errorf("SigEmbedHigh should be untouched: expected 0.88/0.95, got %.4f/%.4f", untouched.MinConfidence, untouched.MaxConfidence)
+	}
+}
+
+// TestSetKindConfidenceOverrides_UnsetBoundFallsBack verifies that an
+// override entry which sets ONLY one bound (the other left at its zero
+// value) leaves the other bound at whatever Viper/default would otherwise
+// produce — a per-field "not set" fallback, not an all-or-nothing entry.
+// This is the "(b) an unset per-kind value falls back to the prior
+// behaviour" requirement.
+func TestSetKindConfidenceOverrides_UnsetBoundFallsBack(t *testing.T) {
+	resetViper(t)
+	b6ResetConfidenceOverrides(t)
+
+	SetKindConfidenceOverrides(map[string]KindConfidenceOverride{
+		// MaxConfidence deliberately left at zero == "not set".
+		string(SigEmbedMedium): {MinConfidence: 0.72},
+	})
+
+	cfg, err := LoadScoreConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	kc := cfg.Signals[string(SigEmbedMedium)]
+	if kc.MinConfidence != 0.72 {
+		t.Errorf("MinConfidence: expected overridden 0.72, got %.4f", kc.MinConfidence)
+	}
+	if kc.MaxConfidence != 0.80 {
+		t.Errorf("MaxConfidence: expected untouched default 0.80, got %.4f", kc.MaxConfidence)
+	}
+}
+
+// TestSetKindConfidenceOverrides_PrecedenceOverViper verifies the documented
+// precedence order (DB override > Viper > defaults): a Viper-set value AND a
+// DB-persisted override for the same kind/bound results in the DB value
+// winning, exactly like SetBandThresholds already wins over Viper for bands.
+func TestSetKindConfidenceOverrides_PrecedenceOverViper(t *testing.T) {
+	resetViper(t)
+	b6ResetConfidenceOverrides(t)
+
+	viper.Set("dedup.signals."+string(SigEmbedMedium), true)
+	viper.Set("dedup.signals."+string(SigEmbedMedium)+".min_confidence", 0.66)
+
+	SetKindConfidenceOverrides(map[string]KindConfidenceOverride{
+		string(SigEmbedMedium): {MinConfidence: 0.74},
+	})
+
+	cfg, err := LoadScoreConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	kc := cfg.Signals[string(SigEmbedMedium)]
+	if kc.MinConfidence != 0.74 {
+		t.Errorf("expected DB override 0.74 to win over Viper's 0.66, got %.4f", kc.MinConfidence)
+	}
+}
+
+// TestSetKindConfidenceOverrides_ConsumedByLoadScoreConfig is requirement (c):
+// the per-kind value is reflected by the config the rest of the package
+// consumes. As of this change (see docs/plans/DECISIONS-PENDING.md row 10),
+// ComposeScore itself does not yet clamp against these bounds — the wiring
+// stops at LoadScoreConfig's returned ScoreConfig, which is what
+// dedup.calibrate-composite and the dedup engine both read cfg.Signals from.
+// This test exercises exactly that boundary rather than asserting a
+// ComposeScore behaviour change that was deliberately not made here.
+func TestSetKindConfidenceOverrides_ConsumedByLoadScoreConfig(t *testing.T) {
+	resetViper(t)
+	b6ResetConfidenceOverrides(t)
+
+	SetKindConfidenceOverrides(map[string]KindConfidenceOverride{
+		string(SigLSHAcoustID): {MinConfidence: 0.91, MaxConfidence: 0.96},
+	})
+
+	cfg, err := LoadScoreConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	kc, ok := cfg.Signals[string(SigLSHAcoustID)]
+	if !ok {
+		t.Fatal("expected SigLSHAcoustID entry in cfg.Signals")
+	}
+	if kc.MinConfidence != 0.91 || kc.MaxConfidence != 0.96 {
+		t.Errorf("expected 0.91/0.96, got %.4f/%.4f", kc.MinConfidence, kc.MaxConfidence)
+	}
+}
+
+// TestSetKindConfidenceOverrides_UnknownKindIsSkipped verifies that an
+// override for a kind string not present in cfg.Signals (shouldn't happen in
+// practice — DefaultScoreConfig seeds every known kind — but a stale/typo'd
+// persisted key must fail closed, not panic or create a partial entry) is
+// silently ignored rather than propagated.
+func TestSetKindConfidenceOverrides_UnknownKindIsSkipped(t *testing.T) {
+	resetViper(t)
+	b6ResetConfidenceOverrides(t)
+
+	SetKindConfidenceOverrides(map[string]KindConfidenceOverride{
+		"not_a_real_signal_kind": {MinConfidence: 0.5, MaxConfidence: 0.9},
+	})
+
+	cfg, err := LoadScoreConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := cfg.Signals["not_a_real_signal_kind"]; ok {
+		t.Error("unknown kind should not be created in cfg.Signals")
 	}
 }

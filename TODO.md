@@ -45,7 +45,14 @@ Companion docs:
    OFF (6f2f7ce0); gated human decision (see DECISIONS-PENDING).
 5. **C8 — auto-file issues per `not_dup` cluster** (H1:1332; INIT-10 T5) — deferred.
 6. **INIT-1 T05 follow-up — per-kind confidence field in `DedupSignalConfig`** (H1:250)
-   — makes the confidence round applyable.
+   — **persistence scaffolding DONE** (2026-07-18): `config.DedupSignalConfig.Confidence`
+   + `unified.SetKindConfidenceOverrides` (mirrors `SetBandThresholds`) + `registry_wire.go`
+   wiring, so a per-kind confidence bound now survives `UpdateConfig`/restart. **Still
+   blocked**: `unified.ComposeScore` ignores `cfg.Signals[kind]` bounds entirely (reads
+   `Signal.Confidence` verbatim), so the field has no effect on live scoring yet, and
+   `dedup.calibrate-composite`'s Round 2 sweep still doesn't write it — decision needed
+   on whether `ComposeScore` should clamp against it (see
+   [`docs/plans/DECISIONS-PENDING.md`](docs/plans/DECISIONS-PENDING.md) row 10).
 7. **Async breakdown-refresh for bulk/cluster dismiss** (H1:1877) — per-pair synchronous
    refresh may need an async variant at scale (latency note).
 8. **Omnibus detection + dedup** — spec-only

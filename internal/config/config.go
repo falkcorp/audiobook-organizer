@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.70.0
+// version: 1.71.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-07-14
+// last-edited: 2026-07-18
 
 package config
 
@@ -108,6 +108,41 @@ type DedupSignalConfig struct {
 	// BandReviewMin is the minimum score to classify a pair as REVIEW (default 60).
 	// Pairs scoring below this floor are not persisted.
 	BandReviewMin float64 `json:"band_review_min" mapstructure:"band_review_min"`
+	// Confidence holds per-signal-kind confidence-bound overrides, keyed by
+	// signal kind (e.g. "exact_file", "isbn_asin", "embedding_high" — see
+	// unified.SignalKind for the full set). A kind absent from this map —
+	// including a nil/unset map, the zero value — falls back to
+	// unified.DefaultScoreConfig()'s compiled-in Min/MaxConfidence for that
+	// kind, so existing configs are byte-for-byte unchanged in behaviour.
+	//
+	// INIT-1 T05 follow-up (TODO item 6): this is the persistence surface
+	// dedup.calibrate-composite's Round 2 advisory confidence sweep was
+	// missing — see internal/plugins/dedup/calibrate_composite.go's "Two
+	// calibration surfaces" doc comment. Adding this field lets a per-kind
+	// confidence bound survive a config update / restart via the normal
+	// UpdateConfig JSON round-trip instead of being silently dropped.
+	//
+	// NOTE: as of this change, populating this map has NO effect on live
+	// scoring — unified.ComposeScore reads each Signal's Confidence directly
+	// and does not clamp it against these bounds (see
+	// docs/plans/DECISIONS-PENDING.md row 10 for the open decision on
+	// whether ComposeScore should start doing so). This field is currently
+	// consumed only by unified.LoadScoreConfig (so it round-trips correctly)
+	// and is available for a human-reviewed follow-up to wire into scoring.
+	Confidence map[string]DedupKindConfidence `json:"confidence,omitempty" mapstructure:"confidence"`
+}
+
+// DedupKindConfidence is a per-signal-kind confidence-bound override, the
+// value type of DedupSignalConfig.Confidence. Both fields are optional —
+// zero means "not set", falling back to the unified package's compiled-in
+// default for that bound — because those are the two bounds
+// dedup.calibrate-composite's Round 2 sweep (the "confidence round")
+// recommends adjusting.
+type DedupKindConfidence struct {
+	// MinConfidence overrides the kind's confidence floor. Zero = not set.
+	MinConfidence float64 `json:"min_confidence,omitempty" mapstructure:"min_confidence"`
+	// MaxConfidence overrides the kind's confidence ceiling. Zero = not set.
+	MaxConfidence float64 `json:"max_confidence,omitempty" mapstructure:"max_confidence"`
 }
 
 // DedupConfig holds all deduplication settings that were previously flat fields
