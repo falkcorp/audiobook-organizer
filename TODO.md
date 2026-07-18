@@ -70,9 +70,24 @@ Companion docs:
 
 ## Pipeline (8)
 
-16. **Library heavy-filter + non-title-sort returns 0 books** (H1:301-330) — CONFIRMED
-    bug (BookSummary projection gap); fix hints recorded inline; was explicitly out of
-    INIT-4 T06 scope.
+16. ~~**Library heavy-filter + non-title-sort returns 0 books** (H1:301-330)~~ —
+    **FIXED** (fix/library-filter-zero-results): root cause was `GetAudiobooks`
+    re-applying an already-pushed-down filter against BookSummary→Book
+    projections missing fields like Language/Genre/FingerprintStatus; the
+    re-check silently dropped every row. Now skips the redundant re-filter and
+    sort+paginates the pushdown result directly. Left a new backlog item (16b)
+    for the separately-discovered author/series-by-name FieldFilter gap found
+    during this investigation.
+16b. **Advanced-search `FieldFilters` on `Field: "author"`/`"series"` always
+    return 0 books** (found during #16's investigation) — `fieldMatchesValue`
+    reads `book.Author.Name`/`book.Series.Name`, but those pointers are never
+    hydrated on memdb-resident or BookSummary-projected Books (only on a
+    narrow write-path enrichment). Independent of sort — reproduces with no
+    sort at all. The Library UI's actual author/series filter (`?author_id=`/
+    `?series_id=`) is unaffected; this only hits the advanced-search-by-name
+    path. Needs the same name→ID resolution pattern already used for tags
+    (`GetBooksByTag` → `RestrictToIDs`), e.g. resolve author/series name to ID
+    via the authors/series store before building the predicate.
 17. **iTunes path-heal residuals** (H1:899-906) — 3,720 ambiguous / 5,349 not-found /
     4,734 doubled-path records still unresolved.
 18. **AP-1b — physically co-locate survivor's files after Combine** (H1:936) — inside

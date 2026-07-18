@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_filtering.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: b4e8c3d2-e5f6-7a80-9b0c-1d2e3f4a5b6c
-// last-edited: 2026-07-12
+// last-edited: 2026-07-18
 
 package audiobooks
 
@@ -146,6 +146,23 @@ func applySorting(books []database.Book, f ListFilters) {
 		}
 		return result < 0
 	})
+}
+
+// paginateFilteredBooks slices books to the given offset/limit window.
+// offset<=0 is treated as "from the start"; offset>=len(books) returns nil
+// (page past the end); limit<=0 means "no limit". Shared by the post-filter
+// pagination pass and the didPushdown+heavySorting pushdown path in
+// GetAudiobooks so both paginate identically.
+func paginateFilteredBooks(books []database.Book, limit, offset int) []database.Book {
+	if offset > 0 && offset < len(books) {
+		books = books[offset:]
+	} else if offset >= len(books) {
+		return nil
+	}
+	if limit > 0 && limit < len(books) {
+		books = books[:limit]
+	}
+	return books
 }
 
 // matchesPerUserFilter evaluates one per-user FieldFilter against a
