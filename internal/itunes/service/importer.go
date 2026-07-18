@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
-// last-edited: 2026-07-17
+// last-edited: 2026-07-18
 
 package itunesservice
 
@@ -421,6 +421,11 @@ func (imp *Importer) Execute(ctx context.Context, opID string, req ImportRequest
 		hashLinked := 0
 		hashBlocked := 0
 		hashBlockFailed := 0
+		// H4 (2026-07 error-correction sweep): GetBookByID error vs. a benign
+		// nil-book skip (book removed between the quick-import phase and
+		// this pass) used to be one bare `continue`. Distinguish them so a
+		// store-level lookup problem is visible in the completion summary.
+		bookLookupErrs := 0
 		for hi, bookID := range newBookIDs {
 			if log.IsCanceled() {
 				log.Info("Hash validation canceled")
@@ -428,7 +433,12 @@ func (imp *Importer) Execute(ctx context.Context, opID string, req ImportRequest
 			}
 
 			book, err := imp.store.GetBookByID(bookID)
-			if err != nil || book == nil {
+			if err != nil {
+				bookLookupErrs++
+				log.Warn("Hash validation: GetBookByID failed for %s: %v", bookID, err)
+				continue
+			}
+			if book == nil {
 				continue
 			}
 
@@ -479,7 +489,7 @@ func (imp *Importer) Execute(ctx context.Context, opID string, req ImportRequest
 				log.UpdateProgress(totalGroups, totalGroups, msg)
 			}
 		}
-		log.Info("Hash validation completed: %d linked, %d blocked, %d blocked-but-soft-delete-failed out of %d new books", hashLinked, hashBlocked, hashBlockFailed, len(newBookIDs))
+		log.Info("Hash validation completed: %d linked, %d blocked, %d blocked-but-soft-delete-failed, %d lookup errors out of %d new books", hashLinked, hashBlocked, hashBlockFailed, bookLookupErrs, len(newBookIDs))
 	}
 
 	// Phase 4: Metadata enrichment

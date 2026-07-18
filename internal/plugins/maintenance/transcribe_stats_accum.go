@@ -1,11 +1,12 @@
 // file: internal/plugins/maintenance/transcribe_stats_accum.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9d3b1e57-6a02-4c8f-b14d-7e9a2f5c08b1
-// last-edited: 2026-07-01
+// last-edited: 2026-07-18
 
 package maintenance
 
 import (
+	"log/slog"
 	"sync"
 	"time"
 
@@ -109,7 +110,14 @@ func (a *transcribeStatsAccum) flush(markDone bool) {
 	}
 	snapshot := a.stats // copy under lock
 	a.mu.Unlock()
-	_ = a.sink.PutTranscribeStats(&snapshot)
+	// M1 (2026-07 error-correction sweep): a persist failure here used to be
+	// swallowed with `_ =`. flush is called after every page, so a
+	// transiently failing sink previously left the live-monitor aggregate
+	// silently stale with no signal that anything was wrong.
+	if err := a.sink.PutTranscribeStats(&snapshot); err != nil {
+		slog.Warn("transcribe stats: persist failed — live monitor may show stale counts",
+			"run_op_id", snapshot.RunOpID, "attempted", snapshot.Attempted, "err", err)
+	}
 }
 
 // snapshot returns a copy of the current counters for logging.

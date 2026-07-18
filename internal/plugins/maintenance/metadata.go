@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/metadata.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a7b8c9d0-e1f2-3456-0123-678901234567
-// last-edited: 2026-05-07
+// last-edited: 2026-07-18
 
 package maintenance
 
@@ -70,7 +70,11 @@ func (p *Plugin) runMetadataUpgrade(ctx context.Context, _ json.RawMessage, repo
 	prog := sdk.NewProgress(reporter, 0)
 	prog.Start("Scanning for books with upgradeable metadata sources...")
 	_ = reporter.Log(slog.LevelInfo, "Scanning for books with upgradeable metadata sources...")
-	checked, upgraded, skipped, errs, err := p.deps.MetadataUpgradeRun(ctx, 200)
+	// M7 (2026-07 error-correction sweep): thread the reporter through as a
+	// progress sink so the 120-minute network-bound scan reports books
+	// processed/total every 25 books instead of going silent between start
+	// and result.
+	checked, upgraded, skipped, errs, err := p.deps.MetadataUpgradeRun(ctx, 200, newOpsAdapter(reporter))
 	if err != nil {
 		return err
 	}

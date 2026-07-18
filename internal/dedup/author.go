@@ -1,11 +1,13 @@
 // file: internal/dedup/author.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
+// last-edited: 2026-07-18
 
 package dedup
 
 import (
 	"fmt"
+	"log/slog"
 	"math"
 	"regexp"
 	"strings"
@@ -744,9 +746,19 @@ func BuildAuthorSeriesMap(store interface {
 	GetSeriesByID(id int) (*database.Series, error)
 }, authors []database.Author) map[int][]string {
 	result := make(map[int][]string, len(authors))
+	// H2 (2026-07 error-correction sweep): both store errors below used to be
+	// bare `continue`s. A failure here doesn't fail the map build — it just
+	// silently degrades author-dedup's series cross-referencing for the
+	// affected author (fewer/no series names → sharesSeries() never fires
+	// for them). Count both kinds and emit one summary Warn so a systemic
+	// store problem shows up instead of manifesting only as "series
+	// cross-referencing isn't catching duplicates".
+	booksLoadErrs := 0
+	seriesLoadErrs := 0
 	for _, a := range authors {
 		books, err := store.GetBooksByAuthorIDCore(a.ID)
 		if err != nil {
+			booksLoadErrs++
 			continue
 		}
 		seen := make(map[int]bool)
@@ -756,7 +768,11 @@ func BuildAuthorSeriesMap(store interface {
 			}
 			seen[*b.SeriesID] = true
 			series, err := store.GetSeriesByID(*b.SeriesID)
-			if err != nil || series == nil {
+			if err != nil {
+				seriesLoadErrs++
+				continue
+			}
+			if series == nil {
 				continue
 			}
 			normalized := strings.ToLower(strings.TrimSpace(series.Name))
@@ -764,6 +780,13 @@ func BuildAuthorSeriesMap(store interface {
 				result[a.ID] = append(result[a.ID], normalized)
 			}
 		}
+	}
+	if booksLoadErrs > 0 || seriesLoadErrs > 0 {
+		slog.Warn("dedup author-series map: store errors degraded series cross-referencing",
+			"authors", len(authors),
+			"books_load_errors", booksLoadErrs,
+			"series_load_errors", seriesLoadErrs,
+		)
 	}
 	return result
 }

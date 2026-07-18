@@ -1,7 +1,7 @@
 // file: internal/scheduler/extra_ops.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: a9b8c7d6-e5f4-3210-fedc-ba9876543210
-// last-edited: 2026-07-16
+// last-edited: 2026-07-18
 
 // extra_ops registers OperationDefs for 13 scheduler tasks that previously
 // used the legacy triggerOperation / triggerOperationWithID helpers.  Each def
@@ -197,7 +197,10 @@ func (r *ExtraOpsRegistrar) RegisterMetadataUpgradeOp(reg *opsregistry.Registry)
 			}
 			svc := metabatch.NewMetadataUpgradeService(r.Store, r.Deps.MetadataFetchService)
 			_ = progress.Log("info", "Scanning for books with upgradeable metadata sources...", nil)
-			result, err := svc.RunUpgrade(ctx, 200)
+			// M7 (2026-07 error-correction sweep): thread progress through so
+			// this 4-hour-timeout op reports books processed/total every 25
+			// books instead of going silent between start and result.
+			result, err := svc.RunUpgrade(ctx, 200, progress)
 			if err != nil {
 				return err
 			}

@@ -1,7 +1,7 @@
 // file: internal/itunes/service/position_sync.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: 9f7a8b5c-0d6e-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-07-07
+// last-edited: 2026-07-18
 //
 // Bidirectional sync between the app's per-user position/state
 // tracking (spec 3.6) and the iTunes Bookmark / Play Count fields
@@ -151,6 +151,11 @@ func (p *PositionSync) pushPositions() int {
 	}
 
 	pushed := 0
+	// H4 (2026-07 error-correction sweep): GetBookByID error vs. a benign
+	// nil-book/no-PID skip used to be one bare `continue`. Distinguish them
+	// so a store-level lookup problem is visible instead of just quietly
+	// reducing how many positions get pushed.
+	lookupErrs := 0
 	seen := map[string]bool{}
 	for _, pos := range positions {
 		if seen[pos.BookID] {
@@ -159,7 +164,11 @@ func (p *PositionSync) pushPositions() int {
 		seen[pos.BookID] = true
 
 		book, err := p.store.GetBookByID(pos.BookID)
-		if err != nil || book == nil || book.ITunesPersistentID == nil {
+		if err != nil {
+			lookupErrs++
+			continue
+		}
+		if book == nil || book.ITunesPersistentID == nil {
 			continue
 		}
 
@@ -189,6 +198,10 @@ func (p *PositionSync) pushPositions() int {
 				slog.Warn("bump play count for", "book", book.ID, "err", err)
 			}
 		}
+	}
+
+	if lookupErrs > 0 {
+		slog.Warn("itunes position push: book lookup errors", "errors", lookupErrs, "total_positions", len(positions))
 	}
 
 	return pushed

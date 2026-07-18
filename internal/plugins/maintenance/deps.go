@@ -72,7 +72,11 @@ type ServerDeps interface {
 	// InvalidateDedupCache invalidates the author-duplicates dedup cache.
 	InvalidateDedupCache()
 	// MetadataUpgradeRun runs the metadata upgrade scan up to limit books.
-	MetadataUpgradeRun(ctx context.Context, limit int) (checked, upgraded, skipped, errs int, err error)
+	// progress may be nil; when non-nil it is updated every 25 books checked
+	// (M7, 2026-07 error-correction sweep — this is a 120-minute,
+	// network-bound op that previously reported nothing between start and
+	// result).
+	MetadataUpgradeRun(ctx context.Context, limit int, progress operations.ProgressReporter) (checked, upgraded, skipped, errs int, err error)
 	// SearchTranscriptionCandidate finds the top-scoring metadata candidate for
 	// bookID using transTitle as the query. The returned score may exceed 1.0
 	// (uncapped scale with transcription boosts applied). Returns found=false

@@ -1,7 +1,7 @@
 // file: internal/itunes/service/writeback_batcher.go
-// version: 5.4.0
+// version: 5.4.1
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e90
-// last-edited: 2026-07-03
+// last-edited: 2026-07-18
 //
 // Combined write-back batcher: handles location updates, track additions,
 // and track removals in a single ITL read-modify-write cycle.
@@ -404,9 +404,19 @@ func (b *WriteBackBatcher) flush() {
 	var locationUpdates []itunes.ITLLocationUpdate
 	var metadataUpdates []itunes.ITLMetadataUpdate
 	var skippedMetadata, changedMetadata int
+	// H4 (2026-07 error-correction sweep): GetBookByID error and "book
+	// deleted between enqueue and flush" (nil, no error) used to be treated
+	// identically as a silent skip. Track them separately — a store error is
+	// worth investigating, a nil book is expected/benign churn.
+	var bookLookupErrs, bookNilSkips int
 	for _, id := range bookIDs {
 		book, err := store.GetBookByID(id)
-		if err != nil || book == nil {
+		if err != nil {
+			bookLookupErrs++
+			continue
+		}
+		if book == nil {
+			bookNilSkips++
 			continue
 		}
 		// Only primary versions are written to iTunes. A non-primary
@@ -538,6 +548,17 @@ func (b *WriteBackBatcher) flush() {
 				Genre:        genre,
 			})
 		}
+	}
+
+	// Emitted before the ops.IsEmpty() early return below so lookup errors
+	// are never lost even when every enqueued book ended up producing no
+	// update (e.g. all bookIDs errored or were skipped).
+	if bookLookupErrs > 0 || bookNilSkips > 0 {
+		slog.Warn("iTunes write-back: book lookups skipped",
+			"lookup_errors", bookLookupErrs,
+			"nil_book_skips", bookNilSkips,
+			"total_bookIDs", len(bookIDs),
+		)
 	}
 
 	ops := itunes.ITLOperationSet{

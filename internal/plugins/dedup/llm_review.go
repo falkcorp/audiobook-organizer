@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/llm_review.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-05-06
+// last-edited: 2026-07-18
 
 package dedup
 
@@ -37,13 +37,32 @@ func (p *Plugin) runLLMReview(ctx context.Context, _ json.RawMessage, reporter s
 		return fmt.Errorf("dedup engine not available")
 	}
 
-	prog := sdk.NewProgress(reporter, 0)
-	prog.Start("Starting LLM review of ambiguous candidates...")
-	if err := p.engine.RunLLMReview(ctx); err != nil {
+	_ = reporter.UpdateProgress(0, 1, "Starting LLM review of ambiguous candidates...")
+
+	// H9 (2026-07 error-correction sweep): the total pair count isn't known
+	// until RunLLMReview lists ambiguous candidates internally, so the
+	// sdk.Progress bar is constructed lazily on the first callback instead
+	// of up front with a placeholder n=0 (which made StepN a no-op). Without
+	// this, the op reported nothing between "starting" and "job submitted"
+	// while building up to 10K pair inputs — indistinguishable from a hang.
+	var prog *sdk.Progress
+	onProgress := func(current, total int, message string) {
+		if prog == nil {
+			prog = sdk.NewProgress(reporter, total)
+			prog.Start(message)
+		}
+		prog.StepN(current, message)
+	}
+
+	if err := p.engine.RunLLMReview(ctx, onProgress); err != nil {
 		reporter.Logger().Error("LLM review error", "error", err)
 		return fmt.Errorf("LLM review: %w", err)
 	}
-	prog.Finalize("writing results...")
-	prog.Done("LLM review complete")
+	if prog != nil {
+		prog.Finalize("writing results...")
+		prog.Done("LLM review complete")
+	} else {
+		_ = reporter.UpdateProgress(1, 1, "LLM review complete (no ambiguous candidates)")
+	}
 	return nil
 }
