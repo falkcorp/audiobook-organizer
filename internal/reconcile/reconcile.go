@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-07-16
+// last-edited: 2026-07-18
 
 package reconcile
 
@@ -134,6 +134,12 @@ type AssignVGResult struct {
 	AlreadyHasVG int `json:"already_has_vg"`
 	NotInLibrary int `json:"not_in_library"`
 	Errors       int `json:"errors"`
+	// SkippedConcurrentAssignment counts books that already had a
+	// VersionGroupID by the time this worker re-fetched the full record —
+	// i.e. another concurrent process (a sibling worker, a regroup apply, or
+	// a merge) assigned one between the initial orphan scan and the
+	// fetch-full/write-back. These are intentionally left untouched.
+	SkippedConcurrentAssignment int `json:"skipped_concurrent_assignment"`
 }
 
 // RunReconcileScan executes the reconcile preview build and persists results.
@@ -1267,6 +1273,22 @@ func MergeBookMetadata(dst, src *database.Book) []string {
 
 // AssignOrphanVGs finds books in the library directory that have no version group,
 // creates a VG for each, and marks them as primary.
+// AssignOrphanVGs assigns a fresh VersionGroupID to every library book that
+// doesn't have one yet. The candidate scan is serial (cheap, no I/O beyond
+// the initial paginated load), but the per-candidate work — a GetBookByID
+// hydrate plus an UpdateBook write-back — is two DB calls per book, which on
+// a whole-library scale collection is a CLAUDE.md concurrency-mandate
+// hotspot if left serial. It is parallelized across a bounded worker pool
+// (runtime.NumCPU()) below, sharded over the candidates slice so each worker
+// only ever touches its own disjoint book row — no two workers can race on
+// the same book.
+//
+// Clobber guard: because the initial scan and the per-book hydrate/write are
+// not atomic, another process (a sibling worker in this same pool, a
+// concurrent regroup apply, or a merge) can assign a VersionGroupID to a book
+// in between. After re-fetching the full record, if VersionGroupID is now
+// non-empty and doesn't match the ID this worker planned to assign, the
+// worker skips the write rather than clobbering the concurrent assignment.
 func AssignOrphanVGs(store Store, rootDir string) (*AssignVGResult, error) {
 	result := &AssignVGResult{}
 
@@ -1283,6 +1305,8 @@ func AssignOrphanVGs(store Store, rootDir string) (*AssignVGResult, error) {
 		}
 	}
 
+	// Serial pre-filter: no I/O, just in-memory field checks.
+	var candidates []database.BookCore
 	for i := range allBooks {
 		c := &allBooks[i]
 		result.TotalChecked++
@@ -1299,29 +1323,72 @@ func AssignOrphanVGs(store Store, rootDir string) (*AssignVGResult, error) {
 			continue
 		}
 
-		// Hydrate before writeback — c is a Core (slim) value here, and writing
-		// it straight through UpdateBook would wipe Author/Series.
-		b, herr := store.GetBookByID(c.ID)
-		if herr != nil || b == nil {
-			slog.Warn("assign-orphan-vgs failed to hydrate book", "book", c.ID, "herr", herr)
-			result.Errors++
-			continue
-		}
-
-		// Create a version group and mark as primary
-		vgID := fmt.Sprintf("vg-%s", ulid.Make().String())
-		b.VersionGroupID = &vgID
-		isPrimary := true
-		b.IsPrimaryVersion = &isPrimary
-		organizedState := "organized"
-		b.LibraryState = &organizedState
-
-		if _, err := store.UpdateBook(b.ID, b); err != nil {
-			result.Errors++
-			continue
-		}
-		result.Assigned++
+		candidates = append(candidates, *c)
 	}
+
+	total := len(candidates)
+	if total == 0 {
+		return result, nil
+	}
+
+	var assigned, skippedConcurrent, errCount, processed int64
+	logProgress := func() {
+		if n := atomic.AddInt64(&processed, 1); n%500 == 0 {
+			slog.Info("assign-orphan-vgs progress", "processed", n, "total", total)
+		}
+	}
+
+	var g errgroup.Group
+	g.SetLimit(max(runtime.NumCPU(), 1))
+	for i := range candidates {
+		c := &candidates[i]
+		g.Go(func() error {
+			defer logProgress()
+
+			// Hydrate before writeback — c is a Core (slim) value here, and
+			// writing it straight through UpdateBook would wipe Author/Series.
+			b, herr := store.GetBookByID(c.ID)
+			if herr != nil || b == nil {
+				slog.Warn("assign-orphan-vgs failed to hydrate book", "book", c.ID, "herr", herr)
+				atomic.AddInt64(&errCount, 1)
+				return nil
+			}
+
+			// Clobber guard — see doc comment above.
+			plannedVGID := fmt.Sprintf("vg-%s", ulid.Make().String())
+			if b.VersionGroupID != nil && *b.VersionGroupID != "" && *b.VersionGroupID != plannedVGID {
+				atomic.AddInt64(&skippedConcurrent, 1)
+				return nil
+			}
+
+			// Create a version group and mark as primary
+			b.VersionGroupID = &plannedVGID
+			isPrimary := true
+			b.IsPrimaryVersion = &isPrimary
+			organizedState := "organized"
+			b.LibraryState = &organizedState
+
+			if _, err := store.UpdateBook(b.ID, b); err != nil {
+				atomic.AddInt64(&errCount, 1)
+				return nil
+			}
+			atomic.AddInt64(&assigned, 1)
+			return nil
+		})
+	}
+	_ = g.Wait() // per-book errors are counted, not fatal to the whole run
+
+	result.Assigned = int(assigned)
+	result.SkippedConcurrentAssignment = int(skippedConcurrent)
+	result.Errors += int(errCount)
+
+	slog.Info("assign-orphan-vgs summary",
+		"total_checked", result.TotalChecked,
+		"assigned", result.Assigned,
+		"skipped_already_grouped", result.AlreadyHasVG,
+		"skipped_concurrent_assignment", result.SkippedConcurrentAssignment,
+		"errors", result.Errors,
+	)
 
 	return result, nil
 }

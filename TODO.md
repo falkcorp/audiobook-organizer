@@ -197,7 +197,7 @@ F7/R-9/R-8 (#2004 — T11).
 - [ ] **T04** — prod deploy (nothing deployed 2026-07-17) + prod dry-runs + ⚠️ HUMAN-GATED apply
 - [ ] **T05** — logging H/M batch: H1 H2 H3 H4 H8 H9 M1 M2 M3 M7 (file:line anchors in the brief)
 - [x] **T06** — R-1: `op.terminal` SSE backend publisher added (see Fixed list, #2002)
-- [ ] **T07** — R-6: AssignOrphanVGs serial loop + VersionGroupID clobber guard (`internal/reconcile/reconcile.go:1270-1327`)
+- [x] **T07** — R-6: AssignOrphanVGs worker pool + VG clobber guard (#2003)
 - [x] **T08** — R-3 (abandoned-reporter logBuf growth) · R-7 (dead scan checkpoint code) · P-2 (RunItems backwards progress) (see Fixed list, #2002)
 - [ ] **T09** — C2: remux/transcode 6-h ops have no reporter threading + can't fail · H7 (external-id backfill, same shape)
 - [ ] **T10** — F6: legacy dedup.MergeBooks hard-deletes losers without external-ID reassignment/ITL removal — VERIFY then reroute
