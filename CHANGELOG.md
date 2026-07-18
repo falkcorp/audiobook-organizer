@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.180.0 -->
+<!-- version: 3.181.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-18 -->
 
@@ -8,6 +8,30 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 18, 2026 - perf(database): cache CountPrimaryBooks to stop an idle ~2-core CPU busy-loop
+
+- **The server burned ~2 CPU cores continuously while idle.** `CountPrimaryBooks()`
+  (`internal/database/pebble_store.go`) full-scans every `book:` key and
+  `json.Unmarshal`s each Book — ~5.6s on the ~44K-book production library. The
+  5-second metrics/status ticker (`internal/server/server_lifecycle.go`) called it on
+  every tick, so with each scan taking longer than the tick interval the scans ran
+  back-to-back, pinning one core on the scan and a second on the GC churn from tens of
+  thousands of unmarshals per pass. It presented as prod sitting at ~189% CPU with
+  nothing in the logs but `deps_scheduler: sweep tick waiting_count=0`. Diagnosed via a
+  goroutine dump showing the sole runnable app goroutine spinning in
+  `Server.Start.func7 → CountPrimaryBooks → json.Unmarshal`. Not a recent regression —
+  the ticker path dates to 2026-05-01.
+- The same scan also made `GET /api/v1/health` take ~5.6s (health-probe timeout risk).
+- Fix: `CountPrimaryBooks` now caches its result in-memory for a short TTL
+  (`primaryCountCacheTTL`, 30s), with a recompute gate so a burst of concurrent callers
+  (e.g. `/health` probes) collapses to a single scan per window. The expensive scan runs
+  at most once per TTL instead of on every 5s tick; the count may lag a write by up to
+  the TTL, which is fine for a metrics gauge / health probe. Pure TTL (not
+  invalidate-on-write) is deliberate: invalidation would re-trigger the full scan on the
+  next tick during any import, reintroducing the busy-loop under load. The 5s ticker is
+  unchanged, so memory/goroutine metrics stay live. Regression test
+  `TestPebbleCountPrimaryBooksTTLCache` fails without the cache.
 
 #### July 18, 2026 - fix(audiobooks): hydrate author/series names for advanced-search FieldFilters (TODO #16b)
 

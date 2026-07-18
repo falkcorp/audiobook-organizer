@@ -672,6 +672,11 @@ func TestPebbleCountPrimaryBooks(t *testing.T) {
 		}
 	}
 
+	// CountPrimaryBooks caches its result for primaryCountCacheTTL, so a read
+	// right after the writes would return the stale pre-create count. Invalidate
+	// the cache to force a fresh scan for this correctness assertion.
+	store.(*PebbleStore).invalidatePrimaryCountForTest()
+
 	// Act
 	newCount, err := store.CountPrimaryBooks()
 	if err != nil {
@@ -681,6 +686,57 @@ func TestPebbleCountPrimaryBooks(t *testing.T) {
 	// Assert
 	if newCount != initialCount+5 {
 		t.Errorf("Expected count to increase by 5, got %d -> %d", initialCount, newCount)
+	}
+}
+
+// invalidatePrimaryCountForTest drops the cached primary-book count so the next
+// CountPrimaryBooks call performs a fresh scan. Test-only seam living in the
+// _test file so it never ships in production binaries.
+func (p *PebbleStore) invalidatePrimaryCountForTest() {
+	p.primaryCountMu.Lock()
+	p.primaryCountValid = false
+	p.primaryCountMu.Unlock()
+}
+
+// TestPebbleCountPrimaryBooksTTLCache is a regression test for the CPU busy-loop
+// fix: CountPrimaryBooks must serve a cached value within primaryCountCacheTTL
+// instead of re-scanning the whole library on every call. Without the cache this
+// test fails, because the second read would immediately reflect the newly created
+// book.
+func TestPebbleCountPrimaryBooksTTLCache(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+	ps := store.(*PebbleStore)
+
+	// Prime the cache.
+	base, err := ps.CountPrimaryBooks()
+	if err != nil {
+		t.Fatalf("initial count: %v", err)
+	}
+
+	// Write a book WITHOUT invalidating the cache.
+	if _, err := ps.CreateBook(&Book{Title: "Cached Book", FilePath: "/test/cache/book.mp3"}); err != nil {
+		t.Fatalf("create book: %v", err)
+	}
+
+	// Within the TTL, the cached (stale) value must be returned — proving the
+	// scan was skipped. An uncached implementation would return base+1 here.
+	cached, err := ps.CountPrimaryBooks()
+	if err != nil {
+		t.Fatalf("cached count: %v", err)
+	}
+	if cached != base {
+		t.Fatalf("expected cached count %d within TTL, got %d (cache not serving stale value)", base, cached)
+	}
+
+	// After invalidation the fresh scan must observe the new book.
+	ps.invalidatePrimaryCountForTest()
+	fresh, err := ps.CountPrimaryBooks()
+	if err != nil {
+		t.Fatalf("fresh count: %v", err)
+	}
+	if fresh != base+1 {
+		t.Fatalf("expected fresh count %d after invalidation, got %d", base+1, fresh)
 	}
 }
 

@@ -152,7 +152,17 @@ Companion docs:
 32. **I1 + I6 — prod pprof verification** (H1:1515, 1538) — measure chromem-lazy
     effect + heap re-audit; measurement only.
 
-## Infra (4)
+## Infra (5)
+
+37. **CPU busy-loop: `CountPrimaryBooks` full-scan on the 5s metrics ticker** — ✅ DONE
+    (2026-07-18): the server burned ~2 cores continuously while idle because
+    `CountPrimaryBooks` (`internal/database/pebble_store.go`) full-scans + `json.Unmarshal`s
+    all ~44K books (~5.6s) and the 5s status ticker
+    (`internal/server/server_lifecycle.go`) called it every tick, running scans
+    back-to-back (presented as ~189% CPU with only `sweep tick waiting_count=0` logs; also
+    made `/api/v1/health` ~5.6s). Fixed with a 30s in-memory TTL cache + recompute gate on
+    `CountPrimaryBooks` (regression test `TestPebbleCountPrimaryBooksTTLCache`). Diagnosed
+    while health-checking the (now torn-down) dedup sandbox.
 
 33. **REPO-SIZE-1 decision** ([plan](docs/plans/2026-07-10-repo-size-history-rewrite-plan.md),
     [package](docs/plans/2026-07-12-repo-size-targeted-purge-package.md)) —
