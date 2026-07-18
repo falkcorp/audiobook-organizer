@@ -56,7 +56,12 @@
   frontend, so finished operations lingered as phantom "running" entries in the
   operations bell until a manual refresh. New helper
   `Registry.publishOpTerminal` fans out `{op_id, def_id, status}` via the
-  existing bus (nil-safe; no direct SSE-hub import). Covered by
+  existing bus (nil-safe; no direct SSE-hub import), called at every worker
+  terminal-write site plus the dependency-scheduler fail-propagation path
+  (`DepsScheduler.OnOpFailed`, which fails a waiting_deps op when its
+  prerequisite fails — a live transition with no worker to publish it).
+  Startup-resume and shutdown-drain terminal writes are intentionally not
+  published (no SSE client is connected at those points). Covered by
   `terminal_events_test.go`.
 - **R-3 (abandoned-reporter log buffer, T08):** after a run is abandoned its
   reporter's flush goroutine has already exited, but the wedged goroutine kept

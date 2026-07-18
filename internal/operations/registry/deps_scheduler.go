@@ -1,7 +1,7 @@
 // file: internal/operations/registry/deps_scheduler.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: a3b4c5d6-e7f8-9a0b-1c2d-3e4f5a6b7c8d
-// last-edited: 2026-07-12
+// last-edited: 2026-07-18
 
 // deps_scheduler.go implements the event-driven + sweep re-evaluation loop for
 // waiting_deps operations. It is the bridge between op lifecycle events
@@ -149,6 +149,10 @@ func (s *DepsScheduler) OnOpFailed(ctx context.Context, sub Subject, opType stri
 				"op_id", op.ID, "error", failErr)
 			continue
 		}
+		// R-1: this is a terminal transition on a LIVE op (a waiting_deps op
+		// failed because its prerequisite failed) — publish op.terminal so the
+		// UI bell drops it instead of leaving it phantom-"running".
+		s.reg.publishOpTerminal(op.ID, op.DefID, "failed")
 		s.mu.Lock()
 		s.removeFromIndex(op.SubjectType, op.SubjectID, op.ID)
 		s.mu.Unlock()
