@@ -1,7 +1,7 @@
 <!-- file: docs/status/2026-07-17-error-correction-session.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 3f8a1c62-9b4e-4d17-a2c5-7e0d94f6b813 -->
-<!-- last-edited: 2026-07-17 -->
+<!-- last-edited: 2026-07-18 -->
 
 # 2026-07-17 error-correction session — status record
 
@@ -52,7 +52,9 @@ Measured results:
 | `dedup.purge-stale` after retitle | only **15** candidates removed → 9,059 exact-pending. **Key learning:** the shattered single-file chapter-books (the 76 % clique residue) each live in their **own directory**, so the same-dir stale rule cannot catch them, and title-repair correctly skips single-file books. The designed lever for that population is triage (with the #1982 relaxed title_leak class) → per-population purge — NOT retitle, NOT purge-stale. |
 | `dedup.breakdown-backfill` dry-run | targets=10,062 · would_backfill=9,419 · skipped_has_breakdown=242 · zero_signal=643 · errors=0 |
 | `dedup.breakdown-backfill` apply | was RUNNING at session stop (op `01KXSJHBDDP17AMR8WYKSTQH30`); completes server-side harmlessly (sandbox only). Verify + continue per task brief T02. |
-| `maintenance.dedup-exact-triage` | NOT yet run — next step (T02). Expect the former `unknown=9,950` to collapse into real classes, with `title_leak` >> 0. |
+| `maintenance.dedup-exact-triage` (classify) | purgeable=**7,891** (title_leak+stub) · keep=278 (genuine) · review=2,150 — the former `unknown=9,950` collapsed into real classes, exactly as predicted. |
+| `maintenance.dedup-exact-triage {"apply":true}` (purge-apply, NEW op #2008) | dismissed 7,891 → exact-pending **9,074 → 1,183**; total-pending 10,319 → 2,428; 0 errors. |
+| `dedup.purge-stale` + `dedup.full-scan` (final) | exact-pending **1,311** · total-pending 2,554 (full-scan embedding re-emission). **Net −85.5% exact-pending; the whole title-repair → backfill → relaxed-triage → purge chain is proven end-to-end, 0 errors.** Full 2026-07-18 re-run recorded in `docs/dedup/STATUS.md`. |
 
 Sandbox operational notes (for the next operator):
 - Instance may or may not still be running on :8485 (plain HTTP, NOT https).
@@ -66,16 +68,22 @@ Sandbox operational notes (for the next operator):
   build — poll `GET /api/v1/operations/v2/<op_id>` yourself instead.
 - Full runbook: falkcorp/infra-docs `docs/runbooks/dedup-sandbox.md` (private).
 
-## Remaining work
+## Status (updated 2026-07-18)
 
-All remaining work is specified in
-[`docs/agent-tasks/error-correction-2026-07/TASKS.md`](../agent-tasks/error-correction-2026-07/TASKS.md)
-(13 briefs T01–T13, dependency-ordered). Summary: land #1986; finish the sandbox
-sequence (backfill-apply verify → triage → purge wave → full-scan → measure);
-prod deploy + human-gated prod apply; SSE terminal publisher (R-1); orphan-VG
-pool (R-6); logging H/M batch; remux/transcode reporter threading (C2);
-legacy-MergeBooks verify (F6); concurrency hygiene (F7, R-9); chapter-duration
-guard (R-8); registry/scanner hygiene (R-3, R-7, P-2); devops follow-ups
-(8 scripts with internal IPs, op-stall alert, coverage floor on PR gate,
-systemd unit dedupe, credential entropy, op_verify.py); docs refresh with
-measured numbers.
+The follow-on briefs T01–T13 ([`docs/agent-tasks/error-correction-2026-07/TASKS.md`](../agent-tasks/error-correction-2026-07/TASKS.md))
+are **complete except the human-gated prod step**:
+
+- **T01–T02, T05–T13 DONE.** The 2026-07-18 coordination wave merged all nine
+  code fixes across PRs **#2001–#2010** (SSE terminal publisher R-1; registry
+  hygiene R-3/R-7/P-2; orphan-VG pool R-6; logging H/M batch; remux/transcode +
+  external-ID-backfill reporter threading C2/H7; legacy MergeBooks rerouted off
+  hard-delete F6; concurrency + duration hygiene F7/R-9/R-8; devops follow-ups;
+  the triage purge-apply op) plus docs cleanup #2011. Main builds + `go vet`
+  clean.
+- **T03 DONE** — the full remediation chain is proven end-to-end on the sandbox
+  (see the table above and `docs/dedup/STATUS.md`): exact-pending **9,074 → 1,311
+  (−85.5%)**, 7,891 junk candidates dismissed, 0 errors.
+- **T04 — the only thing left — is HUMAN-GATED.** Nothing has been deployed to or
+  run on production. Prod deploy + prod dry-runs + the apply decision await an
+  explicit human go-ahead ([`docs/plans/DECISIONS-PENDING.md`](../plans/DECISIONS-PENDING.md);
+  pending-prod-actions rows 1–2).
