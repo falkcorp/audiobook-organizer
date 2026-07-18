@@ -1,5 +1,5 @@
 // file: internal/server/duplicates_ops.go
-// version: 2.5.0
+// version: 2.6.0
 // guid: 8b3e1f92-d4c7-4a6e-b5f0-2a7c9d1e3f45
 // last-edited: 2026-07-18
 
@@ -206,12 +206,30 @@ func (s *Server) RegisterBookMergeOp(reg *opsregistry.Registry) error {
 // losers. Extracted from the op Run body so the reroute (soft-delete +
 // external-ID reassignment, NOT hard delete) is unit-testable on a real store.
 func applyBookMergeReroute(ctx context.Context, store database.Store, ms *merge.Service, keepID string, mergeIDs []string) error {
+	// Build the loser set once, excluding the keep book and de-duping. Callers
+	// (the handler binds keep_id/merge_ids without validation) may include the
+	// keep book in mergeIDs; legacy dedup.MergeBooks guarded this with a
+	// `mergeID == keepID { continue }` skip. Without it, passing keepID into
+	// merge.Service.MergeBooks makes the version-group loop write the keep book
+	// twice and demote it to non-primary — leaving the group with NO primary and
+	// the keep book neither primary nor soft-deleted. Excluding it here (for BOTH
+	// the transfer and the Service call) preserves that integrity guarantee.
+	losers := make([]string, 0, len(mergeIDs))
+	seen := map[string]bool{keepID: true}
+	for _, mid := range mergeIDs {
+		if seen[mid] {
+			continue
+		}
+		seen[mid] = true
+		losers = append(losers, mid)
+	}
+	if len(losers) == 0 {
+		return nil // nothing to merge (every id was the keep book / duplicate)
+	}
+
 	if keepBook, err := store.GetBookByID(keepID); err == nil && keepBook != nil {
 		changed := false
-		for _, mid := range mergeIDs {
-			if mid == keepID {
-				continue
-			}
+		for _, mid := range losers {
 			if mb, mErr := store.GetBookByID(mid); mErr == nil && mb != nil {
 				dedup.TransferITunesMetadataFirstWin(keepBook, mb)
 				changed = true
@@ -224,7 +242,7 @@ func applyBookMergeReroute(ctx context.Context, store database.Store, ms *merge.
 		}
 	}
 	// Service takes ALL ids (losers + winner) and the winner id.
-	_, err := ms.MergeBooks(append(append([]string{}, mergeIDs...), keepID), keepID)
+	_, err := ms.MergeBooks(append(append([]string{}, losers...), keepID), keepID)
 	return err
 }
 
