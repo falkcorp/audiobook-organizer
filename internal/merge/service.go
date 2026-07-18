@@ -1,7 +1,7 @@
 // file: internal/merge/service.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
-// last-edited: 2026-07-16
+// last-edited: 2026-07-18
 
 package merge
 
@@ -97,6 +97,32 @@ func NewService(db database.Store) *Service {
 // preferred, then highest bitrate, then largest file).
 // If primaryID is provided, that book is set as the primary.
 func (ms *Service) MergeBooks(bookIDs []string, primaryID string) (*Result, error) {
+	// De-duplicate the incoming ID list before anything else. Every current
+	// caller either de-dupes itself or trusts a request body (e.g. the
+	// /audiobooks/merge handler passes req.BookIDs straight through) — if
+	// duplicate IDs reach here, the version-group loop below writes that
+	// book's row twice, and the LAST write wins. A duplicated primary would
+	// get its own IsPrimaryVersion=true immediately overwritten back to
+	// false by its second occurrence, while the loser-cleanup loop (which
+	// skips only book.ID == resolvedPrimaryID) still treats both occurrences
+	// as "the primary" and never soft-deletes it — leaving the book neither
+	// primary nor soft-deleted, and the version group with NO live primary.
+	// This is the exact corruption class applyBookMergeReroute (#2007 /
+	// F6-T10) already guards against by de-duping before calling in, but that
+	// guard lived only at that one caller; enforcing it here protects every
+	// caller, present and future, regardless of whether it remembers to
+	// de-dupe first.
+	seen := make(map[string]bool, len(bookIDs))
+	deduped := make([]string, 0, len(bookIDs))
+	for _, id := range bookIDs {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		deduped = append(deduped, id)
+	}
+	bookIDs = deduped
+
 	if len(bookIDs) < 2 {
 		return nil, fmt.Errorf("need at least 2 book IDs to merge")
 	}
