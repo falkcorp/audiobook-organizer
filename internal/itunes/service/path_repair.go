@@ -289,6 +289,15 @@ func (r *PathRepairer) repairWithResult(ctx context.Context, opID string, dryRun
 		resMu     sync.Mutex
 		scanned   int64
 		bookLocks bookWriteLocks
+		// persistMu serializes the periodic partial-report write (both the
+		// report-file os.WriteFile and the DB persist call). `n` is a
+		// completion-order counter, not a track index, so with >= 2 workers
+		// alive at once, two different `n` values can each satisfy
+		// n%persistEvery==0 concurrently; without this lock they'd both call
+		// writeReportFile with the SAME path (itunes-repair-<opID>.json) at
+		// the same time, tearing the file. persist calls are rare (every
+		// 2000 tracks), so this lock sees negligible contention.
+		persistMu sync.Mutex
 	)
 
 	g, gctx := errgroup.WithContext(ctx)
@@ -314,10 +323,15 @@ func (r *PathRepairer) repairWithResult(ctx context.Context, opID string, dryRun
 			}
 			if n%persistEvery == 0 {
 				// Snapshot the partial result so an interrupted run still
-				// leaves something the operator can review.
+				// leaves something the operator can review. persistMu
+				// serializes the actual file/DB I/O below — see its doc
+				// comment for why (two different `n` values can both hit
+				// this branch concurrently and would otherwise tear the
+				// shared report file).
 				resMu.Lock()
 				snap := result
 				resMu.Unlock()
+				persistMu.Lock()
 				if r.cfg.ReportDir != "" {
 					if reportPath, werr := writeReportFile(r.cfg.ReportDir, opID, snap); werr == nil {
 						resMu.Lock()
@@ -327,6 +341,7 @@ func (r *PathRepairer) repairWithResult(ctx context.Context, opID string, dryRun
 					}
 				}
 				_ = persistRepairResult(r.store, opID, snap)
+				persistMu.Unlock()
 			}
 			if !itunes.IsAudiobook(track) {
 				return nil
