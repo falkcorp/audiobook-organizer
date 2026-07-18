@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.179.0 -->
+<!-- version: 3.180.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-18 -->
 
@@ -8,6 +8,41 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 18, 2026 - fix(audiobooks): hydrate author/series names for advanced-search FieldFilters (TODO #16b)
+
+- **Advanced-search `FieldFilters` on `Field: "author"`/`"series"` always
+  returned 0 books**, independent of sort. Root cause: `fieldMatchesValue`
+  (`internal/audiobooks/service_filtering.go`) reads `book.Author.Name` /
+  `book.Series.Name`, but `database.Book.Author`/`.Series` are "Related
+  objects (populated via joins, not stored in DB)" — the memdb-resident
+  `*Book` used by the production listing pushdown never carries them (only
+  `AuthorID`/`SeriesID` survive), and the Pebble `GetBookByID` raw-JSON
+  fallback doesn't hydrate them either. Every author/series FieldFilter
+  therefore compared against `""` and rejected every row. The Library UI's
+  normal `?author_id=`/`?series_id=` filter uses a different indexed path and
+  was never affected — this was specific to the free-text advanced-search
+  filter.
+- Fix: `buildAuthorSeriesNameMaps` (new, `service_filtering.go`) builds
+  authorID→name / seriesID→name maps once per query — via the same
+  `GetAllAuthors`/`GetAllSeries` accessor `author_series.go`'s
+  `ListSeriesWithCounts` already uses for its author-name join — only when
+  the filter set actually references "author"/"series". `matchesFieldFilters
+  WithStrippedFallback` (the single choke point both the memdb pushdown
+  predicate in `buildBookSummaryFilterWithLookupCount` and the mock/
+  non-pushdown post-filter path in `service_query.go` route through) now
+  hydrates a per-book copy's `Author`/`Series` from those maps before running
+  `fieldMatchesValue` — no per-book store call, maps are nil (no-op) for
+  queries that don't filter on author/series. `CountAudiobooksFiltered`
+  shares the same predicate builder, so the paginated "total" is fixed too
+  (previously: list=0 AND count=0 for the same query).
+- New regression tests (`internal/audiobooks/service_fieldfilter_authorseries_test.go`,
+  real `PebbleStore` + warm memdb so the production pushdown path is
+  actually exercised): `TestFieldFilterAuthor_MemdbHydration` and
+  `TestFieldFilterSeries_MemdbHydration` seed two authors (one with a
+  series) and assert the filter discriminates correctly (exact match,
+  the other author's book excluded, and a nonexistent name returns 0 —
+  not "everything").
 
 #### July 18, 2026 - feat(metrics): per-operation progress exporter + op-stall alert (TODO #36)
 

@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_filtering.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: b4e8c3d2-e5f6-7a80-9b0c-1d2e3f4a5b6c
 // last-edited: 2026-07-18
 
@@ -238,6 +238,16 @@ func matchesFieldFilters(book database.Book, filters []FieldFilter) bool {
 // pre-fix behavior where memdb books silently failed all
 // stripped-field filters.
 //
+// authorNames/seriesNames are optional authorID→name / seriesID→name maps
+// (see buildAuthorSeriesNameMaps). memBook.Author / memBook.Series are
+// "Related objects (populated via joins, not stored in DB)" — see
+// database.Book's doc comment — so neither the memdb-resident copy NOR the
+// raw-JSON Pebble fetchFull result ever carries them; only AuthorID/SeriesID
+// survive. Without these maps, an "author"/"series" FieldFilter always
+// compared against "" and rejected every row (TODO 16b). Both maps are nil
+// when the filter set doesn't reference author/series, so callers pay
+// nothing extra for the common case.
+//
 // pebbleLookups is incremented once per actual GetBookByID call so the
 // caller can log a per-query count at DEBUG.
 func matchesFieldFiltersWithStrippedFallback(
@@ -246,9 +256,17 @@ func matchesFieldFiltersWithStrippedFallback(
 	fetchFull func(id string) (*database.Book, error),
 	pebbleLookups *int64,
 	warnOnce func(id string, err error),
+	authorNames, seriesNames map[int]string,
 ) bool {
-	if len(cheap) > 0 && !matchesFieldFilters(*memBook, cheap) {
-		return false
+	if len(cheap) > 0 {
+		cheapBook := memBook
+		if authorNames != nil || seriesNames != nil {
+			hydrated := hydrateAuthorSeriesNames(*memBook, authorNames, seriesNames)
+			cheapBook = &hydrated
+		}
+		if !matchesFieldFilters(*cheapBook, cheap) {
+			return false
+		}
 	}
 	if len(stripped) == 0 {
 		return true
@@ -264,6 +282,62 @@ func matchesFieldFiltersWithStrippedFallback(
 		return false
 	}
 	return matchesFieldFilters(*full, stripped)
+}
+
+// hydrateAuthorSeriesNames returns a copy of book with Author/Series
+// populated from the given id→name maps when the book carries an
+// AuthorID/SeriesID but no already-resolved Author/Series struct. Safe to
+// call with nil maps (no-op) or when the book's Author/Series is already
+// set (left untouched).
+func hydrateAuthorSeriesNames(book database.Book, authorNames, seriesNames map[int]string) database.Book {
+	if book.Author == nil && book.AuthorID != nil && authorNames != nil {
+		if name, ok := authorNames[*book.AuthorID]; ok {
+			book.Author = &database.Author{ID: *book.AuthorID, Name: name}
+		}
+	}
+	if book.Series == nil && book.SeriesID != nil && seriesNames != nil {
+		if name, ok := seriesNames[*book.SeriesID]; ok {
+			book.Series = &database.Series{ID: *book.SeriesID, Name: name}
+		}
+	}
+	return book
+}
+
+// buildAuthorSeriesNameMaps returns authorID→name / seriesID→name maps when
+// filters contains an "author" / "series" FieldFilter, or nil maps
+// otherwise. Authors/Series are small, fully in-memory collections (unlike
+// Books), so fetching all of them once per query — the same GetAllAuthors /
+// GetAllSeries accessor author_series.go's ListSeriesWithCounts already uses
+// for its author-name join — is cheap and avoids a per-book store call
+// inside the filter loop (see CLAUDE.md's concurrency/per-item-DB-call
+// guidance).
+func (svc *AudiobookService) buildAuthorSeriesNameMaps(filters []FieldFilter) (authorNames, seriesNames map[int]string) {
+	needAuthor, needSeries := false, false
+	for _, f := range filters {
+		switch f.Field {
+		case "author":
+			needAuthor = true
+		case "series":
+			needSeries = true
+		}
+	}
+	if needAuthor {
+		if authors, err := svc.store.GetAllAuthors(); err == nil {
+			authorNames = make(map[int]string, len(authors))
+			for _, a := range authors {
+				authorNames[a.ID] = a.Name
+			}
+		}
+	}
+	if needSeries {
+		if series, err := svc.store.GetAllSeries(); err == nil {
+			seriesNames = make(map[int]string, len(series))
+			for _, s := range series {
+				seriesNames[s.ID] = s.Name
+			}
+		}
+	}
+	return authorNames, seriesNames
 }
 
 // fieldMatchesValue checks whether a book's field value matches the search
@@ -678,6 +752,7 @@ func (svc *AudiobookService) buildBookSummaryFilterWithLookupCount(f ListFilters
 				"stripped_fields", strippedFieldNames(strippedFF),
 				"cheap_filter_count", len(cheapFF))
 		}
+		authorNames, seriesNames := svc.buildAuthorSeriesNameMaps(remainingFF)
 		// Per-query Pebble-lookup counter + once-per-query warn for
 		// nil/err. The walker invokes the predicate row-by-row on the
 		// caller's goroutine, so a plain int64 + sync.Once captured in the
@@ -696,7 +771,7 @@ func (svc *AudiobookService) buildBookSummaryFilterWithLookupCount(f ListFilters
 		}
 		predicate = func(b *database.Book) bool {
 			if len(remainingFF) > 0 {
-				if !matchesFieldFiltersWithStrippedFallback(b, cheapFF, strippedFF, fetchFull, pebbleLookups, warnFn) {
+				if !matchesFieldFiltersWithStrippedFallback(b, cheapFF, strippedFF, fetchFull, pebbleLookups, warnFn, authorNames, seriesNames) {
 					return false
 				}
 			}

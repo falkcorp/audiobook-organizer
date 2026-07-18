@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
 // last-edited: 2026-07-18
 
@@ -303,10 +303,16 @@ func (svc *AudiobookService) GetAudiobooks(ctx context.Context, limit int, offse
 			fetchFull := func(id string) (*database.Book, error) {
 				return svc.store.GetBookByID(id)
 			}
+			// author/series names are never persisted on the Book row itself
+			// (populated only via joins), so this fallback path needs the
+			// same id→name hydration as the memdb pushdown predicate — see
+			// buildAuthorSeriesNameMaps / hydrateAuthorSeriesNames in
+			// service_filtering.go (TODO 16b).
+			authorNames, seriesNames := svc.buildAuthorSeriesNameMaps(f.FieldFilters)
 			fieldFiltered := make([]database.Book, 0, len(filtered))
 			for i := range filtered {
 				b := filtered[i]
-				if matchesFieldFiltersWithStrippedFallback(&b, cheapFF, strippedFF, fetchFull, &pebbleLookups, warnFn) {
+				if matchesFieldFiltersWithStrippedFallback(&b, cheapFF, strippedFF, fetchFull, &pebbleLookups, warnFn, authorNames, seriesNames) {
 					fieldFiltered = append(fieldFiltered, b)
 				}
 			}
