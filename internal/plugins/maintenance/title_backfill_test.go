@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
 // last-edited: 2026-07-18
 
@@ -73,7 +73,7 @@ func (d fakeDeps) ActivityFlushOp(_ string)                        {}
 func (d fakeDeps) EnqueueWriteBack(_ string)                       {}
 func (d fakeDeps) PollBatch(_ context.Context) (int, error)        { return 0, nil }
 func (d fakeDeps) DedupLLMReview(_ context.Context) error          { return nil }
-func (d fakeDeps) DedupTriageExactPending(_ context.Context) (*TriageReport, error) {
+func (d fakeDeps) DedupTriageExactPending(_ context.Context, _ bool) (*TriageReport, error) {
 	return &TriageReport{}, nil
 }
 func (d fakeDeps) InvalidateDedupCache() {}

@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.176.0 -->
+<!-- version: 3.177.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-18 -->
 
@@ -8,6 +8,31 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 18, 2026 - dedup: triage purge-apply path (T03-BUILD)
+
+- **`maintenance.dedup-exact-triage` gains an apply path**: the op accepted
+  `{"apply": bool}` params (previously ignored — hardwired report-only). With
+  `apply=true` (default remains `false`, preserving the original report-only
+  contract), every candidate classified `stub` or `title_leak`
+  (`maintenanceplugin.IsPurgeable`) is DISMISSED via
+  `EmbeddingStore.UpdateCandidateStatus(id, "dismissed")` — never
+  `DeleteCandidate`. Dismiss keeps the historical record, maintains the
+  `dedup:s:` status index, is reversible, and (per PR #1973's terminal-status
+  guard) a dismissed candidate never resurrects as pending on a later rescan.
+  `genuine`/`fragment`/`unknown` candidates are never touched. Individual
+  dismiss failures are counted (`dismiss_errors`), not fatal — the pass
+  continues past a single bad row. The `TriageReport` gained
+  `DismissedCount` (0 in dry-run; the number actually flipped when
+  `apply=true`), logged in both the per-run completion `slog` line and the
+  op's summary log line.
+- Unblocks brief T03 (`docs/agent-tasks/error-correction-2026-07/TASKS.md`) —
+  the sandbox purge wave for the 7,878 `title_leak` candidates found by T02's
+  triage run now has an apply mechanism to act on.
+- `internal/plugins/maintenance/deps.go`: `ServerDeps.DedupTriageExactPending`
+  signature changed to `(ctx, apply bool)`; `internal/server/server_maintenance_deps.go`
+  implements the dismiss loop; the `fakeDeps` test double in
+  `title_backfill_test.go` updated to match.
 
 #### July 18, 2026 - fix(reconcile): AssignOrphanVGs worker pool + VG clobber guard (T07/R-6)
 
