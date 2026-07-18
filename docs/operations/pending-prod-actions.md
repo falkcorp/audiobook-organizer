@@ -1,7 +1,7 @@
 <!-- file: docs/operations/pending-prod-actions.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: 84079e70-633b-4bf5-849a-7b6671f6de61 -->
-<!-- last-edited: 2026-07-17 -->
+<!-- last-edited: 2026-07-18 -->
 
 # Pending Prod Actions — the run-on-prod queue
 
@@ -22,8 +22,8 @@ validated on the dedup sandbox first (private runbook in falkcorp/infra-docs).
 
 | # | Action | What / why | Op / command shape | Gating | Source |
 |---|--------|------------|--------------------|--------|--------|
-| 1 | **PH-2 exact-triage** | Run the triage op that classifies the exact-pending dedup backlog into its four populations, then review the population report before any purge | def-id `maintenance.dedup-exact-triage` (read-only classify) → review report → PH-2b per-population purge wave (**never blanket-purge**) | operator-run (triage) → human-decision (PH-2b purge) | [`docs/dedup/STATUS.md`](../dedup/STATUS.md); TODO #2 |
-| 2 | **CONS-10 / INIT-2 T6 backlog drain** | Drain/triage the ~15,269-pending candidate backlog now that title-repair + rescore code is merged; run was never executed | ops per [`docs/plans/2026-07-10-dedup-pipeline-hardening.md`](../plans/2026-07-10-dedup-pipeline-hardening.md) (dry-run → apply); sandbox-first | human-decision (prod apply) | TODO #1 |
+| 1 | **PH-2 exact-triage** | Run the triage op that classifies the exact-pending dedup backlog into its four populations, then review the population report before any purge | def-id `maintenance.dedup-exact-triage` (read-only classify) → review report → PH-2b per-population purge wave (**never blanket-purge**) | operator-run (triage) → human-decision (PH-2b purge) | **Sandbox-validated 2026-07-18: purgeable=7,891, exact-pending 9,074→1,311 (−85.5%), 0 errors** — [`docs/dedup/STATUS.md`](../dedup/STATUS.md); TODO #2 |
+| 2 | **CONS-10 / INIT-2 T6 backlog drain** | Drain/triage the ~15,269-pending candidate backlog now that title-repair + rescore code is merged; run was never executed | chain PROVEN on sandbox 2026-07-18 (title-repair→breakdown-backfill→triage `apply=true`→purge-stale→full-scan; ops #1978/#1982/#2008); prod = same sequence, human-gated | human-decision (prod apply) | TODO #1 |
 | 3 | **Duration-reextract tail** | Re-enqueue the duration-reextract apply for the ~721-book tail that the v3 run left behind | duration-reextract op re-enqueue (see archived design [`2026-06-21-duration-reextract-v3-design.md`](../archive/2026-07-consolidation/specs/2026-06-21-duration-reextract-v3-design.md)); dry-run supported | operator-run | TODO #19 |
 | 4 | **iTunes heal Layer-6 re-trigger** | Re-run the iTunes path-heal op so Layer-6 (the last-resort matching layer) reprocesses the residuals (3,720 ambiguous / 5,349 not-found / 4,734 doubled-path) | re-enqueue the iTunes path-heal op after the residual pools shrink | operator-run | TODO #17, #49 |
 | 5 | **SLOG-PROD-VERIFY** | Live smoke test that the op-activity logging chain (start/progress/complete + activity tags) actually lands in prod journald/op-log | runbook: [`docs/operations/slog-prod-verify.md`](slog-prod-verify.md) | operator-run | TODO #28 |

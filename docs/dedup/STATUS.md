@@ -1,7 +1,7 @@
 <!-- file: docs/dedup/STATUS.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 09dc17af-0c96-4f15-bc27-e5f48edb9e74 -->
-<!-- last-edited: 2026-07-17 -->
+<!-- last-edited: 2026-07-18 -->
 
 # Dedup — Status & Architecture (single source of truth)
 
@@ -37,26 +37,50 @@ genuine-duplicate review signal:
 4. **Stub/empty records** — 11–91-byte files paired with real books. Cleanup;
    never had real audio.
 
-## Remediation path (in order)
+## Remediation path (in order) — PROVEN END-TO-END ON SANDBOX 2026-07-18
 
-1. **Title repair** — fix leaked/junk titles on affected books so exact-title
-   cliques dissolve instead of being purged blind. (Code merged; prod run
-   pending.)
-2. **ScoreBreakdown backfill** — populate ScoreBreakdowns on labeled/pending
-   pairs so composite calibration has real inputs (this was the "calibration
-   blocked" gap, resolved by the #1926/#1927 chain: recall 0.33 → ~0.70 at
-   96.7% precision, auto-merge tier 98.3%).
-3. **Triage** — `maintenance.dedup-exact-triage` classifies the backlog into the
-   four populations above (read-only); review the report.
-4. **Rescan** — full-scan/rescore on the cleaned corpus; then PH-2b runs the
-   per-population purge wave and the review UI drains what remains.
+1. **Title repair** — `maintenance.title-repair` (op built, PR #1978) re-derives
+   CONS-17b agreed chapter titles over stored books so exact-title cliques
+   dissolve. Measured: 556 books retitled, 0 errors.
+2. **ScoreBreakdown backfill** — `dedup.breakdown-backfill` (op built, PR #1982)
+   populates ScoreBreakdowns on pre-T015 pending candidates so triage and
+   composite calibration have real inputs (this was the "calibration blocked"
+   gap; the #1926/#1927 chain took recall 0.33 → ~0.70 at 96.7% precision).
+   Measured: ~9,419 candidates backfilled, 0 errors.
+3. **Triage classify + purge-apply** — `maintenance.dedup-exact-triage` classifies
+   the backlog into the four populations above; with **`{"apply":true}`** (op
+   built, PR #2008) it **dismisses** (never hard-deletes — reversible, and the
+   #1973 terminal-status guard stops resurrection) the purgeable stub/title-leak
+   populations. The relaxed title-leak precondition (PR #1982) recognizes
+   non-iTunes title-leak by identical normalized title.
+4. **Rescan** — `dedup.purge-stale` + `dedup.full-scan` on the cleaned corpus;
+   the review UI drains what genuinely remains.
+
+### Sandbox validation results (2026-07-18, full-fidelity prod replica, 0 errors)
+
+Ran the full chain on a fresh ZFS clone + copy of the production Pebble DB
+(baseline identical to prod: **9,074 exact-pending / 10,319 total-pending**):
+
+| Stage | exact-pending | total-pending | dismissed |
+|---|---|---|---|
+| baseline | 9,074 | 10,319 | 1,351 |
+| after title-repair + breakdown-backfill | 9,074 | 10,319 | 1,351 |
+| **after triage purge-apply** (classified purgeable=**7,891**, keep=278, review=2,150 → dismissed 7,891) | **1,183** | 2,428 | 9,242 |
+| after purge-stale | 1,181 | 2,426 | 9,242 |
+| **final** after full-scan (embedding re-emission) | **1,311** | 2,554 | 9,242 |
+
+**Net: exact-pending 9,074 → 1,311 (−85.5%); total-pending 10,319 → 2,554 (−75%);
+7,891 title-leak/stub junk candidates dismissed, 0 errors.** The remaining ~1,300
+are genuine plausible duplicates + review-band + a small full-scan embedding
+re-emission — the real review backlog that *should* remain. This validates the
+whole title-repair → backfill → relaxed-triage → purge design predicted at 76%.
 
 Prod execution of this path is tracked in
 [`docs/operations/pending-prod-actions.md`](../operations/pending-prod-actions.md)
-(rows 1–2). High-risk steps validate on **the dedup sandbox** first — a
-disposable replica of prod; isolation is proven (a destructive test at the prod
-path left prod byte-identical). Mechanics are deliberately not documented here:
-**private runbook in falkcorp/infra-docs**.
+(rows 1–2) and is **human-gated** (not yet run on prod). High-risk steps validate
+on **the dedup sandbox** first — a disposable replica of prod; isolation is proven
+(a destructive test at the prod path left prod byte-identical). Mechanics are
+deliberately not documented here: **private runbook in falkcorp/infra-docs**.
 
 ## What's fixed (recent)
 
@@ -85,12 +109,16 @@ path left prod byte-identical). Mechanics are deliberately not documented here:
   **cover recovery** fast-follows (TODO #3, #11, #12).
 - **`review_apply_enabled` flip** — human decision
   ([DECISIONS-PENDING](../plans/DECISIONS-PENDING.md)).
-- **2026-07-17 review findings F2–F7** (ApplyVersionGroup group-integrity bugs,
-  status-index bypass, Rescore 100K truncation, legacy MergeBooks op gaps) — see
+- **2026-07-17 review findings F2–F7 are now FIXED** (F2 ApplyVersionGroup
+  integrity #1976, F3/F4/F5 index/Rescore-cap #1977, F6 legacy MergeBooks
+  rerouted off hard-delete #2007, F7 quarantine RunItems #2004) — full map in
   [`docs/audits/2026-07-17-multi-discipline-review.md`](../audits/2026-07-17-multi-discipline-review.md).
-- Audit-carryover code items still relevant: differentiated residual-disposition
-  op (fragment-floor; purge title-leak/stub) and raising the purge-stale 100K
-  cap to 1M with chunked deletes.
+- The differentiated residual-disposition op is now **built** (`dedup-exact-triage`
+  `{"apply":true}` dismisses title-leak/stub, PR #2008) and **validated on the
+  sandbox** (see the validation table above). The Rescore/purge whole-backlog caps
+  were raised to 1M (#1977).
+- **Only prod execution remains** (human-gated) — the sandbox run proved the
+  full chain; the equivalent prod run is TODO #2 / pending-prod-actions rows 1–2.
 
 ## Architecture — the feedback loop
 
