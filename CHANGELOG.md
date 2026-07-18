@@ -1,5 +1,6 @@
 <!-- file: CHANGELOG.md -->
 <!-- version: 3.176.0 -->
+<!-- version: 3.175.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-18 -->
 
@@ -147,6 +148,24 @@
   callback, so this path also gets more than one log line across a
   multi-hour run, and now surfaces the previously-unreachable error via
   `slog.Warn`.
+#### July 18, 2026 - F6: reroute dedup book-merge off the hard-delete path
+
+- **Data-loss fix (T10 / F6):** the `POST /audiobooks/merge` endpoint
+  (`dedup.book-merge` op) was hard-deleting merged-away books via
+  `store.DeleteBook`, which does **not** tombstone external-ID (`ext_id:*`)
+  mappings and does **not** enqueue iTunes ITL removals. Every merge therefore
+  orphaned the losers' PID/ASIN lookups (leaving them resolving to a deleted
+  book) and stranded their iTunes tracks in the library forever. The op now
+  routes through `merge.Service.MergeBooks`, which reassigns external IDs to the
+  winner, enqueues ITL removals, and **soft-deletes** losers (recoverable) — the
+  same single merge path the UI/version-group merge uses. The legacy first-win
+  iTunes-stat copy (rating/play-count/etc.) is preserved onto the winner so the
+  reroute is strictly-better than the old path on every axis. The legacy
+  `dedup.MergeBooks` function is retained only for
+  `internal/reconcile/itunes_heal.go` (which intentionally hard-collapses
+  organize-bug duplicate rows and still carries the same ext-ID/ITL gap — tracked
+  as a follow-up). Regression test drives the reroute on a real PebbleStore and
+  asserts soft-delete + external-ID reassignment + first-win copy.
 
 #### July 17, 2026 - error-correction fix wave (15 PRs) + sandbox verification
 

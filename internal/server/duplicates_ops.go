@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_ops.go
-// version: 2.4.1
+// version: 2.5.0
 // guid: 8b3e1f92-d4c7-4a6e-b5f0-2a7c9d1e3f45
-// last-edited: 2026-07-12
+// last-edited: 2026-07-18
 
 // duplicates_ops registers v2 OperationDefs for the 8 async dedup operations
 // that previously used s.queue.Enqueue.  HTTP handlers in duplicates_handlers.go
@@ -33,9 +33,11 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/gin-gonic/gin"
@@ -148,12 +150,31 @@ func (s *Server) RegisterBookMergeOp(reg *opsregistry.Registry) error {
 			op.AddEntity("books", p.MergeIDs...)
 			logging.Info(ctx, "book merge starting", "keep_id", p.KeepID, "merge_count", len(p.MergeIDs))
 
-			_, err := dedup.MergeBooks(ctx, store, p.LegacyOpID, p.KeepID, p.MergeIDs, progress)
-			if err != nil {
+			// F6 REROUTE: this op previously called dedup.MergeBooks, which
+			// hard-deleted losers via store.DeleteBook. DeleteBook does NOT
+			// tombstone external-ID (ext_id:*) mappings and does NOT enqueue
+			// iTunes ITL removals, so every legacy merge orphaned the losers'
+			// PID/ASIN lookups (leaving them resolving to a hard-deleted book)
+			// and stranded their iTunes tracks in the library forever. Route
+			// through merge.Service.MergeBooks instead (via applyBookMergeReroute),
+			// which reassigns external IDs to the winner, enqueues ITL removals,
+			// and soft-deletes losers (recoverable) — one merge path shared with
+			// the UI/version-group merge.
+			ms := s.mergeService
+			if ms == nil {
+				// Fallback matches wire_handlers.go's getMergeService nil-path.
+				// Note: a fresh Service has no write-back batcher, so ITL removals
+				// are skipped in that mode (tests / iTunes write-back disabled).
+				ms = merge.NewService(store)
+			}
+			if err := applyBookMergeReroute(ctx, store, ms, p.KeepID, p.MergeIDs); err != nil {
 				op.SetStatus("failed")
 				logging.Error(ctx, "book merge failed", "err", err)
 				return err
 			}
+			// Service takes no ProgressReporter; emit a final 100% so the op UI
+			// completes cleanly.
+			_ = progress.UpdateProgress(len(p.MergeIDs), len(p.MergeIDs), "Book merge complete")
 
 			s.dedupCache.InvalidateAll()
 			if s.dedupEngine != nil {
@@ -171,6 +192,40 @@ func (s *Server) RegisterBookMergeOp(reg *opsregistry.Registry) error {
 			return nil
 		},
 	})
+}
+
+// applyBookMergeReroute performs the F6-rerouted book merge for the
+// dedup.book-merge op. It (1) copies the losers' iTunes stats onto the keep book
+// first-win (merge.Service.MergeBooks reassigns external-ID mappings but does
+// NOT carry these Book-level iTunes fields, and after soft-delete they would
+// otherwise survive only on the loser row and vanish on a later purge/archive
+// sweep), persisting the copy BEFORE the merge — Service re-reads books fresh
+// and writes the full keep object back, so the copy survives its own
+// version-group UpdateBook — then (2) merges via merge.Service.MergeBooks, which
+// reassigns external IDs to the winner, enqueues ITL removals, and soft-deletes
+// losers. Extracted from the op Run body so the reroute (soft-delete +
+// external-ID reassignment, NOT hard delete) is unit-testable on a real store.
+func applyBookMergeReroute(ctx context.Context, store database.Store, ms *merge.Service, keepID string, mergeIDs []string) error {
+	if keepBook, err := store.GetBookByID(keepID); err == nil && keepBook != nil {
+		changed := false
+		for _, mid := range mergeIDs {
+			if mid == keepID {
+				continue
+			}
+			if mb, mErr := store.GetBookByID(mid); mErr == nil && mb != nil {
+				dedup.TransferITunesMetadataFirstWin(keepBook, mb)
+				changed = true
+			}
+		}
+		if changed {
+			if _, uErr := store.UpdateBook(keepBook.ID, keepBook); uErr != nil {
+				logging.Warn(ctx, "book merge: iTunes-field transfer write failed", "err", uErr)
+			}
+		}
+	}
+	// Service takes ALL ids (losers + winner) and the winner id.
+	_, err := ms.MergeBooks(append(append([]string{}, mergeIDs...), keepID), keepID)
+	return err
 }
 
 // RegisterAuthorDedupScanOp registers the "dedup.author-scan" v2 OperationDef.

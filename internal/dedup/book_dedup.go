@@ -1,7 +1,7 @@
 // file: internal/dedup/book_dedup.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-07-13
+// last-edited: 2026-07-18
 
 // Package dedup: book_dedup.go contains the extracted execution logic for the
 // "dedup.book-scan" and "dedup.book-merge" async operations.  The *Server
@@ -337,6 +337,40 @@ type BookMergeResult struct {
 // opID is the legacy operation ID written into OperationChange records.
 // keepID is the ID of the book to keep; every ID in mergeIDs is deleted.
 //
+// TransferITunesMetadataFirstWin copies the six iTunes-provenance Book fields
+// (persistent ID, play count, rating, date added, last played, bookmark) from a
+// merged-away loser onto the surviving keep book, first-win: a field is only
+// filled if the keep book does not already have it. These are Book-level fields,
+// NOT external-ID mappings, so merge.Service.ReassignExternalIDs does not carry
+// them — any merge path that soft-deletes/hard-deletes a loser must call this
+// first or the loser's iTunes stats are stranded on the removed row. Shared by
+// the legacy dedup.MergeBooks hard-delete path AND the rerouted book-merge op
+// (internal/server/duplicates_ops.go), so the copy semantics live in one place.
+func TransferITunesMetadataFirstWin(keep, from *database.Book) {
+	if keep == nil || from == nil {
+		return
+	}
+	if (keep.ITunesPersistentID == nil || *keep.ITunesPersistentID == "") &&
+		from.ITunesPersistentID != nil && *from.ITunesPersistentID != "" {
+		keep.ITunesPersistentID = from.ITunesPersistentID
+	}
+	if keep.ITunesPlayCount == nil && from.ITunesPlayCount != nil {
+		keep.ITunesPlayCount = from.ITunesPlayCount
+	}
+	if keep.ITunesRating == nil && from.ITunesRating != nil {
+		keep.ITunesRating = from.ITunesRating
+	}
+	if keep.ITunesDateAdded == nil && from.ITunesDateAdded != nil {
+		keep.ITunesDateAdded = from.ITunesDateAdded
+	}
+	if keep.ITunesLastPlayed == nil && from.ITunesLastPlayed != nil {
+		keep.ITunesLastPlayed = from.ITunesLastPlayed
+	}
+	if keep.ITunesBookmark == nil && from.ITunesBookmark != nil {
+		keep.ITunesBookmark = from.ITunesBookmark
+	}
+}
+
 // Concurrency: this is a package-level function (NOT merge.Service.MergeBooks)
 // with its own unguarded read-modify-write, reached from two async ops with
 // DIFFERENT ConcurrencyKeys (dedup.book-merge and the iTunes-heal op), so it can
@@ -347,9 +381,17 @@ type BookMergeResult struct {
 // per-book loop is bounded by one request's merge set and does only local DB /
 // in-memory progress work under the lock — nothing network/large-scan. Semantics
 // differ from merge.Service.MergeBooks (hard-delete + iTunes-metadata transfer,
-// no version group), so it is intentionally NOT routed through the Service; it
-// only shares the lock. Non-reentrant: this never calls the Service merge paths,
-// so the lock is taken exactly once.
+// no version group), so it only shares the lock. Non-reentrant: this never calls
+// the Service merge paths, so the lock is taken exactly once.
+//
+// F6 (2026-07-18): the POST /audiobooks/merge endpoint (dedup.book-merge op) no
+// longer uses this function — it was rerouted to merge.Service.MergeBooks
+// because this legacy path hard-deletes losers via store.DeleteBook, which does
+// NOT tombstone external-ID (ext_id:*) mappings and does NOT enqueue iTunes ITL
+// removals, orphaning both. See internal/server/duplicates_ops.go. This function
+// is retained solely for internal/reconcile/itunes_heal.go, which intentionally
+// hard-collapses organize-bug duplicate rows; that caller still carries the same
+// ext-ID/ITL gap and is tracked as a follow-up.
 func MergeBooks(
 	_ context.Context,
 	store database.Store,
@@ -397,25 +439,7 @@ func MergeBooks(
 		}
 
 		// Transfer useful iTunes metadata from merge book to keep book (first-win).
-		if (kBook.ITunesPersistentID == nil || *kBook.ITunesPersistentID == "") &&
-			mergeBook.ITunesPersistentID != nil && *mergeBook.ITunesPersistentID != "" {
-			kBook.ITunesPersistentID = mergeBook.ITunesPersistentID
-		}
-		if kBook.ITunesPlayCount == nil && mergeBook.ITunesPlayCount != nil {
-			kBook.ITunesPlayCount = mergeBook.ITunesPlayCount
-		}
-		if kBook.ITunesRating == nil && mergeBook.ITunesRating != nil {
-			kBook.ITunesRating = mergeBook.ITunesRating
-		}
-		if kBook.ITunesDateAdded == nil && mergeBook.ITunesDateAdded != nil {
-			kBook.ITunesDateAdded = mergeBook.ITunesDateAdded
-		}
-		if kBook.ITunesLastPlayed == nil && mergeBook.ITunesLastPlayed != nil {
-			kBook.ITunesLastPlayed = mergeBook.ITunesLastPlayed
-		}
-		if kBook.ITunesBookmark == nil && mergeBook.ITunesBookmark != nil {
-			kBook.ITunesBookmark = mergeBook.ITunesBookmark
-		}
+		TransferITunesMetadataFirstWin(kBook, mergeBook)
 
 		if err := store.DeleteBook(mergeID); err != nil {
 			result.Errors = append(result.Errors,
