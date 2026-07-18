@@ -1,5 +1,5 @@
 // file: internal/scanner/service.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-07-18
 package scanner
@@ -85,7 +85,7 @@ func (ss *ScanService) PerformScan(ctx context.Context, req *ScanRequest, log lo
 	return ss.performScanInternal(ctx, "", req, log)
 }
 
-// performScanInternal is the shared implementation used by PerformScan and PerformScanWithID.
+// performScanInternal is the shared implementation behind PerformScan.
 // opID may be empty when called without a tracked operation (activity batching is skipped).
 func (ss *ScanService) performScanInternal(ctx context.Context, opID string, req *ScanRequest, log logger.Logger) error {
 	// Set the active embedding store for dedup detection during this scan
