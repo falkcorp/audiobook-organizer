@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.4.0 -->
+<!-- version: 10.4.1 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-18 -->
 
@@ -175,7 +175,7 @@ R-2/C-3/C-2/C-4/C-5/C-1 (#1980) · C1/C6/C4/C5/C3 (#1981) ·
 breakdown-backfill op + title-leak relax (#1982) · devops 1(code)/2(template)/
 3/4/5/9 (#1983) · DL-5/C-6/C-7/M5/M6 (#1984) · R-4/H5/R-5/H6/DL-4/M8 (#1985) ·
 DL-1/DL-2/DL-3/M4 (#1986 — OPEN in CI at time of writing, see brief T01) ·
-R-1 (T06) + R-3/R-7/P-2 (T08) (#PR_PLACEHOLDER).
+R-1 (T06) + R-3/R-7/P-2 (T08) (#2002).
 
 ### Remaining — execution state (briefs)
 
@@ -184,9 +184,9 @@ R-1 (T06) + R-3/R-7/P-2 (T08) (#PR_PLACEHOLDER).
 - [ ] **T03** — sandbox: triage purge wave → purge-stale → full-scan → final backlog measurement vs 9,074 baseline
 - [ ] **T04** — prod deploy (nothing deployed 2026-07-17) + prod dry-runs + ⚠️ HUMAN-GATED apply
 - [ ] **T05** — logging H/M batch: H1 H2 H3 H4 H8 H9 M1 M2 M3 M7 (file:line anchors in the brief)
-- [x] **T06** — R-1: `op.terminal` SSE backend publisher added (see Fixed list, #PR_PLACEHOLDER)
+- [x] **T06** — R-1: `op.terminal` SSE backend publisher added (see Fixed list, #2002)
 - [ ] **T07** — R-6: AssignOrphanVGs serial loop + VersionGroupID clobber guard (`internal/reconcile/reconcile.go:1270-1327`)
-- [x] **T08** — R-3 (abandoned-reporter logBuf growth) · R-7 (dead scan checkpoint code) · P-2 (RunItems backwards progress) (see Fixed list, #PR_PLACEHOLDER)
+- [x] **T08** — R-3 (abandoned-reporter logBuf growth) · R-7 (dead scan checkpoint code) · P-2 (RunItems backwards progress) (see Fixed list, #2002)
 - [ ] **T09** — C2: remux/transcode 6-h ops have no reporter threading + can't fail · H7 (external-id backfill, same shape)
 - [ ] **T10** — F6: legacy dedup.MergeBooks hard-deletes losers without external-ID reassignment/ITL removal — VERIFY then reroute
 - [ ] **T11** — F7 (quarantine serial loops → RunItems) · R-9 (path_repair serial loop) · R-8 (all-unreadable-durations group misclassified "short")
