@@ -1,6 +1,5 @@
 <!-- file: CHANGELOG.md -->
 <!-- version: 3.176.0 -->
-<!-- version: 3.175.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-18 -->
 
@@ -114,6 +113,7 @@
 - All three packages (`internal/plugins/dedup`, `internal/itunes/...`,
   `internal/scanner`) pass `go test ./... -race -count=1`.
 #### July 18, 2026 - T09: remux/transcode/external-ID-backfill reporter threading (C2/H7)
+#### July 18, 2026 - T09: remux/transcode/external-ID-backfill reporter threading (C2/H7) — PR #2006
 
 - **fix(maintenance):** the malformed-M4B remux op, its transcode twin, and the
   external-ID backfill op each logged one "starting" line, called into a void
@@ -127,16 +127,26 @@
   `internal/remux/remux.go` + `transcode.go` / `internal/itunes/backfill.go`)
   so each now takes a `func(processed, total int, msg string)` progress
   callback and returns `error`. The plugin wires the callback to
-  `reporter.UpdateProgress` and fails the op on a non-nil error.
+  `reporter.UpdateProgress` and fails the op on a non-nil error. Added an
+  explicit 30m `ProgressTimeout` to the transcode `OperationDef` — a full
+  AAC re-encode can exceed the registry's 5m default gap between progress
+  stamps at the "every 25 files" cadence.
 - Remux/transcode report an accurate "X/Y" (a cheap pre-count walk over the
   same candidate predicate) every 25 files; external-ID backfill reports
   after every page of book pagination and every 10,000 iTunes-XML tracks.
   Per-file remux/transcode failures stay non-fatal (expected — transcode is
   the designed fallback for files remux can't fix); a track-PID bulk-write
-  failure that was previously logged and discarded now fails the op.
-- No behavior change for the startup goroutines in `server_lifecycle.go`
-  that call these directly (outside the UOS op registry) — they now surface
-  the returned error via a Warn log instead of it being silently unreachable.
+  failure and a book-pagination read failure, both previously
+  logged-and-discarded (or silently `break`), now fail the op instead of
+  letting it mark itself "done" after skipping part of the library.
+- The `startBackfills()` goroutines in `server_lifecycle.go` run these same
+  ops directly at every boot, **outside** the UOS op registry (no reporter
+  available there) — grepping found no enqueue site for the UOS ops
+  themselves, so this goroutine path is likely the only one that's actually
+  live in prod. Added `startupProgressLogger`, a small slog-based progress
+  callback, so this path also gets more than one log line across a
+  multi-hour run, and now surfaces the previously-unreachable error via
+  `slog.Warn`.
 
 #### July 17, 2026 - error-correction fix wave (15 PRs) + sandbox verification
 

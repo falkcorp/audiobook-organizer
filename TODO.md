@@ -188,6 +188,7 @@ DL-1/DL-2/DL-3/M4 (#1986 — OPEN in CI at time of writing, see brief T01) ·
 R-1 (T06) + R-3/R-7/P-2 (T08) (#2002).
 F7/R-9/R-8 (#PENDING — T11, see CHANGELOG July 18, 2026).
 F7/R-9/R-8 (#2004 — T11).
+C2/H7 remux/transcode/external-ID-backfill reporter threading (#2006).
 
 ### Remaining — execution state (briefs)
 
@@ -200,6 +201,9 @@ F7/R-9/R-8 (#2004 — T11).
 - [x] **T07** — R-6: AssignOrphanVGs worker pool + VG clobber guard (#2003)
 - [x] **T08** — R-3 (abandoned-reporter logBuf growth) · R-7 (dead scan checkpoint code) · P-2 (RunItems backwards progress) (see Fixed list, #2002)
 - [ ] **T09** — C2: remux/transcode 6-h ops have no reporter threading + can't fail · H7 (external-id backfill, same shape)
+- [ ] **T06** — R-1: `op.terminal` SSE has zero backend publishers (phantom "running" ops in UI)
+- [ ] **T07** — R-6: AssignOrphanVGs serial loop + VersionGroupID clobber guard (`internal/reconcile/reconcile.go:1270-1327`)
+- [ ] **T08** — R-3 (abandoned-reporter logBuf growth) · R-7 (dead scan checkpoint code) · P-2 (RunItems backwards progress)
 - [ ] **T10** — F6: legacy dedup.MergeBooks hard-deletes losers without external-ID reassignment/ITL removal — VERIFY then reroute
 - [ ] **T11** — F7 (quarantine serial loops → RunItems) · R-9 (path_repair serial loop) · R-8 (all-unreadable-durations group misclassified "short")
 - [x] **T12** — devops: 8 remaining scripts with internal IPs · op-stall alert (commented, metric doesn't exist yet — see Infra #36) · coverage floor on PR gate · systemd unit dedupe · credential entropy — #2001
