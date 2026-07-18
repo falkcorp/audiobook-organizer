@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.6.0 -->
+<!-- version: 10.7.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-18 -->
 
@@ -78,16 +78,25 @@ Companion docs:
     sort+paginates the pushdown result directly. Left a new backlog item (16b)
     for the separately-discovered author/series-by-name FieldFilter gap found
     during this investigation.
-16b. **Advanced-search `FieldFilters` on `Field: "author"`/`"series"` always
-    return 0 books** (found during #16's investigation) — `fieldMatchesValue`
-    reads `book.Author.Name`/`book.Series.Name`, but those pointers are never
-    hydrated on memdb-resident or BookSummary-projected Books (only on a
-    narrow write-path enrichment). Independent of sort — reproduces with no
-    sort at all. The Library UI's actual author/series filter (`?author_id=`/
-    `?series_id=`) is unaffected; this only hits the advanced-search-by-name
-    path. Needs the same name→ID resolution pattern already used for tags
-    (`GetBooksByTag` → `RestrictToIDs`), e.g. resolve author/series name to ID
-    via the authors/series store before building the predicate.
+16b. ~~**Advanced-search `FieldFilters` on `Field: "author"`/`"series"` always
+    return 0 books** (found during #16's investigation)~~ — **FIXED**
+    (fix/fieldfilter-author-series-hydration): confirmed root cause —
+    `fieldMatchesValue` (`internal/audiobooks/service_filtering.go:274`) reads
+    `book.Author.Name`/`book.Series.Name`, but per `database.Book`'s own doc
+    comment those are "Related objects (populated via joins, not stored in
+    DB)" — the memdb-resident `*Book` never carries them (only
+    AuthorID/SeriesID), and even the Pebble `GetBookByID` raw-JSON fallback
+    doesn't hydrate them either, so every author/series FieldFilter compared
+    against `""` and rejected every row. Fix: `buildAuthorSeriesNameMaps`
+    fetches all authors/series once per query (cheap — small, fully in-memory
+    collections, same `GetAllAuthors`/`GetAllSeries` accessor
+    `author_series.go`'s `ListSeriesWithCounts` already uses) and
+    `hydrateAuthorSeriesNames` populates a per-book copy's Author/Series from
+    those maps before `fieldMatchesValue` runs, at the single choke point
+    (`matchesFieldFiltersWithStrippedFallback`) both the memdb pushdown
+    predicate and the mock/non-pushdown post-filter path go through — no
+    per-book store call. `CountAudiobooksFiltered` shares the same predicate
+    builder so the paginated total is fixed too.
 17. **iTunes path-heal residuals** (H1:899-906) — 3,720 ambiguous / 5,349 not-found /
     4,734 doubled-path records still unresolved.
 18. **AP-1b — physically co-locate survivor's files after Combine** (H1:936) — inside
