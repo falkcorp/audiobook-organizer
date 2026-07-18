@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.4.2 -->
+<!-- version: 10.5.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-18 -->
 
@@ -182,41 +182,38 @@ specified as weak-model-proof task briefs T01–T13 in
 [`docs/agent-tasks/error-correction-2026-07/TASKS.md`](docs/agent-tasks/error-correction-2026-07/TASKS.md)**
 — work from the briefs, tick lines here as they land.
 
-### Fixed (2026-07-17 wave — do not re-fix)
+### Fixed (2026-07-17 → 07-18 waves — do not re-fix)
 
-F1 (#1973) · F2 (#1976) · F3/F4/F5/C7 (#1977) · title-repair op (#1978) ·
-R-2/C-3/C-2/C-4/C-5/C-1 (#1980) · C1/C6/C4/C5/C3 (#1981) ·
-breakdown-backfill op + title-leak relax (#1982) · devops 1(code)/2(template)/
-3/4/5/9 (#1983) · DL-5/C-6/C-7/M5/M6 (#1984) · R-4/H5/R-5/H6/DL-4/M8 (#1985) ·
-DL-1/DL-2/DL-3/M4 (#1986 — OPEN in CI at time of writing, see brief T01) ·
-R-1 (T06) + R-3/R-7/P-2 (T08) (#2002).
-F7/R-9/R-8 (#PENDING — T11, see CHANGELOG July 18, 2026).
-F7/R-9/R-8 (#2004 — T11).
-C2/H7 remux/transcode/external-ID-backfill reporter threading (#2006).
-F6 (#PR_PLACEHOLDER — book-merge rerouted off hard-delete to soft-delete +
-F6 (#2007 — book-merge rerouted off hard-delete to soft-delete +
-external-ID reassignment + ITL removal, T10).
+**2026-07-17 wave:** F1 (#1973) · F2 (#1976) · F3/F4/F5/C7 (#1977) ·
+title-repair op (#1978) · R-2/C-3/C-2/C-4/C-5/C-1 (#1980) · C1/C6/C4/C5/C3 (#1981) ·
+breakdown-backfill op + title-leak relax (#1982) · devops IP-scrub/template/hook/
+smoke (#1983) · DL-5/C-6/C-7/M5/M6 (#1984) · R-4/H5/R-5/H6/DL-4/M8 (#1985) ·
+DL-1/DL-2/DL-3/M4 (#1986).
+
+**2026-07-18 coordination wave (T05–T12):** R-1 (T06) + R-3/R-7/P-2 (T08) (#2002) ·
+devops follow-ups T12 (#2001) · F7/R-9/R-8 (T11) (#2004) · R-6 orphan-VG pool (T07) (#2003) ·
+dep-fail SSE publisher (T06-fu) (#2005) · C2/H7 reporter threading (T09) (#2006) ·
+F6 legacy book-merge rerouted off hard-delete → soft-delete + external-ID reassignment
++ ITL removal (T10) (#2007) · triage purge-apply op (T03-BUILD) (#2008) ·
+H1/H2/H3/H4/H8/H9/M1/M2/M3/M7 logging batch (T05) (#2010).
 
 ### Remaining — execution state (briefs)
 
-- [ ] **T01** — land PR #1986 (organizer data-loss fixes; CI was running)
-- [ ] **T02** — sandbox: verify breakdown-backfill apply, run dedup-exact-triage, record populations (backfill apply op `01KXSJHBDDP17AMR8WYKSTQH30` was in flight at stop)
-- [ ] **T03** — sandbox: triage purge wave → purge-stale → full-scan → final backlog measurement vs 9,074 baseline
-      (T03-BUILD landed: `maintenance.dedup-exact-triage {"apply":true}` now dismisses
-      purgeable stub/title_leak candidates — see Dedup item 2 above. Sandbox run itself
-      still not executed.)
-- [ ] **T04** — prod deploy (nothing deployed 2026-07-17) + prod dry-runs + ⚠️ HUMAN-GATED apply
-- [x] **T05** — logging H/M batch: H1 H2 H3 H4 H8 H9 M1 M2 M3 M7 (#PR)
-- [x] **T06** — R-1: `op.terminal` SSE backend publisher added (see Fixed list, #2002)
+- [x] **T01** — organizer data-loss fixes landed (#1986)
+- [x] **T02** — sandbox triage measured: purgeable **7,878** (title_leak) / genuine 278 /
+      fragment 392 / unknown 1,756 of 10,304 (was purgeable=1, unknown=9,950 pre-work —
+      the title-repair → breakdown-backfill → relaxed-triage chain is proven). Formal
+      doc recording folded into T13.
+- [ ] **T03** — sandbox purge wave: `maintenance.dedup-exact-triage {"apply":true}` (dismiss
+      ~7,878 purgeable, op merged in #2008) → purge-stale → full-scan → measure vs 9,074
+      baseline. Needs sandbox redeploy with current main first. NOT yet run.
+- [ ] **T04** — prod deploy (nothing deployed since 2026-07-17) + prod dry-runs + ⚠️ HUMAN-GATED apply
+- [x] **T05** — logging H/M batch: H1 H2 H3 H4 H8 H9 M1 M2 M3 M7 (#2010)
+- [x] **T06** — R-1: `op.terminal` SSE backend publisher (#2002) + dep-fail publisher (#2005)
 - [x] **T07** — R-6: AssignOrphanVGs worker pool + VG clobber guard (#2003)
-- [x] **T08** — R-3 (abandoned-reporter logBuf growth) · R-7 (dead scan checkpoint code) · P-2 (RunItems backwards progress) (see Fixed list, #2002)
-- [ ] **T09** — C2: remux/transcode 6-h ops have no reporter threading + can't fail · H7 (external-id backfill, same shape)
-- [ ] **T06** — R-1: `op.terminal` SSE has zero backend publishers (phantom "running" ops in UI)
-- [ ] **T07** — R-6: AssignOrphanVGs serial loop + VersionGroupID clobber guard (`internal/reconcile/reconcile.go:1270-1327`)
-- [ ] **T08** — R-3 (abandoned-reporter logBuf growth) · R-7 (dead scan checkpoint code) · P-2 (RunItems backwards progress)
-- [ ] **T10** — F6: legacy dedup.MergeBooks hard-deletes losers without external-ID reassignment/ITL removal — VERIFY then reroute
-- [ ] **T09** — C2: remux/transcode 6-h ops have no reporter threading + can't fail · H7 (external-id backfill, same shape)
-- [ ] **T11** — F7 (quarantine serial loops → RunItems) · R-9 (path_repair serial loop) · R-8 (all-unreadable-durations group misclassified "short")
-- [x] **T12** — devops: 8 remaining scripts with internal IPs · op-stall alert (commented, metric doesn't exist yet — see Infra #36) · coverage floor on PR gate · systemd unit dedupe · credential entropy — #2001
-- [ ] **T12** — devops: 8 remaining scripts with internal IPs · op-stall alert · coverage floor on PR gate · systemd unit dedupe · credential entropy
-- [ ] **T13** — docs truth-up with measured sandbox/prod numbers (dedup/STATUS.md, pending-prod-actions.md, exec summary)
+- [x] **T08** — R-3 (reporter logBuf cap) · R-7 (dead scan-checkpoint deleted) · P-2 (RunItems completion counter) (#2002)
+- [x] **T09** — C2 (remux/transcode reporter threading + fail-on-error) · H7 (external-id backfill) (#2006)
+- [x] **T10** — F6: legacy book-merge rerouted off hard-delete to soft-delete + external-ID reassignment + ITL removal (#2007)
+- [x] **T11** — F7 (quarantine → RunItems) · R-9 (path_repair pool + 3 concurrency hazards) · R-8 (unknown-duration group guard) (#2004)
+- [x] **T12** — devops: 8 IP-scrub scripts · op-stall alert (commented; metric TBD, Infra #36) · coverage floor on PR gate · systemd dedupe · credential entropy (#2001)
+- [ ] **T13** — docs truth-up with measured sandbox/prod numbers (dedup/STATUS.md, pending-prod-actions.md, exec summary) — in progress
