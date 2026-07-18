@@ -200,5 +200,5 @@ R-1 (T06) + R-3/R-7/P-2 (T08) (#2002).
 - [ ] **T09** — C2: remux/transcode 6-h ops have no reporter threading + can't fail · H7 (external-id backfill, same shape)
 - [ ] **T10** — F6: legacy dedup.MergeBooks hard-deletes losers without external-ID reassignment/ITL removal — VERIFY then reroute
 - [ ] **T11** — F7 (quarantine serial loops → RunItems) · R-9 (path_repair serial loop) · R-8 (all-unreadable-durations group misclassified "short")
-- [x] **T12** — devops: 8 remaining scripts with internal IPs · op-stall alert (commented, metric doesn't exist yet — see Infra #36) · coverage floor on PR gate · systemd unit dedupe · credential entropy — PR pending, see CHANGELOG "July 18, 2026" entry
+- [x] **T12** — devops: 8 remaining scripts with internal IPs · op-stall alert (commented, metric doesn't exist yet — see Infra #36) · coverage floor on PR gate · systemd unit dedupe · credential entropy — #2001
 - [ ] **T13** — docs truth-up with measured sandbox/prod numbers (dedup/STATUS.md, pending-prod-actions.md, exec summary)
