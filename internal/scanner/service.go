@@ -1,7 +1,7 @@
 // file: internal/scanner/service.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-07-17
+// last-edited: 2026-07-18
 package scanner
 
 import (
@@ -17,7 +17,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/operations"
 )
 
 // scanServiceStore is the narrow slice of database.Store this service uses.
@@ -70,20 +69,18 @@ type ScanStats struct {
 	ImportBooks  int
 }
 
-// PerformScanWithID executes the multi-folder scan operation with checkpoint support.
-func (ss *ScanService) PerformScanWithID(ctx context.Context, opID string, req *ScanRequest, log logger.Logger) error {
-	// Save params for resume
-	_ = operations.SaveParams(ss.db, opID, operations.ScanParams{
-		FolderPath:  req.FolderPath,
-		ForceUpdate: req.ForceUpdate != nil && *req.ForceUpdate,
-	})
-	err := ss.performScanInternal(ctx, opID, req, log)
-	_ = operations.ClearState(ss.db, opID)
-	return err
-}
-
 // PerformScan executes the multi-folder scan operation.
 // Accepts a logger.Logger for unified logging, progress, and change tracking.
+//
+// R-7: there is intentionally no checkpoint/resume plumbing here. The old
+// PerformScanWithID saved operations.ScanParams via operations.SaveParams for a
+// resume path that never existed — LoadParams[ScanParams] had zero callers and
+// the method itself had zero callers. The v2 "library.scan" OperationDef uses
+// ResumePolicy=ResumeDrop (see internal/server/library_core_ops.go), so an
+// interrupted scan is dropped and simply restarts from scratch on the next run;
+// a full re-walk is idempotent (the scan cache skips unchanged files). The dead
+// save/clear calls were removed to stop implying a resume contract that isn't
+// honored.
 func (ss *ScanService) PerformScan(ctx context.Context, req *ScanRequest, log logger.Logger) error {
 	return ss.performScanInternal(ctx, "", req, log)
 }

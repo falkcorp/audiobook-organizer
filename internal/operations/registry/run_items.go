@@ -1,7 +1,7 @@
 // file: internal/operations/registry/run_items.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a2b3c4d5-e6f7-8901-abcd-ef2345678901
-// last-edited: 2026-06-25
+// last-edited: 2026-07-18
 
 package registry
 
@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -101,6 +102,13 @@ func RunItems[T any](ctx context.Context, r Reporter, items []T, fn func(ctx con
 		lbl = func(i, total int) string { return fmt.Sprintf("item %d/%d", opt.ProgressOffset+i+1, total) }
 	}
 
+	// P-2: report a monotonic completion count, not the item index. In parallel
+	// mode items finish out of order, so reporting ProgressOffset+i+1 made the
+	// progress bar jump backwards (item 5 finishing before item 2 reported 6
+	// then 3). An atomic counter incremented as each item completes is monotonic
+	// in both sequential and parallel modes. The label still carries the item's
+	// own index for identity.
+	var completed atomic.Int64
 	runOne := func(ctx context.Context, i int, item T) error {
 		itemCtx := ctx
 		if opt.PerItemTimeout > 0 {
@@ -111,7 +119,8 @@ func RunItems[T any](ctx context.Context, r Reporter, items []T, fn func(ctx con
 		l := lbl(i, progTotal)
 		r.SetCurrentItem(l)
 		err := fn(itemCtx, item)
-		_ = r.UpdateProgress(opt.ProgressOffset+i+1, progTotal, l)
+		done := int(completed.Add(1))
+		_ = r.UpdateProgress(opt.ProgressOffset+done, progTotal, l)
 		return err
 	}
 

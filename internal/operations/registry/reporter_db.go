@@ -1,7 +1,7 @@
 // file: internal/operations/registry/reporter_db.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 1a2b3c4d-5e6f-7890-abcd-ef0123456789
-// last-edited: 2026-06-24
+// last-edited: 2026-07-18
 
 package registry
 
@@ -54,9 +54,16 @@ type dbReporter struct {
 	activityRecorder ActivityRecorder
 	logger           *slog.Logger
 
-	logMu   sync.Mutex
-	logBuf  []logEntry
-	flushCh chan struct{}
+	logMu       sync.Mutex
+	logBuf      []logEntry
+	droppedLogs uint64 // count of oldest entries dropped after logBuf hit the cap (guarded by logMu)
+	flushCh     chan struct{}
+
+	// terminated is flipped by markTerminal() when the owning run is abandoned:
+	// its flushLoop has already exited (runCtx canceled) so any further buffered
+	// log lines are unrecoverable. Once set, Log() is a cheap no-op. Atomic so
+	// the wedged Run goroutine can read it without taking logMu. (R-3)
+	terminated atomic.Bool
 
 	progressMu          sync.Mutex
 	progressCurrent     int
@@ -341,8 +348,22 @@ func (r *dbReporter) UpdateProgress(current, total int, message string) error {
 	return nil
 }
 
+// maxBufferedLogEntries caps logBuf. When a run is abandoned its flushLoop has
+// exited but the wedged goroutine may keep calling Log; without a cap logBuf
+// would grow without bound. Beyond the cap the oldest entries are dropped and
+// counted (see droppedLogs). 1,000 entries is far more than any healthy flush
+// interval (250ms) ever leaves unflushed. (R-3)
+const maxBufferedLogEntries = 1000
+
 // Log implements Reporter.
 func (r *dbReporter) Log(level slog.Level, message string, attrs ...slog.Attr) error {
+	// R-3: after abandonment the reporter is terminal — its flushLoop is gone,
+	// so buffered lines can never be persisted. Drop the line cheaply rather
+	// than growing logBuf forever behind a monitored-but-wedged goroutine.
+	if r.terminated.Load() {
+		return nil
+	}
+
 	entry := logEntry{
 		level:     level,
 		message:   message,
@@ -352,6 +373,12 @@ func (r *dbReporter) Log(level slog.Level, message string, attrs ...slog.Attr) e
 
 	r.logMu.Lock()
 	r.logBuf = append(r.logBuf, entry)
+	// R-3: bound the buffer, dropping oldest-first so the most recent lines
+	// survive. Counts the drops for observability.
+	if over := len(r.logBuf) - maxBufferedLogEntries; over > 0 {
+		r.logBuf = r.logBuf[over:]
+		r.droppedLogs += uint64(over)
+	}
 	shouldFlush := len(r.logBuf) >= 100
 	r.logMu.Unlock()
 
@@ -392,6 +419,34 @@ func (r *dbReporter) Log(level slog.Level, message string, attrs ...slog.Attr) e
 // Logger implements Reporter.
 func (r *dbReporter) Logger() *slog.Logger {
 	return r.logger
+}
+
+// markTerminal flags the reporter as terminal so subsequent Log calls become
+// cheap no-ops (R-3). Called by the worker on the abandonment paths, where the
+// run's flushLoop has already exited (runCtx canceled) and any further log
+// lines are unrecoverable by design. If any lines were already dropped by the
+// buffer cap it records that fact once, on the process logger (r.Log would
+// no-op now, and recursing into it would be pointless).
+func (r *dbReporter) markTerminal() {
+	if r.terminated.Swap(true) {
+		return // already terminal — don't double-log
+	}
+	r.logMu.Lock()
+	dropped := r.droppedLogs
+	buffered := len(r.logBuf)
+	r.logMu.Unlock()
+	if dropped > 0 || buffered > 0 {
+		slog.Default().Warn("dbReporter: reporter marked terminal after abandonment; buffered op logs discarded",
+			"op_id", r.opID, "dropped_over_cap", dropped, "buffered_unflushed", buffered)
+	}
+}
+
+// droppedLogCount returns the number of log entries dropped after the buffer
+// hit its cap. Used by tests. (R-3)
+func (r *dbReporter) droppedLogCount() uint64 {
+	r.logMu.Lock()
+	defer r.logMu.Unlock()
+	return r.droppedLogs
 }
 
 // Checkpoint implements Reporter.

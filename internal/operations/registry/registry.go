@@ -1,7 +1,7 @@
 // file: internal/operations/registry/registry.go
-// version: 3.7.0
+// version: 3.8.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-07-17
+// last-edited: 2026-07-18
 
 package registry
 
@@ -779,6 +779,30 @@ func (r *Registry) publishOpCreated(row database.OperationV2Row, resumed bool) {
 	})
 }
 
+// publishOpTerminal fans out an op.terminal SSE event (R-1) whenever an
+// operation reaches a terminal status (completed, failed, canceled, timeout,
+// interrupted_*, or force-dropped). Without it, the UI's operations bell keeps
+// rendering a finished op as "running" until the next manual refresh — the
+// backend never told it the op ended. The frontend
+// (web/src/stores/useOperationsStore.ts) responds to this event by reloading
+// operation state from the server.
+//
+// context.Background() is used deliberately (not the run's context): every
+// terminal call site reaches here AFTER the run context has been canceled
+// (canceled/timeout/abandon paths) or is about to be, so passing runCtx would
+// make the publish a no-op on exactly the paths that most need it. The bus is
+// nil-safe; publishOpTerminal is a no-op when no bus is wired.
+func (r *Registry) publishOpTerminal(opID, defID, status string) {
+	if r.bus == nil {
+		return
+	}
+	_ = r.bus.Publish(context.Background(), "op.terminal", map[string]any{
+		"op_id":  opID,
+		"def_id": defID,
+		"status": status,
+	})
+}
+
 // Cancel cancels an operation by id.
 // If the op is queued, it is marked canceled in the DB.
 // If the op is running, its context is canceled.
@@ -822,6 +846,15 @@ func (r *Registry) Cancel(opID string) error {
 	}
 	if updated {
 		r.logger.Info("registry: canceled queued op", "op_id", opID)
+		// R-1: a purely-queued op is never picked up by a worker once canceled,
+		// so no worker-path op.terminal fires — publish it here or the UI bell
+		// leaves the op phantom-"running". def_id is best-effort (the FE only
+		// needs op_id); an empty def_id on a lookup miss is harmless.
+		defID := ""
+		if row, gerr := r.store.GetOperationV2(opID); gerr == nil && row != nil {
+			defID = row.DefID
+		}
+		r.publishOpTerminal(opID, defID, "canceled")
 	}
 	return nil
 }
