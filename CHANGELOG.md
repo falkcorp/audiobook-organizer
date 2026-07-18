@@ -32,6 +32,34 @@
   separate `op_active` gauge was needed — the series' own existence (created
   at op start, deleted at terminal) already proxies "is this op still
   running". Validated with `promtool check rules`.
+#### July 18, 2026 - refactor(audio): consolidate the 3 duration extractors (AP-3b)
+
+- **New `internal/audioutil.ProbeDurationSeconds`** is now the single ffprobe
+  subprocess implementation shared by `internal/mediainfo` (`realDurationSec`,
+  the scanner's canonical duration source), `internal/fingerprint`
+  (`probeDuration`, used to place the 7 acoustic-fingerprint segment offsets),
+  and `internal/transcode` (`probeDuration` for chapter-metadata timestamps,
+  `probeFileDuration` for transcode progress reporting). All three had
+  independently reimplemented "shell out to ffprobe and parse the container
+  duration" — one via plain-text output, two via JSON — with small drift
+  between them (different `-v` verbosity, presence/absence of a timeout,
+  int/float64/int64-microseconds return types). This class of duplication is
+  exactly what produced past duration bugs (CONS-16/17/18, the ms-vs-seconds
+  confusion documented in `internal/database/duration_sanity.go`).
+- Each call site keeps its own return type, error contract, and validity
+  rules (mediainfo still rounds to `int` seconds and returns `ok=false` for
+  `<=0`; fingerprint and transcode still use raw `float64` seconds;
+  transcode's `probeFileDuration` still converts to microseconds and swallows
+  errors as `0`, matching its original best-effort contract) — this is a
+  consolidation of the ffprobe-invocation mechanism, not a change to any
+  caller's observed duration values or units.
+- Added `internal/audioutil/duration_test.go` (6 tests, generates real silent
+  audio via `ffmpeg -f lavfi anullsrc` and probes it, so no LFS fixture
+  dependency) plus a regression test per rerouted call site
+  (`internal/mediainfo/duration_unify_test.go`,
+  `internal/fingerprint/duration_unify_test.go`,
+  `internal/transcode/duration_unify_test.go`) proving each still returns the
+  correct value/unit after the reroute.
 
 #### July 18, 2026 - fix(logging): H/M observability batch (T05)
 

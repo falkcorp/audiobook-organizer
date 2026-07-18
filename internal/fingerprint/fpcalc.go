@@ -1,7 +1,7 @@
 // file: internal/fingerprint/fpcalc.go
-// version: 3.3.0
+// version: 3.4.0
 // guid: b1c2d3e4-f5a6-7b8c-9d0e-1f2a3b4c5d6e
-// last-edited: 2026-06-15
+// last-edited: 2026-07-18
 
 // Package fingerprint generates AcoustID-compatible acoustic fingerprints for
 // audio files. It supports two backends:
@@ -28,6 +28,7 @@ package fingerprint
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -36,6 +37,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/falkcorp/audiobook-organizer/internal/audioutil"
 )
 
 // ErrNotAvailable is returned when neither fpcalc nor ffmpeg is on PATH.
@@ -337,37 +340,15 @@ func ffmpegChromaprintAt(path string, offset float64) (string, error) {
 	return fp, nil
 }
 
-// ffprobeResult is the subset of ffprobe JSON output we need.
-type ffprobeResult struct {
-	Format struct {
-		Duration string `json:"duration"`
-	} `json:"format"`
-}
-
-// probeDuration uses ffprobe to return the audio duration in seconds.
+// probeDuration uses ffprobe to return the audio duration in seconds. This is
+// a thin wrapper over the shared audioutil.ProbeDurationSeconds (also used by
+// internal/mediainfo and internal/transcode — see TODO item 20 / AP-3b); it
+// used to shell out to ffprobe independently via a JSON-parsing path, but that
+// produced the same duration value as the shared plain-text probe, so the
+// duplicate implementation was removed rather than kept as a second source of
+// drift.
 func probeDuration(path string) (float64, error) {
-	var stdout bytes.Buffer
-	cmd := exec.Command("ffprobe",
-		"-v", "error",
-		"-print_format", "json",
-		"-show_format",
-		path,
-	)
-	cmd.Stdout = &stdout
-	cmd.Stderr = nil
-	if err := cmd.Run(); err != nil {
-		return 0, fmt.Errorf("ffprobe %s: %w", path, err)
-	}
-	var r ffprobeResult
-	if err := json.NewDecoder(&stdout).Decode(&r); err != nil {
-		return 0, fmt.Errorf("ffprobe parse %s: %w", path, err)
-	}
-	var dur float64
-	_, err := fmt.Sscanf(r.Format.Duration, "%f", &dur)
-	if err != nil {
-		return 0, fmt.Errorf("ffprobe duration parse %s: %w", path, err)
-	}
-	return dur, nil
+	return audioutil.ProbeDurationSeconds(context.Background(), "", path)
 }
 
 // HammingSimilarity returns the fraction of bits that agree between two

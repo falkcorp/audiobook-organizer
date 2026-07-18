@@ -1,14 +1,13 @@
 // file: internal/transcode/transcode.go
-// version: 1.5.2
+// version: 1.6.0
 // guid: f8a1b2c3-d4e5-6789-abcd-ef0123456789
-// last-edited: 2026-07-03
+// last-edited: 2026-07-18
 
 package transcode
 
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -19,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/audioutil"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 )
@@ -108,31 +108,14 @@ func BuildConcatFile(inputFiles []string) (string, error) {
 	return f.Name(), nil
 }
 
-// probeDuration returns the duration of an audio file in seconds using ffprobe.
+// probeDuration returns the duration of an audio file in seconds using
+// ffprobe. This is a thin wrapper over the shared
+// audioutil.ProbeDurationSeconds (also used by internal/mediainfo and
+// internal/fingerprint — see TODO item 20 / AP-3b); it used to parse ffprobe's
+// JSON output directly, but that produced the same duration value as the
+// shared plain-text probe, so the duplicate implementation was removed.
 func probeDuration(ffprobePath, filePath string) (float64, error) {
-	cmd := exec.Command(ffprobePath,
-		"-v", "quiet",
-		"-print_format", "json",
-		"-show_format",
-		filePath,
-	)
-	output, err := cmd.Output()
-	if err != nil {
-		return 0, fmt.Errorf("ffprobe failed for %s: %w", filePath, err)
-	}
-	var result struct {
-		Format struct {
-			Duration string `json:"duration"`
-		} `json:"format"`
-	}
-	if err := json.Unmarshal(output, &result); err != nil {
-		return 0, fmt.Errorf("failed to parse ffprobe output: %w", err)
-	}
-	dur, err := strconv.ParseFloat(result.Format.Duration, 64)
-	if err != nil {
-		return 0, fmt.Errorf("failed to parse duration %q: %w", result.Format.Duration, err)
-	}
-	return dur, nil
+	return audioutil.ProbeDurationSeconds(context.Background(), ffprobePath, filePath)
 }
 
 // BuildChapterMetadata probes each input file and generates an FFMetadata chapter file.
@@ -431,21 +414,17 @@ func Transcode(ctx context.Context, opts TranscodeOpts, store interface {
 }
 
 // probeFileDuration uses ffprobe to get a file's duration in microseconds.
+// Thin wrapper over the shared audioutil.ProbeDurationSeconds (see
+// probeDuration above and TODO item 20 / AP-3b) — converts the shared
+// seconds-float result to this call site's historical microsecond-int64
+// return, and preserves the original best-effort "0 on any failure" contract
+// (no error is surfaced; callers treat 0 as "could not determine").
 func probeFileDuration(filePath string) int64 {
 	ffprobePath, err := exec.LookPath("ffprobe")
 	if err != nil {
 		return 0
 	}
-	out, err := exec.Command(ffprobePath,
-		"-v", "error",
-		"-show_entries", "format=duration",
-		"-of", "default=noprint_wrappers=1:nokey=1",
-		filePath,
-	).Output()
-	if err != nil {
-		return 0
-	}
-	seconds, err := strconv.ParseFloat(strings.TrimSpace(string(out)), 64)
+	seconds, err := audioutil.ProbeDurationSeconds(context.Background(), ffprobePath, filePath)
 	if err != nil {
 		return 0
 	}

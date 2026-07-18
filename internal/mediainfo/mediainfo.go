@@ -1,21 +1,21 @@
 // file: internal/mediainfo/mediainfo.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: f1e2d3c4-b5a6-7c8d-9e0f-1a2b3c4d5e6f
+// last-edited: 2026-07-18
 
 package mediainfo
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/dhowden/tag"
+
+	"github.com/falkcorp/audiobook-organizer/internal/audioutil"
 )
 
 // MediaInfo holds technical audio file information
@@ -42,23 +42,14 @@ const ffprobeDurationTimeout = 20 * time.Second
 // realDurationSec reads the TRUE container duration via ffprobe (the stream's own
 // duration, not a filesize estimate). Returns ok=false when ffprobe is missing or
 // the file has no parseable duration, so the caller can fall back to a flagged
-// estimate. ffprobe is resolved from PATH, mirroring internal/diagnosis/probe.go.
+// estimate. ffprobe is resolved from PATH via the shared audioutil.ProbeDurationSeconds
+// (also used by internal/fingerprint and internal/transcode — see TODO item 20 / AP-3b).
 func realDurationSec(filePath string) (int, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), ffprobeDurationTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "ffprobe",
-		"-v", "quiet",
-		"-show_entries", "format=duration",
-		"-of", "default=noprint_wrappers=1:nokey=1",
-		filePath)
-	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
-	if err := cmd.Run(); err != nil {
-		return 0, false // ffprobe missing or failed — caller estimates
-	}
-	secs, err := strconv.ParseFloat(strings.TrimSpace(stdout.String()), 64)
+	secs, err := audioutil.ProbeDurationSeconds(ctx, "", filePath)
 	if err != nil || secs <= 0 {
-		return 0, false
+		return 0, false // ffprobe missing, failed, or unparseable — caller estimates
 	}
 	return int(secs + 0.5), true
 }
