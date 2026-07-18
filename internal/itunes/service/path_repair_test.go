@@ -1,6 +1,7 @@
 // file: internal/itunes/service/path_repair_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6b7e3d51-c0a3-4ab2-8d6c-7e9c1d4a8f01
+// last-edited: 2026-07-18
 
 package itunesservice
 
@@ -420,4 +421,74 @@ func TestRepair_XMLParseError(t *testing.T) {
 	r := newPathRepairer(m, nil, PathRepairConfig{XMLPath: "/nonexistent/itunes.xml"})
 	_, err := r.repairWithResult(context.Background(), "op-bad", true, noopProgressRepair{})
 	require.Error(t, err)
+}
+
+// ---------------------------------------------------------------------------
+// Repair — R-9 concurrency: two tracks resolving to the SAME bookID must
+// still apply correctly under the parallel worker pool (bookWriteLocks
+// serializes their applyResolution calls so the fetch-full-mutate write
+// never races between them, even though they run on different workers).
+// ---------------------------------------------------------------------------
+
+func TestRepair_ApplyMode_SharedBookID_SerializesWrites(t *testing.T) {
+	dir := t.TempDir()
+	withITunesPathMapping(t, dir)
+
+	// Both tracks belong to the same multi-file audiobook (book-multi).
+	// Their DB-known paths are already correct (tier A finds them directly),
+	// so the only work is the ITunesPath recompute + RecordPathChange +
+	// enqueue — exercising exactly the write path bookLocks protects.
+	newPath1 := filepath.Join(dir, "seg1.m4b")
+	require.NoError(t, os.WriteFile(newPath1, []byte("1"), 0o644))
+	newPath2 := filepath.Join(dir, "seg2.m4b")
+	require.NoError(t, os.WriteFile(newPath2, []byte("2"), 0o644))
+	missing1 := filepath.Join(dir, "vanished-1.m4b") // gone in iTunes XML
+	missing2 := filepath.Join(dir, "vanished-2.m4b")
+
+	xmlPath := writeFixtureXMLN(t, dir, []struct{ PID, Name, Location string }{
+		{"PID_M1", "Track M1", missing1},
+		{"PID_M2", "Track M2", missing2},
+	})
+
+	m := dbmocks.NewMockStore(t)
+	m.EXPECT().GetBookByExternalID("itunes", "PID_M1").Return("book-multi", nil).Once()
+	m.EXPECT().GetBookByExternalID("itunes", "PID_M2").Return("book-multi", nil).Once()
+
+	files := []database.BookFile{
+		{ID: "fm1", BookID: "book-multi", FilePath: newPath1, ITunesPersistentID: "PID_M1"},
+		{ID: "fm2", BookID: "book-multi", FilePath: newPath2, ITunesPersistentID: "PID_M2"},
+	}
+	// Called by resolveTierA once per track and by applyResolution's re-fetch
+	// once per track (4 calls total); the same full list is returned every
+	// time regardless of call order.
+	m.EXPECT().GetBookFiles("book-multi").Return(files, nil)
+
+	m.EXPECT().UpdateBookFile("fm1", mock.MatchedBy(func(bf *database.BookFile) bool {
+		return bf.FilePath == newPath1 && bf.ITunesPath != ""
+	})).Return(nil).Once()
+	m.EXPECT().UpdateBookFile("fm2", mock.MatchedBy(func(bf *database.BookFile) bool {
+		return bf.FilePath == newPath2 && bf.ITunesPath != ""
+	})).Return(nil).Once()
+
+	m.EXPECT().RecordPathChange(mock.MatchedBy(func(c *database.BookPathChange) bool {
+		return c.BookID == "book-multi" && c.NewPath == newPath1
+	})).Return(nil).Once()
+	m.EXPECT().RecordPathChange(mock.MatchedBy(func(c *database.BookPathChange) bool {
+		return c.BookID == "book-multi" && c.NewPath == newPath2
+	})).Return(nil).Once()
+
+	m.EXPECT().DeleteOperationState("op-multi").Return(nil).Once()
+	m.EXPECT().UpdateOperationResultData("op-multi", mock.Anything).Return(nil).Once()
+
+	enq := &mockEnqueuer{}
+	r := newPathRepairer(m, enq, PathRepairConfig{XMLPath: xmlPath})
+	res, err := r.repairWithResult(context.Background(), "op-multi", false, noopProgressRepair{})
+	require.NoError(t, err)
+
+	assert.Equal(t, 2, res.AutoResolved)
+	assert.Equal(t, 2, res.Enqueued)
+	assert.Empty(t, res.Errors)
+	require.Len(t, enq.enqueues, 2)
+	assert.Equal(t, "book-multi", enq.enqueues[0])
+	assert.Equal(t, "book-multi", enq.enqueues[1])
 }
