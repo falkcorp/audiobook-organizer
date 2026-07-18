@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/calibrate_composite.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4c2f7a91-8d3b-4e6a-9f10-5b7c2d1e8a34
-// last-edited: 2026-07-12
+// last-edited: 2026-07-18
 
 // Package dedup — op dedup.calibrate-composite (INIT-1 T5).
 //
@@ -26,22 +26,37 @@
 // clamping regime (tighten a stored confidence, or raise one below a new floor);
 // it cannot widen a value the collector already clamped away.
 //
-// CRITICAL persistence gap (found during implementation): the ONLY config-blob
-// surface for dedup.signals.* is the four band thresholds (config.DedupSignalConfig).
-// Per-kind confidences have NO field in the Config struct and would be silently
-// dropped by UpdateConfig's JSON round-trip (same failure class as the retired
-// flat keys). Adding a field is out of scope ("do NOT invent a new persistence
-// path / no config.go changes"). Therefore:
+// Persistence gap — CLOSED for storage, OPEN for live consumption (INIT-1 T05
+// follow-up / TODO item 6, 2026-07-18): config.DedupSignalConfig now has a
+// Confidence map[string]DedupKindConfidence field, so a per-kind confidence
+// bound survives UpdateConfig's JSON round-trip and a restart (previously it
+// had no field and was silently dropped, same failure class as the retired
+// flat keys). unified.SetKindConfidenceOverrides + registry_wire.go wire the
+// persisted map into unified.LoadScoreConfig exactly like SetBandThresholds
+// does for bands.
+//
+// That closes the STORAGE gap, but NOT the reason Round 2 stays advisory:
+// unified.ComposeScore reads Signal.Confidence DIRECTLY and does not clamp it
+// against cfg.Signals[kind].Min/MaxConfidence — a config's per-kind confidence
+// bounds (whether from Viper or now the DB blob) have ZERO effect on live
+// scoring. The only thing that reads those bounds today is this op's own
+// scoreWithClamp simulation below. Making Round 2 truly "applyable" (routing
+// its suggestions through UpdateConfig, and having them actually move
+// production scores) requires deciding whether ComposeScore should start
+// clamping — a change to the noisy-OR scorer that everything on the
+// auto-merge path depends on. That decision is intentionally NOT made in this
+// change; see docs/plans/DECISIONS-PENDING.md row 10. Until it lands:
 //
 //   - Round 1 — band thresholds under BASELINE (production) confidences — is the
 //     APPLICABLE recommendation. Its target-met flags accurately predict prod
 //     because prod runs baseline confidences + these bands. The apply path uses
 //     ONLY these, and the apply gate is computed from the EXACT config being
 //     persisted (baseline confidences + recommended bands).
-//   - Round 2 — per-signal confidence bounds — is ADVISORY only. It is reported so
-//     an operator can hand-edit config.yaml, but it is NEVER routed through
-//     UpdateConfig, NEVER gates the band apply, and NEVER contributes to the
-//     precision attributed to an applied band.
+//   - Round 2 — per-signal confidence bounds — remains ADVISORY only. It is
+//     reported so an operator can persist it (via config.yaml or, now, a direct
+//     UpdateConfig write to dedup.signals.confidence.<kind>.*), but this op
+//     still never writes it itself, never gates the band apply on it, and
+//     never contributes to the precision attributed to an applied band.
 //
 // # Discipline
 //

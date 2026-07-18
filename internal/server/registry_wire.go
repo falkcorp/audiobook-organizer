@@ -1,6 +1,6 @@
 // file: internal/server/registry_wire.go
-// version: 1.19.1
-// last-edited: 2026-07-11
+// version: 1.20.0
+// last-edited: 2026-07-18
 
 package server
 
@@ -162,6 +162,20 @@ func init() {
 			// to break the unified→config circular import.
 			sigs := cfg.Dedup.Signals
 			unified.SetBandThresholds(sigs.BandCertainMin, sigs.BandHighMin, sigs.BandMediumMin, sigs.BandReviewMin)
+			// Same wiring for per-kind confidence bound overrides (INIT-1 T05
+			// follow-up, TODO item 6): sigs.Confidence is the DB-persisted map,
+			// converted to unified's own override type so this package never
+			// needs to import internal/config. A nil/empty map is a no-op.
+			if len(sigs.Confidence) > 0 {
+				confOverrides := make(map[string]unified.KindConfidenceOverride, len(sigs.Confidence))
+				for kind, kc := range sigs.Confidence {
+					confOverrides[kind] = unified.KindConfidenceOverride{
+						MinConfidence: kc.MinConfidence,
+						MaxConfidence: kc.MaxConfidence,
+					}
+				}
+				unified.SetKindConfidenceOverrides(confOverrides)
+			}
 			return engine, nil
 		},
 	})

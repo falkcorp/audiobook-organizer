@@ -43,6 +43,38 @@
   series) and assert the filter discriminates correctly (exact match,
   the other author's book excluded, and a nonexistent name returns 0 —
   not "everything").
+#### July 18, 2026 - feat(dedup): persist per-signal-kind confidence bounds in `DedupSignalConfig` (INIT-1 T05 follow-up, TODO #6)
+
+- **`config.DedupSignalConfig` gained a `Confidence map[string]DedupKindConfidence`
+  field** (`internal/config/config.go`), keyed by signal kind (e.g.
+  `embedding_med`, `lsh_acoustid`). Previously per-kind confidence bounds had
+  no field anywhere in the persisted config blob and were silently dropped by
+  `UpdateConfig`'s JSON round-trip — the exact gap
+  `dedup.calibrate-composite`'s Round 2 advisory sweep documented as the
+  reason its confidence-bound suggestions could never be persisted. A
+  kind absent from the map (including the nil zero-value — every existing
+  config) falls back to `unified.DefaultScoreConfig()`'s compiled-in bounds,
+  so existing configs are byte-for-byte unchanged.
+- **`unified.SetKindConfidenceOverrides`** (`internal/dedup/unified/config.go`)
+  injects the DB-persisted map into `LoadScoreConfig`, mirroring the existing
+  `SetBandThresholds` pattern exactly (same DB-override > Viper > defaults
+  precedence, same unified→config circular-import avoidance via a
+  package-local override type). Wired at startup from
+  `internal/server/registry_wire.go` alongside the existing band-threshold
+  wiring.
+- **Scope note (STOP-and-report, not silently expanded):** this closes the
+  *persistence* gap only. `unified.ComposeScore` still reads each signal's
+  `Confidence` directly and does not clamp it against `cfg.Signals[kind]`'s
+  bounds, so populating this field has **no effect on live scoring** yet —
+  only `dedup.calibrate-composite`'s own simulation consumes it today.
+  Whether `ComposeScore` should start clamping (and whether Round 2 should
+  then route through `UpdateConfig`) is recorded as an open decision:
+  [`docs/plans/DECISIONS-PENDING.md`](docs/plans/DECISIONS-PENDING.md) row 10.
+- Tests: `internal/dedup/unified/config_test.go`
+  (`TestSetKindConfidenceOverrides_*`, 6 cases covering override-one-kind-only,
+  unset-bound-falls-back, DB-over-Viper precedence, and unknown-kind
+  fail-closed) and `internal/config/dedup_signal_confidence_test.go`
+  (JSON round-trip + omitempty-by-default).
 
 #### July 18, 2026 - feat(metrics): per-operation progress exporter + op-stall alert (TODO #36)
 
