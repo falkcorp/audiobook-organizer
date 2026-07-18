@@ -121,12 +121,12 @@ func (s *Server) InvalidateDedupCache() {
 	}
 }
 
-func (s *Server) MetadataUpgradeRun(ctx context.Context, limit int) (checked, upgraded, skipped, errs int, err error) {
+func (s *Server) MetadataUpgradeRun(ctx context.Context, limit int, progress operations.ProgressReporter) (checked, upgraded, skipped, errs int, err error) {
 	if s.metadataFetchService == nil {
 		return 0, 0, 0, 0, fmt.Errorf("metadata fetch service not initialized")
 	}
 	svc := NewMetadataUpgradeService(s.Store(), s.metadataFetchService)
-	result, err := svc.RunUpgrade(ctx, limit)
+	result, err := svc.RunUpgrade(ctx, limit, progress)
 	if err != nil {
 		return 0, 0, 0, 0, err
 	}

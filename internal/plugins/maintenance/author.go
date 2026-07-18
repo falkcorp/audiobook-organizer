@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: e5f6a7b8-c9d0-1234-ef01-456789012345
-// last-edited: 2026-07-13
+// last-edited: 2026-07-18
 
 package maintenance
 
@@ -117,6 +117,13 @@ func (p *Plugin) runAuthorSplitScan(ctx context.Context, _ json.RawMessage, repo
 	splitCount := 0
 	booksUpdated := 0
 	errCount := 0
+	// H8 (2026-07 error-correction sweep): GetBookAuthors errors below used to
+	// be a bare `continue` — the book is left un-relinked to the new
+	// individual authors, yet DeleteAuthor(author.ID) below still removes the
+	// composite author it pointed to, orphaning that book's author reference.
+	// This is a data-affecting miscount, not just a skip, so it gets its own
+	// counter and a per-occurrence Warn in addition to the run summary.
+	bookAuthorsLookupErrs := 0
 	total := len(authors)
 	prog := sdk.NewProgress(reporter, total)
 	prog.Start(fmt.Sprintf("Scanning %d authors for composite names...", total))
@@ -169,6 +176,10 @@ func (p *Plugin) runAuthorSplitScan(ctx context.Context, _ json.RawMessage, repo
 		for _, book := range books {
 			bookAuthors, err := store.GetBookAuthors(book.ID)
 			if err != nil {
+				bookAuthorsLookupErrs++
+				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
+					"author split: GetBookAuthors failed for book %s (author %q not relinked): %v",
+					book.ID, author.Name, err))
 				continue
 			}
 			role := "author"
@@ -251,8 +262,8 @@ func (p *Plugin) runAuthorSplitScan(ctx context.Context, _ json.RawMessage, repo
 	// Invalidate dedup cache since authors changed
 	p.deps.InvalidateDedupCache()
 
-	resultMsg := fmt.Sprintf("Split %d composite authors, updated %d books (%d errors)",
-		splitCount, booksUpdated, errCount)
+	resultMsg := fmt.Sprintf("Split %d composite authors, updated %d books (%d errors, %d books not relinked due to lookup errors)",
+		splitCount, booksUpdated, errCount, bookAuthorsLookupErrs)
 	_ = reporter.Log(slog.LevelInfo, resultMsg)
 	prog.Done(resultMsg)
 	return nil

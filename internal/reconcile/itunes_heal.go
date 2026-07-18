@@ -1,7 +1,7 @@
 // file: internal/reconcile/itunes_heal.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 7f3a1b2c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
-// last-edited: 2026-06-26
+// last-edited: 2026-07-18
 
 package reconcile
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"os/exec"
@@ -27,6 +28,30 @@ import (
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"howett.net/plist"
 )
+
+// resolverFailureCounters (H3, 2026-07 error-correction sweep) tracks
+// per-resolver failures inside resolveAmbiguousByAcoustID and
+// resolveAmbiguousByTranscription that used to be bare `continue`s —
+// indistinguishable from "this candidate just isn't a match", silently
+// inflating the `ambiguous` bucket in RunITunesHeal's summary. Shared by
+// pointer across the RunItems worker pool (Concurrency: 16), so every field
+// is an atomic counter.
+type resolverFailureCounters struct {
+	fpcalcFailed         atomic.Int64 // FileWholeFingerprint error/nil result
+	acoustidLookupFailed atomic.Int64 // ac.Lookup error or empty title
+	whisperFailed        atomic.Int64 // TranscribeFirst30s error/empty text
+}
+
+// warnRateLimited logs msg at Warn on the first occurrence and every 100th
+// occurrence thereafter (n is the post-increment count), so a systemic
+// failure (fpcalc missing, AcoustID down, Whisper model unavailable) is
+// visible without spamming one line per track across a multi-thousand-track
+// heal run.
+func warnRateLimited(n int64, msg string, args ...any) {
+	if n == 1 || n%100 == 0 {
+		slog.Warn(msg, append(args, "occurrence", n)...)
+	}
+}
 
 // iTunesTrack is the minimal set of fields we need from an iTunes XML track entry.
 type iTunesTrack struct {
@@ -342,7 +367,12 @@ func resolveAmbiguousByBookMeta(store database.Store, track iTunesTrack, candida
 // fingerprint when available, falling back to fpcalc), submits to AcoustID,
 // and picks the candidate whose returned title/artist best matches the iTunes
 // track. Only invoked when layers 1–3 fail and an API key is configured.
-func resolveAmbiguousByAcoustID(ctx context.Context, store database.Store, ac *acoustid.Client, track iTunesTrack, candidates []string) string {
+//
+// failures may be nil (tests / call sites that don't care about the counters);
+// when non-nil, fpcalc failures and AcoustID lookup failures are tallied and
+// rate-limited-Warn logged instead of silently `continue`-ing — before H3
+// these were indistinguishable from "no match", inflating `ambiguous`.
+func resolveAmbiguousByAcoustID(ctx context.Context, store database.Store, ac *acoustid.Client, track iTunesTrack, candidates []string, failures *resolverFailureCounters) string {
 	albumWords := titleWords(track.Album)
 	artistWords := titleWords(track.Artist)
 
@@ -368,6 +398,10 @@ func resolveAmbiguousByAcoustID(ctx context.Context, store database.Store, ac *a
 		} else {
 			wf, err := fingerprint.FileWholeFingerprint(path)
 			if err != nil || wf == nil {
+				if failures != nil {
+					n := failures.fpcalcFailed.Add(1)
+					warnRateLimited(n, "itunes-heal: fpcalc fallback failed", "path", path, "err", err)
+				}
 				continue
 			}
 			rawFP = wf.Raw
@@ -377,6 +411,10 @@ func resolveAmbiguousByAcoustID(ctx context.Context, store database.Store, ac *a
 		encoded := fingerprint.EncodeWholeFingerprint(rawFP)
 		result, err := ac.Lookup(ctx, encoded, durationSec)
 		if err != nil || result.Title == "" {
+			if failures != nil {
+				n := failures.acoustidLookupFailed.Add(1)
+				warnRateLimited(n, "itunes-heal: AcoustID lookup failed", "path", path, "err", err)
+			}
 			continue
 		}
 
@@ -443,7 +481,11 @@ func resolveNotFoundByPID(store database.Store, pid string) string {
 // Only called when there are ≤5 candidates (cost: ~5–15 s per candidate with a
 // local Whisper model; more candidates indicate a structural problem better
 // handled by the triage op).
-func resolveAmbiguousByTranscription(ctx context.Context, store database.Store, track iTunesTrack, candidates []string) string {
+//
+// failures may be nil; when non-nil, Whisper transcription failures are
+// tallied and rate-limited-Warn logged instead of a silent `continue` — see
+// resolveAmbiguousByAcoustID's doc comment for why this matters (H3).
+func resolveAmbiguousByTranscription(ctx context.Context, store database.Store, track iTunesTrack, candidates []string, failures *resolverFailureCounters) string {
 	if len(candidates) == 0 || len(candidates) > 5 {
 		return ""
 	}
@@ -474,6 +516,10 @@ func resolveAmbiguousByTranscription(ctx context.Context, store database.Store, 
 
 		text, err := transcribe.TranscribeFirst30s(ctx, firstFile)
 		if err != nil || text == "" {
+			if failures != nil {
+				n := failures.whisperFailed.Add(1)
+				warnRateLimited(n, "itunes-heal: transcription failed", "path", firstFile, "err", err)
+			}
 			continue
 		}
 
@@ -727,6 +773,7 @@ func RunITunesHeal(ctx context.Context, store database.Store, reporter sdk.Repor
 		merged    atomic.Int64
 		healErrs  atomic.Int64
 	)
+	var resolverFailures resolverFailureCounters
 
 	err = registry.RunItems(ctx, reporter, slice,
 		func(ctx context.Context, t iTunesTrack) error {
@@ -756,7 +803,7 @@ func RunITunesHeal(ctx context.Context, store database.Store, reporter sdk.Repor
 
 			// Layer 4: AcoustID title lookup — only when API key is configured.
 			if src == "" && len(candidates) > 0 && ac != nil {
-				src = resolveAmbiguousByAcoustID(ctx, store, ac, t, candidates)
+				src = resolveAmbiguousByAcoustID(ctx, store, ac, t, candidates, &resolverFailures)
 			}
 
 			// Layer 5: PID lookup — authoritative for both ambiguous and not-found.
@@ -771,7 +818,7 @@ func RunITunesHeal(ctx context.Context, store database.Store, reporter sdk.Repor
 			// candidate whose title/author best matches the iTunes track. Definitive
 			// but expensive; only runs for ≤5 still-ambiguous candidates.
 			if src == "" && len(candidates) > 0 && store != nil {
-				src = resolveAmbiguousByTranscription(ctx, store, t, candidates)
+				src = resolveAmbiguousByTranscription(ctx, store, t, candidates, &resolverFailures)
 			}
 
 			// Layer 7: fuzzy album/artist path scan for zero-candidate not-found tracks.
@@ -802,8 +849,9 @@ func RunITunesHeal(ctx context.Context, store database.Store, reporter sdk.Repor
 			ProgressOffset: startIdx,
 			ProgressTotal:  len(missing),
 			Label: func(i, total int) string {
-				return fmt.Sprintf("Track %d/%d  healed=%d merged=%d ambig=%d missing=%d err=%d",
-					i+1, total, healed.Load(), merged.Load(), ambiguous.Load(), notFound.Load(), healErrs.Load())
+				return fmt.Sprintf("Track %d/%d  healed=%d merged=%d ambig=%d missing=%d err=%d  resolver_fails(fpcalc=%d acoustid=%d whisper=%d)",
+					i+1, total, healed.Load(), merged.Load(), ambiguous.Load(), notFound.Load(), healErrs.Load(),
+					resolverFailures.fpcalcFailed.Load(), resolverFailures.acoustidLookupFailed.Load(), resolverFailures.whisperFailed.Load())
 			},
 		},
 	)
@@ -822,7 +870,11 @@ func RunITunesHeal(ctx context.Context, store database.Store, reporter sdk.Repor
 		Errors:      int(healErrs.Load()),
 	}
 	resultJSON, _ := json.Marshal(result)
-	log.Info("itunes-heal: complete", "result", string(resultJSON))
+	log.Info("itunes-heal: complete", "result", string(resultJSON),
+		"resolver_fpcalc_failed", resolverFailures.fpcalcFailed.Load(),
+		"resolver_acoustid_failed", resolverFailures.acoustidLookupFailed.Load(),
+		"resolver_whisper_failed", resolverFailures.whisperFailed.Load(),
+	)
 	_ = reporter.UpdateProgress(len(missing), len(missing), fmt.Sprintf(
 		"Done: healed=%d  merged=%d  ambig=%d  not_found=%d  err=%d",
 		result.Healed, result.Merged, result.Ambiguous, result.NotFound, result.Errors,

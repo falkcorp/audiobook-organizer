@@ -1,7 +1,7 @@
 // file: internal/dedup/collectors_metadata.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: e1f2a3b4-c5d6-4e7f-8a0b-1c2d3e4f5a6b
-// last-edited: 2026-07-05
+// last-edited: 2026-07-18
 
 // Package dedup — metadata-based collector family (fable5 T014).
 //
@@ -173,6 +173,11 @@ func CollectDuration(
 	bookSeriesNum := seriesNumberOf(book)
 
 	var signals []unified.Signal
+	// M2 (2026-07 error-correction sweep): EnsureSingletonBookTag failures
+	// below used to be swallowed with `_ =`. Side-effect tags only — never
+	// gate signal emission — so behavior stays log-and-continue; just count
+	// and warn once per call instead of failing silently.
+	tagErrs := 0
 
 	for i := range others {
 		other := &others[i]
@@ -237,8 +242,12 @@ func CollectDuration(
 			// Preserved verbatim from checkDurationMatch side-effect
 			// (engine.go:655-658).
 			if tagStore != nil {
-				_ = database.EnsureSingletonBookTag(tagStore, book.ID, "dedup:duration-match", "dedup:duration-match", "system")
-				_ = database.EnsureSingletonBookTag(tagStore, other.ID, "dedup:duration-match", "dedup:duration-match", "system")
+				if err := database.EnsureSingletonBookTag(tagStore, book.ID, "dedup:duration-match", "dedup:duration-match", "system"); err != nil {
+					tagErrs++
+				}
+				if err := database.EnsureSingletonBookTag(tagStore, other.ID, "dedup:duration-match", "dedup:duration-match", "system"); err != nil {
+					tagErrs++
+				}
 			}
 			continue
 		}
@@ -249,10 +258,18 @@ func CollectDuration(
 		// (engine.go:672-675).
 		if pct >= 0.10 && titleDist <= cfg.LevenshteinMax {
 			if tagStore != nil {
-				_ = database.EnsureSingletonBookTag(tagStore, book.ID, "dedup:duration-abridged", "dedup:duration-abridged", "system")
-				_ = database.EnsureSingletonBookTag(tagStore, other.ID, "dedup:duration-abridged", "dedup:duration-abridged", "system")
+				if err := database.EnsureSingletonBookTag(tagStore, book.ID, "dedup:duration-abridged", "dedup:duration-abridged", "system"); err != nil {
+					tagErrs++
+				}
+				if err := database.EnsureSingletonBookTag(tagStore, other.ID, "dedup:duration-abridged", "dedup:duration-abridged", "system"); err != nil {
+					tagErrs++
+				}
 			}
 		}
+	}
+
+	if tagErrs > 0 {
+		slog.Warn("dedup/collectors_metadata: EnsureSingletonBookTag errors", "book", book.ID, "errors", tagErrs)
 	}
 
 	return signals, nil
@@ -391,6 +408,9 @@ func CollectMetaFuzzy(
 	bookTitleForms := allNormalizedTitleFormsForStore(store, book)
 
 	var signals []unified.Signal
+	// M2: GetBookByID errors here used to be a bare `continue` with no
+	// counter, indistinguishable from "candidate no longer exists".
+	lookupErrs := 0
 
 	for _, candID := range candidateIDs {
 		if candID == book.ID {
@@ -398,7 +418,11 @@ func CollectMetaFuzzy(
 		}
 
 		other, err := store.GetBookByID(candID)
-		if err != nil || other == nil {
+		if err != nil {
+			lookupErrs++
+			continue
+		}
+		if other == nil {
 			continue
 		}
 		if !hasUsableTitle(other.Title) {
@@ -433,6 +457,11 @@ func CollectMetaFuzzy(
 				sim, conf, book.ID, other.ID,
 			),
 		})
+	}
+
+	if lookupErrs > 0 {
+		slog.Warn("dedup/collectors_metadata: CollectMetaFuzzy candidate lookup errors",
+			"book", book.ID, "errors", lookupErrs, "total_candidates", len(candidateIDs))
 	}
 
 	return signals, nil

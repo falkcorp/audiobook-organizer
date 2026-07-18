@@ -1,7 +1,7 @@
 // file: internal/dedup/engine.go
-// version: 1.62.0
+// version: 1.63.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
-// last-edited: 2026-07-17
+// last-edited: 2026-07-18
 
 package dedup
 
@@ -574,6 +574,14 @@ func (de *Engine) runUnifiedScoringForBook(ctx context.Context, book *database.B
 	suppressedDeleted := 0
 	suppressedDeleteFailures := 0
 
+	// H1 (2026-07 error-correction sweep): GetBookByID errors for a candidate
+	// ref used to be a bare `continue` — indistinguishable from "candidate no
+	// longer exists" and invisible at any log level. Track how many candidate
+	// lookups fail for this book's scan and emit ONE summary Warn below so a
+	// store-level problem (e.g. transient Pebble read errors) shows up instead
+	// of silently shrinking the candidate set.
+	candidateLookupErrs := 0
+
 	for _, ref := range embeddingCandIDs {
 		// Cancellation check per-candidate, not just per-book: a single book
 		// with an unusually large pending-candidate set can otherwise run
@@ -587,6 +595,9 @@ func (de *Engine) runUnifiedScoringForBook(ctx context.Context, book *database.B
 
 		candID := ref.otherID
 		otherBook, err := de.bookStore.GetBookByID(candID)
+		if err != nil {
+			candidateLookupErrs++
+		}
 		if err != nil || otherBook == nil {
 			continue
 		}
@@ -673,6 +684,18 @@ func (de *Engine) runUnifiedScoringForBook(ctx context.Context, book *database.B
 		logging.Warn(ctx, "dedup unified: suppressed candidate deletes failed",
 			"book", book.ID,
 			"failures", suppressedDeleteFailures,
+		)
+	}
+
+	// H1: surface candidate-book lookup errors that used to be a silent
+	// `continue` — a nonzero count here means some pairs were skipped for
+	// this book because the store couldn't read the OTHER side, not because
+	// the candidate is gone.
+	if candidateLookupErrs > 0 {
+		logging.Warn(ctx, "dedup unified: candidate book lookup errors",
+			"book", book.ID,
+			"errors", candidateLookupErrs,
+			"total_candidates", len(embeddingCandIDs),
 		)
 	}
 
@@ -840,12 +863,18 @@ func (de *Engine) checkExactFileHash(book *database.Book, authorName string) (bo
 	if err != nil {
 		return false, err
 	}
+	// H1: GetBookByFileHash errors here used to be a bare `continue` — a
+	// per-file hash lookup failure looked identical to "no match", silently
+	// dropping this file out of the exact-file-hash check. Track it and emit
+	// one summary Warn for this book so a store-level problem is visible.
+	fileHashLookupErrs := 0
 	for _, f := range files {
 		if f.FileHash == "" {
 			continue
 		}
 		other, err := de.bookStore.GetBookByFileHash(f.FileHash)
 		if err != nil {
+			fileHashLookupErrs++
 			continue
 		}
 		if other != nil && other.ID != book.ID {
@@ -857,6 +886,10 @@ func (de *Engine) checkExactFileHash(book *database.Book, authorName string) (bo
 				return true, nil
 			}
 		}
+	}
+	if fileHashLookupErrs > 0 {
+		slog.Warn("dedup exact-file-hash: file hash lookup errors",
+			"book", book.ID, "errors", fileHashLookupErrs, "total_files", len(files))
 	}
 	return false, nil
 }
@@ -1215,6 +1248,12 @@ func (de *Engine) checkDurationMatch(book *database.Book) error {
 	}
 	others := booksFromCore(othersCore)
 
+	// M3: EnsureSingletonBookTag failures below used to be swallowed with
+	// `_ =`. These are side-effect tags only (never gate the merge/candidate
+	// decision), so behavior stays log-and-continue — just count and warn
+	// once per book instead of failing silently.
+	tagErrs := 0
+
 	bookDur := float64(*book.Duration)
 	bookNorm := normalizeTitle(book.Title)
 	bookForms := de.allNormalizedTitleForms(book)
@@ -1283,12 +1322,16 @@ func (de *Engine) checkDurationMatch(book *database.Book) error {
 			}
 			// Tag both sides so users can filter "books the
 			// dedup engine matched on duration signal".
-			_ = database.EnsureSingletonBookTag(
+			if err := database.EnsureSingletonBookTag(
 				de.bookStore, book.ID, "dedup:duration-match", "dedup:duration-match", "system",
-			)
-			_ = database.EnsureSingletonBookTag(
+			); err != nil {
+				tagErrs++
+			}
+			if err := database.EnsureSingletonBookTag(
 				de.bookStore, other.ID, "dedup:duration-match", "dedup:duration-match", "system",
-			)
+			); err != nil {
+				tagErrs++
+			}
 			continue
 		}
 
@@ -1300,13 +1343,21 @@ func (de *Engine) checkDurationMatch(book *database.Book) error {
 		// 10% because normal transcoding noise ends around 2-5%
 		// and 10% is safely above that.
 		if pct >= 0.10 && titleDist <= durationLevenshteinMax {
-			_ = database.EnsureSingletonBookTag(
+			if err := database.EnsureSingletonBookTag(
 				de.bookStore, book.ID, "dedup:duration-abridged", "dedup:duration-abridged", "system",
-			)
-			_ = database.EnsureSingletonBookTag(
+			); err != nil {
+				tagErrs++
+			}
+			if err := database.EnsureSingletonBookTag(
 				de.bookStore, other.ID, "dedup:duration-abridged", "dedup:duration-abridged", "system",
-			)
+			); err != nil {
+				tagErrs++
+			}
 		}
+	}
+	if tagErrs > 0 {
+		slog.Warn("dedup duration-match: EnsureSingletonBookTag errors",
+			"book", book.ID, "errors", tagErrs)
 	}
 	return nil
 }
@@ -3141,7 +3192,17 @@ func (de *Engine) getAllPrimaryBooksWithFullFields() ([]database.Book, error) {
 // Candidates that are already at layer='llm' are skipped — rerunning is cheap in
 // bookkeeping but expensive in API calls, so callers should use UpsertCandidate to
 // clear the layer back to 'embedding' if they want a re-review.
-func (de *Engine) RunLLMReview(ctx context.Context) error {
+// RunLLMReview scans pending ambiguous embedding-layer candidates (book and
+// author) and submits them as a batch to the configured LLM for review.
+//
+// progressFn is optional (H9, 2026-07 error-correction sweep): the
+// input-building loop below can iterate up to LLMMaxPairsPerRun (default
+// 10K) pairs, each doing a store read per side via buildPairInput, inside a
+// 120-minute op timeout. Before this, the op reported zero progress between
+// "starting" and "job submitted" — indistinguishable from a hang. When a
+// callback is supplied it is invoked every 100 pairs (and once at the end)
+// with (built-so-far, total-candidates).
+func (de *Engine) RunLLMReview(ctx context.Context, progressFn ...ProgressCallback) error {
 	if de.llmParser == nil || !de.llmParser.IsEnabled() {
 		logging.Info(ctx, "dedup LLM review skipped — llmParser not configured")
 		return nil
@@ -3169,17 +3230,26 @@ func (de *Engine) RunLLMReview(ctx context.Context) error {
 	}
 	logging.Info(ctx, "dedup LLM review starting — pair(s) queued", "allCandidates_count", len(allCandidates))
 
+	var reportProgress ProgressCallback
+	if len(progressFn) > 0 && progressFn[0] != nil {
+		reportProgress = progressFn[0]
+	}
+
 	// Build inputs alongside an index→candidate map for verdict routing.
-	inputs := make([]ai.DedupPairInput, 0, len(allCandidates))
-	byIndex := make(map[int]database.DedupCandidate, len(allCandidates))
+	total := len(allCandidates)
+	inputs := make([]ai.DedupPairInput, 0, total)
+	byIndex := make(map[int]database.DedupCandidate, total)
 	for i, c := range allCandidates {
 		input, ok := de.buildPairInput(i, c)
 		if !ok {
 			logging.Info(ctx, "dedup skipping candidate — could not load entities", "c", c.ID)
-			continue
+		} else {
+			inputs = append(inputs, input)
+			byIndex[i] = c
 		}
-		inputs = append(inputs, input)
-		byIndex[i] = c
+		if reportProgress != nil && ((i+1)%100 == 0 || i+1 == total) {
+			reportProgress(i+1, total, fmt.Sprintf("building LLM review inputs: %d/%d pairs", i+1, total))
+		}
 	}
 	if len(inputs) == 0 {
 		return nil

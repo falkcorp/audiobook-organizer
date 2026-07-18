@@ -1,7 +1,7 @@
 // file: internal/metabatch/upgrade.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-07-02
+// last-edited: 2026-07-18
 //
 // Background job that upgrades metadata from lower-quality sources
 // (primarily Google Books) to richer ones (Hardcover, Audible/Audnexus)
@@ -28,6 +28,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
+	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
@@ -75,7 +76,13 @@ const MinUpgradeConfidenceWithTranscription = 0.85
 // sources and attempts to find a better match from other sources.
 // Respects context cancellation so it can be run as a long-running
 // operation with a kill switch.
-func (s *MetadataUpgradeService) RunUpgrade(ctx context.Context, limit int) (*UpgradeResult, error) {
+//
+// progress may be nil (M7, 2026-07 error-correction sweep): before this, the
+// op reported nothing between "starting" and the final result while checking
+// up to `limit` books, each involving a network metadata search — a 30+
+// minute silent stretch indistinguishable from a hang. When non-nil,
+// progress is reported every 25 books checked (and once more at the end).
+func (s *MetadataUpgradeService) RunUpgrade(ctx context.Context, limit int, progress operations.ProgressReporter) (*UpgradeResult, error) {
 	if s.Fetcher == nil {
 		return nil, fmt.Errorf("metadata fetch service not configured")
 	}
@@ -113,6 +120,12 @@ func (s *MetadataUpgradeService) RunUpgrade(ctx context.Context, limit int) (*Up
 				result.Upgraded++
 			} else {
 				result.Skipped++
+			}
+
+			if progress != nil && (result.Checked%25 == 0 || result.Checked >= limit) {
+				_ = progress.UpdateProgress(result.Checked, limit, fmt.Sprintf(
+					"metadata upgrade: %d/%d books checked (%d upgraded, %d skipped, %d errors)",
+					result.Checked, limit, result.Upgraded, result.Skipped, result.Errors))
 			}
 		}
 	}

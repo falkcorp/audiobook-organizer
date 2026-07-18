@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
 // last-edited: 2026-07-18
 
@@ -77,7 +77,7 @@ func (d fakeDeps) DedupTriageExactPending(_ context.Context, _ bool) (*TriageRep
 	return &TriageReport{}, nil
 }
 func (d fakeDeps) InvalidateDedupCache() {}
-func (d fakeDeps) MetadataUpgradeRun(_ context.Context, _ int) (int, int, int, int, error) {
+func (d fakeDeps) MetadataUpgradeRun(_ context.Context, _ int, _ operations.ProgressReporter) (int, int, int, int, error) {
 	return 0, 0, 0, 0, nil
 }
 func (d fakeDeps) OptimizeAIScanStore() error { return nil }
