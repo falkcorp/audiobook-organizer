@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.175.0 -->
+<!-- version: 3.176.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-18 -->
 
@@ -8,6 +8,17 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 18, 2026 - fix(reconcile): AssignOrphanVGs worker pool + VG clobber guard (T07/R-6)
+
+- `AssignOrphanVGs` (`internal/reconcile/reconcile.go`) was a serial whole-library
+  loop doing two DB calls per orphan — a concurrency-mandate hotspot — and
+  unconditionally overwrote `VersionGroupID` on the re-hydrated book, clobbering a
+  VG assigned concurrently by a sibling worker, regroup apply, or merge.
+- Parallelized the per-candidate hydrate+write across a bounded `errgroup.Group`
+  pool (`runtime.NumCPU()`), sharded so no two workers touch the same book row;
+  added a clobber guard (skip + `skipped_concurrent_assignment` counter) and
+  progress/summary logging.
 
 #### July 18, 2026 - devops follow-ups (T12, 5 independent items)
 
