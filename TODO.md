@@ -1,6 +1,5 @@
 <!-- file: TODO.md -->
 <!-- version: 10.4.1 -->
-<!-- version: 10.4.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-18 -->
 
@@ -188,6 +187,7 @@ breakdown-backfill op + title-leak relax (#1982) · devops 1(code)/2(template)/
 DL-1/DL-2/DL-3/M4 (#1986 — OPEN in CI at time of writing, see brief T01) ·
 R-1 (T06) + R-3/R-7/P-2 (T08) (#2002).
 F7/R-9/R-8 (#PENDING — T11, see CHANGELOG July 18, 2026).
+F7/R-9/R-8 (#2004 — T11).
 
 ### Remaining — execution state (briefs)
 
