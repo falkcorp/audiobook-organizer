@@ -79,7 +79,10 @@ Companion docs:
     RootDir only.
 19. **AP-3 duration-reextract ~721-book tail** (H1:949) — re-enqueue apply
     (see pending-prod-actions).
-20. **AP-3b — consolidate the 3 duration extractors into one** (H1:954).
+20. ~~**AP-3b — consolidate the 3 duration extractors into one** (H1:954).~~ DONE —
+    `internal/audioutil.ProbeDurationSeconds` is now the single ffprobe
+    implementation shared by `internal/mediainfo`, `internal/fingerprint`, and
+    `internal/transcode`; each call site keeps its own unit/error contract.
 21. **CONS-18 Part 2 — file-tag duration write-back** (H1:1019; spec 2026-06-19 DRAFT)
     — config-gated; deferred until dedup re-scope settles.
 22. **Torrent relocation INIT-5 T2–T7** ([plan](docs/plans/2026-07-10-torrent-relocation.md))
