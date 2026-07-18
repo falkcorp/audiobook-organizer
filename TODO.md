@@ -191,6 +191,7 @@ F7/R-9/R-8 (#PENDING — T11, see CHANGELOG July 18, 2026).
 F7/R-9/R-8 (#2004 — T11).
 C2/H7 remux/transcode/external-ID-backfill reporter threading (#2006).
 F6 (#PR_PLACEHOLDER — book-merge rerouted off hard-delete to soft-delete +
+F6 (#2007 — book-merge rerouted off hard-delete to soft-delete +
 external-ID reassignment + ITL removal, T10).
 
 ### Remaining — execution state (briefs)
