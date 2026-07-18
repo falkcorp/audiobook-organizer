@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.177.0 -->
+<!-- version: 3.178.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-07-18 -->
 
@@ -8,6 +8,19 @@
 ## [Unreleased]
 
 ### Features & Fixes
+
+#### July 18, 2026 - fix(logging): H/M observability batch (T05)
+
+- Added Warn/Error logs with context + summary counters to the swallowed-error
+  and no-progress sites from the 2026-07-17 review: H1 (dedup unified-scoring
+  book-lookup errors), H2 (author series-map), H3 (itunes_heal fpcalc/AcoustID/
+  Whisper failures now distinct from "no match"), H4 (itunes write-back
+  GetBookByID errors vs nil-book skips), H8 (author-merge GetBookAuthors), H9
+  (llm_review op progress on up-to-10K-pair builds), M1 (transcribe-stats put),
+  M2/M3 (swallowed EnsureSingletonBookTag / GetBookByID), M7 (MetadataUpgradeRun
+  now reports progress every 25 books — a 120-min network-bound op that was
+  previously silent between start and result). Behavior unchanged throughout;
+  this is observability only.
 
 #### July 18, 2026 - dedup: triage purge-apply path (T03-BUILD)
 

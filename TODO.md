@@ -206,7 +206,7 @@ external-ID reassignment + ITL removal, T10).
       purgeable stub/title_leak candidates — see Dedup item 2 above. Sandbox run itself
       still not executed.)
 - [ ] **T04** — prod deploy (nothing deployed 2026-07-17) + prod dry-runs + ⚠️ HUMAN-GATED apply
-- [ ] **T05** — logging H/M batch: H1 H2 H3 H4 H8 H9 M1 M2 M3 M7 (file:line anchors in the brief)
+- [x] **T05** — logging H/M batch: H1 H2 H3 H4 H8 H9 M1 M2 M3 M7 (#PR)
 - [x] **T06** — R-1: `op.terminal` SSE backend publisher added (see Fixed list, #2002)
 - [x] **T07** — R-6: AssignOrphanVGs worker pool + VG clobber guard (#2003)
 - [x] **T08** — R-3 (abandoned-reporter logBuf growth) · R-7 (dead scan checkpoint code) · P-2 (RunItems backwards progress) (see Fixed list, #2002)
