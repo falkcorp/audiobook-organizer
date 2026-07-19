@@ -42,7 +42,7 @@ permissions:
 jobs:
   release:
     name: Create Production Release
-    uses: falkcorp/github-common/.github/workflows/reusable-release.yml@7ff6ed85d901b86dd836254c973134a7a764fa51 # v2.14.4 (cleanup-step self-delete guard)
+    uses: falkcorp/github-common/.github/workflows/reusable-release.yml@a8646210dae833d728538f1d9006ea45f4a4f488 # main: changelog.d collect step (org rollout)
     with:
       release-type: ${{ github.event.inputs.release-type }}
       prerelease: false
