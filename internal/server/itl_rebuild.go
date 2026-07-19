@@ -1,5 +1,5 @@
 // file: internal/server/itl_rebuild.go
-// version: 3.2.2
+// version: 3.3.0
 // guid: 8f7e6d5c-4b3a-2c1d-0e9f-8a7b6c5d4e3f
 // last-edited: 2026-07-03
 //
@@ -43,6 +43,20 @@ type ITLRebuildPreview = itunes.ITLRebuildPreview
 // Deprecated: Use itunes.ITLRebuildResult instead.
 type ITLRebuildResult = itunes.ITLRebuildResult
 
+// itlPathMappings converts the configured iTunes path mappings into the itunes
+// package type so the rebuild/export writeback can canonicalize each book's local
+// FilePath into a native Windows ITL location. If the config is empty (the mapping
+// hasn't been set), locations that aren't already native Windows paths are skipped
+// rather than written raw — so the ITL never contains an invalid 0x0D.
+func itlPathMappings() []itunes.PathMapping {
+	cfg := config.AppConfig.ITunes.PathMappings
+	out := make([]itunes.PathMapping, len(cfg))
+	for i, m := range cfg {
+		out[i] = itunes.PathMapping{From: m.From, To: m.To}
+	}
+	return out
+}
+
 // rebuildITLHandler handles POST /api/v1/itunes/rebuild.
 // Query param: dry_run=true returns the diff preview without
 // applying. Otherwise applies the diff via itunesservice.SafeWriteITL.
@@ -59,7 +73,7 @@ func (s *Server) rebuildITLHandler(c *gin.Context) {
 	}
 
 	store := s.Store()
-	ops, preview, err := itunes.ComputeITLDiff(store, itlPath)
+	ops, preview, err := itunes.ComputeITLDiff(store, itlPath, itlPathMappings())
 	if err != nil {
 		httputil.RespondWithInternalError(c, fmt.Sprintf("diff failed: %v", err))
 		return
@@ -139,7 +153,7 @@ func (s *Server) rebuildITLFullHandler(c *gin.Context) {
 		return
 	}
 
-	result, err := itunes.RebuildITLFromDB(store, itlPath, itlPath, c.Query("acknowledge_shrink") == "true")
+	result, err := itunes.RebuildITLFromDB(store, itlPath, itlPath, itlPathMappings(), c.Query("acknowledge_shrink") == "true")
 	if err != nil {
 		httputil.RespondWithInternalError(c, fmt.Sprintf("full rebuild failed: %v", err))
 		return
@@ -170,7 +184,7 @@ func (s *Server) exportITLPartialHandler(c *gin.Context) {
 	}
 	_ = c.ShouldBindJSON(&body) // empty body = all books
 
-	data, err := itunes.BuildExportITL(s.Store(), itlPath, body.BookIDs)
+	data, err := itunes.BuildExportITL(s.Store(), itlPath, body.BookIDs, itlPathMappings())
 	if err != nil {
 		httputil.RespondWithInternalError(c, fmt.Sprintf("build export ITL: %v", err))
 		return
