@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.10.0 -->
+<!-- version: 10.11.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-19 -->
 
@@ -251,6 +251,14 @@ duplicates (same file, differing by a character or two) should be auto-confirmed
 audio fingerprint. Investigate read-only first (dedup page vs review page component
 boundaries; current review-queue flow) and present a plan before building — this is
 frontend + backend feature work, not a mechanical change.
+
+> **2026-07-19 — item 50 is now folded into a full design spec:**
+> [`docs/specs/2026-07-19-fingerprint-driven-reconciliation-design.md`](specs/2026-07-19-fingerprint-driven-reconciliation-design.md)
+> (DRAFT) — fingerprint-driven library reconciliation via a 3-signal (fingerprint /
+> source-folder ground-truth / Whisper) convergence loop; use-cases = shattered-book
+> reassembly, dedup-on-import, iTunes decommission, near-dupe confirm. Verified live:
+> 94% fp coverage, the 39-way *Aces Abroad* shatter. Items 51–52 (review UX +
+> dedup-page consolidation) remain as scoped below.
 
 50. **Fingerprint-confirmed dedup + shattered-book reassembly against the original
     source** (GROUNDED 2026-07-19 via read-only prod verification). Two related tests,
