@@ -95,3 +95,35 @@ deploy-debug: web-build
 	    *) echo "❌ Deployed version does NOT match git describe — stale binary shipped?"; exit 1 ;; \
 	  esac
 	@echo "✅ Debug build deployed to $(DEPLOY_HOST)."
+
+# ============================================================================
+# Sandbox: disposable full-fidelity replica for testing RISKY / DESTRUCTIVE changes
+# ----------------------------------------------------------------------------
+# Runs a SECOND instance of the app on :8485 against a ZFS *clone* of the media
+# tree + a *copy* of the production DB, inside a mount namespace that redirects the
+# production paths to the clones. Because the DB stores absolute paths and there is
+# no path-rewrite hook, redirecting BELOW the app (at the kernel) is what makes the
+# isolation correct-by-construction: a hardcoded path or a stale cache entry lands
+# on the clone, not production. Use it before any change that moves/deletes files,
+# rewrites the ITL, purges candidates, etc. — verify on the clone, then ship to prod.
+#
+# The proven scripts + full runbook live in the (private) infra-docs repo under
+# scripts/dedup-sandbox/. Fill the vars below with YOUR datasets/paths in the
+# gitignored Makefile.local; do NOT commit real ZFS dataset names or host paths.
+#
+#   SANDBOX_SCRIPTS_SRC := /path/to/infra-docs/scripts/dedup-sandbox
+#   SANDBOX_SCRIPTS_DST := /tmp/abk-sandbox/scripts
+#   SANDBOX_BIN_REMOTE  := /tmp/abk-sandbox/audiobook-organizer-fix
+#
+# Prereqs on the server (one-time): kernel.unprivileged_userns_clone=1, and a
+# sudoers rule letting the deploy user run /usr/sbin/zfs NOPASSWD.
+#
+# Targets (see Makefile.local for the wired-up versions):
+#   sandbox-bootstrap  one-time/refresh: snapshot prod media + build pristine DB image
+#   sandbox-reset      THE checkpoint: destroy+re-clone media, restore DB from pristine
+#   sandbox-fix        cross-compile the current tree, ship it as the sandbox binary
+#   sandbox-run        launch the 2nd instance on :8485 (uses the fix binary if present)
+#   sandbox-verify     ISOLATION GATE — delete a prod-path file in the ns, confirm prod survives
+#   sandbox-destroy    stop the instance + zfs destroy the clone (prod untouched)
+#   sandbox            full cycle: scripts -> reset -> fix -> run -> verify
+# ============================================================================

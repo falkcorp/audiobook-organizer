@@ -1,5 +1,5 @@
 // file: internal/itunes/rebuild.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: 3f2e1d0c-9b8a-7c6d-5e4f-3a2b1c0d9e8f
 // last-edited: 2026-07-07
 
@@ -11,7 +11,44 @@ import (
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 )
+
+// canonicalWinLocation derives the native Windows ITL location (hohm 0x0D) for a
+// book from its CURRENT local FilePath, reverse-mapped to a Windows path via the
+// configured iTunes path mappings. Per the deprecation design the ITL points iTunes
+// at wherever the file currently lives (the audiobook-organizer copy for organized
+// books), NOT the frozen original ITunesPath. Returns ("", false) — the caller MUST
+// skip the track — for any path that cannot be canonicalized: a raw/invalid location
+// (a Linux path, a file:// URL, a %XX-escaped value) is NEVER written into 0x0D,
+// which is exactly what the ITLSafetyContract rejects (CRIT-2 / K4).
+func canonicalWinLocation(store RebuildStore, book *database.Book, mappings []PathMapping) (string, bool) {
+	localPath := book.FilePath
+	if bfs, err := store.GetBookFiles(book.ID); err == nil && len(bfs) > 0 && bfs[0].FilePath != "" {
+		localPath = bfs[0].FilePath
+	}
+	if localPath == "" {
+		return "", false
+	}
+	// ReverseRemapPath yields a Windows-rooted path but with forward slashes
+	// (e.g. "W:/audiobook-organizer/Author/01.m4b"); the ITL 0x0D form is a NATIVE
+	// Windows path with backslashes, and isWindowsAbsPath rejects any '/'. Flip the
+	// separators before validating. A path that didn't map (still "/mnt/...") becomes
+	// "\mnt\..." with no drive letter and is correctly rejected below → skipped.
+	winish := strings.ReplaceAll(ReverseRemapPath(localPath, mappings), "/", `\`)
+	pair, err := NewLocationPair(winish)
+	if err != nil {
+		metrics.RecordITunesLocationUnmappable("rebuild_invalid_path")
+		pid := ""
+		if book.ITunesPersistentID != nil {
+			pid = *book.ITunesPersistentID
+		}
+		slog.Warn("ITL rebuild: skipping track with unmappable location (never written raw — CRIT-2)",
+			"pid", pid, "local", localPath, "error", err.Error())
+		return "", false
+	}
+	return pair.WinPath, true
+}
 
 // RebuildStore is the minimal store interface needed by ITL rebuild functions:
 // read access to books plus the ability to look up book files
@@ -28,7 +65,7 @@ type RebuildStore interface {
 // ComputeITLDiff reads the current ITL and the current DB state,
 // and returns the ITLOperationSet that would synchronize them
 // plus a preview of what that set contains.
-func ComputeITLDiff(store RebuildStore, itlPath string) (*ITLOperationSet, *ITLRebuildPreview, error) {
+func ComputeITLDiff(store RebuildStore, itlPath string, mappings []PathMapping) (*ITLOperationSet, *ITLRebuildPreview, error) {
 	// Parse the current ITL to get all existing tracks.
 	lib, err := ParseITL(itlPath)
 	if err != nil {
@@ -98,8 +135,12 @@ func ComputeITLDiff(store RebuildStore, itlPath string) (*ITLOperationSet, *ITLR
 		track, inITL := itlTracks[pid]
 		if !inITL {
 			// Book has a PID but no ITL entry → add.
-			// Build an ITLNewTrack from the book's metadata.
-			newTrack := buildNewTrackFromBook(store, book)
+			// Build an ITLNewTrack from the book's metadata. Skip the add if the
+			// location can't be canonicalized — never insert a raw/invalid 0x0D.
+			newTrack, ok := buildNewTrackFromBook(store, book, mappings)
+			if !ok {
+				continue
+			}
 			ops.Adds = append(ops.Adds, newTrack)
 			preview.ToAdd++
 			continue
@@ -141,12 +182,10 @@ func ComputeITLDiff(store RebuildStore, itlPath string) (*ITLOperationSet, *ITLR
 			preview.ToUpdateMeta++
 		}
 
-		// Location update.
-		wantLoc := ""
-		if bfs, bfErr := store.GetBookFiles(book.ID); bfErr == nil && len(bfs) > 0 && bfs[0].ITunesPath != "" {
-			wantLoc = bfs[0].ITunesPath
-		}
-		if wantLoc != "" && track.Location != wantLoc {
+		// Location update: canonicalize the book's CURRENT FilePath to a native
+		// Windows path (0x0D). Unmappable locations are skipped (never written raw).
+		wantLoc, locOK := canonicalWinLocation(store, book, mappings)
+		if locOK && track.Location != wantLoc {
 			ops.LocationUpdates = append(ops.LocationUpdates, ITLLocationUpdate{
 				PersistentID: pid,
 				NewLocation:  wantLoc,
@@ -154,7 +193,7 @@ func ComputeITLDiff(store RebuildStore, itlPath string) (*ITLOperationSet, *ITLR
 			preview.ToUpdateLoc++
 		}
 
-		if !needsMetaUpdate && (wantLoc == "" || track.Location == wantLoc) {
+		if !needsMetaUpdate && (!locOK || track.Location == wantLoc) {
 			preview.AlreadySynced++
 		}
 	}
@@ -162,25 +201,28 @@ func ComputeITLDiff(store RebuildStore, itlPath string) (*ITLOperationSet, *ITLR
 	return &ops, &preview, nil
 }
 
-// BuildNewTrackFromBook constructs an ITLNewTrack from a database
-// Book for insertion into the ITL. Fills as many fields as
-// possible from the book's metadata.
-func BuildNewTrackFromBook(store RebuildStore, book *database.Book) ITLNewTrack {
-	return buildNewTrackFromBook(store, book)
+// BuildNewTrackFromBook constructs an ITLNewTrack from a database Book for
+// insertion into the ITL. Returns ok=false when the book's location cannot be
+// canonicalized into a native Windows path (the track must then be skipped, never
+// inserted with a raw 0x0D). mappings is the iTunes↔local path mapping set.
+func BuildNewTrackFromBook(store RebuildStore, book *database.Book, mappings []PathMapping) (ITLNewTrack, bool) {
+	return buildNewTrackFromBook(store, book, mappings)
 }
 
 // buildNewTrackFromBook constructs an ITLNewTrack from a database
 // Book for insertion into the ITL. Fills as many fields as
 // possible from the book's metadata.
-func buildNewTrackFromBook(store RebuildStore, book *database.Book) ITLNewTrack {
+func buildNewTrackFromBook(store RebuildStore, book *database.Book, mappings []PathMapping) (ITLNewTrack, bool) {
+	// Canonicalize the current location to a native Windows path (0x0D). If it can't
+	// be mapped, signal skip — the caller must not insert a track with a raw location.
+	location, ok := canonicalWinLocation(store, book, mappings)
+	if !ok {
+		return ITLNewTrack{}, false
+	}
 	authorName := resolveAuthorName(store, book)
 	genre := "Audiobook"
 	if book.Genre != nil && *book.Genre != "" {
 		genre = *book.Genre
-	}
-	location := book.FilePath
-	if bfs, bfErr := store.GetBookFiles(book.ID); bfErr == nil && len(bfs) > 0 && bfs[0].ITunesPath != "" {
-		location = bfs[0].ITunesPath
 	}
 	totalTime := 0
 	if book.Duration != nil {
@@ -206,7 +248,7 @@ func buildNewTrackFromBook(store RebuildStore, book *database.Book) ITLNewTrack 
 		Kind:      "MPEG audio file", // default; the real kind comes from the file format
 		Size:      int(size),
 		TotalTime: totalTime,
-	}
+	}, true
 }
 
 // resolveAuthorName returns the author name for a book. Takes the
@@ -259,7 +301,7 @@ type ITLRebuildResult struct {
 // "rebuild" into "mass deletion" (the July 2026 stub class), and Force
 // (needed legitimately for bounded-delta here) would otherwise be the only
 // gate. A >50% shrink without acknowledgment is an error, never a write.
-func RebuildITLFromDB(store RebuildStore, itlPath, outputPath string, acknowledgeShrink bool) (*ITLRebuildResult, error) {
+func RebuildITLFromDB(store RebuildStore, itlPath, outputPath string, mappings []PathMapping, acknowledgeShrink bool) (*ITLRebuildResult, error) {
 	lib, err := ParseITL(itlPath)
 	if err != nil {
 		return nil, fmt.Errorf("parse ITL: %w", err)
@@ -295,7 +337,9 @@ func RebuildITLFromDB(store RebuildStore, itlPath, outputPath string, acknowledg
 			if b.ITunesPersistentID == nil || *b.ITunesPersistentID == "" {
 				continue
 			}
-			adds = append(adds, buildNewTrackFromBook(store, b))
+			if nt, ok := buildNewTrackFromBook(store, b, mappings); ok {
+				adds = append(adds, nt)
+			}
 		}
 		afterID = books[len(books)-1].ID
 		if len(books) < pageSize {
@@ -342,7 +386,7 @@ func RebuildITLFromDB(store RebuildStore, itlPath, outputPath string, acknowledg
 // DB books. The resulting bytes are returned (not written to disk); the caller
 // is responsible for sending them to the client.
 // If bookIDs is empty, all primary-version non-deleted books with PIDs are included.
-func BuildExportITL(store RebuildStore, templatePath string, bookIDs []string) ([]byte, error) {
+func BuildExportITL(store RebuildStore, templatePath string, bookIDs []string, mappings []PathMapping) ([]byte, error) {
 	// Collect the requested books from the store.
 	wantIDs := make(map[string]bool, len(bookIDs))
 	for _, id := range bookIDs {
@@ -374,7 +418,9 @@ func BuildExportITL(store RebuildStore, templatePath string, bookIDs []string) (
 			if len(wantIDs) > 0 && !wantIDs[b.ID] {
 				continue
 			}
-			adds = append(adds, buildNewTrackFromBook(store, b))
+			if nt, ok := buildNewTrackFromBook(store, b, mappings); ok {
+				adds = append(adds, nt)
+			}
 		}
 		afterID = books[len(books)-1].ID
 		if len(books) < pageSize {

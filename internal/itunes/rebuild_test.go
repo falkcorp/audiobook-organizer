@@ -247,12 +247,20 @@ func TestBuildNewTrackFromBook(t *testing.T) {
 		books: map[string]*database.Book{bookID: book},
 		bookFiles: map[string][]database.BookFile{
 			bookID: {{
-				ITunesPath: "/itunes/books/Test Audiobook.m4b",
+				// Current local path (organized copy) — the writeback emits THIS,
+				// reverse-mapped to a native Windows path, not the frozen ITunesPath.
+				FilePath: "/mnt/library/Author Name/Test Audiobook/01.m4b",
 			}},
 		},
 	}
+	// W: on Windows == /mnt/library on the server; the same entry serves both
+	// directions (import forward, writeback reverse).
+	mappings := []PathMapping{{From: "W:", To: "/mnt/library"}}
 
-	track := buildNewTrackFromBook(store, book)
+	track, ok := buildNewTrackFromBook(store, book, mappings)
+	if !ok {
+		t.Fatalf("expected buildNewTrackFromBook to succeed for a mappable path")
+	}
 
 	// Verify track fields
 	if track.Name != title {
@@ -273,8 +281,8 @@ func TestBuildNewTrackFromBook(t *testing.T) {
 	if track.Size != int(fileSize) {
 		t.Errorf("expected Size=%d, got %d", fileSize, track.Size)
 	}
-	if track.Location != "/itunes/books/Test Audiobook.m4b" {
-		t.Errorf("expected Location from BookFile, got %q", track.Location)
+	if track.Location != `W:\Author Name\Test Audiobook\01.m4b` {
+		t.Errorf("expected canonical native Windows Location, got %q", track.Location)
 	}
 }
 
@@ -316,14 +324,19 @@ func TestBuildNewTrackFromBookWithDefaults(t *testing.T) {
 	book := &database.Book{
 		ID:       bookID,
 		Title:    title,
-		FilePath: "/path/to/book.m4b",
+		// Book-level FilePath is used when there are no book files.
+		FilePath: "/mnt/library/Minimal/01.m4b",
 	}
 
 	store := &mockRebuildStore{
 		books: map[string]*database.Book{bookID: book},
 	}
+	mappings := []PathMapping{{From: "W:", To: "/mnt/library"}}
 
-	track := buildNewTrackFromBook(store, book)
+	track, ok := buildNewTrackFromBook(store, book, mappings)
+	if !ok {
+		t.Fatalf("expected buildNewTrackFromBook to succeed for a mappable path")
+	}
 
 	// Verify defaults
 	if track.Name != title {
@@ -332,10 +345,43 @@ func TestBuildNewTrackFromBookWithDefaults(t *testing.T) {
 	if track.Genre != "Audiobook" {
 		t.Errorf("expected Genre=Audiobook, got %q", track.Genre)
 	}
-	if track.Location != book.FilePath {
-		t.Errorf("expected Location from FilePath, got %q", track.Location)
+	if track.Location != `W:\Minimal\01.m4b` {
+		t.Errorf("expected canonical native Windows Location, got %q", track.Location)
 	}
 	if track.TotalTime != 0 {
 		t.Errorf("expected TotalTime=0 (no duration), got %d", track.TotalTime)
+	}
+}
+
+// TestCanonicalWinLocation covers the three real-world location shapes that broke
+// the writeback (Linux path, and the two Windows forms) plus the skip behavior.
+func TestCanonicalWinLocation(t *testing.T) {
+	mappings := []PathMapping{{From: "W:", To: "/mnt/bigdata/books"}}
+	book := func(fp string) *database.Book { return &database.Book{ID: "b", FilePath: fp} }
+	st := &mockRebuildStore{}
+
+	cases := []struct {
+		name    string
+		file    string
+		wantLoc string
+		wantOK  bool
+	}{
+		{"organized AO path -> W:\\audiobook-organizer",
+			"/mnt/bigdata/books/audiobook-organizer/Author/Book/01.m4b",
+			`W:\audiobook-organizer\Author\Book\01.m4b`, true},
+		{"still-in-itunes path -> W:\\itunes",
+			"/mnt/bigdata/books/itunes/iTunes Media/Audiobooks/A/01.mp3",
+			`W:\itunes\iTunes Media\Audiobooks\A\01.mp3`, true},
+		{"unmappable path outside the mapped root -> skip",
+			"/var/other/place/01.m4b", "", false},
+		{"empty path -> skip", "", "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, ok := canonicalWinLocation(st, book(c.file), mappings)
+			if ok != c.wantOK || got != c.wantLoc {
+				t.Fatalf("canonicalWinLocation(%q) = (%q,%v), want (%q,%v)", c.file, got, ok, c.wantLoc, c.wantOK)
+			}
+		})
 	}
 }
