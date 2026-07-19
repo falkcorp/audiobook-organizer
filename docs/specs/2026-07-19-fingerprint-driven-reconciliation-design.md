@@ -1,5 +1,5 @@
 <!-- file: docs/specs/2026-07-19-fingerprint-driven-reconciliation-design.md -->
-<!-- version: 0.1.0 -->
+<!-- version: 0.2.0 -->
 <!-- guid: 3d2e23d9-f003-4d47-8c11-1b9e3ac3333b -->
 <!-- last-edited: 2026-07-19 -->
 
@@ -141,16 +141,27 @@ Reuse, don't rebuild (from the 2026-07-19 code investigation):
 The convergence loop (§3) is the control layer that runs across P1–P3 signals; P4/P5 are
 applications of the same machinery.
 
-## 8. Open decisions (for owner)
+## 8. Decisions (owner, 2026-07-19 — RESOLVED)
 
-1. **Near-certainty threshold** for auto-resolve vs review — and does it differ per
-   use-case (reassembly vs cross-copy dedup)?
-2. **Bulk source ingest ordering** — confirm P4 (dedup-on-import) ships before pointing a
-   scan at the source roots, to avoid mass-duplication.
-3. **iTunes decommission trigger** — manual per-batch, or automatic once a match is
-   confirmed at ≥ threshold?
-4. **The `duration≈4` anomaly** on the Aces Abroad fragment books — real data bug to fix
-   in parallel, or display artifact? (unconfirmed)
+1. **Auto-resolve aggressiveness → REVIEW-FIRST ALWAYS.** Nothing auto-merges without a
+   human OK; the loop's near-certainty only pre-fills/ranks the review queue. Loosen later
+   once trusted. (Consistent with the prod-apply review gate + the repo's data-loss caution.)
+2. **Bulk source ingest ordering → P4 (dedup-on-import) SHIPS FIRST.** Do not point a scan
+   at the source-download roots until dedup-on-import exists, so importing sources merges
+   into existing primaries instead of mass-duplicating the library.
+3. **iTunes decommission → FULLY MANUAL, verify-first.** Human sign-off per batch, no
+   automation. Before committing: confirm iTunes fully runs on the NEW library
+   (`.itunes-writeback/iTunes Library.itl`) AND that real Apple devices work with the
+   generated library. We will still write to the iTunes library eventually, but carefully —
+   the last iTunes-library write got corrupted (iTunes reverted to its original DB), so no
+   risky writes. **P5-scoping unknowns to investigate first:** is iTunes import still
+   running; how stale is the golden `.itl` (many books imported since the last golden copy).
+   Confirmed config today: import source `itunes/iTunes Library.xml`, writeback target
+   `.itunes-writeback/iTunes Library.itl`.
+4. **`duration≈4` anomaly → INVESTIGATED: it is a LIST-endpoint display bug, not data
+   corruption.** The same book's *detail* endpoint returns `duration = 4680` (correct,
+   ~78 min) while the *list* endpoint returns `4` (seconds-vs-ms unit slip). Stored/file
+   data is fine. Logged as a separate low-severity TODO; off the reconciliation critical path.
 
 ## 9. Verified facts (2026-07-19, read-only prod)
 
