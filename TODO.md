@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.11.0 -->
+<!-- version: 10.12.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-19 -->
 
@@ -237,6 +237,12 @@ Companion docs:
 45. **Performance items #1/#2/#6** (2026-04-14 set) — still open.
 46. **Duration/filesize aggregation** — Book fields show snapshots instead of sums;
     likely stale (F5-T026 shipped) — verify then close.
+    - **46b. `/audiobooks` LIST endpoint mis-serializes `duration`** (found 2026-07-19) —
+      low-severity display bug: the list endpoint returns e.g. `duration: 4` for a book
+      whose *detail* endpoint (and stored data) correctly returns `4680` (~78 min). Looks
+      like a seconds-vs-ms unit slip in the list serializer only; stored/file-level data is
+      fine (NOT corruption). Fix the list handler's duration field. Cross-ref
+      `internal/server/handlers/audiobooks/handler.go`.
 47. **Library centralization backlog** — needs a brainstorming session; future work.
 48. **Transcription quality filter** — ~40% of transcripts low-quality/unparsed; list
     endpoint omits transcription fields.
