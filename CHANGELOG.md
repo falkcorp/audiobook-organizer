@@ -5,6 +5,10 @@
 
 # Changelog
 
+<!-- scriv-insert-here -->
+
+<!-- scriv-end-here: releases below predate the changelog.d fragment system. -->
+
 ## [Unreleased]
 
 ### Features & Fixes

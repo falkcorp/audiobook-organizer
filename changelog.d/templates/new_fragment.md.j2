@@ -1,0 +1,29 @@
+{#- Scaffold rendered by `scriv create`. Do NOT add a file header here — the -#}
+{#- rendered output is concatenated into CHANGELOG.md verbatim, so a header -#}
+{#- would leak into the changelog. -#}
+<!--
+Add ONE fragment per logical change. Uncomment the section(s) that apply below
+and replace the placeholder text, then delete the sections you do not use.
+
+A changelog entry carries MORE detail than a release note: state what changed,
+why, and any impact or reproduction — mirror the "#### short title" +
+explanatory paragraph style already used in CHANGELOG.md.
+
+Conventional-commit type -> category:
+  feat -> Added        fix -> Fixed         perf, refactor -> Changed
+  (deprecations -> Deprecated, removals -> Removed, security fixes -> Security)
+
+Leave every section commented out for a release-note-only entry (no changelog
+line). This file is auto-named and unique, so it never conflicts with other
+contributors' fragments.
+-->
+{% for cat in config.categories -%}
+<!--
+### {{ cat }}
+
+#### Short imperative title for the change
+
+A detailed explanation of the change: what it does, why it was needed, and any
+impact, migration note, or reproduction detail worth recording.
+-->
+{% endfor -%}
