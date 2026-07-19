@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.9.0 -->
+<!-- version: 10.10.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-07-18 -->
+<!-- last-edited: 2026-07-19 -->
 
 # Project TODO — live items only
 
@@ -252,18 +252,39 @@ audio fingerprint. Investigate read-only first (dedup page vs review page compon
 boundaries; current review-queue flow) and present a plan before building — this is
 frontend + backend feature work, not a mechanical change.
 
-50. **AcoustID confirmatory pass to narrow near-dupe candidates** — use audio
-    fingerprint match as a *confirming* signal on title/filename near-dupes (the
-    "same file, one extra character" cases = title-leak residue) to auto-promote them
-    to high-confidence / auto-merge, leaving genuinely-distinct pairs to normal scoring.
-    **CAVEAT (do not re-litigate):** AcoustID is NOT viable as a *blanket* veto — the
-    2026-07-02 finding was ~65% of books unfingerprinted, so a fingerprint-required gate
-    silently drops most pairs (see [[matching_and_dedup_findings_jul2]],
-    [[fingerprint_lsh_dedup_state]]). It only helps where BOTH sides are fingerprinted;
-    the real lever for broad coverage remains the fingerprint-coverage campaign
-    (consultancy-roadmap TASK-16). **First step:** re-measure current fingerprint
-    coverage (may have improved via the backfill campaign) before scoping the design.
-    Cross-ref: `internal/dedup/engine.go`, `internal/plugins/acoustid/`.
+50. **Fingerprint-confirmed dedup + shattered-book reassembly against the original
+    source** (GROUNDED 2026-07-19 via read-only prod verification). Two related tests,
+    added as signals on existing candidates — not a new pipeline:
+    - **(a) Acoustic confirm** — where both sides of a candidate pair are fingerprinted,
+      use `WholeFileSimilarity` closeness as a *confirming* signal to auto-promote the
+      "same file, one extra character" title-leak near-dupes to auto-merge; distinct
+      pairs fall back to today's scoring. Per-file acoustic signals already feed scoring
+      (`exact_acoustid`/`lsh_acoustid`); this extends them + strengthens the
+      `auto_resolve` gate (behind the existing `AutoResolveEnabled` kill-switch).
+    - **(b) Shattered-book reassembly** — for a book split into many fragments (author-
+      first shards of a multi-author anthology), match the fragments' per-file
+      fingerprint **set** against the assembled ORIGINAL source folder (set containment
+      `fragments ⊆ source_folder`) via the existing `fpidx` LSH index → the source
+      folder whose file-set contains them identifies the true whole book. Metadata
+      (album/iTunes-XML/PID/version-group) is the primary regroup key; the fingerprint-
+      set match is the safety confirmation that makes the auto-regroup safe.
+    - **Design constraints (owner, 2026-07-19):** dedup AGAINST the original source as the
+      identity reference, but keep the organized (primary) copy canonical; reflink new
+      files on import. **NEVER mutate the active iTunes tree** — read-only at most (see
+      [[feedback_itunes_active_library_hands_off]]).
+    - **VERIFIED (prod, read-only, 2026-07-19):** file-level raw-fingerprint coverage is
+      **94%** (296,010 / 315,013 files; zero-duration count == 0, so the old Seg0
+      over-count worry is moot — the "~65%" figure was stale/pair-level, NOT a current
+      file-level blocker). **PREREQUISITE / the one real gap:** the assembled source-
+      download root is NOT a configured scan path, so its folders are on disk but not in
+      the DB (title search for a known source book = 0 hits). **Step 1 = scan + fpcalc-
+      fingerprint the source root as a read-only REFERENCE corpus** (cheap — reflinks;
+      distinct root from iTunes so the guardrail holds) and index into `fpidx`; only then
+      does (b) have ground truth to match against. See
+      [[project_dedup_assembled_source_ground_truth]].
+    - Cross-ref: `internal/dedup/engine.go`, `internal/dedup/unified/auto_resolve.go`,
+      `internal/dedup/split_book_detector.go`, `internal/fingerprint/`,
+      `internal/plugins/acoustid/`.
 51. **Overhaul the review interface ("make it not suck")** — the review page UX is a
     pain point. Needs a concrete redesign spec: read-only audit of the current review
     page (what it shows today, interaction friction, per-hold actions) → propose
