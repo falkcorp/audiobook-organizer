@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # file: scripts/assemble_todo.py
-# version: 1.1.0
-# guid: d79fbcb8-add2-4921-b05e-f42b6381431a
+# version: 1.2.0
+# guid: af7ef324-6c69-411e-b1a9-98c9ba2b31e3
 # last-edited: 2026-07-19
 
 """Assemble TODO.md from per-task fragment files in todo.d/.
@@ -50,10 +50,12 @@ CONFIG_FILE = Path("todo.d/todo.ini")
 HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 
 VERSION_HEADER = re.compile(
-    r"^(<!--\s*version:\s*)(\d+)\.(\d+)\.(\d+)(\s*-->)$", re.M
+    r"^(<!--\s*version:\s*)(\d+)\.(\d+)\.(\d+)(\s*-->)$",
+    re.M,
 )
 LAST_EDITED_HEADER = re.compile(
-    r"^(<!--\s*last-edited:\s*)(\S+)(\s*-->)$", re.M
+    r"^(<!--\s*last-edited:\s*)(\S+)(\s*-->)$",
+    re.M,
 )
 
 
@@ -81,9 +83,8 @@ def find_fragments(fragment_dir: Path) -> list[Path]:
     """
     if not fragment_dir.is_dir():
         return []
-    return sorted(
-        path for path in fragment_dir.glob("*.md") if path.name != "README.md"
-    )
+    candidates = fragment_dir.glob("*.md")
+    return sorted(p for p in candidates if p.name != "README.md")
 
 
 def fragment_body(path: Path) -> str:
@@ -121,7 +122,9 @@ def bump_header(text: str, today: str) -> str:
         print("warning: no '<!-- version: X.Y.Z -->' header to bump.")
 
     text, count = LAST_EDITED_HEADER.subn(
-        lambda m: f"{m.group(1)}{today}{m.group(3)}", text, count=1
+        lambda m: f"{m.group(1)}{today}{m.group(3)}",
+        text,
+        count=1,
     )
     if not count:
         print("warning: no '<!-- last-edited: ... -->' header to refresh.")
@@ -136,12 +139,13 @@ def insert_at_marker(text: str, marker: str, addition: str) -> str:
     scriv uses for release sections.
     """
     marker_line = re.compile(
-        rf"^([ \t]*<!--\s*{re.escape(marker)}\s*-->[ \t]*)$", re.M
+        rf"^([ \t]*<!--\s*{re.escape(marker)}\s*-->[ \t]*)$",
+        re.M,
     )
     match = marker_line.search(text)
     if not match:
         raise AssemblyError(
-            f"Output file has no '<!-- {marker} -->' marker; refusing to guess where tasks belong."
+            f"No '<!-- {marker} -->' marker in the output file; refusing to guess where tasks belong.",
         )
     return text[: match.end()] + f"\n\n{addition}" + text[match.end() :]
 
