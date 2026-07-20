@@ -1,9 +1,18 @@
 <!-- file: TODO.md -->
-<!-- version: 10.12.0 -->
+<!-- version: 10.13.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-07-19 -->
 
 # Project TODO — live items only
+
+## 📥 Inbox
+
+Tasks assembled from `todo.d/` fragments. Add a new task by dropping a fragment
+file in `todo.d/` rather than editing this section by hand — see
+[`todo.d/README.md`](todo.d/README.md). Checking a task off, or promoting it
+into one of the curated sections below, is a normal direct edit.
+
+<!-- todo-insert-here -->
 
 The 2026-H1 TODO history (3,220 lines) is frozen verbatim at
 [`docs/archive/todo-2026-H1.md`](docs/archive/todo-2026-H1.md).
