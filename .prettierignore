@@ -10,3 +10,8 @@
 # Generated files
 workflow-permissions-analysis.json
 # Removed legacy doc-update artifacts (deprecated)
+
+# TODO fragments are partial Markdown assembled into TODO.md; keep the README.
+todo.d/*.md
+todo.d/templates/**
+!todo.d/README.md

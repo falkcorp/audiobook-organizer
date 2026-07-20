@@ -1,0 +1,106 @@
+# file: .github/workflows/todo-collect.yml
+# version: 1.0.0
+# guid: b615828c-4cc4-4c68-bb94-429744870438
+# last-edited: 2026-07-19
+
+# Fold todo.d/ fragments into TODO.md and commit the result to the default
+# branch. Opt-in by presence: every step below is a no-op in a repo without
+# todo.d/todo.ini, so this file is safe to ship anywhere.
+#
+# Unlike the changelog system there is deliberately NO pull-request check —
+# adding a task is optional, not something to enforce on every code PR.
+name: Collect TODO Fragments
+
+on:
+  schedule:
+    # Daily at 07:17 UTC. Off the hour so it does not pile into the top-of-hour
+    # crush of scheduled jobs across the org.
+    - cron: '17 7 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: todo-collect-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    name: Assemble TODO.md
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # write, not read: the collect step pushes the assembled TODO.md back to the
+    # default branch. The push normally authenticates with JF_CI_GH_PAT, which is
+    # independent of this token — but without contents: write the documented
+    # GITHUB_TOKEN fallback would be rejected, making it dead code. Matches the
+    # changelog collector in reusable-release.yml.
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
+
+      - name: Collect fragments into TODO.md
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          TODO_PAT: ${{ secrets.JF_CI_GH_PAT }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # Opt-in by presence: repos without the fragment system stop here.
+          if [ ! -f todo.d/todo.ini ]; then
+            echo "::notice::todo.d/todo.ini not present — TODO fragments not enabled here."
+            exit 0
+          fi
+
+          if [ ! -f scripts/assemble_todo.py ]; then
+            echo "::warning::todo.d/todo.ini present but scripts/assemble_todo.py is missing; skipping."
+            exit 0
+          fi
+
+          # Only real fragments count — README.md and templates/ never do.
+          if ! find todo.d -maxdepth 1 -name '*.md' ! -name 'README.md' | grep -q .; then
+            echo "::notice::No TODO fragments to collect."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # The assembler git rm's the fragments it consumes, so the insertion
+          # and the removals are staged together.
+          python3 scripts/assemble_todo.py
+
+          if git diff --quiet && git diff --cached --quiet; then
+            echo "::notice::Assembler produced no changes."
+            exit 0
+          fi
+
+          git add -A TODO.md todo.d
+          # [skip ci] stops this docs-only commit from retriggering the full CI.
+          git commit -m "docs(todo): collect fragments into TODO.md [skip ci]"
+
+          # Prefer the PAT (passes branch protection); fall back to the workflow
+          # token. Push to an explicit authenticated URL so we do not depend on
+          # the checkout's persisted credentials.
+          TOKEN="${TODO_PAT:-$GITHUB_TOKEN}"
+          REMOTE="https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
+          n=0
+          until git push "${REMOTE}" "HEAD:${DEFAULT_BRANCH}" || [ "$n" -ge 4 ]; do
+            n=$((n + 1))
+            echo "Retry $n/4 for TODO push..."
+            sleep $((2 ** n))
+            git pull --rebase "${REMOTE}" "${DEFAULT_BRANCH}"
+          done
+          [ "$n" -lt 4 ] || { echo "::error::Failed to push TODO.md"; exit 1; }
+          echo "TODO.md updated."
