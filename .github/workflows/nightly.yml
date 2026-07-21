@@ -28,7 +28,7 @@ permissions:
 jobs:
   full-ci:
     name: Full CI Suite
-    uses: falkcorp/github-common/.github/workflows/reusable-ci.yml@7ff6ed85d901b86dd836254c973134a7a764fa51 # main 2026-07-05 (fixes jdfalk/ghcommon -> falkcorp/github-common stale-ref 400 error)
+    uses: falkcorp/github-common/.github/workflows/reusable-ci.yml@d0c3326b96557c8ea9117c1c196b628e5e028186 # main 2026-07-05 (fixes jdfalk/ghcommon -> falkcorp/github-common stale-ref 400 error)
     with:
       go-version: '1.26'
       go-experiment: 'jsonv2'

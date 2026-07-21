@@ -42,7 +42,7 @@ permissions:
 jobs:
   release:
     name: Create Production Release
-    uses: falkcorp/github-common/.github/workflows/reusable-release.yml@a8646210dae833d728538f1d9006ea45f4a4f488 # main: changelog.d collect step (org rollout)
+    uses: falkcorp/github-common/.github/workflows/reusable-release.yml@d0c3326b96557c8ea9117c1c196b628e5e028186 # main: changelog.d collect step (org rollout)
     with:
       release-type: ${{ github.event.inputs.release-type }}
       prerelease: false

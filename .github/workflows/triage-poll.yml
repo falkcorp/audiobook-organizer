@@ -19,7 +19,7 @@ on:
 
 jobs:
   triage-poll:
-    uses: falkcorp/github-common/.github/workflows/reusable-triage-poll.yml@7ff6ed85d901b86dd836254c973134a7a764fa51 # image pin fix + auto-updater fix
+    uses: falkcorp/github-common/.github/workflows/reusable-triage-poll.yml@d0c3326b96557c8ea9117c1c196b628e5e028186 # image pin fix + auto-updater fix
     with:
       mode: ${{ inputs.mode || 'draft-only' }}
       triage_model: o3
