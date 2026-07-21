@@ -1,5 +1,5 @@
 // file: internal/itunes/itl_le_mutate.go
-// version: 1.2.0
+// version: 2.1.0
 // guid: d5e6f7a8-b9c0-1d2e-3f4a-5b6c7d8e9f00
 //
 // LE-format ITL mutation: add and remove tracks from v10+ (msdh/mith/mhoh)
@@ -75,9 +75,17 @@ func AddTracksLE(data []byte, tracks []ITLNewTrack) []byte {
 		// rather than writing an invented encoding (CRIT-1) — all six below are
 		// in the table.
 		var mhohData []byte
-		// Location first (0x0D), then metadata — matches iTunes convention
+		// Location first (0x0D + its sibling 0x0B), then metadata — matches iTunes
+		// convention. A 0x0D native path MUST be accompanied by the 0x0B LocalURL
+		// (the ITLSafetyContract rejects a lone 0x0D). tr.Location is the canonical
+		// WinPath; derive the pair and write BOTH, mirroring the update path. If it
+		// can't be normalized, skip the location entirely rather than emit a bare
+		// 0x0D that the safety contract would reject.
 		if tr.Location != "" {
-			mhohData = appendMhohLE(mhohData, 0x0D, tr.Location)
+			if pair, err := normalizeLocationValue(tr.Location); err == nil {
+				mhohData = appendMhohLE(mhohData, 0x0D, pair.WinPath)
+				mhohData = appendMhohLE(mhohData, 0x0B, pair.URL)
+			}
 		}
 		if tr.Name != "" {
 			mhohData = appendMhohLE(mhohData, 0x02, tr.Name)

@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 1.46.0
+// version: 3.1.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-07-18
 
@@ -703,11 +703,24 @@ func (s *Server) Start(cfg ServerConfig) error {
 // (PEBBLE-CLOSED family). Each launch also skips on an already-canceled
 // bgCtx — a SKIP-on-shutdown guard, not a startup gate: a live bgCtx must
 // still run every warmer.
+// warmerRecover logs and swallows a panic in a fire-and-forget cache warmer.
+// Warmers are best-effort by design (they only pre-populate a TTL cache), so a
+// warmup fault — a transient store read error, a store read that trips a
+// dependency bug — must degrade to a cold cache, never crash the whole server.
+// Without this, an unrecovered panic in one warmer goroutine takes the process
+// down at startup.
+func warmerRecover(name string) {
+	if r := recover(); r != nil {
+		slog.Error("cache warmer panicked — continuing with a cold cache", "warmer", name, "panic", r)
+	}
+}
+
 func (s *Server) startCacheWarmers() {
 	// Pre-warm facets cache (genres/languages) - lightweight, <1 second
 	s.bgWG.Add("facets-warmer")
 	go func() {
 		defer s.bgWG.Done("facets-warmer")
+		defer warmerRecover("facets")
 		if s.bgCtx.Err() != nil {
 			return // server already shutting down — skip, never warm a closing store
 		}
@@ -720,6 +733,7 @@ func (s *Server) startCacheWarmers() {
 	s.bgWG.Add("library-sizes-warmer")
 	go func() {
 		defer s.bgWG.Done("library-sizes-warmer")
+		defer warmerRecover("library-sizes")
 		if s.bgCtx.Err() != nil {
 			return // server already shutting down — skip, never warm a closing store
 		}
@@ -737,11 +751,13 @@ func (s *Server) startCacheWarmers() {
 	s.bgWG.Add("library-list-warmer")
 	go func() {
 		defer s.bgWG.Done("library-list-warmer")
+		defer warmerRecover("library-list")
 		s.warmAudiobookListCache()
 	}()
 	s.bgWG.Add("authors-warmer")
 	go func() {
 		defer s.bgWG.Done("authors-warmer")
+		defer warmerRecover("authors")
 		if s.bgCtx.Err() != nil {
 			return // server already shutting down — skip, never warm a closing store
 		}
@@ -750,6 +766,7 @@ func (s *Server) startCacheWarmers() {
 	s.bgWG.Add("series-warmer")
 	go func() {
 		defer s.bgWG.Done("series-warmer")
+		defer warmerRecover("series")
 		if s.bgCtx.Err() != nil {
 			return // server already shutting down — skip, never warm a closing store
 		}
