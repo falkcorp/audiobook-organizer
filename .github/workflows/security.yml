@@ -27,7 +27,7 @@ permissions:
 jobs:
   advanced-security:
     name: Advanced CodeQL Security
-    uses: falkcorp/github-common/.github/workflows/reusable-security.yml@7ff6ed85d901b86dd836254c973134a7a764fa51 # main 2026-07-05 (fixes jdfalk/ghcommon -> falkcorp/github-common stale-ref 400 error)
+    uses: falkcorp/github-common/.github/workflows/reusable-security.yml@d0c3326b96557c8ea9117c1c196b628e5e028186 # main 2026-07-05 (fixes jdfalk/ghcommon -> falkcorp/github-common stale-ref 400 error)
     with:
       languages: '["go", "javascript", "actions"]'
       skip-codeql: false
@@ -46,7 +46,7 @@ jobs:
       GOEXPERIMENT: jsonv2
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
 
@@ -67,7 +67,7 @@ jobs:
       contents: write
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
 
