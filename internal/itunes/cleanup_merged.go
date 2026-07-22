@@ -1,5 +1,5 @@
 // file: internal/itunes/cleanup_merged.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9c4e7a20-1b83-4d6f-a2e9-5c0d3b8f1a74
 // last-edited: 2026-07-22
 //
@@ -23,12 +23,26 @@ import (
 
 // MergedCleanupPreview summarizes the superseded-track removal without applying.
 type MergedCleanupPreview struct {
-	TracksInITL    int `json:"tracks_in_itl"`
-	PrimaryPIDs    int `json:"primary_pids"`     // distinct primary book_file PIDs present in the ITL
-	NonPrimaryPIDs int `json:"non_primary_pids"` // distinct non-primary book_file PIDs present in the ITL
-	ToRemove       int `json:"to_remove"`        // non-primary PIDs that are NOT also a primary PID
-	SharedSkipped  int `json:"shared_skipped"`   // non-primary PIDs also owned by a primary (kept, defensive)
+	TracksInITL    int                   `json:"tracks_in_itl"`
+	PrimaryPIDs    int                   `json:"primary_pids"`     // distinct primary book_file PIDs present in the ITL
+	NonPrimaryPIDs int                   `json:"non_primary_pids"` // distinct non-primary book_file PIDs present in the ITL
+	ToRemove       int                   `json:"to_remove"`        // non-primary PIDs that are NOT also a primary PID
+	SharedSkipped  int                   `json:"shared_skipped"`   // non-primary PIDs also owned by a primary (kept, defensive)
+	Sample         []MergedRemovalSample `json:"sample"`           // up to sampleLimit of the to-remove tracks, for review
 }
+
+// MergedRemovalSample is one to-be-removed track, surfaced so the operator can
+// eyeball that the removal set is genuinely merged duplicates before applying.
+type MergedRemovalSample struct {
+	PID        string `json:"pid"`
+	BookID     string `json:"book_id"`
+	Title      string `json:"title"`
+	Author     string `json:"author"`
+	FilePath   string `json:"file_path"`
+	MergedInto string `json:"merged_into_book_id,omitempty"`
+}
+
+const mergedSampleLimit = 40
 
 // ComputeMergedTrackCleanup finds superseded audiobook tracks to remove. It emits
 // ONLY Removes; never adds/relocates. A non-primary book_file PID is removed only
@@ -51,8 +65,9 @@ func ComputeMergedTrackCleanup(store RebuildStore, itlPath string) (*ITLOperatio
 // remove set (non-primary PIDs not also owned by a primary). Split out for unit
 // testing without minting a real .itl.
 func computeMergedCleanupFromInITL(inITL map[string]bool, store RebuildStore) (*ITLOperationSet, *MergedCleanupPreview) {
-	primary := make(map[string]bool)    // PID → is a primary book_file's PID
-	nonPrimary := make(map[string]bool) // PID → is a non-primary book_file's PID (in ITL)
+	primary := make(map[string]bool)             // PID → is a primary book_file's PID
+	nonPrimary := make(map[string]bool)          // PID → is a non-primary book_file's PID (in ITL)
+	info := make(map[string]MergedRemovalSample) // PID → book context (for the sample)
 
 	const pageSize = 500
 	afterID := ""
@@ -83,6 +98,19 @@ func computeMergedCleanupFromInITL(inITL map[string]bool, store RebuildStore) (*
 					primary[pid] = true
 				} else {
 					nonPrimary[pid] = true
+					if _, seen := info[pid]; !seen {
+						mergedInto := ""
+						if b.MergedIntoBookID != nil {
+							mergedInto = *b.MergedIntoBookID
+						}
+						info[pid] = MergedRemovalSample{
+							PID:        pid,
+							BookID:     b.ID,
+							Title:      b.Title,
+							FilePath:   files[j].FilePath,
+							MergedInto: mergedInto,
+						}
+					}
 				}
 			}
 		}
@@ -105,6 +133,13 @@ func computeMergedCleanupFromInITL(inITL map[string]bool, store RebuildStore) (*
 		}
 		ops.Removes[pid] = true
 		preview.ToRemove++
+		if len(preview.Sample) < mergedSampleLimit {
+			s := info[pid]
+			if b, err := store.GetBookByID(s.BookID); err == nil && b != nil {
+				s.Author = resolveAuthorName(store, b)
+			}
+			preview.Sample = append(preview.Sample, s)
+		}
 	}
 
 	slog.Info("itunes cleanup-merged: computed superseded-track removal",
