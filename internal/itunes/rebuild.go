@@ -1,7 +1,7 @@
 // file: internal/itunes/rebuild.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: 3f2e1d0c-9b8a-7c6d-5e4f-3a2b1c0d9e8f
-// last-edited: 2026-07-07
+// last-edited: 2026-07-22
 
 package itunes
 
@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 )
 
 // canonicalWinLocation derives the native Windows ITL location (hohm 0x0D) for a
@@ -27,27 +26,14 @@ func canonicalWinLocation(store RebuildStore, book *database.Book, mappings []Pa
 	if bfs, err := store.GetBookFiles(book.ID); err == nil && len(bfs) > 0 && bfs[0].FilePath != "" {
 		localPath = bfs[0].FilePath
 	}
-	if localPath == "" {
-		return "", false
+	pid := ""
+	if book.ITunesPersistentID != nil {
+		pid = *book.ITunesPersistentID
 	}
-	// ReverseRemapPath yields a Windows-rooted path but with forward slashes
-	// (e.g. "W:/audiobook-organizer/Author/01.m4b"); the ITL 0x0D form is a NATIVE
-	// Windows path with backslashes, and isWindowsAbsPath rejects any '/'. Flip the
-	// separators before validating. A path that didn't map (still "/mnt/...") becomes
-	// "\mnt\..." with no drive letter and is correctly rejected below → skipped.
-	winish := strings.ReplaceAll(ReverseRemapPath(localPath, mappings), "/", `\`)
-	pair, err := NewLocationPair(winish)
-	if err != nil {
-		metrics.RecordITunesLocationUnmappable("rebuild_invalid_path")
-		pid := ""
-		if book.ITunesPersistentID != nil {
-			pid = *book.ITunesPersistentID
-		}
-		slog.Warn("ITL rebuild: skipping track with unmappable location (never written raw — CRIT-2)",
-			"pid", pid, "local", localPath, "error", err.Error())
-		return "", false
-	}
-	return pair.WinPath, true
+	// Delegate to the shared per-file canonicalizer (relocate.go) so the
+	// CRIT-2-sensitive path logic lives in one place. Keeps the rebuild metric
+	// label for backwards-compatible dashboards.
+	return canonicalWinLocationForFile(localPath, pid, "rebuild_invalid_path", mappings)
 }
 
 // RebuildStore is the minimal store interface needed by ITL rebuild functions:

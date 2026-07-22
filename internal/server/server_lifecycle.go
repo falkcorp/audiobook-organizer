@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 3.1.0
+// version: 3.2.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-07-18
+// last-edited: 2026-07-22
 
 package server
 
@@ -1292,6 +1292,13 @@ func (s *Server) setupRoutes() {
 				itunesGroup.POST("/rebuild-full", s.perm(auth.PermLibraryEditMetadata), s.rebuildITLFullHandler)
 				// Partial export: build ITL containing only specified book IDs (6.4 partial).
 				itunesGroup.POST("/export-partial", s.perm(auth.PermIntegrationsManage), s.exportITLPartialHandler)
+				// Location-only relocate: repoint each book_file's track at its
+				// current path (per-file PID match); NEVER removes/adds, so
+				// music/podcasts/playlists are untouched. dry_run=true previews.
+				itunesGroup.POST("/relocate", s.perm(auth.PermLibraryEditMetadata), s.relocateITLHandler)
+				// Adopt-base: re-bless the identity sidecar after reseeding the
+				// writeback slot from a different library (else K13/K14 reject writes).
+				itunesGroup.POST("/adopt-base", s.perm(auth.PermLibraryEditMetadata), s.adoptBaseHandler)
 
 				// ITL file transfer (6.4)
 				itunesGroup.GET("/library/download", s.perm(auth.PermIntegrationsManage), s.itunesSvcGuard(func(c *gin.Context) { s.itunesSvc.Transfer.HandleDownload(c) }))
