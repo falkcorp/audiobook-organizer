@@ -1,5 +1,5 @@
 <!-- file: docs/specs/2026-07-22-itunes-2way-sync-writeback-design.md -->
-<!-- version: 0.1.0 -->
+<!-- version: 0.2.0 -->
 <!-- guid: 193a875e-d0ca-4bc5-b34f-6461e03a0edb -->
 <!-- last-edited: 2026-07-22 -->
 
@@ -99,16 +99,27 @@ music/podcasts are structurally excluded from all three ops.
 
 ## 5. Hard problems (what the spec must actually solve)
 
-### 5.1 Matching AO books ↔ existing iTunes audiobook tracks
-Relocate/remove both require a reliable join from an AO book to the exact iTunes track record.
-Candidate keys, in preference order:
-- **Stored persistent ID** — if a book_file already carries the iTunes PID from import, this is
-  exact. **[OPEN: do we persist the source track PID at import time? verify.]**
-- **Current location** — match on the pre-relocate path the track still points at.
-- **Fingerprint** — fall back to `AcoustIDFingerprint` / the reconciliation spec's signals for
-  books whose PID/location drifted. Ties into
-  [`2026-07-19-fingerprint-driven-reconciliation-design.md`](2026-07-19-fingerprint-driven-reconciliation-design.md).
-A book that cannot be matched with confidence must **not** be force-relocated — it lands in
+### 5.1 Matching AO books ↔ existing iTunes audiobook tracks — **per-FILE PID** (RESOLVED)
+iTunes stores one track per audio file; a multi-part book = many tracks, each with its own
+persistent ID. **We persist PID at both levels** (verified 2026-07-22): `Book.ITunesPersistentID`
+(`internal/database/bookcore.go:54`) *and* `BookFile.ITunesPersistentID`
+(`internal/database/bookfilecore.go:38`). The correct join is **per-file**: iterate a book's
+`book_files` and match each file's iTunes track by that file's own PID.
+
+> **⚠️ Bug in the current `rebuild`:** `ComputeITLDiff` (`rebuild.go:107`) matches only on the
+> **book-level** `book.ITunesPersistentID` — one PID per book. For a 14-part book it would
+> relocate one track and mark the other 13 part-tracks as "not in DB → remove". The safe
+> relocate MUST operate at `book_file` granularity, keyed on `BookFile.ITunesPersistentID`.
+> **[VERIFY: were per-file PIDs written *uniquely* per file, or the same book PID copied to all?
+> owner unsure — audit a known multi-file book before P1.]**
+
+Match key order per file:
+1. **`BookFile.ITunesPersistentID`** — exact, primary key.
+2. **Current location** — fallback for a file whose PID is missing/blank.
+3. **Fingerprint** — `AcoustIDFingerprint` / reconciliation-spec signals for drifted files. Ties
+   into [`2026-07-19-fingerprint-driven-reconciliation-design.md`](2026-07-19-fingerprint-driven-reconciliation-design.md).
+
+A file that cannot be matched with confidence must **not** be force-relocated — it lands in
 review (same fail-safe posture as the reconciliation loop).
 
 ### 5.2 Topology changes + playlist integrity
@@ -126,11 +137,11 @@ relocate: relocate a known-bookmarked track on a **sandbox clone**, re-parse, an
 bookmark mhod is byte-identical. **[OPEN: identify the bookmark mhod type; extend `itl-diff` to
 surface it.]**
 
-### 5.4 2-way direction: iTunes → AO
-"2-way" also implies iTunes-side facts flowing **back** into AO where relevant (e.g. play
-counts / last-played informing AO, new user playlists noted). Minimum viable: preserve them in
-the library (achieved by edit-in-place). Fuller sync (ingesting play-state into the DB) is a
-**[OPEN: is read-back into AO in scope for v1, or preserve-only?]**
+### 5.4 2-way direction: iTunes → AO — **preserve-only in v1** (RESOLVED)
+"2-way" also implies iTunes-side facts flowing **back** into AO. **v1 is preserve-only** (owner,
+2026-07-22): edit-in-place already keeps every iTunes-side field in the library for free; that is
+the whole v1 requirement. Ingesting play-state (counts / last-played / bookmarks / new playlists)
+back into the DB is deferred to a later phase (P4), not v1.
 
 ## 6. Phasing
 
@@ -152,8 +163,12 @@ in infra-docs) and `itl-diff` as the acceptance oracle.
 
 - Every write goes through `SafeWriteITL` (backup + full contract + auto-rollback). Never a
   direct `writeITLFile`.
-- **Never touch `books/itunes/**`** — hands-off active library. The writeback target is only
-  `.itunes-writeback/`.
+- **🚫 NEVER WRITE TO THE REAL iTunes LIBRARY (`books/itunes/**`) — hands-off, absolute (owner,
+  2026-07-22).** The writeback target is *only* `.itunes-writeback/`. Reading from
+  `books/itunes/` (e.g. to reseed) is fine; writing to it is never permitted. Recovery from a bad
+  writeback is via ZFS snapshot, which is why bookmark preservation is trusted rather than
+  proven up-front (§5.3) — but that trust applies only because the blast radius is confined to the
+  disposable `.itunes-writeback` copy.
 - Blast-radius: the relocate path must **not** need `ForceContractConfig()` — a bounded relocate
   should pass `bounded-delta` on its own. If it doesn't, that's a signal the change set is
   wrong, not a reason to force.
@@ -161,17 +176,29 @@ in infra-docs) and `itl-diff` as the acceptance oracle.
   Δ0, playlists Δ0 (except intentional ref remaps), and audiobook changes matching the intended
   op set exactly.
 
-## 8. Open decisions (collected)
+## 8. Decisions (owner, 2026-07-22)
 
-1. **§5.1** Do we persist the source iTunes persistent ID on `book_file` at import? (Determines
-   whether matching is exact or fingerprint-fallback.)
-2. **§5.3** Which mhod type carries the audiobook playback bookmark? Extend `itl-diff` to show
-   it before P1.
-3. **§5.4** Is iTunes→AO read-back (play-state into the DB) in v1 scope, or preserve-only?
-4. **Base selection**: seed the first real cycle from the current `.itunes-writeback` (already
-   iTunes-pointed) or re-seed from a fresh copy of the real 32 MB library? The 2 MB prototype
-   must be discarded either way.
-5. **Cadence/trigger**: manual op, or on-change after AO reconciliation settles?
+1. **§5.1 PID matching — RESOLVED: per-FILE PID.** Both levels are persisted;
+   `BookFile.ITunesPersistentID` is the correct join. The current book-level match is a bug for
+   multi-file books. Remaining verify: were per-file PIDs written uniquely per file? (owner
+   unsure — audit a multi-file book in P0).
+2. **§5.3 Bookmark preservation — RESOLVED: trust the primitive.** `UpdateITLLocations` rewrites
+   only location bytes; recovery is via ZFS snapshot. No up-front byte-proof required — *conditional*
+   on writes never leaving the disposable `.itunes-writeback` copy (§7).
+3. **§5.4 Read-back — RESOLVED: preserve-only in v1.** DB ingestion of play-state deferred to P4.
+4. **Base selection — RESOLVED (done 2026-07-22):** `.itunes-writeback` reseeded from the latest
+   real library (`books/itunes/iTunes Library.itl`, 32 MB, 97,782 tracks / 356 playlists; read-only
+   copy). The 2 MB prototype is backed up (`.prototype-2mb-bak-20260722`) and discarded. Future
+   cycles edit this reseeded base in place.
+5. **Cadence/trigger — RESOLVED: both.** Manual op first; auto-trigger after AO reconciliation
+   settles, added behind a flag once the relocate path is proven safe on the sandbox.
+
+### Critical caveat discovered while resolving these
+Running the **existing** `rebuild` against the reseeded full library is **destructive**: it is
+DB-authoritative (`rebuild.go:126`), so it would mark ~85,589 non-audiobook / unmatched tracks for
+**removal** and shatter the 356 playlists. It must **not** be run against a full library. The safe
+edit-in-place relocate (this spec) is the only writeback allowed post-reseed; until it exists, the
+reseeded library is left as-is (iTunes shows the full library).
 
 ## 9. Immediate consequence for the current prod state
 
