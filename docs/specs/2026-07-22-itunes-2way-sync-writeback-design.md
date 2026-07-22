@@ -1,5 +1,5 @@
 <!-- file: docs/specs/2026-07-22-itunes-2way-sync-writeback-design.md -->
-<!-- version: 0.3.0 -->
+<!-- version: 0.4.0 -->
 <!-- guid: 193a875e-d0ca-4bc5-b34f-6461e03a0edb -->
 <!-- last-edited: 2026-07-22 -->
 
@@ -161,10 +161,20 @@ back into the DB is deferred to a later phase (P4), not v1.
   (`dry_run` supported) + `POST /api/v1/itunes/adopt-base` (re-bless reseeded sidecar). Unit
   tested (`relocate_test.go`). **Next: dry-run on prod, then `itl-diff --audit` pre/post oracle
   (expect tracks Δ0, playlists Δ0, only Location changed) before applying.**
-- **P2 — Add-path.** Never-in-iTunes AO books via `AddTracksLE` + playlist insertion.
-- **P3 — Topology + playlist-ref remap.** Remove/merge with playlist integrity (§5.2). Highest
-  risk; most adversarial testing.
-- **P4 — iTunes→AO read-back** (if in scope per §5.4).
+- **P2 — Add-path. ✅ NO WORK (measured 2026-07-22).** The prod relocate dry-run reported
+  `unmatched_files: 0` — every primary book_file already has a matching library track, so there
+  are no never-in-iTunes AO books to add. (The `ITLNewTrack.PersistentID`-honoring add path would
+  be needed if this becomes non-zero later.)
+- **P3 — Merged-track cleanup. ✅ BUILT (2026-07-22).** `ComputeMergedTrackCleanup`
+  (`internal/itunes/cleanup_merged.go`) + `POST /api/v1/itunes/cleanup-merged` (dry_run). Removes
+  stale duplicate audiobook tracks whose PID belongs to a non-primary/merged book_file and not to
+  any primary — the merge-cleanup that never applied while the writeback was broken. Removal
+  auto-cleans orphaned playlist refs (`RemoveTracksByPIDLE` v1.2.0), so no manual remap is needed;
+  bounded-delta (≤5000) + no-new-dangling-refs guard it. Estimated ~4,061 candidates (85,783
+  matched − 81,722 primary). **Destructive → dry-run + count review before apply.** Note: this is
+  the *already-merged* cleanup; reflecting *future* AO merges/reassembly still depends on the
+  upstream reconciliation engine (see reconciliation spec).
+- **P4 — iTunes→AO read-back** (deferred per §5.4 — preserve-only in v1).
 
 Each phase is sandbox-proven before prod, using the existing ZFS-clone sandbox (rebuild scripts
 in infra-docs) and `itl-diff` as the acceptance oracle.
