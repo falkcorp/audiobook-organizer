@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 3.2.0
+// version: 3.3.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-07-22
 
@@ -1299,6 +1299,10 @@ func (s *Server) setupRoutes() {
 				// Adopt-base: re-bless the identity sidecar after reseeding the
 				// writeback slot from a different library (else K13/K14 reject writes).
 				itunesGroup.POST("/adopt-base", s.perm(auth.PermLibraryEditMetadata), s.adoptBaseHandler)
+				// Cleanup-merged (P3): remove stale duplicate audiobook tracks left
+				// by merged/superseded books; auto-cleans orphaned playlist refs.
+				// dry_run=true previews.
+				itunesGroup.POST("/cleanup-merged", s.perm(auth.PermLibraryEditMetadata), s.cleanupMergedHandler)
 
 				// ITL file transfer (6.4)
 				itunesGroup.GET("/library/download", s.perm(auth.PermIntegrationsManage), s.itunesSvcGuard(func(c *gin.Context) { s.itunesSvc.Transfer.HandleDownload(c) }))
