@@ -1,5 +1,5 @@
 <!-- file: docs/specs/2026-07-22-itunes-2way-sync-writeback-design.md -->
-<!-- version: 0.2.0 -->
+<!-- version: 0.3.0 -->
 <!-- guid: 193a875e-d0ca-4bc5-b34f-6461e03a0edb -->
 <!-- last-edited: 2026-07-22 -->
 
@@ -110,8 +110,12 @@ persistent ID. **We persist PID at both levels** (verified 2026-07-22): `Book.IT
 > **book-level** `book.ITunesPersistentID` — one PID per book. For a 14-part book it would
 > relocate one track and mark the other 13 part-tracks as "not in DB → remove". The safe
 > relocate MUST operate at `book_file` granularity, keyed on `BookFile.ITunesPersistentID`.
-> **[VERIFY: were per-file PIDs written *uniquely* per file, or the same book PID copied to all?
-> owner unsure — audit a known multi-file book before P1.]**
+> **VERIFIED (P0, 2026-07-22):** per-file PIDs are UNIQUE — `TrackProvisioner.Provision`
+> (`track_provisioner.go:113`) mints one `GeneratePIDHex()` per `book_file`. Confirmed against
+> prod: a ZFS-snapshot read-only scan of the live Pebble DB found **85,788 unique book_file
+> PIDs**, of which **85,783 (100.0%)** match a track in the reseeded 97,782-track library. Only
+> **5** are DB-only (generated-but-never-written → P2 add-set); the 11,999 library-only tracks
+> are the music/podcasts the relocate correctly never touches. Relocate-by-PID is validated.
 
 Match key order per file:
 1. **`BookFile.ITunesPersistentID`** — exact, primary key.
@@ -145,12 +149,18 @@ back into the DB is deferred to a later phase (P4), not v1.
 
 ## 6. Phasing
 
-- **P0 — Verify primitives (read-only + sandbox).** Confirm PID persistence at import (§5.1);
-  identify + diff the bookmark mhod (§5.3); prove a single-track relocate on a sandbox clone
-  preserves all fields via `itl-diff`. Gate: no field loss on a relocate.
-- **P1 — Relocate-only sync (no topology).** Build the audiobook match + `UpdateITLLocations`
-  batch for books whose only change is location. Ship behind a flag; validate on sandbox with
-  `itl-diff --audit` (expect: tracks Δ0, playlists Δ0, only Location fields changed).
+- **P0 — Verify primitives (read-only + sandbox). ✅ DONE (2026-07-22).** Per-file PID uniqueness
+  + 100% DB↔library overlap measured (see §5.1). Rewrite path verified: `ApplyITLOperations` →
+  `rewriteChunksLEImpl` touches only matched PIDs and regenerates BOTH `0x0D` (WinPath) and the
+  `0x0B` URL sibling from the same new location (`itl_le.go:742-770`); non-track containers
+  (playlists) copied byte-for-byte (`itl_le.go:483-486`). Bookmark preservation trusted per owner
+  (ZFS-snapshot recoverable). Remaining P0-optional: identify the bookmark mhod for `itl-diff`.
+- **P1 — Relocate-only sync (no topology). ✅ BUILT (2026-07-22, unmerged).**
+  `ComputeRelocateOps` (`internal/itunes/relocate.go`) matches per-file PID, emits LocationUpdates
+  only (never removes/adds), applied via `SafeWriteITL`; `POST /api/v1/itunes/relocate`
+  (`dry_run` supported) + `POST /api/v1/itunes/adopt-base` (re-bless reseeded sidecar). Unit
+  tested (`relocate_test.go`). **Next: dry-run on prod, then `itl-diff --audit` pre/post oracle
+  (expect tracks Δ0, playlists Δ0, only Location changed) before applying.**
 - **P2 — Add-path.** Never-in-iTunes AO books via `AddTracksLE` + playlist insertion.
 - **P3 — Topology + playlist-ref remap.** Remove/merge with playlist integrity (§5.2). Highest
   risk; most adversarial testing.
