@@ -1,7 +1,7 @@
 // file: internal/server/itl_rebuild.go
-// version: 3.3.0
+// version: 3.4.0
 // guid: 8f7e6d5c-4b3a-2c1d-0e9f-8a7b6c5d4e3f
-// last-edited: 2026-07-03
+// last-edited: 2026-07-23
 //
 // iTunes library rebuild service: diffs the current DB state
 // against the current ITL file and computes the minimal set of
@@ -88,6 +88,13 @@ func (s *Server) rebuildITLHandler(c *gin.Context) {
 		return
 	}
 
+	// Target-shape guard: refuse to gut a real library (music/podcasts/playlists)
+	// with this DB-authoritative diff unless deliberately overridden.
+	if _, gerr := itunes.GuardRebuildTarget(itlPath, c.Query("allow_full_library") == "true"); gerr != nil {
+		httputil.RespondWithBadRequest(c, gerr.Error())
+		return
+	}
+
 	// Apply.
 	if ops.IsEmpty() {
 		httputil.RespondWithOK(c, itunes.ITLRebuildResult{
@@ -150,6 +157,14 @@ func (s *Server) rebuildITLFullHandler(c *gin.Context) {
 			DryRun  bool                     `json:"dry_run"`
 			Preview itunes.ITLRebuildPreview `json:"preview"`
 		}{DryRun: true, Preview: preview})
+		return
+	}
+
+	// Target-shape guard: /rebuild-full passes ForceContractConfig (bypasses
+	// bounded-delta), so add an explicit fail-closed refusal when the target looks
+	// like the real library — belt-and-suspenders over the K15 shrink gate.
+	if _, gerr := itunes.GuardRebuildTarget(itlPath, c.Query("allow_full_library") == "true"); gerr != nil {
+		httputil.RespondWithBadRequest(c, gerr.Error())
 		return
 	}
 
