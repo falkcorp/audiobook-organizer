@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 3.3.0
+// version: 3.4.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-07-22
+// last-edited: 2026-07-23
 
 package server
 
@@ -1303,6 +1303,12 @@ func (s *Server) setupRoutes() {
 				// by merged/superseded books; auto-cleans orphaned playlist refs.
 				// dry_run=true previews.
 				itunesGroup.POST("/cleanup-merged", s.perm(auth.PermLibraryEditMetadata), s.cleanupMergedHandler)
+				// PID-integrity: read-only census of duplicate book_file iTunes PIDs
+				// (a PID must identify exactly one row) + relocate-correctness probe.
+				itunesGroup.GET("/pid-integrity", s.perm(auth.PermLibraryEditMetadata), s.pidIntegrityHandler)
+				// PID-repair: backfill the duplicates — keep the PID on one canonical
+				// row, clear it from the rest (no row/file deletion). dry_run=true previews.
+				itunesGroup.POST("/pid-repair", s.perm(auth.PermLibraryEditMetadata), s.pidRepairHandler)
 
 				// ITL file transfer (6.4)
 				itunesGroup.GET("/library/download", s.perm(auth.PermIntegrationsManage), s.itunesSvcGuard(func(c *gin.Context) { s.itunesSvc.Transfer.HandleDownload(c) }))

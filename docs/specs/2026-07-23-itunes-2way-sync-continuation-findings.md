@@ -117,6 +117,30 @@ Shattered books themselves do **not** break relocate: each fragment is its own 1
 primary book, matched per-file PID, repointed at its own current path — correct by
 construction. The only correctness risk is the shared-PID anomaly above.
 
+### 1.5b Census — measured on prod (2026-07-23, ZFS-snapshot read-only scan)
+
+Ran `ComputePIDIntegrity` (`cmd/pid-census`) against a snapshot copy of the live Pebble DB:
+
+| Metric | Count |
+|---|---|
+| book_file rows carrying a PID | 93,590 |
+| distinct PIDs | 84,535 |
+| **duplicate PIDs (owned by >1 row)** | **8,987** |
+| — `same_file` (all owners share FilePath → duplicate rows) | 8,762 (97.5%) |
+| — `diff_file` (owners point at different files → copied PID) | 225 (2.5%) |
+| duplicate PIDs present in the ITL | 8,987 (all) |
+| **relocate probe: PIDs on >1 primary, differing paths** | **94** (non-zero → relocate first-wins IS order-dependent) |
+
+Sample confirms the mechanism: the dup owners are an organized AO copy
+(`…/audiobook-organizer/…`) + the deprecated iTunes-tree original
+(`…/books/itunes/…`) sharing one PID — the organizer version-split copy (culprit #1).
+
+**Repair plan (dry-run):** auto-resolves **8,984 / 8,987** (8,762 same_file keep-one +
+222 diff_file keep-by-ITL-location); **3 ambiguous** diff_file groups left UNTOUCHED for
+review (fail-safe); **9,050 redundant PID copies cleared**. Clearing is DB-field-only
+(no row/file deletion) and, because each resolved PID ends with exactly one owner, it also
+eliminates the 94 relocate-order-dependence cases.
+
 ### 1.6 Problem 1 conclusion
 
 - **Retire the current P3 criterion** — it targets live non-primary audio, not duplicates.
