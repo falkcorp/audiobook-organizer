@@ -7,6 +7,171 @@
 
 <!-- scriv-insert-here -->
 
+<a id='changelog-v0.217.8'></a>
+## v0.217.8 — 2026-07-23
+
+### Added
+
+#### Adopt the `todo.d/` fragment system for `TODO.md`
+
+New tasks are now added by dropping a uniquely-named Markdown fragment in
+`todo.d/` instead of editing `TODO.md` directly, so parallel PRs no longer
+collide on the TODO list — the same fragment-per-change model this repo already
+uses for `CHANGELOG.md`.
+
+`scripts/assemble_todo.py` folds fragments in below the
+`<!-- todo-insert-here -->` marker and deletes the ones it consumed;
+`.github/workflows/todo-collect.yml` runs it daily and on `workflow_dispatch`.
+The system is add-only (checking a task off stays a direct edit) and opt-in by
+presence of `todo.d/todo.ini`.
+
+#### Design spec: iTunes 2-way sync writeback (edit-in-place, preserve play-state)
+
+Added `docs/specs/2026-07-22-itunes-2way-sync-writeback-design.md`. An `itl-diff`
+comparison showed the deployed `rebuild-full` writeback **regenerates** the library
+(12,193 tracks / 14 playlists) versus the real library's 97,782 tracks / 356
+playlists — valid but catastrophically lossy: no play counts, ratings, playback
+bookmarks, music/podcasts, or user playlists. The spec replaces regenerate-from-DB
+with **surgical edit-in-place**: base = the current library, relocate only audiobook
+tracks via the existing `UpdateITLLocations` primitive (rewrites only the `0x0D`/`0x0B`
+location mhods, preserving every other field), scope-gated by `IsAudiobook`, so
+music/podcasts and all playlists survive verbatim. Documents the three op classes
+(relocate / add / remove+ref-remap), the hard problems (match, topology + playlist
+integrity, bookmark preservation), a sandbox-proven phasing (P0–P4), and open
+decisions. Design only — no code, no prod actions.
+
+#### iTunes merged-track cleanup (`/cleanup-merged`) — P3 of the 2-way-sync writeback
+
+New `POST /api/v1/itunes/cleanup-merged` removes stale duplicate audiobook tracks
+left in the library by books that were merged/superseded — the merge-cleanup that
+never applied while the writeback was broken. A track is removed only if its PID
+belongs to a **non-primary** book_file and **no primary** book_file also owns it
+(shared PIDs are kept, defensively). Removal goes through `RemoveTracksByPIDLE`,
+which excises the master track and auto-cleans orphaned playlist references in one
+pass; the `no-new-dangling-refs` and bounded-delta (≤5000 removes) guards are the
+safety net. Candidates come only from DB book_files, so music and podcast tracks
+are never touched. `dry_run=true` previews the removal (to-remove / shared-skipped /
+primary / non-primary counts). Implements P3 of
+`docs/specs/2026-07-22-itunes-2way-sync-writeback-design.md`.
+
+#### `/itunes/cleanup-merged` dry-run now returns a sample of the removal set
+
+The merged-track cleanup preview now includes a `sample` array (up to 40 of the
+to-remove tracks) with each track's PID, book id, title, author, file path, and
+`merged_into_book_id`, so an operator can eyeball that the removal set is genuinely
+merged duplicates before applying a large, destructive removal.
+
+#### iTunes location-only relocate writeback (`/relocate`, `/adopt-base`)
+
+New `POST /api/v1/itunes/relocate` repoints each iTunes-linked `book_file`'s track
+at the file's current path, matching per-**file** `ITunesPersistentID` (the correct
+granularity — one iTunes track per file). It emits **only** location patches: never
+removes or adds a track, so music, podcasts, and all playlists are left byte-for-byte
+intact — unlike `/rebuild`, which is DB-authoritative and would remove every track the
+DB doesn't know (≈85,589 against a full library) and shatter playlists. `dry_run=true`
+returns a preview (matched / to-relocate / already-correct / unmatched / unmappable).
+New `POST /api/v1/itunes/adopt-base` re-blesses the `.identity.json` sidecar after the
+writeback slot is reseeded from a different library (else the K13/K14 identity guards
+reject every write).
+
+Measured on production (ZFS-snapshot read-only DB scan): 85,783 of 85,788 unique
+`book_file` PIDs (100.0%) match a track in the reseeded library, so relocate-by-PID
+covers the whole audiobook set. Implements P1 of
+`docs/specs/2026-07-22-itunes-2way-sync-writeback-design.md`. Also refactors the
+book-level `canonicalWinLocation` to share the per-file canonicalizer.
+
+### Changed
+
+#### Adopt changelog fragments (`changelog.d/`) for assembling CHANGELOG.md
+
+`CHANGELOG.md` is now assembled from per-change Markdown fragments under
+`changelog.d/` by the shared release workflow (`scriv`), instead of being edited
+by hand. Contributors add a fragment with `scriv create`; a CI check requires
+one on each PR. This removes changelog merge conflicts across parallel PRs.
+
+#### Doc: iTunes 2-way-sync continuation handoff
+
+Added `docs/plans/2026-07-23-itunes-2way-sync-continuation.md` capturing the state
+after the P1 relocate shipped and the remaining work: redefining the (currently
+unsafe) P3 merged-track removal to provable-duplicates-only, building the reverse
+iTunes→writeback→AO sync for full-time use, and guarding the destructive
+`/rebuild` paths against the now-real library.
+
+#### Document the changelog/TODO fragment system for AI agents
+
+`CLAUDE.md` and `.github/copilot-instructions.md` now instruct AI agents to use
+the `changelog.d/` and `todo.d/` fragment systems instead of editing
+`CHANGELOG.md` or the `TODO.md` inbox directly, preventing parallel-PR
+collisions on those files.
+
+### Fixed
+
+#### iTunes ITL writeback now produces valid, safety-contract-clean track locations
+
+The `rebuild` / `rebuild-full` / export writeback wrote each track's location as
+the raw stored `ITunesPath` — a mix of `file://…%20` URLs and Linux `/mnt/…`
+paths — straight into the ITL `0x0D` Location field, which `SafeWriteITL`'s
+`ITLSafetyContract` rejected wholesale (the class of bad write that corrupted the
+generated library on 2026-07-05). Two fixes:
+
+- Every track location is now derived from the book's **current** `FilePath`,
+  reverse-mapped via the configured iTunes path mappings and canonicalized to a
+  native Windows path (`W:\…`), so the ITL points iTunes at wherever the file
+  currently lives (the `audiobook-organizer` copy for organized books) rather than
+  the frozen original path. Unmappable locations are skipped-with-warn + metric,
+  never written raw. Track **adds** now also write the required `0x0B` LocalURL
+  sibling (the metadata-update path already did; adds did not).
+- `startCacheWarmers` fire-and-forget goroutines gained a `recover()` guard so a
+  warmup fault (e.g. a store read tripping a dependency bug, or a torn DB on a
+  clone) degrades to a cold cache instead of crashing the server at startup.
+
+Validated end-to-end on a full-fidelity ZFS-clone replica of production: a blank
+library populated cleanly (11,819 tracks added, contract accepted) where the old
+code was rejected on every track.
+
+#### book_file iTunes persistent IDs are now unique (forward invariant + backfill)
+
+A book_file's iTunes persistent ID (PID) is the join key to its iTunes track, and
+`TrackProvisioner` mints one uniquely per file. But version-split copy paths
+(`internal/organizer/service.go`, `internal/metafetch/service_apply.go`) did
+`newBF := bf`, carrying the PID onto the new organized primary while the demoted
+original kept it too — leaving two rows with one PID. A prod census found **8,987**
+duplicate PIDs (8,762 same-file duplicate rows, 225 different-file copied PIDs), and
+**94** PIDs sat on more than one primary book_file with differing paths, making the
+relocate writeback's first-wins match order-dependent.
+
+- **Forward invariant:** `CreateBookFile` now enforces PID uniqueness at the write
+  chokepoint — if a PID is already held by another row, ownership TRANSFERS to the new
+  (organized) row via the existing `ClearITunesPID` primitive. Only the
+  `itunes_persistent_id` DB field moves; no audio file is touched.
+- **Census + repair endpoints:** `GET /api/v1/itunes/pid-integrity` (read-only census)
+  and `POST /api/v1/itunes/pid-repair` (dry-run-gated backfill). The repair keeps the PID
+  on one canonical row and clears it from the rest — same-file keeps a live primary,
+  different-file keeps the row matching the live ITL track location; ambiguous cases are
+  left untouched for review. No row or file is ever deleted.
+
+#### `/rebuild` + `/rebuild-full` refuse to gut the real iTunes library
+
+The DB-authoritative writebacks (`ComputeITLDiff` / `RebuildITLFromDB`) were designed
+for a disposable, audiobook-only prototype library. Against the now-reseeded real
+library (~98k tracks, ~86k music/podcasts, 357 playlists) they would mark every
+non-audiobook / unmatched track for removal and shatter the playlists —
+`/rebuild-full` especially, since it passes `ForceContractConfig()` which bypasses the
+bounded-delta guard. Added an explicit, fail-closed target-shape precheck
+(`GuardRebuildTarget`): the apply path refuses when the target library "looks real"
+(non-audiobook track count over 1000, or more than 50 playlists), unless the caller
+deliberately passes `allow_full_library=true`. Dry-runs are unaffected. This is
+belt-and-suspenders over the existing K15 shrink-acknowledgement gate — it fails safe
+even when the operation would not trip a >50% shrink.
+
+### Security
+
+#### Force `brace-expansion` >= 5.0.7 in `web/` via npm override
+
+The frontend pulled in a vulnerable transitive `brace-expansion@5.0.6` (ReDoS). Added a
+`brace-expansion` npm override in `web/package.json`, bumping it to 5.0.7. `npm` reports 0
+vulnerabilities.
+
 <!-- scriv-end-here: releases below predate the changelog.d fragment system. -->
 
 ## [Unreleased]
