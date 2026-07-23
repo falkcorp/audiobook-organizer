@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.13.0 -->
+<!-- version: 10.13.1 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-07-19 -->
+<!-- last-edited: 2026-07-23 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,19 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+<!-- file: todo.d/itunes-2way-sync-writeback.md -->
+<!-- version: 0.1.0 -->
+<!-- guid: 7b1c9e34-2a5d-4f81-9c0e-3d6a1f8b2e07 -->
+<!-- last-edited: 2026-07-22 -->
+
+- [ ] **iTunes 2-way sync writeback (edit-in-place, preserve play-state).** The deployed
+  `rebuild-full` writeback regenerates the library (12,193 tracks / 14 playlists) vs the real
+  97,782 / 356 — valid but lossy (no play counts, ratings, playback bookmarks, music/podcasts,
+  user playlists). Redirect to surgical edit-in-place via `UpdateITLLocations`, scope-gated by
+  `IsAudiobook`, per `docs/specs/2026-07-22-itunes-2way-sync-writeback-design.md` (draft PR #2033).
+  Phased P0–P4; resolve §8 open decisions (PID persistence, bookmark mhod, read-back scope, base
+  selection, cadence) before implementation. Discard the current 2 MB prototype library.
 
 The 2026-H1 TODO history (3,220 lines) is frozen verbatim at
 [`docs/archive/todo-2026-H1.md`](docs/archive/todo-2026-H1.md).
