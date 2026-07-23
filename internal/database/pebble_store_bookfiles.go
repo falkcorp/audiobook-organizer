@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
-// last-edited: 2026-07-07
+// last-edited: 2026-07-23
 
 package database
 
@@ -183,6 +183,36 @@ func (s *PebbleStore) HasLSHIndex(bookFileID string) bool {
 	return len(val) > 0 && val[0] == fingerprint.LSHIndexVersion
 }
 
+// enforceBookFilePIDUniqueness guarantees that at most one book_file row carries
+// a given iTunes persistent ID. If `file` carries a non-empty PID already held by
+// a DIFFERENT row, ownership is TRANSFERRED to `file` by clearing the PID from the
+// prior owner (via the existing ClearITunesPID primitive, which also fixes the
+// prior owner's secondary index). Only the itunes_persistent_id DB field is
+// touched — never an audio file, never the prior row's other data. Called from the
+// CreateBookFile mint path (the only place a new row with a PID is minted without
+// the by-PID collapse that BatchUpsertBookFiles already does). A no-op when the PID
+// is empty or already uniquely owned by this same row.
+func (s *PebbleStore) enforceBookFilePIDUniqueness(file *BookFile) error {
+	if file == nil || file.ITunesPersistentID == "" {
+		return nil
+	}
+	prior, err := s.GetBookFileByPID(file.ITunesPersistentID)
+	if err != nil {
+		return fmt.Errorf("CreateBookFile: PID-uniqueness lookup for %q: %w", file.ITunesPersistentID, err)
+	}
+	if prior == nil || prior.ID == file.ID {
+		return nil // unowned, or already owned by this same row
+	}
+	if _, err := s.ClearITunesPID(file.ITunesPersistentID); err != nil {
+		return fmt.Errorf("CreateBookFile: transfer PID %q from prior owner %s: %w",
+			file.ITunesPersistentID, prior.ID, err)
+	}
+	slog.Info("book_file PID uniqueness: transferred to new row",
+		"pid", file.ITunesPersistentID, "priorOwner", prior.ID, "priorBook", prior.BookID,
+		"newFile", file.ID, "newBook", file.BookID)
+	return nil
+}
+
 // CreateBookFile stores a new BookFile, generating a ULID if the ID is empty.
 // It writes the primary key book_file:<bookID>:<fileID> and secondary indexes
 // for iTunes PID and file path (when non-empty) atomically in a single batch.
@@ -204,6 +234,19 @@ func (s *PebbleStore) CreateBookFile(file *BookFile) error {
 		file.CreatedAt = now
 	}
 	file.UpdatedAt = now
+
+	// PID uniqueness invariant (2026-07-23): a book_file iTunes persistent ID must
+	// identify exactly ONE row. Version-split copies (internal/organizer/service.go,
+	// internal/metafetch/service_apply.go) do `newBF := bf`, carrying the PID onto
+	// the new organized primary while the demoted original keeps it too — producing
+	// the duplicate ("shared_skipped") PIDs the census found. Transfer ownership to
+	// THIS new row by clearing the PID from any prior owner. Only the
+	// itunes_persistent_id DB field moves; no audio file is touched. The new
+	// (organized) row is the one a relocate repoints the ITL track at, so it is the
+	// correct owner. See docs/specs/2026-07-23-itunes-2way-sync-continuation-findings.md.
+	if err := s.enforceBookFilePIDUniqueness(file); err != nil {
+		return err
+	}
 
 	// T020: drop AcoustIDSeg0..6 from the stored value via a copy; the
 	// original struct is preserved for writeBookFileSecondaryIndexes and
