@@ -1,7 +1,7 @@
 // file: cmd/pid-census/main.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8f2b0d61-4a37-4c95-9e12-7d3a6b1c0e58
-// last-edited: 2026-07-23
+// last-edited: 2026-07-24
 //
 // READ-ONLY book_file iTunes-PID integrity census. Point it at a COPY of the
 // production Pebble DB (never the live dir — Pebble opens read-write and wants the
@@ -30,6 +30,7 @@ func main() {
 	itlPath := flag.String("itl", "", "optional path to a copy of the writeback iTunes Library.itl")
 	full := flag.Bool("full", false, "print the full JSON report incl. samples (default: summary only)")
 	repair := flag.Bool("repair", false, "also print the pid-repair PLAN preview (read-only; needs --itl for diff_file)")
+	mergeProv := flag.Bool("merge-provenance", false, "run the cleanup provenance census (P3 exit-gate); requires --itl")
 	mapFrom := flag.String("map-from", "W:", "path-mapping source prefix (Windows drive)")
 	mapTo := flag.String("map-to", "/mnt/bigdata/books", "path-mapping target prefix (local mount)")
 	flag.Parse()
@@ -45,6 +46,48 @@ func main() {
 		os.Exit(1)
 	}
 	defer store.Close()
+
+	// Cleanup provenance census (P3 exit-gate) — reconciles BOTH loser sources:
+	// the AutoMergeJournalEntry journal (production-authoritative) via the
+	// EmbeddingStore sharing this store's raw Pebble handle, plus MergedIntoBookID
+	// discovered per-owner inside the census.
+	if *mergeProv {
+		if *itlPath == "" {
+			fmt.Fprintln(os.Stderr, "error: --merge-provenance requires --itl (a copy of the AO writeback .itl)")
+			os.Exit(2)
+		}
+		emb := database.NewEmbeddingStore(store.DB())
+		entries, jerr := emb.ListAutoMergeJournalEntries(0)
+		if jerr != nil {
+			fmt.Fprintf(os.Stderr, "list automerge journal: %v\n", jerr)
+			os.Exit(1)
+		}
+		loserIDs := make([]string, 0, len(entries))
+		for _, e := range entries {
+			loserIDs = append(loserIDs, e.LoserID)
+		}
+		c, cerr := itunes.ComputeMergeOrphanCensus(store, *itlPath, loserIDs)
+		if cerr != nil {
+			fmt.Fprintf(os.Stderr, "merge-orphan census: %v\n", cerr)
+			os.Exit(1)
+		}
+		fmt.Printf("=== CLEANUP PROVENANCE CENSUS (P3 exit-gate) ===\n")
+		fmt.Printf("automerge_journal_entries=%d journal_loser_ids=%d\n", len(entries), c.JournalLoserIDs)
+		fmt.Printf("tracks_in_itl=%d  healthy=%d  stale_owner=%d  no_live_owner=%d\n",
+			c.TracksInITL, c.Healthy, c.StaleOwner, c.NoLiveOwner)
+		fmt.Printf("merged_into_losers=%d distinct_loser_set(seen)=%d residual_duplicate_pids=%d\n",
+			c.MergedIntoLosers, c.DistinctLoserSet, c.ResidualDuplicatePIDs)
+		fmt.Printf(">>> PROVABLE_MERGE_ORPHANS=%d  (sha_gated_removable=%d)\n",
+			c.ProvableMergeOrphans, c.SHAGatedRemovable)
+		fmt.Printf("    NOTE: LOWER BOUND. no_live_owner tracks are unattributable (user non-AO imports\n")
+		fmt.Printf("    OR merge orphans whose PID->loser link was severed). ~0 != 'no orphans exist'.\n")
+		if *full {
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			_ = enc.Encode(c)
+		}
+		return
+	}
 
 	report, err := itunes.ComputePIDIntegrity(store, *itlPath)
 	if err != nil {

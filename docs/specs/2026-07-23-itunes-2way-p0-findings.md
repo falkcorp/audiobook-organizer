@@ -1,7 +1,7 @@
 <!-- file: docs/specs/2026-07-23-itunes-2way-p0-findings.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 2c9e5a71-8b04-4d36-9f18-7a3c1e6b0d52 -->
-<!-- last-edited: 2026-07-23 -->
+<!-- last-edited: 2026-07-24 -->
 
 # iTunes 2-Way-Sync — P0 Findings (read-only)
 
@@ -55,13 +55,66 @@ fail-closed §2.4 assertions). Wired into `Config.Validate()` and viper load. **
 `itunes.libraries` is populated** — empty `Libraries` → legacy behavior byte-for-byte.
 Unit-tested (Resolve for both `import_source` values; all four assertions; back-compat).
 
+## F4 — Cleanup provenance census: P3 is MEASURE-AND-STOP (provable removable set = 0)
+
+**Measured 2026-07-24** against a consistent read-only copy of prod: ZFS snapshot of
+`rpool/ROOT/ubuntu_0nm86n/var/lib` → the Pebble dir copied out of `.zfs/snapshot/` (13G,
+1487 files, crash-consistent) + a copy of the live AO writeback `.itl`
+(`.itunes-writeback/iTunes Library.itl`, 32,103,033 bytes). Ran
+`pid-census --merge-provenance` (new mode, `internal/itunes/pid_integrity.go`
+`ComputeMergeOrphanCensus`). All artifacts + the snapshot were destroyed afterward; the
+`books@itunes-ao-fallback-2026-07-23` snapshot is intact.
+
+```
+tracks_in_itl        = 97999
+  healthy            = 77211   (owned by a live PRIMARY book_file)
+  stale_owner        =  7324   (owned by a soft-deleted / non-primary book_file)
+  no_live_owner      = 13464   (NO book_file carries the PID — unattributable)
+automerge_journal_entries = 0      ← the loser journal is EMPTY on prod
+merged_into_losers        = 1
+residual_duplicate_pids   = 3      (matches the 8,987→3 pid-repair; PIDs are unique)
+>>> PROVABLE_MERGE_ORPHANS = 1   (sha_gated_removable = 0)
+```
+
+**Decision: P3 retires the unsafe `cleanup_merged.go` handler as a guarded no-op and
+builds NO removal machinery.** The provable, SHA-gated, safely-removable orphan set is
+**0** (1 candidate — "Stay of Execution", via `MergedIntoBookID` — with no live-primary
+FileHash match, so not even SHA-confirmed). This is the measure-and-stop branch §6.5
+names as the default expectation.
+
+**Why the number is a floor, and why that STRENGTHENS the stop (advisor fork, confirmed by
+code):** there is no durable, mutation-immune record of "what PIDs a loser owned at merge
+time." `merge.Service.MergeBooks` (`internal/merge/service.go:228`) **reassigns** the
+loser's `ext_id:itunes:*` mappings to the winner and soft-deletes the loser, but writes
+**neither** the `AutoMergeJournalEntry` journal **nor** `MergedIntoBookID`. The journal is
+written ONLY by `dedup/auto_resolve.go` (Tier-1 auto-resolve → 0 entries on prod);
+`MergedIntoBookID` ONLY by `FlagMetadataHashDuplicate` (metafetch dedup +
+`pebble_store.go:4030` → 1 on prod). And the PID-uniqueness repair already cleared
+duplicate `book_file.ITunesPersistentID` off non-canonical rows. So a track that WAS a
+loser's, whose PID→loser link was severed, lands in `no_live_owner` (unattributable), not
+in the provable set. **`~0` here means "the provenance link is gone," not "no orphans
+exist" — and you cannot build a provenance-anchored bulk remover from provenance that
+isn't durably recorded.**
+
+**The 7,324 + 13,464 "leftover-looking" tracks are NOT safely removable.** Samples confirm
+`stale_owner` is dominated by legitimate version-group alternates
+("Warbreaker … Part 1 of 2 (Dramatized Adaptation)", "Legion – Skin Deep") — the editions
+§6.5 forbids removing (reject `version_group_id` basis). `no_live_owner` is unattributable
+(user's direct non-audiobook imports OR severed orphans) and hands-off. Removing from
+either bucket violates the spec's fail-closed rules.
+
+**Two follow-ons (NOT this PR, NOT blocking the stop):**
+1. **No durable merge-provenance trail on prod.** If a future release wants provenance-
+   anchored cleanup, it must FIRST make `merge.Service.MergeBooks` record losers (write the
+   journal at merge time), then re-run this census. Until then, cleanup is un-buildable
+   safely. Also a latent gap for unmerge/audit recovery.
+2. **`no_live_owner` composition** (13,464 = 13.7% of tracks): classify by audiobook genre
+   to separate the user's non-AO music/podcasts (expected, hands-off) from severed
+   audiobook orphans. Does not change the P3 decision (both are un-removable); informs any
+   future re-attribution effort.
+
 ## Remaining P0 (not in this PR)
 
-- **Cleanup provenance census** — enumerate the union of `MergedIntoBookID` +
-  `AutoMergeJournalEntry.LoserID` (+ combine losers), resolve each loser's surviving
-  primary, count the PROVABLE orphan set (loser PID in ITL, owned by no live book_file,
-  survivor PID present, not a static-playlist member). Decides whether P3 builds or is a
-  measure-and-stop no-op.
 - **Cross-type PID collisions** (audiobook vs non-audiobook sharing a PID) — the
   disjointness-assertion backstop. Confirm PID-on-multiple-primaries stays 0 (post pid-repair).
 - **Bookmark / field-preservation byte-proof** on a ZFS clone — run a relocate AND a
