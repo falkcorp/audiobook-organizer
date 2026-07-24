@@ -6,9 +6,63 @@
 package itunes
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
+
+// TestRefreshLibraryIdentity_RealLibrary is an env-gated empirical smoke test
+// against a COPY of a real .itl (ITL_PRESERVE_PROOF_PATH, same fixture the byte-proof
+// uses). It adopts the library (bootstrap sidecar), refreshes it (must be a no-op:
+// same library → drift 0, PID pinned, sample re-derived identically), and partitions
+// the track count. Skips in CI. Copies the input to a temp dir so it never writes a
+// sidecar next to the caller's file.
+func TestRefreshLibraryIdentity_RealLibrary(t *testing.T) {
+	src := os.Getenv("ITL_PRESERVE_PROOF_PATH")
+	if src == "" {
+		t.Skip("set ITL_PRESERVE_PROOF_PATH to a COPY of a real .itl to run the real-library smoke test")
+	}
+	raw, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatalf("read %s: %v", src, err)
+	}
+	work := filepath.Join(t.TempDir(), "iTunes Library.itl")
+	if err := os.WriteFile(work, raw, 0o644); err != nil {
+		t.Fatalf("write work copy: %v", err)
+	}
+
+	adopted, err := AdoptLibraryIdentity(work)
+	if err != nil {
+		t.Fatalf("AdoptLibraryIdentity: %v", err)
+	}
+	t.Logf("adopted: LibraryPID=%s trackCount=%d playlistCount=%d sampleSize=%d",
+		adopted.LibraryPID, adopted.TrackCount, adopted.PlaylistCount, len(adopted.PIDSample))
+
+	fresh, res, err := RefreshLibraryIdentity(work, RefreshOptions{})
+	if err != nil {
+		t.Fatalf("RefreshLibraryIdentity on unchanged real library: %v", err)
+	}
+	if res.DriftPct != 0 {
+		t.Errorf("drift on unchanged library = %d%%, want 0", res.DriftPct)
+	}
+	if fresh.LibraryPID != adopted.LibraryPID {
+		t.Errorf("LibraryPID not pinned: %s -> %s", adopted.LibraryPID, fresh.LibraryPID)
+	}
+	if fresh.TrackCount != adopted.TrackCount || len(fresh.PIDSample) != len(adopted.PIDSample) {
+		t.Errorf("refresh changed counts on unchanged library: tracks %d->%d, sample %d->%d",
+			adopted.TrackCount, fresh.TrackCount, len(adopted.PIDSample), len(fresh.PIDSample))
+	}
+
+	ab, nonAB, err := PartitionedTrackCount(work)
+	if err != nil {
+		t.Fatalf("PartitionedTrackCount: %v", err)
+	}
+	if ab+nonAB != fresh.TrackCount {
+		t.Errorf("partition %d+%d != trackCount %d", ab, nonAB, fresh.TrackCount)
+	}
+	t.Logf("REAL-LIBRARY SMOKE: refresh no-op (drift 0, PID pinned), partition audiobook=%d non-audiobook=%d (total %d)",
+		ab, nonAB, ab+nonAB)
+}
 
 // writeRefreshFixtureITL writes a small encrypted .itl with the given LibraryPID and
 // returns its path + its true identity (for assertions).
