@@ -32,6 +32,8 @@ func main() {
 	repair := flag.Bool("repair", false, "also print the pid-repair PLAN preview (read-only; needs --itl for diff_file)")
 	mergeProv := flag.Bool("merge-provenance", false, "run the cleanup provenance census (P3 exit-gate); requires --itl")
 	crossType := flag.Bool("cross-type", false, "run the cross-type PID-collision census (relocate disjointness backstop); requires --itl")
+	syncDryRun := flag.Bool("sync-dry-run", false, "P2 relocate sync cycle DRY-RUN (plan + in-memory verify, NO write); requires --itl")
+	syncRoot := flag.String("sync-writeback-root", "audiobook-organizer/.itunes-writeback/", "F7 AllowedWritebackRoot for the AO library's own media root")
 	mapFrom := flag.String("map-from", "W:", "path-mapping source prefix (Windows drive)")
 	mapTo := flag.String("map-to", "/mnt/bigdata/books", "path-mapping target prefix (local mount)")
 	flag.Parse()
@@ -47,6 +49,46 @@ func main() {
 		os.Exit(1)
 	}
 	defer store.Close()
+
+	// P2 relocate sync cycle — DRY-RUN (plan + in-memory oracle verify; NO write).
+	if *syncDryRun {
+		if *itlPath == "" {
+			fmt.Fprintln(os.Stderr, "error: --sync-dry-run requires --itl (a copy of the AO writeback .itl)")
+			os.Exit(2)
+		}
+		mappings := []itunes.PathMapping{{From: *mapFrom, To: *mapTo}}
+		r, serr := itunes.RunRelocateSyncCycle(store, itunes.SyncCycleConfig{
+			ITLPath:              *itlPath,
+			AllowedWritebackRoot: *syncRoot,
+			Mappings:             mappings,
+			Apply:                false, // DRY-RUN only
+		})
+		if serr != nil {
+			fmt.Fprintf(os.Stderr, "sync dry-run: %v\n", serr)
+			os.Exit(1)
+		}
+		fmt.Printf("=== P2 RELOCATE SYNC CYCLE — DRY-RUN (no write) ===\n")
+		fmt.Printf("planned=%d already_correct=%d unmatched=%d unmappable=%d\n",
+			r.Planned, r.AlreadyCorrect, r.Unmatched, r.Unmappable)
+		fmt.Printf(">>> ORACLE_OK=%v relocated_verified=%d violations=%d\n",
+			r.OracleOK, r.RelocatedVerified, len(r.OracleViolations))
+		if len(r.OracleViolations) > 0 {
+			for i, v := range r.OracleViolations {
+				if i >= 5 {
+					fmt.Printf("    ... +%d more\n", len(r.OracleViolations)-5)
+					break
+				}
+				fmt.Printf("    VIOLATION pid=%s kind=%s %s\n", v.PID, v.Kind, v.Detail)
+			}
+		}
+		fmt.Printf("    (DRY-RUN: nothing written. Review the plan + sample new locations before Apply=true.)\n")
+		if *full {
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			_ = enc.Encode(r)
+		}
+		return
+	}
 
 	// Cross-type PID-collision census (relocate disjointness backstop).
 	if *crossType {
