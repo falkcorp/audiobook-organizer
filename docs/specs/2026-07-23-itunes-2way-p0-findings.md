@@ -185,24 +185,67 @@ The audiobook **bookmark/resume position lives in the mith header** alongside pl
 rating, and dates — all covered by the header-identity assertion. Untouched tracks are whole-
 block byte-identical; removed tracks are absent and no other track changed.
 
-**Decision: the preservation claim is PROVEN, not assumed.** Relocate changes ONLY the
-location pair; remove changes ONLY the targeted tracks (+ their playlist refs, out of scope
-here). No field of any other track — parsed or unparsed, header or atom — is ever mutated.
-INV-F2's "no sync op mutates unrelated track state" holds for both write paths. The test is
-committed and re-runnable (env-gated; skips in CI — a synthetic fixture would not exercise
-real bookmark/comment/advisory atoms).
+**Decision: the preservation claim is PROVEN across both layers that can touch track
+records.** Two env-gated tests, run against the real library:
+- `TestITLPreservationByteProof` — the **mutation layer** (`UpdateMetadataLE` +
+  `RemoveTracksByPIDLE`): relocate changes ONLY the location pair, remove changes ONLY the
+  targeted tracks; 97,669 untouched tracks byte-identical.
+- `TestITLPreservationThroughEncode` — the **encode layer** (`WriteITLBytes` →
+  `writeITLFile`: CRIT-3 header regeneration + recompress + re-encrypt): after a real
+  relocate encoded through the full production encode path, 97,699 untouched tracks are still
+  byte-identical and relocated tracks changed location-only. This proves header regeneration
+  does not touch any track record.
 
-## P0 status — all measurements DONE
+Together these are the only two layers that transform bytes; the third SafeWriteITL layer (the
+safety **contract**) is a read-only gate that never rewrites track records — and is separately
+covered by F7. No field of any other track — parsed or unparsed, header or atom, including the
+mith-header resume bookmark — is ever mutated. INV-F2 holds. Tests skip in CI (a synthetic
+fixture would not exercise real bookmark/comment/advisory atoms).
+
+## F7 — 🚧 P2 BLOCKER: the location-form guard rejects the entire live AO library
+
+**Discovered 2026-07-24** while running the preservation proof through the full contract path
+(`UpdateITLLocations → SafeWriteITL`, `TestITLRelocateContractStatus`). The write was
+**REJECTED** by the `location-form` guard (`itl_safety_contract.go:562`) on **82,976 tracks**
+whose 0x0B URL contains `.itunes-writeback/`, e.g.
+`file://localhost/W:/audiobook-organizer/.itunes-writeback/iTunes%20Media/Audiobooks/…`.
+
+**These are NOT leaks — they are the AO library's real media paths.** The AO writeback library
+physically lives at `W:\audiobook-organizer\.itunes-writeback\iTunes Library.itl`, so iTunes'
+media folder is `…\.itunes-writeback\iTunes Media\`, and every track legitimately points
+there. The guard was written to catch a staging-dir path **leaking into the hands-off Original
+library** (the "damaged-4" incident — `location_pair.go:24`, iTunes marks such a library
+"(Damaged)"). But in the locked **hard-cutover** design (iTunes pointed AT the AO library,
+whose own root is under `.itunes-writeback/`), that substring is unavoidable and correct.
+
+**Consequence: the relocate op (P2's core write) cannot write the live library at all.** Every
+`SafeWriteITL` call fails location-form; `Force` does not override it (it only relaxes the
+bounded-delta guard, `itl_safe_write.go:138`). This is a hard P2 blocker, not a preservation
+issue.
+
+**Reconciliation options for P2 (owner decision needed):**
+1. **Scope the staging-marker check to the write TARGET.** Reject `.itunes-writeback/` only
+   when writing the **Original** library (`LibrarySet.PointedAt`/`ImportSource`), or only when
+   the path's `.itunes-writeback/` root differs from the AO library's own root. When writing
+   the AO library whose root legitimately contains it, the check must not fire. (Preferred —
+   the 4-state config from P0 already carries the mode facts to gate this.)
+2. Move the AO library + media out from under a `.itunes-writeback/`-named directory (physical
+   relocation of ~all media — invasive, and re-triggers iTunes' own relocation bookkeeping).
+
+Until reconciled, P2 relocate is **blocked**. See [[project_itunes_writeback_pathnorm_bug]].
+
+## P0 status — measurements DONE; one P2 blocker surfaced
 
 F1 (K13 identity), F2 (rebuild callers), F3 (ProtectedPaths), the config scaffold, F4
 (cleanup provenance → P3 measure-and-stop), F5 (cross-type disjointness → holds), and F6
-(preservation byte-proof → holds) are complete. **No P0 blocker remains for P1/P2.**
+(preservation → proven, both mutation + encode layers) are complete. **No P0 blocker remains;
+F7 is a P2 write-path blocker uncovered by the P0 verification.**
 
-Next (P1/P2, separate PRs):
+Next:
+- **P2 pre-req — reconcile F7** (location-form vs the AO library's legitimate
+  `.itunes-writeback/` media root). Owner decision on option 1 vs 2.
 - **P1 — partitioned identity count-refresh.** Re-derive the K13 PID sample + K14 count from
   the freshly-read library each cycle (F1); audiobook count stays plan-authoritative.
 - **P2 — relocate-only sync-cycle op + itl-diff oracle (MVP end).** Wrap the proven-safe
-  relocate (F6) in the decoupled write cycle: own `SafeWriteITL` + `.bak` + tight
-  bounded-delta + pre-rename SHA re-verify + PID-indexed itl-diff oracle with auto-rollback.
-  Cross-type disjointness (F5) and field preservation (F6) are the two safety pre-conditions
-  and both now hold.
+  relocate (F6) in the decoupled write cycle. Disjointness (F5) and preservation (F6) hold;
+  F7 must be reconciled first.
