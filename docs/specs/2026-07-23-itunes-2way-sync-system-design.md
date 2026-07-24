@@ -1,7 +1,14 @@
 <!-- file: docs/specs/2026-07-23-itunes-2way-sync-system-design.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 7f3a9c2e-8b41-4d6a-9e05-2c1f4a8b7d63 -->
 <!-- last-edited: 2026-07-23 -->
+
+<!-- v1.1.0: §10a records the owner decisions RESOLVED 2026-07-23 (SHA-gated
+     auto-merge carve-out; playlist-member refuse+review with measured 292 smart /
+     59 static split + binary-parser caveat; V1-respect iTunes deletions; fallback
+     accepted + ZFS snapshot baseline taken). Where §4/§8.1 describe the earlier
+     open framing, §10a supersedes them. -->
+
 
 # iTunes 2-Way Sync — Definitive Steady-State System Design + Phased Plan
 
@@ -559,15 +566,20 @@ The **minimal-viable steady-state** (resolves the safety judge's "define MVP bef
 
 ---
 
-## 10. Open risks + decisions still needed from the owner
+## 10. Decisions + open risks
 
-1. **§8.1 carve-out (the one hard product decision).** True dedup-*merge* on import is architecturally disallowed today (review-first-always + `AutoResolveEnabled=false`). P4 ships flag-not-merge; full auto-absorb of AO-self-reimported audiobooks into their matched primary needs an **explicit owner decision** re-affirming or carving out §8.1 for this specific case. Until then, genuinely-new-in-iTunes audiobooks queue for human review rather than auto-ingesting. **Needs: owner sign-off on a narrow AO-self-reimport auto-merge carve-out, OR acceptance that new-in-iTunes audiobooks are review-gated.**
-2. **K13 PID-sample question (P0 hard blocker).** The "verify LibraryPID, never re-bless" fallback guarantee assumes `guardLibraryIdentity` compares LibraryPID only. **Must be verified in P0**, not assumed. If K13 also samples PIDs, the drift-vs-reseed boundary needs precise redefinition before P1.
-3. **Cleanup provenance source (P0 measure).** The only in-tree `MergedIntoBookID` setter is a Pebble stub; production losers live in the `AutoMergeJournalEntry` journal. P0 must confirm the authoritative loser source(s) and whether the provable-orphan set is non-trivial at all — P3 may correctly be a measure-and-stop no-op.
-4. **Bookmark preservation is currently incidental.** No binary-LE parser field models it; survival is a copy-through accident. The P0 clone proof + P6/Phase-6 byte-identity assertion convert it to a checked invariant — **no preservation claim is made until P0 passes.**
-5. **Playlist membership shrink on merge-loser removal.** Resolved fail-closed for v1 (refuse to remove playlist-member PIDs; route to review). Membership-*transfer* onto the surviving primary is deferred future work — **owner should confirm** that review-gating (rather than transfer) is acceptable for v1.
-6. **iTunes-side audiobook deletion (steady-state policy).** When a PID-known audiobook track disappears from the AO `.itl` (the owner deleted it in iTunes), v1 **respects the deletion** (does not auto-re-add) and surfaces it in `sync-status` as drift for human review. Relocate simply won't match a vanished PID (it gates on `UpdatedPersistentIDs`). Re-adding would fight the user. **Owner should confirm** respect-the-deletion is the desired default vs AO-authoritative re-add.
-7. **Fallback runtime-state loss is real and one-directional.** Repointing to the frozen Original resets post-cutover play-state/ratings/bookmarks/new-non-audiobook-content to the cutover snapshot (§4.4). It is never *lost* (AO `.itl`/`.bak`/ZFS retain it) but it is not *merged back*. **Owner-acknowledged as an accepted property of a fallback (not a mirror).** Optional future mitigation: a periodic AO play-state export so fallback is not a full runtime reset.
+### 10a. Owner decisions — RESOLVED 2026-07-23
+
+1. **§8.1 auto-merge carve-out — RESOLVED: SHA-gated auto-merge, else review.** For a `pidUnknown` new-in-iTunes audiobook that matches an existing AO book, **auto-merge ONLY when the file content hash (`FileHash`/SHA) is byte-identical** on both sides — i.e. 100% proof it is the same file (this is AO's own writeback output re-imported, or a literal duplicate). This aligns with the engine's existing exact-`FileHash` auto-resolve (the only auto-merge already permitted). **Any non-exact match (fingerprint-similar but not byte-identical) is review-gated** — create a pending `dedup_candidate`, do NOT auto-create, do NOT bind the PID. This is the narrow carve-out to `AutoResolveEnabled=false`: exact-hash only. So P4's fingerprint branch = flag-not-merge; the SHA branch = auto-merge. Removes the "one hard product blocker" — the carve-out is now defined and provably safe (byte-identity is not a heuristic).
+5. **Playlist-member removal — RESOLVED: fail-closed refuse + review (option 1).** Measured on the live AO library (`.xml` export, 2026-07-23): **351 playlists = 292 smart / 59 static.** Smart playlists store only rules (`SmartCriteria`) and self-recompute → **immune to track removal, preserved automatically** (already mirrored to `UserPlaylist`). Only the **59 static** playlists (explicit `mtph` track lists — incl. real per-audiobook chapter lists, the owner's custom lists, system playlists, and some junk like `Playlist 2`/79,818 items) are the removal hazard. Cleanup **refuses to remove any track that is a live member of a static playlist; routes to review.** Membership-*transfer* is deferred. Cost is near-zero in practice (the P3 removal set may be ~0). **⚠️ Design correction (measured): the binary LE `.itl` parser does NOT classify smart vs static** (it reported all 357 as static; only the `.xml` knew the 292/59 split) — so the static-membership safety check MUST derive membership from the `.xml` export (`AO.XMLPath`) or a fixed parser, never the binary `IsSmart`. (Optional separate cleanup: purge the junk static playlists — owner's call, out of the sync loop.)
+6. **iTunes-side audiobook deletion — RESOLVED: V1 respects it, V2 smarter.** When a `pidKnown` audiobook track is deleted in iTunes (its PID vanishes from the AO `.itl`), **v1 respects the deletion** (does not auto-re-add; relocate won't match a vanished PID) and surfaces it in `sync-status` as drift. A smarter reconciliation (AO-set-authoritative re-add with human awareness) is **deferred to V2.**
+7. **Fallback runtime-state loss — RESOLVED: accepted (repoint, not mirror) + snapshot taken.** Owner accepts that repointing to the frozen baseline resets post-cutover runtime state to the snapshot (recoverable from AO `.itl`/`.bak`/ZFS, not merged back). **Fallback baseline captured 2026-07-23: ZFS snapshot `bigdata/BD/bigdata/books@itunes-ao-fallback-2026-07-23`** of the *current working AO library* (iTunes is already pointed at AO and healthy) — so the fallback is a snapshot of the known-good AO state, not (only) the older Original tree. No periodic play-state export in v1.
+
+### 10b. P0 verification tasks (facts to measure, not owner choices)
+
+2. **K13 PID-sample question (P0 hard blocker).** Verify whether `guardLibraryIdentity` compares `LibraryPID` only or also samples track PIDs. The "verify identity, never re-bless" fallback guarantee depends on LibraryPID-only. Must be read from code in P0 before P1 arming.
+3. **Cleanup provenance source + set size (P0 measure).** The only in-tree `MergedIntoBookID` setter is a Pebble stub; production losers live in `AutoMergeJournalEntry`. P0 enumerates the union and measures the provable-orphan set — P3 may correctly be a measure-and-stop no-op.
+4. **Bookmark preservation is currently incidental (P0 byte-proof).** No binary-LE field models it; survival is copy-through. P0's ZFS-clone byte-identity proof (relocate AND remove paths) converts it to a checked invariant — no preservation claim until it passes.
 
 ---
 
