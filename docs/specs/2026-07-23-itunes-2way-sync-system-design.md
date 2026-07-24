@@ -1,8 +1,13 @@
 <!-- file: docs/specs/2026-07-23-itunes-2way-sync-system-design.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 7f3a9c2e-8b41-4d6a-9e05-2c1f4a8b7d63 -->
-<!-- last-edited: 2026-07-23 -->
+<!-- last-edited: 2026-07-24 -->
 
+<!-- v1.2.0: §6.5 P0 exit-gate RESOLVED 2026-07-24 — census ran (provable orphans=1,
+     SHA-removable=0) → P3 is measure-and-stop, no removal machinery. F4 also
+     disproved the "journal is the authoritative loser record" premise (journal
+     empty on prod; merge path records losers in neither source). See
+     2026-07-23-itunes-2way-p0-findings.md §F4. -->
 <!-- v1.1.0: §10a records the owner decisions RESOLVED 2026-07-23 (SHA-gated
      auto-merge carve-out; playlist-member refuse+review with measured 292 smart /
      59 static split + binary-parser caveat; V1-respect iTunes deletions; fallback
@@ -427,7 +432,9 @@ For each loser L (audiobook, soft-deleted):
 - **Fail-closed everywhere:** if the DB cannot be fully enumerated (including soft-deleted), or the survivor's track is not confirmed present, remove nothing.
 - **P0 MEASURE-FIRST + HARD EXIT-GATE (resolves the safety judge's "measure-and-stop as default" must-fix):** the size of the provable-orphan set is unknown and may be ~0 (the writeback batcher was mostly functioning). Ship the **dry-run census first**. If the set is ~0, P3 **retires the old unsafe handler as a guarded no-op and does NOT build removal machinery.** Building the removal path is *conditional* on the census showing a non-trivial, provable set. The measure-and-stop branch is the default expectation.
 
-**Why reconcile both loser sources:** the only in-tree `MergedIntoBookID` setter is `FlagMetadataHashDuplicate` (`pebble_store.go:2811`), explicitly a *PebbleStore stub* ("metadata dedup is only performed by SQLiteStore in production"). The production merge path records losers in the `AutoMergeJournalEntry{WinnerID, LoserID}` journal. A criterion keyed solely on `MergedIntoBookID` would miss the real orphan set. P0 must verify which source(s) actually carry the production losers and enumerate their union.
+  **✅ RESOLVED 2026-07-24 — the census ran; the exit-gate says MEASURE-AND-STOP.** `pid-census --merge-provenance` on a consistent read-only prod copy (ZFS-snapshot Pebble + live AO `.itl`, 97,999 tracks): **provable merge orphans = 1, SHA-gated removable = 0.** P3 **retires `cleanup_merged.go` as a guarded no-op and builds NO removal machinery.** See `2026-07-23-itunes-2way-p0-findings.md` §F4. The count is a **floor**: prod carries no durable merge-provenance trail — `merge.Service.MergeBooks` writes neither the journal nor `MergedIntoBookID` (it reassigns external-IDs + soft-deletes), the journal is empty, and pid-repair cleared duplicate book_file PIDs — so severed-link orphans land in the unattributable `no_live_owner` bucket (13,464), which the fail-closed rules forbid touching anyway. A future provenance-anchored cleanup must FIRST make the merge path record losers durably, then re-measure.
+
+**Why reconcile both loser sources:** the only in-tree `MergedIntoBookID` setter is `FlagMetadataHashDuplicate` (`pebble_store.go:2811`), explicitly a *PebbleStore stub* ("metadata dedup is only performed by SQLiteStore in production"). The production merge path was *assumed* to record losers in the `AutoMergeJournalEntry{WinnerID, LoserID}` journal — **but F4 disproved this: the journal is written only by `dedup/auto_resolve.go` (0 entries on prod), and `merge.Service.MergeBooks` records losers in NEITHER source.** A criterion keyed on either (or both) misses the real loser population, which survives only as `MarkedForDeletion` soft-deletes indistinguishable from legitimate version alternates. This is precisely why the provable set is a floor and bulk removal is un-buildable without new provenance recording.
 
 ---
 

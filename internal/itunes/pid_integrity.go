@@ -1,7 +1,7 @@
 // file: internal/itunes/pid_integrity.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e2f7a1c4-6b90-4d38-8a5e-1c3f9d2b7e60
-// last-edited: 2026-07-23
+// last-edited: 2026-07-24
 //
 // READ-ONLY book_file iTunes-PID integrity census. A PID is minted unique per
 // book_file (TrackProvisioner.Provision → GeneratePIDHex → crypto/rand), so the
@@ -27,7 +27,11 @@ package itunes
 
 import (
 	"log/slog"
+	"runtime"
 	"strings"
+	"sync"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
@@ -190,4 +194,285 @@ func ComputePIDIntegrity(store PIDIntegrityStore, itlPath string) (*PIDIntegrity
 		"dupInITL", report.DupInITL, "filesToClear", report.FilesToClear,
 		"pidsOnMultiplePrimariesDiffPath", report.PIDsOnMultiplePrimariesDiffPath)
 	return report, nil
+}
+
+// -----------------------------------------------------------------------------
+// Cleanup provenance census — the P3 build/no-op exit-gate (spec §6.5, P0).
+// -----------------------------------------------------------------------------
+
+// OrphanBucket labels how one AO-.itl track relates to the live library.
+type OrphanBucket string
+
+const (
+	// BucketHealthy: the track's PID is owned by a live PRIMARY book_file. Fine.
+	BucketHealthy OrphanBucket = "healthy"
+	// BucketStaleOwner: owned by a book_file whose book is soft-deleted or
+	// non-primary — a version/merge leftover, but only an orphan if provenance
+	// attributes it to a merge loser.
+	BucketStaleOwner OrphanBucket = "stale_owner"
+	// BucketNoLiveOwner: NO live book_file carries the PID. Unattributable — this
+	// is EITHER a user's directly-imported non-audiobook track (hands-off) OR a
+	// merge orphan whose book_file PID was cleared by the PID-uniqueness repair.
+	// Never bulk-removable: we cannot prove it is ours.
+	BucketNoLiveOwner OrphanBucket = "no_live_owner"
+)
+
+// OrphanSample is one attributed AO-.itl track, kept for the JSON detail view.
+type OrphanSample struct {
+	PID          string       `json:"pid"`
+	Bucket       OrphanBucket `json:"bucket"`
+	OwnerFileID  string       `json:"owner_file_id,omitempty"`
+	OwnerBookID  string       `json:"owner_book_id,omitempty"`
+	Title        string       `json:"title,omitempty"`
+	InLoserSet   bool         `json:"in_loser_set"`             // owner book ∈ merge-loser provenance
+	LoserSource  string       `json:"loser_source,omitempty"`   // "journal" | "merged_into" | "both"
+	SHAMatch     bool         `json:"sha_match"`                // a live-primary book_file shares this file's FileHash
+	FileHash     string       `json:"file_hash,omitempty"`
+}
+
+// MergeOrphanCensus is the decision-relevant output. The bucket counts partition
+// TracksInITL exactly (Healthy + StaleOwner + NoLiveOwner == TracksInITL).
+type MergeOrphanCensus struct {
+	TracksInITL int `json:"tracks_in_itl"`
+
+	// Loser provenance (spec §6.5 reconciles BOTH sources).
+	JournalLoserIDs   int `json:"journal_loser_ids"`    // distinct LoserID in AutoMergeJournalEntry
+	MergedIntoLosers  int `json:"merged_into_losers"`   // distinct owner-books with MergedIntoBookID set (among .itl owners)
+	DistinctLoserSet  int `json:"distinct_loser_set"`   // |journal ∪ merged_into| restricted to .itl owners actually seen
+
+	// Bucketing of every AO-.itl track by its CURRENT live owner.
+	Healthy     int `json:"healthy"`
+	StaleOwner  int `json:"stale_owner"`
+	NoLiveOwner int `json:"no_live_owner"`
+
+	// The P3 gating number: stale-owner tracks whose owner book is a provable
+	// merge loser (journal ∪ MergedIntoBookID). LOWER BOUND — see caveat.
+	ProvableMergeOrphans int `json:"provable_merge_orphans"`
+
+	// Narrowing (reported, NOT acted on here): of the provable orphans, those
+	// whose FileHash is also carried by a LIVE PRIMARY book_file (spec Decision 1
+	// SHA gate). The playlist-membership gate (§7.2) needs the .xml export and is
+	// deliberately NOT applied here.
+	SHAGatedRemovable int `json:"sha_gated_removable"`
+
+	// Diagnostics.
+	ResidualDuplicatePIDs int `json:"residual_duplicate_pids"` // PIDs on >1 book_file (should be ~0 post-repair)
+
+	Samples []OrphanSample `json:"samples"`
+}
+
+// ComputeMergeOrphanCensus buckets every track in the AO .itl by its current live
+// owner and intersects the stale-owner tracks with the merge-loser provenance
+// set, producing the P3 build/no-op exit-gate. READ-ONLY.
+//
+// journalLoserIDs is the {LoserID} set from EmbeddingStore.ListAutoMergeJournalEntries
+// (the production-authoritative loser record — the itunes package stays decoupled
+// from EmbeddingStore, so the caller passes it in). MergedIntoBookID losers are
+// discovered per-owner from the store.
+//
+// IMPORTANT — the count is a LOWER BOUND. There is no durable record of the PIDs a
+// loser owned at merge time: MergeBooks reassigns the loser's iTunes external-IDs
+// to the winner, the PID-uniqueness repair cleared duplicate book_file PIDs, and
+// the journal/book_ver snapshot store no PIDs. So a track that WAS a loser's but
+// whose PID→loser link was severed lands in no_live_owner (unattributable), not in
+// ProvableMergeOrphans. A ~0 result means "the link is severed," NOT "no orphans
+// exist" — never treat it as a licence for bulk removal.
+func ComputeMergeOrphanCensus(store PIDIntegrityStore, itlPath string, journalLoserIDs []string) (*MergeOrphanCensus, error) {
+	lib, err := ParseITL(itlPath)
+	if err != nil {
+		return nil, err
+	}
+	itlPIDs := make([]string, len(lib.Tracks))
+	for i := range lib.Tracks {
+		itlPIDs[i] = strings.ToUpper(pidToHex(lib.Tracks[i].PersistentID))
+	}
+	return computeMergeOrphanCensus(store, itlPIDs, journalLoserIDs)
+}
+
+// computeMergeOrphanCensus is the pure core: it takes the AO .itl track PID set
+// (upper-hex) directly so it is unit-testable without a binary .itl. See
+// ComputeMergeOrphanCensus for the contract and the LOWER-BOUND caveat.
+func computeMergeOrphanCensus(store PIDIntegrityStore, itlPIDs []string, journalLoserIDs []string) (*MergeOrphanCensus, error) {
+	// PID → the book_file(s) that carry it. Post-repair PIDs are unique, but stay
+	// defensive: a residual duplicate is a diagnostic, not a crash.
+	byPID := make(map[string][]database.BookFileCore)
+	// FileHash → book_files carrying it (for the SHA gate, no extra store reads).
+	byHash := make(map[string][]database.BookFileCore)
+	files, err := store.GetAllBookFilesCore()
+	if err != nil {
+		return nil, err
+	}
+	for i := range files {
+		pid := strings.ToUpper(strings.TrimSpace(files[i].ITunesPersistentID))
+		if pid != "" {
+			byPID[pid] = append(byPID[pid], files[i])
+		}
+		if h := files[i].FileHash; h != "" {
+			byHash[h] = append(byHash[h], files[i])
+		}
+	}
+
+	journalSet := make(map[string]bool, len(journalLoserIDs))
+	for _, id := range journalLoserIDs {
+		if id != "" {
+			journalSet[id] = true
+		}
+	}
+
+	// The distinct owner-books we need to resolve = owners of .itl tracks, plus
+	// owners of any FileHash group that a candidate orphan may SHA-match against.
+	// Collect the .itl-owner books first; resolve concurrently (whole-library
+	// scale, per-item Pebble read → bounded pool per CLAUDE.md concurrency rule).
+	needBook := make(map[string]struct{})
+	for _, pid := range itlPIDs {
+		for _, f := range byPID[pid] {
+			needBook[f.BookID] = struct{}{}
+		}
+	}
+
+	bookMu := sync.Mutex{}
+	books := make(map[string]*database.Book, len(needBook))
+	ids := make([]string, 0, len(needBook))
+	for id := range needBook {
+		ids = append(ids, id)
+	}
+	g := new(errgroup.Group)
+	g.SetLimit(runtime.NumCPU())
+	for _, id := range ids {
+		g.Go(func() error {
+			b, berr := store.GetBookByID(id)
+			if berr != nil || b == nil {
+				return nil // best-effort: a missing book leaves the track unattributed
+			}
+			bookMu.Lock()
+			books[id] = b
+			bookMu.Unlock()
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+
+	isLivePrimary := func(b *database.Book) bool {
+		if b == nil {
+			return false
+		}
+		softDeleted := b.MarkedForDeletion != nil && *b.MarkedForDeletion
+		primary := b.IsPrimaryVersion == nil || *b.IsPrimaryVersion
+		return primary && !softDeleted
+	}
+
+	// Set of FileHashes owned by at least one LIVE PRIMARY book_file — the SHA gate
+	// target. Resolving these books reuses the already-fetched .itl-owner cache
+	// where possible; misses are looked up lazily below only for candidate orphans.
+	livePrimaryHash := make(map[string]bool)
+	for h, group := range byHash {
+		for _, f := range group {
+			if b, ok := books[f.BookID]; ok && isLivePrimary(b) {
+				livePrimaryHash[h] = true
+				break
+			}
+		}
+	}
+
+	c := &MergeOrphanCensus{TracksInITL: len(itlPIDs), JournalLoserIDs: len(journalSet)}
+	mergedIntoSeen := make(map[string]bool)
+	loserSeen := make(map[string]bool)
+
+	for _, pid := range itlPIDs {
+		owners := byPID[pid]
+		if len(owners) > 1 {
+			c.ResidualDuplicatePIDs++
+		}
+		if len(owners) == 0 {
+			c.NoLiveOwner++
+			c.addSample(OrphanSample{PID: pid, Bucket: BucketNoLiveOwner})
+			continue
+		}
+		// Prefer a live-primary owner if any; else take the first (stale) owner.
+		var owner database.BookFileCore
+		var ownerBook *database.Book
+		picked := false
+		for _, f := range owners {
+			b := books[f.BookID]
+			if isLivePrimary(b) {
+				owner, ownerBook, picked = f, b, true
+				break
+			}
+		}
+		if !picked {
+			owner = owners[0]
+			ownerBook = books[owner.BookID]
+		}
+
+		if isLivePrimary(ownerBook) {
+			c.Healthy++
+			continue
+		}
+
+		// Stale owner (soft-deleted or non-primary). Attribute by provenance.
+		c.StaleOwner++
+		inJournal := ownerBook != nil && journalSet[ownerBook.ID]
+		mergedInto := ownerBook != nil && ownerBook.MergedIntoBookID != nil
+		if mergedInto && !mergedIntoSeen[ownerBook.ID] {
+			mergedIntoSeen[ownerBook.ID] = true
+			c.MergedIntoLosers++
+		}
+		if (inJournal || mergedInto) && ownerBook != nil && !loserSeen[ownerBook.ID] {
+			loserSeen[ownerBook.ID] = true
+			c.DistinctLoserSet++
+		}
+
+		sample := OrphanSample{
+			PID: pid, Bucket: BucketStaleOwner, OwnerFileID: owner.ID,
+			FileHash: owner.FileHash,
+		}
+		if ownerBook != nil {
+			sample.OwnerBookID = ownerBook.ID
+			sample.Title = ownerBook.Title
+		}
+		if inJournal || mergedInto {
+			c.ProvableMergeOrphans++
+			sample.InLoserSet = true
+			switch {
+			case inJournal && mergedInto:
+				sample.LoserSource = "both"
+			case inJournal:
+				sample.LoserSource = "journal"
+			default:
+				sample.LoserSource = "merged_into"
+			}
+			if owner.FileHash != "" && livePrimaryHash[owner.FileHash] {
+				c.SHAGatedRemovable++
+				sample.SHAMatch = true
+			}
+		}
+		c.addSample(sample)
+	}
+
+	slog.Info("itunes merge-orphan census",
+		"tracksInITL", c.TracksInITL, "healthy", c.Healthy, "staleOwner", c.StaleOwner,
+		"noLiveOwner", c.NoLiveOwner, "journalLoserIDs", c.JournalLoserIDs,
+		"mergedIntoLosers", c.MergedIntoLosers, "provableMergeOrphans", c.ProvableMergeOrphans,
+		"shaGatedRemovable", c.SHAGatedRemovable, "residualDuplicatePIDs", c.ResidualDuplicatePIDs)
+	return c, nil
+}
+
+// addSample keeps up to pidSampleLimit samples, prioritizing attributed orphans
+// (InLoserSet) so the detail view surfaces the decision-relevant rows first.
+func (c *MergeOrphanCensus) addSample(s OrphanSample) {
+	if len(c.Samples) < pidSampleLimit {
+		c.Samples = append(c.Samples, s)
+		return
+	}
+	if !s.InLoserSet {
+		return
+	}
+	for i := range c.Samples {
+		if !c.Samples[i].InLoserSet {
+			c.Samples[i] = s
+			return
+		}
+	}
 }
