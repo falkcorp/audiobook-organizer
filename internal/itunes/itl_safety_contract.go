@@ -133,6 +133,22 @@ type ContractConfig struct {
 	// MagnitudeTolerancePct is the allowed deviation for expected-magnitude.
 	// Default 10.
 	MagnitudeTolerancePct int
+
+	// AllowedWritebackRoot scopes the location-form staging-marker guard to the
+	// WRITE TARGET (F7). The guard rejects any location containing
+	// ".itunes-writeback/" as a staging-dir leak (the damaged-4 class). But when
+	// iTunes is pointed AT the AO writeback library, that library's own media
+	// legitimately lives under its ".itunes-writeback/iTunes Media/" root, so every
+	// track carries the substring correctly. Set this to the AO library's own root
+	// fragment (e.g. "audiobook-organizer/.itunes-writeback/"): a location whose
+	// ".itunes-writeback/" occurrence is UNDER this root is allowed; a marker not
+	// matching it is still a leak and rejected. Matched case-insensitively with
+	// path separators normalized (so it applies to both the 0x0D WinPath and 0x0B
+	// URL forms). Empty (default) = strict: ALL ".itunes-writeback/" rejected —
+	// fully backward-compatible and fail-closed. Only the sync cycle writing the AO
+	// library sets it (from the 4-state LibrarySet config); never set it when
+	// writing the Original library.
+	AllowedWritebackRoot string
 }
 
 // DefaultContractConfig returns the SPEC-mandated defaults.
@@ -540,9 +556,14 @@ func mhohNonStandardLen(hohmType uint32) bool {
 //     markers (damaged-4 leaked staging-dir paths).
 //
 // Catches: K4 (URL written into 0x0D) and the staging-path leak.
-func guardLocationForm(before, after []byte, _ *hdfmHeader, _ ContractConfig) GuardResult {
+func guardLocationForm(before, after []byte, _ *hdfmHeader, cfg ContractConfig) GuardResult {
 	const name = "location-form"
 	var viol []Violation
+
+	// F7: when writing the AO library (which legitimately lives under its own
+	// ".itunes-writeback/" media root), the staging-marker check is scoped to that
+	// root — a marker UNDER it is not a leak. Empty root = strict (reject all).
+	allowedRoot := normalizeStagingPath(cfg.AllowedWritebackRoot)
 
 	// Pair-consistency (0x0B decodes to the same path as 0x0D) is a NO-NEW
 	// check: the golden corpus proves iTunes itself leaves stale pairs behind
@@ -559,7 +580,8 @@ func guardLocationForm(before, after []byte, _ *hdfmHeader, _ ContractConfig) Gu
 			val     string
 			field   string
 		}{{has0D, loc0D, "0x0D"}, {has0B, loc0B, "0x0B"}} {
-			if pair.present && strings.Contains(pair.val, ".itunes-writeback/") {
+			if pair.present && strings.Contains(pair.val, ".itunes-writeback/") &&
+				stagingMarkerIsLeak(pair.val, allowedRoot) {
 				viol = append(viol, Violation{Offset: trackOffset, Chunk: "mhoh", Message: fmt.Sprintf("%s contains staging marker '.itunes-writeback/': %q", pair.field, truncStr(pair.val))})
 			}
 		}
@@ -607,6 +629,30 @@ func guardLocationForm(before, after []byte, _ *hdfmHeader, _ ContractConfig) Gu
 	})
 
 	return GuardResult{Guard: name, Violations: viol}
+}
+
+// normalizeStagingPath lowercases a location value and normalizes path separators
+// (backslash → forward slash) so the F7 AllowedWritebackRoot check matches against
+// both the 0x0D WinPath form (backslashes) and the 0x0B URL form (forward slashes).
+// Returns "" for an empty input so the strict-by-default behavior is preserved.
+func normalizeStagingPath(s string) string {
+	if s == "" {
+		return ""
+	}
+	return strings.ToLower(strings.ReplaceAll(s, "\\", "/"))
+}
+
+// stagingMarkerIsLeak decides whether a location that contains ".itunes-writeback/"
+// is a staging-dir LEAK (true → reject) versus the AO library's own legitimate media
+// root (false → allow). allowedRootNormalized is cfg.AllowedWritebackRoot already run
+// through normalizeStagingPath. Empty allowed root = strict: every marker is a leak
+// (backward-compatible, fail-closed). Otherwise the marker is legitimate only when
+// the location sits UNDER the configured root.
+func stagingMarkerIsLeak(locationVal, allowedRootNormalized string) bool {
+	if allowedRootNormalized == "" {
+		return true
+	}
+	return !strings.Contains(normalizeStagingPath(locationVal), allowedRootNormalized)
 }
 
 // localURLsEquivalent reports whether two file://localhost/ URLs decode to the
