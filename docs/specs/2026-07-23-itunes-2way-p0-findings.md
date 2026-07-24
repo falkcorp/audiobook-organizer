@@ -1,5 +1,5 @@
 <!-- file: docs/specs/2026-07-23-itunes-2way-p0-findings.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 2c9e5a71-8b04-4d36-9f18-7a3c1e6b0d52 -->
 <!-- last-edited: 2026-07-24 -->
 
@@ -116,10 +116,46 @@ either bucket violates the spec's fail-closed rules.
    audiobook orphans. Does not change the P3 decision (both are un-removable); informs any
    future re-attribution effort.
 
-## Remaining P0 (not in this PR)
+## F5 — Cross-type PID-collision backstop: disjointness invariant HOLDS (0 real collisions)
 
-- **Cross-type PID collisions** (audiobook vs non-audiobook sharing a PID) — the
-  disjointness-assertion backstop. Confirm PID-on-multiple-primaries stays 0 (post pid-repair).
+**Measured 2026-07-24** (`pid-census --cross-type`, `internal/itunes/cross_type.go`
+`ComputeCrossTypeCollisions`), same consistent prod copy as F4. Classifies every AO-`.itl`
+track (`isAudiobookITL`: Kind/Genre/Location) and cross-tabs it against AO book_file
+ownership. The disjointness invariant for the relocate op: an AO book_file PID must resolve
+to an **audiobook** track, never a music/podcast one — else a relocate rewrites a
+non-audiobook track's location.
+
+```
+tracks_in_itl = 97999   audiobook = 92807   non_audiobook = 5192
+  ab_owned = 81099   ab_unowned = 11708   non_ab_owned = 3436   non_ab_unowned = 1756
+CROSS_TYPE_COLLISIONS = 3436  (all live-primary owner)
+```
+
+**All 3,436 "collisions" are audiobooks that `isAudiobookITL` under-classifies — NOT real
+music.** Proof: AO's DB stores only audiobooks, so any AO-owned track is definitionally an
+audiobook; and the genre histogram over all 3,436 is 100% book-shaped — `Audio Book` (653) +
+`audio book` (52), `(none)` (1130), `The First Law Book Two` (230, a Joe Abercrombie
+audiobook), `Science Fiction`/`Sci Fi`/`SciFi`/`Sci-Fi` (~660), `Suspense`, `Fantasy`,
+`Comedy`, `Speech`, various `LGBT …` literary tags — **zero** music genres (no Pop/Rock/
+Classical/Podcast); kinds are ordinary `MPEG audio file` (3194) / `AAC audio file` (236) /
+`Apple Lossless` (6). The 1,756 `non_ab_unowned` are the user's actual non-audiobook tracks,
+correctly hands-off.
+
+**Decision: the relocate disjointness backstop PASSES.** The relocate op targets tracks by
+AO book_file PID (already correct), and AO owns no music/podcast track, so a relocate can
+never make a cross-type write. No blocker for arming relocate (P2) on this ground.
+
+**Secondary finding (fail-safe, not fixed here): `isAudiobookITL` is unreliable as a genre
+gate.** It misses `Audio Book`/`audio book` (checks the substring `"audiobook"` with no
+space — 705 tracks) and every literary-genre audiobook (Science Fiction, Fantasy, Suspense,
+…). For `GuardRebuildTarget` this is **fail-safe** — under-classifying audiobooks *inflates*
+the non-audiobook count, making the "looks real" guard *more* likely to block, never less.
+But it must **not** be used as a relocate/cleanup targeting filter, and "fixing" it (e.g.
+adding the space variant) would *lower* the non-audiobook count and could weaken the rebuild
+guard's threshold — so any such change must re-derive `GuardRebuildTarget`'s thresholds in
+the same PR. Left as a documented follow-on.
+
+## Remaining P0 (not in this PR)
 - **Bookmark / field-preservation byte-proof** on a ZFS clone — run a relocate AND a
   track-remove through `SafeWriteITL`, then byte-compare every untouched track's record;
   assert ZERO changes (incl. the bookmark mhod). No preservation claim until it passes.

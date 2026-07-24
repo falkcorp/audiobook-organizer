@@ -31,6 +31,7 @@ func main() {
 	full := flag.Bool("full", false, "print the full JSON report incl. samples (default: summary only)")
 	repair := flag.Bool("repair", false, "also print the pid-repair PLAN preview (read-only; needs --itl for diff_file)")
 	mergeProv := flag.Bool("merge-provenance", false, "run the cleanup provenance census (P3 exit-gate); requires --itl")
+	crossType := flag.Bool("cross-type", false, "run the cross-type PID-collision census (relocate disjointness backstop); requires --itl")
 	mapFrom := flag.String("map-from", "W:", "path-mapping source prefix (Windows drive)")
 	mapTo := flag.String("map-to", "/mnt/bigdata/books", "path-mapping target prefix (local mount)")
 	flag.Parse()
@@ -46,6 +47,33 @@ func main() {
 		os.Exit(1)
 	}
 	defer store.Close()
+
+	// Cross-type PID-collision census (relocate disjointness backstop).
+	if *crossType {
+		if *itlPath == "" {
+			fmt.Fprintln(os.Stderr, "error: --cross-type requires --itl (a copy of the AO writeback .itl)")
+			os.Exit(2)
+		}
+		r, cerr := itunes.ComputeCrossTypeCollisions(store, *itlPath)
+		if cerr != nil {
+			fmt.Fprintf(os.Stderr, "cross-type census: %v\n", cerr)
+			os.Exit(1)
+		}
+		fmt.Printf("=== CROSS-TYPE PID-COLLISION CENSUS (relocate disjointness backstop) ===\n")
+		fmt.Printf("tracks_in_itl=%d  audiobook=%d  non_audiobook=%d\n",
+			r.TracksInITL, r.AudiobookTracks, r.NonAudiobookTracks)
+		fmt.Printf("  ab_owned=%d  ab_unowned=%d  non_ab_owned=%d  non_ab_unowned=%d\n",
+			r.ABOwned, r.ABUnowned, r.NonABOwned, r.NonABUnowned)
+		fmt.Printf(">>> CROSS_TYPE_COLLISIONS=%d  (live_primary_owner=%d)\n",
+			r.CrossTypeCollisions, r.CollisionsLivePrimaryOwner)
+		fmt.Printf("    MUST be 0 (or each offender explained) before the relocate op is armed.\n")
+		if *full {
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			_ = enc.Encode(r)
+		}
+		return
+	}
 
 	// Cleanup provenance census (P3 exit-gate) — reconciles BOTH loser sources:
 	// the AutoMergeJournalEntry journal (production-authoritative) via the
