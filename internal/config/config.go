@@ -245,6 +245,12 @@ type ITunesConfig struct {
 	WindowsRootPath  string          `json:"windows_root_path"  mapstructure:"windows_root_path"`
 	MediaRoot        string          `json:"media_root"         mapstructure:"media_root"`
 	PathMappings     []ITunesPathMap `json:"path_mappings"      mapstructure:"path_mappings"`
+
+	// Libraries is the explicit 4-state library model (Original/AO x .itl/.xml)
+	// plus the PointedAt/ImportSource mode facts. Inert until populated: when empty,
+	// the legacy LibraryReadPath/LibraryWritePath fields are used as-is. See
+	// itunes_libraries.go and docs/specs/2026-07-23-itunes-2way-sync-system-design.md.
+	Libraries LibrarySet `json:"libraries" mapstructure:"libraries"`
 }
 
 // MaintenanceConfig holds settings for the nightly maintenance window.
@@ -1198,6 +1204,20 @@ func InitConfig() {
 				WindowsRootPath:  viper.GetString("itunes.windows_root_path"),
 				MediaRoot:        viper.GetString("itunes.media_root"),
 				// PathMappings loaded from DB blob, not viper
+				Libraries: LibrarySet{
+					Original: LibraryRef{
+						ITLPath: viper.GetString("itunes.libraries.original.itl_path"),
+						XMLPath: viper.GetString("itunes.libraries.original.xml_path"),
+						Frozen:  viper.GetBool("itunes.libraries.original.frozen"),
+					},
+					AO: LibraryRef{
+						ITLPath: viper.GetString("itunes.libraries.ao.itl_path"),
+						XMLPath: viper.GetString("itunes.libraries.ao.xml_path"),
+						Frozen:  viper.GetBool("itunes.libraries.ao.frozen"),
+					},
+					PointedAt:    viper.GetString("itunes.libraries.pointed_at"),
+					ImportSource: viper.GetString("itunes.libraries.import_source"),
+				},
 			},
 
 			// Download client integration
@@ -1539,6 +1559,12 @@ func (c *Config) Validate() error {
 	}
 
 	var errs []string
+
+	// iTunes 4-state model: derive the legacy path shims, then run the fail-closed
+	// library assertions (inert unless itunes.libraries is populated). See
+	// itunes_libraries.go / spec §2.
+	c.ITunes.Resolve()
+	errs = append(errs, c.ITunes.ValidateLibraries(c.ProtectedPaths)...)
 
 	switch c.DatabaseType {
 	case "pebble", "sqlite":
