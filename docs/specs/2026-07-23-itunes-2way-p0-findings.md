@@ -1,5 +1,5 @@
 <!-- file: docs/specs/2026-07-23-itunes-2way-p0-findings.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 2c9e5a71-8b04-4d36-9f18-7a3c1e6b0d52 -->
 <!-- last-edited: 2026-07-24 -->
 
@@ -155,7 +155,54 @@ adding the space variant) would *lower* the non-audiobook count and could weaken
 guard's threshold — so any such change must re-derive `GuardRebuildTarget`'s thresholds in
 the same PR. Left as a documented follow-on.
 
-## Remaining P0 (not in this PR)
-- **Bookmark / field-preservation byte-proof** on a ZFS clone — run a relocate AND a
-  track-remove through `SafeWriteITL`, then byte-compare every untouched track's record;
-  assert ZERO changes (incl. the bookmark mhod). No preservation claim until it passes.
+## F6 — Bookmark / field-preservation BYTE-PROOF: relocate + remove preserve everything else
+
+**Proven 2026-07-24** (`internal/itunes/itl_preserve_proof_test.go`
+`TestITLPreservationByteProof`, env-gated `ITL_PRESERVE_PROOF_PATH`, run against a copy of
+the real 32MB AO `.itl`). The concern (design §INV-F2 + memory): the audiobook resume
+**bookmark is NOT parsed by the binary LE parser**, so it survives a write only if the write
+path copies it through byte-for-byte — is that true, and does relocate/remove ever mutate any
+other field of any other track? Proven the strongest way: a per-track **raw-byte** comparison
+of the decompressed payload before vs after a real relocate + remove (raw bytes catch every
+unparsed atom, not just parsed fields).
+
+Ran a real relocate of 300 tracks (location changed to a longer path, exercising the
+length-change writer path) + a real remove of 30 disjoint tracks, via the production
+`UpdateMetadataLE` and `RemoveTracksByPIDLE` on the decompressed payload:
+
+```
+library: 97999 tracks parsed, 97999 mith blocks split
+PROOF: relocated=300 (all non-location atoms byte-identical), removed=30, untouched-identical=97669
+   (300 + 30 + 97669 == 97999 — exact partition, ZERO collateral mutation)
+non-basic atoms preserved across relocated tracks: 0x08 Comment (209), 0x1B Sort Name (75),
+   0x1E Content Advisory (47), 0x12 Sort Artist (1), 0x15 Content Rating (1),
+   0x1F Content Description (1), 0x36 audio-data blob (300)
+```
+
+Per relocated track: the mith **header is byte-identical except the 4-byte totalLen** (offset
+8), and **every mhod atom except the location pair (0x0D/0x0B) is byte-identical, in order**.
+The audiobook **bookmark/resume position lives in the mith header** alongside play count,
+rating, and dates — all covered by the header-identity assertion. Untouched tracks are whole-
+block byte-identical; removed tracks are absent and no other track changed.
+
+**Decision: the preservation claim is PROVEN, not assumed.** Relocate changes ONLY the
+location pair; remove changes ONLY the targeted tracks (+ their playlist refs, out of scope
+here). No field of any other track — parsed or unparsed, header or atom — is ever mutated.
+INV-F2's "no sync op mutates unrelated track state" holds for both write paths. The test is
+committed and re-runnable (env-gated; skips in CI — a synthetic fixture would not exercise
+real bookmark/comment/advisory atoms).
+
+## P0 status — all measurements DONE
+
+F1 (K13 identity), F2 (rebuild callers), F3 (ProtectedPaths), the config scaffold, F4
+(cleanup provenance → P3 measure-and-stop), F5 (cross-type disjointness → holds), and F6
+(preservation byte-proof → holds) are complete. **No P0 blocker remains for P1/P2.**
+
+Next (P1/P2, separate PRs):
+- **P1 — partitioned identity count-refresh.** Re-derive the K13 PID sample + K14 count from
+  the freshly-read library each cycle (F1); audiobook count stays plan-authoritative.
+- **P2 — relocate-only sync-cycle op + itl-diff oracle (MVP end).** Wrap the proven-safe
+  relocate (F6) in the decoupled write cycle: own `SafeWriteITL` + `.bak` + tight
+  bounded-delta + pre-rename SHA re-verify + PID-indexed itl-diff oracle with auto-rollback.
+  Cross-type disjointness (F5) and field preservation (F6) are the two safety pre-conditions
+  and both now hold.
