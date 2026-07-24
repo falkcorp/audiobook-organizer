@@ -253,6 +253,11 @@ type MergeOrphanCensus struct {
 	// whose FileHash is also carried by a LIVE PRIMARY book_file (spec Decision 1
 	// SHA gate). The playlist-membership gate (§7.2) needs the .xml export and is
 	// deliberately NOT applied here.
+	//
+	// FLOOR: livePrimaryHash is built only from books that own a track in this .itl,
+	// so a live primary carrying the same audio but no .itl track won't be counted —
+	// SHAGatedRemovable can only under-count. Do NOT read it as authoritative if the
+	// removal path is ever resurrected.
 	SHAGatedRemovable int `json:"sha_gated_removable"`
 
 	// Diagnostics.
