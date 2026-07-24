@@ -107,7 +107,10 @@ either bucket violates the spec's fail-closed rules.
 1. **No durable merge-provenance trail on prod.** If a future release wants provenance-
    anchored cleanup, it must FIRST make `merge.Service.MergeBooks` record losers (write the
    journal at merge time), then re-run this census. Until then, cleanup is un-buildable
-   safely. Also a latent gap for unmerge/audit recovery.
+   safely. **Second consequence of the same gap:** `UnmergeAuto` reads the same journal, so
+   the "undo merge" capability is effectively **inert for every production merge** — the big
+   9,074→1,311 dedup drain went through `MergeBooks`, which wrote nothing to unwind. Any
+   real unmerge/audit recovery needs the same durable-loser-recording fix.
 2. **`no_live_owner` composition** (13,464 = 13.7% of tracks): classify by audiobook genre
    to separate the user's non-AO music/podcasts (expected, hands-off) from severed
    audiobook orphans. Does not change the P3 decision (both are un-removable); informs any
