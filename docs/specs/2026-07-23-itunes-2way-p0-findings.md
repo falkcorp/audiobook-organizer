@@ -1,5 +1,5 @@
 <!-- file: docs/specs/2026-07-23-itunes-2way-p0-findings.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 2c9e5a71-8b04-4d36-9f18-7a3c1e6b0d52 -->
 <!-- last-edited: 2026-07-24 -->
 
@@ -234,18 +234,34 @@ issue.
 
 Until reconciled, P2 relocate is **blocked**. See [[project_itunes_writeback_pathnorm_bug]].
 
-## P0 status — measurements DONE; one P2 blocker surfaced
+## P0 status — DONE; F7 RESOLVED; all P2 primitives merged; only the cycle remains
 
-F1 (K13 identity), F2 (rebuild callers), F3 (ProtectedPaths), the config scaffold, F4
-(cleanup provenance → P3 measure-and-stop), F5 (cross-type disjointness → holds), and F6
-(preservation → proven, both mutation + encode layers) are complete. **No P0 blocker remains;
-F7 is a P2 write-path blocker uncovered by the P0 verification.**
+P0 (F1-F6) complete; F7 uncovered **and resolved**. Merged 2026-07-24:
 
-Next:
-- **P2 pre-req — reconcile F7** (location-form vs the AO library's legitimate
-  `.itunes-writeback/` media root). Owner decision on option 1 vs 2.
-- **P1 — partitioned identity count-refresh.** Re-derive the K13 PID sample + K14 count from
-  the freshly-read library each cycle (F1); audiobook count stays plan-authoritative.
-- **P2 — relocate-only sync-cycle op + itl-diff oracle (MVP end).** Wrap the proven-safe
-  relocate (F6) in the decoupled write cycle. Disjointness (F5) and preservation (F6) hold;
-  F7 must be reconciled first.
+| Piece | PR | What it gives P2 |
+|---|---|---|
+| 4-state `LibrarySet` config | #2040 | Original/AO × .itl/.xml + PointedAt/ImportSource mode facts |
+| Cleanup census → P3 measure-and-stop | #2041 | P3 is a guarded no-op; no bulk-removal machinery |
+| Cross-type (F5) + preservation byte-proof (F6) | #2042 | Disjointness holds; relocate/remove proven to touch nothing else |
+| Relocate oracle `VerifyRelocateWrite` | #2043 | Per-track raw-byte auto-rollback trigger |
+| P1 `RefreshLibraryIdentity` + `PartitionedTrackCount` | #2044 | Delta-aware K13/K14 refresh; K14 partition count |
+| F7 guard scope `ContractConfig.AllowedWritebackRoot` | #2045 | `SafeWriteITL` can now write the AO library (owner chose option 1) |
+
+**P2 — relocate-only sync cycle (MVP end) — READY TO BUILD.** All prerequisites are in
+`main`; nothing re-opens the safety questions. Compose:
+
+1. **Read** the AO `.itl`; `RefreshLibraryIdentity` (pin PID + drift ceiling, #2044) →
+   ExpectedIdentity for K13.
+2. **Plan** the relocate: DB `book_file` locations vs the `.itl`'s 0x0D (the existing
+   relocate op computes `[]ITLLocationUpdate`); 0 adds / 0 removes by construction.
+3. **Write** via `SafeWriteITL` with
+   `ContractConfig{AllowedWritebackRoot: <AO media root>, ExpectedIdentity: <refreshed>,
+   ExpectedTrackCount: PartitionedTrackCount → planAudiobook + liveNonAudiobook (#2044),
+   Force:false}` + `.bak` + tight bounded-delta capped at `len(LocationUpdates)`.
+4. **Verify** with `VerifyRelocateWrite(before, after, relocatedPIDs)` (#2043) BEFORE the
+   atomic rename commits.
+5. **Commit or roll back:** oracle OK → atomic rename; any violation → restore `.bak` + alert.
+   Single-flight lock; never concurrent with a manual relocate/pid-repair/cleanup.
+
+Then P3 stays retired (measure-and-stop), P4 (import) waits on dedup-on-import, P5
+(cutover/fallback tooling), P6 (2-way read-back preserve-only).
