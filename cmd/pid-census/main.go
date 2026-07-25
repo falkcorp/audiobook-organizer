@@ -1,7 +1,7 @@
 // file: cmd/pid-census/main.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8f2b0d61-4a37-4c95-9e12-7d3a6b1c0e58
-// last-edited: 2026-07-24
+// last-edited: 2026-07-25
 //
 // READ-ONLY book_file iTunes-PID integrity census. Point it at a COPY of the
 // production Pebble DB (never the live dir — Pebble opens read-write and wants the
@@ -33,6 +33,7 @@ func main() {
 	mergeProv := flag.Bool("merge-provenance", false, "run the cleanup provenance census (P3 exit-gate); requires --itl")
 	crossType := flag.Bool("cross-type", false, "run the cross-type PID-collision census (relocate disjointness backstop); requires --itl")
 	syncDryRun := flag.Bool("sync-dry-run", false, "P2 relocate sync cycle DRY-RUN (plan + in-memory verify, NO write); requires --itl")
+	syncApply := flag.Bool("sync-apply", false, "P2 relocate sync cycle APPLY — COMMITS to the --itl file (contract + quiescence gate + .bak backup + oracle + auto-rollback); requires --itl. The --itl path is the LIVE write target.")
 	syncRoot := flag.String("sync-writeback-root", "audiobook-organizer/.itunes-writeback/", "F7 AllowedWritebackRoot for the AO library's own media root")
 	mapFrom := flag.String("map-from", "W:", "path-mapping source prefix (Windows drive)")
 	mapTo := flag.String("map-to", "/mnt/bigdata/books", "path-mapping target prefix (local mount)")
@@ -82,6 +83,61 @@ func main() {
 			}
 		}
 		fmt.Printf("    (DRY-RUN: nothing written. Review the plan + sample new locations before Apply=true.)\n")
+		if *full {
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			_ = enc.Encode(r)
+		}
+		return
+	}
+
+	// P2 relocate sync cycle — APPLY (COMMITS to --itl). Same composition as the
+	// dry-run, but Apply=true: the cycle enforces the quiescence gate, arms the
+	// SafeWriteITL contract, takes a .bak, runs the pre-commit oracle, writes only on
+	// a clean verdict, then re-verifies post-commit and auto-rolls-back from the .bak
+	// on any violation. The --itl path is the LIVE write target.
+	if *syncApply {
+		if *itlPath == "" {
+			fmt.Fprintln(os.Stderr, "error: --sync-apply requires --itl (the LIVE AO writeback .itl to commit to)")
+			os.Exit(2)
+		}
+		mappings := []itunes.PathMapping{{From: *mapFrom, To: *mapTo}}
+		r, serr := itunes.RunRelocateSyncCycle(store, itunes.SyncCycleConfig{
+			ITLPath:              *itlPath,
+			AllowedWritebackRoot: *syncRoot,
+			Mappings:             mappings,
+			Apply:                true, // COMMIT
+		})
+		fmt.Printf("=== P2 RELOCATE SYNC CYCLE — APPLY (COMMIT) ===\n")
+		if r != nil {
+			fmt.Printf("planned=%d already_correct=%d unmatched=%d unmappable=%d\n",
+				r.Planned, r.AlreadyCorrect, r.Unmatched, r.Unmappable)
+			fmt.Printf(">>> APPLIED=%v ORACLE_OK=%v relocated_verified=%d playlists_preserved=%v\n",
+				r.Applied, r.OracleOK, r.RelocatedVerified, r.PlaylistsPreserved)
+			fmt.Printf("    library_in_use=%v rolled_back=%v backup=%s violations=%d\n",
+				r.LibraryInUse, r.RolledBack, r.BackupPath, len(r.OracleViolations))
+			if r.LibraryInUseReason != "" {
+				fmt.Printf("    library_in_use_reason: %s\n", r.LibraryInUseReason)
+			}
+			for i, v := range r.OracleViolations {
+				if i >= 5 {
+					fmt.Printf("    ... +%d more\n", len(r.OracleViolations)-5)
+					break
+				}
+				fmt.Printf("    VIOLATION pid=%s kind=%s %s\n", v.PID, v.Kind, v.Detail)
+			}
+		}
+		if serr != nil {
+			// Not necessarily data loss: a quiescence refusal or a clean auto-rollback
+			// also returns an error. The printed result above says which.
+			fmt.Fprintf(os.Stderr, "sync apply: %v\n", serr)
+			if *full && r != nil {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				_ = enc.Encode(r)
+			}
+			os.Exit(1)
+		}
 		if *full {
 			enc := json.NewEncoder(os.Stdout)
 			enc.SetIndent("", "  ")

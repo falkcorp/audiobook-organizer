@@ -1,5 +1,5 @@
 // file: internal/itunes/relocate_sync_cycle.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6c2f9a81-7b54-4d60-9e18-3c7b5a0e2d73
 // last-edited: 2026-07-25
 //
@@ -89,6 +89,13 @@ type SyncCycleResult struct {
 	RelocatedVerified int               `json:"relocated_verified"` // tracks the oracle confirmed changed location-only
 	OracleViolations  []OracleViolation `json:"oracle_violations,omitempty"`
 
+	// PlaylistsPreserved reflects the oracle's playlist-preservation check (#2049):
+	// the entire playlist-list section (msdh type 2 — static + smart playlists,
+	// names, membership, SmartCriteria rules) is byte-identical before vs after.
+	// On Apply this is the POST-COMMIT verdict (what actually landed); in dry-run it
+	// is the in-memory verdict. A relocate must never touch playlists.
+	PlaylistsPreserved bool `json:"playlists_preserved"`
+
 	Applied    bool   `json:"applied"` // true only if committed
 	DryRun     bool   `json:"dry_run"` // true if no write was attempted
 	BackupPath string `json:"backup_path,omitempty"`
@@ -172,6 +179,7 @@ func RunRelocateSyncCycle(store RebuildStore, cfg SyncCycleConfig) (*SyncCycleRe
 	res.OracleOK = verdict.OK
 	res.RelocatedVerified = verdict.RelocatedVerified
 	res.OracleViolations = verdict.Violations
+	res.PlaylistsPreserved = verdict.PlaylistsPreserved
 
 	// Quiescence gate: is iTunes actively using the library right now? A read-only
 	// reader (Apple Devices, Music.app browsing) never trips this — reads don't
@@ -224,18 +232,23 @@ func RunRelocateSyncCycle(store RebuildStore, cfg SyncCycleConfig) (*SyncCycleRe
 	rawAfterCommit, rerr := os.ReadFile(cfg.ITLPath)
 	if rerr == nil {
 		if committed, derr := DecryptAndInflateITL(rawAfterCommit); derr == nil {
-			if v2, verr := VerifyRelocateWrite(before, committed, relocatedPIDs); verr == nil && !v2.OK {
-				res.OracleViolations = v2.Violations
-				res.OracleOK = false
-				if res.BackupPath != "" {
-					if rbErr := restoreITLBackup(res.BackupPath, cfg.ITLPath); rbErr == nil {
-						res.RolledBack = true
-						res.Applied = false
-					} else {
-						return res, fmt.Errorf("sync cycle: post-commit oracle FAILED and rollback FAILED (%v) — .itl may be bad; restore %s manually", rbErr, res.BackupPath)
+			if v2, verr := VerifyRelocateWrite(before, committed, relocatedPIDs); verr == nil {
+				// Post-commit verdict is authoritative for what actually landed.
+				res.PlaylistsPreserved = v2.PlaylistsPreserved
+				res.RelocatedVerified = v2.RelocatedVerified
+				if !v2.OK {
+					res.OracleViolations = v2.Violations
+					res.OracleOK = false
+					if res.BackupPath != "" {
+						if rbErr := restoreITLBackup(res.BackupPath, cfg.ITLPath); rbErr == nil {
+							res.RolledBack = true
+							res.Applied = false
+						} else {
+							return res, fmt.Errorf("sync cycle: post-commit oracle FAILED and rollback FAILED (%v) — .itl may be bad; restore %s manually", rbErr, res.BackupPath)
+						}
 					}
+					return res, fmt.Errorf("sync cycle: post-commit oracle failed; rolled back from %s", res.BackupPath)
 				}
-				return res, fmt.Errorf("sync cycle: post-commit oracle failed; rolled back from %s", res.BackupPath)
 			}
 		}
 	}
