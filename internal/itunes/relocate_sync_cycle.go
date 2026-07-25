@@ -1,7 +1,7 @@
 // file: internal/itunes/relocate_sync_cycle.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6c2f9a81-7b54-4d60-9e18-3c7b5a0e2d73
-// last-edited: 2026-07-24
+// last-edited: 2026-07-25
 //
 // P2 of the 2-way-sync system design: the relocate-only sync cycle (the MVP write
 // path). It composes the primitives verified/built in P0-P1:
@@ -15,15 +15,24 @@
 //                 pre-rename SHA re-verify (FileSHA256 of exactly what we read).
 //   3. VERIFY   — VerifyRelocateWrite (#2043): a per-track RAW-BYTE oracle proving
 //                 ONLY the planned tracks changed, and only their location.
-//   4. COMMIT   — gated behind cfg.Apply. Dry-run (default) computes the plan, applies
+//   4. QUIESCE  — the library must be idle: FileActivityLibraryCheck refuses the write
+//                 if the .itl or an iTunes journal sibling (sentinel, Temp*.tmp) was
+//                 written within QuiescenceWindow. A read-only reader never trips it
+//                 (reads don't touch mtimes); only an active WRITER does. Re-checked
+//                 ATOMICALLY inside SafeWriteITL (WithLibraryNotInUse), and an AO
+//                 single-flight lock (create-exclusive, cleaned up after) prevents two
+//                 AO writers from ever colliding.
+//   5. COMMIT   — gated behind cfg.Apply. Dry-run (default) computes the plan, applies
 //                 it IN MEMORY, and runs the oracle WITHOUT writing — so the exact
 //                 effect (incl. every new location) is inspectable before any write.
-//                 Apply commits via ApplyITLOperations (backup + atomic rename), then
-//                 RE-verifies and auto-rolls-back from the .bak on any oracle failure.
+//                 Apply commits via SafeWriteITL (contract + quiescence + backup +
+//                 atomic rename), then RE-verifies and auto-rolls-back from the .bak on
+//                 any oracle failure.
 //
-// SAFETY: single-flight only — never run concurrently with a manual relocate,
-// pid-repair, or cleanup (all mutate the same .itl and SafeWriteITL's backup/rename
-// is not concurrency-safe). The caller holds that lock.
+// SAFETY: single-flight — the AO write-lock (acquireSyncWriteLock) makes two AO
+// writers mutually exclusive; the quiescence gate makes AO and iTunes mutually
+// exclusive. Neither AO nor iTunes can PREVENT the other from writing on a network
+// share, so AO's rule is to AVOID iTunes (never write while it is active).
 //
 // ⚠️ PRE-APPLY VERIFICATION (do NOT set Apply=true until this is checked): the
 // relocate points each track at BookFile.FilePath's canonical WinPath. Confirm via a
@@ -39,7 +48,9 @@ package itunes
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
+	"time"
 )
 
 // SyncCycleConfig configures one relocate sync cycle.
@@ -54,6 +65,14 @@ type SyncCycleConfig struct {
 	Mappings []PathMapping
 	// MaxDriftPct is the identity-refresh drift ceiling on Apply (0 = default 25).
 	MaxDriftPct int
+	// QuiescenceWindow is how recently the .itl or an iTunes journal sibling
+	// (Temp File*.tmp, iT*.tmp, sentinel) must have been modified to count the
+	// library as "in use" and BLOCK a write (0 = default 2m). A read-only reader
+	// (Apple Devices, Music.app browsing) does not update mtimes, so it never
+	// blocks; only an active WRITER does. iTunes does not always clean these files
+	// up on close, so the window (not mere existence) is what gates — a stale file
+	// ages out and stops blocking.
+	QuiescenceWindow time.Duration
 	// Apply commits the write. FALSE (default) = dry-run: plan + in-memory verify
 	// only, nothing is written. Never set true before a dry-run has been reviewed.
 	Apply bool
@@ -74,6 +93,12 @@ type SyncCycleResult struct {
 	DryRun     bool   `json:"dry_run"` // true if no write was attempted
 	BackupPath string `json:"backup_path,omitempty"`
 	RolledBack bool   `json:"rolled_back"` // committed then reverted from .bak (post-commit oracle failure)
+
+	// LibraryInUse reports the quiescence gate: true when the .itl or an iTunes
+	// journal sibling was written within QuiescenceWindow (iTunes likely has it
+	// open). On Apply this BLOCKS the write; in dry-run it is informational.
+	LibraryInUse       bool   `json:"library_in_use"`
+	LibraryInUseReason string `json:"library_in_use_reason,omitempty"`
 }
 
 // RunRelocateSyncCycle runs one relocate sync cycle against the AO library. Dry-run
@@ -148,12 +173,43 @@ func RunRelocateSyncCycle(store RebuildStore, cfg SyncCycleConfig) (*SyncCycleRe
 	res.RelocatedVerified = verdict.RelocatedVerified
 	res.OracleViolations = verdict.Violations
 
+	// Quiescence gate: is iTunes actively using the library right now? A read-only
+	// reader (Apple Devices, Music.app browsing) never trips this — reads don't
+	// update mtimes; only a recent WRITER does. Reported in dry-run; ENFORCED on
+	// Apply (re-checked atomically inside SafeWriteITL below).
+	window := cfg.QuiescenceWindow
+	if window <= 0 {
+		window = 2 * time.Minute
+	}
+	inUseCheck := FileActivityLibraryCheck(cfg.ITLPath, window)
+	if uerr := inUseCheck(); uerr != nil {
+		res.LibraryInUse = true
+		res.LibraryInUseReason = uerr.Error()
+	}
+
 	// 4. COMMIT — only on Apply AND a clean pre-commit oracle. Dry-run stops here.
 	if !cfg.Apply || !verdict.OK {
 		return res, nil
 	}
+	if res.LibraryInUse {
+		return res, fmt.Errorf("sync cycle: refusing to write — %s", res.LibraryInUseReason)
+	}
 
-	writeRes, err := ApplyITLOperations(cfg.ITLPath, cfg.ITLPath, *ops, contractCfg)
+	// AO single-flight write lock: create-exclusive so two AO writers can never
+	// touch the .itl at once; removed on the way out — unlike iTunes' own journal
+	// files, we clean up after ourselves.
+	releaseLock, lockErr := acquireSyncWriteLock(cfg.ITLPath)
+	if lockErr != nil {
+		return res, fmt.Errorf("sync cycle: %w", lockErr)
+	}
+	defer releaseLock()
+
+	// Commit through SafeWriteITL directly so we can arm BOTH the contract AND the
+	// atomic library-not-in-use precondition — re-checked immediately before the
+	// rename, closing the TOCTOU between the gate above and the write.
+	writeRes, err := SafeWriteITL(cfg.ITLPath, applyOpsMutate(*ops, nil),
+		WithContractConfig(contractCfg),
+		WithLibraryNotInUse(inUseCheck))
 	if err != nil {
 		return res, fmt.Errorf("sync cycle: commit: %w", err)
 	}
@@ -204,6 +260,24 @@ func relocatedPIDSet(ops ITLOperationSet) map[string]bool {
 		out[strings.ToLower(u.PersistentID)] = true
 	}
 	return out
+}
+
+// acquireSyncWriteLock creates an exclusive AO write-lock next to the .itl so two
+// AO writers can never touch it concurrently (the design's single-flight rule).
+// Returns a release func that removes the lock; unlike iTunes' own journal files,
+// AO cleans up after itself. Fails if another AO write already holds it.
+func acquireSyncWriteLock(itlPath string) (func(), error) {
+	lockPath := itlPath + ".ao-writeback.lock"
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		if os.IsExist(err) {
+			return nil, fmt.Errorf("another AO write is in progress (%s exists)", filepath.Base(lockPath))
+		}
+		return nil, fmt.Errorf("acquire write lock: %w", err)
+	}
+	fmt.Fprintf(f, "pid=%d ts=%s\n", os.Getpid(), time.Now().UTC().Format(time.RFC3339))
+	_ = f.Close()
+	return func() { _ = os.Remove(lockPath) }, nil
 }
 
 // restoreITLBackup copies a SafeWriteITL .bak back over the live path (auto-rollback).
