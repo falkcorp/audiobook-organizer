@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.13.2 -->
+<!-- version: 10.13.3 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-07-24 -->
+<!-- last-edited: 2026-07-25 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,89 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+<!-- file: todo.d/itunes-2way-p0-cleanup-census.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 8e2b5a41-6c93-4d07-9f18-3a1c7e6b0d52 -->
+<!-- last-edited: 2026-07-24 -->
+
+- [ ] **iTunes 2-way-sync P3 (cleanup) — decision: MEASURE-AND-STOP, no removal machinery.**
+  The P0 cleanup provenance census ran on prod (97,999 `.itl` tracks): **provable merge
+  orphans = 1, SHA-gated removable = 0** (`pid-census --merge-provenance`). P3 retires the
+  unsafe `cleanup_merged.go` handler as a guarded no-op; do NOT build bulk removal. The
+  count is a floor — prod has no durable merge-provenance trail (`merge.Service.MergeBooks`
+  writes neither the `AutoMergeJournalEntry` journal nor `MergedIntoBookID`; the journal is
+  empty). FOLLOW-ONS (not blocking): (1) if provenance-anchored cleanup is ever wanted, FIRST
+  make the merge path record losers durably, THEN re-run this census; also a latent
+  unmerge/audit gap. (2) Classify the 13,464 `no_live_owner` tracks by audiobook genre to
+  separate the user's non-AO music/podcasts from severed orphans (doesn't change the P3
+  decision). See `docs/specs/2026-07-23-itunes-2way-p0-findings.md` §F4.
+- [ ] **iTunes 2-way-sync — remaining P0 measurements.** (a) Cross-type PID collisions
+  (audiobook vs non-audiobook sharing a PID) — confirm PID-on-multiple-primaries stays 0
+  post pid-repair. (b) Bookmark/field-preservation byte-proof: run a relocate AND a
+  track-remove through `SafeWriteITL` on a ZFS clone, byte-compare every untouched track's
+  record, assert ZERO changes. Then P1 (partitioned count-refresh, re-derive PID sample) /
+  P2 (relocate-only sync-cycle op + oracle = MVP end).
+
+<!-- file: todo.d/itunes-2way-p2-sync-cycle.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 7f2c9a81-6b54-4d60-9e18-3c7b5a0e1d72 -->
+<!-- last-edited: 2026-07-24 -->
+
+- [ ] **iTunes 2-way-sync P2 — relocate-only sync cycle (MVP end).** All prerequisites are
+  merged: 4-state `LibrarySet` config (#2040), cleanup census → P3 no-op (#2041),
+  cross-type + preservation proofs (#2042), relocate oracle `VerifyRelocateWrite` (#2043),
+  P1 `RefreshLibraryIdentity`+`PartitionedTrackCount` (#2044), F7 guard scope
+  `ContractConfig.AllowedWritebackRoot` (#2045). Compose the cycle: (1) read AO `.itl` +
+  `RefreshLibraryIdentity` → ExpectedIdentity; (2) plan relocate from DB `book_file`
+  locations vs `.itl` 0x0D (existing relocate op → `[]ITLLocationUpdate`, 0 adds/0 removes);
+  (3) `SafeWriteITL` with `ContractConfig{AllowedWritebackRoot:<AO media root>,
+  ExpectedIdentity:<refreshed>, ExpectedTrackCount: PartitionedTrackCount →
+  planAudiobook+liveNonAudiobook, Force:false}` + `.bak` + bounded-delta capped at
+  `len(LocationUpdates)`; (4) `VerifyRelocateWrite(before,after,relocatedPIDs)` BEFORE the
+  atomic rename; (5) oracle OK → rename, else restore `.bak` + alert. Single-flight lock; never
+  concurrent with manual relocate/pid-repair/cleanup. Wire `AllowedWritebackRoot` from the AO
+  library's own media root (LibrarySet). See `docs/specs/2026-07-23-itunes-2way-p0-findings.md`
+  (P0 status table) + `docs/specs/2026-07-23-itunes-2way-sync-system-design.md` §4–6.
+
+<!-- file: todo.d/itunes-isaudiobookitl-underclassifies.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 7c3a9e51-4b62-4d08-8f19-2a6c1b7e0d43 -->
+<!-- last-edited: 2026-07-24 -->
+
+- [ ] **`isAudiobookITL` under-classifies audiobooks (fail-safe, but fix carefully).**
+  P0 cross-type census (§F5) found it misses `Audio Book`/`audio book` (it checks the
+  substring `"audiobook"` with NO space — 705 tracks on prod) and every literary-genre
+  audiobook (Science Fiction, Fantasy, Suspense, Comedy, …) — 3,436 AO-owned audiobooks
+  total classified non-audiobook. Impact: for `GuardRebuildTarget` this is FAIL-SAFE
+  (inflates the non-audiobook count → guard more likely to block), so no urgent safety bug.
+  But: (a) never use `isAudiobookITL` as a relocate/cleanup targeting filter; (b) if fixing
+  the heuristic (add the space variant, broaden genres), it LOWERS the non-audiobook count
+  and could drop a real library below `GuardRebuildTarget`'s "looks real" threshold — so
+  re-derive those thresholds in the SAME PR and re-test the guard. See
+  `internal/itunes/library_shape.go:35` + `docs/specs/2026-07-23-itunes-2way-p0-findings.md` §F5.
+
+<!-- file: todo.d/itunes-location-form-guard-blocks-ao-library.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 3f9c1e08-7b52-4d64-a1f8-2c6b5a0e9d47 -->
+<!-- last-edited: 2026-07-24 -->
+
+- [ ] **🚧 P2 BLOCKER — location-form guard rejects the entire live AO library (F7).** The
+  `location-form` safety guard (`internal/itunes/itl_safety_contract.go:562`) rejects any
+  `SafeWriteITL` when a track's 0x0D/0x0B contains `.itunes-writeback/`. On the live AO
+  library that is **82,976 tracks** — because the AO library physically lives at
+  `W:\audiobook-organizer\.itunes-writeback\` so its iTunes media folder legitimately is
+  `…\.itunes-writeback\iTunes Media\`. The guard was built to catch a staging path leaking
+  into the hands-off Original library (damaged-4); in the hard-cutover design (iTunes pointed
+  AT the AO library) the substring is correct and unavoidable. Result: the P2 relocate op
+  **cannot write the library at all** (`Force` does not override location-form — only the
+  bounded-delta guard). FIX (owner decision): (1, preferred) scope the staging-marker check to
+  the write TARGET using the P0 4-state `LibrarySet` mode facts — reject `.itunes-writeback/`
+  only when writing the Original library, or only when the path's `.itunes-writeback/` root
+  differs from the AO library's own root; or (2) physically move the AO library + media out
+  from under a `.itunes-writeback/` dir (invasive). Reproduced by
+  `TestITLRelocateContractStatus` (env-gated). See
+  `docs/specs/2026-07-23-itunes-2way-p0-findings.md` §F7.
 
 <!-- file: todo.d/itunes-2way-sync-continuation.md -->
 <!-- version: 1.0.0 -->
