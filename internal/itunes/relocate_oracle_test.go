@@ -195,8 +195,11 @@ func TestVerifyRelocateWrite_RealLibrary(t *testing.T) {
 	if !v.OK {
 		t.Fatalf("real relocate should verify clean, got %d violations e.g. %+v", len(v.Violations), firstN(v.Violations, 3))
 	}
-	t.Logf("REAL-LIBRARY ORACLE: relocated_verified=%d location_changed=%d unchanged_verified=%d (tracks %d)",
-		v.RelocatedVerified, v.LocationChanged, v.UnchangedVerified, v.TracksBefore)
+	if !v.PlaylistsPreserved {
+		t.Error("real relocate must preserve the playlist-list section byte-for-byte")
+	}
+	t.Logf("REAL-LIBRARY ORACLE: relocated_verified=%d location_changed=%d unchanged_verified=%d playlists_preserved=%v (tracks %d)",
+		v.RelocatedVerified, v.LocationChanged, v.UnchangedVerified, v.PlaylistsPreserved, v.TracksBefore)
 
 	// Tamper an UNTOUCHED track (change its Name) and confirm the oracle catches it
 	// as an unexpected change — the auto-rollback trigger.
@@ -224,6 +227,53 @@ func TestVerifyRelocateWrite_RealLibrary(t *testing.T) {
 		t.Errorf("expected unexpected-change on tampered %s, got %+v", victim, firstN(vt.Violations, 3))
 	}
 	t.Logf("oracle correctly caught tamper on untouched track %s", victim)
+}
+
+// TestVerifyRelocateWrite_PlaylistPreservation proves the oracle asserts the whole
+// playlist-list section (static + smart playlists, their rules) is byte-identical: a
+// relocate passes with PlaylistsPreserved=true, and any change to that section — even
+// a single byte — is caught (the auto-rollback trigger for a user's playlists).
+func TestVerifyRelocateWrite_PlaylistPreservation(t *testing.T) {
+	before := buildCleanPayload()
+	pid := anyPID(t, before)
+
+	after, n := UpdateMetadataLE(before, []ITLMetadataUpdate{{PersistentID: pid, Location: `W:\PROOF\moved.mp3`}})
+	if n != 1 {
+		t.Fatalf("relocate applied %d, want 1", n)
+	}
+
+	// Happy: a real relocate leaves the playlist section byte-identical.
+	v, err := VerifyRelocateWrite(before, after, map[string]bool{pid: true})
+	if err != nil {
+		t.Fatalf("VerifyRelocateWrite: %v", err)
+	}
+	if !v.OK || !v.PlaylistsPreserved {
+		t.Fatalf("relocate must preserve playlists: OK=%v preserved=%v %+v", v.OK, v.PlaylistsPreserved, v.Violations)
+	}
+
+	// Tamper one byte inside the playlist-list (msdh type 2) section → must be caught.
+	off, _, total := findMsdhByType(after, playlistMsdhType)
+	if off < 0 {
+		t.Skip("fixture has no playlist section")
+	}
+	tampered := append([]byte(nil), after...)
+	tampered[off+total-1] ^= 0xFF // flip a byte within the playlist block content
+	vt, err := VerifyRelocateWrite(before, tampered, map[string]bool{pid: true})
+	if err != nil {
+		t.Fatalf("VerifyRelocateWrite(tampered): %v", err)
+	}
+	if vt.OK || vt.PlaylistsPreserved {
+		t.Fatal("a tampered playlist section must be caught (OK/PlaylistsPreserved should be false)")
+	}
+	found := false
+	for _, viol := range vt.Violations {
+		if viol.Kind == ViolationPlaylistChanged {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected a playlist-changed violation, got %+v", vt.Violations)
+	}
 }
 
 func firstN(v []OracleViolation, n int) []OracleViolation {

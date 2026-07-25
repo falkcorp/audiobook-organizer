@@ -1,7 +1,7 @@
 // file: internal/itunes/relocate_oracle.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7a2e9c14-6b83-4d50-9f27-1c8b5a0e3d62
-// last-edited: 2026-07-24
+// last-edited: 2026-07-25
 //
 // Post-write acceptance oracle for the 2-way-sync relocate path (P2 of the
 // 2-way-sync system design). After a relocate write, this compares the decompressed
@@ -12,7 +12,11 @@
 //     byte of the track — the mith header (play count, rating, resume bookmark,
 //     dates) and every other mhod atom — is byte-identical;
 //   - every other track is byte-identical;
-//   - no track was added or removed (relocate is 0 adds / 0 removes).
+//   - no track was added or removed (relocate is 0 adds / 0 removes);
+//   - the ENTIRE playlist-list section (msdh type 2 — static + smart playlists,
+//     names, membership, SmartCriteria rules) is byte-identical: a relocate must
+//     never touch a user's playlists, and this turns that "by construction" into
+//     "verified, or auto-rollback."
 //
 // Raw-byte comparison is the point: it catches ANY unintended change, including
 // atoms the LE parser does not decode (bookmarks, artwork, sort keys) — which a
@@ -34,11 +38,17 @@ import (
 type OracleViolationKind string
 
 const (
-	ViolationAdded          OracleViolationKind = "track-added"          // PID present after, absent before
-	ViolationRemoved        OracleViolationKind = "track-removed"        // PID present before, absent after
-	ViolationUnexpected     OracleViolationKind = "unexpected-change"    // a NON-relocated track's bytes changed
-	ViolationNonLocationMut OracleViolationKind = "non-location-mutated" // a relocated track changed beyond its location pair
+	ViolationAdded           OracleViolationKind = "track-added"          // PID present after, absent before
+	ViolationRemoved         OracleViolationKind = "track-removed"        // PID present before, absent after
+	ViolationUnexpected      OracleViolationKind = "unexpected-change"    // a NON-relocated track's bytes changed
+	ViolationNonLocationMut  OracleViolationKind = "non-location-mutated" // a relocated track changed beyond its location pair
+	ViolationPlaylistChanged OracleViolationKind = "playlist-changed"     // the playlist-list section (msdh type 2) changed at all
 )
+
+// playlistMsdhType is the block type of the playlist-list msdh container — it holds
+// every static (mtph) and smart (SmartCriteria) playlist. A relocate must NEVER
+// touch it, so the oracle asserts it is byte-identical before vs after.
+const playlistMsdhType = 2
 
 // OracleViolation is one departure from the planned relocate.
 type OracleViolation struct {
@@ -49,14 +59,15 @@ type OracleViolation struct {
 
 // RelocateOracleVerdict is the acceptance result. OK is true iff Violations is empty.
 type RelocateOracleVerdict struct {
-	OK                bool              `json:"ok"`
-	TracksBefore      int               `json:"tracks_before"`
-	TracksAfter       int               `json:"tracks_after"`
-	RelocatedExpected int               `json:"relocated_expected"`
-	RelocatedVerified int               `json:"relocated_verified"` // relocated PIDs with all non-location bytes identical
-	UnchangedVerified int               `json:"unchanged_verified"` // untouched PIDs byte-identical
-	LocationChanged   int               `json:"location_changed"`   // relocated PIDs whose location pair actually differs
-	Violations        []OracleViolation `json:"violations,omitempty"`
+	OK                 bool              `json:"ok"`
+	TracksBefore       int               `json:"tracks_before"`
+	TracksAfter        int               `json:"tracks_after"`
+	RelocatedExpected  int               `json:"relocated_expected"`
+	RelocatedVerified  int               `json:"relocated_verified"`  // relocated PIDs with all non-location bytes identical
+	UnchangedVerified  int               `json:"unchanged_verified"`  // untouched PIDs byte-identical
+	LocationChanged    int               `json:"location_changed"`    // relocated PIDs whose location pair actually differs
+	PlaylistsPreserved bool              `json:"playlists_preserved"` // playlist-list section (msdh type 2) byte-identical before vs after
+	Violations         []OracleViolation `json:"violations,omitempty"`
 }
 
 // oracleMaxViolations caps the violation list so a catastrophic write (everything
@@ -117,8 +128,33 @@ func VerifyRelocateWrite(before, after []byte, relocatedPIDs map[string]bool) (*
 		}
 	}
 
+	// Playlist preservation: the entire playlist-list section (static + smart
+	// playlists, names, membership, SmartCriteria rules) must be byte-identical.
+	// The relocate mutate only rewrites track location mhods, so this section is
+	// untouched by construction — the oracle turns "by construction" into "verified,
+	// or auto-rollback." Compare the raw msdh-type-2 block bytes (offset may shift if
+	// the track section's size changed; the CONTENT must not).
+	beforePL := extractMsdhBlock(before, playlistMsdhType)
+	afterPL := extractMsdhBlock(after, playlistMsdhType)
+	if bytes.Equal(beforePL, afterPL) {
+		v.PlaylistsPreserved = true
+	} else {
+		addViol("", ViolationPlaylistChanged, fmt.Sprintf("playlist-list section changed (%d -> %d bytes) — a relocate must never touch playlists", len(beforePL), len(afterPL)))
+	}
+
 	v.OK = len(v.Violations) == 0
 	return v, nil
+}
+
+// extractMsdhBlock returns the raw bytes of the msdh container of the given block
+// type, or nil if absent. Used to compare whole sections (e.g. the playlist list)
+// independent of their offset in the payload.
+func extractMsdhBlock(data []byte, blockType int) []byte {
+	off, _, total := findMsdhByType(data, blockType)
+	if off < 0 || off+total > len(data) {
+		return nil
+	}
+	return data[off : off+total]
 }
 
 // relocateTrackDelta compares one track's before/after blocks and reports whether
