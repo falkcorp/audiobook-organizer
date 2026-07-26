@@ -1,7 +1,7 @@
 // file: internal/itunes/service/fs_regroup_shape.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 1e7d4a92-3c85-4b60-9f21-6a8c0d5e2b47
-// last-edited: 2026-07-25
+// last-edited: 2026-07-26
 
 // Package service — deterministic (regex-only) shape classifier for the
 // shattered-book REGROUP review producer (PR-B1).
@@ -70,7 +70,7 @@ import (
 const (
 	KindMultidisc    = "regroup.multidisc"     // confident collapse: N single-file books = 1 audiobook
 	KindVersionGroup = "regroup.version-group" // Abridged + Unabridged editions in one folder
-	KindAnthology    = "regroup.anthology"     // multiple distinct works (anthology/trilogy/omnibus)
+	KindAnthology    = "regroup.anthology"     // anthology/collection/omnibus = ONE book → combine (owner: single ISBN)
 	KindAmbiguous    = "regroup.ambiguous"     // book-like folder, cannot confidently classify
 )
 
@@ -124,6 +124,12 @@ type RegroupGroup struct {
 	// not the raw file count (a novel split into 133 sequential chapter files is ONE
 	// work, not 133). Zero for every other Kind (callers fall back to len(Members)).
 	DistinctWorks int
+	// Structure is the dominant physical shape of the group's members:
+	// "disc" (real Disc N/CD N folders), "chapter" (`<Book> - N` subdirs),
+	// "flat" (sequential files in one folder), or "edition". It lets the review
+	// label distinguish a genuine multi-DISC set ("Multi-disc → 1 book") from
+	// same-disc CHAPTERS ("Chapters → 1 book"), which read identically otherwise.
+	Structure string
 }
 
 // ShapeStats reconciles every input book so the record count ties out (no silent
@@ -541,6 +547,7 @@ func classifyGroup(members []memberInfo) (RegroupGroup, bool) {
 			ProposedAction: action,
 			Members:        out,
 			DistinctWorks:  distinctWorks,
+			Structure:      structure,
 		}
 	}
 
@@ -562,11 +569,13 @@ func classifyGroup(members []memberInfo) (RegroupGroup, bool) {
 			"create a version group (Abridged + Unabridged), Unabridged primary", 0), true
 
 	case hasFolderAnthologyMarker && manyDistinctTitles:
-		// STRONG evidence: an anthology/omnibus/collection marker on the BOOK FOLDER
-		// itself AND multiple genuinely-distinct title stems → a real anthology. The
-		// human-facing count is the number of DISTINCT WORKS, not the raw file count.
+		// An anthology/omnibus/collection marker on the BOOK FOLDER itself AND multiple
+		// distinct title stems → an anthology. Owner decision (2026-07-26): an anthology
+		// is a SINGLE real book (one ISBN), not multiple works to split — so the action
+		// is to COMBINE the files into one multi-file audiobook, exactly like a disc set.
+		// DistinctWorks is still surfaced (it's the story/chapter count) for the label.
 		return build(KindAnthology, false,
-			"split into separate works (held — needs review to identify boundaries)",
+			"combine into one multi-file audiobook (anthology/collection)",
 			distinctStems), true
 
 	case hasFolderAnthologyMarker:

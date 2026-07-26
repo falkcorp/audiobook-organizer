@@ -732,3 +732,48 @@ func TestApplyMultidisc_LegacyPayload_NoNumbers(t *testing.T) {
 		assert.Equal(t, 0, f.TrackNumber)
 	}
 }
+
+// TestApplyMultidisc_AnthologyPayload_CombinesToOneBook proves the owner decision that
+// an anthology is ONE book: the combine handler (which anthology is wired to) collapses
+// the anthology's story files into a single multi-file book with sequential tracks and
+// preserved fingerprints — exactly the multidisc behavior, driven by an anthology-kind
+// payload.
+func TestApplyMultidisc_AnthologyPayload_CombinesToOneBook(t *testing.T) {
+	store := newApplyTestStore(t)
+
+	paths := []string{
+		"/lib/Dangerous Women/The Princess and the Queen.mp3",
+		"/lib/Dangerous Women/Some Desperate Glory.mp3",
+		"/lib/Dangerous Women/Bombshells.mp3",
+	}
+	ids, fpByPath := seedNumberedBooks(t, store, paths)
+	discs := []int{0, 0, 0}  // one book, no disc
+	tracks := []int{1, 2, 3} // sequential stories
+
+	item := multidiscItemWithNumbers(t, "/lib/Dangerous Women", ids, paths, discs, tracks)
+	item.Kind = "regroup.anthology" // the kind wired to the combine handler
+
+	apply := ApplyMultidisc(store, merge.NewService(store))
+	require.NoError(t, apply(context.Background(), item))
+
+	// Exactly one book survives, owning all three story files.
+	survivor := minID(ids...)
+	for _, id := range ids {
+		b, _ := store.GetBookByID(id)
+		if id == survivor {
+			require.NotNil(t, b, "anthology survivor must remain")
+		} else {
+			assert.Nil(t, b, "absorbed story book %s must be gone", id)
+		}
+	}
+	files, err := store.GetBookFiles(survivor)
+	require.NoError(t, err)
+	require.Len(t, files, 3, "anthology collapses to ONE book owning all stories")
+	wantTrack := map[string]int{paths[0]: 1, paths[1]: 2, paths[2]: 3}
+	for _, f := range files {
+		assert.Equal(t, 0, f.DiscNumber, "anthology is one book — no disc numbers")
+		assert.Equal(t, wantTrack[f.FilePath], f.TrackNumber, "story order for %s", f.FilePath)
+		assert.Equal(t, fpByPath[f.FilePath], f.AcoustIDFingerprint, "fingerprint survives (%s)", f.FilePath)
+	}
+	dbtest.AssertStoreInvariants(t, store)
+}

@@ -7,6 +7,7 @@ package itunesservice
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -223,6 +224,24 @@ func TestClassify_GenuineAnthology(t *testing.T) {
 	}
 	if g.DistinctWorks != 5 {
 		t.Errorf("DistinctWorks=%d, want 5 distinct titles (not file count)", g.DistinctWorks)
+	}
+	// Owner decision 2026-07-26: an anthology is ONE book → the proposed action is to
+	// COMBINE, not split, and its files carry sequential chapter order (disc 0).
+	if !strings.Contains(g.ProposedAction, "combine into one") {
+		t.Errorf("anthology action = %q, want a 'combine into one' action (not split)", g.ProposedAction)
+	}
+	for _, m := range g.Members {
+		if m.DiscNumber != 0 {
+			t.Errorf("anthology member %s DiscNumber=%d, want 0 (one book, no disc)", m.BookID, m.DiscNumber)
+		}
+	}
+	// Track order must be a contiguous 1..N across the anthology's files.
+	seenTracks := map[int]bool{}
+	for _, m := range g.Members {
+		if m.TrackNumber < 1 || m.TrackNumber > len(g.Members) || seenTracks[m.TrackNumber] {
+			t.Errorf("anthology member %s TrackNumber=%d, want unique 1..%d", m.BookID, m.TrackNumber, len(g.Members))
+		}
+		seenTracks[m.TrackNumber] = true
 	}
 }
 

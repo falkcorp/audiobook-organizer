@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_shattered_ai.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8b3e6d21-4f97-4c05-a1d8-2e7b9c0f5a63
-// last-edited: 2026-07-25
+// last-edited: 2026-07-26
 
 // Package maintenance — op maintenance.regroup-shattered-ai (PR-B1).
 //
@@ -310,18 +310,24 @@ func regroupSummary(g itunesservice.RegroupGroup) string {
 	n := len(g.Members)
 	switch g.Kind {
 	case itunesservice.KindMultidisc:
-		return fmt.Sprintf("Multi-disc: %d tracks → 1 book — %s", n, g.FolderRef)
+		// Distinguish a genuine multi-DISC set from same-disc CHAPTERS — the owner's
+		// original confusion. Only a real Disc N/CD N folder structure is "Multi-disc";
+		// flat/chapter files are sequential chapters of ONE disc.
+		if g.Structure == "disc" {
+			return fmt.Sprintf("Multi-disc: %d discs → 1 book — %s", n, g.FolderRef)
+		}
+		return fmt.Sprintf("Chapters: %d tracks → 1 book — %s", n, g.FolderRef)
 	case itunesservice.KindVersionGroup:
 		return fmt.Sprintf("Version group (Abridged + Unabridged): %d files — %s", n, g.FolderRef)
 	case itunesservice.KindAnthology:
-		// Count is DISTINCT WORKS, not the raw file count (Bug 1): a novel split into
-		// N sequential chapter files is one work, not N. DistinctWorks is set by the
-		// classifier for anthologies; fall back to the file count only if it is unset.
+		// An anthology is ONE book (owner decision 2026-07-26) — approving combines its
+		// files into a single audiobook. DistinctWorks is the story/chapter count within
+		// that one book, shown for context.
 		works := g.DistinctWorks
 		if works <= 0 {
 			works = n
 		}
-		return fmt.Sprintf("Anthology/collection: %d works — %s", works, g.FolderRef)
+		return fmt.Sprintf("Anthology/collection: %d files (%d stories) → 1 book — %s", n, works, g.FolderRef)
 	default:
 		return fmt.Sprintf("Ambiguous folder (%d files) — needs review — %s", n, g.FolderRef)
 	}
@@ -343,10 +349,11 @@ func buildRegroupPayload(g itunesservice.RegroupGroup) (string, error) {
 	if g.Confident {
 		confidence = "high"
 	}
-	// Only confident collapses (the two multidisc-producing branches) carry disc/track;
-	// for any other kind the classifier left every member's numbers at 0, so drop the
-	// arrays (they'd be all-zero noise the apply path would skip anyway).
-	if !g.Confident {
+	// Disc/track are meaningful only for the COMBINE kinds — multidisc and anthology
+	// both collapse into one ordered multi-file book (an anthology is a single book,
+	// owner decision 2026-07-26), so both carry the classifier's chapter order.
+	// Version-group and ambiguous leave them nil (all-zero noise the apply path skips).
+	if g.Kind != itunesservice.KindMultidisc && g.Kind != itunesservice.KindAnthology {
 		discs, tracks = nil, nil
 	}
 	data, err := json.Marshal(regroupPayload{
