@@ -1,5 +1,5 @@
 // file: internal/itunes/service/fs_regroup_shape.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 1e7d4a92-3c85-4b60-9f21-6a8c0d5e2b47
 // last-edited: 2026-07-26
 
@@ -95,18 +95,13 @@ type ShatterBook struct {
 	Author     string // display author when known; never used for the FOLDER key
 
 	// DiscNumber / TrackNumber are OUTPUT fields, zero on the input view and
-	// populated by classifyGroup (assignDiscTrack) for the members of a confident
-	// multidisc collapse. They carry the per-file play-order the apply path
-	// (ApplyMultidisc) writes onto the merged book's BookFile rows. Semantics:
-	//   - a member living in a real "Disc N"/"CD N" subfolder gets DiscNumber = N
-	//     (the true physical disc, e.g. a Star Wars boxed set) and a track rank
-	//     WITHIN that disc;
-	//   - a member that is just a sequentially-numbered chapter/flat file on ONE
-	//     disc (e.g. "When We Were Sisters_1.mp3".."_6.mp3") gets DiscNumber = 0
-	//     (no disc concept — do NOT spread fake disc numbers across chapters) and
-	//     TrackNumber = its sequence position.
-	// Both are collision-free within the group by construction (a running per-disc
-	// counter), so the (disc, track, path) sort in GetBookFiles orders cleanly.
+	// populated by classifyGroup (assignDiscTrack) for the members of a combine.
+	// They carry the per-file play-order the apply path (ApplyMultidisc) writes onto
+	// the merged book's BookFile rows. Owner decision (2026-07-26): discs are
+	// flattened away — DiscNumber is ALWAYS 0 and TrackNumber is a single continuous
+	// 1..N over play order, even across former disc boundaries (a real "Disc N" set
+	// becomes one continuous track list). The physical disc only orders the files;
+	// it is never persisted. Contiguous + unique by construction.
 	DiscNumber  int
 	TrackNumber int
 }
@@ -179,17 +174,28 @@ var (
 	abridgedRe   = regexp.MustCompile(`(?i)abridged`)
 )
 
-// anthologyRe detects markers that a folder holds "multiple distinct works" —
-// which regex cannot reliably split. It is now matched ONLY against the BOOK FOLDER
-// NAME (never a parent dir or a track's album tag — see classifyGroup) AND is only
-// promoted to KindAnthology when the members also show multiple distinct title stems
-// (manyDistinctTitles). Because of that second gate, "collection"/"collected" are now
-// SAFE to include: a genuine single "The Complete Collection" (sequential chapters,
-// one stem) fails the distinct-titles gate and falls to an ambiguous review hold, not
-// a wrong anthology split — so the term no longer risks flooding, and a real
-// short-story "…Collection" folder is no longer missed. "complete" alone stays out
-// (too weak — appears on ordinary unabridged titles).
-var anthologyRe = regexp.MustCompile(`(?i)\b(antholog(?:y|ies)|omnibus|trilog(?:y|ies)|tetralog(?:y|ies)|quartet|boxed?\s*set|collect(?:ion|ions|ed))\b`)
+// The folder-marker regexes are split by whether the marked thing is ONE book or
+// potentially SEVERAL (owner decision 2026-07-26). Both are matched ONLY against the
+// BOOK FOLDER NAME (never a parent dir or a track's album tag — see classifyGroup) and
+// only act when the members also show multiple distinct title stems (manyDistinctTitles).
+//
+//   - singleBookMarkerRe: anthology / omnibus / collection = a SINGLE published book
+//     with one ISBN (a short-story anthology, an omnibus). → COMBINE into one book.
+//     A genuine single "The Complete Collection" (sequential chapters, one stem) fails
+//     the distinct-titles gate and falls to an ambiguous hold, so "collection" is safe.
+//   - multiBookMarkerRe: trilogy / tetralogy / quartet / boxed set = potentially
+//     MULTIPLE books, each its own ISBN. → do NOT auto-combine; hold as ambiguous with
+//     a "may be several books" note so the human decides (a boxed set is often 3 books,
+//     not one). If both markers appear, the multi-book marker wins (safer).
+//
+// anthologyMarkerRe is the union, used for the sequential/one-stem fallback (either
+// marker but unclear boundaries → ambiguous). "complete" alone stays out (too weak —
+// appears on ordinary unabridged titles).
+var (
+	singleBookMarkerRe = regexp.MustCompile(`(?i)\b(antholog(?:y|ies)|omnibus|collect(?:ion|ions|ed))\b`)
+	multiBookMarkerRe  = regexp.MustCompile(`(?i)\b(trilog(?:y|ies)|tetralog(?:y|ies)|quartet|boxed?\s*set)\b`)
+	anthologyMarkerRe  = regexp.MustCompile(`(?i)\b(antholog(?:y|ies)|omnibus|trilog(?:y|ies)|tetralog(?:y|ies)|quartet|boxed?\s*set|collect(?:ion|ions|ed))\b`)
+)
 
 // leadingNumRe / trailingParenRe / trailingNumSuffixRe clean a derived survivor title.
 var (
@@ -213,6 +219,14 @@ type memberInfo struct {
 	hasNum     bool
 	fpKey      string // FilePath-derived book-folder key (always set)
 	itKey      string // ITunesPath-derived book-folder key, namespaced; "" when no iTunes path
+	// sortDisc / sortTrack are the PLAY-ORDER key. For a real "Disc N" member,
+	// sortDisc = the physical disc number and sortTrack = the within-disc chapter
+	// parsed from the filename; for flat/chapter/edition members, sortDisc = 0 and
+	// sortTrack = the file's own track/chapter number. Ordering by (sortDisc,
+	// sortTrack) yields D1C1, D1C2, D2C1, D2C2 — the sequence assignDiscTrack then
+	// flattens into continuous track numbers (owner decision: discs don't exist).
+	sortDisc  int
+	sortTrack int
 }
 
 // folderKeyOf computes the BOOK FOLDER key and per-member layout for one file path.
@@ -233,6 +247,10 @@ func folderKeyOf(fp string) (key string, mi memberInfo) {
 		mi.structure = "disc"
 		mi.num, _ = strconv.Atoi(m[1])
 		mi.hasNum = true
+		// Play order: physical disc first, then the within-disc chapter from the
+		// filename (so Disc 1's chapters precede Disc 2's when we flatten to tracks).
+		mi.sortDisc = mi.num
+		mi.sortTrack, _ = trackNum(fileBase)
 		return filepath.Dir(parent), mi
 
 	case chapterSubdirRe.MatchString(pbase):
@@ -245,6 +263,7 @@ func folderKeyOf(fp string) (key string, mi memberInfo) {
 		mi.normPrefix = normTitle(mi.prefix)
 		mi.num, _ = strconv.Atoi(m[2])
 		mi.hasNum = true
+		mi.sortTrack = mi.num // no disc; order by chapter number
 		return filepath.Dir(parent), mi
 
 	case editionMarkerRe.MatchString(pbase):
@@ -254,6 +273,7 @@ func folderKeyOf(fp string) (key string, mi memberInfo) {
 		mi.prefix = stripEditionMarkers(pbase)
 		mi.normPrefix = normTitle(mi.prefix)
 		mi.num, mi.hasNum = trackNum(fileBase)
+		mi.sortTrack = mi.num // no disc; order by filename track
 		return filepath.Dir(parent), mi
 
 	default:
@@ -263,6 +283,7 @@ func folderKeyOf(fp string) (key string, mi memberInfo) {
 		mi.num, mi.hasNum = trackNum(fileBase)
 		mi.prefix = titleRemainder(fileBase)
 		mi.normPrefix = normTitle(mi.prefix)
+		mi.sortTrack = mi.num // no disc; order by filename track
 		return parent, mi
 	}
 }
@@ -489,7 +510,9 @@ func classifyGroup(members []memberInfo) (RegroupGroup, bool) {
 	}
 	text := sb.String()
 	hasUnab, hasAb := versionMarkers(text)
-	hasFolderAnthologyMarker := anthologyRe.MatchString(folderName)
+	hasSingleBookMarker := singleBookMarkerRe.MatchString(folderName)
+	hasMultiBookMarker := multiBookMarkerRe.MatchString(folderName)
+	hasFolderAnthologyMarker := anthologyMarkerRe.MatchString(folderName)
 
 	// Structural tallies.
 	var discCount, chapterCount, flatCount, numberedCount int
@@ -568,22 +591,32 @@ func classifyGroup(members []memberInfo) (RegroupGroup, bool) {
 		return build(KindVersionGroup, false,
 			"create a version group (Abridged + Unabridged), Unabridged primary", 0), true
 
-	case hasFolderAnthologyMarker && manyDistinctTitles:
-		// An anthology/omnibus/collection marker on the BOOK FOLDER itself AND multiple
-		// distinct title stems → an anthology. Owner decision (2026-07-26): an anthology
-		// is a SINGLE real book (one ISBN), not multiple works to split — so the action
-		// is to COMBINE the files into one multi-file audiobook, exactly like a disc set.
-		// DistinctWorks is still surfaced (it's the story/chapter count) for the label.
+	case hasMultiBookMarker && manyDistinctTitles:
+		// A MULTI-book marker (trilogy/tetralogy/quartet/boxed set) with distinct title
+		// stems → this is very likely SEVERAL books, each its own ISBN, NOT one book
+		// (owner decision 2026-07-26). Combining would be wrong, so hold as ambiguous
+		// with a clear note and let the human decide (keep separate, or combine a subset).
+		// Checked BEFORE the single-book case so "Foundation Trilogy Collection" (both
+		// markers) leans safe. DistinctWorks = the likely volume count, for the label.
+		return build(KindAmbiguous, false,
+			"review: looks like a multi-book set (trilogy/boxed set) — may be several separate books, not one",
+			distinctStems), true
+
+	case hasSingleBookMarker && manyDistinctTitles:
+		// A SINGLE-book marker (anthology/omnibus/collection) on the BOOK FOLDER itself
+		// AND multiple distinct title stems → a real anthology, which is ONE published
+		// book (one ISBN), not multiple works to split (owner decision 2026-07-26). The
+		// action is to COMBINE the files into one multi-file audiobook, like a disc set.
+		// DistinctWorks is the story count, surfaced for the label.
 		return build(KindAnthology, false,
 			"combine into one multi-file audiobook (anthology/collection)",
 			distinctStems), true
 
 	case hasFolderAnthologyMarker:
-		// Anthology/trilogy/omnibus marker on the folder, but the members are sequential
-		// / share one title stem (e.g. `Foundation Trilogy - 1/2/3` could be 3 chapters
-		// OR 3 volumes). We cannot confirm distinct works, and a confident multi-disc
-		// collapse would be wrong if they are separate volumes → hold as ambiguous
-		// (maintainer rule: prefer ambiguous over confident-but-wrong).
+		// Either marker on the folder, but the members are sequential / share one title
+		// stem (e.g. `Foundation Trilogy - 1/2/3` could be 3 chapters OR 3 volumes). We
+		// cannot confirm the boundaries, and a confident collapse would be wrong if they
+		// are separate volumes → hold as ambiguous (prefer ambiguous over wrong).
 		return build(KindAmbiguous, false,
 			"review: collection/anthology marker on the folder, but work boundaries are unclear", 0), true
 
@@ -661,52 +694,44 @@ func topStr(votes map[string]int) (string, int) {
 	return bestKey, best
 }
 
-// sortMembers orders members by chapter/track number, then BookID for stability.
+// sortMembers orders members into play order: by physical disc, then within-disc
+// chapter, then filename, then BookID for stability. For non-disc groups sortDisc is
+// 0 for all, so this reduces to track-then-filename order.
 func sortMembers(members []memberInfo) {
 	sort.SliceStable(members, func(i, j int) bool {
-		if members[i].num != members[j].num {
-			return members[i].num < members[j].num
+		a, b := members[i], members[j]
+		if a.sortDisc != b.sortDisc {
+			return a.sortDisc < b.sortDisc
 		}
-		return members[i].book.BookID < members[j].book.BookID
+		if a.sortTrack != b.sortTrack {
+			return a.sortTrack < b.sortTrack
+		}
+		if a.fileBase != b.fileBase {
+			return a.fileBase < b.fileBase
+		}
+		return a.book.BookID < b.book.BookID
 	})
 }
 
 // assignDiscTrack stamps each member's book with the (DiscNumber, TrackNumber) the
-// apply path will write onto the merged BookFile rows. It MUST run after sortMembers
-// so the sequence follows play order. The rule mirrors the two real shapes the owner
-// called out:
+// apply path writes onto the merged BookFile rows. It MUST run after sortMembers so
+// the sequence follows play order.
 //
-//   - A member in a genuine "Disc N"/"CD N" subfolder (structure=="disc") is a real
-//     physical disc: DiscNumber = its disc-folder number, TrackNumber = its rank
-//     within that disc. (A Star Wars boxed set with actual disc folders.)
-//   - Any other member (flat / chapter / edition) is a sequential file on ONE disc:
-//     DiscNumber = 0 (there is NO disc concept — never spread fake disc numbers 1..N
-//     across chapters of a single recording), TrackNumber = its sequence position.
+// Owner decision (2026-07-26): discs don't exist — a combined book is ONE continuous
+// track list. So DiscNumber is ALWAYS 0 and TrackNumber runs 1..N over the play-order
+// sort, INCLUDING across former disc boundaries:
 //
-// TrackNumber is a running per-disc counter (disc 0 is its own bucket), so every
-// (disc, track) pair in the group is unique — the (disc, track, path) ordering in
-// GetBookFiles can never collide. We deliberately renumber to a contiguous 1..N per
-// disc rather than trusting the parsed filename ordinal: the apply path only writes
-// these when the file currently has NO disc/track metadata at all, so a clean
-// contiguous sequence is the right default for an otherwise-unnumbered file.
+//	Disc 1/Ch1 → t1   Disc 1/Ch2 → t2   Disc 2/Ch1 → t3   Disc 2/Ch2 → t4
 //
-// Assignment is by each member's OWN structure, not the group's classified Kind. This
-// is intentional and correct: a file physically living in "Disc 2/" belongs to disc 2
-// regardless of its neighbors, and a bare chapter file belongs to no disc. In the rare
-// mixed folder (a stray loose file alongside real "Disc N" subfolders), the loose file
-// gets disc 0 and the disc files get their true numbers — a sensible hybrid, never the
-// failure the owner flagged (fake disc numbers 1..N spread across chapters of one
-// recording), which only happens if you key off group order instead of real structure.
+// The physical disc is used only to ORDER the files (via sortMembers' sortDisc key),
+// never persisted. Numbers are contiguous and unique by construction, so the
+// (disc, track, path) sort in GetBookFiles can never collide. A same-disc chapter set
+// (e.g. "When We Were Sisters_1.mp3".."_6.mp3") is the identical rule: disc 0, tracks
+// 1..N.
 func assignDiscTrack(members []memberInfo) {
-	trackByDisc := map[int]int{}
 	for i := range members {
-		disc := 0
-		if members[i].structure == "disc" {
-			disc = members[i].num
-		}
-		trackByDisc[disc]++
-		members[i].book.DiscNumber = disc
-		members[i].book.TrackNumber = trackByDisc[disc]
+		members[i].book.DiscNumber = 0
+		members[i].book.TrackNumber = i + 1
 	}
 }
 

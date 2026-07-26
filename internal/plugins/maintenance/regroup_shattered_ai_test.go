@@ -120,7 +120,7 @@ func TestRegroupSummary_Labels(t *testing.T) {
 		g    itunesservice.RegroupGroup
 		want string
 	}{
-		{"real disc set", itunesservice.RegroupGroup{Kind: itunesservice.KindMultidisc, Structure: "disc", Members: make([]itunesservice.ShatterBook, 3), FolderRef: "/x"}, "Multi-disc: 3 discs → 1 book"},
+		{"real disc set", itunesservice.RegroupGroup{Kind: itunesservice.KindMultidisc, Structure: "disc", Members: make([]itunesservice.ShatterBook, 3), FolderRef: "/x"}, "Multi-disc source: 3 tracks → 1 book (flattened)"},
 		{"same-disc chapters", itunesservice.RegroupGroup{Kind: itunesservice.KindMultidisc, Structure: "flat", Members: make([]itunesservice.ShatterBook, 6), FolderRef: "/x"}, "Chapters: 6 tracks → 1 book"},
 		{"anthology", itunesservice.RegroupGroup{Kind: itunesservice.KindAnthology, DistinctWorks: 5, Members: make([]itunesservice.ShatterBook, 9), FolderRef: "/x"}, "Anthology/collection: 9 files (5 stories) → 1 book"},
 	}

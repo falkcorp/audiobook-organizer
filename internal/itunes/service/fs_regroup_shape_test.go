@@ -152,9 +152,10 @@ func TestClassify_FlatSameDisc_DiscTrackNumbers(t *testing.T) {
 	}
 }
 
-// Real "Disc N"/"CD N" folders must get their true DiscNumber per file, track 1 each
-// (one file per disc), with no (disc,track) collision.
-func TestClassify_RealDiscSet_DiscTrackNumbers(t *testing.T) {
+// Owner decision (2026-07-26): discs are FLATTENED — a real "Disc N"/"CD N" set
+// becomes ONE continuous track list, disc 0, tracks 1..N in disc order (one file per
+// disc here → track 1, 2, 3 across discs 1, 2, 3).
+func TestClassify_RealDiscSet_FlattenedToContinuousTracks(t *testing.T) {
 	base := shatterRoot + "/Patrick Rothfuss/The Wise Mans Fear"
 	books := []ShatterBook{
 		sb("wd1", base+"/Disc 1/track.mp3"),
@@ -166,21 +167,82 @@ func TestClassify_RealDiscSet_DiscTrackNumbers(t *testing.T) {
 	if g.Kind != KindMultidisc || !g.Confident {
 		t.Fatalf("kind=%q confident=%v, want multidisc/true", g.Kind, g.Confident)
 	}
+	// Disc order preserved in the track sequence: disc 1 → t1, disc 2 → t2, disc 3 → t3.
 	want := map[string]int{"wd1": 1, "wd2": 2, "wd3": 3}
-	seen := map[[2]int]bool{}
-	for id, wantDisc := range want {
+	for id, wantTrack := range want {
 		m := memberByID(t, g, id)
-		if m.DiscNumber != wantDisc {
-			t.Errorf("%s: DiscNumber=%d, want %d", id, m.DiscNumber, wantDisc)
+		if m.DiscNumber != 0 {
+			t.Errorf("%s: DiscNumber=%d, want 0 (discs flattened away)", id, m.DiscNumber)
 		}
-		if m.TrackNumber != 1 {
-			t.Errorf("%s: TrackNumber=%d, want 1 (one file per disc)", id, m.TrackNumber)
+		if m.TrackNumber != wantTrack {
+			t.Errorf("%s: TrackNumber=%d, want %d (continuous across discs)", id, m.TrackNumber, wantTrack)
 		}
-		key := [2]int{m.DiscNumber, m.TrackNumber}
-		if seen[key] {
-			t.Errorf("(disc,track) collision at %v", key)
+	}
+}
+
+// A real multi-disc, multi-chapter set flattens to ONE continuous track list in
+// disc-then-chapter order: D1C1→t1, D1C2→t2, D2C1→t3, D2C2→t4 (the owner's example).
+func TestClassify_MultiDiscMultiChapter_ContinuousOrder(t *testing.T) {
+	base := shatterRoot + "/Brandon Sanderson/The Way of Kings"
+	books := []ShatterBook{
+		sb("b_d2c2", base+"/Disc 2/C2.mp3"), // deliberately out of order in the slice
+		sb("b_d1c1", base+"/Disc 1/C1.mp3"),
+		sb("b_d2c1", base+"/Disc 2/C1.mp3"),
+		sb("b_d1c2", base+"/Disc 1/C2.mp3"),
+	}
+	groups, _ := ClassifyShatteredFolders(books)
+	g := findGroup(t, groups, "The Way of Kings")
+	if g.Kind != KindMultidisc || !g.Confident {
+		t.Fatalf("kind=%q confident=%v, want multidisc/true", g.Kind, g.Confident)
+	}
+	wantTrack := map[string]int{"b_d1c1": 1, "b_d1c2": 2, "b_d2c1": 3, "b_d2c2": 4}
+	for id, want := range wantTrack {
+		m := memberByID(t, g, id)
+		if m.DiscNumber != 0 {
+			t.Errorf("%s: DiscNumber=%d, want 0", id, m.DiscNumber)
 		}
-		seen[key] = true
+		if m.TrackNumber != want {
+			t.Errorf("%s: TrackNumber=%d, want %d", id, m.TrackNumber, want)
+		}
+	}
+}
+
+// A MULTI-book marker (trilogy/boxed set) with distinct titles must NOT combine —
+// it's likely several separate books (multiple ISBNs). Held ambiguous for a human.
+func TestClassify_MultiBookMarker_NotCombined(t *testing.T) {
+	base := shatterRoot + "/Isaac Asimov/The Foundation Trilogy"
+	books := []ShatterBook{
+		sb("f1", base+"/Foundation.mp3"),
+		sb("f2", base+"/Foundation and Empire.mp3"),
+		sb("f3", base+"/Second Foundation.mp3"),
+	}
+	groups, _ := ClassifyShatteredFolders(books)
+	g := findGroup(t, groups, "The Foundation Trilogy")
+	if g.Kind != KindAmbiguous {
+		t.Fatalf("trilogy with distinct titles: kind=%q, want ambiguous (may be several books)", g.Kind)
+	}
+	if !strings.Contains(g.ProposedAction, "multi-book set") {
+		t.Errorf("action=%q, want a multi-book-set review note", g.ProposedAction)
+	}
+}
+
+// A SINGLE-book marker (anthology/collection/omnibus) with distinct titles IS one book
+// → combine. Contrast with the trilogy case above.
+func TestClassify_SingleBookMarker_Combined(t *testing.T) {
+	base := shatterRoot + "/Various/The Big Book of Science Fiction Anthology"
+	books := []ShatterBook{
+		sb("s1", base+"/The Star.mp3"),
+		sb("s2", base+"/Desertion.mp3"),
+		sb("s3", base+"/Surface Tension.mp3"),
+		sb("s4", base+"/The Nine Billion Names.mp3"),
+	}
+	groups, _ := ClassifyShatteredFolders(books)
+	g := findGroup(t, groups, "The Big Book of Science Fiction Anthology")
+	if g.Kind != KindAnthology {
+		t.Fatalf("anthology: kind=%q, want anthology (combine)", g.Kind)
+	}
+	if !strings.Contains(g.ProposedAction, "combine into one") {
+		t.Errorf("action=%q, want combine", g.ProposedAction)
 	}
 }
 
