@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/FileInfoCompare.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: e4d5f6a7-b8c9-0123-defa-ed4567890123
-// last-edited: 2026-06-19
+// last-edited: 2026-07-26
 
 // FileInfoCompare renders a side-by-side comparison of two books' file lists.
 // Used inside CandidateCompareDrawer.
@@ -9,21 +9,7 @@
 import { Box, Chip, Divider, Stack, Tooltip, Typography } from '@mui/material';
 import type { DedupBookDetail } from '../../services/api';
 import { formatPath, usePathVars, type PathVar } from '../../utils/formatPath';
-
-function formatBytes(bytes: number | undefined): string {
-  if (bytes == null) return '';
-  if (bytes < 1024) return `${bytes}B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)}KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
-}
-
-function formatDuration(seconds: number | undefined): string {
-  if (seconds == null) return '';
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
-}
+import { formatBytes, formatDuration } from '../../utils/mediaFormat';
 
 interface BookFilesColumnProps {
   book: DedupBookDetail;
