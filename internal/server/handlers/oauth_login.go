@@ -175,9 +175,18 @@ func redirectToLogin(c *gin.Context, reason string) {
 	http.Redirect(c.Writer, c.Request, "/login?error="+reason, http.StatusFound)
 }
 
-// sanitizeReturn only allows a same-site absolute path (prevents open-redirect).
+// sanitizeReturn only allows a same-site absolute path (prevents open-redirect). It
+// must be a single leading slash: reject "//host" and "/\host" (browsers normalize
+// backslashes to slashes, so "/\evil.com" is protocol-relative to evil.com), and any
+// path containing a backslash.
 func sanitizeReturn(ret string) string {
-	if ret == "" || !strings.HasPrefix(ret, "/") || strings.HasPrefix(ret, "//") {
+	if ret == "" || !strings.HasPrefix(ret, "/") {
+		return ""
+	}
+	if strings.ContainsRune(ret, '\\') {
+		return ""
+	}
+	if len(ret) > 1 && (ret[1] == '/' || ret[1] == '\\') {
 		return ""
 	}
 	return ret

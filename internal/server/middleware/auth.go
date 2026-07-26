@@ -20,6 +20,11 @@ import (
 const (
 	// SessionCookieName is the auth session cookie used by API clients.
 	SessionCookieName = "session_id"
+	// contextUserKey is LOAD-BEARING for auth: RequireAuth treats a request that
+	// already has this key set as authenticated (it skips its own session check —
+	// see the early-out below). Only a trusted upstream stage that has FULLY verified
+	// an identity (RequireAuth itself, handleAPIKeyAuth, or CloudflareAccessAuth after
+	// JWT verification + allowlist) may set it. Never set it from unvalidated input.
 	contextUserKey    = "auth_user"
 	contextSessionKey = "auth_session"
 	contextAPIKeyKey  = "auth_api_key"
