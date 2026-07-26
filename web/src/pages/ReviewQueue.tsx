@@ -1,80 +1,196 @@
 // file: web/src/pages/ReviewQueue.tsx
-// version: 1.0.0
+// version: 2.0.0
 // guid: 4c8f2a17-5e93-4d60-a1b8-7f3c6d9e0a52
-// last-edited: 2026-07-13
+// last-edited: 2026-07-26
 
 import { useEffect, useMemo, useState } from 'react';
 import {
   Accordion,
   AccordionDetails,
   AccordionSummary,
+  Avatar,
   Box,
   Button,
   Chip,
   CircularProgress,
   Divider,
-  List,
-  ListItem,
   Paper,
   Stack,
+  Tooltip,
   Typography,
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore.js';
 import CheckIcon from '@mui/icons-material/Check.js';
 import CloseIcon from '@mui/icons-material/Close.js';
+import AlbumIcon from '@mui/icons-material/Album.js';
 import * as api from '../services/api';
-import { type ReviewItem } from '../services/api';
+import { type Book, type ReviewItem } from '../services/api';
 import { useReviewStore } from '../stores/useReviewStore';
 import { useAppStore } from '../stores/useAppStore';
 import { labelForKind } from '../lib/reviewKinds';
+import {
+  type MemberEntry,
+  memberCount,
+  memberEntries,
+  parsePayload,
+} from '../lib/reviewPayload';
+import { formatBytes, formatDuration } from '../utils/mediaFormat';
+import { formatPath, usePathVars } from '../utils/formatPath';
 
-// A defensively-typed view of a review item's JSON payload. The producer op
-// (Track B) is not built yet, so NOTHING writes this shape in the current repo
-// state — every field is optional and parsing is wrapped in try/catch. Render
-// only what is present; never assume a key exists.
-interface ReviewPayload {
-  folder?: string;
-  proposed_action?: string;
-  action?: string;
-  derived_title?: string;
-  title?: string;
-  member_ids?: string[];
-  member_count?: number;
-  confidence?: number;
-  files?: string[];
-  [k: string]: unknown;
-}
-
-function parsePayload(raw: string): ReviewPayload | null {
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? (parsed as ReviewPayload) : null;
-  } catch {
-    return null;
+// fetchBooksByIds resolves member book IDs to full Book records in bounded batches
+// (a group can hold dozens of files; don't fire dozens of concurrent requests). A
+// member that was hard-deleted since the hold was created simply resolves to
+// undefined — the row still renders from its file path.
+async function fetchBooksByIds(
+  ids: string[],
+  signal: AbortSignal
+): Promise<Map<string, Book>> {
+  const out = new Map<string, Book>();
+  const unique = Array.from(new Set(ids.filter((id) => id)));
+  const BATCH = 6;
+  for (let i = 0; i < unique.length; i += BATCH) {
+    if (signal.aborted) break;
+    const slice = unique.slice(i, i + BATCH);
+    const results = await Promise.allSettled(slice.map((id) => api.getBook(id)));
+    results.forEach((r, j) => {
+      if (r.status === 'fulfilled' && r.value) out.set(slice[j], r.value);
+    });
   }
+  return out;
 }
 
-function memberCount(payload: ReviewPayload | null): number | undefined {
-  if (!payload) return undefined;
-  if (typeof payload.member_count === 'number') return payload.member_count;
-  if (Array.isArray(payload.member_ids)) return payload.member_ids.length;
-  if (Array.isArray(payload.files)) return payload.files.length;
-  return undefined;
+// MemberRow renders one member of a review group with as much metadata as we could
+// resolve — cover, title, author, series, format/duration/size/bitrate chips, and the
+// proposed disc/track order. When the source book couldn't be fetched (e.g. it was
+// hard-deleted since the hold was created) it degrades to the bare file path.
+function MemberRow({
+  entry,
+  book,
+  pathVars,
+}: {
+  entry: MemberEntry;
+  book: Book | undefined;
+  pathVars: ReturnType<typeof usePathVars>;
+}) {
+  const title = book?.title || entry.filePath.split('/').pop() || '(unknown)';
+  const size = book?.file_size;
+  const duration = book?.duration;
+  const bitrate = book?.bitrate;
+  const codec = book?.codec;
+  const hasDisc = typeof entry.disc === 'number' && entry.disc > 0;
+  const hasTrack = typeof entry.track === 'number' && entry.track > 0;
+
+  return (
+    <Box
+      sx={{
+        display: 'flex',
+        gap: 1.25,
+        p: 1,
+        borderRadius: 1,
+        bgcolor: 'action.hover',
+        alignItems: 'flex-start',
+        minWidth: 0,
+      }}
+    >
+      <Avatar
+        variant="rounded"
+        src={book?.cover_url || book?.cover_image || undefined}
+        sx={{ width: 40, height: 40, bgcolor: 'action.selected' }}
+      >
+        <AlbumIcon fontSize="small" />
+      </Avatar>
+      <Box sx={{ minWidth: 0, flex: 1 }}>
+        <Typography variant="body2" fontWeight={600} noWrap title={title}>
+          {title}
+        </Typography>
+        {(book?.author_name || book?.series_name) && (
+          <Typography variant="caption" color="text.secondary" noWrap display="block">
+            {book?.author_name}
+            {book?.series_name && (
+              <>
+                {book?.author_name ? ' · ' : ''}
+                {book.series_name}
+                {book.series_position != null ? ` #${book.series_position}` : ''}
+              </>
+            )}
+          </Typography>
+        )}
+        <Stack direction="row" spacing={0.5} sx={{ mt: 0.5 }} flexWrap="wrap" useFlexGap>
+          {(hasDisc || hasTrack) && (
+            <Chip
+              size="small"
+              color="primary"
+              variant="outlined"
+              label={`${hasDisc ? `Disc ${entry.disc} · ` : ''}Track ${hasTrack ? entry.track : '?'}`}
+            />
+          )}
+          {book?.format && <Chip size="small" label={book.format.toUpperCase()} />}
+          {duration != null && (
+            <Chip size="small" variant="outlined" label={formatDuration(duration)} />
+          )}
+          {size != null && <Chip size="small" variant="outlined" label={formatBytes(size)} />}
+          {bitrate != null && (
+            <Chip size="small" variant="outlined" label={`${bitrate}kbps`} />
+          )}
+          {codec && <Chip size="small" variant="outlined" label={codec} />}
+        </Stack>
+        {entry.filePath && (
+          <Tooltip title={entry.filePath} placement="bottom-start"
+            componentsProps={{ tooltip: { sx: { maxWidth: 600 } } }}>
+            <Typography
+              variant="caption"
+              sx={{ fontFamily: 'monospace', fontSize: '0.65rem', display: 'block', mt: 0.5 }}
+              noWrap
+            >
+              {formatPath(entry.filePath, pathVars)}
+            </Typography>
+          </Tooltip>
+        )}
+      </Box>
+    </Box>
+  );
 }
 
-function PayloadDetails({ item }: { item: ReviewItem }) {
-  const payload = parsePayload(item.payload);
+// MemberFilesDetail renders a review item's payload header plus a rich per-member
+// list. It fetches the member books lazily (it only mounts when the accordion is
+// expanded, via unmountOnExit) so opening the queue never fans out hundreds of
+// getBook calls up front.
+function MemberFilesDetail({ item }: { item: ReviewItem }) {
+  const pathVars = usePathVars();
+  const payload = useMemo(() => parsePayload(item.payload), [item.payload]);
   const folder = payload?.folder ?? item.folder_ref;
-  const proposed = payload?.proposed_action ?? payload?.action;
-  const title = payload?.derived_title ?? payload?.title;
+  const proposed = payload?.proposedAction ?? payload?.proposed_action;
+  const title = payload?.survivorTitle ?? payload?.derived_title ?? payload?.title;
+  const confidence =
+    typeof payload?.confidence === 'string'
+      ? payload.confidence
+      : typeof payload?.confidence === 'number'
+        ? payload.confidence.toFixed(2)
+        : undefined;
+  const entries = useMemo(() => memberEntries(payload), [payload]);
   const members = memberCount(payload);
-  const confidence = typeof payload?.confidence === 'number' ? payload.confidence : undefined;
-  const files = Array.isArray(payload?.files) ? payload!.files! : undefined;
+
+  const [books, setBooks] = useState<Map<string, Book>>(new Map());
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const ids = entries.map((e) => e.bookId).filter((id): id is string => !!id);
+    if (ids.length === 0) return;
+    const ctrl = new AbortController();
+    setLoading(true);
+    fetchBooksByIds(ids, ctrl.signal)
+      .then((m) => {
+        if (!ctrl.signal.aborted) setBooks(m);
+      })
+      .finally(() => {
+        if (!ctrl.signal.aborted) setLoading(false);
+      });
+    return () => ctrl.abort();
+  }, [entries]);
 
   return (
     <Box sx={{ pl: 1 }}>
-      <Stack spacing={0.5} sx={{ mb: files ? 1 : 0 }}>
+      <Stack spacing={0.5} sx={{ mb: 1 }}>
         {folder && (
           <Typography variant="body2">
             <strong>Folder:</strong> <code>{folder}</code>
@@ -82,7 +198,7 @@ function PayloadDetails({ item }: { item: ReviewItem }) {
         )}
         {title && (
           <Typography variant="body2">
-            <strong>Derived title:</strong> {title}
+            <strong>Proposed title:</strong> {title}
           </Typography>
         )}
         {proposed && (
@@ -90,39 +206,34 @@ function PayloadDetails({ item }: { item: ReviewItem }) {
             <strong>Proposed action:</strong> {proposed}
           </Typography>
         )}
-        {members !== undefined && (
-          <Typography variant="body2">
-            <strong>Members:</strong> {members} file{members === 1 ? '' : 's'}
-          </Typography>
-        )}
-        {confidence !== undefined && (
-          <Typography variant="body2">
-            <strong>Confidence:</strong> {confidence.toFixed(2)}
-          </Typography>
-        )}
+        <Stack direction="row" spacing={1} alignItems="center">
+          {members !== undefined && (
+            <Typography variant="body2">
+              <strong>Members:</strong> {members} file{members === 1 ? '' : 's'}
+            </Typography>
+          )}
+          {confidence && (
+            <Chip
+              size="small"
+              label={confidence === 'high' ? 'High confidence' : confidence}
+              color={confidence === 'high' ? 'success' : 'default'}
+              variant="outlined"
+            />
+          )}
+          {loading && <CircularProgress size={14} />}
+        </Stack>
       </Stack>
-      {files && files.length > 0 && (
-        <Box>
-          <Typography variant="caption" color="text.secondary">
-            Files
-          </Typography>
-          <List dense disablePadding sx={{ pl: 1 }}>
-            {files.slice(0, 25).map((f, i) => (
-              <ListItem key={i} disableGutters sx={{ py: 0 }}>
-                <Typography variant="caption" sx={{ wordBreak: 'break-all' }}>
-                  {f}
-                </Typography>
-              </ListItem>
-            ))}
-            {files.length > 25 && (
-              <ListItem disableGutters sx={{ py: 0 }}>
-                <Typography variant="caption" color="text.secondary">
-                  …and {files.length - 25} more
-                </Typography>
-              </ListItem>
-            )}
-          </List>
-        </Box>
+      {entries.length > 0 && (
+        <Stack spacing={0.75}>
+          {entries.map((e, i) => (
+            <MemberRow
+              key={e.bookId ?? e.filePath ?? i}
+              entry={e}
+              book={e.bookId ? books.get(e.bookId) : undefined}
+              pathVars={pathVars}
+            />
+          ))}
+        </Stack>
       )}
     </Box>
   );
@@ -279,14 +390,18 @@ export function ReviewQueue() {
                 {bucket.items.map((item) => {
                   const itemBusy = busyItems.has(item.id);
                   return (
-                    <Accordion key={item.id} disableGutters>
+                    <Accordion
+                      key={item.id}
+                      disableGutters
+                      slotProps={{ transition: { unmountOnExit: true } }}
+                    >
                       <AccordionSummary expandIcon={<ExpandMoreIcon />}>
                         <Typography variant="body2" sx={{ flexGrow: 1 }}>
                           {item.summary || item.folder_ref || item.id}
                         </Typography>
                       </AccordionSummary>
                       <AccordionDetails>
-                        <PayloadDetails item={item} />
+                        <MemberFilesDetail item={item} />
                         <Stack direction="row" spacing={1} sx={{ mt: 2 }}>
                           <Button
                             size="small"
