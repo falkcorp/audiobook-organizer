@@ -630,9 +630,12 @@ func TestApplyMultidisc_FlatSameDisc_SetsTracksNotDiscs(t *testing.T) {
 	dbtest.AssertStoreInvariants(t, store)
 }
 
-// TestApplyMultidisc_RealDiscSet_SetsDiscNumbers is the genuine boxed-set case: files
-// living in real "Disc N" folders get their true DiscNumber per file (disc 1 / disc 2 /
-// disc 3), so a (disc, track) sort orders across discs correctly with no collision.
+// TestApplyMultidisc_RealDiscSet_SetsDiscNumbers exercises the apply MECHANISM's
+// fidelity: ApplyMultidisc writes exactly the disc/track the payload carries. NOTE the
+// classifier no longer *produces* disc-numbered payloads — since 2026-07-26 it flattens
+// real disc sets to disc 0 + continuous tracks (owner decision; see the classifier's
+// TestClassify_RealDiscSet_FlattenedToContinuousTracks). This test hand-builds a
+// disc-numbered payload purely to prove the writer honors whatever it's given.
 func TestApplyMultidisc_RealDiscSet_SetsDiscNumbers(t *testing.T) {
 	store := newApplyTestStore(t)
 

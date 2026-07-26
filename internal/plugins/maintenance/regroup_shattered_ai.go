@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/regroup_shattered_ai.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8b3e6d21-4f97-4c05-a1d8-2e7b9c0f5a63
 // last-edited: 2026-07-26
 
@@ -310,11 +310,12 @@ func regroupSummary(g itunesservice.RegroupGroup) string {
 	n := len(g.Members)
 	switch g.Kind {
 	case itunesservice.KindMultidisc:
-		// Distinguish a genuine multi-DISC set from same-disc CHAPTERS — the owner's
-		// original confusion. Only a real Disc N/CD N folder structure is "Multi-disc";
-		// flat/chapter files are sequential chapters of ONE disc.
+		// Distinguish a genuine multi-DISC source from same-disc CHAPTERS — the owner's
+		// original confusion. Both flatten to one continuous track list (discs don't
+		// exist), so the count is always tracks (= files), never discs; the Structure
+		// just tells the human where the files came from.
 		if g.Structure == "disc" {
-			return fmt.Sprintf("Multi-disc: %d discs → 1 book — %s", n, g.FolderRef)
+			return fmt.Sprintf("Multi-disc source: %d tracks → 1 book (flattened) — %s", n, g.FolderRef)
 		}
 		return fmt.Sprintf("Chapters: %d tracks → 1 book — %s", n, g.FolderRef)
 	case itunesservice.KindVersionGroup:
