@@ -1,18 +1,71 @@
 // file: internal/plugins/maintenance/regroup_shattered_ai_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3a9f6c04-8e21-4b57-9d0a-6f2e7c1b5a48
-// last-edited: 2026-07-13
+// last-edited: 2026-07-25
 
 package maintenance
 
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 )
+
+// TestBuildRegroupPayload_DiscTrackRoundTrip closes the classifier→payload→apply seam:
+// a real classified group serialized by buildRegroupPayload and decoded back by
+// decodeRegroupPayload must preserve the per-file disc/track arrays, index-aligned with
+// Files/MemberBookIDs. This guards the parallel-array copy the apply path relies on.
+func TestBuildRegroupPayload_DiscTrackRoundTrip(t *testing.T) {
+	// A flat, sequentially-numbered same-disc set (the "When We Were Sisters" shape).
+	base := "/mnt/bigdata/books/audiobook-organizer/Ann Napolitano/When We Were Sisters"
+	var books []itunesservice.ShatterBook
+	for i := 1; i <= 5; i++ {
+		books = append(books, itunesservice.ShatterBook{
+			BookID:    fmt.Sprintf("b%02d", i),
+			FilePath:  fmt.Sprintf("%s/When We Were Sisters_%d.mp3", base, i),
+			FileCount: 1,
+			IsPrimary: true,
+		})
+	}
+	groups, _ := itunesservice.ClassifyShatteredFolders(books)
+	if len(groups) != 1 {
+		t.Fatalf("want 1 group, got %d", len(groups))
+	}
+	g := groups[0]
+	if g.Kind != itunesservice.KindMultidisc || !g.Confident {
+		t.Fatalf("want confident multidisc, got kind=%q confident=%v", g.Kind, g.Confident)
+	}
+
+	raw, err := buildRegroupPayload(g)
+	if err != nil {
+		t.Fatalf("buildRegroupPayload: %v", err)
+	}
+	p, err := decodeRegroupPayload(database.ReviewItem{Payload: raw})
+	if err != nil {
+		t.Fatalf("decodeRegroupPayload: %v", err)
+	}
+
+	if len(p.DiscNumbers) != len(p.Files) || len(p.TrackNumbers) != len(p.Files) {
+		t.Fatalf("arrays not parallel: files=%d discs=%d tracks=%d",
+			len(p.Files), len(p.DiscNumbers), len(p.TrackNumbers))
+	}
+	// Every member is a same-disc chapter: disc 0, contiguous track numbers.
+	for i := range p.Files {
+		if p.DiscNumbers[i] != 0 {
+			t.Errorf("file %d (%s): disc=%d, want 0", i, p.Files[i], p.DiscNumbers[i])
+		}
+	}
+	// The classifier ordered members by track, so tracks are 1..N in payload order.
+	for i, tr := range p.TrackNumbers {
+		if tr != i+1 {
+			t.Errorf("track order: index %d has track %d, want %d", i, tr, i+1)
+		}
+	}
+}
 
 // seedShatterBook creates a single-file book at a chapter-shatter path so the dry-run
 // op's scan groups it into a review hold.

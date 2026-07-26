@@ -1,7 +1,7 @@
 // file: internal/itunes/service/fs_regroup_shape_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4d2a7f81-6c93-4e50-b8a1-0f5e2c9d3b76
-// last-edited: 2026-07-14
+// last-edited: 2026-07-25
 
 package itunesservice
 
@@ -110,6 +110,76 @@ func TestClassify_DiscSubfolders_Multidisc(t *testing.T) {
 	g := findGroup(t, groups, "The Name of the Wind")
 	if g.Kind != KindMultidisc || !g.Confident {
 		t.Errorf("kind=%q confident=%v, want multidisc/true", g.Kind, g.Confident)
+	}
+}
+
+// memberByID returns the classified member with the given BookID (disc/track are set
+// by assignDiscTrack for confident collapses).
+func memberByID(t *testing.T, g RegroupGroup, id string) ShatterBook {
+	t.Helper()
+	for _, m := range g.Members {
+		if m.BookID == id {
+			return m
+		}
+	}
+	t.Fatalf("no member %q in group %s", id, g.FolderRef)
+	return ShatterBook{}
+}
+
+// Flat sequential chapters of ONE recording must get TrackNumber 1..N and DiscNumber 0
+// — the "When We Were Sisters_1..N" case. NO fake disc numbers across chapters.
+func TestClassify_FlatSameDisc_DiscTrackNumbers(t *testing.T) {
+	base := shatterRoot + "/Ann Napolitano/When We Were Sisters"
+	var books []ShatterBook
+	for i := 1; i <= 6; i++ {
+		books = append(books, sb(fmt.Sprintf("wws%02d", i),
+			fmt.Sprintf("%s/When We Were Sisters_%d.mp3", base, i)))
+	}
+	groups, _ := ClassifyShatteredFolders(books)
+	g := findGroup(t, groups, "When We Were Sisters")
+	if g.Kind != KindMultidisc || !g.Confident {
+		t.Fatalf("kind=%q confident=%v, want multidisc/true", g.Kind, g.Confident)
+	}
+	for i := 1; i <= 6; i++ {
+		m := memberByID(t, g, fmt.Sprintf("wws%02d", i))
+		if m.DiscNumber != 0 {
+			t.Errorf("file _%d: DiscNumber=%d, want 0 (same-disc chapters get no disc)", i, m.DiscNumber)
+		}
+		if m.TrackNumber != i {
+			t.Errorf("file _%d: TrackNumber=%d, want %d", i, m.TrackNumber, i)
+		}
+	}
+}
+
+// Real "Disc N"/"CD N" folders must get their true DiscNumber per file, track 1 each
+// (one file per disc), with no (disc,track) collision.
+func TestClassify_RealDiscSet_DiscTrackNumbers(t *testing.T) {
+	base := shatterRoot + "/Patrick Rothfuss/The Wise Mans Fear"
+	books := []ShatterBook{
+		sb("wd1", base+"/Disc 1/track.mp3"),
+		sb("wd2", base+"/Disc 2/track.mp3"),
+		sb("wd3", base+"/CD 3/track.mp3"),
+	}
+	groups, _ := ClassifyShatteredFolders(books)
+	g := findGroup(t, groups, "The Wise Mans Fear")
+	if g.Kind != KindMultidisc || !g.Confident {
+		t.Fatalf("kind=%q confident=%v, want multidisc/true", g.Kind, g.Confident)
+	}
+	want := map[string]int{"wd1": 1, "wd2": 2, "wd3": 3}
+	seen := map[[2]int]bool{}
+	for id, wantDisc := range want {
+		m := memberByID(t, g, id)
+		if m.DiscNumber != wantDisc {
+			t.Errorf("%s: DiscNumber=%d, want %d", id, m.DiscNumber, wantDisc)
+		}
+		if m.TrackNumber != 1 {
+			t.Errorf("%s: TrackNumber=%d, want 1 (one file per disc)", id, m.TrackNumber)
+		}
+		key := [2]int{m.DiscNumber, m.TrackNumber}
+		if seen[key] {
+			t.Errorf("(disc,track) collision at %v", key)
+		}
+		seen[key] = true
 	}
 }
 
