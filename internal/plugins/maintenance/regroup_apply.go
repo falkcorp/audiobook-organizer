@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_apply.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e2a7c9d4-1f68-4b03-9c5e-7a0d3f814b62
-// last-edited: 2026-07-17
+// last-edited: 2026-07-25
 
 // Package maintenance — the APPLY path for the regroup review queue (PR-B2).
 //
@@ -26,6 +26,12 @@
 //     with nil the survivor row is never rewritten and its AcoustIDFingerprint /
 //     Author / Series survive. Absorbed books' FILES move by file ID (fingerprints
 //     ride along); absorbed ROWS are hard-deleted intentionally.
+//   - AFTER the combine, applyDiscTrackNumbers stamps the merged files' play order.
+//     It re-reads the FULL BookFile rows (fingerprint retained) and writes ONLY
+//     DiscNumber/TrackNumber via UpdateBookFile (which also restores the fingerprint
+//     on an empty incoming value) — never a full/partial BookFile write-back. It is
+//     guarded group-level ("any file already numbered → leave the whole set alone")
+//     and best-effort (a numbering error warns, never fails the merge).
 //   - Version-group uses re-fetch-and-patch: GetBookByID returns the FULL row, we
 //     mutate ONLY VersionGroupID, then UpdateBook. Never construct a fresh/partial
 //     Book and write it back — UpdateBook is a full-column replace.
@@ -98,8 +104,77 @@ func ApplyMultidisc(store database.Store, combiner bookCombiner) func(context.Co
 		slog.Info("regroup multidisc apply: collapsed folder",
 			"item", item.ID, "folder", p.Folder, "survivor", res.PrimaryID,
 			"files_moved", res.FilesMoved, "books_deleted", res.BooksDeleted)
+
+		// Stamp the merged book's files with the per-file disc/track order the classifier
+		// derived. Best-effort: the combine (the actual merge) already committed, so a
+		// numbering failure logs a warning but does NOT fail the review item — the disc/
+		// track can be re-derived by re-running the dry-run, and leaving the item "failed"
+		// would wrongly imply the books weren't merged.
+		if n, derr := applyDiscTrackNumbers(store, res.PrimaryID, p); derr != nil {
+			slog.Warn("regroup multidisc apply: disc/track numbering incomplete",
+				"item", item.ID, "folder", p.Folder, "survivor", res.PrimaryID, "updated", n, "err", derr)
+		} else if n > 0 {
+			slog.Info("regroup multidisc apply: set disc/track numbers",
+				"item", item.ID, "survivor", res.PrimaryID, "files_numbered", n)
+		}
 		return nil
 	}
+}
+
+// applyDiscTrackNumbers writes the payload's per-file (disc, track) order onto the
+// merged survivor's BookFile rows. It returns the number of files updated.
+//
+// Safety rules (this repo's dominant incident class is BookFile write-back wipes):
+//   - Reads the FULL rows via GetBookFiles (fingerprint retained in storage) and
+//     mutates ONLY DiscNumber/TrackNumber, then writes via UpdateBookFile — which
+//     itself restores AcoustIDFingerprint on an empty incoming value. Never a full
+//     fresh/partial BookFile write-back.
+//   - GROUP-LEVEL "already set → leave it" guard: if ANY survivor file already carries
+//     disc/track metadata, the whole group is left untouched. That both honors the
+//     owner's "unless the disk is already set, then leave it" and prevents a collision
+//     between a pre-tagged file's track and a freshly-sequenced one.
+//   - Backward compatible: a hold written before DiscNumbers/TrackNumbers existed has
+//     empty arrays → no-op.
+func applyDiscTrackNumbers(store database.Store, survivorID string, p regroupPayload) (int, error) {
+	if len(p.DiscNumbers) == 0 || len(p.TrackNumbers) == 0 {
+		return 0, nil // old payload or a non-confident kind — nothing to assign
+	}
+	// Map each member FilePath → its (disc, track). Files/DiscNumbers/TrackNumbers are
+	// parallel by index; guard against a short/ragged array rather than trusting length.
+	type dt struct{ disc, track int }
+	want := make(map[string]dt, len(p.Files))
+	for i, path := range p.Files {
+		if i < len(p.DiscNumbers) && i < len(p.TrackNumbers) {
+			want[path] = dt{p.DiscNumbers[i], p.TrackNumbers[i]}
+		}
+	}
+	files, err := store.GetBookFiles(survivorID)
+	if err != nil {
+		return 0, fmt.Errorf("read survivor files: %w", err)
+	}
+	// Group-level guard: respect any pre-existing disc/track tagging on the whole set.
+	for i := range files {
+		if files[i].DiscNumber != 0 || files[i].TrackNumber != 0 {
+			slog.Info("regroup multidisc apply: survivor already carries disc/track metadata — leaving as-is",
+				"survivor", survivorID)
+			return 0, nil
+		}
+	}
+	updated := 0
+	for i := range files {
+		f := files[i] // full row incl. AcoustIDFingerprint
+		d, ok := want[f.FilePath]
+		if !ok || (d.disc == 0 && d.track == 0) {
+			continue
+		}
+		f.DiscNumber = d.disc
+		f.TrackNumber = d.track
+		if err := store.UpdateBookFile(f.ID, &f); err != nil {
+			return updated, fmt.Errorf("set disc/track on %s: %w", f.ID, err)
+		}
+		updated++
+	}
+	return updated, nil
 }
 
 // ApplyVersionGroup builds the apply function for regroup.version-group holds: it

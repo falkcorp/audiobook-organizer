@@ -1,7 +1,7 @@
 // file: internal/itunes/service/fs_regroup_shape.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 1e7d4a92-3c85-4b60-9f21-6a8c0d5e2b47
-// last-edited: 2026-07-14
+// last-edited: 2026-07-25
 
 // Package service — deterministic (regex-only) shape classifier for the
 // shattered-book REGROUP review producer (PR-B1).
@@ -93,6 +93,22 @@ type ShatterBook struct {
 	IsPrimary  bool   // non-primary version members are ignored
 	Title      string // scanner-derived title (album tag); may be empty
 	Author     string // display author when known; never used for the FOLDER key
+
+	// DiscNumber / TrackNumber are OUTPUT fields, zero on the input view and
+	// populated by classifyGroup (assignDiscTrack) for the members of a confident
+	// multidisc collapse. They carry the per-file play-order the apply path
+	// (ApplyMultidisc) writes onto the merged book's BookFile rows. Semantics:
+	//   - a member living in a real "Disc N"/"CD N" subfolder gets DiscNumber = N
+	//     (the true physical disc, e.g. a Star Wars boxed set) and a track rank
+	//     WITHIN that disc;
+	//   - a member that is just a sequentially-numbered chapter/flat file on ONE
+	//     disc (e.g. "When We Were Sisters_1.mp3".."_6.mp3") gets DiscNumber = 0
+	//     (no disc concept — do NOT spread fake disc numbers across chapters) and
+	//     TrackNumber = its sequence position.
+	// Both are collision-free within the group by construction (a running per-disc
+	// counter), so the (disc, track, path) sort in GetBookFiles orders cleanly.
+	DiscNumber  int
+	TrackNumber int
 }
 
 // RegroupGroup is one book folder the classifier flagged for a review hold.
@@ -511,6 +527,7 @@ func classifyGroup(members []memberInfo) (RegroupGroup, bool) {
 		dominantCount*2 >= n
 
 	sortMembers(members)
+	assignDiscTrack(members)
 	build := func(kind string, confident bool, action string, distinctWorks int) RegroupGroup {
 		out := make([]ShatterBook, 0, n)
 		for _, m := range members {
@@ -643,6 +660,45 @@ func sortMembers(members []memberInfo) {
 		}
 		return members[i].book.BookID < members[j].book.BookID
 	})
+}
+
+// assignDiscTrack stamps each member's book with the (DiscNumber, TrackNumber) the
+// apply path will write onto the merged BookFile rows. It MUST run after sortMembers
+// so the sequence follows play order. The rule mirrors the two real shapes the owner
+// called out:
+//
+//   - A member in a genuine "Disc N"/"CD N" subfolder (structure=="disc") is a real
+//     physical disc: DiscNumber = its disc-folder number, TrackNumber = its rank
+//     within that disc. (A Star Wars boxed set with actual disc folders.)
+//   - Any other member (flat / chapter / edition) is a sequential file on ONE disc:
+//     DiscNumber = 0 (there is NO disc concept — never spread fake disc numbers 1..N
+//     across chapters of a single recording), TrackNumber = its sequence position.
+//
+// TrackNumber is a running per-disc counter (disc 0 is its own bucket), so every
+// (disc, track) pair in the group is unique — the (disc, track, path) ordering in
+// GetBookFiles can never collide. We deliberately renumber to a contiguous 1..N per
+// disc rather than trusting the parsed filename ordinal: the apply path only writes
+// these when the file currently has NO disc/track metadata at all, so a clean
+// contiguous sequence is the right default for an otherwise-unnumbered file.
+//
+// Assignment is by each member's OWN structure, not the group's classified Kind. This
+// is intentional and correct: a file physically living in "Disc 2/" belongs to disc 2
+// regardless of its neighbors, and a bare chapter file belongs to no disc. In the rare
+// mixed folder (a stray loose file alongside real "Disc N" subfolders), the loose file
+// gets disc 0 and the disc files get their true numbers — a sensible hybrid, never the
+// failure the owner flagged (fake disc numbers 1..N spread across chapters of one
+// recording), which only happens if you key off group order instead of real structure.
+func assignDiscTrack(members []memberInfo) {
+	trackByDisc := map[int]int{}
+	for i := range members {
+		disc := 0
+		if members[i].structure == "disc" {
+			disc = members[i].num
+		}
+		trackByDisc[disc]++
+		members[i].book.DiscNumber = disc
+		members[i].book.TrackNumber = trackByDisc[disc]
+	}
 }
 
 // deriveSurvivorTitle turns a book-folder name into a clean survivor title: strip a

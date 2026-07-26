@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_apply_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a9d3f1c7-6b40-4e28-8f95-2c1e7b0a4d63
-// last-edited: 2026-07-17
+// last-edited: 2026-07-25
 
 package maintenance
 
@@ -551,4 +551,184 @@ func TestApplyMultidisc_BadPayload(t *testing.T) {
 		ID: ulid.Make().String(), Kind: "regroup.multidisc", Payload: "{not json",
 	})
 	require.Error(t, err)
+}
+
+// multidiscItemWithNumbers builds a multidisc hold whose payload carries the parallel
+// per-file disc/track arrays the classifier now emits. files/discs/tracks are parallel
+// by index; memberIDs is parallel too (one book per file).
+func multidiscItemWithNumbers(t *testing.T, folder string, memberIDs, files []string, discs, tracks []int) database.ReviewItem {
+	t.Helper()
+	payload, err := json.Marshal(regroupPayload{
+		Folder:         folder,
+		Files:          files,
+		MemberBookIDs:  memberIDs,
+		DiscNumbers:    discs,
+		TrackNumbers:   tracks,
+		ProposedAction: "collapse into one multi-file book",
+		SurvivorTitle:  "Survivor",
+		Confidence:     "high",
+	})
+	require.NoError(t, err)
+	return database.ReviewItem{
+		ID:        ulid.Make().String(),
+		Kind:      "regroup.multidisc",
+		FolderRef: folder,
+		Payload:   string(payload),
+	}
+}
+
+// seedNumberedBooks creates one single-file, fingerprinted book per path and returns the
+// book IDs (parallel to paths) plus a path→fingerprint map for post-merge assertions.
+func seedNumberedBooks(t *testing.T, store database.Store, paths []string) ([]string, map[string][]byte) {
+	t.Helper()
+	ids := make([]string, len(paths))
+	fpByPath := map[string][]byte{}
+	for i, path := range paths {
+		id := ulid.Make().String()
+		ids[i] = id
+		_, err := store.CreateBook(&database.Book{ID: id, Title: "Chapter", Format: "mp3", FilePath: path})
+		require.NoError(t, err)
+		fp := []byte("fp-" + id)
+		fpByPath[path] = fp
+		require.NoError(t, store.CreateBookFile(&database.BookFile{
+			ID: ulid.Make().String(), BookID: id, FilePath: path, Format: "mp3",
+			AcoustIDFingerprint: fp,
+		}))
+	}
+	return ids, fpByPath
+}
+
+// TestApplyMultidisc_FlatSameDisc_SetsTracksNotDiscs is the owner's core case: flat,
+// sequentially-numbered chapter files of ONE recording (e.g. "…_1.mp3".."_6.mp3") must
+// get TrackNumber 1..N and DiscNumber 0 — NEVER fake disc numbers spread across the
+// chapters. Fingerprints must survive the merge.
+func TestApplyMultidisc_FlatSameDisc_SetsTracksNotDiscs(t *testing.T) {
+	store := newApplyTestStore(t)
+
+	paths := []string{
+		"/lib/When We Were Sisters/When We Were Sisters_1.mp3",
+		"/lib/When We Were Sisters/When We Were Sisters_2.mp3",
+		"/lib/When We Were Sisters/When We Were Sisters_3.mp3",
+	}
+	ids, fpByPath := seedNumberedBooks(t, store, paths)
+	discs := []int{0, 0, 0}   // no disc concept — same recording
+	tracks := []int{1, 2, 3}  // sequential chapters
+
+	apply := ApplyMultidisc(store, merge.NewService(store))
+	item := multidiscItemWithNumbers(t, "/lib/When We Were Sisters", ids, paths, discs, tracks)
+	require.NoError(t, apply(context.Background(), item))
+
+	files, err := store.GetBookFiles(minID(ids...))
+	require.NoError(t, err)
+	require.Len(t, files, 3)
+	wantTrack := map[string]int{paths[0]: 1, paths[1]: 2, paths[2]: 3}
+	for _, f := range files {
+		assert.Equal(t, 0, f.DiscNumber, "flat same-disc chapters must NOT get a disc number (%s)", f.FilePath)
+		assert.Equal(t, wantTrack[f.FilePath], f.TrackNumber, "track number for %s", f.FilePath)
+		assert.Equal(t, fpByPath[f.FilePath], f.AcoustIDFingerprint, "fingerprint must survive (%s)", f.FilePath)
+	}
+	dbtest.AssertStoreInvariants(t, store)
+}
+
+// TestApplyMultidisc_RealDiscSet_SetsDiscNumbers is the genuine boxed-set case: files
+// living in real "Disc N" folders get their true DiscNumber per file (disc 1 / disc 2 /
+// disc 3), so a (disc, track) sort orders across discs correctly with no collision.
+func TestApplyMultidisc_RealDiscSet_SetsDiscNumbers(t *testing.T) {
+	store := newApplyTestStore(t)
+
+	paths := []string{
+		"/lib/Star Wars/Disc 1/track.mp3",
+		"/lib/Star Wars/Disc 2/track.mp3",
+		"/lib/Star Wars/Disc 3/track.mp3",
+	}
+	ids, fpByPath := seedNumberedBooks(t, store, paths)
+	discs := []int{1, 2, 3}  // real physical discs
+	tracks := []int{1, 1, 1} // one track per disc
+
+	apply := ApplyMultidisc(store, merge.NewService(store))
+	item := multidiscItemWithNumbers(t, "/lib/Star Wars", ids, paths, discs, tracks)
+	require.NoError(t, apply(context.Background(), item))
+
+	files, err := store.GetBookFiles(minID(ids...))
+	require.NoError(t, err)
+	require.Len(t, files, 3)
+	wantDisc := map[string]int{paths[0]: 1, paths[1]: 2, paths[2]: 3}
+	for _, f := range files {
+		assert.Equal(t, wantDisc[f.FilePath], f.DiscNumber, "disc number for %s", f.FilePath)
+		assert.Equal(t, 1, f.TrackNumber, "one-track-per-disc → track 1 (%s)", f.FilePath)
+		assert.Equal(t, fpByPath[f.FilePath], f.AcoustIDFingerprint, "fingerprint must survive (%s)", f.FilePath)
+	}
+	// The (disc, track, path) sort GetBookFiles applies must be strictly increasing —
+	// no two files collide on (disc, track).
+	seen := map[[2]int]bool{}
+	for _, f := range files {
+		key := [2]int{f.DiscNumber, f.TrackNumber}
+		assert.False(t, seen[key], "(disc,track) collision at %v", key)
+		seen[key] = true
+	}
+	dbtest.AssertStoreInvariants(t, store)
+}
+
+// TestApplyMultidisc_PreExistingNumbers_LeftAlone verifies the "unless the disc is
+// already set, then leave it" rule: if ANY survivor file already carries disc/track
+// metadata, the whole group is left untouched (both to honor existing tagging and to
+// avoid colliding a pre-set track with a freshly-sequenced one).
+func TestApplyMultidisc_PreExistingNumbers_LeftAlone(t *testing.T) {
+	store := newApplyTestStore(t)
+
+	paths := []string{"/lib/x/a.mp3", "/lib/x/b.mp3", "/lib/x/c.mp3"}
+	ids, _ := seedNumberedBooks(t, store, paths)
+
+	// The survivor's own file already has a real disc/track from an earlier tag import.
+	survivor := minID(ids...)
+	sfiles, err := store.GetBookFiles(survivor)
+	require.NoError(t, err)
+	require.Len(t, sfiles, 1)
+	preset := sfiles[0]
+	preset.DiscNumber = 2
+	preset.TrackNumber = 7
+	require.NoError(t, store.UpdateBookFile(preset.ID, &preset))
+
+	discs := []int{0, 0, 0}
+	tracks := []int{1, 2, 3}
+	apply := ApplyMultidisc(store, merge.NewService(store))
+	item := multidiscItemWithNumbers(t, "/lib/x", ids, paths, discs, tracks)
+	require.NoError(t, apply(context.Background(), item))
+
+	files, err := store.GetBookFiles(survivor)
+	require.NoError(t, err)
+	require.Len(t, files, 3)
+	// The pre-set file keeps its (2,7); the guard means the OTHER files were NOT
+	// renumbered either (whole group left alone).
+	for _, f := range files {
+		if f.ID == preset.ID {
+			assert.Equal(t, 2, f.DiscNumber)
+			assert.Equal(t, 7, f.TrackNumber)
+		} else {
+			assert.Equal(t, 0, f.DiscNumber, "group with pre-existing metadata must be left untouched")
+			assert.Equal(t, 0, f.TrackNumber, "group with pre-existing metadata must be left untouched")
+		}
+	}
+	dbtest.AssertStoreInvariants(t, store)
+}
+
+// TestApplyMultidisc_LegacyPayload_NoNumbers verifies a hold written before the
+// disc/track arrays existed (nil DiscNumbers/TrackNumbers) still merges cleanly and
+// simply skips numbering — backward compatibility.
+func TestApplyMultidisc_LegacyPayload_NoNumbers(t *testing.T) {
+	store := newApplyTestStore(t)
+	paths := []string{"/lib/legacy/a.mp3", "/lib/legacy/b.mp3"}
+	ids, _ := seedNumberedBooks(t, store, paths)
+
+	apply := ApplyMultidisc(store, merge.NewService(store))
+	// multidiscItem (no numbers) is the pre-change payload shape.
+	require.NoError(t, apply(context.Background(), multidiscItem(t, "/lib/legacy", ids)))
+
+	files, err := store.GetBookFiles(minID(ids...))
+	require.NoError(t, err)
+	require.Len(t, files, 2)
+	for _, f := range files {
+		assert.Equal(t, 0, f.DiscNumber)
+		assert.Equal(t, 0, f.TrackNumber)
+	}
 }

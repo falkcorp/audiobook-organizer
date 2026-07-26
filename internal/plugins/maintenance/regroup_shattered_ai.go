@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_shattered_ai.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8b3e6d21-4f97-4c05-a1d8-2e7b9c0f5a63
-// last-edited: 2026-07-14
+// last-edited: 2026-07-25
 
 // Package maintenance — op maintenance.regroup-shattered-ai (PR-B1).
 //
@@ -66,6 +66,16 @@ type regroupPayload struct {
 	MemberBookIDs  []string `json:"memberBookIDs"`
 	SurvivorTitle  string   `json:"survivorTitle"`
 	Confidence     string   `json:"confidence"` // "high" (confident) | "review"
+
+	// DiscNumbers / TrackNumbers are PARALLEL to Files (same index = same member) and
+	// carry the play-order the apply path (ApplyMultidisc) writes onto the merged
+	// book's BookFile rows. They are set only for confident multidisc collapses; other
+	// kinds leave them nil. omitempty + the apply path's length guard keep holds
+	// written before this field existed working unchanged (they just skip the
+	// disc/track write). A DiscNumber of 0 means "sequential chapters on one disc — no
+	// disc concept", distinct from a real "Disc N" set (see assignDiscTrack).
+	DiscNumbers  []int `json:"discNumbers,omitempty"`
+	TrackNumbers []int `json:"trackNumbers,omitempty"`
 }
 
 func (p *Plugin) regroupShatteredAIDef() sdk.OperationDef {
@@ -321,13 +331,23 @@ func regroupSummary(g itunesservice.RegroupGroup) string {
 func buildRegroupPayload(g itunesservice.RegroupGroup) (string, error) {
 	files := make([]string, 0, len(g.Members))
 	ids := make([]string, 0, len(g.Members))
+	discs := make([]int, 0, len(g.Members))
+	tracks := make([]int, 0, len(g.Members))
 	for _, m := range g.Members {
 		files = append(files, m.FilePath)
 		ids = append(ids, m.BookID)
+		discs = append(discs, m.DiscNumber)
+		tracks = append(tracks, m.TrackNumber)
 	}
 	confidence := "review"
 	if g.Confident {
 		confidence = "high"
+	}
+	// Only confident collapses (the two multidisc-producing branches) carry disc/track;
+	// for any other kind the classifier left every member's numbers at 0, so drop the
+	// arrays (they'd be all-zero noise the apply path would skip anyway).
+	if !g.Confident {
+		discs, tracks = nil, nil
 	}
 	data, err := json.Marshal(regroupPayload{
 		Folder:         g.FolderRef,
@@ -336,6 +356,8 @@ func buildRegroupPayload(g itunesservice.RegroupGroup) (string, error) {
 		MemberBookIDs:  ids,
 		SurvivorTitle:  g.SurvivorTitle,
 		Confidence:     confidence,
+		DiscNumbers:    discs,
+		TrackNumbers:   tracks,
 	})
 	if err != nil {
 		return "", err
