@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.81.0
+// version: 1.81.1
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-07-13
+// last-edited: 2026-07-26
 
 package database
 
@@ -222,6 +222,10 @@ type MockStore struct {
 	GetSessionFunc            func(id string) (*Session, error)
 	RevokeSessionFunc         func(id string) error
 	ListUserSessionsFunc      func(userID string) ([]Session, error)
+
+	CreateOAuthIdentityFunc                func(identity *OAuthIdentity) (*OAuthIdentity, error)
+	GetOAuthIdentityByProviderSubjectFunc  func(provider, subject string) (*OAuthIdentity, error)
+	GetOAuthIdentitiesForUserFunc          func(userID string) ([]OAuthIdentity, error)
 	DeleteExpiredSessionsFunc func(now time.Time) (int, error)
 	CountUsersFunc            func() (int, error)
 
@@ -1352,6 +1356,27 @@ func (m *MockStore) CreateSession(userID, ip, userAgent string, ttl time.Duratio
 func (m *MockStore) GetSession(id string) (*Session, error) {
 	if m.GetSessionFunc != nil {
 		return m.GetSessionFunc(id)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) CreateOAuthIdentity(identity *OAuthIdentity) (*OAuthIdentity, error) {
+	if m.CreateOAuthIdentityFunc != nil {
+		return m.CreateOAuthIdentityFunc(identity)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetOAuthIdentityByProviderSubject(provider, subject string) (*OAuthIdentity, error) {
+	if m.GetOAuthIdentityByProviderSubjectFunc != nil {
+		return m.GetOAuthIdentityByProviderSubjectFunc(provider, subject)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetOAuthIdentitiesForUser(userID string) ([]OAuthIdentity, error) {
+	if m.GetOAuthIdentitiesForUserFunc != nil {
+		return m.GetOAuthIdentitiesForUserFunc(userID)
 	}
 	return nil, nil
 }

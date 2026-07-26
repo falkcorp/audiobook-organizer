@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.71.0
+// version: 1.71.1
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-07-18
+// last-edited: 2026-07-26
 
 package config
 
@@ -594,6 +594,30 @@ type Config struct {
 	BasicAuthUsername string `json:"basic_auth_username"`
 	BasicAuthPassword string `json:"basic_auth_password"`
 
+	// OAuth2 / OIDC single sign-on (GitHub + Google) and Cloudflare Access identity
+	// passthrough. All off unless explicitly configured. An OAuth/Access login only
+	// succeeds for an email on OAuthAllowedEmails — a valid IdP login by a
+	// non-allowlisted account is rejected (verified ≠ authorized).
+	OAuthEnabled            bool   `json:"oauth_enabled"`
+	OAuthGithubClientID     string `json:"oauth_github_client_id"`
+	OAuthGithubClientSecret string `json:"oauth_github_client_secret"`
+	OAuthGoogleClientID     string `json:"oauth_google_client_id"`
+	OAuthGoogleClientSecret string `json:"oauth_google_client_secret"`
+	// OAuthRedirectBaseURL is the public origin used to build provider redirect URIs
+	// (e.g. https://books.example.com → https://books.example.com/api/v1/auth/oauth/google/callback).
+	OAuthRedirectBaseURL string `json:"oauth_redirect_base_url"`
+	// OAuthAllowedEmails is the comma-separated allowlist. Only these emails may log in
+	// via OAuth or Cloudflare Access (case-insensitive). Empty = no OAuth logins allowed.
+	OAuthAllowedEmails string `json:"oauth_allowed_emails"`
+	// OAuthDefaultRole is the role assigned to a newly auto-created OAuth user
+	// (default "viewer" — least privilege; promote individual accounts as needed).
+	OAuthDefaultRole string `json:"oauth_default_role"`
+	// Cloudflare Access: when both are set, the middleware trusts a verified
+	// Cf-Access-Jwt-Assertion header (checked against the team JWKS + AUD) as an
+	// identity, resolving/creating a session without a second app-level login.
+	CFAccessTeamDomain string `json:"cf_access_team_domain"` // e.g. myteam.cloudflareaccess.com
+	CFAccessAUD        string `json:"cf_access_aud"`         // Access application AUD tag
+
 	// Memory management
 	MemoryLimitType string `json:"memory_limit_type"` // 'items', 'percent', 'absolute'
 	CacheSize       int    `json:"cache_size"`        // number of items
@@ -801,6 +825,28 @@ func InitConfig() {
 	viper.SetDefault("basic_auth_enabled", false)
 	viper.SetDefault("basic_auth_username", "")
 	viper.SetDefault("basic_auth_password", "")
+
+	// OAuth / OIDC + Cloudflare Access defaults (all off / empty unless configured).
+	viper.SetDefault("oauth_enabled", false)
+	viper.SetDefault("oauth_github_client_id", "")
+	viper.SetDefault("oauth_github_client_secret", "")
+	viper.SetDefault("oauth_google_client_id", "")
+	viper.SetDefault("oauth_google_client_secret", "")
+	viper.SetDefault("oauth_redirect_base_url", "")
+	viper.SetDefault("oauth_allowed_emails", "")
+	viper.SetDefault("oauth_default_role", "viewer")
+	viper.SetDefault("cf_access_team_domain", "")
+	viper.SetDefault("cf_access_aud", "")
+	viper.BindEnv("oauth_enabled", "OAUTH_ENABLED")                          //nolint:errcheck
+	viper.BindEnv("oauth_github_client_id", "OAUTH_GITHUB_CLIENT_ID")        //nolint:errcheck
+	viper.BindEnv("oauth_github_client_secret", "OAUTH_GITHUB_CLIENT_SECRET") //nolint:errcheck
+	viper.BindEnv("oauth_google_client_id", "OAUTH_GOOGLE_CLIENT_ID")        //nolint:errcheck
+	viper.BindEnv("oauth_google_client_secret", "OAUTH_GOOGLE_CLIENT_SECRET") //nolint:errcheck
+	viper.BindEnv("oauth_redirect_base_url", "OAUTH_REDIRECT_BASE_URL")      //nolint:errcheck
+	viper.BindEnv("oauth_allowed_emails", "OAUTH_ALLOWED_EMAILS")            //nolint:errcheck
+	viper.BindEnv("oauth_default_role", "OAUTH_DEFAULT_ROLE")                //nolint:errcheck
+	viper.BindEnv("cf_access_team_domain", "CF_ACCESS_TEAM_DOMAIN")          //nolint:errcheck
+	viper.BindEnv("cf_access_aud", "CF_ACCESS_AUD")                         //nolint:errcheck
 
 	// Set memory management defaults
 	viper.SetDefault("memory_limit_type", "items")
@@ -1144,6 +1190,17 @@ func InitConfig() {
 			BasicAuthEnabled:                 viper.GetBool("basic_auth_enabled"),
 			BasicAuthUsername:                viper.GetString("basic_auth_username"),
 			BasicAuthPassword:                viper.GetString("basic_auth_password"),
+
+			OAuthEnabled:            viper.GetBool("oauth_enabled"),
+			OAuthGithubClientID:     viper.GetString("oauth_github_client_id"),
+			OAuthGithubClientSecret: viper.GetString("oauth_github_client_secret"),
+			OAuthGoogleClientID:     viper.GetString("oauth_google_client_id"),
+			OAuthGoogleClientSecret: viper.GetString("oauth_google_client_secret"),
+			OAuthRedirectBaseURL:    viper.GetString("oauth_redirect_base_url"),
+			OAuthAllowedEmails:      viper.GetString("oauth_allowed_emails"),
+			OAuthDefaultRole:        viper.GetString("oauth_default_role"),
+			CFAccessTeamDomain:      viper.GetString("cf_access_team_domain"),
+			CFAccessAUD:             viper.GetString("cf_access_aud"),
 
 			// Memory management
 			MemoryLimitType:           viper.GetString("memory_limit_type"),

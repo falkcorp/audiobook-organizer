@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 3.4.0
+// version: 3.4.1
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-07-23
+// last-edited: 2026-07-26
 
 package server
 
@@ -1166,14 +1166,24 @@ func (s *Server) setupRoutes() {
 		slog.Warn("rate limiting is disabled (enable_rate_limitfalse) — the API is vulnerable to abuse. Set enable_rate_limit true in config.yaml for production deployments")
 	}
 
-	// API routes (auth + rate limits + request-size limits)
+	// OAuth2/OIDC login + Cloudflare Access passthrough (both no-ops unless configured).
+	oauthH, cfMW := s.buildOAuthWiring()
+
+	// API routes (auth + rate limits + request-size limits). The Cloudflare Access
+	// middleware runs early and FAIL-OPEN: when a valid Cf-Access-Jwt-Assertion is
+	// present it binds the resolved user so the downstream RequireAuth skips its
+	// session check; otherwise it passes through. Harmless on public routes.
 	api := s.router.Group("/api/v1")
-	api.Use(apiRateLimiter, bodyLimitMiddleware)
+	if cfMW != nil {
+		api.Use(apiRateLimiter, bodyLimitMiddleware, cfMW)
+	} else {
+		api.Use(apiRateLimiter, bodyLimitMiddleware)
+	}
 	{
 		protected := api.Group("")
 		protected.Use(authMiddleware)
 
-		s.wireHandlers(api, authMiddleware, protected)
+		s.wireHandlers(api, authMiddleware, protected, oauthH)
 		{
 			// Audiobook routes.
 			// NOTE: the main audiobooks list / CRUD domain (list, count, facets,
