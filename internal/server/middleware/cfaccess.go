@@ -7,6 +7,7 @@ package middleware
 
 import (
 	"github.com/gin-gonic/gin"
+	"log/slog"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -41,18 +42,30 @@ func CloudflareAccessAuth(a *CFAccessAuthenticator) gin.HandlerFunc {
 			c.Next()
 			return
 		}
+		// Prefer the Cf-Access-Jwt-Assertion header; fall back to the CF_Authorization
+		// cookie (browser flows may deliver only the cookie — Cloudflare says the header
+		// is "not guaranteed to be passed" in some setups).
 		raw := c.GetHeader(oauth.CFAccessHeader)
+		if raw == "" {
+			if ck, err := c.Cookie("CF_Authorization"); err == nil {
+				raw = ck
+			}
+		}
 		if raw == "" {
 			c.Next()
 			return
 		}
 		claims, err := a.verifier.Verify(c.Request.Context(), raw)
 		if err != nil {
-			c.Next() // not a valid Access token — let normal auth handle it
+			// Diagnostic: a JWT was present but did not verify (aud/issuer/keyset/expiry).
+			// Rate-limited-ish by being Warn; falls through to normal auth.
+			slog.Warn("cfaccess: Access JWT present but verification failed", "err", err)
+			c.Next()
 			return
 		}
 		user, err := a.cfg.ResolveUser(a.store, *claims)
 		if err != nil {
+			slog.Warn("cfaccess: verified identity not admitted", "email", claims.Email, "err", err)
 			c.Next() // not allowlisted / not verified — normal auth will 401
 			return
 		}
