@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -64,6 +65,72 @@ func TestBuildRegroupPayload_DiscTrackRoundTrip(t *testing.T) {
 		if tr != i+1 {
 			t.Errorf("track order: index %d has track %d, want %d", i, tr, i+1)
 		}
+	}
+}
+
+// TestBuildRegroupPayload_AnthologyCarriesTracks verifies the owner decision that an
+// anthology is ONE book: its payload now carries disc/track (so the combine gets
+// chapter order) and its proposed action is a COMBINE, not a split.
+func TestBuildRegroupPayload_AnthologyCarriesTracks(t *testing.T) {
+	base := "/mnt/bigdata/books/audiobook-organizer/George R R Martin/Dangerous Women Anthology"
+	titles := []string{"The Princess and the Queen", "Some Desperate Glory", "Bombshells", "Raisa Stepanova", "Noras Song"}
+	var books []itunesservice.ShatterBook
+	for i, title := range titles {
+		books = append(books, itunesservice.ShatterBook{
+			BookID:    fmt.Sprintf("a%02d", i),
+			FilePath:  fmt.Sprintf("%s/%s.mp3", base, title),
+			FileCount: 1,
+			IsPrimary: true,
+		})
+	}
+	groups, _ := itunesservice.ClassifyShatteredFolders(books)
+	g := groups[0]
+	if g.Kind != itunesservice.KindAnthology {
+		t.Fatalf("want anthology, got %q", g.Kind)
+	}
+	raw, err := buildRegroupPayload(g)
+	if err != nil {
+		t.Fatalf("buildRegroupPayload: %v", err)
+	}
+	p, err := decodeRegroupPayload(database.ReviewItem{Payload: raw})
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// Anthology now carries disc/track (combine kind) — this is the behavior change.
+	if len(p.DiscNumbers) != len(p.Files) || len(p.TrackNumbers) != len(p.Files) {
+		t.Fatalf("anthology payload must carry disc/track: files=%d discs=%d tracks=%d",
+			len(p.Files), len(p.DiscNumbers), len(p.TrackNumbers))
+	}
+	for i := range p.DiscNumbers {
+		if p.DiscNumbers[i] != 0 {
+			t.Errorf("anthology file %d disc=%d, want 0 (one book)", i, p.DiscNumbers[i])
+		}
+	}
+	if !strings.Contains(p.ProposedAction, "combine into one") {
+		t.Errorf("anthology action = %q, want combine", p.ProposedAction)
+	}
+}
+
+// TestRegroupSummary_Labels pins the owner-facing labels: a real disc set reads
+// "Multi-disc", same-disc chapters read "Chapters" (the original confusion), and an
+// anthology reads "→ 1 book" (combine, not split).
+func TestRegroupSummary_Labels(t *testing.T) {
+	cases := []struct {
+		name string
+		g    itunesservice.RegroupGroup
+		want string
+	}{
+		{"real disc set", itunesservice.RegroupGroup{Kind: itunesservice.KindMultidisc, Structure: "disc", Members: make([]itunesservice.ShatterBook, 3), FolderRef: "/x"}, "Multi-disc: 3 discs → 1 book"},
+		{"same-disc chapters", itunesservice.RegroupGroup{Kind: itunesservice.KindMultidisc, Structure: "flat", Members: make([]itunesservice.ShatterBook, 6), FolderRef: "/x"}, "Chapters: 6 tracks → 1 book"},
+		{"anthology", itunesservice.RegroupGroup{Kind: itunesservice.KindAnthology, DistinctWorks: 5, Members: make([]itunesservice.ShatterBook, 9), FolderRef: "/x"}, "Anthology/collection: 9 files (5 stories) → 1 book"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := regroupSummary(c.g)
+			if !strings.Contains(got, c.want) {
+				t.Errorf("summary = %q, want it to contain %q", got, c.want)
+			}
+		})
 	}
 }
 

@@ -1,7 +1,7 @@
 // file: internal/server/wire_handlers.go
-// version: 2.19.0
+// version: 2.20.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
-// last-edited: 2026-07-14
+// last-edited: 2026-07-26
 
 package server
 
@@ -587,18 +587,22 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	// without re-wiring.
 	reviewH := reviewhandler.New(s.Store(), func() bool { return config.AppConfig.ReviewApplyEnabled })
 
-	// Register the regroup APPLY handlers (PR-B2) so approving a confident hold in
-	// the review UI performs the real merge. Only the two confident kinds get a
-	// handler; anthology/ambiguous stay handler-less (approve → "approved", never
-	// auto-applied). Guarded on a real store — with a nil store the review handler
-	// short-circuits before dispatch, so the closures would never run anyway.
+	// Register the regroup APPLY handlers (PR-B2) so approving a hold in the review
+	// UI performs the real action. Multidisc AND anthology both COMBINE into one
+	// multi-file book (an anthology/collection is a single real book with one ISBN —
+	// owner decision 2026-07-26 — NOT multiple works to split), so both use
+	// ApplyMultidisc. Version-group links editions. Only `ambiguous` stays
+	// handler-less (needs a human resolution choice — the review UI supplies it).
+	// Guarded on a real store — with a nil store the review handler short-circuits
+	// before dispatch, so the closures would never run anyway.
 	if s.Store() != nil {
 		mergeSvc := s.mergeService
 		if mergeSvc == nil {
 			mergeSvc = merge.NewService(s.Store())
 		}
-		reviewH.RegisterApplyHandler(itunesservice.KindMultidisc,
-			maintenanceplugin.ApplyMultidisc(s.Store(), mergeSvc))
+		combine := maintenanceplugin.ApplyMultidisc(s.Store(), mergeSvc)
+		reviewH.RegisterApplyHandler(itunesservice.KindMultidisc, combine)
+		reviewH.RegisterApplyHandler(itunesservice.KindAnthology, combine)
 		reviewH.RegisterApplyHandler(itunesservice.KindVersionGroup,
 			maintenanceplugin.ApplyVersionGroup(s.Store()))
 	}
