@@ -35,6 +35,7 @@ packages:
       NarratorStore:
       WorkStore:
       SessionStore:
+      OAuthIdentityStore:
       RoleStore:
       APIKeyStore:
       InviteStore:

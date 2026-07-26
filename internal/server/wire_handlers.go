@@ -1,5 +1,5 @@
 // file: internal/server/wire_handlers.go
-// version: 2.20.0
+// version: 2.20.1
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
 // last-edited: 2026-07-26
 
@@ -31,11 +31,11 @@ import (
 // wireHandlers instantiates handler structs and registers their routes.
 // Called from Start() after the protected group is created.
 // Route registration is delegated to per-domain wire*Routes methods.
-func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFunc, protected *gin.RouterGroup) {
+func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFunc, protected *gin.RouterGroup, oauthH *handlers.OAuthHandler) {
 	authH := handlers.NewAuthHandler(s.Store(), config.AppConfig.EnableAuth)
 	apiKeyH := handlers.NewAPIKeyHandler(s.Store())
 
-	s.wireAuthRoutes(api, authMiddleware, authH, apiKeyH)
+	s.wireAuthRoutes(api, authMiddleware, authH, apiKeyH, oauthH)
 
 	// ── Build split-book candidate store ─────────────────────────────────────
 	var splitBookCands handlers.SplitBookCandidateStore

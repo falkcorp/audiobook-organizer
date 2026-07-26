@@ -1,7 +1,7 @@
 // file: internal/server/wire_auth_routes.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-07-03
+// last-edited: 2026-07-26
 
 package server
 
@@ -17,6 +17,7 @@ func (s *Server) wireAuthRoutes(
 	authMiddleware gin.HandlerFunc,
 	authH *handlers.AuthHandler,
 	apiKeyH *handlers.APIKeyHandler,
+	oauthH *handlers.OAuthHandler,
 ) {
 	authGroup := api.Group("/auth")
 	{
@@ -25,6 +26,13 @@ func (s *Server) wireAuthRoutes(
 		authGroup.POST("/login", authH.Login)
 		authGroup.POST("/accept-invite", s.handleAcceptInvite)
 		authGroup.POST("/bootstrap", s.handleBootstrap)
+		// OAuth2 / OIDC SSO — public: /start redirects to the IdP, /callback completes
+		// the handshake and starts a session. Both are no-ops for unconfigured providers.
+		if oauthH != nil {
+			authGroup.GET("/oauth-providers", oauthH.Providers)
+			authGroup.GET("/oauth/:provider/start", oauthH.Start)
+			authGroup.GET("/oauth/:provider/callback", oauthH.Callback)
+		}
 	}
 
 	authProtected := authGroup.Group("")

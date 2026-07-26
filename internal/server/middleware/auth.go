@@ -1,7 +1,7 @@
 // file: internal/server/middleware/auth.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: 83c42ecb-1df2-4baf-9890-3f91ab4db6fe
-// last-edited: 2026-07-12
+// last-edited: 2026-07-26
 
 package middleware
 
@@ -105,6 +105,13 @@ func RequireAuth(store interface {
 		}
 		if userCount == 0 {
 			// First-run bootstrap mode: setup endpoint can create the first admin.
+			c.Next()
+			return
+		}
+
+		// An earlier stage (e.g. CloudflareAccessAuth) may have already resolved and
+		// bound the user for this request; if so, don't require a session token.
+		if u, ok := c.Get(contextUserKey); ok && u != nil {
 			c.Next()
 			return
 		}

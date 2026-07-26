@@ -1,5 +1,5 @@
 // file: web/src/pages/Login.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9a3f2c1d-4b5e-6f70-8a9b-0c1d2e3f4a5b
 
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
@@ -10,6 +10,7 @@ import {
   Button,
   Checkbox,
   CircularProgress,
+  Divider,
   FormControlLabel,
   Paper,
   Stack,
@@ -19,6 +20,31 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 
 type AuthMode = 'login' | 'setup';
+
+// oauthErrorMessage maps the short ?error= code the OAuth callback redirects with to a
+// user-facing message. The most important is not-authorized: a valid Google/GitHub
+// login by an email that is not on the allowlist.
+function oauthErrorMessage(code: string): string {
+  switch (code) {
+    case 'oauth_not_authorized':
+      return 'That account is not authorized to access this server.';
+    case 'oauth_denied':
+      return 'Sign-in was cancelled.';
+    case 'oauth_state_missing':
+    case 'oauth_state_invalid':
+      return 'Sign-in session expired — please try again.';
+    case 'oauth_exchange_failed':
+    case 'oauth_no_code':
+      return 'Sign-in failed. Please try again.';
+    default:
+      return 'Sign-in failed.';
+  }
+}
+
+const OAUTH_LABELS: Record<string, string> = {
+  google: 'Sign in with Google',
+  github: 'Sign in with GitHub',
+};
 
 export function Login() {
   const auth = useAuth();
@@ -31,6 +57,23 @@ export function Login() {
   const [rememberMe, setRememberMe] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [providers, setProviders] = useState<string[]>([]);
+  const [oauthError, setOauthError] = useState('');
+
+  // Read a failed-OAuth code from the callback redirect and load the enabled providers.
+  useEffect(() => {
+    const code = new URLSearchParams(location.search).get('error');
+    if (code) setOauthError(oauthErrorMessage(code));
+    fetch('/api/v1/auth/oauth-providers', { credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((body) => {
+        const list = body?.data?.providers ?? body?.providers ?? [];
+        if (Array.isArray(list)) setProviders(list.filter((p): p is string => typeof p === 'string'));
+      })
+      .catch(() => {
+        /* providers endpoint absent → no SSO buttons */
+      });
+  }, [location.search]);
 
   const redirectTo = useMemo(() => {
     const state = location.state as { from?: string } | null;
@@ -182,6 +225,29 @@ export function Login() {
               'Login'
             )}
           </Button>
+
+          {mode === 'login' && providers.length > 0 && (
+            <>
+              {oauthError && <Alert severity="error">{oauthError}</Alert>}
+              <Divider>or</Divider>
+              {providers
+                .filter((p) => OAUTH_LABELS[p])
+                .map((p) => (
+                  <Button
+                    key={p}
+                    variant="outlined"
+                    size="large"
+                    fullWidth
+                    disabled={loading}
+                    onClick={() => {
+                      window.location.href = `/api/v1/auth/oauth/${p}/start`;
+                    }}
+                  >
+                    {OAUTH_LABELS[p]}
+                  </Button>
+                ))}
+            </>
+          )}
 
           {auth.bootstrapReady && (
             <Button
