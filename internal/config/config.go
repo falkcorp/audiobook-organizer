@@ -757,6 +757,30 @@ func Mutate(fn func(*Config)) {
 }
 
 // InitConfig initializes the application configuration
+// envOr returns env when it is non-empty (trimmed), else the fallback. Env vars are
+// read via os.Getenv directly because viper's env binding does not reliably surface a
+// systemd-set env var into config in this app (config is loaded from config.yaml + the
+// DB settings store). Mirrors the WHISPER_REMOTE_URL os.Getenv pattern.
+func envOr(env, fallback string) string {
+	if strings.TrimSpace(env) != "" {
+		return strings.TrimSpace(env)
+	}
+	return fallback
+}
+
+// envOrBool parses a truthy env value ("1"/"true"/"yes"/"on", case-insensitive),
+// falling back to the given value when the env var is unset or unparseable.
+func envOrBool(env string, fallback bool) bool {
+	switch strings.ToLower(strings.TrimSpace(env)) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return fallback
+	}
+}
+
 func InitConfig() {
 	// Set core defaults
 	viper.SetDefault("database_type", "pebble")
@@ -837,16 +861,16 @@ func InitConfig() {
 	viper.SetDefault("oauth_default_role", "viewer")
 	viper.SetDefault("cf_access_team_domain", "")
 	viper.SetDefault("cf_access_aud", "")
-	viper.BindEnv("oauth_enabled", "OAUTH_ENABLED")                          //nolint:errcheck
-	viper.BindEnv("oauth_github_client_id", "OAUTH_GITHUB_CLIENT_ID")        //nolint:errcheck
+	viper.BindEnv("oauth_enabled", "OAUTH_ENABLED")                           //nolint:errcheck
+	viper.BindEnv("oauth_github_client_id", "OAUTH_GITHUB_CLIENT_ID")         //nolint:errcheck
 	viper.BindEnv("oauth_github_client_secret", "OAUTH_GITHUB_CLIENT_SECRET") //nolint:errcheck
-	viper.BindEnv("oauth_google_client_id", "OAUTH_GOOGLE_CLIENT_ID")        //nolint:errcheck
+	viper.BindEnv("oauth_google_client_id", "OAUTH_GOOGLE_CLIENT_ID")         //nolint:errcheck
 	viper.BindEnv("oauth_google_client_secret", "OAUTH_GOOGLE_CLIENT_SECRET") //nolint:errcheck
-	viper.BindEnv("oauth_redirect_base_url", "OAUTH_REDIRECT_BASE_URL")      //nolint:errcheck
-	viper.BindEnv("oauth_allowed_emails", "OAUTH_ALLOWED_EMAILS")            //nolint:errcheck
-	viper.BindEnv("oauth_default_role", "OAUTH_DEFAULT_ROLE")                //nolint:errcheck
-	viper.BindEnv("cf_access_team_domain", "CF_ACCESS_TEAM_DOMAIN")          //nolint:errcheck
-	viper.BindEnv("cf_access_aud", "CF_ACCESS_AUD")                         //nolint:errcheck
+	viper.BindEnv("oauth_redirect_base_url", "OAUTH_REDIRECT_BASE_URL")       //nolint:errcheck
+	viper.BindEnv("oauth_allowed_emails", "OAUTH_ALLOWED_EMAILS")             //nolint:errcheck
+	viper.BindEnv("oauth_default_role", "OAUTH_DEFAULT_ROLE")                 //nolint:errcheck
+	viper.BindEnv("cf_access_team_domain", "CF_ACCESS_TEAM_DOMAIN")           //nolint:errcheck
+	viper.BindEnv("cf_access_aud", "CF_ACCESS_AUD")                           //nolint:errcheck
 
 	// Set memory management defaults
 	viper.SetDefault("memory_limit_type", "items")
@@ -1191,16 +1215,23 @@ func InitConfig() {
 			BasicAuthUsername:                viper.GetString("basic_auth_username"),
 			BasicAuthPassword:                viper.GetString("basic_auth_password"),
 
-			OAuthEnabled:            viper.GetBool("oauth_enabled"),
-			OAuthGithubClientID:     viper.GetString("oauth_github_client_id"),
-			OAuthGithubClientSecret: viper.GetString("oauth_github_client_secret"),
-			OAuthGoogleClientID:     viper.GetString("oauth_google_client_id"),
-			OAuthGoogleClientSecret: viper.GetString("oauth_google_client_secret"),
-			OAuthRedirectBaseURL:    viper.GetString("oauth_redirect_base_url"),
-			OAuthAllowedEmails:      viper.GetString("oauth_allowed_emails"),
-			OAuthDefaultRole:        viper.GetString("oauth_default_role"),
-			CFAccessTeamDomain:      viper.GetString("cf_access_team_domain"),
-			CFAccessAUD:             viper.GetString("cf_access_aud"),
+			// Env-first (os.Getenv), viper fallback. viper's env binding does NOT
+			// reliably surface a systemd-set env var into config at runtime in this app
+			// (config comes from config.yaml + the DB settings store); the established
+			// pattern is os.Getenv directly — see WHISPER_REMOTE_URL in
+			// internal/transcribe/batch.go. A systemd Environment= drop-in value was
+			// silently dropped when these were viper-only (2026-07-26 Cloudflare Access
+			// passthrough never initialized).
+			OAuthEnabled:            envOrBool(os.Getenv("OAUTH_ENABLED"), viper.GetBool("oauth_enabled")),
+			OAuthGithubClientID:     envOr(os.Getenv("OAUTH_GITHUB_CLIENT_ID"), viper.GetString("oauth_github_client_id")),
+			OAuthGithubClientSecret: envOr(os.Getenv("OAUTH_GITHUB_CLIENT_SECRET"), viper.GetString("oauth_github_client_secret")),
+			OAuthGoogleClientID:     envOr(os.Getenv("OAUTH_GOOGLE_CLIENT_ID"), viper.GetString("oauth_google_client_id")),
+			OAuthGoogleClientSecret: envOr(os.Getenv("OAUTH_GOOGLE_CLIENT_SECRET"), viper.GetString("oauth_google_client_secret")),
+			OAuthRedirectBaseURL:    envOr(os.Getenv("OAUTH_REDIRECT_BASE_URL"), viper.GetString("oauth_redirect_base_url")),
+			OAuthAllowedEmails:      envOr(os.Getenv("OAUTH_ALLOWED_EMAILS"), viper.GetString("oauth_allowed_emails")),
+			OAuthDefaultRole:        envOr(os.Getenv("OAUTH_DEFAULT_ROLE"), viper.GetString("oauth_default_role")),
+			CFAccessTeamDomain:      envOr(os.Getenv("CF_ACCESS_TEAM_DOMAIN"), viper.GetString("cf_access_team_domain")),
+			CFAccessAUD:             envOr(os.Getenv("CF_ACCESS_AUD"), viper.GetString("cf_access_aud")),
 
 			// Memory management
 			MemoryLimitType:           viper.GetString("memory_limit_type"),
