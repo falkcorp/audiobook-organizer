@@ -8,6 +8,8 @@ package server
 import (
 	"context"
 	"log/slog"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -23,21 +25,45 @@ import (
 // enabled unless configured, and a provider/verifier that fails to initialize is
 // logged and skipped rather than aborting startup.
 func (s *Server) buildOAuthWiring() (*handlers.OAuthHandler, gin.HandlerFunc) {
-	redirectBase := config.AppConfig.OAuthRedirectBaseURL
+	// Read the OAuth/Cloudflare-Access settings from the ENVIRONMENT here, at the point
+	// of use — NOT from config.AppConfig. config.AppConfig is overwritten by the DB
+	// config-blob load (LoadConfigFromDatabase) right after InitConfig, and these fields
+	// are not in that path's "preserve immutable from env" list, so a systemd-set
+	// Environment= value is zeroed there. os.Getenv is the systemd env and is
+	// authoritative regardless of the blob (this is why WHISPER_REMOTE_URL reads env
+	// directly too). config.AppConfig is only a fallback (e.g. config.yaml).
+	envOr := func(env, fallback string) string {
+		if v := strings.TrimSpace(os.Getenv(env)); v != "" {
+			return v
+		}
+		return fallback
+	}
+	envBool := func(env string, fallback bool) bool {
+		switch strings.ToLower(strings.TrimSpace(os.Getenv(env))) {
+		case "1", "true", "yes", "on":
+			return true
+		case "0", "false", "no", "off":
+			return false
+		default:
+			return fallback
+		}
+	}
+
+	redirectBase := envOr("OAUTH_REDIRECT_BASE_URL", config.AppConfig.OAuthRedirectBaseURL)
 	if redirectBase == "" {
 		redirectBase = s.externalURL
 	}
 	cfg := oauth.New(oauth.Config{
-		Enabled:            config.AppConfig.OAuthEnabled,
-		GitHubClientID:     config.AppConfig.OAuthGithubClientID,
-		GitHubClientSecret: config.AppConfig.OAuthGithubClientSecret,
-		GoogleClientID:     config.AppConfig.OAuthGoogleClientID,
-		GoogleClientSecret: config.AppConfig.OAuthGoogleClientSecret,
+		Enabled:            envBool("OAUTH_ENABLED", config.AppConfig.OAuthEnabled),
+		GitHubClientID:     envOr("OAUTH_GITHUB_CLIENT_ID", config.AppConfig.OAuthGithubClientID),
+		GitHubClientSecret: envOr("OAUTH_GITHUB_CLIENT_SECRET", config.AppConfig.OAuthGithubClientSecret),
+		GoogleClientID:     envOr("OAUTH_GOOGLE_CLIENT_ID", config.AppConfig.OAuthGoogleClientID),
+		GoogleClientSecret: envOr("OAUTH_GOOGLE_CLIENT_SECRET", config.AppConfig.OAuthGoogleClientSecret),
 		RedirectBaseURL:    redirectBase,
-		AllowedEmails:      oauth.ParseAllowedEmails(config.AppConfig.OAuthAllowedEmails),
-		DefaultRole:        config.AppConfig.OAuthDefaultRole,
-		CFAccessTeamDomain: config.AppConfig.CFAccessTeamDomain,
-		CFAccessAUD:        config.AppConfig.CFAccessAUD,
+		AllowedEmails:      oauth.ParseAllowedEmails(envOr("OAUTH_ALLOWED_EMAILS", config.AppConfig.OAuthAllowedEmails)),
+		DefaultRole:        envOr("OAUTH_DEFAULT_ROLE", config.AppConfig.OAuthDefaultRole),
+		CFAccessTeamDomain: envOr("CF_ACCESS_TEAM_DOMAIN", config.AppConfig.CFAccessTeamDomain),
+		CFAccessAUD:        envOr("CF_ACCESS_AUD", config.AppConfig.CFAccessAUD),
 	})
 
 	codec, err := oauth.NewStateCodec(10 * time.Minute)
