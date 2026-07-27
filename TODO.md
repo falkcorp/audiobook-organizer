@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.13.3 -->
+<!-- version: 10.13.4 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-07-25 -->
+<!-- last-edited: 2026-07-27 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,12 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **REGROUP-PARTCHAPTER-PARSER** The Mistborn-style "Ambiguous folder" case
+      (`01 P0-C0.mp3`, `07 P1-C6.mp3` — Part/Chapter naming, non-contiguous numbers)
+      has no parser and stays classified as ambiguous (unaffected by the disc/track
+      fix). Consider a Part→disc / Chapter→track parser as a fast-follow so these
+      collapse with correct numbering too.
 
 <!-- file: todo.d/itunes-2way-p0-cleanup-census.md -->
 <!-- version: 1.0.0 -->
