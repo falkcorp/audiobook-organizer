@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.71.1
+// version: 1.72.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-07-26
+// last-edited: 2026-07-27
 
 package config
 
@@ -521,6 +521,11 @@ type Config struct {
 	FilenameParseModel  string `json:"filename_parse_model"  mapstructure:"filename_parse_model"`
 	CoverArtModel       string `json:"cover_art_model"       mapstructure:"cover_art_model"`
 
+	// WhisperRemoteURL points batch transcription at a remote faster-whisper
+	// server (e.g. "http://192.168.1.x:8000"); empty uses the local uv path.
+	// Environment-authoritative (WHISPER_REMOTE_URL) — see applyEnvAuthoritativeConfig.
+	WhisperRemoteURL string `json:"whisper_remote_url" mapstructure:"whisper_remote_url"`
+
 	// Performance
 	ConcurrentScans int `json:"concurrent_scans"`
 	// ChapterConsolidationThresholdMin is the per-file duration threshold (minutes)
@@ -756,30 +761,62 @@ func Mutate(fn func(*Config)) {
 	fn(&AppConfig)
 }
 
-// InitConfig initializes the application configuration
-// envOr returns env when it is non-empty (trimmed), else the fallback. Env vars are
-// read via os.Getenv directly because viper's env binding does not reliably surface a
-// systemd-set env var into config in this app (config is loaded from config.yaml + the
-// DB settings store). Mirrors the WHISPER_REMOTE_URL os.Getenv pattern.
-func envOr(env, fallback string) string {
-	if strings.TrimSpace(env) != "" {
-		return strings.TrimSpace(env)
+// applyEnvAuthoritativeConfig re-applies the environment-authoritative config keys on
+// top of an already-populated Config, so a systemd Environment= value wins over a
+// persisted config_blob. It exists because LoadConfigFromDatabase restores the whole
+// Config from the DB blob (*c = loaded), which overwrites the env-derived values that
+// InitConfig set. Call it LAST in the DB-load path (after the blob and secret rows are
+// applied) via Mutate.
+//
+// This is pure viper: each key has a BindEnv binding (see InitConfig), so viper.GetX
+// honors the environment — no os.Getenv here. viper.IsSet is true only when a real
+// override layer (env/flag/config-file) supplied the key, NOT for SetDefault, so a
+// UI-set value that lives only in the blob is left untouched when no env var is present.
+// Env-authoritative keys ONLY: OAuth / Cloudflare Access / Whisper. UI-managed keys
+// (itunes.*, scheduled.*, etc.) are intentionally excluded — they belong to the blob.
+func applyEnvAuthoritativeConfig(c *Config) {
+	if viper.IsSet("oauth_enabled") {
+		c.OAuthEnabled = viper.GetBool("oauth_enabled")
 	}
-	return fallback
+	if viper.IsSet("oauth_github_client_id") {
+		c.OAuthGithubClientID = viper.GetString("oauth_github_client_id")
+	}
+	if viper.IsSet("oauth_github_client_secret") {
+		c.OAuthGithubClientSecret = viper.GetString("oauth_github_client_secret")
+	}
+	if viper.IsSet("oauth_google_client_id") {
+		c.OAuthGoogleClientID = viper.GetString("oauth_google_client_id")
+	}
+	if viper.IsSet("oauth_google_client_secret") {
+		c.OAuthGoogleClientSecret = viper.GetString("oauth_google_client_secret")
+	}
+	if viper.IsSet("oauth_redirect_base_url") {
+		c.OAuthRedirectBaseURL = viper.GetString("oauth_redirect_base_url")
+	}
+	if viper.IsSet("oauth_allowed_emails") {
+		c.OAuthAllowedEmails = viper.GetString("oauth_allowed_emails")
+	}
+	if viper.IsSet("oauth_default_role") {
+		c.OAuthDefaultRole = viper.GetString("oauth_default_role")
+	}
+	if viper.IsSet("cf_access_team_domain") {
+		c.CFAccessTeamDomain = viper.GetString("cf_access_team_domain")
+	}
+	if viper.IsSet("cf_access_aud") {
+		c.CFAccessAUD = viper.GetString("cf_access_aud")
+	}
+	if viper.IsSet("whisper_remote_url") {
+		c.WhisperRemoteURL = viper.GetString("whisper_remote_url")
+	}
 }
 
-// envOrBool parses a truthy env value ("1"/"true"/"yes"/"on", case-insensitive),
-// falling back to the given value when the env var is unset or unparseable.
-func envOrBool(env string, fallback bool) bool {
-	switch strings.ToLower(strings.TrimSpace(env)) {
-	case "1", "true", "yes", "on":
-		return true
-	case "0", "false", "no", "off":
-		return false
-	default:
-		return fallback
-	}
+// ApplyEnvAuthoritativeConfig applies the environment-authoritative overrides to the
+// global AppConfig under the write lock. Exported for the DB-load path in persistence.go.
+func ApplyEnvAuthoritativeConfig() {
+	Mutate(applyEnvAuthoritativeConfig)
 }
+
+// InitConfig initializes the application configuration
 
 func InitConfig() {
 	// Set core defaults
@@ -871,6 +908,10 @@ func InitConfig() {
 	viper.BindEnv("oauth_default_role", "OAUTH_DEFAULT_ROLE")                 //nolint:errcheck
 	viper.BindEnv("cf_access_team_domain", "CF_ACCESS_TEAM_DOMAIN")           //nolint:errcheck
 	viper.BindEnv("cf_access_aud", "CF_ACCESS_AUD")                           //nolint:errcheck
+
+	// Transcription: remote faster-whisper server URL (env-authoritative).
+	viper.SetDefault("whisper_remote_url", "")
+	viper.BindEnv("whisper_remote_url", "WHISPER_REMOTE_URL") //nolint:errcheck
 
 	// Set memory management defaults
 	viper.SetDefault("memory_limit_type", "items")
@@ -1215,23 +1256,22 @@ func InitConfig() {
 			BasicAuthUsername:                viper.GetString("basic_auth_username"),
 			BasicAuthPassword:                viper.GetString("basic_auth_password"),
 
-			// Env-first (os.Getenv), viper fallback. viper's env binding does NOT
-			// reliably surface a systemd-set env var into config at runtime in this app
-			// (config comes from config.yaml + the DB settings store); the established
-			// pattern is os.Getenv directly — see WHISPER_REMOTE_URL in
-			// internal/transcribe/batch.go. A systemd Environment= drop-in value was
-			// silently dropped when these were viper-only (2026-07-26 Cloudflare Access
-			// passthrough never initialized).
-			OAuthEnabled:            envOrBool(os.Getenv("OAUTH_ENABLED"), viper.GetBool("oauth_enabled")),
-			OAuthGithubClientID:     envOr(os.Getenv("OAUTH_GITHUB_CLIENT_ID"), viper.GetString("oauth_github_client_id")),
-			OAuthGithubClientSecret: envOr(os.Getenv("OAUTH_GITHUB_CLIENT_SECRET"), viper.GetString("oauth_github_client_secret")),
-			OAuthGoogleClientID:     envOr(os.Getenv("OAUTH_GOOGLE_CLIENT_ID"), viper.GetString("oauth_google_client_id")),
-			OAuthGoogleClientSecret: envOr(os.Getenv("OAUTH_GOOGLE_CLIENT_SECRET"), viper.GetString("oauth_google_client_secret")),
-			OAuthRedirectBaseURL:    envOr(os.Getenv("OAUTH_REDIRECT_BASE_URL"), viper.GetString("oauth_redirect_base_url")),
-			OAuthAllowedEmails:      envOr(os.Getenv("OAUTH_ALLOWED_EMAILS"), viper.GetString("oauth_allowed_emails")),
-			OAuthDefaultRole:        envOr(os.Getenv("OAUTH_DEFAULT_ROLE"), viper.GetString("oauth_default_role")),
-			CFAccessTeamDomain:      envOr(os.Getenv("CF_ACCESS_TEAM_DOMAIN"), viper.GetString("cf_access_team_domain")),
-			CFAccessAUD:             envOr(os.Getenv("CF_ACCESS_AUD"), viper.GetString("cf_access_aud")),
+			// OAuth / Cloudflare Access. These are environment-authoritative in prod
+			// (systemd Environment= drop-in) but read here via viper like everything
+			// else — the BindEnv bindings above make viper.GetX honor the env. The DB
+			// config-blob load later overwrites this whole struct, so the env values are
+			// re-applied on top of the blob by applyEnvAuthoritativeConfig (persistence.go).
+			OAuthEnabled:            viper.GetBool("oauth_enabled"),
+			OAuthGithubClientID:     viper.GetString("oauth_github_client_id"),
+			OAuthGithubClientSecret: viper.GetString("oauth_github_client_secret"),
+			OAuthGoogleClientID:     viper.GetString("oauth_google_client_id"),
+			OAuthGoogleClientSecret: viper.GetString("oauth_google_client_secret"),
+			OAuthRedirectBaseURL:    viper.GetString("oauth_redirect_base_url"),
+			OAuthAllowedEmails:      viper.GetString("oauth_allowed_emails"),
+			OAuthDefaultRole:        viper.GetString("oauth_default_role"),
+			CFAccessTeamDomain:      viper.GetString("cf_access_team_domain"),
+			CFAccessAUD:             viper.GetString("cf_access_aud"),
+			WhisperRemoteURL:        viper.GetString("whisper_remote_url"),
 
 			// Memory management
 			MemoryLimitType:           viper.GetString("memory_limit_type"),

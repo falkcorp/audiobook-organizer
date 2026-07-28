@@ -1,7 +1,7 @@
 // file: internal/config/persistence_test.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-07-10
+// last-edited: 2026-07-27
 
 package config
 
@@ -1178,4 +1178,73 @@ func TestMigrateAIBackend_Idempotent(t *testing.T) {
 	// No AI signal fields at all -> untouched.
 	_, changed3 := migrateAIBackendBlob(`{"root_dir": "/data"}`)
 	assert.False(t, changed3)
+}
+
+// TestLoadConfigFromDatabaseEnvAuthoritative locks the config-blob precedence rule
+// that the OAuth/Cloudflare-Access passthrough depends on: environment-authoritative
+// keys must win over a persisted config_blob, while UI-managed keys (itunes.*) must
+// keep their blob value when no env override is present. Regression guard for the
+// 2026-07-26 incident where the blob's whole-struct restore silently zeroed the
+// env-set CF_ACCESS_TEAM_DOMAIN and the passthrough never initialized.
+func TestLoadConfigFromDatabaseEnvAuthoritative(t *testing.T) {
+	resetConfigTestState()
+	t.Cleanup(resetConfigTestState)
+
+	// Bind the env-authoritative keys exactly as InitConfig does — viper.Reset() in
+	// setup cleared prior bindings, and applyEnvAuthoritativeConfig relies on them.
+	bindForTest := func() {
+		viper.BindEnv("cf_access_team_domain", "CF_ACCESS_TEAM_DOMAIN") //nolint:errcheck
+		viper.BindEnv("oauth_enabled", "OAUTH_ENABLED")                 //nolint:errcheck
+		viper.BindEnv("itunes.sync_interval", "ITUNES_SYNC_INTERVAL")   //nolint:errcheck
+	}
+
+	t.Run("env wins over config blob", func(t *testing.T) {
+		resetConfigTestState()
+		t.Setenv("CF_ACCESS_TEAM_DOMAIN", "env-team.cloudflareaccess.com")
+		t.Setenv("OAUTH_ENABLED", "true")
+		bindForTest()
+
+		blob, err := json.Marshal(Config{
+			CFAccessTeamDomain: "stale-blob-team.cloudflareaccess.com",
+			OAuthEnabled:       false,
+		})
+		require.NoError(t, err)
+
+		store := mocks.NewMockStore(t)
+		setupMigrationExpectations(store)
+		store.On("SetSetting", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		store.EXPECT().GetAllSettings().Return([]database.Setting{
+			{Key: "config_blob", Value: string(blob), Type: "string"},
+		}, nil).Once()
+
+		require.NoError(t, LoadConfigFromDatabase(store))
+		assert.Equal(t, "env-team.cloudflareaccess.com", AppConfig.CFAccessTeamDomain,
+			"env CF_ACCESS_TEAM_DOMAIN must override the config blob")
+		assert.True(t, AppConfig.OAuthEnabled,
+			"env OAUTH_ENABLED must override the config blob")
+	})
+
+	t.Run("blob value survives when env unset", func(t *testing.T) {
+		resetConfigTestState()
+		bindForTest() // bound, but no env vars set
+
+		blob, err := json.Marshal(Config{
+			CFAccessTeamDomain: "blob-team.cloudflareaccess.com",
+			ITunes:             ITunesConfig{SyncInterval: 42},
+		})
+		require.NoError(t, err)
+
+		store := mocks.NewMockStore(t)
+		setupMigrationExpectations(store)
+		store.On("SetSetting", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		store.EXPECT().GetAllSettings().Return([]database.Setting{
+			{Key: "config_blob", Value: string(blob), Type: "string"},
+		}, nil).Once()
+
+		require.NoError(t, LoadConfigFromDatabase(store))
+		assert.Equal(t, "blob-team.cloudflareaccess.com", AppConfig.CFAccessTeamDomain,
+			"env-authoritative blob value must survive when no env override is present")
+		assert.Equal(t, 42, AppConfig.ITunes.SyncInterval,
+			"UI-managed itunes value must survive the env overlay untouched")
+	})
 }
