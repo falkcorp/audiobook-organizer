@@ -1,7 +1,7 @@
 // file: internal/transcribe/batch.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
-// last-edited: 2026-06-27
+// last-edited: 2026-07-27
 
 package transcribe
 
@@ -14,6 +14,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 )
 
 //go:embed batch_whisper.py
@@ -46,7 +48,7 @@ func TranscribeBatch(ctx context.Context, jobs map[string]string, onProgress Pro
 		return nil, nil
 	}
 
-	if remoteURL := os.Getenv("WHISPER_REMOTE_URL"); remoteURL != "" {
+	if remoteURL := config.Snapshot().WhisperRemoteURL; remoteURL != "" {
 		results, err := transcribeRemote(ctx, remoteURL, jobs, onProgress)
 		if err != nil {
 			// Do NOT fall back to the local uv path when WHISPER_REMOTE_URL is

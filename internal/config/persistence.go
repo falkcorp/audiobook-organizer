@@ -1,7 +1,7 @@
 // file: internal/config/persistence.go
-// version: 1.29.1
+// version: 1.30.0
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
-// last-edited: 2026-07-03
+// last-edited: 2026-07-27
 
 package config
 
@@ -850,6 +850,13 @@ func LoadConfigFromDatabase(store database.SettingsStore) error {
 			c.OpenLibraryDumpDir = filepath.Join(c.RootDir, "openlibrary-dumps")
 		}
 	})
+
+	// LAST: re-apply environment-authoritative keys (OAuth / Cloudflare Access /
+	// Whisper) on top of the blob + secret rows + file fallback. The blob's whole-struct
+	// restore above overwrites the env-derived values InitConfig set, so a systemd
+	// Environment= drop-in would otherwise be silently dropped. This runs last so env
+	// wins over every persisted layer, matching viper's normal env>config precedence.
+	ApplyEnvAuthoritativeConfig()
 
 	return nil
 }
