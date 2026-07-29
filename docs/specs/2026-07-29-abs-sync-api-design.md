@@ -1,5 +1,5 @@
 <!-- file: docs/specs/2026-07-29-abs-sync-api-design.md -->
-<!-- version: 2.0.0 -->
+<!-- version: 2.1.0 -->
 <!-- guid: 0869d58c-b186-45cb-9915-64bd18eaa45f -->
 <!-- last-edited: 2026-07-29 -->
 
@@ -78,7 +78,28 @@ Verified against `main` @ `79531338` (see the architecture briefing that seeded 
 
 Owner-approved. Opus-owned design; implemented in Phase 1.
 
-### 3.0 Two credential modes — the origin accepts EITHER
+### 3.0 Credential modes — the origin accepts ANY of three
+
+**Correction (2026-07-29), important:** an earlier draft of this spec over-weighted the client-fork path by
+conflating *unmodified* with *zero-configuration*. **Mode B is an unmodified-client path.** A stock App
+Store ShelfPlayer with the two service-token headers typed into its own settings UI is not a fork — the
+"missing setting" is in the app, not in Cloudflare. Mode B is therefore the **default target**: no fork,
+no on-phone VPN client, no public endpoints, Access guarding everything. Its only prerequisite is a client
+that sends user-supplied custom headers on **every** request — including audio streaming, which on iOS
+often bypasses the app's normal networking layer (`AVURLAsset` needs
+`AVURLAssetHTTPHeaderFieldsKey`, background `URLSession` download tasks need their own header injection).
+**Phase 0 must verify the streaming/download path specifically**, not just the JSON API: if headers are
+missing there, the API would authenticate while playback fails at the edge.
+
+Additional Cloudflare facts verified 2026-07-29 (more ways in than first credited):
+- A self-hosted Access app can be configured to accept a service token in a **single HTTP header**, as an
+  alternative to the `CF-Access-Client-Id`/`CF-Access-Client-Secret` pair — for clients that support only
+  one custom header.
+- `cf-access-token: <JWT>` is a supported **raw-header** alternative to the `CF_Authorization` cookie.
+- The origin should validate **`Cf-Access-Jwt-Assertion`** (Cloudflare's recommendation for API clients)
+  rather than the cookie, which "is not guaranteed to be passed."
+- **Linked App Token** is app-to-app token forwarding (`Cf-Access-Token`), **not** a native/mobile
+  mechanism, and not a long-lived token to paste into an app. Ruled out for this use case.
 
 Verified 2026-07-29: **Cloudflare Access "Managed OAuth"** (open beta, enabled per-application) turns
 Access into a standard OAuth 2.0 authorization server for **non-browser clients**. Flow: unauthenticated
@@ -289,18 +310,20 @@ adjacent stack is added beyond Cloudflare's own client.** The open question is o
 gets admitted through the Access gate*; §3.0 defines the three supported credential modes. Preference
 order, all served by one origin build:
 
-1. **Mode C — Cloudflare One (WARP) device session (preferred).** Enable account-level "Cloudflare One
-   Client authentication," allow it on this application, enroll WARP on the iPhone. An **unmodified**
-   client is then admitted transparently, and Cloudflare forwards per-user identity. **Zero public
-   endpoints** — not even `/ping`/`/status` need a bypass. Verify first: it is a toggle + an app install,
-   no code.
-2. **Mode A — Managed OAuth (no on-phone client).** Enable Managed OAuth on the application; a **forked**
-   ShelfPlayer performs the OAuth flow and sends `Authorization: Bearer oauth:...`. Also zero public
-   endpoints. Chosen if the owner rejects running WARP on the phone.
-3. **Mode B — Service token (fallback).** A **Service Auth** policy (service token) on everything, with a
-   **Bypass** policy on `/ping` and `/status` *only if* the chosen client drops custom headers there
-   (Plappa's issue #330). With a fully header-capable client, require the token on those too and again
-   reach **zero public endpoints**. This is the only mode that needs §3.1–3.5 (our own JWT + rotation).
+1. **Mode B — Service token + stock client (DEFAULT).** A **Service Auth** policy on everything; a stock
+   App Store ShelfPlayer carries `CF-Access-Client-Id`/`CF-Access-Client-Secret` (or the single-header
+   variant) from its own settings UI. **No fork, no on-phone client, zero public endpoints** — add a
+   `/ping`,`/status` **Bypass** only if the chosen client drops headers there (Plappa #330). Gated on the
+   Phase-0 streaming-header verification. This is the only mode that needs §3.1–3.5 (our own JWT +
+   rotation), because a service token authenticates a *device*, not a person.
+2. **Mode C — Cloudflare One (WARP) device session.** Enable account-level "Cloudflare One Client
+   authentication," allow it on this application, enroll WARP on the iPhone. A stock client is admitted
+   transparently **and Cloudflare forwards per-user identity**, so §3.1–3.5 are not needed. Preferred over
+   B on security/simplicity grounds *if* the owner accepts WARP running on the phone, and the automatic
+   answer if Mode B fails the streaming-header check.
+3. **Mode A — Managed OAuth (last resort).** Requires a **forked** client to speak the OAuth flow; also
+   yields CF-forwarded per-user identity and zero public endpoints. Chosen only if B fails and the owner
+   rejects WARP.
 
 - **Play/items/progress are never public in any mode** — the edge authenticates every request, and in
   Mode B an app JWT sits behind it as a second layer.
