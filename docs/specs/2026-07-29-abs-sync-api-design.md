@@ -1,5 +1,5 @@
 <!-- file: docs/specs/2026-07-29-abs-sync-api-design.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 0869d58c-b186-45cb-9915-64bd18eaa45f -->
 <!-- last-edited: 2026-07-29 -->
 
@@ -127,9 +127,12 @@ this migrates without a flag day. `golang-jwt/jwt/v5` and `x/crypto/argon2` are 
 ### 3.6 Router split (security)
 - New **top-level ABS group** off `s.router` (not under `/api/v1`), with its own bearer middleware that
   verifies the access JWT (and `?token=` on GETs). Distinct from the `abk_` API-key scheme.
-- **Public ABS surface = read + play + progress + auth only.** No admin/scan/config/filesystem endpoint
-  is reachable via the ABS group. Management stays on the existing `/api/v1` protected group. This
-  satisfies the "split the router" hardening requirement independent of topology.
+- **Router split (app layer, NOT edge exposure).** The ABS bearer group registers only read + play +
+  progress + auth handlers. No admin/scan/config/filesystem endpoint is wired into the ABS group;
+  management stays on the existing `/api/v1` protected group. This is blast-radius limiting
+  (defense-in-depth), independent of topology — it is *not* a claim that these endpoints are
+  unauthenticated. Under the chosen service-token topology (§8), play/items/progress are edge-
+  authenticated **and** JWT-authenticated; they are never public.
 - Rate limiting + lockout on `/login` and `/auth/refresh` at the app layer (reuse existing
   `auth_lockout`), plus structured **audit logging** of every auth attempt (success + failure) with
   source IP.
@@ -221,9 +224,16 @@ Out of scope (client-side): playback speed, sleep timers, skip intervals. Skip
 
 Owner-approved: **Cloudflare Access service token + `/ping`,`/status` bypass.**
 - Two per-path Access applications on the ABS hostname: a **Bypass** policy on `/ping` and `/status`
-  (version info only), and a **Service Auth** policy (service token) on everything else
-  (`/login`, all `/api/*`, file serving, the socket). The edge stays **fail-closed** on all sensitive
-  paths — no meaningful public surface — and no VPN.
+  (version info only), and a **Service Auth** policy (service token) on **everything else — including
+  `/login` and `/auth/refresh`** (the service-token headers ride on every request, so auth does not need
+  to be public), all `/api/*`, file serving, and the socket. The edge stays **fail-closed** on every
+  path except the two version endpoints — no VPN.
+- **Only forced-public endpoints are `/ping` and `/status`, and only because Plappa drops its custom
+  header on `/status`.** If the owner standardizes on a client that sends headers on every request
+  (ShelfPlayer), we require the service token on `/status`/`/ping` too and have **zero public
+  endpoints** — the entire surface, discovery included, is edge-authenticated. This is the preferred end
+  state; the two-endpoint bypass is the compatibility concession for header-incomplete clients.
+- **Play/items/progress are never public** in this topology: edge service token + app JWT, two layers.
 - **App-layer JWT (§3) runs behind the edge as defense-in-depth.** Even an attacker past the edge hits
   bearer auth.
 - **Contingency:** requires an iOS client that sends custom headers (`CF-Access-Client-Id` /
