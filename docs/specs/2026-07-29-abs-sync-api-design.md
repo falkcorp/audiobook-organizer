@@ -1,5 +1,5 @@
 <!-- file: docs/specs/2026-07-29-abs-sync-api-design.md -->
-<!-- version: 2.1.0 -->
+<!-- version: 2.2.0 -->
 <!-- guid: 0869d58c-b186-45cb-9915-64bd18eaa45f -->
 <!-- last-edited: 2026-07-29 -->
 
@@ -348,6 +348,26 @@ order, all served by one origin build:
 - Tunnel is one hostname → one origin port → this service only; run the service isolated (own
   container/namespace, read-only mounts where possible, non-root); WAF rate-limit + bot + geo rules at
   the edge; HSTS/TLS-only; structured audit logging; residual risk documented honestly in the runbook.
+
+### 8.1 Tunnel settings verified in the owner's account (2026-07-29)
+
+- **`Enforce Access JSON Web Token (JWT) validation` — ENABLE THIS.** Tunnel-level setting: *"Require
+  Cloudflare Tunnel to validate every Access JWT before requests reach your origin... When off, your
+  origin must validate the `Cf-Access-Jwt-Assertion` header directly."* With it on, `cloudflared` rejects
+  any request lacking a valid, correctly-signed JWT bound to the right application tag **before it reaches
+  our process**. This **closes the direct-to-origin bypass** previously recorded as residual risk (leaked
+  origin IP / misconfig). Defense in depth becomes: edge admits → tunnel daemon re-validates → origin
+  verifies the assertion. Keep the origin-side verification anyway (cheap, and protects against the
+  setting being flipped off).
+- **Published-application routes support path regex** (`^/api` prefix, `blog` anywhere, `\.(jpg|png)$` by
+  extension, empty = all). This confirms the per-path Access application split in §8 is implementable:
+  a scoped `/ping`,`/status` policy separate from everything else, and admin surfaces excluded from this
+  hostname entirely.
+- **Origin/HTTP/connection knobs to tune and test for large media** (the prompt's "test, not assume"
+  items): `Connect Timeout` (30s), `Idle Connection Expiration Time` (90s), `Keep Alive Connections`
+  (100), `Disable Chunked Encoding`, `HTTP Host Header`. A several-hundred-MB audiobook download and iOS
+  background transfers depend on these; Phase 8 must verify a full-book download and a long seek survive
+  them rather than assuming defaults suffice.
 - **Must be tested with a real client, not curl alone:** WebSocket upgrade survives `cloudflared`;
   Range/206 pass through intact for large m4b seeking; long transfers survive tunnel/proxy timeouts;
   iOS background downloads complete.
