@@ -1,5 +1,5 @@
 <!-- file: docs/specs/2026-07-29-abs-sync-api-design.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 0869d58c-b186-45cb-9915-64bd18eaa45f -->
 <!-- last-edited: 2026-07-29 -->
 
@@ -228,8 +228,13 @@ Owner-approved: **Cloudflare Access service token + `/ping`,`/status` bypass.**
   bearer auth.
 - **Contingency:** requires an iOS client that sends custom headers (`CF-Access-Client-Id` /
   `CF-Access-Client-Secret`) on every request. Phase 0 audits exact per-client header support
-  (ShelfPlayer robust; Plappa drops it on `/status` — covered by the bypass). If the owner's preferred
-  client can't send headers, fall back to scoped-bypass-with-hardening for that client.
+  (ShelfPlayer robust; Plappa drops it on `/status` — covered by the bypass). **Fallback ladder** if
+  the owner's preferred client can't send headers: (a) switch to a client that can (ShelfPlayer);
+  (b) scoped-bypass-with-hardening for that client; (c) **last resort — fork the open-source client**
+  (ShelfPlayer/Plappa are OSS) and ship a build that sends the headers. Forking is a genuine backstop
+  the owner has authorized, so the service-token path is safe to commit to — but we exhaust unmodified
+  options first (a client fork is an ongoing maintenance burden: rebuilds, resigning, TestFlight/AltStore
+  distribution).
 - Tunnel is one hostname → one origin port → this service only; run the service isolated (own
   container/namespace, read-only mounts where possible, non-root); WAF rate-limit + bot + geo rules at
   the edge; HSTS/TLS-only; structured audit logging; residual risk documented honestly in the runbook.
@@ -270,7 +275,9 @@ Owner-approved: **Cloudflare Access service token + `/ping`,`/status` bypass.**
 - **Authoritative narrator source** among the three representations (Phase 2/3 — pick one, document, and
   make the others derive from it).
 - **socket.io dependency**: full Go library vs hand-rolled engine.io handshake, decided in Phase 7 after
-  reading the client socket layers (fatal-vs-cosmetic). Heavyweight-dep approval requested there.
+  reading the client socket layers (fatal-vs-cosmetic). Heavyweight-dep approval requested there. If a
+  client's socket expectations prove infeasible to satisfy server-side, the §8 fork fallback also applies
+  here (patch the client's socket layer) — again a last resort.
 - **Exact per-client custom-header support** matrix (Phase 0), which confirms the topology contingency.
 - **Chapter synthesis for multi-file books** with no embedded markers: derive from `BookFile.Duration`
   + `TrackNumber` and the existing `ChapterGroup` consolidation (Phase 4).
