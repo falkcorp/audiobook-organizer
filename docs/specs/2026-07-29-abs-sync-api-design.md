@@ -1,5 +1,5 @@
 <!-- file: docs/specs/2026-07-29-abs-sync-api-design.md -->
-<!-- version: 2.2.0 -->
+<!-- version: 2.3.0 -->
 <!-- guid: 0869d58c-b186-45cb-9915-64bd18eaa45f -->
 <!-- last-edited: 2026-07-29 -->
 
@@ -318,9 +318,13 @@ order, all served by one origin build:
    rotation), because a service token authenticates a *device*, not a person.
 2. **Mode C — Cloudflare One (WARP) device session.** Enable account-level "Cloudflare One Client
    authentication," allow it on this application, enroll WARP on the iPhone. A stock client is admitted
-   transparently **and Cloudflare forwards per-user identity**, so §3.1–3.5 are not needed. Preferred over
-   B on security/simplicity grounds *if* the owner accepts WARP running on the phone, and the automatic
-   answer if Mode B fails the streaming-header check.
+   transparently **and Cloudflare forwards per-user identity**, so §3.1–3.5 are not needed.
+   **Owner-accepted fallback (2026-07-29): if Mode B fails the streaming-header check, go to Mode C.**
+   Configure WARP **split tunnel in Include mode** listing only the ABS hostname (`books.jdfalk.com` and
+   its resolved IPs) so *only* audiobook traffic traverses WARP — every other app and all other traffic on
+   the phone bypasses it. This removes the usual full-tunnel objections (battery, interference with other
+   apps, CarPlay/background-transfer risk) and makes Mode C a light-touch configuration rather than an
+   always-on device VPN. Pair with Local Domain Fallback if DNS resolution needs it.
 3. **Mode A — Managed OAuth (last resort).** Requires a **forked** client to speak the OAuth flow; also
    yields CF-forwarded per-user identity and zero public endpoints. Chosen only if B fails and the owner
    rejects WARP.
