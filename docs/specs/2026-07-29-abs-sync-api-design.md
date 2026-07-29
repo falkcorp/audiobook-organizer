@@ -1,5 +1,5 @@
 <!-- file: docs/specs/2026-07-29-abs-sync-api-design.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 0869d58c-b186-45cb-9915-64bd18eaa45f -->
 <!-- last-edited: 2026-07-29 -->
 
@@ -234,8 +234,17 @@ Owner-approved: **Cloudflare Access service token + `/ping`,`/status` bypass.**
   endpoints** — the entire surface, discovery included, is edge-authenticated. This is the preferred end
   state; the two-endpoint bypass is the compatibility concession for header-incomplete clients.
 - **Play/items/progress are never public** in this topology: edge service token + app JWT, two layers.
-- **App-layer JWT (§3) runs behind the edge as defense-in-depth.** Even an attacker past the edge hits
-  bearer auth.
+- **Two layers authenticate different things; the app does not double-auth.** The CF service token
+  authenticates the *device/app* (one shared credential, no user identity) and is verified **at the edge
+  only** — the app does not re-check it or the `Cf-Access-Jwt-Assertion`; it trusts the edge for
+  device-level auth. The app JWT authenticates the *user* and is mandated by the ABS client protocol
+  (`/login` → `user.token` → `Authorization: Bearer`); it is the **only** source of user identity, which
+  the multi-user/family goal requires (the shared service token cannot distinguish users). The app's sole
+  auth work is a microsecond HMAC verify of a token it signed itself.
+- **The JWT signature MUST be verified, not merely trusted-because-it-arrived.** This is the
+  defense-in-depth that makes "trust the edge for device auth" safe: if a request ever reaches the origin
+  bypassing the tunnel (misconfig, leaked origin IP), signature verification prevents a direct-to-origin
+  caller from forging a userID. Documented as residual risk in the runbook.
 - **Contingency:** requires an iOS client that sends custom headers (`CF-Access-Client-Id` /
   `CF-Access-Client-Secret`) on every request. Phase 0 audits exact per-client header support
   (ShelfPlayer robust; Plappa drops it on `/status` — covered by the bypass). **Fallback ladder** if
