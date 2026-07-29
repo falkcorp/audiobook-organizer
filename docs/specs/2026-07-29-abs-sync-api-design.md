@@ -1,5 +1,5 @@
 <!-- file: docs/specs/2026-07-29-abs-sync-api-design.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 2.0.0 -->
 <!-- guid: 0869d58c-b186-45cb-9915-64bd18eaa45f -->
 <!-- last-edited: 2026-07-29 -->
 
@@ -78,7 +78,69 @@ Verified against `main` @ `79531338` (see the architecture briefing that seeded 
 
 Owner-approved. Opus-owned design; implemented in Phase 1.
 
-### 3.1 Shape
+### 3.0 Two credential modes — the origin accepts EITHER
+
+Verified 2026-07-29: **Cloudflare Access "Managed OAuth"** (open beta, enabled per-application) turns
+Access into a standard OAuth 2.0 authorization server for **non-browser clients**. Flow: unauthenticated
+request → Access returns `www-authenticate` pointing at the token endpoint → client runs the OAuth flow
+**in a browser** (user authenticates with the existing Google/GitHub IdP) → client receives an **opaque
+bearer token** (`oauth:...`) → client sends `Authorization: Bearer <token>` → **Cloudflare resolves the
+token server-side and forwards a signed `Cf-Access-Jwt-Assertion` to our origin**. No cookie is involved,
+which is what makes it viable for a native iOS app (iOS sandboxes the browser cookie jar away from the
+app's `URLSession`, so the `CF_Authorization` cookie can never reach the app's own HTTP client).
+
+**Why Managed OAuth cannot be used with an *unmodified* app.** Managed OAuth is a protocol the **client
+must speak**, not something the edge can apply to a client. A participating app must (1) recognize the
+`www-authenticate` challenge, (2) register as an OAuth client (RFC 7591 dynamic registration / RFC 8707
+resource indicators), (3) drive a browser flow and receive the `oauth:...` token, and (4) store, attach,
+and refresh it. ShelfPlayer implements OIDC **against the ABS server**, not against Cloudflare — a
+different authorization server and token; unmodified, it reads the challenge as a plain connection
+failure. The apps that work with Managed OAuth today are AI agents, MCP clients, and CLIs built for that
+flow. Secondary blocker even if a token existed: **header collision** — Managed OAuth needs
+`Authorization: Bearer oauth:...` while the ABS protocol mandates `Authorization: Bearer <ABS user token>`
+on that same header (one header, two owners).
+
+**The architectural reason Mode C works unmodified and Mode A does not:** WARP sits **below** the app
+(network layer — every request from every app on the device is transparently admitted, app needs zero
+awareness), whereas Managed OAuth sits **inside** the app (application layer — the app must implement the
+dance). Hence: stock client ⇒ Mode C; no on-phone client ⇒ Mode A + fork.
+
+There is also a **third mechanism, verified in the owner's account 2026-07-29: "Cloudflare One Client
+authentication"** — *"Allow users to transparently authenticate to Access applications using the session
+from their device client."* With the **Cloudflare One (WARP) app enrolled on the iPhone**, the device
+session transparently satisfies Access for every app on that device, including an **unmodified**
+ShelfPlayer/Plappa: no custom headers, no client fork, no service-token secret, Access still guarding
+everything, and Cloudflare still forwarding `Cf-Access-Jwt-Assertion` with real per-user identity. It is
+an account-level toggle (currently **not enabled** — must be turned on, then allowed per application).
+Cost: the WARP client must be running on the phone (same class of tradeoff as a mesh VPN, but reuses the
+existing Access + Google/GitHub IdP instead of adding a parallel stack). CarPlay and iOS
+background-download behavior under WARP are **on-device gates the owner must verify**.
+
+Therefore the origin is designed to accept **any** of three credentials, off one build:
+
+| | **Mode C — WARP device session (preferred)** | **Mode A — Managed OAuth** | **Mode B — self-hosted JWT (fallback)** |
+|---|---|---|---|
+| Client | **unmodified** | forked ShelfPlayer | unmodified *if* it sends custom headers |
+| On-phone requirement | WARP app enrolled | none | none |
+| `Authorization` header | ABS token (unused by CF) | CF OAuth token | ABS token (CF uses `CF-Access-*`) |
+| Identity source | **existing Google/GitHub IdP** via `Cf-Access-Jwt-Assertion` | same | our own user records |
+| Origin auth work | verify the CF assertion (`middleware/cfaccess.go`) | same | §3.1–3.5 below |
+| Secrets on the phone | none | none (per-user, revocable) | one shared service-token secret |
+
+**Modes C and A share one origin implementation and delete the riskiest part of this project** — no
+refresh-token rotation, no grace window, no "Session not found" failure class, no password storage.
+§3.1–3.5 apply **only to Mode B**. Resolution order in the ABS auth middleware: a verified
+`Cf-Access-Jwt-Assertion` (Mode C/A) wins; otherwise fall back to our own bearer JWT (Mode B);
+otherwise 401.
+
+**Order of attack:** try **Mode C first** — it is a Cloudflare toggle plus installing WARP, testable with
+zero code and zero Swift. Fall back to A (no VPN, needs a fork) then B (needs client header support).
+
+Also enable Access's **"Service Authentication failure → Return 401 Response"** toggle: in Mode B a failed
+edge auth then returns a clean `401` instead of an HTML login page, which clients handle far more
+gracefully. Phase 0 verifies Managed OAuth end-to-end with `curl` **before** any Swift is touched.
+
+### 3.1 Shape (Mode B only)
 ABS clients expect: `POST /login` returns a `user` object whose `token` field is the **access token**;
 when the request carries header `x-return-tokens: true`, the response body **also** includes the
 **refresh token**. Subsequent requests send `Authorization: Bearer <access token>`; GETs may also carry
@@ -222,38 +284,44 @@ Out of scope (client-side): playback speed, sleep timers, skip intervals. Skip
 
 ## 8. LOCKED topology decision (implemented Phase 8)
 
-Owner-approved: **Cloudflare Access service token + `/ping`,`/status` bypass.**
-- Two per-path Access applications on the ABS hostname: a **Bypass** policy on `/ping` and `/status`
-  (version info only), and a **Service Auth** policy (service token) on **everything else — including
-  `/login` and `/auth/refresh`** (the service-token headers ride on every request, so auth does not need
-  to be public), all `/api/*`, file serving, and the socket. The edge stays **fail-closed** on every
-  path except the two version endpoints — no VPN.
-- **Only forced-public endpoints are `/ping` and `/status`, and only because Plappa drops its custom
-  header on `/status`.** If the owner standardizes on a client that sends headers on every request
-  (ShelfPlayer), we require the service token on `/status`/`/ping` too and have **zero public
-  endpoints** — the entire surface, discovery included, is edge-authenticated. This is the preferred end
-  state; the two-endpoint bypass is the compatibility concession for header-incomplete clients.
-- **Play/items/progress are never public** in this topology: edge service token + app JWT, two layers.
-- **Two layers authenticate different things; the app does not double-auth.** The CF service token
-  authenticates the *device/app* (one shared credential, no user identity) and is verified **at the edge
-  only** — the app does not re-check it or the `Cf-Access-Jwt-Assertion`; it trusts the edge for
-  device-level auth. The app JWT authenticates the *user* and is mandated by the ABS client protocol
-  (`/login` → `user.token` → `Authorization: Bearer`); it is the **only** source of user identity, which
-  the multi-user/family goal requires (the shared service token cannot distinguish users). The app's sole
-  auth work is a microsecond HMAC verify of a token it signed itself.
-- **The JWT signature MUST be verified, not merely trusted-because-it-arrived.** This is the
-  defense-in-depth that makes "trust the edge for device auth" safe: if a request ever reaches the origin
-  bypassing the tunnel (misconfig, leaked origin IP), signature verification prevents a direct-to-origin
-  caller from forging a userID. Documented as residual risk in the runbook.
-- **Contingency:** requires an iOS client that sends custom headers (`CF-Access-Client-Id` /
-  `CF-Access-Client-Secret`) on every request. Phase 0 audits exact per-client header support
-  (ShelfPlayer robust; Plappa drops it on `/status` — covered by the bypass). **Fallback ladder** if
-  the owner's preferred client can't send headers: (a) switch to a client that can (ShelfPlayer);
-  (b) scoped-bypass-with-hardening for that client; (c) **last resort — fork the open-source client**
-  (ShelfPlayer/Plappa are OSS) and ship a build that sends the headers. Forking is a genuine backstop
-  the owner has authorized, so the service-token path is safe to commit to — but we exhaust unmodified
-  options first (a client fork is an ongoing maintenance burden: rebuilds, resigning, TestFlight/AltStore
-  distribution).
+**Cloudflare Access stays in front of the entire ABS surface. Nothing is publicly exposed and no VPN-
+adjacent stack is added beyond Cloudflare's own client.** The open question is only *how a native iOS app
+gets admitted through the Access gate*; §3.0 defines the three supported credential modes. Preference
+order, all served by one origin build:
+
+1. **Mode C — Cloudflare One (WARP) device session (preferred).** Enable account-level "Cloudflare One
+   Client authentication," allow it on this application, enroll WARP on the iPhone. An **unmodified**
+   client is then admitted transparently, and Cloudflare forwards per-user identity. **Zero public
+   endpoints** — not even `/ping`/`/status` need a bypass. Verify first: it is a toggle + an app install,
+   no code.
+2. **Mode A — Managed OAuth (no on-phone client).** Enable Managed OAuth on the application; a **forked**
+   ShelfPlayer performs the OAuth flow and sends `Authorization: Bearer oauth:...`. Also zero public
+   endpoints. Chosen if the owner rejects running WARP on the phone.
+3. **Mode B — Service token (fallback).** A **Service Auth** policy (service token) on everything, with a
+   **Bypass** policy on `/ping` and `/status` *only if* the chosen client drops custom headers there
+   (Plappa's issue #330). With a fully header-capable client, require the token on those too and again
+   reach **zero public endpoints**. This is the only mode that needs §3.1–3.5 (our own JWT + rotation).
+
+- **Play/items/progress are never public in any mode** — the edge authenticates every request, and in
+  Mode B an app JWT sits behind it as a second layer.
+- **Identity vs admission (the distinction that drove the design).** The Access credential answers *is
+  this request admitted* — in Mode C/A it **also carries the user** (`Cf-Access-Jwt-Assertion` from the
+  existing Google/GitHub IdP), which is why those modes need no password DB and satisfy the
+  multi-user/family goal directly. A **service token (Mode B) authenticates a device, not a person** — one
+  shared credential with no user identity — which is exactly why Mode B still needs our own per-user JWT.
+- **The origin does not double-auth.** It never re-verifies the service token; it trusts the edge for
+  admission. Its only auth work is verifying whichever identity credential is present.
+- **Whichever credential is used, its signature MUST be verified, not trusted-because-it-arrived** (the CF
+  assertion against Cloudflare's public key + the app AUD tag; our own JWT against `ABS_JWT_SECRET`). This
+  is what makes "trust the edge" safe if a request ever reaches the origin bypassing the tunnel (misconfig,
+  leaked origin IP). Documented as residual risk in the runbook.
+- **Fork posture:** the owner has authorized forking an OSS client (ShelfPlayer/Plappa) as a genuine
+  backstop, which is what makes Mode A viable and de-risks the whole topology — but we exhaust unmodified
+  options (C, then B) first, since a fork carries ongoing maintenance cost (rebuilds, resigning,
+  TestFlight/AltStore distribution).
+- **Phase 0 resolves this empirically, cheapest-first:** (a) toggle Mode C and test an unmodified client;
+  (b) `curl` Managed OAuth end-to-end; (c) audit per-client custom-header support. No Swift is written
+  until (a) and (b) are answered.
 - Tunnel is one hostname → one origin port → this service only; run the service isolated (own
   container/namespace, read-only mounts where possible, non-root); WAF rate-limit + bot + geo rules at
   the edge; HSTS/TLS-only; structured audit logging; residual risk documented honestly in the runbook.
