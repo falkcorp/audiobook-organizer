@@ -1,0 +1,1043 @@
+{
+  "request": {
+    "body": null,
+    "method": "GET",
+    "path": "/api/libraries/b5e3a5b2-a76e-471f-b18b-915e4716d053/search?q=odyssey"
+  },
+  "response": {
+    "body": {
+      "authors": [],
+      "book": [
+        {
+          "libraryItem": {
+            "addedAt": 1785370201391,
+            "birthtimeMs": 1785370076436,
+            "ctimeMs": 1785370076542,
+            "folderId": "60f59687-05cd-4225-87a4-38ec8f4fc232",
+            "id": "e41e6459-821e-4460-aaf6-f78a270f605e",
+            "ino": "11",
+            "isFile": false,
+            "isInvalid": false,
+            "isMissing": false,
+            "lastScan": 1785370201390,
+            "libraryFiles": [
+              {
+                "addedAt": 1785370201330,
+                "fileType": "audio",
+                "ino": "19",
+                "isSupplementary": null,
+                "metadata": {
+                  "birthtimeMs": 1785370076542,
+                  "ctimeMs": 1785370076671,
+                  "ext": ".m4b",
+                  "filename": "odyssey_complete.m4b",
+                  "mtimeMs": 1785370076670,
+                  "path": "/audiobooks/Homer/The Odyssey (Single File)/odyssey_complete.m4b",
+                  "relPath": "odyssey_complete.m4b",
+                  "size": 120828875
+                },
+                "updatedAt": 1785370201330
+              }
+            ],
+            "libraryId": "b5e3a5b2-a76e-471f-b18b-915e4716d053",
+            "media": {
+              "audioFiles": [
+                {
+                  "addedAt": 1785370201389,
+                  "bitRate": 96208,
+                  "channelLayout": "mono",
+                  "channels": 1,
+                  "chapters": [
+                    {
+                      "end": 1386.057,
+                      "id": 0,
+                      "start": 0,
+                      "title": "Chapter 1: odyssey_01_homer_butler_64kb"
+                    },
+                    {
+                      "end": 2788.701,
+                      "id": 1,
+                      "start": 1386.057,
+                      "title": "Chapter 2: odyssey_02_homer_butler_64kb"
+                    },
+                    {
+                      "end": 4309.21,
+                      "id": 2,
+                      "start": 2788.701,
+                      "title": "Chapter 3: odyssey_03_homer_butler_64kb"
+                    },
+                    {
+                      "end": 6928.977,
+                      "id": 3,
+                      "start": 4309.21,
+                      "title": "Chapter 4: odyssey_04_homer_butler_64kb"
+                    },
+                    {
+                      "end": 8602.198,
+                      "id": 4,
+                      "start": 6928.977,
+                      "title": "Chapter 5: odyssey_05_homer_butler_64kb"
+                    },
+                    {
+                      "end": 9975.428,
+                      "id": 5,
+                      "start": 8602.198,
+                      "title": "Chapter 6: odyssey_06_homer_butler_64kb"
+                    }
+                  ],
+                  "codec": "aac",
+                  "discNumFromFilename": null,
+                  "discNumFromMeta": null,
+                  "duration": 9975.480544,
+                  "embeddedCoverArt": null,
+                  "error": null,
+                  "exclude": false,
+                  "format": "QuickTime / MOV",
+                  "index": 1,
+                  "ino": "19",
+                  "language": "und",
+                  "manuallyVerified": false,
+                  "metaTags": {
+                    "tagAlbum": "The Odyssey",
+                    "tagArtist": "Homer",
+                    "tagDate": "800BC",
+                    "tagEncoder": "Lavf62.3.100",
+                    "tagGenre": "Audiobook",
+                    "tagTitle": "The Odyssey"
+                  },
+                  "metadata": {
+                    "birthtimeMs": 1785370076542,
+                    "ctimeMs": 1785370076671,
+                    "ext": ".m4b",
+                    "filename": "odyssey_complete.m4b",
+                    "mtimeMs": 1785370076670,
+                    "path": "/audiobooks/Homer/The Odyssey (Single File)/odyssey_complete.m4b",
+                    "relPath": "odyssey_complete.m4b",
+                    "size": 120828875
+                  },
+                  "mimeType": "audio/mp4",
+                  "timeBase": "1/22050",
+                  "trackNumFromFilename": null,
+                  "trackNumFromMeta": null,
+                  "updatedAt": 1785370201389
+                }
+              ],
+              "chapters": [
+                {
+                  "end": 1386.057,
+                  "id": 0,
+                  "start": 0,
+                  "title": "Chapter 1: odyssey_01_homer_butler_64kb"
+                },
+                {
+                  "end": 2788.701,
+                  "id": 1,
+                  "start": 1386.057,
+                  "title": "Chapter 2: odyssey_02_homer_butler_64kb"
+                },
+                {
+                  "end": 4309.21,
+                  "id": 2,
+                  "start": 2788.701,
+                  "title": "Chapter 3: odyssey_03_homer_butler_64kb"
+                },
+                {
+                  "end": 6928.977,
+                  "id": 3,
+                  "start": 4309.21,
+                  "title": "Chapter 4: odyssey_04_homer_butler_64kb"
+                },
+                {
+                  "end": 8602.198,
+                  "id": 4,
+                  "start": 6928.977,
+                  "title": "Chapter 5: odyssey_05_homer_butler_64kb"
+                },
+                {
+                  "end": 9975.428,
+                  "id": 5,
+                  "start": 8602.198,
+                  "title": "Chapter 6: odyssey_06_homer_butler_64kb"
+                }
+              ],
+              "coverPath": null,
+              "duration": 9975.480544,
+              "ebookFile": null,
+              "id": "f8161816-cc79-4988-a619-0d3cacd40bb9",
+              "libraryItemId": "e41e6459-821e-4460-aaf6-f78a270f605e",
+              "metadata": {
+                "abridged": false,
+                "asin": null,
+                "authorName": "Homer",
+                "authorNameLF": "Homer",
+                "authors": [
+                  {
+                    "id": "4c8fe05a-b38b-4e1f-9846-9b9ea23b8073",
+                    "name": "Homer"
+                  }
+                ],
+                "description": null,
+                "descriptionPlain": null,
+                "explicit": false,
+                "genres": [
+                  "Audiobook"
+                ],
+                "isbn": null,
+                "language": null,
+                "narratorName": "",
+                "narrators": [],
+                "publishedDate": null,
+                "publishedYear": "800BC",
+                "publisher": null,
+                "series": [],
+                "seriesName": "",
+                "subtitle": null,
+                "title": "The Odyssey",
+                "titleIgnorePrefix": "Odyssey, The"
+              },
+              "numAudioFiles": 1,
+              "numChapters": 6,
+              "numTracks": 1,
+              "size": 120828875,
+              "tags": [],
+              "tracks": [
+                {
+                  "addedAt": 1785370201389,
+                  "bitRate": 96208,
+                  "channelLayout": "mono",
+                  "channels": 1,
+                  "chapters": [
+                    {
+                      "end": 1386.057,
+                      "id": 0,
+                      "start": 0,
+                      "title": "Chapter 1: odyssey_01_homer_butler_64kb"
+                    },
+                    {
+                      "end": 2788.701,
+                      "id": 1,
+                      "start": 1386.057,
+                      "title": "Chapter 2: odyssey_02_homer_butler_64kb"
+                    },
+                    {
+                      "end": 4309.21,
+                      "id": 2,
+                      "start": 2788.701,
+                      "title": "Chapter 3: odyssey_03_homer_butler_64kb"
+                    },
+                    {
+                      "end": 6928.977,
+                      "id": 3,
+                      "start": 4309.21,
+                      "title": "Chapter 4: odyssey_04_homer_butler_64kb"
+                    },
+                    {
+                      "end": 8602.198,
+                      "id": 4,
+                      "start": 6928.977,
+                      "title": "Chapter 5: odyssey_05_homer_butler_64kb"
+                    },
+                    {
+                      "end": 9975.428,
+                      "id": 5,
+                      "start": 8602.198,
+                      "title": "Chapter 6: odyssey_06_homer_butler_64kb"
+                    }
+                  ],
+                  "codec": "aac",
+                  "contentUrl": "/api/items/e41e6459-821e-4460-aaf6-f78a270f605e/file/19",
+                  "discNumFromFilename": null,
+                  "discNumFromMeta": null,
+                  "duration": 9975.480544,
+                  "embeddedCoverArt": null,
+                  "error": null,
+                  "exclude": false,
+                  "format": "QuickTime / MOV",
+                  "index": 1,
+                  "ino": "19",
+                  "language": "und",
+                  "manuallyVerified": false,
+                  "metaTags": {
+                    "tagAlbum": "The Odyssey",
+                    "tagArtist": "Homer",
+                    "tagDate": "800BC",
+                    "tagEncoder": "Lavf62.3.100",
+                    "tagGenre": "Audiobook",
+                    "tagTitle": "The Odyssey"
+                  },
+                  "metadata": {
+                    "birthtimeMs": 1785370076542,
+                    "ctimeMs": 1785370076671,
+                    "ext": ".m4b",
+                    "filename": "odyssey_complete.m4b",
+                    "mtimeMs": 1785370076670,
+                    "path": "/audiobooks/Homer/The Odyssey (Single File)/odyssey_complete.m4b",
+                    "relPath": "odyssey_complete.m4b",
+                    "size": 120828875
+                  },
+                  "mimeType": "audio/mp4",
+                  "startOffset": 0,
+                  "timeBase": "1/22050",
+                  "title": "odyssey_complete.m4b",
+                  "trackNumFromFilename": null,
+                  "trackNumFromMeta": null,
+                  "updatedAt": 1785370201389
+                }
+              ]
+            },
+            "mediaType": "book",
+            "mtimeMs": 1785370076542,
+            "numFiles": 1,
+            "oldLibraryItemId": null,
+            "path": "/audiobooks/Homer/The Odyssey (Single File)",
+            "relPath": "Homer/The Odyssey (Single File)",
+            "scanVersion": "2.36.0",
+            "size": 120828875,
+            "updatedAt": 1785370201391
+          }
+        },
+        {
+          "libraryItem": {
+            "addedAt": 1785370201438,
+            "birthtimeMs": 1785370076436,
+            "ctimeMs": 1785370076528,
+            "folderId": "60f59687-05cd-4225-87a4-38ec8f4fc232",
+            "id": "68929fc9-e296-4d25-b3aa-1c2930efd00d",
+            "ino": "12",
+            "isFile": false,
+            "isInvalid": false,
+            "isMissing": false,
+            "lastScan": 1785370201437,
+            "libraryFiles": [
+              {
+                "addedAt": 1785370201331,
+                "fileType": "audio",
+                "ino": "17",
+                "isSupplementary": null,
+                "metadata": {
+                  "birthtimeMs": 1785370076439,
+                  "ctimeMs": 1785370076452,
+                  "ext": ".mp3",
+                  "filename": "odyssey_01_homer_butler_64kb.mp3",
+                  "mtimeMs": 1785370076451,
+                  "path": "/audiobooks/Homer/The Odyssey/odyssey_01_homer_butler_64kb.mp3",
+                  "relPath": "odyssey_01_homer_butler_64kb.mp3",
+                  "size": 11089920
+                },
+                "updatedAt": 1785370201331
+              },
+              {
+                "addedAt": 1785370201331,
+                "fileType": "audio",
+                "ino": "13",
+                "isSupplementary": null,
+                "metadata": {
+                  "birthtimeMs": 1785370076455,
+                  "ctimeMs": 1785370076467,
+                  "ext": ".mp3",
+                  "filename": "odyssey_02_homer_butler_64kb.mp3",
+                  "mtimeMs": 1785370076466,
+                  "path": "/audiobooks/Homer/The Odyssey/odyssey_02_homer_butler_64kb.mp3",
+                  "relPath": "odyssey_02_homer_butler_64kb.mp3",
+                  "size": 11222528
+                },
+                "updatedAt": 1785370201331
+              },
+              {
+                "addedAt": 1785370201331,
+                "fileType": "audio",
+                "ino": "16",
+                "isSupplementary": null,
+                "metadata": {
+                  "birthtimeMs": 1785370076470,
+                  "ctimeMs": 1785370076485,
+                  "ext": ".mp3",
+                  "filename": "odyssey_03_homer_butler_64kb.mp3",
+                  "mtimeMs": 1785370076485,
+                  "path": "/audiobooks/Homer/The Odyssey/odyssey_03_homer_butler_64kb.mp3",
+                  "relPath": "odyssey_03_homer_butler_64kb.mp3",
+                  "size": 12165632
+                },
+                "updatedAt": 1785370201331
+              },
+              {
+                "addedAt": 1785370201331,
+                "fileType": "audio",
+                "ino": "15",
+                "isSupplementary": null,
+                "metadata": {
+                  "birthtimeMs": 1785370076488,
+                  "ctimeMs": 1785370076510,
+                  "ext": ".mp3",
+                  "filename": "odyssey_04_homer_butler_64kb.mp3",
+                  "mtimeMs": 1785370076510,
+                  "path": "/audiobooks/Homer/The Odyssey/odyssey_04_homer_butler_64kb.mp3",
+                  "relPath": "odyssey_04_homer_butler_64kb.mp3",
+                  "size": 20959108
+                },
+                "updatedAt": 1785370201331
+              },
+              {
+                "addedAt": 1785370201331,
+                "fileType": "audio",
+                "ino": "18",
+                "isSupplementary": null,
+                "metadata": {
+                  "birthtimeMs": 1785370076513,
+                  "ctimeMs": 1785370076525,
+                  "ext": ".mp3",
+                  "filename": "odyssey_05_homer_butler_64kb.mp3",
+                  "mtimeMs": 1785370076525,
+                  "path": "/audiobooks/Homer/The Odyssey/odyssey_05_homer_butler_64kb.mp3",
+                  "relPath": "odyssey_05_homer_butler_64kb.mp3",
+                  "size": 13387264
+                },
+                "updatedAt": 1785370201331
+              },
+              {
+                "addedAt": 1785370201331,
+                "fileType": "audio",
+                "ino": "14",
+                "isSupplementary": null,
+                "metadata": {
+                  "birthtimeMs": 1785370076528,
+                  "ctimeMs": 1785370076540,
+                  "ext": ".mp3",
+                  "filename": "odyssey_06_homer_butler_64kb.mp3",
+                  "mtimeMs": 1785370076539,
+                  "path": "/audiobooks/Homer/The Odyssey/odyssey_06_homer_butler_64kb.mp3",
+                  "relPath": "odyssey_06_homer_butler_64kb.mp3",
+                  "size": 10986811
+                },
+                "updatedAt": 1785370201331
+              }
+            ],
+            "libraryId": "b5e3a5b2-a76e-471f-b18b-915e4716d053",
+            "media": {
+              "audioFiles": [
+                {
+                  "addedAt": 1785370201435,
+                  "bitRate": 64000,
+                  "channelLayout": "mono",
+                  "channels": 1,
+                  "chapters": [],
+                  "codec": "mp3",
+                  "discNumFromFilename": null,
+                  "discNumFromMeta": null,
+                  "duration": 1386.057143,
+                  "embeddedCoverArt": null,
+                  "error": null,
+                  "exclude": false,
+                  "format": "MP2/3 (MPEG audio layer 2/3)",
+                  "index": 1,
+                  "ino": "17",
+                  "language": null,
+                  "manuallyVerified": false,
+                  "metaTags": {
+                    "tagAlbum": "The Odyssey",
+                    "tagArtist": "Homer, transl. Samuel Butler",
+                    "tagComment": "http://archive.org/details/odyssey_butler_librivox",
+                    "tagEncoder": "LAME 64bits version 3.98.4 (http://www.mp3dev.org/)",
+                    "tagGenre": "Speech",
+                    "tagTitle": "The Odyssey: Book 01",
+                    "tagTrack": "1/24"
+                  },
+                  "metadata": {
+                    "birthtimeMs": 1785370076439,
+                    "ctimeMs": 1785370076452,
+                    "ext": ".mp3",
+                    "filename": "odyssey_01_homer_butler_64kb.mp3",
+                    "mtimeMs": 1785370076451,
+                    "path": "/audiobooks/Homer/The Odyssey/odyssey_01_homer_butler_64kb.mp3",
+                    "relPath": "odyssey_01_homer_butler_64kb.mp3",
+                    "size": 11089920
+                  },
+                  "mimeType": "audio/mpeg",
+                  "timeBase": "1/14112000",
+                  "trackNumFromFilename": 1,
+                  "trackNumFromMeta": 1,
+                  "updatedAt": 1785370201435
+                },
+                {
+                  "addedAt": 1785370201435,
+                  "bitRate": 64000,
+                  "channelLayout": "mono",
+                  "channels": 1,
+                  "chapters": [],
+                  "codec": "mp3",
+                  "discNumFromFilename": null,
+                  "discNumFromMeta": null,
+                  "duration": 1402.644898,
+                  "embeddedCoverArt": null,
+                  "error": null,
+                  "exclude": false,
+                  "format": "MP2/3 (MPEG audio layer 2/3)",
+                  "index": 2,
+                  "ino": "13",
+                  "language": null,
+                  "manuallyVerified": false,
+                  "metaTags": {
+                    "tagAlbum": "The Odyssey",
+                    "tagArtist": "Homer, transl. Samuel Butler",
+                    "tagComment": "http://archive.org/details/odyssey_butler_librivox",
+                    "tagEncoder": "LAME 64bits version 3.98.4 (http://www.mp3dev.org/)",
+                    "tagGenre": "Speech",
+                    "tagTitle": "The Odyssey: Book 02",
+                    "tagTrack": "2/24"
+                  },
+                  "metadata": {
+                    "birthtimeMs": 1785370076455,
+                    "ctimeMs": 1785370076467,
+                    "ext": ".mp3",
+                    "filename": "odyssey_02_homer_butler_64kb.mp3",
+                    "mtimeMs": 1785370076466,
+                    "path": "/audiobooks/Homer/The Odyssey/odyssey_02_homer_butler_64kb.mp3",
+                    "relPath": "odyssey_02_homer_butler_64kb.mp3",
+                    "size": 11222528
+                  },
+                  "mimeType": "audio/mpeg",
+                  "timeBase": "1/14112000",
+                  "trackNumFromFilename": 2,
+                  "trackNumFromMeta": 2,
+                  "updatedAt": 1785370201435
+                },
+                {
+                  "addedAt": 1785370201434,
+                  "bitRate": 64000,
+                  "channelLayout": "mono",
+                  "channels": 1,
+                  "chapters": [],
+                  "codec": "mp3",
+                  "discNumFromFilename": null,
+                  "discNumFromMeta": null,
+                  "duration": 1520.509388,
+                  "embeddedCoverArt": null,
+                  "error": null,
+                  "exclude": false,
+                  "format": "MP2/3 (MPEG audio layer 2/3)",
+                  "index": 3,
+                  "ino": "16",
+                  "language": null,
+                  "manuallyVerified": false,
+                  "metaTags": {
+                    "tagAlbum": "The Odyssey",
+                    "tagArtist": "Homer, transl. Samuel Butler",
+                    "tagComment": "http://archive.org/details/odyssey_butler_librivox",
+                    "tagEncoder": "LAME 64bits version 3.98.4 (http://www.mp3dev.org/)",
+                    "tagGenre": "Speech",
+                    "tagTitle": "The Odyssey: Book 03",
+                    "tagTrack": "3/24"
+                  },
+                  "metadata": {
+                    "birthtimeMs": 1785370076470,
+                    "ctimeMs": 1785370076485,
+                    "ext": ".mp3",
+                    "filename": "odyssey_03_homer_butler_64kb.mp3",
+                    "mtimeMs": 1785370076485,
+                    "path": "/audiobooks/Homer/The Odyssey/odyssey_03_homer_butler_64kb.mp3",
+                    "relPath": "odyssey_03_homer_butler_64kb.mp3",
+                    "size": 12165632
+                  },
+                  "mimeType": "audio/mpeg",
+                  "timeBase": "1/14112000",
+                  "trackNumFromFilename": 3,
+                  "trackNumFromMeta": 3,
+                  "updatedAt": 1785370201434
+                },
+                {
+                  "addedAt": 1785370201436,
+                  "bitRate": 64000,
+                  "channelLayout": "mono",
+                  "channels": 1,
+                  "chapters": [],
+                  "codec": "mp3",
+                  "discNumFromFilename": null,
+                  "discNumFromMeta": null,
+                  "duration": 2619.7678,
+                  "embeddedCoverArt": null,
+                  "error": null,
+                  "exclude": false,
+                  "format": "MP2/3 (MPEG audio layer 2/3)",
+                  "index": 4,
+                  "ino": "15",
+                  "language": null,
+                  "manuallyVerified": false,
+                  "metaTags": {
+                    "tagAlbum": "The Odyssey",
+                    "tagArtist": "Homer, transl. Samuel Butler",
+                    "tagTitle": "The Odyssey: Book 04",
+                    "tagTrack": "4"
+                  },
+                  "metadata": {
+                    "birthtimeMs": 1785370076488,
+                    "ctimeMs": 1785370076510,
+                    "ext": ".mp3",
+                    "filename": "odyssey_04_homer_butler_64kb.mp3",
+                    "mtimeMs": 1785370076510,
+                    "path": "/audiobooks/Homer/The Odyssey/odyssey_04_homer_butler_64kb.mp3",
+                    "relPath": "odyssey_04_homer_butler_64kb.mp3",
+                    "size": 20959108
+                  },
+                  "mimeType": "audio/mpeg",
+                  "timeBase": "1/14112000",
+                  "trackNumFromFilename": 4,
+                  "trackNumFromMeta": 4,
+                  "updatedAt": 1785370201436
+                },
+                {
+                  "addedAt": 1785370201436,
+                  "bitRate": 64000,
+                  "channelLayout": "mono",
+                  "channels": 1,
+                  "chapters": [],
+                  "codec": "mp3",
+                  "discNumFromFilename": null,
+                  "discNumFromMeta": null,
+                  "duration": 1673.221224,
+                  "embeddedCoverArt": null,
+                  "error": null,
+                  "exclude": false,
+                  "format": "MP2/3 (MPEG audio layer 2/3)",
+                  "index": 5,
+                  "ino": "18",
+                  "language": null,
+                  "manuallyVerified": false,
+                  "metaTags": {
+                    "tagAlbum": "The Odyssey",
+                    "tagArtist": "Homer, transl. Samuel Butler",
+                    "tagComment": "http://archive.org/details/odyssey_butler_librivox",
+                    "tagEncoder": "LAME 64bits version 3.98.4 (http://www.mp3dev.org/)",
+                    "tagGenre": "Speech",
+                    "tagTitle": "The Odyssey: Book 05",
+                    "tagTrack": "5/24"
+                  },
+                  "metadata": {
+                    "birthtimeMs": 1785370076513,
+                    "ctimeMs": 1785370076525,
+                    "ext": ".mp3",
+                    "filename": "odyssey_05_homer_butler_64kb.mp3",
+                    "mtimeMs": 1785370076525,
+                    "path": "/audiobooks/Homer/The Odyssey/odyssey_05_homer_butler_64kb.mp3",
+                    "relPath": "odyssey_05_homer_butler_64kb.mp3",
+                    "size": 13387264
+                  },
+                  "mimeType": "audio/mpeg",
+                  "timeBase": "1/14112000",
+                  "trackNumFromFilename": 5,
+                  "trackNumFromMeta": 5,
+                  "updatedAt": 1785370201436
+                },
+                {
+                  "addedAt": 1785370201436,
+                  "bitRate": 64000,
+                  "channelLayout": "mono",
+                  "channels": 1,
+                  "chapters": [],
+                  "codec": "mp3",
+                  "discNumFromFilename": null,
+                  "discNumFromMeta": null,
+                  "duration": 1373.230658,
+                  "embeddedCoverArt": null,
+                  "error": null,
+                  "exclude": false,
+                  "format": "MP2/3 (MPEG audio layer 2/3)",
+                  "index": 6,
+                  "ino": "14",
+                  "language": null,
+                  "manuallyVerified": false,
+                  "metaTags": {
+                    "tagAlbum": "The Odyssey",
+                    "tagArtist": "Homer, transl. Samuel Butler",
+                    "tagTitle": "The Odyssey: Book 06"
+                  },
+                  "metadata": {
+                    "birthtimeMs": 1785370076528,
+                    "ctimeMs": 1785370076540,
+                    "ext": ".mp3",
+                    "filename": "odyssey_06_homer_butler_64kb.mp3",
+                    "mtimeMs": 1785370076539,
+                    "path": "/audiobooks/Homer/The Odyssey/odyssey_06_homer_butler_64kb.mp3",
+                    "relPath": "odyssey_06_homer_butler_64kb.mp3",
+                    "size": 10986811
+                  },
+                  "mimeType": "audio/mpeg",
+                  "timeBase": "1/14112000",
+                  "trackNumFromFilename": 6,
+                  "trackNumFromMeta": null,
+                  "updatedAt": 1785370201436
+                }
+              ],
+              "chapters": [
+                {
+                  "end": 1386.057143,
+                  "id": 0,
+                  "start": 0,
+                  "title": "The Odyssey: Book 01"
+                },
+                {
+                  "end": 2788.702041,
+                  "id": 1,
+                  "start": 1386.057143,
+                  "title": "The Odyssey: Book 02"
+                },
+                {
+                  "end": 4309.211429,
+                  "id": 2,
+                  "start": 2788.702041,
+                  "title": "The Odyssey: Book 03"
+                },
+                {
+                  "end": 6928.9792290000005,
+                  "id": 3,
+                  "start": 4309.211429,
+                  "title": "The Odyssey: Book 04"
+                },
+                {
+                  "end": 8602.200453000001,
+                  "id": 4,
+                  "start": 6928.9792290000005,
+                  "title": "The Odyssey: Book 05"
+                },
+                {
+                  "end": 9975.431111000002,
+                  "id": 5,
+                  "start": 8602.200453000001,
+                  "title": "The Odyssey: Book 06"
+                }
+              ],
+              "coverPath": null,
+              "duration": 9975.431111000002,
+              "ebookFile": null,
+              "id": "a0b6c2b4-1c38-494c-b793-ce131d283855",
+              "libraryItemId": "68929fc9-e296-4d25-b3aa-1c2930efd00d",
+              "metadata": {
+                "abridged": false,
+                "asin": null,
+                "authorName": "transl. Samuel Butler Homer",
+                "authorNameLF": "Homer, transl. Samuel Butler",
+                "authors": [
+                  {
+                    "id": "5d48ba82-7e75-49bd-8208-5e3f36e07a60",
+                    "name": "transl. Samuel Butler Homer"
+                  }
+                ],
+                "description": "http://archive.org/details/odyssey_butler_librivox",
+                "descriptionPlain": "http://archive.org/details/odyssey_butler_librivox",
+                "explicit": false,
+                "genres": [
+                  "Speech"
+                ],
+                "isbn": null,
+                "language": null,
+                "narratorName": "",
+                "narrators": [],
+                "publishedDate": null,
+                "publishedYear": null,
+                "publisher": null,
+                "series": [],
+                "seriesName": "",
+                "subtitle": null,
+                "title": "The Odyssey",
+                "titleIgnorePrefix": "Odyssey, The"
+              },
+              "numAudioFiles": 6,
+              "numChapters": 6,
+              "numTracks": 6,
+              "size": 79811263,
+              "tags": [],
+              "tracks": [
+                {
+                  "addedAt": 1785370201435,
+                  "bitRate": 64000,
+                  "channelLayout": "mono",
+                  "channels": 1,
+                  "chapters": [],
+                  "codec": "mp3",
+                  "contentUrl": "/api/items/68929fc9-e296-4d25-b3aa-1c2930efd00d/file/17",
+                  "discNumFromFilename": null,
+                  "discNumFromMeta": null,
+                  "duration": 1386.057143,
+                  "embeddedCoverArt": null,
+                  "error": null,
+                  "exclude": false,
+                  "format": "MP2/3 (MPEG audio layer 2/3)",
+                  "index": 1,
+                  "ino": "17",
+                  "language": null,
+                  "manuallyVerified": false,
+                  "metaTags": {
+                    "tagAlbum": "The Odyssey",
+                    "tagArtist": "Homer, transl. Samuel Butler",
+                    "tagComment": "http://archive.org/details/odyssey_butler_librivox",
+                    "tagEncoder": "LAME 64bits version 3.98.4 (http://www.mp3dev.org/)",
+                    "tagGenre": "Speech",
+                    "tagTitle": "The Odyssey: Book 01",
+                    "tagTrack": "1/24"
+                  },
+                  "metadata": {
+                    "birthtimeMs": 1785370076439,
+                    "ctimeMs": 1785370076452,
+                    "ext": ".mp3",
+                    "filename": "odyssey_01_homer_butler_64kb.mp3",
+                    "mtimeMs": 1785370076451,
+                    "path": "/audiobooks/Homer/The Odyssey/odyssey_01_homer_butler_64kb.mp3",
+                    "relPath": "odyssey_01_homer_butler_64kb.mp3",
+                    "size": 11089920
+                  },
+                  "mimeType": "audio/mpeg",
+                  "startOffset": 0,
+                  "timeBase": "1/14112000",
+                  "title": "odyssey_01_homer_butler_64kb.mp3",
+                  "trackNumFromFilename": 1,
+                  "trackNumFromMeta": 1,
+                  "updatedAt": 1785370201435
+                },
+                {
+                  "addedAt": 1785370201435,
+                  "bitRate": 64000,
+                  "channelLayout": "mono",
+                  "channels": 1,
+                  "chapters": [],
+                  "codec": "mp3",
+                  "contentUrl": "/api/items/68929fc9-e296-4d25-b3aa-1c2930efd00d/file/13",
+                  "discNumFromFilename": null,
+                  "discNumFromMeta": null,
+                  "duration": 1402.644898,
+                  "embeddedCoverArt": null,
+                  "error": null,
+                  "exclude": false,
+                  "format": "MP2/3 (MPEG audio layer 2/3)",
+                  "index": 2,
+                  "ino": "13",
+                  "language": null,
+                  "manuallyVerified": false,
+                  "metaTags": {
+                    "tagAlbum": "The Odyssey",
+                    "tagArtist": "Homer, transl. Samuel Butler",
+                    "tagComment": "http://archive.org/details/odyssey_butler_librivox",
+                    "tagEncoder": "LAME 64bits version 3.98.4 (http://www.mp3dev.org/)",
+                    "tagGenre": "Speech",
+                    "tagTitle": "The Odyssey: Book 02",
+                    "tagTrack": "2/24"
+                  },
+                  "metadata": {
+                    "birthtimeMs": 1785370076455,
+                    "ctimeMs": 1785370076467,
+                    "ext": ".mp3",
+                    "filename": "odyssey_02_homer_butler_64kb.mp3",
+                    "mtimeMs": 1785370076466,
+                    "path": "/audiobooks/Homer/The Odyssey/odyssey_02_homer_butler_64kb.mp3",
+                    "relPath": "odyssey_02_homer_butler_64kb.mp3",
+                    "size": 11222528
+                  },
+                  "mimeType": "audio/mpeg",
+                  "startOffset": 1386.057143,
+                  "timeBase": "1/14112000",
+                  "title": "odyssey_02_homer_butler_64kb.mp3",
+                  "trackNumFromFilename": 2,
+                  "trackNumFromMeta": 2,
+                  "updatedAt": 1785370201435
+                },
+                {
+                  "addedAt": 1785370201434,
+                  "bitRate": 64000,
+                  "channelLayout": "mono",
+                  "channels": 1,
+                  "chapters": [],
+                  "codec": "mp3",
+                  "contentUrl": "/api/items/68929fc9-e296-4d25-b3aa-1c2930efd00d/file/16",
+                  "discNumFromFilename": null,
+                  "discNumFromMeta": null,
+                  "duration": 1520.509388,
+                  "embeddedCoverArt": null,
+                  "error": null,
+                  "exclude": false,
+                  "format": "MP2/3 (MPEG audio layer 2/3)",
+                  "index": 3,
+                  "ino": "16",
+                  "language": null,
+                  "manuallyVerified": false,
+                  "metaTags": {
+                    "tagAlbum": "The Odyssey",
+                    "tagArtist": "Homer, transl. Samuel Butler",
+                    "tagComment": "http://archive.org/details/odyssey_butler_librivox",
+                    "tagEncoder": "LAME 64bits version 3.98.4 (http://www.mp3dev.org/)",
+                    "tagGenre": "Speech",
+                    "tagTitle": "The Odyssey: Book 03",
+                    "tagTrack": "3/24"
+                  },
+                  "metadata": {
+                    "birthtimeMs": 1785370076470,
+                    "ctimeMs": 1785370076485,
+                    "ext": ".mp3",
+                    "filename": "odyssey_03_homer_butler_64kb.mp3",
+                    "mtimeMs": 1785370076485,
+                    "path": "/audiobooks/Homer/The Odyssey/odyssey_03_homer_butler_64kb.mp3",
+                    "relPath": "odyssey_03_homer_butler_64kb.mp3",
+                    "size": 12165632
+                  },
+                  "mimeType": "audio/mpeg",
+                  "startOffset": 2788.702041,
+                  "timeBase": "1/14112000",
+                  "title": "odyssey_03_homer_butler_64kb.mp3",
+                  "trackNumFromFilename": 3,
+                  "trackNumFromMeta": 3,
+                  "updatedAt": 1785370201434
+                },
+                {
+                  "addedAt": 1785370201436,
+                  "bitRate": 64000,
+                  "channelLayout": "mono",
+                  "channels": 1,
+                  "chapters": [],
+                  "codec": "mp3",
+                  "contentUrl": "/api/items/68929fc9-e296-4d25-b3aa-1c2930efd00d/file/15",
+                  "discNumFromFilename": null,
+                  "discNumFromMeta": null,
+                  "duration": 2619.7678,
+                  "embeddedCoverArt": null,
+                  "error": null,
+                  "exclude": false,
+                  "format": "MP2/3 (MPEG audio layer 2/3)",
+                  "index": 4,
+                  "ino": "15",
+                  "language": null,
+                  "manuallyVerified": false,
+                  "metaTags": {
+                    "tagAlbum": "The Odyssey",
+                    "tagArtist": "Homer, transl. Samuel Butler",
+                    "tagTitle": "The Odyssey: Book 04",
+                    "tagTrack": "4"
+                  },
+                  "metadata": {
+                    "birthtimeMs": 1785370076488,
+                    "ctimeMs": 1785370076510,
+                    "ext": ".mp3",
+                    "filename": "odyssey_04_homer_butler_64kb.mp3",
+                    "mtimeMs": 1785370076510,
+                    "path": "/audiobooks/Homer/The Odyssey/odyssey_04_homer_butler_64kb.mp3",
+                    "relPath": "odyssey_04_homer_butler_64kb.mp3",
+                    "size": 20959108
+                  },
+                  "mimeType": "audio/mpeg",
+                  "startOffset": 4309.211429,
+                  "timeBase": "1/14112000",
+                  "title": "odyssey_04_homer_butler_64kb.mp3",
+                  "trackNumFromFilename": 4,
+                  "trackNumFromMeta": 4,
+                  "updatedAt": 1785370201436
+                },
+                {
+                  "addedAt": 1785370201436,
+                  "bitRate": 64000,
+                  "channelLayout": "mono",
+                  "channels": 1,
+                  "chapters": [],
+                  "codec": "mp3",
+                  "contentUrl": "/api/items/68929fc9-e296-4d25-b3aa-1c2930efd00d/file/18",
+                  "discNumFromFilename": null,
+                  "discNumFromMeta": null,
+                  "duration": 1673.221224,
+                  "embeddedCoverArt": null,
+                  "error": null,
+                  "exclude": false,
+                  "format": "MP2/3 (MPEG audio layer 2/3)",
+                  "index": 5,
+                  "ino": "18",
+                  "language": null,
+                  "manuallyVerified": false,
+                  "metaTags": {
+                    "tagAlbum": "The Odyssey",
+                    "tagArtist": "Homer, transl. Samuel Butler",
+                    "tagComment": "http://archive.org/details/odyssey_butler_librivox",
+                    "tagEncoder": "LAME 64bits version 3.98.4 (http://www.mp3dev.org/)",
+                    "tagGenre": "Speech",
+                    "tagTitle": "The Odyssey: Book 05",
+                    "tagTrack": "5/24"
+                  },
+                  "metadata": {
+                    "birthtimeMs": 1785370076513,
+                    "ctimeMs": 1785370076525,
+                    "ext": ".mp3",
+                    "filename": "odyssey_05_homer_butler_64kb.mp3",
+                    "mtimeMs": 1785370076525,
+                    "path": "/audiobooks/Homer/The Odyssey/odyssey_05_homer_butler_64kb.mp3",
+                    "relPath": "odyssey_05_homer_butler_64kb.mp3",
+                    "size": 13387264
+                  },
+                  "mimeType": "audio/mpeg",
+                  "startOffset": 6928.9792290000005,
+                  "timeBase": "1/14112000",
+                  "title": "odyssey_05_homer_butler_64kb.mp3",
+                  "trackNumFromFilename": 5,
+                  "trackNumFromMeta": 5,
+                  "updatedAt": 1785370201436
+                },
+                {
+                  "addedAt": 1785370201436,
+                  "bitRate": 64000,
+                  "channelLayout": "mono",
+                  "channels": 1,
+                  "chapters": [],
+                  "codec": "mp3",
+                  "contentUrl": "/api/items/68929fc9-e296-4d25-b3aa-1c2930efd00d/file/14",
+                  "discNumFromFilename": null,
+                  "discNumFromMeta": null,
+                  "duration": 1373.230658,
+                  "embeddedCoverArt": null,
+                  "error": null,
+                  "exclude": false,
+                  "format": "MP2/3 (MPEG audio layer 2/3)",
+                  "index": 6,
+                  "ino": "14",
+                  "language": null,
+                  "manuallyVerified": false,
+                  "metaTags": {
+                    "tagAlbum": "The Odyssey",
+                    "tagArtist": "Homer, transl. Samuel Butler",
+                    "tagTitle": "The Odyssey: Book 06"
+                  },
+                  "metadata": {
+                    "birthtimeMs": 1785370076528,
+                    "ctimeMs": 1785370076540,
+                    "ext": ".mp3",
+                    "filename": "odyssey_06_homer_butler_64kb.mp3",
+                    "mtimeMs": 1785370076539,
+                    "path": "/audiobooks/Homer/The Odyssey/odyssey_06_homer_butler_64kb.mp3",
+                    "relPath": "odyssey_06_homer_butler_64kb.mp3",
+                    "size": 10986811
+                  },
+                  "mimeType": "audio/mpeg",
+                  "startOffset": 8602.200453000001,
+                  "timeBase": "1/14112000",
+                  "title": "odyssey_06_homer_butler_64kb.mp3",
+                  "trackNumFromFilename": 6,
+                  "trackNumFromMeta": null,
+                  "updatedAt": 1785370201436
+                }
+              ]
+            },
+            "mediaType": "book",
+            "mtimeMs": 1785370076528,
+            "numFiles": 6,
+            "oldLibraryItemId": null,
+            "path": "/audiobooks/Homer/The Odyssey",
+            "relPath": "Homer/The Odyssey",
+            "scanVersion": "2.36.0",
+            "size": 79811263,
+            "updatedAt": 1785370201438
+          }
+        }
+      ],
+      "genres": [],
+      "narrators": [],
+      "series": [],
+      "tags": []
+    },
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "etag": "W/\"55a2-U5UH7MJqYQvgc7ptKK4Tu4ln9QI\""
+    },
+    "status": 200
+  }
+}

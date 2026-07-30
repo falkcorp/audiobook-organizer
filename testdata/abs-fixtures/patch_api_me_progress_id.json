@@ -1,0 +1,22 @@
+{
+  "request": {
+    "body": {
+      "currentTime": 42.0,
+      "duration": 9975.48,
+      "isFinished": false,
+      "progress": 0.004
+    },
+    "method": "PATCH",
+    "path": "/api/me/progress/68929fc9-e296-4d25-b3aa-1c2930efd00d"
+  },
+  "response": {
+    "body": {
+      "__non_json_body__": "OK"
+    },
+    "headers": {
+      "content-type": "text/plain; charset=utf-8",
+      "etag": "W/\"2-nOO9QiTIwXgNtWtBJezz8kv3SLc\""
+    },
+    "status": 200
+  }
+}

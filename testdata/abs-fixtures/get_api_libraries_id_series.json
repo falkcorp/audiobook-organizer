@@ -1,0 +1,23 @@
+{
+  "request": {
+    "body": null,
+    "method": "GET",
+    "path": "/api/libraries/b5e3a5b2-a76e-471f-b18b-915e4716d053/series"
+  },
+  "response": {
+    "body": {
+      "include": "",
+      "limit": 0,
+      "minified": false,
+      "page": 0,
+      "results": [],
+      "sortDesc": false,
+      "total": 0
+    },
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "etag": "W/\"5a-K7fSb+1FVJLcLaL15NzscS0TV7Y\""
+    },
+    "status": 200
+  }
+}

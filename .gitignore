@@ -346,3 +346,6 @@ backups/
 
 # itunes-group-preview CLI build artifact (run from tools/cmd/itunes-group-preview)
 /itunes-group-preview
+
+# ABS reference-oracle derived data (media must never be committed)
+testdata/abs-oracle/library/

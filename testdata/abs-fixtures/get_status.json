@@ -1,0 +1,26 @@
+{
+  "request": {
+    "body": null,
+    "method": "GET",
+    "path": "/status"
+  },
+  "response": {
+    "body": {
+      "app": "audiobookshelf",
+      "authFormData": {
+        "authLoginCustomMessage": ""
+      },
+      "authMethods": [
+        "local"
+      ],
+      "isInit": true,
+      "language": "en-us",
+      "serverVersion": "2.36.0"
+    },
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "etag": "W/\"97-JAj1MLaAXJtZnQvZ/YTqCPUTj8A\""
+    },
+    "status": 200
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "request": {
+    "body": null,
+    "method": "GET",
+    "path": "/api/libraries/b5e3a5b2-a76e-471f-b18b-915e4716d053/filterdata"
+  },
+  "response": {
+    "body": {
+      "authorCount": 0,
+      "authors": [
+        {
+          "id": "4c8fe05a-b38b-4e1f-9846-9b9ea23b8073",
+          "name": "Homer"
+        },
+        {
+          "id": "5d48ba82-7e75-49bd-8208-5e3f36e07a60",
+          "name": "transl. Samuel Butler Homer"
+        }
+      ],
+      "bookCount": 0,
+      "genres": [
+        "Audiobook",
+        "Speech"
+      ],
+      "languages": [],
+      "loadedAt": 1785370201321,
+      "narrators": [],
+      "numIssues": 0,
+      "podcastCount": 0,
+      "publishedDecades": [
+        "NaN"
+      ],
+      "publishers": [],
+      "series": [],
+      "seriesCount": 0,
+      "tags": []
+    },
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "etag": "W/\"182-r82JMaleA6qGtH8WzkNxqg76X1I\""
+    },
+    "status": 200
+  }
+}

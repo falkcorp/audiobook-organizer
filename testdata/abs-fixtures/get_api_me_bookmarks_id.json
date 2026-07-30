@@ -1,0 +1,24 @@
+{
+  "request": {
+    "body": null,
+    "method": "GET",
+    "path": "/api/me/bookmarks/68929fc9-e296-4d25-b3aa-1c2930efd00d"
+  },
+  "response": {
+    "body": {
+      "bookmarks": [
+        {
+          "createdAt": 1785370279374,
+          "libraryItemId": "68929fc9-e296-4d25-b3aa-1c2930efd00d",
+          "time": 100,
+          "title": "conformance bookmark"
+        }
+      ]
+    },
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "etag": "W/\"8c-Qz1sHN6um3Gf9ViDhDNarEKnzlI\""
+    },
+    "status": 200
+  }
+}

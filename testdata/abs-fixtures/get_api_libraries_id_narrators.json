@@ -1,0 +1,17 @@
+{
+  "request": {
+    "body": null,
+    "method": "GET",
+    "path": "/api/libraries/b5e3a5b2-a76e-471f-b18b-915e4716d053/narrators"
+  },
+  "response": {
+    "body": {
+      "narrators": []
+    },
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "etag": "W/\"10-eGEs1a06Hy182ARb04GPfwsUVtM\""
+    },
+    "status": 200
+  }
+}

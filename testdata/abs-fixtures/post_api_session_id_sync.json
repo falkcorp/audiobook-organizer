@@ -1,0 +1,21 @@
+{
+  "request": {
+    "body": {
+      "currentTime": 12.5,
+      "duration": 9975.48,
+      "timeListened": 10
+    },
+    "method": "POST",
+    "path": "/api/session/429cdd37-0717-4f16-ae12-0118cae1aeee/sync"
+  },
+  "response": {
+    "body": {
+      "__non_json_body__": "OK"
+    },
+    "headers": {
+      "content-type": "text/plain; charset=utf-8",
+      "etag": "W/\"2-nOO9QiTIwXgNtWtBJezz8kv3SLc\""
+    },
+    "status": 200
+  }
+}
