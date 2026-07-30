@@ -1,7 +1,7 @@
 // file: internal/watcher/watcher.go
-// version: 2.1.2
+// version: 2.2.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f23456789012
-// last-edited: 2026-07-03
+// last-edited: 2026-07-30
 
 package watcher
 
@@ -34,6 +34,28 @@ const DefaultDebounce = 5 * time.Second
 // Callback is invoked after the debounce period with the root directory.
 type Callback func(rootDir string)
 
+// stoppableTimer is the subset of *time.Timer that scheduleScan needs. It
+// exists so tests can substitute a fake clock and drive the debounce timer
+// deterministically instead of relying on wall-clock sleeps.
+type stoppableTimer interface {
+	Stop() bool
+}
+
+// scanClock abstracts timer creation so the debounce logic can be driven by
+// either the real wall clock (production) or a fake, test-controlled clock.
+// This is unexported and has exactly one production implementation
+// (realClock); it is not a general-purpose time abstraction.
+type scanClock interface {
+	AfterFunc(d time.Duration, f func()) stoppableTimer
+}
+
+// realClock is the production scanClock backed by time.AfterFunc.
+type realClock struct{}
+
+func (realClock) AfterFunc(d time.Duration, f func()) stoppableTimer {
+	return time.AfterFunc(d, f)
+}
+
 // Watcher monitors a directory tree for audio file changes and invokes a
 // callback after a debounce period.
 type Watcher struct {
@@ -44,7 +66,8 @@ type Watcher struct {
 	stop      chan struct{}
 	stopped   chan struct{}
 	mu        sync.Mutex
-	timer     *time.Timer
+	timer     stoppableTimer
+	clock     scanClock
 	scanGen   uint64
 	running   bool
 }
@@ -60,6 +83,7 @@ func New(callback Callback, debounce time.Duration) *Watcher {
 		callback: callback,
 		stop:     make(chan struct{}),
 		stopped:  make(chan struct{}),
+		clock:    realClock{},
 	}
 }
 
@@ -180,7 +204,7 @@ func (w *Watcher) scheduleScan() {
 		w.timer = nil
 	}
 
-	w.timer = time.AfterFunc(w.debounce, func() {
+	w.timer = w.clock.AfterFunc(w.debounce, func() {
 		w.mu.Lock()
 		if w.scanGen != gen {
 			// A newer event superseded this timer; do nothing.
