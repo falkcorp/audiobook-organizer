@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_syncid.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5b9bd4e0-2ee2-436d-ac81-16b93de80eb3
 // last-edited: 2026-07-30
 
@@ -78,6 +78,11 @@ func AsSyncIdentityStore(s any) SyncIdentityStore {
 	}
 	return nil
 }
+
+// Compile-time assertion that *PebbleStore satisfies SyncIdentityStore, so a
+// future signature drift on either side fails the build instead of only
+// surfacing at AsSyncIdentityStore's first caller.
+var _ SyncIdentityStore = (*PebbleStore)(nil)
 
 // syncIDMintMu serializes the check-then-mint-then-write section of
 // MintOrGetSyncID so two concurrent first-encounters of the same book cannot
