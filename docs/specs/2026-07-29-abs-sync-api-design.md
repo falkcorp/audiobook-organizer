@@ -1,5 +1,5 @@
 <!-- file: docs/specs/2026-07-29-abs-sync-api-design.md -->
-<!-- version: 7.1.0 -->
+<!-- version: 7.2.0 -->
 <!-- guid: 0869d58c-b186-45cb-9915-64bd18eaa45f -->
 <!-- last-edited: 2026-07-30 -->
 
@@ -458,10 +458,36 @@ chapters, streaming, downloads, or progress sync** — all are cosmetic or perip
 | Chapter-editor audio preview (`chapter_editor_screen.dart:517`) | Absorb |
 | **Chromecast** — receiver-side fetch, unfixable client-side | Absorb |
 
-The narrowest possible remedy is bypassing **`GET /api/items/*/cover`** alone — never `/status`, `/ping`,
-or `/public*`. **Open decision:** whether embedded-artwork extraction or a local cover cache already
-covers the downloaded-book case, which would make the bypass unnecessary. Pending verification; default to
-**no bypass** until answered.
+**RESOLVED 2026-07-30 (owner rule: "if they won't display embedded artwork, go for the bypass").**
+Source-verified: **neither client extracts embedded artwork at all** — zero hits across both trees for
+`AVMetadataItem`, `commonKeyArtwork`, `audio_metadata`, `MediaMetadataRetriever`, ID3/APIC, or ffmpeg.
+Cover art is always fetched by URL. Therefore:
+
+⇒ **DECISION: bypass Cloudflare Access on the cover/image endpoints only** —
+`GET /api/items/*/cover`, `GET /api/authors/*/image`, `GET /api/narrators/*/image`. **Nothing else**:
+`/status`, `/ping`, `/public*`, and every other path stay fully edge-authenticated (§1.9.3).
+
+Verified per-surface behaviour, which explains exactly what the bypass buys:
+
+| Surface | Art without a network fetch? | Mechanism |
+|---|---|---|
+| **AudioBooth widget** | ❌ **No** — downloaded *or* not | No embedded extraction; Nuke's `DataCache(name:)` is process-local, **not** in the App Group (`Audiobookshelf.swift:31-37`); cover URL always remote (`LocalBook.swift:61-73`). Degrades to a generic `book.fill` icon (`SmallWidgetView.swift:22-30`) |
+| AudioBooth lock screen | ❌ needs a fetch, but **carries headers** | Runs in the main process, so `ImagePipeline.shared` has custom headers (`NowPlayingManager.swift:213-222`). No cache/local fallback |
+| **Absorb CarPlay** | ✅ **downloaded** / ❌ not-yet-downloaded | Pre-caches `cover.jpg` per download (`download_service.dart:1691-1708`) and passes a `file://` URI; plugin has a distinct `UIImage(contentsOfFile:)` path (`FCPExtensions.swift:18-42,149-153`) |
+| Absorb Android Auto | ✅ effectively always | `CoverContentProvider.kt:99-137,273-302` — local file first, then a **headers-aware native** fetch |
+| Absorb iOS lock screen | ✅ downloaded / ❌ streaming | `file://` for downloaded (`audio_player_service.dart:3686-3693`); `MediaItem.artHeaders` is never set, so streaming art is unheadered |
+
+**What the bypass buys** (download-first workflow): AudioBooth widget art — its only path; Absorb CarPlay
+art for not-yet-downloaded items; Absorb iOS lock-screen art while streaming. Absorb's downloaded-book
+cases already work with no bypass.
+
+**Residual risk, honestly:** cover images become fetchable by anyone who knows a 36-char item UUID. No
+metadata, no audio, no progress, and no auth surface is exposed; UUIDs are not enumerable. Document this in
+the runbook as an accepted, bounded exposure.
+
+**Origin-side requirement (unchanged from §1.8.8 item 7):** the cover/image endpoints must serve with **no
+credentials required** — AudioBooth's widget sends neither headers nor `?token=` — **and** additionally
+accept `?token=` for Absorb/CarPlay. Honour `width=N`, `raw=1`, `format=jpg`.
 
 ## 2. Non-negotiable constraints
 
