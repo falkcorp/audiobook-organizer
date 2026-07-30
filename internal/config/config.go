@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.72.0
+// version: 1.73.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-07-27
+// last-edited: 2026-07-30
 
 package config
 
@@ -623,6 +623,47 @@ type Config struct {
 	CFAccessTeamDomain string `json:"cf_access_team_domain"` // e.g. myteam.cloudflareaccess.com
 	CFAccessAUD        string `json:"cf_access_aud"`         // Access application AUD tag
 
+	// ── Audiobookshelf-compatible sync API (design spec Phase 1) ─────────────
+	//
+	// Environment-authoritative, like the OAuth/Cloudflare keys above: they are set
+	// from a systemd Environment= drop-in and re-applied on top of the DB config blob
+	// by applyEnvAuthoritativeConfig. The ABS secret must never live in the blob.
+	//
+	// ABSAPIEnabled is the master feature flag and defaults to FALSE: with it unset,
+	// no ABS route is registered at all and the server behaves exactly as it did
+	// before this surface existed.
+	ABSAPIEnabled bool `json:"abs_api_enabled"`
+	// ABSAuthModes selects which identity resolvers are ACTIVE — a comma-separated
+	// subset of {cf,jwt}, default "cf,jwt" (spec §3.0.1). "cf" alone hardens the
+	// server to Cloudflare-Access identity only (no password login, no bearer);
+	// "jwt" alone allows local/LAN testing with no Cloudflare at all. Both resolvers
+	// are always built and tested; this only gates which run.
+	ABSAuthModes string `json:"abs_auth_modes"`
+	// ABSJWTSecret signs ABS access tokens and derives refresh tokens. REQUIRED when
+	// ABSAPIEnabled — the server FAILS CLOSED at boot without it, and it is never
+	// auto-generated, because an ephemeral secret would invalidate every client's
+	// stored token on every restart. Deliberately excluded from the config blob and
+	// from any API response.
+	ABSJWTSecret string `json:"-"`
+	// ABSAccessTokenTTL defaults to 720h = 30 DAYS, not one hour (§1.6 item 1): many
+	// ABS clients implement no refresh at all, and a short access token logs them out
+	// on that cadence. 30d is empirically proven by a known-working ABS shim.
+	ABSAccessTokenTTL string `json:"abs_access_token_ttl"`
+	// ABSRefreshTokenTTL defaults to 720h (30d).
+	ABSRefreshTokenTTL string `json:"abs_refresh_token_ttl"`
+	// ABSRefreshGrace is how long a rotated-out refresh token keeps working so a
+	// concurrent or replayed refresh from the same device is answered idempotently
+	// rather than orphaning the session (§3.4). Default 10m.
+	ABSRefreshGrace string `json:"abs_refresh_grace"`
+	// ABSServerVersion is reported by /status and serverSettings.version. Default
+	// 2.36.0; at or above 2.22.0 suppresses AudioBooth's nag banner (§1.8.8 item 6).
+	ABSServerVersion string `json:"abs_server_version"`
+	// ABSDefaultLibraryID is returned as userDefaultLibraryId. It MUST be a non-null
+	// 36-char UUID: AudioBooth decodes the field non-optionally, so null makes the app
+	// unable to log in at all (§1.8.2), and Absorb splits ids at a fixed offset of 36
+	// (§1.7.1). Placeholder until Phase 3 owns real libraries.
+	ABSDefaultLibraryID string `json:"abs_default_library_id"`
+
 	// Memory management
 	MemoryLimitType string `json:"memory_limit_type"` // 'items', 'percent', 'absolute'
 	CacheSize       int    `json:"cache_size"`        // number of items
@@ -808,6 +849,34 @@ func applyEnvAuthoritativeConfig(c *Config) {
 	if viper.IsSet("whisper_remote_url") {
 		c.WhisperRemoteURL = viper.GetString("whisper_remote_url")
 	}
+	// Audiobookshelf sync API. Env-authoritative for the same reason as the OAuth keys:
+	// LoadConfigFromDatabase replaces the whole struct with the blob, so without these
+	// a systemd Environment=ABS_JWT_SECRET would be silently dropped and the ABS API
+	// would fail closed at boot despite being configured.
+	if viper.IsSet("abs_api_enabled") {
+		c.ABSAPIEnabled = viper.GetBool("abs_api_enabled")
+	}
+	if viper.IsSet("abs_auth_modes") {
+		c.ABSAuthModes = viper.GetString("abs_auth_modes")
+	}
+	if viper.IsSet("abs_jwt_secret") {
+		c.ABSJWTSecret = viper.GetString("abs_jwt_secret")
+	}
+	if viper.IsSet("abs_access_token_ttl") {
+		c.ABSAccessTokenTTL = viper.GetString("abs_access_token_ttl")
+	}
+	if viper.IsSet("abs_refresh_token_ttl") {
+		c.ABSRefreshTokenTTL = viper.GetString("abs_refresh_token_ttl")
+	}
+	if viper.IsSet("abs_refresh_grace") {
+		c.ABSRefreshGrace = viper.GetString("abs_refresh_grace")
+	}
+	if viper.IsSet("abs_server_version") {
+		c.ABSServerVersion = viper.GetString("abs_server_version")
+	}
+	if viper.IsSet("abs_default_library_id") {
+		c.ABSDefaultLibraryID = viper.GetString("abs_default_library_id")
+	}
 }
 
 // ApplyEnvAuthoritativeConfig applies the environment-authoritative overrides to the
@@ -908,6 +977,8 @@ func InitConfig() {
 	viper.BindEnv("oauth_default_role", "OAUTH_DEFAULT_ROLE")                 //nolint:errcheck
 	viper.BindEnv("cf_access_team_domain", "CF_ACCESS_TEAM_DOMAIN")           //nolint:errcheck
 	viper.BindEnv("cf_access_aud", "CF_ACCESS_AUD")                           //nolint:errcheck
+
+	registerABSDefaults()
 
 	// Transcription: remote faster-whisper server URL (env-authoritative).
 	viper.SetDefault("whisper_remote_url", "")
@@ -1272,6 +1343,16 @@ func InitConfig() {
 			CFAccessTeamDomain:      viper.GetString("cf_access_team_domain"),
 			CFAccessAUD:             viper.GetString("cf_access_aud"),
 			WhisperRemoteURL:        viper.GetString("whisper_remote_url"),
+
+			// Audiobookshelf sync API (feature-flagged OFF by default).
+			ABSAPIEnabled:       viper.GetBool("abs_api_enabled"),
+			ABSAuthModes:        viper.GetString("abs_auth_modes"),
+			ABSJWTSecret:        viper.GetString("abs_jwt_secret"),
+			ABSAccessTokenTTL:   viper.GetString("abs_access_token_ttl"),
+			ABSRefreshTokenTTL:  viper.GetString("abs_refresh_token_ttl"),
+			ABSRefreshGrace:     viper.GetString("abs_refresh_grace"),
+			ABSServerVersion:    viper.GetString("abs_server_version"),
+			ABSDefaultLibraryID: viper.GetString("abs_default_library_id"),
 
 			// Memory management
 			MemoryLimitType:           viper.GetString("memory_limit_type"),
