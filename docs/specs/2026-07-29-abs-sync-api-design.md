@@ -1,5 +1,5 @@
 <!-- file: docs/specs/2026-07-29-abs-sync-api-design.md -->
-<!-- version: 2.4.0 -->
+<!-- version: 3.0.0 -->
 <!-- guid: 0869d58c-b186-45cb-9915-64bd18eaa45f -->
 <!-- last-edited: 2026-07-29 -->
 
@@ -96,10 +96,21 @@ including the `AVURLAsset` streaming site and background download tasks. Plappa 
 single-header (`Authorization`) service-token form. Full evidence, the ShelfPlayer supply-chain caveat, and
 the Cloudflare policy-ordering trap: [`docs/reference/abs-client-network-audit.md`](../reference/abs-client-network-audit.md).
 
-**Owner decisions (2026-07-29):**
-1. **Build Mode B now, keep Mode C as a config switch.** §3.1–3.5 ARE built. The origin accepts either
-   credential, so Mode C stays a configuration-only fallback — flippable if the JWT path misbehaves or if
-   iOS ever stops honoring the undocumented `AVURLAssetHTTPHeaderFieldsKey`.
+**Owner decisions (2026-07-29, REVISED — supersedes the earlier "B primary, C as a switch"):**
+
+1. **Build FULL, first-class, tested support for BOTH Mode B and Mode C.** Not a primary with a fallback —
+   two supported topologies, each with its own tests, docs, and runbook section.
+
+   **Rationale (owner):** ShelfPlayer's open-source line is dead (archived, history wiped); the newer
+   closed-source versions carry the critical fixes. So the versions we would actually run are precisely
+   the ones we **cannot audit**. Mode B's correctness depends on a specific app's internal networking
+   behavior — that its custom headers reach `AVURLAsset` and background download tasks. That is
+   unverifiable going forward and could regress silently in any update.
+   **Mode C does not depend on the client at all.** WARP admits traffic at the network layer, beneath the
+   app, so it works with *any* ABS client — closed-source, unaudited, or not yet written. Building both
+   means the server is never hostage to one vendor's undocumented internals, and a client regression
+   becomes a topology switch rather than an outage.
+
 2. **Target both clients, prefer Plappa** (actively maintained by its original developer; ShelfPlayer was
    archived/sold and is no longer auditable past 3.3.0). The server implements the ABS spec and is
    client-agnostic; both appear in the compatibility matrix and both are tested.
@@ -177,6 +188,52 @@ zero code and zero Swift. Fall back to A (no VPN, needs a fork) then B (needs cl
 Also enable Access's **"Service Authentication failure → Return 401 Response"** toggle: in Mode B a failed
 edge auth then returns a clean `401` instead of an HTML login page, which clients handle far more
 gracefully. Phase 0 verifies Managed OAuth end-to-end with `curl` **before** any Swift is touched.
+
+### 3.0.1 Unified identity resolution (serves both modes from one build)
+
+Both modes are satisfied by a single auth middleware with a strict resolution order. This is the core of
+"full support for both" and it is Opus-owned.
+
+**On every ABS request, resolve the user as:**
+1. **A verified `Cf-Access-Jwt-Assertion`** (signature checked against Cloudflare's public keys **and** the
+   application AUD tag — never trusted merely because the header is present) → the user identified by its
+   `email` claim. This is **Mode C, and also Mode A**.
+2. **Else our own bearer JWT** (§3.1–3.5) → the user in its `sub` claim. This is **Mode B**.
+3. **Else 401.**
+
+**Consequences worth designing for deliberately:**
+
+- **In Mode C the "Session not found" failure class cannot occur.** Identity arrives with every request
+  from Cloudflare, so nothing depends on the client having correctly persisted a rotated refresh token —
+  the exact fragility behind ABS's #1 real-world complaint. Therefore:
+  - `POST /login`: if a verified CF assertion is present, issue a token for the CF-identified user
+    **without a password check** (the edge already authenticated a real person against the IdP). Otherwise
+    verify the password per §3.5.
+  - `POST /auth/refresh`: if a verified CF assertion is present, **always succeed** with a fresh token —
+    never "Session not found", because the identity is CF-backed rather than token-backed. Otherwise run
+    the rotation + grace logic of §3.4.
+  - Clients still get token-shaped responses in both modes, so no client can tell the difference. This is
+    what lets one build serve both topologies without client-specific behavior.
+- **Mode C is client-agnostic by construction.** Because admission happens at the network layer beneath
+  the app, Mode C supports **any** ABS client — Plappa, SoundLeaf, AudioBooth, Prologue, the official app,
+  closed-source builds, or clients that do not exist yet — with no custom-header capability required. Mode
+  B is the "nothing installed on the phone" convenience; **Mode C is the universal-compatibility
+  guarantee.** Neither is a fallback for the other.
+- **JIT user provisioning (Mode C/A).** A CF assertion carries an email, not a local user id. On first
+  sight of a verified assertion whose email is **on the allowlist** and has no local user, create one
+  (no password credential; CF-identified only) and link it. This is how multi-user/family works without a
+  password DB. Reuse the existing machinery: `internal/oauth/cfaccess.go`,
+  `internal/server/middleware/cfaccess.go`, and the `OAUTH_ALLOWED_EMAILS` /
+  `CF_ACCESS_TEAM_DOMAIN` / `CF_ACCESS_AUD` config already in the tree.
+  **Fail closed:** an assertion whose email is not on the allowlist is a 403, never an auto-provision.
+- **Existing `cfaccess` middleware runs fail-open on `/api/v1`** (§1). The ABS group must **not** inherit
+  that behavior: on the ABS surface a *malformed or invalid* assertion is a hard 401/403, never a
+  pass-through. Verify this explicitly with a test — a fail-open path on the ABS group would be an
+  authentication bypass.
+
+**Config:** `ABS_AUTH_MODES` (default `cf,jwt`) selects which resolvers are enabled, so an operator can
+harden to CF-only (`cf`) once WARP is in place, or run JWT-only (`jwt`) for local/LAN testing without
+Cloudflare. Both resolvers are always *built* and *tested*; this only gates which are active.
 
 ### 3.1 Shape (Mode B only)
 ABS clients expect: `POST /login` returns a `user` object whose `token` field is the **access token**;
@@ -308,7 +365,7 @@ DAG: 0 → 1 → 2 → (3 ‖ 4) → 5 → 6 → 7 → 8.
 | Phase | Scope | Model | Self-verifiable? |
 |---|---|---|---|
 | **0** | ABS Docker oracle, golden fixtures, conformance-diff harness, client source review | Sonnet/Haiku | Yes |
-| **1** | Auth core: ABS router group, `/ping`,`/status`,`/login`,`/auth/refresh` (rotation+grace), `/logout`, `/api/me/sessions`, JWT+argon2id, audit log | **Opus** | Mostly (unit) |
+| **1** | Auth core, **both modes**: ABS router group; unified identity resolution (§3.0.1) = verified `Cf-Access-Jwt-Assertion` → user (Mode C/A, incl. JIT provisioning + allowlist + fail-closed) **and** our own JWT (Mode B: `/login`, `/auth/refresh` rotation+grace, `/logout`, `/api/me/sessions`, argon2id); `/ping`,`/status`; audit log; `ABS_AUTH_MODES` gate | **Opus** | Mostly (unit) |
 | **2** | Stable identity record + merge-follow hook + backfill; DTO mapping layer (item/library/metadata; pick authoritative narrator source); survival tests | **Opus** (ID), Sonnet (DTO) | Yes |
 | **3** | Library browse: `/api/libraries`, `/items`, `/items/:id`, `/series`, `/authors`, narrators, `/search`, `/personalized` (Continue Listening), covers w/ ETag; podcast stub | Sonnet (parallel by endpoint group) | Yes (conformance) |
 | **4** | Chapters: ffprobe `-show_chapters` at `process_file.go:41`, persisted chapter type, multi-file cumulative `startOffset` timeline, backfill (`registry.RunItems`); DRM (AAX/AAXC) → unplayable-with-reason | Sonnet | Yes (unit) |
