@@ -1,5 +1,5 @@
 <!-- file: docs/specs/2026-07-29-abs-sync-api-design.md -->
-<!-- version: 5.0.0 -->
+<!-- version: 6.0.0 -->
 <!-- guid: 0869d58c-b186-45cb-9915-64bd18eaa45f -->
 <!-- last-edited: 2026-07-29 -->
 
@@ -215,6 +215,151 @@ Playlists, collections, series, authors, tasks, sessions/listening-sessions, all
 backups, search/match/tools/upload/filesystem, api-keys, emails. **Cheapest win:** return
 `user.type: "user"` and Absorb hides the **entire** admin UI (`auth_provider.dart:87-91`). Return 404 for
 all `/api/podcasts*` — never called if no library has `mediaType: "podcast"`.
+
+## 1.8 VERIFIED contract — AudioBooth (Swift) + abs-shim audit. AUTHORITATIVE.
+
+Source-audited **AudioBooth** (MPL-2.0, native Swift) and **`jowtron/abs-shim`** (a *known-working* ABS
+server for ShelfPlayer/Pholia/web-UI) in full. **AudioBooth is the binding constraint** — its Swift
+`Codable` decode is a single all-or-nothing `try decoder.decode(T.self)` with **no per-element `try?`
+anywhere**, so one bad book in a 50-item page throws and the **entire grid goes blank**.
+Where AudioBooth and Absorb (§1.7) disagree, **implement the superset**.
+
+⚠️ Correction: abs-shim's verified-client list is **ShelfPlayer, Pholia, web UI — not Plappa**. Several
+§1.6 claims are true of ShelfPlayer only.
+
+### 🔴 1.8.1 DATA LOSS — an incomplete `user.mediaProgress` DELETES the user's local progress
+
+`Models/MediaProgress.swift:354-367`: `syncFromAPI` iterates local progress rows and **deletes** any whose
+`bookID` is absent from the server's `user.mediaProgress`, sparing only the currently-playing book and
+books with unsynced offline sessions.
+
+**Therefore `/api/authorize` and `/api/me` MUST return the user's COMPLETE progress list.** Returning
+`[]`, a truncated list, or a *paginated* one silently destroys the user's listening positions **on every
+home-screen refresh**. This is the single most dangerous requirement in the project and it directly
+threatens the mission (replacing Apple Books without losing your place). Never paginate this array.
+
+### 🔴 1.8.2 LOGIN BLOCKER — `userDefaultLibraryId` must be a non-null String
+
+`Models/Authorize.swift:5` decodes it non-optionally: **`userDefaultLibraryId: null` makes AudioBooth
+unable to log in at all.** abs-shim emits exactly `null` (`src/index.ts:225`, `:260`), i.e. **abs-shim as
+written cannot log AudioBooth in.** Also non-optional on that response: `user`, `ereaderDevices[].name`,
+`serverSettings.{id, version, sortingIgnorePrefix}`.
+
+### 🔴 1.8.3 NEW ENDPOINT missing from this spec — unauthenticated session-track streaming
+
+AudioBooth **has no `contentUrl` field at all** (zero repo-wide hits). It streams from:
+
+```
+GET {base}/public/session/{sessionId}/track/{track.index}      # UNAUTHENTICATED, byte-ranged
+```
+(`Models/Session.swift:15` + `Models/PlaybackSession.swift:68`.) Downloads use
+`GET /api/items/{id}/file/{ino}/download` **with** the `Authorization` header
+(`DownloadManager.swift:598`); the watch variant uses `?token=`.
+
+**Add `/public/session/:id/track/:index` to Phase 5.** It must be public and Range-capable. Absorb instead
+derives `/api/items/{id}/file/{ino}` itself, so **both paths are required**.
+
+### 1.8.4 `timeListened` vs `timeListening` — a name trap that silently zeroes all listening time
+
+- `POST /api/session/{id}/sync` body key is **`timeListened`** (past tense) and is a **DELTA** the server
+  must **ADD** to a running total (`SessionService.swift:131-134`, `SessionManager.swift:351`, `:359`).
+- `POST /api/session/local[-all]` session objects use **`timeListening`** (gerund) and it is a
+  **CUMULATIVE total** (idempotent set) (`SessionSync.swift:11`).
+- **abs-shim reads the wrong key** (`src/index.ts:336` reads `timeListening` on `/sync`) and therefore
+  records **zero listening time from both clients**. **Accept both keys on `/sync`, and honour the
+  differing semantics.**
+
+### 1.8.5 Type/shape requirements (AudioBooth strict decoder)
+
+1. **Every `Date` field must be an integer millisecond epoch.** `NetworkService.swift:121-126` installs
+   `try container.decode(Int64.self)`. **ISO-8601 strings are fatal; floats with a fractional part are
+   fatal.** Non-optional dates: `Book.addedAt`/`updatedAt`, `AuthorDetails.*`, `LibraryFile.*`.
+2. **`AudioTrack` requires exactly `index:Int`, `startOffset:Double`, `duration:Double`** — all
+   non-optional (`Models/AudioTrack.swift:4-6`). This **overrides §1.7.2**: `startOffset` **is** required
+   (Absorb ignores it, AudioBooth demands it). `mimeType`, `ino`, `metadata` are optional.
+3. **An explicit `"audioTracks": []` is WORSE than omitting the key.**
+   `SessionManager.swift:193-194` falls back to local tracks via `?? updatedItem.orderedTracks`, which
+   only fires on **nil** — so `[]` defeats the fallback and **kills playback of an already-downloaded
+   book**. Omit the key when there are no tracks.
+4. **`media.metadata.title` must never be null** (`Book.swift:196`). abs-shim emits `title: null` when a
+   book lacks a metadata row (`abs-shapes.ts:128`) — that one book would blank the entire page. Fall back
+   to the filename.
+5. **`Page<T>` requires `total:Int` AND `page:Int`** (`Audiobookshelf.swift:129-130`). ⚠️ abs-shim's
+   `/api/libraries/:id/authors` returns a bare `{authors:[…]}` with neither → would throw.
+6. **`Book` requires `id`, `libraryId`, `media`, `addedAt`, `updatedAt`.** `PlaySession` requires
+   `id`, `userId`, `libraryItemId`, `currentTime`, `duration`, **and a complete embedded `libraryItem`**.
+7. **`chapters[]` requires all four of `id:Int`, `start`, `end`, `title`.** Chapter `id` is an **Int**
+   (array index) while every other id is a String.
+8. **`libraryFiles[]` is the strictest object in the repo** — if emitted at all, each needs `ino`,
+   `metadata`, `addedAt`, `updatedAt` plus `metadata.{filename, ext, path, relPath, size, birthtimeMs}`.
+   Safest to omit entirely.
+9. **`Library.mediaType`, if present, must be exactly `"book"` or `"podcast"`** (non-tolerant enum).
+10. **Booleans must be real JSON booleans** — `0`/`1`/`"true"` throw in Swift (and read as `false` in Dart).
+11. **`progress` is a 0.0–1.0 fraction**, not a percentage.
+12. Strings-not-numbers, confirmed again: `publishedYear`, `publishedDate`, `series[].sequence`,
+    `PodcastEpisode.season`/`episode`.
+
+### 1.8.6 Stub shapes — where returning `{}` is WRONG
+
+All of these tolerate failure, so **404/500 is strictly safer than a half-correct body**:
+
+| Endpoint | Correct stub | Why not `{}` |
+|---|---|---|
+| `…/personalized` | **bare `[]`** | decodes as an array; `{}` throws |
+| `…?include=filterdata` | all **eight** keys (`authors,genres,tags,series,narrators,languages,publishers,publishedDecades`) | every field non-optional |
+| `…/series`, `…/authors`, `…/collections`, `…/playlists` | `{"results":[],"total":0,"page":0}` | `Page<T>` needs `total`+`page` |
+| `…/narrators` | `{"narrators":[]}` | wrapper key required |
+| `…/recent-episodes` | `{"episodes":[]}` | wrapper key required |
+| listening-sessions | all five of `total,numPages,page,itemsPerPage,sessions` | all required |
+| listening-stats / year-stats | **prefer 404** | ~12 non-optional fields; callers use `try?` |
+
+Also: **an empty `200` body is fatal** for any typed endpoint (`NetworkService.swift:224-227`), and
+`…/remove-from-continue-listening` needs a non-empty body (`{}` suffices). A `200` serving the SPA
+`index.html` under `/api/` is fatal; a *404* with an HTML body is harmless to these two clients but must
+still be JSON for ShelfPlayer.
+
+### 1.8.7 Progress conflict resolution — client-side rules our server must respect
+
+**Amends §5.** Clients do **not** send `isFinished`/`progress` on `/sync` — the server computes them.
+
+- **AudioBooth at session start uses `max()` on position, ignoring timestamps**
+  (`SessionManager.swift:175-180`). ⇒ **`PlaySession.currentTime` must be the user's true latest position
+  — never 0, never a session-start snapshot.**
+- **AudioBooth at user-data sync uses strict `>` on `lastUpdate`** (`MediaProgress.swift:163`), and
+  truncates via integer `/1000` — so **two writes within the same wall-clock second compare equal and the
+  server's value is discarded** (ties go to local). Our `lastUpdate` must advance by ≥1 s to win.
+- ⚠️ **`isFinished: true` with a null `duration` sets the client's `currentTime` to 0**
+  (`MediaProgress.swift:137-140`). **Always send `duration` alongside `isFinished`.**
+- Absorb adds a **30 s "local ahead" safety**: if local is >30 s ahead it pushes local *even when the
+  server timestamp is newer*, because "timestamps lie when another device touched the server with its own
+  cached position." Our forward-only rule (§5 rule 3) is aligned with this.
+- abs-shim adds a **forward-only guard on offline replay** worth copying: skip when stored
+  `currentTime > incoming currentTime`, since clients re-stamp stale backlogs with `updatedAt = now`
+  (`src/index.ts:534-541`).
+
+### 1.8.8 Other operational requirements
+
+1. **`/api/session/local` must exist and return 2xx** — ShelfPlayer sends it after every play/pause with
+   `maxAttempts:1`, so a **404 immediately marks the connection offline**.
+2. **`/api/session/local-all` body shape differs by client:** AudioBooth sends
+   **`{"sessions":[…],"deviceInfo":{…}}`** (an object) while abs-shim expects a **bare array** — so
+   abs-shim would apply **zero** sessions from AudioBooth. **Accept both.**
+3. **AudioBooth needs NO websocket** (zero hits; verified against `API/Package.swift`). Socket.io is
+   required only for Absorb/ShelfPlayer — so Phase 7 is needed, but AudioBooth works without it.
+4. **Sync cadence:** ≈1 POST per **20 s listened** with a **10 s** wall-clock floor, nothing while paused
+   (`SessionManager.swift:337`); watchOS runs a separate 30 s clock. `/ping` is not used by AudioBooth.
+5. **Access token TTL: 30 days is empirically proven** (abs-shim `ACCESS_TTL_SECONDS`), which
+   **confirms the §1.6 correction away from 1h.** AudioBooth *does* implement `/auth/refresh`
+   (header `x-refresh-token`, response `{user:{accessToken,refreshToken}}`, and `accessToken` **must be a
+   parseable JWT with a numeric `exp`**), but abs-shim ships **no refresh route at all** and works. On 401
+   AudioBooth **throws and loses the in-flight request** — there is no retry-and-refresh interceptor.
+6. **Report `serverSettings.version >= "2.22.0"`** to suppress AudioBooth's nag banner.
+7. **Covers/author images must work with NO credentials** — AudioBooth's widget extension sends no headers
+   at all — **and** accept `?token=` for Absorb/CarPlay. Honour `width=N`, `raw=1`, `format=jpg`.
+8. **Keep session IDs valid or accept syncs for unknown session IDs idempotently.** AudioBooth cannot
+   detect a 404-expired session (it rewraps errors and loses the status code), so it will never re-create one.
+9. **`Content-Type: application/json` arrives on every request including bodyless GET/DELETE**, and there
+   is **no snake_case tolerance** — exact camelCase only.
 
 ## 2. Non-negotiable constraints
 
