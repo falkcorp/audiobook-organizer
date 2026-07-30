@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.49.0
+// version: 1.50.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-07-17
+// last-edited: 2026-07-30
 
 package scanner
 
@@ -29,6 +29,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/matcher"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/oklog/ulid/v2"
@@ -2015,6 +2016,15 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 			}
 		}
 
+		// supersededBook* records the predecessor row when a hash-duplicate is
+		// version-linked below and a BRAND NEW Book ULID is minted for this
+		// path. It is the untagged-move case: the file has no
+		// AUDIOBOOK_ORGANIZER_ID tag to re-link by, so the moved file cannot
+		// reuse its old row and the ABS sync identity (plus the listening
+		// position keyed to the old ULID) has to be carried forward explicitly
+		// once the new row exists. See followSyncIdentityOnVersionLink.
+		var supersededBookID, supersededBookPath string
+
 		// Upsert semantics with duplicate detection:
 		// 1. Try lookup by file path first (exact match)
 		existing, err := getStore().GetBookByFilePath(book.FilePath)
@@ -2096,6 +2106,10 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 					dbBook.IsPrimaryVersion = &newPrimary
 					defaultLog.Info("Auto-linked hash-duplicate as version group %s (primary=%s): %s <-> %s",
 						groupID, existing.FilePath, existing.FilePath, book.FilePath)
+					// A new ULID is about to be minted for this path; remember
+					// the row it supersedes so the sync identity can follow if
+					// this turns out to be a move rather than a second copy.
+					supersededBookID, supersededBookPath = existing.ID, existing.FilePath
 					// Fall through to create the new (non-primary) record below
 					existing = nil
 				}
@@ -2170,6 +2184,8 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 					dbBook.IsPrimaryVersion = &newPrimary
 					defaultLog.Info("Multi-file dedup: linked %q as version group %s (%d/%d files matched)",
 						matchedBook.Title, groupID, bestCount, len(book.SegmentFiles))
+					// Same untagged-move follow as the single-hash branch above.
+					supersededBookID, supersededBookPath = matchedBook.ID, matchedBook.FilePath
 					// Leave existing == nil so CreateBook runs below with the version fields set.
 				} else {
 					defaultLog.Debug("Multi-file dedup: best match %d/%d files (threshold %d) — treating as new book: %s",
@@ -2218,6 +2234,7 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 
 			_, err = getStore().CreateBook(dbBook)
 			if err == nil {
+				followSyncIdentityOnVersionLink(supersededBookID, supersededBookPath, dbBook.ID)
 				// Check for metadata hash duplicates
 				detectMetadataHashDuplicate(dbBook, defaultLog)
 				if scanHooks != nil {
@@ -2254,6 +2271,45 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 	}
 
 	return fmt.Errorf("database store not initialized")
+}
+
+// followSyncIdentityOnVersionLink carries a superseded book's ABS sync identity
+// (its durable libraryItemId) and each user's listening position onto the
+// freshly created row when a hash-duplicate version-link mints a NEW Book ULID
+// for a path.
+//
+// Why the on-disk check decides it: the two situations reaching this point are
+// indistinguishable from the DB alone.
+//
+//   - The predecessor's file is GONE -> the file was moved and, being untagged,
+//     could not be re-linked to its own row. The new row is the live book, so
+//     the identity must follow it or the device's place in the book is orphaned
+//     on a row that points at a path that no longer exists.
+//   - The predecessor's file still EXISTS -> a genuine second copy/version.
+//     Both books are real; the identity stays on the original.
+//
+// Note the IsPrimaryVersion flag cannot be used as that signal: in this branch
+// newPrimary is `newInRoot && !existingInRoot`, which the enclosing else-if
+// has already excluded, so it is always false regardless of what happened on
+// disk.
+//
+// Best-effort and never fails the import; merge.FollowBookIDChange logs at
+// ERROR (with both book IDs) if the carry-forward fails, and is a no-op when
+// the predecessor never had a sync identity minted.
+func followSyncIdentityOnVersionLink(supersededID, supersededPath, newBookID string) {
+	if supersededID == "" || supersededPath == "" || newBookID == "" {
+		return
+	}
+	if _, err := os.Stat(supersededPath); err == nil {
+		return // predecessor file still present: a second copy, not a move
+	} else if !os.IsNotExist(err) {
+		// Cannot prove the predecessor is gone (permissions, unmounted share).
+		// Stay conservative and leave the identity where it is.
+		defaultLog.Warn("sync-identity: cannot stat superseded book path %s, leaving identity on %s: %v",
+			supersededPath, supersededID, err)
+		return
+	}
+	merge.FollowBookIDChange(getStore(), supersededID, newBookID)
 }
 
 // ComputeSegmentFileHash computes SHA256 of the first 1MB of a file for use as
