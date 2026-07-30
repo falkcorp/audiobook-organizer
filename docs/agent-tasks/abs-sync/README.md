@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/abs-sync/README.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 7b287737-c26b-4b06-abb2-52d222ec0bcf -->
 <!-- last-edited: 2026-07-30 -->
 
@@ -33,7 +33,8 @@ same file.** The two hard rules, learned from prior sweeps:
 
 | Wave | Tasks | Owns (exclusive) | Depends on |
 |---|---|---|---|
-| **1** | TASK-01, 02 | `internal/database/pebble_store_syncid.go` (+`_test`) | — |
+| **1** | TASK-01 | `internal/database/pebble_store_syncid.go` (+`_test`) | — |
+| **1** | TASK-02 | `internal/database/pebble_store_syncfile.go` (+`_test`) | — |
 | **1** | TASK-06 | `internal/database/pebble_store_chapters.go` (+`_test`) | — |
 | **1** | TASK-08 | `internal/syncapi/progress/` (new pkg, pure) | — |
 | **1** | TASK-10 | `internal/audioutil/drm.go` (+`_test`) | — |

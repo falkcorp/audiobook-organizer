@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/abs-sync/TASK-02-syncfile-keyspace.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 3960db09-098f-4376-91dc-a54a6248b908 -->
 <!-- last-edited: 2026-07-30 -->
 
@@ -8,7 +8,7 @@
 **Priority:** P0 · **Effort:** M · **Recommended subagent:** Sonnet-class go-backend subagent · **Why:** same shape as TASK-01 (new keyspace, no live call site yet) — additive Pebble work with a clear test surface · **Depends on:** none (Wave 1, parallel with TASK-01)
 
 **Gate:** PLAN -> EXECUTE AUTONOMOUSLY (worktree/PR/CI). Additive-only; nothing reads or writes these keys yet.
-**File-ownership:** owns `internal/database/pebble_store_syncid.go` (+ `_test.go`) **jointly with TASK-01**, in the same wave. **Read TASK-01's brief before starting** — it defines `SyncIdentityStore`/`AsSyncIdentityStore` in the same file; this task adds a second, independent interface (`SyncFileStore`/`AsSyncFileStore`) and its own struct/methods alongside it, appended to the same file rather than duplicating the pattern in a new one. **If TASK-01 has not landed yet, coordinate** (check `git log --oneline origin/main -- internal/database/pebble_store_syncid.go`) — whichever of TASK-01/TASK-02 merges second must rebase onto the first's file rather than overwrite it. **Do NOT edit `internal/database/store.go`.**
+**File-ownership:** owns `internal/database/pebble_store_syncfile.go` (+ `_test.go`) **exclusively** — no other task touches it. **This was changed from an earlier draft that shared `pebble_store_syncfile.go` with TASK-01**: two agents editing one file in the same wave is the overlapping-wave collision this repo has been burned by before, and the two keyspaces are independent, so they get separate files (matching the existing per-domain pattern: `pebble_store_bookfiles.go`, `pebble_store_authors.go`, …). Define `SyncFileStore`/`AsSyncFileStore` here, in this file only. Do **not** edit `internal/database/pebble_store_syncfile.go` (TASK-01 owns it) and do **not** edit `internal/database/store.go` (repo-wide rule — every new type/interface goes in its own file). TASK-01 and TASK-02 are now fully parallel with no coordination needed.
 
 ## ⛔ START HERE (do this first, exactly)
 
@@ -22,7 +22,7 @@ git rebase origin/main
 
 Before writing code, re-check whether TASK-01 already merged:
 ```bash
-git log --oneline origin/main -- internal/database/pebble_store_syncid.go
+git log --oneline origin/main -- internal/database/pebble_store_syncfile.go
 ```
 If it returns commits, the file already exists with `SyncItem`/`SyncIdentityStore` in
 it — **append** this task's additions to the bottom of that file rather than
@@ -87,7 +87,7 @@ Book identity, gives that seam for free and costs one extra Pebble key per file.
 ## Step-by-step
 
 1. Open (or create, if TASK-01 hasn't landed — check first, per START HERE)
-   `internal/database/pebble_store_syncid.go`.
+   `internal/database/pebble_store_syncfile.go`.
 2. Define:
    ```go
    type SyncFile struct {
@@ -157,7 +157,7 @@ Book identity, gives that seam for free and costs one extra Pebble key per file.
    }
    ```
 9. Write `internal/database/pebble_store_syncfile_test.go` (own file, even though the
-   implementation shares `pebble_store_syncid.go` with TASK-01 — keeps the two
+   implementation shares `pebble_store_syncfile.go` with TASK-01 — keeps the two
    tasks' tests from colliding on the same test file):
    - Mint-on-first-encounter for the same `(bookID, fileID)` pair returns the same
      ID twice.
@@ -180,7 +180,7 @@ Book identity, gives that seam for free and costs one extra Pebble key per file.
 
 ```bash
 go build ./...
-gofmt -l internal/database/pebble_store_syncid.go internal/database/pebble_store_syncfile_test.go
+gofmt -l internal/database/pebble_store_syncfile.go internal/database/pebble_store_syncfile_test.go
 go vet ./internal/database/...
 go test ./internal/database/... -run SyncFile -race -count=1 -v
 ```
@@ -237,7 +237,7 @@ gh pr merge <number> --rebase
 
 ## Idempotency / Rollback
 
-If `MintOrGetSyncFileID` already exists in `pebble_store_syncid.go`, the transform is
+If `MintOrGetSyncFileID` already exists in `pebble_store_syncfile.go`, the transform is
 already done — run the acceptance checks instead of re-adding. Rollback = revert the
 single commit; nothing references `sync_file:*` yet outside this task's own tests
 (verify: `git grep -l "AsSyncFileStore\|MintOrGetSyncFileID" -- ':!internal/database/pebble_store_syncid*' ':!internal/database/pebble_store_syncfile*'`
