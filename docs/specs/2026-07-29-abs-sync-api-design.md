@@ -1,5 +1,5 @@
 <!-- file: docs/specs/2026-07-29-abs-sync-api-design.md -->
-<!-- version: 3.1.0 -->
+<!-- version: 3.2.0 -->
 <!-- guid: 0869d58c-b186-45cb-9915-64bd18eaa45f -->
 <!-- last-edited: 2026-07-29 -->
 
@@ -357,6 +357,28 @@ source to the existing state if absent. On an incoming `PATCH /api/me/progress/:
    progress. This is the specific clobber the task fears.
 4. **Finished is sticky within a cycle:** once `isFinished`, it stays finished unless a rule-2 (strictly
    newer) update explicitly sets `isFinished=false` (ABS allows re-opening a finished book).
+
+**5b. Finished-detection tolerance (measured 2026-07-29 — do not use a tight epsilon).** A book has
+**three** legitimate, mutually-disagreeing durations, verified on the Odyssey fixture:
+
+| Source | Value (s) |
+|---|---|
+| m4b container duration | 9975.480544 |
+| m4b **last chapter end** | 9975.428000 |
+| Sum of the 6 mp3 track durations | 9975.431111 |
+
+The spread is ~52 ms and the causes are structural, not sloppiness: m4b chapter marks use
+`time_base 1/1000` (millisecond-quantized) while per-track durations are frame-accurate. A client that
+plays to the end of the final *chapter* stops ~52 ms short of the *container* duration.
+
+**Consequence:** `currentTime >= duration - ε` with a small ε means a fully-listened book **never
+auto-marks finished** and sits at 99% forever. Therefore:
+- Use an explicit tolerance of **≥ 2 s** (comfortably above the worst inter-source skew, still far below
+  a meaningful amount of audio) — or treat "within the last chapter and past its start" as finished.
+- **Pick one authoritative duration per book and use it consistently** in `media.duration`, the play
+  session, and progress math. Recommended: the **sum of track durations**, since it matches the timeline
+  clients actually seek within (and matches real ABS `startOffset` values exactly).
+- Regression test: simulate progress at the last chapter's end and assert `isFinished` becomes true.
 5. On merge (§4.2), the merged item takes `max(currentTime)` and `isFinished = OR`, with `updatedAt = max`.
 
 ## 6. LOCKED cross-cutting decision — Conformance oracle & fixtures
