@@ -1,15 +1,16 @@
 <!-- file: docs/specs/2026-07-29-abs-sync-api-design.md -->
-<!-- version: 6.0.0 -->
+<!-- version: 7.0.0 -->
 <!-- guid: 0869d58c-b186-45cb-9915-64bd18eaa45f -->
-<!-- last-edited: 2026-07-29 -->
+<!-- last-edited: 2026-07-30 -->
 
 # Audiobookshelf-Compatible Sync API — Design Spec (Umbrella)
 
 ## Mission
 
 Implement a production-usable **Audiobookshelf-compatible server API** inside audiobook-organizer,
-so unmodified third-party ABS iOS clients (Plappa, ShelfPlayer, SoundLeaf, AudioBooth, Prologue,
-official TestFlight) can point at this server and work with no awareness that it isn't ABS. The
+so unmodified third-party ABS iOS clients can point at this server and work with no awareness that it
+isn't ABS. **Target clients are AudioBooth (primary) and Absorb (secondary)** — both open source, active,
+and therefore auditable (see §1.9). Others may work incidentally but do not constrain the design. The
 end state: the owner stops syncing audiobooks to iTunes/Apple Books and syncs to this instead.
 
 We target compatibility with **ABS server 2.36.x** and report that in `/status` — but we only
@@ -360,6 +361,62 @@ still be JSON for ShelfPlayer.
    detect a 404-expired session (it rewraps errors and loses the status code), so it will never re-create one.
 9. **`Content-Type: application/json` arrives on every request including bodyless GET/DELETE**, and there
    is **no snake_case tolerance** — exact camelCase only.
+
+## 1.9 SCOPE NARROWED — target clients are AudioBooth and Absorb only (owner, 2026-07-30)
+
+**Decision:** design and test against **AudioBooth (primary)** and **Absorb (secondary)** only. Both are
+genuinely open source (MPL-2.0 / GPL-3.0), actively developed, free, and highly rated — so their behavior
+is **auditable now and re-auditable after every update**, which is exactly what ShelfPlayer's sale cost us.
+Other clients may work incidentally; **they are not requirements and must not constrain the design.**
+
+### 1.9.1 Requirements DROPPED by narrowing scope
+
+Verified against both clients' source — these existed only for clients we no longer target:
+
+| Dropped requirement | Was for | Why it drops |
+|---|---|---|
+| **CORS preflight allowing `Range`** | Pholia / ABS web UI | Both targets are native; neither has a web target, so no `Origin`, no preflight |
+| **JSON bodies on `/api/` 404s** | ShelfPlayer | Neither target ever decodes a non-200 body. Retained as cheap hygiene, **no longer a hard requirement** |
+| **`userMediaProgress` inline without `?include=progress`** | Plappa | Zero occurrences in either target; both use `user.mediaProgress` |
+| **`audioTracks[].metadata.ext`** | (assumed) | Never read by either |
+| **`media.tracks` on the library item** | ShelfPlayer's `playableItem()` | AudioBooth reads `audioTracks` on the play session; Absorb resolves files itself |
+| **`/api/session/local` must 2xx or the client goes offline** | ShelfPlayer (`maxAttempts:1`) | Absorb probes and falls back cleanly on 404/501; still implement it, but a 404 is no longer fatal |
+
+**Still required despite narrowing** (both targets need these, so §1.6–1.8 stand):
+`publishedYear` as a String; strict-decoder type fidelity; complete `user.mediaProgress`; non-null
+`userDefaultLibraryId`; `lastUpdate` in ms; integer `total`/`numBooks`; real JSON booleans;
+`/api/session/local-all` 200-and-ignore-unknown-IDs; the two-header CF service-token form (both use
+`Authorization` for the ABS token, so Cloudflare's single-header variant remains unusable).
+
+### 1.9.2 Phase 7 (socket.io) is now Absorb-only
+
+**AudioBooth needs no websocket at all** — zero repo-wide hits, verified against `API/Package.swift`
+(swift-log, SimpleKeychain, Nuke, Pulse; no socket library at any level). Only **Absorb** requires it, and
+there it is not cosmetic: **5 failed reconnects force the app offline**
+(`socket_service.dart:408-413` → `_lp_core.dart:1170-1173`).
+
+⇒ **Phase 7 is deprioritized and scoped to Absorb.** AudioBooth is fully functional without it, so the
+primary client can ship before socket.io exists. Absorb expects `emit('auth', <raw token string>)`.
+
+### 1.9.3 Goal: ZERO publicly-bypassed endpoints — pending verification
+
+Narrowing removes the reason the `/ping`,`/status` bypass existed: it was a concession to **Plappa**
+dropping its custom header on the status probe ([#330](https://github.com/LeoKlaus/plappa/issues/330)).
+If neither target drops headers there, we require the service token on **every** endpoint and have **no
+public surface at all**.
+
+**This must be verified, not assumed** — it is the same failure class as Plappa #330, and getting it wrong
+means the app **cannot connect at all**, which is strictly worse than exposing a version string. Two
+specific unknowns:
+- AudioBooth calls `GET /status` during **server-add, before the server record is persisted** — do the
+  not-yet-saved custom headers reach that first probe? (Its cover path *does* use `customHeaders`, but its
+  **widget extension sends no headers whatsoever**, proving coverage is not uniform.)
+- Absorb polls **`/ping` every 20 s offline / 60 s online** as its online/offline state machine; header
+  coverage on that path is unestablished.
+
+**Until verified, keep the `/ping`,`/status` bypass as the safe default.** On confirmation, remove it and
+record the zero-public-endpoint posture in the runbook. Both clients are open source, so this is a bounded,
+answerable question — never an assumption.
 
 ## 2. Non-negotiable constraints
 
