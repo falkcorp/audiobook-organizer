@@ -1,7 +1,7 @@
 // file: internal/dedup/book_dedup.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-07-18
+// last-edited: 2026-07-30
 
 // Package dedup: book_dedup.go contains the extracted execution logic for the
 // "dedup.book-scan" and "dedup.book-merge" async operations.  The *Server
@@ -440,6 +440,20 @@ func MergeBooks(
 
 		// Transfer useful iTunes metadata from merge book to keep book (first-win).
 		TransferITunesMetadataFirstWin(kBook, mergeBook)
+
+		// Carry the loser's ABS sync identity (libraryItemId) and each user's
+		// listening position onto the kept book BEFORE the hard delete below.
+		// This path is the worst case for an un-followed merge: store.DeleteBook
+		// removes the row outright, so unlike merge.Service.MergeBooks (which
+		// soft-deletes) there is nothing left to repoint afterwards and the
+		// device's place in the book would be lost permanently. Done here, not
+		// after the delete, so a crash between the two fails in the recoverable
+		// direction (a redirect for a book that still exists) rather than the
+		// unrecoverable one. Best-effort and never fails the merge; it logs at
+		// ERROR with both book IDs on failure. We already hold the process-wide
+		// merge.LockMergeRMW taken at the top of this function, so this is
+		// exactly-once w.r.t. every other merge-family path.
+		merge.FollowMergeWithStore(store, keepID, []string{mergeID})
 
 		if err := store.DeleteBook(mergeID); err != nil {
 			result.Errors = append(result.Errors,

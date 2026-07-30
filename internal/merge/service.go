@@ -1,7 +1,7 @@
 // file: internal/merge/service.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
-// last-edited: 2026-07-18
+// last-edited: 2026-07-30
 
 package merge
 
@@ -50,11 +50,24 @@ func AsExternalIDReassigner(s any) ExternalIDReassigner {
 type Service struct {
 	db               database.Store
 	writeBackBatcher WriteBackEnqueuer
+	syncFollower     SyncFollower
 }
 
 // SetWriteBackBatcher sets the iTunes write-back batcher.
 func (ms *Service) SetWriteBackBatcher(b WriteBackEnqueuer) {
 	ms.writeBackBatcher = b
+}
+
+// SetSyncFollower overrides the sync-identity follower wired by NewService.
+//
+// Why a settable field instead of a type assertion at the call site: tests (and
+// some production wiring) hand this Service a wrapper that EMBEDS
+// database.Store — e.g. serializeProbe in service_concurrent_test.go — and a
+// database.AsSyncIdentityStore assertion through such a wrapper returns nil,
+// which would silently no-op the whole hook without failing anything. Injecting
+// once, mirroring SetWriteBackBatcher, makes that failure mode explicit.
+func (ms *Service) SetSyncFollower(f SyncFollower) {
+	ms.syncFollower = f
 }
 
 // Result contains the outcome of a merge operation.
@@ -64,9 +77,22 @@ type Result struct {
 	MergedCount    int    `json:"merged_count"`
 }
 
-// NewService creates a new Service.
+// NewService creates a new Service. The sync-identity follower is wired
+// automatically when db supports it (the production *PebbleStore does); stores
+// that do not — mocks, wrappers that embed database.Store — yield nil and the
+// merge paths simply do not touch sync identity. Override with
+// SetSyncFollower.
 func NewService(db database.Store) *Service {
-	return &Service{db: db}
+	follower := database.AsSyncIdentityStore(db)
+	if follower == nil {
+		// Say so out loud. A nil follower silently disables the whole
+		// merge-follow hook, and the only way it can happen in production is
+		// someone wrapping the concrete store in a decorator that embeds
+		// database.Store — exactly the kind of change whose blast radius is
+		// invisible otherwise.
+		slog.Warn("merge: store does not implement SyncIdentityStore; merges will NOT carry ABS sync identity or listening progress")
+	}
+	return &Service{db: db, syncFollower: follower}
 }
 
 // MergeBooks merges a set of books into a single version group.
@@ -249,6 +275,29 @@ func (ms *Service) MergeBooks(bookIDs []string, primaryID string) (*Result, erro
 		}
 	}
 
+	// --- Sync-identity + progress follow ---
+	//
+	// Still inside mergeSerializeMu (see the Lock above): that single
+	// process-wide lock already makes every merge-family read-modify-write
+	// mutually exclusive with every other one, so anything added here is
+	// exactly-once with respect to concurrent merges by construction. Do NOT
+	// "fix" this by adding per-book-pair partitioning on top — CLAUDE.md's
+	// partition-by-book-ID guidance targets whole-library batch loops, not a
+	// single already-fully-serialized RMW, and a second scheme could subtly
+	// fight this lock.
+	//
+	// The winner's ULID never changes here (resolvedPrimaryID is an existing
+	// book's ID) and losers are only soft-deleted, so the winner's reverse
+	// index needs no repoint: this is a loser-only redirect. Kept as its own
+	// separately-testable step rather than folded into the loop above.
+	losers := make([]string, 0, len(books)-1)
+	for _, book := range books {
+		if book.ID != resolvedPrimaryID {
+			losers = append(losers, book.ID)
+		}
+	}
+	FollowMerge(ms.db, ms.syncFollower, resolvedPrimaryID, losers)
+
 	return &Result{
 		PrimaryID:      resolvedPrimaryID,
 		VersionGroupID: versionGroupID,
@@ -361,6 +410,14 @@ func (ms *Service) CombineBooks(bookIDs []string, primaryID string, override *Co
 				slog.Warn("combine ReassignExternalIDs", "from", id, "to", survivor.ID, "err", err)
 			}
 		}
+
+		// Carry the absorbed shell's sync identity and listening position onto
+		// the survivor BEFORE the hard delete below. Unlike MergeBooks (which
+		// soft-deletes), there is no surviving row to repoint afterwards, so a
+		// missed follow here is unrecoverable: the client's stored
+		// libraryItemId would resolve to nothing forever. Still inside
+		// mergeSerializeMu, so this is exactly-once w.r.t. every other merge.
+		FollowMerge(ms.db, ms.syncFollower, survivor.ID, []string{id})
 
 		// Guard (mirrors applyFSRegroup): never delete a book that still owns
 		// files — that would orphan audio. After the move it must be empty.
