@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-07-29-abs-sync-phase0-oracle.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: ec50565c-7a14-46a8-a6a9-49376e63f89f -->
 <!-- last-edited: 2026-07-29 -->
 
@@ -179,7 +179,7 @@ If `/status` shows `"isInit": false`, complete first-run setup in a browser at `
 Create `testdata/abs-oracle/README.md`:
 ```markdown
 <!-- file: testdata/abs-oracle/README.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 6a2e8c5b-4f19-4d73-8b1c-90e7f24a3d68 -->
 <!-- last-edited: 2026-07-29 -->
 
@@ -1172,7 +1172,7 @@ Expected: a `request`/`response` envelope whose `response.body` contains a `libr
 Create `testdata/abs-fixtures/README.md`:
 ```markdown
 <!-- file: testdata/abs-fixtures/README.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 0e7d3b96-5a28-4c14-8f7b-91c6a04e2d53 -->
 <!-- last-edited: 2026-07-29 -->
 
@@ -1452,7 +1452,7 @@ guid = subprocess.check_output(["uuidgen"]).decode().strip().lower()
 p = pathlib.Path("changelog.d/20260729_000000_abs_sync_phase0_oracle.md")
 p.write_text(
     "<!-- file: changelog.d/20260729_000000_abs_sync_phase0_oracle.md -->\n"
-    "<!-- version: 1.0.0 -->\n"
+    "<!-- version: 1.1.0 -->\n"
     f"<!-- guid: {guid} -->\n"
     "<!-- last-edited: 2026-07-29 -->\n\n"
     "### Added\n\n"
@@ -1475,7 +1475,16 @@ git commit -m "test(abs-sync): wire golden fixtures to the conformance differ"
 
 ---
 
-### Task 7: Client network-layer audit (the mode-deciding question)
+### Task 7: Client network-layer audit (the mode-deciding question) — ✅ ALREADY COMPLETE
+
+> **Status 2026-07-29: DONE before execution began.** The audit was performed and written to
+> [`docs/reference/abs-client-network-audit.md`](../reference/abs-client-network-audit.md); the spec's §3.0
+> records the outcome. **Verdict: Mode B is GO** (ShelfPlayer source-verified on all paths incl.
+> `AVURLAsset` streaming and background downloads; Plappa evidenced, ≥ 1.5.5 required, two-header form
+> only). Owner decided: build Mode B now with Mode C as a config switch; target both clients, prefer
+> Plappa. **Skip the steps below** — they are retained as the record of how the question was answered.
+> The remaining live work from this task is only Step 4's second half: confirm §7's phase table reflects
+> that §3.1–3.5 IS in scope (Mode B was chosen), which it does.
 
 **Files:**
 - Create: `docs/reference/abs-client-network-audit.md`
