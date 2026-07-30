@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-07-29-abs-sync-phase0-oracle.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: ec50565c-7a14-46a8-a6a9-49376e63f89f -->
 <!-- last-edited: 2026-07-29 -->
 
@@ -9,7 +9,7 @@
 
 **Goal:** Stand up a real Audiobookshelf 2.36.x server in Docker as a reference oracle, capture golden request/response fixtures from it, and build a field-presence-and-type-aware conformance differ that will gate every later ABS phase.
 
-**Architecture:** A pinned ABS Docker container scans a small sample library built from the repo's existing LibriVox testdata (the Odyssey, present both as a 6-file mp3 set and as a 115 MB m4b with 6 real embedded chapters). A Python capture script authenticates against that server, walks every endpoint in the ABS surface, and writes normalized JSON fixtures to `testdata/abs-fixtures/`. A Go package `internal/absync/conformance` provides (a) a normalizer that canonicalizes volatile values while **preserving their JSON types**, and (b) a differ that reports missing fields, type mismatches, extra fields, and array-shape problems by JSON path. No ABS endpoints are implemented in this phase — this phase builds the measuring instrument.
+**Architecture:** A pinned ABS Docker container scans a small sample library built from the repo's existing LibriVox testdata (the Odyssey, present both as a 6-file mp3 set and as a 115 MB m4b with 6 real embedded chapters). A Python capture script authenticates against that server, walks every endpoint in the ABS surface, and writes normalized JSON fixtures to `testdata/abs-fixtures/`. A Go package `internal/syncapi/conformance` provides (a) a normalizer that canonicalizes volatile values while **preserving their JSON types**, and (b) a differ that reports missing fields, type mismatches, extra fields, and array-shape problems by JSON path. No ABS endpoints are implemented in this phase — this phase builds the measuring instrument.
 
 **Tech Stack:** Go 1.26 (stdlib `encoding/json` only for the differ — no new Go deps), Python 3 + `requests` for capture, Docker Compose, `ghcr.io/advplyr/audiobookshelf` pinned to 2.36.x, ffprobe (already installed) for asset verification.
 
@@ -33,13 +33,13 @@
 | `testdata/abs-oracle/docker-compose.yml` | Pinned ABS oracle container + volumes |
 | `testdata/abs-oracle/README.md` | How to start/stop the oracle, credentials, port |
 | `testdata/abs-oracle/build-library.sh` | Arranges existing LibriVox testdata into an ABS-shaped library (gitignored output) |
-| `internal/absync/conformance/jsontype.go` | JSON type classification (one tiny responsibility) |
-| `internal/absync/conformance/diff.go` | Structural differ: missing/extra/type/length findings by path |
-| `internal/absync/conformance/diff_test.go` | Tests for the differ |
-| `internal/absync/conformance/normalize.go` | Volatile-value canonicalizer that preserves JSON type |
-| `internal/absync/conformance/normalize_test.go` | Tests for the normalizer |
-| `internal/absync/conformance/fixture.go` | Loads a captured fixture file into `want` for the differ |
-| `internal/absync/conformance/fixture_test.go` | Tests fixture loading against a committed sample fixture |
+| `internal/syncapi/conformance/jsontype.go` | JSON type classification (one tiny responsibility) |
+| `internal/syncapi/conformance/diff.go` | Structural differ: missing/extra/type/length findings by path |
+| `internal/syncapi/conformance/diff_test.go` | Tests for the differ |
+| `internal/syncapi/conformance/normalize.go` | Volatile-value canonicalizer that preserves JSON type |
+| `internal/syncapi/conformance/normalize_test.go` | Tests for the normalizer |
+| `internal/syncapi/conformance/fixture.go` | Loads a captured fixture file into `want` for the differ |
+| `internal/syncapi/conformance/fixture_test.go` | Tests fixture loading against a committed sample fixture |
 | `scripts/abs_capture_fixtures.py` | Captures golden fixtures from the running oracle |
 | `testdata/abs-fixtures/*.json` | Committed golden fixtures (JSON only, normalized) |
 | `docs/reference/abs-client-network-audit.md` | Findings: per-client custom-header support incl. the streaming path |
@@ -179,7 +179,7 @@ If `/status` shows `"isInit": false`, complete first-run setup in a browser at `
 Create `testdata/abs-oracle/README.md`:
 ```markdown
 <!-- file: testdata/abs-oracle/README.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 6a2e8c5b-4f19-4d73-8b1c-90e7f24a3d68 -->
 <!-- last-edited: 2026-07-29 -->
 
@@ -236,8 +236,8 @@ git commit -m "test(abs-sync): add pinned Audiobookshelf reference oracle + samp
 ### Task 2: JSON type classification
 
 **Files:**
-- Create: `internal/absync/conformance/jsontype.go`
-- Test: `internal/absync/conformance/jsontype_test.go`
+- Create: `internal/syncapi/conformance/jsontype.go`
+- Test: `internal/syncapi/conformance/jsontype_test.go`
 
 **Interfaces:**
 - Produces: `func JSONType(v any) string` returning exactly one of `"object"`, `"array"`, `"string"`, `"number"`, `"bool"`, `"null"`. Used by Task 3's differ and Task 4's normalizer.
@@ -246,9 +246,9 @@ Rationale: `encoding/json` unmarshals into `map[string]any`, `[]any`, `string`, 
 
 - [ ] **Step 1: Write the failing test**
 
-Create `internal/absync/conformance/jsontype_test.go`:
+Create `internal/syncapi/conformance/jsontype_test.go`:
 ```go
-// file: internal/absync/conformance/jsontype_test.go
+// file: internal/syncapi/conformance/jsontype_test.go
 // version: 1.0.0
 // guid: c7e41a90-5b62-4d8f-9a13-e806b2f5d74c
 // last-edited: 2026-07-29
@@ -290,14 +290,14 @@ func TestJSONType(t *testing.T) {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `go test ./internal/absync/conformance/ -run TestJSONType -v`
+Run: `go test ./internal/syncapi/conformance/ -run TestJSONType -v`
 Expected: FAIL — build error, `undefined: JSONType`.
 
 - [ ] **Step 3: Write minimal implementation**
 
-Create `internal/absync/conformance/jsontype.go`:
+Create `internal/syncapi/conformance/jsontype.go`:
 ```go
-// file: internal/absync/conformance/jsontype.go
+// file: internal/syncapi/conformance/jsontype.go
 // version: 1.0.0
 // guid: 1b8f6d3c-90a5-4e27-b6c8-4f21e90d7a35
 // last-edited: 2026-07-29
@@ -334,13 +334,13 @@ func JSONType(v any) string {
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `go test ./internal/absync/conformance/ -run TestJSONType -v`
+Run: `go test ./internal/syncapi/conformance/ -run TestJSONType -v`
 Expected: PASS (all 7 subtests).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add internal/absync/conformance/jsontype.go internal/absync/conformance/jsontype_test.go
+git add internal/syncapi/conformance/jsontype.go internal/syncapi/conformance/jsontype_test.go
 git commit -m "test(abs-sync): add JSON type classification for conformance diffing"
 ```
 
@@ -349,8 +349,8 @@ git commit -m "test(abs-sync): add JSON type classification for conformance diff
 ### Task 3: Structural conformance differ
 
 **Files:**
-- Create: `internal/absync/conformance/diff.go`
-- Test: `internal/absync/conformance/diff_test.go`
+- Create: `internal/syncapi/conformance/diff.go`
+- Test: `internal/syncapi/conformance/diff_test.go`
 
 **Interfaces:**
 - Consumes: `JSONType(v any) string` from Task 2.
@@ -370,9 +370,9 @@ Design notes the implementer must honor:
 
 - [ ] **Step 1: Write the failing test**
 
-Create `internal/absync/conformance/diff_test.go`:
+Create `internal/syncapi/conformance/diff_test.go`:
 ```go
-// file: internal/absync/conformance/diff_test.go
+// file: internal/syncapi/conformance/diff_test.go
 // version: 1.0.0
 // guid: 8e35b1c7-6a24-4f90-bd18-2c7e504a9f63
 // last-edited: 2026-07-29
@@ -505,14 +505,14 @@ func TestCompareCleanWhenIdentical(t *testing.T) {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `go test ./internal/absync/conformance/ -run TestCompare -v`
+Run: `go test ./internal/syncapi/conformance/ -run TestCompare -v`
 Expected: FAIL — build error, `undefined: Compare`, `undefined: Options`, `undefined: Finding`.
 
 - [ ] **Step 3: Write minimal implementation**
 
-Create `internal/absync/conformance/diff.go`:
+Create `internal/syncapi/conformance/diff.go`:
 ```go
-// file: internal/absync/conformance/diff.go
+// file: internal/syncapi/conformance/diff.go
 // version: 1.0.0
 // guid: 4c9a7e18-3b56-42df-9017-8ea6b3createme
 // last-edited: 2026-07-29
@@ -650,22 +650,22 @@ func joinPath(parent, key string) string {
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `go test ./internal/absync/conformance/ -v`
+Run: `go test ./internal/syncapi/conformance/ -v`
 Expected: PASS — all `TestCompare*` and `TestJSONType` subtests green.
 
 - [ ] **Step 5: Run vet and the race detector**
 
 Run:
 ```bash
-go vet ./internal/absync/conformance/
-go test ./internal/absync/conformance/ -race
+go vet ./internal/syncapi/conformance/
+go test ./internal/syncapi/conformance/ -race
 ```
 Expected: no vet output; tests PASS.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add internal/absync/conformance/diff.go internal/absync/conformance/diff_test.go
+git add internal/syncapi/conformance/diff.go internal/syncapi/conformance/diff_test.go
 git commit -m "test(abs-sync): add field-presence and type-aware conformance differ"
 ```
 
@@ -674,8 +674,8 @@ git commit -m "test(abs-sync): add field-presence and type-aware conformance dif
 ### Task 4: Volatile-value normalizer
 
 **Files:**
-- Create: `internal/absync/conformance/normalize.go`
-- Test: `internal/absync/conformance/normalize_test.go`
+- Create: `internal/syncapi/conformance/normalize.go`
+- Test: `internal/syncapi/conformance/normalize_test.go`
 
 **Interfaces:**
 - Consumes: `JSONType(v any) string` from Task 2.
@@ -693,9 +693,9 @@ Design notes the implementer must honor:
 
 - [ ] **Step 1: Write the failing test**
 
-Create `internal/absync/conformance/normalize_test.go`:
+Create `internal/syncapi/conformance/normalize_test.go`:
 ```go
-// file: internal/absync/conformance/normalize_test.go
+// file: internal/syncapi/conformance/normalize_test.go
 // version: 1.0.0
 // guid: 5d0b8f31-7c92-4a6e-b418-3fa95e27c60d
 // last-edited: 2026-07-29
@@ -813,14 +813,14 @@ func TestDefaultVolatileKeysCoverTheObviousOnes(t *testing.T) {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `go test ./internal/absync/conformance/ -run 'TestNormalize|TestDefaultVolatile' -v`
+Run: `go test ./internal/syncapi/conformance/ -run 'TestNormalize|TestDefaultVolatile' -v`
 Expected: FAIL — build error, `undefined: NewNormalizer`, `undefined: DefaultVolatileKeys`.
 
 - [ ] **Step 3: Write minimal implementation**
 
-Create `internal/absync/conformance/normalize.go`:
+Create `internal/syncapi/conformance/normalize.go`:
 ```go
-// file: internal/absync/conformance/normalize.go
+// file: internal/syncapi/conformance/normalize.go
 // version: 1.0.0
 // guid: 7f26a4d9-1e83-4b05-9c7a-62d0fb495e18
 // last-edited: 2026-07-29
@@ -924,13 +924,13 @@ func (n *Normalizer) isVolatile(key string) bool {
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `go test ./internal/absync/conformance/ -v`
+Run: `go test ./internal/syncapi/conformance/ -v`
 Expected: PASS — every test in the package, including the earlier differ tests.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add internal/absync/conformance/normalize.go internal/absync/conformance/normalize_test.go
+git add internal/syncapi/conformance/normalize.go internal/syncapi/conformance/normalize_test.go
 git commit -m "test(abs-sync): add type-preserving volatile-value normalizer"
 ```
 
@@ -1172,7 +1172,7 @@ Expected: a `request`/`response` envelope whose `response.body` contains a `libr
 Create `testdata/abs-fixtures/README.md`:
 ```markdown
 <!-- file: testdata/abs-fixtures/README.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 0e7d3b96-5a28-4c14-8f7b-91c6a04e2d53 -->
 <!-- last-edited: 2026-07-29 -->
 
@@ -1192,7 +1192,7 @@ python3 scripts/abs_capture_fixtures.py
 ## Why bodies are stored raw
 
 Fixtures are **not** normalized on disk. Normalization (canonicalizing volatile ids,
-timestamps, inodes) happens at compare time in `internal/absync/conformance`. Keeping
+timestamps, inodes) happens at compare time in `internal/syncapi/conformance`. Keeping
 the raw capture means a fixture stays a faithful record of what ABS actually returned,
 and the normalizer's own rules stay reviewable and changeable without a recapture.
 
@@ -1200,7 +1200,7 @@ and the normalizer's own rules stay reviewable and changeable without a recaptur
 
 Field **presence** and **type**, not just values — an ABS client that is missing a
 field it hard-requires fails opaquely, so a missing field is the highest-severity
-finding. See `internal/absync/conformance/diff.go`.
+finding. See `internal/syncapi/conformance/diff.go`.
 ```
 
 - [ ] **Step 5: Commit**
@@ -1215,8 +1215,8 @@ git commit -m "test(abs-sync): capture golden fixtures from the ABS 2.36.x oracl
 ### Task 6: Fixture loading wired to the differ
 
 **Files:**
-- Create: `internal/absync/conformance/fixture.go`
-- Test: `internal/absync/conformance/fixture_test.go`
+- Create: `internal/syncapi/conformance/fixture.go`
+- Test: `internal/syncapi/conformance/fixture_test.go`
 
 **Interfaces:**
 - Consumes: `Compare`, `Options`, `Finding` (Task 3); `NewNormalizer` (Task 4); the fixture files from Task 5.
@@ -1231,9 +1231,9 @@ This closes the loop: later phases assert `len(fixture.CompareBody(ourResponse, 
 
 - [ ] **Step 1: Write the failing test**
 
-Create `internal/absync/conformance/fixture_test.go`:
+Create `internal/syncapi/conformance/fixture_test.go`:
 ```go
-// file: internal/absync/conformance/fixture_test.go
+// file: internal/syncapi/conformance/fixture_test.go
 // version: 1.0.0
 // guid: 6b14e8a7-2d59-4370-9c86-af250d63b71e
 // last-edited: 2026-07-29
@@ -1321,14 +1321,14 @@ func TestCompareBodyCatchesAMissingRequiredField(t *testing.T) {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `go test ./internal/absync/conformance/ -run 'TestLoadFixture|TestCompareBody' -v`
+Run: `go test ./internal/syncapi/conformance/ -run 'TestLoadFixture|TestCompareBody' -v`
 Expected: FAIL — build error, `undefined: LoadFixture`.
 
 - [ ] **Step 3: Write minimal implementation**
 
-Create `internal/absync/conformance/fixture.go`:
+Create `internal/syncapi/conformance/fixture.go`:
 ```go
-// file: internal/absync/conformance/fixture.go
+// file: internal/syncapi/conformance/fixture.go
 // version: 1.0.0
 // guid: 9c8a5f72-4e16-4b93-a05d-73f1e6community
 // last-edited: 2026-07-29
@@ -1391,9 +1391,9 @@ func (f *Fixture) CompareBody(got any, opts Options) []Finding {
 
 Run:
 ```bash
-go test ./internal/absync/conformance/ -v
-go test ./internal/absync/conformance/ -race
-go vet ./internal/absync/conformance/
+go test ./internal/syncapi/conformance/ -v
+go test ./internal/syncapi/conformance/ -race
+go vet ./internal/syncapi/conformance/
 ```
 Expected: all tests PASS under both plain and `-race`; no vet output.
 
@@ -1419,8 +1419,8 @@ func TestRealFixtureSelfCompare(t *testing.T) {
 	}
 }
 EOF
-cp /tmp/abs_real_fixture_check_test.go internal/absync/conformance/realfixture_test.go
-go test ./internal/absync/conformance/ -run TestRealFixtureSelfCompare -v
+cp /tmp/abs_real_fixture_check_test.go internal/syncapi/conformance/realfixture_test.go
+go test ./internal/syncapi/conformance/ -run TestRealFixtureSelfCompare -v
 ```
 Expected: PASS (or SKIP with a clear message if Task 5 has not been run yet).
 
@@ -1428,17 +1428,17 @@ Then add the required header to the new file:
 ```bash
 python3 - <<'EOF'
 import pathlib, subprocess
-p = pathlib.Path("internal/absync/conformance/realfixture_test.go")
+p = pathlib.Path("internal/syncapi/conformance/realfixture_test.go")
 guid = subprocess.check_output(["uuidgen"]).decode().strip().lower()
 p.write_text(
-    "// file: internal/absync/conformance/realfixture_test.go\n"
+    "// file: internal/syncapi/conformance/realfixture_test.go\n"
     "// version: 1.0.0\n"
     f"// guid: {guid}\n"
     "// last-edited: 2026-07-29\n\n" + p.read_text()
 )
 EOF
-gofmt -w internal/absync/conformance/realfixture_test.go
-go test ./internal/absync/conformance/ -v
+gofmt -w internal/syncapi/conformance/realfixture_test.go
+go test ./internal/syncapi/conformance/ -v
 ```
 Expected: PASS.
 
@@ -1452,14 +1452,14 @@ guid = subprocess.check_output(["uuidgen"]).decode().strip().lower()
 p = pathlib.Path("changelog.d/20260729_000000_abs_sync_phase0_oracle.md")
 p.write_text(
     "<!-- file: changelog.d/20260729_000000_abs_sync_phase0_oracle.md -->\n"
-    "<!-- version: 1.1.0 -->\n"
+    "<!-- version: 1.2.0 -->\n"
     f"<!-- guid: {guid} -->\n"
     "<!-- last-edited: 2026-07-29 -->\n\n"
     "### Added\n\n"
     "- **Audiobookshelf conformance harness (Phase 0).** Added a pinned ABS 2.36.x\n"
     "  reference oracle (`testdata/abs-oracle/`), a fixture capture script\n"
     "  (`scripts/abs_capture_fixtures.py`), golden fixtures (`testdata/abs-fixtures/`),\n"
-    "  and `internal/absync/conformance` -- a differ that checks field presence and\n"
+    "  and `internal/syncapi/conformance` -- a differ that checks field presence and\n"
     "  JSON type, not just values, so a response missing a field an ABS client\n"
     "  hard-requires fails the build instead of failing opaquely on a phone.\n"
 )
@@ -1469,7 +1469,7 @@ EOF
 - [ ] **Step 7: Commit**
 
 ```bash
-git add internal/absync/conformance/ changelog.d/
+git add internal/syncapi/conformance/ changelog.d/
 git commit -m "test(abs-sync): wire golden fixtures to the conformance differ"
 ```
 
@@ -1550,7 +1550,7 @@ git commit -m "docs(abs-sync): audit iOS client header coverage and resolve the 
 
 - [ ] `docker compose up -d` in `testdata/abs-oracle/` yields a working ABS 2.36.x server with two books scanned.
 - [ ] `python3 scripts/abs_capture_fixtures.py` writes fixtures for every endpoint in spec §7's surface, with all statuses recorded (non-200s reported, not hidden).
-- [ ] `go test ./internal/absync/conformance/ -race` passes, including the real-fixture self-compare.
+- [ ] `go test ./internal/syncapi/conformance/ -race` passes, including the real-fixture self-compare.
 - [ ] The differ demonstrably catches a missing required field and a type mismatch (covered by tests).
 - [ ] `docs/reference/abs-client-network-audit.md` exists and selects Mode B or Mode C with cited evidence.
 - [ ] The spec is updated with the resolved mode and any Phase 1 scope reduction.

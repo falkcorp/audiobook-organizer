@@ -1,5 +1,5 @@
 <!-- file: docs/specs/2026-07-29-abs-sync-api-design.md -->
-<!-- version: 3.0.0 -->
+<!-- version: 3.1.0 -->
 <!-- guid: 0869d58c-b186-45cb-9915-64bd18eaa45f -->
 <!-- last-edited: 2026-07-29 -->
 
@@ -304,22 +304,39 @@ moving, retagging, and **merging** books. If the ID were the raw ULID, every ded
 untagged move) would silently orphan a device's place. The ID must be decoupled from ULID churn.
 
 ### 4.2 Model
-- New keyspace `abs_item:<absID>` → `{currentBookID (ULID), createdAt, mergedFrom []absID}` where
-  `absID` is a freshly minted ULID that is **never reused and never changes** for the life of the item.
-- Reverse index `abs_item:book:<bookID>` → `absID` for O(1) lookup from a Book to its ABS item ID.
-- **Assignment:** when the ABS layer first encounters a Book without an `abs_item:book:` entry, it mints
-  an `absID` and writes both records. (A backfill op assigns IDs to the existing library — worker pool.)
+- New keyspace `sync_item:<syncID>` → `{currentBookID (ULID), createdAt, mergedFrom []syncID}` where
+  `syncID` is a freshly minted ULID that is **never reused and never changes** for the life of the item.
+- Reverse index `sync_item:book:<bookID>` → `syncID` for O(1) lookup from a Book to its sync item ID.
+- **Assignment:** when the ABS layer first encounters a Book without an `sync_item:book:` entry, it mints
+  an `syncID` and writes both records. (A backfill op assigns IDs to the existing library — worker pool.)
 - **Merge-follow:** the dedup/merge apply path (`internal/merge`, `MergeBooks`) gets a hook: when book B
-  merges into surviving book A, repoint `abs_item:book:<A>`'s and B's `absID`s. Policy: the surviving ABS
-  item is A's; B's `absID` is recorded as a redirect (`abs_item:<Babs> → {redirectTo: Aabs}`) so any
+  merges into surviving book A, repoint `sync_item:book:<A>`'s and B's `syncID`s. Policy: the surviving ABS
+  item is A's; B's `syncID` is recorded as a redirect (`sync_item:<Bsync> → {redirectTo: Async}`) so any
   client still holding B's ID resolves to A. Progress is merged per §5's rules, favoring the furthest
   position. This must be **exactly-once** under concurrency (partition by book ID; MergeBooks already has
   a race-safety history — see [[project_bughunt_3wave_jul13]] MergeBooks race).
-- **Untagged move:** if a move mints a new ULID (version-link), the `abs_item:book:` index is updated to
-  the new ULID under the same `absID`, so the ABS item survives the move.
+- **Untagged move:** if a move mints a new ULID (version-link), the `sync_item:book:` index is updated to
+  the new ULID under the same `syncID`, so the ABS item survives the move.
+
+### 4.2b File-level stable IDs (discovered from the oracle, 2026-07-29)
+
+The captured fixtures showed `contentUrl` is `/api/items/<itemId>/file/<ino>`, where `ino` is a **string**
+and is ABS's filesystem inode — and the values are **not in track order** (track 1 → `"17"`, track 2 →
+`"13"`), i.e. fully opaque to clients. Two consequences the original §4 missed:
+
+- **File-level IDs need the same durability as item IDs.** A client that has downloaded a book caches those
+  per-file URLs. This app moves and reorganizes files as its core function, and an inode is *not* stable
+  across a move to another filesystem or a copy-then-replace. Deriving the file id from the inode would
+  break offline clients' cached URLs after any reorganization.
+- **Decision:** mint a durable per-file id in a `sync_file:` keyspace, keyed to the `BookFile` identity
+  (not its path or inode), exposed as the `ino` string. Reverse index `sync_file:book:<bookID>:<fileID>`.
+  It must survive the same operations as §4.3 plus a *file replacement* (same logical track, new physical
+  file — e.g. a remux or a quality upgrade).
+- **Protocol-neutral:** any protocol that addresses individual audio files needs this, so it belongs in the
+  shared foundation, not the ABS DTO layer.
 
 ### 4.3 Tests (mandatory, Phase 2)
-Rename a file, move a file (tagged and untagged), retag a file, and merge two books — assert the `absID`
+Rename a file, move a file (tagged and untagged), retag a file, and merge two books — assert the `syncID`
 and the associated progress/bookmarks survive each operation. This is the acceptance bar for Phase 2.
 
 ## 5. LOCKED cross-cutting decision — Progress conflict resolution
@@ -473,7 +490,7 @@ order, all served by one origin build:
 
 - The entire ABS surface is gated behind a feature flag (`ABS_API_ENABLED`, default **off**) and its own
   router group. Disabling the flag removes all ABS routes; the existing app is untouched.
-- New keyspaces (`abs_sess:`, `abs_item:`, chapters, bookmarks) are additive; no destructive migration
+- New keyspaces (`abs_sess:`, `sync_item:`, chapters, bookmarks) are additive; no destructive migration
   of existing data. A backfill op is idempotent and re-runnable.
 - Each phase is an independently revertable PR. The service-token topology is a Cloudflare-side config
   change, revertable independently of the binary.
