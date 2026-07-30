@@ -1,5 +1,5 @@
 <!-- file: docs/specs/2026-07-29-abs-sync-api-design.md -->
-<!-- version: 3.2.0 -->
+<!-- version: 4.0.0 -->
 <!-- guid: 0869d58c-b186-45cb-9915-64bd18eaa45f -->
 <!-- last-edited: 2026-07-29 -->
 
@@ -61,6 +61,74 @@ Verified against `main` @ `79531338` (see the architecture briefing that seeded 
   `AUDIOBOOK_ORGANIZER_ID` tag), but a plain move/rename of an **untagged** file mints a **new ULID**
   (version-linked), and a dedup **merge** changes the surviving ULID. This is the highest-risk area
   (§4).
+
+## 1.5 Protocol decision — CONFIRMED after survey (2026-07-29)
+
+The ABS choice was inherited from the original brief without a survey. A full protocol survey plus an iOS
+client-landscape survey were run to challenge it. **ABS is confirmed**, and the reasoning is now evidenced:
+
+| Protocol | Good, actively-maintained iOS audiobook clients | Fatal gaps |
+|---|---|---|
+| **Audiobookshelf** | **~8 on the App Store, 6 supporting custom headers** | none for our priorities |
+| Jellyfin | ~1–2 | no multi-file timeline ([meta#71](https://github.com/jellyfin/jellyfin-meta/issues/71)), no bookmarks, `Narrator` absent from `PersonKind` in every *released* version; the `books`-library-gating **Bookshelf plugin was archived 2026-06-30**; v12 removes 22 endpoints |
+| Emby | 1 | same lineage, closed-source server, unauditable drift |
+| OpenSubsonic | ~6 clients, **0 good** | **structural**: schema is Artist→Album→Song so a 30-chapter m4b is ONE song; no chapter model; `createBookmark` is one-per-file-overwrite; no series/narrator |
+| Plex | 1 | **infeasible** — every endpoint needs a plex.tv-minted token; impersonating PMS means impersonating plex.tv |
+| OPDS 2.0 / Readium | **0** | best data model in the survey, zero iOS clients |
+
+Decisive points: ABS is the **common denominator of every multi-protocol client** (Prologue = Plex+ABS,
+Plappa = ABS+Jellyfin+Emby), so implementing it subsumes the alternatives. And **offline reconcile is the
+quiet decider** — ABS is the only candidate with a bulk offline-session replay path
+(`/api/session/local`, `/api/session/local-all`); Subsonic's `savePlayQueue` is a single position and
+Jellyfin/Plex have nothing. That is acceptance criterion 7.
+
+**Jellyfin is the clearest "no":** same implementation cost as ABS for strictly worse audiobook fidelity,
+on the eve of a breaking major version.
+
+**Accepted risk — ABS has the worst spec hygiene of any candidate.** api.audiobookshelf.org states
+verbatim that its docs are "out-of-date and are no longer maintained"; there is no OpenAPI spec, no
+versioning, and no deprecation policy, and ABS itself warns third-party apps use endpoints that are "not
+recommended anymore." Mitigation (already largely in place): pin a tested server version (§6 oracle),
+keep golden fixtures so a client-breaking change fails a test rather than a commute, and derive the
+endpoint contract from **open-source client source** rather than docs (§1.6).
+
+**Deferred, not rejected:** a **podcast-RSS façade** (~300–500 LOC once chapters + Range exist) would open
+the entire iOS podcast-app universe as a read-only "listen anywhere" fallback. Good ROI *after* ABS ships;
+it cannot replace ABS (no progress sync, no series ordering). A Readium/OPDS-2.0 audiobook manifest is
+near-free once chapters + cumulative offsets exist and is worth emitting for interop, but has zero clients.
+
+## 1.6 Client-compatibility hard requirements (from client source + a working shim)
+
+Sourced from [`jowtron/abs-shim`](https://github.com/jowtron/abs-shim) — an ABS-compatible shim verified
+working against ShelfPlayer, Plappa, Pholia and the ABS web UI — and being re-verified against
+**AudioBooth** (MPL-2.0) and **Absorb** (GPL-3.0) source. **Several of these override earlier decisions in
+this spec.** Items marked ⚠️ are pending independent confirmation by the client-source audit.
+
+1. **⚠️ Long-lived access tokens are required.** Many clients (reportedly Plappa and the official iOS app)
+   **do not implement refresh tokens at all**. A 1-hour access token as specified in §3.2 would log those
+   clients out hourly. **Correction to §3.2:** default access-token TTL must be long
+   (`ABS_ACCESS_TOKEN_TTL` default **30d**, not 1h), with refresh rotation offered but never *required*.
+   Mode C (§3.0.1) is unaffected — CF-backed identity needs no client-side token lifecycle at all.
+2. **⚠️ The cover endpoint must work unauthenticated.** Some clients do not attach credentials to image
+   requests. Serve covers without requiring the app bearer (the Cloudflare edge still gates them in
+   Modes B/C, so this is not a public exposure).
+3. **⚠️ `userMediaProgress` must be returned inline even when `?include=progress` is absent.** Stock ABS
+   gates it; Plappa and the web UI ignore the gate.
+4. **⚠️ Strict decoders fail the ENTIRE payload on one wrong type.** ShelfPlayer's Swift `Codable` is
+   reported to reject a whole response over a single bad field — so type fidelity is not cosmetic.
+   Specifically: **`publishedYear` must be a String, not a number.**
+5. **⚠️ `tracks[]` entries require `startOffset`, `duration`, `contentUrl`, `mimeType`, and
+   `metadata.ext` ALL non-null**, and an **empty `tracks` array makes clients treat the item as notFound
+   and go offline.** Never emit an empty tracks array for a playable item.
+6. **CORS preflight must allow the `Range` header** for cross-origin fetches.
+7. **404s under `/api/` must be JSON, not the SPA `index.html`.** Already covered by §1's `NoRoute`
+   finding — this independently corroborates it.
+8. **⚠️ Tolerate stale offline session backlogs.** Clients replay queued offline sessions that may carry
+   item IDs from a *different or previous server*. The server must ignore unknown IDs, never error.
+9. **iOS `AVPlayer` issues tail Range requests** to locate `moov` in m4b files where it sits after `mdat`,
+   so suffix ranges (`bytes=-N`) must be correct — prefix-only Range support silently breaks playback.
+   ✅ **Already verified** in `internal/httputil`: a suffix range on the real 115 MB m4b returns the true
+   last bytes with correct `Content-Range`.
 
 ## 2. Non-negotiable constraints
 
@@ -245,7 +313,7 @@ when the request carries header `x-return-tokens: true`, the response body **als
 ### 3.2 Tokens
 - **Access token = signed JWT.** Claims `{sub: userID, sid: sessionID, iat, exp}`, HMAC-signed with
   `ABS_JWT_SECRET`. Real ABS access tokens are JWTs and some clients read `exp`; we mint real JWTs so
-  those clients behave. Default TTL **1h** (`ABS_ACCESS_TOKEN_TTL`).
+  those clients behave. Default TTL **30d** (`ABS_ACCESS_TOKEN_TTL`) — NOT 1h; see §1.6 item 1: many clients implement no refresh at all and would be logged out hourly.
 - **Refresh token = opaque**, `abr_` + base64url(32 random bytes). Only its SHA-256 hash is persisted.
   Default TTL **30d** (`ABS_REFRESH_TOKEN_TTL`).
 - **`ABS_JWT_SECRET`** is read from env and is **required** when the ABS API is enabled; the server
