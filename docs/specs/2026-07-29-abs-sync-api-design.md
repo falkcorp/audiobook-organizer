@@ -1,5 +1,5 @@
 <!-- file: docs/specs/2026-07-29-abs-sync-api-design.md -->
-<!-- version: 2.3.0 -->
+<!-- version: 2.4.0 -->
 <!-- guid: 0869d58c-b186-45cb-9915-64bd18eaa45f -->
 <!-- last-edited: 2026-07-29 -->
 
@@ -88,8 +88,25 @@ no on-phone VPN client, no public endpoints, Access guarding everything. Its onl
 that sends user-supplied custom headers on **every** request — including audio streaming, which on iOS
 often bypasses the app's normal networking layer (`AVURLAsset` needs
 `AVURLAssetHTTPHeaderFieldsKey`, background `URLSession` download tasks need their own header injection).
-**Phase 0 must verify the streaming/download path specifically**, not just the JSON API: if headers are
-missing there, the API would authenticate while playback fails at the edge.
+
+**RESOLVED 2026-07-29 — Mode B is GO.** Source-verified in ShelfPlayer: headers are attached on every path
+including the `AVURLAsset` streaming site and background download tasks. Plappa attaches them too
+(evidenced via proxy logs + maintainer statements; closed-source, so not source-verified), with a
+**≥ 1.5.5 version floor** for the `/status` fix and a hard constraint that Plappa **cannot** use the
+single-header (`Authorization`) service-token form. Full evidence, the ShelfPlayer supply-chain caveat, and
+the Cloudflare policy-ordering trap: [`docs/reference/abs-client-network-audit.md`](../reference/abs-client-network-audit.md).
+
+**Owner decisions (2026-07-29):**
+1. **Build Mode B now, keep Mode C as a config switch.** §3.1–3.5 ARE built. The origin accepts either
+   credential, so Mode C stays a configuration-only fallback — flippable if the JWT path misbehaves or if
+   iOS ever stops honoring the undocumented `AVURLAssetHTTPHeaderFieldsKey`.
+2. **Target both clients, prefer Plappa** (actively maintained by its original developer; ShelfPlayer was
+   archived/sold and is no longer auditable past 3.3.0). The server implements the ABS spec and is
+   client-agnostic; both appear in the compatibility matrix and both are tested.
+
+**Carried into §3.6:** ShelfPlayer's 401-retry/refresh loop is known to trip fail2ban behind nginx, so our
+`/login` and `/auth/refresh` rate limits and lockout must tolerate a legitimate client's refresh retries
+without locking out a real user.
 
 Additional Cloudflare facts verified 2026-07-29 (more ways in than first credited):
 - A self-hosted Access app can be configured to accept a service token in a **single HTTP header**, as an
