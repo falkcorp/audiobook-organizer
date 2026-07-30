@@ -1,0 +1,57 @@
+{
+  "request": {
+    "body": null,
+    "method": "GET",
+    "path": "/api/me/sessions"
+  },
+  "response": {
+    "body": {
+      "itemsPerPage": 10,
+      "numPages": 1,
+      "page": 0,
+      "sessions": [
+        {
+          "createdAt": 1785370430122,
+          "current": true,
+          "deviceInfo": {
+            "deviceType": "wearable",
+            "model": "quest",
+            "vendor": "Facebook"
+          },
+          "id": "f262c3e8-8646-4ea3-8387-1aa74b4803a5",
+          "ipAddress": "::ffff:192.168.65.1",
+          "updatedAt": 1785370430130,
+          "userAgent": "python-requests/2.34.2"
+        },
+        {
+          "createdAt": 1785370279180,
+          "current": false,
+          "deviceInfo": {
+            "deviceType": "wearable",
+            "model": "quest",
+            "vendor": "Facebook"
+          },
+          "id": "e4eaa6d0-9350-4f31-9e8b-191f7f7f8acf",
+          "ipAddress": "::ffff:192.168.65.1",
+          "updatedAt": 1785370279188,
+          "userAgent": "python-requests/2.34.2"
+        },
+        {
+          "createdAt": 1785370143010,
+          "current": false,
+          "deviceInfo": null,
+          "id": "bcaeb17f-6f32-4b45-8c7e-43c1a766ee37",
+          "ipAddress": "::ffff:192.168.65.1",
+          "updatedAt": 1785370143010,
+          "userAgent": "curl/8.7.1"
+        }
+      ],
+      "total": 3
+    },
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "etag": "W/\"306-xS9b0T7DtvceQLUiTl7EGeJHZao\""
+    },
+    "status": 200
+  }
+}

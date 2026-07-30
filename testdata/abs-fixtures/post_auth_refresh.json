@@ -1,0 +1,127 @@
+{
+  "request": {
+    "body": null,
+    "method": "POST",
+    "path": "/auth/refresh"
+  },
+  "response": {
+    "body": {
+      "Source": "docker",
+      "ereaderDevices": [],
+      "serverSettings": {
+        "allowIframe": false,
+        "allowedOrigins": [],
+        "authActiveAuthMethods": [
+          "local"
+        ],
+        "authLoginCustomMessage": null,
+        "authOpenIDAuthorizationURL": null,
+        "authOpenIDAutoLaunch": false,
+        "authOpenIDAutoRegister": false,
+        "authOpenIDButtonText": "Login with OpenId",
+        "authOpenIDIssuerURL": null,
+        "authOpenIDJwksURL": null,
+        "authOpenIDLogoutURL": null,
+        "authOpenIDMatchExistingBy": null,
+        "authOpenIDTokenSigningAlgorithm": "RS256",
+        "authOpenIDTokenURL": null,
+        "authOpenIDUserInfoURL": null,
+        "backupPath": "/metadata/backups",
+        "backupSchedule": false,
+        "backupsToKeep": 2,
+        "bookshelfView": 1,
+        "buildNumber": 1,
+        "chromecastEnabled": false,
+        "dateFormat": "MM/dd/yyyy",
+        "homeBookshelfView": 1,
+        "id": "server-settings",
+        "language": "en-us",
+        "logLevel": 2,
+        "loggerDailyLogsToKeep": 7,
+        "loggerScannerLogsToKeep": 2,
+        "maxBackupSize": 1,
+        "metadataFileFormat": "json",
+        "podcastEpisodeSchedule": "0 * * * *",
+        "rateLimitLoginRequests": 10,
+        "rateLimitLoginWindow": 600000,
+        "scannerCoverProvider": "google",
+        "scannerDisableWatcher": false,
+        "scannerFindCovers": false,
+        "scannerParseSubtitle": false,
+        "scannerPreferMatchedMetadata": false,
+        "sortingIgnorePrefix": false,
+        "sortingPrefixes": [
+          "the",
+          "a"
+        ],
+        "storeCoverWithItem": false,
+        "storeMetadataWithItem": false,
+        "timeFormat": "HH:mm",
+        "timeZone": "UTC",
+        "version": "2.36.0"
+      },
+      "user": {
+        "accessToken": "<redacted>",
+        "bookmarks": [
+          {
+            "createdAt": 1785370279374,
+            "libraryItemId": "68929fc9-e296-4d25-b3aa-1c2930efd00d",
+            "time": 100,
+            "title": "conformance bookmark"
+          }
+        ],
+        "createdAt": 1785370133398,
+        "email": null,
+        "hasOpenIDLink": false,
+        "id": "e1c3fe66-990b-44f0-8ed6-2bf73cc8cd86",
+        "isActive": true,
+        "isLocked": false,
+        "itemTagsSelected": [],
+        "lastSeen": null,
+        "librariesAccessible": [],
+        "mediaProgress": [
+          {
+            "currentTime": 42,
+            "duration": 9975.48,
+            "ebookLocation": null,
+            "ebookProgress": 0,
+            "episodeId": null,
+            "finishedAt": null,
+            "hideFromContinueListening": false,
+            "id": "537554d4-87c4-420e-ad67-256cf29d8f86",
+            "isFinished": false,
+            "lastUpdate": 1785370279366,
+            "libraryItemId": "68929fc9-e296-4d25-b3aa-1c2930efd00d",
+            "mediaItemId": "a0b6c2b4-1c38-494c-b793-ce131d283855",
+            "mediaItemType": "book",
+            "progress": 0.0012530786750876493,
+            "startedAt": 1785370279345,
+            "userId": "e1c3fe66-990b-44f0-8ed6-2bf73cc8cd86"
+          }
+        ],
+        "permissions": {
+          "accessAllLibraries": true,
+          "accessAllTags": true,
+          "accessExplicitContent": true,
+          "createEreader": true,
+          "delete": true,
+          "download": true,
+          "selectedTagsNotAccessible": false,
+          "update": true,
+          "upload": true
+        },
+        "refreshToken": "<redacted>",
+        "seriesHideFromContinueListening": [],
+        "token": "<redacted>",
+        "type": "root",
+        "username": "oracle"
+      },
+      "userDefaultLibraryId": "b5e3a5b2-a76e-471f-b18b-915e4716d053"
+    },
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "etag": "W/\"cd8-s+R/ybRBsR3wv3Wak9v7Hwrmb6k\""
+    },
+    "status": 200
+  }
+}

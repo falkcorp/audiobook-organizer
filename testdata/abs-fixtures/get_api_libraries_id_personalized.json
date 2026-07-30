@@ -1,0 +1,278 @@
+{
+  "request": {
+    "body": null,
+    "method": "GET",
+    "path": "/api/libraries/b5e3a5b2-a76e-471f-b18b-915e4716d053/personalized"
+  },
+  "response": {
+    "body": [
+      {
+        "entities": [
+          {
+            "addedAt": 1785370201438,
+            "birthtimeMs": 1785370076436,
+            "ctimeMs": 1785370076528,
+            "folderId": "60f59687-05cd-4225-87a4-38ec8f4fc232",
+            "id": "68929fc9-e296-4d25-b3aa-1c2930efd00d",
+            "ino": "12",
+            "isFile": false,
+            "isInvalid": false,
+            "isMissing": false,
+            "libraryId": "b5e3a5b2-a76e-471f-b18b-915e4716d053",
+            "media": {
+              "coverPath": null,
+              "duration": 9975.431111000002,
+              "id": "a0b6c2b4-1c38-494c-b793-ce131d283855",
+              "metadata": {
+                "abridged": false,
+                "asin": null,
+                "authorName": "transl. Samuel Butler Homer",
+                "authorNameLF": "Homer, transl. Samuel Butler",
+                "description": "http://archive.org/details/odyssey_butler_librivox",
+                "explicit": false,
+                "genres": [
+                  "Speech"
+                ],
+                "isbn": null,
+                "language": null,
+                "narratorName": "",
+                "publishedDate": null,
+                "publishedYear": null,
+                "publisher": null,
+                "seriesName": "",
+                "subtitle": null,
+                "title": "The Odyssey",
+                "titleIgnorePrefix": "Odyssey, The"
+              },
+              "numAudioFiles": 6,
+              "numChapters": 6,
+              "numTracks": 6,
+              "size": 79811263,
+              "tags": []
+            },
+            "mediaType": "book",
+            "mtimeMs": 1785370076528,
+            "numFiles": 6,
+            "oldLibraryItemId": null,
+            "path": "/audiobooks/Homer/The Odyssey",
+            "relPath": "Homer/The Odyssey",
+            "size": 79811263,
+            "updatedAt": 1785370201438
+          }
+        ],
+        "id": "continue-listening",
+        "label": "Continue Listening",
+        "labelStringKey": "LabelContinueListening",
+        "total": 1,
+        "type": "book"
+      },
+      {
+        "entities": [
+          {
+            "addedAt": 1785370201438,
+            "birthtimeMs": 1785370076436,
+            "ctimeMs": 1785370076528,
+            "folderId": "60f59687-05cd-4225-87a4-38ec8f4fc232",
+            "id": "68929fc9-e296-4d25-b3aa-1c2930efd00d",
+            "ino": "12",
+            "isFile": false,
+            "isInvalid": false,
+            "isMissing": false,
+            "libraryId": "b5e3a5b2-a76e-471f-b18b-915e4716d053",
+            "media": {
+              "coverPath": null,
+              "duration": 9975.431111000002,
+              "id": "a0b6c2b4-1c38-494c-b793-ce131d283855",
+              "metadata": {
+                "abridged": false,
+                "asin": null,
+                "authorName": "transl. Samuel Butler Homer",
+                "authorNameLF": "Homer, transl. Samuel Butler",
+                "description": "http://archive.org/details/odyssey_butler_librivox",
+                "explicit": false,
+                "genres": [
+                  "Speech"
+                ],
+                "isbn": null,
+                "language": null,
+                "narratorName": "",
+                "publishedDate": null,
+                "publishedYear": null,
+                "publisher": null,
+                "seriesName": "",
+                "subtitle": null,
+                "title": "The Odyssey",
+                "titleIgnorePrefix": "Odyssey, The"
+              },
+              "numAudioFiles": 6,
+              "numChapters": 6,
+              "numTracks": 6,
+              "size": 79811263,
+              "tags": []
+            },
+            "mediaType": "book",
+            "mtimeMs": 1785370076528,
+            "numFiles": 6,
+            "oldLibraryItemId": null,
+            "path": "/audiobooks/Homer/The Odyssey",
+            "relPath": "Homer/The Odyssey",
+            "size": 79811263,
+            "updatedAt": 1785370201438
+          },
+          {
+            "addedAt": 1785370201391,
+            "birthtimeMs": 1785370076436,
+            "ctimeMs": 1785370076542,
+            "folderId": "60f59687-05cd-4225-87a4-38ec8f4fc232",
+            "id": "e41e6459-821e-4460-aaf6-f78a270f605e",
+            "ino": "11",
+            "isFile": false,
+            "isInvalid": false,
+            "isMissing": false,
+            "libraryId": "b5e3a5b2-a76e-471f-b18b-915e4716d053",
+            "media": {
+              "coverPath": null,
+              "duration": 9975.480544,
+              "id": "f8161816-cc79-4988-a619-0d3cacd40bb9",
+              "metadata": {
+                "abridged": false,
+                "asin": null,
+                "authorName": "Homer",
+                "authorNameLF": "Homer",
+                "description": null,
+                "explicit": false,
+                "genres": [
+                  "Audiobook"
+                ],
+                "isbn": null,
+                "language": null,
+                "narratorName": "",
+                "publishedDate": null,
+                "publishedYear": "800BC",
+                "publisher": null,
+                "seriesName": "",
+                "subtitle": null,
+                "title": "The Odyssey",
+                "titleIgnorePrefix": "Odyssey, The"
+              },
+              "numAudioFiles": 1,
+              "numChapters": 6,
+              "numTracks": 1,
+              "size": 120828875,
+              "tags": []
+            },
+            "mediaType": "book",
+            "mtimeMs": 1785370076542,
+            "numFiles": 1,
+            "oldLibraryItemId": null,
+            "path": "/audiobooks/Homer/The Odyssey (Single File)",
+            "relPath": "Homer/The Odyssey (Single File)",
+            "size": 120828875,
+            "updatedAt": 1785370201391
+          }
+        ],
+        "id": "recently-added",
+        "label": "Recently Added",
+        "labelStringKey": "LabelRecentlyAdded",
+        "total": 2,
+        "type": "book"
+      },
+      {
+        "entities": [
+          {
+            "addedAt": 1785370201391,
+            "birthtimeMs": 1785370076436,
+            "ctimeMs": 1785370076542,
+            "folderId": "60f59687-05cd-4225-87a4-38ec8f4fc232",
+            "id": "e41e6459-821e-4460-aaf6-f78a270f605e",
+            "ino": "11",
+            "isFile": false,
+            "isInvalid": false,
+            "isMissing": false,
+            "libraryId": "b5e3a5b2-a76e-471f-b18b-915e4716d053",
+            "media": {
+              "coverPath": null,
+              "duration": 9975.480544,
+              "id": "f8161816-cc79-4988-a619-0d3cacd40bb9",
+              "metadata": {
+                "abridged": false,
+                "asin": null,
+                "authorName": "Homer",
+                "authorNameLF": "Homer",
+                "description": null,
+                "explicit": false,
+                "genres": [
+                  "Audiobook"
+                ],
+                "isbn": null,
+                "language": null,
+                "narratorName": "",
+                "publishedDate": null,
+                "publishedYear": "800BC",
+                "publisher": null,
+                "seriesName": "",
+                "subtitle": null,
+                "title": "The Odyssey",
+                "titleIgnorePrefix": "Odyssey, The"
+              },
+              "numAudioFiles": 1,
+              "numChapters": 6,
+              "numTracks": 1,
+              "size": 120828875,
+              "tags": []
+            },
+            "mediaType": "book",
+            "mtimeMs": 1785370076542,
+            "numFiles": 1,
+            "oldLibraryItemId": null,
+            "path": "/audiobooks/Homer/The Odyssey (Single File)",
+            "relPath": "Homer/The Odyssey (Single File)",
+            "size": 120828875,
+            "updatedAt": 1785370201391
+          }
+        ],
+        "id": "discover",
+        "label": "Discover",
+        "labelStringKey": "LabelDiscover",
+        "total": 1,
+        "type": "book"
+      },
+      {
+        "entities": [
+          {
+            "addedAt": 1785370201443,
+            "asin": null,
+            "description": null,
+            "id": "5d48ba82-7e75-49bd-8208-5e3f36e07a60",
+            "imagePath": null,
+            "libraryId": "b5e3a5b2-a76e-471f-b18b-915e4716d053",
+            "name": "transl. Samuel Butler Homer",
+            "numBooks": 1,
+            "updatedAt": 1785370201443
+          },
+          {
+            "addedAt": 1785370201398,
+            "asin": null,
+            "description": null,
+            "id": "4c8fe05a-b38b-4e1f-9846-9b9ea23b8073",
+            "imagePath": null,
+            "libraryId": "b5e3a5b2-a76e-471f-b18b-915e4716d053",
+            "name": "Homer",
+            "numBooks": 1,
+            "updatedAt": 1785370201398
+          }
+        ],
+        "id": "newest-authors",
+        "label": "Newest Authors",
+        "labelStringKey": "LabelNewestAuthors",
+        "total": 2,
+        "type": "authors"
+      }
+    ],
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "etag": "W/\"1421-KIb4nRtDCgU9N7Ewp5Kx8Jw+U/E\""
+    },
+    "status": 200
+  }
+}

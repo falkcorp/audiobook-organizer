@@ -1,0 +1,42 @@
+{
+  "request": {
+    "body": null,
+    "method": "GET",
+    "path": "/api/libraries/b5e3a5b2-a76e-471f-b18b-915e4716d053/authors"
+  },
+  "response": {
+    "body": {
+      "authors": [
+        {
+          "addedAt": 1785370201398,
+          "asin": null,
+          "description": null,
+          "id": "4c8fe05a-b38b-4e1f-9846-9b9ea23b8073",
+          "imagePath": null,
+          "lastFirst": "Homer",
+          "libraryId": "b5e3a5b2-a76e-471f-b18b-915e4716d053",
+          "name": "Homer",
+          "numBooks": 1,
+          "updatedAt": 1785370201398
+        },
+        {
+          "addedAt": 1785370201443,
+          "asin": null,
+          "description": null,
+          "id": "5d48ba82-7e75-49bd-8208-5e3f36e07a60",
+          "imagePath": null,
+          "lastFirst": "Homer, transl. Samuel Butler",
+          "libraryId": "b5e3a5b2-a76e-471f-b18b-915e4716d053",
+          "name": "transl. Samuel Butler Homer",
+          "numBooks": 1,
+          "updatedAt": 1785370201443
+        }
+      ]
+    },
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "etag": "W/\"220-z8U18xnPalb+QvSN8B7U0nmwRDA\""
+    },
+    "status": 200
+  }
+}

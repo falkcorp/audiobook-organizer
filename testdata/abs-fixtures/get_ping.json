@@ -1,0 +1,17 @@
+{
+  "request": {
+    "body": null,
+    "method": "GET",
+    "path": "/ping"
+  },
+  "response": {
+    "body": {
+      "success": true
+    },
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "etag": "W/\"10-oV4hJxRVSENxc/wX8+mA4/Pe4tA\""
+    },
+    "status": 200
+  }
+}

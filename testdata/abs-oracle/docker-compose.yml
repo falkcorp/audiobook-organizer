@@ -1,0 +1,27 @@
+# file: testdata/abs-oracle/docker-compose.yml
+# version: 1.0.0
+# guid: 9d4b7f01-2c6a-4e38-b5d9-1f8a06c47e3b
+# last-edited: 2026-07-29
+#
+# Reference-oracle Audiobookshelf server. This is the ONLY trustworthy spec for
+# the ABS API (the published docs at api.audiobookshelf.org are stale), so the
+# version is pinned deliberately -- do not float this tag. A version bump
+# invalidates every captured fixture.
+
+services:
+  abs-oracle:
+    image: ghcr.io/advplyr/audiobookshelf:2.36.0
+    container_name: abs-oracle
+    ports:
+      - "13378:80"
+    volumes:
+      - ./library:/audiobooks:ro
+      - abs-oracle-config:/config
+      - abs-oracle-metadata:/metadata
+    environment:
+      - TZ=UTC
+    restart: "no"
+
+volumes:
+  abs-oracle-config:
+  abs-oracle-metadata:
