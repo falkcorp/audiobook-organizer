@@ -1,5 +1,5 @@
 <!-- file: docs/specs/2026-07-29-abs-sync-api-design.md -->
-<!-- version: 4.0.0 -->
+<!-- version: 5.0.0 -->
 <!-- guid: 0869d58c-b186-45cb-9915-64bd18eaa45f -->
 <!-- last-edited: 2026-07-29 -->
 
@@ -129,6 +129,92 @@ this spec.** Items marked ⚠️ are pending independent confirmation by the cli
    so suffix ranges (`bytes=-N`) must be correct — prefix-only Range support silently breaks playback.
    ✅ **Already verified** in `internal/httputil`: a suffix range on the real 115 MB m4b returns the true
    last bytes with correct `Content-Range`.
+
+## 1.7 VERIFIED client contract — Absorb source audit (2026-07-29)
+
+Audited **Absorb** (GPL-3.0, Flutter) source directly. This **supersedes the ⚠️ items in §1.6** where they
+conflict. Every claim below carries a `file:line` citation in the audit record. AudioBooth's audit is
+pending; where the two disagree, implement the superset.
+
+### 🔴 1.7.1 BREAKING — `libraryItem.id` must be a 36-char UUID, NOT our 26-char ULID
+
+Absorb splits compound podcast keys by **fixed offset**: `substring(0, 36)` / `substring(37)`
+(`api_service.dart:1521-1523`, repeated at `:1651-1653`, `:1728-1733`,
+`progress_sync_service.dart:277-279`, `:564-566`, `_lp_state.dart:355-356`, `_lp_core.dart:657`).
+
+- An id **shorter** than 36 chars (our ULIDs are **26**) breaks episode splitting.
+- An id **longer** than 36 chars is mistaken for a compound key and truncated → wrong
+  `/api/me/progress/...` path.
+
+**Consequence for §4:** the `sync_item` id exposed as `libraryItemId` **MUST be minted as a 36-char
+UUID** (canonical hyphenated form). Do **not** expose the Book ULID. `library.id` must also be a JSON
+string or Absorb's library selection throws and **no library is ever selected — the app is dead**
+(`library_provider.dart:301-303`).
+
+### 1.7.2 Corrections to §1.6
+
+| §1.6 claim | Verified reality |
+|---|---|
+| "many clients have no refresh token" | **Refuted for Absorb** — fully implemented (`api_service.dart:282-390`). BUT omitting `refreshToken` sets `isLegacy` and disables refresh permanently (`auth_tokens.dart:9`) → then a long-lived token is required. **Support both:** issue refresh tokens, and keep access-token TTL generous. |
+| "cover endpoint must be unauthenticated" | **Wrong mechanism.** It must accept **`?token=` query-param auth** on covers, author images, and file URLs (`api_service.dart:735`, `:1060`, `:1397`; `carplay_service.dart:568-584`). §3.1's "token query param on GETs" already covers this — make it mandatory, not optional. |
+| "`userMediaProgress` inline" | **Refuted** — zero occurrences in Absorb. The field it reads is `user.mediaProgress` (array). Still emit `userMediaProgress` for other clients; not required by Absorb. |
+| "`tracks[].startOffset` required non-null" | **Refuted for Absorb** — never read; it derives offsets by summing `duration` (`audio_player_service.dart:2002-2012`). Keep emitting it (ShelfPlayer/shim require it) but Absorb needs correct per-track `duration` above all. |
+| "`metadata.ext` required" | **Refuted** — never read from server payloads. |
+| "CORS must allow Range", "JSON 404 bodies" | **Irrelevant for Absorb** (no web target; non-200 bodies are never decoded). Keep both anyway for the web UI and other clients. |
+| "`publishedYear` must be a String" | **CONFIRMED and worse.** In Dart `as String?` on a number **throws** rather than yielding null, and the cast is inside a widget `build()` (`book_detail_sheet.dart:494`) → a numeric `publishedYear` **red-screens the book detail sheet**. Also breaks the edit-metadata and metadata-lookup sheets. |
+
+### 1.7.3 NEW hard requirements
+
+1. **`lastUpdate` (ms epoch) on every progress object is the single highest-value field.** Omit it and
+   **the server permanently loses every conflict** — the client compares it against its own wall clock
+   (`sync_logic.dart:84`, `progress_sync_service.dart:234` vs `:62`). **Feeds directly into §5:** our merge
+   policy must emit `lastUpdate` on every progress payload, in ms, same epoch.
+2. **`/api/session/local-all` must return 200 and silently ignore unknown item IDs.** A 4xx **wedges the
+   offline replay queue forever** (`api_service.dart:1476-1479`, `local_session_service.dart:325`). This is
+   acceptance criterion 7 and confirms §1.6 item 8.
+3. **`/auth/refresh` must return 401/403 ONLY for a genuinely dead refresh token.** That alone forces
+   logout; a 5xx or timeout must preserve the session (`api_service.dart:359-368`, `:307-309`).
+4. **`contentUrl` must be exactly `.../api/items/{itemId}/file/{ino}` with `{ino}` as the FINAL segment**,
+   same-origin with the configured base. Enforced by `segment + 5 != segments.length`; a mismatch throws
+   *"belongs to a different library item"* and **fails the entire download**
+   (`download_service.dart:1629-1660`). Session-scoped or transcode URLs break downloads.
+5. **Emit integers (never floats) for `total`, `numBooks`, `numEpisodes`, `numEpisodesIncomplete`,
+   `numAudioFiles`, `trackCount`, and all ms-epoch timestamps.** Dart throws on `42.0 as int?`, and
+   `numBooks` is cast during widget build → red-screens series/author tiles
+   (`library_screen.dart:1506-1507`, `library_grid_tiles.dart:441`). Durations/positions may be int or float.
+6. **Booleans must be real JSON booleans.** `0`/`1` is not a crash but silently reads as **false** in Dart
+   (`_lp_state.dart:163`) — affects `isFinished`, `explicit`, and all permission flags.
+7. **Minified list responses must carry non-zero `media.duration` for audiobooks.** If `duration <= 0`
+   *and* `audioFiles`/`tracks`/`numAudioFiles` are empty-or-zero, Absorb classes the item ebook-only and
+   **the play button disappears** (`player_settings.dart:895-909`).
+8. **Items expose flat `metadata.authorName` / `metadata.narratorName` strings** — the
+   `authors[]`/`narrators[]` object arrays are **never read on items** (`library_grid_tiles.dart:61`,
+   `book_detail_sheet.dart:481`). Objects are only needed in `filterdata.authors`;
+   `filterdata.narrators` is an array of **plain name strings** (`api_service.dart:1126-1136`).
+   Emit both forms (ABS does), but the flat strings are the required ones.
+9. **`series[].sequence` may be int or string** — Absorb stringifies before parsing
+   (`_lp_state.dart:305`) — and `media.metadata.series` may be an array **or** a single object.
+10. **Never 404 an endpoint you actually implement.** Absorb treats **404 as "unsupported, degrade
+    gracefully"** at exactly 7 endpoints (`api_service.dart:789`, `:812`, `:833`, `:906`, `:1453`,
+    `:1478`, `:1944`) — so 404 is the *correct* response for what we don't implement, and a
+    misapplied 404 silently disables a working feature.
+11. **HTTP 200 with an HTML body is harmful** (the 200 guard passes, then the JSON cast fails);
+    non-200 bodies are never parsed, so error pages are otherwise harmless. Reinforces §1's `NoRoute`
+    finding.
+12. **Socket.io cannot be stubbed away:** Absorb expects `emit('auth', <raw token string>)`
+    (`socket_service.dart:271-275`), and **5 failed reconnects force the app offline**
+    (`socket_service.dart:408-413` → `_lp_core.dart:1170-1173`). Confirms Phase 7 is required, not cosmetic.
+13. **Cadences to design for:** `/ping` polled every **20 s offline / 60 s online**
+    (`_lp_core.dart:906`, `:1043`); session `/sync` every **15 s foreground / 60 s background**
+    (`audio_player_service.dart:4111`). Rate limits (§3.6) must accommodate these.
+14. **`/ping` must be 200 without auth** — it gates the whole online/offline state machine
+    (`api_service.dart:525-536`).
+
+### 1.7.4 Safe to stub (return `[]`/`{}`/404)
+Playlists, collections, series, authors, tasks, sessions/listening-sessions, all stats endpoints, users,
+backups, search/match/tools/upload/filesystem, api-keys, emails. **Cheapest win:** return
+`user.type: "user"` and Absorb hides the **entire** admin UI (`auth_provider.dart:87-91`). Return 404 for
+all `/api/podcasts*` — never called if no library has `mediaType: "podcast"`.
 
 ## 2. Non-negotiable constraints
 
@@ -373,7 +459,7 @@ untagged move) would silently orphan a device's place. The ID must be decoupled 
 
 ### 4.2 Model
 - New keyspace `sync_item:<syncID>` → `{currentBookID (ULID), createdAt, mergedFrom []syncID}` where
-  `syncID` is a freshly minted ULID that is **never reused and never changes** for the life of the item.
+  `syncID` is a freshly minted **36-char UUID** (NOT a ULID -- see §1.7.1: Absorb splits ids by fixed offset `substring(0,36)`, so a 26-char ULID breaks it) that is **never reused and never changes** for the life of the item.
 - Reverse index `sync_item:book:<bookID>` → `syncID` for O(1) lookup from a Book to its sync item ID.
 - **Assignment:** when the ABS layer first encounters a Book without an `sync_item:book:` entry, it mints
   an `syncID` and writes both records. (A backfill op assigns IDs to the existing library — worker pool.)
