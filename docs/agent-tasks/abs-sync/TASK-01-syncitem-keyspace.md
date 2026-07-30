@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/abs-sync/TASK-01-syncitem-keyspace.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 91f5eddf-74aa-4681-b720-5da23f785e02 -->
 <!-- last-edited: 2026-07-30 -->
 
@@ -8,7 +8,7 @@
 **Priority:** P0 · **Effort:** M · **Recommended subagent:** Sonnet-class go-backend subagent · **Why:** new keyspace + store methods, no existing call site to wire up yet — pure additive Pebble work with a clear test surface · **Depends on:** none (Wave 1)
 
 **Gate:** PLAN -> EXECUTE AUTONOMOUSLY (worktree/PR/CI). This is additive-only (new file, new keys); nothing reads or writes these keys yet, so there is no way for this PR to change existing behavior.
-**File-ownership:** owns `internal/database/pebble_store_syncid.go` (+ `_test.go`) exclusively — this is a Wave-1 file no other task touches. **Do NOT edit `internal/database/store.go`** (repo-wide rule — every new type/interface goes in its own file). TASK-02 (`TASK-02-syncfile-keyspace.md`) also targets `pebble_store_syncid.go` in the same wave — if it lands first, this task's methods are additive to the bottom of the file; do not reorder or reformat what TASK-02 added.
+**File-ownership:** owns `internal/database/pebble_store_syncid.go` (+ `_test.go`) exclusively — this is a Wave-1 file no other task touches. **Do NOT edit `internal/database/store.go`** (repo-wide rule — every new type/interface goes in its own file). TASK-02 now owns a separate file (`pebble_store_syncfile.go`), so there is no shared-file coordination: TASK-01 and TASK-02 are fully parallel.
 
 ## ⛔ START HERE (do this first, exactly)
 
