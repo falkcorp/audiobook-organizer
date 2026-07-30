@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.50.0
+// version: 1.51.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-07-30
 
@@ -845,6 +845,12 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 					errChan <- fmt.Errorf("failed to save book %s: %w", books[idx].FilePath, err)
 				} else {
 					createBookFilesForBook(dirPath, nil, scanLog)
+					// Chapters must be persisted AFTER the book files exist —
+					// the multi-file synthesis path reads BookFile durations to
+					// build the cumulative timeline. Never fatal to the scan.
+					if err := PersistChaptersForBook(ctx, dirPath, scanLog); err != nil {
+						scanLog.Warn("chapter persistence failed for %s: %v", dirPath, err)
+					}
 				}
 				return // Done with this directory-based book
 			}
@@ -1022,6 +1028,12 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 				// to avoid re-hashing each segment file (PERF-2b).
 				if len(books[idx].SegmentFiles) > 1 {
 					createBookFilesForBook(books[idx].FilePath, books[idx].SegmentFiles, scanLog, books[idx].SegmentHashes)
+				}
+				// Persist chapters. Deliberately OUTSIDE the SegmentFiles>1 block
+				// so it also runs for genuinely-single-file books, whose embedded
+				// m4b chapter marks are the primary source. Never fatal to the scan.
+				if err := PersistChaptersForBook(ctx, books[idx].FilePath, scanLog); err != nil {
+					scanLog.Warn("chapter persistence failed for %s: %v", books[idx].FilePath, err)
 				}
 				// Update scan cache so next incremental scan skips this file.
 				// Use a deferred recover guard in case GlobalStore is a non-nil interface
