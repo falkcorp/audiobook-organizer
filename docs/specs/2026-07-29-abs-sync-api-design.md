@@ -1,5 +1,5 @@
 <!-- file: docs/specs/2026-07-29-abs-sync-api-design.md -->
-<!-- version: 7.0.0 -->
+<!-- version: 7.1.0 -->
 <!-- guid: 0869d58c-b186-45cb-9915-64bd18eaa45f -->
 <!-- last-edited: 2026-07-30 -->
 
@@ -405,18 +405,63 @@ dropping its custom header on the status probe ([#330](https://github.com/LeoKla
 If neither target drops headers there, we require the service token on **every** endpoint and have **no
 public surface at all**.
 
-**This must be verified, not assumed** — it is the same failure class as Plappa #330, and getting it wrong
-means the app **cannot connect at all**, which is strictly worse than exposing a version string. Two
-specific unknowns:
-- AudioBooth calls `GET /status` during **server-add, before the server record is persisted** — do the
-  not-yet-saved custom headers reach that first probe? (Its cover path *does* use `customHeaders`, but its
-  **widget extension sends no headers whatsoever**, proving coverage is not uniform.)
-- Absorb polls **`/ping` every 20 s offline / 60 s online** as its online/offline state machine; header
-  coverage on that path is unestablished.
+**RESOLVED 2026-07-30 — ZERO publicly-bypassed endpoints is achievable.** Source-verified in both
+clients, including the pre-save case that broke Plappa:
 
-**Until verified, keep the `/ping`,`/status` bypass as the safe default.** On confirmation, remove it and
-record the zero-public-endpoint posture in the runbook. Both clients are open source, so this is a bounded,
-answerable question — never an assumption.
+- **`/status`** — AudioBooth's pre-save probe reads the **not-yet-persisted** UI headers
+  (`ServerViewModel.swift:388-393`) and they reach the wire (`NetworkService.swift:307-311`). A failed
+  `/status` is additionally non-fatal: the auth model keeps its default methods, so login still works.
+  Absorb's two `/status` callers both forward `customHeaders`.
+- **`/ping`** — **AudioBooth never calls it at all** (48 enumerated request paths; zero `ping` hits).
+  Absorb calls it constantly (20 s offline / 60 s online) and **all 17 call sites pass `customHeaders`**,
+  including the pre-save login probe and three background isolates.
+- **`/public/session/*/track/*`** — needs **no** bypass either. AudioBooth issue #192 once documented that
+  it did, but that is **obsolete**: #237 added `AVURLAssetHTTPHeaderFieldsKey`
+  (`AudioPlayer.swift:603-611`).
+
+⇒ **Remove the `/ping`,`/status` bypass. Require the service token on every endpoint.**
+
+### 1.9.4 Operational cautions carried from the client trackers
+
+1. **Never use the app's reachability checkmark as an acceptance test.** Both clients' probes report
+   success against a Cloudflare Access HTML interstitial (Absorb #264, #195). Worse, **Access returns
+   HTTP 200 with an HTML body** (AudioBooth #8), so a header-drop surfaces as a JSON *decode* error, not a
+   401/403. **Validate from Cloudflare Access logs** — confirm each request arrives bearing the service
+   token.
+2. **`Authorization` must not be used for the CF credential.** Neither client reserves header names, but
+   Apple silently drops `Authorization` from `URLSessionConfiguration.httpAdditionalHeaders`, which is
+   exactly how AudioBooth configures its image pipeline. `CF-Access-Client-Id`/`-Secret` are not reserved
+   and work. (This also means Cloudflare's single-header `cf-access-token` variant is usable *except* on
+   AudioBooth's image path — prefer the two-header form.)
+3. **Rate limiting must not trigger a WAF ban.** AudioBooth #326 (open) records a post-403 request storm
+   of 959 requests in 44 s that got a user CrowdSec-banned. Our §3.6 limits and any edge WAF rule must
+   tolerate a client's legitimate retry behavior, and a header-drop must not be able to escalate into an
+   IP ban.
+4. **Known live AudioBooth bug to expect (not ours).** Its image pipeline snapshots `customHeaders` once
+   in `Audiobookshelf.init()` (`Audiobookshelf.swift:34`), and `updateCustomHeaders` is guarded behind
+   `server?.id != nil` — false while adding a *first* server. So on a fresh install every cover is
+   header-less until the app is relaunched. Same staleness when switching servers with different headers.
+   Unreported upstream; document it in the runbook so it is not misdiagnosed as a server fault.
+
+### 1.9.5 Header-less peripheral paths (cover-art bypass decision)
+
+These paths fetch without headers and would break behind Access. **None blocks connect, login, browse,
+chapters, streaming, downloads, or progress sync** — all are cosmetic or peripheral:
+
+| Path | Client |
+|---|---|
+| Home/lock-screen **widget** cover art (`AudioBoothWidgetProvider.swift:78,117` — widget target doesn't import `API`) | AudioBooth |
+| **CarPlay** cover art (`FCPExtensions.swift:132`, bare `URLSession.shared`) | Absorb |
+| Settings playback-session thumbnails (`PlaybackSessionListView.swift:17`, plain `AsyncImage`) | AudioBooth |
+| Supplementary-ebook viewer + share (`EbookReaderViewModel.swift:503`, `BookShareItem.swift:87`) | AudioBooth |
+| Stats + admin cover strips (`stats_screen.dart:878,2294`, `admin_users_screen.dart:1319`) | Absorb |
+| Chapter-editor audio preview (`chapter_editor_screen.dart:517`) | Absorb |
+| **Chromecast** — receiver-side fetch, unfixable client-side | Absorb |
+
+The narrowest possible remedy is bypassing **`GET /api/items/*/cover`** alone — never `/status`, `/ping`,
+or `/public*`. **Open decision:** whether embedded-artwork extraction or a local cover cache already
+covers the downloaded-book case, which would make the bypass unnecessary. Pending verification; default to
+**no bypass** until answered.
 
 ## 2. Non-negotiable constraints
 
