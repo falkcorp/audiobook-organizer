@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 3.4.1
+// version: 3.5.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-07-26
+// last-edited: 2026-07-30
 
 package server
 
@@ -1127,11 +1127,17 @@ func (s *Server) setupRoutes() {
 	s.router.Use(func(c *gin.Context) {
 		path := c.Request.URL.Path
 		// If path starts with /api/ but not /api/v1/ and not /api/health and not /api/events
+		//
+		// absReservedPath excludes the Audiobookshelf-compatible surface: the ABS
+		// protocol is UNVERSIONED, so GET /api/me is a real ABS endpoint. Without this
+		// exclusion it would 301 to /api/v1/me and the client would follow the redirect
+		// into the app API — the route would look implemented and behave broken.
 		if strings.HasPrefix(path, "/api/") &&
 			!strings.HasPrefix(path, "/api/v1/") &&
 			!strings.HasPrefix(path, "/api/health") &&
 			!strings.HasPrefix(path, "/api/events") &&
-			!strings.HasPrefix(path, "/api/metrics") {
+			!strings.HasPrefix(path, "/api/metrics") &&
+			!absReservedPath(path) {
 			// Redirect to /api/v1/
 			newPath := strings.Replace(path, "/api/", "/api/v1/", 1)
 			c.Redirect(http.StatusMovedPermanently, newPath)
@@ -1168,6 +1174,13 @@ func (s *Server) setupRoutes() {
 
 	// OAuth2/OIDC login + Cloudflare Access passthrough (both no-ops unless configured).
 	oauthH, cfMW := s.buildOAuthWiring()
+
+	// Audiobookshelf-compatible surface. A separate TOP-LEVEL group, not a child of
+	// /api/v1, with its own FAIL-CLOSED identity middleware — it must not inherit the
+	// fail-open Cloudflare-Access behaviour applied to /api/v1 below, where an
+	// unverifiable assertion falls through to RequireAuth. Feature-flagged off by
+	// default; registers nothing unless ABS_API_ENABLED is set. See wire_abs_routes.go.
+	s.wireABSRoutes()
 
 	// API routes (auth + rate limits + request-size limits). The Cloudflare Access
 	// middleware runs early and FAIL-OPEN: when a valid Cf-Access-Jwt-Assertion is

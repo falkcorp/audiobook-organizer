@@ -11,6 +11,7 @@ require (
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/gin-contrib/gzip v1.2.6
 	github.com/gin-gonic/gin v1.12.0
+	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/hashicorp/go-memdb v1.3.5
 	github.com/klauspost/compress v1.19.1
 	github.com/lithammer/fuzzysearch v1.1.8
