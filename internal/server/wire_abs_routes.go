@@ -1,5 +1,5 @@
 // file: internal/server/wire_abs_routes.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9c6b13f8-40a2-4e57-b18d-72e0a5c4d396
 // last-edited: 2026-07-30
 
@@ -18,6 +18,12 @@ import (
 	abshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 )
+
+// Compile-time proof that the production store satisfies the Phase 6 capability the
+// block in wireABSRoutes asserts at runtime. Without this, a signature drift on
+// either side would turn into an os.Exit(1) at boot instead of a build failure —
+// and the failure mode it guards is the /api/me empty-list data loss of §1.8.1.
+var _ abshandler.ProgressListStore = (*database.PebbleStore)(nil)
 
 // absReservedPaths are the exact top-level paths the Audiobookshelf-compatible surface
 // owns under /api/. They must be EXCLUDED from the global /api/* → /api/v1/* redirect
@@ -169,15 +175,52 @@ func (s *Server) wireABSRoutes() {
 		os.Exit(1)
 	}
 
+	// Phase 6: the user-scoped payload of /api/me, /login and /auth/refresh.
+	//
+	// FAIL CLOSED, and harder than the rest of this function does. Once the store
+	// holds a single ABS progress record, a nil provider is not "not implemented yet"
+	// — it is active data destruction: /api/me would answer a 200 with an empty
+	// mediaProgress, and AudioBooth DELETES every local progress row absent from that
+	// list (§1.8.1). Exiting is the only honest outcome, and it is unreachable in
+	// practice because PebbleDB (the only supported backend) satisfies both
+	// capabilities asserted here, as well as the sync-identity and library ones
+	// already asserted above.
+	progressList, ok := s.Store().(abshandler.ProgressListStore)
+	if !ok {
+		slog.Error("abs: refusing to start — the configured store cannot enumerate a user's listening positions, " +
+			"so /api/me could only ever report an EMPTY mediaProgress list. Clients DELETE local progress rows " +
+			"absent from that list, so serving it would destroy the owner's place in every book.")
+		os.Exit(1)
+	}
+	bookmarkStore := database.AsBookmarkStore(s.Store())
+	if bookmarkStore == nil {
+		slog.Error("abs: refusing to start — the configured store lacks the named-bookmark keyspace, so /api/me " +
+			"could only ever report an EMPTY bookmarks list.")
+		os.Exit(1)
+	}
+	userData, err := abshandler.NewUserData(abshandler.UserDataOptions{
+		Progress:  progressList,
+		Bookmarks: bookmarkStore,
+		// syncIdentity supplies libraryItemId. It MUST be the 36-char sync UUID: a raw
+		// 26-char Book ULID mis-truncates at Absorb's fixed offset of 36.
+		Identity: syncIdentity,
+		// libraryStore is the duration source (sum-of-tracks, §5b). `isFinished:true`
+		// with a zero duration sets the client's currentTime to 0.
+		Library: libraryStore,
+	})
+	if err != nil {
+		slog.Error("abs: refusing to start — the media-progress provider could not be built", "err", err)
+		os.Exit(1)
+	}
+
 	resolver := servermiddleware.NewABSIdentityResolver(cfg, verifier, oauthCfg, identityStore)
 	handler, err := abshandler.New(abshandler.Options{
 		Config:   cfg,
 		Store:    absStore,
 		Resolver: resolver,
-		// UserData stays nil in Phase 1: no ABS progress records exist yet, so the
-		// empty list genuinely IS the complete list. Phase 6 wires the real provider,
-		// and the warning below makes the gap visible until it does.
-		UserData: nil,
+		// The COMPLETE per-user progress + bookmark lists. Never nil, never paginated:
+		// see the fail-closed block above and internal/server/handlers/abs/userdata.go.
+		UserData: userData,
 
 		Library:  libraryStore,
 		Identity: absIdentityAdapter{SyncIdentityStore: syncIdentity, SyncFileStore: syncFiles},
@@ -207,9 +250,10 @@ func (s *Server) wireABSRoutes() {
 	handler.Register(absGroup)
 
 	if !handler.HasUserDataProvider() {
-		slog.Warn("abs: no media-progress provider is wired — /api/me will report an EMPTY mediaProgress list. " +
-			"That is correct only while the server holds no ABS progress records at all: clients DELETE local " +
-			"progress rows absent from this list. Phase 6 must wire the provider before any progress is stored.")
+		slog.Error("abs: the media-progress provider was NOT wired — /api/me would report an EMPTY mediaProgress " +
+			"list, and clients DELETE local progress rows absent from it. This should be unreachable: " +
+			"NewUserData above exits on failure.")
+		os.Exit(1)
 	}
 	if !handler.HasBrowseSurface() {
 		slog.Error("abs: the browse + playback routes were NOT registered — /api/libraries, /api/items and " +
@@ -222,7 +266,7 @@ func (s *Server) wireABSRoutes() {
 			"rewinds the listener to the start of the book.")
 	}
 
-	slog.Info("abs: Audiobookshelf-compatible surface enabled (auth + library browse + direct playback)",
+	slog.Info("abs: Audiobookshelf-compatible surface enabled (auth + library browse + direct playback + user progress/bookmarks)",
 		"modes", strings.Join(cfg.ModeNames(), ","),
 		"server_version", cfg.ServerVersion,
 		"access_token_ttl", cfg.AccessTTL.String(),
