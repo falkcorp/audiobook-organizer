@@ -79,6 +79,7 @@ type LibraryStore interface {
 	GetBookByID(id string) (*database.Book, error)
 	GetBooksByIDs(ids []string) ([]database.Book, error)
 	GetAllBookSummaries(limit, offset int) ([]database.BookSummary, error)
+	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
 	CountAllBooks() (int, error)
 	SearchBooks(query string, limit, offset int) ([]database.Book, error)
 	GetBookFiles(bookID string) ([]database.BookFile, error)

@@ -486,6 +486,7 @@ func (h *Handler) LibraryFilterData(c *gin.Context) {
 			}
 		}
 	}
+	resp.PublishedDecades = h.publishedDecades()
 	if langs, err := h.library.GetDistinctLanguages(); err == nil {
 		for _, l := range langs {
 			if l = strings.TrimSpace(l); l != "" {
@@ -494,6 +495,46 @@ func (h *Handler) LibraryFilterData(c *gin.Context) {
 		}
 	}
 	respondJSON(c, http.StatusOK, resp)
+}
+
+// filterDataScanLimit bounds the projection scan behind publishedDecades.
+//
+// It is a single Core-typed store call (a projection, no per-item I/O), so it is not
+// the whole-library-loop shape CLAUDE.md's concurrency rule targets — but it is still
+// bounded, because filterdata is a decoration endpoint and no client needs a decade
+// list that cost a full scan of a 68K-row library.
+const filterDataScanLimit = 5000
+
+// publishedDecades derives the decade buckets from the years we actually know.
+//
+// The captured oracle returned ["NaN"] here, because real ABS ran a numeric
+// conversion over the unparseable published year "800BC". We deliberately do NOT
+// reproduce that: "NaN" is an ABS bug, the field is decorative, and emitting a real
+// decade is both honest and what a client can filter on. Books with no usable year
+// contribute nothing rather than a junk bucket.
+func (h *Handler) publishedDecades() []string {
+	out := []string{}
+	books, err := h.library.GetAllBooksCore(filterDataScanLimit, 0)
+	if err != nil {
+		return out
+	}
+	seen := map[string]bool{}
+	for i := range books {
+		year := books[i].AudiobookReleaseYear
+		if year == nil {
+			year = books[i].PrintYear
+		}
+		if year == nil || *year == 0 {
+			continue
+		}
+		decade := strconv.Itoa(*year / 10 * 10)
+		if !seen[decade] {
+			seen[decade] = true
+			out = append(out, decade)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // ── GET /api/libraries/:libraryId/search ────────────────────────────────────

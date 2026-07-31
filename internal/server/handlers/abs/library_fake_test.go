@@ -135,6 +135,26 @@ func (f *fakeLibrary) GetAllBookSummaries(limit, offset int) ([]database.BookSum
 	return out, nil
 }
 
+func (f *fakeLibrary) GetAllBooksCore(limit, offset int) ([]database.BookCore, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := []database.BookCore{}
+	for i, id := range f.order {
+		if i < offset {
+			continue
+		}
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+		b := f.books[id]
+		out = append(out, database.BookCore{
+			ID: b.ID, Title: b.Title, PrintYear: b.PrintYear,
+			AudiobookReleaseYear: b.AudiobookReleaseYear,
+		})
+	}
+	return out, nil
+}
+
 func (f *fakeLibrary) CountAllBooks() (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -412,7 +432,11 @@ func seedOracleLibrary(t *testing.T) *oracleSeed {
 	root := t.TempDir()
 	lib := newFakeLibrary()
 
+	// Distinct creation times, matching the oracle's own addedAt values. The
+	// multi-file copy was added LAST, which is why the Recently Added shelf lists it
+	// first — a shared timestamp would make that shelf's order arbitrary.
 	created := time.UnixMilli(1785370201391)
+	createdMulti := time.UnixMilli(1785370201438)
 	strp := func(s string) *string { return &s }
 	intp := func(i int) *int { return &i }
 
@@ -425,14 +449,21 @@ func seedOracleLibrary(t *testing.T) *oracleSeed {
 	writeFakeAudio(t, m4b, 4096)
 	single := &database.Book{
 		ID: "01SINGLEFILEODYSSEYBOOK00", Title: "The Odyssey",
-		FilePath: m4b, Format: "m4b", Duration: intp(9975),
+		FilePath: m4b, Format: "QuickTime / MOV", Duration: intp(9975),
 		Genre: strp("Audiobook"), PrintYear: intp(800),
 		CreatedAt: &created, UpdatedAt: &created,
 	}
+	// The oracle's m4b carries NO track tag and no track number in its filename, so
+	// both trackNumFrom* are null there. Seeded that way deliberately: an earlier
+	// version of the mapper fabricated an index, which the conformance diff caught.
 	lib.addBook(single, []database.BookFile{{
-		ID: "f-m4b", BookID: single.ID, FilePath: m4b, Format: "m4b", Codec: "aac",
-		Duration: 9975, FileSize: 4096, TrackNumber: 1, TrackCount: 1,
-		BitrateKbps: 64, SampleRateHz: 22050, Channels: 2,
+		ID: "f-m4b", BookID: single.ID, FilePath: m4b, Format: "QuickTime / MOV", Codec: "aac",
+		Duration: 9975, FileSize: 4096,
+		BitrateKbps: 96, SampleRateHz: 22050, Channels: 1,
+		RawTags: map[string]string{
+			"album": "The Odyssey", "artist": "Homer", "date": "800BC",
+			"encoder": "Lavf62.3.100", "genre": "Audiobook", "title": "The Odyssey",
+		},
 		CreatedAt: created, UpdatedAt: created,
 	}}, sixChapters())
 
@@ -446,17 +477,30 @@ func seedOracleLibrary(t *testing.T) *oracleSeed {
 		Format: "mp3", Duration: intp(9975),
 		Genre:       strp("Speech"),
 		Description: strp("http://archive.org/details/odyssey_butler_librivox"),
-		CreatedAt:   &created, UpdatedAt: &created,
+		CreatedAt:   &createdMulti, UpdatedAt: &createdMulti,
 	}
 	var mp3s []database.BookFile
 	for i := 1; i <= 6; i++ {
 		p := filepath.Join(multiDir, fmt.Sprintf("odyssey_%02d_homer_butler_64kb.mp3", i))
 		writeFakeAudio(t, p, 2048+i)
+		// Track 6 deliberately carries no "track" tag, mirroring the oracle: its
+		// trackNumFromFilename is 6 while its trackNumFromMeta is null. That asymmetry
+		// is the whole reason the two fields are not interchangeable.
+		rawTags := map[string]string{
+			"album": "The Odyssey", "artist": "Homer, transl. Samuel Butler",
+			"comment": "http://archive.org/details/odyssey_butler_librivox",
+			"encoder": "LAME 64bits version 3.98.4 (http://www.mp3dev.org/)",
+			"genre":   "Speech", "title": fmt.Sprintf("The Odyssey: Book %02d", i),
+		}
+		if i < 6 {
+			rawTags["track"] = fmt.Sprintf("%d/24", i)
+		}
 		mp3s = append(mp3s, database.BookFile{
 			ID: fmt.Sprintf("f-mp3-%d", i), BookID: multi.ID, FilePath: p,
-			Format: "mp3", Codec: "mp3", Duration: 1662, FileSize: int64(2048 + i),
-			TrackNumber: i, TrackCount: 6, Title: fmt.Sprintf("The Odyssey: Book %02d", i),
+			Format: "MP2/3 (MPEG audio layer 2/3)", Codec: "mp3", Duration: 1662, FileSize: int64(2048 + i),
+			TrackNumber: i, TrackCount: 24, Title: fmt.Sprintf("The Odyssey: Book %02d", i),
 			BitrateKbps: 64, SampleRateHz: 22050, Channels: 1,
+			RawTags:   rawTags,
 			CreatedAt: created, UpdatedAt: created,
 		})
 	}
@@ -513,6 +557,33 @@ func mustLoadFixture(t *testing.T, name string) *conformance.Fixture {
 		t.Fatalf("LoadFixture(%s): %v", name, err)
 	}
 	return f
+}
+
+// assertConformantExcept is assertConformant with an explicit, named allowance list.
+//
+// It exists for exactly ONE situation and must not grow past it: a field where real
+// ABS reports data our pipeline genuinely does not collect, so no amount of mapping
+// work would close the gap. Each allowance names the JSON path AND the reason, so an
+// allowance can never quietly become a shape bug — a finding at any other path still
+// fails, and an allowance that stops firing is dead weight a reader can delete.
+func assertConformantExcept(t *testing.T, fixture string, got any, allowed map[string]string) {
+	t.Helper()
+	f := mustLoadFixture(t, fixture)
+	findings := f.CompareBody(got, conformance.Options{IgnoreExtra: true})
+	var unexpected []conformance.Finding
+	for _, fi := range findings {
+		if reason, ok := allowed[fi.Path]; ok {
+			t.Logf("%s: ALLOWED deviation at %s (%s) — %s", fixture, fi.Path, fi.Kind, reason)
+			continue
+		}
+		unexpected = append(unexpected, fi)
+	}
+	for _, fi := range unexpected {
+		t.Errorf("%s: %s", fixture, fi)
+	}
+	if len(unexpected) > 0 {
+		t.Fatalf("%s: %d unallowed conformance findings against the real ABS 2.36.0 response", fixture, len(unexpected))
+	}
 }
 
 // doAny is do() for endpoints whose top-level body is not an object — most

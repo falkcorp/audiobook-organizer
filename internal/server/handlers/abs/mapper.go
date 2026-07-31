@@ -588,40 +588,94 @@ func trackTitle(f *fileView) string {
 
 func (h *Handler) audioFile(v *itemView, i int) audioFileDTO {
 	f := &v.Files[i]
-	track := f.File.TrackNumber
-	if track == 0 {
-		track = i + 1
-	}
 	disc := discPtr(f.File.DiscNumber)
 	return audioFileDTO{
-		AddedAt:             msEpoch(f.File.CreatedAt),
-		BitRate:             f.File.BitrateKbps * 1000,
-		ChannelLayout:       channelLayout(f.File.Channels),
-		Channels:            f.File.Channels,
-		Chapters:            []chapterDTO{},
+		AddedAt:       msEpoch(f.File.CreatedAt),
+		BitRate:       f.File.BitrateKbps * 1000,
+		ChannelLayout: channelLayout(f.File.Channels),
+		Channels:      f.File.Channels,
+		// A file's `chapters` are the chapters embedded in THAT file, which is a
+		// narrower thing than the book's timeline. We only persist chapters per BOOK,
+		// so the only case where we can honestly fill this in is a single-file book:
+		// there, the book's chapters ARE that file's chapters. For a multi-file book we
+		// cannot attribute a book-level chapter to a particular track, so it stays
+		// empty — which is exactly what real ABS returns for the oracle's 6-mp3 set.
+		Chapters:            h.audioFileChapters(v),
 		Codec:               f.File.Codec,
 		DiscNumFromFilename: disc,
 		DiscNumFromMeta:     disc,
 		Duration:            f.DurationSec,
 		EmbeddedCoverArt:    nil,
 		Error:               nil,
-		Exclude:             false,
+		Exclude:             f.File.SkipScan,
 		Format:              f.File.Format,
 		// ABS indexes tracks from 1, not 0. AudioBooth uses this index as the track
 		// segment of /public/session/:id/track/:index, so an off-by-one here streams
 		// the wrong file.
 		Index:                i + 1,
 		Ino:                  f.SyncFileID,
-		Language:             nil,
+		Language:             fileLanguage(v),
 		ManuallyVerified:     false,
 		MetaTags:             h.metaTags(v, f),
 		Metadata:             h.fileMetadata(f),
 		MimeType:             mimeTypeForPath(f.File.FilePath),
 		TimeBase:             "1/1000",
-		TrackNumFromFilename: &track,
-		TrackNumFromMeta:     &track,
+		TrackNumFromFilename: trackNumPtr(f.File.TrackNumber),
+		TrackNumFromMeta:     trackNumFromTags(f.File.RawTags),
 		UpdatedAt:            msEpoch(f.File.UpdatedAt),
 	}
+}
+
+// audioFileChapters returns the per-file chapter list. See the note at its call site:
+// only a single-file book can be attributed honestly.
+func (h *Handler) audioFileChapters(v *itemView) []chapterDTO {
+	if len(v.Files) != 1 {
+		return []chapterDTO{}
+	}
+	return chapterDTOs(v.Chapters)
+}
+
+// fileLanguage reports the per-file STREAM language.
+//
+// ⚠️ FLAGGED DEVIATION, and a real data gap rather than a mapping choice. Real ABS
+// fills this from ffprobe's stream language ("und" on the oracle's m4b, absent on its
+// mp3s), but our scan pipeline runs ffprobe for duration only and persists no
+// per-stream language, and BookFile has no column for one. So this is always null.
+//
+// Deliberately NOT backfilled from Book.Language: that is the CURATED metadata
+// language shown in the UI (media.metadata.language), a different fact from what a
+// container's audio stream declares — the oracle proves they differ, reporting
+// metadata.language null and the stream "und" for the same file. Copying one into the
+// other would make a curated value look like it came off the file.
+//
+// Zero client impact: neither AudioBooth nor Absorb reads audioFiles[].language. The
+// fix belongs in the scanner (capture the ffprobe stream language), not here.
+func fileLanguage(v *itemView) *string { return nil }
+
+// trackNumPtr returns nil for an unset track number rather than a misleading 0.
+func trackNumPtr(n int) *int {
+	if n <= 0 {
+		return nil
+	}
+	return &n
+}
+
+// trackNumFromTags reads the track number out of the LOSSLESS embedded-tag capture,
+// handling the "3/24" form. It returns nil when the file carries no track tag — which
+// is a real and common state, and is different from "track 0".
+func trackNumFromTags(tags map[string]string) *int {
+	raw, ok := tags["track"]
+	if !ok {
+		return nil
+	}
+	if slash := strings.Index(raw, "/"); slash >= 0 {
+		raw = raw[:slash]
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || n <= 0 {
+		return nil
+	}
+	return &n
 }
 
 // discPtr returns nil for an unset disc number so the field marshals as null,
@@ -646,6 +700,13 @@ func channelLayout(channels int) string {
 	}
 }
 
+// metaTags renders the embedded-tag block.
+//
+// RawTags is the LOSSLESS capture of what the file actually carried at import, so it
+// WINS wherever it has a value; the book-level values are only a fallback for rows
+// imported before lossless capture existed. Doing it the other way round would report
+// our curated metadata as though it were embedded in the file, which is precisely the
+// confusion the metadata-editor screens exist to resolve.
 func (h *Handler) metaTags(v *itemView, f *fileView) metaTagsDTO {
 	tags := metaTagsDTO{
 		TagAlbum:  v.Book.Title,
@@ -656,17 +717,20 @@ func (h *Handler) metaTags(v *itemView, f *fileView) metaTagsDTO {
 	if v.Book.Description != nil {
 		tags.TagComment = *v.Book.Description
 	}
-	if f.File.TrackCount > 0 {
+	if f.File.TrackCount > 0 && f.File.TrackNumber > 0 {
 		tags.TagTrack = fmt.Sprintf("%d/%d", f.File.TrackNumber, f.File.TrackCount)
 	} else if f.File.TrackNumber > 0 {
 		tags.TagTrack = strconv.Itoa(f.File.TrackNumber)
 	}
-	// RawTags is the lossless capture from import; prefer its real values over the
-	// derived ones when present, so the client sees what the file actually carries.
 	for key, dst := range map[string]*string{
-		"encoder": &tags.TagEncoder,
 		"album":   &tags.TagAlbum,
 		"artist":  &tags.TagArtist,
+		"comment": &tags.TagComment,
+		"date":    &tags.TagDate,
+		"encoder": &tags.TagEncoder,
+		"genre":   &tags.TagGenre,
+		"title":   &tags.TagTitle,
+		"track":   &tags.TagTrack,
 	} {
 		if val, ok := f.File.RawTags[key]; ok && strings.TrimSpace(val) != "" {
 			*dst = val
@@ -771,14 +835,16 @@ func (h *Handler) expandedItem(v *itemView) libraryItemExpandedDTO {
 
 func (h *Handler) libraryFiles(v *itemView) []libraryFileDTO {
 	out := make([]libraryFileDTO, 0, len(v.Files))
-	notSupplementary := false
 	for i := range v.Files {
 		f := &v.Files[i]
 		out = append(out, libraryFileDTO{
-			AddedAt:         msEpoch(f.File.CreatedAt),
-			FileType:        "audio",
-			Ino:             f.SyncFileID,
-			IsSupplementary: &notSupplementary,
+			AddedAt:  msEpoch(f.File.CreatedAt),
+			FileType: "audio",
+			Ino:      f.SyncFileID,
+			// null, matching real ABS: the flag is tri-state there (an ebook or a
+			// cover can be marked supplementary), and every file we list is a primary
+			// audio track, so "not applicable" is the honest value rather than false.
+			IsSupplementary: nil,
 			Metadata:        h.fileMetadata(f),
 			UpdatedAt:       msEpoch(f.File.UpdatedAt),
 		})
