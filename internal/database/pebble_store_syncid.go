@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_syncid.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5b9bd4e0-2ee2-436d-ac81-16b93de80eb3
-// last-edited: 2026-07-30
+// last-edited: 2026-07-31
 
 // Package database: sync_item keyspace — durable ABS `libraryItemId` identity.
 //
@@ -76,7 +76,7 @@ func AsSyncIdentityStore(s any) SyncIdentityStore {
 	// asCapability, not a bare type assertion: the server decorates s.store with
 	// indexedStore (which embeds the Store INTERFACE and so hides every
 	// capability method) during Start(). See store_capability.go.
-	if ss, ok := asCapability[SyncIdentityStore](s); ok {
+	if ss, ok := AsCapability[SyncIdentityStore](s); ok {
 		return ss
 	}
 	return nil

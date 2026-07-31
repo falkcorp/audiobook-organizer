@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/recompute_book_aggregates.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9b0c1d2e-3f4a-5b6c-7d8e-9f0a1b2c3d4e
-// last-edited: 2026-06-10
+// last-edited: 2026-07-31
 
 // Maintenance job: recompute-book-aggregates
 //
@@ -58,8 +58,15 @@ func (j *recomputeBookAggregatesJob) Run(
 	reporter maintenance.ProgressReporter,
 	dryRun bool,
 ) error {
-	pebbleStore, ok := store.(*database.PebbleStore)
-	if !ok {
+	// AsPebbleStore, not a bare assertion: this job runs through
+	// server.maintenance_job_op, which resolves Server.Store() at op-run time and
+	// therefore hands us the Bleve search-index decorator in production. A bare
+	// `store.(*database.PebbleStore)` failed against that wrapper, so every prod run
+	// took the interface fallback below — which skips the
+	// IsBookAggregatesBackfillDone sentinel checked further down and so redid the
+	// entire 40k-book backfill each time instead of short-circuiting.
+	pebbleStore := database.AsPebbleStore(store)
+	if pebbleStore == nil {
 		// Fallback for test double or SQLite: iterate via the Store interface.
 		return j.runViaInterface(ctx, store, reporter, dryRun)
 	}

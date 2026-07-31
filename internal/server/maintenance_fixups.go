@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_fixups.go
-// version: 2.7.0
+// version: 2.8.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-07-07
+// last-edited: 2026-07-31
 
 package server
 
@@ -237,13 +237,21 @@ func dryRunLabel(dryRun bool) string {
 }
 
 // wipeBookFiles deletes all book_file rows using the appropriate store backend.
+// The wipe* helpers below take their store from Server.Store() at REQUEST time,
+// which in production is the Bleve search-index decorator, not the bare
+// *PebbleStore. They must resolve the concrete store via database.AsPebbleStore —
+// a bare `store.(*database.PebbleStore)` assertion fails against the decorator and
+// silently sends each of these down its non-Pebble path: an "unsupported store
+// type" error for wipeSegments/wipeBooks/wipeAuthors/wipeSeries/wipeExternalIDs,
+// and for wipeBookFiles a slower interface loop that self-reports an approximate
+// count and misses the secondary-index prefixes. See database.AsPebbleStore.
 func wipeBookFiles(store maintenanceStore, dryRun bool) (int64, error) {
 	if dryRun {
 		// Count only.
 		n, err := store.CountFiles()
 		return int64(n), err
 	}
-	if s, ok := store.(*database.PebbleStore); ok {
+	if s := database.AsPebbleStore(store); s != nil {
 		n, err := s.WipeByPrefixes([]string{"book_file:"})
 		return int64(n), err
 	}
@@ -271,7 +279,7 @@ func wipeBookFiles(store maintenanceStore, dryRun bool) (int64, error) {
 
 // wipeSegments deletes all book_segment rows using the appropriate store backend.
 func wipeSegments(store maintenanceStore, dryRun bool) (int64, error) {
-	if s, ok := store.(*database.PebbleStore); ok {
+	if s := database.AsPebbleStore(store); s != nil {
 		// Pebble segments use "bf:" (primary) and "bfs:" (secondary) prefixes.
 		if dryRun {
 			n, err := s.CountByPrefix("bf:")
@@ -289,7 +297,7 @@ func wipeBooks(store maintenanceStore, dryRun bool) (int64, error) {
 		n, err := store.CountPrimaryBooks()
 		return int64(n), err
 	}
-	if s, ok := store.(*database.PebbleStore); ok {
+	if s := database.AsPebbleStore(store); s != nil {
 		// Book keys: "book:" prefix. Include secondary indexes.
 		n, err := s.WipeByPrefixes([]string{"book:"})
 		return int64(n), err
@@ -303,7 +311,7 @@ func wipeAuthors(store maintenanceStore, dryRun bool) (int64, error) {
 		n, err := store.CountAuthors()
 		return int64(n), err
 	}
-	if s, ok := store.(*database.PebbleStore); ok {
+	if s := database.AsPebbleStore(store); s != nil {
 		n, err := s.WipeByPrefixes([]string{"author:"})
 		return int64(n), err
 	}
@@ -316,7 +324,7 @@ func wipeSeries(store maintenanceStore, dryRun bool) (int64, error) {
 		n, err := store.CountSeries()
 		return int64(n), err
 	}
-	if s, ok := store.(*database.PebbleStore); ok {
+	if s := database.AsPebbleStore(store); s != nil {
 		n, err := s.WipeByPrefixes([]string{"series:"})
 		return int64(n), err
 	}
@@ -325,7 +333,7 @@ func wipeSeries(store maintenanceStore, dryRun bool) (int64, error) {
 
 // wipeExternalIDs deletes all external_id_map rows using the appropriate store backend.
 func wipeExternalIDs(store maintenanceStore, dryRun bool) (int64, error) {
-	if s, ok := store.(*database.PebbleStore); ok {
+	if s := database.AsPebbleStore(store); s != nil {
 		if dryRun {
 			n, err := s.CountByPrefix("ext_id:")
 			return int64(n), err

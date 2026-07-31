@@ -1,7 +1,7 @@
 // file: internal/database/store_capability.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9a41c7e0-58b2-4c33-8f6d-1b0e9d2a7c45
-// last-edited: 2026-07-30
+// last-edited: 2026-07-31
 
 package database
 
@@ -35,6 +35,20 @@ package database
 // The fix is for capability lookups to walk the decorator chain. A decorator
 // opts in by exposing Unwrap; one that does not is treated as opaque on purpose
 // (see StoreUnwrapper).
+//
+// The same hazard applies to CONCRETE-type assertions, not just interfaces:
+// `store.(*PebbleStore)` fails through the decorator too, and its failure mode is
+// worse because such sites usually have a "different backend, degrade gracefully"
+// fallback written for SQLite/mock. A wrapped Pebble store takes that fallback and
+// looks like a supported configuration. Two prod jobs were silently degraded this
+// way for weeks — see AsPebbleStore. Resolve concrete stores through this file
+// too, never with a bare assertion on a value obtained from Server.Store().
+//
+// Rule of thumb for which values are affected: anything bound during NewServer
+// (the service-registry container via Override("store", ...), plugin.Deps, every
+// handler constructor) holds the BARE store and is unaffected. Anything that calls
+// Server.Store() at request time, op-run time, or inside a lazily-built service
+// gets the WRAPPED store and must resolve capabilities through this file.
 
 // maxUnwrapDepth bounds the walk so a decorator that accidentally returns itself
 // — or a cycle built from two decorators pointing at each other — cannot hang a
@@ -55,14 +69,21 @@ type StoreUnwrapper interface {
 	Unwrap() Store
 }
 
-// asCapability resolves T from s, looking through any decorator chain that opts
+// AsCapability resolves T from s, looking through any decorator chain that opts
 // in via StoreUnwrapper. It returns the zero value and false when no layer
 // implements T.
+//
+// T may be an interface (SyncIdentityStore, OpsV2Store, ...) or a concrete type
+// (*PebbleStore) — both fail identically through a decorator, so both belong here.
 //
 // The check runs on the OUTERMOST layer first, so a decorator that implements a
 // capability itself (to add indexing or auditing to it) still wins over the
 // inner store.
-func asCapability[T any](s any) (T, bool) {
+//
+// Exported because callers outside this package hit the same problem: package
+// server's maintenance fixups and package maintenance/jobs both need to reach the
+// concrete Pebble store through the search-index decorator.
+func AsCapability[T any](s any) (T, bool) {
 	var zero T
 	for depth := 0; s != nil && depth < maxUnwrapDepth; depth++ {
 		if c, ok := s.(T); ok {
@@ -81,4 +102,33 @@ func asCapability[T any](s any) (T, bool) {
 		s = inner
 	}
 	return zero, false
+}
+
+// AsPebbleStore resolves the concrete *PebbleStore out of s, looking through any
+// opted-in decorator chain. Returns nil when there is no Pebble store in the
+// chain — a genuinely non-Pebble backend (SQLite, a test double) or an opaque
+// decorator.
+//
+// Use this instead of `store.(*PebbleStore)` on any value that came from
+// Server.Store(). The bare assertion is what silently degraded these in prod,
+// where the Bleve decorator is always installed:
+//
+//   - sweep-pebble-metrics-ttl logged "store is not a PebbleStore; skipping" and
+//     no-opped, so expired metrics snapshots were never swept and grew unbounded.
+//   - recompute-book-aggregates fell back to its interface path, skipping the
+//     IsBookAggregatesBackfillDone sentinel and redoing the full 40k-book
+//     backfill on every run.
+//   - the maintenance wipe fixups either errored with "unsupported store type
+//     *server.indexedStore" or took an approximate fallback that misses the
+//     secondary-index prefixes.
+//
+// Every one of those sites had a deliberate non-Pebble fallback written for
+// SQLite/mock, which is exactly why the failure was invisible: a wrapped Pebble
+// store is indistinguishable from an unsupported backend at the assertion, and
+// the fallback makes it look like a supported configuration rather than a bug.
+func AsPebbleStore(s any) *PebbleStore {
+	if ps, ok := AsCapability[*PebbleStore](s); ok {
+		return ps
+	}
+	return nil
 }
