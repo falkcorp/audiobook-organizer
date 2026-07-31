@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_syncid.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5b9bd4e0-2ee2-436d-ac81-16b93de80eb3
 // last-edited: 2026-07-30
 
@@ -73,7 +73,10 @@ func AsSyncIdentityStore(s any) SyncIdentityStore {
 	if s == nil {
 		return nil
 	}
-	if ss, ok := s.(SyncIdentityStore); ok {
+	// asCapability, not a bare type assertion: the server decorates s.store with
+	// indexedStore (which embeds the Store INTERFACE and so hides every
+	// capability method) during Start(). See store_capability.go.
+	if ss, ok := asCapability[SyncIdentityStore](s); ok {
 		return ss
 	}
 	return nil
