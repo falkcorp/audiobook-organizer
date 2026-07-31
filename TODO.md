@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.13.4 -->
+<!-- version: 10.13.5 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-07-27 -->
+<!-- last-edited: 2026-07-31 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,115 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+<!-- file: todo.d/abs-sync-auth-core-followups.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: a8c0a4eb-d71c-43ae-9a5a-c0d59bb61bc1 -->
+<!-- last-edited: 2026-07-30 -->
+
+- [ ] **ABS-SYNC (Phase 6, DATA LOSS if skipped): wire a `UserDataProvider` into the
+  ABS auth handler.** `internal/server/handlers/abs` currently constructs with
+  `UserData: nil` (`internal/server/wire_abs_routes.go`), so `/api/me`, `/login` and
+  `/auth/refresh` report `mediaProgress: []`. That is correct **only** while the server
+  holds zero ABS progress records — §1.8.1 of the design spec: AudioBooth *deletes*
+  every local progress row absent from the server's list, so the moment Phase 6 starts
+  persisting progress without wiring the provider, every device loses its listening
+  positions on the next home-screen refresh. The interface is already defined
+  (`MediaProgress`/`Bookmarks`, both must return the COMPLETE list; returning an error
+  makes the handler answer 5xx rather than serve a truncated list). A startup
+  `slog.Warn` flags the gap until it is wired.
+
+- [ ] **ABS-SYNC: exempt the ABS surface from `BasicAuth()` when `basic_auth_enabled`
+  is on.** The ABS group hangs off `s.router`, so it inherits the global
+  `servermiddleware.BasicAuth()`. With basic auth enabled (off by default) every ABS
+  client would need to send `Authorization: Basic …`, which collides with the ABS
+  bearer token on the same header — the clients would be unable to connect and the
+  cause would be invisible. Either exempt the ABS paths in `basicauth.go` or document
+  that the two features are mutually exclusive.
+
+- [ ] **ABS-SYNC: prune expired `abs_sess:` records on a schedule.**
+  `PebbleStore.DeleteExpiredABSSessions` exists and is tested but has no caller. Add it
+  to the same maintenance sweep that calls `DeleteExpiredSessions` for the browser
+  keyspace, or revoked/expired ABS sessions accumulate forever.
+
+<!-- file: todo.d/abs-sync-drm-consolidation.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: af93e202-2439-4b45-aade-7e2c309ee62f -->
+<!-- last-edited: 2026-07-30 -->
+
+- [ ] **ABS-SYNC: consolidate the two DRM detection paths, and wire one into the
+  scanner.** PR #2067 adds extension-based `DetectDRM` in `internal/audioutil/drm.go`,
+  but `internal/diagnosis/probe.go` already has an unrelated, richer mediainfo-based
+  probe (`HasActiveDRM`). Two DRM code paths will drift. Decide which is authoritative,
+  then wire it into the scanner so Audible AAX/AAXC files surface as
+  **unplayable-with-reason** instead of importing and failing at play time. Note the live
+  bug this fixes: `.aax`/`.aaxc` are **already** in the default `SupportedExtensions`
+  (`internal/config/config.go` ~:2016) with zero DRM awareness. Caution: ffmpeg's `aax`
+  demuxer is **CRIWARE game audio, not Audible** — do not key detection off it.
+
+<!-- file: todo.d/abs-sync-identity-gap.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 7ed6a106-3ea2-4798-a979-33f0360e0d3a -->
+<!-- last-edited: 2026-07-30 -->
+
+- [ ] **ABS-SYNC TASK-12 (P1, data-loss class): close the three identity gaps so §4.3's
+  ID-durability claim is actually true.** Owner decided (2026-07-30) to hook **all three**
+  paths, not just the worst one. Today only `merge.Service.MergeBooks` repoints sync IDs;
+  these three still orphan a device's listening position:
+  1. **`dedup.MergeBooks`** (`internal/dedup/book_dedup.go:395`) — a separate, still-live
+     path used by `internal/reconcile/itunes_heal.go` that **HARD-DELETES**. An
+     unrepointed sync ID here is unrecoverable: there is no surviving row to repoint later.
+  2. **`CombineBooks`** — same file as the hooked merge, unhooked.
+  3. **Untagged move** — `internal/scanner/scanner.go` (~2078-2099) mints a fresh Book
+     ULID via `CreateBook` + version-link and never calls `RepointSyncItem`.
+  Primitives already exist and are merged (`RepointSyncItem` in #2070,
+  `RepointSyncFile` in #2068). Note `internal/merge/serialize.go` already provides a
+  process-wide `mergeSerializeMu`, so no extra book-ID partitioning is needed — run
+  inside that existing critical section. Requires a `-race` test exercising concurrent
+  merges (`MergeBooks` has a prior race history in this repo).
+
+<!-- file: todo.d/abs-sync-remaining-phases.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 95b9132b-ca92-432a-8629-7d98ef59a38b -->
+<!-- last-edited: 2026-07-30 -->
+
+- [ ] **ABS-SYNC: wave 2 — scanner + merge wiring.** Briefs in
+  `docs/agent-tasks/abs-sync/`. TASK-03 (merge-follow hook into
+  `merge.Service.MergeBooks`), TASK-07 (extract + persist chapters at scan time via
+  `internal/scanner/process_file.go`), TASK-09 (bookmarks CRUD — no bookmark feature
+  exists today). Wave 1 merged: #2070, #2068, #2069.
+- [ ] **ABS-SYNC: wave 3 — backfill + survival proof.** TASK-04 (idempotent sync-ID
+  backfill over the existing library; MUST use a bounded worker pool per the CLAUDE.md
+  concurrency rule), TASK-05 (ID-survival suite: rename / move tagged+untagged / retag /
+  merge / file-replace). TASK-05 is the acceptance bar for §4.
+- [ ] **ABS-SYNC: TASK-11 — auth core, both credential modes.** Brief not yet written.
+  Unified identity resolution per spec §3.0.1: verified `Cf-Access-Jwt-Assertion` →
+  user, else our own JWT, else 401. Mode B needs JWT + DB-backed sessions + **30d**
+  access TTL (NOT 1h — see §1.6) + argon2id; Modes C/A trust the CF assertion with JIT
+  provisioning against the allowlist, fail closed. Mandated test: the ABS router group
+  must NOT inherit the `/api/v1` fail-open `cfaccess` behaviour — that would be an
+  authentication bypass. Only this task may touch `go.mod`.
+- [ ] **ABS-SYNC: Phase 3 — DTO mapping + library browse.** Depends on waves 1–2 and
+  TASK-11. Must honour the verified client contract (§1.7–1.8): `publishedYear` as a
+  **String**, non-null `userDefaultLibraryId`, **never paginate `user.mediaProgress`**
+  (it deletes client-side progress), integer `total`/`numBooks`, real JSON booleans,
+  flat `authorName`/`narratorName`, and never an empty `audioTracks: []` (omit the key
+  instead). Gated by the merged conformance harness.
+- [ ] **ABS-SYNC: Phase 5b — playback routes.** `POST /api/items/:id/play`,
+  `GET /api/items/:id/file/:ino`, and the **unauthenticated**
+  `GET /public/session/:id/track/:index` that AudioBooth streams from (§1.8.3). Uses the
+  merged `internal/httputil` Range helper. Direct play only; HLS must degrade cleanly.
+- [ ] **ABS-SYNC: Phase 7 — socket.io (Absorb only).** AudioBooth needs no websocket at
+  all (verified against its `Package.swift`), but Absorb goes offline after 5 failed
+  reconnects, and expects `emit('auth', <raw token string>)`. Deprioritized: the primary
+  client ships without it.
+- [ ] **ABS-SYNC: Phase 8 — topology, runbook, migration guide.** Cloudflare Access
+  service token in a **dedicated Service Auth policy ordered FIRST** (the trap that bit
+  users in both clients' issue trackers), the cover/image bypass (§1.9.5), tunnel-level
+  JWT enforcement, and the client compatibility matrix. Runbook must record: never trust
+  an app's reachability checkmark (Access returns HTTP 200 with HTML, so failures look
+  like JSON decode errors), and AudioBooth's first-server-add cover bug is upstream, not
+  ours.
 
 - [ ] **REGROUP-PARTCHAPTER-PARSER** The Mistborn-style "Ambiguous folder" case
       (`01 P0-C0.mp3`, `07 P1-C6.mp3` — Part/Chapter naming, non-contiguous numbers)
