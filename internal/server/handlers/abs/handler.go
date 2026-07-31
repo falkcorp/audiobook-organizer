@@ -22,6 +22,7 @@
 package abs
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"sync"
@@ -66,6 +67,74 @@ type UserDataProvider interface {
 	Bookmarks(userID string) ([]any, error)
 }
 
+// LibraryStore is the read slice of the library the browse + playback surface needs
+// (Phase 3 / Phase 5b). Every method already exists on database.Store; declaring the
+// narrow interface here keeps store.go untouched and keeps the handler testable
+// against a fake rather than a whole PebbleStore.
+//
+// Note what is NOT here: no writer of any kind. The ABS surface is read + play +
+// progress only; management stays on /api/v1 (spec §3.6 router split), and the type
+// system is what enforces that rather than a convention nobody rechecks.
+type LibraryStore interface {
+	GetBookByID(id string) (*database.Book, error)
+	GetBooksByIDs(ids []string) ([]database.Book, error)
+	GetAllBookSummaries(limit, offset int) ([]database.BookSummary, error)
+	CountAllBooks() (int, error)
+	SearchBooks(query string, limit, offset int) ([]database.Book, error)
+	GetBookFiles(bookID string) ([]database.BookFile, error)
+	GetAuthorsByBookIDs(ctx context.Context, bookIDs []string) (map[string][]database.Author, error)
+	GetNarratorsByBookIDs(ctx context.Context, bookIDs []string) (map[string][]database.Narrator, error)
+	GetSeriesByIDs(ids []int) (map[int]*database.Series, error)
+	GetAllAuthors() ([]database.Author, error)
+	GetAllAuthorBookCounts() (map[int]int, error)
+	GetAllSeries() ([]database.Series, error)
+	GetAllSeriesBookCounts() (map[int]int, error)
+	ListNarrators() ([]database.Narrator, error)
+	GetDistinctGenres() ([]string, error)
+	GetDistinctLanguages() ([]string, error)
+}
+
+// IdentityStore is the sync_item + sync_file keyspace slice.
+//
+// 🔴 EVERY client-visible id on this surface comes from here and NOWHERE else.
+// libraryItemId must be the 36-char sync_item UUID because Absorb splits compound
+// ids by FIXED BYTE OFFSET substring(0,36) at 4+ call sites (§1.7.1) — our 26-char
+// Book ULIDs would mis-truncate into the wrong /api/me/progress path. `ino` must be
+// the sync_file id and never a real filesystem inode, because this app moves and
+// reorganizes files as its core function and an inode does not survive a move across
+// filesystems or a copy-then-replace (§4.2b) — that would break every offline
+// client's cached download URL.
+type IdentityStore interface {
+	MintOrGetSyncID(bookID string) (string, error)
+	ResolveSyncItem(syncID string) (*database.SyncItem, error)
+	MintOrGetSyncFileID(bookID, fileID string) (string, error)
+	GetSyncFileID(bookID, fileID string) (string, bool, error)
+	ListSyncFilesForBook(bookID string) ([]database.SyncFile, error)
+}
+
+// ChapterStore reads the persisted per-book chapter timeline (Phase 4). Optional:
+// with no chapter store the mapper synthesizes one chapter per track, which is what
+// real ABS does for a multi-file book anyway.
+type ChapterStore interface {
+	GetChaptersForBook(bookID string) ([]database.Chapter, error)
+}
+
+// ProgressStore is the existing per-user listening-progress subsystem (spec §1: we
+// adapt it, we do not rebuild it).
+//
+// The play + session-sync paths need it for one requirement in particular:
+// PlaySession.currentTime must be the user's TRUE latest position. AudioBooth takes
+// max() on position at session start while IGNORING timestamps
+// (SessionManager.swift:175-180), so a 0 or a session-start snapshot here silently
+// rewinds the user (§1.8.7). Optional — with no store, sessions still play, they
+// just start at 0 and remember nothing.
+type ProgressStore interface {
+	GetUserPosition(userID, bookID string) (*database.UserPosition, error)
+	SetUserPosition(userID, bookID, segmentID string, positionSeconds float64) error
+	GetUserBookState(userID, bookID string) (*database.UserBookState, error)
+	SetUserBookState(state *database.UserBookState) error
+}
+
 // Options are the handler's dependencies.
 type Options struct {
 	Config   *absauth.Config
@@ -76,6 +145,24 @@ type Options struct {
 	// once at construction, because an empty list is only safe while it is genuinely
 	// the complete list.
 	UserData UserDataProvider
+
+	// Library and Identity together gate the browse + playback surface: with either
+	// nil, Register skips those routes entirely rather than registering handlers that
+	// would answer with a half-built body. wireABSRoutes refuses to boot when the
+	// configured store cannot supply them, so a real server can never degrade
+	// silently into the auth-only surface.
+	Library  LibraryStore
+	Identity IdentityStore
+	Chapters ChapterStore
+	Progress ProgressStore
+
+	// CoverRoot is config.AppConfig.RootDir — the library root that
+	// metadata.CoverPathForBook resolves covers under, and the base for the relative
+	// paths reported on library items.
+	CoverRoot string
+	// LibraryName is the display name of the single library we expose. Empty means
+	// "Books".
+	LibraryName string
 }
 
 // Handler serves the ABS auth surface.
@@ -85,6 +172,19 @@ type Handler struct {
 	resolver *servermiddleware.ABSIdentityResolver
 	userData UserDataProvider
 	throttle *absauth.Throttle
+
+	library     LibraryStore
+	identity    IdentityStore
+	chapters    ChapterStore
+	progress    ProgressStore
+	coverRoot   string
+	libraryName string
+
+	// sessions holds the live play sessions. See play.go: they are in-memory on
+	// purpose, and a sync for an id we do not know is answered idempotently rather
+	// than 404'd, because AudioBooth cannot detect an expired session (it rewraps
+	// errors and loses the status code) and so will never re-create one (§1.8.8 #8).
+	sessions *sessionRegistry
 
 	// refreshLocks holds one mutex per session id — the per-session single-flight
 	// lock of §3.4 step 1. It serializes concurrent refreshes of the SAME session so
@@ -119,16 +219,34 @@ func New(o Options) (*Handler, error) {
 	if o.Resolver == nil {
 		return nil, errors.New("abs: identity resolver is required")
 	}
-	return &Handler{
-		cfg:      o.Config,
-		store:    o.Store,
-		resolver: o.Resolver,
-		userData: o.UserData,
-		throttle: absauth.NewThrottle(),
-		now:      time.Now,
-		newID:    func() string { return ulid.Make().String() },
-	}, nil
+	name := strings.TrimSpace(o.LibraryName)
+	if name == "" {
+		name = "Books"
+	}
+	h := &Handler{
+		cfg:         o.Config,
+		store:       o.Store,
+		resolver:    o.Resolver,
+		userData:    o.UserData,
+		throttle:    absauth.NewThrottle(),
+		library:     o.Library,
+		identity:    o.Identity,
+		chapters:    o.Chapters,
+		progress:    o.Progress,
+		coverRoot:   o.CoverRoot,
+		libraryName: name,
+		now:         time.Now,
+		newID:       func() string { return ulid.Make().String() },
+	}
+	h.sessions = newSessionRegistry(h.nowFn)
+	return h, nil
 }
+
+// nowFn indirects through the handler so SetClock also moves session expiry.
+func (h *Handler) nowFn() time.Time { return h.now() }
+
+// HasBrowseSurface reports whether the Phase 3 / Phase 5b routes were registered.
+func (h *Handler) HasBrowseSurface() bool { return h.library != nil && h.identity != nil }
 
 // SetSleep replaces the throttle's delay function. Tests inject a no-op.
 func (h *Handler) SetSleep(fn func(time.Duration)) { h.throttle.SetSleep(fn) }
@@ -168,6 +286,49 @@ func (h *Handler) Register(r gin.IRouter) {
 	r.GET("/api/me", auth, h.Me)
 	r.GET("/api/me/sessions", auth, h.Sessions)
 	r.DELETE("/api/me/sessions/:id", auth, h.DeleteSession)
+
+	if !h.HasBrowseSurface() {
+		return
+	}
+
+	// ── Phase 3: library browse ─────────────────────────────────────────────
+	r.GET("/api/libraries", auth, h.Libraries)
+	r.GET("/api/libraries/:libraryId", auth, h.Library)
+	r.GET("/api/libraries/:libraryId/items", auth, h.LibraryItems)
+	r.GET("/api/libraries/:libraryId/personalized", auth, h.Personalized)
+	r.GET("/api/libraries/:libraryId/series", auth, h.LibrarySeries)
+	r.GET("/api/libraries/:libraryId/collections", auth, h.EmptyPage)
+	r.GET("/api/libraries/:libraryId/playlists", auth, h.EmptyPage)
+	r.GET("/api/libraries/:libraryId/authors", auth, h.LibraryAuthors)
+	r.GET("/api/libraries/:libraryId/narrators", auth, h.LibraryNarrators)
+	r.GET("/api/libraries/:libraryId/filterdata", auth, h.LibraryFilterData)
+	r.GET("/api/libraries/:libraryId/search", auth, h.LibrarySearch)
+	// Podcast stub: a probing client gets a valid empty response, not an error
+	// (§1.8.6 — the wrapper key is required, and `{}` throws).
+	r.GET("/api/libraries/:libraryId/recent-episodes", auth, h.RecentEpisodes)
+
+	r.GET("/api/items/:id", auth, h.Item)
+	// The cover endpoint is deliberately OUTSIDE the auth middleware. §1.8.8 item 7 /
+	// §1.9.5: AudioBooth's widget extension sends no headers at all — not even
+	// ?token= — and its widget cover art has no other path. It stays
+	// Cloudflare-Access-gated at the edge in Modes B/C, and the residual exposure
+	// (cover images fetchable by anyone who knows a 36-char item UUID; no metadata,
+	// no audio, no progress) is the owner-accepted, documented tradeoff.
+	r.GET("/api/items/:id/cover", h.ItemCover)
+
+	// ── Phase 5b: playback ──────────────────────────────────────────────────
+	r.POST("/api/items/:id/play", auth, h.Play)
+	r.GET("/api/items/:id/file/:ino", auth, h.ItemFile)
+	r.GET("/api/items/:id/file/:ino/download", auth, h.ItemFileDownload)
+	r.POST("/api/session/:id/sync", auth, h.SessionSync)
+	r.POST("/api/session/:id/close", auth, h.SessionClose)
+
+	// UNAUTHENTICATED by protocol requirement (§1.8.3). AudioBooth has no
+	// contentUrl field at all (zero repo-wide hits) and streams exclusively from
+	// this path; the session id is the capability. It is a freshly minted 36-char
+	// UUID, unguessable and scoped to one book for one user, and it stops working
+	// when the session expires.
+	r.GET("/public/session/:id/track/:index", h.PublicSessionTrack)
 }
 
 // ── shared helpers ──────────────────────────────────────────────────────────

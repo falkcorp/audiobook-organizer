@@ -1,5 +1,5 @@
 // file: internal/server/wire_abs_routes.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9c6b13f8-40a2-4e57-b18d-72e0a5c4d396
 // last-edited: 2026-07-30
 
@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	abshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"
@@ -28,11 +29,21 @@ import (
 // deliberate act, and so a future /api/v1 route can never be captured by accident.
 var absReservedPaths = []string{
 	"/api/me",
+	"/api/libraries",
 }
 
 // absReservedPathPrefixes covers ABS sub-trees (e.g. /api/me/sessions/:id).
+//
+// Adding a route to Handler.Register WITHOUT adding it here is the single most
+// dangerous mistake on this surface, because it fails in the most misleading possible
+// way: the endpoint exists, the route log lists it, a curl against it appears to work
+// (301 → 200), and the client silently receives the /api/v1 app-API shape or a 401.
+// It looks implemented and behaves broken.
 var absReservedPathPrefixes = []string{
 	"/api/me/",
+	"/api/libraries/",
+	"/api/items/",
+	"/api/session/",
 }
 
 // absReservedPath reports whether a request path belongs to the ABS surface and must
@@ -135,6 +146,29 @@ func (s *Server) wireABSRoutes() {
 		os.Exit(1)
 	}
 
+	// Phase 3 / Phase 5b capabilities. Each is a type assertion rather than a Store
+	// interface change (repo rule: store.go stays untouched, new capabilities live in
+	// their own file and are obtained by assertion). PebbleDB is the only supported
+	// backend and satisfies all of them.
+	//
+	// FAIL CLOSED on the two that gate the surface: without them the browse + playback
+	// routes would not be registered at all, so /api/libraries would answer a JSON 404
+	// while the startup log claimed the ABS API was up. Exiting is the honest outcome.
+	libraryStore, ok := s.Store().(abshandler.LibraryStore)
+	if !ok {
+		slog.Error("abs: refusing to start — the configured store cannot serve the library browse surface " +
+			"(PebbleDB is the only supported backend)")
+		os.Exit(1)
+	}
+	syncIdentity := database.AsSyncIdentityStore(s.Store())
+	syncFiles := database.AsSyncFileStore(s.Store())
+	if syncIdentity == nil || syncFiles == nil {
+		slog.Error("abs: refusing to start — the configured store lacks the sync_item/sync_file keyspaces. " +
+			"Every client-visible id (libraryItemId, ino) must come from them: a raw Book ULID is 26 chars and " +
+			"Absorb splits ids at a fixed offset of 36, and a filesystem inode does not survive a file move.")
+		os.Exit(1)
+	}
+
 	resolver := servermiddleware.NewABSIdentityResolver(cfg, verifier, oauthCfg, identityStore)
 	handler, err := abshandler.New(abshandler.Options{
 		Config:   cfg,
@@ -144,6 +178,16 @@ func (s *Server) wireABSRoutes() {
 		// empty list genuinely IS the complete list. Phase 6 wires the real provider,
 		// and the warning below makes the gap visible until it does.
 		UserData: nil,
+
+		Library:  libraryStore,
+		Identity: absIdentityAdapter{SyncIdentityStore: syncIdentity, SyncFileStore: syncFiles},
+		// Chapters and Progress are OPTIONAL by design: without chapters the mapper
+		// synthesizes one per track (what real ABS does for a multi-file book anyway),
+		// and without progress a session still plays, it just starts at 0.
+		Chapters:    asChapterStore(s.Store()),
+		Progress:    asProgressStore(s.Store()),
+		CoverRoot:   config.AppConfig.RootDir,
+		LibraryName: "Books",
 	})
 	if err != nil {
 		slog.Error("abs: refusing to start — handler construction failed", "err", err)
@@ -167,16 +211,67 @@ func (s *Server) wireABSRoutes() {
 			"That is correct only while the server holds no ABS progress records at all: clients DELETE local " +
 			"progress rows absent from this list. Phase 6 must wire the provider before any progress is stored.")
 	}
-	slog.Info("abs: Audiobookshelf-compatible auth surface enabled",
+	if !handler.HasBrowseSurface() {
+		slog.Error("abs: the browse + playback routes were NOT registered — /api/libraries, /api/items and " +
+			"/public/session would answer 404. This should be unreachable: the store assertions above exit on failure.")
+		os.Exit(1)
+	}
+	if asProgressStore(s.Store()) == nil {
+		slog.Warn("abs: no listening-progress store is wired — every play session will report currentTime 0. " +
+			"AudioBooth takes max() on position at session start while ignoring timestamps, so a 0 there silently " +
+			"rewinds the listener to the start of the book.")
+	}
+
+	slog.Info("abs: Audiobookshelf-compatible surface enabled (auth + library browse + direct playback)",
 		"modes", strings.Join(cfg.ModeNames(), ","),
 		"server_version", cfg.ServerVersion,
 		"access_token_ttl", cfg.AccessTTL.String(),
 		"refresh_token_ttl", cfg.RefreshTTL.String(),
 		"refresh_grace", cfg.RefreshGrace.String(),
+		"library_id", cfg.DefaultLibraryID,
+		"library_root", config.AppConfig.RootDir,
+		"routes", len(absRouteList()),
 	)
+	// Logged individually so an operator can diff the live surface against the ABS
+	// protocol without reading the source, and so a route that exists but was never
+	// added to absReservedPath is visible next to the ones that were.
+	for _, route := range absRouteList() {
+		slog.Info("abs: route registered", "route", route)
+	}
+}
+
+// absIdentityAdapter joins the two independent sync keyspaces into the single
+// interface the handler consumes. They are separate store files on purpose (separate
+// locks, separate concerns); the handler only cares that both are present.
+type absIdentityAdapter struct {
+	database.SyncIdentityStore
+	database.SyncFileStore
+}
+
+// asChapterStore returns the persisted-chapter capability, or nil when the store does
+// not have it. Optional: the mapper synthesizes chapters from track durations
+// otherwise.
+func asChapterStore(s any) abshandler.ChapterStore {
+	if cs, ok := s.(abshandler.ChapterStore); ok {
+		return cs
+	}
+	return nil
+}
+
+// asProgressStore returns the listening-progress capability, or nil. Optional, but a
+// nil one means PlaySession.currentTime is always 0 — which silently rewinds the user
+// (§1.8.7) — so the caller warns about it.
+func asProgressStore(s any) abshandler.ProgressStore {
+	if ps, ok := s.(abshandler.ProgressStore); ok {
+		return ps
+	}
+	return nil
 }
 
 // absRouteList is the registered ABS surface, for tests and for the startup log.
+//
+// Every entry here must also be covered by absReservedPath above (unversioned /api
+// paths only) or it 301s into /api/v1 and looks implemented while behaving broken.
 func absRouteList() []string {
 	return []string{
 		"GET /ping",
@@ -187,5 +282,27 @@ func absRouteList() []string {
 		"GET /api/me",
 		"GET /api/me/sessions",
 		"DELETE /api/me/sessions/:id",
+		// Phase 3 — library browse.
+		"GET /api/libraries",
+		"GET /api/libraries/:libraryId",
+		"GET /api/libraries/:libraryId/items",
+		"GET /api/libraries/:libraryId/personalized",
+		"GET /api/libraries/:libraryId/series",
+		"GET /api/libraries/:libraryId/collections",
+		"GET /api/libraries/:libraryId/playlists",
+		"GET /api/libraries/:libraryId/authors",
+		"GET /api/libraries/:libraryId/narrators",
+		"GET /api/libraries/:libraryId/filterdata",
+		"GET /api/libraries/:libraryId/search",
+		"GET /api/libraries/:libraryId/recent-episodes",
+		"GET /api/items/:id",
+		"GET /api/items/:id/cover (no credentials required)",
+		// Phase 5b — playback, direct play only.
+		"POST /api/items/:id/play",
+		"GET /api/items/:id/file/:ino",
+		"GET /api/items/:id/file/:ino/download",
+		"POST /api/session/:id/sync",
+		"POST /api/session/:id/close",
+		"GET /public/session/:id/track/:index (unauthenticated)",
 	}
 }
