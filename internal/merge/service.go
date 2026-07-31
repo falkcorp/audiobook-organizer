@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-07-30
 
@@ -399,6 +399,11 @@ func (ms *Service) CombineBooks(bookIDs []string, primaryID string, override *Co
 			if err := ms.db.MoveBookFilesToBook(ids, id, survivor.ID); err != nil {
 				return nil, fmt.Errorf("move files %s->%s: %w", id, survivor.ID, err)
 			}
+			// Carry each moved file's sync_file identity (ino) onto the
+			// survivor. Still inside mergeSerializeMu and well before the
+			// hard delete below, matching the FollowMerge call's own
+			// placement and rationale.
+			FollowFileMove(ms.db, id, survivor.ID, ids)
 			res.FilesMoved += len(files)
 		} else if book.FilePath != "" {
 			res.FilesMoved += ms.attachVirtualFile(book, survivor.ID)
@@ -507,10 +512,14 @@ func (ms *Service) attachVirtualFile(b *database.Book, targetBookID string) int 
 	existing, _ := ms.db.GetBookFileByPath(b.FilePath)
 	if existing != nil {
 		if existing.BookID != targetBookID {
-			if err := ms.db.MoveBookFilesToBook([]string{existing.ID}, existing.BookID, targetBookID); err != nil {
+			oldOwnerID := existing.BookID
+			if err := ms.db.MoveBookFilesToBook([]string{existing.ID}, oldOwnerID, targetBookID); err != nil {
 				slog.Warn("combine reattach existing file", "path", b.FilePath, "err", err)
 				return 0
 			}
+			// Same file-move shape as the main CombineBooks loop: the row's
+			// owning book id just changed, so its sync_file ino must follow.
+			FollowFileMove(ms.db, oldOwnerID, targetBookID, []string{existing.ID})
 		}
 		return 1
 	}
