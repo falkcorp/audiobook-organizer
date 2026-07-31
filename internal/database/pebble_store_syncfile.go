@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_syncfile.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 92ebd115-9f89-4400-ac26-bf9a065b6153
 // last-edited: 2026-07-30
 
@@ -8,6 +8,7 @@ package database
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -47,6 +48,7 @@ type SyncFileStore interface {
 	GetSyncFileID(bookID, fileID string) (string, bool, error)
 	ListSyncFilesForBook(bookID string) ([]SyncFile, error)
 	RepointSyncFile(bookID, oldFileID, newFileID string) error
+	RepointSyncFileToBook(oldBookID, newBookID, fileID string) error
 }
 
 // AsSyncFileStore type-asserts s into a SyncFileStore, returning nil if s is
@@ -251,6 +253,125 @@ func (s *PebbleStore) RepointSyncFile(bookID, oldFileID, newFileID string) error
 		return err
 	}
 	if err := batch.Set(syncFileLookupKey(bookID, newFileID), []byte(syncFileID), nil); err != nil {
+		batch.Close()
+		return err
+	}
+	if err := batch.Set(syncFileRecordKey(syncFileID), updatedData, nil); err != nil {
+		batch.Close()
+		return err
+	}
+	if err := batch.Commit(pebble.Sync); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// RepointSyncFileToBook moves a sync_file entry from oldBookID to newBookID
+// for the SAME fileID, preserving the sync-file ID -- the cross-book
+// analogue of RepointSyncFile (which moves the fileID side within one book).
+// This is the primitive that lets a file's `ino` survive the two places a
+// BookFile can change owning books without the file itself changing:
+// CombineBooks (files move onto the surviving book) and an untagged move
+// (the whole book is re-keyed under a new ULID). See
+// docs/specs/2026-07-29-abs-sync-api-design.md and the PR #2074 follow-up
+// gap this closes.
+//
+// Same-book calls (oldBookID == newBookID) are a no-op: there is nothing to
+// move.
+//
+// Idempotent: if no sync_file entry exists for (oldBookID, fileID), this is
+// a no-op returning nil, matching RepointSyncFile's convention. A retried
+// call after a successful move lands here, since the old lookup key is gone.
+//
+// Collision rule: if newBookID already has its OWN sync_file entry for
+// fileID (a syncFileID minted independently under that exact (book, file)
+// pair -- see TestSyncFile_SameFileIDOnDifferentBooks_NoCollision), the
+// destination's existing identity wins and the move is skipped entirely. We
+// never silently reassign which syncFileID answers for (newBookID, fileID):
+// a client may already be resolving downloads against the destination's id,
+// and clobbering it would break a URL that was never stale to begin with.
+// The source entry is left exactly as it is; both wired call sites
+// (CombineBooks, the scanner's version-link path) hard-delete or retire
+// their source book row immediately after, so nothing is left dangling in
+// practice. Logged at Warn either way -- an unusual but not erroneous state.
+func (s *PebbleStore) RepointSyncFileToBook(oldBookID, newBookID, fileID string) error {
+	if oldBookID == "" {
+		return fmt.Errorf("RepointSyncFileToBook: oldBookID must not be empty")
+	}
+	if newBookID == "" {
+		return fmt.Errorf("RepointSyncFileToBook: newBookID must not be empty")
+	}
+	if fileID == "" {
+		return fmt.Errorf("RepointSyncFileToBook: fileID must not be empty")
+	}
+	if oldBookID == newBookID {
+		return nil
+	}
+
+	syncFileMintMu.Lock()
+	defer syncFileMintMu.Unlock()
+
+	oldLookupKey := syncFileLookupKey(oldBookID, fileID)
+	existing, closer, err := s.db.Get(oldLookupKey)
+	if err == pebble.ErrNotFound {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	syncFileID := string(existing)
+	closer.Close()
+
+	newLookupKey := syncFileLookupKey(newBookID, fileID)
+	destExisting, destCloser, err := s.db.Get(newLookupKey)
+	if err == nil {
+		destID := string(destExisting)
+		destCloser.Close()
+		if destID != syncFileID {
+			slog.Warn("sync_file repoint-to-book: destination already has its own entry for this fileID; keeping destination's identity, source left in place",
+				"old_book", oldBookID, "new_book", newBookID, "file_id", fileID,
+				"source_sync_file_id", syncFileID, "dest_sync_file_id", destID)
+		}
+		// destID == syncFileID would mean the move already landed (a racing
+		// retry); either way there is nothing left to do.
+		return nil
+	}
+	if err != pebble.ErrNotFound {
+		return err
+	}
+
+	recData, recCloser, err := s.db.Get(syncFileRecordKey(syncFileID))
+	if err != nil {
+		return err
+	}
+	var rec SyncFile
+	unmarshalErr := json.Unmarshal(recData, &rec)
+	recCloser.Close()
+	if unmarshalErr != nil {
+		return fmt.Errorf("failed to unmarshal sync_file record %q: %w", syncFileID, unmarshalErr)
+	}
+	rec.BookID = newBookID
+
+	updatedData, err := json.Marshal(rec)
+	if err != nil {
+		return fmt.Errorf("failed to marshal sync_file record: %w", err)
+	}
+
+	batch := s.db.NewBatch()
+	if err := batch.Delete(oldLookupKey, nil); err != nil {
+		batch.Close()
+		return err
+	}
+	if err := batch.Delete(syncFileBookKey(oldBookID, syncFileID), nil); err != nil {
+		batch.Close()
+		return err
+	}
+	if err := batch.Set(syncFileBookKey(newBookID, syncFileID), []byte(fileID), nil); err != nil {
+		batch.Close()
+		return err
+	}
+	if err := batch.Set(newLookupKey, []byte(syncFileID), nil); err != nil {
 		batch.Close()
 		return err
 	}

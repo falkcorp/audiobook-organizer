@@ -1,5 +1,5 @@
 // file: internal/merge/sync_follow.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 50421381-9def-4b19-bd23-6fa1a03c24d3
 // last-edited: 2026-07-30
 
@@ -16,6 +16,17 @@
 //
 // See docs/specs/2026-07-29-abs-sync-api-design.md §4.2 (model), §4.3 (test
 // bar) and §5.5 (progress on merge).
+//
+// A second, file-scoped identity layer sits alongside the book-level one:
+// each BookFile has a durable sync_file `ino` backing the ABS contentUrl
+// scheme `/api/items/{itemId}/file/{ino}` (internal/database's
+// pebble_store_syncfile.go). PR #2074 wired item-level identity and progress
+// through CombineBooks and the untagged-move path but left per-file `ino`
+// behind, since sync_file entries are keyed (bookID, fileID) and the old
+// RepointSyncFile could only move a fileID within one book, never across
+// books. FollowFileMove (called from CombineBooks) and the file-carry inside
+// FollowBookIDChange (covering the untagged-move path) close that gap using
+// the new database.RepointSyncFileToBook primitive.
 package merge
 
 import (
@@ -105,6 +116,82 @@ func FollowMergeWithStore(db database.Store, winnerBookID string, loserBookIDs [
 	FollowMerge(db, follower, winnerBookID, loserBookIDs)
 }
 
+// FollowFileMove carries each moved file's sync_file identity (its durable
+// `ino`) from oldBookID to newBookID after the caller has physically moved
+// the underlying BookFile row(s) onto a different book -- CombineBooks
+// (MoveBookFilesToBook, and attachVirtualFile's cross-book reattach branch).
+// Call it with the EXACT list of file IDs that were just moved, still inside
+// whatever lock guards the operation's read-modify-write, and BEFORE any
+// hard delete of the source book row -- like FollowMerge, there is no
+// surviving row to repoint afterwards on that path.
+//
+// Best-effort and per-file: one file's repoint failing does not stop the
+// others from being attempted. A store that does not implement
+// SyncFileStore is a silent no-op everywhere else sync_file lives, but
+// CombineBooks hard-deletes its source row, so a skipped follow here is
+// unrecoverable -- logged at Warn once for the whole call, matching
+// FollowMergeWithStore's severity for the same reason. Each individual
+// repoint failure is logged at ERROR with both book IDs and the file ID,
+// because a silent failure here quietly breaks a user's downloaded file with
+// no trace.
+//
+// Idempotent and no-op-safe by construction: RepointSyncFileToBook is
+// idempotent (a re-run finds the source entry already moved) and empty
+// fileIDs entries are skipped.
+func FollowFileMove(db database.Store, oldBookID, newBookID string, fileIDs []string) {
+	if db == nil || oldBookID == "" || newBookID == "" || oldBookID == newBookID || len(fileIDs) == 0 {
+		return
+	}
+	sf := database.AsSyncFileStore(db)
+	if sf == nil {
+		slog.Warn("sync-identity file-follow: store does not implement SyncFileStore; file ino(s) will NOT be carried forward",
+			"old_book", oldBookID, "new_book", newBookID, "file_count", len(fileIDs))
+		return
+	}
+	for _, fileID := range fileIDs {
+		if fileID == "" {
+			continue
+		}
+		if err := sf.RepointSyncFileToBook(oldBookID, newBookID, fileID); err != nil {
+			slog.Error("sync-identity file-follow: repoint FAILED; a cached download URL for this file will go stale",
+				"old_book", oldBookID, "new_book", newBookID, "file_id", fileID, "err", err)
+		}
+	}
+}
+
+// followSyncFilesForBookChange is FollowFileMove's counterpart for
+// FollowBookIDChange's untagged-move path: unlike CombineBooks, the caller
+// there (internal/scanner) does not carry an explicit list of moved file
+// IDs, so this enumerates every sync_file already registered on oldBookID
+// via ListSyncFilesForBook and repoints each by its CurrentFileID. A book's
+// BookFile IDs are stable across the version-link (only the Book ULID
+// changes), so the enumerated fileIDs are exactly the ones that need to
+// move.
+//
+// Debug, not warn, when the store lacks the capability: both rows survive a
+// version-link (this is not a hard-delete path), matching
+// FollowBookIDChange's own severity choice for the identity/progress carry.
+func followSyncFilesForBookChange(db database.Store, oldBookID, newBookID string) {
+	sf := database.AsSyncFileStore(db)
+	if sf == nil {
+		slog.Debug("sync-identity follow: store does not implement SyncFileStore; skipping file ino carry-forward",
+			"old_book", oldBookID, "new_book", newBookID)
+		return
+	}
+	files, err := sf.ListSyncFilesForBook(oldBookID)
+	if err != nil {
+		slog.Error("sync-identity follow: could not list old book's sync_files; file ino(s) NOT carried forward",
+			"old_book", oldBookID, "new_book", newBookID, "err", err)
+		return
+	}
+	for _, f := range files {
+		if err := sf.RepointSyncFileToBook(oldBookID, newBookID, f.CurrentFileID); err != nil {
+			slog.Error("sync-identity follow: file repoint FAILED; a cached download URL for this file will go stale",
+				"old_book", oldBookID, "new_book", newBookID, "file_id", f.CurrentFileID, "sync_file_id", f.SyncFileID, "err", err)
+		}
+	}
+}
+
 // FollowBookIDChange carries a book's sync identity and per-user progress from
 // oldBookID to newBookID when a Book ULID is REPLACED rather than merged --
 // the untagged-move case, where a moved file is re-scanned, matched to its
@@ -151,6 +238,13 @@ func FollowBookIDChange(db database.Store, oldBookID, newBookID string) {
 			"sync_id", syncID, "old_book", oldBookID, "new_book", newBookID, "err", err)
 		return
 	}
+
+	// Carry each registered file's ino forward too. Independent of progress
+	// below (a file-repoint failure must not block a progress carry or vice
+	// versa), so this runs unconditionally once identity itself is repointed
+	// rather than being gated behind the progress-merge outcome.
+	followSyncFilesForBookChange(db, oldBookID, newBookID)
+
 	// The identity now resolves to newBookID, so progress keyed to oldBookID
 	// would look lost to a client. It is still on disk under the old id (this
 	// only fails forward, never destroys), but it must be logged loudly.
