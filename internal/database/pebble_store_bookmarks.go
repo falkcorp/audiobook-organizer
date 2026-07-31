@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_bookmarks.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 35844383-1823-4889-9735-b64bceb2ab17
-// last-edited: 2026-07-30
+// last-edited: 2026-07-31
 
 // Package database: named-bookmark keyspace.
 //
@@ -61,7 +61,7 @@ func AsBookmarkStore(s any) BookmarkStore {
 		return nil
 	}
 	// Looks through the indexedStore decorator; see store_capability.go.
-	if bs, ok := asCapability[BookmarkStore](s); ok {
+	if bs, ok := AsCapability[BookmarkStore](s); ok {
 		return bs
 	}
 	return nil

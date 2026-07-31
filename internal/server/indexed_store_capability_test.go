@@ -1,7 +1,7 @@
 // file: internal/server/indexed_store_capability_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2c7f4b18-6e93-4a52-9d81-5f0a3b6c8e27
-// last-edited: 2026-07-30
+// last-edited: 2026-07-31
 
 package server
 
@@ -84,5 +84,68 @@ func TestIndexedStoreCapabilityRoundTrip(t *testing.T) {
 	}
 	if !ok || got != minted {
 		t.Errorf("inner store has (%q, %v); want (%q, true)", got, ok, minted)
+	}
+}
+
+// TestIndexedStoreResolvesConcretePebbleStore covers the second half of the same
+// bug: the wipe fixups in maintenance_fixups.go assert on the CONCRETE
+// *database.PebbleStore rather than a narrow interface, and a bare assertion fails
+// through this decorator exactly the same way.
+//
+// Those sites are worse than the interface ones because each has a deliberate
+// "different backend" fallback written for SQLite and test doubles. A wrapped
+// Pebble store is indistinguishable from an unsupported backend at a bare
+// assertion, so the fallback fires and the configuration looks supported.
+func TestIndexedStoreResolvesConcretePebbleStore(t *testing.T) {
+	inner, err := database.NewPebbleStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	t.Cleanup(func() { _ = inner.Close() })
+
+	var wrapped database.Store = &indexedStore{Store: inner, server: nil}
+
+	if got := database.AsPebbleStore(wrapped); got != inner {
+		t.Fatalf("AsPebbleStore through indexedStore = %p, want the inner store %p",
+			got, inner)
+	}
+
+	// And the bare form still fails, which is the whole reason AsPebbleStore has
+	// to be used at those call sites.
+	if _, ok := wrapped.(*database.PebbleStore); ok {
+		t.Error("bare *database.PebbleStore assertion unexpectedly saw through " +
+			"indexedStore; the AsPebbleStore call sites may no longer need it")
+	}
+}
+
+// TestWipeFixupsReachPebbleThroughDecorator exercises the repaired call sites
+// themselves rather than the helper in isolation, because the helper being correct
+// says nothing about whether these six functions actually call it.
+//
+// Only the two fixups that assert BEFORE their dry-run branch are exercised —
+// wipeSegments and wipeExternalIDs. Both run a counting query in dry-run mode, so
+// nothing is deleted. The other four (wipeBookFiles, wipeBooks, wipeAuthors,
+// wipeSeries) return from their dry-run branch before reaching the assertion, so a
+// dry-run call cannot distinguish fixed from broken and a non-dry-run call would
+// wipe the store; they are covered by AsPebbleStore's own tests instead.
+func TestWipeFixupsReachPebbleThroughDecorator(t *testing.T) {
+	inner, err := database.NewPebbleStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	t.Cleanup(func() { _ = inner.Close() })
+
+	var wrapped database.Store = &indexedStore{Store: inner, server: nil}
+	ms, ok := wrapped.(maintenanceStore)
+	if !ok {
+		t.Fatal("indexedStore does not satisfy maintenanceStore")
+	}
+
+	// Before the fix these returned "unsupported store type *server.indexedStore".
+	if _, err := wipeSegments(ms, true); err != nil {
+		t.Errorf("wipeSegments(dryRun) through the decorator: %v", err)
+	}
+	if _, err := wipeExternalIDs(ms, true); err != nil {
+		t.Errorf("wipeExternalIDs(dryRun) through the decorator: %v", err)
 	}
 }
