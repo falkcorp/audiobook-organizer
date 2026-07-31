@@ -1,5 +1,5 @@
 // file: internal/server/wire_abs_routes_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3ea1d764-95c8-4b02-8f31-6d70a5be2c49
 // last-edited: 2026-07-30
 
@@ -29,6 +29,58 @@ func TestABSReservedPath_CoversTheABSSurfaceUnderAPI(t *testing.T) {
 		if !absReservedPath(p) {
 			t.Errorf("%s must be reserved for the ABS surface, or the /api/v1 redirect will swallow it", p)
 		}
+	}
+}
+
+// TestABSReservedPath_CoversEVERYRegisteredUnversionedRoute is the guard that scales:
+// it derives its input from absRouteList() rather than a hand-kept list, so adding an
+// ABS route without adding it to absReservedPath fails HERE instead of on a phone.
+//
+// That failure mode is the reason this test exists and is worth the reflection: a
+// missing exclusion does not 404. The route registers, the startup log lists it, and a
+// curl follows the 301 into /api/v1 and prints a 200 — so the endpoint looks
+// implemented while the client silently receives the app API's shape or a 401.
+func TestABSReservedPath_CoversEVERYRegisteredUnversionedRoute(t *testing.T) {
+	// Concrete stand-ins for gin's wildcards: absReservedPath matches real request
+	// paths, not route patterns.
+	placeholders := map[string]string{
+		":libraryId": "b5e3a5b2-a76e-471f-b18b-915e4716d053",
+		":id":        "68929fc9-e296-4d25-b3aa-1c2930efd00d",
+		":ino":       "01JFILEIDABCDEFGHIJKLMNOP",
+		":index":     "1",
+	}
+
+	checked := 0
+	for _, entry := range absRouteList() {
+		// Entries may carry a trailing " (note)" for the startup log.
+		if paren := strings.Index(entry, " ("); paren >= 0 {
+			entry = entry[:paren]
+		}
+		parts := strings.SplitN(entry, " ", 2)
+		if len(parts) != 2 {
+			t.Fatalf("malformed absRouteList entry %q", entry)
+		}
+		path := parts[1]
+		// Only unversioned /api/ paths pass through the redirect middleware. Root paths
+		// (/login, /ping, /status, /logout, /auth/refresh) and /public/* never do.
+		if !strings.HasPrefix(path, "/api/") {
+			continue
+		}
+		for pattern, value := range placeholders {
+			path = strings.ReplaceAll(path, pattern, value)
+		}
+		if strings.Contains(path, ":") {
+			t.Fatalf("route %q has a wildcard with no test placeholder — add one", path)
+		}
+		checked++
+		if !absReservedPath(path) {
+			t.Errorf("REGISTERED BUT NOT RESERVED: %s. Add its prefix to absReservedPathPrefixes "+
+				"(or the exact path to absReservedPaths), or it will 301 into /api/v1 and look "+
+				"implemented while behaving broken.", path)
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no /api/ routes were checked — absRouteList or the parser above is wrong")
 	}
 }
 

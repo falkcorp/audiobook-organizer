@@ -140,14 +140,22 @@ type fileMetadataDTO struct {
 }
 
 // metaTagsDTO is the embedded-tag block real ABS reports per audio file.
+//
+// Every field is `omitempty` because real ABS reports the tags a file ACTUALLY
+// carries and nothing else — the oracle's m4b has a tagDate and no tagTrack, its mp3s
+// the reverse. Emitting `""` for a tag the file does not have would be a small lie
+// with a real cost: the metadata-editor screens in both clients show these verbatim,
+// so a fabricated empty tag reads as "this file has a blank title" rather than "this
+// file has no title tag".
 type metaTagsDTO struct {
-	TagAlbum   string `json:"tagAlbum"`
-	TagArtist  string `json:"tagArtist"`
-	TagComment string `json:"tagComment"`
-	TagEncoder string `json:"tagEncoder"`
-	TagGenre   string `json:"tagGenre"`
-	TagTitle   string `json:"tagTitle"`
-	TagTrack   string `json:"tagTrack"`
+	TagAlbum   string `json:"tagAlbum,omitempty"`
+	TagArtist  string `json:"tagArtist,omitempty"`
+	TagComment string `json:"tagComment,omitempty"`
+	TagDate    string `json:"tagDate,omitempty"`
+	TagEncoder string `json:"tagEncoder,omitempty"`
+	TagGenre   string `json:"tagGenre,omitempty"`
+	TagTitle   string `json:"tagTitle,omitempty"`
+	TagTrack   string `json:"tagTrack,omitempty"`
 }
 
 // chapterDTO is one navigable chapter. All four fields are required (§1.8.5 item 7)
@@ -161,30 +169,38 @@ type chapterDTO struct {
 
 // audioFileDTO is media.audioFiles[] — the physical file, with no playback timeline.
 type audioFileDTO struct {
-	AddedAt              int64           `json:"addedAt"`
-	BitRate              int             `json:"bitRate"`
-	ChannelLayout        string          `json:"channelLayout"`
-	Channels             int             `json:"channels"`
-	Chapters             []chapterDTO    `json:"chapters"`
-	Codec                string          `json:"codec"`
-	DiscNumFromFilename  *int            `json:"discNumFromFilename"`
-	DiscNumFromMeta      *int            `json:"discNumFromMeta"`
-	Duration             float64         `json:"duration"`
-	EmbeddedCoverArt     *string         `json:"embeddedCoverArt"`
-	Error                *string         `json:"error"`
-	Exclude              bool            `json:"exclude"`
-	Format               string          `json:"format"`
-	Index                int             `json:"index"`
-	Ino                  string          `json:"ino"`
-	Language             *string         `json:"language"`
-	ManuallyVerified     bool            `json:"manuallyVerified"`
-	MetaTags             metaTagsDTO     `json:"metaTags"`
-	Metadata             fileMetadataDTO `json:"metadata"`
-	MimeType             string          `json:"mimeType"`
-	TimeBase             string          `json:"timeBase"`
-	TrackNumFromFilename *int            `json:"trackNumFromFilename"`
-	TrackNumFromMeta     *int            `json:"trackNumFromMeta"`
-	UpdatedAt            int64           `json:"updatedAt"`
+	AddedAt             int64        `json:"addedAt"`
+	BitRate             int          `json:"bitRate"`
+	ChannelLayout       string       `json:"channelLayout"`
+	Channels            int          `json:"channels"`
+	Chapters            []chapterDTO `json:"chapters"`
+	Codec               string       `json:"codec"`
+	DiscNumFromFilename *int         `json:"discNumFromFilename"`
+	DiscNumFromMeta     *int         `json:"discNumFromMeta"`
+	Duration            float64      `json:"duration"`
+	EmbeddedCoverArt    *string      `json:"embeddedCoverArt"`
+	Error               *string      `json:"error"`
+	Exclude             bool         `json:"exclude"`
+	Format              string       `json:"format"`
+	Index               int          `json:"index"`
+	Ino                 string       `json:"ino"`
+	// Language is the stream language the container declares ("und" when the file
+	// says "undetermined"), or null when we have none. A *string rather than a plain
+	// string so "we do not know" stays distinguishable from "the file says nothing".
+	Language         *string         `json:"language"`
+	ManuallyVerified bool            `json:"manuallyVerified"`
+	MetaTags         metaTagsDTO     `json:"metaTags"`
+	Metadata         fileMetadataDTO `json:"metadata"`
+	MimeType         string          `json:"mimeType"`
+	TimeBase         string          `json:"timeBase"`
+	// TrackNumFromFilename and TrackNumFromMeta are separate on purpose and are NOT
+	// interchangeable: ABS reports where each number came from, and the two disagree
+	// in practice (the oracle's 6th mp3 has a filename-derived 6 and NO track tag at
+	// all, and its m4b has neither). Both are null when that source has no number —
+	// fabricating an index here would tell a client the file is tagged when it is not.
+	TrackNumFromFilename *int  `json:"trackNumFromFilename"`
+	TrackNumFromMeta     *int  `json:"trackNumFromMeta"`
+	UpdatedAt            int64 `json:"updatedAt"`
 }
 
 // audioTrackDTO is an audioFile placed on the whole-book timeline.
