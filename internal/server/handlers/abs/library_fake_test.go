@@ -1,0 +1,530 @@
+// file: internal/server/handlers/abs/library_fake_test.go
+// version: 1.0.0
+// guid: 1d4a67f2-0c85-4f39-9b6e-3a71c5d0e824
+// last-edited: 2026-07-30
+
+package abs_test
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+	abshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"
+	"github.com/falkcorp/audiobook-organizer/internal/syncapi/conformance"
+)
+
+// fakeLibrary is an in-memory stand-in for the four capability interfaces the
+// browse + playback surface consumes (LibraryStore, IdentityStore, ChapterStore,
+// ProgressStore). *database.PebbleStore satisfies all four in production.
+//
+// It deliberately mints sync ids the same way the real keyspaces do — a 36-char
+// UUID for the item, an opaque string for the file — because those two id shapes
+// are load-bearing client contract (§1.7.1) and a fake that handed back raw
+// ULIDs would let a regression through.
+type fakeLibrary struct {
+	mu sync.Mutex
+
+	// order preserves seed order, which is what the list endpoints iterate.
+	order    []string
+	books    map[string]*database.Book
+	files    map[string][]database.BookFile
+	chapters map[string][]database.Chapter
+
+	authors    []database.Author
+	bookAuthor map[string][]database.Author
+	narrators  []database.Narrator
+	bookNarr   map[string][]database.Narrator
+	series     map[int]*database.Series
+
+	syncIDs     map[string]string // bookID -> syncID
+	syncItems   map[string]*database.SyncItem
+	syncFiles   map[string]string // bookID|fileID -> syncFileID
+	syncFileRev map[string]database.SyncFile
+
+	positions map[string]*database.UserPosition  // userID|bookID
+	states    map[string]*database.UserBookState // userID|bookID
+
+	nextUUID int
+	listErr  error
+}
+
+func newFakeLibrary() *fakeLibrary {
+	return &fakeLibrary{
+		books:       map[string]*database.Book{},
+		files:       map[string][]database.BookFile{},
+		chapters:    map[string][]database.Chapter{},
+		bookAuthor:  map[string][]database.Author{},
+		bookNarr:    map[string][]database.Narrator{},
+		series:      map[int]*database.Series{},
+		syncIDs:     map[string]string{},
+		syncItems:   map[string]*database.SyncItem{},
+		syncFiles:   map[string]string{},
+		syncFileRev: map[string]database.SyncFile{},
+		positions:   map[string]*database.UserPosition{},
+		states:      map[string]*database.UserBookState{},
+	}
+}
+
+// ── seeding ─────────────────────────────────────────────────────────────────
+
+func (f *fakeLibrary) addBook(b *database.Book, files []database.BookFile, chs []database.Chapter) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.order = append(f.order, b.ID)
+	f.books[b.ID] = b
+	f.files[b.ID] = files
+	f.chapters[b.ID] = chs
+}
+
+func (f *fakeLibrary) addAuthor(id int, name string, bookIDs ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	a := database.Author{ID: id, Name: name}
+	f.authors = append(f.authors, a)
+	for _, bid := range bookIDs {
+		f.bookAuthor[bid] = append(f.bookAuthor[bid], a)
+	}
+}
+
+// ── LibraryStore ────────────────────────────────────────────────────────────
+
+func (f *fakeLibrary) GetBookByID(id string) (*database.Book, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.books[id], nil
+}
+
+func (f *fakeLibrary) GetBooksByIDs(ids []string) ([]database.Book, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]database.Book, 0, len(ids))
+	for _, id := range ids {
+		if b, ok := f.books[id]; ok {
+			out = append(out, *b)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeLibrary) GetAllBookSummaries(limit, offset int) ([]database.BookSummary, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := []database.BookSummary{}
+	for i, id := range f.order {
+		if i < offset {
+			continue
+		}
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+		b := f.books[id]
+		out = append(out, database.BookSummary{ID: b.ID, Title: b.Title, CreatedAt: b.CreatedAt})
+	}
+	return out, nil
+}
+
+func (f *fakeLibrary) CountAllBooks() (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.order), nil
+}
+
+func (f *fakeLibrary) SearchBooks(query string, limit, offset int) ([]database.Book, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	q := strings.ToLower(query)
+	out := []database.Book{}
+	for i, id := range f.order {
+		b := f.books[id]
+		if !strings.Contains(strings.ToLower(b.Title), q) {
+			continue
+		}
+		if i < offset {
+			continue
+		}
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+		out = append(out, *b)
+	}
+	return out, nil
+}
+
+func (f *fakeLibrary) GetBookFiles(bookID string) ([]database.BookFile, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.files[bookID], nil
+}
+
+func (f *fakeLibrary) GetAuthorsByBookIDs(_ context.Context, ids []string) (map[string][]database.Author, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := map[string][]database.Author{}
+	for _, id := range ids {
+		if a, ok := f.bookAuthor[id]; ok {
+			out[id] = a
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeLibrary) GetNarratorsByBookIDs(_ context.Context, ids []string) (map[string][]database.Narrator, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := map[string][]database.Narrator{}
+	for _, id := range ids {
+		if n, ok := f.bookNarr[id]; ok {
+			out[id] = n
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeLibrary) GetSeriesByIDs(ids []int) (map[int]*database.Series, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := map[int]*database.Series{}
+	for _, id := range ids {
+		if s, ok := f.series[id]; ok {
+			out[id] = s
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeLibrary) GetAllAuthors() ([]database.Author, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]database.Author(nil), f.authors...), nil
+}
+
+func (f *fakeLibrary) GetAllAuthorBookCounts() (map[int]int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := map[int]int{}
+	for _, list := range f.bookAuthor {
+		for _, a := range list {
+			out[a.ID]++
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeLibrary) GetAllSeries() ([]database.Series, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := []database.Series{}
+	for _, s := range f.series {
+		out = append(out, *s)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+func (f *fakeLibrary) GetAllSeriesBookCounts() (map[int]int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := map[int]int{}
+	for _, b := range f.books {
+		if b.SeriesID != nil {
+			out[*b.SeriesID]++
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeLibrary) ListNarrators() ([]database.Narrator, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]database.Narrator(nil), f.narrators...), nil
+}
+
+func (f *fakeLibrary) GetDistinctGenres() ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	seen := map[string]bool{}
+	out := []string{}
+	for _, b := range f.books {
+		if b.Genre == nil {
+			continue
+		}
+		for _, g := range strings.Split(*b.Genre, ",") {
+			g = strings.TrimSpace(g)
+			if g != "" && !seen[g] {
+				seen[g] = true
+				out = append(out, g)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+func (f *fakeLibrary) GetDistinctLanguages() ([]string, error) { return []string{}, nil }
+
+// ── IdentityStore ───────────────────────────────────────────────────────────
+
+// nextSyncID mints a deterministic 36-char canonical UUID so tests can assert
+// the length invariant of §1.7.1 without depending on randomness.
+func (f *fakeLibrary) nextSyncID() string {
+	f.nextUUID++
+	return fmt.Sprintf("%08x-0000-4000-8000-%012x", f.nextUUID, f.nextUUID)
+}
+
+func (f *fakeLibrary) MintOrGetSyncID(bookID string) (string, error) {
+	if bookID == "" {
+		return "", fmt.Errorf("bookID required")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if id, ok := f.syncIDs[bookID]; ok {
+		return id, nil
+	}
+	id := f.nextSyncID()
+	f.syncIDs[bookID] = id
+	f.syncItems[id] = &database.SyncItem{SyncID: id, CurrentBookID: bookID, CreatedAt: time.Now()}
+	return id, nil
+}
+
+func (f *fakeLibrary) ResolveSyncItem(syncID string) (*database.SyncItem, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	it, ok := f.syncItems[syncID]
+	if !ok {
+		return nil, nil
+	}
+	cp := *it
+	return &cp, nil
+}
+
+func (f *fakeLibrary) MintOrGetSyncFileID(bookID, fileID string) (string, error) {
+	if bookID == "" || fileID == "" {
+		return "", fmt.Errorf("bookID and fileID required")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	key := bookID + "|" + fileID
+	if id, ok := f.syncFiles[key]; ok {
+		return id, nil
+	}
+	id := fmt.Sprintf("sf%03d", len(f.syncFiles)+1)
+	f.syncFiles[key] = id
+	f.syncFileRev[id] = database.SyncFile{SyncFileID: id, BookID: bookID, CurrentFileID: fileID}
+	return id, nil
+}
+
+func (f *fakeLibrary) GetSyncFileID(bookID, fileID string) (string, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	id, ok := f.syncFiles[bookID+"|"+fileID]
+	return id, ok, nil
+}
+
+func (f *fakeLibrary) ListSyncFilesForBook(bookID string) ([]database.SyncFile, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := []database.SyncFile{}
+	for _, sf := range f.syncFileRev {
+		if sf.BookID == bookID {
+			out = append(out, sf)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].SyncFileID < out[j].SyncFileID })
+	return out, nil
+}
+
+// ── ChapterStore ────────────────────────────────────────────────────────────
+
+func (f *fakeLibrary) GetChaptersForBook(bookID string) ([]database.Chapter, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.chapters[bookID], nil
+}
+
+// ── ProgressStore ───────────────────────────────────────────────────────────
+
+func (f *fakeLibrary) GetUserPosition(userID, bookID string) (*database.UserPosition, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.positions[userID+"|"+bookID], nil
+}
+
+func (f *fakeLibrary) SetUserPosition(userID, bookID, segmentID string, pos float64) error {
+	if userID == "" || bookID == "" || segmentID == "" {
+		return fmt.Errorf("user/book/segment required")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.positions[userID+"|"+bookID] = &database.UserPosition{
+		UserID: userID, BookID: bookID, SegmentID: segmentID,
+		PositionSeconds: pos, UpdatedAt: time.Now(),
+	}
+	return nil
+}
+
+func (f *fakeLibrary) GetUserBookState(userID, bookID string) (*database.UserBookState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.states[userID+"|"+bookID], nil
+}
+
+func (f *fakeLibrary) SetUserBookState(s *database.UserBookState) error {
+	if s == nil || s.UserID == "" || s.BookID == "" {
+		return fmt.Errorf("user and book required")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cp := *s
+	f.states[s.UserID+"|"+s.BookID] = &cp
+	return nil
+}
+
+// ── oracle seed ─────────────────────────────────────────────────────────────
+
+// oracleLibrary reproduces the exact library the real ABS 2.36.0 server held when
+// testdata/abs-fixtures/ was captured: two copies of The Odyssey, one a single m4b
+// with six embedded chapters, one six mp3 tracks with six synthesized chapters.
+//
+// The counts matter: the conformance differ compares array LENGTHS as well as
+// element types, so a seed that differs in cardinality fails for a reason that has
+// nothing to do with the code under test.
+type oracleSeed struct {
+	lib      *fakeLibrary
+	root     string
+	singleID string
+	multiID  string
+}
+
+func seedOracleLibrary(t *testing.T) *oracleSeed {
+	t.Helper()
+	root := t.TempDir()
+	lib := newFakeLibrary()
+
+	created := time.UnixMilli(1785370201391)
+	strp := func(s string) *string { return &s }
+	intp := func(i int) *int { return &i }
+
+	// ── book 1: single-file m4b, 6 embedded chapters ─────────────────────────
+	singleDir := filepath.Join(root, "Homer", "The Odyssey (Single File)")
+	if err := os.MkdirAll(singleDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	m4b := filepath.Join(singleDir, "odyssey.m4b")
+	writeFakeAudio(t, m4b, 4096)
+	single := &database.Book{
+		ID: "01SINGLEFILEODYSSEYBOOK00", Title: "The Odyssey",
+		FilePath: m4b, Format: "m4b", Duration: intp(9975),
+		Genre: strp("Audiobook"), PrintYear: intp(800),
+		CreatedAt: &created, UpdatedAt: &created,
+	}
+	lib.addBook(single, []database.BookFile{{
+		ID: "f-m4b", BookID: single.ID, FilePath: m4b, Format: "m4b", Codec: "aac",
+		Duration: 9975, FileSize: 4096, TrackNumber: 1, TrackCount: 1,
+		BitrateKbps: 64, SampleRateHz: 22050, Channels: 2,
+		CreatedAt: created, UpdatedAt: created,
+	}}, sixChapters())
+
+	// ── book 2: six mp3 tracks, 6 synthesized chapters ──────────────────────
+	multiDir := filepath.Join(root, "Homer", "The Odyssey")
+	if err := os.MkdirAll(multiDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	multi := &database.Book{
+		ID: "01MULTIFILEODYSSEYBOOK000", Title: "The Odyssey",
+		Format: "mp3", Duration: intp(9975),
+		Genre:       strp("Speech"),
+		Description: strp("http://archive.org/details/odyssey_butler_librivox"),
+		CreatedAt:   &created, UpdatedAt: &created,
+	}
+	var mp3s []database.BookFile
+	for i := 1; i <= 6; i++ {
+		p := filepath.Join(multiDir, fmt.Sprintf("odyssey_%02d_homer_butler_64kb.mp3", i))
+		writeFakeAudio(t, p, 2048+i)
+		mp3s = append(mp3s, database.BookFile{
+			ID: fmt.Sprintf("f-mp3-%d", i), BookID: multi.ID, FilePath: p,
+			Format: "mp3", Codec: "mp3", Duration: 1662, FileSize: int64(2048 + i),
+			TrackNumber: i, TrackCount: 6, Title: fmt.Sprintf("The Odyssey: Book %02d", i),
+			BitrateKbps: 64, SampleRateHz: 22050, Channels: 1,
+			CreatedAt: created, UpdatedAt: created,
+		})
+	}
+	multi.FilePath = mp3s[0].FilePath
+	lib.addBook(multi, mp3s, nil) // nil chapters => synthesized, one per track
+
+	lib.addAuthor(1, "Homer", single.ID)
+	lib.addAuthor(2, "transl. Samuel Butler Homer", multi.ID)
+
+	return &oracleSeed{lib: lib, root: root, singleID: single.ID, multiID: multi.ID}
+}
+
+func sixChapters() []database.Chapter {
+	out := make([]database.Chapter, 6)
+	start := 0.0
+	for i := range out {
+		end := start + 1662.5
+		out[i] = database.Chapter{ID: i, StartSec: start, EndSec: end, Title: fmt.Sprintf("Book %02d", i+1)}
+		start = end
+	}
+	return out
+}
+
+// writeFakeAudio writes deterministic bytes so Range assertions can name exact
+// offsets. The content is not real audio: nothing under test decodes it.
+func writeFakeAudio(t *testing.T, path string, size int) {
+	t.Helper()
+	buf := make([]byte, size)
+	for i := range buf {
+		buf[i] = byte(i % 251)
+	}
+	if err := os.WriteFile(path, buf, 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+// ── harness plumbing ────────────────────────────────────────────────────────
+
+func withLibrary(s *oracleSeed) harnessOpt {
+	return func(o *abshandler.Options) {
+		o.Library = s.lib
+		o.Identity = s.lib
+		o.Chapters = s.lib
+		o.Progress = s.lib
+		o.CoverRoot = s.root
+	}
+}
+
+// mustLoadFixture loads a golden ABS fixture or fails the test.
+func mustLoadFixture(t *testing.T, name string) *conformance.Fixture {
+	t.Helper()
+	f, err := conformance.LoadFixture(filepath.Join(fixturesDir(), name))
+	if err != nil {
+		t.Fatalf("LoadFixture(%s): %v", name, err)
+	}
+	return f
+}
+
+// doAny is do() for endpoints whose top-level body is not an object — most
+// importantly /personalized, which is a BARE ARRAY (§1.8.6: `{}` there throws).
+func (h *harness) doAny(t *testing.T, req request) (int, any) {
+	t.Helper()
+	w, _ := h.do(t, req)
+	var decoded any
+	if w.Body.Len() > 0 {
+		if err := json.Unmarshal(w.Body.Bytes(), &decoded); err != nil {
+			t.Fatalf("%s %s: body is not JSON (%v): %s", req.method, req.path, err, w.Body.String())
+		}
+	}
+	return w.Code, decoded
+}
