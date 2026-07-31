@@ -1,6 +1,7 @@
 // file: internal/server/indexed_store.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5d2e4f3a-7b5a-4a70-b8c5-3d7e0f1b9a79
+// last-edited: 2026-07-30
 //
 // indexedStore decorates a database.Store so that every successful
 // book mutation (create / update / delete) schedules an async
@@ -25,10 +26,22 @@ import (
 // indexedStore wraps an inner Store and fires index-update events on
 // book mutations. The embedded interface forwards every other method
 // to the underlying store transparently.
+//
+// "Every other method" means every method DECLARED ON database.Store. Embedding
+// an interface promotes only that interface's method set, so the narrow
+// capability interfaces that deliberately live outside database.Store
+// (SyncIdentityStore, SyncFileStore, BookmarkStore, ...) are NOT reachable
+// through this type. Unwrap below is what makes them discoverable again.
 type indexedStore struct {
 	database.Store
 	server *Server
 }
+
+// Compile-time proof that this decorator advertises the unwrap capability, which
+// is what lets database.As*Store lookups resolve capabilities against the store
+// it wraps. If Unwrap is ever dropped or renamed, the build fails here instead of
+// the failure reappearing at runtime as a silent nil in an unrelated package.
+var _ database.StoreUnwrapper = (*indexedStore)(nil)
 
 // CreateBook writes to the inner store and schedules an index
 // refresh for the newly-assigned book ID on success.
@@ -51,8 +64,17 @@ func (s *indexedStore) UpdateBook(id string, b *database.Book) (*database.Book, 
 	return updated, err
 }
 
-// Unwrap returns the inner store so decorator-aware helpers (e.g.
-// unwrapAIJobsStore) can peel layers and reach concrete sub-interfaces.
+// Unwrap returns the inner store so decorator-aware helpers can peel layers and
+// reach concrete sub-interfaces. database.asCapability walks this chain, which is
+// what makes database.AsSyncIdentityStore / AsSyncFileStore / AsBookmarkStore
+// keep working once this decorator is installed in Start().
+//
+// Reaching past this decorator is safe for those capabilities specifically: sync
+// identity, sync files and bookmarks live in keyspaces this type does not index,
+// so a caller that writes to them directly loses no index update. Book mutations
+// still arrive through the explicit CreateBook/UpdateBook/DeleteBook overrides,
+// which is what actually keeps Bleve in sync. Do NOT rely on Unwrap to bypass a
+// decorator whose behaviour is load-bearing.
 func (s *indexedStore) Unwrap() database.Store {
 	return s.Store
 }

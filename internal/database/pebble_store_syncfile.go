@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_syncfile.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 92ebd115-9f89-4400-ac26-bf9a065b6153
 // last-edited: 2026-07-30
 
@@ -57,11 +57,18 @@ func AsSyncFileStore(s any) SyncFileStore {
 	if s == nil {
 		return nil
 	}
-	if sf, ok := s.(SyncFileStore); ok {
+	// Looks through the indexedStore decorator; see store_capability.go.
+	if sf, ok := asCapability[SyncFileStore](s); ok {
 		return sf
 	}
 	return nil
 }
+
+// Compile-time assertion that *PebbleStore satisfies SyncFileStore. This was
+// missing when RepointSyncFileToBook was added to the interface, which meant a
+// signature drift would have surfaced only as a nil from AsSyncFileStore at
+// runtime rather than as a build failure.
+var _ SyncFileStore = (*PebbleStore)(nil)
 
 func syncFileLookupKey(bookID, fileID string) []byte {
 	return []byte(fmt.Sprintf("sync_file:lookup:%s:%s", bookID, fileID))

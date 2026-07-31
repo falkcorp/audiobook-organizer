@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_bookmarks.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 35844383-1823-4889-9735-b64bceb2ab17
 // last-edited: 2026-07-30
 
@@ -60,7 +60,8 @@ func AsBookmarkStore(s any) BookmarkStore {
 	if s == nil {
 		return nil
 	}
-	if bs, ok := s.(BookmarkStore); ok {
+	// Looks through the indexedStore decorator; see store_capability.go.
+	if bs, ok := asCapability[BookmarkStore](s); ok {
 		return bs
 	}
 	return nil
