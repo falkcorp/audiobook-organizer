@@ -282,6 +282,13 @@ func (h *Handler) Register(r gin.IRouter) {
 	r.POST("/login", h.Login)
 	r.POST("/auth/refresh", h.Refresh)
 
+	// Single sign-on. Both are unauthenticated at the app layer by necessity:
+	// /auth/openid is opened in the client's web session and derives identity
+	// from the Cloudflare Access assertion on the request, and the callback is
+	// authenticated by the one-time PKCE code it carries. See openid.go.
+	r.GET("/auth/openid", h.OpenIDAuthorize)
+	r.GET("/auth/openid/callback", h.OpenIDCallback)
+
 	auth := servermiddleware.ABSRequireAuth(h.resolver)
 	r.POST("/logout", auth, h.Logout)
 	r.GET("/api/me", auth, h.Me)
