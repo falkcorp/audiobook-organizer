@@ -231,3 +231,113 @@ REMAINING: 5 — confirm web SSO by observation; merge #2085; iOS Mode B fix +
 edge config; Phases 1–4; Q3 AudioBooth research
 BLOCKED: 2 — ABS_JWT_SECRET rotation + loopback bind (need password sudo on
 the box; server was down for the entire working window)
+
+---
+
+## 2026-07-31 23:45–00:05 — Web SSO CONFIRMED live; `/api/events` 401 root-caused and fixed
+
+### STEP 1 result: web SSO works. Confirmed by observation, not inference.
+
+Owner opened `https://books.jdfalk.com` and **landed logged in — no app login
+form**. Origin log for that session:
+
+```
+23:49:53 | 200 |   1.68ms | <tunnel-host> | GET "/api/v1/auth/me"
+```
+
+<tunnel-host> is the rpi running cloudflared, so the request arrived through the
+tunnel as expected. `/api/v1/auth/me` returning 200 means the CF assertion was
+verified, the allowlist passed, and `resolve.go` bound an existing user. The
+duplicate-admin theory from the previous entry did **not** materialize — no
+second account was created, and the phone screenshot shows the real account
+(avatar `JO`, "379 items to review"), not an empty one.
+
+Also confirmed on iOS: the same site in a **mobile webview** is signed in via
+SSO. One transient `Invalid login session.` from Cloudflare at 11:54 cleared on
+retry at 11:55 — that page is generated at the edge before any request reaches
+the origin (Access could not re-match its own login state cookie, normal in an
+embedded webview), so it is NOT an origin-side redirect bug and needs no code.
+
+### The real defect: `Connection lost` banner = `/api/events` 401 loop
+
+Owner reported a `Connection lost` chip at the top of the UI. Origin log:
+
+```
+23:49:52 | 401 | GET "/api/events"
+23:49:53 | 401 | GET "/api/events"
+23:49:55 | 401 | GET "/api/events"
+23:50:01 | 401 | GET "/api/events"
+23:50:13 | 401 | GET "/api/events"   <- EventSource backoff, retrying forever
+```
+
+Every `/api/v1` call 200s; only `/api/events` 401s.
+
+**Root cause.** `/api/events` is registered directly on `s.router`
+(`server_lifecycle.go`), NOT inside the `/api/v1` group — deliberately, so it
+sits ahead of the `/api/*` redirect middleware. The consequence nobody had
+traced: it therefore inherits **none** of that group's middleware, including
+`cfMW`, the fail-open Cloudflare Access stage that binds the user resolved from
+a verified `Cf-Access-Jwt-Assertion`. Its guard is a bare `RequireAuth`.
+
+The stale assumption was written in the route's own comment: *"A browser
+EventSource automatically sends the HttpOnly session cookie, so the logged-in UI
+keeps working."* True for password login. **False under Access SSO**, where the
+browser holds no application session cookie at all — identity exists only in
+that header, and `cfMW` is the only stage that reads it.
+
+This was the one authenticated endpoint the Access passthrough never reached.
+
+**Fix (PR #2087, branch `fix/sse-cf-access-identity`).** gin binds a route's
+middleware chain at registration time, so a later `Use()` cannot retrofit it.
+`buildOAuthWiring()` is hoisted above the route registration — it is a pure
+constructor (reads config, builds handlers/verifiers, registers no routes) and
+is still called exactly once. Chain composition extracted to
+`buildEventsChain()` in `internal/server/events_chain.go` so it is testable;
+mirrors `/api/v1` exactly (`cfMW` → `RequireAuth` → handler) and omits a nil
+`cfMW` rather than appending a nil handler that would panic on dispatch.
+
+4 tests in `internal/server/events_chain_test.go`, all passing, including the
+revert-validation case `WithoutCFMWTheAssertionIs401` which drives the pre-fix
+chain through the same request and requires the 401 — so the passing case
+cannot go green for the wrong reason.
+
+### Deploy constraint discovered (matters for STEP 2)
+
+`sudo -n -l` on the box shows blanket `(ALL : ALL) ALL` **with** password, plus
+specific NOPASSWD rules. `make deploy` (Makefile.local:13-20) runs four sudo
+commands; three are NOPASSWD (`mv` the binary, `cp` the .service file,
+`daemon-reload`, `restart`) but line 19 —
+
+```
+sudo cp /home/jdfalk/audiobook-organizer-local.conf \
+        /etc/systemd/system/audiobook-organizer.service.d/local.conf
+```
+
+— is **not** in the NOPASSWD list. So any change that has to reach the systemd
+drop-in (i.e. BOTH remaining STEP 2 items: `ABS_JWT_SECRET` rotation and the
+loopback bind, since both live in `deploy/local.conf`) requires the owner's
+password. This is the concrete reason STEP 2 stays blocked, replacing the
+previous entry's vaguer "needs sudo".
+
+### Correction to an earlier claim in this session
+
+I told the owner a native player app "has nowhere to show you a login page."
+That was wrong, and their screenshots disproved it: the app opens a real webview
+and reaches the Access login fine. The actual blocker for a native player is
+narrower — the app's API client is a separate HTTP stack from its webview and
+generally does not share the cookie jar, so the `CF_Authorization` cookie the
+webview earns never rides along on the app's own API calls. Which player app it
+is decides whether that's true here; some do share the jar. Unresolved, and the
+open question to put to the owner.
+
+### Status
+
+COMPLETED: 4 — web SSO confirmed live by observation (browser + iOS webview);
+`/api/events` 401 root-caused; fix + 4 revert-validated tests written and
+pushed; PR #2087 opened
+REMAINING: 4 — merge #2087 + `make deploy`; Mode B non-identity sentinel fix;
+multi-disc review "approve at top" button (owner request, low priority);
+Phases 1–4 of the ultracode prompt
+BLOCKED: 2 — `ABS_JWT_SECRET` rotation and loopback bind; both edit
+`deploy/local.conf`, which `make deploy` installs via a sudo `cp` that is NOT
+NOPASSWD, so both need the owner's password
