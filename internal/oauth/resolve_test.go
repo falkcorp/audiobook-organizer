@@ -1,5 +1,5 @@
 // file: internal/oauth/resolve_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4c9e1b73-6a20-4d58-8f16-2b5a7c0e9d38
 
 package oauth
@@ -137,5 +137,57 @@ func TestResolveUser_AutoCreatesUser(t *testing.T) {
 	}
 	if gotAlgo != "oauth" {
 		t.Errorf("new oauth user PasswordHashAlgo=%q, want oauth", gotAlgo)
+	}
+}
+
+// An auto-created user is named by its FULL verified email, not the local part.
+//
+// Regression guard: the previous implementation cut the address at '@' and named this
+// user "new", which collides across domains and matches nothing the owner ever typed.
+// Reverting uniqueUsername to the local-part form fails this test on the '@' check.
+func TestResolveUser_UsernameIsFullEmail(t *testing.T) {
+	var gotUsername string
+	store := newResolverStore()
+	store.CreateUserFunc = func(username, email, algo, hash string, roles []string, status string) (*database.User, error) {
+		gotUsername = username
+		return &database.User{ID: "unew", Username: username, Email: email}, nil
+	}
+	cfg := New(Config{AllowedEmails: []string{"Owner.Name+abs@Example.com"}, DefaultRole: "admin"})
+	if _, err := cfg.ResolveUser(store, IdentityClaims{
+		Provider: ProviderCFAccess, Subject: "cf-1",
+		Email: "Owner.Name+abs@Example.com", EmailVerified: true,
+	}); err != nil {
+		t.Fatalf("ResolveUser: %v", err)
+	}
+	// Lower-cased, but otherwise the address intact — '@' and '+' must survive.
+	if want := "owner.name+abs@example.com"; gotUsername != want {
+		t.Errorf("username=%q, want %q", gotUsername, want)
+	}
+}
+
+// A username collision that the email lookup did NOT catch (a hand-made local account
+// with an empty email field holding the address as its username) must not silently bind
+// the federated identity to that account — it gets a suffixed name instead.
+func TestResolveUser_UsernameCollisionSuffixes(t *testing.T) {
+	var gotUsername string
+	store := newResolverStore()
+	store.GetUserByUsernameFunc = func(u string) (*database.User, error) {
+		if u == "taken@example.com" {
+			return &database.User{ID: "pre-existing", Username: u}, nil
+		}
+		return nil, nil
+	}
+	store.CreateUserFunc = func(username, email, algo, hash string, roles []string, status string) (*database.User, error) {
+		gotUsername = username
+		return &database.User{ID: "unew", Username: username, Email: email}, nil
+	}
+	cfg := New(Config{AllowedEmails: []string{"taken@example.com"}, DefaultRole: "viewer"})
+	if _, err := cfg.ResolveUser(store, IdentityClaims{
+		Provider: ProviderGoogle, Subject: "g-2", Email: "taken@example.com", EmailVerified: true,
+	}); err != nil {
+		t.Fatalf("ResolveUser: %v", err)
+	}
+	if want := "taken@example.com1"; gotUsername != want {
+		t.Errorf("colliding username=%q, want %q", gotUsername, want)
 	}
 }

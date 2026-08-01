@@ -1,7 +1,7 @@
 // file: internal/oauth/resolve.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6b0d3f81-9a27-4c54-8e16-2a5c7b9e0d43
-// last-edited: 2026-07-26
+// last-edited: 2026-07-31
 
 package oauth
 
@@ -90,14 +90,22 @@ func (c *Config) ResolveUser(store UserStore, claims IdentityClaims) (*database.
 	return user, nil
 }
 
-// uniqueUsername derives a username from the email local part, appending a numeric
-// suffix on collision.
+// uniqueUsername returns the verified email address itself as the username.
+//
+// The username IS the email, deliberately. A username derived from the local part
+// ("johnathan.falk" out of johnathan.falk@gmail.com) is ambiguous the moment a second
+// identity provider or a second domain is in play — two different people can own the
+// same local part — and it leaves an SSO-provisioned account whose name matches nothing
+// the owner ever typed. The verified email is already unique, already proven to belong
+// to the person, and is what they actually sign in with.
+//
+// The numeric-suffix loop is kept only for the pathological case where some pre-existing
+// local account has already claimed that exact username while NOT being reachable by the
+// email lookup in step (4) above — e.g. a hand-made account whose email field is empty.
+// Creating `user@example.com1` there is ugly, but silently binding a federated identity
+// to an unrelated local account would be an account-takeover bug.
 func (c *Config) uniqueUsername(store UserStore, claims IdentityClaims) string {
-	base := claims.Email
-	if at := strings.IndexByte(base, '@'); at > 0 {
-		base = base[:at]
-	}
-	base = sanitizeUsername(base)
+	base := sanitizeUsername(claims.Email)
 	if base == "" {
 		base = "user"
 	}
@@ -111,11 +119,19 @@ func (c *Config) uniqueUsername(store UserStore, claims IdentityClaims) string {
 	return candidate // extremely unlikely fall-through
 }
 
+// sanitizeUsername reduces an identity string to a conservative username charset.
+//
+// '@' and '+' are permitted so that a full email address survives intact — without '@'
+// an address would silently collapse to "johnathan.falkgmail.com", which looks like a
+// typo and is not the address anyone would type. Everything outside the allowlist is
+// dropped rather than escaped: usernames are compared and displayed in a lot of places,
+// and a restricted charset is the cheap way to keep them boring.
 func sanitizeUsername(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
 	var b strings.Builder
 	for _, r := range s {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-' {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') ||
+			r == '.' || r == '_' || r == '-' || r == '@' || r == '+' {
 			b.WriteRune(r)
 		}
 	}
