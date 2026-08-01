@@ -1,7 +1,7 @@
 // file: web/src/pages/ReviewQueue.tsx
-// version: 2.0.0
+// version: 2.1.0
 // guid: 4c8f2a17-5e93-4d60-a1b8-7f3c6d9e0a52
-// last-edited: 2026-07-26
+// last-edited: 2026-08-01
 
 import { useEffect, useMemo, useState } from 'react';
 import {
@@ -18,6 +18,8 @@ import {
   Stack,
   Tooltip,
   Typography,
+  type SxProps,
+  type Theme,
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore.js';
 import CheckIcon from '@mui/icons-material/Check.js';
@@ -320,6 +322,43 @@ export function ReviewQueue() {
     }
   };
 
+  // Approve/Reject pair for a single item. Defined here rather than at module
+  // scope so it closes over handleItemAction; rendered twice per item (above and
+  // below the member-file list) so the decision is reachable without scrolling
+  // past a long multi-disc listing.
+  const ItemActions = ({
+    item,
+    busy,
+    sx,
+  }: {
+    item: ReviewItem;
+    busy: boolean;
+    sx?: SxProps<Theme>;
+  }) => (
+    <Stack direction="row" spacing={1} sx={sx}>
+      <Button
+        size="small"
+        variant="contained"
+        color="success"
+        startIcon={<CheckIcon />}
+        disabled={busy}
+        onClick={() => handleItemAction(item, 'approve')}
+      >
+        Approve
+      </Button>
+      <Button
+        size="small"
+        variant="outlined"
+        color="error"
+        startIcon={<CloseIcon />}
+        disabled={busy}
+        onClick={() => handleItemAction(item, 'reject')}
+      >
+        Reject
+      </Button>
+    </Stack>
+  );
+
   return (
     <Box>
       <Typography variant="h4" gutterBottom>
@@ -401,29 +440,19 @@ export function ReviewQueue() {
                         </Typography>
                       </AccordionSummary>
                       <AccordionDetails>
+                        {/*
+                          Actions are rendered ABOVE the detail as well as below it.
+                          A multi-disc item can list dozens of member files, so with
+                          the buttons only at the bottom you had to scroll the whole
+                          list to act on an item you had already decided about after
+                          reading the first line. Repeating them costs one row and
+                          means the decision is always reachable from wherever you
+                          are — the top pair for a quick call, the bottom pair for
+                          when you have actually read to the end.
+                        */}
+                        <ItemActions item={item} busy={itemBusy} sx={{ mb: 2 }} />
                         <MemberFilesDetail item={item} />
-                        <Stack direction="row" spacing={1} sx={{ mt: 2 }}>
-                          <Button
-                            size="small"
-                            variant="contained"
-                            color="success"
-                            startIcon={<CheckIcon />}
-                            disabled={itemBusy}
-                            onClick={() => handleItemAction(item, 'approve')}
-                          >
-                            Approve
-                          </Button>
-                          <Button
-                            size="small"
-                            variant="outlined"
-                            color="error"
-                            startIcon={<CloseIcon />}
-                            disabled={itemBusy}
-                            onClick={() => handleItemAction(item, 'reject')}
-                          >
-                            Reject
-                          </Button>
-                        </Stack>
+                        <ItemActions item={item} busy={itemBusy} sx={{ mt: 2 }} />
                       </AccordionDetails>
                     </Accordion>
                   );
