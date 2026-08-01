@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/openid_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7e2b98d5-4a13-4c07-b6f9-08d5137ac642
 // last-edited: 2026-08-01
 
@@ -160,5 +160,61 @@ func TestOIDCRedirectErrorUsesCallbackScheme(t *testing.T) {
 	}
 	if u.Query().Get("code") != "" {
 		t.Fatal("an error redirect must never carry a code")
+	}
+}
+
+// ── redirect_uri allowlist: the account-takeover control ────────────────────
+
+// An unvalidated redirect_uri is account takeover, and PKCE cannot prevent it:
+// the attacker supplies the code_challenge, so they hold the verifier and can
+// redeem a code minted for the victim. These are the payloads that matter.
+func TestOIDCRedirectAllowlist_RejectsAttackerControlledTargets(t *testing.T) {
+	t.Setenv(OIDCRedirectURIsEnvVar, "")
+	hostile := []string{
+		"https://evil.example",
+		"https://evil.example/oauth",
+		"http://127.0.0.1:1234/steal",
+		// Prefix matching would admit this one.
+		"audiobooth://oauth.evil.example",
+		"audiobooth://oauth@evil.example",
+		"audiobooth://oauth/../../evil",
+		// Suffix matching would admit these.
+		"https://evil.example/#audiobooth://oauth",
+		"https://evil.example?x=audiobooth://oauth",
+		// Case and whitespace must not open a door.
+		"AUDIOBOOTH://OAUTH",
+		" audiobooth://oauth",
+		"audiobooth://oauth ",
+		"",
+		"javascript:alert(1)",
+		"//evil.example",
+	}
+	for _, uri := range hostile {
+		if oidcRedirectAllowed(uri) {
+			t.Errorf("redirect_uri %q MUST be rejected — accepting it hands an authorization code to an attacker", uri)
+		}
+	}
+}
+
+func TestOIDCRedirectAllowlist_AcceptsRegisteredClient(t *testing.T) {
+	t.Setenv(OIDCRedirectURIsEnvVar, "")
+	if !oidcRedirectAllowed("audiobooth://oauth") {
+		t.Fatal("the shipped client's registered callback must be accepted")
+	}
+}
+
+// The env override replaces the default set rather than adding to it, so an
+// operator can retire a client as well as add one.
+func TestOIDCRedirectAllowlist_EnvOverrideReplaces(t *testing.T) {
+	t.Setenv(OIDCRedirectURIsEnvVar, "otherapp://cb , second://cb")
+
+	if !oidcRedirectAllowed("otherapp://cb") {
+		t.Fatal("configured URI must be accepted (and surrounding whitespace trimmed)")
+	}
+	if !oidcRedirectAllowed("second://cb") {
+		t.Fatal("second configured URI must be accepted")
+	}
+	if oidcRedirectAllowed("audiobooth://oauth") {
+		t.Fatal("override must REPLACE the defaults, not extend them — otherwise a client can never be retired")
 	}
 }

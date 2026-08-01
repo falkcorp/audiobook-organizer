@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/openid.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3b8e5a14-70c9-4f26-9d51-a2c60f7b8e93
 // last-edited: 2026-08-01
 
@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -121,6 +122,48 @@ func (s *oidcCodeStore) take(code string) (oidcPendingCode, bool) {
 	return pending, ok
 }
 
+// OIDCRedirectURIsEnvVar overrides the redirect_uri allowlist (comma-separated,
+// exact matches). Set it when adding a client whose callback scheme differs.
+const OIDCRedirectURIsEnvVar = "ABS_OIDC_REDIRECT_URIS"
+
+// defaultOIDCRedirectURIs are the callback URIs shipped clients register.
+var defaultOIDCRedirectURIs = []string{"audiobooth://oauth"}
+
+// oidcRedirectAllowed reports whether a redirect_uri may receive an
+// authorization code.
+//
+// THIS IS THE CONTROL THAT PREVENTS ACCOUNT TAKEOVER, and it cannot be replaced
+// by PKCE. An unvalidated redirect_uri lets an attacker send:
+//
+//	/auth/openid?redirect_uri=https://evil.example
+//	            &code_challenge=<THEIR OWN>&code_challenge_method=S256
+//
+// to a signed-in victim. The code is minted for the VICTIM and delivered to the
+// attacker, who supplied the challenge and therefore holds the verifier — so
+// they redeem it and get the victim's session. PKCE binds the code to whoever
+// chose the challenge, which in that flow is the attacker.
+//
+// Matching is exact, not prefix or host-based: a prefix rule is defeated by
+// "audiobooth://oauth.evil.example" and a host rule by userinfo tricks. There is
+// no legitimate need for anything but a handful of fixed strings.
+func oidcRedirectAllowed(uri string) bool {
+	allowed := defaultOIDCRedirectURIs
+	if raw := strings.TrimSpace(os.Getenv(OIDCRedirectURIsEnvVar)); raw != "" {
+		allowed = nil
+		for _, part := range strings.Split(raw, ",") {
+			if p := strings.TrimSpace(part); p != "" {
+				allowed = append(allowed, p)
+			}
+		}
+	}
+	for _, a := range allowed {
+		if subtle.ConstantTimeCompare([]byte(a), []byte(uri)) == 1 {
+			return true
+		}
+	}
+	return false
+}
+
 // OpenIDAuthorize handles GET /auth/openid.
 //
 // It never renders anything: on success it 302s to the client's redirect_uri
@@ -136,10 +179,26 @@ func (h *Handler) OpenIDAuthorize(c *gin.Context) {
 	}
 	state := c.Query("state")
 
-	// With no redirect target there is nowhere to report anything, so this is the
-	// one case that answers directly.
+	// With no redirect target there is nowhere to report anything, so this
+	// answers directly.
 	if redirectURI == "" {
 		respondError(c, http.StatusBadRequest, "redirect_uri is required")
+		return
+	}
+
+	// Validate BEFORE any redirect, including error redirects. Reporting a
+	// failure by bouncing to an unvalidated URI is still an open redirect, so an
+	// unregistered target is answered inline and never navigated to.
+	if !oidcRedirectAllowed(redirectURI) {
+		slog.Warn("abs: openid authorize rejected an unregistered redirect_uri",
+			"redirect_uri", redirectURI, "source_ip", strings.TrimSpace(c.ClientIP()),
+			"user_agent", c.Request.UserAgent())
+		absauth.Audit(absauth.AuditEvent{
+			Action: "openid-authorize", Outcome: absauth.OutcomeDenied, Mode: oidcAuthMethod,
+			SourceIP: strings.TrimSpace(c.ClientIP()), Reason: "redirect-uri-not-registered",
+			Path: c.Request.URL.Path, UserAgent: c.Request.UserAgent(),
+		})
+		respondError(c, http.StatusBadRequest, "redirect_uri is not registered")
 		return
 	}
 
