@@ -19,13 +19,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -54,9 +54,9 @@ func setupHandlerTest(t *testing.T) (*Server, *mocks.MockStore, *gin.Engine) {
 func TestHandler_HealthCheck_Success(t *testing.T) {
 	srv, mockStore, router := setupHandlerTest(t)
 
-	mockStore.EXPECT().CountPrimaryBooks().Return(42, nil)
+	// A single cheap probe now, not four counts — /health answers only "can the
+	// store respond". See the doc comment on HealthCheck.
 	mockStore.EXPECT().CountAuthors().Return(1, nil)
-	mockStore.EXPECT().CountSeries().Return(1, nil)
 
 	router.GET("/health", newSystemHandler(srv).HealthCheck)
 
@@ -70,18 +70,17 @@ func TestHandler_HealthCheck_Success(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, "ok", resp.Data["status"])
 
-	metrics := resp.Data["metrics"].(map[string]any)
-	assert.Equal(t, float64(42), metrics["books"])
-	assert.Equal(t, float64(1), metrics["authors"])
-	assert.Equal(t, float64(1), metrics["series"])
+	// Anonymous callers get liveness and nothing else: no build string (which
+	// maps straight to applicable advisories) and no library counts.
+	assert.NotContains(t, resp.Data, "metrics")
+	assert.NotContains(t, resp.Data, "version")
+	assert.NotContains(t, resp.Data, "database_type")
 }
 
 func TestHandler_HealthCheck_DBError(t *testing.T) {
 	srv, mockStore, router := setupHandlerTest(t)
 
-	mockStore.EXPECT().CountPrimaryBooks().Return(0, errors.New("db down"))
 	mockStore.EXPECT().CountAuthors().Return(0, errors.New("db down"))
-	mockStore.EXPECT().CountSeries().Return(0, errors.New("db down"))
 
 	router.GET("/health", newSystemHandler(srv).HealthCheck)
 
@@ -92,7 +91,11 @@ func TestHandler_HealthCheck_DBError(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	var resp struct{ Data map[string]any }
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Contains(t, resp.Data, "partial_error")
+	// Degraded, not dead. The error string is not echoed — it can carry
+	// filesystem paths to a caller that presented no credential.
+	assert.Equal(t, "degraded", resp.Data["status"])
+	assert.NotContains(t, resp.Data, "partial_error")
+	assert.NotContains(t, w.Body.String(), "db down")
 }
 
 // =============== getOperationStatus ===============

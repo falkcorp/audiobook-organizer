@@ -28,13 +28,13 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/system"
 	systemmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/system/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/sysinfo"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -43,12 +43,12 @@ import (
 // --- helpers ---
 
 type deps struct {
-	store     *systemmocks.MockSystemStore
-	sysSvc    *systemmocks.MockSystemService
-	cfgUpd    *systemmocks.MockConfigUpdateService
-	plugins   *systemmocks.MockPluginHealthChecker
-	hub       *systemmocks.MockEventStreamer
-	opLogs    *systemmocks.MockOperationLogsProvider
+	store   *systemmocks.MockSystemStore
+	sysSvc  *systemmocks.MockSystemService
+	cfgUpd  *systemmocks.MockConfigUpdateService
+	plugins *systemmocks.MockPluginHealthChecker
+	hub     *systemmocks.MockEventStreamer
+	opLogs  *systemmocks.MockOperationLogsProvider
 }
 
 // newTestHandler builds a Handler with all-mock deps and benign stub funcs.
@@ -104,9 +104,9 @@ func run(method, routePath, reqPath string, body []byte, register func(r *gin.En
 
 func TestHealthCheck_OK(t *testing.T) {
 	h, d := newTestHandler(t)
-	d.store.EXPECT().CountPrimaryBooks().Return(10, nil)
+	// One cheap probe, not four counts: /health answers "can the store respond",
+	// nothing more. See the doc comment on HealthCheck.
 	d.store.EXPECT().CountAuthors().Return(5, nil)
-	d.store.EXPECT().CountSeries().Return(2, nil)
 
 	w := run(http.MethodGet, "/health", "/health", nil, func(r *gin.Engine) {
 		r.GET("/health", h.HealthCheck)
@@ -116,15 +116,19 @@ func TestHealthCheck_OK(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	data := resp["data"].(map[string]any)
 	assert.Equal(t, "ok", data["status"])
-	assert.Equal(t, "test-version", data["version"])
-	assert.Equal(t, float64(0), data["broken_file_count"]) // type-assert fallback
+	assert.NotNil(t, data["timestamp"])
+
+	// /health is unauthenticated, so it must disclose nothing about what this
+	// server is or holds. The build string is the sharpest edge: it maps
+	// directly to which advisories apply.
+	for _, leak := range []string{"version", "database_type", "metrics", "broken_file_count"} {
+		assert.NotContains(t, data, leak, "/health must not disclose %q to an anonymous caller", leak)
+	}
 }
 
 func TestHealthCheck_PartialError(t *testing.T) {
 	h, d := newTestHandler(t)
-	d.store.EXPECT().CountPrimaryBooks().Return(0, errors.New("db down"))
 	d.store.EXPECT().CountAuthors().Return(0, errors.New("db down"))
-	d.store.EXPECT().CountSeries().Return(0, errors.New("db down"))
 
 	w := run(http.MethodGet, "/health", "/health", nil, func(r *gin.Engine) {
 		r.GET("/health", h.HealthCheck)
@@ -132,7 +136,13 @@ func TestHealthCheck_PartialError(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.NotEmpty(t, resp["data"].(map[string]any)["partial_error"])
+	data := resp["data"].(map[string]any)
+	// Degraded, not dead — the process serves, the store does not answer.
+	assert.Equal(t, "degraded", data["status"])
+	// The error string is NOT echoed: it can carry filesystem paths, and this
+	// endpoint has no credential behind it.
+	assert.NotContains(t, data, "partial_error")
+	assert.NotContains(t, w.Body.String(), "db down")
 }
 
 // --- GetSystemStatus ---
