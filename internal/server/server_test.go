@@ -20,12 +20,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
+	"github.com/gin-gonic/gin"
 	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -159,8 +159,12 @@ func TestHealthCheck(t *testing.T) {
 
 		assert.Equal(t, "ok", wrapper.Data["status"])
 		assert.NotNil(t, wrapper.Data["timestamp"])
-		assert.NotNil(t, wrapper.Data["version"])
-		assert.NotNil(t, wrapper.Data["metrics"])
+		// version/metrics are deliberately absent: /health is unauthenticated
+		// and must not disclose the build string or library counts. See the doc
+		// comment on system.Handler.HealthCheck, and
+		// TestHealth_IsAnonymousButDisclosesNothing.
+		assert.NotContains(t, wrapper.Data, "version")
+		assert.NotContains(t, wrapper.Data, "metrics")
 	}
 }
 
