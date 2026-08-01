@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.9.0
+// version: 1.1.0
 // guid: 8475f406-df31-4286-95b0-30787397603e
-// last-edited: 2026-07-16
+// last-edited: 2026-08-01
 
 // Package system hosts the system-level HTTP handlers extracted from the server
 // package: health, status, announcements, storage, logs, activity-log,
@@ -31,7 +31,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/backup"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -40,6 +39,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/policy"
 	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
+	"github.com/gin-gonic/gin"
 )
 
 // Handler hosts the system-domain HTTP endpoints.
@@ -143,69 +143,39 @@ func (h *Handler) resolveHub() EventStreamer {
 }
 
 // HealthCheck implements GET /health (and /api/health, /api/v1/health).
+//
+// LIVENESS ONLY — it deliberately says nothing about what this server is or
+// what it holds.
+//
+// This endpoint is necessarily unauthenticated: it is how a caller decides
+// whether the server is up at all, including the SPA's reconnect loop, which
+// runs while logged out. It used to answer with the exact build string and the
+// library's book/author/series counts, so any host that could reach the port
+// learned the precise version to look up advisories against and the size of the
+// collection, without presenting a credential. Every consumer in this repo only
+// ever checks reachability — web/src/App.tsx tests `response.ok`, the scripts
+// under scripts/ discard the body — so nothing needed those fields. They live
+// on at GET /api/v1/system/status, behind settings.manage.
+//
+// It is also now cheap. The old implementation ran CountPrimaryBooks +
+// CountAuthors + CountSeries + GetBrokenFileCount on EVERY probe, and the SPA
+// polls this every 5 seconds while reconnecting. A single tiny read is enough
+// to answer the only question being asked: can the store respond?
 func (h *Handler) HealthCheck(c *gin.Context) {
-	// Gather basic metrics; tolerate errors (don't fail health entirely)
-	store := h.resolveStore()
-	var bookCount, authorCount, seriesCount, playlistCount int
-	var dbErr error
-	var brokenFileCount int
-	if store != nil {
-		if bc, err := store.CountPrimaryBooks(); err == nil {
-			bookCount = bc
-		} else {
-			dbErr = err
-		}
-		// Use Count* instead of GetAll* + len() to avoid materializing
-		// every Author/Series struct on every health probe. On cold-start
-		// (memdb not yet published) the GetAll* path falls back to a full
-		// Pebble prefix scan + JSON unmarshal across the corpus, which is
-		// the same bug class as PR #1149 — wasteful for a probe endpoint.
-		// See docs/perf-audit-2026-05-29-getall-callers.md (Win 1).
-		if ac, err := store.CountAuthors(); err == nil {
-			authorCount = ac
-		} else if dbErr == nil {
-			dbErr = err
-		}
-		if sc, err := store.CountSeries(); err == nil {
-			seriesCount = sc
-		} else if dbErr == nil {
-			dbErr = err
-		}
-		// Playlist count intentionally omitted — no reliable counting method yet
-
-		// Try to read broken file count from underlying store (PebbleStore)
-		if gf, ok := store.(interface{ GetBrokenFileCount() (int, error) }); ok {
-			if cnt, err := gf.GetBrokenFileCount(); err == nil {
-				brokenFileCount = cnt
-			}
-		} else if uw, ok := store.(interface{ Unwrap() database.Store }); ok {
-			if inner, ok2 := uw.Unwrap().(interface{ GetBrokenFileCount() (int, error) }); ok2 {
-				if cnt, err := inner.GetBrokenFileCount(); err == nil {
-					brokenFileCount = cnt
-				}
-			}
-		}
-	}
-	version := "dev"
-	if h.appVersion != nil {
-		version = h.appVersion()
-	}
 	resp := gin.H{
-		"status":        "ok",
-		"timestamp":     time.Now().Unix(),
-		"version":       version,
-		"database_type": config.AppConfig.DatabaseType,
-		"metrics": gin.H{
-			"books":             bookCount,
-			"authors":           authorCount,
-			"series":            seriesCount,
-			"playlists":         playlistCount,
-			"broken_file_count": brokenFileCount,
-		},
-		"broken_file_count": brokenFileCount,
+		"status":    "ok",
+		"timestamp": time.Now().Unix(),
 	}
-	if dbErr != nil {
-		resp["partial_error"] = dbErr.Error()
+	if store := h.resolveStore(); store != nil {
+		// CountAuthors is the cheapest of the aggregates and, like the others,
+		// fails when the store is unreachable — which is the whole signal. The
+		// value is read and discarded on purpose.
+		if _, err := store.CountAuthors(); err != nil {
+			// Degraded, not dead: the process is serving, the store is not
+			// answering. The error string is NOT echoed — it can carry
+			// filesystem paths and internal detail to an anonymous caller.
+			resp["status"] = "degraded"
+		}
 	}
 	httputil.RespondWithOK(c, resp)
 }
