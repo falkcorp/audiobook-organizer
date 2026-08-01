@@ -341,3 +341,77 @@ Phases 1–4 of the ultracode prompt
 BLOCKED: 2 — `ABS_JWT_SECRET` rotation and loopback bind; both edit
 `deploy/local.conf`, which `make deploy` installs via a sudo `cp` that is NOT
 NOPASSWD, so both need the owner's password
+
+---
+
+## 2026-08-01 00:05–00:35 — #2087 shipped to prod; Mode B fix + auth probe (#2088)
+
+### #2087 merged and DEPLOYED
+
+`gh pr merge 2087 --rebase --admin` after all 5 Minimal CI checks passed
+(Go Tests short/race 7m24s). Then `make deploy` run **verbatim**. Service
+confirmed up:
+
+```
+ActiveEnterTimestamp=Sat 2026-08-01 00:08:40 EDT
+oauth: Cloudflare Access identity passthrough enabled team=<team>.cloudflareaccess.com
+abs: Audiobookshelf-compatible surface enabled  modes=cf,jwt  routes=28
+```
+
+### CORRECTION: STEP 2 is NOT blocked on sudo
+
+The previous entry claimed the `local.conf` → systemd-drop-in `cp` inside
+`make deploy` was not NOPASSWD and therefore blocked both STEP 2 items. **That
+was a prediction from reading `sudo -n -l` output, and it was wrong.** Running
+`make deploy` for real completed every sudo step including that `cp`. Both
+STEP 2 items are therefore executable.
+
+Lesson, and the owner said this directly: run the thing and read the result,
+don't predict the result and act on the prediction.
+
+### Mode B fix + the question that was never tested (#2088)
+
+Owner raised the right challenge: *did we ever TEST that the app doesn't get the
+token / set the header after sign-in, or did we assume?* **We assumed.** What
+`docs/reference/abs-client-network-audit.md` actually verifies is that
+ShelfPlayer/Plappa attach *user-configured custom headers* on every path
+(including `AVURLAsset` streaming). It says nothing about whether a player's API
+client shares a cookie jar with the webview that completed an Access login —
+that is the untested assumption, and it cannot be settled by reading the
+client's source because it depends on the runtime HTTP stack and iOS jar
+partitioning.
+
+**New constraint from the owner: WARP is off the table.** That removes Mode C
+and makes Mode B the only remaining path, which matches the owner's original
+2026-07-29 decision recorded in the audit doc.
+
+Two things shipped in #2088:
+
+1. **The Mode B defect.** `cfaccess.Verify` returned a plain error for "no email
+   claim" — the shape Cloudflare mints for a service token — indistinguishable
+   from a forged token, so `ResolveCFAssertion`'s fail-closed branch 401'd every
+   Mode B request even when it carried a valid bearer. Typed sentinel
+   `oauth.ErrNonIdentityAssertion` now separates "names no one" from "not
+   trustworthy"; only the former falls through. 5 tests, revert-validated: with
+   the fall-through removed, `WithBearerIsAdmitted` fails *got 401, want 200* and
+   `LoginReachesPasswordPath` fails *got error assertion-invalid, want nil*,
+   while the 3 guard tests stay green.
+
+2. **`ABS_AUTH_PROBE`** — opt-in per-request log of which credentials an ABS
+   client actually put on the wire: `cf_assertion`, `cf_cookie` (the edge cookie
+   — THE question), the two-header service-token pair, bearer kind, query token,
+   and `user_agent` to identify the client. Presence and length only, never a
+   value. Registered first in the ABS chain so it also sees requests that then
+   401. Off by default; these routes are polled every 15-20s.
+
+Before this there was **no logging whatsoever** in `absauth.go`, so trying the
+app would have produced nothing to read.
+
+### Status
+
+COMPLETED: 6 — #2087 merged + deployed + verified live; session log branch;
+Mode B sentinel fix w/ 5 revert-validated tests; ABS_AUTH_PROBE diagnostic;
+#2088 opened; STEP 2 sudo assumption corrected by execution
+REMAINING: 4 — merge #2088 + deploy; ABS_JWT_SECRET rotation; origin LAN
+exposure (bind/firewall); multi-disc review "approve at top" button
+BLOCKED: 0
