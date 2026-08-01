@@ -1,5 +1,5 @@
 // file: web/src/pages/Users.tsx
-// version: 1.0.1
+// version: 1.1.0
 // guid: 4d2e3f1a-5b6c-4a70-b8c5-3d7e0f1b9a99
 
 import { useCallback, useEffect, useState, useRef } from 'react';
@@ -88,9 +88,15 @@ export default function Users() {
   const handleResetPassword = useCallback(async (id: string) => {
     const resp = await fetch(`${API_BASE}/users/${id}/reset-password`, { method: 'POST' });
     const data = await resp.json();
-    if (data.token) {
-      setCopiedToken(data.token);
-      navigator.clipboard.writeText(data.token).catch(() => {});
+    // The endpoint returns { token, login_url }. Copy the URL — it is what the
+    // user actually clicks. The bare token is kept as a fallback for a server
+    // that predates login_url, and because login_url is relative when
+    // EXTERNAL_URL is unset (the admin then prepends the address themselves).
+    const payload = data?.data ?? data;
+    const copyable = payload?.login_url || payload?.token;
+    if (copyable) {
+      setCopiedToken(copyable);
+      navigator.clipboard.writeText(copyable).catch(() => {});
     }
     load();
   }, [load]);

@@ -1,7 +1,7 @@
 // file: internal/server/wire_library_routes.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f23456789012
-// last-edited: 2026-06-23
+// last-edited: 2026-08-01
 
 package server
 
@@ -93,7 +93,7 @@ func (s *Server) wireLibraryRoutes(
 		users.DELETE("/invites/:token", s.perm("users.manage"), userH.DeleteInvite)
 		users.POST("/:id/deactivate", s.perm("users.manage"), userH.DeactivateUser)
 		users.POST("/:id/reactivate", s.perm("users.manage"), userH.ReactivateUser)
-		users.POST("/:id/reset-password", s.perm("users.manage"), userH.ResetPassword)
+		users.POST("/:id/reset-password", s.perm("users.manage"), s.handleResetPassword)
 	}
 
 	// Version groups
