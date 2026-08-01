@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.13.5 -->
+<!-- version: 10.13.6 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-07-31 -->
+<!-- last-edited: 2026-08-01 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,136 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+<!-- file: todo.d/2026-07-31-abs-mode-b-nonidentity-assertion.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 1a7c4e92-5d38-4b60-9f21-8c3e6a0b7d45 -->
+<!-- last-edited: 2026-07-31 -->
+
+- [ ] **TODO-ABS-MODEB** A Cloudflare **service-token** assertion is rejected as
+      invalid, so the documented "Mode B" (edge service token + our own bearer
+      token) cannot work at all. A `non_identity` Access JWT carries
+      `common_name` and **no `email` claim**, so
+      `internal/oauth/cfaccess.go:59-60` fails it, and
+      `internal/server/middleware/absauth.go:166-171` turns *any* Verify error
+      into a terminal 401 that deliberately never falls through to the bearer
+      path — so the request 401s **even when it also carries a valid ABS bearer
+      token**, and `internal/server/handlers/abs/login.go:53-55` makes password
+      login unreachable too. Fix: have `Verify` distinguish a cryptographically
+      *valid* but non-identity assertion (sig/iss/aud/exp all pass, no email)
+      from an invalid one via a typed sentinel (`ErrNonIdentityAssertion`), and
+      map only that sentinel to a `(nil, nil)` fall-through in
+      `ResolveCFAssertion` — every other Verify failure must stay a terminal
+      401. Tests: (a) forged assertion still 401; (b) valid non-identity + valid
+      bearer → 200 via jwt mode; (c) valid non-identity, no bearer → 401
+      `no-credential`; (d) login with non-identity assertion + password body
+      reaches the password path. Revert-validate (b) and (d).
+
+<!-- file: todo.d/2026-07-31-ios-sso-edge-config-drift.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 8c5f1a37-9b24-4e08-a761-2d0e6b8c4f19 -->
+<!-- last-edited: 2026-07-31 -->
+
+- [ ] **TODO-SSO-EDGE** Neither native-app auth mode is actually configured at
+      the Cloudflare edge, despite both being fully written up in
+      `jdfalk/cloudflare-one` `access/audiobook-app-policies.md`. Measured via
+      the CF API on 2026-07-31: the `books.jdfalk.com` Access app has exactly
+      **one** policy (precedence 1, `allow`, email allowlist) — there is **no
+      `non_identity` service-token policy** and **no service tokens exist on the
+      account at all**; app-level `allow_authenticate_via_warp` is unset and
+      org-level is `false`; and no cover-art bypass app exists (confirmed live —
+      the cover path 302s to Access instead of reaching the origin). That fully
+      explains the measured `service_token_status:false, is_warp:false,
+      auth_status:NONE`. So `scripts/setup-audiobook-apps.sh` never ran against
+      this account, or was rolled back — the doc describes a **design**, not the
+      live state. Recommended path is **Mode C (WARP)**: it delivers a real
+      identity JWT with an `email` claim, which satisfies `cf` mode exactly as
+      already coded — no app changes, no `/status` change, no password. Mode B
+      additionally needs TODO-ABS-MODEB fixed before it can work.
+
+- [ ] **TODO-DEPS-VULN** GitHub reports 5 Dependabot vulnerabilities on the
+      default branch (2 high, 3 moderate). Triage and bump.
+
+<!-- file: todo.d/2026-07-31-origin-security-hardening.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 6e2b8d05-3f41-4a97-8c50-7d1a9b4e2c68 -->
+<!-- last-edited: 2026-07-31 -->
+
+- [ ] **TODO-SEC-BIND** The service binds every interface
+      (`ExecStart=… serve --host 0.0.0.0 --port 8484`), so anything on the LAN
+      reaches the origin directly and **Cloudflare Access is not a boundary** —
+      the edge is only enforced for traffic that arrives through the tunnel.
+      Bind loopback (or the tunnel-facing interface only) in
+      `deploy/local.conf` so Access becomes the single front door, then verify
+      the tunnel still serves `books.jdfalk.com`. Note in the PR that
+      direct-to-LAN verification is no longer possible **by design** after this.
+      The tunnel connector runs on rpi1-3, not on the origin host, so the
+      loopback bind must account for that hop.
+
+- [ ] **TODO-SEC-JWT** Rotate `ABS_JWT_SECRET` — it was pasted in plaintext into
+      a chat transcript on 2026-07-31. It signs every ABS session token. Rotate
+      it in `deploy/local.conf` (gitignored — never commit or print it; redact
+      with `sed -E 's/(SECRET|TOKEN|KEY)=[^ ]*/\1=<redacted>/g'` when dumping a
+      unit), redeploy, and confirm previously-issued tokens are rejected.
+
+- [ ] **TODO-SEC-SYSTEMD** The unit has `User=audiobook`, `NoNewPrivileges`,
+      `ProtectKernelTunables`, `ProtectControlGroups` and `PrivateTmp`, but no
+      `ProtectSystem=strict`, no `ReadWritePaths`, no `CapabilityBoundingSet`,
+      no `SystemCallFilter` and **no egress restriction**. `IPAddressDeny=any`
+      plus a narrow allowlist is what stops a compromised process reaching the
+      rest of the LAN. It needs the Whisper host on `:19847` and Ollama on
+      `:11434`, plus outbound HTTPS for OpenLibrary/AcoustID — an over-tight
+      rule silently breaks metadata and transcription, so test before claiming
+      it works.
+
+- [ ] **TODO-SRVTIMEOUT** Split or speed up the `internal/server` test package —
+      it runs 434–480 s against Go's 600 s default per-package timeout, leaving
+      under 30% headroom. Any concurrent load on the machine tips the whole
+      package into a timeout that is indistinguishable from a deadlock: the
+      panic dump names whichever goroutine happened to be mid-teardown
+      (`operations/registry.(*Registry).Shutdown` blocked on `sync.WaitGroup.Wait`
+      at `registry.go:1030` in the observed case), which reads as a real hang and
+      sent a 2026-07-31 investigation down a false trail on PR #2083. Verified
+      not a deadlock: the same commit passes in 480 s when run without competing
+      load. Either shard the package, or set an explicit generous `-timeout` in
+      the Makefile test targets so a slow run fails as "too slow" rather than
+      masquerading as a lock bug.
+
+<!-- file: todo.d/2026-08-01-origin-lan-exposure-finding.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 4f1a8c73-52be-4d09-9a67-e3b05c8d217f -->
+<!-- last-edited: 2026-08-01 -->
+
+## SEC: origin is reachable from the LAN — "bind loopback" is NOT achievable as specified
+
+**Status:** finding, not yet fixed. Needs an owner decision between two options.
+
+The origin listens on `*:8484`, so anything on the LAN reaches it directly and
+Cloudflare Access is not a boundary for those callers. The standing task says to
+"bind loopback instead of `0.0.0.0`". **That specific change cannot work here**, and
+it is worth writing down why so nobody tries it again:
+
+`cloudflared` does not run on the origin host. It runs on rpi1-3 and dials the origin
+over the LAN. So the listener must be reachable from another machine by definition.
+Binding `127.0.0.1` makes the tunnel unable to connect at all — the site goes down.
+And binding the host's LAN address instead of `0.0.0.0` is **exactly as exposed**:
+both accept connections from anywhere on the LAN. There is no bind address that is
+simultaneously "not reachable from the LAN" and "reachable from rpi1-3 over the LAN."
+
+Two options actually accomplish the intent. Both are host-level changes outside
+`deploy/local.conf`, and both need interactive-sudo, so neither was applied:
+
+1. **Firewall the port** (recommended, smallest change). An nftables/ufw rule
+   restricting `:8484` to the rpi source addresses. Keeps the current topology; the
+   origin stops answering everything else on the LAN. Care required: touch only 8484,
+   never 22, or you lock yourself out of the box.
+2. **Move `cloudflared` onto the origin host.** Then `127.0.0.1:8484` is genuinely
+   correct and the port disappears from the LAN entirely. Larger change — it moves
+   the tunnel off the rpi fleet and changes where tunnel outages come from.
+
+**Note for whoever does this:** after either change, verifying the origin by curling
+it directly from a workstation stops working *by design*. That is the success
+condition, not a regression. Verify through `books.jdfalk.com` instead.
 
 <!-- file: todo.d/abs-sync-auth-core-followups.md -->
 <!-- version: 1.0.0 -->
