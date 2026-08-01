@@ -1,5 +1,5 @@
 // file: internal/server/middleware/absauthprobe.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5c9f21a7-3e64-48db-b0d2-9a8e7c4f6103
 // last-edited: 2026-08-01
 
@@ -48,12 +48,22 @@ func ABSAuthProbe() gin.HandlerFunc {
 		assertion := strings.TrimSpace(c.GetHeader(oauth.CFAccessHeader))
 		authz := strings.TrimSpace(c.GetHeader("Authorization"))
 
-		// The edge cookie. Its PRESENCE is the whole question: it means the app's
-		// API client shares a cookie jar with the webview that logged in, and the
-		// request would satisfy Cloudflare Access on its own.
-		cfCookie := ""
-		if ck, err := c.Request.Cookie("CF_Authorization"); err == nil && ck != nil {
-			cfCookie = ck.Value
+		// The edge cookie. Its presence is the whole question: it means the app's API
+		// client shares a cookie jar with the webview that logged in, and the request
+		// would satisfy Cloudflare Access on its own.
+		//
+		// We log the NAMES of every cookie rather than probing for "CF_Authorization"
+		// specifically. Access normally uses that name, but it can be configured with
+		// a custom one, and a hardcoded lookup would then report "no cookie" for a
+		// request that carried it — a false negative on the single question this probe
+		// exists to answer. Names cannot authenticate anything; values are never read.
+		cookieNames := make([]string, 0, 4)
+		cfCookieLen := 0
+		for _, ck := range c.Request.Cookies() {
+			cookieNames = append(cookieNames, ck.Name)
+			if strings.HasPrefix(strings.ToUpper(ck.Name), "CF_") {
+				cfCookieLen += len(ck.Value)
+			}
 		}
 
 		bearerKind := "none"
@@ -77,9 +87,12 @@ func ABSAuthProbe() gin.HandlerFunc {
 			// Mode C / browser-SSO signal: the edge verified a person and injected this.
 			"cf_assertion", assertion != "",
 			"cf_assertion_len", len(assertion),
-			// THE question this probe was built for.
-			"cf_cookie", cfCookie != "",
-			"cf_cookie_len", len(cfCookie),
+			// THE question this probe was built for. cookie_names is the ground truth
+			// (a CF_-prefixed name means the edge cookie rode along); cf_cookie_len is
+			// the convenience roll-up.
+			"cookie_names", strings.Join(cookieNames, ","),
+			"cf_cookie", cfCookieLen > 0,
+			"cf_cookie_len", cfCookieLen,
 			// Mode B signal: the two-header service-token form. Plappa cannot use the
 			// single-header Authorization variant (it collides with ABS auth), so this
 			// pair is what a working Mode B request looks like.
