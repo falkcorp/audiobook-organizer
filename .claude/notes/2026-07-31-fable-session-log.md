@@ -415,3 +415,93 @@ Mode B sentinel fix w/ 5 revert-validated tests; ABS_AUTH_PROBE diagnostic;
 REMAINING: 4 — merge #2088 + deploy; ABS_JWT_SECRET rotation; origin LAN
 exposure (bind/firewall); multi-disc review "approve at top" button
 BLOCKED: 0
+
+---
+
+## 2026-08-01 00:24–00:35 — STEP 2 item 1 DONE (verified); #2088/#2089 merged + deployed
+
+### ABS_JWT_SECRET rotated — PROVEN, not assumed
+
+Rotated to a fresh 64-char value (floor is `minSecretLen = 32`). Never printed,
+never committed; rollback copy of `deploy/local.conf` kept in the session
+scratchpad.
+
+Verification used a token signed with the **new** secret, sent to the origin
+before and after the deploy. The claim shape matches
+`absauth.MintAccessToken` (`sub`/`sid`/`type`/`iat`/`exp`, HS256) with
+deliberately non-existent sub/sid, so a passing signature must fail LATER at the
+session lookup — and the two failures have different messages:
+
+```
+BEFORE deploy:  {"error":"invalid access token"}   HTTP 401   <- signature rejected (old key)
+AFTER  deploy:  {"error":"session not found"}      HTTP 401   <- signature ACCEPTED (new key)
+```
+
+`token-invalid` → `session-not-live` is only reachable if the running process
+verified the signature against the new secret. Old-secret tokens therefore fail
+at the signature check. Health 200, `NRestarts=0`, no crash loop, tunnel still
+serving (`books.jdfalk.com` → 302 to the Access login).
+
+An earlier attempt to read the OLD secret out of the config to mint an old token
+was blocked by the permission classifier. That was correct, and the workaround
+was not to defeat it — the new-secret probe above is a strictly stronger test
+anyway, because it proves the process picked up the new value rather than merely
+proving that some key changed.
+
+### #2088 merged + deployed (20/20 checks green)
+
+`ABS_AUTH_PROBE=1` is LIVE. Verified emitting:
+
+```
+abs: auth probe method=GET path=/api/me user_agent=curl/8.7.1
+  cf_assertion=false cf_assertion_len=0
+  cookie_names=CF_Authorization,other cf_cookie=true cf_cookie_len=4
+  cf_client_id=false cf_client_secret=false bearer=abs-access-token query_token=false
+```
+
+Cookie NAMES are logged rather than probing for a hardcoded `CF_Authorization`,
+because Access allows a custom cookie name and a hardcoded lookup would produce
+a false negative on the exact question the probe exists to answer.
+
+**To answer the cookie-jar question:** open the player app once, then
+
+```
+ssh <server> 'journalctl -u audiobook-organizer --since "-30min" | grep "auth probe"'
+```
+
+`user_agent` identifies the client; a `CF_`-prefixed entry in `cookie_names`
+means the app's API client DID inherit the webview's Access cookie. If it did,
+no service token is needed at all. Unset `ABS_AUTH_PROBE` when done — these
+routes are polled every 15-20s.
+
+### Route-class audit (result: no sibling bugs)
+
+Every top-level route registered directly on `s.router`: `/metrics` (deliberately
+network-protected), `/health` + `/api/health` + `/api/v1/health` (public by
+design), `/auth/temp-login` (public, validates a single-use token), `/` (SPA),
+and `/api/events`. `/api/events` was the ONLY authenticated one, so the #2087
+fix closes the class rather than one instance of it.
+
+### Corroboration of the edge drift, from the edge itself
+
+The Access login redirect's own meta JWT decodes to
+`"service_token_status":false,"is_warp":false` — independent confirmation that
+no service token is in play and WARP is not being used. Consistent with the
+previous session's edge-posture findings.
+
+### Status (session end)
+
+COMPLETED: 8 — web SSO confirmed live by observation; /api/events 401 root-caused,
+fixed, deployed (#2087); route-class audit (no siblings); ABS_JWT_SECRET rotated +
+before/after PROVEN; Mode B non-identity sentinel + 5 revert-validated tests
+(#2088); ABS_AUTH_PROBE built, deployed, verified emitting; origin LAN-exposure
+finding written up (#2089); session log (#2089)
+REMAINING: 2 — read the probe after the owner opens the player app (that decides
+whether a service token is needed at all); multi-disc review "approve at top"
+button (owner request, low priority)
+BLOCKED: 1 — origin LAN exposure. "Bind loopback" is NOT achievable as specified:
+cloudflared runs off-host and dials over the LAN, so 127.0.0.1 kills the tunnel
+and the host's LAN address is exactly as exposed as 0.0.0.0. The two changes that
+DO achieve the intent (firewall :8484 to the rpi sources, or relocate cloudflared)
+are host-level, need interactive sudo, and can sever the only access path — not a
+call to make unattended. Written up in todo.d/2026-08-01-origin-lan-exposure-finding.md
