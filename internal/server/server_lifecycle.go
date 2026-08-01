@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 3.5.0
+// version: 3.6.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-07-30
+// last-edited: 2026-07-31
 
 package server
 
@@ -1103,20 +1103,38 @@ func (s *Server) setupRoutes() {
 	s.router.GET("/api/health", func(c *gin.Context) { s.systemHandler.HealthCheck(c) })
 	s.router.GET("/api/v1/health", func(c *gin.Context) { s.systemHandler.HealthCheck(c) })
 
+	// OAuth2/OIDC login + Cloudflare Access passthrough (both no-ops unless
+	// configured). Built HERE, before the /api/events route below, rather than
+	// alongside the /api/v1 group further down: gin binds a route's middleware
+	// chain at registration time, so /api/events — a top-level route, not a
+	// child of /api/v1 — can only inherit cfMW if cfMW already exists when the
+	// route is registered. buildOAuthWiring is a pure constructor (it reads
+	// config and builds handlers/verifiers; it registers no routes), so calling
+	// it earlier is safe. It is still called exactly once.
+	oauthH, cfMW := s.buildOAuthWiring()
+
 	// Real-time events (SSE). Same pre-middleware-ordering rationale as /health.
 	// Gated behind auth (pen-test finding MED-2): the stream carries library
 	// events (imports, scan progress, metadata updates) that anonymous clients
-	// must not see. A browser EventSource automatically sends the HttpOnly
-	// session cookie, so the logged-in UI keeps working; anonymous clients get
-	// 401. When auth is disabled (local single-user mode) this is a no-op, like
-	// the rest of the API. Built inline because the shared authMiddleware is
-	// constructed later in this function (and routes registered before a
-	// router.Use() don't inherit it).
+	// must not see. Anonymous clients get 401. When auth is disabled (local
+	// single-user mode) this is a no-op, like the rest of the API. Built inline
+	// because the shared authMiddleware is constructed later in this function
+	// (and routes registered before a router.Use() don't inherit it).
+	//
+	// cfMW runs FIRST and fail-open, exactly as it does on /api/v1: it binds the
+	// user resolved from a valid Cf-Access-Jwt-Assertion so the RequireAuth below
+	// short-circuits, and otherwise passes through untouched. Without it this
+	// route was the one authenticated endpoint the Cloudflare Access passthrough
+	// never reached, because a browser under Access SSO has NO session cookie —
+	// identity arrives only in that header — so EventSource 401'd in a reconnect
+	// loop and the UI showed a permanent "Connection lost" banner while every
+	// /api/v1 call succeeded.
 	eventsAuth := gin.HandlerFunc(func(c *gin.Context) { c.Next() })
 	if config.AppConfig.EnableAuth {
 		eventsAuth = servermiddleware.RequireAuth(s.Store())
 	}
-	s.router.GET("/api/events", eventsAuth, func(c *gin.Context) { s.systemHandler.HandleEvents(c) })
+	s.router.GET("/api/events", buildEventsChain(cfMW, eventsAuth,
+		func(c *gin.Context) { s.systemHandler.HandleEvents(c) })...)
 
 	// Public temp-login consumer at the root so URLs are short and
 	// browser-friendly. Validates the token, deletes it (single-use),
@@ -1172,8 +1190,8 @@ func (s *Server) setupRoutes() {
 		slog.Warn("rate limiting is disabled (enable_rate_limitfalse) — the API is vulnerable to abuse. Set enable_rate_limit true in config.yaml for production deployments")
 	}
 
-	// OAuth2/OIDC login + Cloudflare Access passthrough (both no-ops unless configured).
-	oauthH, cfMW := s.buildOAuthWiring()
+	// oauthH and cfMW were built earlier, before the /api/events route that also
+	// needs cfMW — see the comment at that call site.
 
 	// Audiobookshelf-compatible surface. A separate TOP-LEVEL group, not a child of
 	// /api/v1, with its own FAIL-CLOSED identity middleware — it must not inherit the
