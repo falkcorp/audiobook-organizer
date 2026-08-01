@@ -1,7 +1,7 @@
-// file: internal/server/events_chain_test.go
-// version: 1.0.0
+// file: internal/server/toplevel_auth_chain_test.go
+// version: 2.0.0
 // guid: 3e8b56d1-04af-42c7-9b18-5d7a2f0c6e94
-// last-edited: 2026-07-31
+// last-edited: 2026-08-01
 
 package server
 
@@ -66,8 +66,8 @@ func serveEvents(t *testing.T, chain []gin.HandlerFunc, setHeader bool) int {
 // Cloudflare Access has NO session cookie — identity is only in the assertion
 // header — so /api/events must carry the CF middleware or it 401s forever and
 // the UI shows a permanent "Connection lost" banner.
-func TestBuildEventsChain_CFAssertionAdmittedWithoutSessionCookie(t *testing.T) {
-	chain := buildEventsChain(stubCFMW, stubAuthGuard, okHandler)
+func TestBuildTopLevelAuthChain_CFAssertionAdmittedWithoutSessionCookie(t *testing.T) {
+	chain := buildTopLevelAuthChain(stubCFMW, stubAuthGuard, okHandler)
 	if got := serveEvents(t, chain, true); got != http.StatusOK {
 		t.Fatalf("a verified Access assertion must be admitted without a session cookie; got %d, want %d", got, http.StatusOK)
 	}
@@ -75,8 +75,8 @@ func TestBuildEventsChain_CFAssertionAdmittedWithoutSessionCookie(t *testing.T) 
 
 // Proves the above test actually detects the bug: drop cfMW from the chain (the
 // pre-fix wiring) and the very same request 401s.
-func TestBuildEventsChain_WithoutCFMWTheAssertionIs401(t *testing.T) {
-	chain := buildEventsChain(nil, stubAuthGuard, okHandler)
+func TestBuildTopLevelAuthChain_WithoutCFMWTheAssertionIs401(t *testing.T) {
+	chain := buildTopLevelAuthChain(nil, stubAuthGuard, okHandler)
 	if got := serveEvents(t, chain, true); got != http.StatusUnauthorized {
 		t.Fatalf("without cfMW an Access-only client must 401 (this is the bug being fixed); got %d, want %d", got, http.StatusUnauthorized)
 	}
@@ -84,8 +84,8 @@ func TestBuildEventsChain_WithoutCFMWTheAssertionIs401(t *testing.T) {
 
 // cfMW is fail-open, not fail-closed: it must not admit a request that carries
 // no assertion at all. Anonymous clients still get 401 (pen-test finding MED-2).
-func TestBuildEventsChain_AnonymousStill401(t *testing.T) {
-	chain := buildEventsChain(stubCFMW, stubAuthGuard, okHandler)
+func TestBuildTopLevelAuthChain_AnonymousStill401(t *testing.T) {
+	chain := buildTopLevelAuthChain(stubCFMW, stubAuthGuard, okHandler)
 	if got := serveEvents(t, chain, false); got != http.StatusUnauthorized {
 		t.Fatalf("anonymous clients must still be rejected; got %d, want %d", got, http.StatusUnauthorized)
 	}
@@ -93,11 +93,11 @@ func TestBuildEventsChain_AnonymousStill401(t *testing.T) {
 
 // When Cloudflare Access is unconfigured cfMW is nil, and a nil handler in a gin
 // chain panics on dispatch. Assert it is omitted rather than appended.
-func TestBuildEventsChain_NilCFMWOmitted(t *testing.T) {
-	if got := len(buildEventsChain(nil, stubAuthGuard, okHandler)); got != 2 {
+func TestBuildTopLevelAuthChain_NilCFMWOmitted(t *testing.T) {
+	if got := len(buildTopLevelAuthChain(nil, stubAuthGuard, okHandler)); got != 2 {
 		t.Fatalf("nil cfMW must be omitted from the chain; got %d handlers, want 2", got)
 	}
-	if got := len(buildEventsChain(stubCFMW, stubAuthGuard, okHandler)); got != 3 {
+	if got := len(buildTopLevelAuthChain(stubCFMW, stubAuthGuard, okHandler)); got != 3 {
 		t.Fatalf("a non-nil cfMW must be prepended; got %d handlers, want 3", got)
 	}
 }

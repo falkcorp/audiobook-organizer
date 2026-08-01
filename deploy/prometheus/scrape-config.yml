@@ -1,7 +1,7 @@
 # file: deploy/prometheus/scrape-config.yml
-# version: 1.0.0
+# version: 1.1.0
 # guid: c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e5f
-# last-edited: 2026-07-03
+# last-edited: 2026-08-01
 #
 # TEMPLATE / SNIPPET — this is NOT a standalone runnable Prometheus config.
 # It is a `scrape_configs:` entry meant to be merged into an existing
@@ -15,11 +15,39 @@
 # 8484 matches the default --port in deploy/audiobook-organizer.service and
 # deploy/local.conf.example.
 
+# AUTHENTICATION IS REQUIRED. /metrics is no longer anonymous — it used to be
+# readable by anything that could reach the port, which was only ever acceptable
+# under a "LAN-only" assumption that the 0.0.0.0 bind does not actually provide.
+#
+# Mint a key and point Prometheus at it:
+#
+#   1. Create an API key in the UI (Settings → API keys), or via
+#      POST /api/v1/auth/bootstrap on a fresh server. It looks like `abk_...`.
+#   2. Write it to a file readable ONLY by the Prometheus user:
+#        install -m 0600 -o prometheus -g prometheus /dev/null /etc/prometheus/abo.token
+#        printf '%s' 'abk_...' | sudo tee /etc/prometheus/abo.token >/dev/null
+#   3. Reference it below with `authorization.credentials_file`.
+#
+# Use the *_file form, not an inline secret: Prometheus re-reads the file on
+# every scrape, so rotating the key needs no config edit or reload, and the
+# secret never lands in prometheus.yml (which is often world-readable and
+# frequently checked into config management).
+
 scrape_configs:
   - job_name: audiobook-organizer
     scrape_interval: 30s
     metrics_path: /metrics
-    scheme: http
+    # https, not http: the server serves TLS on 8484. With a self-signed
+    # certificate you must either trust it via ca_file or set insecure_skip_verify.
+    scheme: https
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/abo.token
+    tls_config:
+      # Point ca_file at the server's certificate instead if you can — skipping
+      # verification means a host on the path could impersonate the target and
+      # collect the bearer token above.
+      insecure_skip_verify: true
     static_configs:
       - targets:
           - "192.168.0.10:8484"

@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 3.6.0
+// version: 3.7.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-07-31
+// last-edited: 2026-08-01
 
 package server
 
@@ -1084,16 +1084,43 @@ func (s *Server) itunesSvcGuard(fn gin.HandlerFunc) gin.HandlerFunc {
 }
 
 func (s *Server) setupRoutes() {
+	// OAuth2/OIDC login + Cloudflare Access passthrough (both no-ops unless
+	// configured). Built FIRST, ahead of every route registration below, because
+	// gin binds a route's middleware chain at registration time: a top-level
+	// route can only inherit cfMW if cfMW already exists when that route is
+	// registered, and a later router.Use() cannot retrofit it. Both /metrics and
+	// /api/events depend on that. buildOAuthWiring is a pure constructor (it
+	// reads config and builds handlers/verifiers; it registers no routes), so
+	// hoisting it is safe, and it is still called exactly once.
+	oauthH, cfMW := s.buildOAuthWiring()
+
 	// Health check endpoint
-	// Prometheus metrics endpoint (standard path).
+	// Prometheus metrics endpoint (standard path). AUTHENTICATED.
 	//
-	// Intentionally left UNAUTHENTICATED (pen-test finding MED-1, accepted risk).
-	// Prometheus scrapers don't send auth/cookies, and the data here is
-	// operational metrics (counts, cache/op rates) — not user data or secrets.
-	// This matches common practice (e.g. internal metrics endpoints). If this
-	// server is ever exposed to an untrusted network, restrict /metrics at the
-	// network layer (firewall / separate internal port) rather than app auth.
-	s.router.GET("/metrics", gin.WrapH(promhttp.Handler()))
+	// This was previously unauthenticated as an accepted risk (pen-test MED-1),
+	// on the stated grounds that "Prometheus scrapers don't send auth" and that
+	// the endpoint could be restricted "at the network layer (firewall /
+	// separate internal port)".
+	//
+	// Both halves of that were wrong in practice. Prometheus DOES authenticate —
+	// scrape_configs supports authorization / bearer_token / bearer_token_file /
+	// basic_auth / oauth2 — so the premise that gating it breaks scraping is
+	// simply false. And the network-layer restriction it deferred to was never
+	// built: the origin listens on 0.0.0.0, so /metrics and /health were the only
+	// two endpoints any host on the LAN could read without a credential.
+	//
+	// A credential is now required. Any valid credential works — an `abk_` API
+	// key via Authorization: Bearer is the intended one for a scraper (see
+	// deploy/prometheus/scrape-config.yml). No permission beyond authentication
+	// is demanded: the payload is aggregate counters and Go runtime stats with
+	// no per-book or per-user labels, so gating it further would add operator
+	// friction without protecting anything more.
+	metricsAuth := gin.HandlerFunc(func(c *gin.Context) { c.Next() })
+	if config.AppConfig.EnableAuth {
+		metricsAuth = servermiddleware.RequireAuth(s.Store())
+	}
+	s.router.GET("/metrics", buildTopLevelAuthChain(cfMW, metricsAuth,
+		gin.WrapH(promhttp.Handler()))...)
 
 	// Health check endpoint (both paths for compatibility). Registered here on
 	// s.router BEFORE the /api/* redirect middleware (below) so they keep
@@ -1102,16 +1129,6 @@ func (s *Server) setupRoutes() {
 	s.router.GET("/health", func(c *gin.Context) { s.systemHandler.HealthCheck(c) })
 	s.router.GET("/api/health", func(c *gin.Context) { s.systemHandler.HealthCheck(c) })
 	s.router.GET("/api/v1/health", func(c *gin.Context) { s.systemHandler.HealthCheck(c) })
-
-	// OAuth2/OIDC login + Cloudflare Access passthrough (both no-ops unless
-	// configured). Built HERE, before the /api/events route below, rather than
-	// alongside the /api/v1 group further down: gin binds a route's middleware
-	// chain at registration time, so /api/events — a top-level route, not a
-	// child of /api/v1 — can only inherit cfMW if cfMW already exists when the
-	// route is registered. buildOAuthWiring is a pure constructor (it reads
-	// config and builds handlers/verifiers; it registers no routes), so calling
-	// it earlier is safe. It is still called exactly once.
-	oauthH, cfMW := s.buildOAuthWiring()
 
 	// Real-time events (SSE). Same pre-middleware-ordering rationale as /health.
 	// Gated behind auth (pen-test finding MED-2): the stream carries library
@@ -1133,7 +1150,7 @@ func (s *Server) setupRoutes() {
 	if config.AppConfig.EnableAuth {
 		eventsAuth = servermiddleware.RequireAuth(s.Store())
 	}
-	s.router.GET("/api/events", buildEventsChain(cfMW, eventsAuth,
+	s.router.GET("/api/events", buildTopLevelAuthChain(cfMW, eventsAuth,
 		func(c *gin.Context) { s.systemHandler.HandleEvents(c) })...)
 
 	// Public temp-login consumer at the root so URLs are short and
