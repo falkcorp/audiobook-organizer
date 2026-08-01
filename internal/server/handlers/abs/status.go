@@ -38,10 +38,20 @@ func (h *Handler) Status(c *gin.Context) {
 	respondJSON(c, http.StatusOK, statusResponse{
 		App:          "audiobookshelf",
 		AuthFormData: authFormData{AuthLoginCustomMessage: ""},
-		// "local" regardless of credential mode. In Mode C the Cloudflare edge has
-		// already authenticated the person and /login skips the password check, but
-		// advertising anything else would send clients down an OpenID flow they cannot
-		// complete against us.
+		// Stays ["local"] even though GET /auth/openid and /auth/openid/callback
+		// ARE now implemented (openid.go).
+		//
+		// Two reasons, both deliberate. AudioBooth does not consult this to offer
+		// SSO — it has a manual Authentication Method selector and calls
+		// /auth/openid directly, confirmed in its source and in production logs.
+		// And the get_status.json conformance fixture is a recording of a REAL
+		// Audiobookshelf 2.36.0 response, which reports exactly one auth method;
+		// editing that fixture so our change passes would invert what the oracle
+		// is for.
+		//
+		// If a client is ever found that needs authMethods to include "openid",
+		// change this together with a fresh recording from a real ABS server that
+		// has OIDC enabled -- deliberately, not as a side effect.
 		AuthMethods:   []string{"local"},
 		IsInit:        true,
 		Language:      "en-us",

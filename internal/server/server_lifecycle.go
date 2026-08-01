@@ -1158,14 +1158,6 @@ func (s *Server) setupRoutes() {
 	// creates a 24h session, sets the cookie, redirects to the SPA.
 	s.router.GET("/auth/temp-login", s.consumeTempLoginToken)
 
-	// TEMPORARY, opt-in: capture the OIDC contract an Audiobookshelf client
-	// expects. Registered as real routes so they match ahead of the NoRoute
-	// fallback (which otherwise 404s /auth/* — see isNonSPAPath). Off unless
-	// OIDC_DISCOVERY is set, and it mints no session even when on.
-	if strings.TrimSpace(os.Getenv(OIDCDiscoveryEnvVar)) != "" {
-		s.registerOIDCDiscoveryProbe()
-	}
-
 	// Redirect /api/* to /api/v1/* for v1 compatibility
 	s.router.Use(func(c *gin.Context) {
 		path := c.Request.URL.Path
