@@ -1,7 +1,7 @@
 // file: internal/server/handlers/user.go
-// version: 1.3.0
+// version: 1.1.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
-// last-edited: 2026-06-04
+// last-edited: 2026-08-01
 
 // Package handlers contains extracted HTTP handler types for the audiobook
 // organizer server. UserHandler covers user management and invite endpoints.
@@ -14,10 +14,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
+	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -213,28 +213,4 @@ func (h *UserHandler) ReactivateUser(c *gin.Context) {
 	}
 	// Safe shape only — never echo the raw *database.User (leaks password hash, CRIT-2).
 	httputil.RespondWithOK(c, gin.H{"user": buildAuthUserResponse(user)})
-}
-
-// ResetPassword handles POST /api/v1/users/:id/reset-password — generates a
-// reset invite so the user can set a new password.
-func (h *UserHandler) ResetPassword(c *gin.Context) {
-	id := c.Param("id")
-	user, err := h.store.GetUserByID(id)
-	if err != nil || user == nil {
-		httputil.RespondWithNotFound(c, "user", id)
-		return
-	}
-
-	token := generateToken()
-	invite := &database.Invite{
-		Token:     token,
-		Username:  user.Username,
-		RoleID:    "",
-		ExpiresAt: time.Now().Add(24 * time.Hour),
-	}
-	if _, err := h.store.CreateInvite(invite); err != nil {
-		httputil.InternalError(c, "create reset invite", err)
-		return
-	}
-	httputil.RespondWithOK(c, gin.H{"token": token, "expires_at": invite.ExpiresAt})
 }

@@ -1,7 +1,7 @@
 // file: internal/server/auth_temp_login.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5b6c7d8e-9f0a-1b2c-3d4e-5f6a7b8c9d0e
-// last-edited: 2026-06-22
+// last-edited: 2026-08-01
 
 // Temp-login token: admin mints a short-lived single-use URL for a user.
 // User clicks the URL → server consumes the token → 24h session cookie
@@ -20,10 +20,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
+	"github.com/gin-gonic/gin"
 )
 
 // tempLoginEntry tracks one minted token. Tokens are kept in memory
@@ -93,10 +94,28 @@ func (s *Server) createTempLoginToken(c *gin.Context) {
 		return
 	}
 
+	payload, ok := s.mintTempLoginPayload(c, user)
+	if !ok {
+		return
+	}
+	httputil.RespondWithCreated(c, payload)
+}
+
+// mintTempLoginPayload registers a single-use temp-login token for user and
+// builds the response body describing it. It reports false after having already
+// written an error response, so callers just return.
+//
+// Shared by POST /auth/temp-tokens and POST /users/:id/reset-password: both
+// hand an admin a one-time link the target user clicks to get a session. The
+// only difference is how the user is addressed (body vs path param) and the
+// success status, so the token lifecycle lives here once rather than being
+// duplicated — a second copy of "generate, register under the mutex, build the
+// URL" is exactly where a single-use or TTL guarantee gets quietly dropped.
+func (s *Server) mintTempLoginPayload(c *gin.Context, user *database.User) (gin.H, bool) {
 	token, err := newTempLoginToken()
 	if err != nil {
 		httputil.RespondWithInternalError(c, "failed to generate token")
-		return
+		return nil, false
 	}
 	expires := time.Now().Add(handlers.TempLoginTokenTTL)
 
@@ -116,7 +135,7 @@ func (s *Server) createTempLoginToken(c *gin.Context) {
 		loginURL = s.externalURL + relativePath
 	}
 
-	httputil.RespondWithCreated(c, gin.H{
+	return gin.H{
 		"token":      token,
 		"login_url":  loginURL,
 		"expires_at": expires,
@@ -125,7 +144,7 @@ func (s *Server) createTempLoginToken(c *gin.Context) {
 			"username": user.Username,
 		},
 		"session_ttl_hours": int(handlers.DefaultSessionTTL.Hours()),
-	})
+	}, true
 }
 
 // consumeTempLoginToken handles GET /auth/temp-login?token=xxx.
