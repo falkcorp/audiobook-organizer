@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 # file: scripts/setup-prometheus-auth.py
-# version: 1.0.0
+# version: 1.0.1
 # guid: 4d90a2f6-13bc-4e58-9071-8c25e6b3f0a7
 # last-edited: 2026-08-01
 
 """Point Prometheus at audiobook-organizer's now-authenticated /metrics.
 
-Run ON THE SERVER, as root:
+This runs ON THE SERVER, which has NO git checkout -- deployment ships only the
+binary to /usr/local/bin. So copy the file over and run it by absolute path:
 
-    sudo python3 scripts/setup-prometheus-auth.py
+    scp scripts/setup-prometheus-auth.py <server>:/home/<user>/
+    ssh <server>
+    sudo python3 /home/<user>/setup-prometheus-auth.py
 
 It prompts for an API key (Settings -> API keys, `abk_...`), then:
 
