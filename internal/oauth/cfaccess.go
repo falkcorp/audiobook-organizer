@@ -1,17 +1,35 @@
 // file: internal/oauth/cfaccess.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3a7e0c92-8b41-4d56-9f08-1c6b2a5d7e39
-// last-edited: 2026-07-26
+// last-edited: 2026-08-01
 
 package oauth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	oidc "github.com/coreos/go-oidc/v3/oidc"
 )
+
+// ErrNonIdentityAssertion reports an Access token that is cryptographically VALID —
+// correct signature, issuer, expiry and aud — but carries no identity, i.e. no email
+// claim. Cloudflare mints exactly this shape for a service token, where the caller is
+// a machine credential rather than a person.
+//
+// It is a distinct sentinel because "no identity in this token" and "this token is
+// not trustworthy" demand opposite handling. A forged or expired token must be a
+// terminal 401: the credential is bad and no other credential should rescue it. A
+// non-identity token is merely silent about who the caller is, so the request should
+// fall through to whatever other credential it carries — for us, the ABS bearer token
+// — instead of being rejected outright. Collapsing the two (the original bug) made a
+// service token fatal even when the request also presented a perfectly valid bearer,
+// which is precisely the Mode B topology the edge is configured for.
+//
+// Callers MUST match with errors.Is, not string comparison; it is returned wrapped.
+var ErrNonIdentityAssertion = errors.New("cfaccess: assertion carries no identity (no email claim)")
 
 // CFAccessHeader is the request header Cloudflare Access injects with the signed
 // application token once a user has authenticated at the edge.
@@ -57,7 +75,11 @@ func (v *CFAccessVerifier) Verify(ctx context.Context, rawJWT string) (*Identity
 		return nil, fmt.Errorf("cfaccess: parse claims: %w", err)
 	}
 	if claims.Email == "" {
-		return nil, fmt.Errorf("cfaccess: jwt has no email claim")
+		// Wrapped, not returned bare, so the sub is available for logging while
+		// errors.Is(err, ErrNonIdentityAssertion) still matches. Reaching here means
+		// the signature/issuer/aud checks above all PASSED — this is a trusted token
+		// that simply names no person.
+		return nil, fmt.Errorf("%w (sub=%q)", ErrNonIdentityAssertion, claims.Sub)
 	}
 	subject := claims.Sub
 	if subject == "" {
