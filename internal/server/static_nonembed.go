@@ -1,7 +1,7 @@
 //go:build !embed_frontend
-
+// version: 1.1.0
 // file: internal/server/static_nonembed.go
-// version: 1.2.0
+// last-edited: 2026-08-01
 // guid: 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-05-01
 
@@ -11,8 +11,8 @@ import (
 	"embed"
 	"net/http"
 
-	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/gin-gonic/gin"
 )
 
 // SetEmbeddedFS is a no-op when not embedding frontend
@@ -100,8 +100,10 @@ func (s *Server) setupPlaceholder() {
 
 	// Return 404 for unknown routes
 	s.router.NoRoute(func(c *gin.Context) {
-		// Return 404 for unknown API routes
-		if len(c.Request.URL.Path) >= 4 && c.Request.URL.Path[:4] == "/api" {
+		// Server-side paths must 404 rather than render the SPA shell. Serving
+		// the React index for an unimplemented protocol endpoint tells a client
+		// the feature exists — see isNonSPAPath for the AudioBooth OIDC case.
+		if isNonSPAPath(c.Request.URL.Path) {
 			httputil.RespondWithNotFound(c, "endpoint", "")
 			return
 		}
