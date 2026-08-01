@@ -1,7 +1,7 @@
 //go:build embed_frontend
-
+// version: 1.1.0
 // file: internal/server/static_embed.go
-// version: 1.4.0
+// last-edited: 2026-08-01
 // guid: 1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-05-01
 
@@ -15,8 +15,8 @@ import (
 	"net/http"
 	"path/filepath"
 
-	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/gin-gonic/gin"
 )
 
 // webFS holds the embedded filesystem passed from main package
@@ -38,8 +38,10 @@ func (s *Server) setupStaticFiles() {
 
 	// NoRoute handler to serve static files or SPA index.html
 	s.router.NoRoute(func(c *gin.Context) {
-		// Return 404 for unknown API routes
-		if len(c.Request.URL.Path) >= 4 && c.Request.URL.Path[:4] == "/api" {
+		// Server-side paths must 404 rather than render the SPA shell. Serving
+		// the React index for an unimplemented protocol endpoint tells a client
+		// the feature exists — see isNonSPAPath for the AudioBooth OIDC case.
+		if isNonSPAPath(c.Request.URL.Path) {
 			httputil.RespondWithNotFound(c, "endpoint", "")
 			return
 		}
