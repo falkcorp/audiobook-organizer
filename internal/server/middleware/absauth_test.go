@@ -1,7 +1,7 @@
 // file: internal/server/middleware/absauth_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b41e6d09-8a37-4f52-9c10-25d7b8e0f346
-// last-edited: 2026-07-30
+// last-edited: 2026-08-01
 
 package middleware
 
@@ -30,14 +30,24 @@ type fakeCFVerifier struct {
 	// byToken maps a raw assertion to the identity it verifies to. Anything not in
 	// the map fails verification, which is what a forged/malformed header looks like.
 	byToken map[string]*oauth.IdentityClaims
-	calls   int
-	mu      sync.Mutex
+	// nonIdentity holds assertions that are cryptographically VALID but carry no
+	// email claim -- the shape Cloudflare mints for a service token. Distinct from
+	// "not in byToken", which means the token did not verify at all. nil by default,
+	// so existing tests are unaffected.
+	nonIdentity map[string]bool
+	calls       int
+	mu          sync.Mutex
 }
 
 func (f *fakeCFVerifier) Verify(_ context.Context, raw string) (*oauth.IdentityClaims, error) {
 	f.mu.Lock()
 	f.calls++
 	f.mu.Unlock()
+	if f.nonIdentity[raw] {
+		// Mirrors the real verifier: signature/issuer/aud all PASSED, there is simply
+		// no person named in the token.
+		return nil, fmt.Errorf("%w (sub=%q)", oauth.ErrNonIdentityAssertion, "svc-token")
+	}
 	if c, ok := f.byToken[raw]; ok {
 		return c, nil
 	}
@@ -154,6 +164,10 @@ type absHarness struct {
 	store    *fakeABSStore
 	cfg      *absauth.Config
 	verifier *fakeCFVerifier
+	// resolver is exposed so tests can call ResolveCFAssertion directly. That is
+	// the exact entry point POST /login and POST /auth/refresh use, and its
+	// (nil, nil) return is what "fall through to the password check" means.
+	resolver *ABSIdentityResolver
 }
 
 func newABSHarness(t *testing.T, modes string, allowed []string) *absHarness {
@@ -175,7 +189,7 @@ func newABSHarness(t *testing.T, modes string, allowed []string) *absHarness {
 			"user": u.ID, "mode": ABSAuthMode(c), "sid": ABSSessionID(c),
 		})
 	})
-	return &absHarness{router: r, store: store, cfg: cfg, verifier: verifier}
+	return &absHarness{router: r, store: store, cfg: cfg, verifier: verifier, resolver: resolver}
 }
 
 func (h *absHarness) do(method, path string, headers map[string]string) *httptest.ResponseRecorder {

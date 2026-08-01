@@ -1,7 +1,7 @@
 // file: internal/server/middleware/absauth.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e7051b93-6c28-4a0f-9d34-b8f2a61c05de
-// last-edited: 2026-07-30
+// last-edited: 2026-08-01
 
 package middleware
 
@@ -165,8 +165,24 @@ func (r *ABSIdentityResolver) ResolveCFAssertion(c *gin.Context) (*ABSIdentity, 
 
 	claims, err := r.verifier.Verify(c.Request.Context(), raw)
 	if err != nil {
-		// FAIL CLOSED. This is the single most important difference from
-		// CloudflareAccessAuth: no c.Next(), no fall-through to the bearer path.
+		// A cryptographically VALID assertion that simply names no person — the shape
+		// Cloudflare mints for a service token — is NOT a bad credential. Report "no
+		// CF identity here" and let the caller try the bearer token, exactly as if no
+		// assertion had been sent at all. This is the Mode B topology: the service
+		// token proves the device may reach the origin, and our own ABS JWT proves
+		// who the user is. Treating it as fatal (the original bug) 401'd every Mode B
+		// request even when it carried a perfectly valid bearer alongside.
+		//
+		// Note this does NOT widen access: falling through lands on the bearer path,
+		// which is itself fail-closed. A request with a service token and no bearer
+		// still gets 401 — it has simply not proven who it is.
+		if errors.Is(err, oauth.ErrNonIdentityAssertion) {
+			return nil, nil
+		}
+		// Everything else FAILS CLOSED — forged signature, wrong issuer, wrong aud,
+		// expired. This is the single most important difference from
+		// CloudflareAccessAuth: no c.Next(), no fall-through to the bearer path. A
+		// bad credential must not be rescued by presenting a second one.
 		return nil, absErr(http.StatusUnauthorized, "assertion-invalid",
 			"invalid Cloudflare Access assertion", ABSModeCF)
 	}
