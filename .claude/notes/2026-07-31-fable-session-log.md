@@ -1,5 +1,5 @@
 <!-- file: .claude/notes/2026-07-31-fable-session-log.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 4c9e1f7a-2b8d-4e06-9a3f-1d5c8e7b2a90 -->
 <!-- last-edited: 2026-07-31 -->
 
@@ -130,7 +130,7 @@ first thing once the box is back. (deploy/local.conf lives on the box.)
 
 ### Also found
 - GitHub reports 5 dependabot vulns on default branch (2 high, 3 moderate) —
-  todo fragment added on this branch.
+  todo.d fragment added 23:50 (was claimed earlier before it existed — corrected).
 - Pre-commit hook correctly blocks internal IPs in notes → keep using role
   names in this log.
 
