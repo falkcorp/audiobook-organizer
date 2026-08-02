@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/item.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9c8a2f60-1d75-4b38-a0e4-7f21b5c96d13
-// last-edited: 2026-07-30
+// last-edited: 2026-08-02
 
 package abs
 
@@ -112,6 +112,10 @@ func (h *Handler) mediaProgress(userID string, v *itemView) *mediaProgressDTO {
 		Duration:      v.DurationSec,
 		EbookProgress: 0,
 		FinishedAt:    finishedAt,
+		// Must agree with userdata.go's progressRow for the same book: a client
+		// that sees the book hidden on /api/me and visible on /api/items shows it
+		// in Continue Listening anyway, which is the bug the flag exists to fix.
+		HideFromContinueListening: state != nil && state.HideFromContinueListening,
 		// The id is derived from (user, item) rather than random so a client that
 		// stores it keeps matching the same row across restarts.
 		ID:            userID + "-" + v.SyncID,

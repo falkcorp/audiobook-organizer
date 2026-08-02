@@ -1,0 +1,32 @@
+{
+  "request": {
+    "body": null,
+    "method": "GET",
+    "path": "/api/me/progress/68929fc9-e296-4d25-b3aa-1c2930efd00d"
+  },
+  "response": {
+    "body": {
+      "currentTime": 42,
+      "duration": 9975.48,
+      "ebookLocation": null,
+      "ebookProgress": 0,
+      "episodeId": null,
+      "finishedAt": null,
+      "hideFromContinueListening": false,
+      "id": "ea31ae8b-73cb-4550-ad37-ae12c514550e",
+      "isFinished": false,
+      "lastUpdate": 1785649380007,
+      "libraryItemId": "68929fc9-e296-4d25-b3aa-1c2930efd00d",
+      "mediaItemId": "a0b6c2b4-1c38-494c-b793-ce131d283855",
+      "mediaItemType": "book",
+      "progress": 0.004,
+      "startedAt": 1785649380007,
+      "userId": "e1c3fe66-990b-44f0-8ed6-2bf73cc8cd86"
+    },
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "etag": "W/\"1c9-3Xz6ULrJzCNK/eP1/nPAJ4D7y50\""
+    },
+    "status": 200
+  }
+}

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/library_fake_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1d4a67f2-0c85-4f39-9b6e-3a71c5d0e824
-// last-edited: 2026-07-30
+// last-edited: 2026-08-02
 
 package abs_test
 
@@ -391,6 +391,16 @@ func (f *fakeLibrary) SetUserPosition(userID, bookID, segmentID string, pos floa
 		UserID: userID, BookID: bookID, SegmentID: segmentID,
 		PositionSeconds: pos, UpdatedAt: time.Now(),
 	}
+	return nil
+}
+
+// ClearUserPositions backs DELETE /api/me/progress/:id. It drops the (user, book)
+// entry entirely rather than zeroing it, matching PebbleStore's batch delete —
+// GetUserPosition must answer nil afterwards, not a row reading 0.
+func (f *fakeLibrary) ClearUserPositions(userID, bookID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.positions, userID+"|"+bookID)
 	return nil
 }
 

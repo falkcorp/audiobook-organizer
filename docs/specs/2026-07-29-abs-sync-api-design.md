@@ -1,7 +1,7 @@
 <!-- file: docs/specs/2026-07-29-abs-sync-api-design.md -->
-<!-- version: 7.2.0 -->
+<!-- version: 7.3.0 -->
 <!-- guid: 0869d58c-b186-45cb-9915-64bd18eaa45f -->
-<!-- last-edited: 2026-07-30 -->
+<!-- last-edited: 2026-08-02 -->
 
 # Audiobookshelf-Compatible Sync API — Design Spec (Umbrella)
 
@@ -315,9 +315,50 @@ All of these tolerate failure, so **404/500 is strictly safer than a half-correc
 | listening-stats / year-stats | **prefer 404** | ~12 non-optional fields; callers use `try?` |
 
 Also: **an empty `200` body is fatal** for any typed endpoint (`NetworkService.swift:224-227`), and
-`…/remove-from-continue-listening` needs a non-empty body (`{}` suffices). A `200` serving the SPA
+`…/remove-from-continue-listening` needs a non-empty body (`{}` suffices). ⚠️ **Corrected 2026-08-02 —
+see §1.8.9: that route does not exist on real ABS at all.** A `200` serving the SPA
 `index.html` under `/api/` is fatal; a *404* with an HTML body is harmless to these two clients but must
 still be JSON for ShelfPlayer.
+
+### 🔴 1.8.9 CORRECTIONS from the oracle, 2026-08-02 (Phase 6 write half)
+
+Two claims elsewhere in this spec were **wrong**, found by probing the pinned ABS 2.36.0 oracle while
+building the write half. Fixtures for all of it are committed under `testdata/abs-fixtures/`.
+
+1. **`DELETE /api/me/progress/:id` is keyed by the `mediaProgress` ROW id, not the `libraryItemId`.**
+   Deleting by item id answers `404`; deleting by `mediaProgress[].id` answers `200 "OK"`. Our read half
+   renders that id as `"<userID>-<syncID>"`, so a client that read `/api/me` hands *that* back. The
+   handlers accept **both** forms, stripping the authenticated caller's own id as a prefix — so one user
+   can never address another's row by constructing an id.
+
+2. **`POST /api/me/item/:id/remove-from-continue-listening` DOES NOT EXIST on ABS 2.36.0.** It answers
+   `404 Cannot POST`. The real mechanism is `PATCH /api/me/progress/:id` with
+   `{"hideFromContinueListening": true}`. We serve **both**: the PATCH field because it is the genuine
+   mechanism, and the POST alias because a client calls it and was taking a 404 in production (the
+   owner-reported "remove from continue listening does nothing"). The alias answers `{}` — non-empty, per
+   §1.8.6.
+
+Verified response shapes for the whole write half (note that three of them are **`text/plain`**, not JSON):
+
+| Endpoint | Status | Body |
+|---|---|---|
+| `GET /api/me/progress` | 200 | `{"mediaProgress":[…]}` — **§1.8.1 applies: complete or 5xx** |
+| `GET /api/me/progress/:id` | 200 / 404 | a **bare** mediaProgress object / `text/plain "Not Found"` |
+| `PATCH /api/me/progress/:id` | 200 | `text/plain "OK"` |
+| `PATCH /api/me/progress/batch/update` | 200 | `text/plain "OK"`; request body is a **bare array** |
+| `DELETE /api/me/progress/:id` | 200 / 404 | `text/plain "OK"` |
+| `GET /api/me/bookmarks/:id` | 200 | `{"bookmarks":[…]}` |
+| `POST` / `PATCH /api/me/item/:id/bookmark` | 200 | a bare bookmark object |
+| `DELETE /api/me/item/:id/bookmark/:time` | 200 / 404 | `text/plain "OK"` |
+
+**§5 rule 3 (forward-only) does not fire on either write endpoint, and that is intentional.** Neither
+`PATCH /api/me/progress/:id` nor `POST /api/session/:id/sync` carries a client timestamp, so incoming is
+always "newer" and both accept a backwards position. Both report a *live* user action — refusing one would
+make scrubbing backwards impossible. The stale-device clobber is prevented one step earlier instead:
+`POST /api/items/:id/play` returns the server's TRUE latest position and §1.8.7 has AudioBooth take
+`max(local, session.currentTime)` ignoring timestamps, so a stale device is pulled forward and never has a
+behind position to push. Forward-only merging guards the one path with genuinely untrustworthy timestamps —
+offline replay, via `MergeOfflineReplay`.
 
 ### 1.8.7 Progress conflict resolution — client-side rules our server must respect
 

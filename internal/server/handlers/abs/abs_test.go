@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/abs_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2c07b5e9-4d16-48fa-b930-71e5c8a04f6d
-// last-edited: 2026-07-30
+// last-edited: 2026-08-02
 
 package abs_test
 
@@ -258,13 +258,29 @@ func (f *fakeVerifier) Verify(_ context.Context, raw string) (*oauth.IdentityCla
 // ── fake user-data provider (Phase 6 stand-in) ──────────────────────────────
 
 type fakeUserData struct {
-	progress  []any
-	bookmarks []any
-	err       error
+	progress    []any
+	bookmarks   []any
+	progressFor map[string]any
+	err         error
 }
 
 func (f *fakeUserData) MediaProgress(string) ([]any, error) { return f.progress, f.err }
 func (f *fakeUserData) Bookmarks(string) ([]any, error)     { return f.bookmarks, f.err }
+
+// MediaProgressFor mirrors the real provider closely enough for handler tests: the
+// SAME error is reported (so a broken provider still yields a 5xx rather than a 404,
+// which is the distinction GET /api/me/progress/:id exists to preserve), and a
+// missing row is reported as ok=false rather than as an empty object.
+func (f *fakeUserData) MediaProgressFor(_, bookID string) (any, bool, error) {
+	if f.err != nil {
+		return nil, false, f.err
+	}
+	if f.progressFor == nil {
+		return nil, false, nil
+	}
+	row, ok := f.progressFor[bookID]
+	return row, ok, nil
+}
 
 // ── harness ─────────────────────────────────────────────────────────────────
 

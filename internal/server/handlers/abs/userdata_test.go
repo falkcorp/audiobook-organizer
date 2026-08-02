@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/userdata_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7ac71a7b-e1cb-4416-a393-1fa38af8871f
-// last-edited: 2026-07-30
+// last-edited: 2026-08-02
 
 package abs_test
 
@@ -109,6 +109,30 @@ func (f *udFake) addBookmark(b progress.Bookmark) {
 }
 
 // ── ProgressListStore ───────────────────────────────────────────────────────
+
+// GetUserPosition serves MediaProgressFor. It picks the SAME row betterPosition
+// would pick out of the list — newest write, ties to the further position — so the
+// single-item body and the list body agree for a book with several segment rows.
+func (f *udFake) GetUserPosition(userID, bookID string) (*database.UserPosition, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.positionsErr != nil {
+		return nil, f.positionsErr
+	}
+	var best *database.UserPosition
+	for i := range f.positions {
+		pos := f.positions[i]
+		if pos.UserID != userID || pos.BookID != bookID {
+			continue
+		}
+		if best == nil || pos.UpdatedAt.After(best.UpdatedAt) ||
+			(pos.UpdatedAt.Equal(best.UpdatedAt) && pos.PositionSeconds > best.PositionSeconds) {
+			cp := pos
+			best = &cp
+		}
+	}
+	return best, nil
+}
 
 func (f *udFake) ListUserPositionsSince(userID string, since time.Time) ([]database.UserPosition, error) {
 	f.mu.Lock()

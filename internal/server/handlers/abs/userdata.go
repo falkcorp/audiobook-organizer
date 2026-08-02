@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/userdata.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 63289143-7fae-47b5-9ed9-888ac3c2034a
-// last-edited: 2026-07-30
+// last-edited: 2026-08-02
 
 package abs
 
@@ -55,6 +55,11 @@ import (
 type ProgressListStore interface {
 	ListUserPositionsSince(userID string, since time.Time) ([]database.UserPosition, error)
 	GetUserBookState(userID, bookID string) (*database.UserBookState, error)
+	// GetUserPosition serves MediaProgressFor. A single-key get rather than a
+	// filtered rescan of ListUserPositionsSince: GET /api/me/progress/:id is on
+	// the client's reset-progress path and there is no reason to walk every book
+	// the user has touched to answer a question about one of them.
+	GetUserPosition(userID, bookID string) (*database.UserPosition, error)
 }
 
 // BookmarkListStore is the named-bookmark slice. ListBookmarksForUser exists
@@ -230,6 +235,42 @@ func (p *userDataProvider) MediaProgress(userID string) ([]any, error) {
 	return rows, nil
 }
 
+// MediaProgressFor renders the single row GET /api/me/progress/:id serves.
+//
+// It routes through the SAME progressRow renderer the list uses, which is the
+// whole point of the method existing: the client compares the single-item body
+// against the copy of the same book inside /api/me's list, resolving conflicts on
+// `lastUpdate` with a strict `>` after truncating both sides to whole seconds. Two
+// renderers that disagree by one field — or by one rounding step in the finished
+// tolerance — produce a book that re-syncs forever.
+//
+// ok=false means the user has never started this book, which the handler turns
+// into the 404 real ABS answers there. An error means we could not tell, which
+// becomes a 5xx: a 404 we are not sure about reads to the client as "no progress",
+// and that is the one answer that can cost a position.
+func (p *userDataProvider) MediaProgressFor(userID, bookID string) (any, bool, error) {
+	if userID == "" || bookID == "" {
+		return nil, false, errors.New("abs: userdata: userID and bookID are required")
+	}
+	pos, err := p.progress.GetUserPosition(userID, bookID)
+	if err != nil {
+		return nil, false, fmt.Errorf("abs: userdata: load position for %s/%s: %w", userID, bookID, err)
+	}
+	if pos == nil {
+		return nil, false, nil
+	}
+	// GetUserPosition answers for the (user, book) without naming a segment, so
+	// normalize the keys the renderer relies on rather than trusting whichever
+	// segment row the store happened to return.
+	pos.UserID, pos.BookID = userID, bookID
+
+	row, err := p.progressRow(userID, *pos)
+	if err != nil {
+		return nil, false, err
+	}
+	return row, true, nil
+}
+
 // betterPosition decides which of two position rows for the SAME book wins.
 //
 // Newest write wins, and a timestamp TIE resolves to the further position rather
@@ -292,12 +333,17 @@ func (p *userDataProvider) progressRow(userID string, pos database.UserPosition)
 	}
 
 	lastUpdate := lastUpdateMs(pos, state)
+	// The user's own "remove from Continue Listening" choice, persisted on the
+	// book state. Never derived: a false here because the row could not be read
+	// would silently put a book the user hid back on their home screen.
+	hidden := state != nil && state.HideFromContinueListening
+
 	row := mediaProgressDTO{
 		CurrentTime: pos.PositionSeconds,
 		Duration:    duration,
 		// ebook fields: this surface serves audiobooks only. Null/zero, never absent.
 		EbookProgress:             0,
-		HideFromContinueListening: false,
+		HideFromContinueListening: hidden,
 		// Derived from (user, item) rather than random so a client that stores the id
 		// keeps matching the same row across restarts. Same formula as item.go.
 		ID:            userID + "-" + syncID,
