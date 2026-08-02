@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.34.0
+// version: 2.35.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-07-03
+// last-edited: 2026-08-02
 
 package server
 
@@ -361,7 +361,20 @@ func NewServer(store database.Store) *Server {
 	router.Use(securityHeadersMiddleware())
 	router.Use(corsMiddleware())
 	router.Use(servermiddleware.BasicAuth())
-	router.Use(gzip.Gzip(gzip.DefaultCompression, gzip.WithExcludedPaths([]string{"/api/events"})))
+	// 🔴 /metrics MUST be excluded, not just "should be". promhttp.Handler()
+	// does its OWN gzip when the client sends Accept-Encoding: gzip, so leaving
+	// it in here compresses an already-compressed body. Prometheus gunzips once,
+	// finds gzip magic bytes underneath, and fails every scrape with:
+	//
+	//	expected a valid start token, got "\x1f" ("INVALID") while parsing: "\x1f"
+	//
+	// which reads like a corrupt exposition format rather than a transport bug.
+	// Observed in production 2026-08-02, immediately after /metrics was
+	// auth-gated made the target reachable again.
+	//
+	// /api/events is an SSE stream: buffering it through a compressor defeats
+	// incremental delivery, so events arrive only when the buffer flushes.
+	router.Use(gzip.Gzip(gzip.DefaultCompression, gzip.WithExcludedPaths([]string{"/api/events", "/metrics"})))
 	// OpenTelemetry instrumentation: create per-handler spans and record metrics
 	router.Use(otelgin.Middleware("audiobook-organizer"))
 
