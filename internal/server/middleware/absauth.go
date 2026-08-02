@@ -1,7 +1,7 @@
 // file: internal/server/middleware/absauth.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e7051b93-6c28-4a0f-9d34-b8f2a61c05de
-// last-edited: 2026-08-01
+// last-edited: 2026-08-02
 
 package middleware
 
@@ -10,6 +10,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
@@ -24,6 +25,9 @@ import (
 const (
 	contextABSSessionKey = "abs_session_id"
 	contextABSModeKey    = "abs_auth_mode"
+	// contextABSServiceTokenKey holds the Cloudflare service token's common_name.
+	// A CREDENTIAL label, never an identity — nothing may resolve a user from it.
+	contextABSServiceTokenKey = "abs_service_token"
 )
 
 // ABS auth mode names as reported by ABSAuthMode.
@@ -177,6 +181,15 @@ func (r *ABSIdentityResolver) ResolveCFAssertion(c *gin.Context) (*ABSIdentity, 
 		// which is itself fail-closed. A request with a service token and no bearer
 		// still gets 401 — it has simply not proven who it is.
 		if errors.Is(err, oauth.ErrNonIdentityAssertion) {
+			// Record WHICH service token this was before falling through. It is the
+			// only attribution a machine credential ever carries, and on the
+			// fall-through path the request may still go on to authenticate as a
+			// real user via its bearer — at which point the token and the person
+			// appear together on one audit line, which is the pairing that makes an
+			// anomaly visible (see absauth.AuditEvent.ServiceToken).
+			if cn := oauth.CFAssertionCommonName(err); cn != "" && c != nil {
+				c.Set(contextABSServiceTokenKey, cn)
+			}
 			return nil, nil
 		}
 		// Everything else FAILS CLOSED — forged signature, wrong issuer, wrong aud,
@@ -290,6 +303,68 @@ func (r *ABSIdentityResolver) Bind(c *gin.Context, id *ABSIdentity) {
 	c.Request = c.Request.WithContext(ctx)
 }
 
+// ABSServiceToken returns the Cloudflare service token's common_name for this
+// request, or "" when it carried none.
+//
+// 🔴 FOR LOGGING ONLY. It names a credential shared by a GROUP of people (the owner
+// mints separate friends/family/other/testing tokens so a revocation is contained),
+// so it can never answer "who is this". Identity comes from SSO.
+func ABSServiceToken(c *gin.Context) string {
+	if c == nil {
+		return ""
+	}
+	v, ok := c.Get(contextABSServiceTokenKey)
+	if !ok {
+		return ""
+	}
+	s, _ := v.(string)
+	return s
+}
+
+// seenServiceTokenPairings remembers which (service token -> user) pairings this
+// process has already reported.
+var seenServiceTokenPairings sync.Map // common_name -> userID
+
+// noteServiceTokenPairing logs the token↔person pairing the FIRST time it is seen and
+// again whenever it CHANGES for a given token.
+//
+// Why not log it on every request: the ABS surface is polled every 15-20 s per
+// device, so an unconditional line would be pure journal noise — the same reason
+// ABSAuthProbe is opt-in. Why log it at all: token↔person is normally stable, so the
+// `family` token suddenly carrying a friend's SSO identity is a tripwire for either a
+// compromised Google account or a leaked token, and it is invisible unless both
+// values are recorded together.
+//
+// Steady state is one line per (token, person) per process lifetime. A token
+// legitimately shared by several people therefore logs once per person and then goes
+// quiet, which is the intended signal rather than a false positive.
+func noteServiceTokenPairing(commonName string, id *ABSIdentity) {
+	if commonName == "" || id == nil || id.User == nil {
+		return
+	}
+	prev, loaded := seenServiceTokenPairings.Swap(commonName, id.User.ID)
+	if loaded && prev == id.User.ID {
+		return // already reported for this person
+	}
+	absauth.Audit(absauth.AuditEvent{
+		Action:       "service-token-pairing",
+		Outcome:      absauth.OutcomeSuccess,
+		Mode:         id.Mode,
+		UserID:       id.User.ID,
+		Username:     id.User.Username,
+		ServiceToken: commonName,
+		Reason:       serviceTokenPairingReason(loaded),
+	})
+}
+
+func serviceTokenPairingReason(hadPrevious bool) string {
+	if hadPrevious {
+		// The interesting one: this token was carrying somebody else a moment ago.
+		return "service-token-now-used-by-a-different-user"
+	}
+	return "first-seen"
+}
+
 // ABSRequireAuth is the ABS group's authentication middleware. It never falls
 // through: either an identity is bound or the request is aborted with a JSON body.
 func ABSRequireAuth(r *ABSIdentityResolver) gin.HandlerFunc {
@@ -300,6 +375,7 @@ func ABSRequireAuth(r *ABSIdentityResolver) gin.HandlerFunc {
 			return
 		}
 		r.Bind(c, id)
+		noteServiceTokenPairing(ABSServiceToken(c), id)
 		c.Next()
 	}
 }
@@ -322,6 +398,9 @@ func AbortABSAuth(c *gin.Context, action string, e *ABSAuthError) {
 		Reason:    e.Reason,
 		Path:      c.Request.URL.Path,
 		UserAgent: c.Request.UserAgent(),
+		// On a FAILED attempt there is no user_id and never will be, so this is the
+		// only attribution the record can carry.
+		ServiceToken: ABSServiceToken(c),
 	})
 	msg := e.Message
 	if msg == "" {
