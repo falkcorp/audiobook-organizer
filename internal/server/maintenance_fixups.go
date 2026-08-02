@@ -13,11 +13,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/gin-gonic/gin"
 )
 
 // maintenanceStore is the narrow slice of database.Store that the
@@ -571,4 +571,3 @@ func (s *Server) handleGetAcoustIDStats(c *gin.Context) {
 	}
 	httputil.RespondWithOK(c, stats)
 }
-

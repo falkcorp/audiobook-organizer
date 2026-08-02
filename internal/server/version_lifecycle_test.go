@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
+	"github.com/gin-gonic/gin"
 )
 
 func setupVersionLifecycleServer(t *testing.T) (*Server, database.Store) {

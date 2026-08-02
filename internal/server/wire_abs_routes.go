@@ -1,5 +1,5 @@
 // file: internal/server/wire_abs_routes.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9c6b13f8-40a2-4e57-b18d-72e0a5c4d396
 // last-edited: 2026-08-02
 
@@ -398,6 +398,12 @@ func absRouteList() []string {
 		"POST /api/me/progress/:id/remove-from-continue-listening",
 		"POST /api/me/item/:id/remove-from-continue-listening",
 		"GET /api/me/item/:id/remove-from-continue-listening",
+		// Phase 6 — listening statistics. 200, not 404: any non-2xx flips the
+		// client's connection indicator orange (see stats.go).
+		"GET /api/me/listening-stats",
+		"GET /api/me/listening-sessions",
+		"GET /api/me/stats/year/:year",
+		"GET /api/me/item/listening-sessions/:id",
 		// Phase 6 — bookmarks CRUD.
 		"GET /api/me/bookmarks/:id",
 		"POST /api/me/item/:id/bookmark",

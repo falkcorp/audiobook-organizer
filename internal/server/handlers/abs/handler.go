@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/handler.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: fb0271c6-3a49-4d85-9e13-8c507b2ad64f
 // last-edited: 2026-08-02
 
@@ -77,6 +77,16 @@ type UserDataProvider interface {
 	// truncating to whole seconds — so two renderers that drift by a field or a
 	// rounding step turn into a book that will not stop re-syncing.
 	MediaProgressFor(userID, bookID string) (any, bool, error)
+
+	// ListenedSeconds is the user's total listened time across every book they
+	// have touched. It backs GET /api/me/listening-stats.
+	//
+	// Enumeration lives here rather than in the handler because this provider
+	// already owns the ONE user-keyed prefix scan that makes a complete per-user
+	// answer affordable on a request path (see userdata.go). A handler-side
+	// re-implementation would either duplicate that scan or reach for a
+	// whole-library one.
+	ListenedSeconds(userID string) (float64, error)
 }
 
 // BookmarkStore is the named-bookmark CRUD slice (pebble_store_bookmarks.go).
@@ -419,6 +429,20 @@ func (h *Handler) Register(r gin.IRouter) {
 	r.POST("/api/me/progress/:id/remove-from-continue-listening", auth, h.RemoveFromContinueListening)
 	r.POST("/api/me/item/:id/remove-from-continue-listening", auth, h.RemoveFromContinueListening)
 	r.GET("/api/me/item/:id/remove-from-continue-listening", auth, h.RemoveFromContinueListening)
+
+	// ── Phase 6: listening statistics ───────────────────────────────────────
+	//
+	// 200 rather than 404 — NOT cosmetic. AudioBooth's NetworkService flips the
+	// server's connection indicator to `.connectionError` (the orange dot) on ANY
+	// non-2xx, and /api/me/listening-stats is fetched on every home-screen refresh.
+	// See stats.go for why §1.8.6's "prefer 404" guidance was wrong.
+	r.GET("/api/me/listening-stats", auth, h.ListeningStats)
+	r.GET("/api/me/listening-sessions", auth, h.ListeningSessions)
+	r.GET("/api/me/stats/year/:year", auth, h.YearStats)
+	// Registered BEFORE the bookmark block so it is not gated on a bookmark store,
+	// and note the literal "listening-sessions" sits where /api/me/item/:id would —
+	// gin routes the static sibling ahead of the wildcard, which the tests pin.
+	r.GET("/api/me/item/listening-sessions/:id", auth, h.ItemListeningSessions)
 
 	if h.bookmarks == nil {
 		return

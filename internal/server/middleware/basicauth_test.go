@@ -9,8 +9,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/gin-gonic/gin"
 )
 
 func setupBasicAuthRouter() *gin.Engine {

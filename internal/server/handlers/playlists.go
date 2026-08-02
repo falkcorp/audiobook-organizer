@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/playlist"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
+	"github.com/gin-gonic/gin"
 )
 
 // -----------------------------------------------------------------------
@@ -73,8 +73,8 @@ type PlaylistStore interface {
 
 // PlaylistHandler handles all /playlists routes.
 type PlaylistHandler struct {
-	store      PlaylistStore
-	indexFn    func() *search.BleveIndex // lazily resolved — smart playlists return 503 when nil
+	store   PlaylistStore
+	indexFn func() *search.BleveIndex // lazily resolved — smart playlists return 503 when nil
 }
 
 // NewPlaylistHandler constructs a PlaylistHandler.

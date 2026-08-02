@@ -1,5 +1,5 @@
 <!-- file: docs/specs/2026-07-29-abs-sync-api-design.md -->
-<!-- version: 7.4.0 -->
+<!-- version: 7.5.0 -->
 <!-- guid: 0869d58c-b186-45cb-9915-64bd18eaa45f -->
 <!-- last-edited: 2026-08-02 -->
 
@@ -312,7 +312,7 @@ All of these tolerate failure, so **404/500 is strictly safer than a half-correc
 | `…/narrators` | `{"narrators":[]}` | wrapper key required |
 | `…/recent-episodes` | `{"episodes":[]}` | wrapper key required |
 | listening-sessions | all five of `total,numPages,page,itemsPerPage,sessions` | all required |
-| listening-stats / year-stats | **prefer 404** | ~12 non-optional fields; callers use `try?` |
+| listening-stats / year-stats | ~~prefer 404~~ **200, see §1.8.10** | the `try?` reasoning was wrong — a 404 flips the client's connection indicator |
 
 Also: **an empty `200` body is fatal** for any typed endpoint (`NetworkService.swift:224-227`), and
 `…/remove-from-continue-listening` needs a non-empty body (`{}` suffices). ⚠️ **Corrected 2026-08-02 —
@@ -373,6 +373,47 @@ make scrubbing backwards impossible. The stale-device clobber is prevented one s
 `max(local, session.currentTime)` ignoring timestamps, so a stale device is pulled forward and never has a
 behind position to push. Forward-only merging guards the one path with genuinely untrustworthy timestamps —
 offline replay, via `MergeOfflineReplay`.
+
+### 🔴 1.8.10 CORRECTION — a 404 is NOT free: it turns the client's status indicator orange
+
+**Supersedes §1.8.6's "prefer 404" guidance for the listening-stats family.** Established 2026-08-02
+from AudioBooth's source, after the owner reported the app's connection dot "still turns orange
+randomly".
+
+`NetworkService.performRequest` sets the server's status on **every** response:
+
+```swift
+guard 200...299 ~= httpResponse.statusCode else { … await updateStatus(.connectionError) }
+await updateStatus(.connected)
+```
+
+`.connectionError` is the **orange dot** on the home screen (`HomePage.connectionStatusColor`). So ANY
+non-2xx — including a deliberate 404 — flips the indicator, and the next 2xx flips it back.
+`/api/me/listening-stats` is fetched on every home-screen refresh, which produced exactly the reported
+random flicker.
+
+§1.8.6's reasoning ("callers use `try?`") was wrong twice over:
+
+1. `try?` swallows the **error**; the status **side effect** has already happened.
+2. `ListeningStats` has **four** required fields, not "~12": `totalTime`, `days`, `dayOfWeek`, `today`
+   (`recentSessions` and `items` are optional). All four are trivially satisfiable.
+
+**Rule:** on any endpoint the client reaches through `NetworkService`, prefer a shape-complete 200 with
+truthful zero/empty values over a 404. Reserve non-2xx for cases where the client must actually treat
+the call as failed.
+
+⚠️ **Covers are exempt** and must NOT be "fixed" the same way: the client builds cover URLs directly for
+Nuke/AsyncImage rather than going through `NetworkService`, so the ~80% of books with no cover art
+cannot trip the indicator. `GET /api/items/:id/cover` → 404 stays correct.
+
+Verified shapes (all four now served as 200):
+
+| Endpoint | Required fields |
+|---|---|
+| `GET /api/me/listening-stats` | `totalTime`, `today` (numbers); `days`, `dayOfWeek` (objects) |
+| `GET /api/me/listening-sessions` | `total`, `numPages`, `page`, `itemsPerPage`, `sessions[]` |
+| `GET /api/me/item/listening-sessions/:id` | `numPages`, `page`, `itemsPerPage`, `sessions[]` — **no `total`** |
+| `GET /api/me/stats/year/:year` | 6 numbers + `topAuthors`, `topGenres`, `booksWithCovers`, `finishedBooksWithCovers` |
 
 ### 1.8.7 Progress conflict resolution — client-side rules our server must respect
 

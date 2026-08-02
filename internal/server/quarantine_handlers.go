@@ -5,9 +5,9 @@
 package server
 
 import (
-	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/gin-gonic/gin"
 )
 
 // quarantineBook handles POST /api/v1/audiobooks/:id/quarantine

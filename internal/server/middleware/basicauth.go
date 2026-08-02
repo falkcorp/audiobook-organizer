@@ -9,8 +9,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/gin-gonic/gin"
 )
 
 // BasicAuth returns a Gin middleware that enforces HTTP Basic Authentication

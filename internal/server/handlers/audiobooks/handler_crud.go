@@ -17,7 +17,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/batch"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -25,6 +24,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
+	"github.com/gin-gonic/gin"
 )
 
 // UpdateAudiobook handles PUT /audiobooks/:id. Full-column replacement via the

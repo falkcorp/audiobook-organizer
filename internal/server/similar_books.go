@@ -12,10 +12,10 @@ package server
 import (
 	"strings"
 
-	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
+	"github.com/gin-gonic/gin"
 )
 
 // handleSimilarBooks returns books similar to the given book.

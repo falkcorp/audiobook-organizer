@@ -172,4 +172,3 @@ func stripSubtitle(title string) string {
 	}
 	return title
 }
-

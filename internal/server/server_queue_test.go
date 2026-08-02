@@ -10,8 +10,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/gin-gonic/gin"
 	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 )
 

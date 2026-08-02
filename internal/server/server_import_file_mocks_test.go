@@ -16,7 +16,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
@@ -24,6 +23,7 @@ import (
 	metamocks "github.com/falkcorp/audiobook-organizer/internal/metadata/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	queuemocks "github.com/falkcorp/audiobook-organizer/internal/operations/mocks"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"

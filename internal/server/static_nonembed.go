@@ -1,4 +1,5 @@
 //go:build !embed_frontend
+
 // version: 1.1.0
 // file: internal/server/static_nonembed.go
 // last-edited: 2026-08-01

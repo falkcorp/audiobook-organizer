@@ -21,13 +21,13 @@ import (
 	"os"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/diagnostics"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
+	"github.com/gin-gonic/gin"
 	ulid "github.com/oklog/ulid/v2"
 )
 
@@ -120,13 +120,13 @@ type dbHealthMetadataCache struct {
 // parser) so the handler is mockable and package handlers never imports package
 // server.
 type DiagnosticsHandler struct {
-	store          database.Store         // full store (db-health type switch + apply/export paths)
-	diagService    DiagnosticsService     // diagnostics service (CollectAllBooks); may be nil
-	mergeService   MergeService           // merge service (MergeBooks); may be nil
+	store          database.Store           // full store (db-health type switch + apply/export paths)
+	diagService    DiagnosticsService       // diagnostics service (CollectAllBooks); may be nil
+	mergeService   MergeService             // merge service (MergeBooks); may be nil
 	embeddingStore *database.EmbeddingStore // embeddings health stats; may be nil
-	aiScanStore    *database.AIScanStore  // ai-scan health stats; may be nil
-	registry       OperationsRegistry     // shared ops registry (EnqueueOp only)
-	batchParser    *ai.OpenAIParser       // resolved from server.batchPoller.parser; may be nil
+	aiScanStore    *database.AIScanStore    // ai-scan health stats; may be nil
+	registry       OperationsRegistry       // shared ops registry (EnqueueOp only)
+	batchParser    *ai.OpenAIParser         // resolved from server.batchPoller.parser; may be nil
 }
 
 // NewDiagnosticsHandler constructs a DiagnosticsHandler. Field/param order:

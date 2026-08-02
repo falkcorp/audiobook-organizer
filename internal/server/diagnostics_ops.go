@@ -15,8 +15,8 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/diagnostics"
-	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
 type diagnosticsExportOpParams struct {

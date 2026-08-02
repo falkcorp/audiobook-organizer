@@ -13,11 +13,11 @@ func TestSanitizeReturn(t *testing.T) {
 		{"/library", "/library"},
 		{"/", "/"},
 		{"", ""},
-		{"//evil.com", ""},        // protocol-relative
-		{"/\\evil.com", ""},       // backslash → browser normalizes to //
-		{"/path\\x", ""},          // any backslash rejected
-		{"https://evil.com", ""},  // absolute URL
-		{"evil.com", ""},          // no leading slash
+		{"//evil.com", ""},       // protocol-relative
+		{"/\\evil.com", ""},      // backslash → browser normalizes to //
+		{"/path\\x", ""},         // any backslash rejected
+		{"https://evil.com", ""}, // absolute URL
+		{"evil.com", ""},         // no leading slash
 	}
 	for _, c := range cases {
 		if got := sanitizeReturn(c.in); got != c.want {
