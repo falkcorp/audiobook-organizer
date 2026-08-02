@@ -1,5 +1,5 @@
 <!-- file: docs/specs/2026-07-29-abs-sync-api-design.md -->
-<!-- version: 7.3.0 -->
+<!-- version: 7.4.0 -->
 <!-- guid: 0869d58c-b186-45cb-9915-64bd18eaa45f -->
 <!-- last-edited: 2026-08-02 -->
 
@@ -333,10 +333,24 @@ building the write half. Fixtures for all of it are committed under `testdata/ab
 
 2. **`POST /api/me/item/:id/remove-from-continue-listening` DOES NOT EXIST on ABS 2.36.0.** It answers
    `404 Cannot POST`. The real mechanism is `PATCH /api/me/progress/:id` with
-   `{"hideFromContinueListening": true}`. We serve **both**: the PATCH field because it is the genuine
-   mechanism, and the POST alias because a client calls it and was taking a 404 in production (the
-   owner-reported "remove from continue listening does nothing"). The alias answers `{}` — non-empty, per
-   §1.8.6.
+   `{"hideFromContinueListening": true}`.
+
+   🔴 **CORRECTED AGAIN 2026-08-02, from AudioBooth's own source** — the oracle could not answer this
+   because real ABS has no such route, and the shape recorded above (and in §1.8.6) was wrong, so the
+   feature stayed broken through two fix attempts. `SessionService.swift:181-193`:
+
+   ```swift
+   NetworkRequest(path: "/api/me/progress/\(progressID)/remove-from-continue-listening",
+                  method: .get)
+   ```
+
+   It is a **GET**, and it hangs off **`/api/me/progress/:id`** — not a POST on `/api/me/item/:id`.
+   `:id` is the mediaProgress ROW id. The response must be a non-empty JSON object (`{}` suffices):
+   the client decodes into an empty `struct Response: Codable {}` and its NetworkService treats an
+   empty body as a decoding error even on a 2xx.
+
+   **Where the client and the oracle disagree, the CLIENT wins** — it is the thing making the request.
+   The oracle is authoritative only for routes real ABS actually serves.
 
 Verified response shapes for the whole write half (note that three of them are **`text/plain`**, not JSON):
 

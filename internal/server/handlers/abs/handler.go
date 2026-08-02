@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/handler.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: fb0271c6-3a49-4d85-9e13-8c507b2ad64f
 // last-edited: 2026-08-02
 
@@ -392,12 +392,33 @@ func (h *Handler) Register(r gin.IRouter) {
 	r.PATCH("/api/me/progress/:id", auth, h.MediaProgressPatch)
 	r.PATCH("/api/me/progress/batch/update", auth, h.MediaProgressBatchUpdate)
 	r.DELETE("/api/me/progress/:id", auth, h.MediaProgressDelete)
-	// Real ABS 2.36.0 has NO such route — it answers "Cannot POST" — and the
-	// mechanism is really a hideFromContinueListening PATCH (verified against the
-	// oracle, 2026-08-02). It is registered anyway because a client calls it and
-	// §1.8.6/spec:318 records that it must answer a NON-EMPTY body; a 404 is what
-	// the owner reported as "remove from continue listening does nothing".
+	// ── remove from Continue Listening ──────────────────────────────────────
+	//
+	// 🔴 THE PATH AND THE METHOD ARE BOTH NON-OBVIOUS. Read before "tidying".
+	//
+	// Verified against AudioBooth's own source (SessionService.swift:181-193,
+	// MPL-2.0), which is the authority here — the oracle has no such route at all
+	// and this spec's §1.8.6 recorded the wrong shape:
+	//
+	//	NetworkRequest(path: "/api/me/progress/\(progressID)/remove-from-continue-listening",
+	//	               method: .get)
+	//
+	// So it is a **GET**, not a POST, and it hangs off **/api/me/progress/:id**,
+	// not /api/me/item/:id. We shipped only the POST-on-/api/me/item form, so every
+	// tap 404'd before reaching a handler — which is exactly why the owner reported
+	// this as still broken after the Phase 6 write half shipped.
+	//
+	// :id is the mediaProgress ROW id; resolveBookID accepts that and the bare
+	// libraryItemId. The response must be a NON-EMPTY JSON object: the client
+	// decodes into an empty `struct Response: Codable {}` and NetworkService treats
+	// an empty body as a decoding error (§1.8.6).
+	r.GET("/api/me/progress/:id/remove-from-continue-listening", auth, h.RemoveFromContinueListening)
+	// Tolerated aliases. Cheap, and each is a shape some ABS client or a future
+	// AudioBooth version could plausibly use; a 404 here is user-visible breakage
+	// while an extra route costs nothing.
+	r.POST("/api/me/progress/:id/remove-from-continue-listening", auth, h.RemoveFromContinueListening)
 	r.POST("/api/me/item/:id/remove-from-continue-listening", auth, h.RemoveFromContinueListening)
+	r.GET("/api/me/item/:id/remove-from-continue-listening", auth, h.RemoveFromContinueListening)
 
 	if h.bookmarks == nil {
 		return
