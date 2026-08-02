@@ -12,9 +12,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
+	"github.com/gin-gonic/gin"
 )
 
 func setupSimilarBooksServer(t *testing.T) *Server {

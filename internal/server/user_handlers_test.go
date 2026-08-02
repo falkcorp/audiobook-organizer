@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/gin-gonic/gin"
 )
 
 func setupUserHandlerServer(t *testing.T) (*Server, database.Store) {

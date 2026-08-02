@@ -14,10 +14,10 @@
 package system
 
 import (
-	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/sysinfo"
+	"github.com/gin-gonic/gin"
 )
 
 // SystemStore is the narrow database.Store subset the system handlers require.
@@ -40,9 +40,9 @@ type SystemStore interface {
 	database.SettingsStore // factoryReset -> config.SaveConfigToDatabase
 
 	// health metrics
-	CountPrimaryBooks() (int, error)   // BookStore
-	CountAuthors() (int, error) // StatsStore
-	CountSeries() (int, error)  // StatsStore
+	CountPrimaryBooks() (int, error) // BookStore
+	CountAuthors() (int, error)      // StatsStore
+	CountSeries() (int, error)       // StatsStore
 
 	// announcements
 	GetAllAuthors() ([]database.Author, error) // AuthorStore
@@ -55,8 +55,8 @@ type SystemStore interface {
 	GetSystemActivityLogs(source string, limit int) ([]database.SystemActivityLog, error) // SystemActivityStore
 
 	// reset / factory-reset
-	Reset() error             // LifecycleStore
-	InvalidateLibraryStats()  // StatsStore
+	Reset() error            // LifecycleStore
+	InvalidateLibraryStats() // StatsStore
 
 	// dashboard
 	GetDashboardStats() (*database.DashboardStats, error)        // StatsStore

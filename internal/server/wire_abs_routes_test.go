@@ -1,5 +1,5 @@
 // file: internal/server/wire_abs_routes_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3ea1d764-95c8-4b02-8f31-6d70a5be2c49
 // last-edited: 2026-08-02
 
@@ -53,6 +53,8 @@ func TestABSReservedPath_CoversEVERYRegisteredUnversionedRoute(t *testing.T) {
 		// not by an opaque id). Integer form on purpose: that is what AudioBooth
 		// sends here even when it round-trips the same value as a Double elsewhere.
 		":time": "100",
+		// The year-stats path parameter. Any 4-digit year; the handler ignores it.
+		":year": "2026",
 	}
 
 	checked := 0

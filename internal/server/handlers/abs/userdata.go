@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/userdata.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 63289143-7fae-47b5-9ed9-888ac3c2034a
 // last-edited: 2026-08-02
 
@@ -467,6 +467,62 @@ func (p *userDataProvider) durationFor(bookID string) (float64, error) {
 		return float64(*book.Duration), nil
 	}
 	return 0, nil
+}
+
+// ListenedSeconds totals the user's listened time across every book they have
+// touched, from the per-book UserBookState the playback sync maintains.
+//
+// One user-keyed prefix scan for the book list, then bounded per-book state reads —
+// the same shape and the same cost as MediaProgress, and for the same reason: this
+// is a request path and nothing here may scan the library.
+//
+// A per-book state that cannot be read contributes 0 rather than failing the whole
+// total. That is the opposite of MediaProgress's discipline, and deliberately so: an
+// under-reported statistic is cosmetic, while an under-reported PROGRESS LIST makes
+// the client delete books (§1.8.1). Failing this call instead would turn a cosmetic
+// gap into an orange "connection error" on the client's home screen.
+func (p *userDataProvider) ListenedSeconds(userID string) (float64, error) {
+	if userID == "" {
+		return 0, errors.New("abs: userdata: userID is required")
+	}
+	positions, err := p.progress.ListUserPositionsSince(userID, time.Time{})
+	if err != nil {
+		return 0, fmt.Errorf("abs: userdata: list positions for user %s: %w", userID, err)
+	}
+	seen := make(map[string]struct{}, len(positions))
+	bookIDs := make([]string, 0, len(positions))
+	for _, pos := range positions {
+		if pos.BookID == "" {
+			continue
+		}
+		if _, dup := seen[pos.BookID]; dup {
+			continue
+		}
+		seen[pos.BookID] = struct{}{}
+		bookIDs = append(bookIDs, pos.BookID)
+	}
+	if len(bookIDs) == 0 {
+		return 0, nil
+	}
+
+	totals := make([]float64, len(bookIDs))
+	g := new(errgroup.Group)
+	g.SetLimit(p.concurrency)
+	for i := range bookIDs {
+		g.Go(func() error {
+			state, serr := p.progress.GetUserBookState(userID, bookIDs[i])
+			if serr == nil && state != nil && state.TotalListenedSeconds > 0 {
+				totals[i] = state.TotalListenedSeconds
+			}
+			return nil
+		})
+	}
+	_ = g.Wait() // no goroutine returns an error; see the note above
+	sum := 0.0
+	for _, t := range totals {
+		sum += t
+	}
+	return sum, nil
 }
 
 // Bookmarks returns the user's COMPLETE bookmark list, or an error.

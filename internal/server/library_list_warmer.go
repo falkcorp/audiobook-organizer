@@ -675,13 +675,13 @@ func (s *Server) runTrickleWarmer(backlog []qry) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	var (
-		idx        int
-		hits       int
-		misses     int
-		cached     int
-		skipped    int
-		resampled  int
-		backoff    time.Duration
+		idx       int
+		hits      int
+		misses    int
+		cached    int
+		skipped   int
+		resampled int
+		backoff   time.Duration
 	)
 	for idx < len(backlog) {
 		select {

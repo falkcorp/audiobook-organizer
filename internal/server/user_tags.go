@@ -8,9 +8,9 @@ package server
 import (
 	"strings"
 
-	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/gin-gonic/gin"
 )
 
 // normalizeTag normalizes a single tag by trimming whitespace, converting to lowercase,

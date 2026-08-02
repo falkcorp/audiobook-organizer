@@ -6,10 +6,10 @@
 package handlers
 
 import (
-	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
+	"github.com/gin-gonic/gin"
 )
 
 // PluginRegistrar is the narrow interface PluginsHandler requires for the plugin registry.

@@ -16,9 +16,9 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
+	"github.com/gin-gonic/gin"
 )
 
 // pidIntegrityHandler handles GET/POST /api/v1/itunes/pid-integrity. Always

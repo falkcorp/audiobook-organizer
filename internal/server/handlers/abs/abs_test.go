@@ -258,10 +258,11 @@ func (f *fakeVerifier) Verify(_ context.Context, raw string) (*oauth.IdentityCla
 // ── fake user-data provider (Phase 6 stand-in) ──────────────────────────────
 
 type fakeUserData struct {
-	progress    []any
-	bookmarks   []any
-	progressFor map[string]any
-	err         error
+	progress        []any
+	bookmarks       []any
+	progressFor     map[string]any
+	listenedSeconds float64
+	err             error
 }
 
 func (f *fakeUserData) MediaProgress(string) ([]any, error) { return f.progress, f.err }
@@ -271,6 +272,15 @@ func (f *fakeUserData) Bookmarks(string) ([]any, error)     { return f.bookmarks
 // SAME error is reported (so a broken provider still yields a 5xx rather than a 404,
 // which is the distinction GET /api/me/progress/:id exists to preserve), and a
 // missing row is reported as ok=false rather than as an empty object.
+// ListenedSeconds mirrors the real provider's forgiving contract: statistics are
+// cosmetic, so a broken store reports 0 rather than failing the request.
+func (f *fakeUserData) ListenedSeconds(string) (float64, error) {
+	if f.err != nil {
+		return 0, f.err
+	}
+	return f.listenedSeconds, nil
+}
+
 func (f *fakeUserData) MediaProgressFor(_, bookID string) (any, bool, error) {
 	if f.err != nil {
 		return nil, false, f.err

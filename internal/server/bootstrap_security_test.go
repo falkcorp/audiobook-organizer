@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/gin-gonic/gin"
 )
 
 // fakeSettingsStore is a minimal in-memory SettingsReadWriter that mirrors the

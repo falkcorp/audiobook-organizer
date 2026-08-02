@@ -13,9 +13,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/gin-gonic/gin"
 )
 
 // GetAudiobookTags handles GET /audiobooks/:id/tags.

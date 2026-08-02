@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
+	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -33,17 +33,17 @@ func (s *stubAuthStore) CreateUser(username, email, algo, hash string, roles []s
 	return nil, nil
 }
 func (s *stubAuthStore) GetRoleByID(id string) (*database.Role, error)     { return nil, nil }
-func (s *stubAuthStore) GetRoleByName(name string) (*database.Role, error)  { return nil, nil }
-func (s *stubAuthStore) GetSession(id string) (*database.Session, error)    { return nil, nil }
-func (s *stubAuthStore) GetUserByID(id string) (*database.User, error)      { return s.user, s.err }
+func (s *stubAuthStore) GetRoleByName(name string) (*database.Role, error) { return nil, nil }
+func (s *stubAuthStore) GetSession(id string) (*database.Session, error)   { return nil, nil }
+func (s *stubAuthStore) GetUserByID(id string) (*database.User, error)     { return s.user, s.err }
 func (s *stubAuthStore) GetUserByUsername(username string) (*database.User, error) {
 	return s.user, s.err
 }
 func (s *stubAuthStore) ListUserSessions(userID string) ([]database.Session, error) {
 	return nil, nil
 }
-func (s *stubAuthStore) RevokeSession(id string) error          { return nil }
-func (s *stubAuthStore) UpdateUser(user *database.User) error   { return nil }
+func (s *stubAuthStore) RevokeSession(id string) error        { return nil }
+func (s *stubAuthStore) UpdateUser(user *database.User) error { return nil }
 
 func newTestUser(t *testing.T) *database.User {
 	t.Helper()

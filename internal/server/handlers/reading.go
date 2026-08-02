@@ -6,12 +6,12 @@
 package handlers
 
 import (
-	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/readstatus"
 	svrmw "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
+	"github.com/gin-gonic/gin"
 )
 
 // SetPositionRequest is the JSON body for POST /api/v1/books/:id/position.

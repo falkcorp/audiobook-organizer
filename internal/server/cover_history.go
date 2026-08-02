@@ -16,11 +16,11 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/covers"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/security/safepath"
+	"github.com/gin-gonic/gin"
 )
 
 // handleListCoverHistory returns the cover art history for a book.

@@ -10,11 +10,11 @@ package server
 import (
 	"log/slog"
 
-	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
+	"github.com/gin-gonic/gin"
 )
 
 // handleTrashVersion moves a version to trash.

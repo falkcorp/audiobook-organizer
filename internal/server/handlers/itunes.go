@@ -150,8 +150,8 @@ type ITunesTestMappingRequest struct {
 
 // ITunesTestMappingResponse returns sample results from testing a mapping.
 type ITunesTestMappingResponse struct {
-	Tested   int                `json:"tested"`
-	Found    int                `json:"found"`
+	Tested   int                 `json:"tested"`
+	Found    int                 `json:"found"`
 	Examples []ITunesTestExample `json:"examples"`
 }
 

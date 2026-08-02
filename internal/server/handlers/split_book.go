@@ -13,11 +13,11 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/gin-gonic/gin"
-	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/gin-gonic/gin"
 )
 
 // SplitBookOpEnqueuer is the narrow interface required to trigger a
@@ -40,7 +40,7 @@ type SplitBookCandidateStore interface {
 // when the embedding store is unavailable). Handlers check for nil and
 // return 503 gracefully.
 type SplitBookHandler struct {
-	opEnqueuer SplitBookOpEnqueuer    // may be nil
+	opEnqueuer SplitBookOpEnqueuer     // may be nil
 	candStore  SplitBookCandidateStore // may be nil
 	mergeStore database.Store          // required by MergeSplitBookCluster
 }

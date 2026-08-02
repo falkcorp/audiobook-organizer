@@ -10,10 +10,10 @@ package server
 import (
 	"strconv"
 
-	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/gin-gonic/gin"
 )
 
 // entityTagOps bundles the store operations for one tagged-entity type
