@@ -1,5 +1,5 @@
 // file: internal/server/wire_abs_routes.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9c6b13f8-40a2-4e57-b18d-72e0a5c4d396
 // last-edited: 2026-08-02
 
@@ -392,7 +392,12 @@ func absRouteList() []string {
 		"PATCH /api/me/progress/:id",
 		"PATCH /api/me/progress/batch/update",
 		"DELETE /api/me/progress/:id",
+		// The shape AudioBooth actually sends (GET, under /api/me/progress) plus
+		// tolerated aliases — see Handler.Register.
+		"GET /api/me/progress/:id/remove-from-continue-listening",
+		"POST /api/me/progress/:id/remove-from-continue-listening",
 		"POST /api/me/item/:id/remove-from-continue-listening",
+		"GET /api/me/item/:id/remove-from-continue-listening",
 		// Phase 6 — bookmarks CRUD.
 		"GET /api/me/bookmarks/:id",
 		"POST /api/me/item/:id/bookmark",
