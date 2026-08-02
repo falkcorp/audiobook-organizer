@@ -1,7 +1,7 @@
 // file: internal/database/store.go
-// version: 2.85.1
+// version: 2.86.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-07-26
+// last-edited: 2026-08-02
 
 package database
 
@@ -804,7 +804,17 @@ type UserBookState struct {
 	LastSegmentID        string    `json:"last_segment_id,omitempty"`
 	TotalListenedSeconds float64   `json:"total_listened_seconds,omitempty"`
 	ProgressPct          int       `json:"progress_pct"` // 0-100
-	UpdatedAt            time.Time `json:"updated_at"`
+	// HideFromContinueListening backs the Audiobookshelf surface's
+	// `mediaProgress[].hideFromContinueListening` flag — "remove this from Continue
+	// Listening" without discarding the position. Additive: rows written before this
+	// field existed unmarshal to false, which is the correct default (nothing was
+	// ever hidden).
+	//
+	// It is a USER INTENT, not derived state. Anything that rewrites a
+	// UserBookState must read-modify-write rather than construct a fresh literal, or
+	// the next playback sync silently un-hides what the user hid.
+	HideFromContinueListening bool      `json:"hide_from_continue_listening,omitempty"`
+	UpdatedAt                 time.Time `json:"updated_at"`
 }
 
 // UserBookStatus values. Auto-computed from UserPosition rows

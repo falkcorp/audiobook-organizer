@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/handler.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: fb0271c6-3a49-4d85-9e13-8c507b2ad64f
-// last-edited: 2026-08-01
+// last-edited: 2026-08-02
 
 // Package abs implements the Audiobookshelf-compatible auth surface (design spec
 // Phase 1): GET /ping, GET /status, POST /login, POST /auth/refresh, POST /logout,
@@ -31,6 +31,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
+	"github.com/falkcorp/audiobook-organizer/internal/syncapi/progress"
 	"github.com/gin-gonic/gin"
 	"github.com/oklog/ulid/v2"
 )
@@ -65,6 +66,30 @@ type Store interface {
 type UserDataProvider interface {
 	MediaProgress(userID string) ([]any, error)
 	Bookmarks(userID string) ([]any, error)
+
+	// MediaProgressFor renders the single (user, book) row that GET
+	// /api/me/progress/:id serves, reporting ok=false when the user has never
+	// started the book (real ABS answers 404 there).
+	//
+	// It exists so the single-item body is produced by the SAME renderer as the
+	// list rather than by a parallel one. Clients compare the two for the same
+	// book — AudioBooth resolves conflicts on `lastUpdate` with strict `>` after
+	// truncating to whole seconds — so two renderers that drift by a field or a
+	// rounding step turn into a book that will not stop re-syncing.
+	MediaProgressFor(userID, bookID string) (any, bool, error)
+}
+
+// BookmarkStore is the named-bookmark CRUD slice (pebble_store_bookmarks.go).
+//
+// itemID here is the CLIENT-VISIBLE libraryItemId (the 36-char sync UUID), not a
+// Book ULID: the keyspace was defined that way to mirror real ABS, whose
+// create/update/delete surface addresses a bookmark by (item id, time) with the time
+// value in the URL path. userdata.go's Bookmarks reader depends on the same choice.
+type BookmarkStore interface {
+	CreateBookmark(b progress.Bookmark) error
+	ListBookmarks(userID, itemID string) ([]progress.Bookmark, error)
+	UpdateBookmarkTitle(userID, itemID string, timeSec float64, newTitle string) error
+	DeleteBookmark(userID, itemID string, timeSec float64) error
 }
 
 // LibraryStore is the read slice of the library the browse + playback surface needs
@@ -134,6 +159,12 @@ type ProgressStore interface {
 	SetUserPosition(userID, bookID, segmentID string, positionSeconds float64) error
 	GetUserBookState(userID, bookID string) (*database.UserBookState, error)
 	SetUserBookState(state *database.UserBookState) error
+	// ClearUserPositions backs DELETE /api/me/progress/:id ("reset progress"). It
+	// clears EVERY segment row for the (user, book), not just the ABS whole-book
+	// one: the user asked to start the book over, and leaving the app's own
+	// per-chapter positions behind would resurrect the old place the next time the
+	// in-app reader touched the book.
+	ClearUserPositions(userID, bookID string) error
 }
 
 // Options are the handler's dependencies.
@@ -156,6 +187,10 @@ type Options struct {
 	Identity IdentityStore
 	Chapters ChapterStore
 	Progress ProgressStore
+	// Bookmarks gates the bookmark CRUD routes. Nil means they are not registered
+	// at all rather than registered and answering 500 — a client that gets a 404
+	// hides the feature, while one that gets a 500 shows an error on every open.
+	Bookmarks BookmarkStore
 
 	// CoverRoot is config.AppConfig.RootDir — the library root that
 	// metadata.CoverPathForBook resolves covers under, and the base for the relative
@@ -178,6 +213,7 @@ type Handler struct {
 	identity    IdentityStore
 	chapters    ChapterStore
 	progress    ProgressStore
+	bookmarks   BookmarkStore
 	coverRoot   string
 	libraryName string
 
@@ -234,6 +270,7 @@ func New(o Options) (*Handler, error) {
 		identity:    o.Identity,
 		chapters:    o.Chapters,
 		progress:    o.Progress,
+		bookmarks:   o.Bookmarks,
 		coverRoot:   o.CoverRoot,
 		libraryName: name,
 		now:         time.Now,
@@ -341,7 +378,42 @@ func (h *Handler) Register(r gin.IRouter) {
 	// UUID, unguessable and scoped to one book for one user, and it stops working
 	// when the session expires.
 	r.GET("/public/session/:id/track/:index", h.PublicSessionTrack)
+
+	// ── Phase 6: progress mutation ──────────────────────────────────────────
+	//
+	// Registered after the browse block because every one of them resolves a
+	// client-visible libraryItemId through h.identity.
+	//
+	// gin routes the static "batch" sibling alongside the ":id" wildcard at the
+	// same depth correctly on v1.12.0 (verified: no panic, no mis-dispatch), so
+	// batch is a real route rather than a branch inside the :id handler.
+	r.GET("/api/me/progress", auth, h.MediaProgressList)
+	r.GET("/api/me/progress/:id", auth, h.MediaProgressGet)
+	r.PATCH("/api/me/progress/:id", auth, h.MediaProgressPatch)
+	r.PATCH("/api/me/progress/batch/update", auth, h.MediaProgressBatchUpdate)
+	r.DELETE("/api/me/progress/:id", auth, h.MediaProgressDelete)
+	// Real ABS 2.36.0 has NO such route — it answers "Cannot POST" — and the
+	// mechanism is really a hideFromContinueListening PATCH (verified against the
+	// oracle, 2026-08-02). It is registered anyway because a client calls it and
+	// §1.8.6/spec:318 records that it must answer a NON-EMPTY body; a 404 is what
+	// the owner reported as "remove from continue listening does nothing".
+	r.POST("/api/me/item/:id/remove-from-continue-listening", auth, h.RemoveFromContinueListening)
+
+	if h.bookmarks == nil {
+		return
+	}
+	// ── Phase 6: bookmarks CRUD ─────────────────────────────────────────────
+	r.GET("/api/me/bookmarks/:id", auth, h.ListItemBookmarks)
+	r.POST("/api/me/item/:id/bookmark", auth, h.CreateBookmark)
+	r.PATCH("/api/me/item/:id/bookmark", auth, h.UpdateBookmark)
+	// The TIME VALUE is the path parameter — real ABS keys a bookmark by
+	// (libraryItemId, time), not by an opaque bookmark id.
+	r.DELETE("/api/me/item/:id/bookmark/:time", auth, h.DeleteBookmark)
 }
+
+// HasBookmarkSurface reports whether the Phase 6 bookmark CRUD routes were
+// registered.
+func (h *Handler) HasBookmarkSurface() bool { return h.bookmarks != nil }
 
 // ── shared helpers ──────────────────────────────────────────────────────────
 

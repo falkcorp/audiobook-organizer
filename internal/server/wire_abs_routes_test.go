@@ -1,7 +1,7 @@
 // file: internal/server/wire_abs_routes_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3ea1d764-95c8-4b02-8f31-6d70a5be2c49
-// last-edited: 2026-07-30
+// last-edited: 2026-08-02
 
 package server
 
@@ -48,6 +48,11 @@ func TestABSReservedPath_CoversEVERYRegisteredUnversionedRoute(t *testing.T) {
 		":id":        "68929fc9-e296-4d25-b3aa-1c2930efd00d",
 		":ino":       "01JFILEIDABCDEFGHIJKLMNOP",
 		":index":     "1",
+		// The bookmark delete surface addresses a bookmark by its TIME value, which
+		// arrives as a bare path segment (real ABS keys a bookmark by (item, time),
+		// not by an opaque id). Integer form on purpose: that is what AudioBooth
+		// sends here even when it round-trips the same value as a Double elsewhere.
+		":time": "100",
 	}
 
 	checked := 0

@@ -1,0 +1,17 @@
+{
+  "request": {
+    "body": null,
+    "method": "DELETE",
+    "path": "/api/me/item/68929fc9-e296-4d25-b3aa-1c2930efd00d/bookmark/100"
+  },
+  "response": {
+    "body": {
+      "__non_json_body__": "OK"
+    },
+    "headers": {
+      "content-type": "text/plain; charset=utf-8",
+      "etag": "W/\"2-nOO9QiTIwXgNtWtBJezz8kv3SLc\""
+    },
+    "status": 200
+  }
+}

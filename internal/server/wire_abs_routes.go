@@ -1,7 +1,7 @@
 // file: internal/server/wire_abs_routes.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9c6b13f8-40a2-4e57-b18d-72e0a5c4d396
-// last-edited: 2026-08-01
+// last-edited: 2026-08-02
 
 package server
 
@@ -24,6 +24,16 @@ import (
 // either side would turn into an os.Exit(1) at boot instead of a build failure —
 // and the failure mode it guards is the /api/me empty-list data loss of §1.8.1.
 var _ abshandler.ProgressListStore = (*database.PebbleStore)(nil)
+
+// Same proof for the Phase 6 write half. ProgressStore gained ClearUserPositions
+// (DELETE /api/me/progress/:id) and BookmarkStore is asserted at runtime below; a
+// signature drift on either would otherwise surface as an os.Exit(1) at boot — or,
+// for ProgressStore, as a SILENTLY DISABLED write surface, since asProgressStore
+// answers nil on a failed assertion rather than exiting.
+var (
+	_ abshandler.ProgressStore = (*database.PebbleStore)(nil)
+	_ abshandler.BookmarkStore = (*database.PebbleStore)(nil)
+)
 
 // absReservedPaths are the exact top-level paths the Audiobookshelf-compatible surface
 // owns under /api/. They must be EXCLUDED from the global /api/* → /api/v1/* redirect
@@ -231,8 +241,11 @@ func (s *Server) wireABSRoutes() {
 		// Chapters and Progress are OPTIONAL by design: without chapters the mapper
 		// synthesizes one per track (what real ABS does for a multi-file book anyway),
 		// and without progress a session still plays, it just starts at 0.
-		Chapters:    asChapterStore(s.Store()),
-		Progress:    asProgressStore(s.Store()),
+		Chapters: asChapterStore(s.Store()),
+		Progress: asProgressStore(s.Store()),
+		// Phase 6 write half. Already asserted non-nil above (bookmarkStore), so
+		// the CRUD routes always register on the supported backend.
+		Bookmarks:   bookmarkStore,
 		CoverRoot:   config.AppConfig.RootDir,
 		LibraryName: "Books",
 	})
@@ -269,6 +282,11 @@ func (s *Server) wireABSRoutes() {
 		slog.Error("abs: the media-progress provider was NOT wired — /api/me would report an EMPTY mediaProgress " +
 			"list, and clients DELETE local progress rows absent from it. This should be unreachable: " +
 			"NewUserData above exits on failure.")
+		os.Exit(1)
+	}
+	if !handler.HasBookmarkSurface() {
+		slog.Error("abs: the bookmark CRUD routes were NOT registered — creating or deleting a bookmark would 404. " +
+			"This should be unreachable: the bookmark-keyspace assertion above exits on failure.")
 		os.Exit(1)
 	}
 	if !handler.HasBrowseSurface() {
@@ -365,5 +383,20 @@ func absRouteList() []string {
 		"POST /api/session/:id/sync",
 		"POST /api/session/:id/close",
 		"GET /public/session/:id/track/:index (unauthenticated)",
+		// Phase 6 — progress mutation. Every one is covered by the "/api/me/"
+		// entry in absReservedPathPrefixes; they are listed here because
+		// TestABSReservedPath_CoversEVERYRegisteredUnversionedRoute walks THIS
+		// list, so a route missing from it is a route the guard never checks.
+		"GET /api/me/progress",
+		"GET /api/me/progress/:id",
+		"PATCH /api/me/progress/:id",
+		"PATCH /api/me/progress/batch/update",
+		"DELETE /api/me/progress/:id",
+		"POST /api/me/item/:id/remove-from-continue-listening",
+		// Phase 6 — bookmarks CRUD.
+		"GET /api/me/bookmarks/:id",
+		"POST /api/me/item/:id/bookmark",
+		"PATCH /api/me/item/:id/bookmark",
+		"DELETE /api/me/item/:id/bookmark/:time",
 	}
 }

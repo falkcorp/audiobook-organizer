@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/play.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b06d4a13-5f28-4c71-9e0a-38f2c7d915e6
-// last-edited: 2026-07-30
+// last-edited: 2026-08-02
 
 package abs
 
@@ -468,15 +468,41 @@ func (h *Handler) persistProgress(s *playSession, position float64, clientDurati
 		}
 	}
 	_, timeListening, _ := s.snapshot()
-	_ = h.progress.SetUserBookState(&database.UserBookState{
-		UserID:               s.UserID,
-		BookID:               s.BookID,
-		Status:               status,
-		LastActivityAt:       now,
-		LastSegmentID:        absProgressSegmentID,
-		TotalListenedSeconds: timeListening,
-		ProgressPct:          pct,
+	// READ-MODIFY-WRITE, not a fresh literal. A fresh literal silently resets every
+	// field this path does not set, and two of them are USER INTENT rather than
+	// derived state: HideFromContinueListening (the user removed this book from
+	// Continue Listening) and StatusManual (the user pinned a read status by hand).
+	// A sync fires roughly every 20 s of listening, so constructing a literal here
+	// un-hides and un-pins within seconds of the user's choice.
+	_ = h.updateUserBookState(s.UserID, s.BookID, func(state *database.UserBookState) {
+		state.Status = status
+		state.LastActivityAt = now
+		state.LastSegmentID = absProgressSegmentID
+		state.TotalListenedSeconds = timeListening
+		state.ProgressPct = pct
 	})
+}
+
+// updateUserBookState read-modify-writes the (user, book) state row.
+//
+// Every ABS write path goes through here rather than through SetUserBookState
+// directly, so a caller that only means to move the playhead cannot drop a field it
+// never thought about. mutate receives either the stored row or a zero-valued one
+// with the keys already set, so it never has to branch on existence.
+func (h *Handler) updateUserBookState(userID, bookID string, mutate func(*database.UserBookState)) error {
+	if h.progress == nil {
+		return nil
+	}
+	state, err := h.progress.GetUserBookState(userID, bookID)
+	if err != nil || state == nil {
+		// A read error is treated as "no row yet" rather than propagated: losing the
+		// previous StatusManual/hide flag is bad, but refusing to record the user's
+		// new position is worse, and this path has already promised the client 200.
+		state = &database.UserBookState{UserID: userID, BookID: bookID}
+	}
+	mutate(state)
+	state.UserID, state.BookID = userID, bookID
+	return h.progress.SetUserBookState(state)
 }
 
 // respondPlainOK answers exactly what real ABS answers on /sync and /close: HTTP 200

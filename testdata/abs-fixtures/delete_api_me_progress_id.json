@@ -1,0 +1,17 @@
+{
+  "request": {
+    "body": null,
+    "method": "DELETE",
+    "path": "/api/me/progress/ea31ae8b-73cb-4550-ad37-ae12c514550e"
+  },
+  "response": {
+    "body": {
+      "__non_json_body__": "OK"
+    },
+    "headers": {
+      "content-type": "text/plain; charset=utf-8",
+      "etag": "W/\"2-nOO9QiTIwXgNtWtBJezz8kv3SLc\""
+    },
+    "status": 200
+  }
+}

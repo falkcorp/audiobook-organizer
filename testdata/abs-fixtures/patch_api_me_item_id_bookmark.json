@@ -1,0 +1,23 @@
+{
+  "request": {
+    "body": {
+      "time": 100,
+      "title": "conformance bookmark"
+    },
+    "method": "PATCH",
+    "path": "/api/me/item/68929fc9-e296-4d25-b3aa-1c2930efd00d/bookmark"
+  },
+  "response": {
+    "body": {
+      "createdAt": 1785649350565,
+      "libraryItemId": "68929fc9-e296-4d25-b3aa-1c2930efd00d",
+      "time": 100,
+      "title": "conformance bookmark"
+    },
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "etag": "W/\"7c-U2chWk9CmLAFXUIi1nr7NeJy7yw\""
+    },
+    "status": 200
+  }
+}
