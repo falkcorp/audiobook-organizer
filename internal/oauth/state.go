@@ -1,7 +1,7 @@
 // file: internal/oauth/state.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1d6f8b03-4a29-4c57-9e08-2b7a5c0e3d94
-// last-edited: 2026-07-26
+// last-edited: 2026-08-02
 
 package oauth
 
@@ -21,11 +21,32 @@ import (
 // IdP, then verifies it on callback: the `state` query param must equal Payload.State
 // (CSRF), and Payload.Verifier is the PKCE code verifier sent in the token exchange.
 type StatePayload struct {
-	State     string `json:"s"`
-	Verifier  string `json:"v"`
-	Provider  string `json:"p"`
-	Return    string `json:"r,omitempty"` // optional post-login return path
-	IssuedAt  int64  `json:"t"`
+	State    string `json:"s"`
+	Verifier string `json:"v"`
+	Provider string `json:"p"`
+	Return   string `json:"r,omitempty"` // optional post-login return path
+	IssuedAt int64  `json:"t"`
+
+	// ── native-client deep link (optional) ──────────────────────────────────
+	//
+	// 🔴 THERE ARE TWO INDEPENDENT PKCE EXCHANGES IN THIS FLOW AND CONFLATING
+	// THEM BREAKS ONE OF THEM:
+	//
+	//	Verifier      server <-> IdP.  WE choose it, WE send the challenge to
+	//	                               Google/GitHub, WE redeem with the verifier.
+	//	AppChallenge  app <-> server.  THE CLIENT chooses it and keeps its own
+	//	                               verifier; we only ever see the challenge and
+	//	                               hand it to the code store to check later.
+	//
+	// Reusing Verifier for the app hop would issue codes with no client-side proof
+	// of possession; reusing AppChallenge upstream would break the token exchange.
+	//
+	// AppRedirectURI is only ever set to a value that already passed the exact-match
+	// allowlist, so nothing downstream re-validates it — but nothing downstream may
+	// widen it either.
+	AppRedirectURI string `json:"au,omitempty"`
+	AppChallenge   string `json:"ac,omitempty"`
+	AppState       string `json:"as,omitempty"`
 }
 
 // StateCodec signs/verifies StatePayload blobs with an HMAC secret. A fresh random

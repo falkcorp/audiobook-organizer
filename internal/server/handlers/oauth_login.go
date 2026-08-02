@@ -1,7 +1,7 @@
 // file: internal/server/handlers/oauth_login.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2e9c0b47-6a31-4d58-8f04-1b5a7c2e9d63
-// last-edited: 2026-07-26
+// last-edited: 2026-08-02
 
 package handlers
 
@@ -15,6 +15,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/oauth"
+	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"
 )
 
 // oauthStateCookie carries the signed CSRF-state + PKCE blob across the IdP redirect.
@@ -70,8 +71,17 @@ func (h *OAuthHandler) Start(c *gin.Context) {
 		httputil.RespondWithInternalError(c, "oauth verifier")
 		return
 	}
+	app, ok := appDeepLinkParams(c)
+	if !ok {
+		return // appDeepLinkParams already answered
+	}
+
 	blob, err := h.codec.Encode(oauth.StatePayload{
 		State: state, Verifier: verifier, Provider: provider, Return: sanitizeReturn(c.Query("return")),
+		// Empty unless the caller is a registered native client (see
+		// appDeepLinkParams). The two PKCE exchanges are kept apart here: Verifier
+		// above is ours for the IdP hop, AppChallenge is the client's for its own.
+		AppRedirectURI: app.redirectURI, AppChallenge: app.challenge, AppState: app.state,
 	})
 	if err != nil {
 		httputil.RespondWithInternalError(c, "oauth state encode")
@@ -131,6 +141,24 @@ func (h *OAuthHandler) Callback(c *gin.Context) {
 		httputil.RespondWithInternalError(c, "oauth resolve user")
 		return
 	}
+	// A native client gets an authorization code on its own URL scheme instead of a
+	// browser session. Deliberately BEFORE CreateSession: the caller is an
+	// ASWebAuthenticationSession whose cookie jar is discarded the moment it closes,
+	// so issuing a browser session here would leave an unusable row in the store on
+	// every app login. The app's real session comes from redeeming the code.
+	if payload.AppRedirectURI != "" && payload.AppChallenge != "" {
+		code, mintErr := abs.MintAppAuthorizationCode(user.ID, claims.Email, payload.AppChallenge)
+		if mintErr != nil {
+			redirectToLogin(c, "oauth_code_mint_failed")
+			return
+		}
+		// The target already passed the exact-match allowlist at Start and travelled
+		// inside an HMAC-signed blob, so it cannot have been swapped in between.
+		http.Redirect(c.Writer, c.Request,
+			abs.AppRedirectURL(payload.AppRedirectURI, code, payload.AppState), http.StatusFound)
+		return
+	}
+
 	session, err := h.store.CreateSession(
 		user.ID,
 		strings.TrimSpace(c.ClientIP()),
@@ -147,6 +175,56 @@ func (h *OAuthHandler) Callback(c *gin.Context) {
 		dest = payload.Return
 	}
 	http.Redirect(c.Writer, c.Request, dest, http.StatusFound)
+}
+
+// appDeepLink is the native-client half of a /auth/oauth/:provider/start request.
+type appDeepLink struct {
+	redirectURI string
+	challenge   string
+	state       string
+}
+
+// appDeepLinkParams decides whether this Start request is a native-client deep link,
+// answering the request itself and reporting false when it is malformed.
+//
+// 🔴 THE GATE IS "BOTH PRESENT", AND THAT IS A SECURITY PROPERTY, NOT TIDINESS.
+// /auth/oauth/:provider/start is the UNAUTHENTICATED web login endpoint that the SPA's
+// buttons hit. If a bare redirect_uri could trigger a 400, anyone could break web
+// login for everyone by getting a query parameter appended to a shared link. So a
+// request carrying only one of the two is treated as an ordinary web login and the
+// stray parameter is ignored — no error, no behaviour change.
+//
+// Once BOTH are present the caller has unambiguously asked for the native flow, and
+// from there every failure is a hard 400: the target must be on the exact-match
+// allowlist and the method must be S256. "plain" is refused because on a custom URL
+// scheme another installed app can register the same scheme and observe the redirect,
+// so a plain challenge protects nothing.
+func appDeepLinkParams(c *gin.Context) (appDeepLink, bool) {
+	// redirect_uri is the OAuth-standard name; `callback` is the alias AudioBooth
+	// also sends on /auth/openid. Accepted here so one client does not need two
+	// spellings across two endpoints.
+	redirectURI := strings.TrimSpace(c.Query("redirect_uri"))
+	if redirectURI == "" {
+		redirectURI = strings.TrimSpace(c.Query("callback"))
+	}
+	challenge := strings.TrimSpace(c.Query("code_challenge"))
+
+	if redirectURI == "" || challenge == "" {
+		// Not a deep-link request (or not a well-formed one). Ordinary web login.
+		return appDeepLink{}, true
+	}
+	if !abs.AppRedirectURIAllowed(redirectURI) {
+		// Answered INLINE, never by redirecting to the rejected target — bouncing to
+		// an unvalidated URI to report that it is unvalidated is still an open
+		// redirect. This is the control that makes account takeover impossible here.
+		httputil.RespondWithBadRequest(c, "redirect_uri is not registered")
+		return appDeepLink{}, false
+	}
+	if !strings.EqualFold(strings.TrimSpace(c.Query("code_challenge_method")), "S256") {
+		httputil.RespondWithBadRequest(c, "code_challenge_method must be S256")
+		return appDeepLink{}, false
+	}
+	return appDeepLink{redirectURI: redirectURI, challenge: challenge, state: c.Query("state")}, true
 }
 
 // setOAuthStateCookie writes the signed state blob (SameSite=Lax, ~10 min).
