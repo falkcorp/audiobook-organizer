@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/openid.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3b8e5a14-70c9-4f26-9d51-a2c60f7b8e93
-// last-edited: 2026-08-01
+// last-edited: 2026-08-02
 
 package abs
 
@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -162,6 +163,62 @@ func oidcRedirectAllowed(uri string) bool {
 		}
 	}
 	return false
+}
+
+// ── seam for the web OAuth deep-link flow (internal/server/handlers) ────────
+//
+// The web provider flow (/auth/oauth/:provider/start) can hand a native client back
+// to its own URL scheme instead of the SPA root. It resolves identity through
+// Google/GitHub rather than through a Cloudflare Access assertion, but the last hop
+// is IDENTICAL: mint a single-use PKCE-bound code here and let the client redeem it
+// at /auth/openid/callback. These two functions are the only way in.
+//
+// They are exported rather than the code store itself so there is exactly one place
+// that decides what a valid app callback is, and so no caller can put a code into
+// the store without a challenge to bind it to.
+
+// AppRedirectURIAllowed reports whether uri is a registered native-client callback.
+//
+// It is the SAME exact-match allowlist /auth/openid enforces (see
+// oidcRedirectAllowed): this is the control that prevents account takeover, and a
+// second flow reaching the same code store must not get a second, looser opinion
+// about which targets are legitimate.
+func AppRedirectURIAllowed(uri string) bool { return oidcRedirectAllowed(uri) }
+
+// MintAppAuthorizationCode issues a single-use authorization code bound to challenge
+// (the CLIENT's PKCE challenge — never the server's own IdP verifier) and to the
+// resolved user. It expires in oidcCodeTTL and is redeemable exactly once, at
+// /auth/openid/callback.
+//
+// challenge is required. A code minted without one would be a bearer credential
+// sitting in a URL on a custom scheme that any other installed app can register —
+// which is precisely the takeover PKCE exists to stop — so this refuses rather than
+// defaulting to an unbound code.
+func MintAppAuthorizationCode(userID, email, challenge string) (string, error) {
+	if strings.TrimSpace(userID) == "" {
+		return "", errors.New("abs: cannot mint an authorization code with no user")
+	}
+	if strings.TrimSpace(challenge) == "" {
+		return "", errors.New("abs: cannot mint an authorization code with no PKCE challenge")
+	}
+	code, err := absauth.NewRefreshSeed() // 256-bit URL-safe random; not a refresh token
+	if err != nil {
+		return "", err
+	}
+	now := time.Now()
+	oidcCodes.put(code, oidcPendingCode{
+		UserID:    userID,
+		Email:     email,
+		Challenge: challenge,
+		ExpiresAt: now.Add(oidcCodeTTL),
+	}, now)
+	return code, nil
+}
+
+// AppRedirectURL assembles the callback URL a native client is sent back to. Empty
+// params are skipped, and the custom scheme survives verbatim.
+func AppRedirectURL(target, code, state string) string {
+	return buildOIDCRedirect(target, map[string]string{"code": code, "state": state})
 }
 
 // OpenIDAuthorize handles GET /auth/openid.
