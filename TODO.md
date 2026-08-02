@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.13.6 -->
+<!-- version: 10.13.7 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-08-01 -->
+<!-- last-edited: 2026-08-02 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,404 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+<!-- file: todo.d/2026-08-01-assignorphanvgs-offset-pagination.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 8c40f2e7-6b19-4d83-a05c-71fe9b3d5a42 -->
+<!-- last-edited: 2026-08-01 -->
+
+## BUG: `AssignOrphanVGs` can silently skip books — offset pagination over an async memdb snapshot
+
+**Severity:** correctness bug in a full-library maintenance op. Surfaces as a CI
+flake, but the same defect skips real books in production.
+
+`internal/reconcile/reconcile.go:1292` enumerates with offset arithmetic:
+
+```go
+for offset := 0; ; offset += pageSize {
+    books, err := store.GetAllBooksCore(pageSize, offset)
+```
+
+and `GetAllBooksCore` (`internal/database/pebble_store.go:439`) reads **memdb**
+when `UseMemDB` is set:
+
+```go
+if p.UseMemDB && p.mem() != nil {
+    return p.mem().GetAllBooksCore(limit, offset, nil)
+}
+```
+
+The memdb snapshot is republished **asynchronously** (`memdb warmup starting
+(async)` → `memdb warmup published`). Offset pagination is only sound over a
+stable collection: if the snapshot is swapped between page N and page N+1, the
+offset no longer refers to the same position and rows are skipped or repeated.
+
+**Observed**, CI run 30702594886, `TestAssignOrphanVGs_RealStoreConcurrent`:
+
+```
+reconcile_orphanvg_test.go:213: Assigned = 39, want 40
+reconcile_orphanvg_test.go:226: book 01KYYSX09WES7849SHVVBN8H4N VersionGroupID not set
+... assign-orphan-vgs summary total_checked=39 assigned=39 skipped=0 errors=0
+```
+
+`total_checked=39` for 40 books is the tell: the book was never **enumerated**,
+so this is not a write race or a lost update — the op simply never saw it. It
+therefore reports success while having skipped work, which is the dangerous
+shape: no error, no retry, no signal.
+
+Does not reproduce locally (5/5 passes) — it needs the scheduling pressure of a
+loaded CI runner to land the snapshot swap mid-iteration.
+
+**Fix:** enumerate with `ListBookIDs` + `registry.RunItems` rather than
+offset-paging a mutable snapshot. This is the pattern the repo already mandates
+for full-library jobs, for exactly this reason — see
+[[feedback_getallbooksfrom_memdb_cap]] ("cursor pagination silently capped at
+2×limit on prod memdb path", fixed in #1647) and the concurrency section of
+CLAUDE.md. An ID list is a stable set; paging positions in a snapshot that can
+be replaced underneath you is not.
+
+**Also worth auditing:** every other `GetAllBooksCore(pageSize, offset)` caller
+that walks the whole library has the same exposure. Grep for the offset-loop
+shape before assuming this is the only one.
+
+<!-- file: todo.d/2026-08-01-metrics-auth-deploy-gate.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 9b3cf479-67b4-4532-a76c-d2a8b5fd4b94 -->
+<!-- last-edited: 2026-08-01 -->
+
+## ⚠️ DEPLOY GATE: /metrics now requires auth — configure Prometheus BEFORE the next deploy
+
+**PR #2092 is merged but NOT deployed.** Deploying it without doing the below breaks
+metrics collection silently.
+
+There is a **live Prometheus + Grafana on the origin host**, scraping
+`http://127.0.0.1:8484/metrics` every 15s with **1 year / 500GB retention**
+(`--storage.tsdb.path=/mnt/cache/metrics/metrics2/`). It was found only by checking
+`ps` — nothing in this repo references it, and `deploy/prometheus/` is documented as
+"examples/snippets… nothing in this repo scrapes it", which is now false.
+
+Since #2092 gates `/metrics` behind authentication, the next `make deploy` makes every
+scrape 401 and leaves a gap in the series. Prometheus does not alert on its own scrape
+failing unless a rule exists for it.
+
+### Do this first (needs interactive sudo — that is why it was not done unattended)
+
+1. Mint an API key in the UI: **Settings → API keys**. It looks like `abk_…`.
+2. Install it readable only by Prometheus:
+   ```bash
+   sudo install -m 0600 -o prometheus -g prometheus /dev/null /etc/prometheus/abo.token
+   printf '%s' 'abk_…' | sudo tee /etc/prometheus/abo.token >/dev/null
+   ```
+3. Add to the audiobook-organizer job in `/etc/prometheus/prometheus.yml`:
+   ```yaml
+       authorization:
+         type: Bearer
+         credentials_file: /etc/prometheus/abo.token
+   ```
+   Use the `_file` form: Prometheus re-reads it each scrape, so rotating the key needs
+   no reload and the secret never lands in `prometheus.yml`.
+4. `sudo systemctl reload prometheus`
+5. Confirm the target is UP in Prometheus → Status → Targets, THEN deploy.
+
+### Verify after deploying
+
+```bash
+curl -ksS -o /dev/null -w '%{http_code}\n' https://<server>:8484/metrics            # want 401
+curl -ksS -o /dev/null -w '%{http_code}\n' -H 'Authorization: Bearer abk_…' \
+     https://<server>:8484/metrics                                                  # want 200
+```
+
+### Also update
+
+`deploy/prometheus/README.md` claims nothing in this repo scrapes `/metrics`. A real
+scraper exists on the production host; the sentence is misleading and should say so.
+
+<!-- file: todo.d/2026-08-01-oauth-login-deeplink-return.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 9a4f1e58-2d70-4b93-8c16-e05d7b3a92c1 -->
+<!-- last-edited: 2026-08-01 -->
+
+## LATENT: web OAuth callback silently discards a custom-scheme `return`, falling back to `/`
+
+**Severity:** latent. No shipped client currently exercises this path — see
+"Why this is not urgent" below. Filed so it is not rediscovered from scratch.
+
+`internal/server/handlers/oauth_login.go:145` picks the post-login destination:
+
+```go
+dest := "/"
+if payload.Return != "" { dest = payload.Return }
+http.Redirect(c.Writer, c.Request, dest, http.StatusFound)
+```
+
+`payload.Return` was set at `Start` via `sanitizeReturn(c.Query("return"))`, and
+`sanitizeReturn` requires a single leading slash:
+
+```go
+if ret == "" || !strings.HasPrefix(ret, "/") { return "" }
+```
+
+So a native-app deep link such as `audiobooth://oauth` becomes `""`, `dest`
+falls back to `"/"`, and the caller is sent to the web SPA root. **No error is
+raised and nothing is logged** — the redirect target is simply replaced. A client
+expecting to be handed back to its own URL scheme instead lands on the web UI,
+which surfaces as an opaque "it logged me into the website" rather than as a
+failure.
+
+### Why this is not urgent
+
+Production logs over 7 days show **zero** requests to `/auth/oauth/*` — the web
+provider flow is reached only by the SPA's login buttons, which legitimately want
+same-site paths. Audiobookshelf clients use `/auth/openid` +
+`/auth/openid/callback` (`internal/server/handlers/abs/openid.go`) instead, and
+that path already handles custom schemes correctly via `oidcRedirectAllowed` and
+`oidcRedirect`.
+
+This was misdiagnosed on 2026-08-01 as the cause of the AudioBooth login failure.
+It was not — the real cause was Cloudflare Access intercepting
+`/auth/openid/callback` before it reached the origin, fixed with a scoped Access
+bypass on that single path. Recording the distinction here so the next
+investigation does not repeat it: **a redirect-to-web-root symptom has two
+plausible causes, and only traffic logs distinguish them.**
+
+### Fix, if a client ever needs it
+
+Do **not** loosen `sanitizeReturn` — it is the open-redirect guard and the reason
+`d87cbf37` (account takeover via unregistered `redirect_uri`) cannot recur here.
+
+Instead mirror the ABS path: on an allowlisted deep link, mint a single-use
+PKCE-bound code via the `abs` package's existing code store and 302 to
+`audiobooth://oauth?code=…&state=…`, letting the client redeem it at the existing
+`/auth/openid/callback`. Two constraints that a naive implementation gets wrong:
+
+1. **Gate on `redirect_uri` AND `code_challenge` together.**
+   `/auth/oauth/:provider/start` is the unauthenticated web login endpoint; if a
+   bare `redirect_uri` could trigger a 400, anyone could break web login by
+   appending a query param to a link.
+2. **There are two distinct PKCE exchanges** — server↔IdP (verifier already in
+   `StatePayload.Verifier`) and app↔server (the app's own challenge). Conflating
+   them either breaks the upstream token exchange or issues codes with no
+   app-side proof of possession.
+
+Unverified assumption to settle before building: whether
+`ASWebAuthenticationSession` returns the `SameSite=Lax` `oauth_state` cookie on
+the hop back from the IdP. If it does not, `Callback` dies at
+`oauth_state_missing` regardless. Only a real-device test can answer it.
+
+<!-- file: todo.d/2026-08-02-abs-cover-art-coverage.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: e2c81f76-4b90-4d35-a617-9f0c53b8e2a4 -->
+<!-- last-edited: 2026-08-02 -->
+
+## GAP: only ~19.5% of books have cover art, so most ABS clients show placeholders
+
+**Severity:** cosmetic but pervasive. Not a code defect — `GET /api/items/:id/cover`
+behaves as designed.
+
+Observed 2026-08-02: AudioBooth's library grid rendered, and every cover request in
+the sample 404'd:
+
+```
+GET /api/items/cb6e44f7-…/cover  → 404
+GET /api/items/7840afbd-…/cover  → 404      (5 of 5 in the window)
+```
+
+On prod, `/mnt/bigdata/books/audiobook-organizer/covers/` holds **7,885** files
+against a library of roughly **40,400** books — about **19.5%** coverage.
+
+### Why this is not a bug
+
+`Handler.ItemCover` resolves via `metadata.CoverPathForBook`, which globs
+`<RootDir>/covers/<bookID>.{jpg,jpeg,png,webp,gif}` and returns `""` when nothing
+matches. The handler then answers 404, and its own comment records that as intended:
+*"A 404 here is correct and harmless: both clients fall back to a placeholder."*
+
+**Not yet confirmed:** whether those 5 specific items lack cover files, or whether the
+sync-UUID → Book-ULID resolution is picking the wrong ID. With 19.5% coverage, 5
+consecutive misses has a ~34% chance of being pure luck, so this is *likely* a data
+gap but has NOT been proven. Verify by resolving one of those sync IDs to its Book
+ULID and checking for `covers/<ULID>.*` before investing in a backfill — a mapping bug
+and an empty directory look identical from the client.
+
+### If it is the data gap
+
+A cover backfill over ~32,500 books is a full-library maintenance op and must be
+written to the repo's concurrency rules from the start (CLAUDE.md): bounded worker
+pool, `registry.RunItems`, never a plain `for range books`. Network-bound if it
+fetches from a metadata provider, so size concurrency to that provider's rate limits
+rather than `runtime.NumCPU()`.
+
+Look for an existing parallel sibling before writing a new loop — the acoustid
+backfill (`internal/plugins/acoustid/backfill.go`) is the established pattern.
+
+<!-- file: todo.d/2026-08-02-abs-play-counts-listening-history.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 3a91c705-8de2-4f46-b0c3-1d75e29f4b83 -->
+<!-- last-edited: 2026-08-02 -->
+
+## UNSPECIFIED: play counts and listening history have no designed ABS surface
+
+Raised while building the Phase 6 write half (2026-08-02). The owner's goal statement
+names "play counts" as one of "all the backend features the application expects."
+**The design spec defines no endpoint for them**, so nothing was invented — this
+records the gap rather than guessing at a shape.
+
+### What exists today
+
+- `UserBookState.TotalListenedSeconds` accumulates per (user, book) and is written by
+  the ABS sync path.
+- `IncrementBookPlayStats` / `IncrementUserListenStats` /
+  `GetBookStats` / `GetUserStats` exist in `pebble_store_playback.go` but are **not**
+  wired to the ABS surface.
+- `Book.ITunesPlayCount` is an imported scalar from iTunes, unrelated to listening
+  recorded by this server.
+
+### What real ABS exposes (and why we currently 404 it deliberately)
+
+`GET /api/me/listening-stats` and `GET /api/me/item/listening-sessions/:id` are the
+surfaces a client asks for. Both are **intentionally 404** today per spec §1.8.6: they
+carry ~12 non-optional fields, callers wrap them in `try?`, and a half-correct body is
+worse than none. AudioBooth polled `/api/me/listening-stats` 7 times in the 2026-08-01
+window and tolerated every 404 without user-visible breakage.
+
+### Decision needed before building
+
+1. Is a play *count* even the right primitive here, or is `TotalListenedSeconds`
+   (already recorded) what the owner actually wants surfaced?
+2. If the ABS-shaped endpoints are to be implemented, all ~12 fields must be produced —
+   a partial body is a regression from the current honest 404.
+3. `POST /api/session/local[-all]` (offline replay) is the other half of an honest
+   listening history and is itself unbuilt; `progress.MergeOfflineReplay` exists and is
+   tested but has no HTTP caller.
+
+**Do not implement piecemeal.** Half a stats surface reads to a client as a broken
+server rather than an absent feature.
+
+<!-- file: todo.d/2026-08-02-abs-progress-mutation-endpoints.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: b57d2409-8e13-4c6a-9f25-30ab8e17c4d2 -->
+<!-- last-edited: 2026-08-02 -->
+
+## MISSING: ABS progress-mutation endpoints — "reset progress" and "remove from continue listening" do nothing
+
+**Severity:** user-visible feature gap, not a regression. Reported from AudioBooth
+on 2026-08-02 immediately after the client reached a fully working state (SSO login,
+library browse, and playback all confirmed the same night).
+
+Observed in production:
+
+```
+01:13:17  GET /api/me/progress/44669fab-6544-4414-ae2d-fa8eba7c52f3  → 404
+```
+
+`remove-from-continue-listening` was reported as also not working. Its call does not
+appear in the log window that was checked, so it is recorded here from the spec
+rather than from an observation — confirm the exact path and method against
+AudioBooth before implementing.
+
+### This is planned work, not a defect
+
+`docs/specs/2026-07-29-abs-sync-api-design.md:839` puts all of it in **Phase 6**:
+
+> Progress + bookmarks: adapt playback store, `/api/me`, `PATCH /api/me/progress/:id`,
+> `/api/me/progress`, bookmarks CRUD (new), remove-from-continue-listening; §5 merge
+> policy
+
+Phase 6's read half shipped — `/api/me` and `POST /api/authorize` both serve the
+complete `mediaProgress` list from `UserDataProvider`. The **write** half was never
+built, so every client-side progress mutation 404s.
+
+### Endpoints to add
+
+- `PATCH /api/me/progress/:id` — update progress for one item
+- `GET`/`DELETE` on `/api/me/progress/:id` — AudioBooth issued a `GET`; check whether
+  reset is a `DELETE` and the `GET` is only a pre-read
+- `/api/me/progress` — batch
+- `…/remove-from-continue-listening`
+- bookmarks CRUD
+
+### Constraints that already apply
+
+- **`absReservedPaths`.** `/api/me/` is already a reserved *prefix*, so these inherit
+  the exclusion and will not 301 into `/api/v1`. No new reservation needed — unlike
+  `/api/authorize`, which needed an exact-path entry (see PR #2100).
+- **§1.8.1 still governs the read side.** Any handler that returns a user payload must
+  return the COMPLETE `mediaProgress` list or a 5xx. A mutation endpoint that responds
+  with a truncated user object destroys local progress exactly as `/api/me` would.
+- **`…/remove-from-continue-listening` needs a non-empty body** — `{}` suffices
+  (spec:318). An empty `200` is fatal to these decoders (§1.8.6).
+- **§5 merge policy** applies to writes: device↔device sync is explicitly out of scope
+  for the phase, but the merge rules for a single device's updates are specified.
+
+### Not a bug, do not "fix"
+
+`GET /api/me/listening-stats` → 404 and `GET /api/me/item/listening-sessions/:id` →
+404 are **correct**. The spec prefers 404 for the stats endpoints (~12 non-optional
+fields; callers use `try?`), and a half-correct body is worse than none.
+
+<!-- file: todo.d/2026-08-02-chapters-never-backfilled.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: c8d0451f-72a9-4e63-b514-9f3e6a07c2d8 -->
+<!-- last-edited: 2026-08-02 -->
+
+## MISSING: no book in the library has stored chapters — extraction only ever runs during a scan, and no scan has run
+
+Reported by the owner 2026-08-02: "don't we extract chapters from the files that have
+them and then use the tracks for others? I'm not seeing the chapters in the app."
+
+The extraction code **is** implemented and correct. It has simply never run against the
+existing library.
+
+### Evidence chain (all four links verified 2026-08-02)
+
+1. **`SaveChaptersForBook` has exactly one caller:**
+   `scanner.PersistChaptersForBook` (`internal/scanner/process_file.go:259`).
+2. **That function is only invoked from a scan** — `internal/scanner/scanner.go:851`
+   and `:1035`, both inside the per-book scan worker. Nothing else calls it.
+3. **`library.scan` has not run in 14 days.** All 31 occurrences of `id=library.scan`
+   in the journal are the op-*registration* line emitted at startup; there are zero
+   run records. **There is also no chapter backfill op** — no registered op id
+   contains "chapter" except the unrelated `dedup.quarantine-chapter-artifacts`.
+   (Phase 4 of the ABS spec called for a `registry.RunItems` backfill; it was never
+   built.)
+4. **So `GetChaptersForBook` always returns empty**, and
+   `abs/mapper.go:loadChapters` falls through to synthesizing chapters on the fly.
+
+### 🔑 The important part: a backfill only helps SINGLE-FILE books
+
+This is the non-obvious bit, and it decides whether a backfill is worth building.
+
+| Book shape | Stored (scan) path | Live fallback (today) | Visible difference |
+|---|---|---|---|
+| **single-file** (m4b w/ embedded markers) | `probeSingleFileChapters` → the file's **real** embedded chapters | `SynthesizeChapters` over 1 track → **one** chapter for the whole book | 🔴 **Large.** 6 real chapters vs. 1. |
+| **multi-file** (mp3 set) | `synthesizeMultiFileChapters` → `SynthesizeChapters`, one per file | `SynthesizeChapters`, one per file | ⚪ **None.** Same count, same titles; only sub-second boundaries differ (re-probed unrounded duration vs. stored `DurationSec`). |
+
+Both paths call the **same** `audioutil.SynthesizeChapters`. So for a multi-file book a
+backfill is a no-op as far as the user can see.
+
+⚠️ **The book the owner was actually playing (`44669fab-6544-4414-ae2d-fa8eba7c52f3`)
+is multi-file** — production traffic shows it streaming `/public/session/…/track/1`
+and `/track/2`. **A backfill would change nothing for that book.**
+
+### Decision needed
+
+1. **Populate chapters** — pick one:
+   - run `library.scan` (populates as a side effect, but does a great deal else, and
+     has not run in 14 days for reasons nobody has written down); or
+   - build the dedicated bounded-pool backfill op the Phase 4 spec called for
+     (`registry.RunItems`, one ffprobe per single-file book).
+   Either way, scope it to **single-file books** — that is where the entire visible
+   gain is, and it avoids ~40k pointless ffprobe calls.
+2. **Decide whether multi-file books should use their per-file embedded chapters.**
+   `synthesizeMultiFileChapters` deliberately ignores them ("never from that file's own
+   embedded sub-chapters, even when present — real ABS ground truth, spec §1.8.5").
+   `audioutil.ShiftChapters` exists precisely to rebase them onto the whole-book
+   timeline and is **unused** on this path. If the owner wants real chapters inside a
+   multi-file audiobook, that is a **separate feature**, not a backfill — and it means
+   deliberately diverging from real-ABS behaviour.
+
+**Do not run a whole-library backfill without answering (1) first** — a scan touches
+far more than chapters.
 
 <!-- file: todo.d/2026-07-31-abs-mode-b-nonidentity-assertion.md -->
 <!-- version: 1.0.0 -->
