@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/handler.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: fb0271c6-3a49-4d85-9e13-8c507b2ad64f
-// last-edited: 2026-07-30
+// last-edited: 2026-08-01
 
 // Package abs implements the Audiobookshelf-compatible auth surface (design spec
 // Phase 1): GET /ping, GET /status, POST /login, POST /auth/refresh, POST /logout,
@@ -291,6 +291,10 @@ func (h *Handler) Register(r gin.IRouter) {
 
 	auth := servermiddleware.ABSRequireAuth(h.resolver)
 	r.POST("/logout", auth, h.Logout)
+	// Re-validates an existing credential and re-reports the user. Carries the same
+	// §1.8.1 complete-mediaProgress obligation as /api/me — see authorize.go. Must
+	// also appear in absReservedPaths, or gin 301s it into the app API.
+	r.POST("/api/authorize", auth, h.Authorize)
 	r.GET("/api/me", auth, h.Me)
 	r.GET("/api/me/sessions", auth, h.Sessions)
 	r.DELETE("/api/me/sessions/:id", auth, h.DeleteSession)

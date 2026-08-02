@@ -1,5 +1,5 @@
 // file: internal/server/wire_abs_routes.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9c6b13f8-40a2-4e57-b18d-72e0a5c4d396
 // last-edited: 2026-08-01
 
@@ -34,6 +34,10 @@ var _ abshandler.ProgressListStore = (*database.PebbleStore)(nil)
 // Kept as an explicit list rather than a broad prefix so adding an ABS endpoint is a
 // deliberate act, and so a future /api/v1 route can never be captured by accident.
 var absReservedPaths = []string{
+	// POST. Omitting it let gin 301 the call into /api/v1/authorize; the client
+	// downgraded the redirected POST to GET, took a 404, and never refreshed its
+	// session — "connected", then 401 on the next call. Observed in prod 2026-08-01.
+	"/api/authorize",
 	"/api/me",
 	"/api/libraries",
 }
@@ -335,6 +339,7 @@ func absRouteList() []string {
 		"POST /login",
 		"POST /auth/refresh",
 		"POST /logout",
+		"POST /api/authorize",
 		"GET /api/me",
 		"GET /api/me/sessions",
 		"DELETE /api/me/sessions/:id",
