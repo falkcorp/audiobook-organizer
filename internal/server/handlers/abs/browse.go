@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
-// last-edited: 2026-07-30
+// last-edited: 2026-08-02
 
 package abs
 
@@ -335,7 +335,20 @@ func (h *Handler) hasProgress(userID, bookID string) bool {
 		return false
 	}
 	pos, err := h.progress.GetUserPosition(userID, bookID)
-	return err == nil && pos != nil && pos.PositionSeconds > 0
+	if err != nil || pos == nil || pos.PositionSeconds <= 0 {
+		return false
+	}
+	// 🔴 The user's "remove from Continue Listening" choice is what this shelf is
+	// FOR. Reading only the position ignores it, so the book reappears on the very
+	// next home-screen refresh and the feature looks broken — which is exactly how
+	// it was reported. Hiding deliberately KEEPS the position (the user tidied the
+	// shelf, they did not ask to lose their place), so the flag has to be consulted
+	// here rather than inferred from the absence of progress.
+	if state, serr := h.progress.GetUserBookState(userID, bookID); serr == nil && state != nil &&
+		state.HideFromContinueListening {
+		return false
+	}
+	return true
 }
 
 // ── /series, /authors, /narrators ───────────────────────────────────────────
