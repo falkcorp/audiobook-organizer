@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/setup-prometheus-auth.py
-# version: 1.0.1
+# version: 1.1.0
 # guid: 4d90a2f6-13bc-4e58-9071-8c25e6b3f0a7
-# last-edited: 2026-08-01
+# last-edited: 2026-08-02
 
 """Point Prometheus at audiobook-organizer's now-authenticated /metrics.
 
@@ -45,6 +45,7 @@ import grp
 import json
 import os
 import pwd
+import re
 import shutil
 import ssl
 import subprocess
@@ -127,6 +128,75 @@ def probe_metrics(token: str) -> int:
         return 0
 
 
+def _binary_version(binary: str) -> str:
+    """Return the bare version a Prometheus-family binary reports, or ""."""
+    try:
+        out = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    text = (out.stdout or "") + (out.stderr or "")
+    m = re.search(r"version (\d+\.\d+\.\d+)", text)
+    return m.group(1) if m else ""
+
+
+def find_promtool() -> tuple[str | None, str]:
+    """Resolve the promtool that matches the RUNNING Prometheus.
+
+    🔴 PATH ORDER IS NOT TRUSTWORTHY HERE, and trusting it silently breaks this
+    script in the most confusing way possible.
+
+    Observed on this server 2026-08-02: an unpackaged promtool 2.13.1 (built
+    2019) sat in /usr/local/bin, ahead of the packaged 2.53.5 in /usr/bin that
+    matches the running Prometheus. `shutil.which` returned the 2019 one, which
+    does not know the `authorization:` scrape-config field at all -- it was
+    added in Prometheus 2.26 -- so it rejected a PERFECTLY VALID config with:
+
+        field authorization not found in type config.plain
+
+    The script then dutifully restored the original and reported failure, so the
+    error looked like a bad config rather than a bad validator.
+
+    Strategy: prefer an exact version match with `prometheus --version`, else
+    the newest candidate, and say out loud which one was chosen and why. A
+    validator NEWER than the server can only be over-permissive (it accepts
+    fields the server ignores); an OLDER one produces false rejections like the
+    one above, which is the failure worth engineering against.
+
+    Returns (path_or_None, note_to_log).
+    """
+    seen: list[str] = []
+    for directory in os.environ.get("PATH", "").split(os.pathsep) + ["/usr/bin", "/bin", "/usr/local/bin"]:
+        if not directory:
+            continue
+        candidate = os.path.join(directory, "promtool")
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK) and candidate not in seen:
+            seen.append(candidate)
+    if not seen:
+        return None, ""
+
+    server = _binary_version("prometheus")
+    versions = {c: _binary_version(c) for c in seen}
+
+    if server:
+        for candidate, version in versions.items():
+            if version == server:
+                note = f"promtool: using {candidate} (v{version}, matches Prometheus)"
+                if candidate != seen[0]:
+                    note += f" — NOT the first on PATH ({seen[0]} is v{versions[seen[0]] or '?'})"
+                return candidate, note
+
+    def sort_key(path: str) -> tuple[int, ...]:
+        version = versions.get(path) or "0.0.0"
+        return tuple(int(part) for part in version.split("."))
+
+    best = max(seen, key=sort_key)
+    note = f"promtool: using {best} (v{versions[best] or '?'})"
+    if server:
+        note += (f" — no exact match for Prometheus v{server}; "
+                 "an older validator can reject a valid config")
+    return best, note
+
+
 def main() -> None:
     print("\n  Prometheus auth setup for audiobook-organizer\n")
 
@@ -186,17 +256,21 @@ def main() -> None:
         PROM_CONFIG.write_text(config_text.rstrip("\n") + "\n" + JOB_BLOCK)
         info(f"Appended job '{JOB_NAME}'")
 
-        promtool = shutil.which("promtool")
+        promtool, promtool_note = find_promtool()
         if promtool:
+            if promtool_note:
+                info(promtool_note)
             check = subprocess.run(
                 [promtool, "check", "config", str(PROM_CONFIG)],
                 capture_output=True, text=True,
             )
             if check.returncode != 0:
                 shutil.copy2(backup, PROM_CONFIG)
-                die("promtool rejected the new config — ORIGINAL RESTORED:\n"
-                    f"{check.stdout}\n{check.stderr}")
-            info("promtool: config valid")
+                die(f"promtool ({promtool}) rejected the new config — ORIGINAL RESTORED:\n"
+                    f"{check.stdout}\n{check.stderr}\n"
+                    "If this mentions 'field authorization not found', the validator is\n"
+                    "older than the running Prometheus — see find_promtool().")
+            info(f"promtool: config valid ({promtool})")
         else:
             info("promtool not found — skipping validation (reload will catch errors)")
 
