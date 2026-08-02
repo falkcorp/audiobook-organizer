@@ -1,5 +1,5 @@
 <!-- file: changelog.d/20260802_040000_promtool_version_resolution.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 7a3f92e0-5c14-4d8b-a06f-1e58b7d3ca94 -->
 <!-- last-edited: 2026-08-02 -->
 
@@ -24,3 +24,10 @@
   chose and why (explicitly calling out when the winner is *not* first on PATH). A
   validator newer than the server can only be over-permissive; an older one produces
   false rejections like this one.
+
+- **The same script's rollback was incomplete.** On a validation failure it restored
+  `prometheus.yml` but left the shared `file_sd` discovery entry moved aside, so the
+  target ended up in **neither** the shared job nor the dedicated one — silently
+  scraped by nothing, which is worse than either intended end state. Both edits are
+  now rolled back together, and the docstring no longer overpromises "the original is
+  restored".

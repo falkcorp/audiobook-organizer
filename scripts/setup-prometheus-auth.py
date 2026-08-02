@@ -33,8 +33,9 @@ the shared discovery file is disabled.
 Safety
 ------
 Nothing is modified until the key is proven to work, the config is backed up
-before editing, promtool must accept the result, and the original is restored
-automatically if it does not. Re-running is safe: existing state is detected and
+before editing, promtool must accept the result, and BOTH edits (the config and
+the moved file_sd entry) are rolled back together if it does not — rolling back
+only one would leave the target scraped by neither job. Re-running is safe: existing state is detected and
 left alone rather than duplicated.
 """
 
@@ -235,9 +236,17 @@ def main() -> None:
     info(f"Wrote {TOKEN_FILE} (0600 prometheus:prometheus)")
 
     # ---- 3. Disable the shared-job discovery entry -------------------------
+    #
+    # Tracked so step 4 can UNDO it. Disabling the shared entry only makes sense
+    # alongside the dedicated job that replaces it: if validation then rejects the
+    # config and only prometheus.yml is rolled back, the target ends up in NEITHER
+    # job and is silently scraped by nothing. That happened in production on
+    # 2026-08-02 and is strictly worse than either intended end state.
+    moved_sd_file = False
     if SHARED_SD_FILE.exists():
         DISABLED_SD_FILE.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(SHARED_SD_FILE), str(DISABLED_SD_FILE))
+        moved_sd_file = True
         info(f"Moved {SHARED_SD_FILE.name} out of the shared file_sd job")
         info(f"  -> {DISABLED_SD_FILE}")
     else:
@@ -266,7 +275,14 @@ def main() -> None:
             )
             if check.returncode != 0:
                 shutil.copy2(backup, PROM_CONFIG)
-                die(f"promtool ({promtool}) rejected the new config — ORIGINAL RESTORED:\n"
+                restored = "prometheus.yml restored"
+                # Undo step 3 too. Rolling back only the config would leave the
+                # target in neither the shared job nor the dedicated one.
+                if moved_sd_file and DISABLED_SD_FILE.exists():
+                    SHARED_SD_FILE.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(DISABLED_SD_FILE), str(SHARED_SD_FILE))
+                    restored += f"; {SHARED_SD_FILE.name} put back in the shared file_sd job"
+                die(f"promtool ({promtool}) rejected the new config — ROLLED BACK ({restored}):\n"
                     f"{check.stdout}\n{check.stderr}\n"
                     "If this mentions 'field authorization not found', the validator is\n"
                     "older than the running Prometheus — see find_promtool().")
