@@ -230,7 +230,16 @@ func (f *fakeLibrary) filteredSummaries(fl database.BookSummaryFilter) []databas
 		if b == nil {
 			continue
 		}
-		sum := database.BookSummary{ID: b.ID, Title: b.Title}
+		// Mirror the REAL summary projection for the narrator tiers. Without
+		// these two fields the fake silently cannot represent a book whose
+		// narrator lives outside the junction table, and any test asserting
+		// three-tier resolution would pass vacuously.
+		sum := database.BookSummary{
+			ID:            b.ID,
+			Title:         b.Title,
+			Narrator:      b.Narrator,
+			NarratorsJSON: b.NarratorsJSON,
+		}
 		if f.matchesFilter(b, sum, fl) {
 			out = append(out, sum)
 		}

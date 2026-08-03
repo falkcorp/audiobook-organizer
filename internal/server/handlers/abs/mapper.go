@@ -280,7 +280,23 @@ func (h *Handler) loadChapters(bookID string, files []fileView) []audioutil.Chap
 // The fallbacks are read-only: nothing here writes back, so this function cannot
 // change stored data. If the junction is ever backfilled from the other two, the
 // fallbacks become dead code and can be deleted without touching callers.
-func resolveNarrators(book *database.Book, junction []database.Narrator) []string {
+// resolveNarratorsFromSummary is resolveNarrators for callers that hold a
+// BookSummary rather than a full Book — the contributor-list pass, which walks
+// every visible book and must not fetch 16,000 full records to read two fields.
+//
+// It MUST apply the same three tiers in the same order. When the tab and the book
+// page disagree about who narrated a book, the tab is wrong; keeping both rules in
+// this file is what makes a divergence obvious in review.
+func resolveNarratorsFromSummary(s *database.BookSummary, junction []database.Narrator) []string {
+	if s == nil {
+		return nil
+	}
+	return resolveNarratorTiers(junction, s.NarratorsJSON, s.Narrator)
+}
+
+// resolveNarratorTiers holds the actual tier order, shared by both resolvers so
+// there is exactly one place the precedence is defined.
+func resolveNarratorTiers(junction []database.Narrator, narratorsJSON, narrator *string) []string {
 	if len(junction) > 0 {
 		out := make([]string, 0, len(junction))
 		for _, n := range junction {
@@ -292,17 +308,24 @@ func resolveNarrators(book *database.Book, junction []database.Narrator) []strin
 			return out
 		}
 	}
-	if book.NarratorsJSON != nil {
-		if names := parseNarratorsJSON(*book.NarratorsJSON); len(names) > 0 {
+	if narratorsJSON != nil {
+		if names := parseNarratorsJSON(*narratorsJSON); len(names) > 0 {
 			return names
 		}
 	}
-	if book.Narrator != nil {
-		if name := strings.TrimSpace(*book.Narrator); name != "" {
+	if narrator != nil {
+		if name := strings.TrimSpace(*narrator); name != "" {
 			return []string{name}
 		}
 	}
 	return nil
+}
+
+func resolveNarrators(book *database.Book, junction []database.Narrator) []string {
+	if book == nil {
+		return nil
+	}
+	return resolveNarratorTiers(junction, book.NarratorsJSON, book.Narrator)
 }
 
 // parseNarratorsJSON tolerates both shapes the column has held: a JSON array of
