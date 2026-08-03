@@ -114,6 +114,11 @@ type LibraryStore interface {
 	GetBookByID(id string) (*database.Book, error)
 	GetBooksByIDs(ids []string) ([]database.Book, error)
 	GetAllBookSummaries(limit, offset int) ([]database.BookSummary, error)
+	// The FILTERED pair is what the ABS item list uses. The unfiltered ones above
+	// remain for callers that genuinely want every row; this surface does not, and
+	// using them here is what showed 44,888 items instead of ~16,000.
+	GetAllBookSummariesFiltered(limit, offset int, f database.BookSummaryFilter) ([]database.BookSummary, error)
+	CountBookSummariesFiltered(f database.BookSummaryFilter) (int, error)
 	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
 	CountAllBooks() (int, error)
 	SearchBooks(query string, limit, offset int) ([]database.Book, error)
@@ -211,6 +216,12 @@ type Options struct {
 	LibraryName string
 }
 
+// itemsCountEntry is one cached filtered count and when it was computed.
+type itemsCountEntry struct {
+	count int
+	at    time.Time
+}
+
 // Handler serves the ABS auth surface.
 type Handler struct {
 	cfg      *absauth.Config
@@ -242,6 +253,13 @@ type Handler struct {
 	// token or a real CF identity, so its size is bounded by the number of genuine
 	// devices — an attacker replaying random tokens cannot make it grow.
 	refreshLocks sync.Map // sessionID -> *sync.Mutex
+
+	// itemsCount caches the filtered library-item count per filter identity.
+	// CountBookSummariesFiltered is a full-library scan, and this endpoint is polled
+	// on every library page, so an uncached count made latency a flat ~2s regardless
+	// of which page was requested. See countItems in browse.go.
+	itemsCountMu sync.Mutex
+	itemsCount   map[string]itemsCountEntry
 
 	// now and newID are injectable for deterministic tests.
 	now   func() time.Time
@@ -283,6 +301,7 @@ func New(o Options) (*Handler, error) {
 		bookmarks:   o.Bookmarks,
 		coverRoot:   o.CoverRoot,
 		libraryName: name,
+		itemsCount:  map[string]itemsCountEntry{},
 		now:         time.Now,
 		newID:       func() string { return ulid.Make().String() },
 	}
