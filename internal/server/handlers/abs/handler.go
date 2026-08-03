@@ -266,6 +266,7 @@ type Handler struct {
 	// library — see authorDTOsCached in browse.go.
 	authorsCacheMu sync.Mutex
 	authorsCache   []authorDTO
+	narratorsCache []narratorDTO
 	authorsCacheAt time.Time
 
 	// now and newID are injectable for deterministic tests.

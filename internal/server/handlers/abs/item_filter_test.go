@@ -182,3 +182,77 @@ func TestLibraryItems_SortIsHonoured(t *testing.T) {
 		t.Fatalf("?desc=1 did not reverse the order: asc=%v desc=%v", asc, desc)
 	}
 }
+
+// 🔴 TestContributors_ComeOnlyFromVisibleBooks is the "half my authors aren't authors"
+// regression. /items serves 16,491 primary+organized books, but the author and
+// narrator lists were built from GetAllAuthors / ListNarrators — every row in the
+// store, including contributors attached ONLY to the ~28,000 unorganized iTunes-tree
+// books whose "author" is really a track name ("065_Rise of the Corinari", "13_Aurora",
+// "CD 12"), a bare year, or a "Read by ..." credit.
+//
+// The three tabs must agree about what the library is.
+func TestContributors_ComeOnlyFromVisibleBooks(t *testing.T) {
+	w := newWriteHarness(t)
+	strp := func(s string) *string { return &s }
+	boolp := func(b bool) *bool { return &b }
+	now := timeNowForSeed()
+
+	// An unorganized iTunes-tree book whose "author"/"narrator" are track residue.
+	hidden := &database.Book{
+		ID: "01HIDDENTRACKBOOK0000000", Title: "065_Rise of the Corinari",
+		FilePath: "/iTunes Media/Audiobooks/065_Rise of the Corinari.mp3", Format: "mp3",
+		LibraryState: strp("organized_source"), IsPrimaryVersion: boolp(true),
+		CreatedAt: &now, UpdatedAt: &now,
+	}
+	w.seed.lib.addBook(hidden, nil, nil)
+	w.seed.lib.addAuthor(9001, "065_Rise of the Corinari", hidden.ID)
+	w.seed.lib.attachNarrators(hidden.ID, "Read by Sam Tsoutsouvas")
+
+	// Authors
+	_, authorsBody, _ := w.req(t, http.MethodGet, "/api/libraries/"+w.libraryID()+"/authors", nil)
+	for _, entry := range requireArray(t, authorsBody, "authors") {
+		a, _ := entry.(map[string]any)
+		if a != nil && a["name"] == "065_Rise of the Corinari" {
+			t.Fatal("a track name from an UNORGANIZED book appears in the Authors tab")
+		}
+	}
+
+	// Narrators
+	_, narrBody, _ := w.req(t, http.MethodGet, "/api/libraries/"+w.libraryID()+"/narrators", nil)
+	for _, entry := range requireArray(t, narrBody, "narrators") {
+		n, _ := entry.(map[string]any)
+		if n != nil && n["name"] == "Read by Sam Tsoutsouvas" {
+			t.Fatal("a narrator credit from an UNORGANIZED book appears in the Narrators tab")
+		}
+	}
+}
+
+// TestAuthors_NumBooksCountsOnlyVisibleBooks — an author with forty unorganized rows
+// and one real book must read "1 book", not "41". The count drives the subtitle under
+// every author card.
+func TestAuthors_NumBooksCountsOnlyVisibleBooks(t *testing.T) {
+	w := newWriteHarness(t)
+	strp := func(s string) *string { return &s }
+	boolp := func(b bool) *bool { return &b }
+	now := timeNowForSeed()
+
+	hidden := &database.Book{
+		ID: "01HIDDENHOMERCOPY0000000", Title: "The Odyssey (raw import)",
+		FilePath: "/iTunes Media/Audiobooks/odyssey-raw.mp3", Format: "mp3",
+		LibraryState: strp("organized_source"), IsPrimaryVersion: boolp(true),
+		CreatedAt: &now, UpdatedAt: &now,
+	}
+	w.seed.lib.addBook(hidden, nil, nil)
+	w.seed.lib.addAuthor(1, "Homer", hidden.ID) // same author id as the visible book
+
+	_, body, _ := w.req(t, http.MethodGet, "/api/libraries/"+w.libraryID()+"/authors", nil)
+	for _, entry := range requireArray(t, body, "authors") {
+		a, _ := entry.(map[string]any)
+		if a == nil || a["name"] != "Homer" {
+			continue
+		}
+		if got := a["numBooks"].(float64); got != 1 {
+			t.Fatalf("Homer numBooks = %v, want 1 — the hidden raw import must not be counted", got)
+		}
+	}
+}
