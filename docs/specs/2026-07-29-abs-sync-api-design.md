@@ -1,5 +1,5 @@
 <!-- file: docs/specs/2026-07-29-abs-sync-api-design.md -->
-<!-- version: 7.5.0 -->
+<!-- version: 7.6.0 -->
 <!-- guid: 0869d58c-b186-45cb-9915-64bd18eaa45f -->
 <!-- last-edited: 2026-08-02 -->
 
@@ -414,6 +414,52 @@ Verified shapes (all four now served as 200):
 | `GET /api/me/listening-sessions` | `total`, `numPages`, `page`, `itemsPerPage`, `sessions[]` |
 | `GET /api/me/item/listening-sessions/:id` | `numPages`, `page`, `itemsPerPage`, `sessions[]` — **no `total`** |
 | `GET /api/me/stats/year/:year` | 6 numbers + `topAuthors`, `topGenres`, `booksWithCovers`, `finishedBooksWithCovers` |
+
+### 🔴 1.8.11 An EMPTY golden array pins nothing, and a fixture captured without query params pins the wrong shape
+
+Both the Authors and Narrators tabs rendered blank while both endpoints answered **200**. Neither was a
+routing problem — both bodies were unparseable, so nothing showed in the access log. Found 2026-08-02.
+
+**Authors — real ABS switches envelope on `limit`/`page`, and the two shapes share NO keys:**
+
+```
+GET …/authors                    -> {"authors":[…]}
+GET …/authors?limit=100&page=0   -> {"results":[…],"total":…,"limit":…,"page":…,"sortBy":…,"sortDesc":…,"minified":…}
+```
+
+AudioBooth **always** paginates (`?sort=name&minified=1&limit=100&page=0`) and decodes into `Page<Author>`,
+whose `total` and `page` use `try container.decode` — REQUIRED, not `decodeIfPresent`. We always served the
+bare shape, so the decode threw. This is exactly the failure §1.8.5 item 5 warned about; we had reproduced
+it, and **the committed fixture could not catch it because it was captured with no query string**. A second
+fixture (`get_api_libraries_id_authors_paginated.json`) now pins the paginated shape.
+
+**Narrators — the element needs an `id` we were not sending:**
+
+```swift
+public struct Narrator: Codable { public let id: String; public let name: String; public let numBooks: Int? }
+```
+
+`id` is non-optional, so one entry without it throws the whole list. **The conformance diff passed vacuously
+because the oracle fixture body is `{"narrators": []}`** — the fixture library has no narrators, so there was
+no element to compare.
+
+Narrators are **not entities** in ABS; the name IS the identity. Real ABS derives the id
+(`LibraryController.getNarrators`):
+
+```js
+id: encodeURIComponent(Buffer.from(name).toString('base64'))
+```
+
+Derive it the same way — a minted id would change on restart and rot every id the client cached. `numBooks`
+is optional and is **omitted** rather than sent as 0: there is no reverse narrator→book index, so a real
+count would need a library scan on a request path, and `0` would render "0 books" beside every narrator.
+
+**Two rules this establishes for every future fixture:**
+
+1. **A fixture must be captured with the query string the CLIENT actually sends.** Capturing the bare path
+   pins a shape no client ever requests.
+2. **An empty array in a golden fixture pins nothing about its elements.** Any endpoint whose fixture array
+   is empty needs a hand-written element-shape test, or a required field can go missing undetected.
 
 ### 1.8.7 Progress conflict resolution — client-side rules our server must respect
 

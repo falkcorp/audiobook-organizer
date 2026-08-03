@@ -1,12 +1,14 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
 // last-edited: 2026-08-02
 
 package abs
 
 import (
+	"encoding/base64"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -417,6 +419,15 @@ func (h *Handler) authorDTOs() ([]authorDTO, error) {
 }
 
 // LibraryAuthors handles GET /api/libraries/:libraryId/authors.
+//
+// 🔴 TWO RESPONSE SHAPES, chosen by whether the caller paginated. Real ABS does the
+// same (verified against the oracle 2026-08-02) and the shapes share no keys:
+//
+//	…/authors                    -> {"authors":[…]}
+//	…/authors?limit=100&page=0   -> {"results":[…],"total":…,"limit":…,"page":…,…}
+//
+// AudioBooth always paginates and decodes into Page<Author>, which requires `total`
+// and `page`. Serving the bare shape to it throws and blanks the Authors tab.
 func (h *Handler) LibraryAuthors(c *gin.Context) {
 	if !h.knownLibrary(c) {
 		return
@@ -426,7 +437,50 @@ func (h *Handler) LibraryAuthors(c *gin.Context) {
 		respondError(c, http.StatusInternalServerError, "could not list authors")
 		return
 	}
-	respondJSON(c, http.StatusOK, authorsResponse{Authors: authors})
+
+	_, hasLimit := c.GetQuery("limit")
+	_, hasPage := c.GetQuery("page")
+	if !hasLimit && !hasPage {
+		respondJSON(c, http.StatusOK, authorsResponse{Authors: authors})
+		return
+	}
+
+	total := len(authors)
+	limit := queryInt(c, "limit", total)
+	page := queryInt(c, "page", 0)
+	respondJSON(c, http.StatusOK, authorsPageResponse{
+		Limit:    limit,
+		Minified: c.Query("minified") == "1",
+		Page:     page,
+		// total is the FULL count, not the size of this slice — the client uses it to
+		// decide whether more pages exist.
+		Results:  pageSlice(authors, limit, page),
+		SortBy:   strings.TrimSpace(c.Query("sort")),
+		SortDesc: c.Query("desc") == "1",
+		Total:    total,
+	})
+}
+
+// pageSlice returns the requested window of items. A non-positive limit means "no
+// limit" (the caller sent ?page= alone), and a page past the end yields an EMPTY
+// slice rather than an error — a client scrolling past the last page should see
+// nothing more, not a failure.
+func pageSlice(items []authorDTO, limit, page int) []authorDTO {
+	if limit <= 0 || limit >= len(items) {
+		if page > 0 {
+			return []authorDTO{}
+		}
+		return items
+	}
+	start := page * limit
+	if start >= len(items) {
+		return []authorDTO{}
+	}
+	end := start + limit
+	if end > len(items) {
+		end = len(items)
+	}
+	return items[start:end]
 }
 
 // LibraryNarrators handles GET /api/libraries/:libraryId/narrators.
@@ -445,11 +499,25 @@ func (h *Handler) LibraryNarrators(c *gin.Context) {
 	out := make([]narratorDTO, 0, len(narrators))
 	for _, n := range narrators {
 		if name := strings.TrimSpace(n.Name); name != "" {
-			out = append(out, narratorDTO{Name: name})
+			out = append(out, narratorDTO{ID: narratorID(name), Name: name})
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	respondJSON(c, http.StatusOK, narratorsResponse{Narrators: out})
+}
+
+// narratorID derives a narrator's client-visible id from their name, matching real
+// ABS exactly (LibraryController.getNarrators):
+//
+//	id: encodeURIComponent(Buffer.from(name).toString('base64'))
+//
+// Derived rather than minted because narrators are NOT entities in Audiobookshelf —
+// the name is the identity. A generated id would change on restart and rot every id
+// the client had cached. url.QueryEscape is JavaScript's encodeURIComponent for this
+// alphabet: standard base64 emits only [A-Za-z0-9+/=], of which + / and = are the
+// only characters either function escapes, and both escape all three the same way.
+func narratorID(name string) string {
+	return url.QueryEscape(base64.StdEncoding.EncodeToString([]byte(name)))
 }
 
 // LibraryFilterData handles GET /api/libraries/:libraryId/filterdata.
