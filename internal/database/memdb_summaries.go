@@ -228,6 +228,7 @@ func (m *MemStore) GetBookSummaries(limit, offset int, f BookSummaryFilter) ([]B
 			QuarantineReason:     b.QuarantineReason,
 			CoverURL:             b.CoverURL,
 			Narrator:             b.Narrator,
+			NarratorsJSON:        b.NarratorsJSON,
 			TranscribedTitle:     b.TranscribedTitle,
 			CreatedAt:            b.CreatedAt,
 			UpdatedAt:            b.UpdatedAt,

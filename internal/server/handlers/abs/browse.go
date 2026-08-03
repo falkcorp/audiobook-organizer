@@ -566,9 +566,12 @@ func (h *Handler) authorDTOsCached(ctx context.Context) ([]authorDTO, error) {
 // Paged in chunks rather than with one unbounded call so this never depends on a
 // store's limit<=0 meaning "everything", and so peak memory is a chunk of summaries
 // rather than the whole library.
-func (h *Handler) visibleBookIDs(f database.BookSummaryFilter) ([]string, error) {
+// It returns the SUMMARIES, not just the ids, because the narrator list needs two
+// fields that live on the book row rather than in the junction table — see
+// contributorDTOs.
+func (h *Handler) visibleBookSummaries(f database.BookSummaryFilter) ([]database.BookSummary, error) {
 	const chunk = 5000
-	var ids []string
+	var out []database.BookSummary
 	for offset := 0; ; offset += chunk {
 		page, err := h.library.GetAllBookSummariesFiltered(chunk, offset, f)
 		if err != nil {
@@ -576,11 +579,11 @@ func (h *Handler) visibleBookIDs(f database.BookSummaryFilter) ([]string, error)
 		}
 		for i := range page {
 			if page[i].ID != "" {
-				ids = append(ids, page[i].ID)
+				out = append(out, page[i])
 			}
 		}
 		if len(page) < chunk {
-			return ids, nil
+			return out, nil
 		}
 	}
 }
@@ -593,13 +596,30 @@ func (h *Handler) visibleBookIDs(f database.BookSummaryFilter) ([]string, error)
 //
 // Counts are the number of VISIBLE books, not the raw junction count: an author with
 // forty unorganized rows and one real book should read "1 book", not "41".
+// 🔴 NARRATORS MUST USE ALL THREE TIERS. Narrator data lives in three places and
+// resolveNarrators (mapper.go) reads them in order: the BookNarrator junction, then
+// Book.NarratorsJSON, then the legacy Book.Narrator column. Book DETAIL has always
+// done this, which is why a book page shows a narrator.
+//
+// Deriving this list from the junction ALONE — as the first version of this function
+// did — collapsed the Narrators tab to 8 names, because for organized books the
+// junction is nearly empty and the data sits in tiers 2 and 3. Measured on prod:
+// 69 of 120 sampled visible books (57.5%) have a narrator stored, i.e. roughly 9,500
+// of 16,491, against 8 shown.
+//
+// The tab and the book page must agree about who narrated a book, so this uses the
+// same three-tier resolution rather than a second, narrower rule.
 func (h *Handler) contributorDTOs(ctx context.Context) ([]authorDTO, []narratorDTO, error) {
-	ids, err := h.visibleBookIDs(absItemFilterBase())
+	books, err := h.visibleBookSummaries(absItemFilterBase())
 	if err != nil {
 		return nil, nil, err
 	}
-	if len(ids) == 0 {
+	if len(books) == 0 {
 		return []authorDTO{}, []narratorDTO{}, nil
+	}
+	ids := make([]string, 0, len(books))
+	for i := range books {
+		ids = append(ids, books[i].ID)
 	}
 
 	authorsByBook, err := h.library.GetAuthorsByBookIDs(ctx, ids)
@@ -630,10 +650,12 @@ func (h *Handler) contributorDTOs(ctx context.Context) ([]authorDTO, []narratorD
 			agg.books++
 		}
 	}
+	// One entry per VISIBLE book, resolved through the same three tiers the book
+	// page uses. Counting per book (not per junction row) keeps numBooks honest.
 	narratorSeen := map[string]int{}
-	for _, list := range narratorsByBook {
-		for _, n := range list {
-			if name := strings.TrimSpace(n.Name); name != "" {
+	for i := range books {
+		for _, name := range resolveNarratorsFromSummary(&books[i], narratorsByBook[books[i].ID]) {
+			if name = strings.TrimSpace(name); name != "" {
 				narratorSeen[name]++
 			}
 		}

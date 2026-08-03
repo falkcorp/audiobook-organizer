@@ -325,6 +325,13 @@ type BookSummary struct {
 	QuarantineReason  *string    `json:"quarantine_reason,omitempty"`
 	CoverURL          *string    `json:"cover_url,omitempty"`
 	Narrator          *string    `json:"narrator,omitempty"`
+	// NarratorsJSON carries the SECOND narrator tier into the summary projection.
+	// Narrator data lives in three places (see resolveNarrators in the abs mapper):
+	// the BookNarrator junction, this JSON array, and the legacy Narrator column.
+	// Without this field a summary-only caller can read tiers 1 and 3 but silently
+	// miss tier 2 — which is exactly how the Narrators tab came to show 8 names for
+	// a library where ~57% of visible books have a narrator stored.
+	NarratorsJSON *string `json:"narrators_json,omitempty"`
 	// TranscribedTitle is the Whisper-parsed intro title, carried in the
 	// summary projection so filter-pushdown callers (e.g.
 	// FilterSpec.OnlyParsedTranscription) can distinguish parsed from
