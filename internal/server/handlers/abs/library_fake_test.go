@@ -123,11 +123,34 @@ func (f *fakeLibrary) addAuthor(id int, name string, bookIDs ...string) {
 // addNarrators seeds narrator rows. The oracle's fixture library has none, so any
 // test asserting the narrator ELEMENT shape must seed its own — an empty list is
 // exactly how a missing required field shipped unnoticed.
-func (f *fakeLibrary) addNarrators(names ...string) {
+// Narrators are ATTACHED TO A BOOK, not just added to a standalone list: the ABS
+// narrator list is derived from the visible books' junction rows, so a narrator with
+// no book is correctly invisible. Attaching to the first seeded book makes them
+// visible without inventing a new one.
+// attachNarrators binds narrators to a specific book's junction rows.
+func (f *fakeLibrary) attachNarrators(bookID string, names ...string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for i, name := range names {
-		f.narrators = append(f.narrators, database.Narrator{ID: len(f.narrators) + i + 1, Name: name})
+		n := database.Narrator{ID: len(f.narrators) + i + 1, Name: name}
+		f.narrators = append(f.narrators, n)
+		f.bookNarr[bookID] = append(f.bookNarr[bookID], n)
+	}
+}
+
+func (f *fakeLibrary) addNarrators(names ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var target string
+	if len(f.order) > 0 {
+		target = f.order[0]
+	}
+	for i, name := range names {
+		n := database.Narrator{ID: len(f.narrators) + i + 1, Name: name}
+		f.narrators = append(f.narrators, n)
+		if target != "" {
+			f.bookNarr[target] = append(f.bookNarr[target], n)
+		}
 	}
 }
 

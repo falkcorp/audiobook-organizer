@@ -6,6 +6,7 @@
 package abs
 
 import (
+	"context"
 	"encoding/base64"
 	"net/http"
 	"net/url"
@@ -175,14 +176,19 @@ const absItemsCountTTL = 60 * time.Second
 // Sorting is honoured here too. The client always sends sort=media.metadata.title and
 // we previously IGNORED it, so the library was never actually title-sorted. SortBy
 // "title" is backed by a sorted radix index — O(offset+limit), not a full sort.
-func absItemFilter(c *gin.Context) database.BookSummaryFilter {
+func absItemFilterBase() database.BookSummaryFilter {
 	primary := true
-	f := database.BookSummaryFilter{
+	return database.BookSummaryFilter{
 		IsPrimaryVersion:   &primary,
 		LibraryState:       "organized",
 		ExcludeQuarantined: true,
-		SortAscending:      c.Query("desc") != "1",
+		SortAscending:      true,
 	}
+}
+
+func absItemFilter(c *gin.Context) database.BookSummaryFilter {
+	f := absItemFilterBase()
+	f.SortAscending = c.Query("desc") != "1"
 	// Only "title" is index-backed; anything else falls through to store default
 	// ordering rather than pretending to honour a sort we cannot do cheaply.
 	if strings.Contains(strings.ToLower(c.Query("sort")), "title") {
@@ -394,7 +400,7 @@ func (h *Handler) Personalized(c *gin.Context) {
 		recentlyAdded = append(recentlyAdded, h.minifiedItem(&views[i]))
 	}
 
-	authors, err := h.authorDTOsCached()
+	authors, err := h.authorDTOsCached(c.Request.Context())
 	if err != nil {
 		respondError(c, http.StatusInternalServerError, "could not build home shelves")
 		return
@@ -515,56 +521,147 @@ const absAuthorsCacheTTL = 5 * time.Minute
 // Building the list once turns pages 2..93 into slice arithmetic. That is why this
 // caches the whole DOCUMENT rather than just the count: the count was never the
 // expensive part here.
-func (h *Handler) authorDTOsCached() ([]authorDTO, error) {
+func (h *Handler) contributorsCached(ctx context.Context) ([]authorDTO, []narratorDTO, error) {
 	now := h.now()
 
 	h.authorsCacheMu.Lock()
 	if h.authorsCache != nil && now.Sub(h.authorsCacheAt) < absAuthorsCacheTTL {
-		cached := h.authorsCache
+		a, n := h.authorsCache, h.narratorsCache
 		h.authorsCacheMu.Unlock()
-		return cached, nil
+		return a, n, nil
 	}
 	h.authorsCacheMu.Unlock()
 
 	// Built OUTSIDE the lock. Holding it across a full-library scan would serialize
 	// every concurrent page request behind one rebuild — which is precisely the
 	// 93-requests-in-a-row access pattern this exists to serve.
-	built, err := h.authorDTOs()
+	authors, narrators, err := h.contributorDTOs(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	h.authorsCacheMu.Lock()
-	h.authorsCache, h.authorsCacheAt = built, now
+	h.authorsCache, h.narratorsCache, h.authorsCacheAt = authors, narrators, now
 	h.authorsCacheMu.Unlock()
-	return built, nil
+	return authors, narrators, nil
+}
+
+// authorDTOsCached is the author-only view of the shared contributor cache.
+func (h *Handler) authorDTOsCached(ctx context.Context) ([]authorDTO, error) {
+	authors, _, err := h.contributorsCached(ctx)
+	return authors, err
 }
 
 // authorDTOs builds the author list once, shared by /authors and /personalized.
-func (h *Handler) authorDTOs() ([]authorDTO, error) {
-	authors, err := h.library.GetAllAuthors()
-	if err != nil {
-		return nil, err
+// visibleBookIDs returns the ids of every book the library actually SHOWS —
+// the same primary + organized + non-quarantined set /items serves.
+//
+// 🔴 WITHOUT THIS, THE TABS DISAGREE ABOUT WHAT THE LIBRARY IS. /items shows 16,491
+// books while GetAllAuthors returned the authors of all 44,888, so the Authors and
+// Narrators tabs were populated from ~28,000 books the app no longer lists. That is
+// where the junk comes from: unorganized iTunes-tree rows whose "author" is really a
+// track name ("065_Rise of the Corinari", "13_Aurora", "CD 12"), a bare year, or a
+// "Read by ..." narrator credit.
+//
+// Paged in chunks rather than with one unbounded call so this never depends on a
+// store's limit<=0 meaning "everything", and so peak memory is a chunk of summaries
+// rather than the whole library.
+func (h *Handler) visibleBookIDs(f database.BookSummaryFilter) ([]string, error) {
+	const chunk = 5000
+	var ids []string
+	for offset := 0; ; offset += chunk {
+		page, err := h.library.GetAllBookSummariesFiltered(chunk, offset, f)
+		if err != nil {
+			return nil, err
+		}
+		for i := range page {
+			if page[i].ID != "" {
+				ids = append(ids, page[i].ID)
+			}
+		}
+		if len(page) < chunk {
+			return ids, nil
+		}
 	}
-	counts, err := h.library.GetAllAuthorBookCounts()
+}
+
+// contributorDTOs builds the author AND narrator lists from the VISIBLE books only.
+//
+// Both are derived from one pass so the two tabs can never disagree with each other or
+// with the library, and so the expensive part — enumerating visible books — is paid
+// once instead of twice.
+//
+// Counts are the number of VISIBLE books, not the raw junction count: an author with
+// forty unorganized rows and one real book should read "1 book", not "41".
+func (h *Handler) contributorDTOs(ctx context.Context) ([]authorDTO, []narratorDTO, error) {
+	ids, err := h.visibleBookIDs(absItemFilterBase())
 	if err != nil {
-		counts = map[int]int{}
+		return nil, nil, err
 	}
+	if len(ids) == 0 {
+		return []authorDTO{}, []narratorDTO{}, nil
+	}
+
+	authorsByBook, err := h.library.GetAuthorsByBookIDs(ctx, ids)
+	if err != nil {
+		return nil, nil, err
+	}
+	narratorsByBook, err := h.library.GetNarratorsByBookIDs(ctx, ids)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	type authorAgg struct {
+		name  string
+		id    int
+		books int
+	}
+	authorSeen := map[int]*authorAgg{}
+	for _, list := range authorsByBook {
+		for _, a := range list {
+			if strings.TrimSpace(a.Name) == "" {
+				continue
+			}
+			agg, ok := authorSeen[a.ID]
+			if !ok {
+				agg = &authorAgg{name: a.Name, id: a.ID}
+				authorSeen[a.ID] = agg
+			}
+			agg.books++
+		}
+	}
+	narratorSeen := map[string]int{}
+	for _, list := range narratorsByBook {
+		for _, n := range list {
+			if name := strings.TrimSpace(n.Name); name != "" {
+				narratorSeen[name]++
+			}
+		}
+	}
+
 	now := msEpoch(h.now())
-	out := make([]authorDTO, 0, len(authors))
-	for _, a := range authors {
-		out = append(out, authorDTO{
+	authors := make([]authorDTO, 0, len(authorSeen))
+	for _, agg := range authorSeen {
+		authors = append(authors, authorDTO{
 			AddedAt:   now,
-			ID:        strconv.Itoa(a.ID),
-			LastFirst: lastFirst(a.Name),
+			ID:        strconv.Itoa(agg.id),
+			LastFirst: lastFirst(agg.name),
 			LibraryID: h.libraryID(),
-			Name:      a.Name,
-			NumBooks:  counts[a.ID],
+			Name:      agg.name,
+			NumBooks:  agg.books,
 			UpdatedAt: now,
 		})
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-	return out, nil
+	sort.SliceStable(authors, func(i, j int) bool { return authors[i].Name < authors[j].Name })
+
+	narrators := make([]narratorDTO, 0, len(narratorSeen))
+	for name, count := range narratorSeen {
+		n := count
+		narrators = append(narrators, narratorDTO{ID: narratorID(name), Name: name, NumBooks: &n})
+	}
+	sort.SliceStable(narrators, func(i, j int) bool { return narrators[i].Name < narrators[j].Name })
+
+	return authors, narrators, nil
 }
 
 // LibraryAuthors handles GET /api/libraries/:libraryId/authors.
@@ -581,7 +678,7 @@ func (h *Handler) LibraryAuthors(c *gin.Context) {
 	if !h.knownLibrary(c) {
 		return
 	}
-	authors, err := h.authorDTOsCached()
+	authors, err := h.authorDTOsCached(c.Request.Context())
 	if err != nil {
 		respondError(c, http.StatusInternalServerError, "could not list authors")
 		return
@@ -640,18 +737,14 @@ func (h *Handler) LibraryNarrators(c *gin.Context) {
 	if !h.knownLibrary(c) {
 		return
 	}
-	narrators, err := h.library.ListNarrators()
+	// Derived from the VISIBLE books, exactly like the author list — ListNarrators
+	// returns every narrator row in the store, including those attached only to
+	// unorganized iTunes-tree books whose "narrator" is really a track name.
+	_, out, err := h.contributorsCached(c.Request.Context())
 	if err != nil {
 		respondError(c, http.StatusInternalServerError, "could not list narrators")
 		return
 	}
-	out := make([]narratorDTO, 0, len(narrators))
-	for _, n := range narrators {
-		if name := strings.TrimSpace(n.Name); name != "" {
-			out = append(out, narratorDTO{ID: narratorID(name), Name: name})
-		}
-	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	respondJSON(c, http.StatusOK, narratorsResponse{Narrators: out})
 }
 
@@ -809,7 +902,7 @@ func (h *Handler) LibrarySearch(c *gin.Context) {
 	}
 
 	lower := strings.ToLower(query)
-	if authors, err := h.authorDTOs(); err == nil {
+	if authors, err := h.authorDTOsCached(c.Request.Context()); err == nil {
 		for i := range authors {
 			if strings.Contains(strings.ToLower(authors[i].Name), lower) {
 				resp.Authors = append(resp.Authors, authors[i])
