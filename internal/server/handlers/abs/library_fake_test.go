@@ -55,7 +55,22 @@ type fakeLibrary struct {
 
 	nextUUID int
 	listErr  error
+
+	// countFiltered counts CountBookSummariesFiltered calls so a test can prove the
+	// full-library count scan is cached rather than repeated per request.
+	countFiltered int
 }
+
+// countCalls reports how many times the filtered count was actually computed.
+func (f *fakeLibrary) countCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.countFiltered
+}
+
+// timeNowForSeed is a fixed timestamp for seeded rows. Fixed rather than time.Now so
+// ms-epoch assertions stay stable.
+func timeNowForSeed() time.Time { return time.UnixMilli(1785370201500) }
 
 func newFakeLibrary() *fakeLibrary {
 	return &fakeLibrary{
@@ -144,6 +159,84 @@ func (f *fakeLibrary) GetAllBookSummaries(limit, offset int) ([]database.BookSum
 		out = append(out, database.BookSummary{ID: b.ID, Title: b.Title, CreatedAt: b.CreatedAt})
 	}
 	return out, nil
+}
+
+// matchesFilter applies the same predicates the real store applies, so a test that
+// seeds a non-primary or unorganized book actually sees it excluded rather than
+// trusting the handler to have asked for the right thing.
+func (f *fakeLibrary) matchesFilter(b *database.Book, sum database.BookSummary, fl database.BookSummaryFilter) bool {
+	if fl.IsPrimaryVersion != nil {
+		isPrimary := b.IsPrimaryVersion == nil || *b.IsPrimaryVersion
+		if isPrimary != *fl.IsPrimaryVersion {
+			return false
+		}
+	}
+	if fl.LibraryState != "" {
+		state := ""
+		if b.LibraryState != nil {
+			state = *b.LibraryState
+		}
+		if state != fl.LibraryState {
+			return false
+		}
+	}
+	if fl.ExcludeQuarantined && b.QuarantinedAt != nil {
+		return false
+	}
+	_ = sum
+	return true
+}
+
+// filteredSummaries returns the seeded books matching fl, in the requested order.
+func (f *fakeLibrary) filteredSummaries(fl database.BookSummaryFilter) []database.BookSummary {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := []database.BookSummary{}
+	for _, id := range f.order {
+		b := f.books[id]
+		if b == nil {
+			continue
+		}
+		sum := database.BookSummary{ID: b.ID, Title: b.Title}
+		if f.matchesFilter(b, sum, fl) {
+			out = append(out, sum)
+		}
+	}
+	if fl.SortBy == "title" {
+		sort.SliceStable(out, func(i, j int) bool {
+			if fl.SortAscending {
+				return out[i].Title < out[j].Title
+			}
+			return out[i].Title > out[j].Title
+		})
+	}
+	return out
+}
+
+func (f *fakeLibrary) CountBookSummariesFiltered(fl database.BookSummaryFilter) (int, error) {
+	if f.listErr != nil {
+		return 0, f.listErr
+	}
+	n := len(f.filteredSummaries(fl))
+	f.mu.Lock()
+	f.countFiltered++
+	f.mu.Unlock()
+	return n, nil
+}
+
+func (f *fakeLibrary) GetAllBookSummariesFiltered(limit, offset int, fl database.BookSummaryFilter) ([]database.BookSummary, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	all := f.filteredSummaries(fl)
+	if offset >= len(all) {
+		return []database.BookSummary{}, nil
+	}
+	end := offset + limit
+	if limit <= 0 || end > len(all) {
+		end = len(all)
+	}
+	return all[offset:end], nil
 }
 
 func (f *fakeLibrary) GetAllBooksCore(limit, offset int) ([]database.BookCore, error) {
@@ -459,6 +552,11 @@ func seedOracleLibrary(t *testing.T) *oracleSeed {
 	created := time.UnixMilli(1785370201391)
 	createdMulti := time.UnixMilli(1785370201438)
 	strp := func(s string) *string { return &s }
+	boolp := func(b bool) *bool { return &b }
+	// The ABS item list serves ONLY primary + organized books (see absItemFilter), so
+	// the fixture library must look like a normal organized library or every browse
+	// test would assert against an empty list.
+	organized, primary := strp("organized"), boolp(true)
 	intp := func(i int) *int { return &i }
 
 	// ── book 1: single-file m4b, 6 embedded chapters ─────────────────────────
@@ -472,6 +570,7 @@ func seedOracleLibrary(t *testing.T) *oracleSeed {
 		ID: "01SINGLEFILEODYSSEYBOOK00", Title: "The Odyssey",
 		FilePath: m4b, Format: "QuickTime / MOV", Duration: intp(9975),
 		Genre: strp("Audiobook"), PrintYear: intp(800),
+		LibraryState: organized, IsPrimaryVersion: primary,
 		CreatedAt: &created, UpdatedAt: &created,
 	}
 	// The oracle's m4b carries NO track tag and no track number in its filename, so
@@ -496,9 +595,10 @@ func seedOracleLibrary(t *testing.T) *oracleSeed {
 	multi := &database.Book{
 		ID: "01MULTIFILEODYSSEYBOOK000", Title: "The Odyssey",
 		Format: "mp3", Duration: intp(9975),
-		Genre:       strp("Speech"),
-		Description: strp("http://archive.org/details/odyssey_butler_librivox"),
-		CreatedAt:   &createdMulti, UpdatedAt: &createdMulti,
+		Genre:        strp("Speech"),
+		Description:  strp("http://archive.org/details/odyssey_butler_librivox"),
+		LibraryState: organized, IsPrimaryVersion: primary,
+		CreatedAt: &createdMulti, UpdatedAt: &createdMulti,
 	}
 	var mp3s []database.BookFile
 	for i := 1; i <= 6; i++ {

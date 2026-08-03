@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
-// last-edited: 2026-08-02
+// last-edited: 2026-08-03
 
 package abs
 
@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
@@ -148,6 +149,89 @@ func parsePageParams(c *gin.Context) pageParams {
 	return pageParams{Page: page, Limit: limit, Offset: page * limit}
 }
 
+// absItemsCountTTL bounds how long the filtered item count is served from cache.
+//
+// Short on purpose. The count is cosmetic — it drives the client's "is there another
+// page" decision — so a value a minute stale costs nothing, while recomputing it per
+// request costs a full-library scan. Mirrors primaryCountCacheTTL rather than
+// inventing a second caching style.
+const absItemsCountTTL = 60 * time.Second
+
+// absItemFilter builds the filter that defines WHAT THE LIBRARY IS on this surface.
+//
+// 🔴 Without it the app showed 44,888 items where the owner has ~16,000. The app's own
+// counts cache reports total_books=44888, organized_books=16491,
+// unorganized_books=23928 — the extra 28k are raw imports and iTunes-tree copies, plus
+// alternate versions of books already present.
+//
+//   - IsPrimaryVersion collapses alternate versions to a single entry.
+//   - LibraryState "organized" drops rows whose file is not in the managed library
+//     (pebble_store_stats.go computes its organized_books the same way, via a
+//     rootDir path prefix; the two are expected to agree and the acceptance check
+//     compares them).
+//   - ExcludeQuarantined: a quarantined file cannot be played, so listing it only
+//     produces a failed playback attempt.
+//
+// Sorting is honoured here too. The client always sends sort=media.metadata.title and
+// we previously IGNORED it, so the library was never actually title-sorted. SortBy
+// "title" is backed by a sorted radix index — O(offset+limit), not a full sort.
+func absItemFilter(c *gin.Context) database.BookSummaryFilter {
+	primary := true
+	f := database.BookSummaryFilter{
+		IsPrimaryVersion:   &primary,
+		LibraryState:       "organized",
+		ExcludeQuarantined: true,
+		SortAscending:      c.Query("desc") != "1",
+	}
+	// Only "title" is index-backed; anything else falls through to store default
+	// ordering rather than pretending to honour a sort we cannot do cheaply.
+	if strings.Contains(strings.ToLower(c.Query("sort")), "title") {
+		f.SortBy = "title"
+	}
+	return f
+}
+
+// countItems returns the filtered item count, cached for absItemsCountTTL.
+//
+// Keyed by the filter's identity so a differently-filtered request cannot be served
+// another filter's number — today only the sort varies (which does not change the
+// count), but keying it now means a future filter cannot silently reuse a stale total.
+func (h *Handler) countItems(f database.BookSummaryFilter) (int, error) {
+	key := itemsCountKey(f)
+	now := h.now()
+
+	h.itemsCountMu.Lock()
+	if entry, ok := h.itemsCount[key]; ok && now.Sub(entry.at) < absItemsCountTTL {
+		h.itemsCountMu.Unlock()
+		return entry.count, nil
+	}
+	h.itemsCountMu.Unlock()
+
+	// Computed OUTSIDE the lock: this is a full-library scan and holding the mutex
+	// across it would serialize every concurrent request behind one scan — turning a
+	// slow endpoint into a stalled one.
+	count, err := h.library.CountBookSummariesFiltered(f)
+	if err != nil {
+		return 0, err
+	}
+
+	h.itemsCountMu.Lock()
+	h.itemsCount[key] = itemsCountEntry{count: count, at: now}
+	h.itemsCountMu.Unlock()
+	return count, nil
+}
+
+// itemsCountKey identifies a filter for caching. Sort fields are deliberately
+// EXCLUDED — ordering cannot change how many rows match, and including them would
+// multiply the cache entries (and the scans) by the number of sort orders.
+func itemsCountKey(f database.BookSummaryFilter) string {
+	primary := "any"
+	if f.IsPrimaryVersion != nil {
+		primary = strconv.FormatBool(*f.IsPrimaryVersion)
+	}
+	return primary + "|" + f.LibraryState + "|" + strconv.FormatBool(f.ExcludeQuarantined)
+}
+
 // requestsPodcasts reports whether the caller is probing for podcast content.
 //
 // We hold no podcasts, so the correct answer is a well-formed EMPTY page: a 404 or a
@@ -181,14 +265,28 @@ func (h *Handler) LibraryItems(c *gin.Context) {
 		return
 	}
 
-	total, err := h.library.CountAllBooks()
+	filter := absItemFilter(c)
+
+	// 🔴 The FILTERED count, not CountAllBooks.
+	//
+	// Two separate reasons, and both bit us:
+	//
+	//  1. Correctness. CountAllBooks counts every row — 44,888 — while this endpoint
+	//     now serves only primary+organized items (16,491). Reporting the unfiltered
+	//     total makes the client page past the end into empty results forever.
+	//  2. Cost. CountAllBooks iterates every book: key AND json.Unmarshals every book
+	//     purely to count them (pebble_store.go:2509). That is a full 44,888-book
+	//     decode on EVERY request, and it is why latency was a flat ~2s regardless of
+	//     which page was asked for. Same hotspot class as CountPrimaryBooks, fixed in
+	//     PR #2021.
+	total, err := h.countItems(filter)
 	if err != nil {
 		respondError(c, http.StatusInternalServerError, "could not count library items")
 		return
 	}
 	resp.Total = total
 
-	summaries, err := h.library.GetAllBookSummaries(p.Limit, p.Offset)
+	summaries, err := h.library.GetAllBookSummariesFiltered(p.Limit, p.Offset, filter)
 	if err != nil {
 		respondError(c, http.StatusInternalServerError, "could not list library items")
 		return
