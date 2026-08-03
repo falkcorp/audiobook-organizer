@@ -261,6 +261,13 @@ type Handler struct {
 	itemsCountMu sync.Mutex
 	itemsCount   map[string]itemsCountEntry
 
+	// authorsCache holds the fully-built author list. The client requests up to 93
+	// consecutive pages of it (jump-to-letter), and building it walks the whole
+	// library — see authorDTOsCached in browse.go.
+	authorsCacheMu sync.Mutex
+	authorsCache   []authorDTO
+	authorsCacheAt time.Time
+
 	// now and newID are injectable for deterministic tests.
 	now   func() time.Time
 	newID func() string

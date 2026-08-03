@@ -59,6 +59,16 @@ type fakeLibrary struct {
 	// countFiltered counts CountBookSummariesFiltered calls so a test can prove the
 	// full-library count scan is cached rather than repeated per request.
 	countFiltered int
+	authorCounts  int
+}
+
+// authorCountCalls reports how many times the full author-count scan ran. The
+// jump-to-letter interaction issues up to 93 paged requests in a row, so the value
+// that matters is how many of those trigger a rebuild.
+func (f *fakeLibrary) authorCountCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.authorCounts
 }
 
 // countCalls reports how many times the filtered count was actually computed.
@@ -335,6 +345,9 @@ func (f *fakeLibrary) GetAllAuthors() ([]database.Author, error) {
 }
 
 func (f *fakeLibrary) GetAllAuthorBookCounts() (map[int]int, error) {
+	f.mu.Lock()
+	f.authorCounts++
+	f.mu.Unlock()
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	out := map[int]int{}

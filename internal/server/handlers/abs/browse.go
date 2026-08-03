@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
 // last-edited: 2026-08-03
 
@@ -394,7 +394,7 @@ func (h *Handler) Personalized(c *gin.Context) {
 		recentlyAdded = append(recentlyAdded, h.minifiedItem(&views[i]))
 	}
 
-	authors, err := h.authorDTOs()
+	authors, err := h.authorDTOsCached()
 	if err != nil {
 		respondError(c, http.StatusInternalServerError, "could not build home shelves")
 		return
@@ -489,6 +489,57 @@ func (h *Handler) LibrarySeries(c *gin.Context) {
 	respondJSON(c, http.StatusOK, pageResponse{Results: results, Total: len(results)})
 }
 
+// absAuthorsCacheTTL bounds how long the built author list is reused.
+//
+// Generous on purpose: authors change only when books are added, and the owner
+// explicitly accepted a slightly-stale list. The cost being avoided is large — see
+// authorDTOsCached.
+const absAuthorsCacheTTL = 5 * time.Minute
+
+// authorDTOsCached returns the full, sorted author list, rebuilt at most once per
+// absAuthorsCacheTTL.
+//
+// 🔴 THE CLIENT ASKS FOR THIS UP TO 93 TIMES IN A ROW, and each rebuild is a full
+// library scan.
+//
+// AudioBooth pages authors 100 at a time (AuthorsPageModel: itemsPerPage = 100,
+// hasMorePages = currentPage*itemsPerPage < total) and its jump-to-letter feature
+// keeps loading pages until the target letter appears. With ~9,200 authors, jumping
+// to "Z" is ~93 sequential requests.
+//
+// Each of those requests called GetAllAuthorBookCounts, which is by its own
+// description a "Full Pebble book scan combined with junction table scan" — 44,888
+// books walked, per page. 93 pages x ~400ms was ~37 seconds to reach the end of the
+// alphabet.
+//
+// Building the list once turns pages 2..93 into slice arithmetic. That is why this
+// caches the whole DOCUMENT rather than just the count: the count was never the
+// expensive part here.
+func (h *Handler) authorDTOsCached() ([]authorDTO, error) {
+	now := h.now()
+
+	h.authorsCacheMu.Lock()
+	if h.authorsCache != nil && now.Sub(h.authorsCacheAt) < absAuthorsCacheTTL {
+		cached := h.authorsCache
+		h.authorsCacheMu.Unlock()
+		return cached, nil
+	}
+	h.authorsCacheMu.Unlock()
+
+	// Built OUTSIDE the lock. Holding it across a full-library scan would serialize
+	// every concurrent page request behind one rebuild — which is precisely the
+	// 93-requests-in-a-row access pattern this exists to serve.
+	built, err := h.authorDTOs()
+	if err != nil {
+		return nil, err
+	}
+
+	h.authorsCacheMu.Lock()
+	h.authorsCache, h.authorsCacheAt = built, now
+	h.authorsCacheMu.Unlock()
+	return built, nil
+}
+
 // authorDTOs builds the author list once, shared by /authors and /personalized.
 func (h *Handler) authorDTOs() ([]authorDTO, error) {
 	authors, err := h.library.GetAllAuthors()
@@ -530,7 +581,7 @@ func (h *Handler) LibraryAuthors(c *gin.Context) {
 	if !h.knownLibrary(c) {
 		return
 	}
-	authors, err := h.authorDTOs()
+	authors, err := h.authorDTOsCached()
 	if err != nil {
 		respondError(c, http.StatusInternalServerError, "could not list authors")
 		return
