@@ -356,7 +356,11 @@ func (h *VersionsHandler) SplitSegmentsToBooks(c *gin.Context) {
 			title = sourceBook.Title + " (split)"
 		}
 
-		durationSec := f.Duration / 1000 // BookFile stores ms
+		// BookFile.Duration is SECONDS by convention; only ~2% of rows are
+		// milliseconds (iTunes importer). Normalize per row on the file's implied
+		// bitrate instead of dividing unconditionally, which was turning correct
+		// values into near-zero.
+		durationSec := database.NormalizeDurationSec(f.FileSize, f.Duration)
 		newBook := &database.Book{
 			Title:     title,
 			AuthorID:  sourceBook.AuthorID,

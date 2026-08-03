@@ -920,7 +920,22 @@ func (svc *AudiobookService) aggregateFileMetadataWithFiles(books []database.Boo
 			if f.Missing {
 				continue
 			}
-			agg.totalDuration += f.Duration / 1000
+			// 🔴 NEVER DIVIDE UNCONDITIONALLY. This was `f.Duration / 1000` on the
+			// assumption that BookFile.Duration is milliseconds. It is SECONDS by
+			// convention (see database/duration_sanity.go) — only ~2% of rows are
+			// milliseconds, from the iTunes importer.
+			//
+			// So this divided correct values by 1000, and because it truncated per
+			// row BEFORE summing, every file shorter than 1000 s contributed
+			// exactly 0. Hyperion listed 20 s against a stored 174,658 s, and
+			// 25,938 of 44,886 books showed an implausibly small duration — every
+			// one of them a book that HAS files, while the "plausible" ones were
+			// books with none, which skip this loop entirely.
+			//
+			// NormalizeDurationSec divides only when the file's implied bitrate
+			// proves the value is milliseconds, so a correct row passes through
+			// untouched and a genuine ms row is still repaired.
+			agg.totalDuration += database.NormalizeDurationSec(f.FileSize, f.Duration)
 			agg.totalSize += f.FileSize
 		}
 		if idx, ok := bookIDMap[bookID]; ok {
