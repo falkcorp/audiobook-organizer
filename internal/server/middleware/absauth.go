@@ -38,6 +38,12 @@ const (
 	// ABSModeJWT means the request was identified by our own bearer access token
 	// (design spec Mode B).
 	ABSModeJWT = "jwt"
+	// ABSModeAPIKey means the request was identified by an `abk_` application API
+	// key. This exists so ONE credential can exercise the whole app — /api/v1 and
+	// the ABS surface — during testing and diagnostics. It is deliberately last in
+	// the resolution order and carries the key's SCOPED permissions, so it widens
+	// reach without widening privilege.
+	ABSModeAPIKey = "apikey"
 )
 
 // CFAssertionVerifier is the slice of *oauth.CFAccessVerifier this middleware needs.
@@ -99,8 +105,12 @@ func NewABSIdentityResolver(cfg *absauth.Config, verifier CFAssertionVerifier, o
 // ABSIdentity is a successfully resolved ABS identity.
 type ABSIdentity struct {
 	User *database.User
-	// Mode is ABSModeCF or ABSModeJWT.
+	// Mode is ABSModeCF, ABSModeJWT or ABSModeAPIKey.
 	Mode string
+	// APIKeyScopes are the scopes of the `abk_` key in ABSModeAPIKey. Bind narrows
+	// the owner's role permissions to these, so a scoped key cannot reach more on
+	// the ABS surface than it can on /api/v1. nil in every other mode.
+	APIKeyScopes []string
 	// SessionID is the abs_sess record backing a Mode B request. Empty in Mode C,
 	// where identity arrives with every request and no server-side session is needed.
 	SessionID string
@@ -262,6 +272,81 @@ func (r *ABSIdentityResolver) ResolveBearer(c *gin.Context) (*ABSIdentity, *ABSA
 	return &ABSIdentity{User: user, Mode: ABSModeJWT, SessionID: session.ID, AccessToken: raw}, nil
 }
 
+// absAPIKeyStore is the OPTIONAL store slice needed to resolve an `abk_` key. It is
+// asserted at runtime rather than folded into ABSIdentityStore so that the many
+// existing test fakes implementing ABSIdentityStore keep compiling — a fake that
+// does not implement it simply never resolves an API key, which is the safe default.
+type absAPIKeyStore interface {
+	GetAPIKeyByHash(hash string) (*database.APIKey, error)
+}
+
+// ResolveAPIKey runs step 3 — an `abk_` application API key presented against the
+// ABS surface.
+//
+// 🔑 WHY THIS EXISTS. Before this, `absBearerFromRequest` discarded every `abk_`
+// token, so the key minted at startup could reach /api/v1 but got a flat 401 from
+// every ABS route. That made the ABS surface untestable without first performing a
+// password login, and it is why the author-count and cold-cache measurements after
+// PR #2122 could not be taken.
+//
+// This is NOT a bypass, and the distinction matters:
+//
+//   - Every existing key check still runs — hash lookup, revoked, inactive,
+//     expiry, and owner-active. "Short-lived" is the key's OWN ExpiresAt, already
+//     enforced here; no second TTL mechanism was invented.
+//   - Permissions are the key's SCOPES intersected with the owner's role
+//     permissions, exactly as /api/v1 computes them, so every ABS route keeps its
+//     normal authz. A read-only key stays read-only.
+//   - It runs LAST, so it can neither shadow nor weaken the CF or JWT paths.
+//
+// There is no abs_sess record behind an API key, so SessionID stays empty; routes
+// that genuinely need a session (logout, /api/me/sessions) will behave as they do
+// for any sessionless identity rather than being handed a fake one.
+func (r *ABSIdentityResolver) ResolveAPIKey(c *gin.Context) (*ABSIdentity, *ABSAuthError) {
+	if !r.Enabled() || !r.cfg.Modes.JWT {
+		return nil, nil
+	}
+	raw := absAPIKeyFromRequest(c)
+	if raw == "" {
+		return nil, nil
+	}
+	ks, ok := r.store.(absAPIKeyStore)
+	if !ok {
+		return nil, nil
+	}
+
+	key, err := ks.GetAPIKeyByHash(database.HashAPIKeyToken(raw))
+	if err != nil {
+		// Transient, so 500 rather than 401 — same reasoning as ResolveBearer.
+		return nil, absErr(http.StatusInternalServerError, "apikey-lookup-error", "could not verify API key", ABSModeAPIKey)
+	}
+	if key == nil {
+		return nil, absErr(http.StatusUnauthorized, "apikey-invalid", "invalid API key", ABSModeAPIKey)
+	}
+	switch key.Status {
+	case "revoked":
+		return nil, absErr(http.StatusUnauthorized, "apikey-revoked", "API key has been revoked", ABSModeAPIKey)
+	case "inactive":
+		return nil, absErr(http.StatusUnauthorized, "apikey-inactive", "API key is inactive", ABSModeAPIKey)
+	}
+	if key.ExpiresAt != nil && time.Now().After(*key.ExpiresAt) {
+		return nil, absErr(http.StatusUnauthorized, "apikey-expired", "API key has expired", ABSModeAPIKey)
+	}
+
+	user, err := r.store.GetUserByID(key.UserID)
+	if err != nil {
+		return nil, absErr(http.StatusInternalServerError, "user-lookup-error", "could not load user", ABSModeAPIKey)
+	}
+	if user == nil {
+		return nil, absErr(http.StatusUnauthorized, "apikey-owner-missing", "API key owner no longer exists", ABSModeAPIKey)
+	}
+	if e := absCheckUserActive(user, ABSModeAPIKey); e != nil {
+		return nil, e
+	}
+
+	return &ABSIdentity{User: user, Mode: ABSModeAPIKey, APIKeyScopes: key.Scopes}, nil
+}
+
 // Resolve applies the full §3.0.1 order and is what ABSRequireAuth uses.
 func (r *ABSIdentityResolver) Resolve(c *gin.Context) (*ABSIdentity, *ABSAuthError) {
 	if !r.Enabled() {
@@ -273,6 +358,11 @@ func (r *ABSIdentityResolver) Resolve(c *gin.Context) (*ABSIdentity, *ABSAuthErr
 		return id, nil
 	}
 	if id, e := r.ResolveBearer(c); e != nil {
+		return nil, e
+	} else if id != nil {
+		return id, nil
+	}
+	if id, e := r.ResolveAPIKey(c); e != nil {
 		return nil, e
 	} else if id != nil {
 		return id, nil
@@ -297,6 +387,13 @@ func (r *ABSIdentityResolver) Bind(c *gin.Context, id *ABSIdentity) {
 	var perms []auth.Permission
 	if r != nil && r.store != nil {
 		perms = absEffectivePermissions(r.store, id.User)
+		// An API key must not reach MORE through the ABS surface than it reaches
+		// through /api/v1, so narrow role permissions by the key's scopes exactly
+		// as handleAPIKeyAuth does. Without this line a read-only key would become
+		// a full-privilege key the moment it was pointed at an ABS route.
+		if id.Mode == ABSModeAPIKey {
+			perms = intersectPermissions(perms, id.APIKeyScopes)
+		}
 	}
 	ctx := auth.WithUser(c.Request.Context(), id.User)
 	ctx = auth.WithPermissions(ctx, perms)
@@ -480,6 +577,31 @@ func absBearerFromRequest(c *gin.Context) string {
 	}
 	if c.Request.Method == http.MethodGet || c.Request.Method == http.MethodHead {
 		if tok := strings.TrimSpace(c.Query("token")); tok != "" {
+			return tok
+		}
+	}
+	return ""
+}
+
+// absAPIKeyFromRequest reads an `abk_` application API key from the request. It is
+// the exact mirror of absBearerFromRequest: that one returns everything EXCEPT an
+// `abk_` token, this one returns ONLY an `abk_` token, so the two credential schemes
+// stay strictly separate and a token can only ever take one path.
+//
+// `?token=` is accepted on safe methods only, matching absBearerFromRequest, so a key
+// cannot leak into a referer or an access log on a state-changing request.
+func absAPIKeyFromRequest(c *gin.Context) string {
+	if c == nil || c.Request == nil {
+		return ""
+	}
+	header := strings.TrimSpace(c.GetHeader("Authorization"))
+	if len(header) > 7 && strings.EqualFold(header[:7], "bearer ") {
+		if tok := strings.TrimSpace(header[7:]); strings.HasPrefix(tok, "abk_") {
+			return tok
+		}
+	}
+	if c.Request.Method == http.MethodGet || c.Request.Method == http.MethodHead {
+		if tok := strings.TrimSpace(c.Query("token")); strings.HasPrefix(tok, "abk_") {
 			return tok
 		}
 	}
