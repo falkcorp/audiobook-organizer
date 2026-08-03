@@ -95,6 +95,17 @@ func (f *fakeLibrary) addAuthor(id int, name string, bookIDs ...string) {
 	}
 }
 
+// addNarrators seeds narrator rows. The oracle's fixture library has none, so any
+// test asserting the narrator ELEMENT shape must seed its own — an empty list is
+// exactly how a missing required field shipped unnoticed.
+func (f *fakeLibrary) addNarrators(names ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, name := range names {
+		f.narrators = append(f.narrators, database.Narrator{ID: len(f.narrators) + i + 1, Name: name})
+	}
+}
+
 // ── LibraryStore ────────────────────────────────────────────────────────────
 
 func (f *fakeLibrary) GetBookByID(id string) (*database.Book, error) {

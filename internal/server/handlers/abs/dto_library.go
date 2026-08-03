@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/dto_library.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c471e9a0-5b83-4d16-92fe-08a7c35d1b6e
-// last-edited: 2026-07-30
+// last-edited: 2026-08-02
 
 package abs
 
@@ -393,6 +393,33 @@ type authorsResponse struct {
 	Authors []authorDTO `json:"authors"`
 }
 
+// authorsPageResponse is what /api/libraries/:id/authors returns when the caller
+// sends pagination parameters.
+//
+// 🔴 REAL ABS SWITCHES ENVELOPE ON `limit`/`page`, and the two shapes share no keys.
+// Verified against the oracle 2026-08-02:
+//
+//	GET …/authors                    -> {"authors":[…]}
+//	GET …/authors?limit=100&page=0   -> {"results":[…],"total":…,"limit":…,"page":…,…}
+//
+// AudioBooth ALWAYS sends them (`?sort=name&minified=1&limit=100&page=0`) and decodes
+// into Page<Author>, whose `total` and `page` are `try container.decode` — REQUIRED,
+// not decodeIfPresent. Serving the bare shape to a paginated request therefore throws
+// in the client and the Authors tab renders empty with no error shown.
+//
+// This is precisely the failure §1.8.5 item 5 warned about ("abs-shim returns a bare
+// {authors:[…]} with neither → would throw"); we had reproduced it. The committed
+// fixture did not catch it because it was captured WITHOUT query parameters.
+type authorsPageResponse struct {
+	Limit    int         `json:"limit"`
+	Minified bool        `json:"minified"`
+	Page     int         `json:"page"`
+	Results  []authorDTO `json:"results"`
+	SortBy   string      `json:"sortBy,omitempty"`
+	SortDesc bool        `json:"sortDesc"`
+	Total    int         `json:"total"`
+}
+
 // narratorsResponse is /api/libraries/:id/narrators. The wrapper key is required
 // (§1.8.6) and entries are objects with a name and a book count.
 type narratorsResponse struct {
@@ -400,8 +427,27 @@ type narratorsResponse struct {
 }
 
 type narratorDTO struct {
-	Name     string `json:"name"`
-	NumBooks int    `json:"numBooks"`
+	// 🔴 ID IS REQUIRED BY THE CLIENT and was missing, which blanked the Narrators
+	// tab: AudioBooth's `Narrator` declares `public let id: String` non-optionally,
+	// so a narrator object without it throws the whole all-or-nothing decode.
+	//
+	// The committed oracle fixture is `{"narrators": []}` — the fixture library has
+	// no narrators — so the conformance diff had no element to compare and passed
+	// vacuously. An empty golden array cannot pin an element shape.
+	//
+	// Format matches real ABS exactly (LibraryController.getNarrators):
+	//   id: encodeURIComponent(Buffer.from(name).toString('base64'))
+	// Narrators are not entities in ABS — the name IS the identity — so the id has to
+	// be derived from the name rather than invented, or it would not survive a
+	// restart and the client's cached ids would rot.
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// NumBooks is a POINTER and omitted when unknown. There is no reverse
+	// narrator->book index in this store, so a real count would need a library scan
+	// on a request path. The field is optional in the client (`numBooks: Int?`), and
+	// omitting it is honest where emitting 0 would render "0 books" beside every
+	// narrator.
+	NumBooks *int `json:"numBooks,omitempty"`
 }
 
 // episodesResponse is /api/libraries/:id/recent-episodes — the podcast stub. The
