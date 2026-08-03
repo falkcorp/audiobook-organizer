@@ -80,7 +80,9 @@ func (h *Handler) ListAudiobookSegments(c *gin.Context) {
 			"file_path":        f.FilePath,
 			"format":           f.Format,
 			"size_bytes":       f.FileSize,
-			"duration_seconds": f.Duration / 1000, // BookFile stores ms
+			// Seconds by convention; normalize only genuine ms rows. See
+			// database.NormalizeDurationSec.
+			"duration_seconds": database.NormalizeDurationSec(f.FileSize, f.Duration),
 			"track_number":     f.TrackNumber,
 			"total_tracks":     f.TrackCount,
 			"segment_title":    f.Title,
@@ -521,7 +523,7 @@ func (h *Handler) GetSegmentTags(c *gin.Context) {
 		"file_path":              found.FilePath,
 		"format":                 found.Format,
 		"size_bytes":             found.FileSize,
-		"duration_sec":           found.Duration / 1000,
+		"duration_sec":           database.NormalizeDurationSec(found.FileSize, found.Duration),
 		"track_number":           found.TrackNumber,
 		"total_tracks":           found.TrackCount,
 		"tags":                   tags,
