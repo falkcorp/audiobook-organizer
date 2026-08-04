@@ -1,5 +1,6 @@
 <!-- file: TODO.md -->
 <!-- version: 10.13.9 -->
+<!-- version: 10.14.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-08-04 -->
 
@@ -108,16 +109,29 @@ the play session, `startOffset`, synthesized chapters, and the progress fraction
 a ~2000× inflated denominator, `currentTime / duration` rounds to zero — which is
 exactly the reported **"0%"** — and the remaining-time readout is nonsense.
 
-### Scope is UNKNOWN — measure before fixing
+### Scope — MEASURED 2026-08-03
 
-Confirmed for this one book. Whether it is iTunes-import-specific or library-wide is
-**not** established, and that decides the size of the job:
+Both defects were measured library-wide, and the two turned out to have very
+different shapes than this single-book sample suggested.
 
-```bash
-# per book: row count vs distinct track count, and how many durations look like ms
-curl -sk -H "Authorization: Bearer $ABK" \
-  "https://127.0.0.1:8484/api/v1/audiobooks/<id>/files"
-```
+**Defect 2 (units) is small and was mostly a _display_ bug, not stored corruption.**
+Only ~2% of rows actually hold milliseconds. The library-wide symptom — 25,938 books
+showing absurd totals — came from `service_filtering.go`, which divided **every**
+duration by 1000 unconditionally while summing, and truncated each row to an integer
+before adding. Correct second-valued rows were the ones being destroyed, on read.
+Fixed in #2125 by routing the sum through `database.NormalizeDurationSec`, which
+classifies **per row** from the bitrate the file size implies — exactly the
+idempotent, per-row test this entry demanded. Zero of 843 multi-file books still show
+the symptom.
+
+**Defect 1 (duplication) is real, larger, and is NOT a uniform 2×.** The "2.00x"
+figure was an artifact of the one book sampled. The true shape is a single file
+duplicated up to **130 times**: `The Trapped Mind Project` had 130 rows for one file,
+and one m4b's runtime was being counted 26 times (`568,802s = 26 × 21,877` exactly).
+Addressed by a new dry-run-by-default op, `maintenance.dedupe-book-file-rows`
+(#2128), which finds candidates on the cheap memdb path and then re-reads each group
+Pebble-direct before deciding, because the memdb projection strips
+`AcoustIDFingerprint`.
 
 ### Do not fix blind
 
@@ -129,6 +143,33 @@ curl -sk -H "Authorization: Bearer $ABK" \
   correct. Any repair has to classify per row, not per book.
 - Fixing units without deduping (or vice versa) leaves the duration wrong by 2×,
   which is still enough to misplace every chapter boundary.
+
+### Status 2026-08-04
+
+- [x] **Defect 2 — units.** Fixed on the read path (#2125) plus 798 stored durations
+      corrected. `NormalizeDurationSec` classifies per row, so it is idempotent and
+      cannot corrupt already-correct rows.
+- [x] **Dry-run op for Defect 1.** `maintenance.dedupe-book-file-rows` shipped
+      (#2128), dry-run by default, mirroring `maintenance.title-repair`'s `Apply=false`.
+- [x] **Canary applied — 10 books, 338 rows deleted.** Every corrected total verified
+      after restart (`Defending the Lost` 158.00h → 12.15h, `San Kuo` 294.05h → 19.66h)
+      with `fingerprinted_file_count` unchanged on all 10.
+- [x] **Canary defect — keeper lost data.** Ranking picks a whole row, so a
+      fingerprinted keeper with no duration lost the duration to deletion. The keeper
+      now merges every missing field from its twins before they are destroyed (#2129).
+- [ ] **Apply to the remaining ~194 books** (3,239 − 338 rows). Blocked on #2129
+      deploying; re-running before then would repeat the data loss above.
+- [ ] **Restore `The Trapped Mind Project`** (`01KNDB97CWFSMSEY68P82VDRBF`) — left at
+      0.00h by the canary. The file is intact, so `maintenance.duration-reextract`
+      recovers it from ffprobe.
+- [ ] **5 books are multi-copy, not row-duplicated** — distinct paths for the same
+      book (`Wind and Truth` 426 files, `Ajax's Ascension` 272). Deduping rows is the
+      wrong tool; these need regrouping and should surface in the review queue.
+- [ ] **`Call to Arms` (9,957h)** — 96 *distinct* files, unchanged by the dedupe run.
+      A third shape, not yet diagnosed.
+- [ ] **Corrected aggregates are invisible until memdb refreshes** — see the
+      2026-08-04 entry on `RecomputeBookAggregates`. Not a duration bug, but it makes
+      every duration fix look like a no-op until a restart.
 
 <!-- file: todo.d/2026-08-01-assignorphanvgs-offset-pagination.md -->
 <!-- version: 1.0.0 -->
@@ -1133,12 +1174,16 @@ Companion docs:
 45. **Performance items #1/#2/#6** (2026-04-14 set) — still open.
 46. **Duration/filesize aggregation** — Book fields show snapshots instead of sums;
     likely stale (F5-T026 shipped) — verify then close.
-    - **46b. `/audiobooks` LIST endpoint mis-serializes `duration`** (found 2026-07-19) —
-      low-severity display bug: the list endpoint returns e.g. `duration: 4` for a book
-      whose *detail* endpoint (and stored data) correctly returns `4680` (~78 min). Looks
-      like a seconds-vs-ms unit slip in the list serializer only; stored/file-level data is
-      fine (NOT corruption). Fix the list handler's duration field. Cross-ref
-      `internal/server/handlers/audiobooks/handler.go`.
+    - ~~**46b. `/audiobooks` LIST endpoint mis-serializes `duration`** (found
+      2026-07-19)~~ **DONE 2026-08-03 (#2125).** The reported symptom — list says
+      `duration: 4` where the detail endpoint says `4680` — was the arithmetic itself:
+      `4680 / 1000` truncates to `4`. `service_filtering.go:923` divided every
+      duration by 1000 unconditionally while aggregating, so the rows it corrupted
+      were the *correct* second-valued ones. Now routed through
+      `database.NormalizeDurationSec`, which classifies per row from the implied
+      bitrate. Same fix applied to `handlers/versions.go` and
+      `handlers/audiobooks/handler_files.go` (×2). Far from low-severity: it affected
+      25,938 books.
 47. **Library centralization backlog** — needs a brainstorming session; future work.
 48. **Transcription quality filter** — ~40% of transcripts low-quality/unparsed; list
     endpoint omits transcription fields.
