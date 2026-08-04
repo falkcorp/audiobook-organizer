@@ -1,6 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.13.9 -->
-<!-- version: 10.14.0 -->
+<!-- version: 10.14.1 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-08-04 -->
 
@@ -154,14 +153,35 @@ Pebble-direct before deciding, because the memdb projection strips
 - [x] **Canary applied — 10 books, 338 rows deleted.** Every corrected total verified
       after restart (`Defending the Lost` 158.00h → 12.15h, `San Kuo` 294.05h → 19.66h)
       with `fingerprinted_file_count` unchanged on all 10.
-- [x] **Canary defect — keeper lost data.** Ranking picks a whole row, so a
-      fingerprinted keeper with no duration lost the duration to deletion. The keeper
-      now merges every missing field from its twins before they are destroyed (#2129).
-- [ ] **Apply to the remaining ~194 books** (3,239 − 338 rows). Blocked on #2129
-      deploying; re-running before then would repeat the data loss above.
-- [ ] **Restore `The Trapped Mind Project`** (`01KNDB97CWFSMSEY68P82VDRBF`) — left at
-      0.00h by the canary. The file is intact, so `maintenance.duration-reextract`
-      recovers it from ffprobe.
+- [x] **~~Canary defect — keeper lost data.~~ RETRACTED 2026-08-04 — there was no
+      data loss.** The claim was that `The Trapped Mind Project` dropped to 0.00h
+      because ranking kept a fingerprinted row whose `Duration` was 0. Checking the
+      actual audio disproves it: that book's entire content is a **13.5-second,
+      91,958-byte MP3**, and both the surviving row and the file on disk agree.
+
+      ```
+      iTunes copy       91958 bytes   duration=13.485s   bit_rate=54554
+      surviving DB row  file_size=91958                  duration=13
+      ```
+
+      130 rows × 13s ≈ 1,690s ≈ 0.47h inflated → 13s after dedupe. **0.00h is the
+      correct answer for a 13-second file**, and the op behaved exactly as designed.
+      The error was reading "0.00h" as lost data without checking the audio.
+- [x] **Keeper field-merge shipped anyway (#2129).** It is still right on its own
+      merits — ranking selects a whole *row*, so a keeper genuinely can lack a field a
+      twin holds, and merging is strictly additive. But it is **hardening against a
+      latent hazard, not a repair of an observed loss**; no such loss has been
+      demonstrated.
+- [ ] **Apply to the remaining ~194 books** (3,239 − 338 rows). No longer blocked —
+      #2129 is merged and deployed, and the canary is now understood to have succeeded
+      on all 10 books rather than 8.
+- [ ] **`The Trapped Mind Project` is a 13-second stub, not an audiobook**
+      (`01KNDB97CWFSMSEY68P82VDRBF`). Nothing to restore — but two things about it are
+      still wrong and worth chasing as a class:
+      its book-level `file_size` reads **532,805,172** (532 MB) for a 91 KB file, and
+      the API reports `file_exists: true` for a `file_path` that is absent from disk.
+      Both are book-level fields disagreeing with the underlying file. See the
+      duration/filesize aggregation item — same family of defect.
 - [ ] **5 books are multi-copy, not row-duplicated** — distinct paths for the same
       book (`Wind and Truth` 426 files, `Ajax's Ascension` 272). Deduping rows is the
       wrong tool; these need regrouping and should surface in the review queue.

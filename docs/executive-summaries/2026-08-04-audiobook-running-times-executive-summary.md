@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-08-04-audiobook-running-times-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 4c2a5631-03db-4f50-ab49-7056ec114fe6 -->
 <!-- last-edited: 2026-08-04 -->
 
@@ -57,29 +57,37 @@ file checksum. Choosing wrong destroys something expensive to rebuild.
 
 We then ran it on **ten books only**, and checked the outcome book by book.
 
-## What the ten-book trial caught
+## What the ten-book trial showed
 
-It caught a real flaw, which is exactly why it was run.
+All ten came out correct — 158 hours to 12.15, 294 to 19.66 — with every acoustic
+fingerprint intact.
 
-Eight of the ten came out perfect — 158 hours to 12.15, 294 to 19.66 — with every
-acoustic fingerprint intact. But the tool picked which *record* to keep, and the best
-record is not always the most complete one. For one book it kept the copy holding the
-fingerprint, correctly, and deleted the 129 others — but that copy had no length
-stored, and the length only existed on the copies just deleted. The book dropped to
-**zero hours**.
+One of them looked at first like a failure and turned out not to be, and the
+distinction is worth recording because it nearly caused a wrong conclusion. A book
+called *The Trapped Mind Project* had 130 copies of one record, and after cleanup it
+read **0.00 hours**. That looks exactly like a length being wiped.
 
-Had that run against the whole library instead of ten books, it would have quietly
-blanked the length on an unknown number of books while appearing to succeed.
+It was not. That book's entire audio content is a **13.5-second, 91-kilobyte file** —
+a stub or truncated download, not a real audiobook. 130 copies of 13 seconds added up
+to the roughly 28 minutes it showed before; one copy of 13 seconds is 0.00 hours. The
+tool was right, and the reported "damage" was a rounded display value being mistaken
+for evidence.
 
-The tool now takes the best of *every* piece of information from the records it is
-about to remove and merges it into the one it keeps — it can only ever fill in a gap,
-never overwrite something already there. The rescued record is saved **before**
-anything is deleted, and if that save fails the whole group is skipped rather than
-half-cleaned. The one damaged book can be fully recovered, since the audio file itself
-was never touched.
+The lesson generalises: when a number goes to zero, check the underlying file before
+concluding something was destroyed. The stored data and the file agreed here all along.
 
-The remaining ~194 books are deliberately **not** cleaned up yet. That waits until the
-corrected tool is deployed.
+The tool was still hardened as a result, because the concern behind the false alarm is
+real even if this was not an instance of it: it picks which *record* to keep, and the
+best record is not always the most complete one. It now takes the best of *every* piece
+of information from the records it is about to remove and merges it into the one it
+keeps — only ever filling a gap, never overwriting. The rescued record is saved
+**before** anything is deleted, and if that save fails the whole group is skipped
+rather than half-cleaned. That is protection against a hazard we reasoned about, not a
+repair of a loss we observed.
+
+Two unrelated things about that book are genuinely wrong and are now on the list: its
+stored file size reads **532 MB** for a 91 KB file, and the app reports the file as
+present at a path where it does not exist.
 
 ## One more thing worth knowing
 
