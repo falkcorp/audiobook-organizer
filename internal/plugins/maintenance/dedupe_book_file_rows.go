@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1c7f4b93-6a05-42e8-9d31-8b0e5a2f7c46
 // last-edited: 2026-08-04
 
@@ -10,11 +10,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -49,12 +52,13 @@ func (p *Plugin) dedupeBookFileRowsDef() sdk.OperationDef {
 		//   registry: strike recorded kind=stuck message="no progress for 5m12s"
 		//   registry: canceling stuck op
 		//
-		// Per-book cost averages ~45s but is highly variable — a book with 47
-		// duplicate rows does far more work than one with 2 — so a single heavy book
-		// could exceed the window on its own. The primary fix is the intra-book
-		// heartbeat in the loop below; this override is defence in depth for a book
-		// pathological enough to outlast even that, and it matches the precedent set
-		// by malformed-m4b-transcode (backfill.go) for a slow-but-healthy per-item op.
+		// Per-book cost is highly variable — a book with 47 duplicate rows does far
+		// more work than one with 2 — so a single heavy book could exceed the window
+		// on its own. Liveness is now primarily handled by RunItems, which stamps
+		// UpdateProgress on every book completion; this override remains as defence
+		// in depth for one book pathological enough to outlast even that, and it
+		// matches the precedent malformed-m4b-transcode (backfill.go) set for a
+		// slow-but-healthy per-item op.
 		ProgressTimeout: 30 * time.Minute,
 		Capabilities:    []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
 		Run:             p.runDedupeBookFileRows,
@@ -209,30 +213,53 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 		"books_affected", len(affected),
 		"redundant_rows", dupRows)
 
-	prog := sdk.NewProgress(reporter, len(bookIDs))
-	prog.Start(fmt.Sprintf("%d book(s) hold duplicate book_file rows (%d redundant rows)",
-		len(affected), dupRows))
+	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
+		"%d book(s) hold duplicate book_file rows (%d redundant rows)", len(affected), dupRows))
 
+	// 🔒 Counters are touched by every worker — see the pool below. A single mutex
+	// is right here: contention is negligible against per-book DB work, and the
+	// alternative (five atomics plus a locked slice) buys nothing but subtlety.
+	var mu sync.Mutex
 	var deleted, wouldDelete, failed, recomputed, salvaged int
 	var examples []string
 
 	// PASS 2 — per affected book only, so the expensive full-fidelity read is paid
 	// for the handful of books that need it rather than the whole library.
-	for i, bookID := range bookIDs {
-		if ctx.Err() != nil {
-			log.Warn("dedupe-book-file-rows: cancelled",
-				"deleted", deleted, "remaining", len(bookIDs)-i)
-			return ctx.Err()
-		}
+	//
+	// ⚡ PARALLEL BY BOOK. This was a plain sequential `for range bookIDs`, which
+	// CLAUDE.md's concurrency rule forbids for a whole-library loop doing per-item
+	// DB work — and the first full production run proved why: ~1.7 minutes per book
+	// meant 176 books could not finish inside the op's own 2-hour timeout.
+	//
+	// 🔑 SAFE BECAUSE THE PARTITION IS DISJOINT. Every unit of work is one bookID,
+	// and a book_file row belongs to exactly one book, so two workers can never
+	// touch the same row, the same keeper decision, or the same
+	// RecomputeBookAggregates target. This is the partition-into-disjoint-sets case
+	// the concurrency rule calls for, NOT a naive fan-out over shared state.
+	//
+	// RunItems also fixes the liveness problem properly: it stamps UpdateProgress as
+	// each book COMPLETES, via a monotonic atomic counter that stays ordered even
+	// when books finish out of order. The stuck-op watchdog therefore sees progress
+	// on every completion rather than once per sequential step.
+	workers := runtime.NumCPU()
+	if workers > len(bookIDs) {
+		workers = len(bookIDs)
+	}
+	log.Info("dedupe-book-file-rows: processing books in parallel",
+		"books", len(bookIDs), "workers", workers)
 
+	runErr := registry.RunItems(ctx, reporter, bookIDs, func(ctx context.Context, bookID string) error {
 		// GetBookFiles reads Pebble directly (raw prefix iteration), NOT memdb, so
 		// AcoustIDFingerprint is present and un-stripped here. That is exactly why
 		// the keeper decision happens in this pass and not the previous one.
 		files, ferr := store.GetBookFiles(bookID)
 		if ferr != nil {
+			mu.Lock()
 			failed++
+			mu.Unlock()
 			log.Warn("dedupe-book-file-rows: GetBookFiles failed", "book_id", bookID, "err", ferr)
-			continue
+			// nil, not the error: one unreadable book must not abort the sweep.
+			return nil
 		}
 		byPath := map[string][]database.BookFile{}
 		for fi := range files {
@@ -271,15 +298,20 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 			merged, changed := mergeMissingFields(keeper, redundant)
 			keeper = merged
 
+			mu.Lock()
 			if len(examples) < 10 {
 				examples = append(examples, fmt.Sprintf("%s: %d rows for %q (keeping %s)",
 					bookID, len(rows), shortPath(path), keeper.ID))
 			}
+			mu.Unlock()
+
 			if !params.Apply {
+				mu.Lock()
 				wouldDelete += len(redundant)
 				if changed {
 					salvaged++
 				}
+				mu.Unlock()
 				continue
 			}
 
@@ -289,53 +321,74 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 			// also deleting the only copy is not.
 			if changed {
 				if uerr := store.UpdateBookFile(keeper.ID, &keeper); uerr != nil {
+					mu.Lock()
 					failed++
+					mu.Unlock()
 					log.Warn("dedupe-book-file-rows: could not persist salvaged fields; leaving this group intact",
 						"book_id", bookID, "keeper", keeper.ID, "err", uerr)
 					continue
 				}
+				mu.Lock()
 				salvaged++
+				mu.Unlock()
 			}
 
 			for ri := range redundant {
 				if derr := store.DeleteBookFile(redundant[ri].ID); derr != nil {
+					mu.Lock()
 					failed++
+					mu.Unlock()
 					log.Warn("dedupe-book-file-rows: delete failed",
 						"book_id", bookID, "row_id", redundant[ri].ID, "err", derr)
 					continue
 				}
+				mu.Lock()
 				deleted++
+				mu.Unlock()
 				changedThisBook = true
 			}
 
-			// ⏱️ HEARTBEAT — this is a liveness signal, not a step.
-			//
-			// The watchdog cancels an op that goes ProgressTimeout without an
-			// UpdateProgress stamp, and it cannot tell "slow" from "hung". Reporting
-			// only once per book (at the bottom of this loop) killed the first full
-			// production run at book 19/194: one book's deletes took over five
-			// minutes and the op was cancelled mid-flight.
-			//
-			// StepN(i) deliberately re-reports the CURRENT index rather than i+1 —
-			// the book is not finished, so the bar must not advance. The point is
-			// solely to stamp lastProgressAt so a genuinely-working op is not
-			// mistaken for a stalled one.
-			prog.StepN(i, fmt.Sprintf("Processing book %d/%d (%d rows removed so far)",
-				i+1, len(bookIDs), deleted))
 		}
 
 		// Totals are a plain sum over the surviving rows, so they are only correct
 		// once the redundant rows are gone — recompute AFTER deleting, per book.
+		// Safe to do inside a worker: this book's rows belong to no other worker.
 		if params.Apply && changedThisBook {
 			if rerr := store.RecomputeBookAggregates(bookID); rerr != nil {
+				mu.Lock()
 				failed++
+				mu.Unlock()
 				log.Warn("dedupe-book-file-rows: RecomputeBookAggregates failed",
 					"book_id", bookID, "err", rerr)
 			} else {
+				mu.Lock()
 				recomputed++
+				mu.Unlock()
 			}
 		}
-		prog.StepN(i+1, fmt.Sprintf("Processed %d/%d affected books", i+1, len(bookIDs)))
+		// No explicit progress call: RunItems stamps UpdateProgress as each book
+		// completes, using a monotonic counter that stays ordered even when books
+		// finish out of order. That is also what keeps the stuck-op watchdog fed.
+		return nil
+	}, registry.RunItemsOptions{
+		Concurrency: workers,
+		// ErrModeCollect: a single failing book must not abandon the other 175.
+		// Per-book failures are already counted and logged above, and the callback
+		// returns nil for them, so this mainly governs cancellation semantics.
+		ErrMode: registry.ErrModeCollect,
+		Label: func(i, total int) string {
+			return fmt.Sprintf("book %d/%d", i+1, total)
+		},
+	})
+	if runErr != nil && ctx.Err() != nil {
+		// Cancelled or timed out. Everything already committed stays correct — books
+		// are independent and the op is idempotent — so report and let a re-run
+		// pick up the remainder rather than pretending the work was lost.
+		log.Warn("dedupe-book-file-rows: cancelled", "deleted", deleted, "books", len(bookIDs))
+		return ctx.Err()
+	}
+	if runErr != nil {
+		log.Warn("dedupe-book-file-rows: some books failed", "err", runErr)
 	}
 
 	verb := fmt.Sprintf("would delete %d (would salvage fields on %d keepers)", wouldDelete, salvaged)
@@ -353,7 +406,7 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 			"| NOTE: corrected totals may not appear until memdb refreshes (restart) | e.g. %s",
 		len(cores), len(affected), dupRows, verb, failed, strings.Join(examples, "; "))
 	_ = reporter.Log(slog.LevelInfo, summary)
-	prog.Done(summary)
+	_ = reporter.UpdateProgress(len(bookIDs), len(bookIDs), summary)
 	return nil
 }
 
