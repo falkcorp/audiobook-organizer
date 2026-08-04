@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1c7f4b93-6a05-42e8-9d31-8b0e5a2f7c46
-// last-edited: 2026-08-03
+// last-edited: 2026-08-04
 
 package maintenance
 
@@ -41,6 +41,21 @@ func (p *Plugin) dedupeBookFileRowsDef() sdk.OperationDef {
 		Cancellable:     true,
 		Isolate:         false,
 		Timeout:         2 * time.Hour,
+		// The registry watchdog cancels an op that goes ProgressTimeout without an
+		// UpdateProgress stamp (default 5m — see
+		// internal/operations/registry/watchdog.go). The first full production run
+		// was killed at book 19/194 by exactly that:
+		//
+		//   registry: strike recorded kind=stuck message="no progress for 5m12s"
+		//   registry: canceling stuck op
+		//
+		// Per-book cost averages ~45s but is highly variable — a book with 47
+		// duplicate rows does far more work than one with 2 — so a single heavy book
+		// could exceed the window on its own. The primary fix is the intra-book
+		// heartbeat in the loop below; this override is defence in depth for a book
+		// pathological enough to outlast even that, and it matches the precedent set
+		// by malformed-m4b-transcode (backfill.go) for a slow-but-healthy per-item op.
+		ProgressTimeout: 30 * time.Minute,
 		Capabilities:    []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
 		Run:             p.runDedupeBookFileRows,
 	}
@@ -240,10 +255,15 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 			// keeper that carries a fingerprint but no duration silently loses the
 			// duration held by one of its twins.
 			//
-			// That is not hypothetical: the first canary run left "The Trapped Mind
-			// Project" (130 rows for one file) reading 0.00h, because the
-			// fingerprinted row it kept had Duration == 0 while a discarded twin had
-			// the real value.
+			// This was originally written up as an observed loss on "The Trapped Mind
+			// Project", which read 0.00h after its 130 rows were collapsed. That was
+			// WRONG and is retracted: the book's entire audio is a 13.5-second,
+			// 91,958-byte MP3, the surviving row matches the file exactly, and 0.00h
+			// is simply what 13 seconds renders as. A later full-library dry run
+			// confirmed it — "would salvage fields on 0 keepers" across all 194 books.
+			//
+			// The guard stays because the hazard is real even though this was not an
+			// instance of it. Treat it as defence, not as a fix for a known incident.
 			//
 			// So salvage every field the keeper is missing before its twins are
 			// deleted. Only ever FILLS empty fields — a value the keeper already has
@@ -287,6 +307,21 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 				deleted++
 				changedThisBook = true
 			}
+
+			// ⏱️ HEARTBEAT — this is a liveness signal, not a step.
+			//
+			// The watchdog cancels an op that goes ProgressTimeout without an
+			// UpdateProgress stamp, and it cannot tell "slow" from "hung". Reporting
+			// only once per book (at the bottom of this loop) killed the first full
+			// production run at book 19/194: one book's deletes took over five
+			// minutes and the op was cancelled mid-flight.
+			//
+			// StepN(i) deliberately re-reports the CURRENT index rather than i+1 —
+			// the book is not finished, so the bar must not advance. The point is
+			// solely to stamp lastProgressAt so a genuinely-working op is not
+			// mistaken for a stalled one.
+			prog.StepN(i, fmt.Sprintf("Processing book %d/%d (%d rows removed so far)",
+				i+1, len(bookIDs), deleted))
 		}
 
 		// Totals are a plain sum over the surviving rows, so they are only correct
