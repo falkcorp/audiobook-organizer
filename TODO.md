@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.14.1 -->
+<!-- version: 10.15.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-08-04 -->
 
@@ -215,9 +215,50 @@ Pebble-direct before deciding, because the memdb projection strips
       twin holds, and merging is strictly additive. But it is **hardening against a
       latent hazard, not a repair of an observed loss**; no such loss has been
       demonstrated.
-- [ ] **Apply to the remaining ~194 books** (3,239 − 338 rows). No longer blocked —
-      #2129 is merged and deployed, and the canary is now understood to have succeeded
-      on all 10 books rather than 8.
+- [x] **DONE 2026-08-04 — duplicate `book_file` rows are gone library-wide.** Final
+      verification dry run, after a restart so memdb was warm:
+
+      ```
+      314,153 rows scanned, 0 books affected, 0 redundant rows, would delete 0,
+      failed 0
+      ```
+
+      Total across all runs: **204 books, 3,239 redundant rows deleted, 0 failures**,
+      and "salvaged fields on 0 keepers" every time — no keeper anywhere was missing a
+      field one of its twins held, which is the third independent confirmation that the
+      data-loss finding was correctly retracted.
+
+      The run needed three attempts for reasons worth remembering:
+      1. cancelled at book 19/194 by the stuck-op watchdog (progress reported once per
+         book, one book took >5m) → fixed in #2133;
+      2. hit the op's own 2-hour `Timeout` at book 78/176 running sequentially at
+         ~1.7 min/book;
+      3. finished **95 books in 9.5 minutes** once the book loop was parallelised
+         (#2135) — the same work the sequential pass took two hours to half-finish.
+
+- [ ] **⚠️ Duplicate rows were only half the inflation.** Deduping fixed 8 of the 10
+      sampled books (`Shades of Glory` 144.71h → 12.06h, `The Undying Illusionist`
+      261.61h → 17.26h, `Darkness Rises` 205.41h → 14.78h). **Two did not**, because
+      their stored durations are milliseconds, not seconds:
+
+      ```
+      dur=241110   size=1600709   → 0.1 kbps as seconds |  53.1 kbps as ms
+      dur=1307193  size=7997209   → 0.0 kbps as seconds |  48.9 kbps as ms
+      ```
+
+      Every row lands at 48–53 kbps read as ms — a spoken-word MP3 — and
+      9,906h ÷ 1000 ≈ 9.9h, a real audiobook. #2125 fixed the **display** path via
+      `NormalizeDurationSec`; the **stored** rows were never rewritten. Measured
+      prevalence from a 2,733-row sample: **1.9% (53 rows)**, so roughly 6,000
+      library-wide.
+
+      `CreateBookFile` already calls `normalizeBookFileDuration` at the write
+      chokepoint (CONS-18), so no ingest path can re-create this — the affected rows
+      are purely un-backfilled history, which makes this a one-shot repair rather than
+      a recurring battle. `maintenance.duration-reextract` is the tool: fingerprint-
+      first off `AcoustIDFingerprintDurationSec` (verified whole-file ground truth),
+      ffprobe fallback, dry-run by default, writes back both `Book.Duration` and the
+      `book_file` rows. **Dry-run and review before applying.**
 - [ ] **`The Trapped Mind Project` is a 13-second stub, not an audiobook**
       (`01KNDB97CWFSMSEY68P82VDRBF`). Nothing to restore — but two things about it are
       still wrong and worth chasing as a class:
