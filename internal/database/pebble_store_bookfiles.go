@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
 // last-edited: 2026-08-04
 
@@ -284,6 +284,18 @@ func (s *PebbleStore) CreateBookFile(file *BookFile) error {
 // UpdateBookFile replaces an existing BookFile, cleaning up stale secondary
 // indexes when the PID or path changes.
 func (s *PebbleStore) UpdateBookFile(id string, file *BookFile) error {
+	// CONS-18: normalise to the stored standard — Duration is SECONDS. This was the
+	// last write path that did not, while CreateBookFile, UpsertBookFile and
+	// BatchUpsertBookFiles all did, which meant an update could reintroduce the
+	// millisecond corruption those three exist to prevent. Every write now agrees on
+	// the unit, so the invariant holds at the store rather than at each caller.
+	//
+	// Safe to apply unconditionally: DurationLooksLikeMillis only fires when reading
+	// the value as seconds implies an impossible sub-4 kbps file AND dividing by 1000
+	// lands back in a plausible audio band, so a correct row is never touched and a
+	// corrected row is never divided twice.
+	normalizeBookFileDuration(file)
+
 	// We need the bookID to build the primary key; it must be set on file.
 	old, err := s.getBookFileByID(file.BookID, id)
 	if err != nil {
