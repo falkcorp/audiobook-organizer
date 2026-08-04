@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.15.0 -->
+<!-- version: 10.16.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-08-04 -->
 
@@ -236,7 +236,7 @@ Pebble-direct before deciding, because the memdb projection strips
       3. finished **95 books in 9.5 minutes** once the book loop was parallelised
          (#2135) — the same work the sequential pass took two hours to half-finish.
 
-- [ ] **⚠️ Duplicate rows were only half the inflation.** Deduping fixed 8 of the 10
+- [x] **⚠️ Duplicate rows were only half the inflation.** Deduping fixed 8 of the 10
       sampled books (`Shades of Glory` 144.71h → 12.06h, `The Undying Illusionist`
       261.61h → 17.26h, `Darkness Rises` 205.41h → 14.78h). **Two did not**, because
       their stored durations are milliseconds, not seconds:
@@ -252,13 +252,36 @@ Pebble-direct before deciding, because the memdb projection strips
       prevalence from a 2,733-row sample: **1.9% (53 rows)**, so roughly 6,000
       library-wide.
 
-      `CreateBookFile` already calls `normalizeBookFileDuration` at the write
-      chokepoint (CONS-18), so no ingest path can re-create this — the affected rows
-      are purely un-backfilled history, which makes this a one-shot repair rather than
-      a recurring battle. `maintenance.duration-reextract` is the tool: fingerprint-
-      first off `AcoustIDFingerprintDurationSec` (verified whole-file ground truth),
-      ffprobe fallback, dry-run by default, writes back both `Book.Duration` and the
-      `book_file` rows. **Dry-run and review before applying.**
+      **DONE 2026-08-04 (#2137).** Fixed in two parts:
+
+      1. **`UpdateBookFile` now normalises to seconds.** It was the *last* write path
+         that did not — `CreateBookFile`, `UpsertBookFile` and `BatchUpsertBookFiles`
+         all did — so an update could reintroduce the very corruption those three
+         exist to prevent. This also closes the tracked "unguarded `UpdateBookFile`"
+         defect. The unit invariant now holds at the store, not per caller.
+      2. **`maintenance.purge-millisecond-durations`** backfilled the historical rows.
+
+      ```
+      apply : 314,153 rows scanned, 214 books affected, 1,384 ms rows,
+              converted 1,384, recomputed 214 books,
+              skipped 9,352 (already seconds), failed 0
+      verify: 314,153 rows scanned, 0 millisecond durations found — nothing to do
+      ```
+
+      The two books that survived deduping are now right:
+      `01KNDB9V04D7MBTFVDKYWX286E` 19,294.11h → 9,906.11h → **9.90h**, and
+      `01KNDB9ZHJSMBY7D98Y82PQTK0` 15,556.96h → 8,049.06h → **8.05h**. All ten sampled
+      books now read 8–17h.
+
+      ⚠️ **Correct the earlier estimate:** the "1.9% ≈ 6,000 rows" figure extrapolated
+      from a 2,733-row sample was **wrong by ~4×**. The real count is **1,384 rows
+      (0.44%)** — that sample was a targeted dump, not a random one, so its rate did
+      not generalise. Prefer a full scan over an extrapolated sample for anything
+      load-bearing.
+
+      The 9,352 skipped rows are the reassuring part: they sit *inside* the same 214
+      affected books and were correctly left alone, so the predicate discriminates per
+      row, not per book.
 - [ ] **`The Trapped Mind Project` is a 13-second stub, not an audiobook**
       (`01KNDB97CWFSMSEY68P82VDRBF`). Nothing to restore — but two things about it are
       still wrong and worth chasing as a class:
