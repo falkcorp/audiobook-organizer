@@ -1,6 +1,7 @@
 // file: internal/maintenance/jobs/retention_and_hygiene_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: f8d0e5b9-c2a4-5b1d-9e7f-8c3d2a1b0f5e
+// last-edited: 2026-08-04
 
 package jobs
 
@@ -396,6 +397,10 @@ func newPebbleTestStore(t *testing.T) (database.Store, func()) {
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}
+	// Required, not optional — see PebbleStore.WaitForWarmup. Seeding before the
+	// async warmup publishes loses those rows from memdb, which every GetAll*
+	// read then takes the fast path into.
+	store.WaitForWarmup()
 	return store, func() { store.Close() }
 }
 

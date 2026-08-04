@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_sync_ids_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a20f7354-5d7e-49aa-b3b5-94758d52bfc9
-// last-edited: 2026-07-30
+// last-edited: 2026-08-04
 
 // Package jobs_test — coverage for the backfill-sync-ids maintenance job
 // (TASK-04). Every test drives a real PebbleStore because the sync_item /
@@ -71,6 +71,13 @@ func newSyncPebbleStore(t *testing.T) *database.PebbleStore {
 	t.Helper()
 	store, err := database.NewPebbleStore(t.TempDir())
 	require.NoError(t, err)
+	// Required, not optional — see PebbleStore.WaitForWarmup. The memdb warmup
+	// runs async from NewPebbleStore, and while it is in flight mem() is nil, so
+	// every CreateBook write-through is silently dropped; warmup then publishes a
+	// memdb built from the empty just-opened DB. The books exist in Pebble but not
+	// in memdb, and this job enumerates with ListBookIDs, which takes the memdb
+	// fast path — so a seeded book is never visited and never gets a syncID.
+	store.WaitForWarmup()
 	t.Cleanup(func() { _ = store.Close() })
 	return store
 }

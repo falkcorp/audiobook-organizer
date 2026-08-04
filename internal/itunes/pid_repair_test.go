@@ -1,7 +1,7 @@
 // file: internal/itunes/pid_repair_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3e7b0a94-6c21-4d58-8f39-2a1c7e5b0d64
-// last-edited: 2026-07-23
+// last-edited: 2026-08-04
 
 package itunes
 
@@ -21,6 +21,11 @@ func newRepairTestStore(t *testing.T) *database.PebbleStore {
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}
+	// Required, not optional — see PebbleStore.WaitForWarmup. Writes made while
+	// the async warmup is still snapshotting have their memdb write-through
+	// dropped, and the published memdb then omits them. Without this the repair
+	// tests read back a book_file that is in Pebble but missing from memdb.
+	store.WaitForWarmup()
 	t.Cleanup(func() { _ = store.Close() })
 	return store
 }
