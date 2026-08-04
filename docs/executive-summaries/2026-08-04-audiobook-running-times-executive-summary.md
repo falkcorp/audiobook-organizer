@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-08-04-audiobook-running-times-executive-summary.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 4c2a5631-03db-4f50-ab49-7056ec114fe6 -->
 <!-- last-edited: 2026-08-04 -->
 
@@ -135,7 +135,37 @@ hours only half-completing.
 Nothing was ever at risk during any of this. Each book is saved as it completes, and
 re-running simply picks up where the last attempt stopped.
 
-## What is still wrong
+## And now the second half is fixed too
+
+The millisecond problem described below has since been repaired, and the fix came in
+two parts.
+
+The **first** matters more than the cleanup itself. Audiobook lengths are saved in
+several different places in the code, and all but one of them already corrected a
+millisecond value on the way in. The one that didn't was the path used when a book is
+**updated** — so an edit could quietly reintroduce the very problem the others existed
+to prevent. That gap is now closed, which means this cannot come back.
+
+The **second** was a one-time repair of the records already stored wrong:
+
+> **314,153 records scanned. 214 books affected. 1,384 corrected. 0 failures.**
+>
+> Re-checked afterwards: **0 remaining.**
+
+The two stubborn books are now right — the one that read **19,294 hours** now reads
+**9.90 hours**, and the one that read 15,557 now reads 8.05. Every one of the ten
+books tracked through this work now shows a believable length, between 8 and 17 hours.
+
+A detail worth trusting the tool for: within those same 214 books, **9,352 records
+were examined and correctly left alone** because they were already in seconds. The
+test is applied to each individual record, not assumed for a whole book.
+
+One correction to an earlier figure. This was estimated at "about 6,000 records"
+based on a sample. The true number is **1,384** — the sample was not representative,
+and the estimate was roughly four times too high. The full scan is the number to
+trust.
+
+## What was still wrong (now fixed — see above)
 
 Duplicate records turned out to be only **half** the problem.
 
