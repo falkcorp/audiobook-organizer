@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
-// last-edited: 2026-07-23
+// last-edited: 2026-08-04
 
 package database
 
@@ -722,37 +722,89 @@ func (s *PebbleStore) GetBookFileByAcoustIDFuzzy(fp string, minSimilarity float6
 	return nil, iter.Error()
 }
 
-// DeleteBookFile removes the BookFile with the given ID (and its secondary
-// indexes) from the store. It requires the bookID to be available on the
-// struct; the caller must have obtained the record first, so we scan the
-// secondary path index or retrieve by ID. Since we only have fileID here we
-// perform a prefix scan to locate the record.
-func (s *PebbleStore) DeleteBookFile(id string) error {
-	// Scan all book_file: keys to find the one with this file ID.
-	prefix := []byte("book_file:")
+// lookupBookFileByIDIndex resolves a BookFile from the book_file_id index in two
+// point lookups. Returns nil when the index entry or the row it points at is
+// missing, so the caller can fall back to a scan rather than treat a stale index
+// as "already deleted" — a dangling index entry must never make a live row
+// invisible to deletion.
+func (s *PebbleStore) lookupBookFileByIDIndex(id string) *BookFile {
+	idxVal, idxCloser, err := s.db.Get([]byte("book_file_id:" + id))
+	if err != nil {
+		return nil // ErrNotFound for pre-index rows; fall back to the scan
+	}
+	primaryKey := append([]byte(nil), idxVal...) // copy: valid only until Close
+	idxCloser.Close()
+
+	val, closer, err := s.db.Get(primaryKey)
+	if err != nil {
+		return nil
+	}
+	defer closer.Close()
+	var f BookFile
+	if err := json.Unmarshal(val, &f); err != nil {
+		return nil
+	}
+	return &f
+}
+
+// scanForBookFileByID is the pre-index fallback: a full iteration of book_file:
+// keys matching on the <fileID> suffix. O(N) over every book_file row — only
+// reached for rows written before writeBookFileSecondaryIndexes existed.
+func (s *PebbleStore) scanForBookFileByID(id string) *BookFile {
 	iter, err := s.db.NewIter(&pebble.IterOptions{
-		LowerBound: prefix,
+		LowerBound: []byte("book_file:"),
 		UpperBound: []byte("book_file;"),
 	})
 	if err != nil {
-		return err
+		return nil
 	}
+	defer iter.Close()
 
-	var found *BookFile
 	for iter.First(); iter.Valid(); iter.Next() {
 		// Key format: book_file:<bookID>:<fileID>
-		key := string(iter.Key())
-		parts := strings.SplitN(key, ":", 3)
+		parts := strings.SplitN(string(iter.Key()), ":", 3)
 		if len(parts) == 3 && parts[2] == id {
 			var f BookFile
 			if jsonErr := json.Unmarshal(iter.Value(), &f); jsonErr == nil {
-				found = &f
+				return &f
 			}
-			break
+			return nil
 		}
 	}
-	iter.Close()
+	return nil
+}
 
+// DeleteBookFile removes the BookFile with the given ID (and its secondary
+// indexes) from the store.
+//
+// Resolution goes through the book_file_id index rather than a scan. The primary
+// key is book_file:<bookID>:<fileID>, so an ID-only caller cannot seek it directly
+// — which is why this used to iterate every book_file: key looking for a suffix
+// match, an O(N) walk **per deleted row**.
+//
+// The book_file_id:<fileID> → book_file:<bookID>:<fileID> index already existed
+// for exactly this ("allows ID-only lookups", writeBookFileSecondaryIndexes) and
+// is what UpdateBookFileHashes/SetBookFileHash use. This now uses it too.
+//
+// ⚠️ SCOPE OF THE WIN — measured, not assumed. At 8,000 rows the two paths are
+// indistinguishable (9.196ms vs 9.144ms per delete): Pebble walks that many keys
+// for free, and per-delete cost is dominated by fixed overhead (the Sync commit
+// and the change notification), not by the lookup. Extrapolating the walk linearly
+// to the production 316,453 rows puts the scan at roughly 0.36s per delete, so for
+// dedupe-book-file-rows (~15 deletes/book) it accounts for perhaps 5s of a book
+// that takes ~90s.
+//
+// So this removes a real O(N)-per-delete and is strictly better, but it is NOT the
+// explanation for that op's runtime. That cost is still unattributed and wants a
+// pprof run against production (make deploy-debug) rather than another guess.
+//
+// The scan survives ONLY as a fallback for rows written before the index existed;
+// deleting such a row must still work, just slowly.
+func (s *PebbleStore) DeleteBookFile(id string) error {
+	found := s.lookupBookFileByIDIndex(id)
+	if found == nil {
+		found = s.scanForBookFileByID(id)
+	}
 	if found == nil {
 		return nil // already gone
 	}
