@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
-// last-edited: 2026-07-17
+// last-edited: 2026-08-04
 
 package maintenance
 
@@ -42,6 +42,7 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.archiveSweepDef(),
 		p.orphanBookFilesCleanupDef(),
 		p.dedupeBookFileRowsDef(),
+		p.purgeMillisecondDurationsDef(),
 		p.integrityCheckDef(),
 
 		// --- database ---
