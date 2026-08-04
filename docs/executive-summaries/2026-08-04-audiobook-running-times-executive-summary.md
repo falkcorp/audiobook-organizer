@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-08-04-audiobook-running-times-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 4c2a5631-03db-4f50-ab49-7056ec114fe6 -->
 <!-- last-edited: 2026-08-04 -->
 
@@ -100,6 +100,59 @@ That is its own bug and it is now written down rather than patched in a hurry, b
 it affects anything that changes a book's files, not just this one tool. In the
 meantime the cleanup tool says so plainly when it finishes, so nobody concludes it did
 nothing and runs it a second time.
+
+## The cleanup is finished
+
+Every duplicate record in the library is gone. The final check, run against the whole
+library:
+
+> **314,153 records scanned. 0 books affected. 0 duplicates. 0 failures.**
+
+In total **3,239 duplicate records across 204 books** were removed, with nothing lost
+along the way.
+
+It took three attempts, and the reasons are worth knowing because they were all about
+the tool rather than your data.
+
+The first attempt was **killed by a safety mechanism**. The app watches long-running
+jobs and cancels anything that stops reporting progress, on the assumption it has
+hung — a sensible rule that exists because a job once ran silently for hours. But this
+job only reported after finishing each book, and one book took longer than the
+five-minute limit. From the outside, working hard and hanging looked identical. It was
+stopped 19 books in.
+
+The second attempt ran out of its own two-hour budget at book 78 of 176. It was
+processing books **one at a time**, roughly a minute and three quarters each. At that
+rate the job could not finish the work it was created to do — it would have needed
+three or four separate runs.
+
+So the job was changed to process many books **at once**. That is safe here for a
+specific reason: each book's records belong to that book alone, so two workers can
+never reach for the same thing. The difference was stark — the third attempt finished
+**95 books in nine and a half minutes**, work the one-at-a-time version had spent two
+hours only half-completing.
+
+Nothing was ever at risk during any of this. Each book is saved as it completes, and
+re-running simply picks up where the last attempt stopped.
+
+## What is still wrong
+
+Duplicate records turned out to be only **half** the problem.
+
+Of ten books checked closely, eight are now correct — 144 hours became 12, 261 became
+17, 205 became 15. **Two are still wrong**, and for a different reason: their stored
+lengths are recorded in *milliseconds* rather than seconds. Reading them as
+milliseconds gives a bitrate that a real spoken-word recording would have; reading
+them as seconds gives one no audio file could possibly have. And 9,906 hours divided by
+1,000 is 9.9 hours — an ordinary audiobook.
+
+The earlier fix corrected how these are **displayed**. It never rewrote what is
+**stored**. About 1.9% of records are affected — roughly six thousand.
+
+The good news is this cannot spread: new files are already corrected as they are saved,
+so the affected records are purely old history. It is a one-time repair, and the tool
+for it already exists. That is the next job, and it will be previewed before anything
+is changed.
 
 ## Also fixed
 
