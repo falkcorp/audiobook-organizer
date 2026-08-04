@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.13.8 -->
+<!-- version: 10.13.9 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-08-03 -->
+<!-- last-edited: 2026-08-04 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,43 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+<!-- file: todo.d/2026-08-03-flaky-apply-pid-repair-same-file.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 6f10b7e4-9c25-4d83-a0f6-14b7e29d3c05 -->
+<!-- last-edited: 2026-08-03 -->
+
+- [ ] **Flaky: `TestApplyPIDRepairSameFile`** (`internal/itunes`) failed
+      `Minimal CI / Go Tests (short, race)` on PR #2126 — a PR that touches only
+      `internal/server/server_maintenance_deps.go` and cannot affect the iTunes
+      package.
+      Verified as a flake, not a regression: **10 consecutive passes on the PR
+      branch and 10 on `main`**, both with `-race` exactly as CI runs it.
+      This is the **second** flake found on 2026-08-03; see
+      [[2026-08-03-flaky-backfill-syncids-race-sanity]]. Two independent flaky
+      tests blocking unrelated PRs in one evening suggests a shared cause worth
+      one investigation rather than two: both are concurrency tests, both pass
+      locally, both fail only under CI load. Suspect a shared fixture, a fixed
+      sleep, or an unsynchronised goroutine handoff that only loses the race on
+      a slower/contended runner.
+      Do NOT keep re-running them — that is how a flake becomes permanent and
+      how a real regression eventually gets waved through. Related:
+      [[project_ci_gotests_intermittent_stalls]].
+
+<!-- file: todo.d/2026-08-03-flaky-backfill-syncids-race-sanity.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 2e58c9a1-7b34-4f60-a812-3d90f6c47b25 -->
+<!-- last-edited: 2026-08-03 -->
+
+- [ ] **Flaky: `TestBackfillSyncIDsJob_ConcurrentRaceSanity`** (`internal/maintenance/jobs`)
+      failed the Coverage Floor gate on PR #2123, a PR that touches only
+      `internal/server/middleware/absauth.go` and cannot affect this package.
+      Verified as a flake, not a regression: **10 consecutive passes on the PR
+      branch and 10 on `main`** locally. It fails only under CI load, which fits
+      a timing-sensitive concurrency assertion.
+      Do not just keep re-running it — find the timing assumption (likely a
+      fixed sleep or an unsynchronised goroutine handoff) and make the test wait
+      on a condition instead of a duration. Related: [[project_ci_gotests_intermittent_stalls]].
 
 <!-- file: todo.d/2026-08-02-bookfile-duplication-and-duration-units.md -->
 <!-- version: 1.0.0 -->
