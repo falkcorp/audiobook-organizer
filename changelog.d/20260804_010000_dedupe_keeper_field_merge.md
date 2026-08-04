@@ -1,21 +1,26 @@
 <!-- file: changelog.d/20260804_010000_dedupe_keeper_field_merge.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: ea73f5ef-cfab-4f6a-80c9-88fc14bacb1e -->
 <!-- last-edited: 2026-08-04 -->
 
 ### Fixed
 
-- `maintenance.dedupe-book-file-rows` no longer destroys data held only by the rows
+- `maintenance.dedupe-book-file-rows` can no longer lose data held only by the rows
   it deletes. The op collapses redundant `book_file` rows that all describe the same
   file on disk, and it chose which row to keep by ranking them. But ranking picks a
   whole **row**, and the best row is not guaranteed to be the most complete one: a
   row carrying an AcoustID fingerprint could have no duration at all, while the
   duration lived on a twin that was then deleted.
 
-  The first canary run made this concrete. `The Trapped Mind Project` had 130 rows
-  for one file. The op correctly kept the fingerprinted row — a fingerprint costs a
-  full-file decode to regenerate — and correctly deleted the other 129, but that row
-  had `Duration == 0`, so the book went to **0.00h**.
+  **Correction (2026-08-04):** this was first written up as a confirmed loss on
+  `The Trapped Mind Project`, which showed 0.00h after its 130 rows were collapsed.
+  That was wrong. The book's entire audio is a 13.5-second, 91,958-byte MP3, and the
+  surviving row matches the file exactly — 0.00h is simply what 13 seconds looks
+  like, and the op behaved correctly on all 10 canary books.
+
+  The change below is therefore **hardening against a latent hazard, not a repair of
+  an observed loss**: ranking selects a whole row, so a keeper genuinely can lack a
+  field one of its twins holds, and merging is strictly additive.
 
   The keeper now absorbs every field it is missing from the rows about to be
   destroyed: duration, AcoustID fingerprint, fingerprint duration, file hash, and

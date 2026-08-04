@@ -1,5 +1,5 @@
 <!-- file: todo.d/2026-08-04-recompute-aggregates-stale-memdb.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 4a29d7e1-83b6-4c50-9f27-1e08b5c3a64d -->
 <!-- last-edited: 2026-08-04 -->
 
@@ -32,9 +32,11 @@
       Until it is fixed, `dedupe-book-file-rows` says so in its completion
       message rather than letting an operator conclude the run did nothing.
 
-- [ ] **Restore the duration on `The Trapped Mind Project`**
-      (`01KNDB97CWFSMSEY68P82VDRBF`). The first canary kept a fingerprinted row
-      whose `Duration` was 0 and deleted the 129 twins that held the real value,
-      leaving the book at 0.00h. The merge fix prevents recurrence but cannot
-      undo it — the file itself is intact, so
-      `maintenance.duration-reextract` will recover the value from ffprobe.
+- [x] ~~**Restore the duration on `The Trapped Mind Project`**~~ **RETRACTED
+      2026-08-04 — nothing to restore.** The original claim here was that the
+      canary kept a fingerprinted row whose `Duration` was 0 and deleted the 129
+      twins holding the real value. Probing the audio disproves it: the book's
+      entire content is a 13.5-second, 91,958-byte MP3, and the surviving row
+      (`file_size=91958`, `duration=13`) matches it exactly. 0.00h is simply what
+      13 seconds looks like. The op behaved correctly; the error was reading a
+      rounded display value as evidence of loss without checking the file.
