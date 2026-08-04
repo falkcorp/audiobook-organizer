@@ -526,9 +526,26 @@ func (s *Server) ApplyTranscriptionCandidate(_ context.Context, bookID, gatedTit
 			bookID, gatedTitle, gatedAuthor, cand.Title, cand.Author)
 	}
 
-	_, err = s.metadataFetchService.ApplyMetadataCandidate(bookID, cand, nil)
+	// 🔴 APPLY ONLY WHAT WAS GATED. This used to pass nil, which means "no
+	// allowlist" — so the ENTIRE candidate landed: narrator, series,
+	// series_position, year, publisher, ISBN, description, language and
+	// cover_url, none of which any gate above ever looked at.
+	//
+	// The three gates in runAutoMatchTranscribed and the two TOCTOU re-checks
+	// here all reason about exactly two fields: title and author. Writing eight
+	// more on the strength of those two checks is an unreviewed write, and this
+	// repo has already shipped write-back bugs that wiped Author/Series.
+	//
+	// Widening this is a deliberate decision, not a default — add a field here
+	// only once something actually gates on it.
+	_, err = s.metadataFetchService.ApplyMetadataCandidate(bookID, cand, transcriptionApplyFields)
 	return err
 }
+
+// transcriptionApplyFields is the allowlist for auto-applied transcription
+// matches. It must stay in lockstep with what runAutoMatchTranscribed gates on
+// (normalized exact title equality + author containment).
+var transcriptionApplyFields = []string{"title", "author"}
 
 // WaitForOp implements maintenance.ServerDeps. It polls the database at 5-second
 // intervals until the operation reaches a terminal state or ctx is canceled.
