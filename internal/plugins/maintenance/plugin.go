@@ -41,6 +41,7 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.trashCleanupDef(),
 		p.archiveSweepDef(),
 		p.orphanBookFilesCleanupDef(),
+		p.dedupeBookFileRowsDef(),
 		p.integrityCheckDef(),
 
 		// --- database ---
