@@ -90,6 +90,79 @@ func TestRankKeeper_PrefersRowWithFileHash(t *testing.T) {
 	}
 }
 
+// 🔴 THE CANARY REGRESSION. "The Trapped Mind Project" had 130 rows for one
+// file. Ranking kept the fingerprinted row, which had Duration == 0, and the
+// book dropped to 0.00h — the duration existed only on rows that were then
+// deleted.
+//
+// Ranking picks a ROW; the keeper must instead end up with the best of EVERY
+// field before its twins are destroyed.
+func TestMergeMissingFields_RecoversDurationFromADiscardedTwin(t *testing.T) {
+	keeper := database.BookFile{ID: "keeper", AcoustIDFingerprint: []byte{0x01}}
+	twins := []database.BookFile{
+		{ID: "twin-a", Duration: 0},
+		{ID: "twin-b", Duration: 21877},
+	}
+	got, changed := mergeMissingFields(keeper, twins)
+	if !changed {
+		t.Fatal("merge reported no change, but the keeper was missing a duration")
+	}
+	if got.Duration != 21877 {
+		t.Fatalf("duration = %d, want 21877 recovered from the twin that is about to be deleted", got.Duration)
+	}
+	if len(got.AcoustIDFingerprint) != 1 {
+		t.Fatal("the keeper's own fingerprint was lost during the merge")
+	}
+}
+
+// The merge must be strictly additive: a value the keeper already holds always
+// wins, so this can never replace good data with worse.
+func TestMergeMissingFields_NeverOverwritesExistingValues(t *testing.T) {
+	keeper := database.BookFile{
+		ID: "keeper", Duration: 3600, FileHash: "good", FileSize: 999,
+		AcoustIDFingerprint: []byte{0xAA},
+	}
+	twins := []database.BookFile{{
+		ID: "twin", Duration: 1, FileHash: "worse", FileSize: 1,
+		AcoustIDFingerprint: []byte{0xBB},
+	}}
+	got, changed := mergeMissingFields(keeper, twins)
+	if changed {
+		t.Fatal("merge reported a change although the keeper was complete")
+	}
+	if got.Duration != 3600 || got.FileHash != "good" || got.FileSize != 999 ||
+		got.AcoustIDFingerprint[0] != 0xAA {
+		t.Fatalf("an existing keeper value was overwritten: %+v", got)
+	}
+}
+
+// A fingerprint can be salvaged too, not just a duration.
+func TestMergeMissingFields_RecoversFingerprintAndFpDuration(t *testing.T) {
+	keeper := database.BookFile{ID: "keeper", Duration: 600}
+	twins := []database.BookFile{{
+		ID: "twin", AcoustIDFingerprint: []byte{0x07, 0x08},
+		AcoustIDFingerprintDurationSec: 601.5,
+	}}
+	got, changed := mergeMissingFields(keeper, twins)
+	if !changed || len(got.AcoustIDFingerprint) != 2 {
+		t.Fatalf("fingerprint was not salvaged: %+v", got)
+	}
+	if got.AcoustIDFingerprintDurationSec != 601.5 {
+		t.Fatalf("fingerprint duration = %v, want 601.5", got.AcoustIDFingerprintDurationSec)
+	}
+}
+
+// Nothing to salvage means nothing is written — the op must not issue a pointless
+// UpdateBookFile, which is the one write path that bypasses the millisecond guard.
+func TestMergeMissingFields_NoChangeWhenNothingToSalvage(t *testing.T) {
+	keeper := database.BookFile{ID: "k", Duration: 100, FileSize: 10, FileHash: "h",
+		AcoustIDFingerprint: []byte{0x01}, AcoustIDFingerprintDurationSec: 100}
+	_, changed := mergeMissingFields(keeper, []database.BookFile{{ID: "t"}})
+	if changed {
+		t.Fatal("merge reported a change with nothing to salvage")
+	}
+}
+
 // A single row is returned untouched — nothing to choose, nothing to delete.
 func TestRankKeeper_SingleRowUnchanged(t *testing.T) {
 	rows := []database.BookFile{{ID: "only", Duration: 42}}

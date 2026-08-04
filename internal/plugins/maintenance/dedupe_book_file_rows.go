@@ -100,6 +100,40 @@ func rankKeeper(files []database.BookFile) []database.BookFile {
 	return out
 }
 
+// mergeMissingFields fills fields the keeper lacks from the twins about to be
+// deleted, and reports whether anything was salvaged.
+//
+// Strictly additive: a field the keeper already has is never touched, so the
+// merge can only ever recover data, never degrade it. The twins are scanned in
+// ranked order, so the best-evidenced donor is consulted first.
+func mergeMissingFields(keeper database.BookFile, twins []database.BookFile) (database.BookFile, bool) {
+	changed := false
+	for i := range twins {
+		t := twins[i]
+		if keeper.Duration <= 0 && t.Duration > 0 {
+			keeper.Duration = t.Duration
+			changed = true
+		}
+		if len(keeper.AcoustIDFingerprint) == 0 && len(t.AcoustIDFingerprint) > 0 {
+			keeper.AcoustIDFingerprint = t.AcoustIDFingerprint
+			changed = true
+		}
+		if strings.TrimSpace(keeper.FileHash) == "" && strings.TrimSpace(t.FileHash) != "" {
+			keeper.FileHash = t.FileHash
+			changed = true
+		}
+		if keeper.FileSize <= 0 && t.FileSize > 0 {
+			keeper.FileSize = t.FileSize
+			changed = true
+		}
+		if keeper.AcoustIDFingerprintDurationSec <= 0 && t.AcoustIDFingerprintDurationSec > 0 {
+			keeper.AcoustIDFingerprintDurationSec = t.AcoustIDFingerprintDurationSec
+			changed = true
+		}
+	}
+	return keeper, changed
+}
+
 func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
 	var params DedupeBookFileRowsParams
 	if len(raw) > 0 {
@@ -164,7 +198,7 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 	prog.Start(fmt.Sprintf("%d book(s) hold duplicate book_file rows (%d redundant rows)",
 		len(affected), dupRows))
 
-	var deleted, wouldDelete, failed, recomputed int
+	var deleted, wouldDelete, failed, recomputed, salvaged int
 	var examples []string
 
 	// PASS 2 — per affected book only, so the expensive full-fidelity read is paid
@@ -202,14 +236,47 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 			ranked := rankKeeper(rows)
 			keeper, redundant := ranked[0], ranked[1:]
 
+			// 🔴 MERGE, DON'T JUST PICK. Ranking alone chooses a whole ROW, so a
+			// keeper that carries a fingerprint but no duration silently loses the
+			// duration held by one of its twins.
+			//
+			// That is not hypothetical: the first canary run left "The Trapped Mind
+			// Project" (130 rows for one file) reading 0.00h, because the
+			// fingerprinted row it kept had Duration == 0 while a discarded twin had
+			// the real value.
+			//
+			// So salvage every field the keeper is missing before its twins are
+			// deleted. Only ever FILLS empty fields — a value the keeper already has
+			// always wins, so this can never overwrite good data with worse.
+			merged, changed := mergeMissingFields(keeper, redundant)
+			keeper = merged
+
 			if len(examples) < 10 {
 				examples = append(examples, fmt.Sprintf("%s: %d rows for %q (keeping %s)",
 					bookID, len(rows), shortPath(path), keeper.ID))
 			}
 			if !params.Apply {
 				wouldDelete += len(redundant)
+				if changed {
+					salvaged++
+				}
 				continue
 			}
+
+			// Persist the salvaged fields BEFORE deleting the donors. If the write
+			// fails we skip this group entirely rather than delete rows whose data
+			// was never rescued — losing a duration is recoverable, losing it while
+			// also deleting the only copy is not.
+			if changed {
+				if uerr := store.UpdateBookFile(keeper.ID, &keeper); uerr != nil {
+					failed++
+					log.Warn("dedupe-book-file-rows: could not persist salvaged fields; leaving this group intact",
+						"book_id", bookID, "keeper", keeper.ID, "err", uerr)
+					continue
+				}
+				salvaged++
+			}
+
 			for ri := range redundant {
 				if derr := store.DeleteBookFile(redundant[ri].ID); derr != nil {
 					failed++
@@ -236,12 +303,19 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 		prog.StepN(i+1, fmt.Sprintf("Processed %d/%d affected books", i+1, len(bookIDs)))
 	}
 
-	verb := fmt.Sprintf("would delete %d", wouldDelete)
+	verb := fmt.Sprintf("would delete %d (would salvage fields on %d keepers)", wouldDelete, salvaged)
 	if params.Apply {
-		verb = fmt.Sprintf("deleted %d (recomputed %d books)", deleted, recomputed)
+		verb = fmt.Sprintf("deleted %d (salvaged fields on %d keepers, recomputed %d books)",
+			deleted, salvaged, recomputed)
 	}
+	// ⚠️ Operational note, learned the hard way on the first canary: the corrected
+	// totals are NOT visible until memdb catches up. Immediately after an apply the
+	// list projection still reported the pre-delete duration and file count, and a
+	// service restart was what surfaced the (already correct) values. Say so, or
+	// the next operator concludes the op did nothing.
 	summary := fmt.Sprintf(
-		"dedupe-book-file-rows: %d rows scanned, %d books affected, %d redundant rows, %s, failed %d | e.g. %s",
+		"dedupe-book-file-rows: %d rows scanned, %d books affected, %d redundant rows, %s, failed %d "+
+			"| NOTE: corrected totals may not appear until memdb refreshes (restart) | e.g. %s",
 		len(cores), len(affected), dupRows, verb, failed, strings.Join(examples, "; "))
 	_ = reporter.Log(slog.LevelInfo, summary)
 	prog.Done(summary)
