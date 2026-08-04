@@ -51,6 +51,49 @@ into one of the curated sections below, is a normal direct edit.
       fixed sleep or an unsynchronised goroutine handoff) and make the test wait
       on a condition instead of a duration. Related: [[project_ci_gotests_intermittent_stalls]].
 
+      **Update 2026-08-04 — a sibling test failed the same way, and there is now a
+      concrete mechanism to test.** `TestBackfillSyncIDsJob_FreshLibrary` (same
+      file) failed CI on PR #2129, which touches only `internal/plugins/maintenance`
+      and docs — a different package entirely. It seeds 20 books and then asserts
+      each has a syncID; one did not:
+
+      ```
+      backfill_sync_ids_test.go:102: Should be true
+        Messages: book 01KZ6QV6AZPW2AE93P7M0TRVFN has no syncID
+      ```
+
+      25/25 passes locally with `-race`, so it is timing-dependent like its sibling.
+
+      **Mechanism — CONFIRMED by reading the warmup path; fix shipped in #2131.**
+      The job enumerates with `store.ListBookIDs()`, and its comment
+      (`backfill_sync_ids.go:61-64`) correctly rules out the `GetAllBooksFrom`
+      pagination cap — but `ListBookIDs` still takes the memdb fast path
+      (`pebble_store.go:594`). `NewPebbleStore` starts warmup in a goroutine and
+      publishes only at the very end (`memPtr.Store(memStore)`, `pebble_store.go:291`).
+      Until it does, `mem()` is nil — which makes *reads* safe, since they fall back
+      to Pebble, but silently no-ops every *write's* memdb write-through. A test
+      seeding books in that window leaves them in Pebble while the published memdb
+      never saw them, so those books are never enumerated and never get a syncID.
+
+      `PebbleStore.WaitForWarmup` documents this as mandatory for tests
+      (`pebble_store.go:147-152`) and three helpers were skipping it —
+      `newSyncPebbleStore`, `newPebbleTestStore`, `newRepairTestStore`. #2131 adds
+      the call to all three.
+
+      **Keep this item open until a green CI streak earns closing it.** The fix rests
+      on the documented invariant plus a matching failure signature, *not* on a
+      reproduced red test: on an empty temp DB the window is sub-millisecond, and 40
+      iterations under 20× CPU contention would not force it. Calling `WaitForWarmup`
+      is correct regardless of whether it proves to be the whole story.
+
+      Production is not affected — warmup is a one-time startup affair there and
+      reads fall back to Pebble until it publishes.
+
+      Note this is a *different* mechanism from
+      `todo.d/2026-08-01-assignorphanvgs-offset-pagination.md`, which is about offset
+      arithmetic over a swapping snapshot. Same underlying async-warmup design, two
+      distinct failure modes; a fix should consider both.
+
 <!-- file: todo.d/2026-08-02-bookfile-duplication-and-duration-units.md -->
 <!-- version: 1.0.0 -->
 <!-- guid: 9b41c7e2-05d8-4a63-b7f0-3e26c8149ad5 -->
