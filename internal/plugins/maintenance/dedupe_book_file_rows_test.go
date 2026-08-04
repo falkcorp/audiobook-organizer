@@ -1,12 +1,13 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3b6d19a7-4e52-4c08-b7f1-90a5e2c4d738
-// last-edited: 2026-08-03
+// last-edited: 2026-08-04
 
 package maintenance
 
 import (
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
@@ -160,6 +161,28 @@ func TestMergeMissingFields_NoChangeWhenNothingToSalvage(t *testing.T) {
 	_, changed := mergeMissingFields(keeper, []database.BookFile{{ID: "t"}})
 	if changed {
 		t.Fatal("merge reported a change with nothing to salvage")
+	}
+}
+
+// 🔴 THE PRODUCTION-RUN REGRESSION. The first full run was cancelled at book
+// 19/194 by the registry watchdog:
+//
+//	registry: strike recorded kind=stuck message="no progress for 5m12s"
+//	registry: canceling stuck op
+//
+// The op reported progress only once per book, and one book's deletes took
+// longer than the watchdog's 5-minute default — so a healthy op was
+// indistinguishable from a hung one. The declared override must survive, or the
+// op silently reverts to being killable mid-run.
+func TestDedupeBookFileRowsDef_DeclaresAGenerousProgressTimeout(t *testing.T) {
+	def := (&Plugin{}).dedupeBookFileRowsDef()
+	if def.ProgressTimeout <= 5*time.Minute {
+		t.Fatalf("ProgressTimeout = %v, want > 5m (the watchdog default) — a slow "+
+			"but healthy book must not be cancelled as 'stuck'", def.ProgressTimeout)
+	}
+	// The op must still be bounded overall; an unbounded op can wedge a worker slot.
+	if def.Timeout <= def.ProgressTimeout {
+		t.Fatalf("Timeout (%v) must exceed ProgressTimeout (%v)", def.Timeout, def.ProgressTimeout)
 	}
 }
 
