@@ -254,6 +254,22 @@ func (s *Server) wireABSRoutes() {
 		os.Exit(1)
 	}
 
+	// Warm the contributor cache in the background. Building it is a full-library
+	// scan (~6s here), so without this the FIRST request after every restart pays
+	// it — and that request is normally the client's Authors tab, which then looks
+	// like a hang. Measured: 6,104ms cold vs 105ms warm.
+	//
+	// 🔑 Waits for the memdb warmup first. The cache stores the set of authors of
+	// VISIBLE books; building it against a half-published memdb would cache a view
+	// of a library that does not exist yet, and it would then be served for the
+	// whole TTL. A slow-but-correct warm beats a fast wrong one.
+	go func() {
+		if ps, ok := s.Store().(*database.PebbleStore); ok {
+			ps.WaitForWarmup()
+		}
+		handler.WarmContributors(context.Background())
+	}()
+
 	// Own group so the ABS surface carries its own body limit, distinct from /api/v1.
 	// Rate limiting for /login and /auth/refresh is enforced inside the handler (per
 	// source IP, counting FAILURES only) rather than as a blanket per-request limiter:

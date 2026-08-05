@@ -8,6 +8,7 @@ package abs
 import (
 	"context"
 	"encoding/base64"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"sort"
@@ -992,4 +993,24 @@ func (h *Handler) resolveItem(c *gin.Context) *database.Book {
 		return nil
 	}
 	return book
+}
+
+// WarmContributors builds the author/narrator cache ahead of the first request.
+//
+// The build is a full-library scan and takes ~6s on this library, so the FIRST
+// caller after every start pays it while every later one is served in ~100ms.
+// That first caller is normally the client's Authors tab, which is exactly the
+// request that must not hang — and a restart is precisely when someone is most
+// likely to be looking at the app.
+//
+// Deliberately best-effort: a failure here only means the next request rebuilds,
+// which is the behaviour that existed before this. Errors are logged, never
+// returned, and never block startup.
+func (h *Handler) WarmContributors(ctx context.Context) {
+	started := time.Now()
+	if _, _, err := h.contributorsCached(ctx); err != nil {
+		slog.Warn("abs: contributor cache warm failed; the first request will rebuild it", "err", err)
+		return
+	}
+	slog.Info("abs: contributor cache warmed", "duration_ms", time.Since(started).Milliseconds())
 }
