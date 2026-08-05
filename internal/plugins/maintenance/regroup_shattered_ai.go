@@ -137,11 +137,22 @@ func (p *Plugin) runRegroupShatteredAI(ctx context.Context, raw json.RawMessage,
 		if ferr != nil {
 			return nil // non-fatal: skip on read error
 		}
+		// Runtime is what tells a SERIES apart from a CHAPTER SET — six two-hour
+		// files are six books, six three-minute files are six chapters. Summed from
+		// the BookFile rows and normalised per row, because ~1.9% of historical rows
+		// stored milliseconds and a 1000x-inflated member would look book-length to
+		// the guard that depends on this.
+		durationSec := 0
+		for i := range files {
+			durationSec += database.NormalizeDurationSec(files[i].FileSize, files[i].Duration)
+		}
+
 		v := itunesservice.ShatterBook{
-			BookID:    b.ID,
-			Title:     b.Title,
-			FileCount: len(files),
-			IsPrimary: b.IsPrimaryVersion == nil || *b.IsPrimaryVersion,
+			BookID:      b.ID,
+			Title:       b.Title,
+			FileCount:   len(files),
+			IsPrimary:   b.IsPrimaryVersion == nil || *b.IsPrimaryVersion,
+			DurationSec: durationSec,
 		}
 		// Prefer the real BookFile path (more reliable than the virtual Book.FilePath);
 		// fall back to Book.FilePath for zero-file virtual shells.

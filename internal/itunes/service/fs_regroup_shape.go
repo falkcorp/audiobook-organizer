@@ -94,6 +94,13 @@ type ShatterBook struct {
 	Title      string // scanner-derived title (album tag); may be empty
 	Author     string // display author when known; never used for the FOLDER key
 
+	// DurationSec is the book's total runtime in SECONDS, 0 when unknown.
+	//
+	// 🔴 This is the signal that tells a SERIES apart from a CHAPTER SET, and its
+	// absence caused the worst near-miss this classifier has had. See
+	// membersAreBookLength.
+	DurationSec int
+
 	// DiscNumber / TrackNumber are OUTPUT fields, zero on the input view and
 	// populated by classifyGroup (assignDiscTrack) for the members of a combine.
 	// They carry the per-file play-order the apply path (ApplyMultidisc) writes onto
@@ -104,6 +111,52 @@ type ShatterBook struct {
 	// it is never persisted. Contiguous + unique by construction.
 	DiscNumber  int
 	TrackNumber int
+}
+
+// bookLengthSec is the runtime above which a single member is judged to be a
+// whole book rather than a chapter or a disc.
+//
+// 90 minutes sits in a wide empty band: audiobook chapters are minutes long, and
+// full novels are hours. A 90-minute *chapter* is vanishingly rare, and a novel
+// shorter than 90 minutes would be a single-file book, never a member of an N-way
+// group.
+const bookLengthSec = 90 * 60
+
+// membersAreBookLength reports whether most members are individually long enough
+// to BE books, which means the group is a series and must never be collapsed.
+//
+// 🔴 THE NEAR-MISS THIS PREVENTS. The flat branch's over-merge guard keys on
+// distinct title STEMS, and numbered sequels all share one stem:
+//
+//	Super Sales on Super Heroes.m4b
+//	Super Sales on Super Heroes 2.m4b … 5.m4b
+//
+// strips to a single stem, so manyDistinctTitles stayed false and the collapse
+// was judged "confident". A production dry-run on 2026-08-05 found 41 of 43
+// multidisc candidates were this shape — every one an iTunes AUTHOR folder
+// (`iTunes Media/Audiobooks/<Author>/`) holding that author's whole catalogue,
+// because the classifier's founding assumption ("files in one folder are tracks
+// of one book") is true of the organized tree and false of the iTunes tree.
+// Approving them would have merged entire series into single books, and the apply
+// path hard-deletes absorbed rows.
+//
+// Runtime is the discriminator stems cannot be: six two-hour files are six books,
+// six three-minute files are six chapters. Requires a strict majority so one long
+// member (an omnibus track, a mis-tagged file) cannot veto a real chapter set.
+//
+// Members with unknown duration are counted as NOT book-length: an absent value is
+// not evidence of a series, and the guard must not fire on missing data.
+func membersAreBookLength(members []memberInfo) bool {
+	if len(members) == 0 {
+		return false
+	}
+	long := 0
+	for _, m := range members {
+		if m.book.DurationSec >= bookLengthSec {
+			long++
+		}
+	}
+	return long*2 > len(members)
 }
 
 // RegroupGroup is one book folder the classifier flagged for a review hold.
@@ -625,7 +678,8 @@ func classifyGroup(members []memberInfo) (RegroupGroup, bool) {
 		return build(KindMultidisc, true,
 			"collapse disc set into 1 multi-file audiobook", 0), true
 
-	case structure == "flat" && numberedCount*2 >= n && n >= flatMultitrackMin && !manyDistinctTitles:
+	case structure == "flat" && numberedCount*2 >= n && n >= flatMultitrackMin &&
+		!manyDistinctTitles && !membersAreBookLength(members):
 		// Many members sit directly in ONE book folder and are sequentially numbered →
 		// flat multi-track collapse. The shared parent folder IS the book identity.
 		//
@@ -642,6 +696,13 @@ func classifyGroup(members []memberInfo) (RegroupGroup, bool) {
 		// per-chapter descriptive titles is left shattered (recoverable later) rather
 		// than N distinct books being wrongly merged into one (corruption). A dry-run
 		// on 2026-07-14 flagged 24/196 confident-multidisc holds as this shape.
+		//
+		// SERIES GUARD (!membersAreBookLength): stems alone are not enough, because
+		// numbered SEQUELS share one stem ("Super Sales on Super Heroes" / " 2" / " 3").
+		// A 2026-08-05 dry-run found 41 of 43 candidates were exactly that — iTunes
+		// AUTHOR folders holding a whole catalogue — and collapsing them would have
+		// merged entire series into one book. Runtime separates the two cases where the
+		// name cannot. See membersAreBookLength.
 		return build(KindMultidisc, true,
 			"collapse flat multi-track folder into 1 multi-file audiobook", 0), true
 
