@@ -265,6 +265,7 @@ type memberInfo struct {
 	book       ShatterBook
 	structure  string // "disc" | "chapter" | "flat"
 	parentBase string // basename of the file's immediate parent dir
+	parentDir  string // FULL path of the file's immediate parent dir
 	fileBase   string // filename without extension
 	prefix     string // original-case title prefix (chapter prefix, or track prefix)
 	normPrefix string // normalized prefix for consensus voting
@@ -292,6 +293,7 @@ func folderKeyOf(fp string) (key string, mi memberInfo) {
 	pbase := filepath.Base(parent)
 	fileBase := strings.TrimSuffix(filepath.Base(fp), filepath.Ext(filepath.Base(fp)))
 	mi.parentBase = pbase
+	mi.parentDir = parent
 	mi.fileBase = fileBase
 
 	switch {
@@ -529,6 +531,42 @@ func versionMarkers(text string) (hasUnabridged, hasAbridged bool) {
 // review hold. Thresholds are documented inline; the classifier biases conservative
 // (ambiguous, not confident) whenever the evidence is weak — every group is a
 // human-reviewed hold, so the human is the backstop.
+// displayFolderRef picks the folder a HUMAN should be shown for this group.
+//
+// The grouping key deliberately climbs to the grandparent for the chapter/disc/
+// edition shapes, because `<Book>/<Book> - 01/file` needs every chapter shell to
+// land in one group. But the grandparent is only the BOOK when the group really
+// spans sibling shells. When every member sits in the SAME directory, that
+// directory is the book and the grandparent is one level too high.
+//
+// 🔴 WHY THIS MATTERS FOR REVIEW. A production group of 17 tracks — all of
+// "Rysa Walker - The Delphi Effect ... (Unabridged)" — was labelled
+// `/abooks/imported/Rysa Walker`, because the parent carried an edition marker and
+// the edition branch returns the grandparent. The grouping was correct; the label
+// named the AUTHOR. A reviewer reading "Rysa Walker" would reasonably reject it as
+// an author-folder merge and throw away a good regroup — and with ~900 holds to get
+// through, a label that misrepresents the group is a correctness problem in its own
+// right.
+//
+// Display only: the grouping key is untouched, so which books belong together does
+// not change.
+func displayFolderRef(members []memberInfo, groupKey string) string {
+	if len(members) == 0 {
+		return groupKey
+	}
+	first := members[0].parentDir
+	if first == "" {
+		return groupKey
+	}
+	for _, m := range members[1:] {
+		if m.parentDir != first {
+			// Members really do span sibling shells — the grandparent IS the book.
+			return groupKey
+		}
+	}
+	return first
+}
+
 func classifyGroup(members []memberInfo) (RegroupGroup, bool) {
 	n := len(members)
 
@@ -541,7 +579,7 @@ func classifyGroup(members []memberInfo) (RegroupGroup, bool) {
 	for _, m := range members {
 		fpVotes[m.fpKey]++
 	}
-	folderRef := dominantKey(fpVotes)
+	folderRef := displayFolderRef(members, dominantKey(fpVotes))
 	mergedViaItunes := len(fpVotes) > 1
 	folderName := filepath.Base(folderRef)
 	normFolder := normTitle(folderName)
