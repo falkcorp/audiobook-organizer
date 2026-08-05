@@ -41,8 +41,10 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -127,6 +129,10 @@ func (p *Plugin) runRegroupShatteredAI(ctx context.Context, raw json.RawMessage,
 	// the review-row writes run single-threaded AFTER the scan, so there are no write
 	// races — the only shared state here is the slim-view slice, guarded by mu.
 	var mu sync.Mutex
+	// skippedFrozen counts books excluded because they live in the hands-off
+	// books/itunes/** tree; reported so an operator can see the queue shrank by
+	// policy rather than by a silent bug.
+	var skippedFrozen atomic.Int64
 	views := make([]itunesservice.ShatterBook, 0, len(ids))
 	scanErr := registry.RunItems(ctx, reporter, ids, func(ctx context.Context, id string) error {
 		b, err := store.GetBookByID(id)
@@ -168,6 +174,25 @@ func (p *Plugin) runRegroupShatteredAI(ctx context.Context, raw json.RawMessage,
 		if len(files) >= 1 {
 			v.ITunesPath = files[0].ITunesPath
 		}
+		// 🔴 SKIP THE FROZEN iTunes TREE. books/itunes/** is the externally-managed
+		// Original library, marked Frozen and read-only — we are never permitted to
+		// reorganise it. Proposing regroups there is worse than useless:
+		//
+		//   - 561 of 777 ambiguous holds (72%) were iTunes AUTHOR folders
+		//     (`iTunes Media/Audiobooks/<Author>/`), because that layout puts an
+		//     author's whole catalogue in one directory and the classifier reads a
+		//     shared folder as a shared book; and
+		//   - approving one would propose merging distinct novels into a single book
+		//     inside a tree we must not touch.
+		//
+		// A proposal we cannot carry out is noise in a human's queue at best, and an
+		// invitation to destroy a series at worst. Excluded at the SOURCE so no
+		// downstream classifier heuristic has to re-derive the policy.
+		if config.UnderFrozenITunesTree(v.FilePath) || config.UnderFrozenITunesTree(v.ITunesPath) {
+			skippedFrozen.Add(1)
+			return nil
+		}
+
 		mu.Lock()
 		views = append(views, v)
 		mu.Unlock()
@@ -247,8 +272,9 @@ func (p *Plugin) runRegroupShatteredAI(ctx context.Context, raw json.RawMessage,
 	purged := reconcileStaleHolds(ctx, store, reporter, groups, params.Limit)
 
 	result := fmt.Sprintf(
-		"DRY RUN — review holds written=%d (already-decided=%d, write-errors=%d, stale-purged=%d) from %d detected groups; library untouched. bykind=%v",
-		written, alreadyDecided, writeErrs, purged, len(groups), st.ByKind)
+		"DRY RUN — review holds written=%d (already-decided=%d, write-errors=%d, stale-purged=%d, "+
+			"skipped-frozen-itunes=%d) from %d detected groups; library untouched. bykind=%v",
+		written, alreadyDecided, writeErrs, purged, skippedFrozen.Load(), len(groups), st.ByKind)
 	_ = reporter.Log(slog.LevelInfo, result)
 	_ = reporter.UpdateProgress(len(ids)+1, len(ids)+1, result)
 	if writeErrs > 0 {

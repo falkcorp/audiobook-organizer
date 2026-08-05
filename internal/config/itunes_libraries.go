@@ -84,6 +84,19 @@ func (c *ITunesConfig) Resolve() {
 // catches the real library regardless of the absolute mount prefix.
 const booksItunesSegment = "books/itunes/"
 
+// UnderFrozenITunesTree reports whether a path lives in the hands-off Original
+// iTunes tree (books/itunes/**).
+//
+// That tree is externally managed by iTunes itself and is marked Frozen —
+// read-only, never reorganised by us. Callers that PROPOSE structural changes
+// (regroup holds, merges, moves) must consult this and skip such paths, because a
+// proposal we are not permitted to carry out is noise in a human's queue at best
+// and a data-loss invitation at worst.
+//
+// Exported for producers outside this package; underBooksItunes remains the
+// internal spelling used by validation.
+func UnderFrozenITunesTree(p string) bool { return underBooksItunes(p) }
+
 func underBooksItunes(p string) bool {
 	if p == "" {
 		return false
