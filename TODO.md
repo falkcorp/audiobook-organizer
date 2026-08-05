@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.16.0 -->
+<!-- version: 10.16.1 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-08-04 -->
+<!-- last-edited: 2026-08-05 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,86 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+<!-- file: todo.d/2026-08-04-dedupe-op-45s-per-book.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 8333f42a-bd0d-4a2f-8221-403d11576e7c -->
+<!-- last-edited: 2026-08-04 -->
+
+- [ ] **PERF: `maintenance.dedupe-book-file-rows` spends ~45 seconds per book, and
+      that is enough to blow its own 2-hour timeout.**
+
+      Measured on the full production run (2026-08-04, op
+      `01KZ6W1H46696CZDBHCZF10W6C`): 9 books in ~7 minutes, steady. Extrapolated over
+      the 194 affected books that is **~2.4 hours against a `Timeout: 2 * time.Hour`**
+      declared in `dedupeBookFileRowsDef()`, so the op cancels itself with roughly
+      the last 40 books unprocessed and needs a second invocation to finish.
+
+      Not a correctness problem — each book is committed independently and the op is
+      idempotent, so a re-run simply picks up the remainder. But an op that cannot
+      complete its own workload in one pass is mis-sized, and it will get worse, not
+      better, as the library grows.
+
+      **~45s to delete ~15 rows from one book is the anomaly worth explaining.** The
+      per-book work is small: one `GetBookFiles` (Pebble-direct), a handful of
+      `DeleteBookFile` calls, one `RecomputeBookAggregates`. Suspects, cheapest to
+      check first:
+
+      - `DeleteBookFile` → `notifyBookFileChange` may trigger a library-stats
+        invalidation and full recompute **per row deleted**, not per book.
+      - `RecomputeBookAggregates` re-reads the book's files; if it re-reads the whole
+        library-level aggregate instead, that is the 5.6s full-scan class of bug
+        already seen in `CountPrimaryBooks` (see
+        [[project_countprimarybooks_cpu_fix]] — same shape, different caller).
+      - The book loop is sequential. Per `CLAUDE.md`'s concurrency rule this is
+        exactly a whole-library-scale loop doing meaningful per-item DB work, so it
+        should have been a bounded `errgroup` pool from the start. Partition by book
+        ID — books are disjoint, so parallel workers cannot touch the same row.
+
+      Fixing the per-book cost is the real answer; raising the timeout only hides it.
+
+<!-- file: todo.d/2026-08-04-recompute-aggregates-stale-memdb.md -->
+<!-- version: 1.1.0 -->
+<!-- guid: 4a29d7e1-83b6-4c50-9f27-1e08b5c3a64d -->
+<!-- last-edited: 2026-08-04 -->
+
+- [ ] **Corrected book aggregates are invisible until memdb refreshes.**
+      Observed on the first `maintenance.dedupe-book-file-rows` canary
+      (2026-08-03): 338 redundant rows were deleted from 10 books and every
+      duration was **unchanged** immediately afterwards. `total_file_count` still
+      read 50 for a book whose files endpoint already returned 26. A service
+      restart surfaced the corrected values — e.g. "Defending the Lost"
+      158.00h → **12.15h** — so the data in Pebble was right the whole time and
+      only the memdb-backed read was stale.
+
+      Where to look: `DeleteBookFile`
+      (`internal/database/pebble_store_bookfiles.go:730`) does the right things in
+      the right order — Pebble delete, `DeleteBookFileFromMemDB`, then
+      `notifyBookFileChange`. The suspect is
+      `RecomputeBookAggregates`
+      (`internal/database/pebble_store_book_aggregates.go:131-134`), which
+      **early-returns without calling `UpdateBook`** when the recomputed values
+      equal the stored ones. `UpdateBook` is what triggers `UpsertBookToMemDB`,
+      and that is the call which reloads `book_files` from Pebble
+      (`internal/database/memdb_sync.go:53-55`). Skip the write and memdb keeps
+      the stale file set.
+
+      Why it matters beyond this op: any caller that deletes book_files and
+      relies on the aggregate being visible has the same blind spot, and the
+      library list computes duration from the memdb file map, not the stored
+      field.
+
+      Until it is fixed, `dedupe-book-file-rows` says so in its completion
+      message rather than letting an operator conclude the run did nothing.
+
+- [x] ~~**Restore the duration on `The Trapped Mind Project`**~~ **RETRACTED
+      2026-08-04 — nothing to restore.** The original claim here was that the
+      canary kept a fingerprinted row whose `Duration` was 0 and deleted the 129
+      twins holding the real value. Probing the audio disproves it: the book's
+      entire content is a 13.5-second, 91,958-byte MP3, and the surviving row
+      (`file_size=91958`, `duration=13`) matches it exactly. 0.00h is simply what
+      13 seconds looks like. The op behaved correctly; the error was reading a
+      rounded display value as evidence of loss without checking the file.
 
 <!-- file: todo.d/2026-08-03-flaky-apply-pid-repair-same-file.md -->
 <!-- version: 1.0.0 -->
