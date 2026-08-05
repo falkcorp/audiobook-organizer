@@ -23,4 +23,8 @@ func (s *Server) wireReviewRoutes(protected *gin.RouterGroup, reviewH *reviewhan
 	protected.POST("/review/items/:id/approve", s.perm(auth.PermLibraryEditMetadata), reviewH.ApproveReviewItem)
 	protected.POST("/review/items/:id/reject", s.perm(auth.PermLibraryEditMetadata), reviewH.RejectReviewItem)
 	protected.POST("/review/bulk", s.perm(auth.PermLibraryEditMetadata), reviewH.BulkReviewAction)
+	// Re-runs apply for items already marked approved. Exists because approving
+	// while the global switch is off records the decision but never executes it, and
+	// nothing else ever reads that state back.
+	protected.POST("/review/replay-approved", s.perm(auth.PermLibraryEditMetadata), reviewH.ReplayApprovedItems)
 }
