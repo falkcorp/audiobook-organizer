@@ -473,6 +473,10 @@ func (s *Server) handleGetLatestMetadataFetch(c *gin.Context) {
 
 // handleBatchApplyCandidates applies stored metadata candidates for the selected books.
 func (s *Server) handleBatchApplyCandidates(c *gin.Context) {
+	// The list this feeds is memoised; a status change must not keep offering a
+	// candidate the user just acted on.
+	defer invalidateMetadataResultsCache()
+
 	var req batchApplyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		httputil.RespondWithBadRequest(c, "operation_id and book_ids are required")
@@ -574,6 +578,10 @@ func (s *Server) handleBatchApplyCandidates(c *gin.Context) {
 // handleRejectCandidates stores rejected candidates so future fetches exclude them.
 // The rejection is stored as an operation_result with status "rejected".
 func (s *Server) handleRejectCandidates(c *gin.Context) {
+	// The list this feeds is memoised; a status change must not keep offering a
+	// candidate the user just acted on.
+	defer invalidateMetadataResultsCache()
+
 	var req struct {
 		OperationID string   `json:"operation_id" binding:"required"`
 		BookIDs     []string `json:"book_ids" binding:"required"`
@@ -634,6 +642,10 @@ func (s *Server) handleRejectCandidates(c *gin.Context) {
 // handleUnrejectCandidates reverses a rejection — restores the candidate to "matched" status
 // and removes the fast-lookup rejection key so it can be fetched again.
 func (s *Server) handleUnrejectCandidates(c *gin.Context) {
+	// The list this feeds is memoised; a status change must not keep offering a
+	// candidate the user just acted on.
+	defer invalidateMetadataResultsCache()
+
 	var req struct {
 		OperationID string   `json:"operation_id"`
 		BookIDs     []string `json:"book_ids"`
@@ -842,7 +854,7 @@ func (s *Server) handleListMetadataResults(c *gin.Context) {
 	includeUnfetched := c.Query("include_unfetched") == "true"
 	pp := httputil.ParsePaginationParams(c)
 
-	latest, counts, err := latestMetadataResultsByBook(store)
+	latest, counts, err := latestMetadataResultsByBookCached(store)
 	if err != nil {
 		httputil.InternalError(c, "failed to load metadata results", err)
 		return
