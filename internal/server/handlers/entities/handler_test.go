@@ -6,6 +6,8 @@
 package entities_test
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -21,6 +23,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 // deps bundles the mocks + real caches used to construct a Handler under test.
@@ -547,3 +550,105 @@ type errString string
 func (e errString) Error() string { return string(e) }
 
 func intptr(i int) *int { return &i }
+
+// ── Authors paging ───────────────────────────────────────────────────────
+//
+// 🔴 GET /authors ignored limit and offset entirely: on the production library
+// `?limit=5` returned all 9,203 authors — about 765 KB — exactly like
+// `?limit=1000`. Every page view paid for the whole list.
+
+// authorsFixture builds a response with n synthetic authors.
+func authorsFixture(n int) *audiobooks.AuthorWithCountListResponse {
+	items := make([]audiobooks.AuthorWithCount, n)
+	for i := range items {
+		items[i].ID = i + 1
+		items[i].Name = fmt.Sprintf("Author %03d", i+1)
+	}
+	return &audiobooks.AuthorWithCountListResponse{Items: items, Count: n}
+}
+
+func decodeAuthors(t *testing.T, w *httptest.ResponseRecorder) (items []map[string]any, count int) {
+	t.Helper()
+	var body struct {
+		Data struct {
+			Items []map[string]any `json:"items"`
+			Count int              `json:"count"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	return body.Data.Items, body.Data.Count
+}
+
+func TestListAuthors_HonoursLimit(t *testing.T) {
+	h, d := newHandler(t)
+	d.authorsCache.Set("all", authorsFixture(50))
+	c, w := newCtx(http.MethodGet, "/authors?limit=5", "", nil)
+	h.ListAuthors(c)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	items, count := decodeAuthors(t, w)
+	assert.Len(t, items, 5, "limit=5 must return 5 authors, not the whole list")
+	assert.Equal(t, 50, count, "count must stay the FULL total so a client knows how much is left")
+	assert.Equal(t, "Author 001", items[0]["name"])
+}
+
+func TestListAuthors_HonoursOffset(t *testing.T) {
+	h, d := newHandler(t)
+	d.authorsCache.Set("all", authorsFixture(50))
+	c, w := newCtx(http.MethodGet, "/authors?limit=3&offset=10", "", nil)
+	h.ListAuthors(c)
+
+	items, count := decodeAuthors(t, w)
+	require.Len(t, items, 3)
+	assert.Equal(t, 50, count)
+	assert.Equal(t, "Author 011", items[0]["name"], "offset=10 must skip the first ten")
+}
+
+// 🔑 BACKWARD COMPATIBILITY. The current UI fetches this endpoint with no
+// parameters and expects every author. Defaulting to a page size here would
+// silently truncate it, so an absent limit must still return the whole list.
+func TestListAuthors_NoParamsStillReturnsEverything(t *testing.T) {
+	h, d := newHandler(t)
+	d.authorsCache.Set("all", authorsFixture(50))
+	c, w := newCtx(http.MethodGet, "/authors", "", nil)
+	h.ListAuthors(c)
+
+	items, count := decodeAuthors(t, w)
+	assert.Len(t, items, 50, "an unpaged request must still return everything")
+	assert.Equal(t, 50, count)
+}
+
+// An offset past the end is an empty page, not a panic or a wrapped slice.
+func TestListAuthors_OffsetBeyondEndIsEmpty(t *testing.T) {
+	h, d := newHandler(t)
+	d.authorsCache.Set("all", authorsFixture(10))
+	c, w := newCtx(http.MethodGet, "/authors?offset=999&limit=5", "", nil)
+	h.ListAuthors(c)
+
+	items, count := decodeAuthors(t, w)
+	assert.Empty(t, items)
+	assert.Equal(t, 10, count)
+}
+
+// A limit larger than the set returns the set, not a slice-out-of-range panic.
+func TestListAuthors_LimitBeyondEndIsClamped(t *testing.T) {
+	h, d := newHandler(t)
+	d.authorsCache.Set("all", authorsFixture(4))
+	c, w := newCtx(http.MethodGet, "/authors?limit=100", "", nil)
+	h.ListAuthors(c)
+
+	items, _ := decodeAuthors(t, w)
+	assert.Len(t, items, 4)
+}
+
+// Garbage values are ignored rather than erroring, matching the other list
+// endpoints — a bad limit must not turn a working page into a 400.
+func TestListAuthors_IgnoresUnparseableParams(t *testing.T) {
+	h, d := newHandler(t)
+	d.authorsCache.Set("all", authorsFixture(6))
+	c, w := newCtx(http.MethodGet, "/authors?limit=abc&offset=-3", "", nil)
+	h.ListAuthors(c)
+	assert.Equal(t, http.StatusOK, w.Code)
+	items, _ := decodeAuthors(t, w)
+	assert.Len(t, items, 6)
+}

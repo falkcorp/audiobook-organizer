@@ -287,19 +287,74 @@ func (h *Handler) GetWorkStats(c *gin.Context) {
 
 // --- Authors ---
 
-// ListAuthors implements GET /authors.
+// ListAuthors implements GET /authors, with optional limit/offset paging.
+//
+// The handler previously ignored both parameters and always returned every
+// author. On this library that is 9,203 authors — about 765 KB — sent on every
+// request regardless of what the caller asked for; `?limit=5` returned the same
+// 765 KB as `?limit=1000`.
+//
+// Paging is applied AFTER the cache rather than pushed into the query on purpose:
+// building the list is the expensive part (it joins book and file counts per
+// author), so one cached build serves every page slice. Slicing a cached list is
+// free; re-querying per page would give up the cache for no gain.
+//
+// 🔑 Omitting `limit` still returns everything. Existing callers — including the
+// current UI — depend on the unpaged response, so paging is strictly opt-in;
+// defaulting to a page size here would silently truncate them.
 func (h *Handler) ListAuthors(c *gin.Context) {
-	if cached, ok := h.authorsCache.Get("all"); ok {
-		httputil.RespondWithOK(c, cached)
+	resp, ok := h.authorsCache.Get("all")
+	if !ok {
+		built, err := h.authorSeriesService.ListAuthorsWithCounts()
+		if err != nil {
+			httputil.InternalError(c, "failed to list authors", err)
+			return
+		}
+		h.authorsCache.Set("all", built)
+		resp = built
+	}
+	if resp == nil {
+		httputil.RespondWithOK(c, resp)
 		return
 	}
-	resp, err := h.authorSeriesService.ListAuthorsWithCounts()
-	if err != nil {
-		httputil.InternalError(c, "failed to list authors", err)
+
+	limit, offset, paged := parseListWindow(c)
+	if !paged {
+		httputil.RespondWithOK(c, resp)
 		return
 	}
-	h.authorsCache.Set("all", resp)
-	httputil.RespondWithOK(c, resp)
+
+	total := len(resp.Items)
+	start := min(offset, total)
+	end := total
+	if limit > 0 {
+		end = min(start+limit, total)
+	}
+	// Count stays the FULL total, not the page length — a client paging through
+	// needs to know how much is left, and reporting the slice size would make the
+	// last page look like the whole set.
+	httputil.RespondWithOK(c, &audiobooks.AuthorWithCountListResponse{
+		Items: resp.Items[start:end],
+		Count: total,
+	})
+}
+
+// parseListWindow reads limit/offset. paged is false when neither is supplied,
+// so the caller can preserve the historical return-everything behaviour rather
+// than guessing a default page size. Negative or unparseable values are ignored
+// instead of erroring, matching how the rest of the list endpoints behave.
+func parseListWindow(c *gin.Context) (limit, offset int, paged bool) {
+	if v := c.Query("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			limit, paged = n, true
+		}
+	}
+	if v := c.Query("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			offset, paged = n, true
+		}
+	}
+	return limit, offset, paged
 }
 
 // CountAuthors implements GET /authors/count.
