@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.53.0
+// version: 2.54.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-07-13
+// last-edited: 2026-08-06
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -5822,6 +5822,11 @@ export interface ReviewItem {
   payload: string;
   created_at: string;
   updated_at: string;
+  /** The action a HUMAN chose when approving, which may disagree with the payload's
+   *  recommendedAction. Empty while pending, and empty on holds decided before
+   *  2026-08-06. The replay path prefers it over the recommendation, so this is the
+   *  durable record that an override happened. */
+  chosen_action?: string;
 }
 
 /** GET /review/count → data.{count, byKind}. Both cover PENDING items only. */
@@ -5847,14 +5852,28 @@ export interface ReviewItemsFilter {
   offset?: number;
 }
 
+/** One item a bulk approve REFUSED to act on. Bulk approve uses each item's own
+ *  recommendation, so a hold whose recommendation is undecidable (or unimplemented)
+ *  is skipped and the batch continues. */
+export interface ReviewBulkSkip {
+  id: string;
+  /** The action that was refused — usually "insufficient-evidence". */
+  action: string;
+  reason: string;
+}
+
 /** POST /review/bulk → data.{action, processed, ...id buckets}. Note: the
- *  backend reports `processed`, NOT an `affected` count. */
+ *  backend reports `processed`, NOT an `affected` count.
+ *
+ *  🔴 `skipped` MUST BE SURFACED. A bulk approve that silently drops items is how a
+ *  reviewer believes they cleared a queue they did not. */
 export interface ReviewBulkResult {
   action: string;
   approved?: string[];
   applied?: string[];
   rejected?: string[];
   not_found?: string[];
+  skipped?: ReviewBulkSkip[];
   processed: number;
 }
 
@@ -5896,9 +5915,21 @@ export async function getReviewItems(filter: ReviewItemsFilter = {}): Promise<Re
   };
 }
 
-export async function approveReviewItem(id: string): Promise<ReviewItem> {
+/** approveReviewItem approves a hold, optionally OVERRIDING its recommended action.
+ *
+ *  Omitting `action` means "do what the hold recommends" — but the backend refuses to
+ *  default an `insufficient-evidence` hold (400), which is every hold written before
+ *  2026-08-06, so the UI must send an explicit choice for those. The chosen action is
+ *  persisted on the item, so an override survives to the later replay.
+ *
+ *  Errors carry the backend's own message (buildApiError reads `error`), which is how
+ *  the 501 for `duplicate-of` reaches the reviewer intact instead of as "failed". */
+export async function approveReviewItem(id: string, action?: string): Promise<ReviewItem> {
   const response = await apiFetch(`${API_BASE}/review/items/${encodeURIComponent(id)}/approve`, {
     method: 'POST',
+    ...(action
+      ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action }) }
+      : {}),
   });
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to approve review item');
