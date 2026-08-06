@@ -1,7 +1,7 @@
 // file: internal/database/memdb_strip.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-stripbook0001
-// last-edited: 2026-07-05
+// last-edited: 2026-08-06
 
 package database
 
@@ -61,8 +61,29 @@ func stripBookForMemdb(src *Book) *Book {
 //	FingerprintDiagnosticJSON (*string, KB-class)    → can dominate when populated
 //	FingerprintFailureReason / Detail (*string)      → small but per-row
 //	FingerprintFailedAt (*time.Time)                 → 24B retained (needed by LSH builder)
+//	IntroTranscription (*string, ~0.5-1.5 KB/file)   → ~160-475 MB at full coverage
 //
 // Combined drop from Seg0..6 + diagnostic fields: ~550-900 MB + diagnostic overhead.
+//
+// IntroTranscription strip rationale (per-file intro transcription):
+//
+// The per-file intro-transcription group is EIGHT fields, and only this one is
+// stripped — a deliberate hybrid rather than all-or-nothing. A 90s transcript runs
+// ~0.5-1.5 KB; across 317,054 book_files that is ~160-475 MB, squarely inside the
+// band this codebase already treats as clearly worth stripping (AcoustIDSeg0..6 at
+// ~550-900 MB, above). stripBookForMemdb takes memdb from ~10 GB to ~2 GB, so a
+// half-gigabyte regression from a single additive field is not acceptable.
+//
+// Stripping ONLY the raw transcript captures ~99% of the group's bytes while
+// keeping every field a query would actually filter on — TranscribedTitle/Author/
+// Narrator, IntroTranscribedAt, TranscribeStatus, TranscribeError,
+// TranscribeAttemptedAt are all small and all remain in the memdb projection (and
+// therefore on BookFileCore). It also narrows the write-back preserve-guard in
+// pebble_store_bookfiles.go to ONE field instead of eight, which matters because a
+// bare memdb round-trip write-back is this repo's dominant data-loss incident class.
+//
+// Readers needing the raw transcript go Pebble-direct via GetBookFile /
+// GetBookFiles, the same contract AcoustIDFingerprint has had since PERF-7.
 //
 // FingerprintFailedAt is intentionally NOT stripped: it is 24 bytes per row (~7 MB
 // at 308K rows) and is read by the LSH index builder to skip permanently-failed files
@@ -112,5 +133,10 @@ func stripBookFileForMemdb(src *BookFile) *BookFile {
 	cp.AcoustIDSeg4 = ""
 	cp.AcoustIDSeg5 = ""
 	cp.AcoustIDSeg6 = ""
+	// IntroTranscription: raw ~90s Whisper transcript (~0.5-1.5 KB/file,
+	// ~160-475 MB at full coverage). The ONLY stripped member of the eight-field
+	// per-file intro-transcription group — see the rationale block above. The
+	// other seven are small, queryable, and retained (they are on BookFileCore).
+	cp.IntroTranscription = nil
 	return &cp
 }

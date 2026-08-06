@@ -1,7 +1,7 @@
 // file: internal/database/bookfilecore.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 715f4b68-2d23-4f52-b1dd-1b3d0357a4f6
-// last-edited: 2026-07-05
+// last-edited: 2026-08-06
 
 package database
 
@@ -9,10 +9,16 @@ import "time"
 
 // BookFileCore is the projection of BookFile that survives the memdb strip
 // performed by stripBookFileForMemdb. It contains every BookFile field EXCEPT
-// the heavy fingerprint-diagnostic set that memdb clears before insertion:
+// the heavy set that memdb clears before insertion:
 //
 //	FingerprintFailureReason, FingerprintFailureDetail, FingerprintDiagnosticJSON,
-//	AcoustIDFingerprint, AcoustIDSeg0..6
+//	AcoustIDFingerprint, AcoustIDSeg0..6, IntroTranscription
+//
+// IntroTranscription is the only member of the per-file intro-transcription
+// group that is stripped. The other SEVEN (TranscribedTitle/Author/Narrator,
+// IntroTranscribedAt, TranscribeStatus, TranscribeError, TranscribeAttemptedAt)
+// are RETAINED here — they are the small, queryable fields, and the raw
+// transcript carries ~99% of the group's bytes. See memdb_strip.go for the math.
 //
 // Note the two fingerprint-adjacent fields that are intentionally RETAINED
 // (they are NOT stripped in memdb_strip.go and therefore belong on Core):
@@ -74,6 +80,16 @@ type BookFileCore struct {
 	DownloadHash         string     `json:"download_hash,omitempty"`
 	DelugeOriginalPath   string     `json:"deluge_original_path,omitempty"`
 	ImportedFromDelugeAt *time.Time `json:"imported_from_deluge_at,omitempty"`
+
+	// Per-file intro transcription — the 7 RETAINED fields. IntroTranscription
+	// (the raw transcript) is deliberately absent: it is the stripped one.
+	TranscribedTitle      *string    `json:"transcribed_title,omitempty"`
+	TranscribedAuthor     *string    `json:"transcribed_author,omitempty"`
+	TranscribedNarrator   *string    `json:"transcribed_narrator,omitempty"`
+	IntroTranscribedAt    *time.Time `json:"intro_transcribed_at,omitempty"`
+	TranscribeStatus      *string    `json:"transcribe_status,omitempty"`
+	TranscribeError       *string    `json:"transcribe_error,omitempty"`
+	TranscribeAttemptedAt *time.Time `json:"transcribe_attempted_at,omitempty"`
 }
 
 // Core returns the BookFileCore projection of f — every BookFile field that
@@ -120,5 +136,12 @@ func (f *BookFile) Core() BookFileCore {
 		DownloadHash:                   f.DownloadHash,
 		DelugeOriginalPath:             f.DelugeOriginalPath,
 		ImportedFromDelugeAt:           f.ImportedFromDelugeAt,
+		TranscribedTitle:               f.TranscribedTitle,
+		TranscribedAuthor:              f.TranscribedAuthor,
+		TranscribedNarrator:            f.TranscribedNarrator,
+		IntroTranscribedAt:             f.IntroTranscribedAt,
+		TranscribeStatus:               f.TranscribeStatus,
+		TranscribeError:                f.TranscribeError,
+		TranscribeAttemptedAt:          f.TranscribeAttemptedAt,
 	}
 }

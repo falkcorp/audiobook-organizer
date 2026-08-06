@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
 // last-edited: 2026-08-06
 
@@ -330,6 +330,29 @@ func (s *PebbleStore) UpdateBookFile(id string, file *BookFile) error {
 	// field-scoped update under the GetAllBookFiles->BookFileCore retype (STOREFID W3).
 	if len(file.AcoustIDFingerprint) == 0 {
 		file.AcoustIDFingerprint = old.AcoustIDFingerprint
+	}
+
+	// Preserve the memdb-stripped raw intro transcript on a slim round-trip, for
+	// exactly the same reason as AcoustIDFingerprint above: stripBookFileForMemdb
+	// nils IntroTranscription, so any whole-library job that reads a slim BookFile,
+	// edits an unrelated field, and writes the struct back here would blank a
+	// transcript that costs a Whisper run to regenerate.
+	//
+	// Unlike the fingerprint DIAGNOSTIC fields (which are deliberately NOT guarded
+	// — see the note below — because backfill.go legitimately clears them to nil
+	// through this method), there is no write path that legitimately clears a
+	// transcript: a re-transcription always supplies a fresh non-empty value, and a
+	// FAILED attempt writes TranscribeStatus/TranscribeError while deliberately
+	// leaving the last good transcript in place (reparse_only depends on it). So
+	// preserve-on-nil can never strand stale state here, and there is intentionally
+	// no escape hatch — genuinely erasing a transcript would require a deliberate
+	// field-scoped op, which does not exist today.
+	//
+	// Only IntroTranscription needs this guard. The other seven per-file
+	// transcription fields survive the strip (they are on BookFileCore), so a slim
+	// round-trip carries their real values and writing them back is a no-op.
+	if file.IntroTranscription == nil {
+		file.IntroTranscription = old.IntroTranscription
 	}
 
 	// T020: drop AcoustIDSeg0..6 from the stored value via a copy.
@@ -1106,6 +1129,12 @@ func (s *PebbleStore) UpsertBookFile(file *BookFile) error {
 	if file.FingerprintDiagnosticJSON == nil {
 		file.FingerprintDiagnosticJSON = existing.FingerprintDiagnosticJSON
 	}
+	// IntroTranscription is memdb-stripped too — same wipe risk. UpdateBookFile
+	// guards this again below; the double-guard is idempotent and mirrors the
+	// existing AcoustIDFingerprint pattern.
+	if file.IntroTranscription == nil {
+		file.IntroTranscription = existing.IntroTranscription
+	}
 
 	return s.UpdateBookFile(existing.ID, file)
 }
@@ -1173,6 +1202,15 @@ func (s *PebbleStore) BatchUpsertBookFiles(files []*BookFile) error {
 			}
 			if file.FingerprintDiagnosticJSON == nil {
 				file.FingerprintDiagnosticJSON = existing.FingerprintDiagnosticJSON
+			}
+			// IntroTranscription is memdb-stripped as well (~0.5-1.5 KB/file of
+			// Whisper output). Unlike UpsertBookFile, this method writes straight
+			// into the batch rather than delegating to UpdateBookFile, so THIS is
+			// the only guard on the batch path — a whole-library round-trip
+			// (maintenance.tag-backfill et al.) would otherwise wipe every
+			// transcript in one commit.
+			if file.IntroTranscription == nil {
+				file.IntroTranscription = existing.IntroTranscription
 			}
 
 			if err := s.deleteBookFileSecondaryIndexes(batch, existing); err != nil {

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_files.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 82f8d1f7-46d5-4ead-b5c1-ba796fd785f9
-// last-edited: 2026-07-03
+// last-edited: 2026-08-06
 
 // File / segment endpoints for the audiobooks domain: segment listing,
 // book-file listing + patch, track-info extraction, relocate, and segment
@@ -159,6 +159,19 @@ func (h *Handler) ListBookFiles(c *gin.Context) {
 			"file_exists":                 !f.Missing,
 			"created_at":                  f.CreatedAt,
 			"updated_at":                  f.UpdatedAt,
+			// Per-file intro transcription. This response is built from an
+			// explicit key list, so new BookFile fields are invisible to the UI
+			// until added here by hand — unlike the Pebble row, this layer is NOT
+			// additive-safe. GetBookFiles reads Pebble-direct, so intro_transcription
+			// is populated here despite being stripped from the memdb projection.
+			"intro_transcription":     f.IntroTranscription,
+			"transcribed_title":       f.TranscribedTitle,
+			"transcribed_author":      f.TranscribedAuthor,
+			"transcribed_narrator":    f.TranscribedNarrator,
+			"intro_transcribed_at":    f.IntroTranscribedAt,
+			"transcribe_status":       f.TranscribeStatus,
+			"transcribe_error":        f.TranscribeError,
+			"transcribe_attempted_at": f.TranscribeAttemptedAt,
 		})
 	}
 	httputil.RespondWithOK(c, gin.H{"files": results, "count": len(results)})

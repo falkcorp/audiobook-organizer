@@ -1,7 +1,7 @@
 // file: internal/database/store.go
-// version: 2.86.0
+// version: 2.87.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-08-02
+// last-edited: 2026-08-06
 
 package database
 
@@ -783,6 +783,51 @@ type BookFile struct {
 	DownloadHash         string     `json:"download_hash,omitempty"`
 	DelugeOriginalPath   string     `json:"deluge_original_path,omitempty"`
 	ImportedFromDelugeAt *time.Time `json:"imported_from_deluge_at,omitempty"`
+
+	// ---- Per-file intro transcription -------------------------------------
+	//
+	// These mirror the Book-level fields of the same names (see Book, above) but
+	// are recorded PER FILE. The Book-level copies are retained as a derived
+	// convenience (file 1's values) for existing consumers such as
+	// maintenance.auto-match-transcribed; they are NOT deprecated by these.
+	//
+	// Why per-file at all: an audiobook opens with a spoken
+	// "<Title> by <Author>, read by <Narrator>" announcement, which marks a book
+	// START. Storing that on Book alone captures exactly ONE file's opening, so a
+	// folder holding 12 files that are one book is indistinguishable from 12 files
+	// that are 12 separate books. Per file, the sequence is decisive — real prod
+	// rows read "This is a reading of Overlord, Book 7. This part includes the
+	// prologue and Chapter 1" / "...includes Chapter 2" / "...Volume 7, Chapter 3",
+	// which proves continuation. At book level that signal is invisible.
+
+	// IntroTranscription is the raw Whisper transcript of the first ~90 seconds of
+	// THIS file. It is the one field in this group that stripBookFileForMemdb
+	// clears — see the memory math in memdb_strip.go. Readers that need it must go
+	// Pebble-direct (GetBookFile / GetBookFiles), never the memdb projection.
+	IntroTranscription *string `json:"intro_transcription,omitempty"`
+	// TranscribedTitle / TranscribedAuthor / TranscribedNarrator are the fields
+	// parsed from IntroTranscription ("TITLE by AUTHOR. Read by NARRATOR.").
+	// Stored separately from the file's own tags so transcription errors cannot
+	// overwrite curated metadata. Retained in memdb: these are what a query
+	// filters on, and they are small.
+	TranscribedTitle    *string `json:"transcribed_title,omitempty"`
+	TranscribedAuthor   *string `json:"transcribed_author,omitempty"`
+	TranscribedNarrator *string `json:"transcribed_narrator,omitempty"`
+	// IntroTranscribedAt is when IntroTranscription was last populated.
+	IntroTranscribedAt *time.Time `json:"intro_transcribed_at,omitempty"`
+	// TranscribeStatus records the outcome of the most recent transcription
+	// ATTEMPT for this file. One of: "ok", "source_file_missing", "no_audio",
+	// "ffmpeg_error", "whisper_error", "empty". This is the queryable drill-down
+	// field — count files by status to see exactly why transcription is or isn't
+	// producing data.
+	TranscribeStatus *string `json:"transcribe_status,omitempty"`
+	// TranscribeError holds a short human-readable detail for a non-ok status —
+	// typically the tail of ffmpeg stderr or the Whisper error string. Empty on ok.
+	TranscribeError *string `json:"transcribe_error,omitempty"`
+	// TranscribeAttemptedAt is when the most recent transcription attempt ran
+	// (success OR failure), distinct from IntroTranscribedAt which only advances
+	// on a successful transcription.
+	TranscribeAttemptedAt *time.Time `json:"transcribe_attempted_at,omitempty"`
 }
 
 // UserPosition is one user's resume point for one segment of one
