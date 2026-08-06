@@ -1,21 +1,25 @@
 // file: web/src/pages/ReviewQueue.tsx
-// version: 2.1.0
+// version: 2.2.0
 // guid: 4c8f2a17-5e93-4d60-a1b8-7f3c6d9e0a52
-// last-edited: 2026-08-01
+// last-edited: 2026-08-06
 
 import { useEffect, useMemo, useState } from 'react';
 import {
   Accordion,
   AccordionDetails,
   AccordionSummary,
+  Alert,
+  AlertTitle,
   Avatar,
   Box,
   Button,
   Chip,
   CircularProgress,
   Divider,
+  MenuItem,
   Paper,
   Stack,
+  TextField,
   Tooltip,
   Typography,
   type SxProps,
@@ -25,12 +29,18 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore.js';
 import CheckIcon from '@mui/icons-material/Check.js';
 import CloseIcon from '@mui/icons-material/Close.js';
 import AlbumIcon from '@mui/icons-material/Album.js';
+import HelpOutlineIcon from '@mui/icons-material/HelpOutline.js';
 import * as api from '../services/api';
 import { type Book, type ReviewItem } from '../services/api';
 import { useReviewStore } from '../stores/useReviewStore';
 import { useAppStore } from '../stores/useAppStore';
 import { labelForKind } from '../lib/reviewKinds';
 import {
+  REVIEW_ACTIONS,
+  actionSpec,
+  defaultActionFor,
+  evidenceFacts,
+  labelForAction,
   type MemberEntry,
   memberCount,
   memberEntries,
@@ -153,6 +163,214 @@ function MemberRow({
   );
 }
 
+// RecommendationPanel is the part of a hold a reviewer actually reads before
+// deciding: what the classifier recommends, the sentence explaining why, and the
+// NUMBERS that sentence is built from.
+//
+// 🔴 THE NUMBERS ARE THE POINT. Before recommendations, 762 of 777 holds carried the
+// identical `proposedAction` string, which is a queue nobody can work. A reason
+// without its evidence would just be a nicer generic string — the member count, how
+// many runtimes are actually KNOWN, how many members are book-length, and the
+// median/longest runtime are what let a reviewer check the machine rather than
+// trust it. The known-vs-total runtime chip is highlighted when most runtimes are
+// missing, because that gap is exactly why a recommendation lands on
+// "insufficient evidence".
+function RecommendationPanel({
+  recommended,
+  reason,
+  facts,
+}: {
+  recommended: string | undefined;
+  reason: string | undefined;
+  facts: ReturnType<typeof evidenceFacts>;
+}) {
+  const spec = actionSpec(recommended);
+  const undecidable = !spec || !spec.approvable;
+
+  return (
+    <Alert
+      severity={undecidable ? 'warning' : 'info'}
+      icon={undecidable ? <HelpOutlineIcon fontSize="inherit" /> : false}
+      sx={{ mb: 2, '& .MuiAlert-message': { width: '100%' } }}
+    >
+      <AlertTitle sx={{ mb: 0.5 }}>
+        {undecidable
+          ? 'The classifier cannot tell — your decision is required'
+          : `Recommended: ${spec.label}`}
+      </AlertTitle>
+      {reason && (
+        <Typography variant="body2" sx={{ mb: facts.length ? 1 : 0 }}>
+          {reason}
+        </Typography>
+      )}
+      {!reason && (
+        <Typography variant="body2" color="text.secondary" sx={{ mb: facts.length ? 1 : 0 }}>
+          This hold predates evidence-backed recommendations. Re-run the regroup scan to
+          refresh it, or decide it here.
+        </Typography>
+      )}
+      {facts.length > 0 ? (
+        <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+          {facts.map((f) => (
+            <Tooltip key={f.label} title={f.hint} placement="top">
+              <Chip
+                size="small"
+                label={f.label}
+                color={f.warn ? 'warning' : 'default'}
+                variant={f.warn ? 'filled' : 'outlined'}
+              />
+            </Tooltip>
+          ))}
+        </Stack>
+      ) : (
+        <Typography variant="caption" color="text.secondary">
+          No evidence recorded for this hold.
+        </Typography>
+      )}
+    </Alert>
+  );
+}
+
+// ActionSelector lets a reviewer OVERRIDE the recommendation per item. The chosen
+// action is sent as {"action": "..."} and persisted on the hold, so it survives to
+// the replay that does the real work once review_apply_enabled is on.
+//
+// 🔴 `insufficient-evidence` IS NOT AN OPTION. The backend 400s it deliberately — it
+// is a statement BY the machine, not a decision a human can take — so offering it
+// would be offering a button that always fails. Holds recommending it simply start
+// with nothing selected and Approve stays disabled until a real choice is made,
+// rather than pre-filling a guess (which would be `combine` on precisely the holds
+// with the least evidence).
+function ActionSelector({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  disabled: boolean;
+}) {
+  const chosen = actionSpec(value);
+  return (
+    <Stack spacing={0.5} sx={{ minWidth: 260 }}>
+      <TextField
+        select
+        size="small"
+        label="Action"
+        value={value}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.value)}
+        helperText={chosen?.description ?? 'Choose what should happen to these files.'}
+      >
+        <MenuItem value="">
+          <em>Choose an action…</em>
+        </MenuItem>
+        {REVIEW_ACTIONS.filter((a) => a.approvable).map((a) => (
+          <MenuItem key={a.value} value={a.value}>
+            {a.label}
+            {a.unimplemented && ' (not implemented)'}
+          </MenuItem>
+        ))}
+      </TextField>
+    </Stack>
+  );
+}
+
+// ItemActions is the action selector plus the Approve/Reject pair for one hold.
+//
+// Rendered TWICE per item — above and below the member-file list — because a
+// multi-disc hold can list dozens of files, and with the buttons only at the bottom
+// you had to scroll the whole listing to act on something you decided about after
+// reading the first line. Both copies read the same resolved `action` prop, so
+// changing the selector at the top is exactly what the bottom Approve sends.
+//
+// 🔴 Module scope, not inline in ReviewQueue. A component declared inside the parent
+// render is a NEW component type on every render, so React unmounts and remounts its
+// subtree — which would slam the action dropdown shut whenever anything else on the
+// page updated. The buttons this replaced were stateless and got away with it; a
+// select is not.
+//
+// Approve is DISABLED with no action selected. That is the whole insufficient-evidence
+// story on the client: those holds start empty (defaultActionFor) and stay
+// un-approvable until a human names something, matching the backend's deliberate 400.
+function ItemActions({
+  item,
+  action,
+  busy,
+  withSelector,
+  onApprove,
+  onReject,
+  onActionChange,
+  sx,
+}: {
+  item: ReviewItem;
+  action: string;
+  busy: boolean;
+  /** The selector is rendered once (top). The bottom copy shows the resolved action
+   *  read-only, so a reviewer who scrolled past a long listing can still see what
+   *  Approve is about to do without a second control drifting out of sync. */
+  withSelector?: boolean;
+  onApprove: (item: ReviewItem) => void;
+  onReject: (item: ReviewItem) => void;
+  onActionChange: (id: string, value: string) => void;
+  sx?: SxProps<Theme>;
+}) {
+  const spec = actionSpec(action);
+  return (
+    <Stack direction="row" spacing={1.5} alignItems="flex-start" flexWrap="wrap" useFlexGap sx={sx}>
+      {withSelector ? (
+        <ActionSelector
+          value={action}
+          disabled={busy}
+          onChange={(v) => onActionChange(item.id, v)}
+        />
+      ) : (
+        action && (
+          <Chip
+            size="small"
+            variant="outlined"
+            color={spec?.destructive ? 'warning' : 'default'}
+            label={`Will ${labelForAction(action).toLowerCase()}`}
+          />
+        )
+      )}
+      <Stack direction="row" spacing={1} sx={{ mt: withSelector ? 0.5 : 0 }}>
+        <Tooltip
+          title={
+            action
+              ? ''
+              : 'Pick an action first — this hold has no recommendation the system is willing to act on.'
+          }
+        >
+          {/* span so the Tooltip still fires on a disabled Button */}
+          <span>
+            <Button
+              size="small"
+              variant="contained"
+              color={spec?.destructive ? 'warning' : 'success'}
+              startIcon={<CheckIcon />}
+              disabled={busy || !action}
+              onClick={() => onApprove(item)}
+            >
+              Approve
+            </Button>
+          </span>
+        </Tooltip>
+        <Button
+          size="small"
+          variant="outlined"
+          color="error"
+          startIcon={<CloseIcon />}
+          disabled={busy}
+          onClick={() => onReject(item)}
+        >
+          Reject
+        </Button>
+      </Stack>
+    </Stack>
+  );
+}
+
 // MemberFilesDetail renders a review item's payload header plus a rich per-member
 // list. It fetches the member books lazily (it only mounts when the accordion is
 // expanded, via unmountOnExit) so opening the queue never fans out hundreds of
@@ -161,7 +379,6 @@ function MemberFilesDetail({ item }: { item: ReviewItem }) {
   const pathVars = usePathVars();
   const payload = useMemo(() => parsePayload(item.payload), [item.payload]);
   const folder = payload?.folder ?? item.folder_ref;
-  const proposed = payload?.proposedAction ?? payload?.proposed_action;
   const title = payload?.survivorTitle ?? payload?.derived_title ?? payload?.title;
   const confidence =
     typeof payload?.confidence === 'string'
@@ -201,11 +418,6 @@ function MemberFilesDetail({ item }: { item: ReviewItem }) {
         {title && (
           <Typography variant="body2">
             <strong>Proposed title:</strong> {title}
-          </Typography>
-        )}
-        {proposed && (
-          <Typography variant="body2">
-            <strong>Proposed action:</strong> {proposed}
           </Typography>
         )}
         <Stack direction="row" spacing={1} alignItems="center">
@@ -252,6 +464,20 @@ export function ReviewQueue() {
   const [busyItems, setBusyItems] = useState<Set<string>>(new Set());
   const [busyKinds, setBusyKinds] = useState<Set<string>>(new Set());
 
+  // Per-item chosen action. Keyed by item id and populated lazily: an id absent from
+  // this map has not been touched by the reviewer, so it falls back to the hold's own
+  // recommendation (or to "" when that recommendation is not approvable). Keeping the
+  // overrides here rather than in each row means the two ItemActions rendered per item
+  // — above and below the file list — always agree about what Approve will send.
+  const [chosenActions, setChosenActions] = useState<Record<string, string>>({});
+
+  // The last bulk run's skipped items, kept on screen until the next bulk action.
+  // A toast is the wrong home for these: the whole point is that a reviewer can go
+  // deal with them, which means the ids have to stay readable.
+  const [bulkSkips, setBulkSkips] = useState<
+    { kind: string; skipped: api.ReviewBulkSkip[] } | null
+  >(null);
+
   useEffect(() => {
     void loadItems({ status: 'pending' });
   }, [loadItems]);
@@ -274,16 +500,32 @@ export function ReviewQueue() {
       .sort((a, b) => a.label.localeCompare(b.label));
   }, [items]);
 
+  // actionFor resolves what Approve will send for one item: the reviewer's explicit
+  // pick if they made one, else the hold's own approvable recommendation, else "" —
+  // which disables Approve rather than guessing.
+  const actionFor = (item: ReviewItem): string => {
+    const override = chosenActions[item.id];
+    if (override !== undefined) return override;
+    return defaultActionFor(parsePayload(item.payload));
+  };
+
   const handleItemAction = async (item: ReviewItem, action: 'approve' | 'reject') => {
     setBusyItems((prev) => new Set(prev).add(item.id));
     try {
       if (action === 'approve') {
-        await api.approveReviewItem(item.id);
+        // Always send the resolved action explicitly. The backend would accept an
+        // empty body and use the recommendation, but sending what the UI actually
+        // displayed removes any chance of the two disagreeing.
+        await api.approveReviewItem(item.id, actionFor(item));
       } else {
         await api.rejectReviewItem(item.id);
       }
       await refresh();
     } catch (err) {
+      // The backend's own message is surfaced verbatim. That matters most for
+      // `duplicate-of`, which answers 501 with an explanation of who owns it: a
+      // generic "failed to approve" would hide a refusal the reviewer needs to read,
+      // and pretending it succeeded would mark the hold decided while doing nothing.
       addNotification(
         `Failed to ${action} item: ${err instanceof Error ? err.message : 'unknown error'}`,
         'error'
@@ -297,16 +539,27 @@ export function ReviewQueue() {
     }
   };
 
+  const handleApprove = (item: ReviewItem) => void handleItemAction(item, 'approve');
+  const handleReject = (item: ReviewItem) => void handleItemAction(item, 'reject');
+  const handleActionChange = (id: string, value: string) =>
+    setChosenActions((prev) => ({ ...prev, [id]: value }));
+
   const handleBulkAction = async (kind: string, action: 'approve' | 'reject') => {
     setBusyKinds((prev) => new Set(prev).add(kind));
     try {
       const result = await api.bulkReviewAction({ action, kind });
+      const skipped = result.skipped ?? [];
+      // 🔴 REPORT THE SKIPS IN THE SAME BREATH AS THE SUCCESSES. Bulk approve runs
+      // each item's OWN recommendation and refuses the undecidable ones; a message
+      // quoting only `processed` would let a reviewer believe a bucket was cleared
+      // when a third of it is still sitting there.
       addNotification(
         `${action === 'approve' ? 'Approved' : 'Rejected'} ${result.processed} item${
           result.processed === 1 ? '' : 's'
-        }`,
-        'success'
+        }${skipped.length ? ` · ${skipped.length} skipped, listed below` : ''}`,
+        skipped.length ? 'warning' : 'success'
       );
+      setBulkSkips(skipped.length ? { kind, skipped } : null);
       await refresh();
     } catch (err) {
       addNotification(
@@ -321,43 +574,6 @@ export function ReviewQueue() {
       });
     }
   };
-
-  // Approve/Reject pair for a single item. Defined here rather than at module
-  // scope so it closes over handleItemAction; rendered twice per item (above and
-  // below the member-file list) so the decision is reachable without scrolling
-  // past a long multi-disc listing.
-  const ItemActions = ({
-    item,
-    busy,
-    sx,
-  }: {
-    item: ReviewItem;
-    busy: boolean;
-    sx?: SxProps<Theme>;
-  }) => (
-    <Stack direction="row" spacing={1} sx={sx}>
-      <Button
-        size="small"
-        variant="contained"
-        color="success"
-        startIcon={<CheckIcon />}
-        disabled={busy}
-        onClick={() => handleItemAction(item, 'approve')}
-      >
-        Approve
-      </Button>
-      <Button
-        size="small"
-        variant="outlined"
-        color="error"
-        startIcon={<CloseIcon />}
-        disabled={busy}
-        onClick={() => handleItemAction(item, 'reject')}
-      >
-        Reject
-      </Button>
-    </Stack>
-  );
 
   return (
     <Box>
@@ -403,16 +619,20 @@ export function ReviewQueue() {
                     <Chip size="small" label={bucket.items.length} />
                   </Box>
                   <Stack direction="row" spacing={1}>
-                    <Button
-                      size="small"
-                      variant="contained"
-                      color="success"
-                      startIcon={<CheckIcon />}
-                      disabled={kindBusy}
-                      onClick={() => handleBulkAction(bucket.kind, 'approve')}
-                    >
-                      Approve all
-                    </Button>
+                    <Tooltip title="Approves each hold with ITS OWN recommendation — there is no batch-wide action. Holds the classifier could not decide are skipped and listed, not approved.">
+                      <span>
+                        <Button
+                          size="small"
+                          variant="contained"
+                          color="success"
+                          startIcon={<CheckIcon />}
+                          disabled={kindBusy}
+                          onClick={() => handleBulkAction(bucket.kind, 'approve')}
+                        >
+                          Approve all
+                        </Button>
+                      </span>
+                    </Tooltip>
                     <Button
                       size="small"
                       variant="outlined"
@@ -425,9 +645,40 @@ export function ReviewQueue() {
                     </Button>
                   </Stack>
                 </Box>
+                {bulkSkips?.kind === bucket.kind && (
+                  <Alert
+                    severity="warning"
+                    sx={{ mb: 1 }}
+                    onClose={() => setBulkSkips(null)}
+                  >
+                    <AlertTitle>
+                      {bulkSkips.skipped.length} hold
+                      {bulkSkips.skipped.length === 1 ? ' was' : 's were'} skipped — still
+                      pending
+                    </AlertTitle>
+                    <Typography variant="body2" sx={{ mb: 1 }}>
+                      Bulk approve uses each hold&apos;s own recommendation. These had none it
+                      would act on, so they were left alone. Open them below and choose an
+                      action.
+                    </Typography>
+                    <Stack spacing={0.5}>
+                      {bulkSkips.skipped.map((s) => (
+                        <Typography key={s.id} variant="caption" display="block">
+                          <code>{s.id}</code>
+                          {s.action ? ` · ${labelForAction(s.action) || s.action}` : ''} — {s.reason}
+                        </Typography>
+                      ))}
+                    </Stack>
+                  </Alert>
+                )}
                 <Divider sx={{ mb: 1 }} />
                 {bucket.items.map((item) => {
                   const itemBusy = busyItems.has(item.id);
+                  const payload = parsePayload(item.payload);
+                  const action = actionFor(item);
+                  const recommended = payload?.recommendedAction;
+                  const recSpec = actionSpec(recommended);
+                  const needsHuman = !recSpec || !recSpec.approvable;
                   return (
                     <Accordion
                       key={item.id}
@@ -435,11 +686,40 @@ export function ReviewQueue() {
                       slotProps={{ transition: { unmountOnExit: true } }}
                     >
                       <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                        <Typography variant="body2" sx={{ flexGrow: 1 }}>
-                          {item.summary || item.folder_ref || item.id}
-                        </Typography>
+                        <Stack
+                          direction="row"
+                          spacing={1}
+                          alignItems="center"
+                          sx={{ flexGrow: 1, minWidth: 0 }}
+                        >
+                          <Typography variant="body2" noWrap sx={{ flexGrow: 1, minWidth: 0 }}>
+                            {item.summary || item.folder_ref || item.id}
+                          </Typography>
+                          {/* The recommendation is shown COLLAPSED so a reviewer can
+                              triage a bucket without opening every row. An
+                              undecidable hold is flagged rather than hidden: those
+                              are the ones that need a person, and they are the
+                              majority of the current queue. */}
+                          <Chip
+                            size="small"
+                            label={
+                              needsHuman
+                                ? 'Needs a decision'
+                                : `Rec: ${labelForAction(recommended)}`
+                            }
+                            color={
+                              needsHuman ? 'warning' : recSpec?.destructive ? 'default' : 'info'
+                            }
+                            variant="outlined"
+                          />
+                        </Stack>
                       </AccordionSummary>
                       <AccordionDetails>
+                        <RecommendationPanel
+                          recommended={recommended}
+                          reason={payload?.recommendationReason}
+                          facts={evidenceFacts(payload?.recommendationEvidence)}
+                        />
                         {/*
                           Actions are rendered ABOVE the detail as well as below it.
                           A multi-disc item can list dozens of member files, so with
@@ -450,9 +730,26 @@ export function ReviewQueue() {
                           are — the top pair for a quick call, the bottom pair for
                           when you have actually read to the end.
                         */}
-                        <ItemActions item={item} busy={itemBusy} sx={{ mb: 2 }} />
+                        <ItemActions
+                          item={item}
+                          action={action}
+                          busy={itemBusy}
+                          withSelector
+                          onApprove={handleApprove}
+                          onReject={handleReject}
+                          onActionChange={handleActionChange}
+                          sx={{ mb: 2 }}
+                        />
                         <MemberFilesDetail item={item} />
-                        <ItemActions item={item} busy={itemBusy} sx={{ mt: 2 }} />
+                        <ItemActions
+                          item={item}
+                          action={action}
+                          busy={itemBusy}
+                          onApprove={handleApprove}
+                          onReject={handleReject}
+                          onActionChange={handleActionChange}
+                          sx={{ mt: 2 }}
+                        />
                       </AccordionDetails>
                     </Accordion>
                   );
