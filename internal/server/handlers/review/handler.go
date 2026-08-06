@@ -1,7 +1,7 @@
 // file: internal/server/handlers/review/handler.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2b6f9c14-8e37-4a5d-91c6-0f4a7d2e8b53
-// last-edited: 2026-07-14
+// last-edited: 2026-08-06
 
 // Package reviewhandler hosts the universal review-queue HTTP handlers (PR-A1).
 //
@@ -12,28 +12,72 @@
 // B, not built yet), so at A1 the queue starts empty and no apply handlers are
 // registered.
 //
-// Apply-handler registry + global switch: approving an item dispatches on its Kind
-// to a registered ApplyFunc, BUT only when the global apply "big switch"
-// (applyEnabled) is on. When a Kind has a handler AND the switch is on, approve runs
-// it and sets the item to "applied". Otherwise — no handler, OR the switch is off
-// (review-only mode, the default) — approve just sets "approved" and returns OK with
-// a note, never executing anything. This makes "see everything in the review pane,
-// nothing auto-merges" the default until the switch is deliberately flipped. Track
-// B's B2 registers the regroup apply handlers; config.ReviewApplyEnabled is the switch.
+// Apply-handler registry + global switch: approving an item dispatches on the
+// CHOSEN ACTION to a registered ApplyFunc, BUT only when the global apply "big
+// switch" (applyEnabled) is on. When an action has a handler AND the switch is on,
+// approve runs it and sets the item to "applied". Otherwise — no handler, OR the
+// switch is off (review-only mode, the default) — approve just sets "approved" and
+// returns OK with a note, never executing anything. This makes "see everything in
+// the review pane, nothing auto-merges" the default until the switch is deliberately
+// flipped. Track B's B2 registers the regroup apply handlers;
+// config.ReviewApplyEnabled is the switch.
+//
+// 🔴 DISPATCH IS ON THE ACTION, NOT THE KIND (owner item 2, 2026-08-06).
+//
+// Until this change the registry was keyed by ReviewItem.Kind, which conflated two
+// different questions: a Kind says what SHAPE the classifier saw ("these files live
+// in Disc N folders"), an action says what a human should DO about it ("these are
+// six different novels — leave them apart"). Prod proved the two disagree: 3 of the
+// 130 `regroup.multidisc` holds measured on 2026-08-06 hold members that are each
+// book-length, because the disc and chapter/edition branches of classifyGroup never
+// evaluate the series guard. Kind-keyed dispatch would merge those distinct novels
+// through an apply path that hard-deletes the absorbed Book rows.
+//
+// So approve now resolves an ACTION — the request body's explicit choice when the
+// human made one, else the hold's own `recommendedAction` — validates it against the
+// closed vocabulary in internal/itunes/service, and dispatches on that. A typo'd
+// action is a 400, never a silent fall back to the recommendation: a human who meant
+// "separate" must not be given "combine" because they mistyped.
 package reviewhandler
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
+	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	"github.com/gin-gonic/gin"
 )
 
+// approvableActions is the CLOSED approve vocabulary: action → may a human CHOOSE
+// it. It mirrors the classifier's Action* constants
+// (internal/itunes/service/fs_regroup_shape.go) by IMPORTING them rather than
+// re-declaring the strings, so the producer and the dispatcher can never drift.
+//
+// ActionInsufficientEvidence is in the vocabulary but is NOT approvable — it is a
+// statement BY the machine ("I cannot tell"), not a decision a human can make.
+// Approving one would record a decision nobody took, on exactly the holds where the
+// evidence is weakest. ActionDuplicateOf is approvable in principle but has no apply
+// path yet; approveOne rejects it explicitly rather than no-op'ing (see there).
+var approvableActions = map[string]bool{
+	itunesservice.ActionCombine:              true,
+	itunesservice.ActionSeparate:             true,
+	itunesservice.ActionVersionGroup:         true,
+	itunesservice.ActionDuplicateOf:          true,
+	itunesservice.ActionInsufficientEvidence: false,
+}
+
 // ApplyFunc executes the real-world action an approved review item represents
-// (e.g. the regroup op collapsing shattered books). Registered per Kind.
+// (e.g. the regroup op collapsing shattered books). Registered per ACTION — see
+// RegisterApplyHandler and the package doc; it was per Kind before 2026-08-06.
 type ApplyFunc func(ctx context.Context, item database.ReviewItem) error
 
 // Handler hosts the review-queue HTTP endpoints.
@@ -47,10 +91,14 @@ type Handler struct {
 	// treated as disabled (fail-safe: never auto-apply unless explicitly turned on).
 	applyEnabled func() bool
 
-	// applyHandlers maps a review item's Kind to the action that applies it.
-	// Empty in A1; populated by producers (e.g. B2's regroup) via
-	// RegisterApplyHandler. Guarded by mu because registration may happen during
-	// wiring while requests could already be arriving.
+	// applyHandlers maps a CHOSEN ACTION (an itunesservice.Action* string) to the
+	// code that carries it out. Empty in A1; populated by producers (e.g. B2's
+	// regroup) via RegisterApplyHandler. Guarded by mu because registration may
+	// happen during wiring while requests could already be arriving.
+	//
+	// Keyed by action rather than by Kind since 2026-08-06 — see the package doc.
+	// Actions with no entry (separate, insufficient-evidence, duplicate-of) are
+	// handled by approveOne directly and never reach this map.
 	mu            sync.RWMutex
 	applyHandlers map[string]ApplyFunc
 }
@@ -72,19 +120,72 @@ func (h *Handler) applyGloballyEnabled() bool {
 	return h.applyEnabled != nil && h.applyEnabled()
 }
 
-// RegisterApplyHandler registers the apply action for a given review Kind.
-// Producers call this at wire time (B2 registers the regroup apply path).
-func (h *Handler) RegisterApplyHandler(kind string, fn ApplyFunc) {
+// RegisterApplyHandler registers the code that carries out one ACTION (an
+// itunesservice.Action* string, NOT a review Kind). Producers call this at wire
+// time (B2 registers the regroup apply paths).
+func (h *Handler) RegisterApplyHandler(action string, fn ApplyFunc) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.applyHandlers[kind] = fn
+	h.applyHandlers[action] = fn
 }
 
-func (h *Handler) applyHandlerFor(kind string) (ApplyFunc, bool) {
+func (h *Handler) applyHandlerFor(action string) (ApplyFunc, bool) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	fn, ok := h.applyHandlers[kind]
+	fn, ok := h.applyHandlers[action]
 	return fn, ok
+}
+
+// recommendedActionFor reads the classifier's recommendation out of a hold's
+// payload, defaulting to ActionInsufficientEvidence.
+//
+// 🔴 EVERY FAILURE MODE HERE FAILS CLOSED TO insufficient-evidence, which has no
+// apply handler and is not approvable. A hold written before the recommendation
+// existed (all ~356 currently in prod's queue), a hold whose payload is not JSON,
+// and a hold carrying an empty action all land in the same place: approve refuses
+// until a human names an action explicitly. The alternative — guessing a default —
+// would guess `combine` on precisely the holds with the least evidence, and combine
+// routes to an apply path that hard-deletes absorbed Book rows.
+//
+// A malformed payload is logged rather than swallowed: it means a producer wrote
+// something this handler cannot read, which is a bug worth seeing even though the
+// safe behaviour is already guaranteed.
+func recommendedActionFor(item database.ReviewItem) string {
+	if item.Payload == "" {
+		return itunesservice.ActionInsufficientEvidence
+	}
+	var p struct {
+		RecommendedAction string `json:"recommendedAction"`
+	}
+	if err := json.Unmarshal([]byte(item.Payload), &p); err != nil {
+		slog.Warn("review approve: hold payload is not decodable JSON — treating as insufficient-evidence",
+			"item", item.ID, "kind", item.Kind, "err", err)
+		return itunesservice.ActionInsufficientEvidence
+	}
+	if p.RecommendedAction == "" {
+		return itunesservice.ActionInsufficientEvidence
+	}
+	return p.RecommendedAction
+}
+
+// actionRejection is a per-item REFUSAL to approve — a caller error (bad action,
+// unapprovable action, unimplemented action), never a server fault.
+//
+// It exists as a distinct type because approve is now reachable two ways with two
+// different correct responses: a single approve turns it into a 4xx/501, while a
+// BULK approve must SKIP that item and keep going. Before the action dispatch every
+// approveOne error was a genuine fault and bulk was right to abort on it; conflating
+// the two would let one unapprovable hold abort a 121-hold batch.
+type actionRejection struct {
+	status int    // HTTP status a single approve should return
+	code   string // stable machine-readable error code
+	msg    string // human-readable reason, safe to show a reviewer
+}
+
+func (e *actionRejection) Error() string { return e.msg }
+
+func rejectf(status int, code, msg string) *actionRejection {
+	return &actionRejection{status: status, code: code, msg: msg}
 }
 
 // GetReviewCount handles GET /api/v1/review/count.
@@ -146,18 +247,45 @@ func (h *Handler) ListReviewItems(c *gin.Context) {
 	httputil.RespondWithList(c, items, total, filter.Limit, filter.Offset)
 }
 
+// approveRequest is the OPTIONAL POST /api/v1/review/items/:id/approve body.
+//
+// Absent or empty Action means "do what the hold recommends". A present Action
+// OVERRIDES the recommendation — that is the entire point of owner item 2: the
+// machine proposes, the human disposes, and the human's choice is what runs.
+type approveRequest struct {
+	Action string `json:"action,omitempty"`
+}
+
 // ApproveReviewItem handles POST /api/v1/review/items/:id/approve.
 //
-// If a Kind has a registered apply handler, it runs then the item is set
-// "applied". Otherwise (A1 for every Kind) the item is set "approved" and a note
-// is returned — approving without a handler is never an error.
+// The chosen action is the body's `action` when supplied, else the hold's
+// `recommendedAction`. If that action has a registered apply handler AND the global
+// switch is on, it runs and the item is set "applied"; otherwise the item is set
+// "approved" with an explanatory note. Actions a human may not choose
+// (insufficient-evidence), actions outside the vocabulary, and actions with no
+// implementation (duplicate-of) are REFUSED, never quietly downgraded.
 func (h *Handler) ApproveReviewItem(c *gin.Context) {
 	if h.store == nil {
 		httputil.RespondWithServiceUnavailable(c, "review store not available")
 		return
 	}
+	// The body is optional (the pre-override frontend sends none), so an empty body
+	// is not an error — but a MALFORMED body is. Binding errors are surfaced rather
+	// than ignored: silently discarding an unparseable `{"action": ...}` would run
+	// the recommendation while the caller believes it overrode it.
+	var req approveRequest
+	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
+		httputil.RespondWithBadRequest(c, "invalid request body: "+err.Error())
+		return
+	}
+
 	id := c.Param("id")
-	updated, note, err := h.approveOne(c.Request.Context(), id)
+	updated, chosen, note, err := h.approveOne(c.Request.Context(), id, strings.TrimSpace(req.Action))
+	var rej *actionRejection
+	if errors.As(err, &rej) {
+		httputil.RespondWithError(c, rej.status, rej.msg, rej.code)
+		return
+	}
 	if err != nil {
 		httputil.InternalError(c, "failed to approve review item", err)
 		return
@@ -166,45 +294,127 @@ func (h *Handler) ApproveReviewItem(c *gin.Context) {
 		httputil.RespondWithNotFound(c, "review item", id)
 		return
 	}
-	resp := gin.H{"item": updated}
+	// chosenAction is echoed so the caller can see WHICH action ran — with an empty
+	// body that is the recommendation, which the caller may not have read.
+	resp := gin.H{"item": updated, "chosenAction": chosen}
 	if note != "" {
 		resp["note"] = note
 	}
 	httputil.RespondWithOK(c, resp)
 }
 
-// approveOne applies + transitions a single item. Returns (nil, "", nil) when
-// the item does not exist. note is set when the item was approved without a
-// registered apply handler.
-func (h *Handler) approveOne(ctx context.Context, id string) (*database.ReviewItem, string, error) {
+// approveOne resolves, validates and dispatches the action for a single item, then
+// transitions it. Returns (nil, "", "", nil) when the item does not exist.
+//
+// requested is the caller's explicit override ("" = use the hold's recommendation).
+// The returned action is the one actually dispatched. A returned *actionRejection
+// means the caller asked for something that must not happen; any other error is a
+// genuine fault.
+func (h *Handler) approveOne(ctx context.Context, id, requested string) (*database.ReviewItem, string, string, error) {
 	item, err := h.store.GetReviewItem(id)
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	if item == nil {
-		return nil, "", nil
+		return nil, "", "", nil
 	}
-	fn, hasHandler := h.applyHandlerFor(item.Kind)
+
+	recommended := recommendedActionFor(*item)
+	chosen := requested
+	if chosen == "" {
+		chosen = recommended
+	}
+
+	// (1) Closed vocabulary. An unrecognised action is a 400, NEVER a fall back to
+	// the recommendation: a reviewer who typed "seperate" and meant "leave these six
+	// novels apart" must not be handed "combine" because of a typo. Silent fallback
+	// is how a merge happens that nobody chose.
+	approvable, known := approvableActions[chosen]
+	if !known {
+		return nil, chosen, "", rejectf(http.StatusBadRequest, "REVIEW_UNKNOWN_ACTION",
+			"unknown review action "+strconv.Quote(chosen)+"; expected one of combine, separate, version-group, duplicate-of")
+	}
+
+	// (2) insufficient-evidence is emitted BY the classifier, never chosen by a human.
+	// Reaching here by default (an old hold, or one whose members have no runtimes)
+	// means the machine has nothing to say, so the human must say it explicitly.
+	if !approvable {
+		return nil, chosen, "", rejectf(http.StatusBadRequest, "REVIEW_ACTION_NOT_DECIDABLE",
+			"this hold recommends 'insufficient-evidence' — the classifier cannot tell what to do, "+
+				"so approving requires an explicit {\"action\": \"...\"} choice (combine, separate or version-group)")
+	}
+
+	// (3) duplicate-of has no apply path yet (deciding a folder duplicates an existing
+	// book needs cross-book identity evidence the regroup classifier never gathers).
+	// Refuse loudly: accepting it would mark the hold decided while doing nothing,
+	// and "decided" is sticky — UpsertReviewItem never re-offers a non-pending hold.
+	if chosen == itunesservice.ActionDuplicateOf {
+		return nil, chosen, "", rejectf(http.StatusNotImplemented, "REVIEW_ACTION_NOT_IMPLEMENTED",
+			"action 'duplicate-of' is not implemented: the duplicate-detection track owns it. "+
+				"Reject the hold instead, or choose combine/separate/version-group")
+	}
+
+	// (4) 🔴 AN OVERRIDE THAT CANNOT BE PERSISTED MUST NOT BE ACCEPTED.
+	//
+	// The chosen action is NOT stored anywhere: SetReviewItemStatus writes status
+	// only, and UpsertReviewItem is a full no-op on a non-pending row, so there is no
+	// way to record "the human picked separate" on an already-approved hold. With the
+	// global switch OFF the override therefore evaporates — and ReplayApprovedItems,
+	// run after the switch is flipped (owner item 3), re-resolves the action from the
+	// PAYLOAD. A hold recommending `combine` that a human overrode to `separate` would
+	// be replayed as `combine`, hard-deleting the absorbed rows of books the human
+	// explicitly said to keep apart.
+	//
+	// Narrow on purpose: this only fires when the RECOMMENDATION itself has an apply
+	// handler, i.e. exactly the case where a later replay would act on it. Overriding
+	// a hold that recommends separate/insufficient-evidence is still allowed, because
+	// replay skips those — the decision is lost, but nothing is destroyed.
+	//
+	// Removing this guard requires persisting the chosen action first.
+	if requested != "" && requested != recommended && !h.applyGloballyEnabled() {
+		if _, replayable := h.applyHandlerFor(recommended); replayable {
+			return nil, chosen, "", rejectf(http.StatusConflict, "REVIEW_OVERRIDE_NOT_PERSISTABLE",
+				"cannot record an override of '"+recommended+"' while review_apply_enabled is off: "+
+					"the chosen action is not stored, so a later replay would run '"+recommended+
+					"' instead. Reject this hold, or enable review_apply_enabled to apply the override now")
+		}
+	}
+
+	// (5) separate needs NO apply handler and never will. Every member is already its
+	// own book, so "separate into N" is a statement that the current on-disk state is
+	// correct — there is nothing to execute, only a decision to record. The dedup-key
+	// idempotency in UpsertReviewItem keeps it decided across re-scans, which is the
+	// whole mechanism: a re-scan skips a non-pending hold.
+	if chosen == itunesservice.ActionSeparate {
+		updated, serr := h.store.SetReviewItemStatus(id, database.ReviewStatusApproved)
+		if serr != nil {
+			return nil, "", "", serr
+		}
+		return updated, chosen, "action 'separate' needs no apply step — every member is already its own book; " +
+			"recorded as approved so re-scans leave it alone", nil
+	}
+
+	fn, hasHandler := h.applyHandlerFor(chosen)
 	if hasHandler && h.applyGloballyEnabled() {
 		if err := fn(ctx, *item); err != nil {
-			return nil, "", err
+			return nil, "", "", err
 		}
 		updated, err := h.store.SetReviewItemStatus(id, database.ReviewStatusApplied)
-		return updated, "", err
+		return updated, chosen, "", err
 	}
-	// Either no apply handler for this Kind, OR the global apply switch is OFF
+	// Either no apply handler for this action, OR the global apply switch is OFF
 	// (review-only mode). Record the decision as "approved" but do NOT execute — the
 	// item stays visible/reviewable and nothing is merged.
 	updated, err := h.store.SetReviewItemStatus(id, database.ReviewStatusApproved)
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
-	note := "no apply handler registered for kind " + item.Kind + "; marked approved"
+	note := "no apply handler registered for action " + chosen + "; marked approved"
 	if hasHandler {
 		note = "apply is disabled (review-only mode): item approved but NOT applied — " +
 			"enable review_apply_enabled to perform the merge"
 	}
-	return updated, note, nil
+	return updated, chosen, note, nil
 }
 
 // RejectReviewItem handles POST /api/v1/review/items/:id/reject.
@@ -229,20 +439,36 @@ func (h *Handler) RejectReviewItem(c *gin.Context) {
 // bulkRequest is the POST /api/v1/review/bulk body (decision #4: grouped bulk
 // actions). One of Kind or IDs must be set — an unscoped bulk over the whole
 // queue is rejected to avoid an accidental approve/reject-all.
+//
+// 🔴 Action here is the BULK VERB ("approve" | "reject"), and there is deliberately
+// NO batch-wide review action. A single review action applied to a heterogeneous
+// batch is the exact footgun this whole change exists to remove: a batch "combine"
+// over `regroup.multidisc` would merge the 3 series near-misses that motivated it.
+// Bulk approve instead uses EACH item's own recommendation, so it processes the 121
+// all-fragment holds and skips those 3 — the payoff, not a limitation.
 type bulkRequest struct {
 	Action string   `json:"action"` // "approve" | "reject"
 	Kind   string   `json:"kind,omitempty"`
 	IDs    []string `json:"ids,omitempty"`
 }
 
+// bulkSkip is one item a bulk approve refused to act on, with the reason a reviewer
+// needs in order to go handle it individually.
+type bulkSkip struct {
+	ID     string `json:"id"`
+	Action string `json:"action"` // the action that was refused (usually insufficient-evidence)
+	Reason string `json:"reason"`
+}
+
 // bulkResult reports the outcome of a bulk action.
 type bulkResult struct {
-	Action    string   `json:"action"`
-	Approved  []string `json:"approved,omitempty"`
-	Applied   []string `json:"applied,omitempty"`
-	Rejected  []string `json:"rejected,omitempty"`
-	NotFound  []string `json:"not_found,omitempty"`
-	Processed int      `json:"processed"`
+	Action    string     `json:"action"`
+	Approved  []string   `json:"approved,omitempty"`
+	Applied   []string   `json:"applied,omitempty"`
+	Rejected  []string   `json:"rejected,omitempty"`
+	NotFound  []string   `json:"not_found,omitempty"`
+	Skipped   []bulkSkip `json:"skipped,omitempty"`
+	Processed int        `json:"processed"`
 }
 
 // BulkReviewAction handles POST /api/v1/review/bulk.
@@ -291,7 +517,18 @@ func (h *Handler) BulkReviewAction(c *gin.Context) {
 	for _, id := range ids {
 		switch req.Action {
 		case "approve":
-			updated, _, err := h.approveOne(c.Request.Context(), id)
+			// "" = use this item's OWN recommendation. See bulkRequest's comment for
+			// why there is no batch-wide action.
+			updated, chosen, _, err := h.approveOne(c.Request.Context(), id, "")
+			// A per-item refusal (no decidable action, unimplemented action) SKIPS that
+			// item and the batch continues. Aborting the whole batch on one
+			// insufficient-evidence hold would make bulk approve useless on a queue
+			// where 70 of 356 holds are exactly that.
+			var rej *actionRejection
+			if errors.As(err, &rej) {
+				result.Skipped = append(result.Skipped, bulkSkip{ID: id, Action: chosen, Reason: rej.msg})
+				continue
+			}
 			if err != nil {
 				httputil.InternalError(c, "failed to approve review item "+id, err)
 				return

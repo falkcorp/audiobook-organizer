@@ -1,7 +1,7 @@
 // file: internal/server/handlers/review/replay.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4d807d92-72d8-4df6-9da1-80123d2bf6b4
-// last-edited: 2026-08-05
+// last-edited: 2026-08-06
 
 package reviewhandler
 
@@ -11,6 +11,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	"github.com/gin-gonic/gin"
 )
 
@@ -74,14 +75,39 @@ func (h *Handler) ReplayApprovedItems(c *gin.Context) {
 		Kind   string `json:"kind"`
 		Reason string `json:"reason"`
 	}
+	// Resolve the ACTION the same way approveOne does (one place owns "empty →
+	// insufficient-evidence"), then look the handler up by action. Replay must agree
+	// with approve about what a hold means, or the two would carry out different
+	// decisions for the same row.
+	//
+	// Every hold approved before recommendations existed resolves to
+	// insufficient-evidence and lands in the skip list — which is why would_replay
+	// drops to near zero on a queue of pre-2026-08-06 approvals. That is the
+	// fail-closed direction: refusing to replay a hold whose intended action was
+	// never recorded beats guessing one.
+	//
+	// 🔴 THE RECOVERY PATH IS RE-APPROVE, NOT RE-SCAN. A re-scan cannot help here:
+	// UpsertReviewItem is a FULL no-op on a non-pending row, so it will not refresh
+	// an already-approved hold's payload. What does work is approving the hold again
+	// with an explicit {"action": "..."} — approveOne has no status guard, so an
+	// approved item can be re-approved and applied. The skip reason says so, because
+	// pointing an operator at a re-scan that silently does nothing is worse than
+	// saying nothing.
 	var replayable []database.ReviewItem
 	var noHandler []skipped
 	for _, it := range items {
-		if _, ok := h.applyHandlerFor(it.Kind); ok {
+		action := recommendedActionFor(it)
+		if _, ok := h.applyHandlerFor(action); ok {
 			replayable = append(replayable, it)
 			continue
 		}
-		noHandler = append(noHandler, skipped{it.ID, it.Kind, "no apply handler registered for this kind"})
+		reason := "no apply handler registered for action " + action
+		if action == itunesservice.ActionInsufficientEvidence {
+			reason = "hold carries no recommended action (approved before recommendations existed, or the " +
+				"classifier could not tell) — approve it again with an explicit {\"action\": \"...\"} to decide it; " +
+				"a re-scan will NOT refresh an already-approved hold"
+		}
+		noHandler = append(noHandler, skipped{it.ID, it.Kind, reason})
 	}
 	if req.Limit > 0 && len(replayable) > req.Limit {
 		replayable = replayable[:req.Limit]
@@ -113,7 +139,7 @@ func (h *Handler) ReplayApprovedItems(c *gin.Context) {
 	var errs []string
 	for i := range replayable {
 		it := replayable[i]
-		fn, ok := h.applyHandlerFor(it.Kind)
+		fn, ok := h.applyHandlerFor(recommendedActionFor(it))
 		if !ok {
 			continue
 		}

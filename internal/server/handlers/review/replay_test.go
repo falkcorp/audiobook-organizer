@@ -1,18 +1,20 @@
 // file: internal/server/handlers/review/replay_test.go
-// version: 1.0.0
+// version: 1.2.0
 // guid: 8e3c5a71-9d24-4b60-af18-2c47e0b96d35
-// last-edited: 2026-08-05
+// last-edited: 2026-08-06
 
 package reviewhandler_test
 
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	reviewhandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/review"
 )
 
@@ -37,13 +39,13 @@ func approveWith(t *testing.T, h *reviewhandler.Handler, id string) {
 // replay, and the work actually happens.
 func TestReplayApproved_AppliesDecisionsMadeWhileApplyWasOff(t *testing.T) {
 	s := newTestStore(t)
-	it := seed(t, s, "regroup.multidisc", "m1")
+	it := seedAction(t, s, "regroup.multidisc", "m1", itunesservice.ActionCombine)
 
 	applyOn := false
 	h := reviewhandler.New(s, func() bool { return applyOn })
 
 	var appliedIDs []string
-	h.RegisterApplyHandler("regroup.multidisc", func(_ context.Context, item database.ReviewItem) error {
+	h.RegisterApplyHandler(itunesservice.ActionCombine, func(_ context.Context, item database.ReviewItem) error {
 		appliedIDs = append(appliedIDs, item.ID)
 		return nil
 	})
@@ -86,11 +88,11 @@ func TestReplayApproved_AppliesDecisionsMadeWhileApplyWasOff(t *testing.T) {
 // every destructive path in this codebase.
 func TestReplayApproved_DryRunChangesNothing(t *testing.T) {
 	s := newTestStore(t)
-	it := seed(t, s, "regroup.multidisc", "m1")
+	it := seedAction(t, s, "regroup.multidisc", "m1", itunesservice.ActionCombine)
 	h := reviewhandler.New(s, func() bool { return false })
 
 	ran := 0
-	h.RegisterApplyHandler("regroup.multidisc", func(_ context.Context, _ database.ReviewItem) error {
+	h.RegisterApplyHandler(itunesservice.ActionCombine, func(_ context.Context, _ database.ReviewItem) error {
 		ran++
 		return nil
 	})
@@ -114,9 +116,9 @@ func TestReplayApproved_DryRunChangesNothing(t *testing.T) {
 // exists to fix.
 func TestReplayApproved_RefusesWhenApplyIsGloballyDisabled(t *testing.T) {
 	s := newTestStore(t)
-	it := seed(t, s, "regroup.multidisc", "m1")
+	it := seedAction(t, s, "regroup.multidisc", "m1", itunesservice.ActionCombine)
 	h := reviewhandler.New(s, func() bool { return false })
-	h.RegisterApplyHandler("regroup.multidisc", func(_ context.Context, _ database.ReviewItem) error {
+	h.RegisterApplyHandler(itunesservice.ActionCombine, func(_ context.Context, _ database.ReviewItem) error {
 		return nil
 	})
 	approveWith(t, h, it.ID)
@@ -132,11 +134,11 @@ func TestReplayApproved_RefusesWhenApplyIsGloballyDisabled(t *testing.T) {
 // Marking it applied after a failure would strand the work exactly as before.
 func TestReplayApproved_LeavesFailedItemsRetryable(t *testing.T) {
 	s := newTestStore(t)
-	it := seed(t, s, "regroup.multidisc", "m1")
+	it := seedAction(t, s, "regroup.multidisc", "m1", itunesservice.ActionCombine)
 	h := reviewhandler.New(s, func() bool { return true })
 
 	fail := true
-	h.RegisterApplyHandler("regroup.multidisc", func(_ context.Context, _ database.ReviewItem) error {
+	h.RegisterApplyHandler(itunesservice.ActionCombine, func(_ context.Context, _ database.ReviewItem) error {
 		if fail {
 			return context.DeadlineExceeded
 		}
@@ -172,9 +174,12 @@ func TestReplayApproved_LeavesFailedItemsRetryable(t *testing.T) {
 	}
 }
 
-// Kinds with no registered handler are reported as skipped, never silently
-// dropped — 779 of the current queue are regroup.ambiguous, which has none.
-func TestReplayApproved_ReportsKindsWithNoHandler(t *testing.T) {
+// Holds whose ACTION has no registered handler are reported as skipped, never
+// silently dropped. This one is seeded with the OLD payload shape (no
+// recommendedAction), which is every hold approved before 2026-08-06: it resolves
+// to insufficient-evidence and must be skipped with a reason that says why, rather
+// than replayed on a guessed action.
+func TestReplayApproved_ReportsItemsWithNoApplicableAction(t *testing.T) {
 	s := newTestStore(t)
 	it := seed(t, s, "regroup.ambiguous", "a1")
 	h := reviewhandler.New(s, func() bool { return true })
@@ -191,5 +196,49 @@ func TestReplayApproved_ReportsKindsWithNoHandler(t *testing.T) {
 	skipped, _ := data["skipped"].([]any)
 	if len(skipped) != 1 {
 		t.Fatalf("skipped = %v, want the one handler-less item (body %s)", skipped, w.Body.String())
+	}
+	reason, _ := skipped[0].(map[string]any)["reason"].(string)
+	if !strings.Contains(reason, "no recommended action") {
+		t.Fatalf("skip reason = %q, want it to name the missing recommendation so an operator "+
+			"knows a re-scan is the fix", reason)
+	}
+}
+
+// 🔴 THE RECOVERY PATH THE SKIP REASON ADVERTISES MUST ACTUALLY WORK. Replay skips
+// every hold approved before recommendations existed, and a re-scan cannot unstick
+// them — UpsertReviewItem is a full no-op on a non-pending row. The only way out is
+// re-approving with an explicit action, so this asserts an ALREADY-APPROVED hold can
+// be approved again and applied. Without this the skipped items are in a dead end.
+func TestApprove_AlreadyApprovedItem_CanBeReApprovedWithAnExplicitAction(t *testing.T) {
+	s := newTestStore(t)
+	it := seed(t, s, "regroup.ambiguous", "a1") // old payload → insufficient-evidence
+	if _, err := s.SetReviewItemStatus(it.ID, database.ReviewStatusApproved); err != nil {
+		t.Fatalf("seed approved: %v", err)
+	}
+	h, c := newActionHandler(s, true)
+
+	// A re-scan is a no-op on a non-pending row, which is why the skip reason must
+	// not recommend one.
+	again, err := s.UpsertReviewItem(database.ReviewItem{
+		Kind: it.Kind, DedupKey: it.DedupKey, FolderRef: it.FolderRef, Summary: "s",
+		Payload: `{"recommendedAction":"combine"}`,
+	})
+	if err != nil {
+		t.Fatalf("re-scan upsert: %v", err)
+	}
+	if again.Payload != "{}" {
+		t.Fatalf("payload = %q; a re-scan was expected to leave an approved hold untouched", again.Payload)
+	}
+
+	w, _ := approveBody(t, h, it.ID, itunesservice.ActionCombine)
+	if w.Code != http.StatusOK {
+		t.Fatalf("re-approve: code %d body %s", w.Code, w.Body.String())
+	}
+	if c.combine != 1 {
+		t.Fatalf("combine ran %d times, want 1", c.combine)
+	}
+	got, _ := s.GetReviewItem(it.ID)
+	if got.Status != database.ReviewStatusApplied {
+		t.Fatalf("status = %q, want applied", got.Status)
 	}
 }

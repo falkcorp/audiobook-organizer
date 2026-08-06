@@ -1,24 +1,35 @@
 // file: internal/plugins/maintenance/regroup_apply.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: e2a7c9d4-1f68-4b03-9c5e-7a0d3f814b62
-// last-edited: 2026-07-25
+// last-edited: 2026-08-06
 
 // Package maintenance — the APPLY path for the regroup review queue (PR-B2).
 //
 // B1 (regroup_shattered_ai.go) is a dry-run producer: it writes one review-queue
 // HOLD per candidate folder and touches ZERO books. B2 is what makes the "Approve"
 // button in the review UI actually merge. It supplies one apply function per
-// CONFIDENT regroup Kind; the review handler dispatches on ReviewItem.Kind and, on
-// a nil error, transitions the item to "applied" (handler.go:approveOne).
+// executable ACTION; the review handler dispatches on the chosen action and, on a
+// nil error, transitions the item to "applied" (handler.go:approveOne).
 //
-// Only the two confident kinds get an apply function:
-//   - regroup.multidisc     → collapse N single-file books into 1 (CombineBooks).
-//   - regroup.version-group → share a VersionGroupID + designate one primary, via
+// Two actions have an apply function:
+//   - combine       → collapse N single-file books into 1 (CombineBooks).
+//   - version-group → share a VersionGroupID + designate one primary, via
 //     UpdateBook (NOT MergeBooks — both editions must stay visible; locked #8).
 //
-// regroup.anthology and regroup.ambiguous are deliberately handler-less: they need
-// human sub-decisions (which files are distinct works, how to split) that a single
-// apply function cannot make, so approving one only marks it "approved".
+// 🔴 DISPATCH MOVED FROM Kind TO ACTION ON 2026-08-06 (owner item 2), and this
+// comment used to claim a safety property the code no longer has. It read
+// "regroup.anthology and regroup.ambiguous are deliberately handler-less", i.e. no
+// ambiguous hold could ever merge anything. That is FALSE now: an `ambiguous` hold
+// whose evidence recommends `combine` (24 of 356 measured on 2026-08-06) dispatches
+// straight into ApplyMultidisc, which hard-deletes absorbed Book rows. The gate is
+// no longer the Kind — it is the recommendation, which refuses `combine` unless a
+// strict majority of members have a KNOWN runtime and those runtimes are short.
+// (Anthology had already lost its handler-less status on 2026-07-26, when an
+// anthology became one book to combine rather than several to split.)
+//
+// `separate` and `insufficient-evidence` have no apply function and never will:
+// the first is a status transition (every member is already its own book), the
+// second is not a decision a human may pick at all.
 //
 // DATA-LOSS SAFETY (this repo's dominant incident class is write-back wipes):
 //   - Multidisc uses CombineBooks(ids, primary, nil) — a NIL override. The only

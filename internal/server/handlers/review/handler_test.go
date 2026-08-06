@@ -1,7 +1,7 @@
 // file: internal/server/handlers/review/handler_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8e4a1c72-3d95-4b60-a7f1-9c2e6b0d5f83
-// last-edited: 2026-07-14
+// last-edited: 2026-08-06
 
 // Tests for the universal review-queue handlers. The store is exercised through
 // a REAL pebble-backed *database.PebbleStore (which implements the ReviewStore
@@ -22,6 +22,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	reviewhandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/review"
 )
 
@@ -38,14 +39,31 @@ func newTestStore(t *testing.T) *database.PebbleStore {
 	return s
 }
 
+// seed writes an OLD-SHAPE hold: payload "{}" with no recommendedAction, exactly
+// like the ~356 holds already sitting in prod's queue. Approve treats those as
+// insufficient-evidence and refuses them without an explicit action, so tests that
+// exercise the approve path use seedAction instead.
 func seed(t *testing.T, s *database.PebbleStore, kind, dedupKey string) database.ReviewItem {
+	t.Helper()
+	return seedPayload(t, s, kind, dedupKey, "{}")
+}
+
+// seedAction writes a hold carrying a recommendation, the shape every hold written
+// after 2026-08-06 has.
+func seedAction(t *testing.T, s *database.PebbleStore, kind, dedupKey, action string) database.ReviewItem {
+	t.Helper()
+	return seedPayload(t, s, kind, dedupKey,
+		`{"folder":"/f/`+dedupKey+`","recommendedAction":"`+action+`","recommendationReason":"test"}`)
+}
+
+func seedPayload(t *testing.T, s *database.PebbleStore, kind, dedupKey, payload string) database.ReviewItem {
 	t.Helper()
 	it, err := s.UpsertReviewItem(database.ReviewItem{
 		Kind:      kind,
 		DedupKey:  dedupKey,
 		FolderRef: "/f/" + dedupKey,
 		Summary:   "s",
-		Payload:   "{}",
+		Payload:   payload,
 	})
 	if err != nil {
 		t.Fatalf("seed: %v", err)
@@ -131,7 +149,7 @@ func TestListReviewItems(t *testing.T) {
 
 func TestApproveReviewItem_NoHandler_MarksApproved(t *testing.T) {
 	s := newTestStore(t)
-	it := seed(t, s, "regroup.multidisc", "m1")
+	it := seedAction(t, s, "regroup.multidisc", "m1", itunesservice.ActionCombine)
 	h := reviewhandler.New(s, func() bool { return true }) // no apply handlers registered (A1 state)
 
 	w := doReq(t, h.ApproveReviewItem, http.MethodPost, "/review/items/"+it.ID+"/approve", nil,
@@ -152,11 +170,11 @@ func TestApproveReviewItem_NoHandler_MarksApproved(t *testing.T) {
 
 func TestApproveReviewItem_WithHandler_MarksApplied(t *testing.T) {
 	s := newTestStore(t)
-	it := seed(t, s, "regroup.multidisc", "m1")
+	it := seedAction(t, s, "regroup.multidisc", "m1", itunesservice.ActionCombine)
 	h := reviewhandler.New(s, func() bool { return true })
 
 	var applied bool
-	h.RegisterApplyHandler("regroup.multidisc", func(_ context.Context, item database.ReviewItem) error {
+	h.RegisterApplyHandler(itunesservice.ActionCombine, func(_ context.Context, item database.ReviewItem) error {
 		applied = true
 		if item.ID != it.ID {
 			t.Errorf("apply handler got wrong item: %s", item.ID)
@@ -180,9 +198,9 @@ func TestApproveReviewItem_WithHandler_MarksApplied(t *testing.T) {
 
 func TestApproveReviewItem_HandlerError_StaysPending(t *testing.T) {
 	s := newTestStore(t)
-	it := seed(t, s, "regroup.multidisc", "m1")
+	it := seedAction(t, s, "regroup.multidisc", "m1", itunesservice.ActionCombine)
 	h := reviewhandler.New(s, func() bool { return true })
-	h.RegisterApplyHandler("regroup.multidisc", func(_ context.Context, _ database.ReviewItem) error {
+	h.RegisterApplyHandler(itunesservice.ActionCombine, func(_ context.Context, _ database.ReviewItem) error {
 		return context.DeadlineExceeded // any apply failure
 	})
 
@@ -206,10 +224,10 @@ func TestApproveReviewItem_HandlerError_StaysPending(t *testing.T) {
 // (nothing merges), and stay visible/reviewable.
 func TestApproveReviewItem_ApplyGateOff_ApprovesNotApplies(t *testing.T) {
 	s := newTestStore(t)
-	it := seed(t, s, "regroup.multidisc", "m1")
+	it := seedAction(t, s, "regroup.multidisc", "m1", itunesservice.ActionCombine)
 	applied := false
 	h := reviewhandler.New(s, func() bool { return false }) // switch OFF
-	h.RegisterApplyHandler("regroup.multidisc", func(_ context.Context, _ database.ReviewItem) error {
+	h.RegisterApplyHandler(itunesservice.ActionCombine, func(_ context.Context, _ database.ReviewItem) error {
 		applied = true
 		return nil
 	})
@@ -232,10 +250,10 @@ func TestApproveReviewItem_ApplyGateOff_ApprovesNotApplies(t *testing.T) {
 // approve execute the registered handler and mark the item "applied".
 func TestApproveReviewItem_ApplyGateOn_Applies(t *testing.T) {
 	s := newTestStore(t)
-	it := seed(t, s, "regroup.multidisc", "m1")
+	it := seedAction(t, s, "regroup.multidisc", "m1", itunesservice.ActionCombine)
 	applied := false
 	h := reviewhandler.New(s, func() bool { return true }) // switch ON
-	h.RegisterApplyHandler("regroup.multidisc", func(_ context.Context, _ database.ReviewItem) error {
+	h.RegisterApplyHandler(itunesservice.ActionCombine, func(_ context.Context, _ database.ReviewItem) error {
 		applied = true
 		return nil
 	})
@@ -307,8 +325,8 @@ func TestBulkReviewAction_RejectByKind(t *testing.T) {
 
 func TestBulkReviewAction_ByIDs(t *testing.T) {
 	s := newTestStore(t)
-	a := seed(t, s, "regroup.multidisc", "m1")
-	b := seed(t, s, "regroup.multidisc", "m2")
+	a := seedAction(t, s, "regroup.multidisc", "m1", itunesservice.ActionCombine)
+	b := seedAction(t, s, "regroup.multidisc", "m2", itunesservice.ActionCombine)
 	h := reviewhandler.New(s, func() bool { return true })
 
 	w := doReq(t, h.BulkReviewAction, http.MethodPost, "/review/bulk",
