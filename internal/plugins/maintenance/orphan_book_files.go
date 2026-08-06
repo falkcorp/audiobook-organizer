@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/orphan_book_files.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9d2c4f6a-8e1b-4c5d-9a7b-3e5f1a2c4b6d
 // last-edited: 2026-08-06
 
@@ -111,10 +111,8 @@ func (p *Plugin) runOrphanBookFilesCleanup(ctx context.Context, raw json.RawMess
 	//
 	// WHY CHUNKED and not one call for the whole list: DeleteBookFilesByIDs is
 	// fail-closed, so a single unresolvable ID aborts its entire call. Chunking
-	// bounds that blast radius to one chunk, which the next run picks up anyway
-	// because findOrphanBookFiles rescans from scratch. Chunking also preserves the
-	// two things the per-row loop gave us for free — a cancellation check and a
-	// progress tick often enough to keep the stuck-op watchdog fed.
+	// bounds that blast radius to one chunk and keeps a cancellation check and a
+	// progress tick happening often enough to feed the stuck-op watchdog.
 	const orphanDeleteChunk = 500
 	for start := 0; start < total; start += orphanDeleteChunk {
 		if ctx.Err() != nil {
@@ -134,17 +132,60 @@ func (p *Plugin) runOrphanBookFilesCleanup(ctx context.Context, raw json.RawMess
 		}
 
 		if err := store.DeleteBookFilesByIDs(ids); err != nil {
-			// Fail-closed: nothing in this chunk was deleted, so count the whole
-			// chunk as failed rather than guessing at a partial result.
-			failed += len(ids)
-			_ = reporter.Log(slog.LevelWarn, "Failed to delete orphan book_file chunk",
+			// ⚠️ FAIL-CLOSED IS NOT SELF-HEALING ON THIS PATH — hence the fallback.
+			//
+			// The dedupe op can simply retry next run, because it re-reads its row
+			// set from Pebble (GetBookFiles) and an ID that no longer exists is
+			// therefore never queued twice. THIS op cannot make that claim: its list
+			// comes from findOrphanBookFiles → GetAllBookFilesCore, which is served
+			// from memdb whenever UseMemDB is on (i.e. in production). memdb is a
+			// derived cache that can hold a row Pebble no longer has, so a phantom
+			// row yields an ID that can never resolve — and under plain fail-closed
+			// it would abort the same 500-row chunk on EVERY nightly run until the
+			// process restarts and memdb is rebuilt. That is strictly worse than the
+			// per-row loop this replaced, which skipped the phantom and deleted the
+			// other 499.
+			//
+			// So the store layer stays fail-closed (a batch must never act on a view
+			// it cannot fully verify), and the caller that reads from a cache gets an
+			// explicit degraded path: retry this chunk one row at a time via
+			// DeleteBookFile, which tolerates "already gone" by design. Slow — this is
+			// exactly the ~1.35s/row cost the batch exists to avoid — but it only ever
+			// runs on the chunk that actually hit the anomaly, and it makes progress
+			// instead of deadlocking the op run after run.
+			_ = reporter.Log(slog.LevelWarn, "Batched orphan delete failed; retrying chunk row by row",
 				slog.Int("chunk_start", start),
 				slog.Int("chunk_size", len(ids)),
-				slog.String("first_book_file_id", chunk[0].ID),
-				slog.String("first_book_id", chunk[0].BookID),
-				slog.String("first_file_path", chunk[0].FilePath),
 				slog.String("error", err.Error()),
 			)
+			for i := range chunk {
+				if ctx.Err() != nil {
+					_ = reporter.Log(slog.LevelWarn, "Orphan delete cancelled",
+						slog.Int("deleted", deleted),
+						slog.Int("failed", failed),
+						slog.Int("remaining", total-(start+i)),
+					)
+					return ctx.Err()
+				}
+				if derr := store.DeleteBookFile(chunk[i].ID); derr != nil {
+					failed++
+					_ = reporter.Log(slog.LevelWarn, "Failed to delete orphan book_file",
+						slog.String("book_file_id", chunk[i].ID),
+						slog.String("book_id", chunk[i].BookID),
+						slog.String("file_path", chunk[i].FilePath),
+						slog.String("error", derr.Error()),
+					)
+					continue
+				}
+				deleted++
+				// Tick per row here, not per chunk. The fallback is ~1.35s/row, so a
+				// 500-row chunk is ~11 minutes — well past the registry's 5m default
+				// ProgressTimeout, which this op does not override. Without a stamp in
+				// this loop the watchdog would cancel the op mid-recovery.
+				prog.StepN(start+i+1, fmt.Sprintf("Deleting orphan book_files (row-by-row): %d/%d",
+					start+i+1, total))
+			}
+			// Progress is already stamped by the loop above; fall through.
 			continue
 		}
 		deleted += len(ids)

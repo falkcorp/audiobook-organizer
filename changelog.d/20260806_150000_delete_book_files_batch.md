@@ -1,5 +1,5 @@
 <!-- file: changelog.d/20260806_150000_delete_book_files_batch.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 8e5b3db9-c5ac-40b2-88a9-3b387e21cabf -->
 <!-- last-edited: 2026-08-06 -->
 
@@ -40,10 +40,20 @@
   store disagrees with the store, and a disagreement discovered partway through a
   destructive operation is the worst possible moment to press on with the other N−1
   rows. That is this repo's dominant incident shape: write-backs that proceeded on a
-  stale view and silently erased fields. Fail-closed is cheap here specifically because
-  both callers re-read their row set from the store on every run, so a stale ID is
-  simply absent from the next run's list and the deferred work completes then — nothing
-  is lost, at most one batch slips by one run.
+  stale view and silently erased fields.
+
+  **How cheap fail-closed is depends on where the caller got its IDs, and that is not
+  uniform.** `dedupe-book-file-rows` re-reads its rows from Pebble (`GetBookFiles`) every
+  run, so a stale ID is simply absent next time — genuinely self-healing, at most one
+  batch slips by one run. `orphan-book-files-cleanup` does **not** have that property:
+  its list comes from `GetAllBookFilesCore`, which is served from memdb whenever
+  `UseMemDB` is on. memdb is a derived cache that can hold a row Pebble no longer has,
+  so a phantom row yields an ID that can never resolve, and plain fail-closed would abort
+  the same 500-row chunk on every nightly run until the process restarts and memdb
+  rebuilds — strictly worse than the per-row loop it replaced, which skipped the phantom
+  and deleted the other 499. That caller therefore keeps an explicit degraded path (see
+  below). The rule for new callers: fail-closed is the right default for a batch, but if
+  your IDs come from a cache rather than from Pebble, you need a fallback.
 
   Both of `DeleteBookFile`'s lookup paths are preserved (the `book_file_id` index first,
   then the legacy full scan). The scan fallback matters *more* under fail-closed than it
@@ -74,20 +84,30 @@
 - `maintenance.orphan-book-files-cleanup` deletes through the same batched method, in
   chunks of 500. Unlike `dedupe-book-file-rows` this path has **no** trailing
   `RecomputeBookAggregates` of its own, so it depends entirely on the batch method
-  notifying once per affected book. Chunking bounds the blast radius of a single
-  unresolvable ID to one chunk — which the next run picks up anyway, since the orphan
-  scan rebuilds its list from scratch — and preserves the cancellation check and
-  progress tick that the per-row loop provided for free, the latter being what keeps the
-  stuck-op watchdog fed on a multi-thousand-row sweep.
+  notifying once per affected book. (In practice a genuine orphan's owning book does not
+  exist — that is what makes it an orphan — so the recompute finds no book and returns
+  early. The notification still has to be issued, because orphanhood is decided from a
+  snapshot and a book that turns out to exist after all must have its totals corrected.)
+
+  A chunk the store rejects is retried **row by row** through `DeleteBookFile`, which
+  tolerates "already gone" by design. This is the degraded path that keeps a phantom
+  memdb row from wedging the same 500 rows on every nightly run; it is slow — precisely
+  the per-row cost the batch exists to avoid — but it only runs on the chunk that hit
+  the anomaly, and it makes progress instead of deadlocking. That fallback stamps
+  progress per row rather than per chunk: at ~1.35 s/row a 500-row recovery is ~11
+  minutes, well past the registry's 5-minute default `ProgressTimeout`, which this op
+  does not override, so without a per-row stamp the watchdog would cancel the op
+  mid-recovery.
 
 - `PebbleStore.DeleteBookFilesFromMemDB` batches N memdb row deletions into one write
   transaction. The saving is not transaction bookkeeping — it is the contention removed
   from every other writer in the process, since go-memdb serialises all writers behind a
   single global mutex.
 
-  Ten tests cover this: the notification count per affected book (asserted against a
+  Eleven tests cover this: the notification count per affected book (asserted against a
   control test that shows the per-row path still producing one snapshot per row, so the
   "exactly one" figure is anchored rather than vacuous), fail-closed behaviour leaving
   every row intact, secondary-index teardown, duplicate and empty ID handling, the
   salvage-failure ordering rule with a control book that must still collapse, and the
-  orphan path's chunking and per-chunk failure isolation.
+  orphan path's chunking plus the row-by-row recovery of a rejected chunk (asserting the
+  499 real orphans in it actually get deleted, not merely that the run continues).

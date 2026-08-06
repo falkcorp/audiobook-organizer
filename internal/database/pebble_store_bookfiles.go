@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
 // last-edited: 2026-08-06
 
@@ -929,15 +929,28 @@ func (s *PebbleStore) DeleteBookFilesForBook(bookID string) error {
 // class is exactly that shape — write-backs that proceeded on a stale view and
 // silently erased fields (see the AcoustIDFingerprint and Author/Series wipes).
 //
-// Fail-closed is cheap here specifically because both callers are re-runnable and
-// self-healing: they re-read the current row set from the store on every run, so a
-// stale ID simply is not in the next run's list and the deferred work completes
-// then. Nothing is lost, at most one batch is deferred by one run. Skip-and-
-// continue, by contrast, would normalise the disagreement into a silent counter
-// nobody reads.
+// Skip-and-continue, by contrast, would normalise the disagreement into a silent
+// counter nobody reads.
 //
-// Callers that delete large ID sets should chunk them so that one stale ID defers
-// only its own chunk (see the orphan-book-files cleanup, which chunks at 500).
+// ⚠️ HOW CHEAP FAIL-CLOSED IS DEPENDS ON WHERE THE CALLER GOT ITS IDs, and this is
+// NOT uniform across the two callers:
+//
+//   - dedupe-book-file-rows re-reads its row set from Pebble (GetBookFiles) on
+//     every run, so an ID that no longer exists is never queued a second time. A
+//     failed batch there costs one deferred run and nothing else. Genuinely
+//     self-healing.
+//   - orphan-book-files-cleanup gets its list from GetAllBookFilesCore, which is
+//     served from MEMDB when UseMemDB is on. memdb is a derived cache that can
+//     hold a row Pebble no longer has, so a phantom row produces an ID that will
+//     never resolve — and would abort the same chunk on every run until the
+//     process restarts and memdb rebuilds. NOT self-healing. That caller
+//     therefore keeps an explicit row-by-row fallback via DeleteBookFile (which
+//     tolerates "already gone") for any chunk this method rejects.
+//
+// The rule for new callers: fail-closed is the right default for a batch, but if
+// your IDs come from a cache rather than from Pebble, you need a degraded path.
+// Chunk large ID sets either way, so one stale ID cannot take the whole sweep
+// with it (the orphan cleanup chunks at 500).
 //
 // ── RESOLUTION PATH ───────────────────────────────────────────────────────────
 //
