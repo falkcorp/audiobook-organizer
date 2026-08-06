@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.54.0
+// version: 2.55.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-08-06
 
@@ -278,6 +278,20 @@ export interface BookFile {
   deluge_hash?: string | null;
   deluge_original_path?: string | null;
   imported_from_deluge_at?: string | null;
+  // Per-file intro transcription: the spoken "<Title> by <Author>, read by
+  // <Narrator>" opening, recorded per FILE rather than per book so that a
+  // continuation ("...this part includes Chapter 2") is distinguishable from a
+  // genuine book start. intro_transcription is the raw Whisper transcript; the
+  // transcribed_* fields are what the parser extracted from it and are never
+  // treated as canonical metadata.
+  intro_transcription?: string | null;
+  transcribed_title?: string | null;
+  transcribed_author?: string | null;
+  transcribed_narrator?: string | null;
+  intro_transcribed_at?: string | null;
+  transcribe_status?: string | null;
+  transcribe_error?: string | null;
+  transcribe_attempted_at?: string | null;
   created_at: string;
   updated_at: string;
 }
