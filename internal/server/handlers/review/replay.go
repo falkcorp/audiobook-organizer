@@ -1,5 +1,5 @@
 // file: internal/server/handlers/review/replay.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4d807d92-72d8-4df6-9da1-80123d2bf6b4
 // last-edited: 2026-08-06
 
@@ -75,37 +75,53 @@ func (h *Handler) ReplayApprovedItems(c *gin.Context) {
 		Kind   string `json:"kind"`
 		Reason string `json:"reason"`
 	}
-	// Resolve the ACTION the same way approveOne does (one place owns "empty →
-	// insufficient-evidence"), then look the handler up by action. Replay must agree
-	// with approve about what a hold means, or the two would carry out different
-	// decisions for the same row.
+	// 🔴 REPLAY RUNS WHAT THE HUMAN CHOSE, NOT WHAT THE MACHINE RECOMMENDED.
 	//
-	// Every hold approved before recommendations existed resolves to
-	// insufficient-evidence and lands in the skip list — which is why would_replay
-	// drops to near zero on a queue of pre-2026-08-06 approvals. That is the
-	// fail-closed direction: refusing to replay a hold whose intended action was
-	// never recorded beats guessing one.
+	// effectiveActionFor prefers the PERSISTED ReviewItem.ChosenAction and only falls
+	// back to the payload's `recommendedAction` when none was recorded. That ordering
+	// is the entire point of owner item 2: with review_apply_enabled off, approving is
+	// the only moment a human is in the loop and replay is where the work actually
+	// happens, so a hold recommending `combine` that a reviewer approved as `separate`
+	// must arrive here as `separate`. Reading the payload first would merge the books
+	// they said to keep apart, and the combine apply path hard-deletes absorbed rows.
+	//
+	// approveOne resolves through the SAME helper, so approve and replay can never
+	// carry out different decisions for one row.
+	//
+	// Holds approved before ChosenAction existed fall through to the payload; a
+	// pre-recommendation hold resolves to insufficient-evidence and lands in the skip
+	// list. That is the fail-closed direction: refusing to replay a hold whose intended
+	// action was never recorded beats guessing one.
 	//
 	// 🔴 THE RECOVERY PATH IS RE-APPROVE, NOT RE-SCAN. A re-scan cannot help here:
 	// UpsertReviewItem is a FULL no-op on a non-pending row, so it will not refresh
 	// an already-approved hold's payload. What does work is approving the hold again
 	// with an explicit {"action": "..."} — approveOne has no status guard, so an
-	// approved item can be re-approved and applied. The skip reason says so, because
-	// pointing an operator at a re-scan that silently does nothing is worse than
-	// saying nothing.
+	// approved item can be re-approved, and it now RECORDS the action, so a later
+	// replay honours it. The skip reason says so, because pointing an operator at a
+	// re-scan that silently does nothing is worse than saying nothing.
 	var replayable []database.ReviewItem
 	var noHandler []skipped
 	for _, it := range items {
-		action := recommendedActionFor(it)
+		action := effectiveActionFor(it)
 		if _, ok := h.applyHandlerFor(action); ok {
 			replayable = append(replayable, it)
 			continue
 		}
 		reason := "no apply handler registered for action " + action
-		if action == itunesservice.ActionInsufficientEvidence {
+		switch action {
+		case itunesservice.ActionInsufficientEvidence:
 			reason = "hold carries no recommended action (approved before recommendations existed, or the " +
 				"classifier could not tell) — approve it again with an explicit {\"action\": \"...\"} to decide it; " +
 				"a re-scan will NOT refresh an already-approved hold"
+		case itunesservice.ActionSeparate:
+			// Not a gap — a completed decision. Every member is already its own book,
+			// so there is nothing left to execute. Saying so matters when the reviewer
+			// OVERRODE a `combine` recommendation to get here: the skip is the override
+			// working, and an operator reading a bare "no apply handler" line could
+			// easily mistake it for the decision having been dropped.
+			reason = "action 'separate' needs no apply step — every member is already its own book, " +
+				"so this decision is complete"
 		}
 		noHandler = append(noHandler, skipped{it.ID, it.Kind, reason})
 	}
@@ -139,7 +155,8 @@ func (h *Handler) ReplayApprovedItems(c *gin.Context) {
 	var errs []string
 	for i := range replayable {
 		it := replayable[i]
-		fn, ok := h.applyHandlerFor(recommendedActionFor(it))
+		action := effectiveActionFor(it)
+		fn, ok := h.applyHandlerFor(action)
 		if !ok {
 			continue
 		}

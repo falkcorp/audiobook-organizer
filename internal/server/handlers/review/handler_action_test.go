@@ -1,5 +1,5 @@
 // file: internal/server/handlers/review/handler_action_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5c1f0a83-6d47-4e29-b0a5-3f7c8e2d94b1
 // last-edited: 2026-08-06
 
@@ -279,19 +279,22 @@ func TestApprove_AmbiguousRecommendingCombine_NowCombines(t *testing.T) {
 	}
 }
 
-// 🔴 review_apply_enabled IS STILL THE GATE. With the switch OFF, an explicit
-// override to combine records the decision and executes NOTHING.
+// 🔴 review_apply_enabled IS STILL THE GATE, AND THE OVERRIDE IS STILL RECORDED.
+// With the switch OFF — production's setting — an explicit override of a REPLAYABLE
+// recommendation must be accepted (that is the only way a reviewer can register a
+// disagreement at all), must execute nothing, and must persist what they chose.
+//
+// This case used to be a 409 REVIEW_OVERRIDE_NOT_PERSISTABLE, because there was
+// nowhere to store the choice and a later replay would have re-read `combine` from
+// the payload. ChosenAction is that storage, so the refusal is gone.
 func TestApprove_ApplyGateOff_OverrideRecordsButDoesNotApply(t *testing.T) {
 	s := newTestStore(t)
-	// Recommendation is insufficient-evidence, so the override-persistence guard
-	// does not fire (a later replay would skip this hold either way) and we get to
-	// test the apply gate itself.
-	it := seed(t, s, "regroup.ambiguous", "a1")
+	it := seedAction(t, s, "regroup.multidisc", "m1", itunesservice.ActionCombine)
 	h, c := newActionHandler(s, false) // switch OFF
 
-	w, body := approveBody(t, h, it.ID, itunesservice.ActionCombine)
+	w, body := approveBody(t, h, it.ID, itunesservice.ActionSeparate)
 	if w.Code != http.StatusOK {
-		t.Fatalf("code %d body %s", w.Code, w.Body.String())
+		t.Fatalf("code %d body %s — an override must be recordable while apply is off", w.Code, w.Body.String())
 	}
 	if c.combine != 0 {
 		t.Fatalf("combine apply ran %d times with review_apply_enabled OFF", c.combine)
@@ -300,40 +303,51 @@ func TestApprove_ApplyGateOff_OverrideRecordsButDoesNotApply(t *testing.T) {
 	if got.Status != database.ReviewStatusApproved {
 		t.Fatalf("status = %q, want approved (recorded, not applied)", got.Status)
 	}
+	if got.ChosenAction != itunesservice.ActionSeparate {
+		t.Fatalf("chosen_action = %q, want separate — the override must survive the write, "+
+			"or a later replay re-reads 'combine' from the payload and merges the books", got.ChosenAction)
+	}
 	if body["data"].(map[string]any)["note"] == nil {
 		t.Fatal("expected the review-only note explaining nothing was applied")
 	}
 }
 
-// 🔴 AN OVERRIDE THAT CANNOT BE PERSISTED IS REFUSED. With the switch off the
-// chosen action is stored nowhere, and ReplayApprovedItems re-resolves from the
-// payload — so recording "approved" here would let a later replay run `combine` on
-// books a human said to keep apart.
-func TestApprove_OverrideOfReplayableRecommendation_RefusedWhileApplyIsOff(t *testing.T) {
+// The recommendation is persisted too when the reviewer accepts it (empty body), so
+// replay never has to re-derive an action for a hold decided after 2026-08-06.
+func TestApprove_AcceptedRecommendationIsAlsoPersisted(t *testing.T) {
 	s := newTestStore(t)
 	it := seedAction(t, s, "regroup.multidisc", "m1", itunesservice.ActionCombine)
-	h, c := newActionHandler(s, false) // switch OFF
+	h, _ := newActionHandler(s, false) // switch OFF: records, does not apply
 
-	w, _ := approveBody(t, h, it.ID, itunesservice.ActionSeparate)
-	if w.Code != http.StatusConflict {
-		t.Fatalf("code %d, want 409 — the override would be silently lost and replayed as combine", w.Code)
-	}
-	if c.combine != 0 {
-		t.Fatalf("combine ran %d times", c.combine)
+	if w, _ := approveBody(t, h, it.ID, ""); w.Code != http.StatusOK {
+		t.Fatalf("code %d", w.Code)
 	}
 	got, _ := s.GetReviewItem(it.ID)
-	if got.Status != database.ReviewStatusPending {
-		t.Fatalf("status = %q, want pending", got.Status)
+	if got.ChosenAction != itunesservice.ActionCombine {
+		t.Fatalf("chosen_action = %q, want combine", got.ChosenAction)
 	}
+}
 
-	// The same override with the switch ON applies immediately, so there is nothing
-	// left for a replay to get wrong.
-	hOn, cOn := newActionHandler(s, true)
-	if w, _ := approveBody(t, hOn, it.ID, itunesservice.ActionSeparate); w.Code != http.StatusOK {
-		t.Fatalf("switch on: code %d body %s", w.Code, w.Body.String())
+// 🔴 A RE-APPROVE WITH AN EMPTY BODY MUST NOT REVERT A RECORDED OVERRIDE. Re-approving
+// a decided hold is a supported flow (it is the recovery path replay's skip reason
+// advertises), so the default has to be the hold's EFFECTIVE action — what the human
+// last chose — not the payload's recommendation.
+func TestApprove_EmptyBodyOnDecidedHold_KeepsThePersistedOverride(t *testing.T) {
+	s := newTestStore(t)
+	it := seedAction(t, s, "regroup.multidisc", "m1", itunesservice.ActionCombine)
+	h, c := newActionHandler(s, true) // switch ON, so a revert would MERGE
+
+	if w, _ := approveBody(t, h, it.ID, itunesservice.ActionSeparate); w.Code != http.StatusOK {
+		t.Fatalf("first approve: code %d", w.Code)
 	}
-	if cOn.combine != 0 {
-		t.Fatalf("combine ran %d times on a separate override", cOn.combine)
+	// Someone hits Approve again without choosing anything.
+	if w, body := approveBody(t, h, it.ID, ""); w.Code != http.StatusOK {
+		t.Fatalf("re-approve: code %d", w.Code)
+	} else if got := body["data"].(map[string]any)["chosenAction"]; got != itunesservice.ActionSeparate {
+		t.Fatalf("chosenAction = %v, want separate — the empty body reverted to the recommendation", got)
+	}
+	if c.combine != 0 {
+		t.Fatalf("combine ran %d times — a bare re-approve silently reverted the override and merged", c.combine)
 	}
 }
 

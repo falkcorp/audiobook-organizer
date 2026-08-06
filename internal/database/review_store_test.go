@@ -1,7 +1,7 @@
 // file: internal/database/review_store_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9d3b7f21-4a58-4c69-b8e2-1f0a6c5d4e37
-// last-edited: 2026-07-14
+// last-edited: 2026-08-06
 
 package database
 
@@ -283,6 +283,75 @@ func TestSetReviewItemStatus_MovesIndexRow(t *testing.T) {
 func TestSetReviewItemStatus_NotFound(t *testing.T) {
 	s := newReviewTestStore(t)
 	got, err := s.SetReviewItemStatus("nonexistent", ReviewStatusApproved)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("expected nil for missing item, got %+v", got)
+	}
+}
+
+// 🔴 THE DECISION MUST OUTLIVE EVERY SUBSEQUENT WRITE. A recorded ChosenAction is
+// the only durable record that a human DISAGREED with the classifier; if any later
+// write clears it, the replay path silently falls back to the payload's
+// recommendation and merges books the reviewer said to keep apart.
+//
+// This walks the real sequence: decide → status-only transition (replay's
+// approved→applied) → producer re-scan, asserting the action survives all three, and
+// that no unrelated field was collateral damage of the decision write.
+func TestSetReviewItemDecision_PersistsAndIsNeverClearedByLaterWrites(t *testing.T) {
+	s := newReviewTestStore(t)
+	it, err := s.UpsertReviewItem(mkReviewItem(
+		"regroup.multidisc", "dk-dec", "/books/a", "sum", `{"recommendedAction":"combine"}`))
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	// A reviewer overrides the recommendation.
+	got, err := s.SetReviewItemDecision(it.ID, ReviewStatusApproved, "separate")
+	if err != nil {
+		t.Fatalf("SetReviewItemDecision: %v", err)
+	}
+	if got.ChosenAction != "separate" || got.Status != ReviewStatusApproved {
+		t.Fatalf("got status=%q action=%q, want approved/separate", got.Status, got.ChosenAction)
+	}
+	// The narrow write must not have disturbed anything it was not asked to change.
+	if got.Kind != it.Kind || got.DedupKey != it.DedupKey || got.FolderRef != it.FolderRef ||
+		got.Summary != it.Summary || got.Payload != it.Payload || !got.CreatedAt.Equal(it.CreatedAt) {
+		t.Fatalf("decision write disturbed an unrelated field: %+v vs %+v", got, it)
+	}
+
+	// A status-only transition (what replay does after a successful apply) must leave
+	// the decision alone — a blank chosenAction means "don't touch", never "clear".
+	if _, err := s.SetReviewItemStatus(it.ID, ReviewStatusApplied); err != nil {
+		t.Fatalf("SetReviewItemStatus: %v", err)
+	}
+	reread, _ := s.GetReviewItem(it.ID)
+	if reread.ChosenAction != "separate" {
+		t.Fatalf("chosen_action = %q after a status-only write, want separate — the transition "+
+			"wiped the decision it was carrying out", reread.ChosenAction)
+	}
+	if reread.Status != ReviewStatusApplied {
+		t.Fatalf("status = %q, want applied", reread.Status)
+	}
+
+	// A producer re-scan is a full no-op on a decided row, so it cannot resurrect the
+	// recommendation either.
+	if _, err := s.UpsertReviewItem(mkReviewItem(
+		"regroup.multidisc", "dk-dec", "/books/a", "rescanned", `{"recommendedAction":"combine"}`)); err != nil {
+		t.Fatalf("re-scan upsert: %v", err)
+	}
+	reread, _ = s.GetReviewItem(it.ID)
+	if reread.ChosenAction != "separate" {
+		t.Fatalf("chosen_action = %q after a re-scan, want separate", reread.ChosenAction)
+	}
+}
+
+// Persisting a decision on a missing row behaves like every other store getter:
+// (nil, nil), so the handler can answer 404 rather than inventing a row.
+func TestSetReviewItemDecision_NotFound(t *testing.T) {
+	s := newReviewTestStore(t)
+	got, err := s.SetReviewItemDecision("nonexistent", ReviewStatusApproved, "combine")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

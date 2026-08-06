@@ -1,7 +1,7 @@
 // file: internal/database/review_store.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4f2c8a91-6b3d-4e57-9a02-8d1f5c7e3b40
-// last-edited: 2026-07-13
+// last-edited: 2026-08-06
 
 package database
 
@@ -67,6 +67,26 @@ type ReviewItem struct {
 	Payload   string    `json:"payload"`    // JSON blob: folder, listing, proposed action, member IDs, ...
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+
+	// ChosenAction is the action a HUMAN decided on when this item was approved —
+	// an itunesservice.Action* string ("combine", "separate", "version-group", …).
+	// Empty on a pending item, and empty on every item approved before 2026-08-06.
+	//
+	// 🔴 THIS FIELD IS WHY AN OVERRIDE SURVIVES. The classifier's suggestion lives in
+	// Payload.recommendedAction; this records what the reviewer actually picked, which
+	// may DISAGREE with it. Without it, approving a `combine` hold as `separate` wrote
+	// nothing but status="approved", and ReplayApprovedItems — which re-resolves the
+	// action later, after review_apply_enabled is flipped — would read the payload back
+	// and merge exactly the books the human said to keep apart. The combine apply path
+	// hard-deletes the absorbed Book rows, so that is unrecoverable.
+	//
+	// Additive and never backfilled: an empty value means "no human choice recorded",
+	// and readers fall back to the payload recommendation, which for a pre-2026-08-06
+	// hold resolves to insufficient-evidence — the fail-closed direction.
+	//
+	// Written only by SetReviewItemDecision. SetReviewItemStatus leaves it alone, so
+	// the later approved→applied transition cannot erase the decision it is carrying out.
+	ChosenAction string `json:"chosen_action,omitempty"`
 }
 
 // ReviewFilter controls ListReviewItems / list-by-status queries.
@@ -420,7 +440,42 @@ func (p *PebbleStore) ReviewStatsByKind() ([]ReviewKindStat, error) {
 // status-index row accordingly. Returns (nil, nil) when the item does not exist
 // so callers can respond 404. The dedupkey index is never touched (DedupKey is
 // stable), so a rejected item stays remembered across future producer re-scans.
+//
+// It records NO chosen action — see SetReviewItemDecision. That is what makes the
+// approved→applied transition in ReplayApprovedItems safe: it must not disturb the
+// human decision it is in the middle of carrying out.
 func (p *PebbleStore) SetReviewItemStatus(id, status string) (*ReviewItem, error) {
+	return p.SetReviewItemDecision(id, status, "")
+}
+
+// SetReviewItemDecision transitions a review item to a new status AND records the
+// action a human chose, in one atomic batch.
+//
+// 🔴 WHY BOTH IN ONE CALL, AND WHY THIS WRITE IS SAFE.
+//
+// The two facts — "this hold is approved" and "the human picked separate, not the
+// recommended combine" — must land together or not at all. Split across two writes,
+// a crash between them leaves status="approved" with no recorded action, and a later
+// replay falls back to the payload's recommendation: the precise merge-nobody-asked-for
+// this field exists to prevent. One Pebble batch, committed with Sync, removes that window.
+//
+// The write is NARROW BY CONSTRUCTION, which matters in a codebase whose dominant
+// incident class is a field wiped on write-back:
+//
+//   - The record is RE-READ here, inside the store, immediately before mutation. The
+//     caller's copy of the ReviewItem is never marshalled back — so a handler holding a
+//     stale item (fetched before some other writer touched Payload or Summary) cannot
+//     roll those fields back.
+//   - Exactly three fields are assigned: Status, UpdatedAt, and ChosenAction. Everything
+//     else — ID, Kind, DedupKey, FolderRef, Summary, Payload, CreatedAt — round-trips
+//     from the freshly-read record untouched.
+//   - An EMPTY chosenAction means "leave the stored value alone", never "clear it".
+//     That is what lets SetReviewItemStatus delegate here: reject, and replay's
+//     approved→applied transition, change status without erasing the recorded decision.
+//     Clearing requires no code path at all, so no caller can do it by accident.
+//
+// Returns (nil, nil) when the item does not exist.
+func (p *PebbleStore) SetReviewItemDecision(id, status, chosenAction string) (*ReviewItem, error) {
 	if status == "" {
 		return nil, fmt.Errorf("review item: status is required")
 	}
@@ -434,6 +489,9 @@ func (p *PebbleStore) SetReviewItemStatus(id, status string) (*ReviewItem, error
 	oldStatus := item.Status
 	item.Status = status
 	item.UpdatedAt = time.Now().UTC()
+	if chosenAction != "" {
+		item.ChosenAction = chosenAction
+	}
 
 	data, err := json.Marshal(item)
 	if err != nil {
