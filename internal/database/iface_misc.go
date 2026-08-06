@@ -1,7 +1,7 @@
 // file: internal/database/iface_misc.go
-// version: 1.20.1
+// version: 1.21.0
 // guid: 473781a7-1a31-4914-b7c7-8efc91f9f7e6
-// last-edited: 2026-07-12
+// last-edited: 2026-08-06
 
 package database
 
@@ -162,6 +162,16 @@ type BookFileStore interface {
 	GetBookFileByAcoustID(fingerprint string) (*BookFile, error)
 	GetBookFileByAcoustIDFuzzy(fingerprint string, minSimilarity float64) (*BookFile, error)
 	DeleteBookFile(id string) error
+	// DeleteBookFilesByIDs deletes many rows in one Pebble batch, one memdb
+	// transaction, and one aggregate recompute PER AFFECTED BOOK — as opposed to
+	// DeleteBookFile, which pays that entire fixed cost once per row (~1.35s/row
+	// measured on production). Prefer it for any caller deleting more than a
+	// couple of rows.
+	//
+	// Fail-closed: if ANY id does not resolve to a live row, nothing is deleted
+	// and an error naming the unresolved ids is returned. Chunk large id sets so
+	// one stale id defers only its own chunk.
+	DeleteBookFilesByIDs(ids []string) error
 	DeleteBookFilesForBook(bookID string) error
 	UpsertBookFile(file *BookFile) error
 	BatchUpsertBookFiles(files []*BookFile) error

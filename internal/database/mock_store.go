@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.81.1
+// version: 1.82.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-07-26
+// last-edited: 2026-08-06
 
 package database
 
@@ -365,6 +365,7 @@ type MockStore struct {
 	GetBookFileByAcoustIDFunc               func(fingerprint string) (*BookFile, error)
 	GetBookFileByAcoustIDFuzzyFunc          func(fingerprint string, minSimilarity float64) (*BookFile, error)
 	DeleteBookFileFunc                      func(id string) error
+	DeleteBookFilesByIDsFunc                func(ids []string) error
 	DeleteBookFilesForBookFunc              func(bookID string) error
 	UpsertBookFileFunc                      func(file *BookFile) error
 	BatchUpsertBookFilesFunc                func(files []*BookFile) error
@@ -2493,6 +2494,14 @@ func (m *MockStore) DeleteBookFile(id string) error {
 	if m.DeleteBookFileFunc != nil {
 		return m.DeleteBookFileFunc(id)
 	}
+	return nil
+}
+func (m *MockStore) DeleteBookFilesByIDs(ids []string) error {
+	if m.DeleteBookFilesByIDsFunc != nil {
+		return m.DeleteBookFilesByIDsFunc(ids)
+	}
+	// Default to the same fallback DeleteBookFileFunc-less mocks get: succeed
+	// silently. Tests that care about which rows were deleted set the Func.
 	return nil
 }
 func (m *MockStore) DeleteBookFilesForBook(bookID string) error {

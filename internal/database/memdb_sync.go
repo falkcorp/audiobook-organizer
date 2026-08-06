@@ -1,6 +1,7 @@
 // file: internal/database/memdb_sync.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000005
+// last-edited: 2026-08-06
 
 package database
 
@@ -153,6 +154,42 @@ func (p *PebbleStore) DeleteBookFileFromMemDB(fileID string) {
 		obj, err := txn.First(memTableBookFiles, memIdxID, fileID)
 		if err == nil && obj != nil {
 			return txn.Delete(memTableBookFiles, obj)
+		}
+		return nil
+	})
+}
+
+// DeleteBookFilesFromMemDB removes many book_file rows in ONE memdb write
+// transaction.
+//
+// WHY this exists rather than looping DeleteBookFileFromMemDB: go-memdb serialises
+// every writer behind a single global mutex, so N calls means N acquisitions of a
+// lock that every other writer in the process is also queuing on. Deleting 15 rows
+// for one book took 15 turns through that mutex; it now takes one. The saving is
+// not the txn bookkeeping, it is the contention removed from unrelated writers.
+//
+// Semantics are otherwise identical to N successive DeleteBookFileFromMemDB calls:
+// IDs that are absent from memdb are skipped silently (Pebble stays authoritative,
+// and memdb is a derived cache that a later resync will correct anyway).
+func (p *PebbleStore) DeleteBookFilesFromMemDB(fileIDs []string) {
+	if len(fileIDs) == 0 {
+		return
+	}
+	p.memSync("DeleteBookFiles", func(txn memTxn) error {
+		for _, id := range fileIDs {
+			if id == "" {
+				continue
+			}
+			obj, err := txn.First(memTableBookFiles, memIdxID, id)
+			if err != nil || obj == nil {
+				// Not present (or unreadable). memSync aborts the WHOLE txn on a
+				// returned error, so a single missing row must not be one — that
+				// would drop the other N-1 deletes for no benefit.
+				continue
+			}
+			if err := txn.Delete(memTableBookFiles, obj); err != nil {
+				return fmt.Errorf("delete book_file %s: %w", id, err)
+			}
 		}
 		return nil
 	})

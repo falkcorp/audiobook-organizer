@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 1c7f4b93-6a05-42e8-9d31-8b0e5a2f7c46
-// last-edited: 2026-08-04
+// last-edited: 2026-08-06
 
 package maintenance
 
@@ -271,6 +271,26 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 		}
 
 		changedThisBook := false
+		// Redundant row IDs accumulate here and are deleted in ONE batch call after
+		// the group loop, instead of one DeleteBookFile per row.
+		//
+		// 🔴 THE SALVAGE WRITE BELOW MUST NOT JOIN THIS BATCH. Rescued keeper fields
+		// have to be COMMITTED BEFORE their donor rows are deleted, and the whole
+		// point of the "if the salvage write fails, skip this group" escape is that
+		// the donors are still there to try again from. Folding the salvage into an
+		// atomic delete batch silently removes that escape: the group would either
+		// commit both or neither, which sounds safer but actually means a keeper
+		// whose salvage write failed can no longer be repaired from its twins on the
+		// next run, because "neither" is indistinguishable from "nothing to do".
+		// Losing a duration is recoverable; losing it while also deleting the only
+		// other copy is not. That asymmetry is why the two commits stay separate and
+		// ordered. This is the repo's dominant incident class (fingerprint /
+		// Author / Series wipes on write-back) — do not "simplify" this.
+		//
+		// Accumulating across groups keeps that ordering STRONGER, not weaker: every
+		// salvage in this book commits before any donor in this book is deleted, and
+		// a group whose salvage failed simply never enters the accumulator.
+		var pendingDeletes []string
 		for path, rows := range byPath {
 			if len(rows) < 2 {
 				continue
@@ -333,26 +353,44 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 				mu.Unlock()
 			}
 
+			// Salvage for this group is committed; its donors may now be queued.
 			for ri := range redundant {
-				if derr := store.DeleteBookFile(redundant[ri].ID); derr != nil {
-					mu.Lock()
-					failed++
-					mu.Unlock()
-					log.Warn("dedupe-book-file-rows: delete failed",
-						"book_id", bookID, "row_id", redundant[ri].ID, "err", derr)
-					continue
-				}
+				pendingDeletes = append(pendingDeletes, redundant[ri].ID)
+			}
+		}
+
+		// One batched delete for the whole book. DeleteBookFilesByIDs is fail-closed
+		// on unresolvable IDs, so a partial delete cannot happen here — either every
+		// queued row goes or none do. If none do, the rows survive and the next run
+		// of this op re-reads them and collapses them again, so the failure costs a
+		// re-run and nothing else.
+		if len(pendingDeletes) > 0 {
+			if derr := store.DeleteBookFilesByIDs(pendingDeletes); derr != nil {
 				mu.Lock()
-				deleted++
+				failed++
+				mu.Unlock()
+				log.Warn("dedupe-book-file-rows: batched delete failed; leaving this book's rows intact",
+					"book_id", bookID, "rows", len(pendingDeletes), "err", derr)
+			} else {
+				mu.Lock()
+				deleted += len(pendingDeletes)
 				mu.Unlock()
 				changedThisBook = true
 			}
-
 		}
 
 		// Totals are a plain sum over the surviving rows, so they are only correct
 		// once the redundant rows are gone — recompute AFTER deleting, per book.
 		// Safe to do inside a worker: this book's rows belong to no other worker.
+		//
+		// This LOOKS redundant now that DeleteBookFilesByIDs already notifies once
+		// per affected book, and it is nearly free rather than actually redundant:
+		// RecomputeBookAggregates early-returns when neither Duration nor FileSize
+		// changed, which is exactly the state the batch delete just left the book
+		// in. Keep it anyway — it is what feeds the `recomputed` counter this op
+		// reports, and it is the only recompute that happens on the paths where the
+		// batch delete was skipped. Removing it would silently zero a counter the
+		// op's output is read for.
 		if params.Apply && changedThisBook {
 			if rerr := store.RecomputeBookAggregates(bookID); rerr != nil {
 				mu.Lock()
