@@ -1,5 +1,5 @@
 <!-- file: changelog.d/20260806_frontend_toolchain_eslint10.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: d0f2337c-43fc-4a24-b9aa-2239c0b2c946 -->
 <!-- last-edited: 2026-08-06 -->
 
@@ -35,3 +35,22 @@
   ESLint 10 alone. Adopting the compiler rules is a one-line change away and is
   deliberately left as a separate call. `eslint-plugin-react-refresh` needed no
   bump; 0.5.3 already peers `^9 || ^10`.
+
+- **Frontend TypeScript moved to 6.0.3** (from 5.9.3 — deliberately *not* 7, see
+  below). `web/tsconfig.json` drops `baseUrl`, which 6.0 removed; its `paths` entry
+  was already written in the full-prefix form 6.0 requires (`"./src/*"`), so the
+  mapping needed no rewrite. `ignoreDeprecations: "6.0"` is set to stage anything
+  else that starts warning. The project turned out to be well positioned for the
+  rest of 6.0's default changes: it already pins `types` explicitly, so the new
+  `types: []` default — which silently drops the ambient `@types/*` that projects
+  relying on the old "load everything" behaviour depend on — does not apply here;
+  and it uses `module: ESNext` with `moduleResolution: bundler`, so none of the
+  configurations 6.0 deleted outright (`moduleResolution: classic`, `module:
+  amd|umd|systemjs|none`, `outFile`) are in play. `tsc --noEmit` is clean over 248
+  files, checked with a deliberately broken file to confirm the run was actually
+  type-checking rather than silently passing.
+
+  Worth flagging for whoever touches this next: the `@/*` alias that `paths` and
+  vite's `resolve.alias` both define is **not used anywhere** in `web/` — zero
+  import specifiers reference it. The alias config in both files is dead weight and
+  could be deleted, which is also why removing `baseUrl` carried no risk.
