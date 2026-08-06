@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_shattered_ai.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 8b3e6d21-4f97-4c05-a1d8-2e7b9c0f5a63
-// last-edited: 2026-07-26
+// last-edited: 2026-08-06
 
 // Package maintenance — op maintenance.regroup-shattered-ai (PR-B1).
 //
@@ -78,6 +78,27 @@ type regroupPayload struct {
 	// disc concept", distinct from a real "Disc N" set (see assignDiscTrack).
 	DiscNumbers  []int `json:"discNumbers,omitempty"`
 	TrackNumbers []int `json:"trackNumbers,omitempty"`
+
+	// RecommendedAction is what the classifier thinks a human should DO about this
+	// hold — one of the itunesservice.Action* strings. It is what the approve handler
+	// DISPATCHES on (owner item 2), so it is the most load-bearing field here.
+	//
+	// 🔴 ADDITIVE, AND DELIBERATELY NOT BACKFILLED. Every hold already sitting in
+	// prod's queue was written before this field existed and decodes with
+	// RecommendedAction == "". That empty string is the intended "old hold" tell:
+	// the approve handler treats it as ActionInsufficientEvidence, which has no apply
+	// handler, so an old hold can never dispatch to a merge on the strength of a
+	// field it does not carry. Refreshing them is a re-scan (UpsertReviewItem rewrites
+	// the payload of a still-pending hold), never a migration.
+	RecommendedAction string `json:"recommendedAction"`
+	// RecommendationReason is the one-sentence human-readable case for the action,
+	// quoting its own numbers. It replaces ProposedAction as the sentence a reviewer
+	// actually reads — 762 of 777 holds carried the same generic ProposedAction.
+	RecommendationReason string `json:"recommendationReason"`
+	// RecommendationEvidence is the arithmetic behind the reason so a reviewer can
+	// check it instead of trusting it. A value struct, not a pointer: an old hold
+	// decodes it as the zero value, which reads honestly as "no evidence recorded".
+	RecommendationEvidence itunesservice.RecommendationEvidence `json:"recommendationEvidence"`
 }
 
 func (p *Plugin) regroupShatteredAIDef() sdk.OperationDef {
@@ -403,6 +424,13 @@ func buildRegroupPayload(g itunesservice.RegroupGroup) (string, error) {
 		Confidence:     confidence,
 		DiscNumbers:    discs,
 		TrackNumbers:   tracks,
+		// Carried verbatim from the classifier — this producer never re-derives or
+		// second-guesses the recommendation. classifyGroup owns the rule (including
+		// the KindVersionGroup override); duplicating any of it here would be a second
+		// place for the vocabulary to drift.
+		RecommendedAction:      g.RecommendedAction,
+		RecommendationReason:   g.RecommendationReason,
+		RecommendationEvidence: g.RecommendationEvidence,
 	})
 	if err != nil {
 		return "", err

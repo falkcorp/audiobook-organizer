@@ -1,7 +1,7 @@
 // file: internal/server/wire_handlers.go
-// version: 2.20.1
+// version: 2.21.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
-// last-edited: 2026-07-26
+// last-edited: 2026-08-06
 
 package server
 
@@ -588,11 +588,27 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	reviewH := reviewhandler.New(s.Store(), func() bool { return config.AppConfig.ReviewApplyEnabled })
 
 	// Register the regroup APPLY handlers (PR-B2) so approving a hold in the review
-	// UI performs the real action. Multidisc AND anthology both COMBINE into one
-	// multi-file book (an anthology/collection is a single real book with one ISBN —
-	// owner decision 2026-07-26 — NOT multiple works to split), so both use
-	// ApplyMultidisc. Version-group links editions. Only `ambiguous` stays
-	// handler-less (needs a human resolution choice — the review UI supplies it).
+	// UI performs the real action.
+	//
+	// 🔴 REGISTERED PER ACTION, NOT PER KIND (owner item 2, 2026-08-06). Approve now
+	// dispatches on the action a hold recommends (or a human explicitly chose), so
+	// there are exactly two entries — one per thing the system can actually DO —
+	// instead of one per classifier Kind. ApplyMultidisc is the combine path
+	// (multidisc AND anthology both collapse into one multi-file book: an
+	// anthology/collection is a single real book with one ISBN, owner decision
+	// 2026-07-26); ApplyVersionGroup links editions without destroying anything.
+	// `separate` and `insufficient-evidence` deliberately have no entry — the former
+	// is a status transition, the latter is not approvable at all.
+	//
+	// 🔴 BLAST RADIUS THIS WIDENS, DELIBERATELY. Under Kind-keyed dispatch,
+	// `regroup.ambiguous` had no handler and so could never merge anything. Keyed by
+	// action, an ambiguous hold that recommends `combine` (24 of them as measured on
+	// 2026-08-06) now reaches ApplyMultidisc, which hard-deletes absorbed Book rows.
+	// That is intended — the recommendation is evidence-backed where the Kind was
+	// only a shape — but it is a real expansion, and it is why the recommendation
+	// refuses to say `combine` without a majority of known runtimes. Nothing here
+	// runs while review_apply_enabled is off.
+	//
 	// Guarded on a real store — with a nil store the review handler short-circuits
 	// before dispatch, so the closures would never run anyway.
 	if s.Store() != nil {
@@ -600,10 +616,9 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		if mergeSvc == nil {
 			mergeSvc = merge.NewService(s.Store())
 		}
-		combine := maintenanceplugin.ApplyMultidisc(s.Store(), mergeSvc)
-		reviewH.RegisterApplyHandler(itunesservice.KindMultidisc, combine)
-		reviewH.RegisterApplyHandler(itunesservice.KindAnthology, combine)
-		reviewH.RegisterApplyHandler(itunesservice.KindVersionGroup,
+		reviewH.RegisterApplyHandler(itunesservice.ActionCombine,
+			maintenanceplugin.ApplyMultidisc(s.Store(), mergeSvc))
+		reviewH.RegisterApplyHandler(itunesservice.ActionVersionGroup,
 			maintenanceplugin.ApplyVersionGroup(s.Store()))
 	}
 
