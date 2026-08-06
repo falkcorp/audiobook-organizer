@@ -1,7 +1,7 @@
 // file: internal/itunes/service/fs_regroup_shape.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 1e7d4a92-3c85-4b60-9f21-6a8c0d5e2b47
-// last-edited: 2026-07-26
+// last-edited: 2026-08-06
 
 // Package service — deterministic (regex-only) shape classifier for the
 // shattered-book REGROUP review producer (PR-B1).
@@ -58,6 +58,7 @@
 package itunesservice
 
 import (
+	"fmt"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -72,6 +73,60 @@ const (
 	KindVersionGroup = "regroup.version-group" // Abridged + Unabridged editions in one folder
 	KindAnthology    = "regroup.anthology"     // anthology/collection/omnibus = ONE book → combine (owner: single ISBN)
 	KindAmbiguous    = "regroup.ambiguous"     // book-like folder, cannot confidently classify
+)
+
+// Recommended-action strings — the CLOSED vocabulary a review hold may recommend.
+//
+// These are deliberately SEPARATE from the Kind strings above and do not replace
+// them. A Kind says what SHAPE the classifier saw ("these files live in Disc N
+// folders"); an action says what a human should DO about it ("these are six
+// different novels — leave them apart"). Prod showed the two can disagree: 3 of the
+// 130 `regroup.multidisc` holds measured on 2026-08-06 hold members that are each
+// book-length, because the disc and chapter/edition branches of classifyGroup never
+// evaluate the series guard. Their Kind is still "multidisc" — the shape really is a
+// disc set — but the correct action is `separate`, and approving `combine` would
+// merge distinct novels through an apply path that hard-deletes absorbed Book rows.
+//
+// Exported because the approve handler (owner item 2) dispatches on the CHOSEN
+// action across package boundaries.
+const (
+	// ActionCombine — the members are parts of one book; merge them.
+	ActionCombine = "combine"
+	// ActionSeparate — the members are already N distinct books; leave them apart.
+	// Non-destructive: nothing to apply, only a status transition.
+	ActionSeparate = "separate"
+	// ActionDuplicateOf — the members are debris of a book that already exists
+	// correctly elsewhere.
+	//
+	// 🔴 NOTHING IN THIS FILE EVER EMITS THIS. It is defined here so the action
+	// vocabulary is closed and complete in one place, but deciding "this folder
+	// duplicates an existing book" requires cross-book identity evidence
+	// (fingerprints, ASIN/ISBN consensus) that classifyGroup does not have — it
+	// reasons over ONE folder's names and runtimes in isolation. The
+	// duplicate-detection track owns emitting it.
+	ActionDuplicateOf = "duplicate-of"
+	// ActionInsufficientEvidence — the classifier cannot tell. Emit-only: it is a
+	// statement BY the machine, not a decision a human can pick.
+	ActionInsufficientEvidence = "insufficient-evidence"
+	// ActionVersionGroup — the members are DIFFERENT EDITIONS of one work (an
+	// abridged and an unabridged recording, two narrators, a remaster). Link them
+	// into a version group with one primary; keep every file.
+	//
+	// 🔴 WHY THIS EXISTS AS A FIFTH ACTION, AND WHY RUNTIME CANNOT DECIDE IT.
+	// Two editions of the same novel are BOTH book-length by definition, so the
+	// runtime rule below sees a majority over bookLengthSec and answers
+	// ActionSeparate — technically true (they are distinct recordings) and
+	// operationally wrong (leaving them unlinked is exactly the state the hold
+	// exists to fix). Worse, once the approve handler dispatches on the CHOSEN
+	// action rather than on Kind, a version-group hold recommending "separate"
+	// makes ApplyVersionGroup permanently unreachable: the one apply path that
+	// destroys nothing would become the one that never runs.
+	//
+	// So KindVersionGroup overrides the runtime recommendation. That is safe in a
+	// way the reverse would not be — the classifier reached KindVersionGroup only
+	// via explicit abridged/unabridged edition markers PLUS a dominant shared
+	// title, which is positive identity evidence that runtime does not have.
+	ActionVersionGroup = "version-group"
 )
 
 // ShatterBook is the slim per-book view the classifier reasons over. Build it from
@@ -159,6 +214,190 @@ func membersAreBookLength(members []memberInfo) bool {
 	return long*2 > len(members)
 }
 
+// RecommendationEvidence is the numeric case FOR a recommendation — every number
+// the reason sentence quotes, so a reviewer can check the machine's arithmetic
+// instead of trusting it.
+//
+// This exists because of what the queue looked like before it: 762 of 777 holds
+// carried the SAME sentence ("review: flat folder shares a title but ordering is
+// unclear"), which tells a reviewer nothing they could act on. A reason without
+// numbers is just a nicer generic string; the numbers are the point.
+//
+// Every field is already computed by classifyGroup or trivially derived from the
+// members — nothing here needs new I/O. JSON tags are lowerCamelCase to match the
+// existing regroup payload style.
+type RecommendationEvidence struct {
+	// Members is the group's member count.
+	Members int `json:"members"`
+	// DurationsKnown is how many members have a non-zero DurationSec. The gap
+	// between this and Members is the whole reason a recommendation can be
+	// "insufficient-evidence": see recommendAction.
+	DurationsKnown int `json:"durationsKnown"`
+	// BookLengthMembers is how many members run >= bookLengthSec (90 min) and are
+	// therefore individually long enough to BE books.
+	BookLengthMembers int `json:"bookLengthMembers"`
+	// MedianKnownSec is the median runtime over members with a KNOWN duration
+	// (zeros excluded — including them would make the reason sentence state a
+	// number no member actually has). Lower-middle on an even count. 0 when no
+	// member has a known duration.
+	MedianKnownSec int `json:"medianKnownSec"`
+	// LongestKnownSec is the longest member runtime in seconds, 0 when unknown.
+	// It is the single most legible number for the separate case: "the longest
+	// member runs 15.8 h" reads as "that is a novel" without any further context.
+	LongestKnownSec int `json:"longestKnownSec"`
+	// DistinctStems is the number of distinct title stems among the members
+	// (classifyGroup's distinctPrefixes) — the anthology / over-merge signal.
+	DistinctStems int `json:"distinctStems"`
+	// NumberedMembers is how many members carry a parseable chapter/track ordinal.
+	NumberedMembers int `json:"numberedMembers"`
+	// Structure is the group's dominant physical shape, mirroring
+	// RegroupGroup.Structure ("disc" | "chapter" | "flat").
+	Structure string `json:"structure"`
+}
+
+// gatherEvidence tallies the runtime facts about a group's members. The
+// name-derived counts are passed in because classifyGroup already computed them.
+func gatherEvidence(members []memberInfo, distinctStems, numberedMembers int, structure string) RecommendationEvidence {
+	ev := RecommendationEvidence{
+		Members:         len(members),
+		DistinctStems:   distinctStems,
+		NumberedMembers: numberedMembers,
+		Structure:       structure,
+	}
+	known := make([]int, 0, len(members))
+	for _, m := range members {
+		d := m.book.DurationSec
+		if d <= 0 {
+			continue // unknown — deliberately NOT folded into any average
+		}
+		ev.DurationsKnown++
+		known = append(known, d)
+		if d >= bookLengthSec {
+			ev.BookLengthMembers++
+		}
+		if d > ev.LongestKnownSec {
+			ev.LongestKnownSec = d
+		}
+	}
+	if len(known) > 0 {
+		sort.Ints(known)
+		ev.MedianKnownSec = known[(len(known)-1)/2] // lower middle on an even count
+	}
+	return ev
+}
+
+// humanRuntime renders a runtime the way a reviewer thinks about it: hours for a
+// book, minutes for a chapter.
+func humanRuntime(sec int) string {
+	if sec >= 3600 {
+		return fmt.Sprintf("%.1f h", float64(sec)/3600)
+	}
+	return fmt.Sprintf("%d min", (sec+30)/60)
+}
+
+// recommendAction turns the runtime evidence into a recommended action and a
+// one-sentence reason that quotes its own numbers.
+//
+// 🔴 THE ONE RULE THAT MATTERS: AN ABSENT DURATION IS NOT EVIDENCE.
+//
+// The classifier's founding assumption is "files in one folder are tracks of one
+// book". That is true of the organized tree and FALSE of the iTunes tree, where
+// `iTunes Media/Audiobooks/<Author>/` holds an author's whole catalogue. Runtime is
+// the only signal that separates the two cases, because numbered SEQUELS share one
+// title stem ("Super Sales on Super Heroes" / " 2" / " 3") and so slip past every
+// name-based guard. A 2026-08-05 dry-run found 41 of 43 confident candidates were
+// exactly that shape.
+//
+// Which means a group with NO runtime data is not "probably chapters" — it is
+// UNKNOWN, and the same folder that looks like a chapter set with the durations
+// missing looks like a six-novel series with them present. So the majority-known
+// gate below is checked FIRST, unconditionally, with no structural exception: a
+// zero-duration chapter shatter recommends insufficient-evidence, not combine. The
+// asymmetry is deliberate and is the reason for the ordering — `combine` routes to
+// an apply path that HARD-DELETES the absorbed Book rows, while `separate` and
+// `insufficient-evidence` change nothing. Guessing wrong toward separate leaves a
+// book shattered (recoverable any time); guessing wrong toward combine destroys
+// rows. Only one of those is reversible.
+//
+// This is the same rule that made membersAreBookLength safe (it counts unknown
+// members as NOT book-length so the guard cannot fire on missing data); here the
+// symmetric half is enforced — missing data cannot fire a COLLAPSE either.
+//
+// Deliberately independent of Kind. A Kind describes the shape the classifier saw;
+// this describes what the runtimes say to do about it. The 3 multidisc holds whose
+// members are each book-length are exactly the case where the two disagree, and
+// suppressing the disagreement is what would lose books.
+//
+// distinctPathFolders is how many distinct FilePath book-folders the group spans; >1
+// means the membership itself is unconfirmed (see the gate below).
+func recommendAction(ev RecommendationEvidence, members []memberInfo,
+	distinctPathFolders int) (action, reason string) {
+	n := ev.Members
+
+	// (1) Not enough runtime evidence to say anything. A strict majority of members
+	// must have a known duration before ANY decisive call, so a lone known runtime
+	// among five unknowns cannot carry the group.
+	if ev.DurationsKnown*2 <= n {
+		if ev.DurationsKnown == 0 {
+			return ActionInsufficientEvidence, fmt.Sprintf(
+				"none of the %d members has a known runtime — an absent duration is not evidence, "+
+					"so chapters of one book cannot be told apart from separate books", n)
+		}
+		return ActionInsufficientEvidence, fmt.Sprintf(
+			"only %d of %d members has a known runtime — an absent duration is not evidence, "+
+				"so chapters of one book cannot be told apart from separate books",
+			ev.DurationsKnown, n)
+	}
+
+	// (1b) The group spans several FilePath folders and is held together ONLY by a
+	// shared original iTunes album. classifyGroup's first switch case already refuses
+	// to vouch for this grouping ("the two identity signals disagree"), and a
+	// recommendation that reasons purely about RUNTIMES would happily answer
+	// `combine` for it — recommending a destructive merge of a membership the
+	// classifier just declined to confirm. Two 30-minute files under
+	// `Author A/Book One` and `Author B/Book Two` are not two chapters of one book
+	// merely because both runtimes are short; they are two different books whose
+	// iTunes album tag collided.
+	//
+	// This is a GUARD on membership, not a second length threshold — bookLengthSec
+	// remains the only runtime cut-off in this file.
+	if distinctPathFolders > 1 {
+		return ActionInsufficientEvidence, fmt.Sprintf(
+			"these %d members span %d different file-path folders and are grouped only by a "+
+				"shared original iTunes album — whether they are one book is unconfirmed",
+			n, distinctPathFolders)
+	}
+
+	// (2) A strict majority of members are individually long enough to BE books, so
+	// this folder holds separate books that were grouped by name alone. Reuses the
+	// existing membersAreBookLength helper and its single bookLengthSec threshold —
+	// a second threshold here would be a second thing to get wrong.
+	if membersAreBookLength(members) {
+		return ActionSeparate, fmt.Sprintf(
+			"%d of %d members run 90 min or longer (longest %s) — each is book-length, "+
+				"so these are separate books, not parts of one",
+			ev.BookLengthMembers, n, humanRuntime(ev.LongestKnownSec))
+	}
+
+	// (3) Every member whose runtime we know is shorter than a book. Combined with
+	// the majority-known gate above, that is positive evidence of genuine
+	// disc/chapter fragments — the only branch that recommends a destructive merge.
+	if ev.BookLengthMembers == 0 {
+		return ActionCombine, fmt.Sprintf(
+			"all %d members with a known runtime are under 90 min (median %s) — "+
+				"chapter- or disc-length fragments of one book",
+			ev.DurationsKnown, humanRuntime(ev.MedianKnownSec))
+	}
+
+	// (4) Mixed: some members are book-length and some are fragments, but neither
+	// side is a majority. The members disagree about what they are, and a folder
+	// that mixes whole books with loose fragments needs a human to look at it.
+	return ActionInsufficientEvidence, fmt.Sprintf(
+		"members disagree on runtime: %d of %d run 90 min or longer and %d are shorter — "+
+			"neither a chapter set nor a clean set of separate books",
+		ev.BookLengthMembers, n, ev.DurationsKnown-ev.BookLengthMembers)
+}
+
 // RegroupGroup is one book folder the classifier flagged for a review hold.
 type RegroupGroup struct {
 	FolderRef      string        // the book folder (grandparent for chapter/disc; parent for flat)
@@ -178,6 +417,29 @@ type RegroupGroup struct {
 	// label distinguish a genuine multi-DISC set ("Multi-disc → 1 book") from
 	// same-disc CHAPTERS ("Chapters → 1 book"), which read identically otherwise.
 	Structure string
+
+	// RecommendedAction is what a human should DO about this group: one of
+	// ActionCombine, ActionSeparate, ActionVersionGroup, ActionDuplicateOf or
+	// ActionInsufficientEvidence (this file never emits ActionDuplicateOf — see
+	// its doc comment). It is computed from the members' RUNTIMES and is
+	// deliberately independent of Kind, which describes only the folder's physical
+	// SHAPE. The two can disagree, and the disagreement is the point: 3 prod
+	// `regroup.multidisc` holds carry members that are each book-length, because
+	// the disc and chapter/edition branches never evaluate the series guard.
+	//
+	// The ONE exception is KindVersionGroup, which overrides runtime with
+	// ActionVersionGroup — two editions of one work are both book-length, so
+	// runtime alone would say "separate" and strand ApplyVersionGroup behind an
+	// action nothing dispatches to. See ActionVersionGroup.
+	RecommendedAction string
+	// RecommendationReason is one human-readable sentence explaining WHY, quoting
+	// the numbers that produced it. Never a bare category name: the queue this
+	// replaces had 762 of 777 holds carrying one identical generic sentence, which
+	// is precisely what made it unworkable.
+	RecommendationReason string
+	// RecommendationEvidence is the arithmetic behind the reason, so a reviewer
+	// can check it rather than trust it.
+	RecommendationEvidence RecommendationEvidence
 }
 
 // ShapeStats reconciles every input book so the record count ties out (no silent
@@ -608,6 +870,16 @@ func classifyGroup(members []memberInfo) (RegroupGroup, bool) {
 	// Structural tallies.
 	var discCount, chapterCount, flatCount, numberedCount int
 	prefixVotes := map[string]int{}
+	// prefixDisplay maps each NORMALIZED prefix back to the first original-case form
+	// seen for it. prefixVotes is keyed by normPrefix (lowercased, non-alphanumerics
+	// stripped), so the winning key reads "therisingvol9" — unusable as a title. The
+	// survivor-title selector needs the original casing and punctuation.
+	prefixDisplay := map[string]string{}
+	// authorVotes tallies the members' display authors (normalized) so the survivor
+	// title can REJECT a candidate that is merely the author's name — the observed
+	// "C. T. Phipps" failure. Only a majority author is trusted; below that the
+	// guard stays inert rather than guessing.
+	authorVotes := map[string]int{}
 	for _, m := range members {
 		switch m.structure {
 		case "disc":
@@ -622,9 +894,19 @@ func classifyGroup(members []memberInfo) (RegroupGroup, bool) {
 		}
 		if m.normPrefix != "" {
 			prefixVotes[m.normPrefix]++
+			if _, seen := prefixDisplay[m.normPrefix]; !seen {
+				prefixDisplay[m.normPrefix] = m.prefix
+			}
+		}
+		if na := normTitle(m.book.Author); na != "" {
+			authorVotes[na]++
 		}
 	}
 	dominantPrefix, dominantCount := topStr(prefixVotes)
+	dominantAuthorNorm, dominantAuthorCount := topStr(authorVotes)
+	if dominantAuthorCount*2 <= n {
+		dominantAuthorNorm = "" // no majority author — leave the author guard inert
+	}
 	distinctPrefixes := len(prefixVotes)
 	structure := majorityStructure(discCount, chapterCount, flatCount)
 
@@ -648,20 +930,50 @@ func classifyGroup(members []memberInfo) (RegroupGroup, bool) {
 
 	sortMembers(members)
 	assignDiscTrack(members)
+
+	// The recommendation is computed ONCE, before the Kind switch, and closed over by
+	// build — it depends only on the members' runtimes, never on which branch fires.
+	// Keeping it out of build's signature keeps all nine build(...) call sites
+	// byte-identical, so this change cannot perturb the Kind switch by accident.
+	evidence := gatherEvidence(members, distinctPrefixes, numberedCount, structure)
+	recAction, recReason := recommendAction(evidence, members, len(fpVotes))
+	survivorTitle := survivorTitleFor(folderName, folderNamedAfterBook,
+		prefixDisplay[dominantPrefix], dominantCount*2 >= n, dominantAuthorNorm)
+
 	build := func(kind string, confident bool, action string, distinctWorks int) RegroupGroup {
 		out := make([]ShatterBook, 0, n)
 		for _, m := range members {
 			out = append(out, m.book)
 		}
+
+		// KindVersionGroup overrides the runtime recommendation. Both editions of
+		// one work are book-length, so recommendAction would answer ActionSeparate
+		// and — once approve dispatches on the chosen action — make
+		// ApplyVersionGroup unreachable. See ActionVersionGroup's comment for the
+		// full argument. The evidence block is still carried verbatim so the queue
+		// shows the runtimes the human is judging.
+		kindAction, kindReason := recAction, recReason
+		if kind == KindVersionGroup {
+			kindAction = ActionVersionGroup
+			kindReason = fmt.Sprintf(
+				"abridged and unabridged edition markers on a shared title across %d members "+
+					"(longest %s) — different recordings of one work, so link them as versions "+
+					"rather than merging or separating them",
+				evidence.Members, humanRuntime(evidence.LongestKnownSec))
+		}
+
 		return RegroupGroup{
-			FolderRef:      folderRef,
-			Kind:           kind,
-			Confident:      confident,
-			SurvivorTitle:  deriveSurvivorTitle(folderName),
-			ProposedAction: action,
-			Members:        out,
-			DistinctWorks:  distinctWorks,
-			Structure:      structure,
+			FolderRef:              folderRef,
+			Kind:                   kind,
+			Confident:              confident,
+			SurvivorTitle:          survivorTitle,
+			ProposedAction:         action,
+			Members:                out,
+			DistinctWorks:          distinctWorks,
+			Structure:              structure,
+			RecommendedAction:      kindAction,
+			RecommendationReason:   kindReason,
+			RecommendationEvidence: evidence,
 		}
 	}
 
@@ -834,9 +1146,89 @@ func assignDiscTrack(members []memberInfo) {
 	}
 }
 
-// deriveSurvivorTitle turns a book-folder name into a clean survivor title: strip a
+// genericTitleRe matches a candidate title that names a POSITION rather than a work:
+// "Volume 1", "Chapter", "Disc 3", "Part 2", "Untitled", or a bare "01". Such a
+// string is a container label, never a book title.
+//
+// Anchored at both ends and matched against the WHOLE cleaned candidate, never as a
+// substring — a substring match would eat legitimate titles like "The Rising Vol. 9"
+// or "Book of the New Sun".
+var genericTitleRe = regexp.MustCompile(
+	`(?i)^(?:\d+|(?:vol(?:ume)?|bk|books?|parts?|pts?|discs?|cds?|chapters?|tracks?|sides?|sections?|untitled)\.?\s*\d*)$`)
+
+// survivorTitleFor picks WHICH string should become the survivor title, then cleans
+// it with deriveSurvivorTitle. It exists because reading the folder name alone —
+// what this code did until 2026-08-06 — produced author names ("C. T. Phipps"), bare
+// ordinals ("Volume 1"), and WRONG volume numbers (a folder named "… Vol. 01" whose
+// member files all say "Vol. 9").
+//
+// The folder name and the members' dominant title stem are two independent claims
+// about what this book is called, and the choice between them is evidence-ranked:
+//
+//  1. folderNamedAfterBook — the members' own stem is a majority AND appears inside
+//     the folder name, so the two signals AGREE. The folder name is then the better
+//     of the two: it is the full human title, while the stem has had its ordinals
+//     stripped. This is also the case that keeps a correct existing behaviour.
+//  2. Otherwise the two DISAGREE, and the members win. The files are closer to the
+//     content than the directory that happens to hold them — this is what fixes the
+//     "Vol. 01 folder / Vol. 9 files" case, where the folder carries a stale number.
+//     Only a MAJORITY stem is trusted; a 1-of-6 plurality in an author folder is not
+//     a title, it is whichever book sorted first.
+//  3. If the members have nothing trustworthy to say, fall back to the folder name
+//     anyway — but only after the disqualification guards. This step is why a flat
+//     folder "Coraline" holding "01 - Chapter.mp3" … "08 - Chapter.mp3" still yields
+//     "Coraline": its dominant stem is the generic word "Chapter", which step 2
+//     rejects. Without this fallback, the fix would introduce a fresh instance of
+//     the very bug it exists to remove.
+//  4. If NEITHER source survives its guards, return "".
+//
+// 🔴 EMPTY IS BETTER THAN WRONG. A blank survivor title renders as "needs a title"
+// in the review queue — visibly incomplete, and a reviewer supplies one. A WRONG
+// title reads as authoritative and silently mislabels a book. SurvivorTitle is
+// display-only today (regroup_apply.go calls CombineBooks with a nil override, so
+// nothing is written to any Book row), but the label is what a reviewer decides on:
+// a hold labelled with the author's name is one a reasonable reviewer rejects,
+// throwing away a good regroup.
+//
+// dominantAuthorNorm is the NORMALIZED majority author, or "" when no author holds a
+// majority (guard inert).
+func survivorTitleFor(folderName string, folderNamedAfterBook bool,
+	dominantStem string, dominantIsMajority bool, dominantAuthorNorm string) string {
+	// acceptable applies the disqualification guards to an already-cleaned candidate.
+	acceptable := func(cand string) bool {
+		if cand == "" {
+			return false
+		}
+		if genericTitleRe.MatchString(cand) {
+			return false // "Volume 1", "Chapter", "01" — a position, not a work
+		}
+		if dominantAuthorNorm != "" && normTitle(cand) == dominantAuthorNorm {
+			return false // the author's name, not the book's — the "C. T. Phipps" case
+		}
+		return true
+	}
+
+	fromFolder := deriveSurvivorTitle(folderName)
+	if folderNamedAfterBook && acceptable(fromFolder) {
+		return fromFolder
+	}
+	if dominantIsMajority {
+		if fromMembers := deriveSurvivorTitle(dominantStem); acceptable(fromMembers) {
+			return fromMembers
+		}
+	}
+	if acceptable(fromFolder) {
+		return fromFolder
+	}
+	return ""
+}
+
+// deriveSurvivorTitle CLEANS one candidate string into a survivor title: strip a
 // leading "NN - " track prefix, a trailing "(era/year)" parenthetical, and a trailing
 // " - N" number. Author is intentionally NOT derived from the path.
+//
+// This is the pure string transform only. WHICH string reaches it — the book-folder
+// name or the members' dominant title stem — is survivorTitleFor's decision.
 func deriveSurvivorTitle(folderName string) string {
 	t := folderName
 	t = leadingNumRe.ReplaceAllString(t, "")
