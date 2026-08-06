@@ -351,26 +351,29 @@ into one of the curated sections below, is a normal direct edit.
 <!-- guid: 2f57e91b-8c04-4d73-a6e8-95b013fc287d -->
 <!-- last-edited: 2026-08-05 -->
 
-- [ ] **Series names that are really book numbers (~874 books)** — owner item 4
-  (2026-08-05).
+- [x] **Series names that are really book numbers** — owner item 4
+  (2026-08-05, shipped + applied to production 2026-08-06, PR #2156).
 
-  Shapes still unhandled: `<Series> N: <Title>`, `N - <Title>`, and `N (paren)`.
-  `the world 4` means **book 4 of `the world`** — the number belongs in the
-  series *position* field, not baked into the series *name*.
+  `maintenance.series-denumber` now reads the embedded shapes as well as the
+  trailing ones, each scored by confidence. Applied on production: **25 series
+  merged into 21 base series, 52 books given a real series position, 0 failures**;
+  a re-run confirmed the high tier drained 25 → 0 with the other tiers untouched.
 
-  🔴 **This is a DATA bug, not a display bug.** The owner has corrected that
-  reading twice. Do not re-derive it, and do not "fix" it in the frontend.
+  🔴 **This was a DATA bug, not a display bug** — the number belongs in the
+  series *position* field, not baked into the series *name*. Kept here because
+  the owner corrected that reading twice; do not re-derive it.
 
-  `maintenance.series-denumber` already exists and handles the trailing-number
-  shape; these are the remaining shapes.
+  What the tiers are for, in the production data:
+  - **high** (keyword-vouched, e.g. `Evil Genius: Book 4: …`) — applied.
+  - **medium** (bracketed, e.g. `Dragon Born [04]`) — 198 rows, **NOT applied**.
+    ~180 of them turned out to be shattered-book debris, not series positions.
+    See the follow-up task below.
+  - **low** (bare number, e.g. `08. Battle for the Abyss`) — 466 rows, reported
+    only, and unappliable by construction. `86—EIGHTY-SIX` is a real series name
+    in this library with the identical shape.
 
-  🔴 **Extend `IsJunkSeriesBase` ALONGSIDE the parser, not after it.** That guard
-  is what stopped **285 bad merges** in the dry run. A parser extension that
-  lands before the guard extension will happily collapse series bases the guard
-  would have rejected — and series merges are destructive.
-
-  Dry-run first and read the numbers; independent of the First Aid track, so it
-  can proceed in parallel.
+  Rollback artefacts on the server:
+  `/var/lib/audiobook-organizer/series-denumber-{,APPLY-,VERIFY-}2026-08-06.tsv`.
 
 <!-- file: todo.d/20260805_220300_first_aid_library_validate_repair.md -->
 <!-- version: 1.0.0 -->
