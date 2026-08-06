@@ -47,7 +47,7 @@ func TestParseLogLine(t *testing.T) {
 		},
 		{
 			name:       "gin 200 response",
-			line:       "[GIN] 2026/03/25 - 17:35:11 | 200 |    1.44s |    172.16.3.164 | GET      \"/api/v1/health\"",
+			line:       "[GIN] 2026/03/25 - 17:35:11 | 200 |    1.44s |    192.0.2.164 | GET      \"/api/v1/health\"",
 			wantLevel:  "info",
 			wantSource: "gin",
 			wantMsgPfx: "200",

@@ -21,7 +21,7 @@ can't calibrate: only ~234 of 2,474 labeled pairs carry a `ScoreBreakdown`
 ```bash
 # 1. Fresh API key (server-bootstrap skill → .claude/.api-token). Key: Authorization: Bearer abk_...
 KEY=$(grep '^api_key=' .claude/.api-token | cut -d= -f2)
-BASE=https://172.16.2.30:8484/api/v1
+BASE=https://<server>:8484/api/v1
 # 2. Correct binary deployed (guard live). MUST show calibrate-composite:
 curl -sk "$BASE/op-defs" -H "Authorization: Bearer $KEY" | grep -o 'dedup.calibrate-composite' | head -1
 #    If empty: LOCAL tree is stale. git pull --ff-only origin main && make deploy   (see

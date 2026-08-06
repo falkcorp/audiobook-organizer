@@ -100,7 +100,7 @@ Measured via CF API (~22:34, account api token from cloudflare-one/.env):
   johnathan.falk@gmail.com. There is NO `non_identity` service-token policy.
 - NO service tokens exist on the account at all.
 - App-level `allow_authenticate_via_warp`: None; org-level
-  `allow_authenticate_via_warp`: **False** (team jdfalk.cloudflareaccess.com).
+  `allow_authenticate_via_warp`: **False** (team <team>.cloudflareaccess.com).
 - No cover-art bypass app exists (consistent with live probe: cover path
   302s to Access instead of reaching origin).
 
@@ -173,7 +173,7 @@ Verified the browser-SSO chain link by link (all evidence live, tonight):
    before reporting; discarded.)
 3. ORIGIN — service active. Startup log 23:27:08:
    "oauth: Cloudflare Access identity passthrough enabled
-    team=jdfalk.cloudflareaccess.com". No warnings, no errors at -p warning.
+    team=<team>.cloudflareaccess.com". No warnings, no errors at -p warning.
    Drop-in has CF_ACCESS_TEAM_DOMAIN, CF_ACCESS_AUD, OAUTH_ALLOWED_EMAILS,
    OAUTH_DEFAULT_ROLE=admin, ABS_API_ENABLED=true, ABS_AUTH_MODES=cf,jwt.
 4. ROUTES — server_lifecycle.go:1189-1193: /api/v1 group applies cfMW
@@ -309,7 +309,7 @@ commands; three are NOPASSWD (`mv` the binary, `cp` the .service file,
 `daemon-reload`, `restart`) but line 19 —
 
 ```
-sudo cp /home/jdfalk/audiobook-organizer-local.conf \
+sudo cp /home/<user>/audiobook-organizer-local.conf \
         /etc/systemd/system/audiobook-organizer.service.d/local.conf
 ```
 

@@ -6,13 +6,13 @@
 # TASK-07 — Prod re-mine + recalibrate + verify precision floor (INIT-1 T7) — ⛔ NOT AGENT WORK / operator-driven
 
 **Gate:** SPEC -> GATED APPLY. Code PRs run autonomously (worktree/PR/CI). EVERY prod-data mutation (T7 rebuild-gold-labels re-mine, any calibration threshold/config apply, prod re-runs) is dry-run FIRST, then a real AskUserQuestion apply decision — never a text-reply approval.
-**File-ownership:** no SOURCE code is touched — this task runs operations against production (172.16.2.30). It DOES write docs at close-out (step 9): a findings note under `.claude/notes/`, plus `TODO.md` and `CHANGELOG.md` updates. Those doc writes are committed via the repo's Quick Fix Workflow (branch + PR + rebase-merge; never direct to main) using the commit message block below.
+**File-ownership:** no SOURCE code is touched — this task runs operations against production (<server>). It DOES write docs at close-out (step 9): a findings note under `.claude/notes/`, plus `TODO.md` and `CHANGELOG.md` updates. Those doc writes are committed via the repo's Quick Fix Workflow (branch + PR + rebase-merge; never direct to main) using the commit message block below.
 
 **Priority:** P0 · **Effort:** M (operator time) · **Recommended subagent:** NONE — ⛔ NOT AGENT WORK: every apply step requires a real AskUserQuestion decision by the owner; an autonomous agent may at most prepare/present the dry-run evidence · **Depends on:** TASK-01, TASK-02, TASK-03, TASK-05 merged AND deployed to prod (`make deploy`). TASK-08 is a soft prerequisite: re-verify after it lands, but the first re-mine MAY run before it if INIT-2 is slow.
 
 ## ⛔ START HERE (context, not code)
 
-This is a runbook, not a code task. No worktree, no PR. Prod access per the repo's standard path: `server-bootstrap` skill → `.claude/.api-token` → ops API on 172.16.2.30 (`Authorization: Bearer <abk_...>`). All ops are launched via `POST /api/v1/operations/v2 {"def_id": "..."}` and watched in the ops UI/API.
+This is a runbook, not a code task. No worktree, no PR. Prod access per the repo's standard path: `server-bootstrap` skill → `.claude/.api-token` → ops API on <server> (`Authorization: Bearer <abk_...>`). All ops are launched via `POST /api/v1/operations/v2 {"def_id": "..."}` and watched in the ops UI/API.
 
 ## Goal
 

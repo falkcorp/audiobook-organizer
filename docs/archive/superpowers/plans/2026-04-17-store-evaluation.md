@@ -200,7 +200,7 @@ Task 1 must be done first. Tasks 2 and 3 can run in parallel. Task 4 depends on 
 
 ### Constraints
 
-- Benchmarks should run on the production server (172.16.2.30) to reflect real hardware. Also run on a dev machine for comparison.
+- Benchmarks should run on the production server (<server>) to reflect real hardware. Also run on a dev machine for comparison.
 - PostgreSQL benchmarks require Docker (for the PostgreSQL + pgvector container). The benchmark harness should detect if Docker is unavailable and skip gracefully.
 - This is a research deliverable — no production code changes. The benchmark adapters are throwaway code; they do NOT need to implement the full Store interface, only enough for the benchmark workloads.
 - The decision document should be reviewed by the project owner before any migration work begins.

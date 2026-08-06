@@ -302,7 +302,7 @@ outright instead of writing unguarded.
 
 ## Production verification (2026-06-09, post-review pass)
 
-Verified live against `172.16.2.30` (service restarted by owner's `make deploy`;
+Verified live against `<server>` (service restarted by owner's `make deploy`;
 API key via bootstrap-token exchange):
 
 - **Dedup candidates** (`/api/v1/dedup/stats` + sampling): pending = 12,320 exact (all

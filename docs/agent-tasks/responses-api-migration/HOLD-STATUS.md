@@ -163,7 +163,7 @@ Both backend modes (OpenAI + local bge-m3) run through this client; migrating it
 
 - What: each soak (plan §Soak protocol) must log evidence for BOTH modes where the surface has a
   local arm (M1, M2): one real op in OpenAI mode and one against local qwen2.5:7b-instruct
-  (172.16.3.22). D/E are OpenAI-only. The old briefs' acceptance criteria test only code shape;
+  (<gpu-host>). D/E are OpenAI-only. The old briefs' acceptance criteria test only code shape;
   soak-pass is a prod-runtime criterion the briefs cannot self-certify.
 
 ### GAP-3 — close-out doc sweep (rides M5)

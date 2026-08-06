@@ -68,7 +68,7 @@ type rpcError struct {
 }
 
 // New creates a Deluge Web JSON-RPC client.
-// baseURL is the Deluge Web UI URL (e.g. "http://172.16.2.30:8112").
+// baseURL is the Deluge Web UI URL (e.g. "http://<deluge-host>:8112").
 // password is the Web UI password (default: "deluge").
 func New(baseURL, password string) (*Client, error) {
 	jar, err := cookiejar.New(nil)

@@ -43,7 +43,7 @@ This is a large task. Write each spec to its file **as soon as that spec is comp
 - **Frontend:** React + TypeScript + Material-UI, Vite build, Vitest tests, Playwright E2E
 - **Primary DB:** PebbleDB (key-value, at `/var/lib/audiobook-organizer/audiobooks.pebble`) — the only production DB we fully trust
 - **Secondary DBs (want to reduce):** SQLite (`embeddings.db`, `ai_scans.db`), NutsDB (`activity.nutsdb`, `metrics.nutsdb`), Bleve (full-text search at `library.bleve`)
-- **Production:** Linux at `172.16.2.30`, ~50K books (10,891 organized + ~39K iTunes-imported), systemd service
+- **Production:** Linux at `<server>`, ~50K books (10,891 organized + ~39K iTunes-imported), systemd service
 - **Build:** `make build` (frontend first, then `go build -tags embed_frontend`), `make test`, `make ci` (80% coverage gate)
 
 ### Key Package Map

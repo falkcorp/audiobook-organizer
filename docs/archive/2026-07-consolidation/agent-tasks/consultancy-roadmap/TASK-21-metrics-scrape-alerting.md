@@ -24,7 +24,7 @@ alerting layer at all — OpenAI quota exhaustion, the 69GB cache-warmup memory
 bloat, and op wedges were all discovered by a human noticing symptoms, not by
 an alert. Deliver a minimal, self-hostable Prometheus scrape config + Alertmanager
 rule set committed under `deploy/`, a runbook for installing them on
-`172.16.2.30`, and (only if genuinely absent after verification) a small gauge
+`<server>`, and (only if genuinely absent after verification) a small gauge
 exporting AI-backend reachability. Keep it self-hostable — no SaaS/hosted
 monitoring product.
 
@@ -65,11 +65,11 @@ monitoring product.
     (e.g. alert when `process_resident_memory_bytes` exceeds ~90% of 12G, i.e.
     ~11.1e9 bytes).
   - `docs/system/runbooks.md` already exists (Deploy Runbook, Systemd service
-    sections) with a versioned header and a `172.16.2.30` production-host
+    sections) with a versioned header and a `<server>` production-host
     convention — append a new `## Monitoring & Alerting Runbook` section to it
     rather than creating a separate doc.
-  - Prod already runs on `172.16.2.30` — target that host as
-    `172.16.2.30:8484` in the scrape config's `targets:` (adjust the port to
+  - Prod already runs on `<server>` — target that host as
+    `<server>:8484` in the scrape config's `targets:` (adjust the port to
     match whatever `--port` prod actually uses; verify via
     `grep -rn "\-\-port\|ExecStart=" deploy/local.conf 2>/dev/null` if that
     gitignored file exists locally, otherwise default to `8484` per the
@@ -102,7 +102,7 @@ monitoring product.
      `metrics.SetBackendAvailable("ollama", ollamaOK)` (import the metrics
      package if not already imported in that file — check first).
 2. Create `deploy/prometheus/scrape-config.yml` — a minimal, commented
-   Prometheus `scrape_configs` snippet targeting `172.16.2.30:8484` on the
+   Prometheus `scrape_configs` snippet targeting `<server>:8484` on the
    `/metrics` path, `scrape_interval: 30s`, job name `audiobook-organizer`.
    Include a comment explaining this is a **snippet** to merge into an
    existing `prometheus.yml`, not a standalone runnable file.
@@ -120,7 +120,7 @@ monitoring product.
 5. Append a `## Monitoring & Alerting Runbook` section to
    `docs/system/runbooks.md` (after the existing sections — do not reorder or
    rewrite existing content) covering:
-   - Prerequisite: a Prometheus + Alertmanager install on `172.16.2.30` (or a
+   - Prerequisite: a Prometheus + Alertmanager install on `<server>` (or a
      separate host that can reach it) — this task does not install Prometheus
      itself, only ships the config to plug into one.
    - How to merge `deploy/prometheus/scrape-config.yml` into that
@@ -171,7 +171,7 @@ command -v promtool >/dev/null && promtool check rules deploy/prometheus/alert-r
       config/docs.
 
 This task ships config and docs only — it does not install Prometheus/Alertmanager
-on `172.16.2.30` itself and does not require prod access. No owner-greenlight
+on `<server>` itself and does not require prod access. No owner-greenlight
 gate is needed beyond normal PR review (no prod-data mutation, no dry-run
 report required).
 

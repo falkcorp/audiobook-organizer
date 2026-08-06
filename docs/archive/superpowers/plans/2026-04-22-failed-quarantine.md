@@ -1358,21 +1358,21 @@ Expected: all pass.
 
 ```bash
 GOOS=linux GOARCH=amd64 go build -o /tmp/audiobook-organizer-linux .
-scp /tmp/audiobook-organizer-linux jdfalk@172.16.2.30:/home/jdfalk/audiobook-organizer
-ssh jdfalk@172.16.2.30 "sudo mv /home/jdfalk/audiobook-organizer /usr/local/bin/audiobook-organizer && sudo systemctl restart audiobook-organizer.service"
+scp /tmp/audiobook-organizer-linux <user>@<server>:/home/<user>/audiobook-organizer
+ssh <user>@<server> "sudo mv /home/<user>/audiobook-organizer /usr/local/bin/audiobook-organizer && sudo systemctl restart audiobook-organizer.service"
 ```
 
 - [ ] **Step 3: Verify quarantine startup migration ran**
 
 ```bash
-ssh jdfalk@172.16.2.30 "journalctl -u audiobook-organizer.service --no-pager -n 30 2>/dev/null | grep -i quarantine"
+ssh <user>@<server> "journalctl -u audiobook-organizer.service --no-pager -n 30 2>/dev/null | grep -i quarantine"
 ```
 Expected: lines showing `quarantineKnownBadFiles: quarantined N known-bad files`.
 
 - [ ] **Step 4: Verify .failed/ directory created**
 
 ```bash
-ssh jdfalk@172.16.2.30 "ls /mnt/bigdata/books/audiobook-organizer/.failed/"
+ssh <user>@<server> "ls /mnt/bigdata/books/audiobook-organizer/.failed/"
 ```
 Expected: author directories for Argus, Chris Fox, David Petrie, Eric Ugland, etc.
 

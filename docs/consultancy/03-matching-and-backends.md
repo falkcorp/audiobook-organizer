@@ -232,7 +232,7 @@ Two design contributions were produced. The primary (from the backend-toggle spe
 ### Primary design (TOGGLE report)
 
 **Config shape** — new nested struct in the CFG blob:
-`AIBackendConfig { EmbeddingMode, LLMMode string; LocalBaseURL, LocalEmbeddingModel, LocalLLMModel string }`, modes: `disabled | openai | local | openai-fallback-local`, independent per subsystem. Local defaults: bge-m3 / qwen2.5:7b-instruct, base `http://172.16.3.22:11434/v1`.
+`AIBackendConfig { EmbeddingMode, LLMMode string; LocalBaseURL, LocalEmbeddingModel, LocalLLMModel string }`, modes: `disabled | openai | local | openai-fallback-local`, independent per subsystem. Local defaults: bge-m3 / qwen2.5:7b-instruct, base `http://<gpu-host>:11434/v1`.
 
 **Migration** (startup blob migration in persistence.go, plus legacy-key API shim per docs/reference/config-api-shape.md): if `EmbeddingMode` empty → `local` when `Embedding.BaseURL≠""` (copy to `LocalBaseURL`), else `openai` when `OpenAIAPIKey≠""&&Embedding.Enabled`, else `disabled`. `LLMMode` → `openai` when `OpenAIAPIKey≠""&&(EnableAIParsing||MetadataScoring.LLMEnabled)`, else `disabled`. Old fields remain readable shims; write-through both ways for one release.
 
@@ -246,7 +246,7 @@ Two design contributions were produced. The primary (from the backend-toggle spe
 
 **LLM/embedding backend-mode toggle (greenfield — no BackendMode symbol exists).**
 
-Config: two independent enums, `embedding.backend_mode` and `llm.backend_mode` ∈ {`disabled`, `openai`, `local`, `local_with_openai_fallback`, `openai_with_local_fallback`} (covers "disable-all/OpenAI-only/local-only/fallback"). Per-backend blocks: `{base_url, model, api_key}` — local needs no key (fixes register.go:35 gate); local LLM target `qwen2.5:7b-instruct` at 172.16.3.22:11434/v1.
+Config: two independent enums, `embedding.backend_mode` and `llm.backend_mode` ∈ {`disabled`, `openai`, `local`, `local_with_openai_fallback`, `openai_with_local_fallback`} (covers "disable-all/OpenAI-only/local-only/fallback"). Per-backend blocks: `{base_url, model, api_key}` — local needs no key (fixes register.go:35 gate); local LLM target `qwen2.5:7b-instruct` at <gpu-host>:11434/v1.
 
 Wiring: in register.go, replace the single `embedclient`/`llmparser` builders with a `BackendSelector` that constructs up to two `*EmbeddingClient`s (each pinned to its own model+baseURL, reusing `NewEmbeddingClientWithOptions`) and two chat clients. `Model()` already flows into cache keys (`embedding_client.go:212`) and dedup's `embeddingModelMatches` (`engine.go:2110-2115`) — fallback switching automatically forces model-tagged re-embeds and cache partitioning; no new tagging needed, but `EmbeddingScorer` must gain the same model check on its store fast-path (see MATCH-1) so a mid-fallback flip can't mix 3072/1024-dim vectors (CosineSimilarity→0, `embedding_store.go:1214`).
 

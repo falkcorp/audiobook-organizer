@@ -1006,8 +1006,8 @@ Expected: Frontend + backend build clean
 - [ ] **Step 2: Deploy**
 
 ```bash
-scp dist/audiobook-organizer-linux-amd64 jdfalk@unimatrixzero.local:/home/jdfalk/audiobook-organizer
-ssh jdfalk@unimatrixzero.local 'sudo mv /home/jdfalk/audiobook-organizer /usr/local/bin/audiobook-organizer && sudo systemctl restart audiobook-organizer.service'
+scp dist/audiobook-organizer-linux-amd64 <user>@unimatrixzero.local:/home/<user>/audiobook-organizer
+ssh <user>@unimatrixzero.local 'sudo mv /home/<user>/audiobook-organizer /usr/local/bin/audiobook-organizer && sudo systemctl restart audiobook-organizer.service'
 ```
 
 - [ ] **Step 3: Test the flow**

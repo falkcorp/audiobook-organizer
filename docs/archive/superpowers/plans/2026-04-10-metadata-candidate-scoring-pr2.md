@@ -1489,8 +1489,8 @@ Expected: clean.
 Run: `make deploy-debug`. If that hits the `LOCAL_ROOT` bug where scp reads from the main tree's `dist/` instead of the worktree's (same issue we hit in PRs #204 and #206), work around it by manually scp'ing from the worktree's `dist/` directory:
 
 ```bash
-scp dist/audiobook-organizer-linux-amd64 jdfalk@unimatrixzero.local:/home/jdfalk/audiobook-organizer
-ssh jdfalk@unimatrixzero.local 'sudo mv /home/jdfalk/audiobook-organizer /usr/local/bin/audiobook-organizer && sudo systemctl restart audiobook-organizer.service'
+scp dist/audiobook-organizer-linux-amd64 <user>@unimatrixzero.local:/home/<user>/audiobook-organizer
+ssh <user>@unimatrixzero.local 'sudo mv /home/<user>/audiobook-organizer /usr/local/bin/audiobook-organizer && sudo systemctl restart audiobook-organizer.service'
 ```
 
 Expected: service restarts cleanly.
@@ -1498,7 +1498,7 @@ Expected: service restarts cleanly.
 - [ ] **Step 3: Verify the LLM scorer is wired**
 
 ```bash
-ssh jdfalk@unimatrixzero.local "journalctl -u audiobook-organizer --no-pager --since '1 min ago' | grep -E 'LLM rerank tier'"
+ssh <user>@unimatrixzero.local "journalctl -u audiobook-organizer --no-pager --since '1 min ago' | grep -E 'LLM rerank tier'"
 ```
 Expected: one of
 - `[INFO] Metadata candidate scoring: LLM rerank tier wired but disabled in config` (if the default of `false` stuck)
@@ -1517,7 +1517,7 @@ Pick a book whose metadata search returns multiple close matches — a book in a
 Flip the new toggle in the search dialog, run the same search again. Watch the server logs in another terminal:
 
 ```bash
-ssh jdfalk@unimatrixzero.local "journalctl -u audiobook-organizer -f | grep metadata-search"
+ssh <user>@unimatrixzero.local "journalctl -u audiobook-organizer -f | grep metadata-search"
 ```
 
 Expected log lines:

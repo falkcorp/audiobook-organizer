@@ -85,7 +85,7 @@ execute any rewrite.**
      verification command, ordered: freeze merges → inventory worktrees/PRs → backup
      → rewrite → force-push → re-clone protocol for every consumer → un-freeze).
    - **Backup strategy**: `git clone --mirror` to two locations (the server
-     172.16.2.30 + a second copy), verification commands, retention until sign-off.
+     <server> + a second copy), verification commands, retention until sign-off.
    - **Rollback**: mirrors are authoritative; push-back procedure; GitHub support
      contact path if the rewrite must be undone after gc.
    - **Explicit final line**: `STATUS: STOP-FOR-HUMAN — no rewrite executed; awaiting owner decision.`

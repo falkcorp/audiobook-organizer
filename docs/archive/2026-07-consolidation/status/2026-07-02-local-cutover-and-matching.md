@@ -8,7 +8,7 @@
 ## TL;DR
 
 OpenAI hit `insufficient_quota` (429). Switched embeddings + LLM to a **local
-Ollama backend on the Windows GPU box** (172.16.3.22), fixed the matching and
+Ollama backend on the Windows GPU box** (<gpu-host>), fixed the matching and
 dedup bugs that were reported, and shipped 9 PRs. A full re-embed to `bge-m3` is
 running on the GPU. Two tracks remain: the **LLM backend-mode toggle** and
 **fingerprint coverage** for dedup.
@@ -27,7 +27,7 @@ running on the GPU. Two tracks remain: the **LLM backend-mode toggle** and
 | #1740 | embeddings | HNSW `Import` discards stale-dim snapshot (3072 vs 1024) |
 | #1741 | embeddings | HNSW `Upsert` `safeAdd` recovers coder/hnsw library panics → error |
 
-## Local backend setup (Windows GPU box, 172.16.3.22)
+## Local backend setup (Windows GPU box, <gpu-host>)
 
 - Reached via `ssh windows-gpu` (key preinstalled). PowerShell over SSH mis-parses
   scp'd `.ps1` — use `-EncodedCommand` (base64 UTF-16LE).
@@ -40,7 +40,7 @@ running on the GPU. Two tracks remain: the **LLM backend-mode toggle** and
 ## Prod config
 
 ```
-embedding.base_url        = http://172.16.3.22:11434/v1
+embedding.base_url        = http://<gpu-host>:11434/v1
 embedding.model           = bge-m3
 embedding.dimensions      = 1024
 metadata_scoring.llm_enabled = false
@@ -69,7 +69,7 @@ versions skipped, then ~29K primaries embedding via bge-m3 on the GPU. 0 errors,
 
 1. **LLM backend-mode toggle** — config enum + FE selector (disable-all /
    OpenAI-only / local-only / OpenAI+local-fallback) + model-download prompt when
-   local. Local target = qwen2.5:7b-instruct on 172.16.3.22.
+   local. Local target = qwen2.5:7b-instruct on <gpu-host>.
 2. **Fingerprint coverage** track — fingerprint the ~8,387 unfingerprinted books,
    then the AcoustID veto + stronger dedup auto-resolution become viable.
 3. **Commit Windows Ollama scripts** as `scripts/manage-ollama-windows.py`.

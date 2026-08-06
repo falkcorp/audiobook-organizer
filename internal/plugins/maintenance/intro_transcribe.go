@@ -31,7 +31,7 @@ const (
 	introTranscribeFFWorkers = 8 // parallel ffmpeg per page; 6 pages run concurrently → 48 total
 	introTranscribePageConc  = 6 // pages in parallel: 48 concurrent ffmpeg (= server core count)
 	//                              and 6 concurrent Whisper batches to keep the GPU saturated.
-	//                              Tuned for the 48-core prod server (172.16.2.30); audio decode
+	//                              Tuned for the 48-core prod server (<server>); audio decode
 	//                              is I/O-light so one ffmpeg per core is the practical ceiling.
 
 	// silenceSentinel is stored as IntroTranscription when all retry attempts

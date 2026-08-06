@@ -185,7 +185,7 @@ Priority: P2 · Effort: S · Agent: Sonnet-class · Depends on: TASK-02 (TODO.md
 - `TODO.md` — fix the DUR-1 citation (symbol-based: "the `runtime differs by` chip in MetadataReviewDialog.tsx"), append a dated closeout note with the prod scan counts.
 
 **Step-by-step**
-1. Re-verify greps. 2. Run the READ-ONLY prod scan via the real dispatch route (server-bootstrap for token, then `POST /api/v1/maintenance/jobs/scan-duration-mismatch` with body `{"dry_run": true}` against 172.16.2.30; capture `operation_id`) — the job is read-only per gate; if anything suggests a prod write is needed → AskUserQuestion, do not act. 3. Capture the mismatch count from the op's log output — `journalctl` over SSH grepping `scan-duration-mismatch complete mismatches`, or `GET /api/v1/operations/<operation_id>/logs` — and record it in the TODO closeout note (note the fixed 120s threshold in the note; do NOT invent a `max_delta_min` figure). 4. `make ci`.
+1. Re-verify greps. 2. Run the READ-ONLY prod scan via the real dispatch route (server-bootstrap for token, then `POST /api/v1/maintenance/jobs/scan-duration-mismatch` with body `{"dry_run": true}` against <server>; capture `operation_id`) — the job is read-only per gate; if anything suggests a prod write is needed → AskUserQuestion, do not act. 3. Capture the mismatch count from the op's log output — `journalctl` over SSH grepping `scan-duration-mismatch complete mismatches`, or `GET /api/v1/operations/<operation_id>/logs` — and record it in the TODO closeout note (note the fixed 120s threshold in the note; do NOT invent a `max_delta_min` figure). 4. `make ci`.
 
 **Acceptance criteria**
 - [ ] `grep -n "MetadataReviewDialog.tsx:604" TODO.md` → 0 hits.

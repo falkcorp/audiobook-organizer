@@ -18,7 +18,7 @@ MusicBrainz/AcoustID model audiobooks poorly: their database is song/recording-b
 `docs/archive/2026-07-consolidation/specs/2026-06-13-dedup-tuning-dataset-design.md`): **recording_id oracle coverage was
 0 / 9,842 books (0.0%)** — the AcoustID online lookup has never returned a usable MusicBrainz
 recording_id for this library. Every fingerprint→identity mapping we have was earned locally by
-human verification, and it currently lives only on one prod box (172.16.2.30).
+human verification, and it currently lives only on one prod box (<server>).
 
 We already have the acoustic substrate:
 

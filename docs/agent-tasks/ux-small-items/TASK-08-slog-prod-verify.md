@@ -24,7 +24,7 @@ git rebase origin/main
 
 ## Goal
 
-Prove, on prod (172.16.2.30 — "the server"), that the structured-logging op-ID chain works end-to-end: trigger an operation, confirm the opID appears in journalctl log lines, and confirm `GET /api/v1/operations/:id/activity` returns rows for it (GitHub issue #1255, TODO SLOG-PROD-VERIFY). The endpoint exists — [this-session verified] wired at `internal/server/wire_library_routes.go:39` (handler `ListOperationActivity`; NOT in `wire_operations_routes.go`).
+Prove, on prod (<server> — "the server"), that the structured-logging op-ID chain works end-to-end: trigger an operation, confirm the opID appears in journalctl log lines, and confirm `GET /api/v1/operations/:id/activity` returns rows for it (GitHub issue #1255, TODO SLOG-PROD-VERIFY). The endpoint exists — [this-session verified] wired at `internal/server/wire_library_routes.go:39` (handler `ListOperationActivity`; NOT in `wire_operations_routes.go`).
 
 ⚠ **THE PROCEDURE DOC'S OP CHOICE IS NOT READ-ONLY.** `docs/slog-prod-verify.md` says to trigger a `metadata-fetch` op on "a test book that is safe to refresh" — but [this-session verified] that op is fetch+APPLY: `fetchAudiobookMetadataImpl` (`internal/server/handlers/metadata/handler.go:421`) applies the fetched metadata ("fetch+apply rewrites book identity (title, author, etc)" per its own comment) and enqueues an iTunes write-back. That is a prod-data WRITE, which the initiative gate routes to AskUserQuestion — it must NOT be fired autonomously under a "read-only" label.
 
@@ -52,10 +52,10 @@ If anything else observed suggests a prod change is needed, raise it via a real 
 ## Step-by-step
 
 1. Re-verify anchors; read `docs/slog-prod-verify.md` in full (for the checklist shapes, not the op choice).
-2. Bootstrap prod API auth (server-bootstrap skill/procedure). `ssh 172.16.2.30` is the provisioned access — use it, do not ask for credentials.
-3. **Lane A (read-only):** trigger the scan job: `curl -s -X POST -H "Authorization: Bearer <abk_...>" -H "Content-Type: application/json" -d '{"dry_run": true}' http://172.16.2.30:<port>/api/v1/maintenance/jobs/scan-duration-mismatch` — capture the returned `operation_id` (the opID). ⛔ Do NOT trigger `metadata-fetch` in this lane — it writes.
+2. Bootstrap prod API auth (server-bootstrap skill/procedure). `ssh <server>` is the provisioned access — use it, do not ask for credentials.
+3. **Lane A (read-only):** trigger the scan job: `curl -s -X POST -H "Authorization: Bearer <abk_...>" -H "Content-Type: application/json" -d '{"dry_run": true}' http://<server>:<port>/api/v1/maintenance/jobs/scan-duration-mismatch` — capture the returned `operation_id` (the opID). ⛔ Do NOT trigger `metadata-fetch` in this lane — it writes.
 4. Over SSH: `journalctl -u <service> --since "-10 min" | grep <opID>` — capture matching lines (expect ≥1 with the opID field, e.g. the op registry's start/complete lines).
-5. `curl -s -H "Authorization: Bearer <abk_...>" http://172.16.2.30:<port>/api/v1/operations/<opID>/activity` — capture the response (expect non-empty rows; the endpoint is eventually consistent — retry after a few seconds if empty while running).
+5. `curl -s -H "Authorization: Bearer <abk_...>" http://<server>:<port>/api/v1/operations/<opID>/activity` — capture the response (expect non-empty rows; the endpoint is eventually consistent — retry after a few seconds if empty while running).
 6. If EITHER check fails: do NOT fix prod; record exact evidence and report — the failure becomes a new bug task. Any prospective prod file/data change → AskUserQuestion first.
 7. **Lane B (OPTIONAL, human-gated):** only if the metadata-domain tags (`action: metadata-apply` etc.) must be verified per the doc's checklist — AskUserQuestion first, naming the throwaway test book and the revert plan (pre-run metadata JSON snapshot). On approval, run the doc's metadata-fetch procedure against that book only; on refusal or no need, record "chain verified read-only; metadata-domain tags deferred" in the checkoff note.
 8. On success: in the worktree, tick TODO.md's SLOG-PROD-VERIFY to `[x]` and append ` — ✅ verified live 2026-07-XX: opID <id> (read-only scan-duration-mismatch job) present in journalctl + /activity returned <N> rows (INIT-10 TASK-08)`. Touch nothing else. Bump the TODO.md header.
@@ -81,7 +81,7 @@ staticcheck is red on main (pre-existing backlog #1796) — scope staticcheck to
 ```
 docs(todo): check off SLOG-PROD-VERIFY — op-ID chain verified live on prod (#1255)
 
-Read-only scan-duration-mismatch job triggered on 172.16.2.30; opID confirmed
+Read-only scan-duration-mismatch job triggered on <server>; opID confirmed
 in journalctl and /api/v1/operations/:id/activity returned rows. Zero prod
 writes (the procedure doc's metadata-fetch op is fetch+apply and was not used
 autonomously; metadata-domain tags deferred to a human-gated run if needed).

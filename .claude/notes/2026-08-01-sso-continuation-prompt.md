@@ -32,7 +32,7 @@ The **browser SSO chain is fully wired and live**. All five links verified:
    self-signed cert is therefore **fine** — that was investigated and dismissed,
    don't re-open it.
 3. Origin service active; startup log: `oauth: Cloudflare Access identity
-   passthrough enabled team=jdfalk.cloudflareaccess.com`. No warnings.
+   passthrough enabled team=<team>.cloudflareaccess.com`. No warnings.
    `deploy/local.conf` has `CF_ACCESS_TEAM_DOMAIN`, `CF_ACCESS_AUD`,
    `OAUTH_ALLOWED_EMAILS`, `OAUTH_DEFAULT_ROLE=admin`, `ABS_API_ENABLED=true`,
    `ABS_AUTH_MODES=cf,jwt`.

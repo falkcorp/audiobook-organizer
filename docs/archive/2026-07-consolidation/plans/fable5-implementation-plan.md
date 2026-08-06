@@ -990,7 +990,7 @@ code, CGO dep, and the startup open.
    verify with the owner via PR comment if found).
 4. `go mod tidy`; build with and without `embed_frontend` tag.
 5. Prod cleanup step (document in PR; execute post-merge with owner ack): archive then
-   delete the dead store files on `172.16.2.30:/var/lib/audiobook-organizer/` —
+   delete the dead store files on `<server>:/var/lib/audiobook-organizer/` —
    `embeddings.db{,-shm,-wal}` (1.8GB), `activity.db` (842MB), `metrics.db{,-shm,-wal}`,
    `audiobooks.chai/` — all last written 2026-05-11 (prod-verified stale). Move into
    `backups/` first; delete after one clean service restart.

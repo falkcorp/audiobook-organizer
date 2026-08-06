@@ -159,7 +159,7 @@ As of the roadmap-tasks snapshot (2026-07-02/03), verified in this worktree:
    struct near `Embedding`/`MetadataScoring`. Wire it into both the
    viper-load path and the hardcoded-defaults path (the two locations you
    found in Background) with defaults: `LocalBaseURL:
-   "http://172.16.3.22:11434/v1"`, `LocalEmbeddingModel: "bge-m3"`,
+   "http://<gpu-host>:11434/v1"`, `LocalEmbeddingModel: "bge-m3"`,
    `LocalLLMModel: "qwen2.5:7b-instruct"`, both modes empty string (resolved
    by migration/effective-mode logic, not hardcoded to a mode at rest).
 
@@ -298,7 +298,7 @@ the same packages with mocks/staticcheck.
       `EmbeddingMode`, `LLMMode`, `LocalBaseURL`, `LocalEmbeddingModel`,
       `LocalLLMModel`, wired into both the viper-load and hardcoded-defaults
       paths, with local defaults `bge-m3` / `qwen2.5:7b-instruct` /
-      `http://172.16.3.22:11434/v1`.
+      `http://<gpu-host>:11434/v1`.
 - [ ] `EffectiveEmbeddingMode()`/`EffectiveLLMMode()` (or equivalent) resolve
       an empty mode from legacy fields per the design doc's derivation rule,
       with tests covering all three derivation branches plus idempotency.
