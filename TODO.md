@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.16.3 -->
+<!-- version: 10.17.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-08-06 -->
 
@@ -271,10 +271,32 @@ into one of the curated sections below, is a normal direct edit.
 <!-- guid: 4e91b7c2-06d8-4a35-9f17-b3820e5cd641 -->
 <!-- last-edited: 2026-08-05 -->
 
-- [ ] **Give review holds a real recommendation, and let the human override it**
-  — owner items 1 and 2 (2026-08-05). Two halves of one change; building the
-  recommendation as a string first and bolting override on later means rewriting
-  the first half.
+- [x] **Give review holds a real recommendation, and let the human override it**
+  — owner items 1 and 2 (2026-08-05, shipped 2026-08-06 in PR #2163). Two halves
+  of one change, done together as planned.
+
+  **Outcome.** 286 of 356 pending holds now carry a decisive recommendation with
+  the numbers behind it. The prerequisite this entry warned about turned out to
+  be already met: the 2026-08-05 relink populated `book_file` rows, and a probe
+  of all 1,831 member books found 1,593 with a real summed duration. The queue's
+  item count had barely moved (367 → 356), which read like nothing had changed —
+  but the *evidence* had arrived and the classifier simply was not using it.
+
+  🔴 **A data-loss path was found and closed on the way.** The chosen action was
+  originally stored nowhere: `SetReviewItemStatus` wrote status only, and
+  `ReplayApprovedItems` re-derived the action from the payload's
+  `recommendedAction`. A `combine` hold overridden to `separate` would have been
+  recorded as plain `approved` and later **replayed as `combine`**, hard-deleting
+  rows for books a human explicitly said to keep apart — with nothing connecting
+  the destruction back to the click. Fixed by persisting the decision
+  (`ReviewItem.ChosenAction` + `SetReviewItemDecision`, status and action in one
+  Pebble batch). Two paired replay tests pin it, and both fail under mutation.
+
+  ⚠️ **Read before flipping [[multidisc-apply-canary]].** Dispatch now keys on
+  the chosen action rather than `Kind`. Under `Kind` dispatch `regroup.ambiguous`
+  had no handler and could never merge; now an ambiguous hold recommending
+  `combine` (24 of 356) reaches `ApplyMultidisc`. Intended, but it widens the
+  blast radius of turning `review_apply_enabled` on.
 
   **The problem.** `proposedAction` is one generic string on **762 of 777** holds
   ("review: flat folder shares a title but ordering is unclear") and
@@ -501,9 +523,24 @@ into one of the curated sections below, is a normal direct edit.
   endpoint does not populate it.
 
 - [ ] **Remaining after the first apply:** 1,019 directory-shaped books held for
-  review (see [[first-aid-library-validate-repair]] tier-2 duration probe) and 93
-  missing reported only (already `reconcile-scan`'s remit; some may be offline
-  mounts rather than deleted audio).
+  review and 93 missing reported only (already `reconcile-scan`'s remit; some may
+  be offline mounts rather than deleted audio).
+
+  **The tier-2 probe now exists and has been measured** — `maintenance.probe-directory-books`,
+  PR #2162, dry-run against production 2026-08-06 (op `01KZC8A30Z22B81R8NKDHBFZFX`):
+
+  ```
+  examined=1019  actioned=0  skipped=1019  errors=0
+  actions: link=434  review=585
+  ```
+
+  **434 of the 1,019 are confidently linkable.** They were in review only because
+  `classifyUnlinked` passed `nil` durations, so `ClassifyDir`'s series guard could
+  never fire — the classifier existed and was correct, it was simply being called
+  with the one argument that disables it. 585 correctly remain in review.
+
+  What is left here is the **apply**, which needs a human gate. The 93 missing are
+  untouched by this and stay with `reconcile-scan`.
 
 - [ ] **Re-run `regroup-shattered-ai` after relink and re-measure the queue.**
   With durations present the series-guard becomes live for the first time across
@@ -572,8 +609,38 @@ into one of the curated sections below, is a normal direct edit.
 <!-- guid: 8333f42a-bd0d-4a2f-8221-403d11576e7c -->
 <!-- last-edited: 2026-08-04 -->
 
-- [ ] **PERF: `maintenance.dedupe-book-file-rows` spends ~45 seconds per book, and
+- [x] **PERF: `maintenance.dedupe-book-file-rows` spends ~45 seconds per book, and
       that is enough to blow its own 2-hour timeout.**
+      RESOLVED 2026-08-06 in PR #2161 — but almost every premise below was wrong,
+      so read this correction before trusting the analysis that follows it.
+
+      **It never hit the 2-hour `Timeout`.** It hit the 5-minute `ProgressTimeout`
+      watchdog, at book 19/194. Both liveness bugs were already fixed on main
+      (heartbeat `1908396b`, worker pool `df20b8d6`).
+
+      **Total work is ~1.3 h, not 2.4 h.** Real denominator from the scan line:
+      `redundant_rows=2901` across 194 books. The "194 × 45 s" extrapolation
+      double-counted skew — books process in sorted-ID order and the first 19
+      happened to carry 22–47 duplicates against a mean of 15.
+
+      **The unit is per-ROW, not per-book:** ~1.35 s fixed per deleted row, +~7 ms
+      per remaining file. Proven twice — the dry run of the identical read loop over
+      all 194 books took 2.2 s total, and the per-row delta stays flat
+      (1.85/1.94/1.42/1.66/1.54 s) as `total_files` falls 65 → 34, which rules out
+      the O(R²) re-read hypothesis below.
+
+      **Actual cause:** `DeleteBookFile` fires `notifyBookFileChange` per row, and
+      each runs the full `RecomputeBookAggregates` → `UpdateBook` chain: two
+      `pebble.Sync` commits, a full copy-on-write `book_ver` snapshot of the entire
+      old Book, and two global go-memdb write transactions. Hypothesis 1 below was
+      right about the *structure* and wrong about the cost (`InvalidateLibraryStats`
+      is a lazy single NoSync delete, not a recompute); hypothesis 2 was refuted
+      outright — `RecomputeBookAggregates` reads only the book's own files.
+
+      **Fix:** `DeleteBookFilesByIDs` — one batch, one Sync, one notify per affected
+      book. Salvage deliberately NOT folded into the batch: rescued keeper fields
+      must commit *before* donors are deleted, and an atomic batch would remove the
+      skip-on-failure escape.
 
       Measured on the full production run (2026-08-04, op
       `01KZ6W1H46696CZDBHCZF10W6C`): 9 books in ~7 minutes, steady. Extrapolated over
