@@ -319,10 +319,20 @@ func TestOrphanBookFilesCleanup_ChunksLargeOrphanSets(t *testing.T) {
 	}
 }
 
-// A fail-closed chunk must be counted as wholly failed and must NOT abandon the
-// remaining chunks — the rows it left behind are picked up by the next run,
-// because findOrphanBookFiles rescans from scratch every time.
-func TestOrphanBookFilesCleanup_FailedChunkDoesNotAbortRemainingChunks(t *testing.T) {
+// ⚠️ THE REGRESSION THIS GUARDS AGAINST IS SUBTLE AND WAS ALMOST SHIPPED.
+//
+// Fail-closed is self-healing for dedupe-book-file-rows, which re-reads its rows
+// from Pebble every run. It is NOT self-healing here: findOrphanBookFiles gets its
+// list from GetAllBookFilesCore, which is served from MEMDB in production. memdb
+// can hold a row Pebble no longer has, and that phantom yields an ID that will
+// never resolve — so a naive fail-closed chunk would abort the SAME 500 rows on
+// every nightly 02:15 run until the process restarts and memdb rebuilds. The
+// per-row loop this replaced skipped the phantom and deleted the other 499.
+//
+// Hence the degraded path: a rejected chunk is retried one row at a time through
+// DeleteBookFile, which tolerates "already gone". Assert that the survivors of a
+// failed chunk actually get deleted — not merely that the run continues.
+func TestOrphanBookFilesCleanup_RejectedChunkFallsBackToPerRowDeletes(t *testing.T) {
 	const orphanCount = 1200
 
 	files := make([]database.BookFileCore, 0, orphanCount)
@@ -334,16 +344,26 @@ func TestOrphanBookFilesCleanup_FailedChunkDoesNotAbortRemainingChunks(t *testin
 		})
 	}
 
-	calls := 0
+	batchCalls := 0
+	var perRow []string
 	store := &database.MockStore{
 		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },
 		GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) {
 			return []database.BookCore{{ID: "book-alive"}}, nil
 		},
 		DeleteBookFilesByIDsFunc: func(ids []string) error {
-			calls++
-			if calls == 1 {
-				return fmt.Errorf("simulated: 1 of %d ids did not resolve, nothing deleted", len(ids))
+			batchCalls++
+			if batchCalls == 1 {
+				// Exactly the shape DeleteBookFilesByIDs produces for a phantom row.
+				return fmt.Errorf("DeleteBookFilesByIDs: 1 of %d book_file id(s) did not "+
+					"resolve, nothing deleted: orphan-0007", len(ids))
+			}
+			return nil
+		},
+		DeleteBookFileFunc: func(id string) error {
+			perRow = append(perRow, id)
+			if id == "orphan-0007" {
+				return fmt.Errorf("simulated: phantom row, not in pebble")
 			}
 			return nil
 		},
@@ -352,11 +372,34 @@ func TestOrphanBookFilesCleanup_FailedChunkDoesNotAbortRemainingChunks(t *testin
 	p := &Plugin{deps: fakeDeps{store: store}}
 	raw, _ := json.Marshal(OrphanBookFilesCleanupParams{Delete: true})
 	if err := p.runOrphanBookFilesCleanup(context.Background(), raw, &fakeReporter{}); err != nil {
-		t.Fatalf("runOrphanBookFilesCleanup returned %v; a failing chunk is logged and "+
-			"counted, not propagated", err)
+		t.Fatalf("runOrphanBookFilesCleanup returned %v; a failing chunk is recovered and "+
+			"logged, not propagated", err)
 	}
-	if calls != 3 {
+
+	if batchCalls != 3 {
 		t.Fatalf("DeleteBookFilesByIDs called %d times, want 3 — a failing chunk aborted "+
-			"the chunks after it", calls)
+			"the chunks after it", batchCalls)
 	}
+	// THE ASSERTION: the rejected chunk's 500 rows were retried individually, so
+	// the 499 real orphans still got deleted rather than being stuck forever.
+	if len(perRow) != 500 {
+		t.Fatalf("per-row fallback attempted %d rows, want 500 — the rejected chunk's "+
+			"rows would be abandoned on every run until memdb rebuilds", len(perRow))
+	}
+	if perRow[0] != "orphan-0000" || perRow[499] != "orphan-0499" {
+		t.Fatalf("fallback covered the wrong rows: first=%s last=%s", perRow[0], perRow[499])
+	}
+	// Only the phantom is left behind; the other 499 in that chunk succeeded.
+	if !containsID(perRow, "orphan-0007") {
+		t.Fatal("the phantom row was never retried individually")
+	}
+}
+
+func containsID(ids []string, want string) bool {
+	for _, id := range ids {
+		if id == want {
+			return true
+		}
+	}
+	return false
 }
