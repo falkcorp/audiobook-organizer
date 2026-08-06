@@ -1,5 +1,5 @@
 <!-- file: changelog.d/tier2-probe-directory-books.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 7e3b0c95-8d24-4f61-a07c-5b19d2e6a834 -->
 <!-- last-edited: 2026-08-06 -->
 
@@ -66,3 +66,14 @@ contribute zeros fails three tests, including one whose numbers are chosen so
 that exclusion *alone* decides the verdict (4 files sharing a stem, one measured
 at 6,000s and three unprobeable — counted as zeros that is 1-of-4 long and
 auto-links; excluded it is 1-of-1 long and the series guard fires).
+
+The apply path refuses on its own rather than trusting its caller: it errors out
+when handed a verdict that is not one-book, and when the folder's audio contents
+changed between probing and applying (the verdict describes the folder *as
+measured*, and a file that arrived since was never measured). Both refusals are
+mutation-tested — removing the verdict guard fails
+`TestLinkProbedFolder_RefusesSeriesVerdict`. The run report also samples the
+folders that *stayed* in review with their new measured reason, and tallies them
+by category (`confirmed-series` / `unprobeable-files` / `distinct-titles` /
+`no-audio`), since proof that the series guard fired for the right reason on the
+right folders is what an operator needs before authorising an apply.

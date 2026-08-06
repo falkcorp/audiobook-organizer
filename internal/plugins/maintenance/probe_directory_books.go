@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/probe_directory_books.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6f2a90d4-3c81-4e57-b0a6-9d47e1c85b23
 // last-edited: 2026-08-06
 
@@ -269,6 +269,8 @@ func (p *Plugin) runProbeDirectoryBooks(ctx context.Context, raw json.RawMessage
 	const transitionCap = 10
 	var nowOneBook, stillReview, withFailedProbes int
 	transitions := make([]string, 0, transitionCap)
+	heldSamples := make([]string, 0, transitionCap)
+	heldByCategory := map[string]int{}
 	for i := range candidates {
 		c := &candidates[i]
 		c.finding.Reason = c.verdict.Reason
@@ -287,6 +289,16 @@ func (p *Plugin) runProbeDirectoryBooks(ctx context.Context, raw json.RawMessage
 		} else {
 			c.finding.Action = linkintegrity.DispositionReview
 			stillReview++
+			// A folder that STAYS in review is not a non-event: its reason has
+			// changed from "no durations are known" to a measured verdict, and
+			// that is the half an operator most needs to spot-check — proof the
+			// series guard fired for the right reason on the right folders,
+			// before authorising any apply.
+			heldByCategory[reviewCategory(c.verdict)]++
+			if len(heldSamples) < transitionCap {
+				heldSamples = append(heldSamples, fmt.Sprintf("%s [%s]: %q",
+					c.finding.BookID, linkintegrity.DirNameOf(c.finding.FilePath), c.verdict.Reason))
+			}
 		}
 		if c.verdict.ProbesFailed > 0 {
 			withFailedProbes++
@@ -352,6 +364,21 @@ func (p *Plugin) runProbeDirectoryBooks(ctx context.Context, raw json.RawMessage
 		nowOneBook, stillReview, withFailedProbes))
 	for _, tr := range transitions {
 		_ = reporter.Log(slog.LevelInfo, "resolved by measurement: "+tr)
+	}
+	if len(heldByCategory) > 0 {
+		cats := make([]string, 0, len(heldByCategory))
+		for k := range heldByCategory {
+			cats = append(cats, k)
+		}
+		sort.Strings(cats) // deterministic so two dry runs diff cleanly
+		parts := make([]string, 0, len(cats))
+		for _, k := range cats {
+			parts = append(parts, fmt.Sprintf("%s=%d", k, heldByCategory[k]))
+		}
+		_ = reporter.Log(slog.LevelInfo, "STILL IN REVIEW by category: "+strings.Join(parts, " "))
+	}
+	for _, h := range heldSamples {
+		_ = reporter.Log(slog.LevelInfo, "still in review: "+h)
 	}
 	_ = reporter.Log(slog.LevelInfo, report.Summary())
 	_ = reporter.UpdateProgress(totalFolders+1, totalFolders+1, strings.TrimSpace(report.Summary()))
@@ -424,6 +451,29 @@ func probeAll(
 			return fmt.Sprintf("Phase 2/3: probing folder %d/%d…", i+1, total)
 		},
 	})
+}
+
+// reviewCategory buckets a still-in-review verdict by WHY it was held, so 1,019
+// individual reasons collapse into a few numbers an operator can act on.
+//
+// It keys off the verdict's structured fields rather than matching its Reason
+// text: the reason strings are written for humans and will be reworded, and a
+// tally that silently miscategorises after a copy edit is worse than no tally.
+// Order matters — an unprobeable file is reported ahead of any content-based
+// conclusion, because "we could not measure this" is a different problem from
+// "we measured it and it is a series", and only the former is fixable by
+// re-running.
+func reviewCategory(v linkintegrity.DirVerdict) string {
+	switch {
+	case v.AudioCount == 0:
+		return "no-audio"
+	case v.ProbesFailed > 0:
+		return "unprobeable-files"
+	case v.DistinctStems > 1:
+		return "distinct-titles"
+	default:
+		return "confirmed-series"
+	}
 }
 
 // folderAudioNames returns a directory's audio basenames in deterministic order.
@@ -507,6 +557,18 @@ func probeOne(ctx context.Context, ffprobePath, fullPath, name string) linkinteg
 // That is the point of having probed: a zero-duration book_file row leaves the
 // regroup series guard just as inert as no row at all.
 func linkProbedFolder(store database.Store, c probeCandidate) (int, error) {
+	// 🔴 THE VERDICT GATES THE WRITE, HERE, NOT ONLY AT THE CALL SITE.
+	// Phase 3 already skips anything not dispositioned Link, so reaching this
+	// function with a review verdict means a caller has a bug — and the blast
+	// radius of that bug is the one this whole op exists to prevent: linking a
+	// folder of five distinct novels into a single book, whose later merge
+	// hard-deletes the absorbed rows. Refusing loudly rather than returning 0
+	// keeps the mistake visible instead of silently doing nothing.
+	if !c.verdict.OneBook {
+		return 0, fmt.Errorf("refusing to link %s: verdict is not one-book (%s)",
+			c.finding.BookID, c.verdict.Reason)
+	}
+
 	b, err := store.GetBookByID(c.finding.BookID)
 	if err != nil {
 		return 0, fmt.Errorf("refetch book: %w", err)
@@ -534,13 +596,31 @@ func linkProbedFolder(store database.Store, c probeCandidate) (int, error) {
 		return 0, nil
 	}
 
-	// Index the measured durations by name so a folder that changed between
-	// probe and apply still pairs each row with ITS OWN measurement, never a
-	// neighbour's by position.
+	// Index the measured durations by name so each row pairs with ITS OWN
+	// measurement, never a neighbour's by position.
 	bySec := make(map[string]int, len(c.probes))
+	probed := make(map[string]struct{}, len(c.probes))
 	for _, p := range c.probes {
+		probed[p.Name] = struct{}{}
 		if p.OK && p.Sec > 0 {
 			bySec[p.Name] = p.Sec
+		}
+	}
+
+	// 🔴 THE VERDICT DESCRIBES THE FOLDER AS IT WAS MEASURED. If the contents
+	// changed between probe and apply, the "one book" conclusion was reached
+	// about a different set of files than the one about to be linked — a new
+	// arrival could be another novel entirely, and it would be linked with a
+	// duration of 0 that nothing ever measured. Refuse and let the next run
+	// re-probe; this op is designed to be re-run until it converges.
+	if len(audio) != len(probed) {
+		return 0, fmt.Errorf("refusing to link %s: folder changed since probing (%d audio files now, %d measured)",
+			c.finding.BookID, len(audio), len(probed))
+	}
+	for _, n := range audio {
+		if _, ok := probed[n]; !ok {
+			return 0, fmt.Errorf("refusing to link %s: %q appeared since probing and was never measured",
+				c.finding.BookID, n)
 		}
 	}
 

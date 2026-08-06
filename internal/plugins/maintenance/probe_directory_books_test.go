@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/probe_directory_books_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4a71c9e6-2b58-4d03-8f19-7c6e0b2a5d84
 // last-edited: 2026-08-06
 
@@ -344,6 +344,7 @@ func TestLinkProbedFolder_WritesMeasuredDurations(t *testing.T) {
 
 	c := probeCandidate{
 		finding: linkintegrity.Finding{BookID: bk.ID, FilePath: dir, Shape: linkintegrity.ShapeDirectory},
+		verdict: linkintegrity.DirVerdict{OneBook: true, AudioCount: 3, ProbesOK: 3},
 		probes: []linkintegrity.ProbedDuration{
 			{Name: files[0], Sec: 1500, OK: true},
 			{Name: files[1], Sec: 1480, OK: true},
@@ -396,6 +397,7 @@ func TestLinkProbedFolder_SkipsAlreadyLinkedBook(t *testing.T) {
 	}
 	c := probeCandidate{
 		finding: linkintegrity.Finding{BookID: bk.ID, FilePath: dir, Shape: linkintegrity.ShapeDirectory},
+		verdict: linkintegrity.DirVerdict{OneBook: true, AudioCount: 2, ProbesOK: 2},
 		probes: []linkintegrity.ProbedDuration{
 			{Name: files[0], Sec: 1500, OK: true},
 			{Name: files[1], Sec: 1480, OK: true},
@@ -439,6 +441,123 @@ func TestProbeDirectoryBooks_PhaseReconciles(t *testing.T) {
 		}
 		if !phase.Reconciles() {
 			t.Errorf("phase %+v does not reconcile — the op would fail itself at the finish line", phase)
+		}
+	}
+}
+
+// 🔴 THE CENTRAL SAFETY PROPERTY: a folder measurement CONFIRMED to be a series
+// must never have its files linked into one book. Phase 3's disposition check is
+// the live gate, but the consequence of getting it wrong is the incident this
+// whole op exists to prevent — five distinct novels merged into one row, whose
+// later merge hard-deletes the absorbed rows — so the write path refuses on its
+// own rather than trusting its caller.
+func TestLinkProbedFolder_RefusesSeriesVerdict(t *testing.T) {
+	s, err := database.NewPebbleStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewPebbleStore: %v", err)
+	}
+	defer func() { _ = s.Close() }()
+
+	files := []string{
+		"Super Sales on Super Heroes 1.m4b", "Super Sales on Super Heroes 2.m4b",
+		"Super Sales on Super Heroes 3.m4b",
+	}
+	dir := makeFolder(t, files...)
+	bk, err := s.CreateBook(&database.Book{Title: "Super Sales on Super Heroes", FilePath: dir})
+	if err != nil {
+		t.Fatalf("CreateBook: %v", err)
+	}
+
+	probes := make([]linkintegrity.ProbedDuration, 0, len(files))
+	for _, f := range files {
+		probes = append(probes, linkintegrity.ProbedDuration{Name: f, Sec: 9 * 3600, OK: true})
+	}
+	names, subdirs := readDirNames(dir)
+	verdict := linkintegrity.ClassifyDirProbed(names, subdirs, probes)
+	if verdict.OneBook {
+		t.Fatal("precondition failed: book-length members must classify as a series")
+	}
+
+	c := probeCandidate{
+		finding: linkintegrity.Finding{BookID: bk.ID, FilePath: dir, Shape: linkintegrity.ShapeDirectory},
+		verdict: verdict,
+		probes:  probes,
+	}
+	n, err := linkProbedFolder(s, c)
+	if err == nil {
+		t.Error("linkProbedFolder returned nil error for a series verdict — it must refuse loudly, " +
+			"not silently do nothing, so a caller bug stays visible")
+	}
+	if n != 0 {
+		t.Errorf("created = %d rows for a CONFIRMED SERIES — this is the 5-novels-into-1 merge", n)
+	}
+	rows, _ := s.GetBookFiles(bk.ID)
+	if len(rows) != 0 {
+		t.Fatalf("book_file rows = %d, want 0 — no file of a confirmed series may be linked", len(rows))
+	}
+}
+
+// The verdict describes the folder AS MEASURED. A file that appeared between
+// probe and apply was never measured and could be another work entirely, so the
+// apply must refuse rather than link it with a duration of zero.
+func TestLinkProbedFolder_RefusesWhenFolderChangedSinceProbing(t *testing.T) {
+	s, err := database.NewPebbleStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewPebbleStore: %v", err)
+	}
+	defer func() { _ = s.Close() }()
+
+	files := []string{"Chapter 01.mp3", "Chapter 02.mp3"}
+	dir := makeFolder(t, files...)
+	bk, err := s.CreateBook(&database.Book{Title: "Drifting Book", FilePath: dir})
+	if err != nil {
+		t.Fatalf("CreateBook: %v", err)
+	}
+
+	c := probeCandidate{
+		finding: linkintegrity.Finding{BookID: bk.ID, FilePath: dir, Shape: linkintegrity.ShapeDirectory},
+		verdict: linkintegrity.DirVerdict{OneBook: true, AudioCount: 2, ProbesOK: 2},
+		probes: []linkintegrity.ProbedDuration{
+			{Name: files[0], Sec: 1500, OK: true},
+			{Name: files[1], Sec: 1480, OK: true},
+		},
+	}
+
+	// A third file lands after the probe pass — never measured, not covered by
+	// the verdict.
+	if err := os.WriteFile(filepath.Join(dir, "Chapter 03.mp3"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	n, err := linkProbedFolder(s, c)
+	if err == nil {
+		t.Error("linkProbedFolder accepted a folder that changed since probing")
+	}
+	if n != 0 {
+		t.Errorf("created = %d rows, want 0 — the verdict describes different contents", n)
+	}
+	rows, _ := s.GetBookFiles(bk.ID)
+	if len(rows) != 0 {
+		t.Errorf("book_file rows = %d, want 0", len(rows))
+	}
+}
+
+// reviewCategory buckets by the verdict's structured fields, not its prose, so a
+// reworded Reason cannot silently miscategorise the tally an operator reads.
+func TestReviewCategory_BucketsByEvidence(t *testing.T) {
+	cases := []struct {
+		name string
+		v    linkintegrity.DirVerdict
+		want string
+	}{
+		{"measured series", linkintegrity.DirVerdict{AudioCount: 5, DistinctStems: 1, ProbesOK: 5}, "confirmed-series"},
+		{"unmeasurable files", linkintegrity.DirVerdict{AudioCount: 4, DistinctStems: 1, ProbesOK: 1, ProbesFailed: 3}, "unprobeable-files"},
+		{"many works", linkintegrity.DirVerdict{AudioCount: 3, DistinctStems: 3, ProbesOK: 3}, "distinct-titles"},
+		{"empty folder", linkintegrity.DirVerdict{AudioCount: 0}, "no-audio"},
+	}
+	for _, tc := range cases {
+		if got := reviewCategory(tc.v); got != tc.want {
+			t.Errorf("%s: reviewCategory = %q, want %q", tc.name, got, tc.want)
 		}
 	}
 }
