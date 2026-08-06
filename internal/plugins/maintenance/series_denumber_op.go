@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_denumber_op.go
-// version: 1.0.0
+// version: 2.0.0
 // guid: 3f0b6c84-52d1-4a97-9e35-c8b71d0af426
-// last-edited: 2026-08-04
+// last-edited: 2026-08-06
 
 package maintenance
 
@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -22,7 +24,50 @@ type SeriesDenumberParams struct {
 	// Apply, when true, performs the merges. Default false — dry run.
 	Apply bool `json:"apply"`
 	// Limit caps how many SERIES are merged (0 = all). Useful for a canary.
+	// It caps the APPLY set, never the report: a dry run always reports every
+	// candidate so the operator sees the whole picture before scoping the apply.
 	Limit int `json:"limit,omitempty"`
+	// ApplyMedium extends the apply set to medium-confidence plans — a single
+	// bracketed number, "Dragon Born [04]". Default false, so the first
+	// production apply is scoped to names a keyword vouches for, and the dry run
+	// reports what medium WOULD have done before anyone risks it.
+	//
+	// There is deliberately no equivalent for low. See ApplyEligible.
+	ApplyMedium bool `json:"applyMedium,omitempty"`
+	// ReportPath, when set, writes every candidate (all tiers, eligible or not)
+	// as TSV before a single row is touched.
+	//
+	// 🔑 This is the rollback artefact. A merge creates and deletes series rows,
+	// so "undo" means replaying this file — there is no transaction to abort.
+	// Write it during the dry run and keep it.
+	ReportPath string `json:"reportPath,omitempty"`
+}
+
+// writeSeriesDenumberReport dumps every candidate as TSV, eligible or not.
+//
+// TSV rather than JSON because the point of this file is to be read by a person
+// deciding whether to proceed, and sorted/grepped by shape or tier while they do
+// it. The `eligible` column records the decision made at THIS invocation's
+// settings, so the file explains itself later without the params alongside.
+func writeSeriesDenumberReport(path string, plans []SeriesMergePlan, allowMedium bool) error {
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o775); err != nil {
+			return err
+		}
+	}
+	var b strings.Builder
+	b.WriteString("from_series_id\tfrom_name\tinto_name\tposition\tbooks\tshape\tconfidence\teligible\treason\n")
+	for _, pl := range plans {
+		// Tabs and newlines inside a name would break the column alignment and
+		// silently shift every field after it.
+		clean := func(s string) string {
+			return strings.NewReplacer("\t", " ", "\n", " ", "\r", " ").Replace(s)
+		}
+		fmt.Fprintf(&b, "%d\t%s\t%s\t%d\t%d\t%s\t%s\t%t\t%s\n",
+			pl.FromID, clean(pl.FromName), clean(pl.IntoName), pl.Position, pl.Books,
+			pl.Shape, pl.Confidence, ApplyEligible(pl, allowMedium), clean(pl.Reason))
+	}
+	return os.WriteFile(path, []byte(b.String()), 0o664)
 }
 
 func (p *Plugin) seriesDenumberDef() sdk.OperationDef {
@@ -35,7 +80,12 @@ func (p *Plugin) seriesDenumberDef() sdk.OperationDef {
 			"many one-book series as it has volumes. This merges them onto the base name and moves the number " +
 			"into the book's series position. A bare trailing number is only trusted when the library " +
 			"corroborates it — zero-padding, an explicit keyword, or another series sharing the base — so a real " +
-			"name like \"Fahrenheit 451\" is left alone. Dry-run by default; pass {\"apply\": true} to merge.",
+			"name like \"Fahrenheit 451\" is left alone. Also reads positions embedded in the middle or at the " +
+			"front of a name (\"Evil Genius: Book 4: ...\", \"Dragon Born [04]\", \"08. Battle for the Abyss\"), " +
+			"each scored by confidence — a keyword-vouched position applies, a bracketed one needs " +
+			"{\"applyMedium\": true}, and a bare number is only ever reported, because \"86—EIGHTY-SIX\" is a real " +
+			"series name with the same shape. Dry-run by default; pass {\"apply\": true} to merge and " +
+			"{\"reportPath\": \"...\"} to write the rollback report.",
 		ResumePolicy:    sdk.ResumeRestart,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.series-denumber",
@@ -81,26 +131,61 @@ func (p *Plugin) runSeriesDenumber(ctx context.Context, raw json.RawMessage, rep
 		in = append(in, SeriesInput{ID: s.ID, Name: s.Name, AuthorID: aid, Books: counts[s.ID]})
 	}
 
-	plans := SeriesDenumber(in)
+	candidates := SeriesDenumber(in)
 	// Deterministic order so a dry run and the apply that follows it agree, and
 	// so the FIRST plan for a base is the one that creates the base series.
-	sort.Slice(plans, func(i, j int) bool {
-		if plans[i].IntoName != plans[j].IntoName {
-			return plans[i].IntoName < plans[j].IntoName
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].IntoName != candidates[j].IntoName {
+			return candidates[i].IntoName < candidates[j].IntoName
 		}
-		return plans[i].Position < plans[j].Position
+		return candidates[i].Position < candidates[j].Position
 	})
-	if params.Limit > 0 && len(plans) > params.Limit {
-		plans = plans[:params.Limit]
-	}
 
-	log.Info("series-denumber: plan complete", "series", len(in), "merges", len(plans))
-	if len(plans) == 0 {
+	log.Info("series-denumber: plan complete", "series", len(in), "candidates", len(candidates))
+	if len(candidates) == 0 {
 		summary := fmt.Sprintf("series-denumber: %d series scanned, 0 carry a book number — nothing to do", len(in))
 		_ = reporter.Log(slog.LevelInfo, summary)
 		_ = reporter.UpdateProgress(1, 1, summary)
 		return nil
 	}
+
+	// 🔑 The report covers EVERY candidate, including the tiers that will never
+	// be applied. Written before anything is touched, because a merge creates and
+	// deletes series rows and replaying this file is the only way back.
+	if params.ReportPath != "" {
+		if err := writeSeriesDenumberReport(params.ReportPath, candidates, params.ApplyMedium); err != nil {
+			// Fail closed: an apply with no rollback artefact is exactly the
+			// situation the report exists to prevent.
+			return fmt.Errorf("write report %s: %w", params.ReportPath, err)
+		}
+		log.Info("series-denumber: report written", "path", params.ReportPath, "rows", len(candidates))
+	} else if params.Apply {
+		log.Warn("series-denumber: applying with no reportPath — there will be no rollback artefact")
+	}
+
+	// Partition by eligibility. Low never appears in plans, at any setting.
+	plans := make([]SeriesMergePlan, 0, len(candidates))
+	byTier := map[SeriesConfidence]int{}
+	booksByTier := map[SeriesConfidence]int{}
+	heldExamples := make([]string, 0, 6)
+	for _, pl := range candidates {
+		byTier[pl.Confidence]++
+		booksByTier[pl.Confidence] += pl.Books
+		if ApplyEligible(pl, params.ApplyMedium) {
+			plans = append(plans, pl)
+		} else if len(heldExamples) < 6 {
+			heldExamples = append(heldExamples, fmt.Sprintf("%q → %q #%d [%s/%s]",
+				pl.FromName, pl.IntoName, pl.Position, pl.Shape, pl.Confidence))
+		}
+	}
+	if params.Limit > 0 && len(plans) > params.Limit {
+		plans = plans[:params.Limit]
+	}
+
+	tiers := fmt.Sprintf("high=%d(%d books) medium=%d(%d books) low=%d(%d books)",
+		byTier[ConfidenceHigh], booksByTier[ConfidenceHigh],
+		byTier[ConfidenceMedium], booksByTier[ConfidenceMedium],
+		byTier[ConfidenceLow], booksByTier[ConfidenceLow])
 
 	byReason := map[string]int{}
 	bases := map[string]struct{}{}
@@ -123,11 +208,24 @@ func (p *Plugin) runSeriesDenumber(ctx context.Context, raw json.RawMessage, rep
 		}
 		sort.Strings(reasons)
 		summary := fmt.Sprintf(
-			"series-denumber: %d series scanned, would merge %d into %d base series "+
-				"(%d books would move) — by evidence: %s | e.g. %s",
-			len(in), len(plans), len(bases), booksAffected, strings.Join(reasons, " "), strings.Join(examples, "; "))
+			"series-denumber: %d series scanned, %d carry a position (%s). "+
+				"Would merge %d into %d base series (%d books would move) — by evidence: %s | "+
+				"applying: %s | held: %s",
+			len(in), len(candidates), tiers,
+			len(plans), len(bases), booksAffected, strings.Join(reasons, " "),
+			strings.Join(examples, "; "), strings.Join(heldExamples, "; "))
 		_ = reporter.Log(slog.LevelInfo, summary)
-		_ = reporter.UpdateProgress(len(plans), len(plans), summary)
+		_ = reporter.UpdateProgress(len(candidates), len(candidates), summary)
+		return nil
+	}
+
+	if len(plans) == 0 {
+		summary := fmt.Sprintf(
+			"series-denumber: %d candidates found (%s) but none are eligible to apply — "+
+				"pass applyMedium to include bracketed positions; low never applies",
+			len(candidates), tiers)
+		_ = reporter.Log(slog.LevelInfo, summary)
+		_ = reporter.UpdateProgress(1, 1, summary)
 		return nil
 	}
 
