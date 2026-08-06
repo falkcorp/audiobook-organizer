@@ -1,7 +1,7 @@
 // file: internal/linkintegrity/classify.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7a3e15c8-4b92-4d07-a6f3-1c85920be47d
-// last-edited: 2026-08-05
+// last-edited: 2026-08-06
 
 package linkintegrity
 
@@ -89,6 +89,14 @@ type DirVerdict struct {
 	DistinctStems int
 	// AudioCount is how many audio files the folder held.
 	AudioCount int
+
+	// ProbesOK / ProbesFailed are set only by ClassifyDirProbed and record how
+	// much of the folder was actually MEASURED. They are reported separately
+	// from AudioCount on purpose: "4 files, 4 measured" and "4 files, 1
+	// measured" can produce the same verdict from very different evidence, and
+	// an operator reading the queue needs to see which one they are looking at.
+	ProbesOK     int
+	ProbesFailed int
 }
 
 // ClassifyDir decides whether a directory's audio files are one book.
@@ -161,6 +169,85 @@ func ClassifyDir(names []string, subdirCount int, durationsSec []int) DirVerdict
 
 	v.OneBook = true
 	v.Reason = fmt.Sprintf("%d audio files share one title and are chapter-length — one book", len(audio))
+	return v
+}
+
+// ── tier-2: classification with PROBED durations ─────────────────────────────
+//
+// ClassifyDir's series guard is inert without durations, so a whole-library
+// tier-1 scan (one DB read + one os.Stat per book, no budget for subprocesses)
+// can only ever route a multi-file folder to review. Tier 2 revisits that much
+// smaller flagged set and spends an ffprobe per file to supply the missing
+// signal. ClassifyDirProbed is the seam between the two: same classifier, better
+// inputs.
+
+// ProbedDuration is one audio file's probe OUTCOME — deliberately not a bare
+// int.
+//
+// 🔴 THIS TYPE EXISTS TO KEEP "COULD NOT MEASURE" FROM BECOMING "MEASURED
+// ZERO". A failed probe expressed as 0 seconds does not read as missing data
+// downstream; it reads as a very short file, which the series guard interprets
+// as "a chapter, therefore safe to merge into one book". That exact substitution
+// — DurationSec==0 taken as evidence rather than as its absence — disabled the
+// regroup series guard across 97.5% of the review queue and came within one
+// apply of merging 41 of 43 distinct novels. Carrying the OK flag alongside the
+// number makes the failure impossible to express.
+type ProbedDuration struct {
+	// Name is the audio file's basename, for reporting.
+	Name string
+	// Sec is the measured runtime in seconds. Meaningful ONLY when OK is true.
+	Sec int
+	// OK is true only when the file was genuinely measured. Construct it as
+	// (err == nil && secs > 0): ffprobe can exit 0 having reported nothing
+	// usable for a truncated or header-only container, and audioutil's
+	// ProbeDurationSeconds deliberately does not validate that itself ("callers
+	// apply their own validity rules"). A zero from a successful exit is still
+	// an absence of evidence.
+	OK bool
+}
+
+// ClassifyDirProbed classifies a directory using per-file probe outcomes.
+//
+// It feeds ClassifyDir ONLY the durations that were actually measured — a failed
+// probe contributes nothing at all rather than a zero — and then applies a
+// coverage guard on top of the result.
+//
+// WHY THE COVERAGE GUARD IS NEEDED ON TOP OF THE EXCLUSION. Excluding failures
+// already fixes the dangerous direction in most shapes: with 4 files sharing one
+// stem where only one measured 6,000s, the guard sees 1-of-1 long and fires.
+// But the reverse partial is still unsafe — one file measured at chapter length
+// and three unknown yields "0 of 1 are long", which passes the guard and would
+// auto-link a folder we have barely looked at. So when ANY probe failed, a
+// multi-file folder cannot be called one book no matter how the measured subset
+// reads. Absent evidence means "cannot verify", never "confirmed".
+//
+// The single-audio-file case is exempt because its verdict never depended on
+// duration: one file in a folder is one book whether or not it could be probed.
+func ClassifyDirProbed(names []string, subdirCount int, probes []ProbedDuration) DirVerdict {
+	known := make([]int, 0, len(probes))
+	failed := 0
+	for _, p := range probes {
+		// Re-check Sec > 0 rather than trusting OK alone: this is the one place
+		// the invariant is enforced, and a caller that sets OK from err==nil
+		// only must not be able to smuggle a zero past it.
+		if p.OK && p.Sec > 0 {
+			known = append(known, p.Sec)
+			continue
+		}
+		failed++
+	}
+
+	v := ClassifyDir(names, subdirCount, known)
+	v.ProbesOK = len(known)
+	v.ProbesFailed = failed
+
+	if failed > 0 && v.OneBook && v.AudioCount > 1 {
+		v.OneBook = false
+		v.Reason = fmt.Sprintf(
+			"%d audio files share one title and the %d that could be measured are chapter-length, "+
+				"but %d file(s) could not be probed — cannot rule out a series on partial evidence",
+			v.AudioCount, len(known), failed)
+	}
 	return v
 }
 
