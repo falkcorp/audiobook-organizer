@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.16.1 -->
+<!-- version: 10.16.2 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-08-05 -->
+<!-- last-edited: 2026-08-06 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,549 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+<!-- file: todo.d/20260805_213000_version_group_acoustic_audit.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 9f26a740-5c83-4b1e-a207-e5348d19cb6f -->
+<!-- last-edited: 2026-08-05 -->
+
+- [ ] **Version-group acoustic audit op** — verify that books marked as VERSIONS
+  of each other are acoustically close enough to actually be the same work, and
+  auto-fix ones that are not. Requested by owner 2026-08-05; not scheduled.
+
+  Structurally different from the rest of the First Aid roster: every other op
+  *finds* problems, this one *audits assertions* — including First Aid's own
+  writes. Tier 3 creates version groups from duration matching; this re-checks
+  them with a signal that took no part in that decision, so a wrong grouping
+  becomes findable instead of permanent. Also covers groups created by any other
+  path (`ApplyVersionGroup`, manual, historical imports).
+
+  Signals: (1) AcoustID fingerprint similarity across members —
+  `BookFile.AcoustIDFingerprint` plus `AcoustIDSeg0..6`; (2) Whisper
+  transcription content (owner suggestion) — an *independent* signal, not a
+  refinement of the acoustic one, which is what makes agreement meaningful.
+  ~96.5% transcribed but ~40% low-quality/unparsed, so filter before trusting.
+
+  🔴 **Absent evidence must mean "cannot verify", never "refuted".** ~65% of
+  books were unfingerprinted as of 2026-07-02. Reading a missing fingerprint as
+  "not a match" would ungroup correct version groups wholesale — the same failure
+  as `DurationSec == 0` silently disabling the regroup series-guard across 97.5%
+  of the review queue. Emit verified / refuted / insufficient-evidence.
+
+  Auto-fix is safe here in a way deletion is not: the remedy is to UNGROUP (clear
+  `VersionGroupID`, restore `IsPrimaryVersion`), destroying no rows and no files,
+  and itself reversible. Still gate behind a confidence threshold and prefer a
+  review hold when the two signals disagree.
+
+  Home: tier 2 of the First Aid funnel (expensive, runs only over version-grouped
+  books), feeding a tier-3 ungroup fixer. See
+  `.worktrees/link-integrity/PLAN.md`.
+
+<!-- file: todo.d/20260805_214000_chapters_served_to_clients.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 1b7d02c4-9e35-4a68-83f1-6d0947ac2e15 -->
+<!-- last-edited: 2026-08-05 -->
+
+- [ ] **Verify the server actually returns chapters to clients** — confirm the
+  ABS-compatible surface serves chapter data wherever a client expects it, and
+  that it is populated rather than an empty array. Owner request 2026-08-05.
+
+  Chapter extraction and persistence shipped in the ABS sync work (Phase 1,
+  chapter-extraction + scanner chapter hook), so the plumbing exists — what is
+  unverified is the end-to-end path: extracted → persisted → serialized into the
+  item payload → rendered by AudioBooth / Absorb.
+
+  Check specifically:
+  - the item detail response includes a populated `chapters` array (start/end/
+    title), not `[]`, for books that genuinely have chapters
+  - single-file M4Bs with embedded chapter atoms
+  - multi-file books, where "chapters" and "tracks" are different concepts and
+    the client may expect one, the other, or both
+  - what a client sees for a book with NO chapter data — a graceful absence, not
+    a malformed payload
+
+  ⚠️ An empty array and a missing field are different failures to a client, and
+  the ABS conformance harness (`internal/syncapi/conformance`) checks field
+  presence and type rather than just values — use it rather than eyeballing JSON.
+
+  Feeds [[chapters-backfill-from-duplicates]]: knowing which books lack chapters
+  is the input to deciding which ones to repair.
+
+<!-- file: todo.d/20260805_214100_chapters_backfill_from_duplicates.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 5c9e13ab-70d2-4f86-b451-2a86e0f37d94 -->
+<!-- last-edited: 2026-08-05 -->
+
+- [ ] **Backfill chapters into files that lack them, using a duplicate as the
+  source of timings** — owner request 2026-08-05. Turn a chapterless M4B into a
+  properly chaptered one by borrowing structure from another copy of the same
+  book that already encodes it.
+
+  Sources of chapter timings, in preference order:
+  1. **Audible/provider chapter data** — check whether the metadata providers we
+     already query expose chapter titles WITH start offsets. If they do this is
+     by far the cleanest path and needs no duplicate at all.
+  2. **A per-chapter duplicate.** A chapterless `Book.m4b` alongside a duplicate
+     stored as N mp3s, one per chapter: each file's duration gives a chapter
+     length, and the cumulative sum gives the offsets. Filenames often give the
+     titles.
+  3. **A playlist with timings** (see [[playlists-full-support]]) — cue sheets
+     and some playlist formats carry explicit offsets.
+
+  🔴 **GATE ON NEAR-EXACT ACOUSTIC MATCH.** Owner was explicit. Chapter offsets
+  borrowed from a *different edition* — different narrator, abridged vs
+  unabridged, a remaster with different silence padding — are worse than no
+  chapters at all: they read as correct and silently mis-seek. Require an
+  AcoustID fingerprint match well above the ordinary dedup threshold, and reject
+  on ANY duration mismatch beyond a small tolerance. Absent fingerprint must mean
+  "cannot apply", never "assume it matches" — same rule as
+  [[version-group-acoustic-audit]].
+
+  Also verify the summed chapter durations reconcile to the target file's total
+  runtime before writing; a shortfall means the duplicate is incomplete (the
+  Successors debris covered 12 of 13 tracks, which would have silently truncated).
+
+  Write path: chapters go into the M4B container. Treat it as a tag write with
+  the usual safety — this repo's dominant incident class is write-back wipes, and
+  `books/itunes/**` remains hands-off regardless.
+
+  Depends on [[chapters-served-to-clients]] to know which books lack chapters.
+
+<!-- file: todo.d/20260805_214200_playlists_full_support.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 8f31a05d-4c72-4e19-9b06-3d5827ea16bc -->
+<!-- last-edited: 2026-08-05 -->
+
+- [ ] **Playlists — implement the whole surface** — owner request 2026-08-05:
+  "basically implement everything to do with playlists, dynamic playlists,
+  static, etc."
+
+  Scope:
+  - **Import** existing playlist files found during scan — `.m3u` / `.m3u8`,
+    `.pls`, `.cue`, `.xspf`. Resolve their entries to `book_file` rows rather
+    than storing raw paths, so a later reorganise does not break them.
+  - **Static playlists** — user-curated, explicit ordered membership.
+  - **Dynamic playlists** — a stored query (by author, series, narrator, genre,
+    unfinished, recently added, rating…) evaluated at read time.
+  - **CRUD + reorder** via API, and expose over the ABS-compatible surface so
+    iOS clients see them. Check what ABS calls these and match its shape — the
+    conformance harness (`internal/syncapi/conformance`) is the tool for that.
+  - **Export** back to `.m3u`.
+
+  Two reasons this is worth more than it looks:
+  1. **Cue sheets and some playlists carry explicit timings**, which makes them a
+     third source of chapter offsets for [[chapters-backfill-from-duplicates]].
+  2. An imported playlist is **evidence about grouping** — a playlist listing 13
+     files in order is a human-authored assertion that those files belong
+     together, which is exactly the signal the regroup classifier lacks and has
+     to infer from filenames.
+
+  ⚠️ Playlist entries pointing at files with no `book_file` row will silently
+  drop — 38.2% of books were in that state on 2026-08-05, so sequence this after
+  relink or import will look lossy for reasons that have nothing to do with
+  playlists.
+
+<!-- file: todo.d/20260805_214300_reading_review_status_sync.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 3a68d1f9-2b54-4c07-86e3-91f4c05db27a -->
+<!-- last-edited: 2026-08-05 -->
+
+- [ ] **Reading status and review/rating must sync from the app back to the
+  server** — owner request 2026-08-05: set it in the app, it persists server-side.
+  Mirror how Audiobookshelf does it rather than inventing a shape.
+
+  Two distinct things:
+  - **Reading status** — not-started / in-progress / finished, plus the
+    finished-at timestamp. ABS models this as `isFinished` + `finishedAt` on the
+    media-progress record, and clients set it both explicitly ("mark finished")
+    and implicitly (progress crossing a completion threshold).
+  - **Review status** — the user's own rating and/or written review. ABS core
+    does NOT have a first-class review object, so check what the iOS clients
+    actually send before designing; this may need to be our own field exposed in
+    a way clients tolerate.
+
+  Prior art in-repo: Phase 6 ABS progress writes already landed (6 endpoints,
+  `hideFromContinueListening` PATCH persistence, bookmarks — PR #2102), and
+  `remove-from-continue-listening` was fixed in #2116. Reading status likely
+  belongs alongside that media-progress work rather than as a new subsystem —
+  look there first.
+
+  Verify against real clients, not just the spec: AudioBooth and Absorb differ in
+  which endpoints they call and when. The conformance harness checks field
+  presence and type, which is what catches a client silently ignoring a field we
+  thought we were sending.
+
+  ⚠️ Round-trip matters more than write-once here. A finished flag that persists
+  but never comes back on the next sync reads to the user as data loss, and it is
+  the kind of bug that only shows up after reinstalling the app.
+
+<!-- file: todo.d/20260805_214400_deluge_metadata_source.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 6d2f84b0-31ac-4e75-92f8-08b7139ce5a3 -->
+<!-- last-edited: 2026-08-05 -->
+
+- [ ] **Use Deluge as a metadata and identity source** — owner idea 2026-08-05:
+  "connect to deluge, see all the audiobooks it has, the titles it has, any other
+  information and use that as well as other things to really figure out and match
+  a book."
+
+  Deluge's RPC exposes, per torrent: the torrent NAME, the save path, total size,
+  the full file list, and dates. That name is often far richer than anything in
+  the file's own tags — release names routinely carry author, series, volume
+  number, narrator, edition (Unabridged), year, and format, in a structured-ish
+  convention.
+
+  Why this is a genuinely different signal from everything we have: every current
+  identity source is downstream of the file itself (embedded tags, filename,
+  folder, audio fingerprint). The torrent name is an **external, human-authored
+  assertion made at acquisition time**, before any of our import processing could
+  mangle it. For books whose tags were destroyed by the iTunes import, it may be
+  the only surviving record of what the thing actually is.
+
+  Work:
+  - Deluge RPC client (read-only), credentials handled like other secrets — env,
+    never the config blob.
+  - Match torrents to library books by save path first (exact and prefix), then
+    by file size, then by fuzzy title.
+  - Parse release names into candidate metadata, and treat the result as a
+    *scored candidate* feeding the existing matcher — never an authoritative
+    overwrite. Scene naming is inconsistent and a confident parse of a wrong name
+    would be worse than no parse.
+
+  Pairs with [[deluge-file-parts-grouping-check]], which uses the same connection
+  for a different purpose.
+
+<!-- file: todo.d/20260805_214500_deluge_file_parts_grouping_check.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 0e5b3792-a641-4d38-bc09-27f4e816a0df -->
+<!-- last-edited: 2026-08-05 -->
+
+- [ ] **Use Deluge's per-torrent file list as ground truth for GROUPING** — owner
+  idea 2026-08-05: "Deluge shows you all the file parts, we could easily pull
+  that for all torrents and then match them to their files and if some groups are
+  wildly wrong we know something is fucked up."
+
+  This is the more valuable half of the Deluge idea, and it is a different kind
+  of signal from [[deluge-metadata-source]].
+
+  **A torrent's file list is an externally-authored statement that these N files
+  belong together.** Everything the regroup classifier does is an attempt to
+  RE-DERIVE exactly that fact from filenames and durations, after the fact, with
+  known failure modes — it nearly merged 41 of 43 candidate groups that were
+  really separate novels. Where a torrent covers a book, we do not have to infer
+  the grouping; we can read it.
+
+  Uses, in increasing ambition:
+  1. **Audit** — compare our grouping against torrent membership. A torrent whose
+     files we split across many books, or several torrents we merged into one
+     book, flags a grouping error. This is a cheap, high-signal correctness check
+     over a population we currently have no independent check for.
+  2. **Evidence** — feed torrent membership into the regroup classifier as a
+     strong positive grouping signal, outranking filename heuristics.
+  3. **Repair** — propose regroups directly from torrent membership (review-gated
+     like every other regroup proposal; never auto-applied).
+
+  Caveats worth stating up front:
+  - Coverage is partial — only books acquired this way, still seeded, still known
+    to Deluge. Absent coverage must mean "no opinion", never "wrong".
+  - A torrent may contain SEVERAL books (a series pack, an author collection), so
+    torrent membership is an upper bound on one book, not proof of one book. Same
+    over-merge trap as the folder heuristic — pair it with the duration guard.
+  - Files may have been moved or renamed since; match on size and content, not
+    only on path.
+
+  Blocked on the same read-only Deluge RPC client as [[deluge-metadata-source]].
+
+<!-- file: todo.d/20260805_220000_review_queue_recommendations_and_overrides.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 4e91b7c2-06d8-4a35-9f17-b3820e5cd641 -->
+<!-- last-edited: 2026-08-05 -->
+
+- [ ] **Give review holds a real recommendation, and let the human override it**
+  — owner items 1 and 2 (2026-08-05). Two halves of one change; building the
+  recommendation as a string first and bolting override on later means rewriting
+  the first half.
+
+  **The problem.** `proposedAction` is one generic string on **762 of 777** holds
+  ("review: flat folder shares a title but ordering is unclear") and
+  `survivorTitle` is frequently wrong. A queue where every row says the same
+  thing is a queue nobody can work.
+
+  **Recommendation.** Add structured fields to `regroupPayload`:
+  `recommendedAction` (`combine` / `separate` / `duplicate-of` /
+  `insufficient-evidence`), `recommendationReason`, and
+  `recommendationEvidence` — the numbers that produced it (member durations,
+  distinct stem count, part/disc marker count, folder shape). The evidence field
+  is what makes the queue workable; a reason alone is just a nicer generic string.
+
+  **Override.** `ApproveReviewItem` takes an optional body `{action: "..."}`
+  defaulting to `recommendedAction`, and dispatch keys off the CHOSEN action.
+  Today `approveOne` (`internal/server/handlers/review/handler.go`) dispatches on
+  `item.Kind`, so this is the structural change that makes override possible.
+  Keep the four `Kind` strings unchanged — they are load-bearing and the frontend
+  maps them verbatim.
+
+  `separate` needs no apply handler: every member is already its own book, so
+  "separate into N" is a status transition, and `UpsertReviewItem`'s dedup-key
+  idempotency keeps it decided across re-scans.
+
+  **Also fix `deriveSurvivorTitle`**, which reads the folder name only and so
+  returns author names ("C. T. Phipps"), "Volume 1", and wrong volume numbers
+  ("…Vol. 01" on a folder whose files say Vol. 9). `folderNamedAfterBook` and
+  `dominantPrefix` are already computed a few lines above — use the folder name
+  when the former is true, the dominant member title when it is not, and emit
+  empty rather than a wrong title when neither is trustworthy.
+
+  🔴 **Sequencing.** The decisive signal is member `DurationSec`, which was ZERO
+  for 97.5% of the queue because those books had no `book_file` rows. Do this
+  AFTER [[relink-unlinked-books]] and a regroup re-run, or the recommendations
+  are computed on blank evidence — the same failure that let 41 of 43 "confident"
+  candidates propose merging distinct novels.
+
+<!-- file: todo.d/20260805_220100_multidisc_apply_canary.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 7c3d580a-92e4-4b16-8f05-1d47a209e3bf -->
+<!-- last-edited: 2026-08-05 -->
+
+- [ ] **Canary the multidisc applies behind a before/after snapshot** — owner
+  item 3 (2026-08-05). 138 pending `regroup.multidisc` holds; running them
+  requires flipping `review_apply_enabled`, which is OFF in prod.
+
+  🔴 **SNAPSHOT TO A FILE ON DISK BEFORE FLIPPING THE FLAG.** Capture, per
+  candidate: every member book ID, title, duration, file path, and which ID
+  `pickPrimary` will select (smallest ULID —
+  `internal/plugins/maintenance/regroup_apply.go`). The apply path **hard-deletes
+  absorbed rows**, so post-hoc reconstruction is impossible; the on-disk snapshot
+  is the only record.
+
+  That snapshot is not theoretical caution: it is what caught **41 of 43**
+  "confident" multidisc candidates that would have merged distinct novels into
+  single books. Do not skip it because the classifier looks better now.
+
+  🔴 **Approve by explicit `ids:[...]`, never kind-scoped.** The frontend's
+  `handleBulkAction(kind, 'approve')` approves EVERY pending item of a kind — one
+  click with the flag on fires 138 `CombineBooks` calls. Start with a handful of
+  groups verifiable by ear, diff the snapshot, then widen.
+
+  Note a separate finding worth checking first: a 2026-08-05 measurement found
+  **9 of 138** multidisc holds have members that are individually book-length,
+  meaning the series-guard would fire on them if it were evaluated. The guard
+  only applies to the flat branch — the disc and chapter/edition branches do not
+  check it. Those 9 are near-misses still sitting in the queue.
+
+  Depends on [[review-queue-recommendations-and-overrides]] (per-item action
+  selection) so approval targets one hold at a time.
+
+<!-- file: todo.d/20260805_220200_series_names_that_are_book_numbers.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 2f57e91b-8c04-4d73-a6e8-95b013fc287d -->
+<!-- last-edited: 2026-08-05 -->
+
+- [ ] **Series names that are really book numbers (~874 books)** — owner item 4
+  (2026-08-05).
+
+  Shapes still unhandled: `<Series> N: <Title>`, `N - <Title>`, and `N (paren)`.
+  `the world 4` means **book 4 of `the world`** — the number belongs in the
+  series *position* field, not baked into the series *name*.
+
+  🔴 **This is a DATA bug, not a display bug.** The owner has corrected that
+  reading twice. Do not re-derive it, and do not "fix" it in the frontend.
+
+  `maintenance.series-denumber` already exists and handles the trailing-number
+  shape; these are the remaining shapes.
+
+  🔴 **Extend `IsJunkSeriesBase` ALONGSIDE the parser, not after it.** That guard
+  is what stopped **285 bad merges** in the dry run. A parser extension that
+  lands before the guard extension will happily collapse series bases the guard
+  would have rejected — and series merges are destructive.
+
+  Dry-run first and read the numbers; independent of the First Aid track, so it
+  can proceed in parallel.
+
+<!-- file: todo.d/20260805_220300_first_aid_library_validate_repair.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: a8140e6f-5b27-4c93-81da-7f2e0693b5ca -->
+<!-- last-edited: 2026-08-05 -->
+
+- [ ] **"First Aid" — one sequenced library validate + repair system** — owner
+  design 2026-08-05: *"one big system that basically had a investigation →
+  retesting with more advanced situations → fixers."* Architecture and locked
+  decisions: [`.claude/notes/2026-08-05-first-aid-architecture.md`].
+
+  **Three tiers, separated by what they can afford PER BOOK:**
+  - **Tier 1 — investigation.** All ~44,887 books. Budget: one DB read + one
+    `os.Stat`. Cannot afford duration probing, hashing, or cross-book comparison.
+  - **Tier 2 — escalation.** Only tier 1's flagged set (thousands), so it CAN
+    afford probing real durations, matching a candidate's tracks against other
+    books, and fingerprint comparison.
+  - **Tier 3 — fixers.** One per confirmed verdict, small and independently
+    testable.
+
+  **Convergence is the property that matters.** Rather than hard-coding
+  "relink before regroup", run fixers then RE-INVESTIGATE; the next pass sees the
+  new durations and reclassifies. Re-run until investigation returns nothing
+  actionable — idempotent by construction.
+
+  **Sub-tasks still open:**
+  - [ ] Tier-2 duration probe for the **1,019** directory-shaped books that went
+    to review purely because `classifyUnlinked` passes `nil` durations. They are
+    un-probed, not unknowable.
+  - [ ] Duplicate detection + **combine-by-template** + version-group (the
+    Successors class) — see [[never-delete-re-associate]] below.
+  - [ ] Orchestrator + frontend button, dry-run by default, no schedule.
+  - [ ] **Missing-input triggering:** when a check's input is absent, ENQUEUE the
+    op that produces it. `OperationDef.Requires` already supports
+    `ReqOpCompleted` (with `AllFiles`) and `ReqFieldSet`, with a dependency graph
+    and `waiting_deps` parking — but parking WAITS and never enqueues the
+    producer. First Aid must own that step. ⚠️ That subsystem shipped flag-OFF
+    and dormant (#1442) with `dedup.check-book` as its only consumer; its one
+    review caught three real bugs including a promote path that never dispatched.
+
+  **Roster — ops to sequence** (tier 1) `relink-unlinked-books` ·
+  `reconcile-scan` · `orphan-book-files-cleanup` · `dedupe-book-file-rows` ·
+  `purge-millisecond-durations` · `booksig-recovery-audit`; (tier 2)
+  `duration-reextract` · `file-integrity-check` · `malformed-m4b-remux/transcode`;
+  (tier 3) `duration-backfill` · `repair-junk-titles` · `title-repair` ·
+  `title-backfill` · `series-denumber` · `regroup-shattered-ai`; (tier 4, GATED)
+  author/series identity ops → `metadata-refresh` · `isbn-enrichment` ·
+  `auto-match-transcribed`.
+
+  **Excluded as janitorial** (server health, not book correctness):
+  `purge-deleted` · `tombstone-cleanup` · `temp-file-cleanup` ·
+  `cleanup-activity-log` · `purge-old-logs` · `cleanup-old-backups` ·
+  `trash-cleanup` · `archive-sweep` · `db-optimize` · `optimize` ·
+  `batch-poller` · `bulk-write-back` · `intro-transcribe` · `extract-wav-clips`.
+
+  Dedup subsystem stays SEPARATE but shares the duplicate-matching logic — it has
+  its own queue, gold labels and calibrated thresholds, and folding it in
+  wholesale is how 57 ops accumulated.
+
+- [ ] **Never delete — re-associate (duplicate resolution)**. Deleting a
+  redundant book row is **not idempotent**: rescan regenerates a book for any
+  file no `book_file` row claims, so deleted rows come back. `block_hash`
+  (`DoNotImport`) suppresses that but makes real audio permanently unrecoverable.
+  Resolution: (1) detect that a group's tracks map onto a better-assembled book;
+  (2) combine the debris into one book using that book's track list as a
+  **template**, matching by duration instead of guessing boundaries from
+  filenames; (3) version-group them, primary = most complete (ties to earliest
+  ULID). Debris is not always a clean copy — The Successors debris was 11 rows /
+  17 files covering 12 of 13 tracks with 5 internally-redundant files.
+
+<!-- file: todo.d/20260805_220400_metadata_results_cold_start.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: d3690b58-1e7a-4f24-a905-62c8f7bd031e -->
+<!-- last-edited: 2026-08-05 -->
+
+- [ ] **Warm the metadata-results build at boot** — owner item 6 (2026-08-05).
+
+  The metadata-results build takes **34 s cold**. It was memoised (60 s TTL, PR
+  #2142) but is **not warmed at startup**, so the first person to open the match
+  UI after a restart eats the full 34 s. Warm it on boot.
+
+  Same cold-path class as authors/narrators failing to load on first paint —
+  worth fixing together rather than one at a time, since the pattern (expensive
+  aggregate, memoised but never pre-populated) recurs.
+
+  Small and independent of the First Aid track; good candidate to pick up while
+  larger work is in flight.
+
+<!-- file: todo.d/20260805_220500_relink_unlinked_books.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: b52c7e04-a319-4d86-90f7-8e14036b2a97 -->
+<!-- last-edited: 2026-08-05 -->
+
+- [x] **Relink unlinked books — detector + repair op** — owner item 5
+  (2026-08-05). Op `maintenance.relink-unlinked-books` shipped in PR #2147.
+
+  **The measurement.** A whole-library survey found **17,149 of 44,887 books
+  (38.2%)** own ZERO `book_file` rows — not the ~1,300 originally estimated.
+  Disk check of every one of those paths: **16,027 resolve to a real file, 1,029
+  to a directory, 93 are genuinely missing.** They are **unlinked, not orphaned**
+  — the remedy is to relink, never to delete.
+
+  **Why no existing op saw them.** `maintenance.reconcile-scan` flags a book only
+  when `os.Stat` on its path FAILS. These all stat fine, so it walked past every
+  one and reported the library healthy.
+
+  🔴 **Why this blocked everything else.** `regroup-shattered-ai` derives
+  `DurationSec` by summing `book_file` rows, and its `membersAreBookLength`
+  series-guard — the check that stops distinct novels being merged — cannot fire
+  when that sum is zero. With **97.5% of the review queue** made of these books,
+  the guard was inert and the queue was built on blank evidence.
+
+  ⚠️ **Do not measure this with `Book.duration`.** It is a snapshot and is
+  populated (16,596 of the 17,149 have `duration > 0`), so coverage looks ~85%
+  when the classifier's real coverage was ~2.5%. Measuring the wrong field is how
+  this stayed invisible. `total_file_count` on the LIST DTO is a validated proxy
+  (100% agreement vs per-book `/files` across 4,774 books); the single-book
+  endpoint does not populate it.
+
+- [ ] **Remaining after the first apply:** 1,019 directory-shaped books held for
+  review (see [[first-aid-library-validate-repair]] tier-2 duration probe) and 93
+  missing reported only (already `reconcile-scan`'s remit; some may be offline
+  mounts rather than deleted audio).
+
+- [ ] **Re-run `regroup-shattered-ai` after relink and re-measure the queue.**
+  With durations present the series-guard becomes live for the first time across
+  most of the queue. Baseline to compare against: 357 pending holds — 217
+  ambiguous / 138 multidisc / 1 anthology / 1 version-group. This measurement
+  tells us how much of owner item 1 was a DATA problem rather than a classifier
+  problem, and should be taken before investing in recommendation tuning.
+
+<!-- file: todo.d/20260806_001500_version_group_index_underreports.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: f1a7d520-9c34-4e86-b0d2-73e5814cb96f -->
+<!-- last-edited: 2026-08-06 -->
+
+- [ ] 🐛 **`GetBooksByVersionGroup` silently under-reports group membership, which
+  breaks the one-primary-per-group invariant.** Found in production 2026-08-06
+  while version-grouping the two copies of *The Successors*.
+
+  **Symptom.** Two books both carry `version_group_id =
+  01KNDBPNB289W2Y6TMXS2DDSEG`, but `GET /api/v1/version-groups/<gid>` returns
+  only ONE member. `PUT /audiobooks/<id>/set-primary` therefore leaves BOTH books
+  flagged `is_primary_version = true`, so the library shows two tiles for one
+  book. Re-running set-primary does not help — it demotes only what the lookup
+  returns.
+
+  **Root cause** (`internal/database/pebble_store.go`, `GetBooksByVersionGroup`).
+  The fast path iterates a `book:versiongroup:<gid>:<id>` index, then falls back
+  to a full scan **only when the index yields ZERO results**:
+
+      if len(books) > 0 { sortVersions(books); return books, nil }
+      // Fallback: full scan for groups whose index hasn't been backfilled yet
+
+  A *partially* populated index — some members indexed, some not — returns the
+  partial set and never falls back. The zero-result guard reads like a correct
+  fallback and is exactly wrong for partial data.
+
+  The index is only refreshed by `UpdateBook` when `VersionGroupID` **changes**,
+  so a book that acquires a group through a path that does not trip that
+  comparison never gets an index entry. Re-POSTing
+  `/audiobooks/<id>/versions` does not repair it: the group ID is already
+  correct, so nothing changes and no index write occurs.
+
+  **Blast radius is wider than the one endpoint.** `ApplyVersionGroup`
+  (`internal/plugins/maintenance/regroup_apply.go`) uses the same function to
+  "enumerate every current member and demote strays" — the safety net that keeps
+  one primary per group when a `regroup.version-group` hold is approved. With a
+  partial index that net silently does nothing, so approving a version-group hold
+  can leave two primaries behind.
+
+  **Fix directions** (pick after measuring):
+  1. Make the fallback trigger on *suspected incompleteness*, not just zero — e.g.
+     always cross-check against the authoritative rows, or verify the returned
+     count against a group-size counter.
+  2. Write the index entry on every `UpdateBook` where `VersionGroupID` is
+     non-empty, not only when it changes (idempotent write).
+  3. Add a repair op that rebuilds `book:versiongroup:*` from the Book rows, and
+     run it once — existing groups are already affected.
+
+  **Also needs an invariant test**: after linking N books into a group and
+  setting one primary, exactly one member must have `IsPrimaryVersion == true`.
+
+  Related: [[version-group-acoustic-audit]] (which will read group membership and
+  would inherit this under-reporting), [[first-aid-library-validate-repair]].
 
 <!-- file: todo.d/2026-08-04-dedupe-op-45s-per-book.md -->
 <!-- version: 1.0.0 -->
