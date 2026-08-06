@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.12.1
+// version: 3.13.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-07-05
+// last-edited: 2026-08-06
 
 package maintenance
 
@@ -793,7 +793,8 @@ func firstAudioFile(store database.Store, book database.Book) (path, cacheKey, b
 }
 
 // nthAudioFile returns the path, cache key, and BookFile ID for the nth audio
-// file of book (sorted by track number, then path). n=0 is the first file.
+// file of book, sorted by (disc, track, path) — the same canonical ordering
+// GetBookFiles uses. n=0 is the first file.
 // The book-level FilePath fallback (for single-track iTunes imports with no
 // BookFile rows) is only used when n==0 and no BookFile records exist.
 // Cache key priority: FileHash > fp:sha256(AcoustIDFingerprint) > path:sha256(FilePath).
@@ -823,11 +824,39 @@ func nthAudioFile(store database.Store, book database.Book, n int) (path, cacheK
 		return "", "", "", nil
 	}
 
+	// Sort: disc ASC, track ASC, file_path ASC — IDENTICAL to the canonical
+	// ordering in PebbleStore.GetBookFiles (pebble_store_bookfiles.go).
+	//
+	// This comparator used to omit DiscNumber, comparing only (track, path). That
+	// is not a cosmetic difference: GetBookFiles hands the slice back already in
+	// (disc, track, path) order, and re-sorting without the disc key DESTROYS it.
+	// For a book whose DiscNumber came from tags on scan, disc-2-track-1 ties with
+	// disc-1-track-1 and FilePath breaks the tie arbitrarily — so "the first file"
+	// could be the opening of disc 2.
+	//
+	// Why that matters more per-file than it did per-book: the per-file intro
+	// signal rests on "track 1 carries the spoken opening, tracks 2..N do not", and
+	// POSITION is the discriminator that separates a genuine book start from a
+	// continuation. If this sort disagrees about which row IS track 1, the
+	// discriminator reads the wrong row and the whole signal silently misfires. At
+	// book level the same bug was merely a wrong sample.
+	//
+	// Books written by the iTunes regroup path are unaffected either way:
+	// assignDiscTrack (internal/itunes/service/fs_regroup_shape.go) stamps
+	// DiscNumber=0 and TrackNumber=1..N contiguously over play order, per the
+	// owner decision that discs are flattened. With disc always 0 the two
+	// comparators agree. It is the legacy/tag-scanned multi-disc rows, which
+	// predate that convention and still carry real disc numbers, that were broken.
+	//
+	// Kept as an explicit re-sort rather than relying on GetBookFiles' ordering:
+	// `store` is the database.Store INTERFACE, and no implementation is
+	// contractually bound to return files in any particular order.
 	sort.Slice(audio, func(i, j int) bool {
-		ti := audio[i].TrackNumber
-		tj := audio[j].TrackNumber
-		if ti != tj {
-			return ti < tj
+		if audio[i].DiscNumber != audio[j].DiscNumber {
+			return audio[i].DiscNumber < audio[j].DiscNumber
+		}
+		if audio[i].TrackNumber != audio[j].TrackNumber {
+			return audio[i].TrackNumber < audio[j].TrackNumber
 		}
 		return audio[i].FilePath < audio[j].FilePath
 	})
