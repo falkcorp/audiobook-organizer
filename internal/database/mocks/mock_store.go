@@ -50094,6 +50094,80 @@ func (_c *MockStore_SetRaw_Call) RunAndReturn(run func(key string, value []byte)
 	return _c
 }
 
+// SetReviewItemDecision provides a mock function for the type MockStore
+func (_mock *MockStore) SetReviewItemDecision(id string, status string, chosenAction string) (*database.ReviewItem, error) {
+	ret := _mock.Called(id, status, chosenAction)
+
+	if len(ret) == 0 {
+		panic("no return value specified for SetReviewItemDecision")
+	}
+
+	var r0 *database.ReviewItem
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string, string, string) (*database.ReviewItem, error)); ok {
+		return returnFunc(id, status, chosenAction)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string, string, string) *database.ReviewItem); ok {
+		r0 = returnFunc(id, status, chosenAction)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*database.ReviewItem)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string, string, string) error); ok {
+		r1 = returnFunc(id, status, chosenAction)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_SetReviewItemDecision_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SetReviewItemDecision'
+type MockStore_SetReviewItemDecision_Call struct {
+	*mock.Call
+}
+
+// SetReviewItemDecision is a helper method to define mock.On call
+//   - id string
+//   - status string
+//   - chosenAction string
+func (_e *MockStore_Expecter) SetReviewItemDecision(id any, status any, chosenAction any) *MockStore_SetReviewItemDecision_Call {
+	return &MockStore_SetReviewItemDecision_Call{Call: _e.mock.On("SetReviewItemDecision", id, status, chosenAction)}
+}
+
+func (_c *MockStore_SetReviewItemDecision_Call) Run(run func(id string, status string, chosenAction string)) *MockStore_SetReviewItemDecision_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_SetReviewItemDecision_Call) Return(reviewItem *database.ReviewItem, err error) *MockStore_SetReviewItemDecision_Call {
+	_c.Call.Return(reviewItem, err)
+	return _c
+}
+
+func (_c *MockStore_SetReviewItemDecision_Call) RunAndReturn(run func(id string, status string, chosenAction string) (*database.ReviewItem, error)) *MockStore_SetReviewItemDecision_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // SetReviewItemStatus provides a mock function for the type MockStore
 func (_mock *MockStore) SetReviewItemStatus(id string, status string) (*database.ReviewItem, error) {
 	ret := _mock.Called(id, status)
