@@ -20,6 +20,7 @@ func resetMetaResultsCache() {
 	metaResultsCache.counts = nil
 	metaResultsCache.at = time.Time{}
 	metaResultsCache.rebuilding = false
+	metaResultsCache.gen = 0
 	metaResultsCache.mu.Unlock()
 }
 
@@ -141,5 +142,73 @@ func TestInvalidateForcesColdPath(t *testing.T) {
 	metaResultsCache.mu.Unlock()
 	if !cleared {
 		t.Error("invalidate must clear the entry so the next read cannot serve stale data")
+	}
+}
+
+// TestInvalidationDuringBuildIsNotOverwritten reproduces the invalidation race
+// flagged by security review on 2026-08-06.
+//
+// A build runs OUTSIDE the lock and takes ~30s in production. If an apply/reject
+// invalidates during that window, the in-flight build must NOT install the
+// snapshot it captured beforehand — doing so resurrects exactly the stale set the
+// invalidation existed to purge, and the list goes on offering a candidate the
+// user just acted on.
+func TestInvalidationDuringBuildIsNotOverwritten(t *testing.T) {
+	resetMetaResultsCache()
+	defer resetMetaResultsCache()
+
+	// Simulate a build that captured the generation, then an invalidation landing
+	// mid-flight, then the build attempting to install.
+	metaResultsCache.mu.Lock()
+	startGen := metaResultsCache.gen
+	metaResultsCache.mu.Unlock()
+
+	// The apply/reject path fires while the build is still running.
+	invalidateMetadataResultsCache()
+
+	// The build now finishes and tries to install its pre-invalidation snapshot.
+	metaResultsCache.mu.Lock()
+	superseded := metaResultsCache.gen != startGen
+	if !superseded {
+		metaResultsCache.latest = map[string]database.OperationResult{"stale": {}}
+	}
+	installed := metaResultsCache.latest
+	metaResultsCache.mu.Unlock()
+
+	if !superseded {
+		t.Fatal("generation did not change across an invalidation — the guard cannot work")
+	}
+	if installed != nil {
+		t.Error("a build that started before an invalidation must not install its result; " +
+			"the cache would serve a candidate the user already acted on")
+	}
+}
+
+// TestGenerationSurvivesConcurrentInvalidations: the guard must hold under real
+// concurrency, not just in the sequential reproduction above.
+func TestGenerationSurvivesConcurrentInvalidations(t *testing.T) {
+	resetMetaResultsCache()
+	defer resetMetaResultsCache()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			invalidateMetadataResultsCache()
+		}()
+	}
+	wg.Wait()
+
+	metaResultsCache.mu.Lock()
+	gen := metaResultsCache.gen
+	latest := metaResultsCache.latest
+	metaResultsCache.mu.Unlock()
+
+	if gen != 50 {
+		t.Errorf("gen = %d, want 50 — invalidations must each bump the generation", gen)
+	}
+	if latest != nil {
+		t.Error("cache must be cleared after invalidation")
 	}
 }

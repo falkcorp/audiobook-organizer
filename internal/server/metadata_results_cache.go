@@ -53,6 +53,19 @@ type metadataResultsCache struct {
 	// flight, later callers keep serving the stale set rather than each starting
 	// their own ~30s build.
 	rebuilding bool
+
+	// gen is bumped by every invalidation. A build captures it before starting
+	// and refuses to install its result if it changed while the build was running.
+	//
+	// 🔴 WITHOUT THIS, INVALIDATION IS DEFEATED BY ITS OWN SLOWNESS. The build
+	// takes ~30s and runs outside the lock. If a user applies or rejects a
+	// candidate during that window, invalidateMetadataResultsCache() clears the
+	// entry — and then the in-flight build finishes and writes back the snapshot
+	// it read BEFORE the invalidation. The cache ends up holding exactly the
+	// stale set the invalidation existed to purge, so the list keeps offering a
+	// candidate the user just acted on: the one kind of staleness this cache is
+	// explicitly not allowed to have.
+	gen uint64
 }
 
 var metaResultsCache metadataResultsCache
@@ -116,6 +129,12 @@ func refreshMetadataResultsCache(store database.Store) {
 // reason is logged so a cold build (a user waited) is distinguishable from a
 // background refresh (nobody waited) when reading production logs.
 func buildAndStoreMetadataResults(store database.Store, reason string) (map[string]database.OperationResult, map[string]int, error) {
+	// Capture the generation BEFORE reading. Anything that invalidates while this
+	// build runs bumps it, and we must then discard our now-stale result.
+	metaResultsCache.mu.Lock()
+	startGen := metaResultsCache.gen
+	metaResultsCache.mu.Unlock()
+
 	started := time.Now()
 	latest, counts, err := latestMetadataResultsByBook(store)
 	if err != nil {
@@ -125,8 +144,21 @@ func buildAndStoreMetadataResults(store database.Store, reason string) (map[stri
 		"reason", reason, "books", len(latest), "duration_ms", time.Since(started).Milliseconds())
 
 	metaResultsCache.mu.Lock()
-	metaResultsCache.latest, metaResultsCache.counts, metaResultsCache.at = latest, counts, time.Now()
+	superseded := metaResultsCache.gen != startGen
+	if !superseded {
+		metaResultsCache.latest, metaResultsCache.counts, metaResultsCache.at = latest, counts, time.Now()
+	}
 	metaResultsCache.mu.Unlock()
+
+	if superseded {
+		// An apply/reject landed mid-build. Installing now would resurrect the
+		// pre-invalidation snapshot, so drop it and leave the cache cold — the
+		// next read rebuilds from current state.
+		slog.Info("metadata-results build superseded by an invalidation — discarding result",
+			"reason", reason)
+	}
+	// Return the freshly built set to THIS caller regardless: it is the newest
+	// data this goroutine has, and a cold-path caller must not be handed nil.
 	return latest, counts, nil
 }
 
@@ -143,5 +175,8 @@ func buildAndStoreMetadataResults(store database.Store, reason string) (map[stri
 func invalidateMetadataResultsCache() {
 	metaResultsCache.mu.Lock()
 	metaResultsCache.latest, metaResultsCache.counts = nil, nil
+	// Bump the generation so any build already in flight discards its result
+	// instead of writing back the snapshot it read before this call.
+	metaResultsCache.gen++
 	metaResultsCache.mu.Unlock()
 }
