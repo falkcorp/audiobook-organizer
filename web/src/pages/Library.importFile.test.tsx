@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.importFile.test.tsx
-// version: 1.6.0
+// version: 1.6.1
 // guid: 6f4a7b0d-9c9f-4f0b-8d85-1dd9e1ffb913
-// last-edited: 2026-07-01
+// last-edited: 2026-08-06
 
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
@@ -104,7 +104,7 @@ afterEach(() => {
 describe('Library import dialog', () => {
   it('imports a selected file path', async () => {
     render(
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter>
         <Library />
       </MemoryRouter>
     );
@@ -134,7 +134,7 @@ describe('Library import dialog', () => {
     const getBooksMock = vi.mocked(api.getBooks);
 
     render(
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter>
         <Library />
       </MemoryRouter>
     );
@@ -175,7 +175,7 @@ describe('Library import dialog', () => {
     // while still letting us fast-forward the app's 1500ms reload timers.
     vi.useFakeTimers({ shouldAdvanceTime: true });
     render(
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter>
         <Library />
       </MemoryRouter>
     );

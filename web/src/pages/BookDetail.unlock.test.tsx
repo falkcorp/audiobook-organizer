@@ -1,5 +1,6 @@
 // file: web/src/pages/BookDetail.unlock.test.tsx
-// version: 1.3.0
+// version: 1.3.1
+// last-edited: 2026-08-06
 // guid: 2b197bb0-4a61-49ef-8b75-1f9c6c23c84e
 
 import { render, screen, waitFor } from '@testing-library/react';
@@ -57,7 +58,6 @@ describe('BookDetail override unlock', () => {
     render(
       <MemoryRouter
         initialEntries={['/library/book-1']}
-        future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
       >
         <Routes>
           <Route path="/library/:id" element={<BookDetail />} />

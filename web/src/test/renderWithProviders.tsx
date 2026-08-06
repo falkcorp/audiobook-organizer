@@ -1,5 +1,6 @@
 // file: web/src/test/renderWithProviders.tsx
-// version: 1.1.0
+// version: 1.1.1
+// last-edited: 2026-08-06
 
 import React from 'react';
 import { render, type RenderOptions } from '@testing-library/react';
@@ -26,7 +27,7 @@ export function renderWithProviders(
 
   function Wrapper({ children }: { children: React.ReactNode }) {
     return (
-      <MemoryRouter initialEntries={initialEntries} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter initialEntries={initialEntries}>
         <ThemeProvider theme={testTheme}>{children}</ThemeProvider>
       </MemoryRouter>
     );

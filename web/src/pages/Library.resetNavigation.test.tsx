@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.resetNavigation.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4c8b1a2d-9e3f-4a7b-8c1d-2e3f4a5b6c7d
-// last-edited: 2026-07-11
+// last-edited: 2026-08-06
 
 import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, useNavigate } from 'react-router-dom';
@@ -79,7 +79,6 @@ describe('Library reset navigation (/library?reset=1)', () => {
     render(
       <MemoryRouter
         initialEntries={['/library?tag=metadata']}
-        future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
       >
         <ResetNavButton />
         <Library />
@@ -115,7 +114,6 @@ describe('Library reset navigation (/library?reset=1)', () => {
     render(
       <MemoryRouter
         initialEntries={['/library?search=foo']}
-        future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
       >
         <ResetNavButton />
         <Library />

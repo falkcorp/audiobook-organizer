@@ -1,7 +1,7 @@
 // file: web/src/pages/BookDetail.hash-chain.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4b2d9f7e-1c3a-4e5b-8a6d-9f0e1c2d3b4a
-// last-edited: 2026-07-11
+// last-edited: 2026-08-06
 
 import { render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -99,7 +99,6 @@ function setup(files: api.BookFile[]) {
   return render(
     <MemoryRouter
       initialEntries={['/library/book-1?tab=files']}
-      future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
     >
       <Routes>
         <Route path="/library/:id" element={<BookDetail />} />
