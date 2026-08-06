@@ -1,5 +1,12 @@
+// file: web/tsconfig.json
+// version: 1.1.0
+// guid: 5c1e9a74-8b32-4f60-a1d7-2e63b8f0c945
+// last-edited: 2026-08-06
 {
   "compilerOptions": {
+    // TypeScript 6.0 removed `baseUrl`. `paths` values are now resolved relative
+    // to this file, so they must be full-prefix ("./src/*", not "src/*").
+    "ignoreDeprecations": "6.0",
     "target": "ES2020",
     "useDefineForClassFields": true,
     "lib": ["ES2020", "DOM", "DOM.Iterable"],
@@ -16,7 +23,6 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
-    "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"]
     }
