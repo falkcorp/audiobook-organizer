@@ -49,7 +49,7 @@ own private "held" list.
 
 ## Infra reality (verified this session — informs Track B)
 
-- **Whisper** runs on the GPU box (172.16.3.22) via `WHISPER_REMOTE_URL=http://172.16.3.22:19847` — healthy, resident ~6 GB on the 8 GB RTX 2070 SUPER.
+- **Whisper** runs on the GPU box (<gpu-host>) via `WHISPER_REMOTE_URL=http://<gpu-host>:19847` — healthy, resident ~6 GB on the 8 GB RTX 2070 SUPER.
 - **Ollama** is installed on the box (v0.31.1) but **not running / fails to start headless**
   (`Unable to init instance … timed out`), and prod sets **no** `ai_backend.local_base_url`
   (falls back to the checked-in placeholder `192.168.0.20:11434`, which is dead from the server).

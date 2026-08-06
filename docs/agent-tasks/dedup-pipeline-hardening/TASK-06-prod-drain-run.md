@@ -6,7 +6,7 @@
 # TASK-06 — Prod drain of the ~387k exact-candidate backlog: dry-run → AskUserQuestion → apply → verify (INIT-2 T6) [NOT AGENT WORK — human + coordinator]
 
 **Gate:** PLAN -> EXECUTE AUTONOMOUSLY (worktree/PR/CI per task). EXCEPTIONS: T3's 387k-backlog drain and T6's CONS-10 prod drain are prod-data mutations -> dry-run FIRST, then a real AskUserQuestion apply gate. — THIS TASK IS THE EXCEPTION: nothing here is autonomous past the dry-run. The apply requires a real AskUserQuestion decision; a text-reply approval does NOT count (memory: feedback_prod_apply_review_gate).
-**File-ownership:** none — zero code files. This is an operational runbook against production (172.16.2.30).
+**File-ownership:** none — zero code files. This is an operational runbook against production (<server>).
 
 **Priority:** P1 · **Effort:** S · **Recommended subagent:** NONE — human + coordinator session · **Why:** prod-data mutation behind a human decision gate is not delegable to a subagent · **Depends on:** TASK-03 merged + deployed — the ONLY hard prerequisite. Deploy-batching preference: deploy once after TASK-05 also merges to avoid a second deploy; but if T05 (P2) is blocked or delayed, deploy on T03 alone and accept a second deploy later — never stall this P1 drain on the P2 perf task.
 
@@ -74,7 +74,7 @@ TASK-03) already exist. REUSE the op API exactly — do not hand-edit rows over 
 ## Step-by-step
 
 1. Preconditions block above (TASK-03 on main, `make deploy` done, service healthy — check
-   `systemctl is-active` via `ssh 172.16.2.30` and the server-logs skill if in doubt).
+   `systemctl is-active` via `ssh <server>` and the server-logs skill if in doubt).
 2. **Baseline count (read-only):** query pending exact candidates via the candidates list API
    (status=pending, layer=exact) and record the exact total. Use the existing full-scan path
    as-is — do NOT run `dedup.build-candidate-status-index` before the drain. Pre-drain,
@@ -118,7 +118,7 @@ TASK-03) already exist. REUSE the op API exactly — do not hand-edit rows over 
 # (3) post-apply verification counts reported with exact numbers.
 # Read-only verification example (adjust host/port/token path as provisioned):
 TOKEN=$(grep -o 'abk_[A-Za-z0-9_-]*' .claude/.api-token | head -1)
-curl -s -H "Authorization: Bearer $TOKEN" 'http://172.16.2.30:8080/api/v1/dedup/candidates?status=pending&layer=exact&limit=1' | head -c 400
+curl -s -H "Authorization: Bearer $TOKEN" 'http://<server>:8080/api/v1/dedup/candidates?status=pending&layer=exact&limit=1' | head -c 400
 ```
 
 Expected: JSON containing a `total` field — record it exactly; if the route/shape differs,

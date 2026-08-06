@@ -16,7 +16,7 @@ migration to a per-instance service container (`internal/serviceregistry`)
 where domain packages self-register via `init()` and `NewServer` just
 asks the container to build them.
 
-Production data lives on `172.16.2.30` (PebbleDB at
+Production data lives on `<server>` (PebbleDB at
 `/var/lib/audiobook-organizer/audiobooks.pebble`). **Always use
 `make deploy` after merging server-side changes** — `Makefile.local`
 builds, scp's, and restarts via systemd.

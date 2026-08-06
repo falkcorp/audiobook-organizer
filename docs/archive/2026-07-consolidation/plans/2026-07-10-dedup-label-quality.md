@@ -202,7 +202,7 @@ Priority: P0 · Effort: M (operator) · Agent: NOT AGENT WORK — operator-drive
 
 **Context.** Spec M4. `dedup.rebuild-gold-labels` dry-run → **AskUserQuestion** → apply (human rows preserved, rebuild_gold_labels.go:214-215) → re-run `dedup.calibrate-embedding-thresholds` → run `dedup.calibrate-composite` (dry-run; any apply is a second AskUserQuestion) → confirm precision floor reachable. Every apply step is dry-run first + a real AskUserQuestion decision — never a text-reply approval.
 
-**Exact files to change** — none (operations against prod 172.16.2.30 via the ops API).
+**Exact files to change** — none (operations against prod <server> via the ops API).
 
 **Idempotency.** Re-runnable on COMPLETED runs: rebuild apply is a stable no-op on unchanged state. ⚠ The apply itself is NON-ATOMIC (bulk delete of rule/auto rows, then per-row re-insert) and a partial failure is NOT healed by re-running rebuild — recovery is re-running the mining ops (`dedup.dataset-backfill` for rule rows, `dedup.mine-gold-labels` for auto_high_conf) then rebuild; see the brief. **Rollback.** Re-run rebuild after any further rule fix; human labels are never deleted; the JSONL export is NOT a restore path (no import op exists); no config is written without an approved recommendation.
 

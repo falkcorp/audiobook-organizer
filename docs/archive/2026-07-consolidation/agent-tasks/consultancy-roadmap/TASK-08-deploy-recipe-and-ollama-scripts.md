@@ -62,7 +62,7 @@ them.
   machine.
 - **OPS-2** (same doc, "OPS-2 — Windows GPU box is a triple
   single-point-of-failure held up by an interactive-session scheduled task"):
-  `172.16.3.22` serves Whisper transcription, bge-m3 embeddings, and the
+  `<gpu-host>` serves Whisper transcription, bge-m3 embeddings, and the
   qwen2.5 LLM. Ollama survives only via scheduled task **"OllamaServe"** bound
   to an interactive session (GPU access requires it) — logoff/reboot/Windows
   Update silently kills embeddings + LLM. The setup/start scripts exist **only
@@ -73,7 +73,7 @@ them.
   scratchpad-only. The fix pattern: anything referenced by prod must exist in
   git, with only secrets externalized.
 - **Status doc** `docs/status/2026-07-02-local-cutover-and-matching.md:30-38`
-  ("Local backend setup (Windows GPU box, 172.16.3.22)"): reached via
+  ("Local backend setup (Windows GPU box, <gpu-host>)"): reached via
   `ssh windows-gpu` (key preinstalled; alias defined in the operator's
   `~/.ssh/config`, not in this repo). PowerShell over that SSH path
   mis-parses scp'd `.ps1` — use `-EncodedCommand` (base64 UTF-16LE). Ollama is
@@ -96,14 +96,14 @@ them.
   If neither file is available to you, build the templates from the
   citations above and the `Makefile`'s own `backup` target (see step 2 below)
   — do not invent fields not implied by those sources. Redact real hostnames
-  down to what already appears in `docs/system/runbooks.md` (`172.16.2.30`)
-  and `docs/status/2026-07-02-local-cutover-and-matching.md` (`172.16.3.22`);
+  down to what already appears in `docs/system/runbooks.md` (`<server>`)
+  and `docs/status/2026-07-02-local-cutover-and-matching.md` (`<gpu-host>`);
   do **not** include any username, path under a real home directory, or token
   that isn't already public in those two committed docs. Using these two IPs
   in the `.example` templates and in `scripts/manage-ollama-windows.py` is
   licensed specifically because both already appear, unredacted, in the two
-  committed docs cited above (`runbooks.md` for `172.16.2.30`, the status doc
-  for `172.16.3.22`) — this is not a new PII disclosure and does not reopen
+  committed docs cited above (`runbooks.md` for `<server>`, the status doc
+  for `<gpu-host>`) — this is not a new PII disclosure and does not reopen
   the SEC-3 "internal infrastructure PII" finding, which concerns *other*
   identifiers not already committed elsewhere.
 
@@ -135,7 +135,7 @@ them.
    --tls-cert --tls-key --http3-port` flags) but mark clearly at the top that
    real secrets/paths (TLS cert paths, actual DB path) must be filled in by
    the operator, and that `WHISPER_REMOTE_URL` should point at their own
-   Windows GPU box. Use the `172.16.2.30` / `172.16.3.22` hosts since both
+   Windows GPU box. Use the `<server>` / `<gpu-host>` hosts since both
    already appear in committed docs — no new PII.
 
 2. **`Makefile.local.example`** (new file, repo root): a sanitized template
@@ -186,7 +186,7 @@ them.
    driven over the `windows-gpu` SSH alias (per the status doc — this is
    `ssh`-based, NOT WinRM like `manage-whisper-server.py`; do not copy its
    WinRM transport):
-   - `--status` — probe `http://172.16.3.22:11434/api/tags` (or run
+   - `--status` — probe `http://<gpu-host>:11434/api/tags` (or run
      `Invoke-RestMethod` remotely) and report which models are loaded;
      confirm `bge-m3` and `qwen2.5:7b-instruct` are present.
    - `--setup` — idempotent one-time setup: install Ollama via `winget` if

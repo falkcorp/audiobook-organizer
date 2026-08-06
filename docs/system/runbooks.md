@@ -7,7 +7,7 @@
 
 This document collects operational procedures for building, deploying, recovering, and maintaining the Audiobook Organizer in production.
 
-**Production host:** `172.16.2.30` (Linux, x86_64/amd64, ZFS raidz2 + NVMe special vdev)
+**Production host:** `<server>` (Linux, x86_64/amd64, ZFS raidz2 + NVMe special vdev)
 
 ## Deploy Runbook
 
@@ -16,8 +16,8 @@ flowchart TD
     Start["Start: changes merged to main"] --> Pull["git pull origin main"]
     Pull --> Build["make build\n(npm install + npm run build + go build -tags embed_frontend)"]
     Build --> Verify["Verify binary: file audiobook-organizer"]
-    Verify --> SCP["make deploy\n(cross-compile linux/amd64 + scp to 172.16.2.30)"]
-    SCP --> Restart["ssh 172.16.2.30 'sudo systemctl restart audiobook-organizer'"]
+    Verify --> SCP["make deploy\n(cross-compile linux/amd64 + scp to <server>)"]
+    SCP --> Restart["ssh <server> 'sudo systemctl restart audiobook-organizer'"]
     Restart --> Smoke["Smoke: GET /api/v1/auth/status → 200"]
     Smoke --> Done["Done"]
 
@@ -30,9 +30,9 @@ flowchart TD
 1. Ensure you are on `main` with a clean working tree: `git status`
 2. Run the full build: `make build` — this runs `npm install`, `npm run build`, and `go build -tags embed_frontend -o audiobook-organizer`
 3. Deploy: `make deploy` — cross-compiles for linux/amd64 and copies to the server. Never substitute manual scp; always run `make deploy` verbatim.
-4. Restart the service: `ssh 172.16.2.30 'sudo systemctl restart audiobook-organizer'`
-5. Smoke check: `curl -s https://172.16.2.30/api/v1/auth/status` should return `{"data": {...}}`
-6. Monitor logs for 60 seconds: `ssh 172.16.2.30 'journalctl -u audiobook-organizer -f --since now'`
+4. Restart the service: `ssh <server> 'sudo systemctl restart audiobook-organizer'`
+5. Smoke check: `curl -s https://<server>/api/v1/auth/status` should return `{"data": {...}}`
+6. Monitor logs for 60 seconds: `ssh <server> 'journalctl -u audiobook-organizer -f --since now'`
 
 For debug builds (verbose logging): use `make deploy-debug` instead of `make deploy`.
 
@@ -57,7 +57,7 @@ sudo systemctl restart audiobook-organizer
 Use when a parser fix has been shipped and you need to re-extract `TranscribedTitle/Author/Narrator` from already-stored transcription text without running Whisper again.
 
 ```bash
-curl -X POST https://172.16.2.30/api/v1/operations/v2 \
+curl -X POST https://<server>/api/v1/operations/v2 \
   -H "Authorization: Bearer abk_..." \
   -H "Content-Type: application/json" \
   -d '{"def_id":"maintenance.transcribe-book-intros","params":{"reparse_only":true}}'
@@ -66,7 +66,7 @@ curl -X POST https://172.16.2.30/api/v1/operations/v2 \
 Poll for completion:
 ```bash
 # Get op ID from the POST response, then:
-curl -s https://172.16.2.30/api/v1/operations/v2/<OP_ID> \
+curl -s https://<server>/api/v1/operations/v2/<OP_ID> \
   -H "Authorization: Bearer abk_..."
 ```
 
@@ -77,7 +77,7 @@ Expected outcome: parser rewrites `TranscribedTitle/Author/Narrator` for all boo
 Only run on the GPU machine (GTX 1050 Ti, sm_61). Requires the Windows GPU machine to be reachable from the server.
 
 ```bash
-curl -X POST https://172.16.2.30/api/v1/operations/v2 \
+curl -X POST https://<server>/api/v1/operations/v2 \
   -H "Authorization: Bearer abk_..." \
   -H "Content-Type: application/json" \
   -d '{"def_id":"maintenance.transcribe-book-intros","params":{}}'
@@ -94,7 +94,7 @@ curl -X POST https://172.16.2.30/api/v1/operations/v2 \
 
 ```bash
 # Step 1: dry-run triage (read-only)
-curl -X POST https://172.16.2.30/api/v1/operations/v2 \
+curl -X POST https://<server>/api/v1/operations/v2 \
   -H "Authorization: Bearer abk_..." \
   -d '{"def_id":"maintenance.dedup-exact-triage"}'
 
@@ -112,7 +112,7 @@ Purge skips books with iTunes persistent IDs (PID). Never auto-purge books linke
 ### Create backup
 
 ```bash
-curl -X POST https://172.16.2.30/api/v1/backup/create \
+curl -X POST https://<server>/api/v1/backup/create \
   -H "Authorization: Bearer abk_..."
 ```
 
@@ -143,7 +143,7 @@ journalctl -u audiobook-organizer | grep "memdb"
 If organize moved files and iTunes paths became stale (FilePath records no longer resolve):
 
 ```bash
-curl -X POST https://172.16.2.30/api/v1/operations/v2 \
+curl -X POST https://<server>/api/v1/operations/v2 \
   -H "Authorization: Bearer abk_..." \
   -d '{"def_id":"maintenance.itunes-heal"}'
 ```

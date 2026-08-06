@@ -111,7 +111,7 @@ export default function DelugeSettingsTab() {
           <TextField
             fullWidth
             label="Deluge Web URL"
-            placeholder="http://172.16.2.30:8112"
+            placeholder="http://<deluge-host>:8112"
             value={status?.url || ''}
             disabled
             helperText="Set deluge_web_url in server config or environment. Default password: deluge"

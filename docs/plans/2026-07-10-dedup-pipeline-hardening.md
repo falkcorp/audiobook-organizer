@@ -272,7 +272,7 @@ soft-reclassifies to `stale-drain` on apply, checkpoints via `drainStaleCheckpoi
 T3 v2 flag prevents double-apply. **Prod-data mutation: the AskUserQuestion gate is mandatory —
 a text-reply approval does not count** (memory: feedback_prod_apply_review_gate).
 
-**Exact files to change** — none (ops only: `make deploy`, op API calls against 172.16.2.30).
+**Exact files to change** — none (ops only: `make deploy`, op API calls against <server>).
 
 **Step-by-step** → brief `TASK-06-prod-drain-run.md`.
 

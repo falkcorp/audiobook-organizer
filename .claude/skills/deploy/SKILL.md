@@ -38,7 +38,7 @@ This builds the Linux binary with embedded frontend and deploys to the productio
 
 After deploy completes, verify the service is running:
 ```bash
-ssh jdfalk@<server-ip> 'curl -sk https://localhost:8484/api/v1/health'
+ssh <user>@<server-ip> 'curl -sk https://localhost:8484/api/v1/health'
 ```
 
 ## Rules

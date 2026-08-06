@@ -17,7 +17,7 @@
 **Repo conventions to know:**
 
 - Worktree-per-PR. Create with `git worktree add /Users/jdfalk/.worktrees/audiobook-organizer-<slug> -b <branch> origin/main`.
-- `make deploy` builds + scp's + restarts the systemd service on `172.16.2.30`. Run after every server-side merge.
+- `make deploy` builds + scp's + restarts the systemd service on `<server>`. Run after every server-side merge.
 - `gh pr merge <N> --rebase --admin --delete-branch` — repo uses rebase/FF only, never squash.
 - Skip pre-existing `SERVER-THIN-8` test failures in verification (`TestStartScanOperation`, `TestStartOrganizeOperation`, `TestITunesImport_*`, `TestE2E_ITunesImportOrganizeWriteBack`, `TestOrganizeService_ViaHTTP`, `TestAddImportPathAutoScan`, `TestBackfillExternalIDsCollectsBookPIDs`). Pass via `-skip`.
 - Server-side store access — prefer `s.Store()` / `mfs.db` / explicit store params; the `database.GetGlobalStore()` audit is complete (only intentional fallbacks remain).
@@ -2065,7 +2065,7 @@ EOF
 gh pr merge <N> --rebase --admin --delete-branch
 git checkout main && git pull --ff-only origin main
 make deploy
-sleep 3 && curl -sS -o /dev/null -w "HTTP %{http_code}\n" --max-time 5 http://172.16.2.30/api/v1/system/version
+sleep 3 && curl -sS -o /dev/null -w "HTTP %{http_code}\n" --max-time 5 http://<server>/api/v1/system/version
 ```
 
 Expected: HTTP 200.
@@ -2129,7 +2129,7 @@ Expected: deploys successfully; HTTP 200 on health check.
 
 - [ ] **Step 5: Smoke test in browser**
 
-1. Open `https://172.16.2.30` (or local equivalent) in a fresh tab.
+1. Open `https://<server>` (or local equivalent) in a fresh tab.
 2. Library page renders. "Review (N)" button visible with badge.
 3. Select 2 books. "Fetch Selected" appears in toolbar. Click it. Toast appears, dialog does not auto-open.
 4. Click "Review" toolbar button. Dialog opens with pending candidates.

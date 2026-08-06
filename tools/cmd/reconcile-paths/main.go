@@ -15,7 +15,7 @@
 //
 // SSH mode (dev box → prod):
 //
-//	RECONCILE_VIA_SSH=172.16.2.30 reconcile-paths ...
+//	RECONCILE_VIA_SSH=<server> reconcile-paths ...
 package main
 
 import (
@@ -87,7 +87,10 @@ type matchRecord struct {
 // ----- main -----
 
 func main() {
-	apiURL := flag.String("api", "https://172.16.2.30:8484", "API base URL")
+	// No baked-in default: this is a public repo and a hardcoded internal address is
+	// exactly the kind of fleet detail that must not ship in it. Mirrors the -key flag
+	// below, which already reads from the environment.
+	apiURL := flag.String("api", os.Getenv("AUDIOBOOK_API_URL"), "API base URL (or set AUDIOBOOK_API_URL env)")
 	outFile := flag.String("out", "/tmp/reconcile_dry_run.csv", "Output CSV path (use '-' for stdout)")
 	limit := flag.Int("limit", 0, "Max books to inspect (0 = all)")
 	apiKey := flag.String("key", "", "API key (or set AUDIOBOOK_API_KEY env)")

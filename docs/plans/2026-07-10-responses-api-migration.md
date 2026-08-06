@@ -149,7 +149,7 @@ applied, then the shared per-phase loop:
 - [ ] **Baseline snapshot (BEFORE `make deploy` — mandatory).** The soak pass criterion is a diff
       against a pre-deploy baseline, so the baseline must be captured and saved as an artifact
       before deploying. Run:
-      `ssh 172.16.2.30 "journalctl -u audiobook-organizer --since '-48h' | grep -i 'llmparser\|internal/ai' | sed 's/^[^ ]* [^ ]* [^ ]* //' | sort | uniq -c | sort -rn" > .claude/state/soak-baseline-<phase>.txt`
+      `ssh <server> "journalctl -u audiobook-organizer --since '-48h' | grep -i 'llmparser\|internal/ai' | sed 's/^[^ ]* [^ ]* [^ ]* //' | sort | uniq -c | sort -rn" > .claude/state/soak-baseline-<phase>.txt`
       — Expected: file written and committed to the worktree's `.claude/state/` (or otherwise
       preserved for the full soak window). This saved artifact is the ONLY baseline the soak-pass
       diff may use — a soak grep with no recorded pre-deploy baseline is automatically a FAIL.
@@ -159,7 +159,7 @@ applied, then the shared per-phase loop:
       the OpenAI `/v1/responses` arm is the only changed code in every phase, so a soak that
       exercised ONLY the local (Ollama) arm is a FAIL regardless of how clean the logs are (it
       soaked unchanged code). Run:
-      `ssh 172.16.2.30 "journalctl -u audiobook-organizer --since '-48h' | grep -i 'llmparser\|internal/ai' | sed 's/^[^ ]* [^ ]* [^ ]* //' | sort | uniq -c | sort -rn" > .claude/state/soak-post-<phase>.txt`
+      `ssh <server> "journalctl -u audiobook-organizer --since '-48h' | grep -i 'llmparser\|internal/ai' | sed 's/^[^ ]* [^ ]* [^ ]* //' | sort | uniq -c | sort -rn" > .claude/state/soak-post-<phase>.txt`
       then diff against `.claude/state/soak-baseline-<phase>.txt` — Expected: no NEW error
       signatures vs. the saved pre-deploy baseline (compare, don't zero-check).
       Fail → revert + `make deploy` + record in HOLD-STATUS.md + STOP the sequence.
@@ -175,7 +175,7 @@ applied, then the shared per-phase loop:
 - **M1 / T-A (wave 1, additive).** Includes GAP-1: add `useResponsesAPI bool` to `OpenAIParser`
   + set it in `register.go`'s OpenAI-mode arm (`grep -n 'EffectiveLLMMode' internal/ai/register.go`).
   Brief correction: implement as a two-arm dispatch, NOT a replacement (HOLD-STATUS §TASK-01).
-  Soak must exercise metadata LLM review in BOTH modes (OpenAI + local qwen2.5 on 172.16.3.22).
+  Soak must exercise metadata LLM review in BOTH modes (OpenAI + local qwen2.5 on <gpu-host>).
   Rollback: revert the single PR (within the soak window — see rollback-window note) — flag
   defaults false, so partial revert still fails safe to Chat.
 - **M2 / T-B (wave 2, transform).** 6 sites, each read individually; incremental

@@ -1493,13 +1493,13 @@ Run: `make deploy-debug`
 
 - [ ] **Step 5: Verify backfill starts**
 
-Check logs: `ssh 172.16.2.30 "journalctl -u audiobook-organizer --no-pager --since '2 min ago' | grep -i embed"`
+Check logs: `ssh <server> "journalctl -u audiobook-organizer --no-pager --since '2 min ago' | grep -i embed"`
 Expected: "Starting embedding backfill..." message, progress logs.
 
 - [ ] **Step 6: Verify API works**
 
 ```bash
-ssh 172.16.2.30 "curl -sk 'https://localhost:8484/api/v1/dedup/stats'"
+ssh <server> "curl -sk 'https://localhost:8484/api/v1/dedup/stats'"
 ```
 
 - [ ] **Step 7: Verify UI**

@@ -13,7 +13,7 @@
 // Usage examples:
 //
 //	merge-split-books -server http://localhost:8484 -api-token-file .api-token
-//	merge-split-books -server https://172.16.2.30:8484 -api-key $TOKEN --execute --limit 5
+//	merge-split-books -server https://<server>:8484 -api-key $TOKEN --execute --limit 5
 package main
 
 import (

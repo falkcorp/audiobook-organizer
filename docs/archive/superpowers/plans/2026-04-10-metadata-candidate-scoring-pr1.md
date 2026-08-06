@@ -1755,7 +1755,7 @@ Expected: binary deployed to the prod server, service restarted.
 - [ ] **Step 4: Verify the scorer is live**
 
 ```bash
-ssh jdfalk@unimatrixzero.local "journalctl -u audiobook-organizer --no-pager --since '2 min ago' | grep -iE 'metadata candidate scoring'"
+ssh <user>@unimatrixzero.local "journalctl -u audiobook-organizer --no-pager --since '2 min ago' | grep -iE 'metadata candidate scoring'"
 ```
 Expected: `[INFO] Metadata candidate scoring: embedding tier enabled`.
 
@@ -1764,7 +1764,7 @@ Expected: `[INFO] Metadata candidate scoring: embedding tier enabled`.
 Pick a book from the library via the UI or API, trigger a metadata search, and watch the logs:
 
 ```bash
-ssh jdfalk@unimatrixzero.local "journalctl -u audiobook-organizer -f --no-pager | grep metadata-search"
+ssh <user>@unimatrixzero.local "journalctl -u audiobook-organizer -f --no-pager | grep metadata-search"
 ```
 
 Expected log lines include:

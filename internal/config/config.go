@@ -699,7 +699,7 @@ type Config struct {
 	ITunes ITunesConfig `json:"itunes" mapstructure:"itunes"`
 
 	// Deluge integration
-	DelugeWebURL           string `json:"deluge_web_url"`           // e.g. "http://172.16.2.30:8112"
+	DelugeWebURL           string `json:"deluge_web_url"`           // e.g. "http://<deluge-host>:8112"
 	DelugeWebPassword      string `json:"deluge_web_password"`      // Web UI password (default: "deluge")
 	DelugeDiscoveryLabel   string `json:"deluge_discovery_label"`   // label to filter for discovery (e.g. "audiobooks")
 	DelugeDiscoveryEnabled bool   `json:"deluge_discovery_enabled"` // enable /discover endpoint (identify unimported torrents)

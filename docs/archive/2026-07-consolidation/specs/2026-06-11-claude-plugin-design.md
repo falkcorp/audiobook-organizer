@@ -110,7 +110,7 @@ Existing docs contain private values that must be replaced before the repo is pu
 
 | Current value | Replacement |
 |--------------|------------|
-| `172.16.2.30` | `<your-server-ip>` |
+| `<server>` | `<your-server-ip>` |
 | `unimatrixzero` | `<your-hostname>` |
 | Personal email | `<your-email>` |
 

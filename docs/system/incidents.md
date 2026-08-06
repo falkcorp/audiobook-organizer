@@ -68,7 +68,7 @@ This document records known failure modes, historical incidents, architectural d
 **Component:** `internal/itunes` — `BackfillExternalIDs`, file path tracking
 **Root cause:** An organize run moved ~19,922 iTunes-linked audio files into the organized library directory (`/mnt/bigdata/books/audiobook-organizer/`). The `BookFile.FilePath` records still pointed to the old import paths. `file_not_found` errors appeared for all affected iTunes tracks.
 **Fix (PR #1625):** New `maintenance.itunes-heal` op: parses iTunes XML as ground truth, builds a parallel filename index of the organized library, fans out 16 workers using `RunItems[T]` for O(1) map lookup + ZFS reflink per track. First run: 2,274 healed, 3,720 ambiguous, 5,349 not found on disk, 0 errors.
-**Prevention:** After any organize run, check for iTunes `file_not_found` errors in the activity log. Run `maintenance.itunes-heal` if present. Never dismiss iTunes `file_not_found` as "expected" — all files live on the NAS (172.16.2.30); zero Windows-local-only files exist.
+**Prevention:** After any organize run, check for iTunes `file_not_found` errors in the activity log. Run `maintenance.itunes-heal` if present. Never dismiss iTunes `file_not_found` as "expected" — all files live on the NAS (<server>); zero Windows-local-only files exist.
 
 ---
 

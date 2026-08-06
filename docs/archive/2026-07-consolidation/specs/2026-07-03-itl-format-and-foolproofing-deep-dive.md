@@ -145,7 +145,7 @@ was mutated, and (c) anchor to external truth for what the file *means*.
 ## Part B — Empirical census (server audit, 2026-07-03)
 
 `itl-check` (cross-compiled linux/amd64) against every library on
-`172.16.2.30`:
+`<server>`:
 
 | Library | Tracks | Playlists | Ver | Verdict | Notes |
 |---|---|---|---|---|---|

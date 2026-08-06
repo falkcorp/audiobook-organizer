@@ -411,7 +411,7 @@ func TestParseLogLine(t *testing.T) {
 		{"warn with subsystem", "2026/03/25 17:35:08 server.go:874: [warn] server: No params found", "warn", "server", "No params found"},
 		{"debug with subsystem", "2026/03/25 17:35:08 logger.go:103: [debug] metadata: extracting tags", "debug", "metadata", "extracting tags"},
 		{"error with subsystem", "2026/03/25 17:35:08 queue.go:271: [error] queue: operation failed", "error", "queue", "operation failed"},
-		{"GIN log", "[GIN] 2026/03/25 - 17:35:11 | 200 |    1.44s |    172.16.3.164 | GET      \"/api/v1/health\"", "info", "gin", "200 |    1.44s |    172.16.3.164 | GET      \"/api/v1/health\""},
+		{"GIN log", "[GIN] 2026/03/25 - 17:35:11 | 200 |    1.44s |    192.0.2.164 | GET      \"/api/v1/health\"", "info", "gin", "200 |    1.44s |    192.0.2.164 | GET      \"/api/v1/health\""},
 		{"plain log", "2026/03/25 17:35:08 server.go:965: Starting HTTPS server on 0.0.0.0:8484", "info", "server", "Starting HTTPS server on 0.0.0.0:8484"},
 		{"no prefix", "something unexpected happened", "info", "server", "something unexpected happened"},
 	}
@@ -986,7 +986,7 @@ func TestActivity_Integration_TeeWriterCapture(t *testing.T) {
 	w.Start()
 
 	fmt.Fprintln(w, "2026/03/25 17:35:08 logger.go:103: [info] scheduler: iTunes sync started")
-	fmt.Fprintln(w, "[GIN] 2026/03/25 - 17:35:11 | 200 |    1.44s |    172.16.3.164 | GET      \"/api/v1/health\"")
+	fmt.Fprintln(w, "[GIN] 2026/03/25 - 17:35:11 | 200 |    1.44s |    192.0.2.164 | GET      \"/api/v1/health\"")
 	fmt.Fprintln(w, "2026/03/25 17:35:08 logger.go:103: [warn] server: No params found for scan")
 
 	w.Stop() // flushes

@@ -295,7 +295,7 @@ do not begin without explicit sign-off.**
 
 Before any rewrite, create **two independent mirror backups** and verify both.
 
-- [ ] Backup 1 — the server (172.16.2.30):
+- [ ] Backup 1 — the server (<server>):
       `git clone --mirror https://github.com/falkcorp/audiobook-organizer.git /srv/backups/audiobook-organizer-preRewrite-$(date +%Y%m%d).git`
 - [ ] Backup 2 — a second host / offline copy (e.g. a lenserv node or external disk):
       `git clone --mirror https://github.com/falkcorp/audiobook-organizer.git /path/to/second/audiobook-organizer-preRewrite-$(date +%Y%m%d).git`

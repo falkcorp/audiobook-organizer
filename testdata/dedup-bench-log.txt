@@ -12,7 +12,7 @@ Flags:
       --mode string      Mode: groups, full, or both (default "both")
       --models strings   Models to test (default [gpt-4o,gpt-4o-mini,gpt-5,gpt-5-mini,o3-mini,o4-mini])
       --output string    Output directory for results (default "testdata/dedup-bench")
-      --server string    Remote server URL to fetch authors from (e.g., http://172.16.2.30:8484)
+      --server string    Remote server URL to fetch authors from (e.g., https://<server>:8484)
 
 Global Flags:
       --config string                     config file (default is $HOME/.audiobook-organizer.yaml)

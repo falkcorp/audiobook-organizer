@@ -156,7 +156,7 @@ func TestActivity_Integration_TeeWriterCapture(t *testing.T) {
 	w.Start(context.Background()) //nolint:errcheck
 
 	fmt.Fprintln(w, "2026/03/25 17:35:08 logger.go:103: [info] scheduler: iTunes sync started")
-	fmt.Fprintln(w, "[GIN] 2026/03/25 - 17:35:11 | 200 |    1.44s |    172.16.3.164 | GET      \"/api/v1/health\"")
+	fmt.Fprintln(w, "[GIN] 2026/03/25 - 17:35:11 | 200 |    1.44s |    192.0.2.164 | GET      \"/api/v1/health\"")
 	fmt.Fprintln(w, "2026/03/25 17:35:08 logger.go:103: [warn] server: No params found for scan")
 
 	_ = w.Stop(context.Background())

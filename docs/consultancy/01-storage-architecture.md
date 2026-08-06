@@ -5,7 +5,7 @@
 
 # Consultancy Evaluation — Storage & Architecture (2026-07-02)
 
-Evaluation run by a read-only multi-agent workflow (schema-auditor, db-design, and systems-expert specialists, cross-checked by an advisor pass). All findings are cited as `file:line` against the repo state on 2026-07-02. Production context: PebbleDB is the only primary store, ~50K books live on 172.16.2.30.
+Evaluation run by a read-only multi-agent workflow (schema-auditor, db-design, and systems-expert specialists, cross-checked by an advisor pass). All findings are cited as `file:line` against the repo state on 2026-07-02. Production context: PebbleDB is the only primary store, ~50K books live on <server>.
 
 ## Executive Summary
 

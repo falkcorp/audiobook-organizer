@@ -537,17 +537,17 @@ When invoked with a path or "staged changes":
 2. If given "staged": run `git diff --cached --name-only` and read those files
 3. If given no argument: scan `docs/` and `.claude-plugin/` as the highest-risk areas
 
-For each file, reason about whether values are real vs placeholders. A value like `172.16.2.30` in a curl example is real PII. A value like `<your-server-ip>` is a safe placeholder.
+For each file, reason about whether values are real vs placeholders. A value like `<server>` in a curl example is real PII. A value like `<your-server-ip>` is a safe placeholder.
 
 ## Output format
 
 ```
 FILE: docs/AI-REFERENCE.md
-  LINE 19: 172.16.2.30 — private IP address [BLOCKER]
+  LINE 19: <server> — private IP address [BLOCKER]
   LINE 19: unimatrixzero — internal hostname [BLOCKER]
 
 FILE: docs/implementation-guide.md
-  LINE 4: 172.16.2.30 — private IP address (appears in curl examples) [BLOCKER]
+  LINE 4: <server> — private IP address (appears in curl examples) [BLOCKER]
 
 SUMMARY: 2 files, 3 blockers, 0 warnings
 ACTION: Replace with <your-server-ip> and <your-hostname> before public release
@@ -764,11 +764,11 @@ sed -i '' \
   docs/HANDOFF-2026-05-13-night.md
 
 sed -i '' \
-  's|ssh jdfalk@<your-server-ip>|ssh <your-username>@<your-server-ip>|g' \
+  's|ssh <user>@<your-server-ip>|ssh <your-username>@<your-server-ip>|g' \
   docs/HANDOFF-2026-05-13-night.md
 
 sed -i '' \
-  's|jdfalk@172|<your-username>@<your-server-ip>|g' \
+  's|<user>@172|<your-username>@<your-server-ip>|g' \
   docs/HANDOFF-2026-05-13-night.md
 ```
 
@@ -785,7 +785,7 @@ sed -i '' \
 ```bash
 cd /Users/jdfalk/repos/github.com/jdfalk/audiobook-organizer-claude-plugin
 git diff --cached --name-only 2>/dev/null
-grep -rn "172\.16\.\|192\.168\.\|unimatrixzero\|jdfalk@" \
+grep -rn "172\.16\.\|192\.168\.\|unimatrixzero\|<user>@" \
   docs/AI-REFERENCE.md \
   docs/implementation-guide.md \
   docs/HANDOFF-2026-05-13-night.md \
@@ -844,7 +844,7 @@ gh pr create \
 - `project-context` skill: shared brain loader that reads live docs at runtime (no CI pipeline needed)
 - 6 specialist agents: `expert`, `go-specialist`, `db-design`, `schema-auditor`, `pii-scanner`, `docs-agent`
 - Pre-commit PII guard hook: blocks `git commit` if staged files contain private IPs or token patterns
-- Scrubs `172.16.2.30`, `unimatrixzero`, and related values from 4 tracked doc files
+- Scrubs `<server>`, `unimatrixzero`, and related values from 4 tracked doc files
 
 ## Test plan
 

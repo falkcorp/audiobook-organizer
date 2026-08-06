@@ -161,11 +161,11 @@ func TranscribeBatch(ctx context.Context, jobs map[string]string, onProgress Pro
 // typically drop. We prefer a non-snap install (e.g. installed via the
 // official uv installer to ~/.local/bin/uv) over the snap at /snap/bin/uv.
 func resolveUVBin() string {
-	// /home/jdfalk/.local has 700 perms — world-inaccessible to the audiobook
-	// service user. /home/jdfalk/uv is a copy with 755, world-executable.
+	// /home/<user>/.local has 700 perms — world-inaccessible to the audiobook
+	// service user. /home/<user>/uv is a copy with 755, world-executable.
 	// /usr/local/bin/uv would be ideal (requires root to install there).
 	candidates := []string{
-		"/home/jdfalk/uv",
+		"/home/<user>/uv",
 		"/usr/local/bin/uv",
 		"/opt/uv/bin/uv",
 	}
