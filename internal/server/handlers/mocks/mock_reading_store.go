@@ -309,6 +309,57 @@ func (_c *MockReadingStore_DeleteBookFile_Call) RunAndReturn(run func(id string)
 	return _c
 }
 
+// DeleteBookFilesByIDs provides a mock function for the type MockReadingStore
+func (_mock *MockReadingStore) DeleteBookFilesByIDs(ids []string) error {
+	ret := _mock.Called(ids)
+
+	if len(ret) == 0 {
+		panic("no return value specified for DeleteBookFilesByIDs")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func([]string) error); ok {
+		r0 = returnFunc(ids)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockReadingStore_DeleteBookFilesByIDs_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DeleteBookFilesByIDs'
+type MockReadingStore_DeleteBookFilesByIDs_Call struct {
+	*mock.Call
+}
+
+// DeleteBookFilesByIDs is a helper method to define mock.On call
+//   - ids []string
+func (_e *MockReadingStore_Expecter) DeleteBookFilesByIDs(ids any) *MockReadingStore_DeleteBookFilesByIDs_Call {
+	return &MockReadingStore_DeleteBookFilesByIDs_Call{Call: _e.mock.On("DeleteBookFilesByIDs", ids)}
+}
+
+func (_c *MockReadingStore_DeleteBookFilesByIDs_Call) Run(run func(ids []string)) *MockReadingStore_DeleteBookFilesByIDs_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 []string
+		if args[0] != nil {
+			arg0 = args[0].([]string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockReadingStore_DeleteBookFilesByIDs_Call) Return(err error) *MockReadingStore_DeleteBookFilesByIDs_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockReadingStore_DeleteBookFilesByIDs_Call) RunAndReturn(run func(ids []string) error) *MockReadingStore_DeleteBookFilesByIDs_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // DeleteBookFilesForBook provides a mock function for the type MockReadingStore
 func (_mock *MockReadingStore) DeleteBookFilesForBook(bookID string) error {
 	ret := _mock.Called(bookID)

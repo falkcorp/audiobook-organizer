@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
-// last-edited: 2026-08-04
+// last-edited: 2026-08-06
 
 package database
 
@@ -881,6 +881,166 @@ func (s *PebbleStore) DeleteBookFilesForBook(bookID string) error {
 	// Recompute book-level aggregates after bulk-deleting all files for this book.
 	// The book likely has Duration=0 after deletion, which is correct — nothing to sum.
 	s.notifyBookFileChange(bookID)
+	return nil
+}
+
+// DeleteBookFilesByIDs removes many BookFile rows (and their secondary indexes)
+// in ONE Pebble batch, ONE memdb transaction, and ONE aggregate recompute per
+// affected book — regardless of how many rows are being deleted.
+//
+// ── WHY THIS EXISTS ───────────────────────────────────────────────────────────
+//
+// DeleteBookFile pays a large FIXED cost per row, and that cost is the whole
+// problem. Measured against production, maintenance.dedupe-book-file-rows spent
+// ~1.35s PER DELETED ROW with only ~7ms of that scaling with the book's remaining
+// file count. Per-row deltas stayed flat (1.85/1.94/1.42/1.66/1.54s) while the
+// book's total_files fell 65 → 34, which is what proves it is fixed overhead and
+// not an O(R²) walk. Over the 2,901 redundant rows on prod that is ~1.3 hours of
+// almost pure waste.
+//
+// Per deleted row, DeleteBookFile's notifyBookFileChange → RecomputeBookAggregates
+// → UpdateBook chain pays:
+//   - two pebble.Sync commits (the row delete, then the book write)
+//   - one full copy-on-write book_ver:<id>:<nanos> snapshot, which marshals the
+//     ENTIRE old Book just to record that a duration changed
+//   - two go-memdb write transactions, each queueing on memdb's single global
+//     writer mutex
+//   - the book's file set read twice (RecomputeBookAggregates and the memdb
+//     resync), both unmarshalling AcoustIDFingerprint blobs neither one wants
+//
+// None of that is per-row work in principle — it is per-BOOK work being run once
+// per row. This method hoists it out of the loop. This is the same shape as the
+// existing DeleteBookFilesForBook, which is the proven pattern here; the only
+// difference is that the row set is given by ID instead of by owning book, so the
+// grouping has to be derived rather than assumed.
+//
+// ── FAIL-CLOSED ON UNRESOLVABLE IDs ───────────────────────────────────────────
+//
+// Resolution happens in a first pass that mutates NOTHING. If any ID fails to
+// resolve, this returns an error naming the offenders and deletes nothing at all.
+//
+// This deliberately DIVERGES from DeleteBookFile, which treats an unresolvable ID
+// as "already gone" and returns nil. That is defensible for a single row — there
+// is nothing else riding along, so the caller's intent is fully satisfied by doing
+// nothing. It is not defensible for a batch: an ID that does not resolve means the
+// caller's view of the store disagrees with the store, and a disagreement
+// discovered midway through a DESTRUCTIVE operation is the worst possible moment
+// to decide to press on with the other N-1 rows. This repo's dominant incident
+// class is exactly that shape — write-backs that proceeded on a stale view and
+// silently erased fields (see the AcoustIDFingerprint and Author/Series wipes).
+//
+// Fail-closed is cheap here specifically because both callers are re-runnable and
+// self-healing: they re-read the current row set from the store on every run, so a
+// stale ID simply is not in the next run's list and the deferred work completes
+// then. Nothing is lost, at most one batch is deferred by one run. Skip-and-
+// continue, by contrast, would normalise the disagreement into a silent counter
+// nobody reads.
+//
+// Callers that delete large ID sets should chunk them so that one stale ID defers
+// only its own chunk (see the orphan-book-files cleanup, which chunks at 500).
+//
+// ── RESOLUTION PATH ───────────────────────────────────────────────────────────
+//
+// Both of DeleteBookFile's lookup paths are preserved: the book_file_id index
+// first, then the legacy full scan. The scan fallback matters MORE under
+// fail-closed than it did per-row — a row written before the index existed is
+// still deletable today, and dropping the fallback would turn those rows from
+// "slow" into "aborts the entire batch".
+//
+// Rows are resolved to full BookFile structs here rather than accepted from the
+// caller on purpose: deleteBookFileSecondaryIndexes needs the AcoustID segment
+// fields, and the projections callers tend to have on hand (BookFileCore, memdb
+// rows) strip exactly those. An ID-only signature makes that mistake unavailable.
+func (s *PebbleStore) DeleteBookFilesByIDs(ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+
+	// ── Pass 1: resolve everything. No mutation happens in this loop. ──
+	seen := make(map[string]struct{}, len(ids))
+	resolved := make([]*BookFile, 0, len(ids))
+	resolvedIDs := make([]string, 0, len(ids))
+	// Affected books in first-seen order, so notification order is deterministic
+	// and a test can assert on it.
+	var affectedBooks []string
+	bookSeen := make(map[string]struct{})
+	var unresolved []string
+
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		if _, dup := seen[id]; dup {
+			// A duplicate ID in the input would otherwise queue the same key for
+			// deletion twice. Harmless in Pebble, but it would also double-count
+			// the row, so drop it here.
+			continue
+		}
+		seen[id] = struct{}{}
+
+		found := s.lookupBookFileByIDIndex(id)
+		if found == nil {
+			found = s.scanForBookFileByID(id)
+		}
+		if found == nil {
+			unresolved = append(unresolved, id)
+			continue
+		}
+
+		resolved = append(resolved, found)
+		resolvedIDs = append(resolvedIDs, id)
+		if _, ok := bookSeen[found.BookID]; !ok {
+			bookSeen[found.BookID] = struct{}{}
+			affectedBooks = append(affectedBooks, found.BookID)
+		}
+	}
+
+	if len(unresolved) > 0 {
+		// Name the offenders, but cap the list — a caller that hands us 500 stale
+		// IDs should not produce a 500-item error string in the op log.
+		shown := unresolved
+		suffix := ""
+		if len(shown) > 10 {
+			shown = shown[:10]
+			suffix = fmt.Sprintf(" (+%d more)", len(unresolved)-10)
+		}
+		return fmt.Errorf("DeleteBookFilesByIDs: %d of %d book_file id(s) did not resolve, nothing deleted: %s%s",
+			len(unresolved), len(ids), strings.Join(shown, ", "), suffix)
+	}
+	if len(resolved) == 0 {
+		return nil
+	}
+
+	// ── Pass 2: one batch, one Sync commit. ──
+	batch := s.db.NewBatch()
+	for _, f := range resolved {
+		primaryKey := []byte(fmt.Sprintf("book_file:%s:%s", f.BookID, f.ID))
+		if err := batch.Delete(primaryKey, nil); err != nil {
+			batch.Close()
+			return err
+		}
+		if err := s.deleteBookFileSecondaryIndexes(batch, f); err != nil {
+			batch.Close()
+			return err
+		}
+	}
+	if err := batch.Commit(pebble.Sync); err != nil {
+		return err
+	}
+
+	// ── Pass 3: derived state. Everything below is best-effort by design. ──
+	// The rows are committed and gone; a failure to refresh a cache or an
+	// aggregate must not be reported as a failed delete, or a caller would retry
+	// a delete that already succeeded. Same rule DeleteBookFile follows.
+	s.InvalidateLibraryStats()
+	s.MarkQuickQueryDirty("no_fingerprints", "delete_book_files_by_ids")
+	s.DeleteBookFilesFromMemDB(resolvedIDs)
+
+	// ONE recompute per affected book, not one per row. This is the actual fix —
+	// everything above is just what makes it safe to do.
+	for _, bookID := range affectedBooks {
+		s.notifyBookFileChange(bookID)
+	}
 	return nil
 }
 

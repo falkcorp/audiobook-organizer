@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/orphan_book_files.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9d2c4f6a-8e1b-4c5d-9a7b-3e5f1a2c4b6d
-// last-edited: 2026-07-07
+// last-edited: 2026-08-06
 
 package maintenance
 
@@ -20,8 +20,8 @@ import (
 // book_files cleanup op. When Delete is false (default), the op reports the
 // count of orphan rows but does not modify the database.
 type OrphanBookFilesCleanupParams struct {
-	// Delete, when true, removes each detected orphan book_file row via
-	// Store.DeleteBookFile. When false (default), the op is a dry run.
+	// Delete, when true, removes the detected orphan book_file rows via
+	// Store.DeleteBookFilesByIDs. When false (default), the op is a dry run.
 	Delete bool `json:"delete"`
 }
 
@@ -92,27 +92,63 @@ func (p *Plugin) runOrphanBookFilesCleanup(ctx context.Context, raw json.RawMess
 	prog.Start(fmt.Sprintf("Found %d orphan book_file row(s) out of %d (valid books: %d)",
 		total, totalFiles, totalBooks))
 	var deleted, failed int
-	for i, of := range orphans {
+
+	// Deletes go through Store.DeleteBookFilesByIDs in chunks rather than one
+	// DeleteBookFile per row. Per-row deletion costs ~1.35s of FIXED overhead each
+	// (a Sync commit, a full book-version snapshot, two memdb write transactions,
+	// and an aggregate recompute — all per-book work being run per row), which on a
+	// multi-thousand-row orphan sweep is hours of pure waste.
+	//
+	// ⚠️ THIS PATH HAS NO TRAILING RecomputeBookAggregates of its own, unlike
+	// dedupe-book-file-rows. It relies entirely on DeleteBookFilesByIDs notifying
+	// once per affected book. Do not "optimise" that notification away.
+	//
+	// (In practice a genuine orphan's owning book does not exist — that is what
+	// makes it an orphan — so the recompute finds no book and returns early. The
+	// notification still has to happen: findOrphanBookFiles decides orphanhood from
+	// a snapshot, and if a book turns out to exist after all, its aggregates must be
+	// corrected rather than left counting rows that are gone.)
+	//
+	// WHY CHUNKED and not one call for the whole list: DeleteBookFilesByIDs is
+	// fail-closed, so a single unresolvable ID aborts its entire call. Chunking
+	// bounds that blast radius to one chunk, which the next run picks up anyway
+	// because findOrphanBookFiles rescans from scratch. Chunking also preserves the
+	// two things the per-row loop gave us for free — a cancellation check and a
+	// progress tick often enough to keep the stuck-op watchdog fed.
+	const orphanDeleteChunk = 500
+	for start := 0; start < total; start += orphanDeleteChunk {
 		if ctx.Err() != nil {
 			_ = reporter.Log(slog.LevelWarn, "Orphan delete cancelled",
 				slog.Int("deleted", deleted),
 				slog.Int("failed", failed),
-				slog.Int("remaining", total-i),
+				slog.Int("remaining", total-start),
 			)
 			return ctx.Err()
 		}
-		if err := store.DeleteBookFile(of.ID); err != nil {
-			failed++
-			_ = reporter.Log(slog.LevelWarn, "Failed to delete orphan book_file",
-				slog.String("book_file_id", of.ID),
-				slog.String("book_id", of.BookID),
-				slog.String("file_path", of.FilePath),
+		end := min(start+orphanDeleteChunk, total)
+		chunk := orphans[start:end]
+
+		ids := make([]string, 0, len(chunk))
+		for i := range chunk {
+			ids = append(ids, chunk[i].ID)
+		}
+
+		if err := store.DeleteBookFilesByIDs(ids); err != nil {
+			// Fail-closed: nothing in this chunk was deleted, so count the whole
+			// chunk as failed rather than guessing at a partial result.
+			failed += len(ids)
+			_ = reporter.Log(slog.LevelWarn, "Failed to delete orphan book_file chunk",
+				slog.Int("chunk_start", start),
+				slog.Int("chunk_size", len(ids)),
+				slog.String("first_book_file_id", chunk[0].ID),
+				slog.String("first_book_id", chunk[0].BookID),
+				slog.String("first_file_path", chunk[0].FilePath),
 				slog.String("error", err.Error()),
 			)
 			continue
 		}
-		deleted++
-		prog.StepN(i+1, fmt.Sprintf("Deleting orphan book_files: %d/%d", i+1, total))
+		deleted += len(ids)
+		prog.StepN(end, fmt.Sprintf("Deleting orphan book_files: %d/%d", end, total))
 	}
 
 	final := fmt.Sprintf("Orphan book_file cleanup: deleted %d, failed %d (of %d detected)",
@@ -129,8 +165,8 @@ func (p *Plugin) runOrphanBookFilesCleanup(ctx context.Context, raw json.RawMess
 // return projections of the underlying tables without per-row decoding cost.
 //
 // This is the testable core of runOrphanBookFilesCleanup. It does not delete
-// anything — callers that want to delete iterate over the result and call
-// Store.DeleteBookFile themselves.
+// anything — callers that want to delete pass the resulting IDs to
+// Store.DeleteBookFilesByIDs themselves, in chunks.
 func findOrphanBookFiles(ctx context.Context, store database.Store) (orphans []database.BookFileCore, totalFiles int, totalBooks int, err error) {
 	if ctx.Err() != nil {
 		return nil, 0, 0, ctx.Err()
