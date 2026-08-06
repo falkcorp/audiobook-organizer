@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.119.0
+// version: 1.120.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-07-30
+// last-edited: 2026-08-06
 
 package database
 
@@ -96,7 +96,14 @@ type PebbleStore struct {
 	// warmup is in progress / failed). Reads load it lock-free; warmup
 	// stores it once it completes. Use the mem() helper to read; never
 	// touch memPtr directly outside the warmup path.
-	memPtr                   atomic.Pointer[MemStore]
+	memPtr atomic.Pointer[MemStore]
+	// memPending buffers write-throughs that arrive while memPtr is still nil
+	// because the async warmup hasn't published yet, and replays them into the
+	// MemStore immediately before it is published. Without it those writes were
+	// dropped outright and stayed invisible to every memdb-backed read for the
+	// life of the process. See memdb_pending.go for the invariant and the
+	// ordering argument.
+	memPending               memPendingBuffer
 	counterMu                sync.Mutex // protects nextID read-modify-write
 	opsMu                    sync.Mutex // serializes v2 op CAS operations (SetOperationV2StatusIfQueued)
 	reviewMu                 sync.Mutex // serializes review-item upserts so concurrent same-DedupKey writes can't duplicate rows (review_store.go)
@@ -144,12 +151,17 @@ func (p *PebbleStore) IsMemReady() bool { return p.memPtr.Load() != nil }
 // so subsequent write-throughs (UpsertAuthorToMemDB etc.) land in the published
 // memdb and GetAll* reads are deterministic.
 //
-// Tests MUST call this right after NewPebbleStore. Without it there is a race: a
-// write that lands while warmup is still snapshotting Pebble has its memdb
-// write-through dropped (memSync no-ops while mem()==nil), then warmup publishes a
-// memdb missing those rows — surfacing as the order-dependent "expected 3, got 2"
-// GetAll* flakes under the full -race suite. Production never needs this (warmup
-// is a one-time startup affair; reads fall back to Pebble until it publishes).
+// Tests that assert on memdb-backed reads should still call this right after
+// NewPebbleStore, so the read path under test is deterministically the memdb one
+// rather than the Pebble fallback.
+//
+// It is no longer required for CORRECTNESS. It used to be: a write landing while
+// warmup was still snapshotting Pebble had its memdb write-through dropped
+// (memSync no-oped while mem()==nil) and warmup then published a memdb missing
+// those rows — the order-dependent "expected 3, got 2" GetAll* flakes under the
+// full -race suite were this bug in miniature, and in production it silently hid
+// real rows from library listings until restart. Those writes are now buffered
+// and replayed before memdb publishes; see memdb_pending.go.
 func (p *PebbleStore) WaitForWarmup() {
 	if p.warmupDone != nil {
 		<-p.warmupDone
@@ -279,8 +291,23 @@ func NewPebbleStore(path string) (*PebbleStore, error) {
 	} else {
 		warmupCtx, warmupCancel := context.WithCancel(context.Background())
 		store.warmupCancel = warmupCancel
+
+		// Arm the pending-write buffer SYNCHRONOUSLY, before the goroutine is
+		// launched. NewPebbleStore returns to its caller as soon as `go` runs, and
+		// the server starts writing immediately; if arming happened inside the
+		// goroutine, a write that beat it there would be dropped exactly as it was
+		// before this fix. From here until publish, memSync records instead of
+		// dropping. See memdb_pending.go.
+		store.beginMemWarmupBuffering()
+
 		go func() {
 			defer close(store.warmupDone)
+			// Disarm on EVERY exit path — warmup error, Close() cancelling the
+			// context mid-scan, or success (where publishWarmMemStore has already
+			// disarmed and this is a no-op). Otherwise a cancelled warmup leaves
+			// the store buffering forever into a slice nobody drains.
+			defer store.endMemWarmupBuffering()
+
 			started := time.Now()
 			slog.Info("memdb warmup starting (async)")
 			if warmErr := memStore.WarmFromPebble(warmupCtx, store); warmErr != nil {
@@ -288,7 +315,11 @@ func NewPebbleStore(path string) (*PebbleStore, error) {
 					"error", warmErr, "duration_ms", time.Since(started).Milliseconds())
 				return
 			}
-			store.memPtr.Store(memStore)
+			// Replays the buffered write-throughs into memStore and publishes it in
+			// one critical section, so no write can land between the two.
+			if !store.publishWarmMemStore(memStore) {
+				return
+			}
 			slog.Info("memdb warmup published",
 				"duration_ms", time.Since(started).Milliseconds())
 		}()
@@ -3636,11 +3667,16 @@ func (p *PebbleStore) Reset() error {
 	// fails) immediately bypasses the stale snapshot. Without this, reads
 	// from memdb-backed paths (e.g. GetAllAuthors) would continue to return
 	// entries that were just deleted from Pebble.
-	if fresh, err := NewMemStore(); err == nil {
-		p.memPtr.Store(fresh)
-	} else {
-		p.memPtr.Store(nil)
+	//
+	// replaceMemStoreAfterReset also cancels any warmup still in flight: it
+	// holds a snapshot taken BEFORE the wipe above, and letting it publish would
+	// put rows back that no longer exist in Pebble.
+	fresh, err := NewMemStore()
+	if err != nil {
+		slog.Warn("Reset: memdb re-init failed, falling back to Pebble-only reads", "error", err)
+		fresh = nil
 	}
+	p.replaceMemStoreAfterReset(fresh)
 
 	return nil
 }

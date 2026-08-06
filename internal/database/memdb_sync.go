@@ -1,5 +1,5 @@
 // file: internal/database/memdb_sync.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000005
 // last-edited: 2026-08-06
 
@@ -17,20 +17,78 @@ import (
 
 // Write-through helpers from PebbleStore → MemStore.
 //
-// Each helper is a no-op when the MemStore is not initialized. Errors are
-// logged but do not propagate (Pebble remains the source of truth; a memdb
-// sync miss is recoverable by re-running WarmFromPebble on restart).
+// Every helper funnels through memSync, which routes the write one of three
+// ways depending on where startup is:
+//
+//   - memdb published        → apply immediately
+//   - warmup still running   → record for replay just before memdb publishes
+//     (memdb_pending.go — this is what stops writes
+//     from vanishing during the warmup window)
+//   - memdb disabled/failed  → drop; Pebble is authoritative and every read
+//     falls back to it
+//
+// Errors from an individual helper are logged but do not propagate: Pebble
+// remains the source of truth, and a memdb sync miss is recoverable by
+// re-running WarmFromPebble on restart.
 //
 // The functions in this file intentionally mirror the shape of chai_sync.go
 // so the call-site changes in Phase 2 are a one-line addition.
 
-// memSync runs fn inside a write transaction. Returns immediately if memdb
-// is not initialized. Always commits on success; aborts and logs on error.
+// memSync applies fn to the in-memory store, or records it for replay if the
+// async warmup has not published memdb yet.
+//
+// INVARIANT: no write that succeeds in Pebble may be absent from the published
+// memdb. This function is the only runtime mutation path into memdb, so it is
+// also the only place that invariant can be broken — and it used to be:
+//
+//	if p.mem() == nil { return }
+//
+// silently dropped every write-through for the ~2 minutes warmup takes on a
+// production-sized library, while the server was already serving and writing.
+// Anything written in that window's tail was in Pebble but permanently missing
+// from memdb. See memdb_pending.go for the full argument.
+//
+// The three states are decided under memPending.mu, which is also held across
+// the publish, so a concurrent write is either recorded before the publish
+// (replayed into it) or applied after it (memPtr already visible) — never
+// neither.
 func (p *PebbleStore) memSync(op string, fn func(txn memTxn) error) {
-	if p.mem() == nil {
+	p.memPending.mu.Lock()
+	if p.memPending.state == memPendingBuffering {
+		if len(p.memPending.ops) >= memPendingOpCap {
+			// Buffer full. Dropping this write silently is the original bug, so
+			// give up on memdb entirely instead: mark the warmup abandoned (it
+			// will refuse to publish), release the buffer, and shout. Reads then
+			// stay on Pebble — slower, but they cannot lie.
+			p.memPending.state = memPendingAbandoned
+			p.memPending.overflow = true
+			buffered := len(p.memPending.ops)
+			p.memPending.ops = nil
+			p.memPending.mu.Unlock()
+			slog.Error("memdb warmup: pending write buffer overflowed, abandoning memdb for this process; reads fall back to Pebble until restart",
+				"op", op, "buffered_ops", buffered, "cap", memPendingOpCap)
+			return
+		}
+		p.memPending.ops = append(p.memPending.ops, memPendingOp{op: op, fn: fn})
+		p.memPending.mu.Unlock()
 		return
 	}
-	txn := p.mem().db.Txn(true)
+	// Not buffering: either memdb is live (apply now) or it was never published
+	// / was abandoned (nothing to do — Pebble is authoritative and every read
+	// falls back to it).
+	m := p.mem()
+	p.memPending.mu.Unlock()
+	if m == nil {
+		return
+	}
+	applyMemSync(m, op, fn)
+}
+
+// applyMemSync runs fn inside a memdb write transaction. Always commits on
+// success; aborts and logs on error. Shared by the live path and by the warmup
+// replay, so a replayed write behaves exactly like a live one.
+func applyMemSync(m *MemStore, op string, fn func(txn memTxn) error) {
+	txn := m.db.Txn(true)
 	if err := fn(txn); err != nil {
 		txn.Abort()
 		slog.Warn("memdb sync failed (pebble still authoritative)",
