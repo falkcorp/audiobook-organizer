@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.savedFilterPresets.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: e7f8a9b0-c1d2-4e3f-8a9b-0c1d2e3f4a5b
-// last-edited: 2026-07-01
+// last-edited: 2026-08-06
 
 import { render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
@@ -75,7 +75,7 @@ describe('Library saved filter presets', () => {
   it('applying a saved preset updates the active filters', async () => {
     const user = userEvent.setup();
     render(
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter>
         <Library />
       </MemoryRouter>
     );
@@ -95,7 +95,7 @@ describe('Library saved filter presets', () => {
   it('saving the current filters as a new preset persists it', async () => {
     const user = userEvent.setup();
     render(
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter>
         <Library />
       </MemoryRouter>
     );
@@ -125,7 +125,7 @@ describe('Library saved filter presets', () => {
   it('deleting a preset removes it from the list', async () => {
     const user = userEvent.setup();
     render(
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter>
         <Library />
       </MemoryRouter>
     );

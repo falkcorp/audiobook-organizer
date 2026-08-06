@@ -1,5 +1,6 @@
 // file: web/src/pages/BookDetail.files-history.test.tsx
-// version: 1.1.0
+// version: 1.1.1
+// last-edited: 2026-08-06
 // guid: e6be4c8c-534d-44aa-bcb7-9089a8796df4
 
 import { render, screen, waitFor } from '@testing-library/react';
@@ -95,7 +96,6 @@ describe('BookDetail Files & History', () => {
     render(
       <MemoryRouter
         initialEntries={['/library/book-1?tab=files']}
-        future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
       >
         <Routes>
           <Route path="/library/:id" element={<BookDetail />} />

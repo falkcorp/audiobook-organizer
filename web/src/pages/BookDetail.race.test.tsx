@@ -1,7 +1,7 @@
 // file: web/src/pages/BookDetail.race.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7c1d9e2a-4f5b-4a6c-9d3e-2b8f7a1c0e6d
-// last-edited: 2026-07-13
+// last-edited: 2026-08-06
 
 import { act, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
@@ -64,7 +64,6 @@ describe('BookDetail load race (BOOKDETAIL-RACE)', () => {
     render(
       <MemoryRouter
         initialEntries={['/library/book-a']}
-        future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
       >
         <NavCapture />
         <Routes>

@@ -1,5 +1,6 @@
 // file: web/src/main.tsx
-// version: 1.4.0
+// version: 1.4.1
+// last-edited: 2026-08-06
 // guid: 1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
 
 import React, { useMemo } from 'react';
@@ -20,9 +21,7 @@ function AppRoot() {
 
   const app = (
     <ErrorBoundary>
-      <BrowserRouter
-        future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
-      >
+      <BrowserRouter>
         <ThemeProvider theme={theme}>
           <CssBaseline />
           <AuthProvider>
