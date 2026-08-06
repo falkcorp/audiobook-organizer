@@ -772,6 +772,19 @@ func (s *Server) startCacheWarmers() {
 		}
 		s.warmSeriesCache()
 	}()
+	// Pre-warm the metadata-results set. Memoised with a 60s TTL since #2142, but
+	// nothing populated it at boot, so the cache was cold after every restart and
+	// the first request into the match UI paid the whole build (~34s measured).
+	// Memoising moved that cost onto one unlucky request; warming removes it.
+	s.bgWG.Add("metadata-results-warmer")
+	go func() {
+		defer s.bgWG.Done("metadata-results-warmer")
+		defer warmerRecover("metadata-results")
+		if s.bgCtx.Err() != nil {
+			return // server already shutting down — skip, never warm a closing store
+		}
+		s.warmMetadataResultsCache()
+	}()
 
 	// Low-frequency background sweep that WARN-logs API keys approaching
 	// expiry or lacking one entirely (legacy keys) — observability only,
