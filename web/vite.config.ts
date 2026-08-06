@@ -1,7 +1,7 @@
 // file: web/vite.config.ts
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9a8b7c6d-5e4f-3a2b-1c0d-9e8f7a6b5c4d
-// last-edited: 2026-06-12
+// last-edited: 2026-08-06
 
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
@@ -14,6 +14,13 @@ export default defineConfig({
     alias: {
       '@': path.resolve(__dirname, './src'),
     },
+    // @vitejs/plugin-react 4.x added react/react-dom to resolve.dedupe for you;
+    // 5.x dropped that, so we set it explicitly to keep the previous behaviour.
+    // A second React instance reaching MUI/emotion is exactly the shape of the
+    // failure that took every page down with React error #130 during the vite 8
+    // attempt, and the e2e suite that would catch it is currently broken — so
+    // this stays pinned rather than relying on npm's tree happening to dedupe.
+    dedupe: ['react', 'react-dom'],
   },
   server: {
     port: 5173,

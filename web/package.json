@@ -1,6 +1,6 @@
 {
   "name": "audiobook-organizer-web",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -42,7 +42,7 @@
     "@types/node": "^22.20.1",
     "@types/react": "^18.2.43",
     "@types/react-dom": "^18.2.17",
-    "@vitejs/plugin-react": "^4.2.1",
+    "@vitejs/plugin-react": "5.1.4",
     "@vitest/coverage-v8": "^4.1.10",
     "axios": "^1.19.0",
     "eslint": "^10.8.0",

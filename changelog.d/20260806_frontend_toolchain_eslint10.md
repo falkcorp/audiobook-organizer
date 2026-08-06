@@ -1,5 +1,5 @@
 <!-- file: changelog.d/20260806_frontend_toolchain_eslint10.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: d0f2337c-43fc-4a24-b9aa-2239c0b2c946 -->
 <!-- last-edited: 2026-08-06 -->
 
@@ -54,3 +54,33 @@
   vite's `resolve.alias` both define is **not used anywhere** in `web/` — zero
   import specifiers reference it. The alias config in both files is dead weight and
   could be deleted, which is also why removing `baseUrl` carried no risk.
+
+- **`@vitejs/plugin-react` 4.7.0 → 5.1.4**, pinned exactly rather than with a caret.
+  This is independent of Vite 8: 5.1.4 peers `vite: "^4.2.0 || ^5 || ^6 || ^7"`, so
+  it runs on the Vite 7.3.6 this project is held at. The exact pin is deliberate —
+  `^5.1.4` floats to 5.2.0, which was published the same day as 6.0.0 as the 5.x
+  backport that widens the peer range to include Vite 8. Given this repo has a
+  standing incident report against Vite 8, the 5.x release that stays Vite-7-only is
+  the one we want, and a caret would silently drift off it. `vite.config.ts` now sets
+  `resolve.dedupe: ['react', 'react-dom']` explicitly, because plugin-react 4.x
+  added those two for you and 5.0.0 stopped doing so. npm's tree happens to
+  hoist a single React 18.3.1 today, so this is belt-and-braces — but a second
+  React instance reaching MUI/emotion is precisely the failure that took every page
+  down with React error #130 during the abandoned Vite 8 attempt, and the Playwright
+  suite that would catch it is currently broken, so the setting is pinned rather
+  than left to chance. Verified after the fact: `react-dom` appears in exactly one
+  built chunk. The other 5.0.0 breaking changes are inert here — the `exclude`
+  default moving from `[]` to `[/\/node_modules\//]` only narrows the transform away
+  from dependencies, and `disableOxcRecommendation` was never set.
+
+### Deprecated
+
+- **Vite is deliberately held at 7.x and TypeScript at 6.x.** Vite 8's rolldown
+  bundler is still excluded for the reason recorded inline in `web/vite.config.ts`:
+  a CJS/ESM interop bug resolved an MUI/emotion import to a namespace object and
+  crashed every page with React error #130. The upstream issue (vitejs/vite#22499)
+  is closed but no fixing version was ever confirmed. TypeScript 7 is blocked by
+  `typescript-eslint@8.66.0`, which peers `typescript: ">=4.8.4 <6.1.0"`; TS 7 is
+  the native Go rewrite and exposes no stable programmatic API until 7.1, so
+  forcing the install past the peer range crashes at runtime rather than merely
+  warning.
