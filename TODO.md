@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.16.2 -->
+<!-- version: 10.16.3 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-08-06 -->
 
@@ -449,18 +449,25 @@ into one of the curated sections below, is a normal direct edit.
 <!-- guid: d3690b58-1e7a-4f24-a905-62c8f7bd031e -->
 <!-- last-edited: 2026-08-05 -->
 
-- [ ] **Warm the metadata-results build at boot** — owner item 6 (2026-08-05).
+- [x] **Warm the metadata-results build at boot** — owner item 6 (2026-08-05,
+  shipped 2026-08-06).
 
-  The metadata-results build takes **34 s cold**. It was memoised (60 s TTL, PR
-  #2142) but is **not warmed at startup**, so the first person to open the match
-  UI after a restart eats the full 34 s. Warm it on boot.
+  The metadata-results build took **34 s cold**. It was memoised (60 s TTL, PR
+  #2142) but not warmed at startup, so the first person to open the match UI
+  after a restart ate the full 34 s.
 
-  Same cold-path class as authors/narrators failing to load on first paint —
-  worth fixing together rather than one at a time, since the pattern (expensive
-  aggregate, memoised but never pre-populated) recurs.
+  Shipped as `warmMetadataResultsCache`
+  ([`internal/server/metadata_results_warmer.go`](internal/server/metadata_results_warmer.go)),
+  enrolled in `startCacheWarmers` alongside the authors/series/facets/library-list
+  warmers, with `metadata_results_warmer_test.go` asserting both that it degrades
+  rather than panics on a nil store and that the cache is genuinely populated
+  afterwards.
 
-  Small and independent of the First Aid track; good candidate to pick up while
-  larger work is in flight.
+  ⚠️ Note for anyone auditing this later: the stale-while-revalidate work merged
+  the same night (PRs #2153/#2154, 46× measured on prod, 28.9 s → 0.63 s) is a
+  **different** fix for the same symptom. SWR keeps a warm cache from going cold
+  under load; it does not help the first request after a restart. Both were
+  needed, and only the warmer closes this item.
 
 <!-- file: todo.d/20260805_220500_relink_unlinked_books.md -->
 <!-- version: 1.0.0 -->
