@@ -76,6 +76,11 @@ func (p *Plugin) Register(r sdk.Registry) error {
 
 		// --- reconcile ---
 		p.reconcileScanDef(),
+		// relink-unlinked-books is reconcile-scan's COMPLEMENT: that op flags a
+		// book only when os.Stat on its path FAILS, this one flags books whose
+		// path resolves fine but which own zero book_file rows (17,149 of 44,886
+		// on 2026-08-05). Neither can see the other's population.
+		p.relinkUnlinkedBooksDef(),
 		p.itunesHealDef(),
 		p.introTranscribeDef(),
 		p.extractWAVClipsDef(),
