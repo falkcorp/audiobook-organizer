@@ -1,7 +1,7 @@
 // file: internal/audioutil/duration.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 03399668-0f87-4d27-b118-8315b574ef23
-// last-edited: 2026-07-18
+// last-edited: 2026-08-06
 
 // Package audioutil holds small, dependency-free helpers shared by the audio
 // processing packages (internal/mediainfo, internal/fingerprint,
@@ -12,11 +12,45 @@ package audioutil
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strconv"
 	"strings"
 )
+
+// ErrFFprobeNotAvailable is returned by LookupFFprobe when no ffprobe binary can
+// be resolved. It is a sentinel so callers can distinguish "the tool is missing"
+// from "the tool ran and the file was unreadable" — a distinction that matters
+// because the two demand opposite responses. A missing binary means EVERY probe
+// in a run will fail, so an op that treats it as a per-file error reports a
+// library full of unprobeable files: a clean-looking run that actually measured
+// nothing. Callers must check availability ONCE, up front, and refuse to run.
+var ErrFFprobeNotAvailable = errors.New("audioutil: ffprobe not found on PATH — install ffmpeg (which ships ffprobe)")
+
+// LookupFFprobe resolves the ffprobe binary on PATH, returning the absolute path
+// for callers to pass to ProbeDurationSeconds.
+//
+// This mirrors the detect-or-disable convention the fingerprint package already
+// uses (fingerprint.ErrNotAvailable + fingerprint.Available): resolve the binary
+// once, and let a feature that depends on it announce that it cannot run rather
+// than degrade into silently producing empty results.
+//
+// Resolving once and passing the path down also avoids re-running a PATH search
+// per file, which matters for ops that probe thousands of files.
+func LookupFFprobe() (string, error) {
+	p, err := exec.LookPath("ffprobe")
+	if err != nil {
+		return "", ErrFFprobeNotAvailable
+	}
+	return p, nil
+}
+
+// FFprobeAvailable reports whether LookupFFprobe would succeed.
+func FFprobeAvailable() bool {
+	_, err := LookupFFprobe()
+	return err == nil
+}
 
 // ProbeDurationSeconds shells out to ffprobe and returns the container's
 // reported duration in seconds, as a float64 with no rounding applied.

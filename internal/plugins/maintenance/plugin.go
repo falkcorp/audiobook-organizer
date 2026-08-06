@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
-// last-edited: 2026-08-04
+// last-edited: 2026-08-06
 
 package maintenance
 
@@ -81,6 +81,12 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		// path resolves fine but which own zero book_file rows (17,149 of 44,886
 		// on 2026-08-05). Neither can see the other's population.
 		p.relinkUnlinkedBooksDef(),
+		// probe-directory-books is relink's TIER-2 escalation, not a rival: relink
+		// classifies 44,887 books on a one-stat budget and must pass nil durations,
+		// which leaves ClassifyDir's series guard inert and parks every multi-file
+		// folder (1,019 of them). This op re-runs the same classifier over just
+		// that flagged set with real ffprobe durations filled in.
+		p.probeDirectoryBooksDef(),
 		p.itunesHealDef(),
 		p.introTranscribeDef(),
 		p.extractWAVClipsDef(),
