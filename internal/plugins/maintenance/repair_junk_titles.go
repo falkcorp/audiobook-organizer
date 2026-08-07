@@ -196,7 +196,7 @@ func (p *Plugin) runRepairJunkTitles(ctx context.Context, raw json.RawMessage, r
 	}, registry.RunItemsOptions{
 		Concurrency: titleRepairWorkers(),
 		ErrMode:     registry.ErrModeCollect,
-		Label: func(i, total int) string { return fmt.Sprintf("book %d/%d", i+1, total) },
+		Label:       func(i, total int) string { return fmt.Sprintf("book %d/%d", i+1, total) },
 	})
 	if runErr != nil && ctx.Err() != nil {
 		log.Warn("repair-junk-titles: cancelled", "repaired", repaired.Load())

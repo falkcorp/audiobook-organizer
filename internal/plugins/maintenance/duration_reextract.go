@@ -340,19 +340,19 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 	// All counters and the examples slice are owned exclusively by the collector
 	// goroutine (the main goroutine after the workers start). No locking needed.
 	var (
-		examined      int
-		eligible      int
-		wouldChange   int
-		roughlyDouble int
-		estimated     int
-		readErr       int
-		noPath        int
+		examined       int
+		eligible       int
+		wouldChange    int
+		roughlyDouble  int
+		estimated      int
+		readErr        int
+		noPath         int
 		fpBooks        int
 		ffprobeBooks   int
 		storedDurBooks int
 		written        int
-		examples      = make([]string, 0, exampleCap)
-		lastLog       = time.Now()
+		examples       = make([]string, 0, exampleCap)
+		lastLog        = time.Now()
 	)
 
 	heartbeat := func(force bool) {

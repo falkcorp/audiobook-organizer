@@ -109,10 +109,10 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 	if len(rawParams) > 0 {
 		_ = json.Unmarshal(rawParams, &params)
 	}
-	onlyMissing  := params.OnlyMissing == nil || *params.OnlyMissing
+	onlyMissing := params.OnlyMissing == nil || *params.OnlyMissing
 	retrySilence := params.RetrySilence != nil && *params.RetrySilence
-	reparseOnly  := params.ReparseOnly != nil && *params.ReparseOnly
-	extractOnly  := params.ExtractOnly != nil && *params.ExtractOnly
+	reparseOnly := params.ReparseOnly != nil && *params.ReparseOnly
+	extractOnly := params.ExtractOnly != nil && *params.ExtractOnly
 
 	log := reporter.Logger()
 

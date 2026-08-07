@@ -34,10 +34,10 @@ type DedupeBookFileRowsParams struct {
 
 func (p *Plugin) dedupeBookFileRowsDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:          "maintenance.dedupe-book-file-rows",
-		Plugin:      "maintenance",
-		DisplayName: "De-duplicate book_file rows",
-		Description: "Finds books holding MORE THAN ONE book_file row for the same file_path and removes the redundant rows, then recomputes the book's aggregates. Duplicated rows inflate a book's total duration and file size by the duplication factor. Dry-run by default — pass {\"apply\": true} to delete.",
+		ID:              "maintenance.dedupe-book-file-rows",
+		Plugin:          "maintenance",
+		DisplayName:     "De-duplicate book_file rows",
+		Description:     "Finds books holding MORE THAN ONE book_file row for the same file_path and removes the redundant rows, then recomputes the book's aggregates. Duplicated rows inflate a book's total duration and file size by the duplication factor. Dry-run by default — pass {\"apply\": true} to delete.",
 		ResumePolicy:    sdk.ResumeRestart,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.dedupe-book-file-rows",

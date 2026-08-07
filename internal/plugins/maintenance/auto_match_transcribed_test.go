@@ -44,7 +44,7 @@ func (d *autoMatchDeps) HasMetadataFetchService() bool { return true }
 
 // ptr helpers
 
-func boolPtr(b bool) *bool   { return &b }
+func boolPtr(b bool) *bool    { return &b }
 func strPtr(s string) *string { return &s }
 
 // newAutoMatchPlugin builds a Plugin + MockStore wired to the given books.
@@ -86,9 +86,9 @@ func TestAutoMatchTranscribed_Apply(t *testing.T) {
 	author := "Patrick Rothfuss"
 	books := []database.Book{
 		{
-			ID:              "b1",
-			Title:           "Name Wind",
-			TranscribedTitle: strPtr(trans),
+			ID:                "b1",
+			Title:             "Name Wind",
+			TranscribedTitle:  strPtr(trans),
 			TranscribedAuthor: strPtr(author),
 			// MetadataReviewStatus == nil → eligible
 		},

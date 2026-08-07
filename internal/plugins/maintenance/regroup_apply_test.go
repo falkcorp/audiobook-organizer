@@ -611,8 +611,8 @@ func TestApplyMultidisc_FlatSameDisc_SetsTracksNotDiscs(t *testing.T) {
 		"/lib/When We Were Sisters/When We Were Sisters_3.mp3",
 	}
 	ids, fpByPath := seedNumberedBooks(t, store, paths)
-	discs := []int{0, 0, 0}   // no disc concept — same recording
-	tracks := []int{1, 2, 3}  // sequential chapters
+	discs := []int{0, 0, 0}  // no disc concept — same recording
+	tracks := []int{1, 2, 3} // sequential chapters
 
 	apply := ApplyMultidisc(store, merge.NewService(store))
 	item := multidiscItemWithNumbers(t, "/lib/When We Were Sisters", ids, paths, discs, tracks)

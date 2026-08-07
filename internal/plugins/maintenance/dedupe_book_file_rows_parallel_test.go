@@ -35,9 +35,9 @@ func (r *concurrentReporter) UpdateProgress(cur, _ int, _ string) error {
 	return nil
 }
 func (r *concurrentReporter) Log(_ slog.Level, _ string, _ ...slog.Attr) error { return nil }
-func (r *concurrentReporter) Logger() *slog.Logger                            { return slog.Default() }
-func (r *concurrentReporter) Checkpoint(_ any) error                          { return nil }
-func (r *concurrentReporter) IsCanceled() bool                                { return false }
+func (r *concurrentReporter) Logger() *slog.Logger                             { return slog.Default() }
+func (r *concurrentReporter) Checkpoint(_ any) error                           { return nil }
+func (r *concurrentReporter) IsCanceled() bool                                 { return false }
 func (r *concurrentReporter) RunPhase(ctx context.Context, _ string, fn func(context.Context, registry.Reporter) error) error {
 	return fn(ctx, r)
 }
