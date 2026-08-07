@@ -204,6 +204,23 @@ var (
 	// credits in the announcement does not matter.
 	translatorByRe = regexp.MustCompile(`(?i)\b(?:translated|translation)\s+by\b`)
 
+	// combinedCreditByRe matches a SINGLE credit covering both roles:
+	// "Written and Narrated by James Gould", "authored and narrated by ...".
+	// Without it the "<verb> by" patterns miss (the verbs are conjoined, so
+	// "written by" never appears literally) and the split falls back to the bare
+	// "by" that sits AFTER both verbs — welding them onto the title:
+	//
+	//	'Bronze-ranked Brewer, Hawkins Magic Beers, Written and Narrated'
+	//	'... a dark fantasy-lit RPG Adventure 7, authored and narrated'
+	//
+	// Matching it also recovers real information: one person holds both roles,
+	// so Author and Narrator are the same name rather than the narrator being
+	// unknown. Both orderings appear in the wild.
+	combinedCreditByRe = regexp.MustCompile(`(?i)\b(?:` +
+		`(?:written|authored|created|adapted|produced)\s*(?:,\s*)?(?:and|&)\s*(?:read|narrated|performed|voiced)|` +
+		`(?:read|narrated|performed|voiced)\s*(?:,\s*)?(?:and|&)\s*(?:written|authored|created|adapted|produced)` +
+		`)\s+by\b`)
+
 	// titleSepRe separates TITLE from AUTHOR. The authorship-verb forms are
 	// listed FIRST so Go's leftmost-match rule consumes "written by" whole rather
 	// than matching the bare "by" inside it — which is what welded a credit verb
@@ -377,7 +394,17 @@ func ClassifyIntro(text string, pos IntroPosition) IntroClassification {
 // the result looks like an announcement rather than a sentence. Returns ok=false
 // when the "title" is prose — the check the old parser lacked entirely.
 func extractCredits(body string, hasCreditVerb bool) (f IntroFields, confidence float64, ok bool) {
+	// A combined "written and narrated by" credit must be tried FIRST: its verbs
+	// are conjoined, so the single-verb patterns miss and the split would fall
+	// back to the bare "by" that follows both, welding them onto the title.
+	combinedTitle, combinedRest, isCombined := splitOnFirstRe(combinedCreditByRe, body)
+
 	title, rest, hasSep := splitOnFirstRe(titleSepRe, body)
+	if isCombined && (!hasSep || len(combinedTitle) < len(title)) {
+		title, rest, hasSep = combinedTitle, combinedRest, true
+	} else {
+		isCombined = false
+	}
 	if !hasSep {
 		return IntroFields{}, 0, false
 	}
@@ -442,6 +469,14 @@ func extractCredits(body string, hasCreditVerb bool) (f IntroFields, confidence 
 	}
 	if f.Author == "" {
 		return IntroFields{}, 0, false
+	}
+
+	// "Written and Narrated by X" credits one person with both roles. The
+	// announcement carries no second name, so the narrator is known, not
+	// missing — recording it is a recovery, not an assumption.
+	if isCombined && f.Narrator == "" {
+		f.Narrator = f.Author
+		hasReadBy = true
 	}
 
 	// Confidence rises with how complete the announcement is: a title+author

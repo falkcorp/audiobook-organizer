@@ -88,3 +88,25 @@ func TestCreditOrderIsIrrelevant(t *testing.T) {
 		}
 	}
 }
+
+func TestCombinedCreditRecoversNarrator(t *testing.T) {
+	for _, tc := range []struct{ name, text, title, who string }{
+		{"written and narrated",
+			"This is audible. Bronze-ranked Brewer, Hawkins Magic Beers, Written and Narrated by James Gould. Chapter 1. Birds. Hawkins.",
+			"Bronze-ranked Brewer, Hawkins Magic Beers", "James Gould"},
+		{"narrated and written (reverse order)",
+			"Acme presents The Long Road, narrated and written by Dana Cole. Chapter 3. It rained.",
+			"The Long Road", "Dana Cole"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := ParseAudiobookIntro(tc.text)
+			if g.Title != tc.title {
+				t.Errorf("title\n want %q\n got  %q", tc.title, g.Title)
+			}
+			if g.Author != tc.who || g.Narrator != tc.who {
+				t.Errorf("combined credit must set BOTH roles to %q: author=%q narrator=%q",
+					tc.who, g.Author, g.Narrator)
+			}
+		})
+	}
+}
