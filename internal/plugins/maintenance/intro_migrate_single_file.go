@@ -294,13 +294,15 @@ var introMigratedFields = []string{
 	"TranscribedTitle",
 	"TranscribedAuthor",
 	"TranscribedNarrator",
+	"TranscribedTranslator",
+	"TranscribedCoverArtist",
 	"IntroTranscribedAt",
 	"TranscribeStatus",
 	"TranscribeError",
 	"TranscribeAttemptedAt",
 }
 
-// applyBookIntroFieldsToFile copies the eight-field intro-transcription group
+// applyBookIntroFieldsToFile copies the ten-field intro-transcription group
 // from a Book onto one of its BookFiles. It is the ONLY place this migration
 // mutates a BookFile, so the blast radius is one small function with a
 // reflective test pinning it.
@@ -313,6 +315,8 @@ func applyBookIntroFieldsToFile(dst *database.BookFile, src database.Book) {
 	dst.TranscribedTitle = src.TranscribedTitle
 	dst.TranscribedAuthor = src.TranscribedAuthor
 	dst.TranscribedNarrator = src.TranscribedNarrator
+	dst.TranscribedTranslator = src.TranscribedTranslator
+	dst.TranscribedCoverArtist = src.TranscribedCoverArtist
 	dst.IntroTranscribedAt = src.IntroTranscribedAt
 	dst.TranscribeStatus = src.TranscribeStatus
 	dst.TranscribeError = src.TranscribeError

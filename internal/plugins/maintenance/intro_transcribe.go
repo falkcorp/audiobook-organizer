@@ -778,6 +778,12 @@ func (p *Plugin) applyOutcome(
 		if fields.Narrator != "" {
 			book.TranscribedNarrator = &fields.Narrator
 		}
+		if fields.Translator != "" {
+			book.TranscribedTranslator = &fields.Translator
+		}
+		if fields.CoverArtist != "" {
+			book.TranscribedCoverArtist = &fields.CoverArtist
+		}
 	}
 
 	if _, err := store.UpdateBook(book.ID, book); err != nil {

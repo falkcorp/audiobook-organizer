@@ -142,6 +142,11 @@ type BookCore struct {
 	TranscribedTitle    *string `json:"transcribed_title,omitempty"`
 	TranscribedAuthor   *string `json:"transcribed_author,omitempty"`
 	TranscribedNarrator *string `json:"transcribed_narrator,omitempty"`
+	// TranscribedTranslator is credited between author and narrator in
+	// translated works; before it existed the author absorbed it.
+	TranscribedTranslator *string `json:"transcribed_translator,omitempty"`
+	// TranscribedCoverArtist is the album/cover art credit ("Cover art by X").
+	TranscribedCoverArtist *string `json:"transcribed_cover_artist,omitempty"`
 	// IntroTranscribedAt is when IntroTranscription was last populated.
 	IntroTranscribedAt *time.Time `json:"intro_transcribed_at,omitempty"`
 	// TranscribeStatus records the outcome of the most recent transcription attempt.
@@ -253,6 +258,8 @@ func (b *Book) Core() BookCore {
 		TranscribedTitle:         b.TranscribedTitle,
 		TranscribedAuthor:        b.TranscribedAuthor,
 		TranscribedNarrator:      b.TranscribedNarrator,
+		TranscribedTranslator:    b.TranscribedTranslator,
+		TranscribedCoverArtist:   b.TranscribedCoverArtist,
 		IntroTranscribedAt:       b.IntroTranscribedAt,
 		TranscribeStatus:         b.TranscribeStatus,
 		TranscribeError:          b.TranscribeError,
@@ -365,6 +372,8 @@ func (c *BookCore) ToBook() Book {
 		TranscribedTitle:         c.TranscribedTitle,
 		TranscribedAuthor:        c.TranscribedAuthor,
 		TranscribedNarrator:      c.TranscribedNarrator,
+		TranscribedTranslator:    c.TranscribedTranslator,
+		TranscribedCoverArtist:   c.TranscribedCoverArtist,
 		IntroTranscribedAt:       c.IntroTranscribedAt,
 		TranscribeStatus:         c.TranscribeStatus,
 		TranscribeError:          c.TranscribeError,

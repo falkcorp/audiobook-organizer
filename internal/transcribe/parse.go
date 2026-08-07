@@ -22,7 +22,12 @@ type IntroFields struct {
 	// "Kugane Maruyama Translated by Emily Balistreri".
 	Translator string
 	Narrator   string
-	Raw        string // original transcript, for debugging
+	// CoverArtist is the album/cover art credit ("Cover art by SoBin"). It was
+	// previously only a truncation boundary — recognised solely so it would stop
+	// contaminating the neighbouring name, then thrown away. Capturing it keeps
+	// the credit that the announcement actually contained.
+	CoverArtist string
+	Raw         string // original transcript, for debugging
 }
 
 // Whisper transcripts of audiobook intros follow a consistent spoken grammar:
@@ -67,7 +72,14 @@ var (
 	nameBoundaryRe = regexp.MustCompile(`(?i)\b(` +
 		`with an introduction|with a foreword|with an afterword|with a preface|` +
 		`introduction|foreword|afterword|preface|` +
-		`cover art|cover design|illustrated by|artwork by|music by|` +
+		`cover art|cover design|cover illustration|illustrated by|artwork by|music by|` +
+		// Any OTHER role credit ends this name. Without these the author ran
+		// straight through "Translated by ..." into the next credit — the exact
+		// corruption seen on prod ('Kugane Maruyama Translated by Emily
+		// Balistreri'). Each role is extracted separately by its own anchor;
+		// here they serve only to terminate the preceding name.
+		`translated by|translation by|narrated by|read by|performed by|voiced by|` +
+		`edited by|adapted by|produced by|directed by|` +
 		`no one writes|and of course|and i would|i would like|would like to thank|` +
 		`this is a production|this is an? [\w']+ production|a production of|` +
 		`unabridged|abridged|copyright|all rights|published by|` +

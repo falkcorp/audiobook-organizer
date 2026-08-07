@@ -216,6 +216,10 @@ var (
 	// Matching it also recovers real information: one person holds both roles,
 	// so Author and Narrator are the same name rather than the narrator being
 	// unknown. Both orderings appear in the wild.
+	// coverArtByRe anchors the album/cover art credit. Like translatorByRe it is
+	// kept separate so the role is found wherever it appears in the credit run.
+	coverArtByRe = regexp.MustCompile(`(?i)\b(?:cover\s+art|cover\s+design|cover\s+illustration|artwork|illustrated)\s+by\b`)
+
 	combinedCreditByRe = regexp.MustCompile(`(?i)\b(?:` +
 		`(?:written|authored|created|adapted|produced)\s*(?:,\s*)?(?:and|&)\s*(?:read|narrated|performed|voiced)|` +
 		`(?:read|narrated|performed|voiced)\s*(?:,\s*)?(?:and|&)\s*(?:written|authored|created|adapted|produced)` +
@@ -390,6 +394,25 @@ func ClassifyIntro(text string, pos IntroPosition) IntroClassification {
 	}
 }
 
+// roleFromSpans finds a secondary credit (translator, cover artist) by anchoring
+// on its own verb and searching each span in turn.
+//
+// Searching BOTH the author and narrator spans is what makes credit ORDER
+// irrelevant: a translator credited before the narrator lands in the author
+// span, one credited after lands in the narrator span, and either is found.
+// Checking only the author span made the parse order-dependent — caught by
+// TestCreditOrderIsIrrelevant, not by inspection.
+func roleFromSpans(re *regexp.Regexp, spans ...string) string {
+	for _, s := range spans {
+		if _, tail, ok := splitOnFirstRe(re, s); ok {
+			if name := truncateName(tail); name != "" {
+				return name
+			}
+		}
+	}
+	return ""
+}
+
 // extractCredits runs the staged title/author/narrator split and validates that
 // the result looks like an announcement rather than a sentence. Returns ok=false
 // when the "title" is prose — the check the old parser lacked entirely.
@@ -454,18 +477,14 @@ func extractCredits(body string, hasCreditVerb bool) (f IntroFields, confidence 
 	// "Narrated by Y. Translated by X" left the translator welded onto the
 	// narrator instead. Anchoring each role on its own verb, and searching both
 	// spans, is what actually makes order irrelevant.
-	authorPart, authorTail, translatorInAuthor := splitOnFirstRe(translatorByRe, author)
-	narratorPart, narratorTail, translatorInNarrator := splitOnFirstRe(translatorByRe, narrator)
+	f.Translator = roleFromSpans(translatorByRe, author, narrator)
+	f.CoverArtist = roleFromSpans(coverArtByRe, author, narrator)
 
-	f.Author = truncateName(authorPart)
+	// Author and Narrator are whatever precedes the FIRST secondary credit in
+	// their span; truncateName cuts at those anchors via nameBoundaryRe.
+	f.Author = truncateName(author)
 	if hasReadBy {
-		f.Narrator = truncateName(narratorPart)
-	}
-	switch {
-	case translatorInAuthor:
-		f.Translator = truncateName(authorTail)
-	case translatorInNarrator:
-		f.Translator = truncateName(narratorTail)
+		f.Narrator = truncateName(narrator)
 	}
 	if f.Author == "" {
 		return IntroFields{}, 0, false

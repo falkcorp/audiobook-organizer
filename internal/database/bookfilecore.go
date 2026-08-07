@@ -83,13 +83,18 @@ type BookFileCore struct {
 
 	// Per-file intro transcription — the 7 RETAINED fields. IntroTranscription
 	// (the raw transcript) is deliberately absent: it is the stripped one.
-	TranscribedTitle      *string    `json:"transcribed_title,omitempty"`
-	TranscribedAuthor     *string    `json:"transcribed_author,omitempty"`
-	TranscribedNarrator   *string    `json:"transcribed_narrator,omitempty"`
-	IntroTranscribedAt    *time.Time `json:"intro_transcribed_at,omitempty"`
-	TranscribeStatus      *string    `json:"transcribe_status,omitempty"`
-	TranscribeError       *string    `json:"transcribe_error,omitempty"`
-	TranscribeAttemptedAt *time.Time `json:"transcribe_attempted_at,omitempty"`
+	TranscribedTitle    *string `json:"transcribed_title,omitempty"`
+	TranscribedAuthor   *string `json:"transcribed_author,omitempty"`
+	TranscribedNarrator *string `json:"transcribed_narrator,omitempty"`
+	// TranscribedTranslator is credited between author and narrator in
+	// translated works; before it existed the author absorbed it.
+	TranscribedTranslator *string `json:"transcribed_translator,omitempty"`
+	// TranscribedCoverArtist is the album/cover art credit ("Cover art by X").
+	TranscribedCoverArtist *string    `json:"transcribed_cover_artist,omitempty"`
+	IntroTranscribedAt     *time.Time `json:"intro_transcribed_at,omitempty"`
+	TranscribeStatus       *string    `json:"transcribe_status,omitempty"`
+	TranscribeError        *string    `json:"transcribe_error,omitempty"`
+	TranscribeAttemptedAt  *time.Time `json:"transcribe_attempted_at,omitempty"`
 }
 
 // Core returns the BookFileCore projection of f — every BookFile field that
@@ -139,6 +144,8 @@ func (f *BookFile) Core() BookFileCore {
 		TranscribedTitle:               f.TranscribedTitle,
 		TranscribedAuthor:              f.TranscribedAuthor,
 		TranscribedNarrator:            f.TranscribedNarrator,
+		TranscribedTranslator:          f.TranscribedTranslator,
+		TranscribedCoverArtist:         f.TranscribedCoverArtist,
 		IntroTranscribedAt:             f.IntroTranscribedAt,
 		TranscribeStatus:               f.TranscribeStatus,
 		TranscribeError:                f.TranscribeError,
