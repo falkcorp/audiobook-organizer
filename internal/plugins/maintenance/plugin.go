@@ -90,6 +90,7 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.itunesHealDef(),
 		p.introTranscribeDef(),
 		p.repairTranscribeStatusDef(),
+		p.introMigrateSingleFileDef(),
 		p.extractWAVClipsDef(),
 
 		// --- title cleanup ---
