@@ -1,7 +1,7 @@
 // file: internal/transcribe/parse.go
-// version: 2.0.0
+// version: 3.0.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-06-28
+// last-edited: 2026-08-07
 
 package transcribe
 
@@ -20,13 +20,13 @@ type IntroFields struct {
 
 // Whisper transcripts of audiobook intros follow a consistent spoken grammar:
 //
-//	"[Publisher] (audio) presents [TITLE] by [AUTHOR]. Read by [NARRATOR]. <noise>"
+//	"[Publisher] (audio) presents [TITLE] written by [AUTHOR]. Read by [NARRATOR]. <noise>"
 //
-// but Whisper rarely emits punctuation, so the old end-anchored regexes failed
-// and dumped the entire post-"by" acknowledgements wall into Author. We parse in
-// explicit stages instead: strip the credit prefix, split the title on the first
-// " by ", split author/narrator on "read by", then truncate each name field at
-// the first prose/acknowledgement boundary.
+// but Whisper rarely emits punctuation, so end-anchored regexes fail and dump
+// the entire post-"by" acknowledgements wall into Author. The staged extraction
+// that solves this now lives in classify.go, which owns the split regexes; what
+// remains here are the shared shaping helpers (name truncation, whitespace) and
+// the boundary/prefix patterns both files use.
 var (
 	// "[Publisher] (audio) presents " — bounded to ~80 chars so a real title that
 	// happens to contain "presents" later isn't eaten.
@@ -34,12 +34,6 @@ var (
 
 	// Common junk openers captured by the 90s clip before the real announcement.
 	junkOpenerRe = regexp.MustCompile(`(?i)^(?:this is audible[.,]?\s+|audible hopes you enjoy[^.]*\.\s+|an audible original[.,]?\s+|brilliance audio[.,]?\s+)`)
-
-	// First standalone "by" separating title from author.
-	byRe = regexp.MustCompile(`(?i)\bby\b`)
-
-	// "read|narrated|performed by" separating author from narrator.
-	readByRe = regexp.MustCompile(`(?i)\b(?:read|narrated|performed)\s+by\b`)
 
 	// Strong boundary marking the end of a name and the start of prose/noise.
 	// Everything from here on is acknowledgements, blurb, or chapter text.
@@ -65,49 +59,31 @@ var connectorWords = map[string]bool{
 
 // ParseAudiobookIntro extracts title, author, and narrator from a raw
 // transcription of an audiobook's opening seconds. Returns zero-value
-// IntroFields if the text doesn't contain a recognizable "<title> by <author>"
-// announcement.
+// IntroFields when the text is not a recognizable book-opening announcement.
+//
+// This is now a thin wrapper over ClassifyIntro, which is the real parser. The
+// wrapper exists because "does this yield fields?" is the question two existing
+// callers ask (reconcile/itunes_heal.go and the reparse path), and they have no
+// file position to supply.
+//
+// The behavioural change from delegating: text that merely CONTAINS a standalone
+// "by" no longer produces fields. It has to be an announcement. Measured against
+// a 600-transcript production corpus, the old direct-split behaviour welded a
+// leaked verb onto 168 titles ("Awakened Essence 1 Written") and turned ~900
+// characters of narrative prose into a "title" whenever a chapter opened with
+// text containing "by".
+//
+// ⚠️ Callers needing the three-way verdict — in particular anything deciding
+// whether a file STARTS a book — must call ClassifyIntro directly. Absent fields
+// here mean "not an announcement", which is NOT the same as "not a book start":
+// only IntroKindUnknown vs IntroKindProse distinguishes those, and this
+// signature cannot express it.
 func ParseAudiobookIntro(text string) IntroFields {
-	out := IntroFields{Raw: text}
-
-	norm := collapseWS(strings.Join(splitLines(text), " "))
-	if norm == "" {
-		return out
+	c := ClassifyIntro(text, UnknownPosition)
+	if c.Kind != IntroKindCredits {
+		return IntroFields{Raw: text}
 	}
-
-	// 1. Strip junk openers, then the "[Publisher] presents" credit prefix.
-	norm = junkOpenerRe.ReplaceAllString(norm, "")
-	norm = presentsPrefixRe.ReplaceAllString(norm, "")
-	norm = strings.TrimSpace(norm)
-
-	// 2. Split title from the rest on the FIRST standalone "by". Without the
-	// "<title> by <author>" grammar there is no trustworthy announcement — a 90s
-	// Whisper clip with no "by" is almost always a jingle/disclaimer ("This is
-	// Audible.") or chapter text, so we extract nothing rather than guess a title.
-	title, rest, hasBy := splitOnFirstRe(byRe, norm)
-	if !hasBy {
-		return out
-	}
-	out.Title = clean(title)
-
-	// 3. Split author (before "read by") from narrator (after).
-	author, narrator, hasReadBy := splitOnFirstRe(readByRe, rest)
-	out.Author = truncateName(author)
-	if hasReadBy {
-		out.Narrator = truncateName(narrator)
-	}
-
-	if out.Title != "" && out.Author != "" {
-		return out
-	}
-
-	// 4. Last-resort fallback: the old line-by-line / whole-text patterns, in
-	// case staged extraction produced nothing usable (e.g. an unusual intro).
-	if f := legacyPatternParse(text); f.Title != "" && f.Author != "" {
-		f.Raw = text
-		return f
-	}
-	return out
+	return c.Fields
 }
 
 // truncateName trims a candidate name field down to just the name: it cuts at
@@ -138,37 +114,6 @@ func truncateName(s string) string {
 		break
 	}
 	return clean(strings.Join(fields, " "))
-}
-
-// legacyPatternParse is the previous regex-list approach, kept only as a
-// last-resort fallback for intros the staged parser can't handle.
-func legacyPatternParse(text string) IntroFields {
-	var out IntroFields
-	patterns := []*regexp.Regexp{
-		regexp.MustCompile(`(?i)^(?P<title>.+?)\s+by\s+(?P<author>.+?)[,\.]\s+(?:read|narrated)\s+by\s+(?P<narrator>.+?)[\.\,]?$`),
-		regexp.MustCompile(`(?i)^(?P<title>.+?)\s+by\s+(?P<author>.+?)\.\s+(?:read|narrated)\s+by\s+(?P<narrator>.+?)\.?$`),
-		regexp.MustCompile(`(?i)^(?P<title>.+?)\s+by\s+(?P<author>.+?)[\.\,]?$`),
-	}
-	candidates := append(splitLines(text), strings.Join(splitLines(text), " "))
-	for _, line := range candidates {
-		line = strings.TrimSpace(line)
-		if len(line) < 5 {
-			continue
-		}
-		for _, re := range patterns {
-			m := reNamedMatch(re, line)
-			if m == nil {
-				continue
-			}
-			out.Title = clean(m["title"])
-			out.Author = clean(m["author"])
-			out.Narrator = clean(m["narrator"])
-			if out.Title != "" && out.Author != "" {
-				return out
-			}
-		}
-	}
-	return out
 }
 
 // MatchesTrack returns true when the parsed intro's title/author overlap
@@ -231,18 +176,4 @@ func clean(s string) string {
 	s = strings.TrimSpace(s)
 	s = strings.Trim(s, ".,;:")
 	return strings.TrimSpace(s)
-}
-
-func reNamedMatch(re *regexp.Regexp, s string) map[string]string {
-	m := re.FindStringSubmatch(s)
-	if m == nil {
-		return nil
-	}
-	result := make(map[string]string)
-	for i, name := range re.SubexpNames() {
-		if name != "" && i < len(m) {
-			result[name] = m[i]
-		}
-	}
-	return result
 }

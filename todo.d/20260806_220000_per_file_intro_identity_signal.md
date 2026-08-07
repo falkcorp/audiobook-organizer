@@ -1,7 +1,7 @@
 <!-- file: todo.d/20260806_220000_per_file_intro_identity_signal.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 3a7c2e94-5b18-4d60-9f27-c8140b6e3d52 -->
-<!-- last-edited: 2026-08-06 -->
+<!-- last-edited: 2026-08-07 -->
 
 - [ ] **Per-file intro transcription as the primary book-identity signal** — owner
   design 2026-08-06. Storage and the first-file sort fix are **DONE** (PRs #2168);
@@ -29,16 +29,28 @@
 
   ### Remaining work
 
-  - [ ] **Three-outcome parser.** `ParseAudiobookIntro` splits on the first
-        standalone `"by"` and returns credits-or-nothing. Confirmed prod false
-        positives: a book in a *Girls with Rebel Souls* folder parsed as
-        `"Meet Me in Paradise / Libby Hubscher"`, and prose *"...he wasn't mildly
-        amused by Memphis fortunes"* parsed as TITLE/AUTHOR. Must distinguish
-        **book-opening credits** / **chapter announcement** (*"This part includes
-        Chapter 2"*, *"Welcome to X Audio Books"*) / **prose**. Per-file storage
-        unlocks the discriminator that fixes this: **position** — a real opening
-        is at track 1, prose-containing-"by" is at any track. That is why the
-        disc-aware sort fix (#2168) was a prerequisite and not cleanup.
+  - [x] **Three-outcome parser.** ✅ DONE 2026-08-07 — `ClassifyIntro`
+        (`internal/transcribe/classify.go`) returns credits / chapter / prose /
+        unknown with a typed reason, confidence, and chapter number. **Position
+        is a weight, never a veto**: credits at ordinal >0 IS the shattered-book
+        signal, so vetoing it would hide the very finding this was built to
+        surface. Both confirmed prod false positives are covered — the *Girls
+        with Rebel Souls* case is reclassified as **misfiled** rather than
+        mis-parsed (`IsLikelyMisfiled`: the announcement was read correctly, the
+        FILE is in the wrong folder), and prose-containing-"by" now fails
+        plausibility gates (case-sensitive prose markers, so "Meet **Me** in
+        Paradise" survives while "...and **he** wasn't amused" does not).
+        The corpus surfaced a larger defect than either: **24.8% of stored
+        titles carried a leaked credit verb** ("Awakened Essence 1 Written")
+        because the split landed *inside* `written by` — the library's most
+        common credit variant (24.1%), absent from the pattern list entirely.
+        Backed by a 188-transcript production corpus
+        (`internal/transcribe/testdata/intro_corpus.jsonl`), invariant tests, a
+        distribution canary, and a fuzz target (165k execs clean).
+        🔴 `reparseStoredIntros` now **only upgrades, never clears**: 1.4% of
+        987 sampled books (~644 library-wide) hold a parse their *current*
+        transcript cannot regenerate, because `applyOutcome` overwrites the
+        transcript unconditionally but the parsed fields only on success.
   - [ ] **Tiered backfill.** Naive "every file" is ~284,000 files ≈ 12–14 days of
         GPU. Tiers: **0** single-file books migrate by copy (zero GPU, ~32,600
         books); **1** assembled multi-file books probe the first 3 files only;

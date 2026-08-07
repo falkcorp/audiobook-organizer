@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.13.0
+// version: 3.14.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-08-06
+// last-edited: 2026-08-07
 
 package maintenance
 
@@ -38,7 +38,12 @@ const (
 	// (longer clip + second audio file) return 0 chars from Whisper. It lets
 	// only_missing=true skip these books on future runs without re-trying them
 	// every time. Use retry_silence=true to force a fresh attempt.
-	silenceSentinel = "[SILENCE]"
+	//
+	// Aliased from internal/transcribe rather than redeclared: the classifier
+	// must map this exact literal to IntroKindUnknown/"silence-sentinel", and two
+	// independent declarations could drift apart silently — turning "known
+	// silent" into "unparsed prose" across the library.
+	silenceSentinel = transcribe.SilenceSentinel
 )
 
 // introTranscribeParams is the checkpoint state for a transcription run.
@@ -50,11 +55,15 @@ type introTranscribeParams struct {
 	// RetrySilence includes books marked [SILENCE] for another attempt. Useful
 	// after adding more audio files or tuning the VAD threshold.
 	RetrySilence *bool `json:"retry_silence,omitempty"`
-	// ReparseOnly re-runs ParseAudiobookIntro over the ALREADY-STORED
-	// IntroTranscription text and rewrites TranscribedTitle/Author/Narrator —
+	// ReparseOnly re-runs the classifier over the ALREADY-STORED
+	// IntroTranscription text and UPGRADES TranscribedTitle/Author/Narrator —
 	// no ffmpeg, no Whisper. Use after a parser fix to correct existing books
-	// (e.g. the "[Publisher] presents ..." / read-by extraction fix) without the
-	// cost of re-transcribing. Cheap: one GetBookByID + UpdateBook per book.
+	// (e.g. the leaked "written by" verb) without the cost of re-transcribing.
+	// Cheap: one GetBookByID + UpdateBook per changed book.
+	//
+	// It only ever upgrades. A non-credits verdict leaves the stored fields
+	// alone, because ~1.4% of books hold a parse their current transcript can no
+	// longer regenerate. See the guard in reparseStoredIntros.
 	ReparseOnly *bool `json:"reparse_only,omitempty"`
 	// ExtractOnly rebuilds the WAV clip cache WITHOUT calling Whisper. ffmpeg runs
 	// at full concurrency (48 on the prod server) and is no longer gated by the
@@ -299,8 +308,33 @@ func (p *Plugin) reparseStoredIntros(ctx context.Context, store interface {
 			continue
 		}
 		scanned++
-		f := transcribe.ParseAudiobookIntro(*b.IntroTranscription)
+		c := transcribe.ClassifyIntro(*b.IntroTranscription, transcribe.UnknownPosition)
+
+		// 🔴 REPARSE ONLY EVER UPGRADES. It never clears a stored parse.
+		//
+		// The stored parsed fields are NOT always reproducible from the stored
+		// transcript. applyOutcome overwrites IntroTranscription unconditionally
+		// but writes parsed fields only when a title was extracted, so a later,
+		// WORSE transcription ("This is Audible.") replaces good text while the
+		// good parse survives beside it. Measured on prod 2026-08-07 over 987
+		// sampled books: 1.4% (~644 library-wide) hold a parse their current
+		// transcript cannot regenerate — e.g. a book whose transcript is now
+		// "This is Audible." but which still carries "Wind and Truth" /
+		// "Brandon Sanderson".
+		//
+		// So a non-credits verdict means "this text is not an announcement",
+		// NOT "the stored value is wrong". Bad values are neutralised by
+		// consumers gating on the classification, never by erasing data here.
+		if c.Kind != transcribe.IntroKindCredits {
+			continue
+		}
+		f := c.Fields
 		nt, na, nn := strPtrOrNil(f.Title), strPtrOrNil(f.Author), strPtrOrNil(f.Narrator)
+		// A credits verdict guarantees title and author; narrator is optional, so
+		// keep any existing narrator rather than dropping it.
+		if nn == nil {
+			nn = b.TranscribedNarrator
+		}
 		if eqStrPtr(b.TranscribedTitle, nt) && eqStrPtr(b.TranscribedAuthor, na) && eqStrPtr(b.TranscribedNarrator, nn) {
 			continue // unchanged — skip the write
 		}
