@@ -58,7 +58,13 @@ func TranscribeBatch(ctx context.Context, jobs map[string]string, onProgress Pro
 			// Returning the error lets the caller (processTranscribePage) log a
 			// warning, skip the page, and advance to the next one — far better
 			// than stalling for an hour and triggering the watchdog.
-			return nil, fmt.Errorf("transcribe remote: %w", err)
+			//
+			// 🔴 classifyTransport marks this as a BATCH-level failure carrying
+			// no per-file meaning, so the caller defers the page instead of
+			// writing whisper_error to every book in it. Returning a bare error
+			// here is what turned the 2026-07-01 outage into ~34,000 false
+			// per-book verdicts.
+			return nil, classifyTransport([]string{remoteURL}, err)
 		}
 		return results, nil
 	}

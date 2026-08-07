@@ -12,10 +12,17 @@ import (
 
 // IntroFields holds the structured data extracted from an audiobook intro.
 type IntroFields struct {
-	Title    string
-	Author   string
-	Narrator string
-	Raw      string // original transcript, for debugging
+	Title  string
+	Author string
+	// Translator is credited between Author and Narrator in translated works
+	// ("<TITLE> by <AUTHOR>. Translated by <TRANSLATOR>. Narrated by <NARRATOR>").
+	// Before this field existed the translator credit had no anchor of its own,
+	// so Author ran straight through it: measured on prod 2026-08-07, roughly
+	// half of all translated works carried a corrupted author such as
+	// "Kugane Maruyama Translated by Emily Balistreri".
+	Translator string
+	Narrator   string
+	Raw        string // original transcript, for debugging
 }
 
 // Whisper transcripts of audiobook intros follow a consistent spoken grammar:
@@ -37,13 +44,35 @@ var (
 
 	// Strong boundary marking the end of a name and the start of prose/noise.
 	// Everything from here on is acknowledgements, blurb, or chapter text.
+	//
+	// 🔴 The structural markers are GENERALISED, not enumerated. This list used
+	// to read "chapter one|chapter 1|prologue|part one|part 1", which terminated
+	// only on chapter ONE — every other chapter number ran straight into the
+	// name. Measured on prod 2026-08-07:
+	//
+	//	LEAKS       'Katana Jones, Chapter 24 Kongen Serven'
+	//	LEAKS       'Victor Baveen. Chapter 12 Trickster Teeth'
+	//	LEAKS       'Vofon. Translated by CoRansome. Chapter 0'
+	//	TERMINATES  'Eric Rounds Chapter 1 Catalyst'
+	//
+	// Chapters 10-19 leaked too: "chapter 1" is followed by \b, which "chapter
+	// 12" does not satisfy. Tier 0 hid this because a single-file book's clip
+	// almost always opens at Chapter 1 — the one value that worked. Tiers 1-3
+	// are multi-file books whose clips open at Chapter 7, 12, 24, so this would
+	// have corrupted the entire long tail.
+	//
+	// The bare role words (introduction|foreword|...) matter separately: the
+	// "<role> by" forms alone missed 'Lisa Zimmerman and Cale Williams.
+	// Introduction' and 'Ronnie Rowlands and Tiffany Suzuki Foreword'.
 	nameBoundaryRe = regexp.MustCompile(`(?i)\b(` +
 		`with an introduction|with a foreword|with an afterword|with a preface|` +
-		`introduction by|foreword by|afterword by|preface by|` +
+		`introduction|foreword|afterword|preface|` +
+		`cover art|cover design|illustrated by|artwork by|music by|` +
 		`no one writes|and of course|and i would|i would like|would like to thank|` +
 		`this is a production|this is an? [\w']+ production|a production of|` +
 		`unabridged|abridged|copyright|all rights|published by|` +
-		`chapter one|chapter 1|prologue|part one|part 1` +
+		`prologue|epilogue|` +
+		`(?:chapter|part|book|volume|disc|track|section)\s+[\w.]+` +
 		`)\b`)
 
 	wsRe = regexp.MustCompile(`\s+`)
