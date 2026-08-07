@@ -107,7 +107,7 @@ func TestClassifyCandidate_Fragment_Cons17Suspect_NotFragment(t *testing.T) {
 	// CONS-17: one book has an astronomically large duration (stored as ms instead
 	// of seconds) with no DurationVerifiedAt. The ratio looks tiny (<5%) but the
 	// duration data is unreliable — must fall through to unknown, not fragment.
-	a := makeBook("a", 50*1024*1024, 31431, "")   // correct: ~8.7h
+	a := makeBook("a", 50*1024*1024, 31431, "")    // correct: ~8.7h
 	b := makeBook("b", 50*1024*1024, 31430435, "") // CONS-17: 31430435s = 364 days
 	c := database.DedupCandidate{Layer: "exact"}
 
@@ -168,7 +168,7 @@ func TestClassifyCandidate_TitleLeak_NonITunes_SameTitle_NilBreakdown(t *testing
 	a := makeBook("a", 5*1024*1024, 3600, "")
 	b := makeBook("b", 5*1024*1024, 3500, "")
 	a.Title = "Chapter Leak Book"
-	b.Title = "chapter  leak BOOK" // normalization: case + whitespace runs
+	b.Title = "chapter  leak BOOK"               // normalization: case + whitespace runs
 	c := database.DedupCandidate{Layer: "exact"} // pre-T015, nil breakdown
 
 	cls, reason := ClassifyCandidate(c, a, b)

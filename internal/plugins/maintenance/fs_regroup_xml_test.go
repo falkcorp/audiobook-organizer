@@ -214,10 +214,10 @@ func TestApplyFSRegroup_ExtIDErrorSkipsDelete(t *testing.T) {
 	survivor := &database.Book{ID: "surv"}
 	deleted := map[string]bool{}
 	mock := &database.MockStore{
-		GetBookByIDFunc:        func(id string) (*database.Book, error) { return survivor, nil },
-		GetBookFileByPathFunc:  func(string) (*database.BookFile, error) { return nil, nil },
-		CreateBookFileFunc:     func(*database.BookFile) error { return nil },
-		UpdateBookFunc:         func(_ string, b *database.Book) (*database.Book, error) { return b, nil },
+		GetBookByIDFunc:       func(id string) (*database.Book, error) { return survivor, nil },
+		GetBookFileByPathFunc: func(string) (*database.BookFile, error) { return nil, nil },
+		CreateBookFileFunc:    func(*database.BookFile) error { return nil },
+		UpdateBookFunc:        func(_ string, b *database.Book) (*database.Book, error) { return b, nil },
 		GetExternalIDsForBookFunc: func(string) ([]database.ExternalIDMapping, error) {
 			return []database.ExternalIDMapping{{ExternalID: "p", BookID: "shell"}}, nil
 		},

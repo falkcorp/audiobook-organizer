@@ -34,16 +34,16 @@ type autoMatchTranscribedParams struct {
 
 func (p *Plugin) autoMatchTranscribedDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:             "maintenance.auto-match-transcribed",
-		Plugin:         "maintenance",
-		DisplayName:    "Auto-match transcribed books",
-		Description:    "Walks the library and auto-applies the best metadata candidate to unreviewed books whose audio-derived transcription exactly matches a search result above a configurable score threshold. Dry-run by default — pass dry_run=false to apply. Checkpointed and cancellable.",
-		ResumePolicy:   sdk.ResumeRestart,
+		ID:              "maintenance.auto-match-transcribed",
+		Plugin:          "maintenance",
+		DisplayName:     "Auto-match transcribed books",
+		Description:     "Walks the library and auto-applies the best metadata candidate to unreviewed books whose audio-derived transcription exactly matches a search result above a configurable score threshold. Dry-run by default — pass dry_run=false to apply. Checkpointed and cancellable.",
+		ResumePolicy:    sdk.ResumeRestart,
 		DefaultPriority: sdk.PriorityLow,
-		ConcurrencyKey: "maintenance.auto-match-transcribed",
-		Cancellable:    true,
-		Timeout:        12 * time.Hour,
-		Run:            p.runAutoMatchTranscribed,
+		ConcurrencyKey:  "maintenance.auto-match-transcribed",
+		Cancellable:     true,
+		Timeout:         12 * time.Hour,
+		Run:             p.runAutoMatchTranscribed,
 	}
 }
 

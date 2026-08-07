@@ -118,7 +118,7 @@ func TestDurationLooksLikeMillis(t *testing.T) {
 func TestDurationBackfill_ParallelProducesCorrectResults(t *testing.T) {
 	// Create test books and files with ms-valued durations.
 	fileSize64kbps := bytesForBitrate(3600, 64) // 1 hour at 64kbps
-	msValuedDuration := 3600 * 1000              // 1 hour in milliseconds
+	msValuedDuration := 3600 * 1000             // 1 hour in milliseconds
 
 	books := []database.Book{
 		{ID: "book1", Title: "Book One"},

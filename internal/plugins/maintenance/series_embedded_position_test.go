@@ -275,8 +275,8 @@ func TestSeriesDenumber_AssignsTiersAndGatesTheApplySet(t *testing.T) {
 	}
 	for name, wantConf := range map[string]SeriesConfidence{
 		"Evil Genius: Book 4: Becoming the Apex Supervillain": ConfidenceHigh,
-		"Dragon Born [04]":                                    ConfidenceMedium,
-		"08. Battle for the Abyss":                            ConfidenceLow,
+		"Dragon Born [04]":         ConfidenceMedium,
+		"08. Battle for the Abyss": ConfidenceLow,
 	} {
 		if got := byName[name].Confidence; got != wantConf {
 			t.Errorf("%q: confidence=%q, want %q", name, got, wantConf)

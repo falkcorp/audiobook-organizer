@@ -89,6 +89,7 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.probeDirectoryBooksDef(),
 		p.itunesHealDef(),
 		p.introTranscribeDef(),
+		p.repairTranscribeStatusDef(),
 		p.extractWAVClipsDef(),
 
 		// --- title cleanup ---
