@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.17.0 -->
+<!-- version: 10.17.1 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-08-06 -->
+<!-- last-edited: 2026-08-07 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,516 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+<!-- file: todo.d/20260806_093000_bracketed_series_are_shattered_books.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 9d3f621c-47ea-4b05-8c93-2f1a7de04b58 -->
+<!-- last-edited: 2026-08-06 -->
+
+- [ ] **~180 "bracketed series" are actually one shattered book each** — found by
+  the `maintenance.series-denumber` dry run, 2026-08-06.
+
+  The dry run flagged 198 series names carrying a bracketed number
+  (`Dragon Born [04]`, `… Called Peace (12)`). Roughly 18 are genuine series
+  positions. The rest are **one novel exploded into per-chunk series rows**:
+
+  | Target base | Rows | Books | Reality |
+  |---|---:|---:|---|
+  | `Megan E. O'Keefe - Catalyst Gate` | 80 | 80 | one novel |
+  | `Listening-to-ClassA-Threat-by-Dan-Sugralinov--Scribd` | 36 | 36 | scraped page titles |
+  | `Listening-to-Arcane-Kingdom-Online-Dark-Magic-by-Jakob-Tanner--Scribd` | 27 | 27 | scraped page titles |
+  | `The Light We Lost` | 25 | 25 | one novel |
+  | `Arkady Martine - A Desolation Called Peace` | 12 | 12 | one novel |
+  | `Dragon Born`, `Warbreaker`, `Guardian`, `Otherworld Academy`, … | ~18 | ~24 | **genuine** |
+
+  🔴 **Do not resolve this by applying `applyMedium`.** That would manufacture an
+  80-volume "Catalyst Gate" series out of a single book, and a 36-volume series
+  out of a Scribd listing page. The denumber op deliberately holds them; the
+  parser is behaving correctly, the *shape* is a lie.
+
+  These belong to the **combine-into-one-book** track (The Successors class), not
+  the series track: a bracketed `(47)` on a novel title is a disc/chunk marker
+  that leaked into the series field. The `Listening-to-…--Scribd` rows are a
+  distinct, narrower bug — a web scrape wrote page titles into series names, and
+  those need their own cleanup rather than any kind of merge.
+
+  Start from the report:
+  `/var/lib/audiobook-organizer/series-denumber-2026-08-06.tsv`
+  (`shape=bracketed`, group by `into_name`, anything with >3 rows is suspect).
+
+<!-- file: todo.d/20260806_093100_series_denumber_low_tier_consumer.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: c1e84b76-3d29-4f05-a917-6b2508fd3e14 -->
+<!-- last-edited: 2026-08-06 -->
+
+- [ ] **Give the 466 low-confidence series positions somewhere to go** — deferred
+  deliberately on 2026-08-06 (owner decision), revisit after owner items 1 and 2.
+
+  `maintenance.series-denumber` now reports 466 series names carrying a bare
+  number (`08. Battle for the Abyss` → position 8, `Station 64: The Doll Dungeon`
+  → position 64) covering ~580 books. They are correct often enough to be worth
+  surfacing and wrong often enough that they can never apply themselves —
+  `86—EIGHTY-SIX` is a real series name in this library with the identical shape.
+
+  Today they exist only in the `reportPath` TSV. Nothing consumes them.
+
+  🔑 **Why no review-queue Kind was built yet:** a new Kind needs frontend
+  mapping, and `review_apply_enabled` is OFF in production, so approving such a
+  hold would mutate nothing. Wiring these in only makes sense once holds have
+  real per-item actions — i.e. after owner item 1 (recommendations) and item 2
+  (overrides). Doing it in that order avoids building a producer for a consumer
+  that cannot act.
+
+  Note for whoever picks this up: for `08. Battle for the Abyss` the parsed base
+  is `Battle for the Abyss` — the BOOK's title. The real series (`Horus Heresy`)
+  is not present in the string at all. So the low tier cannot be resolved by
+  better parsing; it needs evidence from outside the name (sibling books sharing
+  a folder/author with different leading numbers — spec D4, unbuilt), or a human.
+
+  Design: [`docs/specs/2026-08-06-series-embedded-positions-design.md`].
+
+<!-- file: todo.d/20260806_150000_react_router_v8_residual_advisory.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 4d81e9c3-7a26-4f50-b83d-19e6c07af241 -->
+<!-- last-edited: 2026-08-06 -->
+
+- [ ] **react-router GHSA-qwww-vcr4-c8h2 — accepted, not reachable, do not
+  re-litigate.** The v6 → v7.18.2 upgrade (2026-08-06) closed three advisories
+  and opened this one. It is **expected**, it was a deliberate trade, and the
+  analysis is recorded here so the next person to see the alert does not redo it.
+
+  **The trade.** No single version closes all four. The three originals
+  (open redirect via backslash in `<Link>`/`useNavigate`, open-redirect-to-XSS,
+  arbitrary constructor injection via `deserializeErrors()`) are first patched at
+  **7.18.0**. This one — RSC-mode CSRF bypass, vulnerable range 7.12.0–8.2.0 — is
+  only fixed at **8.3.0**.
+
+  **Why we did not go to v8.** It requires `react >= 19.2.7` (repo is on 18.2.0),
+  and `react-router-dom` does not exist at 8.x at all (E404), so it would also
+  mean rewriting all 49 import sites. That is a React-major migration, not a
+  dependency bump.
+
+  **Why the residual is not reachable.** It is an RSC-mode vulnerability and this
+  is a plain SPA. Verified zero hits for `@react-router/*`, `react-server`,
+  `unstable_RSC`, and `createStaticHandler`. The three closed advisories, by
+  contrast, were in `<Link>` and `useNavigate` — code paths used constantly.
+  Closing reachable risk while accepting unreachable risk is the right direction
+  even though the alert count goes the wrong way.
+
+  Revisit when the app moves to React 19 for its own reasons. Do not take the
+  React major *for* this advisory.
+
+<!-- file: todo.d/20260806_150100_frontend_open_redirect_invariants.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 9e34a7b1-05df-4c82-a6e9-3b7150d2f8ce -->
+<!-- last-edited: 2026-08-06 -->
+
+- [ ] **Two frontend navigation sinks are unvalidated and safe only by
+  accident.** Found 2026-08-06 while auditing the react-router open-redirect
+  advisories. Neither is exploitable today. Both rest on an invariant that a
+  future change breaks **silently** — nothing fails, nothing warns, the sink just
+  becomes live.
+
+  1. `web/src/pages/Login.tsx:78-81` — `location.state?.from` is passed straight
+     to `navigate()` with no validation. Safe **only because nothing writes
+     `state.from`** (zero writers in the codebase). Wire a `?returnTo=` param
+     into it and it is immediately exploitable.
+  2. `web/src/pages/BookDetail.tsx:938,968` — `sessionStorage`'s
+     `library_return_url` goes to `navigate()` unvalidated. Safe **only because
+     the writer runs on the exact routes** `/library` and `/fingerprints`.
+     Changing that to `/library/*` makes it exploitable.
+
+  The remedy is to validate at the sink rather than rely on the writer's reach:
+  the Go side already does exactly this, and does it well —
+  `sanitizeReturn` (`internal/server/handlers/oauth_login.go:260-271`) implements
+  the backslash guard the advisory describes, and `abs/openid.go:246-257`
+  validates `redirect_uri` before error redirects too. Mirror that on the client.
+
+  🔴 **Do not "fix" [[TODO-SSO-EDGE]] / the OAuth-callback entry at `TODO.md`
+  around line 1040 by loosening `sanitizeReturn`.** That entry is a *functional*
+  gap — the guard correctly rejecting a custom-scheme return — not a
+  vulnerability. Loosening it would convert a working defence into one of these.
+
+<!-- file: todo.d/20260806_150200_e2e_suite_broken_on_main.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 2c7f480a-6b13-49de-95a1-8e4d3b6f0721 -->
+<!-- last-edited: 2026-08-06 -->
+
+- [ ] **The Playwright e2e suite is broken on `main` and gates nothing.** Every
+  test dies at fixture collection with `unknown parameter "_page"` — 49 errors.
+  Confirmed pre-existing on 2026-08-06: the identical failure reproduces on the
+  pre-react-router-v7 tree with unchanged specs, and the v7 PR touched zero files
+  under `web/tests/`.
+
+  Why this matters beyond the red: the react-router v6 → v7 upgrade merged with
+  **no runtime routing signal at all**. `tsc` was clean and 402 frontend unit
+  tests passed, but nothing exercised actual navigation. A routing major landing
+  without e2e coverage is precisely the case the suite exists for.
+
+  Fix the fixture signature, then re-run against the v7 tree to retroactively
+  confirm the upgrade — and treat `make test-e2e` as a required gate for any
+  future routing or auth-flow change.
+
+<!-- file: todo.d/20260806_150300_memdb_write_path_followups.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 7b09fd52-3e84-4c17-a1b6-5f2d80e94c63 -->
+<!-- last-edited: 2026-08-06 -->
+
+- [ ] **`UpsertBookToMemDB` holds go-memdb's global writer mutex across Pebble
+  I/O.** Found 2026-08-06 while profiling `dedupe-book-file-rows` (fixed in
+  #2161). This is a **system-wide ceiling on every `UpdateBook`**, not something
+  specific to that op, and it is the natural next performance win.
+
+  go-memdb has a single global writer mutex (`memdb.go:34-35`, `:73-76` — one
+  writer at a time, `Txn(true)` takes `db.writer.Lock()`). Inside that lock,
+  `UpsertBookToMemDB` performs three Pebble reads: `GetBookAuthors`
+  (`memdb_sync.go:72`), `GetBookNarrators` (`:85`), and `loadBookFilesForBookID`
+  (`:98` — a full prefix scan that unmarshals every remaining fingerprint-bearing
+  row). Every other writer in the process waits on that I/O.
+
+  Fix: fetch first, then take `Txn(true)`. Consequence worth stating — this is
+  also why adding worker pools to book-level maintenance ops buys far less than
+  `NumCPU×`: the workers serialize here regardless.
+
+- [ ] **`DeleteBookFilesForBook` leaves stale memdb rows behind.** It never calls
+  `DeleteBookFileFromMemDB` or `MarkQuickQueryDirty`, so Pebble and memdb diverge
+  after it runs. Noticed 2026-08-06 while modelling `DeleteBookFilesByIDs` on it
+  (#2161) — the new method does both; its model does not.
+
+  Latent, and it pairs badly with the known "corrected aggregates are invisible
+  until memdb refreshes" problem: a divergence here looks exactly like that
+  staleness, so the two will be confused during diagnosis.
+
+<!-- file: todo.d/20260806_150400_multidisc_holds_are_duplicates.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 5a1e83c7-42b9-4dc6-8e07-6c39f2a1b5d8 -->
+<!-- last-edited: 2026-08-06 -->
+
+- [ ] **The 3 dangerous multidisc holds are DUPLICATES, not series — feed them to
+  the duplicate-detection track.** Measured 2026-08-06 from a full pre-apply
+  snapshot of all 132 pending `regroup.multidisc` holds (4,146 member books,
+  zero unreadable).
+
+  `TODO.md` predicted ~9 holds with book-length members, presumed to be series
+  the guard would have caught. There are **3**, and all three are two-member
+  holds whose members have near-identical runtimes:
+
+  | hold | members |
+  |---|---|
+  | `01KXF8BNKENR530AKMMKJYD5E1` | `Brother Wulf` 6.30 h + `Brother Wulf - Joseph Delaney` 6.30 h |
+  | `01KXF8BNKACGA6ZAEBPCQK09FX` | `Sevenfold Sword` 20.56 h + `Sevenfold Sword` 21.47 h |
+  | `01KXF8BNHY7AE56CPZWY9VW9VF` | `The Warring Son` 11.77 h + `The Warring Son` 11.77 h |
+
+  Same title, same runtime, two rows. That is the never-delete / re-associate
+  shape, not a series of distinct novels.
+
+  **The recommender emits `separate` for them, and that is the correct default.**
+  Separate destroys nothing and leaves them for a signal that can actually
+  establish identity. 🔴 Do NOT tune the recommender toward `duplicate-of` on
+  runtime similarity — equal runtimes are not identity evidence. Two different
+  books can share a runtime, and acting on that would merge distinct works
+  through a path that hard-deletes the absorbed row.
+
+  These 3 are a clean, small, real test set for
+  [[never-delete-re-associate]] — use them rather than inventing fixtures.
+
+<!-- file: todo.d/20260806_153000_frontend_framework_versions.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 8c14e620-9b7d-4a35-b0f2-73de5a91c4e7 -->
+<!-- last-edited: 2026-08-06 -->
+
+- [ ] **Frontend framework versions — how far behind we actually are, and the
+  order to fix it in.** Surveyed 2026-08-06 at owner request ("are we on
+  TypeScript 7 and the latest React?"). Answer: **no to both.**
+
+  | Package | Installed | Latest | Behind |
+  |---|---|---|---|
+  | `typescript` | 5.9.3 | **7.0.2** | 2 majors |
+  | `react` / `react-dom` | 18.3.1 | **19.2.8** | 1 major |
+  | `@mui/material` | 5.18.0 | **9.3.1** | **4 majors** |
+  | `jsdom` | 23.2.0 | **30.0.1** | **7 majors** |
+  | `vite` | 7.3.6 | 8.2.1 | 1 major |
+  | `eslint` | 9.39.5 | 10.8.0 | 1 major |
+  | `zustand` | 4.5.7 | 5.0.14 | 1 major |
+  | `react-router` | 7.18.2 | 8.x | 1 major (gated on React 19) |
+  | `vitest` | 4.1.10 | 4.1.10 | current |
+
+  **React 19 is worth more than it looks, because it is also a security fix.**
+  [[react-router-v8-residual-advisory]] (GHSA-qwww-vcr4-c8h2) is only patched in
+  react-router **v8**, which requires `react >= 19.2.7` and does not publish
+  `react-router-dom` at all. So "upgrade React" and "close that open high-severity
+  alert" are one piece of work, not two. That changes its cost/benefit — do not
+  price the React major as pure maintenance.
+
+  **TypeScript 7 is not a version bump.** It is the native Go compiler rewrite —
+  roughly 10× faster type-checking, but a different implementation with its own
+  compatibility surface. Budget it as a migration.
+
+  **MUI 5 → 9 is the largest single lift.** Four majors, and MUI majors move the
+  styling engine and component APIs. `@mui/material` is imported across most of
+  the UI, so this is the one that is genuinely days rather than hours.
+
+  Suggested order, cheapest-value-first:
+  1. **React 19 + react-router 8** — closes a live advisory, moderate scope.
+  2. **jsdom + eslint + zustand + vite** — cheap, can ride along with (1).
+  3. **TypeScript 7** — real migration, big payoff in CI time.
+  4. **MUI 9** — largest, purely maintenance, do last.
+
+  🔴 **Do not attempt any of this until the e2e suite is fixed.** See
+  [[e2e-suite-broken-on-main]] — it currently dies at fixture collection and
+  gates nothing, which is why the react-router v6 → v7 upgrade merged with zero
+  runtime navigation coverage. A React major without e2e is exactly the change
+  that suite exists to catch.
+
+<!-- file: todo.d/20260806_220000_per_file_intro_identity_signal.md -->
+<!-- version: 1.1.0 -->
+<!-- guid: 3a7c2e94-5b18-4d60-9f27-c8140b6e3d52 -->
+<!-- last-edited: 2026-08-07 -->
+
+- [ ] **Per-file intro transcription as the primary book-identity signal** — owner
+  design 2026-08-06. Storage and the first-file sort fix are **DONE** (PRs #2168);
+  the parser, the tiered backfill, and the wiring are open.
+
+  **The idea.** An audiobook opens with a spoken *"&lt;Title&gt; by &lt;Author&gt;, read by
+  &lt;Narrator&gt;"* announcement. That announcement marks a book **start**. A file
+  without one is a continuation. That is direct identity evidence, where the
+  current classifier only has runtime — a proxy.
+
+  **Why it needed per-file storage.** Transcripts lived on `Book`, so only ONE
+  file's opening was ever captured and "12 files that are one book" was
+  indistinguishable from "12 files that are 12 books". Measured on prod, one
+  folder's files read:
+
+  ```
+  file 1: "This is a reading of Overlord, Book 7. This part includes the prologue and Chapter 1."
+  file 2: "This is a reading of Overlord Volume 7. This part includes Chapter 2."
+  file 3: "Hello... This is Overlord Volume 7, Chapter 3."
+  ```
+
+  Per-file that sequence is proof of continuation; per-book it is invisible. It
+  also explains the measured **45.8%** credit-parse rate across 1,476 review-queue
+  members — the op sampled one arbitrary file per book.
+
+  ### Remaining work
+
+  - [x] **Three-outcome parser.** ✅ DONE 2026-08-07 — `ClassifyIntro`
+        (`internal/transcribe/classify.go`) returns credits / chapter / prose /
+        unknown with a typed reason, confidence, and chapter number. **Position
+        is a weight, never a veto**: credits at ordinal >0 IS the shattered-book
+        signal, so vetoing it would hide the very finding this was built to
+        surface. Both confirmed prod false positives are covered — the *Girls
+        with Rebel Souls* case is reclassified as **misfiled** rather than
+        mis-parsed (`IsLikelyMisfiled`: the announcement was read correctly, the
+        FILE is in the wrong folder), and prose-containing-"by" now fails
+        plausibility gates (case-sensitive prose markers, so "Meet **Me** in
+        Paradise" survives while "...and **he** wasn't amused" does not).
+        The corpus surfaced a larger defect than either: **24.8% of stored
+        titles carried a leaked credit verb** ("Awakened Essence 1 Written")
+        because the split landed *inside* `written by` — the library's most
+        common credit variant (24.1%), absent from the pattern list entirely.
+        Backed by a 188-transcript production corpus
+        (`internal/transcribe/testdata/intro_corpus.jsonl`), invariant tests, a
+        distribution canary, and a fuzz target (165k execs clean).
+        🔴 `reparseStoredIntros` now **only upgrades, never clears**: 1.4% of
+        987 sampled books (~644 library-wide) hold a parse their *current*
+        transcript cannot regenerate, because `applyOutcome` overwrites the
+        transcript unconditionally but the parsed fields only on success.
+  - [ ] **Tiered backfill.** Naive "every file" is ~284,000 files ≈ 12–14 days of
+        GPU. Tiers: **0** single-file books migrate by copy (zero GPU, ~32,600
+        books); **1** assembled multi-file books probe the first 3 files only;
+        **1b** escalate to the full set if all 3 carry credits — which is what
+        makes the cheap tier *safe*, since it cannot silently be wrong; **2**
+        bookless/shattered/queue members get every file; **3** a lazy, indefinite
+        full sweep so every file eventually has a transcript.
+  - [ ] **Wire into the regroup classifier**, outranking runtime where both exist.
+        Validate by diffing against the 356 holds already measured under the
+        runtime rule.
+  - [ ] **Wire into First Aid** as a tier-2 signal beside the duration probe, and
+        let the verdict pick the fixer.
+
+  ### Measured facts worth keeping
+
+  - 72.7% of books are single-file; 11.3% have 21+ files and hold most of the
+    317,054 rows. The signal is precisely targeted at the fraction that is
+    actually ambiguous.
+  - **195 of 204** "untranscribed" review-queue members have ZERO `book_file`
+    rows — unlinked, not un-transcribed. **Relink before transcribing** or they
+    need a second pass. [[first-aid-library-validate-repair]]'s probe already
+    found 434 of 1,019 directory-shaped books confidently linkable.
+  - The WAV clip cache is keyed by **file path**, so clips already extracted
+    survive the per-file move and ffmpeg is skipped on re-run.
+  - Book-level transcription is already **saturated** — a full `only_missing` run
+    over 221 pages transcribed 0 books. There is no warm-up value left; the
+    per-file pass is the entire remaining work.
+
+  🔴 **Absent transcript means "cannot verify", never "continuation".** This
+  codebase has now been bitten by absent-value-read-as-evidence four separate
+  ways: `DurationSec == 0` read as "short" (disabled the series guard across 97.5%
+  of the queue), a 404 body read as "zero files", `memPtr == nil` read as "nothing
+  to do" (silently dropped writes for the process lifetime), and an empty
+  `intro_transcription` read as "needs transcribing" when it meant "has no file".
+
+<!-- file: todo.d/20260806_220100_whisper_second_worker_u1.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 6f31d4b8-92ae-4c07-b5f1-08e3a7d26c94 -->
+<!-- last-edited: 2026-08-06 -->
+
+- [ ] **Stand up a second Whisper worker on the spare CPU node.** Owner request
+  2026-08-06. Host prepared, worker not built. (Host address and credentials are
+  fleet-internal — see the private infra notes, not this repo.)
+
+  **Why it is cheap to try:** the transcription backend is already a pluggable
+  HTTP service — `WHISPER_REMOTE_URL` points at a faster-whisper instance on the
+  GPU host. Adding a second worker is a deployment question, not a code change.
+  `internal/transcribe/batch.go:51` reads a single URL today, so the only code work
+  is fanning out across several endpoints.
+
+  **The node as measured 2026-08-06:** Ubuntu 26.04, 48 cores, 251 GB RAM,
+  **no GPU**. Its Tdarr node registers CPU-only with `transcodegpu: 0`, the Tdarr
+  queue is **empty** (`table1Count: 0`), and both node processes sit at 0.0% CPU —
+  so nothing needs stopping to free it. Python 3.14.3 with pip 25.1.1 and uv 0.12.2
+  (both installed 2026-08-06).
+
+  🔴 **CPU-only is the whole caveat.** faster-whisper with int8 quantisation on 48
+  cores is real, but it is **not** a second GPU. **Benchmark against a real clip
+  batch before promising throughput** — do not assume it halves the backfill.
+
+  **Prefer an HTTP endpoint over the in-process `uv` path.** `whisper.go` also has
+  `runPythonWhisper` (`uv run --with openai-whisper whisper`), and uv is now
+  installed so that route works — but `batch.go:54-57` warns it loads the full
+  model into RAM and *"reliably OOMs the server"* at batch sizes of 100–200. That
+  warning was written about the **web-serving host**; the spare node has 251 GB and
+  serves nothing, so the reasoning does not transfer directly. Even so, a second
+  HTTP endpoint matches the existing interface, avoids the OOM class entirely, and
+  needs no special batch sizing.
+
+  **Point it at tier 3 first.** The lazy full sweep in
+  [[per-file-intro-identity-signal]] has no deadline, which makes it the natural
+  consumer for a slower worker — "slower than GPU" costs nothing there, while the
+  decision-critical tiers keep the GPU.
+
+<!-- file: todo.d/20260807_012000_transcribe_status_content_drift.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: b471e5c9-2f68-4a03-95d1-0e37c8b2a6d4 -->
+<!-- last-edited: 2026-08-07 -->
+
+- [ ] **Investigate: 79% of books with a stored transcript are marked
+  `whisper_error`.** Found incidentally while sampling a corpus for the
+  three-outcome parser (2026-08-07), not chased — it is out of scope for the
+  parser work but nobody will stumble on it otherwise.
+
+  **The measurement.** A random offset-based sample of **987 distinct books that
+  all have non-empty `intro_transcription`** breaks down by `transcribe_status`
+  as:
+
+  | status | count | share |
+  |---|---|---|
+  | `whisper_error` | 783 | **79.3%** |
+  | `ok` | 177 | 17.9% |
+  | `unparsed` | 26 | 2.6% |
+  | `empty` | 1 | 0.1% |
+
+  Every one of those 783 rows **has transcript text stored** while its status
+  says the transcription failed. Status and content have drifted apart across
+  what looks like most of the library.
+
+  **Why it probably happens.** `applyOutcome`
+  (`internal/plugins/maintenance/intro_transcribe.go`) writes
+  `TranscribeStatus` on every outcome, but only writes `IntroTranscription` when
+  the outcome carries a transcript. So a book transcribed successfully once and
+  then re-attempted later — after the file moved, the GPU host went away, or the
+  batch failed — keeps its old text and acquires a failure status. That is the
+  same *shape* as the parse-vs-transcript divergence the parser PR guards
+  against, one field over.
+
+  **Why it matters.** Anything filtering on `transcribe_status == "ok"` is
+  currently ignoring ~4 out of 5 books that actually have usable transcript text.
+  Worth checking whether the tiered backfill's "needs work" query is one of them
+  before it is sized — it would massively over-count the work remaining.
+
+  **Do not assume it is a live failure.** The status could be a stale record of a
+  historical outage rather than an ongoing one. Check
+  `transcribe_attempted_at` vs `intro_transcribed_at` on the affected rows first:
+  if attempted is consistently much later than transcribed, this is drift from
+  old re-runs, not a currently-failing pipeline. 🔴 The distinction changes the
+  fix completely, so measure before concluding.
+
+  Related: [[per-file-intro-identity-signal]].
+
+<!-- file: todo.d/20260807_020500_memdb_warmup_caller_pointer_race.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: d3f81a56-9c47-4e20-b7d8-52069fe1c4a3 -->
+<!-- last-edited: 2026-08-07 -->
+
+- [ ] 🔴 **Data race: `UpsertBookToMemDB` retains the CALLER's `*Book` and
+  dereferences it later on the warmup goroutine.** Caught by the race detector
+  on CI during PR #2170 (a parser PR that touches no database file). Diagnosed,
+  not fixed — the fix lands in the production memdb write path and deserves its
+  own PR with a regression test.
+
+  **The race, verbatim from CI:**
+
+  ```
+  WARNING: DATA RACE
+  Read at 0x00c000a96388 by goroutine 13725:
+    database.stripBookForMemdb()        memdb_strip.go:33      // cp := *src
+    database.UpsertBookToMemDB.func1()  memdb_sync.go:123
+    database.applyMemSync()             memdb_sync.go:92
+    database.publishWarmMemStore()      memdb_pending.go:211
+    database.NewPebbleStore.func1()     pebble_store.go:320    // async warmup
+
+  Previous write at 0x00c000a96388 by goroutine 13700:
+    database.(*PebbleStore).UpdateBook() pebble_store.go:1827  // book.ID = id
+    database.TestBook_TranscribeFields_RoundTrip()
+                                        transcribe_stats_test.go:99
+  ```
+
+  **Mechanism.** `UpsertBookToMemDB` (`memdb_sync.go:114`) captures the caller's
+  `book` pointer in a **closure** and hands it to `p.memSync`. While the store is
+  still warming, that closure is not run inline — it is queued as a pending op
+  and applied later by `publishWarmMemStore` → `applyMemSync`. So
+  `stripBookForMemdb(book)`'s `cp := *src` reads the caller's **live** struct at
+  an arbitrary later time. `CreateBook` (`pebble_store.go:1812`) and
+  `UpdateBook` (`:2060`) both pass the caller's pointer in, and `UpdateBook`
+  itself writes to it (`book.ID = id`, `:1827`).
+
+  **Why it matters beyond the test.** This is not a test-only bug. Any caller
+  doing the ordinary
+
+  ```go
+  b := &Book{...}
+  store.CreateBook(b)
+  b.SomeField = x        // caller mutates its own struct
+  store.UpdateBook(b.ID, b)
+  ```
+
+  races with warmup whenever the store is still warming — which is exactly
+  startup, when backfills and migrations run. A torn read here writes a
+  half-updated Book projection into memdb. Same family as the memdb warmup
+  write-loss fixed in #2166 and [[feedback_memdb_roundtrip_footgun]].
+
+  **The fix (one line, at the enqueue boundary):** snapshot the struct when the
+  op is *queued*, not when it is *applied*.
+
+  ```go
+  func (p *PebbleStore) UpsertBookToMemDB(ctx context.Context, book *Book) {
+      if book == nil { return }
+      snapshot := *book // copy NOW — the closure may run much later, on another goroutine
+      p.memSync("UpsertBook", func(txn memTxn) error {
+          if err := txn.Insert(memTableBooks, stripBookForMemdb(&snapshot)); err != nil {
+  ```
+
+  Check the sibling upserts (`UpsertBookFileToMemDB`, author/series equivalents)
+  for the same shape before calling it done — the closure-captures-caller-pointer
+  pattern is likely repeated.
+
+  **Reproduction is timing-dependent.** The full `internal/database` package
+  under `-race` passed locally (0 races, 305s) and `TestBook_TranscribeFields_
+  RoundTrip` passed 15/15 in isolation; it fired on CI under coverage
+  instrumentation. 🔴 Do NOT treat a green local run as evidence the race is
+  gone — the regression test must force the interleaving (e.g. mutate the caller
+  struct immediately after `CreateBook` while warmup is still pending) rather
+  than hoping to catch it.
 
 <!-- file: todo.d/20260805_213000_version_group_acoustic_audit.md -->
 <!-- version: 1.0.0 -->
