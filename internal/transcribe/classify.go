@@ -199,6 +199,11 @@ var (
 	// plus the "read for you by" variant seen in production transcripts.
 	creditVerbByRe = regexp.MustCompile(`(?i)\b(?:read|narrated|performed|voiced)(?:\s+for\s+you)?\s+by\b`)
 
+	// translatorByRe separates AUTHOR from TRANSLATOR. Kept distinct from
+	// creditVerbByRe so each role is anchored on its own verb and the order of
+	// credits in the announcement does not matter.
+	translatorByRe = regexp.MustCompile(`(?i)\b(?:translated|translation)\s+by\b`)
+
 	// titleSepRe separates TITLE from AUTHOR. The authorship-verb forms are
 	// listed FIRST so Go's leftmost-match rule consumes "written by" whole rather
 	// than matching the bare "by" inside it — which is what welded a credit verb
@@ -318,9 +323,15 @@ func ClassifyIntro(text string, pos IntroPosition) IntroClassification {
 	loc := anyCreditVerbRe.FindStringIndex(body)
 	hasCreditVerb := loc != nil && loc[0] <= creditVerbWindow
 	if f, conf, ok := extractCredits(body, hasCreditVerb); ok {
+		// Carry the struct through and set Raw, rather than re-listing fields.
+		// This line previously enumerated Title/Author/Narrator by hand, so
+		// Translator was silently dropped the moment it was added — a new field
+		// parsed correctly and then vanished here. Assigning the whole struct
+		// makes every future field additive by construction.
+		f.Raw = text
 		return IntroClassification{
 			Kind:       IntroKindCredits,
-			Fields:     IntroFields{Title: f.Title, Author: f.Author, Narrator: f.Narrator, Raw: text},
+			Fields:     f,
 			Confidence: positionAdjust(conf+boolWeight(hadPresents, 0.05), IntroKindCredits, pos),
 			Reason:     string(ReasonCreditGrammar),
 		}
@@ -395,9 +406,39 @@ func extractCredits(body string, hasCreditVerb bool) (f IntroFields, confidence 
 	}
 
 	author, narrator, hasReadBy := splitOnFirstRe(creditVerbByRe, rest)
-	f.Author = truncateName(author)
+
+	// 🔴 Split the translator off BEFORE truncating the author. The credit order
+	// is "<AUTHOR>. Translated by <TRANSLATOR>. Narrated by <NARRATOR>", so the
+	// narrator split above leaves the translator sitting INSIDE the author span.
+	// Without its own anchor the author absorbs it — measured on prod
+	// 2026-08-07, ~half of all translated works were corrupted this way:
+	//
+	//	'Kugane Maruyama Translated by Emily Balistreri'
+	//	'Alexei Asadchuk. Translated by Andrew Douglas'
+	//	'Yuri Vinokurov and Oleg Sapphire Translated'
+	//
+	// Splitting here rather than adding "translated by" to creditVerbByRe keeps
+	// the narrator anchored on its own verb, so credit ORDER stays irrelevant:
+	// a translator credit appearing before or after the narrator is handled the
+	// same way.
+	// The translator can appear on EITHER side of the narrator credit, so look
+	// in both spans. Checking only the author span made the parse depend on
+	// credit order — "Translated by X. Narrated by Y" worked while
+	// "Narrated by Y. Translated by X" left the translator welded onto the
+	// narrator instead. Anchoring each role on its own verb, and searching both
+	// spans, is what actually makes order irrelevant.
+	authorPart, authorTail, translatorInAuthor := splitOnFirstRe(translatorByRe, author)
+	narratorPart, narratorTail, translatorInNarrator := splitOnFirstRe(translatorByRe, narrator)
+
+	f.Author = truncateName(authorPart)
 	if hasReadBy {
-		f.Narrator = truncateName(narrator)
+		f.Narrator = truncateName(narratorPart)
+	}
+	switch {
+	case translatorInAuthor:
+		f.Translator = truncateName(authorTail)
+	case translatorInNarrator:
+		f.Translator = truncateName(narratorTail)
 	}
 	if f.Author == "" {
 		return IntroFields{}, 0, false
