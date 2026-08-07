@@ -75,11 +75,11 @@ func (h *Handler) ListAudiobookSegments(c *gin.Context) {
 	result := make([]gin.H, 0, len(files))
 	for _, f := range files {
 		result = append(result, gin.H{
-			"id":               f.ID,
-			"book_id":          int(crc32.ChecksumIEEE([]byte(f.BookID))),
-			"file_path":        f.FilePath,
-			"format":           f.Format,
-			"size_bytes":       f.FileSize,
+			"id":         f.ID,
+			"book_id":    int(crc32.ChecksumIEEE([]byte(f.BookID))),
+			"file_path":  f.FilePath,
+			"format":     f.Format,
+			"size_bytes": f.FileSize,
 			// Seconds by convention; normalize only genuine ms rows. See
 			// database.NormalizeDurationSec.
 			"duration_seconds": database.NormalizeDurationSec(f.FileSize, f.Duration),
@@ -164,14 +164,16 @@ func (h *Handler) ListBookFiles(c *gin.Context) {
 			// until added here by hand — unlike the Pebble row, this layer is NOT
 			// additive-safe. GetBookFiles reads Pebble-direct, so intro_transcription
 			// is populated here despite being stripped from the memdb projection.
-			"intro_transcription":     f.IntroTranscription,
-			"transcribed_title":       f.TranscribedTitle,
-			"transcribed_author":      f.TranscribedAuthor,
-			"transcribed_narrator":    f.TranscribedNarrator,
-			"intro_transcribed_at":    f.IntroTranscribedAt,
-			"transcribe_status":       f.TranscribeStatus,
-			"transcribe_error":        f.TranscribeError,
-			"transcribe_attempted_at": f.TranscribeAttemptedAt,
+			"intro_transcription":      f.IntroTranscription,
+			"transcribed_title":        f.TranscribedTitle,
+			"transcribed_author":       f.TranscribedAuthor,
+			"transcribed_narrator":     f.TranscribedNarrator,
+			"transcribed_translator":   f.TranscribedTranslator,
+			"transcribed_cover_artist": f.TranscribedCoverArtist,
+			"intro_transcribed_at":     f.IntroTranscribedAt,
+			"transcribe_status":        f.TranscribeStatus,
+			"transcribe_error":         f.TranscribeError,
+			"transcribe_attempted_at":  f.TranscribeAttemptedAt,
 		})
 	}
 	httputil.RespondWithOK(c, gin.H{"files": results, "count": len(results)})

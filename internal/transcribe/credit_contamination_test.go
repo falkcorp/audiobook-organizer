@@ -110,3 +110,23 @@ func TestCombinedCreditRecoversNarrator(t *testing.T) {
 		})
 	}
 }
+
+// TestCoverArtistCaptured — "Cover art by X" was previously only a truncation
+// boundary (recognised, then discarded). It must now be captured without
+// disturbing the roles either side of it.
+func TestCoverArtistCaptured(t *testing.T) {
+	g := ParseAudiobookIntro("Yen Audio presents Overlord Vol. 10 The Ruler of Conspiracy Written by " +
+		"Kugane Maruyama Translated by Emily Balistreri Cover art by SoBin " +
+		"Read by Chris Guerrero Prologue When Albedo entered the room")
+	for _, c := range []struct{ field, want, got string }{
+		{"title", "Overlord Vol. 10 The Ruler of Conspiracy", g.Title},
+		{"author", "Kugane Maruyama", g.Author},
+		{"translator", "Emily Balistreri", g.Translator},
+		{"coverArtist", "SoBin", g.CoverArtist},
+		{"narrator", "Chris Guerrero", g.Narrator},
+	} {
+		if c.want != c.got {
+			t.Errorf("%s\n want %q\n got  %q", c.field, c.want, c.got)
+		}
+	}
+}
