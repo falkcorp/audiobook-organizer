@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_migrate_single_file.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6b0d94e7-1c58-4a32-bf07-9e5d2a17c630
 // last-edited: 2026-08-07
 
@@ -49,8 +49,14 @@ import (
 // one file, possibly via retry1's longer clip — same file either way.
 //
 // Books with ZERO book_file rows are skipped, not "migrated with no effect".
-// They are unlinked, not un-transcribed; 195 of 204 apparently-untranscribed
-// review-queue members were in this state. Relink first.
+// Measured 2026-08-07 (todo.d dry-run arithmetic: 1,415 no-transcript − 147
+// single-file − 145 multi-file ≈ 1,123): those ~1,122 books have NEITHER file
+// rows NOR a book-level transcript. Relinking alone will not hand them a
+// transcript — they need real GPU transcription after the relink. An earlier
+// revision of this comment claimed they were "unlinked, not un-transcribed";
+// the dry-run disproved that. migrateOneBook checks row shape BEFORE the
+// transcript so they are reported as skip_no_book_file_rows, the more
+// actionable of the two reasons.
 
 // introMigrateParams controls the tier-0 migration.
 type introMigrateParams struct {
@@ -225,20 +231,26 @@ func (p *Plugin) migrateOneBook(store database.Store, log interface {
 	if err != nil || b == nil {
 		return migrateNoRows
 	}
-	if b.IntroTranscription == nil || strings.TrimSpace(*b.IntroTranscription) == "" {
-		return migrateNoTranscript
-	}
 
 	// GetBookFiles is the Pebble-direct read: it returns FULL rows with
 	// IntroTranscription intact. Reading through a memdb path here would hand
 	// back a slim row whose transcript is nil, and writing that back would blank
 	// the very field this op exists to populate.
+	//
+	// Row shape is checked BEFORE the transcript on purpose: the ~1,122 zero-row
+	// books also lack a transcript, and when both reasons apply the row shape is
+	// the actionable one (relink, then transcribe). The original ordering put
+	// them all in skip_book_has_no_transcript, which reported
+	// skip_no_book_file_rows as 0 and hid the unlinked population entirely.
 	files, err := store.GetBookFiles(bookID)
 	if err != nil {
 		return migrateNoRows
 	}
 	if len(files) == 0 {
 		return migrateNoRows
+	}
+	if b.IntroTranscription == nil || strings.TrimSpace(*b.IntroTranscription) == "" {
+		return migrateNoTranscript
 	}
 
 	reason, target := classifyMigrateCandidate(*b, files, overwrite)

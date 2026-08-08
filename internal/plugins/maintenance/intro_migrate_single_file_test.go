@@ -1,11 +1,12 @@
 // file: internal/plugins/maintenance/intro_migrate_single_file_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 91e4c07b-5a63-4d28-8f10-2b74e9d6a35c
 // last-edited: 2026-08-07
 
 package maintenance
 
 import (
+	"log/slog"
 	"reflect"
 	"testing"
 	"time"
@@ -156,6 +157,45 @@ func TestClassifyMigrateCandidate(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestMigrateOneBookReportsRowShapeBeforeTranscript pins the check ORDER in
+// migrateOneBook. Measured 2026-08-07: the ~1,122 zero-book_file-row books have
+// neither file rows nor a book-level transcript. With the transcript checked
+// first they all landed in skip_book_has_no_transcript, reporting
+// skip_no_book_file_rows as 0 and hiding the unlinked population. Row shape is
+// the more actionable reason (relink, then transcribe), so it must win when
+// both apply.
+func TestMigrateOneBookReportsRowShapeBeforeTranscript(t *testing.T) {
+	p := New(fakeDeps{})
+	log := slog.Default()
+
+	bookNoTranscript := func(id string) (*database.Book, error) {
+		return &database.Book{ID: id}, nil // no IntroTranscription either
+	}
+
+	t.Run("zero_rows_and_no_transcript_reports_no_rows", func(t *testing.T) {
+		store := &database.MockStore{
+			GetBookByIDFunc:  bookNoTranscript,
+			GetBookFilesFunc: func(string) ([]database.BookFile, error) { return nil, nil },
+		}
+		if got := p.migrateOneBook(store, log, "b-zero", true, false); got != migrateNoRows {
+			t.Errorf("reason = %q, want %q — zero-row books must be reported by row shape "+
+				"even when the transcript is also missing", got, migrateNoRows)
+		}
+	})
+
+	t.Run("rows_present_but_no_transcript_reports_no_transcript", func(t *testing.T) {
+		store := &database.MockStore{
+			GetBookByIDFunc: bookNoTranscript,
+			GetBookFilesFunc: func(id string) ([]database.BookFile, error) {
+				return []database.BookFile{{ID: "f1", BookID: id, FilePath: "/lib/a.mp3"}}, nil
+			},
+		}
+		if got := p.migrateOneBook(store, log, "b-linked", true, false); got != migrateNoTranscript {
+			t.Errorf("reason = %q, want %q", got, migrateNoTranscript)
+		}
+	})
 }
 
 // TestMigratedFieldsMatchBookFileSchema fails when someone adds a per-file
