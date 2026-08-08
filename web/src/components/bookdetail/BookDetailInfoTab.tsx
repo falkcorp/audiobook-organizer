@@ -1,7 +1,7 @@
 // file: web/src/components/bookdetail/BookDetailInfoTab.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: e5f6a7b8-c9d0-1234-efab-345678901234
-// last-edited: 2026-05-02
+// last-edited: 2026-08-07
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -17,7 +17,7 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
-import LabelIcon from '@mui/icons-material/Label.js';
+import LabelIcon from '@mui/icons-material/Label';
 import type { Book, SegmentTags } from '../../services/api';
 import * as api from '../../services/api';
 import { formatDuration, formatBytes } from './bookDetailUtils';

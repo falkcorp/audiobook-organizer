@@ -1,10 +1,10 @@
 // file: web/src/components/common/FilterTagBar.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7c4f8d12-3b6e-4a5c-9d1e-8f2a3b4c5d6e
-// last-edited: 2026-05-04
+// last-edited: 2026-08-07
 
 import { Box, Button, Chip, Stack, Typography } from '@mui/material';
-import CloseIcon from '@mui/icons-material/Close.js';
+import CloseIcon from '@mui/icons-material/Close';
 
 // Avoid importing the full ChipPropsColorOverrides surface — these are
 // the MUI palette names we actually use across the app for filter chips.

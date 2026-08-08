@@ -1,7 +1,7 @@
 // file: web/src/components/bookdetail/BookDetailDialogs.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: b8c9d0e1-f2a3-4567-bcde-678901234567
-// last-edited: 2026-05-02
+// last-edited: 2026-08-07
 
 import {
   Alert,
@@ -23,15 +23,15 @@ import {
   TableRow,
   Typography,
 } from '@mui/material';
-import SaveIcon from '@mui/icons-material/Save.js';
-import BuildIcon from '@mui/icons-material/Build.js';
-import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown.js';
-import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp.js';
-import FileCopyIcon from '@mui/icons-material/FileCopy.js';
-import LabelIcon from '@mui/icons-material/Label.js';
-import ImageIcon from '@mui/icons-material/Image.js';
-import WarningAmberIcon from '@mui/icons-material/WarningAmber.js';
-import DriveFileRenameOutlineIcon from '@mui/icons-material/DriveFileRenameOutline.js';
+import SaveIcon from '@mui/icons-material/Save';
+import BuildIcon from '@mui/icons-material/Build';
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
+import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
+import FileCopyIcon from '@mui/icons-material/FileCopy';
+import LabelIcon from '@mui/icons-material/Label';
+import ImageIcon from '@mui/icons-material/Image';
+import WarningAmberIcon from '@mui/icons-material/WarningAmber';
+import DriveFileRenameOutlineIcon from '@mui/icons-material/DriveFileRenameOutline';
 import type { Book, BookSegment, OrganizePreviewResponse } from '../../services/api';
 import { MetadataEditDialog } from '../audiobooks/MetadataEditDialog';
 import { MetadataHistory } from '../MetadataHistory';

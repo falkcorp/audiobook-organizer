@@ -1,5 +1,5 @@
 // file: web/src/components/CacheStatsPanel.tsx
-// version: 1.1.1
+// version: 1.1.2
 // guid: b5c8d9ea-1f2g-3h4i-5j6k-7l8m9n0o1p2q
 
 import { useEffect, useState, useRef } from 'react';
@@ -16,7 +16,7 @@ import {
   TableRow,
   Typography,
 } from '@mui/material';
-import RefreshIcon from '@mui/icons-material/Refresh.js';
+import RefreshIcon from '@mui/icons-material/Refresh';
 import * as api from '../services/api';
 
 const POLL_INTERVAL_MS = 5_000;

@@ -1,7 +1,7 @@
 // file: web/src/components/system/MaintenanceTab.tsx
-// version: 1.8.2
+// version: 1.8.3
 // guid: c3d4e5f6-a7b8-9012-cdef-345678901234
-// last-edited: 2026-05-20
+// last-edited: 2026-08-07
 
 import { useEffect, useState, useCallback, useRef } from 'react';
 import {
@@ -26,7 +26,7 @@ import {
   useMediaQuery,
   useTheme,
 } from '@mui/material';
-import PlayArrowIcon from '@mui/icons-material/PlayArrow.js';
+import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import * as api from '../../services/api';
 import { withOptimisticOperation } from '../../utils/withOptimisticOperation';
 

@@ -1,6 +1,6 @@
 // file: web/src/pages/Diagnostics.tsx
-// version: 1.3.0
-// last-edited: 2026-04-30
+// version: 1.3.1
+// last-edited: 2026-08-07
 // guid: f2323fc4-b3e7-4298-9ec5-759447cbd643
 
 import { useState, useCallback, useRef, useEffect } from 'react';
@@ -38,13 +38,13 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
-import BugReportIcon from '@mui/icons-material/BugReport.js';
-import ContentCopyIcon from '@mui/icons-material/ContentCopy.js';
-import SpellcheckIcon from '@mui/icons-material/Spellcheck.js';
-import BuildIcon from '@mui/icons-material/Build.js';
-import DownloadIcon from '@mui/icons-material/Download.js';
-import SmartToyIcon from '@mui/icons-material/SmartToy.js';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore.js';
+import BugReportIcon from '@mui/icons-material/BugReport';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import SpellcheckIcon from '@mui/icons-material/Spellcheck';
+import BuildIcon from '@mui/icons-material/Build';
+import DownloadIcon from '@mui/icons-material/Download';
+import SmartToyIcon from '@mui/icons-material/SmartToy';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import * as api from '../services/api';
 
 interface CategoryOption {

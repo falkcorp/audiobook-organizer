@@ -1,5 +1,5 @@
 // file: web/src/components/layout/TopBar.tsx
-// version: 1.6.1
+// version: 1.6.2
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 
 import { useEffect, useRef, useState } from 'react';
@@ -14,11 +14,11 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
-import MenuIcon from '@mui/icons-material/Menu.js';
-import Brightness4Icon from '@mui/icons-material/Brightness4.js';
-import Brightness7Icon from '@mui/icons-material/Brightness7.js';
-import SearchIcon from '@mui/icons-material/Search.js';
-import SettingsIcon from '@mui/icons-material/Settings.js';
+import MenuIcon from '@mui/icons-material/Menu';
+import Brightness4Icon from '@mui/icons-material/Brightness4';
+import Brightness7Icon from '@mui/icons-material/Brightness7';
+import SearchIcon from '@mui/icons-material/Search';
+import SettingsIcon from '@mui/icons-material/Settings';
 import { eventSourceManager } from '../../services/eventSourceManager';
 import { useAppStore } from '../../stores/useAppStore';
 import { OperationsIndicator } from './OperationsIndicator';

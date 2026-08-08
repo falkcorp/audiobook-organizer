@@ -1,7 +1,7 @@
 // file: web/src/components/settings/ITunesImport.tsx
-// version: 1.19.1
+// version: 1.19.2
 // guid: 4eb9b74d-7192-497b-849a-092833ae63a4
-// last-edited: 2026-05-20
+// last-edited: 2026-08-07
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -43,14 +43,14 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
-import AddIcon from '@mui/icons-material/Add.js';
-import DeleteIcon from '@mui/icons-material/Delete.js';
-import FolderOpenIcon from '@mui/icons-material/FolderOpen.js';
-import CloudUploadIcon from '@mui/icons-material/CloudUpload.js';
-import CloudDownloadIcon from '@mui/icons-material/CloudDownload.js';
-import CheckCircleIcon from '@mui/icons-material/CheckCircle.js';
-import SearchIcon from '@mui/icons-material/Search.js';
-import SyncIcon from '@mui/icons-material/Sync.js';
+import AddIcon from '@mui/icons-material/Add';
+import DeleteIcon from '@mui/icons-material/Delete';
+import FolderOpenIcon from '@mui/icons-material/FolderOpen';
+import CloudUploadIcon from '@mui/icons-material/CloudUpload';
+import CloudDownloadIcon from '@mui/icons-material/CloudDownload';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import SearchIcon from '@mui/icons-material/Search';
+import SyncIcon from '@mui/icons-material/Sync';
 import IconButton from '@mui/material/IconButton';
 import { ITunesConflictDialog, type ConflictItem } from './ITunesConflictDialog';
 import { ServerFileBrowser } from '../common/ServerFileBrowser';

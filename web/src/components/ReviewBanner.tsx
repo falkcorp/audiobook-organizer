@@ -1,11 +1,11 @@
 // file: web/src/components/ReviewBanner.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9b2e7d41-6c30-4a58-8f19-2d7a5e0c3b64
-// last-edited: 2026-07-13
+// last-edited: 2026-08-07
 
 import { useNavigate } from 'react-router-dom';
 import { Alert, Box } from '@mui/material';
-import FactCheckIcon from '@mui/icons-material/FactCheck.js';
+import FactCheckIcon from '@mui/icons-material/FactCheck';
 import { useReviewStore } from '../stores/useReviewStore';
 
 /**

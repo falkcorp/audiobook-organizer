@@ -1,5 +1,5 @@
 // file: web/src/pages/Series.tsx
-// version: 1.4.0
+// version: 1.4.1
 // guid: 7d8e9f0a-1b2c-3d4e-5f6a-7b8c9d0e1f2a
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
@@ -43,15 +43,15 @@ import {
   Divider,
   Badge,
 } from '@mui/material';
-import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown.js';
-import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp.js';
-import EditIcon from '@mui/icons-material/Edit.js';
-import DeleteIcon from '@mui/icons-material/Delete.js';
-import CallSplitIcon from '@mui/icons-material/CallSplit.js';
-import MergeTypeIcon from '@mui/icons-material/MergeType.js';
-import RefreshIcon from '@mui/icons-material/Refresh.js';
-import HistoryIcon from '@mui/icons-material/History.js';
-import UndoIcon from '@mui/icons-material/Undo.js';
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
+import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
+import EditIcon from '@mui/icons-material/Edit';
+import DeleteIcon from '@mui/icons-material/Delete';
+import CallSplitIcon from '@mui/icons-material/CallSplit';
+import MergeTypeIcon from '@mui/icons-material/MergeType';
+import RefreshIcon from '@mui/icons-material/Refresh';
+import HistoryIcon from '@mui/icons-material/History';
+import UndoIcon from '@mui/icons-material/Undo';
 import { useNavigate } from 'react-router-dom';
 import {
   useConfigurableTable,

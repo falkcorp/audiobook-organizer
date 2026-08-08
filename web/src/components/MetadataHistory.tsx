@@ -1,5 +1,5 @@
 // file: web/src/components/MetadataHistory.tsx
-// version: 1.3.0
+// version: 1.3.1
 // guid: 8e3a7b2c-5d1f-4a9e-b6c0-2f8d4e7a1b3c
 
 import { useCallback, useEffect, useState } from 'react';
@@ -24,11 +24,11 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
-import UndoIcon from '@mui/icons-material/Undo.js';
-import SearchIcon from '@mui/icons-material/Search.js';
-import ArrowRightAltIcon from '@mui/icons-material/ArrowRightAlt.js';
-import RestoreIcon from '@mui/icons-material/Restore.js';
-import DeleteSweepIcon from '@mui/icons-material/DeleteSweep.js';
+import UndoIcon from '@mui/icons-material/Undo';
+import SearchIcon from '@mui/icons-material/Search';
+import ArrowRightAltIcon from '@mui/icons-material/ArrowRightAlt';
+import RestoreIcon from '@mui/icons-material/Restore';
+import DeleteSweepIcon from '@mui/icons-material/DeleteSweep';
 import type { MetadataChangeRecord, BookVersionEntry } from '../services/api';
 import * as api from '../services/api';
 

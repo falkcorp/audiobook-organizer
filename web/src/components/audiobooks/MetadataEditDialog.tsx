@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/MetadataEditDialog.tsx
-// version: 2.1.0
+// version: 2.1.1
 // guid: 4a5b6c7d-8e9f-0a1b-2c3d-4e5f6a7b8c9d
 
 import React, { useState, useEffect, useCallback } from 'react';
@@ -18,8 +18,8 @@ import {
   CircularProgress,
   Stack,
 } from '@mui/material';
-import LockIcon from '@mui/icons-material/Lock.js';
-import LockOpenIcon from '@mui/icons-material/LockOpen.js';
+import LockIcon from '@mui/icons-material/Lock';
+import LockOpenIcon from '@mui/icons-material/LockOpen';
 import type { Audiobook } from '../../types';
 import type { MetadataFieldStates, MetadataFieldStateEntry } from '../../services/api';
 import * as api from '../../services/api';

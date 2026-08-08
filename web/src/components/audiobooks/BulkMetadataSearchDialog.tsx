@@ -1,7 +1,7 @@
 // file: web/src/components/audiobooks/BulkMetadataSearchDialog.tsx
-// version: 1.4.0
+// version: 1.4.1
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-06-21
+// last-edited: 2026-08-07
 
 import { useCallback, useEffect, useState } from 'react';
 import {
@@ -28,16 +28,16 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
-import SearchIcon from '@mui/icons-material/Search.js';
-import FolderOpenIcon from '@mui/icons-material/FolderOpen.js';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore.js';
-import ExpandLessIcon from '@mui/icons-material/ExpandLess.js';
-import HeadphonesIcon from '@mui/icons-material/Headphones.js';
-import NavigateBeforeIcon from '@mui/icons-material/NavigateBefore.js';
-import NavigateNextIcon from '@mui/icons-material/NavigateNext.js';
-import SkipNextIcon from '@mui/icons-material/SkipNext.js';
-import CheckCircleIcon from '@mui/icons-material/CheckCircle.js';
-import UndoIcon from '@mui/icons-material/Undo.js';
+import SearchIcon from '@mui/icons-material/Search';
+import FolderOpenIcon from '@mui/icons-material/FolderOpen';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import ExpandLessIcon from '@mui/icons-material/ExpandLess';
+import HeadphonesIcon from '@mui/icons-material/Headphones';
+import NavigateBeforeIcon from '@mui/icons-material/NavigateBefore';
+import NavigateNextIcon from '@mui/icons-material/NavigateNext';
+import SkipNextIcon from '@mui/icons-material/SkipNext';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import UndoIcon from '@mui/icons-material/Undo';
 import type { Audiobook } from '../../types';
 import type { BookFile, MetadataCandidate } from '../../services/api';
 import * as api from '../../services/api';

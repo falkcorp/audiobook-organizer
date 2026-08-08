@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/MetadataSearchDialog.tsx
-// version: 1.9.0
+// version: 1.9.1
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
 
 import { useCallback, useEffect, useState } from 'react';
@@ -24,12 +24,12 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
-import SearchIcon from '@mui/icons-material/Search.js';
-import RefreshIcon from '@mui/icons-material/Refresh.js';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore.js';
-import ExpandLessIcon from '@mui/icons-material/ExpandLess.js';
-import HeadphonesIcon from '@mui/icons-material/Headphones.js';
-import WarningAmberIcon from '@mui/icons-material/WarningAmber.js';
+import SearchIcon from '@mui/icons-material/Search';
+import RefreshIcon from '@mui/icons-material/Refresh';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import ExpandLessIcon from '@mui/icons-material/ExpandLess';
+import HeadphonesIcon from '@mui/icons-material/Headphones';
+import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import type { Book, MetadataCandidate } from '../../services/api';
 import * as api from '../../services/api';
 

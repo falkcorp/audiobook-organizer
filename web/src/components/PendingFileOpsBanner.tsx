@@ -1,5 +1,5 @@
 // file: web/src/components/PendingFileOpsBanner.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6c1e8b3d-2a47-4f5d-9e0c-b8a4d2f6e7a3
 //
 // Banner shown when background file operations (tag write, cover embed,
@@ -17,8 +17,8 @@ import {
   Stack,
   Typography,
 } from '@mui/material';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore.js';
-import ExpandLessIcon from '@mui/icons-material/ExpandLess.js';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import type { PendingFileOp } from '../services/fileOpsApi';
 
 interface Props {

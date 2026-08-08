@@ -1,5 +1,5 @@
 // file: web/src/components/ChangeLog.tsx
-// version: 1.4.0
+// version: 1.4.1
 // guid: 00f575de-ecea-45b7-9aa5-d6dbbc3f21f6
 
 import { useCallback, useEffect, useState } from 'react';
@@ -10,7 +10,7 @@ import {
   Stack,
   Typography,
 } from '@mui/material';
-import RestoreIcon from '@mui/icons-material/Restore.js';
+import RestoreIcon from '@mui/icons-material/Restore';
 import type { ChangeLogEntry } from '../services/api';
 import * as api from '../services/api';
 import { fetchActivity } from '../services/activityApi';
