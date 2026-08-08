@@ -15,6 +15,27 @@
       `!loading && books.length === 0` will show "no books" during that window,
       because a failed request leaves the list empty without leaving it loading.
 
+      **Root cause, located.** `web/src/components/library/LibraryBookGrid.tsx`
+      line 183:
+
+          {audiobooks.length === 0 && !loading && !searchQuery ? (
+
+      That is the predicted bug shape exactly, and there is no error branch
+      anywhere near it. The component's props (line 43) carry only
+      `loading: boolean` — **there is no error/status prop at all**, so
+      `LibraryBookGrid` is structurally incapable of telling "the request
+      failed" apart from "the library is empty." The `manualImportError` /
+      `bulkOrganizeError` state in `pages/Library.tsx` (lines 343, 372) covers
+      import and organize actions, not the book-list fetch. So when the fetch
+      fails during warmup, `loading` flips to false, `audiobooks` is empty,
+      `searchQuery` is unset, and the page confidently announces an empty
+      library.
+
+      Fixing this therefore is not a one-line condition change: a fetch
+      status/error has to be threaded from the data layer into this component
+      first. Line 335 has the sibling branch for the searched-and-empty case and
+      will want the same treatment.
+
       **The distinction the UI must make.** Three states are currently being
       collapsed into one:
 
