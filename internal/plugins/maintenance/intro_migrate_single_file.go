@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_migrate_single_file.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6b0d94e7-1c58-4a32-bf07-9e5d2a17c630
 // last-edited: 2026-08-07
 
@@ -90,9 +90,12 @@ func (p *Plugin) introMigrateSingleFileDef() sdk.OperationDef {
 		ResumePolicy:    sdk.ResumeRestart,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.intro-migrate-single-file",
-		Cancellable:     true,
-		Isolate:         false,
-		Timeout:         2 * time.Hour,
+		// UpdateBookFile whole-row write-back on BookFile rows (reads Books).
+		Writes:      []sdk.Resource{sdk.ResBookFiles},
+		Reads:       []sdk.Resource{sdk.ResBooks},
+		Cancellable: true,
+		Isolate:     false,
+		Timeout:     2 * time.Hour,
 		// Pure DB work, no Whisper: pages complete in seconds, so the default
 		// 5-minute no-progress watchdog is generous already. Left explicit so a
 		// future change that adds I/O here has to think about it.

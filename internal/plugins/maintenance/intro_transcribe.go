@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.15.0
+// version: 3.16.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-08-07
 
@@ -89,9 +89,11 @@ func (p *Plugin) introTranscribeDef() sdk.OperationDef {
 		ResumePolicy:    sdk.ResumeRestart,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.transcribe-book-intros",
-		Cancellable:     true,
-		Isolate:         false,
-		Timeout:         10 * time.Hour,
+		// GetBookByID→mutate→UpdateBook whole-row write-back on Book rows.
+		Writes:      []sdk.Resource{sdk.ResBooks},
+		Cancellable: true,
+		Isolate:     false,
+		Timeout:     10 * time.Hour,
 		// A page of 200 books sent to the (remote GPU or local) Whisper backend
 		// can take several minutes to return. The default 5-minute no-progress
 		// watchdog would cancel the op mid-batch — which it did, repeatedly,
