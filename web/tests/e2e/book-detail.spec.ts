@@ -1,5 +1,5 @@
 // file: tests/e2e/book-detail.spec.ts
-// version: 1.12.1
+// version: 1.13.0
 // guid: 2a3b4c5d-6e7f-8a9b-0c1d-2e3f4a5b6c7d
 // last-edited: 2026-08-07
 
@@ -168,16 +168,40 @@ const setupRoutes = async (page: import('@playwright/test').Page) => {
 
       Object.keys(tagState.tags).forEach((field) => recomputeEffective(field));
 
-      const jsonResponse = (body: unknown, status = 200) =>
-        new Response(JSON.stringify(body), {
+      // The frontend api layer unwraps a { data: ... } envelope on most
+      // endpoints; serve both the top-level fields and the envelope so raw
+      // readers and `.data` readers both work.
+      const jsonResponse = (body: unknown, status = 200) => {
+        const payload =
+          body && typeof body === 'object' && !Array.isArray(body) && !('data' in body)
+            ? { ...(body as Record<string, unknown>), data: body }
+            : body;
+        return new Response(JSON.stringify(payload), {
           status,
           headers: { 'Content-Type': 'application/json' },
         });
+      };
 
       const originalFetch = window.fetch.bind(window);
       window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
         const url = typeof input === 'string' ? input : input.url;
         const method = (init?.method || 'GET').toUpperCase();
+
+        // Auth — the app checks these on boot; without a mock they hit the
+        // real backend, which 401s and bounces the page to the Login screen.
+        if (url.includes('/api/v1/auth/status')) {
+          return Promise.resolve(
+            jsonResponse({
+              auth_enabled: true,
+              has_users: false,
+              requires_auth: false,
+              bootstrap_ready: true,
+            })
+          );
+        }
+        if (url.includes('/api/v1/auth/me')) {
+          return Promise.resolve(jsonResponse({ user: null }));
+        }
 
         // Health/system
         if (url.includes('/api/v1/health')) {
@@ -196,15 +220,38 @@ const setupRoutes = async (page: import('@playwright/test').Page) => {
           );
         }
 
-        // Book detail + list
-        if (
-          url.includes(`/api/v1/audiobooks/${injectedBookId}`) &&
-          !url.includes('/tags') &&
-          !url.includes('/versions') &&
-          !url.includes('/restore') &&
-          !url.includes('/fetch-metadata') &&
-          !url.includes('/parse-with-ai')
-        ) {
+        // Book files (Files & History tab) — must be handled before the
+        // generic book route; getBookFiles unwraps { data: { files, count } }.
+        if (url.includes(`/api/v1/audiobooks/${injectedBookId}/files`)) {
+          return Promise.resolve(
+            jsonResponse({
+              files: [
+                {
+                  id: 'file-1',
+                  book_id: injectedBookId,
+                  file_path: book.file_path,
+                  file_size: 1024 * 1024,
+                  format: 'm4b',
+                  file_hash: book.file_hash,
+                },
+              ],
+              count: 1,
+            })
+          );
+        }
+
+        // Legacy segments endpoint — expects { data: [] } (an array).
+        if (url.includes(`/api/v1/audiobooks/${injectedBookId}/segments`)) {
+          return Promise.resolve(jsonResponse({ data: [] }));
+        }
+
+        // Book detail + list — match only the bare book URL (optionally with a
+        // query string), so subresource routes (/files, /history, ...) never
+        // fall through to this handler and crash array consumers.
+        const bareBookUrl = new RegExp(
+          `/api/v1/audiobooks/${injectedBookId}(\\?|$)`
+        );
+        if (bareBookUrl.test(url)) {
           if (method === 'GET') {
             if (purged) {
               return Promise.resolve(jsonResponse({}, 404));

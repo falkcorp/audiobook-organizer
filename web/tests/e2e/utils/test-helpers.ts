@@ -1,7 +1,7 @@
 // file: web/tests/e2e/utils/test-helpers.ts
-// version: 2.8.0
+// version: 2.9.0
 // guid: a1b2c3d4-e5f6-7890-abcd-e1f2a3b4c5d6
-// last-edited: 2026-07-03
+// last-edited: 2026-08-07
 
 import { Page } from '@playwright/test';
 
@@ -610,28 +610,53 @@ export async function setupMockApiRoutes(
         (mockState.systemStatus as { disk_total_bytes?: number })
           .disk_total_bytes || 500 * 1024 * 1024 * 1024;
 
+      // The frontend api layer (getSystemStatus) unwraps a { data: ... }
+      // envelope; keep top-level fields too for any legacy consumers.
+      const statusPayload = {
+        ...mockState.systemStatus,
+        status: 'ok',
+        library: {
+          book_count: totalBooks,
+          folder_count: 1,
+          total_size: librarySize,
+        },
+        import_paths: {
+          folder_count: mockState.importPaths.length,
+          book_count: mockState.books.filter((b: Record<string, unknown>) => b.library_state === 'import').length,
+        },
+        operations: { recent: (mockState.operations as { history?: unknown[] }).history || [] },
+        library_book_count: totalBooks,
+        import_book_count: mockState.books.filter((b: Record<string, unknown>) => b.library_state === 'import').length,
+        total_book_count: totalBooks,
+        library_size_bytes: librarySize,
+        total_size_bytes: librarySize,
+        disk_used_bytes: librarySize,
+        disk_free_bytes: Math.max(0, diskTotal - librarySize),
+      };
       return route.fulfill(
-        jsonResponse({
-          ...mockState.systemStatus,
-          status: 'ok',
-          library: {
-            book_count: totalBooks,
-            folder_count: 1,
-            total_size: librarySize,
-          },
-          import_paths: {
-            folder_count: mockState.importPaths.length,
-            book_count: mockState.books.filter((b: Record<string, unknown>) => b.library_state === 'import').length,
-          },
-          operations: { recent: (mockState.operations as { history?: unknown[] }).history || [] },
-          library_book_count: totalBooks,
-          import_book_count: mockState.books.filter((b: Record<string, unknown>) => b.library_state === 'import').length,
-          total_book_count: totalBooks,
-          library_size_bytes: librarySize,
-          total_size_bytes: librarySize,
-          disk_used_bytes: librarySize,
-          disk_free_bytes: Math.max(0, diskTotal - librarySize),
-        })
+        jsonResponse({ ...statusPayload, data: statusPayload })
+      );
+    }
+
+    // System storage (statfs of the data volume) — the Dashboard prefers this
+    // endpoint over system/status disk fields, so mock it from the same state.
+    if (pathname === '/api/v1/system/storage') {
+      const librarySize = mockState.books.reduce(
+        (sum, book) => sum + (book.file_size || 0),
+        0
+      );
+      const diskTotal =
+        (mockState.systemStatus as { disk_total_bytes?: number })
+          .disk_total_bytes || 500 * 1024 * 1024 * 1024;
+      const storagePayload = {
+        path: '/library',
+        total_bytes: diskTotal,
+        used_bytes: librarySize,
+        free_bytes: Math.max(0, diskTotal - librarySize),
+        percent_used: diskTotal > 0 ? (librarySize / diskTotal) * 100 : 0,
+      };
+      return route.fulfill(
+        jsonResponse({ ...storagePayload, data: storagePayload })
       );
     }
 
@@ -1037,7 +1062,8 @@ export async function setupMockApiRoutes(
     }
 
     if (pathname === '/api/v1/operations/scan' && method === 'POST') {
-      return route.fulfill(jsonResponse({ id: 'op-scan-1', status: 'running', type: 'scan', progress: 0 }, 201));
+      const scanOp = { id: 'op-scan-1', status: 'running', type: 'scan', progress: 0 };
+      return route.fulfill(jsonResponse({ ...scanOp, data: scanOp }, 201));
     }
 
     if (pathname === '/api/v1/operations/organize' && method === 'POST') {
@@ -1063,14 +1089,16 @@ export async function setupMockApiRoutes(
         return b;
       }) as typeof mockState.books;
       if (errorBook) {
-        return route.fulfill(jsonResponse({
+        const errorOp = {
           id: 'op-org-1', status: 'error', type: 'organize',
           error_message: (errorBook as Record<string, unknown>).organize_error,
           progress: bookIds.indexOf((errorBook as Record<string, unknown>).id as string),
           total: bookIds.length,
-        }, 200));
+        };
+        return route.fulfill(jsonResponse({ ...errorOp, data: errorOp }, 200));
       }
-      return route.fulfill(jsonResponse({ id: 'op-org-1', status: 'completed', type: 'organize', progress: bookIds.length || mockState.books.length, total: bookIds.length || mockState.books.length }, 201));
+      const organizeOp = { id: 'op-org-1', status: 'completed', type: 'organize', progress: bookIds.length || mockState.books.length, total: bookIds.length || mockState.books.length };
+      return route.fulfill(jsonResponse({ ...organizeOp, data: organizeOp }, 201));
     }
 
     if (pathname.match(/\/api\/v1\/operations\/[^/]+$/) && method === 'DELETE') {
