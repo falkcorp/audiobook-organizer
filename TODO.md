@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.17.7 -->
+<!-- version: 10.18.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-08-08 -->
 
@@ -106,32 +106,69 @@ into one of the curated sections below, is a normal direct edit.
 <!-- guid: 5b3a9e17-2c64-4f80-b1d9-7e05c8a3f264 -->
 <!-- last-edited: 2026-08-07 -->
 
-- [ ] **Re-run the CPU-node Whisper benchmark in POOL configuration, during the
-      day.** The 2026-08-07 evening run was cut at 20:50 for quiet hours after
-      measuring only the single-process shapes. Measured so far (10 real prod
-      clips, base.en, beam 5, VAD on, mirroring `scripts/whisper_server.py`):
+- [x] **Re-run the CPU-node Whisper benchmark in POOL configuration, during the
+      day.** ✅ **DONE 2026-08-08.** Full sweep run on U1 (`ssh u1`); raw log
+      `/opt/whisper-bench/pool.log`, scripts `bench_pool.py` (phase 1) and
+      `bench_pool2.py` (phase 2). Same methodology as the evening run: 10 real
+      prod clips, base.en, beam 5, VAD on, mirroring `scripts/whisper_server.py`.
 
-        1 proc x 48 threads, int8          1.96 clips/min  -> 92 days for tier 3
-        1 proc x 48 threads, int8_float32  ~2.04           -> ~89 days
+      **Measured (clips/min, and projected days for the 260k-file tier-3 tail):**
 
-      Two confirmed findings that must drive the config:
-      - **int8 buys nothing on this host** (Haswell: no AVX-512/VNNI; ct2 falls
-        back to a slow int8 GEMM). Same speed as int8_float32 within noise.
-      - **One process cannot use 48 cores** — ctranslate2 plateaus ~8-16
-        intra-op threads; the box mostly idled.
+        shape        int8_float32              float32
+        1 x 48        ~2.04  (~89 days)         2.39  (75.4 days)
+        4 x 12        44.13  ( 4.1 days)        —
+        8 x 6         63.86  ( 2.8 days)       40.48  (4.5 days)
+        12 x 4        67.52  ( 2.7 days)       45.80  (3.9 days)
+        16 x 3        67.82  ( 2.7 days)        —
+        24 x 2        75.83  ( 2.4 days)  <--  47.91  (3.8 days)
+        32 x 1        75.09  ( 2.4 days)        —
+        48 x 1        76.31  ( 2.4 days)        —
 
-      Still to measure: pool shapes **8 workers x 6 threads** and **12 x 4**
-      (add to the script; the planned 4 x 12 too), plus single float32 as a
-      baseline. Linear-ish scaling at 8 workers would be ~10-14 clips/min
-      (~13-18 days for the 260k-file tier-3 tail) — plausible, NOT yet measured,
-      do not plan around it until it is.
+      **➡️ Recommended config: 24 workers x 2 threads, `int8_float32`.**
+      Throughput saturates at ~75-76 clips/min across 24, 32 and 48 workers —
+      three points spanning a 2x range, so this is a real ceiling and not two
+      adjacent samples that happened to agree. 24x2 reaches it with the fewest
+      processes and the fewest resident models, so it is the cheapest way to
+      buy the plateau.
 
-      Everything is staged on the host: `/opt/whisper-bench/{venv,clips,bench.py}`.
-      Rerun: `nohup /opt/whisper-bench/venv/bin/python /opt/whisper-bench/bench.py
-      > /opt/whisper-bench/bench.log 2>&1 &` — edit the script first to skip the
-      already-measured single-process configs. 🔴 Daytime only; the box is in a
-      bedroom. 🔴 Host address is fleet-internal — keep it out of this public
-      repo (it is deliberately absent here; see infra-docs).
+      **The tier-3 tail drops from ~92 days to ~2.4 days.**
+
+      **Corrections to the assumptions this entry previously recorded:**
+
+      - The estimate of "~10-14 clips/min, ~13-18 days" was **~5x pessimistic**.
+        Actual is 75.83 and 2.4 days. Pooling did not merely scale linearly off
+        the single-process number, because the single-process number was itself
+        crippled.
+      - "**One process cannot use 48 cores**" — confirmed, and it is the whole
+        story. Every row above uses the same 48 total threads. The only variable
+        is how they are divided, and it moves throughput **32x** (2.39 -> 76.31).
+        This is not a hardware headroom finding; it is ctranslate2 being unable
+        to use a wide intra-op thread count.
+      - "**int8 buys nothing on this host**" — needs qualifying, because **the
+        compute-type winner flips with configuration**. Single-process,
+        `float32` is fastest (2.39 vs ~2.04 for int8_float32 vs 1.96 for int8).
+        In every pool shape measured, `int8_float32` wins decisively — 63.86 vs
+        40.48 at 8x6, 67.52 vs 45.80 at 12x4, 75.83 vs 47.91 at 24x2, a
+        consistent ~50-58% advantage at three separate shapes. Since a pool is
+        what would actually ship, the original note is closer to right than a
+        single-process comparison suggests. Working hypothesis (NOT measured):
+        concurrent workers saturate memory bandwidth and int8 weights halve that
+        traffic, while a single 48-thread process is compute-starved by poor
+        thread scaling so bandwidth never becomes the limit.
+
+      **Methodology note worth keeping.** The original script mapped the 10
+      clips once per config. That cannot measure a 12-worker pool — two workers
+      would idle — and at 8 workers each does barely one clip, so the number
+      measures pool spin-up and imbalance rather than throughput. Every pool run
+      now replicates the clip list to at least 4 tasks per worker. Compute per
+      clip is identical on repeat (model resident, audio decode + inference
+      still run), so tasks/wall stays a fair throughput figure.
+
+      **⚠️ These are upper bounds for the transcription step alone.** The
+      harness reads local WAVs and discards the text. A production run also
+      fetches/decodes real audiobook files, writes results to Pebble, and
+      updates per-file status — none of which is in these numbers. Treat 2.4
+      days as the floor for the compute, not a schedule for the operation.
 
 - [ ] **TODO-MUI-1** MUI upgrade Step 1 — `@mui/*` 5.14 → 6.x (brief:
       `docs/plans/2026-08-07-mui-upgrade-path.md`; requires TODO-MUI-0 merged;
