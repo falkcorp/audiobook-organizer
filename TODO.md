@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.17.2 -->
+<!-- version: 10.17.3 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-08-07 -->
+<!-- last-edited: 2026-08-08 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,550 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+<!-- file: todo.d/20260807_194500_deluge_must_not_write_into_import_dir.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: c9e4b7d2-51a8-4f36-b0e7-2d84a1f6c093 -->
+<!-- last-edited: 2026-08-07 -->
+
+- [ ] **Stop Deluge writing in-progress downloads directly into the new-books
+      import directory.** A torrent that is still downloading is visible to the
+      scanner as a book, so a partial file gets imported as if it were complete:
+      wrong duration, wrong file size, a truncated or absent intro clip, and a
+      transcription/fingerprint pass that runs against bytes which will change
+      underneath it.
+
+      Fix: give Deluge a staging directory OUTSIDE the watched tree and have it
+      **move** the completed torrent into the import directory only on
+      completion. A move within the same filesystem is an atomic rename, so the
+      scanner can never observe a half-written book. A copy across filesystems
+      is NOT atomic — if staging and import must live on different filesystems,
+      copy to a dotfile/temp name inside the import dir and rename into place as
+      the final step.
+
+      Deluge supports this natively: set "Download to" = staging path and "Move
+      completed to" = import path.
+
+      Also worth adding as defence in depth, since Deluge is not the only way
+      files arrive:
+      - Scanner ignores partial-download suffixes (`.part`, `.!ut`, `.tmp`) and
+        dotfiles.
+      - Quarantine a candidate whose size or mtime changed between the scan and
+        the import rather than importing it.
+
+      🔴 Suspected to be a real source of existing bad rows — worth measuring how
+      many books have a duration or file size inconsistent with their format
+      before assuming this is only a forward fix. Silently-truncated books would
+      also explain some fraction of the `[SILENCE]` sentinels and short/failed
+      intro transcriptions.
+
+<!-- file: todo.d/20260807_203000_all_ops_must_support_dry_run.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: a7f28c15-9364-4e0b-b8d2-46c1e0937fa5 -->
+<!-- last-edited: 2026-08-07 -->
+
+- [ ] **Require every operation to support `dry_run`, and enforce it at the
+      registry rather than by convention.** Any op that mutates state must be
+      runnable in a mode that computes and reports exactly what it WOULD do,
+      writing nothing — so it can be tested independently and reviewed before it
+      touches prod.
+
+      **Motivating case (2026-08-07).** Three maintenance ops were run in one
+      session and they did not agree with each other:
+
+        maintenance.repair-transcribe-status      dry_run, defaults TRUE
+        maintenance.intro-migrate-single-file     dry_run, defaults TRUE
+        maintenance.transcribe-book-intros        NO dry_run at all
+
+      The first two could be previewed, reconciled bucket-by-bucket against the
+      full book count, and gated on real numbers. The third — a reparse that
+      rewrites parsed title/author/narrator across the library — had no preview
+      mode whatsoever: dispatching it IS applying it. The only reason that was
+      acceptable was an unrelated internal guard (reparse only ever upgrades),
+      which is luck, not design.
+
+      **What "supported" should mean** — a bare `dry_run` bool is not enough:
+
+      - **Declared, not optional.** Put it on `OperationDef` (e.g.
+        `SupportsDryRun bool`, or better, make the param struct embed a shared
+        `DryRunParams`). An op declaring `CapLibraryWrite` without dry-run
+        support should fail registration, so the gap is caught at startup rather
+        than discovered while someone is deciding whether to hit apply.
+      - **Default TRUE for destructive ops.** Both ops that had it defaulted to
+        dry-run; that is the right default and should not be per-author choice.
+      - **Report per-reason counts that RECONCILE.** The value of the two
+        previewable ops was that every item landed in exactly one labelled
+        bucket and the buckets summed to the population — 11,315 + 19,505 + 0 +
+        12,587 + 1,463 + 7 = 44,877 exactly. "would change 30,820" with no
+        account of the rest is the shape of report that hides a bug. Consider a
+        shared result type so this is structural rather than remembered.
+      - **Same code path.** The dry run must execute the identical decision
+        logic and diverge only at the write, or it is testing something other
+        than what will run. Both existing ops do this correctly (classify, then
+        branch on `dryRun` immediately before the store call) — that pattern is
+        the one to generalise.
+
+      Related: the write-set/scheduler-conflict work
+      (`OperationDef.Writes []Resource`). Both are the same idea — an op should
+      DECLARE what it does, and the system should enforce it, instead of every
+      author re-deciding by hand.
+
+<!-- file: todo.d/20260807_204800_u1_daytime_pool_benchmark.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 5b3a9e17-2c64-4f80-b1d9-7e05c8a3f264 -->
+<!-- last-edited: 2026-08-07 -->
+
+- [ ] **Re-run the CPU-node Whisper benchmark in POOL configuration, during the
+      day.** The 2026-08-07 evening run was cut at 20:50 for quiet hours after
+      measuring only the single-process shapes. Measured so far (10 real prod
+      clips, base.en, beam 5, VAD on, mirroring `scripts/whisper_server.py`):
+
+        1 proc x 48 threads, int8          1.96 clips/min  -> 92 days for tier 3
+        1 proc x 48 threads, int8_float32  ~2.04           -> ~89 days
+
+      Two confirmed findings that must drive the config:
+      - **int8 buys nothing on this host** (Haswell: no AVX-512/VNNI; ct2 falls
+        back to a slow int8 GEMM). Same speed as int8_float32 within noise.
+      - **One process cannot use 48 cores** — ctranslate2 plateaus ~8-16
+        intra-op threads; the box mostly idled.
+
+      Still to measure: pool shapes **8 workers x 6 threads** and **12 x 4**
+      (add to the script; the planned 4 x 12 too), plus single float32 as a
+      baseline. Linear-ish scaling at 8 workers would be ~10-14 clips/min
+      (~13-18 days for the 260k-file tier-3 tail) — plausible, NOT yet measured,
+      do not plan around it until it is.
+
+      Everything is staged on the host: `/opt/whisper-bench/{venv,clips,bench.py}`.
+      Rerun: `nohup /opt/whisper-bench/venv/bin/python /opt/whisper-bench/bench.py
+      > /opt/whisper-bench/bench.log 2>&1 &` — edit the script first to skip the
+      already-measured single-process configs. 🔴 Daytime only; the box is in a
+      bedroom. 🔴 Host address is fleet-internal — keep it out of this public
+      repo (it is deliberately absent here; see infra-docs).
+
+- [ ] **TODO-MUI-1** MUI upgrade Step 1 — `@mui/*` 5.14 → 6.x (brief:
+      `docs/plans/2026-08-07-mui-upgrade-path.md`; requires TODO-MUI-0 merged;
+      do NOT continue to v7 in the same session/PR)
+  - `cd web && npm install @mui/material@6 @mui/icons-material@6`
+  - Codemods (run from repo root):
+    `npx @mui/codemod@latest v6.0.0/sx-prop web/src` and
+    `npx @mui/codemod@latest v6.0.0/theme-v6 web/src/theme.ts`.
+    Skip `v6.0.0/grid-v2-props` (we have zero Grid2 — legacy Grid stays as-is
+    until v7) and `v6.0.0/list-item-button-prop` (0 `<ListItem button` measured).
+  - Expected hand-fixes (from the 2026-08-07 inventory):
+    - Test churn from the v6 ripple rework: `fireEvent` interactions on
+      Button/Checkbox/Chip/Radio/Switch/Tabs may need
+      `await act(async () => fireEvent...)` — fix failing Vitest specs, don't
+      skip them.
+    - `Typography color=` (405 usages): palette tokens keep working; audit
+      only non-palette CSS values (move those into `sx`).
+    - Accordion summary now renders a heading/button — check
+      `grep -rln Accordion web/src` sites for snapshot/E2E fallout.
+  - Do NOT adopt Pigment CSS; Emotion remains the engine.
+  - Gate: `make build` (embedded UI serves), `make test-all`, `make test-e2e`,
+    manual smoke of Library, Book Detail, Activity Log, System > Maintenance,
+    Dedup tabs; note (don't fix) new MUI deprecation warnings in the PR body.
+  - Rollback: `git revert` of this single PR (lockfile reverts with it).
+
+- [ ] **TODO-MUI-2** MUI upgrade Step 2 — `@mui/*` 6.x → 7.x including the
+      one-time Grid conversion (brief: `docs/plans/2026-08-07-mui-upgrade-path.md`;
+      requires TODO-MUI-1 merged; do NOT continue to v9 in the same session/PR)
+  - `cd web && npm install @mui/material@7 @mui/icons-material@7`
+  - Grid: convert legacy Grid → new Grid NOW (do not rename to `GridLegacy` —
+    it is removed in v9 and we'd pay twice):
+    `npx @mui/codemod@latest v7.0.0/grid-props web/src`
+    Inventory says 175 `<Grid item` and 35 `<Grid container` across 23 files;
+    codemod output is `item xs={12} sm={6}` → `size={{ xs: 12, sm: 6 }}`,
+    `xs` → `size="grow"`. After it runs, `grep -rn "<Grid item" web/src`
+    must return 0.
+  - Hand-verify layout on every Grid file: new Grid spaces with CSS `gap` and
+    containers no longer stretch full-width by default — compare against the
+    TODO-MUI-0 smoke baseline. Highest-risk files: `web/src/pages/Series.tsx`,
+    `web/src/pages/Authors.tsx`, `web/src/pages/Dashboard.tsx`,
+    `web/src/components/settings/ITunesImport.tsx`.
+  - `npx @mui/codemod@latest v7.0.0/input-label-size-normal-medium web/src`
+    (idempotent, cheap).
+  - Build must confirm icon path imports still resolve under the v7 package
+    layout (TODO-MUI-0 normalized the `.js` suffixes; if `npm run build`
+    still errors on `@mui/icons-material/X`, switch those files to named
+    barrel imports).
+  - Known no-ops for this repo (verified 0 usages 2026-08-07): `Hidden`,
+    deep >1-level imports, `createMuiTheme`, `onBackdropClick`, `@mui/lab`,
+    `CssVarsProvider` mode behavior.
+  - Gate: `make build` (embedded UI serves), `make test-all`, `make test-e2e`,
+    manual smoke with EXTRA attention to spacing/layout on Library, Book
+    Detail, Activity Log, System > Maintenance, Dedup tabs.
+  - Rollback: `git revert` of this single PR.
+
+- [ ] **TODO-MUI-3** MUI upgrade Step 3 — React 18 → 19 (OPTIONAL but
+      recommended; brief: `docs/plans/2026-08-07-mui-upgrade-path.md`; requires
+      TODO-MUI-2 merged — MUI v7 supports React 19, v5/v6 pairings are riskier;
+      do NOT combine with the v9 bump in the same session/PR)
+  - Why: MUI v9 does NOT require React 19 (peers `^17 || ^18 || ^19`), but
+    upgrading first deletes the `react-is` override hack, matches the
+    combination MUI tests first-class, and pre-positions for the post-v9
+    styling-layer refactor.
+  - `cd web && npm install react@19 react-dom@19 && npm install -D @types/react@19 @types/react-dom@19`
+  - `npx codemod@latest react/19/migration-recipe` (covers
+    `ReactDOM.render` → `createRoot`, `react-dom/test-utils` `act` →
+    `react`'s `act`, propTypes/defaultProps removal on function components).
+  - Hand-check afterwards: `grep -rn "test-utils" web/src`,
+    `grep -rn "defaultProps" web/src`, `grep -rn "useRef()" web/src`
+    (React 19 `useRef` requires an argument), and Vitest setup files under
+    `web/src/test/`.
+  - Remove the `react-is` override added in TODO-MUI-0 from
+    `web/package.json` (no longer needed on React 19) and `npm install`.
+  - Gate: `make build` (embedded UI serves), `make test-all`, `make test-e2e`,
+    manual smoke of Library, Book Detail, Activity Log, System > Maintenance,
+    Dedup tabs; zero new console errors.
+  - Rollback: `git revert` of this single PR.
+
+- [ ] **TODO-MUI-4** MUI upgrade Step 4 — `@mui/*` 7.x → 9.x (final hop; there
+      is NO Material UI v8 — v7 jumps straight to v9 to align with MUI X; brief:
+      `docs/plans/2026-08-07-mui-upgrade-path.md`; requires TODO-MUI-2 merged,
+      TODO-MUI-3 recommended first; single PR, nothing else in the session)
+  - `cd web && npm install @mui/material@9 @mui/icons-material@9`
+  - If still on React 18 (TODO-MUI-3 skipped): KEEP the
+    `"overrides": { "react-is": "^18.2.0" }` in `web/package.json` — MUI v9
+    ships react-is@19 internally and mismatches cause runtime prop-type
+    errors on React 18.
+  - System props removed from Box/Stack/Typography/Grid/Link/DialogContentText
+    — ~381 direct-prop usages measured 2026-08-07. Run the v9 system-props
+    codemod (confirm exact name on
+    https://mui.com/material-ui/migration/upgrade-to-v9/ or via
+    `npx @mui/codemod@latest --help`), converting e.g.
+    `<Box mt={2} color="primary.main">` → `<Box sx={{ mt: 2, color: 'primary.main' }}>`.
+    Then hand-sweep for leftovers:
+    `grep -rnE '<(Box|Stack|Typography|Grid|Link)[^>]*\s(mt|mb|ml|mr|mx|my|m|pt|pb|pl|pr|px|py|p|gap|bgcolor|display)=\{' web/src --include='*.tsx' | grep -v 'sx='`
+    Misses fail SILENTLY (ignored prop → styling vanishes), so eyeball the
+    smoke pages, don't trust compile success.
+  - Slot-prop removals: `InputProps` (24 usages) → `slotProps.input`,
+    `componentsProps` (4) → `slotProps`. Run the relevant
+    `npx @mui/codemod@latest deprecations/<component>-props web/src` codemods
+    for TextField/Input plus anything tsc flags; hand-fix the remainder.
+  - Grid checks: `grep -rn "GridLegacy" web/src` must be 0 (TODO-MUI-2
+    converted us), and `grep -rnE '<Grid[^>]*direction="column' web/src`
+    must be 0 (removed in v9 — replace with Stack).
+  - Emotion remains the default engine in v9; no Pigment CSS work.
+  - Gate: `make build` (embedded UI serves), `make test-all`, `make test-e2e`,
+    manual smoke of Library, Book Detail + Metadata Review dialog, Activity
+    Log, System > Maintenance, Dedup tabs, checking specifically for
+    silently-dropped spacing/color styling.
+  - Rollback: `git revert` of this single PR.
+
+- [x] **Refresh the remaining content-drift e2e failures unmasked by the `_page` fix.**
+      PR #2178 (2026-08-07) fixed the fixture error that had silently killed six
+      e2e spec files since April 2026. With the mask gone the suite fails
+      honestly: all failures are pre-existing assertion drift — tests assert
+      hardcoded UI text the app no longer renders. Wave 1 (2026-08-07) fixed
+      Dashboard (6) and Book Detail (3): the api layer's `{ data: ... }`
+      response envelope, the unmocked `/api/v1/system/storage` endpoint, the
+      `/operations` → `/activity` route rename, and unmocked auth endpoints.
+      Wave 2 (2026-08-08) cleared the remaining **34** chromium failures across
+      four files — Error Handling 3, File Browser 8, Import Audiobook File 13,
+      Operation Monitoring 10. (The per-file counts recorded here originally
+      said File Browser 9 / Import 14; the measured baseline was 8 / 13, total
+      34.) Root cause for 24 of them was the same missing `{ data: ... }`
+      envelope in `web/tests/e2e/utils/test-helpers.ts` — `/auth/status` in
+      particular meant `AuthContext` never initialized, degrading every mocked
+      page. The rest was renamed-affordance drift. `operation-monitoring.spec.ts`
+      needed a full rewrite: its target page was deleted in afe18e8f and
+      `/operations` is now a redirect to `/activity`. No product code changed.
+
+- [ ] **Move library filtering/search into the Go server as a real, declared
+      query engine — and make unknown filters a hard error instead of a silent
+      no-op.** Today the browser pulls pages of books and narrows them
+      client-side. That does not scale to a 44,874-book / 284,735-file library:
+      any filter that is not expressible as one of the handful of query params
+      the Go handler happens to recognise either degrades into "fetch a lot and
+      filter in JS" or silently does nothing at all. The server has the indexes,
+      the memdb, and 48 cores; the browser has one thread and a network hop.
+
+      **The hard constraint is browser memory.** The reporter's requirement is
+      blunt and it is the thing to design against: *a single web page must not
+      sit on ~10GB of RAM.* Client-side filtering over this library implies
+      pulling the library — or a large fraction of it — into the tab, and at
+      44,874 books that is not a tuning problem, it is the wrong architecture.
+      The browser should never hold more than the page it is displaying plus a
+      small window. Which query language wins (below) is genuinely open; this
+      constraint is not.
+
+      **Measured on prod 2026-08-08** against `GET /api/v1/audiobooks`
+      (envelope is `{"data":{count,items,limit,offset}}`):
+
+        limit=1                              count=44874   <- baseline
+        limit=1&library_state=imported       count=18998   <- honoured
+        limit=1&library_state=in_progress    count=0       <- honoured, no such value
+        limit=1&status=in_progress           count=44874   <- IGNORED
+        limit=1&progress=in_progress         count=44874   <- IGNORED
+        limit=1&bogus_param_xyz=nonsense     count=44874   <- IGNORED
+
+      The last three are the finding. **An unrecognised filter param returns the
+      entire unfiltered library with HTTP 200.** There is no 400, no warning, no
+      `applied_filters` echo — so a frontend that sends a param the backend does
+      not implement is indistinguishable from a frontend that sends no filter,
+      and the bug surfaces to the user as "this button does nothing" (see the
+      companion In-Progress filter task). A typo'd param name is equally
+      invisible. Note the second failure mode too: `library_state=in_progress`
+      IS a recognised param, but `in_progress` is not one of its values, so it
+      silently returns zero books rather than rejecting the value.
+
+      **What to build:**
+
+      - **A declared filter schema, server-side.** Enumerate the filterable
+        fields, their types, and their legal operators/values in one place, so
+        the handler can validate a request against it rather than
+        `c.Query("...")` per field scattered through the handler.
+      - **Reject what you cannot honour.** Unknown param, unknown field, or
+        illegal value for a known field → `400` naming the offending param and
+        listing what is valid. Fail closed. The current fail-open behaviour is
+        why a broken filter can sit in the UI unnoticed.
+      - **Echo what was applied.** Return `applied_filters` (and ideally
+        `ignored`) in the response envelope so the client can render active
+        filter chips from what the server actually did, not from what the client
+        hoped it did.
+      - **Composable predicates, not one param per question.** The user's ask
+        was "maybe some GraphQL-like thing so we can do stuff dynamically." The
+        requirement is dynamic AND/OR over typed fields with comparison
+        operators, sorting, and pagination — evaluate a structured POST
+        `/audiobooks/query` body (a small typed filter AST) against adopting
+        GraphQL wholesale. A filter AST is far less machinery than a GraphQL
+        server and keeps the existing REST surface; GraphQL earns its cost only
+        if arbitrary client-chosen field selection is also wanted. Decide this
+        explicitly and write down why.
+      - **Server-side full-text/substring search** over title/author/narrator/
+        series, so `search=` is not a client-side scan. Check what the existing
+        `search=title:` syntax already supports before adding a second dialect.
+      - **Concurrency.** Per CLAUDE.md, any predicate evaluated across the whole
+        library must use a bounded worker pool (`errgroup` + `SetLimit` sized to
+        `runtime.NumCPU()`), not a plain `for range books`.
+
+      **Acceptance:**
+
+      - Every filter the Library UI can express is computed by the Go server and
+        returns a correct `count` for the whole library, not just the fetched
+        page.
+      - An unsupported filter or illegal value returns `400` rather than the
+        full library.
+      - No filtering pass over all books runs single-threaded.
+      - **Measured:** with any filter or search applied, the browser tab's heap
+        stays flat and bounded — take a DevTools heap snapshot with the Library
+        page open on the full 44,874-book library and confirm the tab holds one
+        page of results, not the library. This is the acceptance criterion the
+        reporter actually cares about; the query-language choice is subordinate
+        to it.
+
+- [ ] **Fix the Library "In Progress" nav item — the selection highlight never
+      moves, and the click is a genuine no-op.** Reported 2026-08-08, root-caused
+      the same night. These are **two independent bugs** that happen to share a
+      symptom. The control is not on the Library page: it is the Library sub-nav
+      in the sidebar, `web/src/components/layout/Sidebar.tsx:53-62`:
+
+          56: { text: 'All Books',   path: '/library?reset=1', matchPath: '/library' },
+          57: { text: 'In Progress', path: '/library?search=read_status:in_progress' },
+          58: { text: 'Finished',    path: '/library?search=read_status:finished' },
+
+      **Bug 1 — the highlight can never move.** `Sidebar.tsx:163`:
+
+          selected={location.pathname === (item.matchPath ?? item.path)}
+
+      `location.pathname` never contains the query string. "In Progress" has no
+      `matchPath`, so this compares `'/library'` against
+      `'/library?search=read_status:in_progress'` — **always false**. "All Books"
+      declares `matchPath: '/library'`, so it is **always true on any /library
+      URL**. The indicator is therefore permanently pinned to "All Books".
+      "Finished" is broken identically.
+
+      Note: the obvious "compare pathname + search" fix is a trap. Once bug 2 is
+      fixed the URL settles at `?search=read_status%3Ain_progress&page=1` — the
+      write effect re-encodes the colon (`Library.tsx:605`) and unconditionally
+      appends `page` (`614`) — so a raw string compare still fails. **Match on
+      the decoded `search` param value, not the path string.**
+
+      **Bug 2 — the click is a permanent no-op.** There is no dedicated
+      selection state; the filter lives entirely in the URL `?search=` param,
+      consumed by `pages/Library.tsx` (`useSearchParams` at 118; `searchQuery`
+      seeded at 121/152; `parsedSearch` at 179; URL→state effect at 551-594;
+      state→URL effect at 602-627; `isInternalUpdate` ref set at 624, consumed
+      at 570-573).
+
+      The ref **gets stuck at `true` after mount and stays true**. react-router
+      7.18.2 rebuilds `setSearchParams` whenever `location.search` changes, and
+      it is in the write effect's dep array (`Library.tsx:627`), so that effect
+      re-fires on URL changes it did not cause. On a plain `/library` load: the
+      write effect always appends `page` (614) and sets the flag; the next
+      commit re-runs it, producing an identical `page=1` and re-arming the flag;
+      because `location.search` is then unchanged, `useSearchParams` returns the
+      same object and the sync effect never runs again to clear it.
+
+      Clicking "In Progress" then hits the guard at `Library.tsx:570-572` and
+      the incoming `search` is **discarded**, while the write effect rewrites
+      the URL back to `page=1`. No `searchQuery`, no `parsedSearch`, no chip, no
+      change to the request.
+
+      **The asymmetry corroborates this:** "All Books" works and "In Progress"
+      does not *from the same machinery*, because the `reset=1` branch is read
+      at line 558 — **before** the guard at 570 — while `search` is read at 576,
+      **after** it.
+
+      **Cheap falsifiable checks — run these first; they also give users a
+      workaround, and if any fails the diagnosis above is wrong:**
+
+      - "Finished" is broken in exactly the same way.
+      - A **hard refresh** of `/library?search=read_status:in_progress` **works**
+        (mount-time seeding at 121/179 bypasses both effects).
+      - **Dashboard → In Progress works** (Library mounts fresh);
+        **/library → In Progress does not.**
+
+      **The backend is fine — do not "fix" it.** Had `parsedSearch` ever been
+      populated, `buildFieldFilters` (`Library.tsx:629-641`) would serialize to
+      the `filters` param (`useLibraryQuery.ts:140` → `services/api.ts:964`),
+      and the Go side splits per-user fields correctly
+      (`internal/server/handlers/audiobooks/handler.go:435-448` →
+      `internal/audiobooks/service_query.go:356-365`). `in_progress` is spelled
+      consistently across `utils/searchParser.ts:59`, `Sidebar.tsx:57`, and
+      `internal/audiobooks/service_types.go:124` — **the value-mismatch theory
+      was investigated and disproved.**
+
+      **Separate latent hazard, worth fixing while here.** Probing prod
+      2026-08-08 showed `GET /api/v1/audiobooks` **fails open on unknown query
+      params**: `bogus_param_xyz=nonsense` returned the entire 44,874-book
+      library with HTTP 200, as did `status=in_progress` and
+      `progress=in_progress`. Meanwhile `library_state=in_progress` is a
+      recognised param with no such value and silently returns **zero** books.
+      That did not cause this bug, but it is why a filter that silently does
+      nothing can ship unnoticed — see the companion backend-filtering task.
+
+      **Acceptance:** clicking the item moves the highlight, adds a filter chip,
+      and changes the result count; the count reflects the whole library rather
+      than the fetched page; and "Finished" works too. Also render the sub-items
+      in collapsed-sidebar mode, where they currently are not rendered at all
+      (`Sidebar.tsx:126-139`).
+
+- [ ] **The Library must never show an empty "no items" state unless the
+      library is genuinely empty (true first startup). Every other case shows a
+      loading state and keeps retrying until books arrive.** Reported
+      2026-08-08. Today a transient backend condition renders as "there are no
+      books," which is the most alarming possible way to display a temporary
+      failure to someone with a 44,874-book library.
+
+      **Why this happens — measured 2026-08-08.** After `make deploy` restarted
+      the service, `GET /api/v1/system/status` was **unreachable for roughly 40
+      seconds** (curl exit with HTTP `000`, i.e. connection refused / no
+      response) before it began returning `200`. The backend does a full memdb
+      warmup over 44,874 books and 284,735 files on boot. So there is a
+      guaranteed ~40s window on every single deploy during which the frontend's
+      requests fail outright. Any UI that renders its empty state on
+      `!loading && books.length === 0` will show "no books" during that window,
+      because a failed request leaves the list empty without leaving it loading.
+
+      **Root cause, located.** `web/src/components/library/LibraryBookGrid.tsx`
+      line 183:
+
+          {audiobooks.length === 0 && !loading && !searchQuery ? (
+
+      That is the predicted bug shape exactly, and there is no error branch
+      anywhere near it. The component's props (line 43) carry only
+      `loading: boolean` — **there is no error/status prop at all**, so
+      `LibraryBookGrid` is structurally incapable of telling "the request
+      failed" apart from "the library is empty." The `manualImportError` /
+      `bulkOrganizeError` state in `pages/Library.tsx` (lines 343, 372) covers
+      import and organize actions, not the book-list fetch. So when the fetch
+      fails during warmup, `loading` flips to false, `audiobooks` is empty,
+      `searchQuery` is unset, and the page confidently announces an empty
+      library.
+
+      Fixing this therefore is not a one-line condition change: a fetch
+      status/error has to be threaded from the data layer into this component
+      first. Line 335 has the sibling branch for the searched-and-empty case and
+      will want the same treatment.
+
+      **The distinction the UI must make.** Three states are currently being
+      collapsed into one:
+
+        a) request in flight            -> spinner / skeleton
+        b) request failed or server not ready -> "still loading…", keep retrying
+        c) request succeeded, count == 0      -> the ONLY case that may say "no books"
+
+      Only (c) is a real empty library, and it should additionally be
+      distinguishable as first-run (nothing ever imported) versus "your filters
+      matched nothing" — those want different copy and different affordances.
+
+      **What to build:**
+
+      - Gate the empty state on a **successful** response whose `count` is 0 —
+        never on `books.length === 0` alone. An errored or not-yet-settled query
+        must fall through to the loading branch.
+      - **Retry with backoff, indefinitely, while the failure looks transient**
+        (network error, 502/503, connection refused). Cap the delay (a few
+        seconds) so recovery is prompt after warmup finishes, and surface a
+        quiet "reconnecting…" note once the first retry fails rather than
+        leaving a silent spinner forever. Do not retry forever on a 4xx — that
+        is a real client bug and should surface.
+      - Consider a **readiness signal from the Go side**: have the server return
+        `503` with a `Retry-After` while memdb warmup is in progress, instead of
+        refusing connections or returning an empty 200. An explicit "not ready
+        yet" is far easier for the client to handle correctly than a dropped
+        connection, and it makes the correct client behaviour obvious. Check
+        whether a readiness/health endpoint already distinguishes "process up"
+        from "warmup complete" — `systemctl is-active` reported the service
+        healthy well before the API answered, so process-liveness is already
+        known to be a misleading signal here.
+      - Distinguish **first-run empty** from **filtered-to-empty** in copy.
+
+      **Acceptance:** restart the backend with the Library page open. The page
+      must show a loading/reconnecting state for the whole warmup window and
+      then populate on its own with no user interaction — at no point may it say
+      the library is empty.
+
+- [ ] **Never accumulate more than 10 RCs on a version — cut the stable release
+      instead.** Owner directive, 2026-08-08: *"we are never to get above 10
+      RCs. Right now we have massive changes all bunched together. Doing it that
+      way we have consistent releases."*
+
+      **What triggered this.** On 2026-08-08 the repo was sitting on
+      **`v0.217.9-rc.87`** — eighty-seven release candidates on a single
+      version — while the last actual stable release was **`v0.217.4`, cut on
+      2026-07-06**. A month of work, including several data-loss fixes and a
+      library-wide reparse, had piled into one undifferentiated blob that nobody
+      could review, bisect, or roll back to a known-good point. Three duplicate
+      broken draft releases had also accumulated against the unused `v0.217.9`
+      tag. (Cut as `v0.218.0` that night; drafts deleted.)
+
+      **The rule.** When the RC counter for a version reaches **10**, the next
+      step is a stable release, not `rc.11`. Every merge to `main` already mints
+      an RC via `.github/workflows/prerelease.yml`, so ten RCs is roughly ten
+      merged PRs — a reviewable unit.
+
+      **Make it enforced, not remembered.** A rule that depends on someone
+      noticing a counter is the same class of failure that let it reach 87:
+
+      - **Fail or warn in CI at the threshold.** Have the prerelease workflow
+        check the RC ordinal it just minted and, at `>= 10`, either fail loudly
+        or open/refresh a "cut a release" issue. A passive dashboard will be
+        ignored; the signal has to appear where the work is happening.
+      - **Consider auto-promoting.** If ten RCs are green, cutting the stable
+        release is mechanical — `release-prod.yml` already takes
+        `release-type` and `previous-version`. Weigh auto-promotion against
+        wanting a human gate; if a human gate is kept, the reminder must be
+        unmissable.
+      - **Clean up RCs on promotion.** `cleanup-rc-releases.yml` exists; verify
+        it actually runs on stable promotion and prunes the superseded RC
+        releases and tags, or 87 stale prereleases will keep cluttering the
+        releases page.
+      - **Watch for the duplicate-draft bug.** Three identical broken drafts for
+        `v0.217.9` accumulated because the release path created a new draft
+        rather than updating the existing one. Fixed for this repo by pinning
+        `.github/ghcommon-ref.txt`, but confirm the draft path specifically.
+
+      **Why it matters beyond tidiness.** With one stable release a month, "roll
+      back to the last good version" means discarding a month of fixes. With a
+      release every ~10 merges, a bad change is bounded by a handful of PRs, the
+      release notes are short enough to actually read, and `git bisect` between
+      two stable tags is a tractable search rather than 87 candidates.
+
+      **Acceptance:** the RC ordinal never exceeds 10 without either a stable
+      release being cut or CI complaining; and the releases page does not
+      accumulate superseded RC entries.
 
 <!-- file: todo.d/20260806_093000_bracketed_series_are_shattered_books.md -->
 <!-- version: 1.0.0 -->
