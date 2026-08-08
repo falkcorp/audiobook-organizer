@@ -1,11 +1,12 @@
 // file: internal/config/config.go
-// version: 1.73.0
+// version: 1.74.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-07-30
+// last-edited: 2026-08-07
 
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -526,6 +527,14 @@ type Config struct {
 	// Environment-authoritative (WHISPER_REMOTE_URL) — see applyEnvAuthoritativeConfig.
 	WhisperRemoteURL string `json:"whisper_remote_url" mapstructure:"whisper_remote_url"`
 
+	// WhisperEndpoints declares a pool of remote faster-whisper servers. When
+	// non-empty it takes precedence over WhisperRemoteURL. Plain structs only —
+	// this package must never import internal/transcribe; the conversion to
+	// transcribe.Endpoint happens at the TranscribeBatch seam.
+	// Environment-authoritative (WHISPER_ENDPOINTS, a JSON array string, e.g.
+	// `[{"url":"http://whisper-1.local:8000","concurrency":2,"priority":1,"kind":"gpu","label":"gpu-box"}]`).
+	WhisperEndpoints []WhisperEndpoint `json:"whisper_endpoints" mapstructure:"whisper_endpoints"`
+
 	// Performance
 	ConcurrentScans int `json:"concurrent_scans"`
 	// ChapterConsolidationThresholdMin is the per-file duration threshold (minutes)
@@ -815,6 +824,36 @@ func Mutate(fn func(*Config)) {
 // UI-set value that lives only in the blob is left untouched when no env var is present.
 // Env-authoritative keys ONLY: OAuth / Cloudflare Access / Whisper. UI-managed keys
 // (itunes.*, scheduled.*, etc.) are intentionally excluded — they belong to the blob.
+// WhisperEndpoint declares one remote Whisper server for the dispatch pool.
+// Mirror of transcribe.Endpoint kept as a plain config struct so this package
+// never imports internal/transcribe.
+type WhisperEndpoint struct {
+	URL         string `json:"url"         mapstructure:"url"`
+	Concurrency int    `json:"concurrency" mapstructure:"concurrency"`
+	Label       string `json:"label"       mapstructure:"label"`
+	// Priority: lower = preferred (GPU box 1, CPU box 100).
+	Priority int `json:"priority" mapstructure:"priority"`
+	// Kind is informational only ("gpu", "cpu", or "").
+	Kind string `json:"kind" mapstructure:"kind"`
+}
+
+// ParseWhisperEndpoints decodes the WHISPER_ENDPOINTS JSON array string.
+// Empty input or malformed JSON yields nil, which falls back to the
+// single-URL (or local) path rather than failing startup — the endpoint list
+// is an optimization, not a correctness requirement.
+func ParseWhisperEndpoints(s string) []WhisperEndpoint {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	var endpoints []WhisperEndpoint
+	if err := json.Unmarshal([]byte(s), &endpoints); err != nil {
+		fmt.Fprintf(os.Stderr, "config: ignoring malformed whisper_endpoints (%v)\n", err)
+		return nil
+	}
+	return endpoints
+}
+
 func applyEnvAuthoritativeConfig(c *Config) {
 	if viper.IsSet("oauth_enabled") {
 		c.OAuthEnabled = viper.GetBool("oauth_enabled")
@@ -848,6 +887,9 @@ func applyEnvAuthoritativeConfig(c *Config) {
 	}
 	if viper.IsSet("whisper_remote_url") {
 		c.WhisperRemoteURL = viper.GetString("whisper_remote_url")
+	}
+	if viper.IsSet("whisper_endpoints") {
+		c.WhisperEndpoints = ParseWhisperEndpoints(viper.GetString("whisper_endpoints"))
 	}
 	// Audiobookshelf sync API. Env-authoritative for the same reason as the OAuth keys:
 	// LoadConfigFromDatabase replaces the whole struct with the blob, so without these
@@ -983,6 +1025,10 @@ func InitConfig() {
 	// Transcription: remote faster-whisper server URL (env-authoritative).
 	viper.SetDefault("whisper_remote_url", "")
 	viper.BindEnv("whisper_remote_url", "WHISPER_REMOTE_URL") //nolint:errcheck
+	// Multi-endpoint pool, JSON array string (env-authoritative; wins over
+	// whisper_remote_url when non-empty).
+	viper.SetDefault("whisper_endpoints", "")
+	viper.BindEnv("whisper_endpoints", "WHISPER_ENDPOINTS") //nolint:errcheck
 
 	// Set memory management defaults
 	viper.SetDefault("memory_limit_type", "items")
@@ -1343,6 +1389,7 @@ func InitConfig() {
 			CFAccessTeamDomain:      viper.GetString("cf_access_team_domain"),
 			CFAccessAUD:             viper.GetString("cf_access_aud"),
 			WhisperRemoteURL:        viper.GetString("whisper_remote_url"),
+			WhisperEndpoints:        ParseWhisperEndpoints(viper.GetString("whisper_endpoints")),
 
 			// Audiobookshelf sync API (feature-flagged OFF by default).
 			ABSAPIEnabled:       viper.GetBool("abs_api_enabled"),
