@@ -1,5 +1,5 @@
 // file: web/tests/e2e/dashboard.spec.ts
-// version: 1.3.1
+// version: 1.4.0
 // guid: f6e23777-438b-4931-88d9-d2c6d2225a00
 // last-edited: 2026-08-07
 
@@ -143,8 +143,8 @@ test.describe('Dashboard', () => {
     // Act
     await page.getByRole('button', { name: 'Scan All Import Paths' }).click();
 
-    // Assert
-    await expect(page).toHaveURL(/\/operations/);
+    // Assert — /operations now redirects to /activity (route rename)
+    await expect(page).toHaveURL(/\/(operations|activity)/);
   });
 
   test('quick action: organize all import books', async ({ page }) => {
@@ -158,7 +158,7 @@ test.describe('Dashboard', () => {
       .getByRole('button', { name: 'Organize' })
       .click();
 
-    // Assert
-    await expect(page).toHaveURL(/\/operations/);
+    // Assert — /operations now redirects to /activity (route rename)
+    await expect(page).toHaveURL(/\/(operations|activity)/);
   });
 });
