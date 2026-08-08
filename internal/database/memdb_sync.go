@@ -1,7 +1,7 @@
 // file: internal/database/memdb_sync.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000005
-// last-edited: 2026-08-06
+// last-edited: 2026-08-07
 
 package database
 
@@ -111,24 +111,35 @@ type memTxn interface {
 
 // UpsertBookToMemDB inserts or replaces a book and its associated relationships
 // (book_authors flattened to rows, book_files reloaded from Pebble) in memdb.
+//
+// DATA-RACE RULE (applies to every Upsert* helper in this file): copy the
+// caller's struct BEFORE handing a closure to memSync. During the async warmup
+// window the closure is not run inline — it is buffered by memSync and replayed
+// much later on the warmup goroutine (publishWarmMemStore → applyMemSync), so a
+// closure that captures the caller's pointer dereferences the caller's LIVE
+// struct while the caller may still be mutating it (UpdateBook writes book.ID
+// after this returns, for example). Caught by -race on CI; see the 2026-08-07
+// memdb-warmup-caller-pointer-race todo for the full report.
 func (p *PebbleStore) UpsertBookToMemDB(ctx context.Context, book *Book) {
 	if book == nil {
 		return
 	}
+	// Snapshot NOW — the closure may run much later, on another goroutine.
+	snapshot := *book
 	p.memSync("UpsertBook", func(txn memTxn) error {
 		// Strip heavy fields (Description, BookSigV1, etc.) — memdb
 		// only needs lightweight projections for indexed iteration.
 		// Pebble retains the full Book; callers needing full payload
 		// hit GetBookByID. See memdb_strip.go.
-		if err := txn.Insert(memTableBooks, stripBookForMemdb(book)); err != nil {
+		if err := txn.Insert(memTableBooks, stripBookForMemdb(&snapshot)); err != nil {
 			return fmt.Errorf("insert book: %w", err)
 		}
 
 		// book_authors: clear existing rows for this book, then reinsert from Pebble.
-		if _, err := txn.DeleteAll(memTableBookAuthors, memIdxBookID, book.ID); err != nil {
+		if _, err := txn.DeleteAll(memTableBookAuthors, memIdxBookID, snapshot.ID); err != nil {
 			return fmt.Errorf("clear book_authors: %w", err)
 		}
-		if bas, baErr := p.GetBookAuthors(book.ID); baErr == nil {
+		if bas, baErr := p.GetBookAuthors(snapshot.ID); baErr == nil {
 			for i := range bas {
 				ba := bas[i]
 				if err := txn.Insert(memTableBookAuthors, &ba); err != nil {
@@ -138,10 +149,10 @@ func (p *PebbleStore) UpsertBookToMemDB(ctx context.Context, book *Book) {
 		}
 
 		// book_narrators
-		if _, err := txn.DeleteAll(memTableBookNarrators, memIdxBookID, book.ID); err != nil {
+		if _, err := txn.DeleteAll(memTableBookNarrators, memIdxBookID, snapshot.ID); err != nil {
 			return fmt.Errorf("clear book_narrators: %w", err)
 		}
-		if bns, bnErr := p.GetBookNarrators(book.ID); bnErr == nil {
+		if bns, bnErr := p.GetBookNarrators(snapshot.ID); bnErr == nil {
 			for i := range bns {
 				bn := bns[i]
 				if err := txn.Insert(memTableBookNarrators, &bn); err != nil {
@@ -151,10 +162,10 @@ func (p *PebbleStore) UpsertBookToMemDB(ctx context.Context, book *Book) {
 		}
 
 		// book_files: clear and reload from Pebble
-		if _, err := txn.DeleteAll(memTableBookFiles, memIdxBookID, book.ID); err != nil {
+		if _, err := txn.DeleteAll(memTableBookFiles, memIdxBookID, snapshot.ID); err != nil {
 			return fmt.Errorf("clear book_files: %w", err)
 		}
-		files, fileErr := p.loadBookFilesForBookID(book.ID)
+		files, fileErr := p.loadBookFilesForBookID(snapshot.ID)
 		if fileErr == nil {
 			for i := range files {
 				bf := files[i]
@@ -199,8 +210,9 @@ func (p *PebbleStore) UpsertBookFileToMemDB(bf *BookFile) {
 	if bf == nil {
 		return
 	}
+	snapshot := *bf // copy at enqueue — see the data-race rule on UpsertBookToMemDB
 	p.memSync("UpsertBookFile", func(txn memTxn) error {
-		return txn.Insert(memTableBookFiles, stripBookFileForMemdb(bf))
+		return txn.Insert(memTableBookFiles, stripBookFileForMemdb(&snapshot))
 	})
 }
 
@@ -259,8 +271,9 @@ func (p *PebbleStore) UpsertAuthorToMemDB(a *Author) {
 	if a == nil {
 		return
 	}
+	snapshot := *a // copy at enqueue — see the data-race rule on UpsertBookToMemDB
 	p.memSync("UpsertAuthor", func(txn memTxn) error {
-		return txn.Insert(memTableAuthors, a)
+		return txn.Insert(memTableAuthors, &snapshot)
 	})
 }
 
@@ -280,8 +293,9 @@ func (p *PebbleStore) UpsertSeriesToMemDB(s *Series) {
 	if s == nil {
 		return
 	}
+	snapshot := *s // copy at enqueue — see the data-race rule on UpsertBookToMemDB
 	p.memSync("UpsertSeries", func(txn memTxn) error {
-		return txn.Insert(memTableSeries, s)
+		return txn.Insert(memTableSeries, &snapshot)
 	})
 }
 
@@ -301,8 +315,9 @@ func (p *PebbleStore) UpsertNarratorToMemDB(n *Narrator) {
 	if n == nil {
 		return
 	}
+	snapshot := *n // copy at enqueue — see the data-race rule on UpsertBookToMemDB
 	p.memSync("UpsertNarrator", func(txn memTxn) error {
-		return txn.Insert(memTableNarrators, n)
+		return txn.Insert(memTableNarrators, &snapshot)
 	})
 }
 
@@ -312,6 +327,9 @@ func (p *PebbleStore) ReplaceBookAuthorsInMemDB(bookID string, authors []BookAut
 	if bookID == "" {
 		return
 	}
+	// Copy the slice at enqueue — the closure iterates it much later during
+	// warmup replay, and the caller may reuse/mutate the backing array.
+	authors = append([]BookAuthor(nil), authors...)
 	p.memSync("ReplaceBookAuthors", func(txn memTxn) error {
 		if _, err := txn.DeleteAll(memTableBookAuthors, memIdxBookID, bookID); err != nil {
 			return err
@@ -330,6 +348,8 @@ func (p *PebbleStore) ReplaceBookNarratorsInMemDB(bookID string, narrators []Boo
 	if bookID == "" {
 		return
 	}
+	// Copy the slice at enqueue — see ReplaceBookAuthorsInMemDB.
+	narrators = append([]BookNarrator(nil), narrators...)
 	p.memSync("ReplaceBookNarrators", func(txn memTxn) error {
 		if _, err := txn.DeleteAll(memTableBookNarrators, memIdxBookID, bookID); err != nil {
 			return err
@@ -350,8 +370,9 @@ func (p *PebbleStore) UpsertImportPathToMemDB(ip *ImportPath) {
 	if ip == nil {
 		return
 	}
+	snapshot := *ip // copy at enqueue — see the data-race rule on UpsertBookToMemDB
 	p.memSync("UpsertImportPath", func(txn memTxn) error {
-		return txn.Insert(memTableImportPaths, ip)
+		return txn.Insert(memTableImportPaths, &snapshot)
 	})
 }
 
@@ -371,8 +392,9 @@ func (p *PebbleStore) UpsertAuthorAliasToMemDB(aa *AuthorAlias) {
 	if aa == nil {
 		return
 	}
+	snapshot := *aa // copy at enqueue — see the data-race rule on UpsertBookToMemDB
 	p.memSync("UpsertAuthorAlias", func(txn memTxn) error {
-		return txn.Insert(memTableAuthorAliases, aa)
+		return txn.Insert(memTableAuthorAliases, &snapshot)
 	})
 }
 
@@ -399,8 +421,9 @@ func (p *PebbleStore) UpsertBlockedHashToMemDB(b *DoNotImport) {
 	if b == nil {
 		return
 	}
+	snapshot := *b // copy at enqueue — see the data-race rule on UpsertBookToMemDB
 	p.memSync("UpsertBlockedHash", func(txn memTxn) error {
-		return txn.Insert(memTableBlockedHashes, b)
+		return txn.Insert(memTableBlockedHashes, &snapshot)
 	})
 }
 

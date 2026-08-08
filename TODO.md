@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.17.1 -->
+<!-- version: 10.17.2 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-08-07 -->
 
@@ -454,11 +454,16 @@ into one of the curated sections below, is a normal direct edit.
 <!-- guid: d3f81a56-9c47-4e20-b7d8-52069fe1c4a3 -->
 <!-- last-edited: 2026-08-07 -->
 
-- [ ] 🔴 **Data race: `UpsertBookToMemDB` retains the CALLER's `*Book` and
+- [x] 🔴 **Data race: `UpsertBookToMemDB` retains the CALLER's `*Book` and
   dereferences it later on the warmup goroutine.** Caught by the race detector
-  on CI during PR #2170 (a parser PR that touches no database file). Diagnosed,
-  not fixed — the fix lands in the production memdb write path and deserves its
-  own PR with a regression test.
+  on CI during PR #2170 (a parser PR that touches no database file).
+  ✅ FIXED 2026-08-07 (fix/memdb-warmup-caller-pointer-race): snapshot copied at
+  enqueue time in `UpsertBookToMemDB` and every same-shape sibling upsert
+  (BookFile/Author/Series/Narrator/ImportPath/AuthorAlias/BlockedHash + slice
+  copies in ReplaceBookAuthors/NarratorsInMemDB). Regression test
+  `TestUpsertBookToMemDB_SnapshotsCallerBookAtEnqueue` forces the interleaving
+  deterministically under `-race`; verified it fires the race on the unfixed
+  code and is green on the fix.
 
   **The race, verbatim from CI:**
 
