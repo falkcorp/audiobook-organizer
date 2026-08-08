@@ -1,0 +1,135 @@
+# file: .github/workflows/e2e.yml
+# version: 1.0.0
+# guid: 6a2f47c9-1e83-4d05-b7f6-92c4a0d81b3e
+# last-edited: 2026-08-08
+
+# Runs the Playwright end-to-end suite.
+#
+# Until now NOTHING ran this suite automatically. That is how six spec files,
+# silently broken by a bad fixture parameter in April 2026, stayed dead until
+# August — four months during which the suite existed, was maintained, and
+# caught nothing.
+#
+# Split by cost. A full run builds the frontend AND the Go binary and then
+# drives two browser engines; that is far too slow to sit in the fast PR gate
+# next to Minimal CI. So:
+#   - pull_request -> chromium only, which catches essentially all content
+#     drift and logic regressions
+#   - nightly      -> chromium + webkit, catching the engine-specific failures
+#     a single-engine PR run would miss
+#
+# Note on the stale-server trap: playwright.config.ts sets
+# `reuseExistingServer: !process.env.CI`. GitHub Actions sets CI=true, so CI
+# always builds its own server and can never attach to a stale one. The hazard
+# is purely local runs — see the todo entry; a local run silently reused a
+# server that was hours old on 2026-08-08 and produced a fully green suite
+# against a bundle predating the fixes under test.
+
+name: E2E
+
+on:
+  pull_request:
+    branches: [main, master]
+    paths:
+      - 'web/**'
+      - '**.go'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/e2e.yml'
+  schedule:
+    - cron: '17 5 * * *' # 05:17 UTC nightly, off the :00 stampede
+  workflow_dispatch:
+    inputs:
+      projects:
+        description: 'Playwright projects to run'
+        required: false
+        type: choice
+        options:
+          - chromium
+          - chromium+webkit
+        default: chromium
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: E2E (${{ github.event_name == 'pull_request' && 'chromium' || 'chromium + webkit' }})
+    runs-on: ubuntu-latest
+    # A full two-engine run measured ~20 minutes locally; allow generous
+    # headroom for a cold CI runner that must also build the Go binary.
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26'
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libtag1-dev
+
+      - name: Install npm dependencies
+        run: cd web && npm ci
+
+      # --with-deps is load-bearing, not boilerplate. Browser binaries are
+      # tied to the installed Playwright version, and a mismatch fails at
+      # LAUNCH ("Executable doesn't exist at .../webkit-NNNN") rather than as
+      # a test failure — which reads like a broken suite when it is a broken
+      # environment. Installing them explicitly here keeps that distinction
+      # obvious in the logs.
+      - name: Install Playwright browsers
+        env:
+          # Passed via env rather than interpolated into the script body.
+          # Neither value is attacker-controlled (event_name is a fixed enum,
+          # projects is a constrained choice input), but interpolating GitHub
+          # context straight into a shell command is the habit that produces
+          # workflow injections, so it is avoided uniformly.
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_PROJECTS: ${{ inputs.projects }}
+        run: |
+          cd web
+          if [ "$EVENT_NAME" = "pull_request" ] || \
+             { [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$INPUT_PROJECTS" != "chromium+webkit" ]; }; then
+            npx playwright install --with-deps chromium
+          else
+            npx playwright install --with-deps chromium webkit
+          fi
+
+      - name: Run E2E suite
+        env:
+          GOEXPERIMENT: jsonv2
+          CI: 'true'
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_PROJECTS: ${{ inputs.projects }}
+        run: |
+          cd web
+          case "$EVENT_NAME" in
+            pull_request) PROJECTS="--project=chromium" ;;
+            workflow_dispatch)
+              if [ "$INPUT_PROJECTS" = "chromium+webkit" ]; then
+                PROJECTS="--project=chromium --project=webkit"
+              else
+                PROJECTS="--project=chromium"
+              fi
+              ;;
+            *) PROJECTS="--project=chromium --project=webkit" ;;
+          esac
+          echo "Running with: $PROJECTS"
+          npx playwright test -c tests/e2e/playwright.config.ts $PROJECTS --reporter=line
