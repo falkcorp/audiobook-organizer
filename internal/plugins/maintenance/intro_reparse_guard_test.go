@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_reparse_guard_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8f2b6d41-7e05-4c39-b8a7-1d94e30c5f26
 // last-edited: 2026-08-07
 
@@ -7,6 +7,7 @@ package maintenance
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -83,7 +84,7 @@ func TestReparseNeverClearsAnUnreproducibleParse(t *testing.T) {
 
 	store := newReparseStore(degraded, prose)
 	p := &Plugin{}
-	if err := p.reparseStoredIntros(context.Background(), store, &fakeReporter{}, store.order); err != nil {
+	if err := p.reparseStoredIntros(context.Background(), store, &fakeReporter{}, store.order, false); err != nil {
 		t.Fatalf("reparseStoredIntros: %v", err)
 	}
 
@@ -115,7 +116,7 @@ func TestReparseStillUpgradesACorrectableParse(t *testing.T) {
 	}
 	store := newReparseStore(stale)
 	p := &Plugin{}
-	if err := p.reparseStoredIntros(context.Background(), store, &fakeReporter{}, store.order); err != nil {
+	if err := p.reparseStoredIntros(context.Background(), store, &fakeReporter{}, store.order, false); err != nil {
 		t.Fatalf("reparseStoredIntros: %v", err)
 	}
 
@@ -143,7 +144,7 @@ func TestReparseKeepsExistingNarratorWhenNewParseHasNone(t *testing.T) {
 	}
 	store := newReparseStore(b)
 	p := &Plugin{}
-	if err := p.reparseStoredIntros(context.Background(), store, &fakeReporter{}, store.order); err != nil {
+	if err := p.reparseStoredIntros(context.Background(), store, &fakeReporter{}, store.order, false); err != nil {
 		t.Fatalf("reparseStoredIntros: %v", err)
 	}
 	if got := deref(store.books["book-no-narrator"].TranscribedNarrator); got != "Christopher Hurt" {
@@ -160,6 +161,69 @@ func TestSilenceSentinelIsSharedWithClassifier(t *testing.T) {
 	}
 	if c := transcribe.ClassifyIntro(silenceSentinel, transcribe.UnknownPosition); c.Kind != transcribe.IntroKindUnknown {
 		t.Errorf("sentinel classified %q, want unknown", c.Kind)
+	}
+}
+
+// progressReporter captures the last progress message so dry-run reporting can
+// be asserted on.
+type progressReporter struct {
+	fakeReporter
+	lastMsg string
+}
+
+func (r *progressReporter) UpdateProgress(_, _ int, msg string) error {
+	r.lastMsg = msg
+	return nil
+}
+
+// TestReparseDryRunWritesNothingButReportsWouldUpdate pins the dry_run
+// contract: identical classification+comparison logic runs, the would-update
+// count is reported, and ZERO UpdateBook calls are made. A second pass with
+// dryRun=false over the same fixture confirms the write path still writes.
+func TestReparseDryRunWritesNothingButReportsWouldUpdate(t *testing.T) {
+	// A correctable stored parse (the leaked-verb defect): a fresh parse of the
+	// stored transcript differs from the stored fields, so a real run would
+	// rewrite them.
+	fixture := func() *database.Book {
+		return &database.Book{
+			ID:                 "book-dry-run",
+			IntroTranscription: sp("Awakened Essence 1 Written by Jacob Poole Performed by Alex Perrone"),
+			TranscribedTitle:   sp("Awakened Essence 1 Written"),
+			TranscribedAuthor:  sp("Jacob Poole"),
+		}
+	}
+
+	// Dry run: nonzero would-update reported, nothing written.
+	store := newReparseStore(fixture())
+	rep := &progressReporter{}
+	p := &Plugin{}
+	if err := p.reparseStoredIntros(context.Background(), store, rep, store.order, true); err != nil {
+		t.Fatalf("reparseStoredIntros(dryRun=true): %v", err)
+	}
+	if n := len(store.updates); n != 0 {
+		t.Fatalf("dry run made %d UpdateBook calls, want 0", n)
+	}
+	if got := deref(store.books["book-dry-run"].TranscribedTitle); got != "Awakened Essence 1 Written" {
+		t.Errorf("dry run mutated stored title: %q", got)
+	}
+	if !strings.Contains(rep.lastMsg, "would update 1 of 1") {
+		t.Errorf("final progress = %q, want it to contain %q", rep.lastMsg, "would update 1 of 1")
+	}
+
+	// Same fixture, dryRun=false: the write happens and is reported as applied.
+	store2 := newReparseStore(fixture())
+	rep2 := &progressReporter{}
+	if err := p.reparseStoredIntros(context.Background(), store2, rep2, store2.order, false); err != nil {
+		t.Fatalf("reparseStoredIntros(dryRun=false): %v", err)
+	}
+	if n := len(store2.updates); n != 1 {
+		t.Fatalf("real run made %d UpdateBook calls, want 1", n)
+	}
+	if got := deref(store2.books["book-dry-run"].TranscribedTitle); got != "Awakened Essence 1" {
+		t.Errorf("real run title = %q, want %q", got, "Awakened Essence 1")
+	}
+	if !strings.Contains(rep2.lastMsg, "updated 1 of 1") {
+		t.Errorf("final progress = %q, want it to contain %q", rep2.lastMsg, "updated 1 of 1")
 	}
 }
 

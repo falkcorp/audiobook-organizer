@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.16.0
+// version: 3.17.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-08-07
 
@@ -78,6 +78,15 @@ type introTranscribeParams struct {
 	// cache: extract-only first (fast, CPU-bound), then a normal run transcribes
 	// off the warm cache (cache hits → no ffmpeg, only the GPU step remains).
 	ExtractOnly *bool `json:"extract_only,omitempty"`
+	// DryRun previews what a run WOULD change without writing anything.
+	// Currently honoured by reparse_only runs only; the full-transcribe path
+	// ignores it (registry-wide dry-run enforcement is tracked separately).
+	//
+	// ⚠️ Behaviour change (2026-08-07): for reparse_only runs, dry_run DEFAULTS
+	// TO TRUE. The 2026-08-07 reparse of 12,990 books was dispatched with no
+	// preview at all; that was acceptable only because reparse is upgrade-only.
+	// Pass dry_run=false explicitly to apply changes.
+	DryRun *bool `json:"dry_run,omitempty"`
 }
 
 func (p *Plugin) introTranscribeDef() sdk.OperationDef {
@@ -128,11 +137,15 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 	// parser over stored transcripts and rewrites the parsed fields. Used to apply
 	// a parser fix to existing books cheaply.
 	if reparseOnly {
+		// ⚠️ dry_run defaults to TRUE on the reparse path (behaviour change
+		// 2026-08-07): previews are free, and the alternative is dispatching a
+		// library-wide write blind. Pass dry_run=false to apply.
+		dryRun := params.DryRun == nil || *params.DryRun
 		ids, err := store.ListBookIDs()
 		if err != nil {
 			return fmt.Errorf("list book ids: %w", err)
 		}
-		return p.reparseStoredIntros(ctx, store, reporter, ids)
+		return p.reparseStoredIntros(ctx, store, reporter, ids, dryRun)
 	}
 
 	// Load the FULL, ordered list of book IDs up front. This is the proven
@@ -293,13 +306,21 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 // UpdateBook does full-column replacement, and GetBookByID returns the full
 // row, so only the three parsed fields change. IntroTranscribedAt is left
 // untouched (reparse is not a new transcription).
+//
+// With dryRun=true (the default for reparse_only runs) the identical
+// classification+comparison logic runs and every bucket is counted, but the
+// UpdateBook call is skipped — nothing is written.
 func (p *Plugin) reparseStoredIntros(ctx context.Context, store interface {
 	ListBookIDs() ([]string, error)
 	GetBookByID(string) (*database.Book, error)
 	UpdateBook(string, *database.Book) (*database.Book, error)
-}, reporter sdk.Reporter, ids []string) error {
+}, reporter sdk.Reporter, ids []string, dryRun bool) error {
 	log := reporter.Logger()
 	total := len(ids)
+	verb := "updated"
+	if dryRun {
+		verb = "would update"
+	}
 	var scanned, changed int
 	for i, id := range ids {
 		if i%500 == 0 {
@@ -309,7 +330,7 @@ func (p *Plugin) reparseStoredIntros(ctx context.Context, store interface {
 			default:
 			}
 			_ = reporter.UpdateProgress(i, total,
-				fmt.Sprintf("Reparsing intros — %d/%d (%d updated)", i, total, changed))
+				fmt.Sprintf("Reparsing intros — %d/%d (%d %s)", i, total, changed, verb))
 		}
 		b, err := store.GetBookByID(id)
 		if err != nil || b == nil || b.IntroTranscription == nil || *b.IntroTranscription == "" {
@@ -347,15 +368,23 @@ func (p *Plugin) reparseStoredIntros(ctx context.Context, store interface {
 			continue // unchanged — skip the write
 		}
 		b.TranscribedTitle, b.TranscribedAuthor, b.TranscribedNarrator = nt, na, nn
-		if _, err := store.UpdateBook(b.ID, b); err != nil {
-			log.Warn("reparse-intros: update failed", "book_id", b.ID, "err", err)
-			continue
+		if !dryRun {
+			if _, err := store.UpdateBook(b.ID, b); err != nil {
+				log.Warn("reparse-intros: update failed", "book_id", b.ID, "err", err)
+				continue
+			}
 		}
 		changed++
 	}
-	log.Info("reparse-intros: complete", "scanned", scanned, "changed", changed, "total_books", total)
-	_ = reporter.UpdateProgress(total, total,
-		fmt.Sprintf("Reparse complete — %d updated of %d transcribed (%d books)", changed, scanned, total))
+	log.Info("reparse-intros: complete", "dry_run", dryRun,
+		"scanned", scanned, "changed", changed, "total_books", total)
+	if dryRun {
+		_ = reporter.UpdateProgress(total, total,
+			fmt.Sprintf("Dry run — would update %d of %d transcribed (%d books, nothing written; pass dry_run=false to apply)", changed, scanned, total))
+	} else {
+		_ = reporter.UpdateProgress(total, total,
+			fmt.Sprintf("Reparse complete — updated %d of %d transcribed (%d books)", changed, scanned, total))
+	}
 	return nil
 }
 
