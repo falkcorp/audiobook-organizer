@@ -1,7 +1,7 @@
 // file: web/src/components/layout/Sidebar.tsx
-// version: 1.15.1
+// version: 1.16.0
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-08-07
+// last-edited: 2026-08-08
 
 import { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
@@ -53,13 +53,44 @@ const librarySubItems = [
   // search, sort, filters, tags) instead of the state-preserving nav most
   // other sidebar links use; matchPath (query-free) drives the selected
   // highlight so it still lights up on a plain /library visit.
-  { text: 'All Books', icon: <LibraryBooksIcon />, path: '/library?reset=1', matchPath: '/library' },
-  { text: 'In Progress', icon: <MenuBookIcon />, path: '/library?search=read_status:in_progress' },
-  { text: 'Finished', icon: <LibraryBooksIcon />, path: '/library?search=read_status:finished' },
+  //
+  // matchSearch is the DECODED value of the `search` query param that marks
+  // this item active. It cannot be derived from `path`: once Library.tsx
+  // settles the URL, `search` is percent-encoded and `page=1` is appended, so
+  // '/library?search=read_status:in_progress' never string-matches the live
+  // location. Comparing the parsed param sidesteps both.
+  { text: 'All Books', icon: <LibraryBooksIcon />, path: '/library?reset=1', matchPath: '/library', matchSearch: '' },
+  { text: 'In Progress', icon: <MenuBookIcon />, path: '/library?search=read_status:in_progress', matchSearch: 'read_status:in_progress' },
+  { text: 'Finished', icon: <LibraryBooksIcon />, path: '/library?search=read_status:finished', matchSearch: 'read_status:finished' },
   { text: 'Fingerprints', icon: <WavesIcon />, path: '/fingerprints' },
   { text: 'Series', icon: <CollectionsBookmarkIcon />, path: '/series' },
   { text: 'Authors', icon: <PeopleIcon />, path: '/authors' },
 ];
+
+/**
+ * Decides whether a Library sub-item should render as selected.
+ *
+ * Exported for tests. The previous implementation compared
+ * `location.pathname` against `item.matchPath ?? item.path`, which is wrong in
+ * both directions for the filter items: `pathname` never carries a query
+ * string, so 'In Progress' (path '/library?search=...') could never match,
+ * while 'All Books' (matchPath '/library') matched on *every* /library URL.
+ * The highlight was therefore pinned to All Books permanently.
+ *
+ * Items that declare `matchSearch` are compared on the parsed, decoded
+ * `search` param rather than the raw path, so they still match once
+ * Library.tsx settles the URL into `?search=read_status%3Ain_progress&page=1`.
+ */
+export function isSubItemSelected(
+  item: { path: string; matchPath?: string; matchSearch?: string },
+  pathname: string,
+  search: string,
+): boolean {
+  const itemPath = (item.matchPath ?? item.path).split('?')[0];
+  if (pathname !== itemPath) return false;
+  if (item.matchSearch === undefined) return true;
+  return (new URLSearchParams(search).get('search') ?? '') === item.matchSearch;
+}
 
 const menuItems = [
   { text: 'Dashboard', icon: <DashboardIcon />, path: '/dashboard' },
@@ -160,7 +191,7 @@ export function Sidebar({ open, onClose, drawerWidth, collapsed = false, onToggl
                   <ListItem key={item.text} disablePadding>
                     <ListItemButton
                       sx={{ pl: 4 }}
-                      selected={location.pathname === (item.matchPath ?? item.path)}
+                      selected={isSubItemSelected(item, location.pathname, location.search)}
                       onClick={() => handleNavigation(item.path)}
                     >
                       <ListItemIcon>{item.icon}</ListItemIcon>

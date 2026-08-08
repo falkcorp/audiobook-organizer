@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.tsx
-// version: 1.78.0
+// version: 1.78.1
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-07-11
+// last-edited: 2026-08-08
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -548,12 +548,26 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
   }, [searchQuery, filters, selectedTags, sortBy, sortOrder, itemsPerPage]);
 
   // Sync state FROM URL when user navigates (back/forward) or edits URL directly
-  const isInternalUpdate = useRef(false);
+  // The URL query string this component last wrote, used to tell our own echo
+  // apart from a real external navigation.
+  //
+  // This replaces a one-shot `isInternalUpdate` boolean that got permanently
+  // stuck at `true`, making every sidebar filter link a no-op. The write effect
+  // below lists `setSearchParams` in its deps, and react-router rebuilds that
+  // callback whenever `location.search` changes — so the effect re-fired on URL
+  // changes it had not caused, re-arming the flag each time. Once it wrote an
+  // identical query string, `location.search` stopped changing, the sync effect
+  // stopped running, and nothing ever cleared the flag again. Every subsequent
+  // external navigation was then swallowed as a phantom "internal echo".
+  //
+  // Comparing the actual query string is idempotent, so repeated writes of the
+  // same URL are harmless and a genuinely different URL always gets through.
+  const lastWrittenSearch = useRef<string | null>(null);
   useEffect(() => {
     // Explicit full-reset request (Sidebar's "All Books" link uses
-    // /library?reset=1). Checked BEFORE the isInternalUpdate guard below
-    // so a reset request can never be swallowed as an internal echo of a
-    // prior filter/search/sort change — that swallow is what previously
+    // /library?reset=1). Checked BEFORE the echo guard below so a reset
+    // request can never be swallowed as an internal echo of a prior
+    // filter/search/sort change — that swallow is what previously
     // left tag (and other) filters "stuck" after clicking All Books.
     if (searchParams.get('reset') === '1') {
       setPage(1);
@@ -564,12 +578,15 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
       setItemsPerPage(20);
       setSelectedTags([]);
       baseHandleFiltersChange({});
-      isInternalUpdate.current = true;
+      lastWrittenSearch.current = '';
       setSearchParams(new URLSearchParams(), { replace: true });
       return;
     }
-    if (isInternalUpdate.current) {
-      isInternalUpdate.current = false;
+    // Our own echo — the URL already says what we last wrote, so there is
+    // nothing to read back. Deliberately does NOT clear the ref: the write
+    // effect can fire repeatedly with the same params, and consuming the
+    // marker here is exactly what let the old boolean get stuck.
+    if (searchParams.toString() === lastWrittenSearch.current) {
       return;
     }
     const urlPage = Math.max(1, parseInt(searchParams.get('page') || localStorage.getItem(STORAGE_KEYS.LIBRARY_PAGE) || '1', 10));
@@ -621,7 +638,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     // replace for other changes (search typing, etc.) to avoid history spam.
     const pageChanged = prevPageRef.current !== page;
     prevPageRef.current = page;
-    isInternalUpdate.current = true;
+    lastWrittenSearch.current = params.toString();
     setSearchParams(params, { replace: !pageChanged });
     localStorage.setItem(STORAGE_KEYS.LIBRARY_PAGE, page.toString());
   }, [filters, itemsPerPage, page, searchQuery, selectedTags, setSearchParams, sortBy, sortOrder, viewMode]);
