@@ -1,7 +1,7 @@
 // file: web/tests/e2e/utils/test-helpers.ts
-// version: 2.9.0
+// version: 2.10.0
 // guid: a1b2c3d4-e5f6-7890-abcd-e1f2a3b4c5d6
-// last-edited: 2026-08-07
+// last-edited: 2026-08-08
 
 import { Page } from '@playwright/test';
 
@@ -441,14 +441,15 @@ export async function setupMockApiRoutes(
 
     // Auth endpoints
     if (pathname === '/api/v1/auth/status' && method === 'GET') {
-      return route.fulfill(
-        jsonResponse({
-          has_users: mockState.auth.has_users,
-          auth_enabled: mockState.auth.auth_enabled,
-          requires_auth: mockState.auth.requires_auth,
-          bootstrap_ready: mockState.auth.bootstrap_ready,
-        })
-      );
+      // api.getAuthStatus reads `body.data`; without the envelope AuthContext
+      // throws ("Cannot read properties of undefined") and never initializes.
+      const status = {
+        has_users: mockState.auth.has_users,
+        auth_enabled: mockState.auth.auth_enabled,
+        requires_auth: mockState.auth.requires_auth,
+        bootstrap_ready: mockState.auth.bootstrap_ready,
+      };
+      return route.fulfill(jsonResponse({ ...status, data: status }));
     }
 
     if (pathname === '/api/v1/auth/setup' && method === 'POST') {
@@ -725,8 +726,10 @@ export async function setupMockApiRoutes(
 
     // Import paths
     if (pathname === '/api/v1/import-paths' && method === 'GET') {
+      // api.getImportPaths reads `body.data.importPaths`.
+      const importPaths = { importPaths: mockState.importPaths };
       return route.fulfill(
-        jsonResponse({ importPaths: mockState.importPaths })
+        jsonResponse({ ...importPaths, data: importPaths })
       );
     }
 
@@ -771,13 +774,15 @@ export async function setupMockApiRoutes(
 
     if (pathname === '/api/v1/audiobooks/soft-deleted' && method === 'GET') {
       const deleted = mockState.books.filter((b: Record<string, unknown>) => b.marked_for_deletion);
-      return route.fulfill(jsonResponse({
+      // api.getSoftDeletedBooks reads `body.data.items`.
+      const softDeleted = {
         items: deleted,
         count: deleted.length,
         total: deleted.length,
         offset: 0,
         limit: 100,
-      }));
+      };
+      return route.fulfill(jsonResponse({ ...softDeleted, data: softDeleted }));
     }
 
     if (pathname === '/api/v1/audiobooks/search' && method === 'GET') {
@@ -896,9 +901,12 @@ export async function setupMockApiRoutes(
         const versions = mockState.books.filter(
           (b: Record<string, unknown>) => b.version_group_id === book.version_group_id
         );
-        return route.fulfill(jsonResponse({ versions }));
+        // api.getBookVersions reads `body.data.versions`.
+        return route.fulfill(jsonResponse({ versions, data: { versions } }));
       }
-      return route.fulfill(jsonResponse({ versions: [] }));
+      return route.fulfill(
+        jsonResponse({ versions: [], data: { versions: [] } })
+      );
     }
 
     if (pathname.match(/\/api\/v1\/audiobooks\/[^/]+\/versions$/) && method === 'POST') {
@@ -1014,11 +1022,14 @@ export async function setupMockApiRoutes(
     }
 
     // Generic audiobook GET by ID (must come AFTER sub-path handlers)
+    // Bare book URL: /api/v1/audiobooks/<id>. api.getBook reads `body.data`, so
+    // the response must carry the { data: ... } envelope; the top-level fields
+    // are kept for legacy readers.
     if (pathname.match(/\/api\/v1\/audiobooks\/[^/]+$/) && method === 'GET') {
       const bookId = pathname.split('/').pop() || '';
       const book = mockState.books.find((b) => b.id === bookId);
       if (book) {
-        return route.fulfill(jsonResponse(book));
+        return route.fulfill(jsonResponse({ ...book, data: book }));
       }
       return route.fulfill(jsonResponse({ error: 'Not found' }, 404));
     }
@@ -1121,27 +1132,41 @@ export async function setupMockApiRoutes(
 
     // Authors and Series
     if (pathname === '/api/v1/authors' && method === 'GET') {
-      const authors = [...new Set(mockState.books.map((b: Record<string, unknown>) => b.author_name).filter(Boolean))];
-      return route.fulfill(jsonResponse({ authors: authors.map((name, i) => ({ id: `author-${i}`, name })) }));
+      const names = [...new Set(mockState.books.map((b: Record<string, unknown>) => b.author_name).filter(Boolean))];
+      // api.getAuthors reads `body.data.items || body.data.authors`.
+      const authors = { authors: names.map((name, i) => ({ id: `author-${i}`, name })) };
+      return route.fulfill(jsonResponse({ ...authors, data: authors }));
     }
 
     if (pathname === '/api/v1/series' && method === 'GET') {
-      const series = [...new Set(mockState.books.map((b: Record<string, unknown>) => b.series_name).filter(Boolean))];
-      return route.fulfill(jsonResponse({ series: series.map((name, i) => ({ id: `series-${i}`, name })) }));
+      const names = [...new Set(mockState.books.map((b: Record<string, unknown>) => b.series_name).filter(Boolean))];
+      // api.getSeries reads `body.data.items || body.data.series`.
+      const series = { series: names.map((name, i) => ({ id: `series-${i}`, name })) };
+      return route.fulfill(jsonResponse({ ...series, data: series }));
     }
 
     // Filesystem endpoints
+    // NOTE: api.getHomeDirectory/browseFilesystem/excludeFilesystemPath all read
+    // `body.data`, so these responses must carry the { data: ... } envelope. The
+    // top-level fields are kept for any legacy reader.
     if (pathname === '/api/v1/filesystem/home') {
-      return route.fulfill(
-        jsonResponse({ path: mockState.homeDirectory, home: mockState.homeDirectory })
-      );
+      const homeData = {
+        path: mockState.homeDirectory,
+        home: mockState.homeDirectory,
+      };
+      return route.fulfill(jsonResponse({ ...homeData, data: homeData }));
     }
 
     if (pathname === '/api/v1/filesystem/browse') {
       const f = maybeFailStatus(mockState.failures.filesystem, 'Directory does not exist.'); if (f) return f;
       const browsePath = url.searchParams.get('path') || '/';
-      const fsData = mockState.filesystem[browsePath] || { path: browsePath, items: [] };
-      return route.fulfill(jsonResponse(fsData));
+      const stored = mockState.filesystem[browsePath] || { path: browsePath, items: [] };
+      const fsData = {
+        ...(stored as Record<string, unknown>),
+        items: (stored as { items?: unknown[] }).items || [],
+        count: ((stored as { items?: unknown[] }).items || []).length,
+      };
+      return route.fulfill(jsonResponse({ ...fsData, data: fsData }));
     }
 
     if (pathname === '/api/v1/filesystem/exclude' && method === 'POST') {
@@ -1161,9 +1186,12 @@ export async function setupMockApiRoutes(
             }
           }
         }
-        return route.fulfill(jsonResponse({ excluded: true, path: targetPath }));
+        const excluded = { excluded: true, path: targetPath };
+        return route.fulfill(jsonResponse({ ...excluded, data: excluded }));
       } catch { /* ignore */ }
-      return route.fulfill(jsonResponse({ excluded: true, path: '' }));
+      return route.fulfill(
+        jsonResponse({ excluded: true, path: '', data: { excluded: true, path: '' } })
+      );
     }
 
     if (pathname === '/api/v1/filesystem/exclude' && method === 'DELETE') {
@@ -1182,9 +1210,12 @@ export async function setupMockApiRoutes(
             }
           }
         }
-        return route.fulfill(jsonResponse({ excluded: false, path: targetPath }));
+        const included = { excluded: false, path: targetPath };
+        return route.fulfill(jsonResponse({ ...included, data: included }));
       } catch { /* ignore */ }
-      return route.fulfill(jsonResponse({ excluded: false, path: '' }));
+      return route.fulfill(
+        jsonResponse({ excluded: false, path: '', data: { excluded: false, path: '' } })
+      );
     }
 
     // Blocked hashes
@@ -1218,6 +1249,29 @@ export async function setupMockApiRoutes(
       return route.fulfill(jsonResponse({ message: 'Removed' }));
     }
 
+    // --- Book sub-resource GET fallback --------------------------------------
+    // Anything of the shape /api/v1/audiobooks/<id>/<sub> that has no specific
+    // handler above. Returning an empty { data: ... } envelope here keeps the
+    // Book Detail tabs from crashing on `undefined` and stops these requests
+    // from falling through to the real backend.
+    const bookSubResource = pathname.match(
+      /^\/api\/v1\/audiobooks\/([^/]+)\/([^/]+)$/
+    );
+    if (bookSubResource && method === 'GET') {
+      const sub = bookSubResource[2];
+      if (sub === 'files') {
+        const payload = { files: [], count: 0 };
+        return route.fulfill(jsonResponse({ ...payload, data: payload }));
+      }
+      if (sub === 'tags-detailed') {
+        return route.fulfill(jsonResponse({ tags: [], data: { tags: [] } }));
+      }
+      if (sub === 'segments' || sub === 'metadata-rejections' || sub === 'activity') {
+        return route.fulfill(jsonResponse({ data: [] }));
+      }
+      return route.fulfill(jsonResponse({ items: [], data: { items: [] } }));
+    }
+
     // Book update/delete
     if (pathname.startsWith('/api/v1/audiobooks/') && method === 'PUT') {
       const bookId = pathname.split('/')[4];
@@ -1229,7 +1283,7 @@ export async function setupMockApiRoutes(
           return route.fulfill(jsonResponse({ error: 'Conflict' }, 409));
         }
         Object.assign(book, body);
-        return route.fulfill(jsonResponse(book));
+        return route.fulfill(jsonResponse({ ...book, data: book }));
       }
       return route.fulfill(jsonResponse({ error: 'Not found' }, 404));
     }

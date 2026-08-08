@@ -1,7 +1,7 @@
 // file: web/tests/e2e/error-handling.spec.ts
-// version: 1.4.1
+// version: 1.5.0
 // guid: 2f4f5afa-c734-4a00-8a72-d288bcea714f
-// last-edited: 2026-08-07
+// last-edited: 2026-08-08
 
 import { test, expect, type Page } from '@playwright/test';
 import {
@@ -68,7 +68,10 @@ test.describe('Error Handling', () => {
     await page.goto('/library/book-1');
     await page.waitForLoadState('networkidle');
     await page.getByRole('button', { name: 'Edit Metadata' }).click();
-    await page.getByLabel('Year').fill('abcd');
+    // The Edit Metadata dialog now renders a per-field "Lock <field>" icon
+    // button alongside each input, so getByLabel('Year') is ambiguous — scope
+    // the locator to the textbox role.
+    await page.getByRole('textbox', { name: 'Year' }).fill('abcd');
     await page.getByRole('button', { name: 'Save' }).click();
 
     // Assert
@@ -90,7 +93,9 @@ test.describe('Error Handling', () => {
     await page.goto('/library/book-1');
     await page.waitForLoadState('networkidle');
     await page.getByRole('button', { name: 'Edit Metadata' }).click();
-    await page.getByLabel('Title').fill('Updated Title');
+    // Title is required, so its accessible name carries the asterisk; the
+    // sibling "Lock Title *" button makes getByLabel('Title') ambiguous.
+    await page.getByRole('textbox', { name: 'Title *' }).fill('Updated Title');
     await page.getByRole('button', { name: 'Save' }).click();
 
     // Assert
@@ -115,32 +120,44 @@ test.describe('Error Handling', () => {
     // Arrange
     await openLibrary(page);
 
+    // The page opens TWO EventSources: the global status stream owned by
+    // eventSourceManager ('/api/events') and the operations stream
+    // ('/api/v1/operations/events') owned by useOperationsStore. Only the
+    // former drives the TopBar connection chip and the Library toasts, so
+    // target it by URL rather than by instance index.
     // Act
     await page.waitForFunction(() => {
       const mock = (window as unknown as { __mockEventSource?: {
-        instances?: unknown[];
+        instances?: Array<{ url: string }>;
       } }).__mockEventSource;
-      return Boolean(mock?.instances?.length);
+      return Boolean(
+        mock?.instances?.some((instance) => instance.url === '/api/events')
+      );
     });
     await page.evaluate(() => {
       const mock = (window as unknown as { __mockEventSource?: {
-        instances?: Array<{ emitError?: () => void; onopen?: () => void }>;
+        instances?: Array<{ url: string; emitError?: () => void }>;
       } }).__mockEventSource;
-      mock?.instances?.[0]?.emitError?.();
+      const target = mock?.instances?.find((i) => i.url === '/api/events');
+      target?.emitError?.();
     });
 
-    // Assert
+    // Assert — TopBar renders a "Connection lost" chip
     await expect(page.getByText('Connection lost', { exact: true })).toBeVisible();
 
-    // Act
+    // Act — the manager auto-reconnects with a new EventSource; force the
+    // most recent status-stream instance open so the restored path fires.
     await page.evaluate(() => {
       const mock = (window as unknown as { __mockEventSource?: {
-        instances?: Array<{ onopen?: () => void }>;
+        instances?: Array<{ url: string; onopen?: () => void }>;
       } }).__mockEventSource;
-      mock?.instances?.[0]?.onopen?.();
+      const matches = (mock?.instances || []).filter(
+        (i) => i.url === '/api/events'
+      );
+      matches[matches.length - 1]?.onopen?.();
     });
 
-    // Assert
+    // Assert — Library surfaces a "Connection restored." toast
     await expect(page.getByText('Connection restored.').first()).toBeVisible();
   });
 
