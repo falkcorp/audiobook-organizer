@@ -1,7 +1,7 @@
 // file: web/tests/e2e/file-browser.spec.ts
-// version: 1.4.0
+// version: 1.4.1
 // guid: bbd8bdb0-5dc1-448f-a520-def03ae76825
-// last-edited: 2026-02-04
+// last-edited: 2026-08-07
 
 import { test, expect, type Page } from '@playwright/test';
 import {
@@ -97,7 +97,7 @@ const openImportFileBrowser = async (page: Page) => {
 };
 
 test.describe('File Browser', () => {
-  test.beforeEach(async ({ _page }) => {
+  test.beforeEach(async () => {
     // Setup handled by openImportFileBrowser() which calls setupMockApi()
   });
 

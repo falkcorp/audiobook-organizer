@@ -1,7 +1,7 @@
 // file: tests/e2e/book-detail.spec.ts
-// version: 1.12.0
+// version: 1.12.1
 // guid: 2a3b4c5d-6e7f-8a9b-0c1d-2e3f4a5b6c7d
-// last-edited: 2026-03-04
+// last-edited: 2026-08-07
 
 import { expect, test } from '@playwright/test';
 import { mockEventSource } from './utils/test-helpers';
@@ -351,7 +351,7 @@ const setupRoutes = async (page: import('@playwright/test').Page) => {
 };
 
 test.describe('Book Detail page', () => {
-  test.beforeEach(async ({ _page }) => {
+  test.beforeEach(async () => {
     // Each test calls setupRoutes which handles all setup including EventSource mocking
     // No setup needed here to avoid conflicts
   });
