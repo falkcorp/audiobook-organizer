@@ -94,6 +94,20 @@ jobs:
       # a test failure — which reads like a broken suite when it is a broken
       # environment. Installing them explicitly here keeps that distinction
       # obvious in the logs.
+      # Pre-build so playwright.config.ts's webServer only has to START the
+      # binary, not compile it. Without this the first CI run died on
+      # "Timed out waiting 120000ms from config.webServer" — the webServer
+      # command builds the frontend AND the Go binary, which does not fit in
+      # the old window on a cold runner with an empty Go build cache. The
+      # config timeout was raised too, but warming the caches here is what
+      # keeps the wait short rather than merely survivable.
+      - name: Pre-build frontend and Go binary
+        env:
+          GOEXPERIMENT: jsonv2
+        run: |
+          cd web && npm run build
+          cd .. && go build -tags embed_frontend -o audiobook-organizer .
+
       - name: Install Playwright browsers
         env:
           # Passed via env rather than interpolated into the script body.
