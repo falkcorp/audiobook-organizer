@@ -748,7 +748,10 @@ export async function setupMockApiRoutes(
         book_count: 0,
       };
       mockState.importPaths.push(newPath);
-      return route.fulfill(jsonResponse(newPath, 201));
+      // api.addImportPath reads `body.data.importPath ?? body.data`.
+      return route.fulfill(
+        jsonResponse({ ...newPath, data: { importPath: newPath } }, 201)
+      );
     }
 
     // Books endpoints
