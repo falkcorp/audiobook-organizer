@@ -1,9 +1,9 @@
 // file: web/tests/e2e/library-sidebar-filters.spec.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3c9a71e5-84fd-4b26-a0d7-6f2e5b81c934
 // last-edited: 2026-08-08
 
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page, type Locator } from '@playwright/test';
 
 import { generateTestBooks, setupLibraryWithBooks } from './utils/test-helpers';
 
@@ -19,9 +19,44 @@ import { generateTestBooks, setupLibraryWithBooks } from './utils/test-helpers';
  *   2. A stuck `isInternalUpdate` guard in Library.tsx discarded the incoming
  *      `search` param and rewrote the URL back, so the click applied nothing.
  *
- * #2193 fixed both, but only with unit tests. These tests exercise the real
- * click path so a regression fails CI rather than being reported by the owner.
+ * #2193 fixed both, but only with unit tests. These exercise the real click
+ * path so a regression fails CI instead of being reported by the owner.
+ *
+ * NOTE for anyone running this locally: `playwright.config.ts` sets
+ * `reuseExistingServer: !process.env.CI`, so a stray server on 127.0.0.1:8484
+ * will be reused and you will silently test whatever bundle IT was built from.
+ * Confirm with `ps -o lstart -p $(lsof -ti :8484)` or kill it first.
  */
+
+/** The Library sub-item buttons, which live inside the collapsible group. */
+function subItems(page: Page): Locator {
+  return page.locator('.MuiCollapse-root:visible .MuiListItemButton-root');
+}
+
+/**
+ * Whichever sub-items are currently highlighted.
+ *
+ * Asserting on this set rather than on each item's class is deliberate: it
+ * states the real invariant — exactly one item is lit, and it is the right
+ * one — and it does not depend on resolving an individual button, which MUI
+ * makes awkward (the label sits in a nested node, so the computed accessible
+ * name does not equal the label).
+ *
+ * `:visible` and the `.MuiCollapse-root` scope are both load-bearing. Sidebar
+ * renders its content TWICE — once for the temporary (mobile) Drawer and once
+ * for the permanent one — so an unscoped `.Mui-selected` matches five elements
+ * on a plain /library visit: ["Library", "All Books", "", "Library",
+ * "All Books"]. Scoping to the Collapse drops the parent "Library" item, which
+ * is highlighted by pathname and is not one of these filters; `:visible` drops
+ * the offscreen duplicate drawer.
+ */
+function selectedSubItems(page: Page): Locator {
+  return page.locator('.MuiCollapse-root:visible .MuiListItemButton-root.Mui-selected');
+}
+
+function clickSubItem(page: Page, name: string) {
+  return subItems(page).filter({ hasText: new RegExp(`^${name}$`) }).click();
+}
 
 /** Records every audiobooks list request the page issues. */
 function recordBookRequests(page: Page): string[] {
@@ -33,107 +68,81 @@ function recordBookRequests(page: Page): string[] {
   return urls;
 }
 
-/**
- * The sidebar sub-item button.
- *
- * Filtered on exact text rather than `getByRole('button', { name })`: MUI's
- * ListItemButton wraps the label in a nested element alongside an icon, so the
- * computed accessible name does not match the label exactly.
- */
-function sidebarItem(page: Page, name: string) {
-  return page.getByRole('button').filter({ hasText: new RegExp(`^${name}$`) });
+async function openLibrary(page: Page) {
+  await setupLibraryWithBooks(page, generateTestBooks(5));
+  await page.goto('/library');
+  await page.waitForLoadState('networkidle');
 }
 
 test.describe('Library sidebar filters', () => {
+  test('a plain /library visit highlights All Books alone', async ({ page }) => {
+    await openLibrary(page);
+    await expect(selectedSubItems(page)).toHaveText(['All Books']);
+  });
+
   test('clicking In Progress moves the highlight off All Books', async ({ page }) => {
-    await setupLibraryWithBooks(page, generateTestBooks(5));
-    await page.goto('/library');
-    await page.waitForLoadState('networkidle');
+    await openLibrary(page);
+    await expect(selectedSubItems(page)).toHaveText(['All Books']);
 
-    // GIVEN: a plain /library visit selects All Books.
-    await expect(sidebarItem(page, 'All Books')).toHaveClass(/Mui-selected/);
-    await expect(sidebarItem(page, 'In Progress')).not.toHaveClass(/Mui-selected/);
+    await clickSubItem(page, 'In Progress');
 
-    // WHEN: the user clicks In Progress.
-    await sidebarItem(page, 'In Progress').click();
-    await page.waitForLoadState('networkidle');
-
-    // THEN: the highlight actually moves. Before #2193 the comparison was
-    // against location.pathname, so All Books stayed lit forever.
-    await expect(sidebarItem(page, 'In Progress')).toHaveClass(/Mui-selected/);
-    await expect(sidebarItem(page, 'All Books')).not.toHaveClass(/Mui-selected/);
+    // Before #2193 the comparison was against location.pathname, so All Books
+    // stayed lit forever and In Progress could never match.
+    await expect(selectedSubItems(page)).toHaveText(['In Progress']);
   });
 
   test('clicking In Progress survives the URL settling with page=1', async ({ page }) => {
-    await setupLibraryWithBooks(page, generateTestBooks(5));
-    await page.goto('/library');
-    await page.waitForLoadState('networkidle');
-
-    await sidebarItem(page, 'In Progress').click();
-    await page.waitForLoadState('networkidle');
+    await openLibrary(page);
+    await clickSubItem(page, 'In Progress');
 
     // Library.tsx re-encodes the colon and appends page=1 once its effects
     // settle. The filter must survive that rewrite — the stuck guard used to
     // throw the search away and restore a bare page=1.
     await expect(page).toHaveURL(/[?&]search=read_status(%3A|:)in_progress/);
-
-    // Decoded comparison, mirroring how the sidebar decides selection.
-    const search = new URL(page.url()).searchParams.get('search');
-    expect(search).toBe('read_status:in_progress');
+    expect(new URL(page.url()).searchParams.get('search')).toBe('read_status:in_progress');
   });
 
   test('clicking In Progress sends the filter to the server', async ({ page }) => {
     const requests = recordBookRequests(page);
-    await setupLibraryWithBooks(page, generateTestBooks(5));
-    await page.goto('/library');
-    await page.waitForLoadState('networkidle');
+    await openLibrary(page);
 
     const before = requests.length;
-    await sidebarItem(page, 'In Progress').click();
-    await page.waitForLoadState('networkidle');
+    await clickSubItem(page, 'In Progress');
+    await expect(page).toHaveURL(/search=read_status(%3A|:)in_progress/);
 
-    // THEN: a NEW list request went out carrying the read_status filter.
-    // This is the half of the bug the user described as "not actually
-    // filtering or adding any filter" — the click used to be a pure no-op,
-    // so no request with a filter was ever issued.
-    const after = requests.slice(before);
-    expect(after.length).toBeGreaterThan(0);
-    const filtered = after.filter((u) => {
-      const filters = new URL(u).searchParams.get('filters');
-      return !!filters && filters.includes('read_status') && filters.includes('in_progress');
-    });
-    expect(filtered.length).toBeGreaterThan(0);
+    // The half the owner described as "not actually filtering or adding any
+    // filter": the click used to be a pure no-op, so no filtered request was
+    // ever issued.
+    await expect
+      .poll(() =>
+        requests.slice(before).filter((u) => {
+          const f = new URL(u).searchParams.get('filters');
+          return !!f && f.includes('read_status') && f.includes('in_progress');
+        }).length
+      )
+      .toBeGreaterThan(0);
   });
 
   test('Finished is fixed by the same change', async ({ page }) => {
-    await setupLibraryWithBooks(page, generateTestBooks(5));
-    await page.goto('/library');
-    await page.waitForLoadState('networkidle');
+    await openLibrary(page);
+    await clickSubItem(page, 'Finished');
 
-    await sidebarItem(page, 'Finished').click();
-    await page.waitForLoadState('networkidle');
-
-    await expect(sidebarItem(page, 'Finished')).toHaveClass(/Mui-selected/);
-    await expect(sidebarItem(page, 'All Books')).not.toHaveClass(/Mui-selected/);
+    await expect(selectedSubItems(page)).toHaveText(['Finished']);
     expect(new URL(page.url()).searchParams.get('search')).toBe('read_status:finished');
   });
 
   test('All Books clears the filter and takes the highlight back', async ({ page }) => {
-    await setupLibraryWithBooks(page, generateTestBooks(5));
-    await page.goto('/library');
-    await page.waitForLoadState('networkidle');
-
-    await sidebarItem(page, 'In Progress').click();
-    await page.waitForLoadState('networkidle');
-    await expect(sidebarItem(page, 'In Progress')).toHaveClass(/Mui-selected/);
+    await openLibrary(page);
+    await clickSubItem(page, 'In Progress');
+    await expect(selectedSubItems(page)).toHaveText(['In Progress']);
 
     // All Books navigates with ?reset=1, which Library.tsx handles BEFORE its
     // echo guard — the reason it kept working even while the others were dead.
-    await sidebarItem(page, 'All Books').click();
-    await page.waitForLoadState('networkidle');
+    await clickSubItem(page, 'All Books');
 
-    await expect(sidebarItem(page, 'All Books')).toHaveClass(/Mui-selected/);
-    await expect(sidebarItem(page, 'In Progress')).not.toHaveClass(/Mui-selected/);
-    expect(new URL(page.url()).searchParams.get('search')).toBeNull();
+    await expect(selectedSubItems(page)).toHaveText(['All Books']);
+    await expect
+      .poll(() => new URL(page.url()).searchParams.get('search'))
+      .toBeNull();
   });
 });
