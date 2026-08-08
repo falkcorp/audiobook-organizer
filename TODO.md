@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.18.0 -->
+<!-- version: 10.18.1 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-08-08 -->
 
@@ -122,7 +122,7 @@ into one of the curated sections below, is a normal direct edit.
         16 x 3        67.82  ( 2.7 days)        —
         24 x 2        75.83  ( 2.4 days)  <--  47.91  (3.8 days)
         32 x 1        75.09  ( 2.4 days)        —
-        48 x 1        76.31  ( 2.4 days)        —
+        48 x 1        76.31  ( 2.4 days)       47.92  (3.8 days)
 
       **➡️ Recommended config: 24 workers x 2 threads, `int8_float32`.**
       Throughput saturates at ~75-76 clips/min across 24, 32 and 48 workers —
@@ -148,8 +148,12 @@ into one of the curated sections below, is a normal direct edit.
         compute-type winner flips with configuration**. Single-process,
         `float32` is fastest (2.39 vs ~2.04 for int8_float32 vs 1.96 for int8).
         In every pool shape measured, `int8_float32` wins decisively — 63.86 vs
-        40.48 at 8x6, 67.52 vs 45.80 at 12x4, 75.83 vs 47.91 at 24x2, a
-        consistent ~50-58% advantage at three separate shapes. Since a pool is
+        40.48 at 8x6, 67.52 vs 45.80 at 12x4, 75.83 vs 47.91 at 24x2, and
+        76.31 vs 47.92 at 48x1 — a consistent ~50-59% advantage at four
+        separate shapes. Both compute types have their OWN plateau, and the
+        gap persists there: int8_float32 tops out ~75-76 clips/min while
+        float32 tops out ~47.9 (47.91 at 24x2 and 47.92 at 48x1, which is
+        about as clean a plateau as this harness can show). Since a pool is
         what would actually ship, the original note is closer to right than a
         single-process comparison suggests. Working hypothesis (NOT measured):
         concurrent workers saturate memory bandwidth and int8 weights halve that
