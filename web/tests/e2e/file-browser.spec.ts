@@ -1,7 +1,7 @@
 // file: web/tests/e2e/file-browser.spec.ts
-// version: 1.4.1
+// version: 1.5.0
 // guid: bbd8bdb0-5dc1-448f-a520-def03ae76825
-// last-edited: 2026-08-07
+// last-edited: 2026-08-08
 
 import { test, expect, type Page } from '@playwright/test';
 import {
@@ -208,8 +208,9 @@ test.describe('File Browser', () => {
     await page.getByRole('button', { name: 'user' }).click();
     await page.getByRole('button', { name: 'audiobooks' }).click();
 
-    // Act
-    await page.getByLabel('Filter extension').fill('.m4b');
+    // Act — the extension filter is now a regex search box labelled
+    // "Search (regex)"; ".m4b" still matches only the .m4b file.
+    await page.getByLabel('Search (regex)').fill('\\.m4b$');
 
     // Assert
     await expect(page.getByText('book1.m4b')).toBeVisible();
@@ -223,7 +224,8 @@ test.describe('File Browser', () => {
     await page.goto('/settings');
     await page.waitForLoadState('networkidle');
 
-    // Act
+    // Act — import paths moved onto a dedicated "Paths" tab in Settings.
+    await page.getByRole('tab', { name: 'Paths' }).click();
     await page.getByRole('button', { name: 'Add Import Path' }).click();
     await page
       .getByRole('button', { name: 'Browse Server Filesystem' })
