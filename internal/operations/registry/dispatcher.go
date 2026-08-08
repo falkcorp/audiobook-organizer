@@ -1,7 +1,7 @@
 // file: internal/operations/registry/dispatcher.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: a7b8c9d0-e1f2-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-08-07
+// last-edited: 2026-08-08
 
 package registry
 
@@ -44,6 +44,7 @@ func (r *Registry) dispatchCycle(ctx context.Context) {
 
 	// Prune write-set deferral log-dedupe entries for ops that left the queue
 	// (dispatched, canceled, deleted) so the map cannot grow unbounded.
+	r.mu.Lock()
 	if len(r.writeSetDeferred) > 0 {
 		queuedIDs := make(map[string]struct{}, len(queued))
 		for _, row := range queued {
@@ -55,6 +56,7 @@ func (r *Registry) dispatchCycle(ctx context.Context) {
 			}
 		}
 	}
+	r.mu.Unlock()
 
 	for _, row := range queued {
 		if ctx.Err() != nil {
@@ -189,7 +191,9 @@ func (r *Registry) dispatchCycle(ctx context.Context) {
 
 		select {
 		case r.nextRun <- qr:
+			r.mu.Lock()
 			delete(r.writeSetDeferred, row.ID)
+			r.mu.Unlock()
 			r.logger.Info("registry: dispatched op", "op_id", row.ID, "def_id", row.DefID)
 		default:
 			// Worker channel is full; undo accounting and try next cycle.
@@ -240,15 +244,29 @@ func (r *Registry) writeSetConflictLocked(candidateID string, candidateWrites []
 
 // logWriteSetDeferral logs one clear line per (deferred op → blocking op)
 // pair. Without dedupe the 100ms dispatch ticker would repeat the line ten
-// times a second for as long as the conflict lasts. writeSetDeferred is only
-// ever touched from the dispatcher goroutine (dispatchCycle is single-caller),
-// so it needs no locking; entries are dropped once the blocking op changes or
-// the deferred op leaves the queue (see the prune in dispatchCycle).
+// times a second for as long as the conflict lasts. Entries are dropped once
+// the blocking op changes or the deferred op leaves the queue (see the prune
+// in dispatchCycle).
+//
+// writeSetDeferred is guarded by r.mu. An earlier version of this comment
+// claimed the map needed no locking because "dispatchCycle is single-caller".
+// That holds only within one Start(): Start() is explicitly restartable after
+// Shutdown() and does not wait for or exclude a prior dispatcher goroutine, so
+// during a restart two dispatchCycle calls can overlap on the same Registry.
+// That is a real race -- caught by -race as a concurrent map read/delete
+// between the prune in dispatchCycle and this dedupe write.
+//
+// The check and the set must happen under one acquisition: splitting them
+// would let two goroutines both miss the entry and log the same line twice,
+// which is the exact spam this dedupe exists to prevent.
 func (r *Registry) logWriteSetDeferral(opID, defID string, holder *runHandle, overlap []Resource) {
+	r.mu.Lock()
 	if r.writeSetDeferred[opID] == holder.id {
+		r.mu.Unlock()
 		return
 	}
 	r.writeSetDeferred[opID] = holder.id
+	r.mu.Unlock()
 	resources := make([]string, len(overlap))
 	for i, res := range overlap {
 		resources[i] = string(res)
