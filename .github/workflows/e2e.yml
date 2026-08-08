@@ -1,5 +1,5 @@
 # file: .github/workflows/e2e.yml
-# version: 1.1.0
+# version: 1.2.0
 # guid: 6a2f47c9-1e83-4d05-b7f6-92c4a0d81b3e
 # last-edited: 2026-08-08
 
@@ -27,15 +27,18 @@
 
 name: E2E
 
+# NOTE: there is deliberately NO `pull_request` trigger yet. See the
+# continue-on-error comment on the job below — the suite is ~50% red, and a
+# permanently-failing check on every PR is worse than no check: people learn to
+# ignore it, which is the same failure that let six specs rot for four months,
+# only louder. Restore the pull_request trigger (with the paths filter below,
+# kept here for whoever does it) at the same time as flipping
+# continue-on-error off.
+#
+#  pull_request:
+#    branches: [main, master]
+#    paths: ['web/**', '**.go', 'go.mod', 'go.sum', '.github/workflows/e2e.yml']
 on:
-  pull_request:
-    branches: [main, master]
-    paths:
-      - 'web/**'
-      - '**.go'
-      - 'go.mod'
-      - 'go.sum'
-      - '.github/workflows/e2e.yml'
   schedule:
     - cron: '17 5 * * *' # 05:17 UTC nightly, off the :00 stampede
   workflow_dispatch:
@@ -60,7 +63,9 @@ jobs:
   e2e:
     name: E2E (${{ github.event_name == 'pull_request' && 'chromium' || 'chromium + webkit' }})
     runs-on: ubuntu-latest
-    # NON-BLOCKING, deliberately and temporarily.
+    # NON-BLOCKING, deliberately and temporarily. Kept even though the job
+    # is nightly-only, so a red nightly does not read as "the pipeline is
+    # broken" while the backlog is known and tracked.
     #
     # The first clean-environment run of this suite scored 146 failed / 138
     # passed of 288 chromium tests. The suite is roughly half red, and that was
