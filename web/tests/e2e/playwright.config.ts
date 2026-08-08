@@ -1,7 +1,7 @@
 // file: tests/e2e/playwright.config.ts
-// version: 1.7.0
+// version: 1.8.0
 // guid: 7c8d9e0f-1a2b-3c4d-5e6f-7a8b9c0d1e2f
-// last-edited: 2026-06-23
+// last-edited: 2026-08-08
 
 import { defineConfig, devices } from '@playwright/test';
 import { fileURLToPath } from 'url';
@@ -70,7 +70,13 @@ export default defineConfig({
     // GOEXPERIMENT=jsonv2 is required for the Go backend (encoding/json/v2)
     command: `bash -c 'export GOEXPERIMENT=jsonv2 && cd ${__dirname}/../../.. && cd web && npm run build && cd .. && go build -tags embed_frontend -o audiobook-organizer . && rm -rf /tmp/ao-e2e-db && mkdir -p /tmp/ao-e2e-db /tmp/ao-e2e-books && ./audiobook-organizer serve --tls-cert "" --tls-key "" --host 127.0.0.1 --db /tmp/ao-e2e-db/e2e.pebble --dir /tmp/ao-e2e-books'`,
     url: 'http://127.0.0.1:8484',
-    timeout: 120000,
+    // The command above builds the frontend AND compiles the Go binary before
+    // it can serve anything. 120s was enough on a warm developer machine and
+    // nowhere near enough on a cold CI runner with an empty Go build cache —
+    // the first CI run of this suite died on exactly this. Raised to 10
+    // minutes: it is a ceiling, not a delay, so a warm local run still starts
+    // as fast as it ever did.
+    timeout: 600000,
     reuseExistingServer: !process.env.CI,
   },
 });
