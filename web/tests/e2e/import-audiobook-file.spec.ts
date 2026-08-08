@@ -1,7 +1,7 @@
 // file: web/tests/e2e/import-audiobook-file.spec.ts
-// version: 1.4.0
+// version: 1.4.1
 // guid: 1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-03-02
+// last-edited: 2026-08-07
 
 import { test, expect, type Page } from '@playwright/test';
 import {
@@ -128,7 +128,7 @@ const dialog = (page: Page) =>
   page.getByRole('dialog').filter({ hasText: 'Import Audiobook File' });
 
 test.describe('Import Audiobook File - Interactive Navigation', () => {
-  test.beforeEach(async ({ _page }) => {
+  test.beforeEach(async () => {
     // Setup handled by openImportFileBrowser() which calls setupMockApi()
   });
 
@@ -382,7 +382,7 @@ test.describe('Import Audiobook File - Interactive Navigation', () => {
 });
 
 test.describe('Import Audiobook File - Error Handling', () => {
-  test.beforeEach(async ({ _page }) => {
+  test.beforeEach(async () => {
     // Setup handled by openImportFileBrowser() which calls setupMockApi()
   });
 

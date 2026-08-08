@@ -1,7 +1,7 @@
 // file: web/tests/e2e/dashboard.spec.ts
-// version: 1.3.0
+// version: 1.3.1
 // guid: f6e23777-438b-4931-88d9-d2c6d2225a00
-// last-edited: 2026-03-02
+// last-edited: 2026-08-07
 
 import { test, expect, type Page } from '@playwright/test';
 import {
@@ -94,7 +94,7 @@ const openDashboard = async (page: Page) => {
 };
 
 test.describe('Dashboard', () => {
-  test.beforeEach(async ({ _page }) => {
+  test.beforeEach(async () => {
     // Setup handled by openDashboard() which calls setupMockApi()
   });
 

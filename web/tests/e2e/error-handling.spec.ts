@@ -1,7 +1,7 @@
 // file: web/tests/e2e/error-handling.spec.ts
-// version: 1.4.0
+// version: 1.4.1
 // guid: 2f4f5afa-c734-4a00-8a72-d288bcea714f
-// last-edited: 2026-03-02
+// last-edited: 2026-08-07
 
 import { test, expect, type Page } from '@playwright/test';
 import {
@@ -19,7 +19,7 @@ const openLibrary = async (
 };
 
 test.describe('Error Handling', () => {
-  test.beforeEach(async ({ _page }) => {
+  test.beforeEach(async () => {
     // Setup handled by openLibrary() which calls setupMockApi()
   });
 

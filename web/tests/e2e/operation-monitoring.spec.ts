@@ -1,7 +1,7 @@
 // file: web/tests/e2e/operation-monitoring.spec.ts
-// version: 2.0.0
+// version: 2.0.1
 // guid: 9845a5f8-e3e4-472f-ae99-2723b6163aae
-// last-edited: 2026-03-02
+// last-edited: 2026-08-07
 
 import { test, expect, type Page } from '@playwright/test';
 import {
@@ -127,7 +127,7 @@ const openOperations = async (page: Page, seed?: Partial<OperationSeed>) => {
 };
 
 test.describe('Operation Monitoring', () => {
-  test.beforeEach(async ({ _page }) => {
+  test.beforeEach(async () => {
     // Setup handled by openOperations() which calls setupMockApi()
   });
 
