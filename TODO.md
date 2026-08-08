@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.17.5 -->
+<!-- version: 10.17.6 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-08-08 -->
 
@@ -261,6 +261,30 @@ into one of the curated sections below, is a normal direct edit.
       page. The rest was renamed-affordance drift. `operation-monitoring.spec.ts`
       needed a full rewrite: its target page was deleted in afe18e8f and
       `/operations` is now a redirect to `/activity`. No product code changed.
+
+      **✅ VERIFIED 2026-08-08 06:48–07:08.** #2191 was merged with its suite
+      result explicitly unverified — the agent that wrote the fixes stalled
+      before it could run a final full pass. A complete `npm run test:e2e` has
+      now been run against `main` at `60030428`:
+
+          130 passed, 7 skipped, 0 failed, 0 flaky  (19.8m)
+
+      That is a stronger result than the fix claimed. The wave-2 counts were
+      measured on **chromium only**, but `test:e2e` runs `--project chromium
+      --project webkit`, so the suite is green on both engines. The run also
+      covers the Library changes merged after #2191 (#2193 In Progress filter,
+      #2195 empty-state), confirming neither regressed the e2e suite.
+
+      **What this run does NOT verify** — recorded so the green result is not
+      over-read:
+
+      - There is **no e2e test for the In Progress / Finished sidebar filter**.
+        #2193 is covered by unit tests only; the suite passing says nothing
+        about it. Adding one is the obvious next step and would close the
+        "not verified interactively" caveat on that entry permanently.
+      - There is **no e2e test for the empty-state / warmup recovery** either.
+        That acceptance test requires restarting the backend mid-session, which
+        the suite does not do.
 
 - [ ] **Move library filtering/search into the Go server as a real, declared
       query engine — and make unknown filters a hard error instead of a silent
