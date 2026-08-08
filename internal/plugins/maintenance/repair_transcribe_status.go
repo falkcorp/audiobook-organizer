@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/repair_transcribe_status.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a5e3c81f-7204-4b96-9d3a-1f68b05e2c47
 // last-edited: 2026-08-07
 
@@ -194,6 +194,8 @@ func (p *Plugin) repairTranscribeStatusDef() sdk.OperationDef {
 		ResumePolicy:    sdk.ResumeRestart,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.repair-transcribe-status",
+		// GetBookByID→mutate→UpdateBook whole-row write-back on Book rows.
+		Writes:          []sdk.Resource{sdk.ResBooks},
 		Cancellable:     true,
 		Isolate:         false,
 		Timeout:         2 * time.Hour,

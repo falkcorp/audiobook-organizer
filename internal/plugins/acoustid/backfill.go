@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/backfill.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: f6a7b8c9-d0e1-2345-def0-123456789abc
-// last-edited: 2026-07-07
+// last-edited: 2026-08-07
 
 package acoustid
 
@@ -39,9 +39,15 @@ func (p *Plugin) backfillDef() sdk.OperationDef {
 		ResumePolicy:    sdk.ResumeRestart,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "acoustid.fingerprint",
-		Schedule:        &sched,
-		Isolate:         false, // DISABLED 2026-05-29: PR #1172 child-mode wire-up cannot work because Pebble is single-writer; child re-open fails. See MAYDEPLOY-A revisit.
-		Timeout:         24 * time.Hour,
+		// Writes verified 2026-08-07: UpdateBookFile (fingerprint columns,
+		// whole-row) and GetBookByID→mutate→UpdateBook (whole-row write-back).
+		// Declared so the dispatcher's write-set gate serializes this against
+		// other Book/BookFile writers (e.g. maintenance.repair-transcribe-status)
+		// instead of silently losing fields via concurrent read-modify-write.
+		Writes:   []sdk.Resource{sdk.ResBooks, sdk.ResBookFiles},
+		Schedule: &sched,
+		Isolate:  false, // DISABLED 2026-05-29: PR #1172 child-mode wire-up cannot work because Pebble is single-writer; child re-open fails. See MAYDEPLOY-A revisit.
+		Timeout:  24 * time.Hour,
 		Capabilities: []sdk.Capability{
 			sdk.CapLibraryRead,
 			sdk.CapLibraryWrite,
