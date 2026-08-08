@@ -1,7 +1,7 @@
 // file: internal/transcribe/batch.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
-// last-edited: 2026-07-27
+// last-edited: 2026-08-07
 
 package transcribe
 
@@ -48,10 +48,14 @@ func TranscribeBatch(ctx context.Context, jobs map[string]string, onProgress Pro
 		return nil, nil
 	}
 
-	if remoteURL := config.Snapshot().WhisperRemoteURL; remoteURL != "" {
-		results, err := transcribeRemote(ctx, remoteURL, jobs, onProgress)
+	// Remote precedence: non-empty whisper_endpoints → multi-endpoint pool;
+	// else whisper_remote_url as a one-element pool (functionally identical to
+	// the historical direct path); else the local uv path below.
+	snap := config.Snapshot()
+	if endpoints := poolEndpoints(snap.WhisperEndpoints, snap.WhisperRemoteURL); len(endpoints) > 0 {
+		results, err := transcribePool(ctx, endpoints, jobs, onProgress)
 		if err != nil {
-			// Do NOT fall back to the local uv path when WHISPER_REMOTE_URL is
+			// Do NOT fall back to the local uv path when remote endpoints are
 			// configured. The local subprocess loads the full Whisper model into
 			// RAM; at batch sizes of 100–200 books this reliably OOMs the server
 			// (signal: killed after 40+ minutes) and produces zero results anyway.
@@ -59,12 +63,13 @@ func TranscribeBatch(ctx context.Context, jobs map[string]string, onProgress Pro
 			// warning, skip the page, and advance to the next one — far better
 			// than stalling for an hour and triggering the watchdog.
 			//
-			// 🔴 classifyTransport marks this as a BATCH-level failure carrying
-			// no per-file meaning, so the caller defers the page instead of
-			// writing whisper_error to every book in it. Returning a bare error
-			// here is what turned the 2026-07-01 outage into ~34,000 false
+			// 🔴 transcribePool returns a *TransportError (via classifyTransport)
+			// ONLY when every endpoint is exhausted — a BATCH-level failure
+			// carrying no per-file meaning, so the caller defers the page instead
+			// of writing whisper_error to every book in it. Returning a bare
+			// error here is what turned the 2026-07-01 outage into ~34,000 false
 			// per-book verdicts.
-			return nil, classifyTransport([]string{remoteURL}, err)
+			return nil, err
 		}
 		return results, nil
 	}
@@ -160,6 +165,37 @@ func TranscribeBatch(ctx context.Context, jobs map[string]string, onProgress Pro
 		onProgress(len(results), len(jobs))
 	}
 	return results, nil
+}
+
+// poolEndpoints converts config-layer endpoint declarations into transcribe
+// Endpoints, applying the precedence documented at the call site: a non-empty
+// whisper_endpoints list wins; otherwise a non-empty whisper_remote_url
+// becomes a one-element pool; otherwise nil (caller uses the local path).
+// The conversion lives here so internal/config never imports
+// internal/transcribe.
+func poolEndpoints(cfgEndpoints []config.WhisperEndpoint, singleURL string) []Endpoint {
+	if len(cfgEndpoints) > 0 {
+		endpoints := make([]Endpoint, 0, len(cfgEndpoints))
+		for _, e := range cfgEndpoints {
+			if e.URL == "" {
+				continue
+			}
+			endpoints = append(endpoints, Endpoint{
+				URL:         e.URL,
+				Concurrency: e.Concurrency,
+				Label:       e.Label,
+				Priority:    e.Priority,
+				Kind:        e.Kind,
+			})
+		}
+		if len(endpoints) > 0 {
+			return endpoints
+		}
+	}
+	if singleURL != "" {
+		return []Endpoint{{URL: singleURL, Concurrency: 1}}
+	}
+	return nil
 }
 
 // resolveUVBin returns the path to a uv binary that is NOT routed through
