@@ -410,14 +410,14 @@ test.describe('Book Detail page', () => {
     await expect(
       page.getByRole('heading', { name: 'The Test Book' })
     ).toBeVisible();
+    // The Files and Versions tabs merged into a single "Files & History" tab;
+    // it shows a "Files (N)" table plus a "Versions" section.
     await page.getByRole('tab', { name: 'Files' }).click();
-    await expect(page.getByText('File Path')).toBeVisible();
+    await expect(page.getByRole('heading', { name: /^Files \(/ })).toBeVisible();
+    await expect(page.getByText('/library/test-book.m4b').first()).toBeVisible();
 
-    await page.getByRole('tab', { name: /Versions/ }).click();
-    await expect(page.getByText(/Versions/).first()).toBeVisible();
-    await expect(
-      page.getByText(/Second Version|No additional versions linked yet/i)
-    ).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Versions' })).toBeVisible();
+    await expect(page.getByText(/Ingested/).first()).toBeVisible();
   });
 
   test('soft delete, restore, and purge flow', async ({ page }) => {
