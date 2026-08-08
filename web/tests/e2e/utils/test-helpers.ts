@@ -251,7 +251,16 @@ export interface MockApiOptions {
     active?: MockActiveOperation[];
     history?: MockOperation[];
     logs?: Record<string, MockOperationLog[]>;
+    /**
+     * Rows served by `GET /api/v1/operations/timeline` — the only source the
+     * Activity page's "Active Operations" section reads. These are raw
+     * OperationV2 objects (def_id / progress_current / progress_message), not
+     * the legacy v1 shape used by `active`.
+     */
+    timeline?: Array<Record<string, unknown>>;
   };
+  /** Rows served by `GET /api/v1/activity` (the Activity page feed). */
+  activity?: Array<Record<string, unknown>>;
   itunes?: MockITunesState;
   auth?: MockAuthState;
   failures?: MockFailures;
@@ -384,7 +393,8 @@ export async function setupMockApiRoutes(
     blockedHashes: options.blockedHashes || [],
     filesystem: JSON.parse(JSON.stringify(options.filesystem || {})),
     homeDirectory: options.homeDirectory || '/',
-    operations: options.operations || {},
+    operations: JSON.parse(JSON.stringify(options.operations || {})) as Record<string, unknown>,
+    activity: JSON.parse(JSON.stringify(options.activity || [])) as Array<Record<string, unknown>>,
     itunes: options.itunes || {},
     auth: buildAuthState(options.auth),
     failures: options.failures || {},
@@ -1042,6 +1052,66 @@ export async function setupMockApiRoutes(
       const f = maybeFailStatus(mockState.failures.operationsActive, 'Failed to fetch operations'); if (f) return f;
       const active = (mockState.operations as { active?: unknown[] }).active || [];
       return route.fulfill(jsonResponse({ operations: active }));
+    }
+
+    // Operations v2 timeline — the ONLY source useOperationsStore reads for the
+    // Activity page's "Active Operations" section. api.getOperationTimeline
+    // reads `body.data.operations`.
+    if (pathname === '/api/v1/operations/timeline' && method === 'GET') {
+      const timeline =
+        (mockState.operations as { timeline?: unknown[] }).timeline || [];
+      return route.fulfill(jsonResponse({ data: { operations: timeline } }));
+    }
+
+    // Clear stale ops: drops every terminal op from the timeline, matching the
+    // server behaviour the Activity page's "Clear Stale" button relies on.
+    if (pathname === '/api/v1/operations/clear-stale' && method === 'POST') {
+      const ops = mockState.operations as { timeline?: Array<Record<string, unknown>> };
+      const before = (ops.timeline || []).length;
+      const TERMINAL = ['completed', 'failed', 'canceled', 'interrupted_dropped', 'interrupted_restart'];
+      ops.timeline = (ops.timeline || []).filter(
+        (op) => !TERMINAL.includes(String(op.status))
+      );
+      const cleared = before - ops.timeline.length;
+      return route.fulfill(jsonResponse({ cleared, data: { cleared } }));
+    }
+
+    // Cancel an operation: api.cancelOperation issues DELETE /operations/<id>,
+    // then the page re-fetches the timeline, so drop the row here.
+    const cancelOp = pathname.match(/^\/api\/v1\/operations\/([^/]+)$/);
+    if (cancelOp && method === 'DELETE') {
+      const ops = mockState.operations as { timeline?: Array<Record<string, unknown>> };
+      ops.timeline = (ops.timeline || []).filter((op) => op.id !== cancelOp[1]);
+      return route.fulfill(jsonResponse({ message: 'cancelled' }));
+    }
+
+    // Activity feed. fetchActivity reads `body.data.{entries,total}`.
+    if (pathname === '/api/v1/activity' && method === 'GET') {
+      const all = mockState.activity as Array<Record<string, unknown>>;
+      const level = url.searchParams.get('level');
+      const filtered = level
+        ? all.filter((entry) => entry.level === level)
+        : all;
+      const limit = parseInt(url.searchParams.get('limit') || '25', 10);
+      const offset = parseInt(url.searchParams.get('offset') || '0', 10);
+      const payload = {
+        entries: filtered.slice(offset, offset + limit),
+        total: filtered.length,
+      };
+      return route.fulfill(jsonResponse({ ...payload, data: payload }));
+    }
+
+    if (pathname === '/api/v1/activity/sources' && method === 'GET') {
+      const all = mockState.activity as Array<Record<string, unknown>>;
+      const counts = new Map<string, number>();
+      for (const entry of all) {
+        const source = String(entry.source || 'unknown');
+        counts.set(source, (counts.get(source) || 0) + 1);
+      }
+      const payload = {
+        sources: [...counts].map(([source, count]) => ({ source, count })),
+      };
+      return route.fulfill(jsonResponse({ ...payload, data: payload }));
     }
 
     if (pathname === '/api/v1/operations/history' && method === 'GET') {

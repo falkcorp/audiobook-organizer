@@ -1,201 +1,215 @@
 // file: web/tests/e2e/operation-monitoring.spec.ts
-// version: 2.0.1
+// version: 3.0.0
 // guid: 9845a5f8-e3e4-472f-ae99-2723b6163aae
-// last-edited: 2026-08-07
+// last-edited: 2026-08-08
+
+// The standalone Operations page this spec was written against was deleted in
+// afe18e8f ("unified Activity page with pinned ops, compound filters, source
+// dropdown; remove Operations page"). /operations now redirects to /activity,
+// which renders ActivityLog: an "Active Operations" section fed exclusively by
+// GET /api/v1/operations/timeline (OperationV2 rows, via useOperationsStore),
+// plus an activity feed fed by GET /api/v1/activity.
+//
+// Every assertion below is written against that page. Tests covering
+// affordances the Activity page does not have were removed rather than
+// skipped:
+//   - "retries failed operation": there is no Retry control anywhere on the
+//     page; a failed op can only be re-run from wherever it was launched.
+//   - "filters operation logs by level": the per-operation log drawer renders
+//     plain strings with no level filter. The feed-level equivalent is covered
+//     by "filters the activity feed by level" below, which is a different
+//     feature and is named accordingly.
 
 import { test, expect, type Page } from '@playwright/test';
-import {
-  setupMockApi,
-} from './utils/test-helpers';
+import { setupMockApi } from './utils/test-helpers';
 
-type OperationSeed = {
-  active: Array<Record<string, unknown>>;
-  history: Array<Record<string, unknown>>;
-  logs: Record<string, Array<Record<string, unknown>>>;
-};
+/**
+ * Build an OperationV2 timeline row. Note `display_name` is deliberately left
+ * empty: ActivityLog renders `displayName || def_id || type`, so a row without
+ * a curated display name shows its def_id — which is what a plain scan row
+ * from the timeline endpoint actually looks like.
+ */
+const timelineOp = (
+  overrides: Record<string, unknown>
+): Record<string, unknown> => ({
+  id: 'op-1',
+  def_id: 'scan',
+  plugin: 'core',
+  display_name: '',
+  status: 'running',
+  priority: 0,
+  notify_level: 1,
+  progress_current: 0,
+  progress_total: 0,
+  progress_message: '',
+  current_phase: null,
+  current_item: null,
+  actor_user_id: null,
+  parent_id: null,
+  queued_at: '2026-01-25T10:00:00Z',
+  started_at: '2026-01-25T10:00:01Z',
+  completed_at: null,
+  error_message: null,
+  resume_count: 0,
+  trace_id: null,
+  span_id: null,
+  ...overrides,
+});
 
-const baseActive = [
-  {
-    id: 'scan-1',
-    type: 'scan',
-    status: 'running',
-    progress: 20,
-    total: 100,
-    message: 'Scanning',
-    folder_path: '/imports',
-  },
-  {
-    id: 'scan-2',
-    type: 'scan',
-    status: 'running',
-    progress: 5,
-    total: 50,
-    message: 'Scanning',
-    folder_path: '/downloads',
-  },
-  {
-    id: 'organize-1',
-    type: 'organize',
-    status: 'running',
-    progress: 5,
-    total: 20,
-    message: 'Organizing',
-    folder_path: '/imports',
-  },
-];
+const runningScan = timelineOp({
+  id: 'scan-1',
+  def_id: 'scan',
+  status: 'running',
+  progress_current: 20,
+  progress_total: 100,
+  progress_message: 'Scanning',
+});
 
-const baseHistory = [
-  {
-    id: 'hist-1',
-    type: 'scan',
-    status: 'completed',
-    progress: 100,
-    total: 100,
-    message: 'Completed scan',
-    created_at: '2026-01-25T10:00:00Z',
-  },
-  {
-    id: 'hist-2',
-    type: 'scan',
-    status: 'failed',
-    progress: 20,
-    total: 100,
-    message: 'Network error',
-    error_message: 'Network error while scanning',
-    created_at: '2026-01-25T09:00:00Z',
-  },
-  {
-    id: 'hist-3',
-    type: 'organize',
-    status: 'running',
-    progress: 3,
-    total: 10,
-    message: 'Organizing',
-    created_at: '2026-01-25T08:00:00Z',
-  },
-];
+const runningOrganize = timelineOp({
+  id: 'organize-1',
+  def_id: 'organize',
+  status: 'running',
+  progress_current: 5,
+  progress_total: 20,
+  progress_message: 'Organizing',
+});
+
+const completedScan = timelineOp({
+  id: 'hist-1',
+  def_id: 'scan',
+  status: 'completed',
+  progress_current: 100,
+  progress_total: 100,
+  progress_message: 'Completed scan',
+  completed_at: '2026-01-25T10:05:00Z',
+});
+
+const failedScan = timelineOp({
+  id: 'hist-2',
+  def_id: 'scan',
+  status: 'failed',
+  progress_current: 20,
+  progress_total: 100,
+  // ActivityLog renders `progress_message`; OperationV2.error_message is not
+  // surfaced anywhere on this page, so the failure text has to live here.
+  progress_message: 'Network error while scanning',
+  completed_at: '2026-01-25T09:05:00Z',
+  error_message: 'Network error while scanning',
+});
 
 const baseLogs = {
   'scan-1': [
-    {
-      id: 'log-1',
-      level: 'info',
-      message: 'Scanning file: book1.m4b',
-      created_at: '2026-01-25T10:00:00Z',
-    },
-    {
-      id: 'log-2',
-      level: 'warning',
-      message: 'Skipping hidden file',
-      created_at: '2026-01-25T10:00:10Z',
-    },
-    {
-      id: 'log-3',
-      level: 'error',
-      message: 'Failed to read file',
-      created_at: '2026-01-25T10:00:20Z',
-    },
+    { id: 'log-1', level: 'info', message: 'Scanning file: book1.m4b', created_at: '2026-01-25T10:00:00Z' },
+    { id: 'log-2', level: 'warning', message: 'Skipping hidden file', created_at: '2026-01-25T10:00:10Z' },
+    { id: 'log-3', level: 'error', message: 'Failed to read file', created_at: '2026-01-25T10:00:20Z' },
   ],
   'hist-1': [
-    {
-      id: 'log-4',
-      level: 'info',
-      message: 'Completed. Found 50 books, 2 errors.',
-      created_at: '2026-01-25T10:05:00Z',
-    },
-  ],
-  'hist-2': [
-    {
-      id: 'log-5',
-      level: 'error',
-      message: 'Network error while scanning',
-      created_at: '2026-01-25T09:05:00Z',
-    },
+    { id: 'log-4', level: 'info', message: 'Completed. Found 50 books, 2 errors.', created_at: '2026-01-25T10:05:00Z' },
   ],
 };
 
-const openOperations = async (page: Page, seed?: Partial<OperationSeed>) => {
+const activityEntry = (
+  overrides: Record<string, unknown>
+): Record<string, unknown> => ({
+  id: 'act-1',
+  timestamp: '2026-01-25T10:00:00Z',
+  tier: 'audit',
+  type: 'scan_completed',
+  level: 'info',
+  source: 'scanner',
+  summary: 'Scan finished',
+  tags: [],
+  ...overrides,
+});
+
+const openActivity = async (
+  page: Page,
+  seed: {
+    timeline?: Array<Record<string, unknown>>;
+    logs?: typeof baseLogs;
+    activity?: Array<Record<string, unknown>>;
+  } = {}
+) => {
   await setupMockApi(page, {
     operations: {
-      active: seed?.active || baseActive,
-      history: seed?.history || baseHistory,
-      logs: seed?.logs || baseLogs,
+      timeline: seed.timeline ?? [runningScan, runningOrganize],
+      logs: seed.logs ?? baseLogs,
     },
+    activity: seed.activity ?? [],
   });
-  await page.goto('/operations');
+  // Go straight to /activity: /operations only exists as a redirect now.
+  await page.goto('/activity');
   await page.waitForLoadState('networkidle');
 };
 
 test.describe('Operation Monitoring', () => {
-  test.beforeEach(async () => {
-    // Setup handled by openOperations() which calls setupMockApi()
-  });
-
   test('views active operations list', async ({ page }) => {
     // Arrange
-    await openOperations(page);
+    await openActivity(page);
 
-    // Act + Assert - Operations page shows type via formatOperationType
-    // 'scan' -> 'Library Scan', 'organize' -> 'Organize'
-    await expect(page.getByText('Library Scan').first()).toBeVisible();
-    await expect(page.getByText('Organize').first()).toBeVisible();
-    // Progress shown as "20 of 100 (20%)"
-    await expect(page.getByText('20 of 100')).toBeVisible();
+    // Assert — each op renders its def_id and a "<done> / <total> (<pct>%)"
+    // progress line.
+    await expect(page.getByText('scan', { exact: true }).first()).toBeVisible();
+    await expect(
+      page.getByText('organize', { exact: true }).first()
+    ).toBeVisible();
+    await expect(page.getByText('20 / 100 (20.00%)')).toBeVisible();
   });
 
   test('monitors operation progress in real-time', async ({ page }) => {
     // Arrange
-    await openOperations(page);
+    await openActivity(page, { timeline: [runningScan] });
+    await expect(page.getByText('20 / 100 (20.00%)')).toBeVisible();
 
-    // Override the active operations route to return updated progress
-    await page.route('**/api/v1/operations/active', async (route) => {
+    // Serve an advanced progress value on the next timeline fetch.
+    await page.route('**/api/v1/operations/timeline*', async (route) => {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
-          operations: [
-            {
-              id: 'scan-1',
-              type: 'scan',
-              status: 'running',
-              progress: 25,
-              total: 100,
-              message: 'Scanning',
-              folder_path: '/imports',
-            },
-          ],
+          data: {
+            operations: [
+              timelineOp({
+                id: 'scan-1',
+                def_id: 'scan',
+                status: 'running',
+                progress_current: 25,
+                progress_total: 100,
+                progress_message: 'Scanning',
+              }),
+            ],
+          },
         }),
       });
     });
 
-    // Act
-    await page.getByRole('button', { name: 'Refresh' }).click();
+    // Act — the page-level Refresh button is the first one; each op card also
+    // has its own aria-label="Refresh" icon button.
+    await page.getByRole('button', { name: 'Refresh' }).first().click();
 
-    // Assert - progress shown as "25 of 100 (25%)"
-    await expect(page.getByText('25 of 100')).toBeVisible();
+    // Assert
+    await expect(page.getByText('25 / 100 (25.00%)')).toBeVisible();
   });
 
   test('views operation logs', async ({ page }) => {
     // Arrange
-    await openOperations(page);
+    await openActivity(page, { timeline: [runningScan] });
 
-    // Act - Active operations use "Logs" button (not "View Logs")
-    // Click the first "Logs" button in the active operations section
-    await page.getByRole('button', { name: 'Logs' }).first().click();
+    // Act — clicking anywhere on an op card expands its log drawer.
+    await page.getByText('20 / 100 (20.00%)').click();
 
     // Assert
     await expect(page.getByText('Scanning file: book1.m4b')).toBeVisible();
   });
 
   test('views completed operation logs', async ({ page }) => {
-    // Arrange - only show completed history, no active ops
-    await openOperations(page, {
-      active: [],
-      history: [baseHistory[0]], // Just the completed scan
-    });
+    // Arrange — a terminal op is grouped under a "Completed" heading rather
+    // than living in a separate history list.
+    await openActivity(page, { timeline: [completedScan] });
+    await expect(page.getByText('Completed (1)')).toBeVisible();
 
-    // Act - History list items have "Logs" button
-    await page.getByRole('button', { name: 'Logs' }).first().click();
+    // Act
+    await page.getByText('100 / 100 (100%)').click();
 
     // Assert
     await expect(
@@ -203,103 +217,90 @@ test.describe('Operation Monitoring', () => {
     ).toBeVisible();
   });
 
-  test('filters operation logs by level', async ({ page }) => {
-    // Arrange
-    await openOperations(page);
-    // Open logs for first active operation
-    await page.getByRole('button', { name: 'Logs' }).first().click();
+  test('filters the activity feed by level', async ({ page }) => {
+    // Arrange — this is the feed's Level filter, not a per-operation log
+    // filter; the op log drawer renders unfiltered plain text.
+    await openActivity(page, {
+      timeline: [],
+      activity: [
+        activityEntry({ id: 'act-info', level: 'info', summary: 'Scan finished' }),
+        activityEntry({
+          id: 'act-error',
+          level: 'error',
+          type: 'scan_completed',
+          summary: 'Failed to read file',
+        }),
+      ],
+    });
+    await expect(page.getByText('Scan finished')).toBeVisible();
 
     // Act
-    await page.getByLabel('Filter').click();
-    await page.getByRole('option', { name: 'Error' }).click();
+    await page.getByRole('combobox', { name: 'Level' }).click();
+    await page.getByRole('option', { name: 'error' }).click();
 
     // Assert
     await expect(page.getByText('Failed to read file')).toBeVisible();
-    await expect(page.getByText('Scanning file: book1.m4b')).not.toBeVisible();
+    await expect(page.getByText('Scan finished')).not.toBeVisible();
   });
 
   test('cancels running operation', async ({ page }) => {
     // Arrange
-    await openOperations(page, {
-      active: [baseActive[0]],
-      history: [],
-    });
+    await openActivity(page, { timeline: [runningScan] });
+    await expect(page.getByText('20 / 100 (20.00%)')).toBeVisible();
 
-    // Act - Active operations have a "Cancel" button
+    // Act — Cancel DELETEs the op, then the page re-fetches the timeline.
+    // There is no confirmation toast; the row simply goes away.
     await page.getByRole('button', { name: 'Cancel' }).click();
 
     // Assert
-    await expect(page.getByText('Operation cancelled.')).toBeVisible();
+    await expect(page.getByText('20 / 100 (20.00%)')).not.toBeVisible();
+    await expect(page.getByText('No active operations.')).toBeVisible();
   });
 
-  test('retries failed operation', async ({ page }) => {
-    // Arrange
-    await openOperations(page, {
-      active: [],
-      history: [baseHistory[1]],
-    });
+  test('clears stale completed operations', async ({ page }) => {
+    // Arrange — one running op and one terminal op.
+    await openActivity(page, { timeline: [runningScan, completedScan] });
+    await expect(page.getByText('100 / 100 (100%)')).toBeVisible();
 
     // Act
-    await page.getByRole('button', { name: 'Retry' }).click();
+    await page.getByRole('button', { name: 'Clear Stale' }).click();
 
-    // Assert
-    await expect(page.getByText('Operation retried.')).toBeVisible();
-  });
-
-  test('clears completed operations', async ({ page }) => {
-    // Arrange
-    await openOperations(page, {
-      active: [],
-      history: baseHistory,
-    });
-
-    // Act
-    await page.getByRole('button', { name: 'Clear Completed' }).click();
-
-    // Assert - After clearing, we verify the button was clicked
-    // The mock DELETE for operations/history returns success but
-    // loadHistory re-fetches from system/status which still has the data.
-    // Just verify the button exists and can be clicked without error.
-    await expect(page.getByRole('button', { name: 'Clear Completed' })).toBeVisible();
+    // Assert — the terminal op is dropped; the running one survives.
+    await expect(page.getByText('100 / 100 (100%)')).not.toBeVisible();
+    await expect(page.getByText('20 / 100 (20.00%)')).toBeVisible();
   });
 
   test('shows operation error details', async ({ page }) => {
     // Arrange
-    await openOperations(page, {
-      active: [],
-      history: [baseHistory[1]],
-    });
+    await openActivity(page, { timeline: [failedScan] });
 
-    // Act - Failed operations have an "Error" button (not "Details")
-    await page.getByRole('button', { name: 'Error' }).click();
-
-    // Assert
+    // Assert — a failed op carries a "failed" status chip and shows its
+    // failure message inline; there is no separate error dialog.
+    await expect(page.getByText('failed', { exact: true })).toBeVisible();
     await expect(
       page.getByText('Network error while scanning')
     ).toBeVisible();
   });
 
-  test('operation history pagination', async ({ page }) => {
-    // Arrange
-    const history = Array.from({ length: 25 }, (_, index) => ({
-      id: `hist-${index + 1}`,
-      type: index < 20 ? 'scan' : 'organize',
-      status: 'completed',
-      progress: 100,
-      total: 100,
-      message: `Operation ${index + 1}`,
-      created_at: `2026-01-25T10:${index.toString().padStart(2, '0')}:00Z`,
-    }));
-    await openOperations(page, {
-      active: [],
-      history,
-      logs: {},
-    });
+  test('activity feed pagination', async ({ page }) => {
+    // Arrange — the feed pages at 25 entries by default.
+    const entries = Array.from({ length: 30 }, (_, index) =>
+      activityEntry({
+        id: `act-${index + 1}`,
+        summary: `Activity entry ${index + 1}`,
+        timestamp: `2026-01-25T10:${index.toString().padStart(2, '0')}:00Z`,
+      })
+    );
+    await openActivity(page, { timeline: [], activity: entries });
+    await expect(page.getByText('Activity entry 1', { exact: true })).toBeVisible();
 
-    // Act - Click page 2 in pagination
+    // Act
     await page.getByRole('button', { name: 'Go to page 2' }).click();
 
-    // Assert - page 2 should show organize operations (items 21-25)
-    await expect(page.getByText('Organize').first()).toBeVisible();
+    // Assert — page 2 holds entries 26-30.
+    await expect(page.getByText('Activity entry 26')).toBeVisible();
+    await expect(
+      page.getByText('Activity entry 1', { exact: true })
+    ).not.toBeVisible();
   });
 });
