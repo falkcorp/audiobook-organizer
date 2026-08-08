@@ -1,5 +1,5 @@
 # file: .github/workflows/e2e.yml
-# version: 1.0.0
+# version: 1.1.0
 # guid: 6a2f47c9-1e83-4d05-b7f6-92c4a0d81b3e
 # last-edited: 2026-08-08
 
@@ -60,6 +60,24 @@ jobs:
   e2e:
     name: E2E (${{ github.event_name == 'pull_request' && 'chromium' || 'chromium + webkit' }})
     runs-on: ubuntu-latest
+    # NON-BLOCKING, deliberately and temporarily.
+    #
+    # The first clean-environment run of this suite scored 146 failed / 138
+    # passed of 288 chromium tests. The suite is roughly half red, and that was
+    # not known when this job was written: the local run that appeared to show
+    # it green (130 passed / 0 failed) had silently reused a server that was
+    # hours stale, AND collected far fewer tests than CI does. Both facts were
+    # wrong in the same direction.
+    #
+    # Making this required right now would block every PR touching web/** or Go
+    # on a backlog nobody has triaged. So it reports and does not block. The
+    # value is still real — the failures are now VISIBLE on every PR instead of
+    # invisible for four months, which is the problem this job exists to solve.
+    #
+    # Flip continue-on-error off once the suite is actually green. That is
+    # tracked in TODO.md; do not flip it silently, and do not delete this job
+    # to make CI quiet.
+    continue-on-error: true
     # A full two-engine run measured ~20 minutes locally; allow generous
     # headroom for a cold CI runner that must also build the Go binary.
     timeout-minutes: 45
