@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-08-08-the-safety-net-that-had-stopped-catching-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: b1ececb6-257a-4ad0-9722-453194d546da -->
 <!-- last-edited: 2026-08-08 -->
 
@@ -64,9 +64,24 @@ and pretending otherwise would put the suite right back where it started.
 tests, and not one of them was a real defect — the app has been behaving correctly
 throughout. The failures were entirely in the description of it.
 
-**The suite can be trusted as a gate again.** It is now safe to require these
-checks to pass before anything ships, which is what should have been true in April
-and would have caught the navigation upgrade going out unverified.
+**~~The suite can be trusted as a gate again.~~ — RETRACTED the same day.**
+This was written believing the whole suite passed. It does not. When the tests
+were finally run automatically, on a clean machine, for the first time ever, the
+score was **146 failed and 138 passed**. Roughly half the safety net is still on
+the floor.
+
+The claim above came from a run that looked clean and was not, for three separate
+reasons at once: it quietly reused a copy of the application that was hours out of
+date; it only actually ran 137 of 576 tests; and the way the command was written
+threw away the pass/fail answer entirely, so "it passed" was never something that
+had been measured.
+
+The thirty-four tests this work repaired are genuinely repaired, and the paragraph
+above them still stands. What is not true is that the rest of the suite is
+healthy. Running the tests automatically is what revealed that — on its first day,
+which is the strongest possible argument for having done it. The remaining
+failures are now written down and being worked through rather than sitting
+invisible.
 
 **The lesson is about disabled tests.** The six files were not deleted; they were
 silently skipped, and silence is indistinguishable from success. Where a feature
