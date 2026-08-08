@@ -1,5 +1,5 @@
 // file: web/src/components/layout/Sidebar.tsx
-// version: 1.16.0
+// version: 1.17.0
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-08-08
 
@@ -37,6 +37,7 @@ import TimelineIcon from '@mui/icons-material/Timeline';
 import WavesIcon from '@mui/icons-material/Waves';
 import FactCheckIcon from '@mui/icons-material/FactCheck';
 import { useReviewStore } from '../../stores/useReviewStore';
+import { isSubItemSelected } from './sidebarSelection';
 
 const MOBILE_DRAWER_WIDTH = 240;
 
@@ -66,31 +67,6 @@ const librarySubItems = [
   { text: 'Series', icon: <CollectionsBookmarkIcon />, path: '/series' },
   { text: 'Authors', icon: <PeopleIcon />, path: '/authors' },
 ];
-
-/**
- * Decides whether a Library sub-item should render as selected.
- *
- * Exported for tests. The previous implementation compared
- * `location.pathname` against `item.matchPath ?? item.path`, which is wrong in
- * both directions for the filter items: `pathname` never carries a query
- * string, so 'In Progress' (path '/library?search=...') could never match,
- * while 'All Books' (matchPath '/library') matched on *every* /library URL.
- * The highlight was therefore pinned to All Books permanently.
- *
- * Items that declare `matchSearch` are compared on the parsed, decoded
- * `search` param rather than the raw path, so they still match once
- * Library.tsx settles the URL into `?search=read_status%3Ain_progress&page=1`.
- */
-export function isSubItemSelected(
-  item: { path: string; matchPath?: string; matchSearch?: string },
-  pathname: string,
-  search: string,
-): boolean {
-  const itemPath = (item.matchPath ?? item.path).split('?')[0];
-  if (pathname !== itemPath) return false;
-  if (item.matchSearch === undefined) return true;
-  return (new URLSearchParams(search).get('search') ?? '') === item.matchSearch;
-}
 
 const menuItems = [
   { text: 'Dashboard', icon: <DashboardIcon />, path: '/dashboard' },

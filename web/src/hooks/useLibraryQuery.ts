@@ -1,7 +1,7 @@
 // file: web/src/hooks/useLibraryQuery.ts
-// version: 1.3.0
+// version: 1.4.0
 // guid: d4e5f6a7-b8c9-0123-def0-123456789003
-// last-edited: 2026-07-11
+// last-edited: 2026-08-08
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -11,6 +11,15 @@ import { SortField, SortOrder } from '../types';
 import type { Audiobook } from '../types';
 import type { ParsedSearch } from '../utils/searchParser';
 import type { ImportPath } from '../pages/libraryTypes';
+
+/** First retry delay after a failed load. Doubles per consecutive failure. */
+const RETRY_BASE_DELAY_MS = 500;
+/**
+ * Ceiling on the retry backoff. Chosen well under the ~40s memdb warmup window
+ * so the Library repopulates within a few seconds of the backend answering,
+ * rather than sitting dark for another full backoff period.
+ */
+const RETRY_MAX_DELAY_MS = 5000;
 
 interface UseLibraryQueryFilters {
   author?: string;
@@ -63,6 +72,17 @@ export function useLibraryQuery({
   const [audiobooks, setAudiobooks] = useState<Audiobook[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(false);
+  // Non-null while the most recent load failed. Consumers MUST consult this
+  // before rendering an "empty library" state: an empty `audiobooks` array
+  // means "we have nothing to show", which is not the same as "there is
+  // nothing to show". The backend is unreachable for ~40s after every deploy
+  // while memdb warms over the whole library, so this is routine, not exotic.
+  const [loadError, setLoadError] = useState<Error | null>(null);
+  // True while a failed load waits on its backoff timer, so the UI can say
+  // "reconnecting" instead of showing a silent spinner forever.
+  const [isRetrying, setIsRetrying] = useState(false);
+  const retryAttemptRef = useRef(0);
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [totalPages, setTotalPages] = useState(1);
   const [softDeletedBooks, setSoftDeletedBooks] = useState<Audiobook[]>([]);
   const [softDeletedCount, setSoftDeletedCount] = useState(0);
@@ -95,6 +115,44 @@ export function useLibraryQuery({
     }
   }, []);
 
+  // Held so scheduleRetry can invoke the latest loadAudiobooks without the two
+  // useCallbacks depending on each other (which cannot be expressed directly).
+  const loadAudiobooksRef = useRef<(() => Promise<void>) | null>(null);
+
+  const cancelPendingRetry = useCallback(() => {
+    if (retryTimerRef.current !== null) {
+      clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+    }
+  }, []);
+
+  /** Clears failure state after a load resolves successfully. */
+  const clearLoadFailure = useCallback(() => {
+    cancelPendingRetry();
+    retryAttemptRef.current = 0;
+    setIsRetrying(false);
+    setLoadError(null);
+  }, [cancelPendingRetry]);
+
+  /**
+   * Re-attempts a failed load after an exponential backoff, capped at
+   * RETRY_MAX_DELAY_MS. Retries indefinitely by design: the failure modes this
+   * exists for (memdb warmup after a deploy, a restart, a brief network drop)
+   * all resolve on their own, and giving up would strand the user on a screen
+   * that never recovers without a manual refresh. The cap keeps recovery
+   * prompt once the backend returns.
+   */
+  const scheduleRetry = useCallback(() => {
+    cancelPendingRetry();
+    const delay = Math.min(RETRY_MAX_DELAY_MS, RETRY_BASE_DELAY_MS * 2 ** retryAttemptRef.current);
+    retryAttemptRef.current += 1;
+    setIsRetrying(true);
+    retryTimerRef.current = setTimeout(() => {
+      retryTimerRef.current = null;
+      void loadAudiobooksRef.current?.();
+    }, delay);
+  }, [cancelPendingRetry]);
+
   const loadAudiobooks = useCallback(async () => {
     const requestId = ++latestRequestIdRef.current;
     abortControllerRef.current?.abort();
@@ -126,6 +184,8 @@ export function useLibraryQuery({
         setTotalPages(cached.totalPages);
         setImportPaths(cached.importPaths);
         setLoading(false);
+        // A cache hit is a resolved load, so any prior failure is over.
+        clearLoadFailure();
         return;
       }
 
@@ -186,6 +246,9 @@ export function useLibraryQuery({
       setTotalCount(total);
       setTotalPages(totalPages);
       setImportPaths(importPathsData);
+      // Success: this result is authoritative, so an empty list here really
+      // does mean an empty library and the empty state may render.
+      clearLoadFailure();
     } catch (error) {
       // A cancelled fetch (user clicked Cancel, or a newer request superseded
       // this one and aborted it) is not a failure — skip the error toast/
@@ -209,14 +272,34 @@ export function useLibraryQuery({
         toast('Request timed out.', 'error');
       }
       console.error('Failed to load audiobooks:', error);
-      setAudiobooks([]);
-      setTotalPages(1);
+      // Deliberately do NOT clear `audiobooks` here. Emptying the list on
+      // failure is what made a transient backend outage render as "No
+      // Audiobooks Found" — the most alarming possible way to display a
+      // temporary error to someone with a 44,000-book library. Keeping the
+      // last known-good page means a mid-session blip leaves the shelf intact,
+      // and `loadError` tells the UI to say "reconnecting" over the top.
+      setLoadError(error instanceof Error ? error : new Error(String(error)));
+      // A 4xx is a real client-side problem and retrying cannot fix it.
+      // Anything else — network failure, connection refused, 5xx, or the
+      // memdb-warmup window after a deploy — is transient by assumption.
+      const isTransient =
+        !(error instanceof api.ApiError) || error.status === 0 || error.status >= 500;
+      if (isTransient) {
+        scheduleRetry();
+      }
     } finally {
       if (requestId === latestRequestIdRef.current) {
         setLoading(false);
       }
     }
-  }, [buildFieldFilters, debouncedSearch, filters, itemsPerPage, page, parsedSearch, selectedTags, sortBy, sortOrder, navigate, toast, setImportPaths, convertBook]);
+  }, [buildFieldFilters, debouncedSearch, filters, itemsPerPage, page, parsedSearch, selectedTags, sortBy, sortOrder, navigate, toast, setImportPaths, convertBook, clearLoadFailure, scheduleRetry]);
+
+  // Keep the retry timer pointed at the current closure, so a retry that fires
+  // after filters/page changed re-runs the CURRENT query rather than the stale
+  // one that happened to fail.
+  useEffect(() => {
+    loadAudiobooksRef.current = loadAudiobooks;
+  }, [loadAudiobooks]);
 
   // Reload books when scan/organize completes
   useEffect(() => {
@@ -265,7 +348,15 @@ export function useLibraryQuery({
   const cancelLoad = useCallback(() => {
     abortControllerRef.current?.abort();
     setLoading(false);
-  }, []);
+    // An explicit cancel must also stop the retry loop, or the request the
+    // user just cancelled would quietly come back a second later.
+    cancelPendingRetry();
+    retryAttemptRef.current = 0;
+    setIsRetrying(false);
+  }, [cancelPendingRetry]);
+
+  // Never leave a retry timer running past unmount.
+  useEffect(() => cancelPendingRetry, [cancelPendingRetry]);
 
   return {
     audiobooks,
@@ -273,6 +364,8 @@ export function useLibraryQuery({
     totalCount,
     setTotalCount,
     loading,
+    loadError,
+    isRetrying,
     totalPages,
     softDeletedBooks,
     softDeletedCount,

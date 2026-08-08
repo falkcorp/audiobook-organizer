@@ -1,11 +1,11 @@
-// file: web/src/components/layout/Sidebar.test.tsx
+// file: web/src/components/layout/sidebarSelection.test.ts
 // version: 1.0.0
 // guid: 5c1d9e42-7f38-4a61-9b0e-2d84c6f1a705
 // last-edited: 2026-08-08
 
 import { describe, expect, it } from 'vitest';
 
-import { isSubItemSelected } from './Sidebar';
+import { isSubItemSelected } from './sidebarSelection';
 
 // Mirrors the librarySubItems entries under test. Kept local so the test
 // documents the contract rather than depending on the array's ordering.

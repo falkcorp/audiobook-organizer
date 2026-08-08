@@ -1,7 +1,7 @@
 // file: web/src/components/library/LibraryBookGrid.tsx
-// version: 1.7.0
+// version: 1.8.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-07-11
+// last-edited: 2026-08-08
 
 import {
   Typography,
@@ -37,10 +37,19 @@ import type { ViewMode } from '../audiobooks/SearchBar';
 import type { ParsedSearch } from '../../utils/searchParser';
 import type { ImportPath } from '../../pages/libraryTypes';
 import { STORAGE_KEYS } from '../../lib/storageKeys';
+import { libraryContentState } from './libraryContentState';
 
 interface LibraryBookGridProps {
   audiobooks: Audiobook[];
   loading: boolean;
+  /**
+   * Non-null when the most recent load failed. Gates the empty state: an empty
+   * `audiobooks` array with a load error means "we could not fetch", NOT "the
+   * library is empty", and the two must never look the same to the user.
+   */
+  loadError?: Error | null;
+  /** True while a failed load is waiting on its retry backoff. */
+  isRetrying?: boolean;
   onCancelLoad?: () => void;
   searchQuery: string;
   setSearchQuery: (q: string) => void;
@@ -112,6 +121,8 @@ interface LibraryBookGridProps {
 export const LibraryBookGrid = ({
   audiobooks,
   loading,
+  loadError,
+  isRetrying,
   onCancelLoad,
   searchQuery,
   setSearchQuery,
@@ -180,7 +191,17 @@ export const LibraryBookGrid = ({
   handleTagFilterChange,
 }: LibraryBookGridProps) => (
   <>
-    {audiobooks.length === 0 && !loading && !searchQuery ? (
+    {libraryContentState({ bookCount: audiobooks.length, loading, loadError, searchQuery }) === 'reconnecting' ? (
+      <Paper sx={{ p: 4, textAlign: 'center', bgcolor: 'background.default' }}>
+        <CircularProgress sx={{ mb: 2 }} />
+        <Alert severity="info" sx={{ textAlign: 'center' }}>
+          <AlertTitle>Loading your library…</AlertTitle>
+          {isRetrying
+            ? "Can't reach the server right now — retrying automatically. This is normal for up to a minute after an update while the library loads."
+            : 'Waiting for the server to respond.'}
+        </Alert>
+      </Paper>
+    ) : libraryContentState({ bookCount: audiobooks.length, loading, loadError, searchQuery }) === 'empty' ? (
       <Paper sx={{ p: 4, textAlign: 'center', bgcolor: 'background.default' }}>
         <FolderOpenIcon sx={{ fontSize: 80, color: 'text.secondary', mb: 2 }} />
         <Alert severity="info" sx={{ textAlign: 'center' }}>
