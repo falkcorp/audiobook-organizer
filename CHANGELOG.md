@@ -7,6 +7,3245 @@
 
 <!-- scriv-insert-here -->
 
+<a id='changelog-v0.218.0'></a>
+## v0.218.0 — 2026-08-08
+
+### Added
+
+- **Audiobookshelf conformance harness (Phase 0).** Added a pinned ABS 2.36.x
+  reference oracle (`testdata/abs-oracle/`), a fixture capture script
+  (`scripts/abs_capture_fixtures.py`), golden fixtures (`testdata/abs-fixtures/`),
+  and `internal/syncapi/conformance` -- a differ that checks field presence and
+  JSON type, not just values, so a response missing a field an ABS client
+  hard-requires fails the build instead of failing opaquely on a phone.
+
+#### Chapter extraction and multi-file timeline primitives (`internal/audioutil`)
+
+Added the chapter model and extraction/synthesis primitives that ABS Sync API Phase 4
+(`docs/specs/2026-07-29-abs-sync-api-design.md` §7) will persist and serve. This codebase
+had no chapter concept at all before this change — `ffprobe` was used for duration only.
+
+`internal/audioutil/chapters.go` adds `ProbeChapters`, which shells out to
+`ffprobe -show_chapters -print_format json` and parses each chapter's `start_time`/
+`end_time` string fields into a `Chapter{ID, StartSec, EndSec, Title}` (deliberately not
+the sibling `start`/`end` integer + `time_base` pair, to preserve full float precision). A
+file with no embedded chapters returns `(nil, nil)` — not an error.
+
+`internal/audioutil/timeline.go` adds the pure, I/O-free timeline math a multi-file book
+needs: `CumulativeOffsets` (running start offset per track), `SynthesizeChapters` (one
+synthetic chapter per track, title falling back to filename when the track has no title
+tag — mirroring real ABS behavior for multi-file books with no embedded chapters), and
+`ShiftChapters` (rebases a track's own embedded chapters onto the whole-book timeline).
+
+Verified against real Audiobookshelf 2.36.0 ground truth captured in
+`testdata/abs-fixtures/README.md` (items 3-4) and against the committed Odyssey
+(Butler/LibriVox) audio fixtures: the single-file m4b's 6 embedded chapters extract with
+`StartSec == 0` and the last `EndSec` matching the file's total duration
+(~9975.428s); the 6-track mp3 split's per-file durations reproduce the exact real ABS
+`startOffset` sequence (`0, 1386.057143, 2788.702041, 4309.211429, ...`) via
+`CumulativeOffsets`, confirmed with a sub-microsecond epsilon test.
+
+Persistence and scanner wiring (a `Chapter` DB type, `process_file.go` integration) are
+deliberately out of scope for this change to avoid colliding with parallel work on those
+shared files; this PR delivers only the extraction/synthesis primitives and their tests.
+
+#### HTTP Range (byte-range) file-serving helper (`internal/httputil`)
+
+Added `ServeFileWithRange` (protocol-agnostic, `http.ResponseWriter`/`*http.Request`)
+and a thin `ServeFileWithRangeGin` adapter for handlers holding a `*gin.Context`. This
+is new plumbing only — no route registers it yet — but it closes the biggest playback
+gap in the project: until now the server had no Range-capable audio serving at all,
+only a transcoded ffmpeg *sample* endpoint (`internal/server/audio_sample.go`) that
+isn't reusable for real playback. Seeking in a large `.m4b`/`.m4a`/`.mp3`/`.flac`/`.opus`
+file and resumable downloads both require correct `206 Partial Content` handling.
+
+Implementation delegates to the standard library's `http.ServeContent` for the actual
+Range/If-Range/If-None-Match/206/416/multipart-byteranges logic (battle-tested,
+avoids reimplementing range parsing), adding: extension-based `Content-Type` sniffing
+tuned for audiobook formats (`.m4b`/`.m4a` → `audio/mp4`, `.mp3` → `audio/mpeg`,
+`.flac` → `audio/flac`, `.opus` → `audio/ogg`), a cheap `"<size>-<mtime-unixnano>"`
+`ETag`, and `Accept-Ranges: bytes` on every response. One deliberate correction over
+the stdlib default: a syntactically malformed `Range` header is now ignored (served as
+a full `200`) per RFC 9110 §14.2, rather than stdlib's default of returning `416` for
+both malformed and well-formed-but-unsatisfiable ranges — a pre-validation pass strips
+the header before handoff only when it fails to parse as a byte-ranges-specifier, so a
+genuinely out-of-bounds (but well-formed) range still gets the correct `416`.
+
+The helper takes an already-resolved absolute path and validates it resolves (after
+following symlinks) to a regular file; it performs no authorization or path-containment
+checks beyond that, and the doc comment is explicit that callers must confine the path
+to an allowed root themselves — this repo has a history of path-injection findings.
+
+Covered by 25 tests including exact-byte assertions against a deterministic fixture and
+one integration test against the real 115 MB committed `odyssey_complete.m4b` fixture
+that proves a mid-file range read matches a direct `os.ReadAt` at the same offset.
+
+- **Persisted chapter storage (abs-sync Phase 4).** Added a `database.Chapter` type and
+  `PebbleStore.{Get,Save,Delete}ChaptersForBook` methods, storing one ordered chapter list per book
+  under a new `chapters:<bookID>` Pebble key. Chapters are deleted when their book is deleted. Pure
+  persistence layer — extraction (ffprobe) and scanner wiring land in a follow-up task.
+
+- **Chapter extraction at scan time (abs-sync Phase 4).** New
+  `scanner.PersistChaptersForBook` (`internal/scanner/process_file.go`) wires the
+  already-merged `internal/audioutil` chapter primitives and the newly-merged
+  `database.Chapter` persistence into the scan pipeline: single-file books keep
+  their embedded chapters as-is; multi-file books get one synthesized chapter per
+  file, titled from each file's own tag. Multi-file chapter boundaries use
+  re-probed, unrounded per-track durations (not the stored, rounded
+  `BookFile.Duration`), so the total matches real Audiobookshelf `startOffset`
+  precision. Idempotent — a rescan skips re-extraction for books that already
+  have chapters.
+  - **Not yet wired into `scanner.go`.** This PR adds the function and its full
+    test suite but intentionally does not add the two `scanner.go` call sites
+    described in the task brief, because `scanner.go` was flagged as owned by a
+    parallel in-flight change at the time this task ran. The feature is inert
+    (dead code, covered by direct-call tests only) until a follow-up applies the
+    two-line hook after each of `scanner.go`'s book-save call sites.
+
+- **DRM detection for Audible AAX/AAXC (abs-sync Phase 4, first step).** Added
+  `audioutil.DetectDRM`, a cheap extension-based check flagging `.aax`/`.aaxc` files as
+  DRM-protected-and-unplayable, with a documented reason string. Detection only, not yet wired into
+  the scanner or surfaced to users -- that's a follow-up task once a schema-owning task decides
+  where the "unplayable" flag lives.
+
+- **Audiobookshelf-compatible auth core (Phase 1, TASK-11).** New top-level ABS
+  router group -- `GET /ping`, `GET /status`, `POST /login`, `POST /auth/refresh`,
+  `POST /logout` (`?allDevices=1`), `GET /api/me`, `GET /api/me/sessions`,
+  `DELETE /api/me/sessions/:id` -- behind a single fail-closed identity middleware
+  that implements the spec's unified resolution order: a *verified*
+  `Cf-Access-Jwt-Assertion` first (Mode C/A, with allowlist-gated JIT user
+  provisioning), then our own bearer JWT (Mode B), else 401. Feature-flagged off by
+  default via `ABS_API_ENABLED`; `ABS_AUTH_MODES` (default `cf,jwt`) selects which
+  resolvers are active. New `abs_sess:` PebbleDB keyspace holds one session per
+  device. Access tokens are real HS256 JWTs with a **30-day** default TTL (not 1h --
+  clients that implement no refresh would otherwise be logged out hourly); refresh
+  tokens are opaque `abr_`-prefixed strings whose SHA-256 hashes alone are persisted,
+  with single-flight rotation plus a 10-minute grace window so a concurrent or
+  replayed refresh returns the already-minted pair instead of orphaning the session.
+  argon2id for new passwords, with bcrypt verify plus transparent rehash-on-login for
+  existing users. Every auth attempt, success and failure, is audit-logged with its
+  source IP.
+
+- **ID-survival acceptance suite for ABS sync identity (spec §4.3).** Added
+  `internal/merge/sync_identity_survival_test.go`, proving the client-visible
+  `libraryItemId` (syncID) and its associated listening progress survive
+  rename, in-place ("tagged") move, retag, and file replacement — the
+  scenarios that had no dedicated end-to-end test yet. It also adds a
+  pathological-cycle regression for `ResolveSyncItem` (two books redirecting
+  to each other) that no existing test covered, proving the resolver fails
+  loudly instead of looping forever, and a composed-lifecycle test that
+  carries ONE book's identity through rename+move+retag and then through
+  BOTH merge-family hops (MergeBooks then CombineBooks) in sequence on the
+  same originating ID — the cross-mechanism proof no single-operation test,
+  new or existing, can provide. The merge.Service.MergeBooks/CombineBooks
+  paths, the separate dedup.MergeBooks hard-delete path (used by
+  `internal/reconcile/itunes_heal.go`), the untagged-move version-link path,
+  and the happy-path redirect chain (B→A→C) already had thorough,
+  mechanism-specific coverage elsewhere (`internal/merge/sync_follow_test.go`,
+  `internal/merge/sync_follow_concurrent_test.go`,
+  `internal/dedup/book_dedup_sync_follow_test.go`,
+  `internal/scanner/sync_identity_move_test.go`), so this suite does not
+  duplicate them — it only adds the scenarios that were genuinely missing.
+  `dedup.MergeBooks` cannot join the composed-lifecycle chain (`internal/dedup`
+  imports `internal/merge`, so the reverse import would cycle); its
+  hard-delete case stays covered by its own package's dedicated test instead.
+  **Scope note:** the file-replace-primitive test
+  (`TestSyncIdentitySurvives_FileReplace_Primitive`) exercises the
+  `RepointSyncFile` primitive directly, because no production code path
+  invokes it yet — today's only real file-replacement mechanism is an
+  in-place `UpdateBookFile` with the same `BookFile.ID` (covered by
+  `TestSyncIdentitySurvives_FileReplace_SameID`). A delete-and-recreate
+  replacement path is a hypothetical future case, not something this suite's
+  green result proves is wired end-to-end. Test-only change; zero production
+  code touched.
+
+- **Library browse over the Audiobookshelf-compatible API (abs-sync Phase 3).** `GET /api/libraries`,
+  `/api/libraries/:id` and its `items` (paged), `personalized`, `series`, `authors`, `narrators`,
+  `filterdata`, `search`, `collections`, `playlists` and `recent-episodes` sub-routes, plus
+  `GET /api/items/:id` and `GET /api/items/:id/cover`. Covers serve with **no credentials required**
+  (AudioBooth's home-screen widget sends none) while also accepting `?token=`, and carry
+  ETag/Last-Modified so clients cache them. A client probing for podcasts gets a valid empty page
+  rather than an error.
+
+- **Direct playback over the Audiobookshelf-compatible API (abs-sync Phase 5b).**
+  `POST /api/items/:id/play` returns a session with cumulative-offset `audioTracks`, chapters and the
+  full embedded library item; `GET /api/items/:id/file/:ino` (and `/download`) and the
+  **unauthenticated `GET /public/session/:id/track/:index`** — the path AudioBooth actually streams
+  from — both serve byte ranges via the verified `httputil.ServeFileWithRange`, including the suffix
+  ranges iOS `AVPlayer` needs to locate `moov` in an m4b. `POST /api/session/:id/sync` accepts both
+  `timeListened` (a delta) and `timeListening` (a cumulative total) with their differing semantics,
+  and writes the listener's position through to the durable progress store forward-only, so a stale
+  device can never rewind newer progress. Direct play only: a client requesting HLS or a transcode
+  gets a working direct-play session instead of an error.
+
+  Client-visible ids come from the `sync_item`/`sync_file` keyspaces — `libraryItemId` is a 36-char
+  UUID that follows dedup merges, and `ino` is a durable file id rather than a filesystem inode — so
+  moving, retagging or merging a book does not orphan a device's saved place or a downloaded book's
+  cached URLs. Every response is diffed field-by-field against golden fixtures captured from a real
+  Audiobookshelf 2.36.0 server. The whole surface stays behind `ABS_API_ENABLED`, which is off by
+  default.
+
+- **Audiobookshelf user progress + bookmarks (Phase 6).** `GET /api/me`, `POST
+  /login` and `POST /auth/refresh` now serve the user's real `mediaProgress[]`
+  and `bookmarks[]` instead of empty arrays. New
+  `internal/server/handlers/abs/userdata.go` implements the `UserDataProvider`
+  interface over the existing listening-progress and named-bookmark keyspaces,
+  and `wireABSRoutes` wires it (the startup warning about a missing provider is
+  gone).
+
+  This closes the last blocker before an ABS client can resume a book where it
+  left off. It is also the endpoint that can destroy data if it under-reports:
+  AudioBooth deletes every local progress row absent from the server's list, so
+  the list is built complete or not at all -- a read failure anywhere returns an
+  error (rendered as 5xx) and the partially-built list is discarded, never
+  served. `libraryItemId` is the 36-char sync UUID (a raw Book ULID
+  mis-truncates at the client's fixed byte offset of 36), `lastUpdate` is an
+  integer millisecond epoch taken from `UserBookState.LastActivityAt`,
+  `duration` is always present (`isFinished` with a zero duration zeroes the
+  client's saved position, so it is cleared instead), `progress` is a 0.0-1.0
+  fraction derived from `currentTime/duration` rather than the store's lossy
+  integer percent, and `isFinished` uses the 2-second tolerance so a
+  fully-listened book does not sit at 99% forever.
+
+  Both lists are built from user-keyed prefix scans, so the cost is proportional
+  to the books that user has touched rather than to the library; the per-book
+  follow-up reads run in a bounded worker pool.
+
+#### `backfill-sync-ids` — idempotent ABS identity backfill for the whole library
+
+New maintenance job that mints a `sync_item` syncID for every Book and a `sync_file`
+syncFileID for every BookFile that does not have one yet, in a single pass. Both
+keyspaces already mint on first encounter at request time, so this is not required for
+correctness — it exists so the entire library is identity-consistent *before* any
+Audiobookshelf-compatible client connects: no first-request latency spike, and no window
+where half the library has stable IDs and half does not.
+
+Idempotent by construction rather than by checkpoint. `MintOrGetSyncID` and
+`MintOrGetSyncFileID` are each independently idempotent, so re-running the job from book 0
+after an interruption is both correct and cheap (an already-minted book or file is a single
+point-get skip). `CanResume()` therefore returns `false` on purpose — there is no index
+worth persisting, unlike `backfill_file_hashes.go`'s `resumeIndex` — and a regression test
+snapshots every minted ID after run 1 and asserts run 2 produces a byte-identical set.
+
+The per-book work runs through `registry.RunItems` with `Concurrency: runtime.NumCPU()`.
+A bare `for range books` loop of exactly this shape is what took a `dedup.full-scan` run
+silent for 3+ hours at 100% CPU on a single core on 2026-07-05, and
+`RunItemsOptions.Concurrency` treats both 0 and 1 as sequential — so the value is a named
+function a test asserts is `> 1`, guarding against a future edit silently reverting to the
+default. Book IDs come from `ListBookIDs()`, never a paginated `GetAllBooksFrom` walk,
+whose memdb fast path silently caps a page at 2× the requested limit and can therefore
+miss books. `ErrMode: ErrModeCollect` keeps a handful of unreadable books from cancelling
+the remaining tens of thousands.
+
+#### `backfill-itunes-positions` — carry existing Apple Books listening positions across
+
+New maintenance job that migrates each book's saved `Book.ITunesBookmark` into the
+per-user progress store (`UserPosition` + `UserBookState`), so moving off iTunes/Apple
+Books does not start from a blank slate. `ITunesBookmark` is **milliseconds** and a single
+scalar per book representing the *farthest position read* — a whole-book resume offset,
+not a per-track value and not a bookmark collection — so it is converted to float seconds
+and placed on the cumulative timeline.
+
+**Every write is routed through `progress.MergeIncoming`, never written bare.** That is
+what makes §5's forward-only rule apply: a user who has already listened further on a real
+device can never be rewound by stale iTunes data, while an iTunes position that *is*
+further along still advances. Two extra safeguards back that up. The incoming timestamp is
+derived from real data (`ITunesLastPlayed`, then `ITunesDateAdded`, then the book's own row
+timestamps) and never `time.Now()` — a fresh stamp would win the newer-wins branch
+outright and overwrite a device's newer position, and would also beat AudioBooth's own
+truncated-seconds comparison client-side. It is then clamped to the server's existing
+stamp, so when a stored record exists the merge can only ever accept via the forward-only
+branch. The server-side position fed to the merge is `max(PositionSeconds)` across all
+existing segment rows rather than the most recent one, because legacy rows are opaque
+per-device segments that are not directly comparable to a whole-book scalar.
+
+`isFinished` is derived with §5b's ≥2 s tolerance via `IsWithinFinishedTolerance`, against
+**one** authoritative duration per book — the sum of track durations, the timeline clients
+actually seek within, falling back to `Book.Duration`. The same book legitimately reports
+three different durations (container `9975.480544`, last-chapter-end `9975.428000`,
+track-sum `9975.431111` on the measured Odyssey fixture), and with a tight epsilon a fully
+listened book never auto-marks finished and sits at 99% forever. `progress` is derived as a
+0.0–1.0 fraction — exported as `ITunesPositionProgressFraction` so the future DTO layer
+cannot re-derive it as a percentage — and an unfinished book is never rendered as 100%.
+`lastUpdate` is stored as an exact integer ms epoch on `UserBookState.LastActivityAt`
+(`UserPosition.UpdatedAt` cannot serve that role: the store stamps it `time.Now()`
+unconditionally); an absent `updatedAt` would make the server permanently lose every
+conflict, since clients compare it against their own wall clock.
+
+A nil or non-positive bookmark is **skipped, never zeroed** — a spurious 0 reads as "start
+over" to a client and would fabricate progress the user never had. A manual status override
+(`StatusManual`) is preserved, and `TotalListenedSeconds` is left untouched, since a
+position is not an amount of audio listened. Re-running is a true no-op when nothing
+changed, and a state row that drifted from its stored position is repaired without the
+position ever being touched, so a run interrupted between the two writes self-heals.
+Per-book failures log the book ID and continue; the job reports exact
+migrated / skipped / failed / no-duration counts rather than "done".
+
+As a courtesy, one named bookmark (`Imported from Apple Books`) is dropped at the migrated
+offset so the position is visible and jumpable, not just an invisible resume point. Exactly
+one, and only on an accepted migration — the ABS named-bookmark keyspace is an independent
+system clients populate themselves, and there is nothing in a single resume scalar to
+synthesize a bookmark list from. It is best-effort: a bookmark-store failure is logged and
+the book still counts as migrated, because the resume position is the requirement.
+
+Which user the positions belong to is a genuinely ambiguous mapping — iTunes has no user
+concept — so it is resolved explicitly and never guessed silently:
+`ABS_ITUNES_POSITION_BACKFILL_USER_ID` if set (an ID matching no user is a hard error, not
+a silent fallback), otherwise the only user, otherwise the earliest-created account with a
+`WARN` naming the choice and the override.
+
+**This job is invoke-only and must not be run before the ABS media-progress provider is
+wired.** Maintenance jobs run solely via `POST /maintenance/jobs/:job_id` and there is no
+cron path to this one, which is deliberate: AudioBooth's `MediaProgress.syncFromAPI`
+*deletes* any local progress row absent from `/api/me`'s `mediaProgress` list, and that
+provider is still nil. Real progress records existing server-side while `/api/me` reports
+an empty list would make a connecting client destroy its own local progress.
+
+- **Server-persisted bookmarks CRUD (abs-sync Phase 6 foundation).** No named-bookmark feature
+  existed in this codebase before -- only the unrelated single scalar `Book.ITunesBookmark`
+  (milliseconds, one value per book, imported from iTunes). Added
+  `internal/syncapi/progress/bookmarks.go` (pure `Bookmark` type, `ParseTimeSec`,
+  `CanonicalTimeKey`, `ValidateBookmark`) and `internal/database/pebble_store_bookmarks.go` (new
+  `bookmark:` Pebble keyspace + `BookmarkStore` interface, satisfied by `*PebbleStore`). Keyed by
+  `(userID, itemID, time)` with no separate bookmark ID, matching real Audiobookshelf's own
+  addressing (`DELETE .../bookmark/:time` puts the time value in the URL path). `CreateBookmark`
+  is an upsert: creating twice at the same time updates the title and preserves the original
+  `CreatedAt` (serialized under a mutex so two concurrent same-key upserts can't corrupt it).
+  `CanonicalTimeKey` rounds to the nearest millisecond and zero-pads to a fixed width so `"12"`
+  and `"12.0"` (AudioBooth sends bookmark `time` as an Int in some paths, as a Double in others)
+  resolve to the identical stored bookmark and sort lexicographically in numeric order.
+  `ListBookmarksForUser` aggregates every bookmark across all of a user's items via a one-segment-
+  wider prefix scan, feeding the `/api/me` response's `bookmarks[]` array built on every login and
+  home-screen refresh. Storage-only: no HTTP handler wired yet, and `BookmarkStore` is
+  deliberately not embedded into the composed `Store` interface -- that is later Phase-6 scope.
+
+#### Progress conflict-resolution policy (`internal/syncapi/progress`)
+
+Added the pure, I/O-free decision functions implementing the ABS Sync API progress
+conflict-resolution rules from `docs/specs/2026-07-29-abs-sync-api-design.md` §5, §5b and
+§1.8.7. Nothing here imports `internal/database`, touches HTTP, or reads the clock —
+callers pass every timestamp in explicitly — so every rule the spec locks down is
+deterministically unit-testable ahead of the Phase-6 `UserBookState`/`UserPosition` store
+adapter and the handlers that will call it. Modeled on the sibling pure package
+`internal/audioutil` (`CumulativeOffsets`, `SynthesizeChapters`). No production wiring
+yet; this change is standalone and has no callers.
+
+The base rule is §5's newer-wins-with-forward-only-fallback: a strictly newer
+`updatedAt` is accepted wholesale, and an *older* update is accepted **only** when its
+position is ahead of the server's. That asymmetry is the whole point — an offline device
+that listened further while offline must still advance the position, while one that is
+merely behind can never rewind newer server progress. A rejected merge returns the stored
+record field-for-field untouched, which the tests assert with `reflect.DeepEqual` rather
+than only checking the accept flag. A stale-but-ahead accept advances `UpdatedAtMs`
+monotonically (it never moves the stored timestamp backwards), since a rewound server
+timestamp would make the *next* update from any device falsely look newer and win a
+conflict it should lose.
+
+**Three different merge entry points, deliberately not one.** The two rules that both
+sound like "don't go backwards" are separate mechanisms for separate endpoints and must
+not share a code path:
+
+- `MergeIncoming` — `POST /api/session/:id/sync`, where clients do not send `isFinished`
+  at all and the server derives it. Finished is **sticky** here: it is OR'd with the
+  tolerance check and never cleared, because this endpoint has no way to express
+  "un-finish".
+- `MergeExplicit` — `PATCH /api/me/progress/:id`, where Absorb *does* send `isFinished`
+  and the server must honour rather than contradict it. Only a strictly-newer update may
+  override the stored flag, including clearing it (re-opening a finished book, which ABS
+  allows); that true→false transition also resets the position to 0, mirroring real ABS
+  "mark as not started". A forward-only accept can never carry an explicit `isFinished`,
+  so it keeps the sticky behaviour.
+- `MergeOfflineReplay` — `POST /api/session/local[-all]`, where timestamps are
+  **unusable**: offline clients re-stamp stale backlog entries with `updatedAt = now`
+  before replaying them, so a far-behind position arrives looking newer. This guard
+  ignores timestamps entirely and is forward-only on position alone. A regression test
+  feeds the same inputs to both functions and asserts `MergeIncoming` accepts while
+  `MergeOfflineReplay` rejects — which is exactly why they are two functions.
+
+`MergeCombine` covers the dedup merge-follow case (§5 rule 5): two previously independent
+progress records for what turned out to be one book are combined unconditionally with
+max-position / OR-finished / max-timestamp, since both are real device positions and
+there is no staleness question to answer.
+
+**Why the finished tolerance is 2 seconds, not an epsilon.** A single book has three
+legitimate, mutually disagreeing durations, measured on the committed Odyssey fixture:
+m4b container `9975.480544`, m4b last-chapter-end `9975.428000`, and sum-of-mp3-tracks
+`9975.431111`. The ~52 ms spread is structural (m4b chapter marks are millisecond-
+quantized via `time_base 1/1000` while per-track durations are frame-accurate), so a
+client that plays to the end of the final *chapter* stops short of the *container*
+duration. With a tight epsilon a fully listened book never auto-marks finished and sits
+at 99% forever; `FinishedToleranceSec = 2.0` is comfortably above the worst inter-source
+skew and far below a meaningful amount of audio. A regression test drives a merge at the
+real last-chapter-end position and asserts finished becomes true.
+
+Also included, each with the silent-failure mode it prevents:
+
+- `NextServerTimestampMs` — AudioBooth compares `lastUpdate` with strict `>` *after*
+  truncating both sides via integer `/1000`, so two writes inside the same wall-clock
+  second compare equal and the client's cached value wins, silently discarding the
+  server's update. This returns a stamp guaranteed to beat that tie-break by a whole
+  second, without inflating a timestamp that is already ahead.
+- `AddListenedDelta` vs `SetListenedCumulative` — `/sync`'s `timeListened` (past tense)
+  is a **delta to add**, while `/session/local[-all]`'s `timeListening` (gerund) is a
+  **cumulative set**. Reading the wrong key records zero listening time from both
+  clients (a known reference implementation does exactly this). The delta form clamps
+  non-positive values instead of subtracting; the cumulative form is idempotent and
+  forward-only so a replayed session cannot rewind the total. Both discard NaN and
+  infinities rather than poisoning the stored total.
+- `ValidateFinishedDuration` — sending `isFinished: true` without a duration zeroes the
+  client's position, so `Progress.Duration` is a required non-pointer field and this
+  guard is checkable before the future DTO layer serializes a response body.
+
+- An opt-in diagnostic that logs which credentials each Audiobookshelf client actually
+  puts on the wire — set `ABS_AUTH_PROBE=1`. It records presence and length only, never
+  a credential value, and is off by default because these routes are polled every
+  15–20 seconds.
+
+  It exists to settle by observation a question no amount of reading a client's source
+  can answer: after a player app signs in through its embedded web view, does its
+  ordinary API client actually carry the resulting Cloudflare cookie, or does it use a
+  separate cookie store and silently drop it?
+
+- A temporary, opt-in diagnostic (`OIDC_DISCOVERY=1`) that records exactly what an
+  audiobook player app asks for when it tries to sign in with single sign-on. It is off
+  by default, creates no account and issues no login of any kind — it only writes to the
+  server log so the sign-in support can be built against what the app actually does
+  rather than a guess.
+
+- **Single sign-on for audiobook player apps.** Players that support OpenID sign-in can
+  now log in with the same identity used for the website — no password typed into the
+  app, and no separate account to manage.
+
+  Signing in opens the normal sign-in page, and the app receives a one-time code it
+  immediately trades for its session. The code expires after a minute, works exactly
+  once, and is cryptographically bound to the specific sign-in attempt that requested
+  it, so an intercepted link is useless on its own.
+
+  Username-and-password sign-in continues to work and is unchanged. It is deliberately
+  kept as a way back in if the sign-in provider is ever unavailable.
+
+  Note for anyone using this behind Cloudflare Access: the app also needs its own
+  credential to reach the server at all — see the service token setup in the docs.
+
+- A setup script for operators running Prometheus against this server. Now that the
+  metrics endpoint requires a credential, `scripts/setup-prometheus-auth.py` asks for an
+  API key and does the rest: checks the key actually works before changing anything,
+  installs it so only Prometheus can read it, adds the scrape configuration, and
+  confirms metrics start flowing again. Re-running it is safe.
+
+- **Audiobookshelf Phase 6 write half — progress mutations and bookmarks.** The read
+  half shipped earlier, so every client-side progress change 404'd: "reset progress"
+  and "remove from continue listening" appeared to do nothing. Adds
+  `GET`/`PATCH`/`DELETE /api/me/progress/:id`, `GET /api/me/progress`,
+  `PATCH /api/me/progress/batch/update`,
+  `POST /api/me/item/:id/remove-from-continue-listening`, and bookmarks CRUD
+  (`GET /api/me/bookmarks/:id`, `POST`/`PATCH /api/me/item/:id/bookmark`,
+  `DELETE /api/me/item/:id/bookmark/:time`) over the existing progress and bookmark
+  keyspaces. Writes merge through the §5 conflict policy (`progress.MergeExplicit`)
+  rather than last-write-wins.
+
+- **`hideFromContinueListening` is now persisted** (`UserBookState`), so removing a
+  book from Continue Listening survives a restart and is reported consistently by
+  `/api/me`, `/api/me/progress` and `/api/items/:id`.
+
+- **Cloudflare service-token cohort logging.** The owner mints several group-scoped
+  service tokens (friends, family, other, testing) so that revoking one only affects
+  that group. Each token's JWT carries a stable `common_name` (its Client ID) and no
+  email, so until now a service-token request left no trace of *which* token it was.
+
+  The ABS audit log now records `service_token=<common_name>` on:
+  - **failed** authentication attempts, where it is the only attribution that will
+    ever exist — an anonymous assertion never becomes a `user_id`; and
+  - a **token↔person pairing** record emitted the first time a given token is seen
+    carrying a given SSO identity, and again whenever that pairing **changes**.
+
+  The pairing is deliberately on the **same line** as `user_id`/`username`. Token↔person
+  is normally stable, so the `family` token suddenly carrying a friend's SSO identity
+  is a tripwire for either a compromised Google account or a leaked token — and that
+  anomaly is only visible when both values appear together. Emitting them separately
+  would destroy the signal.
+
+  Logged on first-seen and on change rather than per request: the ABS surface is polled
+  every 15–20 s per device, so an unconditional line would be journal noise (the same
+  reason `ABS_AUTH_PROBE` is opt-in). Steady state is one line per (token, person) per
+  process lifetime.
+
+  🔴 **`common_name` is never used to resolve a user.** It names a *credential* shared
+  by a group of people, not a person; identity continues to come from SSO alone. The
+  restriction is documented at every layer it passes through.
+
+  Implementation note: `oauth.ErrNonIdentityAssertion` is now returned as a typed
+  `*oauth.NonIdentityAssertionError` carrying the `common_name`. It still satisfies
+  `errors.Is(err, ErrNonIdentityAssertion)` — a regression test pins this, because the
+  fall-through branch that depends on it is what lets a Mode B request (service token
+  at the edge + our own bearer) authenticate at all.
+
+- **Four listening-statistics endpoints**, all 200 with shape-complete, **truthful**
+  bodies: `GET /api/me/listening-stats`, `/api/me/listening-sessions`,
+  `/api/me/stats/year/:year`, `/api/me/item/listening-sessions/:id`.
+
+  `listening-stats` reports a real `totalTime`, summed from the per-book listened
+  totals the playback sync maintains. The per-day breakdowns are emitted **empty
+  rather than fabricated** — attributing a book's whole total to its last-activity
+  date would put invented numbers on the user's stats screen — and the session
+  histories are empty because play sessions are in-memory by design, which makes an
+  empty history the correct answer rather than a stub.
+
+  A store failure reports zeros with a 200 rather than a 5xx: a 5xx trips the same
+  indicator these endpoints exist to keep green.
+
+  ⚠️ Covers are deliberately **not** changed: the client builds cover URLs directly
+  for Nuke/AsyncImage rather than through `NetworkService`, so the ~80% of books with
+  no cover art cannot trip the indicator. `GET /api/items/:id/cover` → 404 stays.
+
+- An `abk_` application API key is now accepted as an identity on the
+  Audiobookshelf-compatible surface, so one credential can exercise the whole
+  app instead of only `/api/v1`. Previously every ABS route answered `401
+  no-credential` for an API key, which made the ABS surface untestable without
+  first performing a password login.
+
+  This is not a privilege bypass: the key still goes through the same hash
+  lookup, revoked/inactive/expiry and owner-active checks, its scopes are
+  intersected with the owner's role permissions so every ABS route keeps its
+  normal authz, and the new step runs last so it cannot shadow the Cloudflare
+  Access or ABS-token paths.
+
+- `maintenance.dedupe-book-file-rows` — a dry-run-by-default op that removes
+  duplicate `book_file` rows, where one book holds more than one row for the
+  same `file_path`.
+
+  Because a book's total duration and file size are a plain sum over its rows,
+  duplication multiplies those totals by the duplication factor. Nine sampled
+  books were affected at roughly 1.92×, including one showing 675.9 hours from
+  66 rows covering 34 real files. This is distinct from the duration-unit
+  problem: the units are correct, the rows are not.
+
+  The op keeps the best-evidenced row — one carrying an AcoustID fingerprint
+  wins over one with only a duration, which wins over one with only a file hash
+  — and falls back to a stable id ordering so a dry run and the apply that
+  follows it always choose the same keeper. Book aggregates are recomputed after
+  each book's deletions. Pass `{"apply": true}` to delete; the default reports
+  only.
+
+- **`maintenance.purge-millisecond-durations`** — a one-shot backfill for rows written
+  before the guard existed. Closing the write path stops new corruption but rewrites
+  nothing, and production holds roughly 6,000 millisecond rows (measured: 1.9% of a
+  2,733-row sample).
+
+  The symptom is stark. A book reading **9,906 hours** is 34 rows of milliseconds;
+  9,906 h ÷ 1000 ≈ 9.9 h, an ordinary audiobook. Every row in it reads 48–53 kbps
+  interpreted as milliseconds versus ~0.1 kbps as seconds — only one interpretation
+  describes a real audio file.
+
+  Design mirrors `dedupe-book-file-rows`, which is now well proven:
+
+  - **Two passes.** Discovery reads the cheap memdb `Core` projection (which already
+    carries `Duration` and `FileSize`, all the predicate needs); the repair re-reads
+    each book Pebble-direct, because the memdb projection strips `AcoustIDFingerprint`
+    and this path writes the whole struct.
+  - **Re-tests every row against the full-fidelity copy** rather than trusting
+    discovery. The memdb snapshot can be stale — it was, twice today — and a row
+    already corrected must not be divided again.
+  - **Dry-run by default**, reporting old → new per row.
+  - **Parallel by book** via `registry.RunItems`, safe for the same disjoint-partition
+    reason: a `book_file` row belongs to exactly one book.
+  - Recomputes each book's aggregates only where rows actually changed, and notes that
+    corrected totals stay invisible until memdb refreshes.
+
+- **`maintenance.repair-junk-titles`** — recovers book titles that were replaced by
+  something that is demonstrably not a title. A library scan found **2,061 such books**:
+
+  | stored title | count | cause |
+  |---|---|---|
+  | `read by narrator` | 1,595 | importer kept the filename's trailing credit instead of the leading title |
+  | `big finish ident` | 170 | track 1's ID3 tag promoted to the book title |
+  | `opening credits` | 152 | same |
+  | `intro` | 144 | same |
+
+  These are **real, full-length books with the wrong name** — 30.71h, 9.62h, 27.32h —
+  not junk records. The existing `dedup-books` Phase 1 deliberately deletes only those
+  with no author, series, ISBN or description, so these survive it and must be
+  *retitled*, never deleted.
+
+  `maintenance.title-repair` does not reach them either: a dry run against production
+  would have fixed **7 books**, skipping 34,912 as single-file and 3,742 for
+  "no agreement" — its all-chapters-agree check cannot work when the tracks
+  legitimately disagree ("Track 01", "Track 02"…).
+
+  Two evidence sources, chosen by shape:
+
+  - **Multi-file → the folder.** The organizer named these correctly; only the title
+    field is wrong: `.../Big Finish Productions/Dark Gallifrey/Dark Gallifrey - The War Master Part 2`.
+  - **Single-file → the filename**, parsed for the
+    `<Title> - <Author> - read by <narrator>` convention. Their folder is poisoned by
+    the same bad title (`.../Nocturne/read by narrator/`) and is useless.
+
+  🔑 The author name is what makes the filename parse safe. Naively dropping the last
+  `" - "` segment after the credit corrupts any title that legitimately contains one —
+  `"Dark Gallifrey - The War Master Part 2 - read by narrator.mp3"` would become
+  *"Dark Gallifrey - The War Master"*. The author is stripped only when it actually
+  matches, so with no author known only the credit is removed.
+
+  The op **refuses rather than guesses**: no evidence means the book is left alone,
+  because a known-bad title is still detectable later while an invented one is not. It
+  never swaps one junk title for another, never writes a result under two characters,
+  and honours user overrides, fetched values and provider-applied metadata exactly as
+  `title-repair` does. Dry-run by default, reporting old → new and which evidence was
+  used. Parallel by book; only the ~2k junk-titled books pay the per-book reads.
+
+  15 tests on the derivation, including the two corruptions an earlier draft actually
+  produced: an unbounded parent-directory walk that returned `"lib"` for
+  `/lib/A/intro.mp3` and the author's name for `/lib/Author/Some Book/Some Book.m4b`.
+
+- **`maintenance.series-denumber`** — merges series whose *name* carries the book's
+  position. A series name should name the series; **2,251 of 15,200 carry a number
+  instead**, which splits one series into as many one-book series as it has volumes:
+
+  ```
+  "Discworld 05" … "Discworld 37"      → 37 separate series
+  "Safehold 01", "Safehold 02"
+  "Mistborn 3", "Mistborn 6"
+  "Schooled in Magic: Book 11"
+  ```
+
+  `maintenance.series-normalize` cannot see this. Probing
+  `metadata.StripSeriesContamination` with the real names returns **every one of them
+  unchanged, with `pos=""` and `flagged=false`** — so the merge machinery downstream
+  is never told they belong together. That is why the problem survived earlier passes.
+
+  🔑 **A bare trailing number is genuinely ambiguous** — "Discworld 5" is a position,
+  "Fahrenheit 451" is not — so it is only trusted when the library corroborates it:
+
+  - an **explicit keyword** (`Book 11`, `bk 6`, `Vol 3`) — the word is the evidence;
+  - **zero-padding** (`Discworld 05`) — nobody titles a work "Blake's 07";
+  - **another series shares the base**, per author (`Mistborn 3` + `Mistborn 6`).
+
+  A lone unpadded number is left alone. Wrongly merging a real name is a permanent
+  corruption; skipping one merely leaves it as it is.
+
+  Against production the planner proposes **1,156 merges into 398 base series, moving
+  1,819 books** — `Discworld` 37→1, `Wheel of Time` 21→1, `Ryanverse` 19→1.
+
+  The dry run is also what taught the junk filter its shape. An equality-only check
+  would have merged 76 series into a base ending `", Chapter"`, 39 into
+  `"- Chapter"`, 126 into a base left dangling on an en-dash, and 11 each into bases
+  of `"01".."04"` — every one manufacturing a series named after a tag artefact.
+  Bases are now rejected when they end in a tag keyword, contain no letters, or dangle
+  on a separator, which dropped the plan from 1,606 to 1,156 and left only real names.
+
+  The apply loop is **deliberately sequential**: two numbered series folding onto the
+  same base must not both decide the base is missing and create it, which would
+  replace one split series with two. An emptied series is deleted only when every one
+  of its books actually moved, and an existing `series_sequence` is never overwritten —
+  a deliberate value outranks one parsed from a name.
+
+  Dry-run by default. 12 tests on the planner, including the ones that caught the
+  bases above.
+
+- **`POST /api/v1/review/replay-approved`** — re-runs the apply handler for review
+  items already marked `approved`.
+
+  🔴 **Approved decisions were being silently discarded.** `approveOne` applies an
+  item only *inside* the approve request, and only when `review_apply_enabled` is on.
+  With the switch off it records `status="approved"` and returns a note — and nothing
+  ever read that state back. Before this endpoint, `ReviewStatusApproved` appeared in
+  exactly two places in the entire codebase: the constant, and the single line that
+  sets it.
+
+  So a human could work through hundreds of holds in review-only mode and lose every
+  decision:
+
+  - flipping `review_apply_enabled` later does **not** revisit them, because apply
+    only ever happens inside approve; and
+  - the regroup scan reports them as `already-decided` and **skips** the folder, so
+    they are never even re-offered.
+
+  With ~928 holds currently queued, that is a large amount of human judgement with
+  nowhere to land. This makes the queue safe to work through *before* apply is
+  enabled.
+
+  Dry-run by default, reporting what would replay and which items have no handler
+  (779 of the current queue are `regroup.ambiguous`, which has none by design).
+
+  **Refuses to execute while the global switch is off**, with a 409, rather than
+  quietly doing nothing — silently re-marking items without doing the work is the
+  exact failure this exists to fix.
+
+  A failing apply leaves the item `approved` so a later replay retries it; marking it
+  applied after a failure would strand the work just as before.
+
+  5 tests, including the full round-trip — approve with apply off, flip the switch,
+  replay, and assert the handler actually ran and the status became `applied`.
+
+- **`internal/linkintegrity` — shared report vocabulary for the "First Aid"
+  library validate + repair pass.** Pure types and pure functions (no I/O):
+  `Shape` (a book's `FilePath` resolving to a file, a directory, or nothing),
+  `Disposition` (what to do about it), `Finding`, and a `Report` whose
+  `Reconciles()` check guards the silent-filtering bug class that the existing
+  maintenance ops' `RECONCILE` log lines were added to catch.
+
+  Groundwork for sequencing four previously-disconnected maintenance ops plus a
+  gap none of them covered. A whole-library survey on 2026-08-05 found **17,149
+  of 44,886 books (38.2%) have zero `book_file` rows** — of those paths, 16,027
+  resolve to a real file, 1,029 to a directory, and only 93 are genuinely
+  missing. They are *unlinked*, not orphaned, so the remedy is to relink rather
+  than delete. `maintenance.reconcile-scan` cannot see them: it flags a book only
+  when `os.Stat` on its path *fails*, and these all stat fine.
+
+  This also fixes an ordering bug rather than a packaging one.
+  `maintenance.regroup-shattered-ai` derives `DurationSec` by summing a book's
+  `book_file` rows, and its `membersAreBookLength` series-guard — the check that
+  stops distinct novels being merged into one book — cannot fire when that sum is
+  zero. With 97.5% of the review queue made of zero-file books, the guard was
+  inert and the queue was built on blank evidence. Relink must run before
+  regroup, and the package documents that constraint.
+
+  `Disposition` deliberately has no `delete` value: deleting a redundant book row
+  is not idempotent, because rescan regenerates a book for any file that no
+  `book_file` row claims, so deleted rows return on the next scan. Duplicates are
+  resolved by re-association instead.
+
+- **Planning: six owner-requested workstreams captured as `todo.d/` fragments.**
+  Documentation only — no code or runtime change. Covers chapter delivery to
+  clients, chapter backfill from duplicate copies, full playlist support,
+  reading/review status sync, and two uses of Deluge as an external identity
+  source. Each fragment records the constraint that makes it non-trivial rather
+  than just the ask: chapter backfill must be gated on a near-exact acoustic
+  match (offsets borrowed from a different edition read as correct and silently
+  mis-seek), and Deluge torrent membership is an upper bound on one book rather
+  than proof of one book, so it carries the same over-merge risk as the folder
+  heuristic.
+
+- **Design specs + implementation plans for 3 of 11 open workstreams** (~25,600
+  words). Documentation only. Covers review-queue recommendations + per-hold
+  overrides (owner items 1 and 2), duplicate detection with combine-by-template
+  and version-grouping (the "assembled copy already exists" class), and full
+  playlist support.
+
+  ⚠️ **Marked UNVERIFIED in-document.** These were authored by agents but the
+  adversarial verification pass — which grep-checks that every cited function,
+  struct field, op ID and path actually exists — did not run; the workflow was
+  halted by API rate limiting (429/529) partway through. Each file carries a
+  banner saying so. The design reasoning and the measured production numbers are
+  sound; the code citations are what needs checking before execution.
+
+  The remaining 8 workstreams (multidisc canary, series-as-book-numbers,
+  metadata-results cold start, First Aid orchestrator, version-group acoustic
+  audit, chapters serve + backfill, reading/review status sync, Deluge
+  integration) still have their `todo.d/` fragments and are unaffected.
+
+- **Specs + plans for 2 more workstreams** (multidisc apply canary, metadata-results
+  cold start), marked UNVERIFIED in-document — the symbol-check pass did not run.
+
+- **Recorded a production bug:** `GetBooksByVersionGroup` silently under-reports
+  version-group membership when its index is partially populated, because the
+  full-scan fallback only triggers on a ZERO-result index rather than on a
+  suspected-incomplete one. This breaks the one-primary-per-group invariant:
+  `set-primary` demotes only what the lookup returns, so a group can end up with
+  two primaries and show two tiles for one book. The same function backs
+  `ApplyVersionGroup`'s stray-primary demotion, so approving a version-group
+  review hold is affected too. Found while version-grouping the two copies of
+  "The Successors" on production.
+
+- **Design + implementation plan for series names that carry a book position in
+  an embedded (non-trailing) shape** — owner item 4. Documentation only.
+
+  Whole-population measurement on production: of 12,201 distinct series names
+  covering 32,119 books, **982 books across 769 names** carry a position the
+  current parser cannot see, in four shapes — `<Series> N: <Title>` (343 books),
+  `<Series> (N)`/`[N]` (307), `N - <Title>` (271), and
+  `<Series> Book N: <Title>` (61).
+
+  The spec records why this is riskier than the trailing case already handled:
+  a leading or embedded number is frequently part of the real title.
+  `86—EIGHTY-SIX` (17 books) and `5-Minute Sherlock` are genuine series names,
+  while `08. Battle for the Abyss` and `11. Fallen Angels` are genuine positions
+  — identical shape, opposite meaning. `The Demon Wars Saga [07] Immortalis [02]`
+  carries two candidate numbers and a naive last-match takes the wrong one.
+
+  Design answer is confidence tiers rather than one regex: keyword-introduced
+  positions auto-apply, single-bracket positions auto-apply, bare leading numbers
+  emit a review hold, and multi-number names are refused outright. The
+  `IsJunkSeriesBase` guard — which stopped 285 bad merges in the earlier dry run
+  — is extended in the same commit as the parser, never after.
+
+- **`maintenance.series-denumber` now reads positions embedded in a series name, not just trailing
+  ones.** A series name should name the series, but many carry the book's position instead, which
+  splits one series into as many one-book series as it has volumes. The op previously handled only
+  trailing positions (`Discworld 05`); it now also reads keyword-embedded
+  (`Evil Genius: Book 4: Becoming the Apex Supervillain`), bracketed (`Dragon Born [04]`),
+  mid-colon (`Station 64: The Doll Dungeon`) and leading-bare (`08. Battle for the Abyss`) shapes.
+  A whole-library census found 769 distinct names in these shapes.
+
+  Each shape carries a **confidence**, because the same string shape means opposite things in real
+  data: `86—EIGHTY-SIX` is a genuine series title covering 17 books, while `08. Battle for the
+  Abyss` is a genuine Horus Heresy position. Only a keyword-vouched position applies unattended; a
+  bracketed one requires `{"applyMedium": true}`; a bare number is **only ever reported** and cannot
+  be applied at any setting. Names offering two candidate positions
+  (`The Demon Wars Saga [07] Immortalis [02]`) are refused rather than guessed at.
+
+- **`reportPath` parameter on `maintenance.series-denumber`.** Writes every candidate — including
+  the tiers that will never be applied — as TSV before any row is touched. A merge creates and
+  deletes series rows, so there is no transaction to abort; replaying this file is the only rollback.
+  Applying without it now logs a warning.
+
+- **Per-file intro transcription storage.** The spoken
+  "<Title> by <Author>, read by <Narrator>" opening is now recorded per
+  `BookFile`, not only per `Book`. Eight fields were added to `BookFile`
+  (`IntroTranscription`, `TranscribedTitle/Author/Narrator`,
+  `IntroTranscribedAt`, `TranscribeStatus`, `TranscribeError`,
+  `TranscribeAttemptedAt`), mirroring the existing `Book` fields exactly, and
+  surfaced through `GET /audiobooks/:id/files` and the frontend `BookFile` type.
+
+  Storing this per book captured exactly ONE file's opening, so a folder of 12
+  files that are one book was indistinguishable from 12 files that are 12
+  separate books. Per file the sequence is decisive: real library rows read
+  "This is a reading of Overlord, Book 7. This part includes the prologue and
+  Chapter 1" / "...includes Chapter 2" / "...Volume 7, Chapter 3", which proves
+  continuation rather than a new book start.
+
+  `Book.IntroTranscription` is unchanged and still populated, so existing
+  consumers (notably `maintenance.auto-match-transcribed`) keep working.
+
+  Only the raw transcript is stripped from the in-memory projection. At
+  ~0.5-1.5 KB across ~317K files it would add ~160-475 MB to a memdb that
+  stripping already takes from ~10 GB to ~2 GB; the other seven fields are small,
+  are what queries actually filter on, and are retained. Stripping one field
+  instead of eight also narrows the write-back preserve-guard to a single field.
+
+- `Store.DeleteBookFilesByIDs(ids []string) error` — deletes many `book_file` rows in
+  **one** Pebble batch with one `Sync` commit, **one** go-memdb write transaction, and
+  **one** aggregate recompute per affected book, however many rows are being removed.
+
+  **This closes out the question the previous `DeleteBookFile` change left open.** That
+  entry noted the per-delete cost was dominated by "fixed overhead (the `Sync` commit
+  and the change notification)" and that the real cost of
+  `maintenance.dedupe-book-file-rows` was "still unattributed". It is now attributed,
+  and it was the change notification. The op cost **~1.35 s per deleted row** of fixed
+  overhead, with only ~7 ms of it scaling with the book's remaining file count. Per-row
+  deltas stayed flat — 1.85 / 1.94 / 1.42 / 1.66 / 1.54 s — while the book's
+  `total_files` fell from 65 to 34, which is what rules out an O(R²) walk and pins the
+  cost on per-**book** work being run once per **row**. Across the 2,901 redundant rows
+  on production that is roughly 1.3 hours of almost pure waste.
+
+  Per deleted row, `DeleteBookFile`'s `notifyBookFileChange` →
+  `RecomputeBookAggregates` → `UpdateBook` chain paid two `pebble.Sync` commits, one
+  full copy-on-write `book_ver:<id>:<nanos>` snapshot that re-marshals the *entire* old
+  `Book` just to record a changed duration, two go-memdb write transactions (each
+  queueing on memdb's single global writer mutex), and two reads of the book's file set
+  that both unmarshal `AcoustIDFingerprint` blobs neither one wants. None of that is
+  per-row work in principle. The new method hoists all of it out of the loop, following
+  the shape of the existing `DeleteBookFilesForBook`; the only real difference is that
+  the row set arrives as IDs, so the grouping by owning book has to be derived rather
+  than assumed.
+
+  **It is fail-closed.** Resolution happens in a first pass that mutates nothing, and if
+  *any* ID fails to resolve, nothing is deleted and the error names the offenders. This
+  deliberately diverges from `DeleteBookFile`, which treats an unresolvable ID as
+  "already gone" and returns `nil` — defensible for a single row, because nothing else
+  rides along and the caller's intent is fully satisfied by doing nothing, but not
+  defensible for a batch. An ID that does not resolve means the caller's view of the
+  store disagrees with the store, and a disagreement discovered partway through a
+  destructive operation is the worst possible moment to press on with the other N−1
+  rows. That is this repo's dominant incident shape: write-backs that proceeded on a
+  stale view and silently erased fields.
+
+  **How cheap fail-closed is depends on where the caller got its IDs, and that is not
+  uniform.** `dedupe-book-file-rows` re-reads its rows from Pebble (`GetBookFiles`) every
+  run, so a stale ID is simply absent next time — genuinely self-healing, at most one
+  batch slips by one run. `orphan-book-files-cleanup` does **not** have that property:
+  its list comes from `GetAllBookFilesCore`, which is served from memdb whenever
+  `UseMemDB` is on. memdb is a derived cache that can hold a row Pebble no longer has,
+  so a phantom row yields an ID that can never resolve, and plain fail-closed would abort
+  the same 500-row chunk on every nightly run until the process restarts and memdb
+  rebuilds — strictly worse than the per-row loop it replaced, which skipped the phantom
+  and deleted the other 499. That caller therefore keeps an explicit degraded path (see
+  below). The rule for new callers: fail-closed is the right default for a batch, but if
+  your IDs come from a cache rather than from Pebble, you need a fallback.
+
+  Both of `DeleteBookFile`'s lookup paths are preserved (the `book_file_id` index first,
+  then the legacy full scan). The scan fallback matters *more* under fail-closed than it
+  did per-row: dropping it would turn pre-index rows that are merely slow to delete
+  today into rows that abort an entire batch.
+
+  `DeleteBookFile` itself is unchanged — other callers still rely on its per-row notify,
+  and a test asserts that its behaviour did not shift.
+
+- **A researched upgrade report for every frontend dependency**, at
+  `docs/2026-08-06-frontend-dependency-upgrade-report.md`. Covers React, MUI,
+  react-router, zustand, jsdom, TypeScript, Vite, ESLint and Testing Library —
+  every version between what is installed and current latest, with the breaking
+  changes per major, the codemods that exist, measured hit-counts against this
+  codebase, and the dependency-ordered sequence to do it in.
+
+  Two upgrades are blocked and the report says why, so nobody re-derives it:
+  **TypeScript 7** cannot be installed (`typescript-eslint` peers `<6.1.0`; TS 7
+  exposes no stable compiler API until 7.1), and **Vite 8** already crashed every
+  page of this app in June 2026 and the fixing version was never confirmed.
+
+  Where a claim mattered, the published tarball was unpacked and the shipped
+  `.d.ts` read rather than trusting the migration guide. That caught a wrong
+  claim in circulation: MUI's `InputProps`/`InputLabelProps` are removed at **v9**,
+  not v7, which is worth ~78 edit sites landing in the right PR.
+
+- **Two TODO fragments recording the per-file intro-transcription initiative** —
+  the follow-on work after the storage move and disc-aware sort fix landed.
+
+  The first captures the design and every measurement behind it: why per-book
+  storage made "12 files that are one book" indistinguishable from "12 files that
+  are 12 books", the confirmed parser false positives, the four-tier backfill that
+  turns ~284,000 files of GPU work into roughly 43,000 decision-critical ones, and
+  the ordering constraint that relinking must precede transcription (195 of 204
+  "untranscribed" review-queue members turned out to have no file at all).
+
+  The second records U1 (`unimatrixone`) as a prepared but unbuilt second Whisper
+  worker — 48 cores, 251 GB, **CPU-only**, Tdarr idle with an empty queue, uv and
+  pip installed. It states plainly that CPU int8 is not a second GPU and must be
+  benchmarked rather than assumed, and points it at the deadline-free tier where
+  "slower" costs nothing.
+
+- **Three-outcome intro classifier** (`internal/transcribe/classify.go`).
+  `ClassifyIntro` replaces the old credits-or-nothing parse with an explicit
+  verdict — `credits` (a book-opening announcement, direct identity evidence),
+  `chapter` (a structural marker, so the file is a continuation), `prose` (no
+  announcement), or `unknown` (nothing interpretable). It reports a typed
+  `IntroReason`, a confidence, and any announced chapter number, and takes an
+  `IntroPosition` so a file's place in its book can shade the verdict.
+- **Misfiled-book detection.** `IsLikelyMisfiled` separates "the parser was
+  wrong" from "the parser was right and the FILE is in the wrong folder" — the
+  case where a clip inside a *Girls with Rebel Souls* folder correctly announces
+  *Meet Me in Paradise by Libby Hubscher*. The two need opposite fixes and were
+  previously indistinguishable.
+- **Golden corpus regression suite.** 188 real production transcripts
+  (`internal/transcribe/testdata/intro_corpus.jsonl`), stratified by shape, plus
+  invariant tests, a distribution canary, and a fuzz target.
+
+- **`maintenance.repair-transcribe-status`** repairs rows whose stored error is a
+  **transport** failure rather than a transcription failure: it recomputes the
+  status from the stored text (credits → `ok`, else `unparsed`), or clears it back
+  to never-attempted where there is no text. It never calls Whisper and never
+  touches transcript text. Genuine failures (a model OOM, an ffmpeg codec error)
+  and the `[SILENCE]` sentinel are deliberately left alone, and an *unrecognised*
+  error is treated as genuine — wrongly clearing a real failure hides a broken
+  file, while wrongly keeping one only costs a re-run. Defaults to `dry_run=true`.
+
+  🔴 The principle it encodes: **an unreachable endpoint is "no attempt made",
+  not "the attempt failed."** Recording it per-file blames the file for the
+  network's problem. Same rule the intro classifier applies one layer up, where
+  an absent transcript yields `unknown` rather than `prose`.
+
+- **`maintenance.intro-migrate-single-file` — tier 0 of the per-file intro
+  backfill.** Copies the book-level intro transcript onto the book's one
+  `BookFile` row for the **33,780 single-file books (75.3% of the library)** at
+  **zero GPU cost**. Storage landed in #2168 and the classifier in #2170, but no
+  op wrote per-file transcripts until now.
+
+  A full-library sweep on 2026-08-07 (all 44,875 books) sized the tiers exactly:
+
+  | shape | books | % | files |
+  |---|---|---|---|
+  | 0 `book_file` rows | 1,122 | 2.5% | 0 |
+  | 1 file — **this tier** | 33,780 | 75.3% | 33,780 |
+  | 2–5 files | 2,884 | 6.4% | 7,829 |
+  | 6–20 files | 2,775 | 6.2% | 34,601 |
+  | 21+ files | 4,314 | 9.6% | 228,681 |
+  | **total** | **44,875** | | **304,891** |
+
+  **9.6% of books hold 75% of all files**, so tiering is what makes the backfill
+  affordable rather than a nice-to-have: ~12–14 GPU-days naive versus ~1.4 days
+  once this tier is free and the rest probe three files each.
+
+  🔴 **Multi-file books are refused on provenance grounds, not skipped for
+  convenience.** The book-level transcript does not record which file produced
+  it, and the silence path retries against the *second* audio file — so copying
+  onto file 1 would assert evidence the data cannot support. For a single-file
+  book the ambiguity provably cannot arise (`nthAudioFile` returns `""` once
+  `n >= len(audio)`, and the retry skips on an empty source). Books with zero
+  `book_file` rows are reported as skipped, never counted as migrated: they are
+  unlinked, not un-transcribed.
+
+  The write guard: all mutation is isolated in one function whose permitted field
+  set is declared as data, and a reflective test fills every `BookFile` field with
+  a distinguishable value and fails if *any* field outside that set changes —
+  verified to bite by injecting a rogue write. A companion test fails when a new
+  transcription-shaped field is added to `BookFile` without deciding whether tier
+  0 carries it, so schema growth cannot silently leave columns empty on 33,780
+  migrated rows. Pages partition books into disjoint sets so no two workers touch
+  the same row. `dry_run` defaults to true.
+
+- **`transcribed_translator` and `transcribed_cover_artist`** on both books and
+  book files, with anchors that find each role wherever it appears in the credit
+  run, so credit order does not affect the parse.
+- **Combined "written and narrated by X" credits** are now recognised, which also
+  recovers the narrator instead of leaving it empty.
+
+- Declared write-sets + scheduler conflict gate for operations. `OperationDef`
+  gains `Writes []Resource` / `Reads []Resource` (table-level: books,
+  book_files, authors, series, review_items, embeddings, operations), and the
+  dispatcher's new Gate 3b refuses to START an op whose declared `Writes`
+  overlap those of any currently running op — the op stays queued and
+  dispatches when the conflict clears, with one deduplicated log line per
+  deferral. Table-level granularity is deliberate: prod writes are whole-row
+  read-modify-write (`UpdateBook` carries every field), so field-disjoint ops
+  still lose fields when interleaved. Empty `Writes` = undeclared = gate
+  skipped, so rollout is incremental. First adopters (today's incident pair
+  plus siblings): `acoustid.backfill` (books, book_files),
+  `maintenance.repair-transcribe-status` (books),
+  `maintenance.intro-migrate-single-file` (book_files),
+  `maintenance.transcribe-book-intros` (books).
+
+- Multi-endpoint Whisper dispatch pool (`internal/transcribe/dispatcher.go`):
+  jobs are allocated across remote faster-whisper servers in priority order
+  (lower `priority` = preferred, e.g. GPU box 1, CPU box 100), each endpoint up
+  to its `concurrency` share, with spill to lower-priority endpoints. A failing
+  endpoint enters a time-based cooldown and its jobs are re-queued to surviving
+  endpoints; a `*TransportError` naming every endpoint is returned only when
+  the whole pool is exhausted, so an outage still writes no per-file verdicts.
+  Configured via env-authoritative `WHISPER_ENDPOINTS` (JSON array, e.g.
+  `[{"url":"http://whisper-1.local:8000","concurrency":2,"priority":1,"kind":"gpu"}]`);
+  empty falls back to `WHISPER_REMOTE_URL` as a one-element pool (unchanged
+  behaviour), else the local path.
+
+#### `sync_file` keyspace for durable per-file ABS `ino` (ABS-SYNC-ID-2)
+
+Added `internal/database/pebble_store_syncfile.go`: a `sync_file:` Pebble keyspace
+giving every `BookFile` a durable identity for the ABS-compatible file-addressing
+scheme, `contentUrl: /api/items/{itemId}/file/{ino}`. The captured ABS conformance
+fixtures show `ino` is an opaque string (ABS's filesystem inode) that offline clients
+cache in downloaded-file URLs. This app's core job is moving and reorganizing files,
+so deriving `ino` from a path or inode would break every already-downloaded book after
+a reorganization.
+
+`BookFile.ID` is already a stable ULID that survives in-place moves/retags
+(`UpdateBookFile` never regenerates it), but a **replacement** (old row deleted, new
+row created with a new `BookFile.ID` -- e.g. a remux or quality upgrade) has no
+existing seam to keep a cached client URL resolving. `MintOrGetSyncFileID(bookID,
+fileID)` mints a `syncFileID` (via the existing `newULID()` helper -- `ino` has no
+length constraint, unlike TASK-01's `libraryItemId`) keyed to the `(bookID, fileID)`
+pair (mirroring `BookFile`'s own `book_file:<bookID>:<fileID>` primary key), with a
+`sync_file:lookup:<bookID>:<fileID>` reverse index for O(1) resolution and an
+enumerable `sync_file:book:<bookID>:<syncFileID>` index so a caller can list every
+`sync_file` entry for a book without knowing IDs up front. `RepointSyncFile(bookID,
+oldFileID, newFileID)` moves the lookup index for a future file-replacement path (no
+caller yet -- this is additive-only groundwork, same as TASK-01's `sync_item`
+keyspace). A package-level `syncFileMintMu` mutex (separate from TASK-01's
+`syncIDMintMu`) guards the check-then-mint race.
+
+New capability interface `SyncFileStore` / `AsSyncFileStore(s any)` follows the
+existing type-assertion pattern for adding a capability without touching the `Store`
+interface in `store.go`. Nothing reads or writes `sync_file:*` keys yet outside this
+task's own tests.
+
+#### `sync_item` keyspace — durable identity for the upcoming ABS sync API (ABS-SYNC-ID-1)
+
+Added a new Pebble keyspace, `sync_item:<syncID>` plus reverse index
+`sync_item:book:<bookID>`, that will back the `libraryItemId` every
+Audiobookshelf-compatible client (Absorb, AudioBooth, etc.) stores progress and
+bookmarks against.
+
+- **Why a separate identity from the Book ULID:** this app's core loop is moving,
+  retagging, and merging books. If the client-visible id were the raw ULID, every
+  dedup merge and every untagged move (which mints a new ULID via version-linking)
+  would silently orphan a device's saved place.
+- **Why a 36-char UUID, not our 26-char ULID:** Absorb (source-audited) splits
+  compound podcast keys by fixed byte offset — `substring(0, 36)` / `substring(37)` —
+  at multiple call sites. A 26-char ULID breaks episode splitting; anything longer
+  than 36 chars is mis-truncated into the wrong `/api/me/progress/...` path. The
+  minted id is a canonical, hyphenated, lowercase UUIDv4, minted by hand via
+  `crypto/rand` (16 lines of stdlib) rather than adding `google/uuid` as a direct
+  dependency.
+- New store methods on `*PebbleStore` (`internal/database/pebble_store_syncid.go`):
+  `MintOrGetSyncID`, `GetSyncIDForBook`, `ResolveSyncItem` (follows merge-redirect
+  chains, capped at 10 hops with cycle detection), `RepointSyncItem` (untagged-move
+  support), and `RecordSyncMerge` (idempotent merge-loser → merge-winner redirect,
+  used by a later merge-hook task). Exposed via a `SyncIdentityStore` capability
+  interface + `AsSyncIdentityStore` type-assertion helper, following this repo's
+  established "don't touch `store.go`" pattern.
+- This PR is additive-only: nothing reads or writes these keys yet. No existing
+  behavior changes. The scanner's merge/move paths, and the ABS HTTP handlers
+  themselves, are wired up by follow-up tasks.
+
+#### iTunes cleanup provenance census — P3 exit-gate (read-only)
+
+`internal/itunes/pid_integrity.go` adds `ComputeMergeOrphanCensus`, and
+`cmd/pid-census` a `--merge-provenance` mode. It buckets every track in the AO
+writeback `.itl` by its current live owner (healthy / stale-owner / no-live-owner) and
+intersects the stale-owner tracks with the merge-loser provenance set (the
+`AutoMergeJournalEntry` journal reconciled with `MergedIntoBookID`), producing the
+measure-first exit-gate the 2-way-sync design (§6.5) makes P3 conditional on. Bounded
+worker pool for the per-owner book resolution. Read-only; a copy-of-prod tool.
+
+Measured on prod (97,999 tracks): **provable merge orphans = 1, SHA-gated removable = 0**
+→ **P3 is measure-and-stop** (retire the unsafe `cleanup_merged.go` handler as a guarded
+no-op; build no removal machinery). The census also disproved the design's premise that
+the auto-merge journal is the authoritative loser record — it is empty on prod, and the
+production merge path records losers in neither durable source — which is exactly why the
+count is a floor and bulk removal is un-buildable without new provenance recording. See
+`docs/specs/2026-07-23-itunes-2way-p0-findings.md` §F4.
+
+#### iTunes 4-state library config model (`LibrarySet`) — scaffold, inert by default
+
+`internal/config/itunes_libraries.go` adds the explicit 4-state iTunes library model
+(`LibraryRef`/`LibrarySet`: Original/AO × .itl/.xml, plus separated `PointedAt` and
+`ImportSource` mode facts) from the 2-way-sync system design. `ITunesConfig.Resolve()`
+derives the legacy `LibraryReadPath`/`LibraryWritePath` shims from it, and
+`ValidateLibraries()` adds four fail-closed config-load assertions (Original tree must be
+covered by `protected_paths`; the AO write target must never resolve under `books/itunes/**`;
+the Original must be frozen once `pointed_at=="ao"`; no zero-value write target while sync is
+enabled). Entirely inert until `itunes.libraries` is populated — existing deployments behave
+byte-for-byte as before. P0 of the phased plan (design + measurement only; nothing applied).
+
+#### iTunes cross-type PID-collision census — relocate disjointness backstop (read-only)
+
+`internal/itunes/cross_type.go` adds `ComputeCrossTypeCollisions`, and `cmd/pid-census` a
+`--cross-type` mode. It classifies every track in the AO writeback `.itl`
+(`isAudiobookITL`) and cross-tabs it against AO book_file ownership, surfacing the
+load-bearing invariant for the relocate op: an AO book_file PID must resolve to an
+audiobook track, never a music/podcast one. Bounded worker pool for owner resolution.
+
+Measured on prod (97,999 tracks): the disjointness invariant **holds** — 0 real cross-type
+collisions. The 3,436 tracks flagged are audiobooks that `isAudiobookITL` under-classifies
+(genre histogram 100% book-shaped, zero music genres); AO's DB stores only audiobooks, so no
+music/podcast track is AO-owned and a relocate can never make a cross-type write. Secondary:
+`isAudiobookITL` misses `Audio Book`/`audio book` (space) and literary-genre audiobooks —
+fail-safe for `GuardRebuildTarget` but not usable as a targeting filter. See
+`docs/specs/2026-07-23-itunes-2way-p0-findings.md` §F5.
+
+#### iTunes relocate/remove field-preservation byte-proof (env-gated test)
+
+`internal/itunes/itl_preserve_proof_test.go` adds `TestITLPreservationByteProof`, a per-track
+raw-byte comparison of the decompressed ITL payload before vs after a real relocate + remove
+(`UpdateMetadataLE` + `RemoveTracksByPIDLE`). Because it compares raw bytes it catches any
+change to any atom the parser ignores — including the audiobook resume bookmark, which the
+binary parser does not parse. Env-gated (`ITL_PRESERVE_PROOF_PATH`); skips in CI.
+
+Proven on the real 97,999-track library across both layers that transform bytes: the
+**mutation** layer (`UpdateMetadataLE`/`RemoveTracksByPIDLE`) and the **encode** layer
+(`WriteITLBytes` → header regeneration + recompress + re-encrypt). A relocate of 300 tracks
+changed **only** the location pair; the full mith header (bookmark position, play count,
+rating, dates) and every other atom byte-identical; 97,669–97,699 untouched tracks
+byte-identical. The bookmark/field-preservation claim (design §INV-F2) is now proven, not
+assumed.
+
+The proof also surfaced a **P2 blocker (F7)**: the `location-form` safety guard rejects the
+entire live AO library (82,976 tracks) because its media legitimately lives under
+`.itunes-writeback/iTunes Media/` (iTunes is pointed at the AO library there) and the guard
+treats any `.itunes-writeback/` substring as a staging-dir leak. The relocate op cannot write
+the library until this is reconciled (scope the staging-marker check to the write target). See
+`docs/specs/2026-07-23-itunes-2way-p0-findings.md` §F6–F7.
+
+#### iTunes 2-way-sync P1 — delta-aware library-identity refresh (primitive, not yet wired)
+
+`internal/itunes/itl_identity_refresh.go` adds the steady-state counterpart to
+`AdoptLibraryIdentity`:
+
+- **`RefreshLibraryIdentity(itlPath, opts)`** re-derives the `.identity.json` sidecar (K13
+  PID sample + K14 track/playlist counts) from the current library while **pinning the
+  LibraryPID**. A changed PID (reseed/baseline swap) or a track-count swing beyond a drift
+  ceiling (`RefreshOptions.MaxDriftPct`, default 25%) errors out rather than silently
+  re-blessing — that is `AdoptLibraryIdentity`'s job. This lets K13/K14 track legitimate
+  iTunes churn each sync cycle without false-rejecting a valid relocate (findings §F1).
+- **`PartitionedTrackCount(itlPath)`** splits the live library into audiobook vs
+  non-audiobook tracks so the P2 sync cycle can arm K14 as
+  `plan.AudiobookCount + liveNonAudiobookCount` (AO owns the audiobook count; iTunes owns the
+  rest). Approximate per F5's `isAudiobookITL` caveat — a magnitude anchor, never a targeting
+  filter.
+
+Purely additive and fully unit-tested (pinned-PID, PID-changed → error, drift ceiling,
+missing sidecar, partition completeness). Nothing calls it yet; the P2 sync cycle wires it in
+a later PR. Independent of the F7 location-form blocker.
+
+#### iTunes 2-way-sync P2 — relocate-only sync cycle (dry-run; the MVP write path)
+
+`internal/itunes/relocate_sync_cycle.go` adds `RunRelocateSyncCycle`, composing the
+P0–P1 primitives into the MVP sync cycle: **plan** (`ComputeRelocateOps` — location-only,
+0 adds/0 removes) → **guard** (`SafeWriteITL` contract armed for the AO library: F7
+`AllowedWritebackRoot`, K13 identity, K14 magnitude via `PartitionedTrackCount`, and a
+pre-rename SHA re-verify) → **verify** in memory (`VerifyRelocateWrite` raw-byte oracle,
+NO write) → **commit** (gated behind `Apply`, with post-commit re-verify and auto-rollback
+from the `.bak`). A `cmd/pid-census --sync-dry-run` mode runs it read-only.
+
+**Dry-run proven on the real library:** `planned=1, already_correct=77,210, unmatched=0,
+unmappable=0, ORACLE_OK=true`. Two things this confirms: the relocate plan **preserves** the
+AO library's `.itunes-writeback/iTunes Media/` paths (77,210/77,211 tracks already correct —
+it does not strip the media root and break links), and the F7 guard scope lets the write
+through (the in-memory contract pass was not rejected by `location-form`). The library is
+essentially already in sync (1 drifted track).
+
+**Dry-run by default; `Apply=true` is a gated production decision** — writing the live iTunes
+library needs explicit owner authorization + the dry-run review (the oracle proves "only the
+planned tracks changed," not that the new location is semantically correct — that is what the
+dry-run is for). Unit-tested helpers; env-gated real-library dry-run via the cmd.
+
+#### iTunes 2-way sync Phase 2 design: bidirectional metadata sync (docs)
+
+`docs/specs/2026-07-25-itunes-2way-sync-phase2-metadata-design.md` — the design for
+expanding the sync cycle from location-only to all AO-owned audiobook metadata
+(title/author/series-as-album/genre/narrator), plus a bidirectional iTunes→AO read-back
+watcher so AO stays authoritative without destroying iTunes-side edits. Owner decisions
+resolved: Album=Book.Title, Name=BookFile.Title→Book.Title, play-state (bookmark / play
+count / rating / dates) never written, 10-minute settle window, persistent background
+watcher, and a mandatory SHA-attribution safeguard so the watcher never mistakes AO's own
+writes for iTunes edits. Design-only; no code path built yet.
+
+#### iTunes 2-way-sync — relocate acceptance oracle (auto-rollback trigger, not yet wired)
+
+`internal/itunes/relocate_oracle.go` adds `VerifyRelocateWrite(before, after,
+relocatedPIDs)`, the post-write acceptance oracle the P2 decoupled write cycle uses to
+gate an atomic rename / trigger auto-rollback. It compares the decompressed ITL payload
+before vs after at the per-track **raw-byte** level and confirms the write did exactly
+what was planned: every relocated PID changed only its location pair (0x0D/0x0B), every
+other track is byte-identical, and no track was added or removed. Raw-byte comparison
+catches any unintended change — including atoms the LE parser does not decode (resume
+bookmark, artwork, sort keys) — which a parsed-field diff cannot see.
+
+Proven on the real 97,999-track library (env-gated test): a genuine 300-track relocate
+verifies clean (300 relocated, 97,699 untouched byte-identical) and a single tampered
+byte in an untouched track is caught. Purely additive and fully unit-tested (happy
+relocate, undeclared change, non-location mutation, track removal, idempotence). Nothing
+calls it yet; the P2 sync cycle wires it in a later PR. Independent of the F7 blocker.
+
+#### iTunes 2-way-sync: `pid-census --sync-apply` (the P2 relocate COMMIT path)
+
+`cmd/pid-census` gains `--sync-apply`, the committing counterpart to `--sync-dry-run`. It
+runs `RunRelocateSyncCycle` with `Apply=true`, so the relocate-only sync cycle enforces the
+quiescence gate, arms the `SafeWriteITL` contract (identity + magnitude + F7 scope +
+pre-rename SHA re-verify), takes a `.bak`, runs the pre-commit oracle, writes only on a clean
+verdict, then re-verifies post-commit and **auto-rolls-back from the `.bak`** on any
+violation. The `--itl` path is the LIVE write target; `--db` is a copy of the Pebble DB.
+
+`SyncCycleResult` now surfaces `PlaylistsPreserved` (from the oracle's playlist-list
+byte-identity check, #2049) so the apply reports `playlists_preserved` explicitly; on Apply it
+reflects the authoritative post-commit verdict.
+
+First live use: a single drifted track in the production AO library was relocated
+(`applied=true oracle_ok=true relocated_verified=1 playlists_preserved=true`, 358 playlists
+preserved, 97,999 tracks unchanged); the post-apply dry-run confirmed the drift resolved
+(`planned=0 already_correct=77,211`).
+
+#### iTunes 2-way-sync — quiescence gate + single-flight lock on the relocate cycle
+
+The relocate sync cycle now refuses to write while iTunes has the library open, closing
+the two-writers-collide hazard. `RunRelocateSyncCycle` wires the existing
+`FileActivityLibraryCheck` (watches the `.itl` + iTunes journal siblings —
+`sentinel`, `Temp File*.tmp`, `iT*.tmp` — for a write within `QuiescenceWindow`, default
+2m) into `SafeWriteITL`'s `WithLibraryNotInUse` precondition, re-checked **atomically**
+immediately before the atomic rename. A read-only reader (Apple Devices, Music.app
+browsing) never trips it — reads don't update mtimes; only an active writer does. And
+because iTunes doesn't always clean up its journal/sentinel files on close, the gate keys
+on the mtime **window**, not mere existence — a stale file ages out and stops blocking.
+
+Adds an AO single-flight write-lock (`<itl>.ao-writeback.lock`, create-exclusive, removed
+on the way out — unlike iTunes, AO cleans up after itself) so two AO writers can never
+touch the `.itl` at once. `SyncCycleResult` now reports `LibraryInUse` (+ reason):
+enforced on `Apply`, informational in dry-run. Unit-tested (recent write blocks, aged file
+ages out, sentinel blocks, lock is single-flight and self-cleaning).
+
+#### Definitive iTunes 2-way-sync steady-state system design
+
+`docs/specs/2026-07-23-itunes-2way-sync-system-design.md` — the single authoritative
+synthesis folding together the three prior iTunes specs. Formalizes the 4-state library
+model (Original/AO × .itl/.xml), the explicit `LibrarySet` config with separated
+`PointedAt`/`ImportSource` mode facts, the ordered steady-state cycle (decoupled
+SafeWriteITL writes with per-write bounded-delta + pre-rename re-verify + a PID-indexed
+itl-diff oracle with auto-rollback), partitioned identity count-auto-refresh, the
+provenance-anchored cleanup redefinition, cutover + recoverable-fallback mechanics, and a
+phased P0–P6 plan whose minimal-viable steady-state (P0–P2) ships without the unbuilt
+dedup-on-import dependency. Design only — nothing applied.
+
+#### iTunes relocate oracle now asserts playlist preservation (smart-playlist rules)
+
+`VerifyRelocateWrite` now checks that the entire **playlist-list section** (msdh type 2 —
+static + smart playlists, names, membership, and SmartCriteria **rules**) is **byte-identical**
+before vs after a relocate, in addition to the existing per-track raw-byte checks. The
+relocate mutate only rewrites track location fields and cannot touch playlists **by
+construction** (`shouldUpdateMhohLE` gates on the 0x0D/0x0B location type + a track PID in the
+plan); this turns that guarantee into an enforced, auto-rollback-on-failure assertion — so a
+user's newly-created smart playlists and rule edits can never be silently lost on a live
+write. New `RelocateOracleVerdict.PlaylistsPreserved` (+ `playlist-changed` violation).
+
+Verified on the real 357-playlist library: a 300-track relocate reports
+`playlists_preserved=true`. Unit-tested (relocate preserves; a single tampered byte in the
+playlist section is caught).
+
+#### OAuth2 / OIDC single sign-on (GitHub + Google) and Cloudflare Access passthrough
+
+Users can now sign in with **GitHub** or **Google** in addition to username/password,
+and the app can trust an existing **Cloudflare Access** login so users behind Zero
+Trust aren't asked to log in twice.
+
+- **Shared core** (`internal/oauth/`): CSRF `state` + PKCE (S256) on every code
+  exchange, provider code-exchange (GitHub via `golang.org/x/oauth2`, Google via OIDC
+  id-token verification), and Cloudflare Access JWT verification against the team JWKS
+  with an `aud` check. Pure package, unit-tested.
+- **Allowlist gate (verified ≠ authorized):** every path — GitHub, Google, and the
+  Cloudflare Access JWT — resolves to a VERIFIED email and is then checked against
+  `OAUTH_ALLOWED_EMAILS` before any user or session is created. A valid IdP login by a
+  non-allowlisted account is rejected with nothing written. Account linking is by
+  verified email only; a new allowlisted email auto-creates a user with a configurable
+  default role (`OAUTH_DEFAULT_ROLE`, default `viewer`).
+- **Identity model:** a new `OAuthIdentity` record links `(provider, subject)` → local
+  `User`, so a user can attach multiple providers; matching is by the provider's stable
+  account id, never email.
+- **Endpoints:** public `GET /api/v1/auth/oauth/:provider/start` and `.../callback`,
+  plus `GET /api/v1/auth/oauth-providers` (the enabled set, so the login page shows
+  only working buttons). Sessions reuse the existing HttpOnly cookie flow.
+- **Cloudflare Access:** an early, fail-open middleware verifies `Cf-Access-Jwt-Assertion`
+  (not the spoofable email header) and binds the resolved user so the normal auth
+  check is skipped; absent/invalid/non-allowlisted → falls through to normal auth.
+- **Frontend:** "Sign in with Google/GitHub" buttons on the login page, plus a friendly
+  "not authorized" message when a non-allowlisted account tries to sign in.
+
+Everything is **off unless configured** (`OAUTH_ENABLED` / provider client IDs /
+`CF_ACCESS_*`). See `docs/oauth-setup.md` for the config and the required Cloudflare
+Access bypass policy on the callback path.
+
+#### `maintenance.probe-directory-books`: tier-2 duration probe for the 1,019 directory-shaped books stuck in review
+
+`maintenance.relink-unlinked-books` (PR #2147) relinked 16.0k of 17,149 unlinked
+books, but 1,019 directory-shaped books went to review — not because they were
+unknowable, but because they were never measured. `classifyUnlinked` calls
+`linkintegrity.ClassifyDir(names, subdirs, nil)`: durations are always `nil`,
+because a whole-library pass over 44,887 books can afford one DB read and one
+`os.Stat` per book and nothing more. Without durations, `ClassifyDir`'s series
+guard cannot fire, so it correctly refuses to auto-link and every multi-file
+folder is parked with the reason "no durations are known — cannot rule out a
+series".
+
+That refusal is right at tier 1 and wrong as a final answer. The new op is the
+First Aid tier-2 escalation: the flagged set is ~1,019 folders rather than 44,887
+books, which is small enough to afford an `ffprobe` per audio file. It reuses the
+tier-1 detection (`classifyUnlinked`) rather than reimplementing it, then re-runs
+the *same* classifier through the new `linkintegrity.ClassifyDirProbed` with the
+measured durations filled in. Writing a second classifier here would let tier 1
+and tier 2 drift into disagreeing about the same folder. Dry run by default;
+nothing is written unless the caller passes `{"apply": true}`.
+
+🔴 **Absent evidence means "cannot verify", never "refuted."** A probe that fails
+contributes nothing to the verdict — never a zero. A zero duration reads as
+"short file, therefore a chapter, therefore safe to merge", and that exact
+substitution (`DurationSec == 0` taken as evidence rather than as its absence)
+disabled the regroup series guard across 97.5% of the review queue and came
+within one apply of merging 41 of 43 distinct novels. The invariant is now
+carried structurally by `linkintegrity.ProbedDuration`'s `OK` flag instead of by
+convention, and it treats a *successful* `ffprobe` exit reporting zero seconds
+(a truncated or header-only container) as unmeasured too — `ProbeDurationSeconds`
+deliberately does not validate that itself. A coverage guard additionally keeps
+any folder with an unprobeable file in review, because excluding failures alone
+still lets a barely-inspected folder pass when its one measured file happens to
+read chapter-length.
+
+A missing `ffprobe` makes the op fail before it touches the store, rather than
+classifying all 1,019 folders as unknown-duration — which would look exactly like
+a successful run that found nothing to do. `internal/audioutil` gained
+`LookupFFprobe` / `FFprobeAvailable` / `ErrFFprobeNotAvailable`, following the
+detect-or-disable convention `internal/fingerprint` already uses.
+
+Concurrency is a bounded `registry.RunItems` pool at the folder level sized to
+`runtime.NumCPU()`, per the CLAUDE.md mandate; files *within* a folder are probed
+sequentially, because a nested pool would put NumCPU² `ffprobe` processes on the
+box at once. Progress is stamped mid-folder rather than only between folders: the
+registry watchdog kills any op quiet for longer than `ProgressTimeout` (default 5
+minutes), and a 23-file folder each hitting the 20s per-file `ffprobe` timeout
+runs ~7.7 minutes — the same way `maintenance.dedupe-book-file-rows` previously
+died at book 19/194. The apply path writes the *measured* duration onto each new
+`book_file` row (tier 1 must seed 0, having never probed); a zero there would
+leave the regroup series guard just as inert as having no rows at all. Like its
+tier-1 sibling, the file contains no `UpdateBook` call at all, so the write-back
+wipe class is structurally unreachable.
+
+Verified with `go build ./...`, `go vet`, and
+`go test ./internal/linkintegrity/... ./internal/plugins/maintenance/... -race
+-count=1` (green). The exclusion guard is mutation-tested: making failed probes
+contribute zeros fails three tests, including one whose numbers are chosen so
+that exclusion *alone* decides the verdict (4 files sharing a stem, one measured
+at 6,000s and three unprobeable — counted as zeros that is 1-of-4 long and
+auto-links; excluded it is 1-of-1 long and the series guard fires).
+
+The apply path refuses on its own rather than trusting its caller: it errors out
+when handed a verdict that is not one-book, and when the folder's audio contents
+changed between probing and applying (the verdict describes the folder *as
+measured*, and a file that arrived since was never measured). Both refusals are
+mutation-tested — removing the verdict guard fails
+`TestLinkProbedFolder_RefusesSeriesVerdict`. The run report also samples the
+folders that *stayed* in review with their new measured reason, and tallies them
+by category (`confirmed-series` / `unprobeable-files` / `distinct-titles` /
+`no-audio`), since proof that the series guard fired for the right reason on the
+right folders is what an operator needs before authorising an apply.
+
+### Changed
+
+- `database.asCapability` is now exported as `database.AsCapability`, since the
+  same decorator problem has to be solved from `internal/server` and
+  `internal/maintenance/jobs` too. It works for concrete types as well as
+  interfaces.
+- `GetOpsV2` and `GetAIJobs` now delegate to `AsCapability` instead of each
+  carrying its own hand-inlined copy of the unwrap walk. Their behaviour is
+  unchanged, and the walk is now depth-bounded — the old loops would spin forever
+  on a decorator whose `Unwrap` returned itself.
+- Documented, and pinned with a test, the distinction that explains why this bug
+  hit some capabilities and not others: `OpsV2Store` and `AIJobsStore` are
+  subsets of `Store`'s method set, so any decorator embedding the `Store`
+  interface satisfies them directly and they were never at risk. Only
+  capabilities with at least one method outside `Store` (`SyncIdentityStore`,
+  `SyncFileStore`, `BookmarkStore`, and the concrete `*PebbleStore`) are
+  affected. The test fails if a capability ever crosses that line.
+
+- SSO/OAuth-provisioned accounts are now named by their full verified email address
+  instead of a username derived from the part before the `@`. Signing in with
+  `owner@example.com` creates the user `owner@example.com`, not `owner`. The old
+  derived form collided across domains and providers, and named the account something
+  the owner had never typed. Existing users are unaffected — this only applies when a
+  new account is auto-created, and sign-in still resolves an existing account by
+  identity link first and verified email second.
+
+- **The metrics endpoint now requires a credential.** `/metrics` was readable by anything
+  that could reach the server. That was recorded as an accepted risk on the grounds that
+  monitoring tools cannot log in and that the endpoint would be walled off at the network
+  level instead — neither of which held. Prometheus authenticates perfectly well, and the
+  network restriction was never built, so in practice the endpoint was simply open.
+
+  Scrape it with an API key from Settings → API keys. `deploy/prometheus/scrape-config.yml`
+  has the exact configuration, including how to store the key so that rotating it needs no
+  config change.
+
+- **The health endpoint no longer volunteers what it knows.** It used to reply with the
+  exact build version, the storage engine, and how many books, authors and series the
+  library holds — to anyone, with no credential. It now answers only whether the server is
+  alive. Nothing needed the rest: the web app and every script in this repo check only that
+  the server responded. The full detail is still available at
+  `/api/v1/system/status` to a signed-in administrator.
+
+  Health checks are also much cheaper now. Each one used to run four separate database
+  counts, and the web app polls it every five seconds while trying to reconnect.
+
+- The Review Queue now shows Approve and Reject buttons at the **top** of an expanded
+  item as well as at the bottom. Multi-disc groups can list dozens of files, and the
+  buttons were only underneath all of them — so deciding on an item you had already
+  sized up from its first line still meant scrolling to the end of the list. The
+  decision is now reachable from either end.
+
+- **Two spec assumptions corrected against the reference oracle** (real ABS 2.36.0,
+  probed 2026-08-02; five new fixtures committed under `testdata/abs-fixtures/`):
+  - `DELETE /api/me/progress/:id` is keyed by the **`mediaProgress` row id**, not the
+    `libraryItemId` — deleting by item id answers 404 on real ABS. Our handlers accept
+    **both** forms, since a client may hold either.
+  - `POST /api/me/item/:id/remove-from-continue-listening` **does not exist** on ABS
+    2.36.0 (it answers "Cannot POST"); the real mechanism is a
+    `hideFromContinueListening` field on `PATCH /api/me/progress/:id`. Both are served,
+    because a client calls the POST form and was taking a 404.
+
+- Recorded three findings from the 2026-08-01 AudioBooth session as `todo.d`
+  fragments: the unbuilt ABS progress-mutation endpoints (Phase 6 write half, so
+  "reset progress" and "remove from continue listening" 404), cover-art coverage at
+  ~19.5% of the library, and a latent deep-link redirect bug in the web OAuth
+  callback that no shipped client currently reaches.
+
+- `maintenance.dedupe-book-file-rows` now states in its completion message that
+  corrected totals may not be visible until the in-memory index refreshes. The same
+  canary showed all 10 durations unchanged immediately after the apply, with a
+  restart then revealing the already-correct values (`Defending the Lost`
+  158.00h → 12.15h) — the data in PebbleDB was right the whole time and only the
+  memdb-backed read was stale. The underlying cause is recorded in `todo.d/`:
+  `RecomputeBookAggregates` early-returns without calling `UpdateBook` when the
+  recomputed values match the stored ones, and `UpdateBook` is what triggers the
+  memdb reload of `book_files`. Saying so beats letting an operator conclude the run
+  did nothing.
+
+- `PebbleStore.DeleteBookFile` resolves its row through the `book_file_id` secondary
+  index instead of iterating every `book_file:` key. The primary key is
+  `book_file:<bookID>:<fileID>`, so an ID-only caller cannot seek it directly — which
+  is why the original implementation walked the whole keyspace looking for a suffix
+  match, once **per deleted row**. The index it now uses
+  (`book_file_id:<fileID>` → `book_file:<bookID>:<fileID>`) already existed for
+  precisely this purpose and is what `UpdateBookFileHashes` and `SetBookFileHash` use.
+
+  **Measured scope, so nobody over-credits this.** At 8,000 rows the two paths are
+  indistinguishable — 9.196 ms vs 9.144 ms per delete. Pebble walks that many keys
+  essentially for free, and per-delete cost is dominated by fixed overhead (the `Sync`
+  commit and the change notification), not by the lookup. Extrapolating the walk
+  linearly to the production 316,453 rows puts the scan at roughly 0.36 s per delete,
+  so for `dedupe-book-file-rows` (~15 deletes per book) it accounts for perhaps 5
+  seconds of a book that takes ~90.
+
+  This was written while investigating that op's runtime, and the initial hypothesis —
+  that the scan explained it — **did not survive measurement**. The change is kept
+  because removing an O(N)-per-delete is right on its own terms, but the op's cost is
+  still unattributed and wants a pprof run against production (`make deploy-debug`)
+  rather than another guess.
+
+  The old scan survives as a fallback for rows written before the index existed, so
+  deleting a pre-index row still works — just slowly. Four tests cover index
+  resolution, index-entry cleanup, the pre-index fallback, and sibling rows being left
+  untouched.
+
+- `maintenance.dedupe-book-file-rows` now processes books through a bounded worker
+  pool (`registry.RunItems`, sized to `runtime.NumCPU()`) instead of one at a time.
+
+  The book loop was a plain sequential `for range bookIDs` doing per-book database
+  work — precisely the shape `CLAUDE.md`'s concurrency rule forbids, and the first
+  full production run showed why: **~1.7 minutes per book**, so 176 books could not
+  finish inside the op's own 2-hour timeout. Completing a 176-book cleanup meant
+  three or four separate invocations.
+
+  **Why parallelising is safe here.** Every unit of work is one book ID, and a
+  `book_file` row belongs to exactly one book, so two workers can never touch the
+  same row, the same keeper decision, or the same `RecomputeBookAggregates` target.
+  This is the partition-into-disjoint-sets case the concurrency rule calls for, not
+  a fan-out over shared state. The five counters and the examples slice are the only
+  genuinely shared values and are mutex-guarded.
+
+  `RunItems` also supersedes the intra-book heartbeat added a moment earlier: it
+  stamps `UpdateProgress` as each book *completes*, via a monotonic counter that
+  stays ordered even when books finish out of order — so the stuck-op watchdog is
+  fed by completions rather than by a hand-rolled liveness ping. The 30-minute
+  `ProgressTimeout` stays as defence for a single pathological book.
+
+  A failing book no longer abandons the sweep: the callback returns `nil` after
+  counting and logging, and `ErrModeCollect` governs cancellation. On cancellation
+  or timeout everything already committed remains correct — books are independent
+  and the op is idempotent — so a re-run picks up the remainder.
+
+  Two new integration tests seed a real PebbleStore (24 books × 6 duplicate rows)
+  and run the op end to end, so `go test -race` finally has a parallel path to
+  inspect; the package's other tests are pure functions and exercised none of this.
+  Verified the race detector actually catches a regression here: removing the mutex
+  around a single counter produces `WARNING: DATA RACE` and a failure.
+
+- **Applied `maintenance.series-denumber` (high tier) to production.** 25 fragmented
+  series merged into 21 base series, 52 books given a real `series_position`, 11 base
+  series created, 25 emptied series deleted, 0 failures. A follow-up dry run confirmed the
+  high tier drained 25 → 0 with the medium (198) and low (466) tiers untouched. Rollback
+  reports: `/var/lib/audiobook-organizer/series-denumber-{,APPLY-,VERIFY-}2026-08-06.tsv`.
+
+  The dry run also established that the acceptance gate holds against real data: 689
+  candidates (under the 982 ceiling), zero candidates whose base fails `IsJunkSeriesBase`,
+  and `86—EIGHTY-SIX` — which exists in production in three spelling variants — absent
+  from the candidate set entirely.
+
+  The medium tier was deliberately NOT applied. See TODO: ~180 of its 198 rows are one
+  shattered book each (80 rows for a single Megan E. O'Keefe novel, 63 more from a Scribd
+  scrape writing page titles into series names), not series positions.
+
+- **Approving a review hold now runs the action a human chose, not the one its
+  category implies.** Until now the review queue dispatched approve on
+  `ReviewItem.Kind` — the shape the classifier saw. A Kind and the right action are
+  not the same question: a `regroup.multidisc` hold means "these files sit in disc
+  folders", which is true of three production holds whose members are each a
+  full-length novel, because the disc and chapter branches of the classifier never
+  evaluated its series guard. Approving those under Kind dispatch would have merged
+  distinct novels through an apply path that hard-deletes the absorbed rows.
+
+  Each hold now carries the classifier's `recommendedAction`, its reason, and the
+  arithmetic behind it (member count, how many runtimes are known, how many are
+  book-length, median and longest runtime, distinct title stems). Approve resolves
+  an action — the explicit `{"action": "..."}` in the request body when a reviewer
+  made a choice, otherwise the hold's own recommendation — and dispatches on that.
+
+  🔑 **A typo is a 400, never a fallback.** Approving with an action outside the
+  closed vocabulary (`combine`, `separate`, `version-group`, `duplicate-of`) is
+  refused rather than quietly downgraded to the recommendation. Someone who meant
+  "leave these six novels apart" and mistyped it must not be handed "combine".
+
+  Three more refusals, all deliberate:
+
+  - `insufficient-evidence` cannot be approved at all. It is the machine saying "I
+    cannot tell", not a decision a human can pick, and the holds carrying it are
+    exactly the ones with the least evidence.
+  - Every hold written before this change decodes with no recommended action, which
+    resolves to `insufficient-evidence`. Old holds are refused until a reviewer names
+    an action explicitly — they are never dispatched to a merge on the strength of a
+    field they do not carry. There is no backfill and no migration; a re-scan
+    refreshes a still-pending hold's payload.
+  - `duplicate-of` returns a "not implemented" error instead of marking the hold
+    decided while doing nothing. "Decided" is sticky — a re-scan never re-offers a
+    non-pending hold.
+
+  `separate` needs no apply handler and never will: every member is already its own
+  book, so the decision is a status transition and the queue's dedup-key idempotency
+  is what keeps it decided across re-scans.
+
+  Bulk approve uses **each item's own** recommendation rather than one action for the
+  whole batch — a single action over a heterogeneous batch is precisely the footgun
+  this change removes. Holds with no decidable action are reported in a `skipped`
+  list with their reason instead of aborting the run.
+
+  The four `Kind` strings are unchanged; they still describe shape and are still what
+  the review UI maps. `review_apply_enabled` remains off, and approving with it off
+  still records the decision without executing anything.
+
+  ⚠️ **One widening worth knowing about.** Under Kind dispatch `regroup.ambiguous`
+  had no apply handler and so could never merge anything. Keyed by action, an
+  ambiguous hold whose evidence recommends `combine` now reaches the combine path.
+  That is intended — the recommendation is evidence-backed where the Kind was only a
+  shape, and it refuses `combine` unless a strict majority of members have a known
+  runtime and those runtimes are short — but the gate is now the evidence, not the
+  category.
+
+- **Routine dependency group bump** across both ecosystems:
+  `github.com/openai/openai-go/v3` 3.46.0 → 3.49.0, `axios` 1.18.1 → 1.19.0,
+  `@playwright/test` 1.62.0 → 1.62.1, and `form-data` 4.0.5 → 4.0.6. The
+  `github/codeql-action` steps move to v4.37.4, still SHA-pinned.
+
+  None of these close an open security advisory — the five outstanding
+  Dependabot alerts (`postcss`, `google.golang.org/grpc`, and three against
+  `react-router` / `react-router-dom`) are untouched by this bump and are being
+  handled separately. Recording that here so a green dependency PR is not
+  mistaken for the vulnerabilities being cleared.
+
+- `maintenance.dedupe-book-file-rows` now accumulates each book's redundant row IDs and
+  deletes them in one batched call instead of one `DeleteBookFile` per row. The op
+  already ran a single `RecomputeBookAggregates` after its delete loop, so the per-row
+  notification was pure duplicated work here.
+
+  **The salvage write stays a separate, earlier commit, and must.** Rescued keeper
+  fields are persisted *before* the donor rows they came from are deleted, and a failed
+  salvage skips its group with the donors left intact. Folding that write into the
+  atomic delete batch would silently remove the escape: the group would commit both or
+  neither, and "neither" is indistinguishable from "nothing to do" on the next run, so a
+  keeper whose rescue failed could never be repaired from its twins again. Losing a
+  duration is recoverable; losing it while also deleting the only other copy is not.
+  Accumulating IDs across groups actually strengthens the ordering — every salvage in a
+  book commits before any donor in that book is deleted — and a group whose salvage
+  failed simply never enters the accumulator.
+
+- `maintenance.orphan-book-files-cleanup` deletes through the same batched method, in
+  chunks of 500. Unlike `dedupe-book-file-rows` this path has **no** trailing
+  `RecomputeBookAggregates` of its own, so it depends entirely on the batch method
+  notifying once per affected book. (In practice a genuine orphan's owning book does not
+  exist — that is what makes it an orphan — so the recompute finds no book and returns
+  early. The notification still has to be issued, because orphanhood is decided from a
+  snapshot and a book that turns out to exist after all must have its totals corrected.)
+
+  A chunk the store rejects is retried **row by row** through `DeleteBookFile`, which
+  tolerates "already gone" by design. This is the degraded path that keeps a phantom
+  memdb row from wedging the same 500 rows on every nightly run; it is slow — precisely
+  the per-row cost the batch exists to avoid — but it only runs on the chunk that hit
+  the anomaly, and it makes progress instead of deadlocking. That fallback stamps
+  progress per row rather than per chunk: at ~1.35 s/row a 500-row recovery is ~11
+  minutes, well past the registry's 5-minute default `ProgressTimeout`, which this op
+  does not override, so without a per-row stamp the watchdog would cancel the op
+  mid-recovery.
+
+- `PebbleStore.DeleteBookFilesFromMemDB` batches N memdb row deletions into one write
+  transaction. The saving is not transaction bookkeeping — it is the contention removed
+  from every other writer in the process, since go-memdb serialises all writers behind a
+  single global mutex.
+
+  Eleven tests cover this: the notification count per affected book (asserted against a
+  control test that shows the per-row path still producing one snapshot per row, so the
+  "exactly one" figure is anchored rather than vacuous), fail-closed behaviour leaving
+  every row intact, secondary-index teardown, duplicate and empty ID handling, the
+  salvage-failure ordering rule with a control book that must still collapse, and the
+  orphan path's chunking plus the row-by-row recovery of a rejected chunk (asserting the
+  499 real orphans in it actually get deleted, not merely that the run continues).
+
+- **A reviewer's disagreement with the classifier is now written down, and it is what
+  actually runs later.** Approving a review hold with an explicit action recorded the
+  status and nothing else: the chosen action lived nowhere. That mattered because with
+  `review_apply_enabled` off — which is how production runs — approving executes
+  nothing, and the work is carried out later by the replay pass. Replay re-derived the
+  action from the hold's payload, so a hold the classifier wanted *combined* that a
+  human had approved as *keep separate* would come back as a merge, hard-deleting the
+  rows for books that person had explicitly said to keep apart.
+
+  The stopgap was to refuse those overrides with a 409. Safe, but it meant that in the
+  configuration production actually uses, a reviewer could not register a disagreement
+  at all — which is the entire feature.
+
+  Review items now carry the chosen action, written in the same atomic batch as the
+  status change, and replay reads it first. The 409 is gone. Two tests hold the line
+  in both directions: a `combine` hold approved as `separate` must come out of replay
+  *unmerged*, and a `separate` hold approved as `combine` must come out *merged* —
+  either one alone would pass on a replay that had simply stopped working.
+
+  The write is deliberately narrow. It re-reads the record inside the store rather
+  than writing back the caller's copy, touches only the status, the timestamp and the
+  chosen action, and has no way to *clear* the chosen action — so the later
+  approved→applied transition cannot erase the decision it is in the middle of
+  carrying out. Holds decided before this change carry no action and fall back to the
+  payload, which for a pre-recommendation hold means "not enough evidence": they keep
+  working, and keep failing closed.
+
+- **`TODO.md` reconciled against what shipped on 2026-08-06**, and an executive
+  summary added for the review-queue work.
+
+  Three entries are now closed: owner items 1+2 (recommendations + override,
+  #2163), the `dedupe-book-file-rows` performance item (#2161), and the
+  directory-shaped-books residue, which now records the measured dry-run result
+  (434 of 1,019 linkable).
+
+  The `dedupe-book-file-rows` entry keeps its original analysis but leads with a
+  correction, because nearly every premise in it was wrong: the op was dying on
+  the 5-minute progress watchdog rather than its 2-hour timeout, the real total
+  was ~1.3 h rather than 2.4 h, and the cost is per-deleted-row rather than
+  per-book. Leaving the original text without that correction would have taught
+  the next reader three false things.
+
+  Six new findings were also recorded as `todo.d/` fragments — the residual
+  react-router advisory and why it is accepted, two frontend navigation sinks
+  that are safe only by accident, the broken e2e suite, two memdb write-path
+  follow-ups, the three multidisc holds that turned out to be duplicates, and a
+  survey of how far behind the frontend framework versions are.
+
+- **The review queue now shows why each hold is there, and lets you disagree with it.**
+  Every hold used to display the same sentence — literally the same one, on 762 of 777
+  holds — which is a queue nobody can work. Each hold now shows the recommended action,
+  the reason for it, and the numbers that reason is built from: how many files are in
+  the group, how many of them have a known runtime, how many are long enough to be a
+  book on their own, the median and longest runtime, and how many distinct titles are
+  mixed together. The known-runtime count is highlighted when most are missing, because
+  that gap is exactly why the system sometimes cannot decide.
+
+  Each hold has its own action picker, starting on the recommendation. Holds the
+  classifier could not call start on *nothing* and their Approve button stays disabled
+  until a person chooses — no guess is pre-filled, least of all on the holds with the
+  weakest evidence. "Not enough evidence" is shown as a state, never offered as a
+  choice, because it is the machine's statement rather than a decision anyone can take.
+  "Duplicate of an existing book" is offered but marked unimplemented, and the server's
+  refusal is shown verbatim rather than dressed up as a generic failure.
+
+  Approving a whole bucket still uses each hold's own recommendation, and the holds it
+  skipped are now listed by id with their reason instead of vanishing behind a count —
+  a bulk action that silently skips things is how someone comes to believe they cleared
+  a queue they did not.
+
+- **Frontend linting moved to ESLint 10.** `eslint` 9.39.5 → 10.8.0, `@eslint/js`
+  9.39.5 → 10.0.1, and `typescript-eslint` 8.65.0 → 8.66.0. Nothing in
+  `web/eslint.config.mjs` touched the surface ESLint 10 removed — it has been flat
+  config for a while, with no `.eslintrc`, no `.eslintignore`, no custom rules and
+  no `RuleTester` — so the config carried over as-is. The upgrade is
+  finding-for-finding identical on the current tree: 291 files linted, 0 errors and
+  24 warnings both before and after, with no new and no resolved findings. That is
+  a real result rather than a vacuous one — `eslint --print-config` confirms the
+  three rules ESLint 10 newly enables in `eslint:recommended`
+  (`no-unassigned-vars`, `no-useless-assignment`, `preserve-caught-error`) are all
+  active at error severity, and that `no-shadow-restricted-names` now runs with
+  `reportGlobalThis: true`. This codebase simply has no violations of any of them.
+  ESLint 10's other headline change — JSX identifiers now counting as references,
+  so `<Card>` marks the imported `Card` as used — produced no delta here either,
+  because `no-undef` is already switched off in this config and
+  `@typescript-eslint/no-unused-vars` was already JSX-aware.
+
+- **`eslint-plugin-react-hooks` 5.2.0 → 7.1.1, forced by ESLint 10's peer range.**
+  This was not optional: 5.2.0, 6.0.0, 6.1.x and 7.0.x all cap their `eslint` peer
+  at `^9.0.0`, and `^10.0.0` first appears in 7.1.0, so an ESLint 10 install fails
+  to resolve without it. The plugin's 7.x `recommended` preset also pulls in about
+  fourteen new React Compiler rules (`immutability`, `purity`, `refs`,
+  `static-components`, `set-state-in-effect` and friends) at error severity, which
+  is a decision about how this codebase writes React rather than anything to do
+  with upgrading ESLint. So the config now pins the exact pair that 5.2.0's
+  `recommended` enabled — `react-hooks/rules-of-hooks` at error and
+  `react-hooks/exhaustive-deps` at warn — leaving the lint diff attributable to
+  ESLint 10 alone. Adopting the compiler rules is a one-line change away and is
+  deliberately left as a separate call. `eslint-plugin-react-refresh` needed no
+  bump; 0.5.3 already peers `^9 || ^10`.
+
+- **Frontend TypeScript moved to 6.0.3** (from 5.9.3 — deliberately *not* 7, see
+  below). `web/tsconfig.json` drops `baseUrl`, which 6.0 removed; its `paths` entry
+  was already written in the full-prefix form 6.0 requires (`"./src/*"`), so the
+  mapping needed no rewrite. `ignoreDeprecations: "6.0"` is set to stage anything
+  else that starts warning. The project turned out to be well positioned for the
+  rest of 6.0's default changes: it already pins `types` explicitly, so the new
+  `types: []` default — which silently drops the ambient `@types/*` that projects
+  relying on the old "load everything" behaviour depend on — does not apply here;
+  and it uses `module: ESNext` with `moduleResolution: bundler`, so none of the
+  configurations 6.0 deleted outright (`moduleResolution: classic`, `module:
+  amd|umd|systemjs|none`, `outFile`) are in play. `tsc --noEmit` is clean over 248
+  files, checked with a deliberately broken file to confirm the run was actually
+  type-checking rather than silently passing.
+
+  Worth flagging for whoever touches this next: the `@/*` alias that `paths` and
+  vite's `resolve.alias` both define is **not used anywhere** in `web/` — zero
+  import specifiers reference it. The alias config in both files is dead weight and
+  could be deleted, which is also why removing `baseUrl` carried no risk.
+
+- **`@vitejs/plugin-react` 4.7.0 → 5.1.4**, pinned exactly rather than with a caret.
+  This is independent of Vite 8: 5.1.4 peers `vite: "^4.2.0 || ^5 || ^6 || ^7"`, so
+  it runs on the Vite 7.3.6 this project is held at. The exact pin is deliberate —
+  `^5.1.4` floats to 5.2.0, which was published the same day as 6.0.0 as the 5.x
+  backport that widens the peer range to include Vite 8. Given this repo has a
+  standing incident report against Vite 8, the 5.x release that stays Vite-7-only is
+  the one we want, and a caret would silently drift off it. `vite.config.ts` now sets
+  `resolve.dedupe: ['react', 'react-dom']` explicitly, because plugin-react 4.x
+  added those two for you and 5.0.0 stopped doing so. npm's tree happens to
+  hoist a single React 18.3.1 today, so this is belt-and-braces — but a second
+  React instance reaching MUI/emotion is precisely the failure that took every page
+  down with React error #130 during the abandoned Vite 8 attempt, and the Playwright
+  suite that would catch it is currently broken, so the setting is pinned rather
+  than left to chance. Verified after the fact: `react-dom` appears in exactly one
+  built chunk. The other 5.0.0 breaking changes are inert here — the `exclude`
+  default moving from `[]` to `[/\/node_modules\//]` only narrows the transform away
+  from dependencies, and `disableOxcRecommendation` was never set.
+
+- **`reparseStoredIntros` only ever upgrades a stored parse — it never clears
+  one.** The parsed fields are not always reproducible from the stored
+  transcript: `applyOutcome` overwrites `IntroTranscription` unconditionally but
+  writes parsed fields only when a title was extracted, so a later, worse
+  transcription replaces good text while the good parse survives beside it.
+  **1.4% of 987 sampled books (~644 library-wide)** are in that state — e.g. a
+  book whose transcript is now `"This is Audible."` but which still holds
+  `"Wind and Truth" / "Brandon Sanderson"`. A non-credits verdict now means "this
+  text is not an announcement", never "the stored value is wrong"; bad values are
+  neutralised by consumers gating on the classification rather than by erasing
+  data. Regression-tested in `intro_reparse_guard_test.go`.
+- **`ParseAudiobookIntro` now delegates to the classifier** and returns fields
+  only for a `credits` verdict. Callers needing the three-way distinction must
+  call `ClassifyIntro` — absent fields mean "not an announcement", which is not
+  the same as "not a book start".
+- **`[SILENCE]` has a single owner.** `transcribe.SilenceSentinel` is now the one
+  declaration; `internal/plugins/maintenance` aliases it. Two packages disagreeing
+  about the literal would have turned "known silent" into "unparsed prose".
+
+- **MUI upgrade Step 0 (prep, TODO-MUI-0).** Normalized all 161 `.js`-suffixed
+  `@mui/icons-material` path imports (`@mui/icons-material/Check.js` →
+  `@mui/icons-material/Check`) across 35 files in `web/src`, so MUI v7's ESM
+  package-layout change cannot break the build later, and added a
+  `"react-is": "^18.2.0"` npm override to `web/package.json` (required by MUI
+  v6+ on React 18, which otherwise resolves a mismatched `react-is@19` copy).
+  No `@mui/*` or React version bumps in this change — pre-flight only, per
+  `docs/plans/2026-08-07-mui-upgrade-path.md`.
+
+- **`maintenance.transcribe-book-intros` with `reparse_only=true` now DEFAULTS
+  to `dry_run=true`.** This is a behaviour change: a reparse-only dispatch with
+  no explicit `dry_run` no longer writes anything — it runs the identical
+  classification+comparison logic, reports "Dry run — would update N of M
+  transcribed", and skips every `UpdateBook` call. Pass `dry_run=false` to
+  apply. Motivated by the 2026-08-07 reparse of 12,990 books being dispatched
+  with no preview (acceptable only because reparse is upgrade-only). The new
+  `dry_run` param is currently honoured by `reparse_only` runs only; the
+  full-transcribe path ignores it.
+
+#### iTunes location-form guard: scope the `.itunes-writeback/` staging-marker check to the write target (F7)
+
+The `location-form` safety guard rejects any track location containing
+`.itunes-writeback/` as a staging-dir leak (the "damaged-4" class). But when iTunes is
+pointed AT the AO writeback library — the locked hard-cutover design — that library's own
+media legitimately lives under its `.itunes-writeback/iTunes Media/` root, so every track
+carries the substring correctly. The unconditional check therefore rejected the **entire
+live AO library (82,981 track-locations)**, making the P2 relocate op unable to write it
+(findings §F7).
+
+`ContractConfig.AllowedWritebackRoot` now scopes the check: a marker whose location sits
+**under** the configured root (the AO library's own media root, e.g.
+`audiobook-organizer/.itunes-writeback/`) is allowed; a marker anywhere else is still a
+leak and rejected. Matched case-insensitively with path separators normalized, so it
+applies to both the 0x0D WinPath and 0x0B URL forms. **Empty (default) = strict — ALL
+`.itunes-writeback/` rejected, fully backward-compatible and fail-closed.** Only the sync
+cycle writing the AO library sets it (from the 4-state `LibrarySet` config); it is never
+set when writing the Original library.
+
+Verified on the real library: strict flags 82,981 staging violations; AO-scoped flags 0.
+Unit-tested via the pure `stagingMarkerIsLeak` decision (strict / scoped-allow /
+leak-under-different-root / misconfigured-root → fail-closed). This adds the guard
+capability; the P2 sync cycle wires it in a later PR. Review-gated (production safety guard).
+
+#### Review queue: anthologies now combine into one book; clearer disc-vs-chapter labels
+
+**Anthology = one book.** An anthology / collection / omnibus is a single real
+audiobook (one ISBN), not multiple works to split apart (owner decision). Approving
+an anthology review hold now **combines** its files into one multi-file book — the
+same safe, tested operation as a multi-disc collapse — instead of doing nothing. The
+proposed-action text changed from "split into separate works" to "combine into one
+multi-file audiobook (anthology/collection)", `regroup.anthology` is wired to the
+combine handler, and anthology payloads now carry sequential chapter order (disc 0,
+tracks 1..N). The over-merge guard is unchanged: a plain author folder of distinct
+books with no anthology marker still never combines.
+
+**Clearer labels.** The review summary now distinguishes a genuine multi-disc set
+("Multi-disc: N discs → 1 book") from same-disc sequential chapters ("Chapters: N
+tracks → 1 book"), which previously both read "Multi-disc" and caused confusion.
+
+**Known edge (flagged for follow-up):** the anthology marker regex also matches
+"trilogy" / "boxed set" / "quartet", which can be *multiple* books (multiple ISBNs),
+not one. Those would now be *suggested* for combine — but every anthology hold is a
+human-reviewed decision (nothing auto-applies; the global `review_apply_enabled`
+switch is off), so a real trilogy is caught on review and rejected. A future refinement
+could split single-book markers (anthology/collection/omnibus → combine) from
+multi-book markers (trilogy/boxed set → offer keep-separate), folding into the planned
+ambiguous-resolution choices.
+
+#### Review queue: flatten multi-disc to continuous tracks; split single- vs multi-book markers
+
+**Discs are flattened away (owner decision).** A combined book is now ONE continuous
+track list — approving a multi-disc set no longer preserves disc numbers. Every file
+gets `DiscNumber = 0` and a single continuous `TrackNumber` 1..N over play order,
+including across former disc boundaries:
+
+```
+Disc 1/Ch1 → t1   Disc 1/Ch2 → t2   Disc 2/Ch1 → t3   Disc 2/Ch2 → t4
+```
+
+The classifier now parses the within-disc chapter from the filename so that ordering is
+correct (disc-then-chapter), then discards the disc — it's used only to sort. This
+revises the disc-preserving behavior shipped earlier in the day.
+
+**Anthology markers split by single- vs multi-book (owner: "make it smarter").** The
+folder-marker detection is now two regexes:
+
+- **Single-book** (`anthology` / `omnibus` / `collection`) = one published book, one
+  ISBN → still **combine** into one audiobook.
+- **Multi-book** (`trilogy` / `tetralogy` / `quartet` / `boxed set`) = potentially
+  *several* books, each its own ISBN → no longer suggested for combine; held as
+  **ambiguous** with a "may be several separate books" note so the human decides. If a
+  folder carries both markers, the multi-book (safer) reading wins.
+
+This closes the trilogy/boxed-set edge flagged in the previous change: a "Foundation
+Trilogy" folder of three distinct novels is no longer proposed as a single-book combine.
+Labels updated accordingly ("Multi-disc source: N tracks → 1 book (flattened)").
+
+#### Review-queue cards now show rich per-file metadata (and read the real payload)
+
+Review-queue cards ("Multi-disc", "Ambiguous folder", …) previously rendered only a
+bare list of file-path strings — not enough to make an informed approve/reject call.
+Expanding a card now shows a per-member row for each file with cover art, title,
+author, series/position, format, duration, size, bitrate, codec, and the **proposed
+disc/track** the classifier will write on approve (so a same-disc chapter set visibly
+shows disc 0 + tracks 1..N, and a real disc set shows its true disc numbers). Member
+metadata is fetched client-side via `getBook` in bounded batches, lazily on expand, so
+opening the queue never fans out hundreds of requests up front.
+
+Also fixes a latent payload-key mismatch: the card reader used snake_case keys
+(`proposed_action`, `member_ids`, `derived_title`) and expected `confidence` as a
+number, but the Go producer (`buildRegroupPayload`) emits camelCase
+(`proposedAction`, `memberBookIDs`, `survivorTitle`) with `confidence` as a string —
+so previously only the folder and raw file list rendered, and the member count
+silently fell back to the file-array length. The payload parsing/zipping now lives in
+a unit-tested `web/src/lib/reviewPayload.ts` (camelCase primary, snake_case fallback),
+and the byte-size/duration formatters were extracted to a shared
+`web/src/utils/mediaFormat.ts` reused by both the review cards and the dedup compare
+view.
+
+### Deprecated
+
+- **Vite is deliberately held at 7.x and TypeScript at 6.x.** Vite 8's rolldown
+  bundler is still excluded for the reason recorded inline in `web/vite.config.ts`:
+  a CJS/ESM interop bug resolved an MUI/emotion import to a namespace object and
+  crashed every page with React error #130. The upstream issue (vitejs/vite#22499)
+  is closed but no fixing version was ever confirmed. TypeScript 7 is blocked by
+  `typescript-eslint@8.66.0`, which peers `typescript: ">=4.8.4 <6.1.0"`; TS 7 is
+  the native Go rewrite and exposes no stable programmatic API until 7.1, so
+  forcing the install past the peer range crashes at runtime rather than merely
+  warning.
+
+### Fixed
+
+- **`GET /api/me` is excluded from the `/api/*` -> `/api/v1/*` compatibility
+  redirect.** The ABS protocol is unversioned, so without the exclusion the endpoint
+  would 301 into the app API and answer a different shape -- it would look implemented
+  and behave broken.
+
+- **Per-file sync `ino` now follows a file across a book-id change (abs-sync,
+  PR #2074 follow-up).** `sync_file` entries are keyed `(bookID, fileID)`, and
+  the existing `RepointSyncFile` could only move an entry's `fileID` within one
+  book — it could not carry an entry to a DIFFERENT book. Two paths move a
+  `BookFile` to a different book without changing the file itself:
+  `CombineBooks` (absorbed books' files are reassigned onto the survivor) and
+  the scanner's untagged-move / hash-duplicate version-link (the book itself
+  gets a new ULID). Neither carried the file's durable `ino` forward, so an
+  offline client's cached download URL (`/api/items/{itemId}/file/{ino}`)
+  could go stale after either operation, requiring a re-download of an
+  already-downloaded book. Item-level identity and progress/bookmarks were
+  unaffected (they key on the item, not the file).
+  - New `database.(*PebbleStore).RepointSyncFileToBook(oldBookID, newBookID,
+    fileID)` (`internal/database/pebble_store_syncfile.go`) moves a sync_file
+    entry across books in a single atomic Pebble batch, preserving the
+    sync-file ID. Idempotent (a re-run after a successful move is a no-op).
+    Collision rule: if the destination book already has its OWN entry for
+    that `fileID` (independently minted), the destination's existing identity
+    wins and the source is left untouched — never silently reassign which
+    syncFileID answers for a (book, file) pair a client may already be
+    resolving against. Guarded by the existing `syncFileMintMu` mutex idiom;
+    covered by a `-race` concurrent-repoint test asserting a single
+    consistent outcome.
+  - New `merge.FollowFileMove(db, oldBookID, newBookID, fileIDs)`
+    (`internal/merge/sync_follow.go`) is wired into `CombineBooks`'s main
+    file-move loop and into `attachVirtualFile`'s cross-book reattach branch
+    (both in `internal/merge/service.go`) — the two places CombineBooks
+    reassigns a `BookFile` row's owning book.
+  - `merge.FollowBookIDChange` (already the hook for the scanner's
+    hash-duplicate version-link path) now also carries every sync_file
+    registered on the superseded book onto the new book id, gated behind the
+    same "old book had a syncID" check as the existing identity/progress
+    carry — a book with no client-visible identity could not have had a
+    client-cached file URL either. No `internal/scanner/scanner.go` changes
+    were needed for this path: it already calls `FollowBookIDChange`.
+  - **Left for a follow-up:** `internal/dedup/book_dedup.go`'s `MergeBooks`
+    hard-delete path (`merge.FollowMergeWithStore` call around line 456) does
+    not move `BookFile` rows across books at all today (files stay attached
+    to whichever book id the dedup engine chose to keep), so no file-ino
+    carry was needed there for this gap. If that ever changes, it will need
+    the same `FollowFileMove` wiring — flagged here rather than edited, since
+    `internal/dedup/book_dedup.go` may have parallel work in flight.
+
+- **Capability-interface lookups no longer break behind the search-index store
+  decorator.** `Server.Start()` replaces `s.store` with an `indexedStore` whenever
+  the Bleve index opens successfully. Because that decorator embeds the
+  `database.Store` *interface*, it promoted only that interface's methods and hid
+  every narrow capability interface declared outside it — so
+  `database.AsSyncIdentityStore`, `AsSyncFileStore` and `AsBookmarkStore` all
+  started returning `nil` in production, with no compile error. Observed fallout:
+  the `backfill-sync-ids` maintenance job failed outright with "store does not
+  implement the sync-identity capability interfaces", and `internal/merge`'s
+  sync-follow hook — which keeps a listener's position attached to a book across a
+  dedup merge — silently degraded to a no-op. The lookups now walk the decorator
+  chain via an opt-in `Unwrap`, and a new regression test asserts the real
+  `indexedStore` preserves each capability. The wrap only happens when Bleve is
+  active, which is why this reproduced on the production host and nowhere else.
+- Added the missing compile-time assertion that `*PebbleStore` satisfies
+  `SyncFileStore`, so a future signature drift fails the build instead of
+  resurfacing as a runtime `nil`.
+
+- **Chapters are now actually extracted during a scan.** `PersistChaptersForBook`
+  shipped in the previous change but had no call site, so no scan ever populated
+  chapters and item detail would have returned an empty chapter list. Wired into both
+  save paths in `internal/scanner/scanner.go` — the directory-based book path and the
+  per-file path. The second call site sits deliberately *outside* the
+  `SegmentFiles > 1` block so single-file books get their embedded m4b chapter marks
+  too. Failures warn and never abort a scan.
+
+- **Two maintenance jobs had been silently degrading in production, and the
+  library-wipe fixups were failing outright.** All three are the concrete-type
+  half of the decorator bug fixed for capability interfaces in the previous
+  release: `Server.Start()` replaces the store with a Bleve search-index
+  decorator, and a bare `store.(*database.PebbleStore)` assertion fails against
+  that wrapper just as an interface assertion does. Because each of these call
+  sites had a deliberate "different backend" fallback written for SQLite and test
+  doubles, a wrapped Pebble store was indistinguishable from an unsupported
+  backend and the fallback made it look like a supported configuration:
+  - `sweep-pebble-metrics-ttl` logged "store is not a PebbleStore; skipping" and
+    no-opped on every production run, so expired Pebble metrics snapshots were
+    never swept and grew without bound past their 30-day retention window.
+  - `recompute-book-aggregates` took its interface fallback every run, which
+    skips the `book_aggregates_v1_done` sentinel — so instead of short-circuiting
+    on an already-completed backfill it recomputed all ~40k books each time.
+  - The six library-wipe fixups either failed with "unsupported store type
+    \*server.indexedStore" (`wipeSegments`, `wipeBooks`, `wipeAuthors`,
+    `wipeSeries`, `wipeExternalIDs`) or fell back to a slower interface loop that
+    reports an approximate count and misses the secondary-index prefixes
+    (`wipeBookFiles`).
+
+  All eight sites now resolve the concrete store through the new
+  `database.AsPebbleStore`, and a regression test drives the repaired wipe
+  fixups through the real `indexedStore` — it reproduces the exact production
+  error string if the bare assertions are restored.
+
+- The live-updates stream (`/api/events`) now works for browsers signed in through
+  Cloudflare Access SSO. It was returning 401 on a permanent reconnect loop, so the UI
+  showed a "Connection lost" banner even though the page had loaded and every other
+  request succeeded.
+
+  `/api/events` is registered as a top-level route rather than inside the `/api/v1`
+  group, so it inherited none of that group's middleware — including the Cloudflare
+  Access identity stage. Its auth guard assumed a browser would always present a
+  session cookie, which is true for password login but false under Access SSO, where
+  identity arrives only as a verified `Cf-Access-Jwt-Assertion` header. The route now
+  runs the same fail-open identity middleware as `/api/v1` before its auth guard.
+  Anonymous clients are still rejected (pen-test finding MED-2 is unaffected).
+
+- Audiobookshelf clients reaching the server through a Cloudflare Access **service
+  token** are no longer rejected. Cloudflare mints a token with no email claim for a
+  service token — it identifies a machine, not a person — and the server treated that
+  as a forged credential and returned a terminal 401, even when the request also
+  carried a perfectly valid bearer token. That made the whole service-token topology
+  unusable, which is the one a native player app needs.
+
+  A valid-but-anonymous assertion now falls through to the bearer token, exactly as if
+  no assertion had been sent. Every other verification failure — forged signature,
+  wrong issuer, wrong audience, expired — remains a hard 401, and a service token with
+  no bearer alongside it is still rejected: it proves a device may reach the server,
+  never who the user is.
+
+- **Resetting a user's password now works.** The button on the Users page returned a
+  server error every single time, for every user — it had never worked.
+
+  The underlying cause was worse than the error suggested. Password reset was built on
+  the *invitation* system, which exists to create brand-new accounts and deliberately
+  refuses to act on a username that already exists. So the feature could not have
+  worked even once the error was fixed; it would simply have failed later and more
+  quietly, handing an administrator a reset link that dead-ends when the user clicks
+  it.
+
+  Reset now issues a genuine single-use sign-in link for the existing account. The
+  administrator sends the link, the user clicks it, and sets their own password —
+  meaning nobody but the account holder ever knows it. The link expires after 15
+  minutes, cannot be used twice, and is refused outright for deactivated accounts. The
+  Users page now copies the full link to the clipboard rather than a bare token.
+
+  Administrators who instead want to set a password *for* someone can still do so
+  directly; that path was unaffected.
+
+- **Player apps could get stuck on a login that can never succeed.** Signing in from
+  AudioBooth ended at a Cloudflare "Invalid login session" error, with no way forward.
+
+  The app checks whether a server supports single sign-on by requesting
+  `/auth/openid` and seeing whether it exists. The server answered every unknown
+  address with the web app's own page rather than "not found", so the check came back
+  positive and the app started a sign-in process this server has no way to finish. The
+  error the user saw came from Cloudflare being handed a half-finished login.
+
+  Unimplemented sign-in addresses now correctly answer "not found", so the app's check
+  fails cleanly and it offers username-and-password login instead. Ordinary links into
+  the web app are unaffected.
+
+- `scripts/setup-prometheus-auth.py` documented a repo-relative invocation, but
+  the production host has no git checkout (deployment ships only the binary to
+  `/usr/local/bin`). The docstring now shows the `scp` + absolute-path form that
+  actually works.
+
+- **`POST /api/authorize` was missing, so Audiobookshelf clients could log in and
+  then silently lose their session.** The route was never registered, so gin's
+  path-fixer answered it with a `301` to `/api/v1/authorize`. A `301` permits a
+  client to downgrade the method, so the app re-issued the call as `GET`, took a
+  `404` from the app API, and never refreshed — presenting as "connected" and then
+  failing on the next authenticated request. Observed in production on 2026-08-01:
+  `POST /api/authorize → 301`, `GET /api/v1/authorize → 404`, then
+  `GET /api/libraries → 401` fifty seconds later.
+
+  The endpoint now re-validates the caller's existing credential and returns the
+  standard authorize payload. It **echoes** the presented access and refresh tokens
+  rather than minting new ones, so an app foregrounding repeatedly no longer creates
+  a session row per call.
+
+  It carries the same §1.8.1 obligation as `/api/me`: AudioBooth's
+  `MediaProgress.syncFromAPI` **deletes** every local progress row absent from
+  `user.mediaProgress`, and it calls this endpoint on foreground — so a `200` with an
+  empty or partial list would erase the user's position in every omitted book on
+  every app launch. The handler therefore answers `5xx` rather than ever serving a
+  short list, and a test asserts it.
+
+  `/api/authorize` was also added to `absReservedPaths`, without which the `301`
+  would return even with the handler present. The existing
+  `TestABSReservedPath_CoversEVERYRegisteredUnversionedRoute` guard derives its input
+  from `absRouteList()`, so it now enforces that pairing automatically.
+
+- **`GET /api/me/listening-stats` returning `404` is correct and was left alone.**
+  The ABS sync spec prefers a `404` there (~12 non-optional fields; callers use
+  `try?`), so a half-correct body would be worse than none.
+
+- **A playback sync silently reset user intent on the book state.**
+  `persistProgress` constructed a fresh `UserBookState` on every sync instead of
+  read-modify-writing it, so every field it did not set was reset. That already
+  un-pinned a hand-set read status (`StatusManual`) roughly every 20 seconds of
+  listening, and would have un-hidden any book removed from Continue Listening within
+  seconds of the user hiding it. All ABS write paths now go through a single
+  read-modify-write helper.
+
+- **The web OAuth callback silently discarded a native client's custom-scheme
+  `return`, dropping it on the web SPA root instead.** `sanitizeReturn` correctly
+  requires a same-site path, so `audiobooth://oauth` became `""` and the destination
+  fell back to `/` — with no error and nothing logged, which surfaced as "it logged me
+  into the website" rather than as a failure.
+
+  `/auth/oauth/:provider/start` now accepts a registered native callback and, on
+  success, hands the client a single-use PKCE-bound authorization code on its own URL
+  scheme, redeemable at the existing `/auth/openid/callback`. `sanitizeReturn` is
+  **unchanged** — it is the open-redirect guard, and the deep-link path goes through
+  the same exact-match allowlist `/auth/openid` already enforces rather than loosening
+  it.
+
+  Three things this deliberately gets right:
+
+  - **The native path engages only when `redirect_uri` AND `code_challenge` are both
+    present.** `/auth/oauth/:provider/start` is the unauthenticated endpoint the SPA's
+    login buttons hit, so if a bare `redirect_uri` could trigger a 400, anyone could
+    break login for every user by getting one query parameter appended to a shared
+    link. A request carrying only one of the two is treated as an ordinary web login
+    and the stray parameter is ignored.
+  - **The two PKCE exchanges stay separate.** Server↔IdP uses our own verifier;
+    app↔server uses the client's challenge, which we only ever store. Conflating them
+    would either break the upstream token exchange or issue codes with no client-side
+    proof of possession.
+  - **No browser session is minted on the native path.** The caller is an
+    `ASWebAuthenticationSession` whose cookie jar is discarded when it closes, so a
+    session created there would be an unusable row written on every app login.
+
+  Latent when fixed — production logs showed zero `/auth/oauth/*` traffic over 7 days,
+  and Audiobookshelf clients use `/auth/openid` instead.
+
+- **`setup-prometheus-auth.py` rejected a valid config because it validated with the
+  wrong `promtool`.** The script called `shutil.which("promtool")` and trusted PATH
+  order. On the production host an unpackaged **promtool 2.13.1 (built 2019)** sits in
+  `/usr/local/bin`, ahead of the packaged **2.53.5** in `/usr/bin` that matches the
+  running Prometheus. The 2019 binary predates the `authorization:` scrape-config
+  field (added in Prometheus 2.26), so it failed with:
+
+  ```
+  field authorization not found in type config.plain
+  ```
+
+  The script then correctly restored the original config and reported failure — so the
+  error read as a bad config rather than a bad validator, which is the confusing part.
+
+  `find_promtool()` now picks the `promtool` whose version matches
+  `prometheus --version`, falling back to the newest available, and logs which one it
+  chose and why (explicitly calling out when the winner is *not* first on PATH). A
+  validator newer than the server can only be over-permissive; an older one produces
+  false rejections like this one.
+
+- **The same script's rollback was incomplete.** On a validation failure it restored
+  `prometheus.yml` but left the shared `file_sd` discovery entry moved aside, so the
+  target ended up in **neither** the shared job nor the dedicated one — silently
+  scraped by nothing, which is worse than either intended end state. Both edits are
+  now rolled back together, and the docstring no longer overpromises "the original is
+  restored".
+
+- **`/metrics` was double-gzipped, so every Prometheus scrape failed.**
+  `promhttp.Handler()` compresses its own response when the client sends
+  `Accept-Encoding: gzip`, and the global `gzip.Gzip` middleware then compressed that
+  already-compressed body a second time. Prometheus decompresses exactly once, found
+  gzip magic bytes underneath, and failed each scrape with:
+
+  ```
+  expected a valid start token, got "\x1f" ("INVALID") while parsing: "\x1f"
+  ```
+
+  which reads like a corrupt exposition format rather than a transport problem.
+
+  `/metrics` now joins `/api/events` in the middleware's excluded-paths list. Surfaced
+  in production on 2026-08-02 the moment the newly auth-gated `/metrics` became
+  reachable again — the target authenticated fine and then failed to parse, so this
+  had been latent behind the auth failure.
+
+  Covered by a regression test that reproduces a real Prometheus scrape
+  (`Accept-Encoding: gzip`, exactly one decode) and asserts the result is not still
+  gzip — verified to FAIL without the exclusion and pass with it — plus a test that
+  ordinary endpoints are still compressed, so the exclusion cannot silently widen.
+
+- **"Remove from Continue Listening" had no effect on the Continue Listening shelf.**
+  Phase 6 added a persisted `hideFromContinueListening` flag and the endpoints that
+  set it, but `hasProgress` — which decides what goes on the `/personalized`
+  Continue Listening shelf — only read the stored position and never consulted the
+  flag. So the book reappeared on the next home-screen refresh and the feature looked
+  broken, which is exactly how it was reported.
+
+  Hiding deliberately **keeps** the position (the user tidied their shelf; they did
+  not ask to lose their place), so the flag cannot be inferred from the absence of
+  progress — it has to be read.
+
+  Covered by a test asserting a hidden book leaves the shelf **and** keeps its
+  `mediaProgress` entry, plus a companion test that `DELETE /api/me/progress/:id`
+  removes the book from all three surfaces a client builds Continue Listening from
+  (`/api/me`, `/api/me/progress`, `/personalized`).
+
+- **"Remove from Continue Listening" was registered at the wrong path AND the wrong
+  HTTP method, so every tap 404'd before reaching a handler.** It stayed broken
+  through two fix attempts because neither source we had could settle it: real ABS
+  2.36.0 has **no such route at all** (the oracle answers `Cannot POST`), and this
+  project's spec recorded the wrong shape.
+
+  AudioBooth's own source is the authority, and it says
+  (`SessionService.swift:181-193`, MPL-2.0):
+
+  ```swift
+  NetworkRequest(path: "/api/me/progress/\(progressID)/remove-from-continue-listening",
+                 method: .get)
+  ```
+
+  A **GET**, under **`/api/me/progress/:id`** — not the `POST /api/me/item/:id/…` we
+  had shipped. That is why nothing ever appeared in the audit log for it: the request
+  never matched a route.
+
+  Now registered at the real shape, plus three tolerated aliases (POST on the same
+  path, and both methods on the old `/api/me/item` form), since a 404 here is
+  user-visible breakage and an extra route costs nothing.
+
+  Spec §1.8.9 updated with the correction and with the rule it establishes: **where
+  the client and the oracle disagree, the client wins** — it is the thing making the
+  request; the oracle is authoritative only for routes real ABS actually serves.
+
+- **The app's connection indicator "turned orange randomly" because our deliberate
+  404s flipped it.** AudioBooth's `NetworkService` sets the server status on every
+  response — `guard 200...299 … else { updateStatus(.connectionError) }`, then
+  `updateStatus(.connected)` — and `.connectionError` is the orange dot on the home
+  screen. `/api/me/listening-stats` is fetched on every home-screen refresh and
+  answered 404 by design, so the dot flipped orange and back on every refresh.
+
+  Spec §1.8.6's reasoning ("callers use `try?`, so 404 is safe") was wrong twice:
+  `try?` swallows the *error* but the status side-effect already fired, and
+  `ListeningStats` has **four** required fields, not "~12".
+
+- **The Authors and Narrators tabs were both blank in the app**, while both endpoints
+  answered `200`. Neither was a routing problem — both bodies were unparseable by the
+  client, so the failure was invisible in the access log.
+
+  **Authors:** real ABS switches response envelope when the caller paginates, and the
+  two shapes share no keys — `{"authors":[…]}` bare, versus
+  `{"results":[…],"total":…,"page":…,…}` with `?limit=&page=`. AudioBooth always
+  paginates and decodes into `Page<Author>`, whose `total` and `page` are required, so
+  the bare shape threw. We now serve whichever envelope the request asks for.
+
+  **Narrators:** every entry needs an `id`, which we never sent. The client's
+  `Narrator` declares `id` non-optionally, so one entry without it throws the entire
+  list. The id is now derived exactly as real ABS derives it —
+  `encodeURIComponent(base64(name))` — because narrators are not entities in ABS and
+  the name is the identity; a minted id would change on restart and rot every id the
+  client had cached. `numBooks` is omitted rather than sent as `0` (there is no
+  reverse narrator→book index, and `0` would render "0 books" beside every narrator).
+
+  **Why the fixtures missed both** — recorded as spec §1.8.11 so it does not recur:
+  the authors fixture was captured **without a query string**, so it pinned the shape
+  no client ever requests; and the narrators fixture body is `{"narrators": []}`, so
+  the conformance diff had **no element to compare** and passed vacuously. An empty
+  golden array pins nothing about its elements. A paginated-authors fixture is now
+  committed, and both element shapes have hand-written tests.
+
+- **The app listed 44,888 books where the library holds ~16,000, and every page took
+  1.3-3.0 s.** `GET /api/libraries/:id/items` counted and listed EVERY book row. The
+  app's own counts cache reports the real split — `total_books=44888`,
+  `organized_books=16491`, `unorganized_books=23928` — so roughly 28,000 raw imports,
+  iTunes-tree copies and alternate versions were being served as library items.
+
+  The item list now serves **primary versions that are organized into the library**,
+  excluding quarantined files, using the filtered store calls that already existed.
+
+- **Latency was a fixed full-library scan, not paging.** It was flat across pages
+  (page 0 = 2.01 s, page 9 = 1.29 s) because `CountAllBooks` iterates every `book:`
+  key **and `json.Unmarshal`s every book** purely to count them — 44,888 decodes per
+  request. The filtered count is now cached for 60 s, mirroring `CountPrimaryBooks`'s
+  existing TTL cache (PR #2021) rather than adding a second caching style. Reporting
+  the unfiltered total also made the client page forever into empty results, since it
+  uses `total` to decide whether another page exists.
+
+- **`sort` was silently ignored.** The client always sends
+  `sort=media.metadata.title` and the handler never read it, so the library was never
+  actually title-sorted. Now honoured via the sorted title index (O(offset+limit)),
+  with `?desc=1` reversing it.
+
+  No progress is at risk: §1.8.1 governs `mediaProgress`, a separate payload built
+  from the user's own position rows. A book that leaves the item list still appears in
+  `/api/me`, so the client deletes nothing.
+
+- **Jumping to a letter in the Authors tab took ~37 seconds.** Per-request latency was
+  never the real metric — request COUNT was. AudioBooth pages authors 100 at a time and
+  its jump-to-letter feature keeps loading pages until the target letter appears
+  (`AuthorsPageModel`: `itemsPerPage = 100`,
+  `hasMorePages = currentPage * itemsPerPage < total`). With ~9,200 authors, reaching
+  "Z" is ~93 consecutive requests.
+
+  Each of those rebuilt the whole author list, and `GetAllAuthorBookCounts` is by its
+  own description a "Full Pebble book scan combined with junction table scan" — all
+  44,888 books walked, per page. 93 full library scans.
+
+  The built list is now cached for 5 minutes, so pages 2..93 are slice arithmetic. The
+  same cache serves the home screen's author shelf, which rebuilt it on every refresh
+  too. Built outside the lock, so a burst of page requests does not serialize behind
+  one rebuild.
+
+- **The Authors and Narrators tabs disagreed with the Library about what the library
+  is.** `/items` serves 16,491 primary+organized books, but the author and narrator
+  lists were built from `GetAllAuthors` / `ListNarrators` — every row in the store,
+  including contributors attached ONLY to the ~28,000 unorganized iTunes-tree books.
+  That is where the junk came from: "authors" that are really track names
+  (`065_Rise of the Corinari`, `13_Aurora`, `CD 12`), bare years, `Read by …` credits,
+  and copyright notices.
+
+  Both lists are now derived from the same visible-book set `/items` uses, in a single
+  shared pass, so the three tabs cannot disagree.
+
+- **Author book counts counted invisible books.** An author with forty unorganized rows
+  and one real book read "41 books". Counts are now over visible books only.
+
+- **Narrators gained a real `numBooks`**, which was previously omitted because there is
+  no reverse narrator→book index; deriving both lists from the same junction pass
+  supplies it for free.
+
+- The Narrators tab showed only a handful of names. It was built from the
+  `BookNarrator` junction alone, but for organized books the junction is nearly
+  empty and the data lives in `Book.NarratorsJSON` or the legacy `Book.Narrator`
+  column. Book detail already read all three tiers, so a book page showed a
+  narrator the Narrators tab did not.
+
+  The tab now uses the same three-tier resolution as book detail, sharing one
+  definition of the precedence so the two cannot drift apart. `NarratorsJSON` was
+  added to the `BookSummary` projection to keep this a single cheap pass rather
+  than a per-book fetch.
+
+  Measured on production: 69 of 120 sampled visible books (57.5%) have a narrator
+  stored — roughly 9,500 of 16,491 — against 8 shown before this fix.
+
+- Book durations displayed as near-zero across the library. Four read paths
+  divided `BookFile.Duration` by 1000 on the assumption it stores milliseconds.
+  It stores **seconds** by convention — only about 2% of rows are milliseconds,
+  written by the iTunes importer.
+
+  Worse, the library-list aggregate applied that integer division **per row
+  before summing**, so every file shorter than 1000 seconds contributed exactly
+  zero. Hyperion listed 20 seconds against a stored 174,658, and 25,938 of
+  44,886 books showed an implausibly small duration — every one of them a book
+  that has files, while the books that looked correct were the ones with no
+  files, which skip the aggregation entirely.
+
+  All four sites now use `database.NormalizeDurationSec`, which divides only when
+  the file's implied bitrate proves the value is milliseconds. Correct rows pass
+  through untouched, genuine millisecond rows are still repaired, and books with
+  mixed units are judged row by row.
+
+- Auto-applying a transcription match wrote the **entire** metadata candidate —
+  narrator, series, series position, year, publisher, ISBN, description,
+  language and cover URL — even though only **title and author** were ever
+  checked by the gates that authorised the apply.
+
+  `ApplyTranscriptionCandidate` passed a nil field list to
+  `ApplyMetadataCandidate`, and nil means "no allowlist". The apply is now
+  narrowed to `["title", "author"]`, matching exactly what
+  `runAutoMatchTranscribed` gates on (normalized exact title equality plus author
+  containment). Widening it is now a deliberate edit rather than a default.
+
+- `maintenance.dedupe-book-file-rows` can no longer lose data held only by the rows
+  it deletes. The op collapses redundant `book_file` rows that all describe the same
+  file on disk, and it chose which row to keep by ranking them. But ranking picks a
+  whole **row**, and the best row is not guaranteed to be the most complete one: a
+  row carrying an AcoustID fingerprint could have no duration at all, while the
+  duration lived on a twin that was then deleted.
+
+  **Correction (2026-08-04):** this was first written up as a confirmed loss on
+  `The Trapped Mind Project`, which showed 0.00h after its 130 rows were collapsed.
+  That was wrong. The book's entire audio is a 13.5-second, 91,958-byte MP3, and the
+  surviving row matches the file exactly — 0.00h is simply what 13 seconds looks
+  like, and the op behaved correctly on all 10 canary books.
+
+  The change below is therefore **hardening against a latent hazard, not a repair of
+  an observed loss**: ranking selects a whole row, so a keeper genuinely can lack a
+  field one of its twins holds, and merging is strictly additive.
+
+  The keeper now absorbs every field it is missing from the rows about to be
+  destroyed: duration, AcoustID fingerprint, fingerprint duration, file hash, and
+  file size. The merge is strictly additive — a value the keeper already holds always
+  wins — so it can only recover data, never degrade it. The salvaged row is written
+  **before** any twin is deleted, and a failed write skips the whole group rather
+  than deleting donors whose data was never rescued.
+
+  The canary that found this was run against 10 books (338 rows deleted) precisely
+  so a design error would surface at that scale instead of across the whole library.
+
+- Three test helpers that build a real `PebbleStore` now call `WaitForWarmup()`, which
+  `PebbleStore` documents as mandatory (`pebble_store.go:147-152`) and which all three
+  were skipping. This is the likely cause of two intermittent CI failures that had been
+  written off as generic flakes — `TestBackfillSyncIDsJob_ConcurrentRaceSanity` and
+  `TestBackfillSyncIDsJob_FreshLibrary`, the latter failing on a PR that touches neither
+  package.
+
+  The memdb warmup runs asynchronously from `NewPebbleStore` and publishes only at the
+  very end (`memPtr.Store(memStore)`). Until it does, `mem()` is nil — which makes
+  *reads* safe, since they fall back to Pebble, but silently discards every *write's*
+  memdb write-through. A test that seeds books in that window leaves them in Pebble
+  while the published memdb never sees them, and `ListBookIDs` takes the memdb fast
+  path. The job then never visits those books, so they never get a syncID:
+
+  ```
+  backfill_sync_ids_test.go:102: Should be true
+    Messages: book 01KZ6QV6AZPW2AE93P7M0TRVFN has no syncID
+  ```
+
+  On an empty temp database that window is sub-millisecond, which is why this surfaces
+  only under CI load and resisted 40 local iterations under 20× CPU contention. The fix
+  rests on the documented invariant and a matching failure signature rather than on a
+  reproduced failing test, so the two TODO entries stay open until a green CI streak
+  confirms it.
+
+  Production is not affected: warmup is a one-time startup affair there, and reads fall
+  back to Pebble until it publishes.
+
+- Corrects the record on the `maintenance.dedupe-book-file-rows` canary. It was written
+  up as having destroyed the duration on `The Trapped Mind Project`, leaving the book at
+  0.00h. **That was wrong, and the op behaved correctly on all 10 canary books, not 8.**
+
+  The book's entire audio content is a 13.5-second, 91,958-byte MP3 — a stub, not a real
+  audiobook — and the surviving row matches the file exactly:
+
+  ```
+  iTunes copy        91958 bytes   duration=13.485s   bit_rate=54554
+  surviving DB row   file_size=91958                  duration=13
+  ```
+
+  130 rows × 13s ≈ 1,690s ≈ 0.47h before the run; one row of 13s after. `0.00h` is
+  simply what 13 seconds renders as. The mistake was treating a rounded display value
+  as evidence of loss without probing the underlying file.
+
+  The keeper field-merge shipped for this remains correct and stays — ranking selects a
+  whole row, so a keeper genuinely can lack a field one of its twins holds — but it is
+  **hardening against a latent hazard, not a repair of an observed loss**.
+
+  Two real defects on that book did surface while checking, and are now tracked: its
+  book-level `file_size` reads 532,805,172 (532 MB) for a 91 KB file, and the API
+  reports `file_exists: true` for a `file_path` that is absent from disk.
+
+- `maintenance.dedupe-book-file-rows` is no longer killed mid-run by the registry's
+  stuck-op watchdog. The first full production run was cancelled at **book 19 of 194**:
+
+  ```
+  registry: strike recorded  kind=stuck  message="no progress for 5m12s (timeout=5m0s)"
+  registry: canceling stuck op
+  ```
+
+  The op reported progress exactly once per book, at the bottom of the loop. Per-book
+  cost averages ~45s but varies widely — a book with 47 duplicate rows does far more
+  work than one with 2 — so a single heavy book could exceed the watchdog's 5-minute
+  window on its own. From the outside a healthy op was indistinguishable from a hung
+  one, and the watchdog is right to be aggressive: it exists because of the
+  "silent for hours" incident class.
+
+  Two changes, one primary and one defensive:
+
+  - The per-book loop now emits a **heartbeat after each duplicate group**, deliberately
+    re-reporting the *current* index rather than advancing it — the book is not
+    finished, so the bar must not move. The only purpose is to stamp `lastProgressAt`.
+  - `ProgressTimeout` is declared at 30 minutes, matching the precedent
+    `malformed-m4b-transcode` set for a slow-but-healthy per-item op.
+
+  No data was at risk — books commit independently and the op is idempotent, so the 19
+  completed books stayed correct and a re-run resumes the remainder. But at ~19 books
+  per cancelled run the op could not finish its own workload, which made a
+  194-book cleanup a ten-invocation chore.
+
+  Separately, the code comment claiming this op had destroyed a duration on
+  `The Trapped Mind Project` is corrected in place. That finding was retracted: the
+  book's entire audio is a 13.5-second file, and a full-library dry run reported
+  "would salvage fields on 0 keepers" across all 194 books. The keeper field-merge
+  guard remains as defence against a real-but-unobserved hazard.
+
+- **Duplicate `book_file` rows are gone library-wide.** Final verification dry run,
+  run after a restart so the memdb read path was warm:
+
+  ```
+  314,153 rows scanned, 0 books affected, 0 redundant rows, would delete 0, failed 0
+  ```
+
+  Total across all runs: **3,239 redundant rows removed from 204 books, 0 failures**.
+  Every run reported "salvaged fields on 0 keepers" — no keeper anywhere was missing a
+  field one of its twins held, which is the third independent confirmation that the
+  earlier data-loss finding was correctly retracted.
+
+  Three attempts were needed, each blocked by a different property of the op rather
+  than by the data:
+
+  1. **Cancelled at book 19/194** by the registry's stuck-op watchdog. Progress was
+     reported once per book and one book took over five minutes, so a healthy op was
+     indistinguishable from a hung one (fixed in #2133).
+  2. **Hit the op's own 2-hour `Timeout` at book 78/176**, running sequentially at
+     ~1.7 min/book — the op could not complete its own workload in one pass.
+  3. **Finished 95 books in 9.5 minutes** once the book loop was parallelised (#2135),
+     the same work the sequential pass had spent two hours half-finishing.
+
+  Nothing was ever at risk: books commit independently and the op is idempotent, so
+  each cancelled attempt kept its completed work and the next run resumed the rest.
+
+  Verified on the sampled books after a memdb refresh — `Shades of Glory`
+  144.71h → 12.06h, `The Undying Illusionist` 261.61h → 17.26h, `Darkness Rises`
+  205.41h → 14.78h — all with exactly one row per distinct path.
+
+- **`UpdateBookFile` now normalises `Duration` to the stored standard (seconds).** It
+  was the last write path that did not. `CreateBookFile`, `UpsertBookFile` and
+  `BatchUpsertBookFiles` all called `normalizeBookFileDuration`; an *update* did not —
+  so an update could reintroduce exactly the millisecond corruption those three exist
+  to prevent. The unit invariant now holds at the store, not at each caller's
+  discretion.
+
+  Applying it unconditionally is safe because `DurationLooksLikeMillis` only fires when
+  reading the value as seconds implies an impossible sub-4 kbps file **and** dividing by
+  1000 lands back inside a plausible audio band. A correct row is never touched, and a
+  corrected row is never divided twice.
+
+  Four tests cover it — conversion on update, inertness on good data, idempotence, and
+  fingerprint preservation (this path writes the whole struct, and a fingerprint-wipe
+  bug has shipped here before). Verified all three failure cases fail on *behaviour*
+  with the guard removed: `stored duration = 1048000, want 1048`.
+
+- **Millisecond durations are gone library-wide.** `maintenance.purge-millisecond-durations`
+  applied against production:
+
+  ```
+  apply : 314,153 rows scanned, 214 books affected, 1,384 ms rows,
+          converted 1,384, recomputed 214 books,
+          skipped 9,352 (already seconds), failed 0
+  verify: 314,153 rows scanned, 0 millisecond durations found — nothing to do
+  ```
+
+  The two books that survived the row-dedupe are now correct:
+  `01KNDB9V04D7MBTFVDKYWX286E` 19,294.11h → 9,906.11h → **9.90h**, and
+  `01KNDB9ZHJSMBY7D98Y82PQTK0` 15,556.96h → 8,049.06h → **8.05h**. All ten books
+  tracked through this work now read 8–17h.
+
+  The 9,352 skipped rows are the reassuring detail: they sit *inside* the same 214
+  affected books and were correctly left untouched, so the predicate discriminates per
+  row rather than condemning a whole book.
+
+  Together with the `UpdateBookFile` normalisation, the unit corruption is both
+  repaired and closed off — every write path now agrees that `Duration` is seconds.
+
+- **`GET /api/v1/authors` ignored `limit` and `offset` entirely.** Measured against
+  production, every request returned all 9,203 authors — about 765 KB — regardless
+  of what was asked for:
+
+  ```
+  ?limit=5     → 9,203 items, 765 KB
+  ?limit=50    → 9,203 items, 765 KB
+  ?limit=1000  → 9,203 items, 765 KB
+  ```
+
+  Both parameters are now honoured. Paging is applied **after** the cache rather
+  than pushed into the query: building the list is the expensive part (it joins book
+  and file counts per author), so one cached build serves every page slice, and
+  re-querying per page would surrender the cache for nothing.
+
+  `count` deliberately stays the **full** total rather than the slice length — a
+  client paging through needs to know how much is left, and reporting the page size
+  would make the last page look like the whole set.
+
+  🔑 Omitting `limit` still returns everything. The current UI depends on the unpaged
+  response, so paging is strictly opt-in; defaulting to a page size would have
+  silently truncated it.
+
+- **The Audiobookshelf Authors tab hung for six seconds after every restart.**
+  Building the contributor list is a full-library scan, and the cache starts empty,
+  so the first caller paid for it — normally the client's Authors tab. Measured:
+  **6,104 ms cold vs 105 ms warm.**
+
+  The cache is now warmed in the background at startup. It waits for the memdb
+  warmup first: the cache holds the authors of *visible* books, and building it
+  against a half-published memdb would cache a view of a library that does not exist
+  yet — and then serve it for the whole TTL. A slow-but-correct warm beats a fast
+  wrong one.
+
+  Best-effort by design: a failed warm only means the next request rebuilds, exactly
+  as before. It is logged, never returned, and never blocks startup.
+
+  6 tests on the paging, covering limit, offset, an offset past the end, a limit
+  larger than the set, unparseable values, and the no-parameters backward-compatibility
+  guarantee.
+
+- **`GET /api/v1/library/metadata-results` took 21.9 seconds — for three rows.**
+  Measured against production: `?limit=3` out of 36,805 results, 21,912 ms.
+
+  The page slice was applied *after* the build, and the build re-ran on every
+  request regardless of the page asked for:
+
+  ```
+  GetRecentOperations(5000)
+    → a SEPARATE GetOperationResults(op.ID) per metadata_candidate_fetch op
+    → folded into a latest-per-book map
+  ```
+
+  So `?limit=3` cost exactly what `?limit=5000` did. That made choosing metadata
+  matches impractical — every interaction paid twenty seconds.
+
+  The build is now memoised for 60 seconds, mirroring the ABS contributor cache for
+  the same reason: assembling the set is the expensive part, and every page is a
+  free slice of it. The rebuild happens **outside the lock**, because holding it
+  across a multi-second build would serialise every concurrent request behind one
+  rebuild — exactly the access pattern a UI paging through results produces.
+
+  Applying, rejecting and un-rejecting a candidate all invalidate the entry. A
+  status change must not leave the list offering a candidate the user just acted
+  on; that is the one kind of staleness that actively misleads rather than merely
+  lags.
+
+  5 tests, including that a fresh entry is served without touching the store at all
+  (a nil store proves no rebuild), that invalidation clears it, and that the TTL
+  stays inside a band short enough to feel live.
+
+- **The shattered-book classifier would have merged whole series into single books.**
+  A production dry-run on 2026-08-05 produced 930 regroup candidates; sampling the
+  `regroup.multidisc` ones — the *confident* kind, the only one with an apply
+  handler — found **41 of 43 were not chapter sets at all**:
+
+  ```
+  Super Sales on Super Heroes.m4b / 2 / 3 / 4 / 5      ← five separate novels
+  He Who Fights with Monsters 10 / 12 / Book 01        ← separate novels
+  Path Of The Voidwalker - BK01 / BK02 / BK03          ← "BK" = Book
+  ```
+
+  One grouped two entirely different titles (*Isekai Cheat Appraiser* with
+  *My Cottage Was Transferred to Another World*).
+
+  **Root cause:** every one of the 43 was an iTunes **author-level** folder —
+  `iTunes Media/Audiobooks/<Author>/`. The classifier's founding assumption, that
+  files sharing a folder are tracks of one book, holds in the organized tree
+  (`<Author>/<Title>/files`) and is false in the iTunes tree, where one folder holds
+  an author's entire catalogue.
+
+  The existing over-merge guard could not catch it. That guard keys on distinct
+  title *stems*, and numbered sequels all strip to one stem, so `manyDistinctTitles`
+  stayed false and the collapse was judged confident.
+
+  🔑 **Runtime is the discriminator the name cannot provide.** Six two-hour files are
+  six books; six three-minute files are six chapters. `ShatterBook` now carries
+  `DurationSec`, and a confident flat collapse is vetoed when a strict majority of
+  members are individually ≥90 minutes — a threshold in the empty band between
+  chapters and novels.
+
+  Deliberately conservative in both directions: a lone long member cannot veto a
+  real chapter set, and **unknown duration counts as not-book-length**, so a library
+  with missing durations does not have every collapse silently blocked. A vetoed
+  group falls through to `ambiguous` and is held for review rather than merged —
+  matching the existing rule that this classifier errs toward *not* grouping,
+  because leaving a book shattered is recoverable and merging distinct books is not
+  (the apply path hard-deletes absorbed rows).
+
+  This was only measurable because the duration data became trustworthy the day
+  before — the millisecond purge and duplicate-row cleanup are what make runtime a
+  usable signal here. Per-row values are normalised through `NormalizeDurationSec`
+  when summed, so a stale millisecond row cannot masquerade as book-length.
+
+  6 tests, including the production shape, a real chapter set that must still
+  collapse, and a check that the guard is load-bearing — removing it makes the
+  series case plan "a CONFIDENT collapse of 6 full-length books into one".
+
+- **Regroup holds could be labelled with the AUTHOR folder instead of the book.** A
+  production group of 17 tracks — every one of them
+  `Rysa Walker - The Delphi Effect ... (Unabridged)` — was shown as
+  `/abooks/imported/Rysa Walker`.
+
+  The grouping was correct; only the label was wrong. The parent directory carried an
+  edition marker, so `folderKeyOf` took the edition branch and returned the
+  *grandparent* — which is the book for `<Book>/<Book> (Unabridged)/files`, but the
+  author for `<Author>/<Book> (Unabridged)/files`.
+
+  🔑 This is a correctness problem, not a cosmetic one. With ~900 holds to work
+  through, a reviewer reading "Rysa Walker" would reasonably reject it as an
+  author-folder merge and discard a *good* regroup — the same mistrust that made this
+  queue feel unsafe in the first place.
+
+  The displayed folder is now the members' shared directory when they all sit in one,
+  and the grandparent only when they genuinely span sibling shells (the real shatter
+  shape, where naming one chapter dir would be worse). **Display only — the grouping
+  key is untouched, so which books belong together does not change.**
+
+  3 tests: the production shape, the spanning shape that must keep the grandparent,
+  and the helper's fallbacks.
+
+- **The regroup producer no longer proposes changes inside the frozen iTunes tree.**
+  `books/itunes/**` is the externally-managed Original library — the config layer
+  already marks it `Frozen` and read-only — but the shattered-book scan never
+  consulted that, and generated holds for it anyway.
+
+  The result dominated the review queue: **561 of 777 ambiguous holds (72%) were
+  iTunes AUTHOR folders**, `iTunes Media/Audiobooks/<Author>/`. That layout puts an
+  author's whole catalogue in one directory, and a folder-grouping classifier reads a
+  shared folder as a shared book.
+
+  Every one of those proposals was wrong twice over:
+
+  - **the books were not shattered.** Sampling their members shows complete, correct
+    audiobooks — 11.79 h, 25.30 h, 8.86 h, one file each, real titles. Combining them
+    would have merged distinct novels; and
+  - **the tree may not be reorganised anyway**, so the proposal was unactionable even
+    if it had been right.
+
+  Excluded at the source, using the existing `UnderFrozenITunesTree` policy helper
+  (newly exported) rather than a fresh heuristic, so no downstream classifier has to
+  re-derive the rule. The count is reported as `skipped-frozen-itunes=N` in the run
+  summary, so the queue shrinking is visibly a policy decision rather than a silent
+  bug.
+
+  Both `FilePath` and `ITunesPath` are checked: the classifier folds the original
+  iTunes album path in as a second grouping signal, so testing only one would let a
+  book back in through the other.
+
+  🔑 **This removes noise, not work.** The excluded books are already correct as
+  separate books. What IS wrong with them is metadata — four different novels all
+  titled `Super Sales on Super Heroes, Book 2`, two titled
+  `He Who Fights with Monsters 4`, one titled `Herald of Shalia 1/?` — which is a
+  matching problem the regroup queue was never going to solve.
+
+- **The metadata-results set is now pre-warmed at startup**, so the first person
+  to open the match UI after a restart no longer waits ~34 seconds for it to
+  build. The build was memoised with a 60s TTL in #2142, but nothing populated
+  the cache at boot — memoising moved the cost onto one unlucky request rather
+  than removing it. Warming it removes it.
+
+  Implemented as `warmMetadataResultsCache`, enrolled in the existing startup
+  cache-warmer group alongside facets/authors/series: `bgWG`-tracked so shutdown
+  drains it before the store closes, guarded on an already-cancelled `bgCtx`, and
+  wrapped in `warmerRecover` so a warmup fault degrades to a cold cache instead of
+  taking the server down. Best-effort by design — it never blocks startup.
+
+  The TTL was deliberately left at 60s. Extending it to paper over the cold-boot
+  gap would make every stale read staler; the right fix for "cold at boot" is to
+  warm at boot.
+
+- **The metadata-results list no longer stalls for ~30 seconds every minute.**
+  The cache expired after 60s and made the next caller rebuild synchronously — a
+  build that costs ~30s on this library. Measured on production: **39.4s** on the
+  first request after a restart and **28.9s** on a request 70s later with no
+  restart involved. Anyone not clicking at least once a minute paid the full
+  build every single time.
+
+  Pre-warming at boot (#2152) fixed exactly one occurrence; the cliff returned
+  sixty seconds later. That change alone did not deliver what it claimed.
+
+  The cache is now **stale-while-revalidate**: an expired entry is served
+  immediately while a single background rebuild runs. A stampede guard means many
+  concurrent callers trigger at most one rebuild rather than one each.
+
+  Serving stale is safe because the TTL was never the correctness mechanism —
+  `invalidateMetadataResultsCache()` already fires on apply/reject/unreject, the
+  only events that make an entry misleading. Freshness comes from that explicit
+  invalidation; the TTL now only decides when to refresh in the background. An
+  invalidation still forces the next caller onto the synchronous path, because
+  after it there is no trustworthy set left to serve.
+
+- **Metadata-results cache: an invalidation could be silently undone by an
+  in-flight rebuild.** Flagged by automated security review of #2153.
+
+  The build runs outside the lock and takes ~30s. If a user applied or rejected a
+  candidate during that window, `invalidateMetadataResultsCache()` cleared the
+  entry — and then the in-flight build finished and wrote back the snapshot it
+  had read *before* the invalidation. The cache ended up holding exactly the
+  stale set the invalidation existed to purge, so the list kept offering a
+  candidate the user had just acted on: the one kind of staleness this cache is
+  explicitly not allowed to have.
+
+  Fixed with a generation counter. A build captures the generation before
+  reading; every invalidation bumps it; the build refuses to install its result
+  if the generation moved, leaving the cache cold so the next read rebuilds from
+  current state.
+
+  The race existed in the pre-#2153 code too (the build was always outside the
+  lock), but background refreshes were rare there — only on a cold miss. #2153
+  made them routine, which turned a narrow window into a regularly-hit one.
+
+- **`IsJunkSeriesBase` missed artefacts stranded at the front of a name.** The guard only checked
+  suffixes, because the parser only stripped suffixes. Stripping a leading number strands the
+  punctuation at the front instead (`. Battle for the Abyss`), where none of those checks could see
+  it. Also added bundle words (`Publisher's Pack`, `Omnibus`, `Box Set`) — a pack number is not a
+  series position — and now rejects single-character bases. This guard stopped 285 bad merges in an
+  earlier production dry run, and the new shapes give it more ways to be reached.
+
+- **`transcribe-book-intros` picked the wrong "first file" on multi-disc books.**
+  `nthAudioFile` sorted candidates by `(track, path)`, ignoring `DiscNumber`, so
+  disc-2-track-1 tied with disc-1-track-1 and the file path broke the tie
+  arbitrarily — a book whose disc 2 sorted lexically first had disc 2's opening
+  transcribed as its intro. The comparator now matches
+  `PebbleStore.GetBookFiles` verbatim: `(disc, track, path)`.
+
+  Books written by the iTunes regroup path were never affected (`assignDiscTrack`
+  flattens discs to `DiscNumber=0` with contiguous track numbers, so the two
+  comparators agree); the break was in legacy rows carrying real disc numbers
+  from tag scans. This is load-bearing for the per-file signal above, which rests
+  on "track 1 carries the opening, tracks 2..N do not" — a sort that disagrees
+  about which row is track 1 makes that discriminator read the wrong row.
+
+- **`TODO.md` now records owner item 6 (warm the metadata-results build at boot)
+  as done.** The warmer shipped as `warmMetadataResultsCache` and is enrolled in
+  `startCacheWarmers`, but the checkbox was never ticked, so the item read as
+  outstanding. Documentation only — no behaviour change.
+
+  The entry now also distinguishes the warmer from the stale-while-revalidate
+  work that merged the same night (#2153/#2154). They address the same 34 s
+  symptom by different means — SWR keeps a warm cache warm under load, the
+  warmer covers the first request after a restart — and conflating them is what
+  made the item look already-closed to one reader and still-open to another.
+
+- **Books written during startup could stay invisible until the next restart.** The in-memory query
+  layer is warmed in the background so the server can start serving immediately — roughly two
+  minutes of scanning on a production-sized library. Any book or book file written during the tail
+  of that window was saved to the database correctly but never made it into the in-memory snapshot,
+  and nothing ever re-warmed it: the row stayed missing from library listings, dedup scans and
+  maintenance jobs for the rest of the process lifetime. Deletes had the mirror-image problem —
+  a book deleted during the window survived in memory as a phantom row that cleanup and dedup
+  would then act on.
+
+  Write-throughs that arrive while the warmup is still running are now buffered and replayed into
+  the snapshot immediately before it is published, in the same critical section as the publish, so
+  a concurrent write is either replayed into the snapshot or applied to it afterwards — it can no
+  longer fall between the two. If that buffer is ever exhausted (a bulk import racing startup), the
+  service logs an error and keeps serving reads from the database directly rather than publishing a
+  snapshot it knows to be incomplete. Startup is still non-blocking.
+
+  Also fixed an adjacent case of the same problem: `Reset` wipes the keyspace, but an in-flight
+  warmup could afterwards publish its pre-wipe snapshot over the top. It is now cancelled instead.
+
+- **Credit verbs no longer leak into parsed titles.** The parser split the title
+  on the first standalone `by`, which lands *inside* `written by` and welded the
+  verb onto the title (`"Awakened Essence 1 Written"`). Measured across 987
+  sampled production books, **24.8% of stored titles carried a leaked verb**, and
+  `written by` is the single most common credit variant in the library (24.1%) —
+  it was not in the pattern list at all. The split now prefers the authorship-verb
+  form, and `translated by` / `edited by` / `adapted by` are recognised.
+- **Narrative prose is no longer parsed as credits.** Text merely containing the
+  word `by` produced a title/author pair — one production clip yielded a ~900
+  character "title" and an author of `"mirrored sunglasses. Fury didn't have
+  time"`. Announcements must now clear plausibility gates (length, narration
+  markers) that prose cannot.
+- **Publisher jingles are `unknown`, not `prose`.** A clip that captured only
+  `"This is Audible."` or a publisher tagline carries no information; reporting it
+  as prose let downstream read it as weak continuation evidence.
+
+- **~77% of the library was falsely marked `whisper_error`.** A day-long
+  transcription-endpoint outage on 2026-07-01 tripped `processTranscribePage`'s
+  whole-batch error path, which marks **every** book in a page as
+  `whisper_error`. Measured 2026-08-07: 76.7% of a 300-book random sample carried
+  the status, and **229 of those 230 books had good transcript text** — dated
+  2026-06-27, four days before the outage. Across a 400-book sample the failures
+  clustered into 17 timestamps, all on 2026-07-01, every error a connection
+  failure. No transcript was ever damaged (`applyOutcome` correctly refuses to
+  overwrite good text with nothing); only the status was wrong. The library had
+  degraded into "everything looks broken while everything is fine" — the worst
+  state for any query that filters on status, including the tiered backfill's
+  "what still needs work" query.
+
+- **Credit parsing no longer contaminates title, author or narrator.** Chapter
+  headings, translator credits and cover-art credits leaked into the adjacent
+  name field because the boundary list enumerated `chapter one|chapter 1` and
+  had no anchor for the other roles. Replaying 346 production transcripts, the
+  number of contaminated fields drops from **103 to 0**.
+
+- **Memdb warmup caller-pointer data race.** `UpsertBookToMemDB` captured the
+  caller's `*Book` in the write-through closure; while the async warmup was
+  still buffering, that closure ran much later on the warmup goroutine
+  (`publishWarmMemStore` → `applyMemSync` → `stripBookForMemdb`'s `cp := *src`),
+  reading the caller's live struct while the caller was still mutating it
+  (`UpdateBook` writes `book.ID` after the call returns). Under load during
+  startup — exactly when backfills and migrations run — this could write a torn,
+  half-updated Book projection into memdb. Fixed by snapshotting the struct at
+  enqueue time, and the same copy-at-enqueue rule was applied to every sibling
+  helper with the same shape (`UpsertBookFileToMemDB`, `UpsertAuthorToMemDB`,
+  `UpsertSeriesToMemDB`, `UpsertNarratorToMemDB`, `UpsertImportPathToMemDB`,
+  `UpsertAuthorAliasToMemDB`, `UpsertBlockedHashToMemDB`, plus slice copies in
+  `ReplaceBookAuthorsInMemDB`/`ReplaceBookNarratorsInMemDB`). Regression test
+  `TestUpsertBookToMemDB_SnapshotsCallerBookAtEnqueue` forces the exact
+  interleaving deterministically under `-race` instead of hoping to catch it.
+
+- **Transport failures no longer write per-file transcription status.** When
+  the Whisper batch call fails with a `*transcribe.TransportError` (endpoint
+  unreachable, connection refused, timeout — the request never reached a
+  model), `processTranscribePage` now writes ZERO `TranscribeStatus` rows and
+  defers the page for retry on the next run, instead of stamping every book
+  in the batch as `whisper_error`. This closes the caller-side half of the
+  bug that recorded the 2026-07-01 day-long endpoint outage as ~34,000 false
+  per-book `whisper_error` verdicts (the error-classification half shipped in
+  PR #2173; the historical rows were repaired by
+  `maintenance.repair-transcribe-status`). Per-file errors reported inside a
+  successful batch (`BatchResult.Error`) still write `whisper_error` for that
+  book, and genuine non-transport batch failures keep the old whole-batch
+  behaviour as defence for the local path. Regression tests cover both
+  directions in `internal/plugins/maintenance/intro_transcribe_transport_test.go`.
+
+- Intro classifier no longer extracts credits from pure narrative prose. A
+  mid-sentence bare "by" could split multi-sentence narration into a short
+  "title" whose sentence-initial pronouns are capitalized ("…people. We only
+  wished…"), evading the deliberately case-sensitive prose-pronoun check — 2 of
+  12 sampled prod transcripts stored garbage parsed fields this way (one
+  transcribed_title was ~1,000 chars of dialogue). Uncorroborated titles (no
+  credit verb) spanning multiple sentences are now rejected (honorifics and
+  initials like "Mr. Mercedes" exempted), and a hard 120-char title cap applies
+  regardless of word count.
+- `maintenance.intro-migrate-single-file` now reports zero-`book_file`-row books
+  as `skip_no_book_file_rows` even when the book-level transcript is also
+  missing (previously they all landed in `skip_book_has_no_transcript`, so the
+  zero-row bucket read 0). Corrected the file comment falsely claiming those
+  books are "unlinked, not un-transcribed" — measured 2026-08-07, the ~1,122
+  zero-row books have neither file rows nor a transcript, so relinking alone
+  will not give them one.
+
+- **E2E content-drift refresh, wave 1: Dashboard (6) + Book Detail (3) specs.** All nine
+  failures were stale mocks, not product bugs: the frontend api layer now unwraps a
+  `{ data: ... }` response envelope, but the e2e mock helper (`web/tests/e2e/utils/test-helpers.ts`)
+  still returned raw bodies, so `getSystemStatus`/`startScan`/`startOrganize` resolved to
+  `undefined` (zeroed stat cards, no `/operations` navigation). The Dashboard also now prefers
+  the previously unmocked `/api/v1/system/storage` endpoint, so the real machine's statfs
+  leaked into the storage card. Book Detail's in-page fetch mock didn't cover
+  `/api/v1/auth/status` + `/api/v1/auth/me`, so the app bounced to the Login screen. Mocks now
+  serve both the envelope and top-level fields; no product code changed.
+
+#### A device's listening position now survives every merge and untagged move (ABS-SYNC-ID-3 / ID-12)
+
+The durable sync identity added in the `sync_item` keyspace only helps if every
+code path that retires a Book ULID carries it forward. Four paths did not, and
+each one silently orphaned a client's saved place in a book:
+
+- **`merge.Service.MergeBooks`** (the UI/dedup merge) — the winner keeps its ULID
+  and losers are soft-deleted, so this is a loser-only redirect: the winner's
+  syncID is minted if absent, and each loser's syncID becomes a redirect record
+  pointing at it. A client still holding a loser's `libraryItemId` now resolves
+  through to the winner (chains included, e.g. B→A→C).
+- **`merge.Service.CombineBooks`** — absorbed shells are **hard-deleted**, so the
+  follow runs *before* the delete; there would be no row left to repoint after.
+- **`dedup.MergeBooks`** (still live via `internal/reconcile/itunes_heal.go`) —
+  also hard-deletes losers. This was the unrecoverable case: without the hook, a
+  routine heal run destroyed the only row that could have carried the identity.
+- **Untagged move** (`internal/scanner`) — a moved file with no
+  `AUDIOBOOK_ORGANIZER_ID` tag cannot be re-linked to its own row, so the scanner
+  mints a brand-new ULID and version-links it to the predecessor. The identity now
+  follows to the new ULID when the predecessor's file is gone from disk (a real
+  move); a second copy whose original still exists leaves the identity alone.
+
+Each user's listening progress moves with the identity, favouring whichever side
+is further along (`UserBookState.ProgressPct`, ties broken by the more recent
+`LastActivityAt`), and the retired book id is drained so no progress is left
+resolvable — or listable by status — under a book that no longer exists. The
+losing side is only drained *after* the carry-forward succeeds, so a store failure
+mid-way can never destroy the position it was meant to preserve.
+
+All four hooks are best-effort with respect to the merge itself (a sync-identity
+hiccup never fails a merge that would otherwise succeed) but never silent: every
+failure logs at ERROR with both book IDs. The merge hooks run inside the existing
+process-wide `mergeSerializeMu` critical section, which makes them exactly-once
+against concurrent merges by construction — no additional partitioning was added.
+A 16-goroutine `-race` test against a real PebbleStore asserts a single redirect,
+a single `MergedFrom` entry, and the correct surviving progress value after
+concurrent identical merges.
+
+**Known gap (follow-up):** the `sync_file` keyspace is keyed `(bookID, fileID)` and
+its `RepointSyncFile` primitive cannot move an entry to a different book, so
+per-file `ino` ids are not yet carried across `CombineBooks` (files move to the
+survivor) or an untagged move. That only affects an offline client's cached
+per-file download URLs, not progress or bookmarks.
+
+#### E2E suite: `unknown parameter "_page"` broke six spec files on main
+
+A lint sweep in April (`68d2a0ed`, "resolve all E2E test lint errors") renamed
+the unused `page` fixture parameter to `_page` in seven no-op
+`test.beforeEach(async ({ _page }) => { ... })` hooks. Playwright validates
+fixture names in the destructured parameter object at run time, so every test
+inside those `describe` blocks failed immediately with
+`Error: Test has unknown parameter "_page"` — the suite was broken on main
+and gated nothing.
+
+The seven hooks (in `dashboard.spec.ts`, `book-detail.spec.ts`,
+`error-handling.spec.ts`, `file-browser.spec.ts`,
+`operation-monitoring.spec.ts`, and two in `import-audiobook-file.spec.ts`)
+have comment-only bodies — each test does its own setup via
+`openLibrary()`/`openDashboard()`/`setupRoutes()` etc. — so the fix is to
+declare them with no parameters at all: `test.beforeEach(async () => { ... })`.
+This satisfies both the linter (no unused parameter) and Playwright (no
+unknown fixture).
+
+#### Environment-driven config is viper-native again (removed the os.Getenv workaround)
+
+The OAuth / Cloudflare-Access config was being read via `os.Getenv` scattered at call
+sites as a workaround for a misdiagnosed "viper doesn't pick up env" problem. viper was
+never broken — every key has an explicit `viper.BindEnv`, so `viper.GetString` honors the
+environment. The real bug was load-order: `LoadConfigFromDatabase` restores the whole
+`Config` from the DB `config_blob` (`*c = loaded`) *after* `InitConfig` populated it from
+viper, zeroing every env-derived field except `DatabaseType`.
+
+The fix re-establishes the standard precedence **env > blob > file > default** natively:
+a single `applyEnvAuthoritativeConfig` re-applies only the environment-authoritative keys
+(OAuth, Cloudflare Access, Whisper) as the last step of the DB-load path, using
+`viper.IsSet` + `viper.GetX`. `IsSet` is false for a key that only has a default, so a
+UI-managed value living in the blob (`itunes.*`, `scheduled.*`) survives untouched when no
+env override is present. `WHISPER_REMOTE_URL` now flows through a real `Config` field
+instead of `os.Getenv`, and all `os.Getenv` call-site reads were removed. Regression test
+`TestLoadConfigFromDatabaseEnvAuthoritative` locks both directions (env wins over blob;
+blob survives when env unset).
+
+#### OAuth/Cloudflare-Access config read from env at point of use (config-blob was zeroing it)
+
+`LoadConfigFromDatabase` overwrites `config.AppConfig` from a stored config-blob right
+after `InitConfig`, preserving only a hardcoded list of env-immutable fields; the
+OAuth/CF-Access fields were not on that list, so a systemd-set `Environment=` value was
+zeroed and the Cloudflare Access passthrough never initialized. `buildOAuthWiring` now
+reads `CF_ACCESS_*` / `OAUTH_*` from `os.Getenv` at the point of use (config.AppConfig
+fallback), which is authoritative regardless of the blob — the same reason
+`WHISPER_REMOTE_URL` reads env directly.
+
+#### OAuth / Cloudflare Access config now read from env vars (os.Getenv, not viper)
+
+The OAuth2/OIDC + Cloudflare Access settings (`CF_ACCESS_TEAM_DOMAIN`, `CF_ACCESS_AUD`,
+`OAUTH_ALLOWED_EMAILS`, `OAUTH_*`) were wired through `viper.BindEnv`, which does not
+reliably surface a systemd-set env var into config at runtime in this app (config is
+loaded from config.yaml + the DB settings store). A drop-in `Environment=` value was
+silently dropped, so the Cloudflare Access passthrough middleware never initialized and
+users still hit the app's own login. These are now read via `os.Getenv` (env-first,
+viper fallback), matching the established `WHISPER_REMOTE_URL` pattern. Also: the CF
+Access middleware now falls back to the `CF_Authorization` cookie when the header is
+absent, and logs (at Warn) when a present JWT fails verification or a verified identity
+is not admitted, so misconfig is no longer silent.
+
+#### Review-queue multidisc approve now writes correct disc/track numbers
+
+Approving a "Multi-disc" regroup hold previously merged the folder's single-file books
+into one book but wrote **no** `DiscNumber`/`TrackNumber` at all — so a merged audiobook
+carried no play-order metadata, and the "Multi-disc" label was misleading for what were
+often just sequentially-numbered chapters of one recording (e.g. `When We Were Sisters_1.mp3`
+… `_6.mp3`).
+
+The regroup classifier (`internal/itunes/service/fs_regroup_shape.go`,
+`assignDiscTrack`) now derives per-file numbers from each member's real structure:
+
+- Files in genuine `Disc N`/`CD N` subfolders (a real boxed set, e.g. Star Wars) get their
+  true `DiscNumber` per file.
+- Flat/chapter files on one disc get `DiscNumber = 0` (no disc concept — never fake disc
+  numbers spread across chapters) and a contiguous `TrackNumber` in play order.
+
+Numbers are threaded through the review payload (`regroupPayload.DiscNumbers`/`TrackNumbers`)
+and written on approve (`internal/plugins/maintenance/regroup_apply.go`,
+`applyDiscTrackNumbers`). The write is a targeted field-only update via `UpdateBookFile`
+(fingerprint-preserving — never a full-record write-back) and is guarded group-level: if any
+file already carries disc/track metadata, the whole set is left untouched ("unless the disc is
+already set, then leave it"). By construction every `(disc, track)` pair in a group is unique,
+so the file-order sort can never collide. Backward compatible: holds written before this
+change (no arrays) merge exactly as before, just without numbering.
+
+#### `internal/watcher`: eliminated the wall-clock flake in the debounce tests
+
+`TestDebounceMultipleEvents` and `TestDebounceSingleEvent` paced file writes and
+asserted the debounce callback count with `time.Sleep` against a short debounce
+window (as little as ~80ms of margin), so a scheduling stall on a loaded CI
+runner could let the debounce timer fire before the write burst finished,
+producing an extra callback and failing the test. This was root-caused from a
+CI log showing two "watcher triggering callback" lines a full second apart —
+a stall signature, not a logic error.
+
+`internal/watcher/watcher.go` now takes its debounce timer through a small
+unexported `scanClock` interface (`AfterFunc(d, f) stoppableTimer`), with the
+existing `time.AfterFunc`-backed behavior preserved exactly for all real
+callers via a `realClock` implementation set by `New()`. The tests substitute
+a `fakeClock` that never fires on its own — the test waits for the real
+fsnotify events to land (polling the watcher's internal scan generation
+counter until it stops changing, with a generous timeout, instead of guessing
+a sleep duration) and then explicitly advances virtual time to fire the
+debounce deterministically. The "exactly one callback" assertion is
+unchanged; only the timing mechanism is fixed.
+
+Verified with `go test ./internal/watcher/ -race -count=50` (green) and again
+under artificial 10-way CPU saturation with `-count=20` (green, 160/160 sub-test
+passes). The now-resolved `todo.d/fix-watcher-debounce-test-flake.md` fragment
+is removed in the same change.
+
+### Security
+
+- **The ABS surface does not inherit the `/api/v1` fail-open Cloudflare-Access
+  behaviour.** On `/api/v1` an unverifiable `Cf-Access-Jwt-Assertion` falls through to
+  session/API-key auth; on the ABS group there is no second gate, so a malformed,
+  forged, expired or wrong-AUD assertion is a hard 401 and a verified-but-not-
+  allowlisted identity is a hard 403 that provisions nothing. Explicit regression
+  tests cover both, including a request that pairs a forged assertion with a valid
+  bearer token -- it is still rejected, so the Cloudflare path cannot be probed for
+  free. `ABS_JWT_SECRET` is required whenever the ABS API is enabled and the server
+  refuses to boot without it; it is never auto-generated and never read from the DB
+  config blob.
+
+- **Scrubbed fleet-internal addresses, usernames and paths from the repository
+  (54 files).** This is a public repo; internal IPs, `<user>@host` strings,
+  `/home/<user>` paths and the Cloudflare Access team domain should never have
+  been committed. Replaced with placeholders (`<server>`, `<gpu-host>`,
+  `<deluge-host>`, `<team>.cloudflareaccess.com`, `/home/<user>`); log-line test
+  fixtures now use the RFC 5737 documentation range (`192.0.2.0/24`) instead of a
+  real internal address.
+
+  **`internal/metadata/cover.go` was deliberately NOT scrubbed.** Its RFC 1918
+  private-range entry is part of the SSRF blocklist that stops cover downloads
+  reaching internal hosts. Removing it would have opened an
+  SSRF hole while nominally fixing a disclosure one — a blanket find-and-replace
+  would have done exactly that.
+
+  `tools/cmd/reconcile-paths` had an internal address as its `-api` flag
+  **default**, not just in a comment. It now reads `AUDIOBOOK_API_URL` from the
+  environment with no baked-in default, mirroring how the same file already
+  handles its API key.
+
+  ⚠️ **This does not rewrite history.** The addresses remain in prior commits and
+  are still retrievable from the public repository. Treat them as disclosed:
+  rotate anything sensitive, and assume the internal topology is known. A history
+  rewrite is a separate, more disruptive operation.
+
+- **Closed two high-severity Dependabot alerts: `postcss` and
+  `google.golang.org/grpc`.** Both are dependencies we never import directly, so
+  neither bump changes a single line of our own code — but both were flagged
+  against ranges the repository was sitting inside.
+
+  `postcss` reached us transitively through Vite's build pipeline, pinned at
+  `8.5.15` against a vulnerable range of `<= 8.5.17`. `npm update postcss`
+  resolves it to `8.5.26`, comfortably inside the `^8.5.6` range Vite already
+  asks for, so no `overrides` entry was needed and Vite's own dependency
+  contract is untouched. The same update carried `nanoid` from `3.3.12` to
+  `3.3.17` as a side effect — postcss depends on it, and npm refreshed it while
+  it was in the tree.
+
+  `google.golang.org/grpc` moved `v1.81.1` → `v1.82.1` (first patched version).
+  It is an indirect dependency, arriving via the OpenTelemetry OTLP trace
+  exporter and grpc-gateway; nothing in this repository imports it. Worth noting
+  because it was the one real risk in this change: grpc `v1.82.1` declares
+  `go 1.25.0`, so on a module still pinned to an older Go it would have silently
+  rewritten the `go`/`toolchain` directives and turned a dependency patch into a
+  language-version bump. `go.mod` already declares `go 1.26.0`, so it did not —
+  `go mod tidy` produced a clean one-line change with no cascade into the otel
+  or grpc-gateway versions.
+
+  These are the two advisories with no API surface to review, deliberately split
+  from the React Router `v6 → v7` major bump that closes the remaining alerts.
+
+- **Upgraded React Router from `v6.30.4` to `v7.18.2`, closing three open
+  Dependabot alerts.** Two are open-redirect class — a `to=`/`navigate()`
+  target beginning with a backslash could escape to an external origin
+  (GHSA-wrjc-x8rr-h8h6), plus an arbitrary-constructor injection in SSR
+  hydration (GHSA-337j-9hxr-rhxg). The third alert, against `react-router-dom`
+  `6.30.2`–`6.30.4`, has **no 6.x patch at all** — its "first patched version"
+  is null. That is what forced a major bump rather than a point release: there
+  was no version of the 6 line left to move to.
+
+  Despite being a major, this is a small change, because the app only ever used
+  the classic declarative API — `BrowserRouter`, `MemoryRouter`, `Routes`,
+  `Route`, `Link`, `Navigate`, `useLocation`, `useNavigate`, `useParams`,
+  `useSearchParams`. v7 keeps all of them with unchanged signatures, and
+  `react-router-dom` still exists as a re-export package, so all **49** files
+  importing from `'react-router-dom'` were left untouched. None of the
+  data-router APIs (`createBrowserRouter`, `RouterProvider`, `useLoaderData`,
+  loaders/actions) are in use — that is the part of a v6→v7 migration that
+  actually hurts, and it does not apply here.
+
+  The one thing that did need changing: v7 **removes the `future` prop** from
+  `BrowserRouter`/`MemoryRouter`, because the flags it used to gate are now the
+  permanent behavior. The repository had already opted into
+  `v7_startTransition` and `v7_relativeSplatPath` at all 18 call sites across
+  11 files, so deleting the prop is a semantic no-op — the app was already
+  running the v7 routing semantics under v6. That earlier opt-in is the reason
+  this bump carries no behavioral risk; the routing change everyone fears from
+  v6→v7 had already been absorbed and shipped.
+
+  Also verified there are no relative `..` links beneath a splat route, the one
+  pattern `v7_relativeSplatPath` changes the meaning of. The single splat route
+  (`path="*"` → `<Navigate to="/login" replace />`) navigates to an absolute
+  path.
+
+### Known issue
+
+- **Duplicate rows were only half the inflation.** Two of the ten sampled books are
+  still wrong (9,906h and 8,049h) because their *stored* durations are milliseconds.
+  Every row reads 48–53 kbps interpreted as ms versus ~0.1 kbps as seconds, and
+  9,906h ÷ 1000 ≈ 9.9h. The display path was fixed earlier via `NormalizeDurationSec`;
+  the stored rows were never rewritten. Measured prevalence: **1.9% of rows** (53 of a
+  2,733-row sample), roughly 6,000 library-wide.
+
+  This cannot spread — `CreateBookFile` already normalises at the write chokepoint
+  (CONS-18) — so it is a one-shot backfill via `maintenance.duration-reextract`, to be
+  dry-run and reviewed before applying.
+
+### Docs
+
+#### Executive summary + P2-ready status for the iTunes 2-way-sync verification milestone
+
+Adds a plain-language executive summary
+(`docs/executive-summaries/2026-07-24-itunes-2way-sync-p0-and-primitives-executive-summary.md`)
+covering the P0 verification + primitives shipped this round (PRs #2041–#2045): cleanup is
+measure-and-stop, music/podcasts are provably never touched, bookmarks/metadata are proven
+preserved on every one of the 97,999 tracks, an auto-rollback oracle now guards every write,
+and the F7 location-form blocker was resolved. Updates the P0 findings doc's status section
+with the merged-primitive matrix and the ready-to-build P2 sync-cycle composition (all
+prerequisites now in `main`).
+
+### Corrected
+
+- The earlier estimate of "~6,000 millisecond rows (1.9%)" was **wrong by roughly 4×**.
+  The true count is **1,384 rows (0.44%)**. That figure was extrapolated from a
+  2,733-row sample which turned out to be a targeted dump rather than a random one, so
+  its rate did not generalise. Recorded because the mistake is reusable: prefer a full
+  scan over an extrapolated sample for any number that drives a decision.
+
+### Documentation
+
+- Added `docs/plans/2026-08-07-mui-upgrade-path.md`: MUI 5.14 → 9.x upgrade-path
+  evaluation with a measured usage inventory of `web/src` (142 MUI files, 1,726
+  `sx=`, 175 `<Grid item`, ~381 system-prop usages, zero `@mui/lab`/`@mui/x-*`),
+  per-major breaking-change mapping (5→6, 6→7, 7→9 — there is no Material UI v8),
+  risk table, recommended order, verification gates, and rollback plan. Five
+  self-contained `todo.d/` agent briefs (TODO-MUI-0 … TODO-MUI-4) cover prep,
+  each major, and the optional React 19 hop. Planning only — no packages upgraded.
+
 <a id='changelog-v0.217.8'></a>
 ## v0.217.8 — 2026-07-23
 
