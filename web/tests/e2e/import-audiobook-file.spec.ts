@@ -1,7 +1,7 @@
 // file: web/tests/e2e/import-audiobook-file.spec.ts
-// version: 1.4.1
+// version: 1.5.0
 // guid: 1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-08-07
+// last-edited: 2026-08-08
 
 import { test, expect, type Page } from '@playwright/test';
 import {
@@ -231,13 +231,16 @@ test.describe('Import Audiobook File - Interactive Navigation', () => {
     await dialog(page).getByRole('button', { name: 'jdfalk' }).click();
     await dialog(page).getByRole('button', { name: 'Audiobooks' }).click();
 
-    // Enter filter
-    await dialog(page).getByLabel('Filter extension').fill('.m4b');
+    // Enter filter — the extension filter is now a regex search box labelled
+    // "Search (regex)" and it applies to directories as well as files, so a
+    // ".m4b$" pattern hides the "Brandon Sanderson" folder too.
+    await dialog(page).getByLabel('Search (regex)').fill('\\.m4b$');
 
     // Only .m4b files visible
     await expect(dialog(page).getByText('standalone.m4b')).toBeVisible();
-    // Folders should still be visible
-    await expect(dialog(page).getByText('Brandon Sanderson')).toBeVisible();
+    await expect(
+      dialog(page).getByText('Brandon Sanderson')
+    ).not.toBeVisible();
   });
 
   test('single-clicks file to select it', async ({ page }) => {
@@ -323,8 +326,9 @@ test.describe('Import Audiobook File - Interactive Navigation', () => {
     await dialog(page).getByRole('button', { name: 'jdfalk' }).click();
     await dialog(page).getByRole('button', { name: 'Audiobooks' }).click();
 
-    // Apply filter
-    await dialog(page).getByLabel('Filter extension').fill('.m4b');
+    // Apply filter — the search box is a regex over every entry name, so match
+    // both the .m4b file and the folder to keep the folder navigable.
+    await dialog(page).getByLabel('Search (regex)').fill('m4b|Brandon');
 
     // Should still be in the same directory
     await expect(dialog(page).getByText('standalone.m4b')).toBeVisible();
