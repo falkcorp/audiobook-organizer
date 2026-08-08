@@ -1,5 +1,5 @@
 // file: web/src/pages/Library.tsx
-// version: 1.78.1
+// version: 1.79.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
 // last-edited: 2026-08-08
 
@@ -662,6 +662,8 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     setAudiobooks,
     totalCount,
     loading,
+    loadError,
+    isRetrying,
     totalPages,
     softDeletedBooks,
     softDeletedCount,
@@ -1901,6 +1903,8 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
         <LibraryBookGrid
           audiobooks={audiobooks}
           loading={loading}
+          loadError={loadError}
+          isRetrying={isRetrying}
           onCancelLoad={handleCancelLoad}
           searchQuery={searchQuery}
           setSearchQuery={setSearchQuery}
