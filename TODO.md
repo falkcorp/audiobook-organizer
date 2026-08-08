@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.17.4 -->
+<!-- version: 10.17.5 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-08-08 -->
 
@@ -538,6 +538,37 @@ into one of the curated sections below, is a normal direct edit.
       must show a loading/reconnecting state for the whole warmup window and
       then populate on its own with no user interaction — at no point may it say
       the library is empty.
+
+      ---
+
+      **✅ Shipped in #2195 (2026-08-08).** The core fix is in. `useLibraryQuery`
+      no longer calls `setAudiobooks([])` on failure, so a failed refresh keeps
+      the last known-good page instead of blanking the shelf. The empty-state
+      decision moved out of the JSX into a pure `libraryContentState()` helper
+      whose branch ORDER is the fix — `reconnecting` is evaluated before
+      `empty`, so only a load that RESOLVED with zero results can claim the
+      library is empty. Failed loads now retry with exponential backoff from
+      500ms capped at 5s, indefinitely for transient failures (network,
+      connection refused, 5xx) and never for a 4xx. Explicit cancel stops the
+      loop; the timer is cleared on unmount. Verified: 442/442 frontend tests,
+      `tsc --noEmit` clean, eslint 0 errors, plus `libraryContentState.test.ts`
+      with an exhaustive sweep asserting `empty` is reachable only from a clean,
+      settled, genuinely-zero result.
+
+      **🟡 Still open — do not close this entry yet:**
+
+      1. **The acceptance test above has NOT been run.** The fix is reasoned and
+         unit-tested; nobody has restarted the backend with the Library page
+         open and watched it recover. Until someone does, this is unverified
+         against the actual failure it was written for.
+      2. **No readiness signal from the Go side.** The server still refuses
+         connections during memdb warmup rather than returning `503` +
+         `Retry-After`. The client now copes either way, but an explicit "not
+         ready yet" would be far more honest — and `systemctl is-active` is
+         still a misleading liveness signal, reporting healthy ~40s before the
+         API answers.
+      3. **first-run empty vs filtered-to-empty copy is unchanged.** The
+         existing state only branches on `importPaths.length === 0`.
 
 - [ ] **Never accumulate more than 10 RCs on a version — cut the stable release
       instead.** Owner directive, 2026-08-08: *"we are never to get above 10
