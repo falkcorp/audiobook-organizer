@@ -1,7 +1,7 @@
 // file: internal/operations/registry/registry.go
-// version: 3.9.0
+// version: 3.10.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-07-18
+// last-edited: 2026-08-07
 
 package registry
 
@@ -24,12 +24,17 @@ import (
 // Registry is the central in-memory and DB-backed object that owns every
 // OperationDef, dispatches runs, enforces policies, and routes events.
 type Registry struct {
-	mu               sync.RWMutex
-	defs             map[string]OperationDef
-	running          map[string]*runHandle // opID → handle
-	pluginRunning    map[string]int        // plugin → count of running ops
-	pluginMax        map[string]int        // plugin → max_concurrent (0 = unlimited)
-	concurrencyKeys  map[string]string     // key → opID of holder
+	mu              sync.RWMutex
+	defs            map[string]OperationDef
+	running         map[string]*runHandle // opID → handle
+	pluginRunning   map[string]int        // plugin → count of running ops
+	pluginMax       map[string]int        // plugin → max_concurrent (0 = unlimited)
+	concurrencyKeys map[string]string     // key → opID of holder
+	// writeSetDeferred dedupes the Gate-3b deferral log line: queued opID →
+	// running opID last logged as blocking it. Dispatcher-goroutine-private
+	// (only dispatchCycle and its helpers touch it), so it is NOT guarded by
+	// mu; pruned every cycle against the live queued set.
+	writeSetDeferred map[string]string
 	nextRun          chan *queuedRun
 	dispatch         chan struct{}
 	store            database.OpsV2Store
@@ -143,6 +148,7 @@ func NewWithOptions(store database.OpsV2Store, logger *slog.Logger, workers int,
 		pluginRunning:    make(map[string]int),
 		pluginMax:        make(map[string]int),
 		concurrencyKeys:  make(map[string]string),
+		writeSetDeferred: make(map[string]string),
 		nextRun:          make(chan *queuedRun, workers*2),
 		dispatch:         make(chan struct{}, 1),
 		store:            store,

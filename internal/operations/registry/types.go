@@ -1,7 +1,7 @@
 // file: internal/operations/registry/types.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-06-22
+// last-edited: 2026-08-07
 
 // Package registry provides the UOS-02 in-memory OperationDef registry,
 // dispatcher, and in-process worker pool. See the spec at
@@ -81,6 +81,33 @@ type OperationDef struct {
 
 	// Dependencies. Optional.
 	DependsOn []string // op def IDs that must NOT be running for this op to start
+
+	// Write/read sets. Optional (2026-08-07 owner design: "we declare what it
+	// does and then the system automatically won't schedule two things" that
+	// mutate the same data).
+	//
+	// Writes declares which logical tables this op mutates. The dispatcher's
+	// write-set conflict gate (Gate 3b, dispatcher.go) refuses to START an op
+	// whose Writes overlap the Writes of any currently RUNNING op — the op
+	// stays queued and dispatches when the conflicting op finishes, exactly
+	// like the ConcurrencyKey gate. Granularity is deliberately table-level,
+	// not field-level: prod writes are whole-row read-modify-write
+	// (GetBookByID → mutate → UpdateBook carries every field), so two ops
+	// touching DISJOINT fields of the same table still silently lose fields
+	// when interleaved. Motivating incident: acoustid.backfill running
+	// concurrently with maintenance.repair-transcribe-status on the same Book
+	// rows (2026-08-07), hand-serialized by watching journalctl.
+	//
+	// Empty Writes = declares nothing = the gate skips this op entirely
+	// (today's behaviour), so rollout is incremental and undeclared ops are
+	// unaffected in both directions.
+	Writes []Resource
+
+	// Reads declares which logical tables this op reads at whole-table scale.
+	// Declared for forward compatibility (a v2 gate may defer writers while a
+	// full-table reader runs); v1 enforces Writes∩Writes only and does not
+	// consult Reads.
+	Reads []Resource
 
 	// Requires are standing prerequisites evaluated before every enqueue of this op.
 	// Unlike DependsOn (which means "must NOT run concurrently"), Requires means
@@ -191,6 +218,24 @@ const (
 
 	CapSubprocessSpawn Capability = "subprocess.spawn"
 	CapDBMigrate       Capability = "db.migrate"
+)
+
+// Resource names a logical table an operation reads or writes, for the
+// dispatcher's write-set conflict gate. Table-level granularity is deliberate:
+// prod writes are whole-row (UpdateBook/UpdateBookFile carry every field), so
+// field-level tracking would still miss the lost-update collisions this gate
+// exists to prevent. The list mirrors the store interfaces in
+// internal/database (BookStore, AuthorStore, ...).
+type Resource string
+
+const (
+	ResBooks       Resource = "books"
+	ResBookFiles   Resource = "book_files"
+	ResAuthors     Resource = "authors"
+	ResSeries      Resource = "series"
+	ResReviewItems Resource = "review_items"
+	ResEmbeddings  Resource = "embeddings"
+	ResOperations  Resource = "operations"
 )
 
 // EventSubscription wires an event name to a handler on the OperationDef.
