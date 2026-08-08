@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.14.0
+// version: 3.15.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-08-07
 
@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -25,6 +26,11 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
+
+// transcribeBatchFn is a test seam over transcribe.TranscribeBatch so tests can
+// substitute a stub (e.g. one returning *transcribe.TransportError) without a
+// live Whisper endpoint. Production code never reassigns it.
+var transcribeBatchFn = transcribe.TranscribeBatch
 
 const (
 	introTranscribePageSize  = 200
@@ -566,9 +572,22 @@ func (p *Plugin) processTranscribePage(
 
 	// Step 3: one Python/Whisper process for the whole page.
 	log.Info("transcribe-book-intros: calling whisper batch", "jobs", len(batchJobs))
-	batchResults, err := transcribe.TranscribeBatch(ctx, batchJobs, onBook)
-	if err != nil {
+	batchResults, err := transcribeBatchFn(ctx, batchJobs, onBook)
+	var te *transcribe.TransportError
+	switch {
+	case errors.As(err, &te):
+		// Endpoint problem, not a file problem. Write NOTHING; the page is
+		// deferred and will be retried next run. On 2026-07-01 this exact
+		// branch's absence recorded a day-long endpoint outage as ~34,000
+		// false per-book whisper_error verdicts.
+		log.Warn("transcribe: endpoints unreachable, page deferred (no status written)",
+			"jobs", len(batchJobs), "endpoints", te.Endpoints, "recognized", te.Recognized, "err", te.Err)
+		return 0
+	case err != nil:
 		// Whole-batch failure: every book that had a WAV is a whisper_error.
+		// Note classifyTransport wraps EVERY batch-level error from the remote
+		// path as a TransportError, so in practice this arm is unreachable from
+		// the remote path; kept as defence for the local path.
 		log.Warn("transcribe: whisper batch failed", "jobs", len(batchJobs), "err", err)
 		detail := truncateDetail(err.Error())
 		for bookID := range batchJobs {
@@ -619,7 +638,7 @@ func (p *Plugin) processTranscribePage(
 			}
 		}
 		if len(retry1Jobs) > 0 {
-			if r1, rerr := transcribe.TranscribeBatch(ctx, retry1Jobs, onBook); rerr == nil {
+			if r1, rerr := transcribeBatchFn(ctx, retry1Jobs, onBook); rerr == nil {
 				for id, res := range r1 {
 					if res.Text != "" {
 						batchResults[id] = res
@@ -655,7 +674,7 @@ func (p *Plugin) processTranscribePage(
 				}
 			}
 			if len(retry2Jobs) > 0 {
-				if r2, rerr := transcribe.TranscribeBatch(ctx, retry2Jobs, onBook); rerr == nil {
+				if r2, rerr := transcribeBatchFn(ctx, retry2Jobs, onBook); rerr == nil {
 					for id, res := range r2 {
 						if res.Text != "" {
 							batchResults[id] = res
