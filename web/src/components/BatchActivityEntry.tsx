@@ -1,5 +1,5 @@
 // file: web/src/components/BatchActivityEntry.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7e3a1f9c-4b82-4d5e-a6c8-2f0d8e7b3a91
 
 import React, { useState } from 'react';
@@ -15,8 +15,8 @@ import {
   useMediaQuery,
   useTheme,
 } from '@mui/material';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore.js';
-import ChevronRightIcon from '@mui/icons-material/ChevronRight.js';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import type { ActivityEntry } from '../services/activityApi';
 
 // ---- Local types -------------------------------------------------------

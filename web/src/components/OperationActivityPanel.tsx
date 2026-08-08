@@ -1,5 +1,5 @@
 // file: web/src/components/OperationActivityPanel.tsx
-// version: 1.3.0
+// version: 1.3.1
 // guid: f7a1e2c3-9b4d-4e5a-8c6f-1d3b5a7e9c0f
 
 import { useCallback, useEffect, useState, useRef, useMemo } from 'react';
@@ -14,10 +14,10 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore.js';
-import ChevronRightIcon from '@mui/icons-material/ChevronRight.js';
-import RefreshIcon from '@mui/icons-material/Refresh.js';
-import ContentCopyIcon from '@mui/icons-material/ContentCopy.js';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import RefreshIcon from '@mui/icons-material/Refresh';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import {
   fetchOperationActivity,
   type OperationActivityEntry,

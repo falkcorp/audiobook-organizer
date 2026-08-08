@@ -1,5 +1,5 @@
 // file: web/src/pages/Authors.tsx
-// version: 1.3.0
+// version: 1.3.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -43,16 +43,16 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
-import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown.js';
-import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp.js';
-import DeleteIcon from '@mui/icons-material/Delete.js';
-import EditIcon from '@mui/icons-material/Edit.js';
-import MergeTypeIcon from '@mui/icons-material/MergeType.js';
-import CallSplitIcon from '@mui/icons-material/CallSplit.js';
-import LabelIcon from '@mui/icons-material/Label.js';
-import RefreshIcon from '@mui/icons-material/Refresh.js';
-import HistoryIcon from '@mui/icons-material/History.js';
-import UndoIcon from '@mui/icons-material/Undo.js';
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
+import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
+import DeleteIcon from '@mui/icons-material/Delete';
+import EditIcon from '@mui/icons-material/Edit';
+import MergeTypeIcon from '@mui/icons-material/MergeType';
+import CallSplitIcon from '@mui/icons-material/CallSplit';
+import LabelIcon from '@mui/icons-material/Label';
+import RefreshIcon from '@mui/icons-material/Refresh';
+import HistoryIcon from '@mui/icons-material/History';
+import UndoIcon from '@mui/icons-material/Undo';
 import {
   useConfigurableTable,
   ResizableHeaderCell,

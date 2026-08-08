@@ -1,7 +1,7 @@
 // file: web/src/components/bookdetail/BookDetailFilesTab.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: a7b8c9d0-e1f2-3456-abcd-567890123456
-// last-edited: 2026-05-02
+// last-edited: 2026-08-07
 
 import {
   Alert,
@@ -13,7 +13,7 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
-import LinkIcon from '@mui/icons-material/Link.js';
+import LinkIcon from '@mui/icons-material/Link';
 import type { Book, BookFile, BookSegment, BookTags } from '../../services/api';
 import * as api from '../../services/api';
 import { BookDetailVersionGroup } from './BookDetailVersionGroup';

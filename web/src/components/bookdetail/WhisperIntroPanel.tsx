@@ -1,7 +1,7 @@
 // file: web/src/components/bookdetail/WhisperIntroPanel.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
-// last-edited: 2026-06-26
+// last-edited: 2026-08-07
 
 import { useState } from 'react';
 import {
@@ -13,8 +13,8 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore.js';
-import MicIcon from '@mui/icons-material/Mic.js';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import MicIcon from '@mui/icons-material/Mic';
 import type { Book } from '../../services/api';
 
 interface Props {

@@ -1,7 +1,7 @@
 // file: web/src/components/bookdetail/BookDetailHeader.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-05-02
+// last-edited: 2026-08-07
 
 import { useEffect, useState } from 'react';
 import {
@@ -15,10 +15,10 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
-import ArrowBackIcon from '@mui/icons-material/ArrowBack.js';
-import AccessTimeIcon from '@mui/icons-material/AccessTime.js';
-import InfoIcon from '@mui/icons-material/Info.js';
-import CompareIcon from '@mui/icons-material/Compare.js';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import AccessTimeIcon from '@mui/icons-material/AccessTime';
+import InfoIcon from '@mui/icons-material/Info';
+import CompareIcon from '@mui/icons-material/Compare';
 import type { Book, BookFile, BookSegment } from '../../services/api';
 import ReadStatusChip from '../audiobooks/ReadStatusChip';
 import { formatDateTime } from './bookDetailUtils';

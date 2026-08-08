@@ -1,7 +1,7 @@
 // file: web/src/pages/ReviewQueue.tsx
-// version: 2.2.0
+// version: 2.2.1
 // guid: 4c8f2a17-5e93-4d60-a1b8-7f3c6d9e0a52
-// last-edited: 2026-08-06
+// last-edited: 2026-08-07
 
 import { useEffect, useMemo, useState } from 'react';
 import {
@@ -25,11 +25,11 @@ import {
   type SxProps,
   type Theme,
 } from '@mui/material';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore.js';
-import CheckIcon from '@mui/icons-material/Check.js';
-import CloseIcon from '@mui/icons-material/Close.js';
-import AlbumIcon from '@mui/icons-material/Album.js';
-import HelpOutlineIcon from '@mui/icons-material/HelpOutline.js';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import CheckIcon from '@mui/icons-material/Check';
+import CloseIcon from '@mui/icons-material/Close';
+import AlbumIcon from '@mui/icons-material/Album';
+import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import * as api from '../services/api';
 import { type Book, type ReviewItem } from '../services/api';
 import { useReviewStore } from '../stores/useReviewStore';

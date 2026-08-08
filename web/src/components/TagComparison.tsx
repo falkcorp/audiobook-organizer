@@ -1,5 +1,5 @@
 // file: web/src/components/TagComparison.tsx
-// version: 1.4.1
+// version: 1.4.2
 // guid: cfed2692-76f6-47b0-bc84-cc2a4075e554
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -23,9 +23,9 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
-import CloseIcon from '@mui/icons-material/Close.js';
-import VisibilityOffIcon from '@mui/icons-material/VisibilityOff.js';
-import RestoreIcon from '@mui/icons-material/Restore.js';
+import CloseIcon from '@mui/icons-material/Close';
+import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
+import RestoreIcon from '@mui/icons-material/Restore';
 import type { Book, BookTags, TagSourceValues } from '../services/api';
 import * as api from '../services/api';
 

@@ -1,7 +1,7 @@
 // file: web/src/components/layout/Sidebar.tsx
-// version: 1.15.0
+// version: 1.15.1
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-07-13
+// last-edited: 2026-08-07
 
 import { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
@@ -19,23 +19,23 @@ import {
   Toolbar,
   Tooltip,
 } from '@mui/material';
-import ExpandLessIcon from '@mui/icons-material/ExpandLess.js';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore.js';
-import ChevronLeftIcon from '@mui/icons-material/ChevronLeft.js';
-import ChevronRightIcon from '@mui/icons-material/ChevronRight.js';
-import DashboardIcon from '@mui/icons-material/Dashboard.js';
-import LibraryBooksIcon from '@mui/icons-material/LibraryBooks.js';
-import MenuBookIcon from '@mui/icons-material/MenuBook.js';
-import MonitorIcon from '@mui/icons-material/Monitor.js';
-import SettingsIcon from '@mui/icons-material/Settings.js';
-import FolderOpenIcon from '@mui/icons-material/FolderOpen.js';
-import MergeTypeIcon from '@mui/icons-material/MergeType.js';
-import BugReportIcon from '@mui/icons-material/BugReport.js';
-import CollectionsBookmarkIcon from '@mui/icons-material/CollectionsBookmark.js';
-import PeopleIcon from '@mui/icons-material/People.js';
-import TimelineIcon from '@mui/icons-material/Timeline.js';
-import WavesIcon from '@mui/icons-material/Waves.js';
-import FactCheckIcon from '@mui/icons-material/FactCheck.js';
+import ExpandLessIcon from '@mui/icons-material/ExpandLess';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import DashboardIcon from '@mui/icons-material/Dashboard';
+import LibraryBooksIcon from '@mui/icons-material/LibraryBooks';
+import MenuBookIcon from '@mui/icons-material/MenuBook';
+import MonitorIcon from '@mui/icons-material/Monitor';
+import SettingsIcon from '@mui/icons-material/Settings';
+import FolderOpenIcon from '@mui/icons-material/FolderOpen';
+import MergeTypeIcon from '@mui/icons-material/MergeType';
+import BugReportIcon from '@mui/icons-material/BugReport';
+import CollectionsBookmarkIcon from '@mui/icons-material/CollectionsBookmark';
+import PeopleIcon from '@mui/icons-material/People';
+import TimelineIcon from '@mui/icons-material/Timeline';
+import WavesIcon from '@mui/icons-material/Waves';
+import FactCheckIcon from '@mui/icons-material/FactCheck';
 import { useReviewStore } from '../../stores/useReviewStore';
 
 const MOBILE_DRAWER_WIDTH = 240;

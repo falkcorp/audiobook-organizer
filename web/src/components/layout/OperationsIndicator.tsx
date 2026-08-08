@@ -1,5 +1,5 @@
 // file: web/src/components/layout/OperationsIndicator.tsx
-// version: 4.0.0
+// version: 4.0.1
 // guid: 3b4c5d6e-7f8a-9b0c-1d2e-3f4a5b6c7d8e
 
 import { useState } from 'react';
@@ -21,14 +21,14 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
-import NotificationsIcon from '@mui/icons-material/Notifications.js';
-import CancelIcon from '@mui/icons-material/Cancel.js';
-import OpenInNewIcon from '@mui/icons-material/OpenInNew.js';
-import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty.js';
-import ArticleIcon from '@mui/icons-material/Article.js';
-import CloseIcon from '@mui/icons-material/Close.js';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore.js';
-import ChevronRightIcon from '@mui/icons-material/ChevronRight.js';
+import NotificationsIcon from '@mui/icons-material/Notifications';
+import CancelIcon from '@mui/icons-material/Cancel';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
+import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty';
+import ArticleIcon from '@mui/icons-material/Article';
+import CloseIcon from '@mui/icons-material/Close';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import { OperationActivityPanel } from '../OperationActivityPanel';
 import {
   useOperationsStore,

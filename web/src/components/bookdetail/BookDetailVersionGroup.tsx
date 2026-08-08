@@ -1,7 +1,7 @@
 // file: web/src/components/bookdetail/BookDetailVersionGroup.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: f6a7b8c9-d0e1-2345-fabc-456789012345
-// last-edited: 2026-07-11
+// last-edited: 2026-08-07
 
 import {
   Alert,
@@ -22,13 +22,13 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
-import StarIcon from '@mui/icons-material/Star.js';
-import StarBorderIcon from '@mui/icons-material/StarBorder.js';
-import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown.js';
-import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp.js';
-import LinkOffIcon from '@mui/icons-material/LinkOff.js';
-import TransformIcon from '@mui/icons-material/Transform.js';
-import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline.js';
+import StarIcon from '@mui/icons-material/Star';
+import StarBorderIcon from '@mui/icons-material/StarBorder';
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
+import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
+import LinkOffIcon from '@mui/icons-material/LinkOff';
+import TransformIcon from '@mui/icons-material/Transform';
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import type { Book, BookFile, BookSegment, BookTags } from '../../services/api';
 import * as api from '../../services/api';
 import { TagComparison } from '../TagComparison';

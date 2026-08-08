@@ -1,7 +1,7 @@
 // file: web/src/components/bookdetail/BookDetailActions.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
-// last-edited: 2026-05-02
+// last-edited: 2026-08-07
 
 import {
   Button,
@@ -11,18 +11,18 @@ import {
   Stack,
   Tooltip,
 } from '@mui/material';
-import DeleteIcon from '@mui/icons-material/Delete.js';
-import RestoreIcon from '@mui/icons-material/Restore.js';
-import EditIcon from '@mui/icons-material/Edit.js';
-import PsychologyIcon from '@mui/icons-material/Psychology.js';
-import CloudDownloadIcon from '@mui/icons-material/CloudDownload.js';
-import HistoryIcon from '@mui/icons-material/History.js';
-import SaveIcon from '@mui/icons-material/Save.js';
-import SearchIcon from '@mui/icons-material/Search.js';
-import TransformIcon from '@mui/icons-material/Transform.js';
-import FolderOpenIcon from '@mui/icons-material/FolderOpen.js';
-import BuildIcon from '@mui/icons-material/Build.js';
-import RefreshIcon from '@mui/icons-material/Refresh.js';
+import DeleteIcon from '@mui/icons-material/Delete';
+import RestoreIcon from '@mui/icons-material/Restore';
+import EditIcon from '@mui/icons-material/Edit';
+import PsychologyIcon from '@mui/icons-material/Psychology';
+import CloudDownloadIcon from '@mui/icons-material/CloudDownload';
+import HistoryIcon from '@mui/icons-material/History';
+import SaveIcon from '@mui/icons-material/Save';
+import SearchIcon from '@mui/icons-material/Search';
+import TransformIcon from '@mui/icons-material/Transform';
+import FolderOpenIcon from '@mui/icons-material/FolderOpen';
+import BuildIcon from '@mui/icons-material/Build';
+import RefreshIcon from '@mui/icons-material/Refresh';
 import type { Book } from '../../services/api';
 
 export interface BookDetailActionsProps {

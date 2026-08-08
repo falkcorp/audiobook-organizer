@@ -1,7 +1,7 @@
 // file: web/src/pages/ActivityLog.tsx
-// version: 2.19.0
+// version: 2.19.1
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-07-03
+// last-edited: 2026-08-07
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -33,14 +33,14 @@ import {
   useMediaQuery,
   useTheme,
 } from '@mui/material';
-import RefreshIcon from '@mui/icons-material/Refresh.js';
-import ContentCopyIcon from '@mui/icons-material/ContentCopy.js';
-import PushPinIcon from '@mui/icons-material/PushPin.js';
-import TimelineIcon from '@mui/icons-material/Timeline.js';
-import ClearIcon from '@mui/icons-material/Clear.js';
-import UndoIcon from '@mui/icons-material/Undo.js';
-import CancelIcon from '@mui/icons-material/Cancel.js';
-import FilterListIcon from '@mui/icons-material/FilterList.js';
+import RefreshIcon from '@mui/icons-material/Refresh';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import PushPinIcon from '@mui/icons-material/PushPin';
+import TimelineIcon from '@mui/icons-material/Timeline';
+import ClearIcon from '@mui/icons-material/Clear';
+import UndoIcon from '@mui/icons-material/Undo';
+import CancelIcon from '@mui/icons-material/Cancel';
+import FilterListIcon from '@mui/icons-material/FilterList';
 import { fetchActivity, fetchActivitySources, compactActivityLog } from '../services/activityApi';
 import type { ActivityEntry, SourceCount } from '../services/activityApi';
 import { BatchActivityEntry } from '../components/BatchActivityEntry';

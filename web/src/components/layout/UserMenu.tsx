@@ -1,5 +1,5 @@
 // file: web/src/components/layout/UserMenu.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 
 import { useState } from 'react';
@@ -22,10 +22,10 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
-import AccountCircleIcon from '@mui/icons-material/AccountCircle.js';
-import LockIcon from '@mui/icons-material/Lock.js';
-import LogoutIcon from '@mui/icons-material/Logout.js';
-import PersonIcon from '@mui/icons-material/Person.js';
+import AccountCircleIcon from '@mui/icons-material/AccountCircle';
+import LockIcon from '@mui/icons-material/Lock';
+import LogoutIcon from '@mui/icons-material/Logout';
+import PersonIcon from '@mui/icons-material/Person';
 import { useAuth } from '../../contexts/AuthContext';
 import * as api from '../../services/api';
 

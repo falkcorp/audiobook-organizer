@@ -1,5 +1,5 @@
 // file: web/src/components/common/ConfigurableTable.tsx
-// version: 1.1.1
+// version: 1.1.2
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -15,7 +15,7 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
-import ViewColumnIcon from '@mui/icons-material/ViewColumn.js';
+import ViewColumnIcon from '@mui/icons-material/ViewColumn';
 import { STORAGE_KEYS } from '../../lib/storageKeys';
 
 // --- Types ---

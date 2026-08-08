@@ -1,10 +1,10 @@
 // file: web/src/components/bookdetail/BookDetailStatusAlerts.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-05-02
+// last-edited: 2026-08-07
 
 import { Alert, Box, Button, Stack, Tooltip } from '@mui/material';
-import WarningAmberIcon from '@mui/icons-material/WarningAmber.js';
+import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import type { Book } from '../../services/api';
 import { formatDateTime } from './bookDetailUtils';
 
