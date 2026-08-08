@@ -1,7 +1,7 @@
 // file: internal/operations/registry/dispatcher.go
-// version: 2.0.1
+// version: 2.1.0
 // guid: a7b8c9d0-e1f2-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-06-10
+// last-edited: 2026-08-07
 
 package registry
 
@@ -40,6 +40,20 @@ func (r *Registry) dispatchCycle(ctx context.Context) {
 	if err != nil {
 		r.logger.Warn("registry: list queued ops failed", "error", err)
 		return
+	}
+
+	// Prune write-set deferral log-dedupe entries for ops that left the queue
+	// (dispatched, canceled, deleted) so the map cannot grow unbounded.
+	if len(r.writeSetDeferred) > 0 {
+		queuedIDs := make(map[string]struct{}, len(queued))
+		for _, row := range queued {
+			queuedIDs[row.ID] = struct{}{}
+		}
+		for opID := range r.writeSetDeferred {
+			if _, still := queuedIDs[opID]; !still {
+				delete(r.writeSetDeferred, opID)
+			}
+		}
 	}
 
 	for _, row := range queued {
@@ -98,6 +112,24 @@ func (r *Registry) dispatchCycle(ctx context.Context) {
 			}
 		}
 
+		// Gate 3b: declared write-set conflict? An op with a non-empty Writes
+		// declaration must not start while any RUNNING op declares an
+		// overlapping write-set — whole-row read-modify-write on both sides
+		// means concurrent execution silently loses fields (the 2026-08-07
+		// acoustid.backfill × maintenance.repair-transcribe-status incident).
+		// The op stays QUEUED, exactly like the ConcurrencyKey gate, and
+		// dispatches when the conflicting op releases its handle. Ops with
+		// empty Writes bypass the gate entirely in both directions.
+		if len(def.Writes) > 0 {
+			r.mu.RLock()
+			holder, overlap := r.writeSetConflictLocked(row.ID, def.Writes)
+			r.mu.RUnlock()
+			if holder != nil {
+				r.logWriteSetDeferral(row.ID, row.DefID, holder, overlap)
+				continue
+			}
+		}
+
 		// Gate 4: DependsOn — all listed op defs must NOT be currently running.
 		if blocked := r.checkDependsOn(def.DependsOn); blocked {
 			continue
@@ -121,6 +153,14 @@ func (r *Registry) dispatchCycle(ctx context.Context) {
 				r.mu.Unlock()
 				continue
 			}
+		}
+		if len(def.Writes) > 0 {
+			if holder, _ := r.writeSetConflictLocked(row.ID, def.Writes); holder != nil {
+				r.mu.Unlock()
+				continue
+			}
+		}
+		if def.ConcurrencyKey != "" {
 			r.concurrencyKeys[def.ConcurrencyKey] = row.ID
 		}
 		r.pluginRunning[def.Plugin]++
@@ -133,6 +173,7 @@ func (r *Registry) dispatchCycle(ctx context.Context) {
 			plugin:         def.Plugin,
 			concurrencyKey: def.ConcurrencyKey,
 			resumePolicy:   def.ResumePolicy,
+			writes:         def.Writes,
 		}
 		r.mu.Unlock()
 
@@ -148,6 +189,7 @@ func (r *Registry) dispatchCycle(ctx context.Context) {
 
 		select {
 		case r.nextRun <- qr:
+			delete(r.writeSetDeferred, row.ID)
 			r.logger.Info("registry: dispatched op", "op_id", row.ID, "def_id", row.DefID)
 		default:
 			// Worker channel is full; undo accounting and try next cycle.
@@ -164,6 +206,57 @@ func (r *Registry) dispatchCycle(ctx context.Context) {
 			r.mu.Unlock()
 		}
 	}
+}
+
+// writeSetConflictLocked returns the first running op (other than candidateID
+// itself) whose declared write-set overlaps candidateWrites, plus the
+// overlapping resources. Returns (nil, nil) when there is no conflict.
+// v1 semantics: Writes∩Writes only — a running op's Reads never block a
+// writer, and ops with empty Writes are invisible to the gate.
+// Caller must hold r.mu (read or write).
+func (r *Registry) writeSetConflictLocked(candidateID string, candidateWrites []Resource) (*runHandle, []Resource) {
+	if len(candidateWrites) == 0 {
+		return nil, nil
+	}
+	for _, h := range r.running {
+		if h.id == candidateID || len(h.writes) == 0 {
+			continue
+		}
+		var overlap []Resource
+		for _, w := range candidateWrites {
+			for _, hw := range h.writes {
+				if w == hw {
+					overlap = append(overlap, w)
+					break
+				}
+			}
+		}
+		if len(overlap) > 0 {
+			return h, overlap
+		}
+	}
+	return nil, nil
+}
+
+// logWriteSetDeferral logs one clear line per (deferred op → blocking op)
+// pair. Without dedupe the 100ms dispatch ticker would repeat the line ten
+// times a second for as long as the conflict lasts. writeSetDeferred is only
+// ever touched from the dispatcher goroutine (dispatchCycle is single-caller),
+// so it needs no locking; entries are dropped once the blocking op changes or
+// the deferred op leaves the queue (see the prune in dispatchCycle).
+func (r *Registry) logWriteSetDeferral(opID, defID string, holder *runHandle, overlap []Resource) {
+	if r.writeSetDeferred[opID] == holder.id {
+		return
+	}
+	r.writeSetDeferred[opID] = holder.id
+	resources := make([]string, len(overlap))
+	for i, res := range overlap {
+		resources[i] = string(res)
+	}
+	r.logger.Info("registry: op deferred: write-set conflict with running op",
+		"op_id", opID, "def_id", defID,
+		"running_op_id", holder.id, "running_def_id", holder.defID,
+		"resources", resources)
 }
 
 // checkDependsOn returns true if any op in depDefIDs is currently running.

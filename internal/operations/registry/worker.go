@@ -1,7 +1,7 @@
 // file: internal/operations/registry/worker.go
-// version: 2.12.0
+// version: 2.13.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-07-18
+// last-edited: 2026-08-07
 
 package registry
 
@@ -46,10 +46,18 @@ type runHandle struct {
 	plugin         string
 	concurrencyKey string
 	resumePolicy   ResumePolicy
-	cancel         context.CancelFunc
-	abandoned      bool
-	currentItem    string
-	currentItemMu  sync.Mutex
+	// writes is the def's declared write-set, copied onto the handle so the
+	// dispatcher's Gate 3b can check running ops without a def lookup. Because
+	// it lives ON the handle, the slot is released wherever the handle is
+	// released — releaseRunHandle covers completion, failure, cancel, and the
+	// channel-full undo path all at once (same hygiene as concurrencyKey; the
+	// C-2 leak class cannot recur here because there is no separate map to
+	// forget to clear).
+	writes        []Resource
+	cancel        context.CancelFunc
+	abandoned     bool
+	currentItem   string
+	currentItemMu sync.Mutex
 	// lastProgressAt is stamped by the reporter on every UpdateProgress call.
 	// Stored as Unix nanoseconds; zero means progress has never been reported.
 	// The watchdog reads this first (lock-free) before falling back to the DB row.
@@ -186,6 +194,7 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 		plugin:         qr.plugin,
 		concurrencyKey: qr.concurrKey,
 		resumePolicy:   qr.resumePolicy,
+		writes:         def.Writes,
 		cancel:         cancel,
 	}
 	r.mu.Lock()
