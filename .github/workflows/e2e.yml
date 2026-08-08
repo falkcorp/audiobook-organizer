@@ -134,16 +134,21 @@ jobs:
           INPUT_PROJECTS: ${{ inputs.projects }}
         run: |
           cd web
+          # Array, not a string. A plain string would have to be left unquoted
+          # to split into separate arguments, which is exactly what shellcheck
+          # SC2086 flags — and quoting it would pass "--project=chromium
+          # --project=webkit" as ONE argument, which Playwright rejects. An
+          # array expands correctly AND lints clean.
           case "$EVENT_NAME" in
-            pull_request) PROJECTS="--project=chromium" ;;
+            pull_request) PROJECTS=(--project=chromium) ;;
             workflow_dispatch)
               if [ "$INPUT_PROJECTS" = "chromium+webkit" ]; then
-                PROJECTS="--project=chromium --project=webkit"
+                PROJECTS=(--project=chromium --project=webkit)
               else
-                PROJECTS="--project=chromium"
+                PROJECTS=(--project=chromium)
               fi
               ;;
-            *) PROJECTS="--project=chromium --project=webkit" ;;
+            *) PROJECTS=(--project=chromium --project=webkit) ;;
           esac
-          echo "Running with: $PROJECTS"
-          npx playwright test -c tests/e2e/playwright.config.ts $PROJECTS --reporter=line
+          echo "Running with: ${PROJECTS[*]}"
+          npx playwright test -c tests/e2e/playwright.config.ts "${PROJECTS[@]}" --reporter=line
