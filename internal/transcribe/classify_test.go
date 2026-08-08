@@ -1,5 +1,5 @@
 // file: internal/transcribe/classify_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5e82c1b7-4d09-42fa-96c3-8b71e0d5a2f9
 // last-edited: 2026-08-07
 
@@ -87,6 +87,70 @@ func TestClassifyIntroKinds(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestNarrativeProseWithMidSentenceByIsNotCredits pins the 2026-08-07 prod
+// leak: 2 of 12 sampled transcripts produced parsed fields from PURE NARRATIVE
+// with no announcement at all — one stored transcribed_title was ~1,000 chars
+// of dialogue ("gestures. We know little about these people…"), author
+// "the Jung. We only wished".
+//
+// Mechanism: titleSepRe's bare-\bby\b fallback split at a mid-sentence "by"
+// ("…the stones left by the Jung…"). When that "by" lands early, the title span
+// ducks the word caps, and because proseMarkerRe is deliberately case-sensitive
+// (lowercase pronouns only), sentence-INITIAL pronouns — capitalized "We",
+// "He" — sailed through. The fix rejects an uncorroborated (no credit verb)
+// title that spans multiple sentences, plus a hard maxTitleChars byte cap.
+func TestNarrativeProseWithMidSentenceByIsNotCredits(t *testing.T) {
+	// Realistic narrative in the shape of the prod sample: multi-sentence
+	// dialogue-bearing prose whose first "by" is mid-sentence.
+	prose := `Gestures. We know little about these people. Only the stones left by ` +
+		`the Jung remain. We only wished to understand what became of them, and the ` +
+		`silence of the valley offered nothing in return. The wind moved through the ` +
+		`ruined archways as it had for a thousand years, indifferent to every question ` +
+		`the travelers asked of it. "Nothing lives here now," the old guide told them ` +
+		`at the gate, and no argument rose to meet him. Beyond the wall the terraces ` +
+		`fell away toward the river, stepped and silent, and the light failed slowly ` +
+		`over the far ridge while the small fire guttered between the stones. Whatever ` +
+		`name the builders gave this place, the mountain kept it, and the travelers ` +
+		`wrote down only what the stones themselves allowed: a height, a bearing, the ` +
+		`count of doorways facing the winter sun. In the morning the mist came up from ` +
+		`the valley floor and closed over the path behind them, and the guide, who ` +
+		`never once looked back, led them down through the terraces toward the sound ` +
+		`of water, and the ruin passed out of sight as quietly as it had appeared.`
+
+	got := ClassifyIntro(prose, UnknownPosition)
+	if got.Kind == IntroKindCredits {
+		t.Fatalf("pure narrative classified as credits: title=%q author=%q",
+			got.Fields.Title, got.Fields.Author)
+	}
+	if got.Kind != IntroKindProse {
+		t.Errorf("Kind = %q, want prose", got.Kind)
+	}
+	if got.Fields.Title != "" || got.Fields.Author != "" {
+		t.Errorf("non-credits verdict leaked fields: %+v", got.Fields)
+	}
+
+	// Positive controls: the sentence-break guard must not reject real titles
+	// whose periods are honorifics or initials, nor bare title-by-author intros.
+	for _, tc := range []struct{ text, wantTitle string }{
+		{"Mr. Mercedes by Stephen King", "Mr. Mercedes"},
+		{"On Writing by Stephen King No one writes a long novel alone", "On Writing"},
+	} {
+		got := ClassifyIntro(tc.text, UnknownPosition)
+		if got.Kind != IntroKindCredits || got.Fields.Title != tc.wantTitle {
+			t.Errorf("ClassifyIntro(%q) = kind %q title %q, want credits/%q",
+				tc.text, got.Kind, got.Fields.Title, tc.wantTitle)
+		}
+	}
+
+	// The hard byte cap holds even for word-shaped degenerate input: a "title"
+	// candidate over maxTitleChars is never credits, word count notwithstanding.
+	long := strings.Repeat("Antidisestablishmentarianism ", 10) // 10 words, ~290 chars
+	got = ClassifyIntro(long+"by Nobody Real", UnknownPosition)
+	if got.Kind == IntroKindCredits {
+		t.Errorf("over-%d-char title accepted as credits: %q", maxTitleChars, got.Fields.Title)
 	}
 }
 

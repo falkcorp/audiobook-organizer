@@ -1,5 +1,5 @@
 // file: internal/transcribe/classify.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7d41f0a2-6c93-4b18-a5e7-2f9b6c0d3184
 // last-edited: 2026-08-07
 
@@ -269,7 +269,39 @@ var (
 	// proseVerbRe catches narration that carries no pronoun at all: contractions
 	// and past-tense auxiliaries do not occur in announced titles.
 	proseVerbRe = regexp.MustCompile(`\b\w+n't\b|\b(?:was|were|had|would|could|should|said|went|came)\b`)
+
+	// sentenceBreakRe finds "<word>. <Capital>" — a completed sentence followed
+	// by the start of another. Announced titles are a single noun phrase; a title
+	// candidate spanning MULTIPLE sentences is narrative prose that a mid-sentence
+	// "by" happened to cut short. This closed the confirmed 2026-08-07 leak
+	// ("Gestures. We know little about these people…"): proseMarkerRe is
+	// deliberately case-sensitive, and sentence-INITIAL pronouns are capitalized
+	// ("…people. We only wished…"), so multi-sentence prose sailed past the
+	// pronoun check whenever no lowercase pronoun landed inside the title span.
+	// The captured word lets titleHasSentenceBreak exempt honorifics and initials
+	// ("Mr. Mercedes", "J. R. R. Tolkien") whose periods are not sentence ends.
+	sentenceBreakRe = regexp.MustCompile(`\b([A-Za-z]+)[.!?]+\s+[A-Z]`)
 )
+
+// titleAbbrevs are period-bearing words that do NOT end a sentence when they
+// appear inside a title ("Mr. Mercedes", "Dr. No", "Vol. 10 …").
+var titleAbbrevs = map[string]bool{
+	"mr": true, "mrs": true, "ms": true, "dr": true, "st": true, "jr": true,
+	"sr": true, "prof": true, "vol": true, "no": true, "vs": true,
+}
+
+// titleHasSentenceBreak reports whether a title candidate contains a genuine
+// sentence boundary — terminal punctuation on a non-abbreviation word followed
+// by a new capitalized sentence. Single letters are treated as initials.
+func titleHasSentenceBreak(s string) bool {
+	for _, m := range sentenceBreakRe.FindAllStringSubmatch(s, -1) {
+		if len(m[1]) == 1 || titleAbbrevs[strings.ToLower(m[1])] {
+			continue
+		}
+		return true
+	}
+	return false
+}
 
 const (
 	// maxTitleWords caps a plausible announced title. The sampled corpus put a
@@ -282,6 +314,14 @@ const (
 	// grammar is self-evidencing; on a bare "<title> by <author>" the title's
 	// length is the only thing standing between a real intro and a sentence.
 	maxTitleWordsNoVerb = 12
+
+	// maxTitleChars is a hard byte cap on a plausible announced title, applied
+	// REGARDLESS of word count. The 2026-08-07 prod sample stored a
+	// ~1,000-character run of dialogue as transcribed_title; the word caps above
+	// should make that unreachable, but this bound holds even if the word-shape
+	// heuristics are loosened later. Longest legitimate corpus titles run well
+	// under half of this.
+	maxTitleChars = 120
 
 	// minProseWords is the floor below which a clip carrying no announcement and
 	// no structural marker is UNKNOWN rather than prose.
@@ -448,10 +488,19 @@ func extractCredits(body string, hasCreditVerb bool) (f IntroFields, confidence 
 		wordCap = maxTitleWordsNoVerb
 	}
 	words := strings.Fields(f.Title)
-	if len(words) > wordCap {
+	if len(words) > wordCap || len(f.Title) > maxTitleChars {
 		return IntroFields{}, 0, false
 	}
 	if proseMarkerRe.MatchString(f.Title) || proseVerbRe.MatchString(f.Title) {
+		return IntroFields{}, 0, false
+	}
+	// A bare "by" with no credit verb anywhere is the weakest possible
+	// announcement evidence, so the title must additionally read as ONE noun
+	// phrase: a candidate spanning multiple sentences is prose whose
+	// mid-sentence "by" landed early enough to duck the word caps. The pronoun
+	// checks above cannot catch this shape — sentence-initial pronouns are
+	// capitalized, and proseMarkerRe is case-sensitive on purpose.
+	if !hasCreditVerb && titleHasSentenceBreak(f.Title) {
 		return IntroFields{}, 0, false
 	}
 
