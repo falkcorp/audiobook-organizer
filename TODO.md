@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.17.6 -->
+<!-- version: 10.17.7 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-08-08 -->
 
@@ -269,19 +269,53 @@ into one of the curated sections below, is a normal direct edit.
 
           130 passed, 7 skipped, 0 failed, 0 flaky  (19.8m)
 
-      That is a stronger result than the fix claimed. The wave-2 counts were
-      measured on **chromium only**, but `test:e2e` runs `--project chromium
-      --project webkit`, so the suite is green on both engines. The run also
-      covers the Library changes merged after #2191 (#2193 In Progress filter,
-      #2195 empty-state), confirming neither regressed the e2e suite.
+      The wave-2 counts were measured on **chromium only**, but `test:e2e` runs
+      `--project chromium --project webkit`, so the suite is green on both
+      engines.
+
+      **⚠️ CORRECTION (2026-08-08 08:00).** The paragraph above originally also
+      claimed the run "covers the Library changes merged after #2191 (#2193,
+      #2195), confirming neither regressed the e2e suite." **That claim was
+      false and has been removed.**
+
+      `playwright.config.ts` sets `reuseExistingServer: !process.env.CI`, so a
+      local run attaches to whatever already listens on 127.0.0.1:8484 instead
+      of building. The process serving that port had been started at
+      **00:31:50** — hours before #2193 (merged 05:11) and #2195. Every local
+      e2e run after that point, including the 06:48 "verification" run, served
+      a **stale frontend bundle** predating both fixes.
+
+      What survives: **#2191 is still genuinely verified.** Its changes are spec
+      and helper files, which Playwright loads from disk rather than from the
+      server, so those ran as written. What does not survive is any claim about
+      #2193 or #2195 — the served bundle did not contain them.
+
+      **The trap is the lesson.** `reuseExistingServer` fails silently and looks
+      exactly like success: a fully green suite that exercised week-old code.
+      Anyone verifying a frontend change locally must confirm the server was
+      built from their commit — check the listener's start time
+      (`ps -o lstart -p $(lsof -ti :8484)`) or kill it first. Consider dropping
+      the flag, or having the config refuse to reuse a server older than the
+      working tree.
 
       **What this run does NOT verify** — recorded so the green result is not
       over-read:
 
-      - There is **no e2e test for the In Progress / Finished sidebar filter**.
-        #2193 is covered by unit tests only; the suite passing says nothing
-        about it. Adding one is the obvious next step and would close the
-        "not verified interactively" caveat on that entry permanently.
+      - There is **no e2e test for the In Progress / Finished sidebar filter**
+        on `main`. #2193 is covered by unit tests only.
+
+        A spec is drafted on branch `test/e2e-in-progress-filter` (commit
+        `a167205e`, deliberately **not merged** — 1 of 5 tests green). The one
+        that passes is the decisive one: *"clicking In Progress survives the URL
+        settling with page=1"*, run against a **freshly built** app. That is the
+        first real-browser evidence that #2193's harder half — the stuck
+        `isInternalUpdate` guard that discarded the click — is genuinely fixed.
+        The other four fail on `toHaveClass` against a filtered locator, which
+        is a test-authoring problem rather than a product bug: MUI nests the
+        label so the computed accessible name does not match, and the filtered
+        locator does not resolve to the element carrying `Mui-selected`.
+        Finishing those four would close the "not verified interactively"
+        caveat permanently.
       - There is **no e2e test for the empty-state / warmup recovery** either.
         That acceptance test requires restarting the backend mid-session, which
         the suite does not do.
