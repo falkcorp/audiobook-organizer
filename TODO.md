@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.17.3 -->
+<!-- version: 10.17.4 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-08-08 -->
 
@@ -346,7 +346,9 @@ into one of the curated sections below, is a normal direct edit.
         to it.
 
 - [ ] **Fix the Library "In Progress" nav item — the selection highlight never
-      moves, and the click is a genuine no-op.** Reported 2026-08-08, root-caused
+      moves, and the click is a genuine no-op.**
+      🟡 **BOTH BUGS FIXED in #2193 (2026-08-08); two acceptance items remain —
+      see "Still open" at the end of this entry.** Reported 2026-08-08, root-caused
       the same night. These are **two independent bugs** that happen to share a
       symptom. The control is not on the Library page: it is the Library sub-nav
       in the sidebar, `web/src/components/layout/Sidebar.tsx:53-62`:
@@ -431,6 +433,35 @@ into one of the curated sections below, is a normal direct edit.
       than the fetched page; and "Finished" works too. Also render the sub-items
       in collapsed-sidebar mode, where they currently are not rendered at all
       (`Sidebar.tsx:126-139`).
+
+      ---
+
+      **✅ Shipped in #2193 (2026-08-08).** Both root causes above are fixed.
+      Bug 1: selection now goes through an exported `isSubItemSelected()` that
+      compares the parsed, decoded `search` param instead of `location.pathname`
+      — which also sidesteps the percent-encoding/`page=1` trap noted above.
+      Bug 2: the stuck one-shot `isInternalUpdate` boolean is replaced by
+      `lastWrittenSearch`, which compares the query string actually written;
+      being idempotent, repeated identical writes are harmless and a genuinely
+      different URL always gets through. "Finished" is fixed by the same change.
+      The backend was confirmed not at fault and was not touched. Verified:
+      432/432 frontend tests, `tsc --noEmit` clean, eslint 0 errors, plus a new
+      `Sidebar.test.tsx` (11 cases) covering the encoded settled URL and a
+      one-item-selected invariant.
+
+      **🟡 Still open — do not close this entry yet:**
+
+      1. **Collapsed-sidebar mode still does not render the sub-items at all**
+         (`Sidebar.tsx:126-139`). Untouched by #2193, so In Progress/Finished
+         remain unreachable when the sidebar is collapsed.
+      2. **The result count still reflects the fetched page, not the whole
+         library.** That is the companion backend-filtering task, not a sidebar
+         concern — close it there rather than duplicating the work here.
+      3. **Not verified interactively.** #2193's fix is reasoned from the code
+         and covered by unit tests; nobody has driven the real app. The
+         falsifiable predictions above double as the manual check: "Finished"
+         should now work, and both should work whether arriving from Dashboard
+         or from `/library`.
 
 - [ ] **The Library must never show an empty "no items" state unless the
       library is genuinely empty (true first startup). Every other case shows a
