@@ -1,7 +1,7 @@
 <!-- file: docs/executive-summaries/2026-08-07-the-outage-that-marked-the-library-broken-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 075339af-a6a4-4f0a-88d5-7bff4bf8fe36 -->
-<!-- last-edited: 2026-08-07 -->
+<!-- last-edited: 2026-08-08 -->
 
 # The outage that marked the library broken — undone
 
@@ -45,12 +45,29 @@ names), it had no idea what a translator credit was (so translated books had
 their translator jammed into the author field), and it threw away the cover
 artist entirely. All three are fixed; translated works and cover artists now
 get their own proper fields. Replaying 346 real recordings through the old and
-new logic: **103 corrupted fields before, zero after.** A cleanup pass is
-rewriting the stored mistakes tonight.
+new logic: **103 corrupted fields before, zero after.** The cleanup pass that
+rewrites the already-stored mistakes has since finished: **12,990 books had
+their titles corrected.**
+
+**Reparsing the library can no longer be done blind.** That 12,990-book
+cleanup was dispatched with no preview — you asked for it and it simply
+started rewriting. It was safe only because of an unrelated internal rule
+that this particular job can only ever improve a record, never blank one,
+which is luck rather than design. That job now **defaults to preview mode**:
+asking for it shows you exactly what it would change, bucket by bucket, and
+writes nothing until you ask again with preview turned off.
 
 ## What to watch for next
 
 The transcripts on multi-file books (the remaining quarter of the library) still
-need to be generated, and a second transcription machine is being prepared so
-that work goes faster. The safeguard above means that even if that machine goes
-down mid-run, no book will ever again be blamed for it.
+need to be generated. The support for **using more than one transcription
+machine at once is now built and running in production** — work is handed out
+by priority across whichever machines are available, so adding a second
+machine speeds the remaining quarter up rather than requiring anything to be
+reconfigured. The safeguard above means that even if one of those machines
+goes down mid-run, no book will ever again be blamed for it.
+
+The one piece still outstanding is what happens to work that was handed to a
+machine that then went away: it is currently set aside rather than
+automatically handed back to another machine. That re-queueing is designed but
+not yet built.
