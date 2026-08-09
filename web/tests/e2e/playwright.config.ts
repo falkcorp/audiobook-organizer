@@ -1,5 +1,5 @@
 // file: tests/e2e/playwright.config.ts
-// version: 1.9.0
+// version: 1.10.0
 // guid: 7c8d9e0f-1a2b-3c4d-5e6f-7a8b9c0d1e2f
 // last-edited: 2026-08-08
 
@@ -22,7 +22,23 @@ export default defineConfig({
   timeout: 30 * 1000,
   fullyParallel: true,
   retries: 0,
-  workers: 2,
+  // One worker on CI, two locally.
+  //
+  // Measured 2026-08-09 in the official Playwright linux image, pinned to 2
+  // CPUs to approximate a runner:
+  //   workers=2 -> library-browser + scan-import FAIL (3 separate runs)
+  //   workers=1 -> 27 passed, 0 failed
+  // The failures were 30s `locator.click` timeouts with a MUI modal backdrop
+  // (Drawer in one case, Select menu in the other) still intercepting pointer
+  // events. Two browser workers plus the Go server on 2 cores starve the close
+  // TRANSITION, so the backdrop outlives any timeout worth setting. Neither the
+  // app nor the tests are wrong — a real user is not running two headless
+  // browsers on two pinned cores.
+  //
+  // The cost is wall-clock: chromium goes from ~4.5min to ~9min. That is the
+  // right trade for a gate that is supposed to block merges — a fast check
+  // people learn to distrust is worth less than a slow one they believe.
+  workers: process.env.CI ? 1 : 2,
   reporter: [
     ['list'],
     ['html', { outputFolder: 'playwright-report', open: 'never' }],
