@@ -1,7 +1,7 @@
 // file: web/tests/e2e/batch-operations.spec.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5d6e7f80-9a0b-1c2d-3e4f-5a6b7c8d9e0f
-// last-edited: 2026-02-04
+// last-edited: 2026-08-09
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import {
@@ -90,8 +90,11 @@ test.describe('Batch Operations', () => {
     // Act
     await page.getByRole('button', { name: 'Deselect' }).click();
 
-    // Assert
-    await expect(page.getByText('0 selected').first()).toBeVisible();
+    // Assert — BatchToolbar returns null at selectedCount === 0
+    // (BatchToolbar.tsx:48), so there is no "0 selected" chip to find. Its
+    // absence is what an empty selection looks like now.
+    await expect(page.getByRole('button', { name: 'Batch Edit' })).toHaveCount(0);
+    await expect(page.getByText(/\d+ selected/)).toHaveCount(0);
   });
 
   test('selection persists across page navigation', async ({ page }) => {
@@ -108,120 +111,26 @@ test.describe('Batch Operations', () => {
     await expect(page.getByLabel(firstLabel, { exact: true })).toBeChecked();
   });
 
-  test('bulk fetches metadata for selected books', async ({ page }) => {
-    // Arrange
-    await arrangeLibrary(page);
-    await selectFirstBooks(page, 3);
-
-    // Act
-    await page
-      .getByRole('button', { name: 'Fetch Selected', exact: true })
-      .click();
-    await page
-      .getByRole('dialog', { name: 'Bulk Fetch Metadata' })
-      .getByRole('button', { name: 'Fetch Metadata', exact: true })
-      .click();
-
-    // Assert
-    await expect(page.getByText('3 / 3 completed')).toBeVisible();
-    await waitForToast(page, 'Metadata fetched for 3 books.');
-  });
-
-  test('monitors bulk fetch progress', async ({ page }) => {
-    // Arrange
-    await arrangeLibrary(page);
-    await page.getByLabel('Select All').click();
-
-    // Act
-    await page
-      .getByRole('button', { name: 'Fetch Selected', exact: true })
-      .click();
-    await page
-      .getByRole('dialog', { name: 'Bulk Fetch Metadata' })
-      .getByRole('button', { name: 'Fetch Metadata', exact: true })
-      .click();
-
-    // Assert
-    const bulkDialog = page.getByRole('dialog', {
-      name: 'Bulk Fetch Metadata',
-    });
-    await expect(
-      bulkDialog.getByText('20 / 20 completed', { exact: true })
-    ).toBeVisible();
-    await expect(
-      bulkDialog.getByText('Test Book 1', { exact: true })
-    ).toBeVisible();
-  });
-
-  test('bulk fetch completes successfully and clears selection', async ({
-    page,
-  }) => {
-    // Arrange
-    await arrangeLibrary(page);
-    await selectFirstBooks(page, 1);
-
-    // Act
-    await page
-      .getByRole('button', { name: 'Fetch Selected', exact: true })
-      .click();
-    await page
-      .getByRole('dialog', { name: 'Bulk Fetch Metadata' })
-      .getByRole('button', { name: 'Fetch Metadata', exact: true })
-      .click();
-
-    // Assert
-    await waitForToast(page, 'Metadata fetched for 1 books.');
-    await expect(page.getByText('0 selected', { exact: true })).toBeVisible();
-  });
-
-  test('bulk fetch handles partial failures', async ({ page }) => {
-    // Arrange
-    const books = generateTestBooks(10);
-    books[1].fetch_metadata_error = true;
-    books[3].fetch_metadata_error = true;
-    await setupLibraryWithBooks(page, books);
-    await page.goto('/library');
-    await page.waitForLoadState('networkidle');
-    await selectFirstBooks(page, 5);
-
-    // Act
-    await page
-      .getByRole('button', { name: 'Fetch Selected', exact: true })
-      .click();
-    await page
-      .getByRole('dialog', { name: 'Bulk Fetch Metadata' })
-      .getByRole('button', { name: 'Fetch Metadata', exact: true })
-      .click();
-
-    // Assert
-    await waitForToast(page, '3 succeeded, 2 failed.');
-    await expect(page.getByText('Metadata fetch failed').first()).toBeVisible();
-  });
-
-  test('cancels bulk fetch operation', async ({ page }) => {
-    // Arrange
-    const books = generateTestBooks(15).map((book) => ({
-      ...book,
-      fetch_metadata_delay_ms: 200,
-    }));
-    await setupLibraryWithBooks(page, books);
-    await page.goto('/library');
-    await page.waitForLoadState('networkidle');
-    await page.getByLabel('Select All').click();
-
-    // Act
-    await page
-      .getByRole('button', { name: 'Fetch Selected', exact: true })
-      .click();
-    await page
-      .getByRole('dialog', { name: 'Bulk Fetch Metadata' })
-      .getByRole('button', { name: 'Fetch Metadata', exact: true })
-      .click();
-    await page.getByRole('button', { name: 'Cancel' }).click();
-
-    // Assert
-    await waitForToast(page, 'Bulk fetch cancelled.');
-  });
+  // REMOVED 2026-08-09: the five 'bulk fetch' tests
+  //   - bulk fetches metadata for selected books
+  //   - monitors bulk fetch progress
+  //   - bulk fetch completes successfully and clears selection
+  //   - bulk fetch handles partial failures
+  //   - cancels bulk fetch operation
+  //
+  // All five drove a "Bulk Fetch Metadata" dialog with an in-dialog progress
+  // counter. That dialog is UNREACHABLE: LibraryDialogs.tsx:920 renders
+  // <Dialog open={bulkFetchDialogOpen}>, and setBulkFetchDialogOpen(true) does
+  // not appear anywhere in web/src — the state is initialised to false at
+  // Library.tsx:352 and only ever set back to false. handleBulkFetchMetadata
+  // (Library.tsx:1218) is reachable only from that dead dialog.
+  //
+  // The flow was replaced by an async one: "Fetch Selected" calls
+  // batchFetchCandidates, toasts "Click Review when complete", and a separate
+  // "Review" button opens the candidates dialog once the cache is populated.
+  // There is no synchronous progress dialog to assert on any more. Rewriting
+  // these against the new flow would be new coverage, not repair, so they are
+  // removed rather than rewritten. See todo.d/20260809-dead-bulk-fetch-dialog.md.
 
   test('batch updates metadata field for selected books', async ({ page }) => {
     // Arrange
@@ -273,20 +182,14 @@ test.describe('Batch Operations', () => {
     // Arrange
     await arrangeLibrary(page);
 
-    // Act
-    await page
-      .locator('span[aria-label="Select books first"]')
-      .filter({ hasText: 'Batch Edit' })
-      .hover();
-
-    // Assert
-    await expect(page.getByText('Select books first')).toBeVisible();
-    await expect(
-      page.getByRole('button', { name: 'Batch Edit' })
-    ).toBeDisabled();
+    // Assert — batch operations are no longer *disabled* on an empty
+    // selection, they are not rendered at all: BatchToolbar.tsx:48 returns
+    // null when selectedCount === 0, so the "Select books first" tooltip
+    // wrapper this test used to hover no longer exists.
+    await expect(page.getByRole('button', { name: 'Batch Edit' })).toHaveCount(0);
     await expect(
       page.getByRole('button', { name: 'Fetch Selected', exact: true })
-    ).toBeDisabled();
+    ).toHaveCount(0);
   });
 
   test('shows different batch actions based on selection state', async ({
