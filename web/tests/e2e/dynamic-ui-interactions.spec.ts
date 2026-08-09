@@ -1,7 +1,7 @@
 // file: web/tests/e2e/dynamic-ui-interactions.spec.ts
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9f8e7d6c-5b4a-3210-fedc-ba9876543210
-// last-edited: 2026-03-02
+// last-edited: 2026-08-09
 
 /**
  * E2E tests for dynamic UI interactions with in-place loading states
@@ -94,15 +94,44 @@ test.describe('Dynamic UI - BookDetail Page', () => {
             title: 'The Odyssey',
           }),
         });
+      } else if (url.includes('/segments')) {
+        // api.getBookSegments reads body.data. Without this branch the URL fell
+        // into the catch-all below and got the book object back, so `segments`
+        // became undefined and BookDetail crashed on `.length` — the page then
+        // rendered the error boundary and every tab/button assertion here was
+        // hunting on a page that had already died.
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ data: [] }),
+        });
+      } else if (url.includes('/external-ids')) {
+        // api.getBookExternalIDs reads the TOP-LEVEL body and destructures
+        // `external_ids` — no envelope here.
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ external_ids: [], itunes_linked: false, total: 0 }),
+        });
+      } else if (/\/files(\?|$)/.test(url)) {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ data: { files: [], count: 0 } }),
+        });
       } else {
+        // api.getBook reads body.data, so the book must be enveloped.
         await route.fulfill({
           status: 200,
           contentType: 'application/json',
           body: JSON.stringify({
-            id: 'test-book-id',
-            title: 'The Odyssey',
-            author: 'Homer',
-            file_path: '/library/test.m4b',
+            data: {
+              id: 'test-book-id',
+              title: 'The Odyssey',
+              author: 'Homer',
+              author_name: 'Homer',
+              file_path: '/library/test.m4b',
+            },
           }),
         });
       }
@@ -152,47 +181,17 @@ test.describe('Dynamic UI - BookDetail Page', () => {
     await expect(page.getByRole('button', { name: /parse with ai/i })).toBeEnabled({ timeout: 10000 });
   });
 
-  test('Compare tab - Use Fetched button shows spinner', async ({ page }) => {
-    // Navigate to Compare tab
-    await page.getByRole('tab', { name: /tags/i }).click();
-    await page.waitForLoadState('networkidle');
-
-    // Find Use Fetched button for audiobook_release_year
-    const useFetchedButton = page
-      .getByRole('row', { name: /audiobook release year/i })
-      .getByRole('button', { name: /use fetched/i });
-
-    await expect(useFetchedButton).toBeVisible();
-
-    await useFetchedButton.click();
-
-    // Should show spinner and "Applying..." text
-    const applyingButton = page.getByRole('button', { name: /applying/i });
-    await expect(applyingButton).toBeVisible();
-    await expect(applyingButton).toBeDisabled();
-  });
-
-  test('Compare tab - other buttons remain clickable during action', async ({ page }) => {
-    await page.getByRole('tab', { name: /tags/i }).click();
-    await page.waitForLoadState('networkidle');
-
-    const row = page.getByRole('row', { name: /audiobook release year/i });
-    const useFetchedButton = row.getByRole('button', { name: /use fetched/i });
-
-    await useFetchedButton.click();
-
-    // After clicking, button shows "Applying..." and is disabled
-    const applyingButton = row.getByRole('button', { name: /applying/i });
-    await expect(applyingButton).toBeVisible();
-    await expect(applyingButton).toBeDisabled();
-
-    // But other buttons in different rows should still be clickable
-    const titleRow = page.getByRole('row', { name: /^title/i });
-    const titleUseFileButton = titleRow.getByRole('button', { name: /use file/i }).first();
-
-    // This button should NOT be disabled (it's for a different field)
-    await expect(titleUseFileButton).toBeEnabled();
-  });
+  // REMOVED 2026-08-09: 'Compare tab - Use Fetched button shows spinner' and
+  // 'Compare tab - other buttons remain clickable during action'.
+  //
+  // Both drove a "Tags"/Compare tab on BookDetail with a per-field row for each
+  // metadata field and one-click "Use File" / "Use Fetched" buttons that showed
+  // their own inline "Applying..." spinner. BookDetail now renders exactly two
+  // tabs (BookDetail.tsx:1014-1015, Info and Files & History), and neither
+  // "Use Fetched" nor "Use File" appears anywhere in web/src. Fetched values are
+  // still surfaced — MetadataEditDialog.tsx:188-198 shows them as a source label
+  // — but there is no per-field one-click apply and so no per-row busy state to
+  // assert on. See todo.d/20260809-per-field-use-fetched-affordance.md.
 
   test('No tab switching after fetch metadata', async ({ page }) => {
     // Start on Info tab
@@ -477,6 +476,14 @@ test.describe('Visual Regression - Button States', () => {
     await expect(loadingButton).toBeVisible();
 
     // Take screenshot of loading state
-    await expect(loadingButton).toHaveScreenshot('scan-button-loading.png');
+    // Mask the spinner. MUI's indeterminate CircularProgress animates both its
+    // rotation and its stroke-dasharray, and Playwright's animations:'disabled'
+    // freezes it at whichever frame it happened to reach — so the arc lands at a
+    // different phase run to run and the golden diffs by ~180px every time.
+    // Everything this check actually cares about (disabled styling, the
+    // "STARTING SCAN..." label, colours) is outside the spinner.
+    await expect(loadingButton).toHaveScreenshot('scan-button-loading.png', {
+      mask: [loadingButton.locator('.MuiCircularProgress-root')],
+    });
   });
 });
