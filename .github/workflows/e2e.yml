@@ -27,18 +27,26 @@
 
 name: E2E
 
-# NOTE: there is deliberately NO `pull_request` trigger yet. See the
-# continue-on-error comment on the job below — the suite is ~50% red, and a
+# The `pull_request` trigger is live as of 2026-08-09, and on that path the job
+# BLOCKS. It was withheld while the suite was ~50% red, because a
 # permanently-failing check on every PR is worse than no check: people learn to
 # ignore it, which is the same failure that let six specs rot for four months,
-# only louder. Restore the pull_request trigger (with the paths filter below,
-# kept here for whoever does it) at the same time as flipping
-# continue-on-error off.
+# only louder.
 #
-#  pull_request:
-#    branches: [main, master]
-#    paths: ['web/**', '**.go', 'go.mod', 'go.sum', '.github/workflows/e2e.yml']
+# Measured on the real runner before enabling it:
+#   chromium (the PR path)   272 passed /  0 failed /  8 skipped   <- blocking
+#   chromium + webkit        543 passed /  1 failed / 16 skipped   <- not blocking
+#
+# Hence the conditional continue-on-error on the job: the configuration that is
+# PROVEN green blocks, and the one that is not stays advisory rather than being
+# handed a green light it has not earned. See
+# todo.d/20260809-webkit-scan-import-drawer-backdrop.md for the single
+# remaining webkit failure.
+#
 on:
+  pull_request:
+    branches: [main, master]
+    paths: ['web/**', '**.go', 'go.mod', 'go.sum', '.github/workflows/e2e.yml']
   schedule:
     - cron: '17 5 * * *' # 05:17 UTC nightly, off the :00 stampede
   workflow_dispatch:
@@ -79,10 +87,21 @@ jobs:
     # value is still real — the failures are now VISIBLE on every PR instead of
     # invisible for four months, which is the problem this job exists to solve.
     #
-    # Flip continue-on-error off once the suite is actually green. That is
-    # tracked in TODO.md; do not flip it silently, and do not delete this job
-    # to make CI quiet.
-    continue-on-error: true
+    # BLOCKING on pull_request, advisory elsewhere.
+    #
+    # The PR path runs chromium only and was measured green on the real runner
+    # (272 passed / 0 failed / 8 skipped) before this was enabled, so it now
+    # blocks: a PR can no longer break the suite unnoticed, which is the whole
+    # point of this job.
+    #
+    # The scheduled/dispatch path also runs webkit, where one test still fails
+    # (see the header comment). Making that blocking would attach a red gate to
+    # a known, tracked failure and teach people to ignore it — the exact
+    # dynamic this job exists to prevent. So it stays advisory until webkit is
+    # green, and then this expression becomes a plain `false`.
+    #
+    # Do not flip it silently, and do not delete this job to make CI quiet.
+    continue-on-error: ${{ github.event_name != 'pull_request' }}
     # A full two-engine run measured ~20 minutes locally; allow generous
     # headroom for a cold CI runner that must also build the Go binary.
     timeout-minutes: 45
