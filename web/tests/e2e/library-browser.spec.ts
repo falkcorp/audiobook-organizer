@@ -1,13 +1,10 @@
 // file: web/tests/e2e/library-browser.spec.ts
-// version: 1.3.0
+// version: 1.4.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f2a3b4c5d6e7
-// last-edited: 2026-02-04
+// last-edited: 2026-08-09
 
 import { test, expect } from '@playwright/test';
-import {
-  generateTestBooks,
-  setupLibraryWithBooks,
-} from './utils/test-helpers';
+import { generateTestBooks, setupLibraryWithBooks } from './utils/test-helpers';
 
 test.describe('Library Browser', () => {
   // Setup handled by setupLibraryWithBooks() which calls setupMockApi()
@@ -23,15 +20,11 @@ test.describe('Library Browser', () => {
     await page.waitForLoadState('networkidle');
 
     // THEN: Grid displays books with title and author
-    await expect(
-      page.getByRole('heading', { name: 'Test Book 1', exact: true })
-    ).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Test Book 1', exact: true })).toBeVisible();
     await expect(page.getByText('Brandon Sanderson').first()).toBeVisible();
 
     // AND: Shows pagination controls
-    await expect(
-      page.getByRole('button', { name: /page 2/i })
-    ).toBeVisible();
+    await expect(page.getByRole('button', { name: /page 2/i })).toBeVisible();
   });
 
   test('switches between grid and list view', async ({ page }) => {
@@ -52,9 +45,7 @@ test.describe('Library Browser', () => {
     await page.getByRole('button', { name: /grid view/i }).click();
 
     // THEN: Display changes back to grid layout
-    await expect(
-      page.getByRole('heading', { name: 'Test Book 1', exact: true })
-    ).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Test Book 1', exact: true })).toBeVisible();
   });
 
   test('sorts books by title ascending', async ({ page }) => {
@@ -66,12 +57,14 @@ test.describe('Library Browser', () => {
     ];
     await setupLibraryWithBooks(page, books);
 
-    await page.goto('/library');
+    // The "Sort by" combobox no longer exists. SearchBarProps
+    // (SearchBar.tsx:124-131) has no onSortChange at all, and LibraryBookGrid
+    // receives the handler as `_handleSortChange` — deliberately unused. Sort
+    // state itself still works and is still sent to the API; the only surviving
+    // way to set it is the URL, which is also how it persists across reloads.
+    // The missing control is filed in todo.d as a product question.
+    await page.goto('/library?sort=title&order=asc');
     await page.waitForLoadState('networkidle');
-
-    // WHEN: User selects "Title" from sort dropdown
-    await page.getByRole('combobox', { name: 'Sort by' }).click();
-    await page.getByRole('option', { name: 'Title' }).click();
 
     // THEN: Books are ordered alphabetically by title
     const titleLocator = page.locator('h2').filter({ hasText: /Book/ });
@@ -88,14 +81,14 @@ test.describe('Library Browser', () => {
     ];
     await setupLibraryWithBooks(page, books);
 
-    await page.goto('/library');
+    // The "Sort by" combobox no longer exists. SearchBarProps
+    // (SearchBar.tsx:124-131) has no onSortChange at all, and LibraryBookGrid
+    // receives the handler as `_handleSortChange` — deliberately unused. Sort
+    // state itself still works and is still sent to the API; the only surviving
+    // way to set it is the URL, which is also how it persists across reloads.
+    // The missing control is filed in todo.d as a product question.
+    await page.goto('/library?sort=title&order=desc');
     await page.waitForLoadState('networkidle');
-
-    // WHEN: User selects "Title" and "Descending"
-    await page.getByRole('combobox', { name: 'Sort by' }).click();
-    await page.getByRole('option', { name: 'Title' }).click();
-    await page.getByRole('combobox', { name: 'Order' }).click();
-    await page.getByRole('option', { name: 'Descending' }).click();
 
     // THEN: Books are ordered reverse alphabetically
     const titleLocator = page.locator('h2').filter({ hasText: /Book/ });
@@ -127,12 +120,14 @@ test.describe('Library Browser', () => {
     ];
     await setupLibraryWithBooks(page, books);
 
-    await page.goto('/library');
+    // The "Sort by" combobox no longer exists. SearchBarProps
+    // (SearchBar.tsx:124-131) has no onSortChange at all, and LibraryBookGrid
+    // receives the handler as `_handleSortChange` — deliberately unused. Sort
+    // state itself still works and is still sent to the API; the only surviving
+    // way to set it is the URL, which is also how it persists across reloads.
+    // The missing control is filed in todo.d as a product question.
+    await page.goto('/library?sort=author&order=asc');
     await page.waitForLoadState('networkidle');
-
-    // WHEN: User selects "Author" from sort dropdown
-    await page.getByRole('combobox', { name: 'Sort by' }).click();
-    await page.getByRole('option', { name: 'Author' }).click();
 
     // THEN: Books are ordered by author name
     const titleLocator = page.locator('h2').filter({ hasText: /Book/ });
@@ -158,12 +153,10 @@ test.describe('Library Browser', () => {
     ];
     await setupLibraryWithBooks(page, books);
 
-    await page.goto('/library');
+    // The "Sort by" combobox no longer exists — see the note on the title-sort
+    // test above. 'created_at' is the SortField the old "Date Added" option set.
+    await page.goto('/library?sort=created_at&order=desc');
     await page.waitForLoadState('networkidle');
-
-    // WHEN: User selects "Date Added" from sort dropdown
-    await page.getByRole('combobox', { name: 'Sort by' }).click();
-    await page.getByRole('option', { name: 'Date Added' }).click();
 
     // THEN: Books are reordered by created_at (newest first)
     const titleLocator = page.locator('h2').filter({ hasText: /Book/ });
@@ -184,7 +177,9 @@ test.describe('Library Browser', () => {
         ...generateTestBooks(1)[0],
         id: 'book-2',
         title: 'Import Book',
-        library_state: 'import',
+        // FilterSidebar.tsx:115 offers "Imported" (value 'imported'); 'import'
+        // is not a state the filter can ever select.
+        library_state: 'imported',
       },
     ];
     await setupLibraryWithBooks(page, books);
@@ -200,12 +195,8 @@ test.describe('Library Browser', () => {
     await page.keyboard.press('Escape');
 
     // THEN: Only organized books are shown
-    await expect(
-      page.getByRole('heading', { name: 'Organized Book', exact: true })
-    ).toBeVisible();
-    await expect(
-      page.getByRole('heading', { name: 'Import Book', exact: true })
-    ).not.toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Organized Book', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Import Book', exact: true })).not.toBeVisible();
   });
 
   test('filters books by import state', async ({ page }) => {
@@ -221,7 +212,7 @@ test.describe('Library Browser', () => {
         ...generateTestBooks(1)[0],
         id: 'book-2',
         title: 'Import Book',
-        library_state: 'import',
+        library_state: 'imported',
       },
     ];
     await setupLibraryWithBooks(page, books);
@@ -232,13 +223,11 @@ test.describe('Library Browser', () => {
     // WHEN: User selects "Import" filter
     await page.getByRole('button', { name: /filters/i }).click();
     await page.getByRole('combobox', { name: 'Library State' }).click();
-    await page.getByRole('option', { name: 'Import' }).click();
+    await page.getByRole('option', { name: 'Imported', exact: true }).click();
     await page.keyboard.press('Escape');
 
     // THEN: Only import books are shown
-    await expect(
-      page.getByRole('heading', { name: 'Import Book', exact: true })
-    ).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Import Book', exact: true })).toBeVisible();
     await expect(
       page.getByRole('heading', { name: 'Organized Book', exact: true })
     ).not.toBeVisible();
@@ -272,12 +261,8 @@ test.describe('Library Browser', () => {
     await page.keyboard.press('Escape');
 
     // THEN: Only deleted books are shown
-    await expect(
-      page.getByRole('heading', { name: 'Deleted Book', exact: true })
-    ).toBeVisible();
-    await expect(
-      page.getByRole('heading', { name: 'Active Book', exact: true })
-    ).not.toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Deleted Book', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Active Book', exact: true })).not.toBeVisible();
   });
 
   test('filters books by author', async ({ page }) => {
@@ -308,12 +293,8 @@ test.describe('Library Browser', () => {
     await page.keyboard.press('Escape');
 
     // THEN: Only books by that author are shown
-    await expect(
-      page.getByRole('heading', { name: 'Book 1', exact: true })
-    ).toBeVisible();
-    await expect(
-      page.getByRole('heading', { name: 'Book 2', exact: true })
-    ).not.toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Book 1', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Book 2', exact: true })).not.toBeVisible();
   });
 
   test('filters books by series', async ({ page }) => {
@@ -344,12 +325,8 @@ test.describe('Library Browser', () => {
     await page.keyboard.press('Escape');
 
     // THEN: Only books in that series are shown
-    await expect(
-      page.getByRole('heading', { name: 'Book 1', exact: true })
-    ).toBeVisible();
-    await expect(
-      page.getByRole('heading', { name: 'Book 2', exact: true })
-    ).not.toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Book 1', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Book 2', exact: true })).not.toBeVisible();
   });
 
   test('combines multiple filters', async ({ page }) => {
@@ -367,7 +344,7 @@ test.describe('Library Browser', () => {
         id: 'book-2',
         title: 'Book 2',
         author_name: 'Brandon Sanderson',
-        library_state: 'import',
+        library_state: 'imported',
       },
     ];
     await setupLibraryWithBooks(page, books);
@@ -384,12 +361,8 @@ test.describe('Library Browser', () => {
     await page.keyboard.press('Escape');
 
     // THEN: Only organized books by Brandon Sanderson are shown
-    await expect(
-      page.getByRole('heading', { name: 'Book 1', exact: true })
-    ).toBeVisible();
-    await expect(
-      page.getByRole('heading', { name: 'Book 2', exact: true })
-    ).not.toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Book 1', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Book 2', exact: true })).not.toBeVisible();
   });
 
   test('clears all filters', async ({ page }) => {
@@ -423,12 +396,10 @@ test.describe('Library Browser', () => {
 
     // WHEN: User selects "50" from items-per-page dropdown
     await page.getByRole('combobox', { name: 'Items per page' }).click();
-    await page.getByRole('option', { name: '50' }).click();
+    await page.getByRole('option', { name: '50', exact: true }).click();
 
     // THEN: Page reloads showing 50 items
-    await expect(
-      page.getByRole('heading', { name: 'Test Book 49', exact: true })
-    ).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Test Book 49', exact: true })).toBeVisible();
   });
 
   test('navigates to next page', async ({ page }) => {
@@ -442,19 +413,13 @@ test.describe('Library Browser', () => {
     await page.waitForLoadState('networkidle');
 
     // WHEN: Page 1 is shown, "Test Book 5" (late alphabetically) is NOT visible
-    await expect(
-      page.getByRole('heading', { name: 'Test Book 1', exact: true })
-    ).toBeVisible();
-    await expect(
-      page.getByRole('heading', { name: 'Test Book 5', exact: true })
-    ).not.toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Test Book 1', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Test Book 5', exact: true })).not.toBeVisible();
 
     await page.getByRole('button', { name: /next page/i }).click();
 
     // THEN: Page 2 has different books
-    await expect(
-      page.getByRole('heading', { name: 'Test Book 1', exact: true })
-    ).not.toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Test Book 1', exact: true })).not.toBeVisible();
   });
 
   test('navigates to previous page', async ({ page }) => {
@@ -467,17 +432,13 @@ test.describe('Library Browser', () => {
 
     await page.getByRole('button', { name: /page 2/i }).click();
     // Page 2 should NOT have "Test Book 1" (first alphabetically)
-    await expect(
-      page.getByRole('heading', { name: 'Test Book 1', exact: true })
-    ).not.toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Test Book 1', exact: true })).not.toBeVisible();
 
     // WHEN: User clicks "Previous" pagination button
     await page.getByRole('button', { name: /previous page/i }).click();
 
     // THEN: Page 1 is loaded with "Test Book 1"
-    await expect(
-      page.getByRole('heading', { name: 'Test Book 1', exact: true })
-    ).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Test Book 1', exact: true })).toBeVisible();
   });
 
   test('jumps to specific page', async ({ page }) => {
@@ -492,9 +453,7 @@ test.describe('Library Browser', () => {
     await page.getByRole('button', { name: /page 3/i }).click();
 
     // THEN: Page 3 is loaded
-    await expect(
-      page.getByRole('heading', { name: 'Test Book 49', exact: true })
-    ).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Test Book 49', exact: true })).toBeVisible();
   });
 
   test('clicks book card to navigate to detail page', async ({ page }) => {
@@ -512,9 +471,7 @@ test.describe('Library Browser', () => {
     await page.waitForLoadState('networkidle');
 
     // WHEN: User clicks on a book card
-    await page
-      .getByRole('heading', { name: 'The Way of Kings', exact: true })
-      .click();
+    await page.getByRole('heading', { name: 'The Way of Kings', exact: true }).click();
 
     // THEN: Navigates to /library/{bookId}
     await page.waitForLoadState('networkidle');
@@ -557,14 +514,14 @@ test.describe('Library Browser', () => {
     const books = generateTestBooks(10);
     await setupLibraryWithBooks(page, books);
 
-    await page.goto('/library');
+    // The "Sort by" combobox no longer exists. SearchBarProps
+    // (SearchBar.tsx:124-131) has no onSortChange at all, and LibraryBookGrid
+    // receives the handler as `_handleSortChange` — deliberately unused. Sort
+    // state itself still works and is still sent to the API; the only surviving
+    // way to set it is the URL, which is also how it persists across reloads.
+    // The missing control is filed in todo.d as a product question.
+    await page.goto('/library?sort=author&order=desc');
     await page.waitForLoadState('networkidle');
-
-    // WHEN: User selects sort and filter
-    await page.getByRole('combobox', { name: 'Sort by' }).click();
-    await page.getByRole('option', { name: 'Author' }).click();
-    await page.getByRole('combobox', { name: 'Order' }).click();
-    await page.getByRole('option', { name: 'Descending' }).click();
 
     await page.getByRole('button', { name: /filters/i }).click();
     await page.getByRole('combobox', { name: 'Library State' }).click();

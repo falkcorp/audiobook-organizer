@@ -1,7 +1,7 @@
 // file: web/src/hooks/useLibraryQuery.ts
-// version: 1.4.0
+// version: 1.5.0
 // guid: d4e5f6a7-b8c9-0123-def0-123456789003
-// last-edited: 2026-08-08
+// last-edited: 2026-08-09
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -174,8 +174,17 @@ export function useLibraryQuery({
       // 'deleted' is a client-side concept (marked_for_deletion flag); send no library_state to server
       const libraryState = filters.libraryState === 'deleted' ? undefined : filters.libraryState;
 
-      // Check cache before fetching
-      const filterStr = JSON.stringify({ fieldFilters, tagsParam, libraryState, showFailed: filters.showFailed, hasFileErrors: filters.hasFileErrors, fingerprintStatus: filters.fingerprintStatus, coveragePercentMin: filters.coveragePercentMin, coveragePercentMax: filters.coveragePercentMax });
+      // Check cache before fetching.
+      //
+      // Use filters.libraryState, NOT the `libraryState` above. That one is
+      // deliberately undefined for 'deleted' so no library_state reaches the
+      // server — but feeding the same undefined into the cache key made
+      // "deleted" and "no state filter" produce an IDENTICAL key. The
+      // marked_for_deletion filter is applied after the fetch (below), which
+      // the cache-hit return never reaches, so selecting Deleted on a warm
+      // cache showed the entire unfiltered library while the Filters chip
+      // said 1. It only appeared to work from a cold cache.
+      const filterStr = JSON.stringify({ fieldFilters, tagsParam, libraryState: filters.libraryState, showFailed: filters.showFailed, hasFileErrors: filters.hasFileErrors, fingerprintStatus: filters.fingerprintStatus, coveragePercentMin: filters.coveragePercentMin, coveragePercentMax: filters.coveragePercentMax });
       const cacheKey = buildCacheKey(page, itemsPerPage, searchText, filterStr, sortBy, sortOrder);
       const cached = useLibraryCache.getState().getCached(cacheKey);
       if (cached) {

@@ -1,5 +1,5 @@
 // file: web/tests/e2e/utils/test-helpers.ts
-// version: 2.11.0
+// version: 2.12.0
 // guid: a1b2c3d4-e5f6-7890-abcd-e1f2a3b4c5d6
 // last-edited: 2026-08-09
 
@@ -848,9 +848,19 @@ export async function setupMockApiRoutes(
       if (filtersRaw) {
         try {
           const parsed = JSON.parse(filtersRaw) as Array<{ field: string; value: string; negated?: boolean }>;
+          // Library.tsx's buildFieldFilters() emits the FILTER name ('author',
+          // 'series'), which is not the book's field name ('author_name',
+          // 'series_name'). Without this mapping str(b, 'author') was always ''
+          // and every author/series filter returned zero rows — a filter that
+          // matches nothing, which reads exactly like a broken page.
+          const FIELD_ALIASES: Record<string, string> = {
+            author: 'author_name',
+            series: 'series_name',
+          };
           for (const flt of parsed) {
+            const field = FIELD_ALIASES[flt.field] ?? flt.field;
             rows = rows.filter((b) => {
-              const hit = str(b, flt.field) === String(flt.value).toLowerCase();
+              const hit = str(b, field) === String(flt.value).toLowerCase();
               return flt.negated ? !hit : hit;
             });
           }
@@ -863,8 +873,18 @@ export async function setupMockApiRoutes(
 
       const sortBy = q.get('sort_by');
       if (sortBy) {
+        // Same field-name gap as the `filters` param above: SortField.Author is
+        // 'author' and SortField.Series is 'series', but the book fields are
+        // 'author_name' and 'series_name'. Sorting on a missing key compares ''
+        // to '' for every row, which leaves the order untouched — a sort that
+        // silently does nothing.
+        const SORT_ALIASES: Record<string, string> = {
+          author: 'author_name',
+          series: 'series_name',
+        };
+        const key = SORT_ALIASES[sortBy] ?? sortBy;
         const dir = q.get('sort_order') === 'desc' ? -1 : 1;
-        rows.sort((a, b) => str(a, sortBy).localeCompare(str(b, sortBy)) * dir);
+        rows.sort((a, b) => str(a, key).localeCompare(str(b, key)) * dir);
       }
 
       const offset = parseInt(q.get('offset') || '0', 10);
