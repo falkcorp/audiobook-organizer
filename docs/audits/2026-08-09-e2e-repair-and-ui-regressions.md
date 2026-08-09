@@ -1,5 +1,5 @@
 <!-- file: docs/audits/2026-08-09-e2e-repair-and-ui-regressions.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 7a2f9d41-3e05-4b8c-9160-c4d8b7e35291 -->
 <!-- last-edited: 2026-08-09 -->
 
@@ -7,16 +7,25 @@
 
 ## Where the suite stands
 
-**~6 failing specs (chromium)**, down from 66 at the start of this session.
+Measured on merged `main` after all 13 PRs, from a clean worktree:
 
-Provenance, because the number has been misquoted before: the 66 baseline was measured
-at `4f24c1af`. The last full local run measured **31**, from a worktree that predated
-#2229; subtracting that PR's 11 gives 20, then #2232 took 4 and #2234 took 6, giving
-~10, and #2235 took the last 4
-(2 fixed, 2 converted to `test.fixme` because they are catching real bugs), giving **~6**.
-Treat that as approximate — `error-handling` reported 3 failures in the
-full-suite JSON but only 2 when run alone, so one of its tests may be order-dependent or
-flaky. Re-measure before trusting any of it:
+| project | passed | skipped | **failing** |
+|---|---|---|---|
+| chromium | 272 | 7 | **0** |
+| webkit | 268 | 7 | **4** |
+
+Down from **66 failing specs** at the start of the session. The 7 skipped are `test.fixme`
+markers I added for real product bugs (see findings 2, 10 and 11 below) — they are
+expected to fail and will report as *unexpected passes* the moment someone fixes them.
+
+The 4 remaining webkit failures are **webkit-only**; chromium passes all of them:
+
+```
+ 3  library-browser.spec.ts        (pagination — 'jumps to specific page' and siblings)
+ 1  library-sidebar-filters.spec.ts
+```
+
+Re-measure with:
 
 ```
 cd <a worktree at origin/main>/web
@@ -24,32 +33,25 @@ PLAYWRIGHT_JSON_OUTPUT_NAME=/tmp/e2e.json npx playwright test \
   -c tests/e2e/playwright.config.ts --project=chromium --reporter=json > /tmp/e2e-run.log
 ```
 
-### Webkit — now installed, and the repairs hold
+### Webkit — installed now, with two traps
 
-Webkit was **not installed** for most of this session, so the per-file counts above were
-measured on chromium alone. It is installed now, and a full webkit run over the eight
-repaired files says the fixes are not chromium-specific: **seven of eight pass
-completely.**
+Webkit was **not installed** for most of this session, so the per-file counts in the table
+below were measured on chromium alone. It is installed now and the fixes hold: the webkit
+run above is within 4 of the chromium one.
 
-The exception is `library-browser`, with **2 webkit-only pagination failures** that
-chromium does not reproduce (`jumps to specific page` and one sibling). For scale, #2230
-took that file from 14 webkit failures to 2 — these are genuine webkit behaviour
-differences, not leftovers from the repair.
+`npx playwright install webkit` **from the repo root installs the wrong build** — the root
+pins a different Playwright version and fetches `webkit-2248`, while `web/` needs
+`webkit-2336`. Run it from `web/`. Running two installs concurrently also leaves a stale
+`__dirlock` in `~/Library/Caches/ms-playwright/` that blocks every later install until you
+`rm -rf` it.
 
-**Installing it has two traps.** `npx playwright install webkit` **from the repo root
-installs the wrong build** — the root pins a different Playwright version and fetches
-`webkit-2248`, while `web/` needs `webkit-2336`. Run it from `web/`. And running two
-installs concurrently leaves a stale `__dirlock` in `~/Library/Caches/ms-playwright/`
-that blocks every later install until you `rm -rf` it.
+The stale `scan-button-loading-webkit-darwin.png` golden was regenerated in #2233.
 
-The stale `scan-button-loading-webkit-darwin.png` golden was regenerated in #2233;
-`dynamic-ui-interactions` now passes 20/20 across both projects.
+Still open: there are **no linux goldens at all**, so the one visual test cannot pass on a
+CI runner regardless. Pre-existing, but it means the nightly e2e workflow has a permanent
+red until linux goldens are committed or that test is scoped to a single platform.
 
-Still open: there are **no linux goldens at all**, so the visual test cannot pass on a CI
-runner regardless. Pre-existing, but it means the nightly e2e workflow has a permanent
-red until linux goldens are committed or the test is scoped to one platform.
-
-## Files fixed (11 PRs — #2224–#2230, #2232–#2235)
+## Files fixed (13 PRs — #2224–#2236)
 
 | PR | File | Before → after |
 |---|---|---|
@@ -64,6 +66,7 @@ red until linux goldens are committed or the test is scoped to one platform.
 | #2233 | webkit visual golden | 1 → 0 (webkit) |
 | #2234 | `error-handling` + `scan-import-organize` | 5 → 0 (both browsers) |
 | #2235 | `auth-flow` + `search-and-filter` | 3 → 0 (2 fixed, 2 fixme) |
+| #2236 | `diagnostics`, `import-paths`, `settings-configuration`, `library-enhancements` | 4 → 0 |
 
 ## Product findings — the valuable output of this session
 
@@ -178,20 +181,10 @@ about what the page *should* contain; all came from reading
   the quoted word. This mangled two commit messages tonight, both caught after the fact.
   Use `git commit -F <file>` with a heredoc-written file.
 
-## Remaining 20, by file
+## What is left
 
-`transcode-and-counting` is already at 0 on `main` (#2229) — it appears in the last local
-run only because that worktree predated the merge.
+Nothing on chromium. The 4 webkit-only failures above have **not** been diagnosed — they
+are pagination behaviour differences, the first genuinely browser-specific failures this
+effort has produced rather than mock or drift problems.
 
-```
- 1  diagnostics.spec.ts
- 1  import-audiobook-file.spec.ts
- 1  import-paths.spec.ts
- 1  itunes-bidirectional-sync.spec.ts
- 1  library-enhancements.spec.ts
- 1  settings-configuration.spec.ts
-```
-
-`metadata-provenance` (#2232), `error-handling` and `scan-import-organize` (#2234) are
-all at 0 now. Nothing in the remaining list has been diagnosed — they are the untouched
-tail of ones and twos.
+The 11 product findings below are the real backlog.
