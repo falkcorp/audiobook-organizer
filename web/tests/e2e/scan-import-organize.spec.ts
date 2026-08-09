@@ -40,11 +40,23 @@ const setupScanWorkflow = async (page: Page, options: ScanMockOptions) => {
       sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ importPaths, libraryBooks }));
     };
 
-    const jsonResponse = (body: unknown, status = 200) =>
-      new Response(JSON.stringify(body), {
+    // Adds the { data: ... } envelope the real API returns. This spec mocks by
+    // patching window.fetch rather than using page.route + setupMockApi, so it
+    // gets none of the shared handlers and needs its own copy.
+    //
+    // Additive: `{ ...body, data: body }` keeps every top-level key, so readers
+    // using `body.items` and readers using `body.data.items` both work. Arrays
+    // and already-wrapped bodies are left alone.
+    const jsonResponse = (body: unknown, status = 200) => {
+      const envelope =
+        body && typeof body === 'object' && !Array.isArray(body) && !('data' in body)
+          ? { ...(body as Record<string, unknown>), data: body }
+          : body;
+      return new Response(JSON.stringify(envelope), {
         status,
         headers: { 'Content-Type': 'application/json' },
       });
+    };
 
     const originalFetch = window.fetch.bind(window);
     window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
@@ -59,6 +71,22 @@ const setupScanWorkflow = async (page: Page, options: ScanMockOptions) => {
       const pathname = urlObj.pathname;
       const body = typeof init?.body === 'string' ? init.body : '';
       const payload = body ? JSON.parse(body) : {};
+
+      // Auth first. Without it the shim falls through to the real server, the
+      // auth check fails, and every page renders the LOGIN screen — which is
+      // why these tests timed out looking for buttons that were never going to
+      // be there. api.getAuthStatus() reads body.data, so the envelope matters.
+      if (pathname === '/api/v1/auth/status') {
+        return Promise.resolve(
+          jsonResponse({
+            has_users: true,
+            auth_enabled: false,
+            requires_auth: false,
+            authenticated: true,
+            user: { id: 'test-user', username: 'test', role: 'admin' },
+          })
+        );
+      }
 
       if (pathname === '/api/v1/import-paths' && method === 'GET') {
         return Promise.resolve(jsonResponse({ importPaths }));
@@ -91,7 +119,7 @@ const setupScanWorkflow = async (page: Page, options: ScanMockOptions) => {
         }
         libraryBooks = libraryBooks.map((book) => ({
           ...book,
-          library_state: 'import',
+          library_state: 'imported',
         }));
         saveState();
         return Promise.resolve(
@@ -400,7 +428,7 @@ test.describe('Scan/Import/Organize Workflow', () => {
       ...baseBook,
       id: 'import-1',
       title: 'Import Book 1',
-      library_state: 'import',
+      library_state: 'imported',
       marked_for_deletion: false,
       file_path: '/imports/import-book-1.m4b',
     };
@@ -448,7 +476,7 @@ test.describe('Scan/Import/Organize Workflow', () => {
       ...baseBook,
       id: 'import-dup',
       title: 'Duplicate Book (Import)',
-      library_state: 'import',
+      library_state: 'imported',
       file_hash: 'dup-hash',
       file_path: '/imports/duplicate.m4b',
     };
@@ -498,7 +526,7 @@ test.describe('Scan/Import/Organize Workflow', () => {
       ...book,
       id: `import-${index + 1}`,
       title: `Import Book ${index + 1}`,
-      library_state: 'import',
+      library_state: 'imported',
       organize_error: index === 2 ? 'Disk full' : undefined,
     }));
     await setupLibraryWithBooks(page, books, {
