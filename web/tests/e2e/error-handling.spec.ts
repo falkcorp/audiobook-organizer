@@ -1,7 +1,7 @@
 // file: web/tests/e2e/error-handling.spec.ts
-// version: 1.5.0
+// version: 1.6.0
 // guid: 2f4f5afa-c734-4a00-8a72-d288bcea714f
-// last-edited: 2026-08-08
+// last-edited: 2026-08-09
 
 import { test, expect, type Page } from '@playwright/test';
 import {
@@ -28,7 +28,8 @@ test.describe('Error Handling', () => {
     await openLibrary(page, { failures: { getBooks: 'timeout' } });
 
     // Act + Assert
-    await expect(page.getByText('Request timed out.')).toBeVisible();
+    // Rendered twice — once in the alert, once inline — so scope to the first.
+    await expect(page.getByText('Request timed out.').first()).toBeVisible();
   });
 
   test('handles 404 not found errors', async ({ page }) => {
@@ -51,7 +52,8 @@ test.describe('Error Handling', () => {
     await openLibrary(page, { failures: { getBooks: 500 } });
 
     // Act + Assert
-    await expect(page.getByText('Server error occurred.')).toBeVisible();
+    // Rendered twice — once in the alert, once inline — so scope to the first.
+    await expect(page.getByText('Server error occurred.').first()).toBeVisible();
   });
 
   test('handles invalid form input', async ({ page }) => {
