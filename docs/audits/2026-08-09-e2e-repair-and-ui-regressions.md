@@ -1,5 +1,5 @@
 <!-- file: docs/audits/2026-08-09-e2e-repair-and-ui-regressions.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 7a2f9d41-3e05-4b8c-9160-c4d8b7e35291 -->
 <!-- last-edited: 2026-08-09 -->
 
@@ -7,11 +7,12 @@
 
 ## Where the suite stands
 
-**20 failing specs (chromium)**, down from 66 at the start of this session.
+**16 failing specs (chromium)**, down from 66 at the start of this session.
 
 Provenance, because the number has been misquoted before: the 66 baseline was measured
 at `4f24c1af`. The last full local run measured **31**, from a worktree that predated
-#2229; subtracting that PR's 11 gives **20**. Re-measure before trusting it:
+#2229; subtracting that PR's 11 gives 20, and #2232 took another 4, giving **16**.
+Re-measure before trusting it:
 
 ```
 cd <a worktree at origin/main>/web
@@ -19,20 +20,32 @@ PLAYWRIGHT_JSON_OUTPUT_NAME=/tmp/e2e.json npx playwright test \
   -c tests/e2e/playwright.config.ts --project=chromium --reporter=json > /tmp/e2e-run.log
 ```
 
-### ⚠️ Every count in this document is chromium-only
+### Webkit — now installed, and the repairs hold
 
-Webkit is **not installed on this machine** — `Executable doesn't exist at
-.../ms-playwright/webkit-2336/pw_run.sh`. The suite defines a webkit project, so a real
-"green" is roughly twice the work measured here. `npx playwright install webkit` is one
-command and it changes what green means. Do that before claiming the suite passes.
+Webkit was **not installed** for most of this session, so the per-file counts above were
+measured on chromium alone. It is installed now, and a full webkit run over the eight
+repaired files says the fixes are not chromium-specific: **seven of eight pass
+completely.**
 
-One casualty: `dynamic-ui-interactions.spec.ts-snapshots/scan-button-loading-webkit-darwin.png`
-is now **stale** (the spinner was masked and only the chromium golden could be
-regenerated). There are also **no linux goldens at all**, so that visual test cannot pass
-on a CI runner regardless — pre-existing, but it means the nightly e2e workflow has a
-permanent red until linux goldens are committed or the test is scoped to one platform.
+The exception is `library-browser`, with **2 webkit-only pagination failures** that
+chromium does not reproduce (`jumps to specific page` and one sibling). For scale, #2230
+took that file from 14 webkit failures to 2 — these are genuine webkit behaviour
+differences, not leftovers from the repair.
 
-## Files fixed (7 PRs, all merged except #2230 pending)
+**Installing it has two traps.** `npx playwright install webkit` **from the repo root
+installs the wrong build** — the root pins a different Playwright version and fetches
+`webkit-2248`, while `web/` needs `webkit-2336`. Run it from `web/`. And running two
+installs concurrently leaves a stale `__dirlock` in `~/Library/Caches/ms-playwright/`
+that blocks every later install until you `rm -rf` it.
+
+The stale `scan-button-loading-webkit-darwin.png` golden was regenerated in #2233;
+`dynamic-ui-interactions` now passes 20/20 across both projects.
+
+Still open: there are **no linux goldens at all**, so the visual test cannot pass on a CI
+runner regardless. Pre-existing, but it means the nightly e2e workflow has a permanent
+red until linux goldens are committed or the test is scoped to one platform.
+
+## Files fixed (9 PRs — #2224–#2230, #2232, #2233)
 
 | PR | File | Before → after |
 |---|---|---|
@@ -43,6 +56,8 @@ permanent red until linux goldens are committed or the test is scoped to one pla
 | #2228 | `version-management.spec.ts` | 6 → 0 |
 | #2229 | `transcode-and-counting.spec.ts` | 11 → 0 |
 | #2230 | `library-browser.spec.ts` + a product fix | 12 → 0 |
+| #2232 | `metadata-provenance.spec.ts` + a product fix | 4 → 0 |
+| #2233 | webkit visual golden | 1 → 0 (webkit) |
 
 ## Product findings — the valuable output of this session
 
@@ -149,7 +164,6 @@ about what the page *should* contain; all came from reading
 run only because that worktree predated the merge.
 
 ```
- 4  metadata-provenance.spec.ts
  3  error-handling.spec.ts
  3  scan-import-organize.spec.ts
  2  auth-flow.spec.ts
@@ -162,5 +176,6 @@ run only because that worktree predated the merge.
  1  settings-configuration.spec.ts
 ```
 
-`metadata-provenance` and `scan-import-organize` already had the auth fix applied earlier
-in the session, so their remaining failures are content drift, not the login-screen cause.
+`metadata-provenance` is now at 0 (#2232). `scan-import-organize` already had the auth
+fix applied earlier in the session, so its remaining failures are content drift, not the
+login-screen cause.
