@@ -1,7 +1,7 @@
 // file: web/src/pages/BookDetail.tsx
-// version: 1.52.1
+// version: 1.53.0
 // guid: 4d2f7c6a-1b3e-4c5d-8f7a-9b0c1d2e3f4a
-// last-edited: 2026-08-07
+// last-edited: 2026-08-09
 
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -766,6 +766,11 @@ export const BookDetail = () => {
     narrator: current.narrator,
     series: current.series_name,
     series_number: current.series_position,
+    // Genre was missing, so the Edit Metadata dialog rendered an empty Genre
+    // box no matter what was stored. Safe to add: `genre` is not part of the
+    // payload handleEditSave builds, so populating it cannot change what a
+    // save writes — it only stops the dialog lying about the current value.
+    genre: current.genre,
     language: current.language,
     publisher: current.publisher,
     description: current.description,
