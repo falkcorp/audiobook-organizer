@@ -1,9 +1,18 @@
 <!-- file: docs/executive-summaries/2026-08-08-the-safety-net-that-had-stopped-catching-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: b1ececb6-257a-4ad0-9722-453194d546da -->
-<!-- last-edited: 2026-08-08 -->
+<!-- last-edited: 2026-08-09 -->
 
 # The safety net that had stopped catching — restored
+
+> **Correction, 2026-08-09.** The claim below that the suite "can be trusted as a
+> gate again" was wrong. It rested on a run that had been checked through a
+> command which hid most of its output, against a server left running for hours.
+> A clean run the same evening reported **146 of 288 tests failing** — the 43
+> described here were real and really fixed, but they were a fraction of what was
+> broken. All 146 have since been repaired; see
+> [the 2026-08-09 summary](2026-08-09-the-half-red-safety-net-executive-summary.md).
+
 
 ## What was wrong
 
