@@ -798,17 +798,81 @@ export async function setupMockApiRoutes(
       );
     }
 
-    // Books endpoints
+    // Books endpoints.
+    //
+    // This handler used to read ONLY offset and limit, silently ignoring
+    // search, filters, tags, library_state and sort. That made every
+    // search/filter/sort assertion in the suite fail in the most confusing way
+    // possible: the request succeeded, the response looked fine, and the page
+    // simply showed every book. A filter that is IGNORED is indistinguishable
+    // from a filter that matched everything — the same failure mode the real
+    // API has (an unrecognised param returns the whole library with HTTP 200),
+    // which is tracked separately as the fail-closed work.
+    //
+    // Param names mirror src/services/api.ts getBooks() exactly; if that
+    // function gains a param, add it here or tests will silently over-match.
     if (pathname === '/api/v1/audiobooks' && method === 'GET') {
       const t = maybeTimeout(mockState.failures.getBooks); if (t) return t;
       const f = maybeFailStatus(mockState.failures.getBooks, 'Server error occurred.'); if (f) return f;
-      const offset = parseInt(url.searchParams.get('offset') || '0', 10);
-      const limit = parseInt(url.searchParams.get('limit') || '12', 10);
-      const paginatedBooks = mockState.books.slice(offset, offset + limit);
+
+      const q = url.searchParams;
+      const str = (b: Record<string, unknown>, k: string) => String(b[k] ?? '').toLowerCase();
+      let rows = [...(mockState.books as Array<Record<string, unknown>>)];
+
+      const search = (q.get('search') || '').toLowerCase().trim();
+      if (search) {
+        // Field-scoped syntax ("title:foo") is parsed client-side into the
+        // `filters` param, so anything arriving here is free text.
+        rows = rows.filter(
+          (b) =>
+            str(b, 'title').includes(search) ||
+            str(b, 'author_name').includes(search) ||
+            str(b, 'series_name').includes(search)
+        );
+      }
+
+      const libraryState = q.get('library_state');
+      if (libraryState) rows = rows.filter((b) => str(b, 'library_state') === libraryState.toLowerCase());
+
+      const tag = q.get('tag');
+      if (tag) {
+        rows = rows.filter((b) => {
+          const tags = b.tags;
+          return Array.isArray(tags) && tags.map((x) => String(x).toLowerCase()).includes(tag.toLowerCase());
+        });
+      }
+
+      // `filters` is a JSON array of { field, value, negated } produced by
+      // Library.tsx's buildFieldFilters().
+      const filtersRaw = q.get('filters');
+      if (filtersRaw) {
+        try {
+          const parsed = JSON.parse(filtersRaw) as Array<{ field: string; value: string; negated?: boolean }>;
+          for (const flt of parsed) {
+            rows = rows.filter((b) => {
+              const hit = str(b, flt.field) === String(flt.value).toLowerCase();
+              return flt.negated ? !hit : hit;
+            });
+          }
+        } catch {
+          // A malformed filters param is a test bug; failing loudly beats
+          // silently returning the whole library.
+          return route.fulfill(jsonResponse({ error: 'invalid filters param' }, 400));
+        }
+      }
+
+      const sortBy = q.get('sort_by');
+      if (sortBy) {
+        const dir = q.get('sort_order') === 'desc' ? -1 : 1;
+        rows.sort((a, b) => str(a, sortBy).localeCompare(str(b, sortBy)) * dir);
+      }
+
+      const offset = parseInt(q.get('offset') || '0', 10);
+      const limit = parseInt(q.get('limit') || '12', 10);
       return route.fulfill(
         jsonResponse({
-          items: paginatedBooks,
-          count: mockState.books.length,
+          items: rows.slice(offset, offset + limit),
+          count: rows.length,
           offset,
           limit,
         })
