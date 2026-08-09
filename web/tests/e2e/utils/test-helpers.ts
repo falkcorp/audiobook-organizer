@@ -1,7 +1,7 @@
 // file: web/tests/e2e/utils/test-helpers.ts
-// version: 2.10.0
+// version: 2.11.0
 // guid: a1b2c3d4-e5f6-7890-abcd-e1f2a3b4c5d6
-// last-edited: 2026-08-08
+// last-edited: 2026-08-09
 
 import { Page } from '@playwright/test';
 
@@ -1481,14 +1481,23 @@ export async function setupMockApiRoutes(
       return route.fulfill(jsonResponse({ message: 'Deleted' }));
     }
 
+    // Batch operations. MUST stay above the generic
+    // startsWith('/api/v1/audiobooks/') POST handler below — '/audiobooks/batch'
+    // matches that prefix too, so this branch was unreachable and every batch
+    // update silently returned the generic { message: 'OK' } instead.
+    if (pathname === '/api/v1/audiobooks/batch' && method === 'POST') {
+      // Echo the real count. This was also hardcoded to 0, so Library's success
+      // toast always read "Updated metadata for 0 audiobooks."
+      let ids: unknown[] = [];
+      try { ids = (request.postDataJSON()?.ids as unknown[]) ?? []; } catch { /* ignore */ }
+      return route.fulfill(
+        jsonResponse({ message: 'Batch update complete', updated: ids.length, failed: 0 })
+      );
+    }
+
     if (pathname.startsWith('/api/v1/audiobooks/') && method === 'POST') {
       // Handle various POST sub-endpoints (fetch-metadata, parse-with-ai, versions, restore)
       return route.fulfill(jsonResponse({ message: 'OK', book: mockState.books[0] || {} }));
-    }
-
-    // Batch operations
-    if (pathname === '/api/v1/audiobooks/batch' && method === 'POST') {
-      return route.fulfill(jsonResponse({ message: 'Batch update complete', updated: 0 }));
     }
 
     // Metadata endpoints
