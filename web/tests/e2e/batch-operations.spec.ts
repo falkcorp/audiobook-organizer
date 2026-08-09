@@ -36,6 +36,13 @@ async function getFirstBookLabel(page: Page): Promise<string> {
   return label || 'Select Test Book 1';
 }
 
+/**
+ * NOTE: the "N selected" chip is rendered TWICE in the tree, so a bare
+ * getByText('1 selected') is a strict-mode violation ("resolved to 2
+ * elements"). These assertions use .first() — the behaviour under test is that
+ * the count is displayed, not how many places display it. If the duplication
+ * is itself unintended, that is a UI question, not a test one.
+ */
 test.describe('Batch Operations', () => {
   // Setup handled by arrangeLibrary() → setupLibraryWithBooks() → setupMockApi()
   // (includes skipWelcomeWizard + mockEventSource + setupMockApiRoutes)
@@ -48,7 +55,7 @@ test.describe('Batch Operations', () => {
     await selectFirstBooks(page, 1);
 
     // Assert
-    await expect(page.getByText('1 selected')).toBeVisible();
+    await expect(page.getByText('1 selected').first()).toBeVisible();
   });
 
   test('selects multiple books with individual checkboxes', async ({
@@ -61,7 +68,7 @@ test.describe('Batch Operations', () => {
     await selectFirstBooks(page, 5);
 
     // Assert
-    await expect(page.getByText('5 selected')).toBeVisible();
+    await expect(page.getByText('5 selected').first()).toBeVisible();
   });
 
   test('selects all books on current page', async ({ page }) => {
@@ -72,7 +79,7 @@ test.describe('Batch Operations', () => {
     await page.getByLabel('Select All').click();
 
     // Assert
-    await expect(page.getByText('20 selected')).toBeVisible();
+    await expect(page.getByText('20 selected').first()).toBeVisible();
   });
 
   test('deselects all books', async ({ page }) => {
@@ -81,10 +88,10 @@ test.describe('Batch Operations', () => {
     await page.getByLabel('Select All').click();
 
     // Act
-    await page.getByRole('button', { name: 'Deselect All' }).click();
+    await page.getByRole('button', { name: 'Deselect' }).click();
 
     // Assert
-    await expect(page.getByText('0 selected')).toBeVisible();
+    await expect(page.getByText('0 selected').first()).toBeVisible();
   });
 
   test('selection persists across page navigation', async ({ page }) => {
@@ -108,7 +115,7 @@ test.describe('Batch Operations', () => {
 
     // Act
     await page
-      .getByRole('button', { name: 'Fetch Metadata', exact: true })
+      .getByRole('button', { name: 'Fetch Selected', exact: true })
       .click();
     await page
       .getByRole('dialog', { name: 'Bulk Fetch Metadata' })
@@ -127,7 +134,7 @@ test.describe('Batch Operations', () => {
 
     // Act
     await page
-      .getByRole('button', { name: 'Fetch Metadata', exact: true })
+      .getByRole('button', { name: 'Fetch Selected', exact: true })
       .click();
     await page
       .getByRole('dialog', { name: 'Bulk Fetch Metadata' })
@@ -155,7 +162,7 @@ test.describe('Batch Operations', () => {
 
     // Act
     await page
-      .getByRole('button', { name: 'Fetch Metadata', exact: true })
+      .getByRole('button', { name: 'Fetch Selected', exact: true })
       .click();
     await page
       .getByRole('dialog', { name: 'Bulk Fetch Metadata' })
@@ -179,7 +186,7 @@ test.describe('Batch Operations', () => {
 
     // Act
     await page
-      .getByRole('button', { name: 'Fetch Metadata', exact: true })
+      .getByRole('button', { name: 'Fetch Selected', exact: true })
       .click();
     await page
       .getByRole('dialog', { name: 'Bulk Fetch Metadata' })
@@ -204,7 +211,7 @@ test.describe('Batch Operations', () => {
 
     // Act
     await page
-      .getByRole('button', { name: 'Fetch Metadata', exact: true })
+      .getByRole('button', { name: 'Fetch Selected', exact: true })
       .click();
     await page
       .getByRole('dialog', { name: 'Bulk Fetch Metadata' })
@@ -278,7 +285,7 @@ test.describe('Batch Operations', () => {
       page.getByRole('button', { name: 'Batch Edit' })
     ).toBeDisabled();
     await expect(
-      page.getByRole('button', { name: 'Fetch Metadata', exact: true })
+      page.getByRole('button', { name: 'Fetch Selected', exact: true })
     ).toBeDisabled();
   });
 
