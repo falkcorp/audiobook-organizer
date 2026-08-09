@@ -1,7 +1,7 @@
 // file: web/tests/e2e/settings-configuration.spec.ts
-// version: 1.2.1
+// version: 1.3.0
 // guid: ab83d28e-beb5-4288-821f-7bf82704f4b9
-// last-edited: 2026-04-30
+// last-edited: 2026-08-09
 
 import { test, expect, type Page } from '@playwright/test';
 import {
@@ -79,10 +79,15 @@ test.describe('Settings Configuration', () => {
 
     // Act + Assert
     await expect(page.getByText('Library Settings')).toBeVisible();
+    await expect(page.getByText('Scan Settings')).toBeVisible();
+
+    // Import paths moved off the Library tab onto their own "Paths" tab
+    // (PathsSettingsTab.tsx:108). The Library tab now just points at it — its
+    // copy reads "Import paths are configured in File Manager."
+    await page.getByRole('tab', { name: 'Paths' }).click();
     await expect(
       page.getByText('Import Paths (Watch Locations)')
     ).toBeVisible();
-    await expect(page.getByText('Scan Settings')).toBeVisible();
 
     await page.getByRole('tab', { name: 'Metadata' }).click();
     await expect(page.getByText('Metadata Settings')).toBeVisible();

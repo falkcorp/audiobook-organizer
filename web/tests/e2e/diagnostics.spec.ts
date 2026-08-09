@@ -1,5 +1,5 @@
 // file: web/tests/e2e/diagnostics.spec.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: f61968fd-c902-4c58-ac4d-9b9a3511fa92
 
 import { test, expect, type Page } from '@playwright/test';
@@ -249,7 +249,9 @@ test.describe('Diagnostics', () => {
       page.getByText('Same book in mp3 and m4b')
     ).toBeVisible({ timeout: 10000 });
 
-    await expect(page.getByText('Orphan track')).toBeVisible();
+    // getByText is case-insensitive substring by default, so this also matched
+    // the Deduplication card's blurb ("…books, orphan tracks, and missing…").
+    await expect(page.getByText('Orphan track', { exact: true })).toBeVisible();
     await expect(page.getByText('Narrator as author')).toBeVisible();
   });
 

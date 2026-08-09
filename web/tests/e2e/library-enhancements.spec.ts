@@ -1,7 +1,7 @@
 // file: web/tests/e2e/library-enhancements.spec.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: e8f9a0b1-c2d3-4e5f-6a7b-8c9d0e1f2a3b
-// last-edited: 2026-03-22
+// last-edited: 2026-08-09
 
 import { test, expect, Page } from '@playwright/test';
 import {
@@ -381,7 +381,12 @@ test.describe('Tag Management', () => {
     await filtersBtn.click();
 
     // Verify the filter drawer is open
-    const drawer = page.locator('.MuiDrawer-paper');
+    // Three drawers are mounted (sidebar, filter, and one more), so a bare
+    // .MuiDrawer-paper is a strict-mode violation. Pick the filter one by a
+    // control only it contains.
+    const drawer = page
+      .locator('.MuiDrawer-paper')
+      .filter({ has: page.getByText('Library State') });
     await expect(drawer).toBeVisible({ timeout: 5000 });
 
     // Verify the "Tags" section exists

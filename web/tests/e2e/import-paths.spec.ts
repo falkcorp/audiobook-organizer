@@ -1,7 +1,7 @@
 // file: tests/e2e/import-paths.spec.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: e3f4a5b6-c7d8-9e0f-1a2b-3c4d5e6f7a8b
-// last-edited: 2026-02-04
+// last-edited: 2026-08-09
 
 import { test, expect } from '@playwright/test';
 import { setupMockApi } from './utils/test-helpers';
@@ -31,7 +31,10 @@ test.describe('Import paths workflows', () => {
         return route.fulfill({
           status: 200,
           contentType: 'application/json',
-          body: JSON.stringify({ importPaths }),
+          // api.getImportPaths reads body.data.importPaths (api.ts:1764), so an
+          // un-enveloped body made body.data undefined and the call threw —
+          // the list stayed empty however many paths had been added.
+          body: JSON.stringify({ importPaths, data: { importPaths } }),
         });
       }
       if (route.request().method() === 'POST') {
@@ -51,7 +54,8 @@ test.describe('Import paths workflows', () => {
         return route.fulfill({
           status: 200,
           contentType: 'application/json',
-          body: JSON.stringify({ importPath: created }),
+          // api.addImportPath reads body.data.importPath (api.ts:1779).
+          body: JSON.stringify({ importPath: created, data: { importPath: created } }),
         });
       }
       if (route.request().method() === 'DELETE') {
@@ -67,13 +71,16 @@ test.describe('Import paths workflows', () => {
       route.fulfill({
         status: 200,
         contentType: 'application/json',
+        // api.getSystemStatus returns body.data (api.ts:2070).
         body: JSON.stringify({
-          status: 'ok',
-          library: { book_count: 0, folder_count: 1, total_size: 0 },
-          import_paths: { book_count: 0, folder_count: 0, total_size: 0 },
-          memory: {},
-          runtime: {},
-          operations: { recent: [] },
+          data: {
+            status: 'ok',
+            library: { book_count: 0, folder_count: 1, total_size: 0 },
+            import_paths: { book_count: 0, folder_count: 0, total_size: 0 },
+            memory: {},
+            runtime: {},
+            operations: { recent: [] },
+          },
         }),
       });
     });
@@ -89,6 +96,9 @@ test.describe('Import paths workflows', () => {
     ).toBeVisible();
 
     // Add import path
+    // Import-path management lives on the Settings "Paths" tab now, not the
+    // Library tab this test used to land on.
+    await page.getByRole('tab', { name: 'Paths' }).click();
     await page.getByRole('button', { name: 'Add Import Path' }).click();
     const dialog = page.getByRole('dialog', { name: /Add Import Path/i });
     const pathInput = dialog.getByPlaceholder('/path/to/downloads');
