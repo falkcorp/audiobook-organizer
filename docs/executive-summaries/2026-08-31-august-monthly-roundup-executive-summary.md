@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-08-31-august-monthly-roundup-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: e7a3f109-52d8-4c6b-91f4-08b7c2d64e35 -->
 <!-- last-edited: 2026-08-09 -->
 
@@ -99,9 +99,18 @@ machine**. The causes were all environmental rather than product defects: image 
 stored in a way the build server could not read, and two browsers competing for two
 processor cores so aggressively that ordinary animations timed out.
 
-**The outcome that matters:** as of Aug 9 the tests **block** — a change that breaks the
-browser suite can no longer merge. That was the entire point, and until this month it was
-not true.
+**The outcome that matters:** as of Aug 9 the tests **block on every run** — a change
+that breaks the browser suite can no longer merge. Both browsers now pass completely:
+**544 tests, none failing.** That was the entire point, and until this month it was not
+true.
+
+Worth recording what the build-server failures turned out to be, because none of them
+were faults in the product and two were written up as such before the evidence came in:
+two browsers competing for two processor cores so hard that ordinary animations timed
+out; a time limit that was fine for one browser and too tight for the slower one; and
+image files stored in a way that meant the build server received a text placeholder
+instead of a picture. That last one had made a check impossible to pass on the build
+server since it was written.
 
 ---
 
