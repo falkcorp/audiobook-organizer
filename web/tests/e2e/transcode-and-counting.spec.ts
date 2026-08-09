@@ -1,5 +1,5 @@
 // file: web/tests/e2e/transcode-and-counting.spec.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: c3d4e5f6-a7b8-9012-cdef-345678901abc
 
 import { test, expect, type Page } from '@playwright/test';
@@ -65,13 +65,16 @@ async function setupWithTranscode(
 
   await setupMockApi(page, { books, ...extra });
 
-  // Intercept transcode endpoint
+  // Intercept transcode endpoint. The delay is load-bearing: this mock used to
+  // resolve instantly, so the button's 'Converting...' state came and went
+  // before any assertion could observe it.
   await page.route('**/api/v1/operations/transcode', async (route) => {
     const req = route.request();
     if (req.method() === 'POST') {
-      const body = JSON.parse(await req.postData() || '{}');
+      const body = JSON.parse((await req.postData()) || '{}');
       transcodeStarted = true;
       transcodeBookId = body.book_id;
+      await new Promise((resolve) => setTimeout(resolve, 1500));
       return route.fulfill({
         status: 202,
         contentType: 'application/json',
@@ -117,6 +120,20 @@ async function setupWithTranscode(
 // M4B Transcode Tests
 // ---------------------------------------------------------------------------
 
+// Version management is no longer reachable from Book Detail — it moved to the
+// library card's overflow menu, where it is a MenuItem (AudiobookCard.tsx:333),
+// not a button. The overflow IconButton has no accessible name
+// (AudiobookCard.tsx:183), so it can only be found by the icon inside it.
+const openVersionManagerFor = async (page: Page, title: string) => {
+  await page.goto('/library');
+  await page.waitForLoadState('networkidle');
+  const card = page
+    .getByText(title, { exact: true })
+    .locator('xpath=ancestor::*[contains(@class,"MuiCard-root")][1]');
+  await card.locator('button:has([data-testid="MoreVertIcon"])').click();
+  await page.getByRole('menuitem', { name: 'Manage Versions' }).click();
+};
+
 test.describe('M4B Transcode', () => {
   test('shows Convert to M4B button for MP3 books', async ({ page }) => {
     const book = mp3Book();
@@ -124,9 +141,7 @@ test.describe('M4B Transcode', () => {
     await page.goto(`/library/${book.id}`);
     await page.waitForLoadState('networkidle');
 
-    await expect(
-      page.getByRole('button', { name: /Convert to M4B/i })
-    ).toBeVisible();
+    await expect(page.getByRole('button', { name: /Convert to M4B/i })).toBeVisible();
   });
 
   test('does NOT show Convert to M4B for books already in M4B format', async ({ page }) => {
@@ -135,9 +150,7 @@ test.describe('M4B Transcode', () => {
     await page.goto(`/library/${book.id}`);
     await page.waitForLoadState('networkidle');
 
-    await expect(
-      page.getByRole('button', { name: /Convert to M4B/i })
-    ).not.toBeVisible();
+    await expect(page.getByRole('button', { name: /Convert to M4B/i })).not.toBeVisible();
   });
 
   test('triggers transcode and shows progress', async ({ page }) => {
@@ -149,11 +162,12 @@ test.describe('M4B Transcode', () => {
     // Click Convert to M4B
     await page.getByRole('button', { name: /Convert to M4B/i }).click();
 
-    // Should show some loading/progress indication
-    // The button should become disabled or show a spinner
-    await expect(
-      page.getByRole('button', { name: /Convert to M4B/i })
-    ).toBeDisabled();
+    // The button relabels itself while the job runs — BookDetailActions.tsx:206
+    // renders 'Converting...' when transcoding, so /Convert to M4B/ no longer
+    // matches the very element this asserts on.
+    const converting = page.getByRole('button', { name: /Converting/i });
+    await expect(converting).toBeVisible();
+    await expect(converting).toBeDisabled();
 
     // Verify the transcode was triggered with the right book ID
     expect(tracker.transcodeStarted()).toBe(true);
@@ -169,9 +183,9 @@ test.describe('M4B Transcode', () => {
     await page.getByRole('button', { name: /Convert to M4B/i }).click();
 
     // Should show a success-related toast/notification
-    await expect(
-      page.getByText(/[Tt]ranscode started|[Cc]onvert/)
-    ).toBeVisible({ timeout: 5000 });
+    await expect(page.getByRole('alert').getByText(/[Tt]ranscode started/)).toBeVisible({
+      timeout: 5000,
+    });
   });
 });
 
@@ -180,8 +194,13 @@ test.describe('M4B Transcode', () => {
 // ---------------------------------------------------------------------------
 
 test.describe('Version Management After Transcode', () => {
+  // Distinct titles: both builders default to 'The Odyssey', which made the two
+  // library cards indistinguishable now that the version manager is opened from
+  // a card rather than from book detail. The tests are about version grouping,
+  // not titles, so disambiguating here costs nothing.
   const originalMp3 = mp3Book({
     id: 'orig-mp3',
+    title: 'The Odyssey (MP3)',
     is_primary_version: false,
     version_group_id: 'vg-odyssey',
     version_notes: 'Original format',
@@ -189,6 +208,7 @@ test.describe('Version Management After Transcode', () => {
 
   const transcodedM4b = m4bBook({
     id: 'new-m4b',
+    title: 'The Odyssey (M4B)',
     is_primary_version: true,
     version_group_id: 'vg-odyssey',
     version_notes: 'Transcoded to M4B',
@@ -203,20 +223,17 @@ test.describe('Version Management After Transcode', () => {
         return route.fulfill({
           status: 200,
           contentType: 'application/json',
+          // api.getBookVersions reads body.data?.versions (services/api.ts:2328),
+          // not a bare { items }.
           body: JSON.stringify({
-            items: [transcodedM4b, originalMp3],
-            count: 2,
+            data: { versions: [transcodedM4b, originalMp3] },
           }),
         });
       }
       return route.fallback();
     });
 
-    await page.goto(`/library/${transcodedM4b.id}`);
-    await page.waitForLoadState('networkidle');
-
-    // Open version management
-    await page.getByRole('button', { name: /Manage Versions/i }).click();
+    await openVersionManagerFor(page, 'The Odyssey (M4B)');
 
     // Should show both versions
     await expect(page.getByText('Transcoded to M4B')).toBeVisible();
@@ -231,19 +248,17 @@ test.describe('Version Management After Transcode', () => {
         return route.fulfill({
           status: 200,
           contentType: 'application/json',
+          // api.getBookVersions reads body.data?.versions (services/api.ts:2328),
+          // not a bare { items }.
           body: JSON.stringify({
-            items: [transcodedM4b, originalMp3],
-            count: 2,
+            data: { versions: [transcodedM4b, originalMp3] },
           }),
         });
       }
       return route.fallback();
     });
 
-    await page.goto(`/library/${transcodedM4b.id}`);
-    await page.waitForLoadState('networkidle');
-
-    await page.getByRole('button', { name: /Manage Versions/i }).click();
+    await openVersionManagerFor(page, 'The Odyssey (M4B)');
 
     // The M4B version should show as primary
     const m4bRow = page.getByRole('listitem').filter({ hasText: 'Transcoded to M4B' }).first();
@@ -258,19 +273,17 @@ test.describe('Version Management After Transcode', () => {
         return route.fulfill({
           status: 200,
           contentType: 'application/json',
+          // api.getBookVersions reads body.data?.versions (services/api.ts:2328),
+          // not a bare { items }.
           body: JSON.stringify({
-            items: [transcodedM4b, originalMp3],
-            count: 2,
+            data: { versions: [transcodedM4b, originalMp3] },
           }),
         });
       }
       return route.fallback();
     });
 
-    await page.goto(`/library/${originalMp3.id}`);
-    await page.waitForLoadState('networkidle');
-
-    await page.getByRole('button', { name: /Manage Versions/i }).click();
+    await openVersionManagerFor(page, 'The Odyssey (MP3)');
 
     // Original should NOT be primary
     const origRow = page.getByRole('listitem').filter({ hasText: 'Original format' }).first();
@@ -285,23 +298,21 @@ test.describe('Version Management After Transcode', () => {
         return route.fulfill({
           status: 200,
           contentType: 'application/json',
+          // api.getBookVersions reads body.data?.versions (services/api.ts:2328),
+          // not a bare { items }.
           body: JSON.stringify({
-            items: [transcodedM4b, originalMp3],
-            count: 2,
+            data: { versions: [transcodedM4b, originalMp3] },
           }),
         });
       }
       return route.fallback();
     });
 
-    await page.goto(`/library/${transcodedM4b.id}`);
-    await page.waitForLoadState('networkidle');
-
-    await page.getByRole('button', { name: /Manage Versions/i }).click();
+    await openVersionManagerFor(page, 'The Odyssey (M4B)');
 
     // Should show codec/format chips
     await expect(page.getByText('aac')).toBeVisible();
-    await expect(page.getByText('mp3')).toBeVisible();
+    await expect(page.getByText('mp3', { exact: true }).first()).toBeVisible();
   });
 });
 
@@ -319,19 +330,29 @@ test.describe('File Count Display', () => {
       return route.fulfill({
         status: 200,
         contentType: 'application/json',
+        // Must be enveloped and use the nested shape. api.getSystemStatus()
+        // returns body.data (services/api.ts:2070), and Dashboard.tsx:97 reads
+        // systemStatus.library_book_count ?? systemStatus.library.book_count.
+        // A flat, un-enveloped body made body.data undefined, which threw on
+        // .library and left EVERY dashboard count at 0 — including Authors and
+        // Series, which is what made this look like an unrelated failure.
         body: JSON.stringify({
-          book_count: 37,
-          file_count: 90,
-          author_count: 12,
-          series_count: 8,
-          import_paths: { folder_count: 2 },
-          storage: {
-            library_size_bytes: 50_000_000_000,
-            import_size_bytes: 5_000_000_000,
-            total_size_bytes: 55_000_000_000,
-            disk_total_bytes: 500_000_000_000,
-            disk_used_bytes: 200_000_000_000,
-            disk_free_bytes: 300_000_000_000,
+          data: {
+            status: 'ok',
+            library: { book_count: 37, folder_count: 2, total_size: 0 },
+            library_book_count: 37,
+            file_count: 90,
+            author_count: 12,
+            series_count: 8,
+            import_paths: { folder_count: 2, book_count: 0, total_size: 0 },
+            storage: {
+              library_size_bytes: 50_000_000_000,
+              import_size_bytes: 5_000_000_000,
+              total_size_bytes: 55_000_000_000,
+              disk_total_bytes: 500_000_000_000,
+              disk_used_bytes: 200_000_000_000,
+              disk_free_bytes: 300_000_000_000,
+            },
           },
         }),
       });
@@ -344,7 +365,10 @@ test.describe('File Count Display', () => {
     // The exact format depends on the implementation ("37 books (90 files)" or similar)
     await expect(page.getByText('37')).toBeVisible();
     // If file_count is displayed, check for it
-    const fileCountVisible = await page.getByText('90').isVisible().catch(() => false);
+    const fileCountVisible = await page
+      .getByText('90')
+      .isVisible()
+      .catch(() => false);
     if (fileCountVisible) {
       await expect(page.getByText('90')).toBeVisible();
     }
@@ -367,19 +391,31 @@ test.describe('File Count Display', () => {
     await setupMockApi(page, { books });
 
     // Override authors endpoint with file_count
-    await page.route('**/api/v1/authors?*', async (route) => {
-      return route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          items: [
-            { id: 1, name: 'Brandon Sanderson', book_count: 3, file_count: 15 },
-            { id: 2, name: 'Patrick Rothfuss', book_count: 2, file_count: 8 },
-          ],
-          count: 2,
-        }),
-      });
-    });
+    await page.route(
+      (url) => new URL(url).pathname === '/api/v1/authors',
+      async (route) => {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          // api.getAuthors reads body.data.items (services/api.ts:1352). The
+          // route pattern also required a query string ('/authors?*'), but
+          // getAuthors fetches '/authors' bare — so this override never even
+          // matched and the shared mock answered instead.
+          body: JSON.stringify({
+            data: {
+              // `aliases` is required: Authors.tsx:89/120/121 read a.aliases.length
+              // with no guard, so omitting it crashes the page into the error
+              // boundary rather than just rendering a blank column.
+              items: [
+                { id: 1, name: 'Brandon Sanderson', book_count: 3, file_count: 15, aliases: [] },
+                { id: 2, name: 'Patrick Rothfuss', book_count: 2, file_count: 8, aliases: [] },
+              ],
+              count: 2,
+            },
+          }),
+        });
+      }
+    );
 
     await page.goto('/authors');
     await page.waitForLoadState('networkidle');
@@ -400,25 +436,29 @@ test.describe('File Count Display', () => {
     await setupMockApi(page, { books });
 
     // Override series endpoint with file_count
-    await page.route('**/api/v1/series?*', async (route) => {
-      return route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          items: [
-            { id: 1, name: 'Stormlight Archive', book_count: 5, file_count: 25 },
-          ],
-          count: 1,
-        }),
-      });
-    });
+    await page.route(
+      (url) => new URL(url).pathname === '/api/v1/series',
+      async (route) => {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          // api.getSeries reads body.data.items (services/api.ts:1627).
+          body: JSON.stringify({
+            data: {
+              items: [{ id: 1, name: 'Stormlight Archive', book_count: 5, file_count: 25 }],
+              count: 1,
+            },
+          }),
+        });
+      }
+    );
 
     await page.goto('/series');
     await page.waitForLoadState('networkidle');
 
     // Should show book count
     await expect(page.getByText('Stormlight Archive')).toBeVisible();
-    await expect(page.getByText('5')).toBeVisible();
+    await expect(page.getByText('5 (25 files)')).toBeVisible();
   });
 });
 
@@ -444,12 +484,42 @@ test.describe('Multi-file Book Handling', () => {
           contentType: 'application/json',
           body: JSON.stringify({
             segments: [
-              { id: 's1', file_path: '/audiobooks/Homer/The Odyssey/chapter_01.mp3', track_number: 1, duration_seconds: 3000 },
-              { id: 's2', file_path: '/audiobooks/Homer/The Odyssey/chapter_02.mp3', track_number: 2, duration_seconds: 3200 },
-              { id: 's3', file_path: '/audiobooks/Homer/The Odyssey/chapter_03.mp3', track_number: 3, duration_seconds: 2800 },
-              { id: 's4', file_path: '/audiobooks/Homer/The Odyssey/chapter_04.mp3', track_number: 4, duration_seconds: 4000 },
-              { id: 's5', file_path: '/audiobooks/Homer/The Odyssey/chapter_05.mp3', track_number: 5, duration_seconds: 3500 },
-              { id: 's6', file_path: '/audiobooks/Homer/The Odyssey/chapter_06.mp3', track_number: 6, duration_seconds: 2500 },
+              {
+                id: 's1',
+                file_path: '/audiobooks/Homer/The Odyssey/chapter_01.mp3',
+                track_number: 1,
+                duration_seconds: 3000,
+              },
+              {
+                id: 's2',
+                file_path: '/audiobooks/Homer/The Odyssey/chapter_02.mp3',
+                track_number: 2,
+                duration_seconds: 3200,
+              },
+              {
+                id: 's3',
+                file_path: '/audiobooks/Homer/The Odyssey/chapter_03.mp3',
+                track_number: 3,
+                duration_seconds: 2800,
+              },
+              {
+                id: 's4',
+                file_path: '/audiobooks/Homer/The Odyssey/chapter_04.mp3',
+                track_number: 4,
+                duration_seconds: 4000,
+              },
+              {
+                id: 's5',
+                file_path: '/audiobooks/Homer/The Odyssey/chapter_05.mp3',
+                track_number: 5,
+                duration_seconds: 3500,
+              },
+              {
+                id: 's6',
+                file_path: '/audiobooks/Homer/The Odyssey/chapter_06.mp3',
+                track_number: 6,
+                duration_seconds: 2500,
+              },
             ],
             media_info: {
               format: 'mp3',
@@ -469,7 +539,7 @@ test.describe('Multi-file Book Handling', () => {
 
     // Book detail should show info about the multi-file nature
     // Check for "6 files" or segment count somewhere
-    await expect(page.getByText('The Odyssey')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'The Odyssey' })).toBeVisible();
   });
 
   test('library list distinguishes single-file from multi-file books', async ({ page }) => {
@@ -530,9 +600,7 @@ test.describe('Transcode Error Handling', () => {
     await page.getByRole('button', { name: /Convert to M4B/i }).click();
 
     // Should show error
-    await expect(
-      page.getByText(/error|failed|not found/i)
-    ).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText(/error|failed|not found/i)).toBeVisible({ timeout: 5000 });
   });
 
   test('shows error when book not found for transcode', async ({ page }) => {
@@ -553,9 +621,7 @@ test.describe('Transcode Error Handling', () => {
 
     await page.getByRole('button', { name: /Convert to M4B/i }).click();
 
-    await expect(
-      page.getByText(/error|not found/i)
-    ).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText(/error|not found/i)).toBeVisible({ timeout: 5000 });
   });
 });
 
@@ -589,18 +655,23 @@ test.describe('Counting Accuracy', () => {
       return route.fulfill({
         status: 200,
         contentType: 'application/json',
+        // Same envelope + nested-shape requirement as above.
         body: JSON.stringify({
-          book_count: 2, // Only primary versions counted
-          file_count: 8, // Total files across all versions
-          author_count: 1,
-          series_count: 0,
-          import_paths: { folder_count: 0 },
-          storage: {
-            library_size_bytes: 0,
-            total_size_bytes: 0,
-            disk_total_bytes: 500_000_000_000,
-            disk_used_bytes: 100_000_000_000,
-            disk_free_bytes: 400_000_000_000,
+          data: {
+            status: 'ok',
+            library: { book_count: 2, folder_count: 1, total_size: 0 },
+            library_book_count: 2, // Only primary versions counted
+            file_count: 8, // Total files across all versions
+            author_count: 1,
+            series_count: 0,
+            import_paths: { folder_count: 0, book_count: 0, total_size: 0 },
+            storage: {
+              library_size_bytes: 0,
+              total_size_bytes: 0,
+              disk_total_bytes: 500_000_000_000,
+              disk_used_bytes: 100_000_000_000,
+              disk_free_bytes: 400_000_000_000,
+            },
           },
         }),
       });
