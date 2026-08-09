@@ -1,13 +1,10 @@
 // file: web/tests/e2e/search-and-filter.spec.ts
-// version: 1.5.0
+// version: 1.6.0
 // guid: c3d4e5f6-a7b8-9012-cdef-a3b4c5d6e7f8
 // last-edited: 2026-08-09
 
 import { test, expect } from '@playwright/test';
-import {
-  setupLibraryWithBooks,
-  generateTestBooks,
-} from './utils/test-helpers';
+import { setupLibraryWithBooks, generateTestBooks, waitForMenuClosed } from './utils/test-helpers';
 
 test.describe('Search and Filter Functionality', () => {
   // Setup handled by setupLibraryWithBooks() which calls setupMockApi()
@@ -42,9 +39,7 @@ test.describe('Search and Filter Functionality', () => {
     await expect(
       page.getByRole('heading', { name: 'The Way of Kings', exact: true })
     ).toBeVisible();
-    await expect(
-      page.getByRole('heading', { name: 'The Hobbit', exact: true })
-    ).not.toBeVisible();
+    await expect(page.getByRole('heading', { name: 'The Hobbit', exact: true })).not.toBeVisible();
   });
 
   test('searches books by partial title match', async ({ page }) => {
@@ -79,15 +74,11 @@ test.describe('Search and Filter Functionality', () => {
     await searchInput.fill('Found');
 
     // THEN: Shows all books with "Found" in title
-    await expect(
-      page.getByRole('heading', { name: 'Foundation', exact: true })
-    ).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Foundation', exact: true })).toBeVisible();
     await expect(
       page.getByRole('heading', { name: 'Foundation and Empire', exact: true })
     ).toBeVisible();
-    await expect(
-      page.getByRole('heading', { name: 'The Hobbit', exact: true })
-    ).not.toBeVisible();
+    await expect(page.getByRole('heading', { name: 'The Hobbit', exact: true })).not.toBeVisible();
   });
 
   test('searches books by author name', async ({ page }) => {
@@ -128,9 +119,7 @@ test.describe('Search and Filter Functionality', () => {
     await expect(
       page.getByRole('heading', { name: 'Words of Radiance', exact: true })
     ).toBeVisible();
-    await expect(
-      page.getByRole('heading', { name: 'The Hobbit', exact: true })
-    ).not.toBeVisible();
+    await expect(page.getByRole('heading', { name: 'The Hobbit', exact: true })).not.toBeVisible();
   });
 
   test('searches books by series name', async ({ page }) => {
@@ -174,9 +163,7 @@ test.describe('Search and Filter Functionality', () => {
     await expect(
       page.getByRole('heading', { name: 'Words of Radiance', exact: true })
     ).toBeVisible();
-    await expect(
-      page.getByRole('heading', { name: 'The Hobbit', exact: true })
-    ).not.toBeVisible();
+    await expect(page.getByRole('heading', { name: 'The Hobbit', exact: true })).not.toBeVisible();
   });
 
   test('search is case-insensitive', async ({ page }) => {
@@ -199,14 +186,10 @@ test.describe('Search and Filter Functionality', () => {
     await searchInput.fill('the hobbit');
 
     // THEN: Shows "The Hobbit" book
-    await expect(
-      page.getByRole('heading', { name: 'The Hobbit', exact: true })
-    ).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'The Hobbit', exact: true })).toBeVisible();
   });
 
-  test('shows no results message when search matches nothing', async ({
-    page,
-  }) => {
+  test('shows no results message when search matches nothing', async ({ page }) => {
     // GIVEN: Library loaded
     const books = generateTestBooks(5);
     await setupLibraryWithBooks(page, books);
@@ -247,12 +230,8 @@ test.describe('Search and Filter Functionality', () => {
     await searchInput.fill('Foundation');
 
     // AND: Results are filtered
-    await expect(
-      page.getByRole('heading', { name: 'Foundation', exact: true })
-    ).toBeVisible();
-    await expect(
-      page.getByRole('heading', { name: 'The Hobbit', exact: true })
-    ).not.toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Foundation', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'The Hobbit', exact: true })).not.toBeVisible();
 
     // WHEN: User clicks "X" (clear search) button
     await page
@@ -265,12 +244,8 @@ test.describe('Search and Filter Functionality', () => {
     await expect(searchInput).toHaveValue('');
 
     // AND: All books are shown again
-    await expect(
-      page.getByRole('heading', { name: 'Foundation', exact: true })
-    ).toBeVisible();
-    await expect(
-      page.getByRole('heading', { name: 'The Hobbit', exact: true })
-    ).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Foundation', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'The Hobbit', exact: true })).toBeVisible();
   });
 
   test('clears search with backspace to empty', async ({ page }) => {
@@ -298,23 +273,15 @@ test.describe('Search and Filter Functionality', () => {
     await searchInput.fill('Foundation');
 
     // Verify filtered
-    await expect(
-      page.getByRole('heading', { name: 'Foundation', exact: true })
-    ).toBeVisible();
-    await expect(
-      page.getByRole('heading', { name: 'The Hobbit', exact: true })
-    ).not.toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Foundation', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'The Hobbit', exact: true })).not.toBeVisible();
 
     // WHEN: User backspaces to empty string
     await searchInput.clear();
 
     // THEN: All books are shown again
-    await expect(
-      page.getByRole('heading', { name: 'Foundation', exact: true })
-    ).toBeVisible();
-    await expect(
-      page.getByRole('heading', { name: 'The Hobbit', exact: true })
-    ).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Foundation', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'The Hobbit', exact: true })).toBeVisible();
   });
 
   // KNOWN BUG. api.searchBooksPage (services/api.ts:1023-1037) sends only
@@ -353,6 +320,7 @@ test.describe('Search and Filter Functionality', () => {
     await page.getByRole('button', { name: /filters/i }).click();
     await page.getByRole('combobox', { name: 'Library State' }).click();
     await page.getByRole('option', { name: 'Organized' }).click();
+    await waitForMenuClosed(page);
     await page.keyboard.press('Escape');
 
     // AND: User types "Sanderson" in search
@@ -360,12 +328,8 @@ test.describe('Search and Filter Functionality', () => {
     await searchInput.fill('Sanderson');
 
     // THEN: Only organized books by Sanderson are shown
-    await expect(
-      page.getByRole('heading', { name: 'Organized Book', exact: true })
-    ).toBeVisible();
-    await expect(
-      page.getByRole('heading', { name: 'Import Book', exact: true })
-    ).not.toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Organized Book', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Import Book', exact: true })).not.toBeVisible();
   });
 
   test('search persists across page navigation', async ({ page }) => {
@@ -393,9 +357,7 @@ test.describe('Search and Filter Functionality', () => {
     await searchInput.fill('Foundation');
 
     // WHEN: User clicks a book to view details
-    await page
-      .getByRole('heading', { name: 'Foundation', exact: true })
-      .click();
+    await page.getByRole('heading', { name: 'Foundation', exact: true }).click();
     await page.waitForLoadState('networkidle');
 
     // AND: User clicks browser back button
@@ -404,12 +366,8 @@ test.describe('Search and Filter Functionality', () => {
 
     // THEN: Search term remains
     await expect(searchInput).toHaveValue('Foundation');
-    await expect(
-      page.getByRole('heading', { name: 'Foundation', exact: true })
-    ).toBeVisible();
-    await expect(
-      page.getByRole('heading', { name: 'The Hobbit', exact: true })
-    ).not.toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Foundation', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'The Hobbit', exact: true })).not.toBeVisible();
   });
 
   test('search updates URL with query parameter', async ({ page }) => {
@@ -425,9 +383,7 @@ test.describe('Search and Filter Functionality', () => {
     await searchInput.fill('Hobbit');
 
     // THEN: URL updates to ?search=Hobbit
-    await page.waitForFunction(() =>
-      window.location.search.includes('search=Hobbit')
-    );
+    await page.waitForFunction(() => window.location.search.includes('search=Hobbit'));
   });
 
   // KNOWN BUG. Measured 2026-08-09: typing the 10 characters of "Foundation"
@@ -435,9 +391,7 @@ test.describe('Search and Filter Functionality', () => {
   // despite this test's name. On a large library that is ten full-text queries
   // where one would do. Documented with the filter-dropping bug above in
   // todo.d/20260809-search-drops-filters-and-debounce.md.
-  test.fixme('search debounces input to avoid excessive requests', async ({
-    page,
-  }) => {
+  test.fixme('search debounces input to avoid excessive requests', async ({ page }) => {
     // GIVEN: Library page loaded
     const books = generateTestBooks(5);
     await setupLibraryWithBooks(page, books);

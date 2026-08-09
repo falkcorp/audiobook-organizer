@@ -1,5 +1,5 @@
 // file: web/tests/e2e/operation-monitoring.spec.ts
-// version: 3.0.0
+// version: 3.1.0
 // guid: 9845a5f8-e3e4-472f-ae99-2723b6163aae
 // last-edited: 2026-08-08
 
@@ -21,7 +21,7 @@
 //     feature and is named accordingly.
 
 import { test, expect, type Page } from '@playwright/test';
-import { setupMockApi } from './utils/test-helpers';
+import { setupMockApi, waitForMenuClosed } from './utils/test-helpers';
 
 /**
  * Build an OperationV2 timeline row. Note `display_name` is deliberately left
@@ -29,9 +29,7 @@ import { setupMockApi } from './utils/test-helpers';
  * a curated display name shows its def_id — which is what a plain scan row
  * from the timeline endpoint actually looks like.
  */
-const timelineOp = (
-  overrides: Record<string, unknown>
-): Record<string, unknown> => ({
+const timelineOp = (overrides: Record<string, unknown>): Record<string, unknown> => ({
   id: 'op-1',
   def_id: 'scan',
   plugin: 'core',
@@ -99,18 +97,36 @@ const failedScan = timelineOp({
 
 const baseLogs = {
   'scan-1': [
-    { id: 'log-1', level: 'info', message: 'Scanning file: book1.m4b', created_at: '2026-01-25T10:00:00Z' },
-    { id: 'log-2', level: 'warning', message: 'Skipping hidden file', created_at: '2026-01-25T10:00:10Z' },
-    { id: 'log-3', level: 'error', message: 'Failed to read file', created_at: '2026-01-25T10:00:20Z' },
+    {
+      id: 'log-1',
+      level: 'info',
+      message: 'Scanning file: book1.m4b',
+      created_at: '2026-01-25T10:00:00Z',
+    },
+    {
+      id: 'log-2',
+      level: 'warning',
+      message: 'Skipping hidden file',
+      created_at: '2026-01-25T10:00:10Z',
+    },
+    {
+      id: 'log-3',
+      level: 'error',
+      message: 'Failed to read file',
+      created_at: '2026-01-25T10:00:20Z',
+    },
   ],
   'hist-1': [
-    { id: 'log-4', level: 'info', message: 'Completed. Found 50 books, 2 errors.', created_at: '2026-01-25T10:05:00Z' },
+    {
+      id: 'log-4',
+      level: 'info',
+      message: 'Completed. Found 50 books, 2 errors.',
+      created_at: '2026-01-25T10:05:00Z',
+    },
   ],
 };
 
-const activityEntry = (
-  overrides: Record<string, unknown>
-): Record<string, unknown> => ({
+const activityEntry = (overrides: Record<string, unknown>): Record<string, unknown> => ({
   id: 'act-1',
   timestamp: '2026-01-25T10:00:00Z',
   tier: 'audit',
@@ -150,9 +166,7 @@ test.describe('Operation Monitoring', () => {
     // Assert — each op renders its def_id and a "<done> / <total> (<pct>%)"
     // progress line.
     await expect(page.getByText('scan', { exact: true }).first()).toBeVisible();
-    await expect(
-      page.getByText('organize', { exact: true }).first()
-    ).toBeVisible();
+    await expect(page.getByText('organize', { exact: true }).first()).toBeVisible();
     await expect(page.getByText('20 / 100 (20.00%)')).toBeVisible();
   });
 
@@ -212,9 +226,7 @@ test.describe('Operation Monitoring', () => {
     await page.getByText('100 / 100 (100%)').click();
 
     // Assert
-    await expect(
-      page.getByText('Completed. Found 50 books, 2 errors.')
-    ).toBeVisible();
+    await expect(page.getByText('Completed. Found 50 books, 2 errors.')).toBeVisible();
   });
 
   test('filters the activity feed by level', async ({ page }) => {
@@ -237,7 +249,7 @@ test.describe('Operation Monitoring', () => {
     // Act
     await page.getByRole('combobox', { name: 'Level' }).click();
     await page.getByRole('option', { name: 'error' }).click();
-
+    await waitForMenuClosed(page);
     // Assert
     await expect(page.getByText('Failed to read file')).toBeVisible();
     await expect(page.getByText('Scan finished')).not.toBeVisible();
@@ -277,9 +289,7 @@ test.describe('Operation Monitoring', () => {
     // Assert — a failed op carries a "failed" status chip and shows its
     // failure message inline; there is no separate error dialog.
     await expect(page.getByText('failed', { exact: true })).toBeVisible();
-    await expect(
-      page.getByText('Network error while scanning')
-    ).toBeVisible();
+    await expect(page.getByText('Network error while scanning')).toBeVisible();
   });
 
   test('activity feed pagination', async ({ page }) => {
@@ -299,8 +309,6 @@ test.describe('Operation Monitoring', () => {
 
     // Assert — page 2 holds entries 26-30.
     await expect(page.getByText('Activity entry 26')).toBeVisible();
-    await expect(
-      page.getByText('Activity entry 1', { exact: true })
-    ).not.toBeVisible();
+    await expect(page.getByText('Activity entry 1', { exact: true })).not.toBeVisible();
   });
 });
