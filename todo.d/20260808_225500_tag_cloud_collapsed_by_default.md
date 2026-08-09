@@ -1,4 +1,4 @@
-- [ ] **"Browse by Tag" should start collapsed, or show only the top few tags.**
+- [x] **"Browse by Tag" should start collapsed, or show only the top few tags.**
       Reported by the owner 2026-08-08: *"Browse by tag should start minimized
       as we have tons of tags or only show the top 5."* On a library this size
       the tag cloud renders as a wall of chips that pushes the actual book grid
@@ -45,3 +45,22 @@
       and if a top-N preview is used, the tags shown are genuinely the most
       common ones, verified against a library with many tags rather than a
       handful of fixtures.
+
+      **✅ SHIPPED same day.** Implemented as *both* options rather than either:
+
+      - Starts **collapsed** (`useState(readStoredExpanded)`, default false).
+      - Collapsed still shows the **top 5 by count** plus a "Show all (N)"
+        button, so the feature stays discoverable. A disclosure control that
+        reveals nothing tells the user nothing.
+      - **Sorted explicitly in the component** (`count` desc, then name), which
+        the note above flagged: the caller's order was never guaranteed and
+        slicing an unsorted list would have quietly shown "the first five".
+      - **Persisted** via `STORAGE_KEYS.LIBRARY_TAG_CLOUD_EXPANDED`, wrapped in
+        try/catch so private-browsing storage failures fall back to collapsed
+        rather than throwing.
+      - The header shows the total tag count while collapsed, so the panel says
+        how much is hidden.
+      - **Selected tags outside the top 5 are always shown** while collapsed.
+        This was not in the original request but is required for correctness:
+        hiding an active filter leaves the user looking at a filtered list with
+        no visible control to clear it.
