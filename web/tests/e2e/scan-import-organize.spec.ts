@@ -1,7 +1,7 @@
 // file: web/tests/e2e/scan-import-organize.spec.ts
-// version: 1.5.0
+// version: 1.6.0
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
-// last-edited: 2026-03-02
+// last-edited: 2026-08-09
 
 import { test, expect, type Page } from '@playwright/test';
 import {
@@ -202,6 +202,14 @@ const setupScanWorkflow = async (page: Page, options: ScanMockOptions) => {
   }, options);
 };
 
+
+// NOTE: navigate to '/settings#paths', not '/settings'.
+//
+// Settings is tabbed and defaults to the Library tab; "Add Import Path" is
+// rendered only by the Paths tab (components/settings/PathsSettingsTab.tsx).
+// A bare /settings therefore never shows the button and the click times out.
+// tabFromHash() in pages/Settings.tsx maps the URL hash to a tab index, with
+// slugs in TAB_KEYS — '#paths' is the app's own supported deep link.
 test.describe('Scan/Import/Organize Workflow', () => {
   // Setup handled per-test by setupScanWorkflow() or setupLibraryWithBooks()
   // setupLibraryWithBooks() calls setupMockApi() which includes skipWelcomeWizard + mockEventSource
@@ -246,7 +254,7 @@ test.describe('Scan/Import/Organize Workflow', () => {
     });
 
     // Act: add import path and scan
-    await page.goto('/settings');
+    await page.goto('/settings#paths');
     await page.getByRole('button', { name: 'Add Import Path' }).click();
     await page.getByLabel('Folder Path').fill('/test/audiobooks');
     await page.getByRole('button', { name: 'Add Path' }).click();
@@ -306,7 +314,7 @@ test.describe('Scan/Import/Organize Workflow', () => {
   }) => {
     // Arrange
     await setupScanWorkflow(page, { scanBooks: [] });
-    await page.goto('/settings');
+    await page.goto('/settings#paths');
     await page.getByRole('button', { name: 'Add Import Path' }).click();
     await page.getByLabel('Folder Path').fill('/test/books');
     await page.getByRole('button', { name: 'Add Path' }).click();
@@ -333,7 +341,7 @@ test.describe('Scan/Import/Organize Workflow', () => {
         },
       ],
     });
-    await page.goto('/settings');
+    await page.goto('/settings#paths');
     await page.getByRole('button', { name: 'Add Import Path' }).click();
     await page.getByLabel('Folder Path').fill('/test/cancel');
     await page.getByRole('button', { name: 'Add Path' }).click();
@@ -369,7 +377,7 @@ test.describe('Scan/Import/Organize Workflow', () => {
       ],
       scanErrors: ['Corrupt file: book2.m4b'],
     });
-    await page.goto('/settings');
+    await page.goto('/settings#paths');
     await page.getByRole('button', { name: 'Add Import Path' }).click();
     await page.getByLabel('Folder Path').fill('/test/corrupt');
     await page.getByRole('button', { name: 'Add Path' }).click();
