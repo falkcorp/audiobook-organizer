@@ -643,6 +643,24 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     localStorage.setItem(STORAGE_KEYS.LIBRARY_PAGE, page.toString());
   }, [filters, itemsPerPage, page, searchQuery, selectedTags, setSearchParams, sortBy, sortOrder, viewMode]);
 
+  // SearchBar re-parses its value on mount and hands back a NEW ParsedSearch
+  // object that is semantically identical to the one this state was seeded
+  // with. Storing it changed `parsedSearch`'s identity, which recreated
+  // `buildFieldFilters`, which recreated `loadAudiobooks`, which re-fired the
+  // "load when filters change" effect — a second, identical offset=0 request
+  // issued before the first had resolved. When that second response landed
+  // while the user was clicking, the re-render detached the pagination button
+  // mid-click and the click was silently lost.
+  //
+  // Bail out when the parsed value has not actually changed. Returning `prev`
+  // from the updater makes React skip the re-render entirely, so the identity
+  // chain never starts.
+  const handleParsedSearchChange = useCallback((next: ParsedSearch) => {
+    setParsedSearch((prev) =>
+      JSON.stringify(prev) === JSON.stringify(next) ? prev : next
+    );
+  }, []);
+
   const buildFieldFilters = useCallback(() => {
     const fieldFilters: Array<{ field: string; value: string; negated: boolean }> = [];
     if (filters.author) fieldFilters.push({ field: 'author', value: filters.author, negated: false });
@@ -1908,7 +1926,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
           onCancelLoad={handleCancelLoad}
           searchQuery={searchQuery}
           setSearchQuery={setSearchQuery}
-          setParsedSearch={setParsedSearch}
+          setParsedSearch={handleParsedSearchChange}
           viewMode={viewMode}
           setViewMode={setViewMode}
           sortBy={sortBy}
