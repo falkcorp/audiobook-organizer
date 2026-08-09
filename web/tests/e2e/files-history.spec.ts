@@ -1,5 +1,5 @@
 // file: tests/e2e/files-history.spec.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: bd99e21f-38d1-4976-8ac2-43060c5fc17a
 
 import { expect, test } from '@playwright/test';
@@ -134,15 +134,43 @@ const setupRoutes = async (page: import('@playwright/test').Page) => {
       tagsData: typeof tags;
       changelogData: typeof changelog;
     }) => {
-      const jsonResponse = (body: unknown, status = 200) =>
-        new Response(JSON.stringify(body), {
+      // Adds the { data: ... } envelope the real API returns. This spec mocks
+      // by patching window.fetch rather than using page.route + setupMockApi,
+      // so it gets none of the shared handlers and needs its own copy.
+      // Additive — top-level keys are preserved, so both `body.x` and
+      // `body.data.x` readers work. Arrays and already-wrapped bodies are
+      // left alone.
+      const jsonResponse = (body: unknown, status = 200) => {
+        const envelope = Array.isArray(body)
+          ? { data: body }
+          : body && typeof body === 'object' && !('data' in body)
+            ? { ...(body as Record<string, unknown>), data: body }
+            : body;
+        return new Response(JSON.stringify(envelope), {
           status,
           headers: { 'Content-Type': 'application/json' },
         });
+      };
 
       const originalFetch = window.fetch.bind(window);
       window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
         const url = typeof input === 'string' ? input : input.url;
+
+        // Auth first. Without it the shim falls through to the real server,
+        // the auth check fails, and the app renders the LOGIN screen — so
+        // every assertion here was looking for a tab on a page that was never
+        // going to show it. api.getAuthStatus() reads body.data.
+        if (url.includes('/api/v1/auth/status')) {
+          return Promise.resolve(
+            jsonResponse({
+              has_users: true,
+              auth_enabled: false,
+              requires_auth: false,
+              authenticated: true,
+              user: { id: 'test-user', username: 'test', role: 'admin' },
+            })
+          );
+        }
 
         if (url.includes('/api/v1/health')) {
           return Promise.resolve(jsonResponse({ status: 'ok' }));
@@ -184,15 +212,25 @@ const setupRoutes = async (page: import('@playwright/test').Page) => {
           return Promise.resolve(jsonResponse({ versions: versionsData }));
         }
 
-        // Segments
+        // Segments (legacy). api.getBookSegments reads body.data, so a bare []
+        // would deserialise to undefined and crash the page on `.length`.
         if (url.includes('/segments')) {
           return Promise.resolve(jsonResponse([]));
         }
 
-        // External IDs
+        // Book files — the canonical endpoint BookDetail tries first. Without
+        // this branch the URL fell through to the book-detail catch-all below,
+        // which returned the book object; `result.files` was then undefined and
+        // the page fell back to /segments.
+        if (url.includes(`/api/v1/audiobooks/${injectedBookId}/files`)) {
+          return Promise.resolve(jsonResponse({ files: [], count: 0 }));
+        }
+
+        // External IDs. api.getBookExternalIDs reads the TOP-LEVEL body (no
+        // envelope) and destructures `external_ids` — not `ids`.
         if (url.includes('/external-ids')) {
           return Promise.resolve(
-            jsonResponse({ itunes_linked: false, total: 0, ids: [] })
+            jsonResponse({ itunes_linked: false, total: 0, external_ids: [] })
           );
         }
 
@@ -203,6 +241,7 @@ const setupRoutes = async (page: import('@playwright/test').Page) => {
           !url.includes('/versions') &&
           !url.includes('/changelog') &&
           !url.includes('/segments') &&
+          !url.includes('/files') &&
           !url.includes('/external-ids')
         ) {
           return Promise.resolve(jsonResponse(bookData));
@@ -254,24 +293,22 @@ test.describe('Files & History tab', () => {
     await expect(mp3Tray.getByText(/MP3/)).toBeVisible();
   });
 
-  test('tag comparison toggle and dropdown work', async ({ page }) => {
+  test('tag comparison table and dropdown render inside an open tray', async ({ page }) => {
     // Expand the M4B format tray
     const m4bTray = page.locator('[data-testid="format-tray-m4b"]');
     await m4bTray.click();
 
-    // Wait for tag comparison to load
-    const toggle = page.getByTestId('tag-comparison-toggle').first();
-    await expect(toggle).toBeVisible();
-
     // Should show key tag badges
     await expect(page.getByText(/\u2713 title/i).first()).toBeVisible();
 
-    // Click to expand full comparison
-    await toggle.click();
-
-    // Tag table should now be visible
-    await expect(page.getByText('File Value').first()).toBeVisible();
-    await expect(page.getByText('DB Value').first()).toBeVisible();
+    // There is no longer a collapse toggle — TagComparison's `expanded` state
+    // is initialised to true and never set, so the table is unconditionally
+    // rendered. The tray's own <Collapse> has no unmountOnExit, so these
+    // assertions must be toBeVisible(): the cells are in the DOM even while
+    // the tray is shut.
+    await expect(page.getByTestId('tag-comparison-select').first()).toBeVisible();
+    await expect(page.getByRole('cell', { name: 'File', exact: true }).first()).toBeVisible();
+    await expect(page.getByRole('cell', { name: 'DB', exact: true }).first()).toBeVisible();
   });
 
   test('change log section renders', async ({ page }) => {
@@ -288,7 +325,12 @@ test.describe('Files & History tab', () => {
     await expect(page.getByText(/Tags written/)).toBeVisible();
     await expect(page.getByText(/Imported from/)).toBeVisible();
 
-    // tag_write entry should have "Compare snapshot" link
-    await expect(page.getByText(/Compare snapshot/)).toBeVisible();
+    // The "Compare snapshot" link was replaced by making the whole tag_write
+    // row clickable, so drive the flow rather than looking for the old label:
+    // open the tray (which mounts TagComparison), click the row, and assert
+    // the comparison banner it is meant to trigger.
+    await page.locator('[data-testid="format-tray-m4b"]').click();
+    await page.getByText(/Tags written/).click();
+    await expect(page.getByTestId('snapshot-comparison-banner').first()).toBeVisible();
   });
 });
