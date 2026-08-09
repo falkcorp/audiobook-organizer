@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.18.1 -->
+<!-- version: 10.18.2 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-08-08 -->
+<!-- last-edited: 2026-08-09 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,504 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **Nothing runs the e2e suite automatically — wire it into CI.** Found
+      2026-08-08 while adding sidebar-filter coverage. `grep -rl
+      "test-e2e\|test:e2e\|playwright test" .github/workflows/` returns
+      **nothing**. The suite exists, is maintained (43 specs were repaired
+      across #2185/#2187/#2191 this week), and gates nothing. A regression in
+      any of it lands on `main` unnoticed until someone runs `make test-e2e` by
+      hand.
+
+      That is exactly how the six spec files broken by the `_page` fixture error
+      stayed dead **from April to August 2026** — roughly four months of silent
+      rot, only noticed because #2178 happened to unmask it.
+
+      **Two traps to fix at the same time, or CI will lie to you:**
+
+      1. **`reuseExistingServer: !process.env.CI`** in
+         `web/tests/e2e/playwright.config.ts`. Locally this attaches to whatever
+         already listens on 127.0.0.1:8484 instead of building. On 2026-08-08 a
+         server left running since **00:31** was silently reused for hours,
+         producing a fully green 130-test suite that had exercised a frontend
+         bundle predating the fixes under test — and it was reported as
+         verification before the mistake was caught. The flag is already
+         disabled under `CI`, so CI itself is safe; the hazard is local runs and
+         anyone trusting them. Consider making the config refuse a server older
+         than the working tree, or dropping the flag entirely.
+      2. **Browser binaries drift per worktree.** A fresh `npm ci` in a new
+         worktree installed a Playwright wanting `webkit-2336`, which was not in
+         `~/Library/Caches/ms-playwright`, so every webkit test errored with
+         "Executable doesn't exist" — which reads like a test failure but is an
+         environment failure. CI needs an explicit `npx playwright install
+         --with-deps` step, and the distinction should be obvious in the logs.
+
+      **Cost consideration.** A full run is ~20 minutes (chromium + webkit) and
+      rebuilds frontend + Go binary, so it does not belong in the fast PR gate
+      alongside Minimal CI. Options worth weighing: chromium-only on PRs with
+      both engines nightly; or a required-but-slower job that runs in parallel
+      with the rest. Decide deliberately rather than defaulting to "everything
+      on every PR" and then disabling it when it gets annoying.
+
+      **Acceptance:** a PR that breaks any e2e spec fails a check, and the
+      failure names the spec rather than surfacing as a browser-launch error.
+
+- [ ] **The e2e suite is roughly HALF RED in a clean environment — 146 failed /
+      138 passed. Triage it, then make the CI gate blocking.** Discovered
+      2026-08-08 by the first-ever clean-environment run, immediately after
+      wiring the suite into CI (#2202).
+
+      **This contradicts what was believed on 2026-08-08 morning.** The
+      executive summary
+      `docs/executive-summaries/2026-08-08-the-safety-net-that-had-stopped-catching-executive-summary.md`
+      states the suite "can be trusted as a gate again" and that "it is now safe
+      to require these". That conclusion rested on a local run reporting **130
+      passed / 0 failed**, and that run was wrong in two independent ways:
+
+      1. It silently reused a server that had been running for **hours**
+         (`reuseExistingServer: !process.env.CI`), so it exercised a stale
+         frontend bundle. This part was already retracted in #2198.
+      2. **It also reported only 137 of 576 tests as having run** — 130 passed
+         + 7 skipped, against 576 collected (288 chromium + 288 webkit).
+
+      **Correction, same day:** the second point was first filed here as a
+      "collection gap", i.e. a suspicion that the config collected fewer tests
+      locally than in CI. **That is wrong and should not be chased.**
+      `npx playwright test --list` locally reports **288 chromium / 576 both**,
+      exactly matching CI. Collection is fine.
+
+      What actually happened is worse and simpler: that run was invoked as
+      `npm run test:e2e ... | tail -60`, which caused two separate failures of
+      observation at once.
+
+      - **The exit code was `tail`'s, not Playwright's.** A shell pipeline
+        returns the status of its LAST command, so the "exit code 0" that made
+        the run look successful only proved `tail` worked. Use
+        `${PIPESTATUS[0]}`, or capture full output to a file and grep the file
+        afterwards — never pipe a test command into a truncating filter and
+        read the result as a verdict.
+      - **The summary header scrolled out of the 60-line window.** What survives
+        is the tail of a long list of webkit tests followed by "7 skipped / 130
+        passed". The list is almost certainly Playwright's "did not run"
+        section, but the header naming it was truncated away, so **why 439
+        tests did not run is undetermined from that log** and will need a fresh
+        full-output run to establish. Do not guess it from the fragment above.
+
+      **The CI job currently runs NIGHTLY ONLY, with `continue-on-error:
+      true`.** It was first wired to run on every PR; that had to be undone
+      within the hour. `continue-on-error` stops a job failing the *workflow*
+      but the individual check still reports red, so every PR would have
+      carried a permanently-failing E2E check. That is worse than no check —
+      people habituate to a red they cannot act on, which is the same failure
+      that let six specs rot for four months, only louder.
+
+      Nightly gives a daily signal without poisoning every PR. Both the
+      `pull_request` trigger (commented out, paths filter preserved) and
+      `continue-on-error` should be restored/flipped **together**, once the
+      suite is green.
+
+      **Work, in order:**
+
+      1. ~~Re-run the full suite locally with output captured properly.~~
+         ✅ **DONE 2026-08-08 18:47.** Fresh build, port 8484 confirmed clear,
+         full output to a file, exit code read from Playwright itself
+         (`PLAYWRIGHT_EXIT=1`). Result: **146 failed / 138 passed / 4 skipped**
+         — *identical to CI*. Local and CI now agree test-for-test, so local
+         triage is trustworthy again. The earlier "130 passed" was entirely an
+         artifact of the truncating pipe plus the stale server; there was never
+         a collection problem.
+      2. **Triage the 146 failures.** ⚠️ **The "expect a small number of root
+         causes" guess above was wrong and is corrected here.** It is not one
+         cascading bug. It is **the same failure CLASS spread across 22 spec
+         files that nobody has refreshed yet**:
+
+           26 dedup                 7 scan-import-organize   3 diagnostics
+           14 library-browser       7 backup-restore         2 itunes-import
+           12 metadata-provenance   6 version-management     2 error-handling
+           11 transcode-and-counting 6 dynamic-ui-interactions 2 auth-flow
+           11 batch-operations      5 settings-configuration  1 settings-ai-persistence
+           10 search-and-filter     4 itunes-bidirectional-sync 1 library-enhancements
+            8 dedup-operations      4 files-history           1 import-paths
+                                    3 unified-dedup-tab
+
+         Error signatures across all 146: `toBeVisible` 67, `element(s) not
+         found` 64, `locator.click` 50, `strict mode violation` 9. That is
+         overwhelmingly "the test looks for an affordance the app no longer
+         renders" — the exact drift already fixed in waves 1 and 2.
+
+         **The strong evidence that this is tractable:** 13 spec files are
+         **fully green**, and they include *every* file repaired in waves 1
+         and 2 — `dashboard`, `book-detail`, `file-browser`,
+         `import-audiobook-file`, `operation-monitoring` — plus the two new
+         specs added 2026-08-08. The repair pattern works and holds; it has
+         simply never been applied to the other 22 files. This is 22 files of
+         known, mechanical work, not 146 mysteries.
+
+         Suggested order: biggest first (`dedup` 26, `library-browser` 14,
+         `metadata-provenance` 12), since shared helpers in those will likely
+         drop several files at once — that is how one `{ data: ... }` envelope
+         fix cleared 24 of 34 in wave 2.
+      3. **Flip `continue-on-error` off** once green, and say so in the PR.
+      4. **Correct the executive summary** rather than leaving a claim on the
+         record that the safety net is restored when half of it is on the floor.
+
+      **Do not "fix" this by deleting or skipping the failing specs.** Six files
+      were disabled-by-accident for four months and that is the incident this
+      whole thread of work exists to prevent.
+
+- [ ] **Audit every e2e mock handler against whether its app-side reader
+      unwraps `body.data`.** Likely the dominant cause of the 146 e2e failures,
+      and a systematic fix rather than 22 separate spec refreshes.
+
+      **Confirmed for `dedup.spec.ts` (26 failures, the largest single file).**
+      `src/services/api.ts:1402` reads:
+
+          const body = await response.json();
+          const data = body.data;
+          return { groups: data.groups || [], ... };
+
+      while `test-helpers.ts:825` mocks `/api/v1/authors/duplicates` as:
+
+          jsonResponse({ groups: dedup.groups, needs_refresh: ... })
+
+      — **unwrapped**. So `body.data` is `undefined`, the page renders zero
+      groups, and every assertion looking for an author heading fails. The spec
+      itself is fine; it passes real fixture groups in.
+
+      **Why this is probably not just dedup.** Wave 2 (#2191) fixed exactly this
+      envelope for **eight** endpoints — `/auth/status`, `/import-paths`,
+      `/authors`, `/series`, `/audiobooks/soft-deleted`, bare `/audiobooks/:id`,
+      `/audiobooks/:id/versions`, `/filesystem/*` — and those spec files are now
+      green. But **80 endpoints in `api.ts` unwrap `body.data`**. Eight are
+      covered. The remaining ~72 are unaudited, and `/authors/duplicates` being
+      broken is the first one anybody checked.
+
+      **⚠️ Confidence, stated honestly.** The dedup cause is *verified* by
+      reading both sides. The claim that this explains the other 21 files is
+      *plausible and unverified*. This estimate has already been revised twice
+      — first "a few cascading root causes", then "22 files of independent
+      drift" — so verify a second and third file before planning around it.
+      Cheapest check: pick a failing test in `library-browser.spec.ts` (14) and
+      `metadata-provenance.spec.ts` (12), find the endpoint its page calls, and
+      compare the mock's shape to the reader's.
+
+      **Suggested approach if it holds:** rather than hand-patching handlers one
+      at a time, make the envelope the default. A single helper — e.g. wrap
+      every `jsonResponse` body as `{ ...body, data: body }` unless the handler
+      opts out — matches what wave 2 already did piecemeal in
+      `test-helpers.ts` and would cover all ~72 at once. Opt-out matters:
+      endpoints that legitimately return bare arrays or non-envelope shapes must
+      not be double-wrapped.
+
+      **Do not skip or delete failing specs to make this go away.** Six files
+      were disabled-by-accident for four months and that is the incident this
+      entire thread exists to prevent.
+
+- [ ] **The e2e failures have MIXED causes — do not plan a single systematic
+      fix.** Sampled 2026-08-08 after a fragment filed an hour earlier
+      speculated that one data-envelope gap might explain most of the 146.
+      **It does not.** Four files sampled, at least three distinct causes:
+
+      - **`dedup.spec.ts` (26)** — the data-envelope bug, *verified*.
+        `api.ts:1402` reads `body.data.groups`; the mock returns
+        `/authors/duplicates` unwrapped. Fix: wrap the handler.
+      - **`library-browser.spec.ts` (14)** — genuine affordance drift. The test
+        clicks `getByRole('combobox', { name: 'Sort by' })`; no such control
+        exists. Nothing to do with data shape.
+      - **`metadata-provenance.spec.ts` (12)** — book-detail page renders no
+        heading for the fixture book. Could be an envelope gap on a book
+        endpoint or a navigation change; not yet traced.
+      - **`search-and-filter.spec.ts` (10)** — behavioural, not structural. The
+        test searches, then asserts a non-matching book disappears; "The Hobbit"
+        stays visible. Either the mock never implements filtering, or search is
+        genuinely not filtering. **Worth tracing first** — it is the only one of
+        the four that might indicate a real product defect rather than test rot,
+        and it sits next to the known server-side filtering weakness (an
+        unrecognised filter param returns the entire library with HTTP 200).
+
+      **Estimate history, kept deliberately.** This has now been framed three
+      ways in one evening: "a few cascading root causes" → "22 files of
+      independent drift" → "probably one envelope gap". The middle one was
+      closest. The third came from verifying exactly ONE file and generalising,
+      which is the same error each time — concluding from the first sample that
+      agreed with a convenient theory. Whoever picks this up should assume mixed
+      causes and re-sample rather than trust any single framing, including this
+      one.
+
+      **Practical consequence:** budget per-file work, not one sweep. The
+      envelope fix is still worth doing (it is cheap and clears the largest
+      file), but it will not clear the other 21.
+
+- [ ] **`search-and-filter.spec.ts` (10 failures) is a MOCK gap, not a product
+      defect — the e2e mock's `/audiobooks` handler ignores every filter
+      param.** Traced 2026-08-08. This downgrades the earlier flag that it
+      "might indicate a real product defect"; it does not.
+
+      **The chain, verified end to end:**
+
+      - `api.searchBooksPage()` (`src/services/api.ts:1023`) issues
+        `GET /audiobooks?search=<q>&limit=&offset=&is_primary_version=true`.
+        It does **not** call `/audiobooks/search`.
+      - The mock's `/api/v1/audiobooks` handler
+        (`tests/e2e/utils/test-helpers.ts:768`) reads **only** `offset` and
+        `limit`. `search`, `filters`, `tags`, `library_state`,
+        `fingerprint_status` and the rest are all ignored; it returns
+        `mockState.books.slice(offset, offset+limit)`.
+      - So a search returns the whole library, the non-matching book stays on
+        screen, and `expect(...).not.toBeVisible()` fails. The app is behaving
+        correctly; the fake server is not.
+      - Dead code worth deleting or wiring up: the mock has a
+        `/api/v1/audiobooks/search` handler that filters properly, and
+        **nothing in `src/` calls that endpoint**.
+
+      **Explicitly ruled out:** the empty-state fix (#2195), which now preserves
+      the last known-good page when a load fails, is NOT implicated. The search
+      request succeeds — it just returns everything — so the preserved-list
+      behaviour never engages here.
+
+      **Fix:** teach the mock's `/audiobooks` handler to honour the params the
+      app actually sends. Minimum for this spec is `search`; doing `filters`
+      (the JSON field-filter array) at the same time is worth it, because the
+      In Progress / Finished sidebar filters ride on that param and any future
+      test of them would hit the identical wall.
+
+      **Note for the real backend work.** This is the mock, so it says nothing
+      about the server. But it rhymes with the open server-side task: an
+      unrecognised filter param on the real API returns the entire
+      44,874-book library with HTTP 200 rather than failing closed. Two
+      different layers, same failure mode — a filter that is ignored rather
+      than rejected looks exactly like a filter that matched everything.
+
+- [x] **"Browse by Tag" should start collapsed, or show only the top few tags.**
+      Reported by the owner 2026-08-08: *"Browse by tag should start minimized
+      as we have tons of tags or only show the top 5."* On a library this size
+      the tag cloud renders as a wall of chips that pushes the actual book grid
+      below the fold.
+
+      **Current behaviour** (`web/src/components/library/TagCloud.tsx`):
+
+      - Line 41: `const [expanded, setExpanded] = useState(true)` — it defaults
+        to **open**.
+      - It renders `availableTags.map(...)` with **no cap**: every tag in the
+        library, every time.
+      - The collapse machinery already exists (header row toggles, `Collapse`,
+        rotating chevron, correct `aria-label`), so "start minimized" is
+        essentially a one-word change.
+
+      **Two options the owner offered; they are not exclusive and the good
+      version is both:**
+
+      1. **Start collapsed** — flip line 41 to `useState(false)`. Trivial, and
+         it makes the component honest: a disclosure control whose default is
+         "already disclosed" is not doing anything.
+      2. **Show the top N (5) when collapsed-ish** — render a short preview row
+         of the highest-count tags with a "Show all (N)" affordance, so the
+         feature is still discoverable without costing a screenful. This is the
+         better UX of the two, because a fully collapsed panel gives no hint
+         that tags are worth browsing.
+
+      **⚠️ Verify sort order before slicing.** `availableTags` is passed
+      straight through from `Library.tsx` (lines 1971 and 1993 — note it feeds
+      **both** `TagCloud` and `FilterSidebar`) and **it has not been confirmed
+      that it arrives sorted by count descending**. `TagCloud` currently only
+      uses `count` for font size, where order does not matter, so a latent
+      sort bug would be invisible today and would silently make "top 5" mean
+      "first 5 alphabetically". Sort explicitly in the component rather than
+      trusting the caller.
+
+      **Persist the open/closed choice** in `localStorage` alongside the other
+      Library view preferences (`STORAGE_KEYS`), so someone who opens it does
+      not have to re-open it on every visit. Without that, "start collapsed"
+      trades one annoyance for another.
+
+      **Acceptance:** on a fresh visit to /library the book grid is visible
+      without scrolling past the tag cloud; tags remain reachable in one click;
+      and if a top-N preview is used, the tags shown are genuinely the most
+      common ones, verified against a library with many tags rather than a
+      handful of fixtures.
+
+      **✅ SHIPPED same day.** Implemented as *both* options rather than either:
+
+      - Starts **collapsed** (`useState(readStoredExpanded)`, default false).
+      - Collapsed still shows the **top 5 by count** plus a "Show all (N)"
+        button, so the feature stays discoverable. A disclosure control that
+        reveals nothing tells the user nothing.
+      - **Sorted explicitly in the component** (`count` desc, then name), which
+        the note above flagged: the caller's order was never guaranteed and
+        slicing an unsorted list would have quietly shown "the first five".
+      - **Persisted** via `STORAGE_KEYS.LIBRARY_TAG_CLOUD_EXPANDED`, wrapped in
+        try/catch so private-browsing storage failures fall back to collapsed
+        rather than throwing.
+      - The header shows the total tag count while collapsed, so the panel says
+        how much is hidden.
+      - **Selected tags outside the top 5 are always shown** while collapsed.
+        This was not in the original request but is required for correctness:
+        hiding an active filter leaves the user looking at a filtered list with
+        no visible control to clear it.
+
+- [ ] **The library "Sort by" control no longer exists — 4 e2e tests target a
+      surface that is gone.** Found 2026-08-09 while repairing
+      `library-browser.spec.ts`.
+
+      `sorts books by title ascending` / `title descending` / `author` /
+      `date added` all do:
+
+          await page.getByRole('combobox', { name: 'Sort by' }).click();
+          await page.getByRole('option', { name: 'Title' }).click();
+
+      There is **no such control anywhere in the library UI**. Grepping the
+      components turns up no `Sort by` label and no sort dropdown in
+      `FilterPanel`, `LibraryToolbar` or `SearchBar`. Sorting now happens
+      through the table view's column headers
+      (`LibraryBookGrid`'s `handleColumnSortChange` → `ConfigurableTable` /
+      `AudiobookList`), which the default grid view does not show at all.
+
+      **This is a rewrite, not a selector tweak**, which is why it was left out
+      of the mock-fix PR: the tests must switch to list/table view first and
+      then drive column-header sorting, and the assertions about resulting
+      order need to match however that view renders.
+
+      The mock now honours `sort_by` / `sort_order` correctly (added
+      2026-08-09), so once the tests drive the real control the backend half of
+      this is already in place.
+
+      **Check before rewriting:** confirm sorting is genuinely still reachable
+      by a user in the default grid view. If it is not, that is a product
+      question — "you can no longer sort the library without switching views"
+      — and should be raised rather than encoded into a test.
+
+- [ ] **The unified Dedup view has no e2e coverage at all.** Found 2026-08-09
+      while repairing `dedup.spec.ts`.
+
+      `/dedup` was redesigned: it now renders a unified candidate surface
+      (bands All / Certain / High / Medium / Review, a candidate table, "Find
+      Duplicates" / "Rescore" / "Force Full Rescan" actions). The old tabbed
+      Books / Authors / Series UI still exists but sits behind a **"Legacy
+      View"** toggle persisted as `sessionStorage.dedup_show_legacy`.
+
+      Every test in `dedup.spec.ts` covers the **legacy** view — they now opt
+      into it explicitly via `enableLegacyDedupView()`. That was the right fix
+      (the legacy features are still shipping and were previously untested by
+      accident), but it means the surface a user actually lands on has **zero**
+      automated coverage.
+
+      Worth covering: band filtering, the candidate table, merge/dismiss
+      actions, and the legacy toggle itself round-tripping through
+      sessionStorage.
+
+      Note the gap was invisible for the same reason the last one was: the
+      specs did not fail with "this UI no longer exists", they failed with
+      `element(s) not found`, which reads identically to a broken selector.
+
+- [ ] **4 remaining failures in `metadata-provenance.spec.ts`** (down from 12).
+      Diagnosed but not fixed 2026-08-09; stopped deliberately rather than
+      keep iterating.
+
+      Fixed in that pass (8 of 12): the spec mocks by patching `window.fetch`
+      rather than using `page.route`, so it gets none of the shared handlers
+      and needed its own `/auth/status` (without it the app rendered the LOGIN
+      screen), its own `{ data: ... }` envelope, and explicit handlers for the
+      book sub-resources — the generic "URL contains the book id" branch was
+      swallowing `/files`, `/versions`, `/tags`, `/segments` and handing each
+      of them the BOOK object, so the page crashed on `.length` of undefined.
+
+      **Still failing, with what is known:**
+
+      1. `dialog opens with all fields populated` — the Author textbox is
+         empty. The dialog reads `formData.author`, and the detail page renders
+         "Unknown Author", so the payload shape is wrong somewhere between the
+         fixture and `Audiobook`. Adding `author_name`/`series_name` alongside
+         the short names did NOT fix it, so the mapping is elsewhere — trace
+         how `formData` is initialised from the API response rather than
+         guessing again.
+      2. `locked fields show orange lock icon` — walks the DOM relative to
+         `getByLabel('Title *')` (`'..'` → `'..'` → `button`) to reach the lock
+         icon. Fragile by construction: it depends on the exact wrapper depth
+         MUI renders. Better fixed by giving the lock button a stable
+         `data-testid` than by counting parents.
+      3. `editing a field automatically locks it` and 4. `year field shows
+         error for non-numeric input` — both start from the same field
+         locators; likely fall out with (1) and (2).
+
+      **Locator rule established in this file, worth keeping:** to READ or FILL
+      a field use `getByRole('textbox', { name, exact: true })` —
+      `getByLabel('Title *')` is a strict-mode violation because each field has
+      an adjacent lock button labelled "Lock Title *" and getByLabel
+      substring-matches. The lock tests still use `getByLabel` on purpose,
+      because they traverse relative to it. A blanket sweep converting all of
+      them broke passing tests; the note in the spec says so.
+
+- [ ] **8 remaining failures in `batch-operations.spec.ts`** (down from 11), and
+      a caution about how they were approached.
+
+      **Fixed (3):** the "N selected" chip is rendered TWICE in the tree, so
+      `getByText('1 selected')` was always a strict-mode violation. Assertions
+      now use `.first()` — the behaviour under test is that the count shows, not
+      how many places show it. *(If that duplication is itself unintended, it is
+      a UI question worth asking separately.)*
+
+      **Verified renames applied:** the toolbar button "Fetch Metadata" is now
+      **"Fetch Selected"**, and "Deselect All" is now **"Deselect"** — read off
+      the app's rendered accessible names, not guessed.
+
+      **⚠️ Trap, hit and recorded:** the confirm button INSIDE the "Bulk Fetch
+      Metadata" dialog is **still "Fetch Metadata"** (`LibraryDialogs.tsx`
+      renders `Fetching…` / `Fetch Metadata`). A blanket find-and-replace of
+      "Fetch Metadata" → "Fetch Selected" therefore breaks the dialog-scoped
+      references. Only the toolbar button was renamed. The spec now carries a
+      comment at that call site.
+
+      **Still failing (8):** `deselects all books`, the five bulk-fetch tests,
+      `batch updates metadata field`, and `disables batch operations when no
+      books selected`. The count did NOT move across three separate attempts
+      (chip fix, renames, dialog-scope correction), which means the remaining
+      cause has not actually been found yet — the failures are almost certainly
+      NOT more label drift.
+
+      **Do this next, and do it first:** open the Playwright DOM snapshot for
+      one bulk-fetch failure (`test-results/*/error-context.md`) and read what
+      is actually on the page at the moment of failure. Every real cause found
+      in this repair effort — the dedup page being redesigned behind a "Legacy
+      View" toggle, metadata-provenance rendering the LOGIN screen, the book
+      sub-resources returning the book object — was found that way, and every
+      wrong guess came from reasoning about what *should* be there instead.
+
+- [ ] **`transcode-and-counting.spec.ts` (11 failures) — two hypotheses tested
+      and REJECTED. Read this before trying either again.**
+      Investigated 2026-08-09; no code shipped, because nothing that was tried
+      improved the count and one attempt made it worse.
+
+      **What the page actually shows** (from the Playwright DOM snapshot, which
+      is the only thing that has reliably told the truth in this effort): the
+      Dashboard renders normally but **every count is 0** — Library Books,
+      Import Path Books, Authors, Series.
+
+      **Rejected hypothesis 1 — missing `{ data: ... }` envelope on the specs'
+      inline `page.route` overrides.** Real in principle: these tests call
+      `route.fulfill` directly, bypassing `jsonResponse()` in test-helpers, and
+      `api.getSystemStatus()` reads `body.data`. Wrapping all 11 success
+      payloads changed the result by **zero**. The envelope is not what is
+      breaking this file.
+
+      **Rejected hypothesis 2 — the mock ignoring `is_primary_version`.**
+      Reasoning looked sound: `api.getBooks()` always sends
+      `is_primary_version=true`, `countBooksFiltered()` reads
+      `body.data?.count` from that same endpoint, and the fixture is exactly 2
+      primary + 1 non-primary against an expected count of 2. Teaching the mock
+      to honour the param took failures from **11 to 12** — a regression. It
+      was reverted. Do not re-apply without understanding why it hurt.
+
+      **The one solid lead:** "Library Books" does NOT come from
+      `/system/status`, which is what these tests mock. It comes from
+      `api.countBooksFiltered()` → `GET /audiobooks?...` → `body.data?.count`
+      (`services/api.ts:1058`). So a test that overrides `/system/status` to
+      control the dashboard count is mocking the wrong endpoint entirely. That
+      is worth confirming as the root cause before writing any more code.
+
+      **Method note.** Every real cause found in this repair effort came from
+      reading `test-results/*/error-context.md` and looking at what was on the
+      page. Every wrong guess — including both above — came from reasoning
+      about what should be there. Look first.
 
 <!-- file: todo.d/20260807_194500_deluge_must_not_write_into_import_dir.md -->
 <!-- version: 1.0.0 -->
