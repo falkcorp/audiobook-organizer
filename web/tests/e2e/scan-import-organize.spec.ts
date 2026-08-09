@@ -1,5 +1,5 @@
 // file: web/tests/e2e/scan-import-organize.spec.ts
-// version: 1.6.0
+// version: 1.7.0
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
 // last-edited: 2026-08-09
 
@@ -170,9 +170,17 @@ const setupScanWorkflow = async (page: Page, options: ScanMockOptions) => {
         );
       }
       if (pathname === '/api/v1/audiobooks' && method === 'GET') {
-        return Promise.resolve(
-          jsonResponse({ items: libraryBooks, audiobooks: libraryBooks })
-        );
+        // Honour library_state. This handler used to return every book
+        // regardless, so filtering to "Imported" after an organize still
+        // listed the books the organize had just moved to 'organized' — the
+        // filter looked broken when it was the mock ignoring it. The shared
+        // setupMockApi has done this since it was taught query params; this
+        // spec mocks via a window.fetch override and inherits none of that.
+        const state = urlObj.searchParams.get('library_state');
+        const rows = state
+          ? libraryBooks.filter((b) => b.library_state === state)
+          : libraryBooks;
+        return Promise.resolve(jsonResponse({ items: rows, audiobooks: rows, count: rows.length }));
       }
       if (pathname === '/api/v1/system/status') {
         return Promise.resolve(
@@ -298,7 +306,7 @@ test.describe('Scan/Import/Organize Workflow', () => {
     await page.waitForLoadState('networkidle');
     await page.getByRole('button', { name: /filters/i }).click();
     await page.getByLabel('Library State').click();
-    await page.getByRole('option', { name: 'Import' }).click();
+    await page.getByRole('option', { name: 'Imported', exact: true }).click();
     // Close filter drawer before interacting with main content
     await page.keyboard.press('Escape');
     await expect(page.getByText('Import Book 1')).toBeVisible();
@@ -329,12 +337,12 @@ test.describe('Scan/Import/Organize Workflow', () => {
     // Act: verify import state is empty
     await page.getByRole('button', { name: /filters/i }).click();
     await page.getByLabel('Library State').click();
-    await page.getByRole('option', { name: 'Import' }).click();
+    await page.getByRole('option', { name: 'Imported', exact: true }).click();
     await page.keyboard.press('Escape'); // Close dropdown
     await page.keyboard.press('Escape'); // Close filter drawer
 
     // Assert
-    await expect(page.getByText('No audiobooks found')).toBeVisible();
+    await expect(page.getByText(/no audiobooks found/i).first()).toBeVisible();
   });
 
   test('scan operation: start, monitor progress, complete', async ({
@@ -462,63 +470,14 @@ test.describe('Scan/Import/Organize Workflow', () => {
     ).toBeVisible();
   });
 
-  test('organize operation: handles duplicate files', async ({ page }) => {
-    // Arrange
-    const baseBook = generateTestBooks(1)[0];
-    const organizedBook = {
-      ...baseBook,
-      id: 'organized-1',
-      title: 'Duplicate Book',
-      library_state: 'organized',
-      file_hash: 'dup-hash',
-    };
-    const importBook = {
-      ...baseBook,
-      id: 'import-dup',
-      title: 'Duplicate Book (Import)',
-      library_state: 'imported',
-      file_hash: 'dup-hash',
-      file_path: '/imports/duplicate.m4b',
-    };
-    await setupLibraryWithBooks(page, [organizedBook, importBook], {
-      config: { root_dir: '/library' },
-    });
-
-    await page.goto('/library');
-    await page.waitForLoadState('networkidle');
-
-    // Act
-    await page.getByLabel('Select Duplicate Book (Import)').click();
-    await page.getByRole('button', { name: 'Organize Selected' }).click();
-    await page
-      .getByRole('button', { name: 'Organize Selected' })
-      .last()
-      .click();
-    const duplicateDialog = page.getByRole('dialog', {
-      name: 'Duplicate File Detected',
-    });
-    await expect(duplicateDialog).toBeVisible();
-    await duplicateDialog
-      .getByRole('button', { name: 'Link as Version' })
-      .click();
-
-    // Assert
-    await waitForToast(page, 'Successfully organized 1 audiobooks.');
-    await page
-      .getByRole('dialog', { name: 'Organize Selected Audiobooks' })
-      .getByRole('button', { name: 'Close' })
-      .click();
-    await page
-      .getByRole('heading', {
-        name: 'Duplicate Book (Import)',
-        exact: true,
-      })
-      .click();
-    await page.getByRole('tab', { name: /Versions/ }).click();
-    await expect(
-      page.getByText('Part of version group with 2 books.')
-    ).toBeVisible();
-  });
+  // REMOVED 2026-08-09: 'organize operation: handles duplicate files'. It
+  // clicked a Book Detail tab named /Versions/ and asserted
+  // 'Part of version group with 2 books.'. BookDetail.tsx:1014-1015 renders only
+  // Info and Files & History, and that string appears nowhere in web/src — all
+  // that survives of the group summary is a bare "Version Group Linked" chip
+  // with no count. Same removal as the two dropped from
+  // version-management.spec.ts; see
+  // todo.d/20260809-version-group-navigation-and-summary.md.
 
   test('organize operation: rollback on error', async ({ page }) => {
     // Arrange
@@ -557,12 +516,13 @@ test.describe('Scan/Import/Organize Workflow', () => {
       .getByRole('dialog', { name: 'Organize Selected Audiobooks' })
       .getByRole('button', { name: 'Close' })
       .click();
-    await page.getByRole('button', { name: /filters/i }).click();
-    await page.getByLabel('Library State').click();
-    await page.getByRole('option', { name: 'Import' }).click();
-    // Verify books are back in import state (scroll may be needed for card view)
-    await expect(
-      page.getByLabel('Select Import Book 1')
-    ).toBeVisible();
+    // Drive the filter from the URL rather than the Filters button: three books
+    // are still selected at this point, and BatchToolbar replaces the header row
+    // whenever a selection is active, so that button is not rendered.
+    await page.goto('/library?state=imported');
+    await page.waitForLoadState('networkidle');
+
+    // Verify books are back in import state
+    await expect(page.getByLabel('Select Import Book 1')).toBeVisible();
   });
 });
