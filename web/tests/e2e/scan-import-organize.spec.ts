@@ -1,5 +1,5 @@
 // file: web/tests/e2e/scan-import-organize.spec.ts
-// version: 1.7.0
+// version: 1.8.0
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
 // last-edited: 2026-08-09
 
@@ -307,8 +307,33 @@ test.describe('Scan/Import/Organize Workflow', () => {
     await page.getByRole('button', { name: /filters/i }).click();
     await page.getByLabel('Library State').click();
     await page.getByRole('option', { name: 'Imported', exact: true }).click();
-    // Close filter drawer before interacting with main content
+    // Close the filter drawer, then WAIT for its modal backdrop to stop being
+    // visible, before touching anything behind it.
+    //
+    // Escape starts a close transition. Until it finishes, MUI's full-page
+    // backdrop is still in the DOM swallowing pointer events, so the Select All
+    // click lands on the backdrop and times out after 30s with
+    //   <div class="MuiBackdrop-root MuiModal-backdrop"> from
+    //   <div aria-hidden="true" class="MuiDrawer-root MuiDrawer-modal ...">
+    //   subtree intercepts pointer events
+    // chromium stopped failing once CI dropped to one worker (#2249); webkit is
+    // slower and kept failing, so this wait is required rather than belt-and-
+    // braces.
+    //
+    // The assertion shape is load-bearing and two obvious forms are both wrong:
+    //   toBeHidden()   -> strict-mode violation: Sidebar renders its content
+    //                     TWICE (temporary Drawer + permanent one), so the
+    //                     selector matches two nodes.
+    //   toHaveCount(0) -> never converges: MUI keeps the backdrop MOUNTED and
+    //                     merely hides it, so the count sits at 2 forever.
+    // Counting only the VISIBLE matches is correct for both: it tolerates any
+    // number of drawers and does not care whether MUI unmounts or hides.
     await page.keyboard.press('Escape');
+    await expect(
+      page
+        .locator('.MuiDrawer-modal .MuiBackdrop-root')
+        .filter({ visible: true }),
+    ).toHaveCount(0, { timeout: 15000 });
     await expect(page.getByText('Import Book 1')).toBeVisible();
     await page.getByLabel('Select All').click();
     await page.getByRole('button', { name: 'Organize Selected' }).click();
