@@ -1,7 +1,7 @@
 // file: web/tests/e2e/unified-dedup-tab.spec.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: e5f6a7b8-c9d0-1234-efab-555678901234
-// last-edited: 2026-06-10
+// last-edited: 2026-08-09
 
 // Playwright E2E flow for the unified dedup tab:
 //   1. Enable feature flag via localStorage
@@ -24,6 +24,26 @@ const MOCK_CANDIDATE = {
   status: 'pending',
   created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-01T00:00:00Z',
+  // UnifiedDedupTab fetches candidates with include_books=true and renders each
+  // side from candidate.book_a / candidate.book_b — there is no per-book
+  // getBook() fan-out. Without these the rows render "(missing book — …)"
+  // instead of a title, which is what every assertion here used to trip on.
+  book_a: {
+    id: '01ABCDEFGHIJKLMNOPQRSTUV01',
+    title: 'Foundation',
+    author_name: 'Isaac Asimov',
+    file_path: '/mnt/bigdata/books/audiobook-organizer/Foundation/Foundation.mp3',
+    asin: 'B002V0QC4Q',
+    isbn13: '9780553293357',
+    cover_url: '',
+    narrator: 'Scott Brick',
+  },
+  book_b: {
+    id: '01ABCDEFGHIJKLMNOPQRSTUV02',
+    title: 'Foundation (Duplicate)',
+    author_name: 'Isaac Asimov',
+    file_path: '/mnt/bigdata/books/audiobook-organizer/Foundation2/Foundation.m4b',
+  },
   band: 'CERTAIN',
   score: 98.0,
   score_breakdown: {
@@ -89,6 +109,24 @@ const MOCK_BREAKDOWN = {
     ],
   },
 };
+
+// The candidate row identifies its books by a title link to /library/<id>.
+// Matching on the href keeps the assertion pinned to this exact candidate
+// without depending on the raw ULID being rendered as text (it is not — the
+// UI only shows the last 8 characters, and then only when the book is missing).
+function bookALink(page: Page) {
+  return page.locator(`a[href="/library/${MOCK_CANDIDATE.entity_a_id}"]`).first();
+}
+
+// The per-row info IconButton (aria-label="Open comparison for candidate <id>")
+// was replaced by a labelled "Compare" Button with no candidate-specific label,
+// so scope the lookup to the row that holds Book A's link.
+function compareButton(page: Page) {
+  return page
+    .getByRole('row')
+    .filter({ has: page.locator(`a[href="/library/${MOCK_CANDIDATE.entity_a_id}"]`) })
+    .getByRole('button', { name: /compare/i });
+}
 
 async function enableUnifiedDedupFeatureFlag(page: Page) {
   // Set the feature flag via localStorage before the app JS runs.
@@ -184,7 +222,7 @@ test.describe('Unified Dedup Tab (T017)', () => {
     await expect(page).toHaveURL(/band=CERTAIN/);
 
     // Candidate row should still be visible (mock returns same data).
-    await expect(page.locator('text=01ABCDEFGHIJKLMNOPQRSTUV01').first()).toBeVisible();
+    await expect(bookALink(page)).toBeVisible();
   });
 
   test('clicking info button opens comparison drawer', async ({ page }) => {
@@ -196,10 +234,10 @@ test.describe('Unified Dedup Tab (T017)', () => {
     await page.waitForLoadState('domcontentloaded');
 
     // Wait for table to populate.
-    await expect(page.locator('text=01ABCDEFGHIJKLMNOPQRSTUV01').first()).toBeVisible({ timeout: 10000 });
+    await expect(bookALink(page)).toBeVisible({ timeout: 10000 });
 
     // Click the info icon button for the first candidate row.
-    await page.locator('[aria-label="Open comparison for candidate 42"]').click();
+    await compareButton(page).click();
 
     // Drawer should open.
     await expect(page.locator('[data-testid="candidate-compare-drawer"]')).toBeVisible();
@@ -214,8 +252,8 @@ test.describe('Unified Dedup Tab (T017)', () => {
     await page.goto('/dedup');
     await page.waitForLoadState('domcontentloaded');
 
-    await expect(page.locator('text=01ABCDEFGHIJKLMNOPQRSTUV01').first()).toBeVisible({ timeout: 10000 });
-    await page.locator('[aria-label="Open comparison for candidate 42"]').click();
+    await expect(bookALink(page)).toBeVisible({ timeout: 10000 });
+    await compareButton(page).click();
     await expect(page.locator('[data-testid="candidate-compare-drawer"]')).toBeVisible();
 
     // Switch to "Score Breakdown" tab inside the drawer.
