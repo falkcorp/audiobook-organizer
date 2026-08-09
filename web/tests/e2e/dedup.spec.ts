@@ -1,7 +1,7 @@
 // file: web/tests/e2e/dedup.spec.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: d1e2f3a4-b5c6-7d8e-9f0a-1b2c3d4e5f6a
-// last-edited: 2026-06-23
+// last-edited: 2026-08-09
 
 import { test, expect, type Page } from '@playwright/test';
 import {
@@ -65,6 +65,31 @@ const booksForAuthor = [
   { id: 'b3', title: 'Oathbringer', author_name: 'Brandon Sanderson', cover_url: null },
 ];
 
+/**
+ * Opt into the legacy tabbed Dedup UI.
+ *
+ * /dedup was redesigned: it now renders a unified candidate view, and the
+ * tabbed Books/Authors/Series UI these tests cover sits behind a "Legacy View"
+ * toggle persisted in sessionStorage. Without this, `?tab=authors` renders the
+ * unified surface and every tab assertion fails with "element(s) not found".
+ *
+ * Must be called BEFORE page.goto — every test that navigates to /dedup needs
+ * it, including the ones that call page.goto directly rather than going
+ * through openDedupPage().
+ *
+ * The unified view itself is NOT covered by this spec; see the todo fragment
+ * filed alongside this change.
+ */
+async function enableLegacyDedupView(page: Page) {
+  await page.addInitScript(() => {
+    try {
+      sessionStorage.setItem('dedup_show_legacy', '1');
+    } catch {
+      /* storage disabled — the test fails loudly rather than silently */
+    }
+  });
+}
+
 async function openDedupPage(page: Page, opts: {
   authorGroups?: MockAuthorDedupGroup[];
   seriesGroups?: MockSeriesDupGroup[];
@@ -87,6 +112,8 @@ async function openDedupPage(page: Page, opts: {
       body: JSON.stringify({ items: booksForAuthor, count: booksForAuthor.length }),
     });
   });
+
+  await enableLegacyDedupView(page);
 
   const tab = opts.tab ?? 'authors';
   await page.goto(`/dedup?tab=${tab}`);
@@ -169,10 +196,15 @@ test.describe('Author Dedup', () => {
       });
     });
 
+    // Arm the waiter BEFORE clicking. waitForRequest only observes requests
+    // made after it is called, and with the route above mocked the request
+    // fires and completes essentially instantly — so a waiter set up after the
+    // click could never see it. This was a race in the test, not app drift.
+    const resolveRequest = page.waitForRequest(req => req.url().includes('/resolve-production'));
+
     await page.getByRole('button', { name: /find real author/i }).first().click();
 
-    // Wait for the API request rather than sleeping — avoids flakiness under load.
-    await page.waitForRequest(req => req.url().includes('/resolve-production'));
+    await resolveRequest;
     expect(resolveCallCount).toBeGreaterThan(0);
   });
 
@@ -258,7 +290,7 @@ test.describe('Book Preview Popover', () => {
     await page.getByText('12 book(s)').click();
     await page.getByText('The Way of Kings').click();
 
-    await expect(page).toHaveURL(/\/books\/b1/);
+    await expect(page).toHaveURL(/\/library\/b1/);
   });
 
   test('popover closes when clicking outside', async ({ page }) => {
@@ -286,6 +318,7 @@ test.describe('Book Preview Popover', () => {
       });
     });
 
+    await enableLegacyDedupView(page);
     await page.goto('/dedup?tab=authors');
     await page.waitForLoadState('networkidle');
 
@@ -323,10 +356,14 @@ test.describe('Dedup Tab Navigation', () => {
       books: generateTestBooks(3),
       authorDedup: { groups: authorDedupGroups },
     });
+    await enableLegacyDedupView(page);
     await page.goto('/dedup');
     await page.waitForLoadState('networkidle');
 
-    const booksTab = page.getByRole('tab', { name: /books/i });
+    // TAB_NAMES[0] is still 'books', but its LABEL is now "Version Groups".
+    // /books/i matched "Split Books" — a different, correctly-unselected tab —
+    // so this assertion was checking the wrong element entirely.
+    const booksTab = page.getByRole('tab', { name: /version groups/i });
     await expect(booksTab).toHaveAttribute('aria-selected', 'true');
   });
 
@@ -420,7 +457,8 @@ test.describe('Dedup AI Review', () => {
   test('AI Review button is visible on authors tab', async ({ page }) => {
     await openDedupPage(page);
 
-    const aiBtn = page.getByRole('button', { name: /ai review/i });
-    await expect(aiBtn).toBeVisible();
+    // AI Review is a Tab in the legacy view (role="tab"), not a button.
+    const aiTab = page.getByRole('tab', { name: /ai review/i });
+    await expect(aiTab).toBeVisible();
   });
 });
