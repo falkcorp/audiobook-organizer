@@ -1,5 +1,5 @@
 <!-- file: todo.d/20260809-library-double-fetch-swallows-clicks.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: b6e4207f-9c31-4d85-a072-3fe185c9a4b8 -->
 <!-- last-edited: 2026-08-09 -->
 
@@ -23,7 +23,18 @@
       3 s. The distinguishing feature of the failing run is the **duplicate initial
       fetch**: two identical `offset=0` requests instead of one.
 
-      **Two problems, and the first probably causes the second:**
+      **CORRECTION 2026-08-09 (later the same day).** The causal claim below —
+      that the duplicate fetch causes the swallowed click — is **wrong**, or at
+      least incomplete. The duplicate was found and eliminated (see the fix note
+      at the bottom); measured like-for-like over 24 webkit runs of the same
+      three tests, the failure rate went **16/24 → 11/24**. A real improvement,
+      but the flake survives, so something else is also at work. The remaining
+      failures have also shifted shape: `navigates to previous page` now fails
+      with "Test Book 1 **not found**" after going next-then-previous, i.e.
+      page 1 does not come back — the inverse of the original symptom. Whoever
+      picks this up should treat the two as separate defects.
+
+      **Two problems, and the first was wrongly assumed to cause the second:**
 
       1. **A wasted duplicate query on mount.** On a large library that is a second full
          page query for nothing. It belongs with the other client-side over-fetching
@@ -58,3 +69,17 @@
 
       **Acceptance:** one `offset=0` request per Library mount, and the three pagination
       tests pass 8/8 on webkit with `--repeat-each=8`.
+
+      **Half of that is now met.** The duplicate mount fetch is fixed: `SearchBar`
+      re-parses its value on mount and hands back a NEW `ParsedSearch` object that is
+      semantically identical to the one `Library.tsx` seeded its state with. Storing it
+      changed `parsedSearch`'s identity → recreated `buildFieldFilters` → recreated
+      `loadAudiobooks` → re-fired the "load when filters change" effect. Confirmed by
+      instrumenting the dependency array: `DEPCHANGE buildFieldFilters,parsedSearch`
+      fired once after mount on 4 runs of 4, and stopped firing entirely once the setter
+      bailed on an unchanged value. `/api/v1/audiobooks` is now hit exactly once per
+      mount, 4 runs of 4.
+
+      **The pagination flake is still open** and needs its own investigation — start from
+      the shifted symptom above rather than from the duplicate fetch, which is no longer
+      present.
