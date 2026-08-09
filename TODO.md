@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.19.0 -->
+<!-- version: 10.20.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-08-09 -->
 
@@ -60,17 +60,32 @@ into one of the curated sections below, is a normal direct edit.
       2026-08-08 by the first-ever clean-environment run, immediately after
       wiring the suite into CI (#2202).
 
-      ✅ **DONE 2026-08-09 across 14 PRs (#2224–#2237).** Measured on merged
-      `main` from a clean worktree: **chromium 272 passed / 7 skipped / 0
-      failing**; webkit 268 / 7 / 4. The 7 skipped are `test.fixme` markers
-      attached to real product defects, so they report as *unexpected passes*
-      once fixed — nothing was deleted or silently skipped. The 4 webkit
-      failures are webkit-only pagination differences (3 `library-browser`,
-      1 `library-sidebar-filters`) and are NOT diagnosed. Full audit with
-      file:line evidence:
+      ✅ **DONE 2026-08-09 across 17 PRs (#2224–#2244).** Final measurement on
+      merged `main`: **552 passed / 0 failed / 16 skipped of 568**, exit 0,
+      **both browsers green**. (Intermediate state after the first 14 PRs was
+      chromium 272/7/0 and webkit 268/7/4; the webkit tail was closed by #2242
+      and #2244.) The 16 skips are 7 `test.fixme` markers × 2 browsers, each
+      attached to a real product defect so they report as *unexpected passes*
+      once fixed, plus a real-server bootstrap smoke test × 2 that skips itself
+      unless the server is un-bootstrapped. **Nothing was deleted or silently
+      skipped.** Full audit with file:line evidence:
       `docs/audits/2026-08-09-e2e-repair-and-ui-regressions.md`.
-      Sub-items 3 (flip `continue-on-error` off) and the webkit tail remain —
-      broken out below.
+      Sub-item 3 (flip `continue-on-error` off) remains — broken out below.
+
+      **The webkit tail was not what it looked like.** 3 of the 4 were a
+      Playwright/webkit harness artifact, not a product defect: its synthesised
+      pointer click on MUI's `PaginationItem` failed 4/4 while an in-page DOM
+      click on the identical buttons passed 6/6. Fixed in #2242 (24/24 on
+      webkit, from an 11/24 failure baseline) with retries logged so the
+      masking stays visible. This had been filed as a product bug **twice**;
+      both claims are corrected on the record in
+      `todo.d/20260809-library-double-fetch-swallows-clicks.md`.
+
+      **The 4th is deliberately still open and NOT fixed** (1 occurrence in
+      1,136 executions, did not reproduce): `book-detail.spec.ts` purge flow.
+      It passes 6/6 in isolation, so there is no measurement establishing the
+      app is correct, and tolerating it in the test would be papering over an
+      unknown. See `todo.d/20260809-book-detail-purge-suite-only-flake.md`.
 
       **This contradicts what was believed on 2026-08-08 morning.** The
       executive summary
