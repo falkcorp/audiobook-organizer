@@ -1,5 +1,5 @@
 // file: tests/e2e/playwright.config.ts
-// version: 1.8.0
+// version: 1.9.0
 // guid: 7c8d9e0f-1a2b-3c4d-5e6f-7a8b9c0d1e2f
 // last-edited: 2026-08-08
 
@@ -14,6 +14,11 @@ const DEMO_ARTIFACTS_DIR = join(__dirname, '../../..', 'demo_artifacts');
 
 export default defineConfig({
   testDir: '.',
+  // Fails the run if :8484 is already serving a bundle older than the code
+  // under test. `reuseExistingServer` below is what makes that possible, and a
+  // silently-reused stale server is what produced a false green on 2026-08-08
+  // while the suite was ~50% red. See global-setup.ts.
+  globalSetup: './global-setup.ts',
   timeout: 30 * 1000,
   fullyParallel: true,
   retries: 0,
