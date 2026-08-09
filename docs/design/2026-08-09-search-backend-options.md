@@ -1,12 +1,15 @@
 <!-- file: docs/design/2026-08-09-search-backend-options.md -->
-<!-- version: 2.0.0 -->
+<!-- version: 2.1.0 -->
 <!-- guid: 4f1c8a72-6d93-4e05-b8a1-9c72e0f45d38 -->
 <!-- last-edited: 2026-08-09 -->
 
 # Search backend — design options and trade-offs
 
-**Status:** decision document. **Two decisions now taken — see §0a.** The rest remains open.
-Written 2026-08-09 at the owner's request; updated the same day with the owner's answers.
+**Status:** decision document, and the intended basis for a later spec. **Two decisions
+taken — see §0a. Sorting cost analysed in §0b**, which answers the "will Go be slow/bloated"
+question and ends with the three questions a spec needs settled. The rest remains open.
+Written 2026-08-09 at the owner's request; updated the same day with the owner's answers
+and the follow-up discussion on frontend-vs-backend sorting.
 **Audience:** the owner, making a build-vs-buy-vs-keep call.
 **Companion reading:** `todo.d/20260809-search-drops-filters-and-debounce.md`,
 `docs/audits/2026-08-09-e2e-repair-and-ui-regressions.md` (findings 10 and 11).
@@ -70,6 +73,110 @@ Two further points that follow directly and are not optional if the bar is "not 
 
 **Not changed by these decisions:** the engine choice (§4) and the API-shape choice (§5).
 Sorting in Go is orthogonal to whether the engine stays Bleve, and orthogonal to GraphQL.
+
+---
+
+## 0b. Sorting cost: will a Go backend be slow, or bloated?
+
+Owner's concern, 2026-08-09:
+
+> "My big concern is how slow the go backend alone will be to respond without loading
+> everything into ram and making audiobook organizer a huge bloated mess."
+
+It is the right question, and the code gives it a sharper answer than expected:
+**that has already happened.** This is not a risk to avoid; it is the current design, and
+it was paid for deliberately.
+
+### The backend already holds the whole library in RAM
+
+`internal/database/memdb_*` warms an immutable radix tree at boot. From
+`memdb_strip.go:14`:
+
+> Memory math (392K-book production library) … Description avg ~500-2000 chars →
+> ~400MB-1.5GB across all books … **Stripping these from memdb cuts the radix tree's
+> resident size from ~10GB to ~2GB.**
+
+So someone already hit exactly this wall and paid for it by stripping `Description`,
+fingerprint blobs and `VersionNotes` out of the resident copy. The question is therefore
+not *"should Go load everything into RAM?"* — it already does — but **"given that, why is
+sorting still expensive?"**
+
+### Sorting splits in two, and only one half is the problem
+
+**Title sort — already cheap.** memdb's title index *is* a sorted radix tree, so the walker
+streams and stops at `limit+offset`. Nothing is materialised.
+
+**Every other sort — this is the cost.** `service_query.go:155`:
+
+```go
+pdLimit, pdOffset := limit, offset
+if heavySorting {
+    pdLimit, pdOffset = 0, 0   // fetch the FULL filtered set
+}
+```
+
+then `applySorting(books, f)` and paginate afterwards. Sorting by author, duration or date
+added **materialises the entire filtered set into a slice, sorts it, and discards all but
+50 rows.** That is the bloat, and it ships today.
+
+Note what the code is doing there: it disables pagination *to make sorting correct*. A sort
+applied after pagination is not slow, it is **wrong** — it orders the 50 rows you already
+have. The current code chose slow over wrong, which was the right call, and the fix is to
+stop having to choose.
+
+### So the lever is indexes, not memory
+
+A secondary sorted index stores **keys and IDs, not books**. Rough order of magnitude: a
+short key plus an ID plus tree overhead across the library is on the order of **tens of MB
+per sort field**, against a **2GB** resident tree. Five sortable fields is a low-single-digit
+percentage increase, and each one converts a full-set materialise-and-sort into the same
+streaming walk that title already enjoys.
+
+That is the trade to weigh: a small, bounded, *predictable* increase in resident memory in
+exchange for deleting an unbounded per-request allocation.
+
+**Alternative — let Bleve sort.** It already indexes these fields with `Store: true` and
+supports sort-by-field, so search + filter + sort + paginate would happen in one place
+instead of three. Conceptually cleaner and it fixes §2.2 at the same time; more work, and
+it promotes the index from a relevance dependency to a **correctness** dependency, which
+raises the stakes on the staleness question (Q8).
+
+### ⚠️ Settle the scale numbers before designing
+
+The figures in the code disagree, and the RAM-per-index estimate moves ~6× depending on
+which is right:
+
+| source | figure |
+|---|---|
+| `memdb_strip.go:14`, `memdb_warmup.go:61` | **392K-book** production library |
+| `pebble_store.go:689`, `memdb_reads.go:585` | **~68K** books scanned unfiltered |
+| `memdb_summaries.go:18` | **~38K** primary rows |
+
+These are probably counting different things (all book rows vs primary versions vs
+book_files), or one is stale. **Resolve this first** — it is the single input that most
+changes the design.
+
+### Where this leaves the recommendation
+
+Unchanged in order, sharper in content:
+
+1. Client sends filters and `sort_by`; debounce the box (§2.1, §2.3). Hours.
+2. **Push filters AND sort into the query so both are applied before pagination.** This is
+   the one piece of real engineering, and it is what removes the full-set materialise.
+3. Delete the client-side library sort and restore the sort control.
+
+The frontend keeps what it should: tracklists, tag clouds, metadata candidates — complete
+small sets it already holds. The rule stays *paginated slice → server; complete set in hand
+→ client.* "Sorting done by Go" should mean **Go never builds that slice at all**, not "Go
+sorts a 38K-row slice per request."
+
+### Open questions for the spec
+
+- **Secondary sorted indexes, or Bleve does the sorting?** Both remove the materialise;
+  they differ in blast radius and in how much they couple correctness to the index.
+- **Which sort fields actually matter?** Every one costs index memory. "All of them" is the
+  expensive answer, and probably nobody sorts by publisher.
+- **Which scale figure is real?** See the table above.
 
 ---
 
