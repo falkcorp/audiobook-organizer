@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.20.0 -->
+<!-- version: 10.21.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-08-09 -->
 
@@ -14,7 +14,45 @@ into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
 
-- [ ] **Nothing runs the e2e suite automatically — wire it into CI.** Found
+- [x] **DONE 2026-08-09 — the e2e suite runs in CI and BLOCKS on every trigger.**
+      `continue-on-error: false`, `pull_request` trigger live with its paths filter
+      (#2258). A change that breaks the browser suite can no longer merge.
+
+      **Final state, measured on the real ubuntu runner — not locally:**
+
+      | configuration | result |
+      |---|---|
+      | chromium (PR path) | **272 passed / 0 failed / 8 skipped** |
+      | chromium + webkit | **544 passed / 0 failed / 16 skipped** |
+
+      Baseline was 146 failed / 138 passed of 288 chromium tests. 26 PRs,
+      #2224–#2258.
+
+      **The three sub-items in the original entry are all closed:**
+
+      1. ~~Establish the real number with a full-output run~~ — done; it was 146, not
+         the ~4 the fragment guessed.
+      2. ~~Triage the failures~~ — done, plus **eleven product regressions** found that
+         were not test problems (audit:
+         `docs/audits/2026-08-09-e2e-repair-and-ui-regressions.md`).
+      3. ~~Flip `continue-on-error` off~~ — done, together with restoring the
+         `pull_request` trigger, exactly as the entry required.
+
+      **⚠️ The CI-only failures were ALL environmental, not product defects** — and two
+      were filed as product bugs before measurement said otherwise:
+      worker contention starving MUI transitions (`workers: 1` on CI), a shared 30s
+      timeout too tight for webkit (its own 60s budget), and visual goldens stored as
+      **Git LFS pointers** no runner could decode. That last one meant the visual test
+      could never have passed on CI, for either browser.
+
+      **🚨 "Green locally" ≠ green on CI.** The suite was 0-failing on macOS while CI
+      had 179 failures. `conclusion: success` on that workflow meant nothing while
+      `continue-on-error` was true. Dispatch
+      `gh workflow run e2e.yml --ref <branch> -f projects=chromium` and read the counts.
+
+      ---
+
+      **Original entry, for the record.** Found
       2026-08-08 while adding sidebar-filter coverage. `grep -rl
       "test-e2e\|test:e2e\|playwright test" .github/workflows/` returns
       **nothing**. The suite exists, is maintained (43 specs were repaired
@@ -70,7 +108,7 @@ into one of the curated sections below, is a normal direct edit.
       unless the server is un-bootstrapped. **Nothing was deleted or silently
       skipped.** Full audit with file:line evidence:
       `docs/audits/2026-08-09-e2e-repair-and-ui-regressions.md`.
-      Sub-item 3 (flip `continue-on-error` off) remains — broken out below.
+      ✅ Sub-item 3 (flip `continue-on-error` off) is now DONE too — #2258.
 
       **The webkit tail was not what it looked like.** 3 of the 4 were a
       Playwright/webkit harness artifact, not a product defect: its synthesised
