@@ -1,9 +1,32 @@
 <!-- file: todo.d/20260809-three-linux-only-e2e-failures-block-ci-gate.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 2.0.0 -->
 <!-- guid: 6b2e9047-3d51-4a8c-b7f0-8e14c5920fda -->
 <!-- last-edited: 2026-08-09 -->
 
-- [ ] **Three linux-only e2e failures block flipping `continue-on-error` off.** Measured
+- [x] **RESOLVED — all three fixed; the PR gate now blocks.** Superseded by
+      `todo.d/20260809-webkit-scan-import-drawer-backdrop.md`, which tracks the single
+      remaining webkit failure. Kept for the causes, which were all different.
+
+      **Outcome 2026-08-09, measured on the real runner:**
+
+      | configuration | before | after |
+      |---|---|---|
+      | chromium (PR path) | 269 passed / 3 failed | **272 passed / 0 failed / 8 skipped** |
+      | chromium + webkit | not measured | **543 passed / 1 failed / 16 skipped** |
+
+      | # | blocker | resolution |
+      |---|---|---|
+      | 1 | missing linux visual golden | Generated for BOTH engines in the Playwright linux image (#2250, #2251). Also found the goldens were **Git LFS pointers** — `*.png filter=lfs` meant CI checked out a text pointer and Playwright reported "Could not decode expected image as PNG", so the test could never have passed on CI for either browser |
+      | 2 | `library-browser` click timeout | **Worker contention**, not a defect. `workers: 1` on CI (#2249) |
+      | 3 | `scan-import-organize` click timeout | Same cause; fixed on chromium by the same change. **Persists on webkit** → the successor fragment |
+
+      `pull_request` trigger restored and the job made blocking on that path;
+      `continue-on-error` is now conditional so the unproven both-engine configuration is
+      not handed a green light it has not earned.
+
+      ---
+
+      **Original entry, for the record.** Measured
       2026-08-09 by dispatching the E2E workflow against current `main` — not inferred
       from the nightly, which was stale.
 
