@@ -37,11 +37,12 @@ name: E2E
 #   chromium (the PR path)   272 passed /  0 failed /  8 skipped   <- blocking
 #   chromium + webkit        543 passed /  1 failed / 16 skipped   <- not blocking
 #
-# Hence the conditional continue-on-error on the job: the configuration that is
-# PROVEN green blocks, and the one that is not stays advisory rather than being
-# handed a green light it has not earned. See
-# todo.d/20260809-webkit-scan-import-drawer-backdrop.md for the single
-# remaining webkit failure.
+# Both configurations are now green on the real runner, so the job blocks on
+# every trigger. The webkit tail was closed by giving webkit its own 60s
+# per-test budget (chromium keeps 30s): webkit had a POPULATION of tests
+# sitting close to the shared limit, and roughly one lost per run — two
+# consecutive runs scored an identical 543/1/16 while failing DIFFERENT tests
+# in different spec files.
 #
 on:
   pull_request:
@@ -87,21 +88,24 @@ jobs:
     # value is still real — the failures are now VISIBLE on every PR instead of
     # invisible for four months, which is the problem this job exists to solve.
     #
-    # BLOCKING on pull_request, advisory elsewhere.
+    # BLOCKING, on every trigger.
     #
-    # The PR path runs chromium only and was measured green on the real runner
-    # (272 passed / 0 failed / 8 skipped) before this was enabled, so it now
-    # blocks: a PR can no longer break the suite unnoticed, which is the whole
-    # point of this job.
+    # Measured on the real runner before this was made unconditional:
+    #   chromium (PR path)   272 passed / 0 failed /  8 skipped
+    #   chromium + webkit    544 passed / 0 failed / 16 skipped
     #
-    # The scheduled/dispatch path also runs webkit, where one test still fails
-    # (see the header comment). Making that blocking would attach a red gate to
-    # a known, tracked failure and teach people to ignore it — the exact
-    # dynamic this job exists to prevent. So it stays advisory until webkit is
-    # green, and then this expression becomes a plain `false`.
+    # This was `true` while the suite was ~50% red, then
+    # `${{ github.event_name != 'pull_request' }}` while chromium was green and
+    # webkit still had one failure per run. Both configurations are now green,
+    # so the exception is gone.
     #
-    # Do not flip it silently, and do not delete this job to make CI quiet.
-    continue-on-error: ${{ github.event_name != 'pull_request' }}
+    # Do not set this back to `true` to quiet a red run, and do not delete this
+    # job. A red result here means the browser suite is broken; that is the
+    # signal, not the problem. If the suite becomes unreliable rather than
+    # wrong, fix the reliability — the 2026-08-09 causes were worker
+    # contention, per-engine timeout budgets, and goldens stored as Git LFS
+    # pointers, none of which were product defects.
+    continue-on-error: false
     # A full two-engine run measured ~20 minutes locally; allow generous
     # headroom for a cold CI runner that must also build the Go binary.
     timeout-minutes: 45
