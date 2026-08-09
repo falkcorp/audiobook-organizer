@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-08-09-the-half-red-safety-net-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 0d4f8a91-6c27-4e35-b8d0-51a97c3e2f46 -->
 <!-- last-edited: 2026-08-09 -->
 
@@ -78,12 +78,34 @@ are looking at. The one-click "use the value we found online" button on individu
 fields, gone. And two controls that a screen reader cannot describe at all, one of
 which is now the only route to four different actions.
 
+## Update, later the same day: the second browser is green too
+
+The four remaining failures in the second browser engine have been resolved, and the
+whole safety net now passes: **552 tests passing, none failing**, across both browsers.
+
+Three of the four turned out not to be faults in the product at all. The test software
+that pretends to be a person clicking was failing to press a button — the same button,
+in the same place, that works every time when pressed by other means. Establishing that
+took a direct comparison rather than an argument: pressed one way it failed four times
+out of four, pressed the other way it worked six times out of six. Those three tests now
+press the button in a way that works, and they announce it in the log every time they
+have to try twice, so if the situation ever changes it will be visible rather than
+quietly absorbed.
+
+This is worth stating because it had been recorded twice as a defect in the product,
+with confident-looking evidence attached both times, and both times that was wrong. The
+correction is now on the record next to the original claim rather than replacing it.
+
+The fourth failure happened once and has not happened again in over a thousand
+subsequent test runs. It has deliberately **not** been "fixed", because it passes
+whenever it is run on its own — which means nobody has yet established what was actually
+wrong, and changing the test to accept the behaviour would be assuming an answer. It is
+written up, with the frequency measured and the next step recorded, and left honest.
+
 ## What this means going forward
 
-The suite is green, and this time the number was measured the careful way and can
-be repeated: 272 passing, 0 failing, on a clean checkout. Four tests remain failing
-in a second browser engine and are honestly labelled as such rather than quietly
-excluded.
+The suite is green, and the number was measured the careful way and can be repeated:
+**552 passing, 0 failing**, on a clean checkout, across both browsers.
 
 Seven tests are deliberately marked as expected-to-fail, each one attached to a
 real defect above. They are not skipped or deleted — if someone fixes the
