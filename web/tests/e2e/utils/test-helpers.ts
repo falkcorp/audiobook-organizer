@@ -1,9 +1,9 @@
 // file: web/tests/e2e/utils/test-helpers.ts
-// version: 2.12.0
+// version: 2.13.0
 // guid: a1b2c3d4-e5f6-7890-abcd-e1f2a3b4c5d6
 // last-edited: 2026-08-09
 
-import { Page } from '@playwright/test';
+import { expect, Page } from '@playwright/test';
 
 // Re-export setup mode helpers for convenience
 export {
@@ -361,8 +361,8 @@ export async function mockEventSource(page: Page) {
     }
     (window as unknown as { EventSource: typeof EventSource }).EventSource =
       MockEventSource as unknown as typeof EventSource;
-    (window as unknown as { __mockEventSource: typeof MockEventSource })
-      .__mockEventSource = MockEventSource;
+    (window as unknown as { __mockEventSource: typeof MockEventSource }).__mockEventSource =
+      MockEventSource;
   });
 }
 
@@ -383,10 +383,7 @@ export async function skipWelcomeWizard(page: Page) {
  * @param page - Playwright test page object
  * @param options - Mock API options
  */
-export async function setupMockApiRoutes(
-  page: Page,
-  options: MockApiOptions = {}
-) {
+export async function setupMockApiRoutes(page: Page, options: MockApiOptions = {}) {
   // Store mock state in page context so it persists
   const mockState = {
     books: options.books || [],
@@ -498,9 +495,7 @@ export async function setupMockApiRoutes(
 
     if (pathname === '/api/v1/auth/setup' && method === 'POST') {
       if (mockState.auth.has_users) {
-        return route.fulfill(
-          jsonResponse({ error: 'initial setup already completed' }, 409)
-        );
+        return route.fulfill(jsonResponse({ error: 'initial setup already completed' }, 409));
       }
 
       const body =
@@ -513,10 +508,7 @@ export async function setupMockApiRoutes(
       const password = body.password || '';
       if (!username || password.length < 8) {
         return route.fulfill(
-          jsonResponse(
-            { error: 'username and password (min 8 chars) are required' },
-            400
-          )
+          jsonResponse({ error: 'username and password (min 8 chars) are required' }, 400)
         );
       }
 
@@ -536,31 +528,28 @@ export async function setupMockApiRoutes(
       mockState.auth.bootstrap_ready = false;
 
       return route.fulfill(
-        jsonResponse({
-          message: 'admin user created',
-          user: mockState.auth.currentUser,
-        }, 201)
+        jsonResponse(
+          {
+            message: 'admin user created',
+            user: mockState.auth.currentUser,
+          },
+          201
+        )
       );
     }
 
     if (pathname === '/api/v1/auth/login' && method === 'POST') {
-      const body =
-        (request.postDataJSON() as { username?: string; password?: string }) ||
-        {};
+      const body = (request.postDataJSON() as { username?: string; password?: string }) || {};
       const username = (body.username || '').trim();
       const password = body.password || '';
       if (!username || !password) {
-        return route.fulfill(
-          jsonResponse({ error: 'username and password are required' }, 400)
-        );
+        return route.fulfill(jsonResponse({ error: 'username and password are required' }, 400));
       }
       if (
         username !== mockState.auth.login_username ||
         password !== mockState.auth.login_password
       ) {
-        return route.fulfill(
-          jsonResponse({ error: 'invalid credentials' }, 401)
-        );
+        return route.fulfill(jsonResponse({ error: 'invalid credentials' }, 401));
       }
 
       if (!mockState.auth.currentUser) {
@@ -646,14 +635,11 @@ export async function setupMockApiRoutes(
 
     // System status
     if (pathname === '/api/v1/system/status') {
-      const librarySize = mockState.books.reduce(
-        (sum, book) => sum + (book.file_size || 0),
-        0
-      );
+      const librarySize = mockState.books.reduce((sum, book) => sum + (book.file_size || 0), 0);
       const totalBooks = mockState.books.length;
       const diskTotal =
-        (mockState.systemStatus as { disk_total_bytes?: number })
-          .disk_total_bytes || 500 * 1024 * 1024 * 1024;
+        (mockState.systemStatus as { disk_total_bytes?: number }).disk_total_bytes ||
+        500 * 1024 * 1024 * 1024;
 
       // The frontend api layer (getSystemStatus) unwraps a { data: ... }
       // envelope; keep top-level fields too for any legacy consumers.
@@ -667,32 +653,31 @@ export async function setupMockApiRoutes(
         },
         import_paths: {
           folder_count: mockState.importPaths.length,
-          book_count: mockState.books.filter((b: Record<string, unknown>) => b.library_state === 'import').length,
+          book_count: mockState.books.filter(
+            (b: Record<string, unknown>) => b.library_state === 'import'
+          ).length,
         },
         operations: { recent: (mockState.operations as { history?: unknown[] }).history || [] },
         library_book_count: totalBooks,
-        import_book_count: mockState.books.filter((b: Record<string, unknown>) => b.library_state === 'import').length,
+        import_book_count: mockState.books.filter(
+          (b: Record<string, unknown>) => b.library_state === 'import'
+        ).length,
         total_book_count: totalBooks,
         library_size_bytes: librarySize,
         total_size_bytes: librarySize,
         disk_used_bytes: librarySize,
         disk_free_bytes: Math.max(0, diskTotal - librarySize),
       };
-      return route.fulfill(
-        jsonResponse({ ...statusPayload, data: statusPayload })
-      );
+      return route.fulfill(jsonResponse({ ...statusPayload, data: statusPayload }));
     }
 
     // System storage (statfs of the data volume) — the Dashboard prefers this
     // endpoint over system/status disk fields, so mock it from the same state.
     if (pathname === '/api/v1/system/storage') {
-      const librarySize = mockState.books.reduce(
-        (sum, book) => sum + (book.file_size || 0),
-        0
-      );
+      const librarySize = mockState.books.reduce((sum, book) => sum + (book.file_size || 0), 0);
       const diskTotal =
-        (mockState.systemStatus as { disk_total_bytes?: number })
-          .disk_total_bytes || 500 * 1024 * 1024 * 1024;
+        (mockState.systemStatus as { disk_total_bytes?: number }).disk_total_bytes ||
+        500 * 1024 * 1024 * 1024;
       const storagePayload = {
         path: '/library',
         total_bytes: diskTotal,
@@ -700,22 +685,24 @@ export async function setupMockApiRoutes(
         free_bytes: Math.max(0, diskTotal - librarySize),
         percent_used: diskTotal > 0 ? (librarySize / diskTotal) * 100 : 0,
       };
-      return route.fulfill(
-        jsonResponse({ ...storagePayload, data: storagePayload })
-      );
+      return route.fulfill(jsonResponse({ ...storagePayload, data: storagePayload }));
     }
 
     // Config endpoint
     if (pathname === '/api/v1/config') {
       if (method === 'GET') {
-        const t = maybeTimeout(mockState.failures.getConfig); if (t) return t;
-        const f = maybeFailStatus(mockState.failures.getConfig, 'Failed to fetch config'); if (f) return f;
+        const t = maybeTimeout(mockState.failures.getConfig);
+        if (t) return t;
+        const f = maybeFailStatus(mockState.failures.getConfig, 'Failed to fetch config');
+        if (f) return f;
         const maskedConfig = { ...mockState.config };
         return route.fulfill(jsonResponse({ config: maskedConfig }));
       }
       if (method === 'PUT') {
-        const t = maybeTimeout(mockState.failures.updateConfig); if (t) return t;
-        const f = maybeFailStatus(mockState.failures.updateConfig, 'Failed to update config'); if (f) return f;
+        const t = maybeTimeout(mockState.failures.updateConfig);
+        if (t) return t;
+        const f = maybeFailStatus(mockState.failures.updateConfig, 'Failed to update config');
+        if (f) return f;
         try {
           const body = route.request().postDataJSON();
           if (body && typeof body === 'object') {
@@ -730,7 +717,8 @@ export async function setupMockApiRoutes(
 
     // Backup endpoints - CRITICAL for backup-restore tests
     if (pathname === '/api/v1/backup/list') {
-      const f = maybeFailStatus(mockState.failures.listBackups, 'Failed to list backups'); if (f) return f;
+      const f = maybeFailStatus(mockState.failures.listBackups, 'Failed to list backups');
+      if (f) return f;
       return route.fulfill(
         jsonResponse({
           backups: mockState.backups,
@@ -740,7 +728,8 @@ export async function setupMockApiRoutes(
     }
 
     if (pathname === '/api/v1/backup/create' && method === 'POST') {
-      const f = maybeFailStatus(mockState.failures.createBackup, 'Failed to create backup'); if (f) return f;
+      const f = maybeFailStatus(mockState.failures.createBackup, 'Failed to create backup');
+      if (f) return f;
       const filename = `backup-${Date.now()}.db.gz`;
       const created = {
         filename,
@@ -754,17 +743,21 @@ export async function setupMockApiRoutes(
 
     if (pathname === '/api/v1/backup/restore' && method === 'POST') {
       if (mockState.failures.restoreBackup) {
-        return route.fulfill(jsonResponse({ error: 'Backup file is corrupt.' }, mockState.failures.restoreBackup as number));
+        return route.fulfill(
+          jsonResponse(
+            { error: 'Backup file is corrupt.' },
+            mockState.failures.restoreBackup as number
+          )
+        );
       }
       return route.fulfill(jsonResponse({ message: 'Restored' }));
     }
 
     if (pathname.startsWith('/api/v1/backup/') && method === 'DELETE') {
-      const f = maybeFailStatus(mockState.failures.deleteBackup, 'Failed to delete backup'); if (f) return f;
+      const f = maybeFailStatus(mockState.failures.deleteBackup, 'Failed to delete backup');
+      if (f) return f;
       const filename = pathname.split('/').pop() || '';
-      mockState.backups = mockState.backups.filter(
-        (item) => item.filename !== filename
-      );
+      mockState.backups = mockState.backups.filter((item) => item.filename !== filename);
       return route.fulfill(jsonResponse({ message: 'Deleted' }));
     }
 
@@ -772,9 +765,7 @@ export async function setupMockApiRoutes(
     if (pathname === '/api/v1/import-paths' && method === 'GET') {
       // api.getImportPaths reads `body.data.importPaths`.
       const importPaths = { importPaths: mockState.importPaths };
-      return route.fulfill(
-        jsonResponse({ ...importPaths, data: importPaths })
-      );
+      return route.fulfill(jsonResponse({ ...importPaths, data: importPaths }));
     }
 
     if (pathname === '/api/v1/import-paths' && method === 'POST') {
@@ -782,10 +773,10 @@ export async function setupMockApiRoutes(
       try {
         const body = route.request().postDataJSON();
         if (body?.path) postedPath = body.path;
-      } catch { /* ignore */ }
-      const nextId =
-        mockState.importPaths.reduce((max, item) => Math.max(max, item.id), 0) +
-        1;
+      } catch {
+        /* ignore */
+      }
+      const nextId = mockState.importPaths.reduce((max, item) => Math.max(max, item.id), 0) + 1;
       const newPath = {
         id: nextId,
         path: postedPath,
@@ -793,9 +784,7 @@ export async function setupMockApiRoutes(
       };
       mockState.importPaths.push(newPath);
       // api.addImportPath reads `body.data.importPath ?? body.data`.
-      return route.fulfill(
-        jsonResponse({ ...newPath, data: { importPath: newPath } }, 201)
-      );
+      return route.fulfill(jsonResponse({ ...newPath, data: { importPath: newPath } }, 201));
     }
 
     // Books endpoints.
@@ -812,8 +801,10 @@ export async function setupMockApiRoutes(
     // Param names mirror src/services/api.ts getBooks() exactly; if that
     // function gains a param, add it here or tests will silently over-match.
     if (pathname === '/api/v1/audiobooks' && method === 'GET') {
-      const t = maybeTimeout(mockState.failures.getBooks); if (t) return t;
-      const f = maybeFailStatus(mockState.failures.getBooks, 'Server error occurred.'); if (f) return f;
+      const t = maybeTimeout(mockState.failures.getBooks);
+      if (t) return t;
+      const f = maybeFailStatus(mockState.failures.getBooks, 'Server error occurred.');
+      if (f) return f;
 
       const q = url.searchParams;
       const str = (b: Record<string, unknown>, k: string) => String(b[k] ?? '').toLowerCase();
@@ -832,13 +823,17 @@ export async function setupMockApiRoutes(
       }
 
       const libraryState = q.get('library_state');
-      if (libraryState) rows = rows.filter((b) => str(b, 'library_state') === libraryState.toLowerCase());
+      if (libraryState)
+        rows = rows.filter((b) => str(b, 'library_state') === libraryState.toLowerCase());
 
       const tag = q.get('tag');
       if (tag) {
         rows = rows.filter((b) => {
           const tags = b.tags;
-          return Array.isArray(tags) && tags.map((x) => String(x).toLowerCase()).includes(tag.toLowerCase());
+          return (
+            Array.isArray(tags) &&
+            tags.map((x) => String(x).toLowerCase()).includes(tag.toLowerCase())
+          );
         });
       }
 
@@ -847,7 +842,11 @@ export async function setupMockApiRoutes(
       const filtersRaw = q.get('filters');
       if (filtersRaw) {
         try {
-          const parsed = JSON.parse(filtersRaw) as Array<{ field: string; value: string; negated?: boolean }>;
+          const parsed = JSON.parse(filtersRaw) as Array<{
+            field: string;
+            value: string;
+            negated?: boolean;
+          }>;
           // Library.tsx's buildFieldFilters() emits the FILTER name ('author',
           // 'series'), which is not the book's field name ('author_name',
           // 'series_name'). Without this mapping str(b, 'author') was always ''
@@ -917,9 +916,15 @@ export async function setupMockApiRoutes(
     }
 
     if (pathname === '/api/v1/audiobooks/search' && method === 'GET') {
-      const t = maybeTimeout(mockState.failures.searchBooks); if (t) return t;
-      const f = maybeFailStatus(mockState.failures.searchBooks, 'Failed to search books'); if (f) return f;
-      const query = (url.searchParams.get('q') || url.searchParams.get('search') || '').toLowerCase();
+      const t = maybeTimeout(mockState.failures.searchBooks);
+      if (t) return t;
+      const f = maybeFailStatus(mockState.failures.searchBooks, 'Failed to search books');
+      if (f) return f;
+      const query = (
+        url.searchParams.get('q') ||
+        url.searchParams.get('search') ||
+        ''
+      ).toLowerCase();
       const limit = parseInt(url.searchParams.get('limit') || '50', 10);
       const filtered = mockState.books.filter((b: Record<string, unknown>) => {
         const title = String(b.title || '').toLowerCase();
@@ -927,10 +932,12 @@ export async function setupMockApiRoutes(
         const series = String(b.series_name || '').toLowerCase();
         return title.includes(query) || author.includes(query) || series.includes(query);
       });
-      return route.fulfill(jsonResponse({
-        items: filtered.slice(0, limit),
-        total: filtered.length,
-      }));
+      return route.fulfill(
+        jsonResponse({
+          items: filtered.slice(0, limit),
+          total: filtered.length,
+        })
+      );
     }
 
     // Page-level data for the Dedup page (pages/BookDedup.tsx). These are NOT
@@ -957,15 +964,36 @@ export async function setupMockApiRoutes(
 
     // Author dedup endpoints
     if (pathname === '/api/v1/authors/duplicates' && method === 'GET') {
-      const dedup = mockState.authorDedup as { groups: MockAuthorDedupGroup[]; needs_refresh?: boolean };
-      return route.fulfill(jsonResponse({ groups: dedup.groups, needs_refresh: dedup.needs_refresh || false }));
+      const dedup = mockState.authorDedup as {
+        groups: MockAuthorDedupGroup[];
+        needs_refresh?: boolean;
+      };
+      return route.fulfill(
+        jsonResponse({ groups: dedup.groups, needs_refresh: dedup.needs_refresh || false })
+      );
     }
     if (pathname === '/api/v1/authors/duplicates/refresh' && method === 'POST') {
-      return route.fulfill(jsonResponse({ id: 'dedup-refresh-1', type: 'author-dedup-scan', status: 'running', progress: 0, total: 100, message: 'Starting...' }));
+      return route.fulfill(
+        jsonResponse({
+          id: 'dedup-refresh-1',
+          type: 'author-dedup-scan',
+          status: 'running',
+          progress: 0,
+          total: 100,
+          message: 'Starting...',
+        })
+      );
     }
     if (pathname === '/api/v1/authors/merge' && method === 'POST') {
       const body = request.postDataJSON();
-      return route.fulfill(jsonResponse({ id: 'merge-op-1', type: 'author-merge', status: 'completed', message: `Merged ${(body?.merge_ids?.length || 0)} authors` }));
+      return route.fulfill(
+        jsonResponse({
+          id: 'merge-op-1',
+          type: 'author-merge',
+          status: 'completed',
+          message: `Merged ${body?.merge_ids?.length || 0} authors`,
+        })
+      );
     }
     if (pathname.match(/\/api\/v1\/authors\/\d+\/rename/) && method === 'PUT') {
       return route.fulfill(jsonResponse({ message: 'Author renamed' }));
@@ -974,51 +1002,131 @@ export async function setupMockApiRoutes(
       return route.fulfill(jsonResponse({ message: 'Author renamed' }));
     }
     if (pathname.match(/\/api\/v1\/authors\/\d+\/split/) && method === 'POST') {
-      return route.fulfill(jsonResponse({ authors: [{ id: 100, name: 'Author A' }, { id: 101, name: 'Author B' }], books_updated: 3 }));
+      return route.fulfill(
+        jsonResponse({
+          authors: [
+            { id: 100, name: 'Author A' },
+            { id: 101, name: 'Author B' },
+          ],
+          books_updated: 3,
+        })
+      );
     }
     if (pathname.match(/\/api\/v1\/authors\/\d+\/resolve-production/) && method === 'POST') {
-      return route.fulfill(jsonResponse({
-        operation: { id: 'resolve-prod-1', type: 'resolve-production-author', status: 'running', progress: 0, total: 100, message: 'Resolving...' },
-      }));
+      return route.fulfill(
+        jsonResponse({
+          operation: {
+            id: 'resolve-prod-1',
+            type: 'resolve-production-author',
+            status: 'running',
+            progress: 0,
+            total: 100,
+            message: 'Resolving...',
+          },
+        })
+      );
     }
     if (pathname.match(/\/api\/v1\/authors\/\d+\/reclassify-as-narrator/) && method === 'POST') {
       return route.fulfill(jsonResponse({ message: 'Reclassified', books_updated: 1 }));
     }
     if (pathname === '/api/v1/authors/duplicates/ai-review' && method === 'POST') {
-      return route.fulfill(jsonResponse({ id: 'ai-review-1', type: 'ai-author-review', status: 'running', progress: 0, total: 100, message: 'Starting AI review...' }, 202));
+      return route.fulfill(
+        jsonResponse(
+          {
+            id: 'ai-review-1',
+            type: 'ai-author-review',
+            status: 'running',
+            progress: 0,
+            total: 100,
+            message: 'Starting AI review...',
+          },
+          202
+        )
+      );
     }
     if (pathname === '/api/v1/authors/duplicates/ai-review/apply' && method === 'POST') {
-      return route.fulfill(jsonResponse({ id: 'ai-apply-1', type: 'ai-author-merge-apply', status: 'running', progress: 0, total: 100, message: 'Applying...' }, 202));
+      return route.fulfill(
+        jsonResponse(
+          {
+            id: 'ai-apply-1',
+            type: 'ai-author-merge-apply',
+            status: 'running',
+            progress: 0,
+            total: 100,
+            message: 'Applying...',
+          },
+          202
+        )
+      );
     }
     if (pathname.match(/\/api\/v1\/operations\/[^/]+\/result/) && method === 'GET') {
-      return route.fulfill(jsonResponse({
-        result_data: [
-          { group_index: 0, action: 'merge', canonical_name: 'Test Author', reason: 'Same author', confidence: 'high' },
-        ],
-      }));
+      return route.fulfill(
+        jsonResponse({
+          result_data: [
+            {
+              group_index: 0,
+              action: 'merge',
+              canonical_name: 'Test Author',
+              reason: 'Same author',
+              confidence: 'high',
+            },
+          ],
+        })
+      );
     }
 
     // Series dedup endpoints
     if (pathname === '/api/v1/series/duplicates' && method === 'GET') {
-      const dedup = mockState.seriesDedup as { groups: MockSeriesDupGroup[]; total_series?: number };
+      const dedup = mockState.seriesDedup as {
+        groups: MockSeriesDupGroup[];
+        total_series?: number;
+      };
       // Transform MockSeriesDupGroup to the real SeriesDupGroup shape
       const groups = (dedup.groups || []).map((g) => ({
         name: g.canonical.name,
         count: g.book_count,
         series: [
-          { id: g.canonical.id, name: g.canonical.name, created_at: new Date().toISOString(), books: (g.books || []) },
-          ...g.variants.map((v) => ({ id: v.id, name: v.name, created_at: new Date().toISOString(), books: [] })),
+          {
+            id: g.canonical.id,
+            name: g.canonical.name,
+            created_at: new Date().toISOString(),
+            books: g.books || [],
+          },
+          ...g.variants.map((v) => ({
+            id: v.id,
+            name: v.name,
+            created_at: new Date().toISOString(),
+            books: [],
+          })),
         ],
         suggested_name: g.canonical.name,
         match_type: 'fuzzy',
       }));
-      return route.fulfill(jsonResponse({ groups, count: groups.length, total_series: dedup.total_series || 0 }));
+      return route.fulfill(
+        jsonResponse({ groups, count: groups.length, total_series: dedup.total_series || 0 })
+      );
     }
     if (pathname === '/api/v1/series/duplicates/refresh' && method === 'POST') {
-      return route.fulfill(jsonResponse({ id: 'series-refresh-1', type: 'series-dedup-scan', status: 'running', progress: 0, total: 100, message: 'Starting...' }));
+      return route.fulfill(
+        jsonResponse({
+          id: 'series-refresh-1',
+          type: 'series-dedup-scan',
+          status: 'running',
+          progress: 0,
+          total: 100,
+          message: 'Starting...',
+        })
+      );
     }
     if (pathname === '/api/v1/series/deduplicate' && method === 'POST') {
-      return route.fulfill(jsonResponse({ id: 'series-merge-1', type: 'series-merge', status: 'completed', message: 'Series merged' }));
+      return route.fulfill(
+        jsonResponse({
+          id: 'series-merge-1',
+          type: 'series-merge',
+          status: 'completed',
+          message: 'Series merged',
+        })
+      );
     }
     if (pathname.match(/\/api\/v1\/series\/\d+\/name/) && method === 'PUT') {
       return route.fulfill(jsonResponse({ message: 'Series renamed' }));
@@ -1027,19 +1135,59 @@ export async function setupMockApiRoutes(
     // Dedup validation
     if (pathname === '/api/v1/dedup/validate' && method === 'POST') {
       const body = request.postDataJSON();
-      return route.fulfill(jsonResponse({ results: [{ source: 'openlibrary', title: body?.query || 'Test', author: 'Test Author' }], query: body?.query || '', type: body?.type || 'author' }));
+      return route.fulfill(
+        jsonResponse({
+          results: [{ source: 'openlibrary', title: body?.query || 'Test', author: 'Test Author' }],
+          query: body?.query || '',
+          type: body?.type || 'author',
+        })
+      );
     }
 
     // System tasks (scheduler)
     if (pathname === '/api/v1/system/tasks' && method === 'GET') {
-      return route.fulfill(jsonResponse({ tasks: [
-        { name: 'library_scan', description: 'Scan library folders', category: 'library', enabled: true, interval_minutes: 0, run_on_startup: false },
-        { name: 'dedup_refresh', description: 'Refresh author & series dedup cache', category: 'maintenance', enabled: true, interval_minutes: 360, run_on_startup: false },
-        { name: 'resolve_production_authors', description: 'Resolve real authors for production companies', category: 'maintenance', enabled: false, interval_minutes: 0, run_on_startup: false },
-      ] }));
+      return route.fulfill(
+        jsonResponse({
+          tasks: [
+            {
+              name: 'library_scan',
+              description: 'Scan library folders',
+              category: 'library',
+              enabled: true,
+              interval_minutes: 0,
+              run_on_startup: false,
+            },
+            {
+              name: 'dedup_refresh',
+              description: 'Refresh author & series dedup cache',
+              category: 'maintenance',
+              enabled: true,
+              interval_minutes: 360,
+              run_on_startup: false,
+            },
+            {
+              name: 'resolve_production_authors',
+              description: 'Resolve real authors for production companies',
+              category: 'maintenance',
+              enabled: false,
+              interval_minutes: 0,
+              run_on_startup: false,
+            },
+          ],
+        })
+      );
     }
     if (pathname.match(/\/api\/v1\/system\/tasks\/[^/]+\/run/) && method === 'POST') {
-      return route.fulfill(jsonResponse({ id: 'task-run-1', type: 'task', status: 'running', progress: 0, total: 100, message: 'Running...' }));
+      return route.fulfill(
+        jsonResponse({
+          id: 'task-run-1',
+          type: 'task',
+          status: 'running',
+          progress: 0,
+          total: 100,
+          message: 'Running...',
+        })
+      );
     }
 
     // Audiobook versions sub-endpoint
@@ -1053,9 +1201,7 @@ export async function setupMockApiRoutes(
         // api.getBookVersions reads `body.data.versions`.
         return route.fulfill(jsonResponse({ versions, data: { versions } }));
       }
-      return route.fulfill(
-        jsonResponse({ versions: [], data: { versions: [] } })
-      );
+      return route.fulfill(jsonResponse({ versions: [], data: { versions: [] } }));
     }
 
     if (pathname.match(/\/api\/v1\/audiobooks\/[^/]+\/versions$/) && method === 'POST') {
@@ -1067,7 +1213,12 @@ export async function setupMockApiRoutes(
         const groupId = book.version_group_id || `group-${Date.now()}`;
         // Update both books to share group
         mockState.books = mockState.books.map((b: Record<string, unknown>) => {
-          if (b.id === bookId) return { ...b, version_group_id: groupId, is_primary_version: b.is_primary_version ?? true };
+          if (b.id === bookId)
+            return {
+              ...b,
+              version_group_id: groupId,
+              is_primary_version: b.is_primary_version ?? true,
+            };
           if (b.id === otherId) return { ...b, version_group_id: groupId };
           return b;
         }) as typeof mockState.books;
@@ -1085,14 +1236,18 @@ export async function setupMockApiRoutes(
         const groupId = book.version_group_id;
         // Remove the other book from the group
         mockState.books = mockState.books.map((b: Record<string, unknown>) => {
-          if (b.id === otherId) return { ...b, version_group_id: undefined, is_primary_version: false };
+          if (b.id === otherId)
+            return { ...b, version_group_id: undefined, is_primary_version: false };
           return b;
         }) as typeof mockState.books;
         // If only one book left in group, remove group from it too
-        const remaining = mockState.books.filter((b: Record<string, unknown>) => b.version_group_id === groupId);
+        const remaining = mockState.books.filter(
+          (b: Record<string, unknown>) => b.version_group_id === groupId
+        );
         if (remaining.length <= 1) {
           mockState.books = mockState.books.map((b: Record<string, unknown>) => {
-            if (b.version_group_id === groupId) return { ...b, version_group_id: undefined, is_primary_version: false };
+            if (b.version_group_id === groupId)
+              return { ...b, version_group_id: undefined, is_primary_version: false };
             return b;
           }) as typeof mockState.books;
         }
@@ -1104,19 +1259,21 @@ export async function setupMockApiRoutes(
     if (pathname.match(/\/api\/v1\/audiobooks\/[^/]+\/tags$/) && method === 'GET') {
       const bookId = pathname.split('/')[4];
       const book = mockState.books.find((b: Record<string, unknown>) => b.id === bookId);
-      return route.fulfill(jsonResponse({
-        tags: {},
-        media: [],
-        media_info: {
-          codec: book?.codec || 'M4B',
-          bitrate: book?.bitrate || 128,
-          sample_rate: book?.sample_rate || 44100,
-          channels: 2,
-          bit_depth: 16,
-        },
-        file_count: 1,
-        duration: book?.duration || 0,
-      }));
+      return route.fulfill(
+        jsonResponse({
+          tags: {},
+          media: [],
+          media_info: {
+            codec: book?.codec || 'M4B',
+            bitrate: book?.bitrate || 128,
+            sample_rate: book?.sample_rate || 44100,
+            channels: 2,
+            bit_depth: 16,
+          },
+          file_count: 1,
+          duration: book?.duration || 0,
+        })
+      );
     }
 
     // Set primary version
@@ -1139,26 +1296,30 @@ export async function setupMockApiRoutes(
       const bookId = pathname.split('/')[4];
       const book = mockState.books.find((b: Record<string, unknown>) => b.id === bookId);
       if (book?.fetch_metadata_error) {
-        const delayMs = (book as Record<string, unknown>).fetch_metadata_delay_ms as number || 0;
-        if (delayMs > 0) await new Promise(resolve => setTimeout(resolve, delayMs));
+        const delayMs = ((book as Record<string, unknown>).fetch_metadata_delay_ms as number) || 0;
+        if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
         return route.fulfill(jsonResponse({ error: 'Metadata fetch failed' }, 500));
       }
-      const delayMs = (book as Record<string, unknown>)?.fetch_metadata_delay_ms as number || 0;
-      if (delayMs > 0) await new Promise(resolve => setTimeout(resolve, delayMs));
+      const delayMs = ((book as Record<string, unknown>)?.fetch_metadata_delay_ms as number) || 0;
+      if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
       if (book) {
         Object.assign(book, {
           publisher: book.publisher || 'Test Publisher',
           description: book.description || 'Updated metadata',
         });
       }
-      return route.fulfill(jsonResponse({ message: 'Metadata fetched', book: book || {}, source: 'mock' }));
+      return route.fulfill(
+        jsonResponse({ message: 'Metadata fetched', book: book || {}, source: 'mock' })
+      );
     }
 
     // Parse with AI for specific book
     if (pathname.match(/\/api\/v1\/audiobooks\/[^/]+\/parse-with-ai$/) && method === 'POST') {
       const bookId = pathname.split('/')[4];
       const book = mockState.books.find((b: Record<string, unknown>) => b.id === bookId);
-      return route.fulfill(jsonResponse({ message: 'Parsed', book: book || {}, confidence: 'high' }));
+      return route.fulfill(
+        jsonResponse({ message: 'Parsed', book: book || {}, confidence: 'high' })
+      );
     }
 
     // Restore soft-deleted book
@@ -1185,7 +1346,8 @@ export async function setupMockApiRoutes(
 
     // Operations endpoints
     if (pathname === '/api/v1/operations/active' && method === 'GET') {
-      const f = maybeFailStatus(mockState.failures.operationsActive, 'Failed to fetch operations'); if (f) return f;
+      const f = maybeFailStatus(mockState.failures.operationsActive, 'Failed to fetch operations');
+      if (f) return f;
       const active = (mockState.operations as { active?: unknown[] }).active || [];
       return route.fulfill(jsonResponse({ operations: active }));
     }
@@ -1194,8 +1356,7 @@ export async function setupMockApiRoutes(
     // Activity page's "Active Operations" section. api.getOperationTimeline
     // reads `body.data.operations`.
     if (pathname === '/api/v1/operations/timeline' && method === 'GET') {
-      const timeline =
-        (mockState.operations as { timeline?: unknown[] }).timeline || [];
+      const timeline = (mockState.operations as { timeline?: unknown[] }).timeline || [];
       return route.fulfill(jsonResponse({ data: { operations: timeline } }));
     }
 
@@ -1204,10 +1365,14 @@ export async function setupMockApiRoutes(
     if (pathname === '/api/v1/operations/clear-stale' && method === 'POST') {
       const ops = mockState.operations as { timeline?: Array<Record<string, unknown>> };
       const before = (ops.timeline || []).length;
-      const TERMINAL = ['completed', 'failed', 'canceled', 'interrupted_dropped', 'interrupted_restart'];
-      ops.timeline = (ops.timeline || []).filter(
-        (op) => !TERMINAL.includes(String(op.status))
-      );
+      const TERMINAL = [
+        'completed',
+        'failed',
+        'canceled',
+        'interrupted_dropped',
+        'interrupted_restart',
+      ];
+      ops.timeline = (ops.timeline || []).filter((op) => !TERMINAL.includes(String(op.status)));
       const cleared = before - ops.timeline.length;
       return route.fulfill(jsonResponse({ cleared, data: { cleared } }));
     }
@@ -1225,9 +1390,7 @@ export async function setupMockApiRoutes(
     if (pathname === '/api/v1/activity' && method === 'GET') {
       const all = mockState.activity as Array<Record<string, unknown>>;
       const level = url.searchParams.get('level');
-      const filtered = level
-        ? all.filter((entry) => entry.level === level)
-        : all;
+      const filtered = level ? all.filter((entry) => entry.level === level) : all;
       const limit = parseInt(url.searchParams.get('limit') || '25', 10);
       const offset = parseInt(url.searchParams.get('offset') || '0', 10);
       const payload = {
@@ -1254,28 +1417,35 @@ export async function setupMockApiRoutes(
       const history = (mockState.operations as { history?: unknown[] }).history || [];
       const offset = parseInt(url.searchParams.get('offset') || '0', 10);
       const limit = parseInt(url.searchParams.get('limit') || '20', 10);
-      return route.fulfill(jsonResponse({
-        operations: history.slice(offset, offset + limit),
-        total: history.length,
-      }));
+      return route.fulfill(
+        jsonResponse({
+          operations: history.slice(offset, offset + limit),
+          total: history.length,
+        })
+      );
     }
 
     if (pathname.match(/\/api\/v1\/operations\/[^/]+\/status/) && method === 'GET') {
       const opId = pathname.split('/')[4];
-      const active = (mockState.operations as { active?: Array<Record<string, unknown>> }).active || [];
-      const history = (mockState.operations as { history?: Array<Record<string, unknown>> }).history || [];
+      const active =
+        (mockState.operations as { active?: Array<Record<string, unknown>> }).active || [];
+      const history =
+        (mockState.operations as { history?: Array<Record<string, unknown>> }).history || [];
       const op = [...active, ...history].find((o) => o.id === opId);
       if (op) return route.fulfill(jsonResponse(op));
-      return route.fulfill(jsonResponse({
-        id: opId,
-        status: 'completed',
-        progress: 100,
-        type: 'scan',
-      }));
+      return route.fulfill(
+        jsonResponse({
+          id: opId,
+          status: 'completed',
+          progress: 100,
+          type: 'scan',
+        })
+      );
     }
 
     if (pathname.match(/\/api\/v1\/operations\/[^/]+\/logs/) && method === 'GET') {
-      const f = maybeFailStatus(mockState.failures.operationLogs, 'Failed to fetch operation logs'); if (f) return f;
+      const f = maybeFailStatus(mockState.failures.operationLogs, 'Failed to fetch operation logs');
+      if (f) return f;
       const opId = pathname.split('/')[4];
       const logs = (mockState.operations as { logs?: Record<string, unknown[]> }).logs || {};
       return route.fulfill(jsonResponse({ logs: logs[opId] || [], items: logs[opId] || [] }));
@@ -1288,8 +1458,12 @@ export async function setupMockApiRoutes(
 
     if (pathname === '/api/v1/operations/organize' && method === 'POST') {
       let body: Record<string, unknown> = {};
-      try { body = request.postDataJSON() || {}; } catch { /* ignore */ }
-      const bookIds = Array.isArray(body.book_ids) ? body.book_ids as string[] : [];
+      try {
+        body = request.postDataJSON() || {};
+      } catch {
+        /* ignore */
+      }
+      const bookIds = Array.isArray(body.book_ids) ? (body.book_ids as string[]) : [];
       let errorBook: Record<string, unknown> | null = null;
       const rootDir = (mockState.config.root_dir || '/library').replace(/\/+$/, '');
       mockState.books = mockState.books.map((b) => {
@@ -1310,14 +1484,22 @@ export async function setupMockApiRoutes(
       }) as typeof mockState.books;
       if (errorBook) {
         const errorOp = {
-          id: 'op-org-1', status: 'error', type: 'organize',
+          id: 'op-org-1',
+          status: 'error',
+          type: 'organize',
           error_message: (errorBook as Record<string, unknown>).organize_error,
           progress: bookIds.indexOf((errorBook as Record<string, unknown>).id as string),
           total: bookIds.length,
         };
         return route.fulfill(jsonResponse({ ...errorOp, data: errorOp }, 200));
       }
-      const organizeOp = { id: 'op-org-1', status: 'completed', type: 'organize', progress: bookIds.length || mockState.books.length, total: bookIds.length || mockState.books.length };
+      const organizeOp = {
+        id: 'op-org-1',
+        status: 'completed',
+        type: 'organize',
+        progress: bookIds.length || mockState.books.length,
+        total: bookIds.length || mockState.books.length,
+      };
       return route.fulfill(jsonResponse({ ...organizeOp, data: organizeOp }, 201));
     }
 
@@ -1327,28 +1509,41 @@ export async function setupMockApiRoutes(
 
     // Dashboard endpoint
     if (pathname === '/api/v1/dashboard') {
-      return route.fulfill(jsonResponse({
-        library_count: mockState.books.length,
-        import_path_count: mockState.importPaths.length,
-        recent_operations: [],
-        storage: {
-          library_size_bytes: mockState.books.reduce((sum: number, b: Record<string, unknown>) => sum + (Number(b.file_size) || 0), 0),
-          total_size_bytes: 0,
-          disk_free_bytes: 500 * 1024 * 1024 * 1024,
-        },
-      }));
+      return route.fulfill(
+        jsonResponse({
+          library_count: mockState.books.length,
+          import_path_count: mockState.importPaths.length,
+          recent_operations: [],
+          storage: {
+            library_size_bytes: mockState.books.reduce(
+              (sum: number, b: Record<string, unknown>) => sum + (Number(b.file_size) || 0),
+              0
+            ),
+            total_size_bytes: 0,
+            disk_free_bytes: 500 * 1024 * 1024 * 1024,
+          },
+        })
+      );
     }
 
     // Authors and Series
     if (pathname === '/api/v1/authors' && method === 'GET') {
-      const names = [...new Set(mockState.books.map((b: Record<string, unknown>) => b.author_name).filter(Boolean))];
+      const names = [
+        ...new Set(
+          mockState.books.map((b: Record<string, unknown>) => b.author_name).filter(Boolean)
+        ),
+      ];
       // api.getAuthors reads `body.data.items || body.data.authors`.
       const authors = { authors: names.map((name, i) => ({ id: `author-${i}`, name })) };
       return route.fulfill(jsonResponse({ ...authors, data: authors }));
     }
 
     if (pathname === '/api/v1/series' && method === 'GET') {
-      const names = [...new Set(mockState.books.map((b: Record<string, unknown>) => b.series_name).filter(Boolean))];
+      const names = [
+        ...new Set(
+          mockState.books.map((b: Record<string, unknown>) => b.series_name).filter(Boolean)
+        ),
+      ];
       // api.getSeries reads `body.data.items || body.data.series`.
       const series = { series: names.map((name, i) => ({ id: `series-${i}`, name })) };
       return route.fulfill(jsonResponse({ ...series, data: series }));
@@ -1367,7 +1562,8 @@ export async function setupMockApiRoutes(
     }
 
     if (pathname === '/api/v1/filesystem/browse') {
-      const f = maybeFailStatus(mockState.failures.filesystem, 'Directory does not exist.'); if (f) return f;
+      const f = maybeFailStatus(mockState.failures.filesystem, 'Directory does not exist.');
+      if (f) return f;
       const browsePath = url.searchParams.get('path') || '/';
       const stored = mockState.filesystem[browsePath] || { path: browsePath, items: [] };
       const fsData = {
@@ -1397,7 +1593,9 @@ export async function setupMockApiRoutes(
         }
         const excluded = { excluded: true, path: targetPath };
         return route.fulfill(jsonResponse({ ...excluded, data: excluded }));
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
       return route.fulfill(
         jsonResponse({ excluded: true, path: '', data: { excluded: true, path: '' } })
       );
@@ -1421,7 +1619,9 @@ export async function setupMockApiRoutes(
         }
         const included = { excluded: false, path: targetPath };
         return route.fulfill(jsonResponse({ ...included, data: included }));
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
       return route.fulfill(
         jsonResponse({ excluded: false, path: '', data: { excluded: false, path: '' } })
       );
@@ -1429,11 +1629,14 @@ export async function setupMockApiRoutes(
 
     // Blocked hashes
     if (pathname === '/api/v1/blocked-hashes' && method === 'GET') {
-      const f = maybeFailStatus(mockState.failures.blockedHashes, 'Failed to load blocked hashes'); if (f) return f;
-      return route.fulfill(jsonResponse({
-        items: mockState.blockedHashes,
-        total: mockState.blockedHashes.length,
-      }));
+      const f = maybeFailStatus(mockState.failures.blockedHashes, 'Failed to load blocked hashes');
+      if (f) return f;
+      return route.fulfill(
+        jsonResponse({
+          items: mockState.blockedHashes,
+          total: mockState.blockedHashes.length,
+        })
+      );
     }
 
     if (pathname === '/api/v1/blocked-hashes' && method === 'POST') {
@@ -1446,7 +1649,9 @@ export async function setupMockApiRoutes(
             created_at: new Date().toISOString(),
           });
         }
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
       return route.fulfill(jsonResponse({ message: 'Added' }, 201));
     }
 
@@ -1463,9 +1668,7 @@ export async function setupMockApiRoutes(
     // handler above. Returning an empty { data: ... } envelope here keeps the
     // Book Detail tabs from crashing on `undefined` and stops these requests
     // from falling through to the real backend.
-    const bookSubResource = pathname.match(
-      /^\/api\/v1\/audiobooks\/([^/]+)\/([^/]+)$/
-    );
+    const bookSubResource = pathname.match(/^\/api\/v1\/audiobooks\/([^/]+)\/([^/]+)$/);
     if (bookSubResource && method === 'GET') {
       const sub = bookSubResource[2];
       if (sub === 'files') {
@@ -1487,7 +1690,11 @@ export async function setupMockApiRoutes(
       const book = mockState.books.find((b: Record<string, unknown>) => b.id === bookId);
       if (book) {
         let body: Record<string, unknown> = {};
-        try { body = request.postDataJSON() || {}; } catch { /* ignore */ }
+        try {
+          body = request.postDataJSON() || {};
+        } catch {
+          /* ignore */
+        }
         if (book.force_update_required && !body.force_update) {
           return route.fulfill(jsonResponse({ error: 'Conflict' }, 409));
         }
@@ -1509,7 +1716,11 @@ export async function setupMockApiRoutes(
       // Echo the real count. This was also hardcoded to 0, so Library's success
       // toast always read "Updated metadata for 0 audiobooks."
       let ids: unknown[] = [];
-      try { ids = (request.postDataJSON()?.ids as unknown[]) ?? []; } catch { /* ignore */ }
+      try {
+        ids = (request.postDataJSON()?.ids as unknown[]) ?? [];
+      } catch {
+        /* ignore */
+      }
       return route.fulfill(
         jsonResponse({ message: 'Batch update complete', updated: ids.length, failed: 0 })
       );
@@ -1522,7 +1733,9 @@ export async function setupMockApiRoutes(
 
     // Metadata endpoints
     if (pathname === '/api/v1/metadata/bulk-fetch' && method === 'POST') {
-      return route.fulfill(jsonResponse({ message: 'Bulk fetch started', operation_id: 'op-bulk-1' }));
+      return route.fulfill(
+        jsonResponse({ message: 'Bulk fetch started', operation_id: 'op-bulk-1' })
+      );
     }
 
     if (pathname.startsWith('/api/v1/metadata/')) {
@@ -1532,7 +1745,9 @@ export async function setupMockApiRoutes(
     // AI endpoints
     if (pathname === '/api/v1/ai/test-connection' && method === 'POST') {
       if (mockState.failures.openaiTest) {
-        return route.fulfill(jsonResponse({ error: 'Connection failed' }, mockState.failures.openaiTest));
+        return route.fulfill(
+          jsonResponse({ error: 'Connection failed' }, mockState.failures.openaiTest)
+        );
       }
       return route.fulfill(jsonResponse({ success: true, message: 'Connection successful' }));
     }
@@ -1587,11 +1802,13 @@ export async function setupMockApiRoutes(
 
     if (pathname === '/api/v1/itunes/import' && method === 'POST') {
       const opId = `op-itunes-${Date.now()}`;
-      return route.fulfill(jsonResponse({
-        operation_id: opId,
-        status: 'queued',
-        message: 'iTunes import queued',
-      }));
+      return route.fulfill(
+        jsonResponse({
+          operation_id: opId,
+          status: 'queued',
+          message: 'iTunes import queued',
+        })
+      );
     }
 
     if (pathname.startsWith('/api/v1/itunes/import-status/') && method === 'GET') {
@@ -1612,11 +1829,13 @@ export async function setupMockApiRoutes(
     }
 
     if (pathname === '/api/v1/itunes/write-back' && method === 'POST') {
-      return route.fulfill(jsonResponse({
-        success: true,
-        updated_count: 0,
-        message: 'Write-back completed',
-      }));
+      return route.fulfill(
+        jsonResponse({
+          success: true,
+          updated_count: 0,
+          message: 'Write-back completed',
+        })
+      );
     }
 
     if (pathname === '/api/v1/itunes/resolve-conflicts' && method === 'POST') {
@@ -1640,26 +1859,32 @@ export async function setupMockApiRoutes(
 
     // Import file
     if (pathname === '/api/v1/import/file' && method === 'POST') {
-      const t = maybeTimeout(mockState.failures.importFile); if (t) return t;
-      const f = maybeFailStatus(mockState.failures.importFile, 'Failed to import file'); if (f) return f;
+      const t = maybeTimeout(mockState.failures.importFile);
+      if (t) return t;
+      const f = maybeFailStatus(mockState.failures.importFile, 'Failed to import file');
+      if (f) return f;
       return route.fulfill(jsonResponse({ message: 'File imported' }, 201));
     }
 
     // Open Library endpoints
     if (pathname === '/api/v1/openlibrary/status' && method === 'GET') {
-      return route.fulfill(jsonResponse({
-        enabled: true,
-        downloads: {},
-      }));
+      return route.fulfill(
+        jsonResponse({
+          enabled: true,
+          downloads: {},
+        })
+      );
     }
 
     if (pathname === '/api/v1/openlibrary/upload' && method === 'POST') {
-      return route.fulfill(jsonResponse({
-        message: 'dump file uploaded',
-        type: 'editions',
-        filename: 'test.gz',
-        size: 1024,
-      }));
+      return route.fulfill(
+        jsonResponse({
+          message: 'dump file uploaded',
+          type: 'editions',
+          filename: 'test.gz',
+          size: 1024,
+        })
+      );
     }
 
     if (pathname === '/api/v1/openlibrary/download' && method === 'POST') {
@@ -1711,11 +1936,7 @@ export async function setupCommonRoutes(page: Page) {
 /**
  * Wait for toast notification
  */
-export async function waitForToast(
-  page: Page,
-  text: string,
-  timeout = 5000
-) {
+export async function waitForToast(page: Page, text: string, timeout = 5000) {
   await page.waitForSelector(`text=${text}`, { timeout });
 }
 
@@ -1818,24 +2039,17 @@ const DEFAULT_SYSTEM_STATUS = {
 const buildConfig = (overrides?: Partial<MockConfig>): MockConfig => ({
   ...DEFAULT_CONFIG,
   ...overrides,
-  metadata_sources:
-    overrides?.metadata_sources ?? DEFAULT_CONFIG.metadata_sources,
-  supported_extensions:
-    overrides?.supported_extensions ?? DEFAULT_CONFIG.supported_extensions,
-  exclude_patterns:
-    overrides?.exclude_patterns ?? DEFAULT_CONFIG.exclude_patterns,
+  metadata_sources: overrides?.metadata_sources ?? DEFAULT_CONFIG.metadata_sources,
+  supported_extensions: overrides?.supported_extensions ?? DEFAULT_CONFIG.supported_extensions,
+  exclude_patterns: overrides?.exclude_patterns ?? DEFAULT_CONFIG.exclude_patterns,
 });
 
-const buildSystemStatus = (
-  overrides?: Record<string, unknown>
-): Record<string, unknown> => ({
+const buildSystemStatus = (overrides?: Record<string, unknown>): Record<string, unknown> => ({
   ...DEFAULT_SYSTEM_STATUS,
   ...(overrides || {}),
 });
 
-const buildAuthState = (
-  overrides?: MockAuthState
-): ResolvedMockAuthState => {
+const buildAuthState = (overrides?: MockAuthState): ResolvedMockAuthState => {
   const hasUsers = overrides?.has_users ?? false;
   const authEnabled = overrides?.auth_enabled ?? true;
   const requiresAuth = overrides?.requires_auth ?? (authEnabled && hasUsers);
@@ -1855,6 +2069,33 @@ const buildAuthState = (
 /**
  * Generate test audiobooks
  */
+/**
+ * Wait for an open MUI Select/Menu popover to finish closing.
+ *
+ * MUI renders a Select's menu as a Modal with an invisible full-page backdrop.
+ * The backdrop is torn down on a CSS transition, so for a few frames AFTER an
+ * option is chosen it is still in the DOM and still swallowing pointer events.
+ * Any click issued in that window hits the backdrop instead of the control.
+ *
+ * This is a real, measured CI failure, not a precaution. On 2026-08-09 two
+ * tests failed on the ubuntu runner while passing on macOS, both with a 30s
+ * `locator.click` timeout and both with the same call-log line:
+ *
+ *   <div class="MuiBackdrop-root MuiModal-backdrop"> from
+ *   <div id="menu-" class="MuiPopover-root MuiMenu-root MuiModal-root">
+ *   subtree intercepts pointer events
+ *
+ * The macOS runs won the race; the slower runner did not. Nothing is wrong with
+ * the application — the menu does close — so the fix belongs in the tests.
+ *
+ * `toBeHidden()` rather than `toHaveCount(0)` deliberately: it is satisfied by
+ * an unmounted popover (MUI's default) AND by a `keepMounted` one that is
+ * merely hidden, so this cannot hang if a Select is ever configured that way.
+ */
+export async function waitForMenuClosed(page: Page): Promise<void> {
+  await expect(page.locator('.MuiPopover-root').first()).toBeHidden();
+}
+
 export function generateTestBooks(count: number) {
   const authors = [
     'Brandon Sanderson',
@@ -1887,8 +2128,8 @@ export function generateTestBooks(count: number) {
     organized_file_hash: i % 4 !== 0 ? `hash-org-${i + 1}` : null,
     created_at: new Date(2024, 0, i + 1).toISOString(),
     updated_at: new Date(2024, 11, i + 1).toISOString(),
-    duration: 3600 + (i * 100),
-    file_size: 100000000 + (i * 1000000),
+    duration: 3600 + i * 100,
+    file_size: 100000000 + i * 1000000,
   }));
 }
 
@@ -1911,9 +2152,7 @@ export function generateTestBook(overrides: Record<string, unknown> = {}) {
     genre: 'Fantasy',
     library_state: 'organized',
     marked_for_deletion: false,
-    file_path:
-      '/library/Brandon Sanderson/The Stormlight Archive/' +
-      'The Way of Kings.m4b',
+    file_path: '/library/Brandon Sanderson/The Stormlight Archive/' + 'The Way of Kings.m4b',
     file_hash: 'hash-twok',
     original_file_hash: 'hash-orig-twok',
     organized_file_hash: 'hash-org-twok',
@@ -1928,10 +2167,7 @@ export function generateTestBook(overrides: Record<string, unknown> = {}) {
 /**
  * Setup shared mock API responses and state for tests
  */
-export async function setupMockApi(
-  page: Page,
-  options: MockApiOptions = {}
-) {
+export async function setupMockApi(page: Page, options: MockApiOptions = {}) {
   // New approach: Use the page.route() based mocking for persistence across navigations
   // This replaces the old addInitScript approach
   await skipWelcomeWizard(page);
@@ -1943,10 +2179,7 @@ export async function setupMockApi(
  * @deprecated Use setupPhase2Interactive or setupMockApiRoutes instead
  * This function is kept for backward compatibility but internally delegates to new setup
  */
-export async function setupMockApiLegacy(
-  page: Page,
-  options: MockApiOptions = {}
-) {
+export async function setupMockApiLegacy(page: Page, options: MockApiOptions = {}) {
   const configData = buildConfig(options.config);
   const systemStatusData = buildSystemStatus(options.systemStatus);
   const importPathsData = options.importPaths || [];
@@ -2020,8 +2253,7 @@ export async function setupMockApiLegacy(
         errors: [],
       };
       const itunesValidation = itunesData.validation || defaultITunesValidation;
-      let itunesImportStatus =
-        itunesData.importStatus || defaultITunesImportStatus;
+      let itunesImportStatus = itunesData.importStatus || defaultITunesImportStatus;
       let itunesOperationId = itunesImportStatus.operation_id;
       const failures = { ...failuresData };
 
@@ -2055,10 +2287,7 @@ export async function setupMockApiLegacy(
         apiState.historyOperations = historyOperations;
       };
 
-      const failWithStatus = (
-        status: number | undefined,
-        message: string
-      ) => {
+      const failWithStatus = (status: number | undefined, message: string) => {
         if (!status) return null;
         return jsonResponse({ error: message }, status);
       };
@@ -2130,9 +2359,7 @@ export async function setupMockApiLegacy(
         const fileName = getFileName(book.file_path, book.id);
         const organizedHash =
           book.organized_file_hash ||
-          (book.file_hash
-            ? `organized-${book.file_hash}`
-            : `organized-${book.id}`);
+          (book.file_hash ? `organized-${book.file_hash}` : `organized-${book.id}`);
         return {
           ...book,
           library_state: 'organized',
@@ -2162,19 +2389,12 @@ export async function setupMockApiLegacy(
 
       window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
         const url =
-          typeof input === 'string'
-            ? input
-            : input instanceof URL
-              ? input.toString()
-              : input.url;
+          typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
         const method = (init?.method || 'GET').toUpperCase();
         const urlObj = new URL(url, window.location.origin);
         const pathname = urlObj.pathname;
 
-        const applySearchFilter = (
-          items: typeof libraryBooks,
-          query: string
-        ) => {
+        const applySearchFilter = (items: typeof libraryBooks, query: string) => {
           if (!query) return items;
           const searchLower = query.toLowerCase();
           return items.filter((b) => {
@@ -2194,30 +2414,26 @@ export async function setupMockApiLegacy(
           return Promise.resolve(jsonResponse({ status: 'ok' }));
         }
         if (pathname === '/api/v1/system/status') {
-          const librarySize = libraryBooks.reduce(
-            (sum, book) => sum + (book.file_size || 0),
-            0
-          );
+          const librarySize = libraryBooks.reduce((sum, book) => sum + (book.file_size || 0), 0);
           const importBookCount = libraryBooks.filter(
-            (book) =>
-              book.library_state === 'import' && !book.marked_for_deletion
+            (book) => book.library_state === 'import' && !book.marked_for_deletion
           ).length;
           const totalBooks = libraryBooks.length;
           const diskTotal =
-            (systemStatusData as { disk_total_bytes?: number })
-              .disk_total_bytes || 0;
+            (systemStatusData as { disk_total_bytes?: number }).disk_total_bytes || 0;
           const status = {
             ...systemStatusData,
             library: {
-              ...(systemStatusData as { library?: Record<string, unknown> })
-                .library,
+              ...(systemStatusData as { library?: Record<string, unknown> }).library,
               book_count: totalBooks,
               total_size: librarySize,
             },
             import_paths: {
-              ...(systemStatusData as {
-                import_paths?: Record<string, unknown>;
-              }).import_paths,
+              ...(
+                systemStatusData as {
+                  import_paths?: Record<string, unknown>;
+                }
+              ).import_paths,
               folder_count: importPaths.length,
               book_count: importBookCount,
             },
@@ -2234,20 +2450,14 @@ export async function setupMockApiLegacy(
         }
         if (pathname === '/api/v1/config') {
           if (method === 'GET') {
-            const failed = failWithStatus(
-              failures.getConfig,
-              'Failed to fetch config'
-            );
+            const failed = failWithStatus(failures.getConfig, 'Failed to fetch config');
             if (failed) {
               return Promise.resolve(failed);
             }
             return Promise.resolve(jsonResponse({ config: maskedConfig() }));
           }
           if (method === 'PUT') {
-            const failed = failWithStatus(
-              failures.updateConfig,
-              'Failed to update config'
-            );
+            const failed = failWithStatus(failures.updateConfig, 'Failed to update config');
             if (failed) {
               return Promise.resolve(failed);
             }
@@ -2260,10 +2470,7 @@ export async function setupMockApiLegacy(
           }
         }
         if (pathname === '/api/v1/ai/test-connection' && method === 'POST') {
-          const failed = failWithStatus(
-            failures.openaiTest,
-            'Connection failed'
-          );
+          const failed = failWithStatus(failures.openaiTest, 'Connection failed');
           if (failed) {
             return Promise.resolve(failed);
           }
@@ -2281,8 +2488,7 @@ export async function setupMockApiLegacy(
         }
         if (pathname === '/api/v1/import-paths' && method === 'POST') {
           const payload = parseJsonBody(init) || {};
-          const nextId =
-            importPaths.reduce((max, item) => Math.max(max, item.id), 0) + 1;
+          const nextId = importPaths.reduce((max, item) => Math.max(max, item.id), 0) + 1;
           const newPath = {
             id: nextId,
             path: payload.path || '/unknown',
@@ -2291,10 +2497,7 @@ export async function setupMockApiLegacy(
           importPaths = [...importPaths, newPath];
           return Promise.resolve(jsonResponse(newPath, 201));
         }
-        if (
-          pathname.startsWith('/api/v1/import-paths/') &&
-          method === 'DELETE'
-        ) {
+        if (pathname.startsWith('/api/v1/import-paths/') && method === 'DELETE') {
           const id = Number(pathname.split('/').pop() || 0);
           importPaths = importPaths.filter((item) => item.id !== id);
           return Promise.resolve(jsonResponse({ message: 'Removed' }));
@@ -2305,9 +2508,7 @@ export async function setupMockApiLegacy(
             return timeout;
           }
           const failed = failWithStatus(
-            typeof failures.importFile === 'number'
-              ? failures.importFile
-              : undefined,
+            typeof failures.importFile === 'number' ? failures.importFile : undefined,
             'Failed to import file'
           );
           if (failed) {
@@ -2326,33 +2527,23 @@ export async function setupMockApiLegacy(
             file_path: payload.file_path || '/imported/book.m4b',
             file_hash: `hash-${Date.now()}`,
             original_file_hash: `hash-orig-${Date.now()}`,
-            organized_file_hash: payload.organize
-              ? `hash-org-${Date.now()}`
-              : null,
+            organized_file_hash: payload.organize ? `hash-org-${Date.now()}` : null,
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
           };
           libraryBooks = [newBook, ...libraryBooks];
-          return Promise.resolve(
-            jsonResponse({ message: 'Import started', book: newBook })
-          );
+          return Promise.resolve(jsonResponse({ message: 'Import started', book: newBook }));
         }
 
         if (pathname === '/api/v1/backup/list' && method === 'GET') {
-          const failed = failWithStatus(
-            failures.listBackups,
-            'Failed to list backups'
-          );
+          const failed = failWithStatus(failures.listBackups, 'Failed to list backups');
           if (failed) {
             return Promise.resolve(failed);
           }
           return Promise.resolve(jsonResponse({ backups }));
         }
         if (pathname === '/api/v1/backup/create' && method === 'POST') {
-          const failed = failWithStatus(
-            failures.createBackup,
-            'Failed to create backup'
-          );
+          const failed = failWithStatus(failures.createBackup, 'Failed to create backup');
           if (failed) {
             return Promise.resolve(failed);
           }
@@ -2367,20 +2558,14 @@ export async function setupMockApiLegacy(
           return Promise.resolve(jsonResponse({ backup: created }));
         }
         if (pathname === '/api/v1/backup/restore' && method === 'POST') {
-          const failed = failWithStatus(
-            failures.restoreBackup,
-            'Backup file is corrupt'
-          );
+          const failed = failWithStatus(failures.restoreBackup, 'Backup file is corrupt');
           if (failed) {
             return Promise.resolve(failed);
           }
           return Promise.resolve(jsonResponse({ message: 'Restored' }));
         }
         if (pathname.startsWith('/api/v1/backup/') && method === 'DELETE') {
-          const failed = failWithStatus(
-            failures.deleteBackup,
-            'Failed to delete backup'
-          );
+          const failed = failWithStatus(failures.deleteBackup, 'Failed to delete backup');
           if (failed) {
             return Promise.resolve(failed);
           }
@@ -2390,10 +2575,7 @@ export async function setupMockApiLegacy(
         }
 
         if (pathname === '/api/v1/blocked-hashes' && method === 'GET') {
-          const failed = failWithStatus(
-            failures.blockedHashes,
-            'Failed to load blocked hashes'
-          );
+          const failed = failWithStatus(failures.blockedHashes, 'Failed to load blocked hashes');
           if (failed) {
             return Promise.resolve(failed);
           }
@@ -2414,26 +2596,18 @@ export async function setupMockApiLegacy(
           blockedHashes = [newItem, ...blockedHashes];
           return Promise.resolve(jsonResponse(newItem, 201));
         }
-        if (
-          pathname.startsWith('/api/v1/blocked-hashes/') &&
-          method === 'DELETE'
-        ) {
+        if (pathname.startsWith('/api/v1/blocked-hashes/') && method === 'DELETE') {
           const hash = pathname.split('/').pop() || '';
           blockedHashes = blockedHashes.filter((item) => item.hash !== hash);
           return Promise.resolve(jsonResponse({ message: 'Removed' }));
         }
 
         if (pathname === '/api/v1/filesystem/home' && method === 'GET') {
-          return Promise.resolve(
-            jsonResponse({ path: homeDirectoryData })
-          );
+          return Promise.resolve(jsonResponse({ path: homeDirectoryData }));
         }
 
         if (pathname === '/api/v1/filesystem/browse' && method === 'GET') {
-          const failed = failWithStatus(
-            failures.filesystem,
-            'Failed to browse filesystem'
-          );
+          const failed = failWithStatus(failures.filesystem, 'Failed to browse filesystem');
           if (failed) {
             return Promise.resolve(failed);
           }
@@ -2468,16 +2642,12 @@ export async function setupMockApiLegacy(
         if (pathname === '/api/v1/filesystem/exclude' && method === 'POST') {
           const payload = parseJsonBody(init) || {};
           updateExcluded(payload.path, true);
-          return Promise.resolve(
-            jsonResponse({ excluded: true, path: payload.path })
-          );
+          return Promise.resolve(jsonResponse({ excluded: true, path: payload.path }));
         }
         if (pathname === '/api/v1/filesystem/exclude' && method === 'DELETE') {
           const payload = parseJsonBody(init) || {};
           updateExcluded(payload.path, false);
-          return Promise.resolve(
-            jsonResponse({ excluded: false, path: payload.path })
-          );
+          return Promise.resolve(jsonResponse({ excluded: false, path: payload.path }));
         }
 
         if (pathname === '/api/v1/itunes/validate' && method === 'POST') {
@@ -2502,14 +2672,9 @@ export async function setupMockApiLegacy(
             })
           );
         }
-        if (
-          pathname.startsWith('/api/v1/itunes/import-status/') &&
-          method === 'GET'
-        ) {
+        if (pathname.startsWith('/api/v1/itunes/import-status/') && method === 'GET') {
           const opId = pathname.split('/').pop() || itunesOperationId;
-          return Promise.resolve(
-            jsonResponse({ ...itunesImportStatus, operation_id: opId })
-          );
+          return Promise.resolve(jsonResponse({ ...itunesImportStatus, operation_id: opId }));
         }
         if (pathname === '/api/v1/itunes/write-back' && method === 'POST') {
           return Promise.resolve(
@@ -2525,16 +2690,11 @@ export async function setupMockApiLegacy(
         }
 
         if (pathname === '/api/v1/operations/active' && method === 'GET') {
-          const failed = failWithStatus(
-            failures.operationsActive,
-            'Failed to fetch operations'
-          );
+          const failed = failWithStatus(failures.operationsActive, 'Failed to fetch operations');
           if (failed) {
             return Promise.resolve(failed);
           }
-          return Promise.resolve(
-            jsonResponse({ operations: activeOperations })
-          );
+          return Promise.resolve(jsonResponse({ operations: activeOperations }));
         }
         if (pathname === '/api/v1/operations/scan' && method === 'POST') {
           const op = {
@@ -2576,10 +2736,7 @@ export async function setupMockApiLegacy(
           pathname.endsWith('/logs') &&
           method === 'GET'
         ) {
-          const failed = failWithStatus(
-            failures.operationLogs,
-            'Failed to fetch operation logs'
-          );
+          const failed = failWithStatus(failures.operationLogs, 'Failed to fetch operation logs');
           if (failed) {
             return Promise.resolve(failed);
           }
@@ -2590,10 +2747,7 @@ export async function setupMockApiLegacy(
           const items = tail > 0 ? logs.slice(-tail) : logs;
           return Promise.resolve(jsonResponse({ logs: items, items }));
         }
-        if (
-          pathname.startsWith('/api/v1/operations/') &&
-          method === 'DELETE'
-        ) {
+        if (pathname.startsWith('/api/v1/operations/') && method === 'DELETE') {
           const opId = pathname.split('/').pop() || '';
           activeOperations = activeOperations.filter((op) => op.id !== opId);
           historyOperations = [
@@ -2614,17 +2768,13 @@ export async function setupMockApiLegacy(
 
         if (pathname === '/api/v1/authors' && method === 'GET') {
           const authors = Array.from(
-            new Set(
-              libraryBooks.map((book) => book.author_name).filter(Boolean)
-            )
+            new Set(libraryBooks.map((book) => book.author_name).filter(Boolean))
           ).map((name, index) => ({ id: `author-${index}`, name }));
           return Promise.resolve(jsonResponse({ authors }));
         }
         if (pathname === '/api/v1/series' && method === 'GET') {
           const series = Array.from(
-            new Set(
-              libraryBooks.map((book) => book.series_name).filter(Boolean)
-            )
+            new Set(libraryBooks.map((book) => book.series_name).filter(Boolean))
           ).map((name, index) => ({ id: `series-${index}`, name }));
           return Promise.resolve(jsonResponse({ series }));
         }
@@ -2633,13 +2783,8 @@ export async function setupMockApiLegacy(
           return Promise.resolve(jsonResponse({ count: libraryBooks.length }));
         }
 
-        if (
-          pathname === '/api/v1/audiobooks/soft-deleted' &&
-          method === 'GET'
-        ) {
-          const deleted = libraryBooks.filter(
-            (book) => book.marked_for_deletion
-          );
+        if (pathname === '/api/v1/audiobooks/soft-deleted' && method === 'GET') {
+          const deleted = libraryBooks.filter((book) => book.marked_for_deletion);
           return Promise.resolve(
             jsonResponse({
               items: deleted,
@@ -2655,18 +2800,13 @@ export async function setupMockApiLegacy(
             return timeout;
           }
           const failed = failWithStatus(
-            typeof failures.searchBooks === 'number'
-              ? failures.searchBooks
-              : undefined,
+            typeof failures.searchBooks === 'number' ? failures.searchBooks : undefined,
             'Failed to search books'
           );
           if (failed) {
             return Promise.resolve(failed);
           }
-          const query =
-            urlObj.searchParams.get('q') ||
-            urlObj.searchParams.get('search') ||
-            '';
+          const query = urlObj.searchParams.get('q') || urlObj.searchParams.get('search') || '';
           const limit = parseInt(urlObj.searchParams.get('limit') || '50');
           const filtered = applySearchFilter([...libraryBooks], query);
           const paginated = filtered.slice(0, limit);
@@ -2686,9 +2826,7 @@ export async function setupMockApiLegacy(
             return timeout;
           }
           const failed = failWithStatus(
-            typeof failures.getBooks === 'number'
-              ? failures.getBooks
-              : undefined,
+            typeof failures.getBooks === 'number' ? failures.getBooks : undefined,
             'Failed to fetch books'
           );
           if (failed) {
@@ -2698,13 +2836,9 @@ export async function setupMockApiLegacy(
           const offset = parseInt(urlObj.searchParams.get('offset') || '0');
           const page = parseInt(urlObj.searchParams.get('page') || '1');
 
-          const effectiveOffset =
-            offset > 0 ? offset : Math.max(0, (page - 1) * limit);
+          const effectiveOffset = offset > 0 ? offset : Math.max(0, (page - 1) * limit);
 
-          const paginatedBooks = libraryBooks.slice(
-            effectiveOffset,
-            effectiveOffset + limit
-          );
+          const paginatedBooks = libraryBooks.slice(effectiveOffset, effectiveOffset + limit);
 
           return Promise.resolve(
             jsonResponse({
@@ -2723,9 +2857,7 @@ export async function setupMockApiLegacy(
           if (bookId && bookId !== 'audiobooks') {
             const match = libraryBooks.find((book) => book.id === bookId);
             if (!match) {
-              return Promise.resolve(
-                jsonResponse({ error: 'Not found' }, 404)
-              );
+              return Promise.resolve(jsonResponse({ error: 'Not found' }, 404));
             }
             return Promise.resolve(jsonResponse(match));
           }
@@ -2753,9 +2885,7 @@ export async function setupMockApiLegacy(
         ) {
           const parts = pathname.split('/').filter(Boolean);
           const bookId = parts[parts.length - 2];
-          return Promise.resolve(
-            jsonResponse({ versions: getVersionsForBook(bookId) })
-          );
+          return Promise.resolve(jsonResponse({ versions: getVersionsForBook(bookId) }));
         }
         if (
           pathname.startsWith('/api/v1/audiobooks/') &&
@@ -2768,9 +2898,7 @@ export async function setupMockApiLegacy(
           const otherId = payload.other_id;
           const groupId = ensureVersionGroup(bookId);
           libraryBooks = libraryBooks.map((book) =>
-            book.id === otherId
-              ? { ...book, version_group_id: groupId }
-              : book
+            book.id === otherId ? { ...book, version_group_id: groupId } : book
           );
           return Promise.resolve(jsonResponse({ message: 'Linked' }));
         }
@@ -2790,9 +2918,7 @@ export async function setupMockApiLegacy(
               : book
           );
           if (groupId) {
-            const remaining = libraryBooks.filter(
-              (book) => book.version_group_id === groupId
-            );
+            const remaining = libraryBooks.filter((book) => book.version_group_id === groupId);
             if (remaining.length <= 1) {
               libraryBooks = libraryBooks.map((book) =>
                 book.version_group_id === groupId
@@ -2823,32 +2949,22 @@ export async function setupMockApiLegacy(
           return Promise.resolve(jsonResponse({ message: 'Primary set' }));
         }
 
-        if (
-          pathname.startsWith('/api/v1/audiobooks/') &&
-          method === 'DELETE'
-        ) {
+        if (pathname.startsWith('/api/v1/audiobooks/') && method === 'DELETE') {
           const parts = pathname.split('/').filter(Boolean);
           const bookId = parts[parts.length - 1];
           libraryBooks = libraryBooks.map((book) =>
-            book.id === bookId
-              ? { ...book, marked_for_deletion: true }
-              : book
+            book.id === bookId ? { ...book, marked_for_deletion: true } : book
           );
           return Promise.resolve(jsonResponse({ message: 'Deleted' }));
         }
 
-        if (
-          pathname.startsWith('/api/v1/audiobooks/') &&
-          method === 'PUT'
-        ) {
+        if (pathname.startsWith('/api/v1/audiobooks/') && method === 'PUT') {
           const parts = pathname.split('/').filter(Boolean);
           const bookId = parts[parts.length - 1];
           const payload = parseJsonBody(init) || {};
           const target = libraryBooks.find((book) => book.id === bookId);
           if (target?.force_update_required && !payload.force_update) {
-            return Promise.resolve(
-              jsonResponse({ error: 'Conflict' }, 409)
-            );
+            return Promise.resolve(jsonResponse({ error: 'Conflict' }, 409));
           }
           libraryBooks = libraryBooks.map((book) =>
             book.id === bookId ? { ...book, ...payload } : book
@@ -2865,9 +2981,7 @@ export async function setupMockApiLegacy(
           const parts = pathname.split('/').filter(Boolean);
           const bookId = parts[parts.length - 2];
           libraryBooks = libraryBooks.map((book) =>
-            book.id === bookId
-              ? { ...book, marked_for_deletion: false }
-              : book
+            book.id === bookId ? { ...book, marked_for_deletion: false } : book
           );
           return Promise.resolve(jsonResponse({ message: 'Restored' }));
         }
@@ -2881,19 +2995,14 @@ export async function setupMockApiLegacy(
           const bookId = parts[parts.length - 2];
           const target = libraryBooks.find((book) => book.id === bookId);
           const shouldFail =
-            target &&
-            (target as { fetch_metadata_error?: boolean }).fetch_metadata_error;
+            target && (target as { fetch_metadata_error?: boolean }).fetch_metadata_error;
           const delayMs =
-            (target as { fetch_metadata_delay_ms?: number })
-              ?.fetch_metadata_delay_ms || 0;
+            (target as { fetch_metadata_delay_ms?: number })?.fetch_metadata_delay_ms || 0;
 
           if (shouldFail) {
-            const failure = () =>
-              jsonResponse({ error: 'Metadata fetch failed' }, 500);
+            const failure = () => jsonResponse({ error: 'Metadata fetch failed' }, 500);
             if (delayMs > 0) {
-              return new Promise((resolve) =>
-                window.setTimeout(() => resolve(failure()), delayMs)
-              );
+              return new Promise((resolve) => window.setTimeout(() => resolve(failure()), delayMs));
             }
             return Promise.resolve(failure());
           }
@@ -2915,9 +3024,7 @@ export async function setupMockApiLegacy(
               source: 'mock',
             });
           if (delayMs > 0) {
-            return new Promise((resolve) =>
-              window.setTimeout(() => resolve(success()), delayMs)
-            );
+            return new Promise((resolve) => window.setTimeout(() => resolve(success()), delayMs));
           }
           return Promise.resolve(success());
         }

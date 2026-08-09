@@ -1,5 +1,5 @@
 // file: web/tests/e2e/scan-import-organize.spec.ts
-// version: 1.7.0
+// version: 1.8.0
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
 // last-edited: 2026-08-09
 
@@ -10,6 +10,7 @@ import {
   skipWelcomeWizard,
   setupLibraryWithBooks,
   waitForToast,
+  waitForMenuClosed,
 } from './utils/test-helpers';
 
 type ScanMockOptions = {
@@ -23,7 +24,10 @@ const setupScanWorkflow = async (page: Page, options: ScanMockOptions) => {
     // Persist state across page navigations using sessionStorage
     const STORAGE_KEY = '__scanWorkflowState';
     const savedState = sessionStorage.getItem(STORAGE_KEY);
-    let state: { importPaths: Array<Record<string, unknown>>; libraryBooks: Array<Record<string, unknown>> };
+    let state: {
+      importPaths: Array<Record<string, unknown>>;
+      libraryBooks: Array<Record<string, unknown>>;
+    };
     if (savedState) {
       state = JSON.parse(savedState);
     } else {
@@ -61,11 +65,7 @@ const setupScanWorkflow = async (page: Page, options: ScanMockOptions) => {
     const originalFetch = window.fetch.bind(window);
     window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
       const url =
-        typeof input === 'string'
-          ? input
-          : input instanceof URL
-            ? input.toString()
-            : input.url;
+        typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
       const method = (init?.method || 'GET').toUpperCase();
       const urlObj = new URL(url, window.location.origin);
       const pathname = urlObj.pathname;
@@ -104,10 +104,7 @@ const setupScanWorkflow = async (page: Page, options: ScanMockOptions) => {
         saveState();
         return Promise.resolve(jsonResponse({ importPath: newPath }));
       }
-      if (
-        pathname.startsWith('/api/v1/import-paths/') &&
-        method === 'DELETE'
-      ) {
+      if (pathname.startsWith('/api/v1/import-paths/') && method === 'DELETE') {
         const id = Number(pathname.split('/').pop() || 0);
         importPaths = importPaths.filter((p) => p.id !== id);
         saveState();
@@ -138,9 +135,7 @@ const setupScanWorkflow = async (page: Page, options: ScanMockOptions) => {
       if (pathname === '/api/v1/operations/organize' && method === 'POST') {
         const ids = Array.isArray(payload.book_ids) ? payload.book_ids : [];
         libraryBooks = libraryBooks.map((book) =>
-          ids.includes(book.id)
-            ? { ...book, library_state: 'organized' }
-            : book
+          ids.includes(book.id) ? { ...book, library_state: 'organized' } : book
         );
         saveState();
         return Promise.resolve(
@@ -165,9 +160,7 @@ const setupScanWorkflow = async (page: Page, options: ScanMockOptions) => {
             .toLowerCase()
             .includes(query.toLowerCase())
         );
-        return Promise.resolve(
-          jsonResponse({ items: filtered, audiobooks: filtered })
-        );
+        return Promise.resolve(jsonResponse({ items: filtered, audiobooks: filtered }));
       }
       if (pathname === '/api/v1/audiobooks' && method === 'GET') {
         // Honour library_state. This handler used to return every book
@@ -177,9 +170,7 @@ const setupScanWorkflow = async (page: Page, options: ScanMockOptions) => {
         // setupMockApi has done this since it was taught query params; this
         // spec mocks via a window.fetch override and inherits none of that.
         const state = urlObj.searchParams.get('library_state');
-        const rows = state
-          ? libraryBooks.filter((b) => b.library_state === state)
-          : libraryBooks;
+        const rows = state ? libraryBooks.filter((b) => b.library_state === state) : libraryBooks;
         return Promise.resolve(jsonResponse({ items: rows, audiobooks: rows, count: rows.length }));
       }
       if (pathname === '/api/v1/system/status') {
@@ -209,35 +200,42 @@ const setupScanWorkflow = async (page: Page, options: ScanMockOptions) => {
         return Promise.resolve(jsonResponse({ message: 'Cancelled' }));
       }
       if (pathname === '/api/v1/config' && method === 'GET') {
-        return Promise.resolve(jsonResponse({
-          config: {
-            root_dir: '/library',
-            database_path: '/data/library.db',
-            database_type: 'pebble',
-            setup_complete: true,
-          },
-        }));
+        return Promise.resolve(
+          jsonResponse({
+            config: {
+              root_dir: '/library',
+              database_path: '/data/library.db',
+              database_type: 'pebble',
+              setup_complete: true,
+            },
+          })
+        );
       }
       if (pathname === '/api/v1/config' && method === 'PUT') {
-        return Promise.resolve(jsonResponse({ config: { root_dir: '/library', setup_complete: true } }));
+        return Promise.resolve(
+          jsonResponse({ config: { root_dir: '/library', setup_complete: true } })
+        );
       }
       if (pathname === '/api/v1/audiobooks/soft-deleted' && method === 'GET') {
-        return Promise.resolve(jsonResponse({ items: [], count: 0, total: 0, offset: 0, limit: 100 }));
+        return Promise.resolve(
+          jsonResponse({ items: [], count: 0, total: 0, offset: 0, limit: 100 })
+        );
       }
       if (pathname === '/api/v1/filesystem/browse') {
         const dir = urlObj.searchParams.get('path') || '/';
-        return Promise.resolve(jsonResponse({
-          path: dir,
-          entries: [],
-          parent: dir === '/' ? null : dir.split('/').slice(0, -1).join('/') || '/',
-        }));
+        return Promise.resolve(
+          jsonResponse({
+            path: dir,
+            entries: [],
+            parent: dir === '/' ? null : dir.split('/').slice(0, -1).join('/') || '/',
+          })
+        );
       }
 
       return originalFetch(input, init);
     };
   }, options);
 };
-
 
 // NOTE: navigate to '/settings#paths', not '/settings'.
 //
@@ -256,9 +254,7 @@ test.describe('Scan/Import/Organize Workflow', () => {
     await mockEventSource(page);
   });
 
-  test('complete workflow: add import path → scan → organize', async ({
-    page,
-  }) => {
+  test('complete workflow: add import path → scan → organize', async ({ page }) => {
     // Arrange
     await setupScanWorkflow(page, {
       scanBooks: [
@@ -307,15 +303,13 @@ test.describe('Scan/Import/Organize Workflow', () => {
     await page.getByRole('button', { name: /filters/i }).click();
     await page.getByLabel('Library State').click();
     await page.getByRole('option', { name: 'Imported', exact: true }).click();
+    await waitForMenuClosed(page);
     // Close filter drawer before interacting with main content
     await page.keyboard.press('Escape');
     await expect(page.getByText('Import Book 1')).toBeVisible();
     await page.getByLabel('Select All').click();
     await page.getByRole('button', { name: 'Organize Selected' }).click();
-    await page
-      .getByRole('button', { name: 'Organize Selected' })
-      .last()
-      .click();
+    await page.getByRole('button', { name: 'Organize Selected' }).last().click();
 
     // Assert: organize progress and success
     await expect(page.getByText('Organized 3 of 3')).toBeVisible();
@@ -328,6 +322,7 @@ test.describe('Scan/Import/Organize Workflow', () => {
     await page.getByRole('button', { name: /filters/i }).click();
     await page.getByLabel('Library State').click();
     await page.getByRole('option', { name: 'Organized' }).click();
+    await waitForMenuClosed(page);
     await page.keyboard.press('Escape'); // Close dropdown
     await page.keyboard.press('Escape'); // Close filter drawer
 
@@ -338,6 +333,7 @@ test.describe('Scan/Import/Organize Workflow', () => {
     await page.getByRole('button', { name: /filters/i }).click();
     await page.getByLabel('Library State').click();
     await page.getByRole('option', { name: 'Imported', exact: true }).click();
+    await waitForMenuClosed(page);
     await page.keyboard.press('Escape'); // Close dropdown
     await page.keyboard.press('Escape'); // Close filter drawer
 
@@ -345,9 +341,7 @@ test.describe('Scan/Import/Organize Workflow', () => {
     await expect(page.getByText(/no audiobooks found/i).first()).toBeVisible();
   });
 
-  test('scan operation: start, monitor progress, complete', async ({
-    page,
-  }) => {
+  test('scan operation: start, monitor progress, complete', async ({ page }) => {
     // Arrange
     await setupScanWorkflow(page, { scanBooks: [] });
     await page.goto('/settings#paths');
@@ -427,9 +421,7 @@ test.describe('Scan/Import/Organize Workflow', () => {
     await expect(page.getByText('Corrupt file: book2.m4b')).toBeVisible();
   });
 
-  test('organize operation: moves files to library root', async ({
-    page,
-  }) => {
+  test('organize operation: moves files to library root', async ({ page }) => {
     // Arrange
     const baseBook = generateTestBooks(1)[0];
     const importBook = {
@@ -450,10 +442,7 @@ test.describe('Scan/Import/Organize Workflow', () => {
     // Act
     await page.getByLabel('Select Import Book 1').click();
     await page.getByRole('button', { name: 'Organize Selected' }).click();
-    await page
-      .getByRole('button', { name: 'Organize Selected' })
-      .last()
-      .click();
+    await page.getByRole('button', { name: 'Organize Selected' }).last().click();
 
     // Assert
     await waitForToast(page, 'Successfully organized 1 audiobooks.');
@@ -461,13 +450,9 @@ test.describe('Scan/Import/Organize Workflow', () => {
       .getByRole('dialog', { name: 'Organize Selected Audiobooks' })
       .getByRole('button', { name: 'Close' })
       .click();
-    await page
-      .getByRole('heading', { name: 'Import Book 1', exact: true })
-      .click();
+    await page.getByRole('heading', { name: 'Import Book 1', exact: true }).click();
     await page.getByRole('tab', { name: 'Files' }).click();
-    await expect(
-      page.getByText('/library/import-book-1.m4b')
-    ).toBeVisible();
+    await expect(page.getByText('/library/import-book-1.m4b')).toBeVisible();
   });
 
   // REMOVED 2026-08-09: 'organize operation: handles duplicate files'. It
@@ -500,16 +485,11 @@ test.describe('Scan/Import/Organize Workflow', () => {
     await page.getByLabel('Select Import Book 2').click();
     await page.getByLabel('Select Import Book 3').click();
     await page.getByRole('button', { name: 'Organize Selected' }).click();
-    await page
-      .getByRole('button', { name: 'Organize Selected' })
-      .last()
-      .click();
+    await page.getByRole('button', { name: 'Organize Selected' }).last().click();
 
     // Assert
     await expect(page.getByText('Organize Error')).toBeVisible();
-    await expect(
-      page.getByText('Failed to organize Import Book 3.')
-    ).toBeVisible();
+    await expect(page.getByText('Failed to organize Import Book 3.')).toBeVisible();
     await page.getByRole('button', { name: 'Rollback' }).click();
     await waitForToast(page, 'Rollback complete.');
     await page
