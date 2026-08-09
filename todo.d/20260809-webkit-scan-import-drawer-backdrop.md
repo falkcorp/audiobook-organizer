@@ -1,12 +1,37 @@
 <!-- file: todo.d/20260809-webkit-scan-import-drawer-backdrop.md -->
-<!-- version: 2.0.0 -->
+<!-- version: 3.0.0 -->
 <!-- guid: 4d20e8b7-1c63-49fa-85e0-7b3f9a06c214 -->
 <!-- last-edited: 2026-08-09 -->
 
-- [ ] **Webkit has a POPULATION of marginal tests on CI, not one broken one.** Retitled
-      after the original drawer failure was fixed and a *different* test failed in its
-      place. This is what keeps the *nightly* (chromium + webkit) advisory rather than
-      blocking. The PR path (chromium) is green and blocks as of 2026-08-09.
+- [x] **RESOLVED — webkit was marginal on TIMING, and its own 60s budget fixed the
+      class.** The nightly now blocks too; `continue-on-error` is a plain `false`.
+
+      **Final measurement on the real runner:**
+
+      | configuration | result |
+      |---|---|
+      | chromium (PR path) | **272 passed / 0 failed / 8 skipped** |
+      | chromium + webkit | **544 passed / 0 failed / 16 skipped** |
+
+      The fix was one line — `timeout: 60 * 1000` on the webkit project only, chromium
+      keeping 30s — and it was chosen as the *discriminating experiment* for the
+      population hypothesis rather than as a workaround. It came back green, so the
+      hypothesis is confirmed: webkit had several tests close to the shared 30s limit and
+      roughly one lost per run.
+
+      **Why this is headroom and not blindness:** a genuinely broken test does not finish
+      in 60s either. What changed is that a slow-but-correct one stopped being reported as
+      a failure. Chromium keeps the tighter budget because it had margin to spare once CI
+      dropped to one worker.
+
+      **Cheaper than the plan this fragment originally proposed.** It suggested three
+      measurement runs to characterise the failing set first; one config change answered
+      the same question and fixed it. Worth remembering: when a hypothesis implies a
+      one-line change, the change often IS the measurement.
+
+      ---
+
+      **Original entry, for the record.**
 
       ## The update that changes the shape of this problem
 
