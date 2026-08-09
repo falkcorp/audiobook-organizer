@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.18.2 -->
+<!-- version: 10.19.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-08-09 -->
 
@@ -55,10 +55,22 @@ into one of the curated sections below, is a normal direct edit.
       **Acceptance:** a PR that breaks any e2e spec fails a check, and the
       failure names the spec rather than surfacing as a browser-launch error.
 
-- [ ] **The e2e suite is roughly HALF RED in a clean environment — 146 failed /
+- [x] **The e2e suite is roughly HALF RED in a clean environment — 146 failed /
       138 passed. Triage it, then make the CI gate blocking.** Discovered
       2026-08-08 by the first-ever clean-environment run, immediately after
       wiring the suite into CI (#2202).
+
+      ✅ **DONE 2026-08-09 across 14 PRs (#2224–#2237).** Measured on merged
+      `main` from a clean worktree: **chromium 272 passed / 7 skipped / 0
+      failing**; webkit 268 / 7 / 4. The 7 skipped are `test.fixme` markers
+      attached to real product defects, so they report as *unexpected passes*
+      once fixed — nothing was deleted or silently skipped. The 4 webkit
+      failures are webkit-only pagination differences (3 `library-browser`,
+      1 `library-sidebar-filters`) and are NOT diagnosed. Full audit with
+      file:line evidence:
+      `docs/audits/2026-08-09-e2e-repair-and-ui-regressions.md`.
+      Sub-items 3 (flip `continue-on-error` off) and the webkit tail remain —
+      broken out below.
 
       **This contradicts what was believed on 2026-08-08 morning.** The
       executive summary
@@ -151,8 +163,17 @@ into one of the curated sections below, is a normal direct edit.
          drop several files at once — that is how one `{ data: ... }` envelope
          fix cleared 24 of 34 in wave 2.
       3. **Flip `continue-on-error` off** once green, and say so in the PR.
+         ⏳ **STILL OPEN.** The workflow was moved to nightly-only rather than
+         made blocking, because a permanently-red check on every PR is worse
+         than no check. Now that chromium is green this can be reconsidered —
+         but the 4 webkit failures and the missing linux visual goldens have to
+         be dealt with first or the gate goes red on day one.
       4. **Correct the executive summary** rather than leaving a claim on the
          record that the safety net is restored when half of it is on the floor.
+         ✅ **DONE 2026-08-09.** A correction banner was added to
+         `2026-08-08-the-safety-net-that-had-stopped-catching-executive-summary.md`
+         and the outcome written up in
+         `2026-08-09-the-half-red-safety-net-executive-summary.md`.
 
       **Do not "fix" this by deleting or skipping the failing specs.** Six files
       were disabled-by-accident for four months and that is the incident this
@@ -161,6 +182,21 @@ into one of the curated sections below, is a normal direct edit.
 - [ ] **Audit every e2e mock handler against whether its app-side reader
       unwraps `body.data`.** Likely the dominant cause of the 146 e2e failures,
       and a systematic fix rather than 22 separate spec refreshes.
+
+      ⚠️ **PARTIALLY DONE 2026-08-09 — the prediction was half right.** The
+      envelope gap was indeed the single most common cause and was fixed
+      wherever it appeared (#2224, #2226, #2229, #2236). But it was **not** a
+      systematic fix: specs that mock by patching `window.fetch` inherit nothing
+      from `setupMockApi`, so each one needed its own copy. Note the two
+      exceptions that bite in the opposite direction — `getBookTags` and
+      `getBookExternalIDs` read the **top-level** body, so enveloping those
+      breaks them.
+
+      A related hazard found the same night and worth its own pass: a specific
+      branch in `setupMockApi` placed *below* a `startsWith(...)` prefix
+      catch-all is unreachable and fails **silently** with a 200. Three separate
+      instances existed (`/audiobooks/batch`, `/audiobooks/<id>/files`,
+      `/authors*`). See `todo.d/20260809-dead-bulk-fetch-dialog.md`.
 
       **Confirmed for `dedup.spec.ts` (26 failures, the largest single file).**
       `src/services/api.ts:1402` reads:
@@ -206,10 +242,23 @@ into one of the curated sections below, is a normal direct edit.
       were disabled-by-accident for four months and that is the incident this
       entire thread exists to prevent.
 
-- [ ] **The e2e failures have MIXED causes — do not plan a single systematic
+- [x] **The e2e failures have MIXED causes — do not plan a single systematic
       fix.** Sampled 2026-08-08 after a fragment filed an hour earlier
       speculated that one data-envelope gap might explain most of the 146.
       **It does not.** Four files sampled, at least three distinct causes:
+
+      ✅ **CONFIRMED CORRECT and closed 2026-08-09.** All four predictions held,
+      and the fourth paid off: the hunch that `search-and-filter` was "the only
+      one of the four that might indicate a real product defect" was **right**.
+      Two real defects sit behind it — `searchBooksPage` sends no
+      `library_state`, `filters`, `tags` or `sort_by`, so typing in the search
+      box silently discards every active filter and the sort order; and the
+      search is not debounced at all (ten requests for a ten-character query).
+      Both are in `todo.d/20260809-search-drops-filters-and-debounce.md`, and
+      the two tests are `test.fixme` rather than rewritten to match broken
+      behaviour. The final cause tally across all 22 files was four shapes, not
+      one: missing envelope; a mock branch shadowed by a prefix catch-all; UI
+      relocated rather than removed; and mock field name ≠ book field name.
 
       - **`dedup.spec.ts` (26)** — the data-envelope bug, *verified*.
         `api.ts:1402` reads `body.data.groups`; the mock returns
@@ -352,6 +401,20 @@ into one of the curated sections below, is a normal direct edit.
       surface that is gone.** Found 2026-08-09 while repairing
       `library-browser.spec.ts`.
 
+      **Test side ✅ DONE (#2230); product decision ⏳ STILL OPEN.** The four
+      tests now drive sort through the URL (`?sort=…&order=…`), which is the
+      only surviving mechanism, so the sort *behaviour* stays covered. What is
+      unresolved is whether losing the control was intentional. Hard evidence:
+      `SearchBarProps` (`web/src/components/audiobooks/SearchBar.tsx:124-131`)
+      has no `onSortChange` prop at all, and
+      `web/src/components/library/LibraryBookGrid.tsx:133` receives the handler
+      as `_handleSortChange` — underscore-prefixed to mark it deliberately
+      unused. `SearchBar.test.tsx:43` asserts "does not render sort controls
+      when `onSortChange` is absent", which now passes vacuously because the
+      prop cannot be supplied. Either restore the control, or delete the dead
+      state and that vacuous unit test.
+      Full write-up: `todo.d/20260809-library-sort-control-missing.md`.
+
       `sorts books by title ascending` / `title descending` / `author` /
       `date added` all do:
 
@@ -475,7 +538,7 @@ into one of the curated sections below, is a normal direct edit.
       sub-resources returning the book object — was found that way, and every
       wrong guess came from reasoning about what *should* be there instead.
 
-- [ ] **`transcode-and-counting.spec.ts` (11 failures) — two hypotheses tested
+- [x] **`transcode-and-counting.spec.ts` (11 failures) — two hypotheses tested
       and REJECTED. Read this before trying either again.**
       Investigated 2026-08-09; no code shipped, because nothing that was tried
       improved the count and one attempt made it worse.
@@ -511,6 +574,22 @@ into one of the curated sections below, is a normal direct edit.
       reading `test-results/*/error-context.md` and looking at what was on the
       page. Every wrong guess — including both above — came from reasoning
       about what should be there. Look first.
+
+      ✅ **RESOLVED 2026-08-09 (#2229): 11 → 0.** The "one solid lead" recorded
+      above was **also wrong**. It concluded that "Library Books" comes from
+      `countBooksFiltered` rather than `/system/status`, and therefore that
+      these tests mock the wrong endpoint. `Dashboard.tsx:97` reads
+      `systemStatus.library_book_count ?? systemStatus.library.book_count`, so
+      `/system/status` *is* the right endpoint. What was wrong was the **shape**:
+      both overrides returned a flat, un-enveloped body, `api.getSystemStatus`
+      returns `body.data`, and Dashboard then threw on `.library` — which is why
+      *every* count read 0, including Authors and Series that have their own
+      endpoints entirely. That is exactly the misdirection that made rejected
+      hypothesis 1 look like it changed nothing: the envelope alone is not
+      enough without the nested `library.book_count` shape. Both together took
+      it 11 → 9; the rest were the Manage Versions relocation, two
+      route-patterns that never matched, and a button that relabels itself to
+      "Converting..." mid-assertion.
 
 <!-- file: todo.d/20260807_194500_deluge_must_not_write_into_import_dir.md -->
 <!-- version: 1.0.0 -->
