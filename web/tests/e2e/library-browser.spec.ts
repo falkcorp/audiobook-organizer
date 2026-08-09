@@ -1,10 +1,10 @@
 // file: web/tests/e2e/library-browser.spec.ts
-// version: 1.6.0
+// version: 1.5.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f2a3b4c5d6e7
 // last-edited: 2026-08-09
 
 import { test, expect, type Page } from '@playwright/test';
-import { generateTestBooks, setupLibraryWithBooks, waitForMenuClosed } from './utils/test-helpers';
+import { generateTestBooks, setupLibraryWithBooks } from './utils/test-helpers';
 
 /**
  * Click a pagination control and wait for it to actually take effect.
@@ -43,10 +43,9 @@ async function clickPagination(page: Page, name: RegExp, expectedUrl: RegExp) {
       await expect(page).toHaveURL(expectedUrl, { timeout: 3000 });
       break;
     } catch {
-      if (attempt === 1)
-        throw new Error(
-          `pagination control ${name} did not navigate to ${expectedUrl} after 2 clicks`
-        );
+      if (attempt === 1) throw new Error(
+        `pagination control ${name} did not navigate to ${expectedUrl} after 2 clicks`,
+      );
       // Make the masked click visible. See KNOWN LIMIT above: a silent retry
       // would hide a real every-other-click regression, so it must be noisy.
       const note = `pagination click on ${name} was swallowed; retrying (known webkit harness flake)`;
@@ -242,7 +241,6 @@ test.describe('Library Browser', () => {
     await page.getByRole('button', { name: /filters/i }).click();
     await page.getByRole('combobox', { name: 'Library State' }).click();
     await page.getByRole('option', { name: 'Organized' }).click();
-    await waitForMenuClosed(page);
     // Close filter drawer to check main content
     await page.keyboard.press('Escape');
 
@@ -276,7 +274,6 @@ test.describe('Library Browser', () => {
     await page.getByRole('button', { name: /filters/i }).click();
     await page.getByRole('combobox', { name: 'Library State' }).click();
     await page.getByRole('option', { name: 'Imported', exact: true }).click();
-    await waitForMenuClosed(page);
     await page.keyboard.press('Escape');
 
     // THEN: Only import books are shown
@@ -311,7 +308,6 @@ test.describe('Library Browser', () => {
     await page.getByRole('button', { name: /filters/i }).click();
     await page.getByRole('combobox', { name: 'Library State' }).click();
     await page.getByRole('option', { name: 'Deleted' }).click();
-    await waitForMenuClosed(page);
     await page.keyboard.press('Escape');
 
     // THEN: Only deleted books are shown
@@ -344,7 +340,6 @@ test.describe('Library Browser', () => {
     await page.getByRole('button', { name: /filters/i }).click();
     await page.getByRole('combobox', { name: 'Author' }).click();
     await page.getByRole('option', { name: 'Brandon Sanderson' }).click();
-    await waitForMenuClosed(page);
     await page.keyboard.press('Escape');
 
     // THEN: Only books by that author are shown
@@ -377,7 +372,6 @@ test.describe('Library Browser', () => {
     await page.getByRole('button', { name: /filters/i }).click();
     await page.getByRole('combobox', { name: 'Series' }).click();
     await page.getByRole('option', { name: 'Stormlight Archive' }).click();
-    await waitForMenuClosed(page);
     await page.keyboard.press('Escape');
 
     // THEN: Only books in that series are shown
@@ -412,10 +406,8 @@ test.describe('Library Browser', () => {
     await page.getByRole('button', { name: /filters/i }).click();
     await page.getByRole('combobox', { name: 'Library State' }).click();
     await page.getByRole('option', { name: 'Organized' }).click();
-    await waitForMenuClosed(page);
     await page.getByRole('combobox', { name: 'Author' }).click();
     await page.getByRole('option', { name: 'Brandon Sanderson' }).click();
-    await waitForMenuClosed(page);
     await page.keyboard.press('Escape');
 
     // THEN: Only organized books by Brandon Sanderson are shown
@@ -434,7 +426,7 @@ test.describe('Library Browser', () => {
     await page.getByRole('button', { name: /filters/i }).click();
     await page.getByRole('combobox', { name: 'Library State' }).click();
     await page.getByRole('option', { name: 'Organized' }).click();
-    await waitForMenuClosed(page);
+
     // WHEN: User clicks "Clear All" button
     await page.getByRole('button', { name: /clear all/i }).click();
     await page.keyboard.press('Escape');
@@ -455,7 +447,7 @@ test.describe('Library Browser', () => {
     // WHEN: User selects "50" from items-per-page dropdown
     await page.getByRole('combobox', { name: 'Items per page' }).click();
     await page.getByRole('option', { name: '50', exact: true }).click();
-    await waitForMenuClosed(page);
+
     // THEN: Page reloads showing 50 items
     await expect(page.getByRole('heading', { name: 'Test Book 49', exact: true })).toBeVisible();
   });
@@ -549,7 +541,6 @@ test.describe('Library Browser', () => {
     await page.getByRole('button', { name: /filters/i }).click();
     await page.getByRole('combobox', { name: 'Library State' }).click();
     await page.getByRole('option', { name: 'Deleted' }).click();
-    await waitForMenuClosed(page);
     await page.keyboard.press('Escape');
 
     // THEN: Shows empty state
@@ -585,7 +576,6 @@ test.describe('Library Browser', () => {
     await page.getByRole('button', { name: /filters/i }).click();
     await page.getByRole('combobox', { name: 'Library State' }).click();
     await page.getByRole('option', { name: 'Organized' }).click();
-    await waitForMenuClosed(page);
     await page.keyboard.press('Escape');
 
     // WHEN: User reloads the page

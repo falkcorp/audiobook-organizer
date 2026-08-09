@@ -1,11 +1,14 @@
 // file: web/tests/e2e/settings-ai-persistence.spec.ts
-// version: 1.2.0
+// version: 1.1.0
 // guid: f1e2d3c4-b5a6-7890-abcd-123456789abc
 
 import { test, expect, type Page } from '@playwright/test';
-import { setupMockApi, waitForMenuClosed } from './utils/test-helpers';
+import { setupMockApi } from './utils/test-helpers';
 
-const openSettings = async (page: Page, options: Parameters<typeof setupMockApi>[1] = {}) => {
+const openSettings = async (
+  page: Page,
+  options: Parameters<typeof setupMockApi>[1] = {}
+) => {
   await setupMockApi(page, options);
   await page.goto('/settings');
   await page.waitForLoadState('networkidle');
@@ -107,7 +110,7 @@ test.describe('AI Backends (TASK-11)', () => {
 
     await page.getByLabel('Embedding mode').click();
     await page.getByRole('option', { name: 'Local (Ollama)' }).click();
-    await waitForMenuClosed(page);
+
     await expect(page.getByLabel('Local base URL')).toBeVisible();
     await expect(page.getByLabel('Local embedding model')).toBeVisible();
     await expect(page.getByLabel('Local LLM model')).toBeVisible();
@@ -119,7 +122,7 @@ test.describe('AI Backends (TASK-11)', () => {
     await page.getByRole('tab', { name: 'Dedup' }).click();
     await page.getByLabel('Embedding mode').click();
     await page.getByRole('option', { name: 'Local (Ollama)' }).click();
-    await waitForMenuClosed(page);
+
     await page.getByLabel('Local base URL').fill('http://192.168.0.20:11434/v1');
     await page.getByLabel('Local embedding model').fill('bge-m3');
 
@@ -134,9 +137,7 @@ test.describe('AI Backends (TASK-11)', () => {
     await expect(page.getByLabel('Local embedding model')).toHaveValue('bge-m3');
   });
 
-  test('Test Connection with an absent local model shows the pull-model dialog', async ({
-    page,
-  }) => {
+  test('Test Connection with an absent local model shows the pull-model dialog', async ({ page }) => {
     await openSettings(page, {
       config: {
         ai_backend: {
