@@ -1,7 +1,7 @@
 // file: web/tests/e2e/auth-flow.spec.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9b9cd01d-ea34-4d87-bc84-f390b6ef10cd
-// last-edited: 2026-06-23
+// last-edited: 2026-08-09
 
 import { test, expect } from '@playwright/test';
 import { setupPhase2Interactive } from './utils/test-helpers';
@@ -47,7 +47,14 @@ test.describe('Authentication Flow', () => {
     await page.getByRole('button', { name: 'Create And Login' }).click();
 
     await expect(page).toHaveURL(/\/dashboard$/);
-    await expect(page.getByLabel('logout')).toBeVisible();
+    // The logout control moved into UserMenu: the header now shows a Chip
+    // labelled with the username (UserMenu.tsx:134-146) that opens a menu whose
+    // Logout entry is a MenuItem, not a labelled button. Assert the same thing
+    // the old locator stood for — the user is signed in and can sign out.
+    const userChip = page.getByRole('button', { name: 'first-admin' });
+    await expect(userChip).toBeVisible();
+    await userChip.click();
+    await expect(page.getByRole('menuitem', { name: 'Logout' })).toBeVisible();
   });
 
   test('shows invalid-credential error before successful login', async ({
