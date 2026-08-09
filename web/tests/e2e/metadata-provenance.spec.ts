@@ -1,7 +1,7 @@
 // file: tests/e2e/metadata-provenance.spec.ts
-// version: 2.0.0
+// version: 2.1.0
 // guid: 9a8b7c6d-5e4f-3d2c-1b0a-9f8e7d6c5b4a
-// last-edited: 2026-03-04
+// last-edited: 2026-08-09
 
 /**
  * E2E tests for MetadataEditDialog provenance features.
@@ -20,9 +20,15 @@ const bookId = 'prov-test-book';
 const createBookData = () => ({
   id: bookId,
   title: 'Provenance Test Book',
+  // Both spellings on purpose: the API returns author_name/series_name and the
+  // app reads those, but some older assertions still reference author/series.
+  // Supplying only the short form made the detail page render "Unknown Author"
+  // and left the dialog's Author box empty.
   author: 'Test Author',
+  author_name: 'Test Author',
   narrator: 'User Override Narrator',
   series: 'DB Series',
+  series_name: 'DB Series',
   series_number: 3,
   genre: 'Science Fiction',
   year: 2024,
@@ -124,11 +130,26 @@ const setupMockRoutes = async (page: import('@playwright/test').Page) => {
       let savedBook = { ...book };
       let lastSaveDirtyFields: string[] = [];
 
-      const jsonResponse = (body: unknown, status = 200) =>
-        new Response(JSON.stringify(body), {
+      // Adds the { data: ... } envelope the real API returns, matching what
+      // test-helpers.ts does for the page.route-based mocks. This spec mocks
+      // by patching window.fetch instead, so it gets none of that and needs
+      // its own copy.
+      //
+      // The envelope is additive: `{ ...body, data: body }` keeps every
+      // top-level key, so readers using `body.items` and readers using
+      // `body.data.items` both work. Arrays and already-wrapped bodies are
+      // left alone. Without it api.getBook() reads body.data === undefined and
+      // the page renders "Audiobook not found".
+      const jsonResponse = (body: unknown, status = 200) => {
+        const envelope =
+          body && typeof body === 'object' && !Array.isArray(body) && !('data' in body)
+            ? { ...(body as Record<string, unknown>), data: body }
+            : body;
+        return new Response(JSON.stringify(envelope), {
           status,
           headers: { 'Content-Type': 'application/json' },
         });
+      };
 
       const originalFetch = window.fetch.bind(window);
       window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
@@ -139,6 +160,26 @@ const setupMockRoutes = async (page: import('@playwright/test').Page) => {
               ? input.toString()
               : input.url;
         const method = (init?.method || 'GET').toUpperCase();
+
+        // Auth. Without this the shim falls through to the real server, the
+        // auth check fails, and the app renders the Login screen instead of
+        // the book — which is why all 12 tests here failed looking for a
+        // heading that was never going to be on the page.
+        //
+        // api.getAuthStatus() reads `body.data`, so the envelope is required,
+        // not decorative. This spec mocks by patching window.fetch rather than
+        // using page.route + setupMockApi, so it gets none of the shared
+        // handlers and has to cover auth itself.
+        if (url.includes('/api/v1/auth/status')) {
+          const authStatus = {
+            has_users: true,
+            auth_enabled: false,
+            requires_auth: false,
+            authenticated: true,
+            user: { id: 'test-user', username: 'test', role: 'admin' },
+          };
+          return Promise.resolve(jsonResponse({ ...authStatus, data: authStatus }));
+        }
 
         // Health / system
         if (url.includes('/api/v1/health')) {
@@ -160,6 +201,37 @@ const setupMockRoutes = async (page: import('@playwright/test').Page) => {
         // Field-states endpoint
         if (url.includes(`/api/v1/audiobooks/${injectedBookId}/field-states`)) {
           return Promise.resolve(jsonResponse(fieldStates));
+        }
+
+        // Book sub-resources MUST be matched before the generic book branch
+        // below. That branch matches any URL containing the book id, so
+        // without these it also swallowed /files, /versions, /tags, /segments
+        // and /external-ids and handed each of them the BOOK object. The page
+        // then called .length on what it expected to be an array and crashed
+        // into the error boundary ("Cannot read properties of undefined
+        // (reading 'length')"), so every test here failed looking for a
+        // heading on a page that had thrown.
+        //
+        // Shapes mirror src/services/api.ts: getBookFiles/getBookSegments
+        // return body.data, getBookVersions reads body.data.versions,
+        // getBookTagsDetailed reads data.tags.
+        if (url.includes(`/api/v1/audiobooks/${injectedBookId}/files`)) {
+          return Promise.resolve(jsonResponse({ files: [], total: 0 }));
+        }
+        if (url.includes(`/api/v1/audiobooks/${injectedBookId}/versions`)) {
+          return Promise.resolve(jsonResponse({ versions: [] }));
+        }
+        if (url.includes(`/api/v1/audiobooks/${injectedBookId}/segments`)) {
+          return Promise.resolve(jsonResponse({ segments: [], total: 0 }));
+        }
+        if (url.includes(`/api/v1/audiobooks/${injectedBookId}/tags`)) {
+          return Promise.resolve(jsonResponse({ tags: [] }));
+        }
+        if (url.includes(`/api/v1/audiobooks/${injectedBookId}/external-ids`)) {
+          return Promise.resolve(jsonResponse({ external_ids: [], itunes_linked: false, total: 0 }));
+        }
+        if (url.includes(`/api/v1/audiobooks/${injectedBookId}/changelog`)) {
+          return Promise.resolve(jsonResponse({ entries: [], total: 0 }));
         }
 
         // Book detail
@@ -199,6 +271,20 @@ const setupMockRoutes = async (page: import('@playwright/test').Page) => {
 };
 
 /**
+ * NOTE on field locators.
+ *
+ * To READ or FILL a field, use getByRole('textbox', { name, exact: true }).
+ * getByLabel('Title *') is a strict-mode violation for that purpose: every
+ * field has an adjacent lock IconButton labelled "Lock Title *", and
+ * getByLabel substring-matches, so it resolves to both the input and button.
+ *
+ * The lock tests deliberately still use getByLabel, because they walk the DOM
+ * relative to it ('..' -> '..' -> button) to reach the lock icon. That walk
+ * depends on where getByLabel lands; swapping it for the role query breaks
+ * tests that pass today. Do not "tidy" those into role queries without
+ * rewriting the traversal.
+ */
+/**
  * Navigates to book detail and opens the Edit Metadata dialog.
  */
 const openEditDialog = async (page: import('@playwright/test').Page) => {
@@ -209,7 +295,11 @@ const openEditDialog = async (page: import('@playwright/test').Page) => {
   await page.getByRole('button', { name: /Edit Metadata/i }).click();
   // Wait for dialog to appear
   await expect(page.getByRole('dialog')).toBeVisible();
-  await expect(page.getByText('Edit Metadata')).toBeVisible();
+  // Scope to the dialog. Bare getByText('Edit Metadata') is a strict-mode
+  // violation now: it matches BOTH the button that opens the dialog and the
+  // dialog's own title, so it fails with "resolved to 2 elements" rather than
+  // anything about the feature under test.
+  await expect(page.getByRole('dialog').getByText('Edit Metadata')).toBeVisible();
 };
 
 test.describe('MetadataEditDialog Provenance E2E', () => {
@@ -228,15 +318,15 @@ test.describe('MetadataEditDialog Provenance E2E', () => {
     ).toBeVisible();
 
     // Verify fields are populated
-    await expect(page.getByLabel('Title *')).toHaveValue('Provenance Test Book');
-    await expect(page.getByLabel('Author')).toHaveValue('Test Author');
-    await expect(page.getByLabel('Narrator')).toHaveValue('User Override Narrator');
-    await expect(page.getByLabel('Series')).toHaveValue('DB Series');
-    await expect(page.getByLabel('Genre')).toHaveValue('Science Fiction');
-    await expect(page.getByLabel('Year')).toHaveValue('2024');
-    await expect(page.getByLabel('Language')).toHaveValue('en');
-    await expect(page.getByLabel('Publisher')).toHaveValue('Audible Studios');
-    await expect(page.getByLabel('ISBN-13')).toHaveValue('978-1234567890');
+    await expect(page.getByRole('textbox', { name: 'Title *', exact: true })).toHaveValue('Provenance Test Book');
+    await expect(page.getByRole('textbox', { name: 'Author', exact: true })).toHaveValue('Test Author');
+    await expect(page.getByRole('textbox', { name: 'Narrator', exact: true })).toHaveValue('User Override Narrator');
+    await expect(page.getByRole('textbox', { name: 'Series', exact: true })).toHaveValue('DB Series');
+    await expect(page.getByRole('textbox', { name: 'Genre', exact: true })).toHaveValue('Science Fiction');
+    await expect(page.getByRole('textbox', { name: 'Year', exact: true })).toHaveValue('2024');
+    await expect(page.getByRole('textbox', { name: 'Language', exact: true })).toHaveValue('en');
+    await expect(page.getByRole('textbox', { name: 'Publisher', exact: true })).toHaveValue('Audible Studios');
+    await expect(page.getByRole('textbox', { name: 'ISBN-13', exact: true })).toHaveValue('978-1234567890');
 
     // Verify Cancel and Save buttons
     await expect(page.getByRole('button', { name: 'Cancel' })).toBeVisible();
@@ -257,7 +347,7 @@ test.describe('MetadataEditDialog Provenance E2E', () => {
     await expect(narratorLockButton.locator('[data-testid="LockIcon"]')).toBeVisible();
 
     // Title has override_locked: false - should show open lock
-    const titleField = page.getByLabel('Title *');
+    const titleField = page.getByRole('textbox', { name: 'Title *', exact: true });
     const titleContainer = titleField.locator('..').locator('..');
     const titleLockButton = titleContainer.locator('button').first();
     await expect(titleLockButton.locator('[data-testid="LockOpenIcon"]')).toBeVisible();
@@ -339,7 +429,7 @@ test.describe('MetadataEditDialog Provenance E2E', () => {
     await setupMockRoutes(page);
     await openEditDialog(page);
 
-    const yearField = page.getByLabel('Year');
+    const yearField = page.getByRole('textbox', { name: 'Year', exact: true });
     await yearField.fill('not-a-number');
 
     // Should show year error
@@ -358,7 +448,7 @@ test.describe('MetadataEditDialog Provenance E2E', () => {
     await openEditDialog(page);
 
     // Edit a field
-    await page.getByLabel('Title *').fill('Should Not Be Saved');
+    await page.getByRole('textbox', { name: 'Title *', exact: true }).fill('Should Not Be Saved');
 
     // Click Cancel
     await page.getByRole('button', { name: 'Cancel' }).click();
@@ -375,7 +465,7 @@ test.describe('MetadataEditDialog Provenance E2E', () => {
     await openEditDialog(page);
 
     // Edit author field
-    await page.getByLabel('Author').fill('New Author Name');
+    await page.getByRole('textbox', { name: 'Author', exact: true }).fill('New Author Name');
 
     // Click Save
     await page.getByRole('button', { name: 'Save' }).click();
