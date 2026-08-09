@@ -1,5 +1,5 @@
 <!-- file: docs/audits/2026-08-09-e2e-repair-and-ui-regressions.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 7a2f9d41-3e05-4b8c-9160-c4d8b7e35291 -->
 <!-- last-edited: 2026-08-09 -->
 
@@ -7,12 +7,16 @@
 
 ## Where the suite stands
 
-**16 failing specs (chromium)**, down from 66 at the start of this session.
+**~6 failing specs (chromium)**, down from 66 at the start of this session.
 
 Provenance, because the number has been misquoted before: the 66 baseline was measured
 at `4f24c1af`. The last full local run measured **31**, from a worktree that predated
-#2229; subtracting that PR's 11 gives 20, and #2232 took another 4, giving **16**.
-Re-measure before trusting it:
+#2229; subtracting that PR's 11 gives 20, then #2232 took 4 and #2234 took 6, giving
+~10, and #2235 took the last 4
+(2 fixed, 2 converted to `test.fixme` because they are catching real bugs), giving **~6**.
+Treat that as approximate — `error-handling` reported 3 failures in the
+full-suite JSON but only 2 when run alone, so one of its tests may be order-dependent or
+flaky. Re-measure before trusting any of it:
 
 ```
 cd <a worktree at origin/main>/web
@@ -45,7 +49,7 @@ Still open: there are **no linux goldens at all**, so the visual test cannot pas
 runner regardless. Pre-existing, but it means the nightly e2e workflow has a permanent
 red until linux goldens are committed or the test is scoped to one platform.
 
-## Files fixed (9 PRs — #2224–#2230, #2232, #2233)
+## Files fixed (11 PRs — #2224–#2230, #2232–#2235)
 
 | PR | File | Before → after |
 |---|---|---|
@@ -58,10 +62,12 @@ red until linux goldens are committed or the test is scoped to one platform.
 | #2230 | `library-browser.spec.ts` + a product fix | 12 → 0 |
 | #2232 | `metadata-provenance.spec.ts` + a product fix | 4 → 0 |
 | #2233 | webkit visual golden | 1 → 0 (webkit) |
+| #2234 | `error-handling` + `scan-import-organize` | 5 → 0 (both browsers) |
+| #2235 | `auth-flow` + `search-and-filter` | 3 → 0 (2 fixed, 2 fixme) |
 
 ## Product findings — the valuable output of this session
 
-Nine things the tests uncovered that are **not** test problems. Ordered by user impact.
+Eleven things the tests uncovered that are **not** test problems. Ordered by user impact.
 Each has a `todo.d` fragment; this is the consolidated list.
 
 1. **You cannot sort the library.** `SearchBarProps`
@@ -112,6 +118,20 @@ Each has a `todo.d` fragment; this is the consolidated list.
    `AudiobookCard.tsx:183` — an `IconButton` containing only `<MoreVertIcon/>`. It is now
    the **only** route to Manage Versions, Edit, Fetch Metadata and Parse with AI. The e2e
    suite has to find it via `button:has([data-testid="MoreVertIcon"])`.
+
+10. **Typing in the search box silently drops every active filter and the sort order.**
+    `useLibraryQuery.ts:192-193` routes any non-empty search through
+    `api.searchBooksPage`, which (`api.ts:1023-1037`) sends only `search`, `limit`,
+    `offset`, `is_primary_version` and optionally `show_quarantined` — no
+    `library_state`, no `filters`, no `tags`, no `sort_by`. Filter to Organized, search
+    an author, get matches from every state, with the Filters chip still showing its
+    count.
+
+11. **The library search is not debounced at all.** Typing the ten characters of
+    "Foundation" fires ten requests, exactly one per keystroke. The e2e test is named
+    "search debounces input to avoid excessive requests" and asserts `<= 3`. Directly
+    relevant to the richer-backend-filtering TODO: no server-side improvement helps if
+    the client sends ten queries per search.
 
 Also noted: `TagComparison.tsx:69` has dead `expanded` state — `useState(true)` with
 `setExpanded` never called.
@@ -164,10 +184,6 @@ about what the page *should* contain; all came from reading
 run only because that worktree predated the merge.
 
 ```
- 3  error-handling.spec.ts
- 3  scan-import-organize.spec.ts
- 2  auth-flow.spec.ts
- 2  search-and-filter.spec.ts
  1  diagnostics.spec.ts
  1  import-audiobook-file.spec.ts
  1  import-paths.spec.ts
@@ -176,6 +192,6 @@ run only because that worktree predated the merge.
  1  settings-configuration.spec.ts
 ```
 
-`metadata-provenance` is now at 0 (#2232). `scan-import-organize` already had the auth
-fix applied earlier in the session, so its remaining failures are content drift, not the
-login-screen cause.
+`metadata-provenance` (#2232), `error-handling` and `scan-import-organize` (#2234) are
+all at 0 now. Nothing in the remaining list has been diagnosed — they are the untouched
+tail of ones and twos.
