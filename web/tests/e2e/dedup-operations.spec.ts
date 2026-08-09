@@ -1,7 +1,7 @@
 // file: web/tests/e2e/dedup-operations.spec.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: e2f3a4b5-c6d7-8e9f-0a1b-2c3d4e5f6a7b
-// last-edited: 2026-06-23
+// last-edited: 2026-08-09
 
 import { test, expect, type Page } from '@playwright/test';
 import {
@@ -42,6 +42,28 @@ const mixedGroups: MockAuthorDedupGroup[] = [
   },
 ];
 
+
+/**
+ * Opt into the legacy tabbed Dedup UI.
+ *
+ * /dedup was redesigned: it renders a unified candidate view, and the tabbed
+ * Books/Authors/Series UI these tests cover sits behind a "Legacy View" toggle
+ * persisted as sessionStorage.dedup_show_legacy. Without this, ?tab=authors
+ * renders the unified surface and every assertion fails with
+ * "element(s) not found".
+ *
+ * Must run BEFORE page.goto. Same fix as dedup.spec.ts.
+ */
+async function enableLegacyDedupView(page: Page) {
+  await page.addInitScript(() => {
+    try {
+      sessionStorage.setItem('dedup_show_legacy', '1');
+    } catch {
+      /* storage disabled — the test fails loudly rather than silently */
+    }
+  });
+}
+
 async function setupDedupWithOperations(page: Page, opts: {
   groups?: MockAuthorDedupGroup[];
   activeOps?: Array<Record<string, unknown>>;
@@ -77,6 +99,7 @@ async function setupDedupWithOperations(page: Page, opts: {
 test.describe('Production Company Resolution', () => {
   test('Find Real Author button only appears on production company groups', async ({ page }) => {
     await setupDedupWithOperations(page);
+    await enableLegacyDedupView(page);
     await page.goto('/dedup?tab=authors');
     await page.waitForLoadState('networkidle');
 
@@ -88,6 +111,7 @@ test.describe('Production Company Resolution', () => {
 
   test('production company badge is distinguishable from other groups', async ({ page }) => {
     await setupDedupWithOperations(page);
+    await enableLegacyDedupView(page);
     await page.goto('/dedup?tab=authors');
     await page.waitForLoadState('networkidle');
 
@@ -122,12 +146,20 @@ test.describe('Production Company Resolution', () => {
       });
     });
 
+    await enableLegacyDedupView(page);
+
     await page.goto('/dedup?tab=authors');
     await page.waitForLoadState('networkidle');
 
+    // Arm the waiter BEFORE clicking. waitForRequest only observes requests
+    // made after it is called, and the route above is mocked so the request
+    // fires and completes essentially instantly — a waiter set up after the
+    // click can never see it. Same race as dedup.spec.ts had.
+    const resolveRequest = page.waitForRequest(req => req.url().includes('/resolve-production'));
+
     await page.getByRole('button', { name: /find real author/i }).first().click();
-    // Wait for the API request rather than sleeping — avoids flakiness under load.
-    await page.waitForRequest(req => req.url().includes('/resolve-production'));
+
+    await resolveRequest;
     expect(resolveCallCount).toBeGreaterThan(0);
   });
 });
@@ -137,6 +169,7 @@ test.describe('Production Company Resolution', () => {
 test.describe('Dedup Operation Progress', () => {
   test('merge operation shows success feedback', async ({ page }) => {
     await setupDedupWithOperations(page);
+    await enableLegacyDedupView(page);
     await page.goto('/dedup?tab=authors');
     await page.waitForLoadState('networkidle');
 
@@ -148,6 +181,7 @@ test.describe('Dedup Operation Progress', () => {
 
   test('split operation shows feedback', async ({ page }) => {
     await setupDedupWithOperations(page);
+    await enableLegacyDedupView(page);
     await page.goto('/dedup?tab=authors');
     await page.waitForLoadState('networkidle');
 
@@ -182,6 +216,7 @@ test.describe('Scheduler Tasks for Dedup', () => {
 
   test('manual task trigger creates operation', async ({ page }) => {
     await setupDedupWithOperations(page);
+    await enableLegacyDedupView(page);
     await page.goto('/dedup?tab=authors');
     await page.waitForLoadState('networkidle');
 
@@ -212,6 +247,8 @@ test.describe('Dedup Error Handling', () => {
       });
     });
 
+    await enableLegacyDedupView(page);
+
     await page.goto('/dedup?tab=authors');
     await page.waitForLoadState('networkidle');
 
@@ -220,6 +257,7 @@ test.describe('Dedup Error Handling', () => {
 
   test('handles merge failure gracefully', async ({ page }) => {
     await setupDedupWithOperations(page);
+    await enableLegacyDedupView(page);
     await page.goto('/dedup?tab=authors');
     await page.waitForLoadState('networkidle');
 
@@ -248,6 +286,8 @@ test.describe('Dedup Error Handling', () => {
         body: JSON.stringify({ error: 'Resolution failed' }),
       });
     });
+
+    await enableLegacyDedupView(page);
 
     await page.goto('/dedup?tab=authors');
     await page.waitForLoadState('networkidle');
