@@ -1,14 +1,75 @@
 <!-- file: docs/design/2026-08-09-search-backend-options.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 2.0.0 -->
 <!-- guid: 4f1c8a72-6d93-4e05-b8a1-9c72e0f45d38 -->
 <!-- last-edited: 2026-08-09 -->
 
 # Search backend — design options and trade-offs
 
-**Status:** decision document, nothing decided. Written 2026-08-09 at the owner's request.
+**Status:** decision document. **Two decisions now taken — see §0a.** The rest remains open.
+Written 2026-08-09 at the owner's request; updated the same day with the owner's answers.
 **Audience:** the owner, making a build-vs-buy-vs-keep call.
 **Companion reading:** `todo.d/20260809-search-drops-filters-and-debounce.md`,
 `docs/audits/2026-08-09-e2e-repair-and-ui-regressions.md` (findings 10 and 11).
+
+---
+
+## 0a. Owner decisions, 2026-08-09
+
+Recorded verbatim in substance, because they close two of the ten questions in §6 and
+change what the recommendation is:
+
+> "I want the system to not suck and I want sorting replaced, and done by go."
+
+**Decision 1 — sorting moves to the backend, in Go. Client-side sorting is to be
+replaced, not supplemented.** This answers **Q9** and part of **Q3**.
+
+**Decision 2 — "not suck" is the bar.** Taken as: the three defects in §2 are not
+acceptable as permanent behaviour, and a fix that leaves search dropping filters or
+firing per keystroke does not count as done. This resolves **Q3** as *all of the above*
+rather than picking one of the five readings.
+
+### What that means concretely, checked against the code rather than assumed
+
+Sorting today is in three places, and only one of them is right:
+
+| where | what it does | verdict |
+|---|---|---|
+| `internal/audiobooks/service_filtering.go:130` `applySorting` | Go, server-side, sorts the full filtered set | **Correct — keep and extend.** This is already "done by Go" |
+| `web/src/components/common/ConfigurableTable.tsx:201` | `[...rows].sort(...)` on the client | **Broken by design — replace.** It sorts *the current page*, so on a paginated library it reorders the 50 rows you can see rather than the library. "Sort by title descending" gives you the wrong 50 books, correctly ordered among themselves |
+| `web/src/services/api.ts` `searchBooksPage` | sends no `sort_by` at all | **Broken — fix.** Any search silently drops the sort order (§2.1) |
+
+There are **15** client-side `.sort()` call sites in `web/src`. Most are legitimate —
+sorting a book's own file list by track number, ordering tag clouds by count, ranking
+metadata-search candidates by score. Those operate on complete, small, already-fetched
+sets and are not what this decision is about. **The one that must go is any sort over a
+paginated slice of the library**, because it is not a sort of the library at all.
+
+Two further points that follow directly and are not optional if the bar is "not suck":
+
+1. **A sort is only meaningful if it is applied before pagination.** This is the same
+   defect as §2.2 (filters applied after pagination) and wants the same fix. Sorting
+   server-side without also pushing the filters down would produce a correctly-sorted
+   page of the wrong rows.
+2. **There is currently no UI control to sort at all** (audit finding 1: `SearchBarProps`
+   has no `onSortChange`; `LibraryBookGrid.tsx:133` takes the handler as
+   `_handleSortChange`, underscore-prefixed to mark it unused). So "replace sorting" is
+   partly "build the control that was removed", not only "move the logic". The state and
+   URL plumbing still work end-to-end — only the affordance is missing.
+
+### Revised recommendation
+
+§7's order still holds, with sorting folded in rather than bolted on afterwards:
+
+1. **Fix §2.1 and §2.3** — client sends filters *and* `sort_by`; debounce the box. Hours.
+2. **Push filters AND sort into the Bleve query (Option A1)**, so both are applied before
+   pagination. This is the single piece of real engineering and it now covers sorting.
+3. **Delete the client-side library sort** (`ConfigurableTable` row sort, where it is used
+   for the library grid) and restore the sort control wired to the existing URL/state
+   plumbing.
+4. Re-evaluate the engine question only after that.
+
+**Not changed by these decisions:** the engine choice (§4) and the API-shape choice (§5).
+Sorting in Go is orthogonal to whether the engine stays Bleve, and orthogonal to GraphQL.
 
 ---
 
@@ -382,8 +443,8 @@ months.
 Engine choice at 10K books and 500K books is not the same choice. §1.1's full-scan fallback
 is tolerable at the low end and catastrophic at the high end.
 
-**Q3. What does "search is bad" actually mean to you, concretely?**
-These have completely different fixes and I do not want to guess:
+**Q3. ~~What does "search is bad" mean?~~ — ANSWERED 2026-08-09: "not suck", i.e. all of
+these, not a pick-one.** Left in full because the list is still the work breakdown:
 - (a) "I filter to Organized, type an author, and get results from every state" → §2.1, one hour.
 - (b) "It's slow / the UI stutters while typing" → §2.3, thirty minutes.
 - (c) "Page 2 of a filtered search is wrong or empty" → §2.2, the architectural one.
@@ -417,7 +478,10 @@ seconds, or minutes? Changes whether A1 can push filters into the index at all �
 index can be stale, filter pushdown can return *wrong* results rather than merely
 stale-ranked ones, which is a much higher bar.
 
-**Q9. Is relevance ranking wanted, or is deterministic ordering preferred?**
+**Q9. ~~Relevance ranking or deterministic ordering?~~ — PARTLY ANSWERED 2026-08-09:
+sorting is to be replaced and done in Go (see §0a).** The open remainder is narrow: when a
+user has NOT chosen a sort, should results come back in relevance order or a stable
+default? The original note still stands and is the reason it matters:
 Right now the fallback returns key order and Bleve returns score order — so **the ordering
 silently changes depending on which path serviced the query.** That alone may explain some
 "search is weird" reports.
