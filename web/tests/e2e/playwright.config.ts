@@ -1,5 +1,5 @@
 // file: tests/e2e/playwright.config.ts
-// version: 1.10.0
+// version: 1.11.0
 // guid: 7c8d9e0f-1a2b-3c4d-5e6f-7a8b9c0d1e2f
 // last-edited: 2026-08-08
 
@@ -65,6 +65,26 @@ export default defineConfig({
       name: 'webkit',
       testIgnore: ['**/demo-*.spec.ts', '**/interactive-*.spec.ts'],
       use: { ...devices['Desktop Safari'] },
+      // Double the per-test budget for webkit only.
+      //
+      // Measured on the real runner: webkit has a POPULATION of tests sitting
+      // close to the 30s budget, and roughly one loses per run. Two
+      // consecutive both-engine runs scored an identical 543 passed / 1 failed
+      // / 16 skipped and failed DIFFERENT tests -- scan-import-organize:259,
+      // then (after that one was fixed) itunes-bidirectional-sync:121, in a
+      // different spec file. Fixing them individually is a treadmill: each fix
+      // is real and the score does not move.
+      //
+      // This is headroom, not blindness. A genuinely broken test does not
+      // finish in 60s either; what changes is that a slow-but-correct one
+      // stops being reported as a failure. The same reasoning as
+      // `workers: process.env.CI ? 1 : 2` above -- the app is not slow, the
+      // runner is loaded, and the suite should measure the app.
+      //
+      // Chromium keeps the tighter 30s: it stopped failing entirely once CI
+      // dropped to one worker, so it has margin to spare and there is no
+      // reason to spend it.
+      timeout: 60 * 1000,
       // We accept WebKit failures for now; main gate stays on Chromium.
       expect: {
         toMatchSnapshot: { maxDiffPixelRatio: 0.05 },
