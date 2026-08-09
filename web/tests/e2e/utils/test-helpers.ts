@@ -267,6 +267,10 @@ export interface MockApiOptions {
   systemStatus?: Record<string, unknown>;
   authorDedup?: { groups: MockAuthorDedupGroup[]; needs_refresh?: boolean };
   seriesDedup?: { groups: MockSeriesDupGroup[]; total_series?: number };
+  /** Rows for GET /dedup/stats — the Dedup page fetches this on mount. */
+  dedupStats?: Array<{ entity_type: string; layer: string; status: string; count: number }>;
+  /** Rows for GET /dedup/candidates — also fetched on mount by the Dedup page. */
+  dedupCandidates?: unknown[];
   aiBackendsStatus?: {
     embedding_mode?: string;
     llm_mode?: string;
@@ -400,6 +404,8 @@ export async function setupMockApiRoutes(
     failures: options.failures || {},
     authorDedup: options.authorDedup || { groups: [] },
     seriesDedup: options.seriesDedup || { groups: [], total_series: 0 },
+    dedupStats: options.dedupStats || [],
+    dedupCandidates: options.dedupCandidates || [],
     aiBackendsStatus: {
       embedding_mode: 'disabled',
       llm_mode: 'disabled',
@@ -424,11 +430,39 @@ export async function setupMockApiRoutes(
     const method = request.method();
     console.log(`[Mock API] ${method} ${pathname}`);
 
-    const jsonResponse = (body: unknown, status = 200) => ({
-      status,
-      contentType: 'application/json',
-      body: JSON.stringify(body),
-    });
+    /**
+     * Serialise a mock response, adding the `{ data: ... }` envelope the real
+     * API returns.
+     *
+     * 80 endpoints in `src/services/api.ts` read `body.data`. Wave 2 (#2191)
+     * hand-wrapped eight of them and the specs covering those went green; the
+     * rest were never audited, and an unwrapped handler leaves `body.data`
+     * undefined so the page renders nothing and every assertion fails. That is
+     * the single biggest cause in the 146-failure backlog.
+     *
+     * Wrapping here rather than per-handler is safe because the envelope is
+     * ADDITIVE: `{ ...body, data: body }` keeps every top-level key, so a
+     * reader doing `body.items` and a reader doing `body.data.items` both work.
+     * `data` points at the pre-spread object, so there is no self-reference for
+     * JSON.stringify to choke on.
+     *
+     * Two deliberate exclusions:
+     *  - Arrays. Spreading an array into an object yields `{0: ..., 1: ...}`
+     *    and breaks any `body.map(...)` reader.
+     *  - Bodies that already carry a `data` key, so hand-wrapped handlers and
+     *    error payloads are left exactly as they are.
+     */
+    const jsonResponse = (body: unknown, status = 200) => {
+      const envelope =
+        body && typeof body === 'object' && !Array.isArray(body) && !('data' in body)
+          ? { ...(body as Record<string, unknown>), data: body }
+          : body;
+      return {
+        status,
+        contentType: 'application/json',
+        body: JSON.stringify(envelope),
+      };
+    };
 
     // Failure injection helpers
     const maybeTimeout = (failure: number | string | undefined) => {
@@ -813,6 +847,24 @@ export async function setupMockApiRoutes(
         items: filtered.slice(0, limit),
         total: filtered.length,
       }));
+    }
+
+    // Page-level data for the Dedup page (pages/BookDedup.tsx). These are NOT
+    // optional extras: the page fetches both on mount, above the tab content,
+    // so leaving them unhandled meant the page never rendered and every tab —
+    // including Authors, whose own endpoint was mocked correctly — failed with
+    // "element(s) not found". They were logged 27 times per run as
+    // "Unhandled endpoint" and that warning was the only visible symptom.
+    if (pathname === '/api/v1/dedup/stats' && method === 'GET') {
+      return route.fulfill(jsonResponse({ stats: mockState.dedupStats ?? [] }));
+    }
+    if (pathname === '/api/v1/dedup/candidates' && method === 'GET') {
+      const limit = parseInt(url.searchParams.get('limit') || '50', 10);
+      const offset = parseInt(url.searchParams.get('offset') || '0', 10);
+      const all = (mockState.dedupCandidates ?? []) as unknown[];
+      return route.fulfill(
+        jsonResponse({ candidates: all.slice(offset, offset + limit), total: all.length })
+      );
     }
 
     if (pathname === '/api/v1/audiobooks/duplicates' && method === 'GET') {
