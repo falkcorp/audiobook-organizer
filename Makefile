@@ -1,7 +1,7 @@
 # file: Makefile
-# version: 2.15.3
+# version: 2.15.4
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
-# last-edited: 2026-07-16
+# last-edited: 2026-08-10
 
 BINARY := audiobook-organizer
 ROOT_DIR := $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
@@ -289,9 +289,18 @@ smoke-run-demo:
 	@bash scripts/run_demo_recording.sh
 
 ## coverage: Generate coverage report
+#
+# -timeout 25m on every `go test ./...` here is not decoration. Go's default
+# is 10m PER PACKAGE, and internal/server alone takes ~500s on an idle Mac.
+# Running packages in parallel (which `./...` does) makes them contend, and
+# a contended run tips past 600s and dies with "panic: test timed out" —
+# naming whichever test happened to be running, which looks like a real
+# failure in an unrelated test and sends you debugging the wrong thing.
+# Observed 2026-08-09. The other three ./... targets already had it; these
+# two did not.
 coverage:
 	@echo "📊 Generating coverage report..."
-	@go test ./... -coverprofile=coverage.out -covermode=atomic
+	@go test ./... -coverprofile=coverage.out -covermode=atomic -timeout 25m
 	@go tool cover -html=coverage.out -o coverage.html
 	@echo ""
 	@echo "Coverage summary:"
@@ -302,7 +311,7 @@ coverage:
 ## coverage-check: Verify coverage meets 30% threshold (full suite)
 coverage-check:
 	@echo "🎯 Checking coverage threshold..."
-	@go test ./... -coverprofile=coverage.out -covermode=atomic >/dev/null 2>&1
+	@go test ./... -coverprofile=coverage.out -covermode=atomic -timeout 25m >/dev/null 2>&1
 	@coverage=$$(go tool cover -func=coverage.out | grep total | awk '{print $$3}' | sed 's/%//'); \
 	echo "Coverage: $$coverage%"; \
 	if [ $$(echo "$$coverage < 30" | bc -l) -eq 1 ]; then \
