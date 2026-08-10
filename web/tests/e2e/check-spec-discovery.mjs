@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // file: web/tests/e2e/check-spec-discovery.mjs
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5b1c93a7-6e42-4d08-9f31-2a7c8e05b4d6
 // last-edited: 2026-08-10
 
@@ -23,12 +23,44 @@
  *
  * WHAT IT CHECKS
  *
- *   1. Every non-demo, non-interactive *.spec.ts on disk appears in Playwright's
- *      own discovery output. Catches: renames that break the glob, a stray
- *      `testIgnore` entry, a file that stopped matching *.spec.ts.
- *   2. Every such file contributes at least one NON-skipped test. Catches a
+ *   1. Every *.spec.ts on disk is discovered by at least one project. Catches:
+ *      renames that break the glob, a stray `testIgnore` entry, a file that
+ *      stopped matching *.spec.ts.
+ *   2. Every file the GATE project (chromium — what the PR run executes)
+ *      discovers contributes at least one NON-skipped test. Catches a
  *      whole-file `test.describe.skip(...)`, which is the same incident wearing
- *      a different hat — the file is discovered, and still runs nothing.
+ *      a different hat: the file is discovered, and still runs nothing.
+ *
+ * NO HARD-CODED EXCLUSION LIST — that was version 1.0.0 and it was wrong.
+ *
+ * v1.0.0 hard-coded `[/^demo-/, /^interactive-/]` to mirror the `testIgnore`
+ * in the chromium/webkit projects. That reintroduces the very failure this
+ * script exists to catch, one step removed: widen `testIgnore` and the check
+ * goes red, and the cheapest way to make it green again is to widen the copy
+ * here — at which point a real spec file is silently uncovered and the guard
+ * says OK.
+ *
+ * So discovery is run WITHOUT `--project`, and the union across all three
+ * projects has to cover every file on disk. This works because the projects
+ * partition the files rather than merely excluding some: chromium/webkit
+ * `testIgnore` the `demo-*.spec.ts` and `interactive-*.spec.ts` globs, and
+ * `chromium-record` carries the exact inverse as its `testMatch`. A file
+ * dropped from the CI projects therefore has to be picked up by the record
+ * project or it lands in `missing` — and moving a functional spec there takes
+ * two deliberate config edits, both visible in a diff.
+ *
+ * Files outside the gate must be named in `GATE_EXEMPT` below. Merely printing
+ * them was not enough: measured against this script, moving a functional spec
+ * into the record project's `testMatch` left it undiscovered by CI and still
+ * exited 0, which is the original incident wearing a third hat.
+ *
+ * `GATE_EXEMPT` is an allow-list of INTENT, not a mirror of config — that is
+ * what makes it different from the v1.0.0 list it replaces. Nothing in
+ * playwright.config.ts states "this file does not need to run in CI"; only a
+ * human can. So a file leaving the gate stays red until someone writes its
+ * name here, and that diff says exactly what it means. It is also checked in
+ * both directions: a stale entry — one that is back in the gate, or gone from
+ * disk — fails too, so the list cannot quietly rot.
  *
  * Deliberately NOT a total-count baseline. A committed "expect >= N tests"
  * number has to be bumped on every PR that adds a test, which trains people to
@@ -39,6 +71,13 @@
  * Individual skipped TESTS are reported but do not fail: `test.skip` on one
  * case with a written reason is a legitimate way to park a missing feature.
  * Silently losing a whole FILE is not.
+ *
+ * The skip COUNT printed here will read lower than the suite's own. `--list`
+ * sees static `test.skip(...)` / `test.fixme(...)` annotations; it cannot see a
+ * conditional `test.skip(cond, 'reason')` that decides at run time (auth-flow
+ * has two, gated on endpoint availability). Those list as runnable and report
+ * as skipped. That is a different question, not a discrepancy — this script
+ * asks what CAN run, the suite reports what DID.
  *
  * Usage:  node tests/e2e/check-spec-discovery.mjs     (run from web/)
  */
@@ -53,10 +92,20 @@ const E2E_DIR = dirname(fileURLToPath(import.meta.url));
 const WEB_DIR = join(E2E_DIR, '../..');
 const CONFIG = 'tests/e2e/playwright.config.ts';
 
-// Mirrors the `testIgnore` in playwright.config.ts's chromium/webkit projects.
-// If that list changes, this must change with it — a mismatch here shows up as
-// a loud failure naming the file, not as silent under-coverage.
-const EXCLUDED = [/^demo-/, /^interactive-/];
+// The project the blocking PR run executes. Webkit adds a second engine
+// nightly but discovers the same files, so gating on chromium alone is
+// sufficient and halves the work.
+const GATE_PROJECT = 'chromium';
+
+// Spec files that legitimately do not run in CI: opt-in demo recordings driven
+// by `npm run test:e2e:demo`, which need a live server with real media.
+// Checked in BOTH directions — see the header. If you are here because the
+// check went red, adding a name is a claim that the file does not need to run
+// in CI. Make that claim deliberately or not at all.
+const GATE_EXEMPT = new Set([
+  'demo-full-workflow.spec.ts',
+  'interactive-import-workflow.spec.ts',
+]);
 
 function specFilesOnDisk(dir) {
   const found = [];
@@ -76,20 +125,18 @@ function collectSpecs(suite, out) {
   for (const child of suite.suites ?? []) collectSpecs(child, out);
 }
 
-const onDisk = specFilesOnDisk(E2E_DIR)
-  .filter((f) => !EXCLUDED.some((re) => re.test(f)))
-  .sort();
+const onDisk = specFilesOnDisk(E2E_DIR).sort();
 
 if (onDisk.length === 0) {
   console.error('FAIL: no *.spec.ts files found under tests/e2e — glob is wrong.');
   process.exit(1);
 }
 
-// One project is enough: discovery is per-file and both projects share the
-// same testIgnore. Running both would only double the work.
+// No `--project` filter: the union across every project is what makes the
+// exclusion list unnecessary. See the header.
 const raw = execFileSync(
   'npx',
-  ['playwright', 'test', '-c', CONFIG, '--project=chromium', '--list', '--reporter=json'],
+  ['playwright', 'test', '-c', CONFIG, '--list', '--reporter=json'],
   { cwd: WEB_DIR, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] }
 );
 
@@ -97,42 +144,75 @@ const report = JSON.parse(raw);
 const specs = [];
 for (const suite of report.suites ?? []) collectSpecs(suite, specs);
 
-/** file -> { total, skipped } */
+/** file -> projectName -> { total, skipped } */
 const byFile = new Map();
 for (const spec of specs) {
-  const entry = byFile.get(spec.file) ?? { total: 0, skipped: 0 };
-  entry.total += 1;
-  const skipped = (spec.tests ?? []).every((t) =>
-    (t.annotations ?? []).some((a) => a.type === 'skip' || a.type === 'fixme')
-  );
-  if (skipped) entry.skipped += 1;
-  byFile.set(spec.file, entry);
+  let perProject = byFile.get(spec.file);
+  if (!perProject) {
+    perProject = new Map();
+    byFile.set(spec.file, perProject);
+  }
+  // One `tests` entry per project, so this counts per project exactly — no
+  // every/some judgement call about what "the file is skipped" means across
+  // engines.
+  for (const t of spec.tests ?? []) {
+    const entry = perProject.get(t.projectName) ?? { total: 0, skipped: 0 };
+    entry.total += 1;
+    if ((t.annotations ?? []).some((a) => a.type === 'skip' || a.type === 'fixme')) {
+      entry.skipped += 1;
+    }
+    perProject.set(t.projectName, entry);
+  }
 }
 
 const missing = [];
 const allSkipped = [];
+const outsideGate = [];
+let gateTotal = 0;
+let gateSkipped = 0;
+
 for (const file of onDisk) {
-  const entry = byFile.get(file);
-  if (!entry || entry.total === 0) {
+  const perProject = byFile.get(file);
+  if (!perProject || perProject.size === 0) {
     missing.push(file);
-  } else if (entry.total === entry.skipped) {
-    allSkipped.push(file);
+    continue;
   }
+  const gate = perProject.get(GATE_PROJECT);
+  if (!gate || gate.total === 0) {
+    outsideGate.push({ file, projects: [...perProject.keys()] });
+    continue;
+  }
+  gateTotal += gate.total;
+  gateSkipped += gate.skipped;
+  if (gate.total === gate.skipped) allSkipped.push(file);
 }
 
-const totalSkipped = [...byFile.values()].reduce((n, e) => n + e.skipped, 0);
-console.log(
-  `spec-discovery: ${onDisk.length} files on disk, ${specs.length} tests discovered ` +
-    `(${totalSkipped} skipped) on chromium`
+// Bidirectional: unexpected departures from the gate fail, and so do stale
+// allow-list entries, so the list cannot outlive the reason it was written.
+const unexpectedlyOutside = outsideGate.filter((o) => !GATE_EXEMPT.has(o.file));
+const staleExempt = [...GATE_EXEMPT].filter(
+  (f) => !outsideGate.some((o) => o.file === f)
 );
 
-if (missing.length === 0 && allSkipped.length === 0) {
-  if (totalSkipped > 0) {
+console.log(
+  `spec-discovery: ${onDisk.length} spec files on disk; ` +
+    `${gateTotal} tests on ${GATE_PROJECT} (${gateSkipped} statically skipped); ` +
+    `${outsideGate.length} exempt`
+);
+
+if (
+  missing.length === 0 &&
+  allSkipped.length === 0 &&
+  unexpectedlyOutside.length === 0 &&
+  staleExempt.length === 0
+) {
+  if (gateSkipped > 0) {
     const detail = [...byFile.entries()]
-      .filter(([, e]) => e.skipped > 0)
+      .map(([f, p]) => [f, p.get(GATE_PROJECT)])
+      .filter(([, e]) => e && e.skipped > 0)
       .map(([f, e]) => `${f} (${e.skipped})`)
       .join(', ');
-    console.log(`spec-discovery: skipped tests live in ${detail}`);
+    console.log(`spec-discovery: statically skipped tests live in ${detail}`);
   }
   console.log('spec-discovery: OK — every spec file contributes a runnable test.');
   process.exit(0);
@@ -140,13 +220,39 @@ if (missing.length === 0 && allSkipped.length === 0) {
 
 if (missing.length > 0) {
   console.error(
-    `\nFAIL: ${missing.length} spec file(s) exist on disk but Playwright discovered ` +
-      `no tests in them:\n` +
+    `\nFAIL: ${missing.length} spec file(s) exist on disk but NO project discovered ` +
+      `any test in them:\n` +
       missing.map((f) => `  - ${f}`).join('\n') +
       `\n\nThe suite would still pass with these silently not running — that is the ` +
       `four-month outage this check exists to prevent. Likely causes: a testIgnore ` +
       `entry in ${CONFIG}, a rename that no longer matches *.spec.ts, or a syntax ` +
-      `error that made the file yield no tests.`
+      `error that made the file yield no tests.\n` +
+      `Do NOT "fix" this by excluding the file here; this script has no exclusion ` +
+      `list on purpose.`
+  );
+}
+
+if (unexpectedlyOutside.length > 0) {
+  console.error(
+    `\nFAIL: ${unexpectedlyOutside.length} spec file(s) are discovered, but not by ` +
+      `the ${GATE_PROJECT} project that CI actually runs:\n` +
+      unexpectedlyOutside
+        .map((o) => `  - ${o.file} (only in: ${o.projects.join(', ')})`)
+        .join('\n') +
+      `\n\nThese never execute in CI. A file moved into the opt-in demo-recording ` +
+      `project is as absent from the gate as one that was deleted. Either put it ` +
+      `back in the chromium/webkit projects, or add it to GATE_EXEMPT in this file ` +
+      `— which is a deliberate claim that it does not need to run in CI.`
+  );
+}
+
+if (staleExempt.length > 0) {
+  console.error(
+    `\nFAIL: ${staleExempt.length} GATE_EXEMPT entr(ies) no longer describe ` +
+      `anything:\n` +
+      staleExempt.map((f) => `  - ${f}`).join('\n') +
+      `\n\nEach is either back inside the ${GATE_PROJECT} gate or gone from disk. ` +
+      `Remove it, so the allow-list keeps meaning what it says.`
   );
 }
 
