@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.55.0
+// version: 2.56.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-08-06
 
@@ -934,6 +934,14 @@ export async function getBooks(
   limit = 100,
   offset = 0,
   options?: {
+    /**
+     * Free-text search. Sent as `search`, alongside every other option here.
+     *
+     * This exists so searching does not mean losing your filters. The old
+     * `searchBooksPage` sent ONLY search/limit/offset, so typing in the box
+     * silently dropped library_state, tags, field filters and the sort order.
+     */
+    search?: string;
     sortBy?: string;
     sortOrder?: string;
     tag?: string;
@@ -951,6 +959,7 @@ export async function getBooks(
   const params = new URLSearchParams();
   params.set('limit', String(limit));
   params.set('offset', String(offset));
+  if (options?.search) params.set('search', options.search);
   if (options?.sortBy) params.set('sort_by', options.sortBy);
   if (options?.sortOrder) params.set('sort_order', options.sortOrder);
   if (options?.tags && options.tags.length > 0) {
@@ -1020,6 +1029,18 @@ export async function searchBooks(query: string, limit = 50, showFailed = false)
   return data.items || [];
 }
 
+/**
+ * @deprecated Use `getBooks(limit, offset, { search, ...filters })` instead.
+ *
+ * This sends ONLY search/limit/offset/is_primary_version/show_quarantined, so
+ * every active filter and the sort order are silently discarded. That was the
+ * cause of "search an author while filtered to Organized and get results from
+ * every state, with the Filters chip still showing its count". `getBooks` hits
+ * the same endpoint and sends the full parameter set.
+ *
+ * Kept only because removing an exported symbol is a wider change than this
+ * fix warrants; it has no production callers.
+ */
 export async function searchBooksPage(
   query: string,
   limit = 50,
