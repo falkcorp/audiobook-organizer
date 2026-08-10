@@ -1,9 +1,9 @@
 <!-- file: todo.d/20260809-edit-dialog-blank-year-isbn.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 2.0.0 -->
 <!-- guid: c8d31e47-5f92-4b60-a3d7-2094f6ba1c85 -->
 <!-- last-edited: 2026-08-09 -->
 
-- [ ] **Edit Metadata shows Year and ISBN-13 as empty boxes whatever is stored — and the
+- [x] **FIXED (#2267).** **Edit Metadata shows Year and ISBN-13 as empty boxes whatever is stored — and the
       obvious fix corrupts `print_year`.** `mapBookToAudiobook`
       (`web/src/pages/BookDetail.tsx:762`) builds the object handed to
       `MetadataEditDialog` and omits `year`, `isbn10` and `isbn13`. `genre` had the same
@@ -37,3 +37,32 @@
 
       `tests/e2e/metadata-provenance.spec.ts` carries a `test.fixme` covering this, so it
       will start failing (loudly, as an unexpected pass) the moment it is fixed.
+
+      > ### What it actually was — worse than a blank box
+      >
+      > The dialog has ONE "Year" box, declared as `audiobook_release_year` in
+      > `FIELD_TO_API`. But `handleEditSave` fed `updated.year` into **two** fields:
+      >
+      > ```ts
+      > audiobook_release_year: … || updated.year || …,
+      > print_year:             updated.year || book.print_year || undefined,
+      > ```
+      >
+      > `print_year` is when the **book** was first published; `audiobook_release_year` is
+      > when the **recording** came out — decades apart for a classic. So typing a year in
+      > that dialog silently replaced the original publication year with the audiobook's.
+      > Same corruption class as the 2026-07-13 write-up, still live on this path. The blank
+      > box masked it for *display* but not for *writes*.
+      >
+      > Fixed in the safe order: remove the bad write first (`print_year` is now
+      > preserve-only — the dialog has no print-year field, so nothing there should change
+      > it), which then makes seeding the box safe. Doing it the other way would have turned
+      > a latent corruption into one firing on every save.
+      >
+      > **And the blank box had a second, separate cause:** the e2e fixture supplied
+      > `year: 2024`, a field the Go API never emits (`bookcore.go:44-45` has `print_year`
+      > and `audiobook_release_year` only). The dialog was correctly reading
+      > `audiobook_release_year` and finding nothing. Mock rot, not app behaviour.
+      >
+      > `test.fixme('year and ISBN-13 populate in the edit dialog')` is now passing:
+      > metadata-provenance 13 passed / 0 failed / 0 skipped, exit 0.
