@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.35.0
+// version: 2.36.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-08-02
+// last-edited: 2026-08-09
 
 package server
 
@@ -222,7 +222,10 @@ type Server struct {
 	searchIndex *search.BleveIndex
 	// indexQueue feeds the single index worker goroutine. Allocated
 	// when searchIndex opens, closed in Shutdown. Bounded channel —
-	// a full queue drops events and the startup reindex heals gaps.
+	// a full queue drops events into the durable dirty set, which
+	// runSearchReconciler drains (search_reconciler.go). This comment
+	// used to say "the startup reindex heals gaps"; it does not, because
+	// buildSearchIndexIfEmpty only runs on an EMPTY index.
 	// indexQueueMu guards against concurrent close vs. send races.
 	indexQueue       chan indexRequest
 	indexQueueMu     sync.RWMutex

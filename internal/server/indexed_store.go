@@ -1,7 +1,7 @@
 // file: internal/server/indexed_store.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5d2e4f3a-7b5a-4a70-b8c5-3d7e0f1b9a79
-// last-edited: 2026-07-30
+// last-edited: 2026-08-09
 //
 // indexedStore decorates a database.Store so that every successful
 // book mutation (create / update / delete) schedules an async
@@ -10,9 +10,18 @@
 // that touches books.
 //
 // Indexing is async via a bounded channel. If the channel fills up
-// (worker stuck, Bleve slow) new requests are dropped silently —
-// the library search rebuilds on startup (see buildSearchIndexIfEmpty)
-// so stale entries eventually get repaired.
+// (worker stuck, Bleve slow) the request is dropped from the queue and
+// recorded in a durable dirty set, which runSearchReconciler drains on a
+// ticker (search_reconciler.go).
+//
+// CORRECTION 2026-08-09: this comment previously said the drop was safe
+// because "the library search rebuilds on startup (see
+// buildSearchIndexIfEmpty)". That was false. buildSearchIndexIfEmpty
+// returns early unless the index has ZERO documents, so on a populated
+// library it has never run and nothing repaired a dropped update. Prod
+// dropped 56,537 index operations in the seven days to 2026-08-10 with no
+// reconciliation whatsoever. The dirty set is what actually makes the drop
+// safe; do not restore the old claim.
 
 package server
 
@@ -96,8 +105,11 @@ type indexRequest struct {
 	delete bool
 }
 
-// enqueueIndex submits an index event. Full queue drops the event
-// silently — a startup reindex will heal any gaps. Safe to call
+// enqueueIndex submits an index event. A full queue drops the event from
+// the channel and records the book in the durable dirty set instead, so
+// runSearchReconciler repairs it on the next tick. (It previously dropped
+// with no record at all, on the false premise that a startup reindex would
+// heal it — see the package comment.) Safe to call
 // concurrently with Shutdown: the mutex + closed flag prevents
 // sending on a closed channel during teardown.
 //
@@ -118,7 +130,15 @@ func (s *Server) enqueueIndex(bookID string, del bool) {
 	case s.indexQueue <- indexRequest{bookID: bookID, delete: del}:
 	default:
 		atomic.AddInt32(&s.indexWorkerBusy, -1)
-		slog.Warn("search index queue full, dropped (delete)", "bookID", bookID, "del", del)
+		searchIndexDropped.Add(1)
+		// Record it durably before logging, so a crash between the two still
+		// leaves the book reconcilable.
+		s.markIndexDirty(bookID)
+		// The old message hardcoded "(delete)" while also logging del=false,
+		// which read as a delete on every upsert drop and made the prod logs
+		// actively misleading. The operation is in the del field.
+		slog.Warn("search index queue full, event dropped and marked for reconcile",
+			"bookID", bookID, "del", del, "dropped_total", searchIndexDropped.Load())
 	}
 }
 
