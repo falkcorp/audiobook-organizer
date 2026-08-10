@@ -1,7 +1,7 @@
 <!-- file: CLAUDE.md -->
-<!-- version: 4.11.0 -->
+<!-- version: 4.12.0 -->
 <!-- guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f -->
-<!-- last-edited: 2026-07-21 -->
+<!-- last-edited: 2026-08-10 -->
 
 # CLAUDE.md
 
@@ -253,3 +253,13 @@ parallel PRs never collide on them.
   section. `scripts/assemble_todo.py` folds fragments in daily. This is
   **add-only**: checking a task off or removing it is a normal direct edit of
   `TODO.md`.
+- **⚠️ Fragments in `todo.d/` and `changelog.d/` are EXEMPT from the file-header
+  rule above — give them no `file`/`version`/`guid`/`last-edited` header.** Their
+  bodies are folded into the assembled document verbatim, so a header does not
+  stay in the fragment: it lands in the middle of `TODO.md` as four lines of
+  comment noise. This exemption was documented only in `todo.d/README.md` until
+  2026-08-10, and 74 headers leaked in from contributors correctly following the
+  global "every Markdown file needs a header" rule and never seeing the
+  exception. `assemble_todo.py` now strips them on collect and `ci.yml`'s
+  `TODO Fragment Headers` job fails a PR that reintroduces one, so this is now
+  three layers deep — but write fragments headerless anyway.
