@@ -1,5 +1,5 @@
 // file: tests/e2e/metadata-provenance.spec.ts
-// version: 2.2.0
+// version: 2.3.0
 // guid: 9a8b7c6d-5e4f-3d2c-1b0a-9f8e7d6c5b4a
 // last-edited: 2026-08-09
 
@@ -31,7 +31,11 @@ const createBookData = () => ({
   series_name: 'DB Series',
   series_number: 3,
   genre: 'Science Fiction',
-  year: 2024,
+  // `audiobook_release_year`, not `year`. The Go API emits print_year and
+  // audiobook_release_year (bookcore.go:44-45) and has NO `year` field, so a
+  // mock supplying one was describing a response that cannot happen — and the
+  // dialog, correctly reading audiobook_release_year, showed an empty box.
+  audiobook_release_year: 2024,
   language: 'en',
   publisher: 'Audible Studios',
   isbn10: '',
@@ -332,19 +336,16 @@ test.describe('MetadataEditDialog Provenance E2E', () => {
     await expect(page.getByRole('button', { name: 'Save' })).toBeVisible();
   });
 
-  // KNOWN BUG, deliberately not fixed here. mapBookToAudiobook (BookDetail.tsx:762)
-  // omits year, isbn10 and isbn13, so the Edit Metadata dialog shows those boxes
-  // empty whatever is stored. `genre` had the same problem and WAS fixed, because
-  // genre does not appear in the payload handleEditSave builds.
+  // FIXED. mapBookToAudiobook omitted year, isbn10 and isbn13, so those boxes
+  // rendered empty whatever was stored.
   //
-  // Year cannot be fixed the same way. The dialog seeds its Year box from
-  // audiobook.year, and handleEditSave computes
-  //   payload.print_year = updated.year || book.print_year
-  // so populating `year` from audiobook_release_year would silently overwrite
-  // print_year with the release year on every save, even when the user never
-  // touched the field. Fixing the display requires untangling that precedence
-  // first. See todo.d/20260809-edit-dialog-blank-year-isbn.md.
-  test.fixme('year and ISBN-13 populate in the edit dialog', async ({ page }) => {
+  // Populating `year` was previously unsafe: handleEditSave computed
+  //   print_year: updated.year || book.print_year
+  // so the dialog's single Year box wrote BOTH audiobook_release_year (its
+  // declared meaning per FIELD_TO_API) AND print_year — two different facts,
+  // decades apart for a classic. That write is now removed; print_year is
+  // preserve-only, so seeding the box is safe and the corruption path is gone.
+  test('year and ISBN-13 populate in the edit dialog', async ({ page }) => {
     await setupMockRoutes(page);
     await openEditDialog(page);
     await expect(page.getByRole('textbox', { name: 'Year', exact: true })).toHaveValue('2024');

@@ -1,5 +1,5 @@
 // file: web/src/pages/BookDetail.tsx
-// version: 1.53.0
+// version: 1.54.0
 // guid: 4d2f7c6a-1b3e-4c5d-8f7a-9b0c1d2e3f4a
 // last-edited: 2026-08-09
 
@@ -771,6 +771,17 @@ export const BookDetail = () => {
     // payload handleEditSave builds, so populating it cannot change what a
     // save writes — it only stops the dialog lying about the current value.
     genre: current.genre,
+    // Year, ISBN-10 and ISBN-13 were omitted, so those boxes rendered empty
+    // whatever was stored. `year` maps to audiobook_release_year — see
+    // FIELD_TO_API below, which is the declared meaning of this field.
+    //
+    // Populating `year` was previously unsafe because handleEditSave did
+    //   print_year: updated.year || book.print_year
+    // i.e. ONE form box wrote TWO different semantic fields. That is fixed
+    // below (print_year is now preserve-only), so this is safe now.
+    year: current.audiobook_release_year,
+    isbn10: current.isbn10,
+    isbn13: current.isbn13,
     language: current.language,
     publisher: current.publisher,
     description: current.description,
@@ -834,7 +845,21 @@ export const BookDetail = () => {
         updated.year ||
         book.audiobook_release_year ||
         undefined,
-      print_year: updated.year || book.print_year || undefined,
+      // PRESERVE-ONLY. This used to be `updated.year || book.print_year`, which
+      // meant the dialog's single Year box wrote BOTH audiobook_release_year
+      // (its declared meaning, per FIELD_TO_API) AND print_year.
+      //
+      // Those are different facts: print_year is when the BOOK was first
+      // published, audiobook_release_year is when the RECORDING came out. For a
+      // classic they are decades apart. Typing a year here silently replaced
+      // the original publication year with the audiobook's — the same
+      // wrong-year corruption written up in the 2026-07-13 summary, still live
+      // on this path.
+      //
+      // The dialog has no print-year field (MetadataEditDialog renders one
+      // 'Year'), so there is nothing here that should change print_year.
+      // Removing the write removes a corruption path, not a feature.
+      print_year: book.print_year || undefined,
       isbn:
         updated.isbn13 ||
         updated.isbn10 ||
