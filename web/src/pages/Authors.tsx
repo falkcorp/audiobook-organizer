@@ -1,5 +1,5 @@
 // file: web/src/pages/Authors.tsx
-// version: 1.3.1
+// version: 1.4.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -86,9 +86,9 @@ const authorColumns: ColumnDef<api.AuthorWithCount>[] = [
     render: (a) => (
       <Box>
         <Typography variant="body2" fontWeight={500}>{a.name}</Typography>
-        {a.aliases.length > 0 && (
+        {(a.aliases?.length ?? 0) > 0 && (
           <Box sx={{ mt: 0.5, display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
-            {a.aliases.map((alias) => (
+            {(a.aliases ?? []).map((alias) => (
               <Chip key={alias.id} label={alias.alias_name} size="small" variant="outlined" color="secondary" title={alias.alias_type} />
             ))}
           </Box>
@@ -117,8 +117,8 @@ const authorColumns: ColumnDef<api.AuthorWithCount>[] = [
     minWidth: 60,
     align: 'right',
     sortable: true,
-    sortValue: (a) => a.aliases.length,
-    render: (a) => a.aliases.length || '-',
+    sortValue: (a) => a.aliases?.length ?? 0,
+    render: (a) => a.aliases?.length || '-',
   },
   {
     key: 'id',
@@ -343,7 +343,7 @@ export function Authors() {
       list = list.filter(
         (a) =>
           a.name.toLowerCase().includes(q) ||
-          a.aliases.some((al) => al.alias_name.toLowerCase().includes(q))
+          (a.aliases ?? []).some((al) => al.alias_name.toLowerCase().includes(q))
       );
     }
     return sortRows(list);
@@ -494,7 +494,7 @@ export function Authors() {
   // Alias management
   const handleOpenAliases = async (author: api.AuthorWithCount) => {
     setAliasDialog(author);
-    setAliases(author.aliases);
+    setAliases(author.aliases ?? []);
     setNewAliasName('');
     setNewAliasType('alias');
   };

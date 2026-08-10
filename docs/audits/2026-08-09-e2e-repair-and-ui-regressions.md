@@ -1,5 +1,5 @@
 <!-- file: docs/audits/2026-08-09-e2e-repair-and-ui-regressions.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 7a2f9d41-3e05-4b8c-9160-c4d8b7e35291 -->
 <!-- last-edited: 2026-08-09 -->
 
@@ -88,10 +88,18 @@ Each has a `todo.d` fragment; this is the consolidated list.
    return. Users saw the full library with the Filters chip showing 1. Only ever worked
    from a cold cache, which is why it survived manual testing.
 
-3. **The Authors page crashes on any author record without `aliases`.**
+3. **~~The Authors page crashes on any author record without `aliases`.~~ CORRECTED 2026-08-09 — it does not crash; see the note below.**
    `Authors.tsx:89`, `:120`, `:121` read `a.aliases.length` unguarded — one bad row takes
    the whole page to the error boundary, not just a blank column. Reachable from a real
    API response that omits or nulls the field. Check whether the Go handler guarantees it.
+   > **Correction.** The unguarded reads are real, but the claim that a real API response
+   > could supply a missing/null `aliases` was **wrong** — it was inferred from the
+   > frontend without checking the server. `Authors.tsx` fetches only
+   > `getAuthorsWithCounts()`, and that handler has coerced nil to `[]` since 2026-03-10
+   > (`internal/audiobooks/author_series.go:108`). The page was never crashing. The reads
+   > are now guarded anyway, because a TS type is a compile-time claim about runtime HTTP
+   > data and validates nothing — but this was a latent fragility, not an outage.
+
 
 4. **~50 lines of dead bulk-fetch UI.** `LibraryDialogs.tsx:920` renders
    `<Dialog open={bulkFetchDialogOpen}>`, and `setBulkFetchDialogOpen(true)` appears
