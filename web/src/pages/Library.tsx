@@ -1,5 +1,5 @@
 // file: web/src/pages/Library.tsx
-// version: 1.79.0
+// version: 1.80.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
 // last-edited: 2026-08-08
 
@@ -177,6 +177,12 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     getActiveFilterCount,
   } = useLibraryFilters({ searchParams, onFiltersChange: () => setPage(1) });
   const [parsedSearch, setParsedSearch] = useState<ParsedSearch>(() => parseSearch(initialSearch));
+  // The debounced twin of `parsedSearch`, moved by the same timer as
+  // `debouncedSearch` so the two never disagree about what is being searched.
+  // See the debounce effect below for why this exists.
+  const [debouncedParsedSearch, setDebouncedParsedSearch] = useState<ParsedSearch>(() =>
+    parseSearch(initialSearch),
+  );
   const [bulkTagDialogOpen, setBulkTagDialogOpen] = useState(false);
   const [bulkRatingDialogOpen, setBulkRatingDialogOpen] = useState(false);
 
@@ -527,16 +533,31 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     });
   }, [operationLogs]);
 
-  // Debounce search query
+  // Debounce the search query AND its parsed form together.
+  //
+  // `debouncedSearch` alone was not enough, and was in fact dead code on the
+  // path that matters. useLibraryQuery does:
+  //
+  //     const searchText = parsedSearch ? parsedSearch.freeText : debouncedSearch;
+  //
+  // so as soon as a search parses (i.e. always, once you type), the debounced
+  // value is ignored and the RAW parsed value is used — and `parsedSearch` sits
+  // in that hook's useCallback dep array, so `loadAudiobooks` was recreated on
+  // every keystroke. Result: one full query per character. Typing "Foundation"
+  // fired ten searches of the whole library.
+  //
+  // Moving both from the same timer keeps them consistent; debouncing only one
+  // would let the free text and the field filters disagree mid-flight.
   useEffect(() => {
     const timer = setTimeout(() => {
       setDebouncedSearch(searchQuery);
+      setDebouncedParsedSearch(parsedSearch);
     }, 300);
 
     return () => {
       if (timer) clearTimeout(timer);
     };
-  }, [searchQuery]);
+  }, [searchQuery, parsedSearch]);
 
   const isInitialMount = useRef(true);
   useEffect(() => {
@@ -694,7 +715,9 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     page,
     itemsPerPage,
     debouncedSearch,
-    parsedSearch,
+    // Debounced: this drives network requests. The raw `parsedSearch` still
+    // feeds SearchBar's own UI, which must react immediately as you type.
+    parsedSearch: debouncedParsedSearch,
     filters,
     selectedTags,
     sortBy,
@@ -740,7 +763,9 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     audiobooks,
     totalCount,
     debouncedSearch,
-    parsedSearch,
+    // Debounced too, deliberately: "select all matching" must mean the query
+    // that produced the rows on screen, not one the user is still typing.
+    parsedSearch: debouncedParsedSearch,
     filters,
     selectedTags,
     buildFieldFilters,
