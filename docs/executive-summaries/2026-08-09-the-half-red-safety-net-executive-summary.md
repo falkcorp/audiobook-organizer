@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-08-09-the-half-red-safety-net-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 0d4f8a91-6c27-4e35-b8d0-51a97c3e2f46 -->
 <!-- last-edited: 2026-08-09 -->
 
@@ -68,8 +68,8 @@ queries for one search — the fix has to happen on both sides.
 
 ### The other seven
 
-A page that crashes outright if a single author record is missing one optional
-field. A dialog that fifty lines of code still build but which nothing can open any
+A page that would crash if a single author record arrived missing one optional
+field.† A dialog that fifty lines of code still build but which nothing can open any
 more. The ability to jump between different versions of the same book, gone —
 replaced in the same spot by a button that moves files between them instead, which
 is not a thing you want to click by accident. A summary that used to say "part of a
@@ -77,6 +77,14 @@ group of 3" now says only "linked", with no count and no indication which one yo
 are looking at. The one-click "use the value we found online" button on individual
 fields, gone. And two controls that a screen reader cannot describe at all, one of
 which is now the only route to four different actions.
+
+> **† Correction, added later.** That first one was overstated. The page's code really
+> is unguarded, but checking the server showed it has always filled that field in — so
+> nothing was actually breaking, and there was no way for a user to hit it. The page was
+> hardened anyway, because a guarantee that lives only on the other side of a network
+> call is worth not depending on. But "would crash" was a guess about the server made
+> from reading the browser code, and it should have been checked before being written
+> down as a finding.
 
 ## Update, later the same day: the second browser is green too
 
