@@ -62,6 +62,11 @@
  * both directions: a stale entry — one that is back in the gate, or gone from
  * disk — fails too, so the list cannot quietly rot.
  *
+ * Side effect of dropping `--project`: the demo/interactive specs are now
+ * PARSED at discovery time (not run — `--list` only loads files). They were not
+ * before, so a syntax error in a demo spec will now fail this check. That is
+ * arguably a small bonus, but it is a behaviour change, not an accident.
+ *
  * Deliberately NOT a total-count baseline. A committed "expect >= N tests"
  * number has to be bumped on every PR that adds a test, which trains people to
  * bump it without reading it — and a guard people edit reflexively is not a

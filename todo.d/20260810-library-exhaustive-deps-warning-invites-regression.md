@@ -34,12 +34,23 @@
       **Do:** replace the warning with an explicit
       `// eslint-disable-next-line react-hooks/exhaustive-deps` carrying a
       one-line reason that points at the `seenSearch` comment. Before
-      committing, run the negative control that validated the original fix —
-      disable the guard body and confirm
-      `library-sidebar-filters.spec.ts` goes red (it failed 4 of 6 runs on
-      webkit with the guard disabled, and passed 24 consecutive with it) — so
+      committing, run the negative control that validated the original fix — so
       the disable is verified to be protecting something real rather than just
       silencing lint.
+
+      **Run the RIGHT control.** Only one test in
+      `library-sidebar-filters.spec.ts` actually exercises this guard:
+
+          the filter never disappears from the URL while the effects settle
+
+      (`library-sidebar-filters.spec.ts:234`, webkit). With the guard body
+      disabled it failed **4 of 6** runs; with it, **24 consecutive** passes.
+
+      The two deep-link tests in the same file — `a deep-linked filter survives
+      mount` and `a deep-linked tag survives mount` — passed **6 of 6 with the
+      guard disabled**. They are invariant coverage, not regression guards, and
+      they are labelled as such in the file. Running those and seeing green
+      proves nothing about this dependency array.
 
       **Do not** simply add the dependency to make the warning disappear
       without running that control.
