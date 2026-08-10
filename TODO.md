@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.21.1 -->
+<!-- version: 10.22.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-08-10 -->
 
@@ -1113,9 +1113,9 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
       natural place for it, and it now requires going back to the library and
       finding the card. That is a product question, not a test question.
 
-- [ ] **`Library.tsx:707` — an `exhaustive-deps` warning whose suggested fix
+- [x] **`Library.tsx:707` — an `exhaustive-deps` warning whose suggested fix
       would silently undo the URL filter-drop guard.** Introduced 2026-08-10 by
-      PR #2271; noticed while linting an unrelated branch.
+      PR #2271; noticed while linting an unrelated branch. **DONE — PR #2273.**
 
       `npx eslint .` in `web/` reports:
 
@@ -1136,39 +1136,48 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
       advances, so effect declaration order is load-bearing. See the comment on
       `seenSearch` and the one inside the write effect.
 
-      **Why this is worth a task rather than a shrug:** the warning tells the
-      next reader to add `searchParams` to the deps array. That is plausible,
-      one keystroke, and makes the warning go away. Whether it actually breaks
-      the guard is **not established** — it may merely cause extra runs — but
-      nobody has tested it, and the failure it would reintroduce is a
-      transient, sub-frame filter drop that took a `history.pushState`
-      interceptor to observe at all (rAF sampling at ~16ms was too coarse to
-      see it). A warning that recommends an untested change to a race fix is a
-      trap with a countdown on it.
+      **RESOLVED 2026-08-10 (PR #2273).** Suppressed with an explicit
+      `// eslint-disable-line react-hooks/exhaustive-deps` on the deps line,
+      carrying the reason. The dependency array is byte-identical to before —
+      the diff is comments only.
 
-      **Do:** replace the warning with an explicit
-      `// eslint-disable-next-line react-hooks/exhaustive-deps` carrying a
-      one-line reason that points at the `seenSearch` comment. Before
-      committing, run the negative control that validated the original fix — so
-      the disable is verified to be protecting something real rather than just
-      silencing lint.
+      **Two claims in the original write-up turned out to be wrong; corrected
+      here so nobody acts on the stale version:**
 
-      **Run the RIGHT control.** Only one test in
-      `library-sidebar-filters.spec.ts` actually exercises this guard:
+      1. It said whether adding the dependency actually breaks the guard was
+         "not established". It is now. **With `searchParams` added to the
+         array, `library-sidebar-filters.spec.ts` ran 36/36 green on webkit**
+         (9 tests × 4 repeats). It does **not** break that spec. It was still
+         not adopted, because that effect owns URL writes for the whole Library
+         page and one spec file is not evidence about the rest of it — with the
+         dep added the writer also re-runs on its own echo and rewrites
+         identical params. Anyone wanting that form must verify it page-wide.
 
-          the filter never disappears from the URL while the effects settle
+      2. It said to use `// eslint-disable-next-line`. **That does not work
+         here.** A `-next-line` directive placed above a multi-line explanation
+         applies to the *comment*, not to the deps array — the original warning
+         survives and lint reports an additional "Unused eslint-disable
+         directive". Only `reportUnusedDisableDirectives` made that visible.
+         Use `eslint-disable-line` on the deps line itself, which is also what
+         the sibling read effect at `Library.tsx:632` already does.
 
-      (`library-sidebar-filters.spec.ts:234`, webkit). With the guard body
-      disabled it failed **4 of 6** runs; with it, **24 consecutive** passes.
+      **Control, re-measured under the pinned Playwright 1.62.1** (the earlier
+      "4 of 6 / 24 consecutive" figures were taken in a worktree that had
+      silently resolved a stray 1.57.0 from `$HOME`, so they were discarded):
 
-      The two deep-link tests in the same file — `a deep-linked filter survives
-      mount` and `a deep-linked tag survives mount` — passed **6 of 6 with the
-      guard disabled**. They are invariant coverage, not regression guards, and
-      they are labelled as such in the file. Running those and seeing green
-      proves nothing about this dependency array.
+          guard intact,   guard test ×8         8 passed,  exit 0
+          guard disabled, guard test ×8         4 failed / 4 passed, exit 1
+          guard intact,   whole spec file ×4   36 passed,  exit 0
 
-      **Do not** simply add the dependency to make the warning disappear
-      without running that control.
+      Only one test in `library-sidebar-filters.spec.ts` exercises this guard —
+      `the filter never disappears from the URL while the effects settle`
+      (`:234`, webkit). The two deep-link tests in the same file pass **6 of 6
+      with the guard disabled**; they are invariant coverage, not regression
+      guards, and are labelled as such in the file. Running those and seeing
+      green proves nothing about this dependency array.
+
+      eslint after the change: **24 warnings, 0 errors** (was 25/0 — exactly
+      this warning removed, none added). `tsc --noEmit` exit 0.
 
 <!-- file: todo.d/20260810-search-index-queue-drops-silently.md -->
 <!-- version: 2.0.0 -->
