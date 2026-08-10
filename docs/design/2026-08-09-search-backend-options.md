@@ -1,5 +1,5 @@
 <!-- file: docs/design/2026-08-09-search-backend-options.md -->
-<!-- version: 4.0.0 -->
+<!-- version: 4.1.0 -->
 <!-- guid: 4f1c8a72-6d93-4e05-b8a1-9c72e0f45d38 -->
 <!-- last-edited: 2026-08-09 -->
 
@@ -32,7 +32,7 @@ relevance, and answered on its own terms in §3 with numbers.
 | 3 | **Sorting moves to the backend, in Go.** Client-side sorting of paginated library slices is replaced. |
 | 4 | **"Not suck" is the bar** — the defects in §5 are not acceptable as permanent behaviour. |
 | 5 | **Index reconciliation: dirty-set + ticker, persisted to Pebble, adaptive batch.** ✅ **BUILT** — §7.3. Unblocks A1. |
-| 6 | **Sorted indexes for 9 fields:** author, narrator, series, created_at, updated_at, year, duration, file_size, bitrate. **Not** library_state/quality — low-cardinality, they are filters. §2.3. |
+| 6 | **Sorted indexes for 9 fields:** author, narrator, series, created_at, updated_at, year, duration, file_size, bitrate. **Not** library_state/quality — low-cardinality, they are filters. §2.3. ⚠️ **BUILT BUT DEFAULT-OFF** — the cost estimate this was decided on was ~10× optimistic; measured at **+1,312 MB** for all nine. Which to enable is re-opened, see §2.3. |
 | 7 | **Multi-user is REAL, not theoretical.** The per-user filter path stays and filter pushdown must be user-aware. This makes §5.2 harder, not easier — see §7.5. |
 
 ---
@@ -148,13 +148,38 @@ lowercase title per page load caused **340MB allocations per call and severe GC 
 
 ### 2.3 The fix: secondary sorted indexes
 
-A secondary index stores **keys and IDs, not books**. Sized against the measured 366,916
-books — short key + ID + tree overhead — expect **tens of MB per sort field** against
-~1.25 GB resident: low single-digit percent each. A bounded, predictable cost that
-**deletes an unbounded per-request allocation.**
-
 Each indexed field converts a full-set materialise-and-sort into the streaming walk that
-title already gets.
+title already gets. That part is right, and it is built.
+
+> ### ⚠️ Correction: this section's cost estimate was wrong by ~10×
+>
+> It previously read: *"A secondary index stores **keys and IDs, not books**… expect
+> **tens of MB per sort field** against ~1.25 GB resident: low single-digit percent
+> each."* **Decision 6 was taken on that basis. It does not hold.**
+>
+> Measured 2026-08-09 (`TestSortIndexCost`, 100,000 books, identical fixture both sides):
+>
+> | | without | all nine | delta |
+> |---|---|---|---|
+> | heap per book | 2,645 B | 6,395 B | **+142%** |
+> | at 366,916 books | 925.6 MB | 2,237.8 MB | **+1,312 MB** |
+> | insert 100K | 335 ms | 935 ms | **2.8× slower** |
+>
+> **~146 MB per sort key**, and that is a *lower* bound — the fixture leaves Author and
+> Series unset, so two of the six physical indexes hold a 1-byte "missing" key for
+> nearly every row.
+>
+> **Why the reasoning failed:** "keys and IDs, not books" is true, and led to sizing by
+> key length. But go-memdb is an **immutable** radix tree — every insert path-copies
+> nodes from root to leaf, so cost is dominated by node allocation (~417 B per book per
+> index) regardless of how short the key is. A short key is not a cheap key.
+>
+> **Consequence:** memdb is already ~1.25 GB resident with a 107.9 s warmup; all nine
+> roughly doubles it. The indexes therefore ship **opt-in and default-empty**
+> (`enabled_sort_indexes`), and which fields earn their memory is now an open decision
+> with real numbers attached — `todo.d/20260810-sort-index-memory-cost-decision.md`.
+> Nobody has measured which sorts users actually pick, so instrumenting `sort_by` for a
+> week is the cheapest way to answer it.
 
 #### What gets indexed, and what does not
 
