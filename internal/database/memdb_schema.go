@@ -1,5 +1,5 @@
 // file: internal/database/memdb_schema.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000002
 
 package database
@@ -41,12 +41,102 @@ const (
 	memIdxAliasName         = "alias_name"
 	memIdxHash              = "hash"
 	memIdxDelugeHash        = "deluge_hash"
+
+	// Sorted secondary indexes for the library list. Each turns a
+	// materialise-the-whole-filtered-set-and-sort into an ordered streaming
+	// walk, the way memIdxTitle already does for title. See
+	// memdb_sort_indexers.go for the key encoding and the field selection.
+	//
+	// Six physical indexes serve nine sort keys: duration/bitrate/file_size
+	// each have an alias spelling that maps to the same index.
+	memIdxSortAuthor    = "sort_author"
+	memIdxSortNarrator  = "sort_narrator"
+	memIdxSortSeries    = "sort_series"
+	memIdxSortYear      = "sort_year"
+	memIdxSortCreatedAt = "sort_created_at"
+	memIdxSortUpdatedAt = "sort_updated_at"
+	memIdxSortDuration  = "sort_duration"
+	memIdxSortBitrate   = "sort_bitrate"
+	memIdxSortFileSize  = "sort_file_size"
 )
 
 // memdbSchema returns the complete schema for the in-memory query layer.
 // PebbleDB remains source of truth; this schema is derived/rebuilt from Pebble
 // on startup and kept in sync via write-through.
 func memdbSchema() *memdb.DBSchema {
+	s := baseMemdbSchema()
+	// Sorted secondary indexes are attached conditionally: each costs real
+	// memory (~146 MB per key at prod scale — see config.EnabledSortIndexes),
+	// so they are opt-in rather than always-on. With none enabled this is a
+	// no-op and the schema is byte-for-byte what it was before they existed.
+	attachEnabledSortIndexes(s)
+	return s
+}
+
+// attachEnabledSortIndexes registers a sorted index on the books table for
+// each enabled sort field. Alias spellings collapse to one index.
+//
+// Indexers are attached here rather than in the schema literal so that the
+// enabled set is consulted exactly once, at schema-build time, and the
+// schema and CanPushDownSort can never disagree about which indexes exist.
+func attachEnabledSortIndexes(s *memdb.DBSchema) {
+	books := s.Tables[memTableBooks]
+	if books == nil {
+		return
+	}
+
+	// AllowMissing is deliberately NOT set on any of these: each indexer
+	// emits an explicit "missing" key for books without a value, so every
+	// book appears in every index. Letting rows be absent instead would
+	// silently drop them from the library page whenever that sort is
+	// selected — the failure titleSortIndex's comment documents.
+	all := map[string]*memdb.IndexSchema{
+		memIdxSortAuthor: {
+			Name:    memIdxSortAuthor,
+			Indexer: bookStringSortIndex{name: memIdxSortAuthor, get: bookAuthorSortValue},
+		},
+		memIdxSortNarrator: {
+			Name:    memIdxSortNarrator,
+			Indexer: bookStringSortIndex{name: memIdxSortNarrator, get: bookNarratorSortValue},
+		},
+		memIdxSortSeries: {
+			Name:    memIdxSortSeries,
+			Indexer: bookStringSortIndex{name: memIdxSortSeries, get: bookSeriesSortValue},
+		},
+		memIdxSortYear: {
+			Name:    memIdxSortYear,
+			Indexer: bookIntSortIndex{name: memIdxSortYear, get: bookYearSortValue},
+		},
+		memIdxSortCreatedAt: {
+			Name:    memIdxSortCreatedAt,
+			Indexer: bookIntSortIndex{name: memIdxSortCreatedAt, get: bookCreatedAtSortValue},
+		},
+		memIdxSortUpdatedAt: {
+			Name:    memIdxSortUpdatedAt,
+			Indexer: bookIntSortIndex{name: memIdxSortUpdatedAt, get: bookUpdatedAtSortValue},
+		},
+		memIdxSortDuration: {
+			Name:    memIdxSortDuration,
+			Indexer: bookIntSortIndex{name: memIdxSortDuration, get: bookDurationSortValue},
+		},
+		memIdxSortBitrate: {
+			Name:    memIdxSortBitrate,
+			Indexer: bookIntSortIndex{name: memIdxSortBitrate, get: bookBitrateSortValue},
+		},
+		memIdxSortFileSize: {
+			Name:    memIdxSortFileSize,
+			Indexer: bookIntSortIndex{name: memIdxSortFileSize, get: bookFileSizeSortValue},
+		},
+	}
+
+	for name := range enabledSortIndexNames() {
+		if idx, ok := all[name]; ok {
+			books.Indexes[name] = idx
+		}
+	}
+}
+
+func baseMemdbSchema() *memdb.DBSchema {
 	return &memdb.DBSchema{
 		Tables: map[string]*memdb.TableSchema{
 			memTableBooks: {

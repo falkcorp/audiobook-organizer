@@ -1,5 +1,5 @@
 // file: cmd/root.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
 // last-edited: 2026-07-01
 
@@ -482,6 +482,20 @@ func initConfig() {
 	}
 	if err := config.AppConfig.Validate(); err != nil {
 		fmt.Printf("Warning: configuration validation failed: %v\n", err)
+	}
+
+	// Select which library sort fields get a memdb sorted index. This MUST
+	// happen before any store is opened: memdbSchema() reads the enabled set
+	// once, when NewMemStore builds the schema. Doing it here — right after
+	// config load, in the single cobra.OnInitialize hook — covers every
+	// command that later calls initializeStore, rather than being repeated
+	// at each of the four call sites and eventually missed at one.
+	//
+	// Unknown names are warned about rather than ignored: a typo in config
+	// would otherwise silently leave a sort on the slow path with no
+	// indication why.
+	if unknown := database.SetEnabledSortIndexes(config.AppConfig.EnabledSortIndexes); len(unknown) > 0 {
+		fmt.Printf("Warning: unknown enabled_sort_indexes entries ignored: %v\n", unknown)
 	}
 }
 

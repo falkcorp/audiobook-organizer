@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.74.0
+// version: 1.75.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-08-07
 
@@ -765,6 +765,34 @@ type Config struct {
 	// the up-to-10K sequential state reads per per-user-filtered request
 	// (spec Decision 11); NOT a feature flag. Default false = filters ON.
 	DisablePerUserSearchFilters bool `json:"disable_per_user_search_filters"`
+
+	// EnabledSortIndexes names the library sort fields that get a memdb
+	// sorted secondary index, turning "sort by X" from a
+	// materialise-the-whole-filtered-set-and-sort into a streaming walk.
+	//
+	// Recognised: author, narrator, series, year, created_at, updated_at,
+	// duration, file_size, bitrate. ("title" is always indexed and is not
+	// configurable.) Unknown names are ignored with a warning.
+	//
+	// ⚠️ DEFAULT IS EMPTY, AND THAT IS DELIBERATE. Each index costs real
+	// memory, measured rather than estimated at 100,000 books:
+	//
+	//	all nine enabled: 6,395 B/book vs 2,645 B/book — +142%
+	//	extrapolated to prod's 366,916 books: +1,312 MB
+	//	insert throughput: 2.8x slower
+	//
+	// That is ~146 MB per sort key, against a design-doc estimate of "tens
+	// of MB per field" — optimistic by roughly an order of magnitude,
+	// because go-memdb's radix tree is immutable and path-copies nodes on
+	// every insert, so cost tracks node count rather than key length.
+	//
+	// memdb is already ~1.25 GB resident with a 107.9s warmup, so enabling
+	// all nine roughly doubles it. Enable the fields that are actually
+	// sorted by, and measure warmup afterwards.
+	//
+	// Empty (the default) reproduces today's behaviour exactly: only title
+	// streams, everything else takes the existing heavy path.
+	EnabledSortIndexes []string `json:"enabled_sort_indexes" mapstructure:"enabled_sort_indexes"`
 }
 
 // mu guards AppConfig against concurrent writes.
