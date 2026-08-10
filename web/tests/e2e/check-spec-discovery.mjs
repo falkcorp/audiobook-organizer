@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // file: web/tests/e2e/check-spec-discovery.mjs
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5b1c93a7-6e42-4d08-9f31-2a7c8e05b4d6
 // last-edited: 2026-08-10
 

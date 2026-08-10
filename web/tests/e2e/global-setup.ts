@@ -1,15 +1,17 @@
 // file: tests/e2e/global-setup.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2f7b4e91-8c05-4d63-a1f2-6b98e0c473da
-// last-edited: 2026-08-09
+// last-edited: 2026-08-10
 
 import { execFileSync } from 'child_process';
 import { statSync } from 'fs';
-import { dirname, join } from 'path';
+import { createRequire } from 'module';
+import { dirname, join, sep } from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '../../..');
+const WEB_DIR = join(__dirname, '../..');
 const PORT = 8484;
 
 /**
@@ -47,6 +49,8 @@ const PORT = 8484;
  * no-ops when nothing is listening.
  */
 export default function globalSetup(): void {
+  assertProjectLocalPlaywright();
+
   if (process.env.CI) return;
   if (process.env.E2E_SKIP_STALE_CHECK === '1') {
     console.warn(
@@ -124,6 +128,58 @@ export default function globalSetup(): void {
       '',
     ].join('\n'),
   );
+}
+
+/**
+ * Fail when the suite is being driven by a Playwright that is not this
+ * project's.
+ *
+ * `npx` searches ancestor node_modules directories. A git worktree is a
+ * SIBLING of the main checkout rather than a child, so a worktree created
+ * without its own `npm ci` inherits nothing from main and keeps walking — in
+ * this repo, all the way to an orphan /Users/<user>/node_modules belonging to
+ * an unrelated project. On 2026-08-10 that silently supplied Playwright 1.57.0
+ * to a worktree while CI ran the pinned 1.62.1, and nothing anywhere said so.
+ *
+ * Same shape as the stale-server check above: the run still produces a number,
+ * the number just does not mean what it appears to. `npm run test:e2e` also
+ * checks this via check-spec-discovery.mjs, but a bare `npx playwright test`
+ * skips the npm script entirely — and that is the command people actually type
+ * when iterating on one spec. This is the layer that covers it.
+ *
+ * Runs under CI too. `npm ci` makes it a formality there, but a mismatch would
+ * be at its most confusing in a CI log, and the assertion costs nothing.
+ */
+function assertProjectLocalPlaywright(): void {
+  const req = createRequire(join(WEB_DIR, 'package.json'));
+  let resolved: string;
+  try {
+    resolved = req.resolve('@playwright/test/package.json');
+  } catch (err) {
+    throw new Error(
+      `\nCannot resolve @playwright/test from ${WEB_DIR}: ${(err as Error).message}\n` +
+        `Run \`npm ci\` there before running the suite.\n`,
+    );
+  }
+  if (!resolved.startsWith(WEB_DIR + sep)) {
+    throw new Error(
+      [
+        '',
+        'FOREIGN PLAYWRIGHT.',
+        '',
+        `@playwright/test resolved to:\n  ${resolved}`,
+        `which is outside this project (${WEB_DIR}).`,
+        '',
+        'npx walked up past this worktree and found someone else\'s install, so the',
+        'suite would run on a different version than CI does — and would still',
+        'report a pass/fail count that looks authoritative.',
+        '',
+        'Fix:',
+        `  cd ${WEB_DIR} && npm ci`,
+        '',
+      ].join('\n'),
+    );
+  }
 }
 
 /** PID listening on the e2e port, or null if nothing is. */
