@@ -1,10 +1,21 @@
 #!/bin/bash
 # file: scripts/run-all-tests.sh
-# version: 1.0.0
+# version: 1.1.0
 # guid: f1e2d3c4-b5a6-7980-1234-567890abcdef
+# last-edited: 2026-08-10
 # description: Run all tests (Go backend + Frontend E2E + Frontend unit) and generate reports
 
 set -e
+
+# pipefail is load-bearing here, not hygiene. Every one of the three test steps
+# below has the shape `if <test command> 2>&1 | tee <log>; then`, and a shell
+# pipeline's exit status is that of its LAST command — `tee`, which essentially
+# always succeeds. Without this line all three `if`s take the PASSED branch
+# unconditionally, so GO_TESTS_PASSED / FRONTEND_UNIT_PASSED / E2E_TESTS_PASSED
+# are always true and the summary reports "🎉 All tests passed!" and exits 0 no
+# matter how many tests actually failed. `set -e` does not help: commands in an
+# `if` condition are exempt from it by design.
+set -o pipefail
 
 echo "🧪 Running Comprehensive Test Suite"
 echo "===================================="
@@ -26,7 +37,11 @@ mkdir -p test-reports
 
 echo "📊 Step 1: Running Go Backend Tests"
 echo "------------------------------------"
-if go test -v -coverprofile=test-reports/go-coverage.out ./... 2>&1 | tee test-reports/go-tests.log; then
+# -timeout 25m matches the Makefile's ./... targets. Go's default is 10m PER
+# PACKAGE and internal/server alone runs ~500s, so a contended run dies with
+# "panic: test timed out" naming whichever test was mid-flight — which reads as
+# a failure in an unrelated test. See the comment above `coverage:` in Makefile.
+if go test -v -coverprofile=test-reports/go-coverage.out -timeout 25m ./... 2>&1 | tee test-reports/go-tests.log; then
     echo -e "${GREEN}✅ Go tests passed${NC}"
     GO_TESTS_PASSED=true
 
