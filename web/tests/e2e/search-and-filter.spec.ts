@@ -1,5 +1,5 @@
 // file: web/tests/e2e/search-and-filter.spec.ts
-// version: 1.6.0
+// version: 1.7.0
 // guid: c3d4e5f6-a7b8-9012-cdef-a3b4c5d6e7f8
 // last-edited: 2026-08-09
 
@@ -326,7 +326,7 @@ test.describe('Search and Filter Functionality', () => {
   // Filters chip keeps showing its count. Same family as the Deleted-filter
   // cache bug fixed in #2230: a filter that silently does nothing.
   // See todo.d/20260809-search-drops-filters-and-debounce.md.
-  test.fixme('search works with other filters combined', async ({ page }) => {
+  test('search works with other filters combined', async ({ page }) => {
     // GIVEN: Library has organized and import books by same author
     const books = [
       {

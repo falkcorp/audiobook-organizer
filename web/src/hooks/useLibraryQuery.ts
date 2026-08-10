@@ -1,5 +1,5 @@
 // file: web/src/hooks/useLibraryQuery.ts
-// version: 1.5.0
+// version: 1.6.0
 // guid: d4e5f6a7-b8c9-0123-def0-123456789003
 // last-edited: 2026-08-09
 
@@ -198,22 +198,34 @@ export function useLibraryQuery({
         return;
       }
 
+      // ONE call, whether or not there is search text.
+      //
+      // This used to branch: with search it called api.searchBooksPage, which
+      // sends only search/limit/offset/show_quarantined. Every other option
+      // below — library_state, tags, field filters, AND the sort order — was
+      // dropped the moment you typed. Filter to Organized, search an author,
+      // and you got matches from every state with the Filters chip still
+      // showing its count.
+      //
+      // The server was never the problem: GetAudiobooks applies the same
+      // post-filters on the search path (service_query.go:226). It simply was
+      // not being told about them. getBooks hits the same endpoint, so passing
+      // `search` here is enough.
       const [page_, folders] = await Promise.all([
-        searchText
-          ? api.searchBooksPage(searchText, itemsPerPage, offset, filters.showFailed, controller.signal)
-          : api.getBooks(itemsPerPage, offset, {
-              sortBy,
-              sortOrder,
-              tags: tagsParam,
-              libraryState,
-              filters: fieldFilters.length > 0 ? JSON.stringify(fieldFilters) : undefined,
-              showFailed: filters.showFailed,
-              hasFileErrors: filters.hasFileErrors,
-              fingerprintStatus: filters.fingerprintStatus,
-              coveragePercentMin: filters.coveragePercentMin,
-              coveragePercentMax: filters.coveragePercentMax,
-              signal: controller.signal,
-            }),
+        api.getBooks(itemsPerPage, offset, {
+          search: searchText || undefined,
+          sortBy,
+          sortOrder,
+          tags: tagsParam,
+          libraryState,
+          filters: fieldFilters.length > 0 ? JSON.stringify(fieldFilters) : undefined,
+          showFailed: filters.showFailed,
+          hasFileErrors: filters.hasFileErrors,
+          fingerprintStatus: filters.fingerprintStatus,
+          coveragePercentMin: filters.coveragePercentMin,
+          coveragePercentMax: filters.coveragePercentMax,
+          signal: controller.signal,
+        }),
         api.getImportPaths(controller.signal),
       ]);
 

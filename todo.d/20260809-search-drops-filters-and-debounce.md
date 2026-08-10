@@ -1,10 +1,10 @@
 <!-- file: todo.d/20260809-search-drops-filters-and-debounce.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 2.0.0 -->
 <!-- guid: a17c53e9-4820-4d6b-b95f-e3086c2741da -->
 <!-- last-edited: 2026-08-09 -->
 
-- [ ] **Typing in the library search box silently drops every active filter and the sort
-      order.**
+- [x] **FIXED — both halves.** Typing in the library search box silently dropped every
+      active filter and the sort order, and queried on every keystroke.
 
       > ### ✅ The debounce half of this is FIXED (#2264) — and the original diagnosis was wrong
       >
@@ -31,7 +31,35 @@
       > `test.fixme('search debounces input to avoid excessive requests')` is now a real
       > passing test (search-and-filter.spec.ts: 11 passed / 1 skipped, exit 0).
       >
-      > **The filter-dropping half below is still open.**
+      > ### ✅ The filter-dropping half is ALSO fixed (#2265)
+      >
+      > It was a **branch**, not a missing capability:
+      >
+      > ```ts
+      > searchText
+      >   ? api.searchBooksPage(searchText, itemsPerPage, offset, filters.showFailed, signal)
+      >   : api.getBooks(itemsPerPage, offset, { sortBy, sortOrder, tags, libraryState, filters, ... })
+      > ```
+      >
+      > Every option lived on the `getBooks` side only, so typing one character crossed to
+      > a call that sends four parameters — dropping `library_state`, tags, field filters
+      > and the sort order.
+      >
+      > **The server was never the problem.** `GetAudiobooks` applies the same post-filters
+      > on the search path (`service_query.go:226`); it was simply never told about them.
+      >
+      > Fixed by collapsing the branch rather than adding nine parameters to
+      > `searchBooksPage`: `getBooks` hits the same endpoint with the same
+      > `is_primary_version`, so it only needed a `search` option. **One code path now** —
+      > which also means a future filter cannot be added to one branch and forgotten in the
+      > other, which is exactly the class of bug this was.
+      >
+      > `searchBooksPage` had exactly one production caller (checked); it is now
+      > `@deprecated` with the reason rather than removed.
+      >
+      > `test.fixme('search works with other filters combined')` is a real passing test.
+      > Verified: search-and-filter + library-browser, **33 passed / 0 failed / 0 skipped,
+      > exit 0.**
       >
       > Lesson worth keeping: "feature X is missing" and "feature X exists but is bypassed"
       > look identical from the outside and have completely different fixes. Grep for the
