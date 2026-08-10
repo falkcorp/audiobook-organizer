@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.26.0 -->
+<!-- version: 10.27.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-08-10 -->
 
@@ -4858,26 +4858,56 @@ far more than chapters.
         `setupTestServerWithStore`), so ≈ **376 s, about 69% of the package**.
         That matches the 296-test 1–5 s band independently.
 
-      Per call the fixture makes a temp dir, opens a **disk-backed** PebbleStore,
-      runs ALL migrations, constructs `NewServer` (hub, queue, write-back
-      batcher, fileIO pool) and calls `opRegistry.Start`; cleanup then calls
-      `opRegistry.Shutdown` — which blocks on `sync.WaitGroup.Wait`, *the very
-      goroutine the #2083 panic dump named*. So the thing that made the timeout
-      look like a deadlock is also the thing making the package slow.
+      **Which phase costs what** — measured per iteration over 5 iterations by
+      timing each step of the fixture separately. The phases sum to **1.4425 s**,
+      independently reproducing the 1.44 s figure above:
 
-      **This redirects the fix.** Sharding redistributes a 69% fixture charge
-      across shards without removing it, and each shard still pays 1.44 s per
-      test. The lever is amortising the fixture: share one store/server across a
-      suite where tests do not mutate global state, skip `opRegistry.Start` for
-      the many tests that never enqueue an op, or keep Pebble in a tmpfs/memory
-      configuration. Any of these is a large, isolation-sensitive refactor across
-      ~260 call sites and wants its own plan — not a drive-by.
+      | Phase | Mean | Share |
+      |---|---|---|
+      | `RunMigrations` | **828 ms** | **57.4%** |
+      | `NewServer` (hub, queue, write-back batcher, fileIO pool) | 473 ms | 32.8% |
+      | `NewPebbleStore` (disk-backed) | 134 ms | 9.3% |
+      | `pools + store.Close` | 5.0 ms | 0.3% |
+      | `RemoveAll` | 1.4 ms | 0.1% |
+      | `MkdirTemp` | 0.44 ms | 0.0% |
+      | `opRegistry.Shutdown` | **0.30 ms** | **0.0%** |
+      | `opRegistry.Start` | 0.08 ms | 0.0% |
 
-      *Not claimed:* the 543 s and 1.44 s figures are each a **single sample** on
-      one idle Mac; 261 is **static call sites**, not dynamic invocations; and
-      which part of the 1.44 s dominates (Pebble open, migrations, registry
-      start, or `Shutdown`'s wait) was **not** isolated — that is the first thing
-      to measure before choosing among the three levers above.
+      **The registry teardown is NOT the cost.** It is tempting to connect the
+      slowness to `opRegistry.Shutdown` blocking on `sync.WaitGroup.Wait`, since
+      that is the goroutine the #2083 panic dump named — and an earlier draft of
+      this entry asserted exactly that. The measurement refutes it: `Shutdown` is
+      **297 µs**, four orders of magnitude below the fixture cost. The #2083
+      panic dump named a goroutine that is normally free and only blocks under
+      the contention that caused the timeout. Slowness and the deadlock-shaped
+      panic are two separate phenomena that happen to name the same symbol.
+
+      **This redirects the fix**, and not where sharding points. Sharding
+      redistributes a 69% fixture charge without removing it; each shard still
+      pays 1.44 s per test. **90% of that charge is `RunMigrations` +
+      `NewServer`,** so those are the levers:
+
+      1. **Migrations (57%)** — every test replays the FULL migration chain onto
+         an empty store, producing a byte-identical result every time. Build one
+         migrated Pebble directory once per package and copy/clone it per test,
+         or share a migrated store where tests do not mutate global state.
+      2. **`NewServer` (33%)** — construct the hub/queue/batcher/fileIO pool
+         lazily, or let tests that only exercise handlers skip the parts they
+         never touch.
+      3. **Pebble open (9%)** — tmpfs or an in-memory VFS; worth doing only after
+         the first two.
+
+      Skipping `opRegistry.Start` — a lever an earlier draft proposed — would
+      save **0.08 ms** and is not worth doing. Any of 1–3 is an
+      isolation-sensitive refactor across ~260 call sites (`setupTestServer` also
+      sets `database.SetGlobalStore`, so shared state is exactly where isolation
+      would break) and wants its own plan, not a drive-by.
+
+      *Not claimed:* the 543 s figure is a **single sample** on one idle Mac
+      (the 1.44 s fixture cost has two independent samples that agree); 261 is
+      **static call sites**, not dynamic invocations; and the phase table is one
+      run of 5 iterations, so treat the shares as approximate rather than the
+      millisecond values as exact.
 
 <!-- file: todo.d/2026-08-01-origin-lan-exposure-finding.md -->
 <!-- version: 1.0.0 -->
