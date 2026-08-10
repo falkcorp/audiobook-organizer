@@ -1,7 +1,7 @@
 // file: web/tests/e2e/scan-import-organize.spec.ts
-// version: 1.8.0
+// version: 1.9.0
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
-// last-edited: 2026-08-09
+// last-edited: 2026-08-10
 
 import { test, expect, type Page } from '@playwright/test';
 import {
@@ -319,6 +319,14 @@ test.describe('Scan/Import/Organize Workflow', () => {
     // chromium stopped failing once CI dropped to one worker (#2249); webkit is
     // slower and kept failing, so this wait is required rather than belt-and-
     // braces.
+    //
+    // UPDATE 2026-08-10 — the worker count was never the cause, only a way to
+    // change the odds. This close could STALL outright: the backdrop stayed
+    // visible past any timeout, on an idle 48-core host, at 17/20 runs under
+    // contention. That was a real product defect (a dead, unclickable page for
+    // the user, not just a red test) and is fixed by giving MuiDrawer
+    // `exit: 0` in web/src/theme.ts. This wait stays: it is correct, and it is
+    // the assertion that would catch a regression.
     //
     // The assertion shape is load-bearing and two obvious forms are both wrong:
     //   toBeHidden()   -> strict-mode violation: Sidebar renders its content
