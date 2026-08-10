@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.tsx
-// version: 1.80.0
+// version: 1.81.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-08-08
+// last-edited: 2026-08-10
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -631,6 +631,12 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     if (urlTag !== (selectedTags[0] || '')) setSelectedTags(urlTag ? [urlTag] : []);
   }, [searchParams]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // The query string as of the END of the last commit. Advanced only by the
+  // tracker effect below the write effect, never by the write effect itself,
+  // so the write effect always observes the pre-navigation value on the render
+  // a navigation arrives. See the comment inside that effect.
+  const seenSearch = useRef(searchParams.toString());
+
   const prevPageRef = useRef(page);
   const reviewOpRef = useRef(searchParams.get('reviewOp'));
   useEffect(() => {
@@ -638,6 +644,42 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
   }, [searchParams]);
 
   useEffect(() => {
+    // Do not write while an unconsumed external URL change is pending.
+    //
+    // This effect rebuilds the whole param set from scratch, so it can only
+    // ever emit a CORRECT url when component state has caught up with the
+    // URL. `filters` comes from useLibraryFilters({ searchParams, ... }), so
+    // it changes identity on the very render the URL changes — which fired
+    // this effect one render too early, before the read effect's setState
+    // had landed. It then emitted a URL built from the previous state:
+    // clicking a sidebar filter went
+    //
+    //   ?page=1  ->  ?search=read_status:finished  ->  ?page=1  ->  ?search=…&page=1
+    //                                                  ^^^^^^^ filter thrown away
+    //
+    // Reproduced 2-5 times in 8 webkit runs.
+    //
+    // The signal is effect ORDER, not any single value. `seenSearch` is
+    // advanced by a tracker effect declared AFTER this one, so within a commit
+    // where the URL changed this still reads the PREVIOUS url. That makes
+    // `urlChangedUnderUs` true exactly on the render react-router handed us a
+    // new query string — the render on which our state is by definition one
+    // step behind it. `lastWrittenSearch` then distinguishes an external
+    // navigation (skip; the read effect owns this render) from our own echo
+    // (proceed; rewriting what we just wrote is idempotent).
+    //
+    // Stamping a ref from inside the read effect does NOT work, and was the
+    // first attempt: that stamp lands in the same commit, immediately before
+    // this effect runs, so the guard passes while state is still stale.
+    //
+    // Skipping is safe: the read effect's ingest changes state, which re-fires
+    // this effect on the next render with the values it needs.
+    const currentSearch = searchParams.toString();
+    const urlChangedUnderUs = currentSearch !== seenSearch.current;
+    if (urlChangedUnderUs && currentSearch !== lastWrittenSearch.current) {
+      return;
+    }
+
     const params = new URLSearchParams();
 
     if (searchQuery) params.set('search', searchQuery);
@@ -663,6 +705,16 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     setSearchParams(params, { replace: !pageChanged });
     localStorage.setItem(STORAGE_KEYS.LIBRARY_PAGE, page.toString());
   }, [filters, itemsPerPage, page, searchQuery, selectedTags, setSearchParams, sortBy, sortOrder, viewMode]);
+
+  // MUST stay declared after the write effect above. Effects run in
+  // declaration order within a commit, so keeping this last is what lets that
+  // effect see the pre-navigation query string. It is also deliberately its
+  // own effect rather than a line inside the writer: the writer does not run
+  // on every commit, and if it fell behind by a commit it would skip the next
+  // legitimate write. This runs on every searchParams change, so it cannot.
+  useEffect(() => {
+    seenSearch.current = searchParams.toString();
+  }, [searchParams]);
 
   // SearchBar re-parses its value on mount and hands back a NEW ParsedSearch
   // object that is semantically identical to the one this state was seeded

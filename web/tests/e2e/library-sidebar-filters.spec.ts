@@ -1,7 +1,7 @@
 // file: web/tests/e2e/library-sidebar-filters.spec.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3c9a71e5-84fd-4b26-a0d7-6f2e5b81c934
-// last-edited: 2026-08-09
+// last-edited: 2026-08-10
 
 import { test, expect, type Page, type Locator } from '@playwright/test';
 
@@ -66,6 +66,65 @@ function recordBookRequests(page: Page): string[] {
     if (u.pathname === '/api/v1/audiobooks') urls.push(req.url());
   });
   return urls;
+}
+
+/**
+ * Records every query string the app publishes, by intercepting the history
+ * API rather than sampling.
+ *
+ * The first version of these tests sampled `location.search` on
+ * requestAnimationFrame. That instrument is not sensitive enough to state the
+ * invariant: rAF fires at ~16ms, and the whole drop-and-restore sequence can
+ * happen between two frames — most easily on the mount commit, where the
+ * offending write lands within a millisecond or two of hydration. A sampling
+ * test that cannot see the bug passes whether or not the bug is there.
+ *
+ * react-router writes through pushState/replaceState, so wrapping both
+ * observes every URL the app ever publishes, with no timing assumptions.
+ *
+ * Must be installed with addInitScript, not evaluate: some of these writes
+ * happen on the very first commit, before a post-goto evaluate could run.
+ */
+function installUrlRecorder(page: Page) {
+  return page.addInitScript(() => {
+    const w = window as unknown as { __urls: string[] };
+    w.__urls = [];
+    const record = (url?: string | URL | null) => {
+      w.__urls.push(url == null ? location.search : new URL(String(url), location.href).search);
+    };
+    const origPush = history.pushState.bind(history);
+    const origReplace = history.replaceState.bind(history);
+    history.pushState = (d: unknown, t: string, url?: string | URL | null) => {
+      origPush(d, t, url as string);
+      record(url);
+    };
+    history.replaceState = (d: unknown, t: string, url?: string | URL | null) => {
+      origReplace(d, t, url as string);
+      record(url);
+    };
+    // The URL the document loaded with, which no history call reports.
+    record();
+  });
+}
+
+/** Every query string published so far, oldest first. */
+function recordedUrls(page: Page): Promise<string[]> {
+  return page.evaluate(() => (window as unknown as { __urls: string[] }).__urls);
+}
+
+/**
+ * Asserts `token` never leaves the URL once it has appeared. Takes the
+ * recorded history rather than a live locator so the assertion covers
+ * intermediate states the user's browser really passed through.
+ */
+function expectNeverDropped(samples: string[], token: string) {
+  const firstSet = samples.findIndex((u) => u.includes(token));
+  expect(firstSet, `${token} should reach the URL at all (saw: ${JSON.stringify(samples)})`)
+    .toBeGreaterThanOrEqual(0);
+  expect(
+    samples.slice(firstSet).filter((u) => !u.includes(token)),
+    `once applied, ${token} must never leave the URL again`
+  ).toEqual([]);
 }
 
 async function openLibrary(page: Page) {
@@ -144,73 +203,89 @@ test.describe('Library sidebar filters', () => {
       .toBe('read_status:finished');
   });
 
-  // KNOWN DEFECT, deliberately not routed around. Sampling `location.search`
-  // every animation frame across a sidebar click shows Library.tsx passing
-  // through a state where it has THROWN THE FILTER AWAY, 3 runs out of 3:
+  // Was `test.fixme` while the defect it describes was open. FIXED and now a
+  // normal test — this is the regression guard for it.
+  //
+  // The defect: across a sidebar click, Library.tsx passed through a state
+  // where it had THROWN THE FILTER AWAY.
   //
   //     ?page=1                                 (initial)
   //     ?search=read_status:finished            (click applies the filter)
   //     ?page=1                                 <-- filter gone
   //     ?search=read_status%3Afinished&page=1   (re-applied, settled)
   //
-  // This is the same shape the comment on the "survives the URL settling" test
-  // above describes as fixed by #2193 — the stuck guard "used to throw the
-  // search away and restore a bare page=1". It still happens; it just recovers
-  // now, so nothing downstream notices.
+  // Same shape the "survives the URL settling" test above describes as fixed
+  // by #2193 — the stuck guard "used to throw the search away and restore a
+  // bare page=1". #2193 fixed one cause; this was a second, independent one
+  // (effect ordering, see the write effect in Library.tsx).
   //
-  // Measured blast radius, so nobody re-derives it: exactly ONE request reaches
-  // /api/v1/audiobooks after the click and it carries the correct `filters`
-  // param — the transient drop costs no wasted query and never sends the server
-  // the wrong thing. The cost is confined to the URL and history: a spurious
+  // Measured blast radius, so nobody re-derives it: exactly ONE request reached
+  // /api/v1/audiobooks after the click and it carried the correct `filters`
+  // param — the transient drop cost no wasted query and never sent the server
+  // the wrong thing. The cost was confined to the URL and history: a spurious
   // intermediate entry, and a flicker for anything reading searchParams
-  // directly. That is why this is filed rather than treated as urgent.
+  // directly. That is why it was filed rather than treated as urgent.
   //
-  // Marked `fixme` (skipped, never executed) rather than `fail`. The race is
-  // real but not certain: forced on, this check fails **5 runs out of 8** on
-  // webkit. `test.fail()` would therefore report a spurious "expected to fail
-  // but passed" on roughly a third of runs, which is a worse signal than none.
-  // To reproduce deliberately:
-  //
-  //   sed -i '' "s/test.fixme('the filter never/test('the filter never/" \
-  //     tests/e2e/library-sidebar-filters.spec.ts
-  //   npx playwright test -c tests/e2e/playwright.config.ts --project=webkit \
-  //     tests/e2e/library-sidebar-filters.spec.ts -g "never disappears" \
-  //     --repeat-each=8 --workers=1
-  //
-  // When the race is actually fixed this should pass 8/8; flip it to a normal
-  // test at that point.
-  //
-  // See todo.d/20260809-library-url-transient-filter-drop.md.
-  test.fixme('the filter never disappears from the URL while the effects settle', async ({ page }) => {
+  // It is a race, so it was never certain: 5 failures in 8 runs on webkit when
+  // it was open. Verified fixed at 24 consecutive passes, and the assertion
+  // verified still able to fail by disabling the guard (4 failures in 6). Both
+  // numbers matter — a green race test proves nothing until you have watched
+  // it go red.
+  test('the filter never disappears from the URL while the effects settle', async ({ page }) => {
+    await installUrlRecorder(page);
     await openLibrary(page);
-
-    await page.evaluate(() => {
-      const w = window as unknown as { __urls: string[] };
-      w.__urls = [];
-      const tick = () => {
-        w.__urls.push(location.search);
-        if (w.__urls.length < 3000) requestAnimationFrame(tick);
-      };
-      tick();
-    });
 
     await clickSubItem(page, 'Finished');
     await expect
       .poll(() => new URL(page.url()).searchParams.get('search'))
       .toBe('read_status:finished');
 
-    const samples: string[] = await page.evaluate(
-      () => (window as unknown as { __urls: string[] }).__urls
-    );
-    const firstSet = samples.findIndex((u) => u.includes('read_status'));
-    expect(firstSet, 'the filter should reach the URL at all').toBeGreaterThanOrEqual(0);
-    const droppedAfterBeingSet = samples
-      .slice(firstSet)
-      .filter((u) => !u.includes('read_status'));
-    expect(
-      droppedAfterBeingSet,
-      'once applied, the filter must never leave the URL again'
-    ).toEqual([]);
+    expectNeverDropped(await recordedUrls(page), 'read_status');
+  });
+
+  // The same invariant reached by the OTHER entry path. The test above always
+  // navigates from an already-mounted Library, so the URL-write guard has a
+  // previous query string to compare against. A deep link (bookmark, shared
+  // URL, reload) has none: the filter is present on the very first commit, so
+  // the guard is structurally blind there and the write effect's mount run is
+  // unguarded.
+  //
+  // Both deep-link tests below PASS with the guard removed — measured, by
+  // disabling it and re-running: 4 of 6 click runs failed, 6 of 6 deep-link
+  // runs passed. They are not regression coverage for a bug that was fixed;
+  // they pin an invariant that currently holds for a different reason, namely
+  // that every URL-backed field is seeded from `searchParams` in its useState
+  // initialiser (Library.tsx `initialSearch`/`initialSortBy`/…,
+  // useLibraryFilters.ts `filters`), so mount state is not stale to begin
+  // with. Add a URL param without a seeded initialiser and the mount write
+  // starts dropping it — that is what these would catch.
+  test('a deep-linked filter survives mount', async ({ page }) => {
+    await setupLibraryWithBooks(page, generateTestBooks(5));
+    await installUrlRecorder(page);
+
+    await page.goto('/library?search=read_status:finished');
+    await expect
+      .poll(() => new URL(page.url()).searchParams.get('search'))
+      .toBe('read_status:finished');
+
+    expectNeverDropped(await recordedUrls(page), 'read_status');
+  });
+
+  // Same invariant, `?tag=` instead of `?search=`, and deliberately kept as a
+  // second case: `selectedTags` is the one URL-backed field NOT seeded from
+  // searchParams (useLibraryFilters.ts, `useState<string[]>([])`), so on paper
+  // it is the field a mount-time write should drop. It does not — verified
+  // with the guard disabled, 6 of 6 — so something else covers it. Kept
+  // because the reasoning says it is the most fragile field, and a cheap test
+  // on the most fragile field is worth keeping even when it is green.
+  test('a deep-linked tag survives mount', async ({ page }) => {
+    await setupLibraryWithBooks(page, generateTestBooks(5));
+    await installUrlRecorder(page);
+
+    await page.goto('/library?tag=scifi');
+    await expect.poll(() => new URL(page.url()).searchParams.get('tag')).toBe('scifi');
+
+    expectNeverDropped(await recordedUrls(page), 'tag=scifi');
   });
 
   test('All Books clears the filter and takes the highlight back', async ({ page }) => {
