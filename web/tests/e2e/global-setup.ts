@@ -159,6 +159,7 @@ function assertProjectLocalPlaywright(): void {
     throw new Error(
       `\nCannot resolve @playwright/test from ${WEB_DIR}: ${(err as Error).message}\n` +
         `Run \`npm ci\` there before running the suite.\n`,
+      { cause: err },
     );
   }
   if (!resolved.startsWith(WEB_DIR + sep)) {
