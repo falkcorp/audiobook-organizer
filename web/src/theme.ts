@@ -1,5 +1,5 @@
 // file: web/src/theme.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-08-10
 
@@ -48,6 +48,24 @@ export function createAppTheme(mode: PaletteMode = 'dark') {
         },
       },
       MuiDrawer: {
+        // exit: 0 for the same reason as MuiMenu below — see that comment for
+        // the mechanism and the measurements. This is the SECOND component hit
+        // by the same stuck-modal defect, and it was named alongside the Select
+        // menu in playwright.config.ts long before either was understood.
+        //
+        // Measured 2026-08-10 on current main (which already carries the
+        // MuiMenu fix), 20 copies of the scan-import-organize "complete
+        // workflow" e2e test across 12 workers: 17/20 FAILED with
+        // `.MuiDrawer-modal .MuiBackdrop-root` still visible after 15s.
+        //
+        // Note Drawer already used NUMERIC durations (enteringScreen /
+        // leavingScreen), so this is direct evidence against the "a numeric
+        // duration restores react-transition-group's fallback timer and fixes
+        // it" theory — the Drawer had that fallback all along and stalls
+        // anyway. Only removing the exit window helps.
+        defaultProps: {
+          transitionDuration: { enter: 225, exit: 0 },
+        },
         styleOverrides: {
           paper: {
             backgroundImage: 'none',
