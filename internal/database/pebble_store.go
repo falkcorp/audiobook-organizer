@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.120.0
+// version: 1.121.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-08-06
+// last-edited: 2026-08-10
 
 package database
 
@@ -1751,15 +1751,18 @@ func (p *PebbleStore) CreateBook(book *Book) (*Book, error) {
 	// Version-group index (PERF-VERSIONS): O(N) full-scan in
 	// GetBooksByVersionGroup was costing ~15s on a 10K-book library.
 	// Indexed by group_id so the read can iterate only matching keys.
-	// Also store full Book JSON to eliminate point lookups.
+	//
+	// POINTER INDEX: the value is the book ID and nothing reads it —
+	// GetBooksByVersionGroup takes the ID from the trailing key segment and
+	// point-looks-up the authoritative book:<id> row. An earlier version
+	// stored the full Book JSON here "to eliminate point lookups", but the
+	// read path stopped trusting it (a same-group edit never refreshed it),
+	// so that copy was pure write amplification. Keep every writer of this
+	// index — CreateBook, UpdateBook, BackfillVersionGroupIndex — writing
+	// the ID, so the row stays cheap enough to rewrite unconditionally.
 	if book.VersionGroupID != nil && *book.VersionGroupID != "" {
 		vgKey := []byte(fmt.Sprintf("book:versiongroup:%s:%s", *book.VersionGroupID, book.ID))
-		bookJSON, err := serializeBookForIndex(book)
-		if err != nil {
-			batch.Close()
-			return nil, err
-		}
-		if err := batch.Set(vgKey, bookJSON, nil); err != nil {
+		if err := batch.Set(vgKey, []byte(book.ID), nil); err != nil {
 			batch.Close()
 			return nil, err
 		}
@@ -1959,7 +1962,19 @@ func (p *PebbleStore) UpdateBook(id string, book *Book) (*Book, error) {
 		return nil, err
 	}
 
-	// Update version-group index if changed (PERF-VERSIONS).
+	// Update version-group index (PERF-VERSIONS).
+	//
+	// SELF-HEAL: the delete of the OLD row is gated on the group actually
+	// changing, but the write of the CURRENT row is unconditional. It used to
+	// be gated too (`if oldVG != newVG { ...set... }`), which meant a row that
+	// was missing for any reason — never backfilled, lost to a partial commit,
+	// written before this index existed — could never come back, because every
+	// later edit to that book left the group unchanged and so skipped the
+	// write. That is what let a partial index survive indefinitely and made
+	// GetBooksByVersionGroup silently under-report a group's members.
+	// The row is a book ID keyed by (group, id), so rewriting it on every
+	// update is one small idempotent Set, and any book touched by any write
+	// path now repairs its own index entry.
 	oldVG := ""
 	if oldBook.VersionGroupID != nil {
 		oldVG = *oldBook.VersionGroupID
@@ -1968,25 +1983,18 @@ func (p *PebbleStore) UpdateBook(id string, book *Book) (*Book, error) {
 	if book.VersionGroupID != nil {
 		newVG = *book.VersionGroupID
 	}
-	if oldVG != newVG {
-		if oldVG != "" {
-			oldVGKey := []byte(fmt.Sprintf("book:versiongroup:%s:%s", oldVG, id))
-			if err := batch.Delete(oldVGKey, nil); err != nil {
-				batch.Close()
-				return nil, err
-			}
+	if oldVG != newVG && oldVG != "" {
+		oldVGKey := []byte(fmt.Sprintf("book:versiongroup:%s:%s", oldVG, id))
+		if err := batch.Delete(oldVGKey, nil); err != nil {
+			batch.Close()
+			return nil, err
 		}
-		if newVG != "" {
-			newVGKey := []byte(fmt.Sprintf("book:versiongroup:%s:%s", newVG, id))
-			bookJSON, err := serializeBookForIndex(book)
-			if err != nil {
-				batch.Close()
-				return nil, err
-			}
-			if err := batch.Set(newVGKey, bookJSON, nil); err != nil {
-				batch.Close()
-				return nil, err
-			}
+	}
+	if newVG != "" {
+		newVGKey := []byte(fmt.Sprintf("book:versiongroup:%s:%s", newVG, id))
+		if err := batch.Set(newVGKey, []byte(id), nil); err != nil {
+			batch.Close()
+			return nil, err
 		}
 	}
 
@@ -2708,14 +2716,11 @@ func (p *PebbleStore) GetBooksByVersionGroup(groupID string) ([]Book, error) {
 	// PERF-VERSIONS so we touch O(|group|) keys instead of full-scanning
 	// the entire books table (was ~15s on 10K books).
 	//
-	// INDEX-CONSISTENCY: like GetBooksByWorkID, the index value embeds a
-	// serialized Book snapshot that UpdateBook only refreshes when the
-	// VersionGroupID changes, so a same-group edit (SoftDeleteBook sets
-	// MarkedForDeletion via UpdateBook without touching the group) leaves it
-	// stale. Treat the index as a POINTER: the trailing key segment is the book
-	// ID (a ULID, no nested colons); point-look-up the authoritative book:<id>
-	// row and skip anything absent (hard-deleted) or MarkedForDeletion
-	// (soft-deleted). This can never desync from the source of truth.
+	// INDEX-CONSISTENCY: treat the index as a POINTER. The trailing key segment
+	// is the book ID (a ULID, no nested colons); point-look-up the
+	// authoritative book:<id> row and skip anything absent (hard-deleted) or
+	// MarkedForDeletion (soft-deleted). The index VALUE is never read, so it
+	// can never desync from the source of truth.
 	prefix := []byte(fmt.Sprintf("book:versiongroup:%s:", groupID))
 	upper := append([]byte(nil), prefix...)
 	upper[len(upper)-1] = ';' // ':' + 1
@@ -2745,9 +2750,27 @@ func (p *PebbleStore) GetBooksByVersionGroup(groupID string) ([]Book, error) {
 		return books, nil
 	}
 
-	// Fallback: full scan for groups whose index hasn't been backfilled
-	// yet. The backfill goroutine writes index entries on startup; this
-	// path keeps the API correct in the meantime.
+	// Fallback: full scan for groups whose index hasn't been backfilled yet.
+	// The backfill goroutine writes index entries on startup; this path keeps
+	// the API correct in the meantime.
+	//
+	// KNOWN LIMITATION, deliberately kept: `len(books) > 0` is a completeness
+	// oracle that assumes "found something" means "found everything". A
+	// PARTIALLY indexed group returns only its indexed members and never
+	// reaches this scan, so it silently under-reports; an EMPTY one falls
+	// through here and returns the correct set. Losing more index data
+	// produced a more correct answer.
+	//
+	// The fix is upstream, not here: CreateBook/UpdateBook now write the
+	// current-group row unconditionally (self-heal) and the v2 backfill
+	// rebuilds the whole index once per deployment, so a partial index should
+	// not exist. Gating this scan on the backfill sentinel instead was
+	// considered and REJECTED — a genuinely missing row would then return
+	// EMPTY rather than the full scan's correct answer, trading a silent
+	// under-report for a silent zero on a path that feeds /versions,
+	// regroup_apply, and metafetch writeback. Keep the fallback until a
+	// completeness signal exists that does not depend on the result being
+	// non-empty (e.g. an authoritative per-group member count).
 	books = nil // Reset for fallback scan
 	iter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: []byte("book:0"),
