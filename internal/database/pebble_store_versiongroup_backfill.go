@@ -1,5 +1,7 @@
 // file: internal/database/pebble_store_versiongroup_backfill.go
-// version: 1.0.1
+// version: 1.1.0
+// guid: 9f3b7c21-6d84-4a5e-b0c9-2e7fa1d85b36
+// last-edited: 2026-08-10
 // PERF-VERSIONS: one-time backfill that writes the
 // book:versiongroup:<gid>:<id> secondary index for every existing book
 // that has a VersionGroupID. Without this, /audiobooks/:id/versions
@@ -17,7 +19,18 @@ import (
 	"github.com/cockroachdb/pebble/v2"
 )
 
-const versionGroupBackfillKey = "system:backfill:versiongroup_index_v1_done"
+// versionGroupBackfillKey gates the one-time backfill.
+//
+// BUMPED v1 -> v2 (2026-08-10): existing deployments already have the v1
+// sentinel set, so they would never rebuild. Their index can be incomplete
+// because UpdateBook used to write a book's index row only when its
+// VersionGroupID *changed* — a row missing after the v1 run could never heal,
+// and GetBooksByVersionGroup then under-reported that group without ever
+// erroring. Bumping the key makes every deployment rebuild the index once on
+// next start; UpdateBook's now-unconditional write keeps it complete after
+// that. This IS the production repair — no manual step. Bump again if the key
+// format or the set of indexed books ever changes.
+const versionGroupBackfillKey = "system:backfill:versiongroup_index_v2_done"
 
 // BackfillVersionGroupIndex writes the secondary index for every book with
 // a non-empty VersionGroupID. Idempotent — gated by a sentinel key so

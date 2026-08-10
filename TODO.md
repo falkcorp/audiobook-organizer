@@ -3526,9 +3526,10 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
   tells us how much of owner item 1 was a DATA problem rather than a classifier
   problem, and should be taken before investing in recommendation tuning.
 
-- [ ] 🐛 **`GetBooksByVersionGroup` silently under-reports group membership, which
+- [x] ✅ 🐛 **`GetBooksByVersionGroup` silently under-reports group membership, which
   breaks the one-primary-per-group invariant.** Found in production 2026-08-06
   while version-grouping the two copies of *The Successors*.
+  **FIXED 2026-08-10 — see RESOLUTION at the end of this entry.**
 
   **Symptom.** Two books both carry `version_group_id =
   01KNDBPNB289W2Y6TMXS2DDSEG`, but `GET /api/v1/version-groups/<gid>` returns
@@ -3645,6 +3646,49 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
   raw secondary-index rows", meaning no caller has ever constructed a partial
   index for it to inspect. The invariant was never wrong; nothing ever put it in
   front of the failing state.
+
+  **RESOLUTION 2026-08-10.** Owner directed "fix the root cause" rather than
+  taking the one-off prod repair. Directions **2 and 3 shipped; 1 and 4 did
+  not** — see below for why each was left alone.
+
+  - **Direction 2 (write path, the durable guard).** `UpdateBook` now writes the
+    current group's index row unconditionally; only the delete of the *old* row
+    is still gated on `oldVG != newVG`. Any book touched by any write path now
+    repairs its own index entry, so a missing row can no longer persist.
+  - **Direction 3 (repair).** The backfill sentinel moved
+    `versiongroup_index_v1_done` → `..._v2_done`, so every deployment rebuilds
+    the index once on next start. This *is* the prod repair — no manual op, no
+    maintenance run. Bump again if the key format or indexed set changes.
+  - **Direction 1 (read-path completeness oracle) — NOT done, deliberately.**
+    The `len(books) > 0` guard stays. Gating the fallback on the backfill
+    sentinel was drafted and rejected: a genuinely missing row would then return
+    EMPTY instead of the full scan's correct answer, trading a silent
+    under-report for a silent zero on a path that also feeds `/versions`,
+    `regroup_apply`, and metafetch writeback. A real fix needs a completeness
+    signal that does not depend on the result being non-empty (an authoritative
+    per-group member count); that does not exist yet. The limitation is now
+    documented in-code at the fallback rather than left implicit.
+  - **Direction 4 (read through memdb) — NOT done.** Unchanged reasoning: it
+    necessarily returns MORE members than today and metafetch enumerates
+    siblings through this call before writing to them. Still wants owner review.
+
+  Also fixed in passing: all three writers of this index (`CreateBook`,
+  `UpdateBook`, `BackfillVersionGroupIndex`) now store the **book ID** as the row
+  value. `CreateBook`/`UpdateBook` previously stored a full serialized `Book`
+  "to eliminate point lookups", but the read path had long since stopped
+  trusting that copy and takes the ID from the key instead — so it was never
+  read. Making the update write unconditional would have doubled write
+  amplification had the fat value stayed.
+
+  **Tests** — `internal/database/pebble_store_versiongroup_index_test.go` (new).
+  Damages exactly ONE index row, asserts the under-report reproduces (2 of 3),
+  then asserts a same-group `UpdateBook` heals it back to 3. Negative control
+  run: with the self-heal reverted the suite exits 1 on
+  `self-heal failed: want 3 books after a same-group update, got 2`. Two
+  companion tests pin the empty-index fallback (still returns the correct 3) and
+  `CreateBook`'s index write + value format. The whole-index-wipe case is
+  covered precisely because it passes *with the bug present* — it is the reason
+  the defect stayed invisible.
 
   **Also needs an invariant test**: after linking N books into a group and
   setting one primary, exactly one member must have `IsPrimaryVersion == true`.
