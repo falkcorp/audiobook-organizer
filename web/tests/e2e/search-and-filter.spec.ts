@@ -1,5 +1,5 @@
 // file: web/tests/e2e/search-and-filter.spec.ts
-// version: 1.5.0
+// version: 1.6.0
 // guid: c3d4e5f6-a7b8-9012-cdef-a3b4c5d6e7f8
 // last-edited: 2026-08-09
 
@@ -435,7 +435,7 @@ test.describe('Search and Filter Functionality', () => {
   // despite this test's name. On a large library that is ten full-text queries
   // where one would do. Documented with the filter-dropping bug above in
   // todo.d/20260809-search-drops-filters-and-debounce.md.
-  test.fixme('search debounces input to avoid excessive requests', async ({
+  test('search debounces input to avoid excessive requests', async ({
     page,
   }) => {
     // GIVEN: Library page loaded

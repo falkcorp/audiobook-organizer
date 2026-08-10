@@ -1,10 +1,41 @@
 <!-- file: todo.d/20260809-search-drops-filters-and-debounce.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: a17c53e9-4820-4d6b-b95f-e3086c2741da -->
 <!-- last-edited: 2026-08-09 -->
 
 - [ ] **Typing in the library search box silently drops every active filter and the sort
-      order.** `useLibraryQuery.ts:192-193` branches on whether there is search text:
+      order.**
+
+      > ### ✅ The debounce half of this is FIXED (#2264) — and the original diagnosis was wrong
+      >
+      > This fragment said the search box "is not debounced at all". **A 300ms debounce
+      > existed the whole time.** What was actually happening is worse and more specific:
+      > `useLibraryQuery.ts:165` reads
+      >
+      > ```ts
+      > const searchText = parsedSearch ? parsedSearch.freeText : debouncedSearch;
+      > ```
+      >
+      > so the moment a search parses — which is always, once you type — the debounced
+      > value is **ignored** and the raw parsed value is used. `parsedSearch` also sits in
+      > that hook's `useCallback` dep array, so `loadAudiobooks` was recreated per
+      > keystroke. The debounce was real, correct, and **dead code on the only path that
+      > matters.**
+      >
+      > Fixed by moving `parsedSearch` and `searchQuery` off the same 300ms timer, rather
+      > than debouncing one and leaving the other raw — debouncing only the free text would
+      > let it disagree with the field filters mid-flight. `SearchBar`'s own UI still gets
+      > the raw value so chips react instantly; `useLibrarySelection` gets the debounced one,
+      > because "select all matching" must mean the query that produced the visible rows.
+      >
+      > `test.fixme('search debounces input to avoid excessive requests')` is now a real
+      > passing test (search-and-filter.spec.ts: 11 passed / 1 skipped, exit 0).
+      >
+      > **The filter-dropping half below is still open.**
+      >
+      > Lesson worth keeping: "feature X is missing" and "feature X exists but is bypassed"
+      > look identical from the outside and have completely different fixes. Grep for the
+      > mechanism before concluding it is absent. `useLibraryQuery.ts:192-193` branches on whether there is search text:
 
       ```ts
       searchText
