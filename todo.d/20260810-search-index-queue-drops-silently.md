@@ -1,12 +1,45 @@
 <!-- file: todo.d/20260810-search-index-queue-drops-silently.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 2.0.0 -->
 <!-- guid: 9e51d7a3-2c48-4b16-8f70-a3d19c6528b4 -->
-<!-- last-edited: 2026-08-10 -->
+<!-- last-edited: 2026-08-09 -->
 
-- [ ] **🔴 The search index silently drops updates when its queue fills — 56,537 dropped
-      in seven days.** Measured on prod 2026-08-10 from `journalctl`. This is a
+- [x] **🔴 The search index silently drops updates when its queue fills — 56,537 dropped
+      in seven days.** Measured on prod 2026-08-10 from `journalctl`. This was a
       **blocking prerequisite** for pushing filters/sort into Bleve (design doc option
-      A1), and it changes the ordering of that plan.
+      A1), and it changed the ordering of that plan.
+
+      **✅ FIXED — reconciliation shipped.** Owner chose a dirty-set drained on a ticker,
+      persisted to Pebble, with an adaptive batch size. Steps 1, 2 and 4 below are done;
+      step 3 (filter/sort pushdown) is now unblocked.
+
+      Implementation: `internal/database/pebble_store_search_dirty.go` (durable set,
+      `idx:sidx:dirty:{id}`, mirroring the existing `idx:upl:dirty:` playlist idiom) and
+      `internal/server/search_reconciler.go` (ticker + adaptive drain).
+
+      ## 🔑 The root cause was a false comment, not just a missing feature
+
+      Three separate comments — `indexed_store.go:14`, `indexed_store.go:100` and
+      `server.go:225` — asserted that "a startup reindex will heal any gaps". **It does
+      not.** `buildSearchIndexIfEmpty` opens with `if count > 0 { return }`, so it runs
+      only when the index has ZERO documents. On a populated library it has never run.
+
+      The drop was therefore designed as safe *under a guarantee that was never true*.
+      That is why all three comments were corrected in place, with the old claim quoted
+      and refuted, rather than quietly rewritten: the next person to read the old
+      reasoning must not re-derive the same wrong conclusion.
+
+      ## Two things the implementation measured rather than assumed
+
+      1. **`pebble.Sync` on the mark was a latency bug.** The first version synced every
+         mark; a test writing 2,500 IDs took **13.9s** (~180/sec). Drops arrive in bursts
+         on the write path while `enqueueIndex` holds `indexQueueMu.RLock`, so that would
+         have added ~5ms to every write during exactly the overload the drop relieves.
+         Switched to `NoSync` (still WAL-backed, survives process crash): the same test
+         now takes **0.13s** — 107× faster.
+      2. **A 1%-per-tick adaptive drain was too slow to matter.** At 1%, a 56,537 backlog
+         drains ~565/tick — indistinguishable from the fixed 500 floor, ~50 minutes total,
+         and it decays so the tail is slowest. Implemented at 10% clamped to
+         [500, 5000]: the same backlog clears in ~11 ticks (~5.5 min).
 
       ## The measurement
 

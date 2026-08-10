@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 3.7.0
+// version: 3.8.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-08-01
+// last-edited: 2026-08-09
 
 package server
 
@@ -290,6 +290,16 @@ func (s *Server) Start(cfg ServerConfig) error {
 		wrapped := &indexedStore{Store: inner, server: s}
 		s.store = wrapped
 		database.SetGlobalStore(wrapped)
+		// Reconciler for events the bounded queue had to drop. Enrolled in
+		// bgWG and gated on bgCtx like every other background loop, so
+		// Shutdown drains it before Pebble closes. Started before the worker
+		// so a backlog left by the previous process starts draining even if
+		// the worker is immediately saturated.
+		s.bgWG.Add("search-reconciler")
+		go func() {
+			defer s.bgWG.Done("search-reconciler")
+			s.runSearchReconciler()
+		}()
 		s.bgWG.Add("index-worker")
 		go func() {
 			defer s.bgWG.Done("index-worker")

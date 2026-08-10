@@ -1,7 +1,7 @@
 <!-- file: docs/design/2026-08-09-search-backend-options.md -->
-<!-- version: 3.2.0 -->
+<!-- version: 4.0.0 -->
 <!-- guid: 4f1c8a72-6d93-4e05-b8a1-9c72e0f45d38 -->
-<!-- last-edited: 2026-08-10 -->
+<!-- last-edited: 2026-08-09 -->
 
 # Search, querying and sorting — the design we are going to build
 
@@ -31,6 +31,9 @@ relevance, and answered on its own terms in §3 with numbers.
 | 2 | **API: explore B2 and B4 further** — structured query body, and typed RPC. §4. |
 | 3 | **Sorting moves to the backend, in Go.** Client-side sorting of paginated library slices is replaced. |
 | 4 | **"Not suck" is the bar** — the defects in §5 are not acceptable as permanent behaviour. |
+| 5 | **Index reconciliation: dirty-set + ticker, persisted to Pebble, adaptive batch.** ✅ **BUILT** — §7.3. Unblocks A1. |
+| 6 | **Sorted indexes for 9 fields:** author, narrator, series, created_at, updated_at, year, duration, file_size, bitrate. **Not** library_state/quality — low-cardinality, they are filters. §2.3. |
+| 7 | **Multi-user is REAL, not theoretical.** The per-user filter path stays and filter pushdown must be user-aware. This makes §5.2 harder, not easier — see §7.5. |
 
 ---
 
@@ -85,7 +88,7 @@ alerts on it. Whatever else gets built, **that fallback must become loud.**
 |---|---|
 | unique method+path routes across `internal/server` | **475** — 219 GET, 256 write |
 | unique method+path routes under `/audiobooks` | **82** — 33 GET, 49 write |
-| server-side sort fields (`sortFieldMap`) | 5 — `title`, `author`, `narrator`, `series`, `genre` |
+| server-side sort fields (`sortFieldMap`) | **22** — see below |
 
 > **Earlier figures in this document were wrong and are corrected here.** "680 route
 > registrations" counted the same route registered in more than one file; "129 distinct
@@ -147,11 +150,39 @@ lowercase title per page load caused **340MB allocations per call and severe GC 
 
 A secondary index stores **keys and IDs, not books**. Sized against the measured 366,916
 books — short key + ID + tree overhead — expect **tens of MB per sort field** against
-~1.25 GB resident: low single-digit percent each. Five fields is a bounded, predictable cost
-that **deletes an unbounded per-request allocation.**
+~1.25 GB resident: low single-digit percent each. A bounded, predictable cost that
+**deletes an unbounded per-request allocation.**
 
 Each indexed field converts a full-set materialise-and-sort into the streaming walk that
 title already gets.
+
+#### What gets indexed, and what does not
+
+> **Correction.** This document previously said "five [sort fields] exist" and §1.3 listed
+> `title, author, narrator, series, genre`. Those are the **first five entries** of
+> `sortFieldMap`. There are **22** (`service_filtering.go:22-124`), and exactly **one** —
+> `title`, via `memIdxTitle` — has a sorted index today. "Index all of them" was never the
+> merely-expensive option; it was 22 indexes.
+
+Six of the 22 are **alias pairs over the same underlying value** — `duration`/
+`duration_seconds`, `bitrate`/`bitrate_kbps`, `file_size`/`file_size_bytes` — so they cost
+**one index each, not two**. Chosen (9 keys, **6 physical indexes**):
+
+| group | keys | why |
+|---|---|---|
+| identity | `author`, `narrator`, `series` | what a person browsing a library actually sorts by |
+| chronological | `created_at`, `updated_at`, `year` | "what's new", "recently changed" |
+| numeric | `duration*`, `file_size*`, `bitrate*` | outlier-hunting and quality triage |
+
+**Excluded: `library_state` and `quality`.** Both are low-cardinality — sorting 366,916
+books by a field with a handful of distinct values produces a few enormous runs in
+arbitrary internal order, which reads as unsorted. They are filters wearing a sort's
+clothes, and §5 already routes them through the filter path.
+
+Also unindexed for now, and deliberately: `genre`, `language`, `publisher`, `format`,
+`codec`, `edition`, `sample_rate_hz`. These keep working via the existing
+materialise-and-sort path; if one turns out to be used, adding it is one `sortFieldMap`
+entry plus one index.
 
 ---
 
@@ -314,8 +345,16 @@ hand-written routes.
    (33 passed / 0 failed / 0 skipped).
 2. **A1 — push filters AND sort into the Bleve query**, so both apply *before* pagination.
    The one piece of real engineering; removes the full-set materialise and fixes §5.2.
-   **⚠️ Blocked on index reconciliation** — see open item 3. Pushing filters into an index
-   that silently drops 56K updates a week converts a relevance problem into missing rows.
+
+   ~~⚠️ Blocked on index reconciliation.~~ ✅ **UNBLOCKED 2026-08-09** — the dirty-set
+   reconciler shipped, so a dropped update no longer diverges the index permanently and
+   pushing filters down can no longer turn a stale-ranking problem into missing rows.
+
+   **⚠️ New gating question, from decision 7: per-user visibility.** Multi-user is real, so
+   the filter that decides *which books this user can see* has to be expressible inside the
+   Bleve query too. If it stays a post-filter, pushdown relocates the
+   post-filter-after-pagination bug instead of fixing it — the same defect, one layer down.
+   Settle that before writing the translator. See §7.5.
 3. **Secondary sorted indexes** (§2.3) for the fields that matter, sized against 366,916.
 4. **Delete the client-side library sort** and restore the missing sort control.
    `SearchBar.test.tsx:43` currently asserts the control is *absent* and passes vacuously —
@@ -340,18 +379,44 @@ SQLite3?" section and there is no sqlite dep in `go.mod`); an external search se
 1. ~~What is the read/write split?~~ **ANSWERED — see §3.2.1.** 46% reads server-wide,
    40% under `/audiobooks`; ~20 of the 33 reads are one-book projections that a single
    query endpoint would replace.
-2. **Which sort fields matter?** Each costs an index. Five exist; "all of them" is the
-   expensive answer, and probably nobody sorts by publisher.
-3. **🔴 Index staleness — now a BLOCKING prerequisite, not a question.** Filter/sort
-   pushdown promotes the Bleve index from a *relevance* dependency to a **correctness**
-   one. Item 4 below measured the index dropping 56,537 updates in a week with no
-   reconciliation. Today that means stale ranking; after A1 it means **a book whose
-   `library_state` changed is absent from the correct filter and present in the wrong
-   one**, with no error shown. **Reconciliation has to land before step 2 of §6.**
+2. ~~Which sort fields matter?~~ **ANSWERED — nine of them**, and the premise was wrong.
+   This document said "five exist". **There are 22** sortable keys in `sortFieldMap`
+   (`service_filtering.go:21`), and exactly **one** — `title`, via `memIdxTitle` — has a
+   sorted index today. So "all of them" was never the expensive answer; it was 22 indexes,
+   which is not a real option.
+
+   Chosen: **author, narrator, series** (identity — what a human browsing actually sorts
+   by), **created_at, updated_at, year** (chronological), and **duration, file_size,
+   bitrate** (outlier-hunting and quality triage). **Excluded: `library_state` and
+   `quality`** — both are low-cardinality, which makes them filters wearing a sort's
+   clothes; indexing them buys an ordering nobody can read meaning from.
+3. ~~Index staleness~~ **ANSWERED AND BUILT — no longer blocking.** Dropped index events
+   are now recorded in a durable dirty-set (`idx:sidx:dirty:{id}`) and repaired by
+   `runSearchReconciler` on a 30s ticker with an adaptive batch.
+
+   **🔑 The finding worth keeping:** the drop was not an oversight. It was *designed as
+   safe* under an explicit claim, repeated in three comments, that "a startup reindex will
+   heal any gaps." That claim was false — `buildSearchIndexIfEmpty` returns early unless
+   `DocCount() == 0`, so on a populated library it had never run once. Every step of the
+   original reasoning was sound except the unchecked premise. All three comments were
+   corrected in place with the old claim quoted, so it cannot be re-derived.
+
+   Two things the build measured rather than assumed: `pebble.Sync` on the mark cost
+   13.9s per 2,500 writes on the hot path (now `NoSync`, 0.13s, 107× faster); and a
+   1%-per-tick drain was indistinguishable from a fixed floor (now 10%, clamped
+   [500, 5000] — a 56,537 backlog clears in ~5.5 minutes instead of ~50).
 4. ~~Is the index complete?~~ **ANSWERED — NO.** Measured on prod 2026-08-10: the index
    worker's 1024-deep queue overflows under bulk operations and **silently drops** the
    overflow — **56,537 dropped operations in seven days** (Aug 03 and Aug 07). There is no
    retry, no dirty-set and no re-sync, so a dropped update diverges the index from the DB
    permanently. See `todo.d/20260810-search-index-queue-drops-silently.md`.
-5. **Per-user filters** — there is a `DisablePerUserSearchFilters` flag and a 10,000-row
-   over-fetch window. If multi-user is theoretical, that path simplifies and §5.2 gets easier.
+5. ~~Per-user filters~~ **ANSWERED — multi-user is REAL.** Other people will have accounts
+   with different visible libraries, so the `DisablePerUserSearchFilters` path stays.
+
+   **This makes §5.2 harder, and that is the honest reading.** The 10,000-row over-fetch
+   window cannot simply be deleted; filter pushdown has to become user-aware, which means
+   per-user visibility has to be expressible *inside* the Bleve query rather than applied
+   as a post-filter. Otherwise pushing filters down just moves the
+   post-filter-after-pagination bug rather than fixing it. **This is now the main open
+   design question for step 2 of §6** — it replaces reconciliation as the thing that has
+   to be worked out before filter pushdown is correct.
