@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.27.0 -->
+<!-- version: 10.28.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-08-10 -->
 
@@ -3987,6 +3987,55 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
 
       Until it is fixed, `dedupe-book-file-rows` says so in its completion
       message rather than letting an operator conclude the run did nothing.
+
+      **Traced 2026-08-10 — the stated suspect does not fit the symptom. Read
+      this before spending time on `RecomputeBookAggregates`.** Four things were
+      verified by reading the code at `65e63135`; **none of this is a
+      reproduction**, and the bug is NOT explained yet.
+
+      1. **The op does not call `DeleteBookFile`.** `dedupe-book-file-rows` uses
+         the batched `store.DeleteBookFilesByIDs`
+         (`internal/plugins/maintenance/dedupe_book_file_rows.go:368`). The entry
+         above says "where to look: `DeleteBookFile`" — that is a different code
+         path from the one the canary actually ran.
+      2. **The batched path already does the memdb delete.**
+         `DeleteBookFilesByIDs` (`pebble_store_bookfiles.go:990`) calls
+         `s.DeleteBookFilesFromMemDB(resolvedIDs)` at :1073 and then
+         `notifyBookFileChange(bookID)` per affected book at :1078. So the
+         book_file rows ARE removed from memdb on the delete path, independently
+         of whether any later `UpdateBook` runs.
+      3. **`total_file_count` is not a stored field**, so a skipped `UpdateBook`
+         cannot stale it. It is derived at read time —
+         `enriched[i].TotalFileCount = len(files)`
+         (`internal/server/audiobooks_helpers.go:95`, and again at
+         `internal/server/handlers/audiobooks/handler.go:387`) — from
+         `FetchBookFilesForBooks` → `GetBookFilesForIDsCore`, whose memdb
+         implementation (`memdb_reads.go:917`) reads `memTableBookFiles` by
+         `memIdxBookID`.
+      4. Consistent with that, `RecomputeBookAggregates` never touches
+         `TotalFileCount` at all — its early return at
+         `pebble_store_book_aggregates.go:131-134` compares only `Duration` and
+         `FileSize`.
+
+      Taken together: if the delete path removes the rows from memdb (2) and the
+      count is derived from memdb at read time (3), then the early return in
+      `RecomputeBookAggregates` cannot be what left `total_file_count` at 50.
+      Something else kept those rows visible.
+
+      **Where to look next**, in rough order of suspicion — all unverified:
+      `DeleteBookFilesFromMemDB` routes through `memSync`, which during warmup
+      either buffers or, on buffer overflow, abandons memdb entirely
+      (`memdb_pending.go`). The canary ran against a production-sized library
+      where warmup takes ~2 minutes, so a delete landing in that window is the
+      first thing to rule in or out — including whether a warmup snapshot taken
+      before the delete could be published after it. Note the observed fix was a
+      **service restart**, which is consistent with a memdb-population problem
+      and not with a missed `UpdateBook`.
+
+      **To reproduce**, the shape that matters is a delete concurrent with
+      warmup, not a delete on a quiet store — a quiet-store test will likely pass
+      and prove nothing, the same way `dbtest` invariant (b) passes everywhere
+      while the version-group under-report is real.
 
 - [x] ~~**Restore the duration on `The Trapped Mind Project`**~~ **RETRACTED
       2026-08-04 — nothing to restore.** The original claim here was that the
