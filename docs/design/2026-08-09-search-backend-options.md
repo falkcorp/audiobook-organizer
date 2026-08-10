@@ -1,5 +1,5 @@
 <!-- file: docs/design/2026-08-09-search-backend-options.md -->
-<!-- version: 3.1.0 -->
+<!-- version: 3.2.0 -->
 <!-- guid: 4f1c8a72-6d93-4e05-b8a1-9c72e0f45d38 -->
 <!-- last-edited: 2026-08-10 -->
 
@@ -299,8 +299,19 @@ hand-written routes.
 
 ## 6. The plan
 
-1. **Client sends filters and `sort_by`; debounce the box.** Hours. Fixes the loudest
-   symptoms and stops them corrupting later measurements.
+1. ~~**Client sends filters and `sort_by`; debounce the box.**~~ ✅ **DONE 2026-08-10**
+   (#2264, #2265). Both turned out to be an existing mechanism being **bypassed**, not a
+   missing one:
+   - The 300ms debounce existed but `useLibraryQuery.ts:165` ignored it the moment the
+     search parsed (`parsedSearch ? parsedSearch.freeText : debouncedSearch`), and
+     `parsedSearch` was in the loader's dep array. Fixed by moving both off one timer.
+   - The filters were dropped by a **branch** — `searchBooksPage` sends four parameters,
+     `getBooks` sends all of them. Fixed by collapsing to one query path rather than
+     widening the narrow one, so a future filter cannot be wired into one branch and
+     forgotten in the other.
+
+   Both `test.fixme` markers in `search-and-filter.spec.ts` are now passing tests
+   (33 passed / 0 failed / 0 skipped).
 2. **A1 — push filters AND sort into the Bleve query**, so both apply *before* pagination.
    The one piece of real engineering; removes the full-set materialise and fixes §5.2.
    **⚠️ Blocked on index reconciliation** — see open item 3. Pushing filters into an index
