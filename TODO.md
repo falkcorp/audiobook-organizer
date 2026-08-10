@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.21.0 -->
+<!-- version: 10.21.1 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-08-09 -->
+<!-- last-edited: 2026-08-10 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,1354 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+<!-- file: todo.d/20260809-abs-series-collections-playlists.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 8f61b3d2-0a47-4e95-9c38-52e7b04af1d6 -->
+<!-- last-edited: 2026-08-09 -->
+
+- [ ] **AudiobookShelf-compatible API: series are broken, and collections/playlists are
+      empty stubs.** Owner report 2026-08-09: *"series are broken on the audioshelf server
+      stuff, because all of them report zero books, and when you click on them they just
+      give you a random list of books… We need full collection support… Same with
+      playlists."* Root causes located in the code below — this is server-side, as the
+      owner suspected.
+
+      ## 1. Series report zero books and open the wrong list
+
+      `internal/server/handlers/abs/browse.go:464` `LibrarySeries` builds each series DTO
+      with:
+
+      ```go
+      "books":         []any{},          // <- ALWAYS EMPTY, hardcoded
+      "totalDuration": 0,                // <- likewise
+      "numBooks":      counts[s.ID],
+      ```
+
+      Two distinct defects, and they explain both halves of the report:
+
+      **(a) `books` is hardcoded empty.** The client is handed a series with no members.
+      "Click a series and get a random list of books" is the client doing something
+      reasonable with nothing — most ABS clients fall back to an unfiltered library query
+      when the series carries no items. The books are not random; they are *the library*.
+
+      **(b) `numBooks` comes from `GetAllSeriesBookCounts()`, whose error path is
+      silent:**
+
+      ```go
+      counts, err := h.library.GetAllSeriesBookCounts()
+      if err != nil {
+          // "not worth failing the page over; report 0 books rather than 500"
+          counts = map[int]int{}
+      }
+      ```
+
+      If that call errors, **every** series reports 0 — which is exactly the symptom.
+      The fallback is defensible as a design choice but it is **unobservable**: there is no
+      log line, so a total failure of the count query looks identical to a library with no
+      series members. Whatever the fix, add a `slog.Warn` here; a silent zero is how this
+      went unnoticed. (It is also possible the counts are keyed differently from `s.ID` —
+      check that before assuming the error path fired.)
+
+      **Do:** populate `books` (at minimum the item IDs/minified items the ABS schema
+      expects), fix or instrument the count path, and verify against a real client rather
+      than by reading the JSON — the two failure modes look the same from the payload.
+
+      ## 2. Collections are a stub
+
+      `internal/server/handlers/abs/handler.go:386`:
+
+      ```go
+      r.GET("/api/libraries/:libraryId/collections", auth, h.EmptyPage)
+      ```
+
+      The route exists and answers 200 with an empty page. Nothing behind it.
+
+      **Wanted** (owner): real collections — *"we may want to make a collection of scifi
+      books that don't have stupid characters"*. That is a **user-curated, arbitrary set**,
+      not a saved query: the membership rule ("no stupid characters") is a judgement the
+      user makes per book and cannot be expressed as a filter. So this needs persisted
+      membership, not a dynamic query.
+
+      Needs: storage for collection + ordered membership, CRUD endpoints, and the ABS
+      collection DTO shape on `GET /api/libraries/:id/collections` (and the single-collection
+      and add/remove-item endpoints the clients call).
+
+      ## 3. Playlists are the same stub
+
+      `internal/server/handlers/abs/handler.go:387` — also `h.EmptyPage`.
+
+      **Note the overlap:** `todo.d/20260805_214200_playlists_full_support.md` (already
+      folded into `TODO.md`) covers playlists broadly — import of `.m3u`/`.m3u8`, static and
+      **dynamic** (stored-query) playlists, and their value as grouping evidence. **This
+      item is narrower and additive:** whatever that work builds must also be *served over
+      the ABS API*, because today the endpoint returns empty regardless of what exists
+      internally. Do not duplicate the design — extend it with the API surface.
+
+      ## Shared design note
+
+      Collections and playlists are close cousins (an ordered set of items with a name) and
+      the ABS schema treats them similarly. Worth designing the storage once with a
+      discriminator rather than twice — but **check the ABS DTOs first**, because clients
+      distinguish them (playlists carry playback semantics, collections do not) and
+      returning the wrong shape produces exactly the class of silent client-side weirdness
+      seen in §1.
+
+      **Acceptance:** in a real ABS client — series show correct counts and open their own
+      books; a hand-made collection appears and lists its members; a playlist likewise.
+      Verified in the client, not by curling the endpoint.
+
+<!-- file: todo.d/20260809-authors-page-aliases-crash.md -->
+<!-- version: 2.0.0 -->
+<!-- guid: 1a4c8e35-7d62-4b09-a3f7-25e0b9d4176c -->
+<!-- last-edited: 2026-08-09 -->
+
+- [x] **CORRECTED and FIXED — this was reported as an active crash and it was not.**
+
+      ## What the original entry claimed
+
+      > The Authors page crashes on any author record without `aliases`. `Authors.tsx:89`,
+      > `:120`, `:121` read `a.aliases.length` unguarded — one bad row takes the whole page
+      > to the error boundary. **Reachable from a real API response that omits or nulls the
+      > field.**
+
+      The first half is true. **The last sentence is not, and it is the part that made this
+      read as urgent.**
+
+      ## What is actually the case
+
+      `Authors.tsx` fetches from exactly one place — `api.getAuthorsWithCounts()` — and the
+      handler behind it has guarded the field since **2026-03-10**, five months before this
+      was filed (`internal/audiobooks/author_series.go:108`):
+
+      ```go
+      aliases := aliasesByAuthor[a.ID]
+      if aliases == nil {
+          aliases = []database.AuthorAlias{}   // never marshals to null
+      }
+      ```
+
+      A Go nil slice marshals to JSON `null`, and `null.length` throws — so the concern was
+      the right shape. But the only endpoint feeding this page has been returning `[]`
+      rather than `null` all along. **The page was not crashing, and there was no "real API
+      response" that would make it crash.**
+
+      The original entry was written from reading the frontend and reasoning about what the
+      backend *might* send, without checking what it does send. That is the same
+      reason-instead-of-measure error that produced four wrong diagnoses during the
+      2026-08-09 CI work.
+
+      ## What was still worth fixing
+
+      The frontend fragility is real even though nothing currently triggers it. TypeScript's
+      `aliases: AuthorAlias[]` is a **compile-time claim about runtime data from an HTTP
+      response** — it validates nothing. One new endpoint returning `AuthorWithCount`
+      without that nil guard, or one API shape change, and the page dies at the error
+      boundary.
+
+      So the six reads in `Authors.tsx` are now guarded (`a.aliases?.length ?? 0`,
+      `(a.aliases ?? []).map(...)`, etc.). Behaviour is identical when the field is present,
+      which it always is today.
+
+      ## Corrected elsewhere
+
+      The overstated claim also appears in `docs/audits/2026-08-09-e2e-repair-and-ui-regressions.md`
+      (finding 3) and the 2026-08-09 executive summary ("a page that crashes outright if a
+      single author record is missing one optional field"). Both are corrected in the same
+      change.
+
+      **The lesson worth keeping:** "unguarded field access" is a real code smell, but
+      "therefore it crashes" is a claim about the *server*, and needs the server checked.
+      Severity asserted from one side of an API boundary is a guess.
+
+<!-- file: todo.d/20260809-book-detail-purge-suite-only-flake.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 5e8b1c04-7a92-4d36-9f1b-2c0a8e64d7f3 -->
+<!-- last-edited: 2026-08-09 -->
+
+- [ ] **`book-detail.spec.ts` "soft delete, restore, and purge flow" fails only in the full
+      parallel suite, never in isolation.** Surfaced 2026-08-09 as the last remaining
+      failure after the e2e repair took the suite to 551 passed / 1 failed / 16 skipped of
+      568 across chromium + webkit.
+
+      **This is deliberately NOT fixed.** It is not spec rot — the test passes 6/6 alone —
+      so changing the test to tolerate it would be papering over an unknown, and unlike the
+      webkit pagination flake there is **no measurement yet establishing the app is
+      correct**. Per the no-papering-over rule this gets written up and left red.
+
+      **The failure:**
+
+      ```
+      [webkit] › book-detail.spec.ts:423 › soft delete, restore, and purge flow
+      Error: expect(page).toHaveURL(expected) failed
+        Expected pattern: /\/library$/
+        Received string:  "http://127.0.0.1:8484/dashboard"
+        - unexpected value "http://127.0.0.1:8484/login"
+      ```
+
+      After "Purge Permanently" the test expects `/library`. Instead the page went to
+      `/login` and settled on `/dashboard` — the signature of an auth guard firing, not of
+      a broken navigation.
+
+      **What has been ruled out (each by measurement, not reasoning):**
+
+      | hypothesis | result |
+      |---|---|
+      | The test itself is stale / selector drift | **No** — 6/6 passes on webkit in isolation, `--repeat-each=6` |
+      | `auth-flow.spec.ts:90` pollutes shared server state by creating an admin account | **No** — that test `test.skip`s itself unless `requires_auth && !has_users`, and it skipped in every run examined. Confirmed by arithmetic: the full run's 16 skips = 7 `test.fixme` × 2 browsers + this bootstrap test × 2 browsers. It never executed, so it mutated nothing |
+      | Reproducible by pairing the two specs under parallel workers | **No** — `book-detail` + `auth-flow`, `--repeat-each=4`, webkit: 24 passed / 4 skipped |
+
+      **What is still open.** The suite runs `fullyParallel: true` with `workers: 2`
+      (`playwright.config.ts:18-20`) against a **single shared Go server on :8484**. Every
+      spec mocks at the browser layer (`page.route` or a `window.fetch` patch), but the
+      server underneath is common to all of them. Something in a concurrently-running spec
+      plausibly moves real server auth state — but the obvious candidate is now excluded,
+      so the actual polluter is unidentified.
+
+      **The artifact was lost, and that is the main obstacle.** Playwright clears
+      `test-results/` at the start of every run, so the `error-context.md` and trace from
+      the failing run were overwritten by the isolation re-runs before they were read. That
+      is the one procedural mistake here: **read the artifact before re-running.** A repeat
+      full-suite run with `--trace=retain-on-failure` is the way to recapture it.
+
+      **Next steps, in order:**
+
+      1. Re-run the full suite with `--trace=retain-on-failure` until it reproduces, and
+         read `test-results/*book-detail*/error-context.md` **first**. That artifact
+         discriminates the two live possibilities and a pass/fail count cannot: was the
+         `/login` hop a client-side route guard, or a document load? Did `/auth/status`
+         return something different from the mock?
+      2. If it is shared-server auth state, the fix is isolation, not tolerance — either a
+         per-worker server, or a fixture that asserts the server's auth posture is
+         unchanged at test start.
+      3. **Frequency: 1 occurrence in 1,136 test executions.** A second full-suite run with
+         `--trace=retain-on-failure` came back **552 passed / 0 failed / 16 skipped, exit
+         0** — the whole suite green on both browsers, and this test among them. So it did
+         not reproduce, no artifact was captured, and the rate is at most ~0.1% of runs of
+         this test.
+
+         That changes the priority but not the conclusion. It is rare enough that it should
+         **not** block calling the suite green, and rare enough that hunting it by repeated
+         full-suite runs is poor value. The right trigger is opportunistic: the next time
+         CI or a local full run goes red on this test, **read
+         `test-results/*book-detail*/error-context.md` before doing anything else** — that
+         is the artifact that was lost the first time and it is what discriminates the
+         remaining possibilities.
+
+      **Do not** add a retry, a URL tolerance, or a `test.fixme` to this test on the
+      strength of "it passes alone."
+
+<!-- file: todo.d/20260809-changelog-row-compare-affordance.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 4b1f7c2e-9a83-4d16-b0e5-7c2a41d8f903 -->
+<!-- last-edited: 2026-08-09 -->
+
+- [ ] **Change Log rows lost their visible "Compare snapshot" affordance and are
+      mouse-only.** `web/src/components/ChangeLog.tsx:135-154` renders each entry as a
+      plain `<Box onClick={...}>` that fires `onCompareSnapshot` for `tag_write` /
+      `metadata_apply` entries. There is no `role`, no `tabIndex`, no keyboard
+      handler, and no label — the old "Compare snapshot" link that used to sit in the
+      row was removed. The flow itself still works end-to-end (verified in
+      `web/tests/e2e/files-history.spec.ts`: clicking the row does raise
+      `snapshot-comparison-banner` in the open format tray), so this is purely a
+      discoverability/accessibility gap, not a broken feature. Deciding what replaces
+      it is a product call: restore a visible link/button, or keep the row click and
+      give it `role="button"` + `tabIndex={0}` + Enter/Space activation + an
+      `aria-label`. Note the row already contains a Revert `<Button>` that calls
+      `stopPropagation`, so any keyboard handler has to not double-fire there.
+
+- [ ] **Dead `expanded` state in `TagComparison`.** `web/src/components/TagComparison.tsx:69`
+      is `useState(true)` and `setExpanded` is never called, so the `<Collapse in={expanded}>`
+      at line 249 is always open. Either drop the state and the `Collapse`, or wire up the
+      toggle that was evidently intended (the e2e suite still had a `tag-comparison-toggle`
+      testid assertion for it until 2026-08-09).
+
+<!-- file: todo.d/20260809-dead-bulk-fetch-dialog.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 2c9a6f31-7d04-48e5-a1b2-6f80e39c4a75 -->
+<!-- last-edited: 2026-08-09 -->
+
+- [ ] **Delete the unreachable "Bulk Fetch Metadata" dialog and its handler.**
+      `web/src/components/library/LibraryDialogs.tsx:920` renders
+      `<Dialog open={bulkFetchDialogOpen}>`, but `setBulkFetchDialogOpen(true)` appears
+      **nowhere** in `web/src` — the state is initialised to `false` at
+      `web/src/pages/Library.tsx:352` and is only ever set back to `false` (by
+      `handleCancelBulkFetch`). The dialog can never open. `handleBulkFetchMetadata`
+      (`Library.tsx:1218`), the `bulkFetchProgress` state, and the props threaded
+      through `LibraryDialogs` for them are reachable only from that dead dialog.
+      The flow it belonged to was replaced: **Fetch Selected** now calls
+      `batchFetchCandidates` and toasts "Click Review when complete", and a separate
+      **Review** button opens the candidates dialog once the cache is populated. Five
+      e2e tests covering the old synchronous progress dialog were deleted on
+      2026-08-09 rather than rewritten, since rewriting them against the new
+      async flow would be new coverage rather than repair. Removing the dead code is
+      a separate change from the e2e repair and was deliberately not bundled with it.
+
+- [ ] **Audit `setupMockApi` for more branches shadowed by earlier prefix catch-alls.**
+      `web/tests/e2e/utils/test-helpers.ts` had `pathname === '/api/v1/audiobooks/batch'`
+      sitting *below* `pathname.startsWith('/api/v1/audiobooks/') && method === 'POST'`,
+      so every batch update silently got the generic `{ message: 'OK' }` back and
+      Library's toast read "Updated metadata for 0 audiobooks." Fixed 2026-08-09 by
+      moving the specific branch above the prefix one, but the same ordering hazard
+      applies to every other `startsWith` catch-all in that dispatcher — a specific
+      branch placed after one is dead and fails silently rather than loudly. Worth one
+      pass to confirm no others are shadowed.
+
+<!-- file: todo.d/20260809-edit-dialog-blank-year-isbn.md -->
+<!-- version: 2.0.0 -->
+<!-- guid: c8d31e47-5f92-4b60-a3d7-2094f6ba1c85 -->
+<!-- last-edited: 2026-08-09 -->
+
+- [x] **FIXED (#2267).** **Edit Metadata shows Year and ISBN-13 as empty boxes whatever is stored — and the
+      obvious fix corrupts `print_year`.** `mapBookToAudiobook`
+      (`web/src/pages/BookDetail.tsx:762`) builds the object handed to
+      `MetadataEditDialog` and omits `year`, `isbn10` and `isbn13`. `genre` had the same
+      problem and was fixed on 2026-08-09; the other three were deliberately left alone,
+      because they are not equally safe.
+
+      `genre` was safe because it does not appear in the payload `handleEditSave` builds,
+      so populating it cannot change what a save writes. **Year is not.** The dialog seeds
+      its Year box from `audiobook.year`, and `handleEditSave` computes:
+
+      ```ts
+      payload.print_year = updated.year || book.print_year;
+      ```
+
+      So mapping `year: current.audiobook_release_year` would make every save overwrite
+      `print_year` with the audiobook release year — on books the user never touched the
+      Year field of. Two genuinely different dates (`print_year`, the original
+      publication; `audiobook_release_year`, when the recording came out) collapsing into
+      one is silent metadata corruption across the library.
+
+      Fixing the display therefore means untangling that precedence first: decide which
+      date the dialog's single "Year" box represents, and have the save path write only
+      that one. `Audiobook` already carries `print_year` and `audiobook_release_year` as
+      separate fields (`web/src/types/index.ts:16-17`) alongside the legacy `year`, so
+      the type is not the obstacle.
+
+      ISBN is a smaller version of the same shape: the payload does
+      `isbn: updated.isbn13 || updated.isbn10 || book.isbn`, which currently falls through
+      to `book.isbn` precisely *because* the mapped object has neither. Populating them
+      changes which field wins.
+
+      `tests/e2e/metadata-provenance.spec.ts` carries a `test.fixme` covering this, so it
+      will start failing (loudly, as an unexpected pass) the moment it is fixed.
+
+      > ### What it actually was — worse than a blank box
+      >
+      > The dialog has ONE "Year" box, declared as `audiobook_release_year` in
+      > `FIELD_TO_API`. But `handleEditSave` fed `updated.year` into **two** fields:
+      >
+      > ```ts
+      > audiobook_release_year: … || updated.year || …,
+      > print_year:             updated.year || book.print_year || undefined,
+      > ```
+      >
+      > `print_year` is when the **book** was first published; `audiobook_release_year` is
+      > when the **recording** came out — decades apart for a classic. So typing a year in
+      > that dialog silently replaced the original publication year with the audiobook's.
+      > Same corruption class as the 2026-07-13 write-up, still live on this path. The blank
+      > box masked it for *display* but not for *writes*.
+      >
+      > Fixed in the safe order: remove the bad write first (`print_year` is now
+      > preserve-only — the dialog has no print-year field, so nothing there should change
+      > it), which then makes seeding the box safe. Doing it the other way would have turned
+      > a latent corruption into one firing on every save.
+      >
+      > **And the blank box had a second, separate cause:** the e2e fixture supplied
+      > `year: 2024`, a field the Go API never emits (`bookcore.go:44-45` has `print_year`
+      > and `audiobook_release_year` only). The dialog was correctly reading
+      > `audiobook_release_year` and finding nothing. Mock rot, not app behaviour.
+      >
+      > `test.fixme('year and ISBN-13 populate in the edit dialog')` is now passing:
+      > metadata-provenance 13 passed / 0 failed / 0 skipped, exit 0.
+
+<!-- file: todo.d/20260809-library-double-fetch-swallows-clicks.md -->
+<!-- version: 2.0.0 -->
+<!-- guid: b6e4207f-9c31-4d85-a072-3fe185c9a4b8 -->
+<!-- last-edited: 2026-08-09 -->
+
+- [x] **The Library fetched page 1 twice on every mount — FIXED.** Found 2026-08-09 while
+      chasing three flaky `library-browser.spec.ts` pagination tests on webkit. On a large
+      library that is a second full page query for nothing, on every single load.
+
+      **Cause.** `SearchBar` re-parsed its value on mount and handed back a NEW
+      `ParsedSearch` object that was semantically identical to the one `Library.tsx` had
+      seeded its state with. Storing it changed `parsedSearch`'s *identity* → recreated
+      `buildFieldFilters` → recreated `loadAudiobooks` → re-fired the "load when filters
+      change" effect. Confirmed by instrumenting the dependency array:
+      `DEPCHANGE buildFieldFilters,parsedSearch` fired once after mount on 4 runs of 4, and
+      stopped firing entirely once the setter bailed on an unchanged value.
+
+      **Fix** (#2241): `Library.tsx` now wraps the setter so an equal value keeps the
+      previous object reference. `/api/v1/audiobooks` is hit exactly once per mount, 4 runs
+      of 4.
+
+      This belongs with the other client-side over-fetching in
+      `todo.d/20260809-search-drops-filters-and-debounce.md` — that one is ten queries per
+      search, this was two per page load.
+
+      ---
+
+      **TWO CORRECTIONS, both worth reading — this fragment was wrong twice.**
+
+      **Correction 1.** The original fragment claimed the duplicate fetch *caused* the
+      swallowed pagination click: the re-render from the second response was said to detach
+      the button mid-click. Measured like-for-like over 24 webkit runs of the same three
+      tests, eliminating the duplicate moved the failure rate **16/24 → 11/24**. A real
+      improvement, but the flake survived, so the causal claim was at best incomplete.
+
+      **Correction 2 — and this is the one that matters.** The residual flake is **not a
+      product defect at all.** It is a Playwright/webkit harness artifact. Five probes:
+
+      | probe | result |
+      |---|---|
+      | failing run instrumented | previous-page click → no request, no URL change (swallowed) |
+      | click twice | first swallowed, second works — looked like a stale closure |
+      | same probe on chromium | first click works; webkit-specific |
+      | Playwright click vs in-page DOM `.click()` | **Playwright 4/4 failed, DOM 4/4 passed** |
+      | both clicks via in-page DOM | **6/6 clean** |
+
+      The application handles pagination correctly. Playwright's *synthesised pointer
+      event* on MUI's `PaginationItem` is what is unreliable on webkit — the same DOM, the
+      same handlers, the same React state, driven by a real DOM click, works every time.
+
+      **So the tests were made robust** (`clickPagination` helper in
+      `library-browser.spec.ts`): re-check the URL, click, assert, and retry once. This does
+      **not** violate the no-papering-over rule, because the measurement establishes there
+      is no product bug to paper over. Result: **24/24 on webkit**, against an 11/24 failure
+      baseline.
+
+      **What the helper does NOT protect against — stated plainly, because the first draft
+      of this fragment claimed the opposite.** It originally said the helper "still fails
+      loudly if the app ever genuinely stops responding, since the second click would be
+      swallowed too." That is **false**, and falsified by the very probe above: the observed
+      webkit signature is *first click swallowed, second click works*. A product regression
+      with that same shape — pagination responding only on every other click — would be
+      silently masked. The helper is not a detector for that case.
+
+      What it does still catch: a control that is missing, disabled, covered, or entirely
+      unresponsive, since both clicks fail and actionability checks are deliberately
+      preserved (no `force: true`, no `dispatchEvent`). And to keep the masking observable
+      rather than invisible, **every retry logs a `[clickPagination]` warning and pushes a
+      `flaky-click-retry` annotation** — so a rising retry rate in CI is the signal that
+      something changed, even though the suite stays green.
+
+      **The lesson, which is the reusable part:** three separate causal hypotheses were
+      filed here with confident evidence attached, and two of them were wrong. Each was
+      killed by a measurement, never by reasoning. Before filing a UI flake as a product
+      defect, do the Playwright-click-vs-DOM-click A/B — it is two minutes and it separates
+      "the app is broken" from "the driver cannot press this particular button."
+
+<!-- file: todo.d/20260809-library-sort-control-missing.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 91c4e7b3-2d68-4a15-8f09-5e63b7a2d40c -->
+<!-- last-edited: 2026-08-09 -->
+
+- [ ] **You cannot sort the library from the UI.** The "Sort by" and "Order"
+      comboboxes are gone. `SearchBarProps`
+      (`web/src/components/audiobooks/SearchBar.tsx:124-131`) has no `onSortChange`
+      prop at all, and `web/src/components/library/LibraryBookGrid.tsx:133` receives
+      the handler as `_handleSortChange` — underscore-prefixed to mark it deliberately
+      unused. Everything downstream still works: `Library.tsx` holds `sortBy`/`sortOrder`,
+      writes them to the URL as `sort`/`order`, restores them on load, and passes them
+      to the API. So sorting is fully functional and completely unreachable — the only
+      way to change it is to hand-edit the URL.
+      `SearchBar.test.tsx:43` asserts "does not render sort controls when `onSortChange`
+      is absent", which now passes vacuously since the prop cannot be supplied.
+      Four `library-browser.spec.ts` tests were repointed at the URL on 2026-08-09 so
+      the sort *behaviour* stays covered while the control is missing.
+      **Was this intentional?** If so the dead state and the vacuous unit test should
+      be cleaned up; if not, the control needs restoring.
+
+<!-- file: todo.d/20260809-mui-select-menu-does-not-close-on-linux.md -->
+<!-- version: 2.0.0 -->
+<!-- guid: c47a0e63-91d8-4f52-bb06-3d5e28a71c9f -->
+<!-- last-edited: 2026-08-09 -->
+
+- [x] **RESOLVED — it was worker contention, not a defect.** This fragment previously
+      claimed "a MUI Select's menu does not close on the ubuntu runner — suspected REAL
+      defect". **That was wrong.** Kept rather than deleted, because the sequence of wrong
+      answers is the useful part.
+
+      ## What it actually was
+
+      Two chromium tests failed on ubuntu and passed on macOS, both 30s `locator.click`
+      timeouts with a MUI modal backdrop still intercepting pointer events. Measured in the
+      official Playwright linux image pinned to 2 CPUs:
+
+      | configuration | result |
+      |---|---|
+      | `--workers=2` | `library-browser` + `scan-import` **FAIL** (3 separate runs) |
+      | `--workers=1` | **27 passed, 0 failed** |
+
+      Two browser workers plus the Go server on two cores starve the close **transition**,
+      so the backdrop outlives any timeout worth setting. The menu does close; the machine
+      is simply too busy to animate it. **Neither the app nor the tests are wrong** — a real
+      user is not running two headless browsers on two pinned cores.
+
+      **Fix:** `workers: process.env.CI ? 1 : 2` in `playwright.config.ts`, with the
+      measurement recorded inline. Costs wall-clock (chromium ~4.5min → ~9min), which is the
+      right trade for a gate meant to block merges.
+
+      ## Four wrong answers, and what killed each
+
+      Worth keeping, because every one of them looked well-evidenced at the time:
+
+      | # | hypothesis | killed by |
+      |---|---|---|
+      | 1 | MUI close-transition race → add `waitForMenuClosed` at all 18 option sites | CI: failure count unchanged at 3, failures merely moved to the new wait |
+      | 2 | The Selects are `multiple`, so the menu stays open by design | Reading `FilterSidebar.tsx` — they are single (`:143`, `:181`); the only `multiple` is `:222`, another control |
+      | 3 | **"The menu never closes on linux — suspected real defect"** (this fragment's original claim) | A probe in the linux image: menu gone in <500ms and the value lands ("Stormlight Archive") |
+      | 4 | The Drawer backdrop is the sole culprit → wait on `.MuiDrawer-modal` | Strict-mode violation — the sidebar renders twice, so the selector matched 2 nodes; and library-browser's blocker was the Select menu, a different overlay |
+
+      **The lesson is about method, not MUI.** Every hypothesis came from reading a call log
+      and reasoning about what *should* follow. What finally settled it was changing one
+      variable and measuring: workers 2 → 1. The cheap discriminating experiment was
+      available from the beginning and was reached fourth.
+
+      **Second lesson: build the repro before iterating.** Three of the four rounds cost a
+      ~6-minute CI cycle each because there was no way to run linux locally. Building that
+      (Go binary compiled in a `golang` container because CGO/`libtag` blocks
+      cross-compilation, then the official Playwright image) took one round and turned the
+      loop into seconds. It should have come first.
+
+      Runner script: `<scratchpad>/linux-probe.sh` — copies the tree in, `npm ci` inside
+      (the host `node_modules` is a symlink to another worktree full of darwin binaries),
+      starts the prebuilt binary, runs Playwright against it with `CI` unset so
+      `reuseExistingServer` attaches instead of trying to `go build`.
+
+<!-- file: todo.d/20260809-per-field-use-fetched-affordance.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 8e3d1a47-52bc-4f09-91d6-3ab7c05e2f18 -->
+<!-- last-edited: 2026-08-09 -->
+
+- [ ] **Per-field "Use File" / "Use Fetched" one-click apply is gone from Book Detail
+      — confirm that was intended.** `web/src/pages/BookDetail.tsx:1014-1015` now renders
+      exactly two tabs (Info, Files & History). The old Tags/Compare tab listed every
+      metadata field as a row with one-click **Use File** and **Use Fetched** buttons,
+      each showing its own inline "Applying…" spinner while only that field's write was
+      in flight. Neither string appears anywhere in `web/src` today. Fetched values are
+      still *surfaced* — `MetadataEditDialog.tsx:188-198` labels a field's source as
+      "Fetched" and pre-fills from `fetched_value` — but applying one now means opening
+      the dialog and saving the whole form, so there is no way to accept a single fetched
+      field. Two e2e tests covering the old flow were deleted on 2026-08-09 rather than
+      left permanently skipped. If the loss was unintentional, this is the third
+      capability this session's e2e sweep has found missing from Book Detail (the others:
+      version management, and the Change Log "Compare snapshot" link — see
+      `todo.d/20260809-changelog-row-compare-affordance.md`).
+
+- [ ] **Visual-regression goldens exist only for darwin.**
+      `web/tests/e2e/dynamic-ui-interactions.spec.ts-snapshots/` holds
+      `scan-button-loading-chromium-darwin.png` and `-webkit-darwin.png` and nothing for
+      linux, so `Button loading states visual check` cannot pass on CI runners — it will
+      report a missing snapshot. The chromium-darwin golden was regenerated 2026-08-09
+      after the spinner was masked; the **webkit-darwin one is now stale** and could not
+      be regenerated locally because the webkit browser is not installed on this machine
+      (`npx playwright install webkit`). Either commit linux goldens generated in CI, or
+      scope this test to a single platform so it stops being a permanent red on the
+      nightly e2e workflow.
+
+<!-- file: todo.d/20260809-search-drops-filters-and-debounce.md -->
+<!-- version: 2.0.0 -->
+<!-- guid: a17c53e9-4820-4d6b-b95f-e3086c2741da -->
+<!-- last-edited: 2026-08-09 -->
+
+- [x] **FIXED — both halves.** Typing in the library search box silently dropped every
+      active filter and the sort order, and queried on every keystroke.
+
+      > ### ✅ The debounce half of this is FIXED (#2264) — and the original diagnosis was wrong
+      >
+      > This fragment said the search box "is not debounced at all". **A 300ms debounce
+      > existed the whole time.** What was actually happening is worse and more specific:
+      > `useLibraryQuery.ts:165` reads
+      >
+      > ```ts
+      > const searchText = parsedSearch ? parsedSearch.freeText : debouncedSearch;
+      > ```
+      >
+      > so the moment a search parses — which is always, once you type — the debounced
+      > value is **ignored** and the raw parsed value is used. `parsedSearch` also sits in
+      > that hook's `useCallback` dep array, so `loadAudiobooks` was recreated per
+      > keystroke. The debounce was real, correct, and **dead code on the only path that
+      > matters.**
+      >
+      > Fixed by moving `parsedSearch` and `searchQuery` off the same 300ms timer, rather
+      > than debouncing one and leaving the other raw — debouncing only the free text would
+      > let it disagree with the field filters mid-flight. `SearchBar`'s own UI still gets
+      > the raw value so chips react instantly; `useLibrarySelection` gets the debounced one,
+      > because "select all matching" must mean the query that produced the visible rows.
+      >
+      > `test.fixme('search debounces input to avoid excessive requests')` is now a real
+      > passing test (search-and-filter.spec.ts: 11 passed / 1 skipped, exit 0).
+      >
+      > ### ✅ The filter-dropping half is ALSO fixed (#2265)
+      >
+      > It was a **branch**, not a missing capability:
+      >
+      > ```ts
+      > searchText
+      >   ? api.searchBooksPage(searchText, itemsPerPage, offset, filters.showFailed, signal)
+      >   : api.getBooks(itemsPerPage, offset, { sortBy, sortOrder, tags, libraryState, filters, ... })
+      > ```
+      >
+      > Every option lived on the `getBooks` side only, so typing one character crossed to
+      > a call that sends four parameters — dropping `library_state`, tags, field filters
+      > and the sort order.
+      >
+      > **The server was never the problem.** `GetAudiobooks` applies the same post-filters
+      > on the search path (`service_query.go:226`); it was simply never told about them.
+      >
+      > Fixed by collapsing the branch rather than adding nine parameters to
+      > `searchBooksPage`: `getBooks` hits the same endpoint with the same
+      > `is_primary_version`, so it only needed a `search` option. **One code path now** —
+      > which also means a future filter cannot be added to one branch and forgotten in the
+      > other, which is exactly the class of bug this was.
+      >
+      > `searchBooksPage` had exactly one production caller (checked); it is now
+      > `@deprecated` with the reason rather than removed.
+      >
+      > `test.fixme('search works with other filters combined')` is a real passing test.
+      > Verified: search-and-filter + library-browser, **33 passed / 0 failed / 0 skipped,
+      > exit 0.**
+      >
+      > Lesson worth keeping: "feature X is missing" and "feature X exists but is bypassed"
+      > look identical from the outside and have completely different fixes. Grep for the
+      > mechanism before concluding it is absent. `useLibraryQuery.ts:192-193` branches on whether there is search text:
+
+      ```ts
+      searchText
+        ? api.searchBooksPage(searchText, itemsPerPage, offset, filters.showFailed, signal)
+        : api.getBooks(itemsPerPage, offset, { sortBy, sortOrder, tags, libraryState, filters, ... })
+      ```
+
+      `api.searchBooksPage` (`web/src/services/api.ts:1023-1037`) sends only `search`,
+      `limit`, `offset`, `is_primary_version` and optionally `show_quarantined`. **No**
+      `library_state`, **no** `filters` (author/series/genre/language), **no** `tags`,
+      **no** `sort_by`. So filtering to Organized and then searching an author returns
+      matches from every state — while the Filters button keeps showing its count, so the
+      filter still looks applied. Same family as the Deleted-filter cache bug fixed in
+      #2230: a filter that silently does nothing is indistinguishable from one that
+      matched everything. Covered by a `test.fixme` in
+      `web/tests/e2e/search-and-filter.spec.ts`.
+
+- [ ] **The library search is not debounced at all.** Measured 2026-08-09: typing the ten
+      characters of "Foundation" fires **ten** requests to `/api/v1/audiobooks?search=…`,
+      exactly one per keystroke. The e2e test is literally named "search debounces input
+      to avoid excessive requests" and asserts `<= 3`; it has been marked `test.fixme` so
+      it fails loudly as an unexpected pass once a debounce lands. On a large library each
+      of those is a full-text query, so this is directly relevant to the backend-filtering
+      work — no amount of server-side improvement helps if the client sends ten queries
+      for one search. Related: the richer-backend-filtering TODO item.
+
+<!-- file: todo.d/20260809-sorting-must-be-server-side-go.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 3a95c7e1-6b20-4d84-a7f9-1e60b52cf483 -->
+<!-- last-edited: 2026-08-09 -->
+
+- [ ] **Replace library sorting with server-side Go sorting.** Owner decision 2026-08-09:
+      *"I want the system to not suck and I want sorting replaced, and done by go."*
+      Recorded in full with the code evidence in §0a of
+      `docs/design/2026-08-09-search-backend-options.md`.
+
+      ## Where sorting lives today — three places, one of them correct
+
+      | where | what | verdict |
+      |---|---|---|
+      | `internal/audiobooks/service_filtering.go:130` `applySorting` | Go, server-side, over the full filtered set | **Correct.** Keep and extend |
+      | `web/src/components/common/ConfigurableTable.tsx:201` | `[...rows].sort(...)` on the client | **Replace.** Sorts the *current page* |
+      | `web/src/services/api.ts` `searchBooksPage` | sends no `sort_by` | **Fix.** Search drops the sort order entirely |
+
+      **Why the client-side one is broken by design, not merely misplaced:** it sorts the
+      rows already fetched. On a paginated library that is the 50 books you can see, not
+      the library. "Sort by title descending" hands you the *wrong 50 books*, correctly
+      ordered among themselves — which looks plausible, which is why it survives.
+
+      ## Scope carefully — not every client sort is wrong
+
+      There are **15** `.sort()` sites in `web/src`. Most are legitimate: a book's own file
+      list by track number (`BookDetailFilesTab.tsx:250`), tag clouds by count
+      (`TagCloud.tsx:76`), metadata candidates by score. Those sort complete, small,
+      already-fetched sets. **The rule is: a sort over a paginated slice of the library is
+      wrong; a sort over a complete set the client already holds is fine.**
+
+      ## Two things that must land with it
+
+      1. **Sort must be applied BEFORE pagination**, which is the same defect as filters
+         being applied after pagination (§2.2 of the design doc). Moving the sort to Go
+         without pushing it into the query would produce a correctly-sorted page of the
+         wrong rows — a subtler bug than the one being fixed.
+      2. **There is no sort control in the UI at all.** `SearchBarProps`
+         (`web/src/components/audiobooks/SearchBar.tsx:124-131`) has no `onSortChange`, and
+         `LibraryBookGrid.tsx:133` takes the handler as `_handleSortChange` —
+         underscore-prefixed to mark it deliberately unused. The state, URL round-trip and
+         API parameter all still work; only the affordance is missing. So "replace sorting"
+         is partly **restore the control**, not only move the logic.
+         `SearchBar.test.tsx:43` asserts the control is absent and now passes vacuously —
+         that assertion has to be inverted, or it will defend the bug.
+
+      **Acceptance:** choosing a sort reorders the whole library (verify by sorting
+      descending and checking page 1 holds the true last items, not the reversed first
+      page); the sort survives a search; `sort_by` appears on the request; no `.sort()`
+      remains over a paginated library slice.
+
+<!-- file: todo.d/20260809-stale-api-token-and-search-index-verification.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 9d3f6a15-4c87-4b20-8e51-7a0b93c26e4d -->
+<!-- last-edited: 2026-08-09 -->
+
+- [ ] **The checked-in `.api-token` no longer authenticates, and it blocked a real
+      verification.** Found 2026-08-09 while grounding
+      `docs/design/2026-08-09-search-backend-options.md`.
+
+      `.api-token` (the shared per-worktree API key created by the `server-bootstrap`
+      skill and documented in `CLAUDE.md`) returns:
+
+      ```
+      {"error":"invalid session","code":"UNAUTHORIZED","status":401}
+      ```
+
+      while `/api/v1/health` returns 200 — so the server is up and it is the credential
+      that is stale, not the endpoint. The file dates from 2026-07-14.
+
+      **Why this matters beyond convenience.** It blocked a specific question that is worth
+      answering: **is the Bleve search index complete?** The engine is confirmed *open* in
+      production (`msg="Search index opened"` on the current process and every restart back
+      to Aug 07), but an index that opens fine while missing books produces confidently
+      wrong results. The other route to that answer — reading the index directory — needs
+      root, and `sudo` on the prod host requires interactive authentication.
+
+      **Do:**
+      1. Regenerate `.api-token` via the documented bootstrap path.
+      2. With it, compare a broad search's result count against the same term reached
+         through a filter-only path. A large gap means index drift.
+      3. Consider whether a *silent* search degradation is acceptable: `Open()` failures
+         are downgraded to warnings so the server boots without search
+         (`internal/search/register.go`), so a fallback to the O(N) substring scan would
+         run indefinitely with only a startup warning to show for it. With `/metrics`
+         currently unscraped (see the Prometheus gap), nothing would surface it. That is
+         the same failure shape as the six e2e specs that sat disabled for four months.
+
+      See §6 Q1 of `docs/design/2026-08-09-search-backend-options.md`.
+
+<!-- file: todo.d/20260809-three-linux-only-e2e-failures-block-ci-gate.md -->
+<!-- version: 2.0.0 -->
+<!-- guid: 6b2e9047-3d51-4a8c-b7f0-8e14c5920fda -->
+<!-- last-edited: 2026-08-09 -->
+
+- [x] **RESOLVED — all three fixed; the PR gate now blocks.** Superseded by
+      `todo.d/20260809-webkit-scan-import-drawer-backdrop.md`, which tracks the single
+      remaining webkit failure. Kept for the causes, which were all different.
+
+      **Outcome 2026-08-09, measured on the real runner:**
+
+      | configuration | before | after |
+      |---|---|---|
+      | chromium (PR path) | 269 passed / 3 failed | **272 passed / 0 failed / 8 skipped** |
+      | chromium + webkit | not measured | **543 passed / 1 failed / 16 skipped** |
+
+      | # | blocker | resolution |
+      |---|---|---|
+      | 1 | missing linux visual golden | Generated for BOTH engines in the Playwright linux image (#2250, #2251). Also found the goldens were **Git LFS pointers** — `*.png filter=lfs` meant CI checked out a text pointer and Playwright reported "Could not decode expected image as PNG", so the test could never have passed on CI for either browser |
+      | 2 | `library-browser` click timeout | **Worker contention**, not a defect. `workers: 1` on CI (#2249) |
+      | 3 | `scan-import-organize` click timeout | Same cause; fixed on chromium by the same change. **Persists on webkit** → the successor fragment |
+
+      `pull_request` trigger restored and the job made blocking on that path;
+      `continue-on-error` is now conditional so the unproven both-engine configuration is
+      not handed a green light it has not earned.
+
+      ---
+
+      **Original entry, for the record.** Measured
+      2026-08-09 by dispatching the E2E workflow against current `main` — not inferred
+      from the nightly, which was stale.
+
+      **The numbers.** CI (ubuntu, chromium): **269 passed / 3 failed / 8 skipped of 280.**
+      The same suite locally (macOS, chromium): **272 passed / 8 skipped of 280, 0 failed.**
+      So exactly **3 failures exist only on linux.**
+
+      | # | test | symptom |
+      |---|---|---|
+      | 1 | `dynamic-ui-interactions.spec.ts:449` — Button loading states visual check | `A snapshot doesn't exist at …/scan-button-loading-chromium-linux.png` |
+      | 2 | `library-browser.spec.ts:382` — combines multiple filters | `locator.click: Test timeout of 30000ms exceeded` |
+      | 3 | `scan-import-organize.spec.ts:259` — complete workflow: add import path → scan → organize | `locator.click: Test timeout of 30000ms exceeded` |
+
+      **#2 and #3 are new information and the important part.** They pass on macOS and hang
+      on linux. That is the whole reason this measurement was worth taking: a suite that is
+      green locally is not evidence that CI is green, and this project has already been
+      burned once by exactly that inference. Do NOT assume they are "just CI slowness"
+      without looking — a 30s click timeout is a long time for a mocked page, and both are
+      `locator.click`, which is suspicious enough to be a shared cause.
+
+      **#1 is mechanical.** There are only two goldens in the repo, both `-darwin`
+      (`scan-button-loading-chromium-darwin.png`, `…-webkit-darwin.png`), and Playwright
+      fails rather than writes when `CI=true`. Generating a linux golden needs a container,
+      because `playwright.config.ts`'s `webServer` builds the Go binary and that needs CGO +
+      `libtag1-dev` — so it is a two-stage build (compile in a Go image, run in the official
+      Playwright image), not a one-liner. Alternatively let CI produce it once and upload it
+      as an artifact to be committed.
+
+      **Two workflow defects found while measuring, worth fixing in the same PR as the flip:**
+
+      1. **`conclusion: success` on this workflow means nothing.** `continue-on-error: true`
+         makes the job succeed no matter how many tests fail. Every nightly to date reports
+         green. Anyone glancing at the Actions tab would reasonably conclude the suite is
+         passing — this morning's nightly reported `success` with **179 failures**. That is
+         a green light attached to a red suite, which is the same shape as the incident this
+         work exists to prevent.
+      2. **The job name misreports what ran.** It renders
+         `E2E (chromium + webkit)` for any non-`pull_request` trigger, including a
+         `workflow_dispatch` with `projects=chromium`. The `projects` input *is* honoured by
+         the test step — only the label is wrong. A label that does not match what executed
+         is precisely how the 2026-08-08 false green was believed.
+
+      **Order of work:** fix #2 and #3 first (they are real and may share a cause), then
+      #1, then flip `continue-on-error: false` **and** restore the `pull_request` trigger in
+      the same change — the workflow comment is explicit that they go together, because a
+      non-blocking check people learn to ignore is worse than no check.
+
+      **Acceptance:** a dispatched run against `main` reports 280 passed / 0 failed for
+      chromium, and a PR touching `web/**` or `**.go` gets a blocking E2E check.
+
+<!-- file: todo.d/20260809-version-group-navigation-and-summary.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 6d5b81af-30c7-4e92-8fa4-19bc7d206e53 -->
+<!-- last-edited: 2026-08-09 -->
+
+- [ ] **You can no longer navigate between versions of a book.** Book Detail used to
+      have a "Versions" tab listing the group's other versions, each clickable to jump
+      to it. `web/src/pages/BookDetail.tsx:1014-1015` now renders only Info and
+      Files & History, and `BookDetailVersionGroup.tsx` contains no `RouterLink` — the
+      version titles are plain text. `VersionManagement.tsx` (the dialog) has no
+      `navigate()` call either. The only per-version action left is
+      **"Move to: \<title\>"** (`BookDetailVersionGroup.tsx:457-464`), which moves
+      *files* between versions — a destructive operation, not navigation, sitting where
+      users previously clicked to browse. Getting from the M4B to the MP3 of the same
+      book now means going back to the library and finding the other card.
+
+- [ ] **The version-group summary lost its count and its "you are here" marker.**
+      `Part of version group with N books.` and `(Current)` appear nowhere in `web/src`.
+      All that survives is a bare **"Version Group Linked"** chip
+      (`BookDetailHeader.tsx:172`) — it tells you a group exists but not how big it is
+      or which member you are looking at.
+
+- [ ] **The library card's overflow menu button has no accessible name.**
+      `web/src/components/audiobooks/AudiobookCard.tsx:183` is an `IconButton` with only
+      a `<MoreVertIcon/>` inside — no `aria-label`, no tooltip. Screen readers announce
+      it as an unlabelled button, and it is now the **only** route to Manage Versions,
+      Edit, Fetch Metadata and Parse with AI. The e2e suite has to locate it via
+      `button:has([data-testid="MoreVertIcon"])` because there is nothing else to match on.
+
+Context: `version-management.spec.ts` was repointed at the surviving entry point on
+2026-08-09 (4 of 6 tests). The two covering navigation and the group summary were
+deleted rather than rewritten, since the capabilities themselves are gone. Related:
+`todo.d/20260809-changelog-row-compare-affordance.md`,
+`todo.d/20260809-per-field-use-fetched-affordance.md`.
+
+<!-- file: todo.d/20260809-webkit-scan-import-drawer-backdrop.md -->
+<!-- version: 3.0.0 -->
+<!-- guid: 4d20e8b7-1c63-49fa-85e0-7b3f9a06c214 -->
+<!-- last-edited: 2026-08-09 -->
+
+- [x] **RESOLVED — webkit was marginal on TIMING, and its own 60s budget fixed the
+      class.** The nightly now blocks too; `continue-on-error` is a plain `false`.
+
+      **Final measurement on the real runner:**
+
+      | configuration | result |
+      |---|---|
+      | chromium (PR path) | **272 passed / 0 failed / 8 skipped** |
+      | chromium + webkit | **544 passed / 0 failed / 16 skipped** |
+
+      The fix was one line — `timeout: 60 * 1000` on the webkit project only, chromium
+      keeping 30s — and it was chosen as the *discriminating experiment* for the
+      population hypothesis rather than as a workaround. It came back green, so the
+      hypothesis is confirmed: webkit had several tests close to the shared 30s limit and
+      roughly one lost per run.
+
+      **Why this is headroom and not blindness:** a genuinely broken test does not finish
+      in 60s either. What changed is that a slow-but-correct one stopped being reported as
+      a failure. Chromium keeps the tighter budget because it had margin to spare once CI
+      dropped to one worker.
+
+      **Cheaper than the plan this fragment originally proposed.** It suggested three
+      measurement runs to characterise the failing set first; one config change answered
+      the same question and fixed it. Worth remembering: when a hypothesis implies a
+      one-line change, the change often IS the measurement.
+
+      ---
+
+      **Original entry, for the record.**
+
+      ## The update that changes the shape of this problem
+
+      The drawer fix landed and **worked** — `scan-import-organize.spec.ts:259` passed on
+      CI. But the same both-engine run came back with an identical score and a different
+      casualty:
+
+      | run | result | which test failed |
+      |---|---|---|
+      | before the fix | 543 / 1 / 16 | `[webkit] scan-import-organize.spec.ts:259` |
+      | after the fix (#2253) | 543 / 1 / 16 | `[webkit] itunes-bidirectional-sync.spec.ts:121` |
+
+      Different spec file, so the fix cannot have caused it. **The conclusion: webkit under
+      CI has several tests sitting close to their timeouts, and roughly one loses per run.**
+      Fixing them individually is a treadmill — each fix is real, and the score does not
+      move.
+
+      **So do not chase individual webkit failures.** Find out why webkit is marginal as a
+      class:
+
+      1. **Measure the margin.** Dispatch the webkit suite on CI 3+ times and collect the
+         failing set. If it is large and varies run to run, this is systemic timing, not N
+         separate bugs.
+      2. **Consider a per-project timeout.** The config uses one 30s `timeout` for both
+         engines, but webkit is measurably slower here — chromium stopped failing at
+         `workers: 1` and webkit did not. A per-project override is a one-line change that
+         would settle whether headroom is all that is missing.
+      3. Only then decide whether individual tests need waits.
+
+      ## Original entry — the drawer case, now FIXED (#2253)
+
+      **Measured on the real runner:**
+
+      | configuration | result |
+      |---|---|
+      | chromium (the PR path) | **272 passed / 0 failed / 8 skipped** |
+      | chromium + webkit | **543 passed / 1 failed / 16 skipped** |
+
+      The one failure: `[webkit] scan-import-organize.spec.ts:259` — *complete workflow: add
+      import path → scan → organize*. After `page.keyboard.press('Escape')` closes the
+      filter drawer, the `Select All` click times out at 30s because MUI's full-page modal
+      backdrop is still intercepting pointer events:
+
+      ```
+      <div class="MuiBackdrop-root MuiModal-backdrop"> from
+      <div aria-hidden="true" class="MuiDrawer-root MuiDrawer-modal MuiModal-root">
+      subtree intercepts pointer events
+      ```
+
+      `workers: 1` (#2249) fixed the identical failure on chromium. **Webkit is slower and
+      it persists there.**
+
+      ## 🚨 Read this before you start: the local container is NOT a valid oracle
+
+      The linux repro container (`<scratchpad>/linux-probe.sh`, `--cpus=2`) is **harsher
+      than the GitHub runner** and invents failures CI does not have. Across four runs of
+      the same spec it produced four different signatures:
+
+      | attempt | what failed |
+      |---|---|
+      | baseline | `:259` drawer backdrop (matches CI) |
+      | after `toHaveCount(0)` fix | `:259` **plus** `:386` "Cancel Scan" — a test CI passes |
+      | after re-run | `:259` plus `:390` |
+      | after visible-filter fix | `:259` failing **earlier**, on the Filters button itself |
+
+      Tuning against it is a treadmill — it was exited deliberately, not because the problem
+      was solved. **Iterate against a dispatched CI run, or a container with more CPU.**
+
+      ## Three assertion shapes already ruled out, by measurement
+
+      Do not re-try these:
+
+      | shape | why it fails |
+      |---|---|
+      | `expect(locator).toBeHidden()` | **Strict-mode violation.** Sidebar renders its content twice (temporary Drawer + permanent one), so the selector matches 2 nodes |
+      | `expect(locator).toHaveCount(0)` | **Never converges.** Count sits at 2 forever — MUI keeps the backdrop MOUNTED and merely hides it |
+      | `.filter({ visible: true })` + `toHaveCount(0)` | Failure moved earlier (to the Filters button) in the container; **unvalidated against CI**, so this one is "unproven", not "disproven" |
+
+      ## Suggested next steps
+
+      1. Re-test the `.filter({ visible: true })` variant **on CI**, not in the container.
+         It is the only shape that is semantically right for a hidden-not-unmounted
+         backdrop, and it was abandoned because of an unreliable oracle rather than
+         evidence against it.
+      2. If that is not enough, consider whether the test should dismiss the drawer by
+         clicking its close control rather than pressing Escape — a more deterministic
+         path than relying on a transition finishing.
+      3. **Do not add a blind retry.** The app does close the drawer; the wait is legitimate
+         and should assert the closed state, not paper over it.
+
+      **When this is green, `continue-on-error` in `.github/workflows/e2e.yml` becomes a
+      plain `false`** and the nightly blocks too. The conditional expression there exists
+      only because of this one test.
+
+- [ ] **`scan-import-organize.spec.ts` (7 failures) — Settings tab deep-link
+      fixed, but that was NOT the blocker. Count unchanged at 7.**
+      Investigated 2026-08-09.
+
+      **Applied and kept (correct, but insufficient):** the tests navigated to
+      `/settings` and immediately clicked "Add Import Path". Settings is tabbed
+      now and defaults to **Library**; the button is rendered by
+      `components/settings/PathsSettingsTab.tsx:229`, mounted from
+      `pages/Settings.tsx:832`, i.e. only when the **Paths** tab is active.
+      `tabFromHash()` (`Settings.tsx:96`) maps a URL hash to a tab index via
+      `TAB_KEYS`, so `'/settings#paths'` is the app's own supported deep link.
+      All four navigations now use it.
+
+      **It did not help — still 7 failures**, all still timing out on
+      `getByRole('button', { name: 'Add Import Path' })`. So the Paths tab is
+      not rendering, or the Settings page is not reaching a usable state at
+      all. The change is kept because it is verifiably more correct than
+      `/settings`, not because it fixed anything.
+
+      **Next step, and do this before writing any code:** capture the DOM for
+      one of these failures specifically. `test-results/` was dominated by
+      other tests' directories, so the Settings page snapshot was never
+      actually read — which, given that reading the snapshot has found every
+      real cause in this effort, is the obvious gap. Run just this spec and
+      open `test-results/<dir>/error-context.md` for the workflow test.
+
+      Candidates worth checking once the snapshot is in hand: whether Settings
+      renders an error boundary from an unmocked endpoint, whether it redirects
+      (auth), and whether the tab panel is lazily mounted such that the
+      hash-selected index is applied after the click is attempted.
+
+- [ ] **E2E repair progress — measured 2026-08-09. Supersedes the stale
+      "146 failures across 22 files" triage.**
+
+      **Suite: 66 failed / 218 passed / 4 skipped of 288 chromium tests.**
+      Down from 146 failed / 138 passed. **80 fixed, 55%**, across 8 merged
+      PRs (#2211-#2221). No spec has been deleted or skipped.
+
+      **Fully green now:** `dedup` (was 26), `dedup-operations` (was 8).
+
+      **Current distribution:**
+
+        12  library-browser          3  unified-dedup-tab
+        11  transcode-and-counting   3  scan-import-organize
+         8  batch-operations         2  search-and-filter
+         6  version-management       2  error-handling
+         6  dynamic-ui-interactions  1  settings-configuration
+         4  metadata-provenance      1  library-enhancements
+         4  files-history            1  import-paths
+                                     1  diagnostics
+                                     1  auth-flow
+
+      **Untouched, and therefore the best value per hour:**
+      `version-management` (6), `dynamic-ui-interactions` (6),
+      `files-history` (4), `unified-dedup-tab` (3), plus the tail of 1s and 2s.
+      Files already worked have had their cheap causes taken; what remains in
+      them is harder.
+
+      **THE METHOD, which is the most transferable thing here.** Run ONLY the
+      spec you are fixing, so `test-results/` is not buried under other tests'
+      directories, then read `test-results/<dir>/error-context.md` BEFORE
+      forming a hypothesis. Every genuine cause in this effort was found that
+      way:
+
+      - `/dedup` redesigned, tabbed UI behind a "Legacy View" toggle
+      - `metadata-provenance` and `scan-import-organize` rendering the LOGIN
+        screen because their window.fetch shims never mocked /auth/status
+      - book sub-resources returning the BOOK object, crashing on `.length`
+      - a fixture saying `library_state: 'import'` where the app checks
+        `'imported'`, so a button disabled itself correctly
+
+      Every wasted cycle came from reasoning about what *should* be on the page.
+      Two whole cycles were spent that way on `transcode-and-counting` and the
+      first pass at `scan-import-organize`.
+
+      **Second lesson: scope fixes narrowly.** Three separate times a correct
+      fix applied too broadly made things worse — a blanket `getByLabel` →
+      `getByRole` sweep took one file from 5 failures to 7; a blanket
+      "Fetch Metadata" rename broke the dialog button, which was never renamed.
+      Verify each site rather than pattern-replacing.
+
+      **Known causes are recorded per file** in the other todo.d fragments,
+      including two hypotheses already tested and REJECTED for
+      `transcode-and-counting` — read those before retrying it.
+
+      **Two open questions that are arguably product issues, not test rot:**
+      whether the library is still sortable without switching views (the
+      "Sort by" control does not exist anywhere), and whether the "N selected"
+      chip rendering twice is intentional.
+
+- [ ] **`version-management.spec.ts` (6 failures) — version management MOVED off
+      the book detail page. The spec needs a rewrite, not a selector tweak.**
+      Fully diagnosed 2026-08-09; no code changed, because the fix is a real
+      rewrite and a half-finished one is worse than none.
+
+      **What the tests do:** `openBookDetail()` navigates to `/library/<id>`
+      and each test then clicks `getByRole('button', { name: 'Manage
+      Versions' })` to open the linking UI.
+
+      **What the app does now:**
+
+      - `pages/BookDetail.tsx` does **not** import `VersionManagement` at all.
+        It renders `components/bookdetail/BookDetailVersionGroup.tsx`, which is
+        **read-only** — Bitrate, Duration, File, Origin, Path, Sample Rate,
+        Size. There is no link/unlink affordance on book detail.
+      - The interactive `VersionManagement` component is rendered from
+        `components/library/LibraryDialogs.tsx` and `pages/Library.tsx` — i.e.
+        from the **Library** page.
+      - "Manage Versions" is a **MenuItem inside the card's overflow menu**
+        (`components/audiobooks/AudiobookCard.tsx:336`), so its role is
+        `menuitem`, not `button`, and the menu must be opened first.
+
+      So the tests are driving a capability that page no longer has. The book
+      detail header still shows a "Version Group Linked" chip, which is why the
+      page *looks* right in the snapshot — it displays version state but cannot
+      change it.
+
+      **The rewrite:** point `openBookDetail()` (5 call sites) at `/library`,
+      open the target card's overflow menu, then click the **menuitem**
+      "Manage Versions". The dialog interactions after that point are likely
+      still valid, since `VersionManagement.tsx` itself was not replaced — only
+      relocated.
+
+      **Worth asking before doing it:** is losing version management from book
+      detail intentional? Managing versions of the book you are looking at is a
+      natural place for it, and it now requires going back to the library and
+      finding the card. That is a product question, not a test question.
+
+- [ ] **`Library.tsx:707` — an `exhaustive-deps` warning whose suggested fix
+      would silently undo the URL filter-drop guard.** Introduced 2026-08-10 by
+      PR #2271; noticed while linting an unrelated branch.
+
+      `npx eslint .` in `web/` reports:
+
+          707:6  warning  React Hook useEffect has a missing dependency:
+                 'searchParams'. Either include it or remove the dependency
+                 array   react-hooks/exhaustive-deps
+
+      The omission is deliberate. That effect is the URL **writer**, and #2271
+      added a guard at the top of it that reads `searchParams` precisely to
+      detect "the URL changed under us since the last commit":
+
+          const currentSearch = searchParams.toString();
+          const urlChangedUnderUs = currentSearch !== seenSearch.current;
+          if (urlChangedUnderUs && currentSearch !== lastWrittenSearch.current) return;
+
+      Reading a value without depending on it is the whole point — the guard
+      needs the *current* URL compared against a ref that a **later** effect
+      advances, so effect declaration order is load-bearing. See the comment on
+      `seenSearch` and the one inside the write effect.
+
+      **Why this is worth a task rather than a shrug:** the warning tells the
+      next reader to add `searchParams` to the deps array. That is plausible,
+      one keystroke, and makes the warning go away. Whether it actually breaks
+      the guard is **not established** — it may merely cause extra runs — but
+      nobody has tested it, and the failure it would reintroduce is a
+      transient, sub-frame filter drop that took a `history.pushState`
+      interceptor to observe at all (rAF sampling at ~16ms was too coarse to
+      see it). A warning that recommends an untested change to a race fix is a
+      trap with a countdown on it.
+
+      **Do:** replace the warning with an explicit
+      `// eslint-disable-next-line react-hooks/exhaustive-deps` carrying a
+      one-line reason that points at the `seenSearch` comment. Before
+      committing, run the negative control that validated the original fix — so
+      the disable is verified to be protecting something real rather than just
+      silencing lint.
+
+      **Run the RIGHT control.** Only one test in
+      `library-sidebar-filters.spec.ts` actually exercises this guard:
+
+          the filter never disappears from the URL while the effects settle
+
+      (`library-sidebar-filters.spec.ts:234`, webkit). With the guard body
+      disabled it failed **4 of 6** runs; with it, **24 consecutive** passes.
+
+      The two deep-link tests in the same file — `a deep-linked filter survives
+      mount` and `a deep-linked tag survives mount` — passed **6 of 6 with the
+      guard disabled**. They are invariant coverage, not regression guards, and
+      they are labelled as such in the file. Running those and seeing green
+      proves nothing about this dependency array.
+
+      **Do not** simply add the dependency to make the warning disappear
+      without running that control.
+
+<!-- file: todo.d/20260810-search-index-queue-drops-silently.md -->
+<!-- version: 2.0.0 -->
+<!-- guid: 9e51d7a3-2c48-4b16-8f70-a3d19c6528b4 -->
+<!-- last-edited: 2026-08-09 -->
+
+- [x] **🔴 The search index silently drops updates when its queue fills — 56,537 dropped
+      in seven days.** Measured on prod 2026-08-10 from `journalctl`. This was a
+      **blocking prerequisite** for pushing filters/sort into Bleve (design doc option
+      A1), and it changed the ordering of that plan.
+
+      **✅ FIXED — reconciliation shipped.** Owner chose a dirty-set drained on a ticker,
+      persisted to Pebble, with an adaptive batch size. Steps 1, 2 and 4 below are done;
+      step 3 (filter/sort pushdown) is now unblocked.
+
+      Implementation: `internal/database/pebble_store_search_dirty.go` (durable set,
+      `idx:sidx:dirty:{id}`, mirroring the existing `idx:upl:dirty:` playlist idiom) and
+      `internal/server/search_reconciler.go` (ticker + adaptive drain).
+
+      ## 🔑 The root cause was a false comment, not just a missing feature
+
+      Three separate comments — `indexed_store.go:14`, `indexed_store.go:100` and
+      `server.go:225` — asserted that "a startup reindex will heal any gaps". **It does
+      not.** `buildSearchIndexIfEmpty` opens with `if count > 0 { return }`, so it runs
+      only when the index has ZERO documents. On a populated library it has never run.
+
+      The drop was therefore designed as safe *under a guarantee that was never true*.
+      That is why all three comments were corrected in place, with the old claim quoted
+      and refuted, rather than quietly rewritten: the next person to read the old
+      reasoning must not re-derive the same wrong conclusion.
+
+      ## Two things the implementation measured rather than assumed
+
+      1. **`pebble.Sync` on the mark was a latency bug.** The first version synced every
+         mark; a test writing 2,500 IDs took **13.9s** (~180/sec). Drops arrive in bursts
+         on the write path while `enqueueIndex` holds `indexQueueMu.RLock`, so that would
+         have added ~5ms to every write during exactly the overload the drop relieves.
+         Switched to `NoSync` (still WAL-backed, survives process crash): the same test
+         now takes **0.13s** — 107× faster.
+      2. **A 1%-per-tick adaptive drain was too slow to matter.** At 1%, a 56,537 backlog
+         drains ~565/tick — indistinguishable from the fixed 500 floor, ~50 minutes total,
+         and it decays so the tail is slowest. Implemented at 10% clamped to
+         [500, 5000]: the same backlog clears in ~11 ticks (~5.5 min).
+
+      ## The measurement
+
+      ```
+      level=WARN msg="search index queue full, dropped (delete)" bookID=01KXXVGZ90PS78ZWJZJY62EFCJ del=false
+      ```
+
+      | window | dropped index operations |
+      |---|---|
+      | last 7 days | **56,537** |
+      | days affected | Aug 03 and Aug 07 only |
+      | since the Aug 09 10:33 restart | 0 |
+
+      **The zero is not reassuring.** The queue is empty because the process restarted and
+      no bulk operation has run since. Both affected days were bulk-operation days; the
+      next scan, merge wave or dedup run refills it and drops again.
+
+      ## The mechanism
+
+      `internal/server/indexed_store.go:113-122` — a non-blocking send onto a 1024-deep
+      channel, with `default:` as the overflow branch:
+
+      ```go
+      select {
+      case s.indexQueue <- indexRequest{bookID: bookID, delete: del}:
+      default:
+          atomic.AddInt32(&s.indexWorkerBusy, -1)
+          slog.Warn("search index queue full, dropped (delete)", "bookID", bookID, "del", del)
+      }
+      ```
+
+      Dropping under pressure is a defensible choice — the alternative is blocking a write
+      path on the indexer. **What is not defensible is that nothing reconciles afterwards.**
+      A dropped update is lost permanently; there is no retry, no dirty-set, and no
+      periodic re-sync. The index diverges from the database and stays diverged until
+      something happens to rewrite that book.
+
+      Note the log message says `(delete)` while `del=false` — the label is wrong for the
+      upsert case, which makes the warning harder to interpret than it needs to be.
+
+      ## Why this blocks A1
+
+      Today a dropped update means **stale relevance** — a book ranks oddly or misses a
+      match. Bad, tolerable, invisible.
+
+      After A1 pushes filters and sort into the Bleve query, a dropped update means
+      **wrong rows**. A book whose `library_state` changed to `organized` but whose index
+      entry still says `imported` will be *absent from the Organized filter and present in
+      Imported*. The user sees a library that is missing books, with no error.
+
+      **This is the difference between an index that is a relevance dependency and one that
+      is a correctness dependency** — exactly the risk flagged as open item 3 in
+      `docs/design/2026-08-09-search-backend-options.md`, now with a measured failure rate
+      attached.
+
+      ## What to do, in order
+
+      1. **Make the drop visible.** A counter and a metric, not just a WARN that scrolls
+         past 56,537 times. Right now the only way to know is to grep journald.
+      2. **Reconcile.** Any of: a dirty-set of book IDs that failed to enqueue, drained on
+         a ticker; a periodic full re-index; or a generation counter per book compared
+         against the index on read. A dirty-set is the cheapest and matches the existing
+         "cached aggregates + dirty flag" idiom in this codebase.
+      3. **Then and only then**, push filters/sort into the index.
+      4. Fix the `(delete)` label while touching this.
+
+      **Do not size the queue bigger and call it fixed.** 1024 → 100,000 moves the
+      threshold; it does not add reconciliation. The bulk days dropped 56K operations,
+      which no reasonable buffer absorbs.
+
+      ## Also settles an open question
+
+      Open item 4 of the design doc asked whether the index is complete. **It is not**, and
+      now there is a mechanism and a number rather than a suspicion. The `.api-token` is
+      still stale, but this answer did not need it.
+
+<!-- file: todo.d/20260810-sort-index-memory-cost-decision.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 3f81a5d2-6e04-4b97-8c13-d29e0b7f461a -->
+<!-- last-edited: 2026-08-09 -->
+
+- [ ] **⚖️ DECIDE which sort indexes to enable — the design-doc cost estimate was ~10×
+      optimistic.** The machinery is built, tested and merged behind
+      `enabled_sort_indexes`, defaulting to empty (today's behaviour exactly). What is
+      left is choosing what to turn on, and that needs the real number rather than the
+      one the decision was originally made on.
+
+      ## What was decided, and on what basis
+
+      On 2026-08-09 the owner selected nine sort fields to index — author, narrator,
+      series, created_at, updated_at, year, duration, file_size, bitrate — from a design
+      doc that estimated **"tens of MB per sort field"** against ~1.25 GB resident, i.e.
+      "low single-digit percent each".
+
+      ## What it actually costs
+
+      Measured, 100,000 books, identical fixture on both sides
+      (`TestSortIndexCost`, `internal/database/memdb_sort_index_cost_test.go`):
+
+      | | without | all nine | delta |
+      |---|---|---|---|
+      | heap per book | 2,645 B | 6,395 B | **+142%** |
+      | at 366,916 books | 925.6 MB | 2,237.8 MB | **+1,312 MB** |
+      | insert 100K | 335 ms | 935 ms | **2.8× slower** |
+
+      That is **~146 MB per sort key**, not "tens of MB". memdb is already ~1.25 GB
+      resident with a 107.9 s warmup, so all nine roughly doubles it.
+
+      **And this is a LOWER bound.** The fixture leaves `Author` and `Series` unset, so
+      two of the six physical indexes store the 1-byte "missing" key for nearly every
+      row. A library with populated author/series data pays more than this.
+
+      ## Why the estimate was wrong
+
+      The doc reasoned that "a secondary index stores keys and IDs, not books", which is
+      true and led to sizing by key length. But go-memdb is an **immutable** radix tree:
+      every insert path-copies the nodes from root to leaf. Cost is dominated by node
+      allocation, so a short key is not a cheap key. Roughly 417 B per book per index
+      regardless of what the key contains.
+
+      ## The decision
+
+      Not "should we index" — the pagination-disabled full-set sort is genuinely bad.
+      It is **which fields earn ~146 MB each**, and there is no usage data to answer it:
+      nobody has measured which sorts real users pick. Options, cheapest first:
+
+      1. **Enable none for now** (current default). Costs nothing, changes nothing.
+      2. **Instrument first** — log `sort_by` values for a week, then enable only the
+         fields that actually appear. This is the option that replaces a guess with
+         evidence, and the instrumentation is small.
+      3. **Enable a chosen subset.** `created_at`/`updated_at` are the most likely to be
+         worth it ("what's new" is a real browsing pattern); the numeric triage fields
+         (duration/file_size/bitrate) are plausibly rare enough to leave on the slow path.
+      4. **Enable all nine** and accept ~2.5 GB resident. Only with headroom confirmed on
+         the host, and re-measure warmup — 107.9 s is already not short.
+
+      After enabling anything: re-measure warmup and RSS on prod, because the
+      extrapolation from 100K is linear-by-assumption and 366,916 is 3.7× further out.
+
+      ## Also worth knowing
+
+      `CanPushDownSort` consults the **enabled** set, not the known set, so a field that
+      is not indexed correctly falls back to the existing path instead of asking memdb
+      for an index that was never registered. `SetEnabledSortIndexes` must be called
+      before the store opens — it is, from the single `cobra.OnInitialize` hook in
+      `cmd/root.go`.
+
+      Related: `docs/design/2026-08-09-search-backend-options.md` §2.3 (which still
+      carries the old estimate in its prose and should be corrected to point here).
 
 - [x] **DONE 2026-08-09 — the e2e suite runs in CI and BLOCKS on every trigger.**
       `continue-on-error: false`, `pull_request` trigger live with its paths filter
