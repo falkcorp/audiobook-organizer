@@ -1,5 +1,5 @@
 // file: internal/database/memdb_summaries.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000008
 // last-edited: 2026-07-05
 
@@ -105,12 +105,29 @@ func (m *MemStore) GetBookSummaries(limit, offset int, f BookSummaryFilter) ([]B
 		}
 		err error
 	)
+	// sortIdx is the sorted index serving this request, or "" when the sort
+	// cannot be streamed and the caller falls back to materialise-and-sort.
+	// title predates the generic map and keeps its own name.
+	//
+	// The enabled check is load-bearing: sortIndexForField lists every field
+	// that COULD be indexed, but indexes are opt-in, so mapping straight
+	// through it would hand txn.Get an index name that was never registered
+	// and error at runtime. sortIndexEnabled is the same predicate
+	// CanPushDownSort uses, so the query service and the store cannot
+	// disagree about which sorts stream.
+	sortIdx := ""
+	if f.SortBy == "title" {
+		sortIdx = memIdxTitle
+	} else if sortIndexEnabled(f.SortBy) {
+		sortIdx = sortIndexForField[f.SortBy]
+	}
+
 	switch {
-	case f.SortBy == "title":
+	case sortIdx != "":
 		if f.SortAscending {
-			iter, err = txn.Get(memTableBooks, memIdxTitle)
+			iter, err = txn.Get(memTableBooks, sortIdx)
 		} else {
-			iter, err = txn.GetReverse(memTableBooks, memIdxTitle)
+			iter, err = txn.GetReverse(memTableBooks, sortIdx)
 		}
 	case f.IsPrimaryVersion != nil:
 		iter, err = txn.Get(memTableBooks, memIdxIsPrimaryVersion, *f.IsPrimaryVersion)
@@ -121,8 +138,10 @@ func (m *MemStore) GetBookSummaries(limit, offset int, f BookSummaryFilter) ([]B
 		return nil, fmt.Errorf("memdb book_summaries scan: %w", err)
 	}
 
-	// When iterating by title, IsPrimary becomes an in-loop predicate.
-	primaryFilter := f.SortBy == "title" && f.IsPrimaryVersion != nil
+	// When iterating a sorted index, IsPrimary becomes an in-loop predicate:
+	// the ordered walk is the thing we need, and rejected rows are cheap to
+	// skip.
+	primaryFilter := sortIdx != "" && f.IsPrimaryVersion != nil
 	wantPrimary := false
 	if primaryFilter {
 		wantPrimary = *f.IsPrimaryVersion

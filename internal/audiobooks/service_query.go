@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
 // last-edited: 2026-07-18
 
@@ -38,11 +38,17 @@ func (svc *AudiobookService) GetAudiobooks(ctx context.Context, limit int, offse
 		f = filters[0]
 	}
 	hasSorting := f.SortBy != ""
-	// "title" sort can be pushed down to memdb (sorted radix index) — every
-	// other sort key still needs the heavy in-memory path. This is the
-	// dominant case (library page default), so the pushdown matters.
-	titleSortPushdownable := f.SortBy == "title"
-	heavySorting := hasSorting && !titleSortPushdownable
+	// Sorts backed by a memdb sorted index are pushed down and streamed;
+	// everything else still needs the heavy materialise-the-whole-set path.
+	//
+	// This used to be hardcoded as `f.SortBy == "title"`. It now asks the
+	// database package, because that is where the indexes are declared —
+	// with the hardcoded string, adding an index would have silently built a
+	// structure that nothing ever queried. Nine sort keys qualify today
+	// (author, narrator, series, year, created_at, updated_at, duration,
+	// file_size, bitrate, plus their alias spellings).
+	sortPushdownable := database.CanPushDownSort(f.SortBy)
+	heavySorting := hasSorting && !sortPushdownable
 	hasPerUser := len(f.PerUserFilters) > 0 && f.UserID != ""
 	hasFingerprintingFilters := f.FingerprintStatus != "" || f.CoveragePercentMin != nil || f.CoveragePercentMax != nil
 	// "Heavy" post-filters require fetching all rows to apply in Go.
@@ -51,7 +57,7 @@ func (svc *AudiobookService) GetAudiobooks(ctx context.Context, limit int, offse
 	// all 68K rows to satisfy ?is_primary_version=true was the prod
 	// "library spins forever" bug.
 	hasHeavyPostFilters := f.LibraryState != "" || f.Tag != "" || len(f.Tags) > 0 || len(f.FieldFilters) > 0 || hasPerUser || heavySorting || hasFingerprintingFilters
-	hasPostFilters := hasHeavyPostFilters || f.IsPrimaryVersion != nil || titleSortPushdownable
+	hasPostFilters := hasHeavyPostFilters || f.IsPrimaryVersion != nil || sortPushdownable
 
 	// When heavy post-filters are active, fetch all and filter in memory.
 	storeLimit := limit
