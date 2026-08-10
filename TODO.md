@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.24.0 -->
+<!-- version: 10.25.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-08-10 -->
 
@@ -3834,6 +3834,19 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
   Damage in the range 1..n-1 is the only damage that is invisible. The probe
   also confirmed the authoritative row still carried the right
   `VersionGroupID` throughout — the truth was present and simply not consulted.
+
+  **That third row also discriminates between the four fix directions**, and is
+  the most decision-relevant thing measured here. Because a fully-empty index
+  returns the correct set, direction 3 (rebuild `book:versiongroup:*`) is
+  *provably sufficient against the read path exactly as it stands* — it needs no
+  code change at all to a function that `metafetch` writes through, only a repair
+  run. Directions 1 and 4 change that read path's results; direction 2 fixes only
+  future writes. So the real question for the owner is narrower than four
+  options: **is a one-off prod repair enough, or does the read path also need to
+  stop trusting a non-empty index?** Anything that can drop index rows again
+  (or any group that acquires members through a path not tripping the
+  `VersionGroupID`-changed comparison) re-opens the hole, which argues for doing
+  3 now and 2 or 4 as the durable guard.
 
   Confirmed unaffected by memdb warmth: the enumeration reads `p.db` directly,
   so the repro does not depend on warmup timing.
