@@ -1,7 +1,7 @@
 // file: tests/e2e/playwright.config.ts
-// version: 1.11.0
+// version: 1.12.0
 // guid: 7c8d9e0f-1a2b-3c4d-5e6f-7a8b9c0d1e2f
-// last-edited: 2026-08-08
+// last-edited: 2026-08-10
 
 import { defineConfig, devices } from '@playwright/test';
 import { fileURLToPath } from 'url';
@@ -30,14 +30,29 @@ export default defineConfig({
   //   workers=1 -> 27 passed, 0 failed
   // The failures were 30s `locator.click` timeouts with a MUI modal backdrop
   // (Drawer in one case, Select menu in the other) still intercepting pointer
-  // events. Two browser workers plus the Go server on 2 cores starve the close
-  // TRANSITION, so the backdrop outlives any timeout worth setting. Neither the
-  // app nor the tests are wrong — a real user is not running two headless
-  // browsers on two pinned cores.
+  // events.
   //
-  // The cost is wall-clock: chromium goes from ~4.5min to ~9min. That is the
-  // right trade for a gate that is supposed to block merges — a fast check
-  // people learn to distrust is worth less than a slow one they believe.
+  // CORRECTION 2026-08-10 — the explanation that used to sit here was wrong,
+  // and wrong in the way that stops the next person from looking. It said the
+  // two workers starved the close transition and concluded "neither the app
+  // nor the tests are wrong". Both halves are false:
+  //
+  //   - It reproduces at workers=1 on an IDLE 48-core host. A clean-room full
+  //     chromium run there failed this same test 1 in 282. Core starvation is
+  //     not the trigger; lowering the worker count only lowers the hit rate.
+  //   - It is a real product defect, since fixed: MUI's Select menu could get
+  //     stuck mid-close with its Modal root still covering the viewport and
+  //     swallowing every click. See the MuiMenu note in web/src/theme.ts.
+  //
+  // Reproduction, if it is ever needed again (20/20 failed before the fix):
+  //   CI=true npx playwright test --config=tests/e2e/playwright.config.ts \
+  //     --project=chromium -g "clears all filters" --repeat-each=20 --workers=12
+  //
+  // workers=1 on CI stays, on its own merits: it is the configuration the gate
+  // has been measured green in, and it keeps runs reproducible. The cost is
+  // wall-clock: chromium goes from ~4.5min to ~9min. That is the right trade
+  // for a gate that is supposed to block merges — a fast check people learn to
+  // distrust is worth less than a slow one they believe.
   workers: process.env.CI ? 1 : 2,
   reporter: [
     ['list'],
