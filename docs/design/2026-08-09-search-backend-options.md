@@ -1,5 +1,5 @@
 <!-- file: docs/design/2026-08-09-search-backend-options.md -->
-<!-- version: 3.0.0 -->
+<!-- version: 3.1.0 -->
 <!-- guid: 4f1c8a72-6d93-4e05-b8a1-9c72e0f45d38 -->
 <!-- last-edited: 2026-08-10 -->
 
@@ -83,9 +83,16 @@ alerts on it. Whatever else gets built, **that fallback must become loud.**
 
 | measure | count |
 |---|---|
-| HTTP route registrations across `internal/server` | **680** |
-| distinct paths under `/audiobooks` alone | **129** |
+| unique method+path routes across `internal/server` | **475** — 219 GET, 256 write |
+| unique method+path routes under `/audiobooks` | **82** — 33 GET, 49 write |
 | server-side sort fields (`sortFieldMap`) | 5 — `title`, `author`, `narrator`, `series`, `genre` |
+
+> **Earlier figures in this document were wrong and are corrected here.** "680 route
+> registrations" counted the same route registered in more than one file; "129 distinct
+> paths under `/audiobooks`" came from grepping quoted strings, which swept up
+> query-string variants (`/audiobooks?has_file_errors=true`) and non-routes
+> (`/audiobooks.db`). The numbers above are unique `METHOD path` pairs from route
+> registrations only, excluding tests.
 
 ---
 
@@ -160,8 +167,8 @@ needed to stop adding endpoints for sorts, because we are not adding endpoints f
 
 ### 3.2 But the proliferation is real, and it lives elsewhere
 
-**129 distinct paths under `/audiobooks`**, 680 route registrations overall. They are
-overwhelmingly **per-action and per-projection**:
+**82 routes under `/audiobooks`** (475 server-wide). They are overwhelmingly
+**per-action and per-projection**:
 
 ```
 /audiobooks/:id/alternative-titles     /audiobooks/:id/apply-metadata
@@ -182,9 +189,45 @@ and it is a real reduction in surface area rather than a theoretical one.
 **A query language does not help.** GraphQL mutations are still one per action; you rename
 `POST /x/:id/apply-metadata` to `mutation applyMetadata`. The count does not drop, it moves.
 
-**So a query language could retire a meaningful share of the 129 read paths and close to
-none of the write paths.** Whether that is worth it turns on the read/write split — the
-single number that decides this, and it has not been counted yet (§7.1).
+### 3.2.1 The read/write split, measured
+
+This was the open question that decides the whole thing. It is now counted.
+
+| scope | total | GET (reads) | writes | read share |
+|---|---|---|---|---|
+| whole server | 475 | **219** | 256 | **46%** |
+| under `/audiobooks` | 82 | **33** | 49 | **40%** |
+
+**Writes outnumber reads.** A query language collapses reads only, so the ceiling on what
+it can retire is **33 of 82** routes under `/audiobooks`, and 219 of 475 server-wide. That
+is an upper bound, not an estimate — it assumes *every* GET is collapsible.
+
+**But those 33 GETs are unusually collapsible.** Enumerated:
+
+```
+/audiobooks/:id/alternative-titles   /audiobooks/:id/changelog
+/audiobooks/:id/changes              /audiobooks/:id/cover-history
+/audiobooks/:id/cow-versions         /audiobooks/:id/external-ids
+/audiobooks/:id/field-states         /audiobooks/:id/files
+/audiobooks/:id/metadata-history     /audiobooks/:id/metadata-history/:field
+/audiobooks/:id/metadata-rejections  /audiobooks/:id/narrators
+/audiobooks/:id/path-history         /audiobooks/:id/segments
+/audiobooks/:id/tags                 /audiobooks/:id/tags-detailed
+/audiobooks/:id/user-tags            /audiobooks/:id/versions
+```
+
+Eighteen of them are **"a different projection of one book"** — exactly the shape a query
+language exists to collapse. Another handful are list variants (`/quarantined`,
+`/soft-deleted`, `/count`, `/facets`, `/duplicates`) that are really `GET /audiobooks` with
+a filter, and would fold into the same query endpoint.
+
+The remainder are genuinely distinct resources — `/cover` and `/sample` stream binary and
+should stay their own routes regardless.
+
+**Conclusion:** the honest ceiling is ~40% of the surface, but the *concentration* is what
+matters — roughly 20 of the 33 reads are one-book projections that a single well-shaped
+query endpoint replaces. That is a real reduction, and it is the strongest concrete argument
+for B2 in this document.
 
 ### 3.3 The cost side, stated honestly
 
@@ -233,7 +276,7 @@ adopting GraphQL's runtime.
 
 **Sequencing:** B2 first, as a plain REST endpoint — incremental, reversible, and
 immediately useful as the home for filter+sort pushdown. Evaluate B4 once there is one
-well-shaped query surface worth generating types *for*, rather than generating types for 680
+well-shaped query surface worth generating types *for*, rather than generating types for 475
 hand-written routes.
 
 ---
@@ -281,8 +324,9 @@ SQLite3?" section and there is no sqlite dep in `go.mod`); an external search se
 
 ## 7. Still open
 
-1. **What is the read/write split across the 129 `/audiobooks` paths?** Decides how much
-   §3.2a is worth. Not yet counted.
+1. ~~What is the read/write split?~~ **ANSWERED — see §3.2.1.** 46% reads server-wide,
+   40% under `/audiobooks`; ~20 of the 33 reads are one-book projections that a single
+   query endpoint would replace.
 2. **Which sort fields matter?** Each costs an index. Five exist; "all of them" is the
    expensive answer, and probably nobody sorts by publisher.
 3. **Index staleness tolerance.** Filter/sort pushdown promotes the Bleve index from a
