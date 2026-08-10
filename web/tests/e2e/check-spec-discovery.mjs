@@ -84,7 +84,8 @@
 
 import { execFileSync } from 'node:child_process';
 import { readdirSync, statSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join, relative, sep } from 'node:path';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 
@@ -123,6 +124,35 @@ function specFilesOnDisk(dir) {
 function collectSpecs(suite, out) {
   for (const spec of suite.specs ?? []) out.push(spec);
   for (const child of suite.suites ?? []) collectSpecs(child, out);
+}
+
+// Assert we are asking the PROJECT'S Playwright, not whatever `npx` found by
+// walking up the tree. `npx` searches ancestor node_modules directories, and a
+// git worktree is a SIBLING of the main checkout rather than a child — so a
+// worktree missing its own `npm ci` inherits nothing from main and keeps
+// walking, potentially all the way to an orphan ~/node_modules. That is not
+// hypothetical: this script's own negative controls were first run under a
+// stray Playwright 1.57.0 from $HOME instead of the pinned 1.62.1, and nothing
+// anywhere said so. A guard verified with the wrong instrument is not verified.
+const require = createRequire(join(WEB_DIR, 'package.json'));
+let playwrightVersion;
+try {
+  const pkgPath = require.resolve('@playwright/test/package.json');
+  if (!pkgPath.startsWith(WEB_DIR + sep)) {
+    console.error(
+      `FAIL: @playwright/test resolved to ${pkgPath}, which is outside this ` +
+        `project.\nRun \`npm ci\` in ${WEB_DIR} — otherwise discovery is being ` +
+        `reported by a different Playwright than CI runs.`
+    );
+    process.exit(1);
+  }
+  playwrightVersion = require(pkgPath).version;
+} catch (err) {
+  console.error(
+    `FAIL: could not resolve @playwright/test from ${WEB_DIR} (${err.message}).\n` +
+      `Run \`npm ci\` there first.`
+  );
+  process.exit(1);
 }
 
 const onDisk = specFilesOnDisk(E2E_DIR).sort();
@@ -195,7 +225,8 @@ const staleExempt = [...GATE_EXEMPT].filter(
 );
 
 console.log(
-  `spec-discovery: ${onDisk.length} spec files on disk; ` +
+  `spec-discovery: playwright ${playwrightVersion} (project-local); ` +
+    `${onDisk.length} spec files on disk; ` +
     `${gateTotal} tests on ${GATE_PROJECT} (${gateSkipped} statically skipped); ` +
     `${outsideGate.length} exempt`
 );
