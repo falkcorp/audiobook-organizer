@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.28.0 -->
+<!-- version: 10.29.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-08-10 -->
 
@@ -4957,6 +4957,57 @@ far more than chapters.
       **static call sites**, not dynamic invocations; and the phase table is one
       run of 5 iterations, so treat the shares as approximate rather than the
       millisecond values as exact.
+
+      **🔑 CORRECTION 2026-08-10 — the package is not slow. The Mac's temp
+      filesystem is. Lever 3 was ranked last and is actually the whole thing.**
+
+      Same commit (`62b43c4e`), identical command
+      (`go test ./internal/server/ -count=1`), three runs:
+
+      | Run | Go package time | real | user | sys |
+      |---|---|---|---|---|
+      | Mac, normal `TMPDIR` (APFS) | **532.524 s** | 538.72 | 18.36 | 42.32 |
+      | Mac, `TMPDIR` on a RAM disk | **33.704 s** | 36.32 | 6.82 | 7.59 |
+      | U1 (Linux, 48-core) | **35.453 s** | 50.66 | 114.42 | 30.96 |
+
+      **A 15.8× speedup from one environment variable**, landing within 2 s of
+      an independently-measured Linux box. The Mac spent ~61 s of CPU across
+      538 s of wall clock — **11% utilisation**. It was blocked, not computing,
+      and `sys` fell 42.32 s → 7.59 s.
+
+      This does not overturn the phase table above; it explains it. Migrations
+      dominate *because* they write, and the write is what is expensive on
+      APFS. The three levers were ranked by share of a cost that is itself an
+      artifact of where the temp directory lives:
+
+      - Levers 1 and 2 (migration snapshotting, lazy `NewServer`) are an
+        isolation-sensitive refactor across ~260 call sites, and would buy less
+        than moving the temp dir.
+      - **Lever 3 — "tmpfs or an in-memory VFS; worth doing only after the
+        first two" — is the fix, not the afterthought.** It was ranked at 9%
+        because that is Pebble *open* time alone, but a memory-backed temp dir
+        removes the durability cost from every phase that writes, migrations
+        included.
+      - **Sharding the package remains the wrong target.** It redistributes a
+        cost that is not CPU-bound in the first place.
+
+      *Not claimed:* this measures **the temp filesystem**, not `F_FULLFSYNC`
+      specifically — the syscall was never isolated, so macOS full-barrier
+      fsync is the *likely* mechanism, not a verified one. The cross-platform
+      `user`-time comparison is also not trustworthy (rusage attribution for
+      grandchildren differs between macOS and Linux); the argument rests on
+      wall clock and Go's own package timer. Each row is a single sample, but
+      the effect is far larger than any plausible run-to-run variance.
+
+      **The `-timeout 25m` work is NOT invalidated** — it remains correct for
+      CI and for any macOS developer without a RAM disk. What changes is that
+      the timeout is a guard, not a workaround for something unfixable.
+
+      **Open question for the owner (do NOT decide alone):** whether to make
+      this the default — a `TMPDIR`-on-tmpfs Makefile target, or test-only
+      Pebble sync settings. Both alter shared test infrastructure and one
+      weakens durability guarantees in tests, so they are a judgement call, not
+      a drive-by. The measurement is the deliverable here; the policy is yours.
 
 <!-- file: todo.d/2026-08-01-origin-lan-exposure-finding.md -->
 <!-- version: 1.0.0 -->

@@ -1,5 +1,5 @@
 # file: Makefile
-# version: 2.15.4
+# version: 2.15.5
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
 # last-edited: 2026-08-10
 
@@ -160,8 +160,10 @@ web-lint-memory:
 ## test: Run Go backend tests (full — includes slow property tests)
 ## NOTE: -timeout 25m (vs the 10m default). internal/server alone runs ~421s
 ## WITHOUT -race; under -race it exceeds the 600s/package default and the run
-## fails with "panic: test timed out after 10m0s". The package is large (heavy
-## per-test setup: Pebble + migrations + op-registry workers). CI uses the
+## fails with "panic: test timed out after 10m0s". The per-test setup (Pebble +
+## migrations) is write-heavy, and on macOS that write cost dominates: same
+## commit, 532s with a normal TMPDIR vs 33.7s with TMPDIR on a RAM disk (35.5s
+## on Linux) — see TODO-SRVTIMEOUT. The package is not CPU-slow. CI uses the
 ## -short variant which fits the default; this full target needs the headroom.
 test: vet
 	@echo "🧪 Running backend tests (full suite)..."
@@ -292,6 +294,13 @@ smoke-run-demo:
 #
 # -timeout 25m on every `go test ./...` here is not decoration. Go's default
 # is 10m PER PACKAGE, and internal/server alone takes ~500s on an idle Mac.
+#
+# That ~500s is a macOS TEMP-FILESYSTEM cost, not the package being slow —
+# measured 2026-08-10 on the same commit: 532s with a normal TMPDIR, 33.7s with
+# TMPDIR on a RAM disk, and 35.5s on Linux. The Mac used ~61s of CPU across
+# 538s of wall clock, i.e. it was blocked on writes, not computing. So a local
+# `TMPDIR=/Volumes/<ramdisk> make test` is ~16x faster. The timeout below stays
+# regardless: it is the guard for CI and for anyone without a RAM disk.
 # Running packages in parallel (which `./...` does) makes them contend, and
 # a contended run tips past 600s and dies with "panic: test timed out" —
 # naming whichever test happened to be running, which looks like a real
