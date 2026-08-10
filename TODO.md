@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.25.0 -->
+<!-- version: 10.26.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-08-10 -->
 
@@ -4832,6 +4832,52 @@ far more than chapters.
       load. Either shard the package, or set an explicit generous `-timeout` in
       the Makefile test targets so a slow run fails as "too slow" rather than
       masquerading as a lock bug.
+
+      **The `-timeout` half is DONE.** #2270 put `-timeout 25m` on the Makefile's
+      four `./...` targets (with a comment above `coverage:` explaining this exact
+      masquerade); #2278 did the last live invocation that lacked it,
+      `scripts/run-all-tests.sh`. A repo-wide sweep found no other. A bare
+      `go test ./internal/server/` still runs on Go's 10m-per-package default.
+
+      **Measured 2026-08-10 — the premise has drifted and the proposed fix is
+      aimed at the wrong thing.**
+
+      - Runtime is now **543 s** solo (`real 553 s`), not 434–480 s. Headroom
+        against the 600 s default is **9.5%**, not "under 30%" — it has gotten
+        worse, and that is *without* the `./...` contention the entry blames.
+      - **~85% of wall time is idle**: `user 40.7 s + sys 40.0 s ≈ 81 s` CPU
+        against 553 s wall. The package is not compute-bound; it is waiting.
+      - **There is no slow test to fix.** 855 top-level tests summing to 540.5 s
+        — so the time is inside tests, not compile or global fixture. The
+        distribution: **4** tests ≥5 s (slowest `TestServerStartGracefulShutdown`
+        at 14.1 s), **296** at 1–5 s, 89 at 0.1–1 s, 466 under 0.1 s. The top 25
+        tests account for only ~85 s of 543 s.
+      - **The cost is a fixed per-test fixture charge.** `setupTestServer` +
+        `cleanup`, timed directly over 10 iterations, is **1.44 s mean**. There
+        are **261 static call sites** (250 `setupTestServer`, 11
+        `setupTestServerWithStore`), so ≈ **376 s, about 69% of the package**.
+        That matches the 296-test 1–5 s band independently.
+
+      Per call the fixture makes a temp dir, opens a **disk-backed** PebbleStore,
+      runs ALL migrations, constructs `NewServer` (hub, queue, write-back
+      batcher, fileIO pool) and calls `opRegistry.Start`; cleanup then calls
+      `opRegistry.Shutdown` — which blocks on `sync.WaitGroup.Wait`, *the very
+      goroutine the #2083 panic dump named*. So the thing that made the timeout
+      look like a deadlock is also the thing making the package slow.
+
+      **This redirects the fix.** Sharding redistributes a 69% fixture charge
+      across shards without removing it, and each shard still pays 1.44 s per
+      test. The lever is amortising the fixture: share one store/server across a
+      suite where tests do not mutate global state, skip `opRegistry.Start` for
+      the many tests that never enqueue an op, or keep Pebble in a tmpfs/memory
+      configuration. Any of these is a large, isolation-sensitive refactor across
+      ~260 call sites and wants its own plan — not a drive-by.
+
+      *Not claimed:* the 543 s and 1.44 s figures are each a **single sample** on
+      one idle Mac; 261 is **static call sites**, not dynamic invocations; and
+      which part of the 1.44 s dominates (Pebble open, migrations, registry
+      start, or `Shutdown`'s wait) was **not** isolated — that is the first thing
+      to measure before choosing among the three levers above.
 
 <!-- file: todo.d/2026-08-01-origin-lan-exposure-finding.md -->
 <!-- version: 1.0.0 -->
