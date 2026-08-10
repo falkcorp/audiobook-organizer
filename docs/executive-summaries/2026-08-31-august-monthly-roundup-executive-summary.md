@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-08-31-august-monthly-roundup-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: e7a3f109-52d8-4c6b-91f4-08b7c2d64e35 -->
 <!-- last-edited: 2026-08-09 -->
 
@@ -129,6 +129,36 @@ Two decisions were taken during the month: **sorting moves to the server**, and 
 system should not suck" is the bar. A follow-up section analyses what that costs, and
 records an open question that has to be settled first — **the code disagrees with itself
 about how many books the library holds**, and the answer changes the design.
+
+---
+
+## 5. Two search fixes that shipped
+
+Both were on the "this has to stop" list, and both turned out to be a mechanism that
+already existed being bypassed rather than a feature that was missing. Worth noting,
+because "it's not there" and "it's there but skipped" look identical from the outside and
+need completely different fixes.
+
+**Searching no longer throws away your filters.** Filter the library to Organized, search
+for an author, and you got matches from every state — while the Filters button still
+showed a count, so nothing looked wrong. The page was switching to a *different* request
+when you typed, and that request left the filters out. The server had always been able to
+search and filter together; it simply was not being asked to. Search now goes through the
+same request as everything else, which also means a filter added in future cannot be
+wired into one path and forgotten in the other.
+
+**The search box no longer asks the server a question per letter.** Typing a
+ten-character title fired ten full searches of the library. A delay was already in place
+and working — but the code that runs the search ignored it the instant the text was
+parsed, which is immediately. So the brake existed and was never connected. Both values
+now move on the same timer.
+
+These compound: before this, typing ten letters sent ten searches that each ignored your
+filters. That matters for the planned work to move filtering onto the server — no
+server-side improvement counts for much while the browser behaves like that, and any
+before/after measurement taken earlier was measuring the wrong thing.
+
+Two tests that had been marked "expected to fail" are now ordinary passing tests.
 
 ---
 
