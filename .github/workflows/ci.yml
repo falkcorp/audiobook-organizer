@@ -1,7 +1,7 @@
 # file: .github/workflows/ci.yml
-# version: 3.1.0
+# version: 3.2.0
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
-# last-edited: 2026-07-18
+# last-edited: 2026-08-10
 
 # Fast parallel CI for PRs and pushes.
 # Runs go vet/build, short tests, frontend lint/build, and frontend unit tests
@@ -101,6 +101,27 @@ jobs:
             exit 1
           fi
           echo "✅ Database mocks are fresh"
+
+  # Project-specific: TODO.md must not contain leaked todo.d fragment headers.
+  #
+  # Fragment bodies are folded into TODO.md verbatim, so a fragment carrying the
+  # org-mandated file/version/guid header puts four lines of comment noise into
+  # the assembled task list. todo.d/README.md has always said not to add one,
+  # but a rule that lives only in prose loses to the global CLAUDE.md rule that
+  # says every Markdown file needs a header — 74 blocks leaked in before anyone
+  # looked. assemble_todo.py now strips them on collect; this job is the second
+  # layer, catching a leak that arrives some other way (a hand edit, a different
+  # assembler, a revert). Seconds to run, and it needs no toolchain.
+  todo-header-lint:
+    name: TODO Fragment Headers
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Lint TODO.md for leaked fragment headers
+        run: python3 scripts/assemble_todo.py --lint
 
   # Project-specific: coverage floor gate on every PR (T12 follow-up).
   # Previously this gate (`make ci`'s coverage-check-short, floor read from

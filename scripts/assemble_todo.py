@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/assemble_todo.py
-# version: 1.2.0
+# version: 1.3.0
 # guid: af7ef324-6c69-411e-b1a9-98c9ba2b31e3
-# last-edited: 2026-07-19
+# last-edited: 2026-08-10
 
 """Assemble TODO.md from per-task fragment files in todo.d/.
 
@@ -58,6 +58,23 @@ LAST_EDITED_HEADER = re.compile(
     re.M,
 )
 
+# The four header kinds mandated by the org-wide file-header rule. Fragments are
+# exempt from that rule (todo.d/README.md), but the exemption used to live only
+# in prose — and prose does not survive contact with a contributor, human or
+# agent, who is following the *global* rule that says every Markdown file needs
+# one. 74 headers leaked into TODO.md that way before anything noticed.
+#
+# So the assembler now strips them instead of trusting the fragment. Anchored to
+# the very top of the file (\A) and only consuming consecutive header lines: a
+# header-shaped comment further down is part of the task text and is left alone.
+HEADER_LINE = r"[ \t]*<!--[ \t]*(?:file|version|guid|last-edited)[ \t]*:[^\n>]*-->[ \t]*"
+FRAGMENT_HEADER_BLOCK = re.compile(rf"\A(?:{HEADER_LINE}\n)+")
+
+# Same four kinds, used to LINT an assembled output file. A leak is any
+# header-shaped line that is not part of the output file's own header block.
+OUTPUT_HEADER_LINE = re.compile(rf"^{HEADER_LINE}$")
+FENCE = re.compile(r"^\s{0,3}(`{3,}|~{3,})")
+
 
 class AssemblyError(RuntimeError):
     """A condition that should fail the run loudly rather than silently pass."""
@@ -87,9 +104,51 @@ def find_fragments(fragment_dir: Path) -> list[Path]:
     return sorted(p for p in candidates if p.name != "README.md")
 
 
+def strip_fragment_header(text: str) -> str:
+    """Drop a leading ``file``/``version``/``guid``/``last-edited`` header block.
+
+    Fragment bodies are folded into the output file verbatim, so a header on a
+    fragment becomes four lines of comment noise in the middle of the assembled
+    task list. ``todo.d/README.md`` tells authors not to add one; this makes
+    that advice unnecessary rather than merely documented.
+    """
+    return FRAGMENT_HEADER_BLOCK.sub("", text, count=1)
+
+
+def lint_output(path: Path) -> list[tuple[int, str]]:
+    """Return ``(line_number, text)`` for every leaked header line in a file.
+
+    The output file legitimately carries its own header block at the very top,
+    so scanning starts after the first blank line. Fenced code blocks are
+    skipped: a task that *documents* the header format is quoting one, not
+    leaking one, and a linter that cannot tell the difference would eventually
+    block a PR for being correct.
+    """
+    lines = path.read_text(encoding="utf-8").split("\n")
+    try:
+        start = lines.index("") + 1
+    except ValueError:
+        start = 0
+
+    leaks: list[tuple[int, str]] = []
+    fence: str | None = None
+    for offset, line in enumerate(lines[start:], start=start + 1):
+        match = FENCE.match(line)
+        if match:
+            token = match.group(1)[0]
+            if fence is None:
+                fence = token
+            elif fence == token:
+                fence = None
+            continue
+        if fence is None and OUTPUT_HEADER_LINE.match(line):
+            leaks.append((offset, line.strip()))
+    return leaks
+
+
 def fragment_body(path: Path) -> str:
     """Return a fragment's contributed Markdown, or '' if it is a no-op."""
-    text = path.read_text(encoding="utf-8")
+    text = strip_fragment_header(path.read_text(encoding="utf-8"))
     if not HTML_COMMENT.sub("", text).strip():
         return ""
     return text.strip("\n")
@@ -183,6 +242,11 @@ def main() -> int:
         action="store_true",
         help="exit 1 if any fragment is pending collection; change nothing",
     )
+    parser.add_argument(
+        "--lint",
+        action="store_true",
+        help="exit 1 if the output file contains leaked fragment headers",
+    )
     args = parser.parse_args()
 
     config = load_config()
@@ -193,6 +257,21 @@ def main() -> int:
     fragment_dir = Path(config.get("fragment_directory", "todo.d"))
     output_file = Path(config.get("output_file", "TODO.md"))
     marker = config.get("insert_marker", "todo-insert-here")
+
+    if args.lint:
+        if not output_file.is_file():
+            raise AssemblyError(f"{output_file} does not exist.")
+        leaks = lint_output(output_file)
+        for line_number, text in leaks:
+            print(f"{output_file}:{line_number}: leaked fragment header: {text}")
+        if leaks:
+            print(
+                f"\n{len(leaks)} leaked fragment header line(s) in {output_file}.\n"
+                "Fragment bodies are folded in verbatim, so a fragment must not carry a\n"
+                "file/version/guid/last-edited header — see todo.d/README.md. Delete the\n"
+                "offending lines; scripts/assemble_todo.py strips them on future collects.",
+            )
+        return 1 if leaks else 0
 
     fragments = find_fragments(fragment_dir)
     if args.check:

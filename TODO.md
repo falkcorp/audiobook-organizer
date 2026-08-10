@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.29.0 -->
+<!-- version: 10.30.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-08-10 -->
 
@@ -13,11 +13,6 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
-
-<!-- file: todo.d/20260809-abs-series-collections-playlists.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 8f61b3d2-0a47-4e95-9c38-52e7b04af1d6 -->
-<!-- last-edited: 2026-08-09 -->
 
 - [ ] **AudiobookShelf-compatible API: series are broken, and collections/playlists are
       empty stubs.** Owner report 2026-08-09: *"series are broken on the audioshelf server
@@ -110,11 +105,6 @@ into one of the curated sections below, is a normal direct edit.
       books; a hand-made collection appears and lists its members; a playlist likewise.
       Verified in the client, not by curling the endpoint.
 
-<!-- file: todo.d/20260809-authors-page-aliases-crash.md -->
-<!-- version: 2.0.0 -->
-<!-- guid: 1a4c8e35-7d62-4b09-a3f7-25e0b9d4176c -->
-<!-- last-edited: 2026-08-09 -->
-
 - [x] **CORRECTED and FIXED — this was reported as an active crash and it was not.**
 
       ## What the original entry claimed
@@ -172,11 +162,6 @@ into one of the curated sections below, is a normal direct edit.
       **The lesson worth keeping:** "unguarded field access" is a real code smell, but
       "therefore it crashes" is a claim about the *server*, and needs the server checked.
       Severity asserted from one side of an API boundary is a guess.
-
-<!-- file: todo.d/20260809-book-detail-purge-suite-only-flake.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 5e8b1c04-7a92-4d36-9f1b-2c0a8e64d7f3 -->
-<!-- last-edited: 2026-08-09 -->
 
 - [ ] **`book-detail.spec.ts` "soft delete, restore, and purge flow" fails only in the full
       parallel suite, never in isolation.** Surfaced 2026-08-09 as the last remaining
@@ -250,11 +235,6 @@ into one of the curated sections below, is a normal direct edit.
       **Do not** add a retry, a URL tolerance, or a `test.fixme` to this test on the
       strength of "it passes alone."
 
-<!-- file: todo.d/20260809-changelog-row-compare-affordance.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 4b1f7c2e-9a83-4d16-b0e5-7c2a41d8f903 -->
-<!-- last-edited: 2026-08-09 -->
-
 - [ ] **Change Log rows lost their visible "Compare snapshot" affordance and are
       mouse-only.** `web/src/components/ChangeLog.tsx:135-154` renders each entry as a
       plain `<Box onClick={...}>` that fires `onCompareSnapshot` for `tag_write` /
@@ -274,11 +254,6 @@ into one of the curated sections below, is a normal direct edit.
       at line 249 is always open. Either drop the state and the `Collapse`, or wire up the
       toggle that was evidently intended (the e2e suite still had a `tag-comparison-toggle`
       testid assertion for it until 2026-08-09).
-
-<!-- file: todo.d/20260809-dead-bulk-fetch-dialog.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 2c9a6f31-7d04-48e5-a1b2-6f80e39c4a75 -->
-<!-- last-edited: 2026-08-09 -->
 
 - [ ] **Delete the unreachable "Bulk Fetch Metadata" dialog and its handler.**
       `web/src/components/library/LibraryDialogs.tsx:920` renders
@@ -305,11 +280,6 @@ into one of the curated sections below, is a normal direct edit.
       applies to every other `startsWith` catch-all in that dispatcher — a specific
       branch placed after one is dead and fails silently rather than loudly. Worth one
       pass to confirm no others are shadowed.
-
-<!-- file: todo.d/20260809-edit-dialog-blank-year-isbn.md -->
-<!-- version: 2.0.0 -->
-<!-- guid: c8d31e47-5f92-4b60-a3d7-2094f6ba1c85 -->
-<!-- last-edited: 2026-08-09 -->
 
 - [x] **FIXED (#2267).** **Edit Metadata shows Year and ISBN-13 as empty boxes whatever is stored — and the
       obvious fix corrupts `print_year`.** `mapBookToAudiobook`
@@ -374,11 +344,6 @@ into one of the curated sections below, is a normal direct edit.
       >
       > `test.fixme('year and ISBN-13 populate in the edit dialog')` is now passing:
       > metadata-provenance 13 passed / 0 failed / 0 skipped, exit 0.
-
-<!-- file: todo.d/20260809-library-double-fetch-swallows-clicks.md -->
-<!-- version: 2.0.0 -->
-<!-- guid: b6e4207f-9c31-4d85-a072-3fe185c9a4b8 -->
-<!-- last-edited: 2026-08-09 -->
 
 - [x] **The Library fetched page 1 twice on every mount — FIXED.** Found 2026-08-09 while
       chasing three flaky `library-browser.spec.ts` pagination tests on webkit. On a large
@@ -452,11 +417,6 @@ into one of the curated sections below, is a normal direct edit.
       defect, do the Playwright-click-vs-DOM-click A/B — it is two minutes and it separates
       "the app is broken" from "the driver cannot press this particular button."
 
-<!-- file: todo.d/20260809-library-sort-control-missing.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 91c4e7b3-2d68-4a15-8f09-5e63b7a2d40c -->
-<!-- last-edited: 2026-08-09 -->
-
 - [ ] **You cannot sort the library from the UI.** The "Sort by" and "Order"
       comboboxes are gone. `SearchBarProps`
       (`web/src/components/audiobooks/SearchBar.tsx:124-131`) has no `onSortChange`
@@ -472,11 +432,6 @@ into one of the curated sections below, is a normal direct edit.
       the sort *behaviour* stays covered while the control is missing.
       **Was this intentional?** If so the dead state and the vacuous unit test should
       be cleaned up; if not, the control needs restoring.
-
-<!-- file: todo.d/20260809-mui-select-menu-does-not-close-on-linux.md -->
-<!-- version: 2.0.0 -->
-<!-- guid: c47a0e63-91d8-4f52-bb06-3d5e28a71c9f -->
-<!-- last-edited: 2026-08-09 -->
 
 - [x] **RESOLVED — it was worker contention, not a defect.** This fragment previously
       claimed "a MUI Select's menu does not close on the ubuntu runner — suspected REAL
@@ -530,11 +485,6 @@ into one of the curated sections below, is a normal direct edit.
       starts the prebuilt binary, runs Playwright against it with `CI` unset so
       `reuseExistingServer` attaches instead of trying to `go build`.
 
-<!-- file: todo.d/20260809-per-field-use-fetched-affordance.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 8e3d1a47-52bc-4f09-91d6-3ab7c05e2f18 -->
-<!-- last-edited: 2026-08-09 -->
-
 - [ ] **Per-field "Use File" / "Use Fetched" one-click apply is gone from Book Detail
       — confirm that was intended.** `web/src/pages/BookDetail.tsx:1014-1015` now renders
       exactly two tabs (Info, Files & History). The old Tags/Compare tab listed every
@@ -560,11 +510,6 @@ into one of the curated sections below, is a normal direct edit.
       (`npx playwright install webkit`). Either commit linux goldens generated in CI, or
       scope this test to a single platform so it stops being a permanent red on the
       nightly e2e workflow.
-
-<!-- file: todo.d/20260809-search-drops-filters-and-debounce.md -->
-<!-- version: 2.0.0 -->
-<!-- guid: a17c53e9-4820-4d6b-b95f-e3086c2741da -->
-<!-- last-edited: 2026-08-09 -->
 
 - [x] **FIXED — both halves.** Typing in the library search box silently dropped every
       active filter and the sort order, and queried on every keystroke.
@@ -653,11 +598,6 @@ into one of the curated sections below, is a normal direct edit.
       work — no amount of server-side improvement helps if the client sends ten queries
       for one search. Related: the richer-backend-filtering TODO item.
 
-<!-- file: todo.d/20260809-sorting-must-be-server-side-go.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 3a95c7e1-6b20-4d84-a7f9-1e60b52cf483 -->
-<!-- last-edited: 2026-08-09 -->
-
 - [ ] **Replace library sorting with server-side Go sorting.** Owner decision 2026-08-09:
       *"I want the system to not suck and I want sorting replaced, and done by go."*
       Recorded in full with the code evidence in §0a of
@@ -704,11 +644,6 @@ into one of the curated sections below, is a normal direct edit.
       page); the sort survives a search; `sort_by` appears on the request; no `.sort()`
       remains over a paginated library slice.
 
-<!-- file: todo.d/20260809-stale-api-token-and-search-index-verification.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 9d3f6a15-4c87-4b20-8e51-7a0b93c26e4d -->
-<!-- last-edited: 2026-08-09 -->
-
 - [ ] **The checked-in `.api-token` no longer authenticates, and it blocked a real
       verification.** Found 2026-08-09 while grounding
       `docs/design/2026-08-09-search-backend-options.md`.
@@ -742,11 +677,6 @@ into one of the curated sections below, is a normal direct edit.
          the same failure shape as the six e2e specs that sat disabled for four months.
 
       See §6 Q1 of `docs/design/2026-08-09-search-backend-options.md`.
-
-<!-- file: todo.d/20260809-three-linux-only-e2e-failures-block-ci-gate.md -->
-<!-- version: 2.0.0 -->
-<!-- guid: 6b2e9047-3d51-4a8c-b7f0-8e14c5920fda -->
-<!-- last-edited: 2026-08-09 -->
 
 - [x] **RESOLVED — all three fixed; the PR gate now blocks.** Superseded by
       `todo.d/20260809-webkit-scan-import-drawer-backdrop.md`, which tracks the single
@@ -822,11 +752,6 @@ into one of the curated sections below, is a normal direct edit.
       **Acceptance:** a dispatched run against `main` reports 280 passed / 0 failed for
       chromium, and a PR touching `web/**` or `**.go` gets a blocking E2E check.
 
-<!-- file: todo.d/20260809-version-group-navigation-and-summary.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 6d5b81af-30c7-4e92-8fa4-19bc7d206e53 -->
-<!-- last-edited: 2026-08-09 -->
-
 - [ ] **You can no longer navigate between versions of a book.** Book Detail used to
       have a "Versions" tab listing the group's other versions, each clickable to jump
       to it. `web/src/pages/BookDetail.tsx:1014-1015` now renders only Info and
@@ -856,11 +781,6 @@ Context: `version-management.spec.ts` was repointed at the surviving entry point
 deleted rather than rewritten, since the capabilities themselves are gone. Related:
 `todo.d/20260809-changelog-row-compare-affordance.md`,
 `todo.d/20260809-per-field-use-fetched-affordance.md`.
-
-<!-- file: todo.d/20260809-webkit-scan-import-drawer-backdrop.md -->
-<!-- version: 3.0.0 -->
-<!-- guid: 4d20e8b7-1c63-49fa-85e0-7b3f9a06c214 -->
-<!-- last-edited: 2026-08-09 -->
 
 - [x] **RESOLVED — webkit was marginal on TIMING, and its own 60s budget fixed the
       class.** The nightly now blocks too; `continue-on-error` is a plain `false`.
@@ -1179,11 +1099,6 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
       eslint after the change: **24 warnings, 0 errors** (was 25/0 — exactly
       this warning removed, none added). `tsc --noEmit` exit 0.
 
-<!-- file: todo.d/20260810-search-index-queue-drops-silently.md -->
-<!-- version: 2.0.0 -->
-<!-- guid: 9e51d7a3-2c48-4b16-8f70-a3d19c6528b4 -->
-<!-- last-edited: 2026-08-09 -->
-
 - [x] **🔴 The search index silently drops updates when its queue fills — 56,537 dropped
       in seven days.** Measured on prod 2026-08-10 from `journalctl`. This was a
       **blocking prerequisite** for pushing filters/sort into Bleve (design doc option
@@ -1296,11 +1211,6 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
       Open item 4 of the design doc asked whether the index is complete. **It is not**, and
       now there is a mechanism and a number rather than a suspicion. The `.api-token` is
       still stale, but this answer did not need it.
-
-<!-- file: todo.d/20260810-sort-index-memory-cost-decision.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 3f81a5d2-6e04-4b97-8c13-d29e0b7f461a -->
-<!-- last-edited: 2026-08-09 -->
 
 - [ ] **⚖️ DECIDE which sort indexes to enable — the design-doc cost estimate was ~10×
       optimistic.** The machinery is built, tested and merged behind
@@ -2001,11 +1911,6 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
       route-patterns that never matched, and a button that relabels itself to
       "Converting..." mid-assertion.
 
-<!-- file: todo.d/20260807_194500_deluge_must_not_write_into_import_dir.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: c9e4b7d2-51a8-4f36-b0e7-2d84a1f6c093 -->
-<!-- last-edited: 2026-08-07 -->
-
 - [ ] **Stop Deluge writing in-progress downloads directly into the new-books
       import directory.** A torrent that is still downloading is visible to the
       scanner as a book, so a partial file gets imported as if it were complete:
@@ -2036,11 +1941,6 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
       before assuming this is only a forward fix. Silently-truncated books would
       also explain some fraction of the `[SILENCE]` sentinels and short/failed
       intro transcriptions.
-
-<!-- file: todo.d/20260807_203000_all_ops_must_support_dry_run.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: a7f28c15-9364-4e0b-b8d2-46c1e0937fa5 -->
-<!-- last-edited: 2026-08-07 -->
 
 - [ ] **Require every operation to support `dry_run`, and enforce it at the
       registry rather than by convention.** Any op that mutates state must be
@@ -2087,11 +1987,6 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
       (`OperationDef.Writes []Resource`). Both are the same idea — an op should
       DECLARE what it does, and the system should enforce it, instead of every
       author re-deciding by hand.
-
-<!-- file: todo.d/20260807_204800_u1_daytime_pool_benchmark.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 5b3a9e17-2c64-4f80-b1d9-7e05c8a3f264 -->
-<!-- last-edited: 2026-08-07 -->
 
 - [x] **Re-run the CPU-node Whisper benchmark in POOL configuration, during the
       day.** ✅ **DONE 2026-08-08.** Full sweep run on U1 (`ssh u1`); raw log
@@ -2706,11 +2601,6 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
       release being cut or CI complaining; and the releases page does not
       accumulate superseded RC entries.
 
-<!-- file: todo.d/20260806_093000_bracketed_series_are_shattered_books.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 9d3f621c-47ea-4b05-8c93-2f1a7de04b58 -->
-<!-- last-edited: 2026-08-06 -->
-
 - [ ] **~180 "bracketed series" are actually one shattered book each** — found by
   the `maintenance.series-denumber` dry run, 2026-08-06.
 
@@ -2742,11 +2632,6 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
   `/var/lib/audiobook-organizer/series-denumber-2026-08-06.tsv`
   (`shape=bracketed`, group by `into_name`, anything with >3 rows is suspect).
 
-<!-- file: todo.d/20260806_093100_series_denumber_low_tier_consumer.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: c1e84b76-3d29-4f05-a917-6b2508fd3e14 -->
-<!-- last-edited: 2026-08-06 -->
-
 - [ ] **Give the 466 low-confidence series positions somewhere to go** — deferred
   deliberately on 2026-08-06 (owner decision), revisit after owner items 1 and 2.
 
@@ -2772,11 +2657,6 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
   a folder/author with different leading numbers — spec D4, unbuilt), or a human.
 
   Design: [`docs/specs/2026-08-06-series-embedded-positions-design.md`].
-
-<!-- file: todo.d/20260806_150000_react_router_v8_residual_advisory.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 4d81e9c3-7a26-4f50-b83d-19e6c07af241 -->
-<!-- last-edited: 2026-08-06 -->
 
 - [ ] **react-router GHSA-qwww-vcr4-c8h2 — accepted, not reachable, do not
   re-litigate.** The v6 → v7.18.2 upgrade (2026-08-06) closed three advisories
@@ -2804,11 +2684,6 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
   Revisit when the app moves to React 19 for its own reasons. Do not take the
   React major *for* this advisory.
 
-<!-- file: todo.d/20260806_150100_frontend_open_redirect_invariants.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 9e34a7b1-05df-4c82-a6e9-3b7150d2f8ce -->
-<!-- last-edited: 2026-08-06 -->
-
 - [ ] **Two frontend navigation sinks are unvalidated and safe only by
   accident.** Found 2026-08-06 while auditing the react-router open-redirect
   advisories. Neither is exploitable today. Both rest on an invariant that a
@@ -2835,11 +2710,6 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
   gap — the guard correctly rejecting a custom-scheme return — not a
   vulnerability. Loosening it would convert a working defence into one of these.
 
-<!-- file: todo.d/20260806_150200_e2e_suite_broken_on_main.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 2c7f480a-6b13-49de-95a1-8e4d3b6f0721 -->
-<!-- last-edited: 2026-08-06 -->
-
 - [ ] **The Playwright e2e suite is broken on `main` and gates nothing.** Every
   test dies at fixture collection with `unknown parameter "_page"` — 49 errors.
   Confirmed pre-existing on 2026-08-06: the identical failure reproduces on the
@@ -2854,11 +2724,6 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
   Fix the fixture signature, then re-run against the v7 tree to retroactively
   confirm the upgrade — and treat `make test-e2e` as a required gate for any
   future routing or auth-flow change.
-
-<!-- file: todo.d/20260806_150300_memdb_write_path_followups.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 7b09fd52-3e84-4c17-a1b6-5f2d80e94c63 -->
-<!-- last-edited: 2026-08-06 -->
 
 - [ ] **`UpsertBookToMemDB` holds go-memdb's global writer mutex across Pebble
   I/O.** Found 2026-08-06 while profiling `dedupe-book-file-rows` (fixed in
@@ -2884,11 +2749,6 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
   Latent, and it pairs badly with the known "corrected aggregates are invisible
   until memdb refreshes" problem: a divergence here looks exactly like that
   staleness, so the two will be confused during diagnosis.
-
-<!-- file: todo.d/20260806_150400_multidisc_holds_are_duplicates.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 5a1e83c7-42b9-4dc6-8e07-6c39f2a1b5d8 -->
-<!-- last-edited: 2026-08-06 -->
 
 - [ ] **The 3 dangerous multidisc holds are DUPLICATES, not series — feed them to
   the duplicate-detection track.** Measured 2026-08-06 from a full pre-apply
@@ -2917,11 +2777,6 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
 
   These 3 are a clean, small, real test set for
   [[never-delete-re-associate]] — use them rather than inventing fixtures.
-
-<!-- file: todo.d/20260806_153000_frontend_framework_versions.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 8c14e620-9b7d-4a35-b0f2-73de5a91c4e7 -->
-<!-- last-edited: 2026-08-06 -->
 
 - [ ] **Frontend framework versions — how far behind we actually are, and the
   order to fix it in.** Surveyed 2026-08-06 at owner request ("are we on
@@ -2965,11 +2820,6 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
   gates nothing, which is why the react-router v6 → v7 upgrade merged with zero
   runtime navigation coverage. A React major without e2e is exactly the change
   that suite exists to catch.
-
-<!-- file: todo.d/20260806_220000_per_file_intro_identity_signal.md -->
-<!-- version: 1.1.0 -->
-<!-- guid: 3a7c2e94-5b18-4d60-9f27-c8140b6e3d52 -->
-<!-- last-edited: 2026-08-07 -->
 
 - [ ] **Per-file intro transcription as the primary book-identity signal** — owner
   design 2026-08-06. Storage and the first-file sort fix are **DONE** (PRs #2168);
@@ -3054,11 +2904,6 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
   to do" (silently dropped writes for the process lifetime), and an empty
   `intro_transcription` read as "needs transcribing" when it meant "has no file".
 
-<!-- file: todo.d/20260806_220100_whisper_second_worker_u1.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 6f31d4b8-92ae-4c07-b5f1-08e3a7d26c94 -->
-<!-- last-edited: 2026-08-06 -->
-
 - [ ] **Stand up a second Whisper worker on the spare CPU node.** Owner request
   2026-08-06. Host prepared, worker not built. (Host address and credentials are
   fleet-internal — see the private infra notes, not this repo.)
@@ -3092,11 +2937,6 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
   [[per-file-intro-identity-signal]] has no deadline, which makes it the natural
   consumer for a slower worker — "slower than GPU" costs nothing there, while the
   decision-critical tiers keep the GPU.
-
-<!-- file: todo.d/20260807_012000_transcribe_status_content_drift.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: b471e5c9-2f68-4a03-95d1-0e37c8b2a6d4 -->
-<!-- last-edited: 2026-08-07 -->
 
 - [ ] **Investigate: 79% of books with a stored transcript are marked
   `whisper_error`.** Found incidentally while sampling a corpus for the
@@ -3140,11 +2980,6 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
   fix completely, so measure before concluding.
 
   Related: [[per-file-intro-identity-signal]].
-
-<!-- file: todo.d/20260807_020500_memdb_warmup_caller_pointer_race.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: d3f81a56-9c47-4e20-b7d8-52069fe1c4a3 -->
-<!-- last-edited: 2026-08-07 -->
 
 - [x] 🔴 **Data race: `UpsertBookToMemDB` retains the CALLER's `*Book` and
   dereferences it later on the warmup goroutine.** Caught by the race detector
@@ -3221,11 +3056,6 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
   struct immediately after `CreateBook` while warmup is still pending) rather
   than hoping to catch it.
 
-<!-- file: todo.d/20260805_213000_version_group_acoustic_audit.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 9f26a740-5c83-4b1e-a207-e5348d19cb6f -->
-<!-- last-edited: 2026-08-05 -->
-
 - [ ] **Version-group acoustic audit op** — verify that books marked as VERSIONS
   of each other are acoustically close enough to actually be the same work, and
   auto-fix ones that are not. Requested by owner 2026-08-05; not scheduled.
@@ -3258,11 +3088,6 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
   books), feeding a tier-3 ungroup fixer. See
   `.worktrees/link-integrity/PLAN.md`.
 
-<!-- file: todo.d/20260805_214000_chapters_served_to_clients.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 1b7d02c4-9e35-4a68-83f1-6d0947ac2e15 -->
-<!-- last-edited: 2026-08-05 -->
-
 - [ ] **Verify the server actually returns chapters to clients** — confirm the
   ABS-compatible surface serves chapter data wherever a client expects it, and
   that it is populated rather than an empty array. Owner request 2026-08-05.
@@ -3287,11 +3112,6 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
 
   Feeds [[chapters-backfill-from-duplicates]]: knowing which books lack chapters
   is the input to deciding which ones to repair.
-
-<!-- file: todo.d/20260805_214100_chapters_backfill_from_duplicates.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 5c9e13ab-70d2-4f86-b451-2a86e0f37d94 -->
-<!-- last-edited: 2026-08-05 -->
 
 - [ ] **Backfill chapters into files that lack them, using a duplicate as the
   source of timings** — owner request 2026-08-05. Turn a chapterless M4B into a
@@ -3328,11 +3148,6 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
 
   Depends on [[chapters-served-to-clients]] to know which books lack chapters.
 
-<!-- file: todo.d/20260805_214200_playlists_full_support.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 8f31a05d-4c72-4e19-9b06-3d5827ea16bc -->
-<!-- last-edited: 2026-08-05 -->
-
 - [ ] **Playlists — implement the whole surface** — owner request 2026-08-05:
   "basically implement everything to do with playlists, dynamic playlists,
   static, etc."
@@ -3362,11 +3177,6 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
   relink or import will look lossy for reasons that have nothing to do with
   playlists.
 
-<!-- file: todo.d/20260805_214300_reading_review_status_sync.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 3a68d1f9-2b54-4c07-86e3-91f4c05db27a -->
-<!-- last-edited: 2026-08-05 -->
-
 - [ ] **Reading status and review/rating must sync from the app back to the
   server** — owner request 2026-08-05: set it in the app, it persists server-side.
   Mirror how Audiobookshelf does it rather than inventing a shape.
@@ -3395,11 +3205,6 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
   ⚠️ Round-trip matters more than write-once here. A finished flag that persists
   but never comes back on the next sync reads to the user as data loss, and it is
   the kind of bug that only shows up after reinstalling the app.
-
-<!-- file: todo.d/20260805_214400_deluge_metadata_source.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 6d2f84b0-31ac-4e75-92f8-08b7139ce5a3 -->
-<!-- last-edited: 2026-08-05 -->
 
 - [ ] **Use Deluge as a metadata and identity source** — owner idea 2026-08-05:
   "connect to deluge, see all the audiobooks it has, the titles it has, any other
@@ -3431,11 +3236,6 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
 
   Pairs with [[deluge-file-parts-grouping-check]], which uses the same connection
   for a different purpose.
-
-<!-- file: todo.d/20260805_214500_deluge_file_parts_grouping_check.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 0e5b3792-a641-4d38-bc09-27f4e816a0df -->
-<!-- last-edited: 2026-08-05 -->
 
 - [ ] **Use Deluge's per-torrent file list as ground truth for GROUPING** — owner
   idea 2026-08-05: "Deluge shows you all the file parts, we could easily pull
@@ -3472,11 +3272,6 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
     only on path.
 
   Blocked on the same read-only Deluge RPC client as [[deluge-metadata-source]].
-
-<!-- file: todo.d/20260805_220000_review_queue_recommendations_and_overrides.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 4e91b7c2-06d8-4a35-9f17-b3820e5cd641 -->
-<!-- last-edited: 2026-08-05 -->
 
 - [x] **Give review holds a real recommendation, and let the human override it**
   — owner items 1 and 2 (2026-08-05, shipped 2026-08-06 in PR #2163). Two halves
@@ -3541,11 +3336,6 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
   are computed on blank evidence — the same failure that let 41 of 43 "confident"
   candidates propose merging distinct novels.
 
-<!-- file: todo.d/20260805_220100_multidisc_apply_canary.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 7c3d580a-92e4-4b16-8f05-1d47a209e3bf -->
-<!-- last-edited: 2026-08-05 -->
-
 - [ ] **Canary the multidisc applies behind a before/after snapshot** — owner
   item 3 (2026-08-05). 138 pending `regroup.multidisc` holds; running them
   requires flipping `review_apply_enabled`, which is OFF in prod.
@@ -3575,11 +3365,6 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
   Depends on [[review-queue-recommendations-and-overrides]] (per-item action
   selection) so approval targets one hold at a time.
 
-<!-- file: todo.d/20260805_220200_series_names_that_are_book_numbers.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 2f57e91b-8c04-4d73-a6e8-95b013fc287d -->
-<!-- last-edited: 2026-08-05 -->
-
 - [x] **Series names that are really book numbers** — owner item 4
   (2026-08-05, shipped + applied to production 2026-08-06, PR #2156).
 
@@ -3603,11 +3388,6 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
 
   Rollback artefacts on the server:
   `/var/lib/audiobook-organizer/series-denumber-{,APPLY-,VERIFY-}2026-08-06.tsv`.
-
-<!-- file: todo.d/20260805_220300_first_aid_library_validate_repair.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: a8140e6f-5b27-4c93-81da-7f2e0693b5ca -->
-<!-- last-edited: 2026-08-05 -->
 
 - [ ] **"First Aid" — one sequenced library validate + repair system** — owner
   design 2026-08-05: *"one big system that basically had a investigation →
@@ -3673,11 +3453,6 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
   ULID). Debris is not always a clean copy — The Successors debris was 11 rows /
   17 files covering 12 of 13 tracks with 5 internally-redundant files.
 
-<!-- file: todo.d/20260805_220400_metadata_results_cold_start.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: d3690b58-1e7a-4f24-a905-62c8f7bd031e -->
-<!-- last-edited: 2026-08-05 -->
-
 - [x] **Warm the metadata-results build at boot** — owner item 6 (2026-08-05,
   shipped 2026-08-06).
 
@@ -3697,11 +3472,6 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
   **different** fix for the same symptom. SWR keeps a warm cache from going cold
   under load; it does not help the first request after a restart. Both were
   needed, and only the warmer closes this item.
-
-<!-- file: todo.d/20260805_220500_relink_unlinked_books.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: b52c7e04-a319-4d86-90f7-8e14036b2a97 -->
-<!-- last-edited: 2026-08-05 -->
 
 - [x] **Relink unlinked books — detector + repair op** — owner item 5
   (2026-08-05). Op `maintenance.relink-unlinked-books` shipped in PR #2147.
@@ -3755,11 +3525,6 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
   ambiguous / 138 multidisc / 1 anthology / 1 version-group. This measurement
   tells us how much of owner item 1 was a DATA problem rather than a classifier
   problem, and should be taken before investing in recommendation tuning.
-
-<!-- file: todo.d/20260806_001500_version_group_index_underreports.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: f1a7d520-9c34-4e86-b0d2-73e5814cb96f -->
-<!-- last-edited: 2026-08-06 -->
 
 - [ ] 🐛 **`GetBooksByVersionGroup` silently under-reports group membership, which
   breaks the one-primary-per-group invariant.** Found in production 2026-08-06
@@ -3887,11 +3652,6 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
   Related: [[version-group-acoustic-audit]] (which will read group membership and
   would inherit this under-reporting), [[first-aid-library-validate-repair]].
 
-<!-- file: todo.d/2026-08-04-dedupe-op-45s-per-book.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 8333f42a-bd0d-4a2f-8221-403d11576e7c -->
-<!-- last-edited: 2026-08-04 -->
-
 - [x] **PERF: `maintenance.dedupe-book-file-rows` spends ~45 seconds per book, and
       that is enough to blow its own 2-hour timeout.**
       RESOLVED 2026-08-06 in PR #2161 — but almost every premise below was wrong,
@@ -3953,11 +3713,6 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
         ID — books are disjoint, so parallel workers cannot touch the same row.
 
       Fixing the per-book cost is the real answer; raising the timeout only hides it.
-
-<!-- file: todo.d/2026-08-04-recompute-aggregates-stale-memdb.md -->
-<!-- version: 1.1.0 -->
-<!-- guid: 4a29d7e1-83b6-4c50-9f27-1e08b5c3a64d -->
-<!-- last-edited: 2026-08-04 -->
 
 - [ ] **Corrected book aggregates are invisible until memdb refreshes.**
       Observed on the first `maintenance.dedupe-book-file-rows` canary
@@ -4046,11 +3801,6 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
       13 seconds looks like. The op behaved correctly; the error was reading a
       rounded display value as evidence of loss without checking the file.
 
-<!-- file: todo.d/2026-08-03-flaky-apply-pid-repair-same-file.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 6f10b7e4-9c25-4d83-a0f6-14b7e29d3c05 -->
-<!-- last-edited: 2026-08-03 -->
-
 - [x] **Flaky: `TestApplyPIDRepairSameFile`** (`internal/itunes`) failed
       `Minimal CI / Go Tests (short, race)` on PR #2126 — a PR that touches only
       `internal/server/server_maintenance_deps.go` and cannot affect the iTunes
@@ -4098,11 +3848,6 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
       its mechanism is inferred from the shared helper rather than observed. The
       case rests on mechanism + fix + regression suite + streak, not on a
       reproduction. If it recurs, reopen — do not re-run it.
-
-<!-- file: todo.d/2026-08-03-flaky-backfill-syncids-race-sanity.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 2e58c9a1-7b34-4f60-a812-3d90f6c47b25 -->
-<!-- last-edited: 2026-08-03 -->
 
 - [x] **Flaky: `TestBackfillSyncIDsJob_ConcurrentRaceSanity`** (`internal/maintenance/jobs`)
       failed the Coverage Floor gate on PR #2123, a PR that touches only
@@ -4185,11 +3930,6 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
 
       The open sibling item above (`TestApplyPIDRepairSameFile`) is closed on the
       same evidence; its helper was one of the same three.
-
-<!-- file: todo.d/2026-08-02-bookfile-duplication-and-duration-units.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 9b41c7e2-05d8-4a63-b7f0-3e26c8149ad5 -->
-<!-- last-edited: 2026-08-02 -->
 
 ## DATA: BookFile rows are duplicated 2× AND their durations are milliseconds, not seconds
 
@@ -4390,11 +4130,6 @@ Pebble-direct before deciding, because the memdb projection strips
       2026-08-04 entry on `RecomputeBookAggregates`. Not a duration bug, but it makes
       every duration fix look like a no-op until a restart.
 
-<!-- file: todo.d/2026-08-01-assignorphanvgs-offset-pagination.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 8c40f2e7-6b19-4d83-a05c-71fe9b3d5a42 -->
-<!-- last-edited: 2026-08-01 -->
-
 ## BUG: `AssignOrphanVGs` can silently skip books — offset pagination over an async memdb snapshot
 
 **Severity:** correctness bug in a full-library maintenance op. Surfaces as a CI
@@ -4449,11 +4184,6 @@ be replaced underneath you is not.
 that walks the whole library has the same exposure. Grep for the offset-loop
 shape before assuming this is the only one.
 
-<!-- file: todo.d/2026-08-01-metrics-auth-deploy-gate.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 9b3cf479-67b4-4532-a76c-d2a8b5fd4b94 -->
-<!-- last-edited: 2026-08-01 -->
-
 ## ⚠️ DEPLOY GATE: /metrics now requires auth — configure Prometheus BEFORE the next deploy
 
 **PR #2092 is merged but NOT deployed.** Deploying it without doing the below breaks
@@ -4500,11 +4230,6 @@ curl -ksS -o /dev/null -w '%{http_code}\n' -H 'Authorization: Bearer abk_…' \
 
 `deploy/prometheus/README.md` claims nothing in this repo scrapes `/metrics`. A real
 scraper exists on the production host; the sentence is misleading and should say so.
-
-<!-- file: todo.d/2026-08-01-oauth-login-deeplink-return.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 9a4f1e58-2d70-4b93-8c16-e05d7b3a92c1 -->
-<!-- last-edited: 2026-08-01 -->
 
 ## LATENT: web OAuth callback silently discards a custom-scheme `return`, falling back to `/`
 
@@ -4573,11 +4298,6 @@ Unverified assumption to settle before building: whether
 the hop back from the IdP. If it does not, `Callback` dies at
 `oauth_state_missing` regardless. Only a real-device test can answer it.
 
-<!-- file: todo.d/2026-08-02-abs-cover-art-coverage.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: e2c81f76-4b90-4d35-a617-9f0c53b8e2a4 -->
-<!-- last-edited: 2026-08-02 -->
-
 ## GAP: only ~19.5% of books have cover art, so most ABS clients show placeholders
 
 **Severity:** cosmetic but pervasive. Not a code defect — `GET /api/items/:id/cover`
@@ -4619,11 +4339,6 @@ rather than `runtime.NumCPU()`.
 Look for an existing parallel sibling before writing a new loop — the acoustid
 backfill (`internal/plugins/acoustid/backfill.go`) is the established pattern.
 
-<!-- file: todo.d/2026-08-02-abs-play-counts-listening-history.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 3a91c705-8de2-4f46-b0c3-1d75e29f4b83 -->
-<!-- last-edited: 2026-08-02 -->
-
 ## UNSPECIFIED: play counts and listening history have no designed ABS surface
 
 Raised while building the Phase 6 write half (2026-08-02). The owner's goal statement
@@ -4661,11 +4376,6 @@ window and tolerated every 404 without user-visible breakage.
 
 **Do not implement piecemeal.** Half a stats surface reads to a client as a broken
 server rather than an absent feature.
-
-<!-- file: todo.d/2026-08-02-abs-progress-mutation-endpoints.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: b57d2409-8e13-4c6a-9f25-30ab8e17c4d2 -->
-<!-- last-edited: 2026-08-02 -->
 
 ## MISSING: ABS progress-mutation endpoints — "reset progress" and "remove from continue listening" do nothing
 
@@ -4723,11 +4433,6 @@ built, so every client-side progress mutation 404s.
 `GET /api/me/listening-stats` → 404 and `GET /api/me/item/listening-sessions/:id` →
 404 are **correct**. The spec prefers 404 for the stats endpoints (~12 non-optional
 fields; callers use `try?`), and a half-correct body is worse than none.
-
-<!-- file: todo.d/2026-08-02-chapters-never-backfilled.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: c8d0451f-72a9-4e63-b514-9f3e6a07c2d8 -->
-<!-- last-edited: 2026-08-02 -->
 
 ## MISSING: no book in the library has stored chapters — extraction only ever runs during a scan, and no scan has run
 
@@ -4788,11 +4493,6 @@ and `/track/2`. **A backfill would change nothing for that book.**
 **Do not run a whole-library backfill without answering (1) first** — a scan touches
 far more than chapters.
 
-<!-- file: todo.d/2026-07-31-abs-mode-b-nonidentity-assertion.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 1a7c4e92-5d38-4b60-9f21-8c3e6a0b7d45 -->
-<!-- last-edited: 2026-07-31 -->
-
 - [ ] **TODO-ABS-MODEB** A Cloudflare **service-token** assertion is rejected as
       invalid, so the documented "Mode B" (edge service token + our own bearer
       token) cannot work at all. A `non_identity` Access JWT carries
@@ -4811,11 +4511,6 @@ far more than chapters.
       bearer → 200 via jwt mode; (c) valid non-identity, no bearer → 401
       `no-credential`; (d) login with non-identity assertion + password body
       reaches the password path. Revert-validate (b) and (d).
-
-<!-- file: todo.d/2026-07-31-ios-sso-edge-config-drift.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 8c5f1a37-9b24-4e08-a761-2d0e6b8c4f19 -->
-<!-- last-edited: 2026-07-31 -->
 
 - [ ] **TODO-SSO-EDGE** Neither native-app auth mode is actually configured at
       the Cloudflare edge, despite both being fully written up in
@@ -4836,11 +4531,6 @@ far more than chapters.
 
 - [ ] **TODO-DEPS-VULN** GitHub reports 5 Dependabot vulnerabilities on the
       default branch (2 high, 3 moderate). Triage and bump.
-
-<!-- file: todo.d/2026-07-31-origin-security-hardening.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 6e2b8d05-3f41-4a97-8c50-7d1a9b4e2c68 -->
-<!-- last-edited: 2026-07-31 -->
 
 - [ ] **TODO-SEC-BIND** The service binds every interface
       (`ExecStart=… serve --host 0.0.0.0 --port 8484`), so anything on the LAN
@@ -5009,11 +4699,6 @@ far more than chapters.
       weakens durability guarantees in tests, so they are a judgement call, not
       a drive-by. The measurement is the deliverable here; the policy is yours.
 
-<!-- file: todo.d/2026-08-01-origin-lan-exposure-finding.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 4f1a8c73-52be-4d09-9a67-e3b05c8d217f -->
-<!-- last-edited: 2026-08-01 -->
-
 ## SEC: origin is reachable from the LAN — "bind loopback" is NOT achievable as specified
 
 **Status:** finding, not yet fixed. Needs an owner decision between two options.
@@ -5045,11 +4730,6 @@ Two options actually accomplish the intent. Both are host-level changes outside
 it directly from a workstation stops working *by design*. That is the success
 condition, not a regression. Verify through `books.jdfalk.com` instead.
 
-<!-- file: todo.d/abs-sync-auth-core-followups.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: a8c0a4eb-d71c-43ae-9a5a-c0d59bb61bc1 -->
-<!-- last-edited: 2026-07-30 -->
-
 - [ ] **ABS-SYNC (Phase 6, DATA LOSS if skipped): wire a `UserDataProvider` into the
   ABS auth handler.** `internal/server/handlers/abs` currently constructs with
   `UserData: nil` (`internal/server/wire_abs_routes.go`), so `/api/me`, `/login` and
@@ -5075,11 +4755,6 @@ condition, not a regression. Verify through `books.jdfalk.com` instead.
   to the same maintenance sweep that calls `DeleteExpiredSessions` for the browser
   keyspace, or revoked/expired ABS sessions accumulate forever.
 
-<!-- file: todo.d/abs-sync-drm-consolidation.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: af93e202-2439-4b45-aade-7e2c309ee62f -->
-<!-- last-edited: 2026-07-30 -->
-
 - [ ] **ABS-SYNC: consolidate the two DRM detection paths, and wire one into the
   scanner.** PR #2067 adds extension-based `DetectDRM` in `internal/audioutil/drm.go`,
   but `internal/diagnosis/probe.go` already has an unrelated, richer mediainfo-based
@@ -5089,11 +4764,6 @@ condition, not a regression. Verify through `books.jdfalk.com` instead.
   bug this fixes: `.aax`/`.aaxc` are **already** in the default `SupportedExtensions`
   (`internal/config/config.go` ~:2016) with zero DRM awareness. Caution: ffmpeg's `aax`
   demuxer is **CRIWARE game audio, not Audible** — do not key detection off it.
-
-<!-- file: todo.d/abs-sync-identity-gap.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 7ed6a106-3ea2-4798-a979-33f0360e0d3a -->
-<!-- last-edited: 2026-07-30 -->
 
 - [ ] **ABS-SYNC TASK-12 (P1, data-loss class): close the three identity gaps so §4.3's
   ID-durability claim is actually true.** Owner decided (2026-07-30) to hook **all three**
@@ -5110,11 +4780,6 @@ condition, not a regression. Verify through `books.jdfalk.com` instead.
   process-wide `mergeSerializeMu`, so no extra book-ID partitioning is needed — run
   inside that existing critical section. Requires a `-race` test exercising concurrent
   merges (`MergeBooks` has a prior race history in this repo).
-
-<!-- file: todo.d/abs-sync-remaining-phases.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 95b9132b-ca92-432a-8629-7d98ef59a38b -->
-<!-- last-edited: 2026-07-30 -->
 
 - [ ] **ABS-SYNC: wave 2 — scanner + merge wiring.** Briefs in
   `docs/agent-tasks/abs-sync/`. TASK-03 (merge-follow hook into
@@ -5160,11 +4825,6 @@ condition, not a regression. Verify through `books.jdfalk.com` instead.
       fix). Consider a Part→disc / Chapter→track parser as a fast-follow so these
       collapse with correct numbering too.
 
-<!-- file: todo.d/itunes-2way-p0-cleanup-census.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 8e2b5a41-6c93-4d07-9f18-3a1c7e6b0d52 -->
-<!-- last-edited: 2026-07-24 -->
-
 - [ ] **iTunes 2-way-sync P3 (cleanup) — decision: MEASURE-AND-STOP, no removal machinery.**
   The P0 cleanup provenance census ran on prod (97,999 `.itl` tracks): **provable merge
   orphans = 1, SHA-gated removable = 0** (`pid-census --merge-provenance`). P3 retires the
@@ -5183,11 +4843,6 @@ condition, not a regression. Verify through `books.jdfalk.com` instead.
   record, assert ZERO changes. Then P1 (partitioned count-refresh, re-derive PID sample) /
   P2 (relocate-only sync-cycle op + oracle = MVP end).
 
-<!-- file: todo.d/itunes-2way-p2-sync-cycle.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 7f2c9a81-6b54-4d60-9e18-3c7b5a0e1d72 -->
-<!-- last-edited: 2026-07-24 -->
-
 - [ ] **iTunes 2-way-sync P2 — relocate-only sync cycle (MVP end).** All prerequisites are
   merged: 4-state `LibrarySet` config (#2040), cleanup census → P3 no-op (#2041),
   cross-type + preservation proofs (#2042), relocate oracle `VerifyRelocateWrite` (#2043),
@@ -5204,11 +4859,6 @@ condition, not a regression. Verify through `books.jdfalk.com` instead.
   library's own media root (LibrarySet). See `docs/specs/2026-07-23-itunes-2way-p0-findings.md`
   (P0 status table) + `docs/specs/2026-07-23-itunes-2way-sync-system-design.md` §4–6.
 
-<!-- file: todo.d/itunes-isaudiobookitl-underclassifies.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 7c3a9e51-4b62-4d08-8f19-2a6c1b7e0d43 -->
-<!-- last-edited: 2026-07-24 -->
-
 - [ ] **`isAudiobookITL` under-classifies audiobooks (fail-safe, but fix carefully).**
   P0 cross-type census (§F5) found it misses `Audio Book`/`audio book` (it checks the
   substring `"audiobook"` with NO space — 705 tracks on prod) and every literary-genre
@@ -5220,11 +4870,6 @@ condition, not a regression. Verify through `books.jdfalk.com` instead.
   and could drop a real library below `GuardRebuildTarget`'s "looks real" threshold — so
   re-derive those thresholds in the SAME PR and re-test the guard. See
   `internal/itunes/library_shape.go:35` + `docs/specs/2026-07-23-itunes-2way-p0-findings.md` §F5.
-
-<!-- file: todo.d/itunes-location-form-guard-blocks-ao-library.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 3f9c1e08-7b52-4d64-a1f8-2c6b5a0e9d47 -->
-<!-- last-edited: 2026-07-24 -->
 
 - [ ] **🚧 P2 BLOCKER — location-form guard rejects the entire live AO library (F7).** The
   `location-form` safety guard (`internal/itunes/itl_safety_contract.go:562`) rejects any
@@ -5243,11 +4888,6 @@ condition, not a regression. Verify through `books.jdfalk.com` instead.
   `TestITLRelocateContractStatus` (env-gated). See
   `docs/specs/2026-07-23-itunes-2way-p0-findings.md` §F7.
 
-<!-- file: todo.d/itunes-2way-sync-continuation.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 2165368b-70dd-48b0-b2d3-7288bbea666f -->
-<!-- last-edited: 2026-07-23 -->
-
 - [ ] **iTunes 2-way-sync — continuation (P3 redefine + reverse sync + footgun audit).**
   P1 relocate is applied+verified on prod (6,414). Still open, per
   `docs/plans/2026-07-23-itunes-2way-sync-continuation.md`: (1) redefine the P3
@@ -5260,11 +4900,6 @@ condition, not a regression. Verify through `books.jdfalk.com` instead.
   `/rebuild-full` against the now-real library; define the adopt-base steady-state.
   Dry-run + sample + owner sign-off before any destructive apply.
 
-<!-- file: todo.d/itunes-pid-uniqueness.md -->
-<!-- version: 1.0.0 -->
-<!-- guid: 9a2c4e07-1b63-4d85-8f20-5c7e3a1b0d49 -->
-<!-- last-edited: 2026-07-23 -->
-
 - [ ] **iTunes book_file PID uniqueness — apply the backfill repair (gated).** Forward
   invariant shipped (`CreateBookFile` transfers a duplicate PID to the new row) + census
   (`GET /itunes/pid-integrity`) + repair (`POST /itunes/pid-repair`) endpoints built and
@@ -5274,11 +4909,6 @@ condition, not a regression. Verify through `books.jdfalk.com` instead.
   `pid-repair?dry_run=true` on prod to confirm → owner runs the apply with `!` → re-run the
   census to confirm 0 duplicates → review the 3 ambiguous groups by hand. See
   `docs/specs/2026-07-23-itunes-2way-sync-continuation-findings.md` §1.5b.
-
-<!-- file: todo.d/itunes-2way-sync-writeback.md -->
-<!-- version: 0.1.0 -->
-<!-- guid: 7b1c9e34-2a5d-4f81-9c0e-3d6a1f8b2e07 -->
-<!-- last-edited: 2026-07-22 -->
 
 - [ ] **iTunes 2-way sync writeback (edit-in-place, preserve play-state).** The deployed
   `rebuild-full` writeback regenerates the library (12,193 tracks / 14 playlists) vs the real

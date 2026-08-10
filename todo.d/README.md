@@ -1,7 +1,7 @@
 <!-- file: todo.d/README.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 4663309b-ed2d-45f1-a6d0-7d309c62481d -->
-<!-- last-edited: 2026-07-19 -->
+<!-- last-edited: 2026-08-10 -->
 
 # TODO fragments (`todo.d/`)
 
@@ -47,6 +47,20 @@ fragments) — adding a task is optional, not something to enforce on every PR.
   `file`/`version`/`guid` header. The body is folded into `TODO.md` verbatim, so
   a header would leak into the assembled document. They are also excluded from
   markdownlint and prettier via `.markdownlintignore` / `.prettierignore`.
+
+  Between 2026-07 and 2026-08 this rule lived here and nowhere else, and **74
+  headers leaked into `TODO.md`** — every one of them written by a contributor
+  correctly obeying the org-wide "every Markdown file carries a header" rule and
+  never reading this line. Documenting an exception is not enforcing it. Two
+  layers now do:
+
+  - `scripts/assemble_todo.py` **strips** a leading header block from every
+    fragment body at collect time, so a fragment that has one still assembles
+    cleanly.
+  - `python3 scripts/assemble_todo.py --lint` fails if `TODO.md` contains a
+    leaked header, and runs on every PR as `ci.yml`'s `TODO Fragment Headers`
+    job. It ignores fenced code blocks, so a task that *documents* the header
+    format is fine.
 - A fragment that is **entirely HTML comments** is treated as an intentional
   no-op: it is deleted on collect without contributing anything. Comment out a
   fragment rather than deleting it if you want the collector to drop it quietly.
