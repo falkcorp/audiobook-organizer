@@ -1,5 +1,5 @@
 <!-- file: docs/design/2026-08-09-search-backend-options.md -->
-<!-- version: 3.0.0 -->
+<!-- version: 3.1.0 -->
 <!-- guid: 4f1c8a72-6d93-4e05-b8a1-9c72e0f45d38 -->
 <!-- last-edited: 2026-08-10 -->
 
@@ -260,6 +260,8 @@ hand-written routes.
    symptoms and stops them corrupting later measurements.
 2. **A1 — push filters AND sort into the Bleve query**, so both apply *before* pagination.
    The one piece of real engineering; removes the full-set materialise and fixes §5.2.
+   **⚠️ Blocked on index reconciliation** — see open item 3. Pushing filters into an index
+   that silently drops 56K updates a week converts a relevance problem into missing rows.
 3. **Secondary sorted indexes** (§2.3) for the fields that matter, sized against 366,916.
 4. **Delete the client-side library sort** and restore the missing sort control.
    `SearchBar.test.tsx:43` currently asserts the control is *absent* and passes vacuously —
@@ -285,10 +287,16 @@ SQLite3?" section and there is no sqlite dep in `go.mod`); an external search se
    §3.2a is worth. Not yet counted.
 2. **Which sort fields matter?** Each costs an index. Five exist; "all of them" is the
    expensive answer, and probably nobody sorts by publisher.
-3. **Index staleness tolerance.** Filter/sort pushdown promotes the Bleve index from a
-   *relevance* dependency to a **correctness** one. If it can lag, pushdown returns wrong
-   rows rather than merely mis-ranked ones. The index worker is async with a 1024-deep queue.
-4. **Is the index complete?** It opens; whether it holds every book is unverified — the
-   checked-in `.api-token` returns `invalid session` and the index directory is root-owned.
+3. **🔴 Index staleness — now a BLOCKING prerequisite, not a question.** Filter/sort
+   pushdown promotes the Bleve index from a *relevance* dependency to a **correctness**
+   one. Item 4 below measured the index dropping 56,537 updates in a week with no
+   reconciliation. Today that means stale ranking; after A1 it means **a book whose
+   `library_state` changed is absent from the correct filter and present in the wrong
+   one**, with no error shown. **Reconciliation has to land before step 2 of §6.**
+4. ~~Is the index complete?~~ **ANSWERED — NO.** Measured on prod 2026-08-10: the index
+   worker's 1024-deep queue overflows under bulk operations and **silently drops** the
+   overflow — **56,537 dropped operations in seven days** (Aug 03 and Aug 07). There is no
+   retry, no dirty-set and no re-sync, so a dropped update diverges the index from the DB
+   permanently. See `todo.d/20260810-search-index-queue-drops-silently.md`.
 5. **Per-user filters** — there is a `DisablePerUserSearchFilters` flag and a 10,000-row
    over-fetch window. If multi-user is theoretical, that path simplifies and §5.2 gets easier.
