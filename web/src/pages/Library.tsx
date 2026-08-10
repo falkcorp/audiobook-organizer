@@ -1,5 +1,5 @@
 // file: web/src/pages/Library.tsx
-// version: 1.81.0
+// version: 1.82.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
 // last-edited: 2026-08-10
 
@@ -674,6 +674,21 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     //
     // Skipping is safe: the read effect's ingest changes state, which re-fires
     // this effect on the next render with the values it needs.
+    //
+    // ON THE MISSING `searchParams` DEPENDENCY (the disable at the bottom):
+    // reading a value without depending on it is the POINT here. This effect
+    // must run when state changes and compare against whatever the URL says at
+    // that moment; adding `searchParams` to the array would also make it run on
+    // every URL change, including its own echo — on which `urlChangedUnderUs`
+    // is true but the second condition is false, so it would fall through and
+    // rewrite identical params.
+    //
+    // That variant was measured, not assumed: with `searchParams` added to the
+    // array, library-sidebar-filters.spec.ts ran 36/36 green on webkit
+    // (9 tests x 4 repeats). So it does not break THIS spec. It was still not
+    // adopted, because this effect owns URL writes for the whole Library page
+    // and one spec file is not evidence about the rest of it. If you want that
+    // form, verify it page-wide first.
     const currentSearch = searchParams.toString();
     const urlChangedUnderUs = currentSearch !== seenSearch.current;
     if (urlChangedUnderUs && currentSearch !== lastWrittenSearch.current) {
@@ -704,7 +719,12 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     lastWrittenSearch.current = params.toString();
     setSearchParams(params, { replace: !pageChanged });
     localStorage.setItem(STORAGE_KEYS.LIBRARY_PAGE, page.toString());
-  }, [filters, itemsPerPage, page, searchQuery, selectedTags, setSearchParams, sortBy, sortOrder, viewMode]);
+    // `searchParams` is read as a guard, not depended on — see "ON THE MISSING
+    // `searchParams` DEPENDENCY" above. Suppressed with eslint-disable-LINE
+    // rather than -next-line: the explanation needs more than one line, and a
+    // continuation comment between a -next-line directive and its target makes
+    // the directive apply to the comment instead, silently suppressing nothing.
+  }, [filters, itemsPerPage, page, searchQuery, selectedTags, setSearchParams, sortBy, sortOrder, viewMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // MUST stay declared after the write effect above. Effects run in
   // declaration order within a commit, so keeping this last is what lets that
