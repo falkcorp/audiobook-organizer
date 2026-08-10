@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.23.0 -->
+<!-- version: 10.24.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-08-10 -->
 
@@ -3804,6 +3804,69 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
      non-empty, not only when it changes (idempotent write).
   3. Add a repair op that rebuilds `book:versiongroup:*` from the Book rows, and
      run it once — existing groups are already affected.
+  4. *(added 2026-08-10)* **Read through memdb instead.**
+     `internal/database/memdb_schema.go:176` already declares
+     `memIdxVersionGroupID` over `Book.VersionGroupID`, memdb stores full
+     `*Book` values (`memdb_reads.go:606,622`), and `GetBooksByVersionGroup`
+     **never calls `p.mem()`** — it goes straight to Pebble. That index is
+     complete by construction and costs O(|group|), so it needs neither a
+     completeness heuristic (1) nor a backfill (3). Not adopted unreviewed: it
+     necessarily returns MORE members than today, and `metafetch`
+     (`service_apply.go:303`, `service_writeback.go:872`) enumerates siblings
+     through this call before writing to them. Returning the correct set is the
+     point, but it widens what those write paths touch, so it wants an owner's
+     eyes rather than an autonomous merge.
+
+  **REPRODUCED 2026-08-10** (deterministically, in a throwaway probe — see
+  "why this is not committed" below). Create two books in one group, then
+  `pebble.Delete` exactly ONE `book:versiongroup:<gid>:<id>` row, leaving both
+  authoritative `book:<id>` rows untouched:
+
+  | Index state | `GetBooksByVersionGroup` |
+  |---|---|
+  | both members indexed | **2** ✓ |
+  | **one** row dropped | **1** ✗ — the second book vanishes |
+  | **both** rows dropped | **2** ✓ — the documented fallback engages |
+
+  **Losing more index data produces a more correct answer.** That third row is
+  the crux: the `len(books) > 0` guard cannot distinguish "found everything"
+  from "found something", so an empty index is safe and a partial one is not.
+  Damage in the range 1..n-1 is the only damage that is invisible. The probe
+  also confirmed the authoritative row still carried the right
+  `VersionGroupID` throughout — the truth was present and simply not consulted.
+
+  Confirmed unaffected by memdb warmth: the enumeration reads `p.db` directly,
+  so the repro does not depend on warmup timing.
+
+  **Why this is not committed as a test yet.** It is red against `main`, and a
+  knowingly-red test on `main` is the same class of "green means nothing" defect
+  this backlog keeps turning up. It belongs in
+  `internal/database/pebble_store_index_consistency_test.go` — which already has
+  the `store.(*PebbleStore)` / `ps.db` raw-index pattern and the sibling
+  soft-delete cases — landing in the SAME PR as whichever fix direction is
+  chosen. Ready to paste:
+
+  ```go
+  vg := "VG0000000000000000000PROBE"
+  a, _ := store.CreateBook(&Book{Title: "Alpha", FilePath: "/probe/a.mp3", VersionGroupID: strPtr(vg)})
+  b, _ := store.CreateBook(&Book{Title: "Beta",  FilePath: "/probe/b.mp3", VersionGroupID: strPtr(vg)})
+  ps := store.(*PebbleStore)
+  // Simulate partial backfill: drop ONE member's index row.
+  _ = ps.db.Delete([]byte(fmt.Sprintf("book:versiongroup:%s:%s", vg, b.ID)), pebble.Sync)
+  got, _ := store.GetBooksByVersionGroup(vg)
+  if len(got) != 2 {
+      t.Errorf("live book %s absent from its own version-group listing: got %d %v", b.ID, len(got), titles(got))
+  }
+  _ = a
+  ```
+
+  Note `dbtest.AssertStoreInvariants` invariant (b) — "a LIVE book must be
+  discoverable by its own version-group listing" — is *already* exactly this
+  assertion and passes everywhere it is called. It cannot catch this: its
+  package doc states it uses only the exported Store surface and so "cannot see
+  raw secondary-index rows", meaning no caller has ever constructed a partial
+  index for it to inspect. The invariant was never wrong; nothing ever put it in
+  front of the failing state.
 
   **Also needs an invariant test**: after linking N books into a group and
   setting one primary, exactly one member must have `IsPrimaryVersion == true`.
