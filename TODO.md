@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.22.0 -->
+<!-- version: 10.23.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-08-10 -->
 
@@ -3926,7 +3926,7 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
 <!-- guid: 6f10b7e4-9c25-4d83-a0f6-14b7e29d3c05 -->
 <!-- last-edited: 2026-08-03 -->
 
-- [ ] **Flaky: `TestApplyPIDRepairSameFile`** (`internal/itunes`) failed
+- [x] **Flaky: `TestApplyPIDRepairSameFile`** (`internal/itunes`) failed
       `Minimal CI / Go Tests (short, race)` on PR #2126 — a PR that touches only
       `internal/server/server_maintenance_deps.go` and cannot affect the iTunes
       package.
@@ -3943,12 +3943,43 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
       how a real regression eventually gets waved through. Related:
       [[project_ci_gotests_intermittent_stalls]].
 
+      **CLOSED 2026-08-10. The "shared cause" guess was right.** This test builds
+      its store with `newRepairTestStore`, which was one of the three helpers
+      that skipped `WaitForWarmup`; its sibling flake used `newSyncPebbleStore`,
+      another of the three. That helper now carries the reason in a comment:
+      *"Without this the repair tests read back a book_file that is in Pebble but
+      missing from memdb."* Both helpers were fixed in #2131, and the underlying
+      write-loss was structurally eliminated in `587b2fd0` (2026-08-06) — writes
+      arriving during warmup are buffered and replayed before memdb publishes
+      (`memdb_pending.go`), so the window no longer drops anything.
+
+      **Evidence for closing** (gathered 2026-08-10):
+
+      - `make test-short` runs `go test ./... -short -race`, so this test executes
+        on every `Coverage Floor` and `Go Tests (short, race)` run. Neither this
+        test nor its sibling has a `testing.Short()` guard — checked, so the runs
+        below genuinely exercised them rather than skipping them.
+      - **50 completed `Continuous Integration` runs since `587b2fd0`, 0 failures**
+        (10 further runs cancelled by `cancel-in-progress`; those are evidence of
+        nothing either way and are not counted).
+      - The fix is covered by a 6-test acceptance suite,
+        `internal/database/memdb_warmup_writeloss_test.go`, which pins the
+        invariant in both directions (dropped create, phantom after dropped
+        delete, concurrent writers, buffer-overflow degrades loudly, Reset not
+        undone) and guards against vacuous passes by skipping when the warmup
+        window was too narrow to exercise.
+
+      **What is NOT claimed:** this particular flake was never reproduced red, and
+      its mechanism is inferred from the shared helper rather than observed. The
+      case rests on mechanism + fix + regression suite + streak, not on a
+      reproduction. If it recurs, reopen — do not re-run it.
+
 <!-- file: todo.d/2026-08-03-flaky-backfill-syncids-race-sanity.md -->
 <!-- version: 1.0.0 -->
 <!-- guid: 2e58c9a1-7b34-4f60-a812-3d90f6c47b25 -->
 <!-- last-edited: 2026-08-03 -->
 
-- [ ] **Flaky: `TestBackfillSyncIDsJob_ConcurrentRaceSanity`** (`internal/maintenance/jobs`)
+- [x] **Flaky: `TestBackfillSyncIDsJob_ConcurrentRaceSanity`** (`internal/maintenance/jobs`)
       failed the Coverage Floor gate on PR #2123, a PR that touches only
       `internal/server/middleware/absauth.go` and cannot affect this package.
       Verified as a flake, not a regression: **10 consecutive passes on the PR
@@ -4000,6 +4031,35 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
       `todo.d/2026-08-01-assignorphanvgs-offset-pagination.md`, which is about offset
       arithmetic over a swapping snapshot. Same underlying async-warmup design, two
       distinct failure modes; a fix should consider both.
+
+      **CLOSED 2026-08-10 — the green streak this item was waiting on has been
+      earned, and the cause is gone rather than merely quiet.**
+
+      `WaitForWarmup` in the three helpers (#2131) was the first half. The second
+      half landed in `587b2fd0` (2026-08-06): writes arriving during warmup are
+      now buffered and replayed before memdb publishes (`memdb_pending.go`), so
+      the lost-update window is structurally closed rather than avoided. The
+      `WaitForWarmup` doc comment records the demotion — it is *"no longer
+      required for CORRECTNESS"*, only for making tests deterministic about which
+      read path they exercise.
+
+      **Evidence** (gathered 2026-08-10):
+
+      - **50 completed `Continuous Integration` runs since `587b2fd0`, 0 failures.**
+        10 more were cancelled by `cancel-in-progress`; those prove nothing and are
+        excluded.
+      - Both this test and `TestBackfillSyncIDsJob_FreshLibrary` run under
+        `go test ./... -short -race` with no `testing.Short()` guard, so every one
+        of those runs actually executed them.
+      - `internal/database/memdb_warmup_writeloss_test.go` pins the invariant in
+        six shapes, including the mirror cases the original write-up did not
+        cover: phantom rows after a dropped delete, buffer overflow refusing to
+        publish and logging at ERROR, and Reset not being undone by an in-flight
+        warmup. It also guards against vacuous passes — each test skips rather
+        than passes when the warmup window closed before any write landed.
+
+      The open sibling item above (`TestApplyPIDRepairSameFile`) is closed on the
+      same evidence; its helper was one of the same three.
 
 <!-- file: todo.d/2026-08-02-bookfile-duplication-and-duration-units.md -->
 <!-- version: 1.0.0 -->
