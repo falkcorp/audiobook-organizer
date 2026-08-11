@@ -151,9 +151,20 @@ The `len(rawParams) > 0` guard makes this look defensive. It is not: it only
 distinguishes "no params" from "params present". A params blob that is present
 **and malformed** produces a fully zero-valued `p` and the op runs anyway.
 
+> 🔑 **The fix template already exists in the same file.** `library.transcode` at
+> `internal/server/library_core_ops.go:255` does it correctly —
+> `if err := json.Unmarshal(rawParams, &p); err != nil { return fmt.Errorf("transcode: decode params: %w", err) }`
+> — followed by a required-field check at line 259. Wave 3 is copying a pattern that
+> is 60 lines below the worst defect, not inventing one.
+
+**Severity is not uniform across the 13.** The `internal/server/*` ops use plain
+`bool` / slice fields, so a zero value means *wider scope* or *not a dry run*. The
+`internal/plugins/maintenance/*` ops use `*bool` fields documented to default TRUE
+when nil, so their zero value is the **safe** direction. Verified per-file below.
+
 | File:line | Op ID | Consequence if it fires |
 |---|---|---|
-| `internal/server/library_core_ops.go:193` | `library.organize` | `p.BookIDs` empty → the code path treats "no selection" as **organize the entire library**, with `CapFilesWrite` — this op moves files on disk. A malformed params blob escalates a 3-book organize into a whole-library file move. **This is the single worst site in the audit.** |
+| `internal/server/library_core_ops.go:193` | `library.organize` | `p.BookIDs` empty → **verified** at `internal/organizer/service.go:170–189`: the `else` branch paginates `GetAllBooksCore` over the **entire library**. With `CapFilesWrite`, this op moves files on disk. A malformed params blob escalates a 3-book organize into a whole-library file move. **This is the single worst site in the audit.** |
 | `internal/server/library_core_ops.go:65` | `library.scan` | `p.FolderPath` nil and `p.ForceUpdate` false → scans the default root instead of the requested folder. Wrong-scope scan; wasted hours; `CapLibraryWrite`. |
 | `internal/server/itunes_path_ops.go:107` | `itunes.path-reconcile` | `p.LegacyOpID` empty → `Reconcile(ctx, "", progress)` runs with **no operation ID**, so every subsequent `store.UpdateOperation*` call keyed on that ID no-ops. The op runs but reports no progress and no result; the UI shows a job that never finishes. `CapLibraryWrite`. |
 | `internal/server/itunes_path_ops.go:136` | `itunes.path-repair` | Same `LegacyOpID` loss; repair mode/limit params zero, so the repair runs with default (widest) scope. |
@@ -161,16 +172,19 @@ distinguishes "no params" from "params present". A params blob that is present
 | `internal/server/openlibrary_ops.go:88` | `openlibrary.import` (second op in file) | Consequence not determined — not read in full in this pass. |
 | `internal/server/diagnostics_ops.go:46` | `diagnostics.export` | `p.Category` / `p.Description` empty → the export is generated with an empty category (wrong or empty bundle), and `p.LegacyOpID` empty means the `UpdateOperationResultData` / `UpdateOperationStatus` calls at lines 64–65 write to a nonexistent op row. User downloads the wrong diagnostics bundle, or sees no result at all. |
 | `internal/server/folder_autoscan_op.go:55` | `folder.autoscan` | `p.FolderPath` empty → `os.Stat("")` at line 65 fails → returns `"folder does not exist: "` with an empty path. Fails loudly, but with an error message that names no folder, so the operator cannot tell which autoscan broke. Lower severity: it fails rather than escalating. |
-| `internal/plugins/maintenance/intro_migrate_single_file.go:122` | maintenance op | Consequence not determined. |
-| `internal/plugins/maintenance/extract_wav_clips.go:56` | maintenance op | Consequence not determined. |
-| `internal/plugins/maintenance/repair_transcribe_status.go:216` | maintenance op | Consequence not determined. |
-| `internal/plugins/maintenance/intro_transcribe.go:127` | maintenance op | Consequence not determined. |
-| `internal/plugins/maintenance/auto_match_transcribed.go:62` | maintenance op | Consequence not determined. |
-| `internal/plugins/dedup/embed_scan.go:71` | `dedup.embed-scan` | Consequence not determined; note this op writes embeddings, so a zeroed batch/limit param plausibly means a full re-embed. Verify before fixing. |
+| `internal/plugins/maintenance/intro_migrate_single_file.go:122` | maintenance op | 🟢 **Downgraded on verification.** `introMigrateParams.DryRun` is a `*bool` documented "Defaults to TRUE" (lines 63–66). A malformed blob leaves it `nil` → **dry run**, the safe direction. `Overwrite *bool` likewise defaults off. Residual consequence: `LastBookID` zeroes, so the op **restarts from the beginning** instead of resuming past a checkpoint — wasted work across ~33,780 rows, no data risk. |
+| `internal/plugins/maintenance/repair_transcribe_status.go:216` | maintenance op | 🟢 Same pointer pattern — `DryRun *bool` "Defaults to TRUE" (line 71). Fails safe. Residual: lost `LastBookID` resume point. |
+| `internal/plugins/maintenance/intro_transcribe.go:127` | maintenance op | 🟢 `OnlyMissing *bool` defaults true, `RetrySilence *bool` defaults false — both safe when nil. Residual: lost `LastBookID`; and `ReparseOnly` falls to false, so a run intended as a cheap classifier re-parse instead does full ffmpeg+Whisper work. 🟡 Cost, not corruption. |
+| `internal/plugins/maintenance/auto_match_transcribed.go:62` | maintenance op | 🟢 `DryRun *bool` carries an explicit contract at lines 26–28: *"The op MUST NOT mutate any book unless this is explicitly set to false."* nil → no mutation. `MinScore` zero → "Defaults to 0.75 when ≤0". Fails safe on both axes. Residual: lost `LastBookID`. |
+| `internal/plugins/maintenance/extract_wav_clips.go:56` | maintenance op | 🟢 Only field is `SkipExisting *bool` ("default true"). nil → skip existing → safe. Effectively benign. |
+| `internal/plugins/dedup/embed_scan.go:71` | `dedup.embed-scan` | ✅ **Correct and deliberate.** Commented at lines 69–70; the only field is `Async bool`, whose zero value is synchronous embedding. There is no scope or batch-size param to zero out. |
 
-> ⚠️ **A worktree already exists for this**: `../audiobook-organizer-opsparams`
-> on branch `fix/ops-params-silent-unmarshal`. Any wave that touches these files
-> must coordinate with it or it will conflict. Confirmed via `git worktree list`.
+> ⚠️ **A worktree exists with a matching name** — `../audiobook-organizer-opsparams`
+> on branch `fix/ops-params-silent-unmarshal`. **Verified: it is empty.**
+> `git log origin/main..fix/ops-params-silent-unmarshal` returns nothing (zero
+> commits ahead) and `git status --short` in that worktree is clean. It is a
+> scaffolded worktree that was never worked in. **Do not treat it as a blocker** —
+> confirm intent with whoever created it, then either adopt or delete it.
 
 ### (a.3) 🟡 Real but lower blast radius
 
@@ -283,12 +297,16 @@ resumes from a **stale checkpoint**, and **re-does work already done**. For
 `backfill_file_hashes` that is wasted hours. For `itunes_import` at line 407,
 re-processing already-imported groups is how duplicate book rows get created.
 
-**Consequence, `ClearState` failing:** the op finished, but its checkpoint row
-survives. On next startup `server_lifecycle.go` sees leftover state for a
-completed operation and can **resume an operation that already completed**. The
-five `server_lifecycle.go` sites are precisely the recovery path, so a discard
-there means recovery silently fails to clean up after itself, compounding every
-restart.
+**Consequence, `ClearState` failing:** ⚠️ **Corrected on verification.** All five
+`server_lifecycle.go` sites (105, 114, 169, 233, 249) sit in *drop* branches that
+have **already** called `UpdateOperationError` on the line above, so the op row is
+marked failed and will not be picked up again. The consequence is therefore **not**
+a re-resume: it is an **orphaned checkpoint/params row that is never reclaimed**,
+accumulating in the store on every interrupted-op restart, with no counter tracking
+it. 🟡 Downgraded from HIGH to MEDIUM. The `SaveCheckpoint` half of this bucket is
+unaffected — re-doing hours of already-completed work is still the real cost there,
+and `internal/itunes/service/importer.go:407` re-processing already-imported groups
+is still how duplicate book rows get created.
 
 ### (b.4) 🟠 MEDIUM — AI scan phase data (14 sites, all one file)
 
@@ -452,8 +470,8 @@ Every one of these collapses "lookup failed" into "row doesn't exist":
 | `internal/dedup/engine.go:601` | `otherBook == nil` → the candidate pair is silently dropped from scoring |
 | `internal/operations/registry/watchdog.go:74` | the **watchdog** skips an op row it cannot read — the watchdog is the thing that is supposed to notice stuck ops |
 | `internal/server/middleware/absauth.go:627` | role lookup fails → the ABS auth loop skips that role. Security-relevant: a permission is silently not granted (fails closed, which is the safe direction, but invisibly). |
-| `internal/database/embedding_store.go:831, 872, 986, 1033, 1215, 1293, 1347` | **7 sites in one file** — embedding rows that fail to decode are dropped from every vector scan. Silently shrinks the candidate set the dedup engine searches, which is the exact "losing more index data" hazard from bucket (e). |
-| `internal/database/pebble_store.go:559, 2738, 3067`, `pebble_store_works.go:197`, `pebble_store_authors.go:877, 885`, `pebble_store_tags.go:609`, `pebble_store_playlists.go:404`, `pebble_store_playback.go:171`, `pebble_store_itunes.go:36`, `pebble_store_externalids.go:90`, `pebble_store_bookfiles.go:745, 1569`, `pebble_store_auth.go:349`, `pebble_store_abssession.go:234` | **15 sites** — list/iterate methods on the primary store. A corrupt or unreadable row is dropped from the returned slice with no error and no count. **Every list endpoint in the product can silently under-report.** This is the single highest-leverage cluster in bucket (d). |
+| `internal/database/embedding_store.go:831, 835, 872, 986, 1033, 1215, 1293, 1347` | **7+ sites in one file — verified, and this is the real cluster.** Unlike the pebble-store sites above these are **decode** failures, not stale-index tolerance: `strconv.ParseInt` on the key (831) and `json.Unmarshal` of the value (835) both `continue`. A corrupt embedding row is dropped from every vector scan with no error and no count. Silently shrinks the candidate set the dedup engine searches — the exact "losing more index data" hazard from bucket (e). **Highest-leverage single file in bucket (d).** |
+| `internal/database/pebble_store.go:559, 2738, 3067`, `pebble_store_works.go:197`, `pebble_store_authors.go:877, 885`, `pebble_store_tags.go:609`, `pebble_store_playlists.go:404`, `pebble_store_playback.go:171`, `pebble_store_itunes.go:36`, `pebble_store_externalids.go:90`, `pebble_store_bookfiles.go:745, 1569`, `pebble_store_auth.go:349`, `pebble_store_abssession.go:234` | **15 sites** — ⚠️ **Partly reclassified on verification.** Three were read (`pebble_store.go:559`, `pebble_store_works.go:197`, `pebble_store_auth.go:349`) and all three are **secondary-index walks**: the loop iterates `idx:…` keys and dereferences each to a primary row. `b == nil` therefore means **stale index entry**, which is expected and tolerated by design (cf. the documented sibling at `pebble_store_bookfiles.go:768`). ✅ The `== nil` half is correct. 🟠 **The `err != nil` half is not**: a genuine read failure is folded into the same branch, so a Pebble I/O error silently shortens the list exactly like a stale index does. The fix is to split the condition, not to remove it. |
 | `internal/backup/backup.go:312` | ⚠️ **Corrected on verification.** This is `ListBackups`, not the backup *writer*: `entry.Info()` fails → that archive is omitted from the returned list. Consequence: an existing `.tar.gz` backup becomes **invisible in the UI**, and any retention/rotation logic driven off this list does not count it. Line 317 (`checksum, _ := calculateFileChecksum(...)`) additionally reports an **empty checksum as if it were computed**. 🟡 Medium — not the "incomplete backup" it looks like at first glance. |
 | `internal/covers/covers.go:113`, `internal/covers/history.go:54` | cover files skipped silently |
 | `internal/maintenance/jobs/backfill_book_files.go:48`, `bulk_fetch_metadata.go`, `revert_metadata_fetch.go:64` | maintenance jobs under-report their denominators |
@@ -668,18 +686,25 @@ Rule to apply: **if a struct field gates destructiveness or scope, a parse error
 a 400.** Where the zero value is the *safe* direction (dedup `Apply`, replay dry-run),
 keep the discard and keep the comment. Do not blanket-change the file.
 
-### Wave 3 — 🔴 v2 operation param unmarshal (13 sites) — ⛔ BLOCKED, see collision note
+### Wave 3 — 🔴 v2 operation param unmarshal (13 sites) — ⚠️ name collision only, NOT blocked
 
 Files: `internal/server/library_core_ops.go`, `internal/server/itunes_path_ops.go`,
 `internal/server/openlibrary_ops.go`, `internal/server/diagnostics_ops.go`,
 `internal/server/folder_autoscan_op.go`,
-`internal/plugins/maintenance/{intro_migrate_single_file,extract_wav_clips,repair_transcribe_status,intro_transcribe,auto_match_transcribed}.go`,
-`internal/plugins/dedup/embed_scan.go`.
+`internal/plugins/maintenance/{intro_migrate_single_file,extract_wav_clips,repair_transcribe_status,intro_transcribe,auto_match_transcribed}.go`.
+(`internal/plugins/dedup/embed_scan.go` was in this wave in an earlier draft and has
+been removed — verification showed it is correct as written.)
 
-The fix is one shape repeated 13 times: `if err := json.Unmarshal(...); err != nil {
-return fmt.Errorf("invalid params for <op>: %w", err) }`. The op registry already
-returns errors from `Run:`, so the plumbing exists. Highest priority within the wave
-is `library_core_ops.go:193` (`library.organize` → whole-library file move).
+The fix is one shape repeated 13 times, and `library.transcode`
+(`library_core_ops.go:255`) is the in-repo template. The op registry already returns
+errors from `Run:`, so the plumbing exists.
+
+**Priority within the wave is uneven** — split it if you parallelise further:
+the six `internal/server/*` op files are 🔴 (zero value = wider scope / not a dry
+run); the five `internal/plugins/maintenance/*` files are 🟢 (their `*bool` params
+default to the safe direction when nil — the only real loss is the `LastBookID`
+resume point); `internal/plugins/dedup/embed_scan.go` is ✅ already correct and can
+be dropped from the wave entirely. Highest priority is `library_core_ops.go:193`.
 Also fix `folder_autoscan_op.go:94, 123` (bucket (d)) while in that file.
 
 ### Wave 4 — 🔴 undo log (22 sites) — the operation is unundoable and nobody knows
@@ -720,10 +745,14 @@ Files: `internal/database/pebble_store.go`, `pebble_store_works.go`,
 `pebble_store_quick_queries.go` *(note: actual filename `pebble_quick_queries.go`)*,
 `embedding_store.go`, `pebble_store_stats.go`.
 
-Highest leverage in the audit by site count. Every list method should count dropped
-rows and log a single summary (`slog.Warn("dropped N unreadable rows", ...)`) rather
-than returning a short slice silently. `embedding_store.go`'s 7 sites matter most —
-a shrinking vector index is the "losing index data" hazard.
+⚠️ **Re-ranked on verification.** `embedding_store.go` is the priority: its
+`continue`s drop rows on **decode failure**, which is unambiguously data loss from
+the index. The `pebble_store*.go` sites are secondary-index walks where `row == nil`
+is *correct* stale-index tolerance — for those the fix is narrow: **split
+`if err != nil || x == nil` into two branches**, tolerate the nil, count and log the
+error. Do not "fix" the nil half; you will break stale-index tolerance. Every list
+method should then log a single summary (`slog.Warn("dropped N unreadable rows", …)`)
+rather than returning a short slice silently.
 
 ### Wave 7 — 🟠 zero-result fallback ladders
 
@@ -791,14 +820,41 @@ belongs higher. `merge/collision.go:26` was downgraded on verification (it is a
 title-display helper, not a merge gate) and is included only because the file is
 small and adjacent.
 
-### Wave 13 — 🟢 operation status/result reporting, settings, low-severity
+### Wave 13 — 🟢 residual: op status reporting, settings, low-severity
 
-Files: everything remaining under `internal/server/*_ops.go` not already claimed,
-`internal/backup/`, `internal/config/persistence.go`, `internal/versions/`, `internal/covers/`,
-`internal/openlibrary/store.go`, `internal/sysinfo/service.go`,
-`internal/diagnostics/service.go`, `internal/tools/ollama_daemon.go`,
-`internal/httputil/parse.go`, `internal/deluge/`, `internal/sweep/`,
-`internal/plugins/maintenance/` (files not claimed by Wave 3).
+⚠️ **Wave 13 is a residual bucket defined by exclusion, not an enumerated file set,
+so it is the one wave that is NOT parallel-safe against the others. Run it alone,
+after Waves 1–12 have landed.** Any attempt to run it concurrently will expand
+"everything remaining" differently than the sibling waves expect.
+
+Scope: every site named in buckets (a), (b), (c), (d) whose file is not claimed by
+Waves 1–12. Files explicitly named in this document that fall through every earlier
+wave's glob and would otherwise be **silently lost**:
+
+- `internal/plugins/deluge/centralization.go:61` — checkpoint unmarshal (a.3). Note
+  this is `plugins/deluge`, **not** `internal/deluge`; a `internal/deluge/` glob misses it.
+- `internal/database/nuts_activity_store.go:671, 865, 924, 928` and
+  `internal/database/pebble_activity_store.go:635, 897, 901` — activity digest
+  unmarshals (a.3) plus one bare `continue` (d). A `pebble_store*.go` glob matches
+  **neither** file.
+- `internal/deluge/client.go:233`, `internal/deluge/discovery.go:163, 171, 201, 245`,
+  `internal/deluge/integration.go:167, 168, 190`.
+- `internal/server/itl_rebuild.go:200` (a.4, reclassified 🟡),
+  `internal/server/handlers/split_book.go:121` (a.4, needs a second look),
+  `internal/server/handlers/abs/refresh.go:299, 317`.
+- `internal/backup/backup.go:312, 317`; `internal/config/persistence.go:867`;
+  `internal/versions/{fs,lifecycle,ingest}.go`; `internal/covers/{covers,history}.go`;
+  `internal/openlibrary/store.go:108, 182, 384, 451, 482`;
+  `internal/sysinfo/service.go:132, 294`; `internal/diagnostics/service.go:280–282`;
+  `internal/tools/ollama_daemon.go:100`; `internal/httputil/parse.go:37`;
+  `internal/sweep/`; `internal/writeback/outbox.go:91`;
+  `internal/fingerprint/fpcalc.go:293`; `internal/audio/sample.go:91, 97`;
+  `internal/transcode/`, `internal/remux/`; `internal/reconcile/reconcile.go`;
+  `internal/itunes/{itl,plist_parser,mhoh_encoding_audit,library_activity}.go`;
+  `internal/itunes/service/{transfer,writeback_batcher}.go`;
+  `internal/audiobooks/`; `internal/playlist/evaluator.go`;
+  `internal/scheduler/extra_ops.go`; remaining `internal/maintenance/jobs/*`;
+  remaining `internal/server/handlers/*`.
 
 ### Collision matrix
 
@@ -816,14 +872,20 @@ Files: everything remaining under `internal/server/*_ops.go` not already claimed
 | `internal/aiscan/pipeline.go` | 10 |
 | `internal/server/bootstrap.go`, `internal/server/handlers/auth.go`, `internal/server/middleware/absauth.go`, `internal/mtls/` | 11 |
 | `internal/server/server.go`, `internal/{importer,merge}/collision.go`, `internal/quarantine/`, `internal/database/pebble_store_quarantine.go`, `internal/server/handlers/filesystem.go`, `internal/reconcile/itunes_heal.go`, `internal/operations/registry/watchdog.go`, `internal/itunes/pid_repair.go` | 12 |
-| everything else | 13 |
+| everything else (residual — see the Wave 13 caveat; **run alone, not in parallel**) | 13 |
 
-**No file appears in two waves.** Waves 1–2 and 4–13 can all run in parallel once
-Wave 0 has landed. Wave 3 is gated on `fix/ops-params-silent-unmarshal`.
+**No file appears in two waves 1–12.** Those twelve are enumerated file-by-file and
+are safe to run concurrently once Wave 0 has landed. **Wave 13 is the exception** —
+it is defined by exclusion and must run last, alone.
 
-Suggested execution: Wave 0 alone → then Waves 1, 2, 4, 5 in parallel (the
-data-loss tier) → then 6, 7, 8, 10 → then 9, 11, 12, 13. Wave 3 slots in whenever
-its blocking branch clears.
+Suggested execution:
+
+1. **Wave 0 alone** (helper + errcheck exemption list).
+2. **Waves 1, 2, 3, 4, 5 in parallel** — the data-loss tier. (Wave 3 is *not*
+   blocked; the similarly-named worktree was verified empty.)
+3. **Waves 6, 7, 8, 10 in parallel.**
+4. **Waves 9, 11, 12 in parallel.**
+5. **Wave 13 alone, last.**
 
 ---
 
@@ -859,7 +921,7 @@ list above as complete. It is not.
     code, not from reproducing the failure. Before fixing a site, confirm the
     failure mode is reachable — several may be dead paths.
 
-### 7.1 Five claims in this document were wrong on first pass
+### 7.1 Ten claims in this document were wrong on first pass
 
 A verification pass re-read the source for every claim that had been inferred from
 a grep line rather than from the surrounding function. **Five of the ~120 named
@@ -872,13 +934,27 @@ consequences were wrong** and are marked "⚠️ Corrected on verification" in p
 | `internal/merge/collision.go:26` | "the merge proceeds when it should have been blocked" | it is a title-display helper; the merge gate is elsewhere |
 | `internal/database/pebble_store_playback.go:107` | "the user's saved position is overwritten" | the row is written regardless; a **stale status index entry** leaks |
 | `internal/undo/engine.go:309` | "the change is silently skipped → partial undo" | it is the conflict **preflight**; a read error is reported to the user as `"book deleted"` |
+| Wave 3 gate | "⛔ BLOCKED — `fix/ops-params-silent-unmarshal` is already working this file set" | the branch is **zero commits ahead of main** with a clean worktree; it was scaffolded and never used. Wave 3 is not blocked. |
+| 5 × `internal/plugins/maintenance/*.go` op params | ranked 🔴 CRITICAL alongside the server ops | their `DryRun`/`OnlyMissing`/`SkipExisting` fields are `*bool` documented to default TRUE when nil, so a malformed blob **fails safe**. Downgraded to 🟢; only the `LastBookID` resume point is lost. |
+| `internal/plugins/dedup/embed_scan.go:71` | "consequence not determined; plausibly a full re-embed" | ✅ correct and deliberate — commented, and the sole field `Async bool` has no scope dimension. Removed from Wave 3. |
+| 15 × `internal/database/pebble_store*.go` bare `continue` | "the single highest-leverage cluster in bucket (d)" | they are **secondary-index walks**; `row == nil` is intended stale-index tolerance. Only the `err != nil` half is a defect. `embedding_store.go` is the real cluster (decode failures). |
+| `operations.ClearState` at `server_lifecycle.go:105–249` | "can resume an operation that already completed" | every site is preceded by `UpdateOperationError`, so the op is already marked failed. The real consequence is an **orphaned checkpoint row**. Downgraded HIGH → MEDIUM. |
 
-Two claims were *strengthened* by the same pass: `internal/itunes/service/position_sync.go:85, 118`
-turned out to be guards whose entire purpose is defeated by the discard, and
+Three claims were *strengthened* by the same pass: `internal/itunes/service/position_sync.go:85, 118`
+turned out to be guards whose entire purpose is defeated by the discard;
 `internal/importer/collision.go` has a **second** site (line 93) that suppresses
-every title-collision candidate.
+every title-collision candidate; and `internal/server/library_core_ops.go:193`
+(`library.organize` → whole library) was confirmed against
+`internal/organizer/service.go:170–189` rather than left as an inference.
+
+The same pass also found the **fix template already in the repo**:
+`library.transcode` at `internal/server/library_core_ops.go:255` handles its params
+correctly, 60 lines below the worst instance of the defect.
 
 **Implication for whoever executes the waves:** a grep line plus a callee name is
-not enough to write a fix. The error rate on inference-from-grep in this audit was
-roughly **1 in 24**. Read the enclosing function before changing any site,
-particularly the ones still marked "consequence not determined".
+not enough to write a fix. Of the claims that were re-verified, **ten were wrong** —
+roughly a **1-in-12 error rate on inference-from-grep**, and two of the ten
+(the Wave 3 gate, the pebble-store cluster ranking) would have misdirected the
+execution order. Read the enclosing function *and* the params struct before changing
+any site, particularly the ones still marked "consequence not determined". A `*bool`
+field is a strong signal that the author already thought about the zero value.
