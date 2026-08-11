@@ -1,5 +1,5 @@
 # file: Makefile
-# version: 2.15.5
+# version: 2.16.0
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
 # last-edited: 2026-08-10
 
@@ -264,6 +264,46 @@ test-nightly: test web-test coverage-check
 
 ## test-frontend: Run frontend tests independently (alias for web-test)
 test-frontend: web-test
+
+## test-everything: Every test surface in ONE run, continuing past failures, ending in a matrix
+##                  (local pre-PR sweep; replaces the retired scripts/run-all-tests.sh)
+.PHONY: test-everything
+test-everything:
+	@echo "🧪 Running every test surface: backend, frontend, e2e."
+	@echo "   A failing surface does NOT stop the run — the matrix at the end is the verdict."
+	@rc_go=0; rc_web=0; rc_e2e=0; \
+	echo ""; echo "────── 1/3  backend (go test) ──────"; \
+	$(MAKE) --no-print-directory test || rc_go=$$?; \
+	echo ""; echo "────── 2/3  frontend (vitest) ──────"; \
+	$(MAKE) --no-print-directory web-test || rc_web=$$?; \
+	echo ""; echo "────── 3/3  e2e (playwright) ──────"; \
+	if command -v lsof >/dev/null 2>&1; then \
+	  stale=$$(lsof -ti :8484 2>/dev/null || true); \
+	  if [ -n "$$stale" ]; then \
+	    echo "⚠️  Killing stale server on :8484 (pids: $$stale)."; \
+	    echo "    playwright.config.ts sets reuseExistingServer outside CI, so a leftover"; \
+	    echo "    server would make the e2e verdict describe a DIFFERENT build than this one."; \
+	    kill -9 $$stale 2>/dev/null || true; \
+	  fi; \
+	else \
+	  echo "ℹ️  lsof unavailable — cannot check for a stale :8484 server."; \
+	fi; \
+	$(MAKE) --no-print-directory test-e2e || rc_e2e=$$?; \
+	echo ""; \
+	echo "╭──────────────────────────────────────────╮"; \
+	echo "│  test-everything summary                 │"; \
+	echo "├──────────────────────────────────────────┤"; \
+	[ $$rc_go  -eq 0 ] && echo "│  backend  (go test)      ✅ PASS         │" || echo "│  backend  (go test)      ❌ FAIL (rc=$$rc_go)   │"; \
+	[ $$rc_web -eq 0 ] && echo "│  frontend (vitest)       ✅ PASS         │" || echo "│  frontend (vitest)       ❌ FAIL (rc=$$rc_web)   │"; \
+	[ $$rc_e2e -eq 0 ] && echo "│  e2e      (playwright)   ✅ PASS         │" || echo "│  e2e      (playwright)   ❌ FAIL (rc=$$rc_e2e)   │"; \
+	echo "╰──────────────────────────────────────────╯"; \
+	failed=0; \
+	for rc in $$rc_go $$rc_web $$rc_e2e; do [ $$rc -eq 0 ] || failed=$$((failed + 1)); done; \
+	if [ $$failed -ne 0 ]; then \
+	  echo "❌ $$failed of 3 surfaces FAILED."; \
+	  exit 1; \
+	fi; \
+	echo "✅ All 3 surfaces passed."
 
 ## test-e2e: Run Playwright E2E tests (chromium + webkit only; excludes demo recording)
 test-e2e:
