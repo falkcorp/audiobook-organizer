@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 3.8.0
+// version: 3.9.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-08-09
+// last-edited: 2026-08-10
 
 package server
 
@@ -1016,10 +1016,18 @@ func (s *Server) startBackfills() {
 			return
 		}
 		type vgBackfiller interface{ BackfillVersionGroupIndex() error }
-		if b, ok := s.Store().(vgBackfiller); ok {
-			if err := b.BackfillVersionGroupIndex(); err != nil {
-				slog.Warn("versiongroup-backfill", "err", err)
-			}
+		b, ok := s.Store().(vgBackfiller)
+		if !ok {
+			// Not a silent fall-through: this is the production repair for an
+			// under-reporting version-group index, and if the store is ever
+			// wrapped or decorated the assertion misses and NOTHING happens.
+			// That is indistinguishable from a completed run unless it says so.
+			slog.Warn("versiongroup-backfill: store does not implement BackfillVersionGroupIndex, index will NOT be rebuilt",
+				"store_type", fmt.Sprintf("%T", s.Store()))
+			return
+		}
+		if err := b.BackfillVersionGroupIndex(); err != nil {
+			slog.Warn("versiongroup-backfill", "err", err)
 		}
 	}()
 
