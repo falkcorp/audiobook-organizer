@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/handler.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 1b7fbd86-cdda-4921-b2d0-786f5cadb438
-// last-edited: 2026-07-16
+// last-edited: 2026-08-11
 
 // Package operations hosts the background-operation HTTP handlers extracted
 // from the server package: the long-running scan / organize / optimize /
@@ -117,7 +117,23 @@ func (h *Handler) launchOp(c *gin.Context, opName string, body []byte) bool {
 	if len(body) == 0 {
 		body = []byte("{}")
 	}
-	opID, err := h.registry.EnqueueOp(c.Request.Context(), opName, body)
+	// json.RawMessage, NOT the bare []byte.
+	//
+	// EnqueueOp takes `params any` and json.Marshal's it. Marshalling a []byte
+	// base64-encodes it, so the raw request body {"book_ids":[...]} was stored
+	// as the JSON STRING "eyJib29rX2lkcyI6..." — and every op that then tried to
+	// decode those params into its struct got
+	// `cannot unmarshal string into Go value of type ...`.
+	//
+	// Until now that error was discarded at the op end, so the params were
+	// silently replaced by the zero value: POST /operations/organize with an
+	// explicit book_ids list ran with BookIDs nil, which downstream means "no
+	// selection" — the WHOLE LIBRARY. Every filter and flag sent through these
+	// three endpoints has been dropped on the floor.
+	//
+	// json.RawMessage marshals to its bytes verbatim, which is what the ops
+	// have always expected to receive.
+	opID, err := h.registry.EnqueueOp(c.Request.Context(), opName, json.RawMessage(body))
 	if err != nil {
 		httputil.InternalError(c, "enqueue failed", err)
 		return false

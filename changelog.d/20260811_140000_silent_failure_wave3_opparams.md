@@ -1,5 +1,25 @@
 ### Fixed
 
+#### Scan, Organize and Transcode were throwing away everything you told them
+
+Found while fixing the item below, and it is the more serious of the two.
+
+When you start a Scan, an Organize, or a Transcode from the UI, the server passes
+your settings along to the background job. It was passing them in a form that
+turned the whole settings object into an unreadable blob of text before it ever
+arrived. The job then couldn't read it, said nothing, and fell back to its
+defaults.
+
+So **every option you set on those three screens was silently discarded** — which
+books you picked, which folder, whether to fetch metadata first. And the default
+for "which books" is not "none", it's **all of them**. Asking to organize a
+handful of books ran an organize across the entire library instead. That is very
+likely why organizing has been touching far more than expected.
+
+Transcode was the tell: it was the one job strict enough to reject the unreadable
+settings outright, so it had simply been failing every time, while its two
+siblings quietly did the wrong thing. One line caused all three.
+
 #### Background jobs no longer run with settings they failed to read
 
 Wave 3 of the silent-failure sweep. Thirteen background operations — library scan,
