@@ -1,5 +1,5 @@
 // file: internal/organizer/service.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
 // last-edited: 2026-08-11
 
@@ -183,6 +183,12 @@ func (orgSvc *Service) PerformOrganize(ctx context.Context, req *Request, log lo
 			for i := range page {
 				allBooks = append(allBooks, page[i].ToBook())
 			}
+			// Stamp per page. This loop pulls the whole library in 1,000-book
+			// pages and had no progress calls at all, so on a large library it
+			// was a second silent window after the backup — same failure mode,
+			// same watchdog. (0, 1) because the row count is not known until
+			// the last short page arrives.
+			log.UpdateProgress(0, 1, fmt.Sprintf("Loading library: %d books", len(allBooks)))
 			if len(page) < fetchPageSize {
 				break
 			}
@@ -197,8 +203,13 @@ func (orgSvc *Service) PerformOrganize(ctx context.Context, req *Request, log lo
 	if req.FetchMetadataFirst {
 		log.Info("Fetching metadata before organizing...")
 		enriched := 0
+		// A sequential network call per book over the whole library, and it had
+		// no progress calls either — the longest silent window of the three.
+		// Stamped per book because the total IS known here, unlike the paging
+		// loops above.
 		for i := range allBooks {
 			book := &allBooks[i]
+			log.UpdateProgress(i+1, len(allBooks), fmt.Sprintf("Fetching metadata: %d/%d", i+1, len(allBooks)))
 			if book.CoverURL != nil {
 				continue // already enriched
 			}
@@ -218,6 +229,7 @@ func (orgSvc *Service) PerformOrganize(ctx context.Context, req *Request, log lo
 			for i := range page {
 				allBooks = append(allBooks, page[i].ToBook())
 			}
+			log.UpdateProgress(0, 1, fmt.Sprintf("Reloading library after metadata: %d books", len(allBooks)))
 			if len(page) < fetchPageSize {
 				break
 			}
@@ -305,6 +317,66 @@ const (
 	backupFailed        backupMethod = "failed"
 )
 
+// backupProgressInterval is how often the auto-backup forwards a progress
+// stamp to the operation. Well under the registry watchdog's 5-minute
+// ProgressTimeout, and far above the rate the archive walk fires at.
+const backupProgressInterval = 15 * time.Second
+
+// backupProgressReporter adapts backup.BackupProgress onto the operation
+// logger, rate-limited to one stamp per interval.
+//
+// WHY THE THROTTLE: log.UpdateProgress writes through to Pebble, and the
+// archive walk fires once per file — thousands of times on a 14 GB database.
+// Unthrottled, the reporting would be a measurable share of the backup's cost.
+//
+// WHY IT IS NOT A TICKER: a goroutine stamping every 15s would satisfy the
+// watchdog whether or not the backup was alive, converting a hang DETECTOR
+// into a hang CONCEALER. This function only runs when the archiver has
+// actually finished another file or another checksum chunk, so it cannot
+// report motion that did not happen. The cost of that honesty is that a single
+// file taking longer than ProgressTimeout to write would still be cancelled —
+// acceptable, because Pebble SSTs are bounded well below that.
+func backupProgressReporter(log logger.Logger, interval time.Duration) backup.BackupProgress {
+	var last time.Time
+	return func(phase string, filesDone int, bytesDone int64) {
+		now := time.Now()
+		if !last.IsZero() && now.Sub(last) < interval {
+			return
+		}
+		last = now
+
+		var msg string
+		switch phase {
+		case backup.PhaseCheckpoint:
+			msg = "Backing up: snapshotting database"
+		case backup.PhaseArchive:
+			msg = fmt.Sprintf("Backing up: archived %d files (%s)", filesDone, humanBytes(bytesDone))
+		case backup.PhaseChecksum:
+			msg = fmt.Sprintf("Backing up: verifying archive (%s)", humanBytes(bytesDone))
+		default:
+			msg = "Backing up database"
+		}
+		// (0, 1) rather than a computed denominator: the total size of the
+		// archive is not known until it is written, and inventing one produces
+		// a percentage that jumps backwards.
+		log.UpdateProgress(0, 1, msg)
+	}
+}
+
+// humanBytes renders a byte count for an operator-facing progress line.
+func humanBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
+}
+
 func (orgSvc *Service) autoBackup(log logger.Logger) backupMethod {
 	dbPath := config.AppConfig.DatabasePath
 	dbType := config.AppConfig.DatabaseType
@@ -330,6 +402,7 @@ func (orgSvc *Service) autoBackup(log logger.Logger) backupMethod {
 	start := time.Now()
 	log.UpdateProgress(0, 1, "Backing up database before organize (this can take several minutes)")
 	log.Info("Auto-backup starting: %s", dbPath)
+	backupConfig.Progress = backupProgressReporter(log, backupProgressInterval)
 
 	var (
 		info   *backup.BackupInfo
