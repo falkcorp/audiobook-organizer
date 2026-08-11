@@ -1,7 +1,7 @@
 // file: internal/server/itunes_path_ops.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c4e9b2a-1f3d-4e5a-8b6c-0d2e4f6a8c0e
-// last-edited: 2026-05-11
+// last-edited: 2026-08-11
 //
 // itunes_path_ops registers the v2 OperationDefs for iTunes path-reconcile
 // and path-repair operations, and provides the HTTP handlers that replace
@@ -104,7 +104,9 @@ func (s *Server) RegisterITunesPathReconcileOp(reg *opsregistry.Registry) error 
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
 			var p itunesPathReconcileOpParams
 			if len(rawParams) > 0 {
-				_ = json.Unmarshal(rawParams, &p)
+				if err := json.Unmarshal(rawParams, &p); err != nil {
+					return fmt.Errorf("itunes.path-reconcile: decode params: %w", err)
+				}
 			}
 			if s.itunesSvc == nil || s.itunesSvc.Paths == nil {
 				return fmt.Errorf("iTunes service not initialized")
@@ -133,7 +135,9 @@ func (s *Server) RegisterITunesPathRepairOp(reg *opsregistry.Registry) error {
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
 			var p itunesPathRepairOpParams
 			if len(rawParams) > 0 {
-				_ = json.Unmarshal(rawParams, &p)
+				if err := json.Unmarshal(rawParams, &p); err != nil {
+					return fmt.Errorf("itunes.path-repair: decode params: %w", err)
+				}
 			}
 			if s.itunesSvc == nil || s.itunesSvc.Repair == nil {
 				return fmt.Errorf("iTunes service not initialized")

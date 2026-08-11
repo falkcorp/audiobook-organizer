@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/auto_match_transcribed.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7a3b5c1d-2e4f-6a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-06-29
+// last-edited: 2026-08-11
 
 package maintenance
 
@@ -59,7 +59,9 @@ func (p *Plugin) runAutoMatchTranscribed(ctx context.Context, rawParams json.Raw
 
 	var params autoMatchTranscribedParams
 	if len(rawParams) > 0 {
-		_ = json.Unmarshal(rawParams, &params)
+		if err := json.Unmarshal(rawParams, &params); err != nil {
+			return fmt.Errorf("maintenance.auto-match-transcribed: decode params: %w", err)
+		}
 	}
 
 	// Default dry_run to true — safety first.

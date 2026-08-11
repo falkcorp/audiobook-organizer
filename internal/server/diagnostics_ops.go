@@ -1,6 +1,7 @@
 // file: internal/server/diagnostics_ops.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7d8e9f0a-1b2c-3d4e-5f6a-7b8c9d0e1f2a
+// last-edited: 2026-08-11
 
 // diagnostics_ops registers the diagnostics export OperationDef (v2 UOS).
 
@@ -43,7 +44,9 @@ func (s *Server) RegisterDiagnosticsExportOp(reg *opsregistry.Registry) error {
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
 			var p diagnosticsExportOpParams
 			if len(rawParams) > 0 {
-				_ = json.Unmarshal(rawParams, &p)
+				if err := json.Unmarshal(rawParams, &p); err != nil {
+					return fmt.Errorf("diagnostics.export: decode params: %w", err)
+				}
 			}
 			store := s.Store()
 			ds := s.diagnosticsService
