@@ -1,7 +1,7 @@
 // file: internal/database/memdb_strip.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-stripbook0001
-// last-edited: 2026-08-06
+// last-edited: 2026-08-11
 
 package database
 
@@ -11,7 +11,7 @@ package database
 // Callers that need the full Book (UI enrichment, write paths) fetch it
 // from Pebble via GetBookByID, which is the canonical source.
 //
-// Memory math (392K-book production library):
+// Memory math (production library):
 //
 //	Description avg ~500-2000 chars  → ~400MB-1.5GB across all books
 //	BookSigV1 base64 4096 uint32s    → ~22KB per fingerprinted book

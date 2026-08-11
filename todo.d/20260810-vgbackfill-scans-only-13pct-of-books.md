@@ -1,56 +1,56 @@
-- [ ] **VGBACKFILL-SCAN-BOUNDS** The version-group backfill scans only ~13% of
-      the library. Its Pebble iterator bounds exclude most book rows, and the
-      run reports a clean `complete` regardless — so it looks like a full
-      rebuild.
+- [x] ~~**VGBACKFILL-SCAN-BOUNDS** The version-group backfill scans only ~13% of
+      the library.~~ **RETRACTED 2026-08-11 — there was no under-scan.** Kept
+      rather than deleted so nobody re-derives the same wrong conclusion from
+      the same logs.
 
-      **Measured on prod 2026-08-10, one boot, same process:**
+      **What was claimed:** `scanned=48874` against `books=366922` from the same
+      boot = 13.3%, therefore the backfill's Pebble iterator bounds
+      (`book:0` .. `book:;`, admitting only digit-leading IDs) were excluding
+      ~318k rows.
 
-          memdb warmup complete    books=366922 ...
-          versiongroup-backfill: complete  scanned=48874 indexed=37377
-              no_version_group=11497 unmarshal_errors=0 commits=4
-              duration=12.943s
+      **What is actually true:** `books=366922` was never a book count. The
+      memdb warmup's `warmIter` returned the number of Pebble KEYS it visited
+      under the `book:` prefix, and that prefix is shared with roughly seven
+      secondary-index families — `book:path:`, `book:hash:`,
+      `book:originalhash:`, `book:organizedhash:`, `book:versiongroup:`,
+      `book:work:`, `book:asin:`/`book:isbn13:`. The row callback skips those
+      via `strings.Count(key, ":") != 1`, but the skipped keys were still
+      counted and then published under the label `books`. About 7.5 keys per
+      book row on production.
 
-      48,874 / 366,922 = **13.3%**. The backfill declared success and set its
-      sentinel, so it will not re-run: the remaining ~86.7% of books stay
-      unindexed until the sentinel key is bumped again.
+      The real library is **~46k–55k books**, corroborated three ways in the
+      same logs: `total_books=46221` and `total_books=54734` from system
+      status, and the organizer's own `Fetched 48896 total books from
+      database`. So `scanned=48874` was a **complete** scan, and the digit-only
+      iterator bounds — while genuinely fragile — were not excluding anything,
+      because production book IDs are ULIDs and a ULID minted this century
+      starts with `0`.
 
-      **Suspected cause — iterator bounds, NOT the row filter.** The scan uses:
+      **How the error was made, because the shape recurs:** the original entry
+      explicitly listed this explanation ("the two numbers could also disagree
+      because `books=366922` counts something the `book:<id>` keyspace does
+      not") and marked the whole thing NOT YET CONFIRMED. It was then upgraded
+      to CONFIRMED on 2026-08-11 when a *second* subsystem — the organizer's
+      `GetAllBooksCore` paging loop — reported 48,896 against the same
+      `books=366922`. Two independent readings agreeing looked like
+      corroboration. They were not independent: both were compared against the
+      **same unverified denominator**. Agreement between two numerators says
+      nothing about the denominator they share.
 
-          LowerBound: []byte("book:0")
-          UpperBound: []byte("book:;")
+      **Fixed in the same PR as this retraction:** warmup now reports rows
+      inserted into memdb, and reports keys scanned separately under its own
+      name so the two can never be confused again. Pinned by
+      `TestWarmupCounts_CountRowsNotPebbleKeys`, which fails with
+      `expected: 4, actual: 20` against the old counting.
 
-      `'0'` is `0x30` and `';'` is `0x3B`, so the range admits only IDs whose
-      first byte is `0x30`–`0x3A` — the ten digits (plus `:`). Any book ID
-      beginning with a letter is outside the range and is never visited.
-
-      New books get ULIDs (`CreateBook` → `newULID()`), and a ULID minted this
-      century starts with `'0'`, so ULID-keyed books ARE in range. But
-      `CreateBook` only mints an ID `if book.ID == ""` — a caller may supply its
-      own, and importers do. That is the likely source of the ~318k invisible
-      rows.
-
-      ⚠️ **NOT YET CONFIRMED**, and it must be before any fix: nobody has
-      sampled real prod book IDs. The two numbers could also disagree because
-      `books=366922` counts something the `book:<id>` keyspace does not
-      (memdb rows built from a different source, tombstoned rows, etc.). Get
-      actual key samples first — the `.api-token` at repo root is stale (401),
-      so this needs a fresh credential.
-
-      **This is pre-existing, not a regression from #2295.** The bounds are
-      unchanged from the original implementation; #2293 replaced a substring
-      blacklist with a `strings.Count(key, ":") != 1` structural filter and
-      #2295 fixed the decorator so the backfill runs at all. Both are why the
-      numbers are now visible: before tonight this code had never executed in
-      production, so it under-scanned silently and invisibly.
-
-      **Fix sketch (after confirming):** drop the bounds to a prefix scan over
-      `book:` → `book;` and let the existing one-colon structural filter reject
-      secondary indexes, which is what it was written to do. Then bump
-      `versionGroupBackfillKey` to `_v3_done` so every deployment rebuilds.
-      Assert on scanned-vs-total, not just on absence of error — a `complete`
-      line that under-scans by 87% is the same class of defect as the parse that
-      "succeeds" on garbage.
-
-      Related: the under-reporting version-group index reproduced in #2277 is
-      only partly explained by the never-running backfill if this holds — most
-      books were never candidates for indexing in the first place.
+- [ ] **VGBACKFILL-BOUNDS-FRAGILE** Separately, and still worth doing: the
+      version-group backfill's iterator bounds `book:0` .. `book:;` admit only
+      IDs whose first byte is `0x30`–`0x3A`. That is correct today only because
+      every production book ID happens to be a ULID starting with `0`. It is
+      not enforced anywhere — `CreateBook` mints a ULID only `if book.ID == ""`,
+      so a caller supplying a letter-leading ID would become permanently
+      invisible to this scan with no error. Replace the bounds with a prefix
+      scan over `book:` → `book;` and let the existing one-colon structural
+      filter reject the secondary indexes, which is what it was written for.
+      This is a latent-correctness fix, **not** the cause of any observed
+      under-scan.
