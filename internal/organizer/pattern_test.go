@@ -1,6 +1,7 @@
 // file: internal/organizer/pattern_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
+// last-edited: 2026-08-11
 
 package organizer
 
@@ -204,7 +205,9 @@ func TestPatternExpansionWithRealData(t *testing.T) {
 			folderPattern:  "{author}/{series}",
 			filePattern:    "{title} - {narrator}",
 			expectedFolder: "Unknown Author",
-			expectedFile:   "Unknown Title - narrator.m4b",
+			// Title falls back to "Unknown Title", but an absent narrator is
+			// NOT defaulted to the word "narrator" — its segment is dropped.
+			expectedFile: "Unknown Title.m4b",
 		},
 	}
 
@@ -262,8 +265,9 @@ func TestEmptyFieldRemoval(t *testing.T) {
 				Title:  "Book Title",
 				Author: &database.Author{Name: "Jane Doe"},
 			},
-			pattern:  "{title} - {narrator}",
-			expected: "Book Title - narrator",
+			pattern: "{title} - {narrator}",
+			// Was "Book Title - narrator" — the defaultNarrator bug.
+			expected: "Book Title",
 		},
 		{
 			name: "keep filled narrator",

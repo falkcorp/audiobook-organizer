@@ -1,6 +1,7 @@
 // file: internal/organizer/organizer_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 8b9c0d1e-2f3a-4b5c-6d7e-8f9a0b1c2d3e
+// last-edited: 2026-08-11
 
 package organizer
 
@@ -588,6 +589,10 @@ func TestExpandPattern_EmptyTitle(t *testing.T) {
 	}
 }
 
+// TestExpandPattern_EmptyNarrator previously asserted that a blank narrator was
+// substituted with the literal string "narrator" (defaultNarrator). That default
+// was the production bug — it wrote the word "narrator" into real filenames — so
+// the test now pins the opposite: a blank narrator expands to nothing.
 func TestExpandPattern_EmptyNarrator(t *testing.T) {
 	org := &Organizer{config: &config.Config{}}
 
@@ -602,8 +607,213 @@ func TestExpandPattern_EmptyNarrator(t *testing.T) {
 		t.Fatalf("expand pattern failed: %v", err)
 	}
 
-	if result != defaultNarrator {
-		t.Errorf("expected %q, got %q", defaultNarrator, result)
+	if result != "" {
+		t.Errorf("expected an empty expansion, got %q", result)
+	}
+
+	// And in a realistic pattern the connector words go with it.
+	result, err = org.expandPattern("{title} - read by {narrator}", book)
+	if err != nil {
+		t.Fatalf("expand pattern failed: %v", err)
+	}
+	if result != "Book" {
+		t.Errorf("expected %q, got %q", "Book", result)
+	}
+}
+
+// TestExpandPattern_EmptySegmentDropsConnectorWords covers the production bug
+// where a book with no narrator was organized to a path containing the literal
+// word "narrator" (measured 2026-08-11: 2,611 of 3,194 occupied-path organize
+// failures contained "read by narrator").
+//
+// The requirement is stronger than "don't substitute a default": with the
+// default pattern `{title} - {author} - read by {narrator}`, blanking the
+// narrator alone leaves a dangling literal "read by". The whole " - "-delimited
+// segment has to go — but only when EVERY placeholder in that segment is empty.
+func TestExpandPattern_EmptySegmentDropsConnectorWords(t *testing.T) {
+	const defaultPattern = "{title} - {author} - read by {narrator}"
+
+	blank := "   "
+	tests := []struct {
+		name     string
+		pattern  string
+		book     *database.Book
+		expected string
+	}{
+		{
+			name:    "narrator present is kept with its connector words",
+			pattern: defaultPattern,
+			book: &database.Book{
+				Title:    "Time Pebbles",
+				Author:   &database.Author{Name: "Jerry Merritt"},
+				Narrator: stringPtr("Rob Inglis"),
+			},
+			expected: "Time Pebbles - Jerry Merritt - read by Rob Inglis",
+		},
+		{
+			name:    "narrator nil drops the whole read-by segment",
+			pattern: defaultPattern,
+			book: &database.Book{
+				Title:  "Time Pebbles",
+				Author: &database.Author{Name: "Jerry Merritt"},
+			},
+			expected: "Time Pebbles - Jerry Merritt",
+		},
+		{
+			name:    "narrator whitespace-only drops the whole read-by segment",
+			pattern: defaultPattern,
+			book: &database.Book{
+				Title:    "Reality Alternatives",
+				Author:   &database.Author{Name: "Lesley L. Smith"},
+				Narrator: &blank,
+			},
+			expected: "Reality Alternatives - Lesley L. Smith",
+		},
+		{
+			name:    "empty placeholder mid-string drops only that segment",
+			pattern: "{title} - read by {narrator} - {author}",
+			book: &database.Book{
+				Title:  "Time Pebbles",
+				Author: &database.Author{Name: "Jerry Merritt"},
+			},
+			expected: "Time Pebbles - Jerry Merritt",
+		},
+		{
+			name:    "segment with two placeholders keeps the segment when one is filled",
+			pattern: "{title} - {series} {series_number}",
+			book: &database.Book{
+				Title:  "Book Title",
+				Author: &database.Author{Name: "Author Name"},
+				Series: &database.Series{Name: "Series Name"},
+			},
+			expected: "Book Title - Series Name",
+		},
+		{
+			name:    "segment with two placeholders is dropped only when both are empty",
+			pattern: "{title} - {series} {series_number}",
+			book: &database.Book{
+				Title:  "Book Title",
+				Author: &database.Author{Name: "Author Name"},
+			},
+			expected: "Book Title",
+		},
+		{
+			name:    "literal-only segments are never dropped",
+			pattern: "{title} - Audiobook - read by {narrator}",
+			book: &database.Book{
+				Title: "Book Title",
+			},
+			expected: "Book Title - Audiobook",
+		},
+		{
+			name:    "empty placeholder in parentheses still drops the parens",
+			pattern: "{title} ({print_year}) - read by {narrator}",
+			book: &database.Book{
+				Title: "Book Title",
+			},
+			expected: "Book Title",
+		},
+		{
+			// The segment split runs on the RAW pattern, never on substituted
+			// text — otherwise a title containing " - " would be torn apart.
+			name:    "title containing the segment separator survives intact",
+			pattern: defaultPattern,
+			book: &database.Book{
+				Title:    "Foundation - Part 1",
+				Author:   &database.Author{Name: "Isaac Asimov"},
+				Narrator: stringPtr("Scott Brick"),
+			},
+			expected: "Foundation - Part 1 - Isaac Asimov - read by Scott Brick",
+		},
+		{
+			name:    "title containing the separator survives a dropped sibling segment",
+			pattern: defaultPattern,
+			book: &database.Book{
+				Title:  "Foundation - Part 1",
+				Author: &database.Author{Name: "Isaac Asimov"},
+			},
+			expected: "Foundation - Part 1 - Isaac Asimov",
+		},
+		{
+			name:    "folder pattern with empty series collapses the path component",
+			pattern: "{author}/{series}/{title}",
+			book: &database.Book{
+				Title:  "Book Title",
+				Author: &database.Author{Name: "Author Name"},
+			},
+			expected: "Author Name/Book Title",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			org := &Organizer{config: &config.Config{}}
+			result, err := org.expandPattern(tt.pattern, tt.book)
+			if err != nil {
+				t.Fatalf("expand pattern failed: %v", err)
+			}
+			if result != tt.expected {
+				t.Errorf("pattern %q:\n  expected: %q\n  got:      %q", tt.pattern, tt.expected, result)
+			}
+			if strings.Contains(strings.ToLower(result), "read by") && tt.book.Narrator == nil {
+				t.Errorf("pattern %q leaked a dangling connector: %q", tt.pattern, result)
+			}
+		})
+	}
+}
+
+// TestExpandPattern_UnknownPlaceholderIsNotEmpty pins the discriminating case
+// for dropEmptyPatternSegments: an unknown placeholder must NOT be treated as
+// empty. If it were, a typo'd pattern would have its segment silently deleted
+// instead of raising the unresolved-placeholder error.
+func TestExpandPattern_UnknownPlaceholderIsNotEmpty(t *testing.T) {
+	org := &Organizer{config: &config.Config{}}
+	book := &database.Book{
+		Title:  "Book Title",
+		Author: &database.Author{Name: "Author Name"},
+	}
+
+	// {narrator} is empty and {unknown_field} is unknown — they share a
+	// segment, so the segment must survive and the error must still fire.
+	if _, err := org.expandPattern("{title} - read by {narrator} {unknown_field}", book); err == nil {
+		t.Fatal("expected an unresolved-placeholder error, got nil")
+	} else if !strings.Contains(err.Error(), "unresolved placeholders") {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	// Same, with the unknown placeholder alone in its own segment.
+	if _, err := org.expandPattern("{title} - read by {narrator} - {unknown_field}", book); err == nil {
+		t.Fatal("expected an unresolved-placeholder error for a lone unknown placeholder, got nil")
+	}
+}
+
+// TestGenerateTargetPath_EmptyStemFallsBackToTitle covers the new failure mode
+// created by dropping empty segments: a pattern that expands to nothing would
+// otherwise produce a bare dotfile (".m4b") that every narrator-less book
+// collides on.
+func TestGenerateTargetPath_EmptyStemFallsBackToTitle(t *testing.T) {
+	tmpDir := t.TempDir()
+	org := &Organizer{
+		config: &config.Config{
+			RootDir:             tmpDir,
+			FolderNamingPattern: "{author}",
+			FileNamingPattern:   "read by {narrator}",
+		},
+	}
+
+	book := &database.Book{
+		Title:    "Time Pebbles",
+		Author:   &database.Author{Name: "Jerry Merritt"},
+		FilePath: "/source/time-pebbles.m4b",
+	}
+
+	got, err := org.generateTargetPath(book)
+	if err != nil {
+		t.Fatalf("generate target path: %v", err)
+	}
+	want := filepath.Join(tmpDir, "Jerry Merritt", "Time Pebbles.m4b")
+	if got != want {
+		t.Errorf("expected %q, got %q", want, got)
 	}
 }
 

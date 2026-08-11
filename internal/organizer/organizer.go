@@ -1,7 +1,7 @@
 // file: internal/organizer/organizer.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-07-17
+// last-edited: 2026-08-11
 
 package organizer
 
@@ -59,10 +59,22 @@ func (o *Organizer) SetStore(s database.Store) {
 }
 
 const (
-	defaultTitle    = "Unknown Title"
-	defaultNarrator = "narrator"
-	tempFileSuffix  = ".tmp"
+	defaultTitle   = "Unknown Title"
+	tempFileSuffix = ".tmp"
+
+	// patternSegmentSep is the delimiter that separates naming-pattern
+	// segments. A segment is the unit that gets dropped wholesale when every
+	// placeholder inside it is empty — see dropEmptyPatternSegments.
+	patternSegmentSep = " - "
 )
+
+// NOTE: there is deliberately no defaultNarrator constant. It used to be
+// "narrator", and expandPattern substituted it whenever a book had no narrator.
+// With the default pattern `{title} - {author} - read by {narrator}` that wrote
+// the literal word into real filenames: measured on production 2026-08-11,
+// 2,611 of 3,194 books failing organize with ErrTargetOccupied had computed a
+// path ending in "- read by narrator". Empty narrator now takes the
+// empty-placeholder path like every other unset field.
 
 var (
 	leftoverPlaceholderRegex  = regexp.MustCompile(`\{[^}]+\}`)
@@ -242,7 +254,19 @@ func (o *Organizer) generateTargetPath(book *database.Book) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("file pattern: %w", err)
 	}
-	fileName = sanitizeFilename(fileName) + ext
+	// A pattern can now legitimately expand to nothing — e.g. the (unusual)
+	// pattern "{narrator}" for a book with no narrator, which before this
+	// commit expanded to the literal word "narrator". An empty stem would make
+	// the target a bare dotfile (".m4b") that EVERY such book collides on, so
+	// fall back to the book's own title, and only then to defaultTitle.
+	stem := sanitizeFilename(fileName)
+	if strings.TrimSpace(stem) == "" {
+		stem = sanitizeFilename(strings.TrimSpace(book.Title))
+	}
+	if strings.TrimSpace(stem) == "" {
+		stem = sanitizeFilename(defaultTitle)
+	}
+	fileName = stem + ext
 
 	// When iTunes path trimming is enabled, shorten the filename stem so the
 	// Windows-equivalent path stays under MAX_PATH (260 chars). This uses
@@ -325,9 +349,6 @@ func (o *Organizer) expandPattern(pattern string, book *database.Book) (string, 
 	}
 
 	narrator := strings.TrimSpace(stringOrEmpty(book.Narrator))
-	if narrator == "" {
-		narrator = defaultNarrator
-	}
 
 	// Replacements map
 	replacements := map[string]string{
@@ -348,6 +369,24 @@ func (o *Organizer) expandPattern(pattern string, book *database.Book) (string, 
 		"{quality}":       stringOrEmpty(book.Quality),
 	}
 
+	// Drop whole segments whose placeholders are ALL empty, before any
+	// substitution happens. This has to run on the raw pattern: it is the only
+	// point at which the connector words around a placeholder are still
+	// identifiable as part of the pattern rather than as book metadata.
+	//
+	// Without it, `{title} - {author} - read by {narrator}` with no narrator
+	// leaves the literal "read by" behind — cleanupPattern trims " -/" but has
+	// no idea "read by" is connective text. Mid-string it is worse: the old
+	// ` - {narrator}` rule ate the wrong dash and produced
+	// "Time Pebbles - read by Jerry Merritt", crediting the AUTHOR as narrator.
+	empties := make(map[string]struct{}, len(replacements))
+	for placeholder, value := range replacements {
+		if strings.TrimSpace(value) == "" {
+			empties[placeholder] = struct{}{}
+		}
+	}
+	result = dropEmptyPatternSegments(result, empties)
+
 	// Perform replacements
 	for placeholder, value := range replacements {
 		if strings.TrimSpace(value) == "" {
@@ -364,6 +403,54 @@ func (o *Organizer) expandPattern(pattern string, book *database.Book) (string, 
 		return "", fmt.Errorf("naming pattern produced %q with unresolved placeholders %v — book is missing values for these fields, or the pattern references unknown placeholders", result, leftover)
 	}
 	return result, nil
+}
+
+// dropEmptyPatternSegments removes each " - "-delimited segment of a naming
+// pattern whose placeholders are ALL empty, including any literal connector
+// words the segment carries ("read by", "narrated by", "#", ...).
+//
+// It must be called on the RAW pattern, before any substitution: once values
+// are in, a title like "Foundation - Part 1" is indistinguishable from a
+// segment boundary and would be split apart.
+//
+// Rules, in order:
+//   - A segment with no placeholders at all is literal text the user asked
+//     for; it is always kept.
+//   - A segment where at least one placeholder has a value is kept, and the
+//     empty placeholders inside it are cleaned up downstream by
+//     removeEmptySegment / cleanupPattern. This is what stops
+//     `{title} - {series} {series_number}` from losing the series name just
+//     because the book has no series number.
+//   - Only a segment where every placeholder is empty is dropped.
+//
+// Placeholders that are not in the replacements map at all (typos, unknown
+// fields) are deliberately NOT treated as empty — they survive into the
+// leftover-placeholder check in expandPattern so a bad pattern errors loudly
+// instead of silently deleting the segment that referenced it.
+//
+// Path components are handled independently so an empty folder level collapses
+// on its own; cleanupPattern squashes the resulting "//".
+func dropEmptyPatternSegments(pattern string, empties map[string]struct{}) string {
+	components := strings.Split(pattern, "/")
+	for i, component := range components {
+		segments := strings.Split(component, patternSegmentSep)
+		kept := segments[:0:0]
+		for _, segment := range segments {
+			placeholders := leftoverPlaceholderRegex.FindAllString(segment, -1)
+			allEmpty := len(placeholders) > 0
+			for _, placeholder := range placeholders {
+				if _, empty := empties[placeholder]; !empty {
+					allEmpty = false
+					break
+				}
+			}
+			if !allEmpty {
+				kept = append(kept, segment)
+			}
+		}
+		components[i] = strings.Join(kept, patternSegmentSep)
+	}
+	return strings.Join(components, "/")
 }
 
 // removeEmptySegment removes segments containing empty placeholders
