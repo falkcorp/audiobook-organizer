@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.121.0
+// version: 1.122.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-08-10
+// last-edited: 2026-08-11
 
 package database
 
@@ -2661,7 +2661,7 @@ func (p *PebbleStore) GetDistinctLanguages() ([]string, error) {
 func (p *PebbleStore) ListSoftDeletedBooks(limit, offset int, olderThan *time.Time) ([]Book, error) {
 	// Fast path: memdb has a marked_for_deletion index, so this is O(deleted)
 	// instead of O(total) — typically the soft-deleted set is tiny relative
-	// to 393K total books, so this turns a 20s Pebble scan into <50ms.
+	// to the full book count, so this turns a 20s Pebble scan into <50ms.
 	if mem := p.mem(); mem != nil {
 		return mem.ListSoftDeletedBooks(limit, offset, olderThan)
 	}

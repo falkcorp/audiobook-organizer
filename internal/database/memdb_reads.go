@@ -1,7 +1,7 @@
 // file: internal/database/memdb_reads.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000006
-// last-edited: 2026-07-11
+// last-edited: 2026-08-11
 
 package database
 
@@ -692,7 +692,7 @@ func (m *MemStore) ListBookIDs() ([]string, error) {
 // ListSoftDeletedBooks returns books with MarkedForDeletion=true, with optional
 // age filter (olderThan: only books whose MarkedForDeletionAt is on/before this
 // time). Uses the marked_for_deletion index so cost is O(deleted_count), not
-// O(total_books) — the soft-deleted set is typically tiny relative to 393K
+// O(total_books) — the soft-deleted set is typically tiny relative to the
 // total books, so this is orders of magnitude faster than the Pebble full-scan.
 func (m *MemStore) ListSoftDeletedBooks(limit, offset int, olderThan *time.Time) ([]Book, error) {
 	txn := m.db.Txn(false)
@@ -732,7 +732,7 @@ func (m *MemStore) ListSoftDeletedBooks(limit, offset int, olderThan *time.Time)
 // CountBooksByPathPrefix returns the number of (non-deleted) books whose
 // SourceImportPath (or FilePath, if SourceImportPath is nil) starts with prefix.
 // Falls back to a full memdb scan — no path-prefix index exists — but a memdb
-// scan over 393K rows is still ~200× faster than the equivalent Pebble scan
+// scan over the full book table is still ~200× faster than the equivalent Pebble scan
 // because the books are in RAM and don't need JSON unmarshal.
 func (m *MemStore) CountBooksByPathPrefix(prefix string) (int, error) {
 	if prefix == "" {
