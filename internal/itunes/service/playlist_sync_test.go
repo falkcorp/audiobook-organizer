@@ -16,7 +16,8 @@ func TestMigrateSmartPlaylists_NilLibrary(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	ps := newPlaylistSync(nil, nil)
-	imported, skipped := ps.MigrateSmartPlaylists(nil)
+	res := ps.MigrateSmartPlaylists(nil, PlaylistImportOptions{})
+	imported, skipped := res.Imported, res.Skipped
 	if imported != 0 || skipped != 0 {
 		t.Errorf("nil library: imported=%d skipped=%d, want 0/0", imported, skipped)
 	}
@@ -42,7 +43,8 @@ func TestMigrateSmartPlaylists_SkipsNonSmart(t *testing.T) {
 	}
 
 	ps := newPlaylistSync(store, nil)
-	imported, skipped := ps.MigrateSmartPlaylists(lib)
+	res := ps.MigrateSmartPlaylists(lib, PlaylistImportOptions{})
+	imported, skipped := res.Imported, res.Skipped
 	if imported != 0 || skipped != 0 {
 		t.Errorf("non-smart: imported=%d skipped=%d, want 0/0", imported, skipped)
 	}
@@ -80,7 +82,8 @@ func TestMigrateSmartPlaylists_SkipsAlreadyImported(t *testing.T) {
 	}
 
 	ps := newPlaylistSync(store, nil)
-	imported, skipped := ps.MigrateSmartPlaylists(lib)
+	res := ps.MigrateSmartPlaylists(lib, PlaylistImportOptions{})
+	imported, skipped := res.Imported, res.Skipped
 	if imported != 0 {
 		t.Errorf("expected 0 imported (already exists), got %d", imported)
 	}
