@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // file: web/tests/e2e/check-spec-discovery.mjs
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5b1c93a7-6e42-4d08-9f31-2a7c8e05b4d6
-// last-edited: 2026-08-10
+// last-edited: 2026-08-11
 
 /**
  * Fails if any e2e spec file on disk contributes no runnable test.
@@ -111,6 +111,13 @@ const GATE_PROJECT = 'chromium';
 const GATE_EXEMPT = new Set([
   'demo-full-workflow.spec.ts',
   'interactive-import-workflow.spec.ts',
+  // A measuring instrument, not a gate: it renders 10k rows at 4x/6x CPU
+  // throttle to produce the DOM-node and blocked-main-thread numbers behind
+  // the soft-deleted load fix. Asserting on wall-clock in CI would be a flake
+  // factory, so it runs on demand:
+  //   E2E_PERF=1 npx playwright test --config=tests/e2e/playwright.config.ts \
+  //     --project=benchmark
+  'benchmark-library-load.spec.ts',
 ]);
 
 function specFilesOnDisk(dir) {
