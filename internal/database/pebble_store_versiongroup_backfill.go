@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_versiongroup_backfill.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 9f3b7c21-6d84-4a5e-b0c9-2e7fa1d85b36
-// last-edited: 2026-08-10
+// last-edited: 2026-08-11
 // PERF-VERSIONS: one-time backfill that writes the
 // book:versiongroup:<gid>:<id> secondary index for every existing book
 // that has a VersionGroupID. Without this, /audiobooks/:id/versions
@@ -38,7 +38,7 @@ const versionGroupBackfillKey = "system:backfill:versiongroup_index_v2_done"
 // commit.
 //
 // This used to be unbounded: one pebble.Batch accumulated a row for EVERY
-// book and was committed once at the end. On a 366,922-book production
+// book and was committed once at the end. On a production-scale
 // library that buffers the entire rebuild in memory and makes nothing durable
 // until the final commit, so an interrupted run threw away all of its work and
 // started over from zero on the next boot — and, because the only log line was

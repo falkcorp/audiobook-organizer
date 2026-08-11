@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.75.0
+// version: 1.75.1
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-08-07
+// last-edited: 2026-08-11
 
 package config
 
@@ -777,17 +777,23 @@ type Config struct {
 	// ⚠️ DEFAULT IS EMPTY, AND THAT IS DELIBERATE. Each index costs real
 	// memory, measured rather than estimated at 100,000 books:
 	//
-	//	all nine enabled: 6,395 B/book vs 2,645 B/book — +142%
-	//	extrapolated to prod's 366,916 books: +1,312 MB
+	//	all nine enabled: 6,395 B/book vs 2,645 B/book — +142% (+3,750 B)
+	//	extrapolated to ~48,900 books: ~+175 MB
 	//	insert throughput: 2.8x slower
 	//
-	// That is ~146 MB per sort key, against a design-doc estimate of "tens
-	// of MB per field" — optimistic by roughly an order of magnitude,
-	// because go-memdb's radix tree is immutable and path-copies nodes on
-	// every insert, so cost tracks node count rather than key length.
+	// That is ~19 MB per sort key. go-memdb's radix tree is immutable and
+	// path-copies nodes on every insert, so cost tracks node count rather
+	// than key length — short keys do not make it cheap.
 	//
-	// memdb is already ~1.25 GB resident with a 107.9s warmup, so enabling
-	// all nine roughly doubles it. Enable the fields that are actually
+	// 🚨 This comment previously said "+1,312 MB" and "~146 MB per sort key",
+	// extrapolating to 366,916 books. That was never a book count — it was
+	// Pebble KEYS under the `book:` prefix, ~7.5 per row. The per-book
+	// measurement was always right; only the multiplier was wrong. See
+	// memdb_sort_index_cost_test.go for the full correction. It matters
+	// because it changes the answer: +175 MB is a very different proposition
+	// from +1.3 GB.
+	//
+	// Enable the fields that are actually
 	// sorted by, and measure warmup afterwards.
 	//
 	// Empty (the default) reproduces today's behaviour exactly: only title

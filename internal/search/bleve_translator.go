@@ -1,5 +1,5 @@
 // file: internal/search/bleve_translator.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 9c2a4f1d-5b3e-4f70-a7d6-2e8c0f1b9a47
 // last-edited: 2026-08-11
 //
@@ -141,7 +141,7 @@ func isStopwordOnly(term string) bool {
 //
 // The guard matters as much as the fix. A nil query from Translate becomes
 // MatchAll, so unconditionally dropping stopwords would make a search for "of"
-// return the entire 367K-book library. Requiring a surviving non-stopword term
+// return the entire library. Requiring a surviving non-stopword term
 // means this only ever fires on the broken case; an all-stopword query keeps its
 // current behaviour exactly.
 //

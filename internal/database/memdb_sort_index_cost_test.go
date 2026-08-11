@@ -1,13 +1,12 @@
 // file: internal/database/memdb_sort_index_cost_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6d0b3e57-41ac-4928-b3f6-8e17c2a95d10
-// last-edited: 2026-08-09
+// last-edited: 2026-08-11
 //
 // Measures what the sorted secondary indexes cost, because "tens of MB per
 // field" was an estimate in the design doc and estimates are not measurements.
 //
-// Prod is 366,916 books with memdb warmup at 107.9s and ~1.25GB resident.
-// Adding nine indexes to that structure is a production-affecting change, so
+// Adding nine indexes to the books table is a production-affecting change, so
 // the insert cost and the resident cost get measured on the same shape of
 // data before it ships, not after someone notices a slower boot.
 //
@@ -20,12 +19,8 @@
 // ⚠️ MEASURED RESULT, 2026-08-09 (100,000 books, same fixture both sides):
 //
 //	                    without      with 9 indexes    delta
-//	  heap per book     2,645 B      6,395 B           +142%
-//	  at 366,916 books  925.6 MB     2,237.8 MB        +1,312 MB
+//	  heap per book     2,645 B      6,395 B           +142%  (+3,750 B)
 //	  insert 100K       335 ms       935 ms            2.8x slower
-//
-// That is ~146 MB per sort key. The design doc estimated "tens of MB per
-// sort field" and was optimistic by roughly an order of magnitude.
 //
 // The reason is that go-memdb is an IMMUTABLE radix tree: every insert
 // path-copies nodes from root to leaf, so the per-index cost is dominated by
@@ -36,9 +31,42 @@
 // for nearly every row. A library with populated author/series data pays
 // more.
 //
-// Consequence: memdb is already ~1.25 GB resident with a 107.9s warmup.
-// Enabling all nine would push it past ~2.5 GB. That is a decision to take
-// with the number in hand, not on the estimate.
+// 🚨 EXTRAPOLATION CORRECTED 2026-08-11 — READ BEFORE QUOTING A TOTAL.
+//
+// The per-book delta above is a real measurement and is unchanged. What was
+// wrong was the population it got multiplied by. This header used to read:
+//
+//	at 366,916 books  925.6 MB  2,237.8 MB  +1,312 MB
+//	... ~146 MB per sort key ... enabling all nine would push memdb past 2.5 GB
+//
+// 366,916 was never a book count. It was the number of Pebble KEYS under the
+// `book:` prefix, which is shared with roughly seven secondary-index families
+// (book:path:, book:hash:, book:versiongroup:, book:work:, …) — about 7.5
+// keys per actual row. See memdb_warmup.go and
+// TestWarmupCounts_CountRowsNotPebbleKeys.
+//
+// The best current row count is ~48,900, from the organizer's own full paging
+// enumeration on 2026-08-11 ("Fetched 48896 total books from database"),
+// consistent with system status readings of 46,221 and 54,734.
+//
+// Re-extrapolated at 48,900 books:
+//
+//	                    without      with 9 indexes    delta
+//	  books table       ~123 MB      ~298 MB           ~+175 MB
+//
+// So all nine sort keys cost roughly **175 MB, not 1.3 GB** — about 19 MB per
+// key rather than 146 MB. The earlier figure overstated the cost by ~7.5x.
+//
+// This CHANGES THE DECISION it was gathered for, so it is flagged rather than
+// quietly edited: "+1.3 GB on a box already at 1.25 GB" reads as prohibitive,
+// while "+175 MB" does not. The owner's call either way — but on this number.
+//
+// Two things NOT claimed: the ~1.25 GB resident memdb figure is a real
+// observation and is not contradicted here (memdb holds every table, and
+// book_files alone is several hundred thousand rows — the books table is not
+// the bulk of it); and 48,900 is the best available count, not a verified one.
+// The definitive number comes from the row/key-separated warmup counter once
+// it is deployed.
 
 package database
 
@@ -49,9 +77,16 @@ import (
 	"time"
 )
 
-// costBookCount is deliberately below prod's 366,916 so the test stays
-// usable in CI; the per-book cost is what extrapolates.
+// costBookCount is deliberately ABOVE the production book count (~48,900) so
+// the per-book figure is measured on a tree at least as deep as the real one;
+// the per-book cost is what extrapolates.
 const costBookCount = 100_000
+
+// prodBookCount is the best available production row count — the organizer's
+// own full paging enumeration on 2026-08-11. NOT the 366,916 this file used
+// to extrapolate to: that was Pebble keys under the `book:` prefix, ~7.5 per
+// row. See the header for the full correction.
+const prodBookCount = 48_900
 
 func TestSortIndexCost(t *testing.T) {
 	enableAllSortIndexes(t)
@@ -126,9 +161,10 @@ func TestSortIndexCost(t *testing.T) {
 		float64(costBookCount)/insertTook.Seconds())
 	t.Logf("heap delta:          %.1f MB", float64(heapDelta)/(1024*1024))
 	t.Logf("heap per book:       %.0f bytes", perBook)
-	t.Logf("extrapolated to prod (366,916 books): %.1f MB, insert %.1fs",
-		perBook*366916/(1024*1024),
-		insertTook.Seconds()*366916/float64(costBookCount))
+	t.Logf("extrapolated to prod (%d books): %.1f MB, insert %.1fs",
+		prodBookCount,
+		perBook*prodBookCount/(1024*1024),
+		insertTook.Seconds()*prodBookCount/float64(costBookCount))
 
 	// Sanity, not a threshold: a wildly wrong number means the measurement
 	// is broken rather than that the indexes are bad.

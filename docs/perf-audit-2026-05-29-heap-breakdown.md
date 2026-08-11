@@ -1,5 +1,5 @@
 <!-- file: docs/perf-audit-2026-05-29-heap-breakdown.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: a1b2c3d4-perf-d4-2026-05-29-heap-breakdown -->
 
 # Heap breakdown audit — post-#1152 strip (MAYDEPLOY-D4)
@@ -30,6 +30,26 @@ stripped `Description`, `BookSigV1`, `BookSigV1Mask`, `BookSigSegments`,
   books 392,962 • authors 17,562 • series 43,124 • book_files 308,857 •
   book_authors 193,059 • book_narrators 3,368 • narrators 922 • works
   211,774.
+
+  > 🚨 **`books 392,962` is not a book count (noted 2026-08-11).** The
+  > equivalent figure from the same source was later shown to be Pebble KEYS
+  > under the `book:` prefix — a prefix shared with ~7 secondary-index
+  > families, so ~7.5 keys per row. The row count is **~48,900** (the
+  > organizer's own full paging enumeration, 2026-08-11; system status
+  > independently read 46,221 and 54,734). See
+  > `internal/database/memdb_sort_index_cost_test.go` and
+  > `TestWarmupCounts_CountRowsNotPebbleKeys`.
+  >
+  > **Every books-multiplied total in this document is therefore ~8x too
+  > high.** The per-row struct analysis below is unaffected — it is derived
+  > from the struct shape, not from the population — so the fix is to
+  > re-multiply, not to re-derive. The other row counts in this list have
+  > NOT been re-verified either way.
+  >
+  > The document is annotated rather than recomputed because its conclusions
+  > (strip heavy fields; do not hydrate) were directional and survive a
+  > smaller library. Anyone quoting an absolute megabyte figure from it must
+  > re-multiply first.
 
 > **Confidence:** medium. Per-row sizes are precise from the struct shape;
 > the string-content estimates rely on observed averages from prior pprof
