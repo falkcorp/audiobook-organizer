@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.tsx
-// version: 1.82.0
+// version: 1.83.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-08-10
+// last-edited: 2026-08-11
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -110,6 +110,22 @@ const buildHashCandidates = (book: Audiobook): string[] => {
 
 // getResultLabel is defined in ./libraryTypes and used by LibraryDialogs
 
+/** Page size used when the URL does not say otherwise. */
+export const DEFAULT_ITEMS_PER_PAGE = 20;
+/** Smallest page size the UI will accept. */
+const MIN_ITEMS_PER_PAGE = 10;
+/**
+ * Largest page size that can be requested at all. Still 1000 — the dropdown's
+ * top option remains fully functional when a user picks it deliberately.
+ */
+export const MAX_ITEMS_PER_PAGE = 1000;
+
+/** Coerce any requested page size into [MIN, MAX]; NaN falls back to default. */
+export function clampItemsPerPage(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_ITEMS_PER_PAGE;
+  return Math.min(MAX_ITEMS_PER_PAGE, Math.max(MIN_ITEMS_PER_PAGE, value));
+}
+
 interface LibraryProps {
   defaultPreset?: 'fingerprints' | 'standard';
 }
@@ -133,20 +149,40 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     1,
     parseInt(searchParams.get('page') || localStorage.getItem(STORAGE_KEYS.LIBRARY_PAGE) || '1', 10)
   );
-  // Clamp both ends: an unclamped ?limit= URL (or stale localStorage) can
-  // request the whole 44K-book library into the DOM — same OOM class as the
-  // useLibraryCache leak. 1000 is the largest offered page-size option.
-  const initialItemsPerPage = Math.min(
-    1000,
-    Math.max(
-      10,
-      parseInt(
-        searchParams.get('limit') ||
-          localStorage.getItem(STORAGE_KEYS.LIBRARY_ITEMS_PER_PAGE) ||
-          '20',
-        10
-      ) || 20
-    )
+  // Page size on first render. The URL is the ONLY source.
+  //
+  // The old form read `?limit=` and localStorage as one interchangeable
+  // fallback chain. That looks like it makes a remembered page size sticky, and
+  // it was reported as doing exactly that — but it does not, and the difference
+  // is the reason this line changed.
+  //
+  // Traced with a mock that records every requested limit, localStorage seeded
+  // to 1000, on unmodified code, 3/3 runs:
+  //
+  //     requested limits = ["1000", "20"]      cards rendered = 20
+  //     final URL        = ?page=1             (no limit)
+  //
+  // The remembered 1000 seeds initial state, fires a request for a thousand
+  // books, and is then immediately overwritten by the URL-sync effect below —
+  // which reads `searchParams.get('limit') || '20'` and has no localStorage
+  // fallback of its own. So the restore path has been dead for as long as that
+  // effect has existed. Its only surviving effect is one wasted 1000-row query
+  // against a 366,922-book library on every single library load, superseded
+  // before a card of it is ever painted.
+  //
+  // Dropping the localStorage read therefore changes no rendered output at all;
+  // it deletes the wasted request and makes the code state what the app already
+  // does. The dropdown's write to that key is now vestigial and is left alone
+  // deliberately — removing it is a separate change, and this one is a fix for
+  // a freeze.
+  //
+  // Explicit `?limit=N` is untouched and still honoured to MAX_ITEMS_PER_PAGE:
+  // choosing 1000 from the dropdown writes ?limit=1000 and renders 1000 cards.
+  // It is a slow page (~2,500ms / ~880ms TBT unthrottled; ~14,000ms / ~8,700ms TBT
+  // at 4x — see library-load-perf.spec.ts axis A) but it is visible in the
+  // address bar, survives a bookmark, and was asked for.
+  const initialItemsPerPage = clampItemsPerPage(
+    parseInt(searchParams.get('limit') || '', 10)
   );
   const [searchQuery, setSearchQuery] = useState(initialSearch);
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -596,7 +632,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
       setSortBy(SortField.Title);
       setSortOrder(SortOrder.Ascending);
       setViewMode('grid');
-      setItemsPerPage(20);
+      setItemsPerPage(DEFAULT_ITEMS_PER_PAGE);
       setSelectedTags([]);
       baseHandleFiltersChange({});
       lastWrittenSearch.current = '';
@@ -618,7 +654,14 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
         ? SortOrder.Descending
         : SortOrder.Ascending;
     const urlView = (searchParams.get('view') as ViewMode) || 'grid';
-    const urlLimit = Math.max(10, parseInt(searchParams.get('limit') || '20', 10));
+    // Clamped at BOTH ends, same as initialItemsPerPage. This line previously
+    // only had a lower bound, so `?limit=50000` on a hand-edited or shared
+    // link walked straight past the ceiling the initial-state clamp exists to
+    // enforce — the sync effect runs on the very first commit, so it was
+    // reachable on load and not merely on later navigation.
+    const urlLimit = clampItemsPerPage(
+      parseInt(searchParams.get('limit') || String(DEFAULT_ITEMS_PER_PAGE), 10)
+    );
 
     const urlTag = searchParams.get('tag') || '';
 
@@ -707,7 +750,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     if (sortOrder !== SortOrder.Ascending) params.set('order', sortOrder);
     if (viewMode !== 'grid') params.set('view', viewMode);
     params.set('page', page.toString());
-    if (itemsPerPage !== 20) params.set('limit', itemsPerPage.toString());
+    if (itemsPerPage !== DEFAULT_ITEMS_PER_PAGE) params.set('limit', itemsPerPage.toString());
     if (selectedTags.length > 0) params.set('tag', selectedTags[0]);
     // Preserve reviewOp if present (via ref to avoid infinite loop)
     if (reviewOpRef.current) params.set('reviewOp', reviewOpRef.current);
@@ -1018,8 +1061,39 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     })();
   }, [loadAudiobooks]);
 
+  // Refresh the soft-deleted panel, fetching the ROWS only if the panel is
+  // currently open.
+  //
+  // Read through a ref rather than depending on `softDeletedExpanded` directly:
+  // this callback is invoked from six mutation handlers (delete, batch delete,
+  // restore, purge, …) and giving it a changing identity would re-fire the
+  // mount effect below on every expand/collapse, re-issuing the fetch for no
+  // reason. The ref is only ever read at call time, which is when the answer
+  // matters.
+  const softDeletedExpandedRef = useRef(softDeletedExpanded);
   useEffect(() => {
-    loadSoftDeleted();
+    softDeletedExpandedRef.current = softDeletedExpanded;
+  }, [softDeletedExpanded]);
+  const refreshSoftDeleted = useCallback(
+    () => loadSoftDeleted(softDeletedExpandedRef.current),
+    [loadSoftDeleted]
+  );
+
+  // On mount, fetch the COUNT only — the panel is collapsed, so its rows are
+  // not rendered and pulling up to 10,000 of them was pure load-path cost. See
+  // loadSoftDeleted in useLibraryQuery.ts for the measurements.
+  useEffect(() => {
+    refreshSoftDeleted();
+  }, [refreshSoftDeleted]);
+
+  // Opening the panel is what actually needs the rows.
+  // The fetch is deliberately OUTSIDE the setState updater. React invokes
+  // updaters twice under StrictMode, so a side effect in there would fire the
+  // request twice on every open.
+  const handleToggleSoftDeletedExpanded = useCallback(() => {
+    const next = !softDeletedExpandedRef.current;
+    setSoftDeletedExpanded(next);
+    if (next) void loadSoftDeleted(true);
   }, [loadSoftDeleted]);
 
   // Watch the operations store: open the review dialog when a metadata fetch op completes.
@@ -1081,7 +1155,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
       setBookPendingDelete(null);
       clearLibraryCache();
       await loadAudiobooks();
-      await loadSoftDeleted();
+      await refreshSoftDeleted();
     } catch (error) {
       console.error('Failed to delete audiobook:', error);
       toast('Failed to delete audiobook. Please try again.', 'error');
@@ -1125,7 +1199,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
       setSelectedAudiobooks([]);
       clearLibraryCache();
       await loadAudiobooks();
-      await loadSoftDeleted();
+      await refreshSoftDeleted();
     } catch (error) {
       console.error('Failed to batch delete audiobooks:', error);
       toast('Failed to delete selected audiobooks.', 'error');
@@ -1146,7 +1220,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
       setCrossPageFilter(null);
       clearLibraryCache();
       await loadAudiobooks();
-      await loadSoftDeleted();
+      await refreshSoftDeleted();
     } catch (error) {
       console.error('Failed to restore selected audiobooks:', error);
       toast('Failed to restore selected audiobooks.', 'error');
@@ -1216,7 +1290,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
       toast(`"${book.title}" was purged from the library.`, 'success');
       clearLibraryCache();
       await loadAudiobooks();
-      await loadSoftDeleted();
+      await refreshSoftDeleted();
     } catch (error) {
       console.error('Failed to purge audiobook', error);
       toast('Failed to purge audiobook.', 'error');
@@ -1232,7 +1306,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
       toast(`"${book.title}" was restored to the library.`, 'success');
       clearLibraryCache();
       await loadAudiobooks();
-      await loadSoftDeleted();
+      await refreshSoftDeleted();
     } catch (error) {
       console.error('Failed to restore audiobook', error);
       toast('Failed to restore audiobook.', 'error');
@@ -1253,7 +1327,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
       setPurgeDeleteFiles(false);
       clearLibraryCache();
       await loadAudiobooks();
-      await loadSoftDeleted();
+      await refreshSoftDeleted();
     } catch (error) {
       console.error('Failed to purge soft-deleted books', error);
       toast('Failed to purge soft-deleted books.', 'error');
@@ -2071,8 +2145,8 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
           restoringBookId={restoringBookId}
           purgeInProgress={purgeInProgress}
           purgingBookId={purgingBookId}
-          onToggleSoftDeletedExpanded={() => setSoftDeletedExpanded(!softDeletedExpanded)}
-          loadSoftDeleted={loadSoftDeleted}
+          onToggleSoftDeletedExpanded={handleToggleSoftDeletedExpanded}
+          loadSoftDeleted={refreshSoftDeleted}
           handleRestoreOne={handleRestoreOne}
           handlePurgeOne={handlePurgeOne}
           filterOpen={filterOpen}

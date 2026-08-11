@@ -1,7 +1,7 @@
 // file: web/src/hooks/useLibraryQuery.ts
-// version: 1.6.0
+// version: 1.7.0
 // guid: d4e5f6a7-b8c9-0123-def0-123456789003
-// last-edited: 2026-08-09
+// last-edited: 2026-08-11
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -20,6 +20,23 @@ const RETRY_BASE_DELAY_MS = 500;
  * rather than sitting dark for another full backoff period.
  */
 const RETRY_MAX_DELAY_MS = 5000;
+
+/**
+ * Largest number of soft-deleted rows the panel will ever render at once.
+ *
+ * This used to be 10000, fetched unconditionally on mount. Measured cost of
+ * rendering that list (library-load-perf.spec.ts, axis C): ~14 DOM nodes per
+ * row, so 10,000 rows is ~140,000 extra nodes built during a library load — on
+ * top of the books — while the panel is COLLAPSED and the user cannot see any
+ * of it. See loadSoftDeleted below for why collapsed did not mean unrendered.
+ *
+ * 500 is a ceiling on the visible list, not on the count: `softDeletedCount`
+ * still reports the true total (the API returns it independently of the page
+ * size) and the panel says so when the list is truncated. Restoring or purging
+ * past 500 is done with the bulk purge control, which never depended on the
+ * rows being rendered.
+ */
+export const SOFT_DELETED_PAGE_SIZE = 500;
 
 interface UseLibraryQueryFilters {
   author?: string;
@@ -100,11 +117,36 @@ export function useLibraryQuery({
   // UnifiedDedupTab.tsx / CandidateCompareDrawer.tsx.
   const abortControllerRef = useRef<AbortController | null>(null);
 
-  const loadSoftDeleted = useCallback(async () => {
+  /**
+   * Load the soft-deleted panel's data.
+   *
+   * `includeItems` is the whole point of this signature. The panel is collapsed
+   * on mount and stays collapsed until the user clicks it, so on the load path
+   * only the COUNT is needed — that is what the header chip shows. Asking for
+   * `limit=1` still returns the true total in `count`, so the chip is exactly
+   * as correct as it was before while the response carries one row instead of
+   * ten thousand.
+   *
+   * This matters because MUI's <Collapse> does not unmount its children when
+   * closed. Every row handed to the panel was built, styled and inserted into
+   * the DOM on every single library load even though it was invisible;
+   * expanding the section afterwards changed the document's node count by
+   * exactly zero, which is how that was confirmed rather than assumed.
+   * LibrarySoftDeletedSection now also passes `unmountOnExit`, so both halves
+   * of that — the fetch and the render — are gone from the load path.
+   */
+  const loadSoftDeleted = useCallback(async (includeItems = false) => {
     setSoftDeletedLoading(true);
     try {
-      const { items, count } = await api.getSoftDeletedBooks(10000, 0);
-      setSoftDeletedBooks(items);
+      const { items, count } = await api.getSoftDeletedBooks(
+        includeItems ? SOFT_DELETED_PAGE_SIZE : 1,
+        0
+      );
+      // Never store rows we did not ask to display. A count-only refresh that
+      // left the previous page of rows in state would be fine today, but it
+      // would silently re-arm the same "invisible rows in the DOM" trap the
+      // moment someone drops the unmountOnExit.
+      setSoftDeletedBooks(includeItems ? items : []);
       setSoftDeletedCount(count);
     } catch (e) {
       console.error('Failed to load soft-deleted books', e);
