@@ -220,7 +220,21 @@ These already carry a comment explaining the discard, and the reasoning holds:
 | `internal/server/deluge_discovery.go:120` | Commented "optional body"; discovery is read-only. Correct. |
 | `internal/server/handlers/split_book.go:121` | Commented "body is optional". Consequence of a zeroed body not verified — flag for a second look given `split_book` mutates. |
 
-**Bucket (a) totals: 45 sites — 16 critical, 16 real-but-lower, 8 correct-and-deliberate, 5 consequence-not-determined.**
+**Bucket (a) totals: 45 sites** (17 `ShouldBindJSON` + 28 `Unmarshal`), recounted
+after the §7.1 verification pass:
+
+| | Count |
+|---|---|
+| 🔴 Critical (scope or dry-run escalation) | **10** — 3 in (a.1), 7 `internal/server/*` v2 ops |
+| 🟠 High / medium | **19** |
+| 🟢 Fail-safe by design (downgraded from critical) | **5** — the `*bool` maintenance plugins |
+| ✅ Correct and deliberate | **9** — incl. `embed_scan.go`; 1 of the 9 (`split_book.go:121`) still flagged for a second look |
+| 🟢 Dev-tooling / cosmetic | **2** |
+
+> **Count note:** the brief cited **13** v2 operation `Run:` handlers with this
+> defect. The measured number is **14** — 8 under `internal/server/`, 5 under
+> `internal/plugins/maintenance/`, 1 under `internal/plugins/dedup/`. The
+> discrepancy is one extra site, not a different set.
 
 ---
 
@@ -606,15 +620,19 @@ near-benign.** The genuinely actionable statement-position population is
 
 | Bucket | Sites found | Critical | High/Medium | Correct & deliberate | Consequence not determined |
 |---|---|---|---|---|---|
-| (a) parse/unmarshal of external input | 45 | 16 | 16 | 8 | 5 |
+| (a) parse/unmarshal of external input | 45 | 10 | 19 (+5 downgraded fail-safe) | 9 | 1 |
 | (b) write/persist errors | ≈133 | 3 | ≈128 | 1 (`itl.go:1049`) | 0 |
-| (c) error → indistinguishable empty result | 20 (shape 4, all read) + ~170 (shape 2, 25 read) | 1 | 34 | 6 | ~145 unread |
+| (c) error → indistinguishable empty result | 20 (shape 4, all read) + ~170 (shape 2, 25 read) | 1 | 33 | 7 | ~145 unread |
 | (d) continue/break with no counter or log | 78 + 9 pool discards | 2 (the 15-site pebble-store list cluster, `mtls/config.go` expiry check) | ≈70 | 6 (`g.Wait` with policy comments) | 3 (`cmd.Wait` on ffmpeg) |
 | (e) zero-result-only fallbacks | 13 error-blind rungs / 3 files | 2 files | 1 file | 2 | 3 sites unread |
 | (f) benign cleanup | ≈742 | — | — | ≈742 | 16 (`b.Delete` on batch) + 54 (`Close`, read-vs-write unclassified) |
 
-**Actionable, non-benign, with a named consequence: ≈120 sites.**
+**Actionable, non-benign, with a named consequence: ≈115 sites.**
 **Actionable but unread (shape-2 residue): ~145 sites.**
+
+⚠️ These figures are **post-verification**. The pre-verification version of this
+table overstated bucket (a)'s critical count by 6 and mis-ranked bucket (d)'s
+largest cluster. See §7.1.
 
 ---
 
