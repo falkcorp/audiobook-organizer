@@ -1,13 +1,15 @@
 - [ ] 🔴 **MUI v6 leaves the Drawer backdrop visible — the same mechanism as the
       2026-08-10 "invisible sheet" incident.** Blocks TODO-MUI-1 (5.14 → 6.5).
       Measured 2026-08-10 by running the full e2e suite on both versions on the
-      same quiet machine.
+      same quiet machine, **twice per side**.
 
-      | Spec | main (MUI 5.18.0) | branch (MUI 6.5.0) |
-      |---|---|---|
-      | `scan-import-organize.spec.ts:259` [chromium] | ✅ passes | ❌ **fails** |
-      | `batch-operations.spec.ts:100` [webkit] | ❌ fails | ❌ fails |
-      | totals | 555 passed / 1 failed / 8 skipped | 554 passed / 2 failed / 8 skipped |
+      | Spec | main (MUI 5.18.0) | branch (MUI 6.5.0) | Verdict |
+      |---|---|---|---|
+      | `scan-import-organize.spec.ts:259` [chromium] | ✅ 2/2 | ❌ **2/2** | **real v6 regression** |
+      | `batch-operations.spec.ts:100` [webkit] | ✅ 1, ❌ 1 | ✅ 1, ❌ 1 | flake, unrelated to v6 |
+
+      main: 556 passed / 0 failed / 8 skipped (run 2, exit 0).
+      branch: 555 passed / 1 failed / 8 skipped (run 2, exit 2).
 
       So v6 introduces **exactly one** new failure, and it is this:
 
@@ -43,26 +45,25 @@
       vitest green) is `feat/mui-v6-upgrade` — everything except this one
       failure is ready.
 
-- [ ] 🔴 **`main` is NOT green: `batch-operations.spec.ts:100` [webkit] fails on
-      main and nobody noticed.** Measured 2026-08-10 on `76269d57`:
-      **555 passed / 1 failed / 8 skipped**, not the 556/0/8 recorded after the
-      2026-08-10 repair.
+- [ ] 🟡 **`batch-operations.spec.ts:100` [webkit] is an intermittent flake —
+      find its mechanism.** Observed 2026-08-10 failing once on `main`
+      (`76269d57`) and once on the MUI v6 branch, and **passing** on a re-run of
+      each. `main` is green: 556 passed / 0 failed / 8 skipped, exit 0.
 
           Error: expect(locator).toBeChecked() failed
           Locator: getByLabel('Select Test Book 1', { exact: true })
           Timeout: 5000ms — element(s) not found
 
-      "Batch Operations › selection persists across page navigation" — a
-      checkbox that should stay checked across navigation is not merely
-      unchecked, its LABEL IS ABSENT, so the row is not rendering as expected at
-      all. Webkit only; chromium passes.
+      "Batch Operations › selection persists across page navigation". When it
+      does fail, the checkbox is not merely unchecked — its **label is absent**,
+      so the row is not rendering as the test expects at all. Webkit only. That
+      shape (row not rendered yet, rather than state lost) points at the
+      navigation completing before the list re-renders, which is a timing
+      mechanism worth finding rather than re-running past.
 
-      **Why it went unnoticed:** `e2e.yml` is `paths:`-filtered, so the e2e
-      suite does not run on most PRs — a regression here lands silently and the
-      only signal is someone running the suite locally. That filter is already
-      recorded as the blocker for an org-level required-check rule
-      (`todo.d/20260810-e2e-gate-not-required.md`); this is the first measured
-      instance of it actually costing something.
-
-      Do not conflate with the MUI v6 item above — this one is independent of
-      any upgrade and is present on plain `main` today.
+      🚨 **This entry previously claimed `main` was red.** That claim came from a
+      single run and was wrong; it was published in a PR body and a memory file
+      before being re-run. A failure seen once on a suite with known webkit
+      flake is not a measurement — re-run before recording it. Per
+      `feedback_fix_flaky_tests`, this still gets its mechanism found rather
+      than being ignored as noise.
