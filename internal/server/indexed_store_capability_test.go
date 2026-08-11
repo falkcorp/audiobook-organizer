@@ -1,7 +1,7 @@
 // file: internal/server/indexed_store_capability_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2c7f4b18-6e93-4a52-9d81-5f0a3b6c8e27
-// last-edited: 2026-07-31
+// last-edited: 2026-08-10
 
 package server
 
@@ -147,5 +147,81 @@ func TestWipeFixupsReachPebbleThroughDecorator(t *testing.T) {
 	}
 	if _, err := wipeExternalIDs(ms, true); err != nil {
 		t.Errorf("wipeExternalIDs(dryRun) through the decorator: %v", err)
+	}
+}
+
+// TestIndexedStoreExposesVersionGroupBackfill is the THIRD instance of the bug
+// this file exists to prevent, and the first one caught in production by its own
+// log line rather than by a failing job.
+//
+// server_lifecycle.go used a bare `s.Store().(vgBackfiller)` type assertion.
+// BackfillVersionGroupIndex is a *PebbleStore method that deliberately lives
+// outside database.Store, so it is not promoted through the embedded interface
+// and the assertion missed on every boot where the Bleve index opened — i.e.
+// always, in production. MEASURED 2026-08-10 23:07:40 on the prod host:
+//
+//	versiongroup-backfill: store does not implement BackfillVersionGroupIndex,
+//	index will NOT be rebuilt   store_type=*server.indexedStore
+//
+// So the "one-time production repair" for the under-reporting version-group
+// index had never run once. The fix is database.AsCapability, which walks the
+// Unwrap chain.
+//
+// SCOPE: this asserts the capability RESOLVES and EXECUTES through the
+// decorator. It does not re-prove that the backfill writes correct index rows —
+// chunk boundaries, row contents and idempotency are covered by
+// pebble_store_versiongroup_backfill_test.go in package database, which can
+// reach the raw keys.
+func TestIndexedStoreExposesVersionGroupBackfill(t *testing.T) {
+	inner, err := database.NewPebbleStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	t.Cleanup(func() { _ = inner.Close() })
+	inner.WaitForWarmup()
+
+	var wrapped database.Store = &indexedStore{Store: inner, server: nil}
+
+	// The shape of the original bug: a bare assertion cannot see it. If this
+	// ever starts succeeding, the decorator has changed and the guard below
+	// stops testing anything — so assert it rather than imply it.
+	if _, ok := wrapped.(vgBackfiller); ok {
+		t.Fatal("a bare type assertion now resolves vgBackfiller through the " +
+			"decorator; this test no longer reproduces the production bug")
+	}
+
+	// The PRODUCTION resolver, not database.AsCapability directly. Calling the
+	// helper here would prove only that the helper works, which says nothing
+	// about whether server_lifecycle.go uses it — the same distinction
+	// TestWipeFixupsReachPebbleThroughDecorator above is built around. Reverting
+	// resolveVGBackfiller to a bare assertion must turn this red.
+	b, ok := resolveVGBackfiller(wrapped)
+	if !ok {
+		t.Fatal("resolveVGBackfiller through indexedStore failed; the " +
+			"version-group index backfill would silently never run")
+	}
+
+	// Seed through the INNER store. Going through the decorator would call
+	// s.server.enqueueIndex on a nil *Server and panic — the same reason every
+	// other test in this file stays read-only. The read below still goes through
+	// the decorator, which is the direction that matters here.
+	gid := "vg-decorator-writethrough"
+	created, err := inner.CreateBook(&database.Book{
+		Title:          "Decorator Backfill Book",
+		VersionGroupID: &gid,
+	})
+	if err != nil {
+		t.Fatalf("CreateBook: %v", err)
+	}
+	if err := b.BackfillVersionGroupIndex(); err != nil {
+		t.Fatalf("BackfillVersionGroupIndex through the decorator: %v", err)
+	}
+	got, err := wrapped.GetBooksByVersionGroup(gid)
+	if err != nil {
+		t.Fatalf("GetBooksByVersionGroup: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != created.ID {
+		t.Fatalf("version group lookup after backfill: got %d books, want 1 (%s)",
+			len(got), created.ID)
 	}
 }

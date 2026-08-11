@@ -1,5 +1,5 @@
 <!-- file: CLAUDE.md -->
-<!-- version: 4.12.0 -->
+<!-- version: 4.13.0 -->
 <!-- guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f -->
 <!-- last-edited: 2026-08-10 -->
 
@@ -65,14 +65,19 @@ resolves it:
 
 ```bash
 cd ../<repo>-<feature>
-go work init .        # gopls: worktrees are SIBLINGS of the main checkout, so a
-                      # language server rooted there reports every file as
-                      # "not included in your workspace". go.work is gitignored.
-                      # A shared parent go.work is NOT an option — every worktree
-                      # declares the same module path, so it fails as a duplicate.
 npm ci --prefix web   # Playwright must come from the worktree, not an orphan
                       # ~/node_modules with a different pinned version.
 ```
+
+> **Do NOT run `go work init .` in a worktree.** It was recommended here briefly
+> on 2026-08-10 to quiet gopls "file not included in your workspace" noise, and it
+> **breaks the build**: workspace mode changes module-graph resolution and
+> re-admits the pre-split monolithic `google.golang.org/genproto` alongside the
+> split `genproto/googleapis/{api,rpc}` modules, so `go build ./...` fails with
+> `ambiguous import` on grpc, grpc-gateway and otel. Measured in a clean worktree:
+> without `go.work` exit 0, with it exit 1. A shared parent `go.work` is not an
+> option either — every worktree declares the same module path and it fails as a
+> duplicate. Accept the gopls noise; verify with real `go build` / `go vet`.
 
 **After merging:** always remove the worktree immediately after the PR merges:
 ```bash
