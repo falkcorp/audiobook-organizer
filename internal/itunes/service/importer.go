@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer.go
-// version: 1.13.1
+// version: 1.14.0
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
-// last-edited: 2026-07-18
+// last-edited: 2026-08-11
 
 package itunesservice
 
@@ -44,6 +44,30 @@ func RecordITLReadTime() {
 	itlState.mu.Unlock()
 }
 
+// logCheckpointErr records a failed resume-state write.
+//
+// These are deliberately NOT fatal — a checkpoint failure must not abort an
+// import that is otherwise succeeding. But they were `_ =` discards, and that
+// is a different thing from "non-fatal": if every checkpoint write fails, the
+// import still reports success while its resume state says it never got past
+// the phase it last managed to record. A crash then resumes from the wrong
+// phase, re-running work that already happened, and nothing anywhere said the
+// checkpoint was not being written.
+//
+// Logged rather than counted: unlike a per-item loop, there are five of these
+// on distinct phase boundaries, so the phase name is the useful signal.
+//
+// (Wave 0 of the silent-failure plan introduces a shared helper for this shape.
+// This is local to the file on purpose so Wave 1 does not pre-empt that design;
+// fold it in when Wave 0 lands.)
+func logCheckpointErr(err error, opID, phase string) {
+	if err == nil {
+		return
+	}
+	slog.Warn("itunes import: checkpoint write failed; resume will restart from an earlier phase",
+		"op_id", opID, "phase", phase, "err", err)
+}
+
 // CheckITLConflict returns an error if the ITL file at path has been
 // externally modified since the last recorded read.
 func CheckITLConflict(itlPath string) error {
@@ -56,7 +80,21 @@ func CheckITLConflict(itlPath string) error {
 	}
 	stat, err := os.Stat(itlPath)
 	if err != nil {
-		return nil
+		// FAIL CLOSED. This guard exists to refuse a write when the ITL has
+		// changed underneath us. A stat error means "cannot verify", and
+		// returning nil turned that into "verified safe" — the one answer we
+		// are certainly not entitled to give.
+		//
+		// The write this gates is to books/itunes/**, which is hands-off and
+		// where an overwrite is not recoverable from anything the app owns.
+		// Refusing a legitimate write is a nuisance; permitting a conflicting
+		// one is the 2026-07-05 corruption incident.
+		//
+		// os.IsNotExist is deliberately NOT special-cased: if the ITL has
+		// vanished since we read it, that is the strongest possible signal
+		// something else is moving it around.
+		return fmt.Errorf("ITL conflict check failed: cannot stat %s to verify it is unchanged since our last read (%v): %w — refusing to write",
+			itlPath, lastRead, err)
 	}
 	if stat.ModTime().After(lastRead.Add(2 * time.Second)) {
 		return fmt.Errorf("ITL conflict: file modified at %v (our last read: %v) — re-sync before writing",
@@ -404,7 +442,7 @@ func (imp *Importer) Execute(ctx context.Context, opID string, req ImportRequest
 		updateImportProgress(log, status, processed, totalGroups, book.Title)
 
 		if processed%10 == 0 {
-			_ = operations.SaveCheckpoint(imp.store, opID, "itunes_import", "importing", processed, totalGroups)
+			logCheckpointErr(operations.SaveCheckpoint(imp.store, opID, "itunes_import", "importing", processed, totalGroups), opID, "importing")
 		}
 	}
 
@@ -414,7 +452,7 @@ func (imp *Importer) Execute(ctx context.Context, opID string, req ImportRequest
 
 	// Phase 3: Hash validation
 	if len(newBookIDs) > 0 && req.SkipDuplicates {
-		_ = operations.SaveCheckpoint(imp.store, opID, "itunes_import", "hash_validation", 0, len(newBookIDs))
+		logCheckpointErr(operations.SaveCheckpoint(imp.store, opID, "itunes_import", "hash_validation", 0, len(newBookIDs)), opID, "hash_validation")
 		log.UpdateProgress(totalGroups, totalGroups, fmt.Sprintf("Hash validation: checking %d new books...", len(newBookIDs)))
 		log.Info("Starting hash validation for %d new books...", len(newBookIDs))
 
@@ -494,19 +532,19 @@ func (imp *Importer) Execute(ctx context.Context, opID string, req ImportRequest
 
 	// Phase 4: Metadata enrichment
 	if req.FetchMetadata {
-		_ = operations.SaveCheckpoint(imp.store, opID, "itunes_import", "enriching", 0, 0)
+		logCheckpointErr(operations.SaveCheckpoint(imp.store, opID, "itunes_import", "enriching", 0, 0), opID, "enriching")
 		log.Info("Starting metadata enrichment phase...")
 		imp.enrichImportedBooks(ctx, status, log)
 	}
 
 	// Phase 5: Organize
 	if importMode == itunes.ImportModeOrganize && !req.PreserveLocation {
-		_ = operations.SaveCheckpoint(imp.store, opID, "itunes_import", "organizing", 0, 0)
+		logCheckpointErr(operations.SaveCheckpoint(imp.store, opID, "itunes_import", "organizing", 0, 0), opID, "organizing")
 		log.Info("Starting organize phase...")
 		imp.organizeImportedBooks(ctx, status, log)
 	}
 
-	_ = operations.ClearState(imp.store, opID)
+	logCheckpointErr(operations.ClearState(imp.store, opID), opID, "clear-state")
 
 	if fp, err := itunes.ComputeFingerprint(req.LibraryPath); err == nil {
 		_ = imp.store.SaveLibraryFingerprint(fp.Path, fp.Size, fp.ModTime, fp.CRC32)
