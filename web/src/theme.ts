@@ -1,7 +1,7 @@
 // file: web/src/theme.ts
-// version: 1.3.0
+// version: 1.4.0
 // guid: 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-08-10
+// last-edited: 2026-08-11
 
 import { createTheme } from '@mui/material/styles';
 
@@ -11,11 +11,30 @@ export function createAppTheme(mode: PaletteMode = 'dark') {
   return createTheme({
     palette: {
       mode,
+      // Mode-aware, because a single brand colour cannot serve both.
+      //
+      // THE BUG (reported 2026-08-11: library buttons in dark mode "too closely
+      // match the existing"): primary.main was '#1976d2' in BOTH modes. That is
+      // MUI's LIGHT-mode blue. Against the dark background it measures 3.89:1 —
+      // under the 4.5:1 WCAG AA floor for text — and the library toolbar is
+      // built from `variant="outlined"` buttons, which draw their label in
+      // primary.main and their border at 50% alpha, i.e. roughly 2:1. The
+      // buttons were genuinely low-contrast, not a matter of taste.
+      //
+      // The dark values are MUI's own dark-palette defaults, which exist for
+      // exactly this reason. Measured against background.default '#0a1929':
+      //
+      //   primary   #1976d2 -> 3.89:1   #90caf9 -> 9.94:1
+      //   secondary #dc004e -> 3.47:1   #f48fb1 -> 8.77:1
+      //
+      // Light mode keeps the original brand colours unchanged. Pinned by
+      // theme.contrast.test.ts so a future palette edit cannot quietly drop
+      // back under the floor.
       primary: {
-        main: '#1976d2',
+        main: mode === 'dark' ? '#90caf9' : '#1976d2',
       },
       secondary: {
-        main: '#dc004e',
+        main: mode === 'dark' ? '#f48fb1' : '#dc004e',
       },
       background:
         mode === 'dark'
