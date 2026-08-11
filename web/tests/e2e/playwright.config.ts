@@ -1,7 +1,7 @@
 // file: tests/e2e/playwright.config.ts
-// version: 1.12.0
+// version: 1.13.0
 // guid: 7c8d9e0f-1a2b-3c4d-5e6f-7a8b9c0d1e2f
-// last-edited: 2026-08-10
+// last-edited: 2026-08-11
 
 import { defineConfig, devices } from '@playwright/test';
 import { fileURLToPath } from 'url';
@@ -73,12 +73,12 @@ export default defineConfig({
     // explicitly via `make test-e2e-demo` / `npm run test:e2e:demo`.
     {
       name: 'chromium',
-      testIgnore: ['**/demo-*.spec.ts', '**/interactive-*.spec.ts'],
+      testIgnore: ['**/demo-*.spec.ts', '**/interactive-*.spec.ts', '**/benchmark-*.spec.ts'],
       use: { ...devices['Desktop Chrome'] },
     },
     {
       name: 'webkit',
-      testIgnore: ['**/demo-*.spec.ts', '**/interactive-*.spec.ts'],
+      testIgnore: ['**/demo-*.spec.ts', '**/interactive-*.spec.ts', '**/benchmark-*.spec.ts'],
       use: { ...devices['Desktop Safari'] },
       // Double the per-test budget for webkit only.
       //
@@ -109,6 +109,20 @@ export default defineConfig({
     // Run with: npx playwright test --project chromium-record
     //       or: npm run test:e2e:demo
     //       or: make test-e2e-demo
+    // --- Opt-in performance benchmark ---------------------------------------
+    // Excluded from the gate projects above by the '**/benchmark-*.spec.ts'
+    // testIgnore, and declared in GATE_EXEMPT in check-spec-discovery.mjs.
+    // These measure DOM-node counts and blocked main-thread time; asserting on
+    // wall-clock in CI would be a flake factory, so they run on demand:
+    //   E2E_PERF=1 npx playwright test --config=tests/e2e/playwright.config.ts \
+    //     --project=benchmark
+    {
+      name: 'benchmark',
+      testMatch: ['**/benchmark-*.spec.ts'],
+      use: { ...devices['Desktop Chrome'] },
+      // Rendering 10k rows under CPU throttle is far past the 30s default.
+      timeout: 180 * 1000,
+    },
     {
       name: 'chromium-record',
       testMatch: ['**/interactive-*.spec.ts', '**/demo-*.spec.ts'],
