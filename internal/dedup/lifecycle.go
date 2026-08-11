@@ -1,7 +1,7 @@
 // file: internal/dedup/lifecycle.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 3e4f5a6b-7c8d-9e0f-a1b2-c3d4e5f60718
-// last-edited: 2026-06-18
+// last-edited: 2026-08-11
 
 // Lifecycle methods on *dedup.Engine that the serviceregistry container
 // picks up via interface satisfaction. PostInit subscribes to lifecycle
@@ -39,7 +39,7 @@ const defaultHydrationStopTimeout = 5 * time.Second
 // FindSimilar in engine.go falls back to the SQLite linear-scan path
 // (EmbeddingStore.FindSimilar at internal/database/embedding_store.go).
 //
-// Tradeoff: skipping hydrate saves ~6GB heap on the 392K-book / 42K-
+// Tradeoff: skipping hydrate saves ~6GB heap on the full-library / 42K-
 // embedding production library, but each dedup FindSimilar goes from
 // chromem ANN (<10ms) to SQLite full-scan + cosine (~50-200ms). Dedup
 // queries are rare (operator-triggered scans, dedup-on-import), so the

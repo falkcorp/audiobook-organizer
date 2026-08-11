@@ -1,5 +1,5 @@
 // file: web/src/pages/Library.tsx
-// version: 1.83.0
+// version: 1.83.1
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
 // last-edited: 2026-08-11
 
@@ -167,7 +167,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
   // which reads `searchParams.get('limit') || '20'` and has no localStorage
   // fallback of its own. So the restore path has been dead for as long as that
   // effect has existed. Its only surviving effect is one wasted 1000-row query
-  // against a 366,922-book library on every single library load, superseded
+  // against the full library on every single library load, superseded
   // before a card of it is ever painted.
   //
   // Dropping the localStorage read therefore changes no rendered output at all;

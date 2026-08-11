@@ -1,7 +1,7 @@
 // file: internal/database/memdb_sort_indexers.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5e7d1b94-08c6-4a32-bf51-9d2e6c0a374b
-// last-edited: 2026-08-09
+// last-edited: 2026-08-11
 //
 // Sorted secondary indexes for the library list.
 //
@@ -14,9 +14,13 @@
 //
 // That is deliberate — a sort applied after pagination only orders the rows
 // you already fetched, so it chose slow over wrong. But "slow" here means
-// materialising and sorting all 366,916 books to return 50 of them, on every
-// page load. memdb_reads.go:585 records the same shape costing 340MB of
-// allocations per call at 68K rows; at 366K it is worse.
+// materialising and sorting the WHOLE book table to return 50 of them, on
+// every page load. memdb_reads.go:585 records the same shape costing 340MB of
+// allocations per call at 68K rows.
+//
+// (This used to say "all 366,916 books". 366,916 was Pebble KEYS under the
+// `book:` prefix, not rows — see memdb_sort_index_cost_test.go. The argument
+// is unchanged; sorting the full table to return a page is wrong at any size.)
 //
 // Title escapes this because it has a sorted index (memIdxTitle) that memdb
 // can walk in order, stopping at limit+offset. These indexers give the same

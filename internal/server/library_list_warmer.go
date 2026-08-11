@@ -1,7 +1,7 @@
 // file: internal/server/library_list_warmer.go
-// version: 2.2.0
+// version: 2.2.1
 // guid: 7e8d9a0b-1c2d-3e4f-5a6b-7c8d9e0f1a2b
-// last-edited: 2026-07-03
+// last-edited: 2026-08-11
 
 // Pre-warms svc.audiobookService.listCache by firing the queries the UI
 // is most likely to hit on first load — library page (first few pages,
@@ -37,7 +37,7 @@ func readHeapAllocMB() uint64 {
 }
 
 // warmerMemoryDeltaMB is how many MB above the post-eager baseline the
-// trickle is allowed to grow heap by. Production measurement (392K-book
+// trickle is allowed to grow heap by. Production measurement (full-library
 // library, ~13GB baseline): a single trickle query allocates ~1.8GB
 // transient before GC. Default 4096 (4GB) gives one-query headroom +
 // GC reclaim buffer. Tunable via LIST_WARMER_HEAP_DELTA_MB.

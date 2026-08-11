@@ -1,7 +1,7 @@
 <!-- file: docs/design/2026-08-09-search-backend-options.md -->
-<!-- version: 4.1.0 -->
+<!-- version: 4.1.1 -->
 <!-- guid: 4f1c8a72-6d93-4e05-b8a1-9c72e0f45d38 -->
-<!-- last-edited: 2026-08-09 -->
+<!-- last-edited: 2026-08-11 -->
 
 # Search, querying and sorting — the design we are going to build
 
@@ -56,8 +56,23 @@ The code carried three different numbers. They measure different things, and two
 | narrators | 922 | — |
 | author_aliases | 30 | — |
 
-- **"392K-book"** (`memdb_strip.go:14`) was **books**, now 366,916. Not tracks — tracks are
-  330,180 and are the *second* largest table.
+- 🚨 **RETRACTED 2026-08-11.** ~~**"392K-book"** (`memdb_strip.go:14`) was **books**, now
+  366,916. Not tracks — tracks are 330,180 and are the *second* largest table.~~
+  366,916 was **not a book count**. It was the number of Pebble KEYS under the `book:`
+  prefix, which is shared with roughly seven secondary-index families (`book:path:`,
+  `book:hash:`, `book:versiongroup:`, `book:work:`, …) — about 7.5 keys per row. The row
+  count is ~48,900 ("Fetched 48896 total books from database", the organizer's own full
+  paging enumeration, 2026-08-11), consistent with system-status readings of 46,221 and
+  54,734. Pinned by `TestWarmupCounts_CountRowsNotPebbleKeys`.
+
+  Kept rather than deleted because this entry is *how the error propagated*: it found a
+  discrepancy between 392K and the user-facing ~44,888, correctly flagged it, and then
+  resolved it in the wrong direction — treating the larger number as authoritative and
+  inventing "non-primary versions" to explain the gap. The gap was index keys.
+
+  The other rows in the table above have **not** been re-verified. They came from the same
+  warmup counter, but each prefix has its own index families (or none), so they may or may
+  not be inflated. Do not assume they are wrong, and do not assume they are right.
 - **"~68K unfiltered"** (`pebble_store.go:689`) and **"~38K primary"**
   (`memdb_summaries.go:18`) are **older figures for filtered subsets** at the time those
   comments were written. Neither describes the table.
@@ -65,8 +80,17 @@ The code carried three different numbers. They measure different things, and two
   Aug 8 summary) is the **primary-version** count — what a person means by "my library".
   366,916 is every row including non-primary versions.
 
-**Consequence:** an index over *books* is a 366K-entry structure, not a 44K one. That is the
-number to size against. Memdb warmup takes **107.9 seconds**.
+**Consequence:** 🚨 ~~an index over *books* is a 366K-entry structure, not a 44K one. That is
+the number to size against.~~ **Reversed by the retraction above.** An index over *books* is
+an ~49K-entry structure. Every sizing estimate in this document that multiplied by 366K is
+overstated by roughly 7.5x — including, materially, the sort-index memory cost, which drops
+from "+1.3 GB, roughly doubles memdb" to "~+175 MB" (see
+`internal/database/memdb_sort_index_cost_test.go`). That was an open decision and the
+correction changes its answer.
+
+Memdb warmup takes **107.9 seconds** — that figure is an observation, not an extrapolation,
+and stands. Note it is also not contradicted by the smaller book count: warmup loads every
+table, and `book_files` is several hundred thousand rows on its own.
 
 ### 1.2 The engine that already exists
 
