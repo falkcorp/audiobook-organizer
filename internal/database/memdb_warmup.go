@@ -1,6 +1,7 @@
 // file: internal/database/memdb_warmup.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000004
+// last-edited: 2026-08-11
 
 package database
 
@@ -9,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"strings"
 	"time"
 
@@ -36,6 +38,7 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 	defer txn.Abort()
 
 	counts := map[string]int{}
+	scanned := map[string]int{}
 	skips := map[string]int{}
 
 	// safeInsert tries to insert an object, logging+counting failures rather
@@ -224,6 +227,11 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 	// GetAllWorks at scan start, which is the only meaningful caller.
 
 	txn.Commit()
+
+	m.warmCountsMu.Lock()
+	m.lastWarmCounts = maps.Clone(counts)
+	m.lastWarmScanned = maps.Clone(scanned)
+	m.warmCountsMu.Unlock()
 
 	slog.Info("memdb warmup complete",
 		"duration_ms", time.Since(started).Milliseconds(),
