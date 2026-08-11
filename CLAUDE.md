@@ -60,6 +60,20 @@ that apply to each shape of problem.
 
 **Before any edit:** run `git worktree list` to confirm current location. If in the primary checkout (main), use EnterPlanMode (which enforces worktree creation) or manually create a worktree first.
 
+**After creating a worktree**, make it a self-contained workspace so tooling
+resolves it:
+
+```bash
+cd ../<repo>-<feature>
+go work init .        # gopls: worktrees are SIBLINGS of the main checkout, so a
+                      # language server rooted there reports every file as
+                      # "not included in your workspace". go.work is gitignored.
+                      # A shared parent go.work is NOT an option — every worktree
+                      # declares the same module path, so it fails as a duplicate.
+npm ci --prefix web   # Playwright must come from the worktree, not an orphan
+                      # ~/node_modules with a different pinned version.
+```
+
 **After merging:** always remove the worktree immediately after the PR merges:
 ```bash
 git worktree remove .worktrees/<branch>   # or the full path
