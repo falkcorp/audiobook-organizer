@@ -530,9 +530,16 @@ func (h *Handler) CreateBackup(c *gin.Context) {
 	// file-copy path so the source-path existence check runs and returns an
 	// appropriate error when the DB file is missing.
 	if store := h.resolveStore(); store != nil && dbType == "pebble" {
-		if cp, ok := store.(backup.Checkpointable); ok {
+		// database.AsCapability, NOT a bare `store.(backup.Checkpointable)`.
+		// The production store is wrapped by the search-index decorator, whose
+		// method set does not include Checkpoint, so a bare assertion fails and
+		// silently drops to the live-directory walk that races Pebble
+		// compaction. Same shape as the version-group backfill bug (PR #2295).
+		if cp, ok := database.AsCapability[backup.Checkpointable](store); ok {
 			info, err = backup.CreateBackupWithCheckpoint(cp, dbPath, dbType, backupConfig)
 		} else {
+			slog.Warn("backup: store does not expose Checkpoint, falling back to a live-directory archive",
+				"store_type", fmt.Sprintf("%T", store))
 			info, err = backup.CreateBackup(dbPath, dbType, backupConfig)
 		}
 	} else {

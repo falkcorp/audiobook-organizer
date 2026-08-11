@@ -1,7 +1,7 @@
 // file: internal/organizer/service.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
-// last-edited: 2026-07-17
+// last-edited: 2026-08-11
 
 package organizer
 
@@ -243,12 +243,74 @@ func (orgSvc *Service) PerformOrganize(ctx context.Context, req *Request, log lo
 	return nil
 }
 
-func (orgSvc *Service) autoBackup(log logger.Logger) {
+// autoBackupMinInterval is how recent a successful backup must be for
+// PerformOrganize to skip taking another one.
+//
+// WHY THIS EXISTS: the pre-organize backup archives the whole database, and on
+// production that is 14 GB at gzip.BestCompression. Measured on prod
+// 2026-08-11, two consecutive organize runs:
+//
+//	01:54:14 organize starting -> 02:14:42 backup failed   (20m28s)
+//	06:31:29 organize starting -> 06:56:00 backup failed   (24m31s)
+//
+// Every organize paid 20-25 minutes before touching a single book. From the
+// user's side the operation simply never started, and at 06:36:36 the ops
+// registry logged `strike recorded ... kind=stuck  no progress for 5m8s`
+// against an operation that was in fact working the whole time.
+//
+// Backing up before a destructive file-moving operation is right, so this does
+// not remove the backup — it stops re-taking one that is still fresh.
+const autoBackupMinInterval = 6 * time.Hour
+
+// newestBackupAge returns the age and filename of the most recent .tar.gz in
+// backupDir. Deliberately NOT backup.ListBackups: that checksums every archive
+// it finds, which on 14 GB files costs more than the check is worth.
+func newestBackupAge(backupDir string) (time.Duration, string, bool) {
+	entries, err := os.ReadDir(backupDir)
+	if err != nil {
+		return 0, "", false
+	}
+	var newest time.Time
+	var name string
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".tar.gz") {
+			continue
+		}
+		info, statErr := e.Info()
+		if statErr != nil {
+			continue
+		}
+		if info.ModTime().After(newest) {
+			newest, name = info.ModTime(), e.Name()
+		}
+	}
+	if name == "" {
+		return 0, "", false
+	}
+	return time.Since(newest), name, true
+}
+
+// backupMethod records which path autoBackup took. It exists to make the
+// choice TESTABLE: the compaction race that motivates the checkpoint path does
+// not reproduce on a small test database, so asserting "a backup was created"
+// would pass whether or not the fix is present. Asserting on the method that
+// was chosen is what actually goes red on a regression.
+type backupMethod string
+
+const (
+	backupSkippedRecent backupMethod = "skipped-recent"
+	backupNoPath        backupMethod = "skipped-no-path"
+	backupCheckpoint    backupMethod = "checkpoint"
+	backupLiveWalk      backupMethod = "live-walk"
+	backupFailed        backupMethod = "failed"
+)
+
+func (orgSvc *Service) autoBackup(log logger.Logger) backupMethod {
 	dbPath := config.AppConfig.DatabasePath
 	dbType := config.AppConfig.DatabaseType
 	if dbPath == "" {
 		log.Warn("Skipping auto-backup: no database path configured")
-		return
+		return backupNoPath
 	}
 
 	backupConfig := backup.DefaultBackupConfig()
@@ -256,12 +318,57 @@ func (orgSvc *Service) autoBackup(log logger.Logger) {
 		backupConfig.BackupDir = filepath.Join(filepath.Dir(dbPath), backupConfig.BackupDir)
 	}
 
-	info, err := backup.CreateBackup(dbPath, dbType, backupConfig)
-	if err != nil {
-		log.Warn("Auto-backup failed: %s", err.Error())
-		return
+	if age, name, ok := newestBackupAge(backupConfig.BackupDir); ok && age < autoBackupMinInterval {
+		log.Info("Skipping auto-backup: %s is %s old (under the %s threshold)",
+			name, age.Truncate(time.Second), autoBackupMinInterval)
+		return backupSkippedRecent
 	}
-	log.Info("Auto-backup created: %s (%d bytes)", info.Filename, info.Size)
+
+	// Announce the phase and keep the progress channel alive. Without this the
+	// operation looks hung for the entire archive and the registry marks it
+	// stuck — see autoBackupMinInterval above.
+	start := time.Now()
+	log.UpdateProgress(0, 1, "Backing up database before organize (this can take several minutes)")
+	log.Info("Auto-backup starting: %s", dbPath)
+
+	var (
+		info   *backup.BackupInfo
+		err    error
+		method backupMethod
+	)
+	// Prefer the Pebble checkpoint path. CreateBackup walks the LIVE database
+	// directory, so Pebble compaction deletes .sst/.log files between the walk
+	// enumerating them and the archiver reading them — which is exactly how
+	// both prod runs died:
+	//
+	//	Auto-backup failed: failed to add files to archive:
+	//	  lstat /var/lib/audiobook-organizer/audiobooks.pebble/536537.sst: no such file or directory
+	//
+	// Checkpoint flushes and hard-links the SSTs into a private directory
+	// first, so the archive is consistent by construction.
+	//
+	// Resolved with database.AsCapability rather than a bare type assertion:
+	// the production store is wrapped by the search-index decorator, and a
+	// bare `orgSvc.db.(backup.Checkpointable)` sees only the decorator's own
+	// method set and silently falls back to the racy path. That exact shape
+	// was a live bug in the version-group backfill (PR #2295).
+	if cp, ok := database.AsCapability[backup.Checkpointable](orgSvc.db); ok && dbType == "pebble" {
+		method = backupCheckpoint
+		info, err = backup.CreateBackupWithCheckpoint(cp, dbPath, dbType, backupConfig)
+	} else {
+		method = backupLiveWalk
+		if dbType == "pebble" {
+			log.Warn("Auto-backup: store %T does not expose Checkpoint; falling back to a live-directory archive, which races Pebble compaction", orgSvc.db)
+		}
+		info, err = backup.CreateBackup(dbPath, dbType, backupConfig)
+	}
+	if err != nil {
+		log.Warn("Auto-backup failed after %s: %s", time.Since(start).Truncate(time.Second), err.Error())
+		return backupFailed
+	}
+	log.Info("Auto-backup created: %s (%d bytes) in %s via %s",
+		info.Filename, info.Size, time.Since(start).Truncate(time.Second), method)
+	return method
 }
 
 func (orgSvc *Service) syncITunesBeforeOrganize(ctx context.Context, log logger.Logger) {
