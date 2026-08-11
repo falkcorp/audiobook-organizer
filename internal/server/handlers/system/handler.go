@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8475f406-df31-4286-95b0-30787397603e
-// last-edited: 2026-08-01
+// last-edited: 2026-08-11
 
 // Package system hosts the system-level HTTP handlers extracted from the server
 // package: health, status, announcements, storage, logs, activity-log,
@@ -23,7 +23,9 @@ package system
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -504,10 +506,19 @@ func (h *Handler) HandleEvents(c *gin.Context) {
 
 // CreateBackup creates a database backup. Implements POST /backup/create.
 func (h *Handler) CreateBackup(c *gin.Context) {
+	// max_backups drives backup ROTATION, which deletes. A malformed body left it
+	// nil, DefaultBackupConfig()'s retention was used instead of the caller's, and
+	// rotation could then delete backups the caller had explicitly asked to keep.
+	// A silently-substituted retention count is data-loss-adjacent, so an
+	// unreadable body is refused. An absent body still means "use the default",
+	// which is the documented behaviour of this endpoint.
 	var req struct {
 		MaxBackups *int `json:"max_backups"`
 	}
-	_ = c.ShouldBindJSON(&req)
+	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
+		httputil.RespondWithBadRequest(c, "invalid request body: "+err.Error())
+		return
+	}
 
 	backupConfig := backup.DefaultBackupConfig()
 	if req.MaxBackups != nil {

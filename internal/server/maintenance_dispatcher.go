@@ -1,11 +1,13 @@
 // file: internal/server/maintenance_dispatcher.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 55555555-5555-5555-5555-555555555555
-// last-edited: 2026-05-11
+// last-edited: 2026-08-11
 
 package server
 
 import (
+	"errors"
+	"io"
 	"net/http"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
@@ -75,10 +77,23 @@ func (s *Server) runMaintenanceJob(c *gin.Context) {
 		}
 	}
 
+	// dry_run is the only thing standing between a preview and a real mutation,
+	// and its zero value is the DESTRUCTIVE one. A body that failed to parse —
+	// a trailing comma, `"true"` instead of true, a truncated upload — left
+	// DryRun false and the job below was enqueued for real. The 202 response is
+	// byte-identical either way, so the operator who asked for a preview had no
+	// signal at all that they got a mutation.
+	//
+	// An ABSENT body still means DryRun=false; that is this endpoint's existing
+	// contract and is deliberately unchanged here. Only "you sent something and
+	// we could not read it" becomes an error.
 	var req struct {
 		DryRun bool `json:"dry_run"`
 	}
-	_ = c.ShouldBindJSON(&req)
+	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
+		httputil.RespondWithBadRequest(c, "invalid request body: "+err.Error())
+		return
+	}
 
 	opID := ulid.Make().String()
 	opType := "maintenance:" + jobID

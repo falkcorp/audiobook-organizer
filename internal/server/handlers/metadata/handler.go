@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.6.2
+// version: 1.7.0
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
-// last-edited: 2026-07-16
+// last-edited: 2026-08-11
 
 // Package metadatahandler hosts the metadata-domain HTTP handlers extracted
 // from the server package's metadata_handlers.go: batch-update / validate /
@@ -50,6 +50,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"math"
 	"net/http"
@@ -468,6 +469,13 @@ func (h *Handler) searchAudiobookMetadataImpl(c *gin.Context) {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
 	}
+	// These five fields are the entire search query AND the persistent cache key
+	// built from them below. A malformed body zeroed all of them, which made
+	// plainFetch true and produced a cache key indistinguishable from a genuine
+	// empty query — so an unreadable search could WRITE a result under a key that
+	// later legitimate searches read back. A parse failure that poisons a cache
+	// outlives the request that caused it, which is why this one is refused
+	// rather than defaulted.
 	var body struct {
 		Query     string `json:"query"`
 		Author    string `json:"author"`
@@ -475,7 +483,10 @@ func (h *Handler) searchAudiobookMetadataImpl(c *gin.Context) {
 		Series    string `json:"series"`
 		UseRerank bool   `json:"use_rerank"`
 	}
-	_ = c.ShouldBindJSON(&body)
+	if err := c.ShouldBindJSON(&body); err != nil && !errors.Is(err, io.EOF) {
+		httputil.RespondWithBadRequest(c, "invalid request body: "+err.Error())
+		return
+	}
 	refresh := c.Query("refresh") == "true"
 
 	// Persistent cache read: only when the caller is doing a plain
@@ -756,12 +767,21 @@ func (h *Handler) writeBackAudiobookMetadataImpl(c *gin.Context) {
 		return
 	}
 
-	// Parse optional segment filter and rename flag from request body
+	// Parse optional segment filter and rename flag from request body.
+	//
+	// segment_ids is the SCOPE. Note the interaction directly below: the rename
+	// branch fires on `doRename && len(body.SegmentIDs) == 0`, so a malformed
+	// body did not merely lose the segment filter — losing it is exactly what
+	// UNLOCKS the whole-book rename path. A request scoped to two segments
+	// became a full rename of the book's files on disk.
 	var body struct {
 		SegmentIDs []string `json:"segment_ids"`
 		Rename     *bool    `json:"rename"`
 	}
-	_ = c.ShouldBindJSON(&body)
+	if err := c.ShouldBindJSON(&body); err != nil && !errors.Is(err, io.EOF) {
+		httputil.RespondWithBadRequest(c, "invalid request body: "+err.Error())
+		return
+	}
 
 	store := h.store
 	book, err := store.GetBookByID(id)
@@ -1164,6 +1184,16 @@ func (h *Handler) handleBulkWriteBackImpl(c *gin.Context) {
 		return
 	}
 
+	// This one fails twice over on a malformed body, in the same direction.
+	//
+	//   1. DryRun falls to false — a preview becomes a real apply.
+	//   2. All three filter fields fall to nil, so the else-branch below runs
+	//      GetAllBooksCore(0, 0) — the ENTIRE library.
+	//
+	// A request scoped to one author, asking for a dry run, became an unfiltered
+	// whole-library metadata write. Both halves of the escalation come from the
+	// same discarded error, which is why neither a filter check nor a dry-run
+	// check downstream would have caught it.
 	var req struct {
 		Filter struct {
 			LibraryState *string `json:"library_state"`
@@ -1173,7 +1203,10 @@ func (h *Handler) handleBulkWriteBackImpl(c *gin.Context) {
 		DryRun bool `json:"dry_run"`
 		Rename bool `json:"rename"`
 	}
-	_ = c.ShouldBindJSON(&req)
+	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
+		httputil.RespondWithBadRequest(c, "invalid request body: "+err.Error())
+		return
+	}
 
 	// Gather matching books based on filters. store.GetBooksByAuthorIDCore /
 	// GetBooksBySeriesIDCore / GetAllBooksCore are all Core-typed (STOREFID
