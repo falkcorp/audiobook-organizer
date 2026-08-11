@@ -1485,8 +1485,8 @@ func TestCalculateChecksumConsistency(t *testing.T) {
 	}
 
 	// Act - Calculate checksum twice
-	checksum1, err1 := calculateFileChecksum(testFile)
-	checksum2, err2 := calculateFileChecksum(testFile)
+	checksum1, err1 := calculateFileChecksum(testFile, nil)
+	checksum2, err2 := calculateFileChecksum(testFile, nil)
 
 	// Assert - Both should succeed and be identical
 	if err1 != nil {
@@ -1895,7 +1895,7 @@ func TestAddToArchiveStatError(t *testing.T) {
 
 	// Act - Try to add non-existent path
 	nonexistentPath := filepath.Join(tempDir, "nonexistent.db")
-	err = addToArchive(tarWriter, nonexistentPath, "sqlite")
+	err = addToArchive(tarWriter, nonexistentPath, "sqlite", nil)
 
 	// Assert
 	if err == nil {
@@ -1947,7 +1947,7 @@ func TestAddToArchiveWalkError(t *testing.T) {
 	defer tarWriter.Close()
 
 	// Act
-	err = addToArchive(tarWriter, sourceDir, "pebbledb")
+	err = addToArchive(tarWriter, sourceDir, "pebbledb", nil)
 
 	// Assert - Should get error trying to read unreadable file
 	if err == nil {
@@ -1962,7 +1962,7 @@ func TestCalculateFileChecksumError(t *testing.T) {
 	nonexistentFile := filepath.Join(tempDir, "nonexistent.db")
 
 	// Act
-	checksum, err := calculateFileChecksum(nonexistentFile)
+	checksum, err := calculateFileChecksum(nonexistentFile, nil)
 
 	// Assert
 	if err == nil {

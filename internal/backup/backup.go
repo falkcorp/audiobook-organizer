@@ -1,7 +1,7 @@
 // file: internal/backup/backup.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 8f9e0a1b-2c3d-4e5f-6a7b-8c9d0e1f2a3b
-// last-edited: 2026-06-30
+// last-edited: 2026-08-11
 
 package backup
 
@@ -42,11 +42,43 @@ type BackupInfo struct {
 	CreatedAt    time.Time `json:"created_at"`
 }
 
+// Progress phases reported through BackupConfig.Progress. A phase is entered
+// once and then re-reported as it advances; a caller that only cares about
+// "something moved" can ignore the name entirely.
+const (
+	// PhaseCheckpoint: flushing and hard-linking the Pebble snapshot. Reported
+	// once on entry and once on completion — Checkpoint() is opaque to us, so
+	// there is nothing honest to report in between.
+	PhaseCheckpoint = "checkpoint"
+	// PhaseArchive: walking the snapshot and writing tar+gzip. Reported per
+	// file, so filesDone/bytesDone strictly increase while real work happens.
+	PhaseArchive = "archive"
+	// PhaseChecksum: SHA-256 over the finished archive. Reported per chunk.
+	PhaseChecksum = "checksum"
+)
+
+// BackupProgress receives evidence that a backup is making forward progress.
+//
+// WHY THE COUNTERS AND NOT JUST A TICK: the caller for this is the pre-organize
+// auto-backup, whose whole problem is that the ops-registry watchdog CANCELS an
+// operation that goes ProgressTimeout (default 5m) without an UpdateProgress
+// stamp — see internal/operations/registry/watchdog.go. A ticker that stamps on
+// a timer would satisfy the watchdog whether or not the backup was alive, which
+// turns a hang detector into a hang concealer. filesDone and bytesDone come off
+// the actual archive walk, so a stalled backup stops producing them and the
+// watchdog still fires.
+//
+// Optional; nil disables reporting. Called synchronously on the backup's
+// goroutine, so implementations must not block — throttle inside the callback.
+type BackupProgress func(phase string, filesDone int, bytesDone int64)
+
 // BackupConfig holds backup configuration
 type BackupConfig struct {
 	BackupDir        string
 	MaxBackups       int
 	CompressionLevel int
+	// Progress is optional. See BackupProgress.
+	Progress BackupProgress
 }
 
 // DefaultBackupConfig returns default backup configuration
@@ -89,7 +121,7 @@ func CreateBackup(databasePath, databaseType string, config BackupConfig) (*Back
 	defer tarWriter.Close()
 
 	// Add database files to archive
-	if err := addToArchive(tarWriter, databasePath, databaseType); err != nil {
+	if err := addToArchive(tarWriter, databasePath, databaseType, config.Progress); err != nil {
 		os.Remove(backupPath) // Clean up on failure
 		return nil, fmt.Errorf("failed to add files to archive: %w", err)
 	}
@@ -112,7 +144,7 @@ func CreateBackup(databasePath, databaseType string, config BackupConfig) (*Back
 	}
 
 	// Calculate checksum
-	checksum, err := calculateFileChecksum(backupPath)
+	checksum, err := calculateFileChecksum(backupPath, config.Progress)
 	if err != nil {
 		return nil, fmt.Errorf("failed to calculate checksum: %w", err)
 	}
@@ -165,8 +197,19 @@ func CreateBackupWithCheckpoint(store Checkpointable, dbSourcePath, databaseType
 	cleanupDir := tmpDir
 	defer func() { os.RemoveAll(cleanupDir) }()
 
+	// Bracket the checkpoint rather than reporting inside it: Checkpoint() is
+	// opaque to us, so a stamp during it would be a guess. Bracketing still
+	// tells the caller which phase is running when it goes quiet, which is the
+	// difference between "the backup is hung" and "the backup is hung IN THE
+	// CHECKPOINT".
+	if config.Progress != nil {
+		config.Progress(PhaseCheckpoint, 0, 0)
+	}
 	if err := store.Checkpoint(tmpDir); err != nil {
 		return nil, fmt.Errorf("pebble checkpoint: %w", err)
+	}
+	if config.Progress != nil {
+		config.Progress(PhaseCheckpoint, 1, 0)
 	}
 
 	// Rename checkpoint dir to source DB basename so tar archive entries use
@@ -314,7 +357,7 @@ func ListBackups(backupDir string) ([]BackupInfo, error) {
 		}
 
 		backupPath := filepath.Join(backupDir, entry.Name())
-		checksum, _ := calculateFileChecksum(backupPath)
+		checksum, _ := calculateFileChecksum(backupPath, nil)
 
 		// Parse database type from filename
 		dbType := "unknown"
@@ -346,12 +389,18 @@ func DeleteBackup(backupPath string) error {
 }
 
 // addToArchive adds a database path to a tar archive
-func addToArchive(tarWriter *tar.Writer, path, dbType string) error {
+func addToArchive(tarWriter *tar.Writer, path, dbType string, progress BackupProgress) error {
 	// Check if path is a directory (PebbleDB) or file (SQLite)
 	info, err := os.Stat(path)
 	if err != nil {
 		return fmt.Errorf("failed to stat database path: %w", err)
 	}
+
+	// filesDone/bytesDone are the forward-progress evidence handed to the
+	// caller. They only advance when a file has actually been written into the
+	// archive, which is the whole point — see BackupProgress.
+	filesDone := 0
+	var bytesDone int64
 
 	if info.IsDir() {
 		// PebbleDB - archive entire directory
@@ -400,8 +449,14 @@ func addToArchive(tarWriter *tar.Writer, path, dbType string) error {
 				}
 				defer f.Close()
 
-				if _, err := io.Copy(tarWriter, f); err != nil {
+				written, err := io.Copy(tarWriter, f)
+				if err != nil {
 					return err
+				}
+				filesDone++
+				bytesDone += written
+				if progress != nil {
+					progress(PhaseArchive, filesDone, bytesDone)
 				}
 			}
 
@@ -425,13 +480,21 @@ func addToArchive(tarWriter *tar.Writer, path, dbType string) error {
 		}
 		defer file.Close()
 
-		_, err = io.Copy(tarWriter, file)
-		return err
+		written, err := io.Copy(tarWriter, file)
+		if err != nil {
+			return err
+		}
+		filesDone++
+		bytesDone += written
+		if progress != nil {
+			progress(PhaseArchive, filesDone, bytesDone)
+		}
+		return nil
 	}
 }
 
 // calculateFileChecksum calculates SHA256 checksum of a file
-func calculateFileChecksum(path string) (string, error) {
+func calculateFileChecksum(path string, progress BackupProgress) (string, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return "", err
@@ -439,8 +502,34 @@ func calculateFileChecksum(path string) (string, error) {
 	defer file.Close()
 
 	hash := sha256.New()
-	if _, err := io.Copy(hash, file); err != nil {
-		return "", err
+	if progress == nil {
+		if _, err := io.Copy(hash, file); err != nil {
+			return "", err
+		}
+		return hex.EncodeToString(hash.Sum(nil)), nil
+	}
+
+	// Hash in chunks so the caller keeps hearing from us. On production this
+	// reads a 14 GB archive, long enough on its own to trip a 5-minute
+	// progress watchdog if it were a single opaque io.Copy.
+	const checksumChunk = 32 << 20 // 32 MiB
+	var done int64
+	buf := make([]byte, checksumChunk)
+	for {
+		n, readErr := file.Read(buf)
+		if n > 0 {
+			if _, werr := hash.Write(buf[:n]); werr != nil {
+				return "", werr
+			}
+			done += int64(n)
+			progress(PhaseChecksum, 0, done)
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return "", readErr
+		}
 	}
 
 	return hex.EncodeToString(hash.Sum(nil)), nil
