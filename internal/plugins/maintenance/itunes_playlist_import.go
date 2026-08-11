@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_playlist_import.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c4e91a3-58bd-42f6-9e0a-1d6b3f8c25e4
 // last-edited: 2026-08-10
 
@@ -38,14 +38,23 @@ import (
 type itunesPlaylistImportParams struct {
 	// DryRun reports what would be imported without creating rows.
 	DryRun bool `json:"dryRun"`
-	// ITLPath is the binary iTunes Library.itl to read.
+	// LibraryPath is the iTunes library to read: either an `iTunes
+	// Library.xml` export or a binary `iTunes Library.itl`. The reader is
+	// chosen by extension.
 	//
-	// Required in practice. It is NOT defaulted from config.LibraryReadPath
-	// because that field resolves to Libraries.Original.XMLPath whenever
-	// ImportSource is "original" or unset (itunes_libraries.go Resolve()) —
-	// i.e. an XML file, which the binary ITL parser cannot read. Silently
-	// feeding XML to ParseITL would fail in a way that looks like "no
-	// playlists found".
+	// Prefer the XML. The binary ITL parser extracts ZERO smart playlists from
+	// real 12.13.10.3 libraries while the XML export of the SAME library yields
+	// 292, each with an intact Smart Criteria blob (measured 2026-08-10 on the
+	// owner's library, and on an April backup, so it is not writeback damage).
+	// iTunes maintains both files; this reads the one that is legible.
+	//
+	// Defaults to config.ITunes.LibraryReadPath, which resolves to the Original
+	// XML export unless import_source is "ao". That default was previously
+	// refused precisely because it is an XML — now that XML is the better
+	// source, it is the sensible default.
+	LibraryPath string `json:"libraryPath"`
+	// ITLPath is the previous name for LibraryPath, kept so existing callers
+	// and saved op params keep working. LibraryPath wins if both are set.
 	ITLPath string `json:"itlPath"`
 	// OwnerUserID is stamped as CreatedByUserID on every imported playlist.
 	//
@@ -55,6 +64,13 @@ type itunesPlaylistImportParams struct {
 	// still reports a healthy count. Set this to the account that should see
 	// them.
 	OwnerUserID string `json:"ownerUserId"`
+	// AllowEmptyQueries permits an apply run to create playlists whose Smart
+	// Criteria did not translate to a query. Off by default: importing a
+	// silently-empty playlist looks like success and is the exact confusion
+	// this op exists to end. The raw criteria blob is stored on every imported
+	// row, so shells imported this way can be re-translated once the parser is
+	// fixed.
+	AllowEmptyQueries bool `json:"allowEmptyQueries"`
 }
 
 func (p *Plugin) itunesPlaylistImportDef() sdk.OperationDef {
@@ -62,7 +78,7 @@ func (p *Plugin) itunesPlaylistImportDef() sdk.OperationDef {
 		ID:              "maintenance.itunes-playlist-import",
 		Plugin:          "maintenance",
 		DisplayName:     "Import iTunes smart (dynamic) playlists",
-		Description:     "Reads smart playlists from a binary iTunes Library.itl, translates each Smart Criteria blob into our query DSL, and creates a matching smart UserPlaylist. Read-only with respect to iTunes — writes only to our own store. Idempotent: playlists already imported are skipped by iTunes persistent ID. Default dry-run reports what would be imported; set dryRun=false to apply.",
+		Description:     "Reads smart playlists from an iTunes Library.xml export (preferred) or a binary .itl, translates each Smart Criteria blob into our query DSL, and creates a matching smart UserPlaylist. Read-only with respect to iTunes — writes only to our own store. Idempotent: playlists already imported are skipped by iTunes persistent ID. Default dry-run reports what would be imported; set dryRun=false to apply.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.itunes-playlist-import",
@@ -83,32 +99,47 @@ func (p *Plugin) runITunesPlaylistImport(ctx context.Context, raw json.RawMessag
 		}
 	}
 
-	itlPath := strings.TrimSpace(params.ITLPath)
-	if itlPath == "" {
-		// Fall back to the configured read path ONLY if it actually is an ITL.
-		// See the ITLPath doc comment: LibraryReadPath is commonly an XML.
-		if cand := config.AppConfig.ITunes.LibraryReadPath; strings.HasSuffix(strings.ToLower(cand), ".itl") {
-			itlPath = cand
-		}
+	libPath := strings.TrimSpace(params.LibraryPath)
+	if libPath == "" {
+		libPath = strings.TrimSpace(params.ITLPath)
 	}
-	if itlPath == "" {
-		return fmt.Errorf("itunes-playlist-import: itlPath is required " +
-			"(the configured itunes.library_read_path is empty or not a .itl — " +
-			"it resolves to the Original XML export unless import_source is \"ao\")")
+	if libPath == "" {
+		libPath = strings.TrimSpace(config.AppConfig.ITunes.LibraryReadPath)
+	}
+	if libPath == "" {
+		return fmt.Errorf("itunes-playlist-import: libraryPath is required " +
+			"(itunes.library_read_path is empty)")
 	}
 
-	st, err := os.Stat(itlPath)
+	st, err := os.Stat(libPath)
 	if err != nil {
-		return fmt.Errorf("itunes-playlist-import: cannot read %q: %w", itlPath, err)
+		return fmt.Errorf("itunes-playlist-import: cannot read %q: %w", libPath, err)
 	}
-	_ = reporter.UpdateProgress(0, 3, fmt.Sprintf("Phase 1/3: parsing %s (%.1f MB)…", itlPath, float64(st.Size())/(1024*1024)))
 
-	lib, err := itunes.ParseITL(itlPath)
+	// Dispatch on extension. Feeding XML to ParseITL fails in a way that looks
+	// like "no playlists found", so the choice must never be implicit.
+	isXML := strings.HasSuffix(strings.ToLower(libPath), ".xml")
+	source := "itl"
+	if isXML {
+		source = "xml"
+	}
+	_ = reporter.UpdateProgress(0, 3, fmt.Sprintf("Phase 1/3: parsing %s source %s (%.1f MB)…",
+		source, libPath, float64(st.Size())/(1024*1024)))
+
+	var lib *itunes.ITLLibrary
+	if isXML {
+		lib, err = itunes.ParseXMLLibraryPlaylists(libPath)
+	} else {
+		reporter.Log(slog.LevelWarn, fmt.Sprintf(
+			"reading the BINARY .itl at %s — it extracts 0 smart playlists from real "+
+				"12.13.10.3 libraries. Point libraryPath at the iTunes Library.xml export instead.", libPath))
+		lib, err = itunes.ParseITL(libPath)
+	}
 	if err != nil {
-		return fmt.Errorf("itunes-playlist-import: parse %q: %w", itlPath, err)
+		return fmt.Errorf("itunes-playlist-import: parse %s %q: %w", source, libPath, err)
 	}
 	if lib == nil {
-		return fmt.Errorf("itunes-playlist-import: parse %q returned no library", itlPath)
+		return fmt.Errorf("itunes-playlist-import: parse %s %q returned no library", source, libPath)
 	}
 
 	smart := 0
@@ -137,7 +168,7 @@ func (p *Plugin) runITunesPlaylistImport(ctx context.Context, raw json.RawMessag
 				"same library can contain hundreds of smart playlists the binary ITL parser "+
 				"does not surface. Verify with: grep -c 'Smart Criteria' '<library>.xml'",
 			len(lib.Playlists))
-		slog.Warn("itunes-playlist-import: no smart playlists extracted", "itl", itlPath, "playlists", len(lib.Playlists))
+		slog.Warn("itunes-playlist-import: no smart playlists extracted", "source", source, "path", libPath, "playlists", len(lib.Playlists))
 		_ = reporter.Log(slog.LevelWarn, msg)
 		_ = reporter.UpdateProgress(3, 3, "0 smart playlists extracted — see log")
 		return nil
@@ -148,10 +179,48 @@ func (p *Plugin) runITunesPlaylistImport(ctx context.Context, raw json.RawMessag
 	}
 
 	importer := itunesservice.NewPlaylistImporter(p.deps.Store())
-	res := importer.MigrateSmartPlaylists(lib, itunesservice.PlaylistImportOptions{
+
+	// ALWAYS dry-run first, even when applying. The criteria translator is
+	// currently producing empty queries (ITUNES-SMARTCRIT-PARSE): ParseSmartCriteria
+	// misreads the SLst format and returns rules with no field, no operator and
+	// no operands, WITHOUT erroring — so an apply run would happily create
+	// hundreds of playlists that are all empty. Importing 292 empty playlists is
+	// worse than importing none: it looks like it worked.
+	probe := importer.MigrateSmartPlaylists(lib, itunesservice.PlaylistImportOptions{
 		OwnerUserID: strings.TrimSpace(params.OwnerUserID),
-		DryRun:      params.DryRun,
+		DryRun:      true,
 	})
+	empties := 0
+	for _, it := range probe.Items {
+		if it.Status == "would-import" && strings.TrimSpace(it.Query) == "" {
+			empties++
+		}
+	}
+	if empties > 0 {
+		msg := fmt.Sprintf(
+			"%d of %d importable playlists translate to an EMPTY query — their Smart "+
+				"Criteria did not survive parsing (ITUNES-SMARTCRIT-PARSE). Importing them "+
+				"would create playlists that are silently empty.", empties, probe.Imported)
+		_ = reporter.Log(slog.LevelWarn, msg)
+		slog.Warn("itunes-playlist-import: empty translated queries",
+			"empty", empties, "importable", probe.Imported)
+
+		if !params.DryRun && !params.AllowEmptyQueries {
+			return fmt.Errorf("itunes-playlist-import: refusing to apply — %d of %d "+
+				"playlists would be created with an empty query. Fix the Smart Criteria "+
+				"parser first, or pass allowEmptyQueries=true to import them as empty "+
+				"shells anyway (their raw criteria blob is stored, so they can be "+
+				"re-translated later)", empties, probe.Imported)
+		}
+	}
+
+	res := probe
+	if !params.DryRun {
+		res = importer.MigrateSmartPlaylists(lib, itunesservice.PlaylistImportOptions{
+			OwnerUserID: strings.TrimSpace(params.OwnerUserID),
+			DryRun:      false,
+		})
+	}
 
 	// Report by RE-READING the store, not by trusting the returned counter.
 	// On an apply run the authoritative number is how many smart playlists
@@ -170,7 +239,7 @@ func (p *Plugin) runITunesPlaylistImport(ctx context.Context, raw json.RawMessag
 		mode = "DRY-RUN"
 	}
 	slog.Info("itunes-playlist-import complete",
-		"mode", mode, "itl", itlPath,
+		"mode", mode, "source", source, "path", libPath,
 		"playlistsInLibrary", len(lib.Playlists),
 		"smartFound", res.SmartFound,
 		"imported", res.Imported, "skipped", res.Skipped,
