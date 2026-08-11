@@ -1,8 +1,7 @@
 // file: web/src/components/dedup/DedupEmbeddingTab.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567891
-// last-edited: 2026-06-29
-
+// last-edited: 2026-08-10
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -730,7 +729,13 @@ export function EmbeddingDedupTab() {
               alignItems="center"
               spacing={0.5}
               useFlexGap
-              sx={{ minWidth: 0, pr: isMultiWay ? 3 : 0 }} // leave room for the button
+              sx={[{
+                minWidth: 0
+              }, isMultiWay ? {
+                pr: 3
+              } : {
+                pr: 0
+              }]} // leave room for the button
             >
               <Typography
                 className="dedup-side-title"
@@ -802,14 +807,17 @@ export function EmbeddingDedupTab() {
                   handleMergeCluster(cluster, id);
                 }}
                 disabled={anyActionBusy}
-                sx={{
+                sx={[{
                   position: 'absolute',
                   top: -4,
-                  right: isMultiWay ? 22 : -4,
                   padding: '2px',
                   color: 'text.disabled',
-                  '&:hover': { color: 'warning.main' },
-                }}
+                  '&:hover': { color: 'warning.main' }
+                }, isMultiWay ? {
+                  right: 22
+                } : {
+                  right: -4
+                }]}
               >
                 {actionLoading === `${cluster.key}:primary:${id}` ? (
                   <CircularProgress size={14} />

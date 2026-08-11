@@ -1,8 +1,7 @@
 // file: web/src/components/audiobooks/AudiobookList.tsx
-// version: 2.8.0
+// version: 2.9.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-07-11
-
+// last-edited: 2026-08-10
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Table,
@@ -534,7 +533,14 @@ export const AudiobookList: React.FC<AudiobookListProps> = ({
                 <TableRow
                   hover
                   onClick={() => handleRowClick(audiobook)}
-                  sx={{ cursor: onClick ? 'pointer' : 'default', contentVisibility: 'auto', containIntrinsicSize: '1px 52px' }}
+                  sx={[{
+                    contentVisibility: 'auto',
+                    containIntrinsicSize: '1px 52px'
+                  }, onClick ? {
+                    cursor: 'pointer'
+                  } : {
+                    cursor: 'default'
+                  }]}
                 >
                   {/* Expand cell */}
                   <TableCell padding="checkbox" sx={{ width: 50 }}>
@@ -618,104 +624,104 @@ export const AudiobookList: React.FC<AudiobookListProps> = ({
               </TableCell>
             </TableRow>
 
-            {/* Expanded files rows */}
-            {isExpanded && (
-              <TableRow sx={{ bgcolor: 'background.default' }}>
-                <TableCell colSpan={hasSelection ? activeColumns.length + 3 : activeColumns.length + 2} sx={{ p: 0 }}>
-                  <Collapse in={isExpanded} timeout="auto" unmountOnExit>
-                    <Box sx={{ p: 2 }}>
-                      <Typography variant="subtitle2" sx={{ mb: 1.5, fontWeight: 600 }}>
-                        Files ({audiobook.total_file_count || 0})
-                      </Typography>
-
-                      {isLoadingFiles ? (
-                        <Box display="flex" justifyContent="center" p={2}>
-                          <CircularProgress size={24} />
-                        </Box>
-                      ) : fetchError ? (
-                        // Fix #6: show error UI with Retry button instead of silent spinner/empty list
-                        <Box display="flex" alignItems="center" gap={1} p={1}>
-                          <Typography variant="body2" color="error">
-                            Failed to load files: {fetchError}
+                {/* Expanded files rows */}
+                {isExpanded && (
+                  <TableRow sx={{ bgcolor: 'background.default' }}>
+                    <TableCell colSpan={hasSelection ? activeColumns.length + 3 : activeColumns.length + 2} sx={{ p: 0 }}>
+                      <Collapse in={isExpanded} timeout="auto" unmountOnExit>
+                        <Box sx={{ p: 2 }}>
+                          <Typography variant="subtitle2" sx={{ mb: 1.5, fontWeight: 600 }}>
+                            Files ({audiobook.total_file_count || 0})
                           </Typography>
-                          <Button size="small" variant="outlined" color="error" onClick={() => fetchFiles(audiobook.id)}>
-                            Retry
-                          </Button>
-                        </Box>
-                      ) : files.length === 0 ? (
-                        <Typography variant="body2" color="text.secondary">
-                          No files found
-                        </Typography>
-                      ) : (
-                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                          {files.map((file) => (
-                            <Box
-                              key={file.id}
-                              sx={{
-                                display: 'grid',
-                                gridTemplateColumns: '1fr auto',
-                                gap: 1,
-                                alignItems: 'center',
-                                p: 1.5,
-                                bgcolor: 'background.paper',
-                                borderRadius: 1,
-                                border: '1px solid',
-                                borderColor: 'divider',
-                              }}
-                            >
-                              <Box sx={{ minWidth: 0 }}>
-                                <Typography variant="body2" sx={{ fontWeight: 500, wordBreak: 'break-word' }}>
-                                  {file.original_filename || file.file_path.split('/').pop() || 'Unknown'}
-                                </Typography>
-                                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', wordBreak: 'break-word' }}>
-                                  {file.file_path}
-                                </Typography>
-                              </Box>
 
-                              <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexShrink: 0 }}>
-                                <Chip
-                                  icon={getFingerprinterStatusIcon(file)}
-                                  label={hasFingerprint(file) ? '✓ Fingerprinted' : '✗ Not Fingerprinted'}
-                                  color={getFingerprinterStatusColor(file)}
-                                  variant="outlined"
-                                  size="small"
-                                />
-                                <FormControlLabel
-                                  control={
-                                    <Switch
-                                      size="small"
-                                      checked={!!file.skip_scan}
-                                      onChange={async (e) => {
-                                        const newValue = e.target.checked;
-                                        try {
-                                          const updated = await api.patchBookFile(audiobook.id, file.id, {
-                                            skip_scan: newValue,
-                                          });
-                                          handleFileUpdate(audiobook.id, updated);
-                                        } catch (err) {
-                                          console.error('Failed to update skip_scan:', err);
-                                        }
-                                      }}
-                                    />
-                                  }
-                                  label="Skip"
-                                  sx={{ ml: 0.5 }}
-                                />
-                                <Typography variant="caption" color="text.secondary" sx={{ minWidth: 80, textAlign: 'right' }}>
-                                  {formatFileSize(file.file_size)}
-                                </Typography>
-                              </Box>
+                          {isLoadingFiles ? (
+                            <Box display="flex" justifyContent="center" p={2}>
+                              <CircularProgress size={24} />
                             </Box>
-                          ))}
+                          ) : fetchError ? (
+                            // Fix #6: show error UI with Retry button instead of silent spinner/empty list
+                            <Box display="flex" alignItems="center" gap={1} p={1}>
+                              <Typography variant="body2" color="error">
+                                Failed to load files: {fetchError}
+                              </Typography>
+                              <Button size="small" variant="outlined" color="error" onClick={() => fetchFiles(audiobook.id)}>
+                                Retry
+                              </Button>
+                            </Box>
+                          ) : files.length === 0 ? (
+                            <Typography variant="body2" color="text.secondary">
+                              No files found
+                            </Typography>
+                          ) : (
+                            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                              {files.map((file) => (
+                                <Box
+                                  key={file.id}
+                                  sx={{
+                                    display: 'grid',
+                                    gridTemplateColumns: '1fr auto',
+                                    gap: 1,
+                                    alignItems: 'center',
+                                    p: 1.5,
+                                    bgcolor: 'background.paper',
+                                    borderRadius: 1,
+                                    border: '1px solid',
+                                    borderColor: 'divider',
+                                  }}
+                                >
+                                  <Box sx={{ minWidth: 0 }}>
+                                    <Typography variant="body2" sx={{ fontWeight: 500, wordBreak: 'break-word' }}>
+                                      {file.original_filename || file.file_path.split('/').pop() || 'Unknown'}
+                                    </Typography>
+                                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', wordBreak: 'break-word' }}>
+                                      {file.file_path}
+                                    </Typography>
+                                  </Box>
+
+                                  <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexShrink: 0 }}>
+                                    <Chip
+                                      icon={getFingerprinterStatusIcon(file)}
+                                      label={hasFingerprint(file) ? '✓ Fingerprinted' : '✗ Not Fingerprinted'}
+                                      color={getFingerprinterStatusColor(file)}
+                                      variant="outlined"
+                                      size="small"
+                                    />
+                                    <FormControlLabel
+                                      control={
+                                        <Switch
+                                          size="small"
+                                          checked={!!file.skip_scan}
+                                          onChange={async (e) => {
+                                            const newValue = e.target.checked;
+                                            try {
+                                              const updated = await api.patchBookFile(audiobook.id, file.id, {
+                                                skip_scan: newValue,
+                                              });
+                                              handleFileUpdate(audiobook.id, updated);
+                                            } catch (err) {
+                                              console.error('Failed to update skip_scan:', err);
+                                            }
+                                          }}
+                                        />
+                                      }
+                                      label="Skip"
+                                      sx={{ ml: 0.5 }}
+                                    />
+                                    <Typography variant="caption" color="text.secondary" sx={{ minWidth: 80, textAlign: 'right' }}>
+                                      {formatFileSize(file.file_size)}
+                                    </Typography>
+                                  </Box>
+                                </Box>
+                              ))}
+                            </Box>
+                          )}
                         </Box>
-                      )}
-                    </Box>
-                  </Collapse>
-                </TableCell>
-              </TableRow>
-            )}
-          </React.Fragment>
-          );
+                      </Collapse>
+                    </TableCell>
+                  </TableRow>
+                )}
+              </React.Fragment>
+            );
           })}
         </TableBody>
       </Table>

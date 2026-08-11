@@ -1,5 +1,5 @@
 // file: web/src/components/BatchActivityEntry.tsx
-// version: 1.1.1
+// version: 1.2.0
 // guid: 7e3a1f9c-4b82-4d5e-a6c8-2f0d8e7b3a91
 
 import React, { useState } from 'react';
@@ -141,7 +141,6 @@ export function BatchActivityEntry({ entry, tierColor }: BatchActivityEntryProps
             {entry.summary}
           </Typography>
         </TableCell>
-
         {/* 5. Item count chip + type info (desktop source column) */}
         <TableCell>
           <Chip
@@ -162,10 +161,13 @@ export function BatchActivityEntry({ entry, tierColor }: BatchActivityEntryProps
       <TableRow>
         <TableCell
           colSpan={7}
-          sx={{
-            py: 0,
-            borderBottom: expanded ? undefined : 'none',
-          }}
+          sx={[{
+            py: 0
+          }, expanded ? {
+            borderBottom: null
+          } : {
+            borderBottom: 'none'
+          }]}
         >
           <Collapse in={expanded} timeout="auto" unmountOnExit>
             <Box sx={{ py: 1, pl: 4 }}>

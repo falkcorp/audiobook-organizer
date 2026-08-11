@@ -1,8 +1,7 @@
 // file: web/src/components/layout/Sidebar.tsx
-// version: 1.17.0
+// version: 1.18.0
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-08-08
-
+// last-edited: 2026-08-10
 import { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
@@ -120,9 +119,17 @@ export function Sidebar({ open, onClose, drawerWidth, collapsed = false, onToggl
             <ListItemButton
               selected={location.pathname === '/dashboard'}
               onClick={() => handleNavigation('/dashboard')}
-              sx={{ justifyContent: isCollapsed ? 'center' : 'flex-start' }}
+              sx={[isCollapsed ? {
+                justifyContent: 'center'
+              } : {
+                justifyContent: 'flex-start'
+              }]}
             >
-              <ListItemIcon sx={{ minWidth: isCollapsed ? 0 : undefined }}>
+              <ListItemIcon sx={[isCollapsed ? {
+                minWidth: 0
+              } : {
+                minWidth: null
+              }]}>
                 <DashboardIcon />
               </ListItemIcon>
               {!isCollapsed && <ListItemText primary="Dashboard" />}
@@ -187,9 +194,17 @@ export function Sidebar({ open, onClose, drawerWidth, collapsed = false, onToggl
               <ListItemButton
                 selected={location.pathname === item.path}
                 onClick={() => handleNavigation(item.path)}
-                sx={{ justifyContent: isCollapsed ? 'center' : 'flex-start' }}
+                sx={[isCollapsed ? {
+                  justifyContent: 'center'
+                } : {
+                  justifyContent: 'flex-start'
+                }]}
               >
-                <ListItemIcon sx={{ minWidth: isCollapsed ? 0 : undefined }}>
+                <ListItemIcon sx={[isCollapsed ? {
+                  minWidth: 0
+                } : {
+                  minWidth: null
+                }]}>
                   {renderMenuIcon(item)}
                 </ListItemIcon>
                 {!isCollapsed && <ListItemText primary={item.text} />}
@@ -239,21 +254,20 @@ export function Sidebar({ open, onClose, drawerWidth, collapsed = false, onToggl
       {/* Permanent drawer — supports collapse to icon-only */}
       <Drawer
         variant="permanent"
-        sx={{
+        sx={theme => ({
           display: { xs: 'none', sm: 'block' },
           '& .MuiDrawer-paper': {
             boxSizing: 'border-box',
             width: drawerWidth,
             overflowX: 'hidden',
-            transition: (theme) =>
-              theme.transitions.create('width', {
-                easing: theme.transitions.easing.sharp,
-                duration: collapsed
-                  ? theme.transitions.duration.leavingScreen
-                  : theme.transitions.duration.enteringScreen,
-              }),
-          },
-        }}
+            transition: theme.transitions.create('width', {
+              easing: theme.transitions.easing.sharp,
+              duration: collapsed
+                ? theme.transitions.duration.leavingScreen
+                : theme.transitions.duration.enteringScreen,
+            }),
+          }
+        })}
         open
       >
         {buildContent(collapsed, true)}

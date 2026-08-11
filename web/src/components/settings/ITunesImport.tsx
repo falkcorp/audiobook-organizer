@@ -1,8 +1,7 @@
 // file: web/src/components/settings/ITunesImport.tsx
-// version: 1.19.2
+// version: 1.20.0
 // guid: 4eb9b74d-7192-497b-849a-092833ae63a4
-// last-edited: 2026-08-07
-
+// last-edited: 2026-08-10
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
@@ -1044,13 +1043,11 @@ export function ITunesImport() {
                 }
                 label="Create backup before writing"
               />
-
               <Tabs value={writeBackMode} onChange={(_e, v) => setWriteBackMode(v)} sx={{ borderBottom: 1, borderColor: 'divider' }}>
                 <Tab label="Enter IDs" />
                 <Tab label="Sync All" />
                 <Tab label="Browse & Select" />
               </Tabs>
-
               {/* Mode 0: Enter IDs manually */}
               {writeBackMode === 0 && (
                 <Stack spacing={2}>

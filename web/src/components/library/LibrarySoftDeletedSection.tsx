@@ -61,10 +61,13 @@ export function LibrarySoftDeletedSection({
       >
         <Stack direction="row" alignItems="center" spacing={1}>
           <ExpandMoreIcon
-            sx={{
-              transform: softDeletedExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
-              transition: 'transform 0.2s',
-            }}
+            sx={[{
+              transition: 'transform 0.2s'
+            }, softDeletedExpanded ? {
+              transform: 'rotate(180deg)'
+            } : {
+              transform: 'rotate(0deg)'
+            }]}
           />
           <Typography variant="h6">Soft-Deleted Books</Typography>
         </Stack>

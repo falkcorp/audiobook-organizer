@@ -1,8 +1,7 @@
 // file: web/src/components/dedup/DedupAIReviewTab.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-06-22
-
+// last-edited: 2026-08-10
 import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
@@ -309,7 +308,6 @@ function AIAuthorPipelinePage() {
               </CardContent>
             </Card>
           ))}
-
           {/* No results for this filter */}
           {filteredResults.length === 0 && (
             <Typography color="text.secondary" sx={{ p: 2, textAlign: 'center' }}>
@@ -318,7 +316,6 @@ function AIAuthorPipelinePage() {
           )}
         </Box>
       )}
-
       {/* Scan complete but no results */}
       {scan?.status === 'complete' && results.length === 0 && (
         <Paper sx={{ p: 4, mx: 2, textAlign: 'center' }}>
@@ -327,7 +324,6 @@ function AIAuthorPipelinePage() {
           </Typography>
         </Paper>
       )}
-
       {/* Scan History Drawer */}
       <Drawer anchor="right" open={historyOpen} onClose={() => setHistoryOpen(false)}>
         <Box sx={{ width: 400, p: 2 }}>
@@ -335,7 +331,18 @@ function AIAuthorPipelinePage() {
           {scans.map(s => (
             <Card
               key={s.id}
-              sx={{ mb: 1, cursor: 'pointer', border: scan?.id === s.id ? 2 : undefined, borderColor: scan?.id === s.id ? 'primary.main' : undefined }}
+              sx={[{
+                mb: 1,
+                cursor: 'pointer'
+              }, scan?.id === s.id ? {
+                border: 2
+              } : {
+                border: null
+              }, scan?.id === s.id ? {
+                borderColor: 'primary.main'
+              } : {
+                borderColor: null
+              }]}
               variant="outlined"
               onClick={() => { loadScan(s.id); setHistoryOpen(false); }}
             >
@@ -357,7 +364,6 @@ function AIAuthorPipelinePage() {
     </Box>
   );
 }
-
 // ---- AI Review Top-Level Tab ----
 export function AIReviewTab() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -367,14 +373,12 @@ export function AIReviewTab() {
     next.set('aisub', v);
     setSearchParams(next, { replace: true });
   };
-
   return (
     <Box>
       <Tabs value={aiSub} onChange={(_, v) => setAiSub(v)} sx={{ mb: 2, borderBottom: 1, borderColor: 'divider' }}>
         <Tab value="authors" label="Authors" icon={<PersonIcon />} iconPosition="start" />
         <Tab value="books" label="Books" icon={<MenuBookIcon />} iconPosition="start" />
       </Tabs>
-
       {aiSub === 'authors' && <AIAuthorPipelinePage />}
       {aiSub === 'books' && (
         <Box sx={{ p: 4, textAlign: 'center' }}>

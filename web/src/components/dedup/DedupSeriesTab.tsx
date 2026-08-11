@@ -1,8 +1,7 @@
 // file: web/src/components/dedup/DedupSeriesTab.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678902
-// last-edited: 2026-05-11
-
+// last-edited: 2026-08-10
 import { useState, useEffect, useCallback } from 'react';
 import {
   Box,
@@ -442,7 +441,23 @@ export function SeriesDedupTab() {
                                   const isDup = (bookIdCounts.get(book.id) || 0) > 1;
                                   return (
                                     <Box key={book.id} sx={{ flexShrink: 0, width: 130, textAlign: 'center' }}>
-                                      <Box sx={{ width: 130, height: 195, borderRadius: 1, overflow: 'hidden', border: '1px solid', borderColor: isDup ? 'warning.main' : 'divider', bgcolor: 'action.hover', cursor: src ? 'pointer' : 'default', position: 'relative' }}
+                                      <Box sx={[{
+                                        width: 130,
+                                        height: 195,
+                                        borderRadius: 1,
+                                        overflow: 'hidden',
+                                        border: '1px solid',
+                                        bgcolor: 'action.hover',
+                                        position: 'relative'
+                                      }, isDup ? {
+                                        borderColor: 'warning.main'
+                                      } : {
+                                        borderColor: 'divider'
+                                      }, src ? {
+                                        cursor: 'pointer'
+                                      } : {
+                                        cursor: 'default'
+                                      }]}
                                         onClick={() => { if (src) setFloatingCovers((prev) => prev.some((c) => c.src === src) ? prev.filter((c) => c.src !== src) : [...prev, { src, title: cleanDisplayTitle(book.title), author: authorLabel }]); }}>
                                         {isDup && (
                                           <Chip label="dup" size="small" color="warning" sx={{ position: 'absolute', top: 4, right: 4, zIndex: 1, height: 18, fontSize: '0.6rem' }} />

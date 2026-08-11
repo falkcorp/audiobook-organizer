@@ -1,8 +1,7 @@
 // file: web/src/components/dedup/DedupSplitBookTab.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-05-29
-
+// last-edited: 2026-08-10
 // Split-book backfill review tab (MAYDEPLOY-G3).
 //
 // Lists persisted split-book candidate clusters from
@@ -169,7 +168,6 @@ function CandidateRow({ candidate, expanded, onToggle, onMergeRequest, merging }
     </>
   );
 }
-
 export function DedupSplitBookTab() {
   const [candidates, setCandidates] = useState<SplitBookCandidate[]>([]);
   const [loading, setLoading] = useState(true);
@@ -183,7 +181,6 @@ export function DedupSplitBookTab() {
   const [confirmCandidate, setConfirmCandidate] = useState<SplitBookCandidate | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isUnmountedRef = useRef(false);
-
   const loadCandidates = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -196,11 +193,9 @@ export function DedupSplitBookTab() {
       setLoading(false);
     }
   }, []);
-
   useEffect(() => {
     loadCandidates();
   }, [loadCandidates]);
-
   useEffect(() => {
     return () => {
       isUnmountedRef.current = true;

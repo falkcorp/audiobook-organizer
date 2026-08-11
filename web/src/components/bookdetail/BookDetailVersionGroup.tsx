@@ -1,8 +1,7 @@
 // file: web/src/components/bookdetail/BookDetailVersionGroup.tsx
-// version: 1.1.1
+// version: 1.2.0
 // guid: f6a7b8c9-d0e1-2345-fabc-456789012345
-// last-edited: 2026-08-07
-
+// last-edited: 2026-08-10
 import {
   Alert,
   Box,
@@ -173,17 +172,30 @@ export const BookDetailVersionGroup = ({
     <Paper key={groupId} sx={{ mb: 1, overflow: 'hidden' }} data-testid={`format-tray-${fmt.toLowerCase()}`}>
       {/* Format tray header */}
       <Box
-        sx={{
+        sx={[{
           display: 'flex',
           alignItems: 'center',
           px: 2,
           py: 1,
-          bgcolor: hasPrimary ? 'primary.dark' : 'background.paper',
           cursor: 'pointer',
-          '&:hover': { bgcolor: hasPrimary ? 'primary.dark' : 'action.hover' },
-          borderBottom: isExpanded ? '1px solid' : 'none',
-          borderColor: 'divider',
-        }}
+          borderColor: 'divider'
+        }, hasPrimary ? {
+          bgcolor: 'primary.dark'
+        } : {
+          bgcolor: 'background.paper'
+        }, hasPrimary ? {
+          '&:hover': {
+            bgcolor: 'primary.dark'
+          }
+        } : {
+          '&:hover': {
+            bgcolor: 'action.hover'
+          }
+        }, isExpanded ? {
+          borderBottom: '1px solid'
+        } : {
+          borderBottom: 'none'
+        }]}
         onClick={() => {
           for (const v of groupVersions) {
             onToggleVersionExpanded(v.id);
@@ -277,7 +289,16 @@ export const BookDetailVersionGroup = ({
             .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
 
           return (
-            <Box key={version.id} sx={{ p: 2, borderBottom: groupVersions.length > 1 ? '2px solid' : 'none', borderColor: 'divider', '&:not(:last-child)': { pb: 3 }, '&:not(:first-of-type)': { pt: 3 } }}>
+            <Box key={version.id} sx={[{
+              p: 2,
+              borderColor: 'divider',
+              '&:not(:last-child)': { pb: 3 },
+              '&:not(:first-of-type)': { pt: 3 }
+            }, groupVersions.length > 1 ? {
+              borderBottom: '2px solid'
+            } : {
+              borderBottom: 'none'
+            }]}>
               {/* Version action buttons */}
               <Stack direction="row" spacing={1} sx={{ mb: 2 }} flexWrap="wrap" useFlexGap>
                 {!isPrimary && versions.length > 1 && (
@@ -314,7 +335,6 @@ export const BookDetailVersionGroup = ({
                   </Button>
                 )}
               </Stack>
-
               {/* Path and codec info */}
               <Table size="small" sx={{ mb: 2 }}>
                 <TableBody>
@@ -336,7 +356,6 @@ export const BookDetailVersionGroup = ({
                   )}
                 </TableBody>
               </Table>
-
               {vSegs.length > 1 && metadataEntries.length > 0 && (
                 <Box
                   sx={{
@@ -492,8 +511,11 @@ export const BookDetailVersionGroup = ({
                           const isSelected = isCurrentBook && selectedSegmentIds.has(seg.id);
                           return (
                             <TableRow key={seg.id} hover selected={isSelected}
-                              sx={{ cursor: isCurrentBook ? 'pointer' : 'default',
-                                ...(isMissing && { bgcolor: 'error.50', '&:hover': { bgcolor: 'error.100' } }) }}
+                              sx={[isCurrentBook ? {
+                                cursor: 'pointer'
+                              } : {
+                                cursor: 'default'
+                              }, isMissing && { bgcolor: 'error.50', '&:hover': { bgcolor: 'error.100' } }]}
                               onClick={() => {
                                 if (!isCurrentBook) return;
                                 if (isMissing) { onSetRelocateSegment(seg); }
@@ -519,7 +541,10 @@ export const BookDetailVersionGroup = ({
                                   <span>{seg.track_number ?? '\u2014'}</span>
                                 </Stack>
                               </TableCell>
-                              <TableCell sx={{ wordBreak: 'break-all', fontSize: '0.8rem', ...(isMissing && { color: 'error.main' }) }}>
+                              <TableCell sx={[{
+                                wordBreak: 'break-all',
+                                fontSize: '0.8rem'
+                              }, isMissing && { color: 'error.main' }]}>
                                 <Tooltip title={seg.file_path}><span>{seg.file_path}</span></Tooltip>
                               </TableCell>
                               <TableCell>

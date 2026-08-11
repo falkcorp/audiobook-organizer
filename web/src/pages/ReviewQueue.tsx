@@ -1,8 +1,7 @@
 // file: web/src/pages/ReviewQueue.tsx
-// version: 2.2.1
+// version: 2.3.0
 // guid: 4c8f2a17-5e93-4d60-a1b8-7f3c6d9e0a52
-// last-edited: 2026-08-07
-
+// last-edited: 2026-08-10
 import { useEffect, useMemo, useState } from 'react';
 import {
   Accordion,
@@ -334,7 +333,11 @@ function ItemActions({
           />
         )
       )}
-      <Stack direction="row" spacing={1} sx={{ mt: withSelector ? 0.5 : 0 }}>
+      <Stack direction="row" spacing={1} sx={[withSelector ? {
+        mt: 0.5
+      } : {
+        mt: 0
+      }]}>
         <Tooltip
           title={
             action
@@ -370,7 +373,6 @@ function ItemActions({
     </Stack>
   );
 }
-
 // MemberFilesDetail renders a review item's payload header plus a rich per-member
 // list. It fetches the member books lazily (it only mounts when the accordion is
 // expanded, via unmountOnExit) so opening the queue never fans out hundreds of
@@ -388,10 +390,8 @@ function MemberFilesDetail({ item }: { item: ReviewItem }) {
         : undefined;
   const entries = useMemo(() => memberEntries(payload), [payload]);
   const members = memberCount(payload);
-
   const [books, setBooks] = useState<Map<string, Book>>(new Map());
   const [loading, setLoading] = useState(false);
-
   useEffect(() => {
     const ids = entries.map((e) => e.bookId).filter((id): id is string => !!id);
     if (ids.length === 0) return;
@@ -406,7 +406,6 @@ function MemberFilesDetail({ item }: { item: ReviewItem }) {
       });
     return () => ctrl.abort();
   }, [entries]);
-
   return (
     <Box sx={{ pl: 1 }}>
       <Stack spacing={0.5} sx={{ mb: 1 }}>

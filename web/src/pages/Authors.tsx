@@ -1,5 +1,5 @@
 // file: web/src/pages/Authors.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -208,7 +208,13 @@ function AuthorRow({ author, selected, visibleColumns, columnWidths, onSelect, o
         </TableCell>
       </TableRow>
       <TableRow>
-        <TableCell colSpan={totalCols} sx={{ py: 0, borderBottom: open ? undefined : 'none' }}>
+        <TableCell colSpan={totalCols} sx={[{
+          py: 0
+        }, open ? {
+          borderBottom: null
+        } : {
+          borderBottom: 'none'
+        }]}>
           <Collapse in={open} timeout="auto" unmountOnExit>
             <Box sx={{ py: 1, pl: 4 }}>
               {loadingBooks ? (

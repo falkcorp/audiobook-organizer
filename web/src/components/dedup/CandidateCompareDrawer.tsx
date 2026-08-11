@@ -1,8 +1,7 @@
 // file: web/src/components/dedup/CandidateCompareDrawer.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: a6f7b8c9-d0e1-2345-fabc-af6789012345
-// last-edited: 2026-06-28
-
+// last-edited: 2026-08-10
 // CandidateCompareDrawer is a right-side Drawer that shows a full side-by-side
 // comparison of the two books in a dedup candidate, plus the score breakdown.
 // It fetches the breakdown data on open via GET /api/v1/dedup/candidates/:id/breakdown.
@@ -114,16 +113,22 @@ function MetadataCompareRow({ id, label, left, right }: MetadataCompareRowProps)
     <Box
       data-testid={`metadata-row-${id}`}
       data-different={different ? 'true' : 'false'}
-      sx={{
+      sx={[{
         display: 'grid',
         gridTemplateColumns: { xs: '1fr', sm: '140px minmax(0, 1fr) minmax(0, 1fr)' },
         gap: { xs: 0.75, sm: 1 },
         alignItems: 'stretch',
         p: 1,
-        borderRadius: 1,
-        bgcolor: different ? 'warning.light' : 'transparent',
-        color: different ? 'warning.contrastText' : 'inherit',
-      }}
+        borderRadius: 1
+      }, different ? {
+        bgcolor: 'warning.light'
+      } : {
+        bgcolor: 'transparent'
+      }, different ? {
+        color: 'warning.contrastText'
+      } : {
+        color: 'inherit'
+      }]}
     >
       <Typography variant="caption" fontWeight={700} color={different ? 'inherit' : 'text.secondary'}>
         {label}

@@ -1,8 +1,7 @@
 // file: web/src/components/dedup/ScoreBreakdownPanel.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: d3c4e5f6-a7b8-9012-cdef-dc3456789012
-// last-edited: 2026-06-10
-
+// last-edited: 2026-08-10
 // ScoreBreakdownPanel renders a stacked bar visualization of the per-signal
 // score contributions for a dedup candidate. Signal contributions are
 // computed client-side from the stored signal values and weights.
@@ -117,11 +116,14 @@ export function ScoreBreakdownPanel({ breakdown }: ScoreBreakdownPanelProps) {
           {withShares.map((s) => (
             <Box
               key={s.kind}
-              sx={{
+              sx={[{
                 width: `${s.share * 100}%`,
-                bgcolor: SIGNAL_COLORS[s.kind] ?? '#9e9e9e',
-                minWidth: s.share > 0 ? 2 : 0,
-              }}
+                bgcolor: SIGNAL_COLORS[s.kind] ?? '#9e9e9e'
+              }, s.share > 0 ? {
+                minWidth: 2
+              } : {
+                minWidth: 0
+              }]}
             />
           ))}
         </Box>

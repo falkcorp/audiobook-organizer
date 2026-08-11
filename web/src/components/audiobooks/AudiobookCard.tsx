@@ -1,8 +1,7 @@
 // file: web/src/components/audiobooks/AudiobookCard.tsx
-// version: 1.13.0
+// version: 1.14.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-07-13
-
+// last-edited: 2026-08-10
 import React from 'react';
 import {
   Card,
@@ -122,17 +121,32 @@ export const AudiobookCard: React.FC<AudiobookCardProps> = ({
 
   return (
     <Card
-      sx={{
+      sx={[{
         height: '100%',
         display: 'flex',
         flexDirection: 'column',
-        cursor: onClick ? 'pointer' : 'default',
-        transition: 'transform 0.2s, box-shadow 0.2s',
+        transition: 'transform 0.2s, box-shadow 0.2s'
+      }, onClick ? {
+        cursor: 'pointer'
+      } : {
+        cursor: 'default'
+      }, onClick ? {
         '&:hover': {
-          transform: onClick ? 'translateY(-4px)' : 'none',
-          boxShadow: onClick ? 6 : 1,
-        },
-      }}
+          transform: 'translateY(-4px)'
+        }
+      } : {
+        '&:hover': {
+          transform: 'none'
+        }
+      }, onClick ? {
+        '&:hover': {
+          boxShadow: 6
+        }
+      } : {
+        '&:hover': {
+          boxShadow: 1
+        }
+      }]}
       onClick={handleCardClick}
     >
       <Box sx={{ position: 'relative' }}>
