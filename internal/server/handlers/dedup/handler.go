@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/handler.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: d1b9e024-d28c-4d62-8f90-96d7064559c4
-// last-edited: 2026-07-11
+// last-edited: 2026-08-11
 
 // Package deduphandler hosts the dedup-domain HTTP handlers extracted from the
 // server package: dedup candidate / cluster / series listing, merge / dismiss /
@@ -31,7 +31,9 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"sort"
@@ -958,6 +960,16 @@ func (h *Handler) BulkMergeDedupCandidates(c *gin.Context) {
 		return
 	}
 
+	// Every field here NARROWS what gets merged. Dropping the bind error meant a
+	// malformed body zeroed all of them, the defaults below filled in
+	// status=pending / entity_type=book, and the filter went out with
+	// Limit: 100000 — so a request to merge one narrow layer became "bulk-merge
+	// every pending book candidate in the library". Merges are the hardest
+	// operation in this system to undo.
+	//
+	// An absent body still means "all pending book candidates", which is this
+	// endpoint's documented bulk behaviour and is unchanged. A body we cannot
+	// read is now refused rather than silently widened to that maximum.
 	var body struct {
 		EntityType    string   `json:"entity_type"`
 		Status        string   `json:"status"`
@@ -965,7 +977,10 @@ func (h *Handler) BulkMergeDedupCandidates(c *gin.Context) {
 		MinSimilarity *float64 `json:"min_similarity"`
 		MaxSimilarity *float64 `json:"max_similarity"`
 	}
-	_ = c.ShouldBindJSON(&body)
+	if err := c.ShouldBindJSON(&body); err != nil && !errors.Is(err, io.EOF) {
+		httputil.RespondWithBadRequest(c, "invalid request body: "+err.Error())
+		return
+	}
 
 	// Default to pending status if caller did not set one. Merging already-
 	// merged or already-dismissed rows makes no sense.

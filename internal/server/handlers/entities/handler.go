@@ -1,7 +1,7 @@
 // file: internal/server/handlers/entities/handler.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b02a07d8-1806-4c86-bb72-f0688d6caff3
-// last-edited: 2026-07-06
+// last-edited: 2026-08-11
 
 // Package entities hosts the entity-domain HTTP handlers extracted from the
 // server package: works, authors, series, and narrators — CRUD plus merges,
@@ -13,7 +13,9 @@
 package entities
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 
@@ -415,11 +417,20 @@ func (h *Handler) SplitCompositeAuthor(c *gin.Context) {
 		return
 	}
 
-	// Optional: caller can provide explicit names to split into
+	// Optional: caller can provide explicit names to split into.
+	//
+	// "Optional" is why an EMPTY body stays valid and still auto-detects. But a
+	// body that failed to parse is not the same as one that was never sent: the
+	// caller DID supply explicit names, they were unreadable, Names fell to empty,
+	// and the auto-detect below split the author some other way — mutating author
+	// records into a shape nobody asked for, behind a 200.
 	var req struct {
 		Names []string `json:"names"`
 	}
-	_ = c.ShouldBindJSON(&req)
+	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
+		httputil.RespondWithBadRequest(c, "invalid request body: "+err.Error())
+		return
+	}
 
 	// If no explicit names, auto-detect split
 	names := req.Names
