@@ -1,6 +1,7 @@
 // file: internal/server/library_core_ops.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
+// last-edited: 2026-08-11
 
 // library_core_ops registers the scan, organize, and transcode OperationDefs
 // that previously went through the legacy BridgeQueue.
@@ -62,7 +63,9 @@ func (s *Server) RegisterLibraryScanOp(reg *opsregistry.Registry) error {
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
 			var p libraryScanParams
 			if len(rawParams) > 0 {
-				_ = json.Unmarshal(rawParams, &p)
+				if err := json.Unmarshal(rawParams, &p); err != nil {
+					return fmt.Errorf("library.scan: decode params: %w", err)
+				}
 			}
 
 			// Create operation context for structured logging
@@ -190,7 +193,9 @@ func (s *Server) RegisterLibraryOrganizeOp(reg *opsregistry.Registry) error {
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
 			var p libraryOrganizeParams
 			if len(rawParams) > 0 {
-				_ = json.Unmarshal(rawParams, &p)
+				if err := json.Unmarshal(rawParams, &p); err != nil {
+					return fmt.Errorf("library.organize: decode params: %w", err)
+				}
 			}
 			opID := ulid.Make().String()
 

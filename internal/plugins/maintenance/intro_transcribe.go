@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.17.0
+// version: 3.18.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-08-07
+// last-edited: 2026-08-11
 
 package maintenance
 
@@ -124,7 +124,9 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 
 	var params introTranscribeParams
 	if len(rawParams) > 0 {
-		_ = json.Unmarshal(rawParams, &params)
+		if err := json.Unmarshal(rawParams, &params); err != nil {
+			return fmt.Errorf("maintenance.intro-transcribe: decode params: %w", err)
+		}
 	}
 	onlyMissing := params.OnlyMissing == nil || *params.OnlyMissing
 	retrySilence := params.RetrySilence != nil && *params.RetrySilence

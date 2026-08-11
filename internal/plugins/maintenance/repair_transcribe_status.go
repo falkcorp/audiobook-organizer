@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repair_transcribe_status.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a5e3c81f-7204-4b96-9d3a-1f68b05e2c47
-// last-edited: 2026-08-07
+// last-edited: 2026-08-11
 
 package maintenance
 
@@ -213,7 +213,9 @@ func (p *Plugin) runRepairTranscribeStatus(ctx context.Context, rawParams json.R
 
 	var params repairStatusParams
 	if len(rawParams) > 0 {
-		_ = json.Unmarshal(rawParams, &params)
+		if err := json.Unmarshal(rawParams, &params); err != nil {
+			return fmt.Errorf("maintenance.repair-transcribe-status: decode params: %w", err)
+		}
 	}
 	dryRun := params.DryRun == nil || *params.DryRun
 	log := reporter.Logger()

@@ -1,7 +1,7 @@
 // file: internal/server/folder_autoscan_op.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7b3e9f2a-4c1d-4e85-a6b8-2f0d5c8e1a93
-// last-edited: 2026-07-01
+// last-edited: 2026-08-11
 //
 // folder_autoscan_op registers the "library.folder-auto-scan" UOS v2 OperationDef.
 // This op is enqueued when a new import path is added to the library; it replicates
@@ -52,7 +52,9 @@ func (s *Server) RegisterFolderAutoScanOp(reg *opsregistry.Registry) error {
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
 			var p folderAutoScanOpParams
 			if len(rawParams) > 0 {
-				_ = json.Unmarshal(rawParams, &p)
+				if err := json.Unmarshal(rawParams, &p); err != nil {
+					return fmt.Errorf("folder.autoscan: decode params: %w", err)
+				}
 			}
 
 			folderPath := p.FolderPath
@@ -89,14 +91,41 @@ func (s *Server) RegisterFolderAutoScanOp(reg *opsregistry.Registry) error {
 				if config.AppConfig.AutoOrganize && config.AppConfig.RootDir != "" {
 					org := organizer.NewOrganizer(&config.AppConfig)
 					organized := 0
+					// Counted, not just skipped. "Auto-organize complete: 0
+					// organized" tells an operator nothing about WHY zero, and
+					// a lookup ERROR is not the same thing as a book that has
+					// no DB row — collapsing both into one bare `continue` hid
+					// both.
+					var failed, lookupErrors, notInDB int
 					for _, b := range books {
 						dbBook, err := s.Store().GetBookByFilePath(b.FilePath)
-						if err != nil || dbBook == nil {
+						if err != nil {
+							lookupErrors++
+							if lookupErrors <= 10 {
+								_ = progress.Log("warn", fmt.Sprintf("Auto-organize: DB lookup failed for %s: %v", b.FilePath, err), nil)
+							}
 							continue
 						}
-						newPath, _, err := org.OrganizeBook(dbBook)
+						if dbBook == nil {
+							notInDB++
+							continue
+						}
+						// OrganizeOneBook, not Organizer.OrganizeBook: the
+						// latter is the SINGLE-FILE path and errors on any
+						// book whose file_path is a directory.
+						//
+						// This is the THIRD copy of this loop. #2303 fixed the
+						// same defect in server.go's AutoOrganizeFn (588
+						// production failures in one run) and hoisted the
+						// three-way decision into OrganizeOneBook so it could
+						// not be copied wrong again — but this copy already
+						// existed and was missed, because that change grepped
+						// for the symptom rather than for every caller of
+						// Organizer.OrganizeBook.
+						newPath, err := s.organizeService.OrganizeOneBook(org, dbBook, scanLog)
 						if err != nil {
 							_ = progress.Log("warn", fmt.Sprintf("Organize failed for %s: %v", dbBook.Title, err), nil)
+							failed++
 							continue
 						}
 						if newPath != dbBook.FilePath {
@@ -109,7 +138,8 @@ func (s *Server) RegisterFolderAutoScanOp(reg *opsregistry.Registry) error {
 							}
 						}
 					}
-					_ = progress.Log("info", fmt.Sprintf("Auto-organize complete: %d organized", organized), nil)
+					_ = progress.Log("info", fmt.Sprintf("Auto-organize complete: %d organized, %d failed, %d not in DB, %d lookup errors (of %d scanned)",
+						organized, failed, notInDB, lookupErrors, len(books)), nil)
 				} else if config.AppConfig.AutoOrganize && config.AppConfig.RootDir == "" {
 					_ = progress.Log("warn", "Auto-organize enabled but root_dir not set", nil)
 				}

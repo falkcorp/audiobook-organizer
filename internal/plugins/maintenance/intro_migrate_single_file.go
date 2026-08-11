@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_migrate_single_file.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 6b0d94e7-1c58-4a32-bf07-9e5d2a17c630
-// last-edited: 2026-08-07
+// last-edited: 2026-08-11
 
 package maintenance
 
@@ -119,7 +119,9 @@ func (p *Plugin) runIntroMigrateSingleFile(ctx context.Context, rawParams json.R
 
 	var params introMigrateParams
 	if len(rawParams) > 0 {
-		_ = json.Unmarshal(rawParams, &params)
+		if err := json.Unmarshal(rawParams, &params); err != nil {
+			return fmt.Errorf("maintenance.intro-migrate-single-file: decode params: %w", err)
+		}
 	}
 	dryRun := params.DryRun == nil || *params.DryRun
 	overwrite := params.Overwrite != nil && *params.Overwrite

@@ -1,6 +1,7 @@
 // file: internal/server/openlibrary_ops.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3c7e9a21-f4b5-4d68-8e2f-1a6c0b9d7f43
+// last-edited: 2026-08-11
 
 package server
 
@@ -46,7 +47,9 @@ func (s *Server) RegisterOLDownloadOp(reg *opsregistry.Registry) error {
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
 			var p olDownloadOpParams
 			if len(rawParams) > 0 {
-				_ = json.Unmarshal(rawParams, &p)
+				if err := json.Unmarshal(rawParams, &p); err != nil {
+					return fmt.Errorf("openlibrary.download: decode params: %w", err)
+				}
 			}
 			tracker := s.olService.Tracker
 			for i, dumpType := range p.Types {
@@ -85,7 +88,9 @@ func (s *Server) RegisterOLImportOp(reg *opsregistry.Registry) error {
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
 			var p olImportOpParams
 			if len(rawParams) > 0 {
-				_ = json.Unmarshal(rawParams, &p)
+				if err := json.Unmarshal(rawParams, &p); err != nil {
+					return fmt.Errorf("openlibrary.import: decode params: %w", err)
+				}
 			}
 			svc := s.olService
 			if err := svc.EnsureStore(p.TargetDir); err != nil {

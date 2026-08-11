@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/extract_wav_clips.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: e1f2a3b4-c5d6-7890-abcd-ef1234567890
-// last-edited: 2026-06-30
+// last-edited: 2026-08-11
 
 package maintenance
 
@@ -53,7 +53,9 @@ func (p *Plugin) runExtractWAVClips(ctx context.Context, rawParams json.RawMessa
 
 	var params extractWAVParams
 	if len(rawParams) > 0 {
-		_ = json.Unmarshal(rawParams, &params)
+		if err := json.Unmarshal(rawParams, &params); err != nil {
+			return fmt.Errorf("maintenance.extract-wav-clips: decode params: %w", err)
+		}
 	}
 	skipExisting := params.SkipExisting == nil || *params.SkipExisting
 
