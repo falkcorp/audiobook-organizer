@@ -1,5 +1,5 @@
 // file: web/src/theme.ts
-// version: 1.4.0
+// version: 1.5.0
 // guid: 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-08-11
 
@@ -67,22 +67,73 @@ export function createAppTheme(mode: PaletteMode = 'dark') {
         },
       },
       MuiDrawer: {
-        // exit: 0 for the same reason as MuiMenu below — see that comment for
-        // the mechanism and the measurements. This is the SECOND component hit
-        // by the same stuck-modal defect, and it was named alongside the Select
-        // menu in playwright.config.ts long before either was understood.
+        // ⚠️ 2026-08-11: the `exit: 0` below is NOT what stops the stuck-modal
+        // defect. That claim was in this comment from 2026-08-10 and it is
+        // WRONG — see "WHAT exit: 0 ACTUALLY DOES" further down. The line that
+        // does the work is `slotProps.transition.exit: false`.
         //
-        // Measured 2026-08-10 on current main (which already carries the
-        // MuiMenu fix), 20 copies of the scan-import-organize "complete
-        // workflow" e2e test across 12 workers: 17/20 FAILED with
-        // `.MuiDrawer-modal .MuiBackdrop-root` still visible after 15s.
+        // THE DEFECT (same one as MuiMenu below): close the right-hand filter
+        // Drawer with Escape and the Drawer's exit transition can stall
+        // forever. The paper animates away and the backdrop reaches opacity 0,
+        // so the UI LOOKS closed — but MUI's Modal only unmounts once the
+        // child transition reports `exited`, so a `position: fixed; inset: 0`
+        // backdrop stays in the DOM and swallows every click on the page until
+        // a reload. Confirmed by hit-test: `document.elementFromPoint(20, 300)`
+        // returns `.MuiBackdrop-root` whose parent is the Drawer's modal root.
         //
-        // Note Drawer already used NUMERIC durations (enteringScreen /
-        // leavingScreen), so this is direct evidence against the "a numeric
-        // duration restores react-transition-group's fallback timer and fixes
-        // it" theory — the Drawer had that fallback all along and stalls
-        // anyway. Only removing the exit window helps.
+        // MECHANISM, measured 2026-08-11 with in-page instrumentation
+        // (`SlideProps` lifecycle hooks + a patched copy of
+        // react-transition-group logging every state transition):
+        //   1. Escape is delivered correctly. `onClose(_, 'escapeKeyDown')`
+        //      fires, `open` goes false. Focus, `isTopModal()` and the Select
+        //      menu are all fine — the menu's Modal is already out of the
+        //      ModalManager by then. (The four theories in the original bug
+        //      report about focus and Escape routing are all disproven.)
+        //   2. The Drawer's Slide and the Backdrop's Fade both enter `exiting`
+        //      and RTG schedules completion with `setTimeout(cb, exitTimeout)`.
+        //   3. The timer FIRES. RTG calls `setState({status: 'exited'})` with
+        //      `updater.isMounted(this) === true`.
+        //   4. React NEVER APPLIES THAT UPDATE. The same instance re-renders
+        //      4ms later still reporting `exiting`, `componentDidUpdate` agrees
+        //      at +9ms, and a 300ms-later probe still reads `exiting` on a
+        //      mounted instance. Permanent.
+        //   5. `onExited` therefore never runs, `useModal`'s `exited` stays
+        //      false, and `Modal` never returns null. → step 1 of this comment.
+        //
+        // WHY `exit: false` FIXES IT: with `exit: false` react-transition-group
+        // takes the synchronous branch in `performExit` —
+        // `safeSetState({status: EXITED}, () => onExited())` called directly
+        // from `componentDidUpdate`, inside React's commit phase — instead of
+        // deferring to a timer. The update that gets lost is never scheduled.
+        // Visually this is identical to the `exit: 0` we already shipped: the
+        // drawer disappears immediately either way.
+        //
+        // WHAT `exit: 0` ACTUALLY DOES: it narrows the race, it does not close
+        // it. Measured on origin/main (MUI 5.18.0, i.e. WITH `exit: 0`
+        // shipped), n=10 per cell, chromium, workers=1: an Escape preceded by a
+        // CDP round-trip stalled 9/10. On the MUI 6.5.0 branch the same
+        // `exit: 0` build stalled 10/10 without the round-trip. v6 did not
+        // introduce this defect; it moved the timing window onto the common
+        // path. Treat any future "we fixed it by shortening the duration" claim
+        // with suspicion.
+        //
+        // STILL UNEXPLAINED: why React silently drops a setState issued from a
+        // setTimeout on a mounted class component inside a portal. Ruled out:
+        // duplicate React copies (single react@18.3.1, deduped), StrictMode
+        // (dev-only here), flushSync/startTransition (absent from web/src),
+        // uncaught exceptions (none), and unmount (componentWillUnmount never
+        // runs, isMounted stays true). `exit: false` sidesteps the question
+        // rather than answering it.
+        //
+        // Repro (P1 in the throwaway escape-focus probe, or the real gate):
+        //   CI=true npx playwright test --config=tests/e2e/playwright.config.ts \
+        //     --project=chromium -g "complete workflow" --repeat-each=10 --workers=1
         defaultProps: {
+          slotProps: { transition: { exit: false } },
+          // Kept for the enter animation. No Drawer call site passes its own
+          // `slotProps`/`SlideProps`, so the defaults above are not clobbered —
+          // MUI merges defaultProps shallowly, so adding one would silently
+          // drop `exit: false`.
           transitionDuration: { enter: 225, exit: 0 },
         },
         styleOverrides: {

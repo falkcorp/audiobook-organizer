@@ -1,49 +1,58 @@
-- [ ] 🔴 **MUI v6 leaves the Drawer backdrop visible — the same mechanism as the
-      2026-08-10 "invisible sheet" incident.** Blocks TODO-MUI-1 (5.14 → 6.5).
-      Measured 2026-08-10 by running the full e2e suite on both versions on the
-      same quiet machine, **twice per side**.
+- [x] 🔴 **The Drawer's close transition can stall forever, leaving an invisible
+      full-viewport backdrop that swallows every click until reload.** FIXED
+      2026-08-11 in `web/src/theme.ts` — `MuiDrawer.defaultProps.slotProps
+      .transition = { exit: false }`. No longer blocks TODO-MUI-1 (5.14 → 6.5).
 
-      | Spec | main (MUI 5.18.0) | branch (MUI 6.5.0) | Verdict |
-      |---|---|---|---|
-      | `scan-import-organize.spec.ts:259` [chromium] | ✅ 2/2 | ❌ **2/2** | **real v6 regression** |
-      | `batch-operations.spec.ts:100` [webkit] | ✅ 1, ❌ 1 | ✅ 1, ❌ 1 | flake, unrelated to v6 |
+      🚨 **This entry's original verdict — "real v6 regression" — was WRONG, and
+      so was the 2026-08-10 fix it was chasing.** The defect is present on
+      `main` (MUI 5.18.0) too. v6 did not introduce it; v6 moved its timing
+      window onto the common path, which is why v6 failed 2/2 and v5 passed 2/2
+      in the original n=2 comparison. Two runs per side cannot tell a regression
+      apart from a shifted race.
 
-      main: 556 passed / 0 failed / 8 skipped (run 2, exit 0).
-      branch: 555 passed / 1 failed / 8 skipped (run 2, exit 2).
+      Measured 2026-08-11, chromium, `workers=1`, `--repeat-each=10`, n=10 per
+      cell. P1 = press Escape with nothing crossing the CDP boundary first;
+      P2 = identical but with one `page.evaluate()` immediately before the
+      Escape. (The pre-existing probe called `page.evaluate` before *every*
+      Escape, so its "closes 6/6" result had measured the instrumented world.)
 
-      So v6 introduces **exactly one** new failure, and it is this:
+      | build | P1 pass | P2 pass |
+      |---|---|---|
+      | v6.5.0, `exit: 0` only (as filed) | **0/10** | 10/10 |
+      | v5.18.0, `exit: 0` only (i.e. `main` today) | 9/10 | **1/10** |
+      | v6.5.0 + `exit: false` | 10/10 | 10/10 |
 
-          Error: expect(locator).toHaveCount(expected) failed
-          Locator: locator('.MuiDrawer-modal .MuiBackdrop-root').filter({ visible: true })
-          Expected: 0   Received: 1   Timeout: 15000ms
-            - 34 × locator resolved to 1 element
+      MECHANISM (in-page instrumentation + a patched react-transition-group):
+      Escape is delivered correctly and `onClose(_, 'escapeKeyDown')` fires —
+      focus, `isTopModal()` and the Select menu are all fine, so the four
+      theories in the original report are disproven. The Slide and the
+      Backdrop's Fade both enter `exiting`, RTG schedules completion with
+      `setTimeout`, **the timer fires**, and RTG calls `setState({status:
+      'exited'})` on an instance whose `updater.isMounted` is `true`. React
+      never applies that update: the same instance re-renders 4 ms later still
+      `exiting`, `componentDidUpdate` agrees at +9 ms, and a 300 ms probe still
+      reads `exiting`. So `onExited` never runs, `useModal`'s `exited` stays
+      false, `Modal` never returns null, and its `position: fixed; inset: 0`
+      backdrop stays hit-testable — `document.elementFromPoint(20, 300)`
+      returns it. `exit: false` makes RTG take the synchronous branch in
+      `performExit` instead, so the lost update is never scheduled.
 
-      **Why this specific assertion matters.** It is the guard added in #2283
-      after a stuck MUI Drawer left an INVISIBLE full-viewport backdrop over the
-      page that swallowed every click until reload. The assertion is not
-      cosmetic test rot — it is the tripwire for a user-facing dead UI. Under v6
-      the backdrop stays visible for the full 15s timeout, so the drawer's close
-      transition is not completing (or is completing without removing/hiding the
-      backdrop). **Do NOT relax or delete this assertion to get v6 green.** That
-      is precisely the move the incident exists to prevent.
-
-      Note the failure is browser-specific: the SAME test passes on webkit
-      (5.8s) and fails on chromium (18.8s). And it passes when the two specs are
-      run in ISOLATION (32/32) — it only fails inside the full suite. Both facts
-      point at the close-transition timing rather than at logic, and both match
-      the original incident's profile, whose root cause ("why the transition
-      never completes") was documented as **still unexplained** and labelled so
-      in-code.
-
-      **Work:** find what changed in v6's Modal/Backdrop/Drawer close path —
-      v6 reworked transitions and the ripple. Candidates: the backdrop's
-      `transitionDuration` default, `keepMounted` behaviour, or the
-      `closeAfterTransition` semantics. Fix the product behaviour, then re-run
-      the full suite on both browsers. Only then land the v6 bump.
-
-      Branch with the full v6 upgrade (codemods applied, build clean, 448/448
-      vitest green) is `feat/mui-v6-upgrade` — everything except this one
-      failure is ready.
+- [ ] 🟡 **Why does React silently drop a `setState` issued from a `setTimeout`
+      on a mounted class component inside a portal?** This is the residual
+      unknown under the Drawer fix above and under the 2026-08-10 "invisible
+      sheet" incident, and it is now the *only* part still unexplained. Ruled
+      out: duplicate React copies (single `react@18.3.1`, deduped), StrictMode
+      (dev-only in `web/src/main.tsx`), `flushSync`/`startTransition`/
+      `unstable_batchedUpdates` (absent from `web/src`), uncaught exceptions
+      (none observed), and unmounting (`componentWillUnmount` never runs,
+      `isMounted` stays true). Leading untested hypothesis: this is a
+      production-build React 18 concurrent-root update issued while the root is
+      mid-render, where the dev-only warning that would have named it does not
+      exist. `exit: false` sidesteps the question rather than answering it, so
+      any other component that keeps a timer-driven exit transition is still
+      exposed — `MuiMenu` currently is (its `exit: 0` measured 20/20 on
+      2026-08-10, but that is the same kind of evidence that `exit: 0` on the
+      Drawer produced before it failed 10/10 on v6).
 
 - [ ] 🟡 **`batch-operations.spec.ts:100` [webkit] is an intermittent flake —
       find its mechanism.** Observed 2026-08-10 failing once on `main`
