@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 3.9.0
+// version: 3.10.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-08-10
 
@@ -1009,14 +1009,18 @@ func (s *Server) startBackfills() {
 	// PERF-VERSIONS: write the book:versiongroup:<gid>:<id> secondary
 	// index for every existing book once so /audiobooks/:id/versions
 	// stops full-scanning. Idempotent and gated by a sentinel key.
+	//
+	// Resolution is deliberately in resolveVGBackfiller (below) rather than
+	// inline here: a test can call that, but it cannot call the body of this
+	// goroutine, and a guard that cannot reach the real call site does not
+	// guard it.
 	s.bgWG.Add("versiongroup-backfill")
 	go func() {
 		defer s.bgWG.Done("versiongroup-backfill")
 		if err := s.bgCtx.Err(); err != nil {
 			return
 		}
-		type vgBackfiller interface{ BackfillVersionGroupIndex() error }
-		b, ok := s.Store().(vgBackfiller)
+		b, ok := resolveVGBackfiller(s.Store())
 		if !ok {
 			// Not a silent fall-through: this is the production repair for an
 			// under-reporting version-group index, and if the store is ever
@@ -1585,4 +1589,38 @@ func GetDefaultServerConfig() ServerConfig {
 		WriteTimeout: 0,                 // Disable write timeout so SSE streams stay open
 		IdleTimeout:  120 * time.Second, // 2 minute idle timeout
 	}
+}
+
+// vgBackfiller is the version-group index repair, which lives on *PebbleStore
+// and deliberately outside database.Store.
+type vgBackfiller interface{ BackfillVersionGroupIndex() error }
+
+// resolveVGBackfiller finds the version-group backfill on the running store.
+//
+// It uses database.AsCapability, NOT a bare type assertion. s.Store() is the
+// *server.indexedStore decorator whenever the Bleve index opened — i.e. always,
+// in production. That decorator embeds the database.Store INTERFACE, so it
+// promotes only that interface's method set and BackfillVersionGroupIndex is
+// invisible through it. AsCapability walks the Unwrap chain and finds it on the
+// inner store.
+//
+// MEASURED IN PRODUCTION 2026-08-10 23:07:40, hours after the caller's warning
+// shipped and minutes after it was first deployed:
+//
+//	versiongroup-backfill: store does not implement BackfillVersionGroupIndex,
+//	index will NOT be rebuilt   store_type=*server.indexedStore
+//
+// The bare assertion had been missing on every boot since the decorator was
+// installed, so this "one-time production repair" had NEVER ONCE RUN, silently.
+// That is the likely origin of the under-reporting version-group index
+// reproduced in #2277: the index was never built, rather than built and then
+// corrupted.
+//
+// This is the THIRD capability lost to the same decorator (after the
+// sync-identity/bookmark set on 2026-07-30 and the maintenance wipe fixups), so
+// it is a function rather than an inline assertion purely so
+// TestIndexedStoreExposesVersionGroupBackfill can execute the real resolution
+// path. A guard that cannot reach the production call site does not guard it.
+func resolveVGBackfiller(s database.Store) (vgBackfiller, bool) {
+	return database.AsCapability[vgBackfiller](s)
 }
