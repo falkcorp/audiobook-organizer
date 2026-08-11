@@ -1,5 +1,5 @@
 // file: internal/organizer/service.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
 // last-edited: 2026-08-11
 
@@ -724,13 +724,11 @@ func (orgSvc *Service) organizeBooks(ctx context.Context, booksToOrganize []data
 				var newPath string
 				var err error
 
-				if alreadyInRoot {
-					newPath, err = orgSvc.ReOrganizeInPlace(&book, log)
-				} else if isDir {
-					newPath, err = orgSvc.OrganizeDirectoryBook(workerOrg, &book, log)
-				} else {
-					newPath, _, err = workerOrg.OrganizeBook(&book)
-				}
+				// Same decision as the post-scan auto-organize hook, via one
+				// shared method — see OrganizeOneBook for why that matters.
+				// isDir/alreadyInRoot are still computed above because the
+				// DB-update step below branches on them too.
+				newPath, err = orgSvc.OrganizeOneBook(workerOrg, &book, log)
 
 				// --- Step 2: DB operations ---
 				if err != nil {
@@ -892,6 +890,42 @@ func (orgSvc *Service) organizeBooks(ctx context.Context, booksToOrganize []data
 	}
 
 	return stats
+}
+
+// OrganizeOneBook applies the correct organize strategy for one book and
+// returns its new path.
+//
+// There are three, and picking the wrong one fails outright rather than
+// degrading:
+//
+//	already under RootDir -> ReOrganizeInPlace
+//	file_path is a dir    -> OrganizeDirectoryBook (multi-file book)
+//	otherwise             -> Organizer.OrganizeBook (single file)
+//
+// WHY THIS IS A METHOD AND NOT AN INLINE `if`: this branch used to live only
+// inside organizeBooks' worker loop. The post-scan auto-organize hook in
+// package server called Organizer.OrganizeBook directly, so every multi-file
+// book it touched failed with
+//
+//	cannot organize %q: file_path %s is a directory but single-file organize
+//	was requested — use organizeDirectoryBook for multi-file books
+//
+// Measured on production 2026-08-11: 588 failures of exactly that shape in a
+// single post-scan run. Both call sites now share one decision, so a third
+// caller cannot reintroduce the same omission by copying the wrong half.
+func (orgSvc *Service) OrganizeOneBook(org *Organizer, book *database.Book, log logger.Logger) (string, error) {
+	if book == nil {
+		return "", fmt.Errorf("cannot organize: book is nil")
+	}
+	oldPath := book.FilePath
+	if config.AppConfig.RootDir != "" && strings.HasPrefix(oldPath, config.AppConfig.RootDir) {
+		return orgSvc.ReOrganizeInPlace(book, log)
+	}
+	if info, err := os.Stat(oldPath); err == nil && info.IsDir() {
+		return orgSvc.OrganizeDirectoryBook(org, book, log)
+	}
+	newPath, _, err := org.OrganizeBook(book)
+	return newPath, err
 }
 
 // OrganizeDirectoryBook handles organizing a multi-file book where file_path is a directory.

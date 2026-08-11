@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.36.0
+// version: 2.37.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-08-09
+// last-edited: 2026-08-11
 
 package server
 
@@ -814,17 +814,38 @@ func NewServer(store database.Store) *Server {
 		org := organizer.NewOrganizer(&config.AppConfig)
 		org.SetStore(server.Store())
 		organized := 0
+		// Counted, not just skipped. "Auto-organize complete: 0 organized" told
+		// an operator nothing about WHY zero — on 2026-08-11 it hid 588
+		// multi-file routing failures and 3,194 occupied-target collisions.
+		var failed, lookupErrors, notInDB int
 		for i := range books {
 			if l.IsCanceled() {
 				break
 			}
 			dbBook, err := server.store.GetBookByFilePath(books[i].FilePath)
-			if err != nil || dbBook == nil {
+			if err != nil {
+				// A lookup ERROR and a book that genuinely is not in the DB are
+				// different things, and collapsing them into one bare `continue`
+				// hid both. Count and log them separately.
+				lookupErrors++
+				if lookupErrors <= 10 {
+					l.Warn("Auto-organize: DB lookup failed for %s: %v", books[i].FilePath, err)
+				}
 				continue
 			}
-			newPath, _, err := org.OrganizeBook(dbBook)
+			if dbBook == nil {
+				notInDB++
+				continue
+			}
+			// OrganizeOneBook, not Organizer.OrganizeBook: the latter is the
+			// SINGLE-FILE path and returns an error for any book whose
+			// file_path is a directory. This hook called it unconditionally, so
+			// every multi-file book failed here — 588 of them in one production
+			// run on 2026-08-11.
+			newPath, err := server.organizeService.OrganizeOneBook(org, dbBook, l)
 			if err != nil {
 				l.Warn("Organize failed for %s: %v", dbBook.Title, err)
+				failed++
 				continue
 			}
 			if newPath != dbBook.FilePath {
@@ -841,7 +862,8 @@ func NewServer(store database.Store) *Server {
 				}
 			}
 		}
-		l.Info("Auto-organize complete: %d organized", organized)
+		l.Info("Auto-organize complete: %d organized, %d failed, %d not in DB, %d lookup errors (of %d scanned)",
+			organized, failed, notInDB, lookupErrors, len(books))
 	}
 
 	// Note: the search index is opened in Start(), not here, so
