@@ -1,7 +1,7 @@
 // file: internal/fileops/safe_operations.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 8f7e6d5c-4b3a-2918-7f6e-5d4c3b2a1908
-// last-edited: 2026-05-15
+// last-edited: 2026-08-11
 
 package fileops
 
@@ -108,9 +108,25 @@ func (op *FileOperation) Execute() error {
 
 	// Step 2: Copy source to target
 	if err := copyFile(op.originalPath, op.targetPath); err != nil {
-		// Rollback: restore from backup if it exists
+		// Rollback: restore from backup if it exists.
+		//
+		// A discarded rollback error is WORSE than no rollback, because the
+		// error we return then tells the caller a different story than what is
+		// on disk. By this point copyFile has already begun writing
+		// op.targetPath, so on failure the target is partially overwritten. If
+		// the restore ALSO fails and we swallow it, the caller (organizer,
+		// iTunes importer) reads "failed to copy file" — which sounds like
+		// nothing happened — and moves on, leaving a truncated audiobook at
+		// targetPath and the user's only intact copy orphaned at backupPath
+		// with nothing pointing at it.
 		if _, statErr := os.Stat(op.backupPath); statErr == nil {
-			_ = copyFile(op.backupPath, op.targetPath)
+			if rbErr := copyFile(op.backupPath, op.targetPath); rbErr != nil {
+				slog.Error("ROLLBACK FAILED: target may be corrupt and the only intact copy is the backup",
+					"target", op.targetPath, "backup", op.backupPath,
+					"copy_error", err, "rollback_error", rbErr)
+				return fmt.Errorf("failed to copy file: %w; ROLLBACK ALSO FAILED: %s may be corrupt — the intact copy is at %s: %w",
+					err, op.targetPath, op.backupPath, rbErr)
+			}
 		}
 		return fmt.Errorf("failed to copy file: %w", err)
 	}
@@ -131,9 +147,22 @@ func (op *FileOperation) Execute() error {
 		op.targetHash = targetHash
 
 		if op.originalHash != op.targetHash {
-			// Rollback: restore from backup
+			// Rollback: restore from backup.
+			//
+			// This branch is reached having just PROVEN the target is corrupt.
+			// Discarding the restore error here meant the code could establish
+			// corruption, attempt recovery, ignore whether recovery worked, and
+			// then return "operation failed integrity check" — which reads as
+			// "we refused to do it", not "there is a known-bad file on disk".
 			if _, statErr := os.Stat(op.backupPath); statErr == nil {
-				_ = copyFile(op.backupPath, op.targetPath)
+				if rbErr := copyFile(op.backupPath, op.targetPath); rbErr != nil {
+					slog.Error("ROLLBACK FAILED after checksum mismatch: a known-corrupt file is left in place",
+						"target", op.targetPath, "backup", op.backupPath,
+						"original_hash", op.originalHash, "target_hash", op.targetHash,
+						"rollback_error", rbErr)
+					return fmt.Errorf("checksum mismatch: operation failed integrity check; ROLLBACK ALSO FAILED: %s is known-corrupt and was NOT restored — the intact copy is at %s: %w",
+						op.targetPath, op.backupPath, rbErr)
+				}
 			}
 			return fmt.Errorf("checksum mismatch: operation failed integrity check")
 		}

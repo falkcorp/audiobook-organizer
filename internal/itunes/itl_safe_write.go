@@ -1,7 +1,7 @@
 // file: internal/itunes/itl_safe_write.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-07-03
+// last-edited: 2026-08-11
 //
 // SafeWriteITL — the single atomic iTunes-library writeback chokepoint
 // (fable5 TASK-004). Implements SPEC 2 §3 (the 8-step atomic write protocol,
@@ -282,9 +282,32 @@ func SafeWriteITL(path string, mutate func(before []byte) (after []byte, err err
 	}
 	if err := os.Rename(newPath, path); err != nil {
 		// Restore original from backup; original is otherwise lost.
-		_ = os.Rename(backupPath, path)
+		//
+		// 🔴 The restore result is CHECKED, and the error message no longer
+		// claims a restore that may not have happened. This block previously
+		// read `_ = os.Rename(backupPath, path)` while returning an error
+		// ending in "(restored original)" — a statement the code had not
+		// verified and could not know to be true.
+		//
+		// If this restore fails, the live iTunes library does not exist at
+		// `path` AT ALL: it is sitting at `path + ".bak-<timestamp>"`, under a
+		// name nothing else looks for. Reporting that as "restored original"
+		// is how a recoverable situation becomes an unnoticed loss — and
+		// `books/itunes/**` is hands-off, so nothing else is going to repair
+		// it. See the 2026-07-05 iTunes corruption incident.
+		if rErr := os.Rename(backupPath, path); rErr != nil {
+			_ = os.Remove(newPath)
+			slog.Error("SafeWriteITL: RESTORE FAILED — the iTunes library is not at its expected path",
+				"op", "itl-safe-write", "component", "itl-safe-write",
+				"expected_path", path, "actual_location", backupPath,
+				"rename_error", err, "restore_error", rErr)
+			return nil, fmt.Errorf("SafeWriteITL: atomic rename %s → %s failed (%w) AND RESTORE FAILED (%w) — "+
+				"the iTunes library is NOT at %s; the original is at %s and must be moved back by hand",
+				newPath, path, err, rErr, path, backupPath)
+		}
 		_ = os.Remove(newPath)
-		return nil, fmt.Errorf("SafeWriteITL: atomic rename %s → %s (restored original): %w", newPath, path, err)
+		return nil, fmt.Errorf("SafeWriteITL: atomic rename %s → %s (original restored to %s): %w",
+			newPath, path, path, err)
 	}
 	if err := syncDir(dir); err != nil {
 		// The rename already landed; a failed dir fsync is logged but not fatal

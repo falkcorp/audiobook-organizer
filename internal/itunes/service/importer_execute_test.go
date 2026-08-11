@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_execute_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-07-13
+// last-edited: 2026-08-11
 
 package itunesservice
 
@@ -49,14 +49,35 @@ func TestCheckITLConflict_ZeroLastRead(t *testing.T) {
 	assert.NoError(t, err, "should be nil when lastRead is zero")
 }
 
-func TestCheckITLConflict_NoFile(t *testing.T) {
+// TestCheckITLConflict_UnstatableFailsClosed replaces a test that asserted the
+// OPPOSITE, and the replacement is deliberate rather than test rot.
+//
+// The old test read:
+//
+//	// File doesn't exist — stat fails → no conflict (returns nil)
+//	assert.NoError(t, err, "missing file should not be flagged as conflict")
+//
+// It was pinning the defect. CheckITLConflict exists to REFUSE a write when the
+// ITL may have changed underneath us; a stat error means "cannot verify", and
+// answering nil converts that into "verified safe" — the one answer the
+// function is not entitled to give. The write it gates lands in
+// books/itunes/**, which is hands-off, and an overwrite there is not
+// recoverable from anything the app owns.
+//
+// The only caller (server/handlers/itunes.go) already stats the path itself and
+// returns 400 if it is missing, so this branch is not the ordinary
+// "no library configured" path — it means the file went away, or became
+// unreadable, between that check and this one. That is precisely when refusing
+// is right.
+func TestCheckITLConflict_UnstatableFailsClosed(t *testing.T) {
 	itlState.mu.Lock()
 	itlState.lastRead = time.Now()
 	itlState.mu.Unlock()
 
-	// File doesn't exist — stat fails → no conflict (returns nil)
 	err := CheckITLConflict("/nonexistent/path.itl")
-	assert.NoError(t, err, "missing file should not be flagged as conflict")
+	assert.Error(t, err, "an unstatable ITL must fail CLOSED — 'cannot verify' is not 'no conflict'")
+	assert.Contains(t, err.Error(), "refusing to write",
+		"the error must say what was refused, not just that stat failed")
 }
 
 func TestCheckITLConflict_NoConflict(t *testing.T) {
