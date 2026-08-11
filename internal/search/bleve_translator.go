@@ -1,7 +1,7 @@
 // file: internal/search/bleve_translator.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9c2a4f1d-5b3e-4f70-a7d6-2e8c0f1b9a47
-// last-edited: 2026-07-10
+// last-edited: 2026-08-11
 //
 // AST → Bleve query translator (spec DES-1 v1.1). Walks the AST
 // produced by ParseQuery and emits a bleve/v2 query.Query suitable
@@ -19,6 +19,9 @@ import (
 	"strconv"
 
 	"github.com/blevesearch/bleve/v2"
+	"github.com/blevesearch/bleve/v2/analysis"
+	"github.com/blevesearch/bleve/v2/analysis/lang/en"
+	"github.com/blevesearch/bleve/v2/registry"
 	"github.com/blevesearch/bleve/v2/search/query"
 )
 
@@ -82,7 +85,7 @@ func translateNode(n Node, perUser *[]PerUserFilter, negated bool) (query.Query,
 
 func translateAnd(n *AndNode, perUser *[]PerUserFilter, negated bool) (query.Query, error) {
 	var children []query.Query
-	for _, c := range n.Children {
+	for _, c := range dropStopwordOnlyConjuncts(n.Children) {
 		q, err := translateNode(c, perUser, negated)
 		if err != nil {
 			return nil, err
@@ -98,6 +101,67 @@ func translateAnd(n *AndNode, perUser *[]PerUserFilter, negated bool) (query.Que
 		return children[0], nil
 	}
 	return bleve.NewConjunctionQuery(children...), nil
+}
+
+// freeTextAnalyzer is the analyzer the index applies to free-text fields
+// (bleve_index.go sets im.DefaultAnalyzer = en.AnalyzerName). It is resolved
+// from the same registry Bleve itself uses, so it cannot drift from the index's
+// notion of a stopword the way a hand-maintained word list would.
+//
+// nil if the registry lookup ever fails; every caller treats nil as "cannot
+// tell", which degrades to the old behaviour rather than to a wrong answer.
+var freeTextAnalyzer = func() analysis.Analyzer {
+	a, err := registry.NewCache().AnalyzerNamed(en.AnalyzerName)
+	if err != nil {
+		return nil
+	}
+	return a
+}()
+
+// isStopwordOnly reports whether a term survives analysis. The English analyzer
+// strips stopwords, so "of" produces zero tokens and therefore appears in no
+// document's term dictionary.
+func isStopwordOnly(term string) bool {
+	if freeTextAnalyzer == nil || term == "" {
+		return false
+	}
+	return len(freeTextAnalyzer.Analyze([]byte(term))) == 0
+}
+
+// dropStopwordOnlyConjuncts removes free-text conjuncts that analyze to nothing,
+// but ONLY when a real term remains.
+//
+// THE BUG (reported 2026-08-11, "shards of oblivion" finds nothing): the parser
+// treats whitespace as AND, so a three-word query becomes a conjunction of three
+// match queries. "of" is an English stopword, so the indexer never wrote it to
+// any document's term dictionary — the conjunct can never be satisfied and takes
+// the entire query down with it. Every multi-word title containing of/the/a/in
+// was unfindable, which is a large share of book titles. Single-word searches
+// worked, which is why this read as "spaces break search".
+//
+// The guard matters as much as the fix. A nil query from Translate becomes
+// MatchAll, so unconditionally dropping stopwords would make a search for "of"
+// return the entire 367K-book library. Requiring a surviving non-stopword term
+// means this only ever fires on the broken case; an all-stopword query keeps its
+// current behaviour exactly.
+//
+// Conjunction only. In a disjunction a stopword child contributes no hits and
+// harms nothing, so OR is deliberately left alone.
+func dropStopwordOnlyConjuncts(children []Node) []Node {
+	kept := make([]Node, 0, len(children))
+	dropped := 0
+	for _, c := range children {
+		if ft, ok := c.(*FreeTextNode); ok && !ft.Quoted && !ft.Prefix && !ft.Fuzzy &&
+			isStopwordOnly(ft.Value) {
+			dropped++
+			continue
+		}
+		kept = append(kept, c)
+	}
+	if dropped == 0 || len(kept) == 0 {
+		return children
+	}
+	return kept
 }
 
 func translateOr(n *OrNode, perUser *[]PerUserFilter, negated bool) (query.Query, error) {
