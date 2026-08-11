@@ -1,8 +1,7 @@
 // file: web/src/components/library/LibraryDialogs.tsx
-// version: 1.5.0
+// version: 1.6.0
 // guid: d4e5f6a7-b8c9-0123-def0-234567890123
-// last-edited: 2026-06-30
-
+// last-edited: 2026-08-10
 import React from 'react';
 import {
   Typography,
@@ -1225,10 +1224,13 @@ export const LibraryDialogs = ({
               }}
             >
               <ExpandMoreIcon
-                sx={{
-                  transform: importPathsExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
-                  transition: 'transform 0.3s',
-                }}
+                sx={[{
+                  transition: 'transform 0.3s'
+                }, importPathsExpanded ? {
+                  transform: 'rotate(180deg)'
+                } : {
+                  transform: 'rotate(0deg)'
+                }]}
               />
             </IconButton>
           </Stack>

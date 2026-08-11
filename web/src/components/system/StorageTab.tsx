@@ -1,8 +1,7 @@
 // file: web/src/components/system/StorageTab.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9e0f1a2b-3c4d-5e6f-7a8b-9c0d1e2f3a4b
-// last-edited: 2026-04-30
-
+// last-edited: 2026-08-10
 import { useState, useEffect } from 'react';
 import {
   Box,
@@ -202,7 +201,11 @@ export function StorageTab() {
                 storage.folders.map((folder, index) => (
                   <Box
                     key={folder.id}
-                    sx={{ mb: index < storage.folders.length - 1 ? 2 : 0 }}
+                    sx={[index < storage.folders.length - 1 ? {
+                      mb: 2
+                    } : {
+                      mb: 0
+                    }]}
                   >
                     <Stack
                       direction="row"

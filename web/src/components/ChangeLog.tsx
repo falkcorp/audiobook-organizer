@@ -1,5 +1,5 @@
 // file: web/src/components/ChangeLog.tsx
-// version: 1.4.1
+// version: 1.5.0
 // guid: 00f575de-ecea-45b7-9aa5-d6dbbc3f21f6
 
 import { useCallback, useEffect, useState } from 'react';
@@ -135,17 +135,20 @@ export const ChangeLog = ({ bookId, refreshKey, onRevert, onCompareSnapshot }: C
       {entries.map((entry, idx) => (
         <Box
           key={`${entry.timestamp}-${idx}`}
-          sx={{
+          sx={[{
             display: 'flex',
             alignItems: 'flex-start',
             gap: 2,
             py: 1.5,
             px: 1,
-            borderBottom: idx < entries.length - 1 ? '1px solid' : 'none',
             borderColor: 'divider',
             cursor: (entry.type === 'metadata_apply' || entry.type === 'tag_write') ? 'pointer' : undefined,
-            '&:hover': { bgcolor: 'action.hover' },
-          }}
+            '&:hover': { bgcolor: 'action.hover' }
+          }, idx < entries.length - 1 ? {
+            borderBottom: '1px solid'
+          } : {
+            borderBottom: 'none'
+          }]}
           onClick={() => {
             if (entry.type === 'metadata_apply' || entry.type === 'tag_write') {
               onCompareSnapshot?.(entry.timestamp);

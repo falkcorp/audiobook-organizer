@@ -1,8 +1,7 @@
 // file: web/src/components/settings/MetadataSettingsTab.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9e0f1a2b-3c4d-5e6f-7a8b-9c0d1e2f3a4b
-// last-edited: 2026-05-01
-
+// last-edited: 2026-08-10
 import { Dispatch, SetStateAction } from 'react';
 import {
   Box,
@@ -306,13 +305,13 @@ export function MetadataSettingsTab(props: MetadataSettingsTabProps) {
                     sx={{ mr: 1 }}
                   >
                     <ExpandMoreIcon
-                      sx={{
-                        transform:
-                          expandedSource === source.id
-                            ? 'rotate(180deg)'
-                            : 'rotate(0deg)',
-                        transition: 'transform 0.3s',
-                      }}
+                      sx={[{
+                        transition: 'transform 0.3s'
+                      }, expandedSource === source.id ? {
+                        transform: 'rotate(180deg)'
+                      } : {
+                        transform: 'rotate(0deg)'
+                      }]}
                     />
                   </IconButton>
                 )}

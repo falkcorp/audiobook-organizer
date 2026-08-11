@@ -1,8 +1,7 @@
 // file: web/src/components/dedup/DedupAcousticTab.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678902
-// last-edited: 2026-06-22
-
+// last-edited: 2026-08-10
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, Link as RouterLink } from 'react-router-dom';
 import {
@@ -906,7 +905,11 @@ export function AcousticDedupTab() {
                     key={c.id}
                     hover
                     selected={selected}
-                    sx={{ opacity: busy ? 0.5 : 1 }}
+                    sx={[busy ? {
+                      opacity: 0.5
+                    } : {
+                      opacity: 1
+                    }]}
                   >
                     <TableCell padding="checkbox">
                       <Checkbox

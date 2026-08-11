@@ -1,8 +1,7 @@
 // file: web/src/components/bookdetail/WhisperIntroPanel.tsx
-// version: 1.0.1
+// version: 1.1.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
-// last-edited: 2026-08-07
-
+// last-edited: 2026-08-10
 import { useState } from 'react';
 import {
   Accordion,
@@ -65,20 +64,27 @@ export function WhisperIntroPanel({ book }: Props) {
 
       <AccordionDetails>
         {book.intro_transcription && (
-          <Box sx={{ mb: hasExtracted ? 2 : 0 }}>
+          <Box sx={[hasExtracted ? {
+            mb: 2
+          } : {
+            mb: 0
+          }]}>
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5, textTransform: 'uppercase', letterSpacing: 0.5 }}>
               Raw Transcript
             </Typography>
             <Typography
               variant="body2"
-              sx={{
+              sx={[{
                 fontStyle: 'italic',
-                color: isShort ? 'warning.main' : 'text.primary',
                 bgcolor: 'action.hover',
                 borderRadius: 1,
                 p: 1.5,
-                whiteSpace: 'pre-wrap',
-              }}
+                whiteSpace: 'pre-wrap'
+              }, isShort ? {
+                color: 'warning.main'
+              } : {
+                color: 'text.primary'
+              }]}
             >
               {book.intro_transcription}
             </Typography>

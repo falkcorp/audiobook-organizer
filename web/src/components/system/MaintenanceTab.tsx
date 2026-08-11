@@ -1,8 +1,7 @@
 // file: web/src/components/system/MaintenanceTab.tsx
-// version: 1.8.3
+// version: 1.9.0
 // guid: c3d4e5f6-a7b8-9012-cdef-345678901234
-// last-edited: 2026-08-07
-
+// last-edited: 2026-08-10
 import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   Alert,
@@ -1107,15 +1106,17 @@ export function MaintenanceTab() {
                         {task.name}
                         {task.last_run && ` · Last run: ${new Date(task.last_run).toLocaleString()}`}
                       </Typography>
-
                       <Box
-                        sx={{
+                        sx={[{
                           display: 'flex',
                           flexWrap: 'wrap',
                           alignItems: 'center',
-                          gap: 1,
-                          mt: isMobile ? 1 : 0.5,
-                        }}
+                          gap: 1
+                        }, isMobile ? {
+                          mt: 1
+                        } : {
+                          mt: 0.5
+                        }]}
                       >
                         <FormControlLabel
                           control={

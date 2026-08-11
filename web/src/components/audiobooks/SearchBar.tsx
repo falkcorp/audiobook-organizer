@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/SearchBar.tsx
-// version: 2.4.0
+// version: 2.5.0
 // guid: 1d2e3f4a-5b6c-7d8e-9f0a-1b2c3d4e5f6a
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -318,7 +318,6 @@ export const SearchBar: React.FC<SearchBarProps> = ({
               </Box>
             ))}
           </Box>
-
           <Typography variant="body2" color="text.secondary" sx={{ mt: 1.5, mb: 0.5 }}>
             Available fields:
           </Typography>

@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/MetadataEditDialog.tsx
-// version: 2.1.1
+// version: 2.2.0
 // guid: 4a5b6c7d-8e9f-0a1b-2c3d-4e5f6a7b8c9d
 
 import React, { useState, useEffect, useCallback } from 'react';
@@ -222,20 +222,31 @@ export const MetadataEditDialog: React.FC<MetadataEditDialogProps> = ({
               size="small"
               onClick={() => toggleLock(field)}
               aria-label={`${locked ? 'Unlock' : 'Lock'} ${label}`}
-              sx={{
+              sx={[{
                 mt: '10px',
                 mr: 0.5,
                 flexShrink: 0,
                 width: 32,
                 height: 32,
                 border: '1px solid',
-                borderColor: locked ? 'warning.main' : 'divider',
-                borderRadius: 1,
-                bgcolor: locked ? 'rgba(237, 108, 2, 0.08)' : 'transparent',
+                borderRadius: 1
+              }, locked ? {
+                borderColor: 'warning.main'
+              } : {
+                borderColor: 'divider'
+              }, locked ? {
+                bgcolor: 'rgba(237, 108, 2, 0.08)'
+              } : {
+                bgcolor: 'transparent'
+              }, locked ? {
                 '&:hover': {
-                  bgcolor: locked ? 'rgba(237, 108, 2, 0.16)' : 'action.hover',
-                },
-              }}
+                  bgcolor: 'rgba(237, 108, 2, 0.16)'
+                }
+              } : {
+                '&:hover': {
+                  bgcolor: 'action.hover'
+                }
+              }]}
             >
               {locked ? (
                 <LockIcon sx={{ fontSize: 16, color: 'warning.main' }} />
@@ -266,21 +277,28 @@ export const MetadataEditDialog: React.FC<MetadataEditDialogProps> = ({
               helperText={field === 'year' ? (yearError || undefined) : undefined}
               required={field === 'title'}
               size="small"
-              sx={{
+              sx={[isDirty ? {
                 '& .MuiOutlinedInput-root': {
-                  bgcolor: isDirty ? 'rgba(237, 108, 2, 0.04)' : 'transparent',
-                },
-              }}
+                  bgcolor: 'rgba(237, 108, 2, 0.04)'
+                }
+              } : {
+                '& .MuiOutlinedInput-root': {
+                  bgcolor: 'transparent'
+                }
+              }]}
             />
             {(sourceLabel || showFetched) && (
               <Stack direction="row" spacing={1} sx={{ mt: 0.25, ml: 0.5 }}>
                 {sourceLabel && (
                   <Typography
                     variant="caption"
-                    sx={{
-                      color: isDirty ? 'warning.main' : 'text.disabled',
-                      fontSize: '0.7rem',
-                    }}
+                    sx={[{
+                      fontSize: '0.7rem'
+                    }, isDirty ? {
+                      color: 'warning.main'
+                    } : {
+                      color: 'text.disabled'
+                    }]}
                   >
                     Source: {sourceLabel}
                   </Typography>

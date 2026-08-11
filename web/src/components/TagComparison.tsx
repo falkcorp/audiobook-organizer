@@ -1,5 +1,5 @@
 // file: web/src/components/TagComparison.tsx
-// version: 1.4.2
+// version: 1.5.0
 // guid: cfed2692-76f6-47b0-bc84-cc2a4075e554
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -236,11 +236,17 @@ export const TagComparison = ({ bookId, versions, refreshKey, snapshotTimestamp,
                   return next;
                 });
               }}
-              sx={{
-                fontSize: '0.7rem',
-                opacity: isVisible ? 0.6 : 1,
-                textDecoration: isVisible ? 'none' : 'none',
-              }}
+              sx={[{
+                fontSize: '0.7rem'
+              }, isVisible ? {
+                opacity: 0.6
+              } : {
+                opacity: 1
+              }, isVisible ? {
+                textDecoration: 'none'
+              } : {
+                textDecoration: 'none'
+              }]}
             />
           );
         })}
@@ -335,12 +341,11 @@ export const TagComparison = ({ bookId, versions, refreshKey, snapshotTimestamp,
                   {visibleTagEntries.map(([tagName], colIdx) => (
                     <TableCell
                       key={tagName}
-                      sx={{
+                      sx={[{
                         fontWeight: 'bold',
                         position: 'relative',
-                        minWidth: 80,
-                        ...(colWidths[colIdx] ? { width: colWidths[colIdx] } : {}),
-                      }}
+                        minWidth: 80
+                      }, (colWidths[colIdx] ? { width: colWidths[colIdx] } : {})]}
                     >
                       <Stack direction="row" alignItems="center" spacing={0.5}>
                         <span>{TAG_LABELS[tagName] || tagName}</span>
@@ -374,7 +379,6 @@ export const TagComparison = ({ bookId, versions, refreshKey, snapshotTimestamp,
                     );
                   })}
                 </TableRow>
-
                 {/* DB Value row */}
                 <TableRow>
                   <TableCell sx={{ fontWeight: 'bold', color: 'text.secondary', position: 'sticky', left: 0, bgcolor: 'background.paper', zIndex: 1 }}>
@@ -390,7 +394,6 @@ export const TagComparison = ({ bookId, versions, refreshKey, snapshotTimestamp,
                     );
                   })}
                 </TableRow>
-
                 {/* Comparison row (only when active) */}
                 {hasComparison && (
                   <TableRow>
@@ -413,7 +416,6 @@ export const TagComparison = ({ bookId, versions, refreshKey, snapshotTimestamp,
             </Table>
           </Box>
         )}
-
         {visibleTagEntries.length === 0 && !loading && tagEntries.length === 0 && (
           <Typography variant="body2" color="text.secondary" sx={{ py: 2 }}>
             No tag data available.

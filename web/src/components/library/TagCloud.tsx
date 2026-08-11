@@ -1,8 +1,7 @@
 // file: web/src/components/library/TagCloud.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7e6c9a1d-3f2b-4c8e-9a5d-1b6f8e2c4d9a
-// last-edited: 2026-08-08
-
+// last-edited: 2026-08-10
 import { useMemo, useState } from 'react';
 import { Box, Button, Chip, Collapse, IconButton, Stack, Typography } from '@mui/material';
 import { ExpandMore as ExpandMoreIcon } from '@mui/icons-material';
@@ -124,9 +123,7 @@ export function TagCloud({ availableTags, selectedTags, onTagsChange }: TagCloud
       />
     );
   };
-
   const hiddenCount = sortedTags.length - previewTags.length;
-
   return (
     <Box sx={{ p: 1.5, border: 1, borderColor: 'divider', borderRadius: 1 }}>
       <Stack
@@ -148,10 +145,13 @@ export function TagCloud({ availableTags, selectedTags, onTagsChange }: TagCloud
           }}
         >
           <ExpandMoreIcon
-            sx={{
-              transform: expanded ? 'rotate(180deg)' : 'rotate(0deg)',
-              transition: 'transform 0.2s',
-            }}
+            sx={[{
+              transition: 'transform 0.2s'
+            }, expanded ? {
+              transform: 'rotate(180deg)'
+            } : {
+              transform: 'rotate(0deg)'
+            }]}
           />
         </IconButton>
       </Stack>

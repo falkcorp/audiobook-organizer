@@ -1,8 +1,7 @@
 // file: web/src/components/dedup/DedupAuthorTab.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-05-11
-
+// last-edited: 2026-08-10
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -535,7 +534,11 @@ export function AuthorDedupTab() {
                                       setError(err instanceof Error ? err.message : 'Failed to rename author');
                                     }
                                   }}
-                                  sx={{ cursor: isSameAsCanonical ? 'default' : 'pointer' }} />
+                                  sx={[isSameAsCanonical ? {
+                                    cursor: 'default'
+                                  } : {
+                                    cursor: 'pointer'
+                                  }]} />
                               </Tooltip>
                               <Chip
                                 label={isNarrator ? 'Narrator' : 'Author'}
@@ -621,13 +624,11 @@ export function AuthorDedupTab() {
           onPageChange={pagination.setPage} onRowsPerPageChange={pagination.setRowsPerPage} />
         </>
       )}
-
       <AuthorBooksPopover
         anchorEl={popoverAnchor}
         onClose={() => { setPopoverAnchor(null); setPopoverAuthorIds([]); }}
         authorIds={popoverAuthorIds}
       />
-
       <Dialog open={confirmOpen} onClose={() => setConfirmOpen(false)}>
         <DialogTitle>Confirm Merge All</DialogTitle>
         <DialogContent>

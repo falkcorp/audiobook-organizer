@@ -1,8 +1,7 @@
 // file: web/src/pages/ActivityLog.tsx
-// version: 2.19.1
+// version: 2.20.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-08-07
-
+// last-edited: 2026-08-10
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
@@ -611,17 +610,29 @@ export default function ActivityLog() {
         label={hideNoOp ? '\u2713 hide no-op' : 'show no-op'}
         onClick={() => setHideNoOp((v) => !v)}
         variant={hideNoOp ? 'filled' : 'outlined'}
-        sx={{
-          borderWidth: hideNoOp ? 2 : 1,
-          cursor: 'pointer',
-          opacity: hideNoOp ? 1 : 0.6,
-        }}
+        sx={[{
+          cursor: 'pointer'
+        }, hideNoOp ? {
+          borderWidth: 2
+        } : {
+          borderWidth: 1
+        }, hideNoOp ? {
+          opacity: 1
+        } : {
+          opacity: 0.6
+        }]}
       />
     </Stack>
   );
 
   const sourcesButton = (fullWidth?: boolean) => (
-    <Box sx={{ position: 'relative', width: fullWidth ? '100%' : undefined }} ref={sourcesDropdownRef}>
+    <Box sx={[{
+      position: 'relative'
+    }, fullWidth ? {
+      width: '100%'
+    } : {
+      width: null
+    }]} ref={sourcesDropdownRef}>
       <Button
         size="small"
         variant="outlined"
@@ -687,11 +698,17 @@ export default function ActivityLog() {
                   <input type="checkbox" checked={!isExcluded} readOnly style={{ pointerEvents: 'none' }} />
                   <Typography
                     variant="body2"
-                    sx={{
-                      textDecoration: isExcluded ? 'line-through' : 'none',
-                      opacity: isExcluded ? 0.5 : 1,
-                      flexGrow: 1,
-                    }}
+                    sx={[{
+                      flexGrow: 1
+                    }, isExcluded ? {
+                      textDecoration: 'line-through'
+                    } : {
+                      textDecoration: 'none'
+                    }, isExcluded ? {
+                      opacity: 0.5
+                    } : {
+                      opacity: 1
+                    }]}
                   >
                     {s.source}
                   </Typography>
@@ -883,14 +900,20 @@ export default function ActivityLog() {
                     <Paper
                       key={op.id}
                       variant="outlined"
-                      sx={{
+                      sx={[{
                         p: 1.5,
                         cursor: 'pointer',
-                        border: expandedOpId === op.id ? 2 : 1,
-                        borderColor: expandedOpId === op.id ? 'primary.main' : 'divider',
                         ml: indent,
-                        transition: 'all 0.2s ease',
-                      }}
+                        transition: 'all 0.2s ease'
+                      }, expandedOpId === op.id ? {
+                        border: 2
+                      } : {
+                        border: 1
+                      }, expandedOpId === op.id ? {
+                        borderColor: 'primary.main'
+                      } : {
+                        borderColor: 'divider'
+                      }]}
                       onClick={() => setExpandedOpId(expandedOpId === op.id ? null : op.id)}
                     >
                       <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 0.5 }}>
@@ -1201,7 +1224,9 @@ export default function ActivityLog() {
                           label={label}
                           size="small"
                           color={color}
-                          sx={{ cursor: 'pointer', ...(sx ?? {}) }}
+                          sx={[{
+                            cursor: 'pointer'
+                          }, sx ?? {}]}
                           variant={tagFilter.includes(tag) ? 'filled' : 'outlined'}
                           clickable
                           onClick={() => toggleTagFilter(tag)}
@@ -1224,7 +1249,9 @@ export default function ActivityLog() {
                           label={label}
                           size="small"
                           color={color}
-                          sx={{ cursor: 'pointer', ...(sx ?? {}) }}
+                          sx={[{
+                            cursor: 'pointer'
+                          }, sx ?? {}]}
                           variant={tagFilter.includes(tag) ? 'filled' : 'outlined'}
                           clickable
                           onClick={() => toggleTagFilter(tag)}
@@ -1275,7 +1302,6 @@ export default function ActivityLog() {
                     />
                   </MenuItem>
                 </Menu>
-
                 {/* Auto-refresh (moved here on mobile) */}
                 <Button
                   size="small"
@@ -1410,7 +1436,6 @@ export default function ActivityLog() {
                 </MenuItem>
               </Menu>
             </Stack>
-
             {/* Row 3: Active filter summary */}
             <Stack direction="row" spacing={1} alignItems="center">
               <Typography variant="caption" color="text.secondary">
@@ -1425,7 +1450,6 @@ export default function ActivityLog() {
           </Stack>
         )}
       </Paper>
-
       {/* Large-log warning banner */}
       {total > 1000 && (
         <Typography
@@ -1585,12 +1609,15 @@ export default function ActivityLog() {
                                   spacing={1}
                                   alignItems="center"
                                   flexWrap="wrap"
-                                  sx={{
+                                  sx={[{
                                     py: 0.5,
                                     borderBottom: '1px solid',
-                                    borderColor: 'divider',
-                                    color: item.type === 'error' ? 'error.main' : 'text.primary',
-                                  }}
+                                    borderColor: 'divider'
+                                  }, item.type === 'error' ? {
+                                    color: 'error.main'
+                                  } : {
+                                    color: 'text.primary'
+                                  }]}
                                 >
                                   {item.timestamp && (
                                     <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace', minWidth: 70 }}>
@@ -1648,7 +1675,10 @@ export default function ActivityLog() {
                                             size="small"
                                             label={label}
                                             color={color}
-                                            sx={{ cursor: 'pointer', fontSize: '0.65rem', ...(tagSx ?? {}) }}
+                                            sx={[{
+                                              cursor: 'pointer',
+                                              fontSize: '0.65rem'
+                                            }, tagSx ?? {}]}
                                             variant={tagFilter.includes(tag) ? 'filled' : 'outlined'}
                                             clickable
                                             onClick={(e: React.MouseEvent) => {
@@ -1680,10 +1710,13 @@ export default function ActivityLog() {
                   <TableRow
                     key={entry.id}
                     hover
-                    sx={{
-                      bgcolor: rowBgColor(entry),
-                      opacity: entry.tier === 'debug' ? 0.6 : 1,
-                    }}
+                    sx={[{
+                      bgcolor: rowBgColor(entry)
+                    }, entry.tier === 'debug' ? {
+                      opacity: 0.6
+                    } : {
+                      opacity: 1
+                    }]}
                   >
                     <TableCell sx={{ whiteSpace: 'nowrap', color: 'text.secondary', fontSize: '0.75rem' }}>
                       {isMobile ? formatTimestampCompact(entry.timestamp) : formatTimestamp(entry.timestamp)}
@@ -1734,7 +1767,9 @@ export default function ActivityLog() {
                                   size="small"
                                   label={label}
                                   color={color}
-                                  sx={{ cursor: 'pointer', ...(sx ?? {}) }}
+                                  sx={[{
+                                    cursor: 'pointer'
+                                  }, sx ?? {}]}
                                   variant={tagFilter.includes(tag) ? 'filled' : 'outlined'}
                                   clickable
                                   onClick={(e) => { e.stopPropagation(); toggleTagFilter(tag); }}

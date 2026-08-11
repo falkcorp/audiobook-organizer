@@ -1,5 +1,5 @@
 // file: web/src/pages/Series.tsx
-// version: 1.4.1
+// version: 1.5.0
 // guid: 7d8e9f0a-1b2c-3d4e-5f6a-7b8c9d0e1f2a
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
@@ -167,7 +167,19 @@ function SeriesRow({ series, selected, expanded, visibleColumns, columnWidths, o
 
   return (
     <>
-      <TableRow hover sx={{ cursor: bookCount > 0 ? 'pointer' : 'default', '& > *': { borderBottom: isExpanded ? 'unset' : undefined } }} onClick={(e) => { if (bookCount > 0 && !(e.target as HTMLElement).closest('button, input, .MuiCheckbox-root')) onToggleExpand(); }}>
+      <TableRow hover sx={[bookCount > 0 ? {
+        cursor: 'pointer'
+      } : {
+        cursor: 'default'
+      }, isExpanded ? {
+        '& > *': {
+          borderBottom: 'unset'
+        }
+      } : {
+        '& > *': {
+          borderBottom: null
+        }
+      }]} onClick={(e) => { if (bookCount > 0 && !(e.target as HTMLElement).closest('button, input, .MuiCheckbox-root')) onToggleExpand(); }}>
         <TableCell padding="checkbox" sx={{ width: 42 }}>
           <Checkbox checked={selected} onChange={onToggleSelect} />
         </TableCell>

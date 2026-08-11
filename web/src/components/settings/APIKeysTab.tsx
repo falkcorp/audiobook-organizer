@@ -1,8 +1,7 @@
 // file: web/src/components/settings/APIKeysTab.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: f6a7b8c9-d0e1-2345-fabc-456789012345
-// last-edited: 2026-06-22
-
+// last-edited: 2026-08-10
 import { useState, useEffect, useRef } from 'react';
 import {
   Box,
@@ -264,7 +263,11 @@ export function APIKeysTab() {
                   : false;
 
                 return (
-                  <TableRow key={k.id} sx={{ opacity: k.status === 'revoked' ? 0.5 : 1 }}>
+                  <TableRow key={k.id} sx={[k.status === 'revoked' ? {
+                    opacity: 0.5
+                  } : {
+                    opacity: 1
+                  }]}>
                     <TableCell>
                       <Tooltip title={k.description || ''} placement="top">
                         <Typography variant="body2" fontWeight={500}>{k.name}</Typography>
@@ -342,7 +345,6 @@ export function APIKeysTab() {
           </Table>
         </TableContainer>
       )}
-
       {/* Create API Key Dialog */}
       <Dialog open={createOpen} onClose={() => setCreateOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>Create API Key</DialogTitle>
@@ -409,7 +411,6 @@ export function APIKeysTab() {
           </Button>
         </DialogActions>
       </Dialog>
-
       {/* One-time token display */}
       <Dialog open={!!createdToken} maxWidth="sm" fullWidth>
         <DialogTitle>API Key Created</DialogTitle>

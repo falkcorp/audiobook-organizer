@@ -1,8 +1,7 @@
 // file: web/src/components/dedup/FingerprintCanvas.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: c7d8e9f0-a1b2-4c3d-8e4f-5a6b7c8d9e0f
-// last-edited: 2026-06-19
-
+// last-edited: 2026-08-10
 // FingerprintCanvas renders a chromaprint base64 fingerprint as a visual
 // bit-matrix heatmap. Each row = one time bucket (aggregated frames), each
 // column = one of the 32 bit positions. Cells are colored by bit value and
@@ -265,10 +264,13 @@ export function FingerprintPair({ hashA, hashB, width = 180, rows = 48 }: Finger
           Visual similarity:{' '}
           <Box
             component="span"
-            sx={{
-              fontWeight: 700,
-              color: simPct > 80 ? 'success.main' : simPct > 50 ? 'warning.main' : 'error.main',
-            }}
+            sx={[{
+              fontWeight: 700
+            }, simPct > 80 ? {
+              color: 'success.main'
+            } : {
+              color: simPct > 50 ? 'warning.main' : 'error.main'
+            }]}
           >
             {simPct}%
           </Box>

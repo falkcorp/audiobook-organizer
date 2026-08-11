@@ -1,5 +1,5 @@
 // file: web/src/components/AudioSampleCompare.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
 
 import { useState, useRef, useCallback } from 'react';
@@ -95,17 +95,23 @@ function SamplePlayer({ book, src, label, selected, onSelect }: PlayerProps) {
   return (
     <Box
       onClick={onSelect}
-      sx={{
+      sx={[{
         flex: 1,
         border: 2,
-        borderColor: selected ? 'primary.main' : 'divider',
         borderRadius: 2,
         p: 2,
         cursor: 'pointer',
         transition: 'border-color 0.15s',
-        bgcolor: selected ? 'action.selected' : 'background.paper',
-        '&:hover': { borderColor: 'primary.light' },
-      }}
+        '&:hover': { borderColor: 'primary.light' }
+      }, selected ? {
+        borderColor: 'primary.main'
+      } : {
+        borderColor: 'divider'
+      }, selected ? {
+        bgcolor: 'action.selected'
+      } : {
+        bgcolor: 'background.paper'
+      }]}
     >
       <Stack spacing={1}>
         <Stack direction="row" alignItems="center" justifyContent="space-between">

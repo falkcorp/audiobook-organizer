@@ -1,8 +1,7 @@
 // file: web/src/App.tsx
-// version: 1.22.0
+// version: 1.23.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-07-13
-
+// last-edited: 2026-08-10
 import { useState, useEffect, useCallback, lazy, Suspense, useRef } from 'react';
 import { STORAGE_KEYS } from './lib/storageKeys';
 import { Routes, Route, Navigate } from 'react-router-dom';
@@ -208,7 +207,10 @@ function App() {
       {/* Shutdown/Restart Overlay */}
       <Backdrop
         open={serverShutdown}
-        sx={{ color: '#fff', zIndex: (theme) => theme.zIndex.drawer + 9999 }}
+        sx={theme => ({
+          color: '#fff',
+          zIndex: theme.zIndex.drawer + 9999
+        })}
       >
         <Stack spacing={3} alignItems="center">
           <CircularProgress color="inherit" size={60} />

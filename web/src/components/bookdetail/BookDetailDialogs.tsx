@@ -1,8 +1,7 @@
 // file: web/src/components/bookdetail/BookDetailDialogs.tsx
-// version: 1.0.1
+// version: 1.1.0
 // guid: b8c9d0e1-f2a3-4567-bcde-678901234567
-// last-edited: 2026-08-07
-
+// last-edited: 2026-08-10
 import {
   Alert,
   Box,
@@ -244,18 +243,30 @@ export const BookDetailDialogs = ({
               {organizePreview.steps.map((step, index) => (
                 <Box
                   key={index}
-                  sx={{
+                  sx={[{
                     display: 'flex',
                     alignItems: 'flex-start',
                     gap: 1.5,
                     mb: 2,
                     p: 1.5,
-                    borderRadius: 1,
-                    bgcolor: step.action === 'warning' ? 'warning.main' : 'action.hover',
-                    opacity: step.action === 'warning' ? 0.9 : 1,
-                  }}
+                    borderRadius: 1
+                  }, step.action === 'warning' ? {
+                    bgcolor: 'warning.main'
+                  } : {
+                    bgcolor: 'action.hover'
+                  }, step.action === 'warning' ? {
+                    opacity: 0.9
+                  } : {
+                    opacity: 1
+                  }]}
                 >
-                  <Box sx={{ mt: 0.25, color: step.action === 'warning' ? 'warning.contrastText' : 'primary.main' }}>
+                  <Box sx={[{
+                    mt: 0.25
+                  }, step.action === 'warning' ? {
+                    color: 'warning.contrastText'
+                  } : {
+                    color: 'primary.main'
+                  }]}>
                     {step.action === 'copy' && <FileCopyIcon />}
                     {step.action === 'rename' && <DriveFileRenameOutlineIcon />}
                     {step.action === 'write_tags' && <LabelIcon />}
@@ -265,9 +276,11 @@ export const BookDetailDialogs = ({
                   <Box sx={{ flex: 1, minWidth: 0 }}>
                     <Typography
                       variant="subtitle2"
-                      sx={{
-                        color: step.action === 'warning' ? 'warning.contrastText' : 'text.primary',
-                      }}
+                      sx={[step.action === 'warning' ? {
+                        color: 'warning.contrastText'
+                      } : {
+                        color: 'text.primary'
+                      }]}
                     >
                       {step.description}
                     </Typography>
@@ -421,7 +434,6 @@ export const BookDetailDialogs = ({
           </Button>
         </DialogActions>
       </Dialog>
-
       <Dialog open={purgeDialogOpen} onClose={onClosePurge}>
         <DialogTitle>Purge Audiobook</DialogTitle>
         <DialogContent dividers>

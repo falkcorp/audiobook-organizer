@@ -1,6 +1,6 @@
 // file: web/src/pages/Diagnostics.tsx
-// version: 1.3.1
-// last-edited: 2026-08-07
+// version: 1.4.0
+// last-edited: 2026-08-10
 // guid: f2323fc4-b3e7-4298-9ec5-759447cbd643
 
 import { useState, useCallback, useRef, useEffect } from 'react';
@@ -336,16 +336,24 @@ export function Diagnostics() {
           <Grid item xs={12} sm={6} key={cat.id}>
             <Card
               variant="outlined"
-              sx={{
-                border: selectedCategory === cat.id ? 2 : 1,
-                borderColor:
-                  selectedCategory === cat.id ? 'primary.main' : 'divider',
-              }}
+              sx={[selectedCategory === cat.id ? {
+                border: 2
+              } : {
+                border: 1
+              }, selectedCategory === cat.id ? {
+                borderColor: 'primary.main'
+              } : {
+                borderColor: 'divider'
+              }]}
             >
               <CardActionArea onClick={() => setSelectedCategory(cat.id)}>
                 <CardContent>
                   <Stack direction="row" spacing={2} alignItems="center">
-                    <Box sx={{ color: selectedCategory === cat.id ? 'primary.main' : 'text.secondary' }}>
+                    <Box sx={[selectedCategory === cat.id ? {
+                      color: 'primary.main'
+                    } : {
+                      color: 'text.secondary'
+                    }]}>
                       {cat.icon}
                     </Box>
                     <Box>
@@ -363,7 +371,6 @@ export function Diagnostics() {
           </Grid>
         ))}
       </Grid>
-
       {/* Description */}
       <TextField
         label="Description"
@@ -376,7 +383,6 @@ export function Diagnostics() {
         onChange={(e) => setDescription(e.target.value)}
         sx={{ mb: 3 }}
       />
-
       {/* Actions */}
       <Stack direction="row" spacing={2} sx={{ mb: 3 }}>
         <Button
@@ -396,7 +402,6 @@ export function Diagnostics() {
           Submit to AI
         </Button>
       </Stack>
-
       {/* Progress */}
       {isRunning && (
         <Box sx={{ mb: 3 }}>
@@ -412,7 +417,6 @@ export function Diagnostics() {
           />
         </Box>
       )}
-
       {/* AI Results Panel */}
       {aiResults && (
         <Box sx={{ mt: 2 }}>

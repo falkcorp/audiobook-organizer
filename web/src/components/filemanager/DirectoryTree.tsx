@@ -1,5 +1,5 @@
 // file: web/src/components/filemanager/DirectoryTree.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6c7d8e9f-0a1b-2c3d-4e5f-6a7b8c9d0e1f
 
 import React, { useState } from 'react';
@@ -102,17 +102,20 @@ const TreeNode: React.FC<TreeNodeProps> = ({
   return (
     <Box>
       <Box
-        sx={{
+        sx={[{
           display: 'flex',
           alignItems: 'center',
           pl: level * 2,
           py: 0.5,
           cursor: node.is_dir ? 'pointer' : 'default',
-          bgcolor: isSelected ? 'action.selected' : 'transparent',
           '&:hover': {
             bgcolor: node.is_dir ? 'action.hover' : 'transparent',
-          },
-        }}
+          }
+        }, isSelected ? {
+          bgcolor: 'action.selected'
+        } : {
+          bgcolor: 'transparent'
+        }]}
         onClick={handleClick}
       >
         {node.is_dir && (

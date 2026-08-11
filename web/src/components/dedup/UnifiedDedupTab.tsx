@@ -1,8 +1,7 @@
 // file: web/src/components/dedup/UnifiedDedupTab.tsx
-// version: 1.8.0
+// version: 1.9.0
 // guid: c8b9d0e1-f2a3-4567-bcde-cb8901234567
-// last-edited: 2026-06-29
-
+// last-edited: 2026-08-10
 // UnifiedDedupTab is the T017 single surface that replaces the separate Books /
 // Advanced-Scan / Acoustic tabs. It shows a paginated candidate table filtered
 // by band (CERTAIN/HIGH/MEDIUM/REVIEW), with a side drawer for per-candidate
@@ -213,16 +212,22 @@ function renderBookCard(book: Book | null | undefined, id: string, opts: BookCar
               component={RouterLink}
               to={`/library/${id}`}
               underline="hover"
-              sx={{
-                color: isGarbageTitle ? 'warning.main' : 'primary.main',
+              sx={[{
                 fontWeight: 600,
                 fontSize: '1rem',
                 textTransform: 'none',
                 textAlign: 'left',
                 whiteSpace: 'normal',
-                wordBreak: 'break-word',
-                fontStyle: isGarbageTitle ? 'italic' : 'normal',
-              }}
+                wordBreak: 'break-word'
+              }, isGarbageTitle ? {
+                color: 'warning.main'
+              } : {
+                color: 'primary.main'
+              }, isGarbageTitle ? {
+                fontStyle: 'italic'
+              } : {
+                fontStyle: 'normal'
+              }]}
               onClick={(e: MouseEvent) => e.stopPropagation()}
             >
               {isGarbageTitle ? title || '(no title)' : title}
@@ -1035,19 +1040,25 @@ export function UnifiedDedupTab({ hidden }: UnifiedDedupTabProps) {
                       onClick={(e) => handleRowClick(e, c.id, idx)}
                       data-testid={`dedup-candidate-row-${c.id}`}
                       aria-current={isFocused ? 'true' : undefined}
-                      sx={{
-                        opacity: busy ? 0.7 : 1,
+                      sx={[{
                         cursor: 'pointer',
-                        // Zebra stripe: odd rows get a subtle tint for easier reading
-                        bgcolor: isSelected
-                          ? undefined
-                          : idx % 2 === 1
-                            ? 'action.hover'
-                            : 'transparent',
-                        outline: isFocused ? 2 : 0,
                         outlineColor: 'primary.main',
-                        outlineOffset: -2,
-                      }}
+                        outlineOffset: -2
+                      }, busy ? {
+                        opacity: 0.7
+                      } : {
+                        opacity: 1
+                      }, isSelected ? {
+                        bgcolor: null
+                      } : {
+                        bgcolor: idx % 2 === 1
+                            ? 'action.hover'
+                            : 'transparent'
+                      }, isFocused ? {
+                        outline: 2
+                      } : {
+                        outline: 0
+                      }]}
                     >
                       {showMultiSelect && (
                         <TableCell padding="checkbox">
