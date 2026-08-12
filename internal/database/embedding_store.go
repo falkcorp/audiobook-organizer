@@ -1,6 +1,6 @@
 // file: internal/database/embedding_store.go
-// version: 2.9.0
-// last-edited: 2026-07-17
+// version: 2.10.0
+// last-edited: 2026-08-12
 // guid: 7c4a9b2e-d831-4f5c-a07e-3b8d6e1f9c42
 
 package database
@@ -198,8 +198,20 @@ type EmbeddingHealthStats struct {
 // EmbeddingStore is a PebbleDB-backed store for vector embeddings, text-hash
 // cache, and dedup candidates. It replaces the former SQLite sidecar (embeddings.db).
 type EmbeddingStore struct {
-	db        *pebble.DB
-	owned     bool        // if true, Close() shuts down the DB
+	db    *pebble.DB
+	owned bool // if true, Close() shuts down the DB
+	// closeMu serialises every DB-touching operation against Close. Operations
+	// hold RLock for their whole duration; Close takes the write lock, so it
+	// cannot begin until the last in-flight operation has returned.
+	//
+	// This exists because Pebble documents that calling Close concurrently with
+	// any other DB method is unsafe, and doing so deadlocks for real: three
+	// writers inside db.Set blocked forever on commitPipeline.prepare and hung
+	// TestChaos_MixedReadWriteDuringClose for 29 minutes (CI run 31603570061).
+	// The pre-existing `closed` flag below cannot prevent that — it is a
+	// check-then-act, and a writer already inside db.Set is past the check.
+	// Only a lock held for the operation's DURATION closes that window.
+	closeMu   sync.RWMutex
 	mu        sync.Mutex  // serialises counter + pair-uniqueness operations
 	closeOnce sync.Once   // guards owned Close against double-call
 	closed    atomic.Bool // set on Close; makes post-close ops return errors, not panic
@@ -219,6 +231,15 @@ func (s *EmbeddingStore) Close() error {
 	}
 	var closeErr error
 	s.closeOnce.Do(func() {
+		// The write lock is the whole fix. It cannot be acquired until every
+		// in-flight operation has released its RLock, so db.Close() never runs
+		// concurrently with another Pebble method — which Pebble documents as
+		// unsafe and which deadlocks in practice (commitPipeline.prepare).
+		//
+		// closed is still set, and set BEFORE the DB goes away, so the cheap
+		// checkClosed fast path keeps working for callers that arrive later.
+		s.closeMu.Lock()
+		defer s.closeMu.Unlock()
 		s.closed.Store(true)
 		closeErr = s.db.Close()
 	})
@@ -301,6 +322,8 @@ func (s *EmbeddingStore) Get(entityType, entityID string) (*Embedding, error) {
 
 // Delete removes an embedding. It is a no-op if the entity does not exist.
 func (s *EmbeddingStore) Delete(entityType, entityID string) error {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
 	if err := s.checkClosed(); err != nil {
 		return err
 	}
@@ -309,6 +332,8 @@ func (s *EmbeddingStore) Delete(entityType, entityID string) error {
 
 // ListByType returns all embeddings for the given entity type.
 func (s *EmbeddingStore) ListByType(entityType string) ([]Embedding, error) {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
 	if err := s.checkClosed(); err != nil {
 		return nil, err
 	}
@@ -369,6 +394,8 @@ func (s *EmbeddingStore) FindSimilar(entityType string, query []float32, minSimi
 
 // CountByType returns the number of embeddings stored for the given entity type.
 func (s *EmbeddingStore) CountByType(entityType string) (int, error) {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
 	if err := s.checkClosed(); err != nil {
 		return 0, err
 	}
@@ -393,6 +420,8 @@ func (s *EmbeddingStore) CountByType(entityType string) (int, error) {
 // GetCachedEmbedding looks up a cached embedding by text hash and model.
 // Returns nil, nil on a cache miss.
 func (s *EmbeddingStore) GetCachedEmbedding(textHash, model string) ([]float32, error) {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
 	if textHash == "" || model == "" {
 		return nil, nil
 	}
@@ -415,6 +444,8 @@ func (s *EmbeddingStore) GetCachedEmbedding(textHash, model string) ([]float32, 
 // PutCachedEmbedding stores a vector keyed by text hash and model.
 // A write failure is never fatal — callers log and continue.
 func (s *EmbeddingStore) PutCachedEmbedding(textHash, model string, vector []float32) error {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
 	if textHash == "" || model == "" || len(vector) == 0 {
 		return nil
 	}
@@ -523,6 +554,8 @@ func (s *EmbeddingStore) UpsertCandidate(c DedupCandidate) error {
 // must never re-label an existing pair on a score update — should call this
 // instead of UpsertCandidate.
 func (s *EmbeddingStore) UpsertCandidateNew(c DedupCandidate) (id int64, isNew bool, err error) {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
 	if err := s.checkClosed(); err != nil {
 		return 0, false, err
 	}
@@ -715,6 +748,21 @@ const dedupCandidateStatusIndexBuiltFlagKey = "dedup_candidate_status_index_v1_d
 // today's full dedup:r: scan (fail-open — no candidate can ever be silently
 // dropped by an incomplete index).
 func (s *EmbeddingStore) IsCandidateStatusIndexBuilt() bool {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
+	return s.isCandidateStatusIndexBuiltLocked()
+}
+
+// isCandidateStatusIndexBuiltLocked is the body of IsCandidateStatusIndexBuilt
+// with NO lock of its own. It exists because ListCandidates — which already
+// holds closeMu.RLock — needs to consult the flag. Calling the exported method
+// from there would take RLock recursively, and sync.RWMutex does not permit
+// that: a writer (Close) blocking between the two acquisitions leaves the
+// second RLock waiting on a writer that is itself waiting on the first, which
+// is a guaranteed deadlock rather than the rare one this file is fixing.
+//
+// Callers MUST hold s.closeMu (read or write) for the duration of this call.
+func (s *EmbeddingStore) isCandidateStatusIndexBuiltLocked() bool {
 	if err := s.checkClosed(); err != nil {
 		return false
 	}
@@ -734,6 +782,8 @@ func (s *EmbeddingStore) IsCandidateStatusIndexBuilt() bool {
 // Called by the dedup.build-candidate-status-index op when its full scan
 // finishes.
 func (s *EmbeddingStore) SetCandidateStatusIndexBuilt() error {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
 	if err := s.checkClosed(); err != nil {
 		return err
 	}
@@ -760,6 +810,8 @@ func (s *EmbeddingStore) SetCandidateStatusIndexBuilt() error {
 // (a candidate can never legitimately have an empty status — UpsertCandidateNew
 // defaults it to "pending" — so this only guards against corrupt/legacy rows).
 func (s *EmbeddingStore) WriteCandidateStatusIndexRow(id int64, status string) error {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
 	if err := s.checkClosed(); err != nil {
 		return err
 	}
@@ -772,6 +824,8 @@ func (s *EmbeddingStore) WriteCandidateStatusIndexRow(id int64, status string) e
 // GetCandidateByID retrieves a single candidate by its ID.
 // Returns nil, nil when not found.
 func (s *EmbeddingStore) GetCandidateByID(id int64) (*DedupCandidate, error) {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
 	val, closer, err := s.db.Get(dedupRecKey(id))
 	if err == pebble.ErrNotFound {
 		return nil, nil
@@ -802,11 +856,15 @@ func (s *EmbeddingStore) GetCandidateByID(id int64) (*DedupCandidate, error) {
 // the REMAINING filters in Go, then the same sort + pagination tail. A
 // dangling index row (record missing) is skipped silently, never an error.
 func (s *EmbeddingStore) ListCandidates(f CandidateFilter) ([]DedupCandidate, int, error) {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
 	if err := s.checkClosed(); err != nil {
 		return nil, 0, err
 	}
 
-	if f.Status != "" && s.IsCandidateStatusIndexBuilt() {
+	// isCandidateStatusIndexBuiltLocked, not the exported method: we already
+	// hold closeMu.RLock, and recursive RLock deadlocks (see that method's doc).
+	if f.Status != "" && s.isCandidateStatusIndexBuiltLocked() {
 		all, err := s.listCandidatesByStatusIndex(f)
 		if err != nil {
 			return nil, 0, err
@@ -966,6 +1024,8 @@ func paginateCandidates(all []DedupCandidate, f CandidateFilter) ([]DedupCandida
 // entity on either side, using the "dedup:e:" secondary index for O(k) lookup
 // instead of a full-table scan. status="" returns all statuses.
 func (s *EmbeddingStore) ListCandidatesForEntity(entityType, entityID, status string) ([]DedupCandidate, error) {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
 	if err := s.checkClosed(); err != nil {
 		return nil, err
 	}
@@ -1014,6 +1074,8 @@ func (s *EmbeddingStore) ListCandidatesForEntity(entityType, entityID, status st
 // was stored before the entity index was introduced. Safe to call repeatedly —
 // writes are idempotent. Returns the number of candidates processed.
 func (s *EmbeddingStore) BackfillEntityIndex() (int, error) {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
 	if err := s.checkClosed(); err != nil {
 		return 0, err
 	}
@@ -1062,6 +1124,8 @@ func (s *EmbeddingStore) BackfillEntityIndex() (int, error) {
 // candidateWriteOpts (NoSync — see PR #1855 / candidateWriteOpts doc). No new
 // lock, no new commit beyond the single write this function already made.
 func (s *EmbeddingStore) UpdateCandidateStatus(id int64, status string) error {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
 	if err := s.checkClosed(); err != nil {
 		return err
 	}
@@ -1128,6 +1192,8 @@ func (s *EmbeddingStore) UpdateCandidateLLM(id int64, verdict, reason string) er
 }
 
 func (s *EmbeddingStore) updateCandidate(id int64, mutFn func(*candRec)) error {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
 	val, closer, err := s.db.Get(dedupRecKey(id))
 	if err == pebble.ErrNotFound {
 		return nil
@@ -1153,6 +1219,8 @@ func (s *EmbeddingStore) updateCandidate(id int64, mutFn func(*candRec)) error {
 
 // DeleteCandidate removes a single candidate row by ID.
 func (s *EmbeddingStore) DeleteCandidate(id int64) error {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
 	val, closer, err := s.db.Get(dedupRecKey(id))
 	if err == pebble.ErrNotFound {
 		return nil
@@ -1192,6 +1260,8 @@ func (s *EmbeddingStore) DeleteCandidate(id int64) error {
 //
 // Returns the number of rows whose status was newly changed.
 func (s *EmbeddingStore) MarkCandidatesAsMergedForEntity(entityType, entityID string) (int, error) {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
 	if entityType == "" || entityID == "" {
 		return 0, nil
 	}
@@ -1274,6 +1344,8 @@ func (s *EmbeddingStore) MarkCandidatesAsMergedForEntity(entityType, entityID st
 // RemoveCandidatesForEntity deletes all candidate rows that involve the given
 // entity (as either entity_a or entity_b). Returns the number of rows deleted.
 func (s *EmbeddingStore) RemoveCandidatesForEntity(entityType, entityID string) (int, error) {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
 	prefix := []byte(dedupRecPfx)
 	upper := prefixUpperBound(prefix)
 
@@ -1328,6 +1400,8 @@ func (s *EmbeddingStore) RemoveCandidatesForEntity(entityType, entityID string) 
 // exactly one entry with entity_a_id < entity_b_id lexicographically.
 // Returns (rewritten, deleted) counts for logging.
 func (s *EmbeddingStore) CanonicalizeCandidates() (rewritten, deleted int, err error) {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
 	prefix := []byte(dedupRecPfx)
 	upper := prefixUpperBound(prefix)
 
@@ -1414,6 +1488,8 @@ func (s *EmbeddingStore) CanonicalizeCandidates() (rewritten, deleted int, err e
 
 // GetCandidateStats returns row counts grouped by entity_type, layer, and status.
 func (s *EmbeddingStore) GetCandidateStats() ([]CandidateStat, error) {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
 	prefix := []byte(dedupRecPfx)
 	upper := prefixUpperBound(prefix)
 
@@ -1469,6 +1545,8 @@ func (s *EmbeddingStore) HealthStats() (EmbeddingHealthStats, error) {
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
 func (s *EmbeddingStore) getEmbRec(key []byte) (*embRec, error) {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
 	val, closer, err := s.db.Get(key)
 	if err == pebble.ErrNotFound {
 		return nil, nil
@@ -1486,6 +1564,8 @@ func (s *EmbeddingStore) getEmbRec(key []byte) (*embRec, error) {
 }
 
 func (s *EmbeddingStore) setJSON(key []byte, v any) error {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
 	data, err := json.Marshal(v)
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)
