@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-08-12-checking-our-own-homework-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 4f1c8e27-9db3-4a56-b0e8-6c395a71d2f4 -->
 <!-- last-edited: 2026-08-12 -->
 
@@ -17,10 +17,11 @@ This was a day of **checking claims** — most of them our own. A phone app was 
 a feature existed when it didn't. Our documentation described dozens of things the server
 cannot do. A maintenance script reported success after doing nothing at all. Our to-do
 list said an important job had never run, when in fact it had finished cleanly weeks
-earlier. And two of the things we found and "fixed" turned out to be wrong — one was a
-mistaken accusation, the other actively broke something. Both were caught and undone the
-same day. The honest summary is not "we fixed eight things"; it is "we fixed eight
-things, got two of them wrong, and caught both before anyone was affected."
+earlier. And some of what we found and "fixed" turned out to be wrong — one was a
+mistaken accusation, one actively broke something, and the repair for *that* missed a
+piece. All three were caught and undone the same day. The honest summary is not "we fixed
+eight things"; it is "we fixed eight things, got three of them wrong, and caught all
+three before anyone was affected."
 
 ---
 
@@ -73,7 +74,7 @@ that job cleared has been **filling back up** — from about 1,300 items to near
 three and a half weeks. Running the cleanup again would clear it and it would refill.
 Something upstream is producing the work, and that is now the recorded problem.
 
-## 5. Two things we got wrong
+## 5. Three things we got wrong
 
 **A mistaken accusation.** We concluded the server was overstating what it lets apps do —
 claiming it accepts changes when nothing could be changed. That was wrong. It had been
@@ -83,32 +84,48 @@ would have told every app "we don't accept changes," turning off progress-saving
 bookmarks — the two things that matter most to someone actually listening. The finding
 was withdrawn, and the wrong reasoning was kept on the record rather than deleted.
 
-**A fix that broke something.** Part of the work above made the server answer "no" to
-features it doesn't have. Six were listed. Three of them — authors, series and playlists
-— are things the server *does* have, under a slightly different address. The old
-behaviour quietly forwarded requests to the working version; the change replaced that
-with a flat "no", switching off **46 working functions** for anyone using the older
-address. It also did this on every installation, including ones with the phone-app
-support turned off entirely.
+**A fix that broke something — and the repair that missed a piece.** Part of the work
+above made the server answer "no" to features it doesn't have. Six were listed. Three of
+them — authors, series and playlists — are things the server *does* have, under a
+slightly different address. The old behaviour quietly forwarded requests to the working
+version; the change replaced that with a flat "no", switching off **46 working
+functions** for anyone using the older address. It also did this on every installation,
+including ones with the phone-app support turned off entirely.
 
-This was caught the same day, before any release, and reversed for those three. Thirty
-days of production records show **no request from anyone** to the affected addresses, so
-no user is known to have been affected. A test now guards it, and that test was checked
-by deliberately reintroducing the bug to confirm it fails.
+That was caught the same day and reversed for those three. But the repair checked the
+list by searching the source code for each address — and **some addresses cannot be found
+that way at all.** Most are written out plainly in the code, but six groups of them are
+assembled from pieces when the server starts, so the finished address appears nowhere to
+be searched for. User management is one of those six. It stayed broken because of it —
+including the password-reset page.
+
+The check no longer works that way. Instead of searching the code, the test now asks the
+running server for its own list of addresses, which is the only version that is
+guaranteed complete. It fails if any address we've marked "we don't have this" turns out
+to exist, and also if one we've marked "keep this working" ever disappears. Both
+directions were confirmed by deliberately reintroducing each bug.
+
+Thirty days of production records show **no request from anyone** to any of the affected
+addresses, so no user is known to have been affected by either mistake. Nothing had been
+released.
 
 ---
 
 ## Why the mistakes are in this summary
 
-They could have been left out. Both were found and fixed by us, on the same day, with no
+They could have been left out. All were found and fixed by us, on the same day, with no
 user impact — the kind of thing that never has to be mentioned.
 
-They are here because the pattern is the point. Both errors came from **checking one side
-of a question and concluding we had checked all of it**: one place that accepts changes,
-not nine; who *calls* an address, but not whether the address *works*. Every item in this
-summary is a version of the same failure — something that reported a state it had not
-actually verified. Leaving our own two out would have made the write-up an example of the
-problem it describes.
+They are here because the pattern is the point. All three came from **concluding we had
+checked something when the check could not have seen the answer**: one place that accepts
+changes, not nine; who *calls* an address, but not whether the address *works*; and then
+a search of the code that structurally cannot find half the addresses it was searching
+for. That third one is the sharpest, because it was the *fix* for the second — the
+correction repeated the original shape of the mistake, one level down.
+
+Every item in this summary is a version of that failure: something reporting a state it
+had not actually verified. Leaving our own three out would have made the write-up an
+example of the problem it describes.
 
 ---
 
