@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/progress_write_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2b7f4e91-8a05-4c63-b1d8-70e396a5cf42
-// last-edited: 2026-08-02
+// last-edited: 2026-08-12
 
 package abs_test
 
@@ -689,15 +689,22 @@ func TestBookmarks_ListErrorIs5xxNotEmptyList(t *testing.T) {
 // ── conformance against the real ABS 2.36.0 captures ────────────────────────
 
 // These diff our bodies against fixtures captured from the reference server on
-// 2026-08-02, field by field, checking PRESENCE and TYPE rather than values. A
-// missing field is the highest-severity finding on this surface: a client that
-// hard-requires it fails its whole decode, and for a progress body that failure
-// looks to the user like the book losing its place.
+// 2026-08-02, field by field. A missing field is the highest-severity finding on
+// this surface: a client that hard-requires it fails its whole decode, and for a
+// progress body that failure looks to the user like the book losing its place.
+//
+// Values are checked too as of 2026-08-12 — except where a call site below is still
+// on assertConformantPending. Wrong values are not a harmless second tier here: a
+// progress body with the right keys and a wrong currentTime does not fail a decode,
+// it silently sends the listener to the wrong place in the book.
 
 func TestMediaProgressGet_ConformsToOracle(t *testing.T) {
 	w := newWriteHarness(t)
 	w.patch(t, map[string]any{"currentTime": 42.0, "duration": 9975.48, "isFinished": false})
-	assertConformant(t, "get_api_me_progress_id.json", w.getRow(t))
+	assertConformantPending(t, "get_api_me_progress_id.json", w.getRow(t),
+		"fixture drift: the oracle's duration 9975.48 is the sum of six REAL Odyssey track "+
+			"durations; the fake library seeds a flat 9975. Goes strict when the seed is "+
+			"derived from the oracle")
 }
 
 func TestMediaProgressList_ConformsToOracle(t *testing.T) {
@@ -707,7 +714,8 @@ func TestMediaProgressList_ConformsToOracle(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("got %d %s", code, raw)
 	}
-	assertConformant(t, "get_api_me_progress.json", body)
+	assertConformantPending(t, "get_api_me_progress.json", body,
+		"same synthetic-duration drift as get_api_me_progress_id.json")
 }
 
 func TestBookmarkCreate_ConformsToOracle(t *testing.T) {
