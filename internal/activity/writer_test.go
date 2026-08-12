@@ -1,6 +1,7 @@
 // file: internal/activity/writer_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: f7e8d9c0-b1a2-4e3f-9c8d-7b6a5e4f3d2c
+// last-edited: 2026-08-11
 
 package activity
 
@@ -122,7 +123,7 @@ func TestWriter_CapturesLogs(t *testing.T) {
 
 	w.Stop(context.Background()) //nolint:errcheck
 
-	entries, total, err := store.Query(database.ActivityFilter{Limit: 50})
+	entries, total, err := store.Query(context.Background(), database.ActivityFilter{Limit: 50})
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -249,7 +250,7 @@ func TestWriter_Flush(t *testing.T) {
 	w.Flush()
 
 	// Verify all three entries are now persisted.
-	entries, total, err := store.Query(database.ActivityFilter{Limit: 50})
+	entries, total, err := store.Query(context.Background(), database.ActivityFilter{Limit: 50})
 	if err != nil {
 		t.Fatalf("Query after Flush: %v", err)
 	}

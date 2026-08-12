@@ -1,6 +1,7 @@
 // file: internal/database/activity_compact_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
+// last-edited: 2026-08-11
 
 package database
 
@@ -84,7 +85,7 @@ func TestCompactByDay_BasicCompaction(t *testing.T) {
 	assert.Equal(t, 6, result.EntriesDeleted, "5 change + 1 audit folded")
 
 	// Should now have: 2 digest rows total — audit folded into day 1.
-	all, total, err := s.Query(ActivityFilter{Limit: 50})
+	all, total, err := s.Query(context.Background(), ActivityFilter{Limit: 50})
 	require.NoError(t, err)
 	assert.Equal(t, 2, total)
 
@@ -190,7 +191,7 @@ func TestCompactByDay_FoldsAuditTier(t *testing.T) {
 	assert.Equal(t, 1, result.EntriesDeleted)
 
 	// Original audit row gone, replaced by a single digest row.
-	all, total, err := s.Query(ActivityFilter{Limit: 50})
+	all, total, err := s.Query(context.Background(), ActivityFilter{Limit: 50})
 	require.NoError(t, err)
 	assert.Equal(t, 1, total)
 	require.Len(t, all, 1)
@@ -236,7 +237,7 @@ func TestCompactByDay_TruncatesLargeDays(t *testing.T) {
 	assert.Equal(t, 600, result.EntriesDeleted)
 
 	// Verify digest details
-	all, total, err := s.Query(ActivityFilter{Limit: 50})
+	all, total, err := s.Query(context.Background(), ActivityFilter{Limit: 50})
 	require.NoError(t, err)
 	assert.Equal(t, 1, total)
 	require.Len(t, all, 1)
@@ -315,7 +316,7 @@ func TestCompactByDay_MergesIntoExistingDigest(t *testing.T) {
 	assert.Equal(t, 5, r2.EntriesDeleted, "all 5 late entries must be deleted")
 
 	// Verify via public API: query digest entries for 2025-05-15.
-	all, total, err := s.Query(ActivityFilter{Limit: 50})
+	all, total, err := s.Query(context.Background(), ActivityFilter{Limit: 50})
 	require.NoError(t, err)
 	assert.Equal(t, 1, total, "must be exactly one digest row after merge")
 	require.Len(t, all, 1)
@@ -362,7 +363,7 @@ func TestCompactByDay_DigestItemTimestampAndTags(t *testing.T) {
 	assert.Equal(t, 1, result.DaysCompacted)
 	assert.Equal(t, 3, result.EntriesDeleted)
 
-	all, _, err := s.Query(ActivityFilter{Limit: 10})
+	all, _, err := s.Query(context.Background(), ActivityFilter{Limit: 10})
 	require.NoError(t, err)
 	require.Len(t, all, 1)
 
@@ -402,12 +403,12 @@ func TestNutsActivityStore_RecompactDigests(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		_, err := s.Record(ActivityEntry{
 			Tier:      "change",
-			Type:      "system_log",  // legacy type — should be re-derived
+			Type:      "system_log", // legacy type — should be re-derived
 			Level:     "info",
 			Source:    "compaction",
 			Summary:   "applied metadata to book",
 			Timestamp: day.Add(time.Duration(i) * time.Minute),
-			Tags:      []string{},    // empty tags — triggers isLegacyItem
+			Tags:      []string{}, // empty tags — triggers isLegacyItem
 		})
 		require.NoError(t, err)
 	}

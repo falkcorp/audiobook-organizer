@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_bounded_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7f2a1c5e-9b34-4d61-8a70-2c6e5b91d403
 // last-edited: 2026-08-11
 
@@ -22,6 +22,7 @@
 package database
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -66,7 +67,7 @@ func TestPebbleActivityStore_QueryDoesNotScanEntireLog(t *testing.T) {
 	seedActivityEntries(t, s, seeded, "change", "info", "debug", "batch")
 
 	before := s.EntriesDecoded()
-	entries, total, err := s.Query(ActivityFilter{Limit: 5})
+	entries, total, err := s.Query(context.Background(), ActivityFilter{Limit: 5})
 	require.NoError(t, err)
 	decoded := s.EntriesDecoded() - before
 
@@ -100,7 +101,7 @@ func TestPebbleActivityStore_QueryHonorsScanBudget(t *testing.T) {
 	seedActivityEntries(t, s, seeded, "change", "info")
 
 	before := s.EntriesDecoded()
-	entries, total, err := s.Query(ActivityFilter{Limit: 5, Search: "zzz-matches-nothing"})
+	entries, total, err := s.Query(context.Background(), ActivityFilter{Limit: 5, Search: "zzz-matches-nothing"})
 	require.NoError(t, err)
 	decoded := s.EntriesDecoded() - before
 
@@ -116,7 +117,7 @@ func TestPebbleActivityStore_QueryExactTotalWhenExhausted(t *testing.T) {
 	s := newTestPebbleActivityStore(t)
 	seedActivityEntries(t, s, 7, "change")
 
-	entries, total, err := s.Query(ActivityFilter{Limit: 50})
+	entries, total, err := s.Query(context.Background(), ActivityFilter{Limit: 50})
 	require.NoError(t, err)
 	assert.Len(t, entries, 7)
 	assert.Equal(t, 7, total, "limit exceeds the log size, so the walk exhausts and total is exact")
@@ -129,7 +130,7 @@ func TestPebbleActivityStore_QueryOffsetPastEnd(t *testing.T) {
 	s := newTestPebbleActivityStore(t)
 	seedActivityEntries(t, s, 4, "change")
 
-	entries, total, err := s.Query(ActivityFilter{Limit: 10, Offset: 999})
+	entries, total, err := s.Query(context.Background(), ActivityFilter{Limit: 10, Offset: 999})
 	require.NoError(t, err)
 	assert.Empty(t, entries)
 	assert.Equal(t, 4, total)
@@ -161,7 +162,7 @@ func TestPebbleActivityStore_QueryDigestSortsLast(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	entries, total, err := s.Query(ActivityFilter{Limit: 50})
+	entries, total, err := s.Query(context.Background(), ActivityFilter{Limit: 50})
 	require.NoError(t, err)
 	require.Len(t, entries, 5)
 	assert.Equal(t, 5, total)
@@ -193,7 +194,7 @@ func TestPebbleActivityStore_GetDistinctSourcesIsBoundedAndCached(t *testing.T) 
 	seedActivityEntries(t, s, seeded, "change", "info")
 
 	before := s.EntriesDecoded()
-	sources, err := s.GetDistinctSources(ActivityFilter{})
+	sources, err := s.GetDistinctSources(context.Background(), ActivityFilter{})
 	require.NoError(t, err)
 	decoded := s.EntriesDecoded() - before
 
@@ -203,7 +204,7 @@ func TestPebbleActivityStore_GetDistinctSourcesIsBoundedAndCached(t *testing.T) 
 
 	// Second call inside the TTL must be served from cache: zero extra decodes.
 	beforeCached := s.EntriesDecoded()
-	cached, err := s.GetDistinctSources(ActivityFilter{})
+	cached, err := s.GetDistinctSources(context.Background(), ActivityFilter{})
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), s.EntriesDecoded()-beforeCached,
 		"a repeat call within the TTL must not touch the store at all")
@@ -211,7 +212,7 @@ func TestPebbleActivityStore_GetDistinctSourcesIsBoundedAndCached(t *testing.T) 
 
 	// A different filter must NOT be served the previous filter's counts.
 	beforeOther := s.EntriesDecoded()
-	_, err = s.GetDistinctSources(ActivityFilter{Tier: "change"})
+	_, err = s.GetDistinctSources(context.Background(), ActivityFilter{Tier: "change"})
 	require.NoError(t, err)
 	assert.Greater(t, s.EntriesDecoded()-beforeOther, int64(0),
 		"a different filter must miss the cache and run its own scan")
@@ -229,7 +230,7 @@ func TestPebbleActivityStore_DecodeFailuresAreCounted(t *testing.T) {
 	require.NoError(t, s.db.Set(corruptKey, []byte("{not json"), nil))
 
 	before := s.DecodeFailures()
-	entries, _, err := s.Query(ActivityFilter{Limit: 50})
+	entries, _, err := s.Query(context.Background(), ActivityFilter{Limit: 50})
 	require.NoError(t, err)
 
 	assert.Equal(t, int64(1), s.DecodeFailures()-before,
