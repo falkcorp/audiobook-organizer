@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/me.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 63b8c105-2f74-4ea9-8d16-947c0be5a2f3
-// last-edited: 2026-07-30
+// last-edited: 2026-08-12
 
 package abs
 
@@ -128,12 +128,47 @@ func (h *Handler) Sessions(c *gin.Context) {
 		})
 	}
 
+	// itemsPerPage is a PAGE SIZE, not the number of items on the page. The oracle
+	// capture answers itemsPerPage=10 with total=3, so reporting len(out) made those
+	// two indistinguishable — and reported 0 on an empty result, which is a divide by
+	// zero for any client deriving a page count from it.
+	//
+	// Paginating for real rather than only correcting the number, because reporting a
+	// page size while still returning everything and ignoring ?page= is a different
+	// lie: a client that reads numPages > 1 and asks for page 1 would be handed the
+	// same full list again. Defaults and clamping follow the sibling handlers at
+	// stats.go:108,133, and queryInt already falls back to the default on a negative
+	// or unparseable value.
+	perPage := queryInt(c, "itemsPerPage", 10)
+	if perPage == 0 {
+		perPage = 10
+	}
+	page := queryInt(c, "page", 0)
+
+	total := len(out)
+	numPages := (total + perPage - 1) / perPage
+	if numPages < 1 {
+		// The oracle has three sessions, so it cannot say whether real ABS reports 0
+		// or 1 numPages for an empty list. Holding this at 1 leaves the empty case
+		// answering exactly as it always has rather than guessing at a change.
+		numPages = 1
+	}
+
+	start := page * perPage
+	if start > total {
+		start = total
+	}
+	end := start + perPage
+	if end > total {
+		end = total
+	}
+
 	respondJSON(c, http.StatusOK, sessionsResponse{
-		ItemsPerPage: len(out),
-		NumPages:     1,
-		Page:         0,
-		Sessions:     out,
-		Total:        len(out),
+		ItemsPerPage: perPage,
+		NumPages:     numPages,
+		Page:         page,
+		Sessions:     out[start:end],
+		Total:        total,
 	})
 }
 
