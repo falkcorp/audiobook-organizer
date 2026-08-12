@@ -1,4 +1,18 @@
-## 🐛 `EmbeddingStore.Close()` deadlocks against in-flight writes (~4–5% of CI runs)
+## ✅ FIXED — `EmbeddingStore.Close()` deadlocked against in-flight writes
+
+**Fixed by `fix/embeddingstore-close-lock`.** Every DB-touching method now holds
+`closeMu.RLock` for its whole duration and `Close` takes the write lock, so `Close` cannot
+begin until the last in-flight operation has returned and the Pebble UB is unreachable.
+The three chaos tests' worker waits are now bounded, so a regression fails in 30 seconds
+naming the broken invariant instead of hanging for the full job cap.
+
+The heading of this entry originally read "~4–5% of CI runs". That figure is **retracted**
+— see the rate section below. It was inferred from run history and then contradicted by
+the same branch hanging 2 out of 2 attempts.
+
+Everything below is the original diagnosis, kept because the mechanism is worth reading.
+
+---
 
 `TestChaos_MixedReadWriteDuringClose` hangs forever, burning the whole Go Tests job.
 This is the cause of the long-standing "Minimal CI / Go Tests cancelled with no reason"
