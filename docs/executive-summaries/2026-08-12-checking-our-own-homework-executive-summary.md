@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-08-12-checking-our-own-homework-executive-summary.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 4f1c8e27-9db3-4a56-b0e8-6c395a71d2f4 -->
 <!-- last-edited: 2026-08-12 -->
 
@@ -153,6 +153,22 @@ The test data itself was part of the problem: it had been typed in by hand and n
 resembled the real recording — six identical files of two kilobytes standing in for six
 different ones of eleven to twenty-one megabytes. It is now generated from the recording,
 so it cannot drift again.
+
+**Four recordings nothing was reading.** We keep twenty-eight recordings of how the
+reference server answers. Four of them — all of them requests that *change* something,
+like saving your place or deleting a bookmark — had never been compared against anything,
+for as long as they had existed. The four requests were being tested, but only for
+"did it work?", never for "did it answer the way the reference server answers?"
+
+What that hid is worth spelling out, because it is not what it sounds like. All four
+replies are the plain word `OK` rather than structured data, and an app decides how to
+read a reply from a label attached to it *before* it looks at the reply itself. Tidying
+those four into structured data would have changed the label while leaving the word `OK`
+and the success code exactly as they were — so every existing test would still have
+passed, and every app would have failed at the first step. That is now checked, and
+confirmed by making precisely that change and watching all six affected places fail on
+the label alone, with the reply itself untouched. **All twenty-eight recordings are now
+compared against something.**
 
 **Two corrections.** We reported a sixth problem — that we were sending a track number in a
 different format than the reference server. That was wrong. We had looked at one line of
