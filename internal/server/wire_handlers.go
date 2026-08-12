@@ -1,7 +1,7 @@
 // file: internal/server/wire_handlers.go
-// version: 2.21.0
+// version: 2.22.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
-// last-edited: 2026-08-06
+// last-edited: 2026-08-11
 
 package server
 
@@ -51,7 +51,19 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	readingH := handlers.NewReadingHandler(s.Store())
 	userH := handlers.NewUserHandler(s.Store())
 	splitBookH := handlers.NewSplitBookHandler(s.opRegistry, splitBookCands, s.Store())
-	metaCacheH := handlers.NewMetadataCacheHandler(s.Store(), s.metadataFetchService, s.writeBackBatcher)
+	// The metadata-cache handler needs the SAME file-I/O pool the single-book
+	// apply path uses (see wiring of metadatahandler below) — without it,
+	// applying from the Metadata Review screen updates only the database and
+	// never writes tags or cover art into the audio files.
+	//
+	// Guard against typed-nil boxing: s.fileIOPool is a concrete pointer, so
+	// assigning it directly would produce a non-nil interface wrapping a nil
+	// pointer and the handler's `pool != nil` check would pass, then panic.
+	var mcFileIOPool handlers.FileIOPool
+	if s.fileIOPool != nil {
+		mcFileIOPool = s.fileIOPool
+	}
+	metaCacheH := handlers.NewMetadataCacheHandler(s.Store(), s.metadataFetchService, s.writeBackBatcher, mcFileIOPool)
 	organizeH := handlers.NewOrganizeHandler(
 		s.Store(),
 		NewRenameService(s.Store()),
