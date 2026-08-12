@@ -1,7 +1,7 @@
 # file: .mockery.yaml
-# version: 1.19.0
+# version: 1.20.0
 # guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
-# last-edited: 2026-07-01
+# last-edited: 2026-08-11
 
 # Mockery configuration (v3)
 # NOTE: with-expecter is enabled by default in v3
@@ -152,6 +152,7 @@ packages:
       MetadataCacheBookStore:
       MetadataCacheFetchService:
       WriteBackEnqueuer:
+      FileIOPool:
       EventPublisher:
       RenameServicer:
       OrganizePreviewServicer:
