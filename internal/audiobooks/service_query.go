@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
-// last-edited: 2026-07-18
+// last-edited: 2026-08-12
 
 package audiobooks
 
@@ -21,8 +21,26 @@ import (
 // GetAudiobooks retrieves audiobooks with optional filtering.
 // Supports search, author_id, series_id, is_primary_version, and library_state filters.
 func (svc *AudiobookService) GetAudiobooks(ctx context.Context, limit int, offset int, search string, authorID *int, seriesID *int, filters ...ListFilters) ([]database.Book, error) {
+	books, _, err := svc.GetAudiobooksWithTotal(ctx, limit, offset, search, authorID, seriesID, filters...)
+	return books, err
+}
+
+// GetAudiobooksWithTotal is GetAudiobooks plus the number of MATCHES for the
+// request, which is not the same thing as the length of the page returned.
+//
+// The int is -1 when this layer cannot establish a true total (the generic
+// unfiltered list path, where the caller already has cheaper dedicated count
+// queries, and the non-Bleve substring fallback which exposes no count).
+// Callers must treat -1 as "unknown" and fall back to their previous
+// behaviour rather than rendering it.
+//
+// A caveat worth stating rather than burying: when a search is combined with
+// post-filters, the total is exact only while the match set fits inside
+// searchPostFilterWindow. Past that it is a lower bound and a warning is
+// logged. It is not silently capped.
+func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit int, offset int, search string, authorID *int, seriesID *int, filters ...ListFilters) ([]database.Book, int, error) {
 	if svc.store == nil {
-		return nil, fmt.Errorf("database not initialized")
+		return nil, 0, fmt.Errorf("database not initialized")
 	}
 
 	// Normalize limit and offset
@@ -76,10 +94,49 @@ func (svc *AudiobookService) GetAudiobooks(ctx context.Context, limit int, offse
 	// page isn't needlessly re-sorted.
 	alreadySortedAndPaginated := false
 
+	// resultTotal is the number of MATCHES for this request, as distinct from
+	// the length of the page returned. It stays -1 until a branch below can
+	// establish it; -1 means "not known here", and the caller substitutes the
+	// page length exactly as it always did.
+	resultTotal := -1
+
 	// Apply filters in order of precedence
 	if search != "" {
 		if svc.searchIndex != nil {
-			books, err = svc.searchWithBleve(search, limit, offset, f.UserID)
+			// When post-filters will run below, the index must hand back the
+			// whole candidate set, NOT one page.
+			//
+			// Fetching a single page here and then post-filtering it produced
+			// two compounding faults, both measured against production on
+			// 2026-08-12 with search=honour&is_primary_version=true&limit=5:
+			// offset=0 returned 1 row instead of a full page, because the
+			// filter deleted most of an already-cut page and nothing refilled
+			// it; and offset=5/10/20 each returned 0 rows, because
+			// paginateFilteredBooks then re-sliced that short page by the
+			// ORIGINAL offset, which is out of range for a <=limit slice.
+			// The same query without the filter paged correctly (5/5/5), which
+			// is what made this look like a search-quality problem rather than
+			// a pagination one.
+			//
+			// The non-search pushdown path already guards the identical hazard
+			// by clearing hasPostFilters once the store has filtered AND
+			// paginated (see the didPushdown branch below, and its comment
+			// naming the same "page 2 returns zero rows" symptom). The search
+			// path never got that guard. Over-fetching is the equivalent fix
+			// for a path that cannot push the filter down: filter the full set
+			// first, then let the existing post-filter block paginate it.
+			fetchLimit, fetchOffset := limit, offset
+			if hasPostFilters {
+				fetchLimit, fetchOffset = searchPostFilterWindow, 0
+			}
+			books, resultTotal, err = svc.searchWithBleve(search, fetchLimit, fetchOffset, f.UserID)
+			if hasPostFilters && len(books) >= searchPostFilterWindow {
+				// Truncated: rows past the window were never considered, so any
+				// count derived below is a lower bound. Say so rather than
+				// reporting a confident wrong number.
+				slog.Warn("search: post-filter over-fetch window exhausted; count is a lower bound",
+					"window", searchPostFilterWindow, "query", search)
+			}
 		} else {
 			books, err = svc.store.SearchBooks(search, limit, offset)
 		}
@@ -127,7 +184,7 @@ func (svc *AudiobookService) GetAudiobooks(ctx context.Context, limit int, offse
 			cacheKey := fmt.Sprintf("all:%d:%d:p=%s:sb=%s:asc=%v:noq=%v",
 				limit, offset, primaryKey, f.SortBy, sortAsc, f.ExcludeQuarantined)
 			if cached, ok := svc.listCache.Get(cacheKey); ok {
-				return cached, nil
+				return cached, -1, nil
 			}
 			summaries, didPushdown, sErr := svc.summariesPushdown(storeLimit, storeOffset, f.IsPrimaryVersion, f.SortBy, sortAsc, f.ExcludeQuarantined)
 			if sErr == nil && summaries != nil {
@@ -225,7 +282,7 @@ func (svc *AudiobookService) GetAudiobooks(ctx context.Context, limit int, offse
 	}
 
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	// Apply post-filters
@@ -243,7 +300,7 @@ func (svc *AudiobookService) GetAudiobooks(ctx context.Context, limit int, offse
 				}
 				ids, tagErr := svc.store.GetBooksByTag(tag)
 				if tagErr != nil {
-					return nil, tagErr
+					return nil, 0, tagErr
 				}
 				curSet := make(map[string]struct{}, len(ids))
 				for _, id := range ids {
@@ -370,6 +427,15 @@ func (svc *AudiobookService) GetAudiobooks(ctx context.Context, limit int, offse
 			filtered = perUserFiltered
 		}
 
+		// The post-filtered set is the real match set for this request, so its
+		// length is the real total — but only if `filtered` was built from the
+		// full candidate set rather than from one page. That holds for the
+		// search path because the branch above over-fetches when
+		// hasPostFilters, and for the author/series paths because those fetch
+		// every row up front. Capture it BEFORE paginating; taking it after is
+		// the bug.
+		resultTotal = len(filtered)
+
 		// Apply pagination after filtering
 		books = paginateFilteredBooks(filtered, limit, offset)
 	}
@@ -387,7 +453,7 @@ func (svc *AudiobookService) GetAudiobooks(ctx context.Context, limit int, offse
 		books = []database.Book{}
 	}
 
-	return books, nil
+	return books, resultTotal, nil
 }
 
 // CountAudiobooksFiltered returns the count of audiobooks matching the
@@ -585,23 +651,34 @@ const searchPostFilterWindow = 10000
 //
 // Falls back to an empty slice (not nil) on zero matches so callers
 // get consistent JSON shape.
-func (svc *AudiobookService) searchWithBleve(query string, limit, offset int, userID string) ([]database.Book, error) {
+// The int return is the number of MATCHES, not the length of the returned
+// page. Bleve computes it on every query and hands it back as the second
+// value of SearchNative; this function used to discard it with `_`, and the
+// caller then substituted len(page) — which is always a plausible-looking
+// number, which is why it survived so long. See searchTotalIsExact for when
+// the figure is exact and when it is a lower bound.
+func (svc *AudiobookService) searchWithBleve(query string, limit, offset int, userID string) ([]database.Book, int, error) {
 	ast, err := search.ParseQuery(query)
 	if err != nil {
 		// Parser failure: fall back to the substring search path so
 		// users still see results for simple queries the DSL parser
 		// rejects (e.g. punctuation-heavy book titles).
-		return svc.store.SearchBooks(query, limit, offset)
+		books, sErr := svc.store.SearchBooks(query, limit, offset)
+		// SearchBooks exposes no match count, so the only honest figure
+		// available here is the page length. Callers must not treat this as
+		// a true total; it is the pre-existing behaviour for this fallback.
+		return books, len(books), sErr
 	}
 	bleveQ, perUser, err := search.Translate(ast)
 	if err != nil {
-		return svc.store.SearchBooks(query, limit, offset)
+		books, sErr := svc.store.SearchBooks(query, limit, offset)
+		return books, len(books), sErr
 	}
 
 	if len(perUser) > 0 && userID != "" && !config.AppConfig.DisablePerUserSearchFilters {
 		hits, _, err := svc.searchIndex.SearchNative(bleveQ, 0, searchPostFilterWindow)
 		if err != nil {
-			return nil, fmt.Errorf("bleve search: %w", err)
+			return nil, 0, fmt.Errorf("bleve search: %w", err)
 		}
 		if len(hits) >= searchPostFilterWindow {
 			slog.Warn("search: post-filter window exhausted; results beyond it are truncated",
@@ -635,6 +712,9 @@ func (svc *AudiobookService) searchWithBleve(query string, limit, offset int, us
 			}
 			filtered = append(filtered, b)
 		}
+		// Capture the match count BEFORE the slice below cuts it to a page.
+		// Taking it afterwards is exactly the bug this change fixes.
+		perUserTotal := len(filtered)
 		// Apply pagination after filtering — offset beyond len yields an
 		// empty slice, not an error (mirrors GetAudiobooks' heavy
 		// post-filter slicing above).
@@ -649,7 +729,12 @@ func (svc *AudiobookService) searchWithBleve(query string, limit, offset int, us
 		if filtered == nil {
 			filtered = []database.Book{}
 		}
-		return filtered, nil
+		// perUserTotal is counted BEFORE the offset/limit slice above, so it is
+		// the number of matches, not the page length. It is exact unless the
+		// over-fetch window was exhausted (warned about above), in which case
+		// it is a lower bound — Bleve's own total cannot be used here because
+		// the per-user predicate is evaluated in Go, outside the index.
+		return filtered, perUserTotal, nil
 	}
 
 	if len(perUser) > 0 {
@@ -661,9 +746,12 @@ func (svc *AudiobookService) searchWithBleve(query string, limit, offset int, us
 			"filters", len(perUser), "reason", reason)
 	}
 
-	hits, _, err := svc.searchIndex.SearchNative(bleveQ, offset, limit)
+	// bleveTotal is the match count for the whole query, independent of the
+	// offset/limit page requested. This value was previously discarded with
+	// `_`, and the HTTP layer reported len(page) in its place.
+	hits, bleveTotal, err := svc.searchIndex.SearchNative(bleveQ, offset, limit)
 	if err != nil {
-		return nil, fmt.Errorf("bleve search: %w", err)
+		return nil, 0, fmt.Errorf("bleve search: %w", err)
 	}
 	ids := make([]string, 0, len(hits))
 	for _, h := range hits {
@@ -682,5 +770,5 @@ func (svc *AudiobookService) searchWithBleve(query string, limit, offset int, us
 	if books == nil {
 		books = []database.Book{}
 	}
-	return books, nil
+	return books, int(bleveTotal), nil
 }

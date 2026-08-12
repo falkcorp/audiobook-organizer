@@ -1,7 +1,7 @@
 // file: internal/server/audiobooks_helpers.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 439aa827-edea-481d-8918-ddacd2c140b7
-// last-edited: 2026-07-11
+// last-edited: 2026-08-12
 
 // Server-package helpers relocated out of audiobooks_handlers.go when the
 // audiobooks HTTP handlers were extracted into the handlers/audiobooks
@@ -58,7 +58,7 @@ func (s *Server) buildAudiobookListResponse(ctx context.Context, limit, offset i
 		filters.ExcludeQuarantined = true
 	}
 
-	books, err := s.audiobookService.GetAudiobooks(ctx, limit, offset, search, authorID, seriesID, filters)
+	books, matchTotal, err := s.audiobookService.GetAudiobooksWithTotal(ctx, limit, offset, search, authorID, seriesID, filters)
 	if err != nil {
 		return nil, err
 	}
@@ -97,7 +97,23 @@ func (s *Server) buildAudiobookListResponse(ctx context.Context, limit, offset i
 		enriched[i].LastFingerprintedAt = lastFp
 	}
 
+	// len(enriched) is the PAGE length. It is only ever the right answer when
+	// the page happens to hold every match, which is why reporting it looked
+	// correct in casual testing and was wrong the moment a limit bit.
+	//
+	// Measured on production 2026-08-12 before this change: search=honour
+	// reported count=5 at limit=5, count=3 at limit=3 and count=21 at
+	// limit=250. The count tracked the limit, so the UI could never show how
+	// many matches existed and any "page 2 of N" was fiction.
 	totalCount := len(enriched)
+
+	// The service returns -1 when it cannot establish a true total; anything
+	// >= 0 is a real match count (exact, or an explicitly-warned lower bound
+	// when a post-filter over-fetch window was exhausted). Prefer it.
+	if matchTotal >= 0 {
+		totalCount = matchTotal
+	}
+
 	hasFilters := filters.IsPrimaryVersion != nil || filters.ExcludeQuarantined || filters.LibraryState != "" || filters.Tag != "" || len(filters.Tags) > 0
 	if search == "" && authorID == nil && seriesID == nil {
 		if hasFilters {
