@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
 // last-edited: 2026-08-11
 
@@ -491,6 +491,14 @@ func (h *Handler) searchAudiobookMetadataImpl(c *gin.Context) {
 
 	// Persistent cache read: only when the caller is doing a plain
 	// per-book fetch (no alt-query) and didn't force refresh.
+	// NOT generation-scoped, unlike the "list:" keys in the same cache
+	// instance. The two keyspaces are disjoint, so there is no collision to
+	// avoid, and the contents are unrelated: these are metadata-provider
+	// search results for one book, not a view of the book corpus. Scoping them
+	// to the library generation would discard every provider result on any
+	// book create/update/delete — throwing away exactly the external API calls
+	// this cache exists to avoid. Freshness here is owned by ?refresh=true and
+	// the persistent candidate cache's own is_fresh flag.
 	cacheKey := fmt.Sprintf("meta_search:%s:%s:%s:%s:%s:%t",
 		id, body.Query, body.Author, body.Narrator, body.Series, body.UseRerank)
 	plainFetch := body.Query == "" && body.Author == "" && body.Narrator == "" && body.Series == ""
