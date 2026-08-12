@@ -31,8 +31,19 @@ This also restores **cover-art embedding** on the review path, which lives
 inside the same `ApplyMetadataFileIO` call.
 
 For a multi-file book — a 40-part MP3 set — the write covers every part, not
-just the one shown in the dialog: each file gets the book-level tags plus its
-own per-track title and `N/40` numbering.
+just the one shown in the dialog. Exactly what each part receives depends on
+whether the book has per-file records:
+
+- **With per-file records** (the normal case for a scanned multi-part book):
+  every part gets the book-level tags plus its own per-track title and `N/40`
+  track numbering.
+- **Without them** (a book whose path is a folder but which has no segment
+  rows): every audio file in the folder still gets the book-level tags, but
+  with no per-track title and no track numbering.
+
+Books whose files live under a protected path — the iTunes tree, import
+folders — are still skipped entirely, by design. Nothing is written for them
+on either branch.
 
 #### The review screen no longer reports books it skipped as applied
 
