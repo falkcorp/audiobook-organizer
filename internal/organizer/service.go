@@ -1,7 +1,7 @@
 // file: internal/organizer/service.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
-// last-edited: 2026-08-11
+// last-edited: 2026-08-12
 
 package organizer
 
@@ -132,6 +132,11 @@ type Stats struct {
 	Skipped        int // soft-deleted / non-primary / missing file skips
 	Failed         int
 	Total          int
+	// Canceled records that the run stopped early because ctx was cancelled or
+	// the operation was cancelled from the UI. Without it the summary said
+	// "Organize complete" for a run that had been deliberately stopped, which
+	// is indistinguishable from one that genuinely finished.
+	Canceled bool
 }
 
 // PerformOrganizeWithID executes organization with checkpoint support.
@@ -252,6 +257,65 @@ func (orgSvc *Service) PerformOrganize(ctx context.Context, req *Request, log lo
 		// Note: auto-rescan disabled — organize already updates all paths and book_files.
 	}
 
+	return organizeOutcomeError(stats)
+}
+
+// organizeOutcomeError converts a finished run's Stats into the error
+// PerformOrganize returns, or nil when the run genuinely succeeded.
+//
+// This exists as its own function because PerformOrganize used to end in an
+// unconditional `return nil`: every book could fail and the caller still saw
+// success, so the operation was marked succeeded and nothing upstream had any
+// way to learn otherwise. Making the rule a pure function means the policy can
+// be stated and tested directly instead of being implied by the last line of a
+// long method.
+//
+// The rule, deliberately:
+//
+//   - Cancelled runs report cancellation FIRST, and are never reported as
+//     failures. A cancelled run has an unknown outcome rather than a bad one —
+//     the books it never reached are neither organized nor failed — so calling
+//     it a failure would be its own misreport.
+//   - Only TOTAL failure is an error. A partial failure stays a success, so a
+//     run where 1 book of 3000 fails is not reported as a failed operation;
+//     the count is carried by the summary line and the organize_summary row.
+//     "Total" means at least one book failed and NOT ONE was organized,
+//     re-organized, or confirmed already-correct.
+//   - A run that organized nothing because there was nothing to do (all zero)
+//     is a success, not a failure.
+//
+// formatOrganizeSummary builds the one-line summary a person actually reads.
+//
+// stats.Failed is in this line deliberately. It used to appear ONLY in the
+// organize_summary operation-change row and never in the logged message, so a
+// run in which every single book failed printed
+//
+//	Organize complete: 0 organized, 0 re-organized, 0 already correct (stamped), 0 skipped
+//
+// which reads as a harmless no-op rather than a total failure. The verb is
+// conditional for the same reason: a cancelled run also said "complete", which
+// is indistinguishable from one that actually finished.
+func formatOrganizeSummary(stats *Stats) string {
+	verb := "complete"
+	if stats.Canceled {
+		verb = "CANCELED"
+	}
+	return fmt.Sprintf("Organize %s: %d organized, %d re-organized, %d already correct (stamped), %d skipped, %d FAILED, %d total",
+		verb, stats.Organized, stats.ReOrganized, stats.AlreadyCorrect, stats.Skipped, stats.Failed, stats.Total)
+}
+
+func organizeOutcomeError(stats *Stats) error {
+	if stats == nil {
+		return nil
+	}
+	if stats.Canceled {
+		return fmt.Errorf("organize canceled after %d organized, %d re-organized, %d failed, of %d total",
+			stats.Organized, stats.ReOrganized, stats.Failed, stats.Total)
+	}
+	if stats.Failed > 0 && stats.Organized == 0 && stats.ReOrganized == 0 && stats.AlreadyCorrect == 0 {
+		return fmt.Errorf("organize failed for all %d books attempted (of %d total); see the organize_summary operation change for per-book errors",
+			stats.Failed, stats.Total)
+	}
 	return nil
 }
 
@@ -787,6 +851,20 @@ func (orgSvc *Service) organizeBooks(ctx context.Context, booksToOrganize []data
 			workerOrg := orgSvc.newOrganizer()
 
 			for i := range jobs {
+				// Cancellation is checked HERE as well as in the feeder below.
+				// Checking only the feeder stops new work being queued but lets
+				// the eight workers drain everything already buffered, so a
+				// cancelled organize kept moving files after the user asked it
+				// to stop. ctx covers the cases log.IsCanceled() cannot see at
+				// all — the HTTP client disconnecting, and server shutdown.
+				if ctx.Err() != nil || log.IsCanceled() {
+					statsMu.Lock()
+					stats.Skipped++
+					statsMu.Unlock()
+					atomic.AddInt64(&progressCounter, 1)
+					continue
+				}
+
 				book := booksToOrganize[i]
 
 				// Policy check: skip books tagged policy:no-organize.
@@ -932,10 +1010,16 @@ func (orgSvc *Service) organizeBooks(ctx context.Context, booksToOrganize []data
 		}()
 	}
 
-	// Feed jobs — cancellation checked here.
+	// Feed jobs — cancellation checked here AND in the worker loop above.
 	for i := range booksToOrganize {
+		if ctx.Err() != nil {
+			log.Info("Organize canceled: %s", ctx.Err().Error())
+			stats.Canceled = true
+			break
+		}
 		if log.IsCanceled() {
 			log.Info("Organize canceled")
+			stats.Canceled = true
 			break
 		}
 		jobs <- i
@@ -959,8 +1043,7 @@ func (orgSvc *Service) organizeBooks(ctx context.Context, booksToOrganize []data
 		stats.AlreadyCorrect += len(alreadyCorrect)
 	}
 
-	summary := fmt.Sprintf("Organize complete: %d organized, %d re-organized, %d already correct (stamped), %d skipped",
-		stats.Organized, stats.ReOrganized, stats.AlreadyCorrect, stats.Skipped)
+	summary := formatOrganizeSummary(stats)
 	log.Info("%s", summary)
 
 	// Record summary as operation change
