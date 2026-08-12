@@ -1,7 +1,7 @@
 // file: internal/scanner/service.go
-// version: 1.10.1
+// version: 1.11.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-07-18
+// last-edited: 2026-08-11
 package scanner
 
 import (
@@ -211,7 +211,26 @@ func (ss *ScanService) determineFoldersToScan(folderPath *string, forceUpdate bo
 		foldersToScan = []string{*folderPath}
 		log.Info("Starting scan of folder: %s", *folderPath)
 	} else {
-		// Full scan: include RootDir if force_update enabled, then all import paths
+		// DECISION (2026-08-11): a DEFAULT scan deliberately does NOT walk
+		// RootDir; only force_update does. Now that library.scan runs on a
+		// timer (scheduled.library_scan, default every 6h) this is a standing
+		// choice rather than an accident, so the reasoning is recorded here:
+		//
+		//  1. RootDir is organize's DESTINATION, not a source. scanFolder
+		//     invokes AutoOrganizeFn on the books it processes, so folding the
+		//     destination into every timed scan would feed already-organized
+		//     books back into the organize path on a loop.
+		//  2. On this deployment the iTunes tree lives UNDER the books root
+		//     (/mnt/bigdata/books/itunes), and that tree is hands-off — a
+		//     default RootDir walk would drag it in every 6 hours.
+		//  3. The consequence is bounded and known: a folder dropped straight
+		//     into the organized library root is NOT auto-discovered. The
+		//     remedy is to add it as an import path (which the watcher
+		//     supervisor now picks up without a restart) or to run a scan with
+		//     force_update=true.
+		//
+		// The log line below states the exclusion out loud so this is a
+		// visible behaviour, not a silent one.
 		if forceUpdate && config.AppConfig.RootDir != "" {
 			foldersToScan = append(foldersToScan, config.AppConfig.RootDir)
 			log.Info("Full rescan: including library path %s", config.AppConfig.RootDir)
@@ -228,6 +247,10 @@ func (ss *ScanService) determineFoldersToScan(folderPath *string, forceUpdate bo
 			}
 		}
 		log.Info("Scanning %d total folders (%d import paths)", len(foldersToScan), len(folders))
+		if !forceUpdate && config.AppConfig.RootDir != "" {
+			log.Info("Library root %s excluded from this incremental scan (organize destination); "+
+				"use force_update=true to include it", config.AppConfig.RootDir)
+		}
 	}
 
 	return foldersToScan, nil

@@ -1,5 +1,5 @@
 // file: internal/watcher/supervisor_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3a7e0b52-8f14-4d69-b0c3-51d2e9af7c86
 // last-edited: 2026-08-11
 
@@ -238,6 +238,26 @@ func TestSupervisorStartErrorIsReported(t *testing.T) {
 	defer mu.Unlock()
 	if reported != 1 {
 		t.Errorf("start failure reports = %d, want 1", reported)
+	}
+}
+
+// TestSupervisorStopAllIsTerminal guards the shutdown race: the server stops
+// watchers BEFORE it waits on its background WaitGroup, so a reconcile tick
+// landing in that window must not start fresh watchers nobody will stop.
+func TestSupervisorStopAllIsTerminal(t *testing.T) {
+	src := &pathSource{paths: []string{"/library/one"}}
+	sup := newSupervisorWithFactory(src.provider, func() managedWatcher { return &fakeWatcher{} }, time.Hour)
+
+	sup.Reconcile()
+	if got := sup.WatchedPaths(); len(got) != 1 {
+		t.Fatalf("watched=%v, want 1 path", got)
+	}
+
+	sup.StopAll()
+	sup.Reconcile()
+
+	if got := sup.WatchedPaths(); len(got) != 0 {
+		t.Errorf("Reconcile after StopAll resurrected watchers: %v", got)
 	}
 }
 

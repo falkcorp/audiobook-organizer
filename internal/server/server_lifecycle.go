@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 3.10.0
+// version: 3.11.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-08-10
+// last-edited: 2026-08-11
 
 package server
 
@@ -431,53 +431,72 @@ func (s *Server) Start(cfg ServerConfig) error {
 	// import path — previously only the first enabled path was watched,
 	// so users with multiple import locations had silent blind spots on
 	// every path after the first.
-	var fileWatchers []*watcher.Watcher
+	//
+	// Enumeration used to happen exactly ONCE here, from a boot-time snapshot,
+	// so an import path added later got no watcher until the process was
+	// restarted; and the read was `if err == nil && len(importPaths) > 0`,
+	// which turned a failed GetAllImportPaths into zero watchers with no log
+	// line at all. Both are now handled by watcher.Supervisor, which re-reads
+	// the desired set on a ticker and reports every failure.
+	//
+	// These watchers remain the LOW-LATENCY path only. The guaranteed
+	// catch-all is the periodic scheduled scan (scheduled.library_scan):
+	// fsnotify does not see writes made by remote NFS/SMB clients and can
+	// exhaust the inotify watch limit on a large tree, so it must never be
+	// the only discovery mechanism.
+	var watcherSupervisor *watcher.Supervisor
 	if config.AppConfig.AutoScanEnabled && s.Store() != nil {
-		importPaths, err := s.Store().GetAllImportPaths()
-		if err == nil && len(importPaths) > 0 {
-			var watchPaths []string
-			for _, ip := range importPaths {
-				if ip.Enabled {
-					watchPaths = append(watchPaths, ip.Path)
-				}
+		debounce := 5 * time.Second
+		if config.AppConfig.AutoScanDebounceSeconds > 0 {
+			debounce = time.Duration(config.AppConfig.AutoScanDebounceSeconds) * time.Second
+		}
+		watchLog := logger.NewWithActivityLog("auto-scan", s.Store())
+		// The same callback is reused across watchers because each watcher
+		// invokes it with its own root path, so the scan target is correct
+		// per event.
+		cb := func(path string) {
+			watchLog.Info("Auto-scan triggered for: %s", path)
+			if s.hub != nil {
+				s.hub.Broadcast(&realtime.Event{
+					Type: "scan.auto_triggered",
+					Data: map[string]any{"path": path},
+				})
 			}
-			if len(watchPaths) > 0 {
-				debounce := 5 * time.Second
-				if config.AppConfig.AutoScanDebounceSeconds > 0 {
-					debounce = time.Duration(config.AppConfig.AutoScanDebounceSeconds) * time.Second
-				}
-				watchLog := logger.NewWithActivityLog("auto-scan", s.Store())
-				// The same callback is reused across watchers because
-				// each watcher invokes it with its own root path, so
-				// the scan target is correct per event.
-				cb := func(path string) {
-					watchLog.Info("Auto-scan triggered for: %s", path)
-					if s.hub != nil {
-						s.hub.Broadcast(&realtime.Event{
-							Type: "scan.auto_triggered",
-							Data: map[string]any{"path": path},
-						})
+			if s.scanService != nil && s.opRegistry != nil {
+				go func() {
+					scanPath := path
+					if _, enqErr := s.opRegistry.EnqueueOp(context.Background(), "library.scan", libraryScanParams{FolderPath: &scanPath}); enqErr != nil {
+						watchLog.Error("Auto-scan: failed to enqueue: %v", enqErr)
 					}
-					if s.scanService != nil && s.opRegistry != nil {
-						go func() {
-							scanPath := path
-							if _, enqErr := s.opRegistry.EnqueueOp(context.Background(), "library.scan", libraryScanParams{FolderPath: &scanPath}); enqErr != nil {
-								watchLog.Error("Auto-scan: failed to enqueue: %v", enqErr)
-							}
-						}()
-					}
-				}
-				for _, wp := range watchPaths {
-					fw := watcher.New(cb, debounce)
-					if startErr := fw.Start(wp); startErr != nil {
-						watchLog.Warn("Failed to start file watcher for %s: %v", wp, startErr)
-						continue
-					}
-					fileWatchers = append(fileWatchers, fw)
-					watchLog.Info("Auto-scan file watcher started for %s", wp)
-				}
+				}()
 			}
 		}
+		// Re-read on every reconcile, not once: this is what makes a path
+		// added through the UI get a watcher without a restart.
+		paths := func() ([]string, error) {
+			importPaths, err := s.Store().GetAllImportPaths()
+			if err != nil {
+				return nil, fmt.Errorf("GetAllImportPaths: %w", err)
+			}
+			var enabled []string
+			for _, ip := range importPaths {
+				if ip.Enabled {
+					enabled = append(enabled, ip.Path)
+				}
+			}
+			return enabled, nil
+		}
+		watcherSupervisor = watcher.NewSupervisor(paths, cb, debounce, 0)
+		watcherSupervisor.SetErrorHook(func(err error) {
+			// Surfaced in the activity log too, so an operator sees it in the
+			// UI rather than only in journalctl.
+			watchLog.Error("Auto-scan watcher problem: %v", err)
+		})
+		backgroundWG.Add(1)
+		go func() {
+			defer backgroundWG.Done()
+			watcherSupervisor.Run(shutdown)
+		}()
 	}
 
 	// Periodic cleanup of expired/revoked auth sessions.
@@ -647,12 +666,15 @@ func (s *Server) Start(cfg ServerConfig) error {
 		}
 	}
 
-	// Stop every file watcher (one per import path).
-	for _, fw := range fileWatchers {
-		fw.Stop()
-	}
-	if len(fileWatchers) > 0 {
-		slog.Info("File watchers stopped ()", "fileWatchers_count", len(fileWatchers))
+	// Stop every file watcher (one per import path). The supervisor goroutine
+	// has already returned via `shutdown`; this only tears down the live
+	// watchers it left running.
+	if watcherSupervisor != nil {
+		stopped := len(watcherSupervisor.WatchedPaths())
+		watcherSupervisor.StopAll()
+		if stopped > 0 {
+			slog.Info("File watchers stopped", "fileWatchers_count", stopped)
+		}
 	}
 
 	// Persist HNSW snapshot for fast next-boot startup (before embedding store
