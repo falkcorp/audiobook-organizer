@@ -1,7 +1,7 @@
 // file: internal/server/wire_library_routes.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f23456789012
-// last-edited: 2026-08-01
+// last-edited: 2026-08-11
 
 package server
 
@@ -110,6 +110,10 @@ func (s *Server) wireLibraryRoutes(
 	adminOnly.Use(servermiddleware.RequireAdmin())
 	{
 		adminOnly.GET("/cache/stats/keys", cacheH.HandleCacheKeysIntrospection)
+		// Operator escape hatch for cache staleness. Until this existed the
+		// only way to clear a stale cache was a process restart, which costs
+		// roughly ten minutes of unusable library while memdb warms back up.
+		adminOnly.POST("/cache/invalidate", cacheH.HandleCacheInvalidate)
 		adminOnly.POST("/admin/recompact-digests", activityH.RecompactDigests)
 	}
 }

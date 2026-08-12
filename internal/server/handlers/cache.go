@@ -1,12 +1,15 @@
 // file: internal/server/handlers/cache.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: c9d0e1f2-a3b4-5678-cdef-678901234567
-// last-edited: 2026-07-13
+// last-edited: 2026-08-11
 
 package handlers
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
 	"strconv"
 	"time"
 
@@ -137,6 +140,80 @@ func (h *CacheHandler) HandleCacheKeysIntrospection(c *gin.Context) {
 		Keys  []string `json:"keys"`
 		Count int      `json:"count"`
 	}{Cache: cacheName, Keys: keys, Count: len(keys)})
+}
+
+// CacheInvalidateRequest is the optional body of POST /api/v1/cache/invalidate.
+// An absent or empty Cache field means "every registered cache".
+type CacheInvalidateRequest struct {
+	Cache string `json:"cache"`
+}
+
+// CacheInvalidateResponse reports what was actually dropped, per cache.
+//
+// Dropped is returned rather than a bare 200 because the operator reaching for
+// this endpoint is trying to confirm that a specific stale entry is gone; "OK"
+// does not distinguish "cleared 2000 entries" from "cleared a cache that was
+// already empty because you named the wrong one".
+type CacheInvalidateResponse struct {
+	Dropped map[string]int `json:"dropped"`
+	Total   int            `json:"total"`
+	Skipped []string       `json:"skipped,omitempty"`
+}
+
+// HandleCacheInvalidate empties one or all in-memory caches.
+// POST /api/v1/cache/invalidate (admin-gated)
+//
+// This is the operator lever for cache staleness. Before it existed the only
+// remedy was a process restart, which costs roughly ten minutes of unusable
+// library while memdb warms back up.
+//
+// Generation keying on the library-list caches does not make this redundant:
+// the counter only advances on the store's three book-level writes, so batch
+// writes, direct memdb writes and index-only edits still bypass it entirely.
+// This endpoint is what covers those.
+func (h *CacheHandler) HandleCacheInvalidate(c *gin.Context) {
+	var req CacheInvalidateRequest
+	// A completely absent body is valid and means "all caches"; only a
+	// malformed one is an error.
+	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
+		httputil.RespondWithBadRequest(c, "invalid request body: "+err.Error())
+		return
+	}
+
+	if req.Cache != "" {
+		dropped, found, invalidatable := cache.InvalidateByName(req.Cache)
+		if !found {
+			if IsNonIntrospectableCache(req.Cache) {
+				httputil.RespondWithBadRequest(c, "not invalidatable: "+req.Cache)
+				return
+			}
+			httputil.RespondWithBadRequest(c, "cache not found: "+req.Cache)
+			return
+		}
+		if !invalidatable {
+			httputil.RespondWithBadRequest(c, "not invalidatable: "+req.Cache)
+			return
+		}
+		slog.Info("cache invalidated by operator", "cache", req.Cache, "dropped", dropped)
+		httputil.RespondWithOK(c, CacheInvalidateResponse{
+			Dropped: map[string]int{req.Cache: dropped},
+			Total:   dropped,
+		})
+		return
+	}
+
+	dropped, skipped := cache.InvalidateAllRegistered()
+	total := 0
+	for _, n := range dropped {
+		total += n
+	}
+	slog.Info("all caches invalidated by operator",
+		"caches", len(dropped), "dropped", total, "skipped", skipped)
+	httputil.RespondWithOK(c, CacheInvalidateResponse{
+		Dropped: dropped,
+		Total:   total,
+		Skipped: skipped,
+	})
 }
 
 // HandleCacheStatsHistory returns persisted snapshots for one or all caches.
