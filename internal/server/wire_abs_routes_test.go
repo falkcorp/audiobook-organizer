@@ -1,13 +1,16 @@
 // file: internal/server/wire_abs_routes_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 3ea1d764-95c8-4b02-8f31-6d70a5be2c49
 // last-edited: 2026-08-12
 
 package server
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -340,4 +343,66 @@ func TestCollisionNamespacesAreStillColliding(t *testing.T) {
 				"list) or it is gone (move %s to absUnimplementedNamespaces so it 404s honestly).",
 			ns, twin, ns)
 	}
+}
+
+// TestABSReservedPath_CoversEveryPathTheRealClientRequested closes the one direction
+// the tests above structurally cannot.
+//
+// Every other guard on this surface derives from absRouteList() — that is, from what we
+// IMPLEMENT. An endpoint the client actually requests but we have not built yet is
+// absent from that list, so nothing checks it. If its prefix is not reserved it 301s
+// into the app API and answers 200 in the app's shape, which is the failure mode this
+// whole file exists to prevent: implemented-looking and broken.
+//
+// The golden fixtures are captures of a real Audiobookshelf answering the real target
+// clients, so request.path is the only record in this repo of what the client ASKS FOR,
+// independent of what we chose to build. Deriving from them means a newly captured
+// endpoint is covered the moment its fixture lands, with no list to remember to update.
+//
+// This passes today — all 28 captured paths are reserved. It is a ratchet, not a bug
+// report: it fails the day someone captures a fixture for an endpoint outside the four
+// reserved sub-trees and does not reserve it.
+func TestABSReservedPath_CoversEveryPathTheRealClientRequested(t *testing.T) {
+	files, err := filepath.Glob(filepath.Join("..", "..", "testdata", "abs-fixtures", "*.json"))
+	require.NoError(t, err)
+	require.Greater(t, len(files), 20,
+		"found only %d fixtures — the capture directory moved or the glob is wrong, and this "+
+			"test would pass by checking nothing", len(files))
+
+	checked := 0
+	for _, file := range files {
+		raw, err := os.ReadFile(file)
+		require.NoError(t, err)
+
+		var fx struct {
+			Request struct {
+				Method string `json:"method"`
+				Path   string `json:"path"`
+			} `json:"request"`
+		}
+		require.NoError(t, json.Unmarshal(raw, &fx), "%s", file)
+		require.NotEmpty(t, fx.Request.Path, "%s: fixture records no request path", file)
+
+		reqPath := fx.Request.Path
+		if q := strings.IndexByte(reqPath, '?'); q >= 0 {
+			reqPath = reqPath[:q]
+		}
+
+		// Captures also include the login/probe endpoints and raw audio fetches, which
+		// live outside /api entirely and are never seen by the /api → /api/v1 redirect.
+		if !strings.HasPrefix(reqPath, "/api/") {
+			continue
+		}
+		checked++
+
+		require.True(t, absReservedPath(reqPath),
+			"%s: the real client requested %s %s, but absReservedPath does not cover it, so the "+
+				"/api → /api/v1 redirect swallows the call. Add its sub-tree to "+
+				"absReservedPathPrefixes (or the exact path to absReservedPaths).",
+			filepath.Base(file), fx.Request.Method, reqPath)
+	}
+
+	require.Greater(t, checked, 15,
+		"only %d of %d fixtures had an /api path — the fixture shape changed and this test is "+
+			"no longer reading what it thinks it is", checked, len(files))
 }
