@@ -1,6 +1,7 @@
 // file: internal/database/pebble_activity_store_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c9d0e1f2-a3b4-0010-3456-000000000010
+// last-edited: 2026-08-11
 
 // Package database — parity test suite for PebbleActivityStore.
 //
@@ -161,8 +162,17 @@ func TestPebbleActivityStore_QueryFilters(t *testing.T) {
 	t.Run("limit", func(t *testing.T) {
 		res, total, err := s.Query(ActivityFilter{Limit: 2})
 		require.NoError(t, err)
-		assert.Equal(t, 4, total)
 		assert.Len(t, res, 2)
+		// CONTRACT CHANGE (bounded query): total is exact only when the walk
+		// exhausts the log. A paged query stops at offset+limit+1 matches so it
+		// never materializes the whole log, so total here is that probe value
+		// (3), not the exact match count (4). Asserting the exact 3 — rather
+		// than a >= range — is deliberate: a range would also pass against the
+		// old full-scan implementation that returned 4.
+		assert.Equal(t, 3, total)
+		// The probe row is what keeps pagination working: total must stay
+		// strictly greater than this page so the caller knows more exist.
+		assert.Greater(t, total, len(res))
 	})
 
 	t.Run("offset", func(t *testing.T) {
