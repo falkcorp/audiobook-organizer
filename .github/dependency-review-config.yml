@@ -1,6 +1,7 @@
 # file: .github/dependency-review-config.yml
-# version: 1.1.0
+# version: 1.2.0
 # guid: dep-review-cfg-2025-12-07
+# last-edited: 2026-08-12
 
 # Dependency Review Configuration
 # This file configures the dependency-review-action for automated security scanning
@@ -22,9 +23,37 @@ allow-licenses:
   - LGPL-2.1
   - LGPL-3.0
 
-# Allow specific packages even if they have denied licenses
-# allow-dependencies-licenses:
-#   - pkg:npm/some-package@1.0.0
+# Allow specific packages even if they have denied licenses.
+#
+# The golang.org/x/* modules are BSD-3-Clause — which IS in allow-licenses above — plus
+# Go's standard PATENTS file, an ADDITIONAL grant of patent rights that makes them
+# strictly more permissive than BSD-3-Clause alone. ScanCode reports the pair as the
+# compound expression:
+#
+#   BSD-3-Clause AND LicenseRef-scancode-google-patent-license-golang
+#
+# allow-licenses matches the WHOLE SPDX expression, not each term, so the compound
+# string fails the policy even though both halves are acceptable. Adding
+# LicenseRef-scancode-google-patent-license-golang to allow-licenses would not fix it
+# either — the expression still would not equal any single allowed entry — and it would
+# quietly widen the policy for every ecosystem. Naming the packages is the narrow fix.
+#
+# Listed WITHOUT versions so the entry matches any version. Dependency Review only
+# reviews CHANGED dependencies, so this failure appears the moment any one of these is
+# bumped and not before: it first blocked #2305, where bytedance/sonic 1.15.1 → 1.15.2
+# pulled golang.org/x/arch. All nine are listed rather than just that one, because the
+# other eight are the same license under the same policy and would each have produced an
+# identical surprise on their next bump.
+allow-dependencies-licenses:
+  - pkg:golang/golang.org/x/arch
+  - pkg:golang/golang.org/x/crypto
+  - pkg:golang/golang.org/x/exp
+  - pkg:golang/golang.org/x/net
+  - pkg:golang/golang.org/x/oauth2
+  - pkg:golang/golang.org/x/sync
+  - pkg:golang/golang.org/x/sys
+  - pkg:golang/golang.org/x/text
+  - pkg:golang/golang.org/x/time
 
 # Deny specific packages
 # deny-packages:
