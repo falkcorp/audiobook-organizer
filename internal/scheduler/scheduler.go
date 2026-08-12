@@ -1,7 +1,7 @@
 // file: internal/scheduler/scheduler.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3f7a9c21-b4d8-4e05-a6f2-8c1d0e3b7a94
-// last-edited: 2026-08-11
+// last-edited: 2026-08-12
 
 // Package scheduler implements the unified task scheduling system.
 // TaskScheduler manages all registered tasks, their schedules, and manual
@@ -186,7 +186,23 @@ func (ts *TaskScheduler) Start(shutdown chan struct{}, wg *sync.WaitGroup) {
 			}()
 		}
 
-		// Start scheduled ticker if interval > 0 and enabled
+		// Start scheduled ticker if interval > 0 and enabled.
+		//
+		// The `else` arms below exist because this condition used to fail
+		// SILENTLY. A task that was enabled but whose interval resolved to 0
+		// got no ticker, no log line, and no other trace — from the outside it
+		// was indistinguishable from a task deliberately turned off.
+		//
+		// That is not hypothetical. Measured on production 2026-08-12: every
+		// task in the `scheduled.*` config block had interval 0, including
+		// library_scan, whose shipped defaults are enabled=true / interval=360.
+		// Stored zero values were overriding the viper defaults, so the ONLY
+		// unattended discovery path for newly added books had never run — and
+		// the only evidence was the absence of a log line, which nobody can
+		// grep for. Four unrelated tasks did get tickers, which made the
+		// scheduler look healthy.
+		//
+		// A scheduler that drops a task must say which task and why.
 		if task.IsEnabled() && task.GetInterval() > 0 {
 			interval := task.GetInterval()
 			taskName := name
@@ -209,6 +225,18 @@ func (ts *TaskScheduler) Start(shutdown chan struct{}, wg *sync.WaitGroup) {
 				}
 			}()
 			slog.Info("Scheduled task interval", "taskName", taskName, "interval", interval)
+		} else if task.IsEnabled() {
+			// Enabled but no usable interval. This is the silent case: the
+			// operator turned the task ON and it will never run. Say so, and
+			// name the config key, because the difference between this and
+			// "deliberately off" is invisible from the outside.
+			slog.Warn("Scheduled task is ENABLED but has no interval — it will NEVER run on a timer; "+
+				"set the interval (minutes) in the scheduled.<task>.interval config key to fix",
+				"taskName", name, "interval", task.GetInterval())
+		} else {
+			// Deliberately off. Logged at Debug so the roster is complete for
+			// anyone diagnosing "why did nothing happen" without adding noise.
+			slog.Debug("Scheduled task disabled", "taskName", name)
 		}
 	}
 
