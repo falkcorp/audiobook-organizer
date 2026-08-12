@@ -1,5 +1,5 @@
 // file: internal/server/list_cache_generation_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 51004630-5b56-463f-851b-8225e2367353
 // last-edited: 2026-08-11
 
@@ -59,9 +59,12 @@ func listTitles(t *testing.T, server *Server, rawQuery string) ([]string, string
 // production defect: the owner merges books, the merge hard-deletes the
 // losers, and the library page keeps listing them for up to 24 hours.
 //
-// Measured on production before the fix: the cached library list returned
-// 40,957 books where the identical cache-busted query returned 40,839 — 118
-// rows that no longer existed, 96 of which 404 on fetch.
+// Measured on production before the fix, on the UI's own default list key:
+// the cached response returned 40,957 books where the identical cache-busted
+// query returned 40,839 — a drift of 118 rows. Three of the merged-away books
+// were still listed while returning HTTP 404 on fetch:
+// 01KQAQEJ7HGX9YJC94WMYZG954, 01KQAQEEWWQWXHGCB9KRR013H5,
+// 01KQAQEHG337RJ2HEHN9PAA61W.
 //
 // The delete here goes through the same store call the merge path uses
 // (DeleteBook), and both list requests go through the production router, so
@@ -110,10 +113,10 @@ func TestListCacheDropsDeletedBookOnNextRequest(t *testing.T) {
 }
 
 // TestListCacheDropsDemotedPrimaryOnNextRequest covers the other half of the
-// production symptom: 74 of the phantom rows were not deleted at all, they
-// were demoted to is_primary_version=false when a merge elected a different
-// winner, and the default library view (is_primary_version=true) kept showing
-// them.
+// production symptom. Not every phantom row is a deleted book: when a merge
+// elects a different winner the loser is demoted to is_primary_version=false
+// rather than removed, and the default library view (is_primary_version=true)
+// kept showing it from cache.
 //
 // This is the case that would still be broken if the generation counter had
 // been hooked to MarkAllQuickQueriesDirty, because UpdateBook does not call
