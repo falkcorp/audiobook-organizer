@@ -1,7 +1,7 @@
 # file: .github/workflows/ci.yml
-# version: 3.2.0
+# version: 3.3.0
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
-# last-edited: 2026-08-10
+# last-edited: 2026-08-11
 
 # Fast parallel CI for PRs and pushes.
 # Runs go vet/build, short tests, frontend lint/build, and frontend unit tests
@@ -133,7 +133,21 @@ jobs:
   coverage-gate:
     name: Coverage Floor (PR gate)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 35, not 20. `make test-short` runs go test with `-timeout 25m`, so a cap
+    # of 20 guaranteed the runner killed the job BEFORE Go's own timeout could
+    # fire — and Go's timeout is the only thing that prints a goroutine dump
+    # naming the stuck test. Every hang therefore surfaced as a bare
+    # `conclusion=cancelled` with no diagnosis, three times on 2026-08-11 alone
+    # (#2311, #2315), and `cancelled` reads as a test failure on the PR even
+    # though nothing failed.
+    #
+    # The job cap must stay strictly greater than the longest `-timeout` passed
+    # to any go test invocation in the steps below, plus setup. If you raise the
+    # test timeout, raise this too.
+    #
+    # This is a diagnosis fix, not a performance fix: internal/server alone is a
+    # ~500s package (TODO-SRVTIMEOUT) and sharding it is still open.
+    timeout-minutes: 35
     env:
       GOEXPERIMENT: jsonv2
     steps:
