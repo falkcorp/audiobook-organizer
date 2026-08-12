@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
 // last-edited: 2026-08-12
 
@@ -181,8 +181,12 @@ func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit i
 			if f.IsPrimaryVersion != nil {
 				primaryKey = strconv.FormatBool(*f.IsPrimaryVersion)
 			}
-			cacheKey := fmt.Sprintf("all:%d:%d:p=%s:sb=%s:asc=%v:noq=%v",
-				limit, offset, primaryKey, f.SortBy, sortAsc, f.ExcludeQuarantined)
+			// Generation-scoped: a created/updated/deleted book advances
+			// svc.libGen, so pages cached before that mutation can no longer be
+			// addressed by any reader. Build the key through Generation.Key so
+			// the read below and the Set further down cannot drift apart.
+			cacheKey := svc.libGen.Key("all:", fmt.Sprintf("%d:%d:p=%s:sb=%s:asc=%v:noq=%v",
+				limit, offset, primaryKey, f.SortBy, sortAsc, f.ExcludeQuarantined))
 			if cached, ok := svc.listCache.Get(cacheKey); ok {
 				return cached, -1, nil
 			}
