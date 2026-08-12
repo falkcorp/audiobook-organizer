@@ -1,5 +1,5 @@
 // file: internal/organizer/service.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
 // last-edited: 2026-08-11
 
@@ -744,10 +744,25 @@ func (orgSvc *Service) hydrateAndUpdateBook(bookID string, mutate func(*database
 }
 
 // stampOrganizeMetadata hydrates the full book row via GetBookByID and writes
-// the LastOrganizeOperationID/LastOrganizedAt stamp back onto that hydrated
-// struct. See hydrateAndUpdateBook for the rationale.
+// the LibraryState/LastOrganizeOperationID/LastOrganizedAt stamp back onto that
+// hydrated struct. See hydrateAndUpdateBook for the rationale.
+//
+// LibraryState MUST be set here, not just the two timestamps. All three callers
+// mean "this book is now sitting at its correct organized path": the
+// oldPath==newPath branch, the alreadyInRoot re-organize branch, and the bulk
+// alreadyCorrect stamp. Until 2026-08-11 this helper wrote only the two stamp
+// fields, so a book that was PERFECTLY organized kept library_state="imported"
+// forever — and the dashboard's "Needs Organizing" card counts exactly
+// library_state=="imported". Re-running organize could never clear it, because
+// FilterBooksNeedingOrganization diverts already-correct books into
+// alreadyCorrect BEFORE they can reach ReOrganizeInPlace, which does set the
+// state correctly (see the oldPath==targetPath branch). That asymmetry — one
+// path marking the state, its sibling silently not — is what produced a
+// permanent, self-refilling organize backlog.
 func (orgSvc *Service) stampOrganizeMetadata(bookID, operationID string, when time.Time) error {
+	organizedState := "organized"
 	return orgSvc.hydrateAndUpdateBook(bookID, func(b *database.Book) {
+		b.LibraryState = &organizedState
 		b.LastOrganizeOperationID = &operationID
 		b.LastOrganizedAt = &when
 	})
