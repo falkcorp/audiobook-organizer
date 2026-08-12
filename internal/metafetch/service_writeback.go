@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_writeback.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: fad73c11-30c2-4fdc-addd-45afef25d792
-// last-edited: 2026-07-17
+// last-edited: 2026-08-11
 
 package metafetch
 
@@ -797,6 +797,12 @@ func (mfs *Service) WriteBackMetadataForBook(id string, segmentFilter ...[]strin
 			}, fileops.WriteTagsSafeOptions{BookFileID: bf.ID, Store: mfs.db}); err != nil {
 								slog.Warn("write-back failed for file", "path", bf.FilePath, "error", err)
 			} else {
+				// Log successes as well as failures. Without this the multi-file
+				// branch was silent on success while the single-file branch below
+				// logged "wrote metadata back to", so the logs showed only
+				// failures for multi-file books and it was impossible to tell a
+				// working write path from one that never ran at all.
+								slog.Info("wrote metadata back to", "path", bf.FilePath)
 				writtenCount++
 			}
 		}
