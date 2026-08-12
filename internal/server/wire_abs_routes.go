@@ -1,5 +1,5 @@
 // file: internal/server/wire_abs_routes.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 9c6b13f8-40a2-4e57-b18d-72e0a5c4d396
 // last-edited: 2026-08-12
 
@@ -77,20 +77,45 @@ var absReservedPathPrefixes = []string{
 // a 301 into a foreign shape makes it look present and broken, and any non-2xx flips
 // AudioBooth's connection indicator.
 //
-// Matched as exact path OR subtree, so /api/authors and /api/authors/:id both 404.
+// Matched as exact path OR subtree, so /api/users and /api/users/:id both 404.
 //
-// Safe because nothing in-repo requests these without the /v1 prefix — the SPA's only
-// bare /api/ call is /api/events (SSE), which is deliberately absent from this list.
+// # Why this list is SHORTER than the set of ABS namespaces we lack
+//
+// A namespace only belongs here if the redirect leads nowhere. Three ABS namespaces —
+// authors, series, playlists — collide with namespaces the APP API really serves under
+// /api/v1 (19, 18 and 9 routes respectively, see wire_entities_routes.go and
+// wire_dedup_routes.go). For those, the 301 is not a lie: it lands on a working handler.
+// Listing them here 404s a live route to make an unimplemented one honest, which is a
+// strictly worse trade — and because this middleware is NOT gated on ABSAPIEnabled
+// (server_lifecycle.go:1219), it would do that on every deployment, including ones with
+// the ABS surface switched off.
+//
+// That is not hypothetical: they WERE listed here when this shipped in #2332, and the
+// original justification — "nothing in-repo requests these without the /v1 prefix" —
+// checked the CALLER side of the boundary and never the TARGET side. The compatibility
+// shim exists precisely for callers that are not in this repo.
+//
+// So the rule for adding a namespace here is: grep for app-API routes under the same
+// name first. No /api/v1 twin → honest 404 belongs here. A twin exists → leave it out
+// and let the redirect work; TestCollidingNamespacesStillRedirect pins that choice.
 //
 // If one of these is ever implemented on the ABS surface, MOVE it to the lists above
 // rather than deleting it — it must stay excluded from the redirect either way.
 var absUnimplementedNamespaces = []string{
 	"/api/collections",
-	"/api/playlists",
-	"/api/authors",
-	"/api/series",
 	"/api/users",
 	"/api/podcasts",
+}
+
+// absAppAPICollisions are ABS namespaces we do NOT implement but must NOT 404, because
+// the app API serves the same name under /api/v1 and the compatibility redirect is the
+// only way an unversioned caller reaches it. Declared as data rather than left implicit
+// so the regression test can iterate it, and so the next person to extend the list above
+// sees the exclusion instead of rediscovering it.
+var absAppAPICollisions = []string{
+	"/api/authors",
+	"/api/series",
+	"/api/playlists",
 }
 
 // absReservedPath reports whether a request path belongs to the ABS surface and must

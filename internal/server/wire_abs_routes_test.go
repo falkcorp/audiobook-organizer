@@ -1,5 +1,5 @@
 // file: internal/server/wire_abs_routes_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3ea1d764-95c8-4b02-8f31-6d70a5be2c49
 // last-edited: 2026-08-12
 
@@ -193,12 +193,9 @@ func TestUnimplementedABSNamespacesAre404NotRedirect(t *testing.T) {
 
 	for _, path := range []string{
 		"/api/collections",
-		"/api/playlists",
-		"/api/authors",
-		"/api/authors/aut_abc123",
-		"/api/series",
-		"/api/series/ser_abc123",
+		"/api/collections/col_abc123",
 		"/api/users",
+		"/api/users/usr_abc123",
 		"/api/podcasts",
 	} {
 		w := httptest.NewRecorder()
@@ -224,4 +221,43 @@ func TestNonABSPathsStillRedirect(t *testing.T) {
 	require.Equal(t, http.StatusMovedPermanently, w.Code,
 		"/api/audiobooks is app-API surface and must keep redirecting to /api/v1")
 	require.Equal(t, "/api/v1/audiobooks", w.Header().Get("Location"))
+}
+
+// TestCollidingNamespacesStillRedirect is the regression guard for the bug #2332
+// introduced: authors, series and playlists are ABS namespaces we don't implement,
+// but they are ALSO app-API namespaces we do. 404ing them to be honest about the ABS
+// surface destroyed 46 working app routes' unversioned form on every deployment,
+// because the redirect middleware is not gated on ABSAPIEnabled.
+//
+// The earlier version of this suite missed it by checking only /api/audiobooks — a
+// path with no ABS meaning at all, so it could never have caught a collision. The
+// test has to be driven by the collision list itself to be worth anything.
+func TestCollidingNamespacesStillRedirect(t *testing.T) {
+	s, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	require.NotEmpty(t, absAppAPICollisions, "the collision list must not be silently emptied")
+
+	for _, base := range absAppAPICollisions {
+		for _, path := range []string{base, base + "/123"} {
+			w := httptest.NewRecorder()
+			s.router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+
+			require.Equal(t, http.StatusMovedPermanently, w.Code,
+				"%s has a live /api/v1 twin — 404ing it breaks a working app route to make an "+
+					"unimplemented ABS one honest, on every deployment including ABS-disabled ones", path)
+			require.Equal(t, strings.Replace(path, "/api/", "/api/v1/", 1), w.Header().Get("Location"))
+		}
+	}
+}
+
+// A namespace must never appear in both lists: one says 404, the other says redirect,
+// and absReservedPath consults only the first — so a duplicate would silently win as a
+// 404 while the collision list claimed otherwise.
+func TestNamespaceListsAreDisjoint(t *testing.T) {
+	for _, u := range absUnimplementedNamespaces {
+		for _, c := range absAppAPICollisions {
+			require.NotEqual(t, u, c, "%s is in both absUnimplementedNamespaces and absAppAPICollisions", u)
+		}
+	}
 }
