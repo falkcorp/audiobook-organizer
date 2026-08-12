@@ -1,10 +1,12 @@
 // file: web/src/pages/ActivityLog.tsx
-// version: 2.20.0
+// version: 2.21.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-08-10
+// last-edited: 2026-08-11
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
+  Alert,
+  AlertTitle,
   Box,
   Button,
   Chip,
@@ -42,6 +44,7 @@ import CancelIcon from '@mui/icons-material/Cancel';
 import FilterListIcon from '@mui/icons-material/FilterList';
 import { fetchActivity, fetchActivitySources, compactActivityLog } from '../services/activityApi';
 import type { ActivityEntry, SourceCount } from '../services/activityApi';
+import { ApiTimeoutError, isAbortError } from '../utils/apiFetch';
 import { BatchActivityEntry } from '../components/BatchActivityEntry';
 import * as api from '../services/api';
 import { PendingFileOpsBanner } from '../components/PendingFileOpsBanner';
@@ -125,6 +128,47 @@ const formatItemTime = (ts?: string): string => {
 const displayTags = (tags?: string[]): string[] =>
   (tags ?? []).filter((tag) => tag !== 'source:server' && tag !== 'action:system');
 
+/** How far back the feed looks when the user has not chosen a range. */
+const DEFAULT_SINCE_HOURS = 24;
+
+/** Format a Date as the `YYYY-MM-DDTHH:mm` local string a datetime-local input wants. */
+const toDateTimeLocal = (d: Date): string => {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
+
+/** The default "Since" value: DEFAULT_SINCE_HOURS ago, in local time. */
+const defaultSinceValue = (): string =>
+  toDateTimeLocal(new Date(Date.now() - DEFAULT_SINCE_HOURS * 60 * 60 * 1000));
+
+/**
+ * Convert a `datetime-local` input value to the RFC3339 string the API needs.
+ *
+ * `GET /api/v1/activity` parses `since`/`until` with
+ * `time.Parse(time.RFC3339, v)` and returns 400 on anything else. A
+ * datetime-local input yields `YYYY-MM-DDTHH:mm` — no seconds, no offset —
+ * which is NOT valid RFC3339, so every date filter this page sent was rejected.
+ * With no error state on the page, that 400 rendered as "No activity entries
+ * found.", i.e. the date filters looked like they worked and silently returned
+ * nothing. Returns undefined for empty/unparseable input so the param is
+ * omitted rather than sent malformed.
+ */
+const toRFC3339 = (localValue: string): string | undefined => {
+  if (!localValue) return undefined;
+  const d = new Date(localValue);
+  if (isNaN(d.getTime())) return undefined;
+  return d.toISOString();
+};
+
+/** Human-readable one-liner for an error surfaced in the UI. */
+const describeError = (err: unknown): string => {
+  if (err instanceof ApiTimeoutError) {
+    return `The server did not respond within ${Math.round(err.timeoutMs / 1000)}s. It may be overloaded — try a narrower time range or fewer entries per page.`;
+  }
+  if (err instanceof Error) return err.message;
+  return String(err);
+};
+
 export default function ActivityLog() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -137,7 +181,13 @@ export default function ActivityLog() {
   const [typeFilter, setTypeFilter] = useState('');
   const [levelFilter, setLevelFilter] = useState('');
   const [operationId, setOperationId] = useState('');
-  const [sinceFilter, setSinceFilter] = useState('');
+  // The feed is bounded to the last DEFAULT_SINCE_HOURS by default. Without a
+  // window the page asked the server for ALL history on every load and on
+  // every poll tick, which is what let one open tab drive an unbounded scan.
+  // This is a VISIBLE default, not a silent cap: it is rendered in the "Since"
+  // field, it can be edited, and clearing the field restores all-history.
+  const [defaultSince] = useState(defaultSinceValue);
+  const [sinceFilter, setSinceFilter] = useState(defaultSince);
   const [untilFilter, setUntilFilter] = useState('');
   const [excludedSources, setExcludedSources] = useState<Set<string>>(() => {
     const saved = localStorage.getItem(STORAGE_KEYS.ACTIVITY_SOURCE_PREFS);
@@ -185,6 +235,7 @@ export default function ActivityLog() {
   // Sources
   const [sources, setSources] = useState<SourceCount[]>([]);
   const [sourcesOpen, setSourcesOpen] = useState(false);
+  const [sourcesError, setSourcesError] = useState<string | null>(null);
 
   // Feed
   const [entries, setEntries] = useState<ActivityEntry[]>([]);
@@ -194,6 +245,10 @@ export default function ActivityLog() {
   const [loading, setLoading] = useState(false);
   // Silent background refresh — updates data without destroying the table DOM
   const [refreshing, setRefreshing] = useState(false);
+  // Feed error. Distinct from "no entries": a 500, a 401, a timeout and a
+  // genuinely empty log used to render the identical "No activity entries
+  // found." message, so a hard failure was indistinguishable from success.
+  const [error, setError] = useState<string | null>(null);
 
   // Auto-refresh
   const [autoRefresh, setAutoRefresh] = useState(true);
@@ -213,6 +268,36 @@ export default function ActivityLog() {
   const opsIntervalRef = useRef<number | null>(null);
   const feedIntervalRef = useRef<number | null>(null);
   const sourcesDropdownRef = useRef<HTMLDivElement | null>(null);
+
+  // ---- Request lifecycle bookkeeping -------------------------------------
+  // Polls used to fire on a fixed schedule regardless of whether the previous
+  // request had come back, so a slow /activity query meant requests stacked up
+  // and each one kept server memory alive — one open tab was enough to grow
+  // without bound. Three pieces of state fix that, per endpoint:
+  //   *InFlightRef  — a background poll drops its tick entirely if a request
+  //                   is still outstanding. Polls never stack.
+  //   *AbortRef     — a user-driven load (mount, filter, page, Refresh)
+  //                   supersedes instead of waiting: the older request's
+  //                   answer is already wrong, so it is aborted.
+  //   *SeqRef       — monotonic ticket. A superseded request that finishes
+  //                   late must not write state belonging to the request that
+  //                   replaced it (including clearing its spinner).
+  const feedInFlightRef = useRef(false);
+  const feedAbortRef = useRef<AbortController | null>(null);
+  const feedSeqRef = useRef(0);
+  const sourcesInFlightRef = useRef(false);
+  const sourcesAbortRef = useRef<AbortController | null>(null);
+  const sourcesSeqRef = useRef(0);
+
+  // Cancel anything outstanding on unmount — otherwise navigating away leaves
+  // the server finishing a query nobody will ever read.
+  useEffect(
+    () => () => {
+      feedAbortRef.current?.abort();
+      sourcesAbortRef.current?.abort();
+    },
+    [],
+  );
 
   // Tracks pending scroll timers so they can be cancelled on unmount — a timer
   // that fires after unmount would touch a detached ref (harmless here thanks to
@@ -327,22 +412,61 @@ export default function ActivityLog() {
     scrollTimeoutsRef.current.push(scrollTimeout);
   }, [latestLogEvent, expandedOpId]);
 
-  // Load sources
-  const loadSources = useCallback(async () => {
+  // Load sources. Pass silent=true from the auto-refresh tick so it can be
+  // dropped rather than stacked when the previous one has not returned.
+  const loadSources = useCallback(async (silent = false) => {
+    if (silent) {
+      if (sourcesInFlightRef.current) return;
+    } else {
+      sourcesAbortRef.current?.abort();
+    }
+    const controller = new AbortController();
+    sourcesAbortRef.current = controller;
+    sourcesInFlightRef.current = true;
+    const seq = ++sourcesSeqRef.current;
+    const isCurrent = () => seq === sourcesSeqRef.current;
+
     try {
-      const data = await fetchActivitySources({
-        since: sinceFilter || undefined,
-        until: untilFilter || undefined,
-      });
+      const data = await fetchActivitySources(
+        {
+          since: toRFC3339(sinceFilter),
+          until: toRFC3339(untilFilter),
+        },
+        { signal: controller.signal },
+      );
+      if (!isCurrent()) return;
       setSources(data.sources || []);
+      setSourcesError(null);
     } catch (err) {
+      // A supersede/unmount abort is normal control flow, not a failure.
+      if (isAbortError(err) || !isCurrent()) return;
       console.error('Failed to load sources', err);
+      setSourcesError(describeError(err));
+    } finally {
+      if (isCurrent()) {
+        sourcesInFlightRef.current = false;
+        sourcesAbortRef.current = null;
+      }
     }
   }, [sinceFilter, untilFilter]);
 
   // Load activity feed. Pass silent=true for background refreshes to avoid
   // replacing the table with a spinner (which resets scroll position).
   const loadFeed = useCallback(async (p: number, silent = false) => {
+    // The guard lives HERE, not in the polling effect, so that every entry
+    // point is covered: the effects, the Refresh button, revert and compact
+    // all call loadFeed directly.
+    if (silent) {
+      if (feedInFlightRef.current) return;
+    } else {
+      feedAbortRef.current?.abort();
+    }
+    const controller = new AbortController();
+    feedAbortRef.current = controller;
+    feedInFlightRef.current = true;
+    const seq = ++feedSeqRef.current;
+    const isCurrent = () => seq === feedSeqRef.current;
+
     if (silent) {
       setRefreshing(true);
     } else {
@@ -356,31 +480,50 @@ export default function ActivityLog() {
       const inactiveTiers = allTiers.filter((t) => !tiers.has(t));
       const excludeTiersStr = inactiveTiers.length > 0 ? inactiveTiers.join(',') : undefined;
 
-      const result = await fetchActivity({
-        limit: pageSize,
-        offset: (p - 1) * pageSize,
-        type: typeFilter || undefined,
-        level: levelFilter || undefined,
-        operation_id: operationId.trim() || undefined,
-        since: sinceFilter || undefined,
-        until: untilFilter || undefined,
-        search: search.trim() || undefined,
-        exclude_sources: excludeStr,
-        exclude_tiers: excludeTiersStr,
-        exclude_tags: hideNoOp ? 'no-op' : undefined,
-        tags: tagFilter.length > 0 ? tagFilter.join(',') : undefined,
-      });
+      const result = await fetchActivity(
+        {
+          limit: pageSize,
+          offset: (p - 1) * pageSize,
+          type: typeFilter || undefined,
+          level: levelFilter || undefined,
+          operation_id: operationId.trim() || undefined,
+          since: toRFC3339(sinceFilter),
+          until: toRFC3339(untilFilter),
+          search: search.trim() || undefined,
+          exclude_sources: excludeStr,
+          exclude_tiers: excludeTiersStr,
+          exclude_tags: hideNoOp ? 'no-op' : undefined,
+          tags: tagFilter.length > 0 ? tagFilter.join(',') : undefined,
+        },
+        { signal: controller.signal },
+      );
 
+      if (!isCurrent()) return;
       setEntries(result.entries || []);
       setTotal(result.total || 0);
-    } catch (err) {
-      console.error('Failed to load activity', err);
-      setEntries([]);
-      setTotal(0);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
+      setError(null);
       setLastUpdated(new Date());
+    } catch (err) {
+      // Our own abort (supersede / unmount) is not a failure — reporting it
+      // would flash an error panel on every keystroke in the search box.
+      if (isAbortError(err) || !isCurrent()) return;
+      console.error('Failed to load activity', err);
+      setError(describeError(err));
+      // A failed BACKGROUND refresh must not destroy what the user is reading:
+      // keep the last good page and surface the failure as a banner. Only a
+      // failed foreground load clears the table, because in that case there is
+      // nothing valid left to show.
+      if (!silent) {
+        setEntries([]);
+        setTotal(0);
+      }
+    } finally {
+      if (isCurrent()) {
+        feedInFlightRef.current = false;
+        feedAbortRef.current = null;
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, [typeFilter, levelFilter, operationId, sinceFilter, untilFilter, search, excludedSources, tiers, hideNoOp, tagFilter, pageSize]);
 
@@ -401,17 +544,35 @@ export default function ActivityLog() {
     };
   }, [loadActiveOpsFromServer, autoRefresh]);
 
-  // Load feed when filters change
+  // Sources load on their own schedule. fetchActivitySources only varies with
+  // the time window, so keeping it out of the feed effect stops it re-firing
+  // on every page change.
   useEffect(() => {
-    setPage(1);
-    loadFeed(1);
     loadSources();
-  }, [typeFilter, levelFilter, operationId, sinceFilter, untilFilter, search, excludedSources, tiers, hideNoOp, tagFilter, loadFeed, loadSources]);
+  }, [loadSources]);
 
-  // Load feed on page or pageSize change
+  // SINGLE feed loader.
+  //
+  // There used to be two effects here — one keyed on the filters, one on
+  // page/pageSize — and BOTH ran on mount, so every mount fired the expensive
+  // /activity query twice. loadFeed's identity already changes whenever any
+  // filter or pageSize changes, so one effect keyed on (loadFeed, page)
+  // covers both cases with exactly one fetch.
+  const prevLoadFeedRef = useRef<typeof loadFeed | null>(null);
   useEffect(() => {
+    const filtersChanged =
+      prevLoadFeedRef.current !== null && prevLoadFeedRef.current !== loadFeed;
+    prevLoadFeedRef.current = loadFeed;
+    if (filtersChanged && page !== 1) {
+      // Changing a filter resets to page 1. Fetch nothing now: setPage re-runs
+      // this effect, and fetching the old page here would be a second query
+      // that is superseded a moment later — the exact duplicate this
+      // consolidation removes.
+      setPage(1);
+      return;
+    }
     loadFeed(page);
-  }, [page, pageSize, loadFeed]);
+  }, [loadFeed, page]);
 
   // Auto-refresh feed — 5s when active ops exist, 30s when idle.
   // Uses silent=true so the table stays in the DOM and scroll position is preserved.
@@ -420,8 +581,11 @@ export default function ActivityLog() {
     if (feedIntervalRef.current) window.clearInterval(feedIntervalRef.current);
     if (autoRefresh) {
       feedIntervalRef.current = window.setInterval(() => {
+        // silent=true is what makes a tick DROPPABLE. If the previous request
+        // has not returned, these calls no-op instead of stacking a second
+        // full-scan query on top of the first.
         loadFeed(page, true);
-        loadSources();
+        loadSources(true);
       }, refreshInterval);
     }
     return () => {
@@ -556,7 +720,10 @@ export default function ActivityLog() {
     typeFilter !== '' ||
     levelFilter !== '' ||
     operationId !== '' ||
-    sinceFilter !== '' ||
+    // Compared against the DEFAULT window, not '': with a default "Since" the
+    // old `!== ''` test would latch permanently on and "Clear filters" would
+    // never disappear.
+    sinceFilter !== defaultSince ||
     untilFilter !== '' ||
     excludedSources.size > 0 ||
     !hideNoOp;
@@ -567,7 +734,7 @@ export default function ActivityLog() {
     typeFilter !== '',
     levelFilter !== '',
     operationId !== '',
-    sinceFilter !== '',
+    sinceFilter !== defaultSince,
     untilFilter !== '',
     excludedSources.size > 0,
     !hideNoOp,
@@ -579,7 +746,9 @@ export default function ActivityLog() {
     setTypeFilter('');
     setLevelFilter('');
     setOperationId('');
-    setSinceFilter('');
+    // Back to the DEFAULT window, not all-history: resetting to '' would turn
+    // "Clear filters" into a one-click unbounded-query button.
+    setSinceFilter(defaultSince);
     setUntilFilter('');
     setExcludedSources(new Set());
     setHideNoOp(true);
@@ -1189,6 +1358,7 @@ export default function ActivityLog() {
                   InputProps={sinceFilter ? {
                     endAdornment: <IconButton size="small" onClick={() => setSinceFilter('')}><ClearIcon fontSize="small" /></IconButton>,
                   } : undefined}
+                  helperText={sinceFilter === defaultSince ? `Default: last ${DEFAULT_SINCE_HOURS}h — clear for all history` : undefined}
                   fullWidth
                 />
 
@@ -1374,6 +1544,7 @@ export default function ActivityLog() {
                 InputProps={sinceFilter ? {
                   endAdornment: <IconButton size="small" onClick={() => setSinceFilter('')}><ClearIcon fontSize="small" /></IconButton>,
                 } : undefined}
+                helperText={sinceFilter === defaultSince ? `Default: last ${DEFAULT_SINCE_HOURS}h — clear for all history` : undefined}
                 sx={{ minWidth: 180 }}
               />
 
@@ -1466,28 +1637,78 @@ export default function ActivityLog() {
         </Typography>
       )}
 
+      {/* Source-count failures are advisory: the feed itself may be fine, so
+          this is a separate, dismissable banner rather than a page-level error. */}
+      {sourcesError && (
+        <Alert
+          severity="warning"
+          data-testid="activity-sources-error"
+          sx={{ mb: 1 }}
+          onClose={() => setSourcesError(null)}
+        >
+          Source counts unavailable — the Sources filter may be incomplete. {sourcesError}
+        </Alert>
+      )}
+
       {/* Activity Feed */}
       <Paper sx={{ position: 'relative' }}>
         {/* Unobtrusive top-edge indicator for background refreshes */}
         {refreshing && (
           <LinearProgress sx={{ position: 'absolute', top: 0, left: 0, right: 0, borderRadius: '4px 4px 0 0' }} />
         )}
+        {/* Four DISTINGUISHABLE states, in priority order:
+              loading  — request outstanding, nothing to show yet
+              error    — request failed and there is no usable data
+              empty    — request succeeded and the log really is empty
+              table    — data (optionally with a stale-data warning on top)
+            Before this, all four collapsed into "No activity entries found." */}
         {loading ? (
-          <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
+          <Box data-testid="activity-loading" sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
             <CircularProgress />
           </Box>
+        ) : error && entries.length === 0 ? (
+          <Box sx={{ p: 3 }}>
+            <Alert
+              severity="error"
+              data-testid="activity-error"
+              action={
+                <Button color="inherit" size="small" onClick={handleRefresh}>
+                  Retry
+                </Button>
+              }
+            >
+              <AlertTitle>Could not load activity</AlertTitle>
+              {error}
+            </Alert>
+          </Box>
         ) : entries.length === 0 ? (
-          <Typography
-            variant="body2"
-            color="text.secondary"
-            sx={{ py: 4, textAlign: 'center' }}
-          >
-            {operationId
-              ? 'No activity entries for this operation (pre-migration).'
-              : 'No activity entries found.'}
-          </Typography>
+          <Box data-testid="activity-empty" sx={{ py: 4, textAlign: 'center' }}>
+            <Typography variant="body2" color="text.secondary">
+              {operationId
+                ? 'No activity entries for this operation (pre-migration).'
+                : sinceFilter
+                  ? 'No activity entries in the selected time range.'
+                  : 'No activity entries found.'}
+            </Typography>
+            {/* The default 24h window must never look like an empty log — give
+                the user the one-click way out of it. */}
+            {sinceFilter && !operationId && (
+              <Button size="small" sx={{ mt: 1 }} onClick={() => setSinceFilter('')}>
+                Search all history
+              </Button>
+            )}
+          </Box>
         ) : (
-          <Table size="small">
+          <>
+            {/* Stale data: the last refresh failed but the previously loaded
+                page is still on screen. Warning, not error — the rows are real,
+                just not current. */}
+            {error && (
+              <Alert severity="warning" data-testid="activity-stale-error" sx={{ m: 1 }}>
+                Showing the last successful result — the most recent refresh failed. {error}
+              </Alert>
+            )}
+            <Table size="small">
             <TableHead>
               <TableRow>
                 <TableCell>Time</TableCell>
@@ -1797,7 +2018,8 @@ export default function ActivityLog() {
                 );
               })}
             </TableBody>
-          </Table>
+            </Table>
+          </>
         )}
 
         <Stack direction="row" justifyContent="center" alignItems="center" spacing={2} sx={{ py: 2 }}>
