@@ -1,7 +1,7 @@
 // file: internal/server/server_more_test.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: 18a6b0a3-7e78-4e0f-8b8e-0e4c1dbde6de
-// last-edited: 2026-06-17
+// last-edited: 2026-08-12
 
 //go:build !windows
 
@@ -337,12 +337,26 @@ func TestServerStartGracefulShutdown(t *testing.T) {
 	time.Sleep(6 * time.Second)
 	_ = syscall.Kill(os.Getpid(), syscall.SIGTERM)
 
+	// The budget must exceed the shutdown path's OWN designed waits, or the test
+	// fails on a contended runner while the server is behaving correctly.
+	//
+	// It did: this was 5s, and the ops-registry step alone is granted 10s
+	// (server_lifecycle.go:580), with a hardcoded 2s goroutine drain inside it
+	// (operations/registry/registry.go:1042) that the CI log showed firing TWICE
+	// — 4s of deliberate waiting inside a 5s allowance, before the HTTP shutdown,
+	// the bgCtx drain and four store closes. Observed failing in CI on PR #2334
+	// (job 94188839037) with "Server exited" already logged: the server had shut
+	// down, the test just wasn't waiting long enough to see it.
+	//
+	// 60s is not a magic number to make red go green — a genuinely hung shutdown
+	// still fails here, and would still fail at 5s. It only removes the case where
+	// a correct shutdown loses a race with the assertion.
 	select {
 	case err := <-done:
 		if err != nil {
 			t.Fatalf("server Start returned error: %v", err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(60 * time.Second):
 		t.Fatal("timeout waiting for server shutdown")
 	}
 }

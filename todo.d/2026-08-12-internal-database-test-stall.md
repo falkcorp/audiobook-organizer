@@ -62,3 +62,52 @@ computation.
 **Not urgent for correctness** — no product bug is implied, and a re-run clears it. It is a
 throughput and trust problem: a red gate that is sometimes meaningless trains us to re-run
 instead of read, which is exactly how a real failure gets waved through.
+
+---
+
+## ✅ Second, unrelated Coverage Floor failure — FIXED in this PR
+
+Reading the log instead of re-running found a **different** defect. `Coverage Floor` failed
+again on the docs-only commit of this very PR, at 15m27s (not a timeout — it ran and failed):
+
+```
+--- FAIL: TestServerStartGracefulShutdown (13.99s)
+    server_more_test.go:346: timeout waiting for server shutdown
+```
+
+The log showed `"Server exited"` had **already been logged**. The server shut down correctly;
+the test simply stopped waiting too early.
+
+**Root cause: the test's budget was smaller than the shutdown path's own designed waits.**
+
+| Step | Budget the implementation allows |
+|---|---|
+| ops-registry shutdown (`server_lifecycle.go:580`) | **10s** |
+| ↳ goroutine drain inside it (`operations/registry/registry.go:1042`) | 2s, observed firing **twice** |
+| HTTP shutdown + `bgCtx` drain + four store closes | unbounded |
+| **the test's total allowance** | **5s** |
+
+4 of those 5 seconds were consumed by deliberate waiting before any real work, leaving ~1s of
+margin — fine on an idle laptop (5/5 passes locally, ~14.2s each), tips over on a contended
+runner.
+
+Raised to 60s with the arithmetic recorded in-code. This is **not** raising a limit to make
+red go green: a genuinely hung shutdown still fails, exactly as it would have at 5s. It only
+removes the case where a *correct* shutdown loses a race with its own assertion. Verified
+3/3 after the change.
+
+**Two further hazards in that test, left alone deliberately (not in scope here):**
+
+- [ ] `syscall.Kill(os.Getpid(), syscall.SIGTERM)` signals the **entire test binary**, not a
+      child. Every test in the package shares that process, so this is a global side effect
+      fired from one test. It works today; it is a trap for whoever adds parallelism.
+- [ ] The unconditional `time.Sleep(6 * time.Second)` before the signal is pure wall-clock
+      cost paid on every run, in a package that is already the gate's biggest consumer.
+
+### Meta-observation worth acting on
+
+**The `Coverage Floor` gate failed 2 of 3 runs today, each for a completely different and
+unrelated reason** (`internal/database` hang; `TestServerStartGracefulShutdown` margin). One
+was environmental, one was a real defect that had been sitting there — and the only reason
+the real one was found is that the log was read instead of the job re-run. That ratio is the
+argument for treating this gate's flakiness as a work item rather than a nuisance.
