@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/play_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3e5c9b17-84d0-4f26-a1b9-70c8de4531f5
 // last-edited: 2026-08-12
 
@@ -43,10 +43,17 @@ func TestPlay_ConformsToOracle(t *testing.T) {
 		t.Fatalf("seed position: %v", err)
 	}
 	body := startSession(t, h, mustSyncID(t, seed, seed.multiID), tok)
-	assertConformantPending(t, "post_api_items_id_play.json", body,
-		"fixture drift: audioTracks carry the synthetic book's six identical 1662s durations, "+
-			"2049-2054 byte sizes and timeBase 1/1000 against the oracle's real per-track "+
-			"values and 1/14112000. Track startOffset accumulates the same error")
+	assertConformantExcept(t, "post_api_items_id_play.json", body,
+		mergeAllowances(t, bookBodyAllowances(), map[string]allowance{
+			// The play body carries the track list under audioTracks and the book's
+			// total under a bare `duration`, so neither is reached by the shared keys.
+			"duration":               {Reason: durationReason + " (summed over six tracks)", Within: 3.0},
+			"audioTracks[].duration": {Reason: durationReason, Within: 0.5},
+			"audioTracks[].title":    {Reason: trackTitleReason},
+			"deviceInfo.deviceType": {Reason: "the oracle was captured from a wearable; we " +
+				"do not derive deviceType from the User-Agent at all and report unknown. " +
+				"Unlike ipAddress/userAgent this is a real gap, not a caller artifact"},
+		}))
 }
 
 // TestPlay_CurrentTimeIsTrueLatestPosition pins verified requirement 16.

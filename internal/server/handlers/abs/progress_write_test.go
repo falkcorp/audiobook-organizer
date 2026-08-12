@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/progress_write_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2b7f4e91-8a05-4c63-b1d8-70e396a5cf42
 // last-edited: 2026-08-12
 
@@ -701,10 +701,10 @@ func TestBookmarks_ListErrorIs5xxNotEmptyList(t *testing.T) {
 func TestMediaProgressGet_ConformsToOracle(t *testing.T) {
 	w := newWriteHarness(t)
 	w.patch(t, map[string]any{"currentTime": 42.0, "duration": 9975.48, "isFinished": false})
-	assertConformantPending(t, "get_api_me_progress_id.json", w.getRow(t),
-		"fixture drift: the oracle's duration 9975.48 is the sum of six REAL Odyssey track "+
-			"durations; the fake library seeds a flat 9975. Goes strict when the seed is "+
-			"derived from the oracle")
+	assertConformantExcept(t, "get_api_me_progress_id.json", w.getRow(t), map[string]allowance{
+		"duration": {Reason: durationReason, Within: 0.5},
+		"progress": {Reason: progressReason},
+	})
 }
 
 func TestMediaProgressList_ConformsToOracle(t *testing.T) {
@@ -714,8 +714,10 @@ func TestMediaProgressList_ConformsToOracle(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("got %d %s", code, raw)
 	}
-	assertConformantPending(t, "get_api_me_progress.json", body,
-		"same synthetic-duration drift as get_api_me_progress_id.json")
+	assertConformantExcept(t, "get_api_me_progress.json", body, map[string]allowance{
+		"mediaProgress[].duration": {Reason: durationReason, Within: 0.5},
+		"mediaProgress[].progress": {Reason: progressReason},
+	})
 }
 
 func TestBookmarkCreate_ConformsToOracle(t *testing.T) {
