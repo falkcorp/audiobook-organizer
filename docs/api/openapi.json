@@ -2,25 +2,678 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Audiobook Organizer API",
-    "version": "0.215.0",
+    "version": "0.218.1",
     "description": "REST API for the audiobook organizer."
   },
   "servers": [
     {
-      "url": "/api/v1"
+      "url": "/api/v1",
+      "description": "Relative path (production and same-origin clients)"
+    },
+    {
+      "url": "http://localhost:8484/api/v1",
+      "description": "Local development server"
     }
   ],
   "components": {
+    "parameters": {
+      "idPath": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "ulid"
+        }
+      },
+      "intIdPath": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "integer"
+        }
+      },
+      "limitQuery": {
+        "name": "limit",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "default": 50,
+          "minimum": 1,
+          "maximum": 10000
+        }
+      },
+      "offsetQuery": {
+        "name": "offset",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "default": 0,
+          "minimum": 0
+        }
+      },
+      "dryRunQuery": {
+        "name": "dry_run",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "enum": [
+            "true",
+            "false"
+          ]
+        },
+        "description": "When \"true\", shows what would happen without making changes."
+      }
+    },
+    "schemas": {
+      "Book": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "title": {
+            "type": "string"
+          },
+          "author_id": {
+            "type": "integer",
+            "nullable": true
+          },
+          "author_name": {
+            "type": "string",
+            "nullable": true
+          },
+          "series_id": {
+            "type": "integer",
+            "nullable": true
+          },
+          "series_name": {
+            "type": "string",
+            "nullable": true
+          },
+          "series_position": {
+            "type": "integer",
+            "nullable": true
+          },
+          "file_path": {
+            "type": "string"
+          },
+          "duration": {
+            "type": "integer",
+            "description": "Duration in seconds",
+            "nullable": true
+          },
+          "narrator": {
+            "type": "string",
+            "nullable": true
+          },
+          "language": {
+            "type": "string",
+            "nullable": true
+          },
+          "publisher": {
+            "type": "string",
+            "nullable": true
+          },
+          "cover_image": {
+            "type": "string",
+            "nullable": true
+          },
+          "bitrate": {
+            "type": "integer",
+            "description": "Bitrate in kbps",
+            "nullable": true
+          },
+          "codec": {
+            "type": "string",
+            "nullable": true
+          },
+          "sample_rate": {
+            "type": "integer",
+            "description": "Sample rate in Hz",
+            "nullable": true
+          },
+          "quality": {
+            "type": "string",
+            "nullable": true
+          },
+          "is_primary_version": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "version_group_id": {
+            "type": "string",
+            "format": "ulid",
+            "nullable": true
+          },
+          "version_notes": {
+            "type": "string",
+            "nullable": true
+          },
+          "deleted_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "file_path",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "Author": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "created_at"
+        ]
+      },
+      "Series": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "author_id": {
+            "type": "integer",
+            "nullable": true
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "created_at"
+        ]
+      },
+      "ImportPath": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_scan": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "book_count": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "path",
+          "name",
+          "enabled",
+          "created_at",
+          "book_count"
+        ]
+      },
+      "MetadataResult": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "author": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "publisher": {
+            "type": "string",
+            "nullable": true
+          },
+          "publish_year": {
+            "type": "integer",
+            "nullable": true
+          },
+          "isbn": {
+            "type": "string",
+            "nullable": true
+          },
+          "cover_url": {
+            "type": "string",
+            "nullable": true
+          },
+          "language": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "SystemStatus": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string"
+          },
+          "library": {
+            "type": "object",
+            "properties": {
+              "book_count": {
+                "type": "integer"
+              },
+              "folder_count": {
+                "type": "integer"
+              },
+              "total_size": {
+                "type": "integer",
+                "description": "Total size in bytes"
+              }
+            }
+          },
+          "memory": {
+            "type": "object",
+            "properties": {
+              "alloc_bytes": {
+                "type": "integer"
+              },
+              "total_alloc_bytes": {
+                "type": "integer"
+              },
+              "sys_bytes": {
+                "type": "integer"
+              },
+              "num_gc": {
+                "type": "integer"
+              }
+            }
+          },
+          "runtime": {
+            "type": "object",
+            "properties": {
+              "go_version": {
+                "type": "string"
+              },
+              "num_goroutine": {
+                "type": "integer"
+              },
+              "num_cpu": {
+                "type": "integer"
+              }
+            }
+          }
+        }
+      },
+      "Config": {
+        "type": "object",
+        "properties": {
+          "root_dir": {
+            "type": "string"
+          },
+          "database_path": {
+            "type": "string"
+          },
+          "playlist_dir": {
+            "type": "string"
+          },
+          "organization_strategy": {
+            "type": "string",
+            "enum": [
+              "copy",
+              "hardlink",
+              "reflink",
+              "auto"
+            ]
+          },
+          "scan_on_startup": {
+            "type": "boolean"
+          },
+          "auto_organize": {
+            "type": "boolean"
+          },
+          "folder_naming_pattern": {
+            "type": "string"
+          },
+          "file_naming_pattern": {
+            "type": "string"
+          },
+          "auto_fetch_metadata": {
+            "type": "boolean"
+          },
+          "log_level": {
+            "type": "string",
+            "enum": [
+              "debug",
+              "info",
+              "warn",
+              "error"
+            ]
+          }
+        }
+      },
+      "Work": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "title": {
+            "type": "string"
+          },
+          "author_name": {
+            "type": "string",
+            "nullable": true
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "VersionGroup": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "primary_book_id": {
+            "type": "string",
+            "format": "ulid",
+            "nullable": true
+          },
+          "books": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Book"
+            }
+          }
+        }
+      },
+      "BlockedHash": {
+        "type": "object",
+        "properties": {
+          "hash": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Operation": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "progress": {
+            "type": "number"
+          },
+          "message": {
+            "type": "string",
+            "nullable": true
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        }
+      },
+      "Message": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "PaginatedBooks": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "integer",
+            "description": "Total number of matching audiobooks (not page size)"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Book"
+            }
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          }
+        }
+      },
+      "CountResponse": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "integer"
+          }
+        }
+      },
+      "DuplicateGroupsResponse": {
+        "type": "object",
+        "properties": {
+          "groups": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/Book"
+              }
+            }
+          },
+          "group_count": {
+            "type": "integer"
+          },
+          "duplicate_count": {
+            "type": "integer"
+          }
+        }
+      },
+      "AuthorAlias": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "author_id": {
+            "type": "integer"
+          },
+          "alias": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "BrokenSegmentResult": {
+        "type": "object",
+        "properties": {
+          "books_checked": {
+            "type": "integer"
+          },
+          "broken_books": {
+            "type": "integer"
+          },
+          "marked_for_review": {
+            "type": "integer"
+          },
+          "details": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "book_id": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "file_path": {
+                  "type": "string"
+                },
+                "total_segments": {
+                  "type": "integer"
+                },
+                "missing_segments": {
+                  "type": "integer"
+                },
+                "missing_paths": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "MergeDuplicatesResult": {
+        "type": "object",
+        "properties": {
+          "total_no_vg": {
+            "type": "integer"
+          },
+          "matched_to_vg": {
+            "type": "integer"
+          },
+          "self_duplicates": {
+            "type": "integer"
+          },
+          "metadata_merged": {
+            "type": "integer"
+          },
+          "soft_deleted": {
+            "type": "integer"
+          },
+          "remaining_orphans": {
+            "type": "integer"
+          },
+          "errors": {
+            "type": "integer"
+          },
+          "details": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "duplicate_id": {
+                  "type": "string"
+                },
+                "primary_id": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "fields_merged": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "action": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "securitySchemes": {
       "session": {
         "type": "apiKey",
         "in": "cookie",
         "name": "ao_session"
+      },
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
       }
     }
   },
   "paths": {
-    "/api/v1/accept-invite": {
+    "/accept-invite": {
       "post": {
         "operationId": "handleAcceptInvite",
         "summary": "Accept Invite",
@@ -44,7 +697,7 @@
         }
       }
     },
-    "/api/v1/activity": {
+    "/activity": {
       "get": {
         "operationId": "listActivity",
         "summary": "list Activity",
@@ -72,7 +725,7 @@
         }
       }
     },
-    "/api/v1/activity/compact": {
+    "/activity/compact": {
       "post": {
         "operationId": "compactActivity",
         "summary": "compact Activity",
@@ -100,7 +753,7 @@
         }
       }
     },
-    "/api/v1/activity/sources": {
+    "/activity/sources": {
       "get": {
         "operationId": "listActivitySources",
         "summary": "list Activity Sources",
@@ -128,7 +781,7 @@
         }
       }
     },
-    "/api/v1/ai/parse-filename": {
+    "/ai/parse-filename": {
       "post": {
         "operationId": "parseFilenameWithAI",
         "summary": "parse Filename With A I",
@@ -156,7 +809,311 @@
         }
       }
     },
-    "/api/v1/ai/test-connection": {
+    "/ai/scans": {
+      "post": {
+        "tags": [
+          "AIScans"
+        ],
+        "summary": "Start an AI scan",
+        "description": "Starts a new AI-powered metadata scan of the library.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "scope": {
+                    "type": "string",
+                    "description": "Scan scope filter"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "AI scan started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "AIScans"
+        ],
+        "summary": "List AI scans",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of AI scans",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "status": {
+                        "type": "string"
+                      },
+                      "created_at": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "completed_at": {
+                        "type": "string",
+                        "format": "date-time",
+                        "nullable": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ai/scans/compare": {
+      "get": {
+        "tags": [
+          "AIScans"
+        ],
+        "summary": "Compare AI scans",
+        "description": "Compares results between two AI scans.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "scan_a",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scan_b",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Comparison results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ai/scans/{id}": {
+      "get": {
+        "tags": [
+          "AIScans"
+        ],
+        "summary": "Get AI scan details",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/idPath"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "AI scan details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Scan not found"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "AIScans"
+        ],
+        "summary": "Delete an AI scan",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/idPath"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Scan deleted"
+          },
+          "404": {
+            "description": "Scan not found"
+          }
+        }
+      }
+    },
+    "/ai/scans/{id}/apply": {
+      "post": {
+        "tags": [
+          "AIScans"
+        ],
+        "summary": "Apply AI scan results",
+        "description": "Applies the suggestions from an AI scan to the library.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/idPath"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "result_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Results applied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Message"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ai/scans/{id}/cancel": {
+      "post": {
+        "tags": [
+          "AIScans"
+        ],
+        "summary": "Cancel an AI scan",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/idPath"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Scan cancelled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Message"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ai/scans/{id}/results": {
+      "get": {
+        "tags": [
+          "AIScans"
+        ],
+        "summary": "Get AI scan results",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/idPath"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Scan results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ai/test-connection": {
       "post": {
         "operationId": "testAIConnection",
         "summary": "test A I Connection",
@@ -184,7 +1141,7 @@
         }
       }
     },
-    "/api/v1/audiobooks": {
+    "/audiobooks": {
       "get": {
         "operationId": "listAudiobooks",
         "summary": "list Audiobooks",
@@ -212,7 +1169,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/batch": {
+    "/audiobooks/batch": {
       "post": {
         "operationId": "batchUpdateAudiobooks",
         "summary": "batch Update Audiobooks",
@@ -240,7 +1197,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/batch-operations": {
+    "/audiobooks/batch-operations": {
       "post": {
         "operationId": "batchOperations",
         "summary": "batch Operations",
@@ -268,7 +1225,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/batch-tags": {
+    "/audiobooks/batch-tags": {
       "post": {
         "operationId": "batchUpdateTags",
         "summary": "batch Update Tags",
@@ -296,7 +1253,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/batch-write-back": {
+    "/audiobooks/batch-write-back": {
       "post": {
         "operationId": "batchWriteBackAudiobooks",
         "summary": "batch Write Back Audiobooks",
@@ -324,7 +1281,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/bulk-write-back": {
+    "/audiobooks/bulk-write-back": {
       "post": {
         "operationId": "handleBulkWriteBack",
         "summary": "Bulk Write Back",
@@ -352,7 +1309,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/count": {
+    "/audiobooks/count": {
       "get": {
         "operationId": "countAudiobooks",
         "summary": "count Audiobooks",
@@ -380,7 +1337,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/duplicates": {
+    "/audiobooks/duplicates": {
       "get": {
         "operationId": "listDuplicateAudiobooks",
         "summary": "list Duplicate Audiobooks",
@@ -408,7 +1365,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/duplicates/dismiss": {
+    "/audiobooks/duplicates/dismiss": {
       "post": {
         "operationId": "dismissBookDuplicateGroup",
         "summary": "dismiss Book Duplicate Group",
@@ -436,7 +1393,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/duplicates/merge": {
+    "/audiobooks/duplicates/merge": {
       "post": {
         "operationId": "mergeBookDuplicatesAsVersions",
         "summary": "merge Book Duplicates As Versions",
@@ -464,7 +1421,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/duplicates/scan": {
+    "/audiobooks/duplicates/scan": {
       "post": {
         "operationId": "scanBookDuplicates",
         "summary": "scan Book Duplicates",
@@ -492,7 +1449,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/duplicates/scan-results": {
+    "/audiobooks/duplicates/scan-results": {
       "get": {
         "operationId": "listBookDuplicateScanResults",
         "summary": "list Book Duplicate Scan Results",
@@ -520,7 +1477,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/merge": {
+    "/audiobooks/merge": {
       "post": {
         "operationId": "mergeBooks",
         "summary": "merge Books",
@@ -548,7 +1505,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/purge-soft-deleted": {
+    "/audiobooks/purge-soft-deleted": {
       "delete": {
         "operationId": "purgeSoftDeletedAudiobooks",
         "summary": "purge Soft Deleted Audiobooks",
@@ -576,7 +1533,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/soft-deleted": {
+    "/audiobooks/soft-deleted": {
       "get": {
         "operationId": "listSoftDeletedAudiobooks",
         "summary": "list Soft Deleted Audiobooks",
@@ -604,7 +1561,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/{id}": {
+    "/audiobooks/{id}": {
       "get": {
         "operationId": "getAudiobook",
         "summary": "get Audiobook",
@@ -684,7 +1641,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/{id}/alternative-titles": {
+    "/audiobooks/{id}/alternative-titles": {
       "get": {
         "operationId": "getBookAlternativeTitles",
         "summary": "get Book Alternative Titles",
@@ -764,7 +1721,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/{id}/apply-metadata": {
+    "/audiobooks/{id}/apply-metadata": {
       "post": {
         "operationId": "applyAudiobookMetadata",
         "summary": "apply Audiobook Metadata",
@@ -792,7 +1749,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/{id}/changelog": {
+    "/audiobooks/{id}/changelog": {
       "get": {
         "operationId": "getBookChangelog",
         "summary": "get Book Changelog",
@@ -820,7 +1777,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/{id}/changes": {
+    "/audiobooks/{id}/changes": {
       "get": {
         "operationId": "getBookChanges",
         "summary": "get Book Changes",
@@ -848,7 +1805,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/{id}/cover": {
+    "/audiobooks/{id}/cover": {
       "get": {
         "operationId": "serveAudiobookCover",
         "summary": "serve Audiobook Cover",
@@ -876,7 +1833,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/{id}/cover-history": {
+    "/audiobooks/{id}/cover-history": {
       "get": {
         "operationId": "handleListCoverHistory",
         "summary": "List Cover History",
@@ -904,7 +1861,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/{id}/cover-history/restore": {
+    "/audiobooks/{id}/cover-history/restore": {
       "post": {
         "operationId": "handleRestoreCover",
         "summary": "Restore Cover",
@@ -932,7 +1889,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/{id}/cow-versions": {
+    "/audiobooks/{id}/cow-versions": {
       "get": {
         "operationId": "listBookCOWVersions",
         "summary": "list Book C O W Versions",
@@ -960,7 +1917,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/{id}/cow-versions/prune": {
+    "/audiobooks/{id}/cow-versions/prune": {
       "post": {
         "operationId": "pruneBookCOWVersions",
         "summary": "prune Book C O W Versions",
@@ -988,7 +1945,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/{id}/external-ids": {
+    "/audiobooks/{id}/external-ids": {
       "get": {
         "operationId": "getAudiobookExternalIDs",
         "summary": "get Audiobook External I Ds",
@@ -1016,7 +1973,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/{id}/extract-track-info": {
+    "/audiobooks/{id}/extract-track-info": {
       "post": {
         "operationId": "extractTrackInfo",
         "summary": "extract Track Info",
@@ -1044,7 +2001,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/{id}/fetch-metadata": {
+    "/audiobooks/{id}/fetch-metadata": {
       "post": {
         "operationId": "fetchAudiobookMetadata",
         "summary": "fetch Audiobook Metadata",
@@ -1072,7 +2029,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/{id}/field-states": {
+    "/audiobooks/{id}/field-states": {
       "get": {
         "operationId": "getAudiobookFieldStates",
         "summary": "get Audiobook Field States",
@@ -1100,7 +2057,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/{id}/files": {
+    "/audiobooks/{id}/files": {
       "get": {
         "operationId": "listBookFiles",
         "summary": "list Book Files",
@@ -1128,7 +2085,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/{id}/mark-no-match": {
+    "/audiobooks/{id}/mark-no-match": {
       "post": {
         "operationId": "markAudiobookNoMatch",
         "summary": "mark Audiobook No Match",
@@ -1156,7 +2113,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/{id}/metadata-history": {
+    "/audiobooks/{id}/metadata-history": {
       "get": {
         "operationId": "getBookMetadataHistory",
         "summary": "get Book Metadata History",
@@ -1184,7 +2141,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/{id}/metadata-history/{field}": {
+    "/audiobooks/{id}/metadata-history/{field}": {
       "get": {
         "operationId": "getFieldMetadataHistory",
         "summary": "get Field Metadata History",
@@ -1212,7 +2169,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/{id}/metadata-history/{field}/undo": {
+    "/audiobooks/{id}/metadata-history/{field}/undo": {
       "post": {
         "operationId": "undoMetadataChange",
         "summary": "undo Metadata Change",
@@ -1240,7 +2197,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/{id}/move-segments": {
+    "/audiobooks/{id}/move-segments": {
       "post": {
         "operationId": "moveSegments",
         "summary": "move Segments",
@@ -1268,7 +2225,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/{id}/narrators": {
+    "/audiobooks/{id}/narrators": {
       "get": {
         "operationId": "listAudiobookNarrators",
         "summary": "list Audiobook Narrators",
@@ -1322,7 +2279,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/{id}/organize": {
+    "/audiobooks/{id}/organize": {
       "post": {
         "operationId": "organizeBook",
         "summary": "organize Book",
@@ -1350,7 +2307,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/{id}/parse-with-ai": {
+    "/audiobooks/{id}/parse-with-ai": {
       "post": {
         "operationId": "parseAudiobookWithAI",
         "summary": "parse Audiobook With A I",
@@ -1378,7 +2335,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/{id}/path-history": {
+    "/audiobooks/{id}/path-history": {
       "get": {
         "operationId": "getBookPathHistory",
         "summary": "get Book Path History",
@@ -1406,7 +2363,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/{id}/preview-organize": {
+    "/audiobooks/{id}/preview-organize": {
       "get": {
         "operationId": "previewOrganize",
         "summary": "preview Organize",
@@ -1434,7 +2391,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/{id}/relocate": {
+    "/audiobooks/{id}/relocate": {
       "post": {
         "operationId": "relocateBookFiles",
         "summary": "relocate Book Files",
@@ -1462,7 +2419,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/{id}/rename/apply": {
+    "/audiobooks/{id}/rename/apply": {
       "post": {
         "operationId": "applyRename",
         "summary": "apply Rename",
@@ -1490,7 +2447,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/{id}/rename/preview": {
+    "/audiobooks/{id}/rename/preview": {
       "post": {
         "operationId": "previewRename",
         "summary": "preview Rename",
@@ -1518,7 +2475,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/{id}/restore": {
+    "/audiobooks/{id}/restore": {
       "post": {
         "operationId": "restoreAudiobook",
         "summary": "restore Audiobook",
@@ -1546,7 +2503,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/{id}/revert-metadata": {
+    "/audiobooks/{id}/revert-metadata": {
       "post": {
         "operationId": "revertAudiobookMetadata",
         "summary": "revert Audiobook Metadata",
@@ -1574,7 +2531,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/{id}/search-metadata": {
+    "/audiobooks/{id}/search-metadata": {
       "post": {
         "operationId": "searchAudiobookMetadata",
         "summary": "search Audiobook Metadata",
@@ -1602,7 +2559,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/{id}/segments": {
+    "/audiobooks/{id}/segments": {
       "get": {
         "operationId": "listAudiobookSegments",
         "summary": "list Audiobook Segments",
@@ -1630,7 +2587,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/{id}/segments/{segmentId}/tags": {
+    "/audiobooks/{id}/segments/{segmentId}/tags": {
       "get": {
         "operationId": "getSegmentTags",
         "summary": "get Segment Tags",
@@ -1658,7 +2615,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/{id}/set-primary": {
+    "/audiobooks/{id}/set-primary": {
       "put": {
         "operationId": "setAudiobookPrimary",
         "summary": "set Audiobook Primary",
@@ -1686,7 +2643,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/{id}/similar": {
+    "/audiobooks/{id}/similar": {
       "get": {
         "operationId": "handleSimilarBooks",
         "summary": "Similar Books",
@@ -1714,7 +2671,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/{id}/split-to-books": {
+    "/audiobooks/{id}/split-to-books": {
       "post": {
         "operationId": "splitSegmentsToBooks",
         "summary": "split Segments To Books",
@@ -1742,7 +2699,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/{id}/split-version": {
+    "/audiobooks/{id}/split-version": {
       "post": {
         "operationId": "splitVersion",
         "summary": "split Version",
@@ -1770,7 +2727,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/{id}/tags": {
+    "/audiobooks/{id}/tags": {
       "get": {
         "operationId": "getAudiobookTags",
         "summary": "get Audiobook Tags",
@@ -1798,7 +2755,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/{id}/tags-detailed": {
+    "/audiobooks/{id}/tags-detailed": {
       "get": {
         "operationId": "getBookTagsDetailed",
         "summary": "get Book Tags Detailed",
@@ -1826,7 +2783,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/{id}/undo-last-apply": {
+    "/audiobooks/{id}/undo-last-apply": {
       "post": {
         "operationId": "undoLastApply",
         "summary": "undo Last Apply",
@@ -1854,7 +2811,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/{id}/user-tags": {
+    "/audiobooks/{id}/user-tags": {
       "get": {
         "operationId": "getBookUserTags",
         "summary": "get Book User Tags",
@@ -1882,7 +2839,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/{id}/versions": {
+    "/audiobooks/{id}/versions": {
       "get": {
         "operationId": "listAudiobookVersions",
         "summary": "list Audiobook Versions",
@@ -1936,7 +2893,7 @@
         }
       }
     },
-    "/api/v1/audiobooks/{id}/write-back": {
+    "/audiobooks/{id}/write-back": {
       "post": {
         "operationId": "writeBackAudiobookMetadata",
         "summary": "write Back Audiobook Metadata",
@@ -1964,7 +2921,267 @@
         }
       }
     },
-    "/api/v1/authors": {
+    "/auth/login": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Login",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "username": {
+                    "type": "string"
+                  },
+                  "password": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "username",
+                  "password"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Login successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "token": {
+                      "type": "string"
+                    },
+                    "user": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "username": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials"
+          }
+        }
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Logout",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Logged out"
+          }
+        }
+      }
+    },
+    "/auth/me": {
+      "get": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Get current user",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current user info",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "username": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated"
+          }
+        }
+      }
+    },
+    "/auth/sessions": {
+      "get": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "List active sessions",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of sessions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "created_at": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "last_active": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "user_agent": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/sessions/{id}": {
+      "delete": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Revoke a session",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Session revoked"
+          },
+          "404": {
+            "description": "Session not found"
+          }
+        }
+      }
+    },
+    "/auth/setup": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Setup initial admin account",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "username": {
+                    "type": "string"
+                  },
+                  "password": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "username",
+                  "password"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Admin account created"
+          },
+          "400": {
+            "description": "Setup already completed or invalid input"
+          },
+          "409": {
+            "description": "Admin already exists"
+          }
+        }
+      }
+    },
+    "/auth/status": {
+      "get": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Check authentication status",
+        "description": "Returns whether auth is enabled and if initial setup is needed.",
+        "responses": {
+          "200": {
+            "description": "Auth status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "auth_enabled": {
+                      "type": "boolean"
+                    },
+                    "setup_required": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/authors": {
       "get": {
         "operationId": "listAuthors",
         "summary": "list Authors",
@@ -1992,7 +3209,7 @@
         }
       }
     },
-    "/api/v1/authors/bulk-delete": {
+    "/authors/bulk-delete": {
       "post": {
         "operationId": "bulkDeleteAuthors",
         "summary": "bulk Delete Authors",
@@ -2020,7 +3237,7 @@
         }
       }
     },
-    "/api/v1/authors/count": {
+    "/authors/count": {
       "get": {
         "operationId": "countAuthors",
         "summary": "count Authors",
@@ -2048,7 +3265,7 @@
         }
       }
     },
-    "/api/v1/authors/duplicates": {
+    "/authors/duplicates": {
       "get": {
         "operationId": "listDuplicateAuthors",
         "summary": "list Duplicate Authors",
@@ -2076,7 +3293,7 @@
         }
       }
     },
-    "/api/v1/authors/duplicates/ai-review": {
+    "/authors/duplicates/ai-review": {
       "post": {
         "operationId": "aiReviewDuplicateAuthors",
         "summary": "ai Review Duplicate Authors",
@@ -2104,7 +3321,7 @@
         }
       }
     },
-    "/api/v1/authors/duplicates/ai-review/apply": {
+    "/authors/duplicates/ai-review/apply": {
       "post": {
         "operationId": "applyAIAuthorReview",
         "summary": "apply A I Author Review",
@@ -2132,7 +3349,7 @@
         }
       }
     },
-    "/api/v1/authors/duplicates/refresh": {
+    "/authors/duplicates/refresh": {
       "post": {
         "operationId": "refreshDuplicateAuthors",
         "summary": "refresh Duplicate Authors",
@@ -2160,7 +3377,7 @@
         }
       }
     },
-    "/api/v1/authors/merge": {
+    "/authors/merge": {
       "post": {
         "operationId": "mergeAuthors",
         "summary": "merge Authors",
@@ -2188,7 +3405,7 @@
         }
       }
     },
-    "/api/v1/authors/{id}": {
+    "/authors/{id}": {
       "delete": {
         "operationId": "deleteAuthorHandler",
         "summary": "delete Author",
@@ -2216,7 +3433,7 @@
         }
       }
     },
-    "/api/v1/authors/{id}/aliases": {
+    "/authors/{id}/aliases": {
       "get": {
         "operationId": "getAuthorAliases",
         "summary": "get Author Aliases",
@@ -2270,7 +3487,7 @@
         }
       }
     },
-    "/api/v1/authors/{id}/aliases/{aliasId}": {
+    "/authors/{id}/aliases/{aliasId}": {
       "delete": {
         "operationId": "deleteAuthorAlias",
         "summary": "delete Author Alias",
@@ -2298,7 +3515,7 @@
         }
       }
     },
-    "/api/v1/authors/{id}/books": {
+    "/authors/{id}/books": {
       "get": {
         "operationId": "getAuthorBooks",
         "summary": "get Author Books",
@@ -2326,7 +3543,7 @@
         }
       }
     },
-    "/api/v1/authors/{id}/name": {
+    "/authors/{id}/name": {
       "put": {
         "operationId": "renameAuthor",
         "summary": "rename Author",
@@ -2354,7 +3571,7 @@
         }
       }
     },
-    "/api/v1/authors/{id}/reclassify-as-narrator": {
+    "/authors/{id}/reclassify-as-narrator": {
       "post": {
         "operationId": "reclassifyAuthorAsNarrator",
         "summary": "reclassify Author As Narrator",
@@ -2382,7 +3599,7 @@
         }
       }
     },
-    "/api/v1/authors/{id}/resolve-production": {
+    "/authors/{id}/resolve-production": {
       "post": {
         "operationId": "resolveProductionAuthor",
         "summary": "resolve Production Author",
@@ -2410,7 +3627,7 @@
         }
       }
     },
-    "/api/v1/authors/{id}/split": {
+    "/authors/{id}/split": {
       "post": {
         "operationId": "splitCompositeAuthor",
         "summary": "split Composite Author",
@@ -2438,7 +3655,7 @@
         }
       }
     },
-    "/api/v1/authors/{id}/tags": {
+    "/authors/{id}/tags": {
       "get": {
         "operationId": "handleGetAuthorTags",
         "summary": "Get Author Tags",
@@ -2492,7 +3709,7 @@
         }
       }
     },
-    "/api/v1/backup/create": {
+    "/backup/create": {
       "post": {
         "operationId": "createBackup",
         "summary": "create Backup",
@@ -2520,7 +3737,7 @@
         }
       }
     },
-    "/api/v1/backup/list": {
+    "/backup/list": {
       "get": {
         "operationId": "listBackups",
         "summary": "list Backups",
@@ -2548,7 +3765,7 @@
         }
       }
     },
-    "/api/v1/backup/restore": {
+    "/backup/restore": {
       "post": {
         "operationId": "restoreBackup",
         "summary": "restore Backup",
@@ -2576,7 +3793,7 @@
         }
       }
     },
-    "/api/v1/backup/{filename}": {
+    "/backup/{filename}": {
       "delete": {
         "operationId": "deleteBackup",
         "summary": "delete Backup",
@@ -2604,7 +3821,7 @@
         }
       }
     },
-    "/api/v1/blocked-hashes": {
+    "/blocked-hashes": {
       "get": {
         "operationId": "listBlockedHashes",
         "summary": "list Blocked Hashes",
@@ -2658,7 +3875,7 @@
         }
       }
     },
-    "/api/v1/blocked-hashes/{hash}": {
+    "/blocked-hashes/{hash}": {
       "delete": {
         "operationId": "removeBlockedHash",
         "summary": "remove Blocked Hash",
@@ -2686,7 +3903,7 @@
         }
       }
     },
-    "/api/v1/books": {
+    "/books": {
       "get": {
         "operationId": "handleListITunesBooks",
         "summary": "List I Tunes Books",
@@ -2714,7 +3931,7 @@
         }
       }
     },
-    "/api/v1/books/{id}/position": {
+    "/books/{id}/position": {
       "post": {
         "operationId": "handleSetPosition",
         "summary": "Set Position",
@@ -2760,7 +3977,7 @@
         }
       }
     },
-    "/api/v1/books/{id}/state": {
+    "/books/{id}/state": {
       "get": {
         "operationId": "handleGetBookState",
         "summary": "Get Book State",
@@ -2784,7 +4001,7 @@
         }
       }
     },
-    "/api/v1/books/{id}/status": {
+    "/books/{id}/status": {
       "patch": {
         "operationId": "handleSetBookStatus",
         "summary": "Set Book Status",
@@ -2830,7 +4047,7 @@
         }
       }
     },
-    "/api/v1/books/{id}/versions/{vid}": {
+    "/books/{id}/versions/{vid}": {
       "delete": {
         "operationId": "handleTrashVersion",
         "summary": "Trash Version",
@@ -2858,7 +4075,7 @@
         }
       }
     },
-    "/api/v1/books/{id}/versions/{vid}/purge-now": {
+    "/books/{id}/versions/{vid}/purge-now": {
       "post": {
         "operationId": "handlePurgeVersion",
         "summary": "Purge Version",
@@ -2886,7 +4103,7 @@
         }
       }
     },
-    "/api/v1/books/{id}/versions/{vid}/restore": {
+    "/books/{id}/versions/{vid}/restore": {
       "post": {
         "operationId": "handleRestoreVersion",
         "summary": "Restore Version",
@@ -2914,7 +4131,7 @@
         }
       }
     },
-    "/api/v1/compare": {
+    "/compare": {
       "get": {
         "operationId": "unknown",
         "summary": "unknown",
@@ -2938,7 +4155,7 @@
         }
       }
     },
-    "/api/v1/config": {
+    "/config": {
       "get": {
         "operationId": "getConfig",
         "summary": "get Config",
@@ -2992,7 +4209,7 @@
         }
       }
     },
-    "/api/v1/covers/local/{filename}": {
+    "/covers/local/{filename}": {
       "get": {
         "operationId": "handleLocalCover",
         "summary": "Local Cover",
@@ -3020,7 +4237,7 @@
         }
       }
     },
-    "/api/v1/covers/proxy": {
+    "/covers/proxy": {
       "get": {
         "operationId": "handleCoverProxy",
         "summary": "Cover Proxy",
@@ -3048,7 +4265,7 @@
         }
       }
     },
-    "/api/v1/dashboard": {
+    "/dashboard": {
       "get": {
         "operationId": "getDashboard",
         "summary": "get Dashboard",
@@ -3076,7 +4293,7 @@
         }
       }
     },
-    "/api/v1/dedup/candidates": {
+    "/dedup/candidates": {
       "get": {
         "operationId": "listDedupCandidates",
         "summary": "list Dedup Candidates",
@@ -3104,7 +4321,7 @@
         }
       }
     },
-    "/api/v1/dedup/candidates/bulk-merge": {
+    "/dedup/candidates/bulk-merge": {
       "post": {
         "operationId": "bulkMergeDedupCandidates",
         "summary": "bulk Merge Dedup Candidates",
@@ -3132,7 +4349,7 @@
         }
       }
     },
-    "/api/v1/dedup/candidates/dismiss-cluster": {
+    "/dedup/candidates/dismiss-cluster": {
       "post": {
         "operationId": "dismissDedupCluster",
         "summary": "dismiss Dedup Cluster",
@@ -3160,7 +4377,7 @@
         }
       }
     },
-    "/api/v1/dedup/candidates/export": {
+    "/dedup/candidates/export": {
       "get": {
         "operationId": "exportDedupCandidates",
         "summary": "export Dedup Candidates",
@@ -3188,7 +4405,7 @@
         }
       }
     },
-    "/api/v1/dedup/candidates/merge-cluster": {
+    "/dedup/candidates/merge-cluster": {
       "post": {
         "operationId": "mergeDedupCluster",
         "summary": "merge Dedup Cluster",
@@ -3216,7 +4433,7 @@
         }
       }
     },
-    "/api/v1/dedup/candidates/merge-series": {
+    "/dedup/candidates/merge-series": {
       "post": {
         "operationId": "mergeDedupCandidateSeries",
         "summary": "merge Dedup Candidate Series",
@@ -3244,7 +4461,7 @@
         }
       }
     },
-    "/api/v1/dedup/candidates/remove-from-cluster": {
+    "/dedup/candidates/remove-from-cluster": {
       "post": {
         "operationId": "removeFromDedupCluster",
         "summary": "remove From Dedup Cluster",
@@ -3272,7 +4489,7 @@
         }
       }
     },
-    "/api/v1/dedup/candidates/series-summary": {
+    "/dedup/candidates/series-summary": {
       "get": {
         "operationId": "listDedupCandidateSeries",
         "summary": "list Dedup Candidate Series",
@@ -3300,7 +4517,7 @@
         }
       }
     },
-    "/api/v1/dedup/candidates/{id}/dismiss": {
+    "/dedup/candidates/{id}/dismiss": {
       "post": {
         "operationId": "dismissDedupCandidate",
         "summary": "dismiss Dedup Candidate",
@@ -3328,7 +4545,7 @@
         }
       }
     },
-    "/api/v1/dedup/candidates/{id}/merge": {
+    "/dedup/candidates/{id}/merge": {
       "post": {
         "operationId": "mergeDedupCandidate",
         "summary": "merge Dedup Candidate",
@@ -3356,7 +4573,7 @@
         }
       }
     },
-    "/api/v1/dedup/refresh": {
+    "/dedup/refresh": {
       "post": {
         "operationId": "triggerDedupRefresh",
         "summary": "trigger Dedup Refresh",
@@ -3384,7 +4601,7 @@
         }
       }
     },
-    "/api/v1/dedup/scan": {
+    "/dedup/scan": {
       "post": {
         "operationId": "triggerDedupScan",
         "summary": "trigger Dedup Scan",
@@ -3412,7 +4629,7 @@
         }
       }
     },
-    "/api/v1/dedup/scan-llm": {
+    "/dedup/scan-llm": {
       "post": {
         "operationId": "triggerDedupLLM",
         "summary": "trigger Dedup L L M",
@@ -3440,7 +4657,7 @@
         }
       }
     },
-    "/api/v1/dedup/stats": {
+    "/dedup/stats": {
       "get": {
         "operationId": "getDedupStats",
         "summary": "get Dedup Stats",
@@ -3468,7 +4685,7 @@
         }
       }
     },
-    "/api/v1/dedup/validate": {
+    "/dedup/validate": {
       "post": {
         "operationId": "validateDedupEntry",
         "summary": "validate Dedup Entry",
@@ -3496,7 +4713,7 @@
         }
       }
     },
-    "/api/v1/diagnostics/ai-results/{operationId}": {
+    "/diagnostics/ai-results/{operationId}": {
       "get": {
         "operationId": "getDiagnosticsAIResults",
         "summary": "get Diagnostics A I Results",
@@ -3524,7 +4741,7 @@
         }
       }
     },
-    "/api/v1/diagnostics/apply-suggestions": {
+    "/diagnostics/apply-suggestions": {
       "post": {
         "operationId": "applyDiagnosticsSuggestions",
         "summary": "apply Diagnostics Suggestions",
@@ -3552,7 +4769,7 @@
         }
       }
     },
-    "/api/v1/diagnostics/export": {
+    "/diagnostics/export": {
       "post": {
         "operationId": "startDiagnosticsExport",
         "summary": "start Diagnostics Export",
@@ -3580,7 +4797,7 @@
         }
       }
     },
-    "/api/v1/diagnostics/export/{operationId}/download": {
+    "/diagnostics/export/{operationId}/download": {
       "get": {
         "operationId": "downloadDiagnosticsExport",
         "summary": "download Diagnostics Export",
@@ -3608,7 +4825,7 @@
         }
       }
     },
-    "/api/v1/diagnostics/submit-ai": {
+    "/diagnostics/submit-ai": {
       "post": {
         "operationId": "submitDiagnosticsAI",
         "summary": "submit Diagnostics A I",
@@ -3636,7 +4853,7 @@
         }
       }
     },
-    "/api/v1/file-ops/pending": {
+    "/file-ops/pending": {
       "get": {
         "operationId": "handleListPendingFileOps",
         "summary": "List Pending File Ops",
@@ -3664,7 +4881,7 @@
         }
       }
     },
-    "/api/v1/filesystem/browse": {
+    "/filesystem/browse": {
       "get": {
         "operationId": "browseFilesystem",
         "summary": "browse Filesystem",
@@ -3692,7 +4909,7 @@
         }
       }
     },
-    "/api/v1/filesystem/exclude": {
+    "/filesystem/exclude": {
       "post": {
         "operationId": "createExclusion",
         "summary": "create Exclusion",
@@ -3746,7 +4963,7 @@
         }
       }
     },
-    "/api/v1/filesystem/home": {
+    "/filesystem/home": {
       "get": {
         "operationId": "getHomeDirectory",
         "summary": "get Home Directory",
@@ -3774,7 +4991,43 @@
         }
       }
     },
-    "/api/v1/import": {
+    "/health": {
+      "get": {
+        "tags": [
+          "Health"
+        ],
+        "summary": "Health check",
+        "description": "Returns health status with library counts. Also available at /health, /api/health.",
+        "responses": {
+          "200": {
+            "description": "Healthy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "ok"
+                    },
+                    "book_count": {
+                      "type": "integer"
+                    },
+                    "author_count": {
+                      "type": "integer"
+                    },
+                    "series_count": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/import": {
       "post": {
         "operationId": "handleITunesImport",
         "summary": "I Tunes Import",
@@ -3802,7 +5055,7 @@
         }
       }
     },
-    "/api/v1/import-paths": {
+    "/import-paths": {
       "get": {
         "operationId": "listImportPaths",
         "summary": "list Import Paths",
@@ -3856,7 +5109,7 @@
         }
       }
     },
-    "/api/v1/import-paths/{id}": {
+    "/import-paths/{id}": {
       "delete": {
         "operationId": "removeImportPath",
         "summary": "remove Import Path",
@@ -3884,7 +5137,7 @@
         }
       }
     },
-    "/api/v1/import-status/bulk": {
+    "/import-status/bulk": {
       "post": {
         "operationId": "handleITunesImportStatusBulk",
         "summary": "I Tunes Import Status Bulk",
@@ -3912,7 +5165,7 @@
         }
       }
     },
-    "/api/v1/import-status/{id}": {
+    "/import-status/{id}": {
       "get": {
         "operationId": "handleITunesImportStatus",
         "summary": "I Tunes Import Status",
@@ -3940,7 +5193,7 @@
         }
       }
     },
-    "/api/v1/import/collision-preview": {
+    "/import/collision-preview": {
       "post": {
         "operationId": "handleImportCollisionPreview",
         "summary": "Import Collision Preview",
@@ -3968,7 +5221,7 @@
         }
       }
     },
-    "/api/v1/import/file": {
+    "/import/file": {
       "post": {
         "operationId": "importFile",
         "summary": "import File",
@@ -3996,7 +5249,7 @@
         }
       }
     },
-    "/api/v1/invite": {
+    "/invite": {
       "post": {
         "operationId": "handleCreateInvite",
         "summary": "Create Invite",
@@ -4024,7 +5277,7 @@
         }
       }
     },
-    "/api/v1/invites": {
+    "/invites": {
       "get": {
         "operationId": "handleListInvites",
         "summary": "List Invites",
@@ -4052,7 +5305,7 @@
         }
       }
     },
-    "/api/v1/invites/{token}": {
+    "/invites/{token}": {
       "delete": {
         "operationId": "handleDeleteInvite",
         "summary": "Delete Invite",
@@ -4080,7 +5333,435 @@
         }
       }
     },
-    "/api/v1/library-status": {
+    "/itunes/books": {
+      "get": {
+        "tags": [
+          "iTunes"
+        ],
+        "summary": "List iTunes books",
+        "description": "Returns books from the parsed iTunes library.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "iTunes book list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/itunes/import": {
+      "post": {
+        "tags": [
+          "iTunes"
+        ],
+        "summary": "Import from iTunes library",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  },
+                  "mapping": {
+                    "type": "object",
+                    "properties": {
+                      "itunes_path": {
+                        "type": "string"
+                      },
+                      "local_path": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                "required": [
+                  "path"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Import started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "operation_id": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/itunes/import-status/bulk": {
+      "post": {
+        "tags": [
+          "iTunes"
+        ],
+        "summary": "Get iTunes import status for multiple books",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Bulk import status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "object",
+                    "properties": {
+                      "imported": {
+                        "type": "boolean"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/itunes/import-status/{id}": {
+      "get": {
+        "tags": [
+          "iTunes"
+        ],
+        "summary": "Get iTunes import status for a book",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/idPath"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Import status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "imported": {
+                      "type": "boolean"
+                    },
+                    "itunes_id": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/itunes/library-status": {
+      "get": {
+        "tags": [
+          "iTunes"
+        ],
+        "summary": "Get iTunes library status",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Library status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "configured": {
+                      "type": "boolean"
+                    },
+                    "path": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "track_count": {
+                      "type": "integer"
+                    },
+                    "last_sync": {
+                      "type": "string",
+                      "format": "date-time",
+                      "nullable": true
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/itunes/sync": {
+      "post": {
+        "tags": [
+          "iTunes"
+        ],
+        "summary": "Sync iTunes library",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sync started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "operation_id": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/itunes/test-mapping": {
+      "post": {
+        "tags": [
+          "iTunes"
+        ],
+        "summary": "Test iTunes path mapping",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "itunes_path": {
+                    "type": "string"
+                  },
+                  "local_path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "itunes_path",
+                  "local_path"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Mapping test result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "valid": {
+                      "type": "boolean"
+                    },
+                    "sample_mappings": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "itunes": {
+                            "type": "string"
+                          },
+                          "local": {
+                            "type": "string"
+                          },
+                          "exists": {
+                            "type": "boolean"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/itunes/validate": {
+      "post": {
+        "tags": [
+          "iTunes"
+        ],
+        "summary": "Validate iTunes library path",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "path"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Validation result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "valid": {
+                      "type": "boolean"
+                    },
+                    "track_count": {
+                      "type": "integer"
+                    },
+                    "error": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/itunes/write-back": {
+      "post": {
+        "tags": [
+          "iTunes"
+        ],
+        "summary": "Write back to iTunes library",
+        "description": "Writes updated metadata back to the iTunes .itl binary file.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Write-back result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Message"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/itunes/write-back/preview": {
+      "post": {
+        "tags": [
+          "iTunes"
+        ],
+        "summary": "Preview iTunes write-back",
+        "description": "Shows what changes would be written to the iTunes library without applying them.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Write-back preview",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/library-status": {
       "get": {
         "operationId": "handleITunesLibraryStatus",
         "summary": "I Tunes Library Status",
@@ -4108,7 +5789,7 @@
         }
       }
     },
-    "/api/v1/login": {
+    "/login": {
       "post": {
         "operationId": "login",
         "summary": "login",
@@ -4132,7 +5813,7 @@
         }
       }
     },
-    "/api/v1/logout": {
+    "/logout": {
       "post": {
         "operationId": "logout",
         "summary": "logout",
@@ -4156,7 +5837,7 @@
         }
       }
     },
-    "/api/v1/maintenance-window/run": {
+    "/maintenance-window/run": {
       "post": {
         "operationId": "runMaintenanceWindowNow",
         "summary": "run Maintenance Window Now",
@@ -4184,7 +5865,7 @@
         }
       }
     },
-    "/api/v1/maintenance/backfill-book-files": {
+    "/maintenance/backfill-book-files": {
       "post": {
         "operationId": "handleBackfillBookFiles",
         "summary": "Backfill Book Files",
@@ -4212,7 +5893,7 @@
         }
       }
     },
-    "/api/v1/maintenance/cleanup-backups": {
+    "/maintenance/cleanup-backups": {
       "post": {
         "operationId": "handleCleanupBackups",
         "summary": "Cleanup Backups",
@@ -4240,7 +5921,7 @@
         }
       }
     },
-    "/api/v1/maintenance/cleanup-empty-folders": {
+    "/maintenance/cleanup-empty-folders": {
       "post": {
         "operationId": "handleCleanupEmptyFolders",
         "summary": "Cleanup Empty Folders",
@@ -4268,7 +5949,7 @@
         }
       }
     },
-    "/api/v1/maintenance/cleanup-organize-mess": {
+    "/maintenance/cleanup-organize-mess": {
       "post": {
         "operationId": "handleCleanupOrganizeMess",
         "summary": "Cleanup Organize Mess",
@@ -4296,7 +5977,7 @@
         }
       }
     },
-    "/api/v1/maintenance/cleanup-series": {
+    "/maintenance/cleanup-series": {
       "post": {
         "operationId": "handleCleanupSeries",
         "summary": "Cleanup Series",
@@ -4324,7 +6005,7 @@
         }
       }
     },
-    "/api/v1/maintenance/dedup-books": {
+    "/maintenance/dedup-books": {
       "post": {
         "operationId": "handleDedupBooks",
         "summary": "Dedup Books",
@@ -4352,7 +6033,7 @@
         }
       }
     },
-    "/api/v1/maintenance/enrich-book-files": {
+    "/maintenance/enrich-book-files": {
       "post": {
         "operationId": "handleEnrichBookFiles",
         "summary": "Enrich Book Files",
@@ -4380,7 +6061,7 @@
         }
       }
     },
-    "/api/v1/maintenance/fix-author-narrator-swap": {
+    "/maintenance/fix-author-narrator-swap": {
       "post": {
         "operationId": "handleFixAuthorNarratorSwap",
         "summary": "Fix Author Narrator Swap",
@@ -4408,7 +6089,7 @@
         }
       }
     },
-    "/api/v1/maintenance/fix-book-file-paths": {
+    "/maintenance/fix-book-file-paths": {
       "post": {
         "operationId": "handleFixBookFilePaths",
         "summary": "Fix Book File Paths",
@@ -4436,7 +6117,7 @@
         }
       }
     },
-    "/api/v1/maintenance/fix-library-states": {
+    "/maintenance/fix-library-states": {
       "post": {
         "operationId": "handleFixLibraryStates",
         "summary": "Fix Library States",
@@ -4464,7 +6145,7 @@
         }
       }
     },
-    "/api/v1/maintenance/fix-read-by-narrator": {
+    "/maintenance/fix-read-by-narrator": {
       "post": {
         "operationId": "handleFixReadByNarrator",
         "summary": "Fix Read By Narrator",
@@ -4492,7 +6173,7 @@
         }
       }
     },
-    "/api/v1/maintenance/fix-version-groups": {
+    "/maintenance/fix-version-groups": {
       "post": {
         "operationId": "handleFixVersionGroups",
         "summary": "Fix Version Groups",
@@ -4520,7 +6201,7 @@
         }
       }
     },
-    "/api/v1/maintenance/generate-itl-tests": {
+    "/maintenance/generate-itl-tests": {
       "post": {
         "operationId": "handleGenerateITLTests",
         "summary": "Generate I T L Tests",
@@ -4548,7 +6229,7 @@
         }
       }
     },
-    "/api/v1/maintenance/recompute-itunes-paths": {
+    "/maintenance/recompute-itunes-paths": {
       "post": {
         "operationId": "handleRecomputeITunesPaths",
         "summary": "Recompute I Tunes Paths",
@@ -4576,7 +6257,7 @@
         }
       }
     },
-    "/api/v1/maintenance/refetch-missing-authors": {
+    "/maintenance/refetch-missing-authors": {
       "post": {
         "operationId": "handleRefetchMissingAuthors",
         "summary": "Refetch Missing Authors",
@@ -4604,7 +6285,7 @@
         }
       }
     },
-    "/api/v1/me": {
+    "/me": {
       "get": {
         "operationId": "me",
         "summary": "me",
@@ -4628,7 +6309,7 @@
         }
       }
     },
-    "/api/v1/me/{status}": {
+    "/me/{status}": {
       "get": {
         "operationId": "handleListByStatus",
         "summary": "List By Status",
@@ -4652,7 +6333,7 @@
         }
       }
     },
-    "/api/v1/metadata-sources/test": {
+    "/metadata-sources/test": {
       "post": {
         "operationId": "testMetadataSource",
         "summary": "test Metadata Source",
@@ -4680,7 +6361,7 @@
         }
       }
     },
-    "/api/v1/metadata/batch-apply-candidates": {
+    "/metadata/batch-apply-candidates": {
       "post": {
         "operationId": "handleBatchApplyCandidates",
         "summary": "Batch Apply Candidates",
@@ -4708,7 +6389,7 @@
         }
       }
     },
-    "/api/v1/metadata/batch-fetch-candidates": {
+    "/metadata/batch-fetch-candidates": {
       "post": {
         "operationId": "handleBatchFetchCandidates",
         "summary": "Batch Fetch Candidates",
@@ -4736,7 +6417,7 @@
         }
       }
     },
-    "/api/v1/metadata/batch-reject-candidates": {
+    "/metadata/batch-reject-candidates": {
       "post": {
         "operationId": "handleRejectCandidates",
         "summary": "Reject Candidates",
@@ -4764,7 +6445,7 @@
         }
       }
     },
-    "/api/v1/metadata/batch-unreject-candidates": {
+    "/metadata/batch-unreject-candidates": {
       "post": {
         "operationId": "handleUnrejectCandidates",
         "summary": "Unreject Candidates",
@@ -4792,7 +6473,7 @@
         }
       }
     },
-    "/api/v1/metadata/batch-update": {
+    "/metadata/batch-update": {
       "post": {
         "operationId": "batchUpdateMetadata",
         "summary": "batch Update Metadata",
@@ -4820,7 +6501,7 @@
         }
       }
     },
-    "/api/v1/metadata/bulk-fetch": {
+    "/metadata/bulk-fetch": {
       "post": {
         "operationId": "bulkFetchMetadata",
         "summary": "bulk Fetch Metadata",
@@ -4848,7 +6529,7 @@
         }
       }
     },
-    "/api/v1/metadata/export": {
+    "/metadata/export": {
       "get": {
         "operationId": "exportMetadata",
         "summary": "export Metadata",
@@ -4876,7 +6557,7 @@
         }
       }
     },
-    "/api/v1/metadata/fields": {
+    "/metadata/fields": {
       "get": {
         "operationId": "getMetadataFields",
         "summary": "get Metadata Fields",
@@ -4904,7 +6585,7 @@
         }
       }
     },
-    "/api/v1/metadata/import": {
+    "/metadata/import": {
       "post": {
         "operationId": "importMetadata",
         "summary": "import Metadata",
@@ -4932,7 +6613,7 @@
         }
       }
     },
-    "/api/v1/metadata/recent-fetches": {
+    "/metadata/recent-fetches": {
       "get": {
         "operationId": "handleGetLatestMetadataFetch",
         "summary": "Get Latest Metadata Fetch",
@@ -4960,7 +6641,7 @@
         }
       }
     },
-    "/api/v1/metadata/search": {
+    "/metadata/search": {
       "get": {
         "operationId": "searchMetadata",
         "summary": "search Metadata",
@@ -4988,7 +6669,7 @@
         }
       }
     },
-    "/api/v1/metadata/validate": {
+    "/metadata/validate": {
       "post": {
         "operationId": "validateMetadata",
         "summary": "validate Metadata",
@@ -5016,7 +6697,7 @@
         }
       }
     },
-    "/api/v1/narrators": {
+    "/narrators": {
       "get": {
         "operationId": "listNarrators",
         "summary": "list Narrators",
@@ -5044,7 +6725,7 @@
         }
       }
     },
-    "/api/v1/narrators/count": {
+    "/narrators/count": {
       "get": {
         "operationId": "countNarrators",
         "summary": "count Narrators",
@@ -5072,7 +6753,7 @@
         }
       }
     },
-    "/api/v1/openlibrary/data": {
+    "/openlibrary/data": {
       "delete": {
         "operationId": "deleteOLData",
         "summary": "delete O L Data",
@@ -5100,7 +6781,7 @@
         }
       }
     },
-    "/api/v1/openlibrary/download": {
+    "/openlibrary/download": {
       "post": {
         "operationId": "startOLDownload",
         "summary": "start O L Download",
@@ -5128,7 +6809,7 @@
         }
       }
     },
-    "/api/v1/openlibrary/import": {
+    "/openlibrary/import": {
       "post": {
         "operationId": "startOLImport",
         "summary": "start O L Import",
@@ -5156,7 +6837,7 @@
         }
       }
     },
-    "/api/v1/openlibrary/status": {
+    "/openlibrary/status": {
       "get": {
         "operationId": "getOLStatus",
         "summary": "get O L Status",
@@ -5184,7 +6865,7 @@
         }
       }
     },
-    "/api/v1/openlibrary/upload": {
+    "/openlibrary/upload": {
       "post": {
         "operationId": "uploadOLDump",
         "summary": "upload O L Dump",
@@ -5212,7 +6893,7 @@
         }
       }
     },
-    "/api/v1/operations": {
+    "/operations": {
       "get": {
         "operationId": "listOperations",
         "summary": "list Operations",
@@ -5240,7 +6921,7 @@
         }
       }
     },
-    "/api/v1/operations/active": {
+    "/operations/active": {
       "get": {
         "operationId": "listActiveOperations",
         "summary": "list Active Operations",
@@ -5268,7 +6949,7 @@
         }
       }
     },
-    "/api/v1/operations/assign-orphan-vgs": {
+    "/operations/assign-orphan-vgs": {
       "post": {
         "operationId": "assignOrphanVGsHandler",
         "summary": "assign Orphan V Gs",
@@ -5296,7 +6977,7 @@
         }
       }
     },
-    "/api/v1/operations/audit-files": {
+    "/operations/audit-files": {
       "get": {
         "operationId": "auditFileConsistency",
         "summary": "audit File Consistency",
@@ -5324,7 +7005,7 @@
         }
       }
     },
-    "/api/v1/operations/cleanup-version-groups": {
+    "/operations/cleanup-version-groups": {
       "post": {
         "operationId": "cleanupDuplicateVersionGroupsHandler",
         "summary": "cleanup Duplicate Version Groups",
@@ -5352,7 +7033,7 @@
         }
       }
     },
-    "/api/v1/operations/clear-stale": {
+    "/operations/clear-stale": {
       "post": {
         "operationId": "clearStaleOperations",
         "summary": "clear Stale Operations",
@@ -5380,7 +7061,7 @@
         }
       }
     },
-    "/api/v1/operations/history": {
+    "/operations/history": {
       "delete": {
         "operationId": "deleteOperationHistory",
         "summary": "delete Operation History",
@@ -5408,7 +7089,7 @@
         }
       }
     },
-    "/api/v1/operations/itunes-path-reconcile": {
+    "/operations/itunes-path-reconcile": {
       "post": {
         "operationId": "startITunesPathReconcile",
         "summary": "start I Tunes Path Reconcile",
@@ -5436,7 +7117,7 @@
         }
       }
     },
-    "/api/v1/operations/mark-broken-segments": {
+    "/operations/mark-broken-segments": {
       "post": {
         "operationId": "markBrokenSegmentBooksHandler",
         "summary": "mark Broken Segment Books",
@@ -5464,7 +7145,7 @@
         }
       }
     },
-    "/api/v1/operations/merge-novg-duplicates": {
+    "/operations/merge-novg-duplicates": {
       "post": {
         "operationId": "mergeNoVGDuplicatesHandler",
         "summary": "merge No V G Duplicates",
@@ -5492,7 +7173,7 @@
         }
       }
     },
-    "/api/v1/operations/optimize-database": {
+    "/operations/optimize-database": {
       "post": {
         "operationId": "optimizeDatabase",
         "summary": "optimize Database",
@@ -5520,7 +7201,7 @@
         }
       }
     },
-    "/api/v1/operations/organize": {
+    "/operations/organize": {
       "post": {
         "operationId": "startOrganize",
         "summary": "start Organize",
@@ -5548,7 +7229,7 @@
         }
       }
     },
-    "/api/v1/operations/recent": {
+    "/operations/recent": {
       "get": {
         "operationId": "handleGetRecentOperations",
         "summary": "Get Recent Operations",
@@ -5576,7 +7257,7 @@
         }
       }
     },
-    "/api/v1/operations/reconcile": {
+    "/operations/reconcile": {
       "post": {
         "operationId": "startReconcile",
         "summary": "start Reconcile",
@@ -5604,7 +7285,7 @@
         }
       }
     },
-    "/api/v1/operations/reconcile/preview": {
+    "/operations/reconcile/preview": {
       "get": {
         "operationId": "reconcilePreview",
         "summary": "reconcile Preview",
@@ -5632,7 +7313,7 @@
         }
       }
     },
-    "/api/v1/operations/reconcile/scan": {
+    "/operations/reconcile/scan": {
       "post": {
         "operationId": "startReconcileScan",
         "summary": "start Reconcile Scan",
@@ -5660,7 +7341,7 @@
         }
       }
     },
-    "/api/v1/operations/reconcile/scan/latest": {
+    "/operations/reconcile/scan/latest": {
       "get": {
         "operationId": "latestReconcileScan",
         "summary": "latest Reconcile Scan",
@@ -5688,7 +7369,7 @@
         }
       }
     },
-    "/api/v1/operations/scan": {
+    "/operations/scan": {
       "post": {
         "operationId": "startScan",
         "summary": "start Scan",
@@ -5716,7 +7397,7 @@
         }
       }
     },
-    "/api/v1/operations/stale": {
+    "/operations/stale": {
       "get": {
         "operationId": "listStaleOperations",
         "summary": "list Stale Operations",
@@ -5744,7 +7425,7 @@
         }
       }
     },
-    "/api/v1/operations/sweep-tombstones": {
+    "/operations/sweep-tombstones": {
       "post": {
         "operationId": "sweepTombstones",
         "summary": "sweep Tombstones",
@@ -5772,7 +7453,7 @@
         }
       }
     },
-    "/api/v1/operations/transcode": {
+    "/operations/transcode": {
       "post": {
         "operationId": "startTranscode",
         "summary": "start Transcode",
@@ -5800,7 +7481,7 @@
         }
       }
     },
-    "/api/v1/operations/{id}": {
+    "/operations/{id}": {
       "delete": {
         "operationId": "cancelOperation",
         "summary": "cancel Operation",
@@ -5828,7 +7509,7 @@
         }
       }
     },
-    "/api/v1/operations/{id}/changes": {
+    "/operations/{id}/changes": {
       "get": {
         "operationId": "getOperationChanges",
         "summary": "get Operation Changes",
@@ -5856,7 +7537,7 @@
         }
       }
     },
-    "/api/v1/operations/{id}/logs": {
+    "/operations/{id}/logs": {
       "get": {
         "operationId": "getOperationLogs",
         "summary": "get Operation Logs",
@@ -5884,7 +7565,7 @@
         }
       }
     },
-    "/api/v1/operations/{id}/result": {
+    "/operations/{id}/result": {
       "get": {
         "operationId": "getOperationResult",
         "summary": "get Operation Result",
@@ -5912,7 +7593,7 @@
         }
       }
     },
-    "/api/v1/operations/{id}/results": {
+    "/operations/{id}/results": {
       "get": {
         "operationId": "handleGetOperationResults",
         "summary": "Get Operation Results",
@@ -5940,7 +7621,7 @@
         }
       }
     },
-    "/api/v1/operations/{id}/revert": {
+    "/operations/{id}/revert": {
       "post": {
         "operationId": "revertOperation",
         "summary": "revert Operation",
@@ -5968,7 +7649,7 @@
         }
       }
     },
-    "/api/v1/operations/{id}/status": {
+    "/operations/{id}/status": {
       "get": {
         "operationId": "getOperationStatus",
         "summary": "get Operation Status",
@@ -5996,7 +7677,7 @@
         }
       }
     },
-    "/api/v1/operations/{id}/undo/preflight": {
+    "/operations/{id}/undo/preflight": {
       "get": {
         "operationId": "undoPreflightHandler",
         "summary": "undo Preflight",
@@ -6024,7 +7705,7 @@
         }
       }
     },
-    "/api/v1/path": {
+    "/path": {
       "get": {
         "operationId": "unknown",
         "summary": "unknown",
@@ -6052,7 +7733,7 @@
         }
       }
     },
-    "/api/v1/playlists": {
+    "/playlists": {
       "get": {
         "operationId": "handleListPlaylists",
         "summary": "List Playlists",
@@ -6098,7 +7779,7 @@
         }
       }
     },
-    "/api/v1/playlists/{id}": {
+    "/playlists/{id}": {
       "get": {
         "operationId": "handleGetPlaylist",
         "summary": "Get Playlist",
@@ -6166,7 +7847,7 @@
         }
       }
     },
-    "/api/v1/playlists/{id}/books": {
+    "/playlists/{id}/books": {
       "post": {
         "operationId": "handleAddBooksToPlaylist",
         "summary": "Add Books To Playlist",
@@ -6190,7 +7871,7 @@
         }
       }
     },
-    "/api/v1/playlists/{id}/books/{bookID}": {
+    "/playlists/{id}/books/{bookID}": {
       "delete": {
         "operationId": "handleRemoveBookFromPlaylist",
         "summary": "Remove Book From Playlist",
@@ -6214,7 +7895,7 @@
         }
       }
     },
-    "/api/v1/playlists/{id}/materialize": {
+    "/playlists/{id}/materialize": {
       "post": {
         "operationId": "handleMaterializePlaylist",
         "summary": "Materialize Playlist",
@@ -6238,7 +7919,7 @@
         }
       }
     },
-    "/api/v1/playlists/{id}/reorder": {
+    "/playlists/{id}/reorder": {
       "post": {
         "operationId": "handleReorderPlaylist",
         "summary": "Reorder Playlist",
@@ -6262,7 +7943,7 @@
         }
       }
     },
-    "/api/v1/preferences/{key}": {
+    "/preferences/{key}": {
       "get": {
         "operationId": "getUserPreference",
         "summary": "get User Preference",
@@ -6342,7 +8023,7 @@
         }
       }
     },
-    "/api/v1/purged-versions/{vid}": {
+    "/purged-versions/{vid}": {
       "delete": {
         "operationId": "handleHardDeleteVersion",
         "summary": "Hard Delete Version",
@@ -6370,7 +8051,7 @@
         }
       }
     },
-    "/api/v1/rebuild": {
+    "/rebuild": {
       "post": {
         "operationId": "rebuildITLHandler",
         "summary": "rebuild I T L",
@@ -6398,7 +8079,7 @@
         }
       }
     },
-    "/api/v1/series": {
+    "/series": {
       "get": {
         "operationId": "listSeries",
         "summary": "list Series",
@@ -6426,7 +8107,7 @@
         }
       }
     },
-    "/api/v1/series/bulk-delete": {
+    "/series/bulk-delete": {
       "post": {
         "operationId": "bulkDeleteSeries",
         "summary": "bulk Delete Series",
@@ -6454,7 +8135,7 @@
         }
       }
     },
-    "/api/v1/series/count": {
+    "/series/count": {
       "get": {
         "operationId": "countSeries",
         "summary": "count Series",
@@ -6482,7 +8163,7 @@
         }
       }
     },
-    "/api/v1/series/deduplicate": {
+    "/series/deduplicate": {
       "post": {
         "operationId": "deduplicateSeriesHandler",
         "summary": "deduplicate Series",
@@ -6510,7 +8191,7 @@
         }
       }
     },
-    "/api/v1/series/duplicates": {
+    "/series/duplicates": {
       "get": {
         "operationId": "listSeriesDuplicates",
         "summary": "list Series Duplicates",
@@ -6538,7 +8219,7 @@
         }
       }
     },
-    "/api/v1/series/duplicates/refresh": {
+    "/series/duplicates/refresh": {
       "post": {
         "operationId": "refreshSeriesDuplicates",
         "summary": "refresh Series Duplicates",
@@ -6566,7 +8247,7 @@
         }
       }
     },
-    "/api/v1/series/merge": {
+    "/series/merge": {
       "post": {
         "operationId": "mergeSeriesGroup",
         "summary": "merge Series Group",
@@ -6594,7 +8275,7 @@
         }
       }
     },
-    "/api/v1/series/prune": {
+    "/series/prune": {
       "post": {
         "operationId": "seriesPrune",
         "summary": "series Prune",
@@ -6622,7 +8303,7 @@
         }
       }
     },
-    "/api/v1/series/prune/preview": {
+    "/series/prune/preview": {
       "get": {
         "operationId": "seriesPrunePreview",
         "summary": "series Prune Preview",
@@ -6650,7 +8331,7 @@
         }
       }
     },
-    "/api/v1/series/{id}": {
+    "/series/{id}": {
       "patch": {
         "operationId": "updateSeriesName",
         "summary": "update Series Name",
@@ -6704,7 +8385,7 @@
         }
       }
     },
-    "/api/v1/series/{id}/books": {
+    "/series/{id}/books": {
       "get": {
         "operationId": "getSeriesBooks",
         "summary": "get Series Books",
@@ -6732,7 +8413,7 @@
         }
       }
     },
-    "/api/v1/series/{id}/name": {
+    "/series/{id}/name": {
       "put": {
         "operationId": "renameSeriesHandler",
         "summary": "rename Series",
@@ -6760,7 +8441,7 @@
         }
       }
     },
-    "/api/v1/series/{id}/split": {
+    "/series/{id}/split": {
       "post": {
         "operationId": "splitSeriesHandler",
         "summary": "split Series",
@@ -6788,7 +8469,7 @@
         }
       }
     },
-    "/api/v1/series/{id}/tags": {
+    "/series/{id}/tags": {
       "get": {
         "operationId": "handleGetSeriesTags",
         "summary": "Get Series Tags",
@@ -6842,7 +8523,7 @@
         }
       }
     },
-    "/api/v1/sessions": {
+    "/sessions": {
       "get": {
         "operationId": "listMySessions",
         "summary": "list My Sessions",
@@ -6866,7 +8547,7 @@
         }
       }
     },
-    "/api/v1/sessions/{id}": {
+    "/sessions/{id}": {
       "delete": {
         "operationId": "revokeMySession",
         "summary": "revoke My Session",
@@ -6890,7 +8571,7 @@
         }
       }
     },
-    "/api/v1/setup": {
+    "/setup": {
       "post": {
         "operationId": "setupInitialAdmin",
         "summary": "setup Initial Admin",
@@ -6914,7 +8595,7 @@
         }
       }
     },
-    "/api/v1/status": {
+    "/status": {
       "get": {
         "operationId": "handleDelugeStatus",
         "summary": "Deluge Status",
@@ -6942,7 +8623,7 @@
         }
       }
     },
-    "/api/v1/sync": {
+    "/sync": {
       "post": {
         "operationId": "handleITunesSync",
         "summary": "I Tunes Sync",
@@ -6970,7 +8651,7 @@
         }
       }
     },
-    "/api/v1/system/activity-log": {
+    "/system/activity-log": {
       "get": {
         "operationId": "getSystemActivityLog",
         "summary": "get System Activity Log",
@@ -6998,7 +8679,7 @@
         }
       }
     },
-    "/api/v1/system/announcements": {
+    "/system/announcements": {
       "get": {
         "operationId": "getSystemAnnouncements",
         "summary": "get System Announcements",
@@ -7026,7 +8707,7 @@
         }
       }
     },
-    "/api/v1/system/factory-reset": {
+    "/system/factory-reset": {
       "post": {
         "operationId": "factoryReset",
         "summary": "factory Reset",
@@ -7054,7 +8735,7 @@
         }
       }
     },
-    "/api/v1/system/logs": {
+    "/system/logs": {
       "get": {
         "operationId": "getSystemLogs",
         "summary": "get System Logs",
@@ -7082,7 +8763,7 @@
         }
       }
     },
-    "/api/v1/system/reset": {
+    "/system/reset": {
       "post": {
         "operationId": "resetSystem",
         "summary": "reset System",
@@ -7110,7 +8791,7 @@
         }
       }
     },
-    "/api/v1/system/status": {
+    "/system/status": {
       "get": {
         "operationId": "getSystemStatus",
         "summary": "get System Status",
@@ -7138,7 +8819,7 @@
         }
       }
     },
-    "/api/v1/system/storage": {
+    "/system/storage": {
       "get": {
         "operationId": "getSystemStorage",
         "summary": "get System Storage",
@@ -7166,7 +8847,7 @@
         }
       }
     },
-    "/api/v1/tags": {
+    "/tags": {
       "get": {
         "operationId": "listAllUserTags",
         "summary": "list All User Tags",
@@ -7194,7 +8875,7 @@
         }
       }
     },
-    "/api/v1/tasks": {
+    "/tasks": {
       "get": {
         "operationId": "listTasks",
         "summary": "list Tasks",
@@ -7222,7 +8903,7 @@
         }
       }
     },
-    "/api/v1/tasks/{name}": {
+    "/tasks/{name}": {
       "put": {
         "operationId": "updateTaskConfig",
         "summary": "update Task Config",
@@ -7250,7 +8931,7 @@
         }
       }
     },
-    "/api/v1/tasks/{name}/run": {
+    "/tasks/{name}/run": {
       "post": {
         "operationId": "runTask",
         "summary": "run Task",
@@ -7278,7 +8959,7 @@
         }
       }
     },
-    "/api/v1/test-connection": {
+    "/test-connection": {
       "post": {
         "operationId": "handleDelugeTestConnection",
         "summary": "Deluge Test Connection",
@@ -7306,7 +8987,7 @@
         }
       }
     },
-    "/api/v1/test-mapping": {
+    "/test-mapping": {
       "post": {
         "operationId": "handleITunesTestMapping",
         "summary": "I Tunes Test Mapping",
@@ -7334,7 +9015,7 @@
         }
       }
     },
-    "/api/v1/torrents": {
+    "/torrents": {
       "get": {
         "operationId": "handleDelugeListTorrents",
         "summary": "Deluge List Torrents",
@@ -7362,7 +9043,7 @@
         }
       }
     },
-    "/api/v1/update/apply": {
+    "/update/apply": {
       "post": {
         "operationId": "applyUpdate",
         "summary": "apply Update",
@@ -7390,7 +9071,7 @@
         }
       }
     },
-    "/api/v1/update/check": {
+    "/update/check": {
       "post": {
         "operationId": "checkForUpdate",
         "summary": "check For Update",
@@ -7418,7 +9099,7 @@
         }
       }
     },
-    "/api/v1/update/status": {
+    "/update/status": {
       "get": {
         "operationId": "getUpdateStatus",
         "summary": "get Update Status",
@@ -7446,7 +9127,7 @@
         }
       }
     },
-    "/api/v1/validate": {
+    "/validate": {
       "post": {
         "operationId": "handleITunesValidate",
         "summary": "I Tunes Validate",
@@ -7474,7 +9155,7 @@
         }
       }
     },
-    "/api/v1/version-groups/{id}": {
+    "/version-groups/{id}": {
       "get": {
         "operationId": "getVersionGroup",
         "summary": "get Version Group",
@@ -7502,7 +9183,7 @@
         }
       }
     },
-    "/api/v1/work": {
+    "/work": {
       "get": {
         "operationId": "listWork",
         "summary": "list Work",
@@ -7530,7 +9211,7 @@
         }
       }
     },
-    "/api/v1/work/stats": {
+    "/work/stats": {
       "get": {
         "operationId": "getWorkStats",
         "summary": "get Work Stats",
@@ -7558,7 +9239,7 @@
         }
       }
     },
-    "/api/v1/works": {
+    "/works": {
       "get": {
         "operationId": "listWorks",
         "summary": "list Works",
@@ -7612,7 +9293,7 @@
         }
       }
     },
-    "/api/v1/works/{id}": {
+    "/works/{id}": {
       "get": {
         "operationId": "getWork",
         "summary": "get Work",
@@ -7692,7 +9373,7 @@
         }
       }
     },
-    "/api/v1/works/{id}/books": {
+    "/works/{id}/books": {
       "get": {
         "operationId": "listWorkBooks",
         "summary": "list Work Books",
@@ -7720,7 +9401,7 @@
         }
       }
     },
-    "/api/v1/write-back": {
+    "/write-back": {
       "post": {
         "operationId": "handleITunesWriteBack",
         "summary": "I Tunes Write Back",
@@ -7748,7 +9429,7 @@
         }
       }
     },
-    "/api/v1/write-back-all": {
+    "/write-back-all": {
       "post": {
         "operationId": "handleITunesWriteBackAll",
         "summary": "I Tunes Write Back All",
@@ -7776,7 +9457,7 @@
         }
       }
     },
-    "/api/v1/write-back/preview": {
+    "/write-back/preview": {
       "post": {
         "operationId": "handleITunesWriteBackPreview",
         "summary": "I Tunes Write Back Preview",
@@ -7804,7 +9485,7 @@
         }
       }
     },
-    "/api/v1/{id}": {
+    "/{id}": {
       "get": {
         "operationId": "getAIScan",
         "summary": "get A I Scan",
@@ -7858,7 +9539,7 @@
         }
       }
     },
-    "/api/v1/{id}/apply": {
+    "/{id}/apply": {
       "post": {
         "operationId": "applyAIScanResults",
         "summary": "apply A I Scan Results",
@@ -7886,7 +9567,7 @@
         }
       }
     },
-    "/api/v1/{id}/cancel": {
+    "/{id}/cancel": {
       "post": {
         "operationId": "cancelAIScan",
         "summary": "cancel A I Scan",
@@ -7914,7 +9595,7 @@
         }
       }
     },
-    "/api/v1/{id}/deactivate": {
+    "/{id}/deactivate": {
       "post": {
         "operationId": "handleDeactivateUser",
         "summary": "Deactivate User",
@@ -7942,7 +9623,7 @@
         }
       }
     },
-    "/api/v1/{id}/reactivate": {
+    "/{id}/reactivate": {
       "post": {
         "operationId": "handleReactivateUser",
         "summary": "Reactivate User",
@@ -7970,7 +9651,7 @@
         }
       }
     },
-    "/api/v1/{id}/reset-password": {
+    "/{id}/reset-password": {
       "post": {
         "operationId": "handleResetPassword",
         "summary": "Reset Password",
@@ -7998,7 +9679,7 @@
         }
       }
     },
-    "/api/v1/{id}/results": {
+    "/{id}/results": {
       "get": {
         "operationId": "getAIScanResults",
         "summary": "get A I Scan Results",
