@@ -57,12 +57,27 @@ normal duration is ~8 min:
 | 20m14s | 1 | hit the old 20m cap — the hang |
 | 33m (run 31603570061) | 1 | the hang, self-identified under the 35m cap |
 
-≈ **2 hangs in ~45 Go Tests executions that reached a natural conclusion (4–5%)**.
+**The rate is NOT established, and a first estimate of "4–5%" from that table was wrong.**
+Re-running the failed job on PR #2323 hung a second time — 14:58:12→15:32:15, 34m03s,
+hitting the 30m Go timeout again. That branch is **2 attempts, 2 hangs**. A per-run rate
+inferred from the history table cannot be reconciled with 2/2 on one branch, so treat the
+table as a floor on *how often it has been seen*, not as a probability:
+
+- PR #2323 (`docs/todo-listened-status`): **2 of 2 attempts hung**.
+- Historical: at least **1 further** hang (the 20m14s run) in the 60 examined.
+- Local macOS: **0 of 50**.
+
+Do not quote a percentage until someone runs the same SHA N times on Linux CI. What is
+established is that it recurs, that it reproduces on demand on at least one branch, and
+that each occurrence costs the full job cap.
 
 NOT reproducible locally: 50 runs of `go test ./internal/database/ -run
 TestChaos_MixedReadWriteDuringClose -count=1 -race` on macOS produced 0 hangs. macOS
 scheduling does not generate the interleaving that Linux + `-race` + parallel packages
 does. Treat the local result as "wrong instrument", not as evidence of absence.
+
+Because it reproduces reliably on at least one branch, this now **blocks PRs**, which
+raises it from "documented annoyance" to "fix before the next `internal/database` PR".
 
 ### Fix direction (not yet applied)
 
