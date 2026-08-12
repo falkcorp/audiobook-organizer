@@ -1,7 +1,7 @@
 // file: internal/server/library_core_ops.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-08-11
+// last-edited: 2026-08-12
 
 // library_core_ops registers the scan, organize, and transcode OperationDefs
 // that previously went through the legacy BridgeQueue.
@@ -11,6 +11,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/transcode"
 	ulid "github.com/oklog/ulid/v2"
@@ -227,6 +229,17 @@ func (s *Server) RegisterLibraryOrganizeOp(reg *opsregistry.Registry) error {
 				OperationID:        opID,
 			}
 			err := s.organizeService.PerformOrganize(ctx, organizeReq, operations.LoggerFromReporter(progress))
+			// A cancelled run is not a failed one. PerformOrganize returns an
+			// error for both now (it used to return nil unconditionally, so a
+			// total failure was recorded as success), and marking a deliberate
+			// cancel "failed" would just swap one misreport for another. The v2
+			// registry worker already distinguishes these — it checks ctxCanceled
+			// before runErr — so this only aligns the logged op status with it.
+			if errors.Is(err, organizer.ErrOrganizeCanceled) {
+				op.SetStatus("canceled")
+				logging.Info(ctx, "library organize canceled", "err", err)
+				return err
+			}
 			if err != nil {
 				op.SetStatus("failed")
 				logging.Error(ctx, "library organize failed", "err", err)

@@ -7,6 +7,7 @@ package organizer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -304,13 +305,23 @@ func formatOrganizeSummary(stats *Stats) string {
 		verb, stats.Organized, stats.ReOrganized, stats.AlreadyCorrect, stats.Skipped, stats.Failed, stats.Total)
 }
 
+// ErrOrganizeCanceled marks the error returned by a cancelled run, so callers
+// can tell "the user stopped this" apart from "this went wrong".
+//
+// Without it, making cancellation return an error would simply have swapped one
+// misreport for another: the caller in library_core_ops.go marks any non-nil
+// error as "failed", so a deliberate cancel would have been recorded as a
+// failure. (The v2 registry worker already gets this right — it checks
+// ctxCanceled BEFORE runErr — but the operation's own logged status did not.)
+var ErrOrganizeCanceled = errors.New("organize canceled")
+
 func organizeOutcomeError(stats *Stats) error {
 	if stats == nil {
 		return nil
 	}
 	if stats.Canceled {
-		return fmt.Errorf("organize canceled after %d organized, %d re-organized, %d failed, of %d total",
-			stats.Organized, stats.ReOrganized, stats.Failed, stats.Total)
+		return fmt.Errorf("%w after %d organized, %d re-organized, %d failed, of %d total",
+			ErrOrganizeCanceled, stats.Organized, stats.ReOrganized, stats.Failed, stats.Total)
 	}
 	if stats.Failed > 0 && stats.Organized == 0 && stats.ReOrganized == 0 && stats.AlreadyCorrect == 0 {
 		return fmt.Errorf("organize failed for all %d books attempted (of %d total); see the organize_summary operation change for per-book errors",
