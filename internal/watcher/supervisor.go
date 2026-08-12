@@ -1,5 +1,5 @@
 // file: internal/watcher/supervisor.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6d1f4a08-5c93-4b27-9e10-72a8c4f3bd15
 // last-edited: 2026-08-11
 
@@ -60,6 +60,11 @@ type Supervisor struct {
 
 	mu     sync.Mutex
 	active map[string]managedWatcher
+	// closed is set by StopAll and makes every later Reconcile a no-op. The
+	// server tears watchers down before it waits on its background WaitGroup,
+	// so without this a tick landing in that window would happily start fresh
+	// watchers that nobody ever stops.
+	closed bool
 }
 
 // NewSupervisor builds a Supervisor that creates real fsnotify-backed Watchers.
@@ -109,6 +114,9 @@ func (s *Supervisor) Run(shutdown <-chan struct{}) {
 // set: start a watcher for every desired path not already watched, stop and
 // drop every watched path no longer desired. Safe for concurrent use.
 func (s *Supervisor) Reconcile() {
+	if s.isClosed() {
+		return
+	}
 	desired, err := s.paths()
 	if err != nil {
 		// Deliberately NOT silent, and deliberately non-destructive: keep the
@@ -130,6 +138,10 @@ func (s *Supervisor) Reconcile() {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Re-check under the lock: StopAll may have landed while s.paths() ran.
+	if s.closed {
+		return
+	}
 
 	// Stop watchers whose path disappeared or was disabled.
 	for path, w := range s.active {
@@ -163,14 +175,23 @@ func (s *Supervisor) Reconcile() {
 	}
 }
 
-// StopAll stops every live watcher and empties the set. Idempotent.
+// StopAll stops every live watcher and empties the set. Idempotent, and
+// TERMINAL: any later Reconcile is a no-op, so a tick racing process shutdown
+// cannot resurrect watchers nobody will stop.
 func (s *Supervisor) StopAll() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.closed = true
 	for path, w := range s.active {
 		w.Stop()
 		delete(s.active, path)
 	}
+}
+
+func (s *Supervisor) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
 }
 
 // WatchedPaths returns the sorted set of paths currently watched.
