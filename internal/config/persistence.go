@@ -1,7 +1,7 @@
 // file: internal/config/persistence.go
-// version: 1.30.0
+// version: 1.31.0
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
-// last-edited: 2026-07-27
+// last-edited: 2026-08-11
 
 package config
 
@@ -1218,6 +1218,27 @@ func applySetting(key, value, typ string) error {
 			}
 
 		// Scheduled maintenance tasks
+		// library_scan is the periodic library scan — the only unattended
+		// discovery path for newly added books. Unlike its siblings it ships
+		// ENABLED (scheduled.library_scan.* defaults: true / 360 min), so an
+		// absent stored setting must leave the viper default alone. That holds
+		// here because applySetting is a per-leaf-key switch: a key that was
+		// never stored is simply never seen, so nothing zeroes the sub-struct.
+		// NOTE: the scheduler snapshots IsEnabled()/GetInterval() once in
+		// Start(), same as all ~20 other tasks, so a change here takes effect
+		// on the next restart.
+		case "scheduled_library_scan_enabled":
+			if b, err := strconv.ParseBool(value); err == nil {
+				c.Scheduled.LibraryScan.Enabled = b
+			}
+		case "scheduled_library_scan_interval":
+			if i, err := strconv.Atoi(value); err == nil {
+				c.Scheduled.LibraryScan.Interval = i
+			}
+		case "scheduled_library_scan_on_startup":
+			if b, err := strconv.ParseBool(value); err == nil {
+				c.Scheduled.LibraryScan.OnStartup = b
+			}
 		case "scheduled_dedup_refresh_enabled":
 			if b, err := strconv.ParseBool(value); err == nil {
 				c.Scheduled.DedupRefresh.Enabled = b

@@ -48,10 +48,12 @@ the operation dispatcher serializes a duplicate rather than rejecting it.
 
 One deliberate limit, now recorded in the code rather than left as an accident:
 a default scan still does **not** walk the organized library root. That
-directory is the destination the organizer writes into (and on this deployment
-the hands-off iTunes tree sits underneath it), so folding it into a scan that
-now runs every six hours would feed already-organized books back through the
-organize path on a loop. A folder dropped straight into the library root is
+directory is the destination the organizer writes into, so folding it into a
+scan that now runs every six hours would feed already-organized books back
+through the organize path on a loop — and because the library root is an
+operator-set path that may sit above unrelated media or a hands-off iTunes
+tree, the timed path stays conservative. A folder dropped straight into the
+library root is
 therefore still not auto-discovered — add it as an import path, or run a scan
 with `force_update`. The scan log now says so out loud instead of staying
 quiet about it.
