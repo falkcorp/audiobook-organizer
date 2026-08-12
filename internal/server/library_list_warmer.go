@@ -1,5 +1,5 @@
 // file: internal/server/library_list_warmer.go
-// version: 2.2.1
+// version: 2.3.0
 // guid: 7e8d9a0b-1c2d-3e4f-5a6b-7c8d9e0f1a2b
 // last-edited: 2026-08-11
 
@@ -597,7 +597,7 @@ func (s *Server) warmAudiobookListCache() {
 		hits++
 		if len(q.filters.PerUserFilters) == 0 {
 			raw := buildListCacheRawQuery(q.limit, q.offset, q.filters)
-			s.listCache.Set("list:"+raw, resp)
+			s.listCache.Set(s.libraryGeneration().Key("list:", raw), resp)
 			cached++
 		}
 		slog.Debug("library list warm-up query ok",
@@ -762,8 +762,20 @@ func (s *Server) runTrickleWarmer(backlog []qry) {
 		idx++
 
 		// Skip if already cached (user query or earlier warmer round beat us).
+		//
+		// The key MUST be generation-scoped like the request path's, or this
+		// branch reads the pre-mutation entry, concludes the query is already
+		// warm, and skips it forever: the warmer would then be structurally
+		// incapable of replacing a stale entry, which is one of the three
+		// reasons the phantom-book bug never self-healed.
+		//
+		// Snapshot the key here and reuse it for the Set below rather than
+		// recomputing after the query. If a book mutation lands mid-query the
+		// response we just built is already stale, and the old key parks it
+		// somewhere no reader can reach — whereas recomputing would publish it
+		// under the new generation as if it were fresh.
 		raw := buildListCacheRawQuery(q.limit, q.offset, q.filters)
-		cacheKey := "list:" + raw
+		cacheKey := s.libraryGeneration().Key("list:", raw)
 		if len(q.filters.PerUserFilters) == 0 {
 			if _, ok := s.listCache.Get(cacheKey); ok {
 				continue
