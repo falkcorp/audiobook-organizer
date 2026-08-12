@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_store_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c9d0e1f2-a3b4-0010-3456-000000000010
 // last-edited: 2026-08-11
 
@@ -62,7 +62,7 @@ func TestPebbleActivityStore_RecordAndQuery(t *testing.T) {
 	require.NoError(t, err)
 	assert.Greater(t, id, int64(0))
 
-	entries, total, err := s.Query(ActivityFilter{Limit: 10})
+	entries, total, err := s.Query(context.Background(), ActivityFilter{Limit: 10})
 	require.NoError(t, err)
 	assert.Equal(t, 1, total)
 	require.Len(t, entries, 1)
@@ -113,7 +113,7 @@ func TestPebbleActivityStore_QueryFilters(t *testing.T) {
 	}
 
 	t.Run("filter_by_tier", func(t *testing.T) {
-		res, total, err := s.Query(ActivityFilter{Tier: "debug", Limit: 50})
+		res, total, err := s.Query(context.Background(), ActivityFilter{Tier: "debug", Limit: 50})
 		require.NoError(t, err)
 		assert.Equal(t, 2, total)
 		assert.Len(t, res, 2)
@@ -123,28 +123,28 @@ func TestPebbleActivityStore_QueryFilters(t *testing.T) {
 	})
 
 	t.Run("filter_by_type", func(t *testing.T) {
-		res, total, err := s.Query(ActivityFilter{Type: "isbn_lookup", Limit: 50})
+		res, total, err := s.Query(context.Background(), ActivityFilter{Type: "isbn_lookup", Limit: 50})
 		require.NoError(t, err)
 		assert.Equal(t, 2, total)
 		assert.Len(t, res, 2)
 	})
 
 	t.Run("filter_by_operation_id", func(t *testing.T) {
-		res, total, err := s.Query(ActivityFilter{OperationID: "op-1", Limit: 50})
+		res, total, err := s.Query(context.Background(), ActivityFilter{OperationID: "op-1", Limit: 50})
 		require.NoError(t, err)
 		assert.Equal(t, 2, total)
 		assert.Len(t, res, 2)
 	})
 
 	t.Run("filter_by_book_id", func(t *testing.T) {
-		res, total, err := s.Query(ActivityFilter{BookID: "book-1", Limit: 50})
+		res, total, err := s.Query(context.Background(), ActivityFilter{BookID: "book-1", Limit: 50})
 		require.NoError(t, err)
 		assert.Equal(t, 2, total)
 		assert.Len(t, res, 2)
 	})
 
 	t.Run("filter_single_tag_alpha", func(t *testing.T) {
-		res, total, err := s.Query(ActivityFilter{Tags: []string{"alpha"}, Limit: 50})
+		res, total, err := s.Query(context.Background(), ActivityFilter{Tags: []string{"alpha"}, Limit: 50})
 		require.NoError(t, err)
 		assert.Equal(t, 2, total)
 		assert.Len(t, res, 2)
@@ -152,7 +152,7 @@ func TestPebbleActivityStore_QueryFilters(t *testing.T) {
 
 	t.Run("filter_two_tags_requires_both", func(t *testing.T) {
 		// Only entry[0] has both alpha AND beta
-		res, total, err := s.Query(ActivityFilter{Tags: []string{"alpha", "beta"}, Limit: 50})
+		res, total, err := s.Query(context.Background(), ActivityFilter{Tags: []string{"alpha", "beta"}, Limit: 50})
 		require.NoError(t, err)
 		assert.Equal(t, 1, total)
 		assert.Len(t, res, 1)
@@ -160,7 +160,7 @@ func TestPebbleActivityStore_QueryFilters(t *testing.T) {
 	})
 
 	t.Run("limit", func(t *testing.T) {
-		res, total, err := s.Query(ActivityFilter{Limit: 2})
+		res, total, err := s.Query(context.Background(), ActivityFilter{Limit: 2})
 		require.NoError(t, err)
 		assert.Len(t, res, 2)
 		// CONTRACT CHANGE (bounded query): total is exact only when the walk
@@ -176,7 +176,7 @@ func TestPebbleActivityStore_QueryFilters(t *testing.T) {
 	})
 
 	t.Run("offset", func(t *testing.T) {
-		res, total, err := s.Query(ActivityFilter{Limit: 50, Offset: 3})
+		res, total, err := s.Query(context.Background(), ActivityFilter{Limit: 50, Offset: 3})
 		require.NoError(t, err)
 		assert.Equal(t, 4, total)
 		assert.Len(t, res, 1)
@@ -215,7 +215,7 @@ func TestPebbleActivityStore_Prune(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 3, deleted)
 
-	all, total, err := s.Query(ActivityFilter{Limit: 50})
+	all, total, err := s.Query(context.Background(), ActivityFilter{Limit: 50})
 	require.NoError(t, err)
 	assert.Equal(t, 2, total)
 	assert.Len(t, all, 2)
@@ -242,7 +242,7 @@ func TestPebbleActivityStore_WipeAllActivity(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(4), n)
 
-	_, total, err := s.Query(ActivityFilter{Limit: 50})
+	_, total, err := s.Query(context.Background(), ActivityFilter{Limit: 50})
 	require.NoError(t, err)
 	assert.Equal(t, 0, total)
 }
@@ -264,7 +264,7 @@ func TestPebbleActivityStore_GetDistinctSources(t *testing.T) {
 	}
 
 	t.Run("unfiltered_returns_all_sources", func(t *testing.T) {
-		sources, err := s.GetDistinctSources(ActivityFilter{})
+		sources, err := s.GetDistinctSources(context.Background(), ActivityFilter{})
 		require.NoError(t, err)
 		assert.Len(t, sources, 3, "expected gin, scanner, metadata")
 		assert.Equal(t, "gin", sources[0].Source)
@@ -272,7 +272,7 @@ func TestPebbleActivityStore_GetDistinctSources(t *testing.T) {
 	})
 
 	t.Run("filtered_by_tier_debug", func(t *testing.T) {
-		sources, err := s.GetDistinctSources(ActivityFilter{Tier: "debug"})
+		sources, err := s.GetDistinctSources(context.Background(), ActivityFilter{Tier: "debug"})
 		require.NoError(t, err)
 		assert.Len(t, sources, 1)
 		assert.Equal(t, "gin", sources[0].Source)
@@ -291,28 +291,28 @@ func TestPebbleActivityStore_CompactByDay_Basic(t *testing.T) {
 
 	for i := 0; i < 3; i++ {
 		_, err := s.Record(ActivityEntry{
-			Tier:    "change",
-			Type:    "metadata_applied",
-			Level:   "info",
-			Source:  "pipeline",
-			BookID:  "book-1",
-			Summary: "applied metadata",
+			Tier:      "change",
+			Type:      "metadata_applied",
+			Level:     "info",
+			Source:    "pipeline",
+			BookID:    "book-1",
+			Summary:   "applied metadata",
 			Timestamp: day1.Add(time.Duration(i) * time.Minute),
-			Details: map[string]any{"book_title": "Test Book"},
+			Details:   map[string]any{"book_title": "Test Book"},
 		})
 		require.NoError(t, err)
 	}
 
 	for i := 0; i < 2; i++ {
 		_, err := s.Record(ActivityEntry{
-			Tier:    "change",
-			Type:    "tag_written",
-			Level:   "info",
-			Source:  "writer",
-			BookID:  "book-2",
-			Summary: "wrote tags",
+			Tier:      "change",
+			Type:      "tag_written",
+			Level:     "info",
+			Source:    "writer",
+			BookID:    "book-2",
+			Summary:   "wrote tags",
 			Timestamp: day2.Add(time.Duration(i) * time.Minute),
-			Details: map[string]any{"title": "Other Book"},
+			Details:   map[string]any{"title": "Other Book"},
 		})
 		require.NoError(t, err)
 	}
@@ -333,7 +333,7 @@ func TestPebbleActivityStore_CompactByDay_Basic(t *testing.T) {
 	assert.Equal(t, 2, result.DaysCompacted)
 	assert.Equal(t, 6, result.EntriesDeleted, "5 change + 1 audit folded")
 
-	all, total, err := s.Query(ActivityFilter{Limit: 50})
+	all, total, err := s.Query(context.Background(), ActivityFilter{Limit: 50})
 	require.NoError(t, err)
 	assert.Equal(t, 2, total)
 
@@ -383,11 +383,11 @@ func TestPebbleActivityStore_CompactByDay_Idempotent(t *testing.T) {
 	olderThan := time.Date(2025, 5, 2, 0, 0, 0, 0, time.UTC)
 
 	_, err := s.Record(ActivityEntry{
-		Tier:    "change",
-		Type:    "config_changed",
-		Level:   "info",
-		Source:  "settings",
-		Summary: "changed setting",
+		Tier:      "change",
+		Type:      "config_changed",
+		Level:     "info",
+		Source:    "settings",
+		Summary:   "changed setting",
 		Timestamp: ts,
 	})
 	require.NoError(t, err)
@@ -428,7 +428,7 @@ func TestPebbleActivityStore_CompactByDay_Truncates(t *testing.T) {
 	assert.Equal(t, 1, result.DaysCompacted)
 	assert.Equal(t, 600, result.EntriesDeleted)
 
-	all, total, err := s.Query(ActivityFilter{Limit: 50})
+	all, total, err := s.Query(context.Background(), ActivityFilter{Limit: 50})
 	require.NoError(t, err)
 	assert.Equal(t, 1, total)
 	require.Len(t, all, 1)
@@ -485,7 +485,7 @@ func TestPebbleActivityStore_CompactByDay_MergesExisting(t *testing.T) {
 	assert.Equal(t, 5, r2.EntriesDeleted)
 
 	// Exactly one digest row for the day.
-	all, total, err := s.Query(ActivityFilter{Tier: "digest", Limit: 50})
+	all, total, err := s.Query(context.Background(), ActivityFilter{Tier: "digest", Limit: 50})
 	require.NoError(t, err)
 	assert.Equal(t, 1, total, "must be exactly one digest per day")
 
@@ -589,20 +589,20 @@ func TestDualWriteActivityStore_WritesReplicated(t *testing.T) {
 	assert.Greater(t, id, int64(0))
 
 	// Query from NutsDB (primary when ReadFromPebble=false).
-	resNuts, totalNuts, err := dual.Query(ActivityFilter{Limit: 10})
+	resNuts, totalNuts, err := dual.Query(context.Background(), ActivityFilter{Limit: 10})
 	require.NoError(t, err)
 	assert.Equal(t, 1, totalNuts)
 	assert.Equal(t, "dual-write-test", resNuts[0].Source)
 
 	// Query Pebble directly to confirm replication.
-	resPebble, totalPebble, err := pebbleStore.Query(ActivityFilter{Limit: 10})
+	resPebble, totalPebble, err := pebbleStore.Query(context.Background(), ActivityFilter{Limit: 10})
 	require.NoError(t, err)
 	assert.Equal(t, 1, totalPebble, "entry must also land in Pebble")
 	assert.Equal(t, "dual-write-test", resPebble[0].Source)
 
 	// Flip to read-from-pebble and verify reads come from Pebble.
 	dual.ReadFromPebble = true
-	resAfterFlip, totalAfterFlip, err := dual.Query(ActivityFilter{Limit: 10})
+	resAfterFlip, totalAfterFlip, err := dual.Query(context.Background(), ActivityFilter{Limit: 10})
 	require.NoError(t, err)
 	assert.Equal(t, 1, totalAfterFlip)
 	assert.Equal(t, "dual-write-test", resAfterFlip[0].Source)
@@ -668,7 +668,7 @@ func TestBackfillNutsActivityToPebble_DryRun(t *testing.T) {
 	assert.Equal(t, 5, res.EntriesCopied, "dry-run should count 5 entries")
 
 	// Confirm Pebble is still empty (dry-run).
-	_, total, err := pebbleStore.Query(ActivityFilter{Limit: 50})
+	_, total, err := pebbleStore.Query(context.Background(), ActivityFilter{Limit: 50})
 	require.NoError(t, err)
 	assert.Equal(t, 0, total, "dry-run must not write to Pebble")
 
@@ -709,7 +709,7 @@ func TestBackfillNutsActivityToPebble_Apply(t *testing.T) {
 	assert.True(t, IsActivityPebbleBackfillDone(db))
 
 	// Pebble must have the entries.
-	_, total, err := pebbleStore.Query(ActivityFilter{Limit: 50})
+	_, total, err := pebbleStore.Query(context.Background(), ActivityFilter{Limit: 50})
 	require.NoError(t, err)
 	assert.Equal(t, 3, total, "Pebble must have all 3 copied entries")
 }

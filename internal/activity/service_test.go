@@ -1,6 +1,7 @@
 // file: internal/activity/service_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
+// last-edited: 2026-08-11
 
 // NOTE(fable5 T022): Ported from SQLite ActivityStore to NutsActivityStore.
 // Tier names updated to match NutsActivityStore's supported tiers
@@ -49,13 +50,13 @@ func TestService_RecordAndQuery(t *testing.T) {
 	require.NoError(t, err)
 
 	// Query all entries.
-	entries, total, err := svc.Query(database.ActivityFilter{Limit: 10})
+	entries, total, err := svc.Query(context.Background(), database.ActivityFilter{Limit: 10})
 	require.NoError(t, err)
 	assert.Equal(t, 2, total)
 	assert.Len(t, entries, 2)
 
 	// Query by tier=change — should return only 1.
-	entries, total, err = svc.Query(database.ActivityFilter{Tier: "change", Limit: 10})
+	entries, total, err = svc.Query(context.Background(), database.ActivityFilter{Tier: "change", Limit: 10})
 	require.NoError(t, err)
 	assert.Equal(t, 1, total)
 	require.Len(t, entries, 1)

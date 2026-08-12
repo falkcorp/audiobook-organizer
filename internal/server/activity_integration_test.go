@@ -1,7 +1,7 @@
 // file: internal/server/activity_integration_test.go
-// version: 3.0.0
+// version: 3.1.0
 // guid: f8a3b2c1-d4e5-6f7a-8b9c-0d1e2f3a4b5c
-// last-edited: 2026-06-10
+// last-edited: 2026-08-11
 
 // NOTE(fable5 T022): Ported NewSQLiteActivityStore → NewNutsActivityStore.
 
@@ -161,7 +161,7 @@ func TestActivity_Integration_TeeWriterCapture(t *testing.T) {
 
 	_ = w.Stop(context.Background())
 
-	entries, total, err := store.Query(database.ActivityFilter{Limit: 100})
+	entries, total, err := store.Query(context.Background(), database.ActivityFilter{Limit: 100})
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -170,18 +170,18 @@ func TestActivity_Integration_TeeWriterCapture(t *testing.T) {
 	}
 
 	// Source filtering
-	_, total, _ = store.Query(database.ActivityFilter{Source: "gin"})
+	_, total, _ = store.Query(context.Background(), database.ActivityFilter{Source: "gin"})
 	if total != 1 {
 		t.Errorf("expected 1 gin entry, got %d", total)
 	}
 
-	_, total, _ = store.Query(database.ActivityFilter{ExcludeSources: []string{"gin"}})
+	_, total, _ = store.Query(context.Background(), database.ActivityFilter{ExcludeSources: []string{"gin"}})
 	if total < 2 {
 		t.Errorf("expected at least 2 non-gin entries, got %d", total)
 	}
 
 	// Search
-	_, total, _ = store.Query(database.ActivityFilter{Search: "iTunes"})
+	_, total, _ = store.Query(context.Background(), database.ActivityFilter{Search: "iTunes"})
 	if total != 1 {
 		t.Errorf("expected 1 entry matching 'iTunes', got %d", total)
 	}
