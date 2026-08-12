@@ -1,7 +1,7 @@
 // file: internal/scheduler/tasks.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9b4c7e21-a5f3-4d08-b2e6-3c8d1f7a0e54
-// last-edited: 2026-07-12
+// last-edited: 2026-08-11
 
 // Package scheduler — task registrations.
 // All 22 registered tasks are defined here. Each task's TriggerFn and
@@ -66,6 +66,15 @@ type labelRefinementCalibrateParams struct{}
 func (ts *TaskScheduler) registerAllTasks() {
 	// --- Library tasks ---
 
+	// library_scan is the ONLY unattended discovery path for new books, so it
+	// is the one task in this file that ships with a real, default-on interval.
+	//
+	// It used to be completely inert: GetInterval returned a hard-coded 0 (so
+	// scheduler.Start's `IsEnabled() && GetInterval() > 0` guard never created
+	// a ticker), IsEnabled/RunOnStart both read scan_on_startup which defaults
+	// false, and maintenance.library_scan was unreachable because "library_scan"
+	// was missing from maintenanceOrder. Net effect: a book copied into an
+	// import path was never noticed until somebody pressed Scan by hand.
 	ts.registerTask(TaskDefinition{
 		Name:        "library_scan",
 		Description: "Scan library for new/changed audiobooks (incremental by default, use force_update for full rescan)",
@@ -75,19 +84,55 @@ func (ts *TaskScheduler) registerAllTasks() {
 			if store == nil {
 				return nil, fmt.Errorf("database not initialized")
 			}
+			// Skip this tick if the previous scan we enqueued has not finished.
+			// library.scan's ConcurrencyKey makes the dispatcher SERIALIZE a
+			// duplicate rather than reject it (registry/dispatcher.go: "the op
+			// stays QUEUED"), so a scan that outruns the interval would other-
+			// wise pile up one queued op — plus one orphan legacy operation
+			// row — on every tick. Guarding here rather than in the generic
+			// ticker keeps the behaviour of the seven other interval tasks
+			// unchanged.
+			if prev := ts.previousRunID("library_scan"); prev != "" {
+				if row, err := store.GetOperationV2(prev); err == nil && row != nil {
+					if row.Status == "queued" || row.Status == "running" {
+						slog.Info("library_scan: previous scan still active, skipping this tick",
+							"op", prev, "status", row.Status, "source", source)
+						return nil, nil
+					}
+				}
+			}
 			opID := ulid.Make().String()
 			op, err := store.CreateOperation(opID, "scan", nil)
 			if err != nil {
 				return nil, fmt.Errorf("failed to create operation: %w", err)
 			}
-			if _, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "library.scan", libraryScanParams{}); enqErr != nil {
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "library.scan", libraryScanParams{})
+			if enqErr != nil {
 				return nil, fmt.Errorf("failed to enqueue library.scan: %w", enqErr)
 			}
+			ts.setPreviousRunID("library_scan", v2ID)
 			return op, nil
 		},
-		IsEnabled:              func() bool { return config.AppConfig.ScanOnStartup },
-		GetInterval:            func() time.Duration { return 0 },
-		RunOnStart:             func() bool { return config.AppConfig.ScanOnStartup },
+		IsEnabled: func() bool {
+			// IsEnabled gates the ticker, the startup run AND maintenance-window
+			// eligibility, so it must stay true for anyone who only ever set the
+			// legacy scan_on_startup flag — otherwise flipping to the new key
+			// would silently take away their startup scan.
+			return config.AppConfig.Scheduled.LibraryScan.Enabled || config.AppConfig.ScanOnStartup
+		},
+		GetInterval: func() time.Duration {
+			if !config.AppConfig.Scheduled.LibraryScan.Enabled {
+				return 0
+			}
+			mins := config.AppConfig.Scheduled.LibraryScan.Interval
+			if mins <= 0 {
+				return 0
+			}
+			return time.Duration(mins) * time.Minute
+		},
+		RunOnStart: func() bool {
+			return config.AppConfig.Scheduled.LibraryScan.OnStartup || config.AppConfig.ScanOnStartup
+		},
 		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.LibraryScan },
 	})
 

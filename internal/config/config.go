@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.75.1
+// version: 1.76.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-08-11
 
@@ -450,6 +450,11 @@ type AutoUpdateConfig struct {
 
 // ScheduledTasksConfig holds settings for all background scheduled tasks.
 type ScheduledTasksConfig struct {
+	// LibraryScan drives the periodic incremental library scan. Unlike the rest
+	// of this family it ships ENABLED with a non-zero interval: without it
+	// nothing in the process ever discovers a newly added book on its own
+	// (the fsnotify watcher is opt-in and best-effort).
+	LibraryScan              ScheduledTaskConfig `json:"library_scan"                mapstructure:"library_scan"`
 	DedupRefresh             ScheduledTaskConfig `json:"dedup_refresh"               mapstructure:"dedup_refresh"`
 	LabelRefinement          ScheduledTaskConfig `json:"label_refinement"            mapstructure:"label_refinement"`
 	AuthorSplit              ScheduledTaskConfig `json:"author_split"                mapstructure:"author_split"`
@@ -1082,6 +1087,19 @@ func InitConfig() {
 	viper.SetDefault("enable_json_logging", false)
 
 	// Scheduled task defaults (nested under "scheduled.*.*")
+	// library_scan ships ENABLED at a 6-hour interval. Every other member of
+	// this family defaults off, but this one is the ONLY thing that discovers
+	// newly added books unattended: before it existed the library_scan task's
+	// GetInterval returned a hard-coded 0, so scheduler.Start never created a
+	// ticker for it and a book copied into an import path stayed invisible
+	// until someone pressed Scan by hand. 360 min bounds worst-case discovery
+	// latency at 6h while keeping the walk cost modest on a large library
+	// (the scan is incremental — unchanged files are skipped via the scan
+	// cache). auto_scan_enabled's fsnotify watchers are the low-latency path
+	// on top of this, not a replacement for it.
+	viper.SetDefault("scheduled.library_scan.enabled", true)
+	viper.SetDefault("scheduled.library_scan.interval", 360)
+	viper.SetDefault("scheduled.library_scan.on_startup", false)
 	viper.SetDefault("scheduled.dedup_refresh.enabled", false)
 	viper.SetDefault("scheduled.dedup_refresh.interval", 360)
 	viper.SetDefault("scheduled.dedup_refresh.on_startup", false)
@@ -1112,6 +1130,9 @@ func InitConfig() {
 	viper.SetDefault("scheduled.reconcile.interval", 0)
 	viper.SetDefault("scheduled.reconcile.on_startup", false)
 	// BindEnv maps env vars so SCHEDULED_* overrides work even without AutomaticEnv.
+	viper.BindEnv("scheduled.library_scan.enabled", "SCHEDULED_LIBRARY_SCAN_ENABLED")                               //nolint:errcheck
+	viper.BindEnv("scheduled.library_scan.interval", "SCHEDULED_LIBRARY_SCAN_INTERVAL")                             //nolint:errcheck
+	viper.BindEnv("scheduled.library_scan.on_startup", "SCHEDULED_LIBRARY_SCAN_ON_STARTUP")                         //nolint:errcheck
 	viper.BindEnv("scheduled.dedup_refresh.enabled", "SCHEDULED_DEDUP_REFRESH_ENABLED")                             //nolint:errcheck
 	viper.BindEnv("scheduled.dedup_refresh.interval", "SCHEDULED_DEDUP_REFRESH_INTERVAL")                           //nolint:errcheck
 	viper.BindEnv("scheduled.dedup_refresh.on_startup", "SCHEDULED_DEDUP_REFRESH_ON_STARTUP")                       //nolint:errcheck
@@ -1629,6 +1650,11 @@ func InitConfig() {
 
 			// Scheduled background tasks (nested sub-struct)
 			Scheduled: ScheduledTasksConfig{
+				LibraryScan: ScheduledTaskConfig{
+					Enabled:   viper.GetBool("scheduled.library_scan.enabled"),
+					Interval:  viper.GetInt("scheduled.library_scan.interval"),
+					OnStartup: viper.GetBool("scheduled.library_scan.on_startup"),
+				},
 				DedupRefresh: ScheduledTaskConfig{
 					Enabled:   viper.GetBool("scheduled.dedup_refresh.enabled"),
 					Interval:  viper.GetInt("scheduled.dedup_refresh.interval"),
@@ -2128,6 +2154,21 @@ func ResetToDefaults() {
 				// via setting + env key.
 				AcoustIDOnlineLookup: false,
 				AcoustIDNightlyLimit: 5000,
+			},
+
+			// Scheduled background tasks. Only library_scan is listed: it is
+			// the one member of the family that defaults ON, so leaving the
+			// whole sub-struct at its zero value here would silently turn the
+			// periodic scan OFF on a factory reset while viper's defaults say
+			// it is on. The other scheduled tasks all default enabled=false,
+			// so their zero value is inert here and they stay omitted (this
+			// literal has never carried their intervals either).
+			Scheduled: ScheduledTasksConfig{
+				LibraryScan: ScheduledTaskConfig{
+					Enabled:   true,
+					Interval:  360,
+					OnStartup: false,
+				},
 			},
 
 			// iTunes sync (nested sub-struct)
