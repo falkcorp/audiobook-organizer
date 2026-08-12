@@ -1,5 +1,5 @@
 <!-- file: docs/audits/2026-08-11-abs-coverage-gap-audit.md -->
-<!-- version: 2.1.0 -->
+<!-- version: 2.2.0 -->
 <!-- guid: 8c4f2b19-5d73-46ea-b1c0-3f8a92d6e457 -->
 <!-- last-edited: 2026-08-12 -->
 
@@ -207,9 +207,9 @@ idiom for "all libraries".
 
 ### ⚠️ N-4. ~~Unimplemented `/api/…` paths **301 into `/api/v1/…`** instead of 404ing~~ — **PARTIALLY FIXED 2026-08-12, after a regression**
 
-> **Fixed for three namespaces, deliberately NOT fixed for three others.**
+> **Fixed for two namespaces, deliberately NOT fixed for four others.**
 >
-> `/api/collections`, `/api/users`, `/api/podcasts` now 404 (exact path or subtree) via
+> `/api/collections` and `/api/podcasts` now 404 (exact path or subtree) via
 > `absUnimplementedNamespaces` in `wire_abs_routes.go`.
 >
 > 🚨 **The first attempt (#2332) listed six and shipped a regression.** `/api/authors`,
@@ -220,13 +220,33 @@ idiom for "all libraries".
 > `ABSAPIEnabled` (`server_lifecycle.go:1219`), so this applied to every deployment, including
 > ABS-disabled ones. Reverted for those three the same day; they are now listed in
 > `absAppAPICollisions` and pinned by `TestCollidingNamespacesStillRedirect`, verified by
-> reintroducing the bug. 30 days of prod logs show **zero** unversioned requests to any of the
-> six, so no client is known to have been affected.
+> reintroducing the bug.
 >
-> **The reasoning error:** the original justification was "nothing in-repo requests these
+> 🚨 **The fix (#2333) then missed a FOURTH: `/api/users`.** It has **7 live app routes**
+> (`wire_library_routes.go:88`), including `POST /api/v1/users/:id/reset-password` — account
+> recovery. Caught 2026-08-12 and moved to `absAppAPICollisions`. Prod logs show 5 calls to
+> `/api/v1/users` in 30 days, so it is admin-path traffic, not a hot path.
+>
+> **The reasoning error, twice.** #2332's justification was "nothing in-repo requests these
 > without the `/v1` prefix" — which checks the *caller* side of the boundary and never the
 > *target* side. A compatibility shim exists precisely for callers that are not in the repo.
-> Rule going forward: before adding a namespace, grep for app-API routes of the same name.
+> #2333 then fixed that but prescribed the wrong instrument: *"grep for app-API routes of the
+> same name."* **Grep cannot answer this question.** gin composes a route's path from its
+> `RouterGroup` at registration time, so a grouped route — `users := protected.Group("/users")`
+> then `users.GET("", …)` — has its final path written nowhere in the source. `/api/users` was
+> invisible to every pattern for exactly that reason, and this codebase registers routes both
+> directly and through groups.
+>
+> The check is now mechanical and derived from the flattened router
+> (`s.router.Routes()`), which is the only complete oracle:
+> `TestUnimplementedNamespacesHaveNoAppAPITwin` fails if any listed namespace has a live
+> `/api/v1` twin, and `TestCollisionNamespacesAreStillColliding` fails if a collision entry's
+> twin ever disappears. Both verified by reintroducing the bug in each direction. Nobody has
+> to remember the right grep again.
+>
+> 30 days of prod logs show **zero** unversioned requests to any of the six namespaces
+> (validated method-agnostically, against a query shape that *does* return traffic for the
+> `/api/v1` forms), so no client is known to have been affected by either regression.
 >
 > Residual gap: an ABS client probing `/api/authors/:id` still 301s into the app API. Fixing
 > that honestly requires gating the ABS surface's semantics on `ABSAPIEnabled` and registering
@@ -379,10 +399,12 @@ unauthenticated cover endpoint (gate 2.17.0) and `/public/session/:id/track/:ind
    the signal. Add the 4 orphan fixtures.
 3. ~~**N-3**~~ — **RETRACTED, do not act on it.** It was wrong; see §N-3. `Update`/`Delete`
    honestly describe the nine `/api/me/*` write routes.
-   **N-4** — *partially done 2026-08-12.* THREE namespaces (`collections`, `users`, `podcasts`)
-   now 404 instead of 301ing into the app API. The first attempt listed six and broke 46 live
-   app routes; `authors`, `series` and `playlists` have `/api/v1` twins and keep their redirect.
-   See §N-4 for the reasoning error and the residual gap.
+   **N-4** — *partially done 2026-08-12, after TWO regressions.* TWO namespaces
+   (`collections`, `podcasts`) now 404 instead of 301ing into the app API. The first attempt
+   listed six and broke 46 live app routes; the fix for that missed a seventh route set under
+   `/api/users`. `authors`, `series`, `playlists` and `users` all have `/api/v1` twins and keep
+   their redirect. The twin check is now a router-derived test, not a grep. See §N-4 for both
+   reasoning errors and the residual gap.
 4. **N-5**, **N-6** — contract-conformance and observability.
 5. **N-7 … N-10** — bookkeeping truth-ups.
 6. **N-11** — an operational decision, not a code change.

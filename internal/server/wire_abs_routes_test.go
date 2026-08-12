@@ -1,5 +1,5 @@
 // file: internal/server/wire_abs_routes_test.go
-// version: 1.5.0
+// version: 1.7.0
 // guid: 3ea1d764-95c8-4b02-8f31-6d70a5be2c49
 // last-edited: 2026-08-12
 
@@ -191,13 +191,18 @@ func TestUnimplementedABSNamespacesAre404NotRedirect(t *testing.T) {
 	s, cleanup := setupTestServer(t)
 	defer cleanup()
 
-	for _, path := range []string{
-		"/api/collections",
-		"/api/collections/col_abc123",
-		"/api/users",
-		"/api/users/usr_abc123",
-		"/api/podcasts",
-	} {
+	// Derived from absUnimplementedNamespaces rather than restated. The hardcoded copy
+	// this replaces went stale the moment /api/users moved to absAppAPICollisions, and
+	// failed CI asserting a 404 the fix had deliberately removed — a duplicated list is
+	// a second source of truth that only ever disagrees with the first.
+	require.NotEmpty(t, absUnimplementedNamespaces, "the unimplemented list must not be silently emptied")
+
+	var paths []string
+	for _, ns := range absUnimplementedNamespaces {
+		paths = append(paths, ns, ns+"/abc123")
+	}
+
+	for _, path := range paths {
 		w := httptest.NewRecorder()
 		s.router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
 
@@ -259,5 +264,80 @@ func TestNamespaceListsAreDisjoint(t *testing.T) {
 		for _, c := range absAppAPICollisions {
 			require.NotEqual(t, u, c, "%s is in both absUnimplementedNamespaces and absAppAPICollisions", u)
 		}
+	}
+}
+
+// TestUnimplementedNamespacesHaveNoAppAPITwin is the mechanical form of the check that
+// has now failed BY HAND twice — in #2332 (authors/series/playlists) and again in #2333,
+// whose fix missed /api/users.
+//
+// Both misses came from searching the SOURCE for route paths. gin builds a route's path
+// from its RouterGroup at registration time, so a grouped route
+// (`users := protected.Group("/users")`; `users.GET("", ...)`) has no literal "/users"
+// path anywhere in the file — grep cannot see it, no matter how the pattern is written.
+// This codebase registers both directly and through groups, so the source is simply not
+// a sound oracle for "does /api/v1/<ns> exist".
+//
+// router.Routes() is: it returns the flattened, fully-resolved table gin will actually
+// match against. Walking it means nobody has to remember the right grep again.
+func TestUnimplementedNamespacesHaveNoAppAPITwin(t *testing.T) {
+	s, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	routes := s.router.Routes()
+
+	// Guard against a VACUOUS pass. If this server were wired without the app API,
+	// every assertion below would succeed by finding nothing, and the test would read
+	// as protection while providing none.
+	var versioned int
+	for _, r := range routes {
+		if strings.HasPrefix(r.Path, "/api/v1/") {
+			versioned++
+		}
+	}
+	require.Greater(t, versioned, 50,
+		"the route table has only %d /api/v1 routes — the app API is not wired into this "+
+			"test server, so the twin checks below would pass by finding nothing", versioned)
+
+	for _, ns := range absUnimplementedNamespaces {
+		twin := strings.Replace(ns, "/api/", "/api/v1/", 1)
+		var found []string
+		for _, r := range routes {
+			if r.Path == twin || strings.HasPrefix(r.Path, twin+"/") {
+				found = append(found, r.Method+" "+r.Path)
+			}
+		}
+		require.Empty(t, found,
+			"%s is listed as unimplemented, so absReservedPath makes it 404 — but the app API "+
+				"serves %d live route(s) under %s: %s.\nThat 404 applies on EVERY deployment, "+
+				"including ABS-disabled ones, because the redirect middleware is not gated on "+
+				"ABSAPIEnabled. Move %s to absAppAPICollisions.",
+			ns, len(found), twin, strings.Join(found, ", "), ns)
+	}
+}
+
+// TestCollisionNamespacesAreStillColliding is the inverse guard, and it exists so the
+// collision list cannot rot into a lie. Each entry claims "we must not 404 this, because
+// a live app-API twin exists" — if that twin is ever deleted or renamed, the entry stops
+// describing reality and the honest-404 we gave up buying is no longer bought.
+func TestCollisionNamespacesAreStillColliding(t *testing.T) {
+	s, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	routes := s.router.Routes()
+
+	for _, ns := range absAppAPICollisions {
+		twin := strings.Replace(ns, "/api/", "/api/v1/", 1)
+		var found int
+		for _, r := range routes {
+			if r.Path == twin || strings.HasPrefix(r.Path, twin+"/") {
+				found++
+			}
+		}
+		require.Greater(t, found, 0,
+			"%s is excluded from the honest-404 list because %s was supposed to be live, but the "+
+				"router has no route under it any more. Either the app route moved (update this "+
+				"list) or it is gone (move %s to absUnimplementedNamespaces so it 404s honestly).",
+			ns, twin, ns)
 	}
 }

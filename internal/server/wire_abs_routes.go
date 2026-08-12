@@ -1,5 +1,5 @@
 // file: internal/server/wire_abs_routes.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 9c6b13f8-40a2-4e57-b18d-72e0a5c4d396
 // last-edited: 2026-08-12
 
@@ -77,7 +77,7 @@ var absReservedPathPrefixes = []string{
 // a 301 into a foreign shape makes it look present and broken, and any non-2xx flips
 // AudioBooth's connection indicator.
 //
-// Matched as exact path OR subtree, so /api/users and /api/users/:id both 404.
+// Matched as exact path OR subtree, so /api/collections and /api/collections/:id both 404.
 //
 // # Why this list is SHORTER than the set of ABS namespaces we lack
 //
@@ -95,15 +95,29 @@ var absReservedPathPrefixes = []string{
 // checked the CALLER side of the boundary and never the TARGET side. The compatibility
 // shim exists precisely for callers that are not in this repo.
 //
-// So the rule for adding a namespace here is: grep for app-API routes under the same
-// name first. No /api/v1 twin → honest 404 belongs here. A twin exists → leave it out
-// and let the redirect work; TestCollidingNamespacesStillRedirect pins that choice.
+// So the rule for adding a namespace here is: no /api/v1 twin → honest 404 belongs
+// here; a twin exists → leave it out and let the redirect work, which
+// TestCollidingNamespacesStillRedirect pins.
+//
+// # Do NOT check for a twin with grep — it cannot see one
+//
+// The #2333 fix said "grep for app-API routes under the same name first", and that
+// advice was itself wrong: it missed /api/users, which has SEVEN live app routes
+// (wire_library_routes.go:88). gin composes a route's path from its RouterGroup at
+// registration time, so a grouped route's final path — `users := protected.Group("/users")`
+// then `users.GET("", ...)` — exists as a literal NOWHERE in the source. Any text search
+// for a route path is structurally blind to grouped registrations, and this codebase
+// registers both ways: six prefixed groups today (/auth, /bench, /deluge, /itunes,
+// /plugins, /users), everything else direct. Six is enough — /users was one of them.
+//
+// The only complete oracle is the flattened router: s.router.Routes(). That is what
+// TestUnimplementedNamespacesHaveNoAppAPITwin walks, so the check no longer depends on
+// anyone remembering to run the right grep.
 //
 // If one of these is ever implemented on the ABS surface, MOVE it to the lists above
 // rather than deleting it — it must stay excluded from the redirect either way.
 var absUnimplementedNamespaces = []string{
 	"/api/collections",
-	"/api/users",
 	"/api/podcasts",
 }
 
@@ -116,6 +130,12 @@ var absAppAPICollisions = []string{
 	"/api/authors",
 	"/api/series",
 	"/api/playlists",
+	// Added 2026-08-12, a second instance of the same defect: #2332 404'd this too and
+	// #2333 did not catch it, because its twin is registered through a RouterGroup
+	// (`protected.Group("/users")`, wire_library_routes.go:88) and the grep used only
+	// matched direct registrations. Seven routes, including reset-password — an
+	// account-recovery path.
+	"/api/users",
 }
 
 // absReservedPath reports whether a request path belongs to the ABS surface and must
