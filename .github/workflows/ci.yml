@@ -1,5 +1,5 @@
 # file: .github/workflows/ci.yml
-# version: 3.3.1
+# version: 3.4.0
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
 # last-edited: 2026-08-12
 
@@ -28,7 +28,15 @@ jobs:
   # Parallel fast jobs via reusable minimal workflow
   ci:
     name: Minimal CI
-    uses: falkcorp/github-common/.github/workflows/reusable-ci-minimal.yml@d0c3326b96557c8ea9117c1c196b628e5e028186 # main 2026-07-05 (fixes jdfalk/ghcommon -> falkcorp/github-common stale-ref 400 error)
+    # Pin bumped 2026-08-12 to pick up falkcorp/github-common#346, which raises
+    # the `Go Tests (short, race)` job cap from 20 to 35 minutes. That job runs
+    # `go test -short -race -timeout 30m ./...`, so at a cap of 20 the runner
+    # killed it ten minutes before Go's own timeout could print the goroutine
+    # dump naming the stuck test — every slow run surfaced as a bare
+    # `conclusion=cancelled` that reads on the PR as a test failure (#2311,
+    # #2315, #2319 at exactly 20m16s). The cap is only settable upstream: this
+    # workflow exposes no timeout input.
+    uses: falkcorp/github-common/.github/workflows/reusable-ci-minimal.yml@85a290960317dca5e50c0c18107f5e3d663658aa # main 2026-08-12 (raises Go Tests cap above its own go test -timeout)
     with:
       go-version: '1.26'
       go-experiment: 'jsonv2'
