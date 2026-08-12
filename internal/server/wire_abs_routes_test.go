@@ -1,7 +1,7 @@
 // file: internal/server/wire_abs_routes_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3ea1d764-95c8-4b02-8f31-6d70a5be2c49
-// last-edited: 2026-08-02
+// last-edited: 2026-08-12
 
 package server
 
@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/require"
 )
 
 // TestABSReservedPath_CoversTheABSSurfaceUnderAPI guards the /api/* → /api/v1/*
@@ -177,4 +178,50 @@ func TestWireABSRoutes_DisabledByDefaultRegistersNothing(t *testing.T) {
 	if n := len(s.router.Routes()); n != 0 {
 		t.Fatalf("expected no routes at all, got %d", n)
 	}
+}
+
+// An ABS endpoint we do NOT implement must 404, not 301 into the app API.
+//
+// The /api/* -> /api/v1/* compatibility redirect used to catch these: a client
+// probing /api/collections was sent to /api/v1/collections, met a different JSON
+// shape or a 401, and concluded the feature was present and broken rather than
+// absent. Contract §2.4 -- a misapplied non-404 silently disables a working client
+// feature, and any non-2xx flips AudioBooth's connection indicator.
+func TestUnimplementedABSNamespacesAre404NotRedirect(t *testing.T) {
+	s, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	for _, path := range []string{
+		"/api/collections",
+		"/api/playlists",
+		"/api/authors",
+		"/api/authors/aut_abc123",
+		"/api/series",
+		"/api/series/ser_abc123",
+		"/api/users",
+		"/api/podcasts",
+	} {
+		w := httptest.NewRecorder()
+		s.router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+
+		require.NotEqual(t, http.StatusMovedPermanently, w.Code,
+			"%s must not 301 into the /api/v1 app API — the client would meet a foreign shape", path)
+		require.Empty(t, w.Header().Get("Location"),
+			"%s must not send the client anywhere", path)
+		require.Equal(t, http.StatusNotFound, w.Code,
+			"%s is unimplemented on the ABS surface and must say so honestly", path)
+	}
+}
+
+// The redirect must still work for everything that is NOT an ABS namespace,
+// otherwise this fix has quietly broken /api/* compatibility for the app API.
+func TestNonABSPathsStillRedirect(t *testing.T) {
+	s, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	w := httptest.NewRecorder()
+	s.router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/audiobooks", nil))
+	require.Equal(t, http.StatusMovedPermanently, w.Code,
+		"/api/audiobooks is app-API surface and must keep redirecting to /api/v1")
+	require.Equal(t, "/api/v1/audiobooks", w.Header().Get("Location"))
 }

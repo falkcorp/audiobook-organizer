@@ -1,7 +1,7 @@
 // file: internal/syncapi/conformance/normalize.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: ed9387e2-9e6a-46d7-912a-28c96d442d0d
-// last-edited: 2026-07-29
+// last-edited: 2026-08-12
 
 package conformance
 
@@ -28,9 +28,16 @@ func DefaultVolatileKeys() map[string]bool {
 		// timestamps
 		"createdat", "updatedat", "addedat", "lastupdate", "lastseen",
 		"startedat", "finishedat", "birthtimems", "mtimems", "ctimems",
-		"scanversion", "lastscan",
+		"scanversion", "lastscan", "loadedat",
 		// host-dependent
 		"path", "relpath", "contenturl", "coverpath", "metadatapath",
+		"fullpath",
+		// request-dependent: describe the CALLER, not the response format.
+		// A capture taken on the oracle's machine can never match ours, and
+		// nothing about ABS compatibility depends on reproducing its client.
+		// Note these are populated for real -- me.go:127 maps s.UserAgent --
+		// so normalizing them hides no gap; the tests just don't set headers.
+		"ipaddress", "useragent",
 	}
 	out := make(map[string]bool, len(keys))
 	for _, k := range keys {
