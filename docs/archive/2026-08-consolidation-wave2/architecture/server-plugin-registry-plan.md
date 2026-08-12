@@ -1,6 +1,6 @@
-<!-- file: docs/architecture/server-plugin-registry-plan.md -->
-<!-- version: 1.0.0 -->
-<!-- last-edited: 2026-05-11 -->
+<!-- file: docs/archive/2026-08-consolidation-wave2/architecture/server-plugin-registry-plan.md -->
+<!-- version: 1.0.1 -->
+<!-- last-edited: 2026-08-12 -->
 
 # SERVER-PLUGIN-REG Implementation Plan
 

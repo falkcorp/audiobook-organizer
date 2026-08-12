@@ -1,7 +1,7 @@
-<!-- file: docs/plans/2026-08-06-series-embedded-positions-plan.md -->
-<!-- version: 1.0.0 -->
+<!-- file: docs/archive/2026-08-consolidation-wave2/plans/2026-08-06-series-embedded-positions-plan.md -->
+<!-- version: 1.0.1 -->
 <!-- guid: 6f28c0d3-91ba-4e75-83c1-05de7492ab61 -->
-<!-- last-edited: 2026-08-06 -->
+<!-- last-edited: 2026-08-12 -->
 
 # Series embedded positions — implementation plan
 

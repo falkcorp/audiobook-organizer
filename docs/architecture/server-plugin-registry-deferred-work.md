@@ -17,7 +17,8 @@ inline-and-container parallel-construction state can be unwound safely.
 ## Companion docs
 
 - `server-plugin-registry-design.md` — design rationale, locked decisions
-- `server-plugin-registry-plan.md` — original 7-wave plan (mostly delivered)
+- [`../archive/2026-08-consolidation-wave2/architecture/server-plugin-registry-plan.md`](../archive/2026-08-consolidation-wave2/architecture/server-plugin-registry-plan.md)
+  — original 7-wave plan (delivered; **archived 2026-08-12**, its residual scope lives in this document)
 
 ## TL;DR
 

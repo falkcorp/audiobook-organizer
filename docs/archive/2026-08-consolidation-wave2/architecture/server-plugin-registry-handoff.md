@@ -1,6 +1,6 @@
-<!-- file: docs/architecture/server-plugin-registry-handoff.md -->
-<!-- version: 1.2.0 -->
-<!-- last-edited: 2026-05-13 -->
+<!-- file: docs/archive/2026-08-consolidation-wave2/architecture/server-plugin-registry-handoff.md -->
+<!-- version: 1.2.1 -->
+<!-- last-edited: 2026-08-12 -->
 
 # SERVER-PLUGIN-REG — Handoff Brief
 

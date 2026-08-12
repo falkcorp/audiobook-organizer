@@ -28,9 +28,23 @@ graph TD
 
 ## PebbleDB Key Conventions
 
-PebbleDB is a sorted key–value store. All keys use colon-delimited prefixes for prefix-scan efficiency. Values are JSON with a `version` field for forward compatibility. IDs are ULIDs (26-char Crockford base32, time-sortable).
+PebbleDB is a sorted key–value store. All keys use colon-delimited prefixes for prefix-scan efficiency. Values are JSON with a `version` field for forward compatibility.
 
-### Primary Entity Prefixes
+> ⚠️ **The prefix table below is the DESIGN, not what production runs.** It was copied from
+> [`docs/database-pebble-schema.md`](../database-pebble-schema.md) **without** that document's
+> correction note, and so asserted a ULID scheme that was never built. Corrected 2026-08-12.
+>
+> **IDs are integers, not ULIDs, for the core entities** (books, authors, series, works,
+> narrators), and the live key prefixes are the spelled-out forms — `book:<int>`,
+> `author:<int>` — not the abbreviated `b:` / `a:` shown below. Verified at HEAD:
+> `internal/database/memdb_warmup.go:69` warms `"book:"` and `:86` warms `"author:"`;
+> `grep '"a:"\|"b:"' internal/database/*.go` returns nothing.
+>
+> The `id16hex` keys in the dedup/embedding section of `database-pebble-schema.md` **are**
+> accurate. Treat that document as the source of truth for the keyspace and this section as a
+> topical summary; do not extend the table below without checking the code.
+
+### Primary Entity Prefixes (design — see the correction above)
 
 | Prefix | Entity | Notes |
 |---|---|---|
