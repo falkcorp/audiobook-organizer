@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.38.0
+// version: 2.38.1
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-08-11
+// last-edited: 2026-08-12
 
 package server
 
@@ -355,6 +355,19 @@ func (s *Server) libraryGeneration() *cache.Generation {
 	gen, resolved := database.LibraryGenerationOf(s.Store())
 	if !resolved {
 		s.libGenWarnOnce.Do(func() {
+			// CodeQL flags this line as go/clear-text-logging (high), reporting
+			// that a `password` field reachable from the store struct flows to
+			// a logging call. It is a false positive: the verb is %T, which
+			// renders only the *dynamic type name* (e.g. "*database.PebbleStore")
+			// and cannot render any field value. Nothing derived from the
+			// struct's contents reaches the log record. CodeQL's taint tracking
+			// does not model %T as value-suppressing, so it follows the store
+			// pointer into Sprintf and reports the sink.
+			//
+			// Do not "fix" this by dropping the type: it is the only thing that
+			// identifies WHICH store failed to expose the counter, and a silent
+			// fallback here pins every cache key at generation 0 and quietly
+			// reinstates the staleness bug this whole change exists to fix.
 			slog.Warn("library list cache: store exposes no library generation counter, "+
 				"cached list pages will only expire by TTL",
 				"store_type", fmt.Sprintf("%T", s.Store()),
