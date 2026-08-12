@@ -1,6 +1,7 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
+// last-edited: 2026-08-11
 
 // Package database — PebbleDB-backed activity log store.
 //
@@ -26,17 +27,35 @@
 package database
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/oklog/ulid/v2"
+)
+
+// Tunables for the bounded query path. These are vars (not consts) so tests can
+// shrink them and exercise the bound without seeding a huge store.
+var (
+	// activityQueryScanBudget caps how many stored entries a single Query or
+	// GetDistinctSources call will decode. Before this bound existed, a default
+	// Query decoded EVERY entry in the log (8.86 GB of heap on production,
+	// 71.9% of the process, and a 120s non-returning GET /api/v1/activity?limit=5).
+	// Hitting the bound is logged, never silent.
+	activityQueryScanBudget = 20000
+
+	// activitySourcesCacheTTL is how long a GetDistinctSources result is reused.
+	// The source list feeds a filter picker, so slightly stale counts are fine;
+	// re-scanning on every page load was half the OOM.
+	activitySourcesCacheTTL = 45 * time.Second
 )
 
 // PebbleActivityStore persists activity log entries in a shared PebbleDB database.
@@ -47,16 +66,46 @@ import (
 type PebbleActivityStore struct {
 	db      *pebble.DB
 	counter atomic.Int64
+
+	// entriesDecoded counts every attempt to json.Unmarshal a stored
+	// ActivityEntry made by ANY scan path on this store (bounded query,
+	// scanTierKVs, ...). It is the instrument that proves a paged query is
+	// bounded: it must be incremented at every decode site, otherwise a
+	// regression test asserting "few decodes" would pass against an
+	// unbounded implementation that simply decodes somewhere else.
+	entriesDecoded atomic.Int64
+
+	// decodeFailures counts entries dropped because their stored JSON could
+	// not be decoded. Dropped rows are also logged per-scan in aggregate.
+	decodeFailures atomic.Int64
+
+	sourcesMu    sync.Mutex
+	sourcesCache map[string]pactSourcesCacheEntry
+}
+
+// pactSourcesCacheEntry is one memoized GetDistinctSources result.
+type pactSourcesCacheEntry struct {
+	at  time.Time
+	out []SourceCount
 }
 
 // NewPebbleActivityStore creates a PebbleActivityStore backed by the provided DB.
 // The caller retains ownership of db; Close() on this store does NOT close db.
 func NewPebbleActivityStore(db *pebble.DB) *PebbleActivityStore {
-	s := &PebbleActivityStore{db: db}
+	s := &PebbleActivityStore{db: db, sourcesCache: make(map[string]pactSourcesCacheEntry)}
 	// Seed counter from current time so IDs don't collide across restarts.
 	s.counter.Store(time.Now().UnixNano())
 	return s
 }
+
+// EntriesDecoded returns the cumulative number of stored-entry JSON decode
+// attempts made by this store's scan paths, including failures. Exported for
+// tests and for operational assertions about query cost.
+func (s *PebbleActivityStore) EntriesDecoded() int64 { return s.entriesDecoded.Load() }
+
+// DecodeFailures returns the cumulative number of stored entries dropped
+// because their JSON could not be decoded.
+func (s *PebbleActivityStore) DecodeFailures() int64 { return s.decodeFailures.Load() }
 
 // Close is a no-op: the caller owns the PebbleDB instance.
 func (s *PebbleActivityStore) Close() error { return nil }
@@ -86,6 +135,49 @@ func pactPrimaryPrefix(tier string) []byte {
 // entries for the tier.
 func pactPrimaryUpperBound(tier string) []byte {
 	return []byte("act:" + tier + ";")
+}
+
+// pactTierBounds computes the Pebble iterator bounds for one tier's primary key
+// range, narrowed by the optional since/until instants.
+//
+// Extracted so the bounded query path and scanTierKVs share one definition of
+// the time-range semantics rather than each keeping its own copy that can drift.
+func pactTierBounds(tier string, since, until *time.Time) (lower, upper []byte) {
+	lower = pactPrimaryPrefix(tier)
+	upper = pactPrimaryUpperBound(tier)
+	if since != nil {
+		lower = pactPrimaryKey(tier, *since, "")
+	}
+	if until != nil {
+		upper = pactPrimaryKey(tier, *until, "\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff")
+	}
+	return lower, upper
+}
+
+// pactKeyTimeField returns the zero-padded 20-digit unix-nano component of a
+// primary key ("act:<tier>:<nanos>:<ulid>"), or "" if the key is malformed.
+//
+// The field is fixed-width and zero-padded, so comparing two of these as
+// strings is equivalent to comparing the instants numerically. That is what
+// lets the query path merge several tiers newest-first WITHOUT decoding each
+// row's JSON just to read its timestamp — only the rows actually taken get
+// decoded.
+func pactKeyTimeField(key []byte) string {
+	s := string(key)
+	if !strings.HasPrefix(s, "act:") {
+		return ""
+	}
+	rest := s[len("act:"):]
+	i := strings.IndexByte(rest, ':') // end of <tier>
+	if i < 0 {
+		return ""
+	}
+	rest = rest[i+1:]
+	j := strings.IndexByte(rest, ':') // end of <nanos>
+	if j < 0 {
+		return rest
+	}
+	return rest[:j]
 }
 
 // pactIndexRef encodes the cross-reference value stored in secondary indexes:
@@ -175,51 +267,73 @@ func (s *PebbleActivityStore) Query(f ActivityFilter) ([]ActivityEntry, int, err
 		return s.queryByIndexPrefix(fmt.Sprintf("act:bk:%s:", f.BookID), f)
 	}
 
-	// General path: scan tier bucket(s) by time range.
-	tiers := actTiers
-	if f.Tier != "" {
-		tiers = []string{f.Tier}
+	// General path: bounded newest-first merge over the tier key ranges.
+	//
+	// Activity keys embed the timestamp, so the store can be read in result
+	// order and abandoned as soon as the requested page is filled. The previous
+	// implementation instead decoded EVERY entry in EVERY tier into one slice,
+	// filtered it, sorted it, and then sliced out the page — 8.86 GB of heap on
+	// production for a limit=5 request, and the cause of the OOM kills.
+	nonDigest, digestTiers := pactSelectTiers(f)
+
+	// Collect one match past the requested page. That extra row is what tells
+	// the caller another page exists without counting the rest of the log.
+	probe := f.Offset + f.Limit + 1
+
+	pageCap := f.Limit
+	if pageCap < 0 {
+		pageCap = 0
+	}
+	page := make([]ActivityEntry, 0, pageCap)
+	matched := 0
+	collect := func(e ActivityEntry) bool {
+		matched++
+		if matched > f.Offset && len(page) < f.Limit {
+			page = append(page, e)
+		}
+		return matched < probe
 	}
 
-	var all []ActivityEntry
-	for _, tier := range tiers {
-		entries, err := s.scanTier(tier, f.Since, f.Until)
+	examined := 0
+	exhausted := true
+	for _, phase := range [][]string{nonDigest, digestTiers} {
+		if len(phase) == 0 {
+			continue
+		}
+		remaining := activityQueryScanBudget - examined
+		if matched >= probe || remaining <= 0 {
+			exhausted = false
+			break
+		}
+		ex, phaseExhausted, err := s.scanNewestFirst(phase, f, remaining, "query", collect)
+		examined += ex
 		if err != nil {
 			return nil, 0, err
 		}
-		all = append(all, entries...)
-	}
-
-	// Apply remaining filters in Go.
-	filtered := make([]ActivityEntry, 0, len(all))
-	for _, e := range all {
-		if matchesFilter(e, f) {
-			filtered = append(filtered, e)
+		if !phaseExhausted {
+			exhausted = false
+			break
 		}
 	}
 
-	// Sort newest-first; digest entries sort last (matching SQL ORDER BY compacted ASC, timestamp DESC).
-	sort.Slice(filtered, func(i, j int) bool {
-		ci := boolInt(filtered[i].Tier == "digest")
-		cj := boolInt(filtered[j].Tier == "digest")
-		if ci != cj {
-			return ci < cj
-		}
-		return filtered[i].Timestamp.After(filtered[j].Timestamp)
-	})
-
-	total := len(filtered)
-
-	// Paginate.
-	start := f.Offset
-	if start > len(filtered) {
-		start = len(filtered)
+	// total is exact when the walk drained the input. Otherwise it is a lower
+	// bound: either it equals probe (one row past this page, so pagination
+	// still advances) or the scan budget cut the walk short.
+	total := matched
+	if !exhausted && matched < probe {
+		slog.Warn("[activity] query hit the scan budget; total is a lower bound and older matches were not examined",
+			"budget", activityQueryScanBudget,
+			"examined", examined,
+			"matched", matched,
+			"limit", f.Limit,
+			"offset", f.Offset,
+			"tier", f.Tier,
+			"type", f.Type,
+			"level", f.Level,
+			"source", f.Source,
+			"search", f.Search)
 	}
-	end := start + f.Limit
-	if end > len(filtered) {
-		end = len(filtered)
-	}
-	return filtered[start:end], total, nil
+	return page, total, nil
 }
 
 // Summarize groups old entries by (operation_id, type), writes a summary row,
@@ -345,30 +459,107 @@ func (s *PebbleActivityStore) Prune(olderThan time.Time, tier string) (int, erro
 	return deleted, nil
 }
 
+// pactSourcesCacheKey derives a cache key covering every filter field that can
+// change the result, so one filter's counts are never served for another.
+func pactSourcesCacheKey(f ActivityFilter) string {
+	since, until := "", ""
+	if f.Since != nil {
+		since = fmt.Sprintf("%d", f.Since.UnixNano())
+	}
+	if f.Until != nil {
+		until = fmt.Sprintf("%d", f.Until.UnixNano())
+	}
+	return strings.Join([]string{
+		f.Tier, f.Type, f.Level, f.Source, f.OperationID, f.BookID, f.Search,
+		since, until,
+		strings.Join(f.Tags, ","),
+		strings.Join(f.ExcludeSources, ","),
+		strings.Join(f.ExcludeTiers, ","),
+		strings.Join(f.ExcludeTags, ","),
+	}, "\x00")
+}
+
 // GetDistinctSources returns unique sources with entry counts, ordered by count desc.
+//
+// Bounded + memoized. This used to full-scan and JSON-decode every entry in
+// every tier on EVERY page load, concurrently with Query — 3.21 GB of the
+// production heap profile. It now scans at most activityQueryScanBudget of the
+// newest entries and reuses the result for activitySourcesCacheTTL.
+//
+// Consequence, deliberate: when the log is larger than the budget, a source
+// that only ever appears in older entries will be missing, and counts are of
+// the newest window rather than of all time. This feeds a filter picker, where
+// a bounded, recent view is the useful one; hitting the bound is logged.
 func (s *PebbleActivityStore) GetDistinctSources(f ActivityFilter) ([]SourceCount, error) {
-	tiers := actTiers
-	if f.Tier != "" {
-		tiers = []string{f.Tier}
+	key := pactSourcesCacheKey(f)
+	if cached, ok := s.lookupSourcesCache(key); ok {
+		return cached, nil
 	}
+
+	nonDigest, digestTiers := pactSelectTiers(f)
+	tiers := append(append([]string{}, nonDigest...), digestTiers...)
+
 	counts := make(map[string]int)
-	for _, tier := range tiers {
-		entries, err := s.scanTier(tier, f.Since, f.Until)
-		if err != nil {
-			return nil, err
-		}
-		for _, e := range entries {
-			if matchesFilter(e, f) {
-				counts[e.Source]++
-			}
-		}
+	examined, exhausted, err := s.scanNewestFirst(tiers, f, activityQueryScanBudget, "sources",
+		func(e ActivityEntry) bool {
+			counts[e.Source]++
+			return true
+		})
+	if err != nil {
+		return nil, err
 	}
+	if !exhausted {
+		slog.Warn("[activity] distinct-sources scan hit the budget; counts cover only the newest entries",
+			"budget", activityQueryScanBudget,
+			"examined", examined,
+			"sources", len(counts),
+			"tier", f.Tier,
+			"level", f.Level)
+	}
+
 	out := make([]SourceCount, 0, len(counts))
 	for src, cnt := range counts {
 		out = append(out, SourceCount{Source: src, Count: cnt})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Count > out[j].Count })
+
+	s.storeSourcesCache(key, out)
 	return out, nil
+}
+
+// lookupSourcesCache returns a copy of a fresh cached result, if one exists.
+// A copy is returned so a caller mutating the slice cannot corrupt the cache.
+func (s *PebbleActivityStore) lookupSourcesCache(key string) ([]SourceCount, bool) {
+	s.sourcesMu.Lock()
+	defer s.sourcesMu.Unlock()
+	entry, ok := s.sourcesCache[key]
+	if !ok || time.Since(entry.at) > activitySourcesCacheTTL {
+		return nil, false
+	}
+	out := make([]SourceCount, len(entry.out))
+	copy(out, entry.out)
+	return out, true
+}
+
+// storeSourcesCache memoizes a result and drops expired keys. Expiry is by TTL
+// only — writes do not invalidate, so counts trail new activity by up to
+// activitySourcesCacheTTL.
+func (s *PebbleActivityStore) storeSourcesCache(key string, out []SourceCount) {
+	stored := make([]SourceCount, len(out))
+	copy(stored, out)
+
+	s.sourcesMu.Lock()
+	defer s.sourcesMu.Unlock()
+	if s.sourcesCache == nil {
+		s.sourcesCache = make(map[string]pactSourcesCacheEntry)
+	}
+	now := time.Now()
+	for k, v := range s.sourcesCache {
+		if now.Sub(v.at) > activitySourcesCacheTTL {
+			delete(s.sourcesCache, k)
+		}
+	}
+	s.sourcesCache[key] = pactSourcesCacheEntry{at: now, out: stored}
 }
 
 // WipeAllActivity deletes every entry from all tier buckets. Returns total count.
@@ -747,34 +938,193 @@ type pactKV struct {
 	entry ActivityEntry
 }
 
-// scanTier returns all entries from a tier within [since, until].
-// nil bounds mean "no bound". Results are in ascending timestamp order (Pebble
-// lexicographic order over the time-keyed prefix).
-func (s *PebbleActivityStore) scanTier(tier string, since, until *time.Time) ([]ActivityEntry, error) {
-	kvs, err := s.scanTierKVs(tier, since, until)
-	if err != nil {
-		return nil, err
-	}
-	entries := make([]ActivityEntry, len(kvs))
-	for i, kv := range kvs {
-		entries[i] = kv.entry
-	}
-	return entries, nil
+// pactDecodeTally accumulates JSON decode failures across a single scan so the
+// scan can emit one aggregate warning instead of flooding the log when a whole
+// key range is corrupt. Requirement: dropped rows are counted and reported,
+// never silently skipped.
+type pactDecodeTally struct {
+	dropped  int
+	firstErr error
+	firstKey string
 }
 
-// scanTierKVs returns key+entry pairs for a tier within the time range.
-func (s *PebbleActivityStore) scanTierKVs(tier string, since, until *time.Time) ([]pactKV, error) {
-	// Default lower/upper bounds cover the entire tier prefix.
-	lower := pactPrimaryPrefix(tier)
-	upper := pactPrimaryUpperBound(tier)
+func (t *pactDecodeTally) record(key []byte, err error) {
+	t.dropped++
+	if t.firstErr == nil {
+		t.firstErr = err
+		t.firstKey = string(key)
+	}
+}
 
-	// Narrow bounds when time constraints are given.
-	if since != nil {
-		lower = pactPrimaryKey(tier, *since, "")
+func (t *pactDecodeTally) log(op string) {
+	if t.dropped == 0 {
+		return
 	}
-	if until != nil {
-		upper = pactPrimaryKey(tier, *until, "\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff")
+	slog.Warn("[activity] pebble store dropped undecodable entries",
+		"op", op,
+		"dropped", t.dropped,
+		"first_key", t.firstKey,
+		"error", t.firstErr)
+}
+
+// pactCursor is one tier's reverse (newest-first) iterator plus the cached time
+// field of the key it currently sits on.
+type pactCursor struct {
+	tier string
+	iter *pebble.Iterator
+	tf   string
+}
+
+// pactSelectTiers splits the tiers a filter is allowed to touch into the
+// non-digest group and the digest group.
+//
+// The two groups exist because the historical result order is a TWO-GROUP
+// order (matching the old SQL "ORDER BY compacted ASC, timestamp DESC"):
+// every non-digest entry sorts before every digest entry, and within a group
+// entries are newest-first. Walking non-digest tiers to exhaustion before
+// touching digest reproduces that order without a global sort.
+//
+// f.Tier and f.ExcludeTiers are applied here rather than left to matchesFilter
+// so excluded tiers never open an iterator or consume scan budget.
+func pactSelectTiers(f ActivityFilter) (nonDigest, digest []string) {
+	base := actTiers
+	if f.Tier != "" {
+		base = []string{f.Tier}
 	}
+	for _, tier := range base {
+		excluded := false
+		for _, ex := range f.ExcludeTiers {
+			if tier == ex {
+				excluded = true
+				break
+			}
+		}
+		if excluded {
+			continue
+		}
+		if tier == "digest" {
+			digest = append(digest, tier)
+		} else {
+			nonDigest = append(nonDigest, tier)
+		}
+	}
+	return nonDigest, digest
+}
+
+// scanNewestFirst walks the given tiers newest-first as a k-way merge over
+// per-tier reverse iterators, decoding at most `budget` entries, and invokes
+// visit for every decoded entry that passes matchesFilter. visit returns false
+// to stop the walk early.
+//
+// Returns the number of entries decoded and whether the input was exhausted.
+// exhausted == false means the walk stopped early — either visit asked to stop
+// or the budget ran out — so any count derived from it is a LOWER BOUND.
+//
+// Ordering note: the merge orders on the key's embedded timestamp, not on the
+// decoded Timestamp field. Those are written together by Record, so they agree;
+// a row whose stored Tier/Timestamp disagrees with its key (already-inconsistent
+// data) now groups by its key.
+//
+// Deliberately single-goroutine: this is a stop-early walk, and fanning it out
+// over workers would mean over-reading, which is the very cost being removed.
+func (s *PebbleActivityStore) scanNewestFirst(
+	tiers []string,
+	f ActivityFilter,
+	budget int,
+	op string,
+	visit func(ActivityEntry) bool,
+) (examined int, exhausted bool, err error) {
+	if len(tiers) == 0 {
+		return 0, true, nil
+	}
+	if budget <= 0 {
+		return 0, false, nil
+	}
+
+	cursors := make([]*pactCursor, 0, len(tiers))
+	defer func() {
+		for _, c := range cursors {
+			if cerr := c.iter.Close(); cerr != nil && err == nil {
+				err = fmt.Errorf("pebble_activity_store: %s iter close (tier=%s): %w", op, c.tier, cerr)
+			}
+		}
+	}()
+
+	for _, tier := range tiers {
+		lower, upper := pactTierBounds(tier, f.Since, f.Until)
+		it, iterErr := s.db.NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: upper})
+		if iterErr != nil {
+			return examined, false, fmt.Errorf("pebble_activity_store: %s new iter (tier=%s): %w", op, tier, iterErr)
+		}
+		if !it.Last() {
+			// Empty range for this tier — close now rather than carrying it.
+			if cerr := it.Close(); cerr != nil {
+				return examined, false, fmt.Errorf("pebble_activity_store: %s iter close (tier=%s): %w", op, tier, cerr)
+			}
+			continue
+		}
+		cursors = append(cursors, &pactCursor{tier: tier, iter: it, tf: pactKeyTimeField(it.Key())})
+	}
+
+	tally := &pactDecodeTally{}
+	defer tally.log(op)
+
+	for {
+		// Pick the cursor sitting on the newest remaining key. Ties break on
+		// the full key bytes so the order is deterministic.
+		best := -1
+		for i, c := range cursors {
+			if !c.iter.Valid() {
+				continue
+			}
+			if best < 0 {
+				best = i
+				continue
+			}
+			b := cursors[best]
+			if c.tf > b.tf || (c.tf == b.tf && bytes.Compare(c.iter.Key(), b.iter.Key()) > 0) {
+				best = i
+			}
+		}
+		if best < 0 {
+			return examined, true, nil // every cursor drained
+		}
+		if examined >= budget {
+			return examined, false, nil // caller logs the truncation
+		}
+
+		c := cursors[best]
+		examined++
+		s.entriesDecoded.Add(1)
+		var e ActivityEntry
+		if jsonErr := json.Unmarshal(c.iter.Value(), &e); jsonErr != nil {
+			s.decodeFailures.Add(1)
+			tally.record(c.iter.Key(), jsonErr)
+		} else if matchesFilter(e, f) {
+			if !visit(e) {
+				return examined, false, nil
+			}
+		}
+
+		if c.iter.Prev() {
+			c.tf = pactKeyTimeField(c.iter.Key())
+		}
+	}
+}
+
+// NOTE: scanTier (a materializing []ActivityEntry wrapper over scanTierKVs)
+// was removed here. Its only callers were Query and GetDistinctSources, both of
+// which now use the bounded scanNewestFirst walk. The maintenance ops that
+// legitimately need every row call scanTierKVs directly.
+
+// scanTierKVs returns key+entry pairs for a tier within the time range.
+//
+// This is a FULL materializing scan and is used only by the maintenance
+// operations (Summarize, Prune, WipeAllActivity, CompactByDay), which
+// legitimately need every row. Query and GetDistinctSources deliberately do NOT
+// use it — see scanNewestFirst.
+func (s *PebbleActivityStore) scanTierKVs(tier string, since, until *time.Time) ([]pactKV, error) {
+	lower, upper := pactTierBounds(tier, since, until)
 
 	iter, err := s.db.NewIter(&pebble.IterOptions{
 		LowerBound: lower,
@@ -785,10 +1135,18 @@ func (s *PebbleActivityStore) scanTierKVs(tier string, since, until *time.Time) 
 	}
 	defer iter.Close()
 
+	tally := &pactDecodeTally{}
+	defer tally.log("scanTierKVs tier=" + tier)
+
 	var out []pactKV
 	for iter.First(); iter.Valid(); iter.Next() {
 		var e ActivityEntry
+		s.entriesDecoded.Add(1)
 		if jsonErr := json.Unmarshal(iter.Value(), &e); jsonErr != nil {
+			// Counted and reported in aggregate by the deferred tally.log —
+			// previously a bare `continue` that dropped rows silently.
+			s.decodeFailures.Add(1)
+			tally.record(iter.Key(), jsonErr)
 			continue
 		}
 		keyCopy := make([]byte, len(iter.Key()))
