@@ -1,7 +1,7 @@
 // file: internal/database/nuts_activity_store.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: c3d4e5f6-a7b8-0003-cdef-000000000003
-// last-edited: 2026-07-01
+// last-edited: 2026-08-11
 
 package database
 
@@ -172,7 +172,12 @@ func (s *NutsActivityStore) Record(e ActivityEntry) (int64, error) {
 }
 
 // Query returns entries matching f, newest-first, plus the total matching count.
-func (s *NutsActivityStore) Query(f ActivityFilter) ([]ActivityEntry, int, error) {
+//
+// ctx is accepted and deliberately IGNORED: this store is retired and unwired
+// (TASK-22) and exists only to satisfy ActivityStorer until the NutsDB removal
+// PR deletes it. It is not on any request path, so it was not given the
+// periodic cancellation checks the live Pebble implementation has.
+func (s *NutsActivityStore) Query(_ context.Context, f ActivityFilter) ([]ActivityEntry, int, error) {
 	if f.Limit == 0 {
 		f.Limit = 50
 	}
@@ -365,7 +370,10 @@ func (s *NutsActivityStore) Prune(olderThan time.Time, tier string) (int, error)
 }
 
 // GetDistinctSources returns unique sources with entry counts, ordered by count desc.
-func (s *NutsActivityStore) GetDistinctSources(f ActivityFilter) ([]SourceCount, error) {
+//
+// ctx is accepted and deliberately IGNORED — see Query: retired, unwired store
+// kept only to satisfy the interface.
+func (s *NutsActivityStore) GetDistinctSources(_ context.Context, f ActivityFilter) ([]SourceCount, error) {
 	tiers := actTiers
 	if f.Tier != "" {
 		tiers = []string{f.Tier}
