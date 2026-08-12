@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/library_fake_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 1d4a67f2-0c85-4f39-9b6e-3a71c5d0e824
 // last-edited: 2026-08-12
 
@@ -1013,21 +1013,103 @@ var arrayIndex = regexp.MustCompile(`\[\d+\]`)
 // allowedAt resolves a finding's path against the allowance keys. Keys use [] for "any
 // index"; a leading * makes the remainder a suffix match, so a single entry covers
 // media.x, libraryItem.media.x and a bare x — the play body carries all three.
-func allowedAt(allowed map[string]allowance, path string) (string, allowance, bool) {
+// Selection MUST be deterministic. This originally returned the first matching pattern
+// found while ranging the map, and Go randomizes map iteration — so if two patterns could
+// match one path, WHICH BOUND APPLIED would vary between runs. A run that happened to pick
+// a 3.0 bound where 0.5 was intended would accept a real divergence and report green,
+// which is a worse failure than the one it hides because it is invisible.
+//
+// An exact key wins outright. Otherwise an ambiguous path is reported as an ERROR rather
+// than resolved by a tie-break: two patterns claiming one field is an authoring mistake,
+// and quietly guessing which the author meant is exactly the guarantee this design exists
+// to provide. Returning the sorted match list keeps the failure message stable too.
+func allowedAt(allowed map[string]allowance, path string) (key string, a allowance, ok bool, ambiguous []string) {
 	norm := arrayIndex.ReplaceAllString(path, "[]")
-	if a, ok := allowed[norm]; ok {
-		return norm, a, true
+	if exact, found := allowed[norm]; found {
+		return norm, exact, true, nil
 	}
-	for key, a := range allowed {
-		suffix, isSuffix := strings.CutPrefix(key, "*")
+	var matches []string
+	for k := range allowed {
+		suffix, isSuffix := strings.CutPrefix(k, "*")
 		if !isSuffix {
 			continue
 		}
 		if norm == suffix || strings.HasSuffix(norm, "."+suffix) {
-			return key, a, true
+			matches = append(matches, k)
 		}
 	}
-	return "", allowance{}, false
+	sort.Strings(matches)
+	switch len(matches) {
+	case 0:
+		return "", allowance{}, false, nil
+	case 1:
+		return matches[0], allowed[matches[0]], true, nil
+	default:
+		return "", allowance{}, false, matches
+	}
+}
+
+// TestAllowedAt_AmbiguousPatternsAreAnErrorNotACoinFlip is the regression guard for the
+// defect the matcher shipped with: it ranged the allowance map and returned the first
+// match, so with two patterns able to claim one path the applied bound depended on Go's
+// randomised map iteration.
+//
+// The loop matters. A single call could pass a hundred times and fail the hundred-and-
+// first, which is precisely the shape of bug that gets closed as "could not reproduce".
+func TestAllowedAt_AmbiguousPatternsAreAnErrorNotACoinFlip(t *testing.T) {
+	allowed := map[string]allowance{
+		"*duration":       {Reason: "loose", Within: 3.0},
+		"*media.duration": {Reason: "tight", Within: 0.5},
+	}
+	for i := 0; i < 200; i++ {
+		key, _, ok, ambiguous := allowedAt(allowed, "libraryItem.media.duration")
+		if ok {
+			t.Fatalf("iteration %d: resolved to %q — two patterns claim this path, so any "+
+				"single winner is iteration-order luck", i, key)
+		}
+		if len(ambiguous) != 2 || ambiguous[0] != "*duration" || ambiguous[1] != "*media.duration" {
+			t.Fatalf("iteration %d: ambiguity must be reported sorted and complete, got %v", i, ambiguous)
+		}
+	}
+}
+
+// TestAllowedAt_ExactKeyBeatsPattern pins the one precedence rule there is, so a call site
+// can always name a specific path to override a shared pattern.
+func TestAllowedAt_ExactKeyBeatsPattern(t *testing.T) {
+	allowed := map[string]allowance{
+		"*duration":               {Reason: "pattern", Within: 3.0},
+		"media.tracks[].duration": {Reason: "exact", Within: 0.5},
+	}
+	for i := 0; i < 50; i++ {
+		key, a, ok, ambiguous := allowedAt(allowed, "media.tracks[3].duration")
+		if !ok || ambiguous != nil || key != "media.tracks[].duration" || a.Within != 0.5 {
+			t.Fatalf("iteration %d: exact key must win outright, got key=%q within=%v ok=%v ambiguous=%v",
+				i, key, a.Within, ok, ambiguous)
+		}
+	}
+}
+
+// TestAllowedAt_SuiteAllowancesAreUnambiguous checks the patterns the suite actually
+// declares, so adding a broad key later fails here rather than silently widening a bound
+// on whichever run picks it.
+func TestAllowedAt_SuiteAllowancesAreUnambiguous(t *testing.T) {
+	paths := []string{
+		"media.duration", "libraryItem.media.duration", "duration",
+		"media.audioFiles[0].duration", "media.tracks[0].duration", "audioTracks[0].duration",
+		"media.tracks[0].startOffset", "media.chapters[0].start", "media.chapters[0].end",
+		"media.audioFiles[0].timeBase", "media.tracks[0].title", "media.metadata.title",
+	}
+	sets := map[string]map[string]allowance{
+		"bookBody": bookBodyAllowances(),
+		"identity": identityAllowances(),
+	}
+	for name, set := range sets {
+		for _, p := range paths {
+			if _, _, _, ambiguous := allowedAt(set, p); len(ambiguous) > 0 {
+				t.Errorf("%s: %q is claimed by %v — narrow one of them", name, p, ambiguous)
+			}
+		}
+	}
 }
 
 // numericGap reports |want-got| when both sides parse as numbers.
@@ -1063,7 +1145,15 @@ func assertConformantExcept(t *testing.T, fixture string, got any, allowed map[s
 	fired := make(map[string]bool, len(allowed))
 	var unexpected []string
 	for _, fi := range findings {
-		key, a, ok := allowedAt(allowed, fi.Path)
+		key, a, ok, ambiguous := allowedAt(allowed, fi.Path)
+		if len(ambiguous) > 0 {
+			unexpected = append(unexpected, fmt.Sprintf(
+				"%s — %d allowances match this path (%s). Which bound applies would depend "+
+					"on map iteration order, so this is an authoring error, not a divergence: "+
+					"narrow the patterns until exactly one claims the field",
+				fi, len(ambiguous), strings.Join(ambiguous, ", ")))
+			continue
+		}
 		if !ok {
 			unexpected = append(unexpected, fi.String())
 			continue
