@@ -1,7 +1,7 @@
 <!-- file: docs/audits/2026-08-11-abs-coverage-gap-audit.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 2.0.0 -->
 <!-- guid: 8c4f2b19-5d73-46ea-b1c0-3f8a92d6e457 -->
-<!-- last-edited: 2026-08-11 -->
+<!-- last-edited: 2026-08-12 -->
 
 # ABS implementation coverage — gap audit, 2026-08-11
 
@@ -35,7 +35,11 @@ out of scope (contract §11).
 
 ## 1. NOW gaps — ranked
 
-### 🔴 N-1. `GET /socket.io/…` answers **200 with `index.html`**
+### ✅ N-1. ~~`GET /socket.io/…` answers **200 with `index.html`**~~ — **FIXED 2026-08-12** (PR #2325)
+
+> `"/socket.io/"` added to `nonSPAPrefixes`; `GET /socket.io/` now returns 404 in both build
+> variants. Regression test verified by removal — with the fix backed out, `TestIsNonSPAPath`
+> and `TestSocketIOHandshakeIs404` both fail. Original finding below.
 
 | | |
 |---|---|
@@ -90,11 +94,42 @@ conformance tests red**, spanning essentially the whole client-facing surface:
 These are **not** ID/timestamp noise. `CompareBody` normalizes *both* sides before diffing
 (`fixture.go:52-54` — `Compare(n.Normalize(want), n.Normalize(got), opts)`), so every volatile
 key is already canonicalized to a same-typed placeholder by the time values are compared. All
-13 failures are therefore real mismatches on **non-volatile** fields. The change was reverted;
-nothing in this branch turns the gate on.
+13 failures are therefore mismatches on fields the normalizer did **not** cover.
+
+> ⚠️ That last sentence originally read *"real mismatches on non-volatile fields"*, which
+> invited the reading that all 13 are defects. **They are not** — see the correction below.
+> "Not normalized" turned out to mean three different things, only one of which is a bug.
 
 ⇒ This is why N-2 is ranked 🔴 rather than as tech debt: the harness is not merely *capable* of
-being stricter, it is currently green over 13 tests' worth of known-wrong values.
+being stricter, it is currently green over 13 tests' worth of uncompared values.
+
+#### ⚠️ Correction (2026-08-12): "13 red tests" is not "13 bugs"
+
+The findings were read one by one rather than counted. **The red list is dominated by test-data
+drift and by deliberate divergences — not product defects.** The earlier wording here implied
+otherwise and was wrong.
+
+| Category | What it is | Product bug? |
+|---|---|---|
+| **Environment-dependent** — `fullPath` (a temp dir), `loadedAt`, `ipAddress`, `userAgent` | Can never match a capture from another machine | **No.** Fixed by normalizing — see below. |
+| **Fixture drift** — `size` 4096 vs 1.2e8, `duration` 9975 vs 9975.480544, `publishedYear` `800` vs `800BC`, track titles, `timeBase`, `mediaItemId`, `itemsPerPage` | The synthetic test book is not the oracle's Odyssey capture | **No.** Fixed by aligning fixture data. |
+| **Deliberate divergence** — `user.type` `user` vs `root`; `Source` `audiobook-organizer` vs `docker` | `dto.go:275-277` states the reason: reporting `user` makes Absorb *hide the admin UI we do not implement* | **No — intentional.** Must be whitelisted, never "fixed". |
+| **Genuinely worth deciding** — `media.tracks[].title` (we send `The Odyssey: Book 06`, ABS sends the filename `odyssey_06_homer_butler_64kb.mp3`); author ordering in `/personalized` | A client renders these directly | **Maybe.** Needs a client-behaviour call. |
+
+**Acted on:** four keys added to `DefaultVolatileKeys` — `fullpath`, `loadedat`, `ipaddress`,
+`useragent`. `fullpath` was a plain oversight, sitting next to `path` in the same
+"host-dependent" group. Measured effect: **13 red → 12**, and a whole class of false positives
+gone. `useragent` normalization hides nothing — `me.go:127` populates it for real; the tests
+simply never set the header.
+
+**Deliberately NOT normalized:** `size`, `duration`, `progress`, `currentTime`, `startOffset`.
+`normalize.go:19-20` records that as an explicit decision — they are real playback data whose
+values matter — and normalizing them to force green would destroy exactly the signal N-2 exists
+to create. **Making the gate pass is not the goal; making it mean something is.**
+
+⇒ Remaining work to turn the gate on permanently is **fixture alignment**, not bug-fixing: seed
+the fake library from the oracle capture so sizes, durations, track lists and progress match.
+That is bounded but not small — `library_fake_test.go` is 767 lines.
 
 Normalization widens the blindness (`normalize.go:21-40`): ~25 volatile keys (`id`,
 `coverPath`, `contentUrl`, `lastUpdate`, `token`, `ino`, …) are canonicalized before
@@ -115,7 +150,42 @@ values are meant to be real, add coverage for the 4 orphan fixtures, and add a c
 > This is the "verify the instrument, not just the result" failure mode: the harness has been
 > green throughout, and green meant almost nothing.
 
-### 🔴 N-3. We advertise write permissions for routes that do not exist
+### ❌ N-3. ~~We advertise write permissions for routes that do not exist~~ — **RETRACTED 2026-08-12. This finding was WRONG.**
+
+> **Do not act on this section.** Acting on it would have broken progress sync and
+> bookmarks in both target clients.
+>
+> The finding scoped `LibraryStore` and item/library write routes, and concluded from their
+> absence that `Update: true` / `Delete: true` are dishonest. **It missed the entire
+> `/api/me/*` write surface**, which is nine real, working, registered routes:
+>
+> | Route | `handler.go` |
+> |---|---|
+> | `PATCH /api/me/progress/:id` | `:429` |
+> | `PATCH /api/me/progress/batch/update` | `:430` |
+> | `DELETE /api/me/progress/:id` | `:431` |
+> | `POST /api/me/progress/:id/remove-from-continue-listening` | `:456` |
+> | `POST /api/me/item/:id/remove-from-continue-listening` | `:457` |
+> | `POST /api/me/item/:id/bookmark` | `:479` |
+> | `PATCH /api/me/item/:id/bookmark` | `:480` |
+> | `DELETE /api/me/item/:id/bookmark/:time` | `:483` |
+> | `DELETE /api/me/sessions/:id` | `:374` |
+>
+> `Update: true` and `Delete: true` **honestly describe writes we serve.** The comment above
+> `defaultPermissions()` already said so — *"update/delete/download must be present and true
+> or the clients disable working features"* — and this audit contradicted a documented
+> decision without engaging with its stated reason.
+>
+> **Lesson, recorded because it generalises:** "there is no writer for X, therefore the write
+> permission is a lie" is only sound if X is the *only* thing the permission gates. Here it
+> gates progress and bookmark writes too, which are the single most important thing a
+> read-only-catalogue server can still do for an audiobook client. Enumerate what a flag
+> governs before calling it dishonest.
+
+<details>
+<summary>Original (incorrect) finding, kept for the record</summary>
+
+#### ~~N-3. We advertise write permissions for routes that do not exist~~
 
 | | |
 |---|---|
@@ -133,7 +203,16 @@ A client renders edit and delete affordances. Tapping one hits an unregistered
 `LibrariesAccessible: []` alongside `AccessAllLibraries: true` — that is the correct ABS
 idiom for "all libraries".
 
-### 🔴 N-4. Unimplemented `/api/…` paths **301 into `/api/v1/…`** instead of 404ing
+</details>
+
+### ✅ N-4. ~~Unimplemented `/api/…` paths **301 into `/api/v1/…`** instead of 404ing~~ — **FIXED 2026-08-12**
+
+> Six ABS namespaces — `/api/collections`, `/api/playlists`, `/api/authors`, `/api/series`,
+> `/api/users`, `/api/podcasts` — added to a new `absUnimplementedNamespaces` list in
+> `wire_abs_routes.go`, matched as exact path or subtree. They now 404 instead of redirecting.
+> Verified empirically before and after; the redirect still works for app-API paths
+> (`/api/audiobooks` → `/api/v1/audiobooks`), which is pinned by its own test. Regression test
+> verified by removal. Original finding below.
 
 | | |
 |---|---|
@@ -274,11 +353,14 @@ unauthenticated cover endpoint (gate 2.17.0) and `/public/session/:id/track/:ind
 ## 4. Recommended order
 
 1. **N-1** — one line in `nonSPAPrefixes`, plus a regression test. Highest value per byte.
-2. **N-2** — turn on the harness gates for value-real endpoints. This **has been measured**:
-   it goes red across 13 tests (§N-2), all on non-volatile fields. That red list *is* the
-   worklist — work it down rather than flipping the gate and reverting. Add the 4 orphan
-   fixtures. Without this, nothing below stays fixed.
-3. **N-3** and **N-4** — stop advertising what we cannot do; make unimplemented ABS paths 404.
+2. **N-2** — *partially done 2026-08-12.* Four environment-dependent keys are now normalized
+   (13 red → 12). The remainder is **fixture alignment**, not bug-fixing — see the correction
+   in §N-2. Do not chase green by normalizing `size`/`duration`/`progress`; that would delete
+   the signal. Add the 4 orphan fixtures.
+3. ~~**N-3**~~ — **RETRACTED, do not act on it.** It was wrong; see §N-3. `Update`/`Delete`
+   honestly describe the nine `/api/me/*` write routes.
+   **N-4** — *done 2026-08-12.* Six unimplemented ABS namespaces now 404 instead of 301ing into
+   the app API.
 4. **N-5**, **N-6** — contract-conformance and observability.
 5. **N-7 … N-10** — bookkeeping truth-ups.
 6. **N-11** — an operational decision, not a code change.

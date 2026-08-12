@@ -1,7 +1,7 @@
 // file: internal/server/wire_abs_routes.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 9c6b13f8-40a2-4e57-b18d-72e0a5c4d396
-// last-edited: 2026-08-02
+// last-edited: 2026-08-12
 
 package server
 
@@ -66,6 +66,33 @@ var absReservedPathPrefixes = []string{
 	"/api/session/",
 }
 
+// absUnimplementedNamespaces are ABS endpoints we do NOT implement, reserved for the
+// opposite reason to the lists above: not to protect a route we serve, but to make sure
+// the ones we DON'T serve fail honestly.
+//
+// Without these, an ABS client probing /api/collections gets a 301 into
+// /api/v1/collections — the app API — and meets a different JSON shape or a 401. That is
+// the exact "looks implemented, behaves broken" failure the comment above warns about,
+// arrived at from the other direction. An honest 404 lets a client hide the feature;
+// a 301 into a foreign shape makes it look present and broken, and any non-2xx flips
+// AudioBooth's connection indicator.
+//
+// Matched as exact path OR subtree, so /api/authors and /api/authors/:id both 404.
+//
+// Safe because nothing in-repo requests these without the /v1 prefix — the SPA's only
+// bare /api/ call is /api/events (SSE), which is deliberately absent from this list.
+//
+// If one of these is ever implemented on the ABS surface, MOVE it to the lists above
+// rather than deleting it — it must stay excluded from the redirect either way.
+var absUnimplementedNamespaces = []string{
+	"/api/collections",
+	"/api/playlists",
+	"/api/authors",
+	"/api/series",
+	"/api/users",
+	"/api/podcasts",
+}
+
 // absReservedPath reports whether a request path belongs to the ABS surface and must
 // therefore skip the /api/* → /api/v1/* compatibility redirect.
 func absReservedPath(path string) bool {
@@ -76,6 +103,11 @@ func absReservedPath(path string) bool {
 	}
 	for _, prefix := range absReservedPathPrefixes {
 		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	for _, ns := range absUnimplementedNamespaces {
+		if path == ns || strings.HasPrefix(path, ns+"/") {
 			return true
 		}
 	}
