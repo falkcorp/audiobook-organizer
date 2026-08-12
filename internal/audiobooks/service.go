@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service.go
-// version: 1.33.0
+// version: 1.34.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-06-23
+// last-edited: 2026-08-11
 
 // Package audiobooks provides the core business logic for managing audiobooks,
 // including CRUD operations, metadata management, search, deduplication, and
@@ -17,6 +17,8 @@
 package audiobooks
 
 import (
+	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
@@ -77,6 +79,16 @@ type AudiobookService struct {
 	// is constructed. Nil-safe — when nil the delete/purge paths skip
 	// the iTunes side-effect (e.g. tests, iTunes disabled in config).
 	itunesEnqueuer ITunesEnqueuer
+	// libGen scopes listCache keys to the store's book-mutation counter, so a
+	// created/updated/deleted book puts every previously cached page out of
+	// reach. Resolved from the store once at construction; never nil.
+	//
+	// This cache sits UNDER the server's HTTP list cache: the handler's cached
+	// gin.H response is built from GetAudiobooks, which reads this. Keying only
+	// the HTTP cache would have left deleted books to be served straight back
+	// out of here, because InvalidateBookCaches skips listCache unless
+	// config.CacheInvalidateOnBookUpdate is on — and it is off by default.
+	libGen *cache.Generation
 }
 
 // SetActivityService wires the activity service for snapshot fallback in GetAudiobookTags.
@@ -98,14 +110,39 @@ func (svc *AudiobookService) SetITunesEnqueuer(e ITunesEnqueuer) {
 
 // NewAudiobookService creates a new AudiobookService instance
 func NewAudiobookService(store audiobookStore) *AudiobookService {
+	libGen, resolved := database.LibraryGenerationOf(store)
+	if !resolved {
+		slog.Warn("audiobook list cache: store exposes no library generation counter, "+
+			"list entries will only expire by TTL",
+			"store_type", fmt.Sprintf("%T", store))
+	}
 	return &AudiobookService{
 		store: store,
 		// MAYDEPLOY-I4: cap entry count via LRU so 24h TTL doesn't allow
 		// unbounded growth of full Book payloads.
 		bookCache: cache.NewWithLimit[*database.Book]("book", 24*time.Hour, 5000),
-		listCache: cache.NewWithLimit[[]database.Book]("audiobook_list", 24*time.Hour, 500),
+		// TTL cut from 24h to listCacheTTL: with generation keying a book
+		// mutation already puts stale pages out of reach, so the TTL only has
+		// to bound mutation paths that bypass the store's three book-level
+		// writes. See listCacheTTL.
+		listCache: cache.NewWithLimit[[]database.Book]("audiobook_list", listCacheTTL, 500),
+		libGen:    libGen,
 	}
 }
+
+// listCacheTTL bounds how long a cached library page can outlive a change that
+// did not go through CreateBook / UpdateBook / DeleteBook — a direct memdb
+// write, a batch path, or an index-only edit. Generation keying handles the
+// three store writes precisely, so this is a backstop rather than the primary
+// mechanism, and 24 hours was far too long to serve that role: the phantom
+// merged books stayed on the library page for a full day because nothing
+// invalidated the entry and the LRU never evicted it (library-page keys are the
+// most recently used, so they are the last candidates for capacity eviction).
+//
+// Ten minutes keeps the warm-cache benefit for normal browsing while capping
+// the blast radius of an unknown-path mutation at a single-digit number of
+// minutes.
+const listCacheTTL = 10 * time.Minute
 
 // InvalidateBookCaches clears all book-related caches. Called after any
 // mutation (create, update, delete) to keep reads consistent.
