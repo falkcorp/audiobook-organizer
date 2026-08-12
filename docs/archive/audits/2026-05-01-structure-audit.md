@@ -1,7 +1,7 @@
-<!-- file: docs/audits/2026-05-01-structure-audit.md -->
-<!-- version: 1.0.0 -->
+<!-- file: docs/archive/audits/2026-05-01-structure-audit.md -->
+<!-- version: 1.0.1 -->
 <!-- guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890 -->
-<!-- last-edited: 2026-05-01 -->
+<!-- last-edited: 2026-08-11 -->
 
 # Structure & Refactor Audit — 2026-05-01
 

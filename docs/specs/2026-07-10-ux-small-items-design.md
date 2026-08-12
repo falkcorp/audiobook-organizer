@@ -29,7 +29,7 @@ involve genuinely new product surface:
 | C8 (#1447, TODO.md:810) | auto-file GitHub issue per `not_dup` cluster | genuinely open: zero implementation in `internal/`; prior design brief exists (`docs/agent-tasks/dedup-dataset/TASK-05-autobug-not-dup-clusters.md`, marked DEFERRED); label quality now depends on INIT-1's re-mine |
 | DOCS-1 (#1276) | comprehensive system docs | open; docs authoring, not weak-model agent work |
 | SLOG-W13 (#1254, TODO.md:1408) | wire raw `slog.*` to `logging.*` | open; fresh count at HEAD: **1162** `slog.Info/Warn` occurrences across **212** files (TODO's "~1363/193" figure is stale); scope is op-context flows only |
-| SLOG-PROD-VERIFY (#1255, TODO.md:1409) | prod smoke-test op-ID chain | open; `GET /api/v1/operations/:id/activity` exists — [this-session verified] `wire_library_routes.go:39` (`ListOperationActivity`). CAUTION: the procedure doc `docs/slog-prod-verify.md` triggers a `metadata-fetch` op which is fetch+APPLY (a prod write) — the autonomous run must substitute a read-only op; metadata-domain tags only via an AskUserQuestion-gated run (see plan TASK-08) |
+| SLOG-PROD-VERIFY (#1255, TODO.md:1409) | prod smoke-test op-ID chain | open; `GET /api/v1/operations/:id/activity` exists — [this-session verified] `wire_library_routes.go:39` (`ListOperationActivity`). CAUTION: the procedure doc `docs/operations/slog-prod-verify.md` triggers a `metadata-fetch` op which is fetch+APPLY (a prod write) — the autonomous run must substitute a read-only op; metadata-domain tags only via an AskUserQuestion-gated run (see plan TASK-08) |
 
 **Goal:** close all eight INIT-10 items — three by verified closeout, two by small shippable
 features (hash-chain UI, gated C8 op), one by a scoped `/parallel-sweep` logging sweep, one by
@@ -189,7 +189,7 @@ signature change, forbidden in a sweep shard). Sharded by package for `/parallel
 
 TODO.md-only transforms with grep-checkable before/after text (TASK-01, TASK-03) and
 report-only verifications with zero repo changes (TASK-04). TASK-08 is an operational prod
-smoke-test, then a one-line TODO checkoff — but NOT verbatim per `docs/slog-prod-verify.md`:
+smoke-test, then a one-line TODO checkoff — but NOT verbatim per `docs/operations/slog-prod-verify.md`:
 that doc's `metadata-fetch` op is fetch+APPLY (a prod write). The autonomous path substitutes
 the read-only `scan-duration-mismatch` maintenance job to verify the opID→journalctl→
 `/operations/:id/activity` chain; the metadata-domain-tag checklist items run only via an

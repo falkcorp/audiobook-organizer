@@ -44,7 +44,7 @@ FILE: docs/AI-REFERENCE.md
   LINE 19: 192.0.2.99 — private IP address [BLOCKER]
   LINE 19: unimatrixzero — internal hostname [BLOCKER]
 
-FILE: docs/implementation-guide.md
+FILE: docs/archive/implementation-guide.md
   LINE 4: 192.0.2.99 — private IP address (appears in curl examples) [BLOCKER]
 
 SUMMARY: 2 files, 3 blockers, 0 warnings

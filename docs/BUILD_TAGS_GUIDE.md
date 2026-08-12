@@ -1,7 +1,7 @@
-<!-- file: BUILD_TAGS_GUIDE.md -->
-<!-- version: 1.0.0 -->
+<!-- file: docs/BUILD_TAGS_GUIDE.md -->
+<!-- version: 1.0.1 -->
 <!-- guid: 1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d -->
-<!-- last-edited: 2026-01-22 -->
+<!-- last-edited: 2026-08-11 -->
 
 # Go Build Tags Guide for Mockery Mocks
 
