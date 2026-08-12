@@ -1,7 +1,7 @@
 # file: .github/workflows/ci.yml
-# version: 3.3.0
+# version: 3.3.1
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
-# last-edited: 2026-08-11
+# last-edited: 2026-08-12
 
 # Fast parallel CI for PRs and pushes.
 # Runs go vet/build, short tests, frontend lint/build, and frontend unit tests
@@ -134,16 +134,25 @@ jobs:
     name: Coverage Floor (PR gate)
     runs-on: ubuntu-latest
     # 35, not 20. `make test-short` runs go test with `-timeout 25m`, so a cap
-    # of 20 guaranteed the runner killed the job BEFORE Go's own timeout could
+    # of 20 would let the runner kill this job BEFORE Go's own timeout could
     # fire — and Go's timeout is the only thing that prints a goroutine dump
-    # naming the stuck test. Every hang therefore surfaced as a bare
-    # `conclusion=cancelled` with no diagnosis, three times on 2026-08-11 alone
-    # (#2311, #2315), and `cancelled` reads as a test failure on the PR even
-    # though nothing failed.
+    # naming the stuck test.
     #
-    # The job cap must stay strictly greater than the longest `-timeout` passed
-    # to any go test invocation in the steps below, plus setup. If you raise the
-    # test timeout, raise this too.
+    # INVARIANT: the job cap must stay strictly greater than the longest
+    # `-timeout` passed to any go test invocation in the steps below, plus
+    # setup. If you raise the test timeout, raise this too.
+    #
+    # CORRECTION (2026-08-12): an earlier version of this comment credited the
+    # #2311/#2315 `conclusion=cancelled` failures to this job. That was wrong.
+    # Those cancellations were on `Minimal CI / Go Tests (short, race)`, which
+    # is NOT defined in this file — the `Minimal CI /` prefix means it comes
+    # from the reusable workflow referenced by the `ci` job above
+    # (falkcorp/github-common/.github/workflows/reusable-ci-minimal.yml), where
+    # the cap was 20 against its own `go test -timeout 30m`. This job is a
+    # different job that has never been the one cancelled; it completed in
+    # 13m21s on the run where Go Tests was killed at 20m16s. Fixed upstream in
+    # falkcorp/github-common#346; that workflow exposes no timeout input, so it
+    # could not have been fixed from this repo.
     #
     # This is a diagnosis fix, not a performance fix: internal/server alone is a
     # ~500s package (TODO-SRVTIMEOUT) and sharding it is still open.
