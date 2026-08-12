@@ -29,7 +29,7 @@ a brief is not evidence. Full per-brief evidence with `file:line` citations is i
 |---|---|---|---|
 | [`abs-sync/`](abs-sync/) | ACTIVE | **10 / 10 written** (index lists 12; TASK-11 and TASK-12 have no brief) | 9 live TODO items; TASK-12's three identity gaps are absent at HEAD |
 | [`bug-techdebt/`](bug-techdebt/) | ACTIVE | 5 / 7 | TASK-01 warn-log absent; TASK-02 `staticcheck` exits 1 (5 test-file findings, post-completion drift); TODO #33/#34 |
-| [`dedup-pipeline-hardening/`](dedup-pipeline-hardening/) | **PARTIAL — closest to archivable** | 5 / 5 code + 1 operational | one contradictory bookkeeping line: `TODO.md:4988` says the prod drain was never run, `docs/operations/pending-prod-actions.md:26` says it ran 2026-07-18 |
+| [`dedup-pipeline-hardening/`](dedup-pipeline-hardening/) | **PARTIAL — closest to archivable** | 5 / 5 code + 1 operational | ~~contradictory bookkeeping~~ **resolved 2026-08-12**: the prod drain *did* run (prod journal, `apply=true dismissed=7891`); `TODO.md` was stale and is corrected. Now blocked only on T03 (the **sandbox** purge wave, still unrun) and T13 |
 | [`error-correction-2026-07/`](error-correction-2026-07/) | ACTIVE | 10 / 13 (inline in `TASKS.md`, no `TASK-*.md` files) | T03 sandbox purge, T04 prod deploy, T13 docs truth-up — the only genuine unchecked boxes in the whole directory |
 | [`ux-small-items/`](ux-small-items/) | ACTIVE | 4 present + 1 partial + 1 N/A-by-design / 8 | TASK-05 and TASK-08 have zero implementation; TODO #5/#28/#29 |
 | [`torrent-relocation/`](torrent-relocation/) | ACTIVE — **human-gated** | 1 / 7 | TASK-02's STOP-FOR-HUMAN Deluge spike never opened, blocking T03–T07 |

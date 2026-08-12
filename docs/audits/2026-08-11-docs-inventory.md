@@ -1,7 +1,7 @@
 <!-- file: docs/audits/2026-08-11-docs-inventory.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 4d1c8a72-3e6b-4f5a-9c28-7b0d1e4f6a93 -->
-<!-- last-edited: 2026-08-11 -->
+<!-- last-edited: 2026-08-12 -->
 
 # Docs inventory and consolidation — 2026-08-11
 
@@ -27,7 +27,7 @@ SHAs, so commit archaeology is unreliable here; the artifact is the evidence.
 |---|---|---|---|
 | `abs-sync` | ACTIVE | 10/10 written (index claims 12; TASK-11/12 unwritten) | 9 live TODO items; TASK-12's identity gaps absent — `grep -c RepointSync internal/dedup/book_dedup.go internal/scanner/scanner.go` → **0 and 0**, while `book_dedup.go:395 MergeBooks` hard-deletes |
 | `bug-techdebt` | ACTIVE | 5/7 | TASK-01's required warn-log absent; TASK-02's acceptance is `staticcheck` exit 0 but HEAD exits **1** (5 findings, all in `_test.go` touched *after* the brief — drift, not backlog) |
-| `dedup-pipeline-hardening` | **PARTIAL** | 5/5 code + 1 operational | one contradictory line (§1.3) |
+| `dedup-pipeline-hardening` | **PARTIAL** | 5/5 code + 1 operational | ~~one contradictory line~~ resolved 2026-08-12 (§1.3): the prod run **did** happen. Now blocked only on T03 (sandbox purge wave) + T13 |
 | `error-correction-2026-07` | ACTIVE | 10/13 inline in `TASKS.md` | T03, T04, T13 — the only genuine unchecked boxes in the directory |
 | `ux-small-items` | ACTIVE | 4 + 1 partial + 1 N/A / 8 | TASK-05, TASK-08 have zero implementation |
 | `torrent-relocation` | ACTIVE | 1/7 | TASK-02's STOP-FOR-HUMAN Deluge spike never opened |
@@ -43,19 +43,66 @@ SHAs, so commit archaeology is unreliable here; the artifact is the evidence.
 `<!-- file: -->` header), which made this both the highest-yield and lowest-risk move
 available. **Archived** to `docs/archive/superpowers/fleet-done/`.
 
-### 1.3 Two bookkeeping contradictions — NOT resolved here
+### 1.3 Two bookkeeping contradictions — ✅ RESOLVED 2026-08-12
 
-The same event is recorded both ways. Each makes the other unfalsifiable, and **only the
-owner can say which is true**:
+> **Update (2026-08-12).** Settled against production. **The status docs were right and
+> `TODO.md` was wrong.** Details and correction in §1.3.1 below. One of the two "contradictions"
+> turned out not to be one at all — see the 7,878/7,891 correction.
 
-| Says NOT done | Says done |
+The same event was recorded both ways:
+
+| Said NOT done — **wrong** | Said done — **correct** |
 |---|---|
 | `TODO.md:4988` — prod drain "code merged, run NOT executed; operator-gated" | `docs/operations/pending-prod-actions.md:26` — "**EXECUTED ON PROD 2026-07-18**", exact-pending 9,074→1,311 |
 | `TODO.md:5311` — T04 prod deploy `- [ ]`, "nothing deployed since 2026-07-17" | `docs/dedup/STATUS.md:78-86` — "EXECUTED ON PRODUCTION 2026-07-18" |
 
-Purgeable count also drifts: **7,878** (`TODO.md:5304`) vs **7,891** (`STATUS.md:68`).
-Task T13 exists specifically to reconcile this and is itself still open. Resolving it is the
-single thing standing between `dedup-pipeline-hardening` and archivability.
+#### 1.3.1 What production actually says
+
+Neither doc was treated as evidence. The production host's journal still carries the run
+(journald holds 2.2 GB there; 2026-07-18 is within retention):
+
+```
+Jul 18 12:48:54  registry: starting run  op_id=01KXV22ZJ6QWWZ1SF1FZGXBC82
+                 def_id=maintenance.dedup-exact-triage
+Jul 18 12:48:58  dedup triage: complete  scanned=10319 purgeable=7891 keep=278 review=2150
+                 lookup_errors=0 apply=true dismissed=7891 dismiss_errors=0
+Jul 18 12:48:58  operation finished  outcome=completed duration_ms=3860
+```
+
+`apply=true` and `dismissed=7891` — a real apply, not a dry-run, matching `STATUS.md` exactly.
+⇒ **`TODO.md` entries 1 and T04 were stale. Corrected.**
+
+#### 1.3.2 The "purgeable drift" was not a drift — this audit got it wrong
+
+The first version of this document reported **7,878** (`TODO.md:5304`) vs **7,891**
+(`STATUS.md:68`) as an unexplained inconsistency. It is not one:
+
+| Figure | Population | Scanned | Source |
+|---|---|---|---|
+| 7,878 | **dedup sandbox** | 10,304 | `TODO.md` T02 |
+| 7,891 | **production** | 10,319 | prod journal + `STATUS.md` |
+
+Two different datasets — the sandbox replica held 15 fewer candidates. **Both numbers are
+correct.** They were only ever comparable-looking because neither line said which population it
+described; both now do. The lesson is the audit's own: two numbers that differ are not
+automatically in conflict — establish they measure the same thing before calling it a
+contradiction.
+
+#### 1.3.3 New finding: the backlog has re-accumulated
+
+Measured on prod 2026-08-12 via `GET /api/v1/dedup/stats`:
+
+| | post-run 2026-07-18 | 2026-08-12 |
+|---|---|---|
+| exact **pending** | 1,311 | **5,947** |
+| exact dismissed | 9,242 | 8,258 |
+
+The drain did what it claimed. But pending has regrown **~4.5×** in 3.5 weeks, so whatever
+emits the junk candidates was never addressed — this needs a *source* fix, not a second drain.
+Filed as a `todo.d` fragment.
+
+⇒ `dedup-pipeline-hardening` is no longer blocked by a bookkeeping contradiction. Its remaining
+gap is T03 (the **sandbox** purge wave, still unrun) and T13.
 
 ### 1.4 Two files were corrupt at HEAD — fixed
 
@@ -173,7 +220,7 @@ and the `run-sweep.sh` limitation documented inline.
 |---|---|---|
 | **11 UNCERTAIN files** left in place | archiving on a guess is worse than leaving them | owner |
 | **`openapi.yaml` / `openapi.json` union merge** | §1.6 — a content merge that would lose 25 paths if done as a pick-a-winner | needs a session of its own |
-| **The two bookkeeping contradictions** | §1.3 — a documentation pass cannot decide whether a prod run happened | owner |
+| ~~**The two bookkeeping contradictions**~~ | ✅ **RESOLVED 2026-08-12** against the prod journal (§1.3): the run happened, `TODO.md` was stale, and the 7,878/7,891 "drift" was sandbox-vs-prod, not a conflict | — |
 | **`docs/system/**` (9) and `docs/architecture/**` (9)** | out of the classification scope, but **required** to settle the top-level-vs-`docs/system/` duplicate cluster | follow-up pass |
 | **78 remaining missing headers** | 76 of them were the fleet files (now archived, still header-less); the rest are CURRENT files that need headers written, not fixed | follow-up |
 | **`run-sweep.sh` silent no-op** | §1.5 — needs a behaviour decision, not just a doc note | owner |
