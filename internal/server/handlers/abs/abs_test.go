@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/abs_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2c07b5e9-4d16-48fa-b930-71e5c8a04f6d
-// last-edited: 2026-08-02
+// last-edited: 2026-08-12
 
 package abs_test
 
@@ -455,14 +455,23 @@ func str(t *testing.T, m map[string]any, key string) string {
 }
 
 // assertConformant diffs a response body against the golden ABS fixture, checking
-// presence and type of every field the real server returned.
+// presence, type AND VALUE of every field the real server returned.
+//
+// CompareValues was off until 2026-08-12, which made this a shape check: a handler
+// that returned every correct key with entirely wrong data passed. Twenty-two call
+// sites read as a conformance suite and gated almost nothing.
+//
+// Strictness is now the DEFAULT, and weakening it is what costs effort — a call site
+// that cannot meet the oracle yet must say so by name via assertConformantPending.
+// The old arrangement had that backwards: a new endpoint got the weak gate for free,
+// and turning it up required someone to remember. Nobody was going to.
 func assertConformant(t *testing.T, fixture string, got any) {
 	t.Helper()
 	f, err := conformance.LoadFixture(filepath.Join(fixturesDir(), fixture))
 	if err != nil {
 		t.Fatalf("LoadFixture(%s): %v", fixture, err)
 	}
-	findings := f.CompareBody(got, conformance.Options{IgnoreExtra: true})
+	findings := f.CompareBody(got, conformance.Options{IgnoreExtra: true, CompareValues: true})
 	if len(findings) > 0 {
 		for _, fi := range findings {
 			t.Errorf("%s: %s", fixture, fi)
@@ -534,7 +543,10 @@ func TestRegisteredRoutesAreReal(t *testing.T) {
 func TestLogin_PasswordSuccessConformsToFixture(t *testing.T) {
 	h := newConformanceHarness(t)
 	body := h.login(t, "oracle", "pw-pw-pw-pw")
-	assertConformant(t, "post_login.json", body)
+	assertConformantPending(t, "post_login.json", body,
+		"identity divergence, not drift: we send user.type=user where ABS sends root, "+
+			"and permissions.upload/createEreader false where ABS sends true. Needs a "+
+			"product call on whether the ABS role model is one we adopt or translate")
 }
 
 // TestLogin_UserDefaultLibraryIdIsNonNullString is a LOGIN BLOCKER (§1.8.2):
@@ -890,7 +902,9 @@ func TestRefresh_RotatesAndConformsToFixture(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("got %d: %s", w.Code, w.Body.String())
 	}
-	assertConformant(t, "post_auth_refresh.json", body)
+	assertConformantPending(t, "post_auth_refresh.json", body,
+		"same identity divergence as post_login.json — this endpoint re-serves the user "+
+			"object, so it goes strict when login does")
 
 	u := userObj(t, body)
 	newAccess := str(t, u, "accessToken")
@@ -1165,7 +1179,9 @@ func TestMe_ConformsToFixture(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("got %d: %s", w.Code, w.Body.String())
 	}
-	assertConformant(t, "get_api_me.json", body)
+	assertConformantPending(t, "get_api_me.json", body,
+		"same identity divergence as post_login.json, plus Source=audiobook-organizer "+
+			"where the oracle captured docker — that one is ours to keep")
 }
 
 // TestMe_MediaProgressIsAlwaysAPresentArray is the DATA-LOSS guard of §1.8.1:
@@ -1310,7 +1326,9 @@ func TestSessions_ConformsToFixture(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("got %d: %s", w.Code, w.Body.String())
 	}
-	assertConformant(t, "get_api_me_sessions.json", body)
+	assertConformantPending(t, "get_api_me_sessions.json", body,
+		"fixture drift: listening sessions embed the synthetic book's duration and "+
+			"per-track values")
 
 	// total must be an INTEGER (§1.7.3 item 5: Dart throws on `42.0 as int?`).
 	total, ok := body["total"].(float64)

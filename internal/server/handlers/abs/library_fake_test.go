@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/library_fake_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1d4a67f2-0c85-4f39-9b6e-3a71c5d0e824
-// last-edited: 2026-08-02
+// last-edited: 2026-08-12
 
 package abs_test
 
@@ -725,6 +725,32 @@ func mustLoadFixture(t *testing.T, name string) *conformance.Fixture {
 	return f
 }
 
+// assertConformantPending is a SHAPE-ONLY check for a call site that cannot meet the
+// oracle's values yet. It is the debt list for the strictness flip of 2026-08-12.
+//
+// Every use is a promise to come back, so every use must say why in prose — an empty
+// reason fails the test rather than silently buying another release of weak checking.
+// Delete a call site from this helper the moment it can hold assertConformant; the
+// count of these IS the remaining N-2 work, so it must not be able to drift upward
+// quietly.
+func assertConformantPending(t *testing.T, fixture string, got any, reason string) {
+	t.Helper()
+	if strings.TrimSpace(reason) == "" {
+		t.Fatalf("%s: assertConformantPending requires a reason — a call site that cannot say "+
+			"why it is exempt has no business being exempt", fixture)
+	}
+	f := mustLoadFixture(t, fixture)
+	t.Logf("%s: PENDING strict conformance (shape only) — %s", fixture, reason)
+	findings := f.CompareBody(got, conformance.Options{IgnoreExtra: true})
+	if len(findings) > 0 {
+		for _, fi := range findings {
+			t.Errorf("%s: %s", fixture, fi)
+		}
+		t.Fatalf("%s: %d SHAPE findings against the real ABS 2.36.0 response — these are not "+
+			"covered by the pending exemption, which is for values only", fixture, len(findings))
+	}
+}
+
 // assertConformantExcept is assertConformant with an explicit, named allowance list.
 //
 // It exists for exactly ONE situation and must not grow past it: a field where real
@@ -732,6 +758,11 @@ func mustLoadFixture(t *testing.T, name string) *conformance.Fixture {
 // work would close the gap. Each allowance names the JSON path AND the reason, so an
 // allowance can never quietly become a shape bug — a finding at any other path still
 // fails, and an allowance that stops firing is dead weight a reader can delete.
+//
+// NOTE (2026-08-12): still shape-only while assertConformant went strict. Its one call
+// site (search) is in the pending-12 and its allowances are calibrated against
+// shape-level findings, so flipping CompareValues here without retriaging those
+// allowances would just relocate the failure. It goes strict with the rest in N-2.
 func assertConformantExcept(t *testing.T, fixture string, got any, allowed map[string]string) {
 	t.Helper()
 	f := mustLoadFixture(t, fixture)
