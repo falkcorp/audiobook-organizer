@@ -220,9 +220,13 @@ func (ss *ScanService) determineFoldersToScan(folderPath *string, forceUpdate bo
 		//     invokes AutoOrganizeFn on the books it processes, so folding the
 		//     destination into every timed scan would feed already-organized
 		//     books back into the organize path on a loop.
-		//  2. On this deployment the iTunes tree lives UNDER the books root
-		//     (/mnt/bigdata/books/itunes), and that tree is hands-off — a
-		//     default RootDir walk would drag it in every 6 hours.
+		//  2. RootDir is operator-set and unconstrained, so its blast radius is
+		//     unknown at this layer. On the reference deployment the books
+		//     tree holds a hands-off iTunes subtree alongside PDFs, archives
+		//     and unrelated media; a RootDir pointed at or above that level
+		//     would be re-walked every 6 hours. (NOT asserting that is where
+		//     RootDir currently points — it is a DB setting this code cannot
+		//     see, which is exactly why the timed path stays conservative.)
 		//  3. The consequence is bounded and known: a folder dropped straight
 		//     into the organized library root is NOT auto-discovered. The
 		//     remedy is to add it as an import path (which the watcher
