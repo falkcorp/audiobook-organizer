@@ -29,29 +29,20 @@
   wrong by more than the known truncation), so this stays visible rather than becoming
   permanently accepted.
 
-- [ ] **`/api/me/sessions` reports `itemsPerPage` as the item count, not the page size.**
-  `internal/server/handlers/abs/me.go:132` sets `ItemsPerPage: len(out)` alongside
-  `NumPages: 1` — the endpoint does not paginate at all. The oracle returns
-  `itemsPerPage=10, total=3, numPages=1`, i.e. the default page size with a short page.
-  The sibling handlers in the same package get this right:
-  `stats.go:108` and `stats.go:133` both use `queryInt(c, "itemsPerPage", 10)`.
+- [ ] **`deviceInfo.deviceType` is always `"unknown"`, and the capture cannot tell us what
+  it should be.** `play.go:307` defaults it to `"unknown"` and then echoes whatever the
+  client sent (`play.go:315`), so a client that supplies `deviceType` is already handled —
+  the gap is only that we never *derive* it. Real ABS derives it from the User-Agent, and
+  the oracle answered `"wearable"` for a request whose body carried only `clientName` and
+  `deviceId`.
 
-  A client computing `numPages = ceil(total / itemsPerPage)` gets the right answer today
-  only by accident, because `total` is also `len(out)`. Any client that trusts
-  `itemsPerPage` as a page size — to decide whether to request a second page — is being
-  told the wrong number.
-
-  Not fixed with the conformance work because the honest fix is either to report the
-  requested page size while still returning everything (self-inconsistent) or to actually
-  paginate the endpoint (a live behaviour change for any user with more sessions than one
-  page). That is a product call, not a test-fixture call. Found by #2337's value gate.
-
-- [ ] **`deviceInfo.deviceType` is always `"unknown"`.** We never derive it from the
-  User-Agent; the oracle capture reported `wearable`. Unlike `ipAddress`/`userAgent` —
-  which the conformance normalizer treats as caller artifacts precisely because
-  `me.go:127` *does* populate them for real — this one is a genuine unimplemented field,
-  so it is named in an allowance rather than normalized away. Low priority; nothing is
-  known to read it.
+  **Blocked on evidence, not effort: 0 of 28 fixtures record request headers at all**, so
+  the User-Agent that produced `"wearable"` is not preserved anywhere. Inferring a
+  UA→deviceType rule from one output with no recorded input is exactly the single-sample
+  mistake that produced the retracted `tagTrack` finding. Unblocking this means teaching
+  the capture harness in `testdata/abs-oracle/` to record request headers and re-capturing;
+  the derivation is then a small, testable mapping. Low priority regardless — nothing in
+  the client contract reads `deviceType`; it is diagnostic, shown in the sessions list.
 
 - [ ] **`publishedYear` loses the era: `Book.PrintYear` is an `int`, so the oracle's
   `"800BC"` comes back `"800"`.** ABS passes the raw date tag through. Same shape of loss

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/abs_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 2c07b5e9-4d16-48fa-b930-71e5c8a04f6d
 // last-edited: 2026-08-12
 
@@ -1321,16 +1321,10 @@ func TestSessions_ConformsToFixture(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("got %d: %s", w.Code, w.Body.String())
 	}
-	assertConformantExcept(t, "get_api_me_sessions.json", body, map[string]allowance{
-		// A real bug, deliberately not fixed here: me.go:132 sets ItemsPerPage to
-		// len(out) — the number of items on the page rather than the page size — where
-		// the sibling handlers at stats.go:108,133 correctly use
-		// queryInt(c, "itemsPerPage", 10). Fixing it changes pagination on a live
-		// endpoint, which has no business riding along with test-fixture work.
-		// Filed: todo.d/20260812-bookfile-duration-integer-seconds.md
-		"itemsPerPage": {Reason: "me.go:132 reports len(out) instead of the page size; " +
-			"oracle says 10 with total 3. Filed as a separate production fix"},
-	})
+	// No allowance any more: me.go now reports itemsPerPage as a page size (default 10,
+	// as the oracle answers) and paginates on ?page=/?itemsPerPage= rather than
+	// returning everything under a page-size that was really an item count.
+	assertConformant(t, "get_api_me_sessions.json", body)
 
 	// total must be an INTEGER (§1.7.3 item 5: Dart throws on `42.0 as int?`).
 	total, ok := body["total"].(float64)
