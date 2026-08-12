@@ -1,7 +1,7 @@
 <!-- file: docs/agent-tasks/README.md -->
-<!-- version: 3.0.0 -->
+<!-- version: 3.1.0 -->
 <!-- guid: 7a1e0c44-9d2b-4f08-bc31-2e5a6b7c8d90 -->
-<!-- last-edited: 2026-08-11 -->
+<!-- last-edited: 2026-08-12 -->
 
 # Agent Task Package
 
@@ -41,8 +41,13 @@ a brief is not evidence. Full per-brief evidence with `file:line` citations is i
 > ⚠️ **`run-sweep.sh` cannot drive four of these ten.** It discovers work with
 > `find -maxdepth 1 -name 'TASK-*.md'`, but `community-fingerprint-index`, `workflow-system`,
 > `responses-api-migration` and `error-correction-2026-07` contain no `TASK-*.md` files —
-> they use `AWAIT-APPROVAL.md`, `HOLD-STATUS.md`, and `TASKS.md` respectively. For those the
-> script creates no worktrees and emits no prompts: a **silent no-op**, not an error.
+> they use `AWAIT-APPROVAL.md`, `HOLD-STATUS.md`, and `TASKS.md` respectively.
+>
+> **It now says so.** As of v1.4.0 the script exits **2** with a diagnostic naming what the
+> package contains instead and what the gate means, rather than creating no worktrees and
+> printing "Next steps" as though it had worked. (Exit **1** remains "no such workstream", so
+> a typo and an unparseable package are distinguishable.) `set -e` could never have caught the
+> old behaviour: iterating an empty list is not a command failure.
 
 ## Completed workstreams (archived)
 

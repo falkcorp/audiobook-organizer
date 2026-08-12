@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # file: docs/agent-tasks/run-sweep.sh
-# version: 1.3.0
+# version: 1.4.0
 # guid: 9e0f1a2b-4c3d-4e60-af71-2b3c4d5e6f70
-# last-edited: 2026-06-28
+# last-edited: 2026-08-12
 #
 # Portable coordinator helper: for each requested TASK in a workstream, create an
 # isolated git worktree branched off a fresh origin/main and emit a ready-to-paste
@@ -45,6 +45,49 @@ if [[ $# -gt 0 ]]; then
 else
   while IFS= read -r f; do TASK_FILES+=("$f"); done \
     < <(find "$HERE/$WORKSTREAM" -maxdepth 1 -name 'TASK-*.md' | sort)
+fi
+
+# A workstream with no TASK-*.md files must be an ERROR, not a quiet success.
+#
+# Four of the ten live packages (community-fingerprint-index, workflow-system,
+# responses-api-migration, error-correction-2026-07) hold their work in
+# AWAIT-APPROVAL.md, HOLD-STATUS.md or a TASKS.md with inline tasks — not in
+# TASK-*.md files. For those, the loop below simply iterated zero times and the
+# script went on to print "Next steps (coordinator)" as though it had done its
+# job. `set -e` cannot catch this: iterating an empty list is not a failure, and
+# every individual command succeeded.
+#
+# The failure mode was therefore indistinguishable from "this workstream has
+# nothing to do" — the operator saw a clean run and no worktrees, and had no way
+# to tell whether that meant done or unparseable.
+if [[ ${#TASK_FILES[@]} -eq 0 ]]; then
+  {
+    echo "ERROR: no TASK-*.md files in workstream '$WORKSTREAM' — nothing to drive."
+    echo
+    echo "This script only understands workstreams built from TASK-*.md briefs."
+    echo "'$WORKSTREAM' contains:"
+    find "$HERE/$WORKSTREAM" -maxdepth 1 -type f -name '*.md' -exec basename {} \; |
+      sort | sed 's/^/  /'
+    echo
+    for alt in AWAIT-APPROVAL.md HOLD-STATUS.md TASKS.md; do
+      if [[ -f "$HERE/$WORKSTREAM/$alt" ]]; then
+        case "$alt" in
+          AWAIT-APPROVAL.md)
+            echo "  ⇒ $alt: this workstream is gated on a human approval that has not been"
+            echo "    given. Read it and resolve the gate before sweeping." ;;
+          HOLD-STATUS.md)
+            echo "  ⇒ $alt: this workstream is on an explicit hold. Read it and confirm the"
+            echo "    hold is lifted before sweeping." ;;
+          TASKS.md)
+            echo "  ⇒ $alt: tasks are inline in a single file rather than one brief per file."
+            echo "    Run them by hand, or split them into TASK-NN-*.md first." ;;
+        esac
+      fi
+    done
+    echo
+    echo "If you expected briefs here, check the workstream name for a typo."
+  } >&2
+  exit 2
 fi
 
 git -C "$REPO" fetch origin -q
