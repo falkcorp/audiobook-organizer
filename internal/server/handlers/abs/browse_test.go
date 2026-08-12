@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/browse_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8b3e10c4-6d97-4a52-bf08-2e4c95d7130a
 // last-edited: 2026-08-12
 
@@ -76,9 +76,10 @@ func TestLibraryItems_ConformsToOracle(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("got %d want 200", code)
 	}
-	assertConformantPending(t, "get_api_libraries_id_items.json", body,
-		"fixture drift: the minified media block carries the synthetic book's flat 9975 "+
-			"duration and 2049-2054 byte sizes")
+	assertConformantExcept(t, "get_api_libraries_id_items.json", body, map[string]allowance{
+		"results[].media.duration":               {Reason: durationReason, Within: 3.0},
+		"results[].media.metadata.publishedYear": {Reason: publishedYearReason},
+	})
 }
 
 // TestLibraryItems_MinifiedDurationIsNonZero pins verified requirement 13: if
@@ -254,9 +255,16 @@ func TestPersonalized_ConformsToOracle(t *testing.T) {
 	if _, isObj := body.(map[string]any); isObj {
 		t.Fatal("/personalized must be a bare array, not an object (§1.8.6)")
 	}
-	assertConformantPending(t, "get_api_libraries_id_personalized.json", body,
-		"fixture drift: shelves embed the same minified media block as "+
-			"get_api_libraries_id_items.json")
+	assertConformantExcept(t, "get_api_libraries_id_personalized.json", body, map[string]allowance{
+		"[].entities[].media.duration":               {Reason: durationReason, Within: 3.0},
+		"[].entities[].media.metadata.publishedYear": {Reason: publishedYearReason},
+		// The authors shelf lists the same two authors in the opposite order. Ordering
+		// within a shelf is not pinned by the fixture format (each entity is compared
+		// positionally), and the seed's author ids drive ours.
+		"[].entities[].name": {Reason: "authors shelf ordering: the oracle lists " +
+			"\"transl. Samuel Butler Homer\" before \"Homer\"; our order follows the " +
+			"seeded author ids. Positional comparison makes this read as two mismatches"},
+	})
 }
 
 func TestSeries_ConformsToOracle(t *testing.T) {
@@ -332,9 +340,10 @@ func TestFilterData_AllEightKeys(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("got %d want 200", code)
 	}
-	assertConformantPending(t, "get_api_libraries_id_filterdata.json", body,
-		"fixture drift: the oracle's filter facets were built from the real library's "+
-			"authors/narrators/genres, which the fake library does not reproduce verbatim")
+	assertConformantExcept(t, "get_api_libraries_id_filterdata.json", body, map[string]allowance{
+		"publishedDecades[]": {Reason: publishedYearReason + " — the decade facet is " +
+			"derived from that year, so it inherits the same loss"},
+	})
 
 	obj := body.(map[string]any)
 	for _, key := range []string{"authors", "genres", "tags", "series", "narrators", "languages", "publishers", "publishedDecades"} {
@@ -373,9 +382,29 @@ func TestSearch_ConformsToOracle(t *testing.T) {
 	// null here. Neither target client reads it. The fix belongs in the scanner.
 	const langGap = "audioFiles[].language is ffprobe stream data our scanner does not persist; " +
 		"read by neither AudioBooth nor Absorb — see mapper.go fileLanguage"
-	assertConformantExcept(t, "get_api_libraries_id_search.json", body, map[string]string{
-		"book[0].libraryItem.media.audioFiles[0].language": langGap,
-		"book[0].libraryItem.media.tracks[0].language":     langGap,
+	// Search returns BOTH books, so this list is the union of what each one diverges on.
+	// book[0] is the single-file m4b — its chapters and filename now come from the
+	// oracle, so its bounds and track title match exactly. book[1] is the six-mp3 copy,
+	// whose chapters are synthesized from the integer track durations and so inherit the
+	// truncation, and whose tracks carry tag titles.
+	assertConformantExcept(t, "get_api_libraries_id_search.json", body, map[string]allowance{
+		"book[].libraryItem.media.chapters[].start":      {Reason: durationReason + " (synthesized chapter bound, book[1])", Within: 3.0},
+		"book[].libraryItem.media.chapters[].end":        {Reason: durationReason + " (synthesized chapter bound, book[1])", Within: 3.0},
+		"book[].libraryItem.media.tracks[].title":        {Reason: trackTitleReason},
+		"book[].libraryItem.media.audioFiles[].language": {Reason: langGap},
+		"book[].libraryItem.media.tracks[].language":     {Reason: langGap},
+		"book[].libraryItem.media.audioFiles[].duration": {Reason: durationReason, Within: 0.5},
+		"book[].libraryItem.media.tracks[].duration":     {Reason: durationReason, Within: 0.5},
+		// book[1]'s total sums six roundings, so this one takes the aggregate bound.
+		"book[].libraryItem.media.duration":               {Reason: durationReason + " (summed over six tracks for book[1])", Within: 3.0},
+		"book[].libraryItem.media.tracks[].startOffset":   {Reason: durationReason + " (accumulated across tracks)", Within: 3.0},
+		"book[].libraryItem.media.audioFiles[].timeBase":  {Reason: timeBaseReason},
+		"book[].libraryItem.media.tracks[].timeBase":      {Reason: timeBaseReason},
+		"book[].libraryItem.media.metadata.publishedYear": {Reason: publishedYearReason},
+		// BitrateKbps is an int too, so 96208 bps can only come back as 96 * 1000.
+		// Same shape of loss as the duration truncation, bounded the same way.
+		"book[].libraryItem.media.audioFiles[].bitRate": {Reason: bitrateReason, Within: 999},
+		"book[].libraryItem.media.tracks[].bitRate":     {Reason: bitrateReason, Within: 999},
 	})
 }
 
@@ -410,11 +439,17 @@ func TestItem_ConformsToOracle(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("got %d want 200: %#v", code, body)
 	}
-	assertConformantPending(t, "get_api_items_id.json", body,
-		"fixture drift on audioFiles/chapters, PLUS two genuine mapper questions this "+
-			"fixture is the only one to expose: metaTags.tagTrack (we pass raw ID3 TRCK "+
-			"'4/24' through where ABS normalizes to 4) and track title (we send the tag "+
-			"title, ABS sends the filename). Those two are behaviour, not seed data")
+	// metaTags.tagTrack is absent from these allowances on purpose. It looked like a
+	// mapper defect (we send "4/24" where the oracle says "4") until all six tracks were
+	// read: the oracle carries 1/24, 2/24, 3/24, 4, 5/24, none. ABS passes the raw ID3
+	// tag through exactly as mapper.go:758 does — track 4's real tag was a bare 4. The
+	// old seed's hardcoded "%d/24" manufactured the difference, and seeding from the
+	// oracle removed it. One row of a diff is one sample.
+	assertConformantExcept(t, "get_api_items_id.json", body,
+		mergeAllowances(t, bookBodyAllowances(), map[string]allowance{
+			"userMediaProgress.duration": {Reason: durationReason + " (summed over six tracks)", Within: 3.0},
+			"userMediaProgress.progress": {Reason: progressReason},
+		}))
 }
 
 // TestItem_LibraryItemIDIs36CharUUID pins §1.7.1, the single BREAKING id

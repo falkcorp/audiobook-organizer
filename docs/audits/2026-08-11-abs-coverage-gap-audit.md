@@ -393,10 +393,27 @@ unauthenticated cover endpoint (gate 2.17.0) and `/public/session/:id/track/:ind
 ## 4. Recommended order
 
 1. **N-1** — one line in `nonSPAPrefixes`, plus a regression test. Highest value per byte.
-2. **N-2** — *partially done 2026-08-12.* Four environment-dependent keys are now normalized
-   (13 red → 12). The remainder is **fixture alignment**, not bug-fixing — see the correction
-   in §N-2. Do not chase green by normalizing `size`/`duration`/`progress`; that would delete
-   the signal. Add the 4 orphan fixtures.
+2. **N-2** — *done 2026-08-12, across two PRs.* `CompareValues` is on for every assertion
+   (#2337), and the fake library's two books are now seeded **from the oracle fixture** —
+   per-track durations, sizes, filenames and tags — so the drift that made 12 assertions
+   uncheckable cannot recur by construction. Sizes conform via sparse files, because
+   `mapper.go:225` stats each track and lets the on-disk size win.
+
+   The standing advice above held and is worth restating: **nothing was made green by
+   normalizing `size`/`duration`/`progress`.** What could not be aligned is named in a
+   **bounded** allowance instead — the gap must be the known one, within a stated numeric
+   limit, so a duration that goes wrong by more than the truncation still fails. Two
+   volatile keys were added (`mediaItemId`/`bookId`, both minted sync ids reached by a
+   different name, plus the session's own `date`/`dayOfWeek`), which is normalization of
+   things no run could ever match rather than of signal.
+
+   Turning values on found five things nothing else had, all filed rather than fixed here:
+   `BookFile.Duration` is an `int` (2.431 s lost over six tracks, `startOffset` drifting
+   2.200 s by track 6), `/api/me/sessions` reports `itemsPerPage` as the item count,
+   `deviceType` is never derived, `publishedYear` loses its era, and `timeBase` is
+   hardcoded. See `todo.d/20260812-bookfile-duration-integer-seconds.md`.
+
+   Still open: add the 4 orphan fixtures.
 3. ~~**N-3**~~ — **RETRACTED, do not act on it.** It was wrong; see §N-3. `Update`/`Delete`
    honestly describe the nine `/api/me/*` write routes.
    **N-4** — *partially done 2026-08-12, after TWO regressions.* TWO namespaces

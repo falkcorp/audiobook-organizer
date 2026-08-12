@@ -1,5 +1,5 @@
 // file: internal/syncapi/conformance/normalize.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: ed9387e2-9e6a-46d7-912a-28c96d442d0d
 // last-edited: 2026-08-12
 
@@ -23,12 +23,21 @@ func DefaultVolatileKeys() map[string]bool {
 		// identifiers
 		"id", "libraryid", "libraryitemid", "folderid", "userid", "sessionid",
 		"episodeid", "ino", "authorid", "seriesid", "collectionid",
+		// mediaitemid/bookid are the same minted sync ids as libraryitemid, reached
+		// by a different name from the progress and playback bodies. They were left
+		// off until 2026-08-12, so turning value comparison on reported four
+		// "mismatches" that no run could ever satisfy.
+		"mediaitemid", "bookid",
 		// secrets / tokens
 		"token", "refreshtoken", "accesstoken", "apikey", "password",
 		// timestamps
 		"createdat", "updatedat", "addedat", "lastupdate", "lastseen",
 		"startedat", "finishedat", "birthtimems", "mtimems", "ctimems",
 		"scanversion", "lastscan", "loadedat",
+		// A listening session records WHEN it happened. The capture's Thursday is not
+		// ours and never will be. Note these are the session's own date fields; the
+		// book's publication date is publishedDate/tagDate and stays compared.
+		"date", "dayofweek",
 		// host-dependent
 		"path", "relpath", "contenturl", "coverpath", "metadatapath",
 		"fullpath",

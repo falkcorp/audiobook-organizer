@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/abs_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2c07b5e9-4d16-48fa-b930-71e5c8a04f6d
 // last-edited: 2026-08-12
 
@@ -543,10 +543,8 @@ func TestRegisteredRoutesAreReal(t *testing.T) {
 func TestLogin_PasswordSuccessConformsToFixture(t *testing.T) {
 	h := newConformanceHarness(t)
 	body := h.login(t, "oracle", "pw-pw-pw-pw")
-	assertConformantPending(t, "post_login.json", body,
-		"identity divergence, not drift: we send user.type=user where ABS sends root, "+
-			"and permissions.upload/createEreader false where ABS sends true. Needs a "+
-			"product call on whether the ABS role model is one we adopt or translate")
+	assertConformantExcept(t, "post_login.json", body,
+		mergeAllowances(t, identityAllowances(), sourceAllowance()))
 }
 
 // TestLogin_UserDefaultLibraryIdIsNonNullString is a LOGIN BLOCKER (§1.8.2):
@@ -902,9 +900,8 @@ func TestRefresh_RotatesAndConformsToFixture(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("got %d: %s", w.Code, w.Body.String())
 	}
-	assertConformantPending(t, "post_auth_refresh.json", body,
-		"same identity divergence as post_login.json — this endpoint re-serves the user "+
-			"object, so it goes strict when login does")
+	assertConformantExcept(t, "post_auth_refresh.json", body,
+		mergeAllowances(t, identityAllowances(), sourceAllowance()))
 
 	u := userObj(t, body)
 	newAccess := str(t, u, "accessToken")
@@ -1179,9 +1176,7 @@ func TestMe_ConformsToFixture(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("got %d: %s", w.Code, w.Body.String())
 	}
-	assertConformantPending(t, "get_api_me.json", body,
-		"same identity divergence as post_login.json, plus Source=audiobook-organizer "+
-			"where the oracle captured docker — that one is ours to keep")
+	assertConformantExcept(t, "get_api_me.json", body, identityAllowances())
 }
 
 // TestMe_MediaProgressIsAlwaysAPresentArray is the DATA-LOSS guard of §1.8.1:
@@ -1326,9 +1321,16 @@ func TestSessions_ConformsToFixture(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("got %d: %s", w.Code, w.Body.String())
 	}
-	assertConformantPending(t, "get_api_me_sessions.json", body,
-		"fixture drift: listening sessions embed the synthetic book's duration and "+
-			"per-track values")
+	assertConformantExcept(t, "get_api_me_sessions.json", body, map[string]allowance{
+		// A real bug, deliberately not fixed here: me.go:132 sets ItemsPerPage to
+		// len(out) — the number of items on the page rather than the page size — where
+		// the sibling handlers at stats.go:108,133 correctly use
+		// queryInt(c, "itemsPerPage", 10). Fixing it changes pagination on a live
+		// endpoint, which has no business riding along with test-fixture work.
+		// Filed: todo.d/20260812-bookfile-duration-integer-seconds.md
+		"itemsPerPage": {Reason: "me.go:132 reports len(out) instead of the page size; " +
+			"oracle says 10 with total 3. Filed as a separate production fix"},
+	})
 
 	// total must be an INTEGER (§1.7.3 item 5: Dart throws on `42.0 as int?`).
 	total, ok := body["total"].(float64)

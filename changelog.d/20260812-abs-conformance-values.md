@@ -18,14 +18,17 @@
   are enumerated in the source rather than in a tracking doc, and the count cannot drift
   upward quietly.
 
-  Their failures are not one problem. Eight are fixture drift: the fake library's
+  Their failures are not one problem. Most are fixture drift: the fake library's
   multi-file book is synthetic (six identical 1662 s tracks, 2049–2054 byte files,
   `timeBase 1/1000`) where the oracle captured a real recording of *The Odyssey* (six
   distinct durations summing to 9975.48, files of 11–21 MB, `timeBase 1/14112000`).
   Four are identity divergences we may well intend to keep — `user.type`, `Source`,
   `permissions.upload`, `permissions.createEreader`.
 
-  Two are neither, and would have stayed invisible under shape-only checking: we emit
-  the raw ID3 `TRCK` value `4/24` in `metaTags.tagTrack` where AudiobookShelf normalizes
-  it to `4`, and we send the tag title for an audio track where AudiobookShelf sends the
-  filename. Both are live mapper behaviour rather than test data.
+  One is neither, and would have stayed invisible under shape-only checking: for an
+  audio track we send the embedded tag title where AudiobookShelf sends the **filename**
+  (`media.tracks[].title` is `odyssey_01_homer_butler_64kb.mp3` in the oracle, while
+  `metaTags.tagTitle` separately carries `The Odyssey: Book 01`). `trackTitle()` prefers
+  `BookFile.Title` and falls back to the basename; ABS appears to use the basename
+  unconditionally. That is live mapper behaviour rather than test data, and whether it
+  matters depends on whether any client renders that field.
