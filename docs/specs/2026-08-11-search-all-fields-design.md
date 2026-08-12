@@ -1,5 +1,5 @@
 <!-- file: docs/specs/2026-08-11-search-all-fields-design.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 2.0.0 -->
 <!-- guid: 7c4e2a91-5d38-4b06-9e17-2f8a6b3c04d5 -->
 <!-- last-edited: 2026-08-11 -->
 
@@ -13,66 +13,76 @@ audiobook app, it shows me the complete list of all that's there."*
 
 ---
 
-## 1. Start here: there are TWO problems, and field coverage is the second one
+## 1. Start here: the reported symptom is NOT missing index coverage
 
-It would be easy to read the request as "add more fields to the index" and start
-there. That would have been wasted work. The measurements say the index does not
-contain the library.
+> **v1.0.0 of this document claimed the Bleve index was missing ~94% of matching
+> rows. That claim was WRONG and has been removed.** It was derived from probes
+> sent with `limit=1`, and the search path reports the returned page length as
+> `count`. Every query "returned 1" because every query was asked for 1 row. The
+> instrument was measuring itself. The corrected measurements are below; the
+> retraction is kept in place rather than quietly deleted because the failure
+> mode — reading a query parameter back as a result — is worth not repeating.
 
-### 1.1 The measurement
+### 1.1 The corrected measurement
 
-Same server, same books, four different paths, 2026-08-11 ~23:55 EDT, all
-cache-busted:
+Same server, same books, 2026-08-11 ~23:57 EDT, cache-busted, `limit=250`:
 
 | Path | Result |
 |---|---|
-| Web search `All the Skills` | **1** |
-| Web search `All the Skills` + `is_primary_version=true` | **0** |
-| Web **filter** `title = All the Skills` (no search index involved) | **16** |
-| The owner's audiobook app (ABS browse endpoint) | **18** |
+| Web search `author:"honour"` | **13**, every one by Honour Rae |
+| Web search + `is_primary_version=true` (what the UI sends) | **1** |
+| Web **filter** `title = All the Skills` (no index involved) | 16 |
+| The owner's audiobook app (ABS browse endpoint) | 18 |
 
-And on the owner's original query:
+**Search works.** The index contains the books and the field query resolves them
+correctly. The UI displays one row because **12 of the 13 are non-primary
+version-group members** and the library list sends `is_primary_version=true` by
+default (`web/src/services/api.ts:981`). All four numbers are the same library
+counted under different collapse rules — 13 indexed rows, 1 primary, 16 by title
+filter, 18 uncollapsed in the app.
 
-| Query | Result |
-|---|---|
-| `author:"honour"` | 1 |
-| `honour` | 1 |
-| `author:honour` | 1 |
-| `Honour Rae` | 1 |
+That the owner has ~13 database rows for one book is a real problem, but it is
+the **version-group fragmentation** problem, not a search problem. See
+`todo.d/20260811-version-group-two-primaries.md`.
 
-### 1.2 What that means
+### 1.2 What IS broken
 
-**The Bleve index is missing ~94% of the matching rows.** The filter path reads
-the database and finds 16. The search path reads the index and finds 1. The app
-finds 18 because the ABS browse endpoint does not use the search index at all.
+**A. `count` on the search path is not a total.** It is the length of the
+returned page after post-filtering:
 
-Worse: **the single indexed book is a non-primary version.** The library UI sends
-`is_primary_version=true` by default (`web/src/services/api.ts:981`), so the one
-hit is then discarded and the user sees **zero results**. That is why search reads
-as totally broken rather than merely incomplete — the failure is amplified by a
-filter applied after the search.
+| Request | `count` | items returned |
+|---|---|---|
+| `search=All the Skills&limit=1` | 1 | 1 |
+| `search=All the Skills&limit=25` | 25 | 25 |
+| `search=All the Skills&limit=250` | 249 | 249 |
 
-### 1.3 Why this is plausible and not a surprise
+The filter path returns a true total (16) for the same library. So on the search
+path a user can never learn how many matches exist, and pagination beyond page 1
+cannot be correct. This is the post-filter-after-pagination defect: filtering is
+applied to a page that was already cut, so both the count and the page contents
+are wrong.
 
-There is prior art in this exact component: the search index was found to be
-**silently dropping updates — 56,537 in seven days**. A durable dirty-set plus a
-reconciler shipped (#2268) to stop the bleeding. What that fix did **not** do is
-**backfill the rows already missing**. A reconciler that keeps the index in step
-from now on leaves every previously-dropped row absent forever.
+**This is the highest-priority search bug and it is independent of field
+coverage.** It also makes every future measurement of search quality unreliable,
+which is exactly how v1.0.0 of this document went wrong.
 
-**Not verified:** that pre-#2268 drops are the cause of *these* particular
-absences. The alternative — that these rows were never indexed because indexing
-is gated on something (library state, primary-version, a scan phase they never
-reached) — has not been ruled out. **Measure before building.** See §5.1.
+**B. Free-text precision is poor.** `All the Skills` at `limit=250` returns 249
+rows, of which **42** have "skill" in the title. The unfielded `_all` child in
+`translateFreeText` (§2.2) matches common words across every mapped field at
+neutral weight, so a multi-word query behaves close to an OR over the whole
+library. The boosted fields rank the real hits first, which is why the top of the
+list looks fine and the tail is noise — but a user paging through, or reading a
+count, sees garbage.
 
-### 1.4 Sequencing, and why it matters
+### 1.3 Sequencing
 
-> Adding fields to an index that is missing 94% of its rows makes the search
-> wrong in more ways, not fewer.
+1. **Fix the count/pagination bug (§1.2A).** Nothing else can be measured
+   honestly until this is right.
+2. **Fix free-text precision (§1.2B).**
+3. **Then** field coverage (§3, §4) — the owner's original request.
 
-Do §5 (coverage) before §4 (fields). A user who searches a newly-added field and
-gets nothing cannot tell "that field isn't indexed" from "that book isn't
-indexed", and we will have made the system harder to debug, not easier.
+Field coverage is real and worth doing. It is third because a user who searches a
+newly-added field and gets a wrong count cannot tell whether the field works.
 
 ---
 
@@ -300,23 +310,39 @@ search being correct at all.
 
 ## 5. Sequencing
 
-### 5.1 Phase 0 — coverage (blocking, do this first)
+### 5.1 Phase 0 — honest counts (blocking, do this first)
 
-1. Count documents in the Bleve index; compare to the book count in the database.
-   Report both numbers. This single measurement decides everything below.
-2. Determine **why** rows are missing. The two hypotheses:
-   (a) pre-#2268 silent drops that the reconciler never backfilled;
-   (b) indexing is gated on a condition these rows never met.
-   These need different fixes. Do not guess.
-3. Build a **full reindex** operation, resumable and bounded. Note that a naive
-   implementation is exactly the shape that OOM-killed this server on 2026-08-11:
-   full-scan, unmarshal everything, no budget, no cancellation. Use a bounded
-   worker pool per the concurrency rules in `CLAUDE.md`, honour `ctx`, and stream.
-4. Add a **coverage invariant check** — indexed count vs book count — surfaced as
-   a metric and an operator-visible number, so a divergence is loud rather than
-   discovered months later by a user typing an author's name.
+**Fix `count` on the search path so it is a total, not a page length** (§1.2A).
+Post-filtering must happen before pagination, not after, or the count must be
+computed from the full match set independently of the page.
 
-Phase 0 alone makes search dramatically better without a single new field.
+Then add the measurement that would have caught this:
+
+1. **Expose the Bleve index document count.** There is no endpoint for it today —
+   `internal/server/wire_*.go` has no search-index stats route at all, which is
+   why v1.0.0 of this document had to infer coverage from result counts and got
+   it wrong. Expose it, and compare it to the book count in the database.
+2. Add a **coverage invariant check** — indexed count vs book count — as a metric
+   and an operator-visible number, so divergence is loud. Prior art: the index was
+   previously found silently dropping updates (**56,537 in seven days**), fixed
+   forward by #2268's durable dirty-set and reconciler — which stopped new drops
+   but **did not backfill rows already missing**. Whether any such rows remain is
+   **unknown**, and it is unknown precisely because nothing counts.
+3. A **resumable, bounded full reindex** is likely wanted regardless — for
+   mapping changes in Phase 1 if nothing else. A naive implementation is exactly
+   the shape that OOM-killed this server on 2026-08-11: full-scan, unmarshal
+   everything, no budget, no cancellation. Bounded worker pool per `CLAUDE.md`,
+   honour `ctx`, stream.
+
+Phase 0 makes search measurable. Nothing after it can be trusted without it.
+
+### 5.1b Phase 0b — free-text precision
+
+Reduce or remove the neutral-weight unfielded `_all` child in `translateFreeText`
+so a multi-word query stops behaving like an OR over the library (§1.2B). Multi-
+word queries should require all terms by default, or the `_all` child should be
+weighted far below the fielded ones. Measure precision before and after on a
+fixed query set; do not ship on intuition.
 
 ### 5.2 Phase 1 — the inversion
 
@@ -336,15 +362,17 @@ Gated on the measurement in §4.4.
 
 ## 6. Explicitly not claimed
 
-- **The root cause of the missing index rows is not established.** §1.3 names two
-  hypotheses and rules out neither.
+- **No claim that index coverage is complete.** §1 retracts the claim that it is
+  badly incomplete, which is not the same thing. Nothing counts the index today,
+  so coverage is simply **unmeasured**. §5.1 exists to make it measurable.
 - Index size after adding ~80 fields **has not been measured or estimated**. It
   must be measured before Phase 1 ships, not after.
 - Reindex duration for the full library is unknown.
-- No claim that the ABS browse path is *correct* — only that it returns 18 where
-  search returns 1. Whether 18 is the right answer (versus 16 from the filter
-  path, versus some collapse of version groups) is itself unresolved and overlaps
-  the double-primary defect tracked in `todo.d/20260811-version-group-two-primaries.md`.
+- No claim about which of 13 / 1 / 16 / 18 in §1.1 is the *right* answer. They
+  differ by collapse rule, and the underlying version-group fragmentation is
+  tracked in `todo.d/20260811-version-group-two-primaries.md`.
+- The free-text precision figure (42 relevant of 249) is one query on one day. It
+  is enough to show the problem is real; it is not a benchmark.
 - Per-user search correctness is out of scope and remains an open design problem.
 
 ---
