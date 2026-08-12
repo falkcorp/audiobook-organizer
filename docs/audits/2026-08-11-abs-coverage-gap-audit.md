@@ -1,5 +1,5 @@
 <!-- file: docs/audits/2026-08-11-abs-coverage-gap-audit.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 8c4f2b19-5d73-46ea-b1c0-3f8a92d6e457 -->
 <!-- last-edited: 2026-08-11 -->
 
@@ -76,6 +76,25 @@ and **never sets `CompareValues`**. So in every real endpoint test, the branches
 **Consequence: all 25 always-hardcoded fields and all 9 stubs in §2 pass conformance.** A
 permanently-`false` boolean, `mediaType:"podcast"` where `"book"` is meant, a `totalDuration`
 of 0 on every series — invisible.
+
+**Measured, not predicted (2026-08-11).** The gate was flipped in a scratch copy —
+`Options{IgnoreExtra: true, CompareValues: true}` in both `assertConformant` call sites —
+and `go test ./internal/server/handlers/abs/... -count=1` run. Result: **`FAIL`, 13 distinct
+conformance tests red**, spanning essentially the whole client-facing surface:
+
+`TestLogin_PasswordSuccessConformsToFixture` · `TestRefresh_RotatesAndConformsToFixture` ·
+`TestMe_ConformsToFixture` · `TestSessions_ConformsToFixture` · `TestLibraries_…` ·
+`TestLibraryItems_…` · `TestItem_…` · `TestSearch_…` · `TestPersonalized_…` · `TestPlay_…` ·
+`TestMediaProgressGet_…` · `TestMediaProgressList_…` · `TestFilterData_AllEightKeys`
+
+These are **not** ID/timestamp noise. `CompareBody` normalizes *both* sides before diffing
+(`fixture.go:52-54` — `Compare(n.Normalize(want), n.Normalize(got), opts)`), so every volatile
+key is already canonicalized to a same-typed placeholder by the time values are compared. All
+13 failures are therefore real mismatches on **non-volatile** fields. The change was reverted;
+nothing in this branch turns the gate on.
+
+⇒ This is why N-2 is ranked 🔴 rather than as tech debt: the harness is not merely *capable* of
+being stricter, it is currently green over 13 tests' worth of known-wrong values.
 
 Normalization widens the blindness (`normalize.go:21-40`): ~25 volatile keys (`id`,
 `coverPath`, `contentUrl`, `lastUpdate`, `token`, `ino`, …) are canonicalized before
@@ -255,8 +274,10 @@ unauthenticated cover endpoint (gate 2.17.0) and `/public/session/:id/track/:ind
 ## 4. Recommended order
 
 1. **N-1** — one line in `nonSPAPrefixes`, plus a regression test. Highest value per byte.
-2. **N-2** — turn on the harness gates for value-real endpoints; expect it to go red, and
-   treat that as the point. Add the 4 orphan fixtures. Without this, nothing below stays fixed.
+2. **N-2** — turn on the harness gates for value-real endpoints. This **has been measured**:
+   it goes red across 13 tests (§N-2), all on non-volatile fields. That red list *is* the
+   worklist — work it down rather than flipping the gate and reverting. Add the 4 orphan
+   fixtures. Without this, nothing below stays fixed.
 3. **N-3** and **N-4** — stop advertising what we cannot do; make unimplemented ABS paths 404.
 4. **N-5**, **N-6** — contract-conformance and observability.
 5. **N-7 … N-10** — bookkeeping truth-ups.
