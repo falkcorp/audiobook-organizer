@@ -21,9 +21,30 @@
 package organizer
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
+
+// TestCanceledErrorIsDistinguishable pins the sentinel. The caller in
+// library_core_ops.go marks any non-nil error "failed", so without a way to
+// recognise cancellation, making a cancelled run return an error would simply
+// have swapped one misreport (cancel shown as success) for another (cancel
+// shown as failure).
+func TestCanceledErrorIsDistinguishable(t *testing.T) {
+	canceled := organizeOutcomeError(&Stats{Organized: 12, Total: 3000, Canceled: true})
+	if !errors.Is(canceled, ErrOrganizeCanceled) {
+		t.Fatalf("a cancelled run must be recognisable via errors.Is; got %v", canceled)
+	}
+
+	totalFailure := organizeOutcomeError(&Stats{Failed: 3194, Total: 3194})
+	if totalFailure == nil {
+		t.Fatal("total failure should still be an error")
+	}
+	if errors.Is(totalFailure, ErrOrganizeCanceled) {
+		t.Error("a total failure must NOT be reported as a cancellation")
+	}
+}
 
 func TestOrganizeOutcomeError(t *testing.T) {
 	cases := []struct {
