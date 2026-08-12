@@ -944,6 +944,17 @@
       }
     },
     "/ai/scans/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "tags": [
           "AIScans"
@@ -1002,6 +1013,17 @@
       }
     },
     "/ai/scans/{id}/apply": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "post": {
         "tags": [
           "AIScans"
@@ -1050,6 +1072,17 @@
       }
     },
     "/ai/scans/{id}/cancel": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "post": {
         "tags": [
           "AIScans"
@@ -1080,6 +1113,17 @@
       }
     },
     "/ai/scans/{id}/results": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "tags": [
           "AIScans"
@@ -1562,6 +1606,17 @@
       }
     },
     "/audiobooks/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "getAudiobook",
         "summary": "get Audiobook",
@@ -1642,6 +1697,17 @@
       }
     },
     "/audiobooks/{id}/alternative-titles": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "getBookAlternativeTitles",
         "summary": "get Book Alternative Titles",
@@ -1722,6 +1788,17 @@
       }
     },
     "/audiobooks/{id}/apply-metadata": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "post": {
         "operationId": "applyAudiobookMetadata",
         "summary": "apply Audiobook Metadata",
@@ -1750,6 +1827,17 @@
       }
     },
     "/audiobooks/{id}/changelog": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "getBookChangelog",
         "summary": "get Book Changelog",
@@ -1778,6 +1866,17 @@
       }
     },
     "/audiobooks/{id}/changes": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "getBookChanges",
         "summary": "get Book Changes",
@@ -1806,6 +1905,17 @@
       }
     },
     "/audiobooks/{id}/cover": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "serveAudiobookCover",
         "summary": "serve Audiobook Cover",
@@ -1834,6 +1944,17 @@
       }
     },
     "/audiobooks/{id}/cover-history": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "handleListCoverHistory",
         "summary": "List Cover History",
@@ -1862,6 +1983,17 @@
       }
     },
     "/audiobooks/{id}/cover-history/restore": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "post": {
         "operationId": "handleRestoreCover",
         "summary": "Restore Cover",
@@ -1890,6 +2022,17 @@
       }
     },
     "/audiobooks/{id}/cow-versions": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "listBookCOWVersions",
         "summary": "list Book C O W Versions",
@@ -1918,6 +2061,17 @@
       }
     },
     "/audiobooks/{id}/cow-versions/prune": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "post": {
         "operationId": "pruneBookCOWVersions",
         "summary": "prune Book C O W Versions",
@@ -1946,6 +2100,17 @@
       }
     },
     "/audiobooks/{id}/external-ids": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "getAudiobookExternalIDs",
         "summary": "get Audiobook External I Ds",
@@ -1974,6 +2139,17 @@
       }
     },
     "/audiobooks/{id}/extract-track-info": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "post": {
         "operationId": "extractTrackInfo",
         "summary": "extract Track Info",
@@ -2002,6 +2178,17 @@
       }
     },
     "/audiobooks/{id}/fetch-metadata": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "post": {
         "operationId": "fetchAudiobookMetadata",
         "summary": "fetch Audiobook Metadata",
@@ -2030,6 +2217,17 @@
       }
     },
     "/audiobooks/{id}/field-states": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "getAudiobookFieldStates",
         "summary": "get Audiobook Field States",
@@ -2058,6 +2256,17 @@
       }
     },
     "/audiobooks/{id}/files": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "listBookFiles",
         "summary": "list Book Files",
@@ -2086,6 +2295,17 @@
       }
     },
     "/audiobooks/{id}/mark-no-match": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "post": {
         "operationId": "markAudiobookNoMatch",
         "summary": "mark Audiobook No Match",
@@ -2114,6 +2334,17 @@
       }
     },
     "/audiobooks/{id}/metadata-history": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "getBookMetadataHistory",
         "summary": "get Book Metadata History",
@@ -2142,6 +2373,26 @@
       }
     },
     "/audiobooks/{id}/metadata-history/{field}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "field",
+          "in": "path",
+          "required": true,
+          "description": "The field path parameter.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "getFieldMetadataHistory",
         "summary": "get Field Metadata History",
@@ -2170,6 +2421,26 @@
       }
     },
     "/audiobooks/{id}/metadata-history/{field}/undo": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "field",
+          "in": "path",
+          "required": true,
+          "description": "The field path parameter.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "post": {
         "operationId": "undoMetadataChange",
         "summary": "undo Metadata Change",
@@ -2198,6 +2469,17 @@
       }
     },
     "/audiobooks/{id}/move-segments": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "post": {
         "operationId": "moveSegments",
         "summary": "move Segments",
@@ -2226,6 +2508,17 @@
       }
     },
     "/audiobooks/{id}/narrators": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "listAudiobookNarrators",
         "summary": "list Audiobook Narrators",
@@ -2280,6 +2573,17 @@
       }
     },
     "/audiobooks/{id}/organize": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "post": {
         "operationId": "organizeBook",
         "summary": "organize Book",
@@ -2308,6 +2612,17 @@
       }
     },
     "/audiobooks/{id}/parse-with-ai": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "post": {
         "operationId": "parseAudiobookWithAI",
         "summary": "parse Audiobook With A I",
@@ -2336,6 +2651,17 @@
       }
     },
     "/audiobooks/{id}/path-history": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "getBookPathHistory",
         "summary": "get Book Path History",
@@ -2364,6 +2690,17 @@
       }
     },
     "/audiobooks/{id}/preview-organize": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "previewOrganize",
         "summary": "preview Organize",
@@ -2392,6 +2729,17 @@
       }
     },
     "/audiobooks/{id}/relocate": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "post": {
         "operationId": "relocateBookFiles",
         "summary": "relocate Book Files",
@@ -2420,6 +2768,17 @@
       }
     },
     "/audiobooks/{id}/rename/apply": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "post": {
         "operationId": "applyRename",
         "summary": "apply Rename",
@@ -2448,6 +2807,17 @@
       }
     },
     "/audiobooks/{id}/rename/preview": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "post": {
         "operationId": "previewRename",
         "summary": "preview Rename",
@@ -2476,6 +2846,17 @@
       }
     },
     "/audiobooks/{id}/restore": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "post": {
         "operationId": "restoreAudiobook",
         "summary": "restore Audiobook",
@@ -2504,6 +2885,17 @@
       }
     },
     "/audiobooks/{id}/revert-metadata": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "post": {
         "operationId": "revertAudiobookMetadata",
         "summary": "revert Audiobook Metadata",
@@ -2532,6 +2924,17 @@
       }
     },
     "/audiobooks/{id}/search-metadata": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "post": {
         "operationId": "searchAudiobookMetadata",
         "summary": "search Audiobook Metadata",
@@ -2560,6 +2963,17 @@
       }
     },
     "/audiobooks/{id}/segments": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "listAudiobookSegments",
         "summary": "list Audiobook Segments",
@@ -2588,6 +3002,26 @@
       }
     },
     "/audiobooks/{id}/segments/{segmentId}/tags": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "segmentId",
+          "in": "path",
+          "required": true,
+          "description": "The segmentId path parameter.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "getSegmentTags",
         "summary": "get Segment Tags",
@@ -2616,6 +3050,17 @@
       }
     },
     "/audiobooks/{id}/set-primary": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "put": {
         "operationId": "setAudiobookPrimary",
         "summary": "set Audiobook Primary",
@@ -2644,6 +3089,17 @@
       }
     },
     "/audiobooks/{id}/similar": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "handleSimilarBooks",
         "summary": "Similar Books",
@@ -2672,6 +3128,17 @@
       }
     },
     "/audiobooks/{id}/split-to-books": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "post": {
         "operationId": "splitSegmentsToBooks",
         "summary": "split Segments To Books",
@@ -2700,6 +3167,17 @@
       }
     },
     "/audiobooks/{id}/split-version": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "post": {
         "operationId": "splitVersion",
         "summary": "split Version",
@@ -2728,6 +3206,17 @@
       }
     },
     "/audiobooks/{id}/tags": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "getAudiobookTags",
         "summary": "get Audiobook Tags",
@@ -2756,6 +3245,17 @@
       }
     },
     "/audiobooks/{id}/tags-detailed": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "getBookTagsDetailed",
         "summary": "get Book Tags Detailed",
@@ -2784,6 +3284,17 @@
       }
     },
     "/audiobooks/{id}/undo-last-apply": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "post": {
         "operationId": "undoLastApply",
         "summary": "undo Last Apply",
@@ -2812,6 +3323,17 @@
       }
     },
     "/audiobooks/{id}/user-tags": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "getBookUserTags",
         "summary": "get Book User Tags",
@@ -2840,6 +3362,17 @@
       }
     },
     "/audiobooks/{id}/versions": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "listAudiobookVersions",
         "summary": "list Audiobook Versions",
@@ -2894,6 +3427,17 @@
       }
     },
     "/audiobooks/{id}/write-back": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "post": {
         "operationId": "writeBackAudiobookMetadata",
         "summary": "write Back Audiobook Metadata",
@@ -3406,6 +3950,17 @@
       }
     },
     "/authors/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "delete": {
         "operationId": "deleteAuthorHandler",
         "summary": "delete Author",
@@ -3434,6 +3989,17 @@
       }
     },
     "/authors/{id}/aliases": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "getAuthorAliases",
         "summary": "get Author Aliases",
@@ -3488,6 +4054,26 @@
       }
     },
     "/authors/{id}/aliases/{aliasId}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "aliasId",
+          "in": "path",
+          "required": true,
+          "description": "The aliasId path parameter.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "delete": {
         "operationId": "deleteAuthorAlias",
         "summary": "delete Author Alias",
@@ -3516,6 +4102,17 @@
       }
     },
     "/authors/{id}/books": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "getAuthorBooks",
         "summary": "get Author Books",
@@ -3544,6 +4141,17 @@
       }
     },
     "/authors/{id}/name": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "put": {
         "operationId": "renameAuthor",
         "summary": "rename Author",
@@ -3572,6 +4180,17 @@
       }
     },
     "/authors/{id}/reclassify-as-narrator": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "post": {
         "operationId": "reclassifyAuthorAsNarrator",
         "summary": "reclassify Author As Narrator",
@@ -3600,6 +4219,17 @@
       }
     },
     "/authors/{id}/resolve-production": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "post": {
         "operationId": "resolveProductionAuthor",
         "summary": "resolve Production Author",
@@ -3628,6 +4258,17 @@
       }
     },
     "/authors/{id}/split": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "post": {
         "operationId": "splitCompositeAuthor",
         "summary": "split Composite Author",
@@ -3656,6 +4297,17 @@
       }
     },
     "/authors/{id}/tags": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "handleGetAuthorTags",
         "summary": "Get Author Tags",
@@ -3794,6 +4446,17 @@
       }
     },
     "/backup/{filename}": {
+      "parameters": [
+        {
+          "name": "filename",
+          "in": "path",
+          "required": true,
+          "description": "The filename path parameter.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "delete": {
         "operationId": "deleteBackup",
         "summary": "delete Backup",
@@ -3876,6 +4539,17 @@
       }
     },
     "/blocked-hashes/{hash}": {
+      "parameters": [
+        {
+          "name": "hash",
+          "in": "path",
+          "required": true,
+          "description": "The hash path parameter.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "delete": {
         "operationId": "removeBlockedHash",
         "summary": "remove Blocked Hash",
@@ -3932,6 +4606,17 @@
       }
     },
     "/books/{id}/position": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "post": {
         "operationId": "handleSetPosition",
         "summary": "Set Position",
@@ -3978,6 +4663,17 @@
       }
     },
     "/books/{id}/state": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "handleGetBookState",
         "summary": "Get Book State",
@@ -4002,6 +4698,17 @@
       }
     },
     "/books/{id}/status": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "patch": {
         "operationId": "handleSetBookStatus",
         "summary": "Set Book Status",
@@ -4048,6 +4755,26 @@
       }
     },
     "/books/{id}/versions/{vid}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "vid",
+          "in": "path",
+          "required": true,
+          "description": "The vid path parameter.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "delete": {
         "operationId": "handleTrashVersion",
         "summary": "Trash Version",
@@ -4076,6 +4803,26 @@
       }
     },
     "/books/{id}/versions/{vid}/purge-now": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "vid",
+          "in": "path",
+          "required": true,
+          "description": "The vid path parameter.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "post": {
         "operationId": "handlePurgeVersion",
         "summary": "Purge Version",
@@ -4104,6 +4851,26 @@
       }
     },
     "/books/{id}/versions/{vid}/restore": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "vid",
+          "in": "path",
+          "required": true,
+          "description": "The vid path parameter.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "post": {
         "operationId": "handleRestoreVersion",
         "summary": "Restore Version",
@@ -4115,30 +4882,6 @@
             "session": []
           }
         ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
-    "/compare": {
-      "get": {
-        "operationId": "unknown",
-        "summary": "unknown",
-        "tags": [
-          "general"
-        ],
-        "security": [],
         "responses": {
           "200": {
             "description": "Success"
@@ -4210,6 +4953,17 @@
       }
     },
     "/covers/local/{filename}": {
+      "parameters": [
+        {
+          "name": "filename",
+          "in": "path",
+          "required": true,
+          "description": "The filename path parameter.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "handleLocalCover",
         "summary": "Local Cover",
@@ -4518,6 +5272,17 @@
       }
     },
     "/dedup/candidates/{id}/dismiss": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "post": {
         "operationId": "dismissDedupCandidate",
         "summary": "dismiss Dedup Candidate",
@@ -4546,6 +5311,17 @@
       }
     },
     "/dedup/candidates/{id}/merge": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "post": {
         "operationId": "mergeDedupCandidate",
         "summary": "merge Dedup Candidate",
@@ -4714,6 +5490,17 @@
       }
     },
     "/diagnostics/ai-results/{operationId}": {
+      "parameters": [
+        {
+          "name": "operationId",
+          "in": "path",
+          "required": true,
+          "description": "The operationId path parameter.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "getDiagnosticsAIResults",
         "summary": "get Diagnostics A I Results",
@@ -4798,6 +5585,17 @@
       }
     },
     "/diagnostics/export/{operationId}/download": {
+      "parameters": [
+        {
+          "name": "operationId",
+          "in": "path",
+          "required": true,
+          "description": "The operationId path parameter.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "downloadDiagnosticsExport",
         "summary": "download Diagnostics Export",
@@ -5110,6 +5908,17 @@
       }
     },
     "/import-paths/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "delete": {
         "operationId": "removeImportPath",
         "summary": "remove Import Path",
@@ -5166,6 +5975,17 @@
       }
     },
     "/import-status/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "handleITunesImportStatus",
         "summary": "I Tunes Import Status",
@@ -5306,6 +6126,17 @@
       }
     },
     "/invites/{token}": {
+      "parameters": [
+        {
+          "name": "token",
+          "in": "path",
+          "required": true,
+          "description": "The token path parameter.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "delete": {
         "operationId": "handleDeleteInvite",
         "summary": "Delete Invite",
@@ -5474,6 +6305,17 @@
       }
     },
     "/itunes/import-status/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "tags": [
           "iTunes"
@@ -6310,6 +7152,17 @@
       }
     },
     "/me/{status}": {
+      "parameters": [
+        {
+          "name": "status",
+          "in": "path",
+          "required": true,
+          "description": "The status path parameter.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "handleListByStatus",
         "summary": "List By Status",
@@ -7482,6 +8335,17 @@
       }
     },
     "/operations/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "delete": {
         "operationId": "cancelOperation",
         "summary": "cancel Operation",
@@ -7510,6 +8374,17 @@
       }
     },
     "/operations/{id}/changes": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "getOperationChanges",
         "summary": "get Operation Changes",
@@ -7538,6 +8413,17 @@
       }
     },
     "/operations/{id}/logs": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "getOperationLogs",
         "summary": "get Operation Logs",
@@ -7566,6 +8452,17 @@
       }
     },
     "/operations/{id}/result": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "getOperationResult",
         "summary": "get Operation Result",
@@ -7594,6 +8491,17 @@
       }
     },
     "/operations/{id}/results": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "handleGetOperationResults",
         "summary": "Get Operation Results",
@@ -7622,6 +8530,17 @@
       }
     },
     "/operations/{id}/revert": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "post": {
         "operationId": "revertOperation",
         "summary": "revert Operation",
@@ -7650,6 +8569,17 @@
       }
     },
     "/operations/{id}/status": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "getOperationStatus",
         "summary": "get Operation Status",
@@ -7678,39 +8608,22 @@
       }
     },
     "/operations/{id}/undo/preflight": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "undoPreflightHandler",
         "summary": "undo Preflight",
         "tags": [
           "operations"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
-    "/path": {
-      "get": {
-        "operationId": "unknown",
-        "summary": "unknown",
-        "tags": [
-          "general"
         ],
         "security": [
           {
@@ -7780,6 +8693,17 @@
       }
     },
     "/playlists/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "handleGetPlaylist",
         "summary": "Get Playlist",
@@ -7848,6 +8772,17 @@
       }
     },
     "/playlists/{id}/books": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "post": {
         "operationId": "handleAddBooksToPlaylist",
         "summary": "Add Books To Playlist",
@@ -7872,6 +8807,26 @@
       }
     },
     "/playlists/{id}/books/{bookID}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "bookID",
+          "in": "path",
+          "required": true,
+          "description": "The bookID path parameter.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "delete": {
         "operationId": "handleRemoveBookFromPlaylist",
         "summary": "Remove Book From Playlist",
@@ -7896,6 +8851,17 @@
       }
     },
     "/playlists/{id}/materialize": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "post": {
         "operationId": "handleMaterializePlaylist",
         "summary": "Materialize Playlist",
@@ -7920,6 +8886,17 @@
       }
     },
     "/playlists/{id}/reorder": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "post": {
         "operationId": "handleReorderPlaylist",
         "summary": "Reorder Playlist",
@@ -7944,6 +8921,17 @@
       }
     },
     "/preferences/{key}": {
+      "parameters": [
+        {
+          "name": "key",
+          "in": "path",
+          "required": true,
+          "description": "Setting key.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "getUserPreference",
         "summary": "get User Preference",
@@ -8024,6 +9012,17 @@
       }
     },
     "/purged-versions/{vid}": {
+      "parameters": [
+        {
+          "name": "vid",
+          "in": "path",
+          "required": true,
+          "description": "The vid path parameter.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "delete": {
         "operationId": "handleHardDeleteVersion",
         "summary": "Hard Delete Version",
@@ -8332,6 +9331,17 @@
       }
     },
     "/series/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "patch": {
         "operationId": "updateSeriesName",
         "summary": "update Series Name",
@@ -8386,6 +9396,17 @@
       }
     },
     "/series/{id}/books": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "getSeriesBooks",
         "summary": "get Series Books",
@@ -8414,6 +9435,17 @@
       }
     },
     "/series/{id}/name": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "put": {
         "operationId": "renameSeriesHandler",
         "summary": "rename Series",
@@ -8442,6 +9474,17 @@
       }
     },
     "/series/{id}/split": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "post": {
         "operationId": "splitSeriesHandler",
         "summary": "split Series",
@@ -8470,6 +9513,17 @@
       }
     },
     "/series/{id}/tags": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "handleGetSeriesTags",
         "summary": "Get Series Tags",
@@ -8548,6 +9602,17 @@
       }
     },
     "/sessions/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "delete": {
         "operationId": "revokeMySession",
         "summary": "revoke My Session",
@@ -8904,6 +9969,17 @@
       }
     },
     "/tasks/{name}": {
+      "parameters": [
+        {
+          "name": "name",
+          "in": "path",
+          "required": true,
+          "description": "Resource name.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "put": {
         "operationId": "updateTaskConfig",
         "summary": "update Task Config",
@@ -8932,6 +10008,17 @@
       }
     },
     "/tasks/{name}/run": {
+      "parameters": [
+        {
+          "name": "name",
+          "in": "path",
+          "required": true,
+          "description": "Resource name.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "post": {
         "operationId": "runTask",
         "summary": "run Task",
@@ -9156,6 +10243,17 @@
       }
     },
     "/version-groups/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "getVersionGroup",
         "summary": "get Version Group",
@@ -9294,6 +10392,17 @@
       }
     },
     "/works/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "getWork",
         "summary": "get Work",
@@ -9374,6 +10483,17 @@
       }
     },
     "/works/{id}/books": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "listWorkBooks",
         "summary": "list Work Books",
@@ -9486,6 +10606,17 @@
       }
     },
     "/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "getAIScan",
         "summary": "get A I Scan",
@@ -9540,6 +10671,17 @@
       }
     },
     "/{id}/apply": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "post": {
         "operationId": "applyAIScanResults",
         "summary": "apply A I Scan Results",
@@ -9568,6 +10710,17 @@
       }
     },
     "/{id}/cancel": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "post": {
         "operationId": "cancelAIScan",
         "summary": "cancel A I Scan",
@@ -9596,6 +10749,17 @@
       }
     },
     "/{id}/deactivate": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "post": {
         "operationId": "handleDeactivateUser",
         "summary": "Deactivate User",
@@ -9624,6 +10788,17 @@
       }
     },
     "/{id}/reactivate": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "post": {
         "operationId": "handleReactivateUser",
         "summary": "Reactivate User",
@@ -9652,6 +10827,17 @@
       }
     },
     "/{id}/reset-password": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "post": {
         "operationId": "handleResetPassword",
         "summary": "Reset Password",
@@ -9680,6 +10866,17 @@
       }
     },
     "/{id}/results": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
         "operationId": "getAIScanResults",
         "summary": "get A I Scan Results",

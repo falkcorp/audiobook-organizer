@@ -1,3 +1,18 @@
+# ARCHIVED 2026-08-12 — DO NOT EDIT, DO NOT RESURRECT.
+#
+# This was a second, independently hand-maintained OpenAPI spec living alongside
+# docs/api/openapi.json. Neither was generated from code, and they drifted until
+# each held endpoints the other lacked (25 here that the JSON did not have; 117
+# there that this did not). Everything real here was union-merged into
+# docs/api/openapi.json, which is now the single spec.
+#
+# Kept only as provenance for that merge. One endpoint was deliberately NOT
+# carried across: /audiobooks/search, which no router has ever served.
+#
+# The .claude/skills/api-doc skill was repointed at the JSON in the same change —
+# it was the repo's only maintenance instruction, and leaving it aimed here is
+# what would have re-created the divergence.
+
 # file: docs/openapi.yaml
 # version: 2.1.0
 # guid: 4d5e6f7a-8b9c-0d1e-2f3a-4b5c6d7e8f9a
