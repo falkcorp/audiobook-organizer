@@ -1,7 +1,7 @@
 // file: internal/database/dual_write_activity_store.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: f6a7b8c9-d0e1-0006-f012-000000000006
-// last-edited: 2026-07-03
+// last-edited: 2026-08-11
 
 // Package database — dual-write wrapper for the activity migration window.
 //
@@ -184,19 +184,19 @@ func (d *DualWriteActivityStore) RecompactDigests(ctx context.Context) (Recompac
 // ── ActivityStorer reads — routed to active backend ──────────────────────────
 
 // Query reads from the active backend only.
-func (d *DualWriteActivityStore) Query(f ActivityFilter) ([]ActivityEntry, int, error) {
+func (d *DualWriteActivityStore) Query(ctx context.Context, f ActivityFilter) ([]ActivityEntry, int, error) {
 	if d.ReadFromPebble {
-		return d.pebble.Query(f)
+		return d.pebble.Query(ctx, f)
 	}
-	return d.nuts.Query(f)
+	return d.nuts.Query(ctx, f)
 }
 
 // GetDistinctSources reads from the active backend only.
-func (d *DualWriteActivityStore) GetDistinctSources(f ActivityFilter) ([]SourceCount, error) {
+func (d *DualWriteActivityStore) GetDistinctSources(ctx context.Context, f ActivityFilter) ([]SourceCount, error) {
 	if d.ReadFromPebble {
-		return d.pebble.GetDistinctSources(f)
+		return d.pebble.GetDistinctSources(ctx, f)
 	}
-	return d.nuts.GetDistinctSources(f)
+	return d.nuts.GetDistinctSources(ctx, f)
 }
 
 // Close closes both backends and returns the first error encountered.

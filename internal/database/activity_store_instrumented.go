@@ -1,6 +1,7 @@
 // file: internal/database/activity_store_instrumented.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: b2c3d4e5-f6a7-0002-bcde-000000000002
+// last-edited: 2026-08-11
 
 package database
 
@@ -47,15 +48,21 @@ func (i *InstrumentedActivityStorer) Record(entry ActivityEntry) (int64, error) 
 }
 
 // Query traces the Query operation.
-func (i *InstrumentedActivityStorer) Query(filter ActivityFilter) ([]ActivityEntry, int, error) {
-	_, span := tracer.Start(context.Background(), "activity_store.query",
+//
+// The span is started FROM ctx and the returned ctx is what gets handed to the
+// wrapped store. Starting from context.Background() here (as this did before
+// Query became cancellable) would silently terminate the cancellation chain at
+// this wrapper: the build and every test would still pass while an abandoned
+// request kept scanning in production.
+func (i *InstrumentedActivityStorer) Query(ctx context.Context, filter ActivityFilter) ([]ActivityEntry, int, error) {
+	ctx, span := tracer.Start(ctx, "activity_store.query",
 		trace.WithAttributes(
 			attribute.String("tier", filter.Tier),
 			attribute.String("source", filter.Source),
 		))
 	defer span.End()
 
-	entries, total, err := i.store.Query(filter)
+	entries, total, err := i.store.Query(ctx, filter)
 	if err != nil {
 		span.RecordError(err)
 		span.SetAttributes(attribute.Bool("error", true))
@@ -106,14 +113,17 @@ func (i *InstrumentedActivityStorer) Prune(olderThan time.Time, tier string) (in
 }
 
 // GetDistinctSources traces the GetDistinctSources operation.
-func (i *InstrumentedActivityStorer) GetDistinctSources(filter ActivityFilter) ([]SourceCount, error) {
-	_, span := tracer.Start(context.Background(), "activity_store.get_distinct_sources",
+//
+// As with Query, the span starts from the caller's ctx and the derived ctx is
+// passed down, so cancellation survives this wrapper.
+func (i *InstrumentedActivityStorer) GetDistinctSources(ctx context.Context, filter ActivityFilter) ([]SourceCount, error) {
+	ctx, span := tracer.Start(ctx, "activity_store.get_distinct_sources",
 		trace.WithAttributes(
 			attribute.String("tier", filter.Tier),
 		))
 	defer span.End()
 
-	sources, err := i.store.GetDistinctSources(filter)
+	sources, err := i.store.GetDistinctSources(ctx, filter)
 	if err != nil {
 		span.RecordError(err)
 		span.SetAttributes(attribute.Bool("error", true))
