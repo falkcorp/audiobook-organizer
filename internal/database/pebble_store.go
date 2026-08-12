@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.122.0
+// version: 1.123.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-08-11
 
@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
+	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/matcher"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
@@ -132,6 +133,13 @@ type PebbleStore struct {
 	// in NewPebbleStore before the store is returned, so no mutex is needed.
 	warmupCancel context.CancelFunc
 	warmupDone   chan struct{}
+
+	// libGen is bumped by every book-level mutation (CreateBook, UpdateBook,
+	// DeleteBook) so response caches derived from the book corpus can key on
+	// it and let their pre-mutation entries fall out of reach. See
+	// library_generation.go for why this lives on the store and why book-file
+	// mutations deliberately do NOT bump it.
+	libGen cache.Generation
 }
 
 // mem returns the active in-memory query layer or nil if warmup hasn't
@@ -1810,6 +1818,7 @@ func (p *PebbleStore) CreateBook(book *Book) (*Book, error) {
 
 	p.InvalidateLibraryStats()
 	p.MarkAllQuickQueriesDirty("create_book")
+	p.libGen.Bump()
 
 	// memdb write-through (always on when initialized)
 	p.UpsertBookToMemDB(context.Background(), book)
@@ -2063,6 +2072,11 @@ func (p *PebbleStore) UpdateBook(id string, book *Book) (*Book, error) {
 	p.MarkQuickQueryDirty("missing_covers", "update_book")
 	p.MarkQuickQueryDirty("no_isbn", "update_book")
 	p.MarkQuickQueryDirty("in_import_path", "update_book")
+	// UpdateBook is how a book gets demoted to is_primary_version=false when a
+	// merge elects a different winner. Those demoted rows must leave the cached
+	// library list, so this path bumps even though it only marks TARGETED quick
+	// queries dirty (i.e. hooking MarkAllQuickQueriesDirty would have missed it).
+	p.libGen.Bump()
 
 	// memdb write-through
 	p.UpsertBookToMemDB(context.Background(), book)
@@ -2378,6 +2392,7 @@ func (p *PebbleStore) DeleteBook(id string) error {
 	}
 	p.InvalidateLibraryStats()
 	p.MarkAllQuickQueriesDirty("delete_book")
+	p.libGen.Bump()
 
 	// memdb write-through
 	p.DeleteBookFromMemDB(context.Background(), id)
