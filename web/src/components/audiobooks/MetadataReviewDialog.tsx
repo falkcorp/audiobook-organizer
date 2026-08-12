@@ -1,7 +1,7 @@
 // file: web/src/components/audiobooks/MetadataReviewDialog.tsx
-// version: 1.13.0
+// version: 1.14.0
 // guid: e7f8a9b0-c1d2-3e4f-5a6b-7c8d9e0f1a2b
-// last-edited: 2026-07-01
+// last-edited: 2026-08-11
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -32,6 +32,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import type { CandidateResult, MetadataCandidate } from '../../services/api';
 import * as api from '../../services/api';
+import { isAuthRedirectError } from '../../utils/apiFetch';
 import { STORAGE_KEYS } from '../../lib/storageKeys';
 
 interface MetadataReviewDialogProps {
@@ -312,41 +313,100 @@ export function MetadataReviewDialog({
   const applyQueueRef = useRef<string[]>([]);
   const applyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Both apply paths follow the same rule: report what the SERVER applied, and
+  // only mark rows the server named in applied_ids. Previously every requested
+  // id was marked 'applied' and the toast reported ids.length — so a book the
+  // server skipped (expired cache entry, apply error) disappeared from the
+  // queue as if it had worked, then came back on the next load. Skipped rows
+  // are reverted to 'pending' so they stay visible and re-appliable.
+  const applyServerOutcome = useCallback(
+    (
+      requestedIds: string[],
+      result: api.BatchApplyFromCacheResult,
+      undoLabel: string
+    ) => {
+      const appliedSet = new Set(result.applied_ids);
+      setRowStates((prev) => {
+        const next = new Map(prev);
+        requestedIds.forEach((id) => next.set(id, appliedSet.has(id) ? 'applied' : 'pending'));
+        return next;
+      });
+      if (result.applied > 0) {
+        const undoIds = result.applied_ids;
+        toast(
+          `Applied metadata to ${result.applied} book${result.applied > 1 ? 's' : ''}`,
+          'success',
+          {
+            label: undoLabel,
+            onClick: async () => {
+              for (const id of undoIds) {
+                try {
+                  await api.undoLastApply(id);
+                } catch {
+                  /* ignore */
+                }
+              }
+              setRowStates((prev) => {
+                const next = new Map(prev);
+                undoIds.forEach((id) => next.set(id, 'pending'));
+                return next;
+              });
+              toast(`Undid ${undoIds.length} apply(s)`, 'info');
+            },
+          }
+        );
+      }
+      if (result.skipped.length > 0) {
+        const expired = result.skipped.filter(
+          (s) => s.reason === 'no_cached_candidates'
+        ).length;
+        const detail =
+          expired === result.skipped.length
+            ? 'no cached match — refresh and try again'
+            : 'see server logs for details';
+        toast(
+          `Skipped ${result.skipped.length} book${result.skipped.length > 1 ? 's' : ''} (${detail})`,
+          'warning'
+        );
+      }
+    },
+    [toast]
+  );
+
+  // Session expiry is NOT a generic failure. When Cloudflare Access bounces the
+  // request to a login page the write never happened, so every optimistic row
+  // must revert and the user has to be told to sign in — not shown a generic
+  // "Failed to apply" they will retry against a dead session.
+  const handleApplyError = useCallback(
+    (err: unknown, requestedIds: string[]) => {
+      setRowStates((prev) => {
+        const next = new Map(prev);
+        requestedIds.forEach((id) => next.set(id, 'pending'));
+        return next;
+      });
+      if (isAuthRedirectError(err)) {
+        toast('Session expired, sign in again — nothing was applied', 'error');
+        return;
+      }
+      toast('Failed to apply', 'error');
+    },
+    [toast]
+  );
+
   const flushApplyQueue = useCallback(async () => {
     const ids = [...applyQueueRef.current];
     applyQueueRef.current = [];
     if (ids.length === 0) return;
     try {
-      await api.batchApplyFromCache(ids);
-      hasChangesRef.current = true;
-      toast(`Applied metadata to ${ids.length} book${ids.length > 1 ? 's' : ''}`, 'success', {
-        label: 'Undo',
-        onClick: async () => {
-          for (const id of ids) {
-            try {
-              await api.undoLastApply(id);
-            } catch {
-              /* ignore */
-            }
-          }
-          setRowStates((prev) => {
-            const next = new Map(prev);
-            ids.forEach((id) => next.set(id, 'pending'));
-            return next;
-          });
-          toast(`Undid ${ids.length} apply(s)`, 'info');
-        },
-      });
-    } catch {
-      // Revert optimistic updates
-      setRowStates((prev) => {
-        const next = new Map(prev);
-        ids.forEach((id) => next.set(id, 'pending'));
-        return next;
-      });
-      toast('Failed to apply', 'error');
+      const result = await api.batchApplyFromCache(ids);
+      if (result.applied > 0) {
+        hasChangesRef.current = true;
+      }
+      applyServerOutcome(ids, result, 'Undo');
+    } catch (err) {
+      handleApplyError(err, ids);
     }
-  }, [toast]);
+  }, [applyServerOutcome, handleApplyError]);
 
   const handleApplyOne = (bookId: string) => {
     // Optimistic UI update
@@ -361,30 +421,17 @@ export function MetadataReviewDialog({
     if (bookIds.length === 0) return;
     setApplying(true);
     try {
-      const { applied } = await api.batchApplyFromCache(bookIds);
-      const newStates = new Map(rowStates);
-      bookIds.forEach((id) => newStates.set(id, 'applied'));
-      setRowStates(newStates);
-      setSelectedIds(new Set());
-      hasChangesRef.current = true;
-      toast(`Applied metadata to ${applied} books`, 'success', {
-        label: 'Undo All',
-        onClick: async () => {
-          for (const id of bookIds) {
-            try {
-              await api.undoLastApply(id);
-            } catch {
-              /* ignore */
-            }
-          }
-          const revertStates = new Map(rowStates);
-          bookIds.forEach((id) => revertStates.set(id, 'pending'));
-          setRowStates(revertStates);
-          toast(`Undid ${bookIds.length} applies`, 'info');
-        },
-      });
-    } catch {
-      toast('Failed to apply', 'error');
+      const result = await api.batchApplyFromCache(bookIds);
+      // Clear the selection only for books that actually applied, so a skipped
+      // book stays selected and the user can retry it after a refresh.
+      const appliedSet = new Set(result.applied_ids);
+      setSelectedIds((prev) => new Set([...prev].filter((id) => !appliedSet.has(id))));
+      if (result.applied > 0) {
+        hasChangesRef.current = true;
+      }
+      applyServerOutcome(bookIds, result, 'Undo All');
+    } catch (err) {
+      handleApplyError(err, bookIds);
     } finally {
       setApplying(false);
     }
