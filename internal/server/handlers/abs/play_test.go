@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/play_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3e5c9b17-84d0-4f26-a1b9-70c8de4531f5
 // last-edited: 2026-08-12
 
@@ -384,7 +384,8 @@ func TestSessionSync_ConformsToOracle(t *testing.T) {
 		body:    map[string]any{"currentTime": 12.5, "duration": 9975.48, "timeListened": 10},
 		headers: bearer(tok),
 	})
-	assertNonJSONConformant(t, "post_api_session_id_sync.json", w.Code, w.Body.String())
+	assertNonJSONConformant(t, "post_api_session_id_sync.json", w.Code,
+		w.Header().Get("Content-Type"), w.Body.String())
 }
 
 func TestSessionClose_ConformsToOracle(t *testing.T) {
@@ -395,7 +396,8 @@ func TestSessionClose_ConformsToOracle(t *testing.T) {
 		method: http.MethodPost, path: "/api/session/" + sessionID + "/close",
 		headers: bearer(tok),
 	})
-	assertNonJSONConformant(t, "post_api_session_id_close.json", w.Code, w.Body.String())
+	assertNonJSONConformant(t, "post_api_session_id_close.json", w.Code,
+		w.Header().Get("Content-Type"), w.Body.String())
 }
 
 // TestSessionSync_TimeListenedIsADeltaTimeListeningIsCumulative pins §1.8.4, the
@@ -506,7 +508,23 @@ func TestSessionSync_OtherUsersSessionIsRejected(t *testing.T) {
 // assertNonJSONConformant compares a plain-text response against a fixture whose
 // body the capture script recorded as {"__non_json_body__": "..."} because real ABS
 // answered text/plain rather than JSON.
-func assertNonJSONConformant(t *testing.T, fixture string, code int, body string) {
+//
+// It checks the Content-Type, not just the status and the body text, because that
+// header is the part a client acts on FIRST. Six routes answer this way, and the
+// difference between them and the other twenty-two is a header, not a payload: gin's
+// c.String sets "text/plain; charset=utf-8" and c.JSON sets "application/json". A
+// client that reads Content-Type and reaches for a JSON decoder fails before it ever
+// sees the two bytes of body. Asserting the status and body alone leaves the one
+// field that distinguishes these responses unchecked — which is how the whole suite
+// used to work, and the reason this track exists.
+//
+// The captures also carry an ETag, deliberately not asserted. All six record the
+// identical value because Express derives a weak ETag from the response body and
+// every one of these bodies is the same two bytes — it identifies the payload, not
+// the resource, and nothing revalidates the response to a mutation. Asserting it
+// would pin an artifact of the oracle's HTTP framework rather than any behaviour a
+// client depends on.
+func assertNonJSONConformant(t *testing.T, fixture string, code int, contentType, body string) {
 	t.Helper()
 	f := mustLoadFixture(t, fixture)
 	if code != f.Response.Status {
@@ -520,7 +538,15 @@ func assertNonJSONConformant(t *testing.T, fixture string, code int, body string
 	if !ok {
 		t.Fatalf("%s: fixture is JSON after all; use assertConformant", fixture)
 	}
+	if wantCT := f.Response.Headers["content-type"]; wantCT != "" && contentType != wantCT {
+		t.Errorf("%s: Content-Type = %q, want %q — a client picks its decoder from this "+
+			"header before reading the body, so answering JSON here breaks it even though "+
+			"the status and payload still look right", fixture, contentType, wantCT)
+	}
 	if strings.TrimSpace(body) != strings.TrimSpace(want) {
-		t.Fatalf("%s: body = %q, want %q (real ABS answers a bare %q here)", fixture, body, want, want)
+		t.Errorf("%s: body = %q, want %q (real ABS answers a bare %q here)", fixture, body, want, want)
+	}
+	if t.Failed() {
+		t.FailNow()
 	}
 }

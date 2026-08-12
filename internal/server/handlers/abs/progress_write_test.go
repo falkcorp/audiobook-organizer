@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/progress_write_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2b7f4e91-8a05-4c63-b1d8-70e396a5cf42
 // last-edited: 2026-08-12
 
@@ -693,8 +693,8 @@ func TestBookmarks_ListErrorIs5xxNotEmptyList(t *testing.T) {
 // this surface: a client that hard-requires it fails its whole decode, and for a
 // progress body that failure looks to the user like the book losing its place.
 //
-// Values are checked too as of 2026-08-12 — except where a call site below is still
-// on assertConformantPending. Wrong values are not a harmless second tier here: a
+// Values are checked too as of 2026-08-12, every call site, with each remaining
+// divergence named and bounded. Wrong values are not a harmless second tier here: a
 // progress body with the right keys and a wrong currentTime does not fail a decode,
 // it silently sends the listener to the wrong place in the book.
 
@@ -794,4 +794,102 @@ func TestProgressWrites_CannotAddressAnotherUsersRow(t *testing.T) {
 	if code != http.StatusNotFound {
 		t.Fatalf("got %d, want 404 for another user's row id", code)
 	}
+}
+
+// ── the four write routes that answer plain text ────────────────────────────
+//
+// These four fixtures were captured from real ABS and then referenced by nothing
+// for as long as they have existed. Every one of their routes IS exercised above —
+// TestMediaProgressPatch_StoresPositionAndIsReadableBack, _BatchUpdate_AppliesEveryElement,
+// _Delete_ResetsProgress, TestBookmarks_CreateListUpdateDelete — but those tests assert
+// the status code and then read the value back out of the store. Only one of them looks
+// at the response body at all, and none looks at Content-Type.
+//
+// That leaves the thing most likely to break unwatched. All four answer `200 OK` as
+// text/plain, and the reason to keep answering that way is not aesthetic: gin picks
+// Content-Type from the render call, so "improving" respondPlainOK into c.JSON would
+// flip the header to application/json while leaving the status at 200 — passing every
+// existing test and breaking every client that chooses its decoder from the header.
+//
+// Driving each request from the fixture's own recorded REQUEST body rather than a
+// hand-typed one is deliberate. The seed for the item fixtures was hand-typed and had
+// drifted into six identical 2 KB files standing in for six different 11–21 MB ones,
+// which manufactured a divergence that got written up as a mapper defect before anyone
+// checked the other five rows. A request typed by hand is the same hazard one step
+// earlier: it can stop being the request that produced the recorded response, and the
+// comparison quietly stops meaning what it claims.
+
+// oracleRequestBody returns the request body the capture recorded for a fixture, so a
+// test sends what the oracle was actually asked rather than an approximation of it.
+func oracleRequestBody(t *testing.T, fixture string) any {
+	t.Helper()
+	f := mustLoadFixture(t, fixture)
+	if f.Request.Body == nil {
+		t.Fatalf("%s: no recorded request body; this helper is for the ones that carry one", fixture)
+	}
+	return f.Request.Body
+}
+
+func TestMediaProgressPatch_ConformsToOracle(t *testing.T) {
+	w := newWriteHarness(t)
+	rec, _ := w.do(t, request{
+		method: http.MethodPatch, path: "/api/me/progress/" + w.syncID,
+		body:    oracleRequestBody(t, "patch_api_me_progress_id.json"),
+		headers: bearer(w.token),
+	})
+	assertNonJSONConformant(t, "patch_api_me_progress_id.json", rec.Code,
+		rec.Header().Get("Content-Type"), rec.Body.String())
+}
+
+func TestMediaProgressBatchUpdate_ConformsToOracle(t *testing.T) {
+	w := newWriteHarness(t)
+	// The recorded body is an array of one element addressing the oracle's own item id.
+	// Only the id has to be re-pointed at this harness's book; every other field is the
+	// oracle's, untouched.
+	batch, ok := oracleRequestBody(t, "patch_api_me_progress_batch_update.json").([]any)
+	if !ok || len(batch) != 1 {
+		t.Fatalf("recorded batch body is not a one-element array: %#v", batch)
+	}
+	row, ok := batch[0].(map[string]any)
+	if !ok {
+		t.Fatalf("recorded batch element is not an object: %#v", batch[0])
+	}
+	row["libraryItemId"] = w.syncID
+
+	rec, _ := w.do(t, request{
+		method: http.MethodPatch, path: "/api/me/progress/batch/update",
+		body: batch, headers: bearer(w.token),
+	})
+	assertNonJSONConformant(t, "patch_api_me_progress_batch_update.json", rec.Code,
+		rec.Header().Get("Content-Type"), rec.Body.String())
+}
+
+func TestMediaProgressDelete_ConformsToOracle(t *testing.T) {
+	w := newWriteHarness(t)
+	// A row must exist: the oracle capture is of a successful delete, and deleting
+	// nothing is a 404 here (TestMediaProgressDelete_NothingToResetIs404).
+	w.patch(t, map[string]any{"currentTime": 42.0, "duration": 9975.48, "isFinished": false})
+
+	rec, _ := w.do(t, request{
+		method: http.MethodDelete, path: "/api/me/progress/" + w.rowID(),
+		headers: bearer(w.token),
+	})
+	assertNonJSONConformant(t, "delete_api_me_progress_id.json", rec.Code,
+		rec.Header().Get("Content-Type"), rec.Body.String())
+}
+
+func TestBookmarkDelete_ConformsToOracle(t *testing.T) {
+	w := newWriteHarness(t)
+	// Time 100 matches the fixture's own path segment (.../bookmark/100).
+	if code, _, raw := w.req(t, http.MethodPost, "/api/me/item/"+w.syncID+"/bookmark",
+		map[string]any{"time": 100, "title": "a good bit"}); code != http.StatusOK {
+		t.Fatalf("seed bookmark = %d %s", code, raw)
+	}
+
+	rec, _ := w.do(t, request{
+		method: http.MethodDelete, path: "/api/me/item/" + w.syncID + "/bookmark/100",
+		headers: bearer(w.token),
+	})
+	assertNonJSONConformant(t, "delete_api_me_item_id_bookmark_time.json", rec.Code,
+		rec.Header().Get("Content-Type"), rec.Body.String())
 }
