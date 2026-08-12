@@ -1,6 +1,7 @@
 // file: internal/database/embedding_store_chaos_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
+// last-edited: 2026-08-12
 //
 // Chaos tests for the EmbeddingStore under shutdown conditions.
 // Validates graceful behavior when the store is closed during or
@@ -28,6 +29,35 @@ func newOwnedEmbeddingStore(t *testing.T, dir string) *EmbeddingStore {
 	db, err := pebble.Open(dir, &pebble.Options{})
 	require.NoError(t, err)
 	return &EmbeddingStore{db: db, owned: true}
+}
+
+// waitForWorkers blocks until wg is done, or fails the test after a deadline.
+//
+// The chaos tests below deliberately race Close against in-flight operations.
+// When that deadlocked (three writers stuck forever on Pebble's
+// commitPipeline.prepare), a bare wg.Wait() produced NO test failure — it hung
+// until the CI job was killed, which surfaced as "Go Tests cancelled" with no
+// test named and no stack. One occurrence burned the whole job cap; see
+// todo.d/20260812-embeddingstore-close-deadlock.md.
+//
+// recover() cannot help here: a deadlock is not a panic. A bounded wait is what
+// turns a silent 30-minute hang into a 30-second named failure, so a regression
+// is reported instead of merely being expensive.
+func waitForWorkers(t *testing.T, wg *sync.WaitGroup, within time.Duration) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(within):
+		t.Fatalf("workers still running %v after Close returned: operations "+
+			"raced Close and deadlocked. EmbeddingStore.closeMu is supposed to "+
+			"make this impossible — Close must not start until every in-flight "+
+			"operation has released its read lock.", within)
+	}
 }
 
 // makeVector creates a random float32 vector of the given dimension.
@@ -146,7 +176,7 @@ func TestChaos_ConcurrentWritesDuringClose(t *testing.T) {
 	time.Sleep(5 * time.Millisecond)
 	_ = store.Close()
 
-	wg.Wait()
+	waitForWorkers(t, &wg, 30*time.Second)
 }
 
 // TestChaos_ConcurrentReadsDuringClose simulates readers active when
@@ -179,7 +209,7 @@ func TestChaos_ConcurrentReadsDuringClose(t *testing.T) {
 	time.Sleep(2 * time.Millisecond)
 	_ = store.Close()
 
-	wg.Wait()
+	waitForWorkers(t, &wg, 30*time.Second)
 }
 
 // TestChaos_MixedReadWriteDuringClose simulates a realistic shutdown
@@ -241,7 +271,7 @@ func TestChaos_MixedReadWriteDuringClose(t *testing.T) {
 	time.Sleep(3 * time.Millisecond)
 	_ = store.Close()
 
-	wg.Wait()
+	waitForWorkers(t, &wg, 30*time.Second)
 }
 
 // TestChaos_DataDurabilityAfterGracefulClose verifies that data written
