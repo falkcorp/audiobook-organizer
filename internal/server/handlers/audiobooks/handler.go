@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
-// last-edited: 2026-07-11
+// last-edited: 2026-08-11
 
 // Package audiobookshandler hosts the main library list / CRUD HTTP handlers
 // extracted from the server package's audiobooks_handlers.go: book listing
@@ -146,6 +146,25 @@ type Handler struct {
 	// publishEvent wraps *Server.publishEvent (the shared plugin event bus), used
 	// by deleteAudiobook.
 	publishEvent func(ctx context.Context, event plugin.Event)
+}
+
+// libraryGeneration resolves the store's book-mutation counter, which scopes
+// every library-list cache key.
+//
+// Resolved at request time from h.store (the un-stripped store) rather than
+// snapshotted, for the same reason the inline Unwrap assertions above are:
+// production runs behind the indexedStore decorator, and a bare assertion
+// against the wrapper misses. Resolution is two type assertions, which is
+// nothing against building a list response.
+//
+// The library-list cache warmer resolves the same counter from the same
+// underlying store, so both compute identical keys. If they ever diverged the
+// warmer would write entries no request could read — a silent cache-miss
+// regression rather than a visible failure, which is why both sides go through
+// Generation.Key instead of formatting keys by hand.
+func (h *Handler) libraryGeneration() *cache.Generation {
+	gen, _ := database.LibraryGenerationOf(h.store)
+	return gen
 }
 
 // New constructs an audiobooks Handler from its dependencies.
@@ -458,7 +477,7 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 	// per-user filters are active because the cache key doesn't
 	// encode userID — a hit could leak User A's filtered list
 	// to User B.
-	cacheKey := "list:" + c.Request.URL.RawQuery
+	cacheKey := h.libraryGeneration().Key("list:", c.Request.URL.RawQuery)
 	if len(filters.PerUserFilters) == 0 {
 		if cached, ok := h.listCache.Get(cacheKey); ok {
 			httputil.RespondWithOK(c, cached)
