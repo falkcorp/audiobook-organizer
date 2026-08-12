@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.56.0
+// version: 2.57.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-08-06
+// last-edited: 2026-08-11
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -3578,9 +3578,37 @@ export async function getCachedReviewResults(
   return data.data ?? data;
 }
 
+// BatchApplySkip is one book that was requested but NOT applied. Reasons are
+// the stable strings the backend emits: 'no_cached_candidates' (by far the
+// most common — the cache entry expired between the review list being loaded
+// and APPLY being clicked), 'decode_failed', 'apply_failed'.
+export interface BatchApplySkip {
+  book_id: string;
+  reason: string;
+  error?: string;
+}
+
+// BatchApplyFromCacheResult carries the per-book outcome. `applied` is the
+// count the server ACTUALLY applied, which is not always the number requested;
+// callers must never substitute the requested count for it.
+export interface BatchApplyFromCacheResult {
+  applied: number;
+  applied_ids: string[];
+  skipped: BatchApplySkip[];
+  requested: number;
+  write_back: boolean;
+}
+
 // batchApplyFromCache applies the highest-scored cached candidate for each
 // book in book_ids. Cache-mode replacement for batchApplyCandidates.
-export async function batchApplyFromCache(bookIds: string[]): Promise<{ applied: number }> {
+//
+// applied_ids / skipped were added because this endpoint used to report only a
+// count: books whose cache entry had expired were skipped server-side, the UI
+// reported them as applied anyway, and they silently vanished from the review
+// queue and then reappeared on the next load.
+export async function batchApplyFromCache(
+  bookIds: string[]
+): Promise<BatchApplyFromCacheResult> {
   const response = await apiFetch(`${API_BASE}/audiobooks/metadata/batch-apply-cached`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -3588,7 +3616,16 @@ export async function batchApplyFromCache(bookIds: string[]): Promise<{ applied:
   });
   if (!response.ok) throw await buildApiError(response, 'Failed to apply cached candidates');
   const data = await response.json();
-  return data.data ?? data;
+  const payload = data.data ?? data;
+  // Tolerate an older server that returns only `applied`: treat every
+  // requested id as applied ONLY when the server did not tell us otherwise.
+  return {
+    applied: typeof payload.applied === 'number' ? payload.applied : 0,
+    applied_ids: Array.isArray(payload.applied_ids) ? payload.applied_ids : bookIds,
+    skipped: Array.isArray(payload.skipped) ? payload.skipped : [],
+    requested: typeof payload.requested === 'number' ? payload.requested : bookIds.length,
+    write_back: payload.write_back !== false,
+  };
 }
 
 // clearMetadataNoMatch clears a book's MetadataReviewStatus back to null
