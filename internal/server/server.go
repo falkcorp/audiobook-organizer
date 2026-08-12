@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.37.0
+// version: 2.38.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-08-11
 
@@ -182,15 +182,18 @@ type Server struct {
 	olService              *metafetch.OpenLibraryService
 	dedupCache             *cache.Cache[gin.H]
 	listCache              *cache.Cache[gin.H]
-	facetsCache            *cache.Cache[gin.H]
-	authorsCache           *cache.Cache[*audiobookspkg.AuthorWithCountListResponse]
-	seriesCache            *cache.Cache[*audiobookspkg.SeriesWithCountsResponse]
-	itunesSvc              *itunesservice.Service
-	updater                *updater.Updater
-	updateScheduler        *updater.Scheduler
-	scheduler              *scheduler.TaskScheduler
-	aiScanStore            *database.AIScanStore
-	pipelineManager        *aiscan.PipelineManager
+	// libGenWarnOnce keeps the "store has no generation counter" warning to a
+	// single line instead of one per list request.
+	libGenWarnOnce  sync.Once
+	facetsCache     *cache.Cache[gin.H]
+	authorsCache    *cache.Cache[*audiobookspkg.AuthorWithCountListResponse]
+	seriesCache     *cache.Cache[*audiobookspkg.SeriesWithCountsResponse]
+	itunesSvc       *itunesservice.Service
+	updater         *updater.Updater
+	updateScheduler *updater.Scheduler
+	scheduler       *scheduler.TaskScheduler
+	aiScanStore     *database.AIScanStore
+	pipelineManager *aiscan.PipelineManager
 	// operationsHandler is the migrated operations-domain handler (instantiated
 	// in wireHandlers). getSystemLogs delegates its operation_id branch to
 	// operationsHandler.GetOperationLogs; routes are registered in the same
@@ -317,6 +320,50 @@ func (s *Server) Store() database.Store {
 	return s.store
 }
 
+// listTTL bounds how long a cached library-list response may outlive a change
+// that did not go through the store's CreateBook / UpdateBook / DeleteBook —
+// a batch write, a direct memdb write, or an index-only edit. Generation
+// keying retires stale pages precisely for those three writes, so this is a
+// backstop, not the primary mechanism.
+//
+// It replaces a 24h TTL that was the reason merged-away books stayed on the
+// library page for a full day: nothing invalidated the entry (this cache had
+// no Invalidate call anywhere in the codebase), Get did not extend expiry so
+// entries lived 24h from their Set, and LRU capacity eviction never reached
+// them because library-page keys are the most recently used in the cache.
+// Ten minutes keeps browsing warm while capping the blast radius of any
+// mutation path the counter does not see.
+const listTTL = 10 * time.Minute
+
+// libraryGeneration resolves the store's book-mutation counter, which scopes
+// every library-list cache key.
+//
+// Resolved from s.Store() on each call rather than snapshotted at
+// construction: the store is wrapped by indexedStore once the search index
+// opens (after NewServer), and integration tests swap it post-wire. Resolving
+// live means this and the audiobooks handler always agree, because both walk
+// to the same underlying PebbleStore and get a pointer to the same counter.
+// They must agree — a warmer writing keys the request path cannot read is a
+// silent cache-miss regression, not a visible failure.
+//
+// Never returns nil. When the store exposes no counter (a test double), the
+// shared never-bumped fallback is returned and behaviour matches the
+// pre-generation code: TTL-only expiry. That case is logged once, because a
+// silent fallback would pin every key at generation 0 and quietly reinstate
+// the staleness bug.
+func (s *Server) libraryGeneration() *cache.Generation {
+	gen, resolved := database.LibraryGenerationOf(s.Store())
+	if !resolved {
+		s.libGenWarnOnce.Do(func() {
+			slog.Warn("library list cache: store exposes no library generation counter, "+
+				"cached list pages will only expire by TTL",
+				"store_type", fmt.Sprintf("%T", s.Store()),
+				"ttl", listTTL)
+		})
+	}
+	return gen
+}
+
 // OpRegistry returns the operations registry. Used by the operation-runner
 // child mode (cmd.RunOperationRunner) to dispatch a single op without
 // starting workers or the HTTP server.
@@ -407,8 +454,10 @@ func NewServer(store database.Store) *Server {
 		// to hundreds of thousands of entries (estimated 0.5–1.5 GB) on heavy
 		// use. Cap entry count via LRU; defaults are conservative starting
 		// points — watch cache_evictions_total{reason="capacity"} in prod.
-		dedupCache:   cache.NewWithLimit[gin.H]("dedup", 24*time.Hour, 1000),
-		listCache:    cache.NewWithLimit[gin.H]("list", 24*time.Hour, 2000),
+		dedupCache: cache.NewWithLimit[gin.H]("dedup", 24*time.Hour, 1000),
+		// listTTL, not 24h: see the listTTL doc comment. Generation keying is
+		// what actually retires stale library pages; the TTL is the backstop.
+		listCache:    cache.NewWithLimit[gin.H]("list", listTTL, 2000),
 		facetsCache:  cache.NewWithLimit[gin.H]("facets", 24*time.Hour, 100),
 		authorsCache: cache.NewWithLimit[*audiobookspkg.AuthorWithCountListResponse]("authors", 24*time.Hour, 1),
 		seriesCache:  cache.NewWithLimit[*audiobookspkg.SeriesWithCountsResponse]("series", 24*time.Hour, 1),
