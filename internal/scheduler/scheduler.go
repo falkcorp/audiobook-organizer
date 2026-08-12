@@ -1,7 +1,7 @@
 // file: internal/scheduler/scheduler.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 3f7a9c21-b4d8-4e05-a6f2-8c1d0e3b7a94
-// last-edited: 2026-07-03
+// last-edited: 2026-08-11
 
 // Package scheduler implements the unified task scheduling system.
 // TaskScheduler manages all registered tasks, their schedules, and manual
@@ -90,6 +90,29 @@ type TaskScheduler struct {
 	shutdown           chan struct{}
 	maintenanceOrder   []string
 	lastMaintenanceRun time.Time
+	// previousRun maps a task name to the v2 operation id it last enqueued.
+	// Only tasks that need to skip a tick while their own previous run is
+	// still queued/running use it (currently library_scan, whose full walk can
+	// outlast its interval on a large library). Guarded by mu.
+	previousRun map[string]string
+}
+
+// previousRunID returns the v2 operation id this task last enqueued, or "" if
+// it has not enqueued one since process start.
+func (ts *TaskScheduler) previousRunID(name string) string {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return ts.previousRun[name]
+}
+
+// setPreviousRunID records the v2 operation id a task just enqueued.
+func (ts *TaskScheduler) setPreviousRunID(name, opID string) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if ts.previousRun == nil {
+		ts.previousRun = make(map[string]string)
+	}
+	ts.previousRun[name] = opID
 }
 
 // NewTaskScheduler creates a scheduler and registers all known tasks.
@@ -115,6 +138,17 @@ func NewTaskScheduler(deps SchedulerDeps) *TaskScheduler {
 		"cleanup_old_backups",
 		"library_size_refresh",
 		"db_optimize",
+		// library_scan is LAST on purpose. It was missing from this list
+		// entirely, which made maintenance.library_scan unreachable dead
+		// config: the window op iterates MaintenanceOrder(), so a user who
+		// flipped the toggle got nothing. It goes at the end rather than the
+		// front because the window op breaks out of the loop the moment the
+		// window closes — a full library walk parked in front of everything
+		// else would starve dedup/purge/optimize on the same night. The
+		// interval ticker (scheduled.library_scan) is the primary discovery
+		// mechanism now; this entry exists so the toggle actually does
+		// something for anyone who prefers scans confined to the window.
+		"library_scan",
 	}
 	return ts
 }
