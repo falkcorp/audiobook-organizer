@@ -1,7 +1,7 @@
 // file: internal/audiobooks/helpers.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234560010
-// last-edited: 2026-07-01
+// last-edited: 2026-08-11
 //
 // Private utilities needed by the audiobooks service package. These mirror
 // equivalent helpers from internal/server/ but are standalone so that the
@@ -10,6 +10,7 @@
 package audiobooks
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -540,11 +541,11 @@ func buildComparisonValuesFromBook(book *database.Book, authorName, seriesName s
 
 // buildComparisonValuesFromActivityLog reconstructs a "before" tag snapshot
 // from the activity log for the given book within ±5 s of ts.
-func buildComparisonValuesFromActivityLog(as *activity.Service, bookID string, ts time.Time) map[string]any {
+func buildComparisonValuesFromActivityLog(ctx context.Context, as *activity.Service, bookID string, ts time.Time) map[string]any {
 	window := 5 * time.Second
 	since := ts.Add(-window)
 	until := ts.Add(window)
-	entries, _, err := as.Query(database.ActivityFilter{
+	entries, _, err := as.Query(ctx, database.ActivityFilter{
 		BookID: bookID,
 		Type:   "metadata_apply",
 		Since:  &since,

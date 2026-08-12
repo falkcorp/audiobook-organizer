@@ -162,7 +162,7 @@ func (svc *AudiobookService) GetAudiobookTags(ctx context.Context, id string, co
 			// Fallback: reconstruct "before" state from activity log old_values
 			slog.Debug("GetAudiobookTags GetBookAtVersion failed (), falling back to activity log for snapshot at", "verErr", verErr, "snapshotTS", snapshotTS)
 			if svc.activityService != nil {
-				comparisonValues = buildComparisonValuesFromActivityLog(svc.activityService, id, ts)
+				comparisonValues = buildComparisonValuesFromActivityLog(ctx, svc.activityService, id, ts)
 			}
 		}
 	} else if compareID != "" {

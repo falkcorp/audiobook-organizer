@@ -1,6 +1,7 @@
 // file: internal/activity/service.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+// last-edited: 2026-08-11
 
 package activity
 
@@ -33,8 +34,11 @@ func (s *Service) Record(entry database.ActivityEntry) error {
 }
 
 // Query returns entries matching the filter plus the total matching count.
-func (s *Service) Query(filter database.ActivityFilter) ([]database.ActivityEntry, int, error) {
-	return s.store.Query(filter)
+// Callers on a request path must pass the request's context: the scan aborts
+// as soon as it is cancelled, which is what stops an abandoned request from
+// scanning the whole log after the client has disconnected.
+func (s *Service) Query(ctx context.Context, filter database.ActivityFilter) ([]database.ActivityEntry, int, error) {
+	return s.store.Query(ctx, filter)
 }
 
 // Summarize collapses old entries in the given tier that are older than olderThan.
@@ -56,8 +60,9 @@ func (s *Service) CompactByDay(ctx context.Context, olderThan time.Time) (databa
 
 // GetDistinctSources returns all unique sources with their entry counts,
 // narrowed by the given filter's tier/level/since/until/search fields.
-func (s *Service) GetDistinctSources(filter database.ActivityFilter) ([]database.SourceCount, error) {
-	return s.store.GetDistinctSources(filter)
+// As with Query, request-path callers must pass the request's context.
+func (s *Service) GetDistinctSources(ctx context.Context, filter database.ActivityFilter) ([]database.SourceCount, error) {
+	return s.store.GetDistinctSources(ctx, filter)
 }
 
 // RecompactDigests re-derives type, tier, and tags on all stored daily-digest

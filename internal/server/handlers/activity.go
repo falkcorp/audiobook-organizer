@@ -1,13 +1,15 @@
 // file: internal/server/handlers/activity.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d4e5f6a7-b8c9-0123-def0-234567890123
-// last-edited: 2026-06-02
+// last-edited: 2026-08-11
 
 package handlers
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -18,11 +20,39 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// statusClientClosedRequest is nginx's 499: the client went away before the
+// response was written. Not in net/http, so it is spelled out here.
+const statusClientClosedRequest = 499
+
+// abortIfClientGone reports whether err is a cancelled/expired request context
+// and, when it is, ends the request with 499 and no body.
+//
+// Two things this deliberately avoids. It does NOT fall through to
+// httputil.InternalError: an abandoned request is not a server fault, and
+// routing every one of them through the 500 path would turn this fix into a
+// 5xx alert storm. It also does NOT use a bare c.Abort(), because Gin's default
+// status is 200 and a cancelled scan must never be reported as a successful
+// empty result — the caller would cache or render it as real data.
+func abortIfClientGone(c *gin.Context, err error, op string) bool {
+	if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	slog.Debug("[activity] request abandoned; scan cancelled",
+		"op", op, "path", c.Request.URL.Path, "error", err)
+	c.AbortWithStatus(statusClientClosedRequest)
+	return true
+}
+
 // ActivityService is the narrow interface ActivityHandler requires from the
 // activity log service.
+//
+// Query and GetDistinctSources take a context and every handler below passes
+// c.Request.Context(). Gin cancels that context when the client disconnects,
+// which is what lets an abandoned request stop scanning the activity log
+// instead of running to completion against a socket nobody is reading.
 type ActivityService interface {
-	Query(filter database.ActivityFilter) ([]database.ActivityEntry, int, error)
-	GetDistinctSources(filter database.ActivityFilter) ([]database.SourceCount, error)
+	Query(ctx context.Context, filter database.ActivityFilter) ([]database.ActivityEntry, int, error)
+	GetDistinctSources(ctx context.Context, filter database.ActivityFilter) ([]database.SourceCount, error)
 	RecompactDigests(ctx context.Context) (database.RecompactResult, error)
 	CompactByDay(ctx context.Context, cutoff time.Time) (database.CompactResult, error)
 }
@@ -151,8 +181,11 @@ func (h *ActivityHandler) ListActivity(c *gin.Context) {
 		}
 	}
 
-	entries, total, err := h.svc.Query(filter)
+	entries, total, err := h.svc.Query(c.Request.Context(), filter)
 	if err != nil {
+		if abortIfClientGone(c, err, "ListActivity") {
+			return
+		}
 		httputil.InternalError(c, "failed to query activity log", err)
 		return
 	}
@@ -191,8 +224,11 @@ func (h *ActivityHandler) ListActivitySources(c *gin.Context) {
 			filter.Until = &t
 		}
 	}
-	sources, err := h.svc.GetDistinctSources(filter)
+	sources, err := h.svc.GetDistinctSources(c.Request.Context(), filter)
 	if err != nil {
+		if abortIfClientGone(c, err, "ListActivitySources") {
+			return
+		}
 		httputil.InternalError(c, "failed to get sources", err)
 		return
 	}
@@ -234,8 +270,11 @@ func (h *ActivityHandler) ListOperationActivity(c *gin.Context) {
 		OperationID: opID,
 		Limit:       limit,
 	}
-	entries, total, err := h.svc.Query(filter)
+	entries, total, err := h.svc.Query(c.Request.Context(), filter)
 	if err != nil {
+		if abortIfClientGone(c, err, "ListOperationActivity") {
+			return
+		}
 		httputil.InternalError(c, "failed to query activity log", err)
 		return
 	}

@@ -1,11 +1,12 @@
 // file: internal/server/maintenance_fixups.go
-// version: 2.8.0
+// version: 2.9.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-07-31
+// last-edited: 2026-08-11
 
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -211,7 +212,7 @@ func (s *Server) handleWipe(c *gin.Context) {
 	// ── activity ──────────────────────────────────────────────────────────
 	if targetSet["activity"] {
 		if s.activityService != nil {
-			n, err := wipeActivity(s.activityService, dryRun)
+			n, err := wipeActivity(c.Request.Context(), s.activityService, dryRun)
 			if err != nil {
 				slog.Warn("wipe activity failed", "error", err)
 			}
@@ -346,9 +347,16 @@ func wipeExternalIDs(store maintenanceStore, dryRun bool) (int64, error) {
 }
 
 // wipeActivity deletes all activity log entries.
-func wipeActivity(svc *activity.Service, dryRun bool) (int64, error) {
+//
+// NOTE (pre-existing, not introduced here): the dry-run count comes from
+// Query's total, which the bounded scan added in 0adf6e97 made a LOWER BOUND.
+// With Limit:1 the walk stops at offset+limit+1 == 2 matches, so the reported
+// dry-run count now saturates at 2 rather than reporting the real row count.
+// Left alone deliberately — fixing it means either a dedicated count path or a
+// different filter, which is out of scope for the cancellation work.
+func wipeActivity(ctx context.Context, svc *activity.Service, dryRun bool) (int64, error) {
 	if dryRun {
-		entries, total, err := svc.Query(database.ActivityFilter{Limit: 1})
+		entries, total, err := svc.Query(ctx, database.ActivityFilter{Limit: 1})
 		if err != nil {
 			return 0, err
 		}
