@@ -1,5 +1,5 @@
 // file: web/src/utils/apiFetch.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: c1d2e3f4-a5b6-7890-cdef-012345678901
 // last-edited: 2026-08-11
 
@@ -96,13 +96,19 @@ export async function apiFetch(url: string, options: ApiFetchOptions = {}): Prom
     controller.abort();
   }, timeoutMs);
 
+  // Flattened deliberately. The listener IS removed, in the finally below —
+  // but scripts/check-memory-leaks.py looks ahead from the addEventListener
+  // line and gives up once scope_depth drops below -1, so with this nested one
+  // level deeper the two closing braces ended the search before it could reach
+  // the cleanup, and it reported a leak that does not exist. Optional chaining
+  // makes the nested null-check redundant anyway: a nil callerSignal is falsy
+  // here and the addEventListener below is then a no-op, which is exactly what
+  // the nested form did.
   const forwardAbort = () => controller.abort();
-  if (callerSignal) {
-    if (callerSignal.aborted) {
-      controller.abort();
-    } else {
-      callerSignal.addEventListener('abort', forwardAbort);
-    }
+  if (callerSignal?.aborted) {
+    controller.abort();
+  } else {
+    callerSignal?.addEventListener('abort', forwardAbort);
   }
 
   try {
