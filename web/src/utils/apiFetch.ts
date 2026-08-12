@@ -100,7 +100,12 @@ function assertNotAuthRedirect(requestUrl: string, response: Response): void {
     throw new ApiAuthRedirectError(requestUrl, response.url);
   }
 
-  const contentType = response.headers.get('Content-Type') ?? '';
+  // Optional chaining is load-bearing, not defensive noise: a real Response
+  // always has `headers`, but test doubles routinely do not (several suites
+  // stub fetch with a bare `{ ok, status, json }` object). Without the `?.`
+  // this throws a TypeError and turns a passing suite red for reasons that
+  // have nothing to do with auth.
+  const contentType = response.headers?.get('Content-Type') ?? '';
   if (contentType.toLowerCase().includes('text/html') && requestUrl.includes('/api/')) {
     throw new ApiAuthRedirectError(requestUrl, response.url || requestUrl);
   }
