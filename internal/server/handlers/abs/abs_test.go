@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/abs_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 2c07b5e9-4d16-48fa-b930-71e5c8a04f6d
 // last-edited: 2026-08-12
 
@@ -1353,6 +1353,96 @@ func TestSessions_ConformsToFixture(t *testing.T) {
 	}
 	if current != 1 {
 		t.Fatalf("exactly one session should be marked current, got %d", current)
+	}
+}
+
+// The oracle capture holds three sessions, so every fixture-derived assertion above fits
+// on a single page and never reaches the clamps in me.go. This seeds past the default page
+// size on purpose: it is the only test that can see an off-by-one in the slice bounds.
+func TestSessions_PaginatesPastTheFirstPage(t *testing.T) {
+	h := newHarness(t, "cf,jwt", nil)
+	h.seedPasswordUser(t, "u1", "owner", "pw-pw-pw-pw")
+
+	const seeded = 12
+	var access string
+	for i := 0; i < seeded; i++ {
+		access = str(t, userObj(t, h.login(t, "owner", "pw-pw-pw-pw")), "accessToken")
+	}
+
+	get := func(t *testing.T, query string) map[string]any {
+		t.Helper()
+		w, body := h.do(t, request{method: http.MethodGet, path: "/api/me/sessions" + query,
+			headers: map[string]string{"Authorization": "Bearer " + access}})
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET %s: %d %s", query, w.Code, w.Body.String())
+		}
+		return body
+	}
+	num := func(t *testing.T, body map[string]any, key string) int {
+		t.Helper()
+		v, ok := body[key].(float64)
+		if !ok || v != float64(int64(v)) {
+			t.Fatalf("%s must be an integer, got %#v", key, body[key])
+		}
+		return int(v)
+	}
+	ids := func(t *testing.T, body map[string]any) []string {
+		t.Helper()
+		raw, _ := body["sessions"].([]any)
+		out := make([]string, 0, len(raw))
+		for _, r := range raw {
+			out = append(out, str(t, r.(map[string]any), "id"))
+		}
+		return out
+	}
+
+	for _, tc := range []struct {
+		name              string
+		query             string
+		wantPage, wantPer int
+		wantPages, wantN  int
+	}{
+		{"default page size", "", 0, 10, 2, 10},
+		{"second page is the remainder", "?page=1", 1, 10, 2, seeded - 10},
+		{"explicit smaller page size", "?itemsPerPage=5", 0, 5, 3, 5},
+		{"last page of an exact multiple", "?itemsPerPage=6&page=1", 1, 6, 2, 6},
+		{"page past the end is empty, not an error", "?page=99", 99, 10, 2, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := get(t, tc.query)
+			if got := num(t, body, "total"); got != seeded {
+				t.Errorf("total = %d, want %d (total is the full count, not the page length)", got, seeded)
+			}
+			if got := num(t, body, "page"); got != tc.wantPage {
+				t.Errorf("page = %d, want %d", got, tc.wantPage)
+			}
+			if got := num(t, body, "itemsPerPage"); got != tc.wantPer {
+				t.Errorf("itemsPerPage = %d, want %d", got, tc.wantPer)
+			}
+			if got := num(t, body, "numPages"); got != tc.wantPages {
+				t.Errorf("numPages = %d, want %d", got, tc.wantPages)
+			}
+			if got := len(ids(t, body)); got != tc.wantN {
+				t.Errorf("returned %d sessions, want %d", got, tc.wantN)
+			}
+		})
+	}
+
+	// The property that catches an off-by-one in either clamp: the pages must partition the
+	// set exactly — every session once, none dropped, none repeated.
+	seen := map[string]int{}
+	for page := 0; page < 2; page++ {
+		for _, id := range ids(t, get(t, fmt.Sprintf("?page=%d", page))) {
+			seen[id]++
+		}
+	}
+	if len(seen) != seeded {
+		t.Fatalf("pages 0+1 covered %d distinct sessions, want %d", len(seen), seeded)
+	}
+	for id, n := range seen {
+		if n != 1 {
+			t.Errorf("session %s appeared on %d pages, want exactly 1", id, n)
+		}
 	}
 }
 
