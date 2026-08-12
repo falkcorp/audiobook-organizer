@@ -253,7 +253,7 @@ mock generation.
 
 - [Architecture](docs/architecture.md)
 - [Configuration](docs/configuration.md)
-- [Technical Design](docs/technical_design.md)
+- [Technical Design](docs/archive/technical_design.md)
 - [PebbleDB Keyspace Schema](docs/database-pebble-schema.md)
 - [MVP Specification](docs/mvp-specification.md)
 - [Implementation Plan](docs/mvp-implementation-plan.md)

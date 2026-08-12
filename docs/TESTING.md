@@ -707,5 +707,5 @@ Example PR checklist:
 
 For more details on the architecture and design, see:
 - [CLAUDE.md](./CLAUDE.md) - Project overview
-- [docs/technical_design.md](./technical_design.md) - Technical architecture
+- [docs/archive/technical_design.md](./archive/technical_design.md) - Technical architecture
 - [.github/copilot-instructions.md](./.github/copilot-instructions.md) - Development guidelines

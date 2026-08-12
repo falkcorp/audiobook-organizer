@@ -1,7 +1,7 @@
-<!-- file: CODING_STANDARDS.md -->
-<!-- version: 1.1.0 -->
+<!-- file: docs/CODING_STANDARDS.md -->
+<!-- version: 1.1.1 -->
 <!-- guid: c1d2e3f4-a5b6-7c8d-9e0f-1a2b3c4d5e6f -->
-<!-- last-edited: 2026-06-23 -->
+<!-- last-edited: 2026-08-11 -->
 
 # Coding Standards for Refactoring Task
 

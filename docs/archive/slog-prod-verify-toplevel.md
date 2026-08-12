@@ -1,7 +1,7 @@
-<!-- file: docs/slog-prod-verify.md -->
-<!-- version: 1.0.0 -->
+<!-- file: docs/archive/slog-prod-verify-toplevel.md -->
+<!-- version: 1.0.1 -->
 <!-- guid: 2c9b9f44-6c3e-4f3c-bbdc-4a1b3a7c7dda -->
-<!-- last-edited: 2026-06-04 -->
+<!-- last-edited: 2026-08-11 -->
 
 # `SLOG-PROD-VERIFY` Smoke Test
 

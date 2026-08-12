@@ -1,7 +1,7 @@
-<!-- file: docs/audits/2026-07-07-dedup-fullscan-composing-scores-writestall.md -->
-<!-- version: 1.0.0 -->
+<!-- file: docs/archive/audits/2026-07-07-dedup-fullscan-composing-scores-writestall.md -->
+<!-- version: 1.0.1 -->
 <!-- guid: 3a7d1c92-8e64-4b05-9f2a-6c1e0b8d4f57 -->
-<!-- last-edited: 2026-07-07 -->
+<!-- last-edited: 2026-08-11 -->
 
 # Root cause: `dedup.full-scan` "Composing scores" freeze — a Pebble write-stall from per-candidate fsync-under-lock (#19)
 

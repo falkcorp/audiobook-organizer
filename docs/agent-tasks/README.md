@@ -1,7 +1,7 @@
 <!-- file: docs/agent-tasks/README.md -->
-<!-- version: 2.2.1 -->
+<!-- version: 3.0.0 -->
 <!-- guid: 7a1e0c44-9d2b-4f08-bc31-2e5a6b7c8d90 -->
-<!-- last-edited: 2026-07-17 -->
+<!-- last-edited: 2026-08-11 -->
 
 # Agent Task Package
 
@@ -16,9 +16,37 @@ tasks in parallel on isolated git worktrees.
 > This is **not** the automated burndown bot (TODO.md → GitHub issues). These are
 > in-repo markdown briefs for hands-on runs.
 
-## Workstreams (2026-07-01 refresh)
+## Live workstreams (verified against HEAD, 2026-08-11)
 
-Planning + cost/efficiency rationale for this set is in
+**These ten folders are what actually lives in this directory.** Every row was verified by
+locating the concrete code artifact each brief promised and grepping for it at HEAD — a ✅ in
+a brief is not evidence. Full per-brief evidence with `file:line` citations is in
+[`docs/audits/2026-08-11-docs-inventory.md`](../audits/2026-08-11-docs-inventory.md).
+
+**Nothing here is archive-ready.** All ten are ACTIVE or PARTIAL.
+
+| Folder | State | Briefs done | Blocked on |
+|---|---|---|---|
+| [`abs-sync/`](abs-sync/) | ACTIVE | **10 / 10 written** (index lists 12; TASK-11 and TASK-12 have no brief) | 9 live TODO items; TASK-12's three identity gaps are absent at HEAD |
+| [`bug-techdebt/`](bug-techdebt/) | ACTIVE | 5 / 7 | TASK-01 warn-log absent; TASK-02 `staticcheck` exits 1 (5 test-file findings, post-completion drift); TODO #33/#34 |
+| [`dedup-pipeline-hardening/`](dedup-pipeline-hardening/) | **PARTIAL — closest to archivable** | 5 / 5 code + 1 operational | one contradictory bookkeeping line: `TODO.md:4988` says the prod drain was never run, `docs/operations/pending-prod-actions.md:26` says it ran 2026-07-18 |
+| [`error-correction-2026-07/`](error-correction-2026-07/) | ACTIVE | 10 / 13 (inline in `TASKS.md`, no `TASK-*.md` files) | T03 sandbox purge, T04 prod deploy, T13 docs truth-up — the only genuine unchecked boxes in the whole directory |
+| [`ux-small-items/`](ux-small-items/) | ACTIVE | 4 present + 1 partial + 1 N/A-by-design / 8 | TASK-05 and TASK-08 have zero implementation; TODO #5/#28/#29 |
+| [`torrent-relocation/`](torrent-relocation/) | ACTIVE — **human-gated** | 1 / 7 | TASK-02's STOP-FOR-HUMAN Deluge spike never opened, blocking T03–T07 |
+| [`ai-responses-migration/`](ai-responses-migration/) | ACTIVE — **on hold** | 0 / 5 | explicit do-not-start-without-greenlight hold, never lifted |
+| [`responses-api-migration/`](responses-api-migration/) | ACTIVE — **on hold** | n/a (`HOLD-STATUS.md` only) | hold never lifted; the doc trails the 2026-07-16 C/D closures |
+| [`community-fingerprint-index/`](community-fingerprint-index/) | ACTIVE — **awaiting approval** | n/a (`AWAIT-APPROVAL.md` only) | design spec still `Draft — STOP-FOR-HUMAN`; TODO #13 |
+| [`workflow-system/`](workflow-system/) | ACTIVE — **stale gate** | n/a (`AWAIT-APPROVAL.md` only) | superseded 2026-07-18 by an owner-approved plan (`docs/plans/2026-07-13-workflow-system-implementation-plan.md`) that this gate file was never updated to point at |
+
+> ⚠️ **`run-sweep.sh` cannot drive four of these ten.** It discovers work with
+> `find -maxdepth 1 -name 'TASK-*.md'`, but `community-fingerprint-index`, `workflow-system`,
+> `responses-api-migration` and `error-correction-2026-07` contain no `TASK-*.md` files —
+> they use `AWAIT-APPROVAL.md`, `HOLD-STATUS.md`, and `TASKS.md` respectively. For those the
+> script creates no worktrees and emits no prompts: a **silent no-op**, not an error.
+
+## Completed workstreams (archived)
+
+Planning + cost/efficiency rationale for the 2026-07-01 set is in
 [`BREAKDOWN-2026-07-01.md`](../archive/2026-07-consolidation/agent-tasks/BREAKDOWN-2026-07-01.md) (three buckets: authored as
 briefs / needs-brainstorm / operational-no-task, plus per-task model tier and the
 same-file collision→wave table).
@@ -33,7 +61,6 @@ same-file collision→wave table).
 | [`provenance-hash-chain/`](../archive/2026-07-consolidation/agent-tasks/provenance-hash-chain/) | Download-hash field + integrity alert (HASH-CHAIN-1/3) | P2 | 2 |
 | [`perf-cleanup/`](../archive/2026-07-consolidation/agent-tasks/perf-cleanup/) | RunItems migration, caching fast-paths, config-shim retire (ARCH-4b, MAYDEPLOY-H5/H7, NUTSDB, CONS-13) | P3 | 5 |
 | [`logging-slog/`](../archive/2026-07-consolidation/agent-tasks/logging-slog/) | Wire `logging.Info(ctx)` into the remaining raw-slog op paths (SLOG-W13 residual) | P3 | 3 |
-| [`ai-responses-migration/`](ai-responses-migration/) | **DEFERRED/optional** — Chat Completions → `/v1/responses` (AI-RESP-A/B/D/E/F) | P3 (deferred) | 5 |
 
 Each workstream folder has its own `README.md` (overview + wave table),
 numbered `TASK-NN-*.md` briefs, an `orchestration.md`, and a `run.sh`.

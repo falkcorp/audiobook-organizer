@@ -1,7 +1,7 @@
-<!-- file: docs/plans/2026-07-29-abs-sync-phase0-oracle.md -->
-<!-- version: 1.2.0 -->
+<!-- file: docs/archive/plans/2026-07-29-abs-sync-phase0-oracle.md -->
+<!-- version: 1.2.1 -->
 <!-- guid: ec50565c-7a14-46a8-a6a9-49376e63f89f -->
-<!-- last-edited: 2026-07-29 -->
+<!-- last-edited: 2026-08-11 -->
 
 # ABS Sync Phase 0 — Reference Oracle & Conformance Harness — Implementation Plan
 

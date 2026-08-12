@@ -1,7 +1,7 @@
-<!-- file: docs/research/2026-06-15-config-architecture-evaluation.md -->
-<!-- version: 1.0.0 -->
+<!-- file: docs/archive/2026-06-15-config-architecture-evaluation.md -->
+<!-- version: 1.0.1 -->
 <!-- guid: c7f3a821-94e0-4b2d-b8e1-3d5f8ac22019 -->
-<!-- last-edited: 2026-06-15 -->
+<!-- last-edited: 2026-08-11 -->
 
 # Config Architecture Evaluation — AppConfig / ToolConfig / Nested Structs
 

@@ -1,4 +1,15 @@
+<!-- file: docs/operations/slog-prod-verify.md -->
+<!-- version: 1.1.0 -->
+<!-- guid: 9fce353e-76db-495b-a4ac-475536aea16f -->
+<!-- last-edited: 2026-08-11 -->
+
 # SLOG-PROD-VERIFY — metadata fetch smoke test
+
+> **Canonical runbook.** A second, independently-written copy lived at
+> `docs/slog-prod-verify.md` until 2026-08-11; its unique content (the verification
+> checklist below) was folded in here and the duplicate was archived to
+> `docs/archive/slog-prod-verify-toplevel.md`. This file is the one cited by TODO item 28
+> and by [`pending-prod-actions.md`](pending-prod-actions.md).
 
 Smoke-test the production metadata-fetch operation from the outside so we can
 confirm the full chain is wired up end-to-end:
@@ -119,6 +130,18 @@ curl -fsS -X DELETE -H "Authorization: Bearer $PROD_TOKEN" \
 The registry respects the cancel request and will log a `cancel` event that also
 includes `op:$OP_ID`.
 
+## Verification checklist
+
+Tick all three before considering the run successful:
+
+- [ ] The `metadata-fetch` operation returned an explicit op ID and is visible in the
+      structured log stream (`op=<OPID>` / `op:<OPID>`).
+- [ ] `/api/v1/operations/<OPID>/activity` returns **multiple** rows for the same op
+      (start / progress / completion). If the operation is still streaming, expect the
+      first request to show rows only after a few seconds.
+- [ ] Activity rows include the metadata domain tags — e.g. `action: metadata-apply`,
+      `domain: metadata`, `source: metadata`.
+
 ## Failure signals to watch for
 
 - Activity endpoint returning an empty array **and** the log search shows no
@@ -134,3 +157,6 @@ Documenting this smoke test completes the `SLOG-PROD-VERIFY` story so the next
 person can reproduce the verification without digging through the codebase. Do
 not mark the TODO as finished until you have run the steps against production
 and confirmed both assertions.
+
+Re-run this verification each time the metadata pipeline is redeployed, or when a new
+logging change lands, so instrumentation regressions are caught early.

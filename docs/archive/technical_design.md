@@ -1,7 +1,7 @@
-<!-- file: docs/technical_design.md -->
-<!-- version: 1.1.0 -->
+<!-- file: docs/archive/technical_design.md -->
+<!-- version: 1.1.1 -->
 <!-- guid: 7d8e9f0a-1b2c-3d4e-5f6a-7b8c9d0e1f2a -->
-<!-- last-edited: 2026-01-19 -->
+<!-- last-edited: 2026-08-11 -->
 
 # Audiobook Organizer - Technical Design Document
 

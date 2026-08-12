@@ -29,7 +29,7 @@ Closes the eight small open UX/feature items from the remaining-work master plan
   ```
   staticcheck is red on main (pre-existing backlog #1796) — scope staticcheck to files you changed; the merge gate is Minimal CI green.
 - **Verify every file:line anchor with `grep` before editing** — line numbers in each brief are a starting point, not a guarantee; every brief carries its anchors' greps verbatim.
-- File version headers bumped on every touched file; conventional commits; prod interactions in TASK-03 and TASK-08 Lane A are READ-ONLY (any prospective prod change → AskUserQuestion). CAUTION: the `docs/slog-prod-verify.md` procedure's `metadata-fetch` op is fetch+APPLY (a prod write) — TASK-08 substitutes the read-only `scan-duration-mismatch` maintenance job on its autonomous lane; the metadata-fetch lane requires an explicit AskUserQuestion approval.
+- File version headers bumped on every touched file; conventional commits; prod interactions in TASK-03 and TASK-08 Lane A are READ-ONLY (any prospective prod change → AskUserQuestion). CAUTION: the `docs/operations/slog-prod-verify.md` procedure's `metadata-fetch` op is fetch+APPLY (a prod write) — TASK-08 substitutes the read-only `scan-duration-mismatch` maintenance job on its autonomous lane; the metadata-fetch lane requires an explicit AskUserQuestion approval.
 
 ## Collision / wave note
 

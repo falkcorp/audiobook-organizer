@@ -1,7 +1,7 @@
-<!-- file: docs/status/2026-07-11-remaining-work-execution.md -->
-<!-- version: 1.0.1 -->
+<!-- file: docs/archive/2026-07-11-remaining-work-execution.md -->
+<!-- version: 1.0.2 -->
 <!-- guid: 8877ac6a-c413-408f-b4b3-fd48a6ece32a -->
-<!-- last-edited: 2026-07-11 -->
+<!-- last-edited: 2026-08-11 -->
 
 # Status — Remaining-Work Execution Wave (2026-07-10 – 2026-07-11)
 
