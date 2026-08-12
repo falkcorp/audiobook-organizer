@@ -1,7 +1,7 @@
 // file: internal/organizer/organizer_test.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 8b9c0d1e-2f3a-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-08-11
+// last-edited: 2026-08-12
 
 package organizer
 
@@ -623,8 +623,25 @@ func TestExpandPattern_EmptyNarrator(t *testing.T) {
 
 // TestExpandPattern_EmptySegmentDropsConnectorWords covers the production bug
 // where a book with no narrator was organized to a path containing the literal
-// word "narrator" (measured 2026-08-11: 2,611 of 3,194 occupied-path organize
-// failures contained "read by narrator").
+// word "narrator".
+//
+// CORRECTION (2026-08-12): this comment used to cite "2,611 of 3,194
+// occupied-path organize failures contained 'read by narrator'", which reads as
+// if the narrator literal CAUSED those collisions. It did not. Comparing the
+// same colliding target across the fix on production shows the pileup unchanged:
+//
+//	pre-fix   .../Unknown Title - Unknown Author - read by narrator.mp3   x852
+//	post-fix  .../Unknown Title - Unknown Author.mp3                      x848
+//
+// The literal was correlated with the collisions only because both are symptoms
+// of the same missing metadata. The collisions are distinct books (128 rows
+// share the title "Clarke, Susanna", 176 share "nobody103 (Jack Voraces)")
+// expanding to one identical path, and they need their own fix — see
+// todo.d/20260812-organize-collision-anatomy.md. Neither the 3,194 nor the 2,611
+// could be reproduced from the logs; do not reuse those numbers.
+//
+// This test is still correct and still worth keeping: a path containing the
+// literal word "narrator" is wrong on its own terms.
 //
 // The requirement is stronger than "don't substitute a default": with the
 // default pattern `{title} - {author} - read by {narrator}`, blanking the
