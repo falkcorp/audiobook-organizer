@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
 // last-edited: 2026-08-11
 
@@ -56,6 +56,13 @@ var (
 	// The source list feeds a filter picker, so slightly stale counts are fine;
 	// re-scanning on every page load was half the OOM.
 	activitySourcesCacheTTL = 45 * time.Second
+
+	// activityCtxCheckInterval is how many rows a scan processes between
+	// context checks. Checking every row would cost a select per decode;
+	// checking never is what let 30 ABANDONED requests keep scanning and
+	// allocating on production (zero connected clients, 30 goroutines still
+	// inside scanTierKVs, 30.8 GB against a 30 GB cap). Tests set this to 1.
+	activityCtxCheckInterval = 64
 )
 
 // PebbleActivityStore persists activity log entries in a shared PebbleDB database.
@@ -253,18 +260,30 @@ func (s *PebbleActivityStore) Record(e ActivityEntry) (int64, error) {
 	return id, nil
 }
 
-// Query returns entries matching f, newest-first, plus the total matching count.
-func (s *PebbleActivityStore) Query(f ActivityFilter) ([]ActivityEntry, int, error) {
+// Query returns entries matching f, newest-first, plus the total matching
+// count, and aborts as soon as ctx is cancelled.
+//
+// There is deliberately no context-free variant: an abandoned request that
+// could not be cancelled is what held 30.8 GB across 30 goroutines with no
+// connected clients on production. Callers on a request path must pass the
+// request's context, never context.Background().
+//
+// total is EXACT when the walk exhausts the matching rows. Otherwise it is a
+// LOWER BOUND: either offset+limit+1 (the probe row, which tells the caller
+// another page exists) or however many matches were found before the scan
+// budget was reached. An exact count would require decoding every stored
+// entry, which is the behaviour this method exists to remove.
+func (s *PebbleActivityStore) Query(ctx context.Context, f ActivityFilter) ([]ActivityEntry, int, error) {
 	if f.Limit == 0 {
 		f.Limit = 50
 	}
 
 	// Fast path: op_id or book_id filter → use secondary index.
 	if f.OperationID != "" {
-		return s.queryByIndexPrefix(fmt.Sprintf("act:op:%s:", f.OperationID), f)
+		return s.queryByIndexPrefix(ctx, fmt.Sprintf("act:op:%s:", f.OperationID), f)
 	}
 	if f.BookID != "" {
-		return s.queryByIndexPrefix(fmt.Sprintf("act:bk:%s:", f.BookID), f)
+		return s.queryByIndexPrefix(ctx, fmt.Sprintf("act:bk:%s:", f.BookID), f)
 	}
 
 	// General path: bounded newest-first merge over the tier key ranges.
@@ -305,9 +324,10 @@ func (s *PebbleActivityStore) Query(f ActivityFilter) ([]ActivityEntry, int, err
 			exhausted = false
 			break
 		}
-		ex, phaseExhausted, err := s.scanNewestFirst(phase, f, remaining, "query", collect)
+		ex, phaseExhausted, err := s.scanNewestFirst(ctx, phase, f, remaining, "query", collect)
 		examined += ex
 		if err != nil {
+			// Explicitly nil: drop the partial page rather than returning it.
 			return nil, 0, err
 		}
 		if !phaseExhausted {
@@ -339,7 +359,7 @@ func (s *PebbleActivityStore) Query(f ActivityFilter) ([]ActivityEntry, int, err
 // Summarize groups old entries by (operation_id, type), writes a summary row,
 // and deletes the originals. Returns count of deleted rows.
 func (s *PebbleActivityStore) Summarize(ctx context.Context, olderThan time.Time, tier string) (int, error) {
-	kvs, err := s.scanTierKVs(tier, nil, &olderThan)
+	kvs, err := s.scanTierKVs(ctx, tier, nil, &olderThan)
 	if err != nil {
 		return 0, err
 	}
@@ -427,7 +447,8 @@ func (s *PebbleActivityStore) Summarize(ctx context.Context, olderThan time.Time
 
 // Prune hard-deletes all entries of the given tier older than olderThan.
 func (s *PebbleActivityStore) Prune(olderThan time.Time, tier string) (int, error) {
-	kvs, err := s.scanTierKVs(tier, nil, &olderThan)
+	// Prune has no caller context; it is a scheduled maintenance op.
+	kvs, err := s.scanTierKVs(context.Background(), tier, nil, &olderThan)
 	if err != nil {
 		return 0, err
 	}
@@ -490,7 +511,12 @@ func pactSourcesCacheKey(f ActivityFilter) string {
 // that only ever appears in older entries will be missing, and counts are of
 // the newest window rather than of all time. This feeds a filter picker, where
 // a bounded, recent view is the useful one; hitting the bound is logged.
-func (s *PebbleActivityStore) GetDistinctSources(f ActivityFilter) ([]SourceCount, error) {
+//
+// Cancellable, with no context-free variant: this ran concurrently with Query
+// on every page load and contributed 3.21 GB to the OOM heap profile, so an
+// abandoned request must be able to stop it. On a cache hit it returns without
+// touching the store at all.
+func (s *PebbleActivityStore) GetDistinctSources(ctx context.Context, f ActivityFilter) ([]SourceCount, error) {
 	key := pactSourcesCacheKey(f)
 	if cached, ok := s.lookupSourcesCache(key); ok {
 		return cached, nil
@@ -500,12 +526,14 @@ func (s *PebbleActivityStore) GetDistinctSources(f ActivityFilter) ([]SourceCoun
 	tiers := append(append([]string{}, nonDigest...), digestTiers...)
 
 	counts := make(map[string]int)
-	examined, exhausted, err := s.scanNewestFirst(tiers, f, activityQueryScanBudget, "sources",
+	examined, exhausted, err := s.scanNewestFirst(ctx, tiers, f, activityQueryScanBudget, "sources",
 		func(e ActivityEntry) bool {
 			counts[e.Source]++
 			return true
 		})
 	if err != nil {
+		// Explicitly nil, and nothing is cached: a cancelled scan's partial
+		// counts must not become the memoized answer for the next 45s.
 		return nil, err
 	}
 	if !exhausted {
@@ -566,7 +594,7 @@ func (s *PebbleActivityStore) storeSourcesCache(key string, out []SourceCount) {
 func (s *PebbleActivityStore) WipeAllActivity() (int64, error) {
 	var total int64
 	for _, tier := range actTiers {
-		kvs, err := s.scanTierKVs(tier, nil, nil)
+		kvs, err := s.scanTierKVs(context.Background(), tier, nil, nil)
 		if err != nil {
 			return total, err
 		}
@@ -603,7 +631,7 @@ func (s *PebbleActivityStore) CompactByDay(ctx context.Context, olderThan time.T
 	// Load all compactable entries (all tiers except "digest").
 	var all []pactKV
 	for _, tier := range actCompactableTiers() {
-		kvs, err := s.scanTierKVs(tier, nil, &olderThan)
+		kvs, err := s.scanTierKVs(ctx, tier, nil, &olderThan)
 		if err != nil {
 			return result, err
 		}
@@ -1027,7 +1055,11 @@ func pactSelectTiers(f ActivityFilter) (nonDigest, digest []string) {
 //
 // Deliberately single-goroutine: this is a stop-early walk, and fanning it out
 // over workers would mean over-reading, which is the very cost being removed.
+// Cancellation: ctx is checked every activityCtxCheckInterval rows. The budget
+// bounds a request that RUNS TO COMPLETION; ctx is what bounds an ABANDONED
+// one. They solve different halves and both are required.
 func (s *PebbleActivityStore) scanNewestFirst(
+	ctx context.Context,
 	tiers []string,
 	f ActivityFilter,
 	budget int,
@@ -1039,6 +1071,9 @@ func (s *PebbleActivityStore) scanNewestFirst(
 	}
 	if budget <= 0 {
 		return 0, false, nil
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return 0, false, ctxErr
 	}
 
 	cursors := make([]*pactCursor, 0, len(tiers))
@@ -1070,6 +1105,14 @@ func (s *PebbleActivityStore) scanNewestFirst(
 	defer tally.log(op)
 
 	for {
+		// Bail out promptly when the caller has gone away. Checked before the
+		// cursor work so an abandoned request stops allocating immediately.
+		if examined%activityCtxCheckInterval == 0 {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return examined, false, ctxErr
+			}
+		}
+
 		// Pick the cursor sitting on the newest remaining key. Ties break on
 		// the full key bytes so the order is deterministic.
 		best := -1
@@ -1123,7 +1166,11 @@ func (s *PebbleActivityStore) scanNewestFirst(
 // operations (Summarize, Prune, WipeAllActivity, CompactByDay), which
 // legitimately need every row. Query and GetDistinctSources deliberately do NOT
 // use it — see scanNewestFirst.
-func (s *PebbleActivityStore) scanTierKVs(tier string, since, until *time.Time) ([]pactKV, error) {
+// This scan is unbounded by design, so ctx is its ONLY brake: it is checked
+// every activityCtxCheckInterval rows, and on cancellation returns a nil slice
+// with ctx.Err() so the entries accumulated so far become garbage immediately
+// rather than being handed back to a caller that has gone away.
+func (s *PebbleActivityStore) scanTierKVs(ctx context.Context, tier string, since, until *time.Time) ([]pactKV, error) {
 	lower, upper := pactTierBounds(tier, since, until)
 
 	iter, err := s.db.NewIter(&pebble.IterOptions{
@@ -1139,7 +1186,18 @@ func (s *PebbleActivityStore) scanTierKVs(tier string, since, until *time.Time) 
 	defer tally.log("scanTierKVs tier=" + tier)
 
 	var out []pactKV
+	seen := 0
 	for iter.First(); iter.Valid(); iter.Next() {
+		if seen%activityCtxCheckInterval == 0 {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				slog.Warn("[activity] scanTierKVs aborted: caller went away",
+					"tier", tier, "rows_scanned", seen, "error", ctxErr)
+				// Explicitly nil: release the accumulated slice.
+				return nil, ctxErr
+			}
+		}
+		seen++
+
 		var e ActivityEntry
 		s.entriesDecoded.Add(1)
 		if jsonErr := json.Unmarshal(iter.Value(), &e); jsonErr != nil {
@@ -1158,9 +1216,26 @@ func (s *PebbleActivityStore) scanTierKVs(tier string, since, until *time.Time) 
 
 // queryByIndexPrefix reads ref values from an index prefix, then fetches primary entries.
 // Handles both op and book secondary indexes.
-func (s *PebbleActivityStore) queryByIndexPrefix(prefix string, f ActivityFilter) ([]ActivityEntry, int, error) {
+//
+// This is the fast path Query takes whenever OperationID or BookID is set, so
+// GET /api/v1/operations/:id/activity never reaches scanNewestFirst. It
+// therefore needs its own cancellation checks: without them, threading a
+// request context into Query would be cosmetic on that endpoint and an
+// abandoned operation-transcript request would keep scanning to completion.
+// ctx is checked every activityCtxCheckInterval rows in BOTH loops, and on
+// cancellation the accumulated slices are dropped (explicit nil) so they become
+// garbage immediately rather than being handed to a caller that has gone away.
+//
+// Known cost, unchanged here: this collects every ref for the id and decodes
+// all of them before slicing by offset/limit, so it is bounded by the number of
+// entries for one operation rather than by f.Limit.
+func (s *PebbleActivityStore) queryByIndexPrefix(ctx context.Context, prefix string, f ActivityFilter) ([]ActivityEntry, int, error) {
 	// Upper bound: replace trailing ':' with ';' to cover the entire id sub-namespace.
 	upperPrefix := prefix[:len(prefix)-1] + ";"
+
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, 0, ctxErr
+	}
 
 	iter, err := s.db.NewIter(&pebble.IterOptions{
 		LowerBound: []byte(prefix),
@@ -1172,14 +1247,26 @@ func (s *PebbleActivityStore) queryByIndexPrefix(prefix string, f ActivityFilter
 	defer iter.Close()
 
 	var refs [][]byte
+	seen := 0
 	for iter.First(); iter.Valid(); iter.Next() {
+		if seen%activityCtxCheckInterval == 0 {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, 0, ctxErr
+			}
+		}
+		seen++
 		valCopy := make([]byte, len(iter.Value()))
 		copy(valCopy, iter.Value())
 		refs = append(refs, valCopy)
 	}
 
 	var all []ActivityEntry
-	for _, ref := range refs {
+	for i, ref := range refs {
+		if i%activityCtxCheckInterval == 0 {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, 0, ctxErr
+			}
+		}
 		primaryKey, ok := pactPrimaryKeyFromRef(ref)
 		if !ok {
 			continue
