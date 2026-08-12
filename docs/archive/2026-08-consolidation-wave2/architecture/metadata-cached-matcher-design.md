@@ -1,6 +1,6 @@
-<!-- file: docs/superpowers/specs/2026-05-13-metadata-cached-matcher-design.md -->
-<!-- version: 1.0.0 -->
-<!-- last-edited: 2026-05-13 -->
+<!-- file: docs/archive/2026-08-consolidation-wave2/architecture/metadata-cached-matcher-design.md -->
+<!-- version: 1.0.1 -->
+<!-- last-edited: 2026-08-12 -->
 
 # METADATA-CACHED-MATCHER — Design
 

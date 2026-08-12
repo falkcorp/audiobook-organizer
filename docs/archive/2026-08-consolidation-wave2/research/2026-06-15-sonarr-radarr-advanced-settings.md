@@ -1,7 +1,7 @@
-<!-- file: docs/research/2026-06-15-sonarr-radarr-advanced-settings.md -->
-<!-- version: 1.0.0 -->
+<!-- file: docs/archive/2026-08-consolidation-wave2/research/2026-06-15-sonarr-radarr-advanced-settings.md -->
+<!-- version: 1.0.1 -->
 <!-- guid: b2c3d4e5-f6a7-8901-bcde-f12345678901 -->
-<!-- last-edited: 2026-06-15 -->
+<!-- last-edited: 2026-08-12 -->
 
 # Sonarr/Radarr "Show Advanced" Settings Toggle — Research
 
