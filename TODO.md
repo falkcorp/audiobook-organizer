@@ -4985,10 +4985,18 @@ Companion docs:
 
 ## Dedup (10)
 
-1. **CONS-10 / INIT-2 T6 — prod drain/triage of the exact-candidate backlog** (H1:983;
-   [plan](docs/plans/2026-07-10-dedup-pipeline-hardening.md)) — code merged, run NOT
-   executed; operator-gated; validate on the dedup sandbox first (private runbook in
-   falkcorp/infra-docs). Real backlog ~15,269 pending.
+1. ~~**CONS-10 / INIT-2 T6 — prod drain/triage of the exact-candidate backlog**~~ — ✅ **RAN ON
+   PROD 2026-07-18**, verified 2026-08-12 from the prod journal, not from a status doc:
+   `dedup triage: complete scanned=10319 purgeable=7891 keep=278 review=2150 apply=true
+   dismissed=7891 dismiss_errors=0`, `outcome=completed duration_ms=3860`
+   (op `01KXV22ZJ6QWWZ1SF1FZGXBC82`, 12:48:54–12:48:58 EDT). This entry previously read
+   "code merged, run NOT executed" and was **wrong** — see
+   [`docs/dedup/STATUS.md`](docs/dedup/STATUS.md).
+   **Open follow-up instead:** the backlog has re-accumulated. Post-run exact-pending was
+   **1,311**; measured **5,947** on 2026-08-12 (dismissed 8,258). The drain worked; whatever
+   produces the junk candidates was never stopped, so this needs a *source* fix, not another
+   drain. Filed as a `todo.d` fragment rather than added here directly (new tasks are
+   add-only via fragments).
 2. **PH-2 — run `maintenance.dedup-exact-triage` on prod + review populations; PH-2b
    per-population purge wave** (H1:916) — never blanket-purge; four residual
    populations (see `docs/dedup/STATUS.md`). **Apply path now exists** (T03-BUILD):
@@ -5301,14 +5309,23 @@ H1/H2/H3/H4/H8/H9/M1/M2/M3/M7 logging batch (T05) (#2010).
 ### Remaining — execution state (briefs)
 
 - [x] **T01** — organizer data-loss fixes landed (#1986)
-- [x] **T02** — sandbox triage measured: purgeable **7,878** (title_leak) / genuine 278 /
-      fragment 392 / unknown 1,756 of 10,304 (was purgeable=1, unknown=9,950 pre-work —
+- [x] **T02** — **sandbox** triage measured: purgeable **7,878** (title_leak) / genuine 278 /
+      fragment 392 / unknown 1,756 **of 10,304** (was purgeable=1, unknown=9,950 pre-work —
       the title-repair → breakdown-backfill → relaxed-triage chain is proven). Formal
       doc recording folded into T13.
-- [ ] **T03** — sandbox purge wave: `maintenance.dedup-exact-triage {"apply":true}` (dismiss
+      > ⚠️ **7,878 is the SANDBOX number. Prod's is 7,891 of 10,319.** These are two
+      > populations, not a drift — the sandbox replica had 15 fewer candidates. A 2026-08-11
+      > docs audit mistakenly reported them as a contradiction; they are both correct.
+- [ ] **T03** — **sandbox** purge wave: `maintenance.dedup-exact-triage {"apply":true}` (dismiss
       ~7,878 purgeable, op merged in #2008) → purge-stale → full-scan → measure vs 9,074
-      baseline. Needs sandbox redeploy with current main first. NOT yet run.
-- [ ] **T04** — prod deploy (nothing deployed since 2026-07-17) + prod dry-runs + ⚠️ HUMAN-GATED apply
+      baseline. Needs sandbox redeploy with current main first. NOT yet run **on the sandbox**
+      — note prod (T04) went ahead and ran, so this is now a validation-parity gap, not a
+      blocker.
+- [x] **T04** — ✅ **prod deploy + dry-run + apply ALL DONE 2026-07-18.** Verified 2026-08-12
+      from the prod journal: deploy `v0.217.8-rc.80-2-g0b474707`, then
+      `maintenance.dedup-exact-triage` with `apply=true` → `dismissed=7891 dismiss_errors=0`,
+      `outcome=completed`. This box previously read "nothing deployed since 2026-07-17" and
+      was **wrong**.
 - [x] **T05** — logging H/M batch: H1 H2 H3 H4 H8 H9 M1 M2 M3 M7 (#2010)
 - [x] **T06** — R-1: `op.terminal` SSE backend publisher (#2002) + dep-fail publisher (#2005)
 - [x] **T07** — R-6: AssignOrphanVGs worker pool + VG clobber guard (#2003)
