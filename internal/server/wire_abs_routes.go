@@ -1,5 +1,5 @@
 // file: internal/server/wire_abs_routes.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 9c6b13f8-40a2-4e57-b18d-72e0a5c4d396
 // last-edited: 2026-08-13
 
@@ -8,6 +8,7 @@ package server
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"os"
 	"strings"
 
@@ -66,7 +67,7 @@ var absReservedPathPrefixes = []string{
 	"/api/session/",
 }
 
-// absCollisionDetailPrefixes are sub-trees of an absAppAPICollisions namespace that
+// absCollisionDetailRoutes are routes inside an absAppAPICollisions namespace that
 // ABS serves natively — but ONLY when the ABS surface is actually enabled.
 //
 // 🔴 THIS LIST IS SEPARATE FROM THE ONE ABOVE FOR ONE REASON: the redirect
@@ -91,17 +92,49 @@ var absReservedPathPrefixes = []string{
 // cannot parse that, so every playlist opened EMPTY — reported from the app
 // 2026-08-13. The web UI is unaffected either way: it hardcodes an /api/v1 base
 // (e.g. DelugeSettingsTab.tsx:24) and never uses the unversioned form.
-var absCollisionDetailPrefixes = []string{
-	"/api/playlists/",
+// 🔴 THIS IS A ROUTE LIST, NOT A PREFIX LIST, AND THE DIFFERENCE WAS A LIVE BUG.
+//
+// It was written as a prefix subtree match — HasPrefix(path, "/api/playlists/") —
+// which reserved the WHOLE subtree for ABS while ABS answers exactly one route in
+// it, GET /api/playlists/:id. Measured against production 2026-08-13 immediately
+// after that shipped, six working app routes had started 404ing instead of
+// redirecting:
+//
+//	PUT    /api/playlists/:id              DELETE /api/playlists/:id
+//	POST   /api/playlists/:id/books        DELETE /api/playlists/:id/books/:bookID
+//	POST   /api/playlists/:id/reorder      POST   /api/playlists/:id/materialize
+//
+// That is the same defect as #2332 → #2333 → #2335 (46 app routes 404'd), recurring
+// one level down, inside the very change whose comment warns about it. Reserving a
+// namespace for ABS must be as narrow as what ABS actually serves: a reservation
+// wider than the implementation converts working routes into 404s silently, because
+// a 404 on a redirect is indistinguishable from a route that never existed.
+//
+// So the match is on METHOD plus EXACTLY ONE remaining segment. A deeper path or a
+// different verb belongs to the app API and keeps redirecting.
+type absCollisionDetailRoute struct {
+	Method string
+	Prefix string
 }
 
-// absCollisionDetailReserved reports whether path is an ABS-served sub-tree of a
-// colliding namespace. The caller must AND this with ABSAPIEnabled.
-func absCollisionDetailReserved(path string) bool {
-	for _, prefix := range absCollisionDetailPrefixes {
-		if strings.HasPrefix(path, prefix) && len(path) > len(prefix) {
-			return true
+var absCollisionDetailRoutes = []absCollisionDetailRoute{
+	{Method: http.MethodGet, Prefix: "/api/playlists/"},
+}
+
+// absCollisionDetailReserved reports whether (method, path) is a route ABS serves
+// natively inside a colliding namespace. The caller must AND this with ABSAPIEnabled.
+func absCollisionDetailReserved(method, path string) bool {
+	for _, r := range absCollisionDetailRoutes {
+		if method != r.Method || !strings.HasPrefix(path, r.Prefix) {
+			continue
 		}
+		// Exactly one segment: "/api/playlists/abc" yes, "/api/playlists/abc/books"
+		// no — the latter is an app route and must keep its redirect.
+		rest := path[len(r.Prefix):]
+		if rest == "" || strings.Contains(rest, "/") {
+			continue
+		}
+		return true
 	}
 	return false
 }

@@ -1,5 +1,5 @@
 // file: internal/server/wire_abs_routes_test.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 3ea1d764-95c8-4b02-8f31-6d70a5be2c49
 // last-edited: 2026-08-13
 
@@ -72,6 +72,7 @@ func TestABSReservedPath_CoversEVERYRegisteredUnversionedRoute(t *testing.T) {
 		if len(parts) != 2 {
 			t.Fatalf("malformed absRouteList entry %q", entry)
 		}
+		method := parts[0]
 		path := parts[1]
 		// Only unversioned /api/ paths pass through the redirect middleware. Root paths
 		// (/login, /ping, /status, /logout, /auth/refresh) and /public/* never do.
@@ -97,10 +98,10 @@ func TestABSReservedPath_CoversEVERYRegisteredUnversionedRoute(t *testing.T) {
 		// unconditional list, which 404s a live app route on every ABS-DISABLED
 		// deployment — the #2332/#2333/#2335 defect. Checking only the gated list
 		// would let a genuinely unreserved route through. Both halves are needed.
-		if !absReservedPath(path) && !absCollisionDetailReserved(path) {
+		if !absReservedPath(path) && !absCollisionDetailReserved(method, path) {
 			t.Errorf("REGISTERED BUT NOT RESERVED: %s. Add its prefix to absReservedPathPrefixes "+
 				"(or the exact path to absReservedPaths), or — if the namespace has a live "+
-				"/api/v1 twin — to absCollisionDetailPrefixes so it is reserved only while ABS "+
+				"/api/v1 twin — to absCollisionDetailRoutes so it is reserved only while ABS "+
 				"is enabled. Otherwise it will 301 into /api/v1 and look implemented while "+
 				"behaving broken.", path)
 		}
@@ -485,4 +486,115 @@ func TestPlaylistDetailReservedOnlyWhenABSEnabled(t *testing.T) {
 		require.Equal(t, http.StatusMovedPermanently, w.Code,
 			"/api/playlists (no id) must still reach the app-API twin")
 	})
+}
+
+// 🔴 A RESERVATION WIDER THAN THE IMPLEMENTATION 404s WORKING ROUTES.
+//
+// The reservation above was first written as a prefix subtree match:
+//
+//	strings.HasPrefix(path, "/api/playlists/") && len(path) > len(prefix)
+//
+// ABS serves exactly ONE route in that subtree, GET /api/playlists/:id. The app API
+// serves six more. Measured against production the same day it shipped, all six had
+// gone from 301 to 404 — reachable only by the unversioned form, but silently dead:
+//
+//	PUT    /api/playlists/:id              DELETE /api/playlists/:id
+//	POST   /api/playlists/:id/books        DELETE /api/playlists/:id/books/:bookID
+//	POST   /api/playlists/:id/reorder      POST   /api/playlists/:id/materialize
+//
+// This is the #2332/#2333/#2335 defect (46 app routes 404'd) recurring one level
+// down, inside the change whose own comment warns about it — which is why the check
+// is a test and not a comment. The failure is invisible from the ABS side: every ABS
+// route still works, and a 404 from an over-wide reservation is indistinguishable
+// from a route that was never registered.
+//
+// The table is derived from wire_library_routes.go:77-85, so a new app playlist
+// sub-route added there without widening the ABS handler will fail here.
+func TestPlaylistReservationDoesNotSwallowAppSubRoutes(t *testing.T) {
+	const id = "01PLAYLIST0000000000000000"
+
+	// Every app-API playlist route that lives under the reserved prefix. ABS serves
+	// none of these, so all must keep redirecting even with ABS ON.
+	appRoutes := []struct{ method, path string }{
+		{http.MethodPut, "/api/playlists/" + id},
+		{http.MethodDelete, "/api/playlists/" + id},
+		{http.MethodPost, "/api/playlists/" + id + "/books"},
+		{http.MethodDelete, "/api/playlists/" + id + "/books/01BOOK00000000000000000000"},
+		{http.MethodPost, "/api/playlists/" + id + "/reorder"},
+		{http.MethodPost, "/api/playlists/" + id + "/materialize"},
+	}
+
+	for _, tc := range appRoutes {
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			s, cleanup := setupTestServer(t)
+			defer cleanup()
+			config.AppConfig.ABSAPIEnabled = true
+
+			w := httptest.NewRecorder()
+			s.router.ServeHTTP(w, httptest.NewRequest(tc.method, tc.path, nil))
+
+			require.Equal(t, http.StatusMovedPermanently, w.Code,
+				"%s %s is an APP route with no ABS implementation. Reserving it for ABS "+
+					"turns a working call into a 404 that looks like it never existed.",
+				tc.method, tc.path)
+			require.Equal(t,
+				strings.Replace(tc.path, "/api/", "/api/v1/", 1),
+				w.Header().Get("Location"))
+		})
+	}
+
+	// The one route ABS DOES serve must still be claimed — otherwise this test could
+	// be satisfied by reserving nothing at all, which reintroduces the empty-playlist
+	// bug the reservation exists to fix.
+	t.Run("GET is still reserved for ABS", func(t *testing.T) {
+		s, cleanup := setupTestServer(t)
+		defer cleanup()
+		config.AppConfig.ABSAPIEnabled = true
+
+		w := httptest.NewRecorder()
+		s.router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/playlists/"+id, nil))
+
+		require.NotEqual(t, http.StatusMovedPermanently, w.Code,
+			"narrowing the reservation must not un-reserve the route ABS actually serves")
+	})
+}
+
+// absCollisionDetailReserved has TWO independent narrowing rules and the
+// route-level test above only exercises one of them.
+//
+// Every app playlist sub-route uses a non-GET verb, so the method check alone
+// rescues all six — mutating the one-segment rule away leaves that test green.
+// That makes the segment rule dead code under a green suite unless it is asserted
+// directly, which is what this does. It matters the moment anyone adds a GET
+// sub-route (an /items or /cover under a playlist would be the obvious one).
+func TestAbsCollisionDetailReserved_BothNarrowingRules(t *testing.T) {
+	const id = "01PLAYLIST0000000000000000"
+
+	for _, tc := range []struct {
+		name   string
+		method string
+		path   string
+		want   bool
+		why    string
+	}{
+		{"the route ABS serves", http.MethodGet, "/api/playlists/" + id, true,
+			"this is the whole point of the reservation"},
+		{"a GET one level deeper", http.MethodGet, "/api/playlists/" + id + "/items", false,
+			"the SEGMENT rule: a deeper GET is an app route, and only this case proves that rule is alive"},
+		{"a GET two levels deeper", http.MethodGet, "/api/playlists/" + id + "/items/3", false,
+			"same rule, deeper"},
+		{"a non-GET on the same path", http.MethodPut, "/api/playlists/" + id, false,
+			"the METHOD rule: ABS serves no PUT here"},
+		{"the bare namespace", http.MethodGet, "/api/playlists", false,
+			"the trailing slash keeps the LIST on the app API"},
+		{"the namespace with a slash but no id", http.MethodGet, "/api/playlists/", false,
+			"an empty segment is not an id"},
+		{"an unrelated namespace", http.MethodGet, "/api/authors/147924", false,
+			"nothing outside the table is ever reserved"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := absCollisionDetailReserved(tc.method, tc.path)
+			require.Equal(t, tc.want, got, "%s %s — %s", tc.method, tc.path, tc.why)
+		})
+	}
 }
