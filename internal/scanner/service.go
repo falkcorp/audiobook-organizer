@@ -1,7 +1,7 @@
 // file: internal/scanner/service.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-08-11
+// last-edited: 2026-08-12
 package scanner
 
 import (
@@ -174,6 +174,19 @@ func (ss *ScanService) performScanInternal(ctx context.Context, opID string, req
 	var processedFiles atomic.Int32
 
 	for folderIdx, folderPath := range foldersToScan {
+		// Both cancellation channels have to be checked here. log.IsCanceled()
+		// is the operation's own stop flag; ctx is the request/server one. Only
+		// the former was checked, so a cancelled CONTEXT did not stop the walk —
+		// the loop carried on into every remaining folder and each one failed
+		// its metadata pass with "context canceled".
+		//
+		// Production, 2026-08-11: 2,406 folders were processed that way inside a
+		// single scan, each logging the failure and continuing. The scan then
+		// reported success.
+		if err := ctx.Err(); err != nil {
+			log.Info("Scan canceled (context): %v", err)
+			return fmt.Errorf("scan canceled: %w", err)
+		}
 		if log.IsCanceled() {
 			log.Info("Scan canceled")
 			return fmt.Errorf("scan canceled")
@@ -374,10 +387,30 @@ func (ss *ScanService) scanFolder(ctx context.Context, folderIdx int, folderPath
 
 		log.Info("Processing metadata for %d books using %d workers", len(books), workers)
 		if err := ProcessBooksParallel(ctx, books, workers, progressCallback, log.With("scanner")); err != nil {
+			// Do NOT fall through to auto-organize. These books did not get
+			// their metadata extracted, so their title/author are whatever the
+			// scan started with — frequently empty. Organizing them anyway
+			// expands the naming pattern over blank fields and sends every one
+			// of them to the same degenerate path, where all but the first fail
+			// as "target already occupied".
+			//
+			// That is not a theoretical risk. In the 4h15m production scan of
+			// 2026-08-11 this branch fired 2,406 times with "context canceled",
+			// and the same run logged 7,561 "safeRename refusing to overwrite
+			// existing destination" and 3,481 organize-collision candidates.
+			// 848 books collided on one path,
+			// "Unknown Author/Unknown Title/Unknown Title - Unknown Author.mp3".
+			//
+			// Returning the error also stops this folder being counted as a
+			// success: scanFolder used to log here and then `return nil`, so a
+			// folder whose metadata pass failed outright was indistinguishable
+			// from one that worked.
 			log.Error("Failed to process books: %v", err)
-		} else {
-			log.Info("Successfully processed %d books", len(books))
+			return fmt.Errorf("metadata processing failed for %s (%d books), "+
+				"skipping auto-organize so unprocessed books are not filed under "+
+				"placeholder names: %w", folderPath, len(books), err)
 		}
+		log.Info("Successfully processed %d books", len(books))
 
 		// Auto-organize if enabled (via server-layer hook to avoid import cycle)
 		if ss.AutoOrganizeFn != nil {
