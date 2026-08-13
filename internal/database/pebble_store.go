@@ -748,6 +748,39 @@ func (p *PebbleStore) GetAllBookSummariesFiltered(limit, offset int, f BookSumma
 	return out, nil
 }
 
+// HonorsEveryBookSummaryFilter is a marker declaring that this store applies
+// EVERY predicate on BookSummaryFilter — on both the memdb path and the
+// Pebble fallback — and that its returned page is already paginated against
+// the post-filter set.
+//
+// It exists because the caller cannot otherwise tell the difference. The
+// service layer skips its own post-filter pass when the store reports a
+// pushdown, and it decided that from a plain type assertion on
+// GetAllBookSummariesFiltered — which answers "does this type have the
+// method?", never "did the method honor the filter?". A store that applied a
+// subset satisfied that assertion just as well as one that applied
+// everything, and the skipped post-filter pass was the only thing that would
+// have caught it.
+//
+// Do not add this method to a store that filters partially. Omitting it is
+// safe: the caller falls back to fetching unfiltered and post-filtering
+// in-memory — slower, but correct. Adding it falsely is not detectable at
+// runtime.
+//
+// CAVEAT: a type that EMBEDS *PebbleStore inherits this marker whether or not
+// it means to. A wrapper that embeds the store and overrides
+// GetAllBookSummariesFiltered with a narrower implementation therefore
+// declares full conformance by accident — the same by-omission failure the
+// marker exists to prevent, arriving through the other door. Such a wrapper
+// must either delegate to the embedded store (as pushdownSpyStore does) or
+// stop embedding it.
+//
+// The declaration is backed by
+// TestGetAllBookSummariesFiltered_PebbleFallbackHonorsEveryPredicate, which
+// asserts both backends against an oracle built from the fixtures. A new
+// implementer adding this marker is expected to earn it the same way.
+func (p *PebbleStore) HonorsEveryBookSummaryFilter() {}
+
 // summaryPageCap bounds the pre-allocation for a summary page so an
 // unbounded (limit<=0) whole-library query does not reserve a
 // million-element slice up front.
