@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/optimize.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: d4e5f6a7-b8c9-0123-4567-890123456789
-// last-edited: 2026-07-12
+// last-edited: 2026-08-12
 
 package maintenance
 
@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -80,6 +81,31 @@ func (p *Plugin) runOptimize(ctx context.Context, _ json.RawMessage, reporter sd
 			defID:  "acoustid.backfill",
 			params: nil,
 		},
+	}
+
+	// maintenance.acoustid_backfill (default OFF as of 2026-08-11): the backfill's load
+	// phase pulls the whole book table into memory before it can start — ~862 MB of live
+	// heap in production, implicated in three OOM kills in one night. optimize is a broad
+	// "tidy everything" sweep rather than a request for this specific op, so it is an
+	// automatic trigger for the purposes of the flag and respects it. A direct
+	// EnqueueOp("acoustid.backfill") via the ops API stays ungated — that is the
+	// deliberate opt-in path. Filtering here rather than skipping mid-loop keeps `total`
+	// honest, so progress does not report a child it never intended to run.
+	if !config.AppConfig.Maintenance.AcoustIDBackfill {
+		kept := make([]childOp, 0, len(children))
+		for _, ch := range children {
+			if ch.defID == "acoustid.backfill" {
+				logging.Info(ctx, "library.optimize: acoustid-backfill excluded",
+					"operation_id", opID,
+					"reason", "maintenance.acoustid_backfill=false",
+				)
+				_ = reporter.Log(slog.LevelInfo,
+					"Skipping acoustid-backfill: disabled by maintenance.acoustid_backfill")
+				continue
+			}
+			kept = append(kept, ch)
+		}
+		children = kept
 	}
 
 	total := len(children)
