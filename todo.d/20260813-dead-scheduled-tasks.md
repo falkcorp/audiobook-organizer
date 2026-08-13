@@ -20,9 +20,21 @@ so a task missing from the list is unreachable no matter what the toggle says. T
 | `transcode` | `IsEnabled: true`, trigger fails by design | `IsEnabled: false` |
 | `series_normalize` | `IsEnabled: true`, no timer, opts out of window | `IsEnabled: false` |
 
-Three of these are unbounded on-disk leaks that had never run: orphaned `*.tmp.m4b` /
-`*.tmp.m4a` from crashed ffmpeg, trashed versions past their 14-day TTL, and soft-deleted
-books past the 30-day retention window.
+Three of these are retention/cleanup jobs that had never run once. **Correcting an
+overstatement in the merged PR body and changelog**, which called all three "unbounded
+on-disk leaks" — only one touches disk, and it is currently empty:
+
+| Task | Operates on | Measured on prod 2026-08-13 |
+|---|---|---|
+| `temp_file_cleanup` | disk — walks `config.AppConfig.RootDir` for `*.tmp.m4b`/`*.tmp.m4a` (`sweep.CleanupOrphanedTempFiles`) | **0 files, 0 bytes** |
+| `trash_cleanup` | database rows — `versions.CleanupTrashedVersions` | not measured |
+| `archive_sweep` | database rows — `sweep.SweepArchivedBooks` | not measured |
+
+The temp-file count was taken with `find` over the real root the op uses, so "0" is a
+measurement, not an assumption. It does mean the disk-leak framing was wrong: whatever
+these three were holding, it was not gigabytes of stranded audio. The two DB-side counts
+are still unknown and will be reported by the first window run, which logs
+`Trash cleanup: purged N versions` and `Archive sweep: cleaned N books`.
 
 `transcode` and `series_normalize` are marked disabled rather than given tickers because
 neither can usefully run unattended — `transcode`'s scheduled `TriggerFn` fails on purpose
