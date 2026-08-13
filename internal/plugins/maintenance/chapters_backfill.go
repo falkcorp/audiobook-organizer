@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/chapters_backfill.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5d3b7e14-9c62-4a8f-b0d7-2e6194af8c35
 // last-edited: 2026-08-13
 
@@ -121,6 +121,22 @@ var probeChaptersFn = audioutil.ProbeChapters
 // *database.PebbleStore so a future backend that implements the same two
 // methods works unchanged — and so a backend that does NOT gets a clear refusal
 // instead of a nil-pointer panic.
+//
+// 🔴 RESOLVE IT WITH database.AsCapability, NEVER A BARE ASSERTION. deps.Store()
+// returns Server.store, which is REPLACED by the *server.indexedStore decorator
+// at server_lifecycle.go:290 once the search index opens. indexedStore embeds
+// database.Store, so only methods on THAT interface are promoted — and the
+// chapter methods are not on it. A bare `store.(chapterPersister)` therefore
+// fails in production while passing every test that hands the op a raw
+// *PebbleStore.
+//
+// That is not hypothetical here: this op shipped with the bare assertion and its
+// first production run refused with "store is *server.indexedStore, which does
+// not persist chapters". It is also the third recorded instance of this exact
+// bug — see AsPebbleStore's doc comment for the two prod jobs that were silently
+// degraded for weeks by the same decorator. Those degraded SILENTLY because they
+// had non-Pebble fallbacks; this one refused loudly, which is the only reason it
+// was caught in one run.
 type chapterPersister interface {
 	GetChaptersForBook(bookID string) ([]database.Chapter, error)
 	SaveChaptersForBook(bookID string, chapters []database.Chapter) error
@@ -216,9 +232,10 @@ func (p *Plugin) runChaptersBackfill(ctx context.Context, raw json.RawMessage, r
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	persister, ok := store.(chapterPersister)
+	persister, ok := database.AsCapability[chapterPersister](store)
 	if !ok {
-		return fmt.Errorf("cannot run: store is %T, which does not persist chapters", store)
+		return fmt.Errorf("cannot run: store is %T, which does not persist chapters "+
+			"(and no store in its decorator chain does)", store)
 	}
 	if !params.Apply {
 		_ = reporter.Log(slog.LevelInfo, "DRY RUN — no chapters will be written")
