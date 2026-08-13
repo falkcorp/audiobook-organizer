@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
 // last-edited: 2026-08-13
 
@@ -272,6 +272,34 @@ func (h *Handler) LibraryItems(c *gin.Context) {
 		return
 	}
 
+	// 🔴 THE ?filter= PARAMETER WAS READ BY NOTHING, so every drill-down returned
+	// THE WHOLE LIBRARY.
+	//
+	// Proven on production 2026-08-13 with three requests to /items differing only
+	// in the filter: no filter, a real series, and a DELIBERATELY FABRICATED series
+	// id. All three answered total=34280 with the same first title. A filter naming
+	// a series that cannot exist returning the entire library is only explicable by
+	// the parameter never being read — which is why the fabricated id was worth
+	// sending: a real id returning everything could be excused as an over-broad
+	// match, a fake one cannot.
+	//
+	// That is the reported "shows random books for every series, and the books it
+	// shows are random too": opening a series asks for its items, gets all 34,280,
+	// and renders the first page under that series' name.
+	//
+	// FORMAT, CONFIRMED BY OBSERVATION rather than inferred. The server's own logs
+	// carry a real request from the app:
+	//
+	//	GET /api/libraries/<id>/items?filter=series.MTQ3OTI0&page=0&limit=100
+	//
+	// MTQ3OTI0 is base64 "147924", the series id of 'Salem's Lot in the live series
+	// list. So the shape is <group>.<base64(value)>. No fixture shows this — zero of
+	// the 28 captures carry a filter — so the log was the only oracle available.
+	if raw := strings.TrimSpace(c.Query("filter")); raw != "" {
+		h.filteredItems(c, raw, p, &resp)
+		return
+	}
+
 	filter := absItemFilter(c)
 
 	// 🔴 The FILTERED count, not CountAllBooks.
@@ -539,6 +567,11 @@ const absSeriesBooksCacheTTL = 5 * time.Minute
 type seriesBooksBuilt struct {
 	items         []any
 	totalDuration int
+	// bookIDs is the same set in the same order, kept so the ?filter=series.<id>
+	// path on /items can reuse this grouping instead of re-deriving it. Reusing it
+	// is not just cheaper: it guarantees the series tile and the series drill-down
+	// agree about which books are in the series, which is the whole complaint.
+	bookIDs []string
 }
 
 func (h *Handler) seriesBooksCached() (map[int]seriesBooksBuilt, error) {
@@ -592,6 +625,7 @@ func (h *Handler) seriesBooksCached() (map[int]seriesBooksBuilt, error) {
 				continue
 			}
 			built.items = append(built.items, entry)
+			built.bookIDs = append(built.bookIDs, list[i].ID)
 			// Summed over the books actually SERVED, not over every row in the
 			// series: a duration counting books the client cannot see would
 			// disagree with the list printed right next to it.
@@ -1159,4 +1193,115 @@ func (h *Handler) WarmContributors(ctx context.Context) {
 		return
 	}
 	slog.Info("abs: contributor cache warmed", "duration_ms", time.Since(started).Milliseconds())
+}
+
+// absFilterGroup splits an ABS filter token into its group and decoded value.
+//
+// The encoding is base64 of the raw value; ABS uses standard encoding but a value
+// can arrive unpadded or URL-safe depending on the client, so both are attempted
+// before giving up. A token that does not decode is reported as not-ok rather than
+// silently treated as a literal — guessing here would reintroduce the very bug this
+// function exists to fix, one level down.
+func absFilterGroup(raw string) (group, value string, ok bool) {
+	dot := strings.Index(raw, ".")
+	if dot <= 0 || dot == len(raw)-1 {
+		return "", "", false
+	}
+	group, enc := raw[:dot], raw[dot+1:]
+	for _, dec := range []*base64.Encoding{
+		base64.StdEncoding, base64.RawStdEncoding,
+		base64.URLEncoding, base64.RawURLEncoding,
+	} {
+		if b, err := dec.DecodeString(enc); err == nil {
+			return group, string(b), true
+		}
+	}
+	return "", "", false
+}
+
+// filteredItems serves GET /items?filter=<group>.<base64 value>.
+//
+// 🔴 AN UNRECOGNISED FILTER RETURNS AN EMPTY PAGE, NOT THE WHOLE LIBRARY.
+//
+// That is the entire point of this function and it is worth being explicit about,
+// because "ignore what you do not understand" is the intuitive choice and it is
+// what produced the bug: an unimplemented filter fell through and answered with
+// all 34,280 books, which the client rendered as though it were the answer. Wrong
+// data that looks like real data is strictly worse than no data — an empty series
+// reads as "nothing here", while a full library under a series name reads as
+// "these are the books in this series" and is simply false.
+//
+// Every unhandled filter is LOGGED with its group. The log is not decoration: no
+// fixture in the corpus carries a filter, so the only way to learn which filters
+// this client actually sends is to watch it send them. The next group to implement
+// should be chosen from that log rather than from a list of what upstream supports.
+func (h *Handler) filteredItems(c *gin.Context, raw string, p pageParams, resp *itemsPageResponse) {
+	group, value, ok := absFilterGroup(raw)
+	if !ok {
+		slog.Warn("abs: undecodable item filter, serving empty page", "filter", raw)
+		respondJSON(c, http.StatusOK, resp)
+		return
+	}
+
+	var ids []string
+	switch group {
+	case "series":
+		seriesID, err := strconv.Atoi(strings.TrimSpace(value))
+		if err != nil {
+			slog.Warn("abs: series filter value is not a series id", "value", value)
+			respondJSON(c, http.StatusOK, resp)
+			return
+		}
+		bySeries, berr := h.seriesBooksCached()
+		if berr != nil {
+			respondError(c, http.StatusInternalServerError, "could not list library items")
+			return
+		}
+		// Reuses the SAME grouping the series list renders from, so the tile and
+		// the drill-down cannot disagree, and it is already ordered by series
+		// sequence — which is the order a series should be read in.
+		ids = bySeries[seriesID].bookIDs
+	default:
+		slog.Warn("abs: unimplemented item filter group, serving empty page",
+			"group", group, "value", value)
+		respondJSON(c, http.StatusOK, resp)
+		return
+	}
+
+	// Total is the size of the FILTERED set, not of the library. Reporting the
+	// library total here makes the client page forever into empty results.
+	resp.Total = len(ids)
+
+	if p.Offset >= len(ids) {
+		respondJSON(c, http.StatusOK, resp)
+		return
+	}
+	end := p.Offset + p.Limit
+	if p.Limit <= 0 || end > len(ids) {
+		end = len(ids)
+	}
+	page := ids[p.Offset:end]
+
+	books, err := h.library.GetBooksByIDs(page)
+	if err != nil {
+		respondError(c, http.StatusInternalServerError, "could not load library items")
+		return
+	}
+	// GetBooksByIDs need not preserve the requested order, and series order is
+	// meaningful, so it is restored explicitly rather than trusted.
+	pos := make(map[string]int, len(page))
+	for i, id := range page {
+		pos[id] = i
+	}
+	sort.SliceStable(books, func(a, b int) bool { return pos[books[a].ID] < pos[books[b].ID] })
+
+	views, err := h.loadItemViews(c.Request.Context(), books)
+	if err != nil {
+		respondError(c, http.StatusInternalServerError, "could not build library items")
+		return
+	}
+	for i := range views {
+		resp.Results = append(resp.Results, h.minifiedItem(&views[i]))
+	}
+	respondJSON(c, http.StatusOK, resp)
 }
