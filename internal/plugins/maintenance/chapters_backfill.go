@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/chapters_backfill.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5d3b7e14-9c62-4a8f-b0d7-2e6194af8c35
 // last-edited: 2026-08-13
 
@@ -68,6 +68,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -180,6 +181,18 @@ func (p *Plugin) chaptersBackfillDef() sdk.OperationDef {
 // multiple RunItems workers, so all of them are atomic rather than
 // mutex-guarded — there is no invariant spanning two counters that would need
 // them to move together.
+// chaptersBackfillResolves reports whether path names an existing REGULAR
+// file. Directories are rejected deliberately rather than incidentally: a
+// multi-file book's Book.FilePath is its FOLDER, and handing a directory to
+// ffprobe yields a confusing decode error instead of a clean skip. On the
+// 2026-08-13 sample every recoverable Book.FilePath was a regular file (86
+// regular, 0 directories), so this guard fires on nothing today — it is here so
+// that stays true.
+func chaptersBackfillResolves(path string) bool {
+	st, err := os.Stat(path)
+	return err == nil && st.Mode().IsRegular()
+}
+
 type chaptersBackfillCounters struct {
 	examined       atomic.Int64
 	skipMultiFile  atomic.Int64
@@ -191,6 +204,11 @@ type chaptersBackfillCounters struct {
 	persisted      atomic.Int64
 	persistFailed  atomic.Int64
 	chaptersWorked atomic.Int64
+	// recoveredViaBook counts books probed via Book.FilePath because the
+	// BookFile row's path was populated but did not exist on disk. Reported on
+	// its own line so a run's output distinguishes rows written from the
+	// authoritative path from rows written from the fallback.
+	recoveredViaBook atomic.Int64
 }
 
 func (c *chaptersBackfillCounters) summary(apply bool) string {
@@ -202,10 +220,11 @@ func (c *chaptersBackfillCounters) summary(apply bool) string {
 	}
 	return fmt.Sprintf(
 		"examined=%d %s=%d (%d chapters) | skipped: multi-file=%d already-had=%d no-path=%d | "+
-			"no-markers=%d probe-failed=%d persist-failed=%d",
+			"no-markers=%d probe-failed=%d persist-failed=%d | recovered-via-book-path=%d",
 		c.examined.Load(), verb, n, c.chaptersWorked.Load(),
 		c.skipMultiFile.Load(), c.skipHasStored.Load(), c.skipNoPath.Load(),
 		c.noChapters.Load(), c.probeFailed.Load(), c.persistFailed.Load(),
+		c.recoveredViaBook.Load(),
 	)
 }
 
@@ -279,17 +298,35 @@ func (p *Plugin) runChaptersBackfill(ctx context.Context, raw json.RawMessage, r
 			return nil
 		}
 
+		// Resolve the file to probe. The BookFile row is the more specific
+		// source and wins when it RESOLVES — but "non-empty" is not "resolves".
+		// A move/organize updates Book.FilePath and leaves the BookFile row
+		// pointing at the old location, so a populated-but-stale path sails
+		// past an emptiness check and dies 300ms later inside ffprobe, where it
+		// is counted as a probe failure rather than the resolution failure it
+		// is. Measured on the whole library 2026-08-13: probe-failed=16130,
+		// 33.7% of single-file books. An independent `test -e` sweep over a
+		// 400-book random sample agreed (88/295 = 29.8% missing, ruling out
+		// ffprobe concurrency exhaustion), and of those 88, 86 had a
+		// Book.FilePath that WAS a regular file on disk. Falling back on
+		// non-existence rather than only on emptiness recovers them.
 		path := ""
 		if len(files) == 1 {
 			path = strings.TrimSpace(files[0].FilePath)
 		}
-		if path == "" {
-			b, berr := store.GetBookByID(id)
-			if berr != nil || b == nil {
-				c.skipNoPath.Add(1)
-				return nil
+		if path == "" || !chaptersBackfillResolves(path) {
+			if b, berr := store.GetBookByID(id); berr == nil && b != nil {
+				if alt := strings.TrimSpace(b.FilePath); alt != "" && chaptersBackfillResolves(alt) {
+					if path != "" {
+						// Counted separately and NEVER folded into persisted:
+						// these rows were written from a secondary path source,
+						// and if that source turns out wrong there has to be a
+						// way to find them again after the fact.
+						c.recoveredViaBook.Add(1)
+					}
+					path = alt
+				}
 			}
-			path = strings.TrimSpace(b.FilePath)
 		}
 		if path == "" {
 			c.skipNoPath.Add(1)
