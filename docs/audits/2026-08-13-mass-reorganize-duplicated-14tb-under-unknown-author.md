@@ -1,5 +1,5 @@
 <!-- file: docs/audits/2026-08-13-mass-reorganize-duplicated-14tb-under-unknown-author.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 3f6c1d84-7a92-4b5e-8c03-19d4e7b26af5 -->
 <!-- last-edited: 2026-08-13 -->
 
@@ -105,11 +105,45 @@ The safe predicate for reclaiming a file is per-book, not per-directory:
 
 Only then is the `Unknown Author/` copy provably redundant.
 
+## What invoked it
+
+**A bulk organize of `/mnt/bigdata/books/newbooks/audiobooks/`** — the routine
+sweep that pulls in recently downloaded books. Server logs across the burst
+window show a continuous stream of organize attempts against that tree.
+
+The mechanism, end to end:
+
+1. Newly downloaded files land in `newbooks/`. Many are books **already owned**
+   via the iTunes library.
+2. The scanner hash-matches the new file to the existing book and places it in
+   that book's existing version group.
+3. Organize runs against the new row. Its author metadata has not been fetched
+   yet, so the target path resolves under `Unknown Author/`.
+4. `CreateOrganizedVersion` writes a **second physical copy** there, marks the
+   new record primary, and demotes only its own source row — leaving the
+   group's earlier organized primary untouched.
+
+So the trigger is not exotic and **it will recur on the next sweep** unless the
+double-organize is guarded. Fixing the flag alone would leave the disk cost.
+
+Notably, the operations API records **no organize operation** in the burst
+window (27 ops logged that day, none of them an organize), so this ran without
+an operation record — the duplication is invisible to any audit that reads the
+operation log rather than the books themselves.
+
+The same logs show a high volume of organize *failures* in three distinct
+classes — `duplicate file already organized`, `target path already occupied by
+a different file`, and `is a directory but single-file organize was requested`.
+Failure accounting for exactly these is being addressed separately on
+`obs/organize-collision-accounting`.
+
 ## Open questions
 
-- Why did the run lose author metadata? `Unknown Author` implies `AuthorID` was
-  nil or unresolvable at organize time. If the trigger was a transient author
-  lookup failure, the same run could recur.
-- What invoked it? A scheduled maintenance task, a manual organize-all, or a
-  reconcile apply. The operation log for 2026-08-11 07:00–07:05 should name it.
-- Are the 839 rows dated 2026-04-04 the same defect or the original import?
+- Should organize refuse to run against a book whose group already contains an
+  `organized` member, or should it demote the existing primary? The first is
+  safer; the second is what the current code half-does.
+- Why was author metadata unresolved at organize time rather than organize
+  waiting for enrichment? That ordering is what put 14 TB under one directory
+  name.
+- Are the 839 surplus rows dated 2026-04-04 the same defect or the original
+  import?
