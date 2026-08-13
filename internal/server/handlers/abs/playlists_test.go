@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/playlists_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7e2f4a08-b165-4c39-8de2-91f0a3b74c6e
 // last-edited: 2026-08-13
 
@@ -40,6 +40,23 @@ func (f *absplFakeStore) ListUserPlaylistsForUser(userID, _ string, _, _ int) ([
 		return nil, 0, f.err
 	}
 	return f.lists, len(f.lists), nil
+}
+
+// GetUserPlaylist resolves by id across ALL users, exactly as the real store
+// does — that is the point. A fake that filtered by owner would make the
+// handler's ownership check untestable, and it is the only thing standing
+// between one user's id-guess and another user's playlist.
+func (f *absplFakeStore) GetUserPlaylist(id string) (*database.UserPlaylist, error) {
+	f.calls++
+	if f.err != nil {
+		return nil, f.err
+	}
+	for i := range f.lists {
+		if f.lists[i].ID == id {
+			return &f.lists[i], nil
+		}
+	}
+	return nil, nil
 }
 
 func withPlaylists(p abshandler.PlaylistStore) harnessOpt {
@@ -322,4 +339,109 @@ func absplSyncIDFor(t *testing.T, seed *oracleSeed, bookID string) string {
 		t.Fatalf("MintOrGetSyncID(%s): %v", bookID, err)
 	}
 	return id
+}
+
+// ── GET /api/playlists/:id — the route that made every playlist open empty ──
+//
+// 🔴 THE DEFECT. The LIST route shipped without the DETAIL route. Opening a
+// playlist calls GET /api/playlists/:id, which fell through absAppAPICollisions
+// into a 301 to /api/v1/playlists/:id and answered {"book_ids":[...]} instead of
+// ABS's {"items":[{"libraryItem":…}]}. The client followed the redirect, received
+// HTTP 200 and valid JSON in the wrong shape, and rendered nothing. Reported from
+// the app 2026-08-13: the playlist list showed the 77-item cohort playlist and
+// opening it showed nothing.
+//
+// Nothing logged an error, because nothing errored. That is the failure mode
+// absReservedPathPrefixes warns about: "looks implemented and behaves broken".
+
+func absplDetail(t *testing.T, h *harness, tok, id string) (int, any) {
+	t.Helper()
+	return h.doAny(t, request{
+		method:  http.MethodGet,
+		path:    "/api/playlists/" + id,
+		headers: bearer(tok),
+	})
+}
+
+func TestPlaylistDetail_ServesItemsNotTheAppAPIShape(t *testing.T) {
+	store := &absplFakeStore{}
+	h, seed, tok := absplHarness(t, store)
+	store.lists = []database.UserPlaylist{{
+		ID:              "01DETAIL0000000000000000000",
+		Name:            "Bedtime",
+		Type:            database.UserPlaylistTypeStatic,
+		BookIDs:         []string{seed.singleID},
+		CreatedByUserID: "u1",
+		CreatedAt:       time.UnixMilli(1785370201391),
+		UpdatedAt:       time.UnixMilli(1785370201438),
+	}}
+
+	code, body := absplDetail(t, h, tok, "01DETAIL0000000000000000000")
+	if code != http.StatusOK {
+		t.Fatalf("GET /api/playlists/:id = %d, want 200 — a 301 here is the bug: it "+
+			"redirects into the app API and the client renders nothing", code)
+	}
+	m, ok := body.(map[string]any)
+	if !ok {
+		t.Fatalf("body is %T, want an object", body)
+	}
+	// 🔴 ASSERT THE ABS SHAPE, NOT MERELY 200. The app-API twin also answers 200
+	// with valid JSON — that is precisely why this failed silently. The
+	// discriminator is `items`, which ABS has and the app API does not: the app
+	// answers `book_ids`.
+	if _, bad := m["book_ids"]; bad {
+		t.Fatalf("response carries book_ids — this is the APP-API shape, i.e. the "+
+			"request was redirected instead of served by ABS: %v", m)
+	}
+	items, ok := m["items"].([]any)
+	if !ok {
+		t.Fatalf("items is %T, want an array (ABS playlist shape)", m["items"])
+	}
+	if len(items) != 1 {
+		t.Fatalf("got %d items, want 1", len(items))
+	}
+	item, _ := items[0].(map[string]any)
+	if item["libraryItem"] == nil {
+		t.Fatalf("item has no libraryItem; an item the client cannot expand is what "+
+			"red-screens the playlist screen: %v", item)
+	}
+	if name, _ := m["name"].(string); name != "Bedtime" {
+		t.Fatalf("name = %q, want \"Bedtime\"", name)
+	}
+}
+
+// 🔴 OWNERSHIP. GetUserPlaylist resolves ANY playlist by id regardless of owner —
+// it is the by-id twin of the ListUserPlaylists this surface deliberately does not
+// expose. Without the check in PlaylistDetail, any authenticated user could read
+// any other user's playlist, and its book list, by guessing or observing an id.
+//
+// 404 rather than 403 on purpose: 403 confirms the playlist exists, which leaks
+// the id space to exactly the caller who should not have it.
+func TestPlaylistDetail_AnotherUsersPlaylistIsNotFound(t *testing.T) {
+	store := &absplFakeStore{}
+	h, seed, tok := absplHarness(t, store)
+	store.lists = []database.UserPlaylist{{
+		ID:              "01OTHERUSER00000000000000000",
+		Name:            "Someone Else's",
+		Type:            database.UserPlaylistTypeStatic,
+		BookIDs:         []string{seed.singleID},
+		CreatedByUserID: "u2-not-the-caller",
+		CreatedAt:       time.UnixMilli(1785370201391),
+		UpdatedAt:       time.UnixMilli(1785370201438),
+	}}
+
+	code, body := absplDetail(t, h, tok, "01OTHERUSER00000000000000000")
+	if code != http.StatusNotFound {
+		t.Fatalf("GET another user's playlist = %d, want 404 — the store resolves by id "+
+			"WITHOUT scoping to the owner, so this handler is the only thing preventing "+
+			"cross-user disclosure; body=%v", code, body)
+	}
+}
+
+func TestPlaylistDetail_UnknownIDIsNotFound(t *testing.T) {
+	store := &absplFakeStore{}
+	h, _, tok := absplHarness(t, store)
+	if code, _ := absplDetail(t, h, tok, "01NOSUCHPLAYLIST00000000000"); code != http.StatusNotFound {
+		t.Fatalf("unknown playlist id = %d, want 404", code)
+	}
 }

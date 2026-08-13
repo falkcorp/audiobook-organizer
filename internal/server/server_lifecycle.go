@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 3.11.0
+// version: 3.12.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-08-11
+// last-edited: 2026-08-13
 
 package server
 
@@ -1240,7 +1240,11 @@ func (s *Server) setupRoutes() {
 			!strings.HasPrefix(path, "/api/health") &&
 			!strings.HasPrefix(path, "/api/events") &&
 			!strings.HasPrefix(path, "/api/metrics") &&
-			!absReservedPath(path) {
+			!absReservedPath(path) &&
+			// Gated on the flag, unlike every other exclusion here: these paths
+			// have a live /api/v1 twin, so reserving them while ABS is OFF would
+			// 404 a working app route instead of redirecting it.
+			!(config.AppConfig.ABSAPIEnabled && absCollisionDetailReserved(path)) {
 			// Redirect to /api/v1/
 			newPath := strings.Replace(path, "/api/", "/api/v1/", 1)
 			c.Redirect(http.StatusMovedPermanently, newPath)

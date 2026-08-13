@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/library_fake_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 1d4a67f2-0c85-4f39-9b6e-3a71c5d0e824
-// last-edited: 2026-08-12
+// last-edited: 2026-08-13
 
 package abs_test
 
@@ -237,11 +237,20 @@ func (f *fakeLibrary) filteredSummaries(fl database.BookSummaryFilter) []databas
 		// these two fields the fake silently cannot represent a book whose
 		// narrator lives outside the junction table, and any test asserting
 		// three-tier resolution would pass vacuously.
+		//
+		// The series trio is here for the same reason, added 2026-08-13: the ABS
+		// series list builds its book lists from THIS projection, so a fake that
+		// dropped SeriesID would hand every series an empty book list and make a
+		// test asserting series membership pass while proving nothing — the exact
+		// vacuous-green the narrator note above describes.
 		sum := database.BookSummary{
-			ID:            b.ID,
-			Title:         b.Title,
-			Narrator:      b.Narrator,
-			NarratorsJSON: b.NarratorsJSON,
+			ID:             b.ID,
+			Title:          b.Title,
+			Narrator:       b.Narrator,
+			NarratorsJSON:  b.NarratorsJSON,
+			SeriesID:       b.SeriesID,
+			SeriesSequence: b.SeriesSequence,
+			Duration:       b.Duration,
 		}
 		if f.matchesFilter(b, sum, fl) {
 			out = append(out, sum)
