@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/chapters_backfill_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8a41c0e6-52b7-4d93-9f18-7c3ea05b61d4
 // last-edited: 2026-08-13
 
@@ -83,14 +83,37 @@ func chbfSeedBook(t *testing.T, s *database.PebbleStore, title string, nFiles in
 	return bk.ID
 }
 
-// chbfRun executes the op against store with the given params.
+// chbfDecorator mirrors *server.indexedStore: it embeds database.Store and opts
+// into the unwrap contract, so ONLY the methods on database.Store are promoted.
+// The chapter methods are not on that interface, which means a bare
+// `store.(chapterPersister)` fails through this wrapper exactly as it does in
+// production.
+//
+// 🔴 EVERY TEST HERE RUNS THROUGH THIS WRAPPER, deliberately. The op originally
+// shipped with a bare assertion and a green suite, because the suite handed it a
+// raw *PebbleStore that production never uses — the decorator is installed at
+// server_lifecycle.go:290. The first real run refused outright. Testing against
+// the undecorated store is what made that possible, so the undecorated path is
+// no longer reachable from these tests.
+type chbfDecorator struct {
+	database.Store
+}
+
+func (d *chbfDecorator) Unwrap() database.Store { return d.Store }
+
+// Compile-time proof the wrapper advertises the unwrap capability, the same
+// guard indexed_store.go carries.
+var _ database.StoreUnwrapper = (*chbfDecorator)(nil)
+
+// chbfRun executes the op against store with the given params, THROUGH the
+// production-shaped decorator.
 func chbfRun(t *testing.T, s *database.PebbleStore, params chaptersBackfillParams) error {
 	t.Helper()
 	raw, err := json.Marshal(params)
 	if err != nil {
 		t.Fatalf("marshal params: %v", err)
 	}
-	p := &Plugin{deps: fakeDeps{store: s}}
+	p := &Plugin{deps: fakeDeps{store: &chbfDecorator{Store: s}}}
 	return p.runChaptersBackfill(context.Background(), raw, &fakeReporter{})
 }
 
@@ -297,6 +320,47 @@ func TestChaptersBackfill_MultiFileBook_NeverProbedOrWritten(t *testing.T) {
 	if n := spy.calls.Load(); n != 1 {
 		t.Fatalf("probe ran %d times; want exactly 1 (the single-file control only) "+
 			"— the multi-file book is paying for an ffprobe it never uses", n)
+	}
+}
+
+// ── case 6b: the decorator chain is walked, not asserted through ────────────
+//
+// 🔴 THE BUG THIS PINS SHIPPED. Production wraps the store in
+// *server.indexedStore (server_lifecycle.go:290), which embeds database.Store and
+// therefore promotes only that interface's methods. The chapter methods are not
+// on it, so the op's original bare `store.(chapterPersister)` failed at runtime
+// with "store is *server.indexedStore, which does not persist chapters" — while
+// every test passed, because the tests handed it a raw *PebbleStore.
+//
+// This test wraps the store TWICE. One layer would pass against an
+// implementation that unwraps exactly once; the chain has to actually be walked.
+func TestChaptersBackfill_ResolvesChapterStoreThroughDecoratorChain(t *testing.T) {
+	if testing.Short() {
+		t.Skip("seeds a real PebbleStore; skipped in -short")
+	}
+	chbfStubFFprobe(t)
+	spy := &chbfProbeSpy{result: chbfChapters()}
+	spy.install(t)
+
+	s := chbfStore(t)
+	id := chbfSeedBook(t, s, "Behind Two Wrappers", 1)
+
+	doubled := &chbfDecorator{Store: &chbfDecorator{Store: s}}
+	p := &Plugin{deps: fakeDeps{store: doubled}}
+	raw, err := json.Marshal(chaptersBackfillParams{Apply: true})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := p.runChaptersBackfill(context.Background(), raw, &fakeReporter{}); err != nil {
+		t.Fatalf("op refused to run behind a decorator chain: %v", err)
+	}
+
+	got, err := s.GetChaptersForBook(id)
+	if err != nil {
+		t.Fatalf("GetChaptersForBook: %v", err)
+	}
+	if len(got) != 6 {
+		t.Fatalf("persisted %d chapters through the decorator chain, want 6", len(got))
 	}
 }
 
