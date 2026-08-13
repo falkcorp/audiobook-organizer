@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
 // last-edited: 2026-08-13
 
@@ -509,8 +509,14 @@ func (h *Handler) LibrarySeries(c *gin.Context) {
 	// Measured on production 2026-08-13 before this fix: books == [] on 14,625 of
 	// 14,625 series and totalDuration == 0 on 14,625 of 14,625, while numBooks was
 	// correctly populated on 14,295 of them. The app therefore showed a series
-	// insisting it held no books while displaying a book count — and the books it
-	// did render came from the client filling an empty list from elsewhere.
+	// insisting it held no books while displaying a book count.
+	//
+	// ⚠️ CORRECTED 2026-08-13: this note previously finished "and the books it did
+	// render came from the client filling an empty list from elsewhere". That was
+	// speculation and it was wrong. The books the app rendered came from
+	// /api/libraries/:id/items, which accepted a `filter` parameter and read it with
+	// nothing — so a request for one series returned an arbitrary page of the whole
+	// library. Fixed separately; see absFilterGroup/filteredItems below.
 	bySeries, berr := h.seriesBooksCached()
 	if berr != nil {
 		// Same rule as the counts above: a series page missing its book lists is
@@ -518,6 +524,52 @@ func (h *Handler) LibrarySeries(c *gin.Context) {
 		// silent-empty that hid the bug for so long.
 		_ = berr
 		bySeries = map[int]seriesBooksBuilt{}
+	}
+
+	// ORDER FIRST, THEN SLICE. GetAllSeries makes no ordering promise, and paginating
+	// an unstable order lets pages overlap and skip — the client would see some series
+	// twice and others never. Sorting on nameIgnorePrefix with the id as tie-break is
+	// total (ids are unique), so the pages partition the set exactly.
+	//
+	// `sort=name` is the only sort the app is observed to send and it is what this
+	// already does; an unrecognised sort keeps this order rather than erroring.
+	sort.SliceStable(series, func(i, j int) bool {
+		li, lj := ignorePrefix(series[i].Name), ignorePrefix(series[j].Name)
+		if li != lj {
+			return li < lj
+		}
+		return series[i].ID < series[j].ID
+	})
+	if c.Query("desc") == "1" || c.Query("sortDesc") == "1" {
+		for i, j := 0, len(series)-1; i < j; i, j = i+1, j-1 {
+			series[i], series[j] = series[j], series[i]
+		}
+	}
+
+	// 🔴 page/limit/sort WERE ACCEPTED AND IGNORED. Confirmed against production
+	// 2026-08-13: limit=100 and limit=500 both returned all 14,625 series, and the
+	// app's own `limit=50&page=2&sort=name` got page 0, unsorted, every time.
+	//
+	// This is not cosmetic any more. Populating `books` above takes the unpaginated
+	// response from 3.36 MB to roughly 10.8 MB (31,139 book rows), which is not a
+	// thing to hand a phone that asked for 50.
+	//
+	// A limit of 0 or an absent limit still returns everything, deliberately: every
+	// observed app request carries an explicit limit, so this keeps every other
+	// caller byte-identical instead of imposing a default page size nobody asked for.
+	total := len(series)
+	limit := queryInt(c, "limit", 0)
+	page := queryInt(c, "page", 0)
+	if limit > 0 {
+		start := page * limit
+		if start > total {
+			start = total
+		}
+		end := start + limit
+		if end > total {
+			end = total
+		}
+		series = series[start:end]
 	}
 
 	results := make([]any, 0, len(series))
@@ -542,7 +594,18 @@ func (h *Handler) LibrarySeries(c *gin.Context) {
 			"numBooks":      counts[s.ID],
 		})
 	}
-	respondJSON(c, http.StatusOK, pageResponse{Results: results, Total: len(results)})
+	// Total is the FULL series count, NOT len(results). The client decides whether
+	// another page exists with `page*limit < total` (the same rule recorded on
+	// authorDTOsCached), so reporting the slice length would tell it page 0 is the
+	// whole library and it would stop at 50 of 14,625. The opposite convention in
+	// playlists.go is correct THERE only because that route has no working page
+	// parameter to offer.
+	respondJSON(c, http.StatusOK, pageResponse{
+		Results: results,
+		Total:   total,
+		Limit:   limit,
+		Page:    page,
+	})
 }
 
 // absSeriesBooksCacheTTL bounds how long the series→books map is reused. Matches
