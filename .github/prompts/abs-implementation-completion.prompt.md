@@ -1,5 +1,5 @@
 <!-- file: .github/prompts/abs-implementation-completion.prompt.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 6b41f0a8-93de-4c57-8e12-a0d75c3fb914 -->
 <!-- last-edited: 2026-08-13 -->
 
@@ -62,21 +62,37 @@ asserts its **values**.
 
 ### Phase 1 — the two real gaps
 
-**Collections** and **playlists** are today both `h.EmptyPage` at
-`internal/server/handlers/abs/handler.go:386-387`. They are *not* the same size of job, and
-scoping them as one bucket is the main way this goes wrong:
+**Collections** and **playlists** were both `h.EmptyPage` when this prompt was written.
+Playlists is now served by `h.LibraryPlaylists`; collections is still `h.EmptyPage` at
+`internal/server/handlers/abs/handler.go`. They were *not* the same size of job, and scoping
+them as one bucket is the main way this goes wrong:
 
-- **Playlists already exist in the domain.** `internal/database` has `Playlist`,
-  `PlaylistItem`, `CreatePlaylist(name, seriesID, filePath)`, `GetPlaylistByID`,
-  `GetPlaylistBySeriesID`, `GetPlaylistItems`, the app API serves full CRUD at
-  `/api/v1/playlists`, and there is an iTunes playlist importer. This is a **mapping** job:
-  translate the existing model into ABS's shape. Do not create a second playlist model.
-  Note the collision — `/api/playlists` currently **301s** into the app-API twin, which the
-  ABS namespace work deliberately left in place; changing that is a routing decision, not a
-  side effect.
-- **Collections do not exist anywhere.** No domain model, no store, no routes. This is a new
-  entity end to end: storage, CRUD, ownership, and whatever ordering ABS expects. Cost it
-  honestly and say so before building.
+- **Playlists already exist in the domain — but there are TWO models, and this prompt
+  originally named the wrong one.** ✅ **Shipped 2026-08-13 in #2366**; kept here because the
+  distinction is the trap.
+  - `UserPlaylist` is the user-facing model and **the one ABS must map**: ULID-keyed,
+    `static` or `smart`, with `MaterializedBookIDs` holding the resolved membership.
+    `ListUserPlaylistsForUser(userID, playlistType, limit, offset)` is the read path.
+  - `Playlist` / `PlaylistItem` / `CreatePlaylist(name, seriesID, filePath)` is the **legacy
+    series M3U generator** — integer ids, one row per series, writes a file to disk. It is
+    not what a user means by "my playlists". Mapping it into the ABS shape would serve a
+    list of series M3U files and look plausible while being wrong.
+  - Implementation notes from #2366: smart playlists resolve through
+    `MaterializedBookIDs`; book refs that no longer resolve are **dropped, not nulled**
+    (a null entry red-screens the client); item order is preserved explicitly rather than
+    relying on map iteration; and `libraryItemId` must be the **36-char sync UUID** from
+    `MintOrGetSyncID`, never the 26-char book ULID — the client splits compound ids at a
+    fixed byte offset of 36.
+  - The collision stands: `/api/playlists` still **301s** into the app-API twin, which the
+    ABS namespace work deliberately left in place; changing that is a routing decision, not
+    a side effect. Regression tests cover the redirect.
+- **Collections do not exist anywhere.** No domain model, no store, no routes. Re-confirmed
+  2026-08-13: there is no `Collection` type in `internal/database`. This is a new entity end
+  to end: storage, CRUD, ownership, and whatever ordering ABS expects. Cost it honestly and
+  say so before building. Note the asymmetry with playlists above — `EmptyPage` on the
+  collections route is **honest** (nothing exists to serve), whereas on the playlists route
+  it was **hiding a populated model**. "Returns an empty page" is not by itself evidence of
+  a gap; check whether a backing model exists before costing the work.
 
 Upstream has ~10 collection routes and ~12 playlist routes. Implement the ones the target
 client actually calls first — check the fixtures for evidence, and if a route appears in
@@ -92,6 +108,7 @@ These exist. Your job is to confirm they are **correct and asserted**, then fix 
 | Current position | `handlers/abs/progress.go` | `currentTime`, single + batch update, delete |
 | Read status | `progress.go` — `IsFinished`, merge semantics, `UserBookStatusFinished` | the merge path at ~L292–L343 is subtle; check the both-nil guard |
 | Sessions (singular) | `play.go`, `/api/session/:id/sync`, `/close` | note upstream also has **plural** `/api/sessions*` history, which we do not serve |
+| Chapters (read) | `handlers/abs/mapper.go` ~L245 | serves stored chapters when present, else synthesizes one chapter spanning the book. Chapter extraction only ever ran on the scanner's new-book save path, so **every book predating 2026-07-30 was never probed** and got the useless single-chapter fallback. `maintenance.chapters-backfill` (added #2364, fixed #2368/#2370) closes that; check whether it has actually been run library-wide before concluding chapters are "working" — a book with no stored chapters is indistinguishable in the response from one legitimately having none |
 
 If one of these is already right, say "already correct, verified by X" and move on. Do not
 manufacture work to look busy.
