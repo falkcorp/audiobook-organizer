@@ -1,12 +1,14 @@
 // file: internal/itunes/plist_parser.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: d1f3e5c7-a9b1-c3d5-e7f9-1a3b5c7d9e1f
+// last-edited: 2026-08-13
 
 package itunes
 
 import (
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -251,7 +253,30 @@ func StreamingParseLibrary(ctx context.Context, path string, onTrack func(*Track
 
 	decoder := xml.NewDecoder(file)
 	count := 0
-	inTracksDict := false
+
+	// Locating <key>Tracks</key> followed by its <dict> is a three-token
+	// affair, not two. In Apple's real layout the key and its dict sit on
+	// separate lines:
+	//
+	//	<key>Tracks</key>
+	//	<dict>
+	//
+	// so the tokens are StartElement(key), CharData("Tracks"),
+	// EndElement(key), CharData("\n\t"), StartElement(dict). The previous
+	// scanner read exactly one token after CharData("Tracks") and required it
+	// to be a StartElement. It got EndElement(key), gave up, and — because
+	// its "root dict seen" flag was already latched — never reconsidered. It
+	// then walked to EOF and returned (0, nil): success, zero tracks, no
+	// warning. Every caller saw a clean parse of an empty library.
+	//
+	// Track the key name across its own element instead, then take the next
+	// StartElement, whatever whitespace or end tags intervene.
+	var (
+		keyText   strings.Builder
+		inKey     bool
+		lastKey   string
+		foundDict bool
+	)
 
 	for {
 		if err := ctx.Err(); err != nil {
@@ -266,31 +291,77 @@ func StreamingParseLibrary(ctx context.Context, path string, onTrack func(*Track
 			return count, fmt.Errorf("XML decode error: %w", err)
 		}
 
-		// Look for the <key>Tracks</key><dict> section
-		if keyToken, ok := token.(xml.CharData); ok {
-			if inTracksDict && string(keyToken) == "Tracks" {
-				// Next token should be the opening <dict>
-				token, err := decoder.Token()
-				if err != nil {
-					return count, fmt.Errorf("failed to read Tracks dict: %w", err)
-				}
-				if _, ok := token.(xml.StartElement); ok {
-					// Now parse track dicts
-					count, err = parseStreamingTracks(ctx, decoder, onTrack)
-					return count, err
-				}
+		switch t := token.(type) {
+		case xml.StartElement:
+			if t.Name.Local == "key" {
+				inKey = true
+				keyText.Reset()
+				continue
 			}
-		}
-
-		// Look for root plist dict
-		if startElem, ok := token.(xml.StartElement); ok {
-			if startElem.Name.Local == "dict" && !inTracksDict {
-				inTracksDict = true
+			if t.Name.Local == "dict" && lastKey == "Tracks" {
+				foundDict = true
+				count, err = parseStreamingTracks(ctx, decoder, onTrack)
+				return count, err
+			}
+			// Any other element ends the association with the last key, so a
+			// later bare <dict> cannot be mistaken for the Tracks dict.
+			lastKey = ""
+		case xml.CharData:
+			if inKey {
+				keyText.Write(t)
+			}
+		case xml.EndElement:
+			if t.Name.Local == "key" {
+				inKey = false
+				lastKey = strings.TrimSpace(keyText.String())
 			}
 		}
 	}
 
+	if !foundDict {
+		// Reaching EOF without ever entering the Tracks dict means this file
+		// is not the iTunes library we were told it was. Returning (0, nil)
+		// here is what let a whole backfill pass report success and then mark
+		// itself permanently done having written nothing.
+		//
+		// An iTunes library with no tracks is a different thing and still
+		// succeeds: it has a <key>Tracks</key> with an empty dict, which is
+		// parsed normally and yields a count of zero.
+		return 0, fmt.Errorf("iTunes library %s contains no Tracks section", path)
+	}
+
 	return count, nil
+}
+
+// errEndOfElement signals that nextStartElement reached a closing tag before
+// finding an opening one — i.e. the enclosing element has ended.
+var errEndOfElement = errors.New("end of enclosing element")
+
+// nextStartElement returns the next opening tag, skipping the whitespace
+// CharData, comments and processing instructions that sit between elements in
+// a pretty-printed plist.
+//
+// It exists because "the next element" and "the next token" are not the same
+// thing in Apple's iTunes XML, and treating them as if they were is what made
+// both the Tracks-section scanner and the per-track loop silently yield
+// nothing against a perfectly valid library file.
+//
+// Returns errEndOfElement when a closing tag arrives first, and io.EOF at end
+// of document, so callers can tell "this container is done" from "the
+// document is malformed".
+func nextStartElement(decoder *xml.Decoder) (xml.StartElement, error) {
+	for {
+		tok, err := decoder.Token()
+		if err != nil {
+			return xml.StartElement{}, err
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			return t, nil
+		case xml.EndElement:
+			return xml.StartElement{}, errEndOfElement
+		}
+	}
 }
 
 // parseStreamingTracks reads track dict entries and yields them via callback
@@ -328,17 +399,20 @@ func parseStreamingTracks(ctx context.Context, decoder *xml.Decoder, onTrack fun
 				continue
 			}
 
-			// Next should be the track's <dict> element
-			token, err := decoder.Token()
+			// Next should be the track's <dict> element — but not the next
+			// TOKEN. Apple writes a newline and indentation between </key>
+			// and <dict>, so reading exactly one token yields CharData and
+			// every track was skipped by the StartElement check below. Same
+			// mistake as the Tracks-section scanner above, one level down.
+			dictElem, err := nextStartElement(decoder)
 			if err != nil {
-				if err == io.EOF {
-					break
+				if errors.Is(err, errEndOfElement) || errors.Is(err, io.EOF) {
+					// Closing </dict> of the Tracks section, or end of file.
+					return count, nil
 				}
-				continue
+				return count, err
 			}
-
-			dictElem, ok := token.(xml.StartElement)
-			if !ok || dictElem.Name.Local != "dict" {
+			if dictElem.Name.Local != "dict" {
 				continue
 			}
 
