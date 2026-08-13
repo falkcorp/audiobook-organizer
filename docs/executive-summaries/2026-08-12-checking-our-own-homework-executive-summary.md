@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-08-12-checking-our-own-homework-executive-summary.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 4f1c8e27-9db3-4a56-b0e8-6c395a71d2f4 -->
 <!-- last-edited: 2026-08-12 -->
 
@@ -22,11 +22,11 @@ answers had the right *fields*, never what was *in* them — a check that could 
 Switching it on found five more real problems.
 
 And some of what we found and "fixed" turned out to be wrong — one was a mistaken
-accusation, one actively broke something, the repair for *that* missed a piece, and two
-later findings were reported before they were understood. All five were caught and
-corrected the same day. The honest summary is not "we fixed nine things"; it is "we fixed
-nine things, got five claims wrong along the way, and caught every one of them before
-anyone was affected."
+accusation, one actively broke something, the repair for *that* missed a piece, one
+described a harm that was not happening, and two later findings were reported before they
+were understood. All six were caught and corrected the same day. The summary is not "we
+fixed ten things"; it is "we fixed ten things, got six claims wrong along the way, and
+caught every one of them before anyone was affected."
 
 ---
 
@@ -79,7 +79,7 @@ that job cleared has been **filling back up** — from about 1,300 items to near
 three and a half weeks. Running the cleanup again would clear it and it would refill.
 Something upstream is producing the work, and that is now the recorded problem.
 
-## 5. Three things we got wrong
+## 5. Four things we got wrong
 
 **A mistaken accusation.** We concluded the server was overstating what it lets apps do —
 claiming it accepts changes when nothing could be changed. That was wrong. It had been
@@ -114,6 +114,33 @@ Thirty days of production records show **no request from anyone** to any of the 
 addresses, so no user is known to have been affected by either mistake. Nothing had been
 released.
 
+**A harm we described that was not happening.** Explaining why the work in section 1
+mattered, we wrote that when a phone app probes one of the remaining addresses it is
+turned away with *"you are not allowed in"* — the kind of answer that makes an app show
+itself as disconnected from the server. That was wrong. Those requests get a plain
+**"there is no such address,"** which is the answer we want and causes no trouble at all.
+
+The mistake has the same shape as the others. The server's security check is attached to a
+specific *set* of addresses, and a request for an address that doesn't exist never reaches
+that set — so it is never checked, and never refused. Reading the wiring, it looks as
+though everything is guarded. We described the consequence confidently without ever making
+the request. Doing so took one minute and gave the opposite answer.
+
+This mattered beyond the wording, because that imagined harm was the argument for changing
+the security wiring again — the same wiring that had already switched off 46 working
+functions, twice. Once the answer turned out to be harmless, the remaining question was
+whether any app actually asks for those addresses. **None does:** all twenty-eight
+recordings of the reference app ask for authors and series *within a library*, an address
+that was never affected, and thirty days of production records agree. So the wiring was
+left alone.
+
+What was missing instead was a different kind of test. The two we had both work by asking
+the server for its list of addresses — they can see whether something *exists*, but not
+what it *answers*. A test was added that takes the addresses from the recordings of the
+real app — what the app **asks for** — rather than from our own list of what we built. It
+is the difference between checking our homework against our own answer sheet and checking
+it against the question.
+
 ---
 
 ## 6. The compatibility tests were checking the shape of the answer, not the answer
@@ -136,18 +163,54 @@ anything else had noticed:
   six-part recording we test against, the last part starts 2.2 seconds later than it
   really does; a book of twenty-odd parts would be out by roughly ten seconds by the end.
   If you close the app and come back, that is how far off you can be put down.
-- **The "your listening sessions" list reports the wrong page size**, which can mislead an
-  app into asking for pages that do not exist. Two neighbouring pieces of code get this
-  right; this one was written differently.
+- **The "your listening sessions" list reports the wrong page size** — ✅ **now fixed.** It
+  was answering with the number of sessions it had just returned, as though that were the
+  size of a page, and it never split the list into pages at all. Two neighbouring pieces of
+  code get this right; this one was written differently.
 - **We never record what kind of device connected** — phone, tablet, watch — and report
   "unknown" for all of them.
 - **Audio quality figures are rounded** to the nearest thousand.
 - **A publication year of "800BC" comes back as "800."** We store years as plain numbers,
   so anything that is not one is lost.
 
-None of these were fixed here. They are all written down with measurements, and the first
-needs a decision about changing how the data is stored — a bigger job than the testing work
-that found it.
+**One of the five is fixed; the rest are written down with measurements.** The sessions
+list now reports a real page size and genuinely splits the list, which is worth being
+precise about because it is a change in behaviour and not only a repair: if you have more
+than ten sessions, the old version handed back *all* of them while claiming there was one
+page, and the new one hands back ten and says there are two. That is what the reference
+server does and what an app expects — but it is a real difference for exactly the people
+who have enough sessions to notice, and it deserves saying out loud rather than being
+filed under "corrected a wrong number."
+
+The arithmetic that does the splitting arrived **untested**, and that gap is worth naming
+too. Our recording of the reference server contains three sessions, so every existing
+check fits comfortably on the first page and none of them could ever reach the code that
+decides where a page ends. A test now seeds twelve sessions and checks the boundary from
+five directions, the strongest being that the first and second pages must between them
+account for every session exactly once — none dropped, none appearing twice. Length checks
+alone can pass while a session silently falls through the gap between two pages; that one
+cannot. It was confirmed by putting the old version back and watching it fail.
+
+This is the **third** place this same confusion has been found: library search had it too,
+and was fixed separately today. In each case a count that was really "how many did I just
+hand you" was presented as "how many are there."
+
+**Of the four findings left, three are the same job wearing different clothes.** Book
+length, audio quality and publication year are all cases of storing a value in a form that
+cannot hold it — whole seconds, whole thousands, a plain number. Fixing any of them means
+both adding somewhere to put the better value *and* re-reading roughly thirty thousand
+books to fill it in. The code is the small half; the re-reading is the large one, and it
+runs against the live library. Those are waiting on a decision rather than on work.
+
+The fourth — **not recording what kind of device connected** — turns out to be blocked on
+something we do not have rather than on effort. The server already passes through whatever
+the app tells it; what is missing is working out the device type when the app doesn't say.
+The reference server answered `"wearable"` for one of our recordings, so it clearly derives
+this from something in the request — but **not one of our twenty-eight recordings saved the
+request headers**, only the replies. The evidence that would tell us the rule was never
+captured. Guessing the rule from a single answer with no matching question is precisely the
+mistake described two paragraphs down. The recording tool needs to save request headers
+first; that is now the written next step.
 
 The test data itself was part of the problem: it had been typed in by hand and no longer
 resembled the real recording — six identical files of two kilobytes standing in for six
@@ -185,6 +248,40 @@ because an unexplained result was written down instead of shrugged off.
 
 ---
 
+## 7. The check we promised to run, and then couldn't
+
+A smaller item, included because it is the same lesson in miniature.
+
+We have an automatic check that refuses any outside code arriving under a licence we
+haven't approved. It had started rejecting a routine update over a licence that is in fact
+perfectly acceptable — it simply wasn't written in the form the checker expected. The
+policy was corrected.
+
+When that correction was published, we said plainly what would prove it: re-run the update
+that had been rejected and watch it pass. That was the right test, because the checker only
+ever inspects outside code that has **changed** — so every later change that doesn't touch
+outside code sails past it without the policy being examined at all. A permanent green tick
+that cannot go red is not proof of anything.
+
+Nineteen minutes before the correction landed, the rejected update was merged by hand. The
+test we had named no longer existed.
+
+The comfortable move is to call it done: the correction is in place, it is obviously right,
+and nothing is failing any more. That is exactly how an unverified change quietly becomes a
+believed one — and the specific thing still unknown was narrow and real, namely whether the
+checker's way of naming packages matches the way we wrote them in the policy.
+
+So a throwaway change was created purely to force the question: bump one outside component
+by one version — the same component and the same shape of change that had produced the
+original rejection — purely to make the checker evaluate the policy. It passed. The change
+was closed immediately and deleted. Cost: four minutes.
+
+**When the event that would have proved a fix disappears, build the smallest artificial one
+that exercises the same path.** The alternative is a claim on the record with nothing behind
+it.
+
+---
+
 ## Why the mistakes are in this summary
 
 They could have been left out. All were found and fixed by us, on the same day, with no
@@ -193,10 +290,17 @@ user impact — the kind of thing that never has to be mentioned.
 They are here because the pattern is the point. All of them came from **concluding we had
 checked something when the check could not have seen the answer**: one place that accepts
 changes, not nine; who *calls* an address, but not whether the address *works*; a search
-of the code that structurally cannot find half the addresses it was searching for; and a
-rule inferred from a single line of a comparison whose other five lines said the opposite.
-The third is the sharpest, because it was the *fix* for the second — the correction
-repeated the original shape of the mistake, one level down.
+of the code that structurally cannot find half the addresses it was searching for; a rule
+inferred from a single line of a comparison whose other five lines said the opposite; and
+a description of what the server would answer, written without ever asking it. The third
+is the sharpest, because it was the *fix* for the second — the correction repeated the
+original shape of the mistake, one level down.
+
+The last one is the cheapest to have avoided, and that is what makes it worth keeping.
+Reading the wiring and reasoning about it took longer than issuing the request would have,
+and produced the opposite answer. Where a claim is about **what a system does**, the system
+is available for questioning and is the only authority on the subject. Reading the code
+tells you what someone intended; running it tells you what is true.
 
 The compatibility suite in section 6 is the same failure worn by a test rather than a
 person: twenty-two checks reporting conformity, none of them able to see a wrong value. A
@@ -218,8 +322,16 @@ example of the problem it describes.
   passes, and the same field going badly wrong still fails. That limit immediately caught
   a chapter-boundary error of over four minutes that a plain "this may differ" note would
   have waved through.
-- Five newly-found problems are written up with measurements and are waiting on decisions,
-  the largest being how audio file lengths are stored.
+- Of the five newly-found problems, **one is fixed** (the sessions list now reports a real
+  page size and splits into pages, with the boundary arithmetic tested from five
+  directions), **one is blocked** on our recordings never having saved request headers, and
+  **three are waiting on a decision** — all three being the same job: storing a value in a
+  form that can hold it, plus re-reading the whole library to fill it in.
+- The remaining gap in saying "no" plainly was closed by **evidence rather than a change**.
+  No app asks for the addresses in question, the answer they get is harmless, and the
+  wiring that would have had to change is the same wiring that switched off 46 working
+  functions twice. A test now checks our answers against what the real app **asks for**,
+  which is what was actually missing.
 - The API specification is one document, valid, and honest about its 48 gaps.
 - Four decisions are waiting on the owner, all written up: a security question about a
   key stored in the browser, what to do about those 48 phantom entries, a stale status
