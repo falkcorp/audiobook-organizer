@@ -1,7 +1,7 @@
 // file: internal/scheduler/scheduler.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3f7a9c21-b4d8-4e05-a6f2-8c1d0e3b7a94
-// last-edited: 2026-08-12
+// last-edited: 2026-08-13
 
 // Package scheduler implements the unified task scheduling system.
 // TaskScheduler manages all registered tasks, their schedules, and manual
@@ -136,8 +136,27 @@ func NewTaskScheduler(deps SchedulerDeps) *TaskScheduler {
 		"purge_old_logs",
 		"cleanup_activity_log",
 		"cleanup_old_backups",
+		// These three declare RunInMaintenanceWindow: true unconditionally but
+		// were absent from this list, so the window op never iterated them and
+		// they had never run. They are cheap and they reclaim disk, so they sit
+		// with the other cleanups rather than behind the expensive walks:
+		//   temp_file_cleanup — orphaned *.tmp.m4b/*.tmp.m4a from crashed ffmpeg
+		//   trash_cleanup     — trashed versions past their 14-day TTL
+		//   archive_sweep     — soft-deleted books past the 30-day retention
+		// Every one of those is an unbounded on-disk leak while it never runs.
+		"temp_file_cleanup",
+		"trash_cleanup",
+		"archive_sweep",
 		"library_size_refresh",
 		"db_optimize",
+		// library_organize was the fourth task declaring a maintenance-window
+		// toggle (config.Maintenance.LibraryOrganize) while missing from this
+		// list — the same dead-config shape documented for library_scan below.
+		// It goes near the end because it MUTATES FILES ON DISK and is expensive;
+		// putting it earlier would let a long organize run starve the cleanup and
+		// dedup work when the window closes. It stays gated behind its own config
+		// toggle, so adding it here does not by itself start moving files.
+		"library_organize",
 		// library_scan is LAST on purpose. It was missing from this list
 		// entirely, which made maintenance.library_scan unreachable dead
 		// config: the window op iterates MaintenanceOrder(), so a user who
@@ -225,14 +244,39 @@ func (ts *TaskScheduler) Start(shutdown chan struct{}, wg *sync.WaitGroup) {
 				}
 			}()
 			slog.Info("Scheduled task interval", "taskName", taskName, "interval", interval)
+		} else if task.IsEnabled() && ts.reachableViaMaintenanceWindow(name) {
+			// Enabled with no ticker, but the nightly maintenance window WILL
+			// reach it. Not a defect — this is how the cleanup/backfill jobs are
+			// meant to run, and warning about them buries the ones that are
+			// genuinely dead.
+			//
+			// The first version of this branch did not exist, and the resulting
+			// WARN fired for 13 of 18 tasks on the 2026-08-12 production boot.
+			// Seven of those thirteen were healthy maintenance-window tasks. A
+			// diagnostic that cries wolf about half the roster is how the real
+			// six stayed invisible.
+			slog.Info("Scheduled task has no timer; runs in the nightly maintenance window",
+				"taskName", name)
 		} else if task.IsEnabled() {
-			// Enabled but no usable interval. This is the silent case: the
-			// operator turned the task ON and it will never run. Say so, and
-			// name the config key, because the difference between this and
-			// "deliberately off" is invisible from the outside.
-			slog.Warn("Scheduled task is ENABLED but has no interval — it will NEVER run on a timer; "+
-				"set the interval (minutes) in the scheduled.<task>.interval config key to fix",
-				"taskName", name, "interval", task.GetInterval())
+			// Enabled, no interval, and NOT reachable by the maintenance window:
+			// the task can never run by itself. This is the genuinely silent
+			// case — the operator sees it listed as enabled and nothing happens.
+			//
+			// Note the two distinct ways to land here, because the fix differs:
+			//   1. no interval configured  -> set scheduled.<task>.interval
+			//   2. declares RunInMaintenanceWindow but is absent from
+			//      maintenanceOrder -> the toggle is dead config; the task must
+			//      be added to the list in NewTaskScheduler
+			// Cause 2 hit library_scan once (see the maintenanceOrder comment),
+			// then recurred on four more tasks: library_organize,
+			// temp_file_cleanup, trash_cleanup and archive_sweep.
+			slog.Warn("Scheduled task is ENABLED but can NEVER run — it has no interval and the "+
+				"maintenance window does not reach it; set scheduled.<task>.interval, or add the "+
+				"task to maintenanceOrder if it is meant to run in the nightly window",
+				"taskName", name,
+				"interval", task.GetInterval(),
+				"declaresMaintenanceWindow", task.RunInMaintenanceWindow != nil && task.RunInMaintenanceWindow(),
+				"inMaintenanceOrder", ts.inMaintenanceOrder(name))
 		} else {
 			// Deliberately off. Logged at Debug so the roster is complete for
 			// anyone diagnosing "why did nothing happen" without adding noise.
@@ -348,6 +392,42 @@ func (ts *TaskScheduler) Tasks() map[string]*TaskDefinition {
 // MaintenanceOrder returns the ordered list of maintenance task names.
 func (ts *TaskScheduler) MaintenanceOrder() []string {
 	return ts.maintenanceOrder
+}
+
+// inMaintenanceOrder reports whether the nightly window op will even consider
+// this task. The op iterates MaintenanceOrder() (see
+// internal/server/scheduler_maintenance_window_op.go), so a task absent from
+// that list is unreachable no matter what RunInMaintenanceWindow returns —
+// which is exactly how four tasks came to declare a maintenance-window toggle
+// that did nothing.
+func (ts *TaskScheduler) inMaintenanceOrder(name string) bool {
+	for _, n := range ts.maintenanceOrder {
+		if n == name {
+			return true
+		}
+	}
+	return false
+}
+
+// reachableViaMaintenanceWindow reports whether the nightly window can actually
+// run this task. BOTH conditions must hold, which is the whole point: the window
+// op's guard is `IsEnabled() && RunInMaintenanceWindow()` applied only to names
+// it iterates, so declaring the toggle without list membership — or list
+// membership without the toggle — runs nothing.
+//
+// This deliberately does NOT check config.Maintenance.Enabled. A task that is
+// correctly wired but sitting behind a disabled maintenance window is an
+// operator choice, not a wiring defect, and conflating the two would restore the
+// over-reporting this function exists to prevent.
+func (ts *TaskScheduler) reachableViaMaintenanceWindow(name string) bool {
+	if !ts.inMaintenanceOrder(name) {
+		return false
+	}
+	task, ok := ts.tasks[name]
+	if !ok || task.RunInMaintenanceWindow == nil {
+		return false
+	}
+	return task.RunInMaintenanceWindow()
 }
 
 // WaitForOperation polls until an operation completes or the context is canceled.
