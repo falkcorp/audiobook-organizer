@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-08-13-the-books-search-could-not-see-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 7d915a69-5d11-4e2a-93fd-bdc1f27e70f1 -->
 <!-- last-edited: 2026-08-13 -->
 
@@ -44,10 +44,16 @@ finished and never went back. A half-built catalogue and a complete one looked i
 to it. Because the pass runs oldest-first, the books that never got cards were always
 the **newest** ones.
 
-We measured it on the live server. Books added in April: 97 out of 100 findable. Books
-added in August: **2 out of 100**. Almost everything added recently was invisible to
-search, and would have stayed invisible indefinitely — nothing in the system was ever
-going to notice.
+We now have the exact figure, because the repair reported it when it ran on the live
+server: **16,738 books had no card — just under a quarter of your library.** Every one
+of them was unfindable by any search on the website, silently, and would have stayed
+that way indefinitely. Nothing in the system was ever going to notice.
+
+*(An earlier estimate here, based on spot-checking about ninety books, said roughly 2 in
+100 of August's additions were findable versus 97 in 100 of April's. That pointed the
+right way but understated the total: 16,738 is far more than one month's worth of
+additions, so the hole was wider than the most recent books alone. The measured number
+above replaces it.)*
 
 There was already a repair mechanism, added earlier this month, and it did not help
 here. It repairs cards that were *dropped* when the system got busy. A book whose card
@@ -79,9 +85,21 @@ investigation is how fixes get harder to trust:
 - **Putting quotes around a phrase does not search for that phrase.** It currently
   appears to work by accident.
 
-One decision is yours: the repair runs on the next restart and will work through roughly
-40,000 books in the background. It can happen on the next natural restart or be
-scheduled deliberately.
+## It has now run
+
+The fix was deployed to the live server on the evening of 2026-08-13. On start-up it
+compared the catalogue against the shelves, found the 16,738 missing cards, and began
+working through the library in the background — without interrupting anything. The
+server stayed available and responsive throughout.
+
+The repair re-checks **every** book rather than only the missing ones. That is
+deliberate and not wasted effort: the count tells you *how many* cards are missing but
+never *which*, and the only way to find out which would be to trust the very catalogue
+that is known to be wrong. Re-checking a book that already has a good card is cheap and
+harmless; guessing wrong is not.
+
+It works oldest book first, which means the newest books — the ones most likely to have
+been missing — are the last to be restored.
 
 ## How we know it is fixed
 
