@@ -1,7 +1,7 @@
 // file: internal/organizer/service.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
-// last-edited: 2026-08-12
+// last-edited: 2026-08-13
 
 package organizer
 
@@ -1174,10 +1174,49 @@ func (orgSvc *Service) CreateOrganizedVersion(org *Organizer, book *database.Boo
 
 	// Determine or create version group
 	versionGroupID := ""
+	joinedExistingGroup := false
 	if book.VersionGroupID != nil && *book.VersionGroupID != "" {
 		versionGroupID = *book.VersionGroupID
+		joinedExistingGroup = true
 	} else {
 		versionGroupID = ulid.Make().String()
+	}
+
+	// A group may already have elected a primary. This happens routinely: a
+	// newly downloaded copy of a book the library already owns gets hash-matched
+	// into the existing book's version group by the scanner, and organize then
+	// runs against the new row. Below, only `book` (this call's own source row)
+	// is demoted — the group's pre-existing organized primary is not, so
+	// claiming primary here would leave the group with two.
+	//
+	// Deliberately: the NEW record yields, rather than the incumbent being
+	// demoted. The incumbent is the copy that has already been through metadata
+	// enrichment and sits under a real author directory; the new one is
+	// frequently still `Unknown Author` because organize can run before
+	// enrichment. Demoting the incumbent would make the worse-named record the
+	// one the UI shows.
+	//
+	// This left 10,780 groups holding surplus primaries in production before it
+	// was guarded — see
+	// docs/audits/2026-08-13-mass-reorganize-duplicated-14tb-under-unknown-author.md
+	if joinedExistingGroup {
+		if members, err := orgSvc.db.GetBooksByVersionGroup(versionGroupID); err == nil {
+			for i := range members {
+				if members[i].ID == book.ID {
+					continue // this row is demoted below
+				}
+				if members[i].IsPrimaryVersion != nil && *members[i].IsPrimaryVersion {
+					isPrimary = false
+					log.Info("Version group %s already has primary %s; organizing %q as a non-primary version",
+						versionGroupID, members[i].ID, book.Title)
+					break
+				}
+			}
+		} else {
+			// Fail open on the read: a lookup failure must not block the
+			// organize itself. Worst case is the pre-guard behaviour.
+			log.Warn("Could not check version group %s for an existing primary: %v", versionGroupID, err)
+		}
 	}
 
 	// Create the new organized book record (copy of metadata)
