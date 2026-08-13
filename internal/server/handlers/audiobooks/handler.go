@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
 // last-edited: 2026-08-13
 
@@ -51,6 +51,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -236,8 +237,83 @@ func ptrStr(p *string) string {
 // has_file_errors fast-path, quick-query (missing_covers / in_import_path /
 // no_isbn / duplicates_flagged) fast-path, then the filtered list pipeline with
 // the list cache (skipped when per-user filters are active).
+// filterFieldQueryParams are names that mean something only INSIDE the
+// `filters` JSON parameter of the library list. Mirrors the field switch in
+// audiobooks.matchesFieldFilters.
+//
+// Omitting a name is harmless — the guard simply does not fire for it, which
+// is today's behavior. INCLUDING a name wrongly is NOT harmless: it rejects a
+// request that used to work. Some names are BOTH a filter field and a genuine
+// bare parameter, and those must stay out.
+//
+// "library_state" is exactly that case and is deliberately absent: it is a
+// real bare parameter, read at ParseQueryString(c, "library_state") below, and
+// TestListBooksWithTagFilter asserts ?tag=…&library_state=organized narrows to
+// one book. An earlier revision of this set included it and broke that test.
+// The near-miss is worth recording: the collision survey that produced this
+// set grepped only c.Query("…") and so could not see the ParseQueryString
+// form. Check every accessor helper, not one spelling, before adding a name.
+//
+// "author" belongs here while "author_id" does not — adjacent names, different
+// things, and only exact-name lookup keeps them apart.
+var filterFieldQueryParams = map[string]struct{}{
+	"title": {}, "author": {}, "narrator": {}, "series": {}, "genre": {},
+	"language": {}, "publisher": {}, "edition": {}, "format": {}, "codec": {},
+	"quality": {}, "description": {},
+	"metadata_review_status": {}, "review": {}, "has_cover": {},
+	"has_written": {}, "needs_writeback": {}, "has_organized": {},
+	"itunes_sync_status": {}, "duration_seconds": {},
+	"read_status": {}, "progress_pct": {}, "last_played": {},
+	"user_rating_overall": {}, "user_rating_story": {},
+	"user_rating_performance": {},
+}
+
+// firstBareFilterFieldParam reports the first filter-field name the request
+// passed as a bare query parameter, if any. Sorted so the message is
+// deterministic when a caller gets several wrong at once — an error that names
+// a different field on each retry is its own small cruelty.
+func firstBareFilterFieldParam(c *gin.Context) (string, bool) {
+	found := make([]string, 0, 2)
+	for name := range c.Request.URL.Query() {
+		if _, ok := filterFieldQueryParams[name]; ok {
+			found = append(found, name)
+		}
+	}
+	if len(found) == 0 {
+		return "", false
+	}
+	sort.Strings(found)
+	return found[0], true
+}
+
 func (h *Handler) ListAudiobooks(c *gin.Context) {
 	store := h.store
+
+	// A field name passed as a bare query parameter (?title=Skills) is not a
+	// filter — field filters travel inside the `filters` JSON parameter. gin
+	// silently ignores unrecognized parameters, so such a request returned the
+	// ENTIRE library while looking exactly like a narrowed query, count and
+	// all.
+	//
+	// Measured on production 2026-08-13: ?title=Skills answered count=63870
+	// with non-matching rows, while
+	// filters=[{"field":"title","value":"Skills"}] correctly answered 25. That
+	// 63,870 was read as evidence of a storage-layer filtering bug and written
+	// into a handoff as a root cause. It was not one. The cost of this silence
+	// was a misdiagnosis, not a user-facing outage — the web UI sends the
+	// `filters` form.
+	//
+	// Same reasoning as the empty-filter-value rejection below: answering a
+	// request that meant to narrow with the whole library is the worst
+	// available response, so say so instead.
+	if field, bare := firstBareFilterFieldParam(c); bare {
+		httputil.RespondWithBadRequest(c,
+			"\""+field+"\" is not a query parameter; it is a filter field. A bare "+
+				"\""+field+"\" is ignored, which would list the entire library rather than "+
+				"narrowing it. Pass it inside the filters parameter instead, e.g. "+
+				"filters=[{\"field\":\""+field+"\",\"value\":\"...\"}].")
+		return
+	}
 
 	// Parse pagination parameters
 	params := httputil.ParsePaginationParams(c)
