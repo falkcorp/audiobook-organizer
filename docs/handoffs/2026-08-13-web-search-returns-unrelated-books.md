@@ -43,18 +43,52 @@ description-matches — the owner's screenshot.
 the search index is invisible to that method by construction, so the enumeration found
 two rows, saw both non-primary, and concluded no primary existed.
 
-**The 6,157 figure needs re-deriving before anyone acts on it.** It was computed by
-paging the `is_primary_version=false` set and grouping by `version_group_id`. A group's
-primary member is *by definition excluded from that set*, so "one book per group" in
-that data can only mean "one **non-primary** book per group" — which is also the shape
-of a perfectly healthy two-member group. `vg-01KXXVFEHRXGXMKPDYMY6HENDK` is a concrete
-counterexample: it is inside the 6,157 and it has a primary. Re-count by fetching each
-candidate group's *full* membership before calling it primary-less.
+Decisive check: **`01KZRBPPCF…` is returned by `is_primary_version=true`.** Paging that
+filtered set (40,839 ids, 41 pages) and grepping for it returns a hit. The filter keeps
+this book. Only the index cannot find it.
 
-To be explicit about what survives: **`vg-` prefixed group ids appearing only in a
-bounded creation window is still an interesting, unexplained observation** and worth
-chasing. What does not survive is "these groups have no primary" and the count attached
-to it.
+### The 6,157 figure re-derived: the real number is 765
+
+The 6,157 was computed by paging the `is_primary_version=false` set and grouping by
+`version_group_id`. A group's primary member is *by definition excluded from that set*,
+so "one book per group" in that data can only mean "one **non-primary** book per group"
+— which is also the shape of a perfectly healthy two-member group.
+
+Re-measured by a **full census**: every one of the 63,870 books paged (ids verified to
+partition cleanly, zero duplicates), grouped by `version_group_id`, then intersected
+against the full `is_primary_version=true` membership.
+
+| population | books |
+|---|---|
+| total library | 63,870 |
+| returned by `is_primary_version=true` | 40,839 |
+| not returned | 23,031 |
+| — legitimately collapsed duplicates (group *has* a primary) | 22,266 |
+| — **in a group where no member is primary** | **724** |
+| — **has no `version_group_id` at all, and still hidden** | **41** |
+| **genuinely wrongly hidden** | **765 (1.20%)** |
+
+So the defect is real but **8× smaller than reported**: 765 books, not 6,157; 1.20% of
+the library, not 9.6%.
+
+**The `vg-` lead does survive, and it is a good one.** Zero-primary groups are heavily
+concentrated in the prefixed namespace — 472 of 7,154 `vg-` groups have no primary,
+versus 7 of 17,635 unprefixed. That is a ~166× enrichment and it does point at a
+specific writer. What does not survive is "one book per group": `vg-` groups hold 12,877
+books across 7,154 groups, and only 1,905 are singletons.
+
+### A separate finding: the filter and the serialized flag disagree
+
+5,731 books are returned by `is_primary_version=true` while their own payload says
+`"is_primary_version": false`. These are books with no `version_group_id` — the filter
+treats an ungrouped book as trivially primary, but the serialized field does not reflect
+that. Nothing is hidden by this, but any consumer that reads the field rather than
+calling the filter will disagree with the server about 5,731 books, and it is what made
+the two independent counts of "primary books" differ (40,839 vs 35,108). Worth a
+separate issue.
+
+The remaining **41** ungrouped-and-hidden books do not fit that rule and are unexplained;
+they are a small, concrete starting sample for whoever picks this up.
 
 ---
 
@@ -101,8 +135,8 @@ and testing the `version_group_id` prefix:
 | total books | 63,870 |
 | `is_primary_version=true` | 40,839 |
 | `is_primary_version=false` | 23,031 |
-| **of those, `vg-` singletons with no primary** | **6,157** |
-| distinct `vg-` groups | 6,157 (one book each — all singletons) |
+| **of those, `vg-` singletons with no primary** | **6,157**  ← WRONG, see v3.0.0 correction: real figure is 765 |
+| distinct `vg-` groups | 6,157 (one book each — all singletons)  ← WRONG: 7,154 groups / 12,877 books, only 1,905 singletons |
 
 The affected books are contiguous in creation order: every one falls between
 **2026-04-04 and 2026-08-11**, and the scan found zero `vg-` rows in the older 11,031.
