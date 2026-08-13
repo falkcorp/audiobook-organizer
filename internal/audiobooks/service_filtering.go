@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_filtering.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: b4e8c3d2-e5f6-7a80-9b0c-1d2e3f4a5b6c
-// last-edited: 2026-07-18
+// last-edited: 2026-08-13
 
 package audiobooks
 
@@ -211,10 +211,57 @@ func matchesAllPerUserFilters(state *database.UserBookState, filters []FieldFilt
 	return true
 }
 
+// FirstEmptyFilterValue returns the field name of the first filter carrying an
+// empty value, and whether one was found.
+//
+// WHY this exists: the comparison at the bottom of fieldMatchesValue is
+//
+//	strings.Contains(strings.ToLower(bookValue), strings.ToLower(value))
+//
+// and strings.Contains(anything, "") is ALWAYS TRUE in Go. So a filter with an
+// empty value does not narrow anything — it silently matches every book.
+//
+// Measured on production 2026-08-13, and the filter is otherwise working:
+//
+//	title=""       -> 63,870 books (the entire library)
+//	title="zzqqxx" ->      0 books
+//	title="Skills" ->     25 books
+//
+// That is not merely a confusing read. FieldFilters also reach
+// Server.resolveFilterToBookIDs, which resolves a FilterSpec into concrete book
+// IDs for BACKGROUND OPERATIONS at a limit of 100,000 — so an empty value there
+// silently targets the whole library. That is the same failure shape as the
+// base64 op-params defect (#2309), where organize defaulted to every book.
+//
+// Callers use this to reject the input loudly. matchesFieldFilters below also
+// fails closed as a last line of defence, so a filter that somehow evades
+// validation matches nothing rather than everything.
+func FirstEmptyFilterValue(filters []FieldFilter) (string, bool) {
+	for _, f := range filters {
+		if f.Value == "" {
+			return f.Field, true
+		}
+	}
+	return "", false
+}
+
 // matchesFieldFilters returns true if a book matches all the given field filters.
 // All filters are ANDed: every filter must match for the book to be included.
 func matchesFieldFilters(book database.Book, filters []FieldFilter) bool {
 	for _, f := range filters {
+		// Fail CLOSED on an empty value. Falling through would reach
+		// strings.Contains(x, "") == true and match every book — see
+		// FirstEmptyFilterValue. Matching nothing is visibly wrong and harmless;
+		// matching everything is invisibly wrong and, on the background-op path,
+		// destructive. Negated is deliberately not consulted: neither `f == ""`
+		// nor `f != ""` is a constraint anyone can have meant.
+		//
+		// No in-repo code builds a filter with an empty value (the list warmer's
+		// constructions all carry real values), so this only ever fires on input
+		// that the boundary validation should already have rejected.
+		if f.Value == "" {
+			return false
+		}
 		matches := fieldMatchesValue(book, f.Field, f.Value)
 		if f.Negated && matches {
 			return false // NOT filter: exclude if matches

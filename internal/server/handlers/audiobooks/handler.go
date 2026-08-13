@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
-// last-edited: 2026-08-11
+// last-edited: 2026-08-13
 
 // Package audiobookshandler hosts the main library list / CRUD HTTP handlers
 // extracted from the server package's audiobooks_handlers.go: book listing
@@ -455,6 +455,20 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 		var fieldFilters []audiobookspkg.FieldFilter
 		if err := json.Unmarshal([]byte(filtersJSON), &fieldFilters); err != nil {
 			httputil.RespondWithBadRequest(c, "invalid filters parameter: "+err.Error())
+			return
+		}
+		// Reject empty filter values at the boundary. strings.Contains(x, "")
+		// is always true, so an empty value silently matches EVERY book instead
+		// of narrowing anything — measured on production as title="" returning
+		// all 63,870 books while title="zzqqxx" correctly returned 0. A caller
+		// that sends an empty value has a bug (usually a cleared UI field that
+		// was submitted anyway), and answering it with the whole library is the
+		// worst possible response. See audiobooks.FirstEmptyFilterValue.
+		if field, empty := audiobookspkg.FirstEmptyFilterValue(fieldFilters); empty {
+			httputil.RespondWithBadRequest(c,
+				"filter on \""+field+"\" has an empty value; an empty value matches every "+
+					"book rather than narrowing the results. Omit the filter to list everything, "+
+					"or supply a value to filter by.")
 			return
 		}
 		for _, ff := range fieldFilters {
