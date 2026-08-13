@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_book_aggregates.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
 // last-edited: 2026-08-12
 
@@ -26,6 +26,7 @@
 package database
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 
@@ -131,12 +132,22 @@ func (p *PebbleStore) RecomputeBookAggregates(bookID string) error {
 	if existingDuration == wantDuration && existingFileSize == wantFileSize {
 		// "caller" is the redundancy signal: a book recomputed many times from
 		// the same originator with no change to show for it is exactly what the
-		// coalescing fix is meant to eliminate. Debug-level, so this costs
-		// nothing in production until someone turns it on to look.
-		slog.Debug("RecomputeBookAggregates: no change needed",
-			"book_id", bookID,
-			"caller", aggregateCaller(),
-		)
+		// coalescing fix is meant to eliminate.
+		//
+		// The Enabled guard is NOT redundant with slog's own level check. Go
+		// evaluates arguments before the call, so an unguarded
+		// slog.Debug(..., "caller", aggregateCaller()) would walk the stack on
+		// every no-change return regardless of log level — and this is the
+		// hottest path in the function: the maintenance backfill sweeps the whole
+		// library and most books have nothing to update. That would add an
+		// unconditional stack walk to a full-library loop inside the very
+		// function this instrumentation exists to make cheaper.
+		if slog.Default().Enabled(context.Background(), slog.LevelDebug) {
+			slog.Debug("RecomputeBookAggregates: no change needed",
+				"book_id", bookID,
+				"caller", aggregateCaller(),
+			)
+		}
 		return nil
 	}
 
