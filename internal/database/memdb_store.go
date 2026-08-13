@@ -1,5 +1,5 @@
 // file: internal/database/memdb_store.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000003
 // last-edited: 2026-08-13
 
@@ -42,6 +42,46 @@ type MemStore struct {
 	// LastWarmupBytes for why the pair is worth carrying.
 	lastWarmBytes     map[string]int64
 	lastWarmDiscarded map[string]int64
+	// lastWarmDiscardedByField breaks lastWarmDiscarded down by which group of
+	// fields the bytes belonged to, keyed by the DiscardField* constants.
+	lastWarmDiscardedByField map[string]int64
+}
+
+// Keys for the per-field discarded-byte breakdown. These are field GROUPS, not
+// individual struct fields: the unit of the decision they inform is "should
+// this group move out of the row", and a group either moves together or not at
+// all. AcoustIDSeg0..6 in particular are seven fields with one lifecycle.
+//
+// They are deliberately not the JSON tag names. A JSON tag is a wire-format
+// detail that can change without the grouping changing, and these strings end
+// up in production logs that get compared across releases.
+const (
+	DiscardFieldAcoustIDFingerprint    = "acoustid_fingerprint"
+	DiscardFieldAcoustIDSegments       = "acoustid_seg0_6"
+	DiscardFieldIntroTranscription     = "intro_transcription"
+	DiscardFieldFingerprintDiagnostics = "fingerprint_diagnostics"
+	DiscardFieldDescription            = "description_and_notes"
+	DiscardFieldBookSignature          = "book_sig_v1_and_mask"
+)
+
+// LastWarmupDiscardedByField returns the discarded-byte totals split by field
+// group, keyed by the DiscardField* constants.
+//
+// LastWarmupBytes answers "is a fix worth doing" (production 2026-08-13: 76% of
+// the book_files phase). This answers "which fix", and the candidates are not
+// equivalent in risk: moving AcoustIDFingerprint out of the row retires the
+// write-back preserve-guards that exist because a bare memdb round-trip once
+// wiped fingerprints in production, while moving IntroTranscription does not.
+// Choosing the expensive option off an aggregate that might be dominated by the
+// cheap one would repeat the error the aggregate just caught.
+func (m *MemStore) LastWarmupDiscardedByField() map[string]int64 {
+	m.warmCountsMu.RLock()
+	defer m.warmCountsMu.RUnlock()
+	out := make(map[string]int64, len(m.lastWarmDiscardedByField))
+	for k, v := range m.lastWarmDiscardedByField {
+		out[k] = v
+	}
+	return out
 }
 
 // WarmupPhaseKeyCommit is the lastWarmDurations key holding the txn.Commit

@@ -1,5 +1,5 @@
 // file: internal/database/memdb_warmup.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000004
 // last-edited: 2026-08-13
 
@@ -44,6 +44,7 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 	durations := map[string]time.Duration{}
 	bytesScanned := map[string]int64{}
 	bytesDiscarded := map[string]int64{}
+	byField := map[string]int64{}
 
 	// warm runs one prefix scan and records how long it took.
 	//
@@ -80,22 +81,64 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 	// would understate the waste by 4/3. String fields are charged their plain
 	// length, which slightly understates them (JSON escaping adds bytes) — a
 	// direction that can only make the finding more conservative, never less.
-	discardedEncodedLen := func(bf *BookFile) int64 {
-		n := int64(base64.StdEncoding.EncodedLen(len(bf.AcoustIDFingerprint)))
-		n += int64(len(bf.AcoustIDSeg0) + len(bf.AcoustIDSeg1) + len(bf.AcoustIDSeg2) +
-			len(bf.AcoustIDSeg3) + len(bf.AcoustIDSeg4) + len(bf.AcoustIDSeg5) +
-			len(bf.AcoustIDSeg6))
-		for _, s := range []*string{
-			bf.IntroTranscription,
-			bf.FingerprintDiagnosticJSON,
-			bf.FingerprintFailureReason,
-			bf.FingerprintFailureDetail,
-		} {
+	// strLen charges a *string its encoded length, treating nil as absent.
+	strLen := func(ss ...*string) int64 {
+		var n int64
+		for _, s := range ss {
 			if s != nil {
 				n += int64(len(*s))
 			}
 		}
 		return n
+	}
+
+	// discardBookFile charges each group of discarded BookFile fields
+	// separately, and returns the row's total.
+	//
+	// The per-group split is the point. The aggregate measured on production
+	// 2026-08-13 — 1,853 MB discarded of 2,436 MB read in the book_files phase,
+	// 76% — establishes that the fix is to stop storing SOMETHING in the row,
+	// but not which thing, and the candidates are not interchangeable:
+	//
+	//   - AcoustIDFingerprint is a []byte. Moving it to a sidecar key means
+	//     rewriting ~13 read sites and, more seriously, retiring the
+	//     write-back preserve-guards in pebble_store_bookfiles.go that exist
+	//     because a bare memdb round-trip once wiped fingerprints in
+	//     production. The two writes would have to become one atomic batch.
+	//   - IntroTranscription and the diagnostic strings are *string fields
+	//     with far fewer readers and no such guard.
+	//
+	// Picking the expensive, data-loss-sensitive option on the strength of an
+	// aggregate that might be dominated by the cheap one is exactly the error
+	// the aggregate itself just caught: the call graph implied ~99% and the
+	// measurement said 76%.
+	discardBookFile := func(bf *BookFile) int64 {
+		fp := int64(base64.StdEncoding.EncodedLen(len(bf.AcoustIDFingerprint)))
+		segs := int64(len(bf.AcoustIDSeg0) + len(bf.AcoustIDSeg1) + len(bf.AcoustIDSeg2) +
+			len(bf.AcoustIDSeg3) + len(bf.AcoustIDSeg4) + len(bf.AcoustIDSeg5) +
+			len(bf.AcoustIDSeg6))
+		transcript := strLen(bf.IntroTranscription)
+		diagnostics := strLen(bf.FingerprintDiagnosticJSON, bf.FingerprintFailureReason,
+			bf.FingerprintFailureDetail)
+
+		byField[DiscardFieldAcoustIDFingerprint] += fp
+		byField[DiscardFieldAcoustIDSegments] += segs
+		byField[DiscardFieldIntroTranscription] += transcript
+		byField[DiscardFieldFingerprintDiagnostics] += diagnostics
+		return fp + segs + transcript + diagnostics
+	}
+
+	// discardBook does the same for the books phase, the second-largest at
+	// 729 MB across 67,824 rows on production. BookSigV1 and BookSigV1Mask are
+	// already base64 *strings* in the struct, so their stored length is their
+	// length — no EncodedLen, which would over-charge them by 4/3.
+	discardBook := func(b *Book) int64 {
+		description := strLen(b.Description, b.VersionNotes)
+		signature := strLen(b.BookSigV1, b.BookSigV1Mask)
+
+		byField[DiscardFieldDescription] += description
+		byField[DiscardFieldBookSignature] += signature
+		return description + signature
 	}
 
 	// safeInsert tries to insert an object, logging+counting failures rather
@@ -131,6 +174,7 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 		if err := json.Unmarshal(val, &b); err != nil {
 			return false, nil
 		}
+		bytesDiscarded[memTableBooks] += discardBook(&b)
 		return safeInsert(memTableBooks, stripBookForMemdb(&b), key)
 	}); err != nil {
 		return fmt.Errorf("warmup books: %w", err)
@@ -187,7 +231,7 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 		if err := json.Unmarshal(val, &bf); err != nil {
 			return false, nil
 		}
-		bytesDiscarded[memTableBookFiles] += discardedEncodedLen(&bf)
+		bytesDiscarded[memTableBookFiles] += discardBookFile(&bf)
 		return safeInsert(memTableBookFiles, stripBookFileForMemdb(&bf), key)
 	}); err != nil {
 		return fmt.Errorf("warmup book_files: %w", err)
@@ -325,6 +369,7 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 	m.lastWarmDurations = maps.Clone(durations)
 	m.lastWarmBytes = maps.Clone(bytesScanned)
 	m.lastWarmDiscarded = maps.Clone(bytesDiscarded)
+	m.lastWarmDiscardedByField = maps.Clone(byField)
 	m.warmCountsMu.Unlock()
 
 	slog.Info("memdb warmup complete",
@@ -353,6 +398,10 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 		// see MemStore.LastWarmupBytes.
 		"phase_mb", bytesMegabytes(bytesScanned),
 		"discarded_mb", bytesMegabytes(bytesDiscarded),
+		// Which FIELD GROUP the discarded bytes belong to. The per-phase total
+		// says a fix is worth doing; this says which fix, and the candidates
+		// differ by an order of magnitude in risk — see discardBookFile.
+		"discarded_field_mb", bytesMegabytes(byField),
 	)
 	if len(skips) > 0 {
 		slog.Warn("memdb warmup: rows skipped by table",
