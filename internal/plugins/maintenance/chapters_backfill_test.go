@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/chapters_backfill_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8a41c0e6-52b7-4d93-9f18-7c3ea05b61d4
 // last-edited: 2026-08-13
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -416,5 +417,90 @@ func TestChaptersBackfill_BookIDsRestrictsScope(t *testing.T) {
 	}
 	if got, _ := s.GetChaptersForBook(outOfScope); len(got) != 0 {
 		t.Fatalf("out-of-scope book got %d chapters; the BookIDs restriction leaked", len(got))
+	}
+}
+
+// ── case 9: the progress label must report the work actually done ───────────
+//
+// The label is the ONLY feedback a whole-library run gives for hours. The first
+// cohort run printed "persist=0 markers=0" on every line while genuinely
+// persisting 33 books, which reads as total failure to anyone watching. Two
+// separate defects produced that:
+//
+//  1. the label read c.persisted, which is 0 by definition in a dry run, and
+//  2. registry.RunItems computes the label BEFORE invoking the work function
+//     and reuses that pre-work string for the post-completion UpdateProgress,
+//     so every line reports the state from before its own item ran.
+//
+// (2) lives in shared infrastructure used by every op and is filed separately;
+// this op defends against both by reporting the eligible-book count, which is
+// incremented in BOTH modes, and by asserting the LAST label is non-zero.
+type chbfLabelReporter struct {
+	fakeReporter
+	mu     chan struct{}
+	labels []string
+}
+
+func newCHBFLabelReporter() *chbfLabelReporter {
+	return &chbfLabelReporter{mu: make(chan struct{}, 1)}
+}
+
+func (r *chbfLabelReporter) UpdateProgress(_, _ int, label string) error {
+	r.mu <- struct{}{}
+	r.labels = append(r.labels, label)
+	<-r.mu
+	return nil
+}
+
+func chbfRunWith(t *testing.T, s *database.PebbleStore, params chaptersBackfillParams, rep *chbfLabelReporter) {
+	t.Helper()
+	raw, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("marshal params: %v", err)
+	}
+	p := &Plugin{deps: fakeDeps{store: &chbfDecorator{Store: s}}}
+	if err := p.runChaptersBackfill(context.Background(), raw, rep); err != nil {
+		t.Fatalf("runChaptersBackfill: %v", err)
+	}
+}
+
+func TestChaptersBackfill_ProgressLabelReportsEligibleCount(t *testing.T) {
+	if testing.Short() {
+		t.Skip("seeds a real PebbleStore; skipped in -short")
+	}
+	for _, apply := range []bool{false, true} {
+		name := "dryRun"
+		if apply {
+			name = "apply"
+		}
+		t.Run(name, func(t *testing.T) {
+			chbfStubFFprobe(t)
+			spy := &chbfProbeSpy{result: chbfChapters()}
+			spy.install(t)
+
+			s := chbfStore(t)
+			const n = 12
+			for i := 0; i < n; i++ {
+				chbfSeedBook(t, s, fmt.Sprintf("Labelled Book %02d", i), 1)
+			}
+
+			rep := newCHBFLabelReporter()
+			chbfRunWith(t, s, chaptersBackfillParams{Apply: apply}, rep)
+
+			if len(rep.labels) < n {
+				t.Fatalf("got %d progress labels for %d books", len(rep.labels), n)
+			}
+			// The LAST per-item label must account for every eligible book.
+			// Asserting merely "non-zero" passes against the pre-fix code,
+			// which reached persist=2 of 12 — the tripwire has to be the
+			// full count or it does not detect the defect it was written for.
+			want := fmt.Sprintf("eligible=%d chapters=%d", n, n*len(chbfChapters()))
+			last := rep.labels[len(rep.labels)-2] // -1 is the final summary line
+			if !strings.Contains(last, want) {
+				t.Fatalf("final per-item label = %q, want it to contain %q\n"+
+					"a label that lags the work it describes makes a multi-hour "+
+					"run look like it is doing nothing", last, want)
+			}
+		})
 	}
 }

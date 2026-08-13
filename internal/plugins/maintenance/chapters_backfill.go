@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/chapters_backfill.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5d3b7e14-9c62-4a8f-b0d7-2e6194af8c35
 // last-edited: 2026-08-13
 
@@ -339,9 +339,13 @@ func (p *Plugin) runChaptersBackfill(ctx context.Context, raw json.RawMessage, r
 		Concurrency:   runtime.NumCPU(),
 		ProgressTotal: len(ids),
 		ErrMode:       registry.ErrModeCollect,
+		// Reports ELIGIBLE (= persisted + wouldPersist), not persisted. A dry
+		// run never increments persisted, so a label reading it sat at zero for
+		// the whole run and was indistinguishable from a run finding nothing —
+		// the opposite of the truth on the first cohort pass, which found 33.
 		Label: func(i, total int) string {
-			return fmt.Sprintf("Books %d/%d (persist=%d markers=%d)",
-				i+1, total, c.persisted.Load(), c.chaptersWorked.Load())
+			return fmt.Sprintf("Books %d/%d (eligible=%d chapters=%d)",
+				i+1, total, c.persisted.Load()+c.wouldPersist.Load(), c.chaptersWorked.Load())
 		},
 	})
 

@@ -1,7 +1,7 @@
 // file: internal/operations/registry/run_items.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a2b3c4d5-e6f7-8901-abcd-ef2345678901
-// last-edited: 2026-07-18
+// last-edited: 2026-08-13
 
 package registry
 
@@ -116,11 +116,19 @@ func RunItems[T any](ctx context.Context, r Reporter, items []T, fn func(ctx con
 			itemCtx, cancel = context.WithTimeout(ctx, opt.PerItemTimeout)
 			defer cancel()
 		}
-		l := lbl(i, progTotal)
-		r.SetCurrentItem(l)
+		r.SetCurrentItem(lbl(i, progTotal))
 		err := fn(itemCtx, item)
 		done := int(completed.Add(1))
-		_ = r.UpdateProgress(opt.ProgressOffset+done, progTotal, l)
+		// Re-render the label AFTER fn rather than reusing the pre-work string.
+		// Labels commonly close over running tallies, and with Concurrency = N
+		// all N workers snapshot their label at dispatch — before any of them
+		// has finished — so a reused string reports state from before its own
+		// item ran. Measured on chapters-backfill: a 12-book apply that wrote
+		// all 12 printed "persist=0" on ten lines and never exceeded 2, which
+		// reads as total failure for the hours a whole-library run takes.
+		// SetCurrentItem above still gets the pre-work label: it names the item
+		// being STARTED, which is what it is for.
+		_ = r.UpdateProgress(opt.ProgressOffset+done, progTotal, lbl(i, progTotal))
 		return err
 	}
 
