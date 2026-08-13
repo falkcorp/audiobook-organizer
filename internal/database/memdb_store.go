@@ -8,6 +8,7 @@ package database
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/hashicorp/go-memdb"
 )
@@ -29,7 +30,17 @@ type MemStore struct {
 	warmCountsMu    sync.RWMutex
 	lastWarmCounts  map[string]int
 	lastWarmScanned map[string]int
+	// lastWarmDurations records how long each per-table prefix scan took in
+	// the most recent WarmFromPebble, plus a "commit" entry for txn.Commit.
+	// Retained rather than only logged so the split is assertable in a test
+	// and readable from a running process, not just recoverable by grepping
+	// startup logs after the fact.
+	lastWarmDurations map[string]time.Duration
 }
+
+// WarmupPhaseKeyCommit is the lastWarmDurations key holding the txn.Commit
+// cost. It is not a table, so it cannot collide with one.
+const WarmupPhaseKeyCommit = "commit"
 
 // LastWarmupCounts returns the per-table row counts from the most recent
 // WarmFromPebble, and the per-table count of Pebble keys scanned to produce
@@ -48,6 +59,25 @@ func (m *MemStore) LastWarmupCounts() (rows, scanned map[string]int) {
 		scanned[k] = v
 	}
 	return rows, scanned
+}
+
+// LastWarmupDurations returns how long each phase of the most recent
+// WarmFromPebble took, keyed by table name, plus WarmupPhaseKeyCommit for the
+// transaction commit.
+//
+// The sum of these is less than the warmup's reported total; the remainder is
+// setup and teardown either side. A commit entry that dominates would mean the
+// ten scans are not where the time goes, and that the fix is to stop holding
+// one write transaction across all of them rather than to make the scans
+// faster.
+func (m *MemStore) LastWarmupDurations() map[string]time.Duration {
+	m.warmCountsMu.RLock()
+	defer m.warmCountsMu.RUnlock()
+	out := make(map[string]time.Duration, len(m.lastWarmDurations))
+	for k, v := range m.lastWarmDurations {
+		out[k] = v
+	}
+	return out
 }
 
 // NewMemStore allocates an empty MemStore with the full schema applied.

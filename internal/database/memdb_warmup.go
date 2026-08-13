@@ -1,7 +1,7 @@
 // file: internal/database/memdb_warmup.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000004
-// last-edited: 2026-08-11
+// last-edited: 2026-08-13
 
 package database
 
@@ -40,6 +40,28 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 	counts := map[string]int{}
 	scanned := map[string]int{}
 	skips := map[string]int{}
+	durations := map[string]time.Duration{}
+
+	// warm runs one prefix scan and records how long it took.
+	//
+	// Per-phase timing is the whole point. Warmup published a single total —
+	// 115,971 ms on production 2026-08-13 — which establishes that the library
+	// is wrong-or-unusable for about two minutes after every restart, but says
+	// nothing about which of the ten scans to attack. The ten are not
+	// comparable: "book:" scans ~7.5 keys per admitted row and inserts into a
+	// heavily indexed table, while "blocked:hash:" is a handful of rows into a
+	// table with one index. Optimizing without knowing the split would be
+	// guessing, and this codebase has already paid for one extrapolated
+	// data-structure cost estimate that was off by several times.
+	//
+	// Cost of the measurement itself: two time.Now() calls per prefix, twenty
+	// for the whole warmup.
+	warm := func(prefix, table string, fn func(key string, val []byte) (bool, error)) (int, int, error) {
+		phaseStart := time.Now()
+		rows, keys, err := warmIter(ctx, p.db, prefix, fn)
+		durations[table] = time.Since(phaseStart)
+		return rows, keys, err
+	}
 
 	// safeInsert tries to insert an object, logging+counting failures rather
 	// than aborting the warmup. Returns whether the row actually landed in
@@ -66,7 +88,7 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 	// Strip heavy fields (Description, BookSigV1, etc.) before insertion
 	// — see memdb_strip.go. Cuts radix-tree footprint from ~10GB to ~2GB
 	// on the production library.
-	if n, keys, err := warmIter(ctx, p.db, "book:", func(key string, val []byte) (bool, error) {
+	if n, keys, err := warm("book:", memTableBooks, func(key string, val []byte) (bool, error) {
 		if strings.Count(key, ":") != 1 {
 			return false, nil
 		}
@@ -83,7 +105,7 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 	}
 
 	// Authors: author:<id> (skip author:name:* index)
-	if n, keys, err := warmIter(ctx, p.db, "author:", func(key string, val []byte) (bool, error) {
+	if n, keys, err := warm("author:", memTableAuthors, func(key string, val []byte) (bool, error) {
 		if strings.Contains(key, ":name:") {
 			return false, nil
 		}
@@ -103,7 +125,7 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 	}
 
 	// Series: series:<id>
-	if n, keys, err := warmIter(ctx, p.db, "series:", func(key string, val []byte) (bool, error) {
+	if n, keys, err := warm("series:", memTableSeries, func(key string, val []byte) (bool, error) {
 		if strings.Count(key, ":") != 1 {
 			return false, nil
 		}
@@ -122,7 +144,7 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 	// BookFiles: book_file:<bookID>:<fileID>
 	// Strip AcoustIDSeg1..6 and fingerprint-diagnostic fields before
 	// insertion — see memdb_strip.go. Cuts ~70MB heap across 308K rows.
-	if n, keys, err := warmIter(ctx, p.db, "book_file:", func(key string, val []byte) (bool, error) {
+	if n, keys, err := warm("book_file:", memTableBookFiles, func(key string, val []byte) (bool, error) {
 		if strings.Count(key, ":") != 2 {
 			return false, nil
 		}
@@ -142,7 +164,7 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 	// One key yields many rows, so track the row count directly rather than
 	// letting warmIter infer it from the per-key admitted flag.
 	bookAuthorRows := 0
-	if _, keys, err := warmIter(ctx, p.db, "book_authors:", func(key string, val []byte) (bool, error) {
+	if _, keys, err := warm("book_authors:", memTableBookAuthors, func(key string, val []byte) (bool, error) {
 		var list []BookAuthor
 		if err := json.Unmarshal(val, &list); err != nil {
 			return false, nil
@@ -163,7 +185,7 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 
 	// BookNarrators: book_narrators:<bookID> contains []BookNarrator; flatten.
 	bookNarratorRows := 0
-	if _, keys, err := warmIter(ctx, p.db, "book_narrators:", func(key string, val []byte) (bool, error) {
+	if _, keys, err := warm("book_narrators:", memTableBookNarrators, func(key string, val []byte) (bool, error) {
 		var list []BookNarrator
 		if err := json.Unmarshal(val, &list); err != nil {
 			return false, nil
@@ -183,7 +205,7 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 	}
 
 	// Narrators: narrator:<id>
-	if n, keys, err := warmIter(ctx, p.db, "narrator:", func(key string, val []byte) (bool, error) {
+	if n, keys, err := warm("narrator:", memTableNarrators, func(key string, val []byte) (bool, error) {
 		var nrt Narrator
 		if err := json.Unmarshal(val, &nrt); err != nil {
 			return false, nil
@@ -197,7 +219,7 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 	}
 
 	// ImportPaths: import_path:<id> (skip import_path:path:* index)
-	if n, keys, err := warmIter(ctx, p.db, "import_path:", func(key string, val []byte) (bool, error) {
+	if n, keys, err := warm("import_path:", memTableImportPaths, func(key string, val []byte) (bool, error) {
 		if strings.Contains(key, ":path:") {
 			return false, nil
 		}
@@ -214,7 +236,7 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 	}
 
 	// AuthorAliases: author_alias:<id>
-	if n, keys, err := warmIter(ctx, p.db, "author_alias:", func(key string, val []byte) (bool, error) {
+	if n, keys, err := warm("author_alias:", memTableAuthorAliases, func(key string, val []byte) (bool, error) {
 		var aa AuthorAlias
 		if err := json.Unmarshal(val, &aa); err != nil {
 			return false, nil
@@ -228,7 +250,7 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 	}
 
 	// BlockedHashes: blocked:hash:<hash>
-	if n, keys, err := warmIter(ctx, p.db, "blocked:hash:", func(key string, val []byte) (bool, error) {
+	if n, keys, err := warm("blocked:hash:", memTableBlockedHashes, func(key string, val []byte) (bool, error) {
 		var bh DoNotImport
 		if err := json.Unmarshal(val, &bh); err != nil {
 			return false, nil
@@ -248,11 +270,23 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 	// prefix scan + JSON unmarshal). The scanner uses a single
 	// GetAllWorks at scan start, which is the only meaningful caller.
 
+	// Time the commit separately rather than folding it into the phase total.
+	// A single write txn is held open across all ten scans, so if go-memdb
+	// defers real work to commit, that cost would otherwise be invisible —
+	// attributed to nothing and sitting in the gap between the phase sum and
+	// duration_ms. Whether the fix is "parallelize the scans" or "don't hold
+	// one txn across all of them" turns on this number.
+	commitStart := time.Now()
 	txn.Commit()
+	commitDur := time.Since(commitStart)
+	commitMS := commitDur.Milliseconds()
+
+	durations[WarmupPhaseKeyCommit] = commitDur
 
 	m.warmCountsMu.Lock()
 	m.lastWarmCounts = maps.Clone(counts)
 	m.lastWarmScanned = maps.Clone(scanned)
+	m.lastWarmDurations = maps.Clone(durations)
 	m.warmCountsMu.Unlock()
 
 	slog.Info("memdb warmup complete",
@@ -268,6 +302,12 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 		"author_aliases", counts[memTableAuthorAliases],
 		"blocked_hashes", counts[memTableBlockedHashes],
 		"skipped_total", sumInts(skips),
+		// Per-phase milliseconds, keyed by table. The sum is less than
+		// duration_ms: the gap is txn.Commit plus the setup either side, and
+		// a large gap is itself the finding — it would mean the commit, not
+		// the scans, is what holds the library down for two minutes.
+		"phase_ms", durationsMillis(durations),
+		"commit_ms", commitMS,
 	)
 	if len(skips) > 0 {
 		slog.Warn("memdb warmup: rows skipped by table",
@@ -281,6 +321,17 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 	}
 
 	return nil
+}
+
+// durationsMillis renders per-phase durations as whole milliseconds keyed by
+// table, so the warmup log carries a breakdown a reader can act on instead of
+// a single total that only says "slow".
+func durationsMillis(d map[string]time.Duration) map[string]int64 {
+	out := make(map[string]int64, len(d))
+	for table, dur := range d {
+		out[table] = dur.Milliseconds()
+	}
+	return out
 }
 
 func sumInts(m map[string]int) int {
