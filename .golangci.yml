@@ -1,0 +1,124 @@
+# file: .golangci.yml
+# version: 1.0.0
+# guid: 8d2a1f47-6c93-4b0e-a15d-7f3e28c9b604
+# last-edited: 2026-08-11
+
+# Wave 0 of the silent-failure sweep.
+# See docs/audits/2026-08-11-silent-failure-error-discards.md
+#
+# Scope: this file enables EXACTLY ONE linter (errcheck). It is deliberately
+# not a general-purpose lint config — `linters.default: none` keeps the
+# reported number an errcheck number, so the before/after counts in the Wave 0
+# PR stay attributable. Adding more linters here is a separate decision.
+#
+# WHY check-blank IS ON:
+#   errcheck's default ignores `_ = f()`. That single form is 100% of the
+#   1,125 statement-position discards the audit measured, i.e. every silent
+#   failure waves 4-13 exist to fix. Without check-blank this linter is inert
+#   for its entire purpose. It is on, and that is the point of the file.
+#
+# WHY THERE IS AN EXCLUDE LIST:
+#   Un-exempted, this config reports 2,326 findings. 54% of the audit's
+#   population is progress/log reporting whose only failure mode is "the
+#   progress bar didn't update" — handling it would mean logging about a
+#   failure to log. A linter that reports 2,326 findings gets switched off by
+#   whoever sees it next, so bucket (f) is exempted BY NAME, before the linter
+#   was ever wired up.
+#
+# HOW TO ADD AN EXEMPTION:
+#   errcheck matches the FULLY-QUALIFIED name (`(module/path.Type).Method`),
+#   never the variable name at the call site. `reporter.Log` as written below
+#   would silently match nothing. Always confirm a new entry by delta: run
+#   `make lint-errcheck-full`, add the line, re-run, and check the count
+#   actually dropped. A non-matching pattern is indistinguishable from a
+#   matching one if you only measure once.
+
+version: "2"
+
+run:
+  # The audit's population is non-test files. Test files have their own
+  # error-handling conventions and are out of scope for the sweep.
+  tests: false
+  timeout: 15m
+
+linters:
+  default: none
+  enable:
+    - errcheck
+
+  settings:
+    errcheck:
+      # See "WHY check-blank IS ON" above. Do not turn this off.
+      check-blank: true
+      # Type assertions are a different defect class; not part of this sweep.
+      check-type-assertions: false
+
+      exclude-functions:
+        # ---------------------------------------------------------------
+        # Bucket (f): progress / log reporting.
+        # Audit: 606 of 1,125 statement-position discards (53.9%).
+        # Only failure mode is a missed progress-bar tick.
+        # sdk.Reporter is a type ALIAS for registry.Reporter, so the two
+        # entries below cover the plugin SDK as well.
+        # ---------------------------------------------------------------
+        - (github.com/falkcorp/audiobook-organizer/internal/operations/registry.Reporter).Log
+        - (github.com/falkcorp/audiobook-organizer/internal/operations/registry.Reporter).UpdateProgress
+        - (github.com/falkcorp/audiobook-organizer/internal/operations.ProgressReporter).Log
+        - (github.com/falkcorp/audiobook-organizer/internal/operations.ProgressReporter).UpdateProgress
+        - (github.com/falkcorp/audiobook-organizer/internal/dedup.ProgressReporter).Log
+        - (github.com/falkcorp/audiobook-organizer/internal/dedup.ProgressReporter).UpdateProgress
+        # Concrete adapters that wrap a Reporter; same benign shape.
+        - (github.com/falkcorp/audiobook-organizer/internal/scheduler.extraOpsProgressAdapter).Log
+        - (github.com/falkcorp/audiobook-organizer/internal/scheduler.extraOpsProgressAdapter).UpdateProgress
+        - (github.com/falkcorp/audiobook-organizer/internal/server.registryProgressAdapter).Log
+        - (github.com/falkcorp/audiobook-organizer/internal/server.registryProgressAdapter).UpdateProgress
+
+        # ---------------------------------------------------------------
+        # Bucket (f): Close on READ handles and iterators.
+        #
+        # ⚠️ DELIBERATELY NOT EXEMPTED: (*os.File).Close, and any
+        # gzip/zip/bufio writer Close. A Close error on a handle you just
+        # WROTE is exactly where a delayed-write failure surfaces — the
+        # audit flags this and did not classify the 54 Close sites into
+        # read vs write. errcheck cannot express "read handle", so the
+        # split below is by TYPE: types that can only be read or whose
+        # Close is a pure resource release are exempt; file writers are
+        # left visible on purpose and are a candidate for a later wave.
+        # ---------------------------------------------------------------
+        - (io.Closer).Close
+        - (io.ReadCloser).Close
+        - (net.Conn).Close
+        - (net.Listener).Close
+        # Pebble iterators are read handles. Pebble Batch.Close is a resource
+        # release — per the audit, the error that actually matters on a batch
+        # is on Commit, which is NOT exempted.
+        - (*github.com/cockroachdb/pebble/v2.Iterator).Close
+        - (*github.com/cockroachdb/pebble/v2.Batch).Close
+        - (*github.com/cockroachdb/pebble/v2.Snapshot).Close
+
+        # ---------------------------------------------------------------
+        # Bucket (f): HTTP response writes. A failed response write means
+        # the client disconnected; there is nobody left to tell.
+        # ---------------------------------------------------------------
+        - (*encoding/json.Encoder).Encode
+
+        # ---------------------------------------------------------------
+        # Bucket (f): temp-file cleanup.
+        # Caveat from the audit: internal/itunes/itl_safe_write.go removes a
+        # staged .itl.new on a rejected write. A leaked .itl.new next to a
+        # live library is confusing but not destructive (rated 🟢 Low), so it
+        # rides along with this exemption rather than blocking Wave 0.
+        # ---------------------------------------------------------------
+        - os.Remove
+        - os.RemoveAll
+
+  exclusions:
+    generated: lax
+    paths:
+      - web/
+
+issues:
+  # Report every finding. Defaults cap at 50/linter and 3/identical, which
+  # would make the before/after counts meaningless.
+  max-issues-per-linter: 0
+  max-same-issues: 0
