@@ -1395,6 +1395,7 @@ func (s *Server) setupRoutes() {
 			protected.POST("/operations/mark-broken-segments", s.perm(auth.PermSettingsManage), s.markBrokenSegmentBooksHandler)
 			protected.POST("/operations/merge-novg-duplicates", s.perm(auth.PermSettingsManage), s.mergeNoVGDuplicatesHandler)
 			protected.POST("/operations/assign-orphan-vgs", s.perm(auth.PermSettingsManage), s.assignOrphanVGsHandler)
+			protected.POST("/operations/elect-missing-primaries", s.perm(auth.PermSettingsManage), s.electMissingPrimariesHandler)
 
 			// Import routes
 			protected.POST("/import/collision-preview", s.perm(auth.PermLibraryView), s.handleImportCollisionPreview)
