@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
-// last-edited: 2026-08-10
+// last-edited: 2026-08-13
 
 package maintenance
 
@@ -88,6 +88,7 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		// folder (1,019 of them). This op re-runs the same classifier over just
 		// that flagged set with real ffprobe durations filled in.
 		p.probeDirectoryBooksDef(),
+		p.chaptersBackfillDef(),
 		p.itunesHealDef(),
 		p.introTranscribeDef(),
 		p.repairTranscribeStatusDef(),
