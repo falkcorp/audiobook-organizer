@@ -1,7 +1,7 @@
 // file: internal/server/metadata_ops.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
-// last-edited: 2026-07-16
+// last-edited: 2026-08-13
 //
 // Async-operation machinery for the metadata domain, relocated verbatim from
 // metadata_handlers.go (ADR-003 Phase 4) when the 19 metadata HTTP handlers
@@ -466,6 +466,17 @@ func (s *Server) resolveFilterToBookIDs(ctx context.Context, f operations.Filter
 	for _, ff := range f.FieldFilters {
 		if IsPerUserField(ff.Field) {
 			continue
+		}
+		// Refuse an empty value rather than resolving it. strings.Contains(x, "")
+		// is always true, so an empty-valued filter matches EVERY book — and this
+		// function resolves to concrete book IDs for a BACKGROUND OPERATION with
+		// a limit of 100,000. Silently widening a targeted op to the whole
+		// library is exactly the base64 op-params defect (#2309) one level down,
+		// and unlike the list endpoint there is no HTTP boundary here to catch
+		// it: params arrive already deserialized from the operation queue.
+		if ff.Value == "" {
+			return nil, fmt.Errorf("filter on %q has an empty value, which would match every "+
+				"book and target the entire library; refusing to resolve it", ff.Field)
 		}
 		filters.FieldFilters = append(filters.FieldFilters, FieldFilter{
 			Field:   ff.Field,
