@@ -1,7 +1,7 @@
 // file: internal/config/persistence.go
-// version: 1.31.0
+// version: 1.32.0
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
-// last-edited: 2026-08-11
+// last-edited: 2026-08-12
 
 package config
 
@@ -748,7 +748,33 @@ func LoadConfigFromDatabase(store database.SettingsStore) error {
 			}
 		}
 
-		var loaded Config
+		// Start from the CURRENT config — which already holds the viper
+		// defaults, plus anything from the config file, env and flags — and let
+		// the blob override only the fields it actually contains.
+		//
+		// This used to be `var loaded Config`, i.e. an all-zero struct, followed
+		// by `*c = loaded`. That threw away every default wholesale: a field
+		// absent from the stored JSON did not fall back to its default, it got
+		// Go's zero value. encoding/json leaves absent fields untouched, so
+		// seeding from Snapshot() is what makes "absent" mean "use the default"
+		// instead of "use zero".
+		//
+		// The consequence of the old behaviour was not theoretical. A blob is
+		// written once and then reloaded on every boot, so any field added to
+		// Config AFTER that blob was saved was pinned to zero forever, and no
+		// later change to its default could ever reach the install. Measured on
+		// production 2026-08-12: every key under scheduled.* was {enabled:false,
+		// interval:0}, including library_scan, whose shipped defaults are
+		// enabled=true / interval=360. library_scan is the only unattended
+		// discovery path for newly added books, so nothing had been scanning —
+		// the feature shipped in #2315, deployed correctly, and was zeroed on
+		// load.
+		//
+		// A value the operator really did set to false/0 is present in the blob
+		// and still wins, which is the intended precedence. Only genuinely
+		// ABSENT keys change meaning.
+		loaded := Snapshot()
+		loaded.DatabaseType = savedDBType
 		if err := json.Unmarshal([]byte(blobStr), &loaded); err == nil {
 			// WHY Mutate: whole-struct assignment races with HTTP readers.
 			Mutate(func(c *Config) {
@@ -757,6 +783,18 @@ func LoadConfigFromDatabase(store database.SettingsStore) error {
 			})
 			blobFound = true
 			slog.Info("Loaded config from blob ( bytes)", "count", len(blob.Value))
+
+			// Name every key the blob did not contain and that therefore kept
+			// its default. Before the seeding fix those keys were silently
+			// zeroed, so an operator had no way to see that a shipped default
+			// had been discarded. Now the inheritance is stated at boot.
+			//
+			// Measured on production 2026-08-12 against the blob in place at the
+			// time: 33 keys inherit a non-zero default this way, including
+			// scheduled.library_scan.{enabled,interval}. Logged rather than
+			// suppressed precisely because that is a behaviour change an
+			// operator must be able to see and audit after an upgrade.
+			logDefaultsPreservedOverBlob(blobStr, loaded)
 		} else {
 			slog.Warn("Failed to parse config_blob — falling back to individual keys", "err", err)
 		}
