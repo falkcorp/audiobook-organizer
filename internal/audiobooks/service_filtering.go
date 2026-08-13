@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_filtering.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: b4e8c3d2-e5f6-7a80-9b0c-1d2e3f4a5b6c
 // last-edited: 2026-08-13
 
@@ -587,9 +587,6 @@ func bookSummariesToBooks(summaries []database.BookSummary) []database.Book {
 // re-slicing an already-paginated page by the original offset is what made
 // "page 2" (any offset>0) return zero rows.
 func (svc *AudiobookService) summariesPushdown(limit, offset int, isPrimary *bool, sortBy string, sortAscending, excludeQuarantined bool) (summaries []database.BookSummary, didPushdown bool, err error) {
-	type filteredSummaryStore interface {
-		GetAllBookSummariesFiltered(limit, offset int, f database.BookSummaryFilter) ([]database.BookSummary, error)
-	}
 	filter := database.BookSummaryFilter{
 		IsPrimaryVersion:   isPrimary,
 		SortBy:             sortBy,
@@ -610,6 +607,45 @@ func (svc *AudiobookService) summariesPushdown(limit, offset int, isPrimary *boo
 	return s, false, e
 }
 
+// filteredSummaryStore is the fast-path contract for pushing a
+// BookSummaryFilter down into the store.
+//
+// The marker method is the point. This interface used to be declared inline
+// as GetAllBookSummariesFiltered alone, and the callers below read a
+// successful type assertion as proof the filter had been applied — then
+// skipped their own post-filter pass on the strength of it. But a type
+// assertion answers "does this type have the method?", never "did the method
+// honor the filter?". PebbleStore satisfied it while its memdb-unavailable
+// fallback applied only 2 of 8 predicates, so a filtered library query issued
+// during the ~2 minute startup warmup returned very nearly the whole library
+// and the post-filter pass that would have caught it was skipped by design.
+//
+// Requiring a second, purpose-built method makes the default fail-safe: a
+// store that has not deliberately declared full conformance simply does not
+// satisfy this interface, so didPushdown is false and the caller post-filters
+// in memory — slower, but correct. Partial conformance now requires an
+// explicit false claim rather than arriving by omission.
+//
+// See PebbleStore.HonorsEveryBookSummaryFilter for what implementing it
+// commits to.
+type filteredSummaryStore interface {
+	GetAllBookSummariesFiltered(limit, offset int, f database.BookSummaryFilter) ([]database.BookSummary, error)
+	HonorsEveryBookSummaryFilter()
+}
+
+// countingFilteredStore is the count-side half of filteredSummaryStore, and
+// carries the same conformance requirement for the same reason.
+//
+// The count path is the less forgiving of the two: countSummariesPushdownFiltered
+// returns this store's number directly with no post-filter correction
+// available, so a partial implementer here produces a wrong pagination total
+// with nothing downstream to catch it. That is how a filtered query came back
+// reporting a total of 63,870.
+type countingFilteredStore interface {
+	CountBookSummariesFiltered(f database.BookSummaryFilter) (int, error)
+	HonorsEveryBookSummaryFilter()
+}
+
 // summariesPushdownFiltered runs the full pushdown — every filter the
 // memdb walker can apply in-loop is on the BookSummaryFilter. Returns at
 // most `limit` summaries (after `offset` matches are skipped). Walker
@@ -621,9 +657,6 @@ func (svc *AudiobookService) summariesPushdown(limit, offset int, isPrimary *boo
 // non-memdb test path). This boolean is the contract that lets the
 // caller skip the post-filter pass safely in production.
 func (svc *AudiobookService) summariesPushdownFiltered(limit, offset int, filter database.BookSummaryFilter) (summaries []database.BookSummary, didPushdown bool, err error) {
-	type filteredSummaryStore interface {
-		GetAllBookSummariesFiltered(limit, offset int, f database.BookSummaryFilter) ([]database.BookSummary, error)
-	}
 	if fs, ok := svc.store.(filteredSummaryStore); ok {
 		s, e := fs.GetAllBookSummariesFiltered(limit, offset, filter)
 		return s, true, e
@@ -648,9 +681,6 @@ func (svc *AudiobookService) summariesPushdownFiltered(limit, offset int, filter
 // itself fell back to unfiltered summaries (mock/non-memdb path), we
 // re-apply the filter here so the count is still correct.
 func (svc *AudiobookService) countSummariesPushdownFiltered(filter database.BookSummaryFilter) (int, error) {
-	type countingFilteredStore interface {
-		CountBookSummariesFiltered(f database.BookSummaryFilter) (int, error)
-	}
 	if cs, ok := svc.store.(countingFilteredStore); ok {
 		return cs.CountBookSummariesFiltered(filter)
 	}
