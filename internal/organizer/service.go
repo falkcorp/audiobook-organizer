@@ -986,6 +986,31 @@ func (orgSvc *Service) organizeBooks(ctx context.Context, booksToOrganize []data
 						statsMu.Lock()
 						stats.Failed++
 						statsMu.Unlock()
+
+						// Record the failure against the operation, the same
+						// way the file-operation failure path above does.
+						//
+						// This branch used to increment stats.Failed and jump
+						// straight to the progress label, writing no
+						// OperationChange at all. The consequence is not a
+						// missing log line — CreateOrganizedVersion logs its
+						// own error — it is that the operation's summary and
+						// the operation's change log DISAGREE, with nothing
+						// saying so. Reconciling "the op reports N failed"
+						// against the organize_failed rows silently returns
+						// fewer than N, and the gap looks like clean books
+						// rather than unrecorded failures.
+						if operationID != "" {
+							_ = orgSvc.db.CreateOperationChange(&database.OperationChange{
+								ID:          ulid.Make().String(),
+								OperationID: operationID,
+								BookID:      book.ID,
+								ChangeType:  "organize_failed",
+								FieldName:   "file_path",
+								OldValue:    oldPath,
+								NewValue:    createErr.Error(),
+							})
+						}
 						goto progress
 					}
 
