@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/chapters_backfill_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8a41c0e6-52b7-4d93-9f18-7c3ea05b61d4
 // last-edited: 2026-08-13
 
@@ -9,6 +9,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -500,6 +502,159 @@ func TestChaptersBackfill_ProgressLabelReportsEligibleCount(t *testing.T) {
 				t.Fatalf("final per-item label = %q, want it to contain %q\n"+
 					"a label that lags the work it describes makes a multi-hour "+
 					"run look like it is doing nothing", last, want)
+			}
+		})
+	}
+}
+
+// ── case 10: the fallback must fire on a MISSING path, not only an EMPTY one ──
+//
+// 🔴 THE DEFECT THIS GUARDS. Path resolution originally fell back to
+// Book.FilePath only when the BookFile row's path was the empty string. A
+// move/organize updates Book.FilePath and leaves the BookFile row pointing at
+// the old location, so the common failure is a path that is POPULATED and
+// WRONG — which sailed past the emptiness check and died inside ffprobe, where
+// it was tallied as a probe failure rather than the resolution failure it was.
+//
+// Measured on production 2026-08-13, whole-library dry run: probe-failed=16130,
+// 33.7% of single-file books. An independent `test -e` sweep over a 400-book
+// random sample agreed at 88/295 = 29.8%, ruling out ffprobe concurrency
+// exhaustion as the cause. Of those 88, 86 had a Book.FilePath that WAS a
+// regular file on disk — i.e. ~97% were recoverable and were being discarded.
+//
+// 🔴 THESE CASES USE REAL FILES ON DISK, unlike every other test in this file.
+// That is load-bearing, not incidental: the other cases seed synthetic paths
+// like /lib/Title/track00.m4b that have never existed, so to them EVERY path is
+// missing and a fallback keyed on existence is indistinguishable from one keyed
+// on emptiness. A suite of synthetic paths cannot detect this bug in either
+// direction, which is exactly how it shipped.
+//
+// The assertion is on WHICH PATH THE PROBE RECEIVED, not on whether chapters
+// landed. The stub returns chapters for any input, so "chapters were persisted"
+// is satisfied by the pre-fix code in the both-exist case and would not fail.
+type chbfPathSpy struct {
+	mu     chan struct{}
+	paths  []string
+	result []audioutil.Chapter
+}
+
+func (s *chbfPathSpy) install(t *testing.T) {
+	t.Helper()
+	s.mu = make(chan struct{}, 1)
+	prev := probeChaptersFn
+	probeChaptersFn = func(_ context.Context, _, path string) ([]audioutil.Chapter, error) {
+		s.mu <- struct{}{}
+		s.paths = append(s.paths, path)
+		<-s.mu
+		return s.result, nil
+	}
+	t.Cleanup(func() { probeChaptersFn = prev })
+}
+
+// chbfSeedBookAt creates a single-file book with explicitly chosen paths, so a
+// test can make the BookFile path and the Book path disagree.
+func chbfSeedBookAt(t *testing.T, s *database.PebbleStore, title, bookPath, bookFilePath string) string {
+	t.Helper()
+	bk, err := s.CreateBook(&database.Book{Title: title, FilePath: bookPath})
+	if err != nil {
+		t.Fatalf("CreateBook(%s): %v", title, err)
+	}
+	if err := s.CreateBookFile(&database.BookFile{BookID: bk.ID, FilePath: bookFilePath}); err != nil {
+		t.Fatalf("CreateBookFile(%s): %v", title, err)
+	}
+	return bk.ID
+}
+
+// chbfTouch creates an empty regular file and returns its path.
+func chbfTouch(t *testing.T, dir, name string) string {
+	t.Helper()
+	p := filepath.Join(dir, name)
+	if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%s): %v", p, err)
+	}
+	return p
+}
+
+func TestChaptersBackfill_FallsBackWhenBookFilePathIsMissingNotOnlyEmpty(t *testing.T) {
+	if testing.Short() {
+		t.Skip("seeds a real PebbleStore and real files; skipped in -short")
+	}
+
+	tmp := t.TempDir()
+	realBook := chbfTouch(t, tmp, "organized.m4b")
+	realBookFile := chbfTouch(t, tmp, "authoritative.m4b")
+	missing := filepath.Join(tmp, "moved-away.m4b") // deliberately never created
+
+	cases := []struct {
+		name         string
+		bookPath     string
+		bookFilePath string
+		wantProbed   string
+		wantRecover  int // expected recovered-via-book-path count
+		why          string
+	}{{
+		name:         "bookfile path missing, book path resolves",
+		bookPath:     realBook,
+		bookFilePath: missing,
+		wantProbed:   realBook,
+		wantRecover:  1,
+		why:          "the 16,130-book production case: populated but stale",
+	}, {
+		name:         "both resolve",
+		bookPath:     realBook,
+		bookFilePath: realBookFile,
+		wantProbed:   realBookFile,
+		wantRecover:  0,
+		why: "the BookFile row is the more specific source and must WIN when it " +
+			"resolves; silently preferring whichever was checked last would " +
+			"reroute every book in the library, not just the broken ones",
+	}, {
+		name:         "neither resolves",
+		bookPath:     missing,
+		bookFilePath: missing,
+		wantProbed:   missing,
+		wantRecover:  0,
+		why: "with no working alternative the original path is kept and the " +
+			"failure is still counted as a probe failure — the fallback must " +
+			"not invent a resolution it does not have",
+	}, {
+		name:         "book path is a directory",
+		bookPath:     tmp,
+		bookFilePath: missing,
+		wantProbed:   missing,
+		wantRecover:  0,
+		why: "a multi-file book's Book.FilePath is its FOLDER; handing a " +
+			"directory to ffprobe yields a confusing decode error instead of " +
+			"a clean skip, so existence alone is not a sufficient test",
+	}}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			chbfStubFFprobe(t)
+			spy := &chbfPathSpy{result: chbfChapters()}
+			spy.install(t)
+
+			s := chbfStore(t)
+			chbfSeedBookAt(t, s, "Relocated Book", tc.bookPath, tc.bookFilePath)
+
+			rep := newCHBFLabelReporter()
+			chbfRunWith(t, s, chaptersBackfillParams{Apply: true}, rep)
+
+			if len(spy.paths) != 1 {
+				t.Fatalf("probed %d paths, want exactly 1: %v", len(spy.paths), spy.paths)
+			}
+			if spy.paths[0] != tc.wantProbed {
+				t.Fatalf("probed %q, want %q\n%s", spy.paths[0], tc.wantProbed, tc.why)
+			}
+
+			// The fallback count must be reported SEPARATELY and never folded
+			// into the persisted total: these rows are written from a secondary
+			// path source, and if that source is ever wrong there has to be a
+			// way to identify the affected books after the fact.
+			summary := rep.labels[len(rep.labels)-1]
+			want := fmt.Sprintf("recovered-via-book-path=%d", tc.wantRecover)
+			if !strings.Contains(summary, want) {
+				t.Fatalf("summary = %q, want it to contain %q", summary, want)
 			}
 		})
 	}
