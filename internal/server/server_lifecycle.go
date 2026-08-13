@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 3.13.0
+// version: 3.14.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-08-13
 
@@ -1101,6 +1101,12 @@ func (s *Server) startBackfills() {
 		go func() {
 			defer s.bgWG.Done("build-search-index")
 			s.buildSearchIndexIfEmpty()
+			// buildSearchIndexIfEmpty only runs on an EMPTY index, so a
+			// build that was cancelled by a previous shutdown leaves a
+			// permanent gap it will never revisit. Seed the dirty set for
+			// the shortfall so the reconciler repairs it. See
+			// search_coverage.go.
+			s.reconcileSearchIndexCoverage()
 		}()
 	}
 

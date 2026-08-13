@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
-// last-edited: 2026-08-12
+// last-edited: 2026-08-13
 
 package audiobooks
 
@@ -138,6 +138,13 @@ func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit i
 					"window", searchPostFilterWindow, "query", search)
 			}
 		} else {
+			// No search index at all. store.SearchBooks is a *whole-query
+			// substring* match over title/author/narrator only — it does not
+			// tokenise, so a multi-word query like "jobs classes" matches
+			// nothing rather than ANDing the terms. That is a large, silent
+			// behaviour change from the Bleve path, so say it happened.
+			slog.Warn("search: search index is nil; falling back to substring SearchBooks",
+				"query", search, "fallback", "store.SearchBooks")
 			books, err = svc.store.SearchBooks(search, limit, offset)
 		}
 	} else if authorID != nil {
@@ -667,6 +674,15 @@ func (svc *AudiobookService) searchWithBleve(query string, limit, offset int, us
 		// Parser failure: fall back to the substring search path so
 		// users still see results for simple queries the DSL parser
 		// rejects (e.g. punctuation-heavy book titles).
+		//
+		// This fallback was silent until 2026-08-13. It swaps a tokenised
+		// full-text index for a whole-query substring match over
+		// title/author/narrator, which changes results dramatically, and
+		// nothing in the logs said so — an investigation into wrong search
+		// results had to rule this path out by probing production instead of
+		// reading a log line.
+		slog.Warn("search: DSL parse failed; falling back to substring SearchBooks",
+			"query", query, "err", err, "fallback", "store.SearchBooks")
 		books, sErr := svc.store.SearchBooks(query, limit, offset)
 		// SearchBooks exposes no match count, so the only honest figure
 		// available here is the page length. Callers must not treat this as
@@ -675,6 +691,11 @@ func (svc *AudiobookService) searchWithBleve(query string, limit, offset int, us
 	}
 	bleveQ, perUser, err := search.Translate(ast)
 	if err != nil {
+		// Same silent-degradation hazard as the parse-failure branch above:
+		// the query parsed fine but could not be expressed as a Bleve query,
+		// and the user silently gets substring results instead.
+		slog.Warn("search: query translation failed; falling back to substring SearchBooks",
+			"query", query, "err", err, "fallback", "store.SearchBooks")
 		books, sErr := svc.store.SearchBooks(query, limit, offset)
 		return books, len(books), sErr
 	}

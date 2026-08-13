@@ -1,20 +1,64 @@
 <!-- file: docs/handoffs/2026-08-13-web-search-returns-unrelated-books.md -->
-<!-- version: 2.0.0 -->
+<!-- version: 3.0.0 -->
 <!-- guid: b2f4a7c1-53de-4e08-9a16-7cc0e5d1f3b8 -->
 <!-- last-edited: 2026-08-13 -->
 
 # Handoff: web-UI search returns unrelated books
 
-**Status: ROOT CAUSE CONFIRMED against production 2026-08-13 17:40 EDT.** Search is not
-broken. 6,157 books are hidden from the entire web UI by a data defect. See "The actual
-cause" immediately below; the hypothesis sections that follow are kept only as a record
-of what was ruled out, and **both of the ones this document originally called "still
-open" are now disproven.**
+**Status: RESOLVED 2026-08-13 (v3.0.0).** Two sessions investigated this in parallel and
+reached opposite conclusions. Reconciled here against production data: **hypothesis A
+(the index does not contain the book) is CONFIRMED; hypothesis B (nil index / substring
+fallback) is REFUTED; and the v2.0.0 conclusion that "search is fine, a primary-less
+`vg-` group is hiding it" is WRONG for the reported book** — its version group has two
+members and *does* elect a primary. See "Correction to v2.0.0" below before reading the
+v2.0.0 section, which is kept intact because its `vg-` observation is a real, separate
+lead that just needs re-counting.
 **Reported:** 2026-08-13 by the owner.
 
 ---
 
-## The actual cause (confirmed, v2.0.0)
+## Correction to v2.0.0 (added v3.0.0)
+
+The v2.0.0 section below concludes that the reported book is hidden because its copies
+sit in `vg-`-prefixed **singleton groups that elect no primary**. That is not what the
+data says. A **third** row carries this title, and v2.0.0 never saw it:
+
+```
+id=01KZRBPPCFP6PV39F4Q5CZZZ85  primary=TRUE   group=vg-01KXXVFEHRXGXMKPDYMY6HENDK
+id=01KXXVFEKD3XE0VBQ5HVXNWB86  primary=False  group=vg-01KXXVFEHRXGXMKPDYMY6HENDK   <- v2.0.0 called this a primary-less singleton
+```
+
+**Same group.** It has (at least) two members and it *does* elect a primary. So the
+`is_primary_version=true` filter is not what removes this book from the results — there
+is a perfectly good primary row for the filter to keep.
+
+It is missing for a different reason: **`01KZRBPPCF…` is absent from the Bleve index.**
+It returns from a direct store lookup and returns nothing under three separate queries
+whose terms are all in its title. The two rows that *do* rank #1–#2 without the filter
+are the two non-primary copies, which *are* indexed. Filter to primaries and the only
+row that qualifies is the one the index cannot see, so the result is the five
+description-matches — the owner's screenshot.
+
+**Why v2.0.0 could not see it:** it enumerated rows by *searching*. A row missing from
+the search index is invisible to that method by construction, so the enumeration found
+two rows, saw both non-primary, and concluded no primary existed.
+
+**The 6,157 figure needs re-deriving before anyone acts on it.** It was computed by
+paging the `is_primary_version=false` set and grouping by `version_group_id`. A group's
+primary member is *by definition excluded from that set*, so "one book per group" in
+that data can only mean "one **non-primary** book per group" — which is also the shape
+of a perfectly healthy two-member group. `vg-01KXXVFEHRXGXMKPDYMY6HENDK` is a concrete
+counterexample: it is inside the 6,157 and it has a primary. Re-count by fetching each
+candidate group's *full* membership before calling it primary-less.
+
+To be explicit about what survives: **`vg-` prefixed group ids appearing only in a
+bounded creation window is still an interesting, unexplained observation** and worth
+chasing. What does not survive is "these groups have no primary" and the count attached
+to it.
+
+---
+
+## The actual cause (v2.0.0 — SUPERSEDED, see correction above)
 
 The search engine returns the right answer. For `All Jobs and Classes` the API returns
 `count=8` with the owner's book ranked **first and second**. The web UI then discards
@@ -89,9 +133,113 @@ explanation for the web-vs-app split that this document was originally written t
 ## Original v1.0.0 investigation — kept as a record of what was ruled out
 
 Everything below was written before the cause was known. The "Eliminated" section is
-still accurate and still useful. **The "Still open" section is now disproven: hypothesis A
-(index missing books) is wrong — Bleve found the books and ranked them first; hypothesis B
-(nil index / fallback) is wrong for the same reason.** Do not spend time on either.
+still accurate and still useful.
+
+> **v3.0.0 correction:** v2.0.0 marked *both* still-open hypotheses disproven on the
+> grounds that "Bleve found the books and ranked them first." Bleve found the two
+> **non-primary** copies. It did not find the primary one. **Hypothesis A is therefore
+> CONFIRMED, not disproven** — see "Correction to v2.0.0" at the top. Hypothesis B *is*
+> correctly refuted, though by a different argument: `PebbleStore.SearchBooks` is a
+> whole-query substring matcher, so if it were serving, `search=jobs classes` would
+> return 0 rather than 8, and reversing the word order would not return a byte-identical
+> set.
+
+---
+
+## Resolution (2026-08-13)
+
+### The bug reproduced exactly
+
+With the parameters the Library page actually sends (`is_primary_version=true`, which
+the original report did not mention), production returned **exactly the owner's five
+books and nothing else**:
+
+```
+search=All Jobs and Classes&is_primary_version=true  ->  count=5
+  Dragon Conjurer / Parallax Rising / All in Charisma /
+  Dungeon Diving Culinary Wizard / Solo Leveling, Vol. 2
+```
+
+Without that filter the same query returns **8**, with the two correct books ranked
+**1 and 2**. So relevance was never the problem, and the "unfiltered slice of the
+library" reading was wrong: all five survivors legitimately match, on the
+**description** field (boost 0.5 — visible in the query JSON), because after stopword
+dropping the query is `job AND class` stemmed, and each decoy's description contains
+both ("*I went to class, worked my minimum-wage job*").
+
+### Why the correct books vanished — Hypothesis A, narrowed
+
+Three rows carry the title (which is what the app returns, closing the 3-vs-2 gap):
+
+| id | primary | in Bleve |
+|---|---|---|
+| `01KXXVFEKD…` | false | yes |
+| `01KZRBPPCF…` | **true** | **NO** |
+| `01KXXVBGQG…` | false | yes |
+
+The index does contain the title — but **not the primary row**, which is the only row
+the Library page's filter keeps. `01KZRBPPCF…` (created 2026-08-11) returns from a
+direct memdb lookup and is absent from Bleve under three different queries whose terms
+are all in its title. Four further distinctive-title probes behaved identically, with
+result counts of 4–9, so a top-N ranking confound is excluded.
+
+The gap is systemic and shaped like a step function:
+
+| created | searchable | missing | coverage |
+|---|---|---|---|
+| 2026-04 | 38 | 1 | **97%** |
+| 2026-08 | 1 | 50 | **2%** |
+
+(Sampling caveat: a first pass reported 2026-04 at 73%. That was a measurement
+artifact — querying full titles containing `:` makes the server DSL parse `System:` as
+`field:value`. Stripping punctuation removed it. Result sets at the page cap are
+counted "inconclusive" rather than "missing", since a capped set cannot prove absence.)
+
+### Mechanism
+
+`buildSearchIndexIfEmpty` (`internal/server/server_search.go`) is the only bulk build
+and gates on `DocCount() == 0` — "non-empty means complete". The loop honours
+`s.bgCtx`, so a shutdown part-way through leaves a populated-but-incomplete index; the
+next boot sees `count > 0` and returns early, making the gap **permanent**. It walks
+books in ULID order and ULIDs are time-ordered, so a cancellation always loses the
+**newest** books — which is exactly the step function measured.
+
+The #2268 dirty-set reconciler does not cover it. `markIndexDirty` is called from
+exactly one place — `enqueueIndex`'s queue-full branch — so it repairs *dropped* events
+only. A book the backfill never reached was never enqueued, is never dirty, and is
+never reconciled. (The reconciler itself *is* started, at
+`server_lifecycle.go:301` — that was verified, not assumed.)
+
+### Why Hypothesis B is refuted
+
+`PebbleStore.SearchBooks` is a **whole-query substring** match over
+title/author/narrator only; it never tokenises and never reads description. If it were
+serving, `search=jobs classes` would return 0. It returned 8, and `classes jobs`
+returned a byte-identical set — order-independent token AND, i.e. Bleve. There is also
+no version-group collapse anywhere on the query path (checked, because a dedup keeping
+the wrong group member would have produced the same five-row output with a healthy
+index); the only primary handling is a per-book pass/fail filter.
+
+### Fix
+
+`internal/server/search_coverage.go` — on boot, compare indexed docs against book
+count and, when short, mark the books dirty so the shipped reconciler re-indexes them.
+It seeds the durable dirty set rather than re-running the build, because re-running
+would reuse the same non-resumable, cancellable loop that created the permanent gap.
+Plus the logging this document asked for on all three silent fallbacks.
+
+Regression tests are in `internal/server/search_coverage_test.go` — deliberately in
+`internal/server`, not `internal/search`: a search-layer test seeds its own index and
+therefore *cannot* fail on missing documents. Both were proven to fail with the fix
+disabled (`3 docs indexed, want 6`) and restored byte-identical.
+
+### Not fixed here, filed separately
+
+The two independent defects this document records (stopword dropping, quoted phrases
+not becoming phrases) are both confirmed **measured** in the query JSON — neither
+causes this bug. They are in `todo.d/20260813-search-index-coverage-followups.md`
+along with the prod-rebuild decision, an unexposed metric, and a version group with no
+primary member.
 
 ---
 
@@ -144,6 +292,11 @@ the live footgun in the next section.)
 ---
 
 ## Still open — start here
+
+> **Superseded 2026-08-13.** Both hypotheses below have been decided against a running
+> server: **A confirmed** (narrowed — it is the *primary* row that is missing, not the
+> title), **B refuted**. Kept verbatim because the reasoning is what made the decisive
+> tests cheap. See "Resolution" above.
 
 ### Hypothesis A (strongest): the Bleve index does not contain these books
 
