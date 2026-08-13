@@ -1,7 +1,7 @@
 // file: internal/database/memdb_store.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000003
-// last-edited: 2026-08-11
+// last-edited: 2026-08-13
 
 package database
 
@@ -36,6 +36,12 @@ type MemStore struct {
 	// and readable from a running process, not just recoverable by grepping
 	// startup logs after the fact.
 	lastWarmDurations map[string]time.Duration
+	// lastWarmBytes records how many bytes of Pebble VALUES each prefix scan
+	// read, and lastWarmDiscarded how many of those bytes belonged to fields
+	// the memdb projection throws away immediately after decoding them. See
+	// LastWarmupBytes for why the pair is worth carrying.
+	lastWarmBytes     map[string]int64
+	lastWarmDiscarded map[string]int64
 }
 
 // WarmupPhaseKeyCommit is the lastWarmDurations key holding the txn.Commit
@@ -78,6 +84,45 @@ func (m *MemStore) LastWarmupDurations() map[string]time.Duration {
 		out[k] = v
 	}
 	return out
+}
+
+// LastWarmupBytes returns, per table, how many bytes of Pebble values the most
+// recent WarmFromPebble read (`scanned`) and how many of those bytes were spent
+// decoding fields that the memdb projection then discards (`discarded`).
+//
+// Why this pair and not just a duration: the per-phase timings shipped earlier
+// established that book_files is 82% of a ~109 s warmup, and a CPU profile
+// showed 61% of the phase inside pebble.Iterator.Next — almost all of it in
+// loadDataBlock, meaning Pebble pulls a fresh sstable data block off disk for
+// nearly every row. That is the signature of rows so large a block holds one or
+// two of them, and BookFile.AcoustIDFingerprint is a []byte held INLINE in the
+// row (~230 KB raw, ~307 KB once encoding/json base64-encodes it) that
+// stripBookFileForMemdb nils out the instant it has been decoded.
+//
+// If that blob really is most of the bytes, the fix is to stop storing it in
+// the row — which pays out in five places at once (pread, cgo block
+// decompression, block alloc, JSON, base64) — and NOT to parallelize the scan,
+// which divides the work without shrinking it. That is a large, data-loss-
+// sensitive schema change, so the premise gets measured rather than inferred
+// from a call graph. This repo has already shipped one extrapolated
+// data-structure cost estimate that was off by several times.
+//
+// `discarded` is accounted in ENCODED bytes (base64 length for []byte fields),
+// because `scanned` counts raw JSON value bytes; comparing a decoded length
+// against an encoded total would understate the ratio by 4/3 and produce a
+// number that looks precise and is wrong.
+func (m *MemStore) LastWarmupBytes() (scanned, discarded map[string]int64) {
+	m.warmCountsMu.RLock()
+	defer m.warmCountsMu.RUnlock()
+	scanned = make(map[string]int64, len(m.lastWarmBytes))
+	for k, v := range m.lastWarmBytes {
+		scanned[k] = v
+	}
+	discarded = make(map[string]int64, len(m.lastWarmDiscarded))
+	for k, v := range m.lastWarmDiscarded {
+		discarded[k] = v
+	}
+	return scanned, discarded
 }
 
 // NewMemStore allocates an empty MemStore with the full schema applied.
