@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_book_aggregates.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-07-12
+// last-edited: 2026-08-12
 
 // Package database — book aggregate recomputation from BookFiles.
 //
@@ -129,7 +129,14 @@ func (p *PebbleStore) RecomputeBookAggregates(bookID string) error {
 		existingFileSize = *book.FileSize
 	}
 	if existingDuration == wantDuration && existingFileSize == wantFileSize {
-		slog.Debug("RecomputeBookAggregates: no change needed", "book_id", bookID)
+		// "caller" is the redundancy signal: a book recomputed many times from
+		// the same originator with no change to show for it is exactly what the
+		// coalescing fix is meant to eliminate. Debug-level, so this costs
+		// nothing in production until someone turns it on to look.
+		slog.Debug("RecomputeBookAggregates: no change needed",
+			"book_id", bookID,
+			"caller", aggregateCaller(),
+		)
 		return nil
 	}
 
@@ -141,8 +148,15 @@ func (p *PebbleStore) RecomputeBookAggregates(bookID string) error {
 		return fmt.Errorf("RecomputeBookAggregates UpdateBook %s: %w", bookID, err)
 	}
 
+	// "caller" names the subsystem that drove this write. This is the line the
+	// 126,928-sample production count was drawn from, so adding the field here
+	// (rather than at some new log site) keeps any future measurement directly
+	// comparable with that baseline. "total_files" is also the per-call read
+	// count — caller x total_files is the amplification attributable to each
+	// originator.
 	slog.Info("RecomputeBookAggregates updated",
 		"book_id", bookID,
+		"caller", aggregateCaller(),
 		"duration_sec", wantDuration,
 		"file_size_bytes", wantFileSize,
 		"files_with_duration", filesWithDuration,
@@ -165,6 +179,7 @@ func (p *PebbleStore) notifyBookFileChange(bookID string) {
 	if err := p.RecomputeBookAggregates(bookID); err != nil {
 		slog.Warn("notifyBookFileChange RecomputeBookAggregates failed (best-effort)",
 			"book_id", bookID,
+			"caller", aggregateCaller(),
 			"error", err,
 		)
 	}

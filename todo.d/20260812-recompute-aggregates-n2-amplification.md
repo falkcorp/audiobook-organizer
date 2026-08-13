@@ -61,6 +61,31 @@ trigger). Neither is traced.
 or instrument `notifyBookFileChange` with a caller tag. Fixing before knowing the
 workload means the fix cannot be measured.
 
+#### ✅ Attribution shipped — awaiting a production sample
+
+`internal/database/aggregate_caller.go` adds a `caller` field naming the nearest stack
+frame outside `internal/database`, e.g. `internal/merge.(*Service).mergeBooks:438`. It is
+on all three aggregate log lines, including the `RecomputeBookAggregates updated` Info
+line the 126,928 baseline was counted from — so the next sample is directly comparable
+with it. A runtime stack walk was chosen over a signature change because
+`RecomputeBookAggregates` is mocked in eight generated files.
+
+**Still open — the numbers below cannot be produced until prod runs this build:**
+
+```
+# which subsystem drives the recomputes
+journalctl -u audiobook-organizer --since "..." \
+  | grep -o 'caller=[^ ]*' | sort | uniq -c | sort -rn
+
+# redundant recomputes per caller (requires log level debug)
+... | grep 'no change needed' | grep -o 'caller=[^ ]*' | sort | uniq -c | sort -rn
+```
+
+Degenerate values are meaningful, not noise: `runtime.goexit:0` means the write came from
+a bare `go store.…(…)` with no in-repo frame left on the stack. Expect `caller` to name
+the merge service, the five maintenance jobs, or the metadata write-back path — **not**
+the scanner, which writes via `BatchUpsertBookFiles` and never reaches this code.
+
 ### Fix direction, once attribution is known
 
 A coalescing scope on the store:
