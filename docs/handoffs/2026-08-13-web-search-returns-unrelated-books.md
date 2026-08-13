@@ -1,15 +1,97 @@
 <!-- file: docs/handoffs/2026-08-13-web-search-returns-unrelated-books.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 2.0.0 -->
 <!-- guid: b2f4a7c1-53de-4e08-9a16-7cc0e5d1f3b8 -->
 <!-- last-edited: 2026-08-13 -->
 
 # Handoff: web-UI search returns unrelated books
 
-**Status:** root cause NOT yet established. Four candidate mechanisms; two eliminated by
-test, two still open and both cheaply decidable against production.
+**Status: ROOT CAUSE CONFIRMED against production 2026-08-13 17:40 EDT.** Search is not
+broken. 6,157 books are hidden from the entire web UI by a data defect. See "The actual
+cause" immediately below; the hypothesis sections that follow are kept only as a record
+of what was ruled out, and **both of the ones this document originally called "still
+open" are now disproven.**
 **Reported:** 2026-08-13 by the owner.
-**Do not start by re-reading the translator.** It has been tested and it is correct — see
-"Eliminated" below. Starting there will burn an hour reproducing a passing result.
+
+---
+
+## The actual cause (confirmed, v2.0.0)
+
+The search engine returns the right answer. For `All Jobs and Classes` the API returns
+`count=8` with the owner's book ranked **first and second**. The web UI then discards
+both, because the Library page filters to primary versions by default and **neither copy
+is flagged as one.**
+
+Adding the UI's own filter to the API call reproduces the owner's screenshot exactly —
+the same five books, no target:
+
+```
+?search=All%20Jobs%20and%20Classes                       -> count=8, target ranked #1 and #2
+?search=All%20Jobs%20and%20Classes&is_primary_version=true -> count=5, target GONE
+```
+
+The five survivors are legitimate low-boost matches on `description` and other non-title
+fields. They are not noise from a broken query; they are what is left after the real
+match is filtered out.
+
+### Why the books are invisible
+
+```
+id=01KXXVFEKD3XE0VBQ5HVXNWB86  primary=False  group=vg-01KXXVFEHRXGXMKPDYMY6HENDK
+id=01KXXVBGQGH6PEP9WE0ZWHBJ50  primary=False  group=vg-01KXXVBGMHPATT8X1X3DV5AW2Q
+id=01KNDCC3F1BASPVH21TVV8J78R  primary=True   group=01KNDCC3F1BASPVH21TX0N8KZH   (Dragon Conjurer)
+```
+
+Healthy books sit in unprefixed version groups where exactly one member is primary
+(verified on a two-member group: *Dungeon Diving Culinary Wizard* 1 and 2 share one group
+and elect one primary). The broken books sit in **`vg-`-prefixed groups, one book per
+group, with no primary elected at all**. A singleton group whose only member is not
+primary can never satisfy `is_primary_version=true`.
+
+### Blast radius: 6,157 books, 9.6% of the library
+
+Counted exhaustively by paging the full non-primary set (23,031 books, 24 pages of 1,000)
+and testing the `version_group_id` prefix:
+
+| | |
+|---|---|
+| total books | 63,870 |
+| `is_primary_version=true` | 40,839 |
+| `is_primary_version=false` | 23,031 |
+| **of those, `vg-` singletons with no primary** | **6,157** |
+| distinct `vg-` groups | 6,157 (one book each — all singletons) |
+
+The affected books are contiguous in creation order: every one falls between
+**2026-04-04 and 2026-08-11**, and the scan found zero `vg-` rows in the older 11,031.
+That bounds this to one code path introduced or active in that window — find what mints a
+`vg-`-prefixed group id and you have the writer.
+
+**This is not a search bug. These 6,157 books are invisible everywhere the web UI applies
+its default primary-version filter** — library browsing, counts, and any filtered view —
+not only in search. The ABS mobile app does not apply that filter, which is the whole
+explanation for the web-vs-app split that this document was originally written to chase.
+
+### What to do next
+
+1. Find the writer that mints `vg-`-prefixed `version_group_id` values and does not elect
+   a primary. That is the defect; everything else here is a symptom.
+2. Decide the repair for existing data: a singleton group's only member should almost
+   certainly be its primary. A backfill that elects the sole member of any
+   single-member group is the obvious candidate — **but confirm the group really is a
+   singleton before flipping the flag**, or a real duplicate pair gets two primaries.
+3. Add an invariant test: no version group may have zero primaries. This class of defect
+   is exactly what an invariant suite catches and no unit test will.
+4. Only then revisit search. The two genuine search defects recorded further down
+   (stopword dropping, quoted phrases) are real and still worth fixing, but neither is
+   the reported bug.
+
+---
+
+## Original v1.0.0 investigation — kept as a record of what was ruled out
+
+Everything below was written before the cause was known. The "Eliminated" section is
+still accurate and still useful. **The "Still open" section is now disproven: hypothesis A
+(index missing books) is wrong — Bleve found the books and ranked them first; hypothesis B
+(nil index / fallback) is wrong for the same reason.** Do not spend time on either.
 
 ---
 
@@ -110,6 +192,11 @@ temporarily log which branch serves a request.
 Both are genuine, both are currently invisible, neither is proven to be *this* bug.
 
 ### `all` and `and` are English stopwords and are silently dropped
+
+**Confirmed live 2026-08-13:** `?search=all%20jobs` returns `count=283`, topped by *The
+Icarus Job* and *Side Jobs* — because the server actually searched `jobs` alone. This is a
+real, separate, user-visible defect and it is why the owner's `all jobs` attempt looked
+just as broken as the others, for an entirely different reason than the main bug.
 
 `dropStopwordOnlyConjuncts` (`internal/search/bleve_translator.go:150`) strips conjuncts
 that analyse to zero tokens. This exists for a good reason — it fixed "shards of
