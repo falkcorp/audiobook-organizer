@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.123.0
+// version: 1.124.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-08-11
+// last-edited: 2026-08-13
 
 package database
 
@@ -684,11 +684,19 @@ func (p *PebbleStore) CountBookSummariesFiltered(f BookSummaryFilter) (int, erro
 	if p.UseMemDB && p.mem() != nil {
 		return p.mem().CountBookSummaries(f)
 	}
-	summaries, err := p.GetAllBookSummariesFiltered(0, 0, f)
+	// Count without projecting: walkFilteredBooksPebble applies the same
+	// predicate set the row path uses, so the count and the rows can never
+	// disagree — the failure mode that reported count=63870 alongside a page
+	// of non-matching rows.
+	n := 0
+	err := p.walkFilteredBooksPebble(f, func(*Book) bool {
+		n++
+		return true
+	})
 	if err != nil {
 		return 0, err
 	}
-	return len(summaries), nil
+	return n, nil
 }
 
 // GetAllBookSummariesFiltered is the filtered variant used by the library
@@ -700,39 +708,171 @@ func (p *PebbleStore) GetAllBookSummariesFiltered(limit, offset int, f BookSumma
 	if p.UseMemDB && p.mem() != nil {
 		return p.mem().GetBookSummaries(limit, offset, f)
 	}
-	// Pebble fallback: filter manually after a full scan. Matches the
-	// historical service behavior so we never regress correctness when
-	// memdb is unavailable.
-	summaries, err := p.getAllBookSummariesFull(0, 0)
+	if offset < 0 {
+		offset = 0
+	}
+	// Pebble fallback. This path must honor EVERY predicate on f, not a
+	// convenient subset: memdb is not merely a warmup-window optimization
+	// that a slower-but-correct fallback covers for. UseMemDB=false is
+	// permanent for the process, and memSync marks the warmup ABANDONED on
+	// pending-write-buffer overflow, which parks reads here for the rest of
+	// the process lifetime (see memdb_sync.go). Its comment there —
+	// "reads then stay on Pebble — slower, but they cannot lie" — is the
+	// invariant this function has to make true.
+	//
+	// The previous implementation applied only IsPrimaryVersion and
+	// ExcludeQuarantined and silently dropped Predicate (which carries every
+	// service-layer field filter: title, author, narrator, ...),
+	// LibraryState, ReviewStatus, RestrictToIDs and MarkedForDeletion. A
+	// filtered library query issued while memdb was unavailable therefore
+	// returned very nearly the whole library, with the matching count to
+	// go with it.
+	//
+	// It also fetched all ~68K summaries before filtering. Filtering during
+	// the walk means only matched rows are ever projected.
+	out := make([]BookSummary, 0, summaryPageCap(limit))
+	skipped := 0
+	err := p.walkFilteredBooksPebble(f, func(b *Book) bool {
+		// Offset is consumed against the POST-filter set so a page of N
+		// holds N matches, matching memdb's pagination semantics.
+		if skipped < offset {
+			skipped++
+			return true
+		}
+		out = append(out, bookToSummary(b))
+		return limit <= 0 || len(out) < limit
+	})
 	if err != nil {
 		return nil, err
 	}
-	filtered := summaries[:0]
-	excludeDeleted := f.MarkedForDeletion == nil
-	for _, s := range summaries {
-		if excludeDeleted {
-			if s.IsPrimaryVersion != nil && false { /* IsPrimaryVersion on BookSummary, MarkedForDeletion is not — handle conservatively below */
-			}
+	return out, nil
+}
+
+// summaryPageCap bounds the pre-allocation for a summary page so an
+// unbounded (limit<=0) whole-library query does not reserve a
+// million-element slice up front.
+func summaryPageCap(limit int) int {
+	if limit <= 0 || limit > 4096 {
+		return 4096
+	}
+	return limit
+}
+
+// walkFilteredBooksPebble iterates the Pebble book keyspace and invokes visit
+// once per book satisfying every predicate on f, in key (ID) order. visit
+// returns false to stop the walk early.
+//
+// This is the single filtering implementation behind both the row path
+// (GetAllBookSummariesFiltered) and the count path
+// (CountBookSummariesFiltered) when memdb is unavailable, so the two cannot
+// drift into disagreeing about what matches.
+//
+// Predicate ordering mirrors MemStore.GetBookSummaries: cheap pointer and
+// string comparisons first, the caller-supplied Predicate last, since it is
+// the only one that can run arbitrary work.
+//
+// Deliberate divergence from memdb, in the safe direction: memdb stores
+// books stripped of Description/VersionNotes/BookSig* (stripBookForMemdb),
+// so a Predicate reading those fields sees nil there but real values here.
+// Predicates must not depend on stripped fields; this path being the more
+// capable of the two means such a predicate fails visibly on the production
+// memdb path rather than only in the fallback.
+//
+// Sorting is NOT applied here — the walk is Pebble key order regardless of
+// f.SortBy, unchanged from the previous fallback. Callers needing an ordered
+// page sort in application memory. See TODO: the fallback silently ignores
+// f.SortBy the same way it used to silently ignore the filters.
+func (p *PebbleStore) walkFilteredBooksPebble(f BookSummaryFilter, visit func(*Book) bool) error {
+	// A non-nil but empty RestrictToIDs means "no book is eligible" — return
+	// before opening an iterator, mirroring memdb's short-circuit.
+	if f.RestrictToIDs != nil && len(f.RestrictToIDs) == 0 {
+		return nil
+	}
+
+	iter, err := p.db.NewIter(&pebble.IterOptions{
+		LowerBound: []byte("book:0"),
+		UpperBound: []byte("book:;"),
+	})
+	if err != nil {
+		return err
+	}
+	defer iter.Close()
+
+	// excludeDeleted: by default marked-for-deletion rows are dropped. An
+	// explicit f.MarkedForDeletion inverts this into an equality test, so
+	// MarkedForDeletion=true returns ONLY deleted rows. The old fallback
+	// reached the corpus through GetAllBooksCore, which drops deleted rows
+	// unconditionally before any filter runs — so that filter could only
+	// ever return the empty set.
+	excludeDeleted := true
+	requireDeleted := false
+	if f.MarkedForDeletion != nil {
+		excludeDeleted = false
+		requireDeleted = *f.MarkedForDeletion
+	}
+
+	for iter.First(); iter.Valid(); iter.Next() {
+		// Skip path index keys (book:series and book:author indexes removed in Task 3.4)
+		if strings.Contains(string(iter.Key()), ":path:") {
+			continue
 		}
+
+		var book Book
+		if err := json.Unmarshal(iter.Value(), &book); err != nil {
+			return err
+		}
+
 		if f.IsPrimaryVersion != nil {
-			eff := s.IsPrimaryVersion == nil || *s.IsPrimaryVersion
+			// A nil IsPrimaryVersion on the row counts as primary, matching
+			// memdb and the historical service behavior.
+			eff := book.IsPrimaryVersion == nil || *book.IsPrimaryVersion
 			if eff != *f.IsPrimaryVersion {
 				continue
 			}
 		}
-		if f.ExcludeQuarantined && s.QuarantinedAt != nil {
+		isDeleted := book.MarkedForDeletion != nil && *book.MarkedForDeletion
+		if excludeDeleted {
+			if isDeleted {
+				continue
+			}
+		} else if isDeleted != requireDeleted {
 			continue
 		}
-		filtered = append(filtered, s)
+		if f.ExcludeQuarantined && book.QuarantinedAt != nil {
+			continue
+		}
+		if f.LibraryState != "" {
+			ls := ""
+			if book.LibraryState != nil {
+				ls = *book.LibraryState
+			}
+			if ls != f.LibraryState {
+				continue
+			}
+		}
+		if f.ReviewStatus != "" {
+			rs := ""
+			if book.MetadataReviewStatus != nil {
+				rs = *book.MetadataReviewStatus
+			}
+			if !strings.EqualFold(rs, f.ReviewStatus) {
+				continue
+			}
+		}
+		if f.RestrictToIDs != nil {
+			if _, ok := f.RestrictToIDs[book.ID]; !ok {
+				continue
+			}
+		}
+		if f.Predicate != nil && !f.Predicate(&book) {
+			continue
+		}
+
+		if !visit(&book) {
+			return nil
+		}
 	}
-	if offset >= len(filtered) {
-		return nil, nil
-	}
-	end := len(filtered)
-	if limit > 0 && offset+limit < end {
-		end = offset + limit
-	}
-	return filtered[offset:end], nil
+	return nil
 }
 
 // getAllBookSummariesFull is the Pebble-backed implementation.
@@ -753,40 +893,55 @@ func (p *PebbleStore) getAllBookSummariesFull(limit, offset int) ([]BookSummary,
 		return nil, nil
 	}
 	summaries := make([]BookSummary, 0, len(books))
-	for _, b := range books {
+	for i := range books {
+		b := &books[i]
 		if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
 			continue
 		}
-		summaries = append(summaries, BookSummary{
-			ID:                   b.ID,
-			Title:                b.Title,
-			AuthorID:             b.AuthorID,
-			SeriesID:             b.SeriesID,
-			SeriesSequence:       b.SeriesSequence,
-			FilePath:             b.FilePath,
-			Format:               b.Format,
-			Duration:             b.Duration,
-			OriginalFilename:     b.OriginalFilename,
-			FileSize:             b.FileSize,
-			FileHash:             b.FileHash,
-			OriginalFileHash:     b.OriginalFileHash,
-			OrganizedFileHash:    b.OrganizedFileHash,
-			LibraryState:         b.LibraryState,
-			QuarantinedAt:        b.QuarantinedAt,
-			QuarantineReason:     b.QuarantineReason,
-			CoverURL:             b.CoverURL,
-			Narrator:             b.Narrator,
-			NarratorsJSON:        b.NarratorsJSON,
-			TranscribedTitle:     b.TranscribedTitle,
-			CreatedAt:            b.CreatedAt,
-			UpdatedAt:            b.UpdatedAt,
-			MetadataUpdatedAt:    b.MetadataUpdatedAt,
-			IsPrimaryVersion:     b.IsPrimaryVersion,
-			VersionGroupID:       b.VersionGroupID,
-			MetadataReviewStatus: b.MetadataReviewStatus,
-		})
+		full := b.ToBook()
+		summaries = append(summaries, bookToSummary(&full))
 	}
 	return summaries, nil
+}
+
+// bookToSummary projects a Book into the lightweight BookSummary the library
+// list view consumes.
+//
+// This is the single projection used by every Pebble-side summary path
+// (getAllBookSummariesFull and the filtered walk). It is field-for-field
+// identical to the projection MemStore.GetBookSummaries builds, which is the
+// point: three hand-maintained copies of the same field list is how a
+// summary field comes to be populated on one backend and silently empty on
+// another.
+func bookToSummary(b *Book) BookSummary {
+	return BookSummary{
+		ID:                   b.ID,
+		Title:                b.Title,
+		AuthorID:             b.AuthorID,
+		SeriesID:             b.SeriesID,
+		SeriesSequence:       b.SeriesSequence,
+		FilePath:             b.FilePath,
+		Format:               b.Format,
+		Duration:             b.Duration,
+		OriginalFilename:     b.OriginalFilename,
+		FileSize:             b.FileSize,
+		FileHash:             b.FileHash,
+		OriginalFileHash:     b.OriginalFileHash,
+		OrganizedFileHash:    b.OrganizedFileHash,
+		LibraryState:         b.LibraryState,
+		QuarantinedAt:        b.QuarantinedAt,
+		QuarantineReason:     b.QuarantineReason,
+		CoverURL:             b.CoverURL,
+		Narrator:             b.Narrator,
+		NarratorsJSON:        b.NarratorsJSON,
+		TranscribedTitle:     b.TranscribedTitle,
+		CreatedAt:            b.CreatedAt,
+		UpdatedAt:            b.UpdatedAt,
+		MetadataUpdatedAt:    b.MetadataUpdatedAt,
+		IsPrimaryVersion:     b.IsPrimaryVersion,
+		VersionGroupID:       b.VersionGroupID,
+		MetadataReviewStatus: b.MetadataReviewStatus,
+	}
 }
 
 func (p *PebbleStore) GetBookByID(id string) (*Book, error) {
