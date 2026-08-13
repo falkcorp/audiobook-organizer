@@ -1,5 +1,5 @@
 <!-- file: docs/audits/2026-08-13-mass-reorganize-duplicated-14tb-under-unknown-author.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 3f6c1d84-7a92-4b5e-8c03-19d4e7b26af5 -->
 <!-- last-edited: 2026-08-13 -->
 
@@ -91,19 +91,65 @@ one primary explicitly by RootDir membership.
 
 ## What must NOT be assumed
 
-**Do not delete `Unknown Author/` wholesale.** 23,622 directory entries versus
-9,942 surplus primaries means the tree is not purely duplicates — it will also
-contain books whose author genuinely is unknown and which have no second copy.
-Deleting blind is data loss.
+**Do not delete `Unknown Author/` wholesale.** The tree is not purely
+duplicates — it also holds books whose author genuinely is unknown, and a
+measured 314 rows where the `Unknown Author` copy is now the **only** surviving
+copy of that audio. Deleting blind is data loss.
 
-The safe predicate for reclaiming a file is per-book, not per-directory:
+### The version-group predicate was the wrong test
 
-1. the row is a surplus primary in a multi-primary group, **and**
-2. another member of that same group is `organized` with a different path, **and**
-3. that other file exists on disk and matches on size — ideally on hash, since
-   size alone has collisions at this scale.
+The first attempt compared each `Unknown Author` file against its **version-group
+twin** and concluded only 1,077 of 4,158 were safe to reclaim. That test was too
+narrow, and its verdicts are superseded:
 
-Only then is the `Unknown Author/` copy provably redundant.
+| verdict (group-scoped test) | count |
+|---|---|
+| content identical | 864 |
+| dup's content contained in twin | 213 |
+| **differs** | **2,767** (1,160 of them single-file vs multi-file set) |
+| twin missing from disk | 314 |
+
+The flaw: organize **copies** rather than moves (`reflink → hardlink → copy`, and
+it never deletes the source), so every organized file has an ancestor still on
+disk — but that ancestor is usually the source in `newbooks/`, which frequently
+is **not a member of the same version group**. Comparing against the group twin
+therefore compares against the wrong file.
+
+### The correct test is content-addressed, whole-disk
+
+A full walk of `/mnt/bigdata/books` found:
+
+| measure | value |
+|---|---|
+| audio files on disk | 549,033 |
+| **audio files under `Unknown Author/`** | **222,965** (41% of all audio files) |
+| **UA files with a same-size file elsewhere on disk** | **215,160 (13.90 TB)** |
+| UA files with no size match anywhere outside UA | 7,805 |
+
+So 96.5% of the tree has a candidate ancestor. Size alone is not proof — these
+are same-source rips at fixed bitrates and size collisions are common — so the
+reclamation predicate is:
+
+1. an identical-content file exists **anywhere** outside `Unknown Author/`, where
+   identity is measured on **interior content** (25/50/75% probes), not head/tail
+   — ID3/MP4 tag blocks differ between an `Unknown Author` copy and its
+   correctly-tagged twin even when the audio is byte-identical; **and**
+2. that twin is currently present on disk.
+
+Content verification of the 215,160 candidates is the gate. Nothing may be
+deleted on the strength of the size match alone.
+
+### Space accounting is real, not a `du` artifact
+
+Worth ruling out explicitly, because the pool has `feature@block_cloning` active
+under ZFS 2.4.1, which would let reflinked copies share extents and make `du`
+double-count. It is not happening: `bigdata/BD/bigdata/books` reports **38.6T
+used against 39.7T logical** — a ~1.1T gap that compression alone explains. The
+duplicate copies are physically stored.
+
+(Reflink failures in the logs are unrelated to cloning support — they read
+`no such file or directory`, i.e. the database pointed at a source path that no
+longer exists.)
 
 ## What invoked it
 
