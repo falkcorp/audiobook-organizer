@@ -1,5 +1,5 @@
 // file: internal/server/reconcile.go
-// version: 3.2.0
+// version: 3.3.0
 // guid: e7f8a9b0-c1d2-3e4f-5a6b-7c8d9e0f1a2b
 // HTTP adapters — all logic in internal/reconcile
 
@@ -182,4 +182,20 @@ func (s *Server) assignOrphanVGsHandler(c *gin.Context) {
 		return
 	}
 	httputil.RespondWithOK(c, gin.H{"result": result})
+}
+
+// electMissingPrimariesHandler repairs version groups that elect no primary at
+// all, which makes every member invisible to any client applying the default
+// is_primary_version=true filter (the web Library page does).
+//
+// Defaults to a dry run: a mutating apply must be opted into explicitly with
+// ?dry_run=false, so an accidental POST previews rather than rewrites rows.
+func (s *Server) electMissingPrimariesHandler(c *gin.Context) {
+	dryRun := c.DefaultQuery("dry_run", "true") != "false"
+	result, err := reconcile.ElectMissingPrimaries(s.Store(), dryRun)
+	if err != nil {
+		httputil.InternalError(c, "failed to elect missing primary versions", err)
+		return
+	}
+	httputil.RespondWithOK(c, gin.H{"dry_run": dryRun, "result": result})
 }

@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
-// last-edited: 2026-08-11
+// last-edited: 2026-08-13
 
 package itunesservice
 
@@ -330,9 +330,17 @@ func (imp *Importer) Execute(ctx context.Context, opID string, req ImportRequest
 
 		book.LibraryState = strPtr(imp.importLibraryState(importMode))
 
+		// This book is brand new: both the external-ID lookup above and the
+		// SkipDuplicates path continue out when an existing row is found, so
+		// reaching here means nothing else shares this freshly-minted group.
+		// The sole member of a group must therefore be its primary — marking
+		// it non-primary produced a group electing no primary at all, and the
+		// web UI (which filters is_primary_version=true by default) could
+		// never show the book again. See ElectMissingPrimaries for the repair
+		// of rows already written this way.
 		vgID := fmt.Sprintf("vg-%s", ulid.Make().String())
 		book.VersionGroupID = strPtr(vgID)
-		isPrimary := false
+		isPrimary := true
 		book.IsPrimaryVersion = &isPrimary
 
 		coverPath, coverErr := metadata.ExtractCoverArt(firstTrackPath)
