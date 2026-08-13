@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.82.0
+// version: 1.83.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-08-06
+// last-edited: 2026-08-13
 
 package database
 
@@ -167,6 +167,11 @@ type MockStore struct {
 	GetSystemActivityLogsFunc   func(source string, limit int) ([]SystemActivityLog, error)
 	PruneOperationLogsFunc      func(olderThan time.Time) (int, error)
 	PruneOperationChangesFunc   func(olderThan time.Time) (int, error)
+	// CreateOperationChangeFunc lets a test observe the change rows an
+	// operation writes. CreateOperationChange returned a bare nil with no hook,
+	// so a test could assert an operation's SUMMARY but never its CHANGE LOG —
+	// and the two disagreeing, silently, is itself a defect class here.
+	CreateOperationChangeFunc func(change *OperationChange) error
 	PruneSystemActivityLogsFunc func(olderThan time.Time) (int, error)
 
 	// AI jobs
@@ -1964,6 +1969,9 @@ func (m *MockStore) Optimize() error {
 }
 
 func (m *MockStore) CreateOperationChange(change *OperationChange) error {
+	if m.CreateOperationChangeFunc != nil {
+		return m.CreateOperationChangeFunc(change)
+	}
 	return nil
 }
 

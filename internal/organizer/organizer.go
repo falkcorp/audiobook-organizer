@@ -1,7 +1,7 @@
 // file: internal/organizer/organizer.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-08-11
+// last-edited: 2026-08-13
 
 package organizer
 
@@ -34,6 +34,58 @@ import (
 // via GetBookByFilePath, and either create a dedup candidate or ask
 // the user to resolve the collision before retrying.
 var ErrTargetOccupied = errors.New("organize: target path already occupied by a different file")
+
+// The three ways a target can be occupied. Every occupied-target error wraps
+// BOTH ErrTargetOccupied and exactly one of these, so existing
+// errors.Is(err, ErrTargetOccupied) callers keep working unchanged while a new
+// caller can ask which kind it is.
+//
+// Why this needed splitting: the two real cases take OPPOSITE remediation, and
+// until now they produced a byte-identical error string, so a production log
+// could not be counted into "how many need dedup" and "how many need cleanup".
+// A survey of 19,519 occupied-target lines on production could say only that
+// they existed.
+//
+//   - ByBook   — another book row owns the target. Two library rows expand to
+//     the same name. Actionable as a dedup candidate.
+//   - ByOrphan — a file sits at the target and NO book row claims it, e.g. the
+//     residue of a partial organize. Actionable as file cleanup; opening a
+//     dedup candidate for it would be meaningless, there is no second book.
+//
+// The third exists so the other two stay trustworthy:
+//
+//   - Unknown  — the ownership question was never answered, because there is
+//     no store wired or the lookup itself failed. This is NOT an orphan. An
+//     orphan is a positive finding ("the DB was asked and said nobody owns
+//     it"); folding a failed lookup into it would manufacture orphans out of
+//     database errors and send someone deleting files on the strength of a
+//     question that was never asked.
+var (
+	ErrTargetOccupiedByBook   = errors.New("occupant is another book row")
+	ErrTargetOccupiedByOrphan = errors.New("occupant is an untracked file with no book row")
+	ErrTargetOccupantUnknown  = errors.New("occupant not identified: no store wired or lookup failed")
+)
+
+// newTargetOccupiedError builds the occupied-target error, tagging it with
+// which of the three cases applies.
+//
+// occupantKnown means the ownership lookup RAN AND SUCCEEDED — it is not
+// "occupant != nil". The two must stay separate: a successful lookup returning
+// nil is the orphan finding, while a lookup that never ran also has a nil
+// occupant and means nothing at all.
+func newTargetOccupiedError(targetPath string, occupant *database.Book, occupantKnown bool) error {
+	switch {
+	case occupant != nil:
+		return fmt.Errorf("%w: %w (book %s): %s",
+			ErrTargetOccupied, ErrTargetOccupiedByBook, occupant.ID, targetPath)
+	case occupantKnown:
+		return fmt.Errorf("%w: %w: %s",
+			ErrTargetOccupied, ErrTargetOccupiedByOrphan, targetPath)
+	default:
+		return fmt.Errorf("%w: %w: %s",
+			ErrTargetOccupied, ErrTargetOccupantUnknown, targetPath)
+	}
+}
 
 // Organizer handles file organization operations
 type Organizer struct {
@@ -170,9 +222,20 @@ func (o *Organizer) OrganizeBook(book *database.Book) (string, string, error) {
 		// Case 2: ask the DB who owns the target. If it's the current
 		// book, this is a re-organize no-op — don't panic, don't fire
 		// the collision hook, just return the target.
+		//
+		// The lookup's result is kept rather than discarded: the same answer
+		// that distinguishes case 2 also distinguishes case 3 from case 4,
+		// and those two need opposite remediation (see below).
+		var occupant *database.Book
+		occupantKnown := false
 		if o.store != nil && book.ID != "" {
-			if owner, lookupErr := o.store.GetBookByFilePath(targetPath); lookupErr == nil && owner != nil && owner.ID == book.ID {
-				return targetPath, "", nil
+			owner, lookupErr := o.store.GetBookByFilePath(targetPath)
+			if lookupErr == nil {
+				occupantKnown = true
+				occupant = owner
+				if owner != nil && owner.ID == book.ID {
+					return targetPath, "", nil
+				}
 			}
 		}
 		// Case 3/4: collision. Fire the hook so the server can create a
@@ -184,7 +247,7 @@ func (o *Organizer) OrganizeBook(book *database.Book) (string, string, error) {
 		if o.hooks != nil {
 			o.hooks.OnCollision(book.ID, targetPath)
 		}
-		return targetPath, "", fmt.Errorf("%w: %s", ErrTargetOccupied, targetPath)
+		return targetPath, "", newTargetOccupiedError(targetPath, occupant, occupantKnown)
 	}
 
 	// Perform the organization based on strategy
