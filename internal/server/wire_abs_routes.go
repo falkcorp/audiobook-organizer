@@ -1,5 +1,5 @@
 // file: internal/server/wire_abs_routes.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 9c6b13f8-40a2-4e57-b18d-72e0a5c4d396
 // last-edited: 2026-08-13
 
@@ -64,6 +64,46 @@ var absReservedPathPrefixes = []string{
 	"/api/libraries/",
 	"/api/items/",
 	"/api/session/",
+}
+
+// absCollisionDetailPrefixes are sub-trees of an absAppAPICollisions namespace that
+// ABS serves natively — but ONLY when the ABS surface is actually enabled.
+//
+// 🔴 THIS LIST IS SEPARATE FROM THE ONE ABOVE FOR ONE REASON: the redirect
+// middleware is NOT gated on ABSAPIEnabled. Putting "/api/playlists/" in
+// absReservedPathPrefixes reserves it unconditionally, so on an ABS-DISABLED
+// deployment — which is the default — GET /api/playlists/123 stops redirecting and
+// starts 404ing, because the ABS route that would answer it was never registered.
+// That is a working app route broken to make an unimplemented ABS one honest: the
+// exact defect that took out 46 live app routes twice (#2332 → #2333 → #2335).
+// TestCollidingNamespacesStillRedirect caught it here on the first run.
+//
+// Gating on the flag means: ABS off → redirect, byte-for-byte as before. ABS on →
+// ABS serves it, which is what an ABS deployment asked for.
+//
+// THE TRAILING SLASH IS LOAD-BEARING. "/api/playlists" itself is NOT reserved even
+// with ABS on, so the bare LIST keeps redirecting to the app-API twin; only
+// "/api/playlists/<id>" is claimed.
+//
+// Why the detail path needed claiming at all: opening a playlist in the app calls
+// GET /api/playlists/:id, which 301'd into /api/v1/playlists/:id and answered
+// {"book_ids":[...]} instead of ABS's {"items":[{"libraryItem":…}]}. The client
+// cannot parse that, so every playlist opened EMPTY — reported from the app
+// 2026-08-13. The web UI is unaffected either way: it hardcodes an /api/v1 base
+// (e.g. DelugeSettingsTab.tsx:24) and never uses the unversioned form.
+var absCollisionDetailPrefixes = []string{
+	"/api/playlists/",
+}
+
+// absCollisionDetailReserved reports whether path is an ABS-served sub-tree of a
+// colliding namespace. The caller must AND this with ABSAPIEnabled.
+func absCollisionDetailReserved(path string) bool {
+	for _, prefix := range absCollisionDetailPrefixes {
+		if strings.HasPrefix(path, prefix) && len(path) > len(prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // absUnimplementedNamespaces are ABS endpoints we do NOT implement, reserved for the
@@ -463,6 +503,9 @@ func absRouteList() []string {
 		"GET /api/libraries/:libraryId/series",
 		"GET /api/libraries/:libraryId/collections",
 		"GET /api/libraries/:libraryId/playlists", // real data since 2026-08-13; was h.EmptyPage
+		// Detail route. The list shipped without it, so opening a playlist 301'd
+		// into the app API and rendered empty — reported from the app 2026-08-13.
+		"GET /api/playlists/:id",
 		"GET /api/libraries/:libraryId/authors",
 		"GET /api/libraries/:libraryId/narrators",
 		"GET /api/libraries/:libraryId/filterdata",

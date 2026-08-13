@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
-// last-edited: 2026-08-03
+// last-edited: 2026-08-13
 
 package abs
 
@@ -477,8 +477,28 @@ func (h *Handler) LibrarySeries(c *gin.Context) {
 		counts = map[int]int{}
 	}
 
+	// 🔴 books AND totalDuration WERE HARDCODED EMPTY, on every series, forever.
+	// Measured on production 2026-08-13 before this fix: books == [] on 14,625 of
+	// 14,625 series and totalDuration == 0 on 14,625 of 14,625, while numBooks was
+	// correctly populated on 14,295 of them. The app therefore showed a series
+	// insisting it held no books while displaying a book count — and the books it
+	// did render came from the client filling an empty list from elsewhere.
+	bySeries, berr := h.seriesBooksCached()
+	if berr != nil {
+		// Same rule as the counts above: a series page missing its book lists is
+		// worth serving; a 500 is not. But it must be VISIBLE — this is exactly the
+		// silent-empty that hid the bug for so long.
+		_ = berr
+		bySeries = map[int]seriesBooksBuilt{}
+	}
+
 	results := make([]any, 0, len(series))
 	for _, s := range series {
+		built := bySeries[s.ID]
+		items, total := built.items, built.totalDuration
+		if items == nil {
+			items = []any{}
+		}
 		results = append(results, gin.H{
 			"id":               strconv.Itoa(s.ID),
 			"name":             s.Name,
@@ -486,14 +506,140 @@ func (h *Handler) LibrarySeries(c *gin.Context) {
 			"libraryId":        h.libraryID(),
 			"addedAt":          msEpoch(h.now()),
 			"updatedAt":        msEpoch(h.now()),
-			"books":            []any{},
+			"books":            items,
 			// An int, never a float: Dart throws on `42.0 as int?` and this is cast
-			// during widget build (§1.7.3 item 5).
-			"totalDuration": 0,
+			// during widget build (§1.7.3 item 5). Summed from BookSummary.Duration,
+			// which is already an int — do not introduce a float on the way here.
+			"totalDuration": total,
 			"numBooks":      counts[s.ID],
 		})
 	}
 	respondJSON(c, http.StatusOK, pageResponse{Results: results, Total: len(results)})
+}
+
+// absSeriesBooksCacheTTL bounds how long the series→books map is reused. Matches
+// the author cache: the underlying set changes only when books are added, and the
+// cost being avoided is a full pass over the visible library.
+const absSeriesBooksCacheTTL = 5 * time.Minute
+
+// seriesBooksCached returns visible books grouped by series id, rebuilt at most
+// once per absSeriesBooksCacheTTL.
+//
+// 🔴 IT USES THE SAME VISIBLE SET AS /items, DELIBERATELY. absItemFilterBase is
+// what the item list serves, and a second, narrower rule here would make the
+// Series tab disagree with the Library tab about what the library contains —
+// the exact failure that put ~28,000 unorganized iTunes-tree rows into the
+// Authors and Narrators tabs (see visibleBookIDs).
+// seriesBooksBuilt is one series' rendered book list plus its summed duration.
+//
+// The BUILT rows are cached, not the raw summaries, following authorDTOsCached in
+// this file — "this caches the whole DOCUMENT rather than just the count". The
+// expensive part here is not the grouping: it is MintOrGetSyncID, one call per
+// book. Caching summaries would still mint ~16,500 ids on EVERY series request.
+type seriesBooksBuilt struct {
+	items         []any
+	totalDuration int
+}
+
+func (h *Handler) seriesBooksCached() (map[int]seriesBooksBuilt, error) {
+	now := h.now()
+
+	h.seriesBooksCacheMu.Lock()
+	if h.seriesBooksCache != nil && now.Sub(h.seriesBooksCacheAt) < absSeriesBooksCacheTTL {
+		m := h.seriesBooksCache
+		h.seriesBooksCacheMu.Unlock()
+		return m, nil
+	}
+	h.seriesBooksCacheMu.Unlock()
+
+	// Built OUTSIDE the lock, for the reason contributorsCached documents: holding
+	// it across a full-library pass serializes every concurrent request behind one
+	// rebuild.
+	books, err := h.visibleBookSummaries(absItemFilterBase())
+	if err != nil {
+		return nil, err
+	}
+	grouped := make(map[int][]database.BookSummary, 1024)
+	for i := range books {
+		if books[i].SeriesID == nil {
+			continue
+		}
+		grouped[*books[i].SeriesID] = append(grouped[*books[i].SeriesID], books[i])
+	}
+
+	m := make(map[int]seriesBooksBuilt, len(grouped))
+	for id, list := range grouped {
+		// Order within a series is the reading order, not insertion order: a
+		// series listed out of sequence is barely better than one listed not at
+		// all. Books with no sequence sort last, by title, rather than dropping.
+		sort.SliceStable(list, func(a, b int) bool {
+			sa, sb := list[a].SeriesSequence, list[b].SeriesSequence
+			switch {
+			case sa != nil && sb != nil && *sa != *sb:
+				return *sa < *sb
+			case sa != nil && sb == nil:
+				return true
+			case sa == nil && sb != nil:
+				return false
+			}
+			return list[a].Title < list[b].Title
+		})
+
+		built := seriesBooksBuilt{items: make([]any, 0, len(list))}
+		for i := range list {
+			entry, ok := h.seriesBookEntry(&list[i])
+			if !ok {
+				continue
+			}
+			built.items = append(built.items, entry)
+			// Summed over the books actually SERVED, not over every row in the
+			// series: a duration counting books the client cannot see would
+			// disagree with the list printed right next to it.
+			if list[i].Duration != nil {
+				built.totalDuration += *list[i].Duration
+			}
+		}
+		m[id] = built
+	}
+
+	h.seriesBooksCacheMu.Lock()
+	h.seriesBooksCache, h.seriesBooksCacheAt = m, now
+	h.seriesBooksCacheMu.Unlock()
+	return m, nil
+}
+
+// seriesBookEntry is the per-book shape embedded in a series row.
+//
+// sequence is a STRING, never a number: contract §6.5 / §1.7.3 — Dart's
+// `as String?` on a number THROWS inside build() and red-screens the book detail
+// sheet. An absent sequence is null rather than "0", which would sort and display
+// as a real position the data does not claim.
+// It returns ok=false when the book has no resolvable sync id. Such a book is
+// DROPPED rather than emitted with the raw ULID or a null: the client splits
+// compound ids at a fixed byte offset of 36, so a 26-char ULID does not merely
+// look wrong, it mis-parses — and a null entry red-screens the list outright.
+// That is the same rule #2366 established for playlist items.
+func (h *Handler) seriesBookEntry(b *database.BookSummary) (gin.H, bool) {
+	sid, err := h.identity.MintOrGetSyncID(b.ID)
+	if err != nil || sid == "" {
+		return nil, false
+	}
+	var seq any
+	if b.SeriesSequence != nil {
+		seq = strconv.Itoa(*b.SeriesSequence)
+	}
+	dur := 0
+	if b.Duration != nil {
+		dur = *b.Duration
+	}
+	return gin.H{
+		"id":            sid,
+		"libraryItemId": sid,
+		"libraryId":     h.libraryID(),
+		"title":         b.Title,
+		"sequence":      seq,
+		"duration":      dur,
+	}, true
 }
 
 // absAuthorsCacheTTL bounds how long the built author list is reused.

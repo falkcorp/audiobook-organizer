@@ -1,7 +1,7 @@
 // file: internal/server/wire_abs_routes_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 3ea1d764-95c8-4b02-8f31-6d70a5be2c49
-// last-edited: 2026-08-12
+// last-edited: 2026-08-13
 
 package server
 
@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -84,10 +85,24 @@ func TestABSReservedPath_CoversEVERYRegisteredUnversionedRoute(t *testing.T) {
 			t.Fatalf("route %q has a wildcard with no test placeholder — add one", path)
 		}
 		checked++
-		if !absReservedPath(path) {
+		// The predicate is the UNION of the unconditional reservation and the
+		// flag-gated one, and that union is exact rather than convenient: every
+		// path in absRouteList() is registered ONLY when ABSAPIEnabled is true
+		// (wireABSRoutes returns early otherwise), and ABSAPIEnabled being true is
+		// precisely the condition under which absCollisionDetailReserved applies.
+		// So for any route this test can see, the two lists together are what the
+		// middleware will actually consult.
+		//
+		// Checking only absReservedPath would force /api/playlists/:id into the
+		// unconditional list, which 404s a live app route on every ABS-DISABLED
+		// deployment — the #2332/#2333/#2335 defect. Checking only the gated list
+		// would let a genuinely unreserved route through. Both halves are needed.
+		if !absReservedPath(path) && !absCollisionDetailReserved(path) {
 			t.Errorf("REGISTERED BUT NOT RESERVED: %s. Add its prefix to absReservedPathPrefixes "+
-				"(or the exact path to absReservedPaths), or it will 301 into /api/v1 and look "+
-				"implemented while behaving broken.", path)
+				"(or the exact path to absReservedPaths), or — if the namespace has a live "+
+				"/api/v1 twin — to absCollisionDetailPrefixes so it is reserved only while ABS "+
+				"is enabled. Otherwise it will 301 into /api/v1 and look implemented while "+
+				"behaving broken.", path)
 		}
 	}
 	if checked == 0 {
@@ -405,4 +420,69 @@ func TestABSReservedPath_CoversEveryPathTheRealClientRequested(t *testing.T) {
 	require.Greater(t, checked, 15,
 		"only %d of %d fixtures had an /api path — the fixture shape changed and this test is "+
 			"no longer reading what it thinks it is", checked, len(files))
+}
+
+// 🔴 THE RESERVATION IS THE FIX; THE HANDLER ALONE IS NOT.
+//
+// GET /api/playlists/:id is served by the ABS handler, but the redirect middleware
+// runs FIRST and is not gated on ABSAPIEnabled. Without an entry in
+// absCollisionDetailPrefixes the request 301s into /api/v1/playlists/:id — the
+// app-API twin — which answers 200 with {"book_ids":[...]} instead of ABS's
+// {"items":[...]}. The client parses nothing and the playlist renders EMPTY, with
+// no error logged anywhere. That is what was reported from the app on 2026-08-13.
+//
+// The handler-level tests in handlers/abs CANNOT catch this: they invoke the
+// handler directly and never traverse this middleware. Deleting the prefix left
+// them all green, which is how the gap was found — by mutating the prefix away and
+// watching nothing fail.
+//
+// Both directions are asserted, because the two failure modes are opposite and each
+// one breaks a different deployment:
+//   - ABS ON  and NOT reserved → the ABS route is dead, playlists open empty.
+//   - ABS OFF and reserved     → a working app route 404s on every ABS-disabled
+//     deployment, which is the #2332/#2333/#2335 defect that broke 46 live routes.
+func TestPlaylistDetailReservedOnlyWhenABSEnabled(t *testing.T) {
+	const path = "/api/playlists/01PLAYLIST0000000000000000"
+
+	t.Run("ABS disabled still redirects", func(t *testing.T) {
+		s, cleanup := setupTestServer(t)
+		defer cleanup()
+		config.AppConfig.ABSAPIEnabled = false
+
+		w := httptest.NewRecorder()
+		s.router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+
+		require.Equal(t, http.StatusMovedPermanently, w.Code,
+			"with ABS off this path has only its /api/v1 twin; reserving it here 404s a "+
+				"working app route to make an ABS one honest — the 46-route defect")
+		require.Equal(t, "/api/v1/playlists/01PLAYLIST0000000000000000", w.Header().Get("Location"))
+	})
+
+	t.Run("ABS enabled does not redirect", func(t *testing.T) {
+		s, cleanup := setupTestServer(t)
+		defer cleanup()
+		config.AppConfig.ABSAPIEnabled = true
+
+		w := httptest.NewRecorder()
+		s.router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+
+		require.NotEqual(t, http.StatusMovedPermanently, w.Code,
+			"a 301 here means the request never reached the ABS handler: it lands on the "+
+				"app API, returns 200 with book_ids instead of items, and the playlist "+
+				"renders empty with nothing logged")
+	})
+
+	t.Run("the bare list keeps redirecting even with ABS enabled", func(t *testing.T) {
+		s, cleanup := setupTestServer(t)
+		defer cleanup()
+		config.AppConfig.ABSAPIEnabled = true
+
+		w := httptest.NewRecorder()
+		s.router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/playlists", nil))
+
+		// The trailing slash in the prefix is what makes this true. Only the DETAIL
+		// sub-tree is claimed; the bare namespace still belongs to the app API.
+		require.Equal(t, http.StatusMovedPermanently, w.Code,
+			"/api/playlists (no id) must still reach the app-API twin")
+	})
 }

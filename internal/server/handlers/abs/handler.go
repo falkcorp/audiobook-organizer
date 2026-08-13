@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/handler.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: fb0271c6-3a49-4d85-9e13-8c507b2ad64f
 // last-edited: 2026-08-13
 
@@ -273,6 +273,18 @@ type Handler struct {
 	narratorsCache []narratorDTO
 	authorsCacheAt time.Time
 
+	// seriesBooksCache maps series id → the visible books in that series.
+	//
+	// Built by ONE pass over the visible set rather than one lookup per series.
+	// GetBooksBySeriesIDCore exists and would be the obvious call, but the
+	// library has 14,625 series and pebble_store.go:70 records that this getter
+	// falls back to a FULL PEBBLE SCAN when memdb is cold — 14,625 full scans
+	// would freeze the library, not merely slow the endpoint. Same reasoning,
+	// and the same shape, as the author cache above.
+	seriesBooksCacheMu sync.Mutex
+	seriesBooksCache   map[int]seriesBooksBuilt
+	seriesBooksCacheAt time.Time
+
 	// now and newID are injectable for deterministic tests.
 	now   func() time.Time
 	newID func() string
@@ -390,6 +402,11 @@ func (h *Handler) Register(r gin.IRouter) {
 	r.GET("/api/libraries/:libraryId/series", auth, h.LibrarySeries)
 	r.GET("/api/libraries/:libraryId/collections", auth, h.EmptyPage)
 	r.GET("/api/libraries/:libraryId/playlists", auth, h.LibraryPlaylists)
+	// The DETAIL route the app calls when a playlist is opened. Without it the
+	// path 301'd into /api/v1/playlists/:id and every playlist rendered empty.
+	// Reserved from the redirect by the "/api/playlists/" prefix — see
+	// absReservedPathPrefixes, where the trailing slash is load-bearing.
+	r.GET("/api/playlists/:id", auth, h.PlaylistDetail)
 	r.GET("/api/libraries/:libraryId/authors", auth, h.LibraryAuthors)
 	r.GET("/api/libraries/:libraryId/narrators", auth, h.LibraryNarrators)
 	r.GET("/api/libraries/:libraryId/filterdata", auth, h.LibraryFilterData)
