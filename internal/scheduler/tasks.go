@@ -1,7 +1,7 @@
 // file: internal/scheduler/tasks.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9b4c7e21-a5f3-4d08-b2e6-3c8d1f7a0e54
-// last-edited: 2026-08-11
+// last-edited: 2026-08-13
 
 // Package scheduler — task registrations.
 // All 22 registered tasks are defined here. Each task's TriggerFn and
@@ -206,7 +206,14 @@ func (ts *TaskScheduler) registerAllTasks() {
 			slog.Warn("transcode task triggered from scheduler () without params — use the operations API", "source", source)
 			return op, nil
 		},
-		IsEnabled:              func() bool { return true },
+		// NOT enabled, and this is not a regression: the TriggerFn above fails
+		// by design because a scheduled trigger has no book_id to transcode.
+		// Reporting Enabled=true for a task whose every automatic invocation
+		// creates a failed operation is a lie the UI repeats on the tasks page.
+		// runTask does not consult IsEnabled, so manual/API invocation with real
+		// params is unaffected — only the automatic paths and the displayed
+		// state change.
+		IsEnabled:              func() bool { return false },
 		GetInterval:            func() time.Duration { return 0 },
 		RunOnStart:             func() bool { return false },
 		RunInMaintenanceWindow: func() bool { return false },
@@ -362,7 +369,14 @@ func (ts *TaskScheduler) registerAllTasks() {
 			}
 			return op, nil
 		},
-		IsEnabled:              func() bool { return true },
+		// Manual-only, and now says so. It has no interval and explicitly opts
+		// out of the maintenance window, so IsEnabled: true described a task
+		// that could never start itself. It also runs write-back + organize,
+		// which moves files — turning it into a timer would be a behaviour
+		// change nobody asked for, so the honest fix is to stop claiming it is
+		// enabled. runTask ignores IsEnabled, so triggering it from the
+		// operations API still works exactly as before.
+		IsEnabled:              func() bool { return false },
 		GetInterval:            func() time.Duration { return 0 },
 		RunOnStart:             func() bool { return false },
 		RunInMaintenanceWindow: func() bool { return false },
