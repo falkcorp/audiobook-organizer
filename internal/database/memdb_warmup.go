@@ -1,5 +1,5 @@
 // file: internal/database/memdb_warmup.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000004
 // last-edited: 2026-08-13
 
@@ -7,6 +7,7 @@ package database
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -41,6 +42,8 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 	scanned := map[string]int{}
 	skips := map[string]int{}
 	durations := map[string]time.Duration{}
+	bytesScanned := map[string]int64{}
+	bytesDiscarded := map[string]int64{}
 
 	// warm runs one prefix scan and records how long it took.
 	//
@@ -56,11 +59,43 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 	//
 	// Cost of the measurement itself: two time.Now() calls per prefix, twenty
 	// for the whole warmup.
+	//
+	// warm also records how many bytes of Pebble values the phase read. Timing
+	// alone says which phase is slow; bytes say WHY, and the two answers point
+	// at different fixes. See MemStore.LastWarmupBytes.
 	warm := func(prefix, table string, fn func(key string, val []byte) (bool, error)) (int, int, error) {
 		phaseStart := time.Now()
-		rows, keys, err := warmIter(ctx, p.db, prefix, fn)
+		rows, keys, nbytes, err := warmIter(ctx, p.db, prefix, fn)
 		durations[table] = time.Since(phaseStart)
+		bytesScanned[table] = nbytes
 		return rows, keys, err
+	}
+
+	// discardedEncodedLen reports how many bytes of a row's JSON encoding were
+	// occupied by fields the memdb projection is about to throw away.
+	//
+	// Counted in ENCODED length, to be comparable with bytesScanned (raw JSON
+	// value bytes). encoding/json renders a []byte as base64, so a 230 KB
+	// fingerprint costs ~307 KB in the stored row; charging the decoded length
+	// would understate the waste by 4/3. String fields are charged their plain
+	// length, which slightly understates them (JSON escaping adds bytes) — a
+	// direction that can only make the finding more conservative, never less.
+	discardedEncodedLen := func(bf *BookFile) int64 {
+		n := int64(base64.StdEncoding.EncodedLen(len(bf.AcoustIDFingerprint)))
+		n += int64(len(bf.AcoustIDSeg0) + len(bf.AcoustIDSeg1) + len(bf.AcoustIDSeg2) +
+			len(bf.AcoustIDSeg3) + len(bf.AcoustIDSeg4) + len(bf.AcoustIDSeg5) +
+			len(bf.AcoustIDSeg6))
+		for _, s := range []*string{
+			bf.IntroTranscription,
+			bf.FingerprintDiagnosticJSON,
+			bf.FingerprintFailureReason,
+			bf.FingerprintFailureDetail,
+		} {
+			if s != nil {
+				n += int64(len(*s))
+			}
+		}
+		return n
 	}
 
 	// safeInsert tries to insert an object, logging+counting failures rather
@@ -152,6 +187,7 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 		if err := json.Unmarshal(val, &bf); err != nil {
 			return false, nil
 		}
+		bytesDiscarded[memTableBookFiles] += discardedEncodedLen(&bf)
 		return safeInsert(memTableBookFiles, stripBookFileForMemdb(&bf), key)
 	}); err != nil {
 		return fmt.Errorf("warmup book_files: %w", err)
@@ -287,6 +323,8 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 	m.lastWarmCounts = maps.Clone(counts)
 	m.lastWarmScanned = maps.Clone(scanned)
 	m.lastWarmDurations = maps.Clone(durations)
+	m.lastWarmBytes = maps.Clone(bytesScanned)
+	m.lastWarmDiscarded = maps.Clone(bytesDiscarded)
 	m.warmCountsMu.Unlock()
 
 	slog.Info("memdb warmup complete",
@@ -308,6 +346,13 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 		// the scans, is what holds the library down for two minutes.
 		"phase_ms", durationsMillis(durations),
 		"commit_ms", commitMS,
+		// Bytes of Pebble values read per phase, and how many of those bytes
+		// belonged to fields the memdb projection discards immediately after
+		// decoding them. A discarded share near the total means the fix is to
+		// stop storing those fields in the row, not to make the scan faster —
+		// see MemStore.LastWarmupBytes.
+		"phase_mb", bytesMegabytes(bytesScanned),
+		"discarded_mb", bytesMegabytes(bytesDiscarded),
 	)
 	if len(skips) > 0 {
 		slog.Warn("memdb warmup: rows skipped by table",
@@ -330,6 +375,27 @@ func durationsMillis(d map[string]time.Duration) map[string]int64 {
 	out := make(map[string]int64, len(d))
 	for table, dur := range d {
 		out[table] = dur.Milliseconds()
+	}
+	return out
+}
+
+// bytesMegabytes renders per-phase byte totals as megabytes for the warmup log.
+//
+// Nonzero totals round UP, never down. Plain integer division would print 0 for
+// any phase under a megabyte, making "read nothing" and "read a little"
+// indistinguishable — and a zero that can mean two things is how a measurement
+// stops being evidence. With ten phases the ceiling costs at most 10 MB of
+// overstatement against a total measured in gigabytes.
+func bytesMegabytes(b map[string]int64) map[string]int64 {
+	const mb = 1 << 20
+	out := make(map[string]int64, len(b))
+	for table, n := range b {
+		switch {
+		case n == 0:
+			out[table] = 0
+		default:
+			out[table] = (n + mb - 1) / mb
+		}
 	}
 	return out
 }
@@ -453,12 +519,17 @@ func emitMemdbSizeTelemetry(ctx context.Context, m *MemStore, counts map[string]
 // measured against that inflated denominator and appeared to be returning
 // 13.3% of the library; a P0 "silent data loss" investigation followed. The
 // iterators were correct the whole time. Never conflate the two counts again.
-func warmIter(ctx context.Context, db *pebble.DB, prefix string, fn func(key string, val []byte) (bool, error)) (rows int, scanned int, err error) {
+// The third return, `bytes`, is the summed length of the Pebble VALUES visited
+// (not the keys). It is what makes "which phase is slow" answerable as "and
+// why": a phase reading 40 GB and a phase reading 400 MB in the same wall time
+// have nothing in common and take opposite fixes. Cost is one integer add per
+// key.
+func warmIter(ctx context.Context, db *pebble.DB, prefix string, fn func(key string, val []byte) (bool, error)) (rows int, scanned int, bytes int64, err error) {
 	// Bail before creating an iterator if the warmup was canceled (Close). This
 	// keeps cancellation prompt and avoids calling NewIter on a DB that is about
 	// to be closed.
 	if err := ctx.Err(); err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
 	upper := append([]byte(nil), []byte(prefix)...)
 	// Replace trailing ':' with ';' so the upper bound sorts immediately past
@@ -473,18 +544,20 @@ func warmIter(ctx context.Context, db *pebble.DB, prefix string, fn func(key str
 		UpperBound: upper,
 	})
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
 	defer iter.Close()
 
 	for iter.First(); iter.Valid(); iter.Next() {
 		if ctx.Err() != nil {
-			return rows, scanned, ctx.Err()
+			return rows, scanned, bytes, ctx.Err()
 		}
 		scanned++
-		admitted, err := fn(string(iter.Key()), iter.Value())
+		val := iter.Value()
+		bytes += int64(len(val))
+		admitted, err := fn(string(iter.Key()), val)
 		if err != nil {
-			return rows, scanned, err
+			return rows, scanned, bytes, err
 		}
 		if admitted {
 			rows++
@@ -493,7 +566,7 @@ func warmIter(ctx context.Context, db *pebble.DB, prefix string, fn func(key str
 	// An iterator that stops short must say so rather than returning a partial
 	// set that reads as complete.
 	if err := iter.Error(); err != nil {
-		return rows, scanned, fmt.Errorf("warmup scan of %q failed after %d keys: %w", prefix, scanned, err)
+		return rows, scanned, bytes, fmt.Errorf("warmup scan of %q failed after %d keys: %w", prefix, scanned, err)
 	}
-	return rows, scanned, nil
+	return rows, scanned, bytes, nil
 }
