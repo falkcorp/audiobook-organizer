@@ -1,7 +1,7 @@
 // file: internal/server/wire_abs_routes.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 9c6b13f8-40a2-4e57-b18d-72e0a5c4d396
-// last-edited: 2026-08-12
+// last-edited: 2026-08-13
 
 package server
 
@@ -318,8 +318,9 @@ func (s *Server) wireABSRoutes() {
 		// Chapters and Progress are OPTIONAL by design: without chapters the mapper
 		// synthesizes one per track (what real ABS does for a multi-file book anyway),
 		// and without progress a session still plays, it just starts at 0.
-		Chapters: asChapterStore(s.Store()),
-		Progress: asProgressStore(s.Store()),
+		Chapters:  asChapterStore(s.Store()),
+		Playlists: asPlaylistStore(s.Store()),
+		Progress:  asProgressStore(s.Store()),
 		// Phase 6 write half. Already asserted non-nil above (bookmarkStore), so
 		// the CRUD routes always register on the supported backend.
 		Bookmarks:   bookmarkStore,
@@ -461,7 +462,7 @@ func absRouteList() []string {
 		"GET /api/libraries/:libraryId/personalized",
 		"GET /api/libraries/:libraryId/series",
 		"GET /api/libraries/:libraryId/collections",
-		"GET /api/libraries/:libraryId/playlists",
+		"GET /api/libraries/:libraryId/playlists", // real data since 2026-08-13; was h.EmptyPage
 		"GET /api/libraries/:libraryId/authors",
 		"GET /api/libraries/:libraryId/narrators",
 		"GET /api/libraries/:libraryId/filterdata",
@@ -503,4 +504,15 @@ func absRouteList() []string {
 		"PATCH /api/me/item/:id/bookmark",
 		"DELETE /api/me/item/:id/bookmark/:time",
 	}
+}
+
+// asPlaylistStore returns the user-playlist capability, or nil when the store does
+// not have it. Optional: a nil store keeps GET /api/libraries/:id/playlists
+// answering the empty page it answered before this was wired, which is a valid
+// Page<T> — never a 500.
+func asPlaylistStore(s any) abshandler.PlaylistStore {
+	if ps, ok := s.(abshandler.PlaylistStore); ok {
+		return ps
+	}
+	return nil
 }
