@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/handler.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: fb0271c6-3a49-4d85-9e13-8c507b2ad64f
-// last-edited: 2026-08-02
+// last-edited: 2026-08-13
 
 // Package abs implements the Audiobookshelf-compatible auth surface (design spec
 // Phase 1): GET /ping, GET /status, POST /login, POST /auth/refresh, POST /logout,
@@ -206,6 +206,9 @@ type Options struct {
 	// at all rather than registered and answering 500 — a client that gets a 404
 	// hides the feature, while one that gets a 500 shows an error on every open.
 	Bookmarks BookmarkStore
+	// Playlists is optional: nil keeps the playlist route answering the empty page
+	// it answered before, which is a valid Page<T>, rather than 500-ing.
+	Playlists PlaylistStore
 
 	// CoverRoot is config.AppConfig.RootDir — the library root that
 	// metadata.CoverPathForBook resolves covers under, and the base for the relative
@@ -235,6 +238,7 @@ type Handler struct {
 	chapters    ChapterStore
 	progress    ProgressStore
 	bookmarks   BookmarkStore
+	playlists   PlaylistStore
 	coverRoot   string
 	libraryName string
 
@@ -305,6 +309,7 @@ func New(o Options) (*Handler, error) {
 		library:     o.Library,
 		identity:    o.Identity,
 		chapters:    o.Chapters,
+		playlists:   o.Playlists,
 		progress:    o.Progress,
 		bookmarks:   o.Bookmarks,
 		coverRoot:   o.CoverRoot,
@@ -384,7 +389,7 @@ func (h *Handler) Register(r gin.IRouter) {
 	r.GET("/api/libraries/:libraryId/personalized", auth, h.Personalized)
 	r.GET("/api/libraries/:libraryId/series", auth, h.LibrarySeries)
 	r.GET("/api/libraries/:libraryId/collections", auth, h.EmptyPage)
-	r.GET("/api/libraries/:libraryId/playlists", auth, h.EmptyPage)
+	r.GET("/api/libraries/:libraryId/playlists", auth, h.LibraryPlaylists)
 	r.GET("/api/libraries/:libraryId/authors", auth, h.LibraryAuthors)
 	r.GET("/api/libraries/:libraryId/narrators", auth, h.LibraryNarrators)
 	r.GET("/api/libraries/:libraryId/filterdata", auth, h.LibraryFilterData)
