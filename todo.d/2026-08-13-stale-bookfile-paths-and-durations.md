@@ -3,8 +3,21 @@
 Measured 2026-08-13 against the 77-book `job` test cohort on production. These are
 **pre-existing defects the backfill exposed**, not regressions from it.
 
-- [ ] **`BookFile.FilePath` rows point at files that do not exist — 14 of 58
-      single-file cohort books (24%).** The op probed
+- [ ] **`BookFile.FilePath` rows point at files that do not exist — 16,130 books
+      library-wide, 33.7% of all single-file books.** ⚠️ The cohort figure this
+      was first written from (14 of 58, 24%) understated it; a whole-library dry
+      run put the real number at `probe-failed=16130`, and an independent `test -e`
+      sweep over a 400-book random sample agreed at 88/295 = 29.8% (which is what
+      rules out ffprobe concurrency exhaustion — `test -e` has no subprocess to
+      exhaust). Of 88 sampled missing rows, **86 (97.7%) have a `Book.FilePath`
+      that IS a regular file on disk**; only 2 are genuinely gone. So this is
+      recoverable, not data loss.
+      **MITIGATED, NOT FIXED (2026-08-13, PR #2372):** `maintenance.chapters-backfill`
+      now falls back to `Book.FilePath` when the `BookFile` path does not resolve,
+      recovering ~16k books. That is a workaround inside ONE op — the stale rows
+      are still stale, and every other consumer that resolves a file by stored
+      path still degrades silently on them. The row repair itself is still open.
+      The op probed
       `.../Timothy Zahn/The Icarus Job/The Icarus Job/The Icarus Job - Timothy Zahn - read by narrator.m4b`;
       the file actually lives at `.../Unknown Author/The Icarus Job/`. Eight of
       the fourteen are filed under `Cliff Kurt`, **who is the narrator, not the
@@ -18,6 +31,16 @@ Measured 2026-08-13 against the 77-book `job` test cohort on production. These a
       row points at a nonexistent path under the organized tree. Any consumer that
       picks the "wrong" one gets a different answer. Decide which is authoritative
       and make the other derive from it.
+- [ ] **`Book.FilePath` is NOT unique — 1,264 values are shared by more than one
+      book row (4,353 of 63,870 rows, 6.8%).** This bounds how far the #2372
+      fallback can safely be reused: anything that resolves a book to a file via
+      `Book.FilePath` can land on a row belonging to a different book. It happens
+      not to bite the chapters backfill (0 of the 88 sampled recoverable rows are
+      among the 4,353), but that is a property of today's data, not a guarantee —
+      **re-run the collision count before extending the fallback to any op that
+      WRITES a book row**, since chapters go to their own `chapters:<bookID>`
+      keyspace and a book-row write would not be so contained. Likely the same
+      root cause as the duplicate-book-rows item below.
 - [ ] **Stored `duration` is short of the real container by 119–186s on 7 cohort
       books.** Confirmed by ffprobe: `Mushoku Tensei … Vol. 03` stores 33582s while
       both physical copies measure 33767.759s. The chapter timelines written by the
