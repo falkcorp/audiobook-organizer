@@ -1,7 +1,7 @@
 # file: Makefile
-# version: 2.16.0
+# version: 2.17.0
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
-# last-edited: 2026-08-10
+# last-edited: 2026-08-12
 
 BINARY := audiobook-organizer
 ROOT_DIR := $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
@@ -494,3 +494,14 @@ t: test
 c: coverage
 b: build
 v: version
+
+# Wave 0 of the silent-failure sweep. See .golangci.yml for why this enables
+# exactly one linter, and docs/audits/2026-08-11-silent-failure-error-discards.md
+# for the population it measures. Deliberately NOT wired into `make ci`: 922
+# findings is a backlog to burn down over waves 4-13, not a gate to fail on today.
+.PHONY: lint-errcheck lint-errcheck-full
+lint-errcheck: ## Run the Wave 0 errcheck config (exclusions applied)
+	golangci-lint run ./...
+
+lint-errcheck-full: ## Same, with a count — use this to verify a new exclusion actually matched
+	@golangci-lint run ./... 2>&1 | tail -3
