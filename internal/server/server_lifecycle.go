@@ -1017,8 +1017,19 @@ func (s *Server) startBackfills() {
 	// that already have a fingerprint) and runs in the registry's own worker
 	// pool, so this is fire-and-forget — no bgWG enrollment (the op's lifecycle
 	// is owned by opRegistry, not the backfill WaitGroup).
+	// Gated by maintenance.acoustid_backfill (default OFF as of 2026-08-11): the op's
+	// load phase pulls the whole book table into memory before it starts and held
+	// ~862 MB of live heap in production, implicated in three OOM kills in one night.
+	// The startup enqueue is automatic and unattended, so it is the trigger that must
+	// respect the flag. A direct EnqueueOp("acoustid.backfill") via the ops API stays
+	// ungated — that is the deliberate opt-in path.
 	go func() {
 		if err := s.bgCtx.Err(); err != nil {
+			return
+		}
+		if !config.AppConfig.Maintenance.AcoustIDBackfill {
+			slog.Info("startup: acoustid.backfill skipped (maintenance.acoustid_backfill=false)",
+				"reason", "load phase holds the full book table in memory; see config.go")
 			return
 		}
 		if _, err := s.opRegistry.EnqueueOp(s.bgCtx, "acoustid.backfill", nil); err != nil {

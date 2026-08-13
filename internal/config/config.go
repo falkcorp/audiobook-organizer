@@ -1,7 +1,7 @@
 // file: internal/config/config.go
 // version: 1.76.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-08-11
+// last-edited: 2026-08-12
 
 package config
 
@@ -273,6 +273,10 @@ type MaintenanceConfig struct {
 	LibrarySizeRefresh   bool `json:"library_size_refresh"   mapstructure:"library_size_refresh"`
 	AcoustIDOnlineLookup bool `json:"acoustid_online_lookup" mapstructure:"acoustid_online_lookup"`
 	AcoustIDNightlyLimit int  `json:"acoustid_nightly_limit" mapstructure:"acoustid_nightly_limit"`
+	// AcoustIDBackfill gates the nightly acoustid.backfill op (local fpcalc/
+	// ffmpeg fingerprint generation). OFF by default — see the SetDefault
+	// comment for why.
+	AcoustIDBackfill bool `json:"acoustid_backfill" mapstructure:"acoustid_backfill"`
 }
 
 // MetadataScoringConfig holds settings for the AI-assisted metadata scoring pipeline.
@@ -1211,12 +1215,19 @@ func InitConfig() {
 	// AcoustID online lookup is OFF by default — uses third-party quota
 	viper.SetDefault("maintenance.acoustid_online_lookup", false)
 	viper.SetDefault("maintenance.acoustid_nightly_limit", 5000)
+	// AcoustID (local) fingerprint backfill is OFF by default as of 2026-08-11.
+	// The nightly op spawns fpcalc/ffmpeg per book file and loads the entire
+	// book table into memory before it can start; in production it held ~862 MB
+	// of live heap and was implicated in three OOM kills in one night. Opt in
+	// deliberately once the memory profile of the load phase is fixed.
+	viper.SetDefault("maintenance.acoustid_backfill", false)
 	// BindEnv maps env vars so MAINTENANCE_ENABLED etc. override even without AutomaticEnv.
 	viper.BindEnv("maintenance.enabled", "MAINTENANCE_ENABLED")                               //nolint:errcheck
 	viper.BindEnv("maintenance.window_start", "MAINTENANCE_WINDOW_START")                     //nolint:errcheck
 	viper.BindEnv("maintenance.window_end", "MAINTENANCE_WINDOW_END")                         //nolint:errcheck
 	viper.BindEnv("maintenance.acoustid_online_lookup", "MAINTENANCE_ACOUSTID_ONLINE_LOOKUP") //nolint:errcheck
 	viper.BindEnv("maintenance.acoustid_nightly_limit", "MAINTENANCE_ACOUSTID_NIGHTLY_LIMIT") //nolint:errcheck
+	viper.BindEnv("maintenance.acoustid_backfill", "MAINTENANCE_ACOUSTID_BACKFILL")           //nolint:errcheck
 
 	// Download client defaults
 	viper.SetDefault("download_client.torrent.type", "")
