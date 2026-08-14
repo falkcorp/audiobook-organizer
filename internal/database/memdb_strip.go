@@ -1,7 +1,7 @@
 // file: internal/database/memdb_strip.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-stripbook0001
-// last-edited: 2026-08-11
+// last-edited: 2026-08-13
 
 package database
 
@@ -26,6 +26,15 @@ package database
 // Predicates that filter by these fields (e.g. `field:description`)
 // silently miss against stripped books. The predicate paths that need
 // them (rare) should be routed through Pebble's GetBookByID instead.
+//
+// The five BookSig* fields are still cleared here even though CreateBook and
+// UpdateBook no longer write them into the row at all (they live under
+// book_sig:<id> — see pebble_store_booksig.go). Rows written before that
+// change still carry them inline and will until the migration op runs, so the
+// strip is what keeps those legacy rows out of the radix tree. Once every row
+// is migrated these five become no-ops; leave them, because the cost is a nil
+// assignment and removing them would silently re-admit ~22 KB per book if any
+// un-migrated row survives.
 func stripBookForMemdb(src *Book) *Book {
 	if src == nil {
 		return nil

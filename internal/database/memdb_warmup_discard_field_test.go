@@ -1,5 +1,5 @@
 // file: internal/database/memdb_warmup_discard_field_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c4e08b52-71a9-4d36-9f2b-6a30df518e7c
 // last-edited: 2026-08-13
 
@@ -190,6 +190,18 @@ func TestDiscardByField_SegmentsAreChargedOnlyFromLegacyRows(t *testing.T) {
 // across 67,824 rows on production, the second largest — is accounted at all.
 // It was unmeasured in the first version, which meant a fifth of the discarded
 // bytes in the library had no owner.
+//
+// The book_sig_v1_and_mask half is now the same shape as
+// TestDiscardByField_SegmentsAreChargedOnlyFromLegacyRows, and for the same
+// reason: since the signature moved to the book_sig: sidecar
+// (pebble_store_booksig.go), CreateBook/UpdateBook strip it from the book: row,
+// so the supported write path can no longer produce an inline one. Nothing
+// asserts that the books phase charges a signature for a CURRENTLY-WRITABLE
+// book, because that state does not exist any more.
+//
+// Read a nonzero book_sig_v1_and_mask in production the same way: it measures
+// un-migrated legacy rows draining toward zero as the migration op runs, not
+// ongoing cost that new writes keep re-creating.
 func TestDiscardByField_CoversTheBooksPhaseToo(t *testing.T) {
 	const blob = 4096
 
@@ -216,8 +228,24 @@ func TestDiscardByField_CoversTheBooksPhaseToo(t *testing.T) {
 
 	require.GreaterOrEqual(t, byField[DiscardFieldDescription], int64(blob),
 		"the books phase must charge Description/VersionNotes")
+
+	// Control: Description above proves the books phase IS being walked, so a
+	// zero here is the sidecar strip working, not the phase going unmeasured.
+	require.Zero(t, byField[DiscardFieldBookSignature],
+		"CreateBook writes the signature to the book_sig: sidecar, so the book: row must carry none")
+
+	// Now a legacy-format row, written straight to Pebble the way rows looked
+	// before the sidecar existed.
+	legacy := fmt.Sprintf(
+		`{"id":"01LEGACYSIG","title":"Legacy Sig","file_path":"/tmp/legacy_sig.m4b","book_sig_v1":%q}`,
+		sig)
+	require.NoError(t, store.db.Set([]byte("book:01LEGACYSIG"), []byte(legacy), nil))
+
+	mem = warmBytesFresh(t, store)
+	byField = mem.LastWarmupDiscardedByField()
+
 	require.GreaterOrEqual(t, byField[DiscardFieldBookSignature], int64(blob),
-		"the books phase must charge BookSigV1/BookSigV1Mask")
+		"a legacy row carrying book_sig_v1 inline must be charged to the signature group")
 	require.Less(t, byField[DiscardFieldBookSignature], int64(blob*4/3),
 		"BookSigV1 is already base64; charging it EncodedLen over-states it by 4/3")
 }

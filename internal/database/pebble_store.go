@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.124.0
+// version: 1.125.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-08-13
 
@@ -614,6 +614,16 @@ func (p *PebbleStore) GetAllBooksFullFrom(afterID string, limit int) ([]Book, er
 		if book.MarkedForDeletion != nil && *book.MarkedForDeletion {
 			continue
 		}
+		// This branch decodes the row directly instead of point-getting each
+		// ID, so unlike the memdb branch above it does not inherit
+		// GetBookByID's sidecar hydration and has to do its own. Both branches
+		// must agree: BookSignatureScan filters on BookSigV1 != nil, and a
+		// UseMemDB=false store that silently returned unhydrated books would
+		// scan zero pairs and report success — the same shape as the bug the
+		// getAllPrimaryBooksWithFullFields comment documents.
+		if err := p.hydrateBookSig(&book); err != nil {
+			return nil, err
+		}
 		books = append(books, book)
 		count++
 		if limit > 0 && count >= limit {
@@ -992,6 +1002,17 @@ func (p *PebbleStore) GetBookByID(id string) (*Book, error) {
 	if err := json.Unmarshal(value, &book); err != nil {
 		return nil, err
 	}
+	// Full-fidelity read: fold in the book_sig: sidecar. This is THE hydration
+	// point — every signature consumer in the codebase reaches its Book through
+	// here (dedup's bookSignature and its AcoustID-conflict cache,
+	// dataset/builder's StoreAdapter.GetBook, registry deps' ReqFieldSet
+	// predicate, acoustid's synthesize read-modify-write, both of
+	// booksig_recovery_audit's reads, UpdateBook's own oldBook fetch, and
+	// GetAllBooksFullFrom's memdb branch, which point-gets each ID through this
+	// function). See pebble_store_booksig.go.
+	if err := p.hydrateBookSig(&book); err != nil {
+		return nil, err
+	}
 	return &book, nil
 }
 
@@ -1000,7 +1021,16 @@ func (p *PebbleStore) GetBookByID(id string) (*Book, error) {
 // nil-on-not-found). It reuses GetBookByID's exact read pattern per item —
 // the same book:<id> point-get + json.Unmarshal — so it is full-fidelity,
 // never a memdb-slim projection; heavy fields (AcoustIDFingerprint etc.)
-// survive.
+// survive — including the five BookSig* fields, which now come from the
+// book_sig: sidecar (pebble_store_booksig.go).
+//
+// Hydrating them here costs one extra point-get per id, and this is the search
+// hydration path, called with up to searchPostFilterWindow = 10000 ids. That
+// is still cheaper than what it replaced: the signature used to be read INLINE
+// as part of every row (~22 KB each), so the trade is N bytes-heavy reads for
+// N small seeks against much smaller rows. Skipping it would also quietly drop
+// book_sig_coverage_pct from the search payload, which the web client types and
+// renders as a partial-fingerprint chip.
 //
 // Concurrency: this is a plain sequential loop, not a worker pool. Per
 // CLAUDE.md's concurrency rule, that's correct here because callers bound
@@ -1010,7 +1040,7 @@ func (p *PebbleStore) GetBookByID(id string) (*Book, error) {
 //
 // Error semantics (spec §C3, verbatim contract): a per-item not-found is
 // skipped silently, matching GetBookByID. On the FIRST non-not-found
-// read/unmarshal error, the loop stops and returns the rows read so far
+// read/unmarshal/sidecar-hydrate error, the loop stops and returns the rows read so far
 // ALONGSIDE the error (not a bare nil, err) so the caller can still serve a
 // partial page instead of failing the whole request.
 func (p *PebbleStore) GetBooksByIDs(ids []string) ([]Book, error) {
@@ -1030,6 +1060,14 @@ func (p *PebbleStore) GetBooksByIDs(ids []string) ([]Book, error) {
 		closer.Close()
 		if unmarshalErr != nil {
 			return books, fmt.Errorf("unmarshal book %q: %w", id, unmarshalErr)
+		}
+		// Fold the sidecar back in. Returning the rows read so far ALONGSIDE
+		// the error is this function's existing contract (see the two branches
+		// above), and both search callers treat a non-nil error as fail-open —
+		// they warn and serve the partial page. Aborting outright here would
+		// turn one bad sidecar read into a truncated search page.
+		if err := p.hydrateBookSig(&book); err != nil {
+			return books, fmt.Errorf("hydrate book signature %q: %w", id, err)
 		}
 		books = append(books, book)
 	}
@@ -1898,7 +1936,9 @@ func (p *PebbleStore) CreateBook(book *Book) (*Book, error) {
 	book.CreatedAt = &now
 	book.UpdatedAt = &now
 
-	data, err := json.Marshal(book)
+	// The row is marshalled WITHOUT the five BookSig* fields; they go to the
+	// book_sig: sidecar below, in this same batch. See pebble_store_booksig.go.
+	data, err := json.Marshal(stripBookSigForRow(book))
 	if err != nil {
 		return nil, err
 	}
@@ -1908,6 +1948,14 @@ func (p *PebbleStore) CreateBook(book *Book) (*Book, error) {
 	// Main key
 	key := []byte(fmt.Sprintf("book:%s", book.ID))
 	if err := batch.Set(key, data, nil); err != nil {
+		batch.Close()
+		return nil, err
+	}
+
+	// Signature sidecar, in the SAME batch as the row it belongs to — a book
+	// can never exist with a partially-written signature. Writes nothing when
+	// the book carries no signature, which is the common case on create.
+	if err := writeBookSigToBatch(batch, book); err != nil {
 		batch.Close()
 		return nil, err
 	}
@@ -2079,12 +2127,21 @@ func (p *PebbleStore) UpdateBook(id string, book *Book) (*Book, error) {
 		book.Series = oldBook.Series
 	}
 
-	data, err := json.Marshal(book)
+	// The row is marshalled WITHOUT the five BookSig* fields; they go to the
+	// book_sig: sidecar below, in this same batch. See pebble_store_booksig.go.
+	data, err := json.Marshal(stripBookSigForRow(book))
 	if err != nil {
 		return nil, err
 	}
 
-	// CoW: snapshot old state before overwriting
+	// CoW: snapshot old state before overwriting.
+	//
+	// Deliberately NOT stripped: the snapshot keeps the full inline signature.
+	// booksig_recovery_audit recovers a wiped signature by scanning book_ver:
+	// rows for the newest one that still carries BookSigV1, and that safety net
+	// must not be removed in the same change that moves where the live copy
+	// lives. It does mean book_ver: rows stay large — this change reduces what
+	// STARTUP READS, not what the database stores on disk.
 	oldData, marshalErr := json.Marshal(oldBook)
 	if marshalErr != nil {
 		return nil, fmt.Errorf("failed to marshal old book for version: %w", marshalErr)
@@ -2102,6 +2159,17 @@ func (p *PebbleStore) UpdateBook(id string, book *Book) (*Book, error) {
 	// Update main key
 	key := []byte(fmt.Sprintf("book:%s", id))
 	if err := batch.Set(key, data, nil); err != nil {
+		batch.Close()
+		return nil, err
+	}
+
+	// Signature sidecar, same batch as the row. `book` reaches here already
+	// carrying oldBook's signature whenever the caller passed nil for it (the
+	// preserve-guard above), and oldBook is itself hydrated because it came
+	// from GetBookByID — so a memdb round-trip write re-writes the signature it
+	// read rather than dropping the key. When there is genuinely no signature,
+	// nothing is written and nothing is deleted.
+	if err := writeBookSigToBatch(batch, book); err != nil {
 		batch.Close()
 		return nil, err
 	}
@@ -2470,6 +2538,18 @@ func (p *PebbleStore) DeleteBook(id string) error {
 	// Delete main key
 	key := []byte(fmt.Sprintf("book:%s", id))
 	if err := batch.Delete(key, nil); err != nil {
+		batch.Close()
+		return err
+	}
+
+	// Delete the signature sidecar. Unconditional: gating on
+	// book.BookSigV1 != nil would make the teardown depend on the read that
+	// just hydrated it, so a sidecar that failed to hydrate — or a book whose
+	// row was written by an older build — would leak its key forever. A
+	// Delete of an absent key is a no-op in Pebble, so there is nothing to
+	// gain by checking. Same dangling-row class as the work/hash indexes
+	// below, which were added to this function after a writer got ahead of it.
+	if err := batch.Delete(bookSigKey(id), nil); err != nil {
 		batch.Close()
 		return err
 	}
