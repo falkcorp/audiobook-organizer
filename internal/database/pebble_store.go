@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.127.0
+// version: 1.128.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-08-14
 
@@ -1813,9 +1813,64 @@ func (p *PebbleStore) GetBooksByAuthorIDCore(authorID int) ([]BookCore, error) {
 	return cores, nil
 }
 
-// getBooksByAuthorIDFull performs a full Pebble book scan filtered by author ID.
-// Fallback path after Task 3.4 index removal.
+// bookIDsInAuthorJunction returns the IDs of every book carrying a book_authors
+// row for this author, at any role or position.
+//
+// Extracted so that both Pebble author getters resolve the junction the same
+// way. They previously did not: this scan lived inline in
+// GetBooksByAuthorIDWithRoleCore and getBooksByAuthorIDFull had no equivalent
+// at all, so the Pebble listing path could only ever see an author through the
+// denormalized Book.AuthorID field. Authors 2..n of a credit list exist ONLY as
+// junction rows, so a co-author's books were invisible to that path entirely.
+func (p *PebbleStore) bookIDsInAuthorJunction(authorID int) (map[string]struct{}, error) {
+	bookIDSet := make(map[string]struct{})
+	iter, err := p.db.NewIter(&pebble.IterOptions{
+		LowerBound: []byte("book_authors:"),
+		UpperBound: []byte("book_authors:~"),
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	for iter.First(); iter.Valid(); iter.Next() {
+		var authors []BookAuthor
+		if err := json.Unmarshal(iter.Value(), &authors); err != nil {
+			continue
+		}
+		for _, a := range authors {
+			if a.AuthorID == authorID {
+				// Key is "book_authors:<bookID>".
+				bookIDSet[strings.TrimPrefix(string(iter.Key()), "book_authors:")] = struct{}{}
+				break
+			}
+		}
+	}
+	return bookIDSet, nil
+}
+
+// getBooksByAuthorIDFull performs a full Pebble book scan for the author's
+// LISTING view: junction + legacy Book.AuthorID, soft-deleted excluded,
+// non-primary versions excluded.
+//
+// Both exclusions are deliberate and both were missing before 2026-08-14. The
+// junction lookup was absent, and the primary-version filter was absent, which
+// left this path disagreeing with its memdb counterpart in two directions at
+// once — under-reporting co-authors while over-reporting duplicate versions.
+// Opposite-signed errors keep aggregate counts plausible, which is why this
+// survived so long. This path only runs before memdb publishes (~132 s after
+// start on prod), so matching memdb here makes cold behaviour match warm rather
+// than changing what the UI normally shows.
+//
+// Callers needing the COMPLETE set — every merge and delete path — must use
+// GetBooksByAuthorIDWithRoleCore instead. See
+// internal/database/author_getter_conformance_test.go.
 func (p *PebbleStore) getBooksByAuthorIDFull(authorID int) ([]Book, error) {
+	inJunction, err := p.bookIDsInAuthorJunction(authorID)
+	if err != nil {
+		return nil, err
+	}
+
 	var books []Book
 	iter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: []byte("book:0"),
@@ -1828,7 +1883,7 @@ func (p *PebbleStore) getBooksByAuthorIDFull(authorID int) ([]Book, error) {
 
 	for iter.First(); iter.Valid(); iter.Next() {
 		key := string(iter.Key())
-		// Skip non-primary book keys (path index etc.)
+		// Skip secondary book keys (path index etc.)
 		if strings.Contains(key, ":path:") {
 			continue
 		}
@@ -1837,10 +1892,15 @@ func (p *PebbleStore) getBooksByAuthorIDFull(authorID int) ([]Book, error) {
 		if err := json.Unmarshal(iter.Value(), &book); err != nil {
 			continue
 		}
-		if book.AuthorID == nil || *book.AuthorID != authorID {
+		_, linkedViaJunction := inJunction[book.ID]
+		linkedViaLegacy := book.AuthorID != nil && *book.AuthorID == authorID
+		if !linkedViaJunction && !linkedViaLegacy {
 			continue
 		}
 		if bookIsSoftDeleted(&book) {
+			continue
+		}
+		if book.IsPrimaryVersion != nil && !*book.IsPrimaryVersion {
 			continue
 		}
 		books = append(books, book)
@@ -1866,7 +1926,13 @@ func (p *PebbleStore) getBooksByAuthorIDFull(authorID int) ([]Book, error) {
 // docs/specs/2026-07-05-store-getter-fidelity-unification.md.
 func (p *PebbleStore) GetBooksByAuthorIDWithRoleCore(authorID int) ([]BookCore, error) {
 	if p.UseMemDB && p.mem() != nil {
-		books, err := p.mem().GetBooksByAuthorID(authorID, 0, 0)
+		// AllVersions, not the plain getter: this method's callers are merges,
+		// deletes and dedup, and a link they cannot see is one they will not
+		// rewrite before deleting the author — which orphans it. The Pebble
+		// branch below has never filtered non-primary versions, so using the
+		// filtered memdb view here also made the two paths disagree. See
+		// internal/database/author_getter_conformance_test.go.
+		books, err := p.mem().GetBooksByAuthorIDAllVersions(authorID, 0, 0)
 		if err != nil {
 			return nil, err
 		}
@@ -1876,32 +1942,16 @@ func (p *PebbleStore) GetBooksByAuthorIDWithRoleCore(authorID int) ([]BookCore, 
 		}
 		return cores, nil
 	}
-	// Collect book IDs from the book_authors junction table.
-	bookIDSet := make(map[string]struct{})
-	iter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("book_authors:"),
-		UpperBound: []byte("book_authors:~"),
-	})
+	// Collect book IDs from the book_authors junction table. Shared with the
+	// listing path so the two Pebble getters cannot drift apart on what
+	// "linked to this author" means.
+	bookIDSet, err := p.bookIDsInAuthorJunction(authorID)
 	if err != nil {
 		return nil, err
 	}
-	for iter.First(); iter.Valid(); iter.Next() {
-		var authors []BookAuthor
-		if err := json.Unmarshal(iter.Value(), &authors); err != nil {
-			continue
-		}
-		for _, a := range authors {
-			if a.AuthorID == authorID {
-				// Extract bookID from key "book_authors:<bookID>"
-				key := string(iter.Key())
-				bookID := strings.TrimPrefix(key, "book_authors:")
-				bookIDSet[bookID] = struct{}{}
-			}
-		}
-	}
-	iter.Close()
 
-	// Also include books matched via legacy AuthorID field.
+	// Also include books matched via legacy AuthorID field. Note there is
+	// deliberately no IsPrimaryVersion filter here — see the doc comment.
 	var books []Book
 	bookIter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: []byte("book:0"),
