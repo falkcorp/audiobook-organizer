@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-08-14-the-series-that-vanished-from-under-13322-books-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 4d81f2ba-6c39-4e17-8a52-9f0b3c7e15d8 -->
 <!-- last-edited: 2026-08-14 -->
 
@@ -82,16 +82,26 @@ are not doing any harm, they still record which books were grouped together, and
 library next reads a series name from a file's own tags it will overwrite them correctly.
 Erasing them would throw away the grouping and gain nothing.
 
-One thing remains open. The damage did not arrive gradually — it came in bursts, on ten
-separate days in total, and the largest by far was **2026-08-11, when 5,367 books were
-added carrying references to series that do not exist**. Those books are loose files
-picked up as "Unknown Author", with titles like *Chapter 06*, so they came in through a
-scan of unsorted audio rather than through the weekly tidy-up. No series-deleting job ran
-on that day at all.
+One thing remains open, though it turned out to be smaller than it first looked. The damage
+did not arrive gradually — it came in bursts, on ten separate days, and the biggest single
+day was **2026-08-11, when 5,367 books appeared carrying references to series that don't
+exist**. That looked at first like something actively breaking new books.
 
-So the weekly job is no longer the cause, and was not the cause of the most recent burst
-either. Whatever ran on 11 August is still unidentified, and it is the thing to find next —
-the fix shipped here stops the bleeding from one source, not from that one.
+It isn't. Every one of those books points at a series that was **already** broken before
+that day — 5,068 series references, and not one of them was new. The last time a genuinely
+new broken reference appeared was **19 July**. What happened in August was copying, not
+breaking: something split existing books into per-chapter pieces (hence titles like
+*Chapter 06*), and each new piece inherited the broken series reference from the book it
+came from.
+
+That also rules out ordinary scanning as a cause, for a simple reason: when a scan reads a
+series name off a file, it looks the series up **by name** and creates it if it's missing.
+It can't end up pointing at something that isn't there. Only copying an existing record can
+do that.
+
+So nothing new is being broken. What's left is to stop the copying from spreading the old
+damage — the places that duplicate a book's record should drop a series reference that no
+longer points anywhere, rather than passing it on.
 
 ## Why it took so long to spot
 

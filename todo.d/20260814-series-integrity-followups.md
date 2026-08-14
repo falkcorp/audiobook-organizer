@@ -26,9 +26,38 @@
   metadata_candidate_fetch ×1). No scan op is recorded there either, which is
   itself worth explaining. `maintenance.series-prune` is ruled out for this burst.
 
-  Two shapes to test: (a) the creating path assigns a `SeriesID` it never
-  persists, or (b) it copies a `SeriesID` from another record whose series was
-  already gone. Start from whatever created book `01KZSX7TW6BZXJX11F8K6Y0DSZ`.
+  **RESOLVED — it is propagation, not minting.** Dating each phantom series ID by
+  the earliest book that references it:
+
+  | day | ids seen | first appearance | inherited |
+  |---|---|---|---|
+  | 2026-04-04 | 5,261 | 5,261 | 0 |
+  | 2026-04-28 | 932 | 909 | 23 |
+  | 2026-04-29 | 17 | 17 | 0 |
+  | 2026-04-30 | 145 | 139 | 6 |
+  | 2026-05-01 | 1 | 0 | 1 |
+  | 2026-06-18 | 70 | 70 | 0 |
+  | 2026-06-19 | 16 | 16 | 0 |
+  | 2026-07-19 | 481 | 481 | 0 |
+  | **2026-08-11** | **5,068** | **0** | **5,068** |
+  | **2026-08-12** | **121** | **0** | **121** |
+
+  No new phantom series ID has appeared since **2026-07-19**. Both August bursts
+  are 100% inherited — every ID they reference was already dangling.
+
+  The mechanism follows from `resolveSeriesID` (`internal/scanner/scanner.go:2487`):
+  it resolves by **name**, creates the series when absent, and `CreateSeries`
+  commits to Pebble with `pebble.Sync` before returning. **A scan therefore cannot
+  produce a dangling reference** — it would just create a fresh series row. So any
+  book holding a dangling `SeriesID` got it by **copying an existing book's
+  record**, not by scanning.
+
+  So the remaining work is not a hunt for a minting bug. It is: find the paths
+  that copy `SeriesID` onto newly-created book rows and have them drop a reference
+  whose series no longer exists. Prime suspects, given the 08-11 rows are
+  per-chapter books (`Chapter 06`) created inside one minute:
+  `internal/dedup/split_book_detector.go`, `maintenance.regroup-shattered-ai`,
+  `maintenance.itunes-regroup`. Start from book `01KZSX7TW6BZXJX11F8K6Y0DSZ`.
 
 - [ ] **`BulkDeleteSeries` still deletes on a filtered count.**
   `internal/server/handlers/entities/handler.go:1017` guards with
