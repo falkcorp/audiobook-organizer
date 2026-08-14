@@ -1,6 +1,7 @@
 // file: internal/search/query_parser.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3c4a1d8f-5b2e-4f70-a7c6-2f8d0e1b9a57
+// last-edited: 2026-08-13
 //
 // Parser for the library search DSL (spec 3.4 / DES-1 v1.1).
 //
@@ -221,6 +222,36 @@ func (p *parser) parsePrimary() (Node, error) {
 // as free text. Handles quoting, value-alternation, and the
 // suffix operators * / ~ / ^boost.
 func (p *parser) parseFieldOrToken() (Node, error) {
+	// A bare quoted phrase: "all jobs".
+	//
+	// This must be handled BEFORE the bare-token scan below, which stops at
+	// whitespace and would therefore split `"All Jobs"` into two tokens,
+	// `"All` and `Jobs"`, with the quote characters still attached. The
+	// English analyser then discards those quotes as punctuation, so the
+	// query behaved exactly like the unquoted one and FreeTextNode.Quoted
+	// was never set — leaving the MatchPhraseQuery branch in the translator
+	// unreachable for bare free text. Measured on production 2026-08-13:
+	// `"All Jobs"` returned 300 rows, byte-identical to unquoted `All Jobs`,
+	// topped by "Side Jobs" and "The Icarus Job".
+	//
+	// The field-scoped form (title:"all jobs") was never affected — it goes
+	// through parseFieldValue, which has always handled quotes.
+	if p.peek() == '"' {
+		phrase, err := p.parseQuoted()
+		if err != nil {
+			return nil, err
+		}
+		// Swallow a '*' glued to the closing quote. The web UI appends one
+		// to whatever was typed, and letting it fall through would leave a
+		// lone '*' for the next iteration to parse as an empty-prefix token,
+		// which matches every document. A prefix-of-a-phrase is not a query
+		// Bleve offers, so the phrase itself is the honest interpretation.
+		if p.peek() == '*' {
+			p.pos++
+		}
+		return &FreeTextNode{Value: phrase, Quoted: true}, nil
+	}
+
 	// Read the identifier up to : or whitespace / special char.
 	start := p.pos
 	for p.pos < len(p.input) {
