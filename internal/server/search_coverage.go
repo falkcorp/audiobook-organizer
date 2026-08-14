@@ -1,7 +1,7 @@
 // file: internal/server/search_coverage.go
-// version: 1.0.0
+// version: 2.0.0
 // guid: ee9cc3d9-3925-4f72-af8a-e9f25a943fb9
-// last-edited: 2026-08-13
+// last-edited: 2026-08-14
 //
 // Boot-time repair for a PARTIALLY built Bleve search index.
 //
@@ -56,16 +56,21 @@ type bookIDLister interface {
 	ListBookIDs() ([]string, error)
 }
 
-// reconcileSearchIndexCoverage compares the number of indexed documents
-// against the number of books and, when the index is short, marks every book
-// dirty so runSearchReconciler re-indexes them.
+// reconcileSearchIndexCoverage compares the SET of indexed document IDs
+// against the SET of live book IDs, marks the missing ones dirty so
+// runSearchReconciler re-indexes them, and deletes stale documents whose
+// book is gone (hard-deleted or soft-deleted).
 //
 // It is a no-op on a healthy index, so it is safe to run on every boot.
 //
-// Deliberately compares counts rather than probing each book: a per-book
-// existence check against Bleve would be ~40K point lookups on every start,
-// and the count comparison is enough to decide whether a sweep is warranted.
-// The cost of being wrong is a redundant re-index, not data loss.
+// This replaced a count comparison (len(ids) <= DocCount() → "OK"), which a
+// polluted index passes forever: on production 2026-08-14 the index held
+// 67,824 docs against 63,871 live books — 3,953 soft-deleted books indexed
+// by the 08-13 backfill, whose enumeration used the then-leaky trash-
+// including ListBookIDs — and the count gate reported "coverage OK" over
+// the top. Padding can also mask genuinely missing live books. The set
+// comparison costs one sequential doc-ID pass (AllDocIDs), not per-book
+// point lookups.
 func (s *Server) reconcileSearchIndexCoverage() {
 	if s.searchIndex == nil {
 		return
@@ -88,9 +93,9 @@ func (s *Server) reconcileSearchIndexCoverage() {
 		return
 	}
 
-	docs, err := s.searchIndex.DocCount()
+	docIDs, err := s.searchIndex.AllDocIDs()
 	if err != nil {
-		slog.Warn("search coverage: DocCount failed", "err", err)
+		slog.Warn("search coverage: AllDocIDs failed", "err", err)
 		return
 	}
 	ids, err := lister.ListBookIDs()
@@ -99,30 +104,73 @@ func (s *Server) reconcileSearchIndexCoverage() {
 		return
 	}
 
-	if uint64(len(ids)) <= docs {
-		slog.Info("search index coverage OK", "indexed", docs, "books", len(ids))
+	indexed := make(map[string]struct{}, len(docIDs))
+	for _, id := range docIDs {
+		indexed[id] = struct{}{}
+	}
+	live := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		live[id] = struct{}{}
+	}
+
+	var missing []string
+	for _, id := range ids {
+		if _, ok := indexed[id]; !ok {
+			missing = append(missing, id)
+		}
+	}
+	var stale []string
+	for _, id := range docIDs {
+		if _, ok := live[id]; !ok {
+			stale = append(stale, id)
+		}
+	}
+
+	if len(missing) == 0 && len(stale) == 0 {
+		slog.Info("search index coverage OK", "indexed", len(docIDs), "books", len(ids))
 		return
 	}
 
-	missing := uint64(len(ids)) - docs
-	slog.Warn("search index is short of the library; marking books for reconciliation",
-		"indexed", docs, "books", len(ids), "shortfall", missing)
+	slog.Warn("search index diverges from the library",
+		"indexed", len(docIDs), "books", len(ids), "missing", len(missing), "stale", len(stale))
 
 	start := time.Now()
 	marked := 0
-	for _, id := range ids {
+	for _, id := range missing {
 		select {
 		case <-s.bgCtx.Done():
 			// Cancellation is safe here in a way it is not in the backfill:
 			// the marks already written are durable, so the next boot's
 			// coverage check resumes from a strictly better position.
-			slog.Info("search coverage: marking canceled (bgCtx)", "marked", marked, "of", len(ids))
+			slog.Info("search coverage: marking canceled (bgCtx)", "marked", marked, "of", len(missing))
 			return
 		default:
 		}
 		s.markIndexDirty(id)
 		marked++
 	}
-	slog.Info("search coverage: books marked for reconciliation",
-		"marked", marked, "shortfall", missing, "took", time.Since(start))
+
+	// Stale documents are removed directly rather than through the dirty set:
+	// the reconciler's unit of work is "re-index book X from the store", and
+	// for these there is no live book to read. DeleteBook on an absent doc is
+	// a no-op, so a doc raced away by a concurrent delete is fine. A book
+	// restored from soft-delete later is re-indexed by the restore path
+	// itself: RestoreAudiobook goes through store.UpdateBook, and the
+	// indexedStore decorator enqueues a reindex on every UpdateBook.
+	deleted := 0
+	for _, id := range stale {
+		select {
+		case <-s.bgCtx.Done():
+			slog.Info("search coverage: stale-doc deletion canceled (bgCtx)", "deleted", deleted, "of", len(stale))
+			return
+		default:
+		}
+		if err := s.searchIndex.DeleteBook(id); err != nil {
+			slog.Warn("search coverage: failed to delete stale doc", "bookID", id, "err", err)
+			continue
+		}
+		deleted++
+	}
+	slog.Info("search coverage: reconciled",
+		"marked_missing", marked, "deleted_stale", deleted, "took", time.Since(start))
 }

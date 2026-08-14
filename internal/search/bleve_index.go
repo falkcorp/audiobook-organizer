@@ -1,7 +1,7 @@
 // file: internal/search/bleve_index.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3c8e1a2f-4d9b-4f70-a5c6-2f8d0e1b9a47
-// last-edited: 2026-08-13
+// last-edited: 2026-08-14
 //
 // BleveIndex is the single-package wrapper around a Bleve v2 scorch
 // index backing library search (spec DES-1 / backlog §4.7). The
@@ -357,6 +357,51 @@ func facetTermCounts(res *bleve.SearchResult, facetName string) map[string]int {
 		out[t.Term] = t.Count
 	}
 	return out
+}
+
+// AllDocIDs returns the external document ID of every indexed document,
+// via the low-level DocIDReader — one sequential pass, no scoring, no
+// document loading. It exists for the boot coverage gate, which needs the
+// index's ID SET: DocCount alone cannot distinguish "every live book is
+// indexed" from "the count is padded by documents whose books are gone"
+// (measured on production 2026-08-14: 67,824 docs vs 63,871 live books —
+// the surplus was 3,953 soft-deleted books indexed by a backfill that
+// enumerated with a trash-including lister).
+func (b *BleveIndex) AllDocIDs() ([]string, error) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if b.idx == nil {
+		return nil, fmt.Errorf("bleve index not open")
+	}
+	advanced, err := b.idx.Advanced()
+	if err != nil {
+		return nil, fmt.Errorf("advanced index access: %w", err)
+	}
+	reader, err := advanced.Reader()
+	if err != nil {
+		return nil, fmt.Errorf("index reader: %w", err)
+	}
+	defer func() { _ = reader.Close() }()
+	itr, err := reader.DocIDReaderAll()
+	if err != nil {
+		return nil, fmt.Errorf("doc id reader: %w", err)
+	}
+	defer func() { _ = itr.Close() }()
+	var out []string
+	for {
+		internalID, err := itr.Next()
+		if err != nil {
+			return nil, fmt.Errorf("doc id iterate: %w", err)
+		}
+		if internalID == nil {
+			return out, nil
+		}
+		extID, err := reader.ExternalID(internalID)
+		if err != nil {
+			return nil, fmt.Errorf("external id: %w", err)
+		}
+		out = append(out, extID)
+	}
 }
 
 // DocCount returns the number of documents currently indexed. Useful
