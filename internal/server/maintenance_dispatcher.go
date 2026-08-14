@@ -1,19 +1,22 @@
 // file: internal/server/maintenance_dispatcher.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 55555555-5555-5555-5555-555555555555
-// last-edited: 2026-08-11
+// last-edited: 2026-08-14
 
 package server
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
+	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/gin-gonic/gin"
 	ulid "github.com/oklog/ulid/v2"
 )
@@ -51,6 +54,31 @@ func (s *Server) listMaintenanceJobs(c *gin.Context) {
 	}{Jobs: out})
 }
 
+// advertisedDryRunDefault reports the dry_run value this job publishes in its
+// DefaultParams(), which is what listMaintenanceJobs serves to clients as
+// `default_params`. Jobs that expose no dry_run key at all report false.
+//
+// It goes through JSON deliberately rather than reflecting over the struct.
+// DefaultParams() returns `any` — in practice an anonymous struct declared
+// inline in each job file — and JSON is the representation the client actually
+// received. Reading it the same way the client did is what keeps the advertised
+// default and the applied default from drifting apart again; a reflection-based
+// reader could disagree with the wire format over tags, embedding or casing,
+// which is the exact class of divergence this function exists to close.
+func advertisedDryRunDefault(job maintenance.MaintenanceJob) bool {
+	raw, err := json.Marshal(job.DefaultParams())
+	if err != nil {
+		return false
+	}
+	var dp struct {
+		DryRun *bool `json:"dry_run"`
+	}
+	if err := json.Unmarshal(raw, &dp); err != nil || dp.DryRun == nil {
+		return false
+	}
+	return *dp.DryRun
+}
+
 // runMaintenanceJob enqueues the named maintenance job as an async operation.
 func (s *Server) runMaintenanceJob(c *gin.Context) {
 	jobID := c.Param("job_id")
@@ -84,15 +112,42 @@ func (s *Server) runMaintenanceJob(c *gin.Context) {
 	// byte-identical either way, so the operator who asked for a preview had no
 	// signal at all that they got a mutation.
 	//
-	// An ABSENT body still means DryRun=false; that is this endpoint's existing
-	// contract and is deliberately unchanged here. Only "you sent something and
-	// we could not read it" becomes an error.
+	// DryRun is a *bool so that "omitted" is representable at all. With a plain
+	// bool, omitted and false are the same value and the handler cannot tell an
+	// operator who asked to apply from one who said nothing.
 	var req struct {
-		DryRun bool `json:"dry_run"`
+		DryRun *bool `json:"dry_run"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
 		httputil.RespondWithBadRequest(c, "invalid request body: "+err.Error())
 		return
+	}
+
+	// When dry_run is omitted, honor the default this job ADVERTISES rather than
+	// Go's zero value.
+	//
+	// listMaintenanceJobs (above) publishes each job's DefaultParams() to clients
+	// as `default_params`, and 18 of the 34 registered jobs advertise
+	// {"dry_run": true} — including cleanup-series, cleanup-organize-mess,
+	// dedup-books, repair-missing-files and fix-library-states. This handler
+	// previously ignored that entirely and fell through to false, so a client
+	// that read the catalogue, saw dry_run:true, and POSTed without a body got
+	// the exact opposite of what the API had just told it — a real mutation,
+	// behind an identical 202.
+	//
+	// cleanup-series is the sharp case: its first phase deletes every series
+	// holding exactly one book, and a census on 2026-08-14 found 2,322 of 6,245
+	// single-book series are genuinely distinct real series. Series names are
+	// not recoverable once deleted — they are not on the book row, not in
+	// operation_changes, and not in file paths.
+	//
+	// This changes behavior only for jobs advertising dry_run:true, and only in
+	// the fail-safe direction (omission now previews instead of applies). The 16
+	// jobs advertising false are unaffected. An explicit "dry_run": false still
+	// applies — callers that mean it say so.
+	dryRun := advertisedDryRunDefault(job)
+	if req.DryRun != nil {
+		dryRun = *req.DryRun
 	}
 
 	opID := ulid.Make().String()
@@ -105,10 +160,36 @@ func (s *Server) runMaintenanceJob(c *gin.Context) {
 		return
 	}
 
+	// Persist the resolved dry_run so a restart mid-run can resume FAITHFULLY
+	// rather than guess.
+	//
+	// database.Operation carries no params field, so before this the resume path
+	// (resumeLegacyOp in server_lifecycle.go) had no record of the operator's
+	// choice at all and fell through to Go's zero value — turning an interrupted
+	// PREVIEW into a real mutation, under the original operation's own ID. Seven
+	// jobs are both CanResume() and advertise dry_run:true, one of which
+	// (cleanup-empty-folders) removes directories from disk.
+	//
+	// This mirrors the bulk_write_back case in the same switch, which already
+	// saves its params and reloads them on resume.
+	//
+	// A save failure does not fail the request: the operator asked for this job
+	// and it is about to run correctly. Only a subsequent restart is affected,
+	// and resumeLegacyOp falls back to the advertised default there. Log it so
+	// the degraded resume is not silent.
+	if err := operations.SaveParams(store, opID, maintenanceJobOpParams{
+		LegacyOpID: opID,
+		JobID:      jobID,
+		DryRun:     dryRun,
+	}); err != nil {
+		slog.Warn("maintenance job params not saved; a resume would fall back to the advertised dry_run default",
+			"opID", opID, "jobID", jobID, "dryRun", dryRun, "err", err)
+	}
+
 	if _, err := s.opRegistry.EnqueueOp(c.Request.Context(), "maintenance.job", maintenanceJobOpParams{
 		LegacyOpID: opID,
 		JobID:      jobID,
-		DryRun:     req.DryRun,
+		DryRun:     dryRun,
 	}); err != nil {
 		httputil.RespondWithConflict(c, err.Error())
 		return

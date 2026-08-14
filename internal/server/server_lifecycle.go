@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 3.15.0
+// version: 3.16.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-08-13
+// last-edited: 2026-08-14
 
 package server
 
@@ -236,7 +236,43 @@ func (s *Server) resumeLegacyOp(opID, opType string) {
 		jobID := strings.TrimPrefix(opType, "maintenance:")
 		if j, jobErr := maintenance.Get(jobID); jobErr == nil && j.CanResume() {
 			if s.opRegistry != nil {
-				enqParams := maintenanceJobOpParams{LegacyOpID: opID, JobID: jobID}
+				// Resume with the dry_run the operator actually chose.
+				//
+				// database.Operation carries no params field, so this branch used
+				// to have no record of that choice and left DryRun at Go's zero
+				// value — every resume resolved to false. An operator who asked
+				// for a PREVIEW and then hit a restart got a real mutation on the
+				// way back up, under the original operation's own ID. Seven jobs
+				// are both CanResume() and advertise dry_run:true —
+				// bulk-deluge-import, cleanup-empty-folders,
+				// recompute-book-aggregates, refetch-missing-authors,
+				// repair-missing-files, retention-and-hygiene, scan-composer-tags
+				// — and cleanup-empty-folders removes directories from disk.
+				//
+				// runMaintenanceJob now persists the resolved value via
+				// operations.SaveParams, the same way bulk_write_back above does,
+				// so the usual case is an exact resume.
+				//
+				// The fallback covers ops enqueued before this shipped and any
+				// save failure: use what the job ADVERTISES rather than false.
+				// That trades an unrequested mutation for an incomplete one — if
+				// the interrupted run was a real apply, the resumed run previews
+				// and reports what it would have done, and the operator re-runs
+				// it. That direction is recoverable; the other is not.
+				enqParams := maintenanceJobOpParams{
+					LegacyOpID: opID,
+					JobID:      jobID,
+					DryRun:     advertisedDryRunDefault(j),
+				}
+				if saved, perr := operations.LoadParams[maintenanceJobOpParams](store, opID); perr != nil {
+					slog.Warn("Could not load saved params for interrupted maintenance job; resuming with the advertised dry_run default",
+						"opID", opID, "jobID", jobID, "dryRun", enqParams.DryRun, "err", perr)
+				} else if saved != nil {
+					enqParams.DryRun = saved.DryRun
+				} else {
+					slog.Info("No saved params for interrupted maintenance job; resuming with the advertised dry_run default",
+						"opID", opID, "jobID", jobID, "dryRun", enqParams.DryRun)
+				}
 				if _, enqErr := s.opRegistry.EnqueueOp(context.Background(), "maintenance.job", enqParams); enqErr != nil {
 					slog.Warn("Failed to re-enqueue maintenance job () via v2", "opID", opID, "jobID", jobID, "enqErr", enqErr)
 					_ = store.UpdateOperationError(opID, "failed to resume: "+enqErr.Error())
