@@ -1,7 +1,7 @@
 // file: internal/server/search_coverage_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 000a3aed-48a5-49fd-b36a-d52d7d4de58e
-// last-edited: 2026-08-13
+// last-edited: 2026-08-14
 //
 // Regression tests for a PARTIALLY built search index.
 //
@@ -171,5 +171,68 @@ func TestSearchCoverage_PrecisionAfterRepair(t *testing.T) {
 		if title, isDecoy := decoys[h.BookID]; isDecoy {
 			t.Errorf("unrelated book %s (%q) present in title-scoped results", h.BookID, title)
 		}
+	}
+}
+
+// TestSearchCoverage_StaleDocsAreDeleted pins the C715 upgrade from a count
+// gate to a set gate. Measured on production 2026-08-14: 67,824 indexed docs
+// vs 63,871 live books — 3,953 soft-deleted books indexed by a backfill that
+// enumerated with the then-leaky ListBookIDs — and the old
+// `len(ids) <= DocCount()` gate answered "coverage OK" over the top. A
+// padded index can also hide genuinely missing live books, which is the
+// combined shape this fixture reproduces: 2 live+indexed, 1 live+missing,
+// 2 indexed-but-gone.
+func TestSearchCoverage_StaleDocsAreDeleted(t *testing.T) {
+	srv, store, idx := newDropOnlyServer(t)
+
+	books := coverageBooks()
+	// Live books: first three; index only the first two (one live book missing).
+	seedPartialIndex(t, store, idx, books[:3], 2)
+
+	// Stale docs: index two books that are NOT in the store — the shape a
+	// soft-deleted or hard-deleted book leaves behind.
+	for _, ghost := range []database.Book{
+		{ID: "ghost-01", Title: "Trashed Tome", FilePath: "/tmp/g1", Format: "m4b"},
+		{ID: "ghost-02", Title: "Vanished Volume", FilePath: "/tmp/g2", Format: "m4b"},
+	} {
+		if err := idx.IndexBook(search.BookToDoc(store, &ghost)); err != nil {
+			t.Fatalf("index ghost %s: %v", ghost.ID, err)
+		}
+	}
+
+	// Precondition: the OLD count gate would pass this index — docs (4) >=
+	// books (3) — which is exactly why it could never see either defect.
+	docs, err := idx.DocCount()
+	if err != nil {
+		t.Fatalf("doccount: %v", err)
+	}
+	if docs != 4 {
+		t.Fatalf("precondition: %d docs, want 4 (2 live + 2 stale)", docs)
+	}
+
+	srv.reconcileSearchIndexCoverage()
+	srv.reconcileOnce()
+
+	// The stale docs are gone, the missing live book is indexed: exactly the
+	// live set remains.
+	if d, _ := idx.DocCount(); d != 3 {
+		t.Fatalf("after reconcile: %d docs, want exactly the 3 live books", d)
+	}
+	for _, probe := range []string{"title:trashed", "title:vanished"} {
+		hits, _, err := idx.Search(probe, 0, 5)
+		if err != nil {
+			t.Fatalf("search %q: %v", probe, err)
+		}
+		if len(hits) != 0 {
+			t.Errorf("stale doc still reachable via %q after reconcile", probe)
+		}
+	}
+	// And the previously-missing live book (cov-03, "All in Charisma") serves.
+	hits, _, err := idx.Search("title:charisma", 0, 5)
+	if err != nil {
+		t.Fatalf("search charisma: %v", err)
+	}
+	if len(hits) != 1 || hits[0].BookID != "cov-03" {
+		t.Errorf("missing live book not repaired: hits=%v", hits)
 	}
 }
