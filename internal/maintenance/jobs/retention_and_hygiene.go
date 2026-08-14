@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/retention_and_hygiene.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: e7c9d4a2-f1b3-49a8-8c4f-7d2e5a1f3c9e
 // last-edited: 2026-08-14
 
@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -87,8 +88,21 @@ func (j *retentionAndHygieneJob) Run(ctx context.Context, store database.Store, 
 		}
 	}
 
+	// (3) opstate sweep: clear opstate:<id> / opstate:<id>:params blobs whose
+	// owning operation is finished or gone. Only 2 of the 34 maintenance jobs
+	// call operations.ClearState on completion, so these keys otherwise
+	// accumulate forever. Runs AFTER phase (1) so state orphaned by this very
+	// run's operation-retention pass is caught in the same run.
+	stateCut, err := deleteStaleOperationState(ctx, store, dryRun)
+	if err != nil {
+		slog.Error("retention-and-hygiene: opstate sweep failed", "error", err)
+		return fmt.Errorf("opstate sweep: %w", err)
+	}
+	slog.Info("retention-and-hygiene: stale operation state cleared",
+		"count", stateCut, "dry_run", dryRun)
+
 	slog.Info("retention-and-hygiene job complete",
-		"operations_deleted", operationsCut, "dry_run", dryRun)
+		"operations_deleted", operationsCut, "opstate_cleared", stateCut, "dry_run", dryRun)
 	return nil
 }
 
@@ -211,6 +225,80 @@ func deleteDeadPrefixes(ctx context.Context, store database.Store, dryRun bool) 
 	}
 
 	return total, nil
+}
+
+// terminalOpStatuses are the operation statuses from which the resume path can
+// never pick an operation back up: GetInterruptedOperations selects only
+// "running", "queued", and "interrupted", so state for anything here is dead.
+// "canceled" and "cancelled" are both listed because both spellings exist in
+// the codebase's status literals.
+var terminalOpStatuses = map[string]bool{
+	"completed": true,
+	"failed":    true,
+	"canceled":  true,
+	"cancelled": true,
+}
+
+// deleteStaleOperationState removes opstate:<id> and opstate:<id>:params blobs
+// whose owning operation is gone or terminal. runMaintenanceJob persists a
+// params blob per run so a restart can resume faithfully, but only 2 of the 34
+// jobs clear it on completion — the rest leak one pair of keys per run,
+// forever (small but unbounded growth).
+//
+// The decision is per-operation, and it deliberately fails toward KEEPING:
+//   - op record missing            -> state is orphaned (phase (1) may have just
+//     deleted the op)              -> delete
+//   - status in terminalOpStatuses -> resume can never fire -> delete
+//   - anything else — running, queued, interrupted, or a status this map does
+//     not know — -> KEEP. Deleting on "status not recognized" would silently
+//     break resume for any status value added later; an unknown status keeps
+//     its state until the operation itself ages out of retention.
+//
+// Returns the number of operations whose state was (or in dry-run, would be)
+// cleared — counting operations, not raw keys, so the dry-run count matches
+// the subsequent real run.
+func deleteStaleOperationState(ctx context.Context, store database.Store, dryRun bool) (int, error) {
+	pairs, err := store.ScanPrefix("opstate:")
+	if err != nil {
+		return 0, fmt.Errorf("scan opstate prefix: %w", err)
+	}
+
+	// Collapse opstate:<id> and opstate:<id>:params to one entry per op.
+	// Op IDs are ULIDs (no colons), so trimming the suffix is unambiguous.
+	ids := make(map[string]struct{}, len(pairs))
+	for _, pair := range pairs {
+		id := strings.TrimPrefix(pair.Key, "opstate:")
+		id = strings.TrimSuffix(id, ":params")
+		ids[id] = struct{}{}
+	}
+
+	slog.Info("deleteStaleOperationState: scanned opstate prefix",
+		"keys", len(pairs), "operations", len(ids), "dry_run", dryRun)
+
+	count := 0
+	for id := range ids {
+		if ctx.Err() != nil {
+			return count, ctx.Err()
+		}
+		op, err := store.GetOperationByID(id)
+		if err != nil {
+			return count, fmt.Errorf("get operation %s: %w", id, err)
+		}
+		if op != nil && !terminalOpStatuses[op.Status] {
+			continue // live or unknown status — resume may still need this state
+		}
+		if dryRun {
+			count++
+			continue
+		}
+		// DeleteOperationState removes both opstate:<id> and opstate:<id>:params
+		// in one batch.
+		if err := store.DeleteOperationState(id); err != nil {
+			return count, fmt.Errorf("delete operation state %s: %w", id, err)
+		}
+		count++
+	}
+	return count, nil
 }
 
 // isDeadPrefixSweepDone checks if the dead-prefix sweep completion flag is set.
