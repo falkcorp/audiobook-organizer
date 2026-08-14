@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/dedup_books.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: a1000010-0000-0000-0000-000000000010
-// last-edited: 2026-07-07
+// last-edited: 2026-08-14
 
 package jobs
 
@@ -377,6 +377,7 @@ func ddMergeDuplicateBook(store database.Store, keeper *database.Book, dup *data
 	}
 
 	ddMergeBookFields(current, dup)
+	database.DropDanglingSeriesRef(store, current, "dedup-books.keeper-fill")
 
 	if _, upErr := store.UpdateBook(keeper.ID, current); upErr != nil {
 		return fmt.Errorf("UpdateBook keeper %s: %w", keeper.ID, upErr)

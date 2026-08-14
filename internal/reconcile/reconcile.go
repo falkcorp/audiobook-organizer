@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-07-18
+// last-edited: 2026-08-14
 
 package reconcile
 
@@ -1008,6 +1008,7 @@ func MergeNoVGDuplicates(store Store, rootDir string, dryRun bool) (*MergeDuplic
 		}
 
 		merged := MergeBookMetadata(primary, dupe)
+		database.DropDanglingSeriesRef(store, primary, "reconcile.merge-primary")
 		entry.FieldsMerged = merged
 
 		if !dryRun {
@@ -1103,6 +1104,7 @@ func MergeNoVGDuplicates(store Store, rootDir string, dryRun bool) (*MergeDuplic
 			}
 
 			merged := MergeBookMetadata(keeper, dupe)
+			database.DropDanglingSeriesRef(store, keeper, "reconcile.merge-keeper")
 			entry.FieldsMerged = merged
 
 			if !dryRun {
