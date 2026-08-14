@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.129.0
+// version: 1.130.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-08-14
 
@@ -668,6 +668,25 @@ func (p *PebbleStore) ListBookIDs() ([]string, error) {
 		// Defensive: skip any other secondary-index key forms that may slip
 		// through (anything containing another ':' is not a primary key).
 		if strings.IndexByte(id, ':') >= 0 {
+			continue
+		}
+		// MemStore.ListBookIDs filters soft-deleted books out of this listing,
+		// so this path must too — otherwise every full-library maintenance op
+		// that enumerates through it would process trashed books during the
+		// cold-start window before warmup publishes memdb.
+		//
+		// Decoding only the deletion flag rather than the whole Book keeps this
+		// scan close to the key-only cost it had before; a full unmarshal here
+		// is what this path was avoiding.
+		//
+		// probe is declared inside the loop deliberately: MarkedForDeletion is
+		// a pointer and `omitempty` means live books omit the key entirely, so
+		// a reused struct would keep the previous book's flag and drop live
+		// books that happen to follow a trashed one.
+		var probe struct {
+			MarkedForDeletion *bool `json:"marked_for_deletion,omitempty"`
+		}
+		if json.Unmarshal(iter.Value(), &probe) == nil && markedForDeletionFlag(probe.MarkedForDeletion) {
 			continue
 		}
 		ids = append(ids, id)
