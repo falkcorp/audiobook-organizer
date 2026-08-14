@@ -1,9 +1,9 @@
 <!-- file: docs/audits/2026-08-13-mass-reorganize-duplicated-14tb-under-unknown-author.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 2.0.0 -->
 <!-- guid: 3f6c1d84-7a92-4b5e-8c03-19d4e7b26af5 -->
 <!-- last-edited: 2026-08-13 -->
 
-# A re-organize run on 2026-08-11 wrote 14 TB of duplicate files under `Unknown Author/`
+# A re-organize run on 2026-08-11 duplicated the library under `Unknown Author/` — but the blocks are shared, not duplicated on disk
 
 Found 2026-08-13 while repairing an unrelated version-group defect. **Nothing has
 been deleted or modified as a result of this audit** — it is a findings record.
@@ -50,7 +50,18 @@ So the run re-organized books that were **already organized**. For each one it:
 3. marked the new row `is_primary_version = true`;
 4. demoted only the original *source* row — never the already-organized primary.
 
-Step 4 is the flag bug; steps 1–2 are the disk bug, and the expensive one.
+Step 4 is the flag bug — real, and fixed. Steps 1–2 looked like an expensive
+disk bug but measured out as nearly free: the copy is a block clone sharing
+extents with its source (see the correction below).
+
+> **CORRECTION (v2.0.0, measured 2026-08-13 20:15).** The headline in this
+> document's title is **wrong**: the 14 TB is not 14 TB of consumed space.
+> ZFS block cloning is active and working, the duplicate files already share
+> blocks with their sources, and **there is essentially nothing to reclaim.**
+> The disk-cost section below is retained for the record but is superseded by
+> "Measured: the space is already shared" at the end. The *version-group*
+> findings — surplus primaries, the organizer defect, the trigger — are
+> unaffected and stand.
 
 ## Disk cost
 
@@ -61,11 +72,14 @@ Step 4 is the flag bug; steps 1–2 are the disk bug, and the expensive one.
 | share of the organized tree in that one directory | **64%** |
 | pool `bigdata` | 151T / 166T allocated — **14.4T free, 91% capacity** |
 
-Verified duplicates are **`links=1`** — independent copies, not hardlinks, so the
-space is genuinely consumed. File sizes match the earlier organized copy exactly.
+These figures come from `du`, and **`du` is the wrong instrument here** — it
+reports each file's own block count and cannot see that ZFS clones share those
+blocks, so every clone is counted again. `links=1` only rules out *hardlinks*;
+it says nothing about block cloning, which is what is actually happening.
 
-ZFS performance degrades sharply above ~80% capacity; the pool is at 91%.
-Reclaiming these would return it to roughly 82%.
+The pool is genuinely at 91% capacity, and ZFS does degrade above ~80% — but
+reclaiming this tree would not move that number. See the measured correction
+below.
 
 ## The code path
 
@@ -139,17 +153,59 @@ reclamation predicate is:
 Content verification of the 215,160 candidates is the gate. Nothing may be
 deleted on the strength of the size match alone.
 
-### Space accounting is real, not a `du` artifact
+### Measured: the space is already shared — there is nothing to reclaim
 
-Worth ruling out explicitly, because the pool has `feature@block_cloning` active
-under ZFS 2.4.1, which would let reflinked copies share extents and make `du`
-double-count. It is not happening: `bigdata/BD/bigdata/books` reports **38.6T
-used against 39.7T logical** — a ~1.1T gap that compression alone explains. The
-duplicate copies are physically stored.
+An earlier revision of this document claimed the duplication was physically
+stored, reasoning that `bigdata/BD/bigdata/books` reports 38.6T used against
+39.7T logical and that the ~1.1T gap was explained by compression. **That
+inference was wrong.** `logicalused` does not inflate to expose cloned blocks,
+so the gap says nothing about sharing, and `du` cannot see it either — ZFS
+reports each cloned file's full block count, so `du` double-counts every clone.
 
-(Reflink failures in the logs are unrelated to cloning support — they read
-`no such file or directory`, i.e. the database pointed at a source path that no
-longer exists.)
+The correct instruments say the opposite:
+
+| measure | value |
+|---|---|
+| `bcloneused` | 12.5T |
+| **`bclonesaved`** | **21.8T** |
+| `bcloneratio` | **2.75x** |
+| allocation delta writing 2 GB | +3,409 MB |
+| allocation delta **cloning** that 2 GB | **+0 MB** |
+
+`FICLONE` works on this dataset — verified directly with `cp --reflink=always`
+and `copy_file_range`, both rc=0. The reflink failures in the application log
+are `no such file or directory`: the database pointed at a source path that no
+longer exists. Those are failed organizes, not a cloning problem.
+
+**A 50-file pilot settled it.** 50 pairs verified byte-identical by full
+SHA-256, snapshot taken for rollback, each `Unknown Author` copy rewritten as a
+`--reflink=always` clone of its twin, content re-verified afterwards (50/50
+unchanged), then the snapshot destroyed so freed blocks could be released:
+
+```
+logical processed : 5.412 GB
+TRUE RECLAIM      : +1.531 GB   (allocation went UP, nothing was freed)
+control: background allocation drift with no activity = 36 MB/min
+```
+
+Had those files been independent copies, releasing them would have freed ~5.4 GB
+— far above the 36 MB/min noise floor. It freed nothing, so **the files were
+already sharing blocks with their sources.**
+
+Two methodology notes for whoever revisits this:
+
+- A safety snapshot **retains the freed blocks**, so reclaim cannot appear while
+  it exists. Measure after destroying it, or the result reads as zero.
+- `filefrag` does not work on ZFS (no FIEMAP), so per-file extent sharing is not
+  directly observable. Pool-level `bclonesaved` plus a measured pilot is the
+  available substitute.
+
+**Consequence: do not pursue reclamation.** Neither deleting the `Unknown
+Author` tree nor offline reflink-dedup would return meaningful space, and ZFS
+`dedup=on` is a non-starter — it only affects new writes and its DDT would cost
+far more RAM than this pool can spare. The remaining duplication is a *library
+hygiene* problem (duplicate rows and confusing `Unknown Author` entries in the
+UI), not a capacity problem.
 
 ## What invoked it
 
