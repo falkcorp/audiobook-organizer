@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_series.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 29120d16-9add-4efd-81a5-edc1e8951f4d
-// last-edited: 2026-07-03
+// last-edited: 2026-08-14
 
 package database
 
@@ -269,6 +269,12 @@ func (p *PebbleStore) GetAllSeriesBookCounts_Pebble() (map[int]int, error) {
 		if b.SeriesID == nil || (b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion) {
 			continue
 		}
+		// The memdb counterpart has always excluded the trash; this path did
+		// not, so a series reported more books than it has whenever it was
+		// served before memdb published. See aggregate_count_conformance_test.go.
+		if bookIsSoftDeleted(&b) {
+			continue
+		}
 		counts[*b.SeriesID]++
 	}
 	return counts, nil
@@ -300,7 +306,10 @@ func (p *PebbleStore) GetAllSeriesFileCounts() (map[int]int, error) {
 		if err := json.Unmarshal(iter.Value(), &b); err != nil {
 			continue
 		}
-		if b.SeriesID != nil && (b.IsPrimaryVersion == nil || *b.IsPrimaryVersion) {
+		// Soft-deleted books are excluded here rather than when counting files,
+		// so their files never enter the map in the first place — matching the
+		// memdb counterpart. See aggregate_count_conformance_test.go.
+		if b.SeriesID != nil && (b.IsPrimaryVersion == nil || *b.IsPrimaryVersion) && !bookIsSoftDeleted(&b) {
 			bookIDToSeriesID[b.ID] = *b.SeriesID
 		}
 	}
