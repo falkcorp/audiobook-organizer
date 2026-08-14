@@ -104,14 +104,27 @@ func translateAnd(n *AndNode, perUser *[]PerUserFilter, negated bool) (query.Que
 	return bleve.NewConjunctionQuery(children...), nil
 }
 
-// freeTextAnalyzer is the analyzer the index applies to free-text fields
-// (bleve_index.go sets im.DefaultAnalyzer = en.AnalyzerName). It is resolved
-// from the same registry Bleve itself uses, so it cannot drift from the index's
-// notion of a stopword the way a hand-maintained word list would.
+// stopwordDetector is the STOCK English analyzer, used here purely as an
+// oracle for "is this word a stopword?" — never to analyze anything destined
+// for the index.
+//
+// It deliberately no longer matches the index's own analyzer. The fields are
+// mapped to bookTextAnalyzerName (bleve_index.go), which keeps stopwords so
+// that quoted phrases can be exact. Detection must nevertheless keep answering
+// the ORIGINAL question, and answering it with the field analyzer would be
+// impossible: under that analyzer nothing is stopword-only, so
+// dropStopwordOnlyConjuncts would stop firing and every unquoted query
+// containing of/the/a would become strict. That would trade the phrase bug for
+// a recall regression across most multi-word titles.
+//
+// So: index keeps stopwords (precision for quoted phrases), unquoted queries
+// still drop them (recall unchanged). This split is the entire design, and it
+// works only because this lookup is by NAME from the registry rather than from
+// the field mapping. Do not "fix" it to follow the mapping.
 //
 // nil if the registry lookup ever fails; every caller treats nil as "cannot
 // tell", which degrades to the old behaviour rather than to a wrong answer.
-var freeTextAnalyzer = func() analysis.Analyzer {
+var stopwordDetector = func() analysis.Analyzer {
 	a, err := registry.NewCache().AnalyzerNamed(en.AnalyzerName)
 	if err != nil {
 		return nil
@@ -119,14 +132,16 @@ var freeTextAnalyzer = func() analysis.Analyzer {
 	return a
 }()
 
-// isStopwordOnly reports whether a term survives analysis. The English analyzer
-// strips stopwords, so "of" produces zero tokens and therefore appears in no
-// document's term dictionary.
+// isStopwordOnly reports whether a term is an English stopword. Note this is
+// now a statement about the ENGLISH LANGUAGE, not about the index: since the
+// mapping switched to a stopword-preserving analyzer, such a term DOES appear
+// in the term dictionary. It is still the right thing to drop from an unquoted
+// conjunction — see dropStopwordOnlyConjuncts.
 func isStopwordOnly(term string) bool {
-	if freeTextAnalyzer == nil || term == "" {
+	if stopwordDetector == nil || term == "" {
 		return false
 	}
-	return len(freeTextAnalyzer.Analyze([]byte(term))) == 0
+	return len(stopwordDetector.Analyze([]byte(term))) == 0
 }
 
 // dropStopwordOnlyConjuncts removes free-text conjuncts that analyze to nothing,

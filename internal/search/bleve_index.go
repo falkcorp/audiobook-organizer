@@ -1,7 +1,7 @@
 // file: internal/search/bleve_index.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3c8e1a2f-4d9b-4f70-a5c6-2f8d0e1b9a47
-// last-edited: 2026-07-11
+// last-edited: 2026-08-13
 //
 // BleveIndex is the single-package wrapper around a Bleve v2 scorch
 // index backing library search (spec DES-1 / backlog §4.7). The
@@ -20,12 +20,19 @@ package search
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/blevesearch/bleve/v2"
+	"github.com/blevesearch/bleve/v2/analysis/analyzer/custom"
 	"github.com/blevesearch/bleve/v2/analysis/analyzer/standard"
 	"github.com/blevesearch/bleve/v2/analysis/lang/en"
+	"github.com/blevesearch/bleve/v2/analysis/token/lowercase"
+	"github.com/blevesearch/bleve/v2/analysis/token/porter"
+	"github.com/blevesearch/bleve/v2/analysis/tokenizer/unicode"
 	"github.com/blevesearch/bleve/v2/mapping"
 	"github.com/blevesearch/bleve/v2/search/query"
 )
@@ -39,28 +46,142 @@ type BleveIndex struct {
 	mu   sync.RWMutex
 	idx  bleve.Index
 	path string
+
+	// recreatedForMapping records that Open threw away an existing index
+	// because its mapping version was stale. Read via
+	// RecreatedForMappingChange; set once at Open and never mutated after.
+	recreatedForMapping bool
 }
 
-// Open creates or opens the on-disk Bleve index at path using the
-// scorch backend. Index mapping is set up once at creation time;
-// reopening an existing index uses the mapping stored alongside it.
+// bookTextAnalyzerName is the analyzer every free-text field is indexed
+// with. It is bleve's stock English chain MINUS the stopword filter:
+// unicode tokenizer, possessive stripper, lowercase, porter stemmer.
+//
+// WHY NOT THE STOCK `en` ANALYZER
+//
+// The stop filter deletes tokens without renumbering the positions of the
+// survivors, and MatchPhraseQuery rebuilds the phrase from those positions
+// (tokenStreamToPhrase, bleve search/query/match_phrase.go), sizing it
+// lastPosition-firstPosition+1 and leaving unfilled slots nil. So under the
+// stock analyzer:
+//
+//	"All Jobs"          -> [jobs@2]          -> phrase of length 1, i.e. NO
+//	                                            adjacency constraint at all
+//	"Lord of the Rings" -> [lord@1, ring@4]  -> length 4 with slots 2-3 nil,
+//	                                            i.e. "Lord ANY ANY Rings"
+//
+// Measured on production 2026-08-13: `"All Jobs"` returned 300 rows, a set
+// byte-identical to the unquoted query. A leading stopword collapses a
+// phrase to a bare term; an interior one turns into a wildcard.
+//
+// Keeping stopwords in the index costs term-dictionary space and makes
+// unquoted conjunctions stricter in principle — but only in principle here,
+// because dropStopwordOnlyConjuncts (bleve_translator.go) still removes them
+// from unquoted queries, and it detects them with the STOCK analyzer resolved
+// by name, independently of this mapping. That decoupling is load-bearing:
+// it is what keeps unquoted recall identical across this change.
+const bookTextAnalyzerName = "book_en_nostop"
+
+// bookMappingVersion identifies the on-disk index mapping. Bleve persists the
+// mapping inside the index and bleve.Open uses the STORED one, so changing
+// bookIndexMapping() has no effect on an index that already exists — the
+// change only takes hold on a freshly created index. Bump this whenever
+// bookIndexMapping changes in a way that alters indexed terms, and Open will
+// recreate the index.
+//
+//	1 (implicit, unmarked) — stock `en` analyzer on all text fields
+//	2                      — bookTextAnalyzerName, stopwords preserved
+const bookMappingVersion = "2"
+
+// mappingMarkerPath returns the sibling file recording which mapping version
+// built the index. Deliberately a SIBLING of the index directory rather than a
+// file inside it: bleve owns that directory's contents and scorch enumerates
+// its segment files, so an unexpected entry there is asking for trouble.
+func mappingMarkerPath(indexPath string) string {
+	return filepath.Join(filepath.Dir(indexPath),
+		filepath.Base(indexPath)+".mapping")
+}
+
+// Open creates or opens the on-disk Bleve index at path using the scorch
+// backend.
+//
+// When an existing index was built by a different mapping version it is
+// DELETED and recreated empty, and RecreatedForMappingChange reports true.
+// Callers must react to that: see server_lifecycle.go, which uses it to skip
+// the non-resumable bulk backfill and seed the durable dirty set instead.
 func Open(path string) (*BleveIndex, error) {
-	// Try opening an existing index first. If it doesn't exist,
-	// create a new one with the book mapping.
 	if info, err := os.Stat(path); err == nil && info.IsDir() {
-		idx, err := bleve.Open(path)
-		if err != nil {
-			return nil, fmt.Errorf("bleve open existing at %s: %w", path, err)
+		stored := readMappingMarker(path)
+		if stored == bookMappingVersion {
+			idx, err := bleve.Open(path)
+			if err != nil {
+				return nil, fmt.Errorf("bleve open existing at %s: %w", path, err)
+			}
+			return &BleveIndex{idx: idx, path: path}, nil
 		}
-		return &BleveIndex{idx: idx, path: path}, nil
+		slog.Warn("search index mapping version changed; recreating index. "+
+			"Search will be incomplete until the reconciler drains the "+
+			"dirty set.",
+			"path", path, "stored", stored, "want", bookMappingVersion)
+		if err := os.RemoveAll(path); err != nil {
+			return nil, fmt.Errorf("bleve remove stale index at %s: %w", path, err)
+		}
+		b, err := createIndex(path)
+		if err != nil {
+			return nil, err
+		}
+		b.recreatedForMapping = true
+		return b, nil
 	}
 
-	m := bookIndexMapping()
-	idx, err := bleve.NewUsing(path, m, "scorch", "scorch", nil)
+	return createIndex(path)
+}
+
+// createIndex builds a new index and records its mapping version.
+//
+// The marker is written only AFTER a successful create. Writing it first
+// would, on a create failure, leave a marker with no index — and writing it
+// unconditionally on failure would be worse still: a marker that cannot be
+// written must not be treated as written, or every boot recreates the index
+// forever.
+func createIndex(path string) (*BleveIndex, error) {
+	idx, err := bleve.NewUsing(path, bookIndexMapping(), "scorch", "scorch", nil)
 	if err != nil {
 		return nil, fmt.Errorf("bleve create at %s: %w", path, err)
 	}
+	marker := mappingMarkerPath(path)
+	if err := os.WriteFile(marker, []byte(bookMappingVersion+"\n"), 0o644); err != nil {
+		// Not fatal — the index is valid and usable. But it WILL be
+		// recreated on every restart until this succeeds, so it must be
+		// loud rather than a debug line nobody reads.
+		slog.Error("search: failed to write index mapping marker; the index "+
+			"will be rebuilt on EVERY restart until this is fixed",
+			"marker", marker, "err", err)
+	}
 	return &BleveIndex{idx: idx, path: path}, nil
+}
+
+// readMappingMarker returns the recorded mapping version, or "" when the
+// marker is absent or unreadable. "" is the correct answer for an index built
+// before markers existed (mapping version 1) and forces a recreate.
+func readMappingMarker(indexPath string) string {
+	b, err := os.ReadFile(mappingMarkerPath(indexPath))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
+// RecreatedForMappingChange reports whether Open discarded an existing index
+// because it had been built with an older mapping. When true the index is
+// EMPTY and every book needs re-indexing.
+func (b *BleveIndex) RecreatedForMappingChange() bool {
+	if b == nil {
+		return false
+	}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.recreatedForMapping
 }
 
 // Close releases the underlying index handle. Safe to call multiple
@@ -269,18 +390,36 @@ var textFieldBoosts = []struct {
 func bookIndexMapping() mapping.IndexMapping {
 	im := bleve.NewIndexMapping()
 
-	// Use bleve's stock English analyzer — lowercases, drops stop
-	// words, stems, and (via the registered `en` package) ascii-folds.
-	// Building a custom analyzer at mapping construction time is
-	// brittle because the registry lookup happens at index open, so
-	// we stick to the guaranteed-available built-in.
+	// Register the stopword-preserving analyzer this mapping uses for
+	// every free-text field. See bookTextAnalyzerName for why the stock
+	// `en` analyzer is not used. A failure here can only mean a bleve
+	// upgrade renamed one of the built-in components, so fall back to
+	// the stock analyzer rather than shipping an index with no analyzer
+	// at all — degraded phrase precision beats unusable search.
+	textAnalyzerName := bookTextAnalyzerName
+	if err := im.AddCustomAnalyzer(bookTextAnalyzerName, map[string]any{
+		"type":      custom.Name,
+		"tokenizer": unicode.Name,
+		"token_filters": []string{
+			en.PossessiveName, // strip trailing 's
+			lowercase.Name,
+			porter.Name, // stem; NOTE: no en.StopName — that is the point
+		},
+	}); err != nil {
+		slog.Error("search: custom analyzer registration failed; "+
+			"falling back to stock English analyzer, quoted phrases "+
+			"containing stopwords will stay imprecise",
+			"analyzer", bookTextAnalyzerName, "err", err)
+		textAnalyzerName = en.AnalyzerName
+	}
+
 	// textAnalyzed no longer takes a boost: bleve v2 has no index-time
 	// field boost, so that parameter was dead. Query-time weighting for
 	// free-text search lives in textFieldBoosts (bleve_index.go) and is
 	// applied by translateFreeText in bleve_translator.go.
 	textAnalyzed := func() *mapping.FieldMapping {
 		f := bleve.NewTextFieldMapping()
-		f.Analyzer = en.AnalyzerName
+		f.Analyzer = textAnalyzerName
 		f.Store = true
 		f.IncludeInAll = true
 		return f
@@ -350,7 +489,7 @@ func bookIndexMapping() mapping.IndexMapping {
 	book.AddFieldMappingsAt("has_cover", boolean())
 
 	im.AddDocumentMapping(BookDocType, book)
-	im.DefaultAnalyzer = en.AnalyzerName
+	im.DefaultAnalyzer = textAnalyzerName
 	im.TypeField = "_type"
 	im.DefaultType = BookDocType
 
