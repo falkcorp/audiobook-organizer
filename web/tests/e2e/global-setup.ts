@@ -1,18 +1,21 @@
 // file: tests/e2e/global-setup.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2f7b4e91-8c05-4d63-a1f2-6b98e0c473da
-// last-edited: 2026-08-10
+// last-edited: 2026-08-14
 
 import { execFileSync } from 'child_process';
-import { statSync } from 'fs';
+import { readFileSync, statSync } from 'fs';
 import { createRequire } from 'module';
 import { dirname, join, sep } from 'path';
 import { fileURLToPath } from 'url';
+import { E2E_PORT } from './e2e-env';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '../../..');
 const WEB_DIR = join(__dirname, '../..');
-const PORT = 8484;
+// Derived per worktree (H113) — two agents in different worktrees can no
+// longer contend for one port. E2E_PORT env var overrides.
+const PORT = E2E_PORT;
 
 /**
  * Fail loudly when the suite is about to test a STALE server.
@@ -48,7 +51,7 @@ const PORT = 8484;
  * No-ops under CI (nothing to reuse — the config always builds its own) and
  * no-ops when nothing is listening.
  */
-export default function globalSetup(): void {
+export default async function globalSetup(): Promise<void> {
   assertProjectLocalPlaywright();
 
   if (process.env.CI) return;
@@ -104,7 +107,15 @@ export default function globalSetup(): void {
     }
   }
 
-  if (staler.length === 0) return;
+  if (staler.length === 0) {
+    // Freshness passed — now IDENTITY (H113). A sibling worktree's server that
+    // just rebuilt passes every timestamp check while serving a bundle with
+    // none of this worktree's changes; on 2026-08-11 a gate ran green-path
+    // assertions against exactly that. Hashed asset filenames are
+    // content-addressed, so "same names as my web/dist" is "same bundle".
+    await assertServedBundleIsOurs(pid);
+    return;
+  }
 
   throw new Error(
     [
@@ -181,6 +192,57 @@ function assertProjectLocalPlaywright(): void {
       ].join('\n'),
     );
   }
+}
+
+/**
+ * Assert the REUSED server serves THIS worktree's bundle (identity, not
+ * freshness). Compares the hashed asset filenames in the served index.html
+ * against the local web/dist/index.html. Only called for reused servers —
+ * a server this run started is trivially ours.
+ */
+async function assertServedBundleIsOurs(pid: number): Promise<void> {
+  let local: string;
+  try {
+    local = readFileSync(join(REPO_ROOT, 'web/dist/index.html'), 'utf8');
+  } catch {
+    return; // nothing built locally yet; the freshness check already ran
+  }
+  let served: string;
+  try {
+    const res = await fetch(`http://127.0.0.1:${PORT}/index.html`);
+    if (!res.ok) return; // not serving HTML — webServer will handle it
+    served = await res.text();
+  } catch {
+    return; // unreachable — webServer will start its own
+  }
+  const assetNames = (html: string): string[] =>
+    [...html.matchAll(/assets\/[A-Za-z0-9._-]+-[A-Za-z0-9_-]{8,}\.(?:js|css)/g)]
+      .map((m) => m[0])
+      .sort();
+  const localAssets = assetNames(local);
+  const servedAssets = assetNames(served);
+  if (localAssets.length === 0) return; // unhashed build; nothing to compare
+  if (JSON.stringify(localAssets) === JSON.stringify(servedAssets)) return;
+  throw new Error(
+    [
+      '',
+      `FOREIGN BUNDLE on 127.0.0.1:${PORT} (pid ${pid}).`,
+      '',
+      'The server passes the freshness check but is serving a DIFFERENT build',
+      'than this worktree\'s web/dist — almost certainly a sibling worktree\'s',
+      'server. Assertions against it say nothing about this worktree\'s code',
+      '(this exact false-green shipped-almost on 2026-08-11).',
+      '',
+      `  local  assets: ${localAssets.join(', ') || '(none)'}`,
+      `  served assets: ${servedAssets.join(', ') || '(none)'}`,
+      '',
+      'Fix:',
+      `  kill -9 ${pid}`,
+      '',
+      'Then re-run; Playwright will build and start this worktree\'s own server.',
+      '',
+    ].join('\n'),
+  );
 }
 
 /** PID listening on the e2e port, or null if nothing is. */
