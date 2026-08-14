@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
-// last-edited: 2026-07-12
+// last-edited: 2026-08-14
 
 package maintenance
 
@@ -310,15 +310,29 @@ func (p *Plugin) runArchiveSweep(_ context.Context, _ json.RawMessage, reporter 
 
 // ctxOpID extracts the operation ID stored in context by the UOS worker loop.
 func ctxOpID(ctx context.Context) string {
-	if v, ok := ctx.Value(opIDKey{}).(string); ok {
-		return v
-	}
-	return ""
+	return OpIDFromContext(ctx)
 }
 
 type opIDKey struct{}
 
 // WithOpID returns a context carrying the operation ID for use by run functions.
+//
+// The only production caller is the run-context decorator installed in
+// internal/server (op_run_context.go). If that wiring is ever removed, every
+// `if operationID != ""` guard in this package goes quiet and the ops stop
+// recording undo history — silently, with no error and a successful-looking
+// result. TestOpRunContextDecorator_CarriesOpIDForMaintenanceOps exists to fail
+// if that happens.
 func WithOpID(ctx context.Context, id string) context.Context {
 	return context.WithValue(ctx, opIDKey{}, id)
+}
+
+// OpIDFromContext returns the operation ID carried by ctx, or "" if none is
+// present. Exported so the wiring that supplies it can be tested from the
+// package that installs it; ops inside this package use ctxOpID.
+func OpIDFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(opIDKey{}).(string); ok {
+		return v
+	}
+	return ""
 }
