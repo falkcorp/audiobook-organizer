@@ -1,7 +1,7 @@
 // file: internal/organizer/service.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
-// last-edited: 2026-08-13
+// last-edited: 2026-08-14
 
 package organizer
 
@@ -1285,6 +1285,11 @@ func (orgSvc *Service) CreateOrganizedVersion(org *Organizer, book *database.Boo
 	if !isDir {
 		orgSvc.ApplyOrganizedFileMetadata(&newBook, newPath)
 	}
+
+	// The organized copy inherits the source row's SeriesID verbatim; if that
+	// series has since been deleted, do not propagate the dangling ref onto a
+	// brand-new row (C610).
+	database.DropDanglingSeriesRef(orgSvc.db, &newBook, "organizer.copy")
 
 	createdBook, err := orgSvc.db.CreateBook(&newBook)
 	if err != nil {
