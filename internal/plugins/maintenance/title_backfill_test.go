@@ -78,6 +78,7 @@ func (d fakeDeps) DedupTriageExactPending(_ context.Context, _ bool) (*TriageRep
 }
 func (d fakeDeps) InvalidateDedupCache()   {}
 func (d fakeDeps) InvalidateAuthorsCache() {}
+func (d fakeDeps) InvalidateSeriesCache()  {}
 func (d fakeDeps) MetadataUpgradeRun(_ context.Context, _ int, _ operations.ProgressReporter) (int, int, int, int, error) {
 	return 0, 0, 0, 0, nil
 }
