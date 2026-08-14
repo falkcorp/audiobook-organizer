@@ -1,7 +1,7 @@
 // file: web/src/hooks/useLibraryQuery.ts
-// version: 1.7.0
+// version: 1.8.0
 // guid: d4e5f6a7-b8c9-0123-def0-123456789003
-// last-edited: 2026-08-11
+// last-edited: 2026-08-14
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -329,6 +329,16 @@ export function useLibraryQuery({
       }
       if (error instanceof api.ApiError && error.status >= 500) {
         toast('Server error occurred.', 'error');
+      } else if (error instanceof api.ApiError && error.status === 400) {
+        // The list endpoint rejects narrowing bugs — empty filter values,
+        // unknown filter fields, bare filter params — with a 400 whose message
+        // names the offending field and the fix. Burying that in the console
+        // leaves the user with a silent, non-retrying dead page (G118). No
+        // current UI path can produce these requests (dropdowns are
+        // truthiness-guarded, the search parser drops empty values, presets
+        // flow through the same guards), so this surfaces stale bundles and
+        // future regressions, not routine use.
+        toast(error.message, 'warning');
       }
       const message = error instanceof Error ? error.message : 'Failed to load audiobooks.';
       if (message.toLowerCase().includes('timeout')) {

@@ -1,7 +1,7 @@
 // file: web/src/hooks/useLibraryQuery.test.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7c8d9e0f-1a2b-4c5d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-07-11
+// last-edited: 2026-08-14
 
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { vi, describe, test, expect, beforeEach } from 'vitest';
@@ -218,5 +218,38 @@ describe('useLibraryQuery cancelLoad', () => {
     await waitFor(() => expect(getFirstSignal()?.aborted).toBe(true));
     await waitFor(() => expect(result.current.audiobooks).toHaveLength(1));
     expect(result.current.audiobooks[0].id).toBe('second');
+  });
+});
+
+describe('useLibraryQuery 400 handling (G118)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    useLibraryCache.getState().clear();
+    vi.mocked(api.getImportPaths).mockResolvedValue([]);
+  });
+
+  test('a 400 from the filter guards surfaces the server message as a toast', async () => {
+    const serverMessage =
+      'filter on "title" has an empty value; an empty value matches every book rather than narrowing the results.';
+    // vi.mock('../services/api') automocks ApiError too: its instances pass
+    // the hook's `instanceof api.ApiError` check (same mocked class) but the
+    // mock constructor drops message/status — restore them explicitly.
+    const err = new api.ApiError(serverMessage, 400);
+    Object.assign(err, { message: serverMessage, status: 400 });
+    vi.mocked(api.getBooks).mockRejectedValue(err);
+
+    const toast = vi.fn();
+    const { result } = renderHook(() => useLibraryQuery(makeBaseProps({ toast })));
+
+    await act(async () => {
+      await result.current.loadAudiobooks();
+    });
+
+    // The guard's message names the field and the fix — it must reach the
+    // user, not just the console (before this, a 400 rendered as a silent
+    // non-retrying dead page).
+    await waitFor(() => expect(toast).toHaveBeenCalledWith(serverMessage, 'warning'));
+    // And a 4xx is not transient: no retry may be pending.
+    expect(result.current.isRetrying).toBe(false);
   });
 });
