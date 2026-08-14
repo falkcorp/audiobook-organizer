@@ -981,7 +981,7 @@ func (de *Engine) checkExactISBNIndexed(book *database.Book, bookISBN10, bookISB
 		}
 		// GetBookByID does not filter MarkedForDeletion; apply the same filter
 		// that GetAllBooks applies so indexed and scan paths are equivalent.
-		if other.MarkedForDeletion != nil && *other.MarkedForDeletion {
+		if other.IsSoftDeleted() {
 			continue
 		}
 		if !hasPlausibleAudio(other) {

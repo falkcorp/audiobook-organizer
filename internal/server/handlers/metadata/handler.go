@@ -1247,7 +1247,7 @@ func (h *Handler) handleBulkWriteBackImpl(c *gin.Context) {
 	var filtered []database.BookCore
 	for _, book := range books {
 		// Skip soft-deleted books
-		if book.MarkedForDeletion != nil && *book.MarkedForDeletion {
+		if book.IsSoftDeleted() {
 			continue
 		}
 		// Skip books with empty file paths

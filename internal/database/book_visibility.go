@@ -1,5 +1,5 @@
 // file: internal/database/book_visibility.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4eee927b-72ce-4b07-aa41-a91afb2368ba
 // last-edited: 2026-08-14
 
@@ -33,17 +33,34 @@ func bookIsSoftDeleted(b *Book) bool {
 //
 // It exists because there was no exported predicate at all, so every package
 // that needed the answer open-coded `b.MarkedForDeletion != nil && *b...` —
-// 26 copies across 18 files in dedup, itunes, organizer, undo, maintenance and
-// the handlers as of 2026-08-14. #2392 collapsed the 37 copies INSIDE this
-// package onto one rule and left those untouched, which is only half the job:
-// an unexported rule cannot stop anyone else from restating it, and restating
-// it is precisely how the two GetAllBooksCore implementations drifted apart.
+// 25 copies across 17 files in dedup, itunes, organizer, undo, maintenance and
+// the handlers. #2392 collapsed the 37 copies INSIDE this package onto one rule
+// and left those untouched, which is only half the job: an unexported rule
+// cannot stop anyone else from restating it, and restating it is precisely how
+// the two GetAllBooksCore implementations drifted apart.
 //
-// Existing sites are not converted here; that is a mechanical sweep of its own
-// and it would bury the fix this commit is actually about. See
-// todo.d/2026-08-14-soft-delete-predicate-sweep-outside-database.md.
+// All 25 now call this. The standing check, which should return only
+// internal/scanner's nil-vs-set merge comparison:
+//
+//	grep -rn "MarkedForDeletion != nil" --include='*.go' internal/ cmd/ \
+//	  | grep -v '^internal/database/' | grep -v _test | grep -v mocks
 func (b *Book) IsSoftDeleted() bool {
 	return bookIsSoftDeleted(b)
+}
+
+// IsSoftDeleted is the BookCore twin of Book.IsSoftDeleted, for the same reason
+// bookCoreIsSoftDeleted is the twin of bookIsSoftDeleted: the two row types each
+// carry their own copy of the trash bit and callers hold whichever one their
+// scan returned.
+//
+// It exists because the compiler asked for it. Converting the 25 open-coded
+// copies outside this package, one of them — internal/dedup's split-book
+// detector — turned out to hold a *BookCore rather than a *Book, and the build
+// said so. That is the whole argument for a shared predicate over a grep-and-
+// replace: the sites that are genuinely different announce themselves instead
+// of being quietly rewritten into something that still compiles.
+func (b *BookCore) IsSoftDeleted() bool {
+	return bookCoreIsSoftDeleted(b)
 }
 
 // bookCoreIsSoftDeleted is the BookCore twin of bookIsSoftDeleted.

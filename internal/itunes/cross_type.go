@@ -197,14 +197,14 @@ func computeCrossTypeCollisions(store PIDIntegrityStore, tracks []ITLTrack) (*Cr
 			if b := books[f.BookID]; b != nil {
 				s.OwnerBookTitle = b.Title
 				s.OwnerIsPrimary = b.IsPrimaryVersion == nil || *b.IsPrimaryVersion
-				s.OwnerSoftDelete = b.MarkedForDeletion != nil && *b.MarkedForDeletion
+				s.OwnerSoftDelete = b.IsSoftDeleted()
 			}
 		}
 		// A collision is acute when ANY owner is a live primary.
 		for _, f := range owners {
 			if b := books[f.BookID]; b != nil {
 				pr := b.IsPrimaryVersion == nil || *b.IsPrimaryVersion
-				del := b.MarkedForDeletion != nil && *b.MarkedForDeletion
+				del := b.IsSoftDeleted()
 				if pr && !del {
 					livePrimary = true
 					break

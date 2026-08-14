@@ -355,7 +355,7 @@ func (de *Engine) autoMergeCertain(c database.DedupCandidate) (string, error) {
 // bookSoftDeleted reports whether a book has been soft-deleted (marked for
 // deletion) — e.g. as a merge loser. GetBookByID returns such rows unfiltered.
 func bookSoftDeleted(b *database.Book) bool {
-	return b != nil && b.MarkedForDeletion != nil && *b.MarkedForDeletion
+	return b.IsSoftDeleted()
 }
 
 // baselineFor picks the correct pre-merge baseline nanos for a book ID given the

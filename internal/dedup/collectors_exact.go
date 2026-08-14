@@ -222,7 +222,7 @@ func CollectISBNASIN(
 			}
 			// Deletion parity: GetAllBooksCore excludes MarkedForDeletion books,
 			// so the scan path never sees them; match that here.
-			if other.MarkedForDeletion != nil && *other.MarkedForDeletion {
+			if other.IsSoftDeleted() {
 				continue
 			}
 			matchField := matchFieldFor(derefStr(other.ISBN10), derefStr(other.ISBN13), derefStr(other.ASIN))

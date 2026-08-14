@@ -153,7 +153,7 @@ func ComputePIDIntegrity(store PIDIntegrityStore, itlPath string) (*PIDIntegrity
 			po := PIDOwner{FileID: f.ID, BookID: f.BookID, FilePath: f.FilePath}
 			if b != nil {
 				po.IsPrimary = b.IsPrimaryVersion == nil || *b.IsPrimaryVersion
-				po.SoftDeleted = b.MarkedForDeletion != nil && *b.MarkedForDeletion
+				po.SoftDeleted = b.IsSoftDeleted()
 				if b.MergedIntoBookID != nil {
 					po.HasMergeLink = true
 					po.MergedInto = *b.MergedIntoBookID
@@ -363,7 +363,7 @@ func computeMergeOrphanCensus(store PIDIntegrityStore, itlPIDs []string, journal
 		if b == nil {
 			return false
 		}
-		softDeleted := b.MarkedForDeletion != nil && *b.MarkedForDeletion
+		softDeleted := b.IsSoftDeleted()
 		primary := b.IsPrimaryVersion == nil || *b.IsPrimaryVersion
 		return primary && !softDeleted
 	}

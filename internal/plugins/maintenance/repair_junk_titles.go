@@ -79,7 +79,7 @@ func (p *Plugin) runRepairJunkTitles(ctx context.Context, raw json.RawMessage, r
 		}
 		scanned += len(page)
 		for i := range page {
-			if page[i].MarkedForDeletion != nil && *page[i].MarkedForDeletion {
+			if page[i].IsSoftDeleted() {
 				continue
 			}
 			if IsJunkTitle(page[i].Title) {

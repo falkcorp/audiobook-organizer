@@ -128,7 +128,7 @@ func loadSlimBooks(ctx context.Context, store database.Store, progress func(load
 			if b.FilePath == "" {
 				continue
 			}
-			if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+			if b.IsSoftDeleted() {
 				continue
 			}
 			all = append(all, splitBookSlim{

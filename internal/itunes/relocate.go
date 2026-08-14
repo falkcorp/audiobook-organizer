@@ -87,7 +87,7 @@ func relocateOpsFromTracks(itlTracks map[string]*ITLTrack, store RebuildStore, m
 			if b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion {
 				continue
 			}
-			if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+			if b.IsSoftDeleted() {
 				continue
 			}
 			files, ferr := store.GetBookFiles(b.ID)

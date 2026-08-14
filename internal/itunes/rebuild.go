@@ -87,7 +87,7 @@ func ComputeITLDiff(store RebuildStore, itlPath string, mappings []PathMapping) 
 				continue
 			}
 			// Soft-deleted books should not be in the ITL.
-			if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+			if b.IsSoftDeleted() {
 				continue
 			}
 			if b.ITunesPersistentID != nil && *b.ITunesPersistentID != "" {
@@ -317,7 +317,7 @@ func RebuildITLFromDB(store RebuildStore, itlPath, outputPath string, mappings [
 			if b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion {
 				continue
 			}
-			if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+			if b.IsSoftDeleted() {
 				continue
 			}
 			if b.ITunesPersistentID == nil || *b.ITunesPersistentID == "" {
@@ -395,7 +395,7 @@ func BuildExportITL(store RebuildStore, templatePath string, bookIDs []string, m
 			if b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion {
 				continue
 			}
-			if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+			if b.IsSoftDeleted() {
 				continue
 			}
 			if b.ITunesPersistentID == nil || *b.ITunesPersistentID == "" {

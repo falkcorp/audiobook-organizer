@@ -312,7 +312,7 @@ func PreflightUndoConflicts(store database.Store, operationID string) (*UndoConf
 						ChangeID: c.ID, BookID: c.BookID, ChangeType: c.ChangeType,
 						Reason: "book deleted",
 					})
-				} else if book.MarkedForDeletion != nil && *book.MarkedForDeletion {
+				} else if book.IsSoftDeleted() {
 					report.BookDeleted = append(report.BookDeleted, UndoConflictItem{
 						ChangeID: c.ID, BookID: c.BookID, ChangeType: c.ChangeType,
 						Reason: "book deleted",
@@ -354,7 +354,7 @@ func checkFileMoveConflict(store database.Store, c *database.OperationChange) *U
 	// Check if book was deleted or re-organized.
 	if c.BookID != "" {
 		book, _ := store.GetBookByID(c.BookID)
-		if book == nil || (book.MarkedForDeletion != nil && *book.MarkedForDeletion) {
+		if book == nil || book.IsSoftDeleted() {
 			return &UndoConflictItem{
 				ChangeID: c.ID, BookID: c.BookID, ChangeType: c.ChangeType,
 				Reason: "book deleted",
