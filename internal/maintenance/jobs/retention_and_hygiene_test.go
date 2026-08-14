@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/retention_and_hygiene_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: f8d0e5b9-c2a4-5b1d-9e7f-8c3d2a1b0f5e
-// last-edited: 2026-08-04
+// last-edited: 2026-08-14
 
 package jobs
 
@@ -90,9 +90,16 @@ func newDeleteTracker(ops []database.Operation) *mockDeleteTracker {
 		if offset >= total {
 			return nil, total, nil
 		}
-		end := offset + limit
-		if end > total {
-			end = total
+		// Mirror PebbleStore.ListOperations, where limit <= 0 means "no limit".
+		// This fake previously computed end == offset for limit == 0 and returned
+		// an empty page, which would silently turn any caller that asks for the
+		// full listing into one that sees nothing.
+		end := total
+		if limit > 0 {
+			end = offset + limit
+			if end > total {
+				end = total
+			}
 		}
 		return ops[offset:end], total, nil
 	}

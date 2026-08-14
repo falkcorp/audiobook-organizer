@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_operations.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e4277998-6d7e-4f2a-9b5c-0a620a98105e
-// last-edited: 2026-07-03
+// last-edited: 2026-08-14
 
 package database
 
@@ -88,6 +88,17 @@ func (p *PebbleStore) GetRecentOperations(limit int) ([]Operation, error) {
 	return operations, nil
 }
 
+// ListOperations returns one page of operations, newest first, along with the
+// total number of operations regardless of the page.
+//
+// A limit <= 0 means "no limit": every operation from offset onwards is
+// returned. That matches SearchBooks, which documents the same sentinel, and it
+// exists because this method reads the ENTIRE "operation:" prefix into memory
+// and sorts all of it before slicing out a page. Paging over a method with that
+// shape costs a full scan per page, so a caller that wants everything must be
+// able to say so in one call rather than walking offsets. Before the sentinel
+// existed, limit == 0 computed end == offset and returned an empty page, which
+// was a trap for exactly the caller that needed all rows.
 func (p *PebbleStore) ListOperations(limit, offset int) ([]Operation, int, error) {
 	var operations []Operation
 	iter, err := p.db.NewIter(&pebble.IterOptions{
@@ -115,9 +126,12 @@ func (p *PebbleStore) ListOperations(limit, offset int) ([]Operation, int, error
 	if offset >= len(operations) {
 		return []Operation{}, total, nil
 	}
-	end := offset + limit
-	if end > len(operations) {
-		end = len(operations)
+	end := len(operations)
+	if limit > 0 {
+		end = offset + limit
+		if end > len(operations) {
+			end = len(operations)
+		}
 	}
 	return operations[offset:end], total, nil
 }
