@@ -1,5 +1,5 @@
 # file: .github/codeql/models/go-sanitizers.model.yml
-# version: 1.1.0
+# version: 1.2.0
 # guid: 9d8c7b6a-5e4f-3d2c-1b0a-9e8f7d6c5b4a
 # last-edited: 2026-05-18
 # Declares project-specific path sanitizers so CodeQL stops flagging code
@@ -10,22 +10,22 @@ extensions:
       extensible: pathInjectionSanitizer
     data:
       # util.SafeJoin: return value is a sanitized path (path injection barrier)
-      - ["github.com/jdfalk/audiobook-organizer/internal/util", "SafeJoin", "ReturnValue"]
+      - ["github.com/falkcorp/audiobook-organizer/internal/util", "SafeJoin", "ReturnValue"]
       # pathvalidation.CleanAbsolutePath: validated absolute path return value
-      - ["github.com/jdfalk/audiobook-organizer/internal/security/pathvalidation", "CleanAbsolutePath", "ReturnValue"]
+      - ["github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation", "CleanAbsolutePath", "ReturnValue"]
       # pathvalidation.ValidateRelativePath: validated relative path joined to root
-      - ["github.com/jdfalk/audiobook-organizer/internal/security/pathvalidation", "ValidateRelativePath", "ReturnValue"]
+      - ["github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation", "ValidateRelativePath", "ReturnValue"]
       # pathvalidation.SecureJoin: validated path return value
-      - ["github.com/jdfalk/audiobook-organizer/internal/security/pathvalidation", "SecureJoin", "ReturnValue"]
+      - ["github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation", "SecureJoin", "ReturnValue"]
       # pathvalidation.SanitizeFilename: sanitized filename component
-      - ["github.com/jdfalk/audiobook-organizer/internal/security/pathvalidation", "SanitizeFilename", "ReturnValue"]
+      - ["github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation", "SanitizeFilename", "ReturnValue"]
       # safepath.Join: validated SafePath value
-      - ["github.com/jdfalk/audiobook-organizer/internal/security/safepath", "Join", "ReturnValue"]
+      - ["github.com/falkcorp/audiobook-organizer/internal/security/safepath", "Join", "ReturnValue"]
       # safepath.SafePath.String: unwrapped validated string from SafePath
-      - ["github.com/jdfalk/audiobook-organizer/internal/security/safepath", "String", "ReturnValue"]
+      - ["github.com/falkcorp/audiobook-organizer/internal/security/safepath", "String", "ReturnValue"]
   - addsTo:
       pack: codeql/go-all
       extensible: pathInjectionSanitizerGuard
     data:
       # util.WithinRoot: when this returns true, the path has been validated
-      - ["github.com/jdfalk/audiobook-organizer/internal/util", "WithinRoot", "true"]
+      - ["github.com/falkcorp/audiobook-organizer/internal/util", "WithinRoot", "true"]

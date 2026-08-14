@@ -1,5 +1,5 @@
 # file: .github/codeql/models/path-sanitizers.model.yml
-# version: 0.2.0
+# version: 0.3.0
 # guid: 07edd0c5-64fa-4d57-8830-fbfaa513c052
 # last-edited: 2026-05-18
 
@@ -10,31 +10,31 @@ extensions:
     data:
       # util.SafeJoin: return value is a sanitized path within root.
       # Signature: func SafeJoin(root string, parts ...string) (string, error)
-      - ["github.com/jdfalk/audiobook-organizer/internal/util", "", false, "SafeJoin", "", "", "ReturnValue[0]", "path-injection", "manual"]
+      - ["github.com/falkcorp/audiobook-organizer/internal/util", "", false, "SafeJoin", "", "", "ReturnValue[0]", "path-injection", "manual"]
 
       # pathvalidation.CleanAbsolutePath: validates and returns the cleaned absolute path.
       # Signature: func CleanAbsolutePath(path string) (string, error)
-      - ["github.com/jdfalk/audiobook-organizer/internal/security/pathvalidation", "", false, "CleanAbsolutePath", "", "", "ReturnValue[0]", "path-injection", "manual"]
+      - ["github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation", "", false, "CleanAbsolutePath", "", "", "ReturnValue[0]", "path-injection", "manual"]
 
       # pathvalidation.ValidateRelativePath: validates and returns the cleaned relative path joined to root.
       # Signature: func ValidateRelativePath(root, userPath string) (string, error)
-      - ["github.com/jdfalk/audiobook-organizer/internal/security/pathvalidation", "", false, "ValidateRelativePath", "", "", "ReturnValue[0]", "path-injection", "manual"]
+      - ["github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation", "", false, "ValidateRelativePath", "", "", "ReturnValue[0]", "path-injection", "manual"]
 
       # pathvalidation.SecureJoin: joins root with user parts, returns sanitized path.
       # Signature: func SecureJoin(root string, parts ...string) (string, error)
-      - ["github.com/jdfalk/audiobook-organizer/internal/security/pathvalidation", "", false, "SecureJoin", "", "", "ReturnValue[0]", "path-injection", "manual"]
+      - ["github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation", "", false, "SecureJoin", "", "", "ReturnValue[0]", "path-injection", "manual"]
 
       # pathvalidation.SanitizeFilename: sanitizes a filename component.
       # Signature: func SanitizeFilename(name string) string
-      - ["github.com/jdfalk/audiobook-organizer/internal/security/pathvalidation", "", false, "SanitizeFilename", "", "", "ReturnValue", "path-injection", "manual"]
+      - ["github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation", "", false, "SanitizeFilename", "", "", "ReturnValue", "path-injection", "manual"]
 
       # safepath.Join: returns a SafePath that is guaranteed to be within root.
       # Signature: func Join(root string, parts ...string) (SafePath, error)
-      - ["github.com/jdfalk/audiobook-organizer/internal/security/safepath", "", false, "Join", "", "", "ReturnValue[0]", "path-injection", "manual"]
+      - ["github.com/falkcorp/audiobook-organizer/internal/security/safepath", "", false, "Join", "", "", "ReturnValue[0]", "path-injection", "manual"]
 
       # safepath.SafePath.String: unwraps the validated path string.
       # Signature: func (SafePath) String() string
-      - ["github.com/jdfalk/audiobook-organizer/internal/security/safepath", "SafePath", false, "String", "", "", "ReturnValue", "path-injection", "manual"]
+      - ["github.com/falkcorp/audiobook-organizer/internal/security/safepath", "SafePath", false, "String", "", "", "ReturnValue", "path-injection", "manual"]
 
   - addsTo:
       pack: codeql/go-all
@@ -42,4 +42,4 @@ extensions:
     data:
       # util.WithinRoot: when this returns true, Argument[0] is within a safe root.
       # Signature: func WithinRoot(path, root string) bool
-      - ["github.com/jdfalk/audiobook-organizer/internal/util", "", false, "WithinRoot", "", "", "Argument[0]", "true", "path-injection", "manual"]
+      - ["github.com/falkcorp/audiobook-organizer/internal/util", "", false, "WithinRoot", "", "", "Argument[0]", "true", "path-injection", "manual"]
