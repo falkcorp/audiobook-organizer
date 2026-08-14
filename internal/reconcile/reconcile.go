@@ -693,19 +693,13 @@ func CleanupDuplicateVersionGroups(store Store, rootDir string, dryRun bool) (*V
 	// Fetch all books and group by version_group_id. Core-typed: grouping and
 	// dup-selection only need ID/FilePath/VersionGroupID, all Core-safe fields.
 	versionGroups := make(map[string][]database.BookCore)
-	const pageSize = 1000
-	for offset := 0; ; offset += pageSize {
-		books, err := store.GetAllBooksCore(pageSize, offset)
-		if err != nil {
-			return nil, fmt.Errorf("failed to fetch books: %w", err)
-		}
-		for _, b := range books {
-			if b.VersionGroupID != nil && *b.VersionGroupID != "" {
-				versionGroups[*b.VersionGroupID] = append(versionGroups[*b.VersionGroupID], b)
-			}
-		}
-		if len(books) < pageSize {
-			break
+	booksForGroups, err := loadAllBooksCore(store)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch books: %w", err)
+	}
+	for _, b := range booksForGroups {
+		if b.VersionGroupID != nil && *b.VersionGroupID != "" {
+			versionGroups[*b.VersionGroupID] = append(versionGroups[*b.VersionGroupID], b)
 		}
 	}
 
@@ -907,17 +901,9 @@ func MergeNoVGDuplicates(store Store, rootDir string, dryRun bool) (*MergeDuplic
 
 	// Load all books in pages. Core-typed: grouping/keeper-selection only needs
 	// ID/Title/FilePath/VersionGroupID/IsPrimaryVersion, all Core-safe fields.
-	var allBooks []database.BookCore
-	pageSize := 5000
-	for offset := 0; ; offset += pageSize {
-		books, err := store.GetAllBooksCore(pageSize, offset)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get books: %w", err)
-		}
-		allBooks = append(allBooks, books...)
-		if len(books) < pageSize {
-			break
-		}
+	allBooks, err := loadAllBooksCore(store)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get books: %w", err)
 	}
 
 	// Index VG primary books by normalized title
@@ -1273,6 +1259,19 @@ func MergeBookMetadata(dst, src *database.Book) []string {
 	return merged
 }
 
+
+// loadAllBooksCore enumerates the whole library in ONE store call (limit 0 =
+// unbounded on both store paths) instead of offset pages. Offset paging reads
+// each page from whichever memdb SNAPSHOT is current, and the reconciler swaps
+// snapshots asynchronously — a swap between page N and N+1 shifts every
+// position, silently skipping or repeating rows. Observed in CI (run
+// 30702594886): AssignOrphanVGs enumerated 39 of 40 books and reported
+// success, total_checked=39, no error, no signal. One call reads one
+// consistent snapshot; there is no cross-page window at all.
+func loadAllBooksCore(store Store) ([]database.BookCore, error) {
+	return store.GetAllBooksCore(0, 0)
+}
+
 // AssignOrphanVGs finds books in the library directory that have no version group,
 // creates a VG for each, and marks them as primary.
 // AssignOrphanVGs assigns a fresh VersionGroupID to every library book that
@@ -1294,17 +1293,9 @@ func MergeBookMetadata(dst, src *database.Book) []string {
 func AssignOrphanVGs(store Store, rootDir string) (*AssignVGResult, error) {
 	result := &AssignVGResult{}
 
-	var allBooks []database.BookCore
-	pageSize := 5000
-	for offset := 0; ; offset += pageSize {
-		books, err := store.GetAllBooksCore(pageSize, offset)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get books: %w", err)
-		}
-		allBooks = append(allBooks, books...)
-		if len(books) < pageSize {
-			break
-		}
+	allBooks, err := loadAllBooksCore(store)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get books: %w", err)
 	}
 
 	// Serial pre-filter: no I/O, just in-memory field checks.

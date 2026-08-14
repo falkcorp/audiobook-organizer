@@ -1,5 +1,5 @@
 // file: internal/reconcile/elect_primaries.go
-// version: 1.0.0
+// version: 1.2.0
 // guid: 25e1f705-9130-4eb0-bd4b-04d45908c704
 // last-edited: 2026-08-13
 
@@ -121,17 +121,11 @@ func electPrimaryFor(members []database.Book) *database.Book {
 func ElectMissingPrimaries(store Store, dryRun bool) (*ElectPrimaryResult, error) {
 	result := &ElectPrimaryResult{DryRun: dryRun}
 
-	var allBooks []database.BookCore
-	const pageSize = 5000
-	for offset := 0; ; offset += pageSize {
-		books, err := store.GetAllBooksCore(pageSize, offset)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get books: %w", err)
-		}
-		allBooks = append(allBooks, books...)
-		if len(books) < pageSize {
-			break
-		}
+	// One-call snapshot enumeration — see loadAllBooksCore in reconcile.go for
+	// why offset pages over the async memdb snapshot silently skip rows.
+	allBooks, err := loadAllBooksCore(store)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get books: %w", err)
 	}
 	result.TotalChecked = len(allBooks)
 
