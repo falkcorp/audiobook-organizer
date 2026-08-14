@@ -18,8 +18,13 @@
          it reports a few hundred it is not recognizing the inline shape. Either
          way, stop — do not apply on a detector that disagrees with the byte
          accounting.
-      3. **Canary**: apply with `{"dryRun":false,"limit":100}`. A limited run is a
-         stable prefix of `ListBookIDs` order, so the full run resumes from it.
+      3. **Canary**: apply with `{"dryRun":false,"limit":100}`. Do NOT assume the
+         limited run is a stable prefix the full run resumes past — `ListBookIDs`
+         has two implementations (memdb index order, which also drops
+         soft-deleted books, vs. the Pebble key range) and which one answers
+         depends on warmup state. The op is idempotent, so a full run simply
+         re-examines the canary's books and reports them `not_candidate`; that
+         is the guarantee to rely on, not the ordering.
          Verify the pairing on a named book: `GetBookByID` must return a non-nil
          `BookSigV1`, and its `book:` row must no longer contain
          `book_sig_v1`.
