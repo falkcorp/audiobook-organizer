@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile_orphanvg_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7a1c9e2d-4f6b-4a3e-9d0c-5b8e2f1a6c3d
-// last-edited: 2026-07-18
+// last-edited: 2026-08-14
 
 package reconcile
 
@@ -233,5 +233,78 @@ func TestAssignOrphanVGs_RealStoreConcurrent(t *testing.T) {
 		if b.IsPrimaryVersion == nil || !*b.IsPrimaryVersion {
 			t.Errorf("book %s IsPrimaryVersion not set true", id)
 		}
+	}
+}
+
+// pagingHazardStore simulates the production hazard the single-call
+// enumeration removes: offset pages served from a snapshot that is SWAPPED
+// between page N and N+1 (the async memdb reconciler replaces the whole
+// snapshot; every offset then refers to a shifted position). A paged read
+// (limit > 0) serves the first page from snapshot A, then swaps to snapshot B
+// — A with its first book removed — so the row at A's index `limit` is
+// silently skipped. A single-call read (limit == 0) returns all of A: one
+// snapshot, no window.
+type pagingHazardStore struct {
+	*fakeReconcileStore
+	snapA  []database.BookCore
+	paged  bool
+	pageNo int
+}
+
+func (p *pagingHazardStore) GetAllBooksCore(limit, offset int) ([]database.BookCore, error) {
+	if limit <= 0 {
+		return p.snapA, nil
+	}
+	p.paged = true
+	p.pageNo++
+	snap := p.snapA
+	if p.pageNo > 1 {
+		snap = p.snapA[1:] // the swap: positions shift by one
+	}
+	if offset >= len(snap) {
+		return nil, nil
+	}
+	end := offset + limit
+	if end > len(snap) {
+		end = len(snap)
+	}
+	return snap[offset:end], nil
+}
+
+// TestAssignOrphanVGs_SnapshotSwapCannotSkipBooks pins the C815 enumeration
+// change: with more books than one page (prod: ~63K books / 5000-per-page =
+// 13 windows for a swap to land in), the old offset loop deterministically
+// skips a book when the snapshot swaps between pages — and reports SUCCESS.
+// The single-call enumeration sees every book.
+func TestAssignOrphanVGs_SnapshotSwapCannotSkipBooks(t *testing.T) {
+	prevRoot := config.AppConfig.RootDir
+	defer func() { config.AppConfig.RootDir = prevRoot }()
+	const libRoot = "/lib"
+	config.AppConfig.RootDir = libRoot
+
+	// One more book than a page, so the old code needed two pages.
+	const n = 5001
+	inner := newFakeStore()
+	var snapA []database.BookCore
+	for i := 0; i < n; i++ {
+		id := fmt.Sprintf("swap-%04d", i)
+		path := fmt.Sprintf("%s/%s.m4b", libRoot, id)
+		snapA = append(snapA, database.BookCore{ID: id, Title: id, FilePath: path})
+		inner.byID[id] = &database.Book{ID: id, Title: id, FilePath: path}
+	}
+	store := &pagingHazardStore{fakeReconcileStore: inner, snapA: snapA}
+
+	result, err := AssignOrphanVGs(store, libRoot)
+	if err != nil {
+		t.Fatalf("AssignOrphanVGs: %v", err)
+	}
+	if store.paged {
+		t.Fatal("enumeration used offset pages — the snapshot-swap skip window is back")
+	}
+	if result.TotalChecked != n {
+		t.Fatalf("TotalChecked = %d, want %d: a book was never enumerated (the silent-skip shape — no error, success reported)", result.TotalChecked, n)
+	}
+	if result.Assigned != n {
+		t.Fatalf("Assigned = %d, want %d", result.Assigned, n)
 	}
 }
