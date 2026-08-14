@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-08-14-the-series-that-vanished-from-under-13322-books-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 4d81f2ba-6c39-4e17-8a52-9f0b3c7e15d8 -->
 <!-- last-edited: 2026-08-14 -->
 
@@ -82,9 +82,16 @@ are not doing any harm, they still record which books were grouped together, and
 library next reads a series name from a file's own tags it will overwrite them correctly.
 Erasing them would throw away the grouping and gain nothing.
 
-One thing remains open: 5,500 of the affected books were added to the library this month,
-which means something is still producing these broken references. The weekly job can no
-longer be the cause, so there is another source still to find.
+One thing remains open. The damage did not arrive gradually — it came in bursts, on ten
+separate days in total, and the largest by far was **2026-08-11, when 5,367 books were
+added carrying references to series that do not exist**. Those books are loose files
+picked up as "Unknown Author", with titles like *Chapter 06*, so they came in through a
+scan of unsorted audio rather than through the weekly tidy-up. No series-deleting job ran
+on that day at all.
+
+So the weekly job is no longer the cause, and was not the cause of the most recent burst
+either. Whatever ran on 11 August is still unidentified, and it is the thing to find next —
+the fix shipped here stops the bleeding from one source, not from that one.
 
 ## Why it took so long to spot
 

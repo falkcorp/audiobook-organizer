@@ -1,12 +1,34 @@
 ### Series table integrity — follow-ups from the 2026-08-14 prune repair
 
-- [ ] **Find what is still minting phantom series references.** Books reference 6,893
-  series IDs that have no row; 5,500 of the referencing books were created in
-  2026-08 and 507 in 2026-07 (88% of that month's books), so the source is live.
-  `maintenance.series-prune` is ruled out as the *current* cause — it was fixed in
-  #2400 and its two recorded runs never executed. Remaining suspects: the other
-  series deleters that never got the unfiltered-reference guard, listed below.
-  Dating method: ULID prefixes on the book IDs are time-sortable.
+- [ ] **Identify what produced the 2026-08-11 burst of phantom series references.**
+  Books reference 6,893 series IDs that have no row. The damage is EPISODIC, not a
+  steady leak — only 10 distinct days ever, dated by ULID prefix on the book IDs:
+
+  | day | books |
+  |---|---|
+  | 2026-06-18 | 78 |
+  | 2026-06-19 | 16 |
+  | 2026-07-19 | 507 |
+  | **2026-08-11** | **5,367** |
+  | 2026-08-12 | 133 |
+
+  (the rest predate June; 7,220 landed in 2026-04.)
+
+  The 08-11 books were all created within the same minute, 22:36 local, are loose
+  files under `Unknown Author`, and carry titles like `Chapter 06` and
+  `Singularity Online Book 3` — i.e. a scan of unsorted audio, not a maintenance
+  op. Their series IDs are mid-range (153577, 165008, 165695), interleaved with
+  live rows, NOT the contiguous all-dead 180000–184999 block.
+
+  Checked and ruled out: no series-deleting op appears in the operations list for
+  2026-08-11 or 08-12 (41 ops those days: purge-deleted ×18, temp-file-cleanup ×14,
+  isbn-enrichment ×4, cleanup_activity_log ×2, maintenance-window ×2,
+  metadata_candidate_fetch ×1). No scan op is recorded there either, which is
+  itself worth explaining. `maintenance.series-prune` is ruled out for this burst.
+
+  Two shapes to test: (a) the creating path assigns a `SeriesID` it never
+  persists, or (b) it copies a `SeriesID` from another record whose series was
+  already gone. Start from whatever created book `01KZSX7TW6BZXJX11F8K6Y0DSZ`.
 
 - [ ] **`BulkDeleteSeries` still deletes on a filtered count.**
   `internal/server/handlers/entities/handler.go:1017` guards with
