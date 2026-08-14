@@ -1,5 +1,5 @@
 // file: internal/audiobooks/filter_field_conformance_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2d84f0b6-31ca-4e57-9a1f-6b70c8e2d415
 // last-edited: 2026-08-14
 
@@ -12,6 +12,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // searchParserPath is the frontend's field list, read as a fixture. Relative to
@@ -122,11 +124,33 @@ func TestFilterFieldNames_MatchTheMatcher(t *testing.T) {
 
 	// And the reverse direction, spot-checked: a name the matcher accepts but
 	// the list omits would never be suggested to a caller who needs it.
-	for _, implemented := range []string{"title", "year", "duration", "marked_for_deletion", "isbn13"} {
+	for _, implemented := range []string{"title", "year", "duration", "marked_for_deletion", "isbn13", "version_group_id"} {
 		require.Containsf(t, names, implemented,
 			"%q is filterable but missing from KnownFilterFields", implemented)
 	}
 
 	require.False(t, FieldIsKnown("zzz_not_a_real_field"),
 		"an unknown field must be reported unknown, or the boundary rejection never fires")
+}
+
+// TestVersionGroupIDFilter_MatchesMembersOnly pins C110: version_group_id is a
+// real filter field. Before this, the #2417 bare-param guard 400'd it and the
+// filters form rejected it as unknown — production measured ?version_group_id=X
+// listing the ENTIRE library (fragment 20260814-version-group-id-not-a-filter-field).
+func TestVersionGroupIDFilter_MatchesMembersOnly(t *testing.T) {
+	vg := "01KNDC17RY2ATJFRACA8KK301A"
+	other := "01KZZZZZZZZZZZZZZZZZZZZZZZ"
+	member := database.Book{ID: "b1", Title: "Member", VersionGroupID: &vg}
+	otherBook := database.Book{ID: "b2", Title: "Other", VersionGroupID: &other}
+	ungrouped := database.Book{ID: "b3", Title: "Ungrouped"}
+
+	require.True(t, fieldMatchesValue(member, "version_group_id", vg))
+	require.False(t, fieldMatchesValue(otherBook, "version_group_id", vg))
+	require.False(t, fieldMatchesValue(ungrouped, "version_group_id", vg),
+		"a nil VersionGroupID must not match any group filter")
+
+	// The boundary validators must now accept it end to end.
+	if field, unknown := FirstUnknownFilterField([]FieldFilter{{Field: "version_group_id", Value: vg}}); unknown {
+		t.Fatalf("FirstUnknownFilterField still rejects %q", field)
+	}
 }
