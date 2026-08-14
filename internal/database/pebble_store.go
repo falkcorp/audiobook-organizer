@@ -503,7 +503,7 @@ func (p *PebbleStore) GetAllBooksCore(limit, offset int) ([]BookCore, error) {
 		if err := json.Unmarshal(iter.Value(), &book); err != nil {
 			return nil, err
 		}
-		if book.MarkedForDeletion != nil && *book.MarkedForDeletion {
+		if bookIsSoftDeleted(&book) {
 			continue
 		}
 		if skipped < offset {
@@ -2857,7 +2857,7 @@ func (p *PebbleStore) CountAllBooks() (int, error) {
 		if err := json.Unmarshal(iter.Value(), &book); err != nil {
 			return 0, err
 		}
-		if book.MarkedForDeletion != nil && *book.MarkedForDeletion {
+		if bookIsSoftDeleted(&book) {
 			continue
 		}
 		count++
@@ -3021,7 +3021,7 @@ func (p *PebbleStore) GetBooksByVersionGroup(groupID string) ([]Book, error) {
 		if err != nil || b == nil {
 			continue
 		}
-		if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+		if bookIsSoftDeleted(b) {
 			continue
 		}
 		books = append(books, *b)

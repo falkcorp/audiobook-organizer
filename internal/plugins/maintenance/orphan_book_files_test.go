@@ -1,16 +1,104 @@
 // file: internal/plugins/maintenance/orphan_book_files_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 0bd4f9a2-1c3e-4f5a-8b6c-7d9e0f1a2b3c
-// last-edited: 2026-07-07
+// last-edited: 2026-08-13
 
 package maintenance
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
+
+// TestFindOrphanBookFiles_SoftDeletedBooksKeepTheirFiles is a data-loss guard.
+//
+// A soft-deleted book is in the trash, not gone — POST
+// /api/v1/audiobooks/:id/restore brings it back. Its book_file rows must
+// therefore NOT be reported as orphans, because callers pass the orphan set to
+// DeleteBookFilesByIDs and a restore whose file rows were deleted underneath it
+// restores an empty shell.
+//
+// This was accidentally safe until 2026-08-13: GetAllBooksCore's memdb
+// implementation leaked soft-deleted rows, so they landed in the valid-owner
+// set by way of a bug. Fixing that leak is what made the explicit
+// ListSoftDeletedBooks union load-bearing. On prod at the time of the fix that
+// was 3,953 books — the losers of the July dedup drain.
+func TestFindOrphanBookFiles_SoftDeletedBooksKeepTheirFiles(t *testing.T) {
+	live := []database.Book{{ID: "book-live-1", Title: "Live"}}
+	yes := true
+	trashed := []database.Book{
+		{ID: "book-trashed-1", Title: "Trashed", MarkedForDeletion: &yes},
+	}
+	files := []database.BookFileCore{
+		{ID: "f1", BookID: "book-live-1", FilePath: "/lib/live.m4b"},
+		{ID: "f2", BookID: "book-trashed-1", FilePath: "/lib/trashed.m4b"},
+		{ID: "f3", BookID: "book-ghost-9", FilePath: "/lib/really-orphan.m4b"},
+	}
+
+	store := &database.MockStore{
+		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },
+		// Models the FIXED contract: soft-deleted rows are excluded here.
+		GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) {
+			return []database.BookCore{live[0].Core()}, nil
+		},
+		ListSoftDeletedBooksFunc: func(limit, offset int, olderThan *time.Time) ([]database.Book, error) {
+			return trashed, nil
+		},
+	}
+
+	orphans, _, _, err := findOrphanBookFiles(context.Background(), store)
+	if err != nil {
+		t.Fatalf("findOrphanBookFiles returned error: %v", err)
+	}
+
+	got := make(map[string]bool, len(orphans))
+	for _, o := range orphans {
+		got[o.ID] = true
+	}
+	if got["f2"] {
+		t.Error("f2 belongs to a SOFT-DELETED book and was reported as an orphan; " +
+			"its owner is restorable, so deleting this row destroys the restore target")
+	}
+	if got["f1"] {
+		t.Error("f1 belongs to a LIVE book and must never be an orphan")
+	}
+	// Non-vacuity: the scan must still find genuine orphans, or a function that
+	// returned nothing at all would pass the assertions above.
+	if !got["f3"] {
+		t.Error("f3 has no owning book at all and must still be reported as an orphan")
+	}
+}
+
+// TestFindOrphanBookFiles_FailsClosedWhenSoftDeletedSetUnavailable pins the
+// error-handling choice: without the soft-deleted set the scan cannot tell a
+// restorable book's files from real garbage, and its caller DELETES what it
+// returns. Failing open here would report every soft-deleted book's files as
+// orphans on a transient read error.
+func TestFindOrphanBookFiles_FailsClosedWhenSoftDeletedSetUnavailable(t *testing.T) {
+	store := &database.MockStore{
+		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) {
+			return []database.BookFileCore{{ID: "f1", BookID: "ghost"}}, nil
+		},
+		GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) {
+			return nil, nil
+		},
+		ListSoftDeletedBooksFunc: func(limit, offset int, olderThan *time.Time) ([]database.Book, error) {
+			return nil, errors.New("pebble read failed")
+		},
+	}
+
+	orphans, _, _, err := findOrphanBookFiles(context.Background(), store)
+	if err == nil {
+		t.Fatalf("expected an error when the soft-deleted set is unreadable, got %d orphans", len(orphans))
+	}
+	if orphans != nil {
+		t.Errorf("expected no orphan list alongside the error, got %d", len(orphans))
+	}
+}
 
 // TestFindOrphanBookFiles_ReportOnly verifies the core scan: given a mix of
 // book_files where some BookIDs reference existing books and some don't, the

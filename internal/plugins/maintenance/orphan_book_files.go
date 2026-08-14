@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/orphan_book_files.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9d2c4f6a-8e1b-4c5d-9a7b-3e5f1a2c4b6d
-// last-edited: 2026-08-06
+// last-edited: 2026-08-13
 
 package maintenance
 
@@ -228,6 +228,32 @@ func findOrphanBookFiles(ctx context.Context, store database.Store) (orphans []d
 	valid := make(map[string]struct{}, len(books))
 	for _, b := range books {
 		valid[b.ID] = struct{}{}
+	}
+
+	// A soft-deleted book still OWNS its book_files. It is in the trash, not
+	// gone: POST /api/v1/audiobooks/:id/restore brings it back, and a restore
+	// whose file rows were deleted underneath it restores an empty shell.
+	//
+	// GetAllBooksCore deliberately excludes soft-deleted rows, so they must be
+	// added back explicitly here — this scan is a set-difference that treats
+	// every book_file whose owner is absent as garbage, and callers feed the
+	// result straight to DeleteBookFilesByIDs.
+	//
+	// Until 2026-08-13 this was accidentally correct: the memdb implementation
+	// of GetAllBooksCore leaked soft-deleted rows, so they landed in `valid` by
+	// way of a bug. Fixing that bug is what made this union load-bearing —
+	// without it the very first orphan-cleanup run after the fix would have
+	// deleted the file rows of all 3,953 books soft-deleted by the July dedup
+	// drain. See TestFindOrphanBookFiles_SoftDeletedBooksKeepTheirFiles.
+	softDeleted, serr := store.ListSoftDeletedBooks(0, 0, nil)
+	if serr != nil {
+		// Fail CLOSED: without the soft-deleted set this scan cannot tell a
+		// restorable book's files from real garbage, and the caller deletes
+		// what it returns. Refuse rather than under-report.
+		return nil, 0, 0, fmt.Errorf("ListSoftDeletedBooks (needed to protect restorable books): %w", serr)
+	}
+	for i := range softDeleted {
+		valid[softDeleted[i].ID] = struct{}{}
 	}
 	orphans = make([]database.BookFileCore, 0)
 	for _, f := range files {
