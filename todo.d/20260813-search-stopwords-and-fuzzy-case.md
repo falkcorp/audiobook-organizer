@@ -1,16 +1,17 @@
 ### Search follow-ups from the wildcard/phrase fix (2026-08-13)
 
-- [ ] **Phrases containing an English stopword still over-match.** `"All Jobs"` returns
-      three books because `all` is dropped by the analyser before matching, reducing the
-      phrase to the single term `jobs`. The phrase machinery itself is correct —
-      `"Side Jobs"` and `"Jobs on the Side"` now resolve to exactly one book each, and
-      no longer match each other. Fixing the stopword case means indexing the text
-      fields with an analyser that keeps stopwords, which changes the index mapping and
-      requires a full re-index of the library. That re-index is now cheap and proven:
-      the coverage reconciler drained all 67,824 books in ~25 minutes with zero
-      failures. `TestQuotedPhraseWithLeadingStopword` is a characterization test that
-      will FAIL when this is fixed — that failure is the signal to delete it and fold
-      the case into `TestQuotedPhraseIsAPhrase`.
+- [x] **Phrases containing an English stopword still over-match.** Fixed in #2391,
+      deployed and verified on production 2026-08-13 22:03 EDT: `"All Jobs"` went from
+      **300 results to 3**, all three the intended book. The cause was subtler than
+      "the stopword is dropped": the stop filter removes tokens *without renumbering
+      the positions of the survivors*, and `MatchPhraseQuery` rebuilds the phrase from
+      those positions. So `"All Jobs"` became a **one-slot** phrase (a bare term query)
+      while `"Lord of the Rings"` became a **four-slot phrase with two nil slots** —
+      wildcards matching "Lord ANY ANY Rings". Text fields now use a
+      stopword-preserving analyser, with an index mapping-version marker that triggers
+      the rebuild. The re-index ran in ~36 min over 67,824 books, `failed=0` on every
+      batch. `TestQuotedPhraseWithLeadingStopword` was replaced by
+      `TestQuotedPhraseWithStopword`, which asserts both cases with word-order decoys.
 - [ ] **Fuzzy queries (`~`) have the same case-sensitivity defect the wildcard fix just
       addressed.** `bleve_translator.go` builds `NewFuzzyQuery` from the raw term, and
       FuzzyQuery bypasses the analyser exactly as PrefixQuery and WildcardQuery do. Not
