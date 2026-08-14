@@ -23,3 +23,17 @@
 
       Regression test to add either way: a soft-deleted book with an iTunes PID must not
       appear in the writeback preview.
+
+- [ ] 🔁 **The three-state deletion filter is implemented twice.** Residue from the
+      same duplication PR #2392 set out to remove. `internal/database/memdb_summaries.go`
+      (the `isDel != requireDeleted` comparisons, two sites) and
+      `internal/database/memdb_reads.go` (`GetAllBooksCore`'s
+      `bookIsSoftDeleted(b) != v` block) independently implement the same
+      three-state rule: exclude deleted by default / require deleted / require
+      live. The *predicate* is now shared; the *tri-state policy around it* is not.
+
+      Not a bug today — both agree. It is listed because "both agree today" is
+      exactly what was true of `GetAllBooksCore`'s two implementations right up
+      until they didn't, and the mechanism was the same: one rule, written out
+      twice. A shared helper taking (row, filter) and returning include/exclude
+      would collapse it. Low priority, no user-visible symptom.
