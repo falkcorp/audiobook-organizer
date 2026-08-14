@@ -23,19 +23,30 @@ behind a write.
 - [ ] Identify the 2 books. They are not among `Nicholas Courtney` (43791)'s 7
       books — none of those reference 46627 — so they are books where 46627 is
       a co-author and 43791 is not linked at all.
-- [ ] Find why memdb's loader drops them. Suspects: the junction load skipping
-      rows whose book is soft-deleted, or an author-id index built only from
-      `Book.AuthorID`. Note `/api/v1/authors/46627/books` and the authors-list
-      `book_count` BOTH report 0, so every serving-layer read agrees with memdb
-      and only Pebble sees them.
+- [ ] Find why memdb's loader drops them. Note `/api/v1/authors/46627/books`
+      and the authors-list `book_count` BOTH report 0, so every serving-layer
+      read agrees with memdb and only Pebble sees them.
+      - ❌ **RULED OUT: `safeInsert` skipping rows.** `memdb_warmup.go` skips and
+        counts rows that fail to insert, which looked like the obvious culprit.
+        The 2026-08-14 01:54 warmup reports `skipped_total=0` with
+        `book_authors=290643` loaded. Nothing was dropped at insert time, so the
+        loss is in the index or the query, not the load.
+      - Remaining suspects: the memdb author→book index construction, or
+        `memdb.GetBooksByAuthorID` itself.
+      - ⏱️ Warmup takes **132s** on prod. Any op dispatched sooner than that
+        after a restart runs on Pebble. That is what made the divergence
+        visible at all.
 - [ ] Write the conformance test rather than a per-path assertion — one fixture,
       both implementations, assert equal. This is the third memdb/Pebble
       divergence in a week (see the soft-deleted leak, #2392), and per-path
       expectations cannot catch drift because the path's own author writes the
       expectation.
 - [ ] Once resolved, drop `skip_author_ids: [46627]` from the repair invocation
-      and repair that row. It is currently the ONLY unrepaired stranded-ampersand
-      author.
+      and repair that row. **Applied 2026-08-14 02:0x: 30 merged, 15 renamed, 0
+      failures, 145/145 book links verified. Author 46627 is the ONLY remaining
+      stranded-ampersand row** (the other two survivors, `&#169` and
+      `&#169;2013 by HarperCollinsPublishers`, are the separate HTML-entity
+      defect).
 
 **Why this blocked the repair:** the merge path relinks the books it can see and
 then DELETES the author row. Run through memdb it would relink 0 books for 46627

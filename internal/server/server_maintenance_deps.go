@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-07-18
+// last-edited: 2026-08-14
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -118,6 +118,16 @@ func (s *Server) DedupLLMReview(ctx context.Context) error {
 func (s *Server) InvalidateDedupCache() {
 	if s.dedupCache != nil {
 		s.dedupCache.Invalidate("author-duplicates")
+	}
+}
+
+// InvalidateAuthorsCache drops the cached author list so a maintenance op that
+// renamed or deleted authors is visible immediately rather than after the
+// cache's 24-hour TTL. Mirrors what entities_ops.go already does on the
+// interactive merge path.
+func (s *Server) InvalidateAuthorsCache() {
+	if s.authorsCache != nil {
+		s.authorsCache.InvalidateAll()
 	}
 }
 

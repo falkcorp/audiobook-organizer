@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_conjunction_repair_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8e35b7d2-1c40-4f96-a2e7-5b9d0c68a341
 // last-edited: 2026-08-14
 
@@ -22,6 +22,17 @@ type conjRepairWrites struct {
 	updatedBooks    []string
 	getBookAuthorsN int
 }
+
+// conjRepairDeps counts cache invalidations so a test can assert the op tells
+// the read layer its data changed.
+type conjRepairDeps struct {
+	fakeDeps
+	authorsInvalidated int
+	dedupInvalidated   int
+}
+
+func (d *conjRepairDeps) InvalidateAuthorsCache() { d.authorsInvalidated++ }
+func (d *conjRepairDeps) InvalidateDedupCache()   { d.dedupInvalidated++ }
 
 // newConjRepairPlugin wires a MockStore around a fixed author table and a
 // book<->author join table.
@@ -65,6 +76,99 @@ func newConjRepairPlugin(
 		},
 	}
 	return New(&fakeDeps{store: store})
+}
+
+// newConjRepairPluginWithDeps is newConjRepairPlugin with invalidation counting.
+func newConjRepairPluginWithDeps(
+	authors []database.Author,
+	booksByAuthor map[int][]database.BookCore,
+	joins map[string][]database.BookAuthor,
+	w *conjRepairWrites,
+	deps *conjRepairDeps,
+) *Plugin {
+	w.setBookAuthors = map[string][]database.BookAuthor{}
+	w.renamedAuthors = map[int]string{}
+	store := &database.MockStore{
+		GetAllAuthorsFunc: func() ([]database.Author, error) { return authors, nil },
+		GetAuthorByNameFunc: func(name string) (*database.Author, error) {
+			for i := range authors {
+				if authors[i].Name == name {
+					return &authors[i], nil
+				}
+			}
+			return nil, nil
+		},
+		GetBooksByAuthorIDWithRoleFunc: func(authorID int) ([]database.BookCore, error) {
+			return booksByAuthor[authorID], nil
+		},
+		GetBookAuthorsFunc: func(bookID string) ([]database.BookAuthor, error) {
+			return joins[bookID], nil
+		},
+		SetBookAuthorsFunc: func(bookID string, ba []database.BookAuthor) error {
+			w.setBookAuthors[bookID] = ba
+			return nil
+		},
+		DeleteAuthorFunc: func(id int) error {
+			w.deletedAuthors = append(w.deletedAuthors, id)
+			return nil
+		},
+		UpdateAuthorNameFunc: func(id int, name string) error {
+			w.renamedAuthors[id] = name
+			return nil
+		},
+	}
+	deps.fakeDeps = fakeDeps{store: store}
+	return New(deps)
+}
+
+// TestAuthorConjunctionRepair_InvalidatesAuthorsCacheOnWrite pins the gap found
+// on 2026-08-14: the apply landed correctly in the store and in all 145 book
+// records, but the authors list kept serving the pre-repair "&" names because
+// its cache holds a 24-hour TTL and only the entities API invalidated it. The
+// one page anyone would check to confirm the repair showed it had not happened.
+//
+// A dry run must NOT invalidate — it changed nothing, and dropping a warm cache
+// costs real work for no reason.
+func TestAuthorConjunctionRepair_InvalidatesAuthorsCacheOnWrite(t *testing.T) {
+	authors := []database.Author{
+		{ID: 46414, Name: "& Joe Thompson"},
+	}
+
+	t.Run("apply invalidates", func(t *testing.T) {
+		var w conjRepairWrites
+		deps := &conjRepairDeps{}
+		p := newConjRepairPluginWithDeps(authors, nil, nil, &w, deps)
+		if err := p.runAuthorConjunctionRepair(context.Background(), conjRepairParams(false), &fakeReporter{}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if deps.authorsInvalidated != 1 {
+			t.Errorf("authors cache invalidated %d times, want 1 — the repair is invisible to the author list without it", deps.authorsInvalidated)
+		}
+	})
+
+	t.Run("dry run does not invalidate", func(t *testing.T) {
+		var w conjRepairWrites
+		deps := &conjRepairDeps{}
+		p := newConjRepairPluginWithDeps(authors, nil, nil, &w, deps)
+		if err := p.runAuthorConjunctionRepair(context.Background(), conjRepairParams(true), &fakeReporter{}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if deps.authorsInvalidated != 0 {
+			t.Errorf("dry run invalidated the authors cache %d times, want 0", deps.authorsInvalidated)
+		}
+	})
+
+	t.Run("no matching rows does not invalidate", func(t *testing.T) {
+		var w conjRepairWrites
+		deps := &conjRepairDeps{}
+		p := newConjRepairPluginWithDeps([]database.Author{{ID: 1, Name: "Dan Simmons"}}, nil, nil, &w, deps)
+		if err := p.runAuthorConjunctionRepair(context.Background(), conjRepairParams(false), &fakeReporter{}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if deps.authorsInvalidated != 0 {
+			t.Errorf("a run that wrote nothing invalidated the cache %d times, want 0", deps.authorsInvalidated)
+		}
+	})
 }
 
 func conjRepairParams(dryRun bool) json.RawMessage {
