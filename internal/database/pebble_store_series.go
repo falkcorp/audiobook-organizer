@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_series.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 29120d16-9add-4efd-81a5-edc1e8951f4d
-// last-edited: 2026-07-03
+// last-edited: 2026-08-14
 
 package database
 
@@ -269,6 +269,12 @@ func (p *PebbleStore) GetAllSeriesBookCounts_Pebble() (map[int]int, error) {
 		if b.SeriesID == nil || (b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion) {
 			continue
 		}
+		// Soft-deleted books are trash awaiting purge, not library content. The
+		// memdb implementation has always skipped them; this path did not, so a
+		// series' book count jumped whenever memdb was unavailable.
+		if bookIsSoftDeleted(&b) {
+			continue
+		}
 		counts[*b.SeriesID]++
 	}
 	return counts, nil
@@ -298,6 +304,12 @@ func (p *PebbleStore) GetAllSeriesFileCounts() (map[int]int, error) {
 		}
 		var b Book
 		if err := json.Unmarshal(iter.Value(), &b); err != nil {
+			continue
+		}
+		// Skip soft-deleted books here rather than when counting files: leaving
+		// them out of bookIDToSeriesID means their BookFile rows are never
+		// attributed to the series in phase 2 either. Matches the memdb path.
+		if bookIsSoftDeleted(&b) {
 			continue
 		}
 		if b.SeriesID != nil && (b.IsPrimaryVersion == nil || *b.IsPrimaryVersion) {
