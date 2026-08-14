@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2c9f5a1b-4d83-4e07-9f6a-1b8e3c0d7a52
 // last-edited: 2026-07-07
 
@@ -152,8 +152,9 @@ func TestDurationBackfill_ParallelProducesCorrectResults(t *testing.T) {
 				if offset >= len(books) {
 					return nil, nil
 				}
+				// Real-store contract: limit <= 0 means no limit.
 				end := offset + limit
-				if end > len(books) {
+				if limit <= 0 || end > len(books) {
 					end = len(books)
 				}
 				page := books[offset:end]
