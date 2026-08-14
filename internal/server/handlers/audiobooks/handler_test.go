@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 5cd764d5-8036-425c-842e-c49d0d44acec
-// last-edited: 2026-07-11
+// last-edited: 2026-08-14
 
 // Tests for the audiobooks-domain handlers (main library list / CRUD). The
 // store / audiobook-service / updater / write-back / metadata-state /
@@ -296,10 +296,46 @@ func TestListSoftDeletedAudiobooks(t *testing.T) {
 	h, d := newHandler(t)
 	d.svc.EXPECT().GetSoftDeletedBooks(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return([]database.Book{{ID: "b1"}}, nil)
+	// 12,345 is deliberately above the old fetch-and-len path's 10,000 cap AND
+	// unequal to len(items): the assertion below fails if total ever again
+	// derives from the fetched page or a capped refetch.
+	d.svc.EXPECT().CountSoftDeletedBooks(mock.Anything, mock.Anything).Return(12345, nil)
 	c, w := newCtx("GET", "/audiobooks/soft-deleted", nil, nil)
 	h.ListSoftDeletedAudiobooks(c)
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", w.Code)
+	}
+	var body struct {
+		Data struct {
+			Total int `json:"total"`
+			Count int `json:"count"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if body.Data.Total != 12345 {
+		t.Fatalf("total must come from the count capability (want 12345), got %d", body.Data.Total)
+	}
+	if body.Data.Count != 1 {
+		t.Fatalf("count must be the page size, got %d", body.Data.Count)
+	}
+}
+
+// TestListSoftDeletedAudiobooks_CountErrorIs500 pins the error propagation:
+// the pre-2026-08-14 code discarded the count error into `_` and reported
+// total 0 — indistinguishable from an empty trash, the alarming direction to
+// be wrong in. A failed count must be a failed request.
+func TestListSoftDeletedAudiobooks_CountErrorIs500(t *testing.T) {
+	h, d := newHandler(t)
+	d.svc.EXPECT().GetSoftDeletedBooks(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return([]database.Book{{ID: "b1"}}, nil)
+	d.svc.EXPECT().CountSoftDeletedBooks(mock.Anything, mock.Anything).
+		Return(0, errString("pebble iterator failed"))
+	c, w := newCtx("GET", "/audiobooks/soft-deleted", nil, nil)
+	h.ListSoftDeletedAudiobooks(c)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("a failed count must 500, not report total 0; got %d", w.Code)
 	}
 }
 

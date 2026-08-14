@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
-// last-edited: 2026-07-07
+// last-edited: 2026-08-14
 
 package audiobooks
 
@@ -321,6 +321,41 @@ func (svc *AudiobookService) GetSoftDeletedBooks(ctx context.Context, limit int,
 	}
 
 	return books, nil
+}
+
+// CountSoftDeletedBooks reports the EXACT size of the soft-deleted set. It
+// exists because the only prior way to get a total was fetch-with-limit-10000
+// and len(), which silently saturates above the guess and reads 10,000 rows to
+// produce one integer — while a failed fetch reported total 0, which is the
+// alarming direction to be wrong in (an empty trash and a broken count look
+// identical). Callers must propagate the error, never default it to zero.
+func (svc *AudiobookService) CountSoftDeletedBooks(ctx context.Context, olderThanDays *int) (int, error) {
+	if svc.store == nil {
+		return 0, fmt.Errorf("database not initialized")
+	}
+	var cutoff *time.Time
+	if olderThanDays != nil && *olderThanDays > 0 {
+		ts := time.Now().AddDate(0, 0, -*olderThanDays)
+		cutoff = &ts
+	}
+	if cs := database.AsSoftDeletedCountStore(svc.store); cs != nil {
+		return cs.CountSoftDeletedBooks(cutoff)
+	}
+	// Fallback for stores without the counting capability (mocks, mostly):
+	// page the listing to exhaustion rather than guessing a single big limit —
+	// a bounded guess is exactly the saturation bug this method replaces.
+	total := 0
+	const page = 1000
+	for offset := 0; ; offset += page {
+		books, err := svc.store.ListSoftDeletedBooks(page, offset, cutoff)
+		if err != nil {
+			return 0, err
+		}
+		total += len(books)
+		if len(books) < page {
+			return total, nil
+		}
+	}
 }
 
 // PurgeSoftDeletedBooks permanently deletes soft-deleted audiobooks
