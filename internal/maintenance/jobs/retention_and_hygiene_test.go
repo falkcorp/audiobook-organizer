@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/retention_and_hygiene_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: f8d0e5b9-c2a4-5b1d-9e7f-8c3d2a1b0f5e
 // last-edited: 2026-08-14
 
@@ -440,3 +440,84 @@ type nopReporter struct{}
 func (r *nopReporter) SetTotal(_ int)                     {}
 func (r *nopReporter) Increment()                         {}
 func (r *nopReporter) Log(_ string, _ string, _ *string)  {}
+
+// opstateSweepMock builds a MockStore holding opstate keys for four operations:
+// one running (must be KEPT — the resume path may still load it), one completed
+// (delete), one whose operation record is gone (delete), and one with a status
+// the sweep does not recognize (must be KEPT — fail toward keeping). The
+// completed op has BOTH key forms so the test also pins that the count is
+// per-operation, not per-key.
+func opstateSweepMock() (*database.MockStore, *[]string) {
+	deleted := &[]string{}
+	ops := map[string]*database.Operation{
+		"RUN1":   {ID: "RUN1", Status: "running"},
+		"DONE1":  {ID: "DONE1", Status: "completed"},
+		"WEIRD1": {ID: "WEIRD1", Status: "quarantined"},
+		// "GONE1" has opstate keys but no operation record.
+	}
+	m := &database.MockStore{}
+	m.ScanPrefixFunc = func(prefix string) ([]database.KVPair, error) {
+		if prefix != "opstate:" {
+			return nil, nil
+		}
+		return []database.KVPair{
+			{Key: "opstate:RUN1", Value: []byte("{}")},
+			{Key: "opstate:RUN1:params", Value: []byte("{}")},
+			{Key: "opstate:DONE1", Value: []byte("{}")},
+			{Key: "opstate:DONE1:params", Value: []byte("{}")},
+			{Key: "opstate:GONE1:params", Value: []byte("{}")},
+			{Key: "opstate:WEIRD1:params", Value: []byte("{}")},
+		}, nil
+	}
+	m.GetOperationByIDFunc = func(id string) (*database.Operation, error) {
+		return ops[id], nil // nil for GONE1, matching PebbleStore's not-found contract
+	}
+	m.DeleteOperationStateFunc = func(opID string) error {
+		*deleted = append(*deleted, opID)
+		return nil
+	}
+	return m, deleted
+}
+
+func TestDeleteStaleOperationState_DryRunCountsWithoutDeleting(t *testing.T) {
+	store, deleted := opstateSweepMock()
+	count, err := deleteStaleOperationState(context.Background(), store, true)
+	if err != nil {
+		t.Fatalf("dry-run sweep: %v", err)
+	}
+	// DONE1 (terminal) + GONE1 (orphaned) — counted per OPERATION, so DONE1's
+	// two keys contribute 1, not 2.
+	if count != 2 {
+		t.Fatalf("dry-run count = %d, want 2 (per-operation, not per-key)", count)
+	}
+	if len(*deleted) != 0 {
+		t.Fatalf("dry-run deleted state for %v, want none", *deleted)
+	}
+}
+
+func TestDeleteStaleOperationState_DeletesTerminalAndOrphanedOnly(t *testing.T) {
+	store, deleted := opstateSweepMock()
+	count, err := deleteStaleOperationState(context.Background(), store, false)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("count = %d, want 2", count)
+	}
+	got := map[string]bool{}
+	for _, id := range *deleted {
+		got[id] = true
+	}
+	if !got["DONE1"] || !got["GONE1"] || len(got) != 2 {
+		t.Fatalf("deleted %v, want exactly {DONE1, GONE1}", *deleted)
+	}
+	// The two keep cases are the load-bearing half of this test: a running op's
+	// state feeds the restart-resume path, and an unrecognized status must fail
+	// toward keeping.
+	if got["RUN1"] {
+		t.Fatal("sweep deleted state for a RUNNING op — this breaks restart-resume")
+	}
+	if got["WEIRD1"] {
+		t.Fatal("sweep deleted state for an unrecognized status — must fail toward keeping")
+	}
+}
