@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/check-memory-leaks.py
-# version: 1.2.0
+# version: 1.3.0
 """
 Detects common memory leak patterns in React/TypeScript code.
 Scans for:
@@ -130,11 +130,22 @@ class MemoryLeakDetector:
     def check_untracked_listeners(self, filepath: str, content: str) -> None:
         """Find addEventListener without removeEventListener.
 
-        Searches up to 100 lines ahead for a matching removeEventListener.
-        Stops only when the enclosing function scope fully closes (scope_depth
-        drops below -1), not on the first closing brace — that would produce
-        false positives when add and remove are in sibling blocks (e.g. an
-        XHR onload handler following the addEventListener call).
+        Two pairing strategies, chosen per call site (LEAKSCAN-SCOPE):
+
+        1. NAMED handler (`addEventListener('x', handleX)`): paired by handler
+           identity — a `removeEventListener('x', handleX)` anywhere in the
+           file clears it. Brace-depth proximity is the wrong instrument here:
+           the 2026-08-11 false positive on apiFetch.ts had the add nested two
+           `if` levels below a `finally`-level remove, and the old look-ahead
+           abandoned the search when its depth counter dropped below -1 —
+           before it ever reached the remove.
+
+        2. ANONYMOUS handler (inline arrow/function): such a listener cannot
+           be detached by removeEventListener at all, so identity pairing is
+           impossible. Keep the original heuristic: search up to 100 lines
+           ahead for a remove of the same event name, abandoning once the
+           enclosing scope closes (depth < -1, not 0, so add/remove in
+           sibling blocks still pair).
         """
         lines = content.split("\n")
 
@@ -142,36 +153,56 @@ class MemoryLeakDetector:
             if "addEventListener" not in line or self.should_ignore(line):
                 continue
 
-            # Get the listener name for matching
-            listener_match = re.search(r"addEventListener\s*\(\s*['\"](\w+)['\"]", line)
+            # Event name, and the handler if it is a bare (possibly dotted)
+            # identifier — `handleX`, `this.onScroll`, `refs.current.fn`.
+            listener_match = re.search(
+                r"addEventListener\s*\(\s*['\"](\w+)['\"]\s*(?:,\s*([A-Za-z_$][\w$.]*)\s*[,)])?",
+                line,
+            )
             if not listener_match:
                 continue
 
             event_name = listener_match.group(1)
+            handler_name = listener_match.group(2)
+            # `function` here means an inline `function (...)` expression, not
+            # a reference to one — treat it as anonymous.
+            if handler_name == "function":
+                handler_name = None
 
-            # Look ahead for removeEventListener with same event
             found_remove = False
-            scope_depth = 0
+            if handler_name:
+                # Identity pairing: same event AND same handler, anywhere in
+                # the file, nesting-independent.
+                remove_re = re.compile(
+                    r"removeEventListener\s*\(\s*['\"]"
+                    + re.escape(event_name)
+                    + r"['\"]\s*,\s*"
+                    + re.escape(handler_name)
+                    + r"\b"
+                )
+                found_remove = bool(remove_re.search(content))
+            else:
+                # Anonymous handler: original look-ahead by event name.
+                scope_depth = 0
+                for j in range(i, min(i + 100, len(lines))):
+                    line_j = lines[j]
 
-            for j in range(i, min(i + 100, len(lines))):
-                line_j = lines[j]
+                    # Track scope to avoid false positives
+                    scope_depth += line_j.count("{") - line_j.count("}")
 
-                # Track scope to avoid false positives
-                scope_depth += line_j.count("{") - line_j.count("}")
+                    if (
+                        f"removeEventListener('{event_name}'" in line_j
+                        or f'removeEventListener("{event_name}"' in line_j
+                    ):
+                        found_remove = True
+                        break
 
-                if (
-                    f"removeEventListener('{event_name}'" in line_j
-                    or f'removeEventListener("{event_name}"' in line_j
-                ):
-                    found_remove = True
-                    break
-
-                # Stop only when we leave the enclosing function entirely
-                # (scope_depth < -1 means we've closed more than one extra level).
-                # Using -1 instead of 0 avoids false positives when add and remove
-                # live in sibling blocks at the same depth.
-                if scope_depth < -1:
-                    break
+                    # Stop only when we leave the enclosing function entirely
+                    # (scope_depth < -1 means we've closed more than one extra
+                    # level). Using -1 instead of 0 avoids false positives when
+                    # add and remove live in sibling blocks at the same depth.
+                    if scope_depth < -1:
+                        break
 
             if not found_remove:
                 self.issues.append(
