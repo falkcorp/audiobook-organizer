@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 3.14.0
+// version: 3.15.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-08-13
 
@@ -1100,7 +1100,26 @@ func (s *Server) startBackfills() {
 		s.bgWG.Add("build-search-index")
 		go func() {
 			defer s.bgWG.Done("build-search-index")
-			s.buildSearchIndexIfEmpty()
+			if s.searchIndex.RecreatedForMappingChange() {
+				// The index was just deleted and recreated empty because the
+				// mapping version changed. An empty index is precisely what
+				// buildSearchIndexIfEmpty triggers on — and that build is
+				// non-resumable and bgCtx-cancellable, which is exactly how a
+				// permanent 24.7% coverage gap was created on 2026-08-13.
+				// Running it here would deliberately re-enter that bug at
+				// full library scale.
+				//
+				// Skip it and let reconcileSearchIndexCoverage seed the
+				// DURABLE dirty set instead: a cancellation mid-sweep then
+				// costs nothing, because the marks survive the restart.
+				// "The index is empty" must not be the signal to bulk-build;
+				// only a genuinely first-time index should take that path.
+				slog.Warn("search index was recreated for a mapping change; " +
+					"skipping bulk backfill and seeding the durable dirty " +
+					"set instead")
+			} else {
+				s.buildSearchIndexIfEmpty()
+			}
 			// buildSearchIndexIfEmpty only runs on an EMPTY index, so a
 			// build that was cancelled by a previous shutdown leaves a
 			// permanent gap it will never revisit. Seed the dirty set for

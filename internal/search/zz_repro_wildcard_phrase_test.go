@@ -1,5 +1,5 @@
 // file: internal/search/zz_repro_wildcard_phrase_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8c4d1f06-2b93-4a57-91e8-73f5a0c6d284
 // last-edited: 2026-08-13
 
@@ -46,6 +46,34 @@ func wildcardPhraseCorpus(t *testing.T) *BleveIndex {
 		// measure phrase behaviour rather than mere co-occurrence.
 		{BookID: "decoy_side", Title: "Jobs on the Side", Author: "Nobody"},
 		{BookID: "decoy_dragon", Title: "Conjurer of the Dragon", Author: "Nobody"},
+
+		// Stopword decoys, for the mapping change that stopped the analyser
+		// deleting stopwords. Each is chosen to be indistinguishable from
+		// the target UNLESS the stopword itself is indexed and positioned:
+		//
+		//   decoy_jobsforall — carries "Jobs" and "All" but not adjacent
+		//                      and in that order, so it separates a real
+		//                      `"All Jobs"` phrase from a bare `jobs` term.
+		//                      Under the old mapping "All Jobs" analysed to
+		//                      the single token [jobs@2] and matched this.
+		//   decoy_oddjobs    — carries "Jobs" with NO "All" at all: the
+		//                      cheapest possible witness that the phrase
+		//                      degraded to a term query.
+		//   lotr / decoy_lotr — differ only in the INTERIOR stopword. The
+		//                      old mapping produced [lord@1, ring@4], a
+		//                      four-slot phrase with slots 2-3 left nil,
+		//                      which bleve treats as wildcards — so "Lord
+		//                      ANY ANY Rings" matched both. This pair is
+		//                      the only assertion here that can detect the
+		//                      interior-wildcard behaviour.
+		{BookID: "decoy_jobsforall", Title: "Jobs for All", Author: "Nobody"},
+		{BookID: "decoy_oddjobs", Title: "Odd Jobs", Author: "Nobody"},
+		{BookID: "lotr", Title: "Lord of the Rings", Author: "J R R Tolkien"},
+		{BookID: "decoy_lotr", Title: "Lord of All Rings", Author: "Nobody"},
+
+		// Recall guard for the 2026-08-11 "shards of oblivion" bug. Keeping
+		// stopwords in the index must NOT make unquoted queries strict.
+		{BookID: "shards", Title: "Shards of Oblivion", Author: "Nobody"},
 	} {
 		if err := idx.IndexBook(d); err != nil {
 			t.Fatalf("index %s: %v", d.BookID, err)
@@ -123,33 +151,87 @@ func TestQuotedPhraseIsAPhrase(t *testing.T) {
 	}
 }
 
-// TestQuotedPhraseWithLeadingStopword is a CHARACTERIZATION test: it asserts
-// what the code does today, which is NOT what the owner asked for.
+// TestQuotedPhraseWithStopword covers the owner's original example, which the
+// phrase fix alone did NOT solve: `"All Jobs"` returned 300 rows on prod
+// because "all" was a stopword the analyser deleted before matching.
 //
-// `"All Jobs"` still returns three books. The phrase machinery above is
-// correct — the cause is that "all" is an English stopword, so the analyser
-// reduces the phrase to the single term "jobs" before it is ever matched, and
-// a one-term phrase is just a term query. Every phrase whose distinguishing
-// word is a stopword degrades the same way.
+// This was a characterization test pinning that limitation until 2026-08-13,
+// when the index mapping moved to a stopword-preserving analyzer
+// (bookTextAnalyzerName). It now asserts the intended behaviour.
 //
-// Fixing it means indexing these fields with an analyser that keeps stopwords,
-// which changes the index mapping and requires a full re-index of the library
-// — deliberately out of scope for this change and filed separately.
+// The two cases are different failure modes of one cause, and each needs its
+// own decoy to be detectable at all — see the corpus comments:
 //
-// This test exists so the limitation cannot be silently forgotten: when the
-// stopword work lands, this test WILL fail, and that failure is the signal to
-// delete it and fold the case into TestQuotedPhraseIsAPhrase above.
-func TestQuotedPhraseWithLeadingStopword(t *testing.T) {
+//	leading  — "All Jobs" collapsed to a 1-token phrase == a bare term query
+//	interior — "Lord of the Rings" became "Lord ANY ANY Rings"
+func TestQuotedPhraseWithStopword(t *testing.T) {
 	idx := wildcardPhraseCorpus(t)
 
-	got := runQuery(t, idx, `"All Jobs"`)
-	if !contains(got, "alljobs") {
-		t.Errorf(`"All Jobs" must at least find the book containing it: got %v`, got)
+	t.Run("leading stopword", func(t *testing.T) {
+		got := runQuery(t, idx, `"All Jobs"`)
+		if !contains(got, "alljobs") {
+			t.Errorf(`"All Jobs" must find the book containing it: got %v`, got)
+		}
+		// The whole point: a phrase whose first word is a stopword must
+		// still constrain word order.
+		if contains(got, "decoy_jobsforall") {
+			t.Errorf(`"All Jobs" matched "Jobs for All" — the stopword is not `+
+				`constraining order, so the phrase is behaving as a `+
+				`conjunction: got %v`, got)
+		}
+		if contains(got, "decoy_oddjobs") || contains(got, "sidejobs") {
+			t.Errorf(`"All Jobs" matched a book with no "all" at all — the `+
+				`phrase degraded to a bare "jobs" term query: got %v`, got)
+		}
+		if len(got) != 1 {
+			t.Errorf(`"All Jobs" should match exactly [alljobs], got %v`, got)
+		}
+	})
+
+	t.Run("interior stopwords are not wildcards", func(t *testing.T) {
+		got := runQuery(t, idx, `"Lord of the Rings"`)
+		if !contains(got, "lotr") {
+			t.Errorf(`"Lord of the Rings" must find lotr: got %v`, got)
+		}
+		if contains(got, "decoy_lotr") {
+			t.Errorf(`"Lord of the Rings" matched "Lord of All Rings" — the `+
+				`dropped stopwords left wildcard slots in the phrase `+
+				`instead of exact terms: got %v`, got)
+		}
+		if len(got) != 1 {
+			t.Errorf(`"Lord of the Rings" should match exactly [lotr], got %v`, got)
+		}
+	})
+}
+
+// TestUnquotedStopwordRecallUnchanged is the counterweight to the mapping
+// change: indexing stopwords must not make ORDINARY unquoted search strict.
+//
+// Regression guard for the 2026-08-11 "shards of oblivion returns nothing"
+// bug. Whitespace parses as AND, so an unquoted three-word query becomes a
+// conjunction; if "of" survives as a required conjunct that the target does
+// not satisfy in every field, recall collapses again. dropStopwordOnlyConjuncts
+// still removes it because it detects stopwords with the STOCK English
+// analyzer, deliberately decoupled from the field mapping.
+func TestUnquotedStopwordRecallUnchanged(t *testing.T) {
+	idx := wildcardPhraseCorpus(t)
+
+	for _, q := range []string{
+		"shards of oblivion",
+		"lord of the rings",
+		"all jobs and classes",
+	} {
+		t.Run(q, func(t *testing.T) {
+			got := runQuery(t, idx, q)
+			if len(got) == 0 {
+				t.Fatalf("unquoted %q returned NOTHING — a stopword conjunct "+
+					"is taking the whole query down", q)
+			}
+		})
 	}
-	if len(got) == 1 {
-		t.Errorf("STOPWORD LIMITATION APPEARS FIXED: %q now matches exactly %v. "+
-			"Delete this characterization test and move the case into "+
-			"TestQuotedPhraseIsAPhrase.", `"All Jobs"`, got)
+
+	if got := runQuery(t, idx, "shards of oblivion"); !contains(got, "shards") {
+		t.Errorf("unquoted 'shards of oblivion' lost its book: got %v", got)
 	}
 }
 
