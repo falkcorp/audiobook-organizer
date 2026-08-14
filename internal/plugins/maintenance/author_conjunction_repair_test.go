@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_conjunction_repair_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8e35b7d2-1c40-4f96-a2e7-5b9d0c68a341
 // last-edited: 2026-08-14
 
@@ -72,8 +72,76 @@ func conjRepairParams(dryRun bool) json.RawMessage {
 	return b
 }
 
+func conjRepairParamsSkip(dryRun bool, skip ...int) json.RawMessage {
+	b, _ := json.Marshal(authorConjunctionRepairParams{DryRun: &dryRun, SkipAuthorIDs: skip})
+	return b
+}
+
+// TestAuthorConjunctionRepair_SkipAuthorIDs pins the exclusion added for author
+// 46627 ("& Nicholas Courtney"), where Pebble holds two book links memdb does
+// not. Merging it would relink zero books and then DELETE the author row,
+// orphaning those links.
+//
+// The excluded row must be neither merged nor renamed, the rows around it must
+// still be repaired, and the skip must be REPORTED — a run that quietly
+// processed 45 of 46 and said "46" would be the exact failure this bucket
+// exists to prevent.
+func TestAuthorConjunctionRepair_SkipAuthorIDs(t *testing.T) {
+	authors := []database.Author{
+		{ID: 46627, Name: "& Nicholas Courtney"},
+		{ID: 43791, Name: "Nicholas Courtney"},
+		{ID: 46751, Name: "& Conrad Westmaas"},
+		{ID: 44001, Name: "Conrad Westmaas"},
+		{ID: 46414, Name: "& Joe Thompson"}, // no twin → rename
+	}
+	booksByAuthor := map[int][]database.BookCore{
+		46627: {{ID: "skipbook"}},
+		46751: {{ID: "b1"}},
+	}
+	joins := map[string][]database.BookAuthor{
+		"skipbook": {{BookID: "skipbook", AuthorID: 46627, Role: "author", Position: 0}},
+		"b1":       {{BookID: "b1", AuthorID: 46751, Role: "author", Position: 0}},
+	}
+
+	var w conjRepairWrites
+	p := newConjRepairPlugin(authors, booksByAuthor, joins, &w)
+	if err := p.runAuthorConjunctionRepair(context.Background(), conjRepairParamsSkip(false, 46627), &fakeReporter{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// The excluded row survives untouched.
+	for _, id := range w.deletedAuthors {
+		if id == 46627 {
+			t.Errorf("excluded author 46627 was deleted")
+		}
+	}
+	if _, renamed := w.renamedAuthors[46627]; renamed {
+		t.Errorf("excluded author 46627 was renamed to %q", w.renamedAuthors[46627])
+	}
+	if _, touched := w.setBookAuthors["skipbook"]; touched {
+		t.Errorf("excluded author's book was relinked: %v", w.setBookAuthors["skipbook"])
+	}
+
+	// Its neighbours are still repaired — the skip must not abort the run.
+	if _, ok := w.setBookAuthors["b1"]; !ok {
+		t.Errorf("non-excluded merge did not run; skip must not halt the loop")
+	}
+	if got := w.renamedAuthors[46414]; got != "Joe Thompson" {
+		t.Errorf("non-excluded rename did not run: got %q", got)
+	}
+	found := false
+	for _, id := range w.deletedAuthors {
+		if id == 46751 {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("non-excluded merge did not delete its stranded row: %v", w.deletedAuthors)
+	}
+}
+
 // TestAuthorConjunctionRepair_MergesIntoExistingTwin covers the majority case:
-// 31 of the 48 production rows have a correctly-named twin already in the table.
+// 31 of the 46 production rows have a correctly-named twin already in the table.
 // The stranded row must lose its book links to the twin and then be deleted.
 //
 // The assertion that matters is on SetBookAuthors, not on Book.AuthorID: every
@@ -135,7 +203,7 @@ func TestAuthorConjunctionRepair_MergesIntoExistingTwin(t *testing.T) {
 	}
 }
 
-// TestAuthorConjunctionRepair_RenamesWhenNoTwin covers the other 17 rows. A
+// TestAuthorConjunctionRepair_RenamesWhenNoTwin covers the other 15 rows. A
 // rename keeps the row id, so no book link is touched at all — asserting that
 // SetBookAuthors stays silent is the point of the test.
 func TestAuthorConjunctionRepair_RenamesWhenNoTwin(t *testing.T) {
