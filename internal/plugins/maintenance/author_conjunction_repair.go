@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_conjunction_repair.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2f8a41c6-9d73-4e05-b18a-6c4f2e93d70b
 // last-edited: 2026-08-14
 
@@ -56,6 +56,26 @@ type authorConjunctionRepairParams struct {
 	// full per-row plan is readable, and merges delete author rows — a
 	// destructive step that deserves to be read before it runs.
 	DryRun *bool `json:"dry_run,omitempty"`
+
+	// SkipAuthorIDs excludes specific author rows from the run, reported as
+	// their own outcome bucket rather than silently dropped.
+	//
+	// This exists because a merge DELETES an author row, and the op can only
+	// relink the books it can see. On 2026-08-14 two dry runs of this same op
+	// disagreed: the first ran four seconds after a restart and fell through to
+	// the Pebble junction scan, reporting books_relinked=86; the second ran
+	// against a warm memdb and reported 84. The whole difference was author
+	// 46627 ("& Nicholas Courtney"), where Pebble holds two book links memdb
+	// does not — and memdb had been freshly loaded, so its loader drops them
+	// rather than merely lagging.
+	//
+	// Merging such a row via the memdb path would relink zero books and then
+	// delete the author, leaving those Pebble junction rows pointing at an
+	// author id that no longer exists. That is the same orphaning hazard H8
+	// documents on the author split scan. Until the divergence is understood,
+	// the affected row is excluded by id rather than by a clever heuristic, so
+	// the exclusion is visible in the op's params and in its summary.
+	SkipAuthorIDs []int `json:"skip_author_ids,omitempty"`
 }
 
 // Repair outcomes — every matched author lands in exactly one bucket and all
@@ -67,6 +87,7 @@ const (
 	conjRepairWouldMerge  = "would_merge_into_existing"
 	conjRepairWouldRename = "would_rename_in_place"
 	conjRepairSkipNoop    = "skip_strip_changed_nothing"
+	conjRepairSkipListed  = "skip_explicitly_excluded"
 	conjRepairFailed      = "failed"
 )
 
@@ -80,7 +101,8 @@ func (p *Plugin) authorConjunctionRepairDef() sdk.OperationDef {
 			"branch could run. Merges each row into the correctly-named author when one already " +
 			"exists, otherwise renames it in place. Matches '&' only — rows beginning with 'and ' " +
 			"are book-title fragments and are deliberately left alone. Defaults to dry_run=true; " +
-			"pass dry_run=false to write.",
+			"pass dry_run=false to write. skip_author_ids excludes specific rows, reported as " +
+			"skip_explicitly_excluded rather than dropped from the totals.",
 		ResumePolicy:    sdk.ResumeRestart,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.author-conjunction-repair",
@@ -107,6 +129,10 @@ func (p *Plugin) runAuthorConjunctionRepair(ctx context.Context, rawParams json.
 		}
 	}
 	dryRun := params.DryRun == nil || *params.DryRun
+	skip := make(map[int]struct{}, len(params.SkipAuthorIDs))
+	for _, id := range params.SkipAuthorIDs {
+		skip[id] = struct{}{}
+	}
 
 	log := reporter.Logger()
 
@@ -129,7 +155,8 @@ func (p *Plugin) runAuthorConjunctionRepair(ctx context.Context, rawParams json.
 	}
 
 	log.Info("author-conjunction-repair: starting",
-		"dry_run", dryRun, "authors_total", len(authors), "authors_matched", len(matched))
+		"dry_run", dryRun, "authors_total", len(authors), "authors_matched", len(matched),
+		"skip_author_ids", params.SkipAuthorIDs)
 
 	outcomes := map[string]int{}
 	booksRelinked := 0
@@ -150,6 +177,18 @@ func (p *Plugin) runAuthorConjunctionRepair(ctx context.Context, rawParams json.
 	for i, author := range matched {
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+
+		// Excluded rows stay in `matched` and get their own bucket, so the
+		// summary still adds up to the number of rows the pattern selected. A
+		// row filtered out of the selection instead would make a partial run
+		// indistinguishable from a smaller library.
+		if _, ok := skip[author.ID]; ok {
+			outcomes[conjRepairSkipListed]++
+			log.Info("author-conjunction-repair: skipped by request",
+				"author_id", author.ID, "name", author.Name)
+			prog.StepN(i+1, fmt.Sprintf("%d/%d", i+1, len(matched)))
+			continue
 		}
 
 		// Use the same normalizer the forward fix installed, so a repaired name
