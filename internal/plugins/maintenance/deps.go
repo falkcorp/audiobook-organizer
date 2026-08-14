@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-07-18
+// last-edited: 2026-08-14
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -71,6 +71,15 @@ type ServerDeps interface {
 	DedupLLMReview(ctx context.Context) error
 	// InvalidateDedupCache invalidates the author-duplicates dedup cache.
 	InvalidateDedupCache()
+	// InvalidateAuthorsCache invalidates the cached author list.
+	//
+	// Any op that renames or deletes an author MUST call this. The cache holds
+	// a 24-hour TTL and only the entities API invalidated it, so a maintenance
+	// op that mutated authors left the author list serving the pre-repair names
+	// for up to a day -- the repair had landed in the store and in every book
+	// record, and the one page a user would check to confirm it still showed
+	// the old names. Measured 2026-08-14 after author-conjunction-repair.
+	InvalidateAuthorsCache()
 	// MetadataUpgradeRun runs the metadata upgrade scan up to limit books.
 	// progress may be nil; when non-nil it is updated every 25 books checked
 	// (M7, 2026-07 error-correction sweep — this is a 120-minute,

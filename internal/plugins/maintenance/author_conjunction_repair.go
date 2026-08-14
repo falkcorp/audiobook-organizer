@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_conjunction_repair.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2f8a41c6-9d73-4e05-b18a-6c4f2e93d70b
 // last-edited: 2026-08-14
 
@@ -250,6 +250,20 @@ func (p *Plugin) runAuthorConjunctionRepair(ctx context.Context, rawParams json.
 				"dry_run", false, "author_id", author.ID, "from", author.Name, "to", cleaned)
 		}
 		prog.StepN(i+1, fmt.Sprintf("%d/%d", i+1, len(matched)))
+	}
+
+	// Drop the cached author list, but only when this run actually wrote.
+	// The cache has a 24-hour TTL and was previously invalidated only by the
+	// entities API, so the 2026-08-14 apply landed correctly in the store and
+	// in all 145 book records while the author list kept serving the old "&"
+	// names -- the one page anyone would check to confirm the repair. A dry
+	// run must NOT invalidate: it changed nothing, and dropping a warm cache
+	// is a real cost to pay for no reason.
+	wrote := outcomes[conjRepairMerged] + outcomes[conjRepairRenamed]
+	if !dryRun && wrote > 0 {
+		p.deps.InvalidateAuthorsCache()
+		p.deps.InvalidateDedupCache()
+		log.Info("author-conjunction-repair: invalidated author caches", "rows_written", wrote)
 	}
 
 	summary := fmt.Sprintf(
