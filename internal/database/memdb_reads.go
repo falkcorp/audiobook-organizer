@@ -1,5 +1,5 @@
 // file: internal/database/memdb_reads.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000006
 // last-edited: 2026-08-14
 
@@ -482,27 +482,9 @@ func (m *MemStore) GetBooksBySeriesIDCore(seriesID int, limit, offset int) ([]Bo
 		}
 		all = append(all, *b)
 	}
-	if len(all) > 1 {
-		keys := make([]string, len(all))
-		for i := range all {
-			keys[i] = strings.ToLower(all[i].Title)
-		}
-		sort.SliceStable(all, func(i, j int) bool {
-			si, sj := all[i].SeriesSequence, all[j].SeriesSequence
-			switch {
-			case si == nil && sj == nil:
-				return keys[i] < keys[j]
-			case si == nil:
-				return false
-			case sj == nil:
-				return true
-			case *si != *sj:
-				return *si < *sj
-			default:
-				return keys[i] < keys[j]
-			}
-		})
-	}
+	// Shared with the Pebble scan so the two implementations of this method
+	// cannot order a series differently. See series_ordering.go.
+	sortBooksInSeriesOrder(all)
 	paged := paginate(all, limit, offset)
 	cores := make([]BookCore, len(paged))
 	for i := range paged {
