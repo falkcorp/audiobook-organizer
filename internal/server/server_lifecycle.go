@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 3.17.0
+// version: 3.18.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-08-14
 
@@ -932,7 +932,13 @@ func (s *Server) configureAndStartHTTP(cfg ServerConfig) error {
 			}
 			slog.Info("Starting server on", "protocols", protocols, "addr", s.httpServer.Addr)
 			if err := s.httpServer.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile); err != nil && err != http.ErrServerClosed {
-				slog.Error("Failed to start HTTPS server", "err", err)
+				// A process whose MAIN listener failed to bind is useless but
+				// looks alive: on 2026-08-11 an e2e run probed the port, got a
+				// 200 from the SIBLING that owned it, and gated a change
+				// against the wrong build while this process idled. Exit so
+				// supervisors and scripts see the failure (H113).
+				slog.Error("Failed to start HTTPS server; exiting", "err", err)
+				os.Exit(1)
 			}
 		}()
 
@@ -987,7 +993,10 @@ func (s *Server) configureAndStartHTTP(cfg ServerConfig) error {
 		go func() {
 			slog.Info("Starting HTTP/1.1 server on (use --tls-cert and --tls-key for HTTP/2, add --http3-port for HTTP/3)", "addr", s.httpServer.Addr)
 			if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				slog.Error("Failed to start server", "err", err)
+				// See the TLS twin above: a bind failure must not leave a
+				// healthy-looking zombie process (H113).
+				slog.Error("Failed to start server; exiting", "err", err)
+				os.Exit(1)
 			}
 		}()
 	}

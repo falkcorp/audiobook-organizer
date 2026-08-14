@@ -1,9 +1,10 @@
 // file: tests/e2e/playwright.config.ts
-// version: 1.13.0
+// version: 1.14.0
 // guid: 7c8d9e0f-1a2b-3c4d-5e6f-7a8b9c0d1e2f
-// last-edited: 2026-08-11
+// last-edited: 2026-08-14
 
 import { defineConfig, devices } from '@playwright/test';
+import { E2E_PORT, E2E_TMP_PREFIX } from './e2e-env';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
@@ -14,7 +15,7 @@ const DEMO_ARTIFACTS_DIR = join(__dirname, '../../..', 'demo_artifacts');
 
 export default defineConfig({
   testDir: '.',
-  // Fails the run if :8484 is already serving a bundle older than the code
+  // Fails the run if the derived e2e port is already serving a bundle older than the code
   // under test. `reuseExistingServer` below is what makes that possible, and a
   // silently-reused stale server is what produced a false green on 2026-08-08
   // while the suite was ~50% red. See global-setup.ts.
@@ -59,7 +60,7 @@ export default defineConfig({
     ['html', { outputFolder: 'playwright-report', open: 'never' }],
   ],
   use: {
-    baseURL: 'http://127.0.0.1:8484',
+    baseURL: `http://127.0.0.1:${E2E_PORT}`,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
@@ -138,8 +139,11 @@ export default defineConfig({
     // Build full app (frontend + embedded backend) and run single Go binary
     // Disable TLS for testing by passing empty cert/key flags
     // GOEXPERIMENT=jsonv2 is required for the Go backend (encoding/json/v2)
-    command: `bash -c 'export GOEXPERIMENT=jsonv2 && cd ${__dirname}/../../.. && cd web && npm run build && cd .. && go build -tags embed_frontend -o audiobook-organizer . && rm -rf /tmp/ao-e2e-db && mkdir -p /tmp/ao-e2e-db /tmp/ao-e2e-books && ./audiobook-organizer serve --tls-cert "" --tls-key "" --host 127.0.0.1 --db /tmp/ao-e2e-db/e2e.pebble --dir /tmp/ao-e2e-books'`,
-    url: 'http://127.0.0.1:8484',
+    // Port and scratch dirs derive from the worktree path (H113): two
+    // worktrees can run concurrently without contending for one port or
+    // clobbering one shared /tmp Pebble.
+    command: `bash -c 'export GOEXPERIMENT=jsonv2 && cd ${__dirname}/../../.. && cd web && npm run build && cd .. && go build -tags embed_frontend -o audiobook-organizer . && rm -rf ${E2E_TMP_PREFIX}-db && mkdir -p ${E2E_TMP_PREFIX}-db ${E2E_TMP_PREFIX}-books && ./audiobook-organizer serve --tls-cert "" --tls-key "" --host 127.0.0.1 --port ${E2E_PORT} --http3-port ${E2E_PORT} --db ${E2E_TMP_PREFIX}-db/e2e.pebble --dir ${E2E_TMP_PREFIX}-books'`,
+    url: `http://127.0.0.1:${E2E_PORT}`,
     // The command above builds the frontend AND compiles the Go binary before
     // it can serve anything. 120s was enough on a warm developer machine and
     // nowhere near enough on a cold CI runner with an empty Go build cache —
