@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_stats.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 8643a893-1898-4098-8e69-c312531d962c
-// last-edited: 2026-08-13
+// last-edited: 2026-08-14
 
 package database
 
@@ -259,9 +259,14 @@ func (p *PebbleStore) computeLibraryStats() (*LibraryStats, error) {
 	// than the Pebble scan below (no JSON unmarshal, no disk I/O). Memdb
 	// can't see the book_file_errors_by_book: index, so we still need a
 	// short Pebble call for BrokenFiles.
-	if mem := p.mem(); mem != nil {
+	//
+	// Gated on UseMemDB as well as publication: dispatching on publication alone
+	// made the Pebble scan below unreachable whenever memdb was up, even with
+	// the flag explicitly off, so it could never be exercised by a test. Same
+	// defect as ListBooksByITunesPID in #2399.
+	if p.UseMemDB && p.mem() != nil {
 		importPaths, _ := p.GetAllImportPaths()
-		stats, err := mem.ComputeLibraryStats(p.rootDir, importPaths)
+		stats, err := p.mem().ComputeLibraryStats(p.rootDir, importPaths)
 		if err == nil {
 			if booksWithErrors, berr := p.ListBooksWithFileErrors(); berr == nil {
 				stats.BrokenFiles = len(booksWithErrors)
