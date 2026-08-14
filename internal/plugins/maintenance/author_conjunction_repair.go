@@ -52,14 +52,14 @@ var authorConjunctionRe = regexp.MustCompile(`^&\s+`)
 // authorConjunctionRepairParams controls the repair.
 type authorConjunctionRepairParams struct {
 	// DryRun reports what WOULD be written without writing it. Defaults to
-	// TRUE. The population is small enough (48 rows on 2026-08-14) that the
+	// TRUE. The population is small enough (46 rows on 2026-08-14) that the
 	// full per-row plan is readable, and merges delete author rows — a
 	// destructive step that deserves to be read before it runs.
 	DryRun *bool `json:"dry_run,omitempty"`
 }
 
 // Repair outcomes — every matched author lands in exactly one bucket and all
-// buckets are reported. A summary of "scanned 9350, repaired 48" that does not
+// buckets are reported. A summary of "scanned 9350, repaired 46" that does not
 // account for the rest is the shape of report that hides a bug.
 const (
 	conjRepairMerged      = "merged_into_existing"
@@ -116,7 +116,9 @@ func (p *Plugin) runAuthorConjunctionRepair(ctx context.Context, rawParams json.
 	}
 
 	// Select first, then act. The matched set is tiny relative to the table
-	// (48 of 9,350 on 2026-08-14), and reporting the selection size separately
+	// (46 of 9,350 on 2026-08-14 — 48 author names begin with '&', but two are
+	// the '&#169' HTML-entity rows this op correctly does not match), and
+	// reporting the selection size separately
 	// from the table size is what makes a zero-match run readable as "nothing
 	// to do" rather than "the scan did not run".
 	var matched []database.Author
@@ -143,7 +145,7 @@ func (p *Plugin) runAuthorConjunctionRepair(ctx context.Context, rawParams json.
 	// SetBookAuthors); two workers repairing two different "&" rows that appear
 	// on the SAME book would lose one another's update. Partitioning by author
 	// does not make the work disjoint, because the unit actually mutated is the
-	// book. Second, the matched set is 48 rows carrying 146 books — the whole
+	// book. Second, the matched set is 46 rows carrying 145 books — the whole
 	// run is seconds, so a pool would add a race window to buy nothing.
 	for i, author := range matched {
 		if ctx.Err() != nil {
@@ -153,7 +155,7 @@ func (p *Plugin) runAuthorConjunctionRepair(ctx context.Context, rawParams json.
 		// Use the same normalizer the forward fix installed, so a repaired name
 		// is byte-identical to what a re-import would now produce rather than
 		// merely similar. For the current population this equals a plain strip:
-		// none of the 48 rows contain collapsed initials for it to expand.
+		// none of the 46 rows contain collapsed initials for it to expand.
 		cleaned := dedup.NormalizeAuthorName(author.Name)
 		if cleaned == "" || cleaned == author.Name {
 			outcomes[conjRepairSkipNoop]++
@@ -225,7 +227,7 @@ func (p *Plugin) runAuthorConjunctionRepair(ctx context.Context, rawParams json.
 // the `from` row. It returns the number of books whose author slice was
 // rewritten.
 //
-// The link that matters is the BookAuthor join slice, not Book.AuthorID: all 48
+// The link that matters is the BookAuthor join slice, not Book.AuthorID: all 46
 // stranded rows sit at position 1+ of a credit list, which is why every one of
 // them reports file_count=0 while carrying books. A merge that only rewrote
 // AuthorID would report success and change nothing.

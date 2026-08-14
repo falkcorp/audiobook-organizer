@@ -1,12 +1,12 @@
 <!-- file: docs/executive-summaries/2026-08-14-the-ampersand-that-became-an-author-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: c9147e3b-8a62-4d05-b7f1-2e6a09d84c53 -->
 <!-- last-edited: 2026-08-14 -->
 
 # Executive Summary: The Ampersand That Became An Author
 
 **Date:** 2026-08-14
-**In one line:** 48 people in your library were filed twice — once under their name, and
+**In one line:** 46 people in your library were filed twice — once under their name, and
 once under their name with a stray "&" stuck to the front — because of how a list of
 narrators got chopped up.
 
@@ -46,7 +46,7 @@ years ago. The tidier punctuation produced the quieter bug.
 
 Two reasons, and both are worth knowing.
 
-**It only happened once.** All 48 bad entries came from a single import of one audio
+**It only happened once.** All 46 bad entries came from a single import of one audio
 drama collection. No new ones appeared afterwards — but that is because nothing has
 re-imported credits in that style since, not because anything was fixed. The next import
 of that shape would have made more.
@@ -65,12 +65,12 @@ than into the comma rule alone — the same flaw was sitting in the rules for sl
 semicolons and brackets, and patching only the one we caught would have left three copies
 of it behind to be rediscovered later.
 
-**The 48 existing entries.** A new cleanup task handles them, and it does two different
+**The 46 existing entries.** A new cleanup task handles them, and it does two different
 things depending on what it finds:
 
 - **31 of them** already have a correctly-spelled twin elsewhere in the library. Their
   books move over to the real person, and the bad entry goes away.
-- **The other 17** have no twin. Those simply get renamed in place, which keeps every
+- **The other 15** have no twin. Those simply get renamed in place, which keeps every
   book already attached to them attached.
 
 The cleanup reports what it *would* do before it does anything. Merging deletes entries,
@@ -114,6 +114,8 @@ doing real work.
 
 ---
 
-**Scale:** 48 author entries, 146 books between them, out of roughly 9,350 authors.
+**Scale:** 46 author entries, 145 books between them, out of roughly 9,350 authors.
+(48 names begin with "&"; the other two are the copyright leftovers described above,
+which the cleanup deliberately does not touch.)
 **Blast radius:** author pages, author counts, and duplicate-detection candidates.
 **Data loss:** none. Nothing was deleted; entries were duplicated, not destroyed.

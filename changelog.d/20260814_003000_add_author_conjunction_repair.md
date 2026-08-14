@@ -2,7 +2,7 @@
 
 #### Maintenance op to repair author rows with a stranded ampersand
 
-`maintenance.author-conjunction-repair` cleans up the 48 author rows the
+`maintenance.author-conjunction-repair` cleans up the 46 author rows the
 Oxford-comma splitting bug created — `& Conrad Westmaas`, `& Lisa Bowerman`,
 `& India Fisher` and the rest. The forward fix stops new ones appearing but does
 nothing to existing rows, because nothing re-normalizes an author name after
@@ -14,14 +14,20 @@ delimiter), so the split scan skips them entirely.
 
 Two repair paths, chosen per row:
 
-- **Merge** when a correctly-named author already exists — 31 of the 48. Book
+- **Merge** when a correctly-named author already exists — 31 of the 46. Book
   links move to the existing author and the stranded row is deleted.
-- **Rename in place** when no such author exists — the remaining 17. The row
+- **Rename in place** when no such author exists — the remaining 15. The row
   keeps its id, so no book row is touched at all.
+
+Census, measured against prod on 2026-08-14: 48 author names begin with `&`, of
+which 46 match `^&\s+` and are repaired here. The other two are `&#169` and
+`&#169;2013 by HarperCollinsPublishers` — HTML-entity leftovers of a copyright
+notice, a separate defect the pattern deliberately does not match. The 46 carry
+145 books, and no book is linked to two of them, so no book is written twice.
 
 The link that gets rewritten is the book↔author **join slice**, not
 `Book.AuthorID`. Every stranded row sits at position 1+ of a credit list, which
-is why all 48 report `file_count: 0` while carrying books between them; a merge
+is why all 46 report `file_count: 0` while carrying 145 books between them; a merge
 that only rewrote the denormalized primary would report success and move
 nothing. The tests assert on `SetBookAuthors` for exactly this reason.
 
