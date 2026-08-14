@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/unknown_filter_field_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 13ea27a2-ccad-49a7-a164-0bc1ca711898
 // last-edited: 2026-08-14
 
@@ -20,7 +20,9 @@ import (
 // 2026-08-14: the nonsense field zzz_not_a_real_field returned count:0, exactly
 // as marked_for_deletion did while 3,953 books qualified.
 func TestListAudiobooks_UnknownFilterField_400(t *testing.T) {
-	for _, field := range []string{"zzz_not_a_real_field", "titel", "version_group_id"} {
+	// version_group_id was in this list until C110 promoted it to a real
+	// filter field (2026-08-14) — it now belongs to the accepted set below.
+	for _, field := range []string{"zzz_not_a_real_field", "titel"} {
 		t.Run(field, func(t *testing.T) {
 			h, _ := newHandler(t)
 			q := url.Values{"filters": {`[{"field":"` + field + `","value":"x"}]`}}
@@ -55,6 +57,7 @@ func TestListAudiobooks_PreviouslyBrokenFields_NotRejected(t *testing.T) {
 		"year", "series_number", "isbn10", "isbn13", "work_id", "channels",
 		"bit_depth", "created_at", "updated_at", "duration", "file_size",
 		"bitrate", "sample_rate", "marked_for_deletion",
+		"version_group_id", // promoted by C110 (2026-08-14)
 	} {
 		t.Run(field, func(t *testing.T) {
 			h, d := newHandler(t)
