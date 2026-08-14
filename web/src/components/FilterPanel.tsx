@@ -1,5 +1,5 @@
 // file: web/src/components/FilterPanel.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5c7d8e9f-0a1b-2c3d-4e5f-6a7b8c9d0e1f
 // last-edited: 2026-05-20
 
@@ -12,7 +12,7 @@ import {
 import {
   Info as InfoIcon,
 } from '@mui/icons-material';
-import { SearchBar, ViewMode } from './audiobooks/SearchBar';
+import { SearchBar, ViewMode, type SortOption } from './audiobooks/SearchBar';
 import type { ParsedSearch } from '../utils/searchParser';
 
 interface FilterPanelProps {
@@ -22,6 +22,10 @@ interface FilterPanelProps {
   viewMode: ViewMode;
   onViewModeChange: (mode: ViewMode) => void;
   onLibraryInfoClick: () => void;
+  sortBy?: string;
+  sortOrder?: 'asc' | 'desc';
+  sortOptions?: SortOption[];
+  onSortChange?: (sortKey: string, order: 'asc' | 'desc') => void;
 }
 
 export const FilterPanel: React.FC<FilterPanelProps> = ({
@@ -31,6 +35,10 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
   viewMode,
   onViewModeChange,
   onLibraryInfoClick,
+  sortBy,
+  sortOrder,
+  sortOptions,
+  onSortChange,
 }) => {
   return (
     <Box display="flex" gap={1} alignItems="center">
@@ -41,6 +49,10 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
           onParsedSearchChange={onParsedSearchChange}
           viewMode={viewMode}
           onViewModeChange={onViewModeChange}
+          sortBy={sortBy}
+          sortOrder={sortOrder}
+          sortOptions={sortOptions}
+          onSortChange={onSortChange}
         />
       </Box>
       <Tooltip title="Library info">
