@@ -1,5 +1,5 @@
 // file: web/src/components/library/LibraryBookGrid.tsx
-// version: 1.8.0
+// version: 1.9.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-08-08
 
@@ -32,12 +32,25 @@ import type { LibrarySoftDeletedSectionProps } from './LibrarySoftDeletedSection
 import { LibrarySoftDeletedSection } from './LibrarySoftDeletedSection';
 import { TagCloud } from './TagCloud';
 import type { ColumnDefinition } from '../../config/columnDefinitions';
-import type { Audiobook, FilterOptions, SortField, SortOrder } from '../../types';
+import type { Audiobook, FilterOptions, SortField } from '../../types';
+import { SortOrder } from '../../types';
 import type { ViewMode } from '../audiobooks/SearchBar';
 import type { ParsedSearch } from '../../utils/searchParser';
 import type { ImportPath } from '../../pages/libraryTypes';
 import { STORAGE_KEYS } from '../../lib/storageKeys';
 import { libraryContentState } from './libraryContentState';
+
+// Sort keys offered by the grid-view "Sort by" control. These are SERVER sort
+// keys (memdb summary indexes): the backend sorts before pagination, so
+// descending page 1 really holds the library's last items.
+const LIBRARY_SORT_OPTIONS = [
+  { value: 'title', label: 'Title' },
+  { value: 'author', label: 'Author' },
+  { value: 'series', label: 'Series' },
+  { value: 'year', label: 'Year' },
+  { value: 'created_at', label: 'Date added' },
+  { value: 'duration_seconds', label: 'Duration' },
+];
 
 interface LibraryBookGridProps {
   audiobooks: Audiobook[];
@@ -130,9 +143,7 @@ export const LibraryBookGrid = ({
   viewMode,
   setViewMode,
   sortBy,
-  handleSortChange: _handleSortChange,
   sortOrder,
-  setSortOrder: _setSortOrder,
   setStorageDrawerOpen,
   importPaths,
   handleManualImport,
@@ -270,6 +281,10 @@ export const LibraryBookGrid = ({
           viewMode={viewMode}
           onViewModeChange={setViewMode}
           onLibraryInfoClick={() => setStorageDrawerOpen(true)}
+          sortBy={sortBy}
+          sortOrder={sortOrder === SortOrder.Ascending ? 'asc' : 'desc'}
+          sortOptions={LIBRARY_SORT_OPTIONS}
+          onSortChange={handleColumnSortChange}
         />
 
         {availableTags.length > 0 && (

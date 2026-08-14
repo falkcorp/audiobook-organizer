@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/SearchBar.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, fireEvent, waitFor } from '@testing-library/react';
@@ -43,6 +43,40 @@ describe('SearchBar', () => {
       expect(screen.queryByLabelText('Sort by')).not.toBeInTheDocument();
     });
 
+  });
+
+  describe('sort controls', () => {
+    const sortProps = () =>
+      defaultProps({
+        sortBy: 'title',
+        sortOrder: 'asc' as const,
+        sortOptions: [
+          { value: 'title', label: 'Title' },
+          { value: 'created_at', label: 'Date added' },
+        ],
+        onSortChange: vi.fn(),
+      });
+
+    it('renders the Sort by control when onSortChange and options are provided', () => {
+      renderWithProviders(<SearchBar {...sortProps()} />);
+      expect(screen.getByLabelText('Sort by')).toBeInTheDocument();
+      expect(screen.getByLabelText('toggle sort direction')).toBeInTheDocument();
+    });
+
+    it('selecting a sort key calls onSortChange with the key and current order', () => {
+      const props = sortProps();
+      renderWithProviders(<SearchBar {...props} />);
+      fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Sort by' }));
+      fireEvent.click(screen.getByRole('option', { name: 'Date added' }));
+      expect(props.onSortChange).toHaveBeenCalledWith('created_at', 'asc');
+    });
+
+    it('the direction toggle flips the order for the current key', () => {
+      const props = sortProps();
+      renderWithProviders(<SearchBar {...props} />);
+      fireEvent.click(screen.getByLabelText('toggle sort direction'));
+      expect(props.onSortChange).toHaveBeenCalledWith('title', 'desc');
+    });
   });
 
   describe('view mode toggle', () => {

@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/SearchBar.tsx
-// version: 2.5.0
+// version: 2.6.0
 // guid: 1d2e3f4a-5b6c-7d8e-9f0a-1b2c3d4e5f6a
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -7,10 +7,14 @@ import {
   Autocomplete,
   Box,
   Chip,
+  FormControl,
   IconButton,
   InputAdornment,
+  InputLabel,
+  MenuItem,
   Paper,
   Popper,
+  Select,
   TextField,
   ToggleButton,
   ToggleButtonGroup,
@@ -24,6 +28,8 @@ import {
   ViewList as ViewListIcon,
   HelpOutline as HelpIcon,
   Close as CloseIcon,
+  ArrowUpward as ArrowUpwardIcon,
+  ArrowDownward as ArrowDownwardIcon,
 } from '@mui/icons-material';
 import { parseSearch, SEARCH_FIELDS, type ParsedSearch } from '../../utils/searchParser';
 import { STORAGE_KEYS } from '../../lib/storageKeys';
@@ -121,6 +127,11 @@ const SEARCH_HELP = [
   { example: 'format:(m4b|mp3)', desc: 'Match either value' },
 ];
 
+export interface SortOption {
+  value: string;
+  label: string;
+}
+
 interface SearchBarProps {
   value: string;
   onChange: (value: string) => void;
@@ -128,6 +139,18 @@ interface SearchBarProps {
   viewMode: ViewMode;
   onViewModeChange: (mode: ViewMode) => void;
   placeholder?: string;
+  /** Current server-side sort key. Only meaningful with onSortChange. */
+  sortBy?: string;
+  /** Current sort direction. Only meaningful with onSortChange. */
+  sortOrder?: 'asc' | 'desc';
+  /** Sort keys to offer. Only meaningful with onSortChange. */
+  sortOptions?: SortOption[];
+  /**
+   * When provided (with sortOptions), the bar renders a "Sort by" select and
+   * a direction toggle. The callback receives the SERVER sort key — sorting
+   * happens before pagination on the backend, never on the current page.
+   */
+  onSortChange?: (sortKey: string, order: 'asc' | 'desc') => void;
 }
 
 export const SearchBar: React.FC<SearchBarProps> = ({
@@ -137,6 +160,10 @@ export const SearchBar: React.FC<SearchBarProps> = ({
   viewMode,
   onViewModeChange,
   placeholder = 'Search audiobooks... (try author:"Name" tag:scifi)',
+  sortBy,
+  sortOrder = 'asc',
+  sortOptions,
+  onSortChange,
 }) => {
   const parsed = useMemo(() => parseSearch(value), [value]);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -240,6 +267,36 @@ export const SearchBar: React.FC<SearchBarProps> = ({
           )}
         />
 
+        {onSortChange && sortOptions && sortOptions.length > 0 && (
+          <>
+            <FormControl size="small" sx={{ minWidth: 140 }}>
+              <InputLabel id="library-sort-label">Sort by</InputLabel>
+              <Select
+                labelId="library-sort-label"
+                label="Sort by"
+                value={sortBy ?? sortOptions[0].value}
+                inputProps={{ 'aria-label': 'Sort by' }}
+                onChange={(e) => onSortChange(String(e.target.value), sortOrder)}
+              >
+                {sortOptions.map((o) => (
+                  <MenuItem key={o.value} value={o.value}>
+                    {o.label}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+            <Tooltip title={sortOrder === 'asc' ? 'Ascending (click for descending)' : 'Descending (click for ascending)'}>
+              <IconButton
+                aria-label="toggle sort direction"
+                onClick={() =>
+                  onSortChange(sortBy ?? sortOptions[0].value, sortOrder === 'asc' ? 'desc' : 'asc')
+                }
+              >
+                {sortOrder === 'asc' ? <ArrowUpwardIcon /> : <ArrowDownwardIcon />}
+              </IconButton>
+            </Tooltip>
+          </>
+        )}
         <ToggleButtonGroup
           value={viewMode}
           exclusive
