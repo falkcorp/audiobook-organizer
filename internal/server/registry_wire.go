@@ -1,6 +1,6 @@
 // file: internal/server/registry_wire.go
-// version: 1.20.0
-// last-edited: 2026-07-18
+// version: 1.21.0
+// last-edited: 2026-08-14
 
 package server
 
@@ -20,7 +20,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/importer"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
-	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -351,10 +350,12 @@ func wireServerFromContainer(s *Server, c *serviceregistry.Container) {
 		if s.activityService != nil {
 			s.opRegistry.SetActivityRecorder(s.activityService)
 		}
-		// Wires SLOG op-ID correlation (logger.WithOperation) into every run's
-		// context without the registry package importing internal/logger
-		// directly — see Registry.SetRunContextDecorator (SDKGUARD-VIOLATION #1795).
-		s.opRegistry.SetRunContextDecorator(logger.WithOperation)
+		// Decorates every run's context with the op ID, both as a slog
+		// attribute and in the form maintenance.OpIDFromContext reads. See
+		// opRunContextDecorator in op_run_context.go for why the second one
+		// matters — without it the ops that record undo history recorded
+		// nothing.
+		s.opRegistry.SetRunContextDecorator(opRunContextDecorator)
 	}
 	if hub, ok := serviceregistry.TryGet[*opsregistry.EventHub](c, serviceregistry.KeyOpHub); ok {
 		s.opHub = hub
