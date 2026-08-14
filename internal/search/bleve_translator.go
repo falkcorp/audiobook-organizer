@@ -1,7 +1,7 @@
 // file: internal/search/bleve_translator.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 9c2a4f1d-5b3e-4f70-a7d6-2e8c0f1b9a47
-// last-edited: 2026-08-11
+// last-edited: 2026-08-13
 //
 // AST → Bleve query translator (spec DES-1 v1.1). Walks the AST
 // produced by ParseQuery and emits a bleve/v2 query.Query suitable
@@ -17,6 +17,7 @@ package search
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/blevesearch/bleve/v2"
 	"github.com/blevesearch/bleve/v2/analysis"
@@ -239,7 +240,7 @@ func translateField(n *FieldNode, perUser *[]PerUserFilter, negated bool) (query
 		return fq, nil
 	}
 	if n.Prefix && !n.Wildcard {
-		pq := bleve.NewPrefixQuery(n.Value)
+		pq := bleve.NewPrefixQuery(patternTerm(n.Value))
 		pq.SetField(n.Field)
 		if n.Boost > 0 {
 			pq.SetBoost(n.Boost)
@@ -247,7 +248,7 @@ func translateField(n *FieldNode, perUser *[]PerUserFilter, negated bool) (query
 		return pq, nil
 	}
 	if n.Wildcard {
-		pattern := n.Value
+		pattern := patternTerm(n.Value)
 		if n.Prefix {
 			pattern = "*" + pattern + "*"
 		} else {
@@ -307,9 +308,24 @@ func translateValueAlt(n *ValueAltNode, perUser *[]PerUserFilter, negated bool) 
 	return bleve.NewDisjunctionQuery(children...), nil
 }
 
+// patternTerm normalises a term destined for a PrefixQuery or WildcardQuery.
+//
+// Those two query types match against the index's stored terms WITHOUT running
+// the field analyser over the input, unlike MatchQuery. The text fields are
+// indexed with the English analyser, whose first step lowercases, so a term
+// carrying any uppercase can never equal a stored term and the query silently
+// returns zero hits. Measured on production 2026-08-13: "Hyperion*" -> 0 while
+// "hyperion*" -> 21, "Dragon*" -> 0 while "dragon*" -> 1757. The web UI appends
+// '*' to what the user typed, so this fired on ordinary capitalised typing.
+//
+// Lowercasing is the only analyser step that can be reproduced here: stemming
+// a prefix would change which terms it is allowed to reach ("classe" must
+// still match "classes"), so it is deliberately not applied.
+func patternTerm(s string) string { return strings.ToLower(s) }
+
 func translateFreeText(n *FreeTextNode) query.Query {
 	if n.Prefix {
-		return bleve.NewPrefixQuery(n.Value)
+		return bleve.NewPrefixQuery(patternTerm(n.Value))
 	}
 	if n.Fuzzy {
 		return bleve.NewFuzzyQuery(n.Value)
