@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.128.0
+// version: 1.129.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-08-14
 
@@ -1747,8 +1747,17 @@ func (p *PebbleStore) GetBooksBySeriesIDCore(seriesID int) ([]BookCore, error) {
 	return cores, nil
 }
 
-// getBooksBySeriesIDFull performs a full Pebble book scan filtered by series ID.
-// Fallback path after Task 3.4 index removal.
+// getBooksBySeriesIDFull performs a full Pebble book scan for the series
+// LISTING view: soft-deleted excluded, non-primary versions excluded, ordered
+// by SeriesSequence then title.
+//
+// All three of those were missing before 2026-08-14 except the soft-delete
+// check, leaving this path disagreeing with its memdb counterpart on both what
+// it returned and what order it returned it in — a series listing served during
+// the ~132 s warmup window showed every alternate rip alongside the book it
+// duplicates, in ULID order. Found by sweeping the other dual-dispatch store
+// methods for the defect shape fixed in the author getters. See
+// internal/database/series_getter_conformance_test.go.
 func (p *PebbleStore) getBooksBySeriesIDFull(seriesID int) ([]Book, error) {
 	var books []Book
 	iter, err := p.db.NewIter(&pebble.IterOptions{
@@ -1777,9 +1786,15 @@ func (p *PebbleStore) getBooksBySeriesIDFull(seriesID int) ([]Book, error) {
 		if bookIsSoftDeleted(&book) {
 			continue
 		}
+		if book.IsPrimaryVersion != nil && !*book.IsPrimaryVersion {
+			continue
+		}
 		books = append(books, book)
 	}
 
+	// Shared with the memdb walk so the two implementations of this method
+	// cannot order a series differently. See series_ordering.go.
+	sortBooksInSeriesOrder(books)
 	return books, nil
 }
 
