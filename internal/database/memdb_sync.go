@@ -1,7 +1,7 @@
 // file: internal/database/memdb_sync.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000005
-// last-edited: 2026-08-07
+// last-edited: 2026-08-14
 
 package database
 
@@ -126,6 +126,20 @@ func (p *PebbleStore) UpsertBookToMemDB(ctx context.Context, book *Book) {
 	}
 	// Snapshot NOW — the closure may run much later, on another goroutine.
 	snapshot := *book
+
+	// Fetch the relationship rows BEFORE entering memSync (C816). The closure
+	// runs inside go-memdb's single global writer mutex (Txn(true) takes
+	// db.writer.Lock()), and these three reads — two point lookups plus a
+	// full book-file prefix scan that unmarshals every fingerprint-bearing
+	// row — used to run inside it. Every other writer in the process
+	// serialized behind that I/O, which is why worker pools on book-level
+	// ops bought far less than NumCPU×. Enqueue-time capture is the same
+	// contract as the struct snapshot above: any later change to these rows
+	// emits its own sync op, so replay order keeps last-write-wins intact.
+	bas, baErr := p.GetBookAuthors(snapshot.ID)
+	bns, bnErr := p.GetBookNarrators(snapshot.ID)
+	files, fileErr := p.loadBookFilesForBookID(snapshot.ID)
+
 	p.memSync("UpsertBook", func(txn memTxn) error {
 		// Strip heavy fields (Description, BookSigV1, etc.) — memdb
 		// only needs lightweight projections for indexed iteration.
@@ -139,7 +153,7 @@ func (p *PebbleStore) UpsertBookToMemDB(ctx context.Context, book *Book) {
 		if _, err := txn.DeleteAll(memTableBookAuthors, memIdxBookID, snapshot.ID); err != nil {
 			return fmt.Errorf("clear book_authors: %w", err)
 		}
-		if bas, baErr := p.GetBookAuthors(snapshot.ID); baErr == nil {
+		if baErr == nil {
 			for i := range bas {
 				ba := bas[i]
 				if err := txn.Insert(memTableBookAuthors, &ba); err != nil {
@@ -152,7 +166,7 @@ func (p *PebbleStore) UpsertBookToMemDB(ctx context.Context, book *Book) {
 		if _, err := txn.DeleteAll(memTableBookNarrators, memIdxBookID, snapshot.ID); err != nil {
 			return fmt.Errorf("clear book_narrators: %w", err)
 		}
-		if bns, bnErr := p.GetBookNarrators(snapshot.ID); bnErr == nil {
+		if bnErr == nil {
 			for i := range bns {
 				bn := bns[i]
 				if err := txn.Insert(memTableBookNarrators, &bn); err != nil {
@@ -165,7 +179,6 @@ func (p *PebbleStore) UpsertBookToMemDB(ctx context.Context, book *Book) {
 		if _, err := txn.DeleteAll(memTableBookFiles, memIdxBookID, snapshot.ID); err != nil {
 			return fmt.Errorf("clear book_files: %w", err)
 		}
-		files, fileErr := p.loadBookFilesForBookID(snapshot.ID)
 		if fileErr == nil {
 			for i := range files {
 				bf := files[i]
