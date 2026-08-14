@@ -1,5 +1,5 @@
 // file: internal/database/memdb_reads.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000006
 // last-edited: 2026-08-14
 
@@ -7,7 +7,6 @@ package database
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -36,9 +35,7 @@ func (m *MemStore) GetAllSeries() ([]Series, error) {
 	for obj := iter.Next(); obj != nil; obj = iter.Next() {
 		out = append(out, *(obj.(*Series)))
 	}
-	sort.Slice(out, func(i, j int) bool {
-		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
-	})
+	sortByLowerName(out, func(v Series) string { return v.Name })
 	return out, nil
 }
 
@@ -55,9 +52,7 @@ func (m *MemStore) GetAllAuthors() ([]Author, error) {
 	for obj := iter.Next(); obj != nil; obj = iter.Next() {
 		out = append(out, *(obj.(*Author)))
 	}
-	sort.Slice(out, func(i, j int) bool {
-		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
-	})
+	sortByLowerName(out, func(v Author) string { return v.Name })
 	return out, nil
 }
 
@@ -74,9 +69,7 @@ func (m *MemStore) GetAllImportPaths() ([]ImportPath, error) {
 	for obj := iter.Next(); obj != nil; obj = iter.Next() {
 		out = append(out, *(obj.(*ImportPath)))
 	}
-	sort.Slice(out, func(i, j int) bool {
-		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
-	})
+	sortByLowerName(out, func(v ImportPath) string { return v.Name })
 	return out, nil
 }
 
@@ -93,12 +86,7 @@ func (m *MemStore) GetAllAuthorAliases() ([]AuthorAlias, error) {
 	for obj := iter.Next(); obj != nil; obj = iter.Next() {
 		out = append(out, *(obj.(*AuthorAlias)))
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].AuthorID != out[j].AuthorID {
-			return out[i].AuthorID < out[j].AuthorID
-		}
-		return strings.ToLower(out[i].AliasName) < strings.ToLower(out[j].AliasName)
-	})
+	sortAuthorAliases(out)
 	return out, nil
 }
 
@@ -748,21 +736,9 @@ func (m *MemStore) ListSoftDeletedBooks(limit, offset int, olderThan *time.Time)
 		}
 		matched = append(matched, *b)
 	}
-	// Stable sort by MarkedForDeletionAt desc (most recent first), nil last —
-	// matches user expectation in the UI ("most recently deleted on top").
-	sort.SliceStable(matched, func(i, j int) bool {
-		ai, aj := matched[i].MarkedForDeletionAt, matched[j].MarkedForDeletionAt
-		switch {
-		case ai == nil && aj == nil:
-			return matched[i].ID < matched[j].ID
-		case ai == nil:
-			return false
-		case aj == nil:
-			return true
-		default:
-			return ai.After(*aj)
-		}
-	})
+	// Shared with the Pebble scan so the two cannot order the trash
+	// differently. See listing_ordering.go.
+	sortBooksByDeletedAtDesc(matched)
 	return paginate(matched, limit, offset), nil
 }
 

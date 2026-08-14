@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_authors.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 1f8b9fd2-e424-4a09-9ee4-7b5b64660605
-// last-edited: 2026-08-13
+// last-edited: 2026-08-14
 
 package database
 
@@ -45,6 +45,7 @@ func (p *PebbleStore) GetAllAuthors() ([]Author, error) {
 		authors = append(authors, author)
 	}
 
+	sortByLowerName(authors, func(a Author) string { return a.Name })
 	return authors, nil
 }
 
@@ -305,6 +306,7 @@ func (p *PebbleStore) GetAllAuthorAliases() ([]AuthorAlias, error) {
 		}
 		aliases = append(aliases, a)
 	}
+	sortAuthorAliases(aliases)
 	return aliases, nil
 }
 
