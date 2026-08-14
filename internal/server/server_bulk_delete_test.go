@@ -1,7 +1,7 @@
 // file: internal/server/server_bulk_delete_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-07-06
+// last-edited: 2026-08-14
 
 package server
 
@@ -429,15 +429,26 @@ func TestBulkDeleteSeries_MixedResults(t *testing.T) {
 
 // ---------- Series bulk-delete with mock store ----------
 
+// TestBulkDeleteSeries_StoreError asserts the fail-closed contract.
+//
+// This test previously described the opposite behaviour: a per-series read
+// error produced one soft entry in "errors" while the other IDs deleted
+// anyway. That shape came from asking GetBooksBySeriesIDCore once per ID, and
+// that counter is the display counter — it skips trashed and non-primary books
+// that still hold the series_id, which is what stranded 13,322 books behind
+// deleted series. The handler now asks for UNFILTERED reference counts once for
+// the whole request, so a failure to obtain them is not a per-ID inconvenience:
+// it means the "is anything still pointing at this?" question is unanswerable,
+// and deleting anyway is precisely the bug. Nothing is deleted, and the request
+// fails loudly.
 func TestBulkDeleteSeries_StoreError(t *testing.T) {
+	deleteCalls := 0
 	mock := &database.MockStore{
-		GetBooksBySeriesIDCoreFunc: func(seriesID int) ([]database.BookCore, error) {
-			if seriesID == 1 {
-				return nil, fmt.Errorf("db read error")
-			}
-			return nil, nil
+		GetAllSeriesBookRefCountsFunc: func() (map[int]int, error) {
+			return nil, fmt.Errorf("db read error")
 		},
 		DeleteSeriesFunc: func(id int) error {
+			deleteCalls++
 			return nil
 		},
 	}
@@ -448,18 +459,10 @@ func TestBulkDeleteSeries_StoreError(t *testing.T) {
 		"ids": []int{1, 2},
 	})
 
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	var wrapper struct {
-		Data bulkDeleteResponse `json:"data"`
-	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &wrapper))
-	resp := wrapper.Data
-
-	assert.Equal(t, 1, resp.Deleted)
-	assert.Equal(t, 0, resp.Skipped)
-	assert.Len(t, resp.Errors, 1)
-	assert.Equal(t, 2, resp.Total)
+	assert.Equal(t, http.StatusInternalServerError, w.Code,
+		"an unanswerable reference count must fail the request, not delete on a guess")
+	assert.Zero(t, deleteCalls,
+		"no series may be deleted when the reference count could not be read")
 }
 
 func TestBulkDeleteSeries_DeleteError(t *testing.T) {
