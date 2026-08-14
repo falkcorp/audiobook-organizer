@@ -1,7 +1,7 @@
 // file: internal/logger/sanitize.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1a7f3c92-5e6b-4d08-9c2a-3b8e0f1d6a47
-// last-edited: 2026-06-17
+// last-edited: 2026-08-14
 
 package logger
 
@@ -18,13 +18,19 @@ import "strings"
 //
 // Clean strings (the common case) are returned unchanged with no allocation.
 //
-// The explicit `strings.ReplaceAll` of "\r" and "\n" below is also what CodeQL
-// recognizes as a log-injection sanitizer barrier; keep it even though the
-// builder loop would otherwise handle them.
+// The explicit `strings.ReplaceAll` of "\r" and "\n" below is what CodeQL
+// recognizes as a log-injection sanitizer barrier. A previous revision of this
+// function claimed that in a comment while the code only had the builder loop —
+// which CodeQL does NOT model — so every call site downstream of this sanitizer
+// stayed flagged (322 open go/log-injection alerts on 2026-08-14, many of them
+// through here). The ReplaceAll calls are semantically redundant with the loop;
+// they exist to be machine-recognizable. Do not "simplify" them away again.
 func sanitizeLogLine(s string) string {
 	if !strings.ContainsFunc(s, isLogControl) {
 		return s
 	}
+	s = strings.ReplaceAll(s, "\r", `\r`)
+	s = strings.ReplaceAll(s, "\n", `\n`)
 	var b strings.Builder
 	b.Grow(len(s) + 8)
 	const hex = "0123456789abcdef"
