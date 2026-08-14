@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 3.16.0
+// version: 3.17.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-08-14
 
@@ -265,11 +265,16 @@ func (s *Server) resumeLegacyOp(opID, opType string) {
 					DryRun:     advertisedDryRunDefault(j),
 				}
 				if saved, perr := operations.LoadParams[maintenanceJobOpParams](store, opID); perr != nil {
+					metrics.RecordMaintenanceResumeParamsFallback(jobID, "load_error")
 					slog.Warn("Could not load saved params for interrupted maintenance job; resuming with the advertised dry_run default",
 						"opID", opID, "jobID", jobID, "dryRun", enqParams.DryRun, "err", perr)
 				} else if saved != nil {
 					enqParams.DryRun = saved.DryRun
 				} else {
+					// runMaintenanceJob has persisted resolved params on every
+					// enqueue since #2419, so once pre-#2419 rows age out of the
+					// interrupted set, any fire here means a save failed (C511).
+					metrics.RecordMaintenanceResumeParamsFallback(jobID, "no_saved_params")
 					slog.Info("No saved params for interrupted maintenance job; resuming with the advertised dry_run default",
 						"opID", opID, "jobID", jobID, "dryRun", enqParams.DryRun)
 				}
