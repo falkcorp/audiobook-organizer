@@ -1,5 +1,5 @@
 // file: internal/organizer/preview.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f1a2b3c4-d5e6-7890-abcd-ef1234567890
 
 package organizer
@@ -126,6 +126,20 @@ func (ops *PreviewService) PreviewOrganize(bookID string) (*PreviewResponse, err
 	}
 
 	var steps []PreviewStep
+
+	// Author gate (mirrors PerformOrganize and ReOrganizeInPlace): never
+	// propose a rename/copy whose target bakes the "Unknown Author"
+	// placeholder into the path. Tag/cover steps below are unaffected.
+	authorUnresolved := !org.HasResolvedAuthor(book)
+	if authorUnresolved && (needsRename || needsCopy) {
+		steps = append(steps, PreviewStep{
+			Action:      "warning",
+			Description: "Author is unresolved — rename deferred so 'Unknown Author' is not baked into the path. Fetch metadata to resolve the author, then organize will rename this book properly.",
+			Warning:     "author_unresolved",
+		})
+		needsRename = false
+		needsCopy = false
+	}
 
 	// Step 1: Protected path warning (only for books outside RootDir)
 	if protected && !alreadyInRoot {

@@ -1,5 +1,5 @@
 // file: internal/organizer/service.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
 // last-edited: 2026-08-14
 
@@ -87,6 +87,11 @@ func (orgSvc *Service) SetWriteBackBatcher(b WriteBackEnqueuer) {
 
 // SetOrganizeHooks sets optional hooks that are propagated to every
 // Organizer instance created by this service.
+// ErrAuthorUnresolved is returned when a rename/organize is refused because
+// the book's author would resolve to the "Unknown Author" placeholder. The
+// caller should surface "resolve metadata first" rather than renaming.
+var ErrAuthorUnresolved = errors.New("author unresolved — metadata fetch must resolve the author before organize renames this book")
+
 func (orgSvc *Service) SetOrganizeHooks(hooks OrganizeHooks) {
 	orgSvc.organizeHooks = hooks
 }
@@ -541,6 +546,7 @@ func (orgSvc *Service) FilterBooksNeedingOrganization(allBooks []database.Book, 
 	alreadyCorrect := make([]database.Book, 0)
 	skippedMissingFiles := 0
 	skippedDeleted := 0
+	skippedUnresolvedAuthor := 0
 	for i, book := range allBooks {
 		// Update progress during filtering so the UI doesn't show 0/0
 		if i%500 == 0 || i == len(allBooks)-1 {
@@ -618,7 +624,19 @@ func (orgSvc *Service) FilterBooksNeedingOrganization(allBooks []database.Book, 
 				continue
 			}
 		}
+		// Author gate: a rename/copy for a book with no resolvable author
+		// would bake "Unknown Author" into the target path — the 2026-08-11
+		// mass-reorganize mechanism. Defer these until metadata resolution
+		// gives them a real author. (Books already sitting under the
+		// placeholder stay put rather than being re-cemented.)
+		if !orgSvc.newOrganizer().HasResolvedAuthor(&book) {
+			skippedUnresolvedAuthor++
+			continue
+		}
 		booksToOrganize = append(booksToOrganize, book)
+	}
+	if skippedUnresolvedAuthor > 0 {
+		log.Info("Organize: Deferred %d book(s) with unresolved author — run metadata fetch, then organize renames them properly", skippedUnresolvedAuthor)
 	}
 	if skippedDeleted > 0 {
 		log.Info("Organize: Skipped %d soft-deleted book(s)", skippedDeleted)
@@ -659,6 +677,9 @@ func (orgSvc *Service) bookNeedsReOrganize(book *database.Book, log logger.Logge
 // correct location based on current metadata. Returns the new path.
 func (orgSvc *Service) ReOrganizeInPlace(book *database.Book, log logger.Logger) (string, error) {
 	org := orgSvc.newOrganizer()
+	if !org.HasResolvedAuthor(book) {
+		return "", ErrAuthorUnresolved
+	}
 	oldPath := book.FilePath
 
 	info, err := os.Stat(oldPath)
