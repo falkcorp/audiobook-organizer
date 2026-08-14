@@ -1,5 +1,5 @@
 // file: internal/importer/service.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: d0e1f2a3-b4c5-6d7e-8f9a-0b1c2d3e4f5b
 // last-edited: 2026-06-16
 
@@ -18,6 +18,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
+	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -146,15 +147,23 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 	// Set author if available
 	if meta.Artist != "" {
 		normalizedArtist := dedup.NormalizeAuthorName(meta.Artist)
-		author, err := is.db.GetAuthorByName(normalizedArtist)
-		if err != nil {
-			author, err = is.db.CreateAuthor(normalizedArtist)
+		// Creation gate (C413): copyright fragments and entity shrapnel from
+		// artist tags must not become author rows. A book with NO author is
+		// honest; an author named "&#169" is a repair job.
+		if dedup.IsDirtyAuthorName(normalizedArtist) {
+			slog.Warn("importer: artist tag rejected as author name",
+				"artist", logging.Sanitize(meta.Artist), "path", logging.Sanitize(req.FilePath))
+		} else {
+			author, err := is.db.GetAuthorByName(normalizedArtist)
 			if err != nil {
-				return nil, fmt.Errorf("failed to create author: %w", err)
+				author, err = is.db.CreateAuthor(normalizedArtist)
+				if err != nil {
+					return nil, fmt.Errorf("failed to create author: %w", err)
+				}
 			}
-		}
-		if author != nil {
-			book.AuthorID = &author.ID
+			if author != nil {
+				book.AuthorID = &author.ID
+			}
 		}
 	}
 

@@ -1,5 +1,5 @@
 // file: internal/metadata/folder_parser.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: f1e2d3c4-b5a6-7890-abcd-ef1234567890
 
 package metadata
@@ -385,13 +385,26 @@ func looksLikeAuthorSegment(s string) bool {
 	return true
 }
 
+// htmlEntityRe matches an HTML entity ("&#169;", "&amp;") so its terminating
+// semicolon can be protected from the author-separator split below. Splitting
+// "&#169;2013 by HarperCollinsPublishers" on the raw ";" sheared it into an
+// "&#169" author row (id 46583) — the entity's ";" is not a separator.
+var htmlEntityRe = regexp.MustCompile(`&#?[a-zA-Z0-9]+;`)
+
 // splitMultipleAuthors splits "Author A & Author B" or "Author A; Author B" into a slice.
 // Each author is trimmed. Returns a slice with at least one element.
 func splitMultipleAuthors(s string) []string {
+	// Protect HTML-entity semicolons (see htmlEntityRe) with a sentinel that
+	// cannot appear in tag text, split, then restore.
+	const sentinel = "\x00"
+	s = htmlEntityRe.ReplaceAllStringFunc(s, func(m string) string {
+		return strings.TrimSuffix(m, ";") + sentinel
+	})
 	// Split on " & " first, then " and " (case-insensitive), then ";".
 	var parts []string
 	for _, chunk := range strings.Split(s, " & ") {
 		for _, sub := range strings.Split(chunk, ";") {
+			sub = strings.ReplaceAll(sub, sentinel, ";")
 			trimmed := strings.TrimSpace(sub)
 			if trimmed != "" {
 				parts = append(parts, trimmed)
