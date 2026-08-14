@@ -1,11 +1,11 @@
 <!-- file: docs/executive-summaries/2026-08-31-august-monthly-roundup-executive-summary.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: e7a3f109-52d8-4c6b-91f4-08b7c2d64e35 -->
-<!-- last-edited: 2026-08-09 -->
+<!-- last-edited: 2026-08-14 -->
 
 # Executive Summary: August 2026 Monthly Roundup
 
-**Period covered:** 2026-08-01 through 2026-08-09 (**month in progress** — this is
+**Period covered:** 2026-08-01 through 2026-08-14 (**month in progress** — this is
 updated as work lands, not a closed record).
 **Individual write-ups this consolidates:** the seven dated summaries in this directory
 from 2026-08-04 to 2026-08-09, linked inline below.
@@ -27,6 +27,42 @@ while half of it was broken. The work has largely been finding out which reading
 be trusted, and fixing the ones that could not.
 
 ---
+
+## August 14: a thirty-fix day, and the search index finally tells the truth
+
+One day produced thirty merged fixes and a fully verified redeploy. The thread
+connecting most of them: **finishing off measurements that had been quietly
+wrong.**
+
+The biggest visible one: for weeks, the search index contained 3,983 entries
+for books that had been deleted — searches could surface books that no longer
+existed. A repair shipped earlier in the week ran at startup today and removed
+every one of them, and the index now matches the library exactly, verified on
+two consecutive restarts.
+
+A safety check on a repair tool paid for itself twice. Before running a
+planned iTunes identifier cleanup, a fresh count showed the recorded backlog
+of ~9,000 items was long stale — the real number was two, both needing a
+human decision rather than automation. And the check itself uncovered that
+the tool's "preview only" switch silently did nothing when sent the way most
+tools accept it — the request went straight to "apply." Nothing was damaged
+(there was nothing left to apply), and the switch now works in both forms.
+
+Monitoring is back. The metrics system had been unable to read the
+application's health feed since that feed was put behind a password earlier
+this month. The missing piece turned out to be one credential file; it's in
+place, and the health dashboard has been live again since mid-afternoon.
+
+Two library-wide repairs were measured before being run, and both
+measurements changed the plan. A migration that moves book signatures out of
+hot storage was previewed at 26,159 books — squarely in the predicted range,
+so it proceeds next session with a small first batch. A repair that rewrites
+correct metadata into the audio files themselves (fixing books whose files
+still carry pre-correction tags) was trialed on 100 books and found to be far
+too slow to run across the whole library overnight as hoped — so it was
+deferred for a speed fix rather than left to run for weeks. The trial also
+caught a real specimen: a file from one book still labeled inside as a
+different book entirely.
 
 ## 1. Numbers that were wrong
 
