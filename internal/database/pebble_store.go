@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.130.0
+// version: 1.131.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-08-14
 
@@ -3066,9 +3066,6 @@ func (p *PebbleStore) ListSoftDeletedBooks(limit, offset int, olderThan *time.Ti
 	}
 	defer iter.Close()
 
-	skipped := 0
-	collected := 0
-
 	for iter.First(); iter.Valid(); iter.Next() {
 		key := string(iter.Key())
 		if strings.Contains(key, ":path:") || strings.Contains(key, ":series:") ||
@@ -3086,19 +3083,15 @@ func (p *PebbleStore) ListSoftDeletedBooks(limit, offset int, olderThan *time.Ti
 		if olderThan != nil && book.MarkedForDeletionAt != nil && book.MarkedForDeletionAt.After(*olderThan) {
 			continue
 		}
-
-		if skipped < offset {
-			skipped++
-			continue
-		}
-		if limit > 0 && collected >= limit {
-			break
-		}
 		books = append(books, book)
-		collected++
 	}
 
-	return books, nil
+	// Shared with the memdb walk so the two implementations cannot order the
+	// trash differently. Sorting is why this path now collects the full match
+	// set before paginating instead of applying limit/offset during iteration.
+	// See listing_ordering.go.
+	sortBooksByDeletedAtDesc(books)
+	return paginate(books, limit, offset), nil
 }
 
 // GetBooksByVersionGroup returns all books in a version group

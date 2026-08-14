@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_importpaths.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: eb97f1d9-af89-4dc7-add9-70ab7c30d137
 // last-edited: 2026-08-14
 
@@ -48,6 +48,7 @@ func (p *PebbleStore) GetAllImportPaths_Pebble() ([]ImportPath, error) {
 		importPaths = append(importPaths, importPath)
 	}
 
+	sortByLowerName(importPaths, func(ip ImportPath) string { return ip.Name })
 	return importPaths, nil
 }
 
