@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.30.0 -->
+<!-- version: 10.31.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-08-10 -->
+<!-- last-edited: 2026-08-14 -->
 
 # Project TODO — live items only
 
@@ -20,6 +20,13 @@ into one of the curated sections below, is a normal direct edit.
       give you a random list of books… We need full collection support… Same with
       playlists."* Root causes located in the code below — this is server-side, as the
       owner suspected.
+
+      > **STATUS 2026-08-14:** §1 (series) — the list now embeds `books` (2026-08-13
+      > fixes; a residual `numBooks>0` with `books: []` defect on prod is tracked in the
+      > 2026-08-14 task breakdown as B20). §3 (playlists) — SHIPPED in #2366
+      > (`h.LibraryPlaylists` + `GET /api/playlists/:id`). **Remaining: §2 collections**
+      > — still `h.EmptyPage`, the only stub route on the ABS surface; see
+      > `docs/reference/abs-implementation-status.md`.
 
       ## 1. Series report zero books and open the wrong list
 
@@ -589,7 +596,9 @@ into one of the curated sections below, is a normal direct edit.
       matched everything. Covered by a `test.fixme` in
       `web/tests/e2e/search-and-filter.spec.ts`.
 
-- [ ] **The library search is not debounced at all.** Measured 2026-08-09: typing the ten
+- [x] **SUPERSEDED — duplicate of the entry above, fixed in #2264** (debounce existed and
+      was bypassed on the parsed path; verified checked-off 2026-08-14). Original text:
+      **The library search is not debounced at all.** Measured 2026-08-09: typing the ten
       characters of "Foundation" fires **ten** requests to `/api/v1/audiobooks?search=…`,
       exactly one per keystroke. The e2e test is literally named "search debounces input
       to avoid excessive requests" and asserts `<= 3`; it has been marked `test.fixme` so
@@ -1610,7 +1619,10 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
       envelope fix is still worth doing (it is cheap and clears the largest
       file), but it will not clear the other 21.
 
-- [ ] **`search-and-filter.spec.ts` (10 failures) is a MOCK gap, not a product
+- [x] **CLOSED 2026-08-14 — the repair wave finished; the suite reached 552 passed /
+      0 failed / 16 skipped on 2026-08-09 (see the DONE entry above), which includes this
+      file.** Kept for the mock-vs-server rhyme note below. Original:
+      **`search-and-filter.spec.ts` (10 failures) is a MOCK gap, not a product
       defect — the e2e mock's `/audiobooks` handler ignores every filter
       param.** Traced 2026-08-08. This downgrades the earlier flag that it
       "might indicate a real product defect"; it does not.
@@ -1785,7 +1797,7 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
       specs did not fail with "this UI no longer exists", they failed with
       `element(s) not found`, which reads identically to a broken selector.
 
-- [ ] **4 remaining failures in `metadata-provenance.spec.ts`** (down from 12).
+- [x] **CLOSED 2026-08-14 — suite green 552/0/16 on 2026-08-09 includes this file (metadata-provenance 13/0/0 recorded in the #2267 entry).** Original: **4 remaining failures in `metadata-provenance.spec.ts`** (down from 12).
       Diagnosed but not fixed 2026-08-09; stopped deliberately rather than
       keep iterating.
 
@@ -1823,8 +1835,9 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
       because they traverse relative to it. A blanket sweep converting all of
       them broke passing tests; the note in the spec says so.
 
-- [ ] **8 remaining failures in `batch-operations.spec.ts`** (down from 11), and
-      a caution about how they were approached.
+- [x] **CLOSED 2026-08-14 — suite green 552/0/16 on 2026-08-09 includes this file.**
+      The caution below is the part worth keeping. Original: **8 remaining failures in
+      `batch-operations.spec.ts`** (down from 11), and a caution about how they were approached.
 
       **Fixed (3):** the "N selected" chip is rendered TWICE in the tree, so
       `getByText('1 selected')` was always a strict-mode violation. Assertions
@@ -2710,7 +2723,9 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
   gap — the guard correctly rejecting a custom-scheme return — not a
   vulnerability. Loosening it would convert a working defence into one of these.
 
-- [ ] **The Playwright e2e suite is broken on `main` and gates nothing.** Every
+- [x] **FIXED (#2178, 2026-08-07; verified checked-off 2026-08-14 — later entries in this
+  file record the repair waves and the blocking CI gate #2258).** Original: **The Playwright
+  e2e suite is broken on `main` and gates nothing.** Every
   test dies at fixture collection with `unknown parameter "_page"` — 49 errors.
   Confirmed pre-existing on 2026-08-06: the identical failure reproduces on the
   pre-react-router-v7 tree with unchanged specs, and the v7 PR touched zero files
@@ -3091,6 +3106,9 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
 - [ ] **Verify the server actually returns chapters to clients** — confirm the
   ABS-compatible surface serves chapter data wherever a client expects it, and
   that it is populated rather than an empty array. Owner request 2026-08-05.
+  *(2026-08-14: tracked as B06 in the task breakdown; `mapper.go` serves stored
+  chapters else synthesizes — a book with no stored chapters is indistinguishable
+  from one having none until the backfill above runs.)*
 
   Chapter extraction and persistence shipped in the ABS sync work (Phase 1,
   chapter-extraction + scanner chapter hook), so the plumbing exists — what is
@@ -3180,6 +3198,9 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
 - [ ] **Reading status and review/rating must sync from the app back to the
   server** — owner request 2026-08-05: set it in the app, it persists server-side.
   Mirror how Audiobookshelf does it rather than inventing a shape.
+  *(2026-08-14: the READ-STATUS half exists — `IsFinished`/merge semantics live in
+  `handlers/abs/progress.go` and the progress-write endpoints are registered
+  (verified against `router.Routes()`). Remaining scope: the review/rating half.)*
 
   Two distinct things:
   - **Reading status** — not-started / in-progress / finished, plus the
@@ -4421,7 +4442,7 @@ window and tolerated every 404 without user-visible breakage.
 **Do not implement piecemeal.** Half a stats surface reads to a client as a broken
 server rather than an absent feature.
 
-## MISSING: ABS progress-mutation endpoints — "reset progress" and "remove from continue listening" do nothing
+## ✅ SHIPPED — ABS progress-mutation endpoints exist (verified against `router.Routes()` 2026-08-14: `PATCH/DELETE /api/me/progress/:id`, batch update, all four remove-from-continue-listening forms, bookmarks CRUD — see `docs/reference/abs-implementation-status.md`)
 
 **Severity:** user-visible feature gap, not a regression. Reported from AudioBooth
 on 2026-08-02 immediately after the client reached a fully working state (SSO login,
@@ -4478,7 +4499,7 @@ built, so every client-side progress mutation 404s.
 404 are **correct**. The spec prefers 404 for the stats endpoints (~12 non-optional
 fields; callers use `try?`), and a half-correct body is worse than none.
 
-## MISSING: no book in the library has stored chapters — extraction only ever runs during a scan, and no scan has run
+## MISSING (op now built, run pending): no book had stored chapters — `maintenance.chapters-backfill` shipped (#2364, fixed #2368/#2370, path-fallback #2372) but has NOT been run library-wide; the run decision is tracked as E02 in the 2026-08-14 task breakdown
 
 Reported by the owner 2026-08-02: "don't we extract chapters from the files that have
 them and then use the tracks for others? I'm not seeing the chapters in the app."
@@ -4774,8 +4795,11 @@ Two options actually accomplish the intent. Both are host-level changes outside
 it directly from a workstation stops working *by design*. That is the success
 condition, not a regression. Verify through `books.jdfalk.com` instead.
 
-- [ ] **ABS-SYNC (Phase 6, DATA LOSS if skipped): wire a `UserDataProvider` into the
-  ABS auth handler.** `internal/server/handlers/abs` currently constructs with
+- [x] **DONE — verified 2026-08-14 by code read: `wireABSRoutes` builds `NewUserData`
+  and FAIL-CLOSES (os.Exit) if the provider cannot be built or is not wired
+  (`wire_abs_routes.go:342-378, :448-453`); `HasUserDataProvider` is asserted after
+  registration.** Original: **ABS-SYNC (Phase 6, DATA LOSS if skipped): wire a
+  `UserDataProvider` into the ABS auth handler.** `internal/server/handlers/abs` currently constructs with
   `UserData: nil` (`internal/server/wire_abs_routes.go`), so `/api/me`, `/login` and
   `/auth/refresh` report `mediaProgress: []`. That is correct **only** while the server
   holds zero ABS progress records — §1.8.1 of the design spec: AudioBooth *deletes*
@@ -4828,8 +4852,7 @@ condition, not a regression. Verify through `books.jdfalk.com` instead.
 - [ ] **ABS-SYNC: wave 2 — scanner + merge wiring.** Briefs in
   `docs/agent-tasks/abs-sync/`. TASK-03 (merge-follow hook into
   `merge.Service.MergeBooks`), TASK-07 (extract + persist chapters at scan time via
-  `internal/scanner/process_file.go`), TASK-09 (bookmarks CRUD — no bookmark feature
-  exists today). Wave 1 merged: #2070, #2068, #2069.
+  `internal/scanner/process_file.go`), TASK-09 (bookmarks CRUD — ~~no bookmark feature exists today~~ SHIPPED: full CRUD registered and value-asserted, see `docs/reference/abs-implementation-status.md` 2026-08-14). Wave 1 merged: #2070, #2068, #2069.
 - [ ] **ABS-SYNC: wave 3 — backfill + survival proof.** TASK-04 (idempotent sync-ID
   backfill over the existing library; MUST use a bounded worker pool per the CLAUDE.md
   concurrency rule), TASK-05 (ID-survival suite: rename / move tagged+untagged / retag /
