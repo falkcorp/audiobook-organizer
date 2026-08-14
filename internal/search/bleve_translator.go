@@ -1,7 +1,7 @@
 // file: internal/search/bleve_translator.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9c2a4f1d-5b3e-4f70-a7d6-2e8c0f1b9a47
-// last-edited: 2026-08-13
+// last-edited: 2026-08-14
 //
 // AST → Bleve query translator (spec DES-1 v1.1). Walks the AST
 // produced by ParseQuery and emits a bleve/v2 query.Query suitable
@@ -247,7 +247,10 @@ func translateField(n *FieldNode, perUser *[]PerUserFilter, negated bool) (query
 
 	// Fuzzy / prefix / wildcard — take precedence over default match.
 	if n.Fuzzy {
-		fq := bleve.NewFuzzyQuery(n.Value)
+		// FuzzyQuery bypasses the field analyser exactly as PrefixQuery and
+		// WildcardQuery do (see patternTerm), so an uppercase term could never
+		// come within edit distance of the lowercased stored terms.
+		fq := bleve.NewFuzzyQuery(patternTerm(n.Value))
 		fq.SetField(n.Field)
 		if n.Boost > 0 {
 			fq.SetBoost(n.Boost)
@@ -343,7 +346,9 @@ func translateFreeText(n *FreeTextNode) query.Query {
 		return bleve.NewPrefixQuery(patternTerm(n.Value))
 	}
 	if n.Fuzzy {
-		return bleve.NewFuzzyQuery(n.Value)
+		// Same analyser bypass as the fielded branch above; the 2026-08-13
+		// fragment named one call site — there are two.
+		return bleve.NewFuzzyQuery(patternTerm(n.Value))
 	}
 	if n.Quoted {
 		return bleve.NewMatchPhraseQuery(n.Value)
