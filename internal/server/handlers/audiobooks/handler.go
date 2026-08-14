@@ -233,39 +233,60 @@ func ptrStr(p *string) string {
 	return *p
 }
 
-// ListAudiobooks handles GET /audiobooks. Mirrors the original listAudiobooks:
-// has_file_errors fast-path, quick-query (missing_covers / in_import_path /
-// no_isbn / duplicates_flagged) fast-path, then the filtered list pipeline with
-// the list cache (skipped when per-user filters are active).
+// bareParamAllowList names fields that are BOTH a filter field and a genuine
+// bare query parameter of the library list, and so must never be rejected.
+//
+// The asymmetry that governs this file: omitting a name from the guard is
+// harmless (the guard just does not fire, which is the pre-guard behavior).
+// INCLUDING one wrongly rejects a request that used to work. So the allow-list
+// is the safety valve, and a name belongs here the moment it has a real
+// accessor on THIS endpoint.
+//
+// "library_state" is the known case: read at ParseQueryString(c,
+// "library_state") in ListAudiobooks, and TestListBooksWithTagFilter asserts
+// ?tag=…&library_state=organized narrows to one book. An earlier revision of
+// the old hand-written set included it and broke that test. The near-miss is
+// worth keeping on the record: the collision survey that produced that set
+// grepped only c.Query("…") and so could not see the ParseQueryString form.
+// Check every accessor spelling, not one, before removing a name from here.
+//
+// "fingerprint_status" is not in KnownFilterFields today, so the derivation
+// below already excludes it. It is named anyway so the protection does not
+// depend on that staying true — if it is ever added to the canonical field
+// list, this endpoint would otherwise start rejecting a parameter it reads.
+var bareParamAllowList = map[string]struct{}{
+	"library_state":      {},
+	"fingerprint_status": {},
+}
+
 // filterFieldQueryParams are names that mean something only INSIDE the
-// `filters` JSON parameter of the library list. Mirrors the field switch in
-// audiobooks.matchesFieldFilters.
+// `filters` JSON parameter of the library list.
 //
-// Omitting a name is harmless — the guard simply does not fire for it, which
-// is today's behavior. INCLUDING a name wrongly is NOT harmless: it rejects a
-// request that used to work. Some names are BOTH a filter field and a genuine
-// bare parameter, and those must stay out.
+// DERIVED, not hand-maintained. audiobooks.KnownFilterFields() is the single
+// source of truth for what the list can filter on, and it is already pinned to
+// the matcher by TestFilterFieldNames_MatchTheMatcher. A literal map here was a
+// THIRD copy of that set — nothing held it against the first, so it drifted:
+// 17 real filter fields (year, work_id, isbn13, marked_for_deletion, …) were
+// missing, and ?year=2001 answered with all 63,870 books while looking exactly
+// like a narrowed query.
 //
-// "library_state" is exactly that case and is deliberately absent: it is a
-// real bare parameter, read at ParseQueryString(c, "library_state") below, and
-// TestListBooksWithTagFilter asserts ?tag=…&library_state=organized narrows to
-// one book. An earlier revision of this set included it and broke that test.
-// The near-miss is worth recording: the collision survey that produced this
-// set grepped only c.Query("…") and so could not see the ParseQueryString
-// form. Check every accessor helper, not one spelling, before adding a name.
+// Deriving it means a field added to the canonical list is guarded here the
+// same day, and the only judgment left is the allow-list above.
 //
-// "author" belongs here while "author_id" does not — adjacent names, different
-// things, and only exact-name lookup keeps them apart.
-var filterFieldQueryParams = map[string]struct{}{
-	"title": {}, "author": {}, "narrator": {}, "series": {}, "genre": {},
-	"language": {}, "publisher": {}, "edition": {}, "format": {}, "codec": {},
-	"quality": {}, "description": {},
-	"metadata_review_status": {}, "review": {}, "has_cover": {},
-	"has_written": {}, "needs_writeback": {}, "has_organized": {},
-	"itunes_sync_status": {}, "duration_seconds": {},
-	"read_status": {}, "progress_pct": {}, "last_played": {},
-	"user_rating_overall": {}, "user_rating_story": {},
-	"user_rating_performance": {},
+// Note "author" is a filter field while "author_id" is a genuine bare
+// parameter — adjacent names, different things, and only exact-name lookup
+// keeps them apart. That is why this is a set lookup and not a prefix match.
+var filterFieldQueryParams = buildFilterFieldQueryParams()
+
+func buildFilterFieldQueryParams() map[string]struct{} {
+	out := make(map[string]struct{})
+	for _, name := range audiobookspkg.KnownFilterFields() {
+		if _, allowed := bareParamAllowList[name]; allowed {
+			continue
+		}
+		out[name] = struct{}{}
+	}
+	return out
 }
 
 // firstBareFilterFieldParam reports the first filter-field name the request
@@ -286,6 +307,10 @@ func firstBareFilterFieldParam(c *gin.Context) (string, bool) {
 	return found[0], true
 }
 
+// ListAudiobooks handles GET /audiobooks. Mirrors the original listAudiobooks:
+// has_file_errors fast-path, quick-query (missing_covers / in_import_path /
+// no_isbn / duplicates_flagged) fast-path, then the filtered list pipeline with
+// the list cache (skipped when per-user filters are active).
 func (h *Handler) ListAudiobooks(c *gin.Context) {
 	store := h.store
 

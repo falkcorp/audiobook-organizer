@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/bare_filter_param_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5a9e2c68-4b71-4d03-9e85-1c6f0a37b2d9
-// last-edited: 2026-08-13
+// last-edited: 2026-08-14
 
 package audiobookshandler
 
@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"testing"
 
+	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -36,7 +37,13 @@ func queryCtx(t *testing.T, rawQuery string) *gin.Context {
 func TestFirstBareFilterFieldParam_RejectsFilterFieldsPassedBare(t *testing.T) {
 	// Every name the guard knows must be caught on its own — a set that is
 	// only spot-checked drifts into holes.
+	//
+	// Counted explicitly: a table that silently iterates nothing also reports
+	// success, so assert the set is the size the derivation should produce
+	// before trusting a green run.
+	ran := 0
 	for field := range filterFieldQueryParams {
+		ran++
 		t.Run(field, func(t *testing.T) {
 			got, bare := firstBareFilterFieldParam(
 				queryCtx(t, url.Values{field: {"anything"}}.Encode()))
@@ -44,6 +51,94 @@ func TestFirstBareFilterFieldParam_RejectsFilterFieldsPassedBare(t *testing.T) {
 			require.Equal(t, field, got)
 		})
 	}
+	require.Equal(t, len(audiobookspkg.KnownFilterFields())-len(bareParamAllowListPresentInCanonical()),
+		ran, "guard table must exercise every derived name")
+}
+
+// bareParamAllowListPresentInCanonical returns the allow-list entries that are
+// actually in the canonical field list. The allow-list may name a field
+// defensively before it exists there (fingerprint_status does), and those
+// entries subtract nothing from the derived set.
+func bareParamAllowListPresentInCanonical() []string {
+	canonical := make(map[string]struct{})
+	for _, n := range audiobookspkg.KnownFilterFields() {
+		canonical[n] = struct{}{}
+	}
+	out := []string{}
+	for name := range bareParamAllowList {
+		if _, ok := canonical[name]; ok {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// TestFilterFieldQueryParams_DerivedFromCanonicalList is the assertion that
+// replaces the hand-maintained mirror this set used to be.
+//
+// audiobooks.KnownFilterFields() is the single source of truth for what the
+// list can filter on, already pinned to the matcher by
+// TestFilterFieldNames_MatchTheMatcher. The guard used to be a THIRD copy of
+// that set, held against nothing — and it drifted: 17 real filter fields were
+// missing, so ?year=2001 answered with the entire 63,870-book library while
+// looking exactly like a narrowed query.
+//
+// With the set derived, this test is what keeps the derivation honest: every
+// canonical field is either guarded or explicitly allow-listed, and nothing is
+// guarded that is not a canonical field.
+func TestFilterFieldQueryParams_DerivedFromCanonicalList(t *testing.T) {
+	canonical := audiobookspkg.KnownFilterFields()
+	require.NotEmpty(t, canonical, "canonical field list must not be empty")
+
+	for _, name := range canonical {
+		_, guarded := filterFieldQueryParams[name]
+		_, allowed := bareParamAllowList[name]
+		if allowed {
+			require.False(t, guarded,
+				"%q is allow-listed and must NOT be guarded", name)
+			continue
+		}
+		require.True(t, guarded,
+			"canonical filter field %q is not guarded — a bare ?%s= would list "+
+				"the entire library while looking like a narrowed query", name, name)
+	}
+
+	// Nothing may be guarded that is not a canonical filter field: the error
+	// message tells the caller to move the name into `filters`, which would be
+	// a lie for a name the matcher does not accept.
+	canonicalSet := make(map[string]struct{}, len(canonical))
+	for _, n := range canonical {
+		canonicalSet[n] = struct{}{}
+	}
+	for name := range filterFieldQueryParams {
+		require.Contains(t, canonicalSet, name,
+			"%q is guarded but is not a canonical filter field", name)
+	}
+}
+
+// TestFilterFieldQueryParams_CoversTheFieldsThatDrifted pins the specific names
+// the hand-written set was missing. Named individually rather than counted, so
+// the test says WHICH field regressed if the derivation is ever unwound.
+//
+// Each of these answered count=63870 when passed bare, on a production library
+// of that exact size.
+func TestFilterFieldQueryParams_CoversTheFieldsThatDrifted(t *testing.T) {
+	drifted := []string{
+		"series_number", "duration", "bitrate", "bitrate_kbps",
+		"file_size", "file_size_bytes", "sample_rate", "sample_rate_hz",
+		"channels", "bit_depth", "isbn10", "isbn13", "work_id", "year",
+		"created_at", "updated_at", "marked_for_deletion",
+	}
+	for _, field := range drifted {
+		t.Run(field, func(t *testing.T) {
+			got, bare := firstBareFilterFieldParam(
+				queryCtx(t, url.Values{field: {"1"}}.Encode()))
+			require.True(t, bare,
+				"bare ?%s= must be rejected, not answered with the whole library", field)
+			require.Equal(t, field, got)
+		})
+	}
+	require.Len(t, drifted, 17)
 }
 
 func TestFirstBareFilterFieldParam_AllowsRealParameters(t *testing.T) {
