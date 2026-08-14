@@ -1,5 +1,5 @@
 // file: internal/logging/sanitize.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6e2a8b40-1d5f-4c93-b7e8-3a09d6c15f82
 // last-edited: 2026-08-14
 
@@ -19,10 +19,13 @@ import "strings"
 // external API payloads — at the point it is passed to slog/fmt logging.
 // Values the program itself computed (op IDs, enum states, counts) need no
 // wrapping.
+// Every path MUST flow through the ReplaceAll calls: CodeQL's barrier is
+// path-sensitive, and a clean-string fast-path (`if !ContainsAny { return s }`)
+// reads to the analyzer as taint bypassing the sanitizer — 321 of 322
+// go/log-injection alerts survived the 2026-08-14 conduit fix for exactly that
+// reason. ReplaceAll already returns the original string allocation-free when
+// there is nothing to replace, so no guard clause is needed.
 func Sanitize(s string) string {
-	if !strings.ContainsAny(s, "\n\r") {
-		return s
-	}
 	s = strings.ReplaceAll(s, "\r", "\\r")
 	s = strings.ReplaceAll(s, "\n", "\\n")
 	return s
