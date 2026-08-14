@@ -1,7 +1,7 @@
 // file: internal/server/handlers/entities/handler.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: b02a07d8-1806-4c86-bb72-f0688d6caff3
-// last-edited: 2026-08-11
+// last-edited: 2026-08-14
 
 // Package entities hosts the entity-domain HTTP handlers extracted from the
 // server package: works, authors, series, and narrators — CRUD plus merges,
@@ -995,12 +995,17 @@ func (h *Handler) DeleteEmptySeries(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "invalid series ID")
 		return
 	}
-	books, err := h.store.GetBooksBySeriesIDCore(seriesID)
+	// "Is anything still pointing at this series?" is NOT the question
+	// GetBooksBySeriesIDCore answers — it skips trashed and non-primary books,
+	// which still hold the series_id. Deleting on its zero is what stranded
+	// 13,322 books behind 6,893 series that no longer exist; see
+	// internal/database/series_bookref.go and executeSeriesPrune.
+	refCounts, err := seriesRefCounts(h.store)
 	if err != nil {
-		httputil.InternalError(c, "failed to get series books", err)
+		httputil.InternalError(c, "failed to count series references", err)
 		return
 	}
-	if len(books) > 0 {
+	if refCounts[seriesID] > 0 {
 		httputil.RespondWithConflict(c, "cannot delete series with books")
 		return
 	}
@@ -1025,13 +1030,17 @@ func (h *Handler) BulkDeleteSeries(c *gin.Context) {
 	deleted := 0
 	skipped := 0
 	var errors []string
+	// Counted ONCE for the whole library rather than per series. That is both the
+	// only form in which "referenced by nothing" is answerable — the per-series
+	// getter skips trashed and non-primary books that still hold the series_id —
+	// and cheaper than one scan per requested ID.
+	refCounts, err := seriesRefCounts(h.store)
+	if err != nil {
+		httputil.InternalError(c, "failed to count series references", err)
+		return
+	}
 	for _, id := range req.IDs {
-		books, err := h.store.GetBooksBySeriesIDCore(id)
-		if err != nil {
-			errors = append(errors, fmt.Sprintf("series %d: %v", id, err))
-			continue
-		}
-		if len(books) > 0 {
+		if refCounts[id] > 0 {
 			skipped++
 			continue
 		}

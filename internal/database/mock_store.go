@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.84.0
+// version: 1.85.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-08-14
 
@@ -123,6 +123,12 @@ type MockStore struct {
 	DeleteSeriesFunc     func(id int) error
 	UpdateSeriesNameFunc func(id int, name string) error
 	GetSeriesByIDsFunc   func(ids []int) (map[int]*Series, error)
+	// GetAllSeriesBookRefCountsFunc backs the SeriesBookRefStore capability.
+	// A nil func yields an empty map, i.e. "no series is referenced by
+	// anything" — the permissive answer, so a mock that does not care about
+	// reference counting still lets deletes through. Tests that assert a
+	// series must survive have to say so explicitly.
+	GetAllSeriesBookRefCountsFunc func() (map[int]int, error)
 
 	// Metadata
 	GetMetadataFieldStatesFunc   func(bookID string) ([]MetadataFieldState, error)
@@ -639,6 +645,18 @@ func (m *MockStore) DeleteSeries(id int) error {
 		return m.DeleteSeriesFunc(id)
 	}
 	return nil
+}
+
+// GetAllSeriesBookRefCounts satisfies SeriesBookRefStore so a MockStore can
+// stand in for a store that answers the UNFILTERED reference question. Without
+// it, AsSeriesBookRefStore returns nil and every caller correctly fails closed,
+// which would make the mock unusable for the delete paths rather than merely
+// permissive.
+func (m *MockStore) GetAllSeriesBookRefCounts() (map[int]int, error) {
+	if m.GetAllSeriesBookRefCountsFunc != nil {
+		return m.GetAllSeriesBookRefCountsFunc()
+	}
+	return map[int]int{}, nil
 }
 
 func (m *MockStore) UpdateSeriesName(id int, name string) error {
