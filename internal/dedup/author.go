@@ -1,5 +1,5 @@
 // file: internal/dedup/author.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
 // last-edited: 2026-08-14
 
@@ -11,6 +11,7 @@ import (
 	"math"
 	"regexp"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -191,11 +192,59 @@ func IsDirtyAuthorName(name string) bool {
 // are caught but "Agent 47" style names (year not leading) are not.
 var leadingYearRe = regexp.MustCompile(`^\d{4}\b`)
 
+// looksLikePersonName is the comma-branch gate (C414): 2–4 words, does not
+// open with a lowercase word (title clauses read "and …", "the …"; person
+// names capitalize), and carries no title-ish punctuation or trailing
+// parenthetical ("… (DBY)"). Deliberately conservative — a refused split
+// keeps the composite row visibly broken instead of laundering a book-title
+// fragment into a plausible-looking author.
+// nameParticles are lowercase words that legitimately appear inside personal
+// names and must not be mistaken for title-clause function words.
+var nameParticles = map[string]bool{
+	"de": true, "la": true, "le": true, "van": true, "von": true,
+	"del": true, "della": true, "di": true, "da": true, "dos": true,
+	"du": true, "den": true, "ter": true, "bin": true, "ibn": true,
+	"al": true, "el": true, "st.": true, "mac": true,
+}
+
+func looksLikePersonName(part string) bool {
+	fields := strings.Fields(part)
+	if len(fields) < 2 || len(fields) > 4 {
+		return false
+	}
+	first := []rune(fields[0])
+	if len(first) == 0 || unicode.IsLower(first[0]) {
+		return false
+	}
+	// Interior lowercase FUNCTION words mark title clauses ("A Game of
+	// Thrones"); lowercase name PARTICLES ("Simone de Beauvoir", "Ludwig van
+	// Beethoven") are legitimate and stay allowed.
+	for _, w := range fields[1:] {
+		r := []rune(w)
+		if len(r) > 0 && unicode.IsLower(r[0]) && !nameParticles[strings.ToLower(w)] {
+			return false
+		}
+	}
+	if strings.ContainsAny(part, ":!?") {
+		return false
+	}
+	if strings.HasSuffix(strings.TrimSpace(part), ")") {
+		return false
+	}
+	return true
+}
+
 // SplitCompositeAuthorName splits "Author1 / Author2" or "Author1, Author2" into parts.
 // Returns nil or single-element slice if the name doesn't look composite.
 func SplitCompositeAuthorName(name string) []string {
 	// Don't split AKA patterns
 	if regexp.MustCompile(`(?i)\(aka\s`).MatchString(name) {
+		return nil
+	}
+
+	// A source carrying subtitle punctuation is a title, not a credit list —
+	// refuse every split rather than guessing at its clauses (C414).
+	if strings.ContainsAny(name, ":!?") {
 		return nil
 	}
 
@@ -216,7 +265,14 @@ func SplitCompositeAuthorName(name string) []string {
 
 	// Try comma: "Author1, Author2" — but not "Last, First" format
 	// "Last, First" has exactly 2 parts where the second is a single name without spaces
-	// "Author1, Author2" has parts where both sides have spaces
+	// "Author1, Author2" has parts where both sides have spaces.
+	//
+	// C414: "contains a space" alone let TITLE clauses through — a comma-split
+	// of "So Long, and Thanks for All the Fish" minted "and Thanks for All the
+	// Fish" as an author (row 46595; also 46989 "and the Farm Boy (DBY)" and
+	// 47193 "and Make Better Decisions"). Every part must be person-shaped or
+	// the whole split is refused — refusing leaves the composite VISIBLY wrong
+	// for repair rather than laundering a title fragment into a name.
 	parts := strings.Split(name, ",")
 	if len(parts) >= 2 {
 		var result []string
@@ -226,12 +282,15 @@ func SplitCompositeAuthorName(name string) []string {
 			if p == "" {
 				continue
 			}
-			// A name part should contain a space (first + last) to be a separate author
-			if !strings.Contains(p, " ") {
+			// Shape-check the NORMALIZED part: credit lists legitimately read
+			// "…, and Conrad Westmaas" and the normalizer strips that leading
+			// conjunction; a title clause's remainder still fails the shape.
+			normalized := NormalizeAuthorName(p)
+			if !looksLikePersonName(normalized) {
 				allLookLikeNames = false
 				break
 			}
-			result = append(result, NormalizeAuthorName(p))
+			result = append(result, normalized)
 		}
 		if allLookLikeNames && len(result) > 1 {
 			return result
@@ -279,14 +338,22 @@ func SplitCompositeAuthorName(name string) []string {
 				}
 				if idx < 0 {
 					p := strings.TrimSpace(remaining)
-					if len(p) > 2 && strings.Contains(p, " ") {
-						result = append(result, NormalizeAuthorName(p))
+					// Same person-shape gate as the comma branch (C414):
+					// "So Long, and Thanks for All the Fish" reaches THIS
+					// branch via its " and ", and a title clause here is just
+					// as capable of minting a fake author.
+					if norm := NormalizeAuthorName(p); len(p) > 2 && looksLikePersonName(norm) {
+						result = append(result, norm)
+					} else if len(p) > 2 {
+						return nil // one non-name clause poisons the whole split
 					}
 					break
 				}
 				p := strings.TrimSpace(remaining[:idx])
-				if len(p) > 2 && strings.Contains(p, " ") {
-					result = append(result, NormalizeAuthorName(p))
+				if norm := NormalizeAuthorName(p); len(p) > 2 && looksLikePersonName(norm) {
+					result = append(result, norm)
+				} else if len(p) > 2 {
+					return nil // one non-name clause poisons the whole split
 				}
 				// Skip past separator
 				for _, s := range []string{" and ", " And ", " AND ", " & "} {
@@ -307,8 +374,12 @@ func SplitCompositeAuthorName(name string) []string {
 	// Heuristic: try splitting at each word boundary and check if both halves
 	// look like valid author names (each has at least first+last).
 	// Only attempt this for names with 4+ words (minimum for two "First Last" names).
+	// A comma-bearing name already had its chance in the comma branch above;
+	// reaching here means its clauses FAILED the person-shape gate, and
+	// re-splitting them on spaces would launder the same title fragments the
+	// gate just refused (C414).
 	words := strings.Fields(name)
-	if len(words) >= 4 {
+	if len(words) >= 4 && !strings.Contains(name, ",") {
 		result := trySplitConcatenatedAuthors(name, words)
 		if len(result) > 1 {
 			return result
