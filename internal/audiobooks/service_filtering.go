@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_filtering.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: b4e8c3d2-e5f6-7a80-9b0c-1d2e3f4a5b6c
 // last-edited: 2026-08-14
 
@@ -524,6 +524,8 @@ func bookFieldValue(book database.Book, field string) (string, bool) {
 		bookValue = derefStr(book.ISBN10)
 	case "isbn13":
 		bookValue = derefStr(book.ISBN13)
+	case "version_group_id":
+		bookValue = derefStr(book.VersionGroupID)
 	case "work_id":
 		bookValue = derefStr(book.WorkID)
 
@@ -648,6 +650,7 @@ var allFilterFieldNames = []string{
 	"itunes_sync_status", "duration", "duration_seconds", "bitrate",
 	"bitrate_kbps", "file_size", "file_size_bytes", "sample_rate",
 	"sample_rate_hz", "channels", "bit_depth", "isbn10", "isbn13", "work_id",
+	"version_group_id",
 	"year", "created_at", "updated_at", "marked_for_deletion",
 	"read_status", "progress_pct", "last_played",
 	"user_rating_overall", "user_rating_story", "user_rating_performance",
