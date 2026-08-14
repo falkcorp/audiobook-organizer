@@ -1,7 +1,7 @@
 <!-- file: docs/audits/2026-06-22-repo-optimization-security-sweep.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 7bcbf9bf-1e2c-4f19-8b3c-8c92c52a7c89 -->
-<!-- last-edited: 2026-06-22 -->
+<!-- last-edited: 2026-08-14 -->
 
 # Repository Optimization, Reuse, Security, and Design Sweep
 
@@ -51,6 +51,59 @@ high-leverage improvement areas:
 | 8 | Frontend | Introduce a centralized `apiFetch` wrapper with credentials, CSRF support, error parsing, and abort support. | Unifies security and removes duplicated fetch code. |
 | 9 | Tooling | Fix CI mockery gate: remove `|| true`, pin mockery, call Makefile target. | Prevents stale generated mocks from landing. |
 | 10 | Repo hygiene | Move full Librivox corpus to optional dataset/LFS flow and untrack generated Playwright reports. | Shrinks checkouts and review noise. |
+
+---
+
+## Status column — every finding verified against HEAD `f9dd8701` (2026-08-14)
+
+Verified per-finding by direct code/file check (the command or file:line is the
+evidence). **FIXED 14 · PARTIAL 8 · OPEN 13 · UNVERIFIED 5 · OBSOLETE 1.**
+Open items that matter are filed as `todo.d/` fragments; this table is what
+makes the audit retirable.
+
+| ID | Status | Evidence (2026-08-14) |
+|---|---|---|
+| SEC-1 | ✅ FIXED | no `abk_` value in `docs/FINGERPRINT_E2E_TEST_REPORT.md` |
+| SEC-2 | 🔴 OPEN | `bootstrap.go:108,:153` still `os.WriteFile` plaintext key/token files (0600) |
+| SEC-3 | ✅ FIXED | `auth_temp_login.go:127-130` canonical ExternalURL / relative path, Host never trusted |
+| SEC-4 | 🟡 PARTIAL | `securityHeadersMiddleware` ships nosniff/frame/referrer/HSTS; **CSP still pending** ("until nonce/hash strategy is settled") |
+| SEC-5 | 🟡 PARTIAL | checksum machinery exists (`backup.go:40,:57,:146-156`); restore-target path constraint not re-verified |
+| SEC-6 | ✅ FIXED | factory reset requires `{"confirm":"RESET"}` (`system/handler.go:343-352`) |
+| SEC-7 | 🟡 PARTIAL | `/metrics` auth-gated (#2092); cache-stats endpoint no longer at the cited anchor — relocation not chased |
+| SEC-8 | 🟡 PARTIAL | all 3 base images digest-pinned (`Dockerfile:13,:26,:81`); build-dep tarballs still `curl \| tar` with no SHA verify |
+| SEC-9 | 🔴 OPEN | `WelcomeWizard.tsx:158` still fetches api.openai.com with the key — filed, task CA13 |
+| PERF-1 | ⚪ OBSOLETE | per TODO.md close-out: Jul-16 truncation fix made whole-library ops deliberately unbounded |
+| PERF-2 | 🟡 PARTIAL | scanner writes via `BatchUpsertBookFiles` (`scanner.go:1544`); rehash-carry-forward and one-recompute-per-book remain (task C818) |
+| PERF-3 | ❔ UNVERIFIED | pushdown work shipped extensively since (sort indexes, filter pushdown) but the three cited escape hatches not individually re-checked |
+| PERF-4 | 🔴 **OPEN — still live** | `handlers/itunes.go:709` still calls `SearchBooks(search, 0, 0)`; fragment filed 2026-08-14 |
+| PERF-5 | 🔴 OPEN | `itunes/backfill.go:60-68` still offset pagination `GetAllBooksCore(10000, offset)` |
+| PERF-6 | ✅ FIXED | `server_search.go:72` uses cursor `GetAllBooksFullFrom(afterID, pageSize)` |
+| PERF-7 | 🔴 OPEN | memdb pressure program ongoing (BookSig sidecar E01 is the active step) |
+| PERF-8 | ✅ FIXED | `backup.go:25-29` `Checkpointable` interface, PebbleStore checkpoint before archive |
+| ARCH-1 | 🔴 OPEN | structural program; handlers still reach server helpers via injected closures |
+| ARCH-2 | ✅ FIXED | route registry split into 12+ per-domain `wire_*_routes.go` modules |
+| ARCH-3 | 🔴 OPEN | no unified operation-launch service found |
+| ARCH-4 | 🔴 OPEN | remap tables still per-group (also in `project_audit_remediation_jun2026` as ARCH-4b) |
+| ARCH-5 | 🔴 OPEN | `AudiobookService` split not done (query/mutation files exist but service is one type) |
+| ARCH-6 | ❔ UNVERIFIED | capability-assertion helpers exist per-domain (`As*Store`); no central `storecap` package |
+| ARCH-7 | 🔴 OPEN | no compatibility registry found |
+| ARCH-8 | 🔴 OPEN | `serviceregistry/container.go:248,:255` still panics on string lookups |
+| FE-1 | ✅ FIXED | `web/src/utils/apiFetch.ts` exists; 275 references in `api.ts` |
+| FE-2 | ❔ UNVERIFIED | cited lines moved; ActivityLog deps not re-anchored |
+| FE-3 | 🔴 OPEN | `BookDedup.tsx` legacy tab still present; deps not re-anchored |
+| FE-4 | ❔ UNVERIFIED | cited lines moved; not re-anchored |
+| FE-5 | ✅ FIXED | `useLibraryQuery.ts` + `useLibrarySelection.ts` extracted |
+| FE-6 | 🔴 OPEN | `useSettingsHandlers` split not observed |
+| FE-7 | ✅ FIXED | `TempLoginTab.tsx:35-42` auto-clears after 30s (comment cites FE-7) |
+| FE-8 | 🟡 PARTIAL | real-server bootstrap smoke test exists (self-skipping); cookie/CSRF semantics still mocked elsewhere |
+| TOOL-1 | 🔴 OPEN | `testdata` measures **2.2G** on 2026-08-14 |
+| TOOL-2 | ✅ FIXED | `mockery … \|\| true` removed from CI |
+| TOOL-3 | ✅ FIXED | `test-e2e-demo` split from `test-e2e` (Makefile:23,:308) |
+| TOOL-4 | ❔ UNVERIFIED | docs-vs-gates agreement not re-audited |
+| TOOL-5 | 🟡 PARTIAL | per-package mocks exist (e.g. `handlers/audiobooks/mocks/`); `mock_store.go` still 52,384 lines |
+| TOOL-6 | ✅ FIXED | `git ls-files` shows zero tracked `playwright-report/` files |
+| TOOL-7 | 🟡 PARTIAL | non-demo `waitForTimeout` down to 2 (benchmark + search specs); `demo-full-workflow` has 61 by design |
+| TOOL-8 | ✅ FIXED | retired/wrapped 2026-08-10 |
 
 ---
 
