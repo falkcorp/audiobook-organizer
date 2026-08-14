@@ -1,5 +1,5 @@
 // file: internal/fileops/write_tags_safe.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: b4c5d6e7-f8a9-0b1c-2d3e-4f5a6b7c8d9e
 // last-edited: 2026-05-15
 
@@ -105,6 +105,16 @@ func copyFileContents(src, dst string) error {
 		return err
 	}
 	defer out.Close()
+
+	// The mode argument above applies only when OpenFile CREATES dst. Our dst
+	// already exists (os.CreateTemp made it, mode 0600), so an explicit chmod
+	// is required — without it every tag rewrite silently replaced the
+	// original with an 0600 file, zeroing the ACL mask and locking out every
+	// non-owner reader (found via the 2026-08-14 E08 canary: 100 books'
+	// files went share-unreadable).
+	if err := out.Chmod(info.Mode().Perm()); err != nil {
+		return err
+	}
 
 	if _, err := io.Copy(out, in); err != nil {
 		return err
