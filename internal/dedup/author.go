@@ -1,5 +1,5 @@
 // file: internal/dedup/author.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
 // last-edited: 2026-08-14
 
@@ -147,9 +147,22 @@ func extractBaseAuthor(name string) string {
 	return strings.TrimSpace(name)
 }
 
-// isDirtyAuthorName returns true if the name is obviously not a real author
-func isDirtyAuthorName(name string) bool {
+// IsDirtyAuthorName returns true if the name is obviously not a real author:
+// publisher/production names, "A - B" separators, copyright fragments and
+// HTML-entity shrapnel (leading "©" or "&#"), and strings that OPEN with a
+// 4-digit year ("2013 by HarperCollinsPublishers") — those are rights lines
+// from artist tags, never people. Exported so CREATION paths can reject these
+// up front instead of minting rows that need repair later (C413; author rows
+// 46583 "&#169" and 51870 "&#169;2013 by HarperCollinsPublishers").
+func IsDirtyAuthorName(name string) bool {
+	name = strings.TrimSpace(name)
 	if strings.Contains(name, " - ") {
+		return true
+	}
+	if strings.HasPrefix(name, "©") || strings.HasPrefix(name, "&#") {
+		return true
+	}
+	if leadingYearRe.MatchString(name) {
 		return true
 	}
 
@@ -172,6 +185,11 @@ func isDirtyAuthorName(name string) bool {
 
 	return IsProductionCompany(name)
 }
+
+// leadingYearRe matches names that BEGIN with a standalone 4-digit year —
+// copyright lines, not people. Anchored so "1984 George Orwell" style titles
+// are caught but "Agent 47" style names (year not leading) are not.
+var leadingYearRe = regexp.MustCompile(`^\d{4}\b`)
 
 // SplitCompositeAuthorName splits "Author1 / Author2" or "Author1, Author2" into parts.
 // Returns nil or single-element slice if the name doesn't look composite.
@@ -421,7 +439,7 @@ func isCompositeAuthorName(name string) bool {
 // Much stricter than raw Jaro-Winkler — requires last name match.
 func areAuthorsDuplicate(name1, name2 string) bool {
 	// Skip dirty names (book titles, publishers)
-	if isDirtyAuthorName(name1) || isDirtyAuthorName(name2) {
+	if IsDirtyAuthorName(name1) || IsDirtyAuthorName(name2) {
 		return false
 	}
 
@@ -873,7 +891,7 @@ func findDuplicateAuthorsInternal(authors []database.Author, threshold float64, 
 			index:  i,
 			author: a,
 		}
-		if isMultiAuthorString(a.Name) || isCompositeAuthorName(a.Name) || isDirtyAuthorName(a.Name) {
+		if isMultiAuthorString(a.Name) || isCompositeAuthorName(a.Name) || IsDirtyAuthorName(a.Name) {
 			pre.skip = true
 		} else {
 			pre.norm = strings.ToLower(NormalizeAuthorName(a.Name))

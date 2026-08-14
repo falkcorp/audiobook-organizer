@@ -102,7 +102,7 @@ func TestIsDirtyAuthorName(t *testing.T) {
 		"Penguin Random House",
 	}
 	for _, name := range dirty {
-		if !isDirtyAuthorName(name) {
+		if !IsDirtyAuthorName(name) {
 			t.Errorf("expected %q to be flagged as dirty", name)
 		}
 	}
@@ -114,7 +114,7 @@ func TestIsDirtyAuthorName(t *testing.T) {
 		"Natalie Maher (aka Thundamoo)",
 	}
 	for _, name := range clean {
-		if isDirtyAuthorName(name) {
+		if IsDirtyAuthorName(name) {
 			t.Errorf("expected %q to NOT be flagged as dirty", name)
 		}
 	}
