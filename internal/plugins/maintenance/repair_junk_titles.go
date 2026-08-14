@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/repair_junk_titles.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9c4e7a12-3b58-4d06-8f21-7ae5c0d94b63
 // last-edited: 2026-08-04
 
@@ -69,25 +69,20 @@ func (p *Plugin) runRepairJunkTitles(ctx context.Context, raw json.RawMessage, r
 	// Filtering here rather than inside the worker matters: the per-book work
 	// (files, field states, author) is several reads, and this turns a 44k-book
 	// sweep into a ~2k-book one.
-	const pageSize = 1000
+	// One limit-0 call = one consistent snapshot; offset pages over the async
+	// memdb can skip or repeat rows on snapshot swap (reconcile #2443).
+	all, err := store.GetAllBooksCore(0, 0)
+	if err != nil {
+		return fmt.Errorf("GetAllBooksCore: %w", err)
+	}
 	var candidates []database.BookCore
-	scanned := 0
-	for offset := 0; ; offset += pageSize {
-		page, err := store.GetAllBooksCore(pageSize, offset)
-		if err != nil {
-			return fmt.Errorf("GetAllBooksCore offset=%d: %w", offset, err)
+	scanned := len(all)
+	for i := range all {
+		if all[i].IsSoftDeleted() {
+			continue
 		}
-		scanned += len(page)
-		for i := range page {
-			if page[i].IsSoftDeleted() {
-				continue
-			}
-			if IsJunkTitle(page[i].Title) {
-				candidates = append(candidates, page[i])
-			}
-		}
-		if len(page) < pageSize {
-			break
+		if IsJunkTitle(all[i].Title) {
+			candidates = append(candidates, all[i])
 		}
 	}
 	if params.Limit > 0 && len(candidates) > params.Limit {

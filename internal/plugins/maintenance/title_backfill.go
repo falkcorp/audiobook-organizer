@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/title_backfill.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 // last-edited: 2026-07-07
 
@@ -73,45 +73,34 @@ func (p *Plugin) runTitleBackfill(ctx context.Context, raw json.RawMessage, repo
 	}
 	_ = reporter.UpdateProgress(0, totalBooks, "Phase 1/2: scanning titles…")
 
-	const pageSize = 500
-	offset := 0
 	var scanned, skipped int
 	var toUpdate []pendingUpdate
 
-	for {
+	// One limit-0 call = one consistent snapshot; offset pages over the async
+	// memdb can skip or repeat rows on snapshot swap (reconcile #2443).
+	books, err := store.GetAllBooksCore(0, 0)
+	if err != nil {
+		return fmt.Errorf("GetAllBooksCore: %w", err)
+	}
+	for _, book := range books {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		scanned++
 
-		books, err := store.GetAllBooksCore(pageSize, offset)
-		if err != nil {
-			return fmt.Errorf("GetAllBooksCore offset=%d: %w", offset, err)
+		cleaned := titleutil.StripChapterPrefix(book.Title)
+		switch {
+		case cleaned == book.Title:
+			skipped++
+		case cleaned == "":
+			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
+				"book %s: title %q stripped to empty, skipping", book.ID, book.Title))
+			skipped++
+		default:
+			toUpdate = append(toUpdate, pendingUpdate{book: book, newTitle: cleaned})
 		}
-		if len(books) == 0 {
-			break
-		}
-
-		for _, book := range books {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			scanned++
-
-			cleaned := titleutil.StripChapterPrefix(book.Title)
-			switch {
-			case cleaned == book.Title:
-				skipped++
-			case cleaned == "":
-				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
-					"book %s: title %q stripped to empty, skipping", book.ID, book.Title))
-				skipped++
-			default:
-				toUpdate = append(toUpdate, pendingUpdate{book: book, newTitle: cleaned})
-			}
-		}
-
-		offset += len(books)
-
+	}
+	{
 		// Use real total if available; fall back to scanned so bar moves.
 		total := totalBooks
 		if total == 0 {
@@ -119,10 +108,6 @@ func (p *Plugin) runTitleBackfill(ctx context.Context, raw json.RawMessage, repo
 		}
 		_ = reporter.UpdateProgress(scanned, total,
 			fmt.Sprintf("Phase 1/2: scanned %d/%d — %d titles to fix", scanned, total, len(toUpdate)))
-
-		if len(books) < pageSize {
-			break
-		}
 	}
 
 	// Phase 2: apply (or preview). We now know exactly how many to change,

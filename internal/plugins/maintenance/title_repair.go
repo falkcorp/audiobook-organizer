@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/title_repair.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 13bedd46-9b61-41a2-b791-36813d7ffcb9
 // last-edited: 2026-07-17
 
@@ -190,21 +190,11 @@ func (p *Plugin) runTitleRepair(ctx context.Context, raw json.RawMessage, report
 
 	// Load the full book list up front (Core rows are slim). Paged — no
 	// silent cap: the loop runs until a short page.
-	const pageSize = 500
-	var books []database.BookCore
-	for offset := 0; ; {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		page, err := store.GetAllBooksCore(pageSize, offset)
-		if err != nil {
-			return fmt.Errorf("GetAllBooksCore offset=%d: %w", offset, err)
-		}
-		books = append(books, page...)
-		offset += len(page)
-		if len(page) < pageSize {
-			break
-		}
+	// One limit-0 call = one consistent snapshot; offset pages over the async
+	// memdb can skip or repeat rows on snapshot swap (reconcile #2443).
+	books, err := store.GetAllBooksCore(0, 0)
+	if err != nil {
+		return fmt.Errorf("GetAllBooksCore: %w", err)
 	}
 
 	total := len(books)
@@ -227,7 +217,7 @@ func (p *Plugin) runTitleRepair(ctx context.Context, raw json.RawMessage, report
 		verb = "retitled"
 	}
 
-	err := registry.RunItems(ctx, reporter, books, func(ctx context.Context, b database.BookCore) error {
+	err = registry.RunItems(ctx, reporter, books, func(ctx context.Context, b database.BookCore) error {
 		n := examined.Add(1)
 		if n%500 == 0 {
 			_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(

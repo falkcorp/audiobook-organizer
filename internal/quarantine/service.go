@@ -1,5 +1,5 @@
 // file: internal/quarantine/service.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-07-07
 
@@ -225,28 +225,23 @@ func (qs *QuarantineService) AutoQuarantineFailedScans() {
 	if qs.store == nil {
 		return
 	}
-	// Paginate to avoid missing books when library exceeds page size.
-	const pageSize = 1000
-	var offset int
-	for {
-		page, err := qs.store.GetAllBooksCore(pageSize, offset)
-		if err != nil || len(page) == 0 {
-			break
+	// One limit-0 call = one consistent snapshot. Offset pages over the async
+	// memdb can skip or repeat rows whenever the snapshot swaps between calls
+	// (see reconcile #2443) — and this loop MUTATES via QuarantineBook as it
+	// walks, so paging was swapping the snapshot under its own feet.
+	books, err := qs.store.GetAllBooksCore(0, 0)
+	if err != nil {
+		return
+	}
+	for _, b := range books {
+		if b.QuarantinedAt != nil {
+			continue
 		}
-		for _, b := range page {
-			if b.QuarantinedAt != nil {
-				continue
-			}
-			n, _ := qs.store.GetScanFailCount(scanFailKey(b.FilePath))
-			if n >= scanFailThreshold {
-				slog.Info("auto-quarantine (fail count)", "filePath", b.FilePath, "failCount", n)
-				_ = qs.QuarantineBook(b.ID, fmt.Sprintf("taglib failed to read file after %d consecutive scan attempts", n))
-			}
+		n, _ := qs.store.GetScanFailCount(scanFailKey(b.FilePath))
+		if n >= scanFailThreshold {
+			slog.Info("auto-quarantine (fail count)", "filePath", b.FilePath, "failCount", n)
+			_ = qs.QuarantineBook(b.ID, fmt.Sprintf("taglib failed to read file after %d consecutive scan attempts", n))
 		}
-		if len(page) < pageSize {
-			break
-		}
-		offset += pageSize
 	}
 }
 
