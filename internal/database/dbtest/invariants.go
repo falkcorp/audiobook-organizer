@@ -1,7 +1,7 @@
 // file: internal/database/dbtest/invariants.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b1d2f3a4-5c6e-7a8b-9c0d-invariantsdbt1
-// last-edited: 2026-07-13
+// last-edited: 2026-08-14
 
 // Package dbtest holds cross-package TEST-ONLY helpers for asserting
 // data-loss / store-consistency invariants against a real database.Store.
@@ -15,14 +15,23 @@
 // it. Nothing in the production build imports this package.
 //
 // The checks here use ONLY the exported database.Store surface, so they are
-// portable but cannot see raw secondary-index rows. Two limitations follow from
-// the public surface and are covered instead by the database package's own
+// portable but cannot see raw secondary-index rows. One limitation follows from
+// the public surface and is covered instead by the database package's own
 // white-box helper (assertStoreInvariants in store_invariants_test.go):
-//   - ListBookIDs (memdb-backed) omits soft-deleted books, so invariant (a)
-//     ("live primary AND MarkedForDeletion") is effectively vacuous here — a
-//     book in that contradictory state would not be enumerated. The white-box
-//     helper scans raw primary rows and checks it properly.
 //   - The "no dangling index row" check needs the unexported *PebbleStore.db.
+//
+// Invariant (a) used to be a second such limitation, and was NOT actually
+// covered by that fallback in the place it mattered. ListBookIDs omits
+// soft-deleted books, so (a) ("live primary AND MarkedForDeletion") could never
+// fire here — and (a) exists to catch a half-applied MERGE. The white-box
+// helper does check it, but it is only reachable from tests inside the database
+// package, which perform no merges; every merge, combine and regroup test in
+// the tree calls THIS helper. So the guard was live only where nothing could
+// violate it and vacuous everywhere the hazard actually is.
+//
+// Fixed 2026-08-14 by enumerating ListBookIDs ∪ ListSoftDeletedBooks. Both are
+// public, so no white-box access is needed — the original reasoning stopped one
+// exported method short.
 //
 // What this helper DOES robustly verify (via GetBookByID, which returns
 // soft-deleted rows too): index listings never surface a soft-deleted or
@@ -58,8 +67,36 @@ func AssertStoreInvariants(tb testing.TB, store database.Store) {
 		tb.Fatalf("invariant: ListBookIDs: %v", err)
 	}
 
+	// ListBookIDs omits soft-deleted books, so on its own it cannot enumerate a
+	// row that is BOTH marked-for-deletion and a live primary — the exact
+	// contradiction invariant (a) exists to catch. Union in the trashed set so
+	// (a) has something to fire on. ListSoftDeletedBooks is part of the public
+	// Store surface, so this needs no white-box access and no import cycle.
+	//
+	// findOrphanBookFiles unions these same two listings for the same reason: a
+	// soft-deleted book is still physically present and still owns its rows.
+	trashed, err := store.ListSoftDeletedBooks(0, 0, nil)
+	if err != nil {
+		tb.Fatalf("invariant: ListSoftDeletedBooks: %v", err)
+	}
+
 	live := map[string]*database.Book{}
 	all := map[string]*database.Book{}
+
+	// check runs the per-book assertions for a book from either listing.
+	check := func(id string, b *database.Book) {
+		all[id] = b
+		marked := b.MarkedForDeletion != nil && *b.MarkedForDeletion
+
+		// (a) live-primary && marked-for-deletion is contradictory.
+		if marked && b.IsPrimaryVersion != nil && *b.IsPrimaryVersion {
+			tb.Errorf("invariant (a): book %s is a live primary version AND MarkedForDeletion", id)
+		}
+		if !marked {
+			live[id] = b
+		}
+	}
+
 	for _, id := range ids {
 		b, err := store.GetBookByID(id)
 		if err != nil {
@@ -71,16 +108,14 @@ func AssertStoreInvariants(tb testing.TB, store database.Store) {
 			tb.Errorf("invariant (b): ListBookIDs returned %s but GetBookByID is nil (dangling primary)", id)
 			continue
 		}
-		all[id] = b
-		marked := b.MarkedForDeletion != nil && *b.MarkedForDeletion
-
-		// (a) live-primary && marked-for-deletion is contradictory.
-		if marked && b.IsPrimaryVersion != nil && *b.IsPrimaryVersion {
-			tb.Errorf("invariant (a): book %s is a live primary version AND MarkedForDeletion", id)
+		check(id, b)
+	}
+	for i := range trashed {
+		b := trashed[i]
+		if _, already := all[b.ID]; already {
+			continue
 		}
-		if !marked {
-			live[id] = b
-		}
+		check(b.ID, &b)
 	}
 
 	// (b) Nothing an index listing returns may be soft-deleted or non-existent,
