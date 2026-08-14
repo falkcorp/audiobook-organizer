@@ -1,5 +1,5 @@
 // file: internal/database/memdb_reads.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000006
 // last-edited: 2026-08-14
 
@@ -527,6 +527,39 @@ func (m *MemStore) GetBooksBySeriesIDCore(seriesID int, limit, offset int) ([]Bo
 // []Book and let each PebbleStore-layer caller project to Core. See
 // docs/specs/2026-07-05-store-getter-fidelity-unification.md.
 func (m *MemStore) GetBooksByAuthorID(authorID int, limit, offset int) ([]Book, error) {
+	return m.getBooksByAuthorID(authorID, limit, offset, true)
+}
+
+// GetBooksByAuthorIDAllVersions is GetBooksByAuthorID without the
+// primary-version filter: it returns EVERY live book the author is attached to,
+// including non-primary versions.
+//
+// This exists because the two PebbleStore getters that share this helper want
+// different sets, and conflating them orphaned junction rows on prod:
+//
+//   - GetBooksByAuthorIDCore is a listing view. Non-primary versions are
+//     duplicates of a book already in the list, so it excludes them.
+//   - GetBooksByAuthorIDWithRoleCore is what merges and deletes consult to find
+//     the links they must rewrite before removing an author. For that caller a
+//     missed link is data loss — the author gets deleted and the junction row
+//     is left pointing at a row that no longer exists — while an extra link is
+//     at worst redundant work. So it needs completeness, not tidiness.
+//
+// Measured 2026-08-14: the author-conjunction-repair op reported 86 books
+// relinked seconds after a restart (Pebble path, no primary filter) and 84 warm
+// (memdb path, filtered) against identical data. The two missing links were
+// co-author credits on non-primary versions belonging to author 46627, and
+// merging that row warm would have deleted the author while they still existed.
+// See internal/database/author_getter_conformance_test.go.
+func (m *MemStore) GetBooksByAuthorIDAllVersions(authorID int, limit, offset int) ([]Book, error) {
+	return m.getBooksByAuthorID(authorID, limit, offset, false)
+}
+
+// getBooksByAuthorID is the shared body. primaryOnly selects the listing view
+// (true) or the complete set (false); see GetBooksByAuthorIDAllVersions for why
+// both are needed. Soft-deleted books are excluded either way — no caller of
+// either getter wants the trash.
+func (m *MemStore) getBooksByAuthorID(authorID int, limit, offset int, primaryOnly bool) ([]Book, error) {
 	txn := m.db.Txn(false)
 	defer txn.Abort()
 
@@ -563,7 +596,7 @@ func (m *MemStore) GetBooksByAuthorID(authorID int, limit, offset int) ([]Book, 
 		if bookIsSoftDeleted(b) {
 			continue
 		}
-		if b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion {
+		if primaryOnly && b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion {
 			continue
 		}
 		all = append(all, *b)
