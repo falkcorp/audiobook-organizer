@@ -618,6 +618,18 @@ func (h *ITunesHandler) WriteBackPreview(c *gin.Context) {
 			if bErr != nil || book == nil {
 				continue
 			}
+			// Soft-deleted books are excluded here as well as in the
+			// ListBooksByITunesPID branch below. Fixing only the listing
+			// would have left this path open: a client that names book IDs
+			// explicitly goes through GetBookByID, which returns trashed rows
+			// by design (that is how restore reads them), so the exclusion has
+			// to be stated at the point of use. The preview decides what gets
+			// written back into the iTunes library, and that must not include
+			// a book the user put in the trash — by whichever route it was
+			// asked for.
+			if book.IsSoftDeleted() {
+				continue
+			}
 			if book.ITunesPersistentID != nil && *book.ITunesPersistentID != "" {
 				books = append(books, *book)
 			}

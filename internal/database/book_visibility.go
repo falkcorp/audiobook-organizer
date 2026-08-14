@@ -1,7 +1,7 @@
 // file: internal/database/book_visibility.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4eee927b-72ce-4b07-aa41-a91afb2368ba
-// last-edited: 2026-08-13
+// last-edited: 2026-08-14
 
 package database
 
@@ -28,6 +28,24 @@ func bookIsSoftDeleted(b *Book) bool {
 	return b != nil && markedForDeletionFlag(b.MarkedForDeletion)
 }
 
+// IsSoftDeleted is the exported form of bookIsSoftDeleted, for callers outside
+// this package.
+//
+// It exists because there was no exported predicate at all, so every package
+// that needed the answer open-coded `b.MarkedForDeletion != nil && *b...` —
+// 26 copies across 18 files in dedup, itunes, organizer, undo, maintenance and
+// the handlers as of 2026-08-14. #2392 collapsed the 37 copies INSIDE this
+// package onto one rule and left those untouched, which is only half the job:
+// an unexported rule cannot stop anyone else from restating it, and restating
+// it is precisely how the two GetAllBooksCore implementations drifted apart.
+//
+// Existing sites are not converted here; that is a mechanical sweep of its own
+// and it would bury the fix this commit is actually about. See
+// todo.d/2026-08-14-soft-delete-predicate-sweep-outside-database.md.
+func (b *Book) IsSoftDeleted() bool {
+	return bookIsSoftDeleted(b)
+}
+
 // bookCoreIsSoftDeleted is the BookCore twin of bookIsSoftDeleted.
 //
 // Book and BookCore are separate structs that each carry their own copy of the
@@ -44,4 +62,52 @@ func bookCoreIsSoftDeleted(b *BookCore) bool {
 // visibility check in this package bottoms out here.
 func markedForDeletionFlag(flag *bool) bool {
 	return flag != nil && *flag
+}
+
+// includeByDeletionState is the tri-state deletion POLICY, stated once, as
+// opposed to bookIsSoftDeleted which is the per-row predicate. deleted is the
+// row's state; want is the caller's request:
+//
+//	nil    → no opinion; exclude the trash (the default library view)
+//	&false → explicitly require live rows
+//	&true  → explicitly require trashed rows
+//
+// The first two rows of that table are the same state, which is why the whole
+// thing is one comparison rather than the three-branch if/else it replaces:
+// "no filter" and "require live" both mean "include iff not deleted". Reusing
+// markedForDeletionFlag on the FILTER pointer is not a pun — the filter and the
+// row's flag are the same *bool shape under the same nil-means-false rule, so
+// one function correctly reads both.
+//
+// This exists because #2392 unified the predicate but left the policy written
+// out twice — once in getAllBookSummariesFiltered as an
+// excludeDeleted/requireDeleted pair, once in GetAllBooksCore as a
+// key-present check plus an inequality. Both were correct at the time. So were
+// the two GetAllBooksCore implementations, right up until they weren't, and by
+// the same mechanism: one rule, spelled out in two places, drifting because
+// nothing forced them to agree.
+func includeByDeletionState(deleted bool, want *bool) bool {
+	return deleted == markedForDeletionFlag(want)
+}
+
+// deletionStateFromFilters decodes GetAllBooksCore's untyped filter map into
+// the *bool tri-state includeByDeletionState takes.
+//
+// A key present with a NON-bool value (a string "true", say) is treated as
+// absent — fail closed to the default library view. The code this replaces
+// keyed the default exclusion off key PRESENCE and the equality off a
+// successful `.(bool)` assertion, two different conditions, so a non-bool
+// value satisfied the first and failed the second and the row was returned
+// whatever its state: a caller who fumbled the type got the trash mixed into
+// live results, silently. That is a narrower instance of the exact leak
+// #2392 fixed, and collapsing presence and type into one decode is what
+// removes it. Getting live books when you asked wrongly for deleted ones is
+// a visible wrong answer; leaking deleted rows into a full-library op is an
+// invisible one.
+func deletionStateFromFilters(filters map[string]interface{}) *bool {
+	v, ok := filters["marked_for_deletion"].(bool)
+	if !ok {
+		return nil
+	}
+	return &v
 }

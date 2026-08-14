@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.126.0
+// version: 1.127.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-08-13
+// last-edited: 2026-08-14
 
 package database
 
@@ -1135,8 +1135,14 @@ func (p *PebbleStore) GetBookByITunesPersistentID(persistentID string) (*Book, e
 // Pebble fallback preserved for cold-start (before memdb publishes) and
 // tests with no memdb.
 func (p *PebbleStore) ListBooksByITunesPID(limit, offset int) ([]Book, error) {
-	if mem := p.mem(); mem != nil {
-		return mem.ListBooksByITunesPID(limit, offset)
+	// Gated on UseMemDB as well as publication, matching every other memdb
+	// dispatch in this file. It used to check publication ALONE, which made
+	// the fallback below unreachable whenever memdb was up — including in a
+	// store with UseMemDB explicitly false. That is worse than a dead branch:
+	// it makes a two-implementation conformance test silently vacuous, because
+	// flipping the flag runs the memdb path twice and asserts memdb == memdb.
+	if p.UseMemDB && p.mem() != nil {
+		return p.mem().ListBooksByITunesPID(limit, offset)
 	}
 	iter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: []byte("book:0"),
@@ -1162,6 +1168,14 @@ func (p *PebbleStore) ListBooksByITunesPID(limit, offset int) ([]Book, error) {
 			continue
 		}
 		if book.ITunesPersistentID == nil || *book.ITunesPersistentID == "" {
+			continue
+		}
+		// Exclude the trash, matching the memdb fast path above. Both
+		// implementations of this method used to include soft-deleted books;
+		// they change together so they keep agreeing. Note the filter must sit
+		// BEFORE the offset/limit accounting — filtering after would let a page
+		// come back short and terminate a paging caller early.
+		if bookIsSoftDeleted(&book) {
 			continue
 		}
 		if skipped < offset {
@@ -2947,8 +2961,16 @@ func (p *PebbleStore) ListSoftDeletedBooks(limit, offset int, olderThan *time.Ti
 	// Fast path: memdb has a marked_for_deletion index, so this is O(deleted)
 	// instead of O(total) — typically the soft-deleted set is tiny relative
 	// to the full book count, so this turns a 20s Pebble scan into <50ms.
-	if mem := p.mem(); mem != nil {
-		return mem.ListSoftDeletedBooks(limit, offset, olderThan)
+	//
+	// Gated on UseMemDB as well as publication (it checked publication alone
+	// until 2026-08-14), so that turning the flag off actually reaches the
+	// Pebble path. This method is load-bearing beyond its own callers:
+	// findOrphanBookFiles unions its result in and FAILS CLOSED if it errors,
+	// because a soft-deleted book still owns its book_files and deleting them
+	// would make it unrestorable. A fallback that cannot be reached also
+	// cannot be tested, and this is not a method to leave untested.
+	if p.UseMemDB && p.mem() != nil {
+		return p.mem().ListSoftDeletedBooks(limit, offset, olderThan)
 	}
 	var books []Book
 	iter, err := p.db.NewIter(&pebble.IterOptions{
