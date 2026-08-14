@@ -1,7 +1,7 @@
 // file: internal/search/zz_repro_wildcard_phrase_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8c4d1f06-2b93-4a57-91e8-73f5a0c6d284
-// last-edited: 2026-08-13
+// last-edited: 2026-08-14
 
 package search
 
@@ -253,4 +253,34 @@ func contains(hay []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+// TestFuzzyIsCaseInsensitive pins the fuzzy sibling of defect 1, filed
+// 2026-08-13 and fixed 2026-08-14: FuzzyQuery bypasses the field analyser
+// exactly as PrefixQuery/WildcardQuery do, so a capitalised term could never
+// come within edit distance of the lowercased stored terms. There are TWO
+// construction sites (fielded and free-text); both are covered because the
+// parser routes a bare `term~` through the free-text branch and
+// `title:term~` through the fielded one.
+func TestFuzzyIsCaseInsensitive(t *testing.T) {
+	idx := wildcardPhraseCorpus(t)
+
+	for _, q := range []string{
+		"hyperion~", "Hyperion~", "HYPERION~", // free-text branch
+		"title:Hyperion~", "title:HYPERION~", // fielded branch
+		"Hyperio~", // one edit away AND mis-cased: needs the lowercase to even enter the automaton
+	} {
+		t.Run(q, func(t *testing.T) {
+			got := runQuery(t, idx, q)
+			if !contains(got, "hyperion") {
+				t.Errorf("%q did not find hyperion: got %v — a fuzzy term must be "+
+					"lowercased before matching the analysed index terms", q, got)
+			}
+			for _, bad := range []string{"sidejobs", "icarus"} {
+				if contains(got, bad) {
+					t.Errorf("IMPRECISE: %q matched unrelated %q: got %v", q, bad, got)
+				}
+			}
+		})
+	}
 }
