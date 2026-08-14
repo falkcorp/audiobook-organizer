@@ -1,5 +1,5 @@
 // file: internal/organizer/service.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
 // last-edited: 2026-08-14
 
@@ -33,6 +33,7 @@ type Store interface {
 	database.BookFileStore
 	database.OperationStore
 	database.AuthorStore
+	database.SeriesStore
 	database.NarratorStore
 	database.MaintenanceStore
 	database.TagStore
@@ -99,6 +100,10 @@ func (orgSvc *Service) SetOrganizeHooks(hooks OrganizeHooks) {
 // newOrganizer creates an Organizer with the service's hooks pre-wired.
 func (orgSvc *Service) newOrganizer() *Organizer {
 	org := NewOrganizer(&config.AppConfig)
+	// Wire the store so AuthorID/SeriesID resolve in path templates. Without
+	// this every service-path organize treated slim books as authorless —
+	// see OrganizerStore's doc comment.
+	org.SetStore(orgSvc.db)
 	if orgSvc.organizeHooks != nil {
 		org.SetHooks(orgSvc.organizeHooks)
 	}

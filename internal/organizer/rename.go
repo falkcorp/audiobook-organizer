@@ -1,5 +1,5 @@
 // file: internal/organizer/rename.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
 // last-edited: 2026-07-17
 
@@ -98,6 +98,7 @@ func (rs *RenameService) PreviewRename(bookID string) (*RenamePreview, error) {
 	}
 
 	org := NewOrganizer(&config.AppConfig)
+	org.SetStore(rs.db) // AuthorID/SeriesID must resolve — see OrganizerStore
 	proposedPath, err := org.GenerateTargetPath(book)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compute proposed path: %w", err)
@@ -127,6 +128,7 @@ func (rs *RenameService) ApplyRename(bookID, operationID string) (*RenameApplyRe
 	}
 
 	org := NewOrganizer(&config.AppConfig)
+	org.SetStore(rs.db) // AuthorID/SeriesID must resolve — see OrganizerStore
 	proposedPath, err := org.GenerateTargetPath(book)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compute proposed path: %w", err)
