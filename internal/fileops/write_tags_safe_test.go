@@ -1,7 +1,7 @@
 // file: internal/fileops/write_tags_safe_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c5d6e7f8-a9b0-1c2d-3e4f-5a6b7c8d9e0f
-// last-edited: 2026-05-01
+// last-edited: 2026-08-14
 
 package fileops
 
@@ -170,5 +170,35 @@ func TestWriteTagsSafe_NonExistentFile(t *testing.T) {
 	_, _, err := WriteTagsSafe(path, writeBytes(nil), WriteTagsSafeOptions{})
 	if err == nil {
 		t.Error("expected error for non-existent file")
+	}
+}
+
+// TestWriteTagsSafe_PreservesFileMode pins the permission contract: the
+// rewritten file must carry the ORIGINAL's mode, not os.CreateTemp's 0600.
+// The 0600 leak zeroes the POSIX-ACL mask and locked 100 books' files out of
+// the share on 2026-08-14 (E08 canary) — OpenFile's mode argument applies
+// only at creation, so an existing temp file needs an explicit chmod.
+func TestWriteTagsSafe_PreservesFileMode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audio.m4b")
+	if err := os.WriteFile(path, []byte("original audio bytes"), 0o664); err != nil {
+		t.Fatal(err)
+	}
+	// os.WriteFile honors umask; force the exact mode under test.
+	if err := os.Chmod(path, 0o664); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := WriteTagsSafe(path, writeBytes([]byte(" tagged")),
+		WriteTagsSafeOptions{}); err != nil {
+		t.Fatalf("WriteTagsSafe: %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o664 {
+		t.Fatalf("rewritten file mode = %o, want 664 (mode must survive the temp-file rename)", got)
 	}
 }
