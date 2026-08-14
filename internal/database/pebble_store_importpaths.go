@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_importpaths.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: eb97f1d9-af89-4dc7-add9-70ab7c30d137
-// last-edited: 2026-07-03
+// last-edited: 2026-08-14
 
 package database
 
@@ -60,8 +60,15 @@ func (p *PebbleStore) CountBooksByPathPrefix(prefix string) (int, error) {
 		return 0, nil
 	}
 	// Fast path: memdb scan is ~200× faster than Pebble + JSON unmarshal.
-	if mem := p.mem(); mem != nil {
-		return mem.CountBooksByPathPrefix(prefix)
+	//
+	// Gated on UseMemDB as well as publication. Dispatching on `p.mem() != nil`
+	// alone made the Pebble branch below unreachable whenever memdb was up,
+	// which is not merely a dormant fallback: it silently reduces any
+	// conformance test that flips UseMemDB to comparing memdb against itself.
+	// ListBooksByITunesPID had the same defect and was fixed on 2026-08-14 for
+	// the same reason. See aggregate_count_conformance_test.go.
+	if p.UseMemDB && p.mem() != nil {
+		return p.mem().CountBooksByPathPrefix(prefix)
 	}
 	count := 0
 	iter, err := p.db.NewIter(&pebble.IterOptions{
@@ -75,6 +82,11 @@ func (p *PebbleStore) CountBooksByPathPrefix(prefix string) (int, error) {
 	for iter.First(); iter.Valid(); iter.Next() {
 		var b Book
 		if json.Unmarshal(iter.Value(), &b) != nil {
+			continue
+		}
+		// Matches the memdb counterpart, which has always excluded the trash.
+		// See aggregate_count_conformance_test.go.
+		if bookIsSoftDeleted(&b) {
 			continue
 		}
 		if b.SourceImportPath != nil && *b.SourceImportPath != "" {
