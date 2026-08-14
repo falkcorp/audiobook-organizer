@@ -24,3 +24,18 @@
 - **Deluge discovery no longer re-offers trashed books** as unimported
   torrents, for the same reason and with the same previously-accidental
   protection made explicit.
+
+### Changed
+
+- **The soft-delete rule is now stated once.** 37 open-coded
+  `MarkedForDeletion != nil && *MarkedForDeletion` checks across eight files in
+  `internal/database` now call a shared predicate. That duplication was the
+  mechanism by which the two implementations drifted apart in the first place —
+  each open-coded the same three-token test independently and nothing noticed
+  when one stopped matching the other. `Book` and `BookCore` are separate
+  structs that each carry the flag, so both delegate to one
+  `markedForDeletionFlag`. `grep "MarkedForDeletion != nil"` over the package
+  now returns only the three reads of the caller-supplied *filter* struct.
+- **Orphan-file cleanup reports the denominator it actually used.** It logged
+  the live book count while deciding orphanhood against live + soft-deleted;
+  the field is now `owning_books` and carries the set that made the decision.

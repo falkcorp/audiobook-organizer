@@ -1,7 +1,7 @@
 // file: internal/database/pebble_quick_queries.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7f3a1b2c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
-// last-edited: 2026-05-20
+// last-edited: 2026-08-13
 
 package database
 
@@ -198,7 +198,7 @@ func (p *PebbleStore) computeQuickQueryCount(id string) (int, error) {
 		if err := json.Unmarshal(iter.Value(), &b); err != nil {
 			continue
 		}
-		if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+		if bookIsSoftDeleted(&b) {
 			continue
 		}
 		// Primary versions only (consistent with LibraryStats).
@@ -326,7 +326,7 @@ func (p *PebbleStore) GetAllBookIDsForQuickQuery(id string) ([]string, error) {
 		if err := json.Unmarshal(iter.Value(), &b); err != nil {
 			continue
 		}
-		if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+		if bookIsSoftDeleted(&b) {
 			continue
 		}
 		// Primary versions only (consistent with LibraryStats and computeQuickQueryCount).

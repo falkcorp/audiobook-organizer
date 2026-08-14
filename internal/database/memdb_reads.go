@@ -1,5 +1,5 @@
 // file: internal/database/memdb_reads.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000006
 // last-edited: 2026-08-13
 
@@ -133,7 +133,7 @@ func (m *MemStore) CountFiles() (int, error) {
 	total := 0
 	for obj := bookIter.Next(); obj != nil; obj = bookIter.Next() {
 		b := obj.(*Book)
-		if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+		if bookIsSoftDeleted(b) {
 			continue
 		}
 		n := bookFileCounts[b.ID]
@@ -163,7 +163,7 @@ func (m *MemStore) GetAllSeriesBookCounts() (map[int]int, error) {
 		if b.SeriesID == nil {
 			continue
 		}
-		if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+		if bookIsSoftDeleted(b) {
 			continue
 		}
 		out[*b.SeriesID]++
@@ -198,7 +198,7 @@ func (m *MemStore) GetAllAuthorBookCounts() (map[int]int, error) {
 		if b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion {
 			continue
 		}
-		if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+		if bookIsSoftDeleted(b) {
 			continue
 		}
 		bookHasJunction[ba.BookID] = true
@@ -218,7 +218,7 @@ func (m *MemStore) GetAllAuthorBookCounts() (map[int]int, error) {
 		if b.AuthorID == nil {
 			continue
 		}
-		if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+		if bookIsSoftDeleted(b) {
 			continue
 		}
 		out[*b.AuthorID]++
@@ -244,7 +244,7 @@ func (m *MemStore) GetAllWorkBookCounts() (map[string]int, error) {
 		if b.WorkID == nil || *b.WorkID == "" {
 			continue
 		}
-		if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+		if bookIsSoftDeleted(b) {
 			continue
 		}
 		out[*b.WorkID]++
@@ -273,7 +273,7 @@ func (m *MemStore) GetAllSeriesFileCounts() (map[int]int, error) {
 		if b.SeriesID == nil {
 			continue
 		}
-		if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+		if bookIsSoftDeleted(b) {
 			continue
 		}
 		bookToSeries[b.ID] = *b.SeriesID
@@ -324,7 +324,7 @@ func (m *MemStore) GetAllAuthorFileCounts() (map[int]int, error) {
 		if b.AuthorID == nil {
 			continue
 		}
-		if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+		if bookIsSoftDeleted(b) {
 			continue
 		}
 		bookToAuthor[b.ID] = *b.AuthorID
@@ -377,7 +377,7 @@ func (m *MemStore) GetFolderDuplicatesCore() ([][]BookCore, error) {
 	var entries []folderDupEntry
 	for obj := iter.Next(); obj != nil; obj = iter.Next() {
 		b := obj.(*Book)
-		if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+		if bookIsSoftDeleted(b) {
 			continue
 		}
 		if b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion {
@@ -434,7 +434,7 @@ func (m *MemStore) GetDuplicateBooksByMetadataCore(threshold float64) ([][]BookC
 	var entries []metadataDupEntry
 	for obj := iter.Next(); obj != nil; obj = iter.Next() {
 		b := obj.(*Book)
-		if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+		if bookIsSoftDeleted(b) {
 			continue
 		}
 		if b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion {
@@ -474,7 +474,7 @@ func (m *MemStore) GetBooksBySeriesIDCore(seriesID int, limit, offset int) ([]Bo
 	all := make([]Book, 0, 32)
 	for obj := iter.Next(); obj != nil; obj = iter.Next() {
 		b := obj.(*Book)
-		if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+		if bookIsSoftDeleted(b) {
 			continue
 		}
 		if b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion {
@@ -560,7 +560,7 @@ func (m *MemStore) GetBooksByAuthorID(authorID int, limit, offset int) ([]Book, 
 			continue
 		}
 		b := raw.(*Book)
-		if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+		if bookIsSoftDeleted(b) {
 			continue
 		}
 		if b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion {
@@ -653,11 +653,7 @@ func (m *MemStore) GetAllBooksCore(limit, offset int, filters map[string]interfa
 			}
 		}
 		if v, ok := filters["marked_for_deletion"].(bool); ok {
-			eff := false
-			if b.MarkedForDeletion != nil {
-				eff = *b.MarkedForDeletion
-			}
-			if eff != v {
+			if bookIsSoftDeleted(b) != v {
 				continue
 			}
 		}
@@ -770,7 +766,7 @@ func (m *MemStore) CountBooksByPathPrefix(prefix string) (int, error) {
 	count := 0
 	for obj := iter.Next(); obj != nil; obj = iter.Next() {
 		b := obj.(*Book)
-		if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+		if bookIsSoftDeleted(b) {
 			continue
 		}
 		if b.SourceImportPath != nil && *b.SourceImportPath != "" {
@@ -814,7 +810,7 @@ func (m *MemStore) ComputeLibraryStats(rootDir string, importPaths []ImportPath)
 	}
 	for obj := bIter.Next(); obj != nil; obj = bIter.Next() {
 		b := obj.(*Book)
-		if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+		if bookIsSoftDeleted(b) {
 			continue
 		}
 		stats.TotalBooks++

@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-08-13-deleted-but-not-gone-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 075d5d8a-d32d-428d-81fe-04c5c5039da6 -->
 <!-- last-edited: 2026-08-13 -->
 
@@ -7,7 +7,8 @@
 
 **Date:** 2026-08-13 (evening session)
 **In one line:** chasing eleven stubborn books uncovered that nearly four thousand
-deleted books had never actually stopped being processed.
+deleted books had never actually stopped being processed — and the eleven turned out to be
+the same story.
 
 ---
 
@@ -99,13 +100,45 @@ books are in the trash.
 
 ---
 
+## The eleven, resolved
+
+The 11 groups that finding #1 could not repair are now explained, and the explanation is
+finding #3.
+
+Every one of those 11 groups contains **nothing but deleted books** — 12 of them in total.
+There was no display copy to elect because there was no book left to elect one from. The
+repair pass was not failing; it was correctly declining to promote a book out of the trash.
+
+**These groups need no further work.** They are not 12 hidden books — they are 12 deleted
+books, correctly not being shown.
+
+*How this was checked, since the count alone would not have been enough:* all 3,870 groups
+containing a deleted book were queried individually, and exactly 11 came back with zero
+live members. Eleven matching eleven could be luck. But the earlier census had also
+recorded that those groups held **12 books**, and the 11 groups found here hold exactly 12
+— ten groups with one book and one with two. Two independently measured numbers agreeing
+is what makes this an answer rather than a coincidence.
+
+---
+
 ## What is left
 
-- **11 groups (12 books)** from finding #1 are still unrepaired. They are almost certainly
-  explained by finding #3 — books whose entire group is in the trash — but that has **not
-  been confirmed yet**, and it will not be written down as the answer until it is.
 - The `Unknown Author` folders remain untidy. That is now known to be a presentation
   problem, not a storage one.
+- The fix in finding #3 is committed but **not yet running on your library.** Until it
+  ships, the ~4,000 deleted books are still being processed.
+
+---
+
+## A note on the other report from today
+
+There is a second write-up from today, *The Books Search Could Not See*, which explains the
+same original symptom — your *All Jobs and Classes* search — a different way: some books
+were missing from the search catalogue.
+
+**Both are true, and they are separate faults.** That one query happened to land on two
+different defects at once, which is also why it stayed confusing for so long. Neither
+report is the complete story on its own; read them together.
 
 ---
 

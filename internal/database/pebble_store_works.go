@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_works.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1d915e6f-133a-4fba-995b-8e4b26b04486
-// last-edited: 2026-07-13
+// last-edited: 2026-08-13
 
 package database
 
@@ -197,7 +197,7 @@ func (p *PebbleStore) GetBooksByWorkID(workID string) ([]Book, error) {
 		if err != nil || b == nil {
 			continue
 		}
-		if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+		if bookIsSoftDeleted(b) {
 			continue
 		}
 		books = append(books, *b)
@@ -242,7 +242,7 @@ func (p *PebbleStore) GetAllWorkBookCounts() (map[string]int, error) {
 		if b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion {
 			continue
 		}
-		if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+		if bookIsSoftDeleted(&b) {
 			continue
 		}
 		counts[*b.WorkID]++

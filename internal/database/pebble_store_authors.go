@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_authors.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 1f8b9fd2-e424-4a09-9ee4-7b5b64660605
-// last-edited: 2026-07-13
+// last-edited: 2026-08-13
 
 package database
 
@@ -520,7 +520,7 @@ func (p *PebbleStore) GetAllAuthorBookCounts() (map[int]int, error) {
 		if book.IsPrimaryVersion != nil && !*book.IsPrimaryVersion {
 			continue
 		}
-		if book.MarkedForDeletion != nil && *book.MarkedForDeletion {
+		if bookIsSoftDeleted(book) {
 			continue
 		}
 		bookHasJunction[bookID] = true
@@ -562,7 +562,7 @@ func (p *PebbleStore) GetAllAuthorBookCounts() (map[int]int, error) {
 		if b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion {
 			continue
 		}
-		if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+		if bookIsSoftDeleted(&b) {
 			continue
 		}
 		counts[*b.AuthorID]++
@@ -621,7 +621,7 @@ func (p *PebbleStore) GetAllAuthorFileCounts_Pebble() (map[int]int, error) {
 		if b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion {
 			continue
 		}
-		if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+		if bookIsSoftDeleted(&b) {
 			continue
 		}
 		authorBooks = append(authorBooks, AuthorBook{AuthorID: *b.AuthorID, BookID: b.ID})

@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.125.0
+// version: 1.126.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-08-13
 
@@ -611,7 +611,7 @@ func (p *PebbleStore) GetAllBooksFullFrom(afterID string, limit int) ([]Book, er
 		if err := json.Unmarshal(iter.Value(), &book); err != nil {
 			return nil, err
 		}
-		if book.MarkedForDeletion != nil && *book.MarkedForDeletion {
+		if bookIsSoftDeleted(&book) {
 			continue
 		}
 		// This branch decodes the row directly instead of point-getting each
@@ -873,7 +873,7 @@ func (p *PebbleStore) walkFilteredBooksPebble(f BookSummaryFilter, visit func(*B
 				continue
 			}
 		}
-		isDeleted := book.MarkedForDeletion != nil && *book.MarkedForDeletion
+		isDeleted := bookIsSoftDeleted(&book)
 		if excludeDeleted {
 			if isDeleted {
 				continue
@@ -938,7 +938,9 @@ func (p *PebbleStore) getAllBookSummariesFull(limit, offset int) ([]BookSummary,
 	summaries := make([]BookSummary, 0, len(books))
 	for i := range books {
 		b := &books[i]
-		if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+		// Belt-and-braces: GetAllBooksCore now filters the trash itself, but
+		// this loop must not silently depend on that to stay correct.
+		if bookCoreIsSoftDeleted(b) {
 			continue
 		}
 		full := b.ToBook()
@@ -1279,7 +1281,7 @@ func (p *PebbleStore) GetDuplicateBooks() ([][]Book, error) {
 		if err := json.Unmarshal(iter.Value(), &book); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal book: %w", err)
 		}
-		if book.MarkedForDeletion != nil && *book.MarkedForDeletion {
+		if bookIsSoftDeleted(&book) {
 			continue
 		}
 
@@ -1758,7 +1760,7 @@ func (p *PebbleStore) getBooksBySeriesIDFull(seriesID int) ([]Book, error) {
 		if book.SeriesID == nil || *book.SeriesID != seriesID {
 			continue
 		}
-		if book.MarkedForDeletion != nil && *book.MarkedForDeletion {
+		if bookIsSoftDeleted(&book) {
 			continue
 		}
 		books = append(books, book)
@@ -1824,7 +1826,7 @@ func (p *PebbleStore) getBooksByAuthorIDFull(authorID int) ([]Book, error) {
 		if book.AuthorID == nil || *book.AuthorID != authorID {
 			continue
 		}
-		if book.MarkedForDeletion != nil && *book.MarkedForDeletion {
+		if bookIsSoftDeleted(&book) {
 			continue
 		}
 		books = append(books, book)
@@ -1904,7 +1906,7 @@ func (p *PebbleStore) GetBooksByAuthorIDWithRoleCore(authorID int) ([]BookCore, 
 		if err := json.Unmarshal(bookIter.Value(), &book); err != nil {
 			continue
 		}
-		if book.MarkedForDeletion != nil && *book.MarkedForDeletion {
+		if bookIsSoftDeleted(&book) {
 			continue
 		}
 		if _, inJunction := bookIDSet[book.ID]; inJunction {
@@ -2813,7 +2815,7 @@ func (p *PebbleStore) countPrimaryBooksScan() (int, error) {
 		if err := json.Unmarshal(iter.Value(), &book); err != nil {
 			return 0, err
 		}
-		if book.MarkedForDeletion != nil && *book.MarkedForDeletion {
+		if bookIsSoftDeleted(&book) {
 			continue
 		}
 		// Skip non-primary versions so duplicate editions don't inflate counts
@@ -3077,7 +3079,7 @@ func (p *PebbleStore) GetBooksByVersionGroup(groupID string) ([]Book, error) {
 			continue
 		}
 
-		if book.MarkedForDeletion != nil && *book.MarkedForDeletion {
+		if bookIsSoftDeleted(&book) {
 			continue
 		}
 
@@ -3127,7 +3129,7 @@ func (p *PebbleStore) GetBooksByMetadataSourceHash(hash string) ([]Book, error) 
 			continue
 		}
 
-		if book.MarkedForDeletion != nil && *book.MarkedForDeletion {
+		if bookIsSoftDeleted(&book) {
 			continue
 		}
 
