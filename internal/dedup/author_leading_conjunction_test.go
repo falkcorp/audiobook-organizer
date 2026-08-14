@@ -95,6 +95,14 @@ func TestNormalizeAuthorName_LeadingConjunction(t *testing.T) {
 		// NOT stripped — "and" is a prefix of a real name, not a conjunction
 		{"Anders Bergman", "Anders Bergman"},
 		{"Andrea Cremer", "Andrea Cremer"},
+		// Stripped, but the result is still not an author. These rows exist in
+		// production ("So Long, and Thanks for All the Fish" reached an artist
+		// tag and the comma branch split the title). Stripping is correct for a
+		// genuine "A, B, and C" credit list, so the pattern keeps "and" — but
+		// the data repair deliberately matches "&" only, because renaming these
+		// would launder obviously-broken rows into plausible-looking ones
+		// without fixing anything. See todo.d/20260814-author-html-entity-rows.md.
+		{"and Thanks for All the Fish", "Thanks for All the Fish"},
 		// unaffected ordinary names
 		{"Paul McGann", "Paul McGann"},
 		{"S.A. Corey", "S. A. Corey"},

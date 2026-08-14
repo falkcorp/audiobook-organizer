@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.83.0
+// version: 1.84.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-08-13
+// last-edited: 2026-08-14
 
 package database
 
@@ -95,6 +95,13 @@ type MockStore struct {
 	UpdateAuthorNameFunc func(id int, name string) error
 
 	GetAuthorsByIDsFunc func(ids []int) (map[int]*Author, error)
+
+	// Book<->Author join methods. These carry the link that matters for
+	// multi-author books: a credit list puts authors 2..n in this slice only,
+	// leaving Book.AuthorID pointing at the first. Tests that assert on a
+	// merge/relink must be able to observe writes here.
+	GetBookAuthorsFunc func(bookID string) ([]BookAuthor, error)
+	SetBookAuthorsFunc func(bookID string, authors []BookAuthor) error
 
 	// Author Alias methods
 	GetAuthorAliasesFunc    func(authorID int) ([]AuthorAlias, error)
@@ -807,10 +814,16 @@ func (m *MockStore) GetBooksByAuthorIDCore(authorID int) ([]BookCore, error) {
 }
 
 func (m *MockStore) GetBookAuthors(bookID string) ([]BookAuthor, error) {
+	if m.GetBookAuthorsFunc != nil {
+		return m.GetBookAuthorsFunc(bookID)
+	}
 	return nil, nil
 }
 
 func (m *MockStore) SetBookAuthors(bookID string, authors []BookAuthor) error {
+	if m.SetBookAuthorsFunc != nil {
+		return m.SetBookAuthorsFunc(bookID, authors)
+	}
 	return nil
 }
 
