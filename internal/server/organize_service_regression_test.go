@@ -318,11 +318,15 @@ func TestFilterBooksNeedingOrganization_SkipsSoftDeleted(t *testing.T) {
 	svc := NewOrganizeService(mockDB)
 	testLog := logger.New("test")
 
+	// Every fixture book carries a resolved author: the organize author-gate
+	// (#2457) defers authorless books, and THIS test's subject is soft-delete
+	// filtering, not the gate.
+	author := &database.Author{ID: 1, Name: "Fixture Author"}
 	books := []database.Book{
-		{ID: "1", Title: "Active Book", FilePath: "/import/book1.m4b", MarkedForDeletion: &notDeleted},
-		{ID: "2", Title: "Deleted Book", FilePath: "/import/book2.m4b", MarkedForDeletion: &deleted},
-		{ID: "3", Title: "Also Deleted", FilePath: "/import/book3.m4b", MarkedForDeletion: &deleted},
-		{ID: "4", Title: "Another Active", FilePath: "/import/book4.m4b", MarkedForDeletion: &notDeleted},
+		{ID: "1", Title: "Active Book", FilePath: "/import/book1.m4b", MarkedForDeletion: &notDeleted, Author: author},
+		{ID: "2", Title: "Deleted Book", FilePath: "/import/book2.m4b", MarkedForDeletion: &deleted, Author: author},
+		{ID: "3", Title: "Also Deleted", FilePath: "/import/book3.m4b", MarkedForDeletion: &deleted, Author: author},
+		{ID: "4", Title: "Another Active", FilePath: "/import/book4.m4b", MarkedForDeletion: &notDeleted, Author: author},
 	}
 
 	needsOrganize, _ := svc.FilterBooksNeedingOrganization(books, testLog)
@@ -393,9 +397,12 @@ func TestFilterBooksNeedingOrganization_AllowsNonPrimaryWithoutPrimary(t *testin
 	svc := NewOrganizeService(mockDB)
 	testLog := logger.New("test")
 
+	// Resolved author required — the organize author-gate (#2457) defers
+	// authorless books, and this test's subject is version-group filtering.
 	books := []database.Book{
 		{ID: "orphan-1", Title: "No Primary", FilePath: "/import/orphan.m4b",
-			IsPrimaryVersion: &isNotPrimary, VersionGroupID: &vgID},
+			IsPrimaryVersion: &isNotPrimary, VersionGroupID: &vgID,
+			Author: &database.Author{ID: 1, Name: "Fixture Author"}},
 	}
 
 	needsOrganize, _ := svc.FilterBooksNeedingOrganization(books, testLog)

@@ -1,5 +1,5 @@
 // file: internal/organizer/organizer.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-08-13
 
@@ -96,7 +96,7 @@ type Organizer struct {
 	// resolution. Nil store → those lookups skip with the same
 	// semantics the pre-audit `GetGlobalStore() == nil` branches had
 	// (SERVER-GLOBAL-STORE-AUDIT phase 5).
-	store database.Store
+	store OrganizerStore
 }
 
 // SetHooks sets the optional organize hooks (e.g. collision callback).
@@ -104,9 +104,26 @@ func (o *Organizer) SetHooks(hooks OrganizeHooks) {
 	o.hooks = hooks
 }
 
+// OrganizerStore is the narrow read surface the Organizer needs: author and
+// series resolution for path templates, and book lookups for duplicate-target
+// identification. It is deliberately small so every organize entry point —
+// the bulk Service (whose composite Store is narrower than database.Store),
+// the preview/rename services, and the server's auto-organize — can wire a
+// store. Until 2026-08-14 ONLY auto-organize called SetStore, which made the
+// AuthorID fallback in expandPattern dead code everywhere else: any book
+// whose Author struct was not populated organized into "Unknown Author/"
+// with its AuthorID sitting right there. That is the mechanism behind the
+// 2026-08-11 mass-reorganize (audit, open question 2 — answered).
+type OrganizerStore interface {
+	GetAuthorByID(id int) (*database.Author, error)
+	GetSeriesByID(id int) (*database.Series, error)
+	GetBookByFileHash(hash string) (*database.Book, error)
+	GetBookByFilePath(path string) (*database.Book, error)
+}
+
 // SetStore wires the database used for duplicate-file + author/series
 // lookups. Idempotent; pass nil to disable lookups.
-func (o *Organizer) SetStore(s database.Store) {
+func (o *Organizer) SetStore(s OrganizerStore) {
 	o.store = s
 }
 

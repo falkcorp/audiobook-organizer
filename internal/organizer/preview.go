@@ -1,5 +1,5 @@
 // file: internal/organizer/preview.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: f1a2b3c4-d5e6-7890-abcd-ef1234567890
 
 package organizer
@@ -80,6 +80,7 @@ func (ops *PreviewService) PreviewOrganize(bookID string) (*PreviewResponse, err
 	}
 
 	org := NewOrganizer(&config.AppConfig)
+	org.SetStore(ops.db) // AuthorID/SeriesID must resolve — see OrganizerStore
 	currentPath := book.FilePath
 
 	// Always fetch book_files — this is the authoritative source for what files
