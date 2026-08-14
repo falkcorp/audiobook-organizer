@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_booksig_migrate_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9e51c0d3-2a87-4f16-b74e-5c8203f9a1d6
 // last-edited: 2026-08-13
 
@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/stretchr/testify/require"
@@ -78,6 +79,86 @@ func migrateRequireRowStripped(t *testing.T, store *PebbleStore, id, tag string)
 	v1, _, _, _, _ := sigFixture(tag)
 	require.NotContains(t, row, v1,
 		"the signature VALUE must not survive in the row under any key")
+}
+
+// TestMigrateBookSigToSidecar_PartialSidecarIsHealedNotSkipped covers the one
+// way this migration could still delete data: a sidecar holding a STRICT SUBSET
+// of the row's five fields. bookSigOf writes a sidecar when ANY field is
+// non-nil, so a partial one is constructible — a rollback to a pre-#2387 binary
+// writes inline again while an older sidecar lingers. If "sidecar exists" meant
+// "leave it alone", stripping the row would drop the fields it lacks from BOTH
+// places, and booksig_recovery_audit cannot see that: nil reads as
+// "never had one", not as damage.
+//
+// The seeded sidecar carries only V1+Mask; the row carries all five. Correct
+// behaviour is to fill the three missing fields from inline while leaving the
+// two it already has at their (authoritative, DIFFERENT) values.
+func TestMigrateBookSigToSidecar_PartialSidecarIsHealedNotSkipped(t *testing.T) {
+	env := newBookSigEnv(t)
+	const id = "partial-sidecar-1"
+	migrateSeedLegacyRow(t, env.store, id, "inline", nil)
+
+	// Sidecar predates the row's inline values and covers only two fields.
+	newerV1, newerMask, _, _, _ := sigFixture("newer")
+	partial, err := json.Marshal(map[string]any{"v1": newerV1, "mask": newerMask})
+	require.NoError(t, err)
+	require.NoError(t, env.store.db.Set(bookSigKey(id), partial, pebble.Sync))
+
+	outcome, err := env.store.MigrateBookSigToSidecar(id, false)
+	require.NoError(t, err)
+	require.Equal(t, BookSigMigrateStrippedOnly, outcome)
+
+	migrateRequireRowStripped(t, env.store, id, "inline")
+
+	var got bookSigSidecar
+	require.NoError(t, json.Unmarshal(migrateSidecarRaw(t, env.store, id), &got))
+
+	// Present sidecar fields win: NOT overwritten by the inline copy.
+	require.NotNil(t, got.V1)
+	require.Equal(t, newerV1, *got.V1, "an existing sidecar value must not be downgraded to the inline one")
+	require.NotNil(t, got.Mask)
+	require.Equal(t, newerMask, *got.Mask)
+
+	// Absent sidecar fields are filled from inline rather than lost with the row.
+	_, _, wantSegments, wantCoverage, wantBuiltAt := sigFixture("inline")
+	require.NotNil(t, got.Segments, "segments lived ONLY inline; stripping the row must not delete it")
+	require.Equal(t, wantSegments, *got.Segments)
+	require.NotNil(t, got.CoveragePct, "coverage_pct lived ONLY inline")
+	require.Equal(t, wantCoverage, *got.CoveragePct)
+	require.NotNil(t, got.BuiltAt, "built_at lived ONLY inline")
+	require.True(t, wantBuiltAt.Equal(*got.BuiltAt))
+
+	// And the whole book still reads back intact through the normal path.
+	book, err := env.store.GetBookByID(id)
+	require.NoError(t, err)
+	require.NotNil(t, book.BookSigSegments)
+	require.Equal(t, wantSegments, *book.BookSigSegments)
+}
+
+// TestMigrateBookSigToSidecar_CompleteSidecarIsLeftByteIdentical is the other
+// half of the pair above: when the sidecar already covers every inline field,
+// nothing is filled and the key must not be rewritten at all. Without this, the
+// heal path could quietly churn every already-migrated book's sidecar.
+func TestMigrateBookSigToSidecar_CompleteSidecarIsLeftByteIdentical(t *testing.T) {
+	env := newBookSigEnv(t)
+	const id = "complete-sidecar-1"
+	migrateSeedLegacyRow(t, env.store, id, "inline", nil)
+
+	newerV1, newerMask, segments, coverage, builtAt := sigFixture("newer")
+	complete, err := json.Marshal(map[string]any{
+		"v1": newerV1, "mask": newerMask, "segments": segments,
+		"coverage_pct": coverage, "built_at": builtAt.Format(time.RFC3339),
+	})
+	require.NoError(t, err)
+	require.NoError(t, env.store.db.Set(bookSigKey(id), complete, pebble.Sync))
+
+	outcome, err := env.store.MigrateBookSigToSidecar(id, false)
+	require.NoError(t, err)
+	require.Equal(t, BookSigMigrateStrippedOnly, outcome)
+
+	migrateRequireRowStripped(t, env.store, id, "inline")
+	require.Equal(t, complete, migrateSidecarRaw(t, env.store, id),
+		"a sidecar that already covers every inline field must be left untouched, not rewritten")
 }
 
 // TestBookSigJSONKeysMatchStructTags is the instrument check for the whole

@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_booksig_migrate.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6a4e2f18-7d05-4b93-8c61-9f2a0e75d3b8
 // last-edited: 2026-08-13
 
@@ -64,10 +64,12 @@ const (
 	// the row rewritten without it, in one batch.
 	BookSigMigrateMigrated
 	// BookSigMigrateStrippedOnly: the row carried an inline signature AND a
-	// sidecar already existed. The sidecar is authoritative (see
-	// bookSigSidecar.applyTo), so it is left alone and only the row is
-	// stripped. Writing the stale inline values over a newer sidecar would be
-	// a silent downgrade.
+	// sidecar already existed, so no NEW sidecar was created. The existing one
+	// is authoritative (see bookSigSidecar.applyTo) FIELD BY FIELD: values it
+	// already holds are kept — writing stale inline values over a newer sidecar
+	// would be a silent downgrade — while fields it is MISSING are filled from
+	// inline, so stripping the row cannot delete a field that lived only there.
+	// A sidecar that already covers every inline field is not rewritten at all.
 	BookSigMigrateStrippedOnly
 	// BookSigMigrateSkippedRaced: the row changed under us between read and
 	// commit, so nothing was written. See the CAS note on
@@ -167,6 +169,45 @@ func stripBookSigJSONKeys(row []byte) (out []byte, changed bool, err error) {
 	return out, true, nil
 }
 
+// mergeBookSigSidecar decodes an existing sidecar payload and fills only its
+// NIL fields from inline. Returns filled=false (and out=nil) when the sidecar
+// already covers every field inline has, so the caller can leave the key alone
+// rather than rewriting it byte-for-byte.
+//
+// The asymmetry is the point: a non-nil sidecar value is never replaced, so a
+// newer sidecar cannot be downgraded by a stale inline copy; a nil one is
+// always filled, so stripping the row cannot drop a field that lived only
+// inline. Both directions of loss are closed.
+func mergeBookSigSidecar(existing []byte, inline bookSigSidecar) (out []byte, filled bool, err error) {
+	var cur bookSigSidecar
+	if err := json.Unmarshal(existing, &cur); err != nil {
+		return nil, false, fmt.Errorf("unmarshal existing sidecar: %w", err)
+	}
+	if cur.V1 == nil && inline.V1 != nil {
+		cur.V1, filled = inline.V1, true
+	}
+	if cur.Mask == nil && inline.Mask != nil {
+		cur.Mask, filled = inline.Mask, true
+	}
+	if cur.Segments == nil && inline.Segments != nil {
+		cur.Segments, filled = inline.Segments, true
+	}
+	if cur.BuiltAt == nil && inline.BuiltAt != nil {
+		cur.BuiltAt, filled = inline.BuiltAt, true
+	}
+	if cur.CoveragePct == nil && inline.CoveragePct != nil {
+		cur.CoveragePct, filled = inline.CoveragePct, true
+	}
+	if !filled {
+		return nil, false, nil
+	}
+	out, err = json.Marshal(cur)
+	if err != nil {
+		return nil, false, fmt.Errorf("marshal merged sidecar: %w", err)
+	}
+	return out, true, nil
+}
+
 // MigrateBookSigToSidecar moves book id's inline signature into the
 // `book_sig:<id>` sidecar and rewrites the row without it, in ONE Pebble batch
 // so there is never a moment where the row is stripped and the sidecar is
@@ -244,7 +285,27 @@ func (p *PebbleStore) MigrateBookSigToSidecar(id string, dryRun bool) (BookSigMi
 		return BookSigMigrateNotCandidate, fmt.Errorf("read book signature sidecar %q: %w", id, err)
 	}
 	if existing != nil {
-		return p.commitBookSigMigration(id, rowKey, before, stripped, nil, dryRun, BookSigMigrateStrippedOnly)
+		// ...but "authoritative" is per-FIELD, not per-record. bookSigOf/
+		// writeBookSigToBatch write a sidecar whenever ANY of the five is
+		// non-nil, so a sidecar holding a strict subset of the row's fields is
+		// constructible — most plausibly by a rollback to a pre-#2387 binary,
+		// which writes inline again while an older sidecar lingers. Stripping
+		// all five inline keys and leaving that sidecar alone would delete the
+		// fields it lacks from BOTH places: exactly the undetectable loss this
+		// whole function exists to prevent.
+		//
+		// So fill, don't skip. Present sidecar values still win; only nil ones
+		// are sourced from inline. That cannot downgrade a newer sidecar and
+		// cannot lose an inline field. Counted as stripped_only either way —
+		// the row-side effect is the same.
+		merged, filled, err := mergeBookSigSidecar(existing, sig)
+		if err != nil {
+			return BookSigMigrateNotCandidate, fmt.Errorf("merge book signature sidecar %q: %w", id, err)
+		}
+		if !filled {
+			merged = nil // sidecar already covers every inline field; leave it untouched.
+		}
+		return p.commitBookSigMigration(id, rowKey, before, stripped, merged, dryRun, BookSigMigrateStrippedOnly)
 	}
 
 	payload, err := json.Marshal(sig)
