@@ -1,9 +1,10 @@
 // file: web/src/components/audiobooks/BulkMetadataSearchDialog.tsx
-// version: 1.4.1
+// version: 1.5.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-08-07
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useRef } from 'react';
+import { applyFieldClick } from './fieldRangeSelect';
 import {
   Avatar,
   Box,
@@ -99,6 +100,8 @@ export function BulkMetadataSearchDialog({ open, books, onClose, onComplete, toa
   const [applying, setApplying] = useState(false);
   const [expandedCard, setExpandedCard] = useState<number | null>(null);
   const [selectedFields, setSelectedFields] = useState<Set<string>>(new Set());
+  // Anchor for shift-click range selection over the visible field rows.
+  const fieldAnchorRef = useRef<string | null>(null);
   const [bookStatuses, setBookStatuses] = useState<Map<string, BookStatus>>(new Map());
   const [writeToFiles, setWriteToFiles] = useState(true);
   const [undoing, setUndoing] = useState(false);
@@ -328,6 +331,17 @@ export function BulkMetadataSearchDialog({ open, books, onClose, onComplete, toa
       if (next.has(field)) next.delete(field);
       else next.add(field);
       return next;
+    });
+  };
+  void toggleField; // retained for non-range callers/tests
+
+  // Plain click toggles; shift-click selects the whole visible range from the
+  // last-clicked field (file-manager semantics). See fieldRangeSelect.ts.
+  const handleFieldClick = (field: string, shiftKey: boolean, visibleFields: string[]) => {
+    setSelectedFields((prev) => {
+      const r = applyFieldClick(prev, field, shiftKey, fieldAnchorRef.current, visibleFields);
+      fieldAnchorRef.current = r.anchor;
+      return r.next;
     });
   };
 
@@ -678,17 +692,22 @@ export function BulkMetadataSearchDialog({ open, books, onClose, onComplete, toa
                 </Button>
                 <Collapse in={expandedCard === idx}>
                   <Box sx={{ mt: 0.5, pl: 1 }}>
-                    {FIELD_OPTIONS.map((field) => {
-                      const value = candidate[field as keyof MetadataCandidate];
-                      if (value === undefined || value === null || value === '') return null;
-                      return (
-                        <FormControlLabel
-                          key={field}
-                          control={<Checkbox checked={selectedFields.has(field)} onChange={() => toggleField(field)} size="small" />}
-                          label={<Typography variant="body2">{FIELD_LABELS[field] || field}: {String(value)}</Typography>}
-                        />
-                      );
-                    })}
+                    {(() => {
+                      const visibleFields = FIELD_OPTIONS.filter((f) => {
+                        const v = candidate[f as keyof MetadataCandidate];
+                        return v !== undefined && v !== null && v !== '';
+                      });
+                      return visibleFields.map((field) => {
+                        const value = candidate[field as keyof MetadataCandidate];
+                        return (
+                          <FormControlLabel
+                            key={field}
+                            control={<Checkbox checked={selectedFields.has(field)} onClick={(e) => { e.preventDefault(); handleFieldClick(field, e.shiftKey, visibleFields); }} onChange={() => {}} size="small" />}
+                            label={<Typography variant="body2">{FIELD_LABELS[field] || field}: {String(value)}</Typography>}
+                          />
+                        );
+                      });
+                    })()}
                     <Box sx={{ mt: 0.5 }}>
                       <Button
                         variant="outlined"
