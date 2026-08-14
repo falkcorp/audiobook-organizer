@@ -548,7 +548,7 @@ func (orgSvc *Service) FilterBooksNeedingOrganization(allBooks []database.Book, 
 		}
 
 		// Skip soft-deleted books
-		if book.MarkedForDeletion != nil && *book.MarkedForDeletion {
+		if book.IsSoftDeleted() {
 			skippedDeleted++
 			continue
 		}

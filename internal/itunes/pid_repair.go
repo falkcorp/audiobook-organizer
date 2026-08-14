@@ -262,7 +262,7 @@ func isLivePrimary(store PIDRepairStore, bookID string, cache map[string]*databa
 		return false
 	}
 	primary := b.IsPrimaryVersion == nil || *b.IsPrimaryVersion
-	deleted := b.MarkedForDeletion != nil && *b.MarkedForDeletion
+	deleted := b.IsSoftDeleted()
 	return primary && !deleted
 }
 

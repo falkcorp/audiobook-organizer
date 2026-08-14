@@ -224,7 +224,7 @@ func ApplyVersionGroup(store database.Store) func(context.Context, database.Revi
 					"item", item.ID, "book", id, "reason", "not found (hard-deleted since hold was created)")
 				continue
 			}
-			if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+			if b.IsSoftDeleted() {
 				slog.Info("regroup version-group apply: skipping member",
 					"item", item.ID, "book", id, "reason", "soft-deleted (merged away since hold was created)")
 				continue
@@ -358,7 +358,7 @@ func presentMembers(store database.Store, ids []string) ([]string, error) {
 				"book", id, "reason", "not found (hard-deleted since hold was created)")
 			continue
 		}
-		if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+		if b.IsSoftDeleted() {
 			slog.Info("regroup apply: skipping member",
 				"book", id, "reason", "soft-deleted (merged away since hold was created)")
 			continue

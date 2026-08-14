@@ -235,7 +235,7 @@ func (p *Plugin) runTitleRepair(ctx context.Context, raw json.RawMessage, report
 		}
 
 		// Cheap pre-gate before any per-book DB reads.
-		if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+		if b.IsSoftDeleted() {
 			skipDeleted.Add(1)
 			return nil
 		}
@@ -271,7 +271,7 @@ func (p *Plugin) runTitleRepair(ctx context.Context, raw json.RawMessage, report
 		if b.MetadataSource != nil {
 			metaSource = *b.MetadataSource
 		}
-		deleted := b.MarkedForDeletion != nil && *b.MarkedForDeletion
+		deleted := b.IsSoftDeleted()
 
 		d := decideTitleRepair(titleRepairBook{
 			Title:             b.Title,

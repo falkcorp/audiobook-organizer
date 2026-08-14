@@ -415,7 +415,7 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 
 	// If soft delete requested, mark for deletion instead of hard delete
 	if opts.SoftDelete {
-		if (book.MarkedForDeletion != nil && *book.MarkedForDeletion) ||
+		if book.IsSoftDeleted() ||
 			(book.LibraryState != nil && strings.EqualFold(*book.LibraryState, "deleted")) {
 			return nil, fmt.Errorf("audiobook already soft deleted")
 		}

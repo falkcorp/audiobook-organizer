@@ -103,7 +103,7 @@ func (p *Plugin) runQuarantineChapterArtifacts(ctx context.Context, rawParams js
 	titleCount := make(map[string]int, len(books))
 	for i := range books {
 		b := &books[i]
-		if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+		if b.IsSoftDeleted() {
 			continue
 		}
 		norm := util.NormalizeTitle(b.Title)
@@ -132,7 +132,7 @@ func (p *Plugin) runQuarantineChapterArtifacts(ctx context.Context, rawParams js
 	var candidates []candidate
 	for i := range books {
 		b := &books[i]
-		if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+		if b.IsSoftDeleted() {
 			continue
 		}
 		norm := util.NormalizeTitle(b.Title)
