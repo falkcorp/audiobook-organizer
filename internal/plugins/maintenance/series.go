@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f6a7b8c9-d0e1-2345-f012-567890123456
-// last-edited: 2026-05-07
+// last-edited: 2026-08-14
 
 package maintenance
 
@@ -44,6 +44,13 @@ func (p *Plugin) runSeriesNormalize(ctx context.Context, _ json.RawMessage, repo
 		p.deps.EnqueueWriteBack(bookID)
 	}
 	affected, err := p.deps.ExecuteSeriesNormalizeCore(ctx, store, enqueueWB)
+	// Renaming a series changes the cached series list, which carries a 24-hour
+	// TTL. Without this the normalize lands in the store while /api/v1/series
+	// keeps serving the old names. Only invalidate when rows actually changed;
+	// dropping a warm cache for a no-op run costs a full recount for nothing.
+	if len(affected) > 0 {
+		p.deps.InvalidateSeriesCache()
+	}
 	msg := fmt.Sprintf("Series normalize complete: %d series affected, %d books enqueued for write-back",
 		len(affected), len(affected))
 	_ = reporter.Log(slog.LevelInfo, msg)

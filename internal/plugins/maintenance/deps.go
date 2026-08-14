@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-08-14
 
@@ -80,6 +80,11 @@ type ServerDeps interface {
 	// record, and the one page a user would check to confirm it still showed
 	// the old names. Measured 2026-08-14 after author-conjunction-repair.
 	InvalidateAuthorsCache()
+	// InvalidateSeriesCache invalidates the cached series list. Call it from any
+	// op that created, renamed, merged or deleted a series: the cache carries a
+	// 24-hour TTL and is warmed at startup, so without this the op's result is
+	// invisible on /api/v1/series for up to a day and reads as a no-op.
+	InvalidateSeriesCache()
 	// MetadataUpgradeRun runs the metadata upgrade scan up to limit books.
 	// progress may be nil; when non-nil it is updated every 25 books checked
 	// (M7, 2026-07 error-correction sweep — this is a 120-minute,

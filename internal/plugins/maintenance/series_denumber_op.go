@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_denumber_op.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 3f0b6c84-52d1-4a97-9e35-c8b71d0af426
-// last-edited: 2026-08-06
+// last-edited: 2026-08-14
 
 package maintenance
 
@@ -328,6 +328,14 @@ func (p *Plugin) runSeriesDenumber(ctx context.Context, raw json.RawMessage, rep
 			_ = reporter.UpdateProgress(idx+1, len(plans),
 				fmt.Sprintf("merged %d/%d series (%d books moved)", merged, len(plans), movedBooks))
 		}
+	}
+
+	// Creating base series, moving books between them and deleting the emptied
+	// ones all change the cached series list (24-hour TTL, warmed at startup).
+	// Without this the denumber result is invisible on /api/v1/series until the
+	// next restart, which reads as an op that did nothing.
+	if created > 0 || deleted > 0 || movedBooks > 0 {
+		p.deps.InvalidateSeriesCache()
 	}
 
 	summary := fmt.Sprintf(

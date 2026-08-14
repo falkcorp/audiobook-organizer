@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_helpers.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 550a807d-8c00-4e34-9a8c-52a80710a0b9
-// last-edited: 2026-07-07
+// last-edited: 2026-08-14
 //
 // Shared, non-HTTP helpers that were extracted from duplicates_handlers.go when
 // the 17 duplicates HTTP handlers moved to internal/server/handlers/duplicates.
@@ -300,6 +300,22 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store interface {
 
 	if s.dedupCache != nil {
 		s.dedupCache.InvalidateAll()
+	}
+
+	// Drop the cached series list, but only when this run actually removed rows.
+	// The cache holds a 24-hour TTL and is warmed at startup, and until now it
+	// was invalidated only by the interactive entities API — so a prune that
+	// merged and deleted correctly left /api/v1/series serving the pre-prune
+	// list, which is indistinguishable from a prune that did nothing. Measured
+	// on production 2026-08-14: "17 duplicates merged, 326 orphans deleted, 0
+	// errors" followed by a series list still reporting all 14,629 rows.
+	//
+	// A run that cleaned nothing must NOT invalidate: it changed nothing, and
+	// dropping a warm cache costs a full recount for no reason. Same rule the
+	// author-conjunction repair follows (658d91a2).
+	if totalCleaned > 0 {
+		s.InvalidateSeriesCache()
+		_ = progress.Log("info", fmt.Sprintf("Invalidated the cached series list (%d rows removed)", totalCleaned), nil)
 	}
 
 	return nil

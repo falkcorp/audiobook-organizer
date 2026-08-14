@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-08-14
 
@@ -128,6 +128,22 @@ func (s *Server) InvalidateDedupCache() {
 func (s *Server) InvalidateAuthorsCache() {
 	if s.authorsCache != nil {
 		s.authorsCache.InvalidateAll()
+	}
+}
+
+// InvalidateSeriesCache drops the cached series list. The series counterpart of
+// InvalidateAuthorsCache, and it exists for the same reason: the cache carries a
+// 24-hour TTL, is warmed at startup by warmSeriesCache, and was invalidated only
+// by the interactive entities API. A maintenance op that merged or deleted
+// series therefore left /api/v1/series serving the pre-op list for up to a day.
+//
+// Measured on production 2026-08-14: a maintenance.series-prune run reported
+// "17 duplicates merged, 326 orphans deleted, 0 errors" and the series list kept
+// returning the same 14,629 rows with the same 329 zero-book entries — a
+// completed repair that is indistinguishable from one that silently did nothing.
+func (s *Server) InvalidateSeriesCache() {
+	if s.seriesCache != nil {
+		s.seriesCache.InvalidateAll()
 	}
 }
 
