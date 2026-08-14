@@ -1,7 +1,7 @@
 // file: internal/database/memdb_summaries.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000008
-// last-edited: 2026-08-13
+// last-edited: 2026-08-14
 
 package database
 
@@ -147,15 +147,6 @@ func (m *MemStore) GetBookSummaries(limit, offset int, f BookSummaryFilter) ([]B
 		wantPrimary = *f.IsPrimaryVersion
 	}
 
-	// excludeDeleted: by default we drop marked_for_deletion=true rows
-	// (mirrors getAllBookSummariesFull). An explicit filter overrides.
-	excludeDeleted := true
-	requireDeleted := false
-	if f.MarkedForDeletion != nil {
-		excludeDeleted = false
-		requireDeleted = *f.MarkedForDeletion
-	}
-
 	cap0 := limit
 	if cap0 > 4096 {
 		cap0 = 4096
@@ -179,15 +170,13 @@ func (m *MemStore) GetBookSummaries(limit, offset int, f BookSummaryFilter) ([]B
 
 		// Apply filters before pagination so offset/limit match the
 		// post-filter set, not the pre-filter set.
-		if excludeDeleted {
-			if bookIsSoftDeleted(b) {
-				continue
-			}
-		} else {
-			isDel := bookIsSoftDeleted(b)
-			if isDel != requireDeleted {
-				continue
-			}
+		//
+		// f.MarkedForDeletion is the tri-state: nil excludes the trash
+		// (the default library view), &true requires it, &false requires
+		// live rows. The policy itself lives in includeByDeletionState so
+		// that GetAllBooksCore cannot spell it differently.
+		if !includeByDeletionState(bookIsSoftDeleted(b), f.MarkedForDeletion) {
+			continue
 		}
 
 		// In-loop filter pushdowns. Each predicate is O(1) per row; the
@@ -303,13 +292,6 @@ func (m *MemStore) CountBookSummaries(f BookSummaryFilter) (int, error) {
 	if primaryFilter {
 		wantPrimary = *f.IsPrimaryVersion
 	}
-	excludeDeleted := true
-	requireDeleted := false
-	if f.MarkedForDeletion != nil {
-		excludeDeleted = false
-		requireDeleted = *f.MarkedForDeletion
-	}
-
 	n := 0
 	for obj := iter.Next(); obj != nil; obj = iter.Next() {
 		b := obj.(*Book)
@@ -319,15 +301,11 @@ func (m *MemStore) CountBookSummaries(f BookSummaryFilter) (int, error) {
 				continue
 			}
 		}
-		if excludeDeleted {
-			if bookIsSoftDeleted(b) {
-				continue
-			}
-		} else {
-			isDel := bookIsSoftDeleted(b)
-			if isDel != requireDeleted {
-				continue
-			}
+		// Same tri-state policy as the listing pass above. This is a COUNT
+		// of what that pass would return, so the two must agree by
+		// construction, not by two people writing the same if/else.
+		if !includeByDeletionState(bookIsSoftDeleted(b), f.MarkedForDeletion) {
+			continue
 		}
 		if f.ExcludeQuarantined && b.QuarantinedAt != nil {
 			continue

@@ -1,7 +1,7 @@
 // file: internal/database/memdb_reads.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000006
-// last-edited: 2026-08-13
+// last-edited: 2026-08-14
 
 package database
 
@@ -607,7 +607,12 @@ func (m *MemStore) GetAllBooksCore(limit, offset int, filters map[string]interfa
 	//
 	// A caller that genuinely wants deleted rows says so with the filter key
 	// (or uses ListSoftDeletedBooks); the default is the documented contract.
-	_, callerChoseDeletionState := filters["marked_for_deletion"]
+	//
+	// The map is decoded to the same *bool tri-state getAllBookSummariesFiltered
+	// takes, so both can share includeByDeletionState. Decoding here rather than
+	// in the shared helper keeps the helper ignorant of this method's untyped
+	// filter map — that map shape is this method's problem, the policy is not.
+	wantDeleted := deletionStateFromFilters(filters)
 
 	var (
 		iter interface {
@@ -640,7 +645,7 @@ func (m *MemStore) GetAllBooksCore(limit, offset int, filters map[string]interfa
 
 	for obj := iter.Next(); obj != nil; obj = iter.Next() {
 		b := obj.(*Book)
-		if !callerChoseDeletionState && bookIsSoftDeleted(b) {
+		if !includeByDeletionState(bookIsSoftDeleted(b), wantDeleted) {
 			continue
 		}
 		if v, ok := filters["is_primary_version"].(bool); ok {
@@ -652,11 +657,10 @@ func (m *MemStore) GetAllBooksCore(limit, offset int, filters map[string]interfa
 				continue
 			}
 		}
-		if v, ok := filters["marked_for_deletion"].(bool); ok {
-			if bookIsSoftDeleted(b) != v {
-				continue
-			}
-		}
+		// No "marked_for_deletion" predicate here: the single
+		// includeByDeletionState call above covers BOTH the default
+		// exclusion and the explicit require-deleted/require-live cases,
+		// because "no filter" and "require live" are the same state.
 		if v, ok := filters["series_id"].(int); ok {
 			if b.SeriesID == nil || *b.SeriesID != v {
 				continue
@@ -1019,6 +1023,16 @@ func (m *MemStore) GetBookFilesNeedingDelugeImportCore() ([]BookFileCore, error)
 //
 // Returns the full match-set when limit <= 0 (matches the GetAllBooks
 // "fetch all" convention used by the iTunes writeback-preview handler).
+//
+// Soft-deleted books are EXCLUDED. Both of this method's callers render into
+// ITunesBookMapping, which has no field for a book's deleted state, so neither
+// can show "in the trash but still mapped" even if that were wanted — the DTO
+// settles what would otherwise be a judgement call. The consequence that
+// matters is the writeback preview: it decides which metadata is offered for
+// writing back to the iTunes library, and a book the user deleted should not
+// be in that set. Both implementations of this method already agreed in
+// including them (so this was consistent behaviour, not the memdb/Pebble drift
+// #2392 fixed) and both change together here so they keep agreeing.
 func (m *MemStore) ListBooksByITunesPID(limit, offset int) ([]Book, error) {
 	txn := m.db.Txn(false)
 	defer txn.Abort()
@@ -1035,6 +1049,9 @@ func (m *MemStore) ListBooksByITunesPID(limit, offset int) ([]Book, error) {
 		// pointer to an empty string would only be skipped by the indexer
 		// itself — keep the check so callers can rely on the postcondition.
 		if b.ITunesPersistentID == nil || *b.ITunesPersistentID == "" {
+			continue
+		}
+		if bookIsSoftDeleted(b) {
 			continue
 		}
 		all = append(all, *b)

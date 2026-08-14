@@ -1,7 +1,7 @@
 // file: internal/database/book_visibility_conformance_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e398a03c-a0e4-4e64-8da3-3beac8e0ff6b
-// last-edited: 2026-08-13
+// last-edited: 2026-08-14
 
 package database
 
@@ -251,4 +251,177 @@ func TestGetAllBooksCore_PaginationPartitionsTheLiveSet(t *testing.T) {
 	// backends must be indistinguishable to a paging caller.
 	require.ElementsMatch(t, traverse[true], traverse[false],
 		"memdb and Pebble paged traversals of GetAllBooksCore recovered different book sets")
+}
+
+// itunesPIDConformanceFixture builds books with iTunes persistent IDs, split
+// live/soft-deleted, plus one book with NO PID that must never appear.
+type itunesPIDConformanceFixture struct {
+	livePIDBookIDs    []string
+	deletedPIDBookIDs []string
+	noPIDBookID       string
+}
+
+func buildITunesPIDConformanceFixture(t *testing.T, store Store) itunesPIDConformanceFixture {
+	t.Helper()
+
+	var fx itunesPIDConformanceFixture
+	yes := true
+
+	mk := func(title, pid string) *Book {
+		b := &Book{Title: title, FilePath: "/lib/" + title}
+		if pid != "" {
+			p := pid
+			b.ITunesPersistentID = &p
+		}
+		created, err := store.CreateBook(b)
+		require.NoError(t, err)
+		return created
+	}
+
+	for i, title := range []string{"PID Live One", "PID Live Two", "PID Live Three"} {
+		created := mk(title, fmt.Sprintf("AAAA00000000000%d", i))
+		fx.livePIDBookIDs = append(fx.livePIDBookIDs, created.ID)
+	}
+
+	// Soft-delete through the real update path so the memdb re-index runs,
+	// exactly as buildSoftDelConformanceFixture does — a row born deleted
+	// would skip the transition this method has to survive.
+	for i, title := range []string{"PID Trashed One", "PID Trashed Two"} {
+		created := mk(title, fmt.Sprintf("BBBB00000000000%d", i))
+		created.MarkedForDeletion = &yes
+		_, err := store.UpdateBook(created.ID, created)
+		require.NoError(t, err)
+		fx.deletedPIDBookIDs = append(fx.deletedPIDBookIDs, created.ID)
+	}
+
+	fx.noPIDBookID = mk("No PID At All", "").ID
+	return fx
+}
+
+// TestListBooksByITunesPID_ExcludesTrashOnBothPaths is the conformance gate for
+// the iTunes mapping listing.
+//
+// This method's two implementations always AGREED — both returned soft-deleted
+// books — so it was consistent behaviour rather than the memdb/Pebble drift
+// PR #2392 fixed, and it was left alone there deliberately. What made it wrong
+// is the caller: ITunesHandler's writeback preview decides which metadata is
+// offered for writing back into the iTunes library, and a book the user put in
+// the trash should not be in that set.
+//
+// The flag flip below only became meaningful in the same commit as this test.
+// PebbleStore.ListBooksByITunesPID previously dispatched on memdb PUBLICATION
+// alone, ignoring UseMemDB, so this loop would have run the memdb path twice
+// and asserted memdb == memdb — green regardless of what the Pebble branch did.
+// A conformance test over two implementations is worth exactly as much as the
+// selector that picks between them.
+func TestListBooksByITunesPID_ExcludesTrashOnBothPaths(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+
+	fx := buildITunesPIDConformanceFixture(t, store)
+
+	p, ok := store.(*PebbleStore)
+	require.True(t, ok, "expected *PebbleStore from setupPebbleTestDB")
+	p.WaitForWarmup()
+	require.True(t, p.IsMemReady(),
+		"memdb must be published or the UseMemDB=true arm silently runs the Pebble path")
+
+	// Non-vacuity guards: without trashed rows the exclusion assertion is
+	// unfalsifiable, and without live rows an implementation that returned
+	// nothing at all would pass.
+	require.NotEmpty(t, fx.deletedPIDBookIDs, "fixture must contain soft-deleted iTunes-mapped books")
+	require.NotEmpty(t, fx.livePIDBookIDs, "fixture must contain live iTunes-mapped books")
+
+	got := map[bool][]string{}
+
+	for _, useMemDB := range []bool{true, false} {
+		p.UseMemDB = useMemDB
+		label := "PebbleScanPath"
+		if useMemDB {
+			label = "MemDBPath"
+		}
+
+		t.Run(label, func(t *testing.T) {
+			books, err := store.ListBooksByITunesPID(0, 0)
+			require.NoError(t, err)
+
+			ids := make([]string, 0, len(books))
+			for _, b := range books {
+				ids = append(ids, b.ID)
+				require.NotNil(t, b.ITunesPersistentID, "row without a PID leaked into the listing")
+				require.NotEmpty(t, *b.ITunesPersistentID, "row with an empty PID leaked into the listing")
+			}
+
+			require.ElementsMatch(t, fx.livePIDBookIDs, ids,
+				"listing did not return exactly the live iTunes-mapped books")
+			for _, id := range fx.deletedPIDBookIDs {
+				require.NotContains(t, ids, id,
+					"soft-deleted book reached the iTunes mapping listing — the writeback "+
+						"preview would offer to write metadata for a book in the trash")
+			}
+			require.NotContains(t, ids, fx.noPIDBookID, "book without a PID leaked into the listing")
+
+			got[useMemDB] = ids
+		})
+	}
+	p.UseMemDB = true
+
+	require.ElementsMatch(t, got[true], got[false],
+		"memdb and Pebble implementations of ListBooksByITunesPID disagree")
+}
+
+// TestListSoftDeletedBooks_MemDBAndPebbleAgree covers the OTHER method whose
+// memdb dispatch ignored UseMemDB until 2026-08-14.
+//
+// Making a fallback reachable and not testing it is its own defect, and this
+// one is load-bearing: findOrphanBookFiles unions this result into its "known
+// book" set and fails closed if it errors, because a soft-deleted book still
+// owns its book_files and deleting them is what makes it unrestorable. Prod
+// carries 3,953 such books.
+func TestListSoftDeletedBooks_MemDBAndPebbleAgree(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+
+	fx := buildSoftDelConformanceFixture(t, store)
+
+	p, ok := store.(*PebbleStore)
+	require.True(t, ok, "expected *PebbleStore from setupPebbleTestDB")
+	p.WaitForWarmup()
+	require.True(t, p.IsMemReady(), "memdb must be published for the flag flip to select two paths")
+	require.NotEmpty(t, fx.deletedIDs, "fixture must contain soft-deleted books")
+	require.NotEmpty(t, fx.liveIDs, "fixture must contain live books to be excluded")
+
+	got := map[bool][]string{}
+
+	for _, useMemDB := range []bool{true, false} {
+		p.UseMemDB = useMemDB
+		label := "PebbleScanPath"
+		if useMemDB {
+			label = "MemDBPath"
+		}
+
+		t.Run(label, func(t *testing.T) {
+			books, err := store.ListSoftDeletedBooks(0, 0, nil)
+			require.NoError(t, err)
+
+			ids := make([]string, 0, len(books))
+			for _, b := range books {
+				ids = append(ids, b.ID)
+			}
+
+			// This method is the inverse of every other visibility check in
+			// the package: here the trash is the ANSWER, not the exclusion.
+			require.ElementsMatch(t, fx.deletedIDs, ids,
+				"soft-deleted listing did not return exactly the trashed set")
+			for _, id := range fx.liveIDs {
+				require.NotContains(t, ids, id, "live book appeared in the soft-deleted listing")
+			}
+
+			got[useMemDB] = ids
+		})
+	}
+	p.UseMemDB = true
+
+	require.ElementsMatch(t, got[true], got[false],
+		"memdb and Pebble implementations of ListSoftDeletedBooks disagree")
 }
