@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
 // last-edited: 2026-08-14
 
@@ -120,8 +120,9 @@ func newTestPlugin(books []database.Book) (*Plugin, *[]database.Book) {
 			if offset >= len(books) {
 				return nil, nil
 			}
+			// Real-store contract: limit <= 0 means no limit.
 			end := offset + limit
-			if end > len(books) {
+			if limit <= 0 || end > len(books) {
 				end = len(books)
 			}
 			core := make([]database.BookCore, end-offset)
