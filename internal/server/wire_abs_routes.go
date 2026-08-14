@@ -1,7 +1,7 @@
 // file: internal/server/wire_abs_routes.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 9c6b13f8-40a2-4e57-b18d-72e0a5c4d396
-// last-edited: 2026-08-13
+// last-edited: 2026-08-14
 
 package server
 
@@ -523,6 +523,14 @@ func absRouteList() []string {
 		"GET /status",
 		"POST /login",
 		"POST /auth/refresh",
+		// OpenID web-flow endpoints (Handler.Register :380-381). Absent from this
+		// list from their introduction until 2026-08-14, which made the list's
+		// "every registered route" claim false — the N-8 audit finding, confirmed
+		// against a runtime router.Routes() dump (47 listed vs 49 real; see
+		// docs/reference/abs-implementation-status.md). Root paths, so the /api
+		// reserved-path guard ignores them by design.
+		"GET /auth/openid",
+		"GET /auth/openid/callback",
 		"POST /logout",
 		"POST /api/authorize",
 		"GET /api/me",

@@ -1,7 +1,7 @@
 // file: internal/server/wire_abs_routes_test.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 3ea1d764-95c8-4b02-8f31-6d70a5be2c49
-// last-edited: 2026-08-13
+// last-edited: 2026-08-14
 
 package server
 
@@ -596,5 +596,27 @@ func TestAbsCollisionDetailReserved_BothNarrowingRules(t *testing.T) {
 			got := absCollisionDetailReserved(tc.method, tc.path)
 			require.Equal(t, tc.want, got, "%s %s — %s", tc.method, tc.path, tc.why)
 		})
+	}
+}
+
+// TestABSRouteListIncludesOpenIDRoutes pins the 2026-08-14 N-8 fix: the two OpenID
+// web-flow routes are registered by Handler.Register but were absent from
+// absRouteList(), making its "every registered route" claim false. A full
+// list-vs-router completeness test needs the abs handler harness (different
+// package); until that exists, membership here at least makes silent removal fail
+// with a name.
+func TestABSRouteListIncludesOpenIDRoutes(t *testing.T) {
+	want := []string{"GET /auth/openid", "GET /auth/openid/callback"}
+	for _, w := range want {
+		found := false
+		for _, entry := range absRouteList() {
+			if entry == w {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("absRouteList() is missing %q — the registered OpenID surface would again be invisible to the guard tests and the startup route log", w)
+		}
 	}
 }
