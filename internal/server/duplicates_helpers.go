@@ -219,8 +219,34 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store interface {
 	orphanStep := len(allSeries) + 1
 	_ = progress.UpdateProgress(orphanStep, totalSteps, fmt.Sprintf("Scanning for orphan series... (%d/%d %.2f%%)", orphanStep, totalSteps, float64(orphanStep)/float64(totalSteps)*100))
 
-	// Phase 2: Delete orphan series (0 books)
+	// Phase 2: Delete orphan series — series NOTHING references.
+	//
+	// This used to ask GetBooksBySeriesIDCore, which skips trashed and
+	// non-primary books. Those books still hold the series_id, so deleting on a
+	// zero from that counter left them pointing at a row that no longer exists.
+	// On production 2026-08-14 that had already produced 6,893 phantom series
+	// IDs held by 13,322 live books (+702 trashed), every one of them rendering
+	// with no series. See internal/database/series_bookref.go.
+	//
+	// The reference counts are computed ONCE for the whole library rather than
+	// per series: it turns 14,626 scans into one, and more importantly it is the
+	// only form in which "referenced by nothing" is actually answerable.
 	orphansDeleted := 0
+	refCounter := database.AsSeriesBookRefStore(store)
+	if refCounter == nil {
+		// Deliberately fatal. Falling back to the filtered counter is precisely
+		// the bug being removed, and it would delete rows while reporting
+		// success — the failure family this repo keeps rediscovering.
+		return fmt.Errorf("series prune: store cannot count unfiltered series references (got %T); "+
+			"refusing to delete orphans from a filtered count, which silently drops "+
+			"series whose books are trashed or non-primary", store)
+	}
+	refCounts, refErr := refCounter.GetAllSeriesBookRefCounts()
+	if refErr != nil {
+		return fmt.Errorf("series prune: failed to count series references: %w", refErr)
+	}
+	_ = progress.Log("info", fmt.Sprintf("Reference scan: %d series are referenced by at least one book (any state)", len(refCounts)), nil)
+
 	// Re-fetch series to account for merges
 	refreshedSeries, err := store.GetAllSeries()
 	if err != nil {
@@ -230,11 +256,7 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store interface {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			books, err := store.GetBooksBySeriesIDCore(ser.ID)
-			if err != nil {
-				continue
-			}
-			if len(books) == 0 {
+			if refCounts[ser.ID] == 0 {
 				if err := store.DeleteSeries(ser.ID); err != nil {
 					mergeErrors = append(mergeErrors, fmt.Sprintf("failed to delete orphan series %d: %v", ser.ID, err))
 				} else {
@@ -246,7 +268,7 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store interface {
 							ChangeType:  "series_delete",
 							FieldName:   "orphan_series",
 							OldValue:    fmt.Sprintf("%d: %s", ser.ID, ser.Name),
-							NewValue:    "deleted (0 books)",
+							NewValue:    "deleted (0 book references, any state)",
 						})
 					}
 				}
