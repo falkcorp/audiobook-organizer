@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
-// last-edited: 2026-08-13
+// last-edited: 2026-08-14
 
 package database
 
@@ -900,7 +900,20 @@ func (s *PebbleStore) DeleteBookFilesForBook(bookID string) error {
 	if err := batch.Commit(pebble.Sync); err != nil {
 		return err
 	}
+	// Derived state, mirroring DeleteBookFilesByIDs' pass 3 exactly. Until
+	// 2026-08-14 this method skipped the memdb delete and the quick-query
+	// dirty mark, so Pebble and memdb diverged after every call: the rows were
+	// gone from disk while every memdb-backed read kept serving them until a
+	// restart — a divergence that looks identical to the known
+	// "corrected aggregates invisible until memdb refreshes" staleness and
+	// would have been mis-diagnosed as it.
 	s.InvalidateLibraryStats()
+	s.MarkQuickQueryDirty("no_fingerprints", "delete_book_files_for_book")
+	fileIDs := make([]string, 0, len(files))
+	for i := range files {
+		fileIDs = append(fileIDs, files[i].ID)
+	}
+	s.DeleteBookFilesFromMemDB(fileIDs)
 	// Recompute book-level aggregates after bulk-deleting all files for this book.
 	// The book likely has Duration=0 after deletion, which is correct — nothing to sum.
 	s.notifyBookFileChange(bookID)
