@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.131.0
+// version: 1.132.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-08-14
 
@@ -1408,13 +1408,14 @@ func (p *PebbleStore) GetFolderDuplicatesCore() ([][]BookCore, error) {
 	}
 
 	var entries []folderDupEntry
-	const folderDupPageSize = 500
-	offset := 0
-	for {
-		page, err := p.GetAllBooksCore(folderDupPageSize, offset)
-		if err != nil {
-			return nil, err
-		}
+	// One limit-0 call: each paged GetAllBooksCore call re-scans the whole
+	// book: prefix (N/500 full scans), and rows written between calls can be
+	// skipped or repeated (reconcile #2443).
+	page, err := p.GetAllBooksCore(0, 0)
+	if err != nil {
+		return nil, err
+	}
+	{
 		for _, book := range page {
 			// GetAllBooksCore already excludes MarkedForDeletion rows; primary
 			// version is not one of its filters, so it's checked here to
@@ -1445,10 +1446,6 @@ func (p *PebbleStore) GetFolderDuplicatesCore() ([][]BookCore, error) {
 				dir:       dir,
 			})
 		}
-		if len(page) < folderDupPageSize {
-			break
-		}
-		offset += folderDupPageSize
 	}
 
 	return bucketFolderDuplicates(entries), nil
@@ -1545,13 +1542,14 @@ func (p *PebbleStore) GetDuplicateBooksByMetadataCore(threshold float64) ([][]Bo
 	}
 
 	var entries []metadataDupEntry
-	const metadataDupPageSize = 500
-	offset := 0
-	for {
-		page, err := p.GetAllBooksCore(metadataDupPageSize, offset)
-		if err != nil {
-			return nil, err
-		}
+	// One limit-0 call: each paged GetAllBooksCore call re-scans the whole
+	// book: prefix (N/500 full scans), and rows written between calls can be
+	// skipped or repeated (reconcile #2443).
+	page, err := p.GetAllBooksCore(0, 0)
+	if err != nil {
+		return nil, err
+	}
+	{
 		for _, book := range page {
 			// GetAllBooksCore already excludes MarkedForDeletion rows; primary
 			// version is not one of its filters, so it's checked here to mirror
@@ -1563,10 +1561,6 @@ func (p *PebbleStore) GetDuplicateBooksByMetadataCore(threshold float64) ([][]Bo
 				entries = append(entries, e)
 			}
 		}
-		if len(page) < metadataDupPageSize {
-			break
-		}
-		offset += metadataDupPageSize
 	}
 
 	return bucketMetadataDuplicates(entries, threshold), nil
