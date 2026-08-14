@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_filtering.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: b4e8c3d2-e5f6-7a80-9b0c-1d2e3f4a5b6c
-// last-edited: 2026-08-13
+// last-edited: 2026-08-14
 
 package audiobooks
 
@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
@@ -403,6 +404,30 @@ func fieldMatchesValue(book database.Book, field, value string) bool {
 		return numericCompare(book.UserRatingPerformance, value)
 	}
 
+	bookValue, known := bookFieldValue(book, field)
+	if !known {
+		return false
+	}
+	return strings.Contains(strings.ToLower(bookValue), strings.ToLower(value))
+}
+
+// bookFieldValue renders a book field as the string the substring matcher
+// compares against, and reports whether the field name is known at all.
+//
+// Split out of fieldMatchesValue so that "which fields exist" has exactly ONE
+// definition. FieldIsKnown answers that question by asking this function, which
+// is the only way a validator and a matcher can be guaranteed to agree — a
+// second hand-maintained list of valid names would drift from this switch the
+// moment either changed, and drift between two copies of one rule is the defect
+// this whole area keeps producing.
+//
+// An unset numeric renders as "0" rather than "", which is how the pre-existing
+// duration_seconds / bitrate_kbps / file_size_bytes / sample_rate_hz cases have
+// always behaved; the consequence is that e.g. channels:0 matches every book
+// with no channel count recorded. Kept uniform across old and new numeric fields
+// deliberately — an alias that behaved differently from the name it aliases
+// would be worse than the footgun.
+func bookFieldValue(book database.Book, field string) (string, bool) {
 	var bookValue string
 	switch field {
 	case "title":
@@ -466,19 +491,166 @@ func fieldMatchesValue(book database.Book, field, value string) bool {
 		}
 	case "itunes_sync_status":
 		bookValue = derefStr(book.ITunesSyncStatus)
-	// Aliases for frontend field names
-	case "duration_seconds":
+
+	// Media technicals. Each accepts BOTH spellings: the unit-suffixed name
+	// this switch has always used, and the bare name the search bar sends.
+	//
+	// The four suffixed cases were added under a comment reading "Aliases for
+	// frontend field names", which had it exactly backwards — those are the
+	// backend spellings, and web/src/utils/searchParser.ts offers the user
+	// `duration:`, `bitrate:`, `file_size:` and `sample_rate:`. Nothing checked
+	// the two lists against each other, so all four typed queries fell through
+	// to the unknown-field default and answered "no books found". Measured on
+	// production 2026-08-14: duration:1 returned 0 while duration_seconds:1
+	// returned 25,090 — the same rows, under a name the UI never sends.
+	case "duration", "duration_seconds":
 		bookValue = fmt.Sprintf("%d", derefInt(book.Duration))
-	case "bitrate_kbps":
+	case "bitrate", "bitrate_kbps":
 		bookValue = fmt.Sprintf("%d", derefInt(book.Bitrate))
-	case "file_size_bytes":
+	case "file_size", "file_size_bytes":
 		bookValue = fmt.Sprintf("%d", derefInt64(book.FileSize))
-	case "sample_rate_hz":
+	case "sample_rate", "sample_rate_hz":
 		bookValue = fmt.Sprintf("%d", derefInt(book.SampleRate))
+	case "channels":
+		bookValue = fmt.Sprintf("%d", derefInt(book.Channels))
+	case "bit_depth":
+		bookValue = fmt.Sprintf("%d", derefInt(book.BitDepth))
+
+	// Identity and bibliographic fields the search bar has always offered and
+	// this switch never implemented.
+	case "series_number":
+		bookValue = fmt.Sprintf("%d", derefInt(book.SeriesSequence))
+	case "isbn10":
+		bookValue = derefStr(book.ISBN10)
+	case "isbn13":
+		bookValue = derefStr(book.ISBN13)
+	case "work_id":
+		bookValue = derefStr(book.WorkID)
+
+	// "year" is deliberately not one column. A book carries a print year and an
+	// audiobook release year, they routinely differ, and someone typing
+	// year:2019 means "released in 2019" by either reckoning rather than
+	// nominating one of the two. Both are rendered and substring-matched; the
+	// space keeps 1997 and 2007 from matching a typed "9720".
+	case "year":
+		bookValue = strings.TrimSpace(
+			fmt.Sprintf("%s %s", intPtrToSearchString(book.PrintYear), intPtrToSearchString(book.AudiobookReleaseYear)))
+
+	// Timestamps render RFC3339 so a date prefix works as a substring:
+	// created_at:2026-08 matches everything created that month. Unset renders
+	// empty rather than the zero time, so a filter on an unset timestamp
+	// matches nothing instead of matching "0001-01-01".
+	case "created_at":
+		bookValue = timePtrToSearchString(book.CreatedAt)
+	case "updated_at":
+		bookValue = timePtrToSearchString(book.UpdatedAt)
+
+	// The trash bit, as "true"/"false". Note this predicate alone is not enough
+	// to make marked_for_deletion:true return anything — the rows have to reach
+	// this filter first, which is what the pushdown in
+	// buildBookSummaryFilterWithLookupCount arranges. See that function.
+	case "marked_for_deletion":
+		bookValue = strconv.FormatBool(book.IsSoftDeleted())
+
 	default:
-		return false // unknown field
+		return "", false // unknown field
 	}
-	return strings.Contains(strings.ToLower(bookValue), strings.ToLower(value))
+	return bookValue, true
+}
+
+// intPtrToSearchString renders an optional int for substring matching, empty
+// when unset so an absent value matches nothing rather than matching "0".
+func intPtrToSearchString(v *int) string {
+	if v == nil {
+		return ""
+	}
+	return strconv.Itoa(*v)
+}
+
+// timePtrToSearchString renders an optional timestamp as RFC3339, empty when
+// unset. See the created_at case for why empty rather than the zero time.
+func timePtrToSearchString(t *time.Time) string {
+	if t == nil {
+		return ""
+	}
+	return t.Format(time.RFC3339)
+}
+
+// FieldIsKnown reports whether field names something the library list can
+// actually filter on: a book column, a per-user state field, or a rating.
+//
+// It answers by consulting bookFieldValue rather than by carrying its own list
+// of names, so the validator and the matcher cannot disagree. The zero Book is
+// safe to probe because bookFieldValue's "known" result depends only on the
+// field name, never on the row's contents.
+func FieldIsKnown(field string) bool {
+	switch field {
+	case "user_rating_overall", "user_rating_story", "user_rating_performance":
+		return true
+	}
+	if IsPerUserField(field) {
+		return true
+	}
+	_, known := bookFieldValue(database.Book{}, field)
+	return known
+}
+
+// FirstUnknownFilterField returns the first filter naming a field the list
+// cannot filter on.
+//
+// Callers reject the request rather than running it. An unknown field is not
+// ignored by the matcher — it falls to bookFieldValue's default and matches
+// NOTHING, so the endpoint answers count:0. That is the most misleading answer
+// available: "0" is indistinguishable from a truthful "no books match", so a
+// typo, a renamed field, or a UI sending a name the backend never implemented
+// all read as a fact about the library. Measured on production 2026-08-14:
+// filtering on the nonsense field zzz_not_a_real_field returned exactly the
+// same count:0 as filtering on marked_for_deletion, for which 3,953 books
+// qualified.
+//
+// Sorted for determinism, on the same reasoning as firstBareFilterFieldParam:
+// an error that names a different field on each retry is its own small cruelty.
+func FirstUnknownFilterField(filters []FieldFilter) (string, bool) {
+	unknown := make([]string, 0, 2)
+	for _, f := range filters {
+		if !FieldIsKnown(f.Field) {
+			unknown = append(unknown, f.Field)
+		}
+	}
+	if len(unknown) == 0 {
+		return "", false
+	}
+	sort.Strings(unknown)
+	return unknown[0], true
+}
+
+// KnownFilterFields returns every field name the list accepts, sorted. Used to
+// name the alternatives in the rejection message, and by the conformance test
+// that holds this set against the search bar's own list.
+func KnownFilterFields() []string {
+	out := make([]string, 0, len(allFilterFieldNames))
+	out = append(out, allFilterFieldNames...)
+	sort.Strings(out)
+	return out
+}
+
+// allFilterFieldNames is the enumeration behind KnownFilterFields. It cannot be
+// derived from bookFieldValue's switch — Go offers no way to enumerate case
+// labels — so it is the one place a second list is unavoidable. That is exactly
+// why TestFilterFieldNames_MatchTheMatcher exists: it asserts every name here is
+// accepted by FieldIsKnown, so a name that is listed but not implemented fails
+// the build rather than reaching a user as an empty result set.
+var allFilterFieldNames = []string{
+	"title", "author", "narrator", "series", "series_number", "genre",
+	"language", "publisher", "edition", "description", "format", "codec",
+	"quality", "library_state", "metadata_review_status", "review",
+	"has_cover", "has_written", "needs_writeback", "has_organized",
+	"itunes_sync_status", "duration", "duration_seconds", "bitrate",
+	"bitrate_kbps", "file_size", "file_size_bytes", "sample_rate",
+	"sample_rate_hz", "channels", "bit_depth", "isbn10", "isbn13", "work_id",
+	"year", "created_at", "updated_at", "marked_for_deletion",
+	"read_status", "progress_pct", "last_played",
+	"user_rating_overall", "user_rating_story", "user_rating_performance",
 }
 
 // numericCompare evaluates a filter value expression against a nullable
@@ -799,6 +971,7 @@ func (svc *AudiobookService) buildBookSummaryFilterWithLookupCount(f ListFilters
 	// rest run via the predicate closure on surviving rows only.
 	libraryState := f.LibraryState
 	reviewStatus := ""
+	var markedForDeletion *bool
 	remainingFF := make([]FieldFilter, 0, len(f.FieldFilters))
 	for _, ff := range f.FieldFilters {
 		if !ff.Negated && (ff.Field == "review" || ff.Field == "metadata_review_status") && reviewStatus == "" {
@@ -808,6 +981,22 @@ func (svc *AudiobookService) buildBookSummaryFilterWithLookupCount(f ListFilters
 		if !ff.Negated && ff.Field == "library_state" && libraryState == "" {
 			libraryState = ff.Value
 			continue
+		}
+		// marked_for_deletion MUST be plucked rather than left to the
+		// predicate. The store excludes soft-deleted rows before any predicate
+		// runs, so a post-filter asking for them is asking an already-live-only
+		// set and can only ever answer zero — which is how the endpoint came to
+		// report count:0 for a library holding 3,953 trashed books. Setting the
+		// store filter's tri-state is what puts those rows in front of the
+		// filter in the first place.
+		if !ff.Negated && ff.Field == "marked_for_deletion" && markedForDeletion == nil {
+			if want, err := strconv.ParseBool(ff.Value); err == nil {
+				markedForDeletion = &want
+				continue
+			}
+			// Unparseable value: leave it in remainingFF so the ordinary
+			// matcher rejects the row, rather than silently widening the scan
+			// to include the trash on the strength of a malformed filter.
 		}
 		remainingFF = append(remainingFF, ff)
 	}
@@ -880,6 +1069,7 @@ func (svc *AudiobookService) buildBookSummaryFilterWithLookupCount(f ListFilters
 		LibraryState:       libraryState,
 		ReviewStatus:       reviewStatus,
 		RestrictToIDs:      restrictIDs,
+		MarkedForDeletion:  markedForDeletion,
 		Predicate:          predicate,
 	}
 	if f.SortBy == "title" {

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
-// last-edited: 2026-08-13
+// last-edited: 2026-08-14
 
 // Package audiobookshandler hosts the main library list / CRUD HTTP handlers
 // extracted from the server package's audiobooks_handlers.go: book listing
@@ -545,6 +545,23 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 				"filter on \""+field+"\" has an empty value; an empty value matches every "+
 					"book rather than narrowing the results. Omit the filter to list everything, "+
 					"or supply a value to filter by.")
+			return
+		}
+		// Reject unknown field names for the mirror-image reason. An unknown
+		// field is not ignored — it matches NOTHING, so the endpoint answers
+		// count:0, and "0" is indistinguishable from a truthful "no books
+		// match". Measured on production 2026-08-14: the nonsense field
+		// zzz_not_a_real_field returned the same count:0 as marked_for_deletion,
+		// for which 3,953 books qualified, and as year / duration / isbn13 and
+		// ten more names the search bar offers but this backend had never
+		// implemented. Naming the field and listing the alternatives is the only
+		// answer that cannot be mistaken for a fact about the library.
+		if field, unknown := audiobookspkg.FirstUnknownFilterField(fieldFilters); unknown {
+			httputil.RespondWithBadRequest(c,
+				"filter on \""+field+"\" names a field the library list cannot filter on; "+
+					"filtering on it would match no books and report a count of 0, which reads "+
+					"as \"none exist\". Valid fields: "+
+					strings.Join(audiobookspkg.KnownFilterFields(), ", ")+".")
 			return
 		}
 		for _, ff := range fieldFilters {
