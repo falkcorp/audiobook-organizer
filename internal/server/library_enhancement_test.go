@@ -668,7 +668,21 @@ func TestServerSideFieldFiltering(t *testing.T) {
 		assert.Equal(t, "The Great Adventure", titles[0])
 	})
 
-	t.Run("unknown field returns empty", func(t *testing.T) {
+	t.Run("unknown field returns 400", func(t *testing.T) {
+		// This subtest asserted the opposite until 2026-08-14: that an unknown
+		// field answered 200 with an empty list. That behaviour was the bug.
+		//
+		// An unknown field matched nothing, so the endpoint reported count 0 —
+		// an answer indistinguishable from a truthful "no books match". A typo,
+		// a renamed field, and a genuinely empty result all looked identical.
+		// It hid thirteen fields the search bar offers and the backend had never
+		// implemented, including year, isbn13 and duration; measured on
+		// production, duration:1 returned 0 while duration_seconds:1 returned
+		// 25,090 over the same rows.
+		//
+		// The expectation is inverted deliberately rather than deleted, because
+		// the request is still well-formed and still has to be answered — just
+		// answered honestly.
 		filters := buildFiltersParam([]FieldFilter{
 			{Field: "unknown_field", Value: "anything", Negated: false},
 		})
@@ -676,9 +690,13 @@ func TestServerSideFieldFiltering(t *testing.T) {
 		w := httptest.NewRecorder()
 		server.router.ServeHTTP(w, req)
 
-		assert.Equal(t, http.StatusOK, w.Code)
-		titles := extractTitles(t, w)
-		assert.Empty(t, titles, "unknown field should match nothing")
+		assert.Equal(t, http.StatusBadRequest, w.Code,
+			"an unrecognised filter field must be rejected, not answered with an empty list")
+		resp := parseJSONResponse(t, w)
+		errorMsg, ok := resp["error"].(string)
+		require.True(t, ok, "error field should be a string")
+		assert.Contains(t, errorMsg, "unknown_field",
+			"the rejection must name the offending field")
 	})
 
 	t.Run("invalid filters JSON returns 400", func(t *testing.T) {
