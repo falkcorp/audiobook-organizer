@@ -1,7 +1,7 @@
 // file: internal/deluge/discovery.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-07-16
+// last-edited: 2026-08-13
 //
 // Four-tier matching to decide if a labeled Deluge torrent is already in
 // the library — run in order, stop on first hit:
@@ -30,6 +30,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -58,28 +59,63 @@ type LibraryIndex struct {
 }
 
 // BookLister is the narrow interface needed to build a library index.
+//
+// ListSoftDeletedBooks is part of it because this index answers "have I seen
+// this before?", and a book in the trash has definitely been seen — see
+// BuildLibraryIndex.
 type BookLister interface {
 	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
+	ListSoftDeletedBooks(limit, offset int, olderThan *time.Time) ([]database.Book, error)
 }
 
-// BuildLibraryIndex builds a LibraryIndex from all books in the store.
+// BuildLibraryIndex builds a LibraryIndex from all books in the store,
+// INCLUDING soft-deleted ones.
+//
+// The index feeds DiscoverUnimported, which reports labeled torrents that are
+// not already in the library. Soft-deleted books must count as "already in the
+// library" for that question: the user trashed those books on purpose, and
+// re-offering them as fresh discoveries invites re-importing exactly what was
+// just removed. Restore (POST /api/v1/audiobooks/:id/restore) is the intended
+// way back, not a re-download.
+//
+// Before 2026-08-13 they were included by accident — GetAllBooksCore's memdb
+// implementation leaked soft-deleted rows. Fixing that leak would silently have
+// turned every trashed book into a discovery candidate (3,953 of them on prod,
+// the losers of the July dedup drain), so the inclusion is now explicit.
 func BuildLibraryIndex(store BookLister) LibraryIndex {
 	idx := LibraryIndex{
 		Paths:  make(map[string]struct{}),
 		Titles: make(map[string]struct{}),
 	}
+	add := func(filePath, title string) {
+		if filePath != "" {
+			idx.Paths[filePath] = struct{}{}
+		}
+		if title != "" {
+			idx.Titles[NormalizeTitle(title)] = struct{}{}
+		}
+	}
+
 	books, err := store.GetAllBooksCore(0, 0)
 	if err != nil {
 		slog.Warn("deluge discovery failed to load books", "err", err)
 		return idx
 	}
 	for _, b := range books {
-		if b.FilePath != "" {
-			idx.Paths[b.FilePath] = struct{}{}
-		}
-		if b.Title != "" {
-			idx.Titles[NormalizeTitle(b.Title)] = struct{}{}
-		}
+		add(b.FilePath, b.Title)
+	}
+
+	// Fail SOFT here, unlike findOrphanBookFiles: a short index only causes a
+	// spurious "unimported" suggestion for a human to review, whereas the
+	// orphan scan's output is fed to a delete. Log loudly and carry on.
+	trashed, terr := store.ListSoftDeletedBooks(0, 0, nil)
+	if terr != nil {
+		slog.Warn("deluge discovery could not load soft-deleted books; "+
+			"trashed titles may be re-offered as unimported", "err", terr)
+		return idx
+	}
+	for i := range trashed {
+		add(trashed[i].FilePath, trashed[i].Title)
 	}
 	return idx
 }

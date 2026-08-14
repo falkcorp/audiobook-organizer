@@ -1,7 +1,7 @@
 // file: internal/database/memdb_reads.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000006
-// last-edited: 2026-08-11
+// last-edited: 2026-08-13
 
 package database
 
@@ -590,6 +590,25 @@ func (m *MemStore) GetAllBooksCore(limit, offset int, filters map[string]interfa
 	txn := m.db.Txn(false)
 	defer txn.Abort()
 
+	// Soft-deleted rows STAY in the memdb books table — ListSoftDeletedBooks
+	// reads them back through memIdxMarkedForDeletion, and ListBookIDs has
+	// always skipped them explicitly — so they must be excluded here too or
+	// this method contradicts its own contract and its Pebble twin.
+	//
+	// It did contradict both, in production, for the whole life of the memdb
+	// query layer: PebbleStore.GetAllBooksCore filters MarkedForDeletion
+	// unconditionally, this path only filtered when a caller passed the
+	// "marked_for_deletion" key, and NO caller ever passed it. Since
+	// UseMemDB defaults to true, every one of the ~35 full-library scans in
+	// the codebase silently included soft-deleted books. Measured on prod
+	// 2026-08-13: 63,869 live books scanned as 67,824 — the 3,953 rows soft
+	// deleted by the July dedup drain, still being organized, backfilled,
+	// counted and re-grouped four weeks after their deletion.
+	//
+	// A caller that genuinely wants deleted rows says so with the filter key
+	// (or uses ListSoftDeletedBooks); the default is the documented contract.
+	_, callerChoseDeletionState := filters["marked_for_deletion"]
+
 	var (
 		iter interface {
 			Next() interface{}
@@ -621,6 +640,9 @@ func (m *MemStore) GetAllBooksCore(limit, offset int, filters map[string]interfa
 
 	for obj := iter.Next(); obj != nil; obj = iter.Next() {
 		b := obj.(*Book)
+		if !callerChoseDeletionState && bookIsSoftDeleted(b) {
+			continue
+		}
 		if v, ok := filters["is_primary_version"].(bool); ok {
 			eff := true
 			if b.IsPrimaryVersion != nil {
@@ -681,7 +703,7 @@ func (m *MemStore) ListBookIDs() ([]string, error) {
 	ids := make([]string, 0, 1024)
 	for obj := iter.Next(); obj != nil; obj = iter.Next() {
 		b := obj.(*Book)
-		if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+		if bookIsSoftDeleted(b) {
 			continue
 		}
 		ids = append(ids, b.ID)
