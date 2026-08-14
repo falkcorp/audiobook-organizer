@@ -1,6 +1,7 @@
 // file: internal/maintenance/jobs/retention_and_hygiene.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e7c9d4a2-f1b3-49a8-8c4f-7d2e5a1f3c9e
+// last-edited: 2026-08-14
 
 package jobs
 
@@ -104,30 +105,40 @@ func (j *retentionAndHygieneJob) Run(ctx context.Context, store database.Store, 
 // mid-scan (PebbleStore.ListOperations reads the entire prefix into memory and slices
 // by offset, so deleting during iteration would cause the same offset to advance past
 // fewer rows, silently skipping records).
+//
+// Phase 1 takes the whole listing in ONE call, which is what "a single pass" has
+// always claimed to mean here. It used to walk the listing in 500-row pages, and
+// because ListOperations reads and sorts the entire "operation:" prefix on every
+// call, each page paid for a full scan: N/500 scans of N rows. At the 10,163
+// operations production held when this was written that was 21 full scans, and it
+// grows quadratically.
+//
+// Paging also had a correctness cost that the two-phase design does not cover.
+// The listing is newest-first, so an operation created by anything else while
+// phase 1 was running shifted every existing row to a HIGHER index; reading a
+// fixed, increasing offset sequence over a right-shifting slice re-read rows and
+// put the same ID in toDelete twice. Deleting an already-deleted key is a no-op,
+// so nothing was lost, but the count returned below counted it twice and the job
+// then reported more deletions than it made. One call takes one snapshot, so
+// neither the amplification nor the double-count is reachable.
 func deleteOldOperations(ctx context.Context, store database.Store, cutoffTime time.Time, dryRun bool) (int, error) {
 	slog.Info("deleteOldOperations: scanning operations", "cutoff_time", cutoffTime, "dry_run", dryRun)
 
-	// Phase 1: collect all eligible operation IDs in a single pass.
+	if ctx.Err() != nil {
+		return 0, ctx.Err()
+	}
+
+	// Phase 1: collect all eligible operation IDs in a single pass. limit <= 0
+	// means "no limit" — see PebbleStore.ListOperations.
+	ops, _, err := store.ListOperations(0, 0)
+	if err != nil {
+		return 0, fmt.Errorf("list operations: %w", err)
+	}
 	var toDelete []string
-	const pageSize = 500
-	offset := 0
-	for {
-		if ctx.Err() != nil {
-			return 0, ctx.Err()
+	for _, op := range ops {
+		if op.CreatedAt.Before(cutoffTime) {
+			toDelete = append(toDelete, op.ID)
 		}
-		ops, totalCount, err := store.ListOperations(pageSize, offset)
-		if err != nil {
-			return 0, fmt.Errorf("list operations (offset=%d): %w", offset, err)
-		}
-		for _, op := range ops {
-			if op.CreatedAt.Before(cutoffTime) {
-				toDelete = append(toDelete, op.ID)
-			}
-		}
-		if offset+pageSize >= totalCount {
-			break
-		}
-		offset += pageSize
 	}
 
 	slog.Info("deleteOldOperations: scan complete",
