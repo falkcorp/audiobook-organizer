@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
 // last-edited: 2026-08-14
 
@@ -640,9 +640,14 @@ func (h *Handler) ListSoftDeletedAudiobooks(c *gin.Context) {
 		return
 	}
 
-	// Get total count (unpaginated) for proper pagination support
-	allBooks, _ := h.audiobookService.GetSoftDeletedBooks(c.Request.Context(), 10000, 0, olderThanDays)
-	total := len(allBooks)
+	// Exact total for pagination. This replaced a fetch-of-10,000-and-len()
+	// whose count silently saturated at 10,000 AND whose error was discarded —
+	// a failed count reported total 0, indistinguishable from an empty trash.
+	total, err := h.audiobookService.CountSoftDeletedBooks(c.Request.Context(), olderThanDays)
+	if err != nil {
+		httputil.InternalError(c, "failed to count deleted audiobooks", err)
+		return
+	}
 
 	httputil.RespondWithOK(c, gin.H{
 		"items":  books,

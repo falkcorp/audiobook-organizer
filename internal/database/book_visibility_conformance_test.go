@@ -1,5 +1,5 @@
 // file: internal/database/book_visibility_conformance_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: e398a03c-a0e4-4e64-8da3-3beac8e0ff6b
 // last-edited: 2026-08-14
 
@@ -8,6 +8,7 @@ package database
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -424,4 +425,80 @@ func TestListSoftDeletedBooks_MemDBAndPebbleAgree(t *testing.T) {
 
 	require.ElementsMatch(t, got[true], got[false],
 		"memdb and Pebble implementations of ListSoftDeletedBooks disagree")
+}
+
+// TestCountSoftDeletedBooks_MemDBAndPebbleAgree pins the counting capability
+// added 2026-08-14 to the same fixture and dual-dispatch contract as the
+// listing above: the count must equal the size of the set the listing returns
+// on BOTH paths, or the trash page's "total" disagrees with its own rows.
+func TestCountSoftDeletedBooks_MemDBAndPebbleAgree(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+
+	fx := buildSoftDelConformanceFixture(t, store)
+
+	p, ok := store.(*PebbleStore)
+	require.True(t, ok, "expected *PebbleStore from setupPebbleTestDB")
+	p.WaitForWarmup()
+	require.True(t, p.IsMemReady(), "memdb must be published for the flag flip to select two paths")
+	require.NotEmpty(t, fx.deletedIDs, "fixture must contain soft-deleted books")
+
+	cs := AsSoftDeletedCountStore(store)
+	require.NotNil(t, cs, "PebbleStore must provide the soft-deleted counting capability")
+
+	// The shared fixture's deletions carry NO MarkedForDeletionAt, so an
+	// olderThan assertion against it alone is VACUOUS — the filter would
+	// exclude nothing and a count that ignored the cutoff would still pass
+	// (caught by mutation on 2026-08-14). Add two TIMESTAMPED deletions
+	// straddling a cutoff so the filter provably excludes something.
+	yes := true
+	oldTS := time.Now().AddDate(0, 0, -30)
+	newTS := time.Now()
+	cutoff := time.Now().AddDate(0, 0, -7)
+	for _, d := range []struct {
+		title string
+		ts    time.Time
+	}{{"Trashed Old", oldTS}, {"Trashed Fresh", newTS}} {
+		created, err := store.CreateBook(&Book{Title: d.title, FilePath: "/lib/" + d.title})
+		require.NoError(t, err)
+		created.MarkedForDeletion = &yes
+		ts := d.ts
+		created.MarkedForDeletionAt = &ts
+		_, err = store.UpdateBook(created.ID, created)
+		require.NoError(t, err)
+	}
+	totalDeleted := len(fx.deletedIDs) + 2
+
+	got := map[bool]int{}
+	for _, useMemDB := range []bool{true, false} {
+		p.UseMemDB = useMemDB
+		label := "PebbleScanPath"
+		if useMemDB {
+			label = "MemDBPath"
+		}
+		t.Run(label, func(t *testing.T) {
+			n, err := cs.CountSoftDeletedBooks(nil)
+			require.NoError(t, err)
+			require.Equal(t, totalDeleted, n,
+				"count must equal the size of the soft-deleted set the listing returns")
+			got[useMemDB] = n
+
+			// olderThan semantics must match the listing ON THIS PATH — a
+			// post-loop check would only ever exercise the memdb branch.
+			nFiltered, err := cs.CountSoftDeletedBooks(&cutoff)
+			require.NoError(t, err)
+			listed, err := store.ListSoftDeletedBooks(0, 0, &cutoff)
+			require.NoError(t, err)
+			require.Equal(t, len(listed), nFiltered,
+				"filtered count must equal the filtered listing's size on the same dispatch path")
+			// Non-vacuity guard: the cutoff must exclude the fresh deletion,
+			// or the olderThan assertion above is testing nothing — exactly
+			// the trap the timestamp-less shared fixture posed.
+			require.Less(t, nFiltered, n,
+				"the cutoff must exclude at least one timestamped deletion")
+		})
+	}
+	p.UseMemDB = true
+	require.Equal(t, got[true], got[false],
+		"memdb and Pebble implementations of CountSoftDeletedBooks disagree")
 }

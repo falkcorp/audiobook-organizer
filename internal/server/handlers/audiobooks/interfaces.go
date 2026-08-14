@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/interfaces.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 110386de-3e07-4ef3-b0e0-2e717a249e91
-// last-edited: 2026-07-05
+// last-edited: 2026-08-14
 
 // Narrow dependency interfaces for the audiobooks-domain HTTP handlers (the
 // main library list / CRUD domain: list, count, facets, soft-delete /
@@ -90,6 +90,10 @@ type AudiobookService interface {
 	GetAudiobook(ctx context.Context, id string) (*database.Book, error)
 	GetAudiobookTags(ctx context.Context, id, compareID, snapshotTS string) (map[string]any, error)
 	GetSoftDeletedBooks(ctx context.Context, limit, offset int, olderThanDays *int) ([]database.Book, error)
+	// CountSoftDeletedBooks is the exact trash size. It replaced a
+	// fetch-10,000-and-len() whose count saturated and whose error was
+	// swallowed into total:0 — callers must surface the error, never zero it.
+	CountSoftDeletedBooks(ctx context.Context, olderThanDays *int) (int, error)
 	PurgeSoftDeletedBooks(ctx context.Context, deleteFiles bool, olderThanDays *int) (*audiobookspkg.PurgeResult, error)
 	RestoreAudiobook(ctx context.Context, id string) (*database.Book, error)
 	CountAudiobooks(ctx context.Context) (int, error)
