@@ -1,7 +1,7 @@
 // file: internal/server/handlers/entities/handler_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 163bc668-0761-43eb-9d85-f4983e8b014b
-// last-edited: 2026-07-06
+// last-edited: 2026-08-14
 
 package entities_test
 
@@ -36,6 +36,32 @@ type deps struct {
 	seriesCache  *cache.Cache[*audiobooks.SeriesWithCountsResponse]
 	dedupCache   *cache.Cache[gin.H]
 	enrichCalls  int
+	// seriesRefCounts backs the UNFILTERED series reference counter the delete
+	// handlers consult. nil means "no series is referenced by anything", which
+	// is what every test that does not care about deletion wants. Set it to
+	// assert that a referenced series survives.
+	seriesRefCounts map[int]int
+}
+
+// entitiesStoreWithSeriesRefs adds GetAllSeriesBookRefCounts to the generated
+// EntitiesStore mock. SeriesBookRefStore is deliberately kept out of the store
+// interfaces so widening it does not force every implementation and generated
+// mock to grow, and the delete handlers reach it via
+// database.AsSeriesBookRefStore and FAIL CLOSED when it is missing — so a bare
+// generated mock cannot exercise them at all.
+//
+// It reads through to deps so a test can set seriesRefCounts after the handler
+// has already been constructed.
+type entitiesStoreWithSeriesRefs struct {
+	*entitiesmocks.MockEntitiesStore
+	d *deps
+}
+
+func (s entitiesStoreWithSeriesRefs) GetAllSeriesBookRefCounts() (map[int]int, error) {
+	if s.d.seriesRefCounts == nil {
+		return map[int]int{}, nil
+	}
+	return s.d.seriesRefCounts, nil
 }
 
 // newHandler builds a Handler backed by fresh mocks and real (non-nil) caches.
@@ -61,7 +87,7 @@ func newHandler(t *testing.T) (*entities.Handler, *deps) {
 		return out
 	}
 	h := entities.New(
-		d.store,
+		entitiesStoreWithSeriesRefs{MockEntitiesStore: d.store, d: d},
 		d.workSvc,
 		d.authorSeries,
 		d.registry,
@@ -462,7 +488,7 @@ func TestSplitSeries_EmptyBookIDs(t *testing.T) {
 
 func TestDeleteEmptySeries(t *testing.T) {
 	h, d := newHandler(t)
-	d.store.EXPECT().GetBooksBySeriesIDCore(5).Return([]database.BookCore{}, nil)
+	// Referenced by nothing in any state.
 	d.store.EXPECT().DeleteSeries(5).Return(nil)
 	c, w := newCtx(http.MethodDelete, "/series/5", "", idParam("5"))
 	h.DeleteEmptySeries(c)
@@ -471,7 +497,10 @@ func TestDeleteEmptySeries(t *testing.T) {
 
 func TestDeleteEmptySeries_HasBooks(t *testing.T) {
 	h, d := newHandler(t)
-	d.store.EXPECT().GetBooksBySeriesIDCore(5).Return([]database.BookCore{{ID: "b"}}, nil)
+	// One reference refuses the delete. It deliberately does not matter whether
+	// that book is live, trashed or a non-primary version — blindness to the
+	// last two is what stranded 13,322 books behind deleted series.
+	d.seriesRefCounts = map[int]int{5: 1}
 	c, w := newCtx(http.MethodDelete, "/series/5", "", idParam("5"))
 	h.DeleteEmptySeries(c)
 	assert.Equal(t, http.StatusConflict, w.Code)
@@ -479,11 +508,24 @@ func TestDeleteEmptySeries_HasBooks(t *testing.T) {
 
 func TestBulkDeleteSeries(t *testing.T) {
 	h, d := newHandler(t)
-	d.store.EXPECT().GetBooksBySeriesIDCore(1).Return([]database.BookCore{}, nil)
 	d.store.EXPECT().DeleteSeries(1).Return(nil)
 	c, w := newCtx(http.MethodPost, "/series/bulk-delete", `{"ids":[1]}`, nil)
 	h.BulkDeleteSeries(c)
 	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+// TestBulkDeleteSeries_SkipsReferencedSeries is the regression case: a series
+// the display counter calls empty because its only book is trashed or a
+// non-primary version must NOT be deleted.
+func TestBulkDeleteSeries_SkipsReferencedSeries(t *testing.T) {
+	h, d := newHandler(t)
+	d.seriesRefCounts = map[int]int{1: 1}
+	// No DeleteSeries expectation: calling it at all fails the mock.
+	c, w := newCtx(http.MethodPost, "/series/bulk-delete", `{"ids":[1]}`, nil)
+	h.BulkDeleteSeries(c)
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), `"skipped":1`)
+	assert.Contains(t, w.Body.String(), `"deleted":0`)
 }
 
 func TestUpdateSeriesName(t *testing.T) {

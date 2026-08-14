@@ -1,7 +1,7 @@
 // file: internal/server/handlers_unit_test.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: f8a2d1c3-4b5e-6789-abcd-ef0123456789
-// last-edited: 2026-07-16
+// last-edited: 2026-08-14
 //
 // Unit tests for HTTP handlers using MockStore + httptest.
 // Focuses on handlers that directly call s.Store() without
@@ -1272,10 +1272,26 @@ func TestHandler_UpdateSeriesName_InvalidID(t *testing.T) {
 
 // =============== deleteEmptySeries ===============
 
+// seriesRefMockStore adds the unfiltered series reference counter to the
+// generated mock, which cannot carry it on its own: SeriesBookRefStore is
+// deliberately kept OUT of database.Store so that widening the capability does
+// not force every implementation and generated mock to grow with it. The delete
+// handlers reach it through database.AsSeriesBookRefStore and fail closed when
+// it is absent, so a bare generated mock cannot exercise them.
+type seriesRefMockStore struct {
+	*mocks.MockStore
+	refCounts map[int]int
+}
+
+func (s seriesRefMockStore) GetAllSeriesBookRefCounts() (map[int]int, error) {
+	return s.refCounts, nil
+}
+
 func TestHandler_DeleteEmptySeries_Success(t *testing.T) {
 	srv, mockStore, router := setupHandlerTest(t)
 
-	mockStore.EXPECT().GetBooksBySeriesIDCore(10).Return([]database.BookCore{}, nil)
+	// Referenced by nothing in ANY state — the only safe-to-delete condition.
+	srv.store = seriesRefMockStore{MockStore: mockStore, refCounts: map[int]int{}}
 	mockStore.EXPECT().DeleteSeries(10).Return(nil)
 
 	router.DELETE("/series/:id", newEntitiesHandler(srv).DeleteEmptySeries)
@@ -1290,7 +1306,10 @@ func TestHandler_DeleteEmptySeries_Success(t *testing.T) {
 func TestHandler_DeleteEmptySeries_HasBooks(t *testing.T) {
 	srv, mockStore, router := setupHandlerTest(t)
 
-	mockStore.EXPECT().GetBooksBySeriesIDCore(10).Return([]database.BookCore{{ID: "b1"}}, nil)
+	// One reference is enough to refuse, and it deliberately does not matter
+	// whether that book is live, trashed or a non-primary version — the old
+	// guard's blindness to the last two is what stranded 13,322 books.
+	srv.store = seriesRefMockStore{MockStore: mockStore, refCounts: map[int]int{10: 1}}
 
 	router.DELETE("/series/:id", newEntitiesHandler(srv).DeleteEmptySeries)
 
