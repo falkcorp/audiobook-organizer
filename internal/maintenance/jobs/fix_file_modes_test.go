@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/fix_file_modes_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1f6e3a58-2d94-4c07-b8e5-9a3c7d1f4b62
 // last-edited: 2026-08-14
 
@@ -16,10 +16,12 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
-// fixModesFixture: one 0600 file (broken — must be repaired), one 0664 file
-// (healthy — must be untouched), one recorded path that no longer exists
-// (must be skipped without failing). All owned by the test's own uid, which
-// matches the job's owned-by-self gate.
+// fixModesFixture: one 0600 file (broken — must be repaired), one 0644 file
+// (healthy — must be untouched; deliberately NOT 0664, because a job that
+// chmods EVERYTHING to 0664 is indistinguishable from a correctly-gated one
+// when the bystander already wears the target mode — that exact blindness
+// let a gate-inverting mutation survive), and one recorded path that no
+// longer exists (must be skipped without failing).
 func fixModesFixture(t *testing.T) (*database.MockStore, string, string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -30,7 +32,7 @@ func fixModesFixture(t *testing.T) (*database.MockStore, string, string) {
 			t.Fatal(err)
 		}
 	}
-	if err := os.Chmod(healthy, 0o664); err != nil {
+	if err := os.Chmod(healthy, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	m := &database.MockStore{}
@@ -65,7 +67,7 @@ func TestFixFileModes_RepairsOnly0600(t *testing.T) {
 	if info, _ := os.Stat(broken); info.Mode().Perm() != 0o664 {
 		t.Fatalf("broken file mode = %o, want 664", info.Mode().Perm())
 	}
-	if info, _ := os.Stat(healthy); info.Mode().Perm() != 0o664 {
-		t.Fatalf("healthy file mode changed to %o", info.Mode().Perm())
+	if info, _ := os.Stat(healthy); info.Mode().Perm() != 0o644 {
+		t.Fatalf("healthy (0644) file mode changed to %o — the job must touch ONLY exactly-0600 files", info.Mode().Perm())
 	}
 }
