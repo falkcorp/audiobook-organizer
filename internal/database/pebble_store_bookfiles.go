@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
-// last-edited: 2026-08-06
+// last-edited: 2026-08-13
 
 package database
 
@@ -567,7 +567,7 @@ func (s *PebbleStore) getAllBooksPebbleScan() ([]Book, error) {
 		if err := json.Unmarshal(iter.Value(), &book); err != nil {
 			return nil, err
 		}
-		if book.MarkedForDeletion != nil && *book.MarkedForDeletion {
+		if bookIsSoftDeleted(&book) {
 			continue
 		}
 		books = append(books, book)

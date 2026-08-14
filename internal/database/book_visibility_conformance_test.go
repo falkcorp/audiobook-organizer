@@ -1,11 +1,12 @@
 // file: internal/database/book_visibility_conformance_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e398a03c-a0e4-4e64-8da3-3beac8e0ff6b
 // last-edited: 2026-08-13
 
 package database
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -140,4 +141,114 @@ func TestGetAllBooksCore_MemDBAndPebbleAgree(t *testing.T) {
 		}
 		require.Len(t, books, len(fx.deletedIDs))
 	})
+}
+
+// TestGetAllBooksCore_PaginationPartitionsTheLiveSet is the pagination half of
+// the conformance gate.
+//
+// The test above calls GetAllBooksCore(0, 0) against a 5-book fixture, which
+// means BOTH the limit clamp and the offset clamp are dead code in it. Every
+// real caller instead pages — GetAllBooksCore(pageSize, offset) in a loop that
+// terminates when a page comes back short — so the untested interaction is the
+// one production actually depends on: filtering must happen BEFORE pagination.
+//
+// If a path ever paginates first and filters second, a page containing trashed
+// rows comes back short after filtering, the caller's `len(page) < pageSize`
+// termination fires early, and the tail of the library is silently skipped.
+// Both paths filter-then-paginate today; this test is what keeps that true,
+// because a length check alone cannot see the difference between a page of
+// [live, live] and a page of [live, trashed].
+func TestGetAllBooksCore_PaginationPartitionsTheLiveSet(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+
+	p, ok := store.(*PebbleStore)
+	require.True(t, ok, "expected *PebbleStore from setupPebbleTestDB")
+
+	// Fixture is deliberately LARGER than the page size, with trashed rows
+	// interleaved among live ones rather than clustered at either end — a
+	// trailing block of trashed rows would only exercise the final page.
+	const (
+		total    = 21
+		pageSize = 4
+	)
+	yes := true
+	var wantLive []string
+	var deleted []string
+
+	for i := 0; i < total; i++ {
+		title := fmt.Sprintf("Paged %02d", i)
+		created, err := store.CreateBook(&Book{Title: title, FilePath: "/lib/paged/" + title})
+		require.NoError(t, err)
+		if i%3 == 0 {
+			created.MarkedForDeletion = &yes
+			_, err = store.UpdateBook(created.ID, created)
+			require.NoError(t, err)
+			deleted = append(deleted, created.ID)
+			continue
+		}
+		wantLive = append(wantLive, created.ID)
+	}
+	p.WaitForWarmup()
+
+	// Non-vacuity guards. The fixture must actually straddle a page boundary
+	// and must actually contain trash, or this test proves nothing.
+	require.Greater(t, len(wantLive), pageSize,
+		"fixture must exceed one page or the pagination clamps are never exercised")
+	require.NotEmpty(t, deleted, "fixture must contain soft-deleted books or this test is vacuous")
+
+	traverse := map[bool][]string{}
+
+	for _, useMemDB := range []bool{true, false} {
+		p.UseMemDB = useMemDB
+		label := "PebbleScanPath"
+		if useMemDB {
+			label = "MemDBPath"
+		}
+
+		t.Run(label, func(t *testing.T) {
+			seen := map[string]struct{}{}
+			var order []string
+			pages := 0
+
+			// This loop is written the way production callers write it,
+			// including the short-page termination that is the actual hazard.
+			for offset := 0; ; offset += pageSize {
+				page, err := store.GetAllBooksCore(pageSize, offset)
+				require.NoError(t, err)
+				pages++
+				require.LessOrEqual(t, len(page), pageSize, "page exceeded the requested limit")
+
+				for _, b := range page {
+					require.NotContains(t, seen, b.ID,
+						"book returned on two different pages — pages must be disjoint")
+					seen[b.ID] = struct{}{}
+					order = append(order, b.ID)
+				}
+				if len(page) < pageSize {
+					break
+				}
+				require.Less(t, pages, total, "pagination did not terminate")
+			}
+
+			// Partition: every live book appears exactly once (disjointness is
+			// asserted above), and nothing else appears at all.
+			require.Len(t, order, len(wantLive),
+				"paged traversal did not recover the live set exactly — a short page from "+
+					"paginate-then-filter would truncate the tail here")
+			for _, id := range wantLive {
+				require.Contains(t, seen, id, "live book missing from the paged traversal")
+			}
+			for _, id := range deleted {
+				require.NotContains(t, seen, id, "soft-deleted book leaked into a page")
+			}
+
+			traverse[useMemDB] = order
+		})
+	}
+
+	// Cross-implementation conformance on the paged path, as sets: the two
+	// backends must be indistinguishable to a paging caller.
+	require.ElementsMatch(t, traverse[true], traverse[false],
+		"memdb and Pebble paged traversals of GetAllBooksCore recovered different book sets")
 }

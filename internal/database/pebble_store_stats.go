@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_stats.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8643a893-1898-4098-8e69-c312531d962c
-// last-edited: 2026-07-07
+// last-edited: 2026-08-13
 
 package database
 
@@ -42,7 +42,7 @@ func (p *PebbleStore) CountFiles() (int, error) {
 		if err := json.Unmarshal(bookIter.Value(), &book); err != nil {
 			return 0, err
 		}
-		if book.MarkedForDeletion != nil && *book.MarkedForDeletion {
+		if bookIsSoftDeleted(&book) {
 			continue
 		}
 		if book.IsPrimaryVersion != nil && !*book.IsPrimaryVersion {
@@ -303,7 +303,7 @@ func (p *PebbleStore) computeLibraryStats() (*LibraryStats, error) {
 		if err := json.Unmarshal(bookIter.Value(), &b); err != nil {
 			continue
 		}
-		if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+		if bookIsSoftDeleted(&b) {
 			continue
 		}
 		stats.TotalBooks++

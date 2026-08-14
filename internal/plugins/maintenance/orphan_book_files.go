@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/orphan_book_files.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 9d2c4f6a-8e1b-4c5d-9a7b-3e5f1a2c4b6d
 // last-edited: 2026-08-13
 
@@ -65,7 +65,7 @@ func (p *Plugin) runOrphanBookFilesCleanup(ctx context.Context, raw json.RawMess
 	scanProg := sdk.NewProgress(reporter, 0)
 	scanProg.Start("Scanning book_files for orphan rows...")
 
-	orphans, totalFiles, totalBooks, err := findOrphanBookFiles(ctx, store)
+	orphans, totalFiles, ownerCount, err := findOrphanBookFiles(ctx, store)
 	if err != nil {
 		return fmt.Errorf("scan failed: %w", err)
 	}
@@ -73,7 +73,8 @@ func (p *Plugin) runOrphanBookFilesCleanup(ctx context.Context, raw json.RawMess
 	_ = reporter.Log(slog.LevelInfo, "Orphan scan complete",
 		slog.Int("orphan_count", len(orphans)),
 		slog.Int("total_book_files", totalFiles),
-		slog.Int("total_books", totalBooks),
+		// live + soft-deleted: every book that could still own a file row.
+		slog.Int("owning_books", ownerCount),
 	)
 
 	if !params.Delete || len(orphans) == 0 {
@@ -89,8 +90,8 @@ func (p *Plugin) runOrphanBookFilesCleanup(ctx context.Context, raw json.RawMess
 	// Delete pass — now we know N.
 	total := len(orphans)
 	prog := sdk.NewProgress(reporter, total)
-	prog.Start(fmt.Sprintf("Found %d orphan book_file row(s) out of %d (valid books: %d)",
-		total, totalFiles, totalBooks))
+	prog.Start(fmt.Sprintf("Found %d orphan book_file row(s) out of %d (owning books: %d)",
+		total, totalFiles, ownerCount))
 	var deleted, failed int
 
 	// Deletes go through Store.DeleteBookFilesByIDs in chunks rather than one
@@ -200,15 +201,21 @@ func (p *Plugin) runOrphanBookFilesCleanup(ctx context.Context, raw json.RawMess
 }
 
 // findOrphanBookFiles returns every BookFile whose BookID does not match any
-// existing book ID. Returns the orphan slice, the total number of book_files
-// scanned, and the number of valid book IDs found. The scan uses the memdb
-// fastpath via Store.GetAllBookFilesCore / Store.GetAllBooks; both calls
-// return projections of the underlying tables without per-row decoding cost.
+// book that could still own it. Returns the orphan slice, the total number of
+// book_files scanned, and the number of owning book IDs considered. The scan
+// uses the memdb fastpath via Store.GetAllBookFilesCore / Store.GetAllBooks;
+// both calls return projections of the underlying tables without per-row
+// decoding cost.
+//
+// "Could still own it" is deliberately wider than "live": a soft-deleted book
+// is restorable and still owns its files, so ownerCount is live + soft-deleted
+// and will exceed the library's book count. That is the correct denominator
+// for this scan and the one it reports.
 //
 // This is the testable core of runOrphanBookFilesCleanup. It does not delete
 // anything — callers that want to delete pass the resulting IDs to
 // Store.DeleteBookFilesByIDs themselves, in chunks.
-func findOrphanBookFiles(ctx context.Context, store database.Store) (orphans []database.BookFileCore, totalFiles int, totalBooks int, err error) {
+func findOrphanBookFiles(ctx context.Context, store database.Store) (orphans []database.BookFileCore, totalFiles int, ownerCount int, err error) {
 	if ctx.Err() != nil {
 		return nil, 0, 0, ctx.Err()
 	}
@@ -270,5 +277,10 @@ func findOrphanBookFiles(ctx context.Context, store database.Store) (orphans []d
 			orphans = append(orphans, f)
 		}
 	}
-	return orphans, len(files), len(books), nil
+	// Report the size of the set that actually decided orphanhood, not just
+	// the live books. `valid` is live + soft-deleted, so returning len(books)
+	// here would log a denominator smaller than the one used above — an
+	// operator reading "N orphans out of M books" would be reading the wrong M
+	// and could not reconcile it against the library count.
+	return orphans, len(files), len(valid), nil
 }

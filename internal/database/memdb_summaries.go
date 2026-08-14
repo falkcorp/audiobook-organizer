@@ -1,7 +1,7 @@
 // file: internal/database/memdb_summaries.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000008
-// last-edited: 2026-07-05
+// last-edited: 2026-08-13
 
 package database
 
@@ -180,11 +180,11 @@ func (m *MemStore) GetBookSummaries(limit, offset int, f BookSummaryFilter) ([]B
 		// Apply filters before pagination so offset/limit match the
 		// post-filter set, not the pre-filter set.
 		if excludeDeleted {
-			if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+			if bookIsSoftDeleted(b) {
 				continue
 			}
 		} else {
-			isDel := b.MarkedForDeletion != nil && *b.MarkedForDeletion
+			isDel := bookIsSoftDeleted(b)
 			if isDel != requireDeleted {
 				continue
 			}
@@ -320,11 +320,11 @@ func (m *MemStore) CountBookSummaries(f BookSummaryFilter) (int, error) {
 			}
 		}
 		if excludeDeleted {
-			if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+			if bookIsSoftDeleted(b) {
 				continue
 			}
 		} else {
-			isDel := b.MarkedForDeletion != nil && *b.MarkedForDeletion
+			isDel := bookIsSoftDeleted(b)
 			if isDel != requireDeleted {
 				continue
 			}

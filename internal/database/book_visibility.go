@@ -1,5 +1,5 @@
 // file: internal/database/book_visibility.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4eee927b-72ce-4b07-aa41-a91afb2368ba
 // last-edited: 2026-08-13
 
@@ -25,5 +25,23 @@ package database
 // See TestGetAllBooksCore_MemDBAndPebbleAgree for the conformance test that
 // holds the two implementations to this shared definition.
 func bookIsSoftDeleted(b *Book) bool {
-	return b != nil && b.MarkedForDeletion != nil && *b.MarkedForDeletion
+	return b != nil && markedForDeletionFlag(b.MarkedForDeletion)
+}
+
+// bookCoreIsSoftDeleted is the BookCore twin of bookIsSoftDeleted.
+//
+// Book and BookCore are separate structs that each carry their own copy of the
+// trash bit, and scans split between them (GetAllBooksCore returns BookCore,
+// GetAllBooks returns Book), so the predicate needs both shapes. Both delegate
+// to markedForDeletionFlag rather than restating the nil-check, which is the
+// whole point: adding a third row type must not add a third copy of the rule.
+func bookCoreIsSoftDeleted(b *BookCore) bool {
+	return b != nil && markedForDeletionFlag(b.MarkedForDeletion)
+}
+
+// markedForDeletionFlag is the rule itself, stated once: the trash bit is a
+// *bool where nil means "never deleted", so an unset pointer is live. Every
+// visibility check in this package bottoms out here.
+func markedForDeletionFlag(flag *bool) bool {
+	return flag != nil && *flag
 }
