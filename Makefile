@@ -1,7 +1,7 @@
 # file: Makefile
-# version: 2.17.0
+# version: 2.18.0
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
-# last-edited: 2026-08-12
+# last-edited: 2026-08-14
 
 BINARY := audiobook-organizer
 ROOT_DIR := $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
@@ -169,6 +169,24 @@ test: vet
 	@echo "🧪 Running backend tests (full suite)..."
 	@go test ./... -v -race -timeout 25m
 	@echo "✅ Backend tests passed"
+
+## test-fast: Full backend suite with TMPDIR on a RAM disk (H111, opt-in).
+## The per-test Pebble+migration setup is write-bound: measured 532s for
+## internal/server on a normal macOS TMPDIR vs 33.7s on a RAM disk (~15.8x).
+## Creates/reuses a 3GB RAM disk at /Volumes/abo-test-ram (macOS) or uses
+## /dev/shm (Linux). Test artifacts on it vanish at detach/reboot — the
+## wrapper only sets TMPDIR for the test run, it never touches data paths.
+## Remove the disk afterwards with: hdiutil detach /Volumes/abo-test-ram
+test-fast: vet
+	@echo "🧪 Running backend tests (full suite, RAM-disk TMPDIR)..."
+	@bash scripts/with-ramdisk-tmpdir.sh go test ./... -v -race -timeout 25m
+	@echo "✅ Backend tests passed (RAM-disk TMPDIR)"
+
+## test-fast-short: -short variant of test-fast.
+test-fast-short: vet
+	@echo "🧪 Running backend tests (-short, RAM-disk TMPDIR)..."
+	@bash scripts/with-ramdisk-tmpdir.sh go test ./... -short -race -timeout 25m
+	@echo "✅ Short backend tests passed (RAM-disk TMPDIR)"
 
 ## test-short: Run Go backend tests in short mode — skips slow property
 ## tests (undo/playlist/dedup/etc.) that create per-iteration PebbleStores.
