@@ -1,5 +1,5 @@
 // file: internal/organizer/organizer.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-08-13
 
@@ -361,24 +361,50 @@ func (o *Organizer) generateTargetPath(book *database.Book) (string, error) {
 	return fullPath, nil
 }
 
+// placeholderAuthor is the path fallback for books with no resolvable author.
+// Baking it into an organized path is what the 2026-08-11 mass-reorganize did
+// 23,622 times — see docs/audits/2026-08-13-mass-reorganize-duplicated-14tb-
+// under-unknown-author.md. Rename/copy paths must gate on HasResolvedAuthor
+// before using a target built from this.
+const placeholderAuthor = "Unknown Author"
+
+// resolveAuthorName returns the book's effective author name, following
+// AuthorID when the Author object is not populated. Empty string means the
+// author is UNRESOLVED and any generated path would fall back to
+// placeholderAuthor.
+func (o *Organizer) resolveAuthorName(book *database.Book) string {
+	if book.Author != nil {
+		if trimmed := strings.TrimSpace(book.Author.Name); trimmed != "" {
+			return trimmed
+		}
+	} else if book.AuthorID != nil && o.store != nil {
+		author, err := o.store.GetAuthorByID(*book.AuthorID)
+		if err == nil && author != nil {
+			if trimmed := strings.TrimSpace(author.Name); trimmed != "" {
+				return trimmed
+			}
+		}
+	}
+	return ""
+}
+
+// HasResolvedAuthor reports whether organizing this book would use a real
+// author name rather than the placeholder. Callers that RENAME or COPY into
+// the library tree must defer when this is false: a book filed under the
+// placeholder needs metadata resolution, not a rename that cements the
+// placeholder into its path (and later a content-verified purge to undo).
+func (o *Organizer) HasResolvedAuthor(book *database.Book) bool {
+	return o.resolveAuthorName(book) != ""
+}
+
 // expandPattern expands a pattern with book metadata
 func (o *Organizer) expandPattern(pattern string, book *database.Book) (string, error) {
 	result := placeholderNormalizeRegex.ReplaceAllStringFunc(pattern, strings.ToLower)
 
 	// Get author name - look up by ID if Author object is nil but AuthorID is set
-	authorName := "Unknown Author"
-	if book.Author != nil {
-		if trimmed := strings.TrimSpace(book.Author.Name); trimmed != "" {
-			authorName = trimmed
-		}
-	} else if book.AuthorID != nil && o.store != nil {
-		// Author object not populated, but we have an ID - look it up
-		author, err := o.store.GetAuthorByID(*book.AuthorID)
-		if err == nil && author != nil {
-			if trimmed := strings.TrimSpace(author.Name); trimmed != "" {
-				authorName = trimmed
-			}
-		}
+	authorName := o.resolveAuthorName(book)
+	if authorName == "" {
+		authorName = placeholderAuthor
 	}
 
 	title := strings.TrimSpace(book.Title)
