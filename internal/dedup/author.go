@@ -1,7 +1,7 @@
 // file: internal/dedup/author.go
-// version: 1.11.1
+// version: 1.12.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
-// last-edited: 2026-07-18
+// last-edited: 2026-08-14
 
 package dedup
 
@@ -62,8 +62,30 @@ func IsProductionCompany(name string) bool {
 	return false
 }
 
+// leadingConjunctionRe matches a coordinating conjunction stranded at the start
+// of an author name, e.g. "& Conrad Westmaas" or "and Sadie Miller".
+//
+// The trailing \s+ is load-bearing and must not be relaxed to \s*:
+//   - "&#169" and "&#169;2013 by HarperCollinsPublishers" are real rows in the
+//     author table — decapitated HTML entities for © from a copyright string that
+//     leaked into an artist tag. They are a SEPARATE defect. A bare "^&" strip
+//     rewrites them to "#169", which is strictly worse than leaving them alone.
+//   - Requiring whitespace also stops "and" from eating the first syllable of
+//     real names like "Anders Bergman" or "Andrea Cremer".
+var leadingConjunctionRe = regexp.MustCompile(`(?i)^(?:&|and)\s+`)
+
 // NormalizeAuthorName normalizes whitespace around initials and trims.
 // "James S. A. Corey" and "James S.A. Corey" both become "James S. A. Corey"
+//
+// It also strips a leading conjunction. Every delimiter branch of
+// SplitCompositeAuthorName funnels through here, and each of them validated a
+// candidate part only by asking whether it contained a space — which
+// "& Conrad Westmaas" satisfies. An Oxford comma before the ampersand
+// ("A, B, & C") makes the comma branch fire before the " & " branch further
+// down, so the ampersand is stranded on the final name and stored verbatim.
+// That produced 48 "& Name" author rows in one import run. Normalizing here
+// rather than in the comma branch closes the same hole in the slash, semicolon
+// and bracket branches, which all share it.
 func NormalizeAuthorName(name string) string {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -73,6 +95,13 @@ func NormalizeAuthorName(name string) string {
 	// Normalize multiple spaces to single
 	spaceRe := regexp.MustCompile(`\s+`)
 	name = spaceRe.ReplaceAllString(name, " ")
+
+	// Strip a stranded leading conjunction, but never turn a name into nothing:
+	// a bare "&" or "and" with no remainder is left as-is for the caller's
+	// existing empty/short-part checks to reject.
+	if stripped := strings.TrimSpace(leadingConjunctionRe.ReplaceAllString(name, "")); stripped != "" {
+		name = stripped
+	}
 
 	// Expand collapsed initials: "S.A." → "S. A."
 	initialsRe := regexp.MustCompile(`([A-Z]\.)([A-Z])`)
