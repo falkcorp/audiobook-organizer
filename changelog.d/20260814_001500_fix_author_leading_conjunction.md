@@ -2,7 +2,7 @@
 
 #### Author names no longer keep a stranded "&" from Oxford-comma credit lists
 
-48 author rows in the library were named `& Conrad Westmaas`, `& Lisa Bowerman`,
+46 author rows in the library were named `& Conrad Westmaas`, `& Lisa Bowerman`,
 `& India Fisher` and so on — a leading ampersand glued to an otherwise correct
 name. They showed up as separate authors on author pages and in dedup
 candidates, splitting a real person's books across two rows.
