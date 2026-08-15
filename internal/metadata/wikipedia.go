@@ -1,5 +1,5 @@
 // file: internal/metadata/wikipedia.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 
 package metadata
@@ -12,7 +12,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/metadata/providerhttp"
 )
 
 // WikipediaClient fetches metadata from the MediaWiki API and Wikidata.
@@ -26,7 +27,7 @@ type WikipediaClient struct {
 // NewWikipediaClient creates a new Wikipedia/Wikidata metadata client.
 func NewWikipediaClient() *WikipediaClient {
 	return &WikipediaClient{
-		httpClient:  &http.Client{Timeout: 30 * time.Second},
+		httpClient:  providerhttp.Client("wikipedia"),
 		baseURL:     "https://en.wikipedia.org/w/api.php",
 		wikidataURL: "https://www.wikidata.org/w/api.php",
 	}
@@ -35,7 +36,7 @@ func NewWikipediaClient() *WikipediaClient {
 // NewWikipediaClientWithBaseURL creates a client with custom URLs (for testing).
 func NewWikipediaClientWithBaseURL(baseURL, wikidataURL string) *WikipediaClient {
 	return &WikipediaClient{
-		httpClient:  &http.Client{Timeout: 30 * time.Second},
+		httpClient:  providerhttp.Client("wikipedia"),
 		baseURL:     strings.TrimRight(baseURL, "/"),
 		wikidataURL: strings.TrimRight(wikidataURL, "/"),
 	}

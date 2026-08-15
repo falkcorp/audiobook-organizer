@@ -1,5 +1,5 @@
 // file: internal/metadata/openlibrary.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-07-13
 
@@ -14,7 +14,8 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/metadata/providerhttp"
 
 	"github.com/falkcorp/audiobook-organizer/internal/openlibrary"
 )
@@ -39,10 +40,8 @@ func NewOpenLibraryClient() *OpenLibraryClient {
 // NewOpenLibraryClientWithBaseURL creates a client with a custom base URL.
 func NewOpenLibraryClientWithBaseURL(baseURL string) *OpenLibraryClient {
 	return &OpenLibraryClient{
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
-		baseURL: strings.TrimRight(baseURL, "/"),
+		httpClient: providerhttp.Client("openlibrary"),
+		baseURL:    strings.TrimRight(baseURL, "/"),
 	}
 }
 

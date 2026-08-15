@@ -1,5 +1,5 @@
 // file: internal/metadata/audnexus.go
-// version: 2.6.0
+// version: 2.7.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-a3b4c5d6e7f8
 // last-edited: 2026-07-13
 
@@ -15,6 +15,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/metadata/providerhttp"
 )
 
 // AudnexusClient fetches audiobook metadata from the Audnexus community API,
@@ -33,7 +35,7 @@ func NewAudnexusClient() *AudnexusClient {
 		baseURL = "https://api.audnex.us"
 	}
 	return &AudnexusClient{
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		httpClient: providerhttp.Client("audnexus"),
 		baseURL:    strings.TrimRight(baseURL, "/"),
 	}
 }
@@ -41,7 +43,7 @@ func NewAudnexusClient() *AudnexusClient {
 // NewAudnexusClientWithBaseURL creates a client with a custom base URL (for testing).
 func NewAudnexusClientWithBaseURL(baseURL string) *AudnexusClient {
 	return &AudnexusClient{
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		httpClient: providerhttp.Client("audnexus"),
 		baseURL:    strings.TrimRight(baseURL, "/"),
 	}
 }

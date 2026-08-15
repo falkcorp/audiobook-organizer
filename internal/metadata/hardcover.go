@@ -1,5 +1,5 @@
 // file: internal/metadata/hardcover.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: e7e02554-8931-49ba-9528-d3d51279da1d
 // last-edited: 2026-07-13
 
@@ -13,8 +13,8 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"sync"
-	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/metadata/providerhttp"
 )
 
 // HardcoverClient fetches metadata from the Hardcover.app GraphQL API.
@@ -24,79 +24,34 @@ type HardcoverClient struct {
 	baseURL    string
 	apiToken   string
 
-	// Simple rate limiter: 60 requests per minute
-	mu         sync.Mutex
-	requestLog []time.Time
-	rateLimit  int
-	ratePeriod time.Duration
+	// Rate limiting lives in the providerhttp transport (shared process-wide
+	// token bucket), NOT here. This client previously carried its own mutex +
+	// time.Sleep limiter, which serialized every caller in the process rather
+	// than pacing them -- a hard bottleneck for any fan-out, since the metadata
+	// source chain is memoized and shared across all fetch workers.
 }
 
 // NewHardcoverClient creates a new Hardcover API client with the given token.
 func NewHardcoverClient(apiToken string) *HardcoverClient {
 	return &HardcoverClient{
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		httpClient: providerhttp.Client("hardcover"),
 		baseURL:    "https://api.hardcover.app/v1/graphql",
 		apiToken:   apiToken,
-		rateLimit:  60,
-		ratePeriod: time.Minute,
 	}
 }
 
 // NewHardcoverClientWithBaseURL creates a client with a custom base URL (for testing).
 func NewHardcoverClientWithBaseURL(baseURL, apiToken string) *HardcoverClient {
 	return &HardcoverClient{
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		httpClient: providerhttp.Client("hardcover"),
 		baseURL:    strings.TrimRight(baseURL, "/"),
 		apiToken:   apiToken,
-		rateLimit:  60,
-		ratePeriod: time.Minute,
 	}
 }
 
 // Name returns the display name for this metadata source.
 func (c *HardcoverClient) Name() string {
 	return "Hardcover"
-}
-
-// waitForRateLimit blocks until a request can be made within the rate limit.
-func (c *HardcoverClient) waitForRateLimit() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	now := time.Now()
-	cutoff := now.Add(-c.ratePeriod)
-
-	// Remove expired entries
-	valid := c.requestLog[:0]
-	for _, t := range c.requestLog {
-		if t.After(cutoff) {
-			valid = append(valid, t)
-		}
-	}
-	c.requestLog = valid
-
-	if len(c.requestLog) >= c.rateLimit {
-		// Wait until the oldest request expires
-		waitUntil := c.requestLog[0].Add(c.ratePeriod)
-		sleepDuration := time.Until(waitUntil)
-		if sleepDuration > 0 {
-			c.mu.Unlock()
-			time.Sleep(sleepDuration)
-			c.mu.Lock()
-			// Re-clean after sleep
-			now = time.Now()
-			cutoff = now.Add(-c.ratePeriod)
-			valid = c.requestLog[:0]
-			for _, t := range c.requestLog {
-				if t.After(cutoff) {
-					valid = append(valid, t)
-				}
-			}
-			c.requestLog = valid
-		}
-	}
-
-	c.requestLog = append(c.requestLog, time.Now())
 }
 
 // GraphQL request/response types
@@ -233,7 +188,6 @@ func (c *HardcoverClient) SearchByContext(ctx context.Context, sc *SearchContext
 }
 
 func (c *HardcoverClient) search(ctx context.Context, query string) ([]BookMetadata, error) {
-	c.waitForRateLimit()
 
 	// Escape the query for embedding in the GraphQL string
 	escapedQuery := strings.ReplaceAll(query, `\`, `\\`)
