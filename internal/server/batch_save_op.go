@@ -1,7 +1,7 @@
 // file: internal/server/batch_save_op.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f2a1b4c-5d6e-7f8a-9b0c-1d2e3f4a5b6c
-// last-edited: 2026-05-10
+// last-edited: 2026-08-15
 //
 // batch_save_op registers the "metadata.batch-save" v2 OperationDef.
 // The HTTP handler batchWriteBackAudiobooks creates a v1 op record for
@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
@@ -65,43 +66,56 @@ func (s *Server) RegisterBatchSaveToFilesOp(reg *opsregistry.Registry) error {
 
 			_ = progress.UpdateProgress(0, totalBooks, "starting save to files")
 
-			written, organized, failed, skipped := 0, 0, 0, 0
-			org := organizer.NewOrganizer(&config.AppConfig)
-			log2 := logger.NewWithActivityLog("batch-write-back", store)
+			var written, organized, failed, skipped atomic.Int64
 
-			for i, id := range bookIDs {
-				if ctx.Err() != nil {
-					return ctx.Err()
-				}
-
+			// Per-item work. Everything mutated here is either an atomic counter or
+			// store-local, so N of these can run at once. The `organizer` and the
+			// activity logger are constructed PER ITEM rather than shared across the
+			// pool: neither documents itself as goroutine-safe, and both are cheap
+			// value-ish constructors, so per-item construction is the safe default.
+			runOne := func(ctx context.Context, id string) error {
 				book, err := store.GetBookByID(id)
 				if err != nil || book == nil {
-					failed++
+					failed.Add(1)
 					_ = store.AddOperationLog(opID, "warn", fmt.Sprintf("book %s not found", id), nil)
-					continue
+					return nil
 				}
 
 				// Skip if already written and metadata hasn't changed since last write
 				if !p.Force && book.LastWrittenAt != nil && !book.UpdatedAt.After(*book.LastWrittenAt) {
-					skipped++
-					_ = progress.UpdateProgress(i+1, totalBooks,
-						fmt.Sprintf("processed %d/%d (skipped: %d — already up to date)", i+1, totalBooks, skipped))
-					continue
+					skipped.Add(1)
+					return nil
 				}
 
-				// Write tags
+				org := organizer.NewOrganizer(&config.AppConfig)
+				log2 := logger.NewWithActivityLog("batch-write-back", store)
+
+				// Serialize on the destination path so two workers can never write
+				// or move the same file at once — see internal/server/path_locks.go
+				// for the three ways two book IDs collapse onto one path.
+				//
+				// RESIDUAL GAP, stated rather than hidden: for a book in a protected
+				// path, WriteBackMetadataForBook redirects internally to a library
+				// copy (internal/metafetch/service_writeback.go:681-691) whose path
+				// is not visible from this package. Two protected books sharing one
+				// library copy therefore remain unserialized here. Unlike
+				// runBulkWriteBack, this op has no protected-path skip, so the gap is
+				// real; closing it needs an exported resolver in internal/metafetch.
+				release := writeBackPathLocks.lock(book.FilePath)
 				_, wbErr := s.metadataFetchService.WriteBackMetadataForBook(id)
 				if wbErr != nil {
-					failed++
+					release()
+					failed.Add(1)
 					detail := wbErr.Error()
 					_ = store.AddOperationLog(opID, "warn", fmt.Sprintf("write-back failed for %s", book.Title), &detail)
-					continue
+					return nil
 				}
-				written++
+				written.Add(1)
 				// Stamp last_written_at on the book the user sees (may differ from library copy)
 				_ = store.SetLastWrittenAt(id, time.Now())
 
-				// Organize
+				// Organize. Still under the same path lock: organizing MOVES the file,
+				// so releasing between the write and the move would reopen the race.
 				if p.Organize {
 					book, _ = store.GetBookByID(id)
 					if book != nil {
@@ -129,23 +143,46 @@ func (s *Server) RegisterBatchSaveToFilesOp(reg *opsregistry.Registry) error {
 							detail := orgErr.Error()
 							_ = store.AddOperationLog(opID, "warn", fmt.Sprintf("organize failed for %s", book.Title), &detail)
 						} else if newPath != "" && newPath != oldPath {
-							organized++
+							organized.Add(1)
 						}
 					}
 				}
+				release()
 
 				// Enqueue ITL write-back
 				if s.writeBackBatcher != nil {
 					s.writeBackBatcher.Enqueue(id)
 				}
+				return nil
+			}
 
-				_ = progress.UpdateProgress(i+1, totalBooks,
-					fmt.Sprintf("processed %d/%d (written: %d, organized: %d, failed: %d)",
-						i+1, totalBooks, written, organized, failed))
+			// RunItems reports progress after EVERY item (run_items.go:131), which is
+			// what resets the registry stuck-op watchdog. This def sets Timeout: 4h
+			// but no explicit ProgressTimeout, so it inherits the 5-minute default;
+			// PerItemTimeout is set to 3 minutes, comfortably below it, so a single
+			// wedged book fails its own item instead of killing the whole op.
+			//
+			// ErrModeCollect, NOT the default ErrModeFail: the loop this replaces
+			// `continue`d past every per-book failure, and ErrModeFail would cancel
+			// the entire batch on the first bad book. (runOne returns nil on per-book
+			// failure anyway and records it in the counters, so this is belt-and-braces.)
+			//
+			// The Label is deliberately COARSE and constant. reporter_db.go:345 writes
+			// one op_logs_v2 row per DISTINCT progress message, so a label carrying the
+			// book id or the running tallies would write one DB row per book.
+			runErr := opsregistry.RunItems(ctx, reporter, bookIDs, runOne, opsregistry.RunItemsOptions{
+				Concurrency:    writeBackWorkers(),
+				PerItemTimeout: 3 * time.Minute,
+				ErrMode:        opsregistry.ErrModeCollect,
+				Label:          func(int, int) string { return "saving metadata to files" },
+			})
+			if runErr != nil && ctx.Err() != nil {
+				return ctx.Err()
 			}
 
 			_ = progress.UpdateProgress(totalBooks, totalBooks,
-				fmt.Sprintf("complete: written %d, organized %d, skipped %d, failed %d", written, organized, skipped, failed))
+				fmt.Sprintf("complete: written %d, organized %d, skipped %d, failed %d",
+					written.Load(), organized.Load(), skipped.Load(), failed.Load()))
 			return nil
 		},
 	})
