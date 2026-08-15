@@ -1,7 +1,7 @@
 // file: web/src/components/audiobooks/MetadataReviewDialog.tsx
-// version: 1.14.0
+// version: 1.15.0
 // guid: e7f8a9b0-c1d2-3e4f-5a6b-7c8d9e0f1a2b
-// last-edited: 2026-08-11
+// last-edited: 2026-08-15
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -26,6 +26,7 @@ import {
   ToggleButton,
   ToggleButtonGroup,
   Tooltip,
+  LinearProgress,
   Typography,
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
@@ -176,6 +177,14 @@ export function MetadataReviewDialog({
   const [onlyWithTranscription, setOnlyWithTranscription] = useState(false);
   const [onlyTranscriptionMatched, setOnlyTranscriptionMatched] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  // Live progress of the background apply op, so a long batch shows movement
+  // instead of a spinner that looks identical to a hung request.
+  const [applyOpId, setApplyOpId] = useState<string | null>(null);
+  const [applyProgress, setApplyProgress] = useState<{
+    current: number;
+    total: number;
+    message: string;
+  } | null>(null);
   // Books in this set have been manually split from their duplicate group and
   // render as standalone rows. Reset when the page changes.
   const [ungroupedIds, setUngroupedIds] = useState<Set<string>>(new Set());
@@ -319,76 +328,79 @@ export function MetadataReviewDialog({
   // server skipped (expired cache entry, apply error) disappeared from the
   // queue as if it had worked, then came back on the next load. Skipped rows
   // are reverted to 'pending' so they stay visible and re-appliable.
-  const applyServerOutcome = useCallback(
-    (
-      requestedIds: string[],
-      result: api.BatchApplyFromCacheResult,
-      undoLabel: string
-    ) => {
-      const appliedSet = new Set(result.applied_ids);
-      setRowStates((prev) => {
-        const next = new Map(prev);
-        requestedIds.forEach((id) => next.set(id, appliedSet.has(id) ? 'applied' : 'pending'));
-        return next;
-      });
-      if (result.applied > 0) {
-        const undoIds = result.applied_ids;
+  // An auth bounce during a batch apply does NOT mean nothing was applied.
+  //
+  // The code here used to assert that it did — every row was reverted to
+  // 'pending' with a "nothing was applied" toast — on the reasoning that when
+  // Cloudflare Access bounces a request to a login page the origin never sees
+  // it. That holds only while the request is short. Measured on production: a
+  // 250-book apply ran 2m0s, the origin returned HTTP 200, 67 files were
+  // written in that window, and the user was told nothing had been applied.
+  // Reverting the rows then invites a re-apply of work that already succeeded.
+  //
+  // So: keep the detection (an expired session really is indistinguishable from
+  // success without it), report it accurately, and re-read server state rather
+  // than guessing. Dispatch is now a sub-second request, which makes the bounce
+  // far less likely to begin with.
+  const handleApplyError = useCallback(
+    (err: unknown, requestedIds: string[]) => {
+      setRefreshKey((k) => k + 1);
+      if (isAuthRedirectError(err)) {
         toast(
-          `Applied metadata to ${result.applied} book${result.applied > 1 ? 's' : ''}`,
-          'success',
-          {
-            label: undoLabel,
-            onClick: async () => {
-              for (const id of undoIds) {
-                try {
-                  await api.undoLastApply(id);
-                } catch {
-                  /* ignore */
-                }
-              }
-              setRowStates((prev) => {
-                const next = new Map(prev);
-                undoIds.forEach((id) => next.set(id, 'pending'));
-                return next;
-              });
-              toast(`Undid ${undoIds.length} apply(s)`, 'info');
-            },
-          }
+          'Session expired — sign in again. Any books already applied were kept; the list has been refreshed.',
+          'error'
         );
+        return;
       }
-      if (result.skipped.length > 0) {
-        const expired = result.skipped.filter(
-          (s) => s.reason === 'no_cached_candidates'
-        ).length;
-        const detail =
-          expired === result.skipped.length
-            ? 'no cached match — refresh and try again'
-            : 'see server logs for details';
-        toast(
-          `Skipped ${result.skipped.length} book${result.skipped.length > 1 ? 's' : ''} (${detail})`,
-          'warning'
-        );
-      }
+      toast(`Failed to start applying ${requestedIds.length} book(s)`, 'error');
     },
     [toast]
   );
 
-  // Session expiry is NOT a generic failure. When Cloudflare Access bounces the
-  // request to a login page the write never happened, so every optimistic row
-  // must revert and the user has to be told to sign in — not shown a generic
-  // "Failed to apply" they will retry against a dead session.
-  const handleApplyError = useCallback(
-    (err: unknown, requestedIds: string[]) => {
-      setRowStates((prev) => {
-        const next = new Map(prev);
-        requestedIds.forEach((id) => next.set(id, 'pending'));
-        return next;
-      });
-      if (isAuthRedirectError(err)) {
-        toast('Session expired, sign in again — nothing was applied', 'error');
-        return;
+  // runApplyOp dispatches the background apply, polls it, and then RE-READS the
+  // review list rather than diffing a client-side guess.
+  //
+  // The previous version trusted an applied_ids/skipped list returned inline.
+  // That list no longer exists: at dispatch time nothing has been applied yet.
+  // Re-reading is also strictly more honest — it reflects what the server
+  // actually did, including work finished after any client-side timeout.
+  const runApplyOp = useCallback(
+    async (requestedIds: string[], writeBack?: boolean): Promise<boolean> => {
+      const dispatch = await api.batchApplyFromCache(requestedIds, writeBack);
+      setApplyOpId(dispatch.op_id);
+      setApplyProgress({ current: 0, total: requestedIds.length, message: 'starting…' });
+      try {
+        const op = await api.pollOperationV2(dispatch.op_id, (o) => {
+          setApplyProgress({
+            current: o.progress_current ?? 0,
+            total: o.progress_total ?? requestedIds.length,
+            message: o.progress_message ?? o.current_item ?? 'applying…',
+          });
+        });
+        if (op.status === 'completed') {
+          hasChangesRef.current = true;
+          // progress_message carries the op's own tally, e.g.
+          // "complete: applied 248 of 250 (no candidates 2, ...)".
+          toast(op.progress_message || `Applied metadata to ${requestedIds.length} books`, 'success');
+          return true;
+        }
+        if (op.status === 'canceled') {
+          // Partial work is real and already on disk. Say so instead of
+          // implying the batch left no trace.
+          hasChangesRef.current = true;
+          toast('Metadata apply canceled — books applied before the cancel were kept', 'warning');
+          return true;
+        }
+        toast(op.progress_message || 'Metadata apply failed', 'error');
+        return true;
+      } finally {
+        setApplyOpId(null);
+        setApplyProgress(null);
+        // Always re-read: even a failed or canceled op may have applied some
+        // books before it stopped, and leaving the list stale would show rows
+        // as pending that are already done.
+        setRefreshKey((k) => k + 1);
       }
-      toast('Failed to apply', 'error');
     },
     [toast]
   );
@@ -398,15 +410,11 @@ export function MetadataReviewDialog({
     applyQueueRef.current = [];
     if (ids.length === 0) return;
     try {
-      const result = await api.batchApplyFromCache(ids);
-      if (result.applied > 0) {
-        hasChangesRef.current = true;
-      }
-      applyServerOutcome(ids, result, 'Undo');
+      await runApplyOp(ids);
     } catch (err) {
       handleApplyError(err, ids);
     }
-  }, [applyServerOutcome, handleApplyError]);
+  }, [runApplyOp, handleApplyError]);
 
   const handleApplyOne = (bookId: string) => {
     // Optimistic UI update
@@ -421,15 +429,11 @@ export function MetadataReviewDialog({
     if (bookIds.length === 0) return;
     setApplying(true);
     try {
-      const result = await api.batchApplyFromCache(bookIds);
-      // Clear the selection only for books that actually applied, so a skipped
-      // book stays selected and the user can retry it after a refresh.
-      const appliedSet = new Set(result.applied_ids);
-      setSelectedIds((prev) => new Set([...prev].filter((id) => !appliedSet.has(id))));
-      if (result.applied > 0) {
-        hasChangesRef.current = true;
-      }
-      applyServerOutcome(bookIds, result, 'Undo All');
+      await runApplyOp(bookIds);
+      // The refresh triggered by runApplyOp re-derives every row from the
+      // server, so clearing the whole selection is safe: anything that did not
+      // apply comes back as pending and can be re-selected.
+      setSelectedIds(new Set());
     } catch (err) {
       handleApplyError(err, bookIds);
     } finally {
@@ -1582,7 +1586,32 @@ export function MetadataReviewDialog({
             </>
           )}
         </DialogContent>
-        <DialogActions>
+        <DialogActions sx={{ gap: 2 }}>
+          {/* Live op progress. A long batch used to be indistinguishable from a
+              hung request — same spinner either way — which is what made a
+              working 2-minute apply read as a failure. */}
+          {applyProgress && (
+            <Box sx={{ flex: 1, minWidth: 0, mr: 1 }}>
+              <LinearProgress
+                variant={applyProgress.total > 0 ? 'determinate' : 'indeterminate'}
+                value={
+                  applyProgress.total > 0
+                    ? Math.min(100, (applyProgress.current / applyProgress.total) * 100)
+                    : 0
+                }
+              />
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                noWrap
+                title={applyProgress.message}
+                sx={{ display: 'block' }}
+              >
+                {applyProgress.current}/{applyProgress.total} — {applyProgress.message}
+                {applyOpId ? ` (op ${applyOpId.slice(0, 8)})` : ''}
+              </Typography>
+            </Box>
+          )}
           <Button onClick={handleClose}>Close</Button>
           <Button
             variant="contained"
