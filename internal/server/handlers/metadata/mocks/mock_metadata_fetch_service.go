@@ -206,6 +206,52 @@ func (_c *MockMetadataFetchService_ApplyMetadataSystemTags_Call) RunAndReturn(ru
 	return _c
 }
 
+// DownloadPendingCover provides a mock function for the type MockMetadataFetchService
+func (_mock *MockMetadataFetchService) DownloadPendingCover(bookID string, coverURL string) {
+	_mock.Called(bookID, coverURL)
+	return
+}
+
+// MockMetadataFetchService_DownloadPendingCover_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DownloadPendingCover'
+type MockMetadataFetchService_DownloadPendingCover_Call struct {
+	*mock.Call
+}
+
+// DownloadPendingCover is a helper method to define mock.On call
+//   - bookID string
+//   - coverURL string
+func (_e *MockMetadataFetchService_Expecter) DownloadPendingCover(bookID any, coverURL any) *MockMetadataFetchService_DownloadPendingCover_Call {
+	return &MockMetadataFetchService_DownloadPendingCover_Call{Call: _e.mock.On("DownloadPendingCover", bookID, coverURL)}
+}
+
+func (_c *MockMetadataFetchService_DownloadPendingCover_Call) Run(run func(bookID string, coverURL string)) *MockMetadataFetchService_DownloadPendingCover_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockMetadataFetchService_DownloadPendingCover_Call) Return() *MockMetadataFetchService_DownloadPendingCover_Call {
+	_c.Call.Return()
+	return _c
+}
+
+func (_c *MockMetadataFetchService_DownloadPendingCover_Call) RunAndReturn(run func(bookID string, coverURL string)) *MockMetadataFetchService_DownloadPendingCover_Call {
+	_c.Run(run)
+	return _c
+}
+
 // FetchAndCache provides a mock function for the type MockMetadataFetchService
 func (_mock *MockMetadataFetchService) FetchAndCache(ctx context.Context, bookID string, query string, author string, narrator string, series string, opts metafetch.SearchOptions) (*metafetch.MetadataCandidateCache, error) {
 	ret := _mock.Called(ctx, bookID, query, author, narrator, series, opts)

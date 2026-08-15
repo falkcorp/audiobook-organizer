@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
-// last-edited: 2026-07-13
+// last-edited: 2026-08-15
 
 package metafetch
 
@@ -601,20 +601,24 @@ func (mfs *Service) ApplyMetadataCandidate(id string, candidate MetadataCandidat
 		slog.Warn("generate segment titles failed for", "id", id, "error", err)
 	}
 
-	// Download cover art (fast network fetch + file write — keep inline so
-	// the response includes the updated cover_url for the UI).
+	// Cover art is downloaded in the BACKGROUND — see pendingCover below.
+	//
+	// It used to run inline, with a comment calling it a "fast network fetch".
+	// Measured on production 2026-08-15, applying metadata to one book: the
+	// request took 6.44s end to end and ~4s of that was this download. Everything
+	// else the apply path does (tags, rename, write-back) was already backgrounded
+	// through the file-IO pool, so this single call was the majority of the wait
+	// a user sees after clicking Apply.
+	//
+	// The response no longer carries the final local cover_url. That is the
+	// deliberate trade: the caller gets the book back immediately and the cover
+	// appears a moment later. FetchMetadataResponse.PendingCoverURL has existed
+	// (documented as "set by ApplyMetadataCandidate for background download")
+	// since before this change but was never set or read by anything — the idea
+	// predates the measurement; only the wiring was missing.
+	pendingCover := ""
 	if meta.CoverURL != "" && config.AppConfig.RootDir != "" {
-		coverPath, coverErr := metadata.DownloadCoverArt(meta.CoverURL, config.AppConfig.RootDir, id)
-		if coverErr != nil {
-			slog.Warn("cover art download failed for", "id", id, "error", coverErr)
-		} else {
-			slog.Info("cover art saved to", "path", coverPath)
-			localCoverURL := "/api/v1/covers/local/" + filepath.Base(coverPath)
-			if updatedBook != nil {
-				updatedBook.CoverURL = &localCoverURL
-				mfs.db.UpdateBook(id, updatedBook)
-			}
-		}
+		pendingCover = meta.CoverURL
 	}
 
 	// Queue background ISBN/ASIN enrichment if identifiers are missing
@@ -644,10 +648,47 @@ func (mfs *Service) ApplyMetadataCandidate(id string, candidate MetadataCandidat
 	// subsequent scan to hit the external API again.
 
 	return &FetchMetadataResponse{
-		Message: "metadata candidate applied",
-		Book:    updatedBook,
-		Source:  candidate.Source,
+		Message:         "metadata candidate applied",
+		Book:            updatedBook,
+		Source:          candidate.Source,
+		PendingCoverURL: pendingCover,
 	}, nil
+}
+
+// DownloadPendingCover fetches a candidate's cover art and points the book at
+// the local copy. Intended to run in the background off the request path — see
+// the comment in ApplyMetadataCandidate for why.
+//
+// Safe to call with an empty URL (no-op) and safe to call concurrently for
+// different books; DownloadCoverArt writes to a per-book path and skips when the
+// file already exists.
+func (mfs *Service) DownloadPendingCover(bookID, coverURL string) {
+	if bookID == "" || coverURL == "" || config.AppConfig.RootDir == "" {
+		return
+	}
+
+	coverPath, err := metadata.DownloadCoverArt(coverURL, config.AppConfig.RootDir, bookID)
+	if err != nil {
+		slog.Warn("background cover art download failed", "id", bookID, "error", err)
+		return
+	}
+	slog.Info("cover art saved to", "path", coverPath, "id", bookID)
+
+	// Re-read rather than reusing the book the caller had: the apply path and the
+	// background file-IO job both write this row, and UpdateBook does a full
+	// column replacement, so writing a stale struct here would silently revert
+	// whatever landed in between.
+	book, err := mfs.db.GetBookByID(bookID)
+	if err != nil || book == nil {
+		slog.Warn("background cover art: book vanished before cover_url update", "id", bookID, "error", err)
+		return
+	}
+
+	localCoverURL := "/api/v1/covers/local/" + filepath.Base(coverPath)
+	book.CoverURL = &localCoverURL
+	if _, err := mfs.db.UpdateBook(bookID, book); err != nil {
+		slog.Warn("background cover art: failed to update cover_url", "id", bookID, "error", err)
+	}
 }
 
 func appendMetadataVersionNote(book *database.Book, marker string) {
