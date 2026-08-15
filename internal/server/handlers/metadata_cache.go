@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-08-15
 
@@ -28,8 +28,18 @@ import (
 // MetadataCacheBookStore is the narrow persistence interface required by
 // MetadataCacheHandler. It also satisfies metabatch.BookFilesGetter so that
 // BuildCandidateBookInfo can be called with the same store value.
+// reviewListConcurrency bounds the concurrent cached-candidate reads when
+// building the review listing. These are store reads, not network calls, and
+// this runs inline on a user-facing request — a small fixed pool, not
+// runtime.NumCPU(), so one large listing cannot starve the rest of the server.
+const reviewListConcurrency = 8
+
 type MetadataCacheBookStore interface {
 	GetBookByID(id string) (*database.Book, error)
+	// GetBooksByIDs fetches many books in one store call, preserving input
+	// order. The review listing is served with limit=0 and previously did two
+	// GetBookByID point reads per entry over the whole pending set.
+	GetBooksByIDs(ids []string) ([]database.Book, error)
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
 	// GetBookFiles is required to satisfy metabatch.BookFilesGetter.
 	GetBookFiles(bookID string) ([]database.BookFile, error)
@@ -158,10 +168,48 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		sum    metafetch.MetadataCacheSummary
 		status string // "matched" | "no_match" | "applied"
 	}
+	// Fetch every book in ONE batch read instead of a GetBookByID per summary.
+	//
+	// This endpoint is called with limit=0 ("return all rows"), so the loops below
+	// run over the entire pending set. It previously did GetBookByID once here to
+	// compute status counts and AGAIN further down to build each row — 2N
+	// sequential point reads. Production served it in 21.7s and 35.2s, which is
+	// what was timing the UI out.
+	//
+	// GetBooksByIDs preserves input order and is a single store call.
+	bookIDs := make([]string, 0, total)
+	for _, sum := range summaries {
+		bookIDs = append(bookIDs, sum.BookID)
+	}
+	booksByID := make(map[string]*database.Book, total)
+	if fetched, berr := h.store.GetBooksByIDs(bookIDs); berr == nil {
+		for i := range fetched {
+			booksByID[fetched[i].ID] = &fetched[i]
+		}
+	} else {
+		slog.Warn("GetCacheReviewResults batch book fetch failed; falling back to per-book reads", "err", berr)
+	}
+
+	// lookupBook serves from the batch result and falls back to a point read only
+	// when the batch missed the row (or the batch call itself failed), so a
+	// partial batch degrades in behavior-preserving fashion rather than dropping
+	// entries.
+	lookupBook := func(id string) *database.Book {
+		if b, ok := booksByID[id]; ok {
+			return b
+		}
+		b, err := h.store.GetBookByID(id)
+		if err != nil || b == nil {
+			return nil
+		}
+		booksByID[id] = b
+		return b
+	}
+
 	prepared := make([]entryWithStatus, 0, total)
 	for _, sum := range summaries {
-		book, err := h.store.GetBookByID(sum.BookID)
-		if err != nil || book == nil {
+		book := lookupBook(sum.BookID)
+		if book == nil {
 			continue
 		}
 		st := "matched"
@@ -206,15 +254,37 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		}
 	}
 
+	// Read each page entry's cached candidates CONCURRENTLY. This was a serial
+	// GetCachedCandidates per entry, on top of a second GetBookByID per entry
+	// that is now gone (lookupBook serves it from the batch above).
+	//
+	// Results are written to a pre-sized slot per index and assembled in order
+	// below, so the response ordering is byte-identical to the serial version —
+	// this is a paginated listing and reordering it would scramble the UI.
+	cachedByIdx := make([]*metafetch.MetadataCandidateCache, len(page))
+	var cg errgroup.Group
+	cg.SetLimit(reviewListConcurrency)
+	for i := range page {
+		i := i
+		cg.Go(func() error {
+			entry, _, cerr := h.svc.GetCachedCandidates(page[i].sum.BookID)
+			if cerr == nil {
+				cachedByIdx[i] = entry
+			}
+			return nil // a per-entry failure skips that row, never the whole page
+		})
+	}
+	_ = cg.Wait()
+
 	results := make([]metabatch.CandidateResult, 0, len(page))
-	for _, p := range page {
+	for pageIdx, p := range page {
 		sum := p.sum
-		book, err := h.store.GetBookByID(sum.BookID)
-		if err != nil || book == nil {
+		book := lookupBook(sum.BookID)
+		if book == nil {
 			continue
 		}
-		entry, _, err := h.svc.GetCachedCandidates(sum.BookID)
-		if err != nil || entry == nil || len(entry.Candidates) == 0 {
+		entry := cachedByIdx[pageIdx]
+		if entry == nil || len(entry.Candidates) == 0 {
 			continue
 		}
 		var cand metafetch.MetadataCandidate

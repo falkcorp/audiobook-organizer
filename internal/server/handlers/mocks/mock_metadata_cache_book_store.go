@@ -160,6 +160,68 @@ func (_c *MockMetadataCacheBookStore_GetBookFiles_Call) RunAndReturn(run func(bo
 	return _c
 }
 
+// GetBooksByIDs provides a mock function for the type MockMetadataCacheBookStore
+func (_mock *MockMetadataCacheBookStore) GetBooksByIDs(ids []string) ([]database.Book, error) {
+	ret := _mock.Called(ids)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetBooksByIDs")
+	}
+
+	var r0 []database.Book
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func([]string) ([]database.Book, error)); ok {
+		return returnFunc(ids)
+	}
+	if returnFunc, ok := ret.Get(0).(func([]string) []database.Book); ok {
+		r0 = returnFunc(ids)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]database.Book)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func([]string) error); ok {
+		r1 = returnFunc(ids)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockMetadataCacheBookStore_GetBooksByIDs_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetBooksByIDs'
+type MockMetadataCacheBookStore_GetBooksByIDs_Call struct {
+	*mock.Call
+}
+
+// GetBooksByIDs is a helper method to define mock.On call
+//   - ids []string
+func (_e *MockMetadataCacheBookStore_Expecter) GetBooksByIDs(ids any) *MockMetadataCacheBookStore_GetBooksByIDs_Call {
+	return &MockMetadataCacheBookStore_GetBooksByIDs_Call{Call: _e.mock.On("GetBooksByIDs", ids)}
+}
+
+func (_c *MockMetadataCacheBookStore_GetBooksByIDs_Call) Run(run func(ids []string)) *MockMetadataCacheBookStore_GetBooksByIDs_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 []string
+		if args[0] != nil {
+			arg0 = args[0].([]string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockMetadataCacheBookStore_GetBooksByIDs_Call) Return(books []database.Book, err error) *MockMetadataCacheBookStore_GetBooksByIDs_Call {
+	_c.Call.Return(books, err)
+	return _c
+}
+
+func (_c *MockMetadataCacheBookStore_GetBooksByIDs_Call) RunAndReturn(run func(ids []string) ([]database.Book, error)) *MockMetadataCacheBookStore_GetBooksByIDs_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // UpdateBook provides a mock function for the type MockMetadataCacheBookStore
 func (_mock *MockMetadataCacheBookStore) UpdateBook(id string, book *database.Book) (*database.Book, error) {
 	ret := _mock.Called(id, book)
