@@ -1,5 +1,5 @@
 <!-- file: docs/handoffs/2026-08-15-writeback-io-and-parallelism-session.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 2d84f0a6-7e13-4b95-8c02-6f1a9d3e5b74 -->
 <!-- last-edited: 2026-08-15 -->
 
@@ -19,12 +19,28 @@ supervised deploy:
 - **#2469** `perf/server-metadata-parallelism` — the multithreading migration
 
 The reason is specific, not caution theatre: **production compiles with
-`-tags native_taglib` (CGO), and that code path has never been executed against a
-real file.** The static libs in `third_party/taglib/lib/` are absent on darwin, so
-`go test -tags native_taglib` fails to link locally, and CI builds the WASM
-variant. The native writer is type-checked only. Since this PR changes *how tags
-get written*, that gap should be closed on the box (or with a canary on a small
-cohort) before a full-library write-back runs.
+`-tags native_taglib` (CGO), and that writer has never been executed against a
+real file.**
+
+Precisely what is and is not established:
+
+- ✅ **It compiles and links.** `CC=x86_64-linux-musl-gcc GOOS=linux GOARCH=amd64
+  CGO_ENABLED=1 go build -tags "fts5 pprof native_taglib" .` produces a real
+  x86-64 ELF binary with the changes in. The static libs in
+  `third_party/taglib/lib/` are **musl/linux** archives — that is why a *darwin*
+  test binary cannot link them and `go test -tags native_taglib` fails locally.
+- ✅ **The de-nesting pattern is runtime-verified** — through the WASM writer,
+  against a real ffmpeg-synthesized file, including a full write → read-back →
+  second-pass-skips-everything cycle.
+- ❌ **The CGO binding itself has not executed.** `writeMetadataWithTaglibInPlace`
+  → `writeTagMapWithTaglib(abs, abs, tags)` has never run. The change there is
+  small and mechanical (that function opens its *second* argument and uses the
+  first only for error strings, so passing the same path twice writes in place),
+  but "small and mechanical" is an argument, not a measurement.
+
+So: deploy, then run a **small** write-back cohort and confirm with `ffprobe`
+that tags landed and the files are intact, before turning it loose on the
+library. Do not go straight to a full-library run.
 
 ## What was actually wrong (the headline)
 
