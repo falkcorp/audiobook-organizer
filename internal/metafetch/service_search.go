@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_search.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
-// last-edited: 2026-07-13
+// last-edited: 2026-08-15
 
 package metafetch
 
@@ -13,12 +13,33 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/openlibrary"
+	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
 	"log/slog"
 	"sort"
 	"strings"
 	"time"
 )
+
+// defaultSourceFanout is the fallback for how many metadata sources are queried
+// concurrently for ONE book when config.MetadataScoring.SourceFanoutWorkers is
+// unset. Kept small on purpose: this multiplies with the per-book pool
+// (BulkFetchWorkers), so 4 books × 4 sources is already 16 provider requests in
+// flight. Each provider enforces its own token bucket in
+// internal/metadata/providerhttp, so raising this past the source count buys
+// nothing — it only makes requests queue behind a limiter instead of a channel.
+const defaultSourceFanout = 4
+
+// sourceFanoutLimit resolves the per-book source fan-out width. The `> 0` guard
+// is load-bearing: a config that never set the key unmarshals to 0, and
+// errgroup.SetLimit(0) blocks forever on the first Go call — a search that
+// simply never returns rather than one that runs slowly.
+func sourceFanoutLimit() int {
+	if w := config.AppConfig.MetadataScoring.SourceFanoutWorkers; w > 0 {
+		return w
+	}
+	return defaultSourceFanout
+}
 
 // BuildSourceChain returns metadata sources ordered by config priority.
 // Each source is wrapped with a circuit breaker that opens after 5 consecutive
@@ -592,7 +613,6 @@ func (mfs *Service) searchMetadataForBook(
 				GoogleRatingCount:    r.GoogleRatingCount,
 			})
 		}
-	}
 	}
 
 	// Try ASIN lookup: either the whole query is an ASIN, or extract one from the query
