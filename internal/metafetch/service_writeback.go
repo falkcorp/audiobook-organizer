@@ -13,6 +13,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"log/slog"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -95,10 +96,30 @@ func (mfs *Service) writeBackMetadata(book *database.Book, meta metadata.BookMet
 		trackFmt := fmt.Sprintf("%%0%dd", digits)
 		for i, bf := range activeFiles {
 			trackNum := i + 1
-			segTitle := fmt.Sprintf(trackFmt+" - %s", trackNum, bookTitle)
+			generated := fmt.Sprintf(trackFmt+" - %s", trackNum, bookTitle)
 			trackStr := fmt.Sprintf("%d/%d", trackNum, totalTracks)
+
+			// Read the file's current tags ONCE and reuse them for both the
+			// chapter-title decision and the unchanged-tag filter. Previously
+			// FilterUnchangedTags did its own read, so adding the title check
+			// naively would have doubled the per-file tag reads.
+			cur, curErr := metadata.ExtractMetadata(bf.FilePath, nil)
+
+			segTitle := generated
+			if curErr == nil {
+				segTitle = chapterTitleFor(cur.Title, generated, bookTitle)
+			}
+
 			tagMap := mfs.BuildFullTagMap(book, bookTitle, segTitle, artistStr, narratorStr, year, trackStr)
-			tagMap = FilterUnchangedTags(bf.FilePath, tagMap)
+			if segTitle == "" {
+				// Preserve the file's real per-chapter title.
+				delete(tagMap, "title")
+			}
+			if curErr == nil {
+				tagMap = filterTagsAgainst(cur, tagMap)
+			}
+			// curErr != nil keeps the historical safe fallback: tags unreadable,
+			// so write everything rather than guess.
 			if len(tagMap) == 0 {
 				continue
 			}
@@ -288,6 +309,47 @@ func (mfs *Service) BuildTagMap(
 		tagMap["track"] = track
 	}
 	return tagMap
+}
+
+// generatedChapterTitleRe matches the synthetic per-file title this package
+// produces for multi-file books: a zero-padded track number, " - ", then the
+// book title (e.g. "01 - The Long Way Home").
+var generatedChapterTitleRe = regexp.MustCompile(`^\d+ - (.+)$`)
+
+// chapterTitleFor decides what to write into the "title" tag of one file of a
+// multi-file book. It returns the title to write, or "" meaning "leave the
+// file's existing title alone".
+//
+// The synthetic "NN - Book Title" form is only a fallback. Real per-chapter
+// titles ("Chapter 1: The Long Way Home", "Prologue", "Epilogue") are genuine
+// metadata worth keeping, and the write-back paths used to overwrite them
+// unconditionally on every run — so a library's chapter titles were flattened to
+// "01 - Book Title", "02 - Book Title", ... and the original text was gone.
+//
+// A title is treated as ours-to-replace when it is empty, when it is exactly the
+// book title (a bulk tag-set left every file identical, which carries no
+// per-chapter information), or when it already matches the synthetic pattern for
+// this book (so renumbering still works).
+func chapterTitleFor(currentTitle, generated, bookTitle string) string {
+	cur := strings.TrimSpace(currentTitle)
+	switch {
+	case cur == "":
+		return generated
+	case cur == bookTitle:
+		// Every file carrying the bare book title tells us nothing about which
+		// chapter it is; numbering them is strictly more informative.
+		return generated
+	case cur == generated:
+		// Already correct. Returning it lets the unchanged-tag filter drop it.
+		return generated
+	}
+	// "NN - <book title>" is our own output from a previous run; refresh it so a
+	// changed track count or book title still propagates. A different suffix means
+	// a human/publisher chapter title, which we keep.
+	if m := generatedChapterTitleRe.FindStringSubmatch(cur); m != nil && m[1] == bookTitle {
+		return generated
+	}
+	return ""
 }
 
 // buildFullTagMap constructs a tag map with ALL available metadata from the book record,
@@ -817,10 +879,27 @@ func (mfs *Service) WriteBackMetadataForBook(id string, segmentFilter ...[]strin
 		trackFmt := fmt.Sprintf("%%0%dd", digits)
 		for i, bf := range activeFiles {
 			trackNum := i + 1
-			segTitle := fmt.Sprintf(trackFmt+" - %s", trackNum, bookTitle)
+			generated := fmt.Sprintf(trackFmt+" - %s", trackNum, bookTitle)
 			trackStr := fmt.Sprintf("%d/%d", trackNum, totalTracks)
+
+			// One tag read per file, shared by the chapter-title decision and the
+			// unchanged-tag filter (see the identical loop in writeBackMetadata).
+			cur, curErr := metadata.ExtractMetadata(bf.FilePath, nil)
+
+			segTitle := generated
+			if curErr == nil {
+				segTitle = chapterTitleFor(cur.Title, generated, bookTitle)
+			}
+
 			tagMap := mfs.BuildFullTagMap(book, bookTitle, segTitle, artistStr, narratorStr, year, trackStr)
-			tagMap = FilterUnchangedTags(bf.FilePath, tagMap)
+			if segTitle == "" {
+				// Preserve the file's real per-chapter title.
+				delete(tagMap, "title")
+			}
+			if curErr == nil {
+				tagMap = filterTagsAgainst(cur, tagMap)
+			}
+			// curErr != nil keeps the historical safe fallback: write everything.
 			if len(tagMap) == 0 {
 								slog.Debug("write-back file tags already match, skipping", "path", bf.FilePath)
 				continue
