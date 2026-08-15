@@ -1,7 +1,7 @@
 // file: internal/fileops/write_tags_safe.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b4c5d6e7-f8a9-0b1c-2d3e-4f5a6b7c8d9e
-// last-edited: 2026-05-15
+// last-edited: 2026-08-15
 
 package fileops
 
@@ -23,20 +23,38 @@ type WriteTagsSafeOptions struct {
 }
 
 // WriteTagsSafe writes audio metadata tags to path safely:
-//  1. Computes original_file_hash (SHA-256) before any write
-//  2. Copies the file to a sibling temp file in the same directory
-//  3. Calls writeFn(tmpPath) to perform the actual tag write on the copy
-//  4. On success: atomically renames the temp file over the original
-//  5. Computes post_metadata_hash from the updated file
-//  6. If opts.BookFileID != "" and opts.Store != nil, persists both hashes
+//  1. Copies the file to a sibling temp file in the same directory
+//  2. Calls writeFn(tmpPath) to perform the actual tag write on the copy
+//  3. On success: atomically renames the temp file over the original
 //
-// Returns (originalHash, postHash, error). On writeFn failure the original
-// file is left untouched and the temp file is removed.
+// When BOTH opts.BookFileID and opts.Store are set it additionally computes
+// original_file_hash before the write and post_metadata_hash after it, and
+// persists the pair. Those two SHA-256 passes each stream the whole audio file,
+// so they are skipped entirely when there is no row to persist them against.
+//
+// Returns (originalHash, postHash, error); the hashes are "" when not computed.
+// On writeFn failure the original file is left untouched and the temp file is
+// removed.
+//
+// writeFn receives a temp copy, so a writer that itself wraps its work in
+// WriteTagsSafe would double the copy-and-hash cost. Writers meant to be called
+// from here have in-place variants — see metadata.WriteMetadataToFileInPlace and
+// tagger.WriteTagsInPlace.
 func WriteTagsSafe(path string, writeFn func(tmpPath string) error, opts WriteTagsSafeOptions) (originalHash, postHash string, err error) {
+	// The hashes exist solely to be persisted against a book_file row. When no
+	// row is supplied there is nothing to persist and every caller discards the
+	// return values, so computing them is pure waste — and it is expensive waste:
+	// ComputeFileHash streams the ENTIRE audio file through SHA-256 with no size
+	// cap and no mtime/size shortcut, twice per call. On NAS-backed audiobooks
+	// that dominated the cost of a tag write.
+	wantHashes := opts.BookFileID != "" && opts.Store != nil
+
 	// Step 1: fingerprint the original file before any modification.
-	originalHash, err = ComputeFileHash(path)
-	if err != nil {
-		return "", "", fmt.Errorf("WriteTagsSafe: hash original %s: %w", path, err)
+	if wantHashes {
+		originalHash, err = ComputeFileHash(path)
+		if err != nil {
+			return "", "", fmt.Errorf("WriteTagsSafe: hash original %s: %w", path, err)
+		}
 	}
 
 	// Step 2: create temp file in the same directory so os.Rename is atomic
@@ -73,14 +91,14 @@ func WriteTagsSafe(path string, writeFn func(tmpPath string) error, opts WriteTa
 		return originalHash, "", fmt.Errorf("WriteTagsSafe: rename: %w", err)
 	}
 
-	// Step 6: fingerprint the result.
-	postHash, err = ComputeFileHash(path)
-	if err != nil {
-		return originalHash, "", fmt.Errorf("WriteTagsSafe: hash result %s: %w", path, err)
-	}
+	// Step 6: fingerprint the result (only when it will be persisted).
+	if wantHashes {
+		postHash, err = ComputeFileHash(path)
+		if err != nil {
+			return originalHash, "", fmt.Errorf("WriteTagsSafe: hash result %s: %w", path, err)
+		}
 
-	// Step 7: best-effort DB recording (non-fatal; caller has both hashes).
-	if opts.BookFileID != "" && opts.Store != nil {
+		// Step 7: best-effort DB recording (non-fatal; caller has both hashes).
 		_ = opts.Store.UpdateBookFileHashes(opts.BookFileID, originalHash, postHash)
 	}
 
