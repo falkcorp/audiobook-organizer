@@ -1,5 +1,5 @@
 // file: internal/metadata/taglib_support.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 //
 // TagLib WASM writer (default, no CGO required).
@@ -44,6 +44,29 @@ func writeMetadataWithTaglib(filePath string, metadata map[string]interface{}, _
 		return fmt.Errorf("taglib write: %w", err)
 	}
 
+	return nil
+}
+
+// writeMetadataWithTaglibInPlace writes tags straight to filePath, skipping the
+// tagger.WriteTagsSafe wrapper (which itself wraps fileops.WriteTagsSafe).
+//
+// Contract: the caller MUST already be operating on a temp copy created by an
+// outer fileops.WriteTagsSafe, and MUST have already resolved the protected-path
+// question against the real path. See tagger.WriteTagsInPlace for the rationale.
+func writeMetadataWithTaglibInPlace(filePath string, metadata map[string]interface{}, _ fileops.OperationConfig) error {
+	abs, err := filepath.Abs(filePath)
+	if err != nil {
+		return fmt.Errorf("taglib abs path: %w", err)
+	}
+
+	tags := buildWriteTagMap(metadata)
+	if len(tags) == 0 {
+		return fmt.Errorf("no writable metadata supplied")
+	}
+
+	if err := tagger.WriteTagsInPlace(abs, tags, 0); err != nil {
+		return fmt.Errorf("taglib write in place: %w", err)
+	}
 	return nil
 }
 

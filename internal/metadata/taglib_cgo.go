@@ -1,6 +1,6 @@
 // file: internal/metadata/taglib_cgo.go
-// version: 1.5.0
-// last-edited: 2026-06-13
+// version: 1.6.0
+// last-edited: 2026-08-15
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
 //
 // Native CGO bindings to TagLib C API for high-performance tag writing.
@@ -59,6 +59,35 @@ func writeMetadataWithTaglib(filePath string, metadata map[string]interface{}, _
 	}, fileops.WriteTagsSafeOptions{})
 	if err != nil {
 		return fmt.Errorf("taglib write: %w", err)
+	}
+	return nil
+}
+
+// writeMetadataWithTaglibInPlace writes tags straight to filePath, skipping the
+// fileops.WriteTagsSafe wrapper that writeMetadataWithTaglib applies.
+//
+// Contract: the caller MUST already be operating on a temp copy created by an
+// outer fileops.WriteTagsSafe, and MUST have already resolved the protected-path
+// question against the real path. See tagger.WriteTagsInPlace for the full
+// rationale — in short, the wrapper was being applied twice, costing four
+// full-file hashes and two full-file copies per tag write instead of two and one.
+//
+// Protected-path resolution is deliberately NOT repeated here: the path handed
+// in is a temp file sitting next to the original, so resolving it would be
+// meaningless, and the real path was already checked upstream.
+func writeMetadataWithTaglibInPlace(filePath string, metadata map[string]interface{}, _ fileops.OperationConfig) error {
+	abs, err := filepath.Abs(filePath)
+	if err != nil {
+		return fmt.Errorf("taglib abs path: %w", err)
+	}
+
+	tags := buildWriteTagMap(metadata)
+	if len(tags) == 0 {
+		return fmt.Errorf("no writable metadata supplied")
+	}
+
+	if err := writeTagMapWithTaglib(abs, abs, tags); err != nil {
+		return fmt.Errorf("taglib write in place: %w", err)
 	}
 	return nil
 }

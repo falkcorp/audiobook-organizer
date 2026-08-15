@@ -1,7 +1,7 @@
 // file: internal/tagger/safe_write.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4a7e1c3b-9f02-4d85-b8e6-2f5a0d3c7b91
-// last-edited: 2026-05-01
+// last-edited: 2026-08-15
 //
 // WriteTagsSafe / WriteImageSafe — pre-flight guard for all taglib writes.
 //
@@ -78,6 +78,40 @@ func WriteTagsSafe(ctx context.Context, path string, tags map[string][]string, o
 	}, fileops.WriteTagsSafeOptions{})
 	if err != nil {
 		return fmt.Errorf("WriteTagsSafe: %w", err)
+	}
+	return nil
+}
+
+// WriteTagsInPlace writes tags directly to path with NO copy-and-rename wrapper
+// and NO protected-path resolution.
+//
+// Use this ONLY when the caller is already operating on a temp copy produced by
+// an outer fileops.WriteTagsSafe, and has already made the protected-path
+// decision on the real path. Writing to a live library file through this
+// function bypasses the atomic-rename safety net — call WriteTagsSafe instead.
+//
+// Why this exists: the write-back path wrapped every tag write in
+// fileops.WriteTagsSafe and then called a writer that wrapped it AGAIN. Each
+// wrapper hashes the whole file twice and copies it once, so one tag write cost
+// four full-file SHA-256 passes and two full-file copies of the audio — and the
+// inner pair was discarded, because the inner call passed empty options and
+// ignored its return values. On NAS-backed multi-hundred-MB files that redundant
+// I/O, not the tag encoding, was the cost of write-back. The inner wrapper also
+// protected nothing the outer one did not already cover: if the tag write
+// corrupts its target and still returns nil, the outer rename publishes it
+// either way.
+func WriteTagsInPlace(path string, tags map[string][]string, opts taglib.WriteOption) error {
+	if err := taglib.WriteTags(path, tags, opts); err != nil {
+		return fmt.Errorf("WriteTagsInPlace: %w", err)
+	}
+	return nil
+}
+
+// WriteImageInPlace embeds cover art directly into path with no copy-and-rename
+// wrapper. Same contract and same caveats as WriteTagsInPlace.
+func WriteImageInPlace(path string, data []byte) error {
+	if err := taglib.WriteImage(path, data); err != nil {
+		return fmt.Errorf("WriteImageInPlace: %w", err)
 	}
 	return nil
 }

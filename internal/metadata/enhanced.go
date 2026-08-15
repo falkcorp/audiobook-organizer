@@ -1,7 +1,7 @@
 // file: internal/metadata/enhanced.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 7e8d9c0b-1a2f-3e4d-5c6b-7a8d9c0b1a2f
-// last-edited: 2026-07-11
+// last-edited: 2026-08-15
 
 package metadata
 
@@ -342,9 +342,28 @@ func BatchUpdateMetadata(updates []MetadataUpdate, store batchUpdateStore, valid
 // WriteMetadataToFile safely writes metadata to an audiobook file
 // Prefers native TagLib writer when built with 'taglib'; falls back to external CLI tools if unavailable or failed.
 // Uses backup/rollback strategy via fileops.SafeCopy for all paths.
-func WriteMetadataToFile(filePath string, metadata map[string]interface{}, config fileops.OperationConfig) error {
-	ext := strings.ToLower(filepath.Ext(filePath))
+// WriteMetadataToFileInPlace is WriteMetadataToFile for callers that are ALREADY
+// inside an outer fileops.WriteTagsSafe and are handing us its temp copy.
+//
+// It skips the writer's own internal copy-and-rename wrapper. Without this, the
+// write-back path wrapped every tag write twice: four full-file SHA-256 passes
+// and two full-file copies of the audio per file per write, half of it discarded.
+// On NAS-backed audiobooks that redundant I/O dominated write-back time.
+//
+// Do NOT call this on a live library file — it has no atomic-rename safety net.
+// Use WriteMetadataToFile for that.
+func WriteMetadataToFileInPlace(filePath string, metadata map[string]interface{}, config fileops.OperationConfig) error {
+	if taglibAvailable {
+		if err := writeMetadataWithTaglibInPlace(filePath, metadata, config); err == nil {
+			return nil
+		}
+		// Native failed; fall through to the CLI writers, which manage their own
+		// temp files and are safe to run against the caller's temp copy.
+	}
+	return writeMetadataViaCLI(filePath, metadata, config)
+}
 
+func WriteMetadataToFile(filePath string, metadata map[string]interface{}, config fileops.OperationConfig) error {
 	// Attempt native writer first if compiled in.
 	// Upstream taglib v0.11.1+ writes custom freeform atoms natively for MP4.
 	// Do NOT run ffmpeg after taglib — ffmpeg's -map_metadata strips freeform atoms.
@@ -355,7 +374,14 @@ func WriteMetadataToFile(filePath string, metadata map[string]interface{}, confi
 		// Native failed; continue with CLI fallback
 	}
 
-	switch ext {
+	return writeMetadataViaCLI(filePath, metadata, config)
+}
+
+// writeMetadataViaCLI dispatches to the per-container ffmpeg/CLI writers. Shared
+// by WriteMetadataToFile and WriteMetadataToFileInPlace so the format dispatch
+// exists once.
+func writeMetadataViaCLI(filePath string, metadata map[string]interface{}, config fileops.OperationConfig) error {
+	switch strings.ToLower(filepath.Ext(filePath)) {
 	case ".m4b", ".m4a":
 		return writeM4BMetadata(filePath, metadata, config)
 	case ".mp3":
@@ -363,7 +389,7 @@ func WriteMetadataToFile(filePath string, metadata map[string]interface{}, confi
 	case ".flac":
 		return writeFLACMetadata(filePath, metadata, config)
 	default:
-		return fmt.Errorf("unsupported file format: %s", ext)
+		return fmt.Errorf("unsupported file format: %s", filepath.Ext(filePath))
 	}
 }
 

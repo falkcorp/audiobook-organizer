@@ -792,7 +792,7 @@ func (mfs *Service) writeBackForBook(id string, ov *writeBackOverrides, segmentF
 			}
 			backupFileBeforeWrite(bf.FilePath)
 			if _, _, err := fileops.WriteTagsSafe(bf.FilePath, func(tmpPath string) error {
-				return metadata.WriteMetadataToFile(tmpPath, tagMap, opConfig)
+				return metadata.WriteMetadataToFileInPlace(tmpPath, tagMap, opConfig)
 			}, fileops.WriteTagsSafeOptions{BookFileID: bf.ID, Store: mfs.db}); err != nil {
 				slog.Warn("write-back failed for file", "path", bf.FilePath, "error", err)
 			} else {
@@ -842,7 +842,7 @@ func (mfs *Service) writeBackForBook(id string, ov *writeBackOverrides, segmentF
 						wtsOpts = fileops.WriteTagsSafeOptions{BookFileID: bff.ID, Store: mfs.db}
 					}
 					if _, _, err := fileops.WriteTagsSafe(f, func(tmpPath string) error {
-						return metadata.WriteMetadataToFile(tmpPath, fm, opConfig)
+						return metadata.WriteMetadataToFileInPlace(tmpPath, fm, opConfig)
 					}, wtsOpts); err != nil {
 						slog.Warn("write-back failed for", "value", f, "error", err)
 					} else {
@@ -861,7 +861,7 @@ func (mfs *Service) writeBackForBook(id string, ov *writeBackOverrides, segmentF
 						wtsOpts = fileops.WriteTagsSafeOptions{BookFileID: bff.ID, Store: mfs.db}
 					}
 					if _, _, err := fileops.WriteTagsSafe(book.FilePath, func(tmpPath string) error {
-						return metadata.WriteMetadataToFile(tmpPath, fm, opConfig)
+						return metadata.WriteMetadataToFileInPlace(tmpPath, fm, opConfig)
 					}, wtsOpts); err != nil {
 						slog.Warn("write-back failed for", "path", book.FilePath, "error", err)
 					} else {
@@ -893,7 +893,7 @@ func (mfs *Service) writeBackForBook(id string, ov *writeBackOverrides, segmentF
 				}
 				backupFileBeforeWrite(sib.FilePath)
 				if _, _, err := fileops.WriteTagsSafe(sib.FilePath, func(tmpPath string) error {
-					return metadata.WriteMetadataToFile(tmpPath, tagMap, opConfig)
+					return metadata.WriteMetadataToFileInPlace(tmpPath, tagMap, opConfig)
 				}, fileops.WriteTagsSafeOptions{}); err != nil {
 					slog.Warn("write-back failed for version-linked", "path", sib.FilePath, "error", err)
 				} else {
