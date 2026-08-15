@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.57.0
+// version: 2.58.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-08-11
+// last-edited: 2026-08-15
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -722,6 +722,11 @@ export interface MetadataScoringConfig {
 
   // Bulk-fetch concurrency (legacy default 4):
   bulk_fetch_workers?: number;
+
+  // Write-back concurrency (default 4). Distinct from bulk_fetch_workers: that
+  // pool is network-bound against metadata providers, this one is disk-bound
+  // against the library (bulk write-back and batch save-to-files).
+  write_back_workers?: number;
 }
 
 export interface ITunesPathMap {
