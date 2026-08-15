@@ -1,7 +1,7 @@
 // file: internal/organizer/organizer.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-08-13
+// last-edited: 2026-08-15
 
 package organizer
 
@@ -762,7 +762,11 @@ func (o *Organizer) OrganizeBookDirectory(book *database.Book, segmentPaths []st
 
 		// Verify dstPath stays inside targetDir (defense against crafted filenames)
 		if err := ensureUnderRoot(dstPath, targetDir); err != nil {
-			slog.Warn("organizeFile skipping unsafe destination", "error", err)
+			slog.Warn("organizeFile skipping unsafe destination",
+				"error", err,
+				"book_id", book.ID, "book_title", book.Title,
+				"source_path", srcPath, "dest_path", dstPath,
+				"target_dir", targetDir, "file_name", fileName)
 			continue
 		}
 
@@ -780,7 +784,10 @@ func (o *Organizer) OrganizeBookDirectory(book *database.Book, segmentPaths []st
 		if _, err := o.organizeFile(srcPath, dstPath); err != nil {
 			// Skip missing source files instead of aborting the entire book
 			if os.IsNotExist(err) || strings.Contains(err.Error(), "no such file") {
-				slog.Warn("organizeFile skipping missing source file", "path", srcPath)
+				slog.Warn("organizeFile skipping missing source file",
+					"source_path", srcPath, "dest_path", dstPath,
+					"book_id", book.ID, "book_title", book.Title,
+					"error", err)
 				continue
 			}
 			// Handle race: another worker may have created the file between our stat and copy

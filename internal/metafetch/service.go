@@ -1,5 +1,5 @@
 // file: internal/metafetch/service.go
-// version: 5.5.0
+// version: 5.6.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
 // last-edited: 2026-08-15
 
@@ -161,7 +161,9 @@ func (mfs *Service) embedCoverInBookFiles(book *database.Book, coverPath string)
 	if mfs.isProtectedPath(book.FilePath) {
 		libCopy := mfs.ensureLibraryCopy(book)
 		if libCopy == nil {
-			slog.Warn("cannot embed cover no library copy for protected book", "id", book.ID)
+			slog.Warn("cannot embed cover: protected book has no library copy",
+				"book_id", book.ID, "book_title", book.Title,
+				"protected_path", book.FilePath)
 			return
 		}
 		book = libCopy
@@ -176,7 +178,8 @@ func (mfs *Service) embedCoverInBookFiles(book *database.Book, coverPath string)
 		// Multi-file book
 		bookFiles, err := mfs.db.GetBookFiles(book.ID)
 		if err != nil {
-			slog.Warn("failed to list book files for cover embedding on book", "id", book.ID, "error", err)
+			slog.Warn("failed to list book files for cover embedding",
+				"book_id", book.ID, "book_title", book.Title, "error", err)
 			return
 		}
 		for _, bf := range bookFiles {
@@ -235,7 +238,10 @@ func (mfs *Service) embedCoverInBookFiles(book *database.Book, coverPath string)
 		// EmbedCoverArtSafe imports the file from a Deluge-protected path before
 		// writing if the pre-flight guard is wired (mfs.safeWriteDeps).
 		if err := tagger.EmbedCoverArtSafe(context.Background(), f, coverPath, mfs.safeWriteDeps); err != nil {
-			slog.Warn("cover art embedding failed for", "value", f, "error", err)
+			slog.Warn("cover art embedding failed for file",
+				"path", f, "error", err,
+				"book_id", book.ID, "book_title", book.Title,
+				"cover_path", coverPath)
 			failed++
 		} else {
 			embedded++

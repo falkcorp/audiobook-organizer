@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_writeback.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: fad73c11-30c2-4fdc-addd-45afef25d792
 // last-edited: 2026-08-15
 
@@ -19,6 +19,20 @@ import (
 	"strings"
 	"time"
 )
+
+// sortedKeys returns a tag map's keys in a stable order so a failure log names
+// which tags were being written. Without it a write-back failure told you only
+// that "a write failed" — not whether it was trying to set one field or twenty,
+// which is the difference between a benign retry and a book about to be
+// rewritten wholesale.
+func sortedKeys(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
 
 // writeBackMetadata writes enriched metadata back to a book's audio file(s)
 // during the fetch/apply flow.
@@ -273,7 +287,7 @@ func FilterUnchangedTags(filePath string, tagMap map[string]interface{}) map[str
 		// Can't read current tags — write everything to be safe
 		return tagMap
 	}
-	return filterTagsAgainst(current, tagMap)
+	return filterTagsAgainst(filePath, current, tagMap)
 }
 
 // filterTagsAgainst is the pure comparison half of FilterUnchangedTags, split
@@ -285,7 +299,7 @@ func FilterUnchangedTags(filePath string, tagMap map[string]interface{}) map[str
 // untouched, and the comparison below never ran. Those tests passed no matter
 // what the mapping did — one of them even asserted that "track" survives,
 // pinning the bug in place as if it were intended behavior.
-func filterTagsAgainst(current metadata.Metadata, tagMap map[string]interface{}) map[string]interface{} {
+func filterTagsAgainst(filePath string, current metadata.Metadata, tagMap map[string]interface{}) map[string]interface{} {
 	// Build a map of known tag names to their current values. Every custom tag
 	// key emitted by the writer (via metadata/taglib_tagmap.go buildWriteTagMap)
 	// must have an entry here, mapping the input key to the corresponding
@@ -368,7 +382,16 @@ func filterTagsAgainst(current metadata.Metadata, tagMap map[string]interface{})
 			// ("track" used to be the example here; it is mapped above now.
 			// This warn is only a real signal once every emitted key is mapped,
 			// so do not add new writer keys without a currentVals entry.)
-			slog.Warn("FilterUnchangedTags: unknown tag key (writing)", "key", k)
+			// Name the FILE, not just the key. This warn used to carry only the
+			// key, so it told you a tag was being force-written every run and
+			// gave you no way to find which file or book it was on.
+			slog.Warn("write-back: unmapped tag key, forcing a write",
+				"key", k,
+				"value", v,
+				"path", filePath,
+				"title", current.Title,
+				"album", current.Album,
+				"hint", "add this key to currentVals in filterTagsAgainst or it rewrites the file on every run")
 			filtered[k] = v
 			continue
 		}
@@ -445,7 +468,10 @@ func (mfs *Service) runApplyPipeline(id string, book *database.Book) error {
 	if mfs.isProtectedPath(book.FilePath) {
 		libCopy := mfs.ensureLibraryCopy(book)
 		if libCopy == nil {
-			slog.Warn("runApplyPipeline no library copy for protected book , skipping", "id", id)
+			slog.Warn("runApplyPipeline skipping protected book: no library copy exists",
+				"book_id", id, "book_title", book.Title,
+				"protected_path", book.FilePath,
+				"hint", "book lives under a protected path (iTunes/import); rename and tag-write are skipped until a library copy is made")
 			return nil
 		}
 		slog.Info("runApplyPipeline using library copy for protected book", "libCopyID", libCopy.ID, "bookID", id)
@@ -514,7 +540,29 @@ func (mfs *Service) runApplyPipeline(id string, book *database.Book) error {
 		// files that did move. The error is returned after the DB sync,
 		// before the rename checkpoint is set.
 		if len(renameResult.Skipped) > 0 {
-			slog.Warn("files skipped (source missing) during rename", "count", len(renameResult.Skipped))
+			// Name the files. This used to log only the count, which told you
+			// something was wrong and nothing about what — you could not find the
+			// offending file without going and diffing the library by hand.
+			//
+			// Capped so one pathological book cannot flood the log; the count is
+			// always reported in full so a truncated list is never mistaken for
+			// the whole set.
+			const maxListed = 20
+			skippedPaths := make([]string, 0, min(len(renameResult.Skipped), maxListed))
+			for i, e := range renameResult.Skipped {
+				if i >= maxListed {
+					break
+				}
+				skippedPaths = append(skippedPaths, e.SourcePath)
+			}
+			slog.Warn("files skipped during rename (source missing on disk)",
+				"book_id", id,
+				"book_title", book.Title,
+				"skipped_count", len(renameResult.Skipped),
+				"total_files", len(bookFiles),
+				"listed", len(skippedPaths),
+				"truncated", len(renameResult.Skipped) > maxListed,
+				"missing_sources", skippedPaths)
 		}
 
 		// Update book file records with new paths (only for succeeded renames)
@@ -591,7 +639,9 @@ func (mfs *Service) runApplyPipeline(id string, book *database.Book) error {
 	// Write metadata tags to audio files
 	if config.AppConfig.AutoWriteTagsOnApply && !hasCheckpoint(mfs.db, id, phaseTags) {
 		if written, err := mfs.WriteBackMetadataForBook(id); err != nil {
-			slog.Warn("tag writing failed for book", "id", id, "error", err)
+			slog.Warn("tag writing failed for book",
+				"book_id", id, "book_title", book.Title,
+				"book_path", book.FilePath, "error", err)
 		} else {
 			slog.Info("wrote metadata tags to file(s) for book", "value", written, "id", id)
 			setCheckpoint(mfs.db, id, phaseTags)
@@ -778,7 +828,7 @@ func (mfs *Service) writeBackForBook(id string, ov *writeBackOverrides, segmentF
 				delete(tagMap, "title")
 			}
 			if curErr == nil {
-				tagMap = filterTagsAgainst(cur, tagMap)
+				tagMap = filterTagsAgainst(bf.FilePath, cur, tagMap)
 			}
 			// curErr != nil keeps the historical safe fallback: write everything.
 			if len(tagMap) == 0 {
@@ -794,7 +844,11 @@ func (mfs *Service) writeBackForBook(id string, ov *writeBackOverrides, segmentF
 			if _, _, err := fileops.WriteTagsSafe(bf.FilePath, func(tmpPath string) error {
 				return metadata.WriteMetadataToFileInPlace(tmpPath, tagMap, opConfig)
 			}, fileops.WriteTagsSafeOptions{BookFileID: bf.ID, Store: mfs.db}); err != nil {
-				slog.Warn("write-back failed for file", "path", bf.FilePath, "error", err)
+				slog.Warn("write-back failed for file",
+					"path", bf.FilePath, "error", err,
+					"book_id", book.ID, "book_title", book.Title,
+					"book_file_id", bf.ID, "file_index", i+1, "file_count", len(activeFiles),
+					"tag_keys", sortedKeys(tagMap))
 			} else {
 				// Log successes as well as failures. Without this the multi-file
 				// branch was silent on success while the single-file branch below
@@ -844,9 +898,12 @@ func (mfs *Service) writeBackForBook(id string, ov *writeBackOverrides, segmentF
 					if _, _, err := fileops.WriteTagsSafe(f, func(tmpPath string) error {
 						return metadata.WriteMetadataToFileInPlace(tmpPath, fm, opConfig)
 					}, wtsOpts); err != nil {
-						slog.Warn("write-back failed for", "value", f, "error", err)
+						slog.Warn("write-back failed for file",
+							"path", f, "error", err,
+							"book_id", book.ID, "book_title", book.Title,
+							"tag_keys", sortedKeys(fm))
 					} else {
-						slog.Info("wrote metadata back to", "value", f)
+						slog.Info("wrote metadata back to", "path", f)
 						writtenCount++
 					}
 				}
@@ -863,7 +920,10 @@ func (mfs *Service) writeBackForBook(id string, ov *writeBackOverrides, segmentF
 					if _, _, err := fileops.WriteTagsSafe(book.FilePath, func(tmpPath string) error {
 						return metadata.WriteMetadataToFileInPlace(tmpPath, fm, opConfig)
 					}, wtsOpts); err != nil {
-						slog.Warn("write-back failed for", "path", book.FilePath, "error", err)
+						slog.Warn("write-back failed for file",
+							"path", book.FilePath, "error", err,
+							"book_id", book.ID, "book_title", book.Title,
+							"tag_keys", sortedKeys(fm))
 					} else {
 						writtenCount++
 					}
