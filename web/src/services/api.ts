@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.58.0
+// version: 2.59.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-08-15
 
@@ -3604,33 +3604,74 @@ export interface BatchApplyFromCacheResult {
   write_back: boolean;
 }
 
-// batchApplyFromCache applies the highest-scored cached candidate for each
-// book in book_ids. Cache-mode replacement for batchApplyCandidates.
+/** What the server returns when a batch apply is DISPATCHED (HTTP 202). */
+export interface BatchApplyDispatch {
+  op_id: string;
+  requested: number;
+  write_back: boolean;
+}
+
+// batchApplyFromCache STARTS a background apply of the highest-scored cached
+// candidate for each book in book_ids, and returns the operation id.
 //
-// applied_ids / skipped were added because this endpoint used to report only a
-// count: books whose cache entry had expired were skipped server-side, the UI
-// reported them as applied anyway, and they silently vanished from the review
-// queue and then reappeared on the next load.
+// It no longer returns applied_ids/skipped, because at the moment it returns
+// nothing has been applied yet. Applying inline held the request open for the
+// whole batch — 2m0s for 250 books on production — and because Go does not kill
+// a handler when the client disconnects, the browser timed out while the server
+// kept working. The UI reported "session expired, nothing was applied" for a
+// request that returned HTTP 200 and wrote over a thousand files.
+//
+// Callers poll the op, then RE-READ the review list. Server state after the op
+// is the only description of what happened that cannot go stale.
 export async function batchApplyFromCache(
-  bookIds: string[]
-): Promise<BatchApplyFromCacheResult> {
+  bookIds: string[],
+  writeBack?: boolean
+): Promise<BatchApplyDispatch> {
+  const body: Record<string, unknown> = { book_ids: bookIds };
+  if (writeBack !== undefined) body.write_back = writeBack;
   const response = await apiFetch(`${API_BASE}/audiobooks/metadata/batch-apply-cached`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ book_ids: bookIds }),
+    body: JSON.stringify(body),
   });
-  if (!response.ok) throw await buildApiError(response, 'Failed to apply cached candidates');
+  if (!response.ok) throw await buildApiError(response, 'Failed to start metadata apply');
   const data = await response.json();
   const payload = data.data ?? data;
-  // Tolerate an older server that returns only `applied`: treat every
-  // requested id as applied ONLY when the server did not tell us otherwise.
+  if (!payload?.op_id) {
+    throw new Error('Server did not return an operation id for the metadata apply');
+  }
   return {
-    applied: typeof payload.applied === 'number' ? payload.applied : 0,
-    applied_ids: Array.isArray(payload.applied_ids) ? payload.applied_ids : bookIds,
-    skipped: Array.isArray(payload.skipped) ? payload.skipped : [],
+    op_id: payload.op_id,
     requested: typeof payload.requested === 'number' ? payload.requested : bookIds.length,
     write_back: payload.write_back !== false,
   };
+}
+
+/** Terminal states for a v2 operation. */
+const OP_V2_TERMINAL = [
+  'completed',
+  'failed',
+  'canceled',
+  'interrupted_dropped',
+  'interrupted_restart',
+];
+
+// pollOperationV2 polls a v2 operation until it reaches a terminal state.
+//
+// Separate from pollOperation, which polls the v1 `/operations/:id/status`
+// endpoint — a v2 op id is not addressable there, so reusing it would poll
+// forever against a 404.
+export async function pollOperationV2(
+  id: string,
+  onProgress?: (op: OperationV2) => void,
+  intervalMs = 1000
+): Promise<OperationV2> {
+  for (;;) {
+    const op = await getOperationV2(id);
+    onProgress?.(op);
+    if (OP_V2_TERMINAL.includes(op.status)) return op;
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
 }
 
 // clearMetadataNoMatch clears a book's MetadataReviewStatus back to null
