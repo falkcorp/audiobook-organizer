@@ -1,5 +1,5 @@
 // file: internal/metadata/taglib_tagmap.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8b9c0d1e-2f3a-4b5c-6d7e-8f9a0b1c2d3e
 //
 // Shared tag map builder used by both WASM and CGO taglib writers.
@@ -60,6 +60,31 @@ func buildWriteTagMap(metadata map[string]interface{}) map[string][]string {
 	}
 	if si, ok := metadata["series_index"].(int); ok && si > 0 {
 		tags["SERIES_INDEX"] = []string{fmt.Sprintf("%d", si)}
+	}
+	// TRACKNUMBER is what the reader looks for first (see taglib_reader.go's
+	// parseSlashPair over TRACKNUMBER/TRACK/TRCK), so an "n/total" value written
+	// here round-trips into Metadata.TrackNumber / Metadata.TrackTotal.
+	//
+	// This case did not exist, and its absence was self-sustaining: the
+	// multi-file write path always emits a "track" entry, the unchanged-tag
+	// filter had no mapping for it and so always wrote, and then THIS function
+	// silently dropped it — so the file never actually received a track tag, the
+	// next read found none, and the next run wrote again. Every multi-file book
+	// rewrote every one of its files on every write-back run, permanently, and
+	// the tag it was rewriting for never landed. Mapping the tag in the filter
+	// alone does not fix it; the value has to actually reach the file.
+	//
+	// Accept the int form too: callers that number tracks without a total pass
+	// an int rather than the "n/total" string.
+	switch track := metadata["track"].(type) {
+	case string:
+		if track != "" {
+			tags["TRACKNUMBER"] = []string{track}
+		}
+	case int:
+		if track > 0 {
+			tags["TRACKNUMBER"] = []string{fmt.Sprintf("%d", track)}
+		}
 	}
 
 	// Custom AUDIOBOOK_ORGANIZER_* tags
