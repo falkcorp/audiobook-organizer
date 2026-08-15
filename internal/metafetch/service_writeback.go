@@ -365,11 +365,44 @@ func FilterUnchangedTags(filePath string, tagMap map[string]interface{}) map[str
 		// Can't read current tags — write everything to be safe
 		return tagMap
 	}
+	return filterTagsAgainst(current, tagMap)
+}
 
+// filterTagsAgainst is the pure comparison half of FilterUnchangedTags, split
+// out so the mapping can be unit-tested against a constructed Metadata without
+// synthesizing a real audio file on disk.
+//
+// This split exists because every pre-existing FilterUnchangedTags test pointed
+// at a nonexistent path: ExtractMetadata failed, the function returned tagMap
+// untouched, and the comparison below never ran. Those tests passed no matter
+// what the mapping did — one of them even asserted that "track" survives,
+// pinning the bug in place as if it were intended behavior.
+func filterTagsAgainst(current metadata.Metadata, tagMap map[string]interface{}) map[string]interface{} {
 	// Build a map of known tag names to their current values. Every custom tag
 	// key emitted by the writer (via metadata/taglib_tagmap.go buildWriteTagMap)
 	// must have an entry here, mapping the input key to the corresponding
 	// Metadata field value.
+	// "track" is emitted unconditionally by the multi-file write path
+	// (BuildTagMap adds it whenever track != "", and the multi-file branch always
+	// passes "n/total"). Until this entry existed it fell through to the
+	// unknown-key branch below and was ALWAYS written, which made
+	// len(tagMap) == 0 unreachable for every multi-file book — so each one
+	// rewrote every one of its files on every single write-back run, forever.
+	//
+	// Render the on-disk value in the same "n/total" shape the writer produces.
+	// A file tagged with a bare "3" (TrackTotal == 0) renders as "3", won't match
+	// "3/12", and is written once — after which it carries the pair and matches.
+	// TrackNumber == 0 means we could not read a track at all: leave the key out
+	// so the unknown-key branch writes it, which is the correct conservative call.
+	trackCur := ""
+	if current.TrackNumber > 0 {
+		if current.TrackTotal > 0 {
+			trackCur = fmt.Sprintf("%d/%d", current.TrackNumber, current.TrackTotal)
+		} else {
+			trackCur = fmt.Sprintf("%d", current.TrackNumber)
+		}
+	}
+
 	currentVals := map[string]string{
 		"title":  current.Title,
 		"album":  current.Album,
@@ -401,6 +434,9 @@ func FilterUnchangedTags(filePath string, tagMap map[string]interface{}) map[str
 		"edition":         current.Edition,
 		"print_year":      current.PrintYear,
 	}
+	if trackCur != "" {
+		currentVals["track"] = trackCur
+	}
 	if current.Publisher != "" {
 		currentVals["publisher"] = current.Publisher
 	}
@@ -418,9 +454,12 @@ func FilterUnchangedTags(filePath string, tagMap map[string]interface{}) map[str
 	for k, v := range tagMap {
 		cur, ok := currentVals[k]
 		if !ok {
-			// Unknown field (e.g. "track") — always write.
+			// Unknown field — always write.
 			// Log unknown keys so new custom tags are added consciously to
 			// the mapping above rather than silently forcing writes.
+			// ("track" used to be the example here; it is mapped above now.
+			// This warn is only a real signal once every emitted key is mapped,
+			// so do not add new writer keys without a currentVals entry.)
 			slog.Warn("FilterUnchangedTags: unknown tag key (writing)", "key", k)
 			filtered[k] = v
 			continue
