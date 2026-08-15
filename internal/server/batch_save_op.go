@@ -1,5 +1,5 @@
 // file: internal/server/batch_save_op.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f2a1b4c-5d6e-7f8a-9b0c-1d2e3f4a5b6c
 // last-edited: 2026-08-15
 //
@@ -176,8 +176,19 @@ func (s *Server) RegisterBatchSaveToFilesOp(reg *opsregistry.Registry) error {
 				ErrMode:        opsregistry.ErrModeCollect,
 				Label:          func(int, int) string { return "saving metadata to files" },
 			})
-			if runErr != nil && ctx.Err() != nil {
-				return ctx.Err()
+			// Return BEFORE the "complete" progress row. runOne never returns a
+			// non-nil error today (per-book failures are recorded in the counters
+			// and swallowed), so runErr is exactly ctx.Err() on cancellation and nil
+			// otherwise — see run_items.go:203-207, where runItemsPar returns
+			// ctx.Err() only when the collected error slice is empty.
+			//
+			// Checking it here rather than after preserves the behaviour of the loop
+			// this replaces, which returned ctx.Err() from the top of every
+			// iteration: a canceled batch-save must NOT write a "complete: ..."
+			// progress row on its way out. It also means a future edit that makes
+			// runOne return a real error surfaces it instead of reporting success.
+			if runErr != nil {
+				return runErr
 			}
 
 			_ = progress.UpdateProgress(totalBooks, totalBooks,

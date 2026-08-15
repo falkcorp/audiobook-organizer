@@ -247,6 +247,12 @@ const (
 	batchSkipNoCachedCandidates = "no_cached_candidates"
 	batchSkipDecodeFailed       = "decode_failed"
 	batchSkipApplyFailed        = "apply_failed"
+	// batchSkipCanceled marks a book the server never attempted because the
+	// request context died (in practice: the client disconnected) before a worker
+	// picked it up. Distinct from batchSkipApplyFailed on purpose — reporting
+	// "apply_failed" for a book nothing tried to apply is simply untrue, and this
+	// is a response body, not a log line.
+	batchSkipCanceled = "canceled"
 )
 
 // batchApplyConcurrency bounds how many books BatchApplyFromCache applies at
@@ -329,7 +335,7 @@ func (h *MetadataCacheHandler) BatchApplyFromCache(c *gin.Context) {
 			if gctx.Err() != nil {
 				outcomes[i] = applyOutcome{skip: BatchApplySkip{
 					BookID: bookID,
-					Reason: batchSkipApplyFailed,
+					Reason: batchSkipCanceled,
 					Error:  gctx.Err().Error(),
 				}}
 				return nil
