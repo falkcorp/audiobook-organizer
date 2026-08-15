@@ -63,7 +63,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	if s.fileIOPool != nil {
 		mcFileIOPool = s.fileIOPool
 	}
-	metaCacheH := handlers.NewMetadataCacheHandler(s.Store(), s.metadataFetchService, s.writeBackBatcher, mcFileIOPool)
+	metaCacheH := handlers.NewMetadataCacheHandler(s.Store(), s.metadataFetchService, s.writeBackBatcher, mcFileIOPool, s.opRegistry)
 	organizeH := handlers.NewOrganizeHandler(
 		s.Store(),
 		NewRenameService(s.Store()),

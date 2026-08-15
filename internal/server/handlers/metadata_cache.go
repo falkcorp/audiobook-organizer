@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"net/http"
 	"sort"
 	"time"
 
@@ -21,8 +22,8 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
+	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/gin-gonic/gin"
-	"golang.org/x/sync/errgroup"
 )
 
 // MetadataCacheBookStore is the narrow persistence interface required by
@@ -75,6 +76,17 @@ type MetadataCacheHandler struct {
 	// path. May be nil; when it is, BatchApplyFromCache logs at warn rather
 	// than skipping silently (see the comment in BatchApplyFromCache).
 	fileIOPool FileIOPool
+	// ops enqueues the background apply op. When nil, BatchApplyFromCache
+	// reports 503 rather than silently falling back to an inline apply: an
+	// inline fallback would be a second implementation that only ever ran in
+	// tests, so the tested path and the shipped path would diverge.
+	ops OpEnqueuer
+}
+
+// OpEnqueuer is the slice of the v2 operations registry this handler needs:
+// enqueue a definition with params, get an op id back immediately.
+type OpEnqueuer interface {
+	EnqueueOp(ctx context.Context, defID string, params any, opts ...opsregistry.EnqueueOption) (string, error)
 }
 
 // NewMetadataCacheHandler constructs a MetadataCacheHandler.
@@ -82,8 +94,8 @@ type MetadataCacheHandler struct {
 // fileIOPool may be nil (tests, or a server built without a pool). Callers must
 // pass a nil INTERFACE, not a typed-nil pointer, or the nil guards below become
 // false-negatives — see the wiring in wire_handlers.go.
-func NewMetadataCacheHandler(store MetadataCacheBookStore, svc MetadataCacheFetchService, batcher WriteBackEnqueuer, fileIOPool FileIOPool) *MetadataCacheHandler {
-	return &MetadataCacheHandler{store: store, svc: svc, batcher: batcher, fileIOPool: fileIOPool}
+func NewMetadataCacheHandler(store MetadataCacheBookStore, svc MetadataCacheFetchService, batcher WriteBackEnqueuer, fileIOPool FileIOPool, ops OpEnqueuer) *MetadataCacheHandler {
+	return &MetadataCacheHandler{store: store, svc: svc, batcher: batcher, fileIOPool: fileIOPool, ops: ops}
 }
 
 // ListCachedCandidates handles GET /api/v1/audiobooks/metadata/cached.
@@ -310,64 +322,40 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 	})
 }
 
-// Skip reasons reported per book by BatchApplyFromCache. Stable string values —
-// the Metadata Review UI keys off them to decide whether to leave a row in the
-// queue and what to tell the user.
-const (
-	batchSkipNoCachedCandidates = "no_cached_candidates"
-	batchSkipDecodeFailed       = "decode_failed"
-	batchSkipApplyFailed        = "apply_failed"
-	// batchSkipCanceled marks a book the server never attempted because the
-	// request context died (in practice: the client disconnected) before a worker
-	// picked it up. Distinct from batchSkipApplyFailed on purpose — reporting
-	// "apply_failed" for a book nothing tried to apply is simply untrue, and this
-	// is a response body, not a log line.
-	batchSkipCanceled = "canceled"
-)
-
-// batchApplyConcurrency bounds how many books BatchApplyFromCache applies at
-// once. The per-book work left on the request path is database-bound (read the
-// cached candidate, apply it, invalidate the cache entry) — the slow file work
-// already goes to h.fileIOPool — so this is deliberately modest: enough to stop
-// a several-hundred-book "Apply All" from being a strictly serial chain of
-// round-trips, without turning one HTTP request into a write storm against the
-// store while other requests are being served.
-const batchApplyConcurrency = 4
-
-// BatchApplySkip describes one book that was requested but not applied.
-type BatchApplySkip struct {
-	BookID string `json:"book_id"`
-	Reason string `json:"reason"`
-	Error  string `json:"error,omitempty"`
-}
-
 // BatchApplyFromCache handles POST /api/v1/audiobooks/metadata/batch-apply-cached.
 //
-// Applies the highest-scored cached candidate for each book_id in the request.
+// This is a DISPATCHER. It enqueues the "metadata.batch-apply-cached" op and
+// returns 202 with an op id; it applies nothing itself.
 //
-// FILE I/O — KEEP IN STEP WITH THE SINGLE-BOOK PATH.
+// It used to apply the whole batch inline. That was already parallel and
+// already pushed the file work to a pool, so the problem was never a missing
+// worker pool — it was the REQUEST DURATION. A 250-book apply measured 2m0s on
+// production. Go's HTTP server does not kill a handler when the client
+// disconnects, and ApplyMetadataCandidate takes no context, so the browser
+// timed out, the UI reported "session expired, nothing was applied", and the
+// server went on applying for another minute. The user was told the opposite of
+// what happened.
 //
-// This handler has a sibling: applyAudiobookMetadataImpl in
-// internal/server/handlers/metadata/handler.go (POST /audiobooks/:id/apply-metadata).
-// The two drifted apart. The sibling submits ApplyMetadataFileIO +
-// WriteBackMetadataForBook to the file-I/O pool, which is what actually writes
-// tags and embeds cover art INTO the audio files; this handler did neither. It
-// updated the database and enqueued h.batcher — but h.batcher is the *iTunes*
-// write-back batcher (itunesservice.WriteBackBatcher), which syncs to the iTunes
-// library and never touches audio tags.
+// The per-book logic now lives in applyCachedCandidateForBook
+// (internal/server/batch_apply_one.go), which the op calls. There is
+// deliberately NO inline fallback here: a fallback would be a second
+// implementation reachable only when the registry is absent, so the tested path
+// and the shipped path would diverge.
 //
-// The visible symptom: metadata applied from the Metadata Review screen existed
-// in the database but was never written to the files, and no cover art was
-// embedded. It looked like success because nothing logged a failure.
-//
-// If you add file-side work to either path, add it to both.
-//
-// The work goes through the pool, never inline: "Apply All" can carry hundreds
-// of book IDs and rewriting tags for each synchronously would hold the request
-// open for minutes.
+// FILE I/O — KEEP IN STEP WITH THE SINGLE-BOOK PATH. The sibling is
+// applyAudiobookMetadataImpl in internal/server/handlers/metadata/handler.go.
+// The two drifted apart once: the sibling wrote tags and embedded cover art
+// while this path only updated the database and enqueued h.batcher — which is
+// the *iTunes* library batcher, not the tag writer. Applied metadata never
+// reached the files and nothing logged a failure. If you add file-side work to
+// either path, add it to both.
 func (h *MetadataCacheHandler) BatchApplyFromCache(c *gin.Context) {
 	if h.store == nil || h.svc == nil {
 		httputil.RespondWithInternalError(c, "metadata service not initialized")
+		return
+	}
+	if h.ops == nil {
+		httputil.RespondWithInternalError(c, "operations registry not initialized")
 		return
 	}
 	var body struct {
@@ -383,120 +371,25 @@ func (h *MetadataCacheHandler) BatchApplyFromCache(c *gin.Context) {
 
 	shouldWriteBack := body.WriteBack == nil || *body.WriteBack
 
-	// Apply in parallel, but assemble the response strictly in request order.
-	//
-	// Each slot is written by exactly ONE goroutine (the one that owns index i)
-	// and read only after g.Wait(), so no lock is needed on the slice itself.
-	// Ordering is not cosmetic: the Metadata Review UI diffs `applied_ids` and
-	// `skipped` against the ids it sent, and a nondeterministic order would make
-	// the same request produce a different-looking response every time.
-	type applyOutcome struct {
-		applied bool
-		skip    BatchApplySkip
-	}
-	outcomes := make([]applyOutcome, len(body.BookIDs))
-
-	g, gctx := errgroup.WithContext(c.Request.Context())
-	g.SetLimit(batchApplyConcurrency)
-
-	for i, bookID := range body.BookIDs {
-		i, bookID := i, bookID
-		g.Go(func() error {
-			if gctx.Err() != nil {
-				outcomes[i] = applyOutcome{skip: BatchApplySkip{
-					BookID: bookID,
-					Reason: batchSkipCanceled,
-					Error:  gctx.Err().Error(),
-				}}
-				return nil
-			}
-
-			entry, _, err := h.svc.GetCachedCandidates(bookID)
-			if err != nil || entry == nil || len(entry.Candidates) == 0 {
-				slog.Warn("BatchApplyFromCache no cached candidates", "bookID", bookID, "err", err)
-				outcomes[i] = applyOutcome{skip: BatchApplySkip{
-					BookID: bookID,
-					Reason: batchSkipNoCachedCandidates,
-					Error:  errString(err),
-				}}
-				return nil
-			}
-			var cand metafetch.MetadataCandidate
-			if err := json.Unmarshal(entry.Candidates[0], &cand); err != nil {
-				slog.Warn("BatchApplyFromCache decode candidate", "bookID", bookID, "err", err)
-				outcomes[i] = applyOutcome{skip: BatchApplySkip{
-					BookID: bookID,
-					Reason: batchSkipDecodeFailed,
-					Error:  errString(err),
-				}}
-				return nil
-			}
-			if _, err := h.svc.ApplyMetadataCandidate(bookID, cand, nil); err != nil {
-				slog.Warn("BatchApplyFromCache apply", "bookID", bookID, "err", err)
-				outcomes[i] = applyOutcome{skip: BatchApplySkip{
-					BookID: bookID,
-					Reason: batchSkipApplyFailed,
-					Error:  errString(err),
-				}}
-				return nil
-			}
-			_ = h.svc.InvalidateCachedCandidates(bookID)
-
-			// iTunes library sync. Enqueued before the pool submission (matching the
-			// single-book path) so a panic in the background file job cannot lose it.
-			if shouldWriteBack && h.batcher != nil {
-				h.batcher.Enqueue(bookID)
-			}
-
-			if shouldWriteBack {
-				if pool := h.fileIOPool; pool != nil {
-					id := bookID
-					svc := h.svc
-					pool.Submit(id, func() {
-						svc.ApplyMetadataFileIO(id)
-						if _, wbErr := svc.WriteBackMetadataForBook(id); wbErr != nil {
-							slog.Warn("BatchApplyFromCache background write-back", "bookID", id, "err", wbErr)
-						}
-					})
-				} else {
-					// Never skip silently. A silent skip here is exactly the shape of
-					// the defect this code path is fixing: the DB says applied, the
-					// files were never touched, and nothing in the logs says so.
-					slog.Warn("BatchApplyFromCache: no file-I/O pool wired, audio tags and cover art NOT written",
-						"bookID", bookID, "reason", "fileIOPool is nil")
-				}
-			}
-
-			outcomes[i] = applyOutcome{applied: true}
-			return nil
-		})
-	}
-	// runOne never returns a non-nil error (every per-book failure is recorded as
-	// a skip so the UI can show a reason), so Wait cannot fail here — but check it
-	// rather than discarding it, in case that invariant is ever changed.
-	if err := g.Wait(); err != nil {
-		httputil.InternalError(c, "failed to apply cached candidates", err)
+	opID, err := h.ops.EnqueueOp(c.Request.Context(), "metadata.batch-apply-cached", map[string]any{
+		"book_ids":   body.BookIDs,
+		"write_back": shouldWriteBack,
+	})
+	if err != nil {
+		httputil.InternalError(c, "failed to enqueue metadata apply", err)
 		return
 	}
 
-	appliedIDs := make([]string, 0, len(body.BookIDs))
-	skipped := make([]BatchApplySkip, 0)
-	for i, bookID := range body.BookIDs {
-		if outcomes[i].applied {
-			appliedIDs = append(appliedIDs, bookID)
-			continue
-		}
-		skipped = append(skipped, outcomes[i].skip)
-	}
-
-	// "applied" stays an int at the top level: the Metadata Review UI already
-	// reads it, so changing its type would break the frontend.
-	httputil.RespondWithOK(c, gin.H{
-		"applied":     len(appliedIDs),
-		"applied_ids": appliedIDs,
-		"skipped":     skipped,
-		"requested":   len(body.BookIDs),
-		"write_back":  shouldWriteBack,
+	// 202 with an op id, NOT a completed result. The response no longer carries
+	// applied_ids/skipped because nothing has been applied yet — the caller polls
+	// the op and then re-reads the review list, which is the only description of
+	// what actually happened that cannot go stale.
+	c.JSON(http.StatusAccepted, gin.H{
+		"data": gin.H{
+			"op_id":      opID,
+			"requested":  len(body.BookIDs),
+			"write_back": shouldWriteBack,
+		},
 	})
 }
 
