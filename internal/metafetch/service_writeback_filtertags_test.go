@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_writeback_filtertags_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c1d9a04-2b6e-4f38-9d51-0a8e3b7c62f4
 // last-edited: 2026-08-15
 
@@ -47,7 +47,7 @@ func TestFilterTagsAgainst_MultiFileBookCanSkip(t *testing.T) {
 		"track":  "1/12",
 	}
 
-	filtered := filterTagsAgainst(current, tagMap)
+	filtered := filterTagsAgainst("/tmp/test.m4b", current, tagMap)
 
 	assert.Empty(t, filtered,
 		"an unchanged multi-file book must filter to zero tags so write-back can skip it; "+
@@ -114,7 +114,7 @@ func TestFilterTagsAgainst_TrackMatching(t *testing.T) {
 				TrackNumber: tt.trackNumber,
 				TrackTotal:  tt.trackTotal,
 			}
-			filtered := filterTagsAgainst(current, map[string]interface{}{"track": tt.desired})
+			filtered := filterTagsAgainst("/tmp/test.m4b", current, map[string]interface{}{"track": tt.desired})
 
 			if tt.wantWritten {
 				assert.Contains(t, filtered, "track", tt.why)
@@ -217,7 +217,7 @@ func TestFilterTagsAgainst_ChangedValuesStillWritten(t *testing.T) {
 		"track":  "1/12",       // unchanged — must be dropped
 	}
 
-	filtered := filterTagsAgainst(current, tagMap)
+	filtered := filterTagsAgainst("/tmp/test.m4b", current, tagMap)
 
 	assert.Equal(t, map[string]interface{}{
 		"title": "01 - New Title",
