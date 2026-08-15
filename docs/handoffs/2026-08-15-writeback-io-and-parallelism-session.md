@@ -1,5 +1,5 @@
 <!-- file: docs/handoffs/2026-08-15-writeback-io-and-parallelism-session.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 2d84f0a6-7e13-4b95-8c02-6f1a9d3e5b74 -->
 <!-- last-edited: 2026-08-15 -->
 
@@ -103,7 +103,21 @@ production symptom; revert the title logic → 4 fail).
 | Branch #2469 | `perf/server-metadata-parallelism` (agent-authored), CI running |
 | Worktrees | `.worktrees/writeback-io-amp`, `.worktrees/server-parallelism` — remove after merge |
 | Local tests | metafetch, metadata, tagger, fileops, organizer, audiobooks: **6/6 pass** |
-| Known-noise | `internal/database` and `internal/server` fail at **exactly 600s** — the documented stall signature; neither package is touched by #2468's diff (verified with `git diff --stat`) |
+| Known-noise | see below — **resolved**, they are slow, not broken |
+
+### The `internal/database` / `internal/server` test failures are SLOWNESS, confirmed
+
+Previous handoffs listed this as an open question ("control on clean main was
+never finished"). It is now settled. Both packages fail at **exactly 600s** under
+the default timeout; re-run with `-timeout 25m` they both **pass**:
+
+- `internal/database` — **580.9s** (finishes just **19 seconds** under the 600s
+  default, which is exactly why it fails intermittently)
+- `internal/server` — **849.1s** (genuinely over the default)
+
+Neither is touched by #2468's diff (verified with `git diff --stat`). Treat a
+600.x-second failure in these two as a timeout, not a regression. The real fix is
+to raise the timeout or split the packages, not to chase a phantom bug.
 
 ## Next actions, in order
 
@@ -123,6 +137,34 @@ production symptom; revert the title logic → 4 fail).
    throttling, no jitter, no 429/`Retry-After` handling. Hardcover's 60/min
    limiter is a process-wide mutex that will serialise any fan-out. Plan:
    `~/.claude/plans/unified-weaving-grove.md`.
+
+## Two deliberate non-actions (do not "finish" these without re-reading why)
+
+**1. The `LastWrittenAt` pre-filter for `runBulkWriteBack` was dropped on purpose.**
+It was in the approved plan. On reading the code: `runBulkWriteBack` has no force
+parameter, and `LastWrittenAt`/`UpdatedAt` compares **database** state, not disk
+state. Tags altered outside the app never advance `UpdatedAt`, so such a book
+would be skipped **permanently** and the file could never be repaired. The saving
+it was meant to buy has largely evaporated now that the disk-based
+`FilterUnchangedTags` skip actually works — that pre-filter exists in
+`batch_save_op.go` precisely *because* the disk skip was broken by the `track`
+bug. Net remaining gain: one tag read per file, bought with a permanent-skip
+correctness hazard.
+
+**2. #2469 did NOT convert the two apply loops to background op-id endpoints**,
+and that was the right call. `web/src/services/api.ts` documents that
+`applied_ids`/`skipped` were added *because* the endpoint used to report only a
+count and "books silently vanished from the review queue"; the dialog awaits the
+response and diffs `applied_ids`. Returning only an op id would have reintroduced
+a fixed data-visibility bug. Both loops were parallelized with `errgroup` +
+`SetLimit` instead, keeping the response shape byte-identical.
+
+## Known residual gap from #2469 (agent-flagged, real)
+
+`metadata.batch-save` has no protected-path skip, and the library-copy resolution
+is not visible from package `server`, so two protected books that share one
+library copy are **not** serialized against each other. Needs an exported resolver
+in `internal/metafetch`. Commented at the lock-acquisition site.
 
 ## Carried over, still unresolved from the previous session
 
